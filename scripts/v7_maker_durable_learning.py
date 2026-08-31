@@ -250,6 +250,21 @@ def group_key(order: dict[str, Any]) -> str:
     return f"{action}|{outcome}|{side}"
 
 
+def exact_execution_cell(order: dict[str, Any]) -> tuple[str, str, str, str] | None:
+    """Return the causal market/token/action/side identity for selector feedback."""
+    metadata = order.get("metadata") if isinstance(order.get("metadata"), dict) else {}
+    market_id = str(order.get("market_id") or "")
+    token_id = str(order.get("token_id") or "")
+    action = str(
+        order.get("intended_action") or metadata.get("action") or "").upper()
+    side = str(order.get("side") or metadata.get("execution_side") or "").upper()
+    if not market_id or not token_id or action not in {
+        "JOIN", "IMPROVE1", "ONE_SIDED", "FADE1", "FADE2",
+    } or side not in {"BUY", "SELL"}:
+        return None
+    return market_id, token_id, action, side
+
+
 def placement_features(order: dict[str, Any]) -> list[float] | None:
     metadata = order.get("metadata") if isinstance(order.get("metadata"), dict) else {}
     raw = metadata.get("placement_features")
@@ -301,6 +316,8 @@ def order_examples(values: list[dict[str, Any]]) -> list[dict[str, Any]]:
             later[order_id].append(row)
     output: list[dict[str, Any]] = []
     for order_id, order in orders.items():
+        order_metadata = (
+            order.get("metadata") if isinstance(order.get("metadata"), dict) else {})
         start = int(order.get("recorded_ts_ms") or 0)
         intended = max(0.0, number(order.get("intended_size")))
         if start <= 0 or intended <= 0.0:
@@ -353,6 +370,7 @@ def order_examples(values: list[dict[str, Any]]) -> list[dict[str, Any]]:
             "first_fill_ms": max(0, first_fill_ts - start) if first_fill_ts else None,
             "filled_fraction": min(1.0, filled / intended),
             "terminal_state": terminal_state,
+            "terminal_ts_ms": terminal_ts or None,
             "execution_outcome": execution_outcome,
             "opposite_flow_prints_seen": opposite_flow_prints_seen,
             "price_reach_prints_seen": price_reach_prints_seen,
@@ -362,9 +380,83 @@ def order_examples(values: list[dict[str, Any]]) -> list[dict[str, Any]]:
             "queue_ahead": max(0.0, number(order.get("queue_ahead"))),
             "spread": max(0.0, number(order.get("ask")) - number(order.get("bid"))),
             "side": str(order.get("side") or "UNKNOWN"),
+            "market_id": str(order.get("market_id") or ""),
+            "token_id": str(order.get("token_id") or ""),
+            "action": str(
+                order.get("intended_action")
+                or order_metadata.get("action") or "UNKNOWN"
+            ).upper(),
+            "outcome": str(
+                order_metadata.get("outcome") or "UNKNOWN"
+            ).upper(),
+            "exact_execution_cell": exact_execution_cell(order),
             "features": placement_features(order),
         })
     return output
+
+
+def exact_execution_cell_evidence(
+    examples: list[dict[str, Any]],
+) -> dict[str, Any]:
+    """Aggregate no-fill stages without transferring evidence across markets.
+
+    This artifact is selector feedback only. It cannot grant maturity, fill
+    credit, or execution authority; it merely prevents a quiet cold-start
+    control from repeatedly spending its bounded budget on the same exact
+    market/token/action/side while equally admissible cells remain untried.
+    """
+    grouped: dict[tuple[str, str, str, str], list[dict[str, Any]]] = defaultdict(list)
+    for row in examples:
+        key = row.get("exact_execution_cell")
+        if isinstance(key, tuple) and len(key) == 4:
+            grouped[key].append(row)
+    cells: list[dict[str, Any]] = []
+    for (market_id, token_id, action, side), sample in sorted(grouped.items()):
+        terminal = [
+            row for row in sample
+            if str(row.get("execution_outcome") or "") != "OPEN_CENSORED"
+        ]
+        outcome_counts = Counter(
+            str(row.get("execution_outcome") or "UNKNOWN") for row in terminal)
+        reached = sum(int(row.get("price_reach_prints_seen") or 0) > 0
+                      for row in terminal)
+        opposite = sum(int(row.get("opposite_flow_prints_seen") or 0) > 0
+                       for row in terminal)
+        filled = sum(number(row.get("filled_fraction")) > 0.0 for row in terminal)
+        queue_ahead = [max(0.0, number(row.get("queue_ahead"))) for row in sample]
+        outcomes = {
+            key: int(value) for key, value in sorted(outcome_counts.items())
+        }
+        cells.append({
+            "market_id": market_id,
+            "token_id": token_id,
+            "action": action,
+            "quote_side": side,
+            "orders": len(sample),
+            "terminal_orders": len(terminal),
+            "outcome_counts": outcomes,
+            "no_opposite_flow": outcomes.get("NO_OPPOSITE_FLOW", 0),
+            "price_not_reached": outcomes.get("PRICE_NOT_REACHED", 0),
+            "queue_not_depleted": outcomes.get("QUEUE_NOT_DEPLETED", 0),
+            "filled_orders": filled,
+            "opposite_flow_reach_rate": (
+                opposite / len(terminal) if terminal else None),
+            "price_reach_rate": reached / len(terminal) if terminal else None,
+            "queue_depletion_rate_given_price_reach": (
+                filled / reached if reached else None),
+            "mean_queue_ahead": (
+                sum(queue_ahead) / len(queue_ahead) if queue_ahead else None),
+            "last_order_ts_ms": max(
+                (int(row.get("start_ts_ms") or 0) for row in sample), default=0),
+            "last_terminal_ts_ms": max(
+                (int(row.get("terminal_ts_ms") or 0) for row in terminal), default=0),
+            "role": "SELECTOR_FEEDBACK_ONLY_NO_AUTHORITY_OR_PROMOTION_CREDIT",
+        })
+    return {
+        "identity": ["market_id", "token_id", "action", "quote_side"],
+        "semantics": "exact_cell_terminal_funnel_current_policy_only_v1",
+        "cells": cells,
+    }
 
 
 def _standardize(rows: list[list[float]]) -> tuple[list[list[float]], list[float], list[float]]:
@@ -949,6 +1041,7 @@ def fit_model(values: list[dict[str, Any]], *, model_sha: str, policy_hash: str,
                 filled / reached if reached else None),
             "semantics": "NO_OPPOSITE_FLOW->PRICE_NOT_REACHED->QUEUE_NOT_DEPLETED->FILL",
         },
+        "exact_execution_cells": exact_execution_cell_evidence(examples),
         "cross_policy_global_adverse_diagnostic": adverse_models.get("GLOBAL", {}),
         "risk_only_symmetric_outcome_adverse": {
             key: value for key, value in symmetric_outcome_adverse.items()

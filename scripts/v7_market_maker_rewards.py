@@ -29,6 +29,88 @@ from typing import Any, Callable
 SELECTOR_STATUS_SCHEMA = "polymarket_v7_maker_selector_status_v1"
 UNIVERSE_SCHEMA = "polymarket_v7_adaptive_universe_snapshot_v1"
 EXECUTION_AUTHORITY_SEMANTICS = "token_action_side_v2"
+EXECUTION_MODEL_SCHEMA = "polymarket_v7_maker_execution_model_v1"
+EXECUTION_SEMANTICS = "maker-paper-v7.2-bilateral-inventory"
+
+
+def _exact_cell_identity(
+    market_id: Any, token_id: Any, action: Any, quote_side: Any,
+) -> tuple[str, str, str, str]:
+    return (
+        str(market_id or ""), str(token_id or ""),
+        str(action or "").upper(), str(quote_side or "").upper(),
+    )
+
+
+def _load_exact_cell_evidence(
+    path: Path | None, *, model_sha: str,
+) -> dict[tuple[str, str, str, str], dict[str, Any]]:
+    """Load optional exact-policy selector feedback from the Maker champion.
+
+    Invalid or stale feedback cannot grant authority and is therefore ignored.
+    The C++ runtime remains the only component allowed to admit a quote.
+    """
+    if path is None or not path.is_file():
+        return {}
+    try:
+        model = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return {}
+    exact = model.get("exact_execution_cells")
+    cells = exact.get("cells") if isinstance(exact, dict) else None
+    if (
+        model.get("schema") != EXECUTION_MODEL_SCHEMA
+        or model.get("paper_only") is not True
+        or model.get("authenticated_execution") is not False
+        or model.get("real_order_submission") is not False
+        or model.get("model_sha") != model_sha
+        or model.get("execution_semantics_version") != EXECUTION_SEMANTICS
+        or not isinstance(exact, dict)
+        or exact.get("identity") != [
+            "market_id", "token_id", "action", "quote_side"]
+        or exact.get("semantics")
+            != "exact_cell_terminal_funnel_current_policy_only_v1"
+        or not isinstance(cells, list)
+    ):
+        return {}
+    output: dict[tuple[str, str, str, str], dict[str, Any]] = {}
+    for raw in cells:
+        if not isinstance(raw, dict):
+            continue
+        key = _exact_cell_identity(
+            raw.get("market_id"), raw.get("token_id"),
+            raw.get("action"), raw.get("quote_side"),
+        )
+        if (
+            not key[0] or not key[1]
+            or key[2] not in {"JOIN", "IMPROVE1", "ONE_SIDED", "FADE1", "FADE2"}
+            or key[3] not in {"BUY", "SELL"}
+        ):
+            continue
+        output[key] = raw
+    return output
+
+
+def _annotate_exact_cell_evidence(
+    row: dict[str, Any], cell: dict[str, Any],
+    evidence: dict[tuple[str, str, str, str], dict[str, Any]],
+) -> dict[str, Any]:
+    result = dict(cell)
+    raw = evidence.get(_exact_cell_identity(
+        row.get("market_id"), cell.get("token_id"),
+        cell.get("action"), cell.get("quote_side"),
+    ), {})
+    result["durable_exact_cell_evidence"] = {
+        "terminal_orders": max(0, int(finite(raw.get("terminal_orders"), 0.0))),
+        "no_opposite_flow": max(0, int(finite(raw.get("no_opposite_flow"), 0.0))),
+        "price_not_reached": max(0, int(finite(raw.get("price_not_reached"), 0.0))),
+        "queue_not_depleted": max(0, int(finite(raw.get("queue_not_depleted"), 0.0))),
+        "filled_orders": max(0, int(finite(raw.get("filled_orders"), 0.0))),
+        "last_terminal_ts_ms": max(
+            0, int(finite(raw.get("last_terminal_ts_ms"), 0.0))),
+        "role": "RANKING_ONLY_NO_EXECUTION_OR_PROMOTION_AUTHORITY",
+    }
+    return result
 
 
 def _control_exploration_cell(row: dict[str, Any]) -> dict[str, Any]:
@@ -200,8 +282,11 @@ def _authorize_control_cells(
     maximum_markets: int,
     minimum_prints_30s: int,
     maximum_last_side_age_ms: int,
+    exact_cell_evidence: dict[
+        tuple[str, str, str, str], dict[str, Any]] | None = None,
 ) -> int:
     """Authorize bounded, distinct causal controls without global collapse."""
+    exact_cell_evidence = exact_cell_evidence or {}
     maximum_markets = max(1, int(maximum_markets))
     authorized_rows = [
         row for row in rows if row.get("authorized_execution_cells")]
@@ -225,7 +310,8 @@ def _authorize_control_cells(
             if isinstance(cell, dict)
         }
         additions = [
-            cell for cell in controls
+            _annotate_exact_cell_evidence(row, cell, exact_cell_evidence)
+            for cell in controls
             if (str(cell["token_id"]), str(cell["action"]),
                 str(cell["quote_side"])) not in existing
         ]
@@ -262,22 +348,31 @@ def _authorize_control_cells(
     )[:remaining_markets]:
         row["control_exploration_authorized"] = True
         row["execution_role"] = str(cells[0]["authority_basis"])
-        row["authorized_execution_cells"] = cells
+        row["authorized_execution_cells"] = [
+            _annotate_exact_cell_evidence(row, cell, exact_cell_evidence)
+            for cell in cells
+        ]
         row["authorized_execution_cell_count"] = len(cells)
         authorized_cells += len(cells)
 
     # With no causal print anywhere, retain one reproducible control rather
     # than either freezing learning or spraying the warm observation universe.
     if authorized_cells == 0 and already_authorized == 0:
-        return _authorize_one_control_cell(rows)
+        return _authorize_one_control_cell(
+            rows, exact_cell_evidence=exact_cell_evidence)
     return authorized_cells
 
 
-def _authorize_one_control_cell(rows: list[dict[str, Any]]) -> int:
+def _authorize_one_control_cell(
+    rows: list[dict[str, Any]], *,
+    exact_cell_evidence: dict[
+        tuple[str, str, str, str], dict[str, Any]] | None = None,
+) -> int:
     """Authorize exactly one best research cell when no full flow cell exists."""
+    exact_cell_evidence = exact_cell_evidence or {}
     if any(row.get("authorized_execution_cells") for row in rows):
         return 0
-    candidates: list[tuple[float, str, dict[str, Any], dict[str, Any]]] = []
+    candidates: list[tuple[float, str, dict[str, Any], dict[str, Any], dict[str, Any]]] = []
     for row in rows:
         cell = _control_exploration_cell(row)
         if not cell["token_id"]:
@@ -287,13 +382,42 @@ def _authorize_one_control_cell(rows: list[dict[str, Any]]) -> int:
             str(row.get("market_id") or ""), str(cell["token_id"]),
             str(cell["action"]), str(cell["quote_side"]),
         ))
-        candidates.append((probability, identity, row, cell))
+        history = exact_cell_evidence.get(_exact_cell_identity(
+            row.get("market_id"), cell.get("token_id"),
+            cell.get("action"), cell.get("quote_side"),
+        ), {})
+        candidates.append((probability, identity, row, cell, history))
     if not candidates:
         return 0
-    # Highest measured reach/depletion opportunity wins. Deterministic identity
-    # ordering keeps the zero-flow cold start reproducible.
-    probability, _identity, row, cell = sorted(
-        candidates, key=lambda item: (-item[0], item[1]))[0]
+    # A fresh causal probability always dominates historical quiet-window
+    # evidence. With no causal flow, cover untried exact cells first and then
+    # revisit the least-observed/oldest cell. This preserves one active control
+    # while preventing a single market from consuming every cold-start trial.
+    def rank(item: tuple[
+        float, str, dict[str, Any], dict[str, Any], dict[str, Any]
+    ]) -> tuple[Any, ...]:
+        probability, identity, row, _cell, history = item
+        positive = probability > 0.0
+        return (
+            0 if positive else 1,
+            -probability if positive else 0.0,
+            0 if positive else max(0, int(finite(
+                history.get("terminal_orders"), 0.0))),
+            0 if positive else max(0, int(finite(
+                history.get("no_opposite_flow"), 0.0))),
+            0 if positive else max(0, int(finite(
+                history.get("last_terminal_ts_ms"), 0.0))),
+            -finite(row.get("selection_score"), 0.0),
+            identity,
+        )
+
+    probability, _identity, row, cell, _history = sorted(
+        candidates, key=rank)[0]
+    cell = _annotate_exact_cell_evidence(row, cell, exact_cell_evidence)
+    cell["control_selection_reason"] = (
+        "FRESH_CAUSAL_PROJECTED_FILL" if probability > 0.0
+        else "MINIMUM_EXACT_CELL_TERMINAL_ATTEMPTS"
+    )
     row["control_exploration_authorized"] = True
     row["execution_role"] = (
         "POSITIVE_FLOW_CONTROL" if probability > 0.0 else "COLD_START_CONTROL")
@@ -839,6 +963,8 @@ def _recent_flow_snapshot(
     model_sha: str,
     now_ms: int,
     live_flow_path: Path | None = None,
+    exact_cell_evidence: dict[
+        tuple[str, str, str, str], dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     """Rank PAPER markets by causal recent public prints, not reward-pool size."""
     flow_cfg = selection_cfg.get("recent_flow")
@@ -1397,6 +1523,7 @@ def _recent_flow_snapshot(
             "control_minimum_prints_30s", 1))),
         maximum_last_side_age_ms=max(1_000, int(float(flow_cfg.get(
             "control_maximum_last_side_age_seconds", 30.0)) * 1_000.0)),
+        exact_cell_evidence=exact_cell_evidence,
     )
     _annotate_inventory_seed_authority(selected)
     if len(selected) < minimum_markets:
@@ -1433,6 +1560,7 @@ def _recent_flow_snapshot(
         "stable_reserve_added": stable_reserve_added,
         "flow_authorized_market_count": flow_authorized_markets,
         "control_exploration_cell_count": control_cells_authorized,
+        "exact_cell_evidence_count": len(exact_cell_evidence or {}),
         "control_exploration_market_count": sum(
             1 for row in selected
             if row.get("control_exploration_authorized") is True),
@@ -1501,6 +1629,8 @@ def _primary_snapshot(
     max_market_pages: int,
     max_order_notional_usd: float,
     max_quote_shares: float,
+    exact_cell_evidence: dict[
+        tuple[str, str, str, str], dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     clob_url = str(cfg.get("clob_url") or "https://clob.polymarket.com")
     deadline = time.monotonic() + max(0.1, float(deadline_seconds))
@@ -1531,7 +1661,8 @@ def _primary_snapshot(
             "authorized_execution_cells": [],
             "authorized_execution_cell_count": 0,
         })
-    control_cells_authorized = _authorize_one_control_cell(selected_rows)
+    control_cells_authorized = _authorize_one_control_cell(
+        selected_rows, exact_cell_evidence=exact_cell_evidence)
     _annotate_inventory_seed_authority(selected_rows)
     return {
         "schema": "polymarket_v7_maker_reward_selection_v1",
@@ -1555,6 +1686,7 @@ def _primary_snapshot(
         "resource_capacity": capacity_cfg,
         "authorized_execution_cell_count": control_cells_authorized,
         "control_exploration_cell_count": control_cells_authorized,
+        "exact_cell_evidence_count": len(exact_cell_evidence or {}),
         "markets": selected_rows,
         "note": "Pool dollars are configuration facts; realized reward share remains competition-dependent and is not guaranteed.",
     }
@@ -1570,6 +1702,8 @@ def _fallback_snapshot(
     primary_error: str,
     now_ms: int,
     maximum_markets: int | None = None,
+    exact_cell_evidence: dict[
+        tuple[str, str, str, str], dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     universe = json.loads(universe_path.read_text(encoding="utf-8"))
     if (
@@ -1718,7 +1852,8 @@ def _fallback_snapshot(
             break
     if not selected:
         raise ValueError("maker_fallback_universe_has_no_eligible_markets")
-    control_cells_authorized = _authorize_one_control_cell(selected)
+    control_cells_authorized = _authorize_one_control_cell(
+        selected, exact_cell_evidence=exact_cell_evidence)
     _annotate_inventory_seed_authority(selected)
     return {
         "schema": "polymarket_v7_maker_reward_selection_v1",
@@ -1741,6 +1876,7 @@ def _fallback_snapshot(
         "cold_start_maximum_markets": cold_start_maximum,
         "authorized_execution_cell_count": control_cells_authorized,
         "control_exploration_cell_count": control_cells_authorized,
+        "exact_cell_evidence_count": len(exact_cell_evidence or {}),
         "unused_resource_capacity_markets": max(0, resource_capacity - len(selected)),
         "resource_capacity": capacity_cfg,
         "universe_membership_sha256": str(universe.get("membership_sha256") or ""),
@@ -1763,11 +1899,14 @@ def build_snapshot(
     now_ms: int | None = None,
     sleeve_capital: float | None = None,
     allocation_path: Path | None = None,
+    execution_model_path: Path | None = None,
 ) -> dict[str, Any]:
     cfg, selection_cfg, capacity_cfg, resource_capacity = _validated_config(config_path)
     if model_sha and (len(model_sha) != 40 or any(ch not in "0123456789abcdef" for ch in model_sha.lower())):
         raise ValueError("model_sha must be a 40-character hexadecimal SHA")
     model_sha = model_sha.lower()
+    exact_cell_evidence = _load_exact_cell_evidence(
+        execution_model_path, model_sha=model_sha)
     deadline_seconds = float(deadline_seconds if deadline_seconds is not None else selection_cfg.get("selector_deadline_seconds", 12.0))
     request_timeout_seconds = float(request_timeout_seconds if request_timeout_seconds is not None else selection_cfg.get("selector_request_timeout_seconds", 5.0))
     max_pool_pages = int(max_pool_pages if max_pool_pages is not None else selection_cfg.get("selector_max_pool_pages", 100))
@@ -1803,6 +1942,7 @@ def build_snapshot(
                     resource_capacity, model_sha=model_sha,
                     now_ms=time.time_ns() // 1_000_000 if now_ms is None else int(now_ms),
                     live_flow_path=live_flow_path,
+                    exact_cell_evidence=exact_cell_evidence,
                 )
             except Exception as error:
                 flow_error = f"{type(error).__name__}:{error}"[:500]
@@ -1817,6 +1957,7 @@ def build_snapshot(
             fallback_universe_path, selection_cfg, capacity_cfg, resource_capacity,
             model_sha=model_sha, primary_error=flow_error,
             now_ms=time.time_ns() // 1_000_000 if now_ms is None else int(now_ms),
+            exact_cell_evidence=exact_cell_evidence,
         )
     try:
         return _primary_snapshot(
@@ -1826,6 +1967,7 @@ def build_snapshot(
             max_pool_pages=max_pool_pages, max_market_pages=max_market_pages,
             max_order_notional_usd=max_order_notional_usd,
             max_quote_shares=max_quote_shares,
+            exact_cell_evidence=exact_cell_evidence,
         )
     except Exception as error:
         if fallback_universe_path is None:
@@ -1835,6 +1977,7 @@ def build_snapshot(
             fallback_universe_path, selection_cfg, capacity_cfg, resource_capacity,
             model_sha=model_sha, primary_error=primary_error,
             now_ms=time.time_ns() // 1_000_000 if now_ms is None else int(now_ms),
+            exact_cell_evidence=exact_cell_evidence,
         )
 
 
@@ -1994,6 +2137,7 @@ def main() -> int:
     parser.add_argument("--trade-tape", type=Path)
     parser.add_argument("--live-flow", type=Path)
     parser.add_argument("--allocation", type=Path)
+    parser.add_argument("--execution-model", type=Path)
     parser.add_argument("--model-sha", default="")
     parser.add_argument("--deadline-seconds", type=float)
     parser.add_argument("--request-timeout-seconds", type=float)
@@ -2004,6 +2148,7 @@ def main() -> int:
         trade_tape_path=args.trade_tape,
         live_flow_path=args.live_flow,
         allocation_path=args.allocation,
+        execution_model_path=args.execution_model,
         model_sha=args.model_sha,
         deadline_seconds=args.deadline_seconds,
         request_timeout_seconds=args.request_timeout_seconds,

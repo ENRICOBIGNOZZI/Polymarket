@@ -349,6 +349,75 @@ class MakerCohortSupervisorTests(unittest.TestCase):
         self.assertEqual(
             metrics["rotation_target_cell"], "challenger|yes-2|JOIN|BUY")
 
+    def test_subpercent_rotation_gate_does_not_apply_five_point_hurdle(self) -> None:
+        current = selection("incumbent")
+        current["markets"][0]["authorized_execution_cells"][0][
+            "projected_fill_probability"] = 0.003
+        candidate = json.loads(json.dumps(current))
+        candidate["markets"].append({
+            "condition_id": "condition-2", "market_id": "challenger",
+            "yes_token": "yes-2", "no_token": "no-2",
+            "inventory_seed_authorized": False,
+            "authorized_execution_cells": [{
+                "token_id": "yes-2", "action": "JOIN", "quote_side": "BUY",
+                "projected_fill_probability": 0.008,
+            }],
+            "quote_opportunities": [],
+        })
+        candidate["selected_count"] = 2
+
+        allowed, metrics = rotation_gate(
+            current, candidate,
+            minimum_projected_fill_probability=0.004,
+            minimum_absolute_improvement=0.05,
+            minimum_relative_multiplier=1.5,
+        )
+
+        self.assertTrue(allowed)
+        self.assertTrue(metrics["incumbent_below_minimum_fill_probability"])
+        self.assertEqual(
+            metrics["required_challenger_projected_fill_probability"], 0.004)
+        self.assertEqual(metrics["configured_absolute_fill_improvement"], 0.05)
+        self.assertEqual(metrics["effective_absolute_fill_improvement"], 0.004)
+
+    def test_subpercent_exploit_rotation_keeps_relative_and_bounded_absolute_hurdles(self) -> None:
+        current = selection("incumbent")
+        current["markets"][0]["authorized_execution_cells"][0][
+            "projected_fill_probability"] = 0.006
+        candidate = json.loads(json.dumps(current))
+        candidate["markets"].append({
+            "condition_id": "condition-2", "market_id": "challenger",
+            "yes_token": "yes-2", "no_token": "no-2",
+            "inventory_seed_authorized": False,
+            "authorized_execution_cells": [{
+                "token_id": "yes-2", "action": "JOIN", "quote_side": "BUY",
+                "projected_fill_probability": 0.009,
+            }],
+            "quote_opportunities": [],
+        })
+        candidate["selected_count"] = 2
+
+        allowed, metrics = rotation_gate(
+            current, candidate,
+            minimum_projected_fill_probability=0.004,
+            minimum_absolute_improvement=0.05,
+            minimum_relative_multiplier=1.5,
+        )
+
+        self.assertFalse(allowed)
+        self.assertFalse(metrics["incumbent_below_minimum_fill_probability"])
+        self.assertEqual(
+            metrics["required_challenger_projected_fill_probability"], 0.01)
+        candidate["markets"][1]["authorized_execution_cells"][0][
+            "projected_fill_probability"] = 0.011
+        allowed, _ = rotation_gate(
+            current, candidate,
+            minimum_projected_fill_probability=0.004,
+            minimum_absolute_improvement=0.05,
+            minimum_relative_multiplier=1.5,
+        )
+        self.assertTrue(allowed)
+
     def test_same_membership_refreshes_cell_authority_without_cohort_restart(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

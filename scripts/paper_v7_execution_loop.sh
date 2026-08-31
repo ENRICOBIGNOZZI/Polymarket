@@ -571,6 +571,7 @@ pids+=("$!")
       --live-flow "$RUN_ROOT/market_data/live_trade_flow.json" \
       --trade-tape "$RUN_ROOT/trade_tape.csv" \
       --allocation "$ALLOC/micro_maker.json" \
+      --execution-model "$MAKER_CHAMPION_MODEL" \
       --model-sha "$SHA" \
       >> "$RUN_ROOT/micro_maker/reward_selection.log" 2>&1 || true
     sleep "$MAKER_SELECTOR_REFRESH_SECONDS"

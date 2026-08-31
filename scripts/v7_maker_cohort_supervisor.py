@@ -192,14 +192,28 @@ def rotation_gate(
     incumbent_probability = incumbent[0][0] if incumbent else 0.0
     challenger_probability = challenger[0][0] if challenger else 0.0
     challenger_cell = challenger[0][1] if challenger else ""
-    cold_start = not fresh_flow_eligible(runtime)
+    minimum_probability = max(0.0, minimum_projected_fill_probability)
+    # A recent-flow snapshot is an observation contract, not proof that the
+    # incumbent execution cell is fillable. Treat a zero/sub-threshold cell as
+    # cold start even when the surrounding 40-market cohort is fresh.
+    cold_start = (
+        not fresh_flow_eligible(runtime)
+        or incumbent_probability < minimum_probability
+    )
+    # Projected maker fills are commonly sub-percent. A configuration value
+    # from a coarser probability regime must not silently demand a five-point
+    # absolute jump from a 0.3% incumbent. Bound the absolute increment by the
+    # minimum economically admissible probability; the relative hurdle still
+    # protects incumbent queue priority at larger probabilities.
+    effective_absolute_improvement = min(
+        max(0.0, minimum_absolute_improvement), minimum_probability)
     threshold = max(
-        max(0.0, minimum_projected_fill_probability),
-        incumbent_probability + max(0.0, minimum_absolute_improvement),
+        minimum_probability,
+        incumbent_probability + effective_absolute_improvement,
         incumbent_probability * max(1.0, minimum_relative_multiplier),
     )
     allowed = bool(challenger_cell) and (
-        (cold_start and challenger_probability >= minimum_projected_fill_probability)
+        (cold_start and challenger_probability >= minimum_probability)
         or (not cold_start and challenger_probability >= threshold)
     )
     reason = (
@@ -214,8 +228,13 @@ def rotation_gate(
         "incumbent_projected_fill_probability": incumbent_probability,
         "challenger_projected_fill_probability": challenger_probability,
         "required_challenger_projected_fill_probability": (
-            max(0.0, minimum_projected_fill_probability) if cold_start else threshold
+            minimum_probability if cold_start else threshold
         ),
+        "configured_absolute_fill_improvement": max(
+            0.0, minimum_absolute_improvement),
+        "effective_absolute_fill_improvement": effective_absolute_improvement,
+        "incumbent_below_minimum_fill_probability": (
+            incumbent_probability < minimum_probability),
     }
 
 

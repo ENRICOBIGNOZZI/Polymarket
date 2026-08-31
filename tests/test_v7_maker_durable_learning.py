@@ -203,6 +203,77 @@ class DurableLearningTests(unittest.TestCase):
         self.assertEqual(funnel["price_reach_rate"], 0.0)
         self.assertIsNone(funnel["queue_depletion_rate_given_price_reach"])
 
+    def test_terminal_funnel_memory_is_scoped_to_exact_execution_cell(self) -> None:
+        first = record(
+            "ORDER_SUBMITTED", "submitted-1", order_id="o1", event_id="event-1",
+            market_id="market-1", token_id="yes-1", intended_action="JOIN",
+            side="BUY", intended_size=5.0, queue_ahead=100.0,
+            recorded_ts_ms=1_000,
+        )
+        first_terminal = record(
+            "ORDER_STATE", "terminal-1", order_id="o1", event_id="event-1",
+            order_state="CANCELLED", recorded_ts_ms=6_000,
+        )
+        first_terminal["metadata"].update({
+            "execution_outcome": "NO_OPPOSITE_FLOW",
+            "opposite_flow_prints_seen": 0,
+            "price_reach_prints_seen": 0,
+        })
+        second = record(
+            "ORDER_SUBMITTED", "submitted-2", order_id="o2", event_id="event-2",
+            market_id="market-2", token_id="yes-2", intended_action="JOIN",
+            side="BUY", intended_size=5.0, queue_ahead=20.0,
+            recorded_ts_ms=2_000,
+        )
+        second_terminal = record(
+            "ORDER_STATE", "terminal-2", order_id="o2", event_id="event-2",
+            order_state="CANCELLED", recorded_ts_ms=7_000,
+        )
+        second_terminal["metadata"].update({
+            "execution_outcome": "QUEUE_NOT_DEPLETED",
+            "opposite_flow_prints_seen": 2,
+            "price_reach_prints_seen": 1,
+        })
+        stale = record(
+            "ORDER_SUBMITTED", "submitted-stale", order_id="old",
+            market_id="market-1", token_id="yes-1", intended_action="JOIN",
+            side="BUY", intended_size=5.0, recorded_ts_ms=500,
+        )
+        stale["metadata"]["policy_hash"] = "old-policy"
+        stale_terminal = record(
+            "ORDER_STATE", "terminal-stale", order_id="old",
+            order_state="CANCELLED", recorded_ts_ms=800,
+        )
+        stale_terminal["metadata"].update({
+            "execution_outcome": "NO_OPPOSITE_FLOW",
+            "policy_hash": "old-policy",
+        })
+
+        fitted = fit_model(
+            [first, first_terminal, second, second_terminal, stale, stale_terminal],
+            model_sha=SHA, policy_hash="policy", config_hash="config",
+            cold_fill_prior=0.02,
+        )
+        exact = fitted["exact_execution_cells"]
+        self.assertEqual(
+            exact["identity"],
+            ["market_id", "token_id", "action", "quote_side"],
+        )
+        self.assertEqual(
+            exact["semantics"],
+            "exact_cell_terminal_funnel_current_policy_only_v1",
+        )
+        cells = {row["market_id"]: row for row in exact["cells"]}
+        self.assertEqual(set(cells), {"market-1", "market-2"})
+        self.assertEqual(cells["market-1"]["terminal_orders"], 1)
+        self.assertEqual(cells["market-1"]["no_opposite_flow"], 1)
+        self.assertEqual(cells["market-2"]["queue_not_depleted"], 1)
+        self.assertEqual(cells["market-2"]["price_reach_rate"], 1.0)
+        self.assertEqual(
+            cells["market-1"]["role"],
+            "SELECTOR_FEEDBACK_ONLY_NO_AUTHORITY_OR_PROMOTION_CREDIT",
+        )
+
     def test_placement_features_are_side_oriented_and_complete(self) -> None:
         row = record("ORDER_SUBMITTED", "r", side="SELL")
         row["metadata"]["placement_features"] = {

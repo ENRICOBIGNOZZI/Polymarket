@@ -84,13 +84,121 @@ class MakerRewardSelectorTests(unittest.TestCase):
         self.assertEqual(rows[0]["authorized_execution_cells"], [])
         self.assertEqual(rows[1]["execution_role"], "POSITIVE_FLOW_CONTROL")
         self.assertTrue(rows[1]["inventory_seed_authorized"])
-        self.assertEqual(rows[1]["authorized_execution_cells"], [{
+        expected = {
             "outcome": "NO", "token_id": "flow-no", "action": "JOIN",
             "quote_side": "SELL", "authority_basis": "POSITIVE_FLOW_CONTROL",
             "projected_flow_reach_probability": 0.10,
             "projected_queue_depletion_probability": 0.039,
             "projected_fill_probability": 0.0039,
-        }])
+        }
+        actual = rows[1]["authorized_execution_cells"][0]
+        for key, value in expected.items():
+            self.assertEqual(actual[key], value)
+        self.assertEqual(
+            actual["control_selection_reason"], "FRESH_CAUSAL_PROJECTED_FILL")
+        self.assertEqual(
+            actual["durable_exact_cell_evidence"]["role"],
+            "RANKING_ONLY_NO_EXECUTION_OR_PROMOTION_AUTHORITY",
+        )
+
+    def test_cold_control_moves_to_untried_exact_cell_after_no_flow(self) -> None:
+        rows = [
+            {
+                "market_id": "repeated", "yes_token": "yes-repeated",
+                "selection_score": 100.0, "quote_opportunities": [],
+                "authorized_execution_cells": [],
+            },
+            {
+                "market_id": "untried", "yes_token": "yes-untried",
+                "selection_score": 1.0, "quote_opportunities": [],
+                "authorized_execution_cells": [],
+            },
+        ]
+        evidence = {
+            ("repeated", "yes-repeated", "JOIN", "BUY"): {
+                "terminal_orders": 3,
+                "no_opposite_flow": 3,
+                "last_terminal_ts_ms": 50_000,
+            },
+        }
+        self.assertEqual(rewards._authorize_one_control_cell(
+            rows, exact_cell_evidence=evidence), 1)
+        self.assertEqual(rows[0]["authorized_execution_cells"], [])
+        selected = rows[1]["authorized_execution_cells"][0]
+        self.assertEqual(selected["token_id"], "yes-untried")
+        self.assertEqual(
+            selected["control_selection_reason"],
+            "MINIMUM_EXACT_CELL_TERMINAL_ATTEMPTS",
+        )
+        self.assertEqual(
+            selected["durable_exact_cell_evidence"]["terminal_orders"], 0)
+
+    def test_fresh_causal_fill_projection_dominates_no_flow_history(self) -> None:
+        rows = [
+            {
+                "market_id": "quiet", "yes_token": "quiet-yes",
+                "selection_score": 100.0, "quote_opportunities": [],
+                "authorized_execution_cells": [],
+            },
+            {
+                "market_id": "flow", "yes_token": "flow-yes",
+                "selection_score": 1.0,
+                "authorized_execution_cells": [],
+                "quote_opportunities": [{
+                    "outcome": "YES", "token_id": "flow-yes",
+                    "quote_side": "BUY", "book_evidence_valid": True,
+                    "opposite_flow_is_fresh": True,
+                    "improve1_available": False,
+                    "projected_flow_reach_probability": 0.2,
+                    "projected_join_queue_depletion_probability": 0.5,
+                    "projected_join_fill_probability": 0.1,
+                    "projected_improve1_fill_probability": 0.0,
+                }],
+            },
+        ]
+        evidence = {
+            ("flow", "flow-yes", "JOIN", "BUY"): {
+                "terminal_orders": 20,
+                "no_opposite_flow": 20,
+                "last_terminal_ts_ms": 50_000,
+            },
+        }
+        self.assertEqual(rewards._authorize_one_control_cell(
+            rows, exact_cell_evidence=evidence), 1)
+        selected = rows[1]["authorized_execution_cells"][0]
+        self.assertEqual(
+            selected["control_selection_reason"], "FRESH_CAUSAL_PROJECTED_FILL")
+        self.assertEqual(
+            selected["durable_exact_cell_evidence"]["terminal_orders"], 20)
+
+    def test_exact_cell_feedback_loader_requires_exact_sha_and_safe_contract(self) -> None:
+        from tempfile import TemporaryDirectory
+        with TemporaryDirectory() as directory:
+            path = Path(directory) / "execution_model.json"
+            path.write_text(json.dumps({
+                "schema": "polymarket_v7_maker_execution_model_v1",
+                "paper_only": True,
+                "authenticated_execution": False,
+                "real_order_submission": False,
+                "model_sha": SHA,
+                "execution_semantics_version": (
+                    "maker-paper-v7.2-bilateral-inventory"),
+                "exact_execution_cells": {
+                    "identity": [
+                        "market_id", "token_id", "action", "quote_side"],
+                    "semantics": (
+                        "exact_cell_terminal_funnel_current_policy_only_v1"),
+                    "cells": [{
+                        "market_id": "m", "token_id": "yes",
+                        "action": "JOIN", "quote_side": "BUY",
+                        "terminal_orders": 2,
+                    }],
+                },
+            }), encoding="utf-8")
+            loaded = rewards._load_exact_cell_evidence(path, model_sha=SHA)
+            stale = rewards._load_exact_cell_evidence(path, model_sha="b" * 40)
+        self.assertEqual(loaded[("m", "yes", "JOIN", "BUY")]["terminal_orders"], 2)
+        self.assertEqual(stale, {})
 
     def test_low_sample_control_is_side_specific_bounded_and_exposes_actions(self) -> None:
         rows = []
@@ -720,9 +828,13 @@ class MakerRewardSelectorTests(unittest.TestCase):
         self.assertEqual(snapshot["markets"][0]["quote_opportunities"], [])
         self.assertEqual(snapshot["authorized_execution_cell_count"], 1)
         self.assertEqual(snapshot["control_exploration_cell_count"], 1)
+        cell = snapshot["markets"][0]["authorized_execution_cells"][0]
+        expected = rewards._control_exploration_cell(snapshot["markets"][0])
+        for key, value in expected.items():
+            self.assertEqual(cell[key], value)
         self.assertEqual(
-            snapshot["markets"][0]["authorized_execution_cells"],
-            [rewards._control_exploration_cell(snapshot["markets"][0])],
+            cell["control_selection_reason"],
+            "MINIMUM_EXACT_CELL_TERMINAL_ATTEMPTS",
         )
         status = rewards.selector_status(snapshot)
         self.assertTrue(status["ready"])

@@ -63,6 +63,7 @@ class ProfessionalMakerRuntimeContractTests(unittest.TestCase):
         self.assertIn("PM_V7_MAKER_MARKOUT_OBSERVER", source)
         self.assertIn("v7_market_maker_rewards.py", source)
         self.assertIn('--allocation "$ALLOC/micro_maker.json"', source)
+        self.assertIn('--execution-model "$MAKER_CHAMPION_MODEL"', source)
         self.assertIn('--candidate-output "$RUN_ROOT/micro_maker/reward_selection_candidate.json"', source)
         self.assertIn("--pin-runtime-selection", source)
         self.assertIn('--lookback-seconds "$MAKER_FLOW_LOOKBACK_SECONDS"', source)
