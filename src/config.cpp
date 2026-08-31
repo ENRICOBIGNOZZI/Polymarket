@@ -1,4 +1,5 @@
 #include "pm/config.hpp"
+#include "pm/v7_execution_mode.hpp"
 
 #include <boost/json.hpp>
 #include <algorithm>
@@ -48,6 +49,25 @@ Config load_config(const std::string& path) {
     auto root = json::parse(ss.str());
     if (!root.is_object()) throw std::runtime_error("Config must be JSON object");
     const auto& o = root.as_object();
+
+    if (const auto mode_text = jstring(o, "execution_mode", ""); !mode_text.empty()) {
+        const auto mode = v7::parse_execution_mode(mode_text);
+        if (!mode) throw std::runtime_error("unknown execution_mode");
+        const bool paper_only = jbool(o, "paper_only", false);
+        const auto v7_it = o.find("v7");
+        const json::object* v7_policy = v7_it != o.end() && v7_it->value().is_object()
+            ? &v7_it->value().as_object() : nullptr;
+        const bool authenticated = v7_policy != nullptr
+            ? jbool(*v7_policy, "authenticated_execution", false) : false;
+        const bool submission = v7_policy != nullptr
+            ? jbool(*v7_policy, "real_order_submission", false) : false;
+        if (!v7::legacy_execution_flags_match(*mode, paper_only, authenticated, submission)) {
+            throw std::runtime_error("execution_mode conflicts with legacy authority flags");
+        }
+        if (v7_policy != nullptr && jstring(*v7_policy, "execution_mode", mode_text) != mode_text) {
+            throw std::runtime_error("root and v7 execution_mode disagree");
+        }
+    }
 
     c.gamma_url = jstring(o, "gamma_url", c.gamma_url);
     c.clob_url = jstring(o, "clob_url", c.clob_url);

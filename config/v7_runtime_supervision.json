@@ -1,6 +1,8 @@
 {
   "schema": "polymarket_v7_runtime_supervision_v1",
   "version": 7,
+  "execution_mode": "PAPER_SIMULATED",
+  "execution_modes_policy": "config/v7_execution_modes.json",
   "paper_only": true,
   "authenticated_execution": false,
   "real_order_submission": false,
@@ -35,7 +37,40 @@
     "reject_unsafe_paper_inventory": true,
     "never_restart_killed_or_unsafe_state": true
   },
+  "clob_v2_recovery": {
+    "http_425_backoff_initial_seconds": 1,
+    "http_425_backoff_max_seconds": 30,
+    "post_restart_post_only_seconds": 120,
+    "cancel_only_allows_cancel": true,
+    "private_reconciliation_required_after_stream_disconnect": true,
+    "paper_only": true,
+    "authenticated_execution": false,
+    "real_order_submission": false
+  },
+  "order_heartbeat": {
+    "interval_seconds": 5,
+    "maximum_ack_age_seconds": 10,
+    "missing_ack_action": "cancel_all_and_reconcile",
+    "paper_only": true,
+    "authenticated_execution": false,
+    "real_order_submission": false
+  },
+  "signer_rate_limit": {
+    "rolling_window_seconds": 1,
+    "maximum_regular_requests": 10,
+    "maximum_emergency_requests": 10,
+    "maximum_total_requests": 20,
+    "reserve_emergency_for": ["cancel", "heartbeat"],
+    "clock_regression_action": "quarantine_signer_and_reconcile",
+    "paper_only": true,
+    "authenticated_execution": false,
+    "real_order_submission": false
+  },
   "failure_domains": {
+    "signer_rate_limit": {"scope": "signer", "action": "quarantine_signer_and_reconcile", "critical": true},
+    "order_heartbeat_expired": {"scope": "account", "action": "cancel_all_and_reconcile", "critical": true},
+    "matching_engine_restart": {"scope": "venue", "action": "cancel_and_backoff_until_post_only_recovery", "critical": true},
+    "matching_engine_cancel_only": {"scope": "venue", "action": "cancel_only_until_reconciled", "critical": true},
     "market_ws": {"scope": "runtime", "action": "withdraw_and_restart", "critical": true},
     "sequence_gap": {"scope": "affected_market", "action": "invalidate_book_and_resnapshot", "critical": false},
     "duplicate_update": {"scope": "affected_market", "action": "deduplicate", "critical": false},

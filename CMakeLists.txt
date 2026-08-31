@@ -20,9 +20,13 @@ add_library(pm_json src/boost_json.cpp)
 target_include_directories(pm_json PUBLIC ${Boost_INCLUDE_DIRS})
 target_compile_options(pm_json PRIVATE -Wall -Wextra -Wpedantic)
 
+add_library(pm_v7_execution_mode src/v7_execution_mode.cpp)
+target_include_directories(pm_v7_execution_mode PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/include)
+target_compile_options(pm_v7_execution_mode PRIVATE -Wall -Wextra -Wpedantic)
+
 add_library(pm_core src/http.cpp src/api.cpp src/event_api.cpp src/config.cpp)
 target_include_directories(pm_core PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/include ${Boost_INCLUDE_DIRS})
-target_link_libraries(pm_core PUBLIC PkgConfig::LIBCURL pm_json)
+target_link_libraries(pm_core PUBLIC PkgConfig::LIBCURL pm_json pm_v7_execution_mode)
 target_compile_options(pm_core PRIVATE -Wall -Wextra -Wpedantic)
 
 add_library(pm_fast_arb src/fast_arb.cpp src/fast_ws.cpp)
@@ -147,6 +151,22 @@ if(BUILD_TESTING)
   add_executable(pm_v7_liveness_tests tests/test_v7_liveness.cpp)
   target_link_libraries(pm_v7_liveness_tests PRIVATE pm_v7_common)
   add_test(NAME pm_v7_liveness_tests COMMAND pm_v7_liveness_tests)
+
+  add_executable(pm_v7_execution_mode_tests tests/test_v7_execution_mode.cpp)
+  target_link_libraries(pm_v7_execution_mode_tests PRIVATE pm_v7_execution_mode)
+  add_test(NAME pm_v7_execution_mode_tests COMMAND pm_v7_execution_mode_tests)
+
+  add_executable(pm_v7_clob_v2_recovery_tests tests/test_v7_clob_v2_recovery.cpp)
+  target_include_directories(pm_v7_clob_v2_recovery_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
+  add_test(NAME pm_v7_clob_v2_recovery_tests COMMAND pm_v7_clob_v2_recovery_tests)
+
+  add_executable(pm_v7_order_heartbeat_tests tests/test_v7_order_heartbeat.cpp)
+  target_include_directories(pm_v7_order_heartbeat_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
+  add_test(NAME pm_v7_order_heartbeat_tests COMMAND pm_v7_order_heartbeat_tests)
+
+  add_executable(pm_v7_signer_rate_limit_tests tests/test_v7_signer_rate_limit.cpp)
+  target_include_directories(pm_v7_signer_rate_limit_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
+  add_test(NAME pm_v7_signer_rate_limit_tests COMMAND pm_v7_signer_rate_limit_tests)
 
   add_executable(pm_v7_order_tx_tests tests/test_v7_order_tx.cpp)
   target_link_libraries(pm_v7_order_tx_tests PRIVATE pm_v7_common)

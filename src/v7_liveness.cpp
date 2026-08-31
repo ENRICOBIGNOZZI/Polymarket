@@ -55,6 +55,24 @@ LivenessDecision evaluate_liveness(
             || input.private_stream_state == PrivateStreamState::Disconnected)) {
         out.reason_mask |= PrivateReconciliationRequired;
     }
+    if (policy.clob_v2_recovery_required) {
+        switch (input.clob_v2_venue_mode) {
+            case ClobV2VenueMode::Healthy:
+                break;
+            case ClobV2VenueMode::RestartBackoff:
+                out.reason_mask |= VenueRestartBackoff;
+                break;
+            case ClobV2VenueMode::PostOnlyRecovery:
+                out.reason_mask |= VenuePostOnlyRecovery;
+                break;
+            case ClobV2VenueMode::CancelOnly:
+                out.reason_mask |= VenueCancelOnly;
+                break;
+            case ClobV2VenueMode::ReconciliationRequired:
+                out.reason_mask |= VenueReconciliationRequired;
+                break;
+        }
+    }
 
     const std::uint32_t cancel_all_mask = PublicFeedStale | HeartbeatStale | ClockUnhealthy;
     if ((out.reason_mask & cancel_all_mask) != 0U) {
@@ -64,19 +82,26 @@ LivenessDecision evaluate_liveness(
 
     const std::uint32_t reconcile_mask = PrivateFeedStale
                                        | OmsInconsistent
-                                       | PrivateReconciliationRequired;
+                                       | PrivateReconciliationRequired
+                                       | VenueReconciliationRequired;
     if ((out.reason_mask & reconcile_mask) != 0U) {
         out.action = LivenessAction::Reconcile;
         return out;
     }
 
-    if ((out.reason_mask & TransportUnhealthy) != 0U) {
+    const std::uint32_t no_new_mask = TransportUnhealthy
+                                    | VenueRestartBackoff
+                                    | VenueCancelOnly;
+    if ((out.reason_mask & no_new_mask) != 0U) {
         out.action = LivenessAction::NoNewQuotes;
         return out;
     }
 
     out.action = LivenessAction::AllowQuotes;
     out.maker_admission = 1;
+    if ((out.reason_mask & VenuePostOnlyRecovery) != 0U) {
+        out.maker_post_only_required = 1;
+    }
     return out;
 }
 

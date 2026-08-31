@@ -260,6 +260,10 @@ class V7RuntimeChaosContractTest(unittest.TestCase):
     def test_failure_isolation_matrix_covers_deterministic_chaos_scenarios(self) -> None:
         policy = json.loads((ROOT / "config/v7_runtime_supervision.json").read_text())
         expected = {
+            "signer_rate_limit": "quarantine_signer_and_reconcile",
+            "order_heartbeat_expired": "cancel_all_and_reconcile",
+            "matching_engine_restart": "cancel_and_backoff_until_post_only_recovery",
+            "matching_engine_cancel_only": "cancel_only_until_reconciled",
             "market_ws": "withdraw_and_restart",
             "sequence_gap": "invalidate_book_and_resnapshot",
             "duplicate_update": "deduplicate",
@@ -280,6 +284,35 @@ class V7RuntimeChaosContractTest(unittest.TestCase):
                 self.assertEqual(failure_action(policy, failure)["action"], action)
         self.assertTrue(failure_action(policy, "ledger_write")["critical"])
         self.assertFalse(failure_action(policy, "external_feed")["critical"])
+
+        recovery = policy["clob_v2_recovery"]
+        self.assertEqual(recovery["http_425_backoff_initial_seconds"], 1)
+        self.assertEqual(recovery["http_425_backoff_max_seconds"], 30)
+        self.assertEqual(recovery["post_restart_post_only_seconds"], 120)
+        self.assertTrue(recovery["cancel_only_allows_cancel"])
+        self.assertTrue(recovery["private_reconciliation_required_after_stream_disconnect"])
+        self.assertTrue(recovery["paper_only"])
+        self.assertFalse(recovery["authenticated_execution"])
+        self.assertFalse(recovery["real_order_submission"])
+
+        heartbeat = policy["order_heartbeat"]
+        self.assertEqual(heartbeat["interval_seconds"], 5)
+        self.assertEqual(heartbeat["maximum_ack_age_seconds"], 10)
+        self.assertEqual(heartbeat["missing_ack_action"], "cancel_all_and_reconcile")
+        self.assertTrue(heartbeat["paper_only"])
+        self.assertFalse(heartbeat["authenticated_execution"])
+        self.assertFalse(heartbeat["real_order_submission"])
+
+        rate_limit = policy["signer_rate_limit"]
+        self.assertEqual(rate_limit["rolling_window_seconds"], 1)
+        self.assertEqual(rate_limit["maximum_regular_requests"], 10)
+        self.assertEqual(rate_limit["maximum_emergency_requests"], 10)
+        self.assertEqual(rate_limit["maximum_total_requests"], 20)
+        self.assertEqual(rate_limit["reserve_emergency_for"], ["cancel", "heartbeat"])
+        self.assertEqual(rate_limit["clock_regression_action"], "quarantine_signer_and_reconcile")
+        self.assertTrue(rate_limit["paper_only"])
+        self.assertFalse(rate_limit["authenticated_execution"])
+        self.assertFalse(rate_limit["real_order_submission"])
 
 
 if __name__ == "__main__":

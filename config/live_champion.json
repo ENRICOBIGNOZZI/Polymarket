@@ -2,6 +2,7 @@
   "schema_version": 1,
   "enabled": true,
   "version": 7,
+  "execution_mode": "PAPER_SIMULATED",
   "loop": "scripts/paper_v7_execution_loop.sh",
   "config": "config/paper_v7.json",
   "run_root": "runs/paper_v7_live",

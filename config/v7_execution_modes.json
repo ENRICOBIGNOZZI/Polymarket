@@ -1,0 +1,23 @@
+{
+  "schema": "polymarket_v7_execution_modes_v1",
+  "version": 7,
+  "default_execution_mode": "PAPER_SIMULATED",
+  "checked_in_live_caps": {
+    "maximum_order_base_units": 0,
+    "maximum_gross_exposure_base_units": 0,
+    "maximum_event_loss_base_units": 0,
+    "maximum_daily_loss_base_units": 0,
+    "maximum_open_order_count": 0
+  },
+  "modes": {
+    "RESEARCH_ZERO_AUTHORITY": {"public_ingress": true, "paper_orders": false, "authenticated_read": false, "signing": false, "submit_orders": false, "cancel_orders": false, "authoritative_pnl": false},
+    "PAPER_SIMULATED": {"public_ingress": true, "paper_orders": true, "authenticated_read": false, "signing": false, "submit_orders": false, "cancel_orders": false, "authoritative_pnl": false},
+    "SHADOW_LIVE_READ_ONLY": {"public_ingress": true, "paper_orders": false, "authenticated_read": true, "signing": false, "submit_orders": false, "cancel_orders": false, "authoritative_pnl": false},
+    "MICRO_LIVE": {"public_ingress": true, "paper_orders": false, "authenticated_read": true, "signing": true, "submit_orders": true, "cancel_orders": true, "authoritative_pnl": true},
+    "LIVE_RESTRICTED": {"public_ingress": true, "paper_orders": false, "authenticated_read": true, "signing": true, "submit_orders": true, "cancel_orders": true, "authoritative_pnl": true},
+    "LIVE_SCALED": {"public_ingress": true, "paper_orders": false, "authenticated_read": true, "signing": true, "submit_orders": true, "cancel_orders": true, "authoritative_pnl": true},
+    "DRAIN_ONLY": {"public_ingress": true, "paper_orders": false, "authenticated_read": true, "signing": false, "submit_orders": false, "cancel_orders": true, "authoritative_pnl": false},
+    "CANCEL_ONLY": {"public_ingress": true, "paper_orders": false, "authenticated_read": true, "signing": false, "submit_orders": false, "cancel_orders": true, "authoritative_pnl": false},
+    "KILLED": {"public_ingress": false, "paper_orders": false, "authenticated_read": false, "signing": false, "submit_orders": false, "cancel_orders": false, "authoritative_pnl": false}
+  }
+}

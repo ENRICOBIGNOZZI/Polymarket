@@ -1,5 +1,6 @@
 #pragma once
 
+#include "pm/v7_clob_v2_recovery.hpp"
 #include "pm/v7_private_state.hpp"
 
 #include <cstdint>
@@ -22,6 +23,10 @@ enum LivenessReason : std::uint32_t {
     OmsInconsistent = 1U << 4U,
     TransportUnhealthy = 1U << 5U,
     PrivateReconciliationRequired = 1U << 6U,
+    VenueRestartBackoff = 1U << 7U,
+    VenuePostOnlyRecovery = 1U << 8U,
+    VenueCancelOnly = 1U << 9U,
+    VenueReconciliationRequired = 1U << 10U,
 };
 
 struct LivenessPolicy {
@@ -30,6 +35,7 @@ struct LivenessPolicy {
     std::int64_t max_heartbeat_age_ns = 5'000'000'000LL;
     std::uint8_t private_stream_required = 0; // PAPER default: disabled.
     std::uint8_t heartbeat_required = 0;      // PAPER default: disabled.
+    std::uint8_t clob_v2_recovery_required = 0; // PAPER default: disabled.
 
     [[nodiscard]] bool valid() const noexcept;
 };
@@ -40,6 +46,7 @@ struct LivenessInput {
     std::int64_t last_private_receive_ns = 0;
     std::int64_t last_heartbeat_ack_ns = 0;
     PrivateStreamState private_stream_state = PrivateStreamState::Disconnected;
+    ClobV2VenueMode clob_v2_venue_mode = ClobV2VenueMode::ReconciliationRequired;
     std::uint8_t clock_healthy = 1;
     std::uint8_t oms_consistent = 1;
     std::uint8_t transport_healthy = 1;
@@ -49,6 +56,7 @@ struct LivenessDecision {
     LivenessAction action = LivenessAction::CancelAll;
     std::uint32_t reason_mask = LivenessNone;
     std::uint8_t maker_admission = 0;
+    std::uint8_t maker_post_only_required = 0;
 };
 
 // Pure common risk-plane function: no I/O, allocation or wall-clock reads. The

@@ -1,6 +1,7 @@
 {
   "schema_version": 3,
   "engine_version": 7,
+  "execution_mode": "PAPER_SIMULATED",
   "paper_only": true,
   "gamma_url": "https://gamma-api.polymarket.com",
   "clob_url": "https://clob.polymarket.com",
@@ -34,14 +35,31 @@
     "single_canonical_ledger_writer": true
   },
   "v7": {
+    "execution_mode": "PAPER_SIMULATED",
+    "execution_modes_policy": "config/v7_execution_modes.json",
     "paper_only": true,
     "authenticated_execution": false,
     "real_order_submission": false,
+    "live_capability": {
+      "live_enabled": false,
+      "max_order": 0,
+      "max_exposure": 0,
+      "max_daily_loss": 0
+    },
     "execution_root": "runs/paper_v7_live/execution",
     "shadow_root": "runs/paper_v7_live/shadow",
     "market_data_root": "runs/paper_v7_live/market_data",
     "frequency_matrix": "config/v7_frequency_matrix.json",
     "strategy_registry": "config/v7_strategy_registry.json",
+    "contract_registry": "config/v7_polymarket_v2_contracts.json",
+    "require_v2_contract_registry": true,
+    "real_pnl_provenance_required": true,
+    "real_pnl_economic_scorecard_required": true,
+    "pre_canary_security": {
+      "full_history_secret_scan_required": true,
+      "findings_must_equal": 0,
+      "remediation_evidence_required": true
+    },
     "adaptive_universe_policy": "config/v7_adaptive_universe.json",
     "intent_min_edge": 0.00005,
     "micro_maker_policy": "config/v7_professional_market_maker.json",

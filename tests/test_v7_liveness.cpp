@@ -61,6 +61,31 @@ void test_stale_private_stream_requires_reconcile_not_fake_cancel_ack() {
     assert((decision.reason_mask & pm::v7::PrivateFeedStale) != 0U);
 }
 
+void test_clob_v2_restrictions_preserve_cancel_capacity_and_reconciliation() {
+    pm::v7::LivenessPolicy policy;
+    policy.clob_v2_recovery_required = 1;
+    auto input = healthy_input();
+
+    input.clob_v2_venue_mode = pm::v7::ClobV2VenueMode::RestartBackoff;
+    auto decision = pm::v7::evaluate_liveness(input, policy);
+    assert(decision.action == pm::v7::LivenessAction::NoNewQuotes);
+    assert((decision.reason_mask & pm::v7::VenueRestartBackoff) != 0U);
+
+    input.clob_v2_venue_mode = pm::v7::ClobV2VenueMode::PostOnlyRecovery;
+    decision = pm::v7::evaluate_liveness(input, policy);
+    assert(decision.action == pm::v7::LivenessAction::AllowQuotes);
+    assert(decision.maker_admission == 1);
+    assert(decision.maker_post_only_required == 1);
+
+    input.clob_v2_venue_mode = pm::v7::ClobV2VenueMode::CancelOnly;
+    decision = pm::v7::evaluate_liveness(input, policy);
+    assert(decision.action == pm::v7::LivenessAction::NoNewQuotes);
+
+    input.clob_v2_venue_mode = pm::v7::ClobV2VenueMode::ReconciliationRequired;
+    decision = pm::v7::evaluate_liveness(input, policy);
+    assert(decision.action == pm::v7::LivenessAction::Reconcile);
+}
+
 void test_heartbeat_deadman_has_cancel_all_precedence() {
     pm::v7::LivenessPolicy policy;
     policy.heartbeat_required = 1;
@@ -175,6 +200,7 @@ int main() {
     test_stale_public_feed_requests_cancel_all();
     test_private_uncertainty_requires_reconcile_when_enabled();
     test_stale_private_stream_requires_reconcile_not_fake_cancel_ack();
+    test_clob_v2_restrictions_preserve_cancel_capacity_and_reconciliation();
     test_heartbeat_deadman_has_cancel_all_precedence();
     test_clock_failure_requests_cancel_all();
     test_transport_failure_blocks_new_quotes_without_hiding_other_health();

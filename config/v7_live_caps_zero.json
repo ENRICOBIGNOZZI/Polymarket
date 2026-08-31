@@ -1,0 +1,10 @@
+{
+  "schema_version": 1,
+  "live_enabled": false,
+  "maximum_order_base_units": 0,
+  "maximum_gross_exposure_base_units": 0,
+  "maximum_event_loss_base_units": 0,
+  "maximum_daily_loss_base_units": 0,
+  "maximum_open_order_count": 0,
+  "note": "Checked-in live limits must remain zero."
+}
