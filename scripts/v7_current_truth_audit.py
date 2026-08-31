@@ -148,8 +148,8 @@ def audit(root: Path, *, now: datetime | None = None, secret_report: dict[str, A
 def markdown(value: dict[str, Any]) -> str:
     return "\n".join((
         "# V7 current-truth audit", "",
-        f"Audit timestamp: `{value['audit_timestamp']}`  ",
-        f"Audit anchor: `{value['audit_anchor_sha']}`  ",
+        f"Audit timestamp: `{value['audit_timestamp']}`",
+        f"Audit anchor: `{value['audit_anchor_sha']}`",
         f"Current HEAD: `{value['starting_head_sha']}`", "",
         "This is a redacted evidence record, not a readiness claim.", "",
         "## Honest claim state", "",
