@@ -127,6 +127,7 @@ class RtdsExternalFairMonitorTests(unittest.TestCase):
             self.assertEqual(monitor.written, 1)
             self.assertEqual(monitor.dropped, 0)
             self.assertEqual(monitor.duplicates, 1)
+            self.assertEqual(monitor.malformed_frames, 0)
 
     def test_boundary_reference_is_causal_bounded_and_prefers_latest(self) -> None:
         history = {

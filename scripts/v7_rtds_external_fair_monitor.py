@@ -383,6 +383,7 @@ class Monitor:
         }
         self.oracle_history: dict[int, dict[str, Any]] = {}
         self.accepted = self.written = self.dropped = self.duplicates = 0
+        self.malformed_frames = 0
         self.connection_epoch = self.reconnects = self.gaps = 0
         self.last_error = "starting"
         self.last_contract_refresh_ns = 0
@@ -834,7 +835,8 @@ class Monitor:
             "paper_router": router,
             "tape": {"evidence_valid": True, "accepted": self.accepted,
                      "written": self.written, "dropped": self.dropped,
-                     "duplicates": self.duplicates},
+                     "duplicates": self.duplicates,
+                     "malformed_frames": self.malformed_frames},
             "blockers": (["CONTRACT_BINDING_NOT_RUNNING"] if not self.active_contract else [])
                         + (["CONTRACT_RULES_NOT_AUTHORIZED"] if self.active_contract and not self.active_contract.get("rules_hash_recognized") else [])
                         + (["SETTLEMENT_REFERENCE_NOT_CAPTURED"] if not self.reference.get("valid") else [])
@@ -896,7 +898,11 @@ class Monitor:
                         try:
                             decoded = json.loads(fragments.decode("utf-8"))
                         except (UnicodeDecodeError, json.JSONDecodeError):
-                            self.dropped += 1
+                            # An unparseable wire frame contains no qualified
+                            # observation.  Keep it distinct from a dropped
+                            # accepted tape event so evidence loss remains
+                            # auditable.
+                            self.malformed_frames += 1
                         else:
                             observed = False
                             for row in observations(decoded):
