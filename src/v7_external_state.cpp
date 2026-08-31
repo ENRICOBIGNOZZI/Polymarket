@@ -103,6 +103,7 @@ std::size_t ExternalAssetState::venue_index(VenueId venue) noexcept {
         case VenueId::CoinbaseSpot: return 1;
         case VenueId::BybitSpot: return 2;
         case VenueId::Deribit: return 3;
+        case VenueId::BybitLinear: return 4;
         case VenueId::Unknown:
         default: return kVenueCount;
     }

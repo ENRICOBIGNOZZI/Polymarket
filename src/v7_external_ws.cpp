@@ -106,6 +106,14 @@ ExternalVenueConnectionSpec btc_spot_connection_spec(
             spec.subscription_json =
                 R"({"jsonrpc":"2.0","method":"public/subscribe","id":1,"params":{"channels":["ticker.BTC-PERPETUAL.100ms","trades.BTC-PERPETUAL.100ms"]}})";
             break;
+        case VenueId::BybitLinear:
+            spec.host = "stream.bybit.com";
+            spec.port = "443";
+            spec.target = "/v5/public/linear";
+            spec.symbol = "BTCUSDT";
+            spec.subscription_json =
+                R"({"op":"subscribe","args":["orderbook.50.BTCUSDT","publicTrade.BTCUSDT","tickers.BTCUSDT","allLiquidation.BTCUSDT"]})";
+            break;
         case VenueId::Unknown:
         default:
             throw std::invalid_argument("unsupported external venue");

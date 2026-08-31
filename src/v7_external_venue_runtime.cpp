@@ -685,8 +685,9 @@ private:
 
 class BybitL2Observer final : public ExternalFrameObserver {
 public:
-    BybitL2Observer(ExternalVenueIngress& ingress, std::uint64_t asset_handle) noexcept
-        : ingress_(ingress), asset_handle_(asset_handle) {}
+    BybitL2Observer(ExternalVenueIngress& ingress, std::uint64_t asset_handle,
+                    VenueId venue = VenueId::BybitSpot) noexcept
+        : ingress_(ingress), asset_handle_(asset_handle), venue_(venue) {}
 
     void on_connection_epoch(std::uint64_t epoch) noexcept override {
         std::lock_guard lock(mutex_);
@@ -794,7 +795,7 @@ private:
         event.asset_handle = asset_handle_;
         event.connection_epoch = connection_epoch_;
         event.source_sequence = update_id;
-        event.venue = VenueId::BybitSpot;
+        event.venue = venue_;
         event.event_type = ExternalEventType::BookTop;
         event.local_receive_monotonic_ns = receive_ns;
         event.local_receive_wall_ns = wall_ns;
@@ -815,11 +816,142 @@ private:
 
     ExternalVenueIngress& ingress_;
     std::uint64_t asset_handle_ = 0;
+    VenueId venue_ = VenueId::BybitSpot;
     mutable std::mutex mutex_{};
     CoinbaseL2Book book_{};
     std::uint64_t connection_epoch_ = 0;
     std::uint64_t last_update_id_ = 0;
     std::uint64_t parse_failures_ = 0;
+};
+
+struct BybitLinearMarketMetrics {
+    std::int64_t ticker_receive_ns = 0;
+    double mark_price = 0.0;
+    double index_price = 0.0;
+    double funding_rate = 0.0;
+    double open_interest = 0.0;
+    double signed_trade_flow = 0.0;
+    double liquidation_buy_notional = 0.0;
+    double liquidation_sell_notional = 0.0;
+    std::uint64_t ticker_frames = 0;
+    std::uint64_t trade_frames = 0;
+    std::uint64_t liquidation_frames = 0;
+    std::uint64_t parse_failures = 0;
+    std::uint8_t valid = 0;
+};
+
+json::object bybit_linear_json(const BybitLinearMarketMetrics& value) {
+    return {
+        {"valid", value.valid != 0}, {"ticker_receive_monotonic_ns", value.ticker_receive_ns},
+        {"mark_price", value.mark_price}, {"index_price", value.index_price},
+        {"funding_rate", value.funding_rate}, {"open_interest", value.open_interest},
+        {"signed_trade_flow", value.signed_trade_flow},
+        {"liquidation_buy_notional", value.liquidation_buy_notional},
+        {"liquidation_sell_notional", value.liquidation_sell_notional},
+        {"ticker_frames", value.ticker_frames}, {"trade_frames", value.trade_frames},
+        {"liquidation_frames", value.liquidation_frames}, {"parse_failures", value.parse_failures},
+    };
+}
+
+class BybitLinearMarketObserver final : public ExternalFrameObserver {
+public:
+    void on_connection_epoch(std::uint64_t) noexcept override {
+        std::lock_guard lock(mutex_);
+        metrics_.valid = 0;
+    }
+
+    void on_frame(std::uint64_t, std::int64_t receive_ns, std::int64_t,
+                  std::string_view payload) noexcept override {
+        try {
+            boost::system::error_code error;
+            const auto raw = json::parse(payload, error);
+            if (error || !raw.is_object()) { fail(); return; }
+            const auto& root = raw.as_object();
+            const auto* topic = json_field(root, "topic");
+            const auto* data = json_field(root, "data");
+            if (topic == nullptr || !topic->is_string() || data == nullptr) return;
+            const std::string_view channel(topic->as_string().data(), topic->as_string().size());
+            std::lock_guard lock(mutex_);
+            if (channel == "tickers.BTCUSDT" && data->is_object()) update_ticker(data->as_object(), receive_ns);
+            else if (channel == "publicTrade.BTCUSDT" && data->is_array()) update_trades(data->as_array());
+            else if (channel == "allLiquidation.BTCUSDT" && data->is_object()) update_liquidation(data->as_object());
+        } catch (...) { fail(); }
+    }
+
+    [[nodiscard]] BybitLinearMarketMetrics metrics() const noexcept {
+        std::lock_guard lock(mutex_);
+        return metrics_;
+    }
+
+private:
+    void fail() noexcept { std::lock_guard lock(mutex_); ++metrics_.parse_failures; metrics_.valid = 0; }
+
+    bool update_optional(const json::object& data, std::string_view key, double& target,
+                         bool nonnegative = false) noexcept {
+        const auto* value = json_field(data, key);
+        if (value == nullptr) return true;
+        double parsed = 0.0;
+        if (!json_number(value, parsed) || (!nonnegative && !std::isfinite(parsed))
+            || (nonnegative && parsed < 0.0)) return false;
+        target = parsed;
+        return true;
+    }
+
+    void update_ticker(const json::object& data, std::int64_t receive_ns) noexcept {
+        if (!update_optional(data, "markPrice", metrics_.mark_price)
+            || !update_optional(data, "indexPrice", metrics_.index_price)
+            || !update_optional(data, "fundingRate", metrics_.funding_rate)
+            || !update_optional(data, "openInterest", metrics_.open_interest, true)) {
+            ++metrics_.parse_failures; metrics_.valid = 0; return;
+        }
+        ++metrics_.ticker_frames;
+        metrics_.ticker_receive_ns = receive_ns;
+        metrics_.valid = metrics_.mark_price > 0.0 && metrics_.index_price > 0.0 ? 1 : 0;
+    }
+
+    void update_trades(const json::array& trades) noexcept {
+        ++metrics_.trade_frames;
+        for (const auto& raw_trade : trades) {
+            if (!raw_trade.is_object()) { ++metrics_.parse_failures; continue; }
+            const auto& trade = raw_trade.as_object();
+            double size = 0.0;
+            if (!json_number(json_field(trade, "v"), size) || size <= 0.0) { ++metrics_.parse_failures; continue; }
+            if (json_text_equals(json_field(trade, "S"), "Buy")) metrics_.signed_trade_flow = .9 * metrics_.signed_trade_flow + .1 * size;
+            else if (json_text_equals(json_field(trade, "S"), "Sell")) metrics_.signed_trade_flow = .9 * metrics_.signed_trade_flow - .1 * size;
+            else ++metrics_.parse_failures;
+        }
+    }
+
+    void update_liquidation(const json::object& value) noexcept {
+        ++metrics_.liquidation_frames;
+        double price = 0.0, size = 0.0;
+        if (!json_number(json_field(value, "p"), price) || !json_number(json_field(value, "v"), size)
+            || price <= 0.0 || size <= 0.0) { ++metrics_.parse_failures; return; }
+        if (json_text_equals(json_field(value, "S"), "Buy")) metrics_.liquidation_buy_notional += price * size;
+        else if (json_text_equals(json_field(value, "S"), "Sell")) metrics_.liquidation_sell_notional += price * size;
+        else ++metrics_.parse_failures;
+    }
+
+    mutable std::mutex mutex_{};
+    BybitLinearMarketMetrics metrics_{};
+};
+
+class FanoutObserver final : public ExternalFrameObserver {
+public:
+    FanoutObserver(ExternalFrameObserver& first, ExternalFrameObserver& second) noexcept
+        : first_(first), second_(second) {}
+    void on_connection_epoch(std::uint64_t epoch) noexcept override {
+        first_.on_connection_epoch(epoch);
+        second_.on_connection_epoch(epoch);
+    }
+    void on_frame(std::uint64_t epoch, std::int64_t receive_ns, std::int64_t wall_ns,
+                  std::string_view payload) noexcept override {
+        first_.on_frame(epoch, receive_ns, wall_ns, payload);
+        second_.on_frame(epoch, receive_ns, wall_ns, payload);
+    }
+private:
+    ExternalFrameObserver& first_;
+    ExternalFrameObserver& second_;
 };
 } // namespace
 
@@ -862,6 +994,7 @@ int main(int argc, char** argv) {
         auto binance_event_tape = normalized_event_tape("binance-spot");
         auto coinbase_event_tape = normalized_event_tape("coinbase-spot");
         auto bybit_event_tape = normalized_event_tape("bybit-spot");
+        auto bybit_linear_event_tape = normalized_event_tape("bybit-linear");
         auto deribit_event_tape = normalized_event_tape("deribit");
         const auto raw_tape = [&](std::string source) {
             if (raw_tape_dir.empty()) return std::unique_ptr<ExternalRawTapeRecorder>{};
@@ -873,6 +1006,7 @@ int main(int argc, char** argv) {
         auto binance_raw_tape = raw_tape("binance-spot");
         auto coinbase_raw_tape = raw_tape("coinbase-spot");
         auto bybit_raw_tape = raw_tape("bybit-spot");
+        auto bybit_linear_raw_tape = raw_tape("bybit-linear");
         auto deribit_raw_tape = raw_tape("deribit");
         auto binance_usdm_depth_raw_tape = raw_tape("binance-usdm-depth");
         auto binance_usdm_market_raw_tape = raw_tape("binance-usdm-market");
@@ -882,15 +1016,20 @@ int main(int argc, char** argv) {
         ExternalVenueIngress binance_ingress(VenueId::BinanceSpot, asset_handle, binance_event_tape.get());
         ExternalVenueIngress coinbase_ingress(VenueId::CoinbaseSpot, asset_handle, coinbase_event_tape.get());
         ExternalVenueIngress bybit_ingress(VenueId::BybitSpot, asset_handle, bybit_event_tape.get());
+        ExternalVenueIngress bybit_linear_ingress(VenueId::BybitLinear, asset_handle, bybit_linear_event_tape.get());
         ExternalVenueIngress deribit_ingress(VenueId::Deribit, asset_handle, deribit_event_tape.get());
         BinanceSpotL2Observer binance_l2;
         CoinbaseL2Observer coinbase_l2(coinbase_ingress, asset_handle);
         BybitL2Observer bybit_l2(bybit_ingress, asset_handle);
+        BybitL2Observer bybit_linear_l2(bybit_linear_ingress, asset_handle, VenueId::BybitLinear);
+        BybitLinearMarketObserver bybit_linear_market;
+        FanoutObserver bybit_linear_observer(bybit_linear_l2, bybit_linear_market);
         BinanceUsdMObserver binance_usdm_observer;
         DeribitObserver deribit_observer;
         ExternalVenueWsClient binance(btc_spot_connection_spec(VenueId::BinanceSpot, asset_handle), &binance_ingress, &binance_l2, binance_raw_tape.get());
         ExternalVenueWsClient coinbase(btc_spot_connection_spec(VenueId::CoinbaseSpot, asset_handle), nullptr, &coinbase_l2, coinbase_raw_tape.get());
         ExternalVenueWsClient bybit(btc_spot_connection_spec(VenueId::BybitSpot, asset_handle), &bybit_ingress, &bybit_l2, bybit_raw_tape.get());
+        ExternalVenueWsClient bybit_linear(btc_spot_connection_spec(VenueId::BybitLinear, asset_handle), nullptr, &bybit_linear_observer, bybit_linear_raw_tape.get());
         ExternalVenueWsClient deribit(btc_spot_connection_spec(VenueId::Deribit, asset_handle), &deribit_ingress, &deribit_observer, deribit_raw_tape.get());
         auto binance_usdm_depth_spec = btc_spot_connection_spec(VenueId::BinanceUsdM, asset_handle);
         binance_usdm_depth_spec.subscription_json =
@@ -905,6 +1044,7 @@ int main(int argc, char** argv) {
         std::thread binance_thread([&] { binance.run(ExternalStopToken(stopping)); });
         std::thread coinbase_thread([&] { coinbase.run(ExternalStopToken(stopping)); });
         std::thread bybit_thread([&] { bybit.run(ExternalStopToken(stopping)); });
+        std::thread bybit_linear_thread([&] { bybit_linear.run(ExternalStopToken(stopping)); });
         std::thread deribit_thread([&] { deribit.run(ExternalStopToken(stopping)); });
         std::thread binance_usdm_depth_thread([&] { binance_usdm_depth.run(ExternalStopToken(stopping)); });
         std::thread binance_usdm_market_thread([&] { binance_usdm_market.run(ExternalStopToken(stopping)); });
@@ -912,6 +1052,7 @@ int main(int argc, char** argv) {
         std::jthread binance_thread([&](std::stop_token token) { binance.run(token); });
         std::jthread coinbase_thread([&](std::stop_token token) { coinbase.run(token); });
         std::jthread bybit_thread([&](std::stop_token token) { bybit.run(token); });
+        std::jthread bybit_linear_thread([&](std::stop_token token) { bybit_linear.run(token); });
         std::jthread deribit_thread([&](std::stop_token token) { deribit.run(token); });
         std::jthread binance_usdm_depth_thread([&](std::stop_token token) { binance_usdm_depth.run(token); });
         std::jthread binance_usdm_market_thread([&](std::stop_token token) { binance_usdm_market.run(token); });
@@ -921,6 +1062,7 @@ int main(int argc, char** argv) {
             const auto drained = binance_ingress.drain_into(state, policy)
                 + coinbase_ingress.drain_into(state, policy)
                 + bybit_ingress.drain_into(state, policy)
+                + bybit_linear_ingress.drain_into(state, policy)
                 + deribit_ingress.drain_into(state, policy);
             const auto now_mono = monotonic_now_ns();
             const auto snapshot = state.snapshot(now_mono, policy);
@@ -934,6 +1076,7 @@ int main(int argc, char** argv) {
             const auto binance_status = binance.snapshot();
             const auto coinbase_status = coinbase.snapshot();
             const auto bybit_status = bybit.snapshot();
+            const auto bybit_linear_status = bybit_linear.snapshot();
             const auto deribit_status = deribit.snapshot();
             const auto binance_usdm_depth_status = binance_usdm_depth.snapshot();
             const auto binance_usdm_market_status = binance_usdm_market.snapshot();
@@ -941,6 +1084,7 @@ int main(int argc, char** argv) {
             venues.emplace_back(transport_json(binance_status, "BINANCE_SPOT"));
             venues.emplace_back(transport_json(coinbase_status, "COINBASE_SPOT"));
             venues.emplace_back(transport_json(bybit_status, "BYBIT_SPOT"));
+            venues.emplace_back(transport_json(bybit_linear_status, "BYBIT_LINEAR"));
             venues.emplace_back(transport_json(deribit_status, "DERIBIT"));
             venues.emplace_back(transport_json(binance_usdm_depth_status, "BINANCE_USDM_DEPTH"));
             venues.emplace_back(transport_json(binance_usdm_market_status, "BINANCE_USDM_MARKET"));
@@ -974,12 +1118,14 @@ int main(int argc, char** argv) {
                     {"binance_spot", tape_json(binance_event_tape ? binance_event_tape->snapshot() : TapeRecorderSnapshot{}, binance_event_tape != nullptr)},
                     {"coinbase_spot", tape_json(coinbase_event_tape ? coinbase_event_tape->snapshot() : TapeRecorderSnapshot{}, coinbase_event_tape != nullptr)},
                     {"bybit_spot", tape_json(bybit_event_tape ? bybit_event_tape->snapshot() : TapeRecorderSnapshot{}, bybit_event_tape != nullptr)},
+                    {"bybit_linear", tape_json(bybit_linear_event_tape ? bybit_linear_event_tape->snapshot() : TapeRecorderSnapshot{}, bybit_linear_event_tape != nullptr)},
                     {"deribit", tape_json(deribit_event_tape ? deribit_event_tape->snapshot() : TapeRecorderSnapshot{}, deribit_event_tape != nullptr)},
                 }},
                 {"raw_frame_tapes", {
                     {"binance_spot", tape_json(binance_raw_tape ? binance_raw_tape->snapshot() : TapeRecorderSnapshot{}, binance_raw_tape != nullptr)},
                     {"coinbase_spot", tape_json(coinbase_raw_tape ? coinbase_raw_tape->snapshot() : TapeRecorderSnapshot{}, coinbase_raw_tape != nullptr)},
                     {"bybit_spot", tape_json(bybit_raw_tape ? bybit_raw_tape->snapshot() : TapeRecorderSnapshot{}, bybit_raw_tape != nullptr)},
+                    {"bybit_linear", tape_json(bybit_linear_raw_tape ? bybit_linear_raw_tape->snapshot() : TapeRecorderSnapshot{}, bybit_linear_raw_tape != nullptr)},
                     {"deribit", tape_json(deribit_raw_tape ? deribit_raw_tape->snapshot() : TapeRecorderSnapshot{}, deribit_raw_tape != nullptr)},
                     {"binance_usdm_depth", tape_json(binance_usdm_depth_raw_tape ? binance_usdm_depth_raw_tape->snapshot() : TapeRecorderSnapshot{}, binance_usdm_depth_raw_tape != nullptr)},
                     {"binance_usdm_market", tape_json(binance_usdm_market_raw_tape ? binance_usdm_market_raw_tape->snapshot() : TapeRecorderSnapshot{}, binance_usdm_market_raw_tape != nullptr)},
@@ -988,6 +1134,8 @@ int main(int argc, char** argv) {
                 {"coinbase_spot_l2", l2_json(coinbase_l2.metrics())},
                 {"coinbase_spot_l2_diagnostic", coinbase_l2.diagnostic()},
                 {"bybit_spot_l2", l2_json(bybit_l2.metrics())},
+                {"bybit_linear_l2", l2_json(bybit_linear_l2.metrics())},
+                {"bybit_linear", bybit_linear_json(bybit_linear_market.metrics())},
                 {"deribit", deribit_json(deribit_observer.metrics())},
                 {"binance_usdm", usdm_json(binance_usdm_observer.metrics())},
                 {"venues", std::move(venues)},
@@ -999,6 +1147,7 @@ int main(int argc, char** argv) {
         binance_thread.request_stop();
         coinbase_thread.request_stop();
         bybit_thread.request_stop();
+        bybit_linear_thread.request_stop();
         deribit_thread.request_stop();
         binance_usdm_depth_thread.request_stop();
         binance_usdm_market_thread.request_stop();
@@ -1006,6 +1155,7 @@ int main(int argc, char** argv) {
         if (binance_thread.joinable()) binance_thread.join();
         if (coinbase_thread.joinable()) coinbase_thread.join();
         if (bybit_thread.joinable()) bybit_thread.join();
+        if (bybit_linear_thread.joinable()) bybit_linear_thread.join();
         if (deribit_thread.joinable()) deribit_thread.join();
         if (binance_usdm_depth_thread.joinable()) binance_usdm_depth_thread.join();
         if (binance_usdm_market_thread.joinable()) binance_usdm_market_thread.join();
