@@ -382,7 +382,7 @@ class Monitor:
             "fair_compute": deque(maxlen=LATENCY_SAMPLE_LIMIT),
         }
         self.oracle_history: dict[int, dict[str, Any]] = {}
-        self.accepted = self.written = self.dropped = 0
+        self.accepted = self.written = self.dropped = self.duplicates = 0
         self.connection_epoch = self.reconnects = self.gaps = 0
         self.last_error = "starting"
         self.last_contract_refresh_ns = 0
@@ -406,7 +406,9 @@ class Monitor:
         previous = self.latest.get(topic)
         sequence = int(row["timestamp_ms"])
         if topic == ORACLE_TOPIC and sequence in self.oracle_history:
-            self.dropped += 1
+            # RTDS can repeat the current TWAP observation.  It is a valid
+            # duplicate, not a parser failure or an unwritten tape event.
+            self.duplicates += 1
             return
         receive_wall_ns = time.time_ns()
         enriched = dict(row)
@@ -831,7 +833,8 @@ class Monitor:
             },
             "paper_router": router,
             "tape": {"evidence_valid": True, "accepted": self.accepted,
-                     "written": self.written, "dropped": self.dropped},
+                     "written": self.written, "dropped": self.dropped,
+                     "duplicates": self.duplicates},
             "blockers": (["CONTRACT_BINDING_NOT_RUNNING"] if not self.active_contract else [])
                         + (["CONTRACT_RULES_NOT_AUTHORIZED"] if self.active_contract and not self.active_contract.get("rules_hash_recognized") else [])
                         + (["SETTLEMENT_REFERENCE_NOT_CAPTURED"] if not self.reference.get("valid") else [])

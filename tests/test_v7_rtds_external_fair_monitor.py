@@ -113,6 +113,21 @@ class RtdsExternalFairMonitorTests(unittest.TestCase):
         self.assertEqual(len(rows), 1)
         self.assertEqual(rows[0]["window_seconds"], 60)
 
+    def test_duplicate_oracle_timestamp_is_not_recorded_as_a_drop(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            monitor = module.Monitor(Path(directory), "a" * 40)
+            event = {
+                "topic": module.ORACLE_TOPIC, "symbol": "btc/usd",
+                "price": 77001.25, "price_decimal": "77001.25",
+                "timestamp_ms": 1_788_019_000_000,
+            }
+            monitor.ingest(event)
+            monitor.ingest(event)
+            self.assertEqual(monitor.accepted, 1)
+            self.assertEqual(monitor.written, 1)
+            self.assertEqual(monitor.dropped, 0)
+            self.assertEqual(monitor.duplicates, 1)
+
     def test_boundary_reference_is_causal_bounded_and_prefers_latest(self) -> None:
         history = {
             7_000: {"timestamp_ms": 7_000, "price": 70.0},
