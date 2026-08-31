@@ -1,0 +1,38 @@
+from __future__ import annotations
+
+import json
+import sys
+import unittest
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT / "scripts"))
+import v7_external_source_registry as registry
+
+
+class ExternalSourceRegistryTest(unittest.TestCase):
+    def test_canonical_registry_is_v7_paper_only_and_fingerprinted(self) -> None:
+        result = registry.validate(registry.load(ROOT / "config/v7_external_source_registry.json"))
+        self.assertEqual(result["source_count"], 15)
+        self.assertEqual(len(result["registry_sha256"]), 64)
+        self.assertIn("deribit_btc", result["source_ids"])
+        self.assertIn("kalshi_public_rest", result["source_ids"])
+
+    def test_rejects_private_authority_and_unknown_event(self) -> None:
+        value = registry.load(ROOT / "config/v7_external_source_registry.json")
+        value["execution_authority"] = True
+        with self.assertRaisesRegex(registry.SourceRegistryError, "private_authority"):
+            registry.validate(value)
+        value["execution_authority"] = False
+        value["sources"][0]["event_kinds"] = ["INVENTED_EVENT"]
+        with self.assertRaisesRegex(registry.SourceRegistryError, "event_kind"):
+            registry.validate(value)
+
+    def test_registry_is_json_roundtrip_stable(self) -> None:
+        value = registry.load(ROOT / "config/v7_external_source_registry.json")
+        copy = json.loads(json.dumps(value))
+        self.assertEqual(registry.validate(value)["registry_sha256"], registry.validate(copy)["registry_sha256"])
+
+
+if __name__ == "__main__":
+    unittest.main()

@@ -37,14 +37,12 @@
   },
   "oracle": {
     "provider": "Chainlink",
-    "product": "contract_specific_data_streams_twap",
-    "transport_binding": "VERIFIED_CHAINLINK_DATA_STREAMS_V3_ADAPTER_V1",
+    "product": "polymarket_public_rtds_chainlink_twap_sixty",
+    "transport_binding": "POLYMARKET_PUBLIC_RTDS_CHAINLINK_TWAP_SIXTY_V1",
     "adapter": "scripts/v7_same_oracle_adapter.py",
-    "official_rest_origin": "https://api.dataengine.chain.link",
-    "official_websocket_origin": "wss://ws.dataengine.chain.link",
-    "binding_file_env": "PM_V7_ORACLE_BINDING",
-    "credential_env": ["STREAMS_API_KEY", "STREAMS_API_SECRET"],
-    "credentials_absent_behavior": "CONTRACT_LOCAL_UNKNOWN_NO_NEW_RISK",
+    "public_observability_source": "polymarket_rtds_chainlink_btc",
+    "authenticated_chainlink_data_streams": false,
+    "credentials_absent_behavior": "NOT_APPLICABLE_PUBLIC_RTDS_ONLY",
     "resolution_source_from_contract": true,
     "hardcoded_window_seconds": null,
     "max_age_ns": 2000000000,
@@ -65,7 +63,8 @@
     "external_comparison_topic": "crypto_prices",
     "credentials_required": false,
     "execution_authority": "SHADOW_ZERO_AUTHORITY",
-    "may_authorize_contract_or_fair_execution": false
+    "may_authorize_contract_or_fair_execution": false,
+    "paid_chainlink_data_streams_in_scope": false
   },
   "external_venues": {
     "instrument_type": "SPOT",

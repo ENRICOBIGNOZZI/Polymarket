@@ -15,7 +15,7 @@ MAKER_POLICY="${PM_V7_MAKER_POLICY:-config/v7_professional_market_maker.json}"
 FAST_STRUCTURAL_POLICY="${PM_V7_FAST_STRUCTURAL_POLICY:-config/v7_fast_structural.json}"
 FAST_STRUCTURAL_RELATIONS="${PM_V7_FAST_STRUCTURAL_RELATIONS:-config/v7_fast_structural_relations.csv}"
 EXTERNAL_FAIR_POLICY="${PM_V7_EXTERNAL_FAIR_POLICY:-config/v7_external_fair.json}"
-ORACLE_BINDING="${PM_V7_ORACLE_BINDING:-}"
+EXTERNAL_SOURCE_REGISTRY="${PM_V7_EXTERNAL_SOURCE_REGISTRY:-config/v7_external_source_registry.json}"
 CI_REPOSITORY="${PM_V7_CI_REPOSITORY:-ENRICOBIGNOZZI/Polymarket}"
 OSINT_SOURCE_REGISTRY="${PM_V7_OSINT_SOURCE_REGISTRY:-config/v7_osint_sources.json}"
 LIVE_MODEL_SCOPE="${PM_V7_LIVE_MODEL_SCOPE:-config/v7_live_model_scope.json}"
@@ -62,6 +62,12 @@ python3 scripts/v7_exact_sha_ci_gate.py \
   --repository "$CI_REPOSITORY" --sha "$SHA" \
   --output "$CONTROL/exact_sha_ci_receipt.json"
 EXACT_SHA_CI_GREEN=true
+
+# Source registration is an authority boundary, not a best-effort manifest.
+# Collectors may only publish information; this registry cannot grant OMS,
+# capital, ledger, execution, or promotion authority.
+python3 scripts/v7_external_source_registry.py --registry "$EXTERNAL_SOURCE_REGISTRY" \
+  > "$CONTROL/external_source_registry.json"
 
 python3 - "$CONFIG" "$MAKER_POLICY" "$EXTERNAL_FAIR_POLICY" "$OSINT_SOURCE_REGISTRY" "$LIVE_MODEL_SCOPE" "$EXTERNAL_INPUT_CONFIG" "$EXTERNAL_MAPPING_REGISTRY" "$ADAPTIVE_UNIVERSE_CONFIG" "$WS_JSON_ARENA_MAKER_MAX_BYTES" "$WS_JSON_ARENA_OBSERVER_MAX_BYTES" "$WS_JSON_ARENA_FILLABILITY_MAX_BYTES" "$WS_JSON_ARENA_TOTAL_BUDGET_BYTES" <<'PY'
 import json,sys
@@ -254,31 +260,18 @@ python3 scripts/v7_external_fair_challenger.py \
   --status "$RUN_ROOT/external_fair/challenger_status.json" \
   >> "$RUN_ROOT/external_fair/challenger.log" 2>&1 || true
 
-# Official settlement-source data is optional at process level and mandatory at
-# contract level. Missing credentials/binding isolate only settlement-aware
-# contracts; unrelated maker/arb sleeves continue. When configured, the adapter
-# authenticates only to Chainlink market data and can never submit an order.
-if [[ -n "$ORACLE_BINDING" && -f "$ORACLE_BINDING" ]]; then
-  python3 scripts/v7_same_oracle_adapter.py \
-    --binding "$ORACLE_BINDING" \
-    --tape "$RUN_ROOT/external_fair/oracle_events.jsonl" \
-    --status "$RUN_ROOT/external_fair/oracle_status.json" \
-    >> "$RUN_ROOT/external_fair/oracle_adapter.log" 2>&1 &
-  pids+=("$!")
-else
-  # Public RTDS restores the real Chainlink/Binance data plane without
-  # credentials. Contract, fair-value and OMS authorization remain fail-closed
-  # and are reported explicitly instead of being represented as missing data.
-  python3 scripts/v7_rtds_external_fair_monitor.py \
-    --output-dir "$RUN_ROOT/external_fair" --code-sha "$SHA" \
-    --universe "$RUN_ROOT/universe/current.json" \
-    --approvals "config/v7_external_fair_rule_approvals.json" \
-    --external-venues "$RUN_ROOT/external_fair/external_venues.json" \
-    --champion-pointer "$RUN_ROOT/external_fair/model_registry/fair_value_champion.json" \
-    --challenger-pointer "$RUN_ROOT/external_fair/model_registry/fair_value_challenger.json" \
-    >> "$RUN_ROOT/external_fair/rtds_monitor.log" 2>&1 &
-  pids+=("$!")
-fi
+# Paid Chainlink Data Streams are intentionally out of scope. Public RTDS
+# provides the Chainlink 60-second TWAP observability tape. It never replaces
+# the contract resolution oracle or bypasses contract-local verification.
+python3 scripts/v7_rtds_external_fair_monitor.py \
+  --output-dir "$RUN_ROOT/external_fair" --code-sha "$SHA" \
+  --universe "$RUN_ROOT/universe/current.json" \
+  --approvals "config/v7_external_fair_rule_approvals.json" \
+  --external-venues "$RUN_ROOT/external_fair/external_venues.json" \
+  --champion-pointer "$RUN_ROOT/external_fair/model_registry/fair_value_champion.json" \
+  --challenger-pointer "$RUN_ROOT/external_fair/model_registry/fair_value_challenger.json" \
+  >> "$RUN_ROOT/external_fair/rtds_monitor.log" 2>&1 &
+pids+=("$!")
 
 "$EXTERNAL_VENUE_RUNTIME" \
   --output "$RUN_ROOT/external_fair/external_venues.json" --model-sha "$SHA" \
