@@ -752,6 +752,7 @@ MakerModelSnapshot load_model_snapshot(const fs::path& policy_path,
     model.exploration_confidence_z = valid_exploration_confidence
         ? configured_exploration_confidence_z : 0.0;
     model.exploration_quote_notional_fraction = exploration_quote_fraction;
+    model.exploration_max_market_fraction = exploration_market_fraction;
     model.exploration_max_active_markets = configured_market_capacity;
     model.exploration_concurrent_market_cap = exploration_market_cap;
     model.exploration_min_rest_ns = std::max<std::int64_t>(0, object_integer(
@@ -1042,6 +1043,7 @@ struct ShardDiagnostics {
     pm::fast::FeedSnapshot feed{};
     std::uint64_t decisions = 0;
     std::uint64_t quote_intents = 0;
+    std::uint64_t rejected_below_minimum_order = 0;
     std::uint64_t rejected_nonpositive_robust_ev = 0;
     std::uint64_t rejected_positive_point_ev = 0;
     std::int64_t best_rejected_robust_ev_nano = std::numeric_limits<std::int64_t>::min();
@@ -1147,6 +1149,8 @@ public:
         if (feed_) out.feed = feed_->snapshot();
         out.decisions = decisions_.load(std::memory_order_relaxed);
         out.quote_intents = quote_intents_.load(std::memory_order_relaxed);
+        out.rejected_below_minimum_order =
+            rejected_below_minimum_order_.load(std::memory_order_relaxed);
         out.rejected_nonpositive_robust_ev =
             rejected_nonpositive_robust_ev_.load(std::memory_order_relaxed);
         out.rejected_positive_point_ev = rejected_positive_point_ev_.load(std::memory_order_relaxed);
@@ -1361,10 +1365,30 @@ private:
                                                  std::min(100.0, capital_bound));
         context.risk.max_abs_residual_shares = std::max(
             2.0 * context.risk.max_quote_shares, 10.0 * min_order(market, instrument.yes != 0));
-        const double exploration_cap = context.risk.max_quote_shares
-            * model.exploration_quote_notional_fraction / 0.01;
-        context.risk.exploration_max_quote_shares = exploration_cap + 1e-12
-            >= min_order(market, instrument.yes != 0) ? exploration_cap : 0.0;
+        const double venue_minimum_shares = min_order(market, instrument.yes != 0);
+        // Use the ask as a conservative notional bound for either passive side:
+        // JOIN BUY will be cheaper, while JOIN SELL cannot consume more funded
+        // inventory than this price-valued bound. The per-quote fraction is a
+        // target; the venue minimum may round it up only inside the independent
+        // per-market hard cap. If even the venue minimum is unaffordable, zero
+        // is an explicit denial consumed fail-closed by the hot path.
+        const double quote_notional_price = source_event.book.valid
+            ? std::clamp(e4_price(source_event.book.best_ask_e4), 0.01, 0.99)
+            : 1.0;
+        const double target_exploration_shares = std::min(
+            context.risk.max_quote_shares,
+            sleeve_starting_capital_dollars_
+                * model.exploration_quote_notional_fraction / quote_notional_price);
+        const double minimum_order_notional = venue_minimum_shares * quote_notional_price;
+        const double market_notional_cap = sleeve_starting_capital_dollars_
+            * model.exploration_max_market_fraction;
+        if (target_exploration_shares + 1e-12 >= venue_minimum_shares) {
+            context.risk.exploration_max_quote_shares = target_exploration_shares;
+        } else if (minimum_order_notional <= market_notional_cap + 1e-12) {
+            context.risk.exploration_max_quote_shares = venue_minimum_shares;
+        } else {
+            context.risk.exploration_max_quote_shares = 0.0;
+        }
         context.risk.max_local_state_age_ns = 5'000'000'000LL;
         context.risk.global_kill = static_cast<std::uint8_t>(
             global_kill_->load(std::memory_order_acquire));
@@ -1400,9 +1424,12 @@ private:
                 intent.exchange_event_ns = std::max<std::int64_t>(1, instrument.last_exchange_ns);
             }
             if (intent.type == IntentType::Quote) {
-                quote_intents_.fetch_add(1, std::memory_order_relaxed);
                 const double shares_requested = micro_shares(intent.quantity_microunits);
-                if (shares_requested + 1e-12 < min_order(market, instrument.yes != 0)) continue;
+                if (shares_requested + 1e-12 < min_order(market, instrument.yes != 0)) {
+                    rejected_below_minimum_order_.fetch_add(1, std::memory_order_relaxed);
+                    continue;
+                }
+                quote_intents_.fetch_add(1, std::memory_order_relaxed);
                 push_candidate(market, instrument.yes != 0, decision, intent,
                                source_event.book, receive);
             }
@@ -1531,8 +1558,9 @@ public:
     }
 
 public:
-    void set_starting_capital_fraction(double dollars) noexcept {
-        starting_capital_fraction_ = std::max(0.0, dollars);
+    void set_sleeve_starting_capital(double dollars) noexcept {
+        sleeve_starting_capital_dollars_ = std::max(0.0, dollars);
+        starting_capital_fraction_ = 0.01 * sleeve_starting_capital_dollars_;
     }
 
 private:
@@ -1572,6 +1600,7 @@ private:
     std::array<std::atomic<std::uint64_t>, kDecisionReasonCount> decision_reasons_{};
     std::atomic<std::uint64_t> decisions_{0};
     std::atomic<std::uint64_t> quote_intents_{0};
+    std::atomic<std::uint64_t> rejected_below_minimum_order_{0};
     std::atomic<std::uint64_t> rejected_nonpositive_robust_ev_{0};
     std::atomic<std::uint64_t> rejected_positive_point_ev_{0};
     std::atomic<std::uint64_t> raw_last_trade_events_{0};
@@ -1587,6 +1616,7 @@ private:
     std::atomic<std::int64_t> best_rejected_point_ev_nano_{
         std::numeric_limits<std::int64_t>::min()};
     double starting_capital_fraction_ = 5.0;
+    double sleeve_starting_capital_dollars_ = 0.0;
 };
 
 void write_runtime_diagnostics(
@@ -1603,6 +1633,7 @@ void write_runtime_diagnostics(
         total.feed.errors += value.feed.errors;
         total.decisions += value.decisions;
         total.quote_intents += value.quote_intents;
+        total.rejected_below_minimum_order += value.rejected_below_minimum_order;
         total.rejected_nonpositive_robust_ev += value.rejected_nonpositive_robust_ev;
         total.rejected_positive_point_ev += value.rejected_positive_point_ev;
         total.raw_last_trade_events += value.raw_last_trade_events;
@@ -1640,6 +1671,7 @@ void write_runtime_diagnostics(
     root["feed_errors"] = total.feed.errors;
     root["decisions"] = total.decisions;
     root["quote_intents"] = total.quote_intents;
+    root["rejected_below_minimum_order"] = total.rejected_below_minimum_order;
     root["raw_last_trade_events"] = total.raw_last_trade_events;
     root["valid_trade_prints"] = total.valid_trade_prints;
     root["trade_missing_side"] = total.trade_missing_side;
@@ -3276,7 +3308,7 @@ int main(int argc, char** argv) {
                 external_maker_fair.local_directional_weight);
             // Max quote dollars before per-event price conversion. The allocation
             // child config is already sleeve-bounded by v7_capital_allocator.py.
-            shard->set_starting_capital_fraction(config.starting_capital * 0.01);
+            shard->set_sleeve_starting_capital(config.starting_capital);
             for (std::size_t i = start; i < std::min(markets.size(), start + kMarketsPerShard); ++i) {
                 shard->seed_execution_snapshot(execution->snapshot(markets[i]->market_handle));
             }

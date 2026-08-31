@@ -205,6 +205,7 @@ void populate_exploration_policy(MakerModelSnapshot& model) noexcept {
         model.exploration_confidence_z = confidence_z;
         model.exploration_epsilon = epsilon;
         model.exploration_quote_notional_fraction = quote_fraction;
+        model.exploration_max_market_fraction = market_fraction;
         model.exploration_max_active_markets = selected_market_capacity;
         model.exploration_concurrent_market_cap = max_markets;
         model.exploration_min_rest_ns = static_cast<std::int64_t>(std::llround(min_rest_ms * 1'000'000.0));
@@ -220,6 +221,7 @@ void populate_exploration_policy(MakerModelSnapshot& model) noexcept {
         model.exploration_confidence_z = 0.0;
         model.exploration_epsilon = 0.0;
         model.exploration_quote_notional_fraction = 0.0;
+        model.exploration_max_market_fraction = 0.0;
         model.exploration_persistent_fraction = 0.0;
         model.exploration_max_active_markets = 0;
         model.exploration_concurrent_market_cap = 0;

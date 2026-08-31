@@ -522,6 +522,7 @@ void configure_exploration(pm::v7::maker::MakerModelSnapshot& model) {
     model.exploration_enabled = 1;
     model.exploration_epsilon = 1.0;
     model.exploration_quote_notional_fraction = 0.002;
+    model.exploration_max_market_fraction = 0.004;
     model.exploration_max_active_markets = 20;
     model.exploration_concurrent_market_cap = 5;
     model.exploration_min_rest_ns = 3'000'000'000LL;
@@ -557,6 +558,28 @@ void test_positive_exploration_ev_breaks_robust_cold_start() {
     assert(decision.intents[0].expected_ev > 0.0);
     assert(decision.intents[0].expected_ev < model.min_robust_ev_per_share);
     assert(decision.intents[0].quantity_microunits == 2'000'000);
+}
+
+void test_zero_runtime_exploration_cap_is_an_explicit_denial() {
+    pm::v7::maker::MakerHotPath hot;
+    auto update = normal_update();
+    auto model = profitable_model();
+    model.base_ev_se_per_share = 0.025;
+    model.robust_ev_z = 100.0;
+    model.min_robust_ev_per_share = 1.0;
+    configure_exploration(model);
+    model.exploration_confidence_z = 0.0;
+    pm::v7::maker::InventorySnapshot inventory;
+    pm::v7::maker::QuoteSnapshot quotes;
+    pm::v7::maker::RiskSnapshot risk;
+    risk.max_quote_shares = 20.0;
+    risk.exploration_max_quote_shares = 0.0;
+    risk.max_abs_residual_shares = 200.0;
+
+    const auto decision = hot.on_market_update(update, inventory, quotes, risk, model);
+    for (std::size_t i = 0; i < decision.intent_count; ++i) {
+        assert(decision.intents[i].type != pm::v7::IntentType::Quote);
+    }
 }
 
 void test_point_ev_exploration_prefers_highest_economic_placement() {
@@ -854,6 +877,7 @@ int main() {
     test_partial_inventory_sizes_reducing_quote_to_available_residual();
     test_transient_no_economic_quote_cannot_cancel_before_minimum_lifetime();
     test_positive_exploration_ev_breaks_robust_cold_start();
+    test_zero_runtime_exploration_cap_is_an_explicit_denial();
     test_point_ev_exploration_prefers_highest_economic_placement();
     test_exploration_collects_positive_buy_and_inventory_backed_sell_evidence();
     test_exploration_never_emits_uncovered_sell();

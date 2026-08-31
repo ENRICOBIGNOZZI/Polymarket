@@ -223,6 +223,10 @@ struct MakerModelSnapshot {
     double exploration_confidence_z = 0.0;
     double exploration_epsilon = 0.0;
     double exploration_quote_notional_fraction = 0.0;
+    // The per-market budget is deliberately distinct from the per-quote target.
+    // A venue minimum may round one quote above its target only while the
+    // resulting notional remains inside this market-level hard bound.
+    double exploration_max_market_fraction = 0.0;
     // A randomized PAPER-only lifetime arm measures whether longer time at
     // risk raises fills enough to compensate for adverse selection. The
     // control arm keeps exploration_max_rest_ns unchanged.

@@ -137,10 +137,14 @@ class V7MarketMakerCppRuntimeContractTest(unittest.TestCase):
             "exploration_market_cap",
             "model.exploration_max_active_markets = configured_market_capacity",
             "model.exploration_concurrent_market_cap = exploration_market_cap",
+            "model.exploration_max_market_fraction = exploration_market_fraction",
             "context.risk.exploration_max_quote_shares",
+            "minimum_order_notional <= market_notional_cap",
+            "shard->set_sleeve_starting_capital(config.starting_capital)",
         ):
             with self.subTest(token=token):
                 self.assertIn(token, self.source)
+        self.assertEqual(float(self.policy["inventory"]["seed_min_quote_multiples"]), 1.0)
 
     def test_declared_inventory_factory_has_runtime_callsite_and_canonical_evidence(self) -> None:
         inventory = self.policy["inventory"]

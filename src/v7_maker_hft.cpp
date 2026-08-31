@@ -465,10 +465,15 @@ bool MakerModelSnapshot::valid() const noexcept {
         || exploration_confidence_z > std::max(0.0, robust_ev_z)) return false;
     if (!finite(exploration_quote_notional_fraction) || exploration_quote_notional_fraction < 0.0
         || exploration_quote_notional_fraction > kNormalQuoteCapitalFraction) return false;
+    if (!finite(exploration_max_market_fraction) || exploration_max_market_fraction < 0.0
+        || exploration_max_market_fraction > 1.0
+        || 2.0 * exploration_quote_notional_fraction
+            > exploration_max_market_fraction + kEps) return false;
     if (!finite(exploration_persistent_fraction) || exploration_persistent_fraction < 0.0
         || exploration_persistent_fraction > 1.0) return false;
     if (exploration_enabled != 0
         && (exploration_epsilon <= 0.0 || exploration_quote_notional_fraction <= 0.0
+            || exploration_max_market_fraction <= 0.0
             || exploration_max_active_markets == 0
             || exploration_concurrent_market_cap == 0
             || exploration_concurrent_market_cap > exploration_max_active_markets)) return false;
@@ -875,13 +880,11 @@ MakerDecision MakerHotPath::on_market_update(
         // PAPER-only exploration collects side-specific BUY and
         // inventory-backed SELL evidence. It may use a lower explicit
         // confidence penalty than exploit, but adjusted EV must remain positive.
-        const double exploration_scale = clamp(
-            model.exploration_quote_notional_fraction / kNormalQuoteCapitalFraction,
-            0.0, 1.0);
-        double exploration_cap = std::max(0.0, risk.max_quote_shares) * exploration_scale;
-        if (risk.exploration_max_quote_shares > 0.0) {
-            exploration_cap = std::min(exploration_cap, risk.exploration_max_quote_shares);
-        }
+        // The owning runtime has the venue minimum, the current price and the
+        // sleeve-dollar budgets. Zero is therefore an explicit denial, never a
+        // missing-cap fallback: recomputing here previously emitted sub-minimum
+        // intents that the runtime silently discarded before the PAPER OMS.
+        const double exploration_cap = std::max(0.0, risk.exploration_max_quote_shares);
         const double exploration_shares = std::min(quote_shares, exploration_cap);
         std::array<Candidate, 2> exploration_candidates{};
         std::size_t exploration_candidate_count = 0;
