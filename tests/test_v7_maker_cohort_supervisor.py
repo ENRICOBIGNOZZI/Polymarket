@@ -163,8 +163,22 @@ class MakerCohortSupervisorTests(unittest.TestCase):
             policy["market_selection"]["recent_flow"]["rotation_min_interval_seconds"],
             300,
         )
+        # The selector reports a five-second fill probability while the
+        # bounded exploration order may rest for fifteen seconds.  A 0.4%
+        # five-second floor implies about 1.2% over the allowed resting
+        # horizon and does not repeat the former 5% cold-start deadlock.
+        self.assertEqual(
+            policy["market_selection"]["recent_flow"][
+                "rotation_min_projected_fill_probability"
+            ],
+            0.004,
+        )
         self.assertIn(
             'recent.get("rotation_min_interval_seconds") or 300', loop
+        )
+        self.assertIn(
+            'recent.get("rotation_min_projected_fill_probability") or 0.004',
+            loop,
         )
         self.assertIn("authenticated_execution\") is not False", supervisor)
         self.assertIn("real_order_submission\") is not False", supervisor)

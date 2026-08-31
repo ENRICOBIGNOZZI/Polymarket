@@ -452,7 +452,7 @@ recent=((maker.get("market_selection") or {}).get("recent_flow") or {})
 refresh=max(1,int(recent.get("selector_refresh_seconds") or 5))
 rotation=max(0,int(recent.get("rotation_min_interval_seconds") or 300))
 confirmations=max(2,int(recent.get("candidate_confirmations") or 2))
-minimum_fill=max(0.0,min(1.0,float(recent.get("rotation_min_projected_fill_probability") or 0.05)))
+minimum_fill=max(0.0,min(1.0,float(recent.get("rotation_min_projected_fill_probability") or 0.004)))
 absolute_improvement=max(0.0,min(1.0,float(recent.get("rotation_min_absolute_fill_improvement") or 0.05)))
 relative_multiplier=max(1.0,float(recent.get("rotation_min_relative_fill_multiplier") or 1.5))
 print(hot,active,structural,flow,refresh,rotation,confirmations,
