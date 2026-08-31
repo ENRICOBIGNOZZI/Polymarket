@@ -289,6 +289,28 @@ class DurableLearningTests(unittest.TestCase):
         self.assertFalse(model["groups"]["GLOBAL"]["mature"])
         self.assertGreater(model["risk_only_cross_policy_records"], 0)
 
+    def test_symmetric_outcome_markout_pools_action_side_without_fill_credit(self) -> None:
+        order = record(
+            "ORDER_SUBMITTED", "order", order_id="o1", intended_size=5.0,
+            intended_action="JOIN", side="SELL",
+        )
+        order["metadata"]["outcome"] = "YES"
+        order["metadata"]["policy_hash"] = "old-policy"
+        fill = record("FILL", "fill", order_id="o1", filled_size=5.0)
+        mark = record("MARKOUT", "mark", order_id="o1", markouts={"45s": -0.05})
+
+        model = fit_model(
+            [order, fill, mark], model_sha=SHA, policy_hash="policy",
+            config_hash="config", cold_fill_prior=0.02,
+        )
+        expected = (0.002 * 20.0 + 0.05 * 5.0) / 25.0
+        pooled = model["risk_only_symmetric_outcome_adverse"]["JOIN|SELL"]
+        self.assertAlmostEqual(pooled["adverse_markout_per_share"], expected)
+        self.assertEqual(pooled["adverse_markout_observations"], 1)
+        self.assertIn("JOIN|NO|SELL", model["groups"])
+        self.assertEqual(model["groups"]["JOIN|NO|SELL"]["orders"], 0)
+        self.assertEqual(model["groups"]["JOIN|NO|SELL"]["filled_orders"], 0)
+
     def test_placement_markout_inherits_compatibility_from_submitted_order(self) -> None:
         order = record(
             "ORDER_SUBMITTED", "order", order_id="o1", event_id="event-1",

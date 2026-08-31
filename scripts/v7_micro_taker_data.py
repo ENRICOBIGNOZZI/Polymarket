@@ -13,7 +13,7 @@ from pathlib import Path
 from typing import Any
 
 from polymarket_fees import FeeDetails, fee_per_share, parse_fee_details, resolve_fee_details
-from v7_micro_target import label_matured_samples
+from v7_micro_target import label_matured_horizon_probes, label_matured_samples
 from v7_shared_market_state import SharedStateError, load_snapshot, synchronized_books
 
 

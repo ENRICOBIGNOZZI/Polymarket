@@ -29,8 +29,9 @@ MODEL_ACTIVE_QUANTILE = 0.90
 MODEL_SPEC_VERSION = "dual_side_continuous_executable_net_edge_ridge_v5"
 DATASET_VERSION = 3
 DATASET_LINEAGE = "EVENT_NOVEL_EXECUTABLE_ROUND_TRIP_V3"
-DATASET_STORAGE_VERSION = 4
-DATASET_STORAGE_CONTRACT = "labeled_features_plus_probe_depth_recent_origins_v4"
+DATASET_STORAGE_VERSION = 5
+DATASET_STORAGE_CONTRACT = "labeled_features_plus_multi_horizon_probe_depth_recent_origins_v5"
+RESEARCH_HORIZONS_SECONDS = (30, 60, 300)
 COMPLETE_ROUND_TRIP_EXECUTION_CONTRACT = "complete_round_trip_executable_ev"
 CONSERVATIVE_MARKING_CONTRACT = "full_depth_executable_bid_net_fee_or_zero_fail_closed"
 LIVE_FLOW_SCHEMA = "polymarket_v7_live_trade_flow_v1"
@@ -251,6 +252,7 @@ def _probe_depth_levels(
 def compact_samples(
     samples: list[dict[str, Any]], *, now: int, horizon_seconds: int,
     max_target_staleness_seconds: int,
+    research_horizons_seconds: tuple[int, ...] = (),
 ) -> tuple[list[dict[str, Any]], dict[str, Any]]:
     """Discard impossible origins and retain only exact probe executable depth."""
     output: list[dict[str, Any]] = []
@@ -258,15 +260,21 @@ def compact_samples(
     stripped = 0
     levels_before = 0
     levels_after = 0
+    maximum_research_horizon = max(
+        (int(value) for value in research_horizons_seconds if int(value) > 0),
+        default=int(horizon_seconds),
+    )
     recent_cutoff = int(now) - max(
-        1, int(horizon_seconds) + int(max_target_staleness_seconds) + 5)
+        1, maximum_research_horizon + int(max_target_staleness_seconds) + 5)
     for row in samples:
         ts = int(_finite(row.get("ts"), 0.0))
         labeled = _has_dual_side_target(row)
-        # Once t+h has passed, a missing pre-horizon observation can never be
-        # supplied by a future run. Keeping that origin only bloats the state
-        # file and slows the sampler that would have prevented the gap.
-        if not labeled and (ts <= 0 or ts + int(horizon_seconds) <= int(now)):
+        # An origin that missed the primary target may still mature into a
+        # longer research horizon. Drop it only after the longest declared
+        # probe has also become irrecoverable.
+        if not labeled and (
+            ts <= 0 or ts + maximum_research_horizon <= int(now)
+        ):
             dropped += 1
             continue
         probe = max(0.0, _finite(row.get("label_probe_shares"), 0.0))
@@ -300,7 +308,59 @@ def compact_samples(
         "stripped_mature_labeled_book_payloads": stripped,
         "book_levels_before": levels_before,
         "book_levels_after": levels_after,
+        "book_payload_retention_horizon_seconds": maximum_research_horizon,
     }
+
+
+def horizon_probe_diagnostics(
+    samples: list[dict[str, Any]], horizons_seconds: tuple[int, ...],
+) -> dict[str, Any]:
+    output: dict[str, Any] = {}
+    for horizon in sorted({int(value) for value in horizons_seconds if int(value) > 0}):
+        rows: list[tuple[dict[str, Any], dict[str, Any], dict[str, Any]]] = []
+        for row in samples:
+            targets = row.get("research_horizon_targets")
+            target = targets.get(str(horizon)) if isinstance(targets, dict) else None
+            if (
+                not isinstance(target, dict)
+                and horizon == int(_finite(row.get("label_horizon_seconds"), 0.0))
+                and isinstance(row.get("target_execution"), dict)
+            ):
+                target = row["target_execution"]
+            yes = target.get("YES") if isinstance(target, dict) else None
+            no = target.get("NO") if isinstance(target, dict) else None
+            if isinstance(yes, dict) and isinstance(no, dict):
+                rows.append((row, yes, no))
+        best_edges = [max(
+            _finite(yes.get("net_edge"), -math.inf),
+            _finite(no.get("net_edge"), -math.inf),
+        ) for _row, yes, no in rows]
+        yes_gross = [_finite(yes.get("exit_vwap")) - _finite(yes.get("entry_vwap"))
+                     for _row, yes, _no in rows]
+        no_gross = [_finite(no.get("exit_vwap")) - _finite(no.get("entry_vwap"))
+                    for _row, _yes, no in rows]
+        output[str(horizon)] = {
+            "labeled_samples": len(rows),
+            "independent_time_buckets": len({
+                int(_finite(row.get("ts"), 0.0)) // horizon for row, _yes, _no in rows
+                if int(_finite(row.get("ts"), 0.0)) > 0
+            }),
+            "unique_events": len({
+                str(row.get("event_id") or row.get("market_id") or "")
+                for row, _yes, _no in rows
+            } - {""}),
+            "positive_executable_actions": sum(edge > 0.0 for edge in best_edges),
+            "positive_gross_markout_actions": sum(
+                max(yes_value, no_value) > 0.0
+                for yes_value, no_value in zip(yes_gross, no_gross)
+            ),
+            "maximum_executable_net_edge": max(best_edges) if best_edges else None,
+            "mean_best_executable_net_edge": (
+                statistics.fmean(best_edges) if best_edges else None
+            ),
+            "execution_authority": "RESEARCH_ONLY_ZERO_AUTHORITY",
+        }
+    return output
 
 
 def sample_diagnostics(samples: list[dict[str, Any]], *, horizon_seconds: int = 30) -> dict[str, Any]:
@@ -1566,9 +1626,14 @@ def main() -> int:
                 )
 
     label_stats = base.label_matured_samples(samples, now=now, horizon_seconds=args.horizon_seconds, max_target_staleness_seconds=args.max_target_staleness_seconds)
+    horizon_label_stats = base.label_matured_horizon_probes(
+        samples, now=now, horizons_seconds=RESEARCH_HORIZONS_SECONDS,
+        max_target_staleness_seconds=args.max_target_staleness_seconds,
+    )
     samples, dataset_storage = compact_samples(
         samples, now=now, horizon_seconds=args.horizon_seconds,
         max_target_staleness_seconds=args.max_target_staleness_seconds,
+        research_horizons_seconds=RESEARCH_HORIZONS_SECONDS,
     )
     model_rows = causal_model_rows(samples)
     challenger, challenger_readiness = load_or_freeze_model_challenger(
@@ -1996,6 +2061,8 @@ def main() -> int:
         and len(row["x"]) == FLOW_FEATURE_DIM for row in samples)
     dataset_diagnostics = sample_diagnostics(
         samples, horizon_seconds=args.horizon_seconds)
+    research_horizon_diagnostics = horizon_probe_diagnostics(
+        samples, RESEARCH_HORIZONS_SECONDS)
 
     new_state = {
         "schema": "polymarket_v7_micro_taker_status_v1",
@@ -2058,6 +2125,8 @@ def main() -> int:
         "missing_book_pairs": missing_book_pair_count,
         "feature_ready_markets": len(current),
         "label_stats_last_tick": label_stats,
+        "research_horizon_label_stats_last_tick": horizon_label_stats,
+        "research_horizon_diagnostics": research_horizon_diagnostics,
         "signals": signals,
         "opened": opened,
         "best_edge": best_edge,
@@ -2087,6 +2156,7 @@ def main() -> int:
         "labeled_samples", "model_labeled_samples",
         "market_state_source", "discovered_markets", "fee_ready_markets",
         "atomic_book_pairs", "missing_book_pairs", "feature_ready_markets",
+        "research_horizon_label_stats_last_tick", "research_horizon_diagnostics",
         "signals", "opened", "best_edge",
         "realized_pnl_last_tick", "realized_pnl_total", "admission_contract", "execution_contract", "feature_contract", "exit_liquidity_contract", "failures"
     )} | {"open_positions": len(positions)})

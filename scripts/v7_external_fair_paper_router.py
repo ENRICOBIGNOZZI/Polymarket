@@ -606,7 +606,9 @@ class PaperRouter:
                     "rules_hash", "reference_version", "tte_bucket_seconds",
                     "observed_tte_seconds", "model_yes", "market_yes",
                     "external_only_yes", "hybrid_yes", "external_only_model_id",
-                    "hybrid_model_id", "lower", "upper", "oracle_value",
+                    "hybrid_model_id", "registered_challenger_yes",
+                    "registered_challenger_model_id",
+                    "registered_challenger_model_hash", "lower", "upper", "oracle_value",
                     "external_venue_count", "fair_calculated_monotonic_ns",
                     "fair_valid_until_monotonic_ns", "yes_best_bid", "yes_best_ask",
                     "no_best_bid", "no_best_ask", "market_mid_source", "decision",
@@ -759,6 +761,39 @@ class PaperRouter:
             minimum_bin_size=int((self.config.get("promotion") or {}).get(
                 "minimum_probability_interval_bin_size", 3)),
         )
+        challenger_pointer = load(
+            self.directory / "model_registry" / "fair_value_challenger.json")
+        current_challenger_hash = str(challenger_pointer.get("model_hash") or "")
+        challenger_by_market: dict[str, list[dict[str, Any]]] = {}
+        for row in forecasts:
+            probability = finite(row.get("registered_challenger_yes"), math.nan)
+            model_hash = str(row.get("registered_challenger_model_hash") or "")
+            market_id = str(row.get("market_id") or "")
+            if (
+                math.isfinite(probability) and len(current_challenger_hash) == 64
+                and model_hash == current_challenger_hash and market_id
+            ):
+                challenger_by_market.setdefault(market_id, []).append(row)
+        challenger_model_losses: list[float] = []
+        challenger_market_losses: list[float] = []
+        for rows in challenger_by_market.values():
+            challenger_pairs = [
+                (finite(row.get("registered_challenger_brier"), math.nan),
+                 finite(row.get("market_brier"), math.nan))
+                for row in rows
+            ]
+            challenger_pairs = [pair for pair in challenger_pairs
+                                if all(math.isfinite(value) for value in pair)]
+            if challenger_pairs:
+                challenger_model_losses.append(statistics.fmean(
+                    value[0] for value in challenger_pairs))
+                challenger_market_losses.append(statistics.fmean(
+                    value[1] for value in challenger_pairs))
+        challenger_delta = (
+            statistics.fmean(challenger_model_losses)
+            - statistics.fmean(challenger_market_losses)
+            if challenger_model_losses and challenger_market_losses else None
+        )
         fills = {
             str(row.get("fill_id")): row for row in records.values()
             if row.get("event_type") == "VIRTUAL_FILL" and row.get("fill_id")
@@ -841,6 +876,27 @@ class PaperRouter:
                 "probability_interval_diagnostics"),
             "virtual_final_markets": len(final_markets),
             "virtual_2x_cost_stress_pnl": stressed_2x,
+            "registered_challenger_forward": {
+                "state": (
+                    "FORWARD_EVIDENCE_ACCUMULATING" if challenger_by_market
+                    else "AWAITING_FORWARD_SETTLEMENTS"
+                ),
+                "independent_settlement_markets": len(challenger_by_market),
+                "model_hash": (
+                    current_challenger_hash if len(current_challenger_hash) == 64
+                    else None
+                ),
+                "model_brier_cluster_equal_weighted": (
+                    statistics.fmean(challenger_model_losses)
+                    if challenger_model_losses else None
+                ),
+                "market_brier_cluster_equal_weighted": (
+                    statistics.fmean(challenger_market_losses)
+                    if challenger_market_losses else None
+                ),
+                "model_minus_market_brier_mean": challenger_delta,
+                "execution_authority": "SHADOW_ZERO_AUTHORITY",
+            },
             "blocking_reasons": reasons,
         }
 
@@ -935,12 +991,25 @@ class PaperRouter:
         reference = status.get("settlement_reference") if isinstance(status.get("settlement_reference"), dict) else {}
         oracle = status.get("oracle") if isinstance(status.get("oracle"), dict) else {}
         external = status.get("external") if isinstance(status.get("external"), dict) else {}
+        fair_models = status.get("fair_models") if isinstance(
+            status.get("fair_models"), dict) else {}
+        challenger = fair_models.get("registered_challenger") if isinstance(
+            fair_models.get("registered_challenger"), dict) else {}
         tte = finite(fair.get("tte_seconds"))
         model_yes = finite(fair.get("yes"))
         market_yes = live_market_yes(books, market)
         hybrid_yes = (
             hybrid_probability(model_yes, market_yes, self.hybrid_market_weight)
             if math.isfinite(model_yes) and market_yes is not None else math.nan
+        )
+        challenger_yes = finite(challenger.get("yes"), math.nan)
+        challenger_hash = str(challenger.get("probability_model_hash") or "")
+        challenger_applied = bool(
+            challenger.get("valid") is True
+            and challenger.get("explicit_registry_model_applied") is True
+            and math.isfinite(challenger_yes)
+            and 0.0 <= challenger_yes <= 1.0
+            and len(challenger_hash) == 64
         )
         market_id = str(market.get("market_id") or "")
         if not (
@@ -973,6 +1042,14 @@ class PaperRouter:
             "hybrid_yes": hybrid_yes if math.isfinite(hybrid_yes) else None,
             "external_only_model_id": "external_only_fair",
             "hybrid_model_id": "hybrid_fair",
+            "registered_challenger_yes": challenger_yes if challenger_applied else None,
+            "registered_challenger_model_id": (
+                str(challenger.get("probability_model_id") or "")
+                if challenger_applied else ""
+            ),
+            "registered_challenger_model_hash": (
+                challenger_hash if challenger_applied else ""
+            ),
             "lower": finite(fair.get("lower")), "upper": finite(fair.get("upper")),
             "oracle_value": finite(oracle.get("value")),
             "external_venue_count": int(external.get("fresh_venue_count") or 0),
@@ -1047,6 +1124,12 @@ class PaperRouter:
                 else:
                     hybrid_brier = hybrid_log_loss = None
                 market_brier, market_log_loss = self.forecast_scores(float(forecast["market_yes"]), actual_yes)
+                challenger_yes = finite(forecast.get("registered_challenger_yes"))
+                if math.isfinite(challenger_yes):
+                    challenger_brier, challenger_log_loss = self.forecast_scores(
+                        challenger_yes, actual_yes)
+                else:
+                    challenger_brier = challenger_log_loss = None
                 self.emit_counterfactual(
                     "FORECAST_FINAL", counterfactual_id=forecast_id, forecast_id=forecast_id,
                     market_id=market_id, tte_bucket_seconds=forecast["tte_bucket_seconds"],
@@ -1062,6 +1145,14 @@ class PaperRouter:
                     observed_tte_seconds=forecast.get("observed_tte_seconds"),
                     external_only_model_id=forecast.get("external_only_model_id"),
                     hybrid_model_id=forecast.get("hybrid_model_id"),
+                    registered_challenger_yes=(
+                        challenger_yes if math.isfinite(challenger_yes) else None),
+                    registered_challenger_brier=challenger_brier,
+                    registered_challenger_log_loss=challenger_log_loss,
+                    registered_challenger_model_id=forecast.get(
+                        "registered_challenger_model_id"),
+                    registered_challenger_model_hash=forecast.get(
+                        "registered_challenger_model_hash"),
                 )
                 pending.pop(forecast_id, None)
                 self.state["resolved_forecasts"] = int(self.state.get("resolved_forecasts") or 0) + 1

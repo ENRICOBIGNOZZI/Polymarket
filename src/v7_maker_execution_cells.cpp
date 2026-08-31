@@ -276,6 +276,11 @@ void populate_execution_cells(MakerModelSnapshot& model) noexcept {
             number(find_value(global, "fill_probability"), 0.02), 1e-6, 1.0 - 1e-6);
         const double global_adverse = std::max(
             0.0, number(find_value(global, "adverse_markout_per_share"), 0.002));
+        const auto* symmetric_outcome_value = find_value(
+            object, "risk_only_symmetric_outcome_adverse");
+        const json::object* symmetric_outcome =
+            symmetric_outcome_value != nullptr && symmetric_outcome_value->is_object()
+                ? &symmetric_outcome_value->as_object() : nullptr;
 
         for (const auto& item : groups) {
             const std::string key(item.key());
@@ -285,7 +290,8 @@ void populate_execution_cells(MakerModelSnapshot& model) noexcept {
             if (first == std::string::npos || second == std::string::npos) continue;
             const Action action = parse_action(std::string_view(key).substr(0, first));
             const std::string_view outcome = std::string_view(key).substr(first + 1, second - first - 1);
-            const Side side = parse_side(std::string_view(key).substr(second + 1));
+            const std::string_view side_name = std::string_view(key).substr(second + 1);
+            const Side side = parse_side(side_name);
             const std::int8_t sign = outcome == "YES" ? 1 : outcome == "NO" ? -1 : 0;
             const std::size_t index = execution_cell_index(action, sign, side);
             if (index >= model.execution_cells.size() || !item.value().is_object()) continue;
@@ -308,6 +314,25 @@ void populate_execution_cells(MakerModelSnapshot& model) noexcept {
                 number(find_value(group, "fill_probability"), global_fill), 1e-6, 1.0 - 1e-6);
             const double raw_adverse = std::max(
                 0.0, number(find_value(group, "adverse_markout_per_share"), global_adverse));
+            double symmetric_adverse = global_adverse;
+            std::uint32_t symmetric_markouts = 0;
+            std::uint32_t symmetric_clusters = 0;
+            if (symmetric_outcome != nullptr) {
+                const std::string pooled_key = key.substr(0, first) + "|"
+                    + std::string(side_name);
+                const auto pooled_it = symmetric_outcome->find(pooled_key);
+                if (pooled_it != symmetric_outcome->end()
+                    && pooled_it->value().is_object()) {
+                    const auto& pooled = pooled_it->value().as_object();
+                    symmetric_markouts = count(find_value(
+                        pooled, "adverse_markout_observations"));
+                    symmetric_clusters = count(find_value(
+                        pooled, "adverse_markout_event_clusters"));
+                    symmetric_adverse = std::max(global_adverse, number(
+                        find_value(pooled, "adverse_markout_per_share"),
+                        global_adverse));
+                }
+            }
             const double cluster_weight = evidence_weight(clusters, kClusterShrinkage);
             const double fill_weight = std::min(
                 evidence_weight(orders, kFillOrderShrinkage), cluster_weight);
@@ -321,14 +346,21 @@ void populate_execution_cells(MakerModelSnapshot& model) noexcept {
             // cluster shrinkage here erased the very risk signal the cell was
             // meant to carry. Keep markout_weight as an uncertainty diagnostic,
             // but consume the fitted posterior directly when it exists.
-            cell.adverse_markout_per_share = markouts > 0 ? raw_adverse : global_adverse;
+            const double exact_adverse = markouts > 0 ? raw_adverse : global_adverse;
+            // Outcome labels do not alter passive queue mechanics. A toxic
+            // JOIN/SELL observation on YES is therefore a valid conservative
+            // risk floor for JOIN/SELL on NO (and vice versa), but never fill
+            // evidence and never promotion credit.
+            cell.adverse_markout_per_share = symmetric_markouts > 0
+                ? std::max(exact_adverse, symmetric_adverse) : exact_adverse;
             cell.fill_weight = fill_weight;
             cell.markout_weight = markout_weight;
             cell.orders = orders;
             cell.filled_orders = fills;
-            cell.adverse_markouts = markouts;
-            cell.event_clusters = clusters;
-            cell.valid = static_cast<std::uint8_t>(orders > 0 || markouts > 0);
+            cell.adverse_markouts = std::max(markouts, symmetric_markouts);
+            cell.event_clusters = std::max(clusters, symmetric_clusters);
+            cell.valid = static_cast<std::uint8_t>(
+                orders > 0 || markouts > 0 || symmetric_markouts > 0);
         }
     } catch (...) {
         // Exact-SHA execution cells are optional evidence. A malformed, stale or

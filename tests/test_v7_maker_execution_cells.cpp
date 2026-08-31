@@ -42,6 +42,22 @@ void write_model(const std::filesystem::path& path, const std::string& sha) {
       "fill_probability": 0.02,
       "adverse_markout_per_share": 0.04,
       "adverse_markout_n": 0
+    },
+    "JOIN|NO|SELL": {
+      "orders": 0,
+      "filled_orders": 0,
+      "event_clusters": 0,
+      "fill_probability": 0.10,
+      "adverse_markout_per_share": 0.01,
+      "adverse_markout_observations": 0,
+      "adverse_markout_event_clusters": 0
+    }
+  },
+  "risk_only_symmetric_outcome_adverse": {
+    "JOIN|SELL": {
+      "adverse_markout_per_share": 0.05,
+      "adverse_markout_observations": 1,
+      "adverse_markout_event_clusters": 1
     }
   }
 })";
@@ -79,6 +95,15 @@ void test_exact_sha_loader_shrinks_to_global() {
     assert(zero_markout.valid);
     assert(zero_markout.adverse_markouts == 0);
     assert(zero_markout.markout_weight == 0.0);
+
+    const auto pooled_index = pm::v7::maker::execution_cell_index(
+        pm::v7::maker::Action::Join, -1, pm::v7::Side::Sell);
+    const auto& pooled = model.execution_cells[pooled_index];
+    assert(pooled.valid);
+    assert(close(pooled.adverse_markout_per_share, 0.05));
+    assert(pooled.orders == 0);
+    assert(pooled.filled_orders == 0);
+    assert(pooled.adverse_markouts == 1);
 
     unsetenv("PM_V7_MAKER_EXECUTION_MODEL");
     unsetenv("PM_V7_MODEL_SHA");

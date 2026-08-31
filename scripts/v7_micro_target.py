@@ -185,3 +185,111 @@ def label_matured_samples(
         "max_target_staleness_seconds": max(lags) if lags else None,
         "mean_target_staleness_seconds": (sum(lags) / len(lags)) if lags else None,
     }
+
+
+def label_matured_horizon_probes(
+    samples: list[dict[str, Any]], *, now: int, horizons_seconds: tuple[int, ...],
+    max_target_staleness_seconds: int,
+) -> dict[str, Any]:
+    """Attach causal, execution-complete research labels at multiple horizons.
+
+    These labels never authorize trading and never alter the frozen 30-second
+    champion target. They reveal whether the missing Micro Taker economics are
+    horizon-specific before a new model specification is selected.
+    """
+    horizons = tuple(sorted({int(value) for value in horizons_seconds if int(value) > 0}))
+    if not horizons:
+        return {"horizons": {}, "target_semantics_version": TARGET_SEMANTICS_VERSION}
+    if max_target_staleness_seconds < 0:
+        raise ValueError("max_target_staleness_seconds must be nonnegative")
+
+    by_market: dict[str, list[tuple[int, dict[str, Any]]]] = defaultdict(list)
+    for row in samples:
+        market_id = str(row.get("market_id") or "")
+        ts = int(finite(row.get("ts"), 0.0))
+        if market_id and ts > 0 and row.get(
+            "target_semantics_version") == TARGET_SEMANTICS_VERSION:
+            by_market[market_id].append((ts, row))
+    for values in by_market.values():
+        values.sort(key=lambda item: item[0])
+
+    diagnostics = {
+        str(horizon): {
+            "newly_labeled": 0,
+            "primary_target_reused": 0,
+            "missing_pre_horizon_observation": 0,
+            "stale_pre_horizon_observation": 0,
+            "unexecutable_round_trip": 0,
+        }
+        for horizon in horizons
+    }
+    for row in samples:
+        origin_ts = int(finite(row.get("ts"), 0.0))
+        market_id = str(row.get("market_id") or "")
+        if (
+            origin_ts <= 0 or not market_id
+            or row.get("target_semantics_version") != TARGET_SEMANTICS_VERSION
+        ):
+            continue
+        targets = row.get("research_horizon_targets")
+        if not isinstance(targets, dict):
+            targets = {}
+        for horizon in horizons:
+            key = str(horizon)
+            if isinstance(targets.get(key), dict):
+                continue
+            primary = row.get("target_execution")
+            if (
+                horizon == int(finite(row.get("label_horizon_seconds"), 0.0))
+                and isinstance(primary, dict)
+                and isinstance(primary.get("YES"), dict)
+                and isinstance(primary.get("NO"), dict)
+            ):
+                # The primary 30-second target already contains the identical
+                # execution payload. Count it in diagnostics without copying
+                # tens of thousands of dictionaries back into durable state.
+                diagnostics[key]["primary_target_reused"] += 1
+                continue
+            if now < origin_ts + horizon:
+                continue
+            target_ts = origin_ts + horizon
+            chosen: tuple[int, dict[str, Any]] | None = None
+            for obs_ts, observation in by_market.get(market_id, []):
+                if obs_ts <= origin_ts:
+                    continue
+                if obs_ts > target_ts:
+                    break
+                chosen = (obs_ts, observation)
+            if chosen is None:
+                diagnostics[key]["missing_pre_horizon_observation"] += 1
+                continue
+            obs_ts, target = chosen
+            staleness = target_ts - obs_ts
+            if staleness > max_target_staleness_seconds:
+                diagnostics[key]["stale_pre_horizon_observation"] += 1
+                continue
+            yes = _side_label(row, target, "YES")
+            no = _side_label(row, target, "NO")
+            if yes is None or no is None:
+                diagnostics[key]["unexecutable_round_trip"] += 1
+                continue
+            yes_edge, no_edge = yes["net_edge"], no["net_edge"]
+            action = (
+                "BUY_YES" if yes_edge > 0.0 and yes_edge >= no_edge else
+                "BUY_NO" if no_edge > 0.0 else "NOTHING"
+            )
+            targets[key] = {
+                "horizon_seconds": horizon,
+                "target_action": action,
+                "target_observation_ts": obs_ts,
+                "target_staleness_seconds": staleness,
+                "YES": yes,
+                "NO": no,
+            }
+            row["research_horizon_targets"] = targets
+            diagnostics[key]["newly_labeled"] += 1
+    return {
+        "horizons": diagnostics,
+        "target_semantics_version": TARGET_SEMANTICS_VERSION,
+        "execution_authority": "RESEARCH_ONLY_ZERO_AUTHORITY",
+    }

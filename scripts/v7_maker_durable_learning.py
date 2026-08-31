@@ -618,6 +618,7 @@ def hazard_model(
 def adverse_markout_models(
     values: list[dict[str, Any]], *, cold_adverse: float = 0.002,
     prior_filled_shares: float = 20.0,
+    pool_outcomes: bool = False,
 ) -> dict[str, dict[str, Any]]:
     """Build a risk-only adverse-selection floor from fill-conditioned marks.
 
@@ -672,7 +673,13 @@ def adverse_markout_models(
             or "UNKNOWN"
         )
         observation = (adverse_dollars, shares, selected, cluster)
-        grouped[group_key(orders[order_id])].append(observation)
+        key = group_key(orders[order_id])
+        if pool_outcomes:
+            action, _outcome, side = (key.split("|") + ["", "", ""])[:3]
+            if action == "UNKNOWN" or side not in {"BUY", "SELL"}:
+                continue
+            key = f"{action}|{side}"
+        grouped[key].append(observation)
         grouped["GLOBAL"].append(observation)
     output: dict[str, dict[str, Any]] = {}
     prior = max(1e-9, float(prior_filled_shares))
@@ -777,6 +784,8 @@ def fit_model(values: list[dict[str, Any]], *, model_sha: str, policy_hash: str,
         row for row in values if str(row.get("order_id") or "") in risk_order_ids
     ]
     adverse_models = adverse_markout_models(risk_values)
+    symmetric_outcome_adverse = adverse_markout_models(
+        risk_values, pool_outcomes=True)
     # Policy/config changes invalidate fill and promotion credit, but linked
     # same-semantics markouts remain useful in their exact action/outcome/side
     # cell.  Do not promote three sparse toxic fills into a universal GLOBAL
@@ -803,6 +812,17 @@ def fit_model(values: list[dict[str, Any]], *, model_sha: str, policy_hash: str,
     grouped["GLOBAL"] = examples
     groups: dict[str, Any] = {}
     group_keys = set(grouped) | {key for key in adverse_models if key != "GLOBAL"}
+    # YES and NO tokens have identical queue mechanics once action and
+    # execution side are fixed. Ensure both exact cells exist so the native
+    # loader can apply the cross-outcome risk floor without granting any fill
+    # or promotion credit to the unobserved counterpart.
+    for pooled_key in symmetric_outcome_adverse:
+        if pooled_key == "GLOBAL":
+            continue
+        action, side = (pooled_key.split("|") + ["", ""])[:2]
+        if action and side in {"BUY", "SELL"}:
+            group_keys.add(f"{action}|YES|{side}")
+            group_keys.add(f"{action}|NO|{side}")
     group_keys.add("GLOBAL")
     for key in sorted(group_keys):
         sample = grouped.get(key, [])
@@ -930,6 +950,10 @@ def fit_model(values: list[dict[str, Any]], *, model_sha: str, policy_hash: str,
             "semantics": "NO_OPPOSITE_FLOW->PRICE_NOT_REACHED->QUEUE_NOT_DEPLETED->FILL",
         },
         "cross_policy_global_adverse_diagnostic": adverse_models.get("GLOBAL", {}),
+        "risk_only_symmetric_outcome_adverse": {
+            key: value for key, value in symmetric_outcome_adverse.items()
+            if key != "GLOBAL"
+        },
         "joint_cycle_model": joint_states(compatible),
         "excluded_incompatible_records": dict(incompatible),
         "risk_only_cross_policy_records": max(0, len(risk_values) - len(compatible)),

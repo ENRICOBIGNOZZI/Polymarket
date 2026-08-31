@@ -238,6 +238,17 @@ fi
 [[ -n "$PM_V7_WS_RESOLVE_IPS" ]] || { echo "public WS DNS resolution returned no addresses" >&2; exit 77; }
 export PM_V7_WS_RESOLVE_IPS
 
+# Freeze one exact-SHA calibration challenger from already-settled SHADOW
+# contracts before the RTDS monitor starts. This publishes no execution
+# authority; every subsequent settlement is immutable forward OOS evidence.
+python3 scripts/v7_external_fair_challenger.py \
+  --tape "$RUN_ROOT/../paper_v7_durable/external_fair/counterfactuals.jsonl" \
+  --tape "$RUN_ROOT/external_fair/counterfactuals.jsonl" \
+  --registry "$RUN_ROOT/external_fair/model_registry" \
+  --config "$EXTERNAL_FAIR_POLICY" --model-sha "$SHA" \
+  --status "$RUN_ROOT/external_fair/challenger_status.json" \
+  >> "$RUN_ROOT/external_fair/challenger.log" 2>&1 || true
+
 # Official settlement-source data is optional at process level and mandatory at
 # contract level. Missing credentials/binding isolate only settlement-aware
 # contracts; unrelated maker/arb sleeves continue. When configured, the adapter

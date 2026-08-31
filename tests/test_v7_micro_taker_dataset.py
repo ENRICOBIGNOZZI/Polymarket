@@ -368,6 +368,17 @@ def test_storage_compaction_drops_only_irrecoverable_origins_and_old_payloads() 
     assert diagnostics["book_levels_after"] < diagnostics["book_levels_before"]
 
 
+def test_storage_retains_depth_until_longest_research_horizon() -> None:
+    row = _storage_sample("unlabeled-needs-300s-probe", 900, labeled=False)
+    compacted, diagnostics = compact_samples(
+        [row], now=1_000, horizon_seconds=30,
+        max_target_staleness_seconds=10,
+        research_horizons_seconds=(30, 60, 300),
+    )
+    assert compacted[0]["yes_bids"]
+    assert diagnostics["book_payload_retention_horizon_seconds"] == 300
+
+
 def test_probe_depth_compaction_preserves_exact_target_economics() -> None:
     origin = _storage_sample("origin", 100)
     target = _storage_sample("target", 129)

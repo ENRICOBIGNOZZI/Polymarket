@@ -320,6 +320,13 @@ def main() -> None:
         observation["fair_models"] = {
             "hybrid_fair": {"yes": 0.70},
             "external_only_fair": observation["fair"],
+            "registered_challenger": {
+                "valid": True,
+                "yes": 0.75,
+                "explicit_registry_model_applied": True,
+                "probability_model_id": "frozen-challenger",
+                "probability_model_hash": "f" * 64,
+            },
         }
         observation["market"].update({"market_id": "forecast-market", "event_id": "forecast-event"})
         books = {"yes": book("yes", 0.81, 0.79), "no": book("no", 0.21, 0.19)}
@@ -328,6 +335,8 @@ def main() -> None:
         pending = next(iter(collector.state["pending_forecasts"].values()))
         assert abs(pending["market_yes"] - 0.80) < 1e-12
         assert 0.60 < pending["hybrid_yes"] < 0.80
+        assert pending["registered_challenger_yes"] == 0.75
+        assert pending["registered_challenger_model_hash"] == "f" * 64
         assert pending["market_mid_source"] == "LIVE_COMPLEMENT_CONSISTENT_CLOB_BATCH"
         # Simulate an exact-SHA cutover before settlement. The ephemeral state
         # is intentionally unavailable; pending identity must come from the
@@ -362,6 +371,8 @@ def main() -> None:
         assert final["actual_yes"] == 1.0
         assert final["model_brier"] > final["market_brier"]
         assert final["external_only_brier"] > final["hybrid_brier"]
+        assert final["registered_challenger_brier"] < final["external_only_brier"]
+        assert final["registered_challenger_model_hash"] == "f" * 64
 
 
 if __name__ == "__main__":
