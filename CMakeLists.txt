@@ -65,6 +65,7 @@ target_compile_options(pm_v7_hft PRIVATE -Wall -Wextra -Wpedantic)
 # deterministic offline replay primitives.
 add_library(pm_v7_external
   src/v7_external_fair.cpp
+  src/v7_binance_l2.cpp
   src/v7_external_state.cpp
   src/v7_external_execution.cpp
   src/v7_external_kernel.cpp
@@ -235,6 +236,10 @@ if(BUILD_TESTING)
   add_executable(pm_v7_external_replay_tests tests/test_v7_external_replay.cpp)
   target_link_libraries(pm_v7_external_replay_tests PRIVATE pm_v7_external)
   add_test(NAME pm_v7_external_replay_tests COMMAND pm_v7_external_replay_tests)
+
+  add_executable(pm_v7_binance_l2_tests tests/test_v7_binance_l2.cpp)
+  target_link_libraries(pm_v7_binance_l2_tests PRIVATE pm_v7_external)
+  add_test(NAME pm_v7_binance_l2_tests COMMAND pm_v7_binance_l2_tests)
 
   file(GLOB V7_PY_TESTS CONFIGURE_DEPENDS
     "${CMAKE_CURRENT_SOURCE_DIR}/tests/test_v7_*.py"
