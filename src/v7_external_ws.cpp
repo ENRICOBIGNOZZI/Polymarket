@@ -147,9 +147,35 @@ void ExternalVenueWsClient::run(ExternalStopToken stop) noexcept {
                     static_cast<int>(::ERR_get_error()), net::error::get_ssl_category());
             }
             ws.next_layer().handshake(ssl::stream_base::client);
-            ws.set_option(websocket::stream_base::timeout::suggested(beast::role_type::client));
+            // Bound an otherwise blocking read so process shutdown can drain
+            // writer queues and leave complete immutable tape records.
+            websocket::stream_base::timeout timeout;
+            timeout.handshake_timeout = std::chrono::seconds(30);
+            timeout.idle_timeout = std::chrono::seconds(1);
+            timeout.keep_alive_pings = true;
+            ws.set_option(timeout);
             ws.read_message_max(spec_.max_message_bytes);
             ws.handshake(normalize_host_for_handshake(spec_.host), spec_.target);
+
+            std::atomic<bool> session_done{false};
+            std::thread stop_watcher([&] {
+                while (!session_done.load(std::memory_order_acquire)
+                       && !stop.stop_requested()) {
+                    std::this_thread::sleep_for(std::chrono::milliseconds(20));
+                }
+                if (!session_done.load(std::memory_order_acquire) && stop.stop_requested()) {
+                    boost::system::error_code ignored;
+                    auto& socket = beast::get_lowest_layer(ws).socket();
+                    socket.shutdown(tcp::socket::shutdown_both, ignored);
+                    socket.close(ignored);
+                }
+            });
+            const auto finish_session = [&] {
+                session_done.store(true, std::memory_order_release);
+                if (stop_watcher.joinable()) stop_watcher.join();
+            };
+
+            try {
 
             // Protocol messages remain on the IO thread and are never used as a
             // trading trigger. Coinbase needs two channel subscriptions.
@@ -177,7 +203,12 @@ void ExternalVenueWsClient::run(ExternalStopToken stop) noexcept {
 
             while (!stop.stop_requested()) {
                 buffer->consume(buffer->size());
+                // tcp_stream deadlines apply below Beast's WebSocket layer.
+                // They bound a silent synchronous read so a SIGTERM-driven
+                // stop request cannot leave the runtime waiting forever.
+                beast::get_lowest_layer(ws).expires_after(std::chrono::seconds(1));
                 ws.read(*buffer);
+                beast::get_lowest_layer(ws).expires_never();
                 const auto receive_ns = monotonic_now_ns();
                 const auto wall_ns = wall_now_ns();
                 frames_received_.fetch_add(1, std::memory_order_relaxed);
@@ -207,14 +238,24 @@ void ExternalVenueWsClient::run(ExternalStopToken stop) noexcept {
                 }
             }
 
-            boost::system::error_code close_error;
-            ws.close(websocket::close_code::normal, close_error);
+            } catch (...) {
+                finish_session();
+                throw;
+            }
+            finish_session();
+
             connected_.store(false, std::memory_order_release);
             healthy_.store(false, std::memory_order_release);
+            // The process is already stopping. Do not wait for a peer close
+            // acknowledgement here: an unresponsive server must not prevent
+            // tape workers from draining and flushing their accepted frames.
             if (stop.stop_requested()) return;
+            boost::system::error_code close_error;
+            ws.close(websocket::close_code::normal, close_error);
         } catch (const std::exception& error) {
             connected_.store(false, std::memory_order_release);
             healthy_.store(false, std::memory_order_release);
+            if (stop.stop_requested()) return;
             transport_failures_.fetch_add(1, std::memory_order_relaxed);
             if (ingress_ != nullptr) ingress_->mark_disconnected(epoch);
             std::cerr << "v7 external websocket transport failure venue="
@@ -224,6 +265,7 @@ void ExternalVenueWsClient::run(ExternalStopToken stop) noexcept {
         } catch (...) {
             connected_.store(false, std::memory_order_release);
             healthy_.store(false, std::memory_order_release);
+            if (stop.stop_requested()) return;
             transport_failures_.fetch_add(1, std::memory_order_relaxed);
             if (ingress_ != nullptr) ingress_->mark_disconnected(epoch);
             std::cerr << "v7 external websocket transport failure venue="

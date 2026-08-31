@@ -828,12 +828,14 @@ int main(int argc, char** argv) {
         fs::path output;
         fs::path tape_path;
         fs::path raw_tape_dir;
+        fs::path normalized_event_tape_dir;
         std::string model_sha;
         for (int index = 1; index < argc; ++index) {
             const std::string argument = argv[index];
             if (argument == "--output" && index + 1 < argc) output = argv[++index];
             else if (argument == "--tape" && index + 1 < argc) tape_path = argv[++index];
             else if (argument == "--raw-tape-dir" && index + 1 < argc) raw_tape_dir = argv[++index];
+            else if (argument == "--normalized-event-tape-dir" && index + 1 < argc) normalized_event_tape_dir = argv[++index];
             else if (argument == "--model-sha" && index + 1 < argc) model_sha = argv[++index];
             else throw std::invalid_argument("unknown or incomplete argument: " + argument);
         }
@@ -850,6 +852,17 @@ int main(int argc, char** argv) {
             normalized_tape = std::make_unique<ExternalTapeRecorder>(
                 tape_path, model_sha, "paper-v7", session, "external-venue-runtime", wall_now_ns());
         }
+        const auto normalized_event_tape = [&](std::string source) {
+            if (normalized_event_tape_dir.empty()) return std::unique_ptr<ExternalTapeRecorder>{};
+            const auto session = "external-events-" + std::to_string(::getpid());
+            return std::make_unique<ExternalTapeRecorder>(
+                normalized_event_tape_dir / (source + "." + std::to_string(::getpid()) + ".bin"),
+                model_sha, "paper-v7", session, std::move(source), wall_now_ns());
+        };
+        auto binance_event_tape = normalized_event_tape("binance-spot");
+        auto coinbase_event_tape = normalized_event_tape("coinbase-spot");
+        auto bybit_event_tape = normalized_event_tape("bybit-spot");
+        auto deribit_event_tape = normalized_event_tape("deribit");
         const auto raw_tape = [&](std::string source) {
             if (raw_tape_dir.empty()) return std::unique_ptr<ExternalRawTapeRecorder>{};
             const auto session = "external-raw-" + std::to_string(::getpid());
@@ -866,10 +879,10 @@ int main(int argc, char** argv) {
         std::uint64_t tape_sequence = 0;
         ExternalStatePolicy policy;
         ExternalAssetState state(asset_handle);
-        ExternalVenueIngress binance_ingress(VenueId::BinanceSpot, asset_handle);
-        ExternalVenueIngress coinbase_ingress(VenueId::CoinbaseSpot, asset_handle);
-        ExternalVenueIngress bybit_ingress(VenueId::BybitSpot, asset_handle);
-        ExternalVenueIngress deribit_ingress(VenueId::Deribit, asset_handle);
+        ExternalVenueIngress binance_ingress(VenueId::BinanceSpot, asset_handle, binance_event_tape.get());
+        ExternalVenueIngress coinbase_ingress(VenueId::CoinbaseSpot, asset_handle, coinbase_event_tape.get());
+        ExternalVenueIngress bybit_ingress(VenueId::BybitSpot, asset_handle, bybit_event_tape.get());
+        ExternalVenueIngress deribit_ingress(VenueId::Deribit, asset_handle, deribit_event_tape.get());
         BinanceSpotL2Observer binance_l2;
         CoinbaseL2Observer coinbase_l2(coinbase_ingress, asset_handle);
         BybitL2Observer bybit_l2(bybit_ingress, asset_handle);
@@ -957,6 +970,12 @@ int main(int argc, char** argv) {
                 {"latest_input_receive_monotonic_ns", snapshot.latest_input_receive_monotonic_ns},
                 {"drained_last_cycle", drained},
                 {"normalized_snapshot_tape", tape_json(tape_status, normalized_tape != nullptr)},
+                {"normalized_event_tapes", {
+                    {"binance_spot", tape_json(binance_event_tape ? binance_event_tape->snapshot() : TapeRecorderSnapshot{}, binance_event_tape != nullptr)},
+                    {"coinbase_spot", tape_json(coinbase_event_tape ? coinbase_event_tape->snapshot() : TapeRecorderSnapshot{}, coinbase_event_tape != nullptr)},
+                    {"bybit_spot", tape_json(bybit_event_tape ? bybit_event_tape->snapshot() : TapeRecorderSnapshot{}, bybit_event_tape != nullptr)},
+                    {"deribit", tape_json(deribit_event_tape ? deribit_event_tape->snapshot() : TapeRecorderSnapshot{}, deribit_event_tape != nullptr)},
+                }},
                 {"raw_frame_tapes", {
                     {"binance_spot", tape_json(binance_raw_tape ? binance_raw_tape->snapshot() : TapeRecorderSnapshot{}, binance_raw_tape != nullptr)},
                     {"coinbase_spot", tape_json(coinbase_raw_tape ? coinbase_raw_tape->snapshot() : TapeRecorderSnapshot{}, coinbase_raw_tape != nullptr)},

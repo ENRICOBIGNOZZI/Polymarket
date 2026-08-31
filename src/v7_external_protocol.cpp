@@ -446,7 +446,6 @@ void decode_deribit(const json::object& root, std::uint64_t asset_handle,
         std::int64_t timestamp_ms = 0;
         if (parse_i64(find_value(ticker, "timestamp"), timestamp_ms)) {
             event.exchange_event_ns = milliseconds_to_ns(timestamp_ms);
-            event.source_sequence = static_cast<std::uint64_t>(timestamp_ms > 0 ? timestamp_ms : 0);
         }
         if (!parse_double(find_value(ticker, "best_bid_price"), event.bid)
             || !parse_double(find_value(ticker, "best_ask_price"), event.ask)

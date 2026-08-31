@@ -81,7 +81,7 @@ int main() {
     assert(deribit_ticker.invalid_frame == 0);
     assert(deribit_ticker.output_count == 1);
     assert(output[0].venue == VenueId::Deribit);
-    assert(output[0].source_sequence == 1770000000300ULL);
+    assert(output[0].source_sequence == 0); // timestamp is diagnostic, not a sequence guarantee.
     assert(output[0].exchange_event_ns == 1770000000300000000LL);
 
     const auto deribit_trade = decode_external_venue_frame(

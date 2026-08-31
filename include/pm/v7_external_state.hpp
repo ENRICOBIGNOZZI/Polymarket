@@ -75,7 +75,10 @@ public:
 
 private:
     struct VenueState {
-        std::uint64_t source_sequence = 0;
+        // Book updates require monotone source continuity. Trade and health
+        // channels have independent sequence domains and must never be
+        // compared against book IDs merely because they share a venue socket.
+        std::uint64_t book_source_sequence = 0;
         std::uint64_t connection_epoch = 0;
         std::int64_t last_receive_ns = 0;
         double bid = 0.0;

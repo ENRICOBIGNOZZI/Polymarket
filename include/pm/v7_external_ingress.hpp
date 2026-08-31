@@ -12,6 +12,8 @@
 
 namespace pm::v7::external_fair {
 
+class ExternalTapeRecorder;
+
 inline constexpr std::size_t kExternalIngressQueueCapacity = 4096;
 inline constexpr std::size_t kExternalIngressDecodeBatch = 32;
 
@@ -37,7 +39,8 @@ struct ExternalIngressSnapshot {
 // writer. No locks, allocation or persistence are introduced after parsing.
 class ExternalVenueIngress final {
 public:
-    ExternalVenueIngress(VenueId venue, std::uint64_t asset_handle) noexcept;
+    ExternalVenueIngress(VenueId venue, std::uint64_t asset_handle,
+                         ExternalTapeRecorder* normalized_tape = nullptr) noexcept;
 
     [[nodiscard]] ExternalDecodeResult on_frame(
         std::uint64_t connection_epoch,
@@ -62,6 +65,7 @@ public:
 private:
     VenueId venue_ = VenueId::Unknown;
     std::uint64_t asset_handle_ = 0;
+    ExternalTapeRecorder* normalized_tape_ = nullptr;
     SpscRing<ExternalVenueEvent, kExternalIngressQueueCapacity> queue_{};
     std::atomic<std::uint64_t> frames_{0};
     std::atomic<std::uint64_t> decoded_events_{0};

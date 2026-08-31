@@ -148,6 +148,9 @@ public:
     // Hot-path API: bounded, lock-free SPSC enqueue only. Overflow marks the
     // evidence session invalid; it never performs synchronous persistence.
     [[nodiscard]] bool try_record(const TapeRecord& record) noexcept;
+    // One recorder is assigned to one ingress producer. This helper assigns a
+    // local monotone tape sequence to each accepted normalized venue event.
+    [[nodiscard]] bool try_record_external_venue_event(const ExternalVenueEvent& event) noexcept;
     [[nodiscard]] TapeRecorderSnapshot snapshot() const noexcept;
 
 private:

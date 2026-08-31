@@ -94,6 +94,18 @@ int main() {
     assert(three.venue_dispersion_bps >= 0.0);
     assert(std::isfinite(three.aggregate_ofi));
 
+    // Binance bookTicker and aggregate-trade IDs are different source
+    // sequence domains. A trade must not invalidate a subsequent book update
+    // or be rejected merely because its ID is below the latest book ID.
+    auto independent_trade = book(VenueId::BinanceSpot, 1, 216, 0.0, 0.0, 0.0, 0.0);
+    independent_trade.event_type = ExternalEventType::Trade;
+    independent_trade.trade_price = 100.0;
+    independent_trade.trade_size = 1.0;
+    independent_trade.trade_side = 1;
+    assert(external.on_venue_event(independent_trade, policy));
+    assert(!external.on_venue_event(book(VenueId::BinanceSpot, 1, 217, 99.9, 100.1, 10, 8), policy));
+    assert(external.on_venue_event(book(VenueId::BinanceSpot, 2, 217, 99.9, 100.1, 10, 8), policy));
+
     assert(external.on_venue_event(book(VenueId::Deribit, 1, 218, 100.05, 100.25, 4, 4), policy));
     auto four = external.snapshot(220, policy);
     assert(four.valid == 1);
@@ -109,7 +121,7 @@ int main() {
     // contextual at its default zero composite weight, so a three-source
     // requirement fails closed rather than silently using two sources.
     policy.min_healthy_venues = 3;
-    auto bad = book(VenueId::BinanceSpot, 2, 230, 99.9, 100.1, 10, 8);
+    auto bad = book(VenueId::BinanceSpot, 3, 230, 99.9, 100.1, 10, 8);
     bad.gap = 1;
     assert(external.on_venue_event(bad, policy));
     auto insufficient = external.snapshot(231, policy);

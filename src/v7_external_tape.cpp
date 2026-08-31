@@ -38,6 +38,7 @@ struct ExternalTapeRecorder::Impl {
     std::ofstream output;
     std::thread worker;
     std::atomic<bool> stop_requested{false};
+    std::atomic<std::uint64_t> next_event_sequence{0};
     std::atomic<std::uint64_t> accepted{0};
     std::atomic<std::uint64_t> written{0};
     std::atomic<std::uint64_t> dropped{0};
@@ -139,6 +140,18 @@ bool ExternalTapeRecorder::try_record(const TapeRecord& record) noexcept {
     }
     impl_->accepted.fetch_add(1, std::memory_order_relaxed);
     return true;
+}
+
+bool ExternalTapeRecorder::try_record_external_venue_event(const ExternalVenueEvent& event) noexcept {
+    if (!impl_ || event.asset_handle == 0 || event.connection_epoch == 0
+        || event.local_receive_monotonic_ns <= 0 || event.venue == VenueId::Unknown) {
+        if (impl_) impl_->evidence_valid.store(false, std::memory_order_release);
+        return false;
+    }
+    const auto sequence = impl_->next_event_sequence.fetch_add(1, std::memory_order_relaxed) + 1;
+    return try_record(make_tape_record(TapeRecordKind::ExternalVenueEvent, sequence,
+                                       event.local_receive_monotonic_ns,
+                                       event.asset_handle, event));
 }
 
 TapeRecorderSnapshot ExternalTapeRecorder::snapshot() const noexcept {

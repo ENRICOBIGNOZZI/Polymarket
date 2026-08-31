@@ -118,8 +118,9 @@ bool ExternalAssetState::on_venue_event(const ExternalVenueEvent& event,
     }
     if (asset_handle_ == 0) asset_handle_ = event.asset_handle;
     auto& venue = venues_[index];
-    if (venue.connection_epoch == event.connection_epoch && event.source_sequence > 0
-        && venue.source_sequence > 0 && event.source_sequence <= venue.source_sequence) {
+    if (event.event_type == ExternalEventType::BookTop
+        && venue.connection_epoch == event.connection_epoch && event.source_sequence > 0
+        && venue.book_source_sequence > 0 && event.source_sequence <= venue.book_source_sequence) {
         return false;
     }
 
@@ -127,7 +128,6 @@ bool ExternalAssetState::on_venue_event(const ExternalVenueEvent& event,
         && venue.connection_epoch != event.connection_epoch;
     if (epoch_changed || event.gap != 0) venue.valid = 0;
     venue.connection_epoch = event.connection_epoch;
-    venue.source_sequence = event.source_sequence;
     venue.last_receive_ns = event.local_receive_monotonic_ns;
     venue.healthy = event.healthy;
     venue.gap = event.gap;
@@ -148,6 +148,7 @@ bool ExternalAssetState::on_venue_event(const ExternalVenueEvent& event,
         venue.ask = event.ask;
         venue.bid_size = event.bid_size;
         venue.ask_size = event.ask_size;
+        venue.book_source_sequence = event.source_sequence;
         venue.mid = 0.5 * (event.bid + event.ask);
         const double total_depth = event.bid_size + event.ask_size;
         venue.microprice = total_depth > kEps

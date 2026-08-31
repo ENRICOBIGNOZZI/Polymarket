@@ -77,15 +77,12 @@ int main() {
 
     {
         ExternalTapeRecorder b(b_path, kSha, "run", "external-session", "external", 1'000'001);
-        assert(b.try_record(make_tape_record(
-            TapeRecordKind::ExternalVenueEvent, 1, 105, 10,
-            book(VenueId::BinanceSpot, 1, 105, 65000.0))));
-        assert(b.try_record(make_tape_record(
-            TapeRecordKind::ExternalVenueEvent, 2, 106, 11,
-            book(VenueId::CoinbaseSpot, 1, 106, 65001.0))));
-        assert(b.try_record(make_tape_record(
-            TapeRecordKind::ExternalVenueEvent, 3, 107, 12,
-            book(VenueId::BybitSpot, 1, 107, 65002.0))));
+        assert(b.try_record_external_venue_event(
+            book(VenueId::BinanceSpot, 1, 105, 65000.0)));
+        assert(b.try_record_external_venue_event(
+            book(VenueId::CoinbaseSpot, 1, 106, 65001.0)));
+        assert(b.try_record_external_venue_event(
+            book(VenueId::BybitSpot, 1, 107, 65002.0)));
 
         CausalCut cut;
         cut.causal_cut_id = 99;

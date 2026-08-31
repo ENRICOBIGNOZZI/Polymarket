@@ -112,6 +112,10 @@ add_executable(polymarket_v7_external_venue_runtime src/v7_external_venue_runtim
 target_link_libraries(polymarket_v7_external_venue_runtime PRIVATE pm_v7_external)
 target_compile_options(polymarket_v7_external_venue_runtime PRIVATE -Wall -Wextra -Wpedantic)
 
+add_executable(polymarket_v7_external_tape_replay src/v7_external_tape_replay.cpp)
+target_link_libraries(polymarket_v7_external_tape_replay PRIVATE pm_v7_external)
+target_compile_options(polymarket_v7_external_tape_replay PRIVATE -Wall -Wextra -Wpedantic)
+
 include(CTest)
 if(BUILD_TESTING)
   find_package(Python3 REQUIRED COMPONENTS Interpreter)
