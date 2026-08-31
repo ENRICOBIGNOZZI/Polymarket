@@ -10,10 +10,11 @@
 namespace pm::v7::external_fair {
 
 struct ExternalStatePolicy {
-    // Deribit is a volatility/context predictor by default, not a price
-    // contributor to the spot composite. Promotion requires an explicit,
-    // evidence-backed weight change in the single V7 policy owner.
-    std::array<double, kVenueCount> venue_weights{0.34, 0.33, 0.33, 0.0, 0.0};
+    // Deribit, Bybit linear and Binance USD-M are contextual derivative
+    // predictors by default, not price contributors to the spot composite.
+    // Promotion requires an explicit, evidence-backed weight change in the
+    // single V7 policy owner.
+    std::array<double, kVenueCount> venue_weights{0.34, 0.33, 0.33, 0.0, 0.0, 0.0};
     std::int64_t max_venue_age_ns = 1'000'000'000LL;
     std::uint32_t min_healthy_venues = 2;
     // A fresh venue that is this far from the weighted-median log-price is

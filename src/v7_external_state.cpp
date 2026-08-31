@@ -104,6 +104,7 @@ std::size_t ExternalAssetState::venue_index(VenueId venue) noexcept {
         case VenueId::BybitSpot: return 2;
         case VenueId::Deribit: return 3;
         case VenueId::BybitLinear: return 4;
+        case VenueId::BinanceUsdM: return 5;
         case VenueId::Unknown:
         default: return kVenueCount;
     }
@@ -113,6 +114,7 @@ std::size_t ExternalAssetState::derivative_context_index(VenueId venue) noexcept
     switch (venue) {
         case VenueId::Deribit: return 0;
         case VenueId::BybitLinear: return 1;
+        case VenueId::BinanceUsdM: return 2;
         default: return kDerivativeContextVenueCount;
     }
 }
@@ -439,7 +441,7 @@ ExternalAssetSnapshot ExternalAssetState::snapshot(
     out.venue_composite_return_1s = lagged_return(now_ns, 1'000'000'000LL, composite);
     out.venue_composite_return_5s = lagged_return(now_ns, 5'000'000'000LL, composite);
     constexpr std::array<VenueId, kDerivativeContextVenueCount> derivative_venues{
-        VenueId::Deribit, VenueId::BybitLinear};
+        VenueId::Deribit, VenueId::BybitLinear, VenueId::BinanceUsdM};
     for (std::size_t i = 0; i < derivative_venues.size(); ++i) {
         const auto& venue = venues_[venue_index(derivative_venues[i])];
         auto& context = out.derivative_contexts[i];

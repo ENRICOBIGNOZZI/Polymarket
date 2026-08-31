@@ -9,10 +9,11 @@
 
 namespace pm::v7::external_fair {
 
-inline constexpr std::size_t kVenueCount = 5;
-// Deribit and Bybit linear are retained as distinct, contextual derivative
-// sources. They do not contribute to the default spot-composite weights.
-inline constexpr std::size_t kDerivativeContextVenueCount = 2;
+inline constexpr std::size_t kVenueCount = 6;
+// Deribit, Bybit linear and Binance USD-M are retained as distinct,
+// contextual derivative sources. They do not contribute to the default
+// spot-composite weights.
+inline constexpr std::size_t kDerivativeContextVenueCount = 3;
 inline constexpr std::size_t kMaxAggressiveLevels = 16;
 // Four resting-quote cancels + four maker actions + two informed-taker actions
 // can coexist in one causal cut. Keep the unified selector large enough to
@@ -200,8 +201,9 @@ struct ExternalVenueEvent {
 };
 
 struct ExternalDerivativeContextSnapshot {
-    // Array order is fixed: Deribit, BybitLinear. `venue` is repeated so a
-    // persisted snapshot remains self-describing if it is inspected alone.
+    // Array order is fixed: Deribit, BybitLinear, BinanceUsdM. `venue` is
+    // repeated so a persisted snapshot remains self-describing if inspected
+    // alone.
     VenueId venue = VenueId::Unknown;
     std::uint8_t valid_mask = 0;
     std::uint8_t healthy = 0;

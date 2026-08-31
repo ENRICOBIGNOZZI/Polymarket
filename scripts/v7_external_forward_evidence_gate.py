@@ -15,8 +15,8 @@ from typing import Any
 
 
 SCHEMA = "polymarket_v7_external_forward_evidence_status_v1"
-EVENT_SOURCES = ("binance_spot", "bybit_spot", "bybit_linear", "deribit")
-RAW_SOURCES = ("binance_spot", "bybit_spot", "bybit_linear", "deribit", "binance_usdm_depth")
+EVENT_SOURCES = ("binance_spot", "bybit_spot", "bybit_linear", "deribit", "binance_usdm_market")
+RAW_SOURCES = ("binance_spot", "bybit_spot", "bybit_linear", "deribit", "binance_usdm_depth", "binance_usdm_market")
 
 
 def _load(path: Path) -> dict[str, Any]:
@@ -69,7 +69,7 @@ def evaluate(runtime: dict[str, Any], coinbase_rest: dict[str, Any], deribit_res
         observations[f"raw_frames_{source}"] = count
         if not ok and failure:
             failures.append(failure)
-    for field in ("binance_spot_l2", "bybit_spot_l2", "bybit_linear_l2", "bybit_linear", "deribit"):
+    for field in ("binance_spot_l2", "bybit_spot_l2", "bybit_linear_l2", "bybit_linear", "deribit", "binance_usdm"):
         value = runtime.get(field)
         if not isinstance(value, dict) or value.get("valid") is not True or int(value.get("parse_failures") or 0) != 0:
             failures.append(f"LIVE_SOURCE_UNHEALTHY:{field}")

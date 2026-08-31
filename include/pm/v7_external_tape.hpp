@@ -15,9 +15,10 @@
 
 namespace pm::v7::external_fair {
 
-// V2 extends ExternalVenueEvent with derivative-context fields. Replayers
-// retain an explicit V1 adapter; writers never reuse an old payload ABI.
-inline constexpr std::uint32_t kExternalTapeSchemaVersion = 2;
+// V2 extends ExternalVenueEvent with derivative-context fields; V3 extends
+// ExternalAssetSnapshot with the Binance USD-M context slot. Replayers retain
+// explicit V1/V2 compatibility; writers never reuse an old payload ABI.
+inline constexpr std::uint32_t kExternalTapeSchemaVersion = 3;
 inline constexpr std::uint32_t kExternalTapeOldestReplaySchemaVersion = 1;
 inline constexpr std::size_t kExternalTapePayloadBytes = 512;
 inline constexpr std::size_t kExternalTapeQueueCapacity = 4096;

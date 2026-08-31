@@ -21,7 +21,7 @@ def _runtime(uptime_ns: int) -> dict[str, object]:
             "authenticated_execution": False, "real_order_submission": False, "valid": True,
             "uptime_ns": uptime_ns, "normalized_event_tapes": event, "raw_frame_tapes": raw,
             "binance_spot_l2": valid, "bybit_spot_l2": valid, "bybit_linear_l2": valid,
-            "bybit_linear": valid, "deribit": valid}
+            "bybit_linear": valid, "deribit": valid, "binance_usdm": valid}
 
 
 def test_short_clean_run_is_honestly_insufficient() -> None:
@@ -44,3 +44,14 @@ def test_duration_and_durable_tapes_are_required() -> None:
                            {"state": "OPERATIONAL", "option_surface_valid": True}, min_duration_s=60.0)
     assert failed["engineering_valid"] is False
     assert "TAPE_INCOMPLETE:bybit_spot" in failed["failures"]
+
+
+def test_binance_usdm_market_normalized_tape_and_health_are_required() -> None:
+    broken = _runtime(61_000_000_000)
+    broken["normalized_event_tapes"].pop("binance_usdm_market")  # type: ignore[index]
+    broken["binance_usdm"]["valid"] = False  # type: ignore[index]
+    failed = gate.evaluate(broken, {"state": "OPERATIONAL_POLLING", "hft_trigger_eligible": False},
+                           {"state": "OPERATIONAL", "option_surface_valid": True}, min_duration_s=60.0)
+    assert failed["engineering_valid"] is False
+    assert "TAPE_MISSING:binance_usdm_market" in failed["failures"]
+    assert "LIVE_SOURCE_UNHEALTHY:binance_usdm" in failed["failures"]

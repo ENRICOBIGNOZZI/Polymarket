@@ -95,7 +95,7 @@ void fnv_mix(std::uint64_t& hash, const void* data, std::size_t size) noexcept {
 [[nodiscard]] bool decode_external_venue_event(
     const TapeRecord& record, std::uint32_t schema_version,
     ExternalVenueEvent& event) noexcept {
-    if (schema_version == kExternalTapeSchemaVersion
+    if ((schema_version >= 2 && schema_version <= kExternalTapeSchemaVersion)
         // A V1 header paired with the V2-sized payload can only have been
         // produced during the writer-side migration. Preserve that evidence
         // by recognizing the unambiguous payload size; ordinary V1 remains

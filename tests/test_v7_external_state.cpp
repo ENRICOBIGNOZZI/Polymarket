@@ -170,6 +170,15 @@ int main() {
     assert(std::abs(with_context.derivative_contexts[0].funding_rate + 0.0001) < 1e-12);
     assert(with_context.derivative_contexts[1].venue == VenueId::BybitLinear);
     assert(with_context.derivative_contexts[1].open_interest == 123.0);
+    auto usdm_context = derivative_context(VenueId::BinanceUsdM, 221);
+    usdm_context.context_valid_mask = DerivativeContextMarkPrice | DerivativeContextIndexPrice
+        | DerivativeContextFundingRate;
+    assert(external.on_venue_event(usdm_context, policy));
+    const auto with_usdm_context = external.snapshot(222, policy);
+    assert(with_usdm_context.derivative_contexts[2].venue == VenueId::BinanceUsdM);
+    assert(with_usdm_context.derivative_contexts[2].valid_mask
+        == (DerivativeContextMarkPrice | DerivativeContextIndexPrice | DerivativeContextFundingRate));
+    assert(with_usdm_context.venue_count_fresh == 3);
     assert(with_context.venue_composite_price > 99.9 && with_context.venue_composite_price < 100.2);
 
     ExternalStatePolicy short_age = policy;

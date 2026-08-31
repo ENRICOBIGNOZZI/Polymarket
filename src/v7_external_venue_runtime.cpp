@@ -267,9 +267,13 @@ json::object deribit_json(const DeribitMetrics& value) {
 
 class BinanceUsdMObserver final : public ExternalFrameObserver {
 public:
+    BinanceUsdMObserver(ExternalVenueIngress& market_ingress,
+                         std::uint64_t asset_handle) noexcept
+        : market_ingress_(market_ingress), asset_handle_(asset_handle) {}
+
     void on_connection_epoch(std::uint64_t) noexcept override {}
 
-    void on_frame(std::uint64_t, std::int64_t receive_ns, std::int64_t,
+    void on_frame(std::uint64_t epoch, std::int64_t receive_ns, std::int64_t wall_ns,
                   std::string_view payload) noexcept override {
         try {
             boost::system::error_code error;
@@ -281,8 +285,8 @@ public:
             std::lock_guard lock(mutex_);
             ++metrics_.frames;
             if (json_text_equals(event, "depthUpdate")) { ++metrics_.depth_frames; update_depth(*root, receive_ns); }
-            else if (json_text_equals(event, "aggTrade")) { ++metrics_.trade_frames; update_trade(*root); }
-            else if (json_text_equals(event, "markPriceUpdate")) { ++metrics_.mark_frames; update_mark(*root, receive_ns); }
+            else if (json_text_equals(event, "aggTrade")) { ++metrics_.trade_frames; update_trade(*root, epoch, receive_ns, wall_ns); }
+            else if (json_text_equals(event, "markPriceUpdate")) { ++metrics_.mark_frames; update_mark(*root, epoch, receive_ns, wall_ns); }
             else if (json_text_equals(event, "forceOrder")) { ++metrics_.liquidation_frames; update_liquidation(*root); }
             else ++metrics_.ignored_frames;
         } catch (...) { fail(); }
@@ -322,21 +326,51 @@ private:
         metrics_.book_receive_ns = receive_ns; metrics_.valid = 1;
     }
 
-    void update_trade(const json::object& root) noexcept {
-        double quantity = 0.0;
+    void update_trade(const json::object& root, std::uint64_t epoch,
+                      std::int64_t receive_ns, std::int64_t wall_ns) noexcept {
+        double price = 0.0, quantity = 0.0;
         bool buyer_is_maker = false;
-        if (!json_number(json_field(root, "q"), quantity) || !json_bool(json_field(root, "m"), buyer_is_maker) || quantity <= 0.0) {
+        if (!json_number(json_field(root, "p"), price) || !json_number(json_field(root, "q"), quantity)
+            || !json_bool(json_field(root, "m"), buyer_is_maker) || price <= 0.0 || quantity <= 0.0) {
             ++metrics_.parse_failures; return;
         }
         const double sign = buyer_is_maker ? -1.0 : 1.0;
         metrics_.signed_trade_flow = 0.9 * metrics_.signed_trade_flow + 0.1 * sign * quantity;
+        ExternalVenueEvent event;
+        event.asset_handle = asset_handle_;
+        event.connection_epoch = epoch;
+        event.venue = VenueId::BinanceUsdM;
+        event.event_type = ExternalEventType::Trade;
+        event.local_receive_monotonic_ns = receive_ns;
+        event.local_receive_wall_ns = wall_ns;
+        (void)json_u64(json_field(root, "a"), event.source_sequence);
+        event.trade_price = price;
+        event.trade_size = quantity;
+        event.trade_side = buyer_is_maker ? -1 : 1;
+        event.healthy = 1;
+        (void)market_ingress_.on_event(event);
     }
 
-    void update_mark(const json::object& root, std::int64_t receive_ns) noexcept {
+    void update_mark(const json::object& root, std::uint64_t epoch,
+                     std::int64_t receive_ns, std::int64_t wall_ns) noexcept {
         double mark = 0.0, index = 0.0, funding = 0.0;
         if (!json_number(json_field(root, "p"), mark) || !json_number(json_field(root, "i"), index)
             || !json_number(json_field(root, "r"), funding) || mark <= 0.0 || index <= 0.0) { ++metrics_.parse_failures; return; }
         metrics_.mark_price = mark; metrics_.index_price = index; metrics_.funding_rate = funding; metrics_.mark_receive_ns = receive_ns;
+        ExternalVenueEvent context;
+        context.asset_handle = asset_handle_;
+        context.connection_epoch = epoch;
+        context.venue = VenueId::BinanceUsdM;
+        context.event_type = ExternalEventType::DerivativeContext;
+        context.local_receive_monotonic_ns = receive_ns;
+        context.local_receive_wall_ns = wall_ns;
+        context.mark_price = mark;
+        context.index_price = index;
+        context.funding_rate = funding;
+        context.context_valid_mask = DerivativeContextMarkPrice | DerivativeContextIndexPrice
+            | DerivativeContextFundingRate;
+        context.healthy = 1;
+        (void)market_ingress_.on_event(context);
     }
 
     void update_liquidation(const json::object& root) noexcept {
@@ -350,6 +384,8 @@ private:
         else ++metrics_.parse_failures;
     }
 
+    ExternalVenueIngress& market_ingress_;
+    std::uint64_t asset_handle_ = 0;
     mutable std::mutex mutex_{};
     BinanceUsdMMetrics metrics_{};
 };
@@ -857,7 +893,8 @@ json::array derivative_context_json(const ExternalAssetSnapshot& snapshot) {
     json::array output;
     for (const auto& value : snapshot.derivative_contexts) {
         const char* venue = value.venue == VenueId::Deribit ? "DERIBIT"
-            : value.venue == VenueId::BybitLinear ? "BYBIT_LINEAR" : "UNKNOWN";
+            : value.venue == VenueId::BybitLinear ? "BYBIT_LINEAR"
+            : value.venue == VenueId::BinanceUsdM ? "BINANCE_USDM" : "UNKNOWN";
         output.emplace_back(json::object{
             {"venue", venue}, {"valid_mask", value.valid_mask},
             {"healthy", value.healthy != 0}, {"gap", value.gap != 0},
@@ -1052,6 +1089,7 @@ int main(int argc, char** argv) {
         auto bybit_event_tape = normalized_event_tape("bybit-spot");
         auto bybit_linear_event_tape = normalized_event_tape("bybit-linear");
         auto deribit_event_tape = normalized_event_tape("deribit");
+        auto binance_usdm_market_event_tape = normalized_event_tape("binance-usdm-market");
         const auto raw_tape = [&](std::string source) {
             if (raw_tape_dir.empty()) return std::unique_ptr<ExternalRawTapeRecorder>{};
             const auto session = "external-raw-" + std::to_string(::getpid());
@@ -1074,13 +1112,14 @@ int main(int argc, char** argv) {
         ExternalVenueIngress bybit_ingress(VenueId::BybitSpot, asset_handle, bybit_event_tape.get());
         ExternalVenueIngress bybit_linear_ingress(VenueId::BybitLinear, asset_handle, bybit_linear_event_tape.get());
         ExternalVenueIngress deribit_ingress(VenueId::Deribit, asset_handle, deribit_event_tape.get());
+        ExternalVenueIngress binance_usdm_market_ingress(VenueId::BinanceUsdM, asset_handle, binance_usdm_market_event_tape.get());
         BinanceSpotL2Observer binance_l2;
         CoinbaseL2Observer coinbase_l2(coinbase_ingress, asset_handle);
         BybitL2Observer bybit_l2(bybit_ingress, asset_handle);
         BybitL2Observer bybit_linear_l2(bybit_linear_ingress, asset_handle, VenueId::BybitLinear);
         BybitLinearMarketObserver bybit_linear_market(bybit_linear_ingress, asset_handle);
         FanoutObserver bybit_linear_observer(bybit_linear_l2, bybit_linear_market);
-        BinanceUsdMObserver binance_usdm_observer;
+        BinanceUsdMObserver binance_usdm_observer(binance_usdm_market_ingress, asset_handle);
         DeribitObserver deribit_observer;
         ExternalVenueWsClient binance(btc_spot_connection_spec(VenueId::BinanceSpot, asset_handle), &binance_ingress, &binance_l2, binance_raw_tape.get());
         ExternalVenueWsClient coinbase(btc_spot_connection_spec(VenueId::CoinbaseSpot, asset_handle), nullptr, &coinbase_l2, coinbase_raw_tape.get());
@@ -1120,7 +1159,8 @@ int main(int argc, char** argv) {
                 + coinbase_ingress.drain_into(state, policy)
                 + bybit_ingress.drain_into(state, policy)
                 + bybit_linear_ingress.drain_into(state, policy)
-                + deribit_ingress.drain_into(state, policy);
+                + deribit_ingress.drain_into(state, policy)
+                + binance_usdm_market_ingress.drain_into(state, policy);
             const auto now_mono = monotonic_now_ns();
             const auto snapshot = state.snapshot(now_mono, policy);
             TapeRecorderSnapshot tape_status;
@@ -1183,6 +1223,7 @@ int main(int argc, char** argv) {
                     {"bybit_spot", tape_json(bybit_event_tape ? bybit_event_tape->snapshot() : TapeRecorderSnapshot{}, bybit_event_tape != nullptr)},
                     {"bybit_linear", tape_json(bybit_linear_event_tape ? bybit_linear_event_tape->snapshot() : TapeRecorderSnapshot{}, bybit_linear_event_tape != nullptr)},
                     {"deribit", tape_json(deribit_event_tape ? deribit_event_tape->snapshot() : TapeRecorderSnapshot{}, deribit_event_tape != nullptr)},
+                    {"binance_usdm_market", tape_json(binance_usdm_market_event_tape ? binance_usdm_market_event_tape->snapshot() : TapeRecorderSnapshot{}, binance_usdm_market_event_tape != nullptr)},
                 }},
                 {"raw_frame_tapes", {
                     {"binance_spot", tape_json(binance_raw_tape ? binance_raw_tape->snapshot() : TapeRecorderSnapshot{}, binance_raw_tape != nullptr)},

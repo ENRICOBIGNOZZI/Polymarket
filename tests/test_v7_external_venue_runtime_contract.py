@@ -13,6 +13,8 @@ def main() -> None:
     assert "ExternalVenueWsClient coinbase" in source
     assert "ExternalVenueWsClient bybit" in source
     assert 'binance_usdm_market_spec.target = "/market/ws"' in source
+    assert "binance_usdm_market_ingress" in source
+    assert '"binance_usdm_market"' in source
     assert "ExternalAssetState state" in source
     assert '"real_order_submission", false' in source
     assert "polymarket_v7_external_venue_runtime" in cmake
