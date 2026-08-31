@@ -94,6 +94,17 @@ class V7MarketMakerCppRuntimeContractTest(unittest.TestCase):
         self.assertLessEqual(2.0 * per_quote, per_market)
         expected_market_cap = int(total // (2.0 * per_quote))
         self.assertEqual(expected_market_cap, 5)
+        selection = self.policy["market_selection"]
+        recent = selection["recent_flow"]
+        self.assertEqual(
+            int(selection["cold_start_maximum_markets"]), expected_market_cap
+        )
+        self.assertEqual(
+            int(recent["minimum_operational_markets"]), expected_market_cap
+        )
+        self.assertEqual(
+            int(recent["maximum_zero_flow_reserve_markets"]), expected_market_cap
+        )
         for token in (
             'inventory, "soft_directional_inventory_fraction"',
             'exploration, "max_quote_notional_fraction"',

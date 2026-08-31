@@ -429,7 +429,7 @@ class MakerRewardSelectorTests(unittest.TestCase):
             {"STABLE_SPREAD_EXPLORATION"},
         )
 
-    def test_resource_capacity_does_not_force_zero_flow_markets(self) -> None:
+    def test_stable_reserve_is_bounded_by_available_diversified_markets(self) -> None:
         from tempfile import TemporaryDirectory
         now_ms = 1_000_000
         base = {
@@ -466,9 +466,9 @@ class MakerRewardSelectorTests(unittest.TestCase):
                 universe, tape, selection_cfg, capacity_cfg, capacity,
                 model_sha=SHA, now_ms=now_ms,
             )
-        self.assertEqual(snapshot["selected_count"], 1)
-        self.assertEqual(snapshot["stable_reserve_added"], 0)
-        self.assertEqual(snapshot["unused_resource_capacity_markets"], capacity - 1)
+        self.assertEqual(snapshot["selected_count"], 3)
+        self.assertEqual(snapshot["stable_reserve_added"], 2)
+        self.assertEqual(snapshot["unused_resource_capacity_markets"], capacity - 3)
         self.assertEqual(snapshot["resource_capacity_markets"], capacity)
 
     def test_recent_flow_requires_sustained_sell_flow_and_a_fresh_last_print(self) -> None:
@@ -598,14 +598,14 @@ class MakerRewardSelectorTests(unittest.TestCase):
         self.assertEqual(snapshot["markets"][0]["reward_intensity"], 0.0)
         self.assertEqual(snapshot["markets"][0]["midpoint"], 0.45)
         self.assertEqual(snapshot["markets"][0]["flow_to_depth_24h"], 0.5)
-        self.assertEqual(snapshot["cold_start_maximum_markets"], 1)
+        self.assertEqual(snapshot["cold_start_maximum_markets"], 5)
         self.assertEqual(snapshot["markets"][0]["side_mode"], "STABLE_SPREAD_EXPLORATION")
         self.assertEqual(snapshot["markets"][0]["quote_opportunities"], [])
         status = rewards.selector_status(snapshot)
         self.assertTrue(status["ready"])
         self.assertEqual(status["state"], "OPERATIONAL_FALLBACK")
 
-    def test_cold_start_fallback_does_not_fill_shard_capacity(self) -> None:
+    def test_cold_start_fallback_matches_bounded_exploration_capacity(self) -> None:
         from tempfile import TemporaryDirectory
         now_ms = 1_000_000
         base = {
@@ -631,8 +631,8 @@ class MakerRewardSelectorTests(unittest.TestCase):
                 universe, selection_cfg, capacity_cfg, capacity,
                 model_sha=SHA, primary_error="cold-start", now_ms=now_ms,
             )
-        self.assertEqual(snapshot["selected_count"], 1)
-        self.assertEqual(snapshot["unused_resource_capacity_markets"], capacity - 1)
+        self.assertEqual(snapshot["selected_count"], 5)
+        self.assertEqual(snapshot["unused_resource_capacity_markets"], capacity - 5)
         self.assertEqual(snapshot["markets"][0]["recent_prints"], 0)
 
     def test_recent_flow_admits_liquid_two_cent_tail(self) -> None:

@@ -1073,7 +1073,7 @@ def _recent_flow_snapshot(
         "minimum_side_prints_2m": minimum_side_prints_2m,
         "maximum_last_side_age_ms": maximum_last_side_age_ms,
         "markets": selected,
-        "note": "PAPER maker ranks market-side cells from causal BUY/SELL aggressor flow. Resource capacity is a ceiling; zero-flow reserve is explicitly bounded and disabled in production. Rewards remain zero unless verified.",
+        "note": "PAPER maker ranks market-side cells from causal BUY/SELL aggressor flow. Resource capacity is a ceiling; the stable exploration reserve is explicitly bounded by the same five-market, two-percent PAPER capital envelope as the execution owner. Rewards remain zero unless verified.",
     }
 
 
