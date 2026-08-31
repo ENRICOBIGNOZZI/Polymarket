@@ -100,12 +100,12 @@ def validate_claim_registry(value: dict[str, Any]) -> None:
 
 
 def validate_control_manifest(value: dict[str, Any], modes: dict[str, Any]) -> None:
-    required = {"schema_version", "exact_code_sha", "build_manifest_hash", "config_bundle_hash", "strategy_registry_hash", "model_registry_hash", "policy_hash", "dataset_manifest_hash", "execution_mode", "wallet_id_hash", "signer_session_id_hash", "server_id", "region", "run_id", "start_time"}
+    required = {"schema_version", "exact_code_sha", "build_manifest_hash", "config_bundle_hash", "strategy_registry_hash", "model_registry_hash", "policy_hash", "dataset_manifest_hash", "approval_envelope_hash", "execution_mode", "wallet_id_hash", "signer_session_id_hash", "server_id", "region", "run_id", "start_time"}
     if set(value) != required or value.get("schema_version") != 1:
         raise ControlPlaneError("manifest:schema")
     if not isinstance(value["exact_code_sha"], str) or not SHA1_RE.fullmatch(value["exact_code_sha"]):
         raise ControlPlaneError("manifest:exact_code_sha")
-    for key in {"build_manifest_hash", "config_bundle_hash", "strategy_registry_hash", "model_registry_hash", "policy_hash", "dataset_manifest_hash", "wallet_id_hash", "signer_session_id_hash"}:
+    for key in {"build_manifest_hash", "config_bundle_hash", "strategy_registry_hash", "model_registry_hash", "policy_hash", "dataset_manifest_hash", "approval_envelope_hash", "wallet_id_hash", "signer_session_id_hash"}:
         if not isinstance(value[key], str) or not SHA256_RE.fullmatch(value[key]):
             raise ControlPlaneError(f"manifest:{key}")
     mode = value["execution_mode"]
