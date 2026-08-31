@@ -11,6 +11,7 @@ than a silent in-process fallback.
 from __future__ import annotations
 
 import argparse
+import gzip
 import hashlib
 import json
 import math
@@ -79,17 +80,21 @@ def identity(row: dict[str, Any]) -> tuple[str, str, str, str]:
 def jsonl_files(roots: Iterable[pathlib.Path]) -> list[pathlib.Path]:
     output: set[pathlib.Path] = set()
     for root in roots:
-        if root.is_file() and root.suffix == ".jsonl":
+        if root.is_file() and (
+            root.suffix == ".jsonl" or root.name.endswith(".jsonl.gz")
+        ):
             output.add(root.resolve())
         elif root.exists():
             output.update(item.resolve() for item in root.rglob("*.jsonl"))
+            output.update(item.resolve() for item in root.rglob("*.jsonl.gz"))
     return sorted(output)
 
 
 def rows(paths: Iterable[pathlib.Path]) -> Iterable[dict[str, Any]]:
     for path in paths:
         try:
-            with path.open(encoding="utf-8") as handle:
+            opener = gzip.open if path.suffix == ".gz" else open
+            with opener(path, "rt", encoding="utf-8") as handle:
                 for line in handle:
                     try:
                         row = json.loads(line)
@@ -951,7 +956,11 @@ def main() -> int:
     # the MICRO_MAKER_PRO ledger contract.
     source_files = [
         path for path in jsonl_files(sources)
-        if path.resolve() != args.store.resolve() and path.name == "execution.jsonl"
+        if path.resolve() != args.store.resolve()
+        and (
+            path.name == "execution.jsonl"
+            or (path.name.startswith("execution-") and path.name.endswith(".jsonl.gz"))
+        )
     ]
     evidence_paths = ([args.store] if args.store.exists() else []) + source_files
     evidence, compaction = compact_evidence(

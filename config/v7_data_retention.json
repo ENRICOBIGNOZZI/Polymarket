@@ -15,6 +15,12 @@
     "retain_local_checkpoints": 168,
     "durable_archive_required_before_local_prune": true
   },
+  "cutover_archives": {
+    "directory_name": "paper_v7_archives",
+    "keep_full_generations": 3,
+    "canonical_ledgers": "verified_gzip_never_delete",
+    "remove_only": "derived_snapshots_superseded_cumulative_state_and_logs"
+  },
   "streams": [
     {"name": "ws_tape", "patterns": ["market_data/*.csv.*", "market_data/*.jsonl.*"], "retention_days": 7},
     {"name": "trade_tape", "patterns": ["trade_tape.csv.*"], "retention_days": 30},

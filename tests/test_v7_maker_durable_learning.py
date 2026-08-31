@@ -1,3 +1,4 @@
+import gzip
 import json
 import pathlib
 import sys
@@ -9,7 +10,7 @@ sys.path.insert(0, str(ROOT / "scripts"))
 
 from v7_maker_durable_learning import (  # noqa: E402
     adverse_markout_models, append_new, compact_evidence, fit_model, hazard_model, identity,
-    placement_features,
+    jsonl_files, placement_features, rows,
 )
 
 SHA = "a" * 40
@@ -32,6 +33,17 @@ def record(event_type: str, record_id: str, **extra):
 
 
 class DurableLearningTests(unittest.TestCase):
+    def test_verified_cutover_gzip_remains_a_readable_evidence_source(self) -> None:
+        with tempfile.TemporaryDirectory() as folder:
+            root = pathlib.Path(folder)
+            source = root / "archive/canonical-ledger/execution-digest-100.jsonl.gz"
+            source.parent.mkdir(parents=True)
+            expected = record("ORDER_SUBMITTED", "gz-r1", order_id="gz-o1")
+            with gzip.open(source, "wt", encoding="utf-8") as handle:
+                handle.write(json.dumps(expected) + "\n")
+            self.assertEqual(jsonl_files([root]), [source.resolve()])
+            self.assertEqual(list(rows([source]))[0]["record_id"], "gz-r1")
+
     def test_compaction_drops_non_training_telemetry_but_keeps_labeled_risk(self) -> None:
         with tempfile.TemporaryDirectory() as folder:
             root = pathlib.Path(folder)

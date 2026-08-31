@@ -14,10 +14,22 @@ import gzip
 import hashlib
 import json
 import os
+import re
 import shutil
 import time
 from pathlib import Path
 from typing import Any
+
+
+SHA40 = re.compile(r"^[0-9a-f]{40}$")
+DERIVED_CUTOVER_FILES = (
+    "universe/current.json",
+    "graph_rv/relation_registry.json",
+    "reports/v7_arb_coverage_report.json",
+    "control/fee_reward_registry.json",
+    "micro_taker/state.json",
+    "micro_taker/state_dataset_v1_degenerate_repeated_snapshot.json",
+)
 
 
 def _json(path: Path) -> dict[str, Any]:
@@ -175,6 +187,179 @@ def prune_checkpoints(run_root: Path, policy: dict[str, Any], *, durable_archive
     return removed
 
 
+def _safe_cutover_archive(path: Path) -> bool:
+    runtime = _json(path / "control" / "runtime_status.json")
+    return (
+        path.is_dir()
+        and path.name.startswith("cutover-")
+        and runtime.get("paper_only") is True
+        and runtime.get("authenticated_execution") is False
+        and runtime.get("real_order_submission") is False
+        and SHA40.fullmatch(str(runtime.get("model_sha") or "")) is not None
+    )
+
+
+def _gzip_digest(path: Path) -> tuple[str, int]:
+    digest = hashlib.sha256()
+    size = 0
+    with gzip.open(path, "rb") as handle:
+        while True:
+            block = handle.read(1024 * 1024)
+            if not block:
+                break
+            digest.update(block)
+            size += len(block)
+    return digest.hexdigest(), size
+
+
+def _compact_cutover_ledger(archive: Path, *, dry_run: bool) -> dict[str, Any]:
+    source = archive / "ledger" / "execution.jsonl"
+    if not source.is_file():
+        return {"created": False, "reason": "source_absent"}
+    digest = hashlib.sha256()
+    rows = 0
+    source_bytes = 0
+    with source.open("rb") as handle:
+        for raw in handle:
+            source_bytes += len(raw)
+            digest.update(raw)
+            if not raw.endswith(b"\n"):
+                raise ValueError(f"cutover ledger has incomplete tail:{archive.name}")
+            if not raw.strip():
+                continue
+            value = json.loads(raw)
+            if (
+                not isinstance(value, dict)
+                or value.get("paper_only") is not True
+                or value.get("authenticated_execution") is not False
+                or SHA40.fullmatch(str(value.get("model_sha") or "")) is None
+            ):
+                raise ValueError(f"unsafe cutover ledger record:{archive.name}:{rows + 1}")
+            rows += 1
+    if source_bytes <= 0:
+        return {"created": False, "reason": "empty_source", "rows": rows}
+    source_digest = digest.hexdigest()
+    relative = Path("archive") / "canonical-ledger" / (
+        f"execution-{source_digest[:20]}-{source_bytes}.jsonl.gz"
+    )
+    target = archive / relative
+    if dry_run:
+        return {
+            "created": False,
+            "reason": "dry_run",
+            "source": str(source.relative_to(archive)),
+            "target": str(relative),
+            "source_bytes": source_bytes,
+            "rows": rows,
+            "sha256": source_digest,
+        }
+    target.parent.mkdir(parents=True, exist_ok=True)
+    if not target.exists():
+        temporary = target.with_name(f"{target.name}.tmp.{os.getpid()}")
+        with source.open("rb") as input_handle, temporary.open("wb") as raw_output:
+            with gzip.GzipFile(
+                filename="execution.jsonl", mode="wb",
+                fileobj=raw_output, mtime=0,
+            ) as output:
+                shutil.copyfileobj(input_handle, output, length=1024 * 1024)
+            raw_output.flush()
+            os.fsync(raw_output.fileno())
+        compressed_digest, decompressed_bytes = _gzip_digest(temporary)
+        if compressed_digest != source_digest or decompressed_bytes != source_bytes:
+            temporary.unlink(missing_ok=True)
+            raise ValueError(f"cutover ledger gzip verification failed:{archive.name}")
+        os.replace(temporary, target)
+    compressed_digest, decompressed_bytes = _gzip_digest(target)
+    if compressed_digest != source_digest or decompressed_bytes != source_bytes:
+        raise ValueError(f"existing cutover ledger gzip mismatch:{archive.name}")
+    compressed_bytes = target.stat().st_size
+    source.unlink()
+    return {
+        "created": True,
+        "source": str(source.relative_to(archive)),
+        "target": str(relative),
+        "source_bytes": source_bytes,
+        "compressed_bytes": compressed_bytes,
+        "reclaimed_bytes": max(0, source_bytes - compressed_bytes),
+        "rows": rows,
+        "sha256": source_digest,
+    }
+
+
+def compact_cutover_archives(
+    archive_root: Path, policy: dict[str, Any], *, now: int, dry_run: bool,
+) -> dict[str, Any]:
+    """Compact only inactive, verified PAPER cutovers.
+
+    Canonical ledgers remain byte-verifiable gzip evidence. Only derived
+    snapshots, cumulative superseded Micro datasets and diagnostic logs are
+    removed; the newest generations remain fully expanded for incident review.
+    """
+    keep_full = max(1, int(policy.get("keep_full_generations") or 3))
+    if not archive_root.exists():
+        return {"archive_root": str(archive_root), "compacted": [], "skipped": []}
+    candidates = sorted(
+        (path for path in archive_root.glob("cutover-*") if path.is_dir()),
+        key=lambda path: (path.stat().st_mtime_ns, path.name), reverse=True,
+    )
+    protected = {path.resolve() for path in candidates[:keep_full]}
+    compacted: list[dict[str, Any]] = []
+    skipped: list[str] = []
+    for archive in candidates[keep_full:]:
+        if archive.resolve() in protected or not _safe_cutover_archive(archive):
+            skipped.append(archive.name)
+            continue
+        archive_resolved = archive.resolve()
+        ledger = _compact_cutover_ledger(archive, dry_run=dry_run)
+        removed: list[dict[str, Any]] = []
+        removal_candidates = [archive / relative for relative in DERIVED_CUTOVER_FILES]
+        removal_candidates.extend(archive.glob("**/*.log"))
+        removal_candidates.extend(archive.glob("**/*.log.*"))
+        seen: set[Path] = set()
+        for candidate in removal_candidates:
+            try:
+                resolved = candidate.resolve(strict=True)
+                resolved.relative_to(archive_resolved)
+            except (OSError, ValueError):
+                continue
+            if resolved in seen or not resolved.is_file():
+                continue
+            seen.add(resolved)
+            size = resolved.stat().st_size
+            removed.append({
+                "path": str(resolved.relative_to(archive_resolved)), "bytes": size,
+            })
+            if not dry_run:
+                resolved.unlink()
+        reclaimed = int(ledger.get("reclaimed_bytes") or 0) + sum(
+            int(row["bytes"]) for row in removed
+        )
+        entry = {
+            "archive": archive.name,
+            "ledger": ledger,
+            "removed_derived_files": removed,
+            "reclaimed_bytes": reclaimed,
+        }
+        if not dry_run:
+            _atomic_json(archive / "archive" / "compaction_manifest.json", {
+                "schema": "polymarket_v7_cutover_compaction_v1",
+                "timestamp": now,
+                "paper_only": True,
+                "authenticated_execution": False,
+                **entry,
+            })
+        compacted.append(entry)
+    return {
+        "archive_root": str(archive_root),
+        "keep_full_generations": keep_full,
+        "protected_full_archives": [path.name for path in candidates[:keep_full]],
+        "compacted": compacted,
+        "skipped": skipped,
+        "reclaimed_bytes": sum(int(row["reclaimed_bytes"]) for row in compacted),
+        "dry_run": dry_run,
+    }
+
+
 def run_retention(
     run_root: Path,
     config: dict[str, Any],
@@ -188,7 +373,6 @@ def run_retention(
     run_root.mkdir(parents=True, exist_ok=True)
     if config.get("schema") != "polymarket_v7_data_retention_v1" or config.get("paper_only") is not True:
         raise ValueError("invalid V7 PAPER retention policy")
-    disk = disk_state(run_root, config["disk"])
     checkpoint = checkpoint_ledger(run_root, config["canonical_ledger"], expected_sha) if not dry_run else {"created": False, "reason": "dry_run"}
     rotated = rotate_append_reopen_streams(
         run_root, config.get("active_files", {}), now=now, dry_run=dry_run
@@ -200,6 +384,14 @@ def run_retention(
         durable_archive_confirmed=durable_archive_confirmed,
         dry_run=dry_run,
     )
+    cutover_policy = config.get("cutover_archives", {})
+    archive_name = str(cutover_policy.get("directory_name") or "paper_v7_archives")
+    if Path(archive_name).name != archive_name:
+        raise ValueError("unsafe cutover archive directory name")
+    cutover_compaction = compact_cutover_archives(
+        run_root.parent / archive_name, cutover_policy, now=now, dry_run=dry_run,
+    )
+    disk = disk_state(run_root, config["disk"])
     result = {
         "schema": "polymarket_v7_retention_status_v1",
         "timestamp": now,
@@ -211,6 +403,7 @@ def run_retention(
         "rotated_append_reopen_streams": rotated,
         "expired_rotated_segments": expired,
         "pruned_ledger_checkpoints": pruned,
+        "cutover_archive_compaction": cutover_compaction,
         "durable_archive_confirmed": durable_archive_confirmed,
         "dry_run": dry_run,
     }
