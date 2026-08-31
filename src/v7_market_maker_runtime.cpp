@@ -1218,6 +1218,12 @@ public:
         return execution_snapshots_.try_push(update);
     }
 
+    [[nodiscard]] bool owns_market(std::uint64_t market_handle) const noexcept {
+        return market_handle < execution_state_.size()
+            && execution_state_[static_cast<std::size_t>(market_handle)].market_handle
+                == market_handle;
+    }
+
 private:
     [[nodiscard]] InstrumentRef* ref(std::uint64_t instrument) noexcept {
         if (instrument >= refs_.size() || refs_[instrument].market == nullptr) return nullptr;
@@ -2031,15 +2037,18 @@ public:
         return telemetry_.try_pop(record);
     }
 
-    [[nodiscard]] bool maintenance_tick(std::int64_t now_ns) noexcept {
+    [[nodiscard]] bool maintenance_tick(
+        std::int64_t now_ns,
+        std::array<std::uint64_t, pm::v7::maker::kMaxMakerExecutionMarkets>& changed_markets,
+        std::size_t& changed_count) noexcept {
+        changed_count = 0;
         if (!sync_inventory_drain_mode()) return false;
-        if (!inventory_drain_any_) return true;
         for (std::size_t handle = 1; handle < markets_.size(); ++handle) {
             const auto* market = markets_[handle];
-            if (market == nullptr
-                || handle >= inventory_drain_active_by_market_.size()
-                || inventory_drain_active_by_market_[handle] == 0) continue;
-            auto cancellation = policy_.cancel_all(handle, now_ns, capital_);
+            if (market == nullptr) continue;
+            const bool inventory_drain_active = inventory_drain_any_
+                && handle < inventory_drain_active_by_market_.size()
+                && inventory_drain_active_by_market_[handle] != 0;
             ExecutionContext context;
             context.market_handle = handle;
             context.event_handle = market->event_handle;
@@ -2048,15 +2057,35 @@ public:
             context.receive_monotonic_ns = now_ns;
             context.tick_size_e4 = market->yes_tick_e4;
             context.outcome_yes = 1;
-            if (cancellation.paper.event_count > 0) emit(context, cancellation.paper);
-            if (cancellation.capital_invariant_violation
-                || cancellation.paper.invariant_violation) {
-                return false;
+            bool market_changed = false;
+            if (inventory_drain_active) {
+                auto cancellation = policy_.cancel_all(handle, now_ns, capital_);
+                if (cancellation.paper.event_count > 0) {
+                    emit(context, cancellation.paper);
+                    market_changed = true;
+                }
+                if (cancellation.capital_invariant_violation
+                    || cancellation.paper.invariant_violation) {
+                    return false;
+                }
             }
+            // Advance every registered market. Exploration horizons are an OMS
+            // deadline and must not depend on either inventory-drain state or a
+            // subsequent venue payload arriving for a quiet exact cell.
             auto result = policy_.advance_time(handle, now_ns, capital_);
-            if (result.paper.event_count > 0) emit(context, result.paper);
+            if (result.paper.event_count > 0) {
+                emit(context, result.paper);
+                market_changed = true;
+            }
             if (result.capital_invariant_violation || result.paper.invariant_violation) {
                 return false;
+            }
+            if (!inventory_drain_active) {
+                if (market_changed) {
+                    if (changed_count >= changed_markets.size()) return false;
+                    changed_markets[changed_count++] = handle;
+                }
+                continue;
             }
             const auto yes_quotes = policy_.quote_snapshot(
                 handle, market->yes_instrument_handle);
@@ -2106,6 +2135,7 @@ public:
                         liquidation_context.exchange_event_ns =
                             relevant_book.exchange_event_ns;
                         emit(liquidation_context, liquidation.paper);
+                        market_changed = true;
                     }
                     if (liquidation.capital_invariant_violation
                         || liquidation.paper.invariant_violation) {
@@ -2124,12 +2154,16 @@ public:
                 inventory_targets_[handle] = 0;
                 inventory_drain_active_by_market_[handle] = 0;
             }
+            if (market_changed) {
+                if (changed_count >= changed_markets.size()) return false;
+                changed_markets[changed_count++] = handle;
+            }
         }
         inventory_drain_any_ = std::any_of(
             inventory_drain_active_by_market_.begin(),
             inventory_drain_active_by_market_.end(),
             [](std::uint8_t value) { return value != 0; });
-        ++execution_version_;
+        if (changed_count > 0) ++execution_version_;
         return true;
     }
 
@@ -3588,7 +3622,37 @@ int main(int argc, char** argv) {
             };
             std::uint32_t idle_iterations = 0;
             std::int64_t last_maintenance_ns = monotonic_ns();
+            std::array<std::uint64_t, pm::v7::maker::kMaxMakerExecutionMarkets>
+                maintenance_changed_markets{};
+            auto run_maintenance = [&](std::int64_t now_ns) noexcept {
+                std::size_t changed_count = 0;
+                if (!execution->maintenance_tick(
+                        now_ns, maintenance_changed_markets, changed_count)) {
+                    fatal.store(true, std::memory_order_release);
+                    return;
+                }
+                for (std::size_t i = 0; i < changed_count; ++i) {
+                    const auto handle = maintenance_changed_markets[i];
+                    const auto update = execution->snapshot(handle);
+                    bool owner_found = false;
+                    for (const auto& shard : shards) {
+                        if (!shard->owns_market(handle)) continue;
+                        owner_found = true;
+                        if (update.market_handle == 0
+                            || !shard->push_execution_snapshot(update)) {
+                            fatal.store(true, std::memory_order_release);
+                        }
+                        break;
+                    }
+                    if (!owner_found) fatal.store(true, std::memory_order_release);
+                }
+            };
             while (!execution_stop.load(std::memory_order_acquire) || pending()) {
+                const auto loop_now_ns = monotonic_ns();
+                if (loop_now_ns - last_maintenance_ns >= 100'000'000LL) {
+                    run_maintenance(loop_now_ns);
+                    last_maintenance_ns = loop_now_ns;
+                }
                 ExecutionCommand command;
                 std::size_t source_shard = 0;
                 bool have = false;
@@ -3616,13 +3680,6 @@ int main(int argc, char** argv) {
                     }
                 }
                 if (!have) {
-                    const auto now_ns = monotonic_ns();
-                    if (now_ns - last_maintenance_ns >= 100'000'000LL) {
-                        if (!execution->maintenance_tick(now_ns)) {
-                            fatal.store(true, std::memory_order_release);
-                        }
-                        last_maintenance_ns = now_ns;
-                    }
                     // Avoid a fixed 50 us tax on a newly enqueued cancel/order.
                     // The isolated order-TX owner spins briefly, then yields,
                     // and only sleeps after a prolonged idle period.

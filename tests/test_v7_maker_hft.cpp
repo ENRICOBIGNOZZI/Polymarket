@@ -571,6 +571,7 @@ void configure_exploration(pm::v7::maker::MakerModelSnapshot& model) {
     model.exploration_concurrent_market_cap = 5;
     model.exploration_min_rest_ns = 3'000'000'000LL;
     model.exploration_max_rest_ns = 15'000'000'000LL;
+    model.exploration_persistent_fraction = 0.0;
     model.exploration_persistent_max_rest_ns = model.exploration_max_rest_ns;
 }
 
@@ -602,6 +603,7 @@ void test_positive_exploration_ev_breaks_robust_cold_start() {
     assert(decision.intents[0].expected_ev > 0.0);
     assert(decision.intents[0].expected_ev < model.min_robust_ev_per_share);
     assert(decision.intents[0].quantity_microunits == 2'000'000);
+    assert(decision.intents[0].horizon_ms == 15'000);
 }
 
 void test_zero_runtime_exploration_cap_is_an_explicit_denial() {
@@ -829,6 +831,7 @@ void test_persistent_lifetime_arm_is_explicit_and_bounded() {
     assert(decision.exploration_max_rest_ns == 60'000'000'000LL);
     assert(decision.exploration_persistent == 1);
     assert(decision.intent_count == 1);
+    assert(decision.intents[0].horizon_ms == 60'000);
 }
 
 void test_exploration_minimum_rest_survives_transient_negative_ev() {

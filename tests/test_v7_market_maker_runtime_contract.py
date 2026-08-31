@@ -110,8 +110,12 @@ class ProfessionalMakerRuntimeContractTests(unittest.TestCase):
             "policy_.process(command.plan, capital_)",
             "policy_.on_public_trade",
             "policy_.advance_time",
+            "Advance every registered market",
+            "maintenance_changed_markets",
+            "owns_market(handle)",
         ):
             self.assertIn(required, runtime)
+        self.assertNotIn("if (!inventory_drain_any_) return true;", runtime)
         for forbidden in (
             "market.paper.apply_intent",
             "market.paper.on_public_trade",

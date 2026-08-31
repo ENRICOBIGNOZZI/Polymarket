@@ -203,6 +203,11 @@ private:
         PaperRestingOrder paper{};
         std::uint64_t intent_id = 0;
         std::int32_t tick_size_e4 = 0;
+        // Zero preserves the ordinary event-driven quote lifetime. A positive
+        // value is the autonomous PAPER execution horizon carried by the
+        // StrategyIntent (currently used by bounded exploration arms). Keeping
+        // this uint32 beside tick_size_e4 consumes existing alignment padding.
+        std::uint32_t economic_horizon_ms = 0;
         std::uint64_t opposite_flow_prints_seen = 0;
         std::uint64_t price_reach_prints_seen = 0;
         std::int64_t opposite_flow_microunits_seen = 0;

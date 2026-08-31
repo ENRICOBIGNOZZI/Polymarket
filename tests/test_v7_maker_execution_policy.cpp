@@ -2,6 +2,7 @@
 
 #include <cassert>
 #include <cmath>
+#include <memory>
 
 namespace {
 
@@ -152,6 +153,37 @@ void test_control_plane_cancel_all_releases_buy_reservations() {
     assert(capital.snapshot().order_reserved_microdollars == 0);
 }
 
+void test_economic_horizon_releases_buy_reservation_after_cancel_latency() {
+    // The policy owns a fixed array of market engines and is intentionally
+    // large. Keep this additional integration case off the test process stack.
+    auto execution = std::make_unique<pm::v7::maker::MakerPaperExecutionPolicy>();
+    const bool registered = execution->register_market(kMarket, kYes, kNo, kTickE4);
+    assert(registered);
+    (void)registered;
+    pm::v7::SleeveCapitalAccount capital(capital_limits());
+    auto plan = quote_plan(206, kYes, pm::v7::Side::Buy, 48, 2'000'000);
+    plan.intent.horizon_ms = 100;
+    assert(execution->process(plan, capital).accepted);
+    assert(capital.snapshot().order_reserved_microdollars == 960'000);
+
+    const auto requested = execution->advance_time(
+        kMarket, 1'101'000'000LL, capital);
+    assert(requested.accepted);
+    assert(requested.paper.event_count == 1);
+    assert(requested.paper.events[0].kind
+           == pm::v7::maker::PaperMakerEventKind::CancelRequested);
+    assert(capital.snapshot().order_reserved_microdollars == 960'000);
+
+    const auto terminal = execution->advance_time(
+        kMarket, 1'201'000'000LL, capital);
+    assert(terminal.accepted);
+    assert(terminal.paper.event_count == 1);
+    assert(terminal.paper.events[0].kind
+           == pm::v7::maker::PaperMakerEventKind::Cancelled);
+    assert(capital.snapshot().order_reserved_microdollars == 0);
+    assert(capital.snapshot().total_exposure_microdollars == 0);
+}
+
 void test_yes_no_buy_cycle_merge_releases_inventory_capital() {
     auto execution = policy();
     pm::v7::SleeveCapitalAccount capital(capital_limits());
@@ -242,6 +274,7 @@ int main() {
     test_full_buy_fill_moves_reservation_to_inventory();
     test_partial_fill_preserves_total_capital_until_cancel_effective();
     test_control_plane_cancel_all_releases_buy_reservations();
+    test_economic_horizon_releases_buy_reservation_after_cancel_latency();
     test_yes_no_buy_cycle_merge_releases_inventory_capital();
     test_split_then_sell_releases_sold_leg_cost_basis();
     test_unobservable_queue_fails_before_capital_or_paper_mutation();

@@ -432,6 +432,19 @@ PaperMakerResult MakerPaperMarketEngine::apply_intent(
         slot->occupied = 0;
         return reject();
     }
+    if (intent.horizon_ms > 0) {
+        constexpr std::int64_t kNanosecondsPerMillisecond = 1'000'000LL;
+        const auto horizon_ns = static_cast<std::int64_t>(intent.horizon_ms)
+            * kNanosecondsPerMillisecond;
+        if (arrival_receive > std::numeric_limits<std::int64_t>::max() - horizon_ns) {
+            slot->occupied = 0;
+            result.invariant_violation = 1;
+            return reject();
+        }
+        // Start the maximum resting lifetime at the causal PAPER arrival, not
+        // before the hypothetical order could have joined the public queue.
+        slot->economic_horizon_ms = intent.horizon_ms;
+    }
 
     auto transition = slot->oms.apply(oms_event(OmsEventType::QueueSend,
                                                 intent.decision_monotonic_ns));
@@ -700,6 +713,33 @@ PaperMakerResult MakerPaperMarketEngine::advance_time(
             emit(result, event);
         }
         result.applied = 1;
+    }
+    // Economic expiry is owned by this market-local OMS state, so it progresses
+    // even when the venue emits no new book or trade message. Acknowledge older
+    // cancels first, then request newly expired ones; this prevents a zero-latency
+    // policy from emitting two events per slot into a fixed-capacity result.
+    for (auto& slot : slots_) {
+        if (!slot.occupied || slot.economic_horizon_ms == 0
+            || (slot.oms.record().state != OrderState::Live
+                && slot.oms.record().state != OrderState::Partial)) {
+            continue;
+        }
+        constexpr std::int64_t kNanosecondsPerMillisecond = 1'000'000LL;
+        const auto horizon_ns = static_cast<std::int64_t>(slot.economic_horizon_ms)
+            * kNanosecondsPerMillisecond;
+        if (slot.paper.arrival_receive_monotonic_ns
+                > std::numeric_limits<std::int64_t>::max() - horizon_ns) {
+            result.invariant_violation = 1;
+            break;
+        }
+        const auto expiry_ns = slot.paper.arrival_receive_monotonic_ns + horizon_ns;
+        if (monotonic_ns < expiry_ns) continue;
+        // Preserve one event of headroom for maybe_merge() below. If many orders
+        // expire together, the 100 ms execution timer drains the remainder on
+        // the next bounded pass instead of violating the fixed hot-path buffer.
+        if (result.event_count + 1 >= result.events.size()) break;
+        request_cancel(slot, monotonic_ns, result);
+        if (result.invariant_violation) break;
     }
     maybe_merge(monotonic_ns, result);
     refresh_inventory_derived();

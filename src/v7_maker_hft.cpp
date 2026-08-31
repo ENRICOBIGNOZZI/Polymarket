@@ -1151,11 +1151,21 @@ MakerDecision MakerHotPath::on_market_update(
                     * lifetime_propensity;
                 decision.exploration_information_arm = static_cast<std::uint8_t>(
                     choice.information_arm);
-                append_intent(decision, make_intent(++intent_sequence_, update, model,
-                                                    IntentType::Quote, choice.economics->side,
-                                                    choice.economics->price_tick,
-                                                    choice.economics->quote_shares,
-                                                    &authorized_exploration, now));
+                auto exploration_intent = make_intent(
+                    ++intent_sequence_, update, model, IntentType::Quote,
+                    choice.economics->side, choice.economics->price_tick,
+                    choice.economics->quote_shares, &authorized_exploration, now);
+                // This is an execution contract, not just decision metadata.
+                // A quiet market may emit no later book/trade event, so the
+                // single OMS owner must be able to terminate the assigned arm
+                // without waiting for MakerHotPath to run again.
+                constexpr std::int64_t kNanosecondsPerMillisecond = 1'000'000LL;
+                const auto lifetime_ms = std::clamp<std::int64_t>(
+                    exploration_max_rest_ns_ / kNanosecondsPerMillisecond,
+                    1,
+                    static_cast<std::int64_t>(std::numeric_limits<std::uint32_t>::max()));
+                exploration_intent.horizon_ms = static_cast<std::uint32_t>(lifetime_ms);
+                append_intent(decision, exploration_intent);
                 exploration_active_ = 1;
                 exploration_action_ = choice.action;
                 exploration_side_ = choice.economics->side;

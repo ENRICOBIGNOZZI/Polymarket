@@ -212,6 +212,48 @@ void test_control_plane_cancel_all_drains_quiet_market_without_book_update() {
     assert(engine.active_order_count() == 0);
 }
 
+void test_economic_horizon_expires_quiet_quote_without_book_update() {
+    pm::v7::maker::PaperMakerPolicy policy;
+    policy.assumed_submission_latency_ns = 1'000'000LL;
+    policy.cancel_latency_ns = 100'000'000LL;
+    pm::v7::maker::MakerPaperMarketEngine engine(kMarket, kYes, kNo, policy);
+    auto bounded = quote(3, kYes, pm::v7::Side::Buy, 48, 1'000'000,
+                         1'000'000'000LL, 10'000'000'000LL);
+    bounded.horizon_ms = 100;
+    assert(engine.apply_intent(bounded, 2'000'000, 100).applied);
+
+    const auto before = engine.advance_time(1'100'999'999LL);
+    assert(find_event(before, pm::v7::maker::PaperMakerEventKind::CancelRequested) == nullptr);
+    assert(engine.quote_snapshot(kYes).bid_active == 1);
+
+    const auto expired = engine.advance_time(1'101'000'000LL);
+    const auto* requested = find_event(
+        expired, pm::v7::maker::PaperMakerEventKind::CancelRequested);
+    assert(requested != nullptr);
+    assert(requested->execution_outcome
+           == pm::v7::maker::PaperExecutionOutcome::Pending);
+    assert(engine.quote_snapshot(kYes).cancel_pending == 1);
+
+    const auto terminal = engine.advance_time(1'201'000'000LL);
+    const auto* cancelled = find_event(
+        terminal, pm::v7::maker::PaperMakerEventKind::Cancelled);
+    assert(cancelled != nullptr);
+    assert(cancelled->execution_outcome
+           == pm::v7::maker::PaperExecutionOutcome::NoOppositeFlow);
+    assert(engine.active_order_count() == 0);
+}
+
+void test_zero_economic_horizon_preserves_event_driven_quote() {
+    pm::v7::maker::MakerPaperMarketEngine engine(kMarket, kYes, kNo);
+    assert(engine.apply_intent(
+        quote(4, kYes, pm::v7::Side::Buy, 48, 1'000'000,
+              1'000'000'000LL, 10'000'000'000LL), 0, 100).applied);
+    const auto much_later = engine.advance_time(101'000'000'000LL);
+    assert(find_event(much_later, pm::v7::maker::PaperMakerEventKind::CancelRequested)
+           == nullptr);
+    assert(engine.quote_snapshot(kYes).bid_active == 1);
+}
+
 void test_terminal_no_fill_reason_is_order_specific() {
     using Outcome = pm::v7::maker::PaperExecutionOutcome;
     pm::v7::maker::PaperMakerPolicy policy;
@@ -434,6 +476,8 @@ int main() {
     test_public_trade_rejection_funnel_is_explicit();
     test_cancel_pending_can_fill_until_effective_but_not_after();
     test_control_plane_cancel_all_drains_quiet_market_without_book_update();
+    test_economic_horizon_expires_quiet_quote_without_book_update();
+    test_zero_economic_horizon_preserves_event_driven_quote();
     test_terminal_no_fill_reason_is_order_specific();
     test_yes_no_buys_merge_complete_set_and_realize_trading_pnl();
     test_merge_does_not_consume_inventory_reserved_by_live_sell();
