@@ -71,21 +71,12 @@ ExternalVenueConnectionSpec btc_spot_connection_spec(
                 R"({"method":"SUBSCRIBE","params":["btcusdt@depth@100ms","btcusdt@bookTicker","btcusdt@aggTrade"],"id":1})";
             break;
         case VenueId::CoinbaseSpot:
-            spec.host = "advanced-trade-ws.coinbase.com";
+            spec.host = "ws-feed.exchange.coinbase.com";
             spec.port = "443";
             spec.target = "/";
             spec.symbol = "BTC-USD";
-            // Coinbase requires one subscribe message per channel. A JSON array
-            // here would not be a valid protocol message, so the IO loop emits
-            // the two newline-delimited objects separately before reading.
             spec.subscription_json =
-                R"({"type":"subscribe","product_ids":["BTC-USD"],"channel":"ticker"})"
-                "\n"
-                R"({"type":"subscribe","product_ids":["BTC-USD"],"channel":"market_trades"})"
-                "\n"
-                R"({"type":"subscribe","product_ids":["BTC-USD"],"channel":"level2"})"
-                "\n"
-                R"({"type":"subscribe","channel":"heartbeats"})";
+                R"({"type":"subscribe","product_ids":["BTC-USD"],"channels":["level2","matches","heartbeat"]})";
             break;
         case VenueId::BybitSpot:
             spec.host = "stream.bybit.com";
