@@ -1,0 +1,12 @@
+{
+  "fixture": "non_authoritative_missing_evidence_scorecard",
+  "schema": "polymarket_v7_world_class_scorecard_v1",
+  "model_sha": "0000000000000000000000000000000000000000",
+  "state": "MORE_EVIDENCE_REQUIRED",
+  "world_class_candidate": false,
+  "automatic_promotion": false,
+  "reason_codes": ["real_pnl_evidence_missing"],
+  "economics": {
+    "realized_and_settled_net_pnl_base_units": null
+  }
+}

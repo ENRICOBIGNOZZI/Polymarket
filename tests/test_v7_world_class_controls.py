@@ -22,7 +22,7 @@ class WorldClassControlsTests(unittest.TestCase):
             self.assertTrue((ROOT / path).is_file())
 
     def test_scorecard_never_infers_real_pnl_from_missing_evidence(self) -> None:
-        value = json.loads((ROOT / "artifacts/v7_world_class/scorecard.json").read_text(encoding="utf-8"))
+        value = json.loads((ROOT / "tests/fixtures/v7_world_class_scorecard_missing_evidence.json").read_text(encoding="utf-8"))
         self.assertEqual(value["state"], "MORE_EVIDENCE_REQUIRED")
         self.assertFalse(value["world_class_candidate"])
         self.assertIsNone(value["economics"]["realized_and_settled_net_pnl_base_units"])
