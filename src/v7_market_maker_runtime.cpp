@@ -1250,7 +1250,7 @@ private:
             rejected_nonpositive_robust_ev_.fetch_add(1, std::memory_order_relaxed);
             const double point_ev = decision.robust_ev
                 + std::max(0.0, model.robust_ev_z) * decision.ev_uncertainty;
-            if (point_ev > model.min_robust_ev_per_share) {
+            if (point_ev > 0.0) {
                 rejected_positive_point_ev_.fetch_add(1, std::memory_order_relaxed);
             }
             update_atomic_max(best_rejected_robust_ev_nano_, ev_nano(decision.robust_ev));

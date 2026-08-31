@@ -457,7 +457,10 @@ void test_positive_exploration_ev_breaks_robust_cold_start() {
     // exploration gate.
     model.base_ev_se_per_share = 0.025;
     model.robust_ev_z = 1.64;
-    model.min_robust_ev_per_share = 0.00001;
+    // The exploit floor is intentionally above every feasible per-share EV.
+    // Strictly positive point-EV must still have bounded PAPER exploration
+    // authority; otherwise this floor recreates an absorbing cold start.
+    model.min_robust_ev_per_share = 1.0;
     configure_exploration(model);
     pm::v7::maker::InventorySnapshot inventory;
     pm::v7::maker::QuoteSnapshot quotes;
@@ -470,7 +473,8 @@ void test_positive_exploration_ev_breaks_robust_cold_start() {
     assert(decision.reason == pm::v7::maker::DecisionReason::ExplorationQuote);
     assert(decision.intent_count == 1);
     assert(decision.intents[0].type == pm::v7::IntentType::Quote);
-    assert(decision.intents[0].expected_ev > model.min_robust_ev_per_share);
+    assert(decision.intents[0].expected_ev > 0.0);
+    assert(decision.intents[0].expected_ev < model.min_robust_ev_per_share);
     assert(decision.intents[0].quantity_microunits == 2'000'000);
 }
 

@@ -146,7 +146,12 @@ struct ExplorationChoice {
             if (candidate.action != Action::Join && candidate.action != Action::Improve1) continue;
             const auto& economics = wanted_side == Side::Sell ? candidate.ask : candidate.bid;
             const double adjusted_ev = exploration_adjusted_ev(economics, model);
-            if (!finite(adjusted_ev) || adjusted_ev <= model.min_robust_ev_per_share
+            // Exploration has its own tiny PAPER capital envelope and exists
+            // to learn below the exploit confidence floor.  Requiring the
+            // exploit floor here recreates the cold-start deadlock: a strictly
+            // positive point-EV cell can never rest long enough to label its
+            // reach, queue depletion and markout.  Zero remains fail-closed.
+            if (!finite(adjusted_ev) || adjusted_ev <= 0.0
                 || economics.price_tick <= 0 || economics.side != wanted_side) continue;
             // Exploration still spends real PAPER risk. Rank by conservative
             // expected dollars first; use fill probability only as a tie-break
@@ -858,7 +863,7 @@ MakerDecision MakerHotPath::on_market_update(
                     ? exploration_adjusted_ev(*exploratory, model)
                     : -std::numeric_limits<double>::infinity();
                 const bool exploration_economic = finite(adjusted_ev)
-                    && adjusted_ev > model.min_robust_ev_per_share;
+                    && adjusted_ev > 0.0;
                 if (!exploration_economic) {
                     decision.robust_ev = finite(adjusted_ev) ? adjusted_ev : 0.0;
                     decision.ev_uncertainty = exploratory != nullptr ? exploratory->uncertainty : 0.0;
