@@ -16,7 +16,9 @@
 
 #include <atomic>
 #include <chrono>
+#include <cmath>
 #include <csignal>
+#include <cstdlib>
 #include <filesystem>
 #include <fstream>
 #include <future>
@@ -107,6 +109,163 @@ json::object l2_json(const BinanceL2Metrics& value) {
         {"bid_levels", value.bid_levels}, {"ask_levels", value.ask_levels},
     };
 }
+
+[[nodiscard]] const json::value* json_field(const json::object& object, std::string_view key) noexcept {
+    const auto iter = object.find(key);
+    return iter == object.end() ? nullptr : &iter->value();
+}
+
+[[nodiscard]] bool json_number(const json::value* value, double& output) noexcept {
+    if (value == nullptr) return false;
+    if (value->is_double()) output = value->as_double();
+    else if (value->is_int64()) output = static_cast<double>(value->as_int64());
+    else if (value->is_uint64()) output = static_cast<double>(value->as_uint64());
+    else if (value->is_string()) {
+        const auto& text = value->as_string();
+        std::string copy(text.data(), text.size());
+        char* end = nullptr;
+        output = std::strtod(copy.c_str(), &end);
+        if (end != copy.c_str() + copy.size()) return false;
+    } else return false;
+    return std::isfinite(output);
+}
+
+[[nodiscard]] bool json_text_equals(const json::value* value, std::string_view expected) noexcept {
+    if (value == nullptr || !value->is_string()) return false;
+    const auto& text = value->as_string();
+    return std::string_view(text.data(), text.size()) == expected;
+}
+
+[[nodiscard]] bool json_bool(const json::value* value, bool& output) noexcept {
+    if (value == nullptr || !value->is_bool()) return false;
+    output = value->as_bool();
+    return true;
+}
+
+struct BinanceUsdMMetrics {
+    std::int64_t book_receive_ns = 0;
+    std::int64_t mark_receive_ns = 0;
+    double bid = 0.0;
+    double ask = 0.0;
+    double bid_depth_l20 = 0.0;
+    double ask_depth_l20 = 0.0;
+    double microprice = 0.0;
+    double signed_trade_flow = 0.0;
+    double mark_price = 0.0;
+    double index_price = 0.0;
+    double funding_rate = 0.0;
+    double liquidation_buy_notional = 0.0;
+    double liquidation_sell_notional = 0.0;
+    std::uint64_t frames = 0;
+    std::uint64_t parse_failures = 0;
+    std::uint8_t valid = 0;
+};
+
+json::object usdm_json(const BinanceUsdMMetrics& value) {
+    return {
+        {"valid", value.valid != 0}, {"book_receive_monotonic_ns", value.book_receive_ns},
+        {"mark_receive_monotonic_ns", value.mark_receive_ns}, {"perp_bid", value.bid},
+        {"perp_ask", value.ask}, {"perp_mid", 0.5 * (value.bid + value.ask)},
+        {"perp_microprice", value.microprice}, {"perp_bid_depth_l20", value.bid_depth_l20},
+        {"perp_ask_depth_l20", value.ask_depth_l20}, {"perp_trade_imbalance", value.signed_trade_flow},
+        {"mark_price", value.mark_price}, {"index_price", value.index_price}, {"funding_rate", value.funding_rate},
+        {"liquidation_buy_notional", value.liquidation_buy_notional},
+        {"liquidation_sell_notional", value.liquidation_sell_notional},
+        {"frames", value.frames}, {"parse_failures", value.parse_failures},
+        {"open_interest", nullptr}, {"open_interest_state", "PENDING_RATE_AWARE_REST"},
+    };
+}
+
+class BinanceUsdMObserver final : public ExternalFrameObserver {
+public:
+    void on_connection_epoch(std::uint64_t) noexcept override {
+        std::lock_guard lock(mutex_);
+        metrics_ = {};
+    }
+
+    void on_frame(std::uint64_t, std::int64_t receive_ns, std::int64_t,
+                  std::string_view payload) noexcept override {
+        try {
+            boost::system::error_code error;
+            const auto raw = json::parse(payload, error);
+            if (error || !raw.is_object()) { fail(); return; }
+            const json::object* root = &raw.as_object();
+            if (const auto* data = json_field(*root, "data"); data != nullptr && data->is_object()) root = &data->as_object();
+            const auto* event = json_field(*root, "e");
+            std::lock_guard lock(mutex_);
+            ++metrics_.frames;
+            if (json_text_equals(event, "depthUpdate")) update_depth(*root, receive_ns);
+            else if (json_text_equals(event, "aggTrade")) update_trade(*root);
+            else if (json_text_equals(event, "markPriceUpdate")) update_mark(*root, receive_ns);
+            else if (json_text_equals(event, "forceOrder")) update_liquidation(*root);
+        } catch (...) { fail(); }
+    }
+
+    [[nodiscard]] BinanceUsdMMetrics metrics() const noexcept {
+        std::lock_guard lock(mutex_);
+        return metrics_;
+    }
+
+private:
+    void fail() noexcept { std::lock_guard lock(mutex_); ++metrics_.parse_failures; }
+
+    void update_depth(const json::object& root, std::int64_t receive_ns) noexcept {
+        const auto* bids = json_field(root, "b");
+        const auto* asks = json_field(root, "a");
+        if (bids == nullptr || asks == nullptr || !bids->is_array() || !asks->is_array()
+            || bids->as_array().empty() || asks->as_array().empty()) { ++metrics_.parse_failures; return; }
+        auto total = [](const json::array& levels, double& first_price, double& first_quantity, double& sum) noexcept {
+            for (std::size_t index = 0; index < levels.size(); ++index) {
+                if (!levels[index].is_array() || levels[index].as_array().size() < 2) return false;
+                const auto& level = levels[index].as_array();
+                double price = 0.0, quantity = 0.0;
+                if (!json_number(&level[0], price) || !json_number(&level[1], quantity) || price <= 0.0 || quantity < 0.0) return false;
+                if (index == 0) { first_price = price; first_quantity = quantity; }
+                sum += quantity;
+            }
+            return true;
+        };
+        double bid = 0.0, ask = 0.0, bid_l1 = 0.0, ask_l1 = 0.0, bid_sum = 0.0, ask_sum = 0.0;
+        if (!total(bids->as_array(), bid, bid_l1, bid_sum) || !total(asks->as_array(), ask, ask_l1, ask_sum) || bid >= ask) {
+            ++metrics_.parse_failures; return;
+        }
+        metrics_.bid = bid; metrics_.ask = ask;
+        metrics_.bid_depth_l20 = bid_sum; metrics_.ask_depth_l20 = ask_sum;
+        metrics_.microprice = (bid_l1 + ask_l1) > 0.0 ? (ask * bid_l1 + bid * ask_l1) / (bid_l1 + ask_l1) : 0.5 * (bid + ask);
+        metrics_.book_receive_ns = receive_ns; metrics_.valid = 1;
+    }
+
+    void update_trade(const json::object& root) noexcept {
+        double quantity = 0.0;
+        bool buyer_is_maker = false;
+        if (!json_number(json_field(root, "q"), quantity) || !json_bool(json_field(root, "m"), buyer_is_maker) || quantity <= 0.0) {
+            ++metrics_.parse_failures; return;
+        }
+        const double sign = buyer_is_maker ? -1.0 : 1.0;
+        metrics_.signed_trade_flow = 0.9 * metrics_.signed_trade_flow + 0.1 * sign * quantity;
+    }
+
+    void update_mark(const json::object& root, std::int64_t receive_ns) noexcept {
+        double mark = 0.0, index = 0.0, funding = 0.0;
+        if (!json_number(json_field(root, "p"), mark) || !json_number(json_field(root, "i"), index)
+            || !json_number(json_field(root, "r"), funding) || mark <= 0.0 || index <= 0.0) { ++metrics_.parse_failures; return; }
+        metrics_.mark_price = mark; metrics_.index_price = index; metrics_.funding_rate = funding; metrics_.mark_receive_ns = receive_ns;
+    }
+
+    void update_liquidation(const json::object& root) noexcept {
+        const auto* order = json_field(root, "o");
+        if (order == nullptr || !order->is_object()) { ++metrics_.parse_failures; return; }
+        double price = 0.0, quantity = 0.0;
+        if (!json_number(json_field(order->as_object(), "ap"), price) || !json_number(json_field(order->as_object(), "q"), quantity)
+            || price <= 0.0 || quantity <= 0.0) { ++metrics_.parse_failures; return; }
+        if (json_text_equals(json_field(order->as_object(), "S"), "BUY")) metrics_.liquidation_buy_notional += price * quantity;
+        else if (json_text_equals(json_field(order->as_object(), "S"), "SELL")) metrics_.liquidation_sell_notional += price * quantity;
+        else ++metrics_.parse_failures;
+    }
+
+    mutable std::mutex mutex_{};
+    BinanceUsdMMetrics metrics_{};
+};
 
 class BinanceSpotL2Observer final : public ExternalFrameObserver {
 public:
@@ -223,18 +382,22 @@ int main(int argc, char** argv) {
         ExternalVenueIngress coinbase_ingress(VenueId::CoinbaseSpot, asset_handle);
         ExternalVenueIngress bybit_ingress(VenueId::BybitSpot, asset_handle);
         BinanceSpotL2Observer binance_l2;
-        ExternalVenueWsClient binance(btc_spot_connection_spec(VenueId::BinanceSpot, asset_handle), binance_ingress, &binance_l2);
-        ExternalVenueWsClient coinbase(btc_spot_connection_spec(VenueId::CoinbaseSpot, asset_handle), coinbase_ingress);
-        ExternalVenueWsClient bybit(btc_spot_connection_spec(VenueId::BybitSpot, asset_handle), bybit_ingress);
+        BinanceUsdMObserver binance_usdm_observer;
+        ExternalVenueWsClient binance(btc_spot_connection_spec(VenueId::BinanceSpot, asset_handle), &binance_ingress, &binance_l2);
+        ExternalVenueWsClient coinbase(btc_spot_connection_spec(VenueId::CoinbaseSpot, asset_handle), &coinbase_ingress);
+        ExternalVenueWsClient bybit(btc_spot_connection_spec(VenueId::BybitSpot, asset_handle), &bybit_ingress);
+        ExternalVenueWsClient binance_usdm(btc_spot_connection_spec(VenueId::BinanceUsdM, asset_handle), nullptr, &binance_usdm_observer);
 
 #if defined(__APPLE__)
         std::thread binance_thread([&] { binance.run(ExternalStopToken(stopping)); });
         std::thread coinbase_thread([&] { coinbase.run(ExternalStopToken(stopping)); });
         std::thread bybit_thread([&] { bybit.run(ExternalStopToken(stopping)); });
+        std::thread binance_usdm_thread([&] { binance_usdm.run(ExternalStopToken(stopping)); });
 #else
         std::jthread binance_thread([&](std::stop_token token) { binance.run(token); });
         std::jthread coinbase_thread([&](std::stop_token token) { coinbase.run(token); });
         std::jthread bybit_thread([&](std::stop_token token) { bybit.run(token); });
+        std::jthread binance_usdm_thread([&](std::stop_token token) { binance_usdm.run(token); });
 #endif
 
         while (!stopping.load(std::memory_order_relaxed)) {
@@ -246,10 +409,12 @@ int main(int argc, char** argv) {
             const auto binance_status = binance.snapshot();
             const auto coinbase_status = coinbase.snapshot();
             const auto bybit_status = bybit.snapshot();
+            const auto binance_usdm_status = binance_usdm.snapshot();
             json::array venues;
             venues.emplace_back(transport_json(binance_status, "BINANCE_SPOT"));
             venues.emplace_back(transport_json(coinbase_status, "COINBASE_SPOT"));
             venues.emplace_back(transport_json(bybit_status, "BYBIT_SPOT"));
+            venues.emplace_back(transport_json(binance_usdm_status, "BINANCE_USDM"));
             atomic_write(output, {
                 {"schema", "polymarket_v7_external_venue_runtime_v1"},
                 {"timestamp_ns", wall_now_ns()},
@@ -276,6 +441,7 @@ int main(int argc, char** argv) {
                 {"latest_input_receive_monotonic_ns", snapshot.latest_input_receive_monotonic_ns},
                 {"drained_last_cycle", drained},
                 {"binance_spot_l2", l2_json(binance_l2.metrics())},
+                {"binance_usdm", usdm_json(binance_usdm_observer.metrics())},
                 {"venues", std::move(venues)},
             });
             std::this_thread::sleep_for(std::chrono::milliseconds(100));
@@ -285,10 +451,12 @@ int main(int argc, char** argv) {
         binance_thread.request_stop();
         coinbase_thread.request_stop();
         bybit_thread.request_stop();
+        binance_usdm_thread.request_stop();
 #endif
         if (binance_thread.joinable()) binance_thread.join();
         if (coinbase_thread.joinable()) coinbase_thread.join();
         if (bybit_thread.joinable()) bybit_thread.join();
+        if (binance_usdm_thread.joinable()) binance_usdm_thread.join();
         return 0;
     } catch (const std::exception& error) {
         std::cerr << "v7_external_venue_runtime: " << error.what() << '\n';

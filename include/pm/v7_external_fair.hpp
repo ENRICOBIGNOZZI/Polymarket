@@ -21,6 +21,7 @@ enum class VenueId : std::uint8_t {
     BinanceSpot = 1,
     CoinbaseSpot = 2,
     BybitSpot = 3,
+    BinanceUsdM = 4,
 };
 
 enum class ExternalEventType : std::uint8_t {

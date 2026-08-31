@@ -90,6 +90,14 @@ ExternalVenueConnectionSpec btc_spot_connection_spec(
             spec.subscription_json =
                 R"({"op":"subscribe","args":["orderbook.1.BTCUSDT","publicTrade.BTCUSDT"]})";
             break;
+        case VenueId::BinanceUsdM:
+            spec.host = "fstream.binance.com";
+            spec.port = "443";
+            spec.target = "/public/stream";
+            spec.symbol = "BTCUSDT";
+            spec.subscription_json =
+                R"({"method":"SUBSCRIBE","params":["btcusdt@depth20@100ms","btcusdt@aggTrade","btcusdt@markPrice@1s","btcusdt@forceOrder"],"id":1})";
+            break;
         case VenueId::Unknown:
         default:
             throw std::invalid_argument("unsupported external venue");
@@ -99,7 +107,7 @@ ExternalVenueConnectionSpec btc_spot_connection_spec(
 
 ExternalVenueWsClient::ExternalVenueWsClient(
     ExternalVenueConnectionSpec spec,
-    ExternalVenueIngress& ingress, ExternalFrameObserver* observer)
+    ExternalVenueIngress* ingress, ExternalFrameObserver* observer)
     : spec_(std::move(spec)), ingress_(ingress), observer_(observer) {
     if (spec_.venue == VenueId::Unknown || spec_.asset_handle == 0
         || spec_.host.empty() || spec_.port.empty() || spec_.target.empty()
@@ -172,18 +180,19 @@ void ExternalVenueWsClient::run(ExternalStopToken stop) noexcept {
                 const auto total = net::buffer_size(sequence);
                 if (front.size() != total) {
                     decode_failures_.fetch_add(1, std::memory_order_relaxed);
-                    ingress_.mark_disconnected(epoch + 1);
+                    if (ingress_ != nullptr) ingress_->mark_disconnected(epoch + 1);
                     healthy_.store(false, std::memory_order_release);
                     throw std::runtime_error("non-contiguous bounded websocket frame");
                 }
                 const auto* bytes = static_cast<const char*>(front.data());
                 const std::string_view payload(bytes, front.size());
                 if (observer_ != nullptr) observer_->on_frame(epoch, receive_ns, wall_ns, payload);
-                const auto decoded = ingress_.on_frame(
-                    epoch, receive_ns, wall_ns, payload);
-                if (decoded.invalid_frame != 0 || decoded.output_overflow != 0
-                    || decoded.arena_exhausted != 0) {
-                    decode_failures_.fetch_add(1, std::memory_order_relaxed);
+                if (ingress_ != nullptr) {
+                    const auto decoded = ingress_->on_frame(epoch, receive_ns, wall_ns, payload);
+                    if (decoded.invalid_frame != 0 || decoded.output_overflow != 0
+                        || decoded.arena_exhausted != 0) {
+                        decode_failures_.fetch_add(1, std::memory_order_relaxed);
+                    }
                 }
             }
 
@@ -196,7 +205,7 @@ void ExternalVenueWsClient::run(ExternalStopToken stop) noexcept {
             connected_.store(false, std::memory_order_release);
             healthy_.store(false, std::memory_order_release);
             transport_failures_.fetch_add(1, std::memory_order_relaxed);
-            ingress_.mark_disconnected(epoch);
+            if (ingress_ != nullptr) ingress_->mark_disconnected(epoch);
             ++consecutive_failures;
             bounded_backoff(stop, consecutive_failures);
         }

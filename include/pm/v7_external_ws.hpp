@@ -84,7 +84,7 @@ struct ExternalWsSnapshot {
 class ExternalVenueWsClient final {
 public:
     ExternalVenueWsClient(ExternalVenueConnectionSpec spec,
-                          ExternalVenueIngress& ingress,
+                          ExternalVenueIngress* ingress = nullptr,
                           ExternalFrameObserver* observer = nullptr);
 
     ExternalVenueWsClient(const ExternalVenueWsClient&) = delete;
@@ -99,7 +99,7 @@ public:
 
 private:
     ExternalVenueConnectionSpec spec_;
-    ExternalVenueIngress& ingress_;
+    ExternalVenueIngress* ingress_ = nullptr;
     ExternalFrameObserver* observer_ = nullptr;
     std::atomic<std::uint64_t> connection_epoch_{0};
     std::atomic<std::uint64_t> connection_attempts_{0};
