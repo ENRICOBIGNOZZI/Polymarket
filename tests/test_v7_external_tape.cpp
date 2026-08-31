@@ -87,5 +87,29 @@ int main() {
     assert(fair_roundtrip.fair_yes == fair.fair_yes);
 
     std::filesystem::remove(path);
+    const auto raw_path = std::filesystem::temp_directory_path() / "pm_v7_external_raw_tape_test.bin";
+    std::filesystem::remove(raw_path);
+    {
+        ExternalRawTapeRecorder raw_recorder(raw_path, sha, "run-raw", "session-raw", "binance-spot", 1'000'002);
+        assert(raw_recorder.try_record_raw(VenueId::BinanceSpot, 3, 120, 1'020, R"({"e":"depthUpdate"})"));
+        assert(!raw_recorder.try_record_raw(VenueId::BinanceSpot, 3, 121, 1'021,
+                                             std::string(kExternalRawTapePayloadBytes + 1, 'x')));
+        const auto raw_snapshot = raw_recorder.snapshot();
+        assert(raw_snapshot.accepted == 1);
+        assert(raw_snapshot.evidence_valid == 0);
+    }
+    std::ifstream raw_input(raw_path, std::ios::binary);
+    TapeSessionHeader raw_header;
+    RawTapeDiskRecordHeader raw_record;
+    raw_input.read(reinterpret_cast<char*>(&raw_header), sizeof(raw_header));
+    raw_input.read(reinterpret_cast<char*>(&raw_record), sizeof(raw_record));
+    std::string raw_payload(raw_record.payload_size, '\0');
+    raw_input.read(raw_payload.data(), static_cast<std::streamsize>(raw_payload.size()));
+    assert(raw_input.good());
+    assert(std::string(raw_header.magic.data(), raw_header.magic.size()) == "PMV7RAW!");
+    assert(raw_header.record_bytes == 0);
+    assert(raw_record.venue == VenueId::BinanceSpot);
+    assert(raw_payload == R"({"e":"depthUpdate"})");
+    std::filesystem::remove(raw_path);
     return 0;
 }

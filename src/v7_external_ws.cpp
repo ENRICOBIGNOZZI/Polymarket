@@ -1,4 +1,5 @@
 #include "pm/v7_external_ws.hpp"
+#include "pm/v7_external_tape.hpp"
 
 #include <boost/asio/connect.hpp>
 #include <boost/asio/ip/tcp.hpp>
@@ -114,8 +115,9 @@ ExternalVenueConnectionSpec btc_spot_connection_spec(
 
 ExternalVenueWsClient::ExternalVenueWsClient(
     ExternalVenueConnectionSpec spec,
-    ExternalVenueIngress* ingress, ExternalFrameObserver* observer)
-    : spec_(std::move(spec)), ingress_(ingress), observer_(observer) {
+    ExternalVenueIngress* ingress, ExternalFrameObserver* observer,
+    ExternalRawFrameSink* raw_sink)
+    : spec_(std::move(spec)), ingress_(ingress), observer_(observer), raw_sink_(raw_sink) {
     if (spec_.venue == VenueId::Unknown || spec_.asset_handle == 0
         || spec_.host.empty() || spec_.port.empty() || spec_.target.empty()
         || spec_.subscription_json.empty() || spec_.max_message_bytes == 0
@@ -193,6 +195,8 @@ void ExternalVenueWsClient::run(ExternalStopToken stop) noexcept {
                 }
                 const auto* bytes = static_cast<const char*>(front.data());
                 const std::string_view payload(bytes, front.size());
+                if (raw_sink_ != nullptr) (void)raw_sink_->try_record_raw(
+                    spec_.venue, epoch, receive_ns, wall_ns, payload);
                 if (observer_ != nullptr) observer_->on_frame(epoch, receive_ns, wall_ns, payload);
                 if (ingress_ != nullptr) {
                     const auto decoded = ingress_->on_frame(epoch, receive_ns, wall_ns, payload);

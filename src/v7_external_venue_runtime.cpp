@@ -26,6 +26,7 @@
 #include <fstream>
 #include <future>
 #include <iostream>
+#include <memory>
 #include <mutex>
 #include <optional>
 #include <stdexcept>
@@ -83,6 +84,14 @@ json::object transport_json(const ExternalWsSnapshot& value, const char* venue) 
         {"last_receive_wall_ns", value.last_receive_wall_ns},
         {"connected", value.connected != 0},
         {"healthy", value.healthy != 0},
+    };
+}
+
+json::object tape_json(const TapeRecorderSnapshot& value, bool enabled) {
+    return {
+        {"enabled", enabled}, {"accepted", value.accepted}, {"written", value.written},
+        {"dropped", value.dropped}, {"queued", value.queued},
+        {"evidence_valid", value.evidence_valid != 0}, {"writer_healthy", value.writer_healthy != 0},
     };
 }
 
@@ -818,11 +827,13 @@ int main(int argc, char** argv) {
     try {
         fs::path output;
         fs::path tape_path;
+        fs::path raw_tape_dir;
         std::string model_sha;
         for (int index = 1; index < argc; ++index) {
             const std::string argument = argv[index];
             if (argument == "--output" && index + 1 < argc) output = argv[++index];
             else if (argument == "--tape" && index + 1 < argc) tape_path = argv[++index];
+            else if (argument == "--raw-tape-dir" && index + 1 < argc) raw_tape_dir = argv[++index];
             else if (argument == "--model-sha" && index + 1 < argc) model_sha = argv[++index];
             else throw std::invalid_argument("unknown or incomplete argument: " + argument);
         }
@@ -839,6 +850,19 @@ int main(int argc, char** argv) {
             normalized_tape = std::make_unique<ExternalTapeRecorder>(
                 tape_path, model_sha, "paper-v7", session, "external-venue-runtime", wall_now_ns());
         }
+        const auto raw_tape = [&](std::string source) {
+            if (raw_tape_dir.empty()) return std::unique_ptr<ExternalRawTapeRecorder>{};
+            const auto session = "external-raw-" + std::to_string(::getpid());
+            return std::make_unique<ExternalRawTapeRecorder>(
+                raw_tape_dir / (source + "." + std::to_string(::getpid()) + ".bin"),
+                model_sha, "paper-v7", session, std::move(source), wall_now_ns());
+        };
+        auto binance_raw_tape = raw_tape("binance-spot");
+        auto coinbase_raw_tape = raw_tape("coinbase-spot");
+        auto bybit_raw_tape = raw_tape("bybit-spot");
+        auto deribit_raw_tape = raw_tape("deribit");
+        auto binance_usdm_depth_raw_tape = raw_tape("binance-usdm-depth");
+        auto binance_usdm_market_raw_tape = raw_tape("binance-usdm-market");
         std::uint64_t tape_sequence = 0;
         ExternalStatePolicy policy;
         ExternalAssetState state(asset_handle);
@@ -851,18 +875,18 @@ int main(int argc, char** argv) {
         BybitL2Observer bybit_l2(bybit_ingress, asset_handle);
         BinanceUsdMObserver binance_usdm_observer;
         DeribitObserver deribit_observer;
-        ExternalVenueWsClient binance(btc_spot_connection_spec(VenueId::BinanceSpot, asset_handle), &binance_ingress, &binance_l2);
-        ExternalVenueWsClient coinbase(btc_spot_connection_spec(VenueId::CoinbaseSpot, asset_handle), nullptr, &coinbase_l2);
-        ExternalVenueWsClient bybit(btc_spot_connection_spec(VenueId::BybitSpot, asset_handle), &bybit_ingress, &bybit_l2);
-        ExternalVenueWsClient deribit(btc_spot_connection_spec(VenueId::Deribit, asset_handle), &deribit_ingress, &deribit_observer);
+        ExternalVenueWsClient binance(btc_spot_connection_spec(VenueId::BinanceSpot, asset_handle), &binance_ingress, &binance_l2, binance_raw_tape.get());
+        ExternalVenueWsClient coinbase(btc_spot_connection_spec(VenueId::CoinbaseSpot, asset_handle), nullptr, &coinbase_l2, coinbase_raw_tape.get());
+        ExternalVenueWsClient bybit(btc_spot_connection_spec(VenueId::BybitSpot, asset_handle), &bybit_ingress, &bybit_l2, bybit_raw_tape.get());
+        ExternalVenueWsClient deribit(btc_spot_connection_spec(VenueId::Deribit, asset_handle), &deribit_ingress, &deribit_observer, deribit_raw_tape.get());
         auto binance_usdm_depth_spec = btc_spot_connection_spec(VenueId::BinanceUsdM, asset_handle);
         binance_usdm_depth_spec.subscription_json =
             R"({"method":"SUBSCRIBE","params":["btcusdt@depth20@100ms"],"id":1})";
         auto binance_usdm_market_spec = btc_spot_connection_spec(VenueId::BinanceUsdM, asset_handle);
         binance_usdm_market_spec.subscription_json =
             R"({"method":"SUBSCRIBE","params":["btcusdt@aggTrade","btcusdt@markPrice@1s","btcusdt@forceOrder"],"id":2})";
-        ExternalVenueWsClient binance_usdm_depth(std::move(binance_usdm_depth_spec), nullptr, &binance_usdm_observer);
-        ExternalVenueWsClient binance_usdm_market(std::move(binance_usdm_market_spec), nullptr, &binance_usdm_observer);
+        ExternalVenueWsClient binance_usdm_depth(std::move(binance_usdm_depth_spec), nullptr, &binance_usdm_observer, binance_usdm_depth_raw_tape.get());
+        ExternalVenueWsClient binance_usdm_market(std::move(binance_usdm_market_spec), nullptr, &binance_usdm_observer, binance_usdm_market_raw_tape.get());
 
 #if defined(__APPLE__)
         std::thread binance_thread([&] { binance.run(ExternalStopToken(stopping)); });
@@ -932,12 +956,14 @@ int main(int argc, char** argv) {
                 {"aggregate_trade_imbalance", snapshot.aggregate_trade_imbalance},
                 {"latest_input_receive_monotonic_ns", snapshot.latest_input_receive_monotonic_ns},
                 {"drained_last_cycle", drained},
-                {"normalized_snapshot_tape", {
-                    {"enabled", normalized_tape != nullptr},
-                    {"accepted", tape_status.accepted}, {"written", tape_status.written},
-                    {"dropped", tape_status.dropped}, {"queued", tape_status.queued},
-                    {"evidence_valid", tape_status.evidence_valid != 0},
-                    {"writer_healthy", tape_status.writer_healthy != 0},
+                {"normalized_snapshot_tape", tape_json(tape_status, normalized_tape != nullptr)},
+                {"raw_frame_tapes", {
+                    {"binance_spot", tape_json(binance_raw_tape ? binance_raw_tape->snapshot() : TapeRecorderSnapshot{}, binance_raw_tape != nullptr)},
+                    {"coinbase_spot", tape_json(coinbase_raw_tape ? coinbase_raw_tape->snapshot() : TapeRecorderSnapshot{}, coinbase_raw_tape != nullptr)},
+                    {"bybit_spot", tape_json(bybit_raw_tape ? bybit_raw_tape->snapshot() : TapeRecorderSnapshot{}, bybit_raw_tape != nullptr)},
+                    {"deribit", tape_json(deribit_raw_tape ? deribit_raw_tape->snapshot() : TapeRecorderSnapshot{}, deribit_raw_tape != nullptr)},
+                    {"binance_usdm_depth", tape_json(binance_usdm_depth_raw_tape ? binance_usdm_depth_raw_tape->snapshot() : TapeRecorderSnapshot{}, binance_usdm_depth_raw_tape != nullptr)},
+                    {"binance_usdm_market", tape_json(binance_usdm_market_raw_tape ? binance_usdm_market_raw_tape->snapshot() : TapeRecorderSnapshot{}, binance_usdm_market_raw_tape != nullptr)},
                 }},
                 {"binance_spot_l2", l2_json(binance_l2.metrics())},
                 {"coinbase_spot_l2", l2_json(coinbase_l2.metrics())},

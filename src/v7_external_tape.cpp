@@ -157,4 +157,127 @@ TapeRecorderSnapshot ExternalTapeRecorder::snapshot() const noexcept {
     return out;
 }
 
+struct ExternalRawTapeRecorder::Impl {
+    SpscRing<RawTapeRecord, kExternalRawTapeQueueCapacity> queue{};
+    std::ofstream output;
+    std::thread worker;
+    std::atomic<bool> stop_requested{false};
+    std::atomic<std::uint64_t> next_sequence{0};
+    std::atomic<std::uint64_t> accepted{0};
+    std::atomic<std::uint64_t> written{0};
+    std::atomic<std::uint64_t> dropped{0};
+    std::atomic<bool> evidence_valid{true};
+    std::atomic<bool> writer_healthy{true};
+
+    Impl(std::filesystem::path path, std::string code_sha, std::string run_id,
+         std::string session_id, std::string source, std::int64_t creation_wall_ns) {
+        if (!exact_sha(code_sha)) throw std::invalid_argument("code_sha must be exact 40-char lowercase hex");
+        if (creation_wall_ns <= 0) throw std::invalid_argument("creation_wall_ns must be positive");
+        if (std::filesystem::exists(path)) throw std::invalid_argument("V7 raw tape path already exists");
+        if (!path.parent_path().empty()) std::filesystem::create_directories(path.parent_path());
+        output.open(path, std::ios::binary | std::ios::trunc);
+        if (!output) throw std::runtime_error("unable to open V7 raw tape");
+
+        TapeSessionHeader header;
+        header.magic = {'P','M','V','7','R','A','W','!'};
+        // Variable-length records: header is followed by payload_size bytes.
+        header.record_bytes = 0;
+        header.creation_wall_ns = creation_wall_ns;
+        copy_fixed(header.code_sha, code_sha, "code_sha");
+        copy_fixed(header.run_id, run_id, "run_id");
+        copy_fixed(header.session_id, session_id, "session_id");
+        copy_fixed(header.source, source, "source");
+        output.write(reinterpret_cast<const char*>(&header), sizeof(header));
+        output.flush();
+        if (!output) throw std::runtime_error("unable to write V7 raw tape header");
+        worker = std::thread([this] { writer_loop(); });
+    }
+
+    ~Impl() {
+        stop_requested.store(true, std::memory_order_release);
+        if (worker.joinable()) worker.join();
+        output.flush();
+    }
+
+    void writer_loop() noexcept {
+        RawTapeRecord record;
+        while (!stop_requested.load(std::memory_order_acquire) || queue.approximate_size() != 0) {
+            bool progressed = false;
+            while (queue.try_pop(record)) {
+                progressed = true;
+                RawTapeDiskRecordHeader disk;
+                disk.tape_sequence = record.tape_sequence;
+                disk.connection_epoch = record.connection_epoch;
+                disk.receive_monotonic_ns = record.receive_monotonic_ns;
+                disk.receive_wall_ns = record.receive_wall_ns;
+                disk.venue = record.venue;
+                disk.payload_size = record.payload_size;
+                output.write(reinterpret_cast<const char*>(&disk), sizeof(disk));
+                output.write(reinterpret_cast<const char*>(record.payload.data()),
+                             static_cast<std::streamsize>(record.payload_size));
+                if (!output) {
+                    writer_healthy.store(false, std::memory_order_release);
+                    evidence_valid.store(false, std::memory_order_release);
+                    return;
+                }
+                written.fetch_add(1, std::memory_order_relaxed);
+            }
+            if (!progressed) std::this_thread::sleep_for(std::chrono::microseconds(100));
+        }
+        output.flush();
+        if (!output) {
+            writer_healthy.store(false, std::memory_order_release);
+            evidence_valid.store(false, std::memory_order_release);
+        }
+    }
+};
+
+ExternalRawTapeRecorder::ExternalRawTapeRecorder(
+    std::filesystem::path path, std::string code_sha, std::string run_id,
+    std::string session_id, std::string source, std::int64_t creation_wall_ns)
+    : impl_(std::make_unique<Impl>(std::move(path), std::move(code_sha),
+                                   std::move(run_id), std::move(session_id),
+                                   std::move(source), creation_wall_ns)) {}
+
+ExternalRawTapeRecorder::~ExternalRawTapeRecorder() = default;
+
+bool ExternalRawTapeRecorder::try_record_raw(
+    VenueId venue, std::uint64_t connection_epoch, std::int64_t receive_monotonic_ns,
+    std::int64_t receive_wall_ns, std::string_view payload) noexcept {
+    if (!impl_ || venue == VenueId::Unknown || connection_epoch == 0
+        || receive_monotonic_ns <= 0 || receive_wall_ns <= 0 || payload.empty()
+        || payload.size() > kExternalRawTapePayloadBytes
+        || !impl_->writer_healthy.load(std::memory_order_acquire)) {
+        if (impl_) impl_->evidence_valid.store(false, std::memory_order_release);
+        return false;
+    }
+    RawTapeRecord record;
+    record.tape_sequence = impl_->next_sequence.fetch_add(1, std::memory_order_relaxed) + 1;
+    record.connection_epoch = connection_epoch;
+    record.receive_monotonic_ns = receive_monotonic_ns;
+    record.receive_wall_ns = receive_wall_ns;
+    record.venue = venue;
+    record.payload_size = static_cast<std::uint32_t>(payload.size());
+    std::memcpy(record.payload.data(), payload.data(), payload.size());
+    if (!impl_->queue.try_push(record)) {
+        impl_->dropped.fetch_add(1, std::memory_order_relaxed);
+        impl_->evidence_valid.store(false, std::memory_order_release);
+        return false;
+    }
+    impl_->accepted.fetch_add(1, std::memory_order_relaxed);
+    return true;
+}
+
+TapeRecorderSnapshot ExternalRawTapeRecorder::snapshot() const noexcept {
+    TapeRecorderSnapshot out;
+    if (!impl_) { out.evidence_valid = 0; out.writer_healthy = 0; return out; }
+    out.accepted = impl_->accepted.load(std::memory_order_acquire);
+    out.written = impl_->written.load(std::memory_order_acquire);
+    out.dropped = impl_->dropped.load(std::memory_order_acquire);
+    out.queued = impl_->queue.approximate_size();
+    out.evidence_valid = impl_->evidence_valid.load(std::memory_order_acquire) ? 1 : 0;
+    out.writer_healthy = impl_->writer_healthy.load(std::memory_order_acquire) ? 1 : 0;
+    return out;
+}
+
 } // namespace pm::v7::external_fair

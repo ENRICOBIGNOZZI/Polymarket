@@ -1,6 +1,7 @@
 #pragma once
 
 #include "pm/v7_spsc.hpp"
+#include "pm/v7_external_fair.hpp"
 
 #include <array>
 #include <atomic>
@@ -17,6 +18,8 @@ namespace pm::v7::external_fair {
 inline constexpr std::uint32_t kExternalTapeSchemaVersion = 1;
 inline constexpr std::size_t kExternalTapePayloadBytes = 512;
 inline constexpr std::size_t kExternalTapeQueueCapacity = 4096;
+inline constexpr std::size_t kExternalRawTapePayloadBytes = 32 * 1024;
+inline constexpr std::size_t kExternalRawTapeQueueCapacity = 256;
 
 enum class TapeRecordKind : std::uint16_t {
     OracleEvent = 1,
@@ -63,6 +66,44 @@ struct TapeRecorderSnapshot {
     std::uint8_t evidence_valid = 1;
     std::uint8_t writer_healthy = 1;
     std::array<std::uint8_t, 6> reserved{};
+};
+
+// Raw frames are persisted per connection before parsing. The bounded maximum
+// makes a payload that cannot be durably captured explicit evidence loss, not
+// a silently truncated record. One recorder is owned by one WebSocket IO
+// thread, preserving a lock-free SPSC handoff to its file writer.
+struct RawTapeRecord {
+    std::uint64_t tape_sequence = 0;
+    std::uint64_t connection_epoch = 0;
+    std::int64_t receive_monotonic_ns = 0;
+    std::int64_t receive_wall_ns = 0;
+    VenueId venue = VenueId::Unknown;
+    std::uint8_t reserved[3]{};
+    std::uint32_t payload_size = 0;
+    std::array<std::byte, kExternalRawTapePayloadBytes> payload{};
+};
+
+// The in-memory queue uses RawTapeRecord's fixed capacity; disk records carry
+// only their actual payload so ordinary market-data traffic does not expand to
+// the queue's maximum size on durable storage.
+struct RawTapeDiskRecordHeader {
+    std::uint64_t tape_sequence = 0;
+    std::uint64_t connection_epoch = 0;
+    std::int64_t receive_monotonic_ns = 0;
+    std::int64_t receive_wall_ns = 0;
+    VenueId venue = VenueId::Unknown;
+    std::uint8_t reserved[3]{};
+    std::uint32_t payload_size = 0;
+};
+
+class ExternalRawFrameSink {
+public:
+    virtual ~ExternalRawFrameSink() = default;
+    [[nodiscard]] virtual bool try_record_raw(VenueId venue,
+                                               std::uint64_t connection_epoch,
+                                               std::int64_t receive_monotonic_ns,
+                                               std::int64_t receive_wall_ns,
+                                               std::string_view payload) noexcept = 0;
 };
 
 template <class T>
@@ -114,8 +155,35 @@ private:
     std::unique_ptr<Impl> impl_;
 };
 
+class ExternalRawTapeRecorder final : public ExternalRawFrameSink {
+public:
+    ExternalRawTapeRecorder(std::filesystem::path path,
+                            std::string code_sha,
+                            std::string run_id,
+                            std::string session_id,
+                            std::string source,
+                            std::int64_t creation_wall_ns);
+    ~ExternalRawTapeRecorder();
+
+    ExternalRawTapeRecorder(const ExternalRawTapeRecorder&) = delete;
+    ExternalRawTapeRecorder& operator=(const ExternalRawTapeRecorder&) = delete;
+
+    [[nodiscard]] bool try_record_raw(VenueId venue,
+                                       std::uint64_t connection_epoch,
+                                       std::int64_t receive_monotonic_ns,
+                                       std::int64_t receive_wall_ns,
+                                       std::string_view payload) noexcept override;
+    [[nodiscard]] TapeRecorderSnapshot snapshot() const noexcept;
+
+private:
+    struct Impl;
+    std::unique_ptr<Impl> impl_;
+};
+
 static_assert(std::is_trivially_copyable_v<TapeSessionHeader>);
 static_assert(std::is_trivially_copyable_v<TapeRecord>);
 static_assert(std::is_trivially_copyable_v<TapeRecorderSnapshot>);
+static_assert(std::is_trivially_copyable_v<RawTapeRecord>);
+static_assert(std::is_trivially_copyable_v<RawTapeDiskRecordHeader>);
 
 } // namespace pm::v7::external_fair

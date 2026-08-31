@@ -18,6 +18,8 @@
 
 namespace pm::v7::external_fair {
 
+class ExternalRawFrameSink;
+
 class ExternalFrameObserver {
 public:
     virtual ~ExternalFrameObserver() = default;
@@ -85,7 +87,8 @@ class ExternalVenueWsClient final {
 public:
     ExternalVenueWsClient(ExternalVenueConnectionSpec spec,
                           ExternalVenueIngress* ingress = nullptr,
-                          ExternalFrameObserver* observer = nullptr);
+                          ExternalFrameObserver* observer = nullptr,
+                          ExternalRawFrameSink* raw_sink = nullptr);
 
     ExternalVenueWsClient(const ExternalVenueWsClient&) = delete;
     ExternalVenueWsClient& operator=(const ExternalVenueWsClient&) = delete;
@@ -101,6 +104,7 @@ private:
     ExternalVenueConnectionSpec spec_;
     ExternalVenueIngress* ingress_ = nullptr;
     ExternalFrameObserver* observer_ = nullptr;
+    ExternalRawFrameSink* raw_sink_ = nullptr;
     std::atomic<std::uint64_t> connection_epoch_{0};
     std::atomic<std::uint64_t> connection_attempts_{0};
     std::atomic<std::uint64_t> successful_connections_{0};

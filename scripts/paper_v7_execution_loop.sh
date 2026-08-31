@@ -286,6 +286,7 @@ pids+=("$!")
 "$EXTERNAL_VENUE_RUNTIME" \
   --output "$RUN_ROOT/external_fair/external_venues.json" \
   --tape "$RUN_ROOT/external_fair/tapes/external_venues.${SHA}.$$.bin" --model-sha "$SHA" \
+  --raw-tape-dir "$RUN_ROOT/external_fair/raw" \
   >> "$RUN_ROOT/external_fair/external_venues.log" 2>&1 &
 pids+=("$!")
 
