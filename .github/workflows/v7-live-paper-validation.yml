@@ -173,6 +173,29 @@ jobs:
           fi
           echo "PAPER deployment is a technical/safety evidence-collection state; it is not a real-money or profitability promotion." >> "$GITHUB_STEP_SUMMARY"
 
+      - name: Regenerate redacted current-truth evidence
+        if: steps.gate.outputs.ready == 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 scripts/v7_current_truth_audit.py \
+            --root . \
+            --json-output "$SMOKE_ROOT/current_truth.json" \
+            --markdown-output "$SMOKE_ROOT/current_truth.md"
+
+      - name: Record release provenance and read-only canary preflight
+        if: steps.gate.outputs.ready == 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 scripts/v7_release_provenance.py \
+            --repository-root . \
+            --output "$SMOKE_ROOT/release_provenance.json"
+          python3 scripts/v7_live_canary_orchestrator.py \
+            --repository-root . \
+            --stage AUTHENTICATED_READ_ONLY \
+            > "$SMOKE_ROOT/live_canary_preflight.json"
+
       - name: Record immutable main-SHA validation result
         if: steps.gate.outputs.ready == 'true'
         shell: bash

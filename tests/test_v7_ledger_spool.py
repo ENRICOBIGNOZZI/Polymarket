@@ -10,12 +10,13 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "scripts"))
 
-from v7_execution_ledger import LedgerContractError, LedgerEvent, canonical_ledger_path
+from v7_execution_ledger import EconomicJournalEntry, JournalPosting, LedgerContractError, LedgerEvent, canonical_ledger_path, load_journal_entries
 from v7_ledger_spool import (
     _drain_with_existing,
     _existing_record_ids,
     drain_spool,
     spool_event,
+    spool_journal_entry,
 )
 
 SHA = "1" * 40
@@ -144,6 +145,37 @@ class LedgerSpoolTests(unittest.TestCase):
             self.assertEqual(result["appended"], 0)
             self.assertEqual(result["rejected"], 1)
             self.assertFalse(canonical_ledger_path(root).exists())
+
+    def test_journal_facts_use_the_same_spool_and_canonical_writer(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            journal = EconomicJournalEntry(
+                entry_type="DEPOSIT",
+                model_sha=SHA, observed_ts_ms=1, source="WALLET_RPC", source_record_id="deposit-1",
+                postings=(
+                    JournalPosting("assets:cash:wallet", "pUSD", 10),
+                    JournalPosting("equity:external_funding", "pUSD", -10),
+                ),
+            )
+            spool_journal_entry(root, journal)
+            result = drain_spool(root, model_sha=SHA)
+            self.assertEqual(result["appended"], 1)
+            rows = load_journal_entries(canonical_ledger_path(root), expected_model_sha=SHA)
+            self.assertEqual(len(rows), 1)
+            self.assertIsNotNone(rows[0].entry_hash)
+            spool_journal_entry(root, journal)
+            self.assertEqual(drain_spool(root, model_sha=SHA)["duplicates"], 1)
+
+    def test_taker_rebate_is_a_first_class_economic_fact(self) -> None:
+        entry = EconomicJournalEntry(
+            entry_type="TAKER_REBATE", model_sha=SHA, observed_ts_ms=1,
+            source="DATA_API", source_record_id="taker-rebate-1",
+            postings=(
+                JournalPosting("assets:cash:wallet", "pUSD", 7),
+                JournalPosting("income:taker_rebate", "pUSD", -7),
+            ),
+        )
+        entry.validate(sealed=False)
 
 
 if __name__ == "__main__":

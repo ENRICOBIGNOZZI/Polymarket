@@ -2,13 +2,14 @@
 from __future__ import annotations
 
 import json
+import hashlib
 import math
 import os
 import re
 import threading
 import time
 import uuid
-from dataclasses import asdict, dataclass, field
+from dataclasses import asdict, dataclass, field, replace
 from pathlib import Path
 from typing import Any, Iterator
 
@@ -37,6 +38,19 @@ EVENT_TYPES = frozenset(
 )
 MARKOUT_HORIZONS = frozenset({"1s", "5s", "10s", "15s", "30s", "45s", "60s", "300s"})
 SIDES = frozenset({"BUY", "SELL"})
+JOURNAL_SCHEMA_VERSION = 1
+JOURNAL_ENTRY_TYPES = frozenset({
+    "DEPOSIT", "WITHDRAW", "TRADE_FILL", "TAKER_FEE", "MAKER_REBATE", "TAKER_REBATE",
+    "LIQUIDITY_REWARD", "WALLET_GAS", "RELAYER_FEE", "BRIDGE_FEE",
+    "PUSD_WRAP", "PUSD_UNWRAP", "TOKEN_SPLIT", "TOKEN_MERGE", "TOKEN_REDEEM", "SETTLEMENT",
+})
+JOURNAL_SOURCES = frozenset({
+    "CLOB_USER_WS", "CLOB_API", "DATA_API", "WALLET_RPC", "POLYGON_RPC",
+})
+JOURNAL_MODES = frozenset({"PAPER", "LIVE_OBSERVED"})
+_SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
+_ACCOUNT_RE = re.compile(r"^(?:assets|liabilities|equity|income|expenses|clearing):[A-Za-z0-9._:-]+$")
+_ASSET_RE = re.compile(r"^(?:pUSD|USDCe|token:[A-Za-z0-9._:-]+)$")
 
 
 class LedgerContractError(ValueError):
@@ -45,6 +59,17 @@ class LedgerContractError(ValueError):
 
 class LedgerOwnershipError(RuntimeError):
     """Raised when another process already owns the canonical ledger writer."""
+
+
+def _canonical_bytes(value: Any) -> bytes:
+    return json.dumps(
+        value, sort_keys=True, separators=(",", ":"), ensure_ascii=False,
+        allow_nan=False,
+    ).encode("utf-8")
+
+
+def _sha256(value: Any) -> str:
+    return hashlib.sha256(_canonical_bytes(value)).hexdigest()
 
 
 def _finite_optional(name: str, value: float | None) -> None:
@@ -359,12 +384,180 @@ class LedgerEvent:
         return event
 
 
+@dataclass(frozen=True)
+class JournalPosting:
+    """One integer base-unit posting in the canonical monetary journal.
+
+    Every entry balances independently *per asset*.  The clearing accounts make
+    token-for-cash exchanges explicit instead of silently treating incomparable
+    token shares and pUSD as one floating-point quantity.
+    """
+
+    account: str
+    asset: str
+    units: int
+
+    def validate(self) -> None:
+        if not isinstance(self.account, str) or not _ACCOUNT_RE.fullmatch(self.account):
+            raise LedgerContractError("journal_posting:account_invalid")
+        if not isinstance(self.asset, str) or not _ASSET_RE.fullmatch(self.asset):
+            raise LedgerContractError("journal_posting:asset_invalid")
+        if isinstance(self.units, bool) or not isinstance(self.units, int) or self.units == 0:
+            raise LedgerContractError("journal_posting:units_must_be_nonzero_integer")
+
+
+@dataclass(frozen=True)
+class EconomicJournalEntry:
+    """Hash-chained, double-entry monetary evidence in integer base units.
+
+    This is deliberately an extension of the one canonical execution ledger,
+    not another writer, OMS, or execution authority.  A journal row records
+    independently observed monetary facts; it never creates an order.
+    """
+
+    entry_type: str
+    model_sha: str
+    observed_ts_ms: int
+    source: str
+    source_record_id: str
+    postings: tuple[JournalPosting, ...]
+    execution_mode: str = "PAPER"
+    authenticated_execution: bool = False
+    entry_id: str = field(default_factory=lambda: uuid.uuid4().hex)
+    schema_version: int = JOURNAL_SCHEMA_VERSION
+    metadata: dict[str, Any] = field(default_factory=dict)
+    previous_entry_hash: str = "0" * 64
+    entry_hash: str | None = None
+
+    def _hash_payload(self) -> dict[str, Any]:
+        value = asdict(self)
+        value.pop("entry_hash", None)
+        value["record_kind"] = "ECONOMIC_JOURNAL"
+        return value
+
+    def computed_hash(self) -> str:
+        return _sha256(self._hash_payload())
+
+    def validate(self, *, sealed: bool = True) -> None:
+        if self.schema_version != JOURNAL_SCHEMA_VERSION:
+            raise LedgerContractError("journal:schema_version_unsupported")
+        if self.entry_type not in JOURNAL_ENTRY_TYPES:
+            raise LedgerContractError("journal:entry_type_unsupported")
+        if not isinstance(self.model_sha, str) or not _SHA_RE.fullmatch(self.model_sha):
+            raise LedgerContractError("journal:model_sha_not_exact_git_sha")
+        _positive_clock("journal:observed_ts_ms", self.observed_ts_ms)
+        if self.source not in JOURNAL_SOURCES:
+            raise LedgerContractError("journal:source_unsupported")
+        _nonempty_optional("journal:source_record_id", self.source_record_id)
+        _nonempty_optional("journal:entry_id", self.entry_id)
+        if self.execution_mode not in JOURNAL_MODES:
+            raise LedgerContractError("journal:execution_mode_unsupported")
+        if not isinstance(self.authenticated_execution, bool):
+            raise LedgerContractError("journal:authenticated_execution_not_boolean")
+        if self.execution_mode == "PAPER" and self.authenticated_execution:
+            raise LedgerContractError("journal:paper_cannot_be_authenticated")
+        if self.execution_mode == "LIVE_OBSERVED" and not self.authenticated_execution:
+            raise LedgerContractError("journal:live_observed_requires_authenticated_execution")
+        if not isinstance(self.postings, tuple) or len(self.postings) < 2:
+            raise LedgerContractError("journal:postings_too_short")
+        totals: dict[str, int] = {}
+        seen: set[tuple[str, str]] = set()
+        for posting in self.postings:
+            if not isinstance(posting, JournalPosting):
+                raise LedgerContractError("journal:posting_invalid")
+            posting.validate()
+            key = (posting.account, posting.asset)
+            if key in seen:
+                raise LedgerContractError("journal:duplicate_account_asset_posting")
+            seen.add(key)
+            totals[posting.asset] = totals.get(posting.asset, 0) + posting.units
+        if any(total != 0 for total in totals.values()):
+            raise LedgerContractError("journal:unbalanced_postings")
+        if not isinstance(self.metadata, dict):
+            raise LedgerContractError("journal:metadata_not_object")
+        try:
+            _canonical_bytes(self.metadata)
+        except (TypeError, ValueError) as exc:
+            raise LedgerContractError("journal:metadata_not_json_serializable") from exc
+        if self.execution_mode == "LIVE_OBSERVED":
+            evidence_hash = self.metadata.get("evidence_record_hash")
+            if not isinstance(evidence_hash, str) or not _SHA256_RE.fullmatch(evidence_hash):
+                raise LedgerContractError("journal:live_observed_requires_evidence_hash")
+        if not isinstance(self.previous_entry_hash, str) or not _SHA256_RE.fullmatch(self.previous_entry_hash):
+            raise LedgerContractError("journal:previous_hash_invalid")
+        if sealed:
+            if not isinstance(self.entry_hash, str) or not _SHA256_RE.fullmatch(self.entry_hash):
+                raise LedgerContractError("journal:entry_hash_invalid")
+            if self.entry_hash != self.computed_hash():
+                raise LedgerContractError("journal:entry_hash_mismatch")
+        elif self.entry_hash is not None:
+            raise LedgerContractError("journal:unsealed_entry_has_hash")
+
+    def seal(self, previous_entry_hash: str) -> "EconomicJournalEntry":
+        if not isinstance(previous_entry_hash, str) or not _SHA256_RE.fullmatch(previous_entry_hash):
+            raise LedgerContractError("journal:previous_hash_invalid")
+        candidate = replace(self, previous_entry_hash=previous_entry_hash, entry_hash=None)
+        candidate.validate(sealed=False)
+        sealed = replace(candidate, entry_hash=candidate.computed_hash())
+        sealed.validate()
+        return sealed
+
+    def to_dict(self) -> dict[str, Any]:
+        self.validate()
+        value = asdict(self)
+        value["record_kind"] = "ECONOMIC_JOURNAL"
+        return value
+
+    def to_spool_dict(self) -> dict[str, Any]:
+        """Serialize an unsealed fact for the canonical single-writer spool."""
+        self.validate(sealed=False)
+        value = asdict(self)
+        value["record_kind"] = "ECONOMIC_JOURNAL"
+        return value
+
+    @classmethod
+    def from_dict(cls, raw: dict[str, Any]) -> "EconomicJournalEntry":
+        if not isinstance(raw, dict):
+            raise LedgerContractError("journal:record_not_object")
+        value = dict(raw)
+        if value.pop("record_kind", None) != "ECONOMIC_JOURNAL":
+            raise LedgerContractError("journal:record_kind_invalid")
+        postings = value.get("postings")
+        if not isinstance(postings, list):
+            raise LedgerContractError("journal:postings_not_array")
+        try:
+            value["postings"] = tuple(JournalPosting(**posting) for posting in postings)
+            entry = cls(**value)
+        except (TypeError, ValueError) as exc:
+            raise LedgerContractError(f"journal:record_shape:{exc}") from exc
+        entry.validate()
+        return entry
+
+    @classmethod
+    def from_spool_dict(cls, raw: dict[str, Any]) -> "EconomicJournalEntry":
+        if not isinstance(raw, dict):
+            raise LedgerContractError("journal:record_not_object")
+        value = dict(raw)
+        if value.pop("record_kind", None) != "ECONOMIC_JOURNAL":
+            raise LedgerContractError("journal:record_kind_invalid")
+        postings = value.get("postings")
+        if not isinstance(postings, list):
+            raise LedgerContractError("journal:postings_not_array")
+        try:
+            value["postings"] = tuple(JournalPosting(**posting) for posting in postings)
+            entry = cls(**value)
+        except (TypeError, ValueError) as exc:
+            raise LedgerContractError(f"journal:record_shape:{exc}") from exc
+        entry.validate(sealed=False)
+        return entry
+
+
 def canonical_ledger_path(run_root: Path) -> Path:
     return Path(run_root) / "ledger" / "execution.jsonl"
 
 
 class CanonicalLedgerWriter:
-    """Fail-closed single-process owner for the append-only V7 PAPER ledger.
+    """Fail-closed single-process owner for the append-only V7 ledger.
 
     Historical records from older deployed SHAs may remain in the same logical
     ledger. Every append is bound to this writer's exact SHA, and every research
@@ -379,6 +572,7 @@ class CanonicalLedgerWriter:
         self._owned = False
         self._owner_token = uuid.uuid4().hex
         self._append_lock = threading.Lock()
+        self._journal_tip_by_sha: dict[str, str] | None = None
 
         if not self.writer_id:
             raise LedgerOwnershipError("writer_id:missing")
@@ -422,6 +616,42 @@ class CanonicalLedgerWriter:
                 handle.flush()
                 os.fsync(handle.fileno())
 
+    def _journal_tips(self) -> dict[str, str]:
+        if self._journal_tip_by_sha is not None:
+            return self._journal_tip_by_sha
+        tips: dict[str, str] = {}
+        if self.path.exists():
+            for record in iter_records(self.path):
+                if isinstance(record, EconomicJournalEntry):
+                    expected = tips.get(record.model_sha, "0" * 64)
+                    if record.previous_entry_hash != expected:
+                        raise LedgerContractError("journal:chain_break")
+                    tips[record.model_sha] = str(record.entry_hash)
+        self._journal_tip_by_sha = tips
+        return tips
+
+    def append_journal(self, entry: EconomicJournalEntry) -> EconomicJournalEntry:
+        """Append a sealed monetary fact using this ledger's existing lock.
+
+        Journal entries may be PAPER or independently observed LIVE facts, but
+        their exact model SHA must always match this writer's run identity.
+        """
+        if not self._owned:
+            raise LedgerOwnershipError("writer:not_acquired")
+        entry.validate(sealed=False)
+        if entry.model_sha != self.model_sha:
+            raise LedgerContractError("journal:mixed_sha_append")
+        with self._append_lock:
+            tips = self._journal_tips()
+            sealed = entry.seal(tips.get(entry.model_sha, "0" * 64))
+            line = json.dumps(sealed.to_dict(), sort_keys=True, separators=(",", ":")) + "\n"
+            with self.path.open("a", encoding="utf-8") as handle:
+                handle.write(line)
+                handle.flush()
+                os.fsync(handle.fileno())
+            tips[entry.model_sha] = str(sealed.entry_hash)
+        return sealed
+
     def close(self) -> None:
         if not self._owned:
             return
@@ -446,10 +676,9 @@ class CanonicalLedgerWriter:
         self.close()
 
 
-def iter_events(path: Path, *, expected_model_sha: str) -> Iterator[LedgerEvent]:
-    """Validate the full ledger and yield evidence for exactly one source SHA."""
-    if not _SHA_RE.fullmatch(expected_model_sha):
-        raise LedgerContractError("expected_model_sha:not_exact_git_sha")
+def iter_records(path: Path) -> Iterator[LedgerEvent | EconomicJournalEntry]:
+    """Validate every canonical record, including nonselected SHA history."""
+    journal_tips: dict[str, str] = {}
     with Path(path).open("r", encoding="utf-8") as handle:
         for line_number, line in enumerate(handle, start=1):
             if not line.strip():
@@ -458,10 +687,34 @@ def iter_events(path: Path, *, expected_model_sha: str) -> Iterator[LedgerEvent]
                 raw = json.loads(line)
             except json.JSONDecodeError as exc:
                 raise LedgerContractError(f"line_{line_number}:invalid_json") from exc
-            event = LedgerEvent.from_dict(raw)
-            if event.model_sha == expected_model_sha:
-                yield event
+            if isinstance(raw, dict) and raw.get("record_kind") == "ECONOMIC_JOURNAL":
+                record = EconomicJournalEntry.from_dict(raw)
+                expected = journal_tips.get(record.model_sha, "0" * 64)
+                if record.previous_entry_hash != expected:
+                    raise LedgerContractError(f"line_{line_number}:journal_chain_break")
+                journal_tips[record.model_sha] = str(record.entry_hash)
+                yield record
+            else:
+                yield LedgerEvent.from_dict(raw)
+
+
+def iter_events(path: Path, *, expected_model_sha: str) -> Iterator[LedgerEvent]:
+    """Validate the full ledger and yield execution evidence for one exact SHA."""
+    if not _SHA_RE.fullmatch(expected_model_sha):
+        raise LedgerContractError("expected_model_sha:not_exact_git_sha")
+    for record in iter_records(path):
+        if isinstance(record, LedgerEvent) and record.model_sha == expected_model_sha:
+            yield record
 
 
 def load_events(path: Path, *, expected_model_sha: str) -> list[LedgerEvent]:
     return list(iter_events(path, expected_model_sha=expected_model_sha))
+
+
+def load_journal_entries(path: Path, *, expected_model_sha: str) -> list[EconomicJournalEntry]:
+    if not _SHA_RE.fullmatch(expected_model_sha):
+        raise LedgerContractError("expected_model_sha:not_exact_git_sha")
+    return [
+        record for record in iter_records(path)
+        if isinstance(record, EconomicJournalEntry) and record.model_sha == expected_model_sha
+    ]

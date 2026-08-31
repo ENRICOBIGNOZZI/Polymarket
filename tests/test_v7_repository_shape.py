@@ -148,12 +148,13 @@ class V7RepositoryShapeTest(unittest.TestCase):
         self.assertTrue(manifest["paper_only"])
         self.assertFalse(manifest["authenticated_execution"])
         self.assertFalse(manifest["real_order_submission"])
+        self.assertEqual(manifest["execution_mode"], "PAPER_SIMULATED")
         self.assertEqual(manifest["deployment_ref"], "main")
         self.assertEqual(manifest["promotion_policy"], "operator_approved_exact_main_sha")
         self.assertEqual(
             set(manifest),
             {
-                "schema_version", "enabled", "version", "loop", "config", "run_root",
+                "schema_version", "enabled", "version", "execution_mode", "loop", "config", "run_root",
                 "deployment_ref", "promotion_policy", "paper_only", "authenticated_execution",
                 "real_order_submission", "candidate_only_until_promoted", "reason",
             },

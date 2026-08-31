@@ -9,6 +9,8 @@ import subprocess
 from pathlib import Path, PurePosixPath
 from typing import Any
 
+from v7_polymarket_v2_contracts import ContractRegistryError, load as load_v2_contract_registry
+
 SHA40 = re.compile(r"^[0-9a-f]{40}$")
 REQUIRED_COSTS = {"fee", "slippage", "unwind_loss", "capital_cost", "latency_cost"}
 
@@ -70,7 +72,9 @@ def validate(root: Path, expected_head: str | None) -> dict[str, str]:
         fail("V7 cutover blocked: operator PAPER/authenticated boundary invalid")
 
     manifest = load_json(root / "config/live_champion.json")
-    if manifest.get("enabled") is not True or manifest.get("version") != 7 or isinstance(manifest.get("version"), bool):
+    if (manifest.get("enabled") is not True or manifest.get("version") != 7
+            or isinstance(manifest.get("version"), bool)
+            or manifest.get("execution_mode") != "PAPER_SIMULATED"):
         fail("V7 cutover blocked: enabled champion version must be exactly 7")
     if manifest.get("paper_only") is not True or manifest.get("authenticated_execution") is not False:
         fail("V7 cutover blocked: champion must be PAPER-only with authenticated execution disabled")
@@ -107,6 +111,27 @@ def validate(root: Path, expected_head: str | None) -> dict[str, str]:
         "scripts/v7_cross_platform_collector.py",
         "scripts/v7_osint_mapping_collector.py",
         "scripts/v7_learned_execution_model.py",
+        "scripts/v7_polymarket_v2_contracts.py",
+        "scripts/v7_real_pnl_evidence.py",
+        "scripts/v7_execution_provenance.py",
+        "scripts/v7_real_pnl_verifier.py",
+        "scripts/v7_real_pnl_scorecard.py",
+        "scripts/v7_generate_pnl_attestation.py",
+        "scripts/v7_verify_pnl_attestation.py",
+        "scripts/v7_secret_scan.py",
+        "scripts/v7_security_audit.py",
+        "scripts/v7_current_truth_audit.py",
+        "scripts/v7_release_provenance.py",
+        "scripts/v7_live_canary_orchestrator.py",
+        "scripts/v7_reconcile_account.py",
+        "scripts/v7_world_class_scorecard.py",
+        "config/v7_execution_modes.json",
+        "config/v7_risk_tiers.json",
+        "schemas/v7/execution_mode.schema.json",
+        "schemas/v7/pnl_attestation.schema.json",
+        "schemas/v7/world_class_scorecard.schema.json",
+        "config/v7_polymarket_v2_contracts.json",
+        "config/v7_runtime_supervision.json",
         "config/v7_strategy_registry.json",
         "config/v7_live_model_scope.json",
         "config/v7_external_inputs.json",
@@ -192,7 +217,8 @@ def validate(root: Path, expected_head: str | None) -> dict[str, str]:
         fail("V7 cutover blocked: adaptive universe resource budgets missing")
 
     cfg = load_json(root / config_rel)
-    if cfg.get("engine_version") != 7 or cfg.get("paper_only") is not True:
+    if (cfg.get("engine_version") != 7 or cfg.get("paper_only") is not True
+            or cfg.get("execution_mode") != "PAPER_SIMULATED"):
         fail("V7 cutover blocked: config must be engine_version=7 and PAPER-only")
     require_close(cfg.get("market_limit"), authorization.get("market_limit"), "market_limit")
     require_close(cfg.get("min_liquidity"), authorization.get("min_liquidity"), "min_liquidity")
@@ -226,6 +252,79 @@ def validate(root: Path, expected_head: str | None) -> dict[str, str]:
             fail(f"V7 cutover blocked: v7.{key} must be true")
     if v7.get("authenticated_execution") is not False or v7.get("real_order_submission") is not False:
         fail("V7 cutover blocked: V7 authenticated/real execution must remain disabled")
+    if (v7.get("execution_mode") != "PAPER_SIMULATED"
+            or v7.get("execution_modes_policy") != "config/v7_execution_modes.json"):
+        fail("V7 cutover blocked: canonical typed execution mode is invalid")
+    if (v7.get("contract_registry") != "config/v7_polymarket_v2_contracts.json"
+            or v7.get("require_v2_contract_registry") is not True):
+        fail("V7 cutover blocked: pinned CLOB V2/pUSD registry is required")
+    if v7.get("real_pnl_provenance_required") is not True:
+        fail("V7 cutover blocked: immutable real-PnL execution provenance is required")
+    if v7.get("real_pnl_economic_scorecard_required") is not True:
+        fail("V7 cutover blocked: real-PnL economic scorecard is required")
+    if v7.get("pre_canary_security") != {
+            "full_history_secret_scan_required": True,
+            "findings_must_equal": 0,
+            "remediation_evidence_required": True}:
+        fail("V7 cutover blocked: pre-canary secret-remediation contract invalid")
+    try:
+        load_v2_contract_registry(root / "config/v7_polymarket_v2_contracts.json")
+    except ContractRegistryError as exc:
+        fail(f"V7 cutover blocked: invalid CLOB V2/pUSD contract registry: {exc}")
+
+    runtime_supervision = load_json(root / "config/v7_runtime_supervision.json")
+    if (runtime_supervision.get("schema") != "polymarket_v7_runtime_supervision_v1"
+            or runtime_supervision.get("version") != 7
+            or runtime_supervision.get("execution_mode") != "PAPER_SIMULATED"
+            or runtime_supervision.get("execution_modes_policy") != "config/v7_execution_modes.json"
+            or runtime_supervision.get("paper_only") is not True
+            or runtime_supervision.get("authenticated_execution") is not False
+            or runtime_supervision.get("real_order_submission") is not False
+            or runtime_supervision.get("real_capital_at_risk") is not False):
+        fail("V7 cutover blocked: runtime supervision safety contract invalid")
+    clob_recovery = runtime_supervision.get("clob_v2_recovery")
+    if not isinstance(clob_recovery, dict) or (
+            clob_recovery.get("http_425_backoff_initial_seconds") != 1
+            or clob_recovery.get("http_425_backoff_max_seconds") != 30
+            or clob_recovery.get("post_restart_post_only_seconds") != 120
+            or clob_recovery.get("cancel_only_allows_cancel") is not True
+            or clob_recovery.get("private_reconciliation_required_after_stream_disconnect") is not True
+            or clob_recovery.get("paper_only") is not True
+            or clob_recovery.get("authenticated_execution") is not False
+            or clob_recovery.get("real_order_submission") is not False):
+        fail("V7 cutover blocked: CLOB V2 restart/reconciliation policy invalid")
+    failure_domains = runtime_supervision.get("failure_domains")
+    if (not isinstance(failure_domains, dict)
+            or failure_domains.get("matching_engine_restart") != {
+                "scope": "venue", "action": "cancel_and_backoff_until_post_only_recovery", "critical": True}
+            or failure_domains.get("matching_engine_cancel_only") != {
+                "scope": "venue", "action": "cancel_only_until_reconciled", "critical": True}
+            or failure_domains.get("order_heartbeat_expired") != {
+                "scope": "account", "action": "cancel_all_and_reconcile", "critical": True}
+            or failure_domains.get("signer_rate_limit") != {
+                "scope": "signer", "action": "quarantine_signer_and_reconcile", "critical": True}):
+        fail("V7 cutover blocked: CLOB V2 matching-engine failure actions invalid")
+    order_heartbeat = runtime_supervision.get("order_heartbeat")
+    if not isinstance(order_heartbeat, dict) or (
+            order_heartbeat.get("interval_seconds") != 5
+            or order_heartbeat.get("maximum_ack_age_seconds") != 10
+            or order_heartbeat.get("missing_ack_action") != "cancel_all_and_reconcile"
+            or order_heartbeat.get("paper_only") is not True
+            or order_heartbeat.get("authenticated_execution") is not False
+            or order_heartbeat.get("real_order_submission") is not False):
+        fail("V7 cutover blocked: order-heartbeat safety policy invalid")
+    signer_rate_limit = runtime_supervision.get("signer_rate_limit")
+    if not isinstance(signer_rate_limit, dict) or (
+            signer_rate_limit.get("rolling_window_seconds") != 1
+            or signer_rate_limit.get("maximum_regular_requests") != 10
+            or signer_rate_limit.get("maximum_emergency_requests") != 10
+            or signer_rate_limit.get("maximum_total_requests") != 20
+            or signer_rate_limit.get("reserve_emergency_for") != ["cancel", "heartbeat"]
+            or signer_rate_limit.get("clock_regression_action") != "quarantine_signer_and_reconcile"
+            or signer_rate_limit.get("paper_only") is not True
+            or signer_rate_limit.get("authenticated_execution") is not False
+            or signer_rate_limit.get("real_order_submission") is not False):
+        fail("V7 cutover blocked: per-signer rate-limit policy invalid")
     if set(v7.get("cost_vector_required") or []) != REQUIRED_COSTS:
         fail("V7 cutover blocked: complete fee/slippage/unwind/capital/latency cost vector required")
     if sorted(int(x) for x in v7.get("markout_horizons_seconds") or []) != [1,10,45,60,300]:

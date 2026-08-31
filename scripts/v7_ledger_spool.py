@@ -17,9 +17,11 @@ from typing import Iterable
 
 from v7_execution_ledger import (
     CanonicalLedgerWriter,
+    EconomicJournalEntry,
     LedgerContractError,
     LedgerEvent,
     canonical_ledger_path,
+    iter_records,
 )
 
 
@@ -43,20 +45,31 @@ def spool_events(run_root: Path, events: Iterable[LedgerEvent]) -> list[Path]:
     return [spool_event(run_root, event) for event in events]
 
 
+def spool_journal_entry(run_root: Path, entry: EconomicJournalEntry) -> Path:
+    """Queue an unsealed monetary fact for the same canonical writer.
+
+    The router, rather than a data collector, establishes its hash-chain link.
+    """
+    entry.validate(sealed=False)
+    directory = spool_dir(run_root)
+    directory.mkdir(parents=True, exist_ok=True)
+    name = f"journal.{entry.observed_ts_ms:013d}.{entry.entry_id}.json"
+    target = directory / name
+    temporary = target.with_name(target.name + f".tmp.{os.getpid()}")
+    temporary.write_text(json.dumps(entry.to_spool_dict(), sort_keys=True) + "\n", encoding="utf-8")
+    os.replace(temporary, target)
+    return target
+
+
 def _existing_record_ids(path: Path) -> set[str]:
     ids: set[str] = set()
     if not path.exists():
         return ids
-    with path.open("r", encoding="utf-8") as handle:
-        for line_number, line in enumerate(handle, start=1):
-            if not line.strip():
-                continue
-            try:
-                raw = json.loads(line)
-            except json.JSONDecodeError as exc:
-                raise LedgerContractError(f"canonical_line_{line_number}:invalid_json") from exc
-            event = LedgerEvent.from_dict(raw)
-            ids.add(event.record_id)
+    for record in iter_records(path):
+        if isinstance(record, LedgerEvent):
+            ids.add(record.record_id)
+        else:
+            ids.add(f"journal:{record.entry_id}")
     return ids
 
 
@@ -82,17 +95,22 @@ def _drain_with_existing(
     appended = 0
     duplicates = 0
     rejected = 0
-    events: list[tuple[Path, LedgerEvent]] = []
+    events: list[tuple[Path, LedgerEvent | EconomicJournalEntry]] = []
     for path in files:
         try:
             raw = json.loads(path.read_text(encoding="utf-8"))
-            event = LedgerEvent.from_dict(raw)
+            event: LedgerEvent | EconomicJournalEntry
+            if isinstance(raw, dict) and raw.get("record_kind") == "ECONOMIC_JOURNAL":
+                event = EconomicJournalEntry.from_spool_dict(raw)
+            else:
+                event = LedgerEvent.from_dict(raw)
             if event.model_sha != model_sha:
                 raise LedgerContractError("spool:mixed_model_sha")
         except (OSError, json.JSONDecodeError, LedgerContractError):
             rejected += 1
             continue
-        if event.record_id in existing:
+        record_key = event.record_id if isinstance(event, LedgerEvent) else f"journal:{event.entry_id}"
+        if record_key in existing:
             duplicates += 1
             path.unlink(missing_ok=True)
             continue
@@ -101,8 +119,12 @@ def _drain_with_existing(
     if events:
         with CanonicalLedgerWriter(ledger_path, writer_id=writer_id, model_sha=model_sha) as writer:
             for path, event in events:
-                writer.append(event)
-                existing.add(event.record_id)
+                if isinstance(event, LedgerEvent):
+                    writer.append(event)
+                    existing.add(event.record_id)
+                else:
+                    writer.append_journal(event)
+                    existing.add(f"journal:{event.entry_id}")
                 path.unlink()
                 appended += 1
     return {"queued": len(files), "appended": appended, "duplicates": duplicates, "rejected": rejected}

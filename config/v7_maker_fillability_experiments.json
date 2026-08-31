@@ -6,6 +6,17 @@
   "single_variable_changes_only": true,
   "simulator_relaxation_forbidden": true,
   "promotion_credit_for_exploration": false,
+  "randomized_probe_protocol": {
+    "enabled": true,
+    "checked_in_live_enabled": false,
+    "execution_authority": "RESEARCH_ZERO_AUTHORITY",
+    "minimum_size_base_units_only": true,
+    "assignment_before_outcome_required": true,
+    "randomization_unit": "candidate_id",
+    "required_strata": ["queue_bucket", "spread_bucket", "tte_bucket", "volatility_bucket", "activity_bucket", "quote_lifetime_bucket"],
+    "live_observed_outcome_requires_immutable_evidence_hash": true,
+    "promotion_credit": false
+  },
   "required_fields": [
     "experiment_id",
     "hypothesis",
