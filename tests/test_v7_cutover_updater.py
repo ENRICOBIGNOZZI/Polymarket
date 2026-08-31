@@ -320,6 +320,7 @@ class V7CutoverUpdaterTest(unittest.TestCase):
             "canonical_economics.json",
             "ledger/execution.jsonl",
             "trade_tape.csv",
+            "trade_recorder_status.json",
             "monitoring/exporter_v7.py",
             "polymarket_v7_ledger_valid 1",
             "polymarket_external_fair_router_book_requests_total",
@@ -399,6 +400,7 @@ class V7CutoverUpdaterTest(unittest.TestCase):
         self.assertIn("control/research_sleeves_manifest.json", manifest["required_surfaces"])
         self.assertIn("canonical_economics.json", manifest["required_surfaces"])
         self.assertIn("ledger/execution.jsonl", manifest["required_surfaces"])
+        self.assertIn("trade_recorder_status.json", manifest["required_surfaces"])
 
 
 if __name__ == "__main__":

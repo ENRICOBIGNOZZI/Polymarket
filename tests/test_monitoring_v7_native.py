@@ -329,6 +329,14 @@ class V7NativeMonitoringTest(unittest.TestCase):
             f"{now - 1},{(now - 1) * 1000},m,t,SELL,0.5,2,tr1\n",
             encoding="utf-8",
         )
+        self._write(root / "trade_recorder_status.json", {
+            "schema": "polymarket_v7_trade_recorder_status_v1",
+            "timestamp_ms": (now - 1) * 1000,
+            "paper_only": True, "authenticated_execution": False,
+            "real_order_submission": False, "data_plane_healthy": True,
+            "flow_regime": "STANDARD_CLOB_TRADES_OBSERVED", "conditions": 1800,
+            "requests": 45, "fetched": 1, "errors": 0, "truncated_batches": 0,
+        })
         latency = root / "micro_maker" / "latency.csv"
         latency.write_text(
             "recorded_ts_ms,record_kind,market_handle,instrument_handle,state_version,parse_ns,book_ns,feature_ns,decision_ns,risk_ns,tx_queue_ns,execution_ns,receive_to_intent_ns\n"
@@ -444,13 +452,35 @@ class V7NativeMonitoringTest(unittest.TestCase):
             snapshot = exporter.collect_snapshot(run_root, ROOT, now=1_000)
             self.assertIn("trade_tape_stale", exporter.health_reasons(snapshot))
 
-    def test_empty_trade_tape_fails_health_closed(self) -> None:
+    def test_empty_trade_tape_with_verified_no_standard_clob_flow_is_healthy(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             run_root = Path(directory) / "paper_v7_live"
             self._fixture(run_root)
             (run_root / "trade_tape.csv").write_text("timestamp,received_ms,market_id,asset_id,side,price,size,trade_id\n", encoding="utf-8")
+            self._write(run_root / "trade_recorder_status.json", {
+                "schema": "polymarket_v7_trade_recorder_status_v1", "timestamp_ms": 999000,
+                "paper_only": True, "authenticated_execution": False,
+                "real_order_submission": False, "data_plane_healthy": True,
+                "flow_regime": "STANDARD_CLOB_NO_MATCHING_TRADES", "conditions": 1800,
+                "requests": 45, "fetched": 0, "errors": 0, "truncated_batches": 0,
+            })
             snapshot = exporter.collect_snapshot(run_root, ROOT, now=1_000)
-            self.assertIn("trade_tape_empty", exporter.health_reasons(snapshot))
+            self.assertNotIn("trade_tape_empty_or_unverified_no_standard_clob_flow", exporter.health_reasons(snapshot))
+            self.assertEqual(exporter.health_reasons(snapshot), [])
+            self.assertIn("polymarket_v7_trade_tape_no_standard_clob_flow 1", exporter.render_prometheus(snapshot))
+
+    def test_empty_trade_tape_without_fresh_complete_recorder_evidence_fails_closed(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            run_root = Path(directory) / "paper_v7_live"
+            self._fixture(run_root)
+            (run_root / "trade_tape.csv").write_text("timestamp,received_ms,market_id,asset_id,side,price,size,trade_id\n", encoding="utf-8")
+            status = json.loads((run_root / "trade_recorder_status.json").read_text(encoding="utf-8"))
+            status["timestamp_ms"] = 700000
+            status["flow_regime"] = "STANDARD_CLOB_NO_MATCHING_TRADES"
+            status["fetched"] = 0
+            self._write(run_root / "trade_recorder_status.json", status)
+            snapshot = exporter.collect_snapshot(run_root, ROOT, now=1_000)
+            self.assertIn("trade_tape_empty_or_unverified_no_standard_clob_flow", exporter.health_reasons(snapshot))
 
     def test_authenticated_runtime_fails_health_closed(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

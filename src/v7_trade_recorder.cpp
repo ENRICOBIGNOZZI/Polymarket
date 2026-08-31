@@ -145,6 +145,7 @@ public:
         fs::create_directories(run_dir_);
         tape_path_ = fs::path(run_dir_) / "trade_tape.csv";
         state_path_ = fs::path(run_dir_) / "trade_recorder_state.csv";
+        status_path_ = fs::path(run_dir_) / "trade_recorder_status.json";
         load_recent_seen();
         if (!fs::exists(tape_path_) || fs::file_size(tape_path_) == 0) {
             std::ofstream output(tape_path_);
@@ -250,6 +251,8 @@ public:
         }
         output.flush();
         persist_state();
+        persist_status(started_ms, markets.size(), conditions.size(), requests, fetched,
+                       new_rows.size(), errors, truncated_batches);
         trim_seen();
 
         std::cout << "trade_recorder markets=" << markets.size()
@@ -275,6 +278,7 @@ private:
     std::int64_t lookback_seconds_;
     fs::path tape_path_;
     fs::path state_path_;
+    fs::path status_path_;
     std::unordered_set<std::string> seen_;
     std::int64_t last_trade_ts_ = 0;
 
@@ -322,6 +326,46 @@ private:
             fs::rename(temporary, state_path_, error);
         }
         if (error) throw std::runtime_error("cannot persist V7 trade recorder state");
+    }
+
+    void persist_status(std::int64_t started_ms, std::size_t markets, std::size_t conditions,
+                        std::size_t requests, std::size_t fetched, std::size_t new_trades,
+                        std::size_t errors, std::size_t truncated_batches) const {
+        // A header-only tape can be a complete, successful scan of the standard
+        // CLOB universe during a no-print regime.  Monitoring must distinguish
+        // that truthful state from a dead or partially failing recorder.
+        const bool complete_scan = conditions > 0 && requests > 0 && errors == 0 &&
+                                   truncated_batches == 0;
+        const bool no_matching_standard_clob_flow = complete_scan && fetched == 0;
+        json::object status{
+            {"schema", "polymarket_v7_trade_recorder_status_v1"},
+            {"timestamp_ms", now_ms()},
+            {"started_ms", started_ms},
+            {"data_plane_healthy", complete_scan},
+            {"flow_regime", no_matching_standard_clob_flow
+                ? "STANDARD_CLOB_NO_MATCHING_TRADES"
+                : (complete_scan ? "STANDARD_CLOB_TRADES_OBSERVED" : "SCAN_INCOMPLETE_OR_FAILED")},
+            {"markets", markets}, {"conditions", conditions}, {"requests", requests},
+            {"fetched", fetched}, {"new_trades", new_trades}, {"errors", errors},
+            {"truncated_batches", truncated_batches}, {"last_trade_ts", last_trade_ts_},
+            {"paper_only", true}, {"authenticated_execution", false},
+            {"real_order_submission", false},
+        };
+        const auto temporary = status_path_.string() + ".tmp";
+        {
+            std::ofstream output(temporary, std::ios::trunc);
+            output << json::serialize(status) << '\n';
+            output.flush();
+            if (!output) throw std::runtime_error("cannot write V7 trade recorder status");
+        }
+        std::error_code error;
+        fs::rename(temporary, status_path_, error);
+        if (error) {
+            fs::remove(status_path_, error);
+            error.clear();
+            fs::rename(temporary, status_path_, error);
+        }
+        if (error) throw std::runtime_error("cannot persist V7 trade recorder status");
     }
 };
 

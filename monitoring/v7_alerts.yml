@@ -202,20 +202,20 @@ groups:
           description: The account-level drawdown/kill guard has not refreshed within 30 seconds.
 
       - alert: PolymarketV7RuntimeStateStale
-        expr: polymarket_v7_state_age_seconds{surface=~"runtime|graph|economics|trade_tape"} > 180
+        expr: polymarket_v7_state_age_seconds{surface=~"runtime|graph|economics|trade_tape|trade_recorder"} > 180
         for: 15s
         labels: {severity: critical}
         annotations:
           summary: A canonical V7 runtime/data/economics surface is stale
-          description: Runtime, Graph/RV, canonical economics or the receive-time trade tape exceeds the freshness bound.
+          description: Runtime, Graph/RV, canonical economics, trade tape, or recorder liveness exceeds the freshness bound.
 
       - alert: PolymarketV7TradeTapeEmpty
-        expr: polymarket_v7_trade_tape_rows <= 0
+        expr: (polymarket_v7_trade_tape_rows <= 0) and (polymarket_v7_trade_tape_no_standard_clob_flow < 1)
         for: 30s
         labels: {severity: critical}
         annotations:
           summary: V7 receive-time public trade tape is empty
-          description: Causal PAPER fill replay cannot be trusted without public trade observations carrying local receive time.
+          description: Causal PAPER fill replay has neither public trade observations nor a fresh complete scan proving a no-standard-CLOB-flow regime.
 
       - alert: PolymarketV7RetentionStale
         expr: (polymarket_v7_retention_status_present < 1) or (polymarket_v7_retention_status_age_seconds > 7200)

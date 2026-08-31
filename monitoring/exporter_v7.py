@@ -188,6 +188,34 @@ def _trade_tape(path: Path, now: int) -> dict[str, Any]:
     return {"rows": rows, "assets": len(assets), "age": _age(now, newest_ts)}
 
 
+def _trade_recorder_status(path: Path, now: int) -> dict[str, Any]:
+    status = _json(path)
+    timestamp_ms = _integer(status.get("timestamp_ms"), 0)
+    return {
+        **status,
+        "present": bool(status),
+        "age": _age(now, timestamp_ms / 1000.0 if timestamp_ms > 0 else 0.0),
+    }
+
+
+def _verified_no_standard_clob_flow(status: dict[str, Any], max_age: float) -> bool:
+    return (
+        status.get("schema") == "polymarket_v7_trade_recorder_status_v1"
+        and status.get("paper_only") is True
+        and status.get("authenticated_execution") is False
+        and status.get("real_order_submission") is False
+        and status.get("data_plane_healthy") is True
+        and status.get("flow_regime") == "STANDARD_CLOB_NO_MATCHING_TRADES"
+        and _integer(status.get("conditions")) > 0
+        and _integer(status.get("requests")) > 0
+        and _integer(status.get("fetched")) == 0
+        and _integer(status.get("errors")) == 0
+        and _integer(status.get("truncated_batches")) == 0
+        and math.isfinite(float(status.get("age", math.inf)))
+        and float(status["age"]) <= max_age
+    )
+
+
 def _maker_latency(path: Path) -> dict[str, Any]:
     stages = ("parse_ns", "book_ns", "feature_ns", "decision_ns", "risk_ns",
               "tx_queue_ns", "execution_ns", "receive_to_intent_ns")
@@ -285,6 +313,7 @@ def collect_snapshot(run_root: Path, repository_root: Path | None = None, *, now
     )
     maker_latency = _maker_latency(run_root / "micro_maker" / "latency.csv")
     tape = _trade_tape(run_root / "trade_tape.csv", now)
+    trade_recorder = _trade_recorder_status(run_root / "trade_recorder_status.json", now)
     directives = _json(repository_root / "config" / "operator_directives.json")
     strategy_registry = _json(repository_root / "config" / "v7_strategy_registry.json")
     live_model_scope = _json(repository_root / "config" / "v7_live_model_scope.json")
@@ -376,6 +405,7 @@ def collect_snapshot(run_root: Path, repository_root: Path | None = None, *, now
         "graph": _age(now, graph.get("timestamp")),
         "economics": _file_age(economics_path, now),
         "trade_tape": tape["age"],
+        "trade_recorder": trade_recorder["age"],
     }
     operations = _runtime_operations(run_root, runtime, now)
     return {
@@ -416,6 +446,7 @@ def collect_snapshot(run_root: Path, repository_root: Path | None = None, *, now
         "reconciliation": reconciliation,
         "maker_latency": maker_latency,
         "trade_tape": tape,
+        "trade_recorder": trade_recorder,
         "authority": {"valid": authority_valid, "max_drawdown": authority_max_drawdown},
         "strategies": strategies,
         "ages": ages,
@@ -666,9 +697,16 @@ def health_reasons(snapshot: dict[str, Any], *, max_runtime_age: int = 180, max_
     if canonical.get("expected_model_sha") != snapshot.get("sha"): reasons.append("canonical_economics_sha_mismatch")
     if not ledger.get("present"): reasons.append("canonical_ledger_missing")
     elif not ledger.get("valid"): reasons.append("canonical_ledger_invalid_or_mixed_sha")
-    if _integer(snapshot["trade_tape"].get("rows")) <= 0: reasons.append("trade_tape_empty")
-    for key in ("runtime", "graph", "economics", "trade_tape"):
+    tape_rows = _integer(snapshot["trade_tape"].get("rows"))
+    no_standard_clob_flow = _verified_no_standard_clob_flow(
+        snapshot.get("trade_recorder") or {}, max_runtime_age
+    )
+    if tape_rows <= 0 and not no_standard_clob_flow:
+        reasons.append("trade_tape_empty_or_unverified_no_standard_clob_flow")
+    for key in ("runtime", "graph", "economics"):
         if not math.isfinite(float(ages[key])) or float(ages[key]) > max_runtime_age: reasons.append(f"{key}_stale")
+    if tape_rows > 0 and (not math.isfinite(float(ages["trade_tape"])) or float(ages["trade_tape"]) > max_runtime_age):
+        reasons.append("trade_tape_stale")
     if not math.isfinite(float(ages["portfolio"])) or float(ages["portfolio"]) > max_supervisor_age: reasons.append("portfolio_guard_stale")
     if snapshot["economics"]["killed"]: reasons.append("runtime_killed")
     retention_age = _number((snapshot.get("operations") or {}).get("retention_age"), math.inf)
@@ -781,6 +819,7 @@ def _append_maker_lab_metrics(lines: list[str], lab: dict[str, Any]) -> None:
 
 def render_prometheus(snapshot: dict[str, Any]) -> str:
     runtime = snapshot["runtime"]
+    trade_recorder = snapshot.get("trade_recorder") if isinstance(snapshot.get("trade_recorder"), dict) else {}
     evidence_allocator = snapshot.get("evidence_allocator") if isinstance(snapshot.get("evidence_allocator"), dict) else {}
     fee_reward_registry = snapshot.get("fee_reward_registry") if isinstance(snapshot.get("fee_reward_registry"), dict) else {}
     research = snapshot.get("research_sleeves") if isinstance(snapshot.get("research_sleeves"), dict) else {}
@@ -1109,6 +1148,9 @@ def render_prometheus(snapshot: dict[str, Any]) -> str:
         _metric("polymarket_runtime_killed", 1 if economics["killed"] else 0),
         _metric("polymarket_v7_trade_tape_rows", snapshot["trade_tape"]["rows"]),
         _metric("polymarket_v7_trade_tape_assets", snapshot["trade_tape"]["assets"]),
+        _metric("polymarket_v7_trade_recorder_status_present", 1 if trade_recorder.get("present") else 0),
+        _metric("polymarket_v7_trade_recorder_age_seconds", trade_recorder.get("age")),
+        _metric("polymarket_v7_trade_tape_no_standard_clob_flow", 1 if _verified_no_standard_clob_flow(trade_recorder, 90.0) else 0),
         _metric("polymarket_v7_canonical_economics_promotion_ready", 1 if canonical.get("promotion_ready") else 0),
         _metric("polymarket_v7_canonical_submitted_units", canonical.get("submitted_units")),
         _metric("polymarket_v7_canonical_complete_units", canonical.get("complete_units")),

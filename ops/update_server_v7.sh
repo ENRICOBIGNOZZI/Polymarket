@@ -950,7 +950,7 @@ runtime_health(){
 import csv,json,os,sys,time
 from pathlib import Path
 root=Path(sys.argv[1]); sha=sys.argv[2]; now=int(time.time())
-required=[root/'control/runtime_status.json',root/'control/portfolio_state.json',root/'control/allocations/manifest.json',root/'control/evidence_capital_allocator.json',root/'control/fee_reward_registry.json',root/'control/research_sleeves_manifest.json',root/'control/slow_research_shadow_manifest.json',root/'control/retention_status.json',root/'osint/status.json',root/'osint/mapping_status.json',root/'shadow/sports_latency/component_status.json',root/'shadow/cross_platform/component_status.json',root/'market_open/status.json',root/'graph_rv/status.json',root/'external_fair/paper_router_status.json',root/'canonical_economics.json',root/'ledger/execution.jsonl',root/'trade_tape.csv']
+required=[root/'control/runtime_status.json',root/'control/portfolio_state.json',root/'control/allocations/manifest.json',root/'control/evidence_capital_allocator.json',root/'control/fee_reward_registry.json',root/'control/research_sleeves_manifest.json',root/'control/slow_research_shadow_manifest.json',root/'control/retention_status.json',root/'osint/status.json',root/'osint/mapping_status.json',root/'shadow/sports_latency/component_status.json',root/'shadow/cross_platform/component_status.json',root/'market_open/status.json',root/'graph_rv/status.json',root/'external_fair/paper_router_status.json',root/'canonical_economics.json',root/'ledger/execution.jsonl',root/'trade_tape.csv',root/'trade_recorder_status.json']
 assert all(p.exists() for p in required), [str(p) for p in required if not p.exists()]
 runtime=json.loads((root/'control/runtime_status.json').read_text())
 portfolio=json.loads((root/'control/portfolio_state.json').read_text())
@@ -983,7 +983,16 @@ assert int(fee_reward.get('market_count') or 0)>0 and int(fee_reward.get('execut
 assert retention.get('schema')=='polymarket_v7_retention_status_v1' and retention.get('expected_sha')==sha
 assert retention.get('paper_only') is True and retention.get('authenticated_execution') is False
 with (root/'trade_tape.csv').open(newline='',encoding='utf-8') as handle: rows=list(csv.DictReader(handle))
-assert rows and max(int(float(r.get('received_ms') or 0)) for r in rows)>0
+recorder=json.loads((root/'trade_recorder_status.json').read_text())
+if rows:
+    assert max(int(float(r.get('received_ms') or 0)) for r in rows)>0
+else:
+    assert recorder.get('schema')=='polymarket_v7_trade_recorder_status_v1'
+    assert recorder.get('paper_only') is True and recorder.get('authenticated_execution') is False and recorder.get('real_order_submission') is False
+    assert recorder.get('data_plane_healthy') is True and recorder.get('flow_regime')=='STANDARD_CLOB_NO_MATCHING_TRADES'
+    assert int(recorder.get('conditions') or 0)>0 and int(recorder.get('requests') or 0)>0
+    assert int(recorder.get('fetched') or 0)==0 and int(recorder.get('errors') or 0)==0 and int(recorder.get('truncated_batches') or 0)==0
+    assert now-int(recorder.get('timestamp_ms') or 0)/1000<=180
 PY
   [[ "$?" -eq 0 ]] || return 1
   curl -fsS http://127.0.0.1:9108/healthz >/dev/null || return 1

@@ -97,7 +97,8 @@
     "graph_rv/status.json",
     "canonical_economics.json",
     "ledger/execution.jsonl",
-    "trade_tape.csv"
+    "trade_tape.csv",
+    "trade_recorder_status.json"
   ],
   "freshness_seconds": {
     "portfolio": 30,
@@ -105,6 +106,7 @@
     "graph": 180,
     "economics": 180,
     "trade_tape": 180,
+    "trade_recorder": 180,
     "external_fair_oracle": 2
   },
   "retired_surfaces": [
