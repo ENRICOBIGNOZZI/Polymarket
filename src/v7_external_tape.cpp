@@ -56,6 +56,9 @@ struct ExternalTapeRecorder::Impl {
         if (creation_wall_ns <= 0) {
             throw std::invalid_argument("creation_wall_ns must be positive");
         }
+        if (std::filesystem::exists(path)) {
+            throw std::invalid_argument("V7 external tape path already exists");
+        }
         if (!path.parent_path().empty()) {
             std::filesystem::create_directories(path.parent_path());
         }

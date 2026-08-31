@@ -2,6 +2,7 @@
 #include "pm/v7_binance_l2_protocol.hpp"
 #include "pm/v7_coinbase_l2.hpp"
 #include "pm/v7_external_state.hpp"
+#include "pm/v7_external_tape.hpp"
 #include "pm/v7_external_ws.hpp"
 
 #include <boost/asio/connect.hpp>
@@ -816,10 +817,12 @@ private:
 int main(int argc, char** argv) {
     try {
         fs::path output;
+        fs::path tape_path;
         std::string model_sha;
         for (int index = 1; index < argc; ++index) {
             const std::string argument = argv[index];
             if (argument == "--output" && index + 1 < argc) output = argv[++index];
+            else if (argument == "--tape" && index + 1 < argc) tape_path = argv[++index];
             else if (argument == "--model-sha" && index + 1 < argc) model_sha = argv[++index];
             else throw std::invalid_argument("unknown or incomplete argument: " + argument);
         }
@@ -830,6 +833,13 @@ int main(int argc, char** argv) {
         std::signal(SIGTERM, signal_handler);
 
         constexpr std::uint64_t asset_handle = 0x425443555344ULL; // BTCUSD
+        std::unique_ptr<ExternalTapeRecorder> normalized_tape;
+        if (!tape_path.empty()) {
+            const auto session = "external-venues-" + std::to_string(::getpid());
+            normalized_tape = std::make_unique<ExternalTapeRecorder>(
+                tape_path, model_sha, "paper-v7", session, "external-venue-runtime", wall_now_ns());
+        }
+        std::uint64_t tape_sequence = 0;
         ExternalStatePolicy policy;
         ExternalAssetState state(asset_handle);
         ExternalVenueIngress binance_ingress(VenueId::BinanceSpot, asset_handle);
@@ -877,6 +887,13 @@ int main(int argc, char** argv) {
                 + deribit_ingress.drain_into(state, policy);
             const auto now_mono = monotonic_now_ns();
             const auto snapshot = state.snapshot(now_mono, policy);
+            TapeRecorderSnapshot tape_status;
+            if (normalized_tape != nullptr) {
+                (void)normalized_tape->try_record(make_tape_record(
+                    TapeRecordKind::ExternalAssetSnapshot, ++tape_sequence,
+                    now_mono, asset_handle, snapshot));
+                tape_status = normalized_tape->snapshot();
+            }
             const auto binance_status = binance.snapshot();
             const auto coinbase_status = coinbase.snapshot();
             const auto bybit_status = bybit.snapshot();
@@ -915,6 +932,13 @@ int main(int argc, char** argv) {
                 {"aggregate_trade_imbalance", snapshot.aggregate_trade_imbalance},
                 {"latest_input_receive_monotonic_ns", snapshot.latest_input_receive_monotonic_ns},
                 {"drained_last_cycle", drained},
+                {"normalized_snapshot_tape", {
+                    {"enabled", normalized_tape != nullptr},
+                    {"accepted", tape_status.accepted}, {"written", tape_status.written},
+                    {"dropped", tape_status.dropped}, {"queued", tape_status.queued},
+                    {"evidence_valid", tape_status.evidence_valid != 0},
+                    {"writer_healthy", tape_status.writer_healthy != 0},
+                }},
                 {"binance_spot_l2", l2_json(binance_l2.metrics())},
                 {"coinbase_spot_l2", l2_json(coinbase_l2.metrics())},
                 {"coinbase_spot_l2_diagnostic", coinbase_l2.diagnostic()},

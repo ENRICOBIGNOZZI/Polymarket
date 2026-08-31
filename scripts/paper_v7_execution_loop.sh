@@ -284,7 +284,8 @@ python3 scripts/v7_rtds_external_fair_monitor.py \
 pids+=("$!")
 
 "$EXTERNAL_VENUE_RUNTIME" \
-  --output "$RUN_ROOT/external_fair/external_venues.json" --model-sha "$SHA" \
+  --output "$RUN_ROOT/external_fair/external_venues.json" \
+  --tape "$RUN_ROOT/external_fair/tapes/external_venues.${SHA}.$$.bin" --model-sha "$SHA" \
   >> "$RUN_ROOT/external_fair/external_venues.log" 2>&1 &
 pids+=("$!")
 

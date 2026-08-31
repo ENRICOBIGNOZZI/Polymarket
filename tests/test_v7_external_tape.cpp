@@ -51,6 +51,14 @@ int main() {
         assert(snapshot.evidence_valid == 1);
     }
 
+    bool overwrite_rejected = false;
+    try {
+        ExternalTapeRecorder duplicate(path, sha, "run-2", "session-2", "external-fair", 1'000'001);
+    } catch (const std::invalid_argument&) {
+        overwrite_rejected = true;
+    }
+    assert(overwrite_rejected);
+
     std::ifstream input(path, std::ios::binary);
     assert(input.good());
     TapeSessionHeader header;
