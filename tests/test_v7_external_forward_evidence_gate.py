@@ -20,8 +20,12 @@ def _runtime(uptime_ns: int) -> dict[str, object]:
     return {"schema": "polymarket_v7_external_venue_runtime_v1", "paper_only": True,
             "authenticated_execution": False, "real_order_submission": False, "valid": True,
             "uptime_ns": uptime_ns, "normalized_event_tapes": event, "raw_frame_tapes": raw,
-            "binance_spot_l2": valid, "bybit_spot_l2": valid, "bybit_linear_l2": valid,
-            "bybit_linear": valid, "deribit": valid, "binance_usdm": valid}
+            "binance_spot_l2": valid, "coinbase_spot_l2": valid,
+            "bybit_spot_l2": valid, "bybit_linear_l2": valid,
+            "bybit_linear": valid, "deribit": valid, "binance_usdm": valid,
+            "venues": [{"venue": "COINBASE_SPOT", "connected": True, "healthy": True,
+                        "successful_connections": 1, "frames_received": 10,
+                        "transport_failures": 0}]}
 
 
 def test_short_clean_run_is_honestly_insufficient() -> None:
@@ -31,6 +35,7 @@ def test_short_clean_run_is_honestly_insufficient() -> None:
     assert result["engineering_valid"] is True
     assert result["state"] == "FORWARD_EVIDENCE_INSUFFICIENT"
     assert result["forward_evidence_sufficient"] is False
+    assert result["coinbase_realtime_l2_continuity"] is True
 
 
 def test_duration_and_durable_tapes_are_required() -> None:
@@ -64,3 +69,20 @@ def test_binance_usdm_market_normalized_tape_and_health_are_required() -> None:
     assert failed["engineering_valid"] is False
     assert "TAPE_MISSING:binance_usdm_market" in failed["failures"]
     assert "LIVE_SOURCE_UNHEALTHY:binance_usdm" in failed["failures"]
+
+
+def test_coinbase_realtime_l2_is_required_and_continuity_is_honest() -> None:
+    runtime = _runtime(61_000_000_000)
+    runtime["venues"] = []
+    unavailable = gate.evaluate(runtime, {"state": "OPERATIONAL_POLLING", "hft_trigger_eligible": False},
+                                {"state": "OPERATIONAL", "option_surface_valid": True}, min_duration_s=60.0)
+    assert unavailable["engineering_valid"] is False
+    assert "COINBASE_REALTIME_L2_UNHEALTHY" in unavailable["failures"]
+    assert unavailable["coinbase_realtime_l2_continuity"] is False
+
+    runtime = _runtime(61_000_000_000)
+    runtime["venues"][0]["transport_failures"] = 1  # type: ignore[index]
+    recovered = gate.evaluate(runtime, {"state": "OPERATIONAL_POLLING", "hft_trigger_eligible": False},
+                              {"state": "OPERATIONAL", "option_surface_valid": True}, min_duration_s=60.0)
+    assert recovered["engineering_valid"] is True
+    assert recovered["coinbase_realtime_l2_continuity"] is False

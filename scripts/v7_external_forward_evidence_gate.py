@@ -15,8 +15,8 @@ from typing import Any
 
 
 SCHEMA = "polymarket_v7_external_forward_evidence_status_v1"
-EVENT_SOURCES = ("binance_spot", "bybit_spot", "bybit_linear", "deribit", "binance_usdm_market")
-RAW_SOURCES = ("binance_spot", "bybit_spot", "bybit_linear", "deribit", "binance_usdm_depth", "binance_usdm_market")
+EVENT_SOURCES = ("binance_spot", "coinbase_spot", "bybit_spot", "bybit_linear", "deribit", "binance_usdm_market")
+RAW_SOURCES = ("binance_spot", "coinbase_spot", "bybit_spot", "bybit_linear", "deribit", "binance_usdm_depth", "binance_usdm_market")
 
 
 def _load(path: Path) -> dict[str, Any]:
@@ -75,10 +75,25 @@ def evaluate(runtime: dict[str, Any], coinbase_rest: dict[str, Any], deribit_res
         observations[f"raw_frames_{source}"] = count
         if not ok and failure:
             failures.append(failure)
-    for field in ("binance_spot_l2", "bybit_spot_l2", "bybit_linear_l2", "bybit_linear", "deribit", "binance_usdm"):
+    for field in ("binance_spot_l2", "coinbase_spot_l2", "bybit_spot_l2", "bybit_linear_l2", "bybit_linear", "deribit", "binance_usdm"):
         value = runtime.get(field)
         if not isinstance(value, dict) or value.get("valid") is not True or int(value.get("parse_failures") or 0) != 0:
             failures.append(f"LIVE_SOURCE_UNHEALTHY:{field}")
+    coinbase_transport = next((value for value in runtime.get("venues", [])
+                               if isinstance(value, dict) and value.get("venue") == "COINBASE_SPOT"), {})
+    coinbase_realtime_l2_live = bool(
+        isinstance(coinbase_transport, dict)
+        and coinbase_transport.get("connected") is True
+        and coinbase_transport.get("healthy") is True
+        and int(coinbase_transport.get("successful_connections") or 0) > 0
+        and int(coinbase_transport.get("frames_received") or 0) > 0
+    )
+    if not coinbase_realtime_l2_live:
+        failures.append("COINBASE_REALTIME_L2_UNHEALTHY")
+    coinbase_realtime_l2_continuity = bool(
+        coinbase_realtime_l2_live
+        and int(coinbase_transport.get("transport_failures") or 0) == 0
+    )
     if coinbase_rest.get("state") != "OPERATIONAL_POLLING" or coinbase_rest.get("hft_trigger_eligible") is not False:
         failures.append("COINBASE_POLLING_FALLBACK_UNHEALTHY")
     if deribit_rest.get("state") != "OPERATIONAL" or deribit_rest.get("option_surface_valid") is not True:
@@ -91,7 +106,7 @@ def evaluate(runtime: dict[str, Any], coinbase_rest: dict[str, Any], deribit_res
         "forward_evidence_sufficient": state == "ENGINEERING_VALIDATED",
         "runtime_duration_seconds": duration_s, "minimum_duration_seconds": min_duration_s,
         "failures": sorted(set(failures)), "observations": observations,
-        "coinbase_realtime_l2_continuity": False,
+        "coinbase_realtime_l2_continuity": coinbase_realtime_l2_continuity,
         "paper_only": True, "authenticated_execution": False, "real_order_submission": False,
         "execution_authority": False, "capital_authority": False, "oms_authority": False,
         "ledger_writer_authority": False, "promotion_authority": False,
