@@ -468,6 +468,50 @@ void test_selector_authority_fails_closed_but_never_blocks_inventory_reduction()
     assert(reducing.ask_inventory_reduction_bypass == 1);
 }
 
+void test_pending_order_cannot_impersonate_filled_inventory_for_selector_bypass() {
+    auto update = normal_update();
+    update.selector_authority_required = 1;
+    update.selector_execution_authority_mask = 0;
+    const auto model = profitable_model();
+    pm::v7::maker::QuoteSnapshot quotes;
+    pm::v7::maker::RiskSnapshot risk;
+    risk.max_quote_shares = 5.0;
+    risk.max_abs_residual_shares = 10.0;
+
+    pm::v7::maker::MakerHotPath hot;
+    pm::v7::maker::InventorySnapshot inventory;
+    // This is only a live YES BUY reservation. It can disappear or remain
+    // unfilled, so an unauthorized SELL must not be called inventory-reducing.
+    inventory.reserved_buy_shares = 5.0;
+    const auto decision = hot.on_market_update(update, inventory, quotes, risk, model);
+    assert(decision.reason == pm::v7::maker::DecisionReason::NoEconomicQuote);
+    assert(decision.intent_count == 1);
+    assert(decision.intents[0].type == pm::v7::IntentType::Withdraw);
+    assert(decision.ask_inventory_reduction_bypass == 0);
+}
+
+void test_selector_bypass_never_overhedges_filled_inventory() {
+    auto update = normal_update();
+    update.selector_authority_required = 1;
+    update.selector_execution_authority_mask = 0;
+    const auto model = profitable_model();
+    pm::v7::maker::QuoteSnapshot quotes;
+    pm::v7::maker::RiskSnapshot risk;
+    risk.max_quote_shares = 5.0;
+    risk.max_abs_residual_shares = 10.0;
+
+    pm::v7::maker::MakerHotPath hot;
+    pm::v7::maker::InventorySnapshot inventory;
+    inventory.yes_shares = 1.0;
+    inventory.reserved_buy_shares = 4.0;
+    const auto decision = hot.on_market_update(update, inventory, quotes, risk, model);
+    assert(decision.action == pm::v7::maker::Action::OneSided);
+    assert(decision.intent_count == 1);
+    assert(decision.intents[0].side == pm::v7::Side::Sell);
+    assert(decision.intents[0].quantity_microunits == 1'000'000);
+    assert(decision.ask_inventory_reduction_bypass == 1);
+}
+
 void test_partial_inventory_sizes_reducing_quote_to_available_residual() {
     pm::v7::maker::MakerHotPath hot;
     auto update = normal_update();
@@ -874,6 +918,8 @@ int main() {
     test_inventory_forces_reducing_side();
     test_selector_authority_allows_only_exact_token_action_side_cell();
     test_selector_authority_fails_closed_but_never_blocks_inventory_reduction();
+    test_pending_order_cannot_impersonate_filled_inventory_for_selector_bypass();
+    test_selector_bypass_never_overhedges_filled_inventory();
     test_partial_inventory_sizes_reducing_quote_to_available_residual();
     test_transient_no_economic_quote_cannot_cancel_before_minimum_lifetime();
     test_positive_exploration_ev_breaks_robust_cold_start();

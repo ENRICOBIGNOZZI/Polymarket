@@ -239,16 +239,27 @@ struct ExplorationChoice {
     out.quote_shares = quote_shares;
 
     const double residual = inventory.residual_shares();
+    const double filled_residual = inventory.filled_residual_shares();
     out.selector_cell_authorized = (
         update.selector_execution_authority_mask
         & execution_authority_bit(action, side)) != 0;
+    // A sibling passive order is not an executed hedge. It must count in the
+    // projected risk envelope, but it cannot grant authority to a different
+    // token/action/side cell: either leg may fill first. A bypass is therefore
+    // allowed only while the proposed side reduces both filled exposure and
+    // exposure including all live reservations.
     out.inventory_reduction_bypass =
-        (residual > kEps && side == Side::Sell)
-        || (residual < -kEps && side == Side::Buy);
+        (filled_residual > kEps && residual > kEps && side == Side::Sell)
+        || (filled_residual < -kEps && residual < -kEps && side == Side::Buy);
     if (update.selector_authority_required != 0
         && !out.selector_cell_authorized
         && !out.inventory_reduction_bypass) {
         return out;
+    }
+    if (!out.selector_cell_authorized && out.inventory_reduction_bypass) {
+        quote_shares = std::min(
+            quote_shares, std::min(std::abs(filled_residual), std::abs(residual)));
+        out.quote_shares = quote_shares;
     }
 
     if (quote_shares <= 0.0 || quote_tick <= 0) return out;
@@ -444,8 +455,12 @@ double InventorySnapshot::complete_sets() const noexcept {
     return std::max(0.0, std::min(yes_shares, no_shares));
 }
 
+double InventorySnapshot::filled_residual_shares() const noexcept {
+    return yes_shares - no_shares;
+}
+
 double InventorySnapshot::residual_shares() const noexcept {
-    return (yes_shares - no_shares) + reserved_buy_shares - reserved_sell_shares;
+    return filled_residual_shares() + reserved_buy_shares - reserved_sell_shares;
 }
 
 bool MakerModelSnapshot::valid() const noexcept {

@@ -136,6 +136,10 @@ struct InventorySnapshot {
     double pending_merge_shares = 0.0;
 
     [[nodiscard]] double complete_sets() const noexcept;
+    // Filled YES-NO exposure only. Pending passive orders remain part of
+    // residual_shares() for risk sizing, but cannot authorize an execution
+    // cell as an inventory-reduction bypass before either order has filled.
+    [[nodiscard]] double filled_residual_shares() const noexcept;
     [[nodiscard]] double residual_shares() const noexcept;
 };
 
