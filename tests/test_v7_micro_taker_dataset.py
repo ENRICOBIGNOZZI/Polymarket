@@ -11,11 +11,12 @@ sys.path.insert(0, str(ROOT / "scripts"))
 
 import v7_micro_taker_data as data  # noqa: E402
 from v7_micro_taker_worker import (  # noqa: E402
-    MODEL_FEATURE_DIM, canonical_live_flow_features, causal_model_rows,
+    MODEL_FEATURE_DIM, MODEL_SPEC_VERSION, canonical_live_flow_features,
+    causal_model_rows,
     chronological_oos_diagnostics, executable_strategy_oos,
     fixed_forward_oos_diagnostics,
-    load_or_freeze_model_challenger, model_validity, sample_diagnostics,
-    sample_key,
+    load_or_freeze_model_challenger, model_prediction, model_validity,
+    sample_diagnostics, sample_key,
 )
 
 
@@ -57,6 +58,8 @@ def test_degenerate_samples_invalidate_model_instead_of_false_low_sigma() -> Non
     samples = [
         {
             "sample_key": f"m:{index}", "market_id": "m", "y": 0.0,
+            "yes_executable_net_edge": 0.0,
+            "no_executable_net_edge": 0.0,
             "x": [1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0],
         }
         for index in range(50)
@@ -76,6 +79,7 @@ def test_novel_nonzero_flow_and_targets_can_make_dataset_valid() -> None:
             "sample_key": f"m:{index}", "market_id": f"m-{index % 5}",
             "event_id": f"e-{index % 5}", "ts": 1_000 + index * 30,
             "y": 0.001 if index % 2 else -0.001,
+            **executable_labels(0.001 if index % 2 else -0.001),
             "x": [1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.2, -0.1],
         }
         for index in range(240)
@@ -91,6 +95,7 @@ def test_correlated_burst_cannot_unlock_capital_from_raw_row_count() -> None:
             "sample_key": f"m:{index}", "market_id": f"m-{index % 20}",
             "event_id": f"e-{index % 20}", "ts": 1_000,
             "y": 0.001 if index % 2 else -0.001,
+            **executable_labels(0.001 if index % 2 else -0.001),
             "x": [1.0, 0.1, 0.0, 0.0, 0.0, 0.0, 0.2, -0.1],
         }
         for index in range(500)
@@ -147,7 +152,8 @@ def test_executable_oos_equal_weights_event_time_and_requires_2x_cost_profit() -
             **executable_labels(target, stressed=-0.001),
         }
         rows.append(row)
-        predictions.append(0.01)
+        predictions.append({"YES": 0.01, "NO": -0.01,
+                            "side": "YES", "edge": 0.01})
     diagnostics = executable_strategy_oos(
         rows, predictions, horizon_seconds=30)
     assert diagnostics["mean_executable_net_edge"] > 0.0
@@ -158,7 +164,7 @@ def test_executable_oos_equal_weights_event_time_and_requires_2x_cost_profit() -
 
     burst_rows = [{**rows[0], "market_id": f"copy-{index}"} for index in range(100)]
     burst = executable_strategy_oos(
-        burst_rows, [0.01] * len(burst_rows), horizon_seconds=30)
+        burst_rows, [predictions[0]] * len(burst_rows), horizon_seconds=30)
     assert burst["event_time_clusters"] == 1
     assert "INSUFFICIENT_EXECUTABLE_EVENT_TIME_CLUSTERS" in burst["reasons"]
 
@@ -196,10 +202,11 @@ def test_frozen_challenger_uses_only_post_selection_forward_rows() -> None:
     assert readiness["ready"]
     assert challenger is not None
     boundary = int(challenger["validation_start_ts"])
-    beta = list(challenger["beta"])
+    yes_beta = list(challenger["yes_beta"])
+    no_beta = list(challenger["no_beta"])
     threshold = float(challenger["prediction_activity_threshold"])
     pre_only = fixed_forward_oos_diagnostics(
-        model_rows, beta=beta, threshold=threshold,
+        model_rows, yes_beta=yes_beta, no_beta=no_beta, threshold=threshold,
         validation_start_ts=boundary, horizon_seconds=30)
     assert pre_only["oos_samples"] == 0
     assert "INSUFFICIENT_FORWARD_OOS_SAMPLES" in pre_only["reasons"]
@@ -219,13 +226,95 @@ def test_frozen_challenger_uses_only_post_selection_forward_rows() -> None:
         })
     combined = causal_model_rows(rows + future)
     forward = fixed_forward_oos_diagnostics(
-        combined, beta=beta, threshold=threshold,
+        combined, yes_beta=yes_beta, no_beta=no_beta, threshold=threshold,
         validation_start_ts=boundary, horizon_seconds=30)
     assert forward["oos_samples"] == 60
     assert forward["independent_time_buckets"] >= 12
     assert forward["unique_events"] >= 12
     assert forward["valid"]
-    assert len(beta) == MODEL_FEATURE_DIM
+    assert len(yes_beta) == len(no_beta) == MODEL_FEATURE_DIM
+
+
+def test_dual_heads_learn_dense_edges_when_sparse_action_target_is_zero() -> None:
+    rows = []
+    for index in range(160):
+        signal = -1.0 if index % 2 else 1.0
+        rows.append({
+            "sample_key": f"dense:{index}",
+            "market_id": f"m-{index % 20}",
+            "event_id": f"e-{index % 20}",
+            "ts": 1_000 + index * 2,
+            "mid": 0.5, "spread": 0.01,
+            "x": [1.0, signal, 0.0, 0.0, 0.0, 0.0, 0.2, -0.1],
+            # The old sparse target discarded every one of these observations.
+            "y": 0.0,
+            "yes_executable_net_edge": -0.010 + 0.003 * signal,
+            "no_executable_net_edge": -0.012 - 0.002 * signal,
+            "yes_cost_stress_2x_net_edge": -0.012 + 0.003 * signal,
+            "no_cost_stress_2x_net_edge": -0.014 - 0.002 * signal,
+            "label_probe_shares": 5.0,
+        })
+    diagnostics = sample_diagnostics(rows)
+    assert diagnostics["labeled_samples"] == len(rows)
+    assert diagnostics["nonzero_labeled_samples"] == len(rows)
+    assert diagnostics["target_variance"] > 0.0
+
+    model_rows = causal_model_rows(rows)
+    challenger, readiness = load_or_freeze_model_challenger(
+        {}, model_rows, horizon_seconds=30, selected_at_ts=9_999)
+    assert readiness["ready"]
+    assert challenger is not None
+    prediction = model_prediction(
+        model_rows[-1]["x"], challenger["yes_beta"], challenger["no_beta"], 0.0)
+    assert abs(prediction["YES"]) > 1e-6
+    assert abs(prediction["NO"]) > 1e-6
+    assert prediction["side"] is None
+    assert prediction["edge"] == 0.0
+
+
+def test_dual_prediction_selects_best_positive_side_only() -> None:
+    x = [1.0] + [0.0] * (MODEL_FEATURE_DIM - 1)
+    yes = [0.020] + [0.0] * (MODEL_FEATURE_DIM - 1)
+    no = [0.010] + [0.0] * (MODEL_FEATURE_DIM - 1)
+    prediction = model_prediction(x, yes, no, 0.0)
+    assert prediction["side"] == "YES"
+    assert prediction["edge"] > 0.0
+
+    both_negative = model_prediction(
+        x,
+        [-0.010] + [0.0] * (MODEL_FEATURE_DIM - 1),
+        [-0.020] + [0.0] * (MODEL_FEATURE_DIM - 1),
+        0.0,
+    )
+    assert both_negative["side"] is None
+    assert both_negative["edge"] == 0.0
+
+
+def test_legacy_single_head_challenger_is_never_loaded() -> None:
+    rows = []
+    for index in range(100):
+        signal = -1.0 if index % 2 else 1.0
+        rows.append({
+            "sample_key": f"legacy:{index}", "market_id": f"m-{index % 15}",
+            "event_id": f"e-{index % 15}", "ts": 1_000 + index * 2,
+            "mid": 0.5, "spread": 0.01,
+            "x": [1.0, signal, 0.0, 0.0, 0.0, 0.0, 0.2, -0.1],
+            "y": 0.0,
+            **executable_labels(0.002 * signal),
+        })
+    stale = {"model_challenger": {
+        "model_spec_version": "executable_net_edge_sparse_ridge_v4",
+        "feature_dimension": MODEL_FEATURE_DIM,
+        "beta": [99.0] * MODEL_FEATURE_DIM,
+        "prediction_activity_threshold": 0.0,
+        "validation_start_ts": 1,
+    }}
+    challenger, readiness = load_or_freeze_model_challenger(
+        stale, causal_model_rows(rows), horizon_seconds=30, selected_at_ts=9_999)
+    assert readiness["reason"] == "CHALLENGER_FROZEN"
+    assert challenger is not None
+    assert challenger["model_spec_version"] == MODEL_SPEC_VERSION
+    assert "beta" not in challenger
 
 
 class DatasetReadinessTests(unittest.TestCase):
@@ -257,6 +346,15 @@ class DatasetReadinessTests(unittest.TestCase):
 
     def test_frozen_forward_challenger(self) -> None:
         test_frozen_challenger_uses_only_post_selection_forward_rows()
+
+    def test_dense_dual_targets(self) -> None:
+        test_dual_heads_learn_dense_edges_when_sparse_action_target_is_zero()
+
+    def test_dual_side_selection(self) -> None:
+        test_dual_prediction_selects_best_positive_side_only()
+
+    def test_legacy_challenger_rejected(self) -> None:
+        test_legacy_single_head_challenger_is_never_loaded()
 
 
 class CanonicalLiveFlowTests(unittest.TestCase):

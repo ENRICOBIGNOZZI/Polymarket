@@ -204,7 +204,8 @@ class MicroTakerRoundTripTest(unittest.TestCase):
                 "model_challenger": {
                     "model_spec_version": worker.MODEL_SPEC_VERSION,
                     "feature_dimension": worker.MODEL_FEATURE_DIM,
-                    "beta": [0.0] * worker.MODEL_FEATURE_DIM,
+                    "yes_beta": [0.0] * worker.MODEL_FEATURE_DIM,
+                    "no_beta": [0.0] * worker.MODEL_FEATURE_DIM,
                 },
                 # Execution state must never be returned by the helper.
                 "cash": 1.0, "positions": {"unsafe": {}},

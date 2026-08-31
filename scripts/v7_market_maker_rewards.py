@@ -32,7 +32,64 @@ EXECUTION_AUTHORITY_SEMANTICS = "token_action_side_v2"
 
 
 def _control_exploration_cell(row: dict[str, Any]) -> dict[str, Any]:
-    """Return one deterministic cold-start cell, never a market-wide permit."""
+    """Return the best observed sub-threshold flow cell or a cold-start cell.
+
+    The C++ runtime still requires positive point EV before it can quote this
+    exact token/action/side.  Here we only stop cold-start exploration from
+    choosing the opposite side of the sole fresh aggressor flow.
+    """
+    opportunities = (
+        row.get("quote_opportunities")
+        if isinstance(row.get("quote_opportunities"), list) else [])
+    best: tuple[float, str, dict[str, Any]] | None = None
+    for opportunity in opportunities:
+        if not isinstance(opportunity, dict):
+            continue
+        token_id = str(opportunity.get("token_id") or "")
+        outcome = str(opportunity.get("outcome") or "").upper()
+        quote_side = str(opportunity.get("quote_side") or "").upper()
+        join_probability = finite(
+            opportunity.get("projected_join_fill_probability"), 0.0)
+        improve_probability = finite(
+            opportunity.get("projected_improve1_fill_probability"), 0.0)
+        improve_available = opportunity.get("improve1_available") is True
+        if improve_available and improve_probability > join_probability:
+            action = "IMPROVE1"
+            fill_probability = improve_probability
+            queue_probability = 1.0
+        else:
+            action = "JOIN"
+            fill_probability = join_probability
+            queue_probability = finite(
+                opportunity.get("projected_join_queue_depletion_probability"),
+                0.0,
+            )
+        if (
+            not token_id or outcome not in {"YES", "NO"}
+            or quote_side not in {"BUY", "SELL"}
+            or opportunity.get("book_evidence_valid") is not True
+            or opportunity.get("opposite_flow_is_fresh") is not True
+            or fill_probability <= 0.0
+        ):
+            continue
+        cell = {
+            "outcome": outcome,
+            "token_id": token_id,
+            "action": action,
+            "quote_side": quote_side,
+            "authority_basis": "POSITIVE_FLOW_CONTROL",
+            "projected_flow_reach_probability": max(0.0, finite(
+                opportunity.get("projected_flow_reach_probability"), 0.0)),
+            "projected_queue_depletion_probability": max(
+                0.0, queue_probability),
+            "projected_fill_probability": max(0.0, fill_probability),
+        }
+        identity = "|".join((token_id, action, quote_side))
+        candidate = (fill_probability, identity, cell)
+        if best is None or candidate[:2] > best[:2]:
+            best = candidate
+    if best is not None:
+        return best[2]
     return {
         "outcome": "YES",
         "token_id": str(row.get("yes_token") or ""),
@@ -46,19 +103,32 @@ def _control_exploration_cell(row: dict[str, Any]) -> dict[str, Any]:
 
 
 def _authorize_one_control_cell(rows: list[dict[str, Any]]) -> int:
-    """Authorize exactly one research cell when no causal-flow cell exists."""
+    """Authorize exactly one best research cell when no full flow cell exists."""
     if any(row.get("authorized_execution_cells") for row in rows):
         return 0
+    candidates: list[tuple[float, str, dict[str, Any], dict[str, Any]]] = []
     for row in rows:
         cell = _control_exploration_cell(row)
         if not cell["token_id"]:
             continue
-        row["control_exploration_authorized"] = True
-        row["execution_role"] = "COLD_START_CONTROL"
-        row["authorized_execution_cells"] = [cell]
-        row["authorized_execution_cell_count"] = 1
-        return 1
-    return 0
+        probability = finite(cell.get("projected_fill_probability"), 0.0)
+        identity = "|".join((
+            str(row.get("market_id") or ""), str(cell["token_id"]),
+            str(cell["action"]), str(cell["quote_side"]),
+        ))
+        candidates.append((probability, identity, row, cell))
+    if not candidates:
+        return 0
+    # Highest measured reach/depletion opportunity wins. Deterministic identity
+    # ordering keeps the zero-flow cold start reproducible.
+    probability, _identity, row, cell = sorted(
+        candidates, key=lambda item: (-item[0], item[1]))[0]
+    row["control_exploration_authorized"] = True
+    row["execution_role"] = (
+        "POSITIVE_FLOW_CONTROL" if probability > 0.0 else "COLD_START_CONTROL")
+    row["authorized_execution_cells"] = [cell]
+    row["authorized_execution_cell_count"] = 1
+    return 1
 
 
 def _annotate_inventory_seed_authority(rows: list[dict[str, Any]]) -> None:
@@ -1191,7 +1261,7 @@ def _recent_flow_snapshot(
         "minimum_side_prints_2m": minimum_side_prints_2m,
         "maximum_last_side_age_ms": maximum_last_side_age_ms,
         "markets": selected,
-        "note": "PAPER maker observes the configured universe but execution is fail-closed to selector-authorized token/action/side cells. Fresh opposite flow may authorize multiple economic placements; if none exists, exactly one JOIN/YES/BUY control cell may collect cold-start evidence. Rewards remain zero unless verified.",
+        "note": "PAPER maker observes the configured universe but execution is fail-closed to selector-authorized token/action/side cells. Fresh opposite flow may authorize multiple economic placements; if none clears the main fillability threshold, exactly one best sub-threshold fresh-flow cell receives control authority, falling back to deterministic JOIN/YES/BUY only when no positive flow cell exists. The runtime still requires positive point EV. Rewards remain zero unless verified.",
     }
 
 

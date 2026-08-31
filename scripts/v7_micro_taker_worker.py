@@ -26,7 +26,7 @@ MODEL_TRAINING_WINDOW_SECONDS = 300
 MODEL_RIDGE = 1_000.0
 MODEL_PREDICTION_SHRINKAGE = 0.50
 MODEL_ACTIVE_QUANTILE = 0.90
-MODEL_SPEC_VERSION = "executable_net_edge_sparse_ridge_v4"
+MODEL_SPEC_VERSION = "dual_side_continuous_executable_net_edge_ridge_v5"
 DATASET_VERSION = 3
 DATASET_LINEAGE = "EVENT_NOVEL_EXECUTABLE_ROUND_TRIP_V3"
 COMPLETE_ROUND_TRIP_EXECUTION_CONTRACT = "complete_round_trip_executable_ev"
@@ -80,6 +80,10 @@ def latest_compatible_archived_dataset(run_dir: Path) -> tuple[dict[str, Any], s
             and challenger.get("model_spec_version") == MODEL_SPEC_VERSION
             and int(_finite(challenger.get("feature_dimension"), 0.0))
                 == MODEL_FEATURE_DIM
+            and isinstance(challenger.get("yes_beta"), list)
+            and len(challenger["yes_beta"]) == MODEL_FEATURE_DIM
+            and isinstance(challenger.get("no_beta"), list)
+            and len(challenger["no_beta"]) == MODEL_FEATURE_DIM
         ):
             restored["model_challenger"] = challenger
         return restored, str(path)
@@ -172,15 +176,17 @@ def _finite(value: Any, default: float = math.nan) -> float:
     return out if math.isfinite(out) else default
 
 
-def residual_sigma(samples: list[dict[str, Any]], beta: list[float]) -> float:
+def residual_sigma(
+    samples: list[dict[str, Any]], beta: list[float], target_key: str,
+) -> float:
     residuals: list[float] = []
     p = len(beta)
     for row in samples[-10000:]:
-        if row.get("y") is None:
+        if row.get(target_key) is None:
             continue
         try:
             x = [float(value) for value in row["x"]]
-            y = float(row["y"])
+            y = float(row[target_key])
         except (KeyError, TypeError, ValueError):
             continue
         if len(x) != p:
@@ -205,12 +211,28 @@ def sample_key(market_id: str, yes: base.Book, no: base.Book) -> str:
     ))
 
 
+def _side_target(row: dict[str, Any], side: str) -> float | None:
+    value = _finite(row.get(f"{side.lower()}_executable_net_edge"))
+    return value if math.isfinite(value) else None
+
+
+def _has_dual_side_target(row: dict[str, Any]) -> bool:
+    return _side_target(row, "YES") is not None and _side_target(row, "NO") is not None
+
+
 def sample_diagnostics(samples: list[dict[str, Any]], *, horizon_seconds: int = 30) -> dict[str, Any]:
-    labeled = [row for row in samples if row.get("y") is not None]
-    targets = [_finite(row.get("y")) for row in labeled]
-    targets = [value for value in targets if math.isfinite(value)]
-    nonzero = sum(abs(value) > 1e-12 for value in targets)
-    target_variance = statistics.pvariance(targets) if len(targets) >= 2 else 0.0
+    labeled = [row for row in samples if _has_dual_side_target(row)]
+    yes_targets = [float(_side_target(row, "YES")) for row in labeled]
+    no_targets = [float(_side_target(row, "NO")) for row in labeled]
+    nonzero = sum(
+        abs(yes) > 1e-12 or abs(no) > 1e-12
+        for yes, no in zip(yes_targets, no_targets)
+    )
+    yes_variance = (
+        statistics.pvariance(yes_targets) if len(yes_targets) >= 2 else 0.0)
+    no_variance = (
+        statistics.pvariance(no_targets) if len(no_targets) >= 2 else 0.0)
+    target_variance = max(yes_variance, no_variance)
     flow_nonzero = sum(
         isinstance(row.get("x"), list) and len(row["x"]) == FLOW_FEATURE_DIM
         and (abs(_finite(row["x"][-2], 0.0)) > 1e-12
@@ -233,10 +255,13 @@ def sample_diagnostics(samples: list[dict[str, Any]], *, horizon_seconds: int = 
     }
     return {
         "raw_samples": len(samples),
-        "labeled_samples": len(targets),
+        "labeled_samples": len(labeled),
         "nonzero_labeled_samples": nonzero,
-        "nonzero_label_fraction": nonzero / len(targets) if targets else 0.0,
+        "nonzero_label_fraction": nonzero / len(labeled) if labeled else 0.0,
         "target_variance": target_variance,
+        "yes_target_variance": yes_variance,
+        "no_target_variance": no_variance,
+        "target_contract": "dense_continuous_yes_and_no_executable_net_edge",
         "flow_nonzero_samples": flow_nonzero,
         "flow_nonzero_fraction": flow_nonzero / len(samples) if samples else 0.0,
         "effective_sample_size": len(unique_keys),
@@ -265,19 +290,22 @@ def model_validity(
 
 
 def prediction_activity_threshold(
-    samples: list[dict[str, Any]], beta: list[float],
+    samples: list[dict[str, Any]], yes_beta: list[float], no_beta: list[float],
     quantile: float = MODEL_ACTIVE_QUANTILE,
     *, horizon_seconds: int = 30,
 ) -> float:
     eligible = [row for row in samples if isinstance(row.get("x"), list)
-                and len(row["x"]) == len(beta)]
+                and len(row["x"]) == len(yes_beta) == len(no_beta)]
     if not eligible:
         return math.inf
     cluster_counts: dict[tuple[str, int], int] = defaultdict(int)
     for row in eligible:
         cluster_counts[_independent_cluster_key(row, horizon_seconds)] += 1
     weighted = sorted((
-        abs(sum(a * b for a, b in zip(beta, row["x"]))),
+        max(
+            sum(a * b for a, b in zip(yes_beta, row["x"])),
+            sum(a * b for a, b in zip(no_beta, row["x"])),
+        ),
         1.0 / cluster_counts[_independent_cluster_key(row, horizon_seconds)],
     ) for row in eligible)
     target_weight = min(1.0, max(0.0, quantile)) * sum(
@@ -286,24 +314,43 @@ def prediction_activity_threshold(
     for magnitude, weight in weighted:
         cumulative += weight
         if cumulative >= target_weight:
-            return magnitude
-    return weighted[-1][0]
+            return max(0.0, magnitude)
+    return max(0.0, weighted[-1][0])
 
 
-def model_prediction(x: list[float], beta: list[float], threshold: float) -> float:
-    raw = sum(a * b for a, b in zip(beta, x))
-    if not math.isfinite(raw) or abs(raw) < max(0.0, threshold):
-        return 0.0
-    return MODEL_PREDICTION_SHRINKAGE * raw
+def model_prediction(
+    x: list[float], yes_beta: list[float], no_beta: list[float], threshold: float,
+) -> dict[str, Any]:
+    """Predict both executable edges and activate only the better positive side."""
+    raw = {
+        "YES": sum(a * b for a, b in zip(yes_beta, x)),
+        "NO": sum(a * b for a, b in zip(no_beta, x)),
+    }
+    if not all(math.isfinite(value) for value in raw.values()):
+        return {"YES": 0.0, "NO": 0.0, "side": None, "edge": 0.0}
+    side = max(("YES", "NO"), key=lambda name: raw[name])
+    active = (
+        raw[side] > 1e-12
+        and raw[side] + 1e-12 >= max(0.0, threshold)
+    )
+    shrunk = {
+        name: MODEL_PREDICTION_SHRINKAGE * value for name, value in raw.items()
+    }
+    return {
+        **shrunk,
+        "side": side if active else None,
+        "edge": shrunk[side] if active else 0.0,
+    }
 
 
 def _realized_executable_action(
-    row: dict[str, Any], prediction: float,
+    row: dict[str, Any], prediction: dict[str, Any],
 ) -> tuple[float, float, float] | None:
     """Return base edge, 2x-cost edge and probe PnL for the chosen side."""
-    if not math.isfinite(prediction) or abs(prediction) <= 1e-12:
+    selected = prediction.get("side") if isinstance(prediction, dict) else None
+    if selected not in {"YES", "NO"}:
         return None
-    side = "yes" if prediction > 0.0 else "no"
+    side = str(selected).lower()
     edge = _finite(row.get(f"{side}_executable_net_edge"))
     stressed_edge = _finite(row.get(f"{side}_cost_stress_2x_net_edge"))
     pnl = _finite(row.get(f"{side}_executable_net_pnl_per_share"))
@@ -324,7 +371,7 @@ def _realized_executable_action(
 
 
 def executable_strategy_oos(
-    rows: list[dict[str, Any]], predictions: list[float], *,
+    rows: list[dict[str, Any]], predictions: list[dict[str, Any]], *,
     horizon_seconds: int, minimum_active_rows: int = 20,
     minimum_clusters: int = 12,
 ) -> dict[str, Any]:
@@ -339,10 +386,11 @@ def executable_strategy_oos(
     side_counts = {"YES": 0, "NO": 0}
     bucket_seconds = max(1, int(horizon_seconds))
     for row, prediction in zip(rows, predictions):
-        if not math.isfinite(prediction) or abs(prediction) <= 1e-12:
+        selected = prediction.get("side") if isinstance(prediction, dict) else None
+        if selected not in {"YES", "NO"}:
             continue
         active_rows += 1
-        side_counts["YES" if prediction > 0.0 else "NO"] += 1
+        side_counts[str(selected)] += 1
         outcome = _realized_executable_action(row, prediction)
         event = str(row.get("event_id") or row.get("market_id") or "")
         ts = int(_finite(row.get("ts"), 0.0))
@@ -456,6 +504,29 @@ def _prediction_diagnostics(
     }
 
 
+def _dual_prediction_diagnostics(
+    rows: list[dict[str, Any]], predictions: list[dict[str, Any]],
+) -> dict[str, Any]:
+    yes_targets = [float(_side_target(row, "YES")) for row in rows]
+    no_targets = [float(_side_target(row, "NO")) for row in rows]
+    yes_predictions = [float(prediction["YES"]) for prediction in predictions]
+    no_predictions = [float(prediction["NO"]) for prediction in predictions]
+    yes = _prediction_diagnostics(yes_targets, yes_predictions)
+    no = _prediction_diagnostics(no_targets, no_predictions)
+    combined = _prediction_diagnostics(
+        yes_targets + no_targets, yes_predictions + no_predictions)
+    head_sigmas = [
+        value for value in (
+            yes.get("oos_residual_sigma"), no.get("oos_residual_sigma"))
+        if isinstance(value, (int, float)) and math.isfinite(float(value))
+    ]
+    combined["oos_residual_sigma"] = max(head_sigmas) if head_sigmas else None
+    combined["heads"] = {"YES": yes, "NO": no}
+    combined["prediction_contract"] = (
+        "two_continuous_side_edges_then_argmax_positive")
+    return combined
+
+
 def chronological_oos_diagnostics(
     samples: list[dict[str, Any]], *, horizon_seconds: int,
     minimum_train_samples: int = 120, minimum_oos_samples: int = 40,
@@ -463,12 +534,8 @@ def chronological_oos_diagnostics(
     """Purged OOS proof on realized executable actions, never midpoint fit."""
     rows = []
     for row in causal_model_rows(samples):
-        try:
-            y = float(row["y"])
-        except (KeyError, TypeError, ValueError, OverflowError):
-            continue
-        if len(row["x"]) == MODEL_FEATURE_DIM and math.isfinite(y):
-            rows.append({**row, "y": y})
+        if len(row["x"]) == MODEL_FEATURE_DIM and _has_dual_side_target(row):
+            rows.append(row)
     result: dict[str, Any] = {
         "valid": False, "reasons": [], "train_samples": 0, "oos_samples": 0,
         "purge_seconds": max(1, int(horizon_seconds)), "baseline_mse": None,
@@ -502,16 +569,19 @@ def chronological_oos_diagnostics(
     if reasons:
         result["reasons"] = reasons
         return result
-    beta = solve_ridge(
+    yes_beta = solve_ridge(
         train, MODEL_RIDGE, MODEL_FEATURE_DIM,
-        horizon_seconds=horizon_seconds)
+        target_key="yes_executable_net_edge", horizon_seconds=horizon_seconds)
+    no_beta = solve_ridge(
+        train, MODEL_RIDGE, MODEL_FEATURE_DIM,
+        target_key="no_executable_net_edge", horizon_seconds=horizon_seconds)
     activity_threshold = prediction_activity_threshold(
-        train, beta, horizon_seconds=horizon_seconds)
+        train, yes_beta, no_beta, horizon_seconds=horizon_seconds)
     predictions = [
-        model_prediction(row["x"], beta, activity_threshold) for row in holdout
+        model_prediction(row["x"], yes_beta, no_beta, activity_threshold)
+        for row in holdout
     ]
-    targets = [float(row["y"]) for row in holdout]
-    predictive = _prediction_diagnostics(targets, predictions)
+    predictive = _dual_prediction_diagnostics(holdout, predictions)
     executable = executable_strategy_oos(
         holdout, predictions, horizon_seconds=horizon_seconds)
     reasons.extend(f"OOS_{reason}" for reason in executable["reasons"])
@@ -531,17 +601,22 @@ def chronological_oos_diagnostics(
         ]
         if len(fold_train) < minimum_train_samples:
             continue
-        fold_beta = solve_ridge(
+        fold_yes_beta = solve_ridge(
             fold_train, MODEL_RIDGE, MODEL_FEATURE_DIM,
-            horizon_seconds=horizon_seconds)
+            target_key="yes_executable_net_edge", horizon_seconds=horizon_seconds)
+        fold_no_beta = solve_ridge(
+            fold_train, MODEL_RIDGE, MODEL_FEATURE_DIM,
+            target_key="no_executable_net_edge", horizon_seconds=horizon_seconds)
         fold_threshold = prediction_activity_threshold(
-            fold_train, fold_beta, horizon_seconds=horizon_seconds)
+            fold_train, fold_yes_beta, fold_no_beta,
+            horizon_seconds=horizon_seconds)
         fold_predictions = [
-            model_prediction(row["x"], fold_beta, fold_threshold)
+            model_prediction(
+                row["x"], fold_yes_beta, fold_no_beta, fold_threshold)
             for row in fold_holdout
         ]
-        fold_targets = [float(row["y"]) for row in fold_holdout]
-        fold_predictive = _prediction_diagnostics(fold_targets, fold_predictions)
+        fold_predictive = _dual_prediction_diagnostics(
+            fold_holdout, fold_predictions)
         fold_executable = executable_strategy_oos(
             fold_holdout, fold_predictions, horizon_seconds=horizon_seconds,
             minimum_active_rows=max(10, minimum_oos_samples // 2),
@@ -575,21 +650,23 @@ def chronological_oos_diagnostics(
 
 
 def fixed_forward_oos_diagnostics(
-    rows: list[dict[str, Any]], *, beta: list[float], threshold: float,
+    rows: list[dict[str, Any]], *, yes_beta: list[float], no_beta: list[float],
+    threshold: float,
     validation_start_ts: int, horizon_seconds: int,
     minimum_oos_samples: int = 40,
 ) -> dict[str, Any]:
     """Evaluate a frozen challenger only on origins created after selection."""
     challenger_valid = (
-        len(beta) == MODEL_FEATURE_DIM
-        and all(math.isfinite(value) for value in beta)
+        len(yes_beta) == MODEL_FEATURE_DIM == len(no_beta)
+        and all(math.isfinite(value) for value in yes_beta + no_beta)
         and math.isfinite(threshold)
         and threshold >= 0.0
         and validation_start_ts > 0
     )
     holdout = [
         row for row in rows
-        if row.get("y") is not None and int(row.get("ts") or 0) > validation_start_ts
+        if _has_dual_side_target(row)
+        and int(row.get("ts") or 0) > validation_start_ts
     ]
     result: dict[str, Any] = {
         "valid": False,
@@ -628,9 +705,11 @@ def fixed_forward_oos_diagnostics(
         result["reasons"] = reasons
         return result
 
-    predictions = [model_prediction(row["x"], beta, threshold) for row in holdout]
-    targets = [float(row["y"]) for row in holdout]
-    predictive = _prediction_diagnostics(targets, predictions)
+    predictions = [
+        model_prediction(row["x"], yes_beta, no_beta, threshold)
+        for row in holdout
+    ]
+    predictive = _dual_prediction_diagnostics(holdout, predictions)
     executable = executable_strategy_oos(
         holdout, predictions, horizon_seconds=horizon_seconds)
     reasons.extend(f"FORWARD_OOS_{reason}" for reason in executable["reasons"])
@@ -656,20 +735,24 @@ def load_or_freeze_model_challenger(
     prior = state.get("model_challenger")
     if isinstance(prior, dict):
         try:
-            prior_beta = [float(value) for value in prior["beta"]]
+            prior_yes_beta = [float(value) for value in prior["yes_beta"]]
+            prior_no_beta = [float(value) for value in prior["no_beta"]]
             prior_threshold = float(prior["prediction_activity_threshold"])
             prior_boundary = int(prior["validation_start_ts"])
         except (KeyError, TypeError, ValueError, OverflowError):
-            prior_beta, prior_threshold, prior_boundary = [], math.nan, 0
+            prior_yes_beta, prior_no_beta = [], []
+            prior_threshold, prior_boundary = math.nan, 0
         if (
             prior.get("model_spec_version") == MODEL_SPEC_VERSION
-            and len(prior_beta) == MODEL_FEATURE_DIM
-            and all(math.isfinite(value) for value in prior_beta)
+            and len(prior_yes_beta) == MODEL_FEATURE_DIM == len(prior_no_beta)
+            and all(math.isfinite(value)
+                    for value in prior_yes_beta + prior_no_beta)
             and math.isfinite(prior_threshold) and prior_threshold >= 0.0
             and prior_boundary > 0
         ):
             loaded = dict(prior)
-            loaded["beta"] = prior_beta
+            loaded["yes_beta"] = prior_yes_beta
+            loaded["no_beta"] = prior_no_beta
             loaded["prediction_activity_threshold"] = prior_threshold
             loaded["validation_start_ts"] = prior_boundary
             return loaded, {
@@ -682,7 +765,7 @@ def load_or_freeze_model_challenger(
     purge = max(1, int(horizon_seconds))
     train = [
         row for row in rows
-        if row.get("y") is not None
+        if _has_dual_side_target(row)
         and int(row.get("ts") or 0) + purge < boundary
         and int(row.get("ts") or 0) >= boundary - MODEL_TRAINING_WINDOW_SECONDS
     ]
@@ -695,13 +778,16 @@ def load_or_freeze_model_challenger(
     }
     if boundary <= 0 or len(train) < 40:
         return None, readiness
-    beta = solve_ridge(
+    yes_beta = solve_ridge(
         train, MODEL_RIDGE, MODEL_FEATURE_DIM,
-        horizon_seconds=horizon_seconds)
+        target_key="yes_executable_net_edge", horizon_seconds=horizon_seconds)
+    no_beta = solve_ridge(
+        train, MODEL_RIDGE, MODEL_FEATURE_DIM,
+        target_key="no_executable_net_edge", horizon_seconds=horizon_seconds)
     threshold = prediction_activity_threshold(
-        train, beta, horizon_seconds=horizon_seconds)
-    if (len(beta) != MODEL_FEATURE_DIM
-            or not all(math.isfinite(value) for value in beta)
+        train, yes_beta, no_beta, horizon_seconds=horizon_seconds)
+    if (len(yes_beta) != MODEL_FEATURE_DIM or len(no_beta) != MODEL_FEATURE_DIM
+            or not all(math.isfinite(value) for value in yes_beta + no_beta)
             or not math.isfinite(threshold)):
         readiness["reason"] = "INVALID_CHALLENGER_FIT"
         return None, readiness
@@ -718,7 +804,8 @@ def load_or_freeze_model_challenger(
         "prediction_shrinkage": MODEL_PREDICTION_SHRINKAGE,
         "active_quantile": MODEL_ACTIVE_QUANTILE,
         "prediction_activity_threshold": threshold,
-        "beta": beta,
+        "yes_beta": yes_beta,
+        "no_beta": no_beta,
     }
     readiness.update({"ready": True, "reason": "CHALLENGER_FROZEN"})
     return challenger, readiness
@@ -734,15 +821,16 @@ def _independent_cluster_key(
 
 def solve_ridge(
     samples: list[dict[str, Any]], ridge: float, feature_dim: int, *,
+    target_key: str,
     horizon_seconds: int = 30,
 ) -> list[float]:
     labeled: list[dict[str, Any]] = []
     for row in samples:
-        if row.get("y") is None:
+        if row.get(target_key) is None:
             continue
         try:
             x = [float(v) for v in row["x"]]
-            float(row["y"])
+            float(row[target_key])
         except (KeyError, TypeError, ValueError):
             continue
         if len(x) == feature_dim:
@@ -779,7 +867,7 @@ def solve_ridge(
             (raw_x[index] - means[index]) / scales[index]
             for index in range(1, p)
         ]
-        target = float(row["y"])
+        target = float(row[target_key])
         for i in range(p):
             rhs[i] += weight * x[i] * target
             for j in range(p):
@@ -1092,6 +1180,7 @@ def depth_adjusted_economics(
 
 def executable_edge_candidate(
     *, book: economics.BookSnapshot, predicted_net_edge: float,
+    predicted_side: str | None = None,
     prediction_sigma_net_edge: float, fee: economics.FeeSpec,
     horizon_seconds: int, now: int, slippage_bps_per_leg: float,
     uncertainty_z: float, adverse_markout_penalty_bps: float,
@@ -1103,13 +1192,19 @@ def executable_edge_candidate(
     on deployed capital; the pricing engine reconstructs the gross exit needed
     to earn it and then independently applies OOS uncertainty.
     """
+    normalized_side = str(predicted_side or "").upper()
     if (not math.isfinite(predicted_net_edge)
             or not math.isfinite(prediction_sigma_net_edge)
-            or abs(predicted_net_edge) <= 1e-12
+            or (predicted_net_edge <= 1e-12 if predicted_side is not None
+                else abs(predicted_net_edge) <= 1e-12)
             or prediction_sigma_net_edge < 0.0):
         return None
-    side = "YES" if predicted_net_edge > 0.0 else "NO"
-    target_edge = abs(predicted_net_edge)
+    if predicted_side is not None and normalized_side not in {"YES", "NO"}:
+        return None
+    side = normalized_side if predicted_side is not None else (
+        "YES" if predicted_net_edge > 0.0 else "NO")
+    target_edge = (
+        predicted_net_edge if predicted_side is not None else abs(predicted_net_edge))
 
     def price(value: float, sigma_probability: float, z: float) -> economics.RoundTripEconomics | None:
         return economics.round_trip_economics(
@@ -1389,13 +1484,17 @@ def main() -> int:
         selected_at_ts=now,
     )
     if challenger is None:
-        beta = [0.0] * MODEL_FEATURE_DIM
+        yes_beta = [0.0] * MODEL_FEATURE_DIM
+        no_beta = [0.0] * MODEL_FEATURE_DIM
         activity_threshold = math.inf
     else:
-        beta = list(challenger["beta"])
+        yes_beta = list(challenger["yes_beta"])
+        no_beta = list(challenger["no_beta"])
         activity_threshold = float(
             challenger["prediction_activity_threshold"])
-    model_labeled = sum(row.get("y") is not None and isinstance(row.get("x"), list) and len(row["x"]) == FLOW_FEATURE_DIM for row in samples)
+    model_labeled = sum(
+        _has_dual_side_target(row) and isinstance(row.get("x"), list)
+        and len(row["x"]) == FLOW_FEATURE_DIM for row in samples)
     training_diagnostics = sample_diagnostics(
         samples, horizon_seconds=args.horizon_seconds)
     model_valid, model_invalid_reasons = model_validity(training_diagnostics)
@@ -1413,7 +1512,8 @@ def main() -> int:
     else:
         validation_diagnostics = fixed_forward_oos_diagnostics(
             model_rows,
-            beta=beta,
+            yes_beta=yes_beta,
+            no_beta=no_beta,
             threshold=activity_threshold,
             validation_start_ts=int(challenger["validation_start_ts"]),
             horizon_seconds=args.horizon_seconds,
@@ -1425,7 +1525,7 @@ def main() -> int:
             str(reason) for reason in validation_diagnostics.get("reasons", []))
         model_valid = False
     # Entry uncertainty must come from untouched future observations, never
-    # from residuals of the same rows used to fit beta.
+    # from residuals of the same rows used to fit either side head.
     sigma = validation_diagnostics.get("oos_residual_sigma") if model_valid else None
     slip = max(0.0, args.slippage_bps) / 10000.0
 
@@ -1443,9 +1543,9 @@ def main() -> int:
             if len(failures) < 30:
                 failures.append(f"exit_depth:{market_id}")
             continue
-        prediction = model_prediction(feature[0], beta, activity_threshold)
-        flip = ((side == "YES" and prediction <= 0.0)
-                or (side == "NO" and prediction >= 0.0))
+        prediction = model_prediction(
+            feature[0], yes_beta, no_beta, activity_threshold)
+        flip = prediction.get("side") != side
         if now - int(position["entry_ts"]) >= args.horizon_seconds or flip or bool(state.get("killed")):
             exit_price = max(1e-6, bid_vwap * (1.0 - slip))
             fee = base.fee_per_share(exit_price, market.fee) * shares
@@ -1545,8 +1645,11 @@ def main() -> int:
                     rejection_funnel["missing_fee"] += 1
                 continue
             rejection_funnel["prediction_evaluated"] += 1
-            prediction = model_prediction(feature[0], beta, activity_threshold)
-            if abs(prediction) <= 1e-12:
+            prediction = model_prediction(
+                feature[0], yes_beta, no_beta, activity_threshold)
+            predicted_side = prediction.get("side")
+            predicted_edge = _finite(prediction.get("edge"), 0.0)
+            if predicted_side not in {"YES", "NO"} or predicted_edge <= 1e-12:
                 rejection_funnel["inactive_learned_edge"] += 1
                 continue
             snapshot = book_snapshot(yes, no, market.liq, now=now, max_age_seconds=args.max_book_age_seconds)
@@ -1554,7 +1657,8 @@ def main() -> int:
                 continue
             priced = executable_edge_candidate(
                 book=snapshot,
-                predicted_net_edge=prediction,
+                predicted_net_edge=predicted_edge,
+                predicted_side=str(predicted_side),
                 prediction_sigma_net_edge=float(sigma),
                 fee=fee_spec(market.fee),
                 horizon_seconds=args.horizon_seconds,
@@ -1591,11 +1695,14 @@ def main() -> int:
                     rejection_funnel["nonpositive_net_edge"] += 1
                 continue
             ranked.append((adjusted.economic_score, market, adjusted.side, book,
-                           adjusted, predicted_yes_mid, prediction))
+                           adjusted, predicted_yes_mid, predicted_edge))
             admission_rows.append({
                 "market_id": market.id,
                 "side": adjusted.side,
-                "learned_executable_net_edge": prediction,
+                "learned_executable_net_edge": predicted_edge,
+                "predicted_yes_executable_net_edge": prediction["YES"],
+                "predicted_no_executable_net_edge": prediction["NO"],
+                "predicted_side": predicted_side,
                 "learned_executable_edge_sigma": float(sigma),
                 "learned_robust_edge_after_uncertainty": adjusted.net_edge,
                 "net_edge": adjusted.net_edge,
@@ -1787,8 +1894,10 @@ def main() -> int:
     drawdown = max(0.0, 1.0 - equity / peak) if peak > 0.0 else 0.0
     marking_complete = not unmarkable_positions
     killed = killed or (marking_complete and drawdown >= max_drawdown)
-    labeled = sum(row.get("y") is not None for row in samples)
-    model_labeled = sum(row.get("y") is not None and isinstance(row.get("x"), list) and len(row["x"]) == FLOW_FEATURE_DIM for row in samples)
+    labeled = sum(_has_dual_side_target(row) for row in samples)
+    model_labeled = sum(
+        _has_dual_side_target(row) and isinstance(row.get("x"), list)
+        and len(row["x"]) == FLOW_FEATURE_DIM for row in samples)
     dataset_diagnostics = sample_diagnostics(
         samples, horizon_seconds=args.horizon_seconds)
 
@@ -1820,7 +1929,8 @@ def main() -> int:
         "dataset_diagnostics": dataset_diagnostics,
         "novel_samples_last_tick": novel_samples,
         "duplicate_snapshots_rejected_last_tick": duplicate_snapshots_rejected,
-        "beta": beta,
+        "yes_beta": yes_beta,
+        "no_beta": no_beta,
         "model_feature_dimension": MODEL_FEATURE_DIM,
         "model_training_window_seconds": MODEL_TRAINING_WINDOW_SECONDS,
         "model_ridge": MODEL_RIDGE,
@@ -1855,9 +1965,9 @@ def main() -> int:
         "realized_pnl_last_tick": realized_last_tick,
         "realized_pnl_total": realized_total,
         "target_semantics_version": TARGET_SEMANTICS_VERSION,
-        "admission_contract": "causal_flow_learned_executable_net_edge_plus_depth_complete_round_trip_ev",
+        "admission_contract": "causal_flow_dual_side_continuous_executable_net_edge_plus_depth_complete_round_trip_ev",
         "execution_contract": COMPLETE_ROUND_TRIP_EXECUTION_CONTRACT,
-        "feature_contract": "book_microprice_depth_parity_plus_receive_causal_flow_plus_strictly_prior_1_5_15_30s_market_regime_lags; label=fee_depth_cost_net_executable_round_trip_edge",
+        "feature_contract": "book_microprice_depth_parity_plus_receive_causal_flow_plus_strictly_prior_1_5_15_30s_market_regime_lags; labels=dense_continuous_yes_and_no_fee_depth_cost_net_executable_round_trip_edges",
         "exit_liquidity_contract": "shares_specific_full_visible_bid_depth_vwap_fail_closed",
         "failures": failures,
     }

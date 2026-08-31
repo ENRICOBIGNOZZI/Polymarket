@@ -59,6 +59,39 @@ def _universe(path: Path, *, timestamp_ms: int, model_sha: str = SHA, markets=No
 
 
 class MakerRewardSelectorTests(unittest.TestCase):
+    def test_control_exploration_follows_best_fresh_opposite_flow_cell(self) -> None:
+        rows = [
+            {
+                "market_id": "quiet", "yes_token": "quiet-yes",
+                "quote_opportunities": [], "authorized_execution_cells": [],
+            },
+            {
+                "market_id": "flow", "yes_token": "flow-yes",
+                "quote_opportunities": [{
+                    "outcome": "NO", "token_id": "flow-no", "quote_side": "SELL",
+                    "book_evidence_valid": True, "opposite_flow_is_fresh": True,
+                    "improve1_available": False,
+                    "projected_flow_reach_probability": 0.10,
+                    "projected_join_queue_depletion_probability": 0.039,
+                    "projected_join_fill_probability": 0.0039,
+                    "projected_improve1_fill_probability": 0.0,
+                }],
+                "authorized_execution_cells": [],
+            },
+        ]
+        self.assertEqual(rewards._authorize_one_control_cell(rows), 1)
+        rewards._annotate_inventory_seed_authority(rows)
+        self.assertEqual(rows[0]["authorized_execution_cells"], [])
+        self.assertEqual(rows[1]["execution_role"], "POSITIVE_FLOW_CONTROL")
+        self.assertTrue(rows[1]["inventory_seed_authorized"])
+        self.assertEqual(rows[1]["authorized_execution_cells"], [{
+            "outcome": "NO", "token_id": "flow-no", "action": "JOIN",
+            "quote_side": "SELL", "authority_basis": "POSITIVE_FLOW_CONTROL",
+            "projected_flow_reach_probability": 0.10,
+            "projected_queue_depletion_probability": 0.039,
+            "projected_fill_probability": 0.0039,
+        }])
+
     def test_fill_projection_decays_old_burst_in_event_time(self) -> None:
         fresh_rate, fresh_weight = rewards._decayed_opposite_flow_rate(
             shares_10m=120.0, prints_10m=2, prints_30s=2,
