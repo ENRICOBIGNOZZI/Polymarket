@@ -158,6 +158,11 @@ struct BinanceUsdMMetrics {
     double liquidation_sell_notional = 0.0;
     std::uint64_t frames = 0;
     std::uint64_t parse_failures = 0;
+    std::uint64_t depth_frames = 0;
+    std::uint64_t trade_frames = 0;
+    std::uint64_t mark_frames = 0;
+    std::uint64_t liquidation_frames = 0;
+    std::uint64_t ignored_frames = 0;
     std::uint8_t valid = 0;
 };
 
@@ -172,16 +177,16 @@ json::object usdm_json(const BinanceUsdMMetrics& value) {
         {"liquidation_buy_notional", value.liquidation_buy_notional},
         {"liquidation_sell_notional", value.liquidation_sell_notional},
         {"frames", value.frames}, {"parse_failures", value.parse_failures},
+        {"depth_frames", value.depth_frames}, {"trade_frames", value.trade_frames},
+        {"mark_frames", value.mark_frames}, {"liquidation_frames", value.liquidation_frames},
+        {"ignored_frames", value.ignored_frames},
         {"open_interest", nullptr}, {"open_interest_state", "PENDING_RATE_AWARE_REST"},
     };
 }
 
 class BinanceUsdMObserver final : public ExternalFrameObserver {
 public:
-    void on_connection_epoch(std::uint64_t) noexcept override {
-        std::lock_guard lock(mutex_);
-        metrics_ = {};
-    }
+    void on_connection_epoch(std::uint64_t) noexcept override {}
 
     void on_frame(std::uint64_t, std::int64_t receive_ns, std::int64_t,
                   std::string_view payload) noexcept override {
@@ -194,10 +199,11 @@ public:
             const auto* event = json_field(*root, "e");
             std::lock_guard lock(mutex_);
             ++metrics_.frames;
-            if (json_text_equals(event, "depthUpdate")) update_depth(*root, receive_ns);
-            else if (json_text_equals(event, "aggTrade")) update_trade(*root);
-            else if (json_text_equals(event, "markPriceUpdate")) update_mark(*root, receive_ns);
-            else if (json_text_equals(event, "forceOrder")) update_liquidation(*root);
+            if (json_text_equals(event, "depthUpdate")) { ++metrics_.depth_frames; update_depth(*root, receive_ns); }
+            else if (json_text_equals(event, "aggTrade")) { ++metrics_.trade_frames; update_trade(*root); }
+            else if (json_text_equals(event, "markPriceUpdate")) { ++metrics_.mark_frames; update_mark(*root, receive_ns); }
+            else if (json_text_equals(event, "forceOrder")) { ++metrics_.liquidation_frames; update_liquidation(*root); }
+            else ++metrics_.ignored_frames;
         } catch (...) { fail(); }
     }
 
@@ -386,18 +392,27 @@ int main(int argc, char** argv) {
         ExternalVenueWsClient binance(btc_spot_connection_spec(VenueId::BinanceSpot, asset_handle), &binance_ingress, &binance_l2);
         ExternalVenueWsClient coinbase(btc_spot_connection_spec(VenueId::CoinbaseSpot, asset_handle), &coinbase_ingress);
         ExternalVenueWsClient bybit(btc_spot_connection_spec(VenueId::BybitSpot, asset_handle), &bybit_ingress);
-        ExternalVenueWsClient binance_usdm(btc_spot_connection_spec(VenueId::BinanceUsdM, asset_handle), nullptr, &binance_usdm_observer);
+        auto binance_usdm_depth_spec = btc_spot_connection_spec(VenueId::BinanceUsdM, asset_handle);
+        binance_usdm_depth_spec.subscription_json =
+            R"({"method":"SUBSCRIBE","params":["btcusdt@depth20@100ms"],"id":1})";
+        auto binance_usdm_market_spec = btc_spot_connection_spec(VenueId::BinanceUsdM, asset_handle);
+        binance_usdm_market_spec.subscription_json =
+            R"({"method":"SUBSCRIBE","params":["btcusdt@aggTrade","btcusdt@markPrice@1s","btcusdt@forceOrder"],"id":2})";
+        ExternalVenueWsClient binance_usdm_depth(std::move(binance_usdm_depth_spec), nullptr, &binance_usdm_observer);
+        ExternalVenueWsClient binance_usdm_market(std::move(binance_usdm_market_spec), nullptr, &binance_usdm_observer);
 
 #if defined(__APPLE__)
         std::thread binance_thread([&] { binance.run(ExternalStopToken(stopping)); });
         std::thread coinbase_thread([&] { coinbase.run(ExternalStopToken(stopping)); });
         std::thread bybit_thread([&] { bybit.run(ExternalStopToken(stopping)); });
-        std::thread binance_usdm_thread([&] { binance_usdm.run(ExternalStopToken(stopping)); });
+        std::thread binance_usdm_depth_thread([&] { binance_usdm_depth.run(ExternalStopToken(stopping)); });
+        std::thread binance_usdm_market_thread([&] { binance_usdm_market.run(ExternalStopToken(stopping)); });
 #else
         std::jthread binance_thread([&](std::stop_token token) { binance.run(token); });
         std::jthread coinbase_thread([&](std::stop_token token) { coinbase.run(token); });
         std::jthread bybit_thread([&](std::stop_token token) { bybit.run(token); });
-        std::jthread binance_usdm_thread([&](std::stop_token token) { binance_usdm.run(token); });
+        std::jthread binance_usdm_depth_thread([&](std::stop_token token) { binance_usdm_depth.run(token); });
+        std::jthread binance_usdm_market_thread([&](std::stop_token token) { binance_usdm_market.run(token); });
 #endif
 
         while (!stopping.load(std::memory_order_relaxed)) {
@@ -409,12 +424,14 @@ int main(int argc, char** argv) {
             const auto binance_status = binance.snapshot();
             const auto coinbase_status = coinbase.snapshot();
             const auto bybit_status = bybit.snapshot();
-            const auto binance_usdm_status = binance_usdm.snapshot();
+            const auto binance_usdm_depth_status = binance_usdm_depth.snapshot();
+            const auto binance_usdm_market_status = binance_usdm_market.snapshot();
             json::array venues;
             venues.emplace_back(transport_json(binance_status, "BINANCE_SPOT"));
             venues.emplace_back(transport_json(coinbase_status, "COINBASE_SPOT"));
             venues.emplace_back(transport_json(bybit_status, "BYBIT_SPOT"));
-            venues.emplace_back(transport_json(binance_usdm_status, "BINANCE_USDM"));
+            venues.emplace_back(transport_json(binance_usdm_depth_status, "BINANCE_USDM_DEPTH"));
+            venues.emplace_back(transport_json(binance_usdm_market_status, "BINANCE_USDM_MARKET"));
             atomic_write(output, {
                 {"schema", "polymarket_v7_external_venue_runtime_v1"},
                 {"timestamp_ns", wall_now_ns()},
@@ -451,12 +468,14 @@ int main(int argc, char** argv) {
         binance_thread.request_stop();
         coinbase_thread.request_stop();
         bybit_thread.request_stop();
-        binance_usdm_thread.request_stop();
+        binance_usdm_depth_thread.request_stop();
+        binance_usdm_market_thread.request_stop();
 #endif
         if (binance_thread.joinable()) binance_thread.join();
         if (coinbase_thread.joinable()) coinbase_thread.join();
         if (bybit_thread.joinable()) bybit_thread.join();
-        if (binance_usdm_thread.joinable()) binance_usdm_thread.join();
+        if (binance_usdm_depth_thread.joinable()) binance_usdm_depth_thread.join();
+        if (binance_usdm_market_thread.joinable()) binance_usdm_market_thread.join();
         return 0;
     } catch (const std::exception& error) {
         std::cerr << "v7_external_venue_runtime: " << error.what() << '\n';
