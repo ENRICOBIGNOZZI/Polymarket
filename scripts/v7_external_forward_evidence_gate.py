@@ -42,7 +42,13 @@ def _tape_ok(tapes: Any, source: str) -> tuple[bool, str | None, int]:
     written = int(value.get("written") or 0)
     if value.get("enabled") is not True or value.get("evidence_valid") is not True or value.get("writer_healthy") is not True:
         return False, f"TAPE_UNHEALTHY:{source}", accepted
-    if accepted <= 0 or written != accepted or int(value.get("dropped") or 0) != 0:
+    # The recorder publishes independent atomic counters. During an active,
+    # high-rate session the writer can have popped a record between the
+    # `queued` and `written` observations, so exact equality at a random gate
+    # instant is not a valid durability test. Evidence loss remains fail-closed
+    # through the recorder's sticky `evidence_valid` flag and a nonzero drop;
+    # terminal tape replay verifies a fully drained artifact separately.
+    if accepted <= 0 or written > accepted or int(value.get("dropped") or 0) != 0:
         return False, f"TAPE_INCOMPLETE:{source}", accepted
     return True, None, accepted
 

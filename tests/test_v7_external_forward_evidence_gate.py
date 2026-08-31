@@ -46,6 +46,15 @@ def test_duration_and_durable_tapes_are_required() -> None:
     assert "TAPE_INCOMPLETE:bybit_spot" in failed["failures"]
 
 
+def test_active_recorder_inflight_write_does_not_create_a_false_failure() -> None:
+    runtime = _runtime(61_000_000_000)
+    runtime["normalized_event_tapes"]["bybit_linear"]["written"] = 3  # type: ignore[index]
+    result = gate.evaluate(runtime, {"state": "OPERATIONAL_POLLING", "hft_trigger_eligible": False},
+                           {"state": "OPERATIONAL", "option_surface_valid": True}, min_duration_s=60.0)
+    assert result["engineering_valid"] is True
+    assert result["state"] == "ENGINEERING_VALIDATED"
+
+
 def test_binance_usdm_market_normalized_tape_and_health_are_required() -> None:
     broken = _runtime(61_000_000_000)
     broken["normalized_event_tapes"].pop("binance_usdm_market")  # type: ignore[index]
