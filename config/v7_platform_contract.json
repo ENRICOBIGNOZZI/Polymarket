@@ -1,0 +1,16 @@
+{
+  "schema_version": 1,
+  "execution_mode_on_drift": "SHADOW_LIVE_READ_ONLY",
+  "last_verified_at": "2026-08-31T00:00:00Z",
+  "official_sources": [
+    "https://docs.polymarket.com/v2-migration",
+    "https://docs.polymarket.com/resources/contracts",
+    "https://docs.polymarket.com/api-reference/trade/send-heartbeat",
+    "https://docs.polymarket.com/trading/matching-engine",
+    "https://docs.polymarket.com/api-reference/rate-limits"
+  ],
+  "api": {"version": "CLOB_V2", "production_url": "https://clob.polymarket.com", "sdk_package": "@polymarket/clob-client-v2", "chain_id": 137},
+  "contracts": {"pUSD": "0xc011a7e12a19f7b1f670d46f03b03f3342e82dfb", "pUSD_decimals": 6, "conditional_tokens": "0x4d97dcd97ec945f40cf65f87097ace5ea0476045", "ctf_exchange": "0xe111180000d2663c0091e4f400237545b87b996b", "neg_risk_ctf_exchange": "0xe2222d279d744050d28e00520010520000310f59", "neg_risk_adapter": "0xd91e80cf2e7be2e162c6513ced06f1dd0da35296"},
+  "protocol": {"l1_auth": "EIP-712 ClobAuthDomain version 1", "l2_auth": "HMAC-SHA256", "exchange_eip712_domain_version": "2", "order_heartbeat_endpoint": "/heartbeats", "order_heartbeat_required": true, "matching_engine_restart_status": 425, "post_restart_post_only_seconds": 120},
+  "market_constraints": {"fee_source_required": true, "tick_size_source_required": true, "minimum_order_size_source_required": true, "settlement_rule_hash_required": true, "websocket_schema_hash_required": true, "rate_limit_source_required": true}
+}

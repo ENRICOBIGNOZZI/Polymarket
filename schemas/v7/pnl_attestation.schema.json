@@ -1,0 +1,17 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "V7 real PnL attestation package manifest",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema", "created_at", "model_sha", "report_sha256", "journal_head_hash", "files", "redaction", "automatic_promotion"],
+  "properties": {
+    "schema": {"const": "polymarket_v7_pnl_attestation_package_v1"},
+    "created_at": {"type": "string", "format": "date-time"},
+    "model_sha": {"type": "string", "pattern": "^[0-9a-f]{40}$"},
+    "report_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "journal_head_hash": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "files": {"type": "object", "additionalProperties": {"type": "string", "pattern": "^[0-9a-f]{64}$"}},
+    "redaction": {"type": "object", "additionalProperties": false, "required": ["raw_private_evidence_included", "source_record_ids_hashed"]},
+    "automatic_promotion": {"const": false}
+  }
+}

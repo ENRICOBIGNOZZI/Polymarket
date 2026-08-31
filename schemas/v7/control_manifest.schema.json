@@ -1,0 +1,24 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://polymarket.example/schemas/v7/control_manifest.schema.json",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "exact_code_sha", "build_manifest_hash", "config_bundle_hash", "strategy_registry_hash", "model_registry_hash", "policy_hash", "dataset_manifest_hash", "execution_mode", "wallet_id_hash", "signer_session_id_hash", "server_id", "region", "run_id", "start_time"],
+  "properties": {
+    "schema_version": {"const": 1},
+    "exact_code_sha": {"type": "string", "pattern": "^[0-9a-f]{40}$"},
+    "build_manifest_hash": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "config_bundle_hash": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "strategy_registry_hash": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "model_registry_hash": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "policy_hash": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "dataset_manifest_hash": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "execution_mode": {"enum": ["RESEARCH_ZERO_AUTHORITY", "PAPER_SIMULATED", "SHADOW_LIVE_READ_ONLY", "MICRO_LIVE", "LIVE_RESTRICTED", "LIVE_SCALED", "DRAIN_ONLY", "CANCEL_ONLY", "KILLED"]},
+    "wallet_id_hash": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "signer_session_id_hash": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "server_id": {"type": "string", "minLength": 1},
+    "region": {"type": "string", "minLength": 1},
+    "run_id": {"type": "string", "minLength": 1},
+    "start_time": {"type": "string", "format": "date-time"}
+  }
+}

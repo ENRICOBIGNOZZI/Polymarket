@@ -1,0 +1,14 @@
+{
+  "schema_version": 1,
+  "checked_in_execution_mode": "PAPER_SIMULATED",
+  "automatic_promotion": false,
+  "automatic_live_cap_increase": false,
+  "tiers": {
+    "RESEARCH": {"allowed_mode": "RESEARCH_ZERO_AUTHORITY", "maximum_order_base_units": 0, "maximum_gross_exposure_base_units": 0, "maximum_event_loss_base_units": 0, "maximum_daily_loss_base_units": 0, "maximum_open_order_count": 0},
+    "PAPER": {"allowed_mode": "PAPER_SIMULATED", "maximum_order_base_units": 0, "maximum_gross_exposure_base_units": 0, "maximum_event_loss_base_units": 0, "maximum_daily_loss_base_units": 0, "maximum_open_order_count": 0},
+    "MICRO_LIVE": {"allowed_mode": "MICRO_LIVE", "maximum_order_base_units": 0, "maximum_gross_exposure_base_units": 0, "maximum_event_loss_base_units": 0, "maximum_daily_loss_base_units": 0, "maximum_open_order_count": 0},
+    "LIVE_RESTRICTED": {"allowed_mode": "LIVE_RESTRICTED", "maximum_order_base_units": 0, "maximum_gross_exposure_base_units": 0, "maximum_event_loss_base_units": 0, "maximum_daily_loss_base_units": 0, "maximum_open_order_count": 0},
+    "LIVE_SCALED": {"allowed_mode": "LIVE_SCALED", "maximum_order_base_units": 0, "maximum_gross_exposure_base_units": 0, "maximum_event_loss_base_units": 0, "maximum_daily_loss_base_units": 0, "maximum_open_order_count": 0}
+  },
+  "note": "All checked-in values are zero. Nonzero limits are never stored in this repository."
+}

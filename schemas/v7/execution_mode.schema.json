@@ -1,0 +1,6 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Polymarket V7 execution mode",
+  "type": "string",
+  "enum": ["RESEARCH_ZERO_AUTHORITY", "PAPER_SIMULATED", "SHADOW_LIVE_READ_ONLY", "MICRO_LIVE", "LIVE_RESTRICTED", "LIVE_SCALED", "DRAIN_ONLY", "CANCEL_ONLY", "KILLED"]
+}

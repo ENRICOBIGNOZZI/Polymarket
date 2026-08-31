@@ -1,0 +1,39 @@
+{
+  "schema": "polymarket_v7_clob_v2_contract_registry_v1",
+  "chain_id": 137,
+  "paper_only": true,
+  "authenticated_execution": false,
+  "real_order_submission": false,
+  "source": "https://docs.polymarket.com/resources/contracts",
+  "verified_at": "2026-08-31",
+  "clob": {
+    "production_url": "https://clob.polymarket.com",
+    "user_websocket_url": "wss://ws-subscriptions-clob.polymarket.com/ws/user",
+    "l1_api_key_path": "/auth/api-key",
+    "l2_signature_scheme": "HMAC-SHA256(base64Decode(secret), timestamp + method + path + body)",
+    "exchange_eip712_domain_version": "2",
+    "api_auth_domain_version": "1",
+    "ctf_exchange": "0xe111180000d2663c0091e4f400237545b87b996b",
+    "neg_risk_ctf_exchange": "0xe2222d279d744050d28e00520010520000310f59",
+    "conditional_tokens": "0x4d97dcd97ec945f40cf65f87097ace5ea0476045"
+  },
+  "collateral": {
+    "asset": "pUSD",
+    "decimals": 6,
+    "underlying_asset": "USDCe",
+    "underlying_proxy": "0x2791bca1f2de4661ed88a30c99a7a9449aa84174",
+    "proxy": "0xc011a7e12a19f7b1f670d46f03b03f3342e82dfb",
+    "implementation": "0x6bbcef9f7ef3b6c592c99e0f206a0de94ad0925f",
+    "onramp": "0x93070a847efef7f70739046a929d47a521f5b8ee",
+    "offramp": "0x2957922eb93258b93368531d39facca3b4dc5854",
+    "ctf_collateral_adapter": "0xada100db00ca00073811820692005400218fce1f",
+    "neg_risk_ctf_collateral_adapter": "0xada2005600dec949baf300f4c6120000bdb6eaab"
+  },
+  "operations": {
+    "split": "pUSD -> equal YES and NO ERC1155 outcome units",
+    "merge": "equal YES and NO ERC1155 outcome units -> pUSD",
+    "redeem": "resolved winning ERC1155 outcome units -> pUSD",
+    "pUSD_wrap": "USDC.e -> pUSD through CollateralOnramp",
+    "pUSD_unwrap": "pUSD -> USDC.e through CollateralOfframp"
+  }
+}

@@ -1,0 +1,14 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://polymarket.example/schemas/v7/platform_contract.schema.json",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "execution_mode_on_drift", "last_verified_at", "official_sources", "api", "contracts", "protocol", "market_constraints"],
+  "properties": {
+    "schema_version": {"const": 1},
+    "execution_mode_on_drift": {"enum": ["SHADOW_LIVE_READ_ONLY", "CANCEL_ONLY"]},
+    "last_verified_at": {"type": "string", "format": "date-time"},
+    "official_sources": {"type": "array", "minItems": 1, "items": {"type": "string", "pattern": "^https://docs\\.polymarket\\.com/"}},
+    "api": {"type": "object"}, "contracts": {"type": "object"}, "protocol": {"type": "object"}, "market_constraints": {"type": "object"}
+  }
+}

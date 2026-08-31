@@ -1,0 +1,16 @@
+{
+  "schema_version": 1,
+  "claim_policy": "exact_sha_evidence_only",
+  "claims": {
+    "TECHNICALLY_VALIDATED": {"requires": ["exact_sha_ci", "replay", "accounting_fixtures", "recovery_tests"]},
+    "DEPLOYED_READ_ONLY": {"requires": ["exact_run_manifest", "read_only_runtime"]},
+    "DEPLOYED_PAPER": {"requires": ["exact_run_manifest", "paper_runtime"]},
+    "DEPLOYED_MICRO_LIVE": {"requires": ["live_capability_gates", "exact_run_manifest"]},
+    "RECONCILED": {"requires": ["external_sources", "zero_unresolved_breaks", "independent_verifier"]},
+    "PROFITABILITY_NOT_TESTABLE": {"requires": ["no_mature_real_terminal_observations"]},
+    "MORE_EVIDENCE_REQUIRED": {"requires": ["evidence_collection_active"]},
+    "PROFITABILITY_REJECTED": {"requires": ["preregistered_economic_gate_failed"]},
+    "REAL_PNL_VERIFIED": {"requires": ["real_terminal_evidence", "zero_unresolved_breaks", "independent_verifier", "signed_attestation"]},
+    "WORLD_CLASS_CANDIDATE": {"requires": ["REAL_PNL_VERIFIED", "positive_conservative_lcb", "capacity", "tail_risk", "multiple_regimes", "security", "recovery", "external_verifier"]}
+  }
+}
