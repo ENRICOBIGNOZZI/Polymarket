@@ -222,6 +222,7 @@ void test_side_specific_opposite_flow_authorizes_only_reachable_side() {
     // Aggressive SELLs can reach our BUY.  No aggressive BUY flow means our
     // inventory-backed SELL is not an executable opportunity.
     update.prior_aggressive_sell_shares_per_second = 100.0;
+    update.prior_aggressive_sell_prints_per_second = 100.0;
     const auto model = profitable_model();
     pm::v7::maker::InventorySnapshot inventory;
     inventory.yes_shares = 3.0;
@@ -245,6 +246,7 @@ void test_trade_rate_uses_elapsed_time_not_book_message_count() {
     auto update = normal_update();
     update.flow_prior_valid = 1;
     update.prior_aggressive_sell_shares_per_second = 10.0;
+    update.prior_aggressive_sell_prints_per_second = 2.0;
     const auto model = profitable_model();
     pm::v7::maker::InventorySnapshot inventory;
     pm::v7::maker::QuoteSnapshot quotes;
@@ -254,12 +256,37 @@ void test_trade_rate_uses_elapsed_time_not_book_message_count() {
 
     const auto first = hot.on_market_update(update, inventory, quotes, risk, model);
     const double seeded_rate = first.features.aggressive_sell_shares_per_second;
+    const double seeded_print_rate = first.features.aggressive_sell_prints_per_second;
     assert(std::abs(seeded_rate - 10.0) < 1e-12);
+    assert(std::abs(seeded_print_rate - 2.0) < 1e-12);
     for (std::uint64_t version = 8; version < 108; ++version) {
         update.state_version = version;
         const auto next = hot.on_market_update(update, inventory, quotes, risk, model);
         assert(std::abs(next.features.aggressive_sell_shares_per_second - seeded_rate) < 1e-12);
+        assert(std::abs(next.features.aggressive_sell_prints_per_second
+                        - seeded_print_rate) < 1e-12);
     }
+}
+
+void test_whale_size_cannot_impersonate_future_print_arrival() {
+    pm::v7::maker::MakerHotPath hot;
+    auto update = normal_update();
+    update.flow_prior_valid = 1;
+    update.prior_aggressive_sell_shares_per_second = 1'000.0;
+    update.prior_aggressive_sell_prints_per_second = 0.01;
+    const auto model = profitable_model();
+    pm::v7::maker::InventorySnapshot inventory;
+    pm::v7::maker::QuoteSnapshot quotes;
+    pm::v7::maker::RiskSnapshot risk;
+    risk.max_quote_shares = 3.0;
+    risk.max_abs_residual_shares = 20.0;
+
+    const auto decision = hot.on_market_update(update, inventory, quotes, risk, model);
+    const double expected_reach = 1.0 - std::exp(-0.01 * 5.0);
+    assert(std::abs(decision.bid_flow_reach_probability - expected_reach) < 1e-12);
+    assert(decision.bid_flow_reach_probability < 0.05);
+    assert(decision.bid_opposite_flow_shares_per_second == 1'000.0);
+    assert(decision.bid_opposite_flow_prints_per_second == 0.01);
 }
 
 void test_specific_improve_cell_changes_candidate_ranking() {
@@ -762,6 +789,7 @@ int main() {
     test_authoritative_zero_flow_blocks_passive_quote();
     test_side_specific_opposite_flow_authorizes_only_reachable_side();
     test_trade_rate_uses_elapsed_time_not_book_message_count();
+    test_whale_size_cannot_impersonate_future_print_arrival();
     test_specific_improve_cell_changes_candidate_ranking();
     test_settlement_fair_uses_lower_for_bid_and_upper_for_ask();
     test_outcome_cell_orientation_is_respected();

@@ -3,6 +3,7 @@ from __future__ import annotations
 import importlib.util
 import csv
 import json
+import math
 from pathlib import Path
 import sys
 import unittest
@@ -70,6 +71,17 @@ class MakerRewardSelectorTests(unittest.TestCase):
         self.assertGreater(fresh_weight, 0.99)
         self.assertAlmostEqual(old_rate, 0.05, places=6)
         self.assertAlmostEqual(old_weight, 0.25, places=6)
+
+    def test_flow_reach_uses_print_arrivals_not_whale_size(self) -> None:
+        print_rate = rewards._decayed_opposite_print_rate(
+            prints_10m=1, prints_30s=1, age_ms=0,
+            half_life_seconds=30.0,
+        )
+        reach = 1.0 - math.exp(-print_rate * 5.0)
+        self.assertAlmostEqual(print_rate, 1.0 / 30.0)
+        self.assertLess(reach, 0.16)
+        # Print size is deliberately absent: one 10,000-share print and one
+        # 5-share print carry the same evidence that another print will arrive.
 
     def test_canonical_live_flow_is_exact_sha_and_event_time_grounded(self) -> None:
         from tempfile import TemporaryDirectory

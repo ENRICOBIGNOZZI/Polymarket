@@ -48,6 +48,10 @@ MakerDecision MakerInstrumentLane::on_market_event(
         std::max(0.0, context.prior_aggressive_buy_shares_per_second);
     update.prior_aggressive_sell_shares_per_second =
         std::max(0.0, context.prior_aggressive_sell_shares_per_second);
+    update.prior_aggressive_buy_prints_per_second =
+        std::max(0.0, context.prior_aggressive_buy_prints_per_second);
+    update.prior_aggressive_sell_prints_per_second =
+        std::max(0.0, context.prior_aggressive_sell_prints_per_second);
     update.flow_prior_valid = context.flow_prior_valid;
 
     const bool sign_valid = inventory_sign_ == 1 || inventory_sign_ == -1;

@@ -30,7 +30,8 @@ PLACEMENT_FEATURE_NAMES = (
     "intercept", "spread_ticks", "signed_imbalance", "signed_ofi",
     "ew_vol_ticks", "trade_intensity", "cancel_intensity",
     "signed_short_return_ticks", "signed_inventory_fraction",
-    "local_latency_ms",
+    "local_latency_ms", "opposite_prints_per_second",
+    "log_queue_ahead_per_quote", "distance_from_touch_ticks",
 )
 EXECUTION_SEMANTICS = "maker-paper-v7.2-bilateral-inventory"
 RISK_TRANSFER_EVENTS = {"ORDER_SUBMITTED", "FILL", "MARKOUT"}
@@ -253,6 +254,18 @@ def placement_features(order: dict[str, Any]) -> list[float] | None:
     if side not in {"BUY", "SELL"}:
         return None
     direction = 1.0 if side == "BUY" else -1.0
+    opposite_print_rate = number(raw.get(
+        "aggressive_sell_prints_per_second" if side == "BUY"
+        else "aggressive_buy_prints_per_second"), math.nan)
+    intended_size = number(order.get("intended_size"), math.nan)
+    queue_ahead = number(order.get("queue_ahead"), math.nan)
+    action = str(order.get("intended_action") or metadata.get("action") or "").upper()
+    distance_from_touch = {
+        "IMPROVE1": -1.0,
+        "JOIN": 0.0,
+        "FADE1": 1.0,
+        "FADE2": 2.0,
+    }.get(action, 0.0)
     values = [
         1.0,
         number(raw.get("spread_ticks"), math.nan),
@@ -264,6 +277,9 @@ def placement_features(order: dict[str, Any]) -> list[float] | None:
         direction * number(raw.get("short_return_ticks"), math.nan),
         direction * number(raw.get("inventory_fraction"), math.nan),
         number(raw.get("local_latency_ms"), math.nan),
+        opposite_print_rate,
+        math.log1p(max(0.0, queue_ahead) / max(1e-9, intended_size)),
+        distance_from_touch,
     ]
     return values if all(math.isfinite(value) for value in values) else None
 
@@ -467,7 +483,7 @@ def learned_placement_policy(order_rows: list[dict[str, Any]],
         cluster_first_ts[cluster] = min(timestamp, cluster_first_ts.get(cluster, timestamp))
     clusters = sorted(cluster_first_ts.items(), key=lambda item: (item[1], item[0]))
     output: dict[str, Any] = {
-        "family": "cluster_purged_oos_fill_and_fill_conditioned_markout_v1",
+        "family": "cluster_purged_oos_fill_and_fill_conditioned_markout_v2",
         "feature_names": list(PLACEMENT_FEATURE_NAMES),
         "valid": False,
         "fill_examples": len(fill_rows),
@@ -852,7 +868,7 @@ def fit_model(values: list[dict[str, Any]], *, model_sha: str, policy_hash: str,
     return {
         "schema": MODEL_SCHEMA,
         "strategy": STRATEGY,
-        "family": "censored_survival_hazard_joint_cycle_v3",
+        "family": "censored_survival_hazard_joint_cycle_v4",
         "version": generated,
         "generated_ts_ms": generated,
         "paper_only": True,
@@ -862,7 +878,7 @@ def fit_model(values: list[dict[str, Any]], *, model_sha: str, policy_hash: str,
         "code_sha": model_sha,
         "policy_hash": policy_hash,
         "config_hash": config_hash,
-        "policy_version": 3,
+        "policy_version": 4,
         "hyperparameters": {
             "cold_fill_prior": cold_fill_prior,
             "fill_prior_strength_orders": fill_prior_strength_orders,
@@ -870,7 +886,7 @@ def fit_model(values: list[dict[str, Any]], *, model_sha: str, policy_hash: str,
             "adverse_prior_filled_shares": 20.0,
         },
         "feature_schema": {
-            "version": 3,
+            "version": 4,
             "fill": "censored_hazard_plus_cluster_purged_oos_features",
             "markout": "fill_conditioned_cluster_purged_oos_features",
             "joint": "direct_cycle_states",

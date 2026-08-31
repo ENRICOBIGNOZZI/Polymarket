@@ -10,7 +10,7 @@
 
 namespace pm::v7::maker {
 
-inline constexpr std::size_t kFeatureCount = 10;
+inline constexpr std::size_t kFeatureCount = 13;
 inline constexpr std::size_t kExecutionActionCount = 4;
 inline constexpr std::size_t kExecutionOutcomeCount = 2;
 inline constexpr std::size_t kExecutionSideCount = 2;
@@ -69,6 +69,8 @@ struct MarketUpdate {
     // prints then update it without book-message-count dilution.
     double prior_aggressive_buy_shares_per_second = 0.0;
     double prior_aggressive_sell_shares_per_second = 0.0;
+    double prior_aggressive_buy_prints_per_second = 0.0;
+    double prior_aggressive_sell_prints_per_second = 0.0;
     double cancel_bid_qty_delta = 0.0;
     double cancel_ask_qty_delta = 0.0;
     double conservative_rebate_ev_per_share = 0.0;
@@ -201,9 +203,11 @@ struct MakerModelSnapshot {
     std::int64_t min_quote_lifetime_ns = 100'000'000LL;
     std::int64_t max_related_snapshot_age_ns = 1'500'000'000LL;
     std::array<double, kFeatureCount> fill_coefficients{
-        -2.8, -0.10, 0.35, 0.40, -0.15, 0.08, -0.05, -0.05, -0.10, -0.05};
+        -2.8, -0.10, 0.35, 0.40, -0.15, 0.08, -0.05, -0.05, -0.10, -0.05,
+        0.0, 0.0, 0.0};
     std::array<double, kFeatureCount> markout_coefficients{
-        0.0015, 0.0001, -0.0002, -0.00025, 0.0002, 0.00005, 0.00005, 0.00005, 0.0002, 0.00005};
+        0.0015, 0.0001, -0.0002, -0.00025, 0.0002, 0.00005, 0.00005, 0.00005,
+        0.0002, 0.00005, 0.0, 0.0, 0.0};
     std::array<ExecutionCellBaseline, kExecutionCellCount> execution_cells{};
 
     [[nodiscard]] bool valid() const noexcept;
@@ -258,6 +262,8 @@ struct Features {
     double trade_intensity = 0.0;
     double aggressive_buy_shares_per_second = 0.0;
     double aggressive_sell_shares_per_second = 0.0;
+    double aggressive_buy_prints_per_second = 0.0;
+    double aggressive_sell_prints_per_second = 0.0;
     double cancel_intensity = 0.0;
     double inventory_fraction = 0.0;
     double local_latency_ms = 0.0;
@@ -295,6 +301,8 @@ struct MakerDecision {
     double ask_queue_depletion_probability = 0.0;
     double bid_opposite_flow_shares_per_second = 0.0;
     double ask_opposite_flow_shares_per_second = 0.0;
+    double bid_opposite_flow_prints_per_second = 0.0;
+    double ask_opposite_flow_prints_per_second = 0.0;
     std::int64_t exploration_max_rest_ns = 0;
     std::array<StrategyIntent, 4> intents{};
     std::uint8_t intent_count = 0;
@@ -324,6 +332,8 @@ private:
     double ew_trade_intensity_ = 0.0;
     double ew_aggressive_buy_shares_per_second_ = 0.0;
     double ew_aggressive_sell_shares_per_second_ = 0.0;
+    double ew_aggressive_buy_prints_per_second_ = 0.0;
+    double ew_aggressive_sell_prints_per_second_ = 0.0;
     double ew_cancel_intensity_ = 0.0;
     std::int64_t previous_feature_monotonic_ns_ = 0;
     std::uint64_t intent_sequence_ = 0;

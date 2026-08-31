@@ -370,6 +370,10 @@ struct SelectedMarket {
     double yes_aggressive_sell_shares_per_second = 0.0;
     double no_aggressive_buy_shares_per_second = 0.0;
     double no_aggressive_sell_shares_per_second = 0.0;
+    double yes_aggressive_buy_prints_per_second = 0.0;
+    double yes_aggressive_sell_prints_per_second = 0.0;
+    double no_aggressive_buy_prints_per_second = 0.0;
+    double no_aggressive_sell_prints_per_second = 0.0;
     bool flow_priors_present = false;
 };
 
@@ -537,6 +541,7 @@ InventoryFactoryPolicy load_inventory_factory_policy(const fs::path& policy_path
                 const double age_ms = number(
                     find_value(opportunity, "last_opposite_flow_age_ms"), -1.0);
                 double rate = 0.0;
+                double print_rate = 0.0;
                 if (age_ms >= 0.0 && shares_10m > 0.0 && prints_10m > 0.0) {
                     const double long_rate = shares_10m / 600.0;
                     const double recent_rate = (shares_10m / prints_10m)
@@ -546,18 +551,28 @@ InventoryFactoryPolicy load_inventory_factory_policy(const fs::path& policy_path
                     const double freshness = std::exp(
                         -std::log(2.0) * age_ms / 30'000.0);
                     rate = std::max(long_rate, recent_rate) * freshness;
+                    print_rate = std::max(
+                        prints_10m / 600.0, prints_30s / 30.0) * freshness;
                 }
                 double* destination = nullptr;
+                double* print_destination = nullptr;
                 if (token == market.yes_token && aggressor == "BUY") {
                     destination = &market.yes_aggressive_buy_shares_per_second;
+                    print_destination = &market.yes_aggressive_buy_prints_per_second;
                 } else if (token == market.yes_token && aggressor == "SELL") {
                     destination = &market.yes_aggressive_sell_shares_per_second;
+                    print_destination = &market.yes_aggressive_sell_prints_per_second;
                 } else if (token == market.no_token && aggressor == "BUY") {
                     destination = &market.no_aggressive_buy_shares_per_second;
+                    print_destination = &market.no_aggressive_buy_prints_per_second;
                 } else if (token == market.no_token && aggressor == "SELL") {
                     destination = &market.no_aggressive_sell_shares_per_second;
+                    print_destination = &market.no_aggressive_sell_prints_per_second;
                 }
                 if (destination != nullptr) *destination = std::max(*destination, rate);
+                if (print_destination != nullptr) {
+                    *print_destination = std::max(*print_destination, print_rate);
+                }
             }
         }
         if (market.market_id.empty() || market.condition_id.empty() || market.yes_token.empty()
@@ -1190,6 +1205,12 @@ private:
         context.prior_aggressive_sell_shares_per_second = instrument.yes
             ? market.cold.yes_aggressive_sell_shares_per_second
             : market.cold.no_aggressive_sell_shares_per_second;
+        context.prior_aggressive_buy_prints_per_second = instrument.yes
+            ? market.cold.yes_aggressive_buy_prints_per_second
+            : market.cold.no_aggressive_buy_prints_per_second;
+        context.prior_aggressive_sell_prints_per_second = instrument.yes
+            ? market.cold.yes_aggressive_sell_prints_per_second
+            : market.cold.no_aggressive_sell_prints_per_second;
         const auto decision_now_ns = monotonic_ns();
         const auto external = std::atomic_load_explicit(
             &market.external_fair, std::memory_order_acquire);
@@ -2388,6 +2409,9 @@ private:
             {"opposite_aggressive_flow_shares_per_second", bid_side
                 ? record.decision.bid_opposite_flow_shares_per_second
                 : record.decision.ask_opposite_flow_shares_per_second},
+            {"opposite_aggressive_flow_prints_per_second", bid_side
+                ? record.decision.bid_opposite_flow_prints_per_second
+                : record.decision.ask_opposite_flow_prints_per_second},
             {"flow_reach_probability", bid_side
                 ? record.decision.bid_flow_reach_probability
                 : record.decision.ask_flow_reach_probability},
@@ -2408,6 +2432,10 @@ private:
                 record.decision.features.aggressive_buy_shares_per_second},
             {"aggressive_sell_shares_per_second",
                 record.decision.features.aggressive_sell_shares_per_second},
+            {"aggressive_buy_prints_per_second",
+                record.decision.features.aggressive_buy_prints_per_second},
+            {"aggressive_sell_prints_per_second",
+                record.decision.features.aggressive_sell_prints_per_second},
             {"cancel_intensity", record.decision.features.cancel_intensity},
             {"short_return_ticks", record.decision.features.short_return_ticks},
             {"inventory_fraction", record.decision.features.inventory_fraction},

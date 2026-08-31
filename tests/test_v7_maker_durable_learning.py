@@ -136,7 +136,7 @@ class DurableLearningTests(unittest.TestCase):
             values, model_sha=SHA, policy_hash="policy", config_hash="config",
             cold_fill_prior=0.02, fill_prior_strength_orders=20.0,
         )
-        self.assertEqual(fitted["family"], "censored_survival_hazard_joint_cycle_v3")
+        self.assertEqual(fitted["family"], "censored_survival_hazard_joint_cycle_v4")
         self.assertAlmostEqual(
             fitted["groups"]["GLOBAL"]["fill_probability"], 0.4 / 28.0)
         self.assertAlmostEqual(
@@ -203,14 +203,19 @@ class DurableLearningTests(unittest.TestCase):
             "short_return_ticks": 0.7,
             "inventory_fraction": -0.8,
             "local_latency_ms": 0.9,
+            "aggressive_buy_prints_per_second": 0.25,
+            "aggressive_sell_prints_per_second": 0.50,
         }
         features = placement_features(row)
         self.assertIsNotNone(features)
         assert features is not None
-        self.assertEqual(len(features), 10)
+        self.assertEqual(len(features), 13)
         self.assertEqual(features[:4], [1.0, 2.0, -0.3, 0.2])
         self.assertEqual(features[7], -0.7)
         self.assertEqual(features[8], 0.8)
+        self.assertEqual(features[10], 0.25)
+        self.assertEqual(features[11], 0.0)
+        self.assertEqual(features[12], 0.0)
 
     def test_incompatible_policy_is_stored_but_not_trained(self) -> None:
         row = record("ORDER_SUBMITTED", "r1", order_id="o1", intended_size=5.0)
@@ -287,6 +292,8 @@ class DurableLearningTests(unittest.TestCase):
             "short_return_ticks": 0.7,
             "inventory_fraction": -0.8,
             "local_latency_ms": 0.9,
+            "aggressive_buy_prints_per_second": 0.25,
+            "aggressive_sell_prints_per_second": 0.50,
         }
         fill = record("FILL", "fill", order_id="o1", filled_size=5.0)
         markout = record(

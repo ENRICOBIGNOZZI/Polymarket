@@ -52,6 +52,19 @@ def _decayed_opposite_flow_rate(
     return max(long_rate, recent_rate) * freshness, freshness
 
 
+def _decayed_opposite_print_rate(
+    *, prints_10m: int, prints_30s: int, age_ms: int,
+    half_life_seconds: float,
+) -> float:
+    """Estimate future print arrivals without treating print size as intensity."""
+    if prints_10m <= 0 or age_ms < 0:
+        return 0.0
+    freshness = math.exp(
+        -math.log(2.0) * age_ms / (max(0.1, half_life_seconds) * 1_000.0)
+    )
+    return max(prints_10m / 600.0, max(0, prints_30s) / 30.0) * freshness
+
+
 def request_json(url: str, *, timeout: float = 20.0) -> Any:
     req = urllib.request.Request(url, headers={"User-Agent": "polymarket-v7-maker/1"})
     with urllib.request.urlopen(req, timeout=timeout) as response:
@@ -808,13 +821,30 @@ def _recent_flow_snapshot(
                     opposite_flow_shares_per_second
                     * selection_quote_horizon_seconds
                 )
+                opposite_flow_prints_per_second = _decayed_opposite_print_rate(
+                    prints_10m=opposite_prints_10m,
+                    prints_30s=opposite_prints_30s,
+                    age_ms=opposite_flow_age_ms,
+                    half_life_seconds=selection_flow_half_life_seconds,
+                )
+                expected_opposite_prints = (
+                    opposite_flow_prints_per_second
+                    * selection_quote_horizon_seconds
+                )
+                # Reach is an arrival event, not a volume event. A single large
+                # historical print may imply large depletion conditional on a
+                # repeat, but cannot make the repeat itself almost certain.
                 flow_reach_probability = (
-                    1.0 - math.exp(-expected_opposite_shares / selection_quote_shares)
-                    if expected_opposite_shares > 0.0 else 0.0)
+                    1.0 - math.exp(-expected_opposite_prints)
+                    if expected_opposite_prints > 0.0 else 0.0)
+                conditional_opposite_shares = (
+                    expected_opposite_shares / flow_reach_probability
+                    if flow_reach_probability > 1e-12 else 0.0
+                )
                 queue_ahead = float(token_stats.get(
                     "best_bid_depth" if quote_side == "BUY" else "best_ask_depth", 0.0))
                 join_queue_depletion_probability = (
-                    min(1.0, expected_opposite_shares
+                    min(1.0, conditional_opposite_shares
                         / max(1e-9, queue_ahead + selection_quote_shares))
                     if token_stats.get("book_evidence_valid") is True else 0.0)
                 projected_join_fill_probability = (
@@ -848,7 +878,12 @@ def _recent_flow_snapshot(
                     "opposite_flow_freshness": flow_freshness,
                     "opposite_flow_shares_per_second": (
                         opposite_flow_shares_per_second),
+                    "opposite_flow_prints_per_second": (
+                        opposite_flow_prints_per_second),
+                    "expected_opposite_prints_at_horizon": expected_opposite_prints,
                     "expected_opposite_shares_at_horizon": expected_opposite_shares,
+                    "conditional_opposite_shares_given_reach": (
+                        conditional_opposite_shares),
                     "market_side_score": side_score,
                     "book_evidence_valid": token_stats.get("book_evidence_valid") is True,
                     "tick_size": tick_size,

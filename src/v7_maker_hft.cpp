@@ -95,6 +95,7 @@ struct SideEconomics {
     double flow_reach_probability = 0.0;
     double queue_depletion_probability = 0.0;
     double opposite_flow_shares_per_second = 0.0;
+    double opposite_flow_prints_per_second = 0.0;
     double gross_capture = 0.0;
     double expected_cost = 0.0;
     double expected_risk = 0.0;
@@ -195,8 +196,12 @@ struct ExplorationChoice {
 }
 
 [[nodiscard]] std::array<double, kFeatureCount> model_features(
-    const Features& features, Side side) noexcept {
+    const Features& features, Side side, double queue_ahead,
+    double quote_shares, double distance_ticks) noexcept {
     const double direction = side == Side::Buy ? 1.0 : -1.0;
+    const double opposite_print_rate = side == Side::Buy
+        ? features.aggressive_sell_prints_per_second
+        : features.aggressive_buy_prints_per_second;
     return {
         1.0,
         features.spread_ticks,
@@ -208,6 +213,9 @@ struct ExplorationChoice {
         direction * features.short_return_ticks,
         direction * features.inventory_fraction,
         features.local_latency_ms,
+        std::max(0.0, opposite_print_rate),
+        std::log1p(std::max(0.0, queue_ahead) / std::max(kEps, quote_shares)),
+        distance_ticks,
     };
 }
 
@@ -235,11 +243,20 @@ struct ExplorationChoice {
     const double price = static_cast<double>(quote_tick) * model.tick_size;
     if (!(price > 0.0 && price < 1.0)) return out;
 
-    const auto x = model_features(features, side);
     const double touch_depth = side == Side::Buy ? update.bid_depth_l1 : update.ask_depth_l1;
     const double distance_ticks = side == Side::Buy
         ? static_cast<double>(update.best_bid_tick - quote_tick)
         : static_cast<double>(quote_tick - update.best_ask_tick);
+    double queue_ahead = 0.0;
+    if (distance_ticks >= -kEps && distance_ticks <= kEps) {
+        queue_ahead = std::max(0.0, touch_depth);
+    } else if (distance_ticks > 0.0) {
+        queue_ahead = side == Side::Buy
+            ? std::max(0.0, update.bid_depth_l10)
+            : std::max(0.0, update.ask_depth_l10);
+    }
+    const auto x = model_features(
+        features, side, queue_ahead, quote_shares, distance_ticks);
     const auto* cell = execution_cell(model, action, update, side);
 
     const double global_fill_logit = model.fill_coefficients[0];
@@ -260,24 +277,23 @@ struct ExplorationChoice {
     const double opposite_flow_rate = side == Side::Buy
         ? features.aggressive_sell_shares_per_second
         : features.aggressive_buy_shares_per_second;
+    const double opposite_print_rate = side == Side::Buy
+        ? features.aggressive_sell_prints_per_second
+        : features.aggressive_buy_prints_per_second;
     const double horizon_seconds = std::max(0.001, model.fill_prediction_horizon_seconds);
     const double expected_opposite_shares = std::max(0.0, opposite_flow_rate) * horizon_seconds;
-    double queue_ahead = 0.0;
-    if (distance_ticks >= -kEps && distance_ticks <= kEps) {
-        queue_ahead = std::max(0.0, touch_depth);
-    } else if (distance_ticks > 0.0) {
-        queue_ahead = side == Side::Buy
-            ? std::max(0.0, update.bid_depth_l10)
-            : std::max(0.0, update.ask_depth_l10);
-    }
-    const double distance_flow_requirement = distance_ticks > 0.0 ? queue_ahead : 0.0;
+    const double expected_opposite_prints =
+        std::max(0.0, opposite_print_rate) * horizon_seconds;
+    // Arrival and size are separate causal stages. A single historical whale
+    // print may imply large conditional depletion if another print arrives,
+    // but it must not imply that a second print is almost certain.
     const double modeled_flow_reach_probability = clamp(
-        1.0 - std::exp(-expected_opposite_shares /
-                       std::max(kEps, quote_shares + distance_flow_requirement)),
-        0.0, 1.0);
+        1.0 - std::exp(-expected_opposite_prints), 0.0, 1.0);
+    const double conditional_opposite_shares = modeled_flow_reach_probability > kEps
+        ? expected_opposite_shares / modeled_flow_reach_probability : 0.0;
     const double modeled_queue_depletion_probability = queue_ahead <= kEps
         ? 1.0
-        : clamp(expected_opposite_shares /
+        : clamp(conditional_opposite_shares /
                 std::max(kEps, queue_ahead + quote_shares), 0.0, 1.0);
     const double flow_reach_probability = features.flow_evidence_valid != 0
         ? modeled_flow_reach_probability : 1.0;
@@ -322,6 +338,7 @@ struct ExplorationChoice {
     out.flow_reach_probability = flow_reach_probability;
     out.queue_depletion_probability = queue_depletion_probability;
     out.opposite_flow_shares_per_second = std::max(0.0, opposite_flow_rate);
+    out.opposite_flow_prints_per_second = std::max(0.0, opposite_print_rate);
     out.gross_capture = capture;
     out.expected_cost = expected_cost;
     out.expected_risk = adverse_markout + inventory_cost;
@@ -527,15 +544,25 @@ MakerDecision MakerHotPath::on_market_update(
             0.0, update.prior_aggressive_buy_shares_per_second);
         ew_aggressive_sell_shares_per_second_ = std::max(
             0.0, update.prior_aggressive_sell_shares_per_second);
+        ew_aggressive_buy_prints_per_second_ = std::max(
+            0.0, update.prior_aggressive_buy_prints_per_second);
+        ew_aggressive_sell_prints_per_second_ = std::max(
+            0.0, update.prior_aggressive_sell_prints_per_second);
         flow_evidence_valid_ = 1;
     } else {
         ew_aggressive_buy_shares_per_second_ *= time_decay;
         ew_aggressive_sell_shares_per_second_ *= time_decay;
+        ew_aggressive_buy_prints_per_second_ *= time_decay;
+        ew_aggressive_sell_prints_per_second_ *= time_decay;
     }
     const double buy_trade_delta = std::max(0.0, update.trade_buy_qty_delta);
     const double sell_trade_delta = std::max(0.0, update.trade_sell_qty_delta);
     ew_aggressive_buy_shares_per_second_ += buy_trade_delta / tau_seconds;
     ew_aggressive_sell_shares_per_second_ += sell_trade_delta / tau_seconds;
+    ew_aggressive_buy_prints_per_second_ +=
+        buy_trade_delta > 0.0 ? 1.0 / tau_seconds : 0.0;
+    ew_aggressive_sell_prints_per_second_ +=
+        sell_trade_delta > 0.0 ? 1.0 / tau_seconds : 0.0;
     if (buy_trade_delta > 0.0 || sell_trade_delta > 0.0) flow_evidence_valid_ = 1;
     ew_trade_intensity_ = (ew_aggressive_buy_shares_per_second_
                          + ew_aggressive_sell_shares_per_second_) / visible_depth;
@@ -566,6 +593,10 @@ MakerDecision MakerHotPath::on_market_update(
         std::max(0.0, ew_aggressive_buy_shares_per_second_);
     decision.features.aggressive_sell_shares_per_second =
         std::max(0.0, ew_aggressive_sell_shares_per_second_);
+    decision.features.aggressive_buy_prints_per_second =
+        std::max(0.0, ew_aggressive_buy_prints_per_second_);
+    decision.features.aggressive_sell_prints_per_second =
+        std::max(0.0, ew_aggressive_sell_prints_per_second_);
     decision.features.cancel_intensity = std::max(0.0, ew_cancel_intensity_);
     decision.features.inventory_fraction = clamp(
         inventory.residual_shares() / std::max(kEps, risk.max_abs_residual_shares), -2.0, 2.0);
@@ -943,6 +974,8 @@ MakerDecision MakerHotPath::on_market_update(
                         choice.economics->queue_depletion_probability;
                     decision.bid_opposite_flow_shares_per_second =
                         choice.economics->opposite_flow_shares_per_second;
+                    decision.bid_opposite_flow_prints_per_second =
+                        choice.economics->opposite_flow_prints_per_second;
                 } else {
                     decision.ask_fill_probability = choice.economics->fill_probability;
                     decision.ask_flow_reach_probability =
@@ -951,6 +984,8 @@ MakerDecision MakerHotPath::on_market_update(
                         choice.economics->queue_depletion_probability;
                     decision.ask_opposite_flow_shares_per_second =
                         choice.economics->opposite_flow_shares_per_second;
+                    decision.ask_opposite_flow_prints_per_second =
+                        choice.economics->opposite_flow_prints_per_second;
                 }
                 decision.action = choice.action;
                 decision.reason = DecisionReason::ExplorationQuote;
@@ -1001,6 +1036,10 @@ MakerDecision MakerHotPath::on_market_update(
         best->bid.opposite_flow_shares_per_second;
     decision.ask_opposite_flow_shares_per_second =
         best->ask.opposite_flow_shares_per_second;
+    decision.bid_opposite_flow_prints_per_second =
+        best->bid.opposite_flow_prints_per_second;
+    decision.ask_opposite_flow_prints_per_second =
+        best->ask.opposite_flow_prints_per_second;
     decision.robust_ev = (want_bid ? best->bid.robust_ev : 0.0) + (want_ask ? best->ask.robust_ev : 0.0);
     decision.ev_uncertainty = (want_bid ? best->bid.uncertainty : 0.0)
                             + (want_ask ? best->ask.uncertainty : 0.0);

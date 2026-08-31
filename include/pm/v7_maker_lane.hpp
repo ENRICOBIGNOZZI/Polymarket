@@ -15,6 +15,8 @@ struct MakerLaneContext {
     double conservative_reward_ev_per_share = 0.0;
     double prior_aggressive_buy_shares_per_second = 0.0;
     double prior_aggressive_sell_shares_per_second = 0.0;
+    double prior_aggressive_buy_prints_per_second = 0.0;
+    double prior_aggressive_sell_prints_per_second = 0.0;
     double related_fair_value = 0.0;
     double related_fair_lower = 0.0;
     double related_fair_upper = 0.0;
