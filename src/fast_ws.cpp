@@ -251,9 +251,13 @@ struct MarketWebSocketFeed::Impl {
                 ws.next_layer().handshake(ssl::stream_base::client);
 
                 beast::get_lowest_layer(ws).expires_never();
+                // Quiet market subscriptions remain connected without public
+                // mutations for tens of seconds. Keep a finite transport
+                // failure bound, but do not mistake ordinary quiet for a
+                // disconnect and churn lineage every five seconds.
                 websocket::stream_base::timeout timeouts{
                     std::chrono::seconds(10),
-                    std::chrono::seconds(5),
+                    std::chrono::seconds(60),
                     true,
                 };
                 ws.set_option(timeouts);
