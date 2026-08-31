@@ -33,6 +33,58 @@ CONSERVATIVE_MARKING_CONTRACT = "full_depth_executable_bid_net_fee_or_zero_fail_
 LIVE_FLOW_SCHEMA = "polymarket_v7_live_trade_flow_v1"
 
 
+def latest_compatible_archived_dataset(run_dir: Path) -> tuple[dict[str, Any], str]:
+    """Recover research samples after a PAPER cutover, never trading state.
+
+    The deploy archives ``paper_v7_live`` before starting the next exact SHA.
+    Cash, positions and PnL belong to that old execution generation, but the
+    event-novel feature/label tape and frozen challenger remain valid while the
+    declared dataset/model semantics are unchanged.
+    """
+    live_root = run_dir.parent
+    if live_root.name != "paper_v7_live":
+        return {}, ""
+    archive_root = live_root.parent / "paper_v7_archives"
+    try:
+        candidates = sorted(
+            archive_root.glob("cutover-*/micro_taker/state.json"),
+            key=lambda path: path.stat().st_mtime_ns,
+            reverse=True,
+        )
+    except OSError:
+        return {}, ""
+    for path in candidates:
+        try:
+            archived = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            continue
+        samples = archived.get("samples") if isinstance(archived, dict) else None
+        if (
+            not isinstance(samples, list)
+            or int(_finite(archived.get("dataset_version"), 0.0)) != DATASET_VERSION
+            or archived.get("dataset_lineage") != DATASET_LINEAGE
+        ):
+            continue
+        restored: dict[str, Any] = {
+            "samples": samples,
+            "dataset_version": DATASET_VERSION,
+            "dataset_lineage": DATASET_LINEAGE,
+        }
+        migration = archived.get("dataset_migration")
+        if isinstance(migration, dict):
+            restored["dataset_migration"] = migration
+        challenger = archived.get("model_challenger")
+        if (
+            isinstance(challenger, dict)
+            and challenger.get("model_spec_version") == MODEL_SPEC_VERSION
+            and int(_finite(challenger.get("feature_dimension"), 0.0))
+                == MODEL_FEATURE_DIM
+        ):
+            restored["model_challenger"] = challenger
+        return restored, str(path)
+    return {}, ""
+
+
 def _model_feature_vector(
     raw_x: list[float], mid: float, spread: float,
     history: list[tuple[int, float]], ts: int,
@@ -1004,7 +1056,28 @@ def main() -> int:
     drain_requested = (args.run_dir.parent / "control" / "CUTOVER_DRAIN").exists()
     trade_tape = args.trade_tape or (args.run_dir.parent / "trade_tape.csv")
     state_path = args.run_dir / "state.json"
-    state = json.loads(state_path.read_text(encoding="utf-8")) if state_path.exists() else {"cash": start_capital, "peak": start_capital, "killed": False, "positions": {}, "samples": []}
+    dataset_restore: dict[str, Any] = {}
+    if state_path.exists():
+        state = json.loads(state_path.read_text(encoding="utf-8"))
+        if isinstance(state.get("dataset_restore"), dict):
+            dataset_restore = state["dataset_restore"]
+    else:
+        state = {
+            "cash": start_capital, "peak": start_capital, "killed": False,
+            "positions": {}, "samples": [],
+        }
+        archived_dataset, archived_path = latest_compatible_archived_dataset(args.run_dir)
+        if archived_dataset:
+            state.update(archived_dataset)
+            dataset_restore = {
+                "state": "RESTORED_COMPATIBLE_RESEARCH_ONLY",
+                "source": archived_path,
+                "samples": len(archived_dataset.get("samples") or []),
+                "cash_positions_pnl_restored": False,
+                "dataset_version": DATASET_VERSION,
+                "dataset_lineage": DATASET_LINEAGE,
+                "model_spec_version": MODEL_SPEC_VERSION,
+            }
     prior_dataset_version = int(_finite(state.get("dataset_version"), 1.0))
     legacy_samples = state.get("samples") if isinstance(state.get("samples"), list) else []
     dataset_migration: dict[str, Any] = state.get("dataset_migration") if isinstance(state.get("dataset_migration"), dict) else {}
@@ -1516,6 +1589,7 @@ def main() -> int:
         "dataset_version": DATASET_VERSION,
         "dataset_lineage": DATASET_LINEAGE,
         "dataset_migration": dataset_migration,
+        "dataset_restore": dataset_restore,
         "dataset_diagnostics": dataset_diagnostics,
         "novel_samples_last_tick": novel_samples,
         "duplicate_snapshots_rejected_last_tick": duplicate_snapshots_rejected,

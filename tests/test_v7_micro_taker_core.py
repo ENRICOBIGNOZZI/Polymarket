@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import json
 import sys
+import tempfile
 import unittest
 from pathlib import Path
 from types import SimpleNamespace
@@ -143,6 +145,40 @@ class MicroTakerRoundTripTest(unittest.TestCase):
             worker.full_depth_vwap(levels, 5.0, buy=False),
             (0.49 * 2.0 + 0.48 * 3.0) / 5.0,
         )
+
+    def test_cutover_restores_only_compatible_research_dataset(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            runs = Path(directory)
+            run_dir = runs / "paper_v7_live" / "micro_taker"
+            older = runs / "paper_v7_archives" / "cutover-old-1" / "micro_taker"
+            latest = runs / "paper_v7_archives" / "cutover-new-2" / "micro_taker"
+            older.mkdir(parents=True)
+            latest.mkdir(parents=True)
+            compatible = {
+                "dataset_version": worker.DATASET_VERSION,
+                "dataset_lineage": worker.DATASET_LINEAGE,
+                "samples": [{"sample_key": "causal-1"}],
+                "model_challenger": {
+                    "model_spec_version": worker.MODEL_SPEC_VERSION,
+                    "feature_dimension": worker.MODEL_FEATURE_DIM,
+                    "beta": [0.0] * worker.MODEL_FEATURE_DIM,
+                },
+                # Execution state must never be returned by the helper.
+                "cash": 1.0, "positions": {"unsafe": {}},
+                "realized_pnl_total": 99.0,
+            }
+            (older / "state.json").write_text(json.dumps(compatible))
+            incompatible = {**compatible, "dataset_lineage": "legacy"}
+            (latest / "state.json").write_text(json.dumps(incompatible))
+            # Ensure the incompatible archive is inspected first.
+            (latest / "state.json").touch()
+            restored, source = worker.latest_compatible_archived_dataset(run_dir)
+            self.assertEqual(restored["samples"], [{"sample_key": "causal-1"}])
+            self.assertIn("model_challenger", restored)
+            self.assertNotIn("cash", restored)
+            self.assertNotIn("positions", restored)
+            self.assertNotIn("realized_pnl_total", restored)
+            self.assertEqual(source, str(older / "state.json"))
 
 
 NOW = 1_800_000_000

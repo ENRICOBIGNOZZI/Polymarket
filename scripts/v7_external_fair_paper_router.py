@@ -27,6 +27,11 @@ from v7_ledger_spool import spool_event
 
 STRATEGY = "CRYPTO_INFORMED_TAKER"
 MODEL_VERSION = "external-fair-structural-v7-paper"
+# Evidence produced by the same declared semantics may survive an exact-SHA
+# cutover.  Bump this whenever forecast labels, settlement semantics or virtual
+# execution economics change incompatibly.  Exact SHA still governs execution;
+# this version governs only read-only SHADOW evidence pooling.
+EVIDENCE_SEMANTICS_VERSION = "external-fair-settlement-evidence-v1"
 HORIZONS = (1, 10, 45, 60, 300)
 FORECAST_TTE_BUCKETS = (240, 180, 120, 90, 60, 45, 30, 20, 15, 10, 5)
 FORECAST_BUCKET_TOLERANCE_SECONDS = 1.25
@@ -336,6 +341,13 @@ class PaperRouter:
         self.status_path = self.directory / "paper_router_status.json"
         self.state_path = self.directory / "paper_router_state.json"
         self.counterfactual_path = self.directory / "counterfactuals.jsonl"
+        # Production uses runs/paper_v7_live, while unit tests often pass an
+        # arbitrary temporary directory.  Keep both layouts isolated and put
+        # durable evidence beside (never inside) the ephemeral live run.
+        family_root = run_root.parent if run_root.name == "paper_v7_live" else run_root
+        self.archive_root = family_root / "paper_v7_archives"
+        self.durable_directory = family_root / "paper_v7_durable" / "external_fair"
+        self.durable_counterfactual_path = self.durable_directory / "counterfactuals.jsonl"
         self.drain_path = run_root / "control" / "CUTOVER_DRAIN"
         allocation = load(run_root / "control" / "allocations" / "manifest.json")
         budgets = allocation.get("budgets") if isinstance(allocation.get("budgets"), dict) else {}
@@ -358,9 +370,200 @@ class PaperRouter:
         prior = load(self.state_path)
         if prior.get("model_sha") == model_sha:
             self.state.update(prior)
+        self.compact_durable_evidence()
+        self.restore_durable_state()
         self.last_book_error = ""
         self.last_attempt_reason = ""
         self.last_live_market: dict[str, Any] = {}
+
+    def evidence_compatible(self, row: dict[str, Any]) -> bool:
+        """Pool only explicitly compatible, permanently SHADOW observations."""
+        semantics = str(row.get("evidence_semantics_version") or "")
+        return (
+            row.get("schema") == "polymarket_v7_external_fair_counterfactual_v1"
+            and row.get("paper_only") is True
+            and row.get("authenticated_execution") is False
+            and row.get("real_order_submission") is False
+            and row.get("execution_authority") == "SHADOW_ZERO_AUTHORITY"
+            and row.get("model_version") == MODEL_VERSION
+            and row.get("policy_sha256") == self.policy_sha256
+            # One-time migration for same-policy evidence written immediately
+            # before this field existed. Incompatible configurations have a
+            # different policy hash and remain excluded.
+            and semantics in {"", EVIDENCE_SEMANTICS_VERSION}
+        )
+
+    @staticmethod
+    def read_counterfactual_records(paths: list[Path]) -> dict[str, dict[str, Any]]:
+        records: dict[str, dict[str, Any]] = {}
+        for path in paths:
+            try:
+                with path.open(encoding="utf-8") as handle:
+                    for line in handle:
+                        try:
+                            row = json.loads(line)
+                        except json.JSONDecodeError:
+                            continue
+                        if isinstance(row, dict) and row.get("record_id"):
+                            records.setdefault(str(row["record_id"]), row)
+            except OSError:
+                continue
+        return records
+
+    def evidence_source_paths(self) -> list[Path]:
+        paths = [self.durable_counterfactual_path, self.counterfactual_path]
+        if self.archive_root.exists():
+            paths.extend(sorted(
+                self.archive_root.glob("cutover-*/external_fair/counterfactuals.jsonl")
+            ))
+        return paths
+
+    def compact_durable_evidence(self) -> None:
+        """Deduplicate compatible evidence before old cutover trees are pruned."""
+        records = self.read_counterfactual_records(self.evidence_source_paths())
+        compatible = [
+            row for row in records.values() if self.evidence_compatible(row)
+        ]
+        compatible.sort(key=lambda row: (
+            int(row.get("timestamp_ms") or 0), str(row.get("record_id") or "")
+        ))
+        self.durable_directory.mkdir(parents=True, exist_ok=True)
+        temporary = self.durable_counterfactual_path.with_name(
+            self.durable_counterfactual_path.name + f".tmp.{os.getpid()}"
+        )
+        with temporary.open("w", encoding="utf-8") as handle:
+            for row in compatible:
+                handle.write(json.dumps(row, separators=(",", ":"), sort_keys=True) + "\n")
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(temporary, self.durable_counterfactual_path)
+
+    def durable_records(self) -> dict[str, dict[str, Any]]:
+        return {
+            record_id: row for record_id, row in self.read_counterfactual_records(
+                [self.durable_counterfactual_path, self.counterfactual_path]
+            ).items() if self.evidence_compatible(row)
+        }
+
+    def restore_durable_state(self) -> None:
+        """Restore unresolved forecasts and virtual positions across cutovers."""
+        records = self.durable_records()
+        forecasts: dict[str, dict[str, Any]] = {}
+        forecast_finals: set[str] = set()
+        fills: dict[str, dict[str, Any]] = {}
+        fill_finals: dict[str, dict[str, Any]] = {}
+        markout_horizons: dict[str, set[int]] = {}
+        candidate_ids: set[str] = set()
+        for row in records.values():
+            event_type = str(row.get("event_type") or "")
+            forecast_id = str(row.get("forecast_id") or "")
+            fill_id = str(row.get("fill_id") or "")
+            if event_type == "FORECAST" and forecast_id:
+                forecasts.setdefault(forecast_id, row)
+            elif event_type == "FORECAST_FINAL" and forecast_id:
+                forecast_finals.add(forecast_id)
+            elif event_type == "VIRTUAL_FILL" and fill_id:
+                fills.setdefault(fill_id, row)
+            elif event_type == "VIRTUAL_FINAL" and fill_id:
+                fill_finals.setdefault(fill_id, row)
+            elif event_type == "VIRTUAL_MARKOUT" and fill_id:
+                for key in (row.get("markouts") or {}):
+                    try:
+                        markout_horizons.setdefault(fill_id, set()).add(
+                            int(str(key).removesuffix("s"))
+                        )
+                    except ValueError:
+                        continue
+            if event_type == "CANDIDATE" and row.get("counterfactual_id"):
+                candidate_ids.add(str(row["counterfactual_id"]))
+
+        seen_keys = {
+            f"{row.get('market_id')}:{int(row.get('tte_bucket_seconds') or 0)}"
+            for row in forecasts.values() if row.get("market_id")
+        }
+        pending: dict[str, dict[str, Any]] = {}
+        for forecast_id, row in forecasts.items():
+            if forecast_id in forecast_finals:
+                continue
+            required = ("market_id", "yes_token", "no_token", "resolution_due_ms")
+            if not all(row.get(key) not in {None, ""} for key in required):
+                continue
+            pending[forecast_id] = {
+                key: row.get(key) for key in (
+                    "counterfactual_id", "forecast_id", "market_id", "event_id",
+                    "rules_hash", "reference_version", "tte_bucket_seconds",
+                    "observed_tte_seconds", "model_yes", "market_yes",
+                    "external_only_yes", "hybrid_yes", "external_only_model_id",
+                    "hybrid_model_id", "lower", "upper", "oracle_value",
+                    "external_venue_count", "fair_calculated_monotonic_ns",
+                    "fair_valid_until_monotonic_ns", "yes_best_bid", "yes_best_ask",
+                    "no_best_bid", "no_best_ask", "market_mid_source", "decision",
+                    "yes_token", "no_token", "observed_ms", "resolution_due_ms",
+                )
+            }
+
+        restored_positions: dict[str, dict[str, Any]] = {}
+        for fill_id, row in fills.items():
+            if fill_id in fill_finals:
+                continue
+            metadata = row.get("metadata") if isinstance(row.get("metadata"), dict) else {}
+            try:
+                shares = float(row.get("filled_size"))
+                price = float(row.get("fill_price"))
+                fee = float(row.get("fee") or 0.0)
+            except (TypeError, ValueError):
+                continue
+            position_id = str(row.get("position_id") or "")
+            if not position_id or shares <= 0.0 or not 0.0 < price < 1.0:
+                continue
+            restored_positions[position_id] = {
+                "position_id": position_id,
+                "counterfactual_id": str(row.get("counterfactual_id") or ""),
+                "fill_id": fill_id,
+                "order_id": str(row.get("counterfactual_id") or ""),
+                "market_id": str(row.get("market_id") or ""),
+                "event_id": str(row.get("event_id") or ""),
+                "token_id": str(row.get("token_id") or ""),
+                "outcome": str(metadata.get("outcome") or ""),
+                "shares": shares, "entry_price": price,
+                "entry_fee": fee, "entry_cost": shares * price,
+                "executable_value": 0.0,
+                "opened_ms": int(row.get("receive_ts_ms") or row.get("timestamp_ms") or 0),
+                "fee_schedule": row.get("fee_schedule") if isinstance(
+                    row.get("fee_schedule"), dict) else {
+                        "rate": float(row.get("fee_rate") or 0.0),
+                        "exponent": 1, "takerOnly": True,
+                    },
+                "markouts": sorted(markout_horizons.get(fill_id, set())),
+                "settled": False,
+                "model_yes": finite(metadata.get("fair_yes")),
+                "market_yes": finite(metadata.get("arrival_pm_mid")),
+                "market_mid_source": "LIVE_COMPLEMENT_CONSISTENT_CLOB_BATCH",
+            }
+
+        self.state["forecasts"] = len(forecasts)
+        self.state["resolved_forecasts"] = len(forecast_finals)
+        self.state["forecasted_keys"] = sorted(seen_keys)[-10_000:]
+        self.state["pending_forecasts"] = pending
+        self.state["counterfactual_fills"] = len(fills)
+        self.state["candidates"] = len(candidate_ids)
+        self.state["counterfactual_realized_pnl"] = sum(
+            finite(row.get("counterfactual_pnl"), 0.0)
+            for row in fill_finals.values()
+        )
+        self.state["traded_markets"] = sorted({
+            str(row.get("market_id") or "") for row in fills.values()
+            if row.get("market_id")
+        })
+        current_positions = self.state.get("positions") if isinstance(
+            self.state.get("positions"), dict) else {}
+        current_positions = {
+            position_id: position for position_id, position in current_positions.items()
+            if not isinstance(position, dict)
+            or str(position.get("fill_id") or "") not in fill_finals
+        }
+        current_positions.update(restored_positions)
+        self.state["positions"] = current_positions
 
     def reject(self, reason: str) -> None:
         reasons = self.state.setdefault("rejection_reasons", {})
@@ -372,19 +575,16 @@ class PaperRouter:
 
     def maturity_diagnostics(self) -> dict[str, Any]:
         """Fail-closed settlement-cluster gate; never grants authority automatically."""
-        records: dict[str, dict[str, Any]] = {}
-        try:
-            with self.counterfactual_path.open(encoding="utf-8") as handle:
-                for line in handle:
-                    try:
-                        row = json.loads(line)
-                    except json.JSONDecodeError:
-                        continue
-                    if isinstance(row, dict) and row.get("record_id"):
-                        records[str(row["record_id"])] = row
-        except OSError:
-            pass
-        forecasts = [row for row in records.values() if row.get("event_type") == "FORECAST_FINAL"]
+        records = self.durable_records()
+        # A process may crash after appending a final but before publishing its
+        # state. Deduplicate by the causal forecast identity so retries cannot
+        # overweight one settlement cluster.
+        forecast_finals: dict[str, dict[str, Any]] = {}
+        for row in records.values():
+            forecast_id = str(row.get("forecast_id") or "")
+            if row.get("event_type") == "FORECAST_FINAL" and forecast_id:
+                forecast_finals.setdefault(forecast_id, row)
+        forecasts = list(forecast_finals.values())
         by_market: dict[str, list[dict[str, Any]]] = {}
         for row in forecasts:
             by_market.setdefault(str(row.get("market_id") or "UNKNOWN"), []).append(row)
@@ -510,6 +710,7 @@ class PaperRouter:
             "timestamp_ms": timestamp_ms,
             "model_sha": self.sha,
             "model_version": MODEL_VERSION,
+            "evidence_semantics_version": EVIDENCE_SEMANTICS_VERSION,
             "policy_sha256": self.policy_sha256,
             "execution_authority": "SHADOW_ZERO_AUTHORITY",
             "paper_only": True,
@@ -517,18 +718,15 @@ class PaperRouter:
             "real_order_submission": False,
             **values,
         }
-        self.counterfactual_path.parent.mkdir(parents=True, exist_ok=True)
         payload = (json.dumps(record, separators=(",", ":"), sort_keys=True) + "\n").encode()
-        descriptor = os.open(
-            self.counterfactual_path,
-            os.O_APPEND | os.O_CREAT | os.O_WRONLY,
-            0o600,
-        )
-        try:
-            os.write(descriptor, payload)
-            os.fsync(descriptor)
-        finally:
-            os.close(descriptor)
+        for path in (self.counterfactual_path, self.durable_counterfactual_path):
+            path.parent.mkdir(parents=True, exist_ok=True)
+            descriptor = os.open(path, os.O_APPEND | os.O_CREAT | os.O_WRONLY, 0o600)
+            try:
+                os.write(descriptor, payload)
+                os.fsync(descriptor)
+            finally:
+                os.close(descriptor)
 
     def emit_canonical_shadow(self, event: LedgerEvent) -> None:
         """Route shadow evidence through the sole canonical writer transport."""
@@ -611,6 +809,7 @@ class PaperRouter:
         yes_token, no_token = str(market.get("yes_token") or ""), str(market.get("no_token") or "")
         yes_book, no_book = books.get(yes_token), books.get(no_token)
         observed_ms = now_ms()
+        resolution_due_ms = observed_ms + int(tte * 1000.0)
         values = {
             "counterfactual_id": forecast_id, "forecast_id": forecast_id,
             "market_id": market_id, "event_id": str(market.get("event_id") or ""),
@@ -633,15 +832,17 @@ class PaperRouter:
             "no_best_ask": no_book.asks[0][0] if no_book and no_book.asks else None,
             "market_mid_source": "LIVE_COMPLEMENT_CONSISTENT_CLOB_BATCH",
             "decision": "SHADOW_FORECAST_ONLY",
+            # Persist enough settlement identity to resume a pending forecast
+            # after the ephemeral live run is archived during a cutover.
+            "yes_token": yes_token, "no_token": no_token,
+            "observed_ms": observed_ms, "resolution_due_ms": resolution_due_ms,
         }
         self.emit_counterfactual("FORECAST", **values)
         seen.append(key)
         self.state["forecasted_keys"] = seen[-10_000:]
         self.state["forecasts"] = int(self.state.get("forecasts") or 0) + 1
         self.state.setdefault("pending_forecasts", {})[forecast_id] = {
-            **values, "yes_token": yes_token, "no_token": no_token,
-            "observed_ms": observed_ms,
-            "resolution_due_ms": observed_ms + int(tte * 1000.0),
+            **values,
         }
         return True
 
@@ -907,6 +1108,7 @@ class PaperRouter:
             exchange_ts_ms=arrival_book.exchange_ts_ms, receive_ts_ms=arrival_book.receive_ts_ms,
             fill_price=ask, filled_size=size, fee=total_fee,
             fee_rate=float(schedule.get("rate") or 0.0), fee_source="GAMMA_AUTHORITATIVE_FEE_SCHEDULE",
+            fee_schedule=schedule,
             slippage=max(0.0, ask - float(common["ask"])) * size,
             metadata={
                 **common["metadata"], "robust_net_ev": robust_ev,

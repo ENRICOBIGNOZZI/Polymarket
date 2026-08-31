@@ -170,6 +170,10 @@ def main() -> None:
         events = [json.loads(line) for line in (external / "counterfactuals.jsonl").read_text().splitlines()]
         event_types = {event["event_type"] for event in events}
         assert {"FORECAST", "CANDIDATE", "VIRTUAL_FILL"} <= event_types
+        assert all(event["evidence_semantics_version"] == router.EVIDENCE_SEMANTICS_VERSION
+                   for event in events)
+        durable_tape = run_root / "paper_v7_durable" / "external_fair" / "counterfactuals.jsonl"
+        assert durable_tape.exists()
         status = json.loads((external / "paper_router_status.json").read_text())
         assert status["execution_authority"] == "SHADOW_ZERO_AUTHORITY"
         assert status["order_submission_enabled"] is False
@@ -236,6 +240,10 @@ def main() -> None:
             run_root, "b" * 40, ROOT / "config" / "v7_external_fair.json",
             "https://clob.invalid", "https://gamma.invalid",
         )
+        # A cutover changes exact execution SHA but must not erase a compatible
+        # unresolved SHADOW position or its future settlement label.
+        assert failing.state["counterfactual_fills"] == 1
+        assert len(failing.state["positions"]) == 1
         failed_status = snapshot()
         failed_status["code_sha"] = "b" * 40
         failed_status["market"].update({"market_id": "m2", "event_id": "e2"})
@@ -302,16 +310,31 @@ def main() -> None:
         assert abs(pending["market_yes"] - 0.80) < 1e-12
         assert 0.60 < pending["hybrid_yes"] < 0.80
         assert pending["market_mid_source"] == "LIVE_COMPLEMENT_CONSISTENT_CLOB_BATCH"
-        pending["resolution_due_ms"] = router.now_ms() - 10_000
+        # Simulate an exact-SHA cutover before settlement. The ephemeral state
+        # is intentionally unavailable; pending identity must come from the
+        # compact durable tape.
+        resumed = router.PaperRouter(
+            run_root, "e" * 40, ROOT / "config" / "v7_external_fair.json",
+            "https://clob.invalid", "https://gamma.invalid",
+        )
+        assert resumed.state["forecasts"] == 1
+        assert len(resumed.state["pending_forecasts"]) == 1
+        resumed_pending = next(iter(resumed.state["pending_forecasts"].values()))
+        assert resumed_pending["yes_token"] == "yes"
+        assert resumed_pending["no_token"] == "no"
+        resumed_pending["resolution_due_ms"] = router.now_ms() - 10_000
         resolution = {
             "closed": True, "clobTokenIds": '["yes", "no"]',
             "outcomePrices": '["1", "0"]',
         }
         with mock.patch.object(router, "request_json", return_value=resolution):
-            collector.observe_forecasts()
-        assert collector.state["forecasts"] == 1
-        assert collector.state["resolved_forecasts"] == 1
-        assert collector.state["pending_forecasts"] == {}
+            resumed.observe_forecasts()
+        assert resumed.state["forecasts"] == 1
+        assert resumed.state["resolved_forecasts"] == 1
+        assert resumed.state["pending_forecasts"] == {}
+        maturity = resumed.maturity_diagnostics()
+        assert maturity["independent_settlement_markets"] == 1
+        assert maturity["forecast_rows"] == 1
         events = [
             json.loads(line) for line in
             (run_root / "external_fair" / "counterfactuals.jsonl").read_text().splitlines()
