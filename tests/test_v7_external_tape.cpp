@@ -92,13 +92,10 @@ int main() {
     {
         ExternalRawTapeRecorder raw_recorder(raw_path, sha, "run-raw", "session-raw", "binance-spot", 1'000'002);
         assert(raw_recorder.try_record_raw(VenueId::BinanceSpot, 3, 120, 1'020, R"({"e":"depthUpdate"})"));
-        const std::string full_coinbase_l2_snapshot((1U << 20U) + 64U, 'x');
-        assert(raw_recorder.try_record_raw(VenueId::CoinbaseSpot, 3, 121, 1'021,
-                                            full_coinbase_l2_snapshot));
-        assert(!raw_recorder.try_record_raw(VenueId::BinanceSpot, 3, 122, 1'022,
+        assert(!raw_recorder.try_record_raw(VenueId::BinanceSpot, 3, 121, 1'021,
                                              std::string(kExternalRawTapePayloadBytes + 1, 'x')));
         const auto raw_snapshot = raw_recorder.snapshot();
-        assert(raw_snapshot.accepted == 2);
+        assert(raw_snapshot.accepted == 1);
         assert(raw_snapshot.evidence_valid == 0);
     }
     std::ifstream raw_input(raw_path, std::ios::binary);
@@ -114,5 +111,19 @@ int main() {
     assert(raw_record.venue == VenueId::BinanceSpot);
     assert(raw_payload == R"({"e":"depthUpdate"})");
     std::filesystem::remove(raw_path);
+
+    const auto large_raw_path = std::filesystem::temp_directory_path() / "pm_v7_external_large_raw_tape_test.bin";
+    std::filesystem::remove(large_raw_path);
+    {
+        ExternalRawTapeRecorder raw_recorder(
+            large_raw_path, sha, "run-large-raw", "session-large-raw", "coinbase-spot", 1'000'003);
+        const std::string full_coinbase_l2_snapshot((1U << 20U) + 64U, 'x');
+        assert(raw_recorder.try_record_raw(VenueId::CoinbaseSpot, 4, 130, 1'030,
+                                            full_coinbase_l2_snapshot));
+        const auto raw_snapshot = raw_recorder.snapshot();
+        assert(raw_snapshot.accepted == 1);
+        assert(raw_snapshot.evidence_valid == 1);
+    }
+    std::filesystem::remove(large_raw_path);
     return 0;
 }

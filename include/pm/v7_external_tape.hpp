@@ -22,11 +22,13 @@ inline constexpr std::uint32_t kExternalTapeSchemaVersion = 3;
 inline constexpr std::uint32_t kExternalTapeOldestReplaySchemaVersion = 1;
 inline constexpr std::size_t kExternalTapePayloadBytes = 512;
 inline constexpr std::size_t kExternalTapeQueueCapacity = 4096;
-// A Coinbase BTC-USD level2 recovery snapshot can be larger than 1 MiB. Keep
-// it intact in the raw causal tape, while retaining the prior 8 MiB per-source
-// queue-and-scratch memory budget through a shallower SPSC queue.
-inline constexpr std::size_t kExternalRawTapePayloadBytes = 2 * 1024 * 1024;
-inline constexpr std::size_t kExternalRawTapeQueueCapacity = 2;
+inline constexpr std::size_t kExternalRawTapePayloadBytes = 32 * 1024;
+inline constexpr std::size_t kExternalRawTapeQueueCapacity = 256;
+// Coinbase's complete BTC-USD L2 recovery snapshot can exceed 1 MiB. Its raw
+// recorder uses this separate bounded queue; other sources retain the compact
+// high-depth path above.
+inline constexpr std::size_t kExternalLargeRawTapePayloadBytes = 2 * 1024 * 1024;
+inline constexpr std::size_t kExternalLargeRawTapeQueueCapacity = 8;
 
 enum class TapeRecordKind : std::uint16_t {
     OracleEvent = 1,
@@ -88,6 +90,17 @@ struct RawTapeRecord {
     std::uint8_t reserved[3]{};
     std::uint32_t payload_size = 0;
     std::array<std::byte, kExternalRawTapePayloadBytes> payload{};
+};
+
+struct LargeRawTapeRecord {
+    std::uint64_t tape_sequence = 0;
+    std::uint64_t connection_epoch = 0;
+    std::int64_t receive_monotonic_ns = 0;
+    std::int64_t receive_wall_ns = 0;
+    VenueId venue = VenueId::Unknown;
+    std::uint8_t reserved[3]{};
+    std::uint32_t payload_size = 0;
+    std::array<std::byte, kExternalLargeRawTapePayloadBytes> payload{};
 };
 
 // The in-memory queue uses RawTapeRecord's fixed capacity; disk records carry
@@ -194,6 +207,7 @@ static_assert(std::is_trivially_copyable_v<TapeSessionHeader>);
 static_assert(std::is_trivially_copyable_v<TapeRecord>);
 static_assert(std::is_trivially_copyable_v<TapeRecorderSnapshot>);
 static_assert(std::is_trivially_copyable_v<RawTapeRecord>);
+static_assert(std::is_trivially_copyable_v<LargeRawTapeRecord>);
 static_assert(std::is_trivially_copyable_v<RawTapeDiskRecordHeader>);
 
 } // namespace pm::v7::external_fair

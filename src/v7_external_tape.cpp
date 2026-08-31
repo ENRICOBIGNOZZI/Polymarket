@@ -172,11 +172,13 @@ TapeRecorderSnapshot ExternalTapeRecorder::snapshot() const noexcept {
 
 struct ExternalRawTapeRecorder::Impl {
     SpscRing<RawTapeRecord, kExternalRawTapeQueueCapacity> queue{};
-    // These records are deliberately heap-owned with the recorder. A live
-    // Coinbase recovery snapshot is larger than the macOS worker-stack limit.
-    // One producer and one writer own their respective scratch records.
     RawTapeRecord producer_record{};
     RawTapeRecord writer_record{};
+    using LargeQueue = SpscRing<LargeRawTapeRecord, kExternalLargeRawTapeQueueCapacity>;
+    std::unique_ptr<LargeQueue> large_queue{};
+    std::unique_ptr<LargeRawTapeRecord> large_producer_record{};
+    std::unique_ptr<LargeRawTapeRecord> large_writer_record{};
+    bool large_payloads = false;
     std::ofstream output;
     std::thread worker;
     std::atomic<bool> stop_requested{false};
@@ -195,6 +197,15 @@ struct ExternalRawTapeRecorder::Impl {
         if (!path.parent_path().empty()) std::filesystem::create_directories(path.parent_path());
         output.open(path, std::ios::binary | std::ios::trunc);
         if (!output) throw std::runtime_error("unable to open V7 raw tape");
+        // Keep the high-rate 32 KiB recorder for every venue. Coinbase alone
+        // receives the documented complete L2 recovery snapshot, which needs
+        // a larger but still bounded FIFO and heap-owned scratch records.
+        large_payloads = source == "coinbase-spot";
+        if (large_payloads) {
+            large_queue = std::make_unique<LargeQueue>();
+            large_producer_record = std::make_unique<LargeRawTapeRecord>();
+            large_writer_record = std::make_unique<LargeRawTapeRecord>();
+        }
 
         TapeSessionHeader header;
         header.magic = {'P','M','V','7','R','A','W','!'};
@@ -217,27 +228,44 @@ struct ExternalRawTapeRecorder::Impl {
         output.flush();
     }
 
+    [[nodiscard]] std::size_t queued() const noexcept {
+        return large_payloads ? large_queue->approximate_size() : queue.approximate_size();
+    }
+
+    template <class Record>
+    [[nodiscard]] bool write_record(const Record& record) noexcept {
+        RawTapeDiskRecordHeader disk;
+        disk.tape_sequence = record.tape_sequence;
+        disk.connection_epoch = record.connection_epoch;
+        disk.receive_monotonic_ns = record.receive_monotonic_ns;
+        disk.receive_wall_ns = record.receive_wall_ns;
+        disk.venue = record.venue;
+        disk.payload_size = record.payload_size;
+        output.write(reinterpret_cast<const char*>(&disk), sizeof(disk));
+        output.write(reinterpret_cast<const char*>(record.payload.data()),
+                     static_cast<std::streamsize>(record.payload_size));
+        if (!output) {
+            writer_healthy.store(false, std::memory_order_release);
+            evidence_valid.store(false, std::memory_order_release);
+            return false;
+        }
+        written.fetch_add(1, std::memory_order_relaxed);
+        return true;
+    }
+
     void writer_loop() noexcept {
-        while (!stop_requested.load(std::memory_order_acquire) || queue.approximate_size() != 0) {
+        while (!stop_requested.load(std::memory_order_acquire) || queued() != 0) {
             bool progressed = false;
-            while (queue.try_pop(writer_record)) {
-                progressed = true;
-                RawTapeDiskRecordHeader disk;
-                disk.tape_sequence = writer_record.tape_sequence;
-                disk.connection_epoch = writer_record.connection_epoch;
-                disk.receive_monotonic_ns = writer_record.receive_monotonic_ns;
-                disk.receive_wall_ns = writer_record.receive_wall_ns;
-                disk.venue = writer_record.venue;
-                disk.payload_size = writer_record.payload_size;
-                output.write(reinterpret_cast<const char*>(&disk), sizeof(disk));
-                output.write(reinterpret_cast<const char*>(writer_record.payload.data()),
-                             static_cast<std::streamsize>(writer_record.payload_size));
-                if (!output) {
-                    writer_healthy.store(false, std::memory_order_release);
-                    evidence_valid.store(false, std::memory_order_release);
-                    return;
+            if (large_payloads) {
+                while (large_queue->try_pop(*large_writer_record)) {
+                    progressed = true;
+                    if (!write_record(*large_writer_record)) return;
                 }
-                written.fetch_add(1, std::memory_order_relaxed);
+            } else {
+                while (queue.try_pop(writer_record)) {
+                    progressed = true;
+                    if (!write_record(writer_record)) return;
+                }
             }
             if (!progressed) std::this_thread::sleep_for(std::chrono::microseconds(100));
         }
@@ -263,22 +291,27 @@ bool ExternalRawTapeRecorder::try_record_raw(
     std::int64_t receive_wall_ns, std::string_view payload) noexcept {
     if (!impl_ || venue == VenueId::Unknown || connection_epoch == 0
         || receive_monotonic_ns <= 0 || receive_wall_ns <= 0 || payload.empty()
-        || payload.size() > kExternalRawTapePayloadBytes
         || !impl_->writer_healthy.load(std::memory_order_acquire)) {
         if (impl_) impl_->evidence_valid.store(false, std::memory_order_release);
         return false;
     }
-    // Each recorder has exactly one IO producer, so the recorder-owned scratch
-    // record avoids a multi-megabyte hot-path stack allocation.
-    auto& record = impl_->producer_record;
-    record.tape_sequence = impl_->next_sequence.fetch_add(1, std::memory_order_relaxed) + 1;
-    record.connection_epoch = connection_epoch;
-    record.receive_monotonic_ns = receive_monotonic_ns;
-    record.receive_wall_ns = receive_wall_ns;
-    record.venue = venue;
-    record.payload_size = static_cast<std::uint32_t>(payload.size());
-    std::memcpy(record.payload.data(), payload.data(), payload.size());
-    if (!impl_->queue.try_push(record)) {
+    const auto sequence = impl_->next_sequence.fetch_add(1, std::memory_order_relaxed) + 1;
+    const auto enqueue = [&](auto& record, auto& queue, std::size_t maximum) noexcept {
+        if (payload.size() > maximum) return false;
+        record.tape_sequence = sequence;
+        record.connection_epoch = connection_epoch;
+        record.receive_monotonic_ns = receive_monotonic_ns;
+        record.receive_wall_ns = receive_wall_ns;
+        record.venue = venue;
+        record.payload_size = static_cast<std::uint32_t>(payload.size());
+        std::memcpy(record.payload.data(), payload.data(), payload.size());
+        return queue.try_push(record);
+    };
+    const bool queued = impl_->large_payloads
+        ? enqueue(*impl_->large_producer_record, *impl_->large_queue,
+                  kExternalLargeRawTapePayloadBytes)
+        : enqueue(impl_->producer_record, impl_->queue, kExternalRawTapePayloadBytes);
+    if (!queued) {
         impl_->dropped.fetch_add(1, std::memory_order_relaxed);
         impl_->evidence_valid.store(false, std::memory_order_release);
         return false;
@@ -293,7 +326,7 @@ TapeRecorderSnapshot ExternalRawTapeRecorder::snapshot() const noexcept {
     out.accepted = impl_->accepted.load(std::memory_order_acquire);
     out.written = impl_->written.load(std::memory_order_acquire);
     out.dropped = impl_->dropped.load(std::memory_order_acquire);
-    out.queued = impl_->queue.approximate_size();
+    out.queued = impl_->queued();
     out.evidence_valid = impl_->evidence_valid.load(std::memory_order_acquire) ? 1 : 0;
     out.writer_healthy = impl_->writer_healthy.load(std::memory_order_acquire) ? 1 : 0;
     return out;
