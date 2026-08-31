@@ -10,6 +10,7 @@
 #include <cmath>
 #include <cstdint>
 #include <cstdlib>
+#include <initializer_list>
 #include <limits>
 #include <memory>
 #include <new>
@@ -73,6 +74,14 @@ constexpr std::size_t kMaxSnapshotLevelsPerSide = 256;
 [[nodiscard]] const json::value* find_value(const json::object& object, const char* key) noexcept {
     const auto it = object.find(key);
     return it == object.end() ? nullptr : &it->value();
+}
+
+[[nodiscard]] const json::value* find_first_value(
+    const json::object& object, std::initializer_list<const char*> keys) noexcept {
+    for (const auto* key : keys) {
+        if (const auto* value = find_value(object, key); value != nullptr) return value;
+    }
+    return nullptr;
 }
 
 [[nodiscard]] bool parse_scaled_decimal(std::string_view text, std::int64_t scale,
@@ -355,10 +364,20 @@ struct MarketWsShard::Impl {
         if (type.empty()) type = string_view_of(find_value(event, "type"));
         if (type.empty()) return;
 
-        const std::int64_t exchange_ns = normalize_exchange_ns(event);
+        // The legacy CLOB stream put event fields beside event_type. The current
+        // public market stream wraps the same event type and fields in
+        // {topic, type, payload}; retain both forms so a venue rollout cannot
+        // silently turn received frames into an unhealthy feed.
+        const json::object* payload = &event;
+        if (const auto* wrapped = find_value(event, "payload"); wrapped != nullptr
+            && wrapped->is_object()) {
+            payload = &wrapped->as_object();
+        }
+        const std::int64_t exchange_ns = normalize_exchange_ns(*payload);
         if (ascii_ieq(type, "book")) {
             ++result.recognized_events;
-            const auto asset = string_view_of(find_value(event, "asset_id"));
+            const auto asset = string_view_of(find_first_value(
+                *payload, {"asset_id", "assetId", "token_id", "tokenId"}));
             TokenState* state = find_asset(asset);
             if (state == nullptr) {
                 ++result.ignored_unknown_assets;
@@ -367,8 +386,8 @@ struct MarketWsShard::Impl {
             std::size_t bid_count = 0;
             std::size_t ask_count = 0;
             if (exchange_ns <= 0 || receive.monotonic_ns <= 0
-                || !parse_snapshot_levels(event, "bids", bid_scratch, bid_count)
-                || !parse_snapshot_levels(event, "asks", ask_scratch, ask_count)
+                || !parse_snapshot_levels(*payload, "bids", bid_scratch, bid_count)
+                || !parse_snapshot_levels(*payload, "asks", ask_scratch, ask_count)
                 || !state->book.replace_snapshot(
                     std::span<const PriceLevelE4>(bid_scratch.data(), bid_count),
                     std::span<const PriceLevelE4>(ask_scratch.data(), ask_count),
@@ -384,7 +403,8 @@ struct MarketWsShard::Impl {
 
         if (ascii_ieq(type, "price_change")) {
             ++result.recognized_events;
-            const auto* raw_changes = find_value(event, "price_changes");
+            const auto* raw_changes = find_first_value(
+                *payload, {"price_changes", "priceChanges"});
             if (exchange_ns <= 0 || receive.monotonic_ns <= 0
                 || raw_changes == nullptr || !raw_changes->is_array()) {
                 result.invalid_frame = 1;
@@ -396,7 +416,8 @@ struct MarketWsShard::Impl {
                     continue;
                 }
                 const auto& change = raw.as_object();
-                const auto asset = string_view_of(find_value(change, "asset_id"));
+                const auto asset = string_view_of(find_first_value(
+                    change, {"asset_id", "assetId", "token_id", "tokenId"}));
                 TokenState* state = find_asset(asset);
                 if (state == nullptr) {
                     ++result.ignored_unknown_assets;
@@ -432,7 +453,8 @@ struct MarketWsShard::Impl {
 
         if (ascii_ieq(type, "tick_size_change")) {
             ++result.recognized_events;
-            const auto asset = string_view_of(find_value(event, "asset_id"));
+            const auto asset = string_view_of(find_first_value(
+                *payload, {"asset_id", "assetId", "token_id", "tokenId"}));
             TokenState* state = find_asset(asset);
             if (state == nullptr) {
                 ++result.ignored_unknown_assets;
@@ -440,7 +462,8 @@ struct MarketWsShard::Impl {
             }
             std::int64_t new_tick = 0;
             if (exchange_ns <= 0 || receive.monotonic_ns <= 0
-                || !parse_scaled(find_value(event, "new_tick_size"), kCanonicalPriceScale, new_tick)
+                || !parse_scaled(find_first_value(
+                    *payload, {"new_tick_size", "newTickSize"}), kCanonicalPriceScale, new_tick)
                 || new_tick <= 0 || new_tick > kCanonicalPriceScale
                 || !state->book.change_tick_size(static_cast<std::int32_t>(new_tick),
                                                  exchange_ns, receive.monotonic_ns)) {
@@ -456,7 +479,8 @@ struct MarketWsShard::Impl {
         if (ascii_ieq(type, "last_trade_price")) {
             ++result.recognized_events;
             ++result.raw_last_trade_events;
-            const auto asset = string_view_of(find_value(event, "asset_id"));
+            const auto asset = string_view_of(find_first_value(
+                *payload, {"asset_id", "assetId", "token_id", "tokenId"}));
             TokenState* state = find_asset(asset);
             if (state == nullptr) {
                 ++result.ignored_unknown_assets;
@@ -464,10 +488,10 @@ struct MarketWsShard::Impl {
             }
             std::int32_t price_e4 = 0;
             std::int64_t quantity = 0;
-            const Side aggressor = parse_side(find_value(event, "side"));
+            const Side aggressor = parse_side(find_value(*payload, "side"));
             const bool valid_timestamp = exchange_ns > 0 && receive.monotonic_ns > 0;
-            const bool valid_price = parse_price_e4(find_value(event, "price"), price_e4);
-            const auto* size = find_value(event, "size");
+            const bool valid_price = parse_price_e4(find_value(*payload, "price"), price_e4);
+            const auto* size = find_value(*payload, "size");
             const bool has_size = size != nullptr;
             const bool valid_quantity = has_size && parse_quantity(size, quantity);
             if (!valid_timestamp) ++result.trade_invalid_timestamp;

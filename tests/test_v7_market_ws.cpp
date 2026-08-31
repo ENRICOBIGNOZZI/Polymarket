@@ -135,6 +135,60 @@ void test_price_only_trade_is_diagnosed_but_never_depletes_queue() {
     assert(result.output_count == 0);
 }
 
+void test_documented_envelope_and_camel_case_fields_are_consumed() {
+    auto shard = make_shard();
+    std::array<pm::v7::MarketWsEvent, 8> output{};
+
+    constexpr std::string_view snapshot = R"JSON({
+      "topic":"market",
+      "type":"book",
+      "payload":{
+        "tokenId":"asset-yes",
+        "timestamp":"1700000000000",
+        "bids":[{"price":"0.48","size":"2"}],
+        "asks":[{"price":"0.52","size":"3"}]
+      }
+    })JSON";
+    auto result = shard.process_frame(snapshot, stamp(2'500'000'000LL, 1'700'000'000'000LL), output);
+    assert(!result.invalid_frame);
+    assert(result.recognized_events == 1);
+    assert(result.applied_state_events == 1);
+    assert(result.output_count == 1);
+    assert(output[0].kind == pm::v7::MarketWsEventKind::BookChanged);
+    assert(shard.snapshot(301).valid);
+
+    constexpr std::string_view delta = R"JSON({
+      "topic":"market",
+      "type":"price_change",
+      "payload":{
+        "timestamp":"1700000000100",
+        "priceChanges":[{"tokenId":"asset-yes","side":"BUY","price":"0.48","size":"1.5"}]
+      }
+    })JSON";
+    result = shard.process_frame(delta, stamp(2'600'000'000LL, 1'700'000'000'100LL), output);
+    assert(!result.invalid_frame);
+    assert(result.applied_state_events == 1);
+    assert(result.output_count == 1);
+    assert(output[0].book.best_bid_microunits == 1'500'000);
+
+    constexpr std::string_view trade = R"JSON({
+      "topic":"market",
+      "type":"last_trade_price",
+      "payload":{
+        "tokenId":"asset-yes","timestamp":"1700000000200","side":"SELL",
+        "price":"0.52","size":"0.7"
+      }
+    })JSON";
+    result = shard.process_frame(trade, stamp(2'700'000'000LL, 1'700'000'000'200LL), output);
+    assert(!result.invalid_frame);
+    assert(result.raw_last_trade_events == 1);
+    assert(result.trade_events == 1);
+    assert(result.output_count == 1);
+    assert(output[0].kind == pm::v7::MarketWsEventKind::Trade);
+    assert(output[0].side == pm::v7::Side::Sell);
+    assert(output[0].quantity_microunits == 700'000);
+}
+
 void test_large_live_snapshot_frame_fits_bounded_arena() {
     auto shard = make_shard();
     std::array<pm::v7::MarketWsEvent, 8> output{};
@@ -217,6 +271,7 @@ void test_malformed_or_unconsumable_frame_invalidates_continuity() {
 int main() {
     test_snapshot_delta_trade_and_reconnect_lineage();
     test_price_only_trade_is_diagnosed_but_never_depletes_queue();
+    test_documented_envelope_and_camel_case_fields_are_consumed();
     test_large_live_snapshot_frame_fits_bounded_arena();
     test_unknown_asset_is_ignored_without_poisoning_known_lineage();
     test_malformed_or_unconsumable_frame_invalidates_continuity();
