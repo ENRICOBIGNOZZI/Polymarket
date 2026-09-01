@@ -16,15 +16,6 @@
       "canonical_replacement": "V7_OPERATOR_EXACT_SHA_PROMOTION"
     },
     {
-      "source": "scripts/v7_external_fair_paper_router.py",
-      "classification": "KEEP_TEMPORARY_COMPATIBILITY",
-      "runtime_reachability": "LAUNCHED_SHADOW_ONLY",
-      "authority_mode": "SHADOW_EVIDENCE_PRODUCER",
-      "severity": "P1_MIGRATION",
-      "reason": "shadow virtual fills use canonical transport but must move behind the opportunity coordinator",
-      "canonical_replacement": "BTC_SETTLEMENT_ENGINE_TO_V7_GLOBAL_PORTFOLIO_COORDINATOR"
-    },
-    {
       "source": "scripts/v7_finalize_maker_cutover.py",
       "classification": "KEEP_CANONICAL",
       "runtime_reachability": "CUTOVER_ONLY",

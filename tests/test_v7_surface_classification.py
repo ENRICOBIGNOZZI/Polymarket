@@ -75,13 +75,12 @@ class SurfaceClassificationTests(unittest.TestCase):
         with self.assertRaisesRegex(ClassificationError, "research_authority"):
             validate_manifest(value)
 
-    def test_every_temporary_surface_has_a_deletion_gate(self) -> None:
+    def test_no_temporary_compatibility_surface_remains(self) -> None:
         rows = [
             row for row in self.value["entries"]
             if row["classification"] == "KEEP_TEMPORARY_COMPATIBILITY"
         ]
-        self.assertTrue(rows)
-        self.assertTrue(all(row["deletion_gate"] for row in rows))
+        self.assertEqual(rows, [])
 
 
 if __name__ == "__main__":

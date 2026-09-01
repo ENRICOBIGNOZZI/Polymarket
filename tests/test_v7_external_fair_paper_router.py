@@ -16,6 +16,7 @@ from v7_external_fair_paper_router import (  # noqa: E402
     hybrid_probability, live_market_yes, model_market_disagreement_allowed,
     opportunity_set, probability_interval_bin_diagnostics, robust_candidates,
 )
+from v7_opportunity import OpportunityEnvelope  # noqa: E402
 
 
 def snapshot() -> dict:
@@ -142,7 +143,12 @@ def main() -> None:
     source = (ROOT / "scripts" / "v7_external_fair_paper_router.py").read_text()
     assert 'event_type="ORDER_SUBMITTED"' in source
     assert 'event_type="FILL"' in source
-    assert '"economic_authority": "SHADOW_COUNTERFACTUAL"' in source
+    assert '"economic_authority": "RESEARCH_EVIDENCE_ONLY"' in source
+    assert '"engine_id": "BTC_SETTLEMENT_ENGINE"' in source
+    assert '"schema": "polymarket_v7_opportunity_envelope_v1"' in source
+    assert '"opportunities" / "inbox"' in source
+    assert "spool_event" not in source
+    assert "v7_ledger_spool" not in source
     assert '"VIRTUAL_FILL"' in source
     assert "api_key" not in source.lower()
     assert "signature" not in source.lower()
@@ -191,6 +197,18 @@ def main() -> None:
         run_root = Path(directory)
         external = run_root / "external_fair"
         external.mkdir(parents=True)
+        control = run_root / "control"
+        control.mkdir()
+        (control / "runtime_status.json").write_text(json.dumps({
+            "schema": "polymarket_v7_runtime_status_v3",
+            "model_sha": "a" * 40,
+            "config_hash": "b" * 40,
+            "policy_hash": "c" * 40,
+            "run_id": "test-run",
+            "paper_only": True,
+            "authenticated_execution": False,
+            "real_order_submission": False,
+        }))
         live = snapshot()
         live["market"].update({"market_id": "m1", "event_id": "e1"})
         (external / "status.json").write_text(json.dumps(live))
@@ -222,15 +240,22 @@ def main() -> None:
         ) <= 10.0 + 1e-9
         with mock.patch.object(router, "request_json", side_effect=public_request):
             paper.step()
-        canonical = [
+        proposals = [
             json.loads(path.read_text())
-            for path in (run_root / "ledger" / "spool").glob("*.json")
+            for path in (run_root / "opportunities" / "inbox").glob("*.json")
         ]
-        assert {event["event_type"] for event in canonical} == {
-            "CANDIDATE", "ORDER_SUBMITTED", "FILL",
-        }
-        assert all(event["metadata"]["counterfactual"] is True for event in canonical)
-        assert all(event["metadata"]["excluded_from_portfolio_equity"] is True for event in canonical)
+        assert len(proposals) == 1
+        proposal = OpportunityEnvelope.parse(proposals[0]).raw
+        assert proposal["engine_id"] == "BTC_SETTLEMENT_ENGINE"
+        assert proposal["action"] == "NOTHING"
+        research = [
+            json.loads(path.read_text())
+            for path in (run_root / "research" / "evidence" / "btc_settlement_counterfactual").glob("*.json")
+        ]
+        assert {event["event_type"] for event in research} == {"ORDER_SUBMITTED", "FILL"}
+        assert all(event["metadata"]["research_evidence_only"] is True
+                   for event in research)
+        assert not (run_root / "ledger" / "spool").exists()
         events = [json.loads(line) for line in (external / "counterfactuals.jsonl").read_text().splitlines()]
         event_types = {event["event_type"] for event in events}
         assert {"FORECAST", "OPPORTUNITY_SET", "CANDIDATE", "VIRTUAL_FILL"} <= event_types
@@ -239,7 +264,11 @@ def main() -> None:
         durable_tape = run_root / "paper_v7_durable" / "external_fair" / "counterfactuals.jsonl"
         assert durable_tape.exists()
         status = json.loads((external / "paper_router_status.json").read_text())
-        assert status["execution_authority"] == "SHADOW_ZERO_AUTHORITY"
+        assert status["execution_authority"] == "OPPORTUNITY_PROPOSAL_ONLY"
+        assert status["capital_authority"] is False
+        assert status["oms_authority"] is False
+        assert status["inventory_authority"] is False
+        assert status["ledger_writer_authority"] is False
         assert status["order_submission_enabled"] is False
         assert status["counterfactual_collection_enabled"] is True
         assert status["fills"] == 0

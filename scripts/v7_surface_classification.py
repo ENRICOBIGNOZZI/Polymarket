@@ -52,9 +52,7 @@ COMPONENT_MARKERS = (
     "external_protocol", "external_replay", "external_tape",
     "external_ws", "btc_settlement_engine",
 )
-TEMPORARY_PATHS = frozenset({
-    "scripts/v7_external_fair_paper_router.py",
-})
+TEMPORARY_PATHS: frozenset[str] = frozenset()
 ARCHIVE_PATHS = frozenset({
     "AGENT_DIRECTIVE_V7_UNIFICATION_AND_LEGACY_ERADICATION.md",
     "CODEX_START_HERE_V7_UNIFICATION.md",

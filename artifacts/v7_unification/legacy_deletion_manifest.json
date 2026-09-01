@@ -55,6 +55,24 @@
         "tests/test_v7_market_maker_runtime_contract.py"
       ],
       "disposition_commit": "SELF_REFERENTIAL_COMMIT"
+    },
+    {
+      "path": "scripts/v7_external_fair_paper_router.py",
+      "prior_classification": "KEEP_TEMPORARY_COMPATIBILITY",
+      "deletion_reason": "The filename is retained for operational continuity, but its temporary ledger-spool adapter authority is deleted and the component is reclassified as part of BTC_SETTLEMENT_ENGINE.",
+      "unique_behavior_disposition": "Contract-bound fair value, arrival revalidation, and durable counterfactual tapes remain. Candidates use the native opportunity envelope; virtual lifecycle labels write only to the research evidence plane.",
+      "canonical_replacement": "BTC_SETTLEMENT_ENGINE -> V7_GLOBAL_PORTFOLIO_COORDINATOR",
+      "reference_scan": "No v7_ledger_spool import, spool_event call, or ledger/spool path remains; all runtime status readers require proposal-only authority.",
+      "validation_tests": [
+        "tests/test_v7_external_fair_paper_router.py",
+        "tests/test_v7_global_portfolio_coordinator.py",
+        "tests/test_v7_opportunity.py",
+        "tests/test_v7_authority_reachability_audit.py",
+        "tests/test_v7_rtds_external_fair_monitor.py",
+        "tests/test_v7_runtime_supervisor.py"
+      ],
+      "final_disposition": "RECLASSIFIED_CANONICAL_ENGINE_COMPONENT",
+      "disposition_commit": "SELF_REFERENTIAL_COMMIT"
     }
   ]
 }

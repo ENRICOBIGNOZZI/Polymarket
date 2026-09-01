@@ -24,7 +24,6 @@ from typing import Any
 
 from v7_market_common import finite, parse_array, request_json
 from v7_execution_ledger import LedgerEvent
-from v7_ledger_spool import spool_event
 
 STRATEGY = "CRYPTO_INFORMED_TAKER"
 MODEL_VERSION = "external-fair-structural-v7-paper"
@@ -60,6 +59,11 @@ def now_ms() -> int:
 
 def stable_id(*parts: Any) -> str:
     return hashlib.sha256("|".join(str(part) for part in parts).encode()).hexdigest()[:32]
+
+
+def identity_hash(value: Any) -> bool:
+    text = str(value or "")
+    return len(text) in {40, 64} and all(ch in "0123456789abcdef" for ch in text)
 
 
 def expected_calibration_error(
@@ -1093,16 +1097,133 @@ class PaperRouter:
                 os.close(descriptor)
 
     def emit_shadow_ingress(self, event: LedgerEvent) -> None:
-        """Send candidates to coordination and other records to shadow evidence."""
+        """Publish proposals to coordination and lifecycle labels to research."""
         metadata = dict(event.metadata)
         metadata.update({
             "counterfactual": True,
-            "economic_authority": "SHADOW_COUNTERFACTUAL",
+            "economic_authority": "RESEARCH_EVIDENCE_ONLY",
             "excluded_from_portfolio_equity": True,
+            "research_evidence_only": True,
+            "ledger_writer_authority": False,
         })
-        spool_event(self.root, LedgerEvent(**{
+        evidence = LedgerEvent(**{
             **event.to_dict(), "metadata": metadata,
-        }))
+        })
+        if evidence.event_type != "CANDIDATE":
+            target = (
+                self.root / "research" / "evidence" / "btc_settlement_counterfactual"
+                / f"{evidence.recorded_ts_ms}.{evidence.record_id}.json"
+            )
+            atomic_json(target, evidence.to_dict())
+            return
+
+        runtime = load(self.root / "control" / "runtime_status.json")
+        if (
+            runtime.get("schema") != "polymarket_v7_runtime_status_v3"
+            or runtime.get("model_sha") != self.sha
+            or runtime.get("paper_only") is not True
+            or runtime.get("authenticated_execution") is not False
+            or runtime.get("real_order_submission") is not False
+            or not identity_hash(runtime.get("config_hash"))
+            or not identity_hash(runtime.get("policy_hash"))
+            or not str(runtime.get("run_id") or "")
+        ):
+            return
+        exchange_ms = int(evidence.exchange_ts_ms or 0)
+        receive_ms = int(evidence.receive_ts_ms or 0)
+        decision_ms = max(
+            exchange_ms, receive_ms, int(evidence.decision_ts_ms or 0),
+        )
+        quantity = float(evidence.intended_size or 0.0)
+        limit_price = float(evidence.limit_price or 0.0)
+        if min(exchange_ms, receive_ms, decision_ms) <= 0 or quantity <= 0.0 \
+                or not 0.0 <= limit_price <= 1.0:
+            return
+        fair_lower = max(0.0, min(1.0, finite(metadata.get("fair_lower"), 0.0)))
+        fair_point = max(fair_lower, min(1.0, finite(metadata.get("fair_yes"), 0.5)))
+        fair_upper = max(fair_point, min(1.0, finite(metadata.get("fair_upper"), 1.0)))
+        identity = str(evidence.candidate_id or evidence.record_id)
+        token_id = str(evidence.token_id or identity)
+        market_id = str(evidence.market_id or f"unmapped:{identity}")
+        event_id = str(evidence.event_id or f"unmapped:{identity}")
+        fee = max(0.0, float(evidence.fee or 0.0))
+        envelope = {
+            "schema": "polymarket_v7_opportunity_envelope_v1",
+            "version": 1,
+            "model_sha": self.sha,
+            "config_hash": str(runtime["config_hash"]),
+            "policy_hash": str(runtime["policy_hash"]),
+            "run_id": str(runtime["run_id"]),
+            "source_snapshot_identity": str(evidence.book_snapshot_id or identity),
+            "engine_id": "BTC_SETTLEMENT_ENGINE",
+            "component_provenance": ["crypto_informed_taker", "crypto_settlement_fair"],
+            "market_id": market_id,
+            "event_id": event_id,
+            "contract_id": token_id,
+            "mapping_identity": str(metadata.get("contract_rules_hash") or f"unverified:{identity}"),
+            "action": "NOTHING",
+            "side": "NONE",
+            "decision_receive_timestamp_ns": decision_ms * 1_000_000,
+            "source_event_timestamps_ns": sorted({
+                exchange_ms * 1_000_000, receive_ms * 1_000_000,
+            }),
+            "fair_value": {
+                "lower": fair_lower, "point": fair_point, "upper": fair_upper,
+            },
+            "conservative_expected_wealth_change": float(evidence.expected_ev or 0.0),
+            "cost_vector": {
+                "fee": fee, "slippage": max(0.0, float(evidence.slippage or 0.0)),
+                "unwind_loss": 0.0, "capital_cost": 0.0, "latency_cost": 0.0,
+                "adverse_markout": 0.0, "rebate": 0.0,
+            },
+            "cost_authority": {
+                "fee": "CONSERVATIVE_BOUND" if fee > 0.0 else "CONSERVATIVE_ZERO",
+                "slippage": "CONSERVATIVE_ZERO", "unwind_loss": "CONSERVATIVE_ZERO",
+                "capital_cost": "CONSERVATIVE_ZERO", "latency_cost": "CONSERVATIVE_ZERO",
+                "adverse_markout": "CONSERVATIVE_ZERO", "rebate": "CONSERVATIVE_ZERO",
+            },
+            "uncertainty": {"lower_bound": -1.0, "upper_bound": 1.0, "status": "MISSING"},
+            "calibration_status": "MISSING",
+            "latency": {
+                "profile_id": "missing-economic-latency-profile", "profile_valid": False,
+                "economic_percentile": "p99", "arrival_ns": max(
+                    1, (decision_ms - receive_ms) * 1_000_000,
+                ),
+            },
+            "capacity": {
+                "executable_size": quantity,
+                "depth_provenance": str(evidence.book_snapshot_id or "MISSING"),
+            },
+            "execution_plan": {
+                "atomic_unit_id": f"btc-settlement:{identity}",
+                "execution_style": "SINGLE_LEG",
+                "legs": [{
+                    "leg_id": f"leg-1-{token_id}", "market_id": market_id,
+                    "contract_id": token_id, "token_id": token_id, "side": "BUY",
+                    "target_quantity": quantity, "limit_price": limit_price,
+                    "fee_authority": "CONSERVATIVE_BOUND" if fee > 0.0 else "CONSERVATIVE_ZERO",
+                }],
+                "partial_fill_plan": "NO_NEW_RISK", "timeout_ms": 0,
+                "unwind_plan": "CANCEL_ONLY",
+            },
+            "inventory_delta": 0.0,
+            "portfolio_exposure_delta": 0.0,
+            "settlement": {
+                "definition": "counterfactual settlement binding is not promotion evidence",
+                "source": "BTC_SETTLEMENT_ENGINE_EXTERNAL_FAIR_COMPONENT", "verified": False,
+            },
+            "eligible": True,
+            "reasons": [
+                "ECONOMIC_EVIDENCE_MISSING", "SETTLEMENT_PROMOTION_UNVERIFIED",
+                "NEW_RISK_DISABLED",
+            ],
+            "deterministic_replay_key": f"btc-settlement:{identity}",
+            "expires_at_ns": decision_ms * 1_000_000 + 1_000_000_000,
+        }
+        target = self.root / "opportunities" / "inbox" / (
+            f"{decision_ms}.btc-settlement.{identity}.json"
+        )
+        atomic_json(target, envelope)
 
     def fetch_book(self, token_id: str) -> Book | None:
         try:
@@ -1736,12 +1857,16 @@ class PaperRouter:
         atomic_json(self.state_path, self.state)
         maturity = self.maturity_diagnostics()
         atomic_json(self.status_path, {
-            "schema": "polymarket_v7_external_fair_paper_router_v1", "timestamp": int(time.time()),
+            "schema": "polymarket_v7_btc_settlement_engine_status_v1", "timestamp": int(time.time()),
             "code_sha": self.sha, "state": "KILLED" if killed else "DRAINING" if drain_requested else "RUNNING", "paper_only": True,
             "authenticated_execution": False, "real_order_submission": False,
             "execution_mode": "SHADOW_COUNTERFACTUAL",
             "policy_sha256": self.policy_sha256,
-            "execution_authority": "SHADOW_ZERO_AUTHORITY", "model_mature": self.model_mature,
+            "engine_id": "BTC_SETTLEMENT_ENGINE",
+            "execution_authority": "OPPORTUNITY_PROPOSAL_ONLY",
+            "capital_authority": False, "oms_authority": False,
+            "inventory_authority": False, "ledger_writer_authority": False,
+            "model_mature": self.model_mature,
             "economic_confidence": (
                 "PAPER_PROMOTION_ELIGIBLE_MANUAL_REVIEW"
                 if maturity["eligible_for_manual_paper_promotion"]

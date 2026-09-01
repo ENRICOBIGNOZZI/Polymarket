@@ -413,13 +413,17 @@ ok=(status.get("schema")=="polymarket_v7_external_fair_status_v1"
     and fair.get("valid") is True
     and oracle.get("healthy") is True
     and external.get("healthy") is True
-    and value.get("schema")=="polymarket_v7_external_fair_paper_router_v1"
+    and value.get("schema")=="polymarket_v7_btc_settlement_engine_status_v1"
     and value.get("code_sha")==sys.argv[3]
     and value.get("state")=="RUNNING"
     and value.get("paper_only") is True
     and value.get("authenticated_execution") is False
     and value.get("real_order_submission") is False
-    and value.get("execution_authority")=="SHADOW_ZERO_AUTHORITY"
+    and value.get("execution_authority")=="OPPORTUNITY_PROPOSAL_ONLY"
+    and value.get("capital_authority") is False
+    and value.get("oms_authority") is False
+    and value.get("inventory_authority") is False
+    and value.get("ledger_writer_authority") is False
     and value.get("order_submission_enabled") is False
     and value.get("counterfactual_collection_enabled") is True
     and value.get("killed") is False

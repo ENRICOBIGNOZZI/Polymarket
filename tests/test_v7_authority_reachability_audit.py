@@ -29,8 +29,8 @@ class AuthorityReachabilityAuditTests(unittest.TestCase):
         )
         self.assertEqual(result["unexplained_edges"], [])
         self.assertTrue(result["audit_gate"]["complete_static_edge_coverage"])
-        self.assertFalse(result["audit_gate"]["target_topology_complete"])
-        self.assertGreater(result["known_migration_defect_count"], 0)
+        self.assertTrue(result["audit_gate"]["target_topology_complete"])
+        self.assertEqual(result["known_migration_defect_count"], 0)
 
     def test_unregistered_writer_injection_fails_closed(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

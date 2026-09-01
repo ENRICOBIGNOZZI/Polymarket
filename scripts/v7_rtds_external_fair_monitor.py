@@ -790,13 +790,17 @@ class Monitor:
         )
         common = {"paper_only": True, "authenticated_execution": False, "real_order_submission": False}
         shadow_collector_active = bool(
-            router.get("schema") == "polymarket_v7_external_fair_paper_router_v1"
+            router.get("schema") == "polymarket_v7_btc_settlement_engine_status_v1"
             and router.get("code_sha") == self.code_sha
             and router.get("state") == "RUNNING"
             and router.get("paper_only") is True
             and router.get("authenticated_execution") is False
             and router.get("real_order_submission") is False
-            and router.get("execution_authority") == "SHADOW_ZERO_AUTHORITY"
+            and router.get("execution_authority") == "OPPORTUNITY_PROPOSAL_ONLY"
+            and router.get("capital_authority") is False
+            and router.get("oms_authority") is False
+            and router.get("inventory_authority") is False
+            and router.get("ledger_writer_authority") is False
             and router.get("order_submission_enabled") is False
             and router.get("counterfactual_collection_enabled") is True
             and router.get("killed") is False
