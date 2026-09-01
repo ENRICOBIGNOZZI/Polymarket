@@ -77,6 +77,15 @@ router stayed healthy together; it does not establish profitability, model
 maturity, promotion authority, or permission to submit real orders. Those
 claims continue to require their own out-of-sample and economic evidence.
 
+## Kalshi credential handling
+
+The Kalshi WebSocket collector signs its authenticated handshake with RSA-PSS
+and reads only `PM_V7_KALSHI_KEY_ID` plus `PM_V7_KALSHI_PRIVATE_KEY_PATH`.
+The latter must point to a regular owner-only file (`0600`); the private key,
+signature and access headers are never included in a tape, status, log or Git
+artifact. A missing or permissive key file fails closed before a socket is
+opened. The collector is read-only and remains a RESEARCH/PAPER component.
+
 ## Failure isolation
 
 - Missing Sportradar credentials produces `CREDENTIALS_REQUIRED` and the sports

@@ -9,6 +9,7 @@ sys.path.insert(0, str(ROOT / "tests"))
 from v7_function_test_support import function_test_loader, raises
 
 import v7_cross_platform_collector as cross
+import v7_kalshi_authenticated_ws_collector as kalshi_ws
 import v7_osint_mapping_collector as osint_mapping
 import v7_sports_collector as sports
 from v7_osint_engine import RawEvent, SourceTier
@@ -79,6 +80,65 @@ def test_kalshi_authenticated_ws_preflight_requires_a_real_private_key_path(tmp_
             os.environ.pop("PM_TEST_KALSHI_KEY_ID", None)
         else:
             os.environ["PM_TEST_KALSHI_KEY_ID"] = previous_key_id
+
+
+def test_kalshi_ws_uses_local_owner_only_key_and_never_serializes_it(tmp_path, monkeypatch):
+    key = tmp_path / "kalshi.pem"
+    key.write_text("private-key-material", encoding="utf-8")
+    key.chmod(0o600)
+    previous_id = os.environ.get("PM_TEST_KALSHI_KEY_ID")
+    previous_path = os.environ.get("PM_TEST_KALSHI_PRIVATE_KEY_PATH")
+    try:
+        os.environ["PM_TEST_KALSHI_KEY_ID"] = "key-id"
+        os.environ["PM_TEST_KALSHI_PRIVATE_KEY_PATH"] = str(key)
+        key_id, key_path = kalshi_ws.credentials({
+            "key_id_env": "PM_TEST_KALSHI_KEY_ID",
+            "private_key_path_env": "PM_TEST_KALSHI_PRIVATE_KEY_PATH",
+        })
+        assert (key_id, key_path) == ("key-id", key)
+        calls = []
+        class Result:
+            stdout = b"signature-bytes"
+        monkeypatch.setattr(kalshi_ws.subprocess, "run", lambda *args, **kwargs: calls.append((args, kwargs)) or Result())
+        headers = kalshi_ws.auth_headers(key_id, key_path, 123)
+        assert headers["KALSHI-ACCESS-KEY"] == "key-id"
+        assert headers["KALSHI-ACCESS-TIMESTAMP"] == "123"
+        assert headers["KALSHI-ACCESS-SIGNATURE"]
+        assert str(key) in calls[0][0][0]
+        key.chmod(0o644)
+        with raises(kalshi_ws.KalshiWsError, "PERMISSIONS_UNSAFE"):
+            kalshi_ws.credentials({"key_id_env": "PM_TEST_KALSHI_KEY_ID", "private_key_path_env": "PM_TEST_KALSHI_PRIVATE_KEY_PATH"})
+    finally:
+        if previous_id is None: os.environ.pop("PM_TEST_KALSHI_KEY_ID", None)
+        else: os.environ["PM_TEST_KALSHI_KEY_ID"] = previous_id
+        if previous_path is None: os.environ.pop("PM_TEST_KALSHI_PRIVATE_KEY_PATH", None)
+        else: os.environ["PM_TEST_KALSHI_PRIVATE_KEY_PATH"] = previous_path
+
+
+def test_kalshi_ws_subscription_allows_ticker_without_orderbook_scope():
+    assert kalshi_ws.subscription([], ticker_all_markets=True) == {
+        "id": 1, "cmd": "subscribe", "params": {"channels": ["ticker"]},
+    }
+    scoped = kalshi_ws.subscription(["KXTEST", "KXTEST"], ticker_all_markets=True)
+    assert scoped["params"] == {"channels": ["ticker", "orderbook_delta"], "market_tickers": ["KXTEST"]}
+
+
+def test_kalshi_ws_missing_local_credentials_fails_closed_without_a_tape(tmp_path):
+    config = json.loads((ROOT / "config" / "v7_external_inputs.json").read_text())
+    venue = config["cross_platform"]["venues"][0]
+    venue["key_id_env"] = "PM_TEST_KALSHI_ABSENT_KEY_ID"
+    venue["private_key_path_env"] = "PM_TEST_KALSHI_ABSENT_KEY_PATH"
+    config_path = tmp_path / "inputs.json"
+    config_path.write_text(json.dumps(config), encoding="utf-8")
+    tape = tmp_path / "events.jsonl"
+    status = kalshi_ws.run_session(
+        repository_root=ROOT, config_path=config_path, tape_path=tape,
+        state_path=tmp_path / "state.json", status_path=tmp_path / "status.json",
+    )
+    assert status["feed_status"] == "BLOCKED"
+    assert status["blocker"] == "BLOCKED_KALSHI_WS_KEY_ID_MISSING"
+    assert status["websocket_attempted"] is False
+    assert not tape.exists()
 
 
 def test_kalshi_metadata_discovery_pages_to_exhaustion_and_polls_books(tmp_path):

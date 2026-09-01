@@ -916,6 +916,16 @@ python3 scripts/v7_cross_platform_collector.py \
   >> "$RUN_ROOT/shadow/cross_platform/collector.log" 2>&1 &
 pids+=("$!")
 
+# Kalshi authenticated WebSocket is a separate read-only collector.  It opens
+# only when a locally protected, rotated private key and key ID are configured.
+python3 scripts/v7_kalshi_authenticated_ws_collector.py \
+  --repository-root "$ROOT" --config "$EXTERNAL_INPUT_CONFIG" \
+  --tape "$RUN_ROOT/shadow/cross_platform/kalshi_ws_events.jsonl" \
+  --state "$RUN_ROOT/shadow/cross_platform/kalshi_ws_state.json" \
+  --status "$RUN_ROOT/shadow/cross_platform/kalshi_ws_status.json" --loop \
+  >> "$RUN_ROOT/shadow/cross_platform/kalshi_ws.log" 2>&1 &
+pids+=("$!")
+
 # The exact-SHA supervisor aggregates measured sports/cross evidence and the
 # still configuration-blocked wallet sleeve. It owns no OMS, capital, ledger
 # writer, order or promotion authority.

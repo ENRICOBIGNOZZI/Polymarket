@@ -56,6 +56,12 @@
     "metadata_discovery_time_budget_millis": 10000,
     "orderbook_poll_time_budget_millis": 5000,
     "estimated_orderbook_request_millis": 100,
+    "authenticated_websocket": {
+      "enabled": true,
+      "market_tickers": [],
+      "ticker_stream_all_markets": true,
+      "authority": "RESEARCH_ONLY"
+    },
     "venues": [
       {
         "venue": "kalshi",
