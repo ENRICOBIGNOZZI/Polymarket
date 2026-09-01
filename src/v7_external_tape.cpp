@@ -174,16 +174,10 @@ struct ExternalRawTapeRecorder::Impl {
     SpscRing<RawTapeRecord, kExternalRawTapeQueueCapacity> queue{};
     RawTapeRecord producer_record{};
     RawTapeRecord writer_record{};
-    using BurstQueue = SpscRing<BurstRawTapeRecord, kExternalBurstRawTapeQueueCapacity>;
-    std::unique_ptr<BurstQueue> burst_queue{};
-    std::unique_ptr<BurstRawTapeRecord> burst_producer_record{};
-    std::unique_ptr<BurstRawTapeRecord> burst_writer_record{};
     using LargeQueue = SpscRing<LargeRawTapeRecord, kExternalLargeRawTapeQueueCapacity>;
     std::unique_ptr<LargeQueue> large_queue{};
     std::unique_ptr<LargeRawTapeRecord> large_producer_record{};
     std::unique_ptr<LargeRawTapeRecord> large_writer_record{};
-    bool burst_payloads = false;
-    bool large_payloads = false;
     std::ofstream output;
     std::thread worker;
     std::atomic<bool> stop_requested{false};
@@ -205,22 +199,12 @@ struct ExternalRawTapeRecorder::Impl {
         output.open(path, std::ios::binary | std::ios::trunc);
         if (!output) throw std::runtime_error("unable to open V7 raw tape");
         // Keep the high-rate 32 KiB recorder for every ordinary venue.
-        // Deribit has a bounded wider FIFO for catch-up multiplexed batches.
-        // Coinbase, Binance Spot, and Bybit Linear can each emit a complete
-        // recovery/public batch, so they use the separate large bounded FIFO.
-        burst_payloads = source == "deribit";
-        large_payloads = source == "coinbase-spot" || source == "binance-spot"
-            || source == "bybit-linear";
-        if (burst_payloads) {
-            burst_queue = std::make_unique<BurstQueue>();
-            burst_producer_record = std::make_unique<BurstRawTapeRecord>();
-            burst_writer_record = std::make_unique<BurstRawTapeRecord>();
-        }
-        if (large_payloads) {
-            large_queue = std::make_unique<LargeQueue>();
-            large_producer_record = std::make_unique<LargeRawTapeRecord>();
-            large_writer_record = std::make_unique<LargeRawTapeRecord>();
-        }
+        // All live WebSocket clients admit recovery-sized frames. Keep their
+        // ordinary traffic on the compact FIFO, and reserve this bounded
+        // queue for the exceptional frame only.
+        large_queue = std::make_unique<LargeQueue>();
+        large_producer_record = std::make_unique<LargeRawTapeRecord>();
+        large_writer_record = std::make_unique<LargeRawTapeRecord>();
 
         TapeSessionHeader header;
         header.magic = {'P','M','V','7','R','A','W','!'};
@@ -245,8 +229,7 @@ struct ExternalRawTapeRecorder::Impl {
 
     [[nodiscard]] std::size_t queued() const noexcept {
         std::size_t result = queue.approximate_size();
-        if (burst_payloads) result += burst_queue->approximate_size();
-        if (large_payloads) result += large_queue->approximate_size();
+        result += large_queue->approximate_size();
         return result;
     }
 
@@ -281,17 +264,9 @@ struct ExternalRawTapeRecorder::Impl {
                 progressed = true;
                 if (!write_record(writer_record)) return;
             }
-            if (burst_payloads) {
-                while (burst_queue->try_pop(*burst_writer_record)) {
-                    progressed = true;
-                    if (!write_record(*burst_writer_record)) return;
-                }
-            }
-            if (large_payloads) {
-                while (large_queue->try_pop(*large_writer_record)) {
-                    progressed = true;
-                    if (!write_record(*large_writer_record)) return;
-                }
+            while (large_queue->try_pop(*large_writer_record)) {
+                progressed = true;
+                if (!write_record(*large_writer_record)) return;
             }
             if (!progressed) std::this_thread::sleep_for(std::chrono::microseconds(100));
         }
@@ -332,11 +307,7 @@ bool ExternalRawTapeRecorder::try_record_raw(
         std::memcpy(record.payload.data(), payload.data(), payload.size());
         return queue.try_push(record);
     };
-    const std::size_t maximum = impl_->large_payloads
-        ? kExternalLargeRawTapePayloadBytes
-        : impl_->burst_payloads
-            ? kExternalBurstRawTapePayloadBytes
-            : kExternalRawTapePayloadBytes;
+    const std::size_t maximum = kExternalLargeRawTapePayloadBytes;
     if (payload.size() > maximum) {
         impl_->dropped.fetch_add(1, std::memory_order_relaxed);
         impl_->dropped_payload_too_large.fetch_add(1, std::memory_order_relaxed);
@@ -345,9 +316,7 @@ bool ExternalRawTapeRecorder::try_record_raw(
     }
     const bool queued = payload.size() <= kExternalRawTapePayloadBytes
         ? enqueue(impl_->producer_record, impl_->queue)
-        : impl_->burst_payloads
-            ? enqueue(*impl_->burst_producer_record, *impl_->burst_queue)
-            : enqueue(*impl_->large_producer_record, *impl_->large_queue);
+        : enqueue(*impl_->large_producer_record, *impl_->large_queue);
     if (!queued) {
         impl_->dropped.fetch_add(1, std::memory_order_relaxed);
         impl_->dropped_queue_full.fetch_add(1, std::memory_order_relaxed);

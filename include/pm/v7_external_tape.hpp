@@ -27,12 +27,9 @@ inline constexpr std::size_t kExternalRawTapeQueueCapacity = 256;
 // Deribit's catch-up batches can emit a transiently larger public frame. It
 // uses this bounded source-specific FIFO so those frames are captured without
 // making every venue pay the memory cost.
-inline constexpr std::size_t kExternalBurstRawTapePayloadBytes = 64 * 1024;
-inline constexpr std::size_t kExternalBurstRawTapeQueueCapacity = 512;
 // Complete L2 recovery/public batches can exceed the ordinary source limit.
-// Coinbase, Binance Spot, and Bybit Linear use this separate bounded queue;
-// other sources retain the compact high-depth path above unless explicitly
-// burst-enabled.
+// Every live raw source gets this separate bounded queue, while ordinary
+// frames retain the compact high-depth path above.
 inline constexpr std::size_t kExternalLargeRawTapePayloadBytes = 2 * 1024 * 1024;
 inline constexpr std::size_t kExternalLargeRawTapeQueueCapacity = 8;
 
@@ -98,17 +95,6 @@ struct RawTapeRecord {
     std::uint8_t reserved[3]{};
     std::uint32_t payload_size = 0;
     std::array<std::byte, kExternalRawTapePayloadBytes> payload{};
-};
-
-struct BurstRawTapeRecord {
-    std::uint64_t tape_sequence = 0;
-    std::uint64_t connection_epoch = 0;
-    std::int64_t receive_monotonic_ns = 0;
-    std::int64_t receive_wall_ns = 0;
-    VenueId venue = VenueId::Unknown;
-    std::uint8_t reserved[3]{};
-    std::uint32_t payload_size = 0;
-    std::array<std::byte, kExternalBurstRawTapePayloadBytes> payload{};
 };
 
 struct LargeRawTapeRecord {
@@ -226,7 +212,6 @@ static_assert(std::is_trivially_copyable_v<TapeSessionHeader>);
 static_assert(std::is_trivially_copyable_v<TapeRecord>);
 static_assert(std::is_trivially_copyable_v<TapeRecorderSnapshot>);
 static_assert(std::is_trivially_copyable_v<RawTapeRecord>);
-static_assert(std::is_trivially_copyable_v<BurstRawTapeRecord>);
 static_assert(std::is_trivially_copyable_v<LargeRawTapeRecord>);
 static_assert(std::is_trivially_copyable_v<RawTapeDiskRecordHeader>);
 

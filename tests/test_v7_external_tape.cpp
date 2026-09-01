@@ -93,7 +93,7 @@ int main() {
         ExternalRawTapeRecorder raw_recorder(raw_path, sha, "run-raw", "session-raw", "bybit-spot", 1'000'002);
         assert(raw_recorder.try_record_raw(VenueId::BybitSpot, 3, 120, 1'020, R"({"e":"depthUpdate"})"));
         assert(!raw_recorder.try_record_raw(VenueId::BybitSpot, 3, 121, 1'021,
-                                             std::string(kExternalRawTapePayloadBytes + 1, 'x')));
+                                             std::string(kExternalLargeRawTapePayloadBytes + 1, 'x')));
         const auto raw_snapshot = raw_recorder.snapshot();
         assert(raw_snapshot.accepted == 1);
         assert(raw_snapshot.dropped == 1);
@@ -146,12 +146,12 @@ int main() {
     }
     std::filesystem::remove(binance_large_raw_path);
 
-    const auto burst_raw_path = std::filesystem::temp_directory_path() / "pm_v7_external_burst_raw_tape_test.bin";
-    std::filesystem::remove(burst_raw_path);
+    const auto bybit_large_raw_path = std::filesystem::temp_directory_path() / "pm_v7_external_bybit_large_raw_tape_test.bin";
+    std::filesystem::remove(bybit_large_raw_path);
     {
         ExternalRawTapeRecorder raw_recorder(
-            burst_raw_path, sha, "run-burst-raw", "session-burst-raw", "bybit-linear", 1'000'005);
-        const std::string volatile_bybit_batch((kExternalBurstRawTapePayloadBytes + 64U), 'x');
+            bybit_large_raw_path, sha, "run-bybit-large-raw", "session-bybit-large-raw", "bybit-linear", 1'000'005);
+        const std::string volatile_bybit_batch((2U * kExternalRawTapePayloadBytes + 64U), 'x');
         assert(raw_recorder.try_record_raw(VenueId::BybitLinear, 5, 140, 1'040,
                                             volatile_bybit_batch));
         const auto raw_snapshot = raw_recorder.snapshot();
@@ -159,14 +159,14 @@ int main() {
         assert(raw_snapshot.dropped == 0);
         assert(raw_snapshot.evidence_valid == 1);
     }
-    std::filesystem::remove(burst_raw_path);
+    std::filesystem::remove(bybit_large_raw_path);
 
     const auto deribit_burst_raw_path = std::filesystem::temp_directory_path() / "pm_v7_external_deribit_burst_raw_tape_test.bin";
     std::filesystem::remove(deribit_burst_raw_path);
     {
         ExternalRawTapeRecorder raw_recorder(
             deribit_burst_raw_path, sha, "run-deribit-burst-raw", "session-deribit-burst-raw", "deribit", 1'000'006);
-        const std::string deribit_catchup_batch((kExternalRawTapePayloadBytes + 64U), 'x');
+        const std::string deribit_catchup_batch((2U * kExternalRawTapePayloadBytes + 64U), 'x');
         assert(raw_recorder.try_record_raw(VenueId::Deribit, 6, 150, 1'050,
                                             deribit_catchup_batch));
         const auto raw_snapshot = raw_recorder.snapshot();
