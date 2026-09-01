@@ -76,6 +76,108 @@ def maker_flat(state: dict[str, Any]) -> bool:
     return True
 
 
+def finalize_never_started(
+    root: Path,
+    model_sha: str,
+    nonce: str,
+    status: dict[str, Any],
+    prior_receipt: dict[str, Any],
+    current_ms: int,
+) -> dict[str, Any]:
+    """Attest a flat Maker that provably never materialized durable state."""
+    if prior_receipt:
+        if (
+            prior_receipt.get("schema") == "polymarket_v7_maker_cutover_liquidation_v1"
+            and prior_receipt.get("nonce") == nonce
+            and prior_receipt.get("model_sha") == model_sha
+            and prior_receipt.get("state") == "MAKER_FLAT"
+            and prior_receipt.get("never_started") is True
+            and prior_receipt.get("positions_liquidated") == 0
+        ):
+            return prior_receipt
+        raise MakerCutoverError("maker_never_started_receipt_mismatch")
+
+    runtime = read_json(root / "control/runtime_status.json")
+    portfolio = read_json(root / "control/portfolio_state.json")
+    ledger = root / "ledger/execution.jsonl"
+    spool = root / "ledger/spool"
+    sleeves = portfolio.get("sleeves") if isinstance(portfolio.get("sleeves"), dict) else {}
+    maker = sleeves.get("micro_maker") if isinstance(sleeves.get("micro_maker"), dict) else {}
+    safe_status_model = status.get("model_sha") in (None, "", model_sha)
+    if (
+        status.get("schema") != "polymarket_v7_professional_maker_status_v1"
+        or status.get("paper_only") is not True
+        or status.get("authenticated_execution") is not False
+        or status.get("real_order_submission") is not False
+        or status.get("source") != "not_started"
+        or not safe_status_model
+        or status.get("marking_complete") is not True
+        or status.get("new_risk_frozen") is not True
+        or status.get("drain_requested") is not True
+        or status.get("drain_complete") is not True
+        or status.get("killed") is True
+        or status.get("degraded") is not False
+        or status.get("unmarkable_tokens") != []
+    ):
+        raise MakerCutoverError("maker_never_started_status_invalid")
+    status_ms = int(number("status_timestamp_ms", status.get("timestamp_ms"), minimum=1.0))
+    if current_ms < status_ms or current_ms - status_ms > 15_000:
+        raise MakerCutoverError("maker_mark_stale")
+    if (
+        runtime.get("model_sha") != model_sha
+        or runtime.get("paper_only") is not True
+        or runtime.get("authenticated_execution") is not False
+        or runtime.get("real_order_submission") is not False
+        or runtime.get("state") not in {"stopping", "stopped"}
+        or runtime.get("economic_new_risk_ready") is not False
+        or runtime.get("authorized_alpha_actions") != []
+        or portfolio.get("paper_only") is not True
+        or portfolio.get("authenticated_execution") is not False
+        or portfolio.get("killed") is not False
+        or portfolio.get("fatal_sleeves") not in (None, [])
+        or maker.get("source") != "not_started"
+        or maker.get("killed") is not False
+        or abs(number("maker_budget", maker.get("budget"), minimum=0.0)
+               - number("maker_equity", maker.get("equity"), minimum=0.0)) > 1e-9
+        or not ledger.exists()
+        or ledger.stat().st_size != 0
+        or (spool.exists() and any(spool.glob("*.json")))
+    ):
+        raise MakerCutoverError("maker_never_started_proof_invalid")
+
+    proof = {
+        "runtime_sha": runtime["model_sha"],
+        "runtime_state": runtime["state"],
+        "authorized_alpha_actions": [],
+        "ledger_bytes": 0,
+        "maker_portfolio_source": maker["source"],
+        "maker_budget": number("maker_budget", maker["budget"], minimum=0.0),
+        "maker_equity": number("maker_equity", maker["equity"], minimum=0.0),
+    }
+    receipt = {
+        "schema": "polymarket_v7_maker_cutover_liquidation_v1",
+        "state": "MAKER_FLAT",
+        "timestamp_ms": current_ms,
+        "paper_only": True,
+        "authenticated_execution": False,
+        "real_order_submission": False,
+        "model_sha": model_sha,
+        "nonce": nonce,
+        "never_started": True,
+        "positions_liquidated": 0,
+        "net_cashflow": 0.0,
+        "final_pnl": 0.0,
+        "liquidations": [],
+        "zero_recovery_writeoffs": 0,
+        "rejected_spool_records": 0,
+        "ledger_record_ids": [],
+        "final_state_digest": object_digest(proof),
+        "absence_proof": proof,
+    }
+    atomic_json(root / "control/maker_cutover_liquidation.json", receipt)
+    return receipt
+
+
 def reconcile_invalid_spool(root: Path, model_sha: str, nonce: str) -> dict[str, Any]:
     """Losslessly quarantine records that can never enter the canonical ledger."""
     spool = root / "ledger/spool"
@@ -235,12 +337,16 @@ def finalize(
     sentinel = read_json(control / "CUTOVER_DRAIN")
     state_path = root / "micro_maker/state.json"
     status_path = root / "micro_maker/status.json"
-    state = read_json(state_path)
     status = read_json(mark_path if mark_path is not None else status_path)
     if sentinel.get("schema") != "polymarket_v7_cutover_drain_v1" or sentinel.get("nonce") != nonce:
         raise MakerCutoverError("cutover_drain_identity_mismatch")
     if sentinel.get("current_sha") != model_sha or sentinel.get("paper_only") is not True:
         raise MakerCutoverError("cutover_drain_safety_mismatch")
+    current_ms = int(time.time_ns() // 1_000_000 if now_ms is None else now_ms)
+    if not state_path.exists() and status.get("source") == "not_started":
+        return finalize_never_started(
+            root, model_sha, nonce, status, prior_receipt, current_ms)
+    state = read_json(state_path)
     for name, value in (("state", state),):
         if value.get("paper_only") is not True or value.get("authenticated_execution") is not False:
             raise MakerCutoverError(f"unsafe_maker_{name}")
@@ -258,7 +364,6 @@ def finalize(
     if "drain_requested" in status and status.get("drain_requested") is not True:
         raise MakerCutoverError("maker_drain_not_observed")
 
-    current_ms = int(time.time_ns() // 1_000_000 if now_ms is None else now_ms)
     status_ms = int(number("status_timestamp_ms", status.get("timestamp_ms"), minimum=1.0))
     if current_ms < status_ms or current_ms - status_ms > 15_000:
         raise MakerCutoverError("maker_mark_stale")

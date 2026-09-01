@@ -288,12 +288,14 @@ assert portfolio.get('killed') is False and not portfolio.get('fatal_sleeves')
 # still report the untouched budget with an explicit non-started source.
 ledger_path=root/'ledger/execution.jsonl'
 ledger_empty=ledger_path.exists() and ledger_path.stat().st_size == 0
+spool_path=root/'ledger/spool'
+spool_empty=not spool_path.exists() or not any(spool_path.glob('*.json'))
 sleeves=portfolio.get('sleeves') if isinstance(portfolio.get('sleeves'),dict) else {}
 def prove_never_started(sleeve_name):
     sleeve=sleeves.get(sleeve_name) if isinstance(sleeves.get(sleeve_name),dict) else {}
     budget=float(sleeve.get('budget') or 0.0); equity=float(sleeve.get('equity') or 0.0)
     return (
-        not runtime_alive and ledger_empty
+        not runtime_alive and ledger_empty and spool_empty
         and runtime.get('state') in {'stopping','stopped'}
         and runtime.get('economic_new_risk_ready') is False
         and runtime.get('authorized_alpha_actions') == []

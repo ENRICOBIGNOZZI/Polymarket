@@ -151,6 +151,7 @@ class V7CutoverUpdaterTest(unittest.TestCase):
         self.assertIn("A previously stopped incumbent cannot acknowledge", function)
         self.assertIn("prove_never_started", function)
         self.assertIn("ledger_path.stat().st_size == 0", function)
+        self.assertIn("spool_empty", function)
         self.assertIn("runtime.get('economic_new_risk_ready') is False", function)
         self.assertIn("runtime.get('authorized_alpha_actions') == []", function)
         self.assertIn("sleeve.get('source') in {'not_started','zero_authority_budget'}", function)

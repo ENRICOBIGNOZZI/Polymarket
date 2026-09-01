@@ -78,6 +78,51 @@ class MakerCutoverFinalizerTest(unittest.TestCase):
             # The receipt makes a completed retry idempotent.
             self.assertEqual(cutover.finalize(root, SHA, NONCE, now_ms=now), receipt)
 
+    def test_never_started_maker_is_flattened_from_canonical_absence_proof(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            now = 1_788_040_000_000
+            write(root / "control/CUTOVER_DRAIN", {
+                "schema": "polymarket_v7_cutover_drain_v1", "nonce": NONCE,
+                "current_sha": SHA, "target_sha": "b" * 40, "paper_only": True,
+            })
+            write(root / "control/runtime_status.json", {
+                "model_sha": SHA, "paper_only": True, "authenticated_execution": False,
+                "real_order_submission": False, "state": "stopping",
+                "economic_new_risk_ready": False, "authorized_alpha_actions": [],
+            })
+            write(root / "control/portfolio_state.json", {
+                "paper_only": True, "authenticated_execution": False, "killed": False,
+                "fatal_sleeves": [], "sleeves": {"micro_maker": {
+                    "source": "not_started", "killed": False,
+                    "budget": 2_000.0, "equity": 2_000.0,
+                }},
+            })
+            ledger = root / "ledger/execution.jsonl"
+            ledger.parent.mkdir(parents=True)
+            ledger.write_text("", encoding="utf-8")
+            mark = root / "control/maker_cutover_mark.json"
+            write(mark, {
+                "schema": "polymarket_v7_professional_maker_status_v1",
+                "timestamp_ms": now - 1, "paper_only": True,
+                "authenticated_execution": False, "real_order_submission": False,
+                "model_sha": None, "marking_complete": True, "killed": False,
+                "drain_requested": True, "new_risk_frozen": True,
+                "drain_complete": True, "degraded": False,
+                "source": "not_started", "unmarkable_tokens": [],
+            })
+            receipt = cutover.finalize(
+                root, SHA, NONCE, mark_path=mark, now_ms=now)
+            self.assertEqual(receipt["state"], "MAKER_FLAT")
+            self.assertTrue(receipt["never_started"])
+            self.assertEqual(receipt["positions_liquidated"], 0)
+            self.assertEqual(receipt["ledger_record_ids"], [])
+            self.assertFalse((root / "micro_maker/state.json").exists())
+            self.assertEqual(
+                cutover.finalize(root, SHA, NONCE, mark_path=mark, now_ms=now),
+                receipt,
+            )
+
     def test_crash_after_state_commit_resumes_with_stale_mark_exactly_once(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
