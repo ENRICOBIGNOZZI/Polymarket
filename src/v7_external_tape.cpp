@@ -244,9 +244,10 @@ struct ExternalRawTapeRecorder::Impl {
     }
 
     [[nodiscard]] std::size_t queued() const noexcept {
-        if (burst_payloads) return burst_queue->approximate_size();
-        if (large_payloads) return large_queue->approximate_size();
-        return queue.approximate_size();
+        std::size_t result = queue.approximate_size();
+        if (burst_payloads) result += burst_queue->approximate_size();
+        if (large_payloads) result += large_queue->approximate_size();
+        return result;
     }
 
     template <class Record>
@@ -273,20 +274,23 @@ struct ExternalRawTapeRecorder::Impl {
     void writer_loop() noexcept {
         while (!stop_requested.load(std::memory_order_acquire) || queued() != 0) {
             bool progressed = false;
+            // The ordinary path must stay compact even for a source that
+            // occasionally sends a recovery batch. Only the exceptional
+            // frame goes through its wider FIFO.
+            while (queue.try_pop(writer_record)) {
+                progressed = true;
+                if (!write_record(writer_record)) return;
+            }
             if (burst_payloads) {
                 while (burst_queue->try_pop(*burst_writer_record)) {
                     progressed = true;
                     if (!write_record(*burst_writer_record)) return;
                 }
-            } else if (large_payloads) {
+            }
+            if (large_payloads) {
                 while (large_queue->try_pop(*large_writer_record)) {
                     progressed = true;
                     if (!write_record(*large_writer_record)) return;
-                }
-            } else {
-                while (queue.try_pop(writer_record)) {
-                    progressed = true;
-                    if (!write_record(writer_record)) return;
                 }
             }
             if (!progressed) std::this_thread::sleep_for(std::chrono::microseconds(100));
@@ -328,10 +332,10 @@ bool ExternalRawTapeRecorder::try_record_raw(
         std::memcpy(record.payload.data(), payload.data(), payload.size());
         return queue.try_push(record);
     };
-    const std::size_t maximum = impl_->burst_payloads
-        ? kExternalBurstRawTapePayloadBytes
-        : impl_->large_payloads
-            ? kExternalLargeRawTapePayloadBytes
+    const std::size_t maximum = impl_->large_payloads
+        ? kExternalLargeRawTapePayloadBytes
+        : impl_->burst_payloads
+            ? kExternalBurstRawTapePayloadBytes
             : kExternalRawTapePayloadBytes;
     if (payload.size() > maximum) {
         impl_->dropped.fetch_add(1, std::memory_order_relaxed);
@@ -339,11 +343,11 @@ bool ExternalRawTapeRecorder::try_record_raw(
         impl_->evidence_valid.store(false, std::memory_order_release);
         return false;
     }
-    const bool queued = impl_->burst_payloads
-        ? enqueue(*impl_->burst_producer_record, *impl_->burst_queue)
-        : impl_->large_payloads
-            ? enqueue(*impl_->large_producer_record, *impl_->large_queue)
-            : enqueue(impl_->producer_record, impl_->queue);
+    const bool queued = payload.size() <= kExternalRawTapePayloadBytes
+        ? enqueue(impl_->producer_record, impl_->queue)
+        : impl_->burst_payloads
+            ? enqueue(*impl_->burst_producer_record, *impl_->burst_queue)
+            : enqueue(*impl_->large_producer_record, *impl_->large_queue);
     if (!queued) {
         impl_->dropped.fetch_add(1, std::memory_order_relaxed);
         impl_->dropped_queue_full.fetch_add(1, std::memory_order_relaxed);

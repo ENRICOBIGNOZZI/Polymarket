@@ -134,11 +134,13 @@ int main() {
     {
         ExternalRawTapeRecorder raw_recorder(
             binance_large_raw_path, sha, "run-binance-large-raw", "session-binance-large-raw", "binance-spot", 1'000'004);
+        assert(raw_recorder.try_record_raw(VenueId::BinanceSpot, 5, 139, 1'039,
+                                            R"({"e":"depthUpdate"})"));
         const std::string full_binance_public_batch((kExternalRawTapePayloadBytes + 64U), 'x');
         assert(raw_recorder.try_record_raw(VenueId::BinanceSpot, 5, 140, 1'040,
                                             full_binance_public_batch));
         const auto raw_snapshot = raw_recorder.snapshot();
-        assert(raw_snapshot.accepted == 1);
+        assert(raw_snapshot.accepted == 2);
         assert(raw_snapshot.dropped == 0);
         assert(raw_snapshot.evidence_valid == 1);
     }
