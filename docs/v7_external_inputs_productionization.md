@@ -16,6 +16,7 @@ stack. All external-input components remain RESEARCH and PAPER-only.
 | Sports recovery | Sportradar Soccer v4 timeline REST | Conditional recovery after disconnect/gap | same key | Adapter contract configured; live recovery evidence pending |
 | Cross-platform venue | Kalshi | Public REST polling for discovery and orderbooks | none | Collector complete; deployment connectivity validation pending |
 | Cross-platform upgrade | Kalshi WebSocket v2 | authenticated WebSocket snapshot + delta | key id/private key | Optional; not used or claimed without credentials |
+| Cross-platform auxiliary | Limitless public API | REST market discovery, CLOB books and finalized trades | none | Collector operational; exact semantic mapping still required |
 
 Primary documentation:
 

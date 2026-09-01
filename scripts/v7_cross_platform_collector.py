@@ -169,7 +169,7 @@ def _load_state(path: Path) -> dict[str, Any]:
         value = json.loads(path.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError):
         return {"schema": STATE_SCHEMA, "sequences": {}, "metadata_hashes": {},
-                "book_cursor": 0, "last_hash": "0" * 64}
+                "book_cursor": 0, "market_cursor": "", "last_hash": "0" * 64}
     if value.get("schema") != STATE_SCHEMA or not isinstance(value.get("sequences"), dict):
         raise CrossCollectorError("collector_state_invalid")
     return value
@@ -301,7 +301,10 @@ def collect_once(*, repository_root: Path, config_path: Path, mappings_path: Pat
         discovery_budget_ns = max(1, int(section.get("metadata_discovery_time_budget_millis") or 10_000)) * 1_000_000
         discovery_started = time.monotonic_ns()
         markets: list[dict[str, Any]] = []
-        cursor = ""
+        # A large public market universe can outlive one bounded collection
+        # interval. Resume pagination next cycle instead of repeatedly
+        # recording only the first pages and calling that whole discovery.
+        cursor = str(state.get("market_cursor") or "")
         discovery_exhaustive = False
         for page_number in range(page_guard):
             # A discovery pass may span a large public universe. Bound it by
@@ -322,10 +325,12 @@ def collect_once(*, repository_root: Path, config_path: Path, mappings_path: Pat
             next_cursor = str(market_data.get("cursor") or "") if isinstance(market_data, dict) else ""
             if not next_cursor or not page:
                 discovery_exhaustive = True
+                state["market_cursor"] = ""
                 break
             if next_cursor == cursor:
                 raise CrossCollectorError("venue_market_cursor_not_advancing")
             cursor = next_cursor
+            state["market_cursor"] = cursor
         if not discovery_exhaustive and not discovery_time_budget_exhausted:
             raise CrossCollectorError("venue_market_pagination_guard_hit")
         tickers = []
@@ -348,7 +353,10 @@ def collect_once(*, repository_root: Path, config_path: Path, mappings_path: Pat
                     })
                     metadata_changes += 1
                 metadata_hashes[ticker] = metadata_hash
-        state["metadata_hashes"] = {ticker: metadata_hashes[ticker] for ticker in tickers}
+        # Only a complete pagination cycle proves absence from the venue.  Do
+        # not erase metadata from pages that have not been visited this cycle.
+        if discovery_exhaustive:
+            state["metadata_hashes"] = {ticker: metadata_hashes[ticker] for ticker in tickers}
         tickers = list(dict.fromkeys(tickers))
         discovered = len(tickers)
         poll_budget = max(1, int(float(section.get("orderbook_poll_time_budget_millis") or 0)
@@ -412,6 +420,7 @@ def collect_once(*, repository_root: Path, config_path: Path, mappings_path: Pat
         "metadata_changes": metadata_changes if transport_state != "DOWN" else 0,
         "book_poll_budget": poll_budget if transport_state != "DOWN" else 0,
         "book_poll_cursor": int(state.get("book_cursor") or 0),
+        "market_discovery_cursor": str(state.get("market_cursor") or ""),
         "feed_age_ms": 0 if synced else None, "last_sequence": max(state["sequences"].values(), default=0),
         "connection_epoch": int(getattr(client, "connection_epoch", 0)),
         "reconnect_count": int(getattr(client, "reconnect_count", 0)),

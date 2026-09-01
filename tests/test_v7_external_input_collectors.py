@@ -159,10 +159,13 @@ def test_limitless_public_collector_records_markets_books_and_trades_without_tok
         def close(self): pass
     tape = tmp_path / "events.jsonl"
     status = limitless.collect_once(
-        repository_root=ROOT, config_path=ROOT / "config" / "v7_external_inputs.json", tape_path=tape,
+        repository_root=ROOT, config_path=ROOT / "config" / "v7_external_inputs.json",
+        mappings_path=ROOT / "config" / "v7_external_mappings.json", tape_path=tape,
         state_path=tmp_path / "state.json", status_path=tmp_path / "status.json", client=LimitlessClient(), now_ms=1_800_000_000_000,
     )
     assert status["feed_status"] == "OPERATIONAL" and status["credentials_required"] is False and status["token_used"] is False
+    assert status["mapping_status"] == "NO_VERIFIED_EQUIVALENCE"
+    assert status["forward_opportunity_tape_active"] is False
     rows = [json.loads(line) for line in tape.read_text().splitlines()]
     assert {row["kind"] for row in rows} == {"MARKET_METADATA", "ORDERBOOK_SNAPSHOT", "PREDICTION_MARKET_TRADE"}
     assert all(row["transport"] == "PUBLIC_REST" for row in rows)
@@ -268,6 +271,33 @@ def test_kalshi_metadata_discovery_time_budget_is_explicit_and_never_hangs(tmp_p
     assert status["blocker"] == "BLOCKED_KALSHI_METADATA_DISCOVERY_TIME_BUDGET_EXHAUSTED"
 
 
+def test_kalshi_discovery_resumes_after_a_bounded_pagination_interval(tmp_path, monkeypatch):
+    class CursorClient(KalshiClient):
+        def get(self, path):
+            timing = {"request_ms": 2.0, "ttfb_ms": 1.0, "connection_epoch": 1, "body_sha256": "b" * 64}
+            if path.startswith("/markets?"):
+                if "cursor=next" in path:
+                    return {"markets": [{"ticker": "KX2", "title": "Second"}], "cursor": ""}, timing
+                return {"markets": [{"ticker": "KX1", "title": "First"}], "cursor": "next"}, timing
+            return {"orderbook_fp": {"yes_dollars": [["0.40", "10"]], "no_dollars": [["0.50", "8"]]}}, timing
+    config = json.loads((ROOT / "config" / "v7_external_inputs.json").read_text())
+    config["cross_platform"]["metadata_discovery_time_budget_millis"] = 1
+    config_path = tmp_path / "inputs.json"
+    config_path.write_text(json.dumps(config))
+    state_path, tape = tmp_path / "state.json", tmp_path / "books.jsonl"
+    timestamps = iter((0, 0, 2_000_000, 2_000_000))
+    monkeypatch.setattr(cross.time, "monotonic_ns", lambda: next(timestamps, 2_000_000))
+    first = cross.collect_once(repository_root=ROOT, config_path=config_path, mappings_path=ROOT / "config" / "v7_external_mappings.json",
+                               tape_path=tape, state_path=state_path, status_path=tmp_path / "first.json", client=CursorClient(), now_ms=1_800_000_000_000)
+    assert first["market_discovery_cursor"] == "next"
+    monkeypatch.setattr(cross.time, "monotonic_ns", lambda: 0)
+    second = cross.collect_once(repository_root=ROOT, config_path=config_path, mappings_path=ROOT / "config" / "v7_external_mappings.json",
+                                tape_path=tape, state_path=state_path, status_path=tmp_path / "second.json", client=CursorClient(), now_ms=1_800_000_030_000)
+    assert second["discovery_exhaustive"] is True
+    assert second["market_discovery_cursor"] == ""
+    assert second["discovered_markets"] == 1
+
+
 def test_kalshi_malformed_book_degrades_locally(tmp_path):
     status = cross.collect_once(
         repository_root=ROOT, config_path=ROOT / "config" / "v7_external_inputs.json",
@@ -342,6 +372,25 @@ def test_sports_missing_secret_is_explicit_and_nonfatal(tmp_path):
     assert status["feed_status"] == "CREDENTIALS_REQUIRED"
     assert status["missing_secret"] == "PM_V7_SPORTRADAR_API_KEY"
     assert status["implementation_complete"] and not status["feed_operational"]
+    assert status["real_order_submission"] is False
+
+
+def test_sports_provider_rejection_is_published_as_down_status(tmp_path, monkeypatch):
+    previous = os.environ.get("PM_V7_SPORTRADAR_API_KEY")
+    try:
+        os.environ["PM_V7_SPORTRADAR_API_KEY"] = "test-only"
+        monkeypatch.setattr(sports.urllib.request, "urlopen", lambda *_args, **_kwargs: (_ for _ in ()).throw(sports.urllib.error.HTTPError("https://provider.invalid", 403, "Forbidden", {}, None)))
+        status = sports.run_session(
+            repository_root=ROOT, config_path=ROOT / "config" / "v7_external_inputs.json",
+            mappings_path=ROOT / "config" / "v7_external_mappings.json",
+            tape_path=tmp_path / "events", state_path=tmp_path / "state", status_path=tmp_path / "status",
+            now_ms=1_800_000_000_000,
+        )
+    finally:
+        if previous is None: os.environ.pop("PM_V7_SPORTRADAR_API_KEY", None)
+        else: os.environ["PM_V7_SPORTRADAR_API_KEY"] = previous
+    assert status["feed_status"] == "DOWN"
+    assert status["blocker"] == "BLOCKED_PROVIDER_CONNECT:HTTPError"
     assert status["real_order_submission"] is False
 
 

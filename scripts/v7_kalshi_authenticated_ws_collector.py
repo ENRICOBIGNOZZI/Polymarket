@@ -273,9 +273,13 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__); parser.add_argument("--repository-root", type=Path, default=Path("."))
     parser.add_argument("--config", type=Path, default=Path("config/v7_external_inputs.json")); parser.add_argument("--tape", type=Path, required=True)
     parser.add_argument("--state", type=Path, required=True); parser.add_argument("--status", type=Path, required=True)
+    parser.add_argument("--max-messages", type=int)
     parser.add_argument("--loop", action="store_true"); args = parser.parse_args(argv)
+    if args.max_messages is not None and args.max_messages < 1:
+        parser.error("--max-messages must be positive")
     while True:
-        result = run_session(repository_root=args.repository_root, config_path=args.config, tape_path=args.tape, state_path=args.state, status_path=args.status)
+        result = run_session(repository_root=args.repository_root, config_path=args.config, tape_path=args.tape,
+                             state_path=args.state, status_path=args.status, max_messages=args.max_messages)
         print(json.dumps(result, sort_keys=True), flush=True)
         if not args.loop: return 0
         time.sleep(5 if result["feed_status"] == "OPERATIONAL" else 15)

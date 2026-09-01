@@ -13,10 +13,12 @@ import json
 import math
 import os
 import time
+import urllib.parse
 from pathlib import Path
 from typing import Any, Mapping, Sequence
 
 from v7_cross_platform_collector import PersistentJsonClient, atomic_json, append_record, git_head
+from v7_semantic_mapping import load_verified_mappings
 
 
 STATUS_SCHEMA = "polymarket_v7_limitless_public_status_v1"
@@ -89,7 +91,20 @@ def _metadata(row: Mapping[str, Any]) -> dict[str, Any]:
                                            "marketType", "priceOracleMetadata", "metadata", "settings")}
 
 
-def collect_once(*, repository_root: Path, config_path: Path, tape_path: Path, state_path: Path,
+def _verified_limitless_slugs(mappings: Sequence[Any]) -> list[str]:
+    slugs: list[str] = []
+    for mapping in mappings:
+        for fingerprint in (mapping.left, mapping.right):
+            if str(fingerprint.venue).lower() != "limitless":
+                continue
+            slug = str(fingerprint.contract_id).strip()
+            if slug and slug not in slugs:
+                slugs.append(slug)
+    return slugs
+
+
+def collect_once(*, repository_root: Path, config_path: Path, mappings_path: Path,
+                 tape_path: Path, state_path: Path,
                  status_path: Path, client: Any | None = None, now_ms: int | None = None) -> dict[str, Any]:
     config = _load(config_path); policy = config.get("limitless") if isinstance(config.get("limitless"), dict) else {}
     if (config.get("schema") != "polymarket_v7_external_inputs_v1" or config.get("version") != 7
@@ -97,12 +112,18 @@ def collect_once(*, repository_root: Path, config_path: Path, tape_path: Path, s
             or config.get("real_order_submission") is not False or policy.get("credentials_required") is not False):
         raise LimitlessCollectorError("limitless_config_invalid")
     timestamp = int(time.time() * 1000) if now_ms is None else int(now_ms); sha = git_head(repository_root); state = _state(state_path)
+    mappings = load_verified_mappings(mappings_path, "cross_platform", now_ms=timestamp,
+                                      repository_sha=sha)
+    verified_slugs = _verified_limitless_slugs(mappings)
     own_client = client is None; client = client or PersistentJsonClient(str(policy.get("base_url") or ""))
     discovered = books = trades = failures = 0; blocker = ""; latency: list[float] = []
     try:
         raw, timing = client.get("/markets/active"); latency.append(float(timing.get("request_ms") or 0.0))
         markets = _markets(raw); discovered = len(markets); maximum = max(1, min(100, int(policy.get("max_markets_per_cycle") or 20)))
-        for market in markets[:maximum]:
+        by_slug = {str(market["slug"]): market for market in markets}
+        ordered = [by_slug[slug] for slug in verified_slugs if slug in by_slug]
+        ordered.extend(market for market in markets if str(market["slug"]) not in set(verified_slugs))
+        for market in ordered[:maximum]:
             slug = str(market["slug"]); metadata = _metadata(market)
             digest = hashlib.sha256(json.dumps(metadata, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
             if state["metadata_hashes"].get(slug) != digest:
@@ -110,15 +131,18 @@ def collect_once(*, repository_root: Path, config_path: Path, tape_path: Path, s
                     "received_at_ms": timestamp, "transport": "PUBLIC_REST", "polling_latency_not_event_latency": True,
                     "metadata": metadata, "metadata_hash": digest, "repository_sha": sha})
                 state["metadata_hashes"][slug] = digest
+                atomic_json(state_path, state)
             try:
-                raw_book, book_timing = client.get("/markets/" + slug + "/orderbook"); latency.append(float(book_timing.get("request_ms") or 0.0))
+                encoded_slug = urllib.parse.quote(slug, safe="")
+                raw_book, book_timing = client.get("/markets/" + encoded_slug + "/orderbook"); latency.append(float(book_timing.get("request_ms") or 0.0))
                 append_record(tape_path, state, {"kind": "ORDERBOOK_SNAPSHOT", "venue": "limitless", "contract_id": slug,
                     "received_at_ms": timestamp, "transport": "PUBLIC_REST", "polling_latency_not_event_latency": True,
                     "book": _book(raw_book), "token_id": raw_book.get("tokenId"), "repository_sha": sha})
+                atomic_json(state_path, state)
                 books += 1
             except Exception: failures += 1
             try:
-                raw_trades, trade_timing = client.get("/markets/" + slug + "/events"); latency.append(float(trade_timing.get("request_ms") or 0.0))
+                raw_trades, trade_timing = client.get("/markets/" + encoded_slug + "/events"); latency.append(float(trade_timing.get("request_ms") or 0.0))
                 rows = raw_trades.get("events") if isinstance(raw_trades, dict) else []
                 if not isinstance(rows, list): raise LimitlessCollectorError("limitless_events_invalid")
                 for trade in rows:
@@ -130,9 +154,12 @@ def collect_once(*, repository_root: Path, config_path: Path, tape_path: Path, s
                         "received_at_ms": timestamp, "transport": "PUBLIC_REST", "polling_latency_not_event_latency": True,
                         "trade": trade, "repository_sha": sha})
                     if event_id: state["trade_hashes"][event_id] = digest
+                    atomic_json(state_path, state)
                     trades += 1
             except Exception: failures += 1
         feed_status = "OPERATIONAL" if books > 0 else "DEGRADED"
+        if not verified_slugs:
+            blocker = "BLOCKED_NO_VERIFIED_LIMITLESS_EQUIVALENCE"
     except Exception as exc:
         feed_status, blocker = "DOWN", f"BLOCKED_LIMITLESS_PUBLIC:{type(exc).__name__}:{exc}"
     finally:
@@ -143,6 +170,10 @@ def collect_once(*, repository_root: Path, config_path: Path, tape_path: Path, s
         "process_state": "RUNNING", "implementation_complete": True, "feed_status": feed_status,
         "feed_operational": feed_status == "OPERATIONAL", "transport": "PUBLIC_REST", "credentials_required": False,
         "token_used": False, "discovered_markets": discovered, "synchronized_books": books, "trades_observed": trades,
+        "mapping_status": "VERIFIED_EQUIVALENCES_ACTIVE" if verified_slugs else "NO_VERIFIED_EQUIVALENCE",
+        "verified_mappings": len(verified_slugs), "mapping_pipeline": True,
+        "forward_collection_active": books > 0,
+        "forward_opportunity_tape_active": bool(books and verified_slugs),
         "parse_failure_count": failures, "request_latency_ms": latency, "blocker": blocker, "reason_codes": [blocker] if blocker else [],
         "paper_only": True, "research_only": True, "authenticated_execution": False, "real_order_submission": False,
         "execution_authority": False, "capital_authority": False, "oms_authority": False, "ledger_write_authority": False,
@@ -152,11 +183,11 @@ def collect_once(*, repository_root: Path, config_path: Path, tape_path: Path, s
 
 def main(argv: Sequence[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__); parser.add_argument("--repository-root", type=Path, default=Path("."))
-    parser.add_argument("--config", type=Path, default=Path("config/v7_external_inputs.json")); parser.add_argument("--tape", type=Path, required=True)
+    parser.add_argument("--config", type=Path, default=Path("config/v7_external_inputs.json")); parser.add_argument("--mappings", type=Path, default=Path("config/v7_external_mappings.json")); parser.add_argument("--tape", type=Path, required=True)
     parser.add_argument("--state", type=Path, required=True); parser.add_argument("--status", type=Path, required=True)
     parser.add_argument("--interval", type=float, default=15.0); parser.add_argument("--loop", action="store_true"); args = parser.parse_args(argv)
     while True:
-        print(json.dumps(collect_once(repository_root=args.repository_root, config_path=args.config, tape_path=args.tape,
+        print(json.dumps(collect_once(repository_root=args.repository_root, config_path=args.config, mappings_path=args.mappings, tape_path=args.tape,
                                       state_path=args.state, status_path=args.status), sort_keys=True), flush=True)
         if not args.loop: return 0
         time.sleep(max(1.0, args.interval))

@@ -249,6 +249,7 @@ pids+=("$!")
 # read-only endpoints. A trading token is intentionally never passed here.
 python3 scripts/v7_limitless_collector.py \
   --repository-root "$ROOT" --config "$EXTERNAL_INPUT_CONFIG" \
+  --mappings "$EXTERNAL_MAPPING_REGISTRY" \
   --tape "$RUN_ROOT/shadow/limitless/events.jsonl" \
   --state "$RUN_ROOT/shadow/limitless/collector_state.json" \
   --status "$RUN_ROOT/shadow/limitless/component_status.json" --interval 15 --loop \

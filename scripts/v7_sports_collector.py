@@ -339,7 +339,18 @@ def run_session(*, repository_root: Path, config_path: Path, mappings_path: Path
             "Accept": "application/json", "x-api-key": secret,
             "User-Agent": "PolymarketV7Research/1.0",
         })
-        response = urllib.request.urlopen(request, timeout=30.0)
+        try:
+            response = urllib.request.urlopen(request, timeout=30.0)
+        except (OSError, urllib.error.URLError) as exc:
+            state["reconnect_count"] = int(state.get("reconnect_count") or 0) + 1
+            status = component_status(
+                sha=sha, timestamp_ms=timestamp, provider=provider, state=state,
+                feed_status="DOWN", blocker=f"BLOCKED_PROVIDER_CONNECT:{type(exc).__name__}",
+                verified_mappings=len(mappings), events=0, heartbeats=0,
+                parse_failures=0, last_receive_ms=0,
+            )
+            atomic_json(state_path, state); atomic_json(status_path, status)
+            return status
         stream = iter(lambda: response.read(64 * 1024), b"")
     state["connection_epoch"] = int(state.get("connection_epoch") or 0) + 1
     events = heartbeats = parse_failures = objects = 0

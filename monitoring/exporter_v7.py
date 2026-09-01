@@ -1299,6 +1299,24 @@ def render_prometheus(snapshot: dict[str, Any]) -> str:
                 ("authenticated_websocket_orderbook_deltas", "polymarket_v7_kalshi_authenticated_websocket_orderbook_deltas"),
             ):
                 lines.append(_metric(metric_name, row.get(key), {"strategy": family}))
+            limitless_labels = {
+                "strategy": family,
+                "feed_status": row.get("limitless_feed_status", "MISSING_OR_STALE"),
+                "blocker": row.get("limitless_blocker", "") or "NONE",
+            }
+            lines.append(_metric("polymarket_v7_limitless_info", 1, limitless_labels))
+            lines.append(_metric(
+                "polymarket_v7_limitless_feed_operational",
+                1 if row.get("limitless_feed_operational") is True else 0,
+                {"strategy": family},
+            ))
+            for key, metric_name in (
+                ("limitless_discovered_markets", "polymarket_v7_limitless_discovered_markets"),
+                ("limitless_synchronized_books", "polymarket_v7_limitless_synchronized_books"),
+                ("limitless_trades_observed", "polymarket_v7_limitless_trades_observed"),
+                ("limitless_verified_mappings", "polymarket_v7_limitless_verified_mappings"),
+            ):
+                lines.append(_metric(metric_name, row.get(key), {"strategy": family}))
     for family, row in sorted(slow_research_rows.items()):
         if not isinstance(row, dict):
             continue

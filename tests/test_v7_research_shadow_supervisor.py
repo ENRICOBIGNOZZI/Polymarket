@@ -179,6 +179,34 @@ class ResearchShadowSupervisorTest(unittest.TestCase):
             self.assertEqual(row["authenticated_websocket_messages"], 12)
             self.assertEqual(row["authenticated_websocket_ticker_updates"], 9)
 
+    def test_limitless_public_feed_is_aggregated_without_execution_authority(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            status_path = root / "run/shadow/limitless/component_status.json"
+            status_path.parent.mkdir(parents=True)
+            status_path.write_text(json.dumps({
+                "schema": "polymarket_v7_limitless_public_status_v1",
+                "version": 7, "family": "cross_platform", "source_id": "limitless_public",
+                "authority": "RESEARCH", "model_sha": SHA, "timestamp_ms": 999_000,
+                "paper_only": True, "research_only": True,
+                "authenticated_execution": False, "real_order_submission": False,
+                "execution_authority": False, "capital_authority": False,
+                "oms_authority": False, "ledger_write_authority": False,
+                "promotion_authority": False, "implementation_complete": True,
+                "feed_status": "OPERATIONAL", "feed_operational": True,
+                "discovered_markets": 25, "synchronized_books": 20,
+                "trades_observed": 9, "verified_mappings": 0,
+                "blocker": "BLOCKED_NO_VERIFIED_LIMITLESS_EQUIVALENCE",
+            }), encoding="utf-8")
+            app = self.make(root, Clock())
+            manifest = json.loads(app.manifest_path.read_text())
+            row = manifest["families"]["cross_platform"]
+            self.assertEqual(row["limitless_feed_status"], "OPERATIONAL")
+            self.assertTrue(row["limitless_feed_operational"])
+            self.assertEqual(row["limitless_discovered_markets"], 25)
+            self.assertEqual(row["limitless_synchronized_books"], 20)
+            self.assertEqual(row["limitless_verified_mappings"], 0)
+
     def test_stopped_heartbeat_remains_fail_closed_without_attempts(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
