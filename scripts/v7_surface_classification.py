@@ -88,6 +88,30 @@ def _refs(root: Path) -> list[tuple[str, str]]:
     return sorted(tuple(line.split("\t", 1)) for line in lines if "\t" in line)
 
 
+def equivalent_ref_surface_ids(surface_id: str) -> tuple[str, ...]:
+    """Return portable local/remote-tracking identities for one branch ref.
+
+    A full clone exposes upstream branches under ``refs/remotes/origin`` while
+    the workstation on which the audit snapshot was produced may expose the
+    same branch under ``refs/heads``.  These namespaces describe the same
+    branch surface for classification purposes.  Tags and ``origin/HEAD`` are
+    intentionally never aliased.
+    """
+    prefix = "ref:"
+    if not surface_id.startswith(prefix):
+        return (surface_id,)
+    ref = surface_id[len(prefix):]
+    remote_prefix = "refs/remotes/origin/"
+    local_prefix = "refs/heads/"
+    if ref.startswith(remote_prefix) and ref != "refs/remotes/origin/HEAD":
+        branch = ref[len(remote_prefix):]
+        return (surface_id, f"{prefix}{local_prefix}{branch}")
+    if ref.startswith(local_prefix):
+        branch = ref[len(local_prefix):]
+        return (surface_id, f"{prefix}{remote_prefix}{branch}")
+    return (surface_id,)
+
+
 def _classification_for_name(name: str) -> str:
     lowered = name.lower()
     if name in TEMPORARY_PATHS:
@@ -419,9 +443,9 @@ def validate_manifest(value: dict[str, Any], *, root: Path | None = None) -> dic
         }
         if actual_paths != expected_paths:
             raise ClassificationError("tracked_path_coverage")
-        expected_refs = {ref for ref, _ in _refs(root.resolve())}
+        expected_refs = {f"ref:{ref}" for ref, _ in _refs(root.resolve())}
         actual_refs = {
-            row["path_or_ref"] for row in entries
+            row["surface_id"] for row in entries
             if row["object_type"] in {"tag", "branch_or_remote_ref"}
         }
         # A committed audit may include workstation-local or remote-tracking
@@ -429,7 +453,10 @@ def validate_manifest(value: dict[str, Any], *, root: Path | None = None) -> dic
         # must nevertheless fail if *its* visible ref namespace contains an
         # unclassified ref.  Extra immutable snapshot entries are evidence,
         # not a reproducibility defect.
-        missing_refs = sorted(expected_refs - actual_refs)
+        missing_refs = sorted(
+            ref for ref in expected_refs
+            if not any(alias in actual_refs for alias in equivalent_ref_surface_ids(ref))
+        )
         if missing_refs:
             raise ClassificationError(f"ref_coverage:{missing_refs}")
     counts = {name: 0 for name in sorted(CLASSES)}

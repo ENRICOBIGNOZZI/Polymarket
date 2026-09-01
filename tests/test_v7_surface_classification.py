@@ -13,6 +13,7 @@ sys.path.insert(0, str(ROOT / "scripts"))
 from v7_surface_classification import (  # noqa: E402
     ClassificationError,
     build_manifest,
+    equivalent_ref_surface_ids,
     validate_manifest,
 )
 
@@ -46,7 +47,14 @@ class SurfaceClassificationTests(unittest.TestCase):
         # The checked-in artifact is a complete audit-time ref snapshot.  A
         # clean CI checkout intentionally has fewer local/remote-tracking refs;
         # every surface CI can see must still match the audited classification.
-        self.assertEqual(actual, {key: expected[key] for key in actual})
+        for key, value in actual.items():
+            audited_key = next(
+                (candidate for candidate in equivalent_ref_surface_ids(key)
+                 if candidate in expected),
+                None,
+            )
+            self.assertIsNotNone(audited_key, key)
+            self.assertEqual(value, expected[audited_key], key)
         for field, count in generated["coverage"].items():
             if field != "ref_count":
                 self.assertEqual(count, self.value["coverage"][field])
@@ -61,7 +69,19 @@ class SurfaceClassificationTests(unittest.TestCase):
             row["surface_id"] for row in self.value["entries"]
             if row["object_type"] in {"branch_or_remote_ref", "tag"}
         }
-        self.assertLessEqual(current, audited)
+        missing = {
+            key for key in current
+            if not any(candidate in audited for candidate in equivalent_ref_surface_ids(key))
+        }
+        self.assertEqual(missing, set())
+
+    def test_branch_ref_namespace_aliases_are_portable(self) -> None:
+        local = "ref:refs/heads/codex/example"
+        remote = "ref:refs/remotes/origin/codex/example"
+        self.assertEqual(equivalent_ref_surface_ids(local), (local, remote))
+        self.assertEqual(equivalent_ref_surface_ids(remote), (remote, local))
+        head = "ref:refs/remotes/origin/HEAD"
+        self.assertEqual(equivalent_ref_surface_ids(head), (head,))
 
     def test_research_authority_injection_fails_closed(self) -> None:
         value = copy.deepcopy(self.value)
