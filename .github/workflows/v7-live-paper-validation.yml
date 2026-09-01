@@ -50,8 +50,9 @@ jobs:
           git fetch --no-tags origin main
           test "$(git rev-parse HEAD)" = "$VALIDATION_SHA"
           if [[ "$(git rev-parse origin/main)" != "$VALIDATION_SHA" ]]; then
-            echo "validation_state=stale_non_main_sha" >> "$GITHUB_STEP_SUMMARY"
-            exit 0
+            echo "validation_state=BLOCKED_STALE_NON_MAIN_SHA" >> "$GITHUB_STEP_SUMMARY"
+            echo "::error title=V7 PAPER validation blocked::Requested SHA is not the current immutable main SHA. No substantive PAPER validation ran."
+            exit 1
           fi
           python3 - <<'PY'
           import json
@@ -83,10 +84,12 @@ jobs:
             fi
           done
           if [[ "$all_exact_green" != "true" ]]; then
-            echo "validation_state=awaiting_all_exact_sha_technical_gates" >> "$GITHUB_STEP_SUMMARY"
-            exit 0
+            echo "validation_state=BLOCKED_AWAITING_ALL_EXACT_SHA_TECHNICAL_GATES" >> "$GITHUB_STEP_SUMMARY"
+            echo "::error title=V7 PAPER validation blocked::One or more required exact-SHA technical gates are unavailable or non-green. No substantive PAPER validation ran."
+            exit 1
           fi
           echo "ready=true" >> "$GITHUB_OUTPUT"
+          echo "validation_state=READY_FOR_SUBSTANTIVE_PAPER_VALIDATION" >> "$GITHUB_STEP_SUMMARY"
 
       - name: Enforce V7 PAPER safety contract
         if: steps.gate.outputs.ready == 'true'

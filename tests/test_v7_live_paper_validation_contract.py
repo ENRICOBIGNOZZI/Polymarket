@@ -18,7 +18,10 @@ class V7LivePaperValidationContractTest(unittest.TestCase):
             "monitoring.yml:monitoring",
             "private-runtime-single-writer-validation.yml:Private runtime single-writer validation",
             "all_exact_green=true",
-            "validation_state=awaiting_all_exact_sha_technical_gates",
+            "validation_state=BLOCKED_STALE_NON_MAIN_SHA",
+            "validation_state=BLOCKED_AWAITING_ALL_EXACT_SHA_TECHNICAL_GATES",
+            "validation_state=READY_FOR_SUBSTANTIVE_PAPER_VALIDATION",
+            "No substantive PAPER validation ran.",
             "scripts/v7_cutover_contract.py",
             "scripts/v7_current_truth_audit.py",
             "scripts/v7_release_provenance.py",
@@ -54,6 +57,12 @@ class V7LivePaperValidationContractTest(unittest.TestCase):
             "cutover_approved:",
         ):
             self.assertNotIn(forbidden, text)
+
+        gate = text.split("- name: Require exact-main V7 technical gates", 1)[1].split(
+            "- name: Enforce V7 PAPER safety contract", 1
+        )[0]
+        self.assertEqual(gate.count("exit 1"), 2)
+        self.assertNotIn("exit 0", gate)
 
     def test_deploy_is_manual_exact_sha_cutover_only(self) -> None:
         text = (ROOT / ".github/workflows/v7-deploy-paper-server.yml").read_text(encoding="utf-8")
