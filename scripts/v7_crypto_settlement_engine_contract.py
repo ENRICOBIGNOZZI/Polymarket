@@ -168,9 +168,6 @@ def validate_config(config: dict[str, Any]) -> None:
                 raise ContractError("research_horizon_has_execution")
     if found != ALLOWED_HORIZONS:
         raise ContractError("horizon_partition")
-    research = set(config.get("research_zero_authority_families") or [])
-    if len(research) != 10 or research & components:
-        raise ContractError("research_zero_authority_partition")
 
 
 def validate_structural_config(config: dict[str, Any]) -> None:
@@ -213,73 +210,55 @@ def validate_structural_config(config: dict[str, Any]) -> None:
 def validate_registry_authority(
     config: dict[str, Any], structural: dict[str, Any], registry: dict[str, Any],
 ) -> None:
-    if registry.get("schema") != "polymarket_v7_strategy_registry_v1":
+    if registry.get("schema") != "polymarket_v7_live_algorithm_registry_v2":
         raise ContractError("strategy_registry_schema")
-    rows = registry.get("strategies")
-    if not isinstance(rows, list):
+    rows = registry.get("live_algorithms")
+    if not isinstance(rows, list) or len(rows) != 2:
         raise ContractError("strategy_registry_rows")
-    authorities = {
-        str(row.get("family") or ""): str(row.get("authority") or "").upper()
-        for row in rows if isinstance(row, dict) and row.get("enabled") is True
+    algorithms = {
+        str(row.get("id") or ""): row for row in rows if isinstance(row, dict)
     }
-    if len(authorities) != 15:
-        raise ContractError("strategy_registry_partition")
-    engines = registry.get("economic_engines") if isinstance(
-        registry.get("economic_engines"), dict) else {}
-    expected_owners = {"CRYPTO_SETTLEMENT_ENGINE", "STRUCTURAL_ARB_ENGINE"}
-    for name in expected_owners:
-        engine = engines.get(name) if isinstance(engines.get(name), dict) else {}
-        if (
-            engine.get("authority_owner") != name
-            or engine.get("component_independent_authority") is not False
-        ):
-            raise ContractError(f"economic_engine_authority:{name}")
-    if set(engines["CRYPTO_SETTLEMENT_ENGINE"].get("components") or []) != {
+    if set(algorithms) != {"CRYPTO_SETTLEMENT_ENGINE", "STRUCTURAL_ARB_ENGINE"}:
+        raise ContractError("live_algorithm_registry_partition")
+    if registry.get("component_independent_authority") is not False:
+        raise ContractError("component_has_independent_authority")
+    if any(
+        row.get("enabled") is not True or row.get("mode") != "PAPER"
+        or row.get("new_risk_authorized") is not False
+        for row in algorithms.values()
+    ):
+        raise ContractError("live_algorithm_registry_safety")
+    if set(algorithms["CRYPTO_SETTLEMENT_ENGINE"].get("components") or []) != {
         "crypto_settlement_fair", "professional_maker", "crypto_informed_taker",
     }:
         raise ContractError("crypto_engine_registry_components")
-    if set(engines["STRUCTURAL_ARB_ENGINE"].get("components") or []) != {
+    if set(algorithms["STRUCTURAL_ARB_ENGINE"].get("components") or []) != {
         "hard_arb", "fast_structural",
     }:
         raise ContractError("structural_engine_registry_components")
-    independent_paper = {
-        family for family, authority in authorities.items() if authority == "PAPER"
-    }
-    if independent_paper:
-        raise ContractError("component_has_independent_paper_authority")
-    component_families = set(config["component_families"])
-    component_families.update(structural["component_families"])
-    if any(authorities.get(family) not in {"SHADOW", "RESEARCH"}
-           for family in component_families):
-        raise ContractError("component_has_independent_authority")
-    if any(authorities.get(family) != "RESEARCH"
-           for family in config["research_zero_authority_families"]):
-        raise ContractError("research_family_has_authority")
 
 
 def validate_live_scope(
     config: dict[str, Any], structural: dict[str, Any], scope: dict[str, Any],
 ) -> None:
     if (
-        scope.get("schema") != "polymarket_v7_live_model_scope_v1"
+        scope.get("schema") != "polymarket_v7_live_engine_scope_v2"
         or scope.get("paper_only") is not True
         or scope.get("authenticated_execution") is not False
         or scope.get("real_order_submission") is not False
+        or scope.get("live_algorithm_count") != 2
+        or scope.get("component_independent_authority") is not False
     ):
         raise ContractError("live_scope_identity_or_safety")
-    if set(scope.get("paper_execution_engines") or []) != {
+    if set(scope.get("live_algorithms") or []) != {
         "CRYPTO_SETTLEMENT_ENGINE", "STRUCTURAL_ARB_ENGINE",
     }:
         raise ContractError("live_scope_must_have_two_economic_owners")
-    if set(scope.get("component_shadow_families") or []) != {
-        "crypto_settlement_fair", "professional_maker", "crypto_informed_taker",
-        "hard_arb", "fast_structural",
-    }:
-        raise ContractError("live_scope_component_shadows")
-    if set(scope.get("research_zero_authority_families") or []) != set(
-        config["research_zero_authority_families"]
-    ):
-        raise ContractError("live_scope_research_zero_authority")
+    internal = scope.get("internal_engine_components")
+    if not isinstance(internal, dict) or set(internal.get("CRYPTO_SETTLEMENT_ENGINE") or []) != set(config["component_families"]):
+        raise ContractError("live_scope_crypto_components")
+    if set(internal.get("STRUCTURAL_ARB_ENGINE") or []) != set(structural["component_families"]):
+        raise ContractError("live_scope_structural_components")
     if scope.get("crypto_settlement_engine_contract") != \
             "config/v7_crypto_settlement_engine.json":
         raise ContractError("live_scope_engine_contract_path")

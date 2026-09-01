@@ -20,7 +20,7 @@ def main() -> None:
     assert "polymarket_v7_external_venue_runtime" in cmake
     assert 'source scripts/v7_process_runtime.sh' in launcher
     assert 'v7_register_child "$!"' in launcher
-    assert "v7_assert_registered_child_count 31" in launcher
+    assert "v7_assert_registered_child_count 20" in launcher
     assert "external_venues.json" in launcher
     assert "std::make_unique<beast::flat_static_buffer" in websocket
     assert "flat_static_buffer<kMaxWsMessageBytes> buffer;" not in websocket
