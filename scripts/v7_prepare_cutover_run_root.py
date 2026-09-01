@@ -261,16 +261,7 @@ def prepare(
             raise CutoverArchiveError(f"prior_never_started_invalid:{name}")
         return {"source": sleeve["source"], "budget": budget, "equity": equity}
 
-    if not micro_status and not micro_state:
-        # micro_taker was removed from V7.  Exact absence in a stopped runtime
-        # is the canonical terminal state; no compatibility sleeve is created.
-        micro_status = {
-            "paper_only": True, "authenticated_execution": False, "open_positions": 0,
-        }
-        micro_state = {"positions": {}}
-    if not maker_status and not maker_state:
-        maker_proof = prove_never_started(
-            "micro_maker", {"not_started", "zero_authority_budget"})
+    def verify_maker_never_started_receipt(maker_proof: dict) -> None:
         absence = maker_receipt.get("absence_proof") \
             if isinstance(maker_receipt.get("absence_proof"), dict) else {}
         if (
@@ -293,9 +284,48 @@ def prepare(
             or float(absence.get("maker_equity") or 0.0) != maker_proof["equity"]
         ):
             raise CutoverArchiveError("prior_never_started_receipt_invalid:micro_maker")
+
+    if not micro_status and not micro_state:
+        # micro_taker was removed from V7.  Exact absence in a stopped runtime
+        # is the canonical terminal state; no compatibility sleeve is created.
+        micro_status = {
+            "paper_only": True, "authenticated_execution": False, "open_positions": 0,
+        }
+        micro_state = {"positions": {}}
+    if not maker_status and not maker_state:
+        maker_proof = prove_never_started(
+            "micro_maker", {"not_started", "zero_authority_budget"})
+        verify_maker_never_started_receipt(maker_proof)
         maker_status = {
             "paper_only": True, "authenticated_execution": False, "positions": [],
         }
+        maker_state = {"inventory": {}}
+        prior_never_started_sleeves.append("micro_maker")
+    elif maker_status and not maker_state:
+        # The professional-maker cohort is an observer component of the crypto
+        # settlement algorithm. It intentionally creates no durable inventory
+        # file. Accept that absence only when both its exact-SHA zero-authority
+        # status and the post-stop liquidation receipt prove it never started.
+        maker_proof = prove_never_started(
+            "micro_maker", {"not_started", "zero_authority_budget"})
+        if (
+            maker_status.get("schema") != "polymarket_v7_professional_maker_status_v1"
+            or maker_status.get("model_sha") != previous_sha
+            or maker_status.get("paper_only") is not True
+            or maker_status.get("authenticated_execution") is not False
+            or maker_status.get("real_order_submission") is not False
+            or maker_status.get("execution_authority") != "SHADOW_ZERO_AUTHORITY"
+            or maker_status.get("capital_authority") is not False
+            or maker_status.get("ledger_writer_authority") is not False
+            or maker_status.get("source") != "shadow_markout_and_fillability_observers"
+            or maker_status.get("new_risk_frozen") is not True
+            or maker_status.get("killed") is not False
+            or int(maker_status.get("open_orders", -1)) != 0
+            or int(maker_status.get("open_positions", -1)) != 0
+        ):
+            raise CutoverArchiveError("prior_observer_status_invalid:micro_maker")
+        verify_maker_never_started_receipt(maker_proof)
+        maker_status = dict(maker_status, positions=[])
         maker_state = {"inventory": {}}
         prior_never_started_sleeves.append("micro_maker")
     for name, value in (("external_status", external_status), ("external_state", external_state),
