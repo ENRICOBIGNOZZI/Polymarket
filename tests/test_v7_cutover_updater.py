@@ -353,6 +353,10 @@ class V7CutoverUpdaterTest(unittest.TestCase):
         self.assertLess(archive, start)
         self.assertIn('paper_v7_archives', text)
         self.assertIn('POLYMARKET_CUTOVER_ARCHIVER', text)
+        self.assertIn(
+            'POLYMARKET_CUTOVER_ARCHIVER:-$candidate/scripts/v7_prepare_cutover_run_root.py',
+            text,
+        )
         self.assertNotIn('rm -rf "$(production_run_root)"', text)
 
     def test_health_failure_emits_endpoint_and_monitoring_log_diagnostics(self) -> None:

@@ -1218,7 +1218,7 @@ if [[ "$INCUMBENT_PRESENT" == 1 && "$OLD_SHA" != "$EXPECTED_SHA" ]]; then
     --mark "$(production_run_root)/control/maker_cutover_mark.json" | tee -a deploy-evidence.txt
 fi
 stop_owned_monitoring
-CUTOVER_ARCHIVER="${POLYMARKET_CUTOVER_ARCHIVER:-$APP_DIR/scripts/v7_prepare_cutover_run_root.py}"
+CUTOVER_ARCHIVER="${POLYMARKET_CUTOVER_ARCHIVER:-$candidate/scripts/v7_prepare_cutover_run_root.py}"
 [[ -f "$CUTOVER_ARCHIVER" ]] || fail "cutover archiver missing: $CUTOVER_ARCHIVER"
 if [[ "$INCUMBENT_PRESENT" == 1 ]]; then
   python3 "$CUTOVER_ARCHIVER" \
