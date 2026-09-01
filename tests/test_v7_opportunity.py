@@ -93,6 +93,7 @@ def test_risk_cancel_preempts_positive_alpha() -> None:
     cancel["side"] = "NONE"
     decision = coordinate([envelope(ev=10.0), cancel], now_ns=150, new_risk_authorized=True)
     assert decision["action"] == "CANCEL"
+    assert decision["engine_id"] == "BTC_SETTLEMENT_ENGINE"
     assert decision["new_risk_authorized"] is False
 
 
@@ -102,6 +103,7 @@ def test_coordinator_compares_engines_on_one_objective() -> None:
     )
     decision = coordinate([envelope(ev=1.0, key="btc"), structural], now_ns=150, new_risk_authorized=True)
     assert decision["action"] == "ARB"
+    assert decision["engine_id"] == "STRUCTURAL_ARB_ENGINE"
     assert decision["selected_replay_key"] == "structural"
 
 

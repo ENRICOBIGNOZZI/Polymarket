@@ -138,7 +138,7 @@
   "real_capital_at_risk": false,
   "real_order_submission": false,
   "schema": "polymarket_v7_authority_reachability_audit_v2",
-  "source_snapshot_sha": "2f6da390188db0e25c5f47e18ba589218c5a6378",
+  "source_snapshot_sha": "1ec82a1e1afb443175b5d8bc27e24325cf644e86",
   "static_ledger_transport_edges": [
     {
       "authority_mode": "DRAIN_AND_ARCHIVE",

@@ -28,7 +28,7 @@ class LedgerSpoolTests(unittest.TestCase):
             root = Path(tmp)
             event = LedgerEvent(
                 event_type="OPPORTUNITY",
-                strategy="GRAPH_RV",
+                strategy="CANONICAL_TEST",
                 model_sha=SHA,
                 opportunity_id="opp-1",
             )
@@ -51,13 +51,13 @@ class LedgerSpoolTests(unittest.TestCase):
             root = Path(tmp)
             first = LedgerEvent(
                 event_type="OPPORTUNITY",
-                strategy="GRAPH_RV",
+                strategy="CANONICAL_TEST",
                 model_sha=SHA,
                 opportunity_id="opp-cache-1",
             )
             second = LedgerEvent(
                 event_type="OPPORTUNITY",
-                strategy="GRAPH_RV",
+                strategy="CANONICAL_TEST",
                 model_sha=SHA,
                 opportunity_id="opp-cache-2",
             )
@@ -117,7 +117,68 @@ class LedgerSpoolTests(unittest.TestCase):
             self.assertEqual(raw["side"], "BUY")
             self.assertEqual(raw["metadata"]["outcome_side"], "YES")
             self.assertEqual(raw["metadata"]["execution_side"], "BUY")
-            self.assertEqual(drain_spool(root, model_sha=SHA)["appended"], 1)
+            result = drain_spool(root, model_sha=SHA)
+            self.assertEqual(result["appended"], 0)
+            self.assertEqual(result["routed_research"], 1)
+            self.assertFalse(canonical_ledger_path(root).exists())
+
+    def test_engine_candidate_is_routed_to_the_single_opportunity_inbox(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            event = LedgerEvent(
+                event_type="CANDIDATE", strategy="FAST_STRUCTURAL",
+                model_sha=SHA, candidate_id="candidate-1",
+                exchange_ts_ms=1000, receive_ts_ms=1100,
+                decision_ts_ms=1200, book_snapshot_id="book-1",
+            )
+            spool_event(root, event)
+            result = drain_spool(root, model_sha=SHA)
+            self.assertEqual(result["routed_opportunities"], 1)
+            self.assertEqual(result["appended"], 0)
+            paths = list((root / "opportunities/inbox").glob("*.json"))
+            self.assertEqual(len(paths), 1)
+            ingress = json.loads(paths[0].read_text())
+            self.assertEqual(ingress["ingress"]["engine_id"], "STRUCTURAL_ARB_ENGINE")
+
+    def test_component_fill_without_coordinator_receipt_is_quarantined(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            event = LedgerEvent(
+                event_type="FILL", strategy="HARD_ARB", model_sha=SHA,
+                order_id="order-1", fill_id="fill-1", side="BUY",
+                token_id="token-1", exchange_ts_ms=1000, receive_ts_ms=1100,
+                fill_price=0.5, filled_size=1.0, fee=0.0,
+                fee_source="test:authoritative",
+            )
+            spool_event(root, event)
+            result = drain_spool(root, model_sha=SHA)
+            self.assertEqual(result["quarantined"], 1)
+            self.assertEqual(result["rejected"], 1)
+            self.assertFalse(canonical_ledger_path(root).exists())
+
+    def test_component_fill_with_matching_coordinator_receipt_can_reach_ledger(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            receipt = {
+                "schema": "polymarket_v7_global_opportunity_decision_v1",
+                "owner": "V7_GLOBAL_PORTFOLIO_COORDINATOR",
+                "engine_id": "STRUCTURAL_ARB_ENGINE",
+                "action": "ARB",
+                "selected_replay_key": "structural-cut-1",
+                "new_risk_authorized": True,
+            }
+            event = LedgerEvent(
+                event_type="FILL", strategy="HARD_ARB", model_sha=SHA,
+                order_id="order-1", fill_id="fill-1", side="BUY",
+                token_id="token-1", exchange_ts_ms=1000, receive_ts_ms=1100,
+                fill_price=0.5, filled_size=1.0, fee=0.0,
+                fee_source="test:authoritative",
+                metadata={"coordinator_receipt": receipt},
+            )
+            spool_event(root, event)
+            result = drain_spool(root, model_sha=SHA)
+            self.assertEqual(result["appended"], 1)
+            self.assertEqual(result["quarantined"], 0)
 
     def test_spool_rejects_graph_outcome_as_execution_side(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

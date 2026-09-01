@@ -4,8 +4,9 @@
 Only public CLOB data is used.  Every decision is revalidated on a fresh L2
 arrival snapshot, fees are taken from the contract-bound schedule, and virtual
 FAK fills are limited by visible depth. Evidence is written to an append-only
-counterfactual tape and the canonical ledger with explicit SHADOW authority.
-It never reaches portfolio cash or authoritative PAPER PnL.
+counterfactual tape and the zero-authority shadow evidence plane. Candidate
+records enter the common opportunity coordinator. Nothing from this component
+can reach portfolio cash or authoritative PAPER PnL directly.
 """
 from __future__ import annotations
 
@@ -1091,8 +1092,8 @@ class PaperRouter:
             finally:
                 os.close(descriptor)
 
-    def emit_canonical_shadow(self, event: LedgerEvent) -> None:
-        """Route shadow evidence through the sole canonical writer transport."""
+    def emit_shadow_ingress(self, event: LedgerEvent) -> None:
+        """Send candidates to coordination and other records to shadow evidence."""
         metadata = dict(event.metadata)
         metadata.update({
             "counterfactual": True,
@@ -1489,7 +1490,7 @@ class PaperRouter:
         counterfactual_id = f"external-shadow-{stable_id(self.sha, market_id, row['outcome'], current_ms)}"
         common = self.common(status, row, counterfactual_id, size)
         self.emit_counterfactual("CANDIDATE", counterfactual_id=counterfactual_id, **common)
-        self.emit_canonical_shadow(LedgerEvent(
+        self.emit_shadow_ingress(LedgerEvent(
             event_type="CANDIDATE", **common,
         ))
         self.state["candidates"] = int(self.state.get("candidates") or 0) + 1
@@ -1546,7 +1547,7 @@ class PaperRouter:
                 - float(arrival["market_yes"])
             ),
         }
-        self.emit_canonical_shadow(LedgerEvent(
+        self.emit_shadow_ingress(LedgerEvent(
             event_type="ORDER_SUBMITTED", strategy=STRATEGY, model_sha=self.sha,
             model_version=MODEL_VERSION, candidate_id=counterfactual_id,
             order_id=order_id, position_id=position_id, market_id=market_id,
@@ -1558,7 +1559,7 @@ class PaperRouter:
             predicted_alpha=arrival["robust_ev"], expected_ev=robust_ev,
             metadata=arrival_metadata,
         ))
-        self.emit_canonical_shadow(LedgerEvent(
+        self.emit_shadow_ingress(LedgerEvent(
             event_type="FILL", strategy=STRATEGY, model_sha=self.sha,
             model_version=MODEL_VERSION, candidate_id=counterfactual_id,
             order_id=order_id, position_id=position_id, fill_id=fill_id,
@@ -1636,7 +1637,7 @@ class PaperRouter:
                             executable_liquidation_value=liquidation, markouts={f"{horizon}s": per_share},
                             metadata={"full_visible_depth": True, "fill_conditioned": True},
                         )
-                        self.emit_canonical_shadow(LedgerEvent(
+                        self.emit_shadow_ingress(LedgerEvent(
                             event_type="MARKOUT", strategy=STRATEGY, model_sha=self.sha,
                             model_version=MODEL_VERSION,
                             order_id=str(position["order_id"]), fill_id=str(position["fill_id"]),
@@ -1691,7 +1692,7 @@ class PaperRouter:
                     "model_family": STRATEGY, "horizon_seconds": 300,
                 },
             )
-            self.emit_canonical_shadow(LedgerEvent(
+            self.emit_shadow_ingress(LedgerEvent(
                 event_type="FINAL", strategy=STRATEGY, model_sha=self.sha,
                 model_version=MODEL_VERSION, order_id=str(position["order_id"]),
                 position_id=str(position["position_id"]), market_id=str(position["market_id"]),

@@ -78,7 +78,7 @@ ALLOC="$CONTROL/allocations"
 KILL="$CONTROL/KILL"
 MAKER_FREEZE="$CONTROL/MAKER_FREEZE"
 LOCK="$CONTROL/runtime.lock"
-mkdir -p "$CONTROL" "$RUN_ROOT/ledger" "$RUN_ROOT/market_data" "$RUN_ROOT/universe" "$RUN_ROOT/fast_structural" "$RUN_ROOT/graph_rv" "$RUN_ROOT/hard_arb" "$RUN_ROOT/micro_taker" "$RUN_ROOT/micro_maker" "$RUN_ROOT/external" "$RUN_ROOT/external_fair" "$RUN_ROOT/osint" "$RUN_ROOT/market_open" "$RUN_ROOT/shadow/sports_latency" "$RUN_ROOT/shadow/cross_platform" "$RUN_ROOT/shadow/wallet_intelligence" "$RUN_ROOT/shadow/ranking" "$RUN_ROOT/shadow/pca" "$RUN_ROOT/shadow/local_factor" "$RUN_ROOT/learned_execution"
+mkdir -p "$CONTROL" "$RUN_ROOT/ledger" "$RUN_ROOT/opportunities/inbox" "$RUN_ROOT/research/evidence" "$RUN_ROOT/market_data" "$RUN_ROOT/universe" "$RUN_ROOT/fast_structural" "$RUN_ROOT/graph_rv" "$RUN_ROOT/hard_arb" "$RUN_ROOT/micro_taker" "$RUN_ROOT/micro_maker" "$RUN_ROOT/external" "$RUN_ROOT/external_fair" "$RUN_ROOT/osint" "$RUN_ROOT/market_open" "$RUN_ROOT/shadow/sports_latency" "$RUN_ROOT/shadow/cross_platform" "$RUN_ROOT/shadow/wallet_intelligence" "$RUN_ROOT/shadow/ranking" "$RUN_ROOT/shadow/pca" "$RUN_ROOT/shadow/local_factor" "$RUN_ROOT/learned_execution"
 touch "$RUN_ROOT/ledger/execution.jsonl"
 
 # The runtime is not allowed to self-assert CI approval through an environment
@@ -647,6 +647,13 @@ python3 scripts/v7_ledger_spool.py \
   >> "$RUN_ROOT/ledger_router.log" 2>&1 &
 pids+=("$!")
 
+# The only consumer of proposals from both economic engines. Checked-in V7
+# cannot authorize new risk; the coordinator may select CANCEL or emit NOTHING.
+python3 scripts/v7_global_portfolio_coordinator.py \
+  --run-root "$RUN_ROOT" --loop --interval 0.1 \
+  >> "$RUN_ROOT/global_portfolio_coordinator.log" 2>&1 &
+pids+=("$!")
+
 # Slow-plane reward selection only. It may perform REST discovery, but it never
 # decides/cancels quotes and is not a second maker runtime.
 (
@@ -689,16 +696,6 @@ pids+=("$!")
   --run-dir "$RUN_ROOT/fast_structural" --run-root "$RUN_ROOT" --model-sha "$SHA" \
   --markets "$ACTIVE_SCAN_MARKET_BUDGET" --min-liquidity 2 --shard-size 200 \
   >> "$RUN_ROOT/fast_structural/runtime.log" 2>&1 &
-pids+=("$!")
-
-# Revalidate candidates in shadow mode. The policy worker owns no capital,
-# order, fill, inventory or canonical-ledger write authority.
-python3 scripts/v7_fast_structural_paper_executor.py \
-  --run-root "$RUN_ROOT" --config "$ALLOC/fast_structural.json" \
-  --policy "$FAST_STRUCTURAL_POLICY" \
-  --shared-state "$RUN_ROOT/market_data/shared_state.json" --model-sha "$SHA" \
-  --slippage-bps 5 --leg-latency-ms 100 --interval 0.1 --shadow-only \
-  >> "$RUN_ROOT/fast_structural/paper_executor.log" 2>&1 &
 pids+=("$!")
 
 # Slow-plane exact-SHA fill/markout fit. A refit is a CHALLENGER only. It is
@@ -805,18 +802,6 @@ pids+=("$!")
       --output "$CONTROL/evidence_capital_allocator.json" \
       >> "$RUN_ROOT/evidence_capital_allocator.log" 2>&1 || true
     sleep 60
-  done
-) & pids+=("$!")
-
-(
-  while [[ ! -e "$KILL" ]]; do
-    python3 scripts/v7_hard_arb_guard.py \
-      --config "$ALLOC/hard_arb.json" --run-dir "$RUN_ROOT/hard_arb" \
-      --shared-state "$RUN_ROOT/market_data/shared_state.json" --model-sha "$SHA" \
-      --markets 0 --min-liquidity 2 --max-events "$STRUCTURAL_SCAN_EVENT_BUDGET" --min-edge 0.001 \
-      --max-trade-usd 300 --slippage-bps 5 --leg-latency-ms 100 \
-      >> "$RUN_ROOT/hard_arb/runtime.log" 2>&1 || true
-    sleep 5
   done
 ) & pids+=("$!")
 

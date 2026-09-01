@@ -1,10 +1,11 @@
 #!/usr/bin/env python3
-"""Single-writer transport for the canonical V7 execution ledger.
+"""Single-writer transport and authority firewall for the V7 ledger.
 
-Strategy workers may create fully validated ``LedgerEvent`` records in an atomic
-spool, but only this module drains them into ``ledger/execution.jsonl``. The
-spool is transport, not an alternate evidence store: canonical research reads
-only the append-only execution ledger.
+Only this module drains records into ``ledger/execution.jsonl``. Engine
+component candidates are diverted to the global opportunity coordinator;
+zero-authority research is diverted to its own evidence plane; component
+order/fill/PnL events without a coordinator receipt are quarantined.  The spool
+therefore cannot be used as a component-to-ledger authority bypass.
 """
 from __future__ import annotations
 
@@ -23,6 +24,89 @@ from v7_execution_ledger import (
     canonical_ledger_path,
     iter_records,
 )
+
+
+ENGINE_STRATEGIES = {
+    "CRYPTO_SETTLEMENT_FAIR": "BTC_SETTLEMENT_ENGINE",
+    "CRYPTO_INFORMED_TAKER": "BTC_SETTLEMENT_ENGINE",
+    "MICRO_MAKER_PRO": "BTC_SETTLEMENT_ENGINE",
+    "PROFESSIONAL_MAKER": "BTC_SETTLEMENT_ENGINE",
+    "FAST_STRUCTURAL": "STRUCTURAL_ARB_ENGINE",
+    "HARD_ARB": "STRUCTURAL_ARB_ENGINE",
+}
+RESEARCH_STRATEGIES = {
+    "GRAPH_RV", "MICRO_TAKER", "RANKING", "PCA", "LOCAL_FACTOR",
+    "WALLET_INTELLIGENCE", "MARKET_OPEN", "OSINT", "SPORTS_LATENCY",
+    "CROSS_PLATFORM",
+}
+CANDIDATE_EVENTS = {"CANDIDATE", "OPPORTUNITY"}
+RISK_CREATING_EVENTS = {"ORDER_SUBMITTED", "FILL", "INVENTORY_SPLIT"}
+
+
+def _atomic_payload(directory: Path, name: str, value: dict[str, object]) -> Path:
+    directory.mkdir(parents=True, exist_ok=True)
+    target = directory / name
+    temporary = target.with_name(target.name + f".tmp.{os.getpid()}")
+    temporary.write_text(json.dumps(value, sort_keys=True) + "\n", encoding="utf-8")
+    os.replace(temporary, target)
+    return target
+
+
+def _coordinator_receipt_valid(event: LedgerEvent, engine_id: str) -> bool:
+    receipt = event.metadata.get("coordinator_receipt") if isinstance(event.metadata, dict) else None
+    if not isinstance(receipt, dict):
+        return False
+    action = str(event.intended_action or receipt.get("action") or "").upper()
+    return (
+        receipt.get("schema") == "polymarket_v7_global_opportunity_decision_v1"
+        and receipt.get("owner") == "V7_GLOBAL_PORTFOLIO_COORDINATOR"
+        and receipt.get("engine_id") == engine_id
+        and isinstance(receipt.get("selected_replay_key"), str)
+        and bool(receipt.get("selected_replay_key"))
+        and receipt.get("action") == action
+        and (
+            event.event_type not in RISK_CREATING_EVENTS
+            or receipt.get("new_risk_authorized") is True
+        )
+    )
+
+
+def _authority_route(run_root: Path, event: LedgerEvent) -> str:
+    """Return APPEND after routing every non-canonical authority surface."""
+    strategy = event.strategy.upper()
+    payload = event.to_dict()
+    filename = f"{event.recorded_ts_ms:013d}.{event.record_id}.json"
+    if strategy in RESEARCH_STRATEGIES:
+        _atomic_payload(run_root / "research" / "evidence", filename, payload)
+        return "RESEARCH_EVIDENCE"
+    engine_id = ENGINE_STRATEGIES.get(strategy)
+    if engine_id is None:
+        return "APPEND"
+    if event.event_type in CANDIDATE_EVENTS:
+        payload["ingress"] = {
+            "schema": "polymarket_v7_opportunity_ingress_v1",
+            "engine_id": engine_id,
+            "owner": "V7_GLOBAL_PORTFOLIO_COORDINATOR",
+            "temporary_adapter": "V7_LEDGER_SPOOL_CANDIDATE_INGRESS",
+        }
+        _atomic_payload(run_root / "opportunities" / "inbox", filename, payload)
+        return "OPPORTUNITY_INGRESS"
+    metadata = event.metadata if isinstance(event.metadata, dict) else {}
+    if metadata.get("cutover") is True and event.event_type in {
+        "ORDER_SUBMITTED", "FILL", "FINAL", "EXIT", "INVENTORY_LIQUIDATION",
+    }:
+        return "APPEND"
+    if _coordinator_receipt_valid(event, engine_id):
+        return "APPEND"
+    evidence_only = (
+        metadata.get("counterfactual") is True
+        or metadata.get("economic_authority") == "SHADOW_COUNTERFACTUAL"
+        or metadata.get("execution_authority") == "SHADOW_ZERO_AUTHORITY"
+        or metadata.get("authority") == "SHADOW_ZERO_AUTHORITY"
+    )
+    destination = "shadow_evidence" if evidence_only else "quarantine"
+    _atomic_payload(run_root / "opportunities" / destination, filename, payload)
+    return "SHADOW_EVIDENCE" if evidence_only else "QUARANTINED"
 
 
 def spool_dir(run_root: Path) -> Path:
@@ -95,6 +179,10 @@ def _drain_with_existing(
     appended = 0
     duplicates = 0
     rejected = 0
+    routed_opportunities = 0
+    routed_research = 0
+    routed_shadow = 0
+    quarantined = 0
     events: list[tuple[Path, LedgerEvent | EconomicJournalEntry]] = []
     for path in files:
         try:
@@ -114,6 +202,21 @@ def _drain_with_existing(
             duplicates += 1
             path.unlink(missing_ok=True)
             continue
+        if isinstance(event, LedgerEvent):
+            route = _authority_route(root, event)
+            if route != "APPEND":
+                path.unlink()
+                existing.add(event.record_id)
+                if route == "OPPORTUNITY_INGRESS":
+                    routed_opportunities += 1
+                elif route == "RESEARCH_EVIDENCE":
+                    routed_research += 1
+                elif route == "SHADOW_EVIDENCE":
+                    routed_shadow += 1
+                else:
+                    quarantined += 1
+                    rejected += 1
+                continue
         events.append((path, event))
 
     if events:
@@ -127,7 +230,12 @@ def _drain_with_existing(
                     existing.add(f"journal:{event.entry_id}")
                 path.unlink()
                 appended += 1
-    return {"queued": len(files), "appended": appended, "duplicates": duplicates, "rejected": rejected}
+    return {
+        "queued": len(files), "appended": appended, "duplicates": duplicates,
+        "rejected": rejected, "routed_opportunities": routed_opportunities,
+        "routed_research": routed_research, "routed_shadow": routed_shadow,
+        "quarantined": quarantined,
+    }
 
 
 def drain_spool(

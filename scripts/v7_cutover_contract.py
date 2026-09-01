@@ -97,6 +97,7 @@ def validate(root: Path, expected_head: str | None) -> dict[str, str]:
         config_rel,
         "scripts/v7_execution_ledger.py",
         "scripts/v7_ledger_spool.py",
+        "scripts/v7_global_portfolio_coordinator.py",
         "scripts/v7_canonical_economics.py",
         "scripts/v7_joint_execution_policy.py",
         "scripts/v7_capital_allocator.py",

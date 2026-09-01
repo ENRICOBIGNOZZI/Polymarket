@@ -60,7 +60,7 @@ class V7FastAuthoritySentinelContractTest(unittest.TestCase):
         self.assertNotIn("fast_arb_v7_shadow.json", workflow)
         self.assertNotIn("fast-arb-hourly", workflow)
 
-    def test_fast_structural_is_built_started_and_evaluated_without_authority(self) -> None:
+    def test_fast_structural_is_built_and_routed_to_the_single_coordinator(self) -> None:
         cmake = (ROOT / "CMakeLists.txt").read_text(encoding="utf-8")
         loop = (ROOT / "scripts" / "paper_v7_execution_loop.sh").read_text(encoding="utf-8")
         runtime = (ROOT / "src" / "fast_runtime" / "part3.inc").read_text(encoding="utf-8")
@@ -72,8 +72,12 @@ class V7FastAuthoritySentinelContractTest(unittest.TestCase):
         self.assertIn('"ledger" / "spool"', runtime)
         self.assertIn('"paper_candidate_only", true', runtime)
         self.assertIn('"structured_legs"', runtime)
-        self.assertIn("v7_fast_structural_paper_executor.py", loop)
-        self.assertIn("--shadow-only", loop)
+        self.assertNotIn("v7_fast_structural_paper_executor.py", loop)
+        self.assertNotIn("v7_hard_arb_guard.py", loop)
+        self.assertIn("v7_global_portfolio_coordinator.py", loop)
+        firewall = (ROOT / "scripts" / "v7_ledger_spool.py").read_text(encoding="utf-8")
+        self.assertIn('"FAST_STRUCTURAL": "STRUCTURAL_ARB_ENGINE"', firewall)
+        self.assertIn('run_root / "opportunities" / "inbox"', firewall)
         executor = (ROOT / "scripts" / "v7_fast_structural_paper_executor.py").read_text(encoding="utf-8")
         self.assertIn('event_type="ORDER_SUBMITTED"', executor)
         self.assertIn('event_type="FILL"', executor)

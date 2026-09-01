@@ -4,7 +4,7 @@
   "authenticated_execution": false,
   "real_order_submission": false,
   "real_capital_at_risk": false,
-  "source_snapshot_sha": "2f6da390188db0e25c5f47e18ba589218c5a6378",
+  "source_snapshot_sha": "1ec82a1e9a38eced06745ed941a8da2b49996da6",
   "canonical_runtime_owners": {
     "lifecycle": "ops/v7_runtime_supervisor.py",
     "launcher": "scripts/paper_v7_execution_loop.sh",
@@ -13,9 +13,9 @@
   },
   "static_launcher_inventory": {
     "source": "scripts/paper_v7_execution_loop.sh",
-    "process_count": 34,
+    "process_count": 33,
     "machine_readable_entries": "artifacts/v7_unification/path_classification.json#object_type=process",
-    "runtime_output_count": 122,
+    "runtime_output_count": 123,
     "runtime_output_entries": "artifacts/v7_unification/path_classification.json#object_type=runtime_output",
     "extraction_validator": "scripts/v7_surface_classification.py",
     "unexplained_processes": [],
@@ -31,6 +31,16 @@
     ],
     "authority_registry": "config/v7_authority_registry.json",
     "ledger_transport_edge_registry": "config/v7_authority_edges.json"
+  },
+  "opportunity_coordination": {
+    "owner": "V7_GLOBAL_PORTFOLIO_COORDINATOR",
+    "runtime": "scripts/v7_global_portfolio_coordinator.py",
+    "engine_count": 2,
+    "new_risk_authorized": false,
+    "safe_actions": ["CANCEL", "NOTHING"],
+    "component_candidate_ingress": "scripts/v7_ledger_spool.py#OPPORTUNITY_INGRESS",
+    "unauthorized_component_lifecycle_policy": "QUARANTINE",
+    "research_ledger_policy": "ROUTE_TO_ZERO_AUTHORITY_EVIDENCE"
   },
   "declarative_manifest_migration": {
     "state": "PENDING_PHASE_7",
