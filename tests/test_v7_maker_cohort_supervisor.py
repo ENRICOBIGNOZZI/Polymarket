@@ -15,11 +15,7 @@ from v7_maker_cohort_supervisor import (  # noqa: E402
     CohortSupervisor,
     atomic_json,
     degraded_fallback_control_refresh_eligible,
-    directional_inventory_markets,
-    flat_state,
     fresh_flow_eligible,
-    inventory_drainable_state,
-    inventory_flat_state,
     membership_sha256,
     read_json,
     rotation_gate,
@@ -62,30 +58,6 @@ def selection(market_id: str = "market-1") -> dict:
     }
 
 
-def state(**changes: object) -> dict:
-    value = {
-        "schema": "polymarket_v7_professional_maker_state_v2",
-        "timestamp_ms": 2_000,
-        "paper_only": True,
-        "authenticated_execution": False,
-        "real_order_submission": False,
-        "model_sha": SHA,
-        "active_order_count": 0,
-        "flat_restart_safe": True,
-        "new_risk_frozen": True,
-        "inventory": {
-            "market-1": {
-                "yes_shares": 0.0,
-                "no_shares": 0.0,
-                "yes_cost": 0.0,
-                "no_cost": 0.0,
-            }
-        },
-    }
-    value.update(changes)
-    return value
-
-
 class MakerCohortSupervisorTests(unittest.TestCase):
     @staticmethod
     def supervisor_args(run_root: Path, selection_path: Path, candidate_path: Path) -> SimpleNamespace:
@@ -116,60 +88,16 @@ class MakerCohortSupervisorTests(unittest.TestCase):
         second["markets"][0]["score"] = 123.0
         self.assertEqual(membership_sha256(first), membership_sha256(second))
 
-    def test_rotation_requires_fresh_flat_and_acknowledged_freeze(self) -> None:
-        self.assertTrue(flat_state(
-            state(), SHA, newer_than_ms=1_999, require_frozen=True
-        ))
-        self.assertFalse(flat_state(state(timestamp_ms=1_000), SHA, newer_than_ms=1_999))
-        self.assertFalse(flat_state(state(new_risk_frozen=False), SHA, require_frozen=True))
-        self.assertFalse(flat_state(state(active_order_count=1), SHA))
-        self.assertTrue(inventory_flat_state(state(active_order_count=1), SHA))
-
-        held = state()
-        held["inventory"]["market-1"]["yes_shares"] = 1.0
-        self.assertFalse(flat_state(held, SHA))
-
-        seeded = state(new_risk_frozen=False)
-        seeded["inventory"]["market-1"].update({
-            "yes_shares": 10.0,
-            "no_shares": 10.0,
-            "yes_cost": 5.0,
-            "no_cost": 5.0,
-            "yes_reserved_sell_shares": 0.0,
-            "no_reserved_sell_shares": 0.0,
-            "pending_split_shares": 0.0,
-            "pending_merge_shares": 0.0,
-        })
-        self.assertTrue(inventory_drainable_state(seeded, SHA))
-        seeded["inventory"]["market-1"]["yes_reserved_sell_shares"] = 2.0
-        self.assertTrue(inventory_drainable_state(seeded, SHA))
-        seeded["inventory"]["market-1"]["pending_merge_shares"] = 1.0
-        self.assertFalse(inventory_drainable_state(seeded, SHA))
-        seeded["inventory"]["market-1"]["pending_merge_shares"] = 0.0
-        seeded["inventory"]["market-1"]["yes_shares"] = 9.0
-        # Selector churn must not cross a directional residual at the current
-        # bid merely to make a whole-cohort membership handoff possible.
-        self.assertFalse(inventory_drainable_state(seeded, SHA))
-        self.assertEqual(directional_inventory_markets(seeded, SHA), {
-            "market-1": -1.0,
-        })
-
     def test_runtime_contract_uses_one_flat_handoff_cohort(self) -> None:
         loop = (ROOT / "scripts" / "paper_v7_execution_loop.sh").read_text(encoding="utf-8")
-        runtime = (ROOT / "src" / "v7_market_maker_runtime.cpp").read_text(encoding="utf-8")
         supervisor = (ROOT / "scripts" / "v7_maker_cohort_supervisor.py").read_text(encoding="utf-8")
         policy = json.loads((
             ROOT / "config" / "v7_professional_market_maker.json"
         ).read_text(encoding="utf-8"))
         self.assertIn("v7_maker_cohort_supervisor.py", loop)
-        self.assertIn("--observer-only", loop)
+        self.assertNotIn("--observer-only", loop)
+        self.assertNotIn("--maker-runtime", loop)
         self.assertIn("SHADOW_OBSERVERS_ONLY", supervisor)
-        self.assertIn('"MAKER_ROTATION_DRAIN"', runtime)
-        self.assertIn('root["active_order_count"]', runtime)
-        self.assertIn('root["new_risk_frozen"]', runtime)
-        self.assertIn("directional_rotation_preservations", runtime)
-        self.assertIn("DIRECTIONAL_MARKET_DRAINING", supervisor)
-        self.assertIn("require_frozen=True", supervisor)
         self.assertIn("atomic_json(self.selection, latest)", supervisor)
         self.assertIn('--candidate-confirmations "$MAKER_CANDIDATE_CONFIRMATIONS"', loop)
         self.assertIn('--min-rotation-interval-seconds "$MAKER_ROTATION_INTERVAL_SECONDS"', loop)
@@ -208,7 +136,6 @@ class MakerCohortSupervisorTests(unittest.TestCase):
             atomic_json(selection_path, selection())
             atomic_json(candidate_path, selection())
             args = self.supervisor_args(root, selection_path, candidate_path)
-            args.observer_only = True
             supervisor = CohortSupervisor(args)
             supervisor.processes = {"observer": SimpleNamespace(pid=1234)}
             supervisor.control.mkdir(parents=True)
@@ -246,8 +173,6 @@ class MakerCohortSupervisorTests(unittest.TestCase):
                 "token_id"] = "yes-2"
             atomic_json(selection_path, current)
             atomic_json(candidate_path, candidate)
-            maker_state = state(timestamp_ms=2_000)
-            atomic_json(run_root / "micro_maker/state.json", maker_state)
             args = self.supervisor_args(run_root, selection_path, candidate_path)
             supervisor = CohortSupervisor(args)
             calls: list[str] = []
@@ -261,7 +186,6 @@ class MakerCohortSupervisorTests(unittest.TestCase):
             self.assertEqual(
                 membership_sha256(read_json(selection_path)), membership_sha256(candidate)
             )
-            self.assertFalse(supervisor.drain.exists())
 
     def test_flat_handoff_aborts_when_material_target_changes_during_drain(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -285,7 +209,6 @@ class MakerCohortSupervisorTests(unittest.TestCase):
                 "token_id"] = "yes-3"
             atomic_json(selection_path, current)
             atomic_json(candidate_path, latest)
-            atomic_json(run_root / "micro_maker/state.json", state(timestamp_ms=2_000))
             supervisor = CohortSupervisor(self.supervisor_args(
                 run_root, selection_path, candidate_path
             ))
@@ -300,7 +223,6 @@ class MakerCohortSupervisorTests(unittest.TestCase):
             self.assertEqual(
                 membership_sha256(read_json(selection_path)), membership_sha256(current)
             )
-            self.assertFalse(supervisor.drain.exists())
 
     def test_candidate_confirmation_counts_distinct_generations_only(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -619,60 +541,6 @@ class MakerCohortSupervisorTests(unittest.TestCase):
             self.assertEqual(refreshed["warm_identity_overlap_count"], 1)
             self.assertEqual(supervisor.rotation_count, 0)
 
-    def test_directional_market_drains_in_place_without_global_rotation(self) -> None:
-        with tempfile.TemporaryDirectory() as directory:
-            root = Path(directory)
-            selection_path = root / "micro_maker/reward_selection.json"
-            candidate_path = root / "micro_maker/reward_selection_candidate.json"
-            current = selection("held")
-            reserve = json.loads(json.dumps(current["markets"][0]))
-            reserve.update({
-                "market_id": "reserve", "condition_id": "reserve-condition",
-                "yes_token": "reserve-yes", "no_token": "reserve-no",
-                "authorized_execution_cells": [],
-                "inventory_seed_authorized": False,
-            })
-            current["markets"].append(reserve)
-            current["selected_count"] = 2
-            candidate = selection("new")
-            candidate["timestamp_ms"] = 2_000
-            candidate["markets"][0].update({
-                "condition_id": "new-condition",
-                "yes_token": "new-yes", "no_token": "new-no",
-            })
-            candidate["markets"][0]["authorized_execution_cells"][0][
-                "token_id"
-            ] = "new-yes"
-            atomic_json(selection_path, current)
-            atomic_json(candidate_path, candidate)
-            held_state = state()
-            held_state["inventory"] = {
-                "held": {
-                    "yes_shares": 5.0, "no_shares": 0.0,
-                    "yes_cost": 1.05, "no_cost": 0.0,
-                }
-            }
-            atomic_json(root / "micro_maker/state.json", held_state)
-            supervisor = CohortSupervisor(self.supervisor_args(
-                root, selection_path, candidate_path
-            ))
-
-            self.assertTrue(supervisor.refresh_same_membership_authority())
-            refreshed = read_json(selection_path)
-            rows = {row["market_id"]: row for row in refreshed["markets"]}
-            self.assertEqual(rows["held"]["execution_role"], "DRAINING_INVENTORY")
-            self.assertEqual(rows["held"]["authorized_execution_cells"], [])
-            self.assertFalse(rows["held"]["inventory_seed_authorized"])
-            self.assertEqual(rows["reserve"]["execution_role"], "ROTATION_CONTROL")
-            self.assertEqual(len(rows["reserve"]["authorized_execution_cells"]), 1)
-
-            supervisor.rotate_if_safe(candidate)
-            self.assertFalse(supervisor.drain.exists())
-            self.assertEqual(supervisor.rotation_count, 0)
-            status = read_json(root / "micro_maker/rotation_status.json")
-            self.assertEqual(status["state"], "RUNNING_DIRECTIONAL_DRAIN")
-            self.assertEqual(status["directional_drain_markets"], ["held"])
-
     def test_quiet_flow_fallback_keeps_last_known_good_without_global_pause(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
@@ -695,8 +563,6 @@ class MakerCohortSupervisorTests(unittest.TestCase):
             self.assertTrue(fresh_flow_eligible(current))
             self.assertFalse(fresh_flow_eligible(fallback))
             self.assertIsNone(supervisor.pending_candidate())
-            self.assertFalse(supervisor.sync_no_fresh_flow_pause())
-            self.assertFalse(supervisor.drain.exists())
             self.assertEqual(
                 membership_sha256(read_json(selection_path)), membership_sha256(current)
             )
@@ -709,14 +575,10 @@ class MakerCohortSupervisorTests(unittest.TestCase):
             different_fresh["markets"][0]["authorized_execution_cells"][0][
                 "token_id"] = "yes-3"
             atomic_json(candidate_path, different_fresh)
-            self.assertFalse(supervisor.sync_no_fresh_flow_pause())
-            self.assertFalse(supervisor.drain.exists())
 
             resumed = json.loads(json.dumps(current))
             resumed["timestamp_ms"] = 3_000
             atomic_json(candidate_path, resumed)
-            self.assertFalse(supervisor.sync_no_fresh_flow_pause())
-            self.assertFalse(supervisor.drain.exists())
 
 
 if __name__ == "__main__":

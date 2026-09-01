@@ -62,7 +62,8 @@ config/v7_professional_market_maker.json
 scripts/v7_market_maker_core.py
 scripts/v7_market_maker_model.py
 scripts/v7_market_maker_rewards.py
-build/polymarket_v7_market_maker_runtime
+build/polymarket_v7_maker_fillability_observer
+build/polymarket_v7_maker_markout_observer
 scripts/v7_market_maker_status.py
 ```
 

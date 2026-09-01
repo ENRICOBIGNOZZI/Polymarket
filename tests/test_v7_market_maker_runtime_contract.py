@@ -47,8 +47,8 @@ class ProfessionalMakerRuntimeContractTests(unittest.TestCase):
 
     def test_canonical_runtime_starts_maker_observers_without_independent_authority(self) -> None:
         source = (ROOT / "scripts" / "paper_v7_execution_loop.sh").read_text(encoding="utf-8")
-        self.assertIn("polymarket_v7_market_maker_runtime", source)
-        self.assertIn("PM_V7_MARKET_MAKER_RUNTIME", source)
+        self.assertNotIn("polymarket_v7_market_maker_runtime", source)
+        self.assertNotIn("PM_V7_MARKET_MAKER_RUNTIME", source)
         self.assertIn("polymarket_v7_maker_markout_observer", source)
         self.assertIn("PM_V7_MAKER_MARKOUT_OBSERVER", source)
         self.assertIn("v7_market_maker_rewards.py", source)
@@ -58,7 +58,6 @@ class ProfessionalMakerRuntimeContractTests(unittest.TestCase):
         self.assertIn("--pin-runtime-selection", source)
         self.assertIn('--lookback-seconds "$MAKER_FLOW_LOOKBACK_SECONDS"', source)
         self.assertIn("v7_market_maker_model.py", source)
-        self.assertIn("--observer-only", source)
         self.assertIn("SHADOW_ZERO_AUTHORITY", source)
         self.assertIn("fee_registry_ready", source)
         self.assertIn("v7_ledger_spool.py", source)
@@ -82,50 +81,6 @@ class ProfessionalMakerRuntimeContractTests(unittest.TestCase):
         self.assertIn("int recycle_seconds = 0;", options)
         self.assertNotIn("int recycle_seconds = 900;", options)
 
-    def test_runtime_routes_all_paper_execution_through_single_order_tx_owner(self) -> None:
-        runtime = (ROOT / "src" / "v7_market_maker_runtime.cpp").read_text(encoding="utf-8")
-        for required in (
-            '"pm/v7_maker_execution_policy.hpp"',
-            '"pm/v7_spsc.hpp"',
-            "class ExecutionCore final",
-            "MakerPaperExecutionPolicy policy_{}",
-            "SleeveCapitalAccount capital_{}",
-            "std::thread execution_thread",
-            "execution_plan_is_critical",
-            "pop_critical",
-            "pop_normal",
-            "push_execution_snapshot",
-            "ExecutionCommandKind::PublicTrade",
-            "ExecutionCommandKind::AdvanceTime",
-            "policy_.process(command.plan, capital_)",
-            "policy_.on_public_trade",
-            "policy_.advance_time",
-            "Advance every registered market",
-            "maintenance_changed_markets",
-            "owns_market(handle)",
-        ):
-            self.assertIn(required, runtime)
-        self.assertNotIn("if (!inventory_drain_any_) return true;", runtime)
-        for forbidden in (
-            "market.paper.apply_intent",
-            "market.paper.on_public_trade",
-            "market.paper.advance_time",
-            "MakerPaperMarketEngine paper;",
-        ):
-            self.assertNotIn(forbidden, runtime)
-        critical_pos = runtime.index("pop_critical(command)")
-        normal_pos = runtime.index("pop_normal(command)")
-        self.assertLess(critical_pos, normal_pos)
-
-    def test_maker_ledger_ids_are_globally_unique_across_market_engines(self) -> None:
-        runtime = (ROOT / "src" / "v7_market_maker_runtime.cpp").read_text(encoding="utf-8")
-        self.assertIn('return "mmo-" + std::to_string(market) + "-" + telemetry_epoch_', runtime)
-        self.assertIn('event["record_id"] = "cpp-mm-" + telemetry_epoch_', runtime)
-        self.assertIn('"mmf-" + std::to_string(record.market_handle) + "-"', runtime)
-        self.assertIn('telemetry_epoch_ + "-" + std::to_string(paper.order_id)', runtime)
-        self.assertNotIn("struct OrderMeta", runtime)
-        self.assertNotIn("orders_[paper.order_id]", runtime)
-
     def test_execution_cells_are_exact_sha_slow_path_and_hot_path_bounded(self) -> None:
         loader = (ROOT / "src" / "v7_maker_execution_cells.cpp").read_text(encoding="utf-8")
         kernel = (ROOT / "src" / "v7_maker_hft.cpp").read_text(encoding="utf-8")
@@ -143,21 +98,12 @@ class ProfessionalMakerRuntimeContractTests(unittest.TestCase):
         self.assertNotIn("filesystem", kernel)
         self.assertNotIn("boost/json", kernel)
 
-    def test_champion_reload_requires_full_economic_identity_and_is_audited(self) -> None:
-        runtime = (ROOT / "src" / "v7_market_maker_runtime.cpp").read_text(encoding="utf-8")
+    def test_champion_artifacts_remain_governed_and_never_auto_promote(self) -> None:
         loop = (ROOT / "scripts" / "paper_v7_execution_loop.sh").read_text(encoding="utf-8")
-        for contract in (
-            'policy_hash == hex64(fnv1a(policy_content))',
-            'config_hash == hex64(fnv1a(config_content))',
-            'role == "champion"',
-            'eligible_for_live_reload',
-            'maker-paper-v7.2-bilateral-inventory',
-            'common("MODEL_RELOAD")',
-            'immutable_snapshot_atomic_publish',
-        ):
-            self.assertIn(contract, runtime)
         self.assertIn("v7_maker_durable_learning.py", loop)
         self.assertIn("PM_V7_DURABLE_ROOT", loop)
+        self.assertIn("--artifact-role challenger", loop)
+        self.assertNotIn('--output "$MAKER_CHAMPION_MODEL"', loop)
 
     def test_markout_observer_is_evidence_only_and_full_depth(self) -> None:
         observer = (ROOT / "src" / "v7_maker_markout_observer.cpp").read_text(encoding="utf-8")

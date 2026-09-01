@@ -50,15 +50,6 @@
       "severity": "CONTROLLED",
       "reason": "exact-SHA cutover preparation verifies spool state without creating economic events",
       "canonical_replacement": "V7_OPERATOR_EXACT_SHA_PROMOTION"
-    },
-    {
-      "source": "src/v7_market_maker_runtime.cpp",
-      "classification": "MERGE_INTO_CANONICAL",
-      "runtime_reachability": "CANONICAL_LAUNCHER_COMPONENT",
-      "authority_mode": "DIRECT_MAKER_LIFECYCLE_TO_LEDGER_SPOOL",
-      "severity": "P0_BYPASS",
-      "reason": "standalone maker runtime retains independent PAPER candidate, order, fill, inventory, and final-event production",
-      "canonical_replacement": "BTC_SETTLEMENT_ENGINE_TO_V7_GLOBAL_PORTFOLIO_COORDINATOR"
     }
   ]
 }

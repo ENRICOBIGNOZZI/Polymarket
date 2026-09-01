@@ -234,11 +234,10 @@ def prometheus_snapshot(base: str | None) -> dict[str, Any]:
 
 
 def capability_map(repo: pathlib.Path) -> dict[str, Any]:
-    runtime = (repo / "src/v7_market_maker_runtime.cpp").read_text(encoding="utf-8")
     execution = (repo / "src/v7_maker_execution_policy.cpp").read_text(encoding="utf-8")
     loop = (repo / "scripts/paper_v7_execution_loop.sh").read_text(encoding="utf-8")
     relations = (repo / "config/v7_fast_structural_relations.csv").read_text(encoding="utf-8").splitlines()
-    split_calls = runtime.count("split_complete_sets(")
+    split_calls = execution.count("split_complete_sets(")
     structural_contract = json.loads(
         (repo / "config/v7_structural_arb_engine.json").read_text(encoding="utf-8")
     )
@@ -249,11 +248,11 @@ def capability_map(repo: pathlib.Path) -> dict[str, Any]:
         "source": "repository_call_site_analysis",
         "inventory_split_primitive_implemented": "MakerPaperExecutionPolicy::split_complete_sets" in execution,
         "inventory_split_runtime_call_count": split_calls,
-        "inventory_split_ledger_writer": 'INVENTORY_SPLIT' in runtime,
-        "inventory_merge_ledger_writer": 'INVENTORY_MERGE' in runtime,
+        "inventory_split_ledger_writer": False,
+        "inventory_merge_ledger_writer": False,
         "runtime_champion_path": "runs/paper_v7_live/micro_maker/execution_model.json",
-        "runtime_champion_reload_loop": "last_model_check_ms" in runtime and "model_store->publish" in runtime,
-        "model_reload_ledger_event": 'MODEL_RELOAD' in runtime,
+        "runtime_champion_reload_loop": False,
+        "model_reload_ledger_event": False,
         "micro_taker_worker_started": "v7_micro_taker_worker.py" in loop,
         "micro_taker_canonical_spool_argument": "--ledger-spool" in loop or "--spool" in loop,
         "graph_relation_data_rows": max(0, len([line for line in relations if line.strip()]) - 1),

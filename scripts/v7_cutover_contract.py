@@ -132,7 +132,6 @@ def validate(root: Path, expected_head: str | None) -> dict[str, str]:
         "scripts/v7_dataset_manifest.py",
         "scripts/v7_maker_probe_design.py",
         "scripts/v7_maker_durable_learning.py",
-        "src/v7_market_maker_runtime.cpp",
         "scripts/v7_simulator_calibration_support.py",
         "scripts/v7_scenario_risk.py",
         "scripts/v7_regional_shootout.py",

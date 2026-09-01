@@ -7,7 +7,6 @@ source scripts/v7_process_runtime.sh
 CONFIG="${PM_V7_CONFIG:-config/paper_v7.json}"
 RUN_ROOT="${PM_V7_RUN_ROOT:-runs/paper_v7_live}"
 RECORDER="${PM_TRADE_RECORDER:-build/polymarket_v7_trade_recorder}"
-MAKER_RUNTIME="${PM_V7_MARKET_MAKER_RUNTIME:-build/polymarket_v7_market_maker_runtime}"
 MARKOUT_OBSERVER="${PM_V7_MAKER_MARKOUT_OBSERVER:-build/polymarket_v7_maker_markout_observer}"
 FILLABILITY_OBSERVER="${PM_V7_MAKER_FILLABILITY_OBSERVER:-build/polymarket_v7_maker_fillability_observer}"
 EXTERNAL_VENUE_RUNTIME="${PM_V7_EXTERNAL_VENUE_RUNTIME:-build/polymarket_v7_external_venue_runtime}"
@@ -65,7 +64,6 @@ WS_PUBLIC_HOST="ws-subscriptions-clob.polymarket.com"
 # evidence-only markout and fillability observers each own one all-market
 # decoder. The defaults expose a 4 GiB aggregate ceiling without eagerly
 # allocating it; each decoder starts small and grows only for large venue frames.
-WS_JSON_ARENA_MAKER_MAX_BYTES="${PM_V7_WS_JSON_ARENA_MAKER_MAX_BYTES:-536870912}"
 WS_JSON_ARENA_OBSERVER_MAX_BYTES="${PM_V7_WS_JSON_ARENA_OBSERVER_MAX_BYTES:-1073741824}"
 WS_JSON_ARENA_FILLABILITY_MAX_BYTES="${PM_V7_WS_JSON_ARENA_FILLABILITY_MAX_BYTES:-536870912}"
 WS_JSON_ARENA_TOTAL_BUDGET_BYTES="${PM_V7_WS_JSON_ARENA_TOTAL_BUDGET_BYTES:-4294967296}"
@@ -97,7 +95,7 @@ EXACT_SHA_CI_GREEN=true
 python3 scripts/v7_external_source_registry.py --registry "$EXTERNAL_SOURCE_REGISTRY" \
   > "$CONTROL/external_source_registry.json"
 
-python3 - "$CONFIG" "$MAKER_POLICY" "$EXTERNAL_FAIR_POLICY" "$OSINT_SOURCE_REGISTRY" "$LIVE_MODEL_SCOPE" "$EXTERNAL_INPUT_CONFIG" "$EXTERNAL_MAPPING_REGISTRY" "$ADAPTIVE_UNIVERSE_CONFIG" "$WS_JSON_ARENA_MAKER_MAX_BYTES" "$WS_JSON_ARENA_OBSERVER_MAX_BYTES" "$WS_JSON_ARENA_FILLABILITY_MAX_BYTES" "$WS_JSON_ARENA_TOTAL_BUDGET_BYTES" <<'PY'
+python3 - "$CONFIG" "$MAKER_POLICY" "$EXTERNAL_FAIR_POLICY" "$OSINT_SOURCE_REGISTRY" "$LIVE_MODEL_SCOPE" "$EXTERNAL_INPUT_CONFIG" "$EXTERNAL_MAPPING_REGISTRY" "$ADAPTIVE_UNIVERSE_CONFIG" "$WS_JSON_ARENA_OBSERVER_MAX_BYTES" "$WS_JSON_ARENA_FILLABILITY_MAX_BYTES" "$WS_JSON_ARENA_TOTAL_BUDGET_BYTES" <<'PY'
 import json,sys
 cfg=json.load(open(sys.argv[1]))
 v7=cfg.get("v7") or {}
@@ -174,10 +172,9 @@ assert adaptive_universe.get("version") == 7
 assert adaptive_universe.get("paper_only") is True
 assert adaptive_universe.get("authenticated_execution") is False
 assert adaptive_universe.get("real_order_submission") is False
-maker_arena=int(sys.argv[9])
-observer_arena=int(sys.argv[10])
-fillability_arena=int(sys.argv[11])
-total_budget=int(sys.argv[12])
+observer_arena=int(sys.argv[9])
+fillability_arena=int(sys.argv[10])
+total_budget=int(sys.argv[11])
 assert cfg.get("engine_version")==7
 assert cfg.get("paper_only") is True
 assert v7.get("paper_only") is True
@@ -212,10 +209,9 @@ assert external.get("maker",{}).get("external_fair_enabled_for_live_quotes") is 
 assert external.get("maker",{}).get("economic_maturity_may_block_paper") is True
 assert external.get("gate_classes",{}).get("A_HARD_CORRECTNESS_SAFETY",{}).get("may_block_paper") is True
 assert external.get("gate_classes",{}).get("B_ECONOMIC_MATURITY",{}).get("may_block_paper") is True
-assert maker_arena >= 16*1024*1024
 assert observer_arena >= 16*1024*1024
 assert fillability_arena >= 16*1024*1024
-assert maker_arena*max_shards + observer_arena + fillability_arena <= total_budget
+assert observer_arena + fillability_arena <= total_budget
 PY
 
 python3 scripts/v7_research_data_plane_contract.py \
@@ -504,10 +500,6 @@ if [[ ! -x "$RECORDER" ]]; then
   echo "missing canonical V7 trade recorder executable: $RECORDER" >&2
   exit 74
 fi
-if [[ ! -x "$MAKER_RUNTIME" ]]; then
-  echo "missing canonical V7 market-maker runtime executable: $MAKER_RUNTIME" >&2
-  exit 75
-fi
 if [[ ! -x "$MARKOUT_OBSERVER" ]]; then
   echo "missing V7 maker markout observer executable: $MARKOUT_OBSERVER" >&2
   exit 76
@@ -754,18 +746,15 @@ v7_register_child "$!"
     --candidate "$RUN_ROOT/micro_maker/reward_selection_candidate.json" \
     --model "$MAKER_CHAMPION_MODEL" \
     --model-sha "$SHA" \
-    --maker-runtime "$MAKER_RUNTIME" \
     --markout-observer "$MARKOUT_OBSERVER" \
     --fillability-observer "$FILLABILITY_OBSERVER" \
-    --maker-arena-bytes "$WS_JSON_ARENA_MAKER_MAX_BYTES" \
     --observer-arena-bytes "$WS_JSON_ARENA_OBSERVER_MAX_BYTES" \
     --fillability-arena-bytes "$WS_JSON_ARENA_FILLABILITY_MAX_BYTES" \
     --candidate-confirmations "$MAKER_CANDIDATE_CONFIRMATIONS" \
     --min-rotation-interval-seconds "$MAKER_ROTATION_INTERVAL_SECONDS" \
     --rotation-min-projected-fill-probability "$MAKER_ROTATION_MIN_FILL" \
     --rotation-min-absolute-fill-improvement "$MAKER_ROTATION_MIN_ABSOLUTE_IMPROVEMENT" \
-    --rotation-min-relative-fill-multiplier "$MAKER_ROTATION_MIN_RELATIVE_MULTIPLIER" \
-    --observer-only
+    --rotation-min-relative-fill-multiplier "$MAKER_ROTATION_MIN_RELATIVE_MULTIPLIER"
 ) >> "$RUN_ROOT/micro_maker/cohort_supervisor.log" 2>&1 &
 v7_register_child "$!"
 

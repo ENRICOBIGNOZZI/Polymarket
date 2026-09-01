@@ -36,6 +36,25 @@
         "tests/test_v7_authority_reachability_audit.py"
       ],
       "disposition_commit": "SELF_REFERENTIAL_COMMIT"
+    },
+    {
+      "path": "src/v7_market_maker_runtime.cpp",
+      "prior_classification": "MERGE_INTO_CANONICAL",
+      "deletion_reason": "The unlaunched standalone maker executable retained a second PAPER order, fill, inventory, capital, model-reload, and ledger-spool lifecycle outside the global coordinator.",
+      "unique_behavior_disposition": "Maker decision, queue, inventory, execution-policy, replay, fillability, and markout behavior remains in pm_v7_hft libraries and their C++ tests. Runtime observation is provided by the zero-authority fillability and markout observers; new risk stays disabled.",
+      "canonical_replacement": "BTC_SETTLEMENT_ENGINE -> V7_GLOBAL_PORTFOLIO_COORDINATOR -> V7_CANONICAL_OMS",
+      "reference_scan": "CMake, launcher, cutover, cohort-supervisor, audit, documentation, and source-specific test references removed in this deletion wave.",
+      "validation_tests": [
+        "pm_v7_maker_hft_tests",
+        "pm_v7_maker_execution_cells_tests",
+        "pm_v7_maker_lane_tests",
+        "pm_v7_maker_paper_tests",
+        "pm_v7_maker_inventory_tests",
+        "pm_v7_maker_execution_policy_tests",
+        "tests/test_v7_maker_cohort_supervisor.py",
+        "tests/test_v7_market_maker_runtime_contract.py"
+      ],
+      "disposition_commit": "SELF_REFERENTIAL_COMMIT"
     }
   ]
 }

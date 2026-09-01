@@ -1,13 +1,5 @@
 #!/usr/bin/env python3
-"""Rotate the PAPER Maker cohort without forcing directional inventory losses.
-
-The C++ maker and its two evidence observers consume one immutable selection per
-process generation. This supervisor follows the continuously refreshed
-candidate selection without ever discarding hypothetical inventory or live
-PAPER orders. Balanced complete sets may be merged during a global handoff;
-directional residuals remain in a market-local draining lane while the warm
-cohort continues operating and can exit passively on positive economics.
-"""
+"""Rotate the zero-authority PAPER maker evidence-observer cohort."""
 from __future__ import annotations
 
 import argparse
@@ -311,133 +303,6 @@ def rotation_gate(
     }
 
 
-def inventory_flat_state(
-    value: dict[str, Any],
-    model_sha: str,
-    *,
-    newer_than_ms: int = 0,
-) -> bool:
-    if (
-        value.get("schema") != "polymarket_v7_professional_maker_state_v2"
-        or value.get("paper_only") is not True
-        or value.get("authenticated_execution") is not False
-        or value.get("real_order_submission") is not False
-        or value.get("model_sha") != model_sha
-        or int(value.get("timestamp_ms") or 0) < newer_than_ms
-    ):
-        return False
-    inventory = value.get("inventory")
-    if not isinstance(inventory, dict):
-        return False
-    for row in inventory.values():
-        if not isinstance(row, dict):
-            return False
-        for key in ("yes_shares", "no_shares", "yes_cost", "no_cost"):
-            try:
-                if abs(float(row.get(key) or 0.0)) > 1e-9:
-                    return False
-            except (TypeError, ValueError):
-                return False
-    return True
-
-
-def inventory_drainable_state(
-    value: dict[str, Any],
-    model_sha: str,
-    *,
-    newer_than_ms: int = 0,
-) -> bool:
-    """Accept only flat or balanced inventory for a membership handoff.
-
-    The maker intentionally seeds balanced YES/NO complete sets. Requiring zero
-    inventory before requesting a drain therefore makes every cohort rotation
-    impossible. Balanced complete sets are safe to merge. A directional
-    residual is not a rotation prerequisite: crossing it at the current bid
-    crystallizes adverse selection and turns selector churn into trading loss.
-    Such a market remains warm in its own draining lane until passive economics
-    make it flat. In-flight split/merge accounting still fails closed.
-    """
-    if (
-        value.get("schema") != "polymarket_v7_professional_maker_state_v2"
-        or value.get("paper_only") is not True
-        or value.get("authenticated_execution") is not False
-        or value.get("real_order_submission") is not False
-        or value.get("model_sha") != model_sha
-        or int(value.get("timestamp_ms") or 0) < newer_than_ms
-    ):
-        return False
-    inventory = value.get("inventory")
-    if not isinstance(inventory, dict):
-        return False
-    for row in inventory.values():
-        if not isinstance(row, dict):
-            return False
-        try:
-            yes = float(row.get("yes_shares") or 0.0)
-            no = float(row.get("no_shares") or 0.0)
-            yes_cost = float(row.get("yes_cost") or 0.0)
-            no_cost = float(row.get("no_cost") or 0.0)
-            pending = sum(abs(float(row.get(key) or 0.0)) for key in (
-                "pending_split_shares", "pending_merge_shares",
-            ))
-        except (TypeError, ValueError):
-            return False
-        if (
-            yes < -1e-9 or no < -1e-9
-            or yes_cost < -1e-12 or no_cost < -1e-12
-            or pending > 1e-9
-            or abs(yes - no) > 1e-9
-        ):
-            return False
-    return True
-
-
-def directional_inventory_markets(
-    value: dict[str, Any], model_sha: str
-) -> dict[str, float]:
-    """Return validated market-local directional residuals by market id."""
-    if (
-        value.get("schema") != "polymarket_v7_professional_maker_state_v2"
-        or value.get("paper_only") is not True
-        or value.get("authenticated_execution") is not False
-        or value.get("real_order_submission") is not False
-        or value.get("model_sha") != model_sha
-        or not isinstance(value.get("inventory"), dict)
-    ):
-        return {}
-    output: dict[str, float] = {}
-    for market_id, row in value["inventory"].items():
-        if not isinstance(row, dict):
-            return {}
-        try:
-            residual = float(row.get("yes_shares") or 0.0) - float(
-                row.get("no_shares") or 0.0
-            )
-        except (TypeError, ValueError):
-            return {}
-        if abs(residual) > 1e-9:
-            output[str(market_id)] = residual
-    return output
-
-
-def flat_state(
-    value: dict[str, Any],
-    model_sha: str,
-    *,
-    newer_than_ms: int = 0,
-    require_frozen: bool = False,
-) -> bool:
-    if not inventory_flat_state(
-        value, model_sha, newer_than_ms=newer_than_ms
-    ):
-        return False
-    return (
-        int(value.get("active_order_count") or 0) == 0
-        and value.get("flat_restart_safe") is True
-        and (not require_frozen or value.get("new_risk_frozen") is True)
-    )
-
-
 class CohortSupervisor:
     def __init__(self, args: argparse.Namespace) -> None:
         self.args = args
@@ -445,8 +310,6 @@ class CohortSupervisor:
         self.control = self.run_root / "control"
         self.selection = args.selection
         self.candidate = args.candidate
-        self.state = self.run_root / "micro_maker" / "state.json"
-        self.drain = self.control / "MAKER_ROTATION_DRAIN"
         self.status = self.run_root / "micro_maker" / "rotation_status.json"
         self.processes: dict[str, subprocess.Popen[bytes]] = {}
         self.logs: list[Any] = []
@@ -459,7 +322,6 @@ class CohortSupervisor:
         self.pending_rotation_key = ""
         self.pending_last_generation_ms = 0
         self.pending_confirmations = 0
-        self.flow_pause_latched = False
         self.rotation_gate_metrics: dict[str, Any] = {
             "rotation_gate_reason": "NOT_EVALUATED",
         }
@@ -504,9 +366,6 @@ class CohortSupervisor:
         runtime = read_json(self.selection)
         candidate = read_json(self.candidate)
         cutover_drain_requested = (self.control / "CUTOVER_DRAIN").exists()
-        directional = directional_inventory_markets(
-            read_json(self.state), self.args.model_sha
-        )
         payload: dict[str, Any] = {
             "schema": "polymarket_v7_maker_cohort_rotation_status_v1",
             "timestamp_ms": time.time_ns() // 1_000_000,
@@ -528,18 +387,17 @@ class CohortSupervisor:
             "candidate_membership_sha256": (
                 safe_membership_sha256(candidate) if candidate else ""
             ),
-            "fresh_flow_pause_active": self.flow_pause_latched,
-            "directional_drain_market_count": len(directional),
-            "directional_drain_markets": sorted(directional),
+            "fresh_flow_pause_active": False,
+            "directional_drain_market_count": 0,
+            "directional_drain_markets": [],
             "cohort_pids": {name: process.pid for name, process in self.processes.items()},
-            "cohort_mode": "SHADOW_OBSERVERS_ONLY" if getattr(self.args, "observer_only", False) else "PAPER_EXECUTION_AND_OBSERVERS",
-            "execution_authority": "SHADOW_ZERO_AUTHORITY" if getattr(self.args, "observer_only", False) else "PAPER",
+            "cohort_mode": "SHADOW_OBSERVERS_ONLY",
+            "execution_authority": "SHADOW_ZERO_AUTHORITY",
         }
         payload.update(self.rotation_gate_metrics)
         payload.update(extra)
         atomic_json(self.status, payload)
-        if getattr(self.args, "observer_only", False):
-            atomic_json(self.run_root / "micro_maker" / "status.json", {
+        atomic_json(self.run_root / "micro_maker" / "status.json", {
                 "schema": "polymarket_v7_professional_maker_status_v1",
                 "timestamp": int(time.time()),
                 "timestamp_ms": time.time_ns() // 1_000_000,
@@ -565,12 +423,10 @@ class CohortSupervisor:
                 "observer_pids": {
                     name: process.pid for name, process in self.processes.items()
                 },
-            })
+        })
 
     def command_specs(self) -> dict[str, tuple[list[str], Path, dict[str, str]]]:
         base_env = os.environ.copy()
-        maker_env = dict(base_env)
-        maker_env["PM_V7_WS_JSON_ARENA_MAX_BYTES"] = str(self.args.maker_arena_bytes)
         observer_env = dict(base_env)
         observer_env["PM_V7_WS_JSON_ARENA_MAX_BYTES"] = str(self.args.observer_arena_bytes)
         fillability_env = dict(base_env)
@@ -578,15 +434,6 @@ class CohortSupervisor:
             self.args.fillability_arena_bytes
         )
         specifications = {
-            "maker": ([
-                str(self.args.maker_runtime),
-                "--config", str(self.args.config),
-                "--maker-policy", str(self.args.maker_policy),
-                "--run-root", str(self.run_root),
-                "--selection", str(self.selection),
-                "--model", str(self.args.model),
-                "--model-sha", self.args.model_sha,
-            ], self.run_root / "micro_maker" / "runtime.log", maker_env),
             "markout": ([
                 str(self.args.markout_observer),
                 "--config", str(self.args.config),
@@ -602,8 +449,6 @@ class CohortSupervisor:
                 "--model-sha", self.args.model_sha,
             ], self.run_root / "micro_maker" / "fillability_observer.log", fillability_env),
         }
-        if getattr(self.args, "observer_only", False):
-            specifications.pop("maker")
         return specifications
 
     def start_cohort(self) -> None:
@@ -652,7 +497,7 @@ class CohortSupervisor:
         self.logs.clear()
 
     def cohort_healthy(self) -> bool:
-        expected = 2 if getattr(self.args, "observer_only", False) else 3
+        expected = 2
         return len(self.processes) == expected and all(
             process.poll() is None for process in self.processes.values()
         )
@@ -729,26 +574,10 @@ class CohortSupervisor:
             str(row.get("market_id") or ""): row
             for row in candidate["markets"] if isinstance(row, dict)
         }
-        directional = directional_inventory_markets(
-            read_json(self.state), self.args.model_sha
-        )
         projected_rows: list[dict[str, Any]] = []
         overlap = 0
         for market_id, incumbent in runtime_rows.items():
             challenger = candidate_rows.get(market_id)
-            if market_id in directional:
-                draining = dict(incumbent)
-                draining.update({
-                    "execution_role": "DRAINING_INVENTORY",
-                    "control_exploration_authorized": False,
-                    "authorized_execution_cells": [],
-                    "authorized_execution_cell_count": 0,
-                    "inventory_seed_authorized": False,
-                    "quote_opportunities": [],
-                    "directional_inventory_shares": directional[market_id],
-                })
-                projected_rows.append(draining)
-                continue
             if challenger is not None and all(
                 str(challenger.get(key) or "") == str(incumbent.get(key) or "")
                 for key in ("condition_id", "yes_token", "no_token")
@@ -766,38 +595,8 @@ class CohortSupervisor:
                 "quote_opportunities": [],
             })
             projected_rows.append(observation)
-        if overlap <= 0 and not directional:
+        if overlap <= 0:
             return False
-        # Keep one strictly bounded positive-edge control cell alive while a
-        # different market drains. This prevents a directional residual from
-        # collapsing the entire warm universe without granting authority to
-        # add risk in the draining market itself.
-        if directional and not any(
-            row.get("authorized_execution_cells") for row in projected_rows
-        ):
-            for row in projected_rows:
-                if str(row.get("market_id") or "") in directional:
-                    continue
-                token = str(row.get("yes_token") or "")
-                if not token:
-                    continue
-                row.update({
-                    "execution_role": "ROTATION_CONTROL",
-                    "control_exploration_authorized": True,
-                    "authorized_execution_cells": [{
-                        "token_id": token,
-                        "outcome": "YES",
-                        "action": "JOIN",
-                        "quote_side": "BUY",
-                        "authority_basis": "DIRECTIONAL_DRAIN_CONTROL",
-                        "projected_flow_reach_probability": 0.0,
-                        "projected_queue_depletion_probability": 0.0,
-                        "projected_fill_probability": 0.0,
-                    }],
-                    "authorized_execution_cell_count": 1,
-                    "inventory_seed_authorized": False,
-                })
-                break
         projected = dict(candidate)
         projected["markets"] = projected_rows
         projected["selected_count"] = len(projected_rows)
@@ -807,7 +606,7 @@ class CohortSupervisor:
         projected["candidate_membership_sha256"] = membership_sha256(candidate)
         projected["runtime_warm_membership_sha256"] = membership_sha256(runtime)
         projected["warm_identity_overlap_count"] = overlap
-        projected["directional_drain_markets"] = sorted(directional)
+        projected["directional_drain_markets"] = []
         projected["authorized_execution_cell_count"] = sum(
             len(row.get("authorized_execution_cells") or [])
             for row in projected_rows
@@ -816,42 +615,13 @@ class CohortSupervisor:
         self.cell_authority_refresh_count += 1
         self.last_cell_authority_refresh_ms = time.time_ns() // 1_000_000
         self.rotation_gate_metrics = {
-            "rotation_gate_reason": (
-                "DIRECTIONAL_MARKET_DRAIN_AUTHORITY_REFRESHED"
-                if directional else "WARM_MEMBERSHIP_CELL_AUTHORITY_REFRESHED"
-            ),
+            "rotation_gate_reason": "WARM_MEMBERSHIP_CELL_AUTHORITY_REFRESHED",
             "warm_identity_overlap_count": overlap,
-            "directional_drain_market_count": len(directional),
+            "directional_drain_market_count": 0,
         }
         return True
 
-    def write_flow_pause_drain(self) -> None:
-        atomic_json(self.drain, {
-            "schema": "polymarket_v7_maker_rotation_drain_v1",
-            "timestamp_ms": time.time_ns() // 1_000_000,
-            "paper_only": True,
-            "authenticated_execution": False,
-            "real_order_submission": False,
-            "model_sha": self.args.model_sha,
-            "reason": "no_fresh_aggressive_flow",
-        })
-
-    def sync_no_fresh_flow_pause(self) -> bool:
-        """Remove the retired flow-only pause; book staleness remains in C++.
-
-        Quiet aggressor flow is an economic feature, not a feed-integrity
-        failure. The bilateral selector can route to inventory-backed asks,
-        collateral-backed bids or bounded exploration. Only the canonical
-        WebSocket lineage/freshness controls may withdraw for a genuinely stale
-        book.
-        """
-        if read_json(self.drain).get("reason") == "no_fresh_aggressive_flow":
-            self.drain.unlink(missing_ok=True)
-        self.flow_pause_latched = False
-        return False
-
     def rotate_if_safe(self, candidate: dict[str, Any]) -> None:
-        target_membership = membership_sha256(candidate)
         target_cell = str(self.rotation_gate_metrics.get("rotation_target_cell") or "")
         if not target_cell:
             allowed, metrics = rotation_gate(
@@ -868,139 +638,40 @@ class CohortSupervisor:
                 self.write_status("PENDING_CONFIRMATION")
                 return
             target_cell = str(metrics.get("rotation_target_cell") or "")
-        if getattr(self.args, "observer_only", False):
-            latest = read_json(self.candidate)
-            try:
-                validate_selection(latest, self.args.model_sha)
-            except ValueError:
-                self.reset_pending_confirmation()
-                self.write_status("PENDING_CONFIRMATION", reason="candidate_invalid_before_observer_rotation")
-                return
-            if latest.get("degraded") is True:
-                self.reset_pending_confirmation()
-                self.write_status("PENDING_CONFIRMATION", reason="candidate_degraded_before_observer_rotation")
-                return
-            self.stop_cohort()
-            atomic_json(self.selection, latest)
-            self.rotation_count += 1
-            self.last_rotation_ms = time.time_ns() // 1_000_000
+        latest = read_json(self.candidate)
+        try:
+            validate_selection(latest, self.args.model_sha)
+        except ValueError:
             self.reset_pending_confirmation()
-            self.start_cohort()
-            self.write_status("RUNNING")
+            self.write_status("PENDING_CONFIRMATION", reason="candidate_invalid_before_observer_rotation")
             return
-        now_ms = time.time_ns() // 1_000_000
-        current_state = read_json(self.state)
-        directional = directional_inventory_markets(
-            current_state, self.args.model_sha
+        if latest.get("degraded") is True:
+            self.reset_pending_confirmation()
+            self.write_status("PENDING_CONFIRMATION", reason="candidate_degraded_before_observer_rotation")
+            return
+        still_allowed, latest_metrics = rotation_gate(
+            read_json(self.selection), latest,
+            minimum_projected_fill_probability=self.args.rotation_min_projected_fill_probability,
+            minimum_absolute_improvement=self.args.rotation_min_absolute_fill_improvement,
+            minimum_relative_multiplier=self.args.rotation_min_relative_fill_multiplier,
         )
-        if directional:
-            self.rotation_gate_metrics.update({
-                "rotation_gate_reason": "DIRECTIONAL_MARKET_DRAINING",
-                "directional_drain_market_count": len(directional),
-                "directional_drain_markets": sorted(directional),
-            })
-            self.write_status("RUNNING_DIRECTIONAL_DRAIN")
+        self.rotation_gate_metrics = latest_metrics
+        if not still_allowed or latest_metrics.get("rotation_target_cell") != target_cell:
+            self.reset_pending_confirmation()
+            self.write_status(
+                "PENDING_CONFIRMATION", reason="material_rotation_target_changed_before_observer_rotation",
+            )
             return
-        if not inventory_drainable_state(
-            current_state, self.args.model_sha,
-            newer_than_ms=now_ms - 5_000,
-        ):
-            self.write_status("PENDING_NONFLAT")
-            return
-        requested_ms = time.time_ns() // 1_000_000
-        atomic_json(self.drain, {
-            "schema": "polymarket_v7_maker_rotation_drain_v1",
-            "timestamp_ms": requested_ms,
-            "paper_only": True,
-            "authenticated_execution": False,
-            "real_order_submission": False,
-            "model_sha": self.args.model_sha,
-            "candidate_membership_sha256": target_membership,
-        })
-        self.write_status("DRAINING")
-        deadline = time.monotonic() + self.args.drain_timeout_seconds
-        while not self.stop_requested and time.monotonic() < deadline:
-            if not self.cohort_healthy():
-                raise RuntimeError("maker_cohort_died_during_rotation_drain")
-            if flat_state(
-                read_json(self.state), self.args.model_sha,
-                newer_than_ms=requested_ms, require_frozen=True,
-            ):
-                latest = read_json(self.candidate)
-                try:
-                    validate_selection(latest, self.args.model_sha)
-                except ValueError:
-                    if self.flow_pause_latched:
-                        self.write_flow_pause_drain()
-                    else:
-                        self.drain.unlink(missing_ok=True)
-                    self.reset_pending_confirmation()
-                    self.write_status("PENDING_CONFIRMATION", reason="candidate_invalid_during_drain")
-                    return
-                # Recent-flow membership is expected to move while the old
-                # cohort drains.  Once the PAPER engine proves frozen and flat,
-                # atomically hand off to the newest valid non-degraded cohort
-                # instead of releasing the freeze and reseeding the old one.
-                # The 300-second post-handoff cooldown bounds turnover.
-                if latest.get("degraded") is True:
-                    self.drain.unlink(missing_ok=True)
-                    self.reset_pending_confirmation()
-                    self.write_status("PENDING_CONFIRMATION", reason="candidate_degraded_during_drain")
-                    return
-                runtime = read_json(self.selection)
-                still_allowed, latest_metrics = rotation_gate(
-                    runtime, latest,
-                    minimum_projected_fill_probability=(
-                        self.args.rotation_min_projected_fill_probability),
-                    minimum_absolute_improvement=(
-                        self.args.rotation_min_absolute_fill_improvement),
-                    minimum_relative_multiplier=(
-                        self.args.rotation_min_relative_fill_multiplier),
-                )
-                self.rotation_gate_metrics = latest_metrics
-                if (
-                    not still_allowed
-                    or latest_metrics.get("rotation_target_cell") != target_cell
-                ):
-                    self.drain.unlink(missing_ok=True)
-                    self.reset_pending_confirmation()
-                    self.write_status(
-                        "PENDING_CONFIRMATION",
-                        reason="material_rotation_target_changed_during_drain",
-                    )
-                    return
-                self.stop_cohort()
-                # Re-read after the maker's final state write. A late PAPER fill
-                # must abort promotion and restart the old cohort unchanged.
-                if not flat_state(
-                    read_json(self.state), self.args.model_sha, require_frozen=True
-                ):
-                    if self.flow_pause_latched:
-                        self.write_flow_pause_drain()
-                    else:
-                        self.drain.unlink(missing_ok=True)
-                    self.start_cohort()
-                    self.write_status("PENDING_NONFLAT")
-                    return
-                atomic_json(self.selection, latest)
-                self.flow_pause_latched = False
-                self.rotation_count += 1
-                self.last_rotation_ms = time.time_ns() // 1_000_000
-                self.reset_pending_confirmation()
-                self.drain.unlink(missing_ok=True)
-                self.start_cohort()
-                self.write_status("RUNNING")
-                return
-            time.sleep(0.1)
-        if self.flow_pause_latched:
-            self.write_flow_pause_drain()
-        else:
-            self.drain.unlink(missing_ok=True)
-        self.write_status("PENDING_DRAIN_TIMEOUT")
+        self.stop_cohort()
+        atomic_json(self.selection, latest)
+        self.rotation_count += 1
+        self.last_rotation_ms = time.time_ns() // 1_000_000
+        self.reset_pending_confirmation()
+        self.start_cohort()
+        self.write_status("RUNNING")
 
     def run(self) -> int:
         self.control.mkdir(parents=True, exist_ok=True)
-        self.drain.unlink(missing_ok=True)
         try:
             self.start_cohort()
             self.write_status("RUNNING")
@@ -1008,9 +679,6 @@ class CohortSupervisor:
                 if not self.cohort_healthy():
                     self.write_status("FAILED", reason="cohort_process_exit")
                     return 2
-                if self.sync_no_fresh_flow_pause():
-                    time.sleep(self.args.poll_seconds)
-                    continue
                 authority_refreshed = self.refresh_same_membership_authority()
                 candidate = self.pending_candidate()
                 if candidate is not None:
@@ -1028,7 +696,6 @@ class CohortSupervisor:
                 time.sleep(self.args.poll_seconds)
             return 0
         finally:
-            self.drain.unlink(missing_ok=True)
             self.stop_cohort()
             if self.stop_requested or (self.control / "KILL").exists():
                 self.write_status("STOPPED")
@@ -1044,15 +711,11 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--candidate", type=Path, required=True)
     parser.add_argument("--model", type=Path, required=True)
     parser.add_argument("--model-sha", required=True)
-    parser.add_argument("--maker-runtime", type=Path, required=True)
     parser.add_argument("--markout-observer", type=Path, required=True)
     parser.add_argument("--fillability-observer", type=Path, required=True)
-    parser.add_argument("--maker-arena-bytes", type=int, required=True)
     parser.add_argument("--observer-arena-bytes", type=int, required=True)
     parser.add_argument("--fillability-arena-bytes", type=int, required=True)
-    parser.add_argument("--observer-only", action="store_true")
     parser.add_argument("--poll-seconds", type=float, default=1.0)
-    parser.add_argument("--drain-timeout-seconds", type=float, default=20.0)
     parser.add_argument("--candidate-confirmations", type=int, default=2)
     parser.add_argument("--min-rotation-interval-seconds", type=float, default=300.0)
     parser.add_argument("--rotation-min-projected-fill-probability", type=float, default=0.05)

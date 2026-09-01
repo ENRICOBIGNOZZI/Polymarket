@@ -30,12 +30,6 @@ class V7LatencyContractTests(unittest.TestCase):
         self.assertFalse(policy["claim_boundaries"]["top_percentile_claim_allowed"])
         self.assertLessEqual(policy["ci_internal_guardrails_ns"]["receive_to_intent"]["p99"], 1_000_000)
 
-    def test_all_required_stages_are_in_runtime_telemetry(self) -> None:
-        source = (ROOT / "src/v7_market_maker_runtime.cpp").read_text(encoding="utf-8")
-        for stage in ("parse_ns", "book_ns", "feature_ns", "decision_ns", "risk_ns",
-                      "tx_queue_ns", "execution_ns", "receive_to_intent_ns"):
-            self.assertIn(stage, source)
-
     def test_public_probe_cannot_send_orders(self) -> None:
         source = (ROOT / "src/v7_latency_probe.cpp").read_text(encoding="utf-8")
         self.assertIn("client.get", source)
