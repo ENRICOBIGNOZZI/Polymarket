@@ -1,10 +1,15 @@
 {
-  "schema": "polymarket_v7_authority_graph_v1",
-  "observed_at": "2026-09-01T09:12:46Z",
-  "baseline_sha": "8d9e8e603aae4d73842212eedcf8e0e06383127f",
-  "source_head_sha": "124d077394d1625f0e9ca11ef2caf405eb0b8d54",
-  "target_chain": [
-    "BTC_SETTLEMENT_ENGINE|STRUCTURAL_ARB_ENGINE",
+  "audit_gate": {
+    "all_detected_edges_explained": true,
+    "complete_static_edge_coverage": true,
+    "duplicate_owner_injection_tested": true,
+    "one_declared_owner_per_authority": true,
+    "target_topology_complete": false
+  },
+  "authenticated_execution": false,
+  "authority_registry": "config/v7_authority_registry.json",
+  "decision_chain": [
+    "ECONOMIC_ENGINE",
     "V7_GLOBAL_PORTFOLIO_COORDINATOR",
     "V7_CANONICAL_ALLOCATOR",
     "V7_CANONICAL_RISK",
@@ -12,48 +17,246 @@
     "V7_CANONICAL_INVENTORY",
     "V7_CANONICAL_LEDGER"
   ],
-  "declared_authorities": {
-    "global_portfolio_coordinator": [],
-    "capital": ["crypto_settlement_fair", "hard_arb"],
-    "risk": ["scripts/v7_portfolio_guard.py"],
-    "oms": ["V7_CANONICAL_OMS"],
-    "inventory": ["V7_CANONICAL_INVENTORY"],
-    "ledger": ["V7_CANONICAL_LEDGER"],
-    "runtime_identity": ["scripts/paper_v7_execution_loop.sh", "ops/update_server_v7.sh"],
-    "promotion": ["operator_approved_exact_main_sha"]
-  },
   "economic_engines": {
     "BTC_SETTLEMENT_ENGINE": {
-      "components": ["crypto_settlement_fair", "crypto_informed_taker", "professional_maker"],
-      "declared_owner": "crypto_settlement_fair",
-      "target_owner": "BTC_SETTLEMENT_ENGINE"
+      "actions": [
+        "MAKE",
+        "TAKE",
+        "CANCEL",
+        "NOTHING"
+      ],
+      "components": [
+        "crypto_settlement_fair",
+        "crypto_informed_taker",
+        "professional_maker"
+      ]
     },
     "STRUCTURAL_ARB_ENGINE": {
-      "components": ["hard_arb", "fast_structural"],
-      "declared_owner": "hard_arb",
-      "target_owner": "STRUCTURAL_ARB_ENGINE"
+      "actions": [
+        "ARB",
+        "CANCEL",
+        "NOTHING"
+      ],
+      "components": [
+        "hard_arb",
+        "fast_structural"
+      ]
     }
   },
-  "research_zero_authority": [
-    "micro_taker",
-    "graph_rv",
-    "ranking",
-    "pca",
-    "local_factor",
-    "wallet_intelligence",
-    "market_open",
-    "osint",
-    "sports_latency",
-    "cross_platform"
+  "edge_registry": "config/v7_authority_edges.json",
+  "known_migration_defect_count": 9,
+  "known_migration_defects": [
+    {
+      "canonical_replacement": "BTC_SETTLEMENT_ENGINE_TO_V7_GLOBAL_PORTFOLIO_COORDINATOR",
+      "reason": "shadow virtual fills use canonical transport but must move behind the opportunity coordinator",
+      "runtime_reachability": "LAUNCHED_SHADOW_ONLY",
+      "severity": "P1_MIGRATION",
+      "source": "scripts/v7_external_fair_paper_router.py"
+    },
+    {
+      "canonical_replacement": "STRUCTURAL_ARB_ENGINE_TO_V7_GLOBAL_PORTFOLIO_COORDINATOR",
+      "reason": "the active launcher is shadow-only, but the standalone CLI retains a PAPER ledger path",
+      "runtime_reachability": "LAUNCHED_WITH_SHADOW_ONLY_FLAG",
+      "severity": "P0_BYPASS",
+      "source": "scripts/v7_fast_structural_paper_executor.py"
+    },
+    {
+      "canonical_replacement": "ZERO_AUTHORITY_RESEARCH_ARTIFACT_STORE",
+      "reason": "research cost annotation currently writes the canonical spool and must be redirected to research evidence",
+      "runtime_reachability": "LAUNCHED_PERIODICALLY",
+      "severity": "P0_RESEARCH_AUTHORITY",
+      "source": "scripts/v7_graph_cost_vector.py"
+    },
+    {
+      "canonical_replacement": "ZERO_AUTHORITY_RESEARCH_ARTIFACT_STORE",
+      "reason": "standalone research module retains a PAPER spool path",
+      "runtime_reachability": "NOT_LAUNCHED_BUT_STANDALONE_REACHABLE",
+      "severity": "P0_BYPASS",
+      "source": "scripts/v7_graph_rv.py"
+    },
+    {
+      "canonical_replacement": "STRUCTURAL_ARB_ENGINE_TO_V7_GLOBAL_PORTFOLIO_COORDINATOR",
+      "reason": "compatibility worker is disabled by launcher sizing but retains independent PAPER lifecycle code",
+      "runtime_reachability": "LAUNCHED_WITH_ZERO_MARKET_BUDGET",
+      "severity": "P0_BYPASS",
+      "source": "scripts/v7_hard_arb_guard.py"
+    },
+    {
+      "canonical_replacement": "ZERO_AUTHORITY_RESEARCH_ARTIFACT_STORE",
+      "reason": "active launcher is research-only, but the standalone CLI retains a PAPER spool path",
+      "runtime_reachability": "LAUNCHED_WITH_RESEARCH_ONLY_FLAG",
+      "severity": "P0_BYPASS",
+      "source": "scripts/v7_micro_taker_worker.py"
+    },
+    {
+      "canonical_replacement": "STRUCTURAL_ARB_ENGINE_TO_V7_GLOBAL_PORTFOLIO_COORDINATOR",
+      "reason": "structural detector publishes executable candidates directly to the ledger transport instead of the opportunity coordinator",
+      "runtime_reachability": "CANONICAL_LAUNCHER_COMPONENT",
+      "severity": "P0_BYPASS",
+      "source": "src/fast_runtime/part3.inc"
+    },
+    {
+      "canonical_replacement": "BTC_SETTLEMENT_ENGINE_TO_V7_GLOBAL_PORTFOLIO_COORDINATOR",
+      "reason": "maker observer writes economic annotations directly to the ledger transport",
+      "runtime_reachability": "CANONICAL_LAUNCHER_COMPONENT",
+      "severity": "P0_BYPASS",
+      "source": "src/v7_maker_markout_observer.cpp"
+    },
+    {
+      "canonical_replacement": "BTC_SETTLEMENT_ENGINE_TO_V7_GLOBAL_PORTFOLIO_COORDINATOR",
+      "reason": "standalone maker runtime retains independent PAPER candidate, order, fill, inventory, and final-event production",
+      "runtime_reachability": "CANONICAL_LAUNCHER_COMPONENT",
+      "severity": "P0_BYPASS",
+      "source": "src/v7_market_maker_runtime.cpp"
+    }
   ],
-  "baseline_gate": {
-    "passed": false,
-    "unexplained_edges": [
-      "no explicit global portfolio coordinator owner",
-      "capital authority is declared per component family",
-      "engine authority is assigned to internal component families",
-      "runtime identity is split between launcher and deploy script without a single typed owner declaration"
-    ]
+  "live_runtime_verification": {
+    "reason": "PAPER-host SSH owner authentication is unavailable",
+    "state": "EXTERNAL_BLOCKER"
   },
-  "secret_values_recorded": false
+  "owner_counts": {
+    "capital_allocator": 1,
+    "global_portfolio_coordinator": 1,
+    "inventory": 1,
+    "ledger": 1,
+    "oms": 1,
+    "promotion": 1,
+    "risk_engine": 1,
+    "runtime_identity": 1
+  },
+  "owners": {
+    "capital_allocator": "V7_CANONICAL_ALLOCATOR",
+    "global_portfolio_coordinator": "V7_GLOBAL_PORTFOLIO_COORDINATOR",
+    "inventory": "V7_CANONICAL_INVENTORY",
+    "ledger": "V7_CANONICAL_LEDGER",
+    "oms": "V7_CANONICAL_OMS",
+    "promotion": "V7_OPERATOR_EXACT_SHA_PROMOTION",
+    "risk_engine": "V7_CANONICAL_RISK",
+    "runtime_identity": "V7_EXACT_SHA_RUNTIME_IDENTITY"
+  },
+  "paper_only": true,
+  "real_capital_at_risk": false,
+  "real_order_submission": false,
+  "schema": "polymarket_v7_authority_reachability_audit_v2",
+  "source_snapshot_sha": "2f6da390188db0e25c5f47e18ba589218c5a6378",
+  "static_ledger_transport_edges": [
+    {
+      "authority_mode": "DRAIN_AND_ARCHIVE",
+      "canonical_replacement": "V7_OPERATOR_EXACT_SHA_PROMOTION",
+      "classification": "KEEP_CANONICAL",
+      "reason": "exact-SHA cutover drains the canonical spool before archive",
+      "runtime_reachability": "CUTOVER_ONLY",
+      "severity": "CONTROLLED",
+      "source": "ops/update_server_v7.sh"
+    },
+    {
+      "authority_mode": "SHADOW_EVIDENCE_PRODUCER",
+      "canonical_replacement": "BTC_SETTLEMENT_ENGINE_TO_V7_GLOBAL_PORTFOLIO_COORDINATOR",
+      "classification": "KEEP_TEMPORARY_COMPATIBILITY",
+      "reason": "shadow virtual fills use canonical transport but must move behind the opportunity coordinator",
+      "runtime_reachability": "LAUNCHED_SHADOW_ONLY",
+      "severity": "P1_MIGRATION",
+      "source": "scripts/v7_external_fair_paper_router.py"
+    },
+    {
+      "authority_mode": "SHADOW_EVIDENCE_PRODUCER_WITH_DORMANT_PAPER_MODE",
+      "canonical_replacement": "STRUCTURAL_ARB_ENGINE_TO_V7_GLOBAL_PORTFOLIO_COORDINATOR",
+      "classification": "MERGE_INTO_CANONICAL",
+      "reason": "the active launcher is shadow-only, but the standalone CLI retains a PAPER ledger path",
+      "runtime_reachability": "LAUNCHED_WITH_SHADOW_ONLY_FLAG",
+      "severity": "P0_BYPASS",
+      "source": "scripts/v7_fast_structural_paper_executor.py"
+    },
+    {
+      "authority_mode": "DRAIN_AND_FINALIZE",
+      "canonical_replacement": "V7_OPERATOR_EXACT_SHA_PROMOTION",
+      "classification": "KEEP_CANONICAL",
+      "reason": "exact-SHA cutover finalizes existing PAPER lifecycle events through the canonical spool",
+      "runtime_reachability": "CUTOVER_ONLY",
+      "severity": "CONTROLLED",
+      "source": "scripts/v7_finalize_maker_cutover.py"
+    },
+    {
+      "authority_mode": "CANONICAL_LEDGER_ANNOTATION",
+      "canonical_replacement": "ZERO_AUTHORITY_RESEARCH_ARTIFACT_STORE",
+      "classification": "KEEP_ZERO_AUTHORITY_RESEARCH",
+      "reason": "research cost annotation currently writes the canonical spool and must be redirected to research evidence",
+      "runtime_reachability": "LAUNCHED_PERIODICALLY",
+      "severity": "P0_RESEARCH_AUTHORITY",
+      "source": "scripts/v7_graph_cost_vector.py"
+    },
+    {
+      "authority_mode": "DORMANT_PAPER_LEDGER_PATH",
+      "canonical_replacement": "ZERO_AUTHORITY_RESEARCH_ARTIFACT_STORE",
+      "classification": "KEEP_ZERO_AUTHORITY_RESEARCH",
+      "reason": "standalone research module retains a PAPER spool path",
+      "runtime_reachability": "NOT_LAUNCHED_BUT_STANDALONE_REACHABLE",
+      "severity": "P0_BYPASS",
+      "source": "scripts/v7_graph_rv.py"
+    },
+    {
+      "authority_mode": "DORMANT_PAPER_LEDGER_PATH",
+      "canonical_replacement": "STRUCTURAL_ARB_ENGINE_TO_V7_GLOBAL_PORTFOLIO_COORDINATOR",
+      "classification": "KEEP_TEMPORARY_COMPATIBILITY",
+      "reason": "compatibility worker is disabled by launcher sizing but retains independent PAPER lifecycle code",
+      "runtime_reachability": "LAUNCHED_WITH_ZERO_MARKET_BUDGET",
+      "severity": "P0_BYPASS",
+      "source": "scripts/v7_hard_arb_guard.py"
+    },
+    {
+      "authority_mode": "SOLE_LEDGER_FILE_WRITER",
+      "canonical_replacement": "V7_CANONICAL_LEDGER",
+      "classification": "KEEP_CANONICAL",
+      "reason": "only this process drains producer events into the canonical append-only ledger",
+      "runtime_reachability": "CANONICAL_RUNTIME",
+      "severity": "CONTROLLED",
+      "source": "scripts/v7_ledger_spool.py"
+    },
+    {
+      "authority_mode": "RESEARCH_MODE_WITH_DORMANT_PAPER_LEDGER_PATH",
+      "canonical_replacement": "ZERO_AUTHORITY_RESEARCH_ARTIFACT_STORE",
+      "classification": "KEEP_ZERO_AUTHORITY_RESEARCH",
+      "reason": "active launcher is research-only, but the standalone CLI retains a PAPER spool path",
+      "runtime_reachability": "LAUNCHED_WITH_RESEARCH_ONLY_FLAG",
+      "severity": "P0_BYPASS",
+      "source": "scripts/v7_micro_taker_worker.py"
+    },
+    {
+      "authority_mode": "EMPTY_SPOOL_PRECONDITION",
+      "canonical_replacement": "V7_OPERATOR_EXACT_SHA_PROMOTION",
+      "classification": "KEEP_CANONICAL",
+      "reason": "exact-SHA cutover preparation verifies spool state without creating economic events",
+      "runtime_reachability": "CUTOVER_ONLY",
+      "severity": "CONTROLLED",
+      "source": "scripts/v7_prepare_cutover_run_root.py"
+    },
+    {
+      "authority_mode": "DIRECT_EXECUTABLE_CANDIDATE_TO_LEDGER_SPOOL",
+      "canonical_replacement": "STRUCTURAL_ARB_ENGINE_TO_V7_GLOBAL_PORTFOLIO_COORDINATOR",
+      "classification": "MERGE_INTO_CANONICAL",
+      "reason": "structural detector publishes executable candidates directly to the ledger transport instead of the opportunity coordinator",
+      "runtime_reachability": "CANONICAL_LAUNCHER_COMPONENT",
+      "severity": "P0_BYPASS",
+      "source": "src/fast_runtime/part3.inc"
+    },
+    {
+      "authority_mode": "DIRECT_MARKOUT_ANNOTATION_TO_LEDGER_SPOOL",
+      "canonical_replacement": "BTC_SETTLEMENT_ENGINE_TO_V7_GLOBAL_PORTFOLIO_COORDINATOR",
+      "classification": "MERGE_INTO_CANONICAL",
+      "reason": "maker observer writes economic annotations directly to the ledger transport",
+      "runtime_reachability": "CANONICAL_LAUNCHER_COMPONENT",
+      "severity": "P0_BYPASS",
+      "source": "src/v7_maker_markout_observer.cpp"
+    },
+    {
+      "authority_mode": "DIRECT_MAKER_LIFECYCLE_TO_LEDGER_SPOOL",
+      "canonical_replacement": "BTC_SETTLEMENT_ENGINE_TO_V7_GLOBAL_PORTFOLIO_COORDINATOR",
+      "classification": "MERGE_INTO_CANONICAL",
+      "reason": "standalone maker runtime retains independent PAPER candidate, order, fill, inventory, and final-event production",
+      "runtime_reachability": "CANONICAL_LAUNCHER_COMPONENT",
+      "severity": "P0_BYPASS",
+      "source": "src/v7_market_maker_runtime.cpp"
+    }
+  ],
+  "unexplained_edges": []
 }

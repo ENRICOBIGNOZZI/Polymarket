@@ -1,41 +1,42 @@
 {
-  "schema": "polymarket_v7_runtime_process_graph_v1",
-  "observed_at": "2026-09-01T09:12:46Z",
-  "source_head_sha": "124d077394d1625f0e9ca11ef2caf405eb0b8d54",
-  "static_entrypoints": [
-    {
-      "id": "v7_runtime_supervisor",
-      "path": "ops/v7_runtime_supervisor.py",
-      "owner_class": "CANONICAL_RUNTIME_IDENTITY",
-      "authority": ["restart", "liveness"],
-      "economic_authority": false
-    },
-    {
-      "id": "paper_v7_execution_loop",
-      "path": "scripts/paper_v7_execution_loop.sh",
-      "owner_class": "CANONICAL_EXECUTION_RUNTIME",
-      "authority": ["process_launch", "runtime_status"],
-      "economic_authority": true
-    },
-    {
-      "id": "update_server_v7",
-      "path": "ops/update_server_v7.sh",
-      "owner_class": "EXACT_SHA_CUTOVER",
-      "authority": ["drain", "archive", "promote", "rollback"],
-      "economic_authority": false
-    },
-    {
-      "id": "monitoring_exporter",
-      "path": "monitoring/exporter_v7.py",
-      "owner_class": "ZERO_AUTHORITY_OBSERVER",
-      "authority": [],
-      "economic_authority": false
-    }
-  ],
-  "fault_isolation": {
-    "multiple_processes_allowed": true,
+  "schema": "polymarket_v7_runtime_process_graph_v2",
+  "paper_only": true,
+  "authenticated_execution": false,
+  "real_order_submission": false,
+  "real_capital_at_risk": false,
+  "source_snapshot_sha": "2f6da390188db0e25c5f47e18ba589218c5a6378",
+  "canonical_runtime_owners": {
+    "lifecycle": "ops/v7_runtime_supervisor.py",
+    "launcher": "scripts/paper_v7_execution_loop.sh",
+    "runtime_identity": "V7_EXACT_SHA_RUNTIME_IDENTITY",
+    "cutover": "V7_OPERATOR_EXACT_SHA_PROMOTION"
+  },
+  "static_launcher_inventory": {
+    "source": "scripts/paper_v7_execution_loop.sh",
+    "process_count": 34,
+    "machine_readable_entries": "artifacts/v7_unification/path_classification.json#object_type=process",
+    "runtime_output_count": 122,
+    "runtime_output_entries": "artifacts/v7_unification/path_classification.json#object_type=runtime_output",
+    "extraction_validator": "scripts/v7_surface_classification.py",
+    "unexplained_processes": [],
+    "unexplained_runtime_outputs": []
+  },
+  "authority_boundary": {
+    "multiple_fault_isolated_collectors_allowed": true,
     "multiple_economic_authorities_allowed": false,
-    "research_may_control_execution_core": false
+    "research_may_control_execution_core": false,
+    "economic_engines": [
+      "BTC_SETTLEMENT_ENGINE",
+      "STRUCTURAL_ARB_ENGINE"
+    ],
+    "authority_registry": "config/v7_authority_registry.json",
+    "ledger_transport_edge_registry": "config/v7_authority_edges.json"
+  },
+  "declarative_manifest_migration": {
+    "state": "PENDING_PHASE_7",
+    "current_source": "launcher-encoded process catalogue",
+    "target_source": "single declarative process manifest consumed by launcher, tests, monitoring, and cutover",
+    "deletion_gate": "DECLARATIVE_PROCESS_MANIFEST_PARITY_AND_RUNTIME_PROOF"
   },
   "live_runtime_inspection": {
     "state": "EXTERNAL_BLOCKER",
@@ -45,6 +46,5 @@
     "open_orders_verified": false,
     "paper_positions_verified": false
   },
-  "next_proof": "replace launcher-encoded catalogue with a complete declarative process manifest, then compare it to the running PAPER host",
   "secret_values_recorded": false
 }
