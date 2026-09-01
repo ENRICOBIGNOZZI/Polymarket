@@ -9,32 +9,24 @@ ROOT = Path(__file__).resolve().parents[1]
 
 
 class ProfessionalMakerRuntimeContractTests(unittest.TestCase):
-    def test_maker_is_a_funded_observation_component_not_an_authority_owner(self) -> None:
+    def test_maker_observation_budget_is_not_an_independent_capital_envelope(self) -> None:
         cfg = json.loads((ROOT / "config" / "paper_v7.json").read_text(encoding="utf-8"))
         v7 = cfg["v7"]
         self.assertTrue(cfg["paper_only"])
         self.assertFalse(v7["authenticated_execution"])
         self.assertFalse(v7["real_order_submission"])
-        self.assertAlmostEqual(
-            float(cfg["starting_capital"]) * float(v7["micro_maker_capital_fraction"]),
-            2000.0,
-        )
-        self.assertEqual(v7["relative_value_capital_fraction"], 0)
-        self.assertEqual(v7["micro_taker_capital_fraction"], 0)
-        self.assertAlmostEqual(
-            float(cfg["starting_capital"]) * float(v7["external_capital_fraction"]),
-            4000.0,
-        )
+        self.assertEqual(v7["capital_authority_owner"], "V7_CANONICAL_ALLOCATOR")
+        self.assertEqual(v7["engine_capital_envelope_owners"], [
+            "BTC_SETTLEMENT_ENGINE", "STRUCTURAL_ARB_ENGINE",
+        ])
+        self.assertAlmostEqual(float(cfg["starting_capital"]) * float(
+            v7["component_observation_budget_fractions"]["professional_maker"]
+        ), 2000.0)
+        self.assertAlmostEqual(float(cfg["starting_capital"]) * float(
+            v7["engine_capital_fractions"]["BTC_SETTLEMENT_ENGINE"]
+        ), 4000.0)
         self.assertEqual(v7["micro_maker_policy"], "config/v7_professional_market_maker.json")
-        self.assertAlmostEqual(
-            sum(float(v7[key]) for key in (
-                "micro_maker_capital_fraction", "micro_taker_capital_fraction",
-                "fast_structural_capital_fraction",
-                "relative_value_capital_fraction", "hard_arb_capital_fraction",
-                "external_capital_fraction", "reserve_fraction",
-            )),
-            1.0,
-        )
+        self.assertFalse(any(key.endswith("_capital_fraction") for key in v7))
 
     def test_policy_requires_single_v7_architecture_and_bounded_exploration(self) -> None:
         policy = json.loads((ROOT / "config" / "v7_professional_market_maker.json").read_text(encoding="utf-8"))
@@ -211,7 +203,9 @@ class ProfessionalMakerRuntimeContractTests(unittest.TestCase):
         architecture = directives["architecture"]
         self.assertTrue(architecture["single_runtime_owner"])
         self.assertTrue(architecture["single_execution_ledger"])
-        self.assertTrue(architecture["professional_market_maker_is_v7_sleeve_not_new_runtime"])
+        self.assertTrue(architecture["professional_market_maker_is_btc_engine_component"])
+        self.assertTrue(architecture["hard_arb_and_fast_structural_share_one_engine"])
+        self.assertTrue(architecture["single_global_portfolio_coordinator"])
         self.assertEqual(architecture["cleanup_sequence"], "audit_then_port_then_test_then_validate_then_retire_obsolete_generations")
         self.assertIn("Git history is the archive", architecture["retired_generation_rule"])
         forbidden = "\n".join(directives["forbidden_regressions"])

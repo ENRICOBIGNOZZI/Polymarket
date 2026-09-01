@@ -20,13 +20,15 @@
     "wallet_intelligence",
     "market_open"
   ],
-  "paper_execution_families": [
-    "hard_arb",
-    "crypto_settlement_fair"
+  "paper_execution_engines": [
+    "BTC_SETTLEMENT_ENGINE",
+    "STRUCTURAL_ARB_ENGINE"
   ],
   "component_shadow_families": [
+    "crypto_settlement_fair",
     "professional_maker",
     "crypto_informed_taker",
+    "hard_arb",
     "fast_structural"
   ],
   "research_zero_authority_families": [

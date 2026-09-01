@@ -1590,30 +1590,33 @@ def _validated_config(config_path: Path) -> tuple[dict[str, Any], dict[str, Any]
     return cfg, selection_cfg, capacity_cfg, resource_capacity
 
 
-def _validated_sleeve_capital(allocation_path: Path) -> float:
+def _validated_observation_budget(allocation_path: Path) -> float:
     allocation = json.loads(allocation_path.read_text(encoding="utf-8"))
     v7 = allocation.get("v7") if isinstance(allocation.get("v7"), dict) else {}
     scope = allocation.get("capital_scope") if isinstance(allocation.get("capital_scope"), dict) else {}
-    strategy_budgets = scope.get("strategy_budgets") if isinstance(scope.get("strategy_budgets"), dict) else {}
     if (
         allocation.get("paper_only") is not True
         or v7.get("authenticated_execution") is not False
         or v7.get("real_order_submission") is not False
-        or scope.get("sleeve") != "micro_maker"
+        or scope.get("schema") != "polymarket_v7_capital_scope_v3"
+        or scope.get("allocator_owner") != "V7_CANONICAL_ALLOCATOR"
+        or scope.get("view_id") != "micro_maker"
+        or scope.get("scope_class") != "COMPONENT_OBSERVATION"
+        or scope.get("engine_id") != "BTC_SETTLEMENT_ENGINE"
+        or scope.get("component") != "professional_maker"
+        or scope.get("observation_budget_is_capital") is not False
+        or scope.get("independent_capital_authority") is not False
+        or scope.get("independent_oms_authority") is not False
+        or scope.get("independent_ledger_authority") is not False
         or scope.get("double_counting_forbidden") is not True
-        or set(strategy_budgets) != {"professional_maker"}
     ):
         raise ValueError("maker_reward_allocation_contract_invalid")
-    capital = finite(allocation.get("starting_capital"), -1.0)
-    declared = finite(scope.get("sleeve_starting_capital"), -2.0)
-    strategy_budget = finite(strategy_budgets.get("professional_maker"), -3.0)
-    strategy_sum = finite(scope.get("strategy_budget_sum"), -4.0)
-    if capital <= 0.0 or any(
-        abs(value - capital) > 1e-9
-        for value in (declared, strategy_budget, strategy_sum)
-    ):
-        raise ValueError("maker_reward_allocation_capital_mismatch")
-    return capital
+    execution_budget = finite(scope.get("execution_budget"), -1.0)
+    observation_budget = finite(scope.get("observation_budget"), -1.0)
+    starting_capital = finite(allocation.get("starting_capital"), -1.0)
+    if execution_budget != 0.0 or starting_capital != 0.0 or observation_budget <= 0.0:
+        raise ValueError("maker_reward_observation_budget_mismatch")
+    return observation_budget
 
 
 def _primary_snapshot(
@@ -1914,7 +1917,7 @@ def build_snapshot(
     if sleeve_capital is not None and allocation_path is not None:
         raise ValueError("maker_reward_capital_source_ambiguous")
     if allocation_path is not None:
-        sleeve_capital = _validated_sleeve_capital(allocation_path)
+        sleeve_capital = _validated_observation_budget(allocation_path)
     elif sleeve_capital is None:
         sleeve_capital = finite(selection_cfg.get("reward_sleeve_capital_usd"), 0.0)
     configured_sleeve_capital = finite(selection_cfg.get("reward_sleeve_capital_usd"), 0.0)

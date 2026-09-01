@@ -96,24 +96,25 @@ def validate(config: dict[str, Any]) -> list[str]:
     floor("v7.intent_min_edge", v7.get("intent_min_edge"), float(auth["min_net_edge"]))
     floor("v7.hard_arb_min_net_edge", v7.get("hard_arb_min_net_edge"), float(auth["min_net_edge"]))
 
-    sleeve_keys = (
-        "micro_maker_capital_fraction",
-        "micro_taker_capital_fraction",
-        "fast_structural_capital_fraction",
-        "relative_value_capital_fraction",
-        "hard_arb_capital_fraction",
-        "external_capital_fraction",
-        "reserve_fraction",
-    )
+    if v7.get("capital_authority_owner") != "V7_CANONICAL_ALLOCATOR":
+        errors.append("v7.capital_authority_owner must be V7_CANONICAL_ALLOCATOR")
+    engine_fractions = v7.get("engine_capital_fractions") if isinstance(
+        v7.get("engine_capital_fractions"), dict
+    ) else {}
+    if set(engine_fractions) != {"BTC_SETTLEMENT_ENGINE", "STRUCTURAL_ARB_ENGINE"}:
+        errors.append("v7.engine_capital_fractions must contain exactly two engines")
+    sleeve_keys = (*sorted(engine_fractions), "reserve_fraction")
     fractions: list[float] = []
     for key in sleeve_keys:
-        value = number(v7.get(key))
+        value = number(v7.get(key) if key == "reserve_fraction" else engine_fractions.get(key))
         if value is None or value < -1e-12:
             errors.append(f"v7.{key} missing, non-numeric or negative")
         else:
             fractions.append(value)
-    if len(fractions) == len(sleeve_keys) and abs(sum(fractions) - 1.0) > 1e-9:
-        errors.append(f"v7 capital allocations must sum to 100%: total={sum(fractions):g}")
+    if len(fractions) == len(sleeve_keys) and sum(fractions) > 1.0 + 1e-9:
+        errors.append(f"v7 engine capital plus reserve exceeds 100%: total={sum(fractions):g}")
+    if any(key.endswith("_capital_fraction") for key in v7):
+        errors.append("component strategy capital fractions are forbidden")
     return errors
 
 
@@ -139,12 +140,17 @@ def authorized_config() -> dict[str, Any]:
         },
         "v7": {
             "paper_only": True,
-            "micro_maker_capital_fraction": 0.22,
-            "micro_taker_capital_fraction": 0.12,
-            "fast_structural_capital_fraction": 0.0,
-            "relative_value_capital_fraction": 0.34,
-            "hard_arb_capital_fraction": 0.22,
-            "external_capital_fraction": 0.08,
+            "capital_authority_owner": "V7_CANONICAL_ALLOCATOR",
+            "engine_capital_fractions": {
+                "BTC_SETTLEMENT_ENGINE": 0.40,
+                "STRUCTURAL_ARB_ENGINE": 0.20,
+            },
+            "component_observation_budget_fractions": {
+                "professional_maker": 0.20,
+                "crypto_informed_taker": 0.0,
+                "fast_structural": 0.10,
+            },
+            "research_compute_budget_fractions": {},
             "reserve_fraction": 0.02,
             "intent_min_edge": 0.00005,
             "hard_arb_min_net_edge": 0.00005,

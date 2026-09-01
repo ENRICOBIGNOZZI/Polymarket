@@ -112,7 +112,7 @@ def scan(cfg:dict[str,Any], now:int) -> tuple[list[dict[str,Any]],dict[str,int]]
     rows=[]; stats={"events_considered":0,"events_complete":0,"bundles":0}; v7=cfg.get("v7") or {}
     budget=structural_scan_budget(cfg); selected,cursor=rotating_events(event_ids,now,budget,int(v7.get("graph_scan_seconds",15)))
     stats.update({"discovered_markets":len(markets),"discovered_events":len(event_ids),"scan_budget_events":budget,"scan_cursor":cursor,"discovery_exhaustive":True})
-    min_edge=float(cfg.get("min_net_edge",.00005)); allocation=float(v7.get("relative_value_capital_fraction",.34)); capital=float(cfg.get("starting_capital",10000.0)); max_notional=max(0.0,capital*allocation)
+    min_edge=float(cfg.get("min_net_edge",.00005)); capital_scope=cfg.get("capital_scope") if isinstance(cfg.get("capital_scope"),dict) else {}; max_notional=max(0.0,float(capital_scope.get("execution_budget",0.0)))
     for event_id in selected:
         stats["events_considered"]+=1
         try: event=request_json(f"{gamma}/events/{event_id}")

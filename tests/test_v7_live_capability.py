@@ -18,9 +18,13 @@ class LiveCapabilityTests(unittest.TestCase):
         config = json.loads((ROOT / "config" / "paper_v7.json").read_text(encoding="utf-8"))
         capability.validate_checked_in_config(config)
 
-    def test_full_history_secret_findings_block_pre_canary_use(self) -> None:
-        with self.assertRaisesRegex(capability.LiveCapabilityError, "pattern_scan_not_clean"):
-            capability.validate_pre_canary_security(ROOT)
+    def test_full_history_secret_scans_are_clean_after_remediation(self) -> None:
+        reports = capability.validate_pre_canary_security(ROOT)
+        self.assertEqual(set(reports), {"pattern", "entropy"})
+        for report in reports.values():
+            self.assertTrue(report["history_scanned"])
+            self.assertEqual(report["finding_count"], 0)
+            self.assertTrue(report["safe_for_authenticated_execution"])
 
     def test_security_summary_has_no_credential_or_approval_fields(self) -> None:
         summary = capability.security_summary({

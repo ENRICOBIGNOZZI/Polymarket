@@ -341,7 +341,6 @@ def collect_snapshot(run_root: Path, repository_root: Path | None = None, *, now
         },
     )
 
-    budgets = allocations.get("budgets") if isinstance(allocations.get("budgets"), dict) else {}
     sleeves = portfolio.get("sleeves") if isinstance(portfolio.get("sleeves"), dict) else {}
     strategies: dict[str, dict[str, Any]] = {}
     for name, row in sleeves.items():
@@ -351,11 +350,11 @@ def collect_snapshot(run_root: Path, repository_root: Path | None = None, *, now
         equity = _number(row.get("equity"), budget)
         strategies[str(name)] = {"equity": equity, "pnl": equity - budget, "killed": bool(row.get("killed", False))}
     if graph:
-        strategies.setdefault("graph_rv", {}).update({"equity": _number(graph.get("equity")), "pnl": _number(graph.get("equity")) - _number(budgets.get("graph_rv")), "net_pnl": _number(graph.get("realized_pnl_total")), "killed": bool(graph.get("killed", False)), "signals": _integer(graph_scan.get("bundles"))})
+        strategies.setdefault("graph_rv", {}).update({"equity": _number(graph.get("equity")), "pnl": _number(graph.get("realized_pnl_total")), "net_pnl": _number(graph.get("realized_pnl_total")), "killed": bool(graph.get("killed", False)), "signals": _integer(graph_scan.get("bundles")), "paper_eligible": False})
     if fast:
         strategies.setdefault("fast_structural", {}).update({
             "equity": _number(fast.get("equity")),
-            "pnl": _number(fast.get("equity")) - _number(budgets.get("fast_structural")),
+            "pnl": _number(fast.get("realized_pnl_total")),
             "net_pnl": _number(fast.get("realized_pnl_total")),
             "killed": bool(fast.get("killed", False)),
             "signals": _integer(fast.get("candidates_seen")),
@@ -364,7 +363,7 @@ def collect_snapshot(run_root: Path, repository_root: Path | None = None, *, now
     if hard:
         strategies.setdefault("hard_arb", {}).update({"equity": _number(hard.get("equity_cost_basis"), _number(hard.get("cash"))), "pnl": _number(hard.get("realized_pnl_total")), "killed": bool(hard.get("killed", False)), "signals": _integer(hard.get("candidates"))})
     if micro:
-        strategies.setdefault("micro_taker", {}).update({"equity": _number(micro.get("equity")), "pnl": _number(micro.get("equity")) - _number(budgets.get("micro_taker")), "killed": bool(micro.get("killed", False)), "signals": _integer(micro.get("signals")), "best_edge": _number(micro.get("best_edge")), "live_units": _integer(micro.get("open_positions")), "net_pnl": _number(micro.get("realized_pnl_total")), "paper_eligible": False})
+        strategies.setdefault("micro_taker", {}).update({"equity": _number(micro.get("equity")), "pnl": _number(micro.get("realized_pnl_total")), "killed": bool(micro.get("killed", False)), "signals": _integer(micro.get("signals")), "best_edge": _number(micro.get("best_edge")), "live_units": _integer(micro.get("open_positions")), "net_pnl": _number(micro.get("realized_pnl_total")), "paper_eligible": False})
     if maker:
         strategies.setdefault("micro_maker", {}).update({"killed": False, "paper_eligible": False})
     if external:

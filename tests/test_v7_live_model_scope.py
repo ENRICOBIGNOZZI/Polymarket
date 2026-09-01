@@ -32,12 +32,12 @@ class V7LiveModelScopeTest(unittest.TestCase):
             {"sports_latency", "cross_platform", "wallet_intelligence"},
         )
         self.assertEqual(
-            set(scope["paper_execution_families"]),
-            {"crypto_settlement_fair", "hard_arb"},
+            set(scope["paper_execution_engines"]),
+            {"BTC_SETTLEMENT_ENGINE", "STRUCTURAL_ARB_ENGINE"},
         )
         self.assertEqual(
             set(scope["component_shadow_families"]),
-            {"professional_maker", "crypto_informed_taker", "fast_structural"},
+            {"crypto_settlement_fair", "professional_maker", "crypto_informed_taker", "hard_arb", "fast_structural"},
         )
         self.assertEqual(len(scope["research_zero_authority_families"]), 10)
         self.assertEqual(
@@ -79,9 +79,9 @@ class V7LiveModelScopeTest(unittest.TestCase):
             "polymarket_v7_live_model_blocked_external_count",
             "polymarket_v7_live_model_scope_wired 1",
             "polymarket_v7_live_model_target_operational",
-            "polymarket_v7_capital_allocation_v2",
-            "execution_strategy_count",
-            "strategy_budgets",
+            "polymarket_v7_capital_allocation_v3",
+            "capital_authority_owner_count",
+            "engine_budgets",
             "account_starting_capital",
             "research_has_capital",
             "real_capital_at_risk",

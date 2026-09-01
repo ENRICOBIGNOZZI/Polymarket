@@ -179,6 +179,8 @@ def validate(root: Path, expected_head: str | None) -> dict[str, str]:
         "config/v7_frequency_matrix.json",
         "config/v7_external_fair.json",
         "config/v7_btc_settlement_engine.json",
+        "config/v7_authority_registry.json",
+        "schemas/v7/opportunity_envelope.schema.json",
         "config/v7_scheduler_freeze.json",
         "config/v7_capability_matrix.json",
         "config/v7_incumbent_identity.json",
@@ -200,6 +202,7 @@ def validate(root: Path, expected_head: str | None) -> dict[str, str]:
     target_live = set(scope.get("target_live_families") or [])
     excluded_live = set(scope.get("excluded_live_families") or [])
     research_shadow = set(scope.get("research_shadow_supervised_families") or [])
+    paper_engines = set(scope.get("paper_execution_engines") or [])
     if (scope.get("schema") != "polymarket_v7_live_model_scope_v1"
             or scope.get("version") != 7
             or scope.get("target_live_count") != 12
@@ -215,6 +218,13 @@ def validate(root: Path, expected_head: str | None) -> dict[str, str]:
         fail("V7 cutover blocked: excluded slow families must remain always-on economic shadow")
     if research_shadow != {"sports_latency", "cross_platform", "wallet_intelligence"}:
         fail("V7 cutover blocked: research-shadow supervisor scope is not the exact approved three-family set")
+    if paper_engines != {"BTC_SETTLEMENT_ENGINE", "STRUCTURAL_ARB_ENGINE"}:
+        fail("V7 cutover blocked: exactly two economic engines must own PAPER decisions")
+    if set(scope.get("component_shadow_families") or []) != {
+        "crypto_settlement_fair", "professional_maker", "crypto_informed_taker",
+        "hard_arb", "fast_structural",
+    }:
+        fail("V7 cutover blocked: economic components must have zero independent authority")
     governance = scope.get("governance") if isinstance(scope.get("governance"), dict) else {}
     if (governance.get("single_execution_owner") is not True
             or governance.get("research_has_capital") is not False

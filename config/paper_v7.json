@@ -66,13 +66,17 @@
     "micro_maker_policy": "config/v7_professional_market_maker.json",
     "external_fair_policy": "config/v7_external_fair.json",
     "micro_maker_bootstrap_interval_ms": 500,
-    "micro_maker_capital_fraction": 0.14285714285714285,
-    "micro_taker_capital_fraction": 0,
+    "engine_capital_fractions": {
+      "BTC_SETTLEMENT_ENGINE": 0.2857142857142857,
+      "STRUCTURAL_ARB_ENGINE": 0.14285714285714285
+    },
+    "component_observation_budget_fractions": {
+      "professional_maker": 0.14285714285714285,
+      "crypto_informed_taker": 0,
+      "fast_structural": 0.14285714285714285
+    },
+    "research_compute_budget_fractions": {},
     "micro_taker_immature_max_market_fraction": 0.005,
-    "fast_structural_capital_fraction": 0.14285714285714285,
-    "relative_value_capital_fraction": 0,
-    "hard_arb_capital_fraction": 0.14285714285714285,
-    "external_capital_fraction": 0.2857142857142857,
     "reserve_fraction": 0.2857142857142857,
     "graph_scan_seconds": 15,
     "graph_execution_seconds": 1,
@@ -108,9 +112,10 @@
       60,
       300
     ],
-    "capital_authority_owners": [
-      "crypto_settlement_fair",
-      "hard_arb"
+    "capital_authority_owner": "V7_CANONICAL_ALLOCATOR",
+    "engine_capital_envelope_owners": [
+      "BTC_SETTLEMENT_ENGINE",
+      "STRUCTURAL_ARB_ENGINE"
     ]
   }
 }

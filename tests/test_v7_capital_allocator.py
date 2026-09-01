@@ -7,102 +7,94 @@ import tempfile
 import unittest
 from pathlib import Path
 
+
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "scripts"))
 
-from v7_capital_allocator import (
-    EXECUTION_STRATEGIES,
-    allocate,
-    materialize,
-    strategy_budgets_from_sleeves,
+from v7_capital_allocator import (  # noqa: E402
+    ALLOCATOR_OWNER, ENGINES, allocate, component_observation_budgets, materialize,
 )
 
 
 class CapitalAllocatorTests(unittest.TestCase):
-    def test_sleeves_plus_reserve_equal_account(self) -> None:
-        cfg = {"paper_only": True, "starting_capital": 10000.0, "v7": {
-            "authenticated_execution": False, "real_order_submission": False,
-            "relative_value_capital_fraction": .34, "hard_arb_capital_fraction": .22,
-            "micro_taker_capital_fraction": .12, "micro_maker_capital_fraction": .22,
-            "fast_structural_capital_fraction": 0.0,
-            "external_capital_fraction": .08, "reserve_fraction": .02,
-        }}
-        budgets = allocate(cfg)
-        self.assertAlmostEqual(sum(budgets.values()), 10000.0)
-        self.assertAlmostEqual(budgets["graph_rv"], 3400.0)
-        self.assertAlmostEqual(budgets["fast_structural"], 0.0)
-        self.assertAlmostEqual(budgets["reserve"], 200.0)
+    def config(self, btc: float, structural: float, reserve: float) -> dict:
+        return {
+            "paper_only": True,
+            "starting_capital": 10_000.0,
+            "v7": {
+                "authenticated_execution": False,
+                "real_order_submission": False,
+                "capital_authority_owner": ALLOCATOR_OWNER,
+                "engine_capital_fractions": {
+                    "BTC_SETTLEMENT_ENGINE": btc,
+                    "STRUCTURAL_ARB_ENGINE": structural,
+                },
+                "component_observation_budget_fractions": {
+                    "professional_maker": 0.2,
+                    "crypto_informed_taker": 0.0,
+                    "fast_structural": 0.1,
+                },
+                "research_compute_budget_fractions": {},
+                "reserve_fraction": reserve,
+            },
+        }
 
-    def test_current_paper_config_assigns_capital_only_to_two_authority_owners(self) -> None:
+    def test_engine_envelopes_plus_reserve_equal_account(self) -> None:
+        budgets = allocate(self.config(0.4, 0.2, 0.1))
+        self.assertAlmostEqual(sum(budgets.values()), 10_000.0)
+        self.assertEqual(budgets["BTC_SETTLEMENT_ENGINE"], 4_000.0)
+        self.assertEqual(budgets["STRUCTURAL_ARB_ENGINE"], 2_000.0)
+        self.assertAlmostEqual(budgets["reserve"], 4_000.0)
+
+    def test_current_config_has_two_engine_envelopes_and_one_owner(self) -> None:
         cfg = json.loads((ROOT / "config/paper_v7.json").read_text())
         budgets = allocate(cfg)
-        strategy_budgets = strategy_budgets_from_sleeves(budgets)
-        self.assertEqual(float(cfg["starting_capital"]), 14000.0)
-        self.assertEqual(set(strategy_budgets), EXECUTION_STRATEGIES)
-        self.assertEqual(len(strategy_budgets), 2)
-        self.assertEqual(strategy_budgets, {
-            "crypto_settlement_fair": 4000.0,
-            "hard_arb": 2000.0,
+        self.assertEqual(set(budgets), {*ENGINES, "reserve"})
+        self.assertEqual(budgets["BTC_SETTLEMENT_ENGINE"], 4_000.0)
+        self.assertEqual(budgets["STRUCTURAL_ARB_ENGINE"], 2_000.0)
+        self.assertAlmostEqual(budgets["reserve"], 8_000.0)
+        self.assertEqual(cfg["v7"]["capital_authority_owner"], ALLOCATOR_OWNER)
+        self.assertNotIn("capital_authority_owners", cfg["v7"])
+        self.assertFalse(any(key.endswith("_capital_fraction") for key in cfg["v7"]))
+
+    def test_component_observation_budget_is_not_capital(self) -> None:
+        cfg = json.loads((ROOT / "config/paper_v7.json").read_text())
+        self.assertEqual(component_observation_budgets(cfg), {
+            "crypto_informed_taker": 0.0,
+            "fast_structural": 2_000.0,
+            "professional_maker": 2_000.0,
         })
-        self.assertAlmostEqual(sum(strategy_budgets.values()), 6000.0)
-        self.assertAlmostEqual(budgets["external"], 4000.0)
-        self.assertAlmostEqual(budgets["reserve"], 4000.0)
-        self.assertTrue(cfg["paper_only"])
-        self.assertFalse(cfg["v7"]["authenticated_execution"])
-        self.assertFalse(cfg["v7"]["real_order_submission"])
-
-    def test_materialized_manifest_and_children_are_strategy_auditable(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
-            manifest = materialize(
-                ROOT / "config/paper_v7.json", Path(tmp) / "allocations"
-            )
-            self.assertEqual(
-                manifest["schema"], "polymarket_v7_capital_allocation_v2"
-            )
-            self.assertEqual(manifest["execution_strategy_count"], 2)
-            self.assertAlmostEqual(manifest["strategy_budget_sum"], 6000.0)
-            self.assertEqual(manifest["component_observation_budgets"], {
-                "crypto_informed_taker": 0.0,
-                "fast_structural": 2000.0,
-                "professional_maker": 2000.0,
-            })
-            self.assertEqual(manifest["research_strategy_budgets"], {})
-            self.assertFalse(manifest["research_has_capital"])
-            self.assertFalse(manifest["real_capital_at_risk"])
-            external = json.loads(
-                (Path(tmp) / "allocations" / "external.json").read_text()
-            )
-            self.assertEqual(
-                external["capital_scope"]["strategy_budgets"],
-                {"crypto_informed_taker": 0.0, "crypto_settlement_fair": 4000.0},
-            )
-            self.assertAlmostEqual(
-                external["capital_scope"]["strategy_budget_sum"], 4000.0
-            )
+            root = Path(tmp) / "allocations"
+            manifest = materialize(ROOT / "config/paper_v7.json", root)
+            self.assertEqual(manifest["schema"], "polymarket_v7_capital_allocation_v3")
+            self.assertEqual(manifest["capital_authority_owner_count"], 1)
+            self.assertEqual(manifest["engine_count"], 2)
+            self.assertEqual(manifest["engine_budget_sum"], 6_000.0)
+            self.assertAlmostEqual(manifest["reserve_budget"], 8_000.0)
+            self.assertFalse(manifest["component_observation_budgets_are_capital"])
+            self.assertEqual(manifest["research_budgets"], {})
+            maker = json.loads((root / "micro_maker.json").read_text())
+            self.assertEqual(maker["starting_capital"], 0.0)
+            self.assertEqual(maker["capital_scope"]["observation_budget"], 2_000.0)
+            self.assertFalse(maker["capital_scope"]["observation_budget_is_capital"])
+            external = json.loads((root / "external.json").read_text())
+            self.assertEqual(external["starting_capital"], 4_000.0)
+            self.assertEqual(external["capital_scope"]["engine_id"], "BTC_SETTLEMENT_ENGINE")
+            self.assertEqual(external["capital_scope"]["scope_class"], "TEMPORARY_ENGINE_ADAPTER")
 
-    def test_configured_target_mismatch_fails_closed(self) -> None:
-        budgets = {
-            "fast_structural": 0.0,
-            "graph_rv": 0.0,
-            "hard_arb": 100.0,
-            "micro_taker": 0.0,
-            "micro_maker": 0.0,
-            "external": 200.0,
-        }
-        with self.assertRaises(ValueError):
-            strategy_budgets_from_sleeves(budgets, target_budget=100.0)
-
-    def test_overallocation_fails_closed(self) -> None:
-        cfg = {"paper_only": True, "starting_capital": 100.0, "v7": {
-            "authenticated_execution": False, "real_order_submission": False,
-            "relative_value_capital_fraction": .8, "hard_arb_capital_fraction": .8,
-        }}
-        with self.assertRaises(ValueError):
+    def test_duplicate_or_unknown_engine_partition_fails_closed(self) -> None:
+        cfg = self.config(0.4, 0.2, 0.1)
+        cfg["v7"]["engine_capital_fractions"]["THIRD_ENGINE"] = 0.1
+        with self.assertRaisesRegex(ValueError, "engine_capital_fraction_partition"):
             allocate(cfg)
 
-    def test_authenticated_execution_is_rejected(self) -> None:
-        cfg = {"paper_only": True, "starting_capital": 100.0, "v7": {"authenticated_execution": True, "real_order_submission": False}}
-        with self.assertRaises(ValueError):
+    def test_overallocation_and_wrong_owner_fail_closed(self) -> None:
+        with self.assertRaisesRegex(ValueError, "capital_fractions_exceed_one"):
+            allocate(self.config(0.8, 0.8, 0.0))
+        cfg = self.config(0.4, 0.2, 0.1)
+        cfg["v7"]["capital_authority_owner"] = "SECOND_ALLOCATOR"
+        with self.assertRaisesRegex(ValueError, "canonical_owner"):
             allocate(cfg)
 
 

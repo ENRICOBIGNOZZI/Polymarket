@@ -123,12 +123,8 @@ assert registry.get("safety",{}).get("paper_only") is True
 assert registry.get("safety",{}).get("authenticated_execution") is False
 assert registry.get("safety",{}).get("real_order_submission") is False
 assert registry.get("governance",{}).get("automatic_promotion") is False
-assert all(row.get("authority") in {"RESEARCH","SHADOW","PAPER"} for row in registry.get("strategies",[]))
-paper_authority={
-    row.get("family") for row in registry.get("strategies",[])
-    if row.get("enabled") is True and row.get("authority")=="PAPER"
-}
-assert paper_authority=={"crypto_settlement_fair","hard_arb"}
+assert all(row.get("authority") in {"RESEARCH","SHADOW"} for row in registry.get("strategies",[]))
+assert not any(row.get("authority")=="PAPER" for row in registry.get("strategies",[]))
 assert osint_sources.get("schema") == "polymarket_v7_osint_source_registry_v1"
 assert osint_sources.get("paper_only") is True
 assert osint_sources.get("authenticated_execution") is False
@@ -145,9 +141,12 @@ assert live_scope.get("real_order_submission") is False
 assert target | excluded == families and not target & excluded
 assert excluded == {"ranking", "pca", "local_factor"}
 assert shadow == {"sports_latency", "cross_platform", "wallet_intelligence"}
-assert set(live_scope.get("paper_execution_families") or [])==paper_authority
+assert set(live_scope.get("paper_execution_engines") or [])=={
+    "BTC_SETTLEMENT_ENGINE","STRUCTURAL_ARB_ENGINE",
+}
 assert set(live_scope.get("component_shadow_families") or [])=={
-    "professional_maker","crypto_informed_taker","fast_structural",
+    "crypto_settlement_fair","professional_maker","crypto_informed_taker",
+    "hard_arb","fast_structural",
 }
 assert set(live_scope.get("research_zero_authority_families") or [])=={
     "micro_taker","graph_rv","ranking","pca","local_factor",
@@ -197,8 +196,9 @@ max_shards=int(capacity.get("shard_count_budget",0))
 markets_per_shard=int(capacity.get("markets_per_shard",0))
 assert max_shards > 0 and markets_per_shard == 8
 assert int(maker.get("market_selection",{}).get("max_active_markets",0)) == max_shards*markets_per_shard
-expected_maker_capital=float(cfg.get("starting_capital",0))*float(v7.get("micro_maker_capital_fraction",0))
-assert abs(float(maker.get("market_selection",{}).get("reward_sleeve_capital_usd",0))-expected_maker_capital) <= 1e-9
+observation_fractions=v7.get("component_observation_budget_fractions") or {}
+expected_maker_observation_budget=float(cfg.get("starting_capital",0))*float(observation_fractions.get("professional_maker",0))
+assert abs(float(maker.get("market_selection",{}).get("reward_sleeve_capital_usd",0))-expected_maker_observation_budget) <= 1e-9
 assert external.get("execution_authority") == "SHADOW_ZERO_AUTHORITY"
 assert external.get("paper_only") is True
 assert external.get("authenticated_execution") is False
@@ -446,7 +446,7 @@ write_runtime_status() {
     model_source="cold_start_policy"
   fi
   local tmp="$CONTROL/runtime_status.json.tmp.$$"
-  printf '{"schema":"polymarket_v7_runtime_status_v2","timestamp":%s,"version":7,"paper_only":true,"authenticated_execution":false,"real_order_submission":false,"model_sha":"%s","config_hash":"%s","policy_hash":"%s","model_hash":"%s","model_identity_source":"%s","run_id":"%s","ledger_id":"%s","server_id":"%s","pid":%s,"state":"%s","killed":%s,"primary_economic_sleeve":"BTC_SETTLEMENT_ENGINE","execution_authority":"PAPER_EXECUTION_OWNER","single_execution_owner":true,"canonical_state_reconciled":true,"exact_sha_ci_green":%s,"p0_authority_configured":["crypto_settlement_fair","hard_arb"],"p0_full_stack_ready":%s,"readiness":"%s","external_fair_runtime_ready":%s,"economic_new_risk_ready":false,"economic_decision_state":"CANCEL_NOTHING_ONLY","authorized_alpha_actions":[],"safe_actions":["CANCEL","NOTHING"]}\n' \
+  printf '{"schema":"polymarket_v7_runtime_status_v3","timestamp":%s,"version":7,"paper_only":true,"authenticated_execution":false,"real_order_submission":false,"real_capital_at_risk":false,"model_sha":"%s","config_hash":"%s","policy_hash":"%s","model_hash":"%s","model_identity_source":"%s","run_id":"%s","ledger_id":"%s","server_id":"%s","pid":%s,"state":"%s","killed":%s,"economic_system":"V7_UNIFIED","economic_engines":["BTC_SETTLEMENT_ENGINE","STRUCTURAL_ARB_ENGINE"],"global_portfolio_coordinator":"V7_GLOBAL_PORTFOLIO_COORDINATOR","execution_authority":"V7_CANONICAL_CHAIN","single_execution_owner":true,"canonical_state_reconciled":true,"exact_sha_ci_green":%s,"p0_authority_configured":["BTC_SETTLEMENT_ENGINE","STRUCTURAL_ARB_ENGINE"],"p0_full_stack_ready":%s,"readiness":"%s","external_fair_runtime_ready":%s,"economic_new_risk_ready":false,"economic_decision_state":"CANCEL_NOTHING_ONLY","authorized_alpha_actions":[],"safe_actions":["CANCEL","NOTHING"]}\n' \
     "$now" "$SHA" "$CONFIG_HASH" "$POLICY_HASH" "$model_hash" "$model_source" "$RUN_ID" "$LEDGER_ID" "$SERVER_ID" "$$" "$state" "$killed" "$EXACT_SHA_CI_GREEN" "$p0_ready" "$readiness" "$external_ready" > "$tmp"
   mv "$tmp" "$CONTROL/runtime_status.json"
 }

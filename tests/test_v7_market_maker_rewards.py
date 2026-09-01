@@ -1065,13 +1065,21 @@ class MakerRewardSelectorTests(unittest.TestCase):
         from tempfile import TemporaryDirectory
         allocation = {
             "paper_only": True,
-            "starting_capital": 2000.0,
+            "starting_capital": 0.0,
             "v7": {"authenticated_execution": False, "real_order_submission": False},
             "capital_scope": {
-                "sleeve": "micro_maker",
-                "sleeve_starting_capital": 2000.0,
-                "strategy_budgets": {"professional_maker": 2000.0},
-                "strategy_budget_sum": 2000.0,
+                "schema": "polymarket_v7_capital_scope_v3",
+                "allocator_owner": "V7_CANONICAL_ALLOCATOR",
+                "view_id": "micro_maker",
+                "scope_class": "COMPONENT_OBSERVATION",
+                "engine_id": "BTC_SETTLEMENT_ENGINE",
+                "component": "professional_maker",
+                "execution_budget": 0.0,
+                "observation_budget": 2000.0,
+                "observation_budget_is_capital": False,
+                "independent_capital_authority": False,
+                "independent_oms_authority": False,
+                "independent_ledger_authority": False,
                 "double_counting_forbidden": True,
             },
         }
@@ -1088,9 +1096,9 @@ class MakerRewardSelectorTests(unittest.TestCase):
                     allocation_path=path,
                     model_sha=SHA,
                 )
-            allocation["capital_scope"]["strategy_budget_sum"] = 1999.0
+            allocation["capital_scope"]["execution_budget"] = 1.0
             path.write_text(json.dumps(allocation), encoding="utf-8")
-            with self.assertRaisesRegex(ValueError, "allocation_capital_mismatch"):
+            with self.assertRaisesRegex(ValueError, "observation_budget_mismatch"):
                 rewards.build_snapshot(
                     ROOT / "config" / "v7_professional_market_maker.json",
                     allocation_path=path,

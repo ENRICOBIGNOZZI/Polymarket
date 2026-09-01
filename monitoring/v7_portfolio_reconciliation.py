@@ -28,11 +28,16 @@ def reconcile(
     state_realized_pnl: dict[str, float | None],
 ) -> dict[str, Any]:
     reasons: list[str] = []
-    budgets = allocations.get("budgets") if isinstance(allocations.get("budgets"), dict) else {}
+    engine_budgets = allocations.get("engine_budgets") if isinstance(
+        allocations.get("engine_budgets"), dict
+    ) else {}
+    reserve = _finite(allocations.get("reserve_budget"))
     sleeves = portfolio.get("sleeves") if isinstance(portfolio.get("sleeves"), dict) else {}
     account = _finite(allocations.get("account_starting_capital"))
-    budget_sum = sum(value for value in (_finite(raw) for raw in budgets.values()) if value is not None)
-    if account is None or not budgets or not _close(account, budget_sum):
+    budget_sum = sum(value for value in (_finite(raw) for raw in engine_budgets.values()) if value is not None)
+    if reserve is not None:
+        budget_sum += reserve
+    if account is None or not engine_budgets or reserve is None or not _close(account, budget_sum):
         reasons.append("allocation_sum_divergence")
 
     portfolio_equity = _finite(portfolio.get("equity"))

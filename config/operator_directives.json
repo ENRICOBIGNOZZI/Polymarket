@@ -37,7 +37,9 @@
     "single_broker_authority": true,
     "single_canonical_integration": true,
     "no_live_expert_averaging": true,
-    "professional_market_maker_is_v7_sleeve_not_new_runtime": true,
+    "professional_market_maker_is_btc_engine_component": true,
+    "hard_arb_and_fast_structural_share_one_engine": true,
+    "single_global_portfolio_coordinator": true,
     "cleanup_sequence": "audit_then_port_then_test_then_validate_then_retire_obsolete_generations",
     "retired_generation_rule": "Obsolete operational generations must remain absent after their unique useful capabilities are ported to V7 and the exact replacement is green and healthy in live-PAPER. Git history is the archive."
   },
@@ -49,12 +51,12 @@
   "current_priority_order": [
     "P0 V7 Latency Domination: exact stage timestamps, persistent transport, exact-head p99/p99.9 guardrails, regional shootout and maker cancel-latency optimization before additional alpha features.",
     "Keep every obsolete operational generation retired; port any uniquely useful capability into V7 without restoring the old runtime.",
-    "Keep one V7 runtime, one broker authority, one canonical execution ledger, one allocator, one risk guard and one monitoring plane.",
+    "Keep one V7 runtime, two economic engines, one global portfolio coordinator, one broker authority, one canonical execution ledger, one allocator, one risk guard and one monitoring plane.",
     "Keep only generation-neutral/common primitives that are actually imported by V7.",
-    "Professional Market Making V7 is the primary economic system.",
-    "Fast Structural Arb/HFT remains a V7 secondary sleeve.",
-    "Graph/RV remains a V7 secondary sleeve.",
-    "Ranking/PCA/Local Factor/Micro Taker remain V7 sleeves/research only.",
+    "BTC_SETTLEMENT_ENGINE compares professional maker, informed taker, cancellation and no-action components on one conservative account-wealth objective.",
+    "STRUCTURAL_ARB_ENGINE owns hard-arb and fast-structural components as one capital reservation and lifecycle.",
+    "All engine proposals pass through one global portfolio coordinator, allocator, risk engine, OMS, inventory and ledger chain.",
+    "Graph/RV, Ranking, PCA, Local Factor and Micro Taker remain zero-authority research only.",
     "Continuously run the repository-shape audit and V7-only CI/monitoring/runtime smoke tests."
   ],
   "scheduler_assignments": {

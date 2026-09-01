@@ -22,14 +22,18 @@ class PortfolioReconciliationTests(unittest.TestCase):
             "portfolio": {
                 "equity": 103.0,
                 "sleeves": {
-                    "hard_arb": {"equity": 51.0},
-                    "micro_taker": {"equity": 22.0},
+                    "btc_settlement_engine": {"equity": 51.0},
+                    "structural_arb_engine": {"equity": 22.0},
                     "reserve": {"equity": 30.0},
                 },
             },
             "allocations": {
                 "account_starting_capital": 100.0,
-                "budgets": {"hard_arb": 50.0, "micro_taker": 20.0, "reserve": 30.0},
+                "engine_budgets": {
+                    "BTC_SETTLEMENT_ENGINE": 50.0,
+                    "STRUCTURAL_ARB_ENGINE": 20.0,
+                },
+                "reserve_budget": 30.0,
             },
             "state_realized_pnl": {"HARD_ARB": 1.0, "MICRO_TAKER": 2.0},
         }

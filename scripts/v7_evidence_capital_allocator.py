@@ -4,7 +4,7 @@
 Information collection, exploitation, and cash reserve are separate budgets.
 Exploitation requires a positive day-block lower confidence bound after
 stressed costs, finite capacity, and drawdown clearance.  The proposal is
-advisory: it never mutates child budgets or promotes a strategy.
+advisory: it never mutates engine envelopes or promotes a component.
 """
 from __future__ import annotations
 
@@ -47,7 +47,7 @@ def atomic_json(path: Path, value: dict[str, Any]) -> None:
 
 def _day_series(economics: dict[str, Any], strategy: str) -> list[tuple[str, float]]:
     """Read whole-day stressed PnL blocks without treating rows as independent."""
-    sources = economics.get("strategy_day_stressed_net_pnl")
+    sources = economics.get("engine_day_stressed_net_pnl")
     if not isinstance(sources, dict):
         return []
     raw = sources.get(strategy)
@@ -179,19 +179,19 @@ def propose(allocation: dict[str, Any], economics: dict[str, Any], *,
             or allocation.get("authenticated_execution") is not False
             or allocation.get("real_order_submission") is not False):
         raise ValueError("safe_paper_allocation_required")
-    budgets = allocation.get("strategy_budgets") if isinstance(allocation.get("strategy_budgets"), dict) else {}
+    budgets = allocation.get("engine_budgets") if isinstance(allocation.get("engine_budgets"), dict) else {}
     if not budgets:
-        raise ValueError("strategy_budgets_required")
+        raise ValueError("engine_budgets_required")
     account = finite(allocation.get("account_starting_capital"))
     if account <= 0.0:
         raise ValueError("positive_account_capital_required")
-    mature = economics.get("strategy_mature_terminal_units") if isinstance(economics.get("strategy_mature_terminal_units"), dict) else {}
-    stress = economics.get("strategy_stressed_net_pnl") if isinstance(economics.get("strategy_stressed_net_pnl"), dict) else {}
-    hours = economics.get("strategy_capital_hours") if isinstance(economics.get("strategy_capital_hours"), dict) else {}
-    capacities = economics.get("strategy_capacity_usd") if isinstance(economics.get("strategy_capacity_usd"), dict) else {}
-    drawdowns = economics.get("strategy_drawdown_fraction") if isinstance(economics.get("strategy_drawdown_fraction"), dict) else {}
-    drawdown_usd = economics.get("strategy_drawdown_usd") if isinstance(economics.get("strategy_drawdown_usd"), dict) else {}
-    thresholds = economics.get("strategy_minimum_terminal_units") if isinstance(economics.get("strategy_minimum_terminal_units"), dict) else {}
+    mature = economics.get("engine_mature_terminal_units") if isinstance(economics.get("engine_mature_terminal_units"), dict) else {}
+    stress = economics.get("engine_stressed_net_pnl") if isinstance(economics.get("engine_stressed_net_pnl"), dict) else {}
+    hours = economics.get("engine_capital_hours") if isinstance(economics.get("engine_capital_hours"), dict) else {}
+    capacities = economics.get("engine_capacity_usd") if isinstance(economics.get("engine_capacity_usd"), dict) else {}
+    drawdowns = economics.get("engine_drawdown_fraction") if isinstance(economics.get("engine_drawdown_fraction"), dict) else {}
+    drawdown_usd = economics.get("engine_drawdown_usd") if isinstance(economics.get("engine_drawdown_usd"), dict) else {}
+    thresholds = economics.get("engine_minimum_terminal_units") if isinstance(economics.get("engine_minimum_terminal_units"), dict) else {}
     exploration_fraction = min(0.20, max(0.0, finite(exploration_fraction, 0.10)))
     reserve_fraction = min(0.99, max(0.80, finite(reserve_fraction, 0.85)))
     maximum_concentration = min(0.50, max(0.05, finite(maximum_concentration, 0.25)))
@@ -302,18 +302,18 @@ def propose(allocation: dict[str, Any], economics: dict[str, Any], *,
         "advisory_only": True, "automatic_transfer": False,
         "automatic_promotion": False,
         "active_paper_envelopes_unchanged": True,
-        "information_fraction_per_strategy_envelope": exploration_fraction,
+        "information_fraction_per_engine_envelope": exploration_fraction,
         "minimum_terminal_units_for_exploitation": minimum_terminal_units,
         "minimum_day_blocks_for_exploitation": minimum_day_blocks,
         "reserve_fraction_floor": reserve_fraction,
         "reserve_floor": reserve_floor,
-        "maximum_strategy_concentration": maximum_concentration,
+        "maximum_engine_concentration": maximum_concentration,
         "maximum_step_fraction_of_current_envelope": maximum_step_fraction,
         "covariance_shrinkage": covariance_shrinkage,
         "shrunk_day_covariance": covariance,
         "soft_drawdown_fraction": soft_drawdown,
         "hard_drawdown_fraction": hard_drawdown,
-        "strategies": rows, "information_budget_total": information_total,
+        "engines": rows, "information_budget_total": information_total,
         "exploitation_pool": exploitation_pool,
         "proposed_exploitation_total": sum(exploitation.values()),
         "proposed_allocated_total": allocated,

@@ -144,16 +144,17 @@ jobs:
           for key in ('config_hash','policy_hash','model_hash','run_id','ledger_id','server_id'): assert identity.get(key)==runtime.get(key) and str(identity.get(key) or '')
           pid=int(runtime.get('pid') or 0); assert pid>0; os.kill(pid,0); assert now-int(runtime.get('timestamp') or 0)<=180
           assert portfolio.get('paper_only') is True and portfolio.get('authenticated_execution') is False and portfolio.get('killed') is False and float(portfolio.get('drawdown',1))<.15 and now-int(portfolio.get('timestamp') or 0)<=30
-          expected_strategy_budgets={'hard_arb','crypto_settlement_fair'}
+          expected_engine_budgets={'BTC_SETTLEMENT_ENGINE','STRUCTURAL_ARB_ENGINE'}
           expected_component_budgets={'professional_maker','fast_structural','crypto_informed_taker'}
-          strategy_budgets=allocation.get('strategy_budgets') or {}
+          engine_budgets=allocation.get('engine_budgets') or {}
           component_budgets=allocation.get('component_observation_budgets') or {}
-          assert allocation.get('schema')=='polymarket_v7_capital_allocation_v2' and allocation.get('paper_only') is True and allocation.get('authenticated_execution') is False and allocation.get('real_order_submission') is False and allocation.get('real_capital_at_risk') is False
-          assert float(allocation.get('account_starting_capital') or 0)==14000.0 and int(allocation.get('execution_strategy_count') or 0)==2 and set(strategy_budgets)==expected_strategy_budgets
-          assert strategy_budgets=={'hard_arb':2000.0,'crypto_settlement_fair':4000.0} and abs(float(allocation.get('strategy_budget_sum') or 0)-6000.0)<=1e-9
+          assert allocation.get('schema')=='polymarket_v7_capital_allocation_v3' and allocation.get('paper_only') is True and allocation.get('authenticated_execution') is False and allocation.get('real_order_submission') is False and allocation.get('real_capital_at_risk') is False
+          assert allocation.get('capital_authority_owner')=='V7_CANONICAL_ALLOCATOR' and int(allocation.get('capital_authority_owner_count') or 0)==1
+          assert float(allocation.get('account_starting_capital') or 0)==14000.0 and int(allocation.get('engine_count') or 0)==2 and set(engine_budgets)==expected_engine_budgets
+          assert engine_budgets=={'BTC_SETTLEMENT_ENGINE':4000.0,'STRUCTURAL_ARB_ENGINE':2000.0} and abs(float(allocation.get('engine_budget_sum') or 0)-6000.0)<=1e-9
           assert set(component_budgets)==expected_component_budgets and component_budgets=={'professional_maker':2000.0,'fast_structural':2000.0,'crypto_informed_taker':0.0}
-          assert abs(float(allocation.get('component_observation_budget_sum') or 0)-4000.0)<=1e-9
-          assert allocation.get('research_strategy_budgets')=={} and allocation.get('research_has_capital') is False and abs(float((allocation.get('budgets') or {}).get('reserve') or 0)-4000.0)<=1e-9
+          assert allocation.get('component_observation_budgets_are_capital') is False
+          assert allocation.get('research_budgets')=={} and allocation.get('research_has_capital') is False and abs(float(allocation.get('reserve_budget') or 0)-8000.0)<=1e-9
           assert evidence_allocator.get('schema')=='polymarket_v7_evidence_capital_allocator_v1' and evidence_allocator.get('paper_only') is True and evidence_allocator.get('authenticated_execution') is False and evidence_allocator.get('real_order_submission') is False and evidence_allocator.get('automatic_transfer') is False
           assert fee_reward.get('schema')=='polymarket_v7_fee_reward_registry_v1' and fee_reward.get('model_sha')==sha and fee_reward.get('paper_only') is True and fee_reward.get('authenticated_execution') is False and fee_reward.get('real_order_submission') is False
           assert fee_reward.get('unknown_fee_policy')=='NON_EXECUTABLE' and fee_reward.get('unknown_reward_policy')=='ZERO_EXPECTED_VALUE' and int(fee_reward.get('executable_market_count') or 0)>0
@@ -203,7 +204,7 @@ jobs:
           tape=root/'trade_tape.csv'; assert tape.is_file()
           with tape.open(newline='',encoding='utf-8') as h: rows=list(csv.DictReader(h))
           assert rows and max(int(float(r.get('received_ms') or 0)) for r in rows)>0
-          print(json.dumps({'runtime_sha':sha,'pid':pid,'research_pid':research_pid,'live_model_target':len(target),'research_shadow_attached':len(families),'research_evidence_states':{name:row.get('evidence_state') for name,row in sorted(families.items())},'account_starting_capital':portfolio.get('account_starting_capital'),'strategy_budgets':strategy_budgets,'drawdown':portfolio.get('drawdown'),'economic_state':economics.get('state'),'promotion_ready':economics.get('promotion_ready'),'submitted_units':economics.get('submitted_units'),'complete_units':economics.get('complete_units'),'net_pnl':economics.get('net_pnl'),'stressed_net_pnl':economics.get('stressed_net_pnl')},sort_keys=True))
+          print(json.dumps({'runtime_sha':sha,'pid':pid,'research_pid':research_pid,'live_model_target':len(target),'research_shadow_attached':len(families),'research_evidence_states':{name:row.get('evidence_state') for name,row in sorted(families.items())},'account_starting_capital':portfolio.get('account_starting_capital'),'engine_budgets':engine_budgets,'drawdown':portfolio.get('drawdown'),'economic_state':economics.get('state'),'promotion_ready':economics.get('promotion_ready'),'submitted_units':economics.get('submitted_units'),'complete_units':economics.get('complete_units'),'net_pnl':economics.get('net_pnl'),'stressed_net_pnl':economics.get('stressed_net_pnl')},sort_keys=True))
           PY
           curl -fsS http://127.0.0.1:9108/healthz
           metrics="$(curl -fsS http://127.0.0.1:9108/metrics)"

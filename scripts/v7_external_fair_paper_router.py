@@ -601,8 +601,12 @@ class PaperRouter:
         self.durable_counterfactual_path = self.durable_directory / "counterfactuals.jsonl"
         self.drain_path = run_root / "control" / "CUTOVER_DRAIN"
         allocation = load(run_root / "control" / "allocations" / "manifest.json")
-        budgets = allocation.get("budgets") if isinstance(allocation.get("budgets"), dict) else {}
-        starting_capital = max(1.0, finite(budgets.get("external"), 4000.0))
+        budgets = allocation.get("engine_budgets") if isinstance(
+            allocation.get("engine_budgets"), dict
+        ) else {}
+        starting_capital = max(
+            1.0, finite(budgets.get("BTC_SETTLEMENT_ENGINE"), 4000.0),
+        )
         self.state: dict[str, Any] = {
             "model_sha": model_sha, "starting_capital": starting_capital,
             "cash": starting_capital, "orders": 0, "fills": 0,

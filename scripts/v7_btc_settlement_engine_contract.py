@@ -167,37 +167,31 @@ def validate_registry_authority(
         raise ContractError("strategy_registry_partition")
     engines = registry.get("economic_engines") if isinstance(
         registry.get("economic_engines"), dict) else {}
-    expected_owners = {
-        "BTC_SETTLEMENT_ENGINE": "crypto_settlement_fair",
-        "STRUCTURAL_ARB_ENGINE": "hard_arb",
-    }
-    for name, owner in expected_owners.items():
+    expected_owners = {"BTC_SETTLEMENT_ENGINE", "STRUCTURAL_ARB_ENGINE"}
+    for name in expected_owners:
         engine = engines.get(name) if isinstance(engines.get(name), dict) else {}
         if (
-            engine.get("authority_owner") != owner
+            engine.get("authority_owner") != name
             or engine.get("component_independent_authority") is not False
-            or authorities.get(owner) != "PAPER"
         ):
             raise ContractError(f"economic_engine_authority:{name}")
     if set(engines["BTC_SETTLEMENT_ENGINE"].get("components") or []) != {
-        "professional_maker", "crypto_informed_taker",
+        "crypto_settlement_fair", "professional_maker", "crypto_informed_taker",
     }:
         raise ContractError("btc_engine_registry_components")
     if set(engines["STRUCTURAL_ARB_ENGINE"].get("components") or []) != {
-        "fast_structural",
+        "hard_arb", "fast_structural",
     }:
         raise ContractError("structural_engine_registry_components")
     independent_paper = {
         family for family, authority in authorities.items() if authority == "PAPER"
     }
-    if independent_paper != set(expected_owners.values()):
-        raise ContractError("independent_paper_authority_not_two_engines")
+    if independent_paper:
+        raise ContractError("component_has_independent_paper_authority")
     component_families = set(config["component_families"])
-    component_families.remove("crypto_settlement_fair")
     component_families.update(
         config["structural_arb_engine"]["component_families"]
     )
-    component_families.remove("hard_arb")
     if any(authorities.get(family) not in {"SHADOW", "RESEARCH"}
            for family in component_families):
         raise ContractError("component_has_independent_authority")
@@ -214,12 +208,13 @@ def validate_live_scope(config: dict[str, Any], scope: dict[str, Any]) -> None:
         or scope.get("real_order_submission") is not False
     ):
         raise ContractError("live_scope_identity_or_safety")
-    if set(scope.get("paper_execution_families") or []) != {
-        "crypto_settlement_fair", "hard_arb",
+    if set(scope.get("paper_execution_engines") or []) != {
+        "BTC_SETTLEMENT_ENGINE", "STRUCTURAL_ARB_ENGINE",
     }:
         raise ContractError("live_scope_must_have_two_economic_owners")
     if set(scope.get("component_shadow_families") or []) != {
-        "professional_maker", "crypto_informed_taker", "fast_structural",
+        "crypto_settlement_fair", "professional_maker", "crypto_informed_taker",
+        "hard_arb", "fast_structural",
     }:
         raise ContractError("live_scope_component_shadows")
     if set(scope.get("research_zero_authority_families") or []) != set(
