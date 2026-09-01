@@ -23,17 +23,28 @@ class V7FastAuthoritySentinelContractTest(unittest.TestCase):
         self.assertFalse(auth["fixed_dollar_trade_cap_enabled"])
         self.assertEqual(auth["max_drawdown"], 0.15)
 
-    def test_unbounded_config_value_is_not_spendable_notional(self) -> None:
-        source = (ROOT / "src" / "fast_runtime" / "part4.inc").read_text(encoding="utf-8")
+    def test_detector_uses_only_zero_authority_observation_scope(self) -> None:
+        source = "\n".join(
+            (ROOT / "src" / "fast_runtime" / name).read_text(encoding="utf-8")
+            for name in ("part1.inc", "part4.inc")
+        )
         for token in (
-            "capital_fraction_ceiling",
-            "config.starting_capital * capital_fraction_ceiling",
-            "policy.max_notional_usd > capital_ceiling",
-            "policy.max_notional_usd = capital_ceiling",
-            "invalid PAPER capital ceiling for Fast Structural",
+            '"COMPONENT_OBSERVATION"',
+            '"STRUCTURAL_ARB_ENGINE"',
+            '"observation_budget_is_capital"',
+            '"independent_capital_authority"',
+            '"independent_oms_authority"',
+            '"independent_ledger_authority"',
+            "result.execution_budget != 0.0",
+            "config.starting_capital != 0.0",
+            "observation_scope.observation_budget * observation_fraction_ceiling",
+            "policy.max_notional_usd > observation_ceiling",
+            "policy.max_notional_usd = observation_ceiling",
         ):
             with self.subTest(token=token):
                 self.assertIn(token, source)
+        self.assertNotIn("config.starting_capital * capital_fraction_ceiling", source)
+        self.assertNotIn("invalid PAPER capital ceiling for Fast Structural", source)
 
     def test_deleted_fast_shadow_surfaces_stay_deleted(self) -> None:
         for rel in (

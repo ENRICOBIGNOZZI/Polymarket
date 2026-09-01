@@ -62,20 +62,35 @@ int main(int argc, char** argv) {
         if (options.external_signals.empty()) options.external_signals = config.external_signals_file;
         auto policy = load_policy(options.policy);
 
+        // Fast Structural is a detector/planner component, not an account. Its
+        // materialized child allocation must therefore carry zero execution
+        // capital and an explicitly non-capital observation budget. Candidate
+        // sizing is bounded by that observation budget, while every emitted
+        // opportunity remains action=NOTHING and can only be consumed by the
+        // single global coordinator.
+        const auto observation_scope =
+            load_fast_structural_observation_scope(options.config);
+        if (!std::isfinite(config.starting_capital) || config.starting_capital != 0.0 ||
+            config.starting_capital != observation_scope.execution_budget) {
+            throw std::runtime_error(
+                "Fast Structural component must have zero execution capital");
+        }
+
         // V7 interprets the disabled fixed-dollar cap as metadata, not spendable
-        // notional. PAPER sizing remains bounded by sleeve capital and the
-        // binding market/event/gross percentage ceilings.
-        const double capital_fraction_ceiling = std::clamp(
+        // notional. Proposal sizing remains bounded by the explicitly
+        // non-capital observation budget and the market/event/gross fractions.
+        const double observation_fraction_ceiling = std::clamp(
             std::min({config.max_market_fraction, config.max_event_fraction,
                       config.max_gross_fraction}),
             0.0, 1.0);
-        const double capital_ceiling = config.starting_capital * capital_fraction_ceiling;
-        if (!std::isfinite(capital_ceiling) || capital_ceiling <= 0.0) {
-            throw std::runtime_error("invalid PAPER capital ceiling for Fast Structural");
+        const double observation_ceiling =
+            observation_scope.observation_budget * observation_fraction_ceiling;
+        if (!std::isfinite(observation_ceiling) || observation_ceiling <= 0.0) {
+            throw std::runtime_error("invalid Fast Structural observation ceiling");
         }
         if (!std::isfinite(policy.max_notional_usd) ||
-            policy.max_notional_usd > capital_ceiling) {
-            policy.max_notional_usd = capital_ceiling;
+            policy.max_notional_usd > observation_ceiling) {
+            policy.max_notional_usd = observation_ceiling;
         }
 
         FastRuntime runtime(std::move(config), policy, options);

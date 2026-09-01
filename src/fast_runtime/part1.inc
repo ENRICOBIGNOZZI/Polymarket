@@ -110,6 +110,11 @@ double get_number(const json::object& object, const char* key, double fallback =
     return it == object.end() ? fallback : number(it->value(), fallback);
 }
 
+bool get_boolean(const json::object& object, const char* key, bool fallback = false) {
+    const auto it = object.find(key);
+    return it == object.end() ? fallback : boolean(it->value(), fallback);
+}
+
 std::int64_t get_integer(const json::object& object, const char* key,
                          std::int64_t fallback = 0) {
     const auto it = object.find(key);
@@ -217,6 +222,60 @@ bool identity_hash(const std::string& value) {
            std::all_of(value.begin(), value.end(), [](unsigned char c) {
                return std::isdigit(c) || (c >= 'a' && c <= 'f');
            });
+}
+
+struct FastStructuralObservationScope {
+    double execution_budget = 0.0;
+    double observation_budget = 0.0;
+};
+
+FastStructuralObservationScope load_fast_structural_observation_scope(
+    const std::string& path) {
+    std::ifstream input(path);
+    if (!input) throw std::runtime_error("cannot open Fast Structural allocation: " + path);
+    std::stringstream buffer;
+    buffer << input.rdbuf();
+    const auto root = json::parse(buffer.str());
+    if (!root.is_object()) {
+        throw std::runtime_error("Fast Structural allocation must be a JSON object");
+    }
+    const auto& object = root.as_object();
+    if (!get_boolean(object, "paper_only", false) ||
+        get_boolean(object, "authenticated_execution", true) ||
+        get_boolean(object, "real_order_submission", true)) {
+        throw std::runtime_error("Fast Structural allocation violates PAPER safety");
+    }
+    const auto scope_it = object.find("capital_scope");
+    if (scope_it == object.end() || !scope_it->value().is_object()) {
+        throw std::runtime_error("Fast Structural allocation scope missing");
+    }
+    const auto& scope = scope_it->value().as_object();
+    const FastStructuralObservationScope result{
+        get_number(scope, "execution_budget", -1.0),
+        get_number(scope, "observation_budget", -1.0),
+    };
+    const bool identity_valid =
+        get_text(scope, "schema") == "polymarket_v7_capital_scope_v3" &&
+        get_text(scope, "allocator_owner") == "V7_CANONICAL_ALLOCATOR" &&
+        get_text(scope, "view_id") == "fast_structural" &&
+        get_text(scope, "scope_class") == "COMPONENT_OBSERVATION" &&
+        get_text(scope, "engine_id") == "STRUCTURAL_ARB_ENGINE" &&
+        get_text(scope, "component") == "fast_structural" &&
+        get_text(scope, "canonical_replacement") == "structural_arb_engine.json";
+    const bool authority_absent =
+        !get_boolean(scope, "observation_budget_is_capital", true) &&
+        !get_boolean(scope, "independent_capital_authority", true) &&
+        !get_boolean(scope, "independent_risk_authority", true) &&
+        !get_boolean(scope, "independent_oms_authority", true) &&
+        !get_boolean(scope, "independent_inventory_authority", true) &&
+        !get_boolean(scope, "independent_ledger_authority", true) &&
+        get_boolean(scope, "double_counting_forbidden", false);
+    if (!identity_valid || !authority_absent ||
+        !std::isfinite(result.execution_budget) || result.execution_budget != 0.0 ||
+        !std::isfinite(result.observation_budget) || result.observation_budget <= 0.0) {
+        throw std::runtime_error("invalid zero-authority Fast Structural observation scope");
+    }
+    return result;
 }
 
 pm::fast::Policy load_policy(const std::string& path) {
