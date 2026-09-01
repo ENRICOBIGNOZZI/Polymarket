@@ -140,5 +140,20 @@ int main() {
         assert(raw_snapshot.evidence_valid == 1);
     }
     std::filesystem::remove(burst_raw_path);
+
+    const auto deribit_burst_raw_path = std::filesystem::temp_directory_path() / "pm_v7_external_deribit_burst_raw_tape_test.bin";
+    std::filesystem::remove(deribit_burst_raw_path);
+    {
+        ExternalRawTapeRecorder raw_recorder(
+            deribit_burst_raw_path, sha, "run-deribit-burst-raw", "session-deribit-burst-raw", "deribit", 1'000'005);
+        const std::string deribit_catchup_batch((kExternalRawTapePayloadBytes + 64U), 'x');
+        assert(raw_recorder.try_record_raw(VenueId::Deribit, 6, 150, 1'050,
+                                            deribit_catchup_batch));
+        const auto raw_snapshot = raw_recorder.snapshot();
+        assert(raw_snapshot.accepted == 1);
+        assert(raw_snapshot.dropped == 0);
+        assert(raw_snapshot.evidence_valid == 1);
+    }
+    std::filesystem::remove(deribit_burst_raw_path);
     return 0;
 }

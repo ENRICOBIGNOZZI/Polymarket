@@ -24,10 +24,10 @@ inline constexpr std::size_t kExternalTapePayloadBytes = 512;
 inline constexpr std::size_t kExternalTapeQueueCapacity = 4096;
 inline constexpr std::size_t kExternalRawTapePayloadBytes = 32 * 1024;
 inline constexpr std::size_t kExternalRawTapeQueueCapacity = 256;
-// Bybit's linear multiplexed subscription can emit a transiently larger
-// public-trade/liquidation batch during volatile periods.  It gets a bounded
-// source-specific FIFO so that those raw frames are captured without making
-// every venue pay the memory cost.
+// Bybit linear's multiplexed subscription and Deribit's catch-up batches can
+// each emit a transiently larger public frame. They use a bounded
+// source-specific FIFO so those frames are captured without making every
+// venue pay the memory cost.
 inline constexpr std::size_t kExternalBurstRawTapePayloadBytes = 64 * 1024;
 inline constexpr std::size_t kExternalBurstRawTapeQueueCapacity = 512;
 // Coinbase's complete BTC-USD L2 recovery snapshot can exceed 1 MiB. Its raw
