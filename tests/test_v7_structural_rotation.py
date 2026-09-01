@@ -4,7 +4,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "scripts"))
 
-from v7_graph_rv_intents import rotating_events, structural_scan_budget
+from v7_graph_rv_intents import parse_book, rotating_events, structural_scan_budget
 from v7_hard_arb_guard import rotating_window
 
 
@@ -29,3 +29,18 @@ def test_graph_rotation_and_budget_are_resource_based():
     assert len(first) == len(second) == budget
     assert cursor != next_cursor
     assert set(first) | set(second) == set(values)
+
+
+def test_graph_research_book_requires_causal_exchange_clock():
+    receive_ms = 1_800_000_000_000
+    raw = {
+        "asset_id": "token-1",
+        "bids": [{"price": "0.49", "size": "10"}],
+        "asks": [{"price": "0.51", "size": "10"}],
+        "hash": "snapshot-1",
+    }
+    assert parse_book(raw, receive_ms) is None
+    raw["timestamp"] = receive_ms - 1000
+    assert parse_book(raw, receive_ms) is not None
+    raw["timestamp"] = receive_ms + 1000
+    assert parse_book(raw, receive_ms) is None

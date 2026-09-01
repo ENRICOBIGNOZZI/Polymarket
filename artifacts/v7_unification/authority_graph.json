@@ -44,7 +44,7 @@
     }
   },
   "edge_registry": "config/v7_authority_edges.json",
-  "known_migration_defect_count": 9,
+  "known_migration_defect_count": 6,
   "known_migration_defects": [
     {
       "canonical_replacement": "BTC_SETTLEMENT_ENGINE_TO_V7_GLOBAL_PORTFOLIO_COORDINATOR",
@@ -61,32 +61,11 @@
       "source": "scripts/v7_fast_structural_paper_executor.py"
     },
     {
-      "canonical_replacement": "ZERO_AUTHORITY_RESEARCH_ARTIFACT_STORE",
-      "reason": "research cost annotation currently writes the canonical spool and must be redirected to research evidence",
-      "runtime_reachability": "LAUNCHED_PERIODICALLY",
-      "severity": "P0_RESEARCH_AUTHORITY",
-      "source": "scripts/v7_graph_cost_vector.py"
-    },
-    {
-      "canonical_replacement": "ZERO_AUTHORITY_RESEARCH_ARTIFACT_STORE",
-      "reason": "standalone research module retains a PAPER spool path",
-      "runtime_reachability": "NOT_LAUNCHED_BUT_STANDALONE_REACHABLE",
-      "severity": "P0_BYPASS",
-      "source": "scripts/v7_graph_rv.py"
-    },
-    {
       "canonical_replacement": "STRUCTURAL_ARB_ENGINE_TO_V7_GLOBAL_PORTFOLIO_COORDINATOR",
       "reason": "compatibility worker is disabled by launcher sizing but retains independent PAPER lifecycle code",
       "runtime_reachability": "LAUNCHED_WITH_ZERO_MARKET_BUDGET",
       "severity": "P0_BYPASS",
       "source": "scripts/v7_hard_arb_guard.py"
-    },
-    {
-      "canonical_replacement": "ZERO_AUTHORITY_RESEARCH_ARTIFACT_STORE",
-      "reason": "active launcher is research-only, but the standalone CLI retains a PAPER spool path",
-      "runtime_reachability": "LAUNCHED_WITH_RESEARCH_ONLY_FLAG",
-      "severity": "P0_BYPASS",
-      "source": "scripts/v7_micro_taker_worker.py"
     },
     {
       "canonical_replacement": "STRUCTURAL_ARB_ENGINE_TO_V7_GLOBAL_PORTFOLIO_COORDINATOR",
@@ -138,7 +117,7 @@
   "real_capital_at_risk": false,
   "real_order_submission": false,
   "schema": "polymarket_v7_authority_reachability_audit_v2",
-  "source_snapshot_sha": "1ec82a1e1afb443175b5d8bc27e24325cf644e86",
+  "source_snapshot_sha": "37c6ad9fbb273f5afdac69c2a270020d89e265d8",
   "static_ledger_transport_edges": [
     {
       "authority_mode": "DRAIN_AND_ARCHIVE",
@@ -177,24 +156,6 @@
       "source": "scripts/v7_finalize_maker_cutover.py"
     },
     {
-      "authority_mode": "CANONICAL_LEDGER_ANNOTATION",
-      "canonical_replacement": "ZERO_AUTHORITY_RESEARCH_ARTIFACT_STORE",
-      "classification": "KEEP_ZERO_AUTHORITY_RESEARCH",
-      "reason": "research cost annotation currently writes the canonical spool and must be redirected to research evidence",
-      "runtime_reachability": "LAUNCHED_PERIODICALLY",
-      "severity": "P0_RESEARCH_AUTHORITY",
-      "source": "scripts/v7_graph_cost_vector.py"
-    },
-    {
-      "authority_mode": "DORMANT_PAPER_LEDGER_PATH",
-      "canonical_replacement": "ZERO_AUTHORITY_RESEARCH_ARTIFACT_STORE",
-      "classification": "KEEP_ZERO_AUTHORITY_RESEARCH",
-      "reason": "standalone research module retains a PAPER spool path",
-      "runtime_reachability": "NOT_LAUNCHED_BUT_STANDALONE_REACHABLE",
-      "severity": "P0_BYPASS",
-      "source": "scripts/v7_graph_rv.py"
-    },
-    {
       "authority_mode": "DORMANT_PAPER_LEDGER_PATH",
       "canonical_replacement": "STRUCTURAL_ARB_ENGINE_TO_V7_GLOBAL_PORTFOLIO_COORDINATOR",
       "classification": "KEEP_TEMPORARY_COMPATIBILITY",
@@ -211,15 +172,6 @@
       "runtime_reachability": "CANONICAL_RUNTIME",
       "severity": "CONTROLLED",
       "source": "scripts/v7_ledger_spool.py"
-    },
-    {
-      "authority_mode": "RESEARCH_MODE_WITH_DORMANT_PAPER_LEDGER_PATH",
-      "canonical_replacement": "ZERO_AUTHORITY_RESEARCH_ARTIFACT_STORE",
-      "classification": "KEEP_ZERO_AUTHORITY_RESEARCH",
-      "reason": "active launcher is research-only, but the standalone CLI retains a PAPER spool path",
-      "runtime_reachability": "LAUNCHED_WITH_RESEARCH_ONLY_FLAG",
-      "severity": "P0_BYPASS",
-      "source": "scripts/v7_micro_taker_worker.py"
     },
     {
       "authority_mode": "EMPTY_SPOOL_PRECONDITION",

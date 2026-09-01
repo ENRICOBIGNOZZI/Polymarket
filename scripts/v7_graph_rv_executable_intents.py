@@ -8,9 +8,8 @@ import time
 from pathlib import Path
 from typing import Any
 
-from v7_graph_rv_intents import FIELDS, atomic_csv, books, discover, parse_market, rotating_events, structural_scan_budget
+from v7_graph_rv_intents import Book, FIELDS, atomic_csv, books, discover, parse_market, rotating_events, structural_scan_budget
 from v7_market_common import fee_per_share, request_json, resolve_fee_details
-from v7_graph_rv import Book
 from v7_shared_market_state import load_snapshot
 
 

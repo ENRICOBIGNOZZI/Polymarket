@@ -217,6 +217,10 @@ assert fillability_arena >= 16*1024*1024
 assert maker_arena*max_shards + observer_arena + fillability_arena <= total_budget
 PY
 
+python3 scripts/v7_research_data_plane_contract.py \
+  --repository-root "$ROOT" \
+  > "$CONTROL/research_data_plane_contract.json"
+
 # Freeze the horizon/authority contract even during execution-evidence cold
 # start. With no empirical ACK/cancel profile supplied, the resulting snapshot
 # deliberately authorizes CANCEL/NOTHING only.
@@ -812,8 +816,7 @@ pids+=("$!")
       --shared-state "$RUN_ROOT/market_data/shared_state.json" --model-sha "$SHA" \
       --live-flow "$RUN_ROOT/market_data/live_trade_flow.json" \
       --trade-tape "$RUN_ROOT/trade_tape.csv" --markets "$ACTIVE_SCAN_MARKET_BUDGET" --min-liquidity 2 \
-      --horizon-seconds 30 --max-trade-usd 0 --min-edge 0.001 --slippage-bps 5 \
-      --research-only \
+      --horizon-seconds 30 --max-probe-usd 125 --min-edge 0.001 --slippage-bps 5 \
       >> "$RUN_ROOT/micro_taker/runtime.log" 2>&1 || true
     sleep 5
   done

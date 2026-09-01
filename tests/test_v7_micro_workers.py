@@ -55,7 +55,7 @@ def test_maker_uses_canonical_cpp_runtime_and_fill_conditioned_research_core():
     assert 'fs::exists(maker_freeze_path) || fs::exists(cutover_drain_path)' in runtime
 
 
-def test_taker_uses_complete_round_trip_contract():
+def test_micro_taker_is_zero_authority_round_trip_research():
     text = (ROOT / "scripts/v7_micro_taker_worker.py").read_text(encoding="utf-8")
     assert "complete_round_trip_executable_ev" in text
     assert "expected_exit_price" in text
@@ -64,50 +64,43 @@ def test_taker_uses_complete_round_trip_contract():
     assert "capital_cost_bps_per_hour" in text
     assert "full_visible_depth_entry_and_forecast_shifted_exit_vwap" in text
     assert "v7_shared_market_state" in text
-    assert 'event_type="CANDIDATE"' in text
-    assert 'event_type="ORDER_SUBMITTED"' in text
-    assert 'event_type="FILL"' in text
-    assert 'event_type="MARKOUT"' in text
-    assert 'event_type="FINAL"' in text
-    assert "spool_event" in text
+    assert "spool_event" not in text
+    assert "LedgerEvent" not in text
+    assert "v7_execution_ledger" not in text
+    assert "--research-only" not in text
+    assert "--max-probe-usd" in text
     assert '"schema": "polymarket_v7_micro_taker_status_v1"' in text
     assert '"model_sha": args.model_sha' in text
     assert '"real_order_submission": False' in text
     loop = (ROOT / "scripts/paper_v7_execution_loop.sh").read_text(encoding="utf-8")
-    assert "--research-only" in loop
-    assert '"RESEARCH_ONLY_ZERO_AUTHORITY" if args.research_only' in text
+    assert "--max-probe-usd" in loop
+    assert '"execution_authority": "RESEARCH_ONLY_ZERO_AUTHORITY"' in text
+    for authority in (
+        "capital_authority", "oms_authority", "inventory_authority",
+        "ledger_writer_authority", "order_authority", "promotion_authority",
+    ):
+        assert f'"{authority}": False' in text
     assert '"atomic_book_pairs": book_pair_count' in text
     assert '"missing_book_pairs": missing_book_pair_count' in text
     assert '"feature_ready_markets": len(current)' in text
 
 
-def test_taker_freezes_new_risk_when_open_positions_are_unmarkable():
+def test_micro_taker_cannot_restore_inventory_or_publish_orders():
     text = (ROOT / "scripts/v7_micro_taker_worker.py").read_text(encoding="utf-8")
     assert "full_depth_executable_bid_net_fee_or_zero_fail_closed" in text
-    assert '"reason": "missing_current_snapshot"' in text
-    assert '"reason": "insufficient_exit_depth"' in text
-    assert '"reason": "missing_authoritative_fee"' in text
-    assert "new_risk_frozen = bool(unmarkable_positions)" in text
-    assert "and not killed" in text
-    assert "and not new_risk_frozen" in text
-    assert "and model_valid" in text
+    assert "model_valid\n        and flow_valid" in text
     assert "and flow_valid" in text
     assert '"DEGENERATE_ZERO_TARGET_VARIANCE"' in text
     assert '"duplicate_snapshots_rejected_last_tick"' in text
-    assert '"new_risk_frozen": new_risk_frozen' in text
-    assert '"unmarkable_positions": unmarkable_positions' in text
-    assert "marking_complete = not unmarkable_positions" in text
-    assert "marking_complete and drawdown >= max_drawdown" in text
-    assert '"micro_taker_immature_max_market_fraction"' in text
-    assert '"market_capital_ceiling": start_capital * max_market_fraction' in text
+    assert "zero_authority_research_refuses_prior_paper_positions" in text
+    assert '"inventory_state_created": False' in text
     assert '(args.run_dir.parent / "control" / "CUTOVER_DRAIN").exists()' in text
-    assert "or drain_requested" in text
-    assert '"drain_complete": drain_requested and not positions' in text
-    assert 'value += float(position["shares"]) * float(position["entry_price"])' not in text
+    assert '"drain_complete": True' in text
+    assert "append_fill" not in text
 
 
 if __name__ == "__main__":
     test_maker_uses_canonical_cpp_runtime_and_fill_conditioned_research_core()
-    test_taker_uses_complete_round_trip_contract()
-    test_taker_freezes_new_risk_when_open_positions_are_unmarkable()
+    test_micro_taker_is_zero_authority_round_trip_research()
+    test_micro_taker_cannot_restore_inventory_or_publish_orders()
     print("ok 3 v7 micro worker tests")

@@ -43,24 +43,6 @@
       "canonical_replacement": "V7_OPERATOR_EXACT_SHA_PROMOTION"
     },
     {
-      "source": "scripts/v7_graph_cost_vector.py",
-      "classification": "KEEP_ZERO_AUTHORITY_RESEARCH",
-      "runtime_reachability": "LAUNCHED_PERIODICALLY",
-      "authority_mode": "CANONICAL_LEDGER_ANNOTATION",
-      "severity": "P0_RESEARCH_AUTHORITY",
-      "reason": "research cost annotation currently writes the canonical spool and must be redirected to research evidence",
-      "canonical_replacement": "ZERO_AUTHORITY_RESEARCH_ARTIFACT_STORE"
-    },
-    {
-      "source": "scripts/v7_graph_rv.py",
-      "classification": "KEEP_ZERO_AUTHORITY_RESEARCH",
-      "runtime_reachability": "NOT_LAUNCHED_BUT_STANDALONE_REACHABLE",
-      "authority_mode": "DORMANT_PAPER_LEDGER_PATH",
-      "severity": "P0_BYPASS",
-      "reason": "standalone research module retains a PAPER spool path",
-      "canonical_replacement": "ZERO_AUTHORITY_RESEARCH_ARTIFACT_STORE"
-    },
-    {
       "source": "scripts/v7_hard_arb_guard.py",
       "classification": "KEEP_TEMPORARY_COMPATIBILITY",
       "runtime_reachability": "LAUNCHED_WITH_ZERO_MARKET_BUDGET",
@@ -77,15 +59,6 @@
       "severity": "CONTROLLED",
       "reason": "only this process drains producer events into the canonical append-only ledger",
       "canonical_replacement": "V7_CANONICAL_LEDGER"
-    },
-    {
-      "source": "scripts/v7_micro_taker_worker.py",
-      "classification": "KEEP_ZERO_AUTHORITY_RESEARCH",
-      "runtime_reachability": "LAUNCHED_WITH_RESEARCH_ONLY_FLAG",
-      "authority_mode": "RESEARCH_MODE_WITH_DORMANT_PAPER_LEDGER_PATH",
-      "severity": "P0_BYPASS",
-      "reason": "active launcher is research-only, but the standalone CLI retains a PAPER spool path",
-      "canonical_replacement": "ZERO_AUTHORITY_RESEARCH_ARTIFACT_STORE"
     },
     {
       "source": "scripts/v7_prepare_cutover_run_root.py",

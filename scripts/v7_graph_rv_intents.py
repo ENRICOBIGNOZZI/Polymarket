@@ -4,6 +4,7 @@ from __future__ import annotations
 import argparse
 import csv
 import datetime as dt
+import hashlib
 import json
 import math
 import os
@@ -13,10 +14,65 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from v7_graph_rv import Book, parse_book
 from v7_market_common import fee_per_share, finite, parse_array, request_json, resolve_fee_details
 
 FIELDS = ["bundle_id","strategy","event_id","created_ts","mode","expected_edge","max_notional","market_id","outcome","weight","limit_price","execution_deadline_ts","hold_deadline_ts"]
+
+
+def normalize_ts_ms(value: Any) -> int:
+    ts = finite(value, 0.0)
+    if not math.isfinite(ts) or ts <= 0:
+        return 0
+    return int(ts * 1000.0) if ts < 10_000_000_000 else int(ts)
+
+
+@dataclass(frozen=True)
+class Book:
+    token: str
+    bids: list[tuple[float, float]]
+    asks: list[tuple[float, float]]
+    tick: float
+    min_order: float
+    exchange_ts_ms: int
+    receive_ts_ms: int
+    snapshot_id: str
+
+    @property
+    def bid(self) -> float:
+        return self.bids[0][0]
+
+    @property
+    def ask(self) -> float:
+        return self.asks[0][0]
+
+
+def parse_book(raw: dict[str, Any], received_ms: int) -> Book | None:
+    token = str(raw.get("asset_id") or "")
+    bids: list[tuple[float, float]] = []
+    asks: list[tuple[float, float]] = []
+    for key, output in (("bids", bids), ("asks", asks)):
+        for row in raw.get(key, []):
+            if not isinstance(row, dict):
+                continue
+            price = finite(row.get("price"))
+            quantity = max(0.0, finite(row.get("size"), 0.0))
+            if math.isfinite(price) and 0.0 < price < 1.0 and quantity > 0.0:
+                output.append((price, quantity))
+    bids.sort(reverse=True)
+    asks.sort()
+    exchange = normalize_ts_ms(raw.get("timestamp"))
+    if not token or not bids or not asks or exchange <= 0 or exchange > received_ms:
+        return None
+    snapshot = str(raw.get("hash") or "").strip()
+    if not snapshot:
+        snapshot = hashlib.sha256(
+            f"{token}|{exchange}|{bids}|{asks}".encode()).hexdigest()[:32]
+    return Book(
+        token, bids, asks,
+        max(1e-6, finite(raw.get("tick_size"), 0.01)),
+        max(1.0, finite(raw.get("min_order_size"), 1.0)),
+        exchange, received_ms, snapshot,
+    )
 
 
 def parse_ts(value: Any) -> int:

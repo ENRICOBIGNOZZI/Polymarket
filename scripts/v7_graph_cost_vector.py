@@ -1,21 +1,20 @@
 #!/usr/bin/env python3
-"""Derive the explicit Graph/RV slippage component from canonical PAPER events.
+"""Derive Graph/RV slippage evidence from historical canonical PAPER events.
 
-Graph records effective execution prices.  This annotator reconstructs the
-configured slippage component without changing realized cashflows/PnL and emits
-one canonical EXIT cost annotation per terminal bundle.  Fees remain on FILL /
-FINAL records; unwind, capital and latency remain on FINAL.  The annotation only
-sets ``cost_vector_complete`` after all terminal components are observable.
+This is a zero-authority research reader. It reconstructs the configured
+slippage component without changing realized cashflows/PnL and writes a
+standalone evidence artifact. It cannot write the ledger transport.
 """
 from __future__ import annotations
 
 import argparse
 from collections import defaultdict
+import json
+import os
 from pathlib import Path
 from typing import Any
 
-from v7_execution_ledger import LedgerEvent, iter_events
-from v7_ledger_spool import spool_event
+from v7_execution_ledger import iter_events
 
 STRATEGY = "GRAPH_RV"
 
@@ -34,7 +33,14 @@ def slippage_cost_from_effective_sell_cashflow(cashflow: float, slip: float) -> 
     return max(0.0, raw - cashflow)
 
 
-def annotate(run_root: Path, *, model_sha: str, slippage_bps: float) -> dict[str, int]:
+def atomic_json(path: Path, value: Any) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temporary = path.with_name(f"{path.name}.tmp.{os.getpid()}")
+    temporary.write_text(json.dumps(value, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    os.replace(temporary, path)
+
+
+def annotate(run_root: Path, *, model_sha: str, slippage_bps: float) -> dict[str, Any]:
     ledger_path = Path(run_root) / "ledger" / "execution.jsonl"
     slip = max(0.0, float(slippage_bps)) / 10000.0
     actions: dict[str, str] = {}
@@ -44,7 +50,19 @@ def annotate(run_root: Path, *, model_sha: str, slippage_bps: float) -> dict[str
     try:
         events = list(iter_events(ledger_path, expected_model_sha=model_sha))
     except (OSError, ValueError):
-        return {"terminal_bundles": 0, "annotations_spooled": 0}
+        return {
+            "schema": "polymarket_v7_graph_cost_research_v1",
+            "model_sha": model_sha,
+            "research_only": True,
+            "capital_authority": False,
+            "oms_authority": False,
+            "inventory_authority": False,
+            "ledger_authority": False,
+            "order_authority": False,
+            "promotion_authority": False,
+            "terminal_bundles": 0,
+            "evidence_rows": [],
+        }
     for event in events:
         if event.strategy != STRATEGY or not event.bundle_id:
             continue
@@ -56,7 +74,7 @@ def annotate(run_root: Path, *, model_sha: str, slippage_bps: float) -> dict[str
             finals[event.bundle_id] = event
         elif event.event_type == "EXIT" and isinstance(event.metadata, dict) and event.metadata.get("graph_cost_annotation") is True:
             annotated.add(event.bundle_id)
-    spooled = 0
+    evidence_rows: list[dict[str, Any]] = []
     for bundle_id, final in finals.items():
         if bundle_id in annotated:
             continue
@@ -70,23 +88,27 @@ def annotate(run_root: Path, *, model_sha: str, slippage_bps: float) -> dict[str
         exit_slippage = 0.0
         if reason not in {"settled", "no_fill"}:
             exit_slippage = slippage_cost_from_effective_sell_cashflow(float(final.realized_cashflow or 0.0), slip)
-        spool_event(Path(run_root), LedgerEvent(
-            event_type="EXIT",
-            strategy=STRATEGY,
-            model_sha=model_sha,
-            bundle_id=bundle_id,
-            slippage=entry_slippage + exit_slippage,
-            metadata={
-                "graph_cost_annotation": True,
-                "cost_vector_complete": True,
-                "slippage_model": "configured_bps_reconstructed_from_effective_execution",
-                "entry_slippage": entry_slippage,
-                "exit_slippage": exit_slippage,
-                "terminal_record_id": final.record_id,
-            },
-        ))
-        spooled += 1
-    return {"terminal_bundles": len(finals), "annotations_spooled": spooled}
+        evidence_rows.append({
+            "bundle_id": bundle_id,
+            "slippage": entry_slippage + exit_slippage,
+            "slippage_model": "configured_bps_reconstructed_from_effective_execution",
+            "entry_slippage": entry_slippage,
+            "exit_slippage": exit_slippage,
+            "terminal_record_id": final.record_id,
+        })
+    return {
+        "schema": "polymarket_v7_graph_cost_research_v1",
+        "model_sha": model_sha,
+        "research_only": True,
+        "capital_authority": False,
+        "oms_authority": False,
+        "inventory_authority": False,
+        "ledger_authority": False,
+        "order_authority": False,
+        "promotion_authority": False,
+        "terminal_bundles": len(finals),
+        "evidence_rows": evidence_rows,
+    }
 
 
 def main() -> int:
@@ -94,8 +116,12 @@ def main() -> int:
     parser.add_argument("--run-root", type=Path, required=True)
     parser.add_argument("--model-sha", required=True)
     parser.add_argument("--slippage-bps", type=float, default=5.0)
+    parser.add_argument("--output", type=Path)
     args = parser.parse_args()
-    print(annotate(args.run_root, model_sha=args.model_sha, slippage_bps=args.slippage_bps))
+    result = annotate(args.run_root, model_sha=args.model_sha, slippage_bps=args.slippage_bps)
+    output = args.output or args.run_root / "research" / "evidence" / "graph_cost_vector.json"
+    atomic_json(output, result)
+    print({"terminal_bundles": result["terminal_bundles"], "evidence_rows": len(result["evidence_rows"])})
     return 0
 
 

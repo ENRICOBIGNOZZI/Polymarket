@@ -4,7 +4,6 @@ from __future__ import annotations
 import argparse
 import bisect
 import csv
-import hashlib
 import json
 import math
 import statistics
@@ -15,8 +14,6 @@ from typing import Any
 
 import v7_micro_taker_data as base
 import v7_micro_taker_core as economics
-from v7_execution_ledger import LedgerEvent
-from v7_ledger_spool import spool_event
 from v7_shared_market_state import SharedStateError
 from v7_micro_target import TARGET_SEMANTICS_VERSION
 
@@ -1423,24 +1420,8 @@ def conservative_marked_equity(
     return value, unmarkable
 
 
-def append_fill(run_dir: Path, **row: Any) -> None:
-    base.append_csv(
-        run_dir / "fills.csv",
-        ["timestamp", "market_id", "slug", "action", "side", "shares", "price", "fee", "pnl", "net_edge", "expected_exit_price"],
-        row,
-    )
-
-
-def stable_id(*parts: Any) -> str:
-    return hashlib.sha256("|".join(str(part) for part in parts).encode()).hexdigest()[:32]
-
-
-def emit(run_root: Path, event: LedgerEvent) -> None:
-    spool_event(run_root, event)
-
-
 def main() -> int:
-    parser = argparse.ArgumentParser(description="V7 fixed-horizon Micro Taker with causal flow and depth-aware round-trip admission")
+    parser = argparse.ArgumentParser(description="Zero-authority V7 Micro Taker causal research")
     parser.add_argument("--config", type=Path, required=True)
     parser.add_argument("--run-dir", type=Path, required=True)
     parser.add_argument("--trade-tape", type=Path)
@@ -1451,18 +1432,16 @@ def main() -> int:
     parser.add_argument("--min-liquidity", type=float, default=2.0)
     parser.add_argument("--horizon-seconds", type=int, default=30)
     parser.add_argument("--max-target-staleness-seconds", type=int, default=10)
-    parser.add_argument("--max-trade-usd", type=float, default=125.0)
+    parser.add_argument("--max-probe-usd", type=float, default=125.0)
     parser.add_argument("--min-edge", type=float, default=0.00005)
     parser.add_argument("--slippage-bps", type=float, default=5.0)
     parser.add_argument("--uncertainty-z", type=float, default=1.0)
     parser.add_argument("--adverse-markout-bps", type=float, default=2.0)
     parser.add_argument("--capital-cost-bps-per-hour", type=float, default=0.25)
     parser.add_argument("--max-book-age-seconds", type=int, default=5)
-    parser.add_argument("--max-positions", type=int, default=20)
     parser.add_argument("--shared-state", type=Path)
     parser.add_argument("--model-sha", required=True)
     parser.add_argument("--max-shared-publish-age-ms", type=int, default=2500)
-    parser.add_argument("--research-only", action="store_true")
     args = parser.parse_args()
 
     cfg = json.loads(args.config.read_text(encoding="utf-8"))
@@ -1475,17 +1454,7 @@ def main() -> int:
     ):
         raise SystemExit("PAPER-only authenticated-disabled config required")
     gamma, clob = str(cfg["gamma_url"]), str(cfg["clob_url"])
-    start_capital = float(cfg["starting_capital"])
-    max_drawdown = float(cfg.get("max_drawdown", 0.15))
-    v7 = cfg.get("v7") if isinstance(cfg.get("v7"), dict) else {}
-    # The online ridge is not promotion-mature. The sleeve allocation is a
-    # ceiling, not permission to concentrate it in one exploratory market.
-    max_market_fraction = min(
-        float(cfg.get("max_market_fraction", 0.05)),
-        max(0.0, float(v7.get("micro_taker_immature_max_market_fraction", 0.005))),
-    )
     args.run_dir.mkdir(parents=True, exist_ok=True)
-    run_root = args.run_dir.parent
     drain_requested = (args.run_dir.parent / "control" / "CUTOVER_DRAIN").exists()
     trade_tape = args.trade_tape or (args.run_dir.parent / "trade_tape.csv")
     state_path = args.run_dir / "state.json"
@@ -1496,7 +1465,6 @@ def main() -> int:
             dataset_restore = state["dataset_restore"]
     else:
         state = {
-            "cash": start_capital, "peak": start_capital, "killed": False,
             "positions": {}, "samples": [],
         }
         archived_dataset, archived_path = latest_compatible_archived_dataset(args.run_dir)
@@ -1533,13 +1501,10 @@ def main() -> int:
         }
         state["samples"] = []
         state.pop("model_challenger", None)
-    cash = base.finite(state.get("cash"), start_capital)
-    peak = max(start_capital, base.finite(state.get("peak"), start_capital))
     positions = state.get("positions") if isinstance(state.get("positions"), dict) else {}
-    if args.research_only and positions:
-        raise SystemExit("research_only_refuses_prior_paper_positions")
+    if positions:
+        raise SystemExit("zero_authority_research_refuses_prior_paper_positions")
     samples = state.get("samples") if isinstance(state.get("samples"), list) else []
-    realized_total = base.finite(state.get("realized_pnl_total"), 0.0)
     failures: list[str] = []
     discovered_market_count = 0
     fee_ready_market_count = 0
@@ -1687,128 +1652,31 @@ def main() -> int:
     # Entry uncertainty must come from untouched future observations, never
     # from residuals of the same rows used to fit either side head.
     sigma = validation_diagnostics.get("oos_residual_sigma") if model_valid else None
-    slip = max(0.0, args.slippage_bps) / 10000.0
-
-    realized_last_tick = 0.0
-    for market_id, position in list(positions.items()):
-        current_row = current.get(market_id)
-        if not current_row:
-            continue
-        market, yes, no, feature = current_row
-        side = str(position["side"])
-        book = yes if side == "YES" else no
-        shares = float(position["shares"])
-        bid_vwap = full_depth_vwap(list(book.bids), shares, buy=False)
-        if bid_vwap is None or market.fee is None:
-            if len(failures) < 30:
-                failures.append(f"exit_depth:{market_id}")
-            continue
-        prediction = model_prediction(
-            feature[0], yes_beta, no_beta, activity_threshold)
-        flip = prediction.get("side") != side
-        if now - int(position["entry_ts"]) >= args.horizon_seconds or flip or bool(state.get("killed")):
-            exit_price = max(1e-6, bid_vwap * (1.0 - slip))
-            fee = base.fee_per_share(exit_price, market.fee) * shares
-            proceeds = exit_price * shares - fee
-            pnl = proceeds - float(position["cost"])
-            cash += proceeds
-            realized_last_tick += pnl
-            append_fill(args.run_dir, timestamp=now, market_id=market_id, slug=market.slug, action="SELL_TAKER", side=side, shares=shares, price=exit_price, fee=fee, pnl=pnl, net_edge=position.get("entry_net_edge", ""), expected_exit_price=position.get("expected_exit_price", ""))
-            decision_ms = time.time_ns() // 1_000_000
-            token = market.yes if side == "YES" else market.no
-            position_id = str(position.get("position_id") or stable_id(
-                args.model_sha, "MICRO_TAKER", market_id, position.get("entry_ts")))
-            exit_order_id = stable_id(position_id, "EXIT", decision_ms)
-            exit_fill_id = stable_id(exit_order_id, "FILL")
-            exit_common = dict(
-                strategy="MICRO_TAKER", model_sha=args.model_sha,
-                position_id=position_id, order_id=exit_order_id,
-                market_id=market.id, event_id=market.event, token_id=token,
-                exchange_ts_ms=book.exchange_ts_ms,
-                receive_ts_ms=book.received_ts_ms, decision_ts_ms=decision_ms,
-                book_snapshot_id=book.snapshot_id, side="SELL", bid=book.bid(),
-                ask=book.ask(), bid_depth=sum(size for _, size in book.bids),
-                ask_depth=sum(size for _, size in book.asks), limit_price=exit_price,
-                intended_action="TAKER_EXIT", intended_size=shares,
-                metadata={"outcome": side, "execution_side": "SELL",
-                          "economic_cycle": "MICRO_TAKER_ROUND_TRIP"},
-            )
-            emit(run_root, LedgerEvent(
-                event_type="ORDER_SUBMITTED", order_state="CROSS", **exit_common))
-            emit(run_root, LedgerEvent(
-                event_type="FILL", fill_id=exit_fill_id, exchange_ts_ms=book.exchange_ts_ms,
-                receive_ts_ms=book.received_ts_ms, strategy="MICRO_TAKER",
-                model_sha=args.model_sha, position_id=position_id, order_id=exit_order_id,
-                market_id=market.id, event_id=market.event, token_id=token, side="SELL",
-                fill_price=exit_price, filled_size=shares, complete=True, fee=fee,
-                fee_rate=market.fee.rate, fee_source=market.fee.source,
-                slippage=shares * abs(exit_price - bid_vwap),
-                metadata={"outcome": side, "execution_side": "SELL"}))
-            emit(run_root, LedgerEvent(
-                event_type="FINAL", strategy="MICRO_TAKER", model_sha=args.model_sha,
-                position_id=position_id, market_id=market.id, event_id=market.event,
-                token_id=token, final_pnl=pnl, realized_cashflow=pnl,
-                fee=0.0, slippage=0.0, unwind_loss=0.0,
-                capital_cost=0.0, latency_cost=0.0,
-                capital_duration_ms=max(0, (now - int(position["entry_ts"])) * 1000),
-                metadata={"terminal_state": "ROUND_TRIP_CLOSED", "outcome": side,
-                          "realized": True, "unwind_accounted": True,
-                          "cost_vector_complete": True,
-                          "terminal_id": f"micro_taker:{position_id}:final",
-                          "pnl_decomposition": {"trading_pnl": pnl,
-                              "spread_capture": 0.0, "adverse_markout": 0.0,
-                              "inventory_pnl": 0.0, "maker_rebates": 0.0,
-                              "liquidity_rewards": 0.0,
-                              "own_reward_share_verified": False},
-                          "entry_cost": float(position["cost"]), "exit_proceeds": proceeds,
-                          "entry_fill_id": position.get("entry_fill_id"),
-                          "exit_fill_id": exit_fill_id}))
-            del positions[market_id]
-    realized_total += realized_last_tick
-
-    equity, unmarkable_positions = conservative_marked_equity(cash, positions, current)
-    new_risk_frozen = bool(unmarkable_positions) or drain_requested
-    peak = max(peak, equity)
-    drawdown = max(0.0, 1.0 - equity / peak) if peak > 0.0 else 0.0
-    marking_complete = not unmarkable_positions
-    killed = bool(state.get("killed")) or (marking_complete and drawdown >= max_drawdown)
-
     signals = 0
-    opened = 0
     best_edge = 0.0
     admission_rows: list[dict[str, Any]] = []
     rejection_funnel: dict[str, int] = {
         "feature_ready_markets": len(current),
         "model_or_flow_gate_closed": 0,
-        "already_positioned": 0,
         "missing_fee": 0,
         "prediction_evaluated": 0,
         "inactive_learned_edge": 0,
         "no_complete_round_trip_ev": 0,
-        "zero_capital_room": 0,
+        "zero_probe_size": 0,
         "entry_or_exit_depth_rejected": 0,
         "nonpositive_net_edge": 0,
         "ranked_signals": 0,
-        "below_minimum_order": 0,
-        "cash_rejected": 0,
-        "opened": 0,
     }
     if (
-        not args.research_only
-        and not killed
-        and not new_risk_frozen
-        and model_valid
+        model_valid
         and flow_valid
     ):
         ranked: list[tuple[
             float, Any, str, base.Book, economics.RoundTripEconomics, float, float,
         ]] = []
         for market_id, (market, yes, no, feature) in current.items():
-            if market_id in positions or market.fee is None:
-                if market_id in positions:
-                    rejection_funnel["already_positioned"] += 1
-                else:
-                    rejection_funnel["missing_fee"] += 1
+            if market.fee is None:
+                rejection_funnel["missing_fee"] += 1
                 continue
             rejection_funnel["prediction_evaluated"] += 1
             prediction = model_prediction(
@@ -1843,9 +1711,9 @@ def main() -> int:
                 rejection_funnel["nonpositive_net_edge"] += 1
                 continue
             book = yes if candidate.side == "YES" else no
-            room_probe = max(0.0, min(args.max_trade_usd, max_market_fraction * equity, cash))
+            room_probe = max(0.0, args.max_probe_usd)
             if room_probe <= 0.0:
-                rejection_funnel["zero_capital_room"] += 1
+                rejection_funnel["zero_probe_size"] += 1
                 continue
             shares_probe = room_probe / max(candidate.capital_per_share, 1e-9)
             adjusted = depth_adjusted_economics(candidate, book=book, predicted_yes_mid=predicted_yes_mid, fee=fee_spec(market.fee), shares=shares_probe, slippage_bps_per_leg=args.slippage_bps, adverse_markout_penalty_bps=args.adverse_markout_bps, capital_cost_bps_per_hour=args.capital_cost_bps_per_hour, prediction_sigma_net_edge=float(sigma), uncertainty_z=args.uncertainty_z)
@@ -1888,120 +1756,8 @@ def main() -> int:
         signals = len(ranked)
         rejection_funnel["ranked_signals"] = signals
         best_edge = max((row[4].net_edge for row in ranked), default=0.0)
-        for (_score, market, side, book, candidate, predicted_yes_mid,
-             learned_executable_edge) in ranked:
-            if len(positions) >= args.max_positions:
-                break
-            if market.id in positions or market.fee is None:
-                continue
-            room = max(0.0, min(args.max_trade_usd, max_market_fraction * equity, cash))
-            shares = room / max(candidate.capital_per_share, 1e-9)
-            candidate = depth_adjusted_economics(candidate, book=book, predicted_yes_mid=predicted_yes_mid, fee=fee_spec(market.fee), shares=shares, slippage_bps_per_leg=args.slippage_bps, adverse_markout_penalty_bps=args.adverse_markout_bps, capital_cost_bps_per_hour=args.capital_cost_bps_per_hour, prediction_sigma_net_edge=float(sigma), uncertainty_z=args.uncertainty_z)
-            if candidate is None or candidate.net_edge < args.min_edge or candidate.net_pnl_per_share <= 0.0:
-                continue
-            shares = room / max(candidate.capital_per_share, 1e-9)
-            if shares < book.min_order:
-                rejection_funnel["below_minimum_order"] += 1
-                continue
-            candidate = depth_adjusted_economics(candidate, book=book, predicted_yes_mid=predicted_yes_mid, fee=fee_spec(market.fee), shares=shares, slippage_bps_per_leg=args.slippage_bps, adverse_markout_penalty_bps=args.adverse_markout_bps, capital_cost_bps_per_hour=args.capital_cost_bps_per_hour, prediction_sigma_net_edge=float(sigma), uncertainty_z=args.uncertainty_z)
-            if candidate is None or candidate.net_edge < args.min_edge or candidate.net_pnl_per_share <= 0.0:
-                if candidate is None:
-                    rejection_funnel["entry_or_exit_depth_rejected"] += 1
-                else:
-                    rejection_funnel["nonpositive_net_edge"] += 1
-                continue
-            fee = candidate.entry_fee_per_share * shares
-            cost = candidate.entry_price * shares + fee
-            if cost > cash + 1e-9:
-                rejection_funnel["cash_rejected"] += 1
-                continue
-            positions[market.id] = {
-                "side": side,
-                "shares": shares,
-                "entry_price": candidate.entry_price,
-                "cost": cost,
-                "entry_ts": now,
-                "entry_net_edge": candidate.net_edge,
-                "model_predicted_executable_net_edge": learned_executable_edge,
-                "model_prediction_sigma_net_edge": float(sigma),
-                "expected_exit_price": candidate.expected_exit_price,
-            }
-            cash -= cost
-            opened += 1
-            rejection_funnel["opened"] += 1
-            append_fill(args.run_dir, timestamp=now, market_id=market.id, slug=market.slug, action="BUY_TAKER", side=side, shares=shares, price=candidate.entry_price, fee=fee, pnl=0.0, net_edge=candidate.net_edge, expected_exit_price=candidate.expected_exit_price)
-            decision_ms = time.time_ns() // 1_000_000
-            position_id = stable_id(args.model_sha, "MICRO_TAKER", market.id, decision_ms)
-            candidate_id = stable_id(position_id, "CANDIDATE")
-            order_id = stable_id(position_id, "ENTRY_ORDER")
-            fill_id = stable_id(order_id, "FILL")
-            common = dict(
-                strategy="MICRO_TAKER", model_sha=args.model_sha,
-                position_id=position_id, market_id=market.id, event_id=market.event,
-                token_id=book.token, exchange_ts_ms=book.exchange_ts_ms,
-                receive_ts_ms=book.received_ts_ms, decision_ts_ms=decision_ms,
-                book_snapshot_id=book.snapshot_id, side="BUY", bid=book.bid(), ask=book.ask(),
-                bid_depth=sum(size for _, size in book.bids),
-                ask_depth=sum(size for _, size in book.asks),
-                limit_price=candidate.entry_price, predicted_alpha=candidate.gross_markout_per_share,
-                expected_ev=candidate.net_pnl_per_share, intended_action="TAKER_ENTRY",
-                intended_size=shares, metadata={"outcome": side, "execution_side": "BUY",
-                    "horizon_seconds": candidate.horizon_seconds,
-                    "uncertainty_penalty_per_share": candidate.uncertainty_penalty_per_share,
-                    "market_state_source": "SHARED_CPP_WEBSOCKET" if args.shared_state else "REST_COMPATIBILITY"},
-            )
-            emit(run_root, LedgerEvent(event_type="CANDIDATE", candidate_id=candidate_id, **common))
-            emit(run_root, LedgerEvent(
-                event_type="ORDER_SUBMITTED", candidate_id=candidate_id,
-                order_id=order_id, order_state="CROSS", **common))
-            emit(run_root, LedgerEvent(
-                event_type="FILL", strategy="MICRO_TAKER", model_sha=args.model_sha,
-                position_id=position_id, order_id=order_id, fill_id=fill_id,
-                market_id=market.id, event_id=market.event, token_id=book.token,
-                exchange_ts_ms=book.exchange_ts_ms, receive_ts_ms=book.received_ts_ms,
-                side="BUY", fill_price=candidate.entry_price, filled_size=shares,
-                complete=True, fee=fee, fee_rate=market.fee.rate,
-                fee_source=market.fee.source,
-                slippage=shares * abs(candidate.entry_price - (
-                    full_depth_vwap(list(book.asks), shares, buy=True) or candidate.entry_price)),
-                metadata={"outcome": side, "execution_side": "BUY"}))
-            positions[market.id].update({
-                "position_id": position_id, "entry_order_id": order_id,
-                "entry_fill_id": fill_id, "markout_horizons": [],
-            })
     else:
         rejection_funnel["model_or_flow_gate_closed"] = len(current)
-
-    # Append one size-aware executable mark per configured economic horizon.
-    for market_id, position in positions.items():
-        current_row = current.get(market_id)
-        if not current_row or not position.get("entry_fill_id"):
-            continue
-        market, yes, no, _feature = current_row
-        side, shares = str(position["side"]), float(position["shares"])
-        book = yes if side == "YES" else no
-        bid_vwap = full_depth_vwap(list(book.bids), shares, buy=False)
-        if bid_vwap is None:
-            continue
-        emitted = set(int(value) for value in position.get("markout_horizons", []))
-        age = max(0, now - int(position["entry_ts"]))
-        for horizon in (5, 15, 30, 60, 300):
-            if horizon in emitted or age < horizon:
-                continue
-            fee = base.fee_per_share(bid_vwap, market.fee) * shares if market.fee else 0.0
-            liquidation = max(0.0, shares * bid_vwap - fee)
-            emit(run_root, LedgerEvent(
-                event_type="MARKOUT", strategy="MICRO_TAKER", model_sha=args.model_sha,
-                position_id=str(position["position_id"]), order_id=str(position["entry_order_id"]),
-                fill_id=str(position["entry_fill_id"]), market_id=market.id,
-                event_id=market.event, token_id=book.token,
-                exchange_ts_ms=book.exchange_ts_ms, receive_ts_ms=book.received_ts_ms,
-                book_snapshot_id=book.snapshot_id,
-                executable_liquidation_value=liquidation,
-                markouts={f"{horizon}s": liquidation - float(position["cost"])},
-                metadata={"outcome": side, "full_depth": True, "fee_net": True}))
-            emitted.add(horizon)
-        position["markout_horizons"] = sorted(emitted)
 
     known_sample_keys = {
         str(row.get("sample_key") or "") for row in samples
@@ -2058,12 +1814,6 @@ def main() -> int:
     samples = samples[-50000:]
     dataset_storage["retained_samples_after_append"] = len(samples)
     dataset_storage["novel_samples_appended"] = novel_samples
-    equity, unmarkable_positions = conservative_marked_equity(cash, positions, current)
-    new_risk_frozen = bool(unmarkable_positions) or drain_requested
-    peak = max(peak, equity)
-    drawdown = max(0.0, 1.0 - equity / peak) if peak > 0.0 else 0.0
-    marking_complete = not unmarkable_positions
-    killed = killed or (marking_complete and drawdown >= max_drawdown)
     labeled = sum(_has_dual_side_target(row) for row in samples)
     model_labeled = sum(
         _has_dual_side_target(row) and isinstance(row.get("x"), list)
@@ -2080,25 +1830,19 @@ def main() -> int:
         "paper_only": True,
         "authenticated_execution": False,
         "real_order_submission": False,
-        "research_only": args.research_only,
-        "execution_authority": (
-            "RESEARCH_ONLY_ZERO_AUTHORITY" if args.research_only else "PAPER"
-        ),
-        "capital_authority": not args.research_only,
-        "ledger_writer_authority": not args.research_only,
-        "cash": cash,
-        "equity": equity,
-        "peak": peak,
-        "drawdown": drawdown,
-        "killed": killed,
-        "new_risk_frozen": new_risk_frozen,
+        "real_capital_at_risk": False,
+        "research_only": True,
+        "execution_authority": "RESEARCH_ONLY_ZERO_AUTHORITY",
+        "capital_authority": False,
+        "oms_authority": False,
+        "inventory_authority": False,
+        "ledger_writer_authority": False,
+        "order_authority": False,
+        "promotion_authority": False,
         "drain_requested": drain_requested,
-        "drain_complete": drain_requested and not positions,
-        "marking_complete": marking_complete,
-        "market_capital_ceiling": start_capital * max_market_fraction,
-        "unmarkable_positions": unmarkable_positions,
-        "marking_contract": CONSERVATIVE_MARKING_CONTRACT,
-        "positions": positions,
+        "drain_complete": True,
+        "inventory_state_created": False,
+        "probe_notional_usd": max(0.0, args.max_probe_usd),
         "samples": samples,
         "dataset_version": DATASET_VERSION,
         "dataset_lineage": DATASET_LINEAGE,
@@ -2143,10 +1887,7 @@ def main() -> int:
         "research_horizon_label_stats_last_tick": horizon_label_stats,
         "research_horizon_diagnostics": research_horizon_diagnostics,
         "signals": signals,
-        "opened": opened,
         "best_edge": best_edge,
-        "realized_pnl_last_tick": realized_last_tick,
-        "realized_pnl_total": realized_total,
         "target_semantics_version": TARGET_SEMANTICS_VERSION,
         "admission_contract": "causal_flow_dual_side_continuous_executable_net_edge_plus_depth_complete_round_trip_ev",
         "execution_contract": COMPLETE_ROUND_TRIP_EXECUTION_CONTRACT,
@@ -2156,11 +1897,9 @@ def main() -> int:
     }
     base.atomic_json(state_path, new_state)
     base.atomic_json(args.run_dir / "status.json", {k: new_state[k] for k in (
-        "schema", "timestamp", "model_sha", "paper_only", "authenticated_execution", "real_order_submission",
-        "research_only", "execution_authority", "capital_authority", "ledger_writer_authority",
-        "cash", "equity", "peak", "drawdown", "killed",
-        "new_risk_frozen", "drain_requested", "drain_complete", "marking_complete", "market_capital_ceiling",
-        "unmarkable_positions", "marking_contract",
+        "schema", "timestamp", "model_sha", "paper_only", "authenticated_execution", "real_order_submission", "real_capital_at_risk",
+        "research_only", "execution_authority", "capital_authority", "oms_authority", "inventory_authority", "ledger_writer_authority", "order_authority", "promotion_authority",
+        "drain_requested", "drain_complete", "inventory_state_created", "probe_notional_usd",
         "prediction_sigma_net_edge", "model_valid", "model_invalid_reasons",
         "validation_diagnostics", "model_challenger", "model_challenger_readiness",
         "flow_valid", "flow_diagnostics",
@@ -2173,40 +1912,26 @@ def main() -> int:
         "market_state_source", "discovered_markets", "fee_ready_markets",
         "atomic_book_pairs", "missing_book_pairs", "feature_ready_markets",
         "research_horizon_label_stats_last_tick", "research_horizon_diagnostics",
-        "signals", "opened", "best_edge",
-        "realized_pnl_last_tick", "realized_pnl_total", "admission_contract", "execution_contract", "feature_contract", "exit_liquidity_contract", "failures"
-    )} | {"open_positions": len(positions)})
+        "signals", "best_edge", "admission_contract", "execution_contract", "feature_contract", "exit_liquidity_contract", "failures"
+    )})
     base.atomic_json(args.run_dir / "admission_latest.json", {
         "timestamp": now,
         "paper_only": True,
         "contract": COMPLETE_ROUND_TRIP_EXECUTION_CONTRACT,
         "details": "causal-flow + full-depth-entry/exit + fees/slippage/uncertainty/adverse/capital-time",
-        "new_risk_frozen": new_risk_frozen,
-        "unmarkable_positions": unmarkable_positions,
+        "research_only": True,
+        "execution_authority": False,
         "rows": admission_rows[:100],
     })
-    base.append_csv(
-        args.run_dir / "equity.csv",
-        ["timestamp", "cash", "equity", "drawdown", "open_positions", "signals", "opened", "best_edge", "labeled_samples", "model_labeled_samples", "realized_pnl_total", "prediction_sigma_net_edge"],
-        {
-            "timestamp": now, "cash": cash, "equity": equity, "drawdown": drawdown,
-            "open_positions": len(positions), "signals": signals, "opened": opened,
-            "best_edge": best_edge, "labeled_samples": labeled, "model_labeled_samples": model_labeled,
-            "realized_pnl_total": realized_total, "prediction_sigma_net_edge": sigma,
-        },
-    )
     print(json.dumps({
         "markets": len(markets), "atomic_book_pairs": book_pair_count,
         "feature_ready_markets": len(current), "labeled": labeled, "model_labeled": model_labeled,
-        "signals": signals, "opened": opened, "positions": len(positions), "equity": equity,
-        "realized_pnl_total": realized_total, "best_edge": best_edge,
+        "signals": signals, "best_edge": best_edge,
         "prediction_sigma_net_edge": sigma, "model_valid": model_valid,
         "model_invalid_reasons": model_invalid_reasons,
         "novel_samples": novel_samples,
         "duplicate_snapshots_rejected": duplicate_snapshots_rejected,
-        "killed": killed,
-        "new_risk_frozen": new_risk_frozen, "unmarkable_positions": len(unmarkable_positions),
-        "marking_contract": CONSERVATIVE_MARKING_CONTRACT,
+        "research_only": True, "execution_authority": False,
         "admission_contract": "causal_flow_depth_complete_round_trip_ev",
         "execution_contract": COMPLETE_ROUND_TRIP_EXECUTION_CONTRACT,
     }, sort_keys=True))
