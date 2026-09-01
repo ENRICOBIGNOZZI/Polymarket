@@ -11,7 +11,7 @@
     ],
     "economic_engine_count": 2,
     "economic_engines": [
-      "BTC_SETTLEMENT_ENGINE",
+      "CRYPTO_SETTLEMENT_ENGINE",
       "STRUCTURAL_ARB_ENGINE"
     ],
     "known_migration_defect_count": 0,
@@ -90,17 +90,17 @@
     "path": "artifacts/v7_sbom.spdx.json"
   },
   "schema": "polymarket_v7_final_convergence_audit_v1",
-  "source_snapshot_sha": "cc1f8e103b1117509cf9911d6537a860d19f6aa7",
+  "source_snapshot_sha": "15fd020b20500e8f1c3ffdb664e568d7b5e3e66f",
   "surfaces": {
     "classification_counts": {
       "ARCHIVE_HISTORY_ONLY": 24,
       "EXTERNAL_BLOCKER": 2,
-      "KEEP_CANONICAL": 577,
+      "KEEP_CANONICAL": 588,
       "KEEP_ZERO_AUTHORITY_RESEARCH": 146,
       "MERGE_INTO_CANONICAL": 164
     },
     "delete_active_legacy_count": 0,
-    "entry_count": 913,
+    "entry_count": 924,
     "temporary_compatibility_count": 0
   },
   "valid": true

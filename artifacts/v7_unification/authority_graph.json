@@ -18,11 +18,12 @@
     "V7_CANONICAL_LEDGER"
   ],
   "economic_engines": {
-    "BTC_SETTLEMENT_ENGINE": {
+    "CRYPTO_SETTLEMENT_ENGINE": {
       "actions": [
         "MAKE",
         "TAKE",
         "CANCEL",
+        "WITHDRAW",
         "NOTHING"
       ],
       "components": [
@@ -74,7 +75,7 @@
   "real_capital_at_risk": false,
   "real_order_submission": false,
   "schema": "polymarket_v7_authority_reachability_audit_v2",
-  "source_snapshot_sha": "cc1f8e103b1117509cf9911d6537a860d19f6aa7",
+  "source_snapshot_sha": "15fd020b20500e8f1c3ffdb664e568d7b5e3e66f",
   "static_ledger_transport_edges": [
     {
       "authority_mode": "DRAIN_AND_ARCHIVE",
