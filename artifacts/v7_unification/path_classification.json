@@ -3,10 +3,10 @@
   "coverage": {
     "external_blocker_count": 2,
     "process_count": 33,
-    "ref_count": 41,
+    "ref_count": 25,
     "runtime_output_count": 124,
     "schema_count": 22,
-    "tracked_or_intended_path_count": 691,
+    "tracked_or_intended_path_count": 692,
     "workflow_count": 11
   },
   "entries": [
@@ -1869,6 +1869,7 @@
         "analysis": "exact path/module references from tracked text; runtime linkage is separately enumerated",
         "static_references": [
           "artifacts/v7_unification/path_classification.json",
+          "artifacts/v7_unification/phase_10_report.md",
           "artifacts/v7_unification/phase_6_report.md"
         ]
       },
@@ -1923,7 +1924,8 @@
       "current_imports_callers_readers_writers": {
         "analysis": "exact path/module references from tracked text; runtime linkage is separately enumerated",
         "static_references": [
-          "artifacts/v7_unification/path_classification.json"
+          "artifacts/v7_unification/path_classification.json",
+          "artifacts/v7_unification/phase_10_report.md"
         ]
       },
       "deletion_gate": "NONE_CANONICAL_SURFACE",
@@ -1951,6 +1953,7 @@
         "analysis": "exact path/module references from tracked text; runtime linkage is separately enumerated",
         "static_references": [
           "AGENT_DIRECTIVE_V7_UNIFICATION_AND_LEGACY_ERADICATION.md",
+          "artifacts/v7_unification/phase_10_report.md",
           "artifacts/v7_unification/phase_2_report.md",
           "artifacts/v7_unification/phase_9_report.md",
           "scripts/v7_cutover_contract.py",
@@ -1998,6 +2001,31 @@
       "path_or_ref": "artifacts/v7_unification/phase_0_report.md",
       "rollback_artifact_tag": "v7-unification-pre-migration-8d9e8e60",
       "surface_id": "path:artifacts/v7_unification/phase_0_report.md",
+      "unique_behavior_data_contribution": "tracked repository behavior, evidence, test, configuration, or documentation",
+      "validation_tests": [
+        "tests/test_v7_surface_classification.py"
+      ]
+    },
+    {
+      "canonical_replacement": "artifacts/v7_unification/path_classification.json",
+      "classification": "ARCHIVE_HISTORY_ONLY",
+      "current_imports_callers_readers_writers": {
+        "analysis": "exact path/module references from tracked text; runtime linkage is separately enumerated",
+        "static_references": []
+      },
+      "deletion_gate": "NONE_IMMUTABLE_AUDIT_OR_ROLLBACK_EVIDENCE",
+      "disposition_commit": null,
+      "economic_authority": {
+        "capabilities": [],
+        "executable": false,
+        "owner": null
+      },
+      "final_disposition": "retain_as_nonruntime_history",
+      "migration_status": "classified",
+      "object_type": "tracked_path",
+      "path_or_ref": "artifacts/v7_unification/phase_10_report.md",
+      "rollback_artifact_tag": "v7-unification-pre-migration-8d9e8e60",
+      "surface_id": "path:artifacts/v7_unification/phase_10_report.md",
       "unique_behavior_data_contribution": "tracked repository behavior, evidence, test, configuration, or documentation",
       "validation_tests": [
         "tests/test_v7_surface_classification.py"
@@ -9880,7 +9908,6 @@
       "current_imports_callers_readers_writers": {
         "analysis": "exact path/module references from tracked text; runtime linkage is separately enumerated",
         "static_references": [
-          "artifacts/v7_unification/authority_graph.json",
           "artifacts/v7_unification/legacy_deletion_manifest.json",
           "artifacts/v7_unification/path_classification.json",
           "artifacts/v7_unification/runtime_process_graph.json",
@@ -14826,7 +14853,6 @@
         "analysis": "exact path/module references from tracked text; runtime linkage is separately enumerated",
         "static_references": [
           "CMakeLists.txt",
-          "artifacts/v7_unification/authority_graph.json",
           "artifacts/v7_unification/path_classification.json"
         ]
       },
@@ -21342,110 +21368,6 @@
       ]
     },
     {
-      "canonical_replacement": "origin/main",
-      "classification": "DELETE_ACTIVE_LEGACY",
-      "current_imports_callers_readers_writers": {
-        "analysis": "exact path/module references from tracked text; runtime linkage is separately enumerated",
-        "static_references": []
-      },
-      "deletion_gate": "UNIQUE_COMMIT_AND_ACTIVE_REFERENCE_SCAN_CLEAN",
-      "disposition_commit": null,
-      "economic_authority": {
-        "capabilities": [],
-        "executable": false,
-        "owner": null
-      },
-      "final_disposition": "delete_after_gate",
-      "migration_status": "deletion_deferred_until_phase_9",
-      "object_type": "branch_or_remote_ref",
-      "path_or_ref": "refs/heads/codex/v7-debug-ci-paper-collateral",
-      "rollback_artifact_tag": "v7-unification-pre-migration-8d9e8e60",
-      "snapshot_object_id": "7059d8187977c320fc37d9e81a6a04379cd2ccad",
-      "surface_id": "ref:refs/heads/codex/v7-debug-ci-paper-collateral",
-      "unique_behavior_data_contribution": "fully reachable from origin/main; redundant active ref",
-      "validation_tests": [
-        "tests/test_v7_surface_classification.py"
-      ]
-    },
-    {
-      "canonical_replacement": "origin/main",
-      "classification": "DELETE_ACTIVE_LEGACY",
-      "current_imports_callers_readers_writers": {
-        "analysis": "exact path/module references from tracked text; runtime linkage is separately enumerated",
-        "static_references": []
-      },
-      "deletion_gate": "UNIQUE_COMMIT_AND_ACTIVE_REFERENCE_SCAN_CLEAN",
-      "disposition_commit": null,
-      "economic_authority": {
-        "capabilities": [],
-        "executable": false,
-        "owner": null
-      },
-      "final_disposition": "delete_after_gate",
-      "migration_status": "deletion_deferred_until_phase_9",
-      "object_type": "branch_or_remote_ref",
-      "path_or_ref": "refs/heads/codex/v7-economic-convergence",
-      "rollback_artifact_tag": "v7-unification-pre-migration-8d9e8e60",
-      "snapshot_object_id": "148a99fdda5f717e367696b86d92e6c383dd0f12",
-      "surface_id": "ref:refs/heads/codex/v7-economic-convergence",
-      "unique_behavior_data_contribution": "fully reachable from origin/main; redundant active ref",
-      "validation_tests": [
-        "tests/test_v7_surface_classification.py"
-      ]
-    },
-    {
-      "canonical_replacement": "origin/main",
-      "classification": "DELETE_ACTIVE_LEGACY",
-      "current_imports_callers_readers_writers": {
-        "analysis": "exact path/module references from tracked text; runtime linkage is separately enumerated",
-        "static_references": []
-      },
-      "deletion_gate": "UNIQUE_COMMIT_AND_ACTIVE_REFERENCE_SCAN_CLEAN",
-      "disposition_commit": null,
-      "economic_authority": {
-        "capabilities": [],
-        "executable": false,
-        "owner": null
-      },
-      "final_disposition": "delete_after_gate",
-      "migration_status": "deletion_deferred_until_phase_9",
-      "object_type": "branch_or_remote_ref",
-      "path_or_ref": "refs/heads/codex/v7-economic-loop-completion",
-      "rollback_artifact_tag": "v7-unification-pre-migration-8d9e8e60",
-      "snapshot_object_id": "c9f196a5e8845cf1750ebeb7de08e5f8e2f40292",
-      "surface_id": "ref:refs/heads/codex/v7-economic-loop-completion",
-      "unique_behavior_data_contribution": "fully reachable from origin/main; redundant active ref",
-      "validation_tests": [
-        "tests/test_v7_surface_classification.py"
-      ]
-    },
-    {
-      "canonical_replacement": "origin/main",
-      "classification": "DELETE_ACTIVE_LEGACY",
-      "current_imports_callers_readers_writers": {
-        "analysis": "exact path/module references from tracked text; runtime linkage is separately enumerated",
-        "static_references": []
-      },
-      "deletion_gate": "UNIQUE_COMMIT_AND_ACTIVE_REFERENCE_SCAN_CLEAN",
-      "disposition_commit": null,
-      "economic_authority": {
-        "capabilities": [],
-        "executable": false,
-        "owner": null
-      },
-      "final_disposition": "delete_after_gate",
-      "migration_status": "deletion_deferred_until_phase_9",
-      "object_type": "branch_or_remote_ref",
-      "path_or_ref": "refs/heads/codex/v7-final-integrated",
-      "rollback_artifact_tag": "v7-unification-pre-migration-8d9e8e60",
-      "snapshot_object_id": "8512ac131c8ae0628a342d753cb5160c4eee1806",
-      "surface_id": "ref:refs/heads/codex/v7-final-integrated",
-      "unique_behavior_data_contribution": "fully reachable from origin/main; redundant active ref",
-      "validation_tests": [
-        "tests/test_v7_surface_classification.py"
-      ]
-    },
-    {
       "canonical_replacement": "config/v7_authority_registry.json#BTC_SETTLEMENT_ENGINE",
       "classification": "MERGE_INTO_CANONICAL",
       "current_imports_callers_readers_writers": {
@@ -21469,32 +21391,6 @@
       "snapshot_object_id": "c1f0f9999400d533cf89e4e4a69b933f43cf97e4",
       "surface_id": "ref:refs/heads/codex/v7-fresh-flow-fillability",
       "unique_behavior_data_contribution": "1 commit(s) not reachable from origin/main require content audit",
-      "validation_tests": [
-        "tests/test_v7_surface_classification.py"
-      ]
-    },
-    {
-      "canonical_replacement": "origin/main",
-      "classification": "DELETE_ACTIVE_LEGACY",
-      "current_imports_callers_readers_writers": {
-        "analysis": "exact path/module references from tracked text; runtime linkage is separately enumerated",
-        "static_references": []
-      },
-      "deletion_gate": "UNIQUE_COMMIT_AND_ACTIVE_REFERENCE_SCAN_CLEAN",
-      "disposition_commit": null,
-      "economic_authority": {
-        "capabilities": [],
-        "executable": false,
-        "owner": null
-      },
-      "final_disposition": "delete_after_gate",
-      "migration_status": "deletion_deferred_until_phase_9",
-      "object_type": "branch_or_remote_ref",
-      "path_or_ref": "refs/heads/codex/v7-integrated-sep1",
-      "rollback_artifact_tag": "v7-unification-pre-migration-8d9e8e60",
-      "snapshot_object_id": "026eaebac657ba182990c38ff9c346363acfdcb8",
-      "surface_id": "ref:refs/heads/codex/v7-integrated-sep1",
-      "unique_behavior_data_contribution": "fully reachable from origin/main; redundant active ref",
       "validation_tests": [
         "tests/test_v7_surface_classification.py"
       ]
@@ -21556,60 +21452,6 @@
       ]
     },
     {
-      "canonical_replacement": "origin/main",
-      "classification": "DELETE_ACTIVE_LEGACY",
-      "current_imports_callers_readers_writers": {
-        "analysis": "exact path/module references from tracked text; runtime linkage is separately enumerated",
-        "static_references": []
-      },
-      "deletion_gate": "UNIQUE_COMMIT_AND_ACTIVE_REFERENCE_SCAN_CLEAN",
-      "disposition_commit": null,
-      "economic_authority": {
-        "capabilities": [],
-        "executable": false,
-        "owner": null
-      },
-      "final_disposition": "delete_after_gate",
-      "migration_status": "deletion_deferred_until_phase_9",
-      "object_type": "branch_or_remote_ref",
-      "path_or_ref": "refs/heads/codex/v7-micro-dual-head",
-      "rollback_artifact_tag": "v7-unification-pre-migration-8d9e8e60",
-      "snapshot_object_id": "4b40ef16cabc933971744f2c65936338305fb44c",
-      "surface_id": "ref:refs/heads/codex/v7-micro-dual-head",
-      "unique_behavior_data_contribution": "fully reachable from origin/main; redundant active ref",
-      "validation_tests": [
-        "tests/test_v7_surface_classification.py"
-      ]
-    },
-    {
-      "canonical_replacement": "origin/main",
-      "classification": "DELETE_ACTIVE_LEGACY",
-      "current_imports_callers_readers_writers": {
-        "analysis": "exact path/module references from tracked text; runtime linkage is separately enumerated",
-        "static_references": []
-      },
-      "deletion_gate": "UNIQUE_COMMIT_AND_ACTIVE_REFERENCE_SCAN_CLEAN",
-      "disposition_commit": null,
-      "economic_authority": {
-        "capabilities": [
-          "cutover"
-        ],
-        "executable": true,
-        "owner": "V7_OPERATOR_EXACT_SHA_PROMOTION"
-      },
-      "final_disposition": "delete_after_gate",
-      "migration_status": "deletion_deferred_until_phase_9",
-      "object_type": "branch_or_remote_ref",
-      "path_or_ref": "refs/heads/codex/v7-paper-cutover-5b9a7c90",
-      "rollback_artifact_tag": "v7-unification-pre-migration-8d9e8e60",
-      "snapshot_object_id": "d41a5eb9d7b1f25dcf0d552cac342031ba8b2808",
-      "surface_id": "ref:refs/heads/codex/v7-paper-cutover-5b9a7c90",
-      "unique_behavior_data_contribution": "fully reachable from origin/main; redundant active ref",
-      "validation_tests": [
-        "tests/test_v7_surface_classification.py"
-      ]
-    },
-    {
       "canonical_replacement": "config/v7_authority_registry.json#BTC_SETTLEMENT_ENGINE",
       "classification": "MERGE_INTO_CANONICAL",
       "current_imports_callers_readers_writers": {
@@ -21638,118 +21480,6 @@
       ]
     },
     {
-      "canonical_replacement": "origin/main",
-      "classification": "DELETE_ACTIVE_LEGACY",
-      "current_imports_callers_readers_writers": {
-        "analysis": "exact path/module references from tracked text; runtime linkage is separately enumerated",
-        "static_references": []
-      },
-      "deletion_gate": "UNIQUE_COMMIT_AND_ACTIVE_REFERENCE_SCAN_CLEAN",
-      "disposition_commit": null,
-      "economic_authority": {
-        "capabilities": [
-          "cutover"
-        ],
-        "executable": true,
-        "owner": "V7_OPERATOR_EXACT_SHA_PROMOTION"
-      },
-      "final_disposition": "delete_after_gate",
-      "migration_status": "deletion_deferred_until_phase_9",
-      "object_type": "branch_or_remote_ref",
-      "path_or_ref": "refs/heads/codex/v7-paper-cutover-79572c3a",
-      "rollback_artifact_tag": "v7-unification-pre-migration-8d9e8e60",
-      "snapshot_object_id": "146651dcca5d47062ca39718bfcb0339392df991",
-      "surface_id": "ref:refs/heads/codex/v7-paper-cutover-79572c3a",
-      "unique_behavior_data_contribution": "fully reachable from origin/main; redundant active ref",
-      "validation_tests": [
-        "tests/test_v7_surface_classification.py"
-      ]
-    },
-    {
-      "canonical_replacement": "origin/main",
-      "classification": "DELETE_ACTIVE_LEGACY",
-      "current_imports_callers_readers_writers": {
-        "analysis": "exact path/module references from tracked text; runtime linkage is separately enumerated",
-        "static_references": []
-      },
-      "deletion_gate": "UNIQUE_COMMIT_AND_ACTIVE_REFERENCE_SCAN_CLEAN",
-      "disposition_commit": null,
-      "economic_authority": {
-        "capabilities": [
-          "cutover"
-        ],
-        "executable": true,
-        "owner": "V7_OPERATOR_EXACT_SHA_PROMOTION"
-      },
-      "final_disposition": "delete_after_gate",
-      "migration_status": "deletion_deferred_until_phase_9",
-      "object_type": "branch_or_remote_ref",
-      "path_or_ref": "refs/heads/codex/v7-paper-cutover-834008a6",
-      "rollback_artifact_tag": "v7-unification-pre-migration-8d9e8e60",
-      "snapshot_object_id": "7461a3fc81d492dd5abe0c84a35154c73987325b",
-      "surface_id": "ref:refs/heads/codex/v7-paper-cutover-834008a6",
-      "unique_behavior_data_contribution": "fully reachable from origin/main; redundant active ref",
-      "validation_tests": [
-        "tests/test_v7_surface_classification.py"
-      ]
-    },
-    {
-      "canonical_replacement": "origin/main",
-      "classification": "DELETE_ACTIVE_LEGACY",
-      "current_imports_callers_readers_writers": {
-        "analysis": "exact path/module references from tracked text; runtime linkage is separately enumerated",
-        "static_references": []
-      },
-      "deletion_gate": "UNIQUE_COMMIT_AND_ACTIVE_REFERENCE_SCAN_CLEAN",
-      "disposition_commit": null,
-      "economic_authority": {
-        "capabilities": [
-          "cutover"
-        ],
-        "executable": true,
-        "owner": "V7_OPERATOR_EXACT_SHA_PROMOTION"
-      },
-      "final_disposition": "delete_after_gate",
-      "migration_status": "deletion_deferred_until_phase_9",
-      "object_type": "branch_or_remote_ref",
-      "path_or_ref": "refs/heads/codex/v7-paper-cutover-b4d3ad75",
-      "rollback_artifact_tag": "v7-unification-pre-migration-8d9e8e60",
-      "snapshot_object_id": "da9a59525b1605ebfdc9ed305d8bfa3aa5f16544",
-      "surface_id": "ref:refs/heads/codex/v7-paper-cutover-b4d3ad75",
-      "unique_behavior_data_contribution": "fully reachable from origin/main; redundant active ref",
-      "validation_tests": [
-        "tests/test_v7_surface_classification.py"
-      ]
-    },
-    {
-      "canonical_replacement": "origin/main",
-      "classification": "DELETE_ACTIVE_LEGACY",
-      "current_imports_callers_readers_writers": {
-        "analysis": "exact path/module references from tracked text; runtime linkage is separately enumerated",
-        "static_references": []
-      },
-      "deletion_gate": "UNIQUE_COMMIT_AND_ACTIVE_REFERENCE_SCAN_CLEAN",
-      "disposition_commit": null,
-      "economic_authority": {
-        "capabilities": [
-          "cutover"
-        ],
-        "executable": true,
-        "owner": "V7_OPERATOR_EXACT_SHA_PROMOTION"
-      },
-      "final_disposition": "delete_after_gate",
-      "migration_status": "deletion_deferred_until_phase_9",
-      "object_type": "branch_or_remote_ref",
-      "path_or_ref": "refs/heads/codex/v7-paper-cutover-cd4e78a7",
-      "rollback_artifact_tag": "v7-unification-pre-migration-8d9e8e60",
-      "snapshot_object_id": "564909bbe05115290d060bee3d0c874c73c8406f",
-      "surface_id": "ref:refs/heads/codex/v7-paper-cutover-cd4e78a7",
-      "unique_behavior_data_contribution": "fully reachable from origin/main; redundant active ref",
-      "validation_tests": [
-        "tests/test_v7_surface_classification.py"
-      ]
-    },
-    {
       "canonical_replacement": "config/v7_authority_registry.json#BTC_SETTLEMENT_ENGINE",
       "classification": "MERGE_INTO_CANONICAL",
       "current_imports_callers_readers_writers": {
@@ -21773,110 +21503,6 @@
       "snapshot_object_id": "02a1a298479a0f222cd8ef92a9be33c5bc537be2",
       "surface_id": "ref:refs/heads/codex/v7-paper-cutover-ef993f67",
       "unique_behavior_data_contribution": "1 commit(s) not reachable from origin/main require content audit",
-      "validation_tests": [
-        "tests/test_v7_surface_classification.py"
-      ]
-    },
-    {
-      "canonical_replacement": "origin/main",
-      "classification": "DELETE_ACTIVE_LEGACY",
-      "current_imports_callers_readers_writers": {
-        "analysis": "exact path/module references from tracked text; runtime linkage is separately enumerated",
-        "static_references": []
-      },
-      "deletion_gate": "UNIQUE_COMMIT_AND_ACTIVE_REFERENCE_SCAN_CLEAN",
-      "disposition_commit": null,
-      "economic_authority": {
-        "capabilities": [],
-        "executable": false,
-        "owner": null
-      },
-      "final_disposition": "delete_after_gate",
-      "migration_status": "deletion_deferred_until_phase_9",
-      "object_type": "branch_or_remote_ref",
-      "path_or_ref": "refs/heads/codex/v7-paper-exploration-208eb206",
-      "rollback_artifact_tag": "v7-unification-pre-migration-8d9e8e60",
-      "snapshot_object_id": "88b79b21faed7406a013b17b87ac3ecaafa8e784",
-      "surface_id": "ref:refs/heads/codex/v7-paper-exploration-208eb206",
-      "unique_behavior_data_contribution": "fully reachable from origin/main; redundant active ref",
-      "validation_tests": [
-        "tests/test_v7_surface_classification.py"
-      ]
-    },
-    {
-      "canonical_replacement": "origin/main",
-      "classification": "DELETE_ACTIVE_LEGACY",
-      "current_imports_callers_readers_writers": {
-        "analysis": "exact path/module references from tracked text; runtime linkage is separately enumerated",
-        "static_references": []
-      },
-      "deletion_gate": "UNIQUE_COMMIT_AND_ACTIVE_REFERENCE_SCAN_CLEAN",
-      "disposition_commit": null,
-      "economic_authority": {
-        "capabilities": [],
-        "executable": false,
-        "owner": null
-      },
-      "final_disposition": "delete_after_gate",
-      "migration_status": "deletion_deferred_until_phase_9",
-      "object_type": "branch_or_remote_ref",
-      "path_or_ref": "refs/heads/codex/v7-paper-exploration-point-ev",
-      "rollback_artifact_tag": "v7-unification-pre-migration-8d9e8e60",
-      "snapshot_object_id": "ac7d961cd834c26b0933976cfcfd436c3e47dbd1",
-      "surface_id": "ref:refs/heads/codex/v7-paper-exploration-point-ev",
-      "unique_behavior_data_contribution": "fully reachable from origin/main; redundant active ref",
-      "validation_tests": [
-        "tests/test_v7_surface_classification.py"
-      ]
-    },
-    {
-      "canonical_replacement": "origin/main",
-      "classification": "DELETE_ACTIVE_LEGACY",
-      "current_imports_callers_readers_writers": {
-        "analysis": "exact path/module references from tracked text; runtime linkage is separately enumerated",
-        "static_references": []
-      },
-      "deletion_gate": "UNIQUE_COMMIT_AND_ACTIVE_REFERENCE_SCAN_CLEAN",
-      "disposition_commit": null,
-      "economic_authority": {
-        "capabilities": [],
-        "executable": false,
-        "owner": null
-      },
-      "final_disposition": "delete_after_gate",
-      "migration_status": "deletion_deferred_until_phase_9",
-      "object_type": "branch_or_remote_ref",
-      "path_or_ref": "refs/heads/codex/v7-paper-fillable-placement-47c6faa3",
-      "rollback_artifact_tag": "v7-unification-pre-migration-8d9e8e60",
-      "snapshot_object_id": "4a9ee39c3b3743fad5cb7a4bcb47ac44a1c81fe6",
-      "surface_id": "ref:refs/heads/codex/v7-paper-fillable-placement-47c6faa3",
-      "unique_behavior_data_contribution": "fully reachable from origin/main; redundant active ref",
-      "validation_tests": [
-        "tests/test_v7_surface_classification.py"
-      ]
-    },
-    {
-      "canonical_replacement": "origin/main",
-      "classification": "DELETE_ACTIVE_LEGACY",
-      "current_imports_callers_readers_writers": {
-        "analysis": "exact path/module references from tracked text; runtime linkage is separately enumerated",
-        "static_references": []
-      },
-      "deletion_gate": "UNIQUE_COMMIT_AND_ACTIVE_REFERENCE_SCAN_CLEAN",
-      "disposition_commit": null,
-      "economic_authority": {
-        "capabilities": [],
-        "executable": false,
-        "owner": null
-      },
-      "final_disposition": "delete_after_gate",
-      "migration_status": "deletion_deferred_until_phase_9",
-      "object_type": "branch_or_remote_ref",
-      "path_or_ref": "refs/heads/codex/v7-paper-lifetime-ab-a1b01297",
-      "rollback_artifact_tag": "v7-unification-pre-migration-8d9e8e60",
-      "snapshot_object_id": "e92a7d6340426fcf3aa54e13717d9e6f9a409993",
-      "surface_id": "ref:refs/heads/codex/v7-paper-lifetime-ab-a1b01297",
-      "unique_behavior_data_contribution": "fully reachable from origin/main; redundant active ref",
       "validation_tests": [
         "tests/test_v7_surface_classification.py"
       ]
@@ -21966,32 +21592,6 @@
       ]
     },
     {
-      "canonical_replacement": "origin/main",
-      "classification": "DELETE_ACTIVE_LEGACY",
-      "current_imports_callers_readers_writers": {
-        "analysis": "exact path/module references from tracked text; runtime linkage is separately enumerated",
-        "static_references": []
-      },
-      "deletion_gate": "UNIQUE_COMMIT_AND_ACTIVE_REFERENCE_SCAN_CLEAN",
-      "disposition_commit": null,
-      "economic_authority": {
-        "capabilities": [],
-        "executable": false,
-        "owner": null
-      },
-      "final_disposition": "delete_after_gate",
-      "migration_status": "deletion_deferred_until_phase_9",
-      "object_type": "branch_or_remote_ref",
-      "path_or_ref": "refs/heads/codex/v7-paper-sell-flow-db29343f",
-      "rollback_artifact_tag": "v7-unification-pre-migration-8d9e8e60",
-      "snapshot_object_id": "f48289de70d24495ef27728aa302447dca8acfbd",
-      "surface_id": "ref:refs/heads/codex/v7-paper-sell-flow-db29343f",
-      "unique_behavior_data_contribution": "fully reachable from origin/main; redundant active ref",
-      "validation_tests": [
-        "tests/test_v7_surface_classification.py"
-      ]
-    },
-    {
       "canonical_replacement": "refs/heads/codex/v7-unified-system-legacy-eradication",
       "classification": "KEEP_CANONICAL",
       "current_imports_callers_readers_writers": {
@@ -22010,7 +21610,7 @@
       "object_type": "branch_or_remote_ref",
       "path_or_ref": "refs/heads/codex/v7-unified-system-legacy-eradication",
       "rollback_artifact_tag": "v7-unification-pre-migration-8d9e8e60",
-      "snapshot_object_id": "8b89bc3dab7b7704caeefcd1a6638685fee32cae",
+      "snapshot_object_id": "2a0521275d03aaff48329fb604b32e20679cd2d0",
       "surface_id": "ref:refs/heads/codex/v7-unified-system-legacy-eradication",
       "unique_behavior_data_contribution": "active migration or canonical upstream ref",
       "validation_tests": [
@@ -26781,5 +26381,5 @@
   "real_capital_at_risk": false,
   "real_order_submission": false,
   "schema": "polymarket_v7_surface_classification_v1",
-  "source_snapshot_sha": "8b89bc3dab7b7704caeefcd1a6638685fee32cae"
+  "source_snapshot_sha": "2a0521275d03aaff48329fb604b32e20679cd2d0"
 }

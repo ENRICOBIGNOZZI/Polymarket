@@ -4,7 +4,7 @@
     "complete_static_edge_coverage": true,
     "duplicate_owner_injection_tested": true,
     "one_declared_owner_per_authority": true,
-    "target_topology_complete": false
+    "target_topology_complete": true
   },
   "authenticated_execution": false,
   "authority_registry": "config/v7_authority_registry.json",
@@ -44,51 +44,8 @@
     }
   },
   "edge_registry": "config/v7_authority_edges.json",
-  "known_migration_defect_count": 6,
-  "known_migration_defects": [
-    {
-      "canonical_replacement": "BTC_SETTLEMENT_ENGINE_TO_V7_GLOBAL_PORTFOLIO_COORDINATOR",
-      "reason": "shadow virtual fills use canonical transport but must move behind the opportunity coordinator",
-      "runtime_reachability": "LAUNCHED_SHADOW_ONLY",
-      "severity": "P1_MIGRATION",
-      "source": "scripts/v7_external_fair_paper_router.py"
-    },
-    {
-      "canonical_replacement": "STRUCTURAL_ARB_ENGINE_TO_V7_GLOBAL_PORTFOLIO_COORDINATOR",
-      "reason": "the active launcher is shadow-only, but the standalone CLI retains a PAPER ledger path",
-      "runtime_reachability": "LAUNCHED_WITH_SHADOW_ONLY_FLAG",
-      "severity": "P0_BYPASS",
-      "source": "scripts/v7_fast_structural_paper_executor.py"
-    },
-    {
-      "canonical_replacement": "STRUCTURAL_ARB_ENGINE_TO_V7_GLOBAL_PORTFOLIO_COORDINATOR",
-      "reason": "compatibility worker is disabled by launcher sizing but retains independent PAPER lifecycle code",
-      "runtime_reachability": "LAUNCHED_WITH_ZERO_MARKET_BUDGET",
-      "severity": "P0_BYPASS",
-      "source": "scripts/v7_hard_arb_guard.py"
-    },
-    {
-      "canonical_replacement": "STRUCTURAL_ARB_ENGINE_TO_V7_GLOBAL_PORTFOLIO_COORDINATOR",
-      "reason": "structural detector publishes executable candidates directly to the ledger transport instead of the opportunity coordinator",
-      "runtime_reachability": "CANONICAL_LAUNCHER_COMPONENT",
-      "severity": "P0_BYPASS",
-      "source": "src/fast_runtime/part3.inc"
-    },
-    {
-      "canonical_replacement": "BTC_SETTLEMENT_ENGINE_TO_V7_GLOBAL_PORTFOLIO_COORDINATOR",
-      "reason": "maker observer writes economic annotations directly to the ledger transport",
-      "runtime_reachability": "CANONICAL_LAUNCHER_COMPONENT",
-      "severity": "P0_BYPASS",
-      "source": "src/v7_maker_markout_observer.cpp"
-    },
-    {
-      "canonical_replacement": "BTC_SETTLEMENT_ENGINE_TO_V7_GLOBAL_PORTFOLIO_COORDINATOR",
-      "reason": "standalone maker runtime retains independent PAPER candidate, order, fill, inventory, and final-event production",
-      "runtime_reachability": "CANONICAL_LAUNCHER_COMPONENT",
-      "severity": "P0_BYPASS",
-      "source": "src/v7_market_maker_runtime.cpp"
-    }
-  ],
+  "known_migration_defect_count": 0,
+  "known_migration_defects": [],
   "live_runtime_verification": {
     "reason": "PAPER-host SSH owner authentication is unavailable",
     "state": "EXTERNAL_BLOCKER"
@@ -117,7 +74,7 @@
   "real_capital_at_risk": false,
   "real_order_submission": false,
   "schema": "polymarket_v7_authority_reachability_audit_v2",
-  "source_snapshot_sha": "37c6ad9fbb273f5afdac69c2a270020d89e265d8",
+  "source_snapshot_sha": "2a0521275d03aaff48329fb604b32e20679cd2d0",
   "static_ledger_transport_edges": [
     {
       "authority_mode": "DRAIN_AND_ARCHIVE",
@@ -129,24 +86,6 @@
       "source": "ops/update_server_v7.sh"
     },
     {
-      "authority_mode": "SHADOW_EVIDENCE_PRODUCER",
-      "canonical_replacement": "BTC_SETTLEMENT_ENGINE_TO_V7_GLOBAL_PORTFOLIO_COORDINATOR",
-      "classification": "KEEP_TEMPORARY_COMPATIBILITY",
-      "reason": "shadow virtual fills use canonical transport but must move behind the opportunity coordinator",
-      "runtime_reachability": "LAUNCHED_SHADOW_ONLY",
-      "severity": "P1_MIGRATION",
-      "source": "scripts/v7_external_fair_paper_router.py"
-    },
-    {
-      "authority_mode": "SHADOW_EVIDENCE_PRODUCER_WITH_DORMANT_PAPER_MODE",
-      "canonical_replacement": "STRUCTURAL_ARB_ENGINE_TO_V7_GLOBAL_PORTFOLIO_COORDINATOR",
-      "classification": "MERGE_INTO_CANONICAL",
-      "reason": "the active launcher is shadow-only, but the standalone CLI retains a PAPER ledger path",
-      "runtime_reachability": "LAUNCHED_WITH_SHADOW_ONLY_FLAG",
-      "severity": "P0_BYPASS",
-      "source": "scripts/v7_fast_structural_paper_executor.py"
-    },
-    {
       "authority_mode": "DRAIN_AND_FINALIZE",
       "canonical_replacement": "V7_OPERATOR_EXACT_SHA_PROMOTION",
       "classification": "KEEP_CANONICAL",
@@ -154,15 +93,6 @@
       "runtime_reachability": "CUTOVER_ONLY",
       "severity": "CONTROLLED",
       "source": "scripts/v7_finalize_maker_cutover.py"
-    },
-    {
-      "authority_mode": "DORMANT_PAPER_LEDGER_PATH",
-      "canonical_replacement": "STRUCTURAL_ARB_ENGINE_TO_V7_GLOBAL_PORTFOLIO_COORDINATOR",
-      "classification": "KEEP_TEMPORARY_COMPATIBILITY",
-      "reason": "compatibility worker is disabled by launcher sizing but retains independent PAPER lifecycle code",
-      "runtime_reachability": "LAUNCHED_WITH_ZERO_MARKET_BUDGET",
-      "severity": "P0_BYPASS",
-      "source": "scripts/v7_hard_arb_guard.py"
     },
     {
       "authority_mode": "SOLE_LEDGER_FILE_WRITER",
@@ -181,33 +111,6 @@
       "runtime_reachability": "CUTOVER_ONLY",
       "severity": "CONTROLLED",
       "source": "scripts/v7_prepare_cutover_run_root.py"
-    },
-    {
-      "authority_mode": "DIRECT_EXECUTABLE_CANDIDATE_TO_LEDGER_SPOOL",
-      "canonical_replacement": "STRUCTURAL_ARB_ENGINE_TO_V7_GLOBAL_PORTFOLIO_COORDINATOR",
-      "classification": "MERGE_INTO_CANONICAL",
-      "reason": "structural detector publishes executable candidates directly to the ledger transport instead of the opportunity coordinator",
-      "runtime_reachability": "CANONICAL_LAUNCHER_COMPONENT",
-      "severity": "P0_BYPASS",
-      "source": "src/fast_runtime/part3.inc"
-    },
-    {
-      "authority_mode": "DIRECT_MARKOUT_ANNOTATION_TO_LEDGER_SPOOL",
-      "canonical_replacement": "BTC_SETTLEMENT_ENGINE_TO_V7_GLOBAL_PORTFOLIO_COORDINATOR",
-      "classification": "MERGE_INTO_CANONICAL",
-      "reason": "maker observer writes economic annotations directly to the ledger transport",
-      "runtime_reachability": "CANONICAL_LAUNCHER_COMPONENT",
-      "severity": "P0_BYPASS",
-      "source": "src/v7_maker_markout_observer.cpp"
-    },
-    {
-      "authority_mode": "DIRECT_MAKER_LIFECYCLE_TO_LEDGER_SPOOL",
-      "canonical_replacement": "BTC_SETTLEMENT_ENGINE_TO_V7_GLOBAL_PORTFOLIO_COORDINATOR",
-      "classification": "MERGE_INTO_CANONICAL",
-      "reason": "standalone maker runtime retains independent PAPER candidate, order, fill, inventory, and final-event production",
-      "runtime_reachability": "CANONICAL_LAUNCHER_COMPONENT",
-      "severity": "P0_BYPASS",
-      "source": "src/v7_market_maker_runtime.cpp"
     }
   ],
   "unexplained_edges": []
