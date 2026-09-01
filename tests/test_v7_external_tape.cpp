@@ -96,6 +96,9 @@ int main() {
                                              std::string(kExternalRawTapePayloadBytes + 1, 'x')));
         const auto raw_snapshot = raw_recorder.snapshot();
         assert(raw_snapshot.accepted == 1);
+        assert(raw_snapshot.dropped == 1);
+        assert(raw_snapshot.dropped_payload_too_large == 1);
+        assert(raw_snapshot.dropped_queue_full == 0);
         assert(raw_snapshot.evidence_valid == 0);
     }
     std::ifstream raw_input(raw_path, std::ios::binary);

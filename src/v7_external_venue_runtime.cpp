@@ -90,7 +90,9 @@ json::object transport_json(const ExternalWsSnapshot& value, const char* venue) 
 json::object tape_json(const TapeRecorderSnapshot& value, bool enabled) {
     return {
         {"enabled", enabled}, {"accepted", value.accepted}, {"written", value.written},
-        {"dropped", value.dropped}, {"queued", value.queued},
+        {"dropped", value.dropped},
+        {"dropped_payload_too_large", value.dropped_payload_too_large},
+        {"dropped_queue_full", value.dropped_queue_full}, {"queued", value.queued},
         {"evidence_valid", value.evidence_valid != 0}, {"writer_healthy", value.writer_healthy != 0},
     };
 }

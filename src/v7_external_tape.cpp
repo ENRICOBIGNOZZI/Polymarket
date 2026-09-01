@@ -191,6 +191,8 @@ struct ExternalRawTapeRecorder::Impl {
     std::atomic<std::uint64_t> accepted{0};
     std::atomic<std::uint64_t> written{0};
     std::atomic<std::uint64_t> dropped{0};
+    std::atomic<std::uint64_t> dropped_payload_too_large{0};
+    std::atomic<std::uint64_t> dropped_queue_full{0};
     std::atomic<bool> evidence_valid{true};
     std::atomic<bool> writer_healthy{true};
 
@@ -315,8 +317,7 @@ bool ExternalRawTapeRecorder::try_record_raw(
         return false;
     }
     const auto sequence = impl_->next_sequence.fetch_add(1, std::memory_order_relaxed) + 1;
-    const auto enqueue = [&](auto& record, auto& queue, std::size_t maximum) noexcept {
-        if (payload.size() > maximum) return false;
+    const auto enqueue = [&](auto& record, auto& queue) noexcept {
         record.tape_sequence = sequence;
         record.connection_epoch = connection_epoch;
         record.receive_monotonic_ns = receive_monotonic_ns;
@@ -326,15 +327,25 @@ bool ExternalRawTapeRecorder::try_record_raw(
         std::memcpy(record.payload.data(), payload.data(), payload.size());
         return queue.try_push(record);
     };
-    const bool queued = impl_->burst_payloads
-        ? enqueue(*impl_->burst_producer_record, *impl_->burst_queue,
-                  kExternalBurstRawTapePayloadBytes)
+    const std::size_t maximum = impl_->burst_payloads
+        ? kExternalBurstRawTapePayloadBytes
         : impl_->large_payloads
-            ? enqueue(*impl_->large_producer_record, *impl_->large_queue,
-                      kExternalLargeRawTapePayloadBytes)
-            : enqueue(impl_->producer_record, impl_->queue, kExternalRawTapePayloadBytes);
+            ? kExternalLargeRawTapePayloadBytes
+            : kExternalRawTapePayloadBytes;
+    if (payload.size() > maximum) {
+        impl_->dropped.fetch_add(1, std::memory_order_relaxed);
+        impl_->dropped_payload_too_large.fetch_add(1, std::memory_order_relaxed);
+        impl_->evidence_valid.store(false, std::memory_order_release);
+        return false;
+    }
+    const bool queued = impl_->burst_payloads
+        ? enqueue(*impl_->burst_producer_record, *impl_->burst_queue)
+        : impl_->large_payloads
+            ? enqueue(*impl_->large_producer_record, *impl_->large_queue)
+            : enqueue(impl_->producer_record, impl_->queue);
     if (!queued) {
         impl_->dropped.fetch_add(1, std::memory_order_relaxed);
+        impl_->dropped_queue_full.fetch_add(1, std::memory_order_relaxed);
         impl_->evidence_valid.store(false, std::memory_order_release);
         return false;
     }
@@ -348,6 +359,8 @@ TapeRecorderSnapshot ExternalRawTapeRecorder::snapshot() const noexcept {
     out.accepted = impl_->accepted.load(std::memory_order_acquire);
     out.written = impl_->written.load(std::memory_order_acquire);
     out.dropped = impl_->dropped.load(std::memory_order_acquire);
+    out.dropped_payload_too_large = impl_->dropped_payload_too_large.load(std::memory_order_acquire);
+    out.dropped_queue_full = impl_->dropped_queue_full.load(std::memory_order_acquire);
     out.queued = impl_->queued();
     out.evidence_valid = impl_->evidence_valid.load(std::memory_order_acquire) ? 1 : 0;
     out.writer_healthy = impl_->writer_healthy.load(std::memory_order_acquire) ? 1 : 0;

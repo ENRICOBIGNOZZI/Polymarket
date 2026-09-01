@@ -77,6 +77,8 @@ struct TapeRecorderSnapshot {
     std::uint64_t accepted = 0;
     std::uint64_t written = 0;
     std::uint64_t dropped = 0;
+    std::uint64_t dropped_payload_too_large = 0;
+    std::uint64_t dropped_queue_full = 0;
     std::size_t queued = 0;
     std::uint8_t evidence_valid = 1;
     std::uint8_t writer_healthy = 1;
