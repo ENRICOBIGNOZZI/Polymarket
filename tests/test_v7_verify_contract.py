@@ -26,6 +26,8 @@ class V7VerifyContractTests(unittest.TestCase):
             "v7_protocol_fuzz.py",
             "git status --porcelain=v1 --untracked-files=all",
             "exact-SHA verification requires a clean worktree",
+            'BUILD_MANIFEST="$RELEASE_BUILD/build_manifest.json"',
+            'rm -f -- "$BUILD_MANIFEST"',
         ):
             self.assertIn(required, text)
 

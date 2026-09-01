@@ -134,14 +134,19 @@ if ((${#binary_args[@]} == 0)); then
   echo "verify_v7: no canonical V7 binaries found" >&2
   exit 2
 fi
+# This path is generated exclusively by this verifier.  The manifest writer
+# correctly refuses to overwrite immutable evidence, so clear the previous
+# local verification product before asking it to create a fresh exact-SHA one.
+BUILD_MANIFEST="$RELEASE_BUILD/build_manifest.json"
+rm -f -- "$BUILD_MANIFEST"
 python3 scripts/v7_build_manifest.py create \
-  --output "$RELEASE_BUILD/build_manifest.json" \
+  --output "$BUILD_MANIFEST" \
   --repository-root "$REPOSITORY_ROOT" \
   --code-sha "$(git rev-parse HEAD)" \
   --timestamp "$(git show -s --format=%cI HEAD)" \
   --build-type Release \
   "${binary_args[@]}"
-python3 scripts/v7_build_manifest.py validate "$RELEASE_BUILD/build_manifest.json" >/dev/null
+python3 scripts/v7_build_manifest.py validate "$BUILD_MANIFEST" >/dev/null
 
 if [[ "${V7_VERIFY_SANITIZERS:-0}" == "1" ]]; then
   SANITIZER_BUILD="$BUILD_ROOT/ASan-UBSan"
