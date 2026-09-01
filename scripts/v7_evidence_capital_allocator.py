@@ -190,6 +190,7 @@ def propose(allocation: dict[str, Any], economics: dict[str, Any], *,
     hours = economics.get("strategy_capital_hours") if isinstance(economics.get("strategy_capital_hours"), dict) else {}
     capacities = economics.get("strategy_capacity_usd") if isinstance(economics.get("strategy_capacity_usd"), dict) else {}
     drawdowns = economics.get("strategy_drawdown_fraction") if isinstance(economics.get("strategy_drawdown_fraction"), dict) else {}
+    drawdown_usd = economics.get("strategy_drawdown_usd") if isinstance(economics.get("strategy_drawdown_usd"), dict) else {}
     thresholds = economics.get("strategy_minimum_terminal_units") if isinstance(economics.get("strategy_minimum_terminal_units"), dict) else {}
     exploration_fraction = min(0.20, max(0.0, finite(exploration_fraction, 0.10)))
     reserve_fraction = min(0.99, max(0.80, finite(reserve_fraction, 0.85)))
@@ -214,7 +215,11 @@ def propose(allocation: dict[str, Any], economics: dict[str, Any], *,
         pnl_2x = finite(strategy_stress.get("2x"))
         capital_hours = max(0.0, finite(hours.get(strategy)))
         capacity = max(0.0, finite(capacities.get(strategy)))
-        drawdown = max(0.0, finite(drawdowns.get(strategy)))
+        drawdown_observed = strategy in drawdowns or strategy in drawdown_usd
+        drawdown = max(0.0, finite(
+            drawdowns.get(strategy),
+            finite(drawdown_usd.get(strategy), 0.0) / max(envelope, 1e-9),
+        ))
         confidence = day_block_lcb95(
             [value for _, value in day_series[strategy]],
             seed=int(hashlib.sha256(strategy.encode()).hexdigest()[:8], 16),
@@ -232,6 +237,8 @@ def propose(allocation: dict[str, Any], economics: dict[str, Any], *,
             blockers.append("CAPITAL_HOURS_MISSING")
         if capacity <= 0.0:
             blockers.append("CAPACITY_MISSING_OR_ZERO")
+        if not drawdown_observed:
+            blockers.append("DRAWDOWN_MISSING")
         if drawdown >= hard_drawdown:
             blockers.append("HARD_DRAWDOWN_BREACH")
         eligible = not blockers

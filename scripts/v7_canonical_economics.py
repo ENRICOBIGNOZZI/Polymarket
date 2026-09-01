@@ -182,6 +182,7 @@ class UnitState:
     pnl_component_observed: dict[str, bool] = field(default_factory=lambda: {name: False for name in PNL_COMPONENTS})
     cost_vector_complete_flag: bool = False
     capital_duration_ms: int = 0
+    capacity_observations_usd: list[float] = field(default_factory=list)
     reasons: set[str] = field(default_factory=set)
     economic_authorities: set[str] = field(default_factory=set)
     counterfactual: bool = False
@@ -232,6 +233,13 @@ class UnitState:
                 self.reasons.add(str(exc))
         self.required_contract_explicit = self.required_contract_explicit or explicit
         self.cost_vector_complete_flag = self.cost_vector_complete_flag or _bool_true(metadata.get("cost_vector_complete"))
+        for key in (
+            "executable_capacity_usd", "capacity_at_decision_usd",
+            "market_capacity_usd", "capacity_usd",
+        ):
+            capacity = _finite(metadata.get(key))
+            if capacity is not None and capacity > 0.0:
+                self.capacity_observations_usd.append(capacity)
 
     def observe_submission(self, event: Any) -> None:
         leg = _leg_id(event)
@@ -566,14 +574,36 @@ def assess(ledger_path: Path, *, expected_model_sha: str, family: str | None = N
         lambda: {f"{multiplier:g}x": 0.0 for multiplier in STRESS_MULTIPLIERS}
     )
     strategy_capital_hours: dict[str, float] = defaultdict(float)
+    strategy_day_stressed_net_pnl: dict[str, dict[str, float]] = defaultdict(
+        lambda: defaultdict(float)
+    )
+    strategy_capacity_observations: dict[str, list[float]] = defaultdict(list)
     for unit, pnl in event_mature:
         strategy_net_pnl[unit.strategy] += pnl
         strategy_mature_terminal_units[unit.strategy] += 1
         strategy_capital_hours[unit.strategy] += unit.capital_duration_ms / 3_600_000.0
+        day = str(unit.latest_recorded_ts_ms // 86_400_000)
+        strategy_day_stressed_net_pnl[unit.strategy][day] += _stress_pnl(
+            pnl, unit.baseline_cost(), 2.0,
+        )
+        strategy_capacity_observations[unit.strategy].extend(
+            unit.capacity_observations_usd)
         for multiplier in STRESS_MULTIPLIERS:
             strategy_stressed_net_pnl[unit.strategy][f"{multiplier:g}x"] += _stress_pnl(
                 pnl, unit.baseline_cost(), multiplier,
             )
+    strategy_drawdown_usd: dict[str, float] = {}
+    for strategy, daily in strategy_day_stressed_net_pnl.items():
+        cumulative = peak = maximum_drawdown = 0.0
+        for day in sorted(daily, key=lambda value: int(value)):
+            cumulative += daily[day]
+            peak = max(peak, cumulative)
+            maximum_drawdown = max(maximum_drawdown, peak - cumulative)
+        strategy_drawdown_usd[strategy] = maximum_drawdown
+    strategy_capacity_usd = {
+        strategy: min(values)
+        for strategy, values in strategy_capacity_observations.items() if values
+    }
     pnl_decomposition = {
         component: (
             sum(unit.pnl_components[component] for unit, _ in event_mature)
@@ -665,6 +695,15 @@ def assess(ledger_path: Path, *, expected_model_sha: str, family: str | None = N
             strategy: values for strategy, values in sorted(strategy_stressed_net_pnl.items())
         },
         "strategy_capital_hours": dict(sorted(strategy_capital_hours.items())),
+        "strategy_day_stressed_net_pnl": {
+            strategy: dict(sorted(values.items(), key=lambda item: int(item[0])))
+            for strategy, values in sorted(strategy_day_stressed_net_pnl.items())
+        },
+        "strategy_drawdown_usd": dict(sorted(strategy_drawdown_usd.items())),
+        "strategy_capacity_usd": dict(sorted(strategy_capacity_usd.items())),
+        "strategy_capacity_semantics": (
+            "MINIMUM_EXPLICIT_EXECUTABLE_CAPACITY_ACROSS_MATURE_TERMINAL_UNITS"
+        ),
         "pnl_decomposition": {
             **pnl_decomposition,
             "fees": costs_by_component["fee"],

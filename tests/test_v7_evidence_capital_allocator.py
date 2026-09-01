@@ -32,6 +32,7 @@ class EvidenceCapitalAllocatorTests(unittest.TestCase):
                 "INSUFFICIENT_TERMINAL_UNITS", "INSUFFICIENT_DAY_BLOCKS",
                 "DAY_BLOCK_LCB95_NOT_POSITIVE", "FULL_COST_2X_PNL_NOT_POSITIVE",
                 "CAPITAL_HOURS_MISSING", "CAPACITY_MISSING_OR_ZERO",
+                "DRAWDOWN_MISSING",
             ],
         )
 
@@ -44,6 +45,7 @@ class EvidenceCapitalAllocatorTests(unittest.TestCase):
             },
             "strategy_capital_hours": {"maker": 2.0, "arb": 1.0},
             "strategy_capacity_usd": {"maker": 20.0, "arb": 20.0},
+            "strategy_drawdown_usd": {"maker": 1.0, "arb": 1.0},
             "strategy_day_stressed_net_pnl": {
                 "maker": {f"2026-08-{day:02d}": -0.1 for day in range(1, 31)},
                 "arb": {f"2026-08-{day:02d}": 0.1 for day in range(1, 31)},

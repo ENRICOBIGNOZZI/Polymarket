@@ -121,7 +121,8 @@ class CanonicalEconomicsTest(unittest.TestCase):
                 executable_liquidation_value=0.968,
                 realized_cashflow=-0.082,
                 metadata={"authoritative_fee_verified": True,
-                          "cost_vector_complete": True},
+                          "cost_vector_complete": True,
+                          "executable_capacity_usd": 25.0},
             ),
             ledger.LedgerEvent(
                 event_type="FINAL", strategy="MICRO_MAKER_PRO", model_sha=SHA,
@@ -143,6 +144,15 @@ class CanonicalEconomicsTest(unittest.TestCase):
         self.assertEqual(report["mature_terminal_units"], 1)
         self.assertAlmostEqual(report["net_pnl"], -0.082)
         self.assertAlmostEqual(report["costs"]["baseline_total"], 0.082)
+        self.assertEqual(
+            list(report["strategy_day_stressed_net_pnl"]), ["MICRO_MAKER_PRO"]
+        )
+        self.assertAlmostEqual(
+            sum(report["strategy_day_stressed_net_pnl"]["MICRO_MAKER_PRO"].values()),
+            -0.164,
+        )
+        self.assertAlmostEqual(report["strategy_drawdown_usd"]["MICRO_MAKER_PRO"], 0.164)
+        self.assertEqual(report["strategy_capacity_usd"]["MICRO_MAKER_PRO"], 25.0)
 
     def test_shadow_counterfactual_is_in_ledger_but_excluded_from_paper_pnl(self) -> None:
         now = clock()
