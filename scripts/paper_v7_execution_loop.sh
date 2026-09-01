@@ -3,6 +3,7 @@ set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT"
+source scripts/v7_process_runtime.sh
 CONFIG="${PM_V7_CONFIG:-config/paper_v7.json}"
 RUN_ROOT="${PM_V7_RUN_ROOT:-runs/paper_v7_live}"
 RECORDER="${PM_TRADE_RECORDER:-build/polymarket_v7_trade_recorder}"
@@ -220,6 +221,9 @@ PY
 python3 scripts/v7_research_data_plane_contract.py \
   --repository-root "$ROOT" \
   > "$CONTROL/research_data_plane_contract.json"
+python3 scripts/v7_process_manifest.py \
+  --repository-root "$ROOT" \
+  --output "$CONTROL/process_manifest_resolved.json"
 
 # Freeze the horizon/authority contract even during execution-evidence cold
 # start. With no empirical ACK/cancel profile supplied, the resulting snapshot
@@ -271,7 +275,7 @@ fi
 # every economically actionable fair into a silent `NOTHING` decision.
 python3 scripts/v7_public_https_proxy.py --host 127.0.0.1 --port "$PUBLIC_PROXY_PORT" \
   >> "$RUN_ROOT/public_https_proxy.log" 2>&1 &
-pids+=("$!")
+v7_register_child "$!"
 
 # Limitless exposes markets, orderbooks and finalized trades through public
 # read-only endpoints. A trading token is intentionally never passed here.
@@ -283,7 +287,7 @@ python3 scripts/v7_limitless_collector.py \
   --state "$RUN_ROOT/shadow/limitless/collector_state.json" \
   --status "$RUN_ROOT/shadow/limitless/component_status.json" --interval 15 --loop \
   >> "$RUN_ROOT/shadow/limitless/collector.log" 2>&1 &
-pids+=("$!")
+v7_register_child "$!"
 proxy_ready=0
 for _ in $(seq 1 50); do
   if python3 - "$PUBLIC_PROXY_PORT" <<'PY' >/dev/null 2>&1
@@ -337,7 +341,7 @@ python3 scripts/v7_rtds_external_fair_monitor.py \
   --champion-pointer "$RUN_ROOT/external_fair/model_registry/fair_value_champion.json" \
   --challenger-pointer "$RUN_ROOT/external_fair/model_registry/fair_value_challenger.json" \
   >> "$RUN_ROOT/external_fair/rtds_monitor.log" 2>&1 &
-pids+=("$!")
+v7_register_child "$!"
 
 "$EXTERNAL_VENUE_RUNTIME" \
   --output "$RUN_ROOT/external_fair/external_venues.json" \
@@ -345,7 +349,7 @@ pids+=("$!")
   --normalized-event-tape-dir "$RUN_ROOT/external_fair/normalized_events" \
   --raw-tape-dir "$RUN_ROOT/external_fair/raw" \
   >> "$RUN_ROOT/external_fair/external_venues.log" 2>&1 &
-pids+=("$!")
+v7_register_child "$!"
 
 # Slow public USD-M market state complements the event-driven depth channel.
 # It is explicitly polling data and cannot become an execution trigger by
@@ -354,17 +358,17 @@ python3 scripts/v7_binance_usdm_rest_collector.py \
   --status "$RUN_ROOT/external_fair/binance_usdm_rest_status.json" \
   --tape "$RUN_ROOT/external_fair/binance_usdm_rest.jsonl" --interval 5 --loop \
   >> "$RUN_ROOT/external_fair/binance_usdm_rest.log" 2>&1 &
-pids+=("$!")
+v7_register_child "$!"
 python3 scripts/v7_deribit_rest_collector.py \
   --status "$RUN_ROOT/external_fair/deribit_rest_status.json" \
   --tape "$RUN_ROOT/external_fair/deribit_rest.jsonl" --interval 15 --loop \
   >> "$RUN_ROOT/external_fair/deribit_rest.log" 2>&1 &
-pids+=("$!")
+v7_register_child "$!"
 python3 scripts/v7_coinbase_l2_rest_collector.py \
   --status "$RUN_ROOT/external_fair/coinbase_l2_rest_status.json" \
   --tape "$RUN_ROOT/external_fair/coinbase_l2_rest.jsonl" --interval 5 --loop \
   >> "$RUN_ROOT/external_fair/coinbase_l2_rest.log" 2>&1 &
-pids+=("$!")
+v7_register_child "$!"
 python3 scripts/v7_external_forward_evidence_gate.py \
   --runtime-status "$RUN_ROOT/external_fair/external_venues.json" \
   --coinbase-rest-status "$RUN_ROOT/external_fair/coinbase_l2_rest_status.json" \
@@ -372,12 +376,12 @@ python3 scripts/v7_external_forward_evidence_gate.py \
   --output "$RUN_ROOT/external_fair/forward_evidence_status.json" \
   --min-duration-seconds "$EXTERNAL_FORWARD_MIN_DURATION_SECONDS" --loop \
   >> "$RUN_ROOT/external_fair/forward_evidence.log" 2>&1 &
-pids+=("$!")
+v7_register_child "$!"
 
 python3 scripts/v7_external_fair_paper_router.py \
   --run-root "$RUN_ROOT" --model-sha "$SHA" --config "$EXTERNAL_FAIR_POLICY" --interval 1 \
   >> "$RUN_ROOT/external_fair/paper_router.log" 2>&1 &
-pids+=("$!")
+v7_register_child "$!"
 
 CONFIG_HASH="$(git hash-object "$CONFIG")"
 POLICY_HASH="$(git hash-object "$MAKER_POLICY")"
@@ -523,7 +527,7 @@ python3 scripts/v7_adaptive_universe.py \
   --config "$ADAPTIVE_UNIVERSE_CONFIG" --output-dir "$RUN_ROOT/universe" \
   --model-sha "$SHA" --loop \
   >> "$RUN_ROOT/universe/collector.log" 2>&1 &
-pids+=("$!")
+v7_register_child "$!"
 universe_ready=0
 for _ in $(seq 1 600); do
   if python3 - "$RUN_ROOT/universe/status.json" "$SHA" <<'PY' >/dev/null 2>&1
@@ -585,7 +589,7 @@ python3 scripts/v7_relation_builder.py \
       >> "$RUN_ROOT/graph_rv/relation_builder.log" 2>&1 || true
     sleep 60
   done
-) & pids+=("$!")
+) & v7_register_child "$!"
 
 maker_selection_ready() {
   python3 - "$RUN_ROOT/micro_maker/reward_selection.json" "$SHA" <<'PY' >/dev/null 2>&1
@@ -641,7 +645,7 @@ PY
   --markets "$ACTIVE_SCAN_MARKET_BUDGET" --batch 40 --min-liquidity 2 \
   --lookback-seconds "$MAKER_FLOW_LOOKBACK_SECONDS" --interval 5 --loop \
   >> "$RUN_ROOT/trade_recorder.log" 2>&1 &
-pids+=("$!")
+v7_register_child "$!"
 
 # One persistent canonical ledger router. 100ms transport cadence keeps FILL
 # evidence available before the 1s markout horizon without creating a second
@@ -649,14 +653,14 @@ pids+=("$!")
 python3 scripts/v7_ledger_spool.py \
   --run-root "$RUN_ROOT" --model-sha "$SHA" --loop --interval 0.1 \
   >> "$RUN_ROOT/ledger_router.log" 2>&1 &
-pids+=("$!")
+v7_register_child "$!"
 
 # The only consumer of proposals from both economic engines. Checked-in V7
 # cannot authorize new risk; the coordinator may select CANCEL or emit NOTHING.
 python3 scripts/v7_global_portfolio_coordinator.py \
   --run-root "$RUN_ROOT" --loop --interval 0.1 \
   >> "$RUN_ROOT/global_portfolio_coordinator.log" 2>&1 &
-pids+=("$!")
+v7_register_child "$!"
 
 # Slow-plane reward selection only. It may perform REST discovery, but it never
 # decides/cancels quotes and is not a second maker runtime.
@@ -677,7 +681,7 @@ pids+=("$!")
       >> "$RUN_ROOT/micro_maker/reward_selection.log" 2>&1 || true
     sleep "$MAKER_SELECTOR_REFRESH_SECONDS"
   done
-) & pids+=("$!")
+) & v7_register_child "$!"
 
 # Exact-SHA fee/reward evidence registry. Unknown fees are explicitly
 # non-executable and unknown rewards are forced to zero; this process has no
@@ -688,7 +692,7 @@ python3 scripts/v7_fee_reward_registry.py \
   --output "$CONTROL/fee_reward_registry.json" \
   --model-sha "$SHA" --interval 30 \
   >> "$RUN_ROOT/fee_reward_registry.log" 2>&1 &
-pids+=("$!")
+v7_register_child "$!"
 
 # V7 Fast Structural is the zero-authority detector/planning component of the
 # structural-arbitrage owner. It may publish candidates and execution-policy
@@ -700,7 +704,7 @@ pids+=("$!")
   --run-dir "$RUN_ROOT/fast_structural" --run-root "$RUN_ROOT" --model-sha "$SHA" \
   --markets "$ACTIVE_SCAN_MARKET_BUDGET" --min-liquidity 2 --shard-size 200 \
   >> "$RUN_ROOT/fast_structural/runtime.log" 2>&1 &
-pids+=("$!")
+v7_register_child "$!"
 
 # Slow-plane exact-SHA fill/markout fit. A refit is a CHALLENGER only. It is
 # written to a separate artifact and registered for OOS/shadow-PAPER review.
@@ -732,7 +736,7 @@ pids+=("$!")
     fi
     sleep 60
   done
-) & pids+=("$!")
+) & v7_register_child "$!"
 
 # The professional Maker is now an execution-model component of the single BTC
 # settlement owner. Keep its exact-WS fillability and fill-conditioned markout
@@ -762,7 +766,7 @@ pids+=("$!")
     --rotation-min-relative-fill-multiplier "$MAKER_ROTATION_MIN_RELATIVE_MULTIPLIER" \
     --observer-only
 ) >> "$RUN_ROOT/micro_maker/cohort_supervisor.log" 2>&1 &
-pids+=("$!")
+v7_register_child "$!"
 
 # Hourly exact-SHA evidence pack. Reports are observational only and remain
 # outside the repository checkout, so generating them cannot mutate deployed
@@ -775,7 +779,7 @@ pids+=("$!")
       >> "$RUN_ROOT/economic_artifacts.log" 2>&1 || true
     sleep 3600
   done
-) & pids+=("$!")
+) & v7_register_child "$!"
 
 (
   while [[ ! -e "$KILL" ]]; do
@@ -787,7 +791,7 @@ pids+=("$!")
       >> "$RUN_ROOT/graph_rv/scan.log" 2>&1 || true
     sleep 15
   done
-) & pids+=("$!")
+) & v7_register_child "$!"
 
 (
   while [[ ! -e "$KILL" ]]; do
@@ -807,7 +811,7 @@ pids+=("$!")
       >> "$RUN_ROOT/evidence_capital_allocator.log" 2>&1 || true
     sleep 60
   done
-) & pids+=("$!")
+) & v7_register_child "$!"
 
 (
   while [[ ! -e "$KILL" ]]; do
@@ -820,7 +824,7 @@ pids+=("$!")
       >> "$RUN_ROOT/micro_taker/runtime.log" 2>&1 || true
     sleep 5
   done
-) & pids+=("$!")
+) & v7_register_child "$!"
 
 # Research-only official-source OSINT tape. It has no model-to-intent bridge,
 # OMS, capital, risk, order, or promotion authority. Source failures are
@@ -832,7 +836,7 @@ python3 scripts/v7_osint_collector.py \
   --status "$RUN_ROOT/osint/status.json" \
   --interval 60 --loop \
   >> "$RUN_ROOT/osint/collector.log" 2>&1 &
-pids+=("$!")
+v7_register_child "$!"
 
 # Candidate discovery is isolated from verification: lexical similarity may
 # populate a review queue, but only exact attested semantic bundles can activate
@@ -848,7 +852,7 @@ python3 scripts/v7_osint_mapping_collector.py \
   --status "$RUN_ROOT/osint/mapping_status.json" \
   --interval 60 --loop \
   >> "$RUN_ROOT/osint/mapping.log" 2>&1 &
-pids+=("$!")
+v7_register_child "$!"
 
 # Research-only market-creation/milestone collector. Its first snapshot is a
 # baseline and can never masquerade as a burst of new listings. Exact semantic
@@ -860,7 +864,7 @@ python3 scripts/v7_market_open_collector.py \
   --status "$RUN_ROOT/market_open/status.json" \
   --interval 5 --loop \
   >> "$RUN_ROOT/market_open/collector.log" 2>&1 &
-pids+=("$!")
+v7_register_child "$!"
 
 # Sports uses the credential-gated Sportradar Realtime adapter. Without its key
 # it remains alive and publishes CREDENTIALS_REQUIRED rather than fabricating a
@@ -874,7 +878,7 @@ python3 scripts/v7_sports_collector.py \
   --status "$RUN_ROOT/shadow/sports_latency/component_status.json" \
   --interval 10 --loop \
   >> "$RUN_ROOT/shadow/sports_latency/collector.log" 2>&1 &
-pids+=("$!")
+v7_register_child "$!"
 
 # Kalshi public REST market data begins collecting immediately. Polling is
 # explicitly distinguished from event latency; semantic equivalence and fees
@@ -888,7 +892,7 @@ python3 scripts/v7_cross_platform_collector.py \
   --status "$RUN_ROOT/shadow/cross_platform/component_status.json" \
   --interval 30 --loop \
   >> "$RUN_ROOT/shadow/cross_platform/collector.log" 2>&1 &
-pids+=("$!")
+v7_register_child "$!"
 
 # Kalshi authenticated WebSocket is a separate read-only collector.  It opens
 # only when a locally protected, rotated private key and key ID are configured.
@@ -898,7 +902,7 @@ python3 scripts/v7_kalshi_authenticated_ws_collector.py \
   --state "$RUN_ROOT/shadow/cross_platform/kalshi_ws_state.json" \
   --status "$RUN_ROOT/shadow/cross_platform/kalshi_ws_status.json" --loop \
   >> "$RUN_ROOT/shadow/cross_platform/kalshi_ws.log" 2>&1 &
-pids+=("$!")
+v7_register_child "$!"
 
 # The exact-SHA supervisor aggregates measured sports/cross evidence and the
 # still configuration-blocked wallet sleeve. It owns no OMS, capital, ledger
@@ -910,7 +914,7 @@ python3 scripts/v7_research_shadow_supervisor.py \
   --model-sha "$SHA" \
   --heartbeat-seconds 5 \
   >> "$RUN_ROOT/research_shadow_supervisor.log" 2>&1 &
-pids+=("$!")
+v7_register_child "$!"
 
 # Ranking, PCA and Local Factor remain outside authoritative live-PAPER, but no
 # longer remain dormant. Their exact-SHA supervisor continuously runs frozen,
@@ -920,8 +924,9 @@ python3 scripts/v7_slow_economic_shadow_supervisor.py \
   --scope "$LIVE_MODEL_SCOPE" --model-sha "$SHA" \
   --interval-seconds 7200 --heartbeat-seconds 5 \
   >> "$RUN_ROOT/slow_economic_shadow_supervisor.log" 2>&1 &
-pids+=("$!")
+v7_register_child "$!"
 
+v7_assert_registered_child_count 31
 write_runtime_status running false
 
 while [[ ! -e "$KILL" ]]; do

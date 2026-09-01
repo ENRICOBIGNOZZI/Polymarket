@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import argparse
 import csv
+import hashlib
 import json
 import math
 import os
@@ -317,6 +318,12 @@ def collect_snapshot(run_root: Path, repository_root: Path | None = None, *, now
     directives = _json(repository_root / "config" / "operator_directives.json")
     strategy_registry = _json(repository_root / "config" / "v7_strategy_registry.json")
     live_model_scope = _json(repository_root / "config" / "v7_live_model_scope.json")
+    process_manifest_path = repository_root / "config" / "v7_process_manifest.json"
+    process_manifest = _json(process_manifest_path)
+    try:
+        process_manifest_sha256 = hashlib.sha256(process_manifest_path.read_bytes()).hexdigest()
+    except OSError:
+        process_manifest_sha256 = ""
     authorization = directives.get("paper_v7_authorization") if isinstance(directives.get("paper_v7_authorization"), dict) else {}
     authority_max_drawdown = _number(authorization.get("max_drawdown"), 0.0)
     authority_valid = directives.get("authority") == "latest_explicit_user_instruction" and authorization.get("paper_only") is True and authorization.get("authenticated_execution") is False and 0.0 < authority_max_drawdown <= 1.0
@@ -417,6 +424,12 @@ def collect_snapshot(run_root: Path, repository_root: Path | None = None, *, now
         "research_shadow_statuses": research_shadow_statuses,
         "strategy_registry": strategy_registry,
         "live_model_scope": live_model_scope,
+        "process_manifest": {
+            "schema": process_manifest.get("schema"),
+            "version": process_manifest.get("version"),
+            "process_count": len(process_manifest.get("processes") or []),
+            "sha256": process_manifest_sha256,
+        },
         "runtime_alive": runtime_alive,
         "portfolio": portfolio,
         "allocations": allocations,

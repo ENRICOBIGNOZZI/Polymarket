@@ -257,7 +257,7 @@ def _processes(launcher: str) -> list[tuple[str, str, int]]:
     processes: list[tuple[str, str, int]] = []
     previous = 0
     for index, line in enumerate(lines):
-        if 'pids+=("$!")' not in line:
+        if 'pids+=("$!")' not in line and 'v7_register_child "$!"' not in line:
             continue
         segment = "\n".join(lines[previous:index + 1])
         previous = index + 1

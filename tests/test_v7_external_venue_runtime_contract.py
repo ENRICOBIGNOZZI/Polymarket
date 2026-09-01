@@ -18,7 +18,9 @@ def main() -> None:
     assert "ExternalAssetState state" in source
     assert '"real_order_submission", false' in source
     assert "polymarket_v7_external_venue_runtime" in cmake
-    assert 'pids+=("$!")' in launcher
+    assert 'source scripts/v7_process_runtime.sh' in launcher
+    assert 'v7_register_child "$!"' in launcher
+    assert "v7_assert_registered_child_count 31" in launcher
     assert "external_venues.json" in launcher
     assert "std::make_unique<beast::flat_static_buffer" in websocket
     assert "flat_static_buffer<kMaxWsMessageBytes> buffer;" not in websocket

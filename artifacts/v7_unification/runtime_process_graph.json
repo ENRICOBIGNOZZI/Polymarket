@@ -1,60 +1,1308 @@
 {
-  "schema": "polymarket_v7_runtime_process_graph_v2",
+  "authority_counts": {
+    "capital_allocator": 1,
+    "global_portfolio_coordinator": 1,
+    "inventory": 1,
+    "ledger": 1,
+    "oms": 1,
+    "promotion": 0,
+    "risk_engine": 1,
+    "runtime_identity": 1
+  },
+  "dependency_graph_acyclic": true,
+  "launcher_child_count": 31,
+  "launcher_manifest_parity": true,
   "paper_only": true,
-  "authenticated_execution": false,
-  "real_order_submission": false,
-  "real_capital_at_risk": false,
-  "source_snapshot_sha": "1ec82a1e9a38eced06745ed941a8da2b49996da6",
-  "canonical_runtime_owners": {
-    "lifecycle": "ops/v7_runtime_supervisor.py",
-    "launcher": "scripts/paper_v7_execution_loop.sh",
-    "runtime_identity": "V7_EXACT_SHA_RUNTIME_IDENTITY",
-    "cutover": "V7_OPERATOR_EXACT_SHA_PROMOTION"
-  },
-  "static_launcher_inventory": {
-    "source": "scripts/paper_v7_execution_loop.sh",
-    "process_count": 33,
-    "machine_readable_entries": "artifacts/v7_unification/path_classification.json#object_type=process",
-    "runtime_output_count": 123,
-    "runtime_output_entries": "artifacts/v7_unification/path_classification.json#object_type=runtime_output",
-    "extraction_validator": "scripts/v7_surface_classification.py",
-    "unexplained_processes": [],
-    "unexplained_runtime_outputs": []
-  },
-  "authority_boundary": {
-    "multiple_fault_isolated_collectors_allowed": true,
-    "multiple_economic_authorities_allowed": false,
-    "research_may_control_execution_core": false,
-    "economic_engines": [
-      "BTC_SETTLEMENT_ENGINE",
-      "STRUCTURAL_ARB_ENGINE"
-    ],
-    "authority_registry": "config/v7_authority_registry.json",
-    "ledger_transport_edge_registry": "config/v7_authority_edges.json"
-  },
-  "opportunity_coordination": {
-    "owner": "V7_GLOBAL_PORTFOLIO_COORDINATOR",
-    "runtime": "scripts/v7_global_portfolio_coordinator.py",
-    "engine_count": 2,
-    "new_risk_authorized": false,
-    "safe_actions": ["CANCEL", "NOTHING"],
-    "component_candidate_ingress": "scripts/v7_ledger_spool.py#OPPORTUNITY_INGRESS",
-    "unauthorized_component_lifecycle_policy": "QUARANTINE",
-    "research_ledger_policy": "ROUTE_TO_ZERO_AUTHORITY_EVIDENCE"
-  },
-  "declarative_manifest_migration": {
-    "state": "PENDING_PHASE_7",
-    "current_source": "launcher-encoded process catalogue",
-    "target_source": "single declarative process manifest consumed by launcher, tests, monitoring, and cutover",
-    "deletion_gate": "DECLARATIVE_PROCESS_MANIFEST_PARITY_AND_RUNTIME_PROOF"
-  },
-  "live_runtime_inspection": {
-    "state": "EXTERNAL_BLOCKER",
-    "reason": "PAPER-host SSH authentication failed before command execution",
-    "process_identities_verified": false,
-    "active_writer_counts_verified": false,
-    "open_orders_verified": false,
-    "paper_positions_verified": false
-  },
-  "secret_values_recorded": false
+  "process_count": 33,
+  "processes": [
+    {
+      "archival_behavior": "EXACT_SHA_ATOMIC_ARCHIVE",
+      "arguments": [
+        "--host",
+        "127.0.0.1",
+        "--port",
+        "${PUBLIC_PROXY_PORT}"
+      ],
+      "authority_flags": {
+        "capital_allocator": false,
+        "global_portfolio_coordinator": false,
+        "inventory": false,
+        "ledger": false,
+        "oms": false,
+        "promotion": false,
+        "risk_engine": false,
+        "runtime_identity": false
+      },
+      "config_identity_required": false,
+      "dependencies": [],
+      "drain_behavior": "STOP_AFTER_DEPENDENTS",
+      "exact_sha_required": true,
+      "executable": "scripts/v7_public_https_proxy.py",
+      "fault_domain": "INFRASTRUCTURE",
+      "freshness_slo_seconds": 5,
+      "id": "public_https_proxy",
+      "inputs": [],
+      "launcher_log": "public_https_proxy.log",
+      "liveness_slo_seconds": 5,
+      "outputs": [
+        "public_https_proxy.log"
+      ],
+      "owner_class": "RUNTIME_INFRASTRUCTURE",
+      "profile": "infrastructure",
+      "restart_policy": "FAIL_CLOSED_DEPENDENTS"
+    },
+    {
+      "archival_behavior": "ARCHIVE_EVIDENCE_BY_EXACT_SHA",
+      "arguments": [
+        "--loop"
+      ],
+      "authority_flags": {
+        "capital_allocator": false,
+        "global_portfolio_coordinator": false,
+        "inventory": false,
+        "ledger": false,
+        "oms": false,
+        "promotion": false,
+        "risk_engine": false,
+        "runtime_identity": false
+      },
+      "config_identity_required": true,
+      "dependencies": [
+        "public_https_proxy"
+      ],
+      "drain_behavior": "STOP_WITHOUT_INVENTORY",
+      "exact_sha_required": true,
+      "executable": "scripts/v7_limitless_collector.py",
+      "fault_domain": "RESEARCH_ISOLATED",
+      "freshness_slo_seconds": 120,
+      "id": "limitless_collector",
+      "inputs": [
+        "config/v7_external_inputs.json",
+        "config/v7_external_mapping_registry.json"
+      ],
+      "launcher_log": "shadow/limitless/collector.log",
+      "liveness_slo_seconds": 30,
+      "outputs": [
+        "shadow/limitless/events.jsonl",
+        "shadow/limitless/component_status.json",
+        "shadow/limitless/collector.log"
+      ],
+      "owner_class": "ZERO_AUTHORITY_RESEARCH",
+      "profile": "research",
+      "restart_policy": "RESTART_ISOLATED_WITH_BACKOFF"
+    },
+    {
+      "archival_behavior": "EXACT_SHA_ATOMIC_ARCHIVE",
+      "arguments": [],
+      "authority_flags": {
+        "capital_allocator": false,
+        "global_portfolio_coordinator": false,
+        "inventory": false,
+        "ledger": false,
+        "oms": false,
+        "promotion": false,
+        "risk_engine": false,
+        "runtime_identity": false
+      },
+      "config_identity_required": true,
+      "dependencies": [
+        "public_https_proxy",
+        "adaptive_universe",
+        "external_venue_runtime"
+      ],
+      "drain_behavior": "STOP_NEW_PROPOSALS_AND_DRAIN_OBSERVATIONS",
+      "exact_sha_required": true,
+      "executable": "scripts/v7_rtds_external_fair_monitor.py",
+      "fault_domain": "ENGINE_INPUT",
+      "freshness_slo_seconds": 5,
+      "id": "rtds_monitor",
+      "inputs": [
+        "universe/current.json",
+        "external_fair/external_venues.json"
+      ],
+      "launcher_log": "external_fair/rtds_monitor.log",
+      "liveness_slo_seconds": 5,
+      "outputs": [
+        "external_fair/rtds_monitor.log"
+      ],
+      "owner_class": "ECONOMIC_ENGINE_COMPONENT",
+      "profile": "engine",
+      "restart_policy": "FAIL_CLOSED_ENGINE_INPUT"
+    },
+    {
+      "archival_behavior": "EXACT_SHA_ATOMIC_ARCHIVE",
+      "arguments": [
+        "--model-sha",
+        "${SHA}"
+      ],
+      "authority_flags": {
+        "capital_allocator": false,
+        "global_portfolio_coordinator": false,
+        "inventory": false,
+        "ledger": false,
+        "oms": false,
+        "promotion": false,
+        "risk_engine": false,
+        "runtime_identity": false
+      },
+      "config_identity_required": true,
+      "dependencies": [
+        "public_https_proxy"
+      ],
+      "drain_behavior": "STOP_NEW_PROPOSALS_AND_DRAIN_OBSERVATIONS",
+      "exact_sha_required": true,
+      "executable": "${EXTERNAL_VENUE_RUNTIME}",
+      "fault_domain": "ENGINE_INPUT",
+      "freshness_slo_seconds": 5,
+      "id": "external_venue_runtime",
+      "inputs": [],
+      "launcher_log": "external_fair/external_venues.log",
+      "liveness_slo_seconds": 5,
+      "outputs": [
+        "external_fair/external_venues.json",
+        "external_fair/external_venues.log"
+      ],
+      "owner_class": "ECONOMIC_ENGINE_COMPONENT",
+      "profile": "engine",
+      "restart_policy": "FAIL_CLOSED_ENGINE_INPUT"
+    },
+    {
+      "archival_behavior": "ARCHIVE_EVIDENCE_BY_EXACT_SHA",
+      "arguments": [
+        "--loop"
+      ],
+      "authority_flags": {
+        "capital_allocator": false,
+        "global_portfolio_coordinator": false,
+        "inventory": false,
+        "ledger": false,
+        "oms": false,
+        "promotion": false,
+        "risk_engine": false,
+        "runtime_identity": false
+      },
+      "config_identity_required": false,
+      "dependencies": [
+        "public_https_proxy"
+      ],
+      "drain_behavior": "STOP_WITHOUT_INVENTORY",
+      "exact_sha_required": true,
+      "executable": "scripts/v7_binance_usdm_rest_collector.py",
+      "fault_domain": "RESEARCH_ISOLATED",
+      "freshness_slo_seconds": 120,
+      "id": "binance_usdm_rest",
+      "inputs": [],
+      "launcher_log": "external_fair/binance_usdm_rest.log",
+      "liveness_slo_seconds": 30,
+      "outputs": [
+        "external_fair/binance_usdm_rest.jsonl",
+        "external_fair/binance_usdm_rest.log"
+      ],
+      "owner_class": "ZERO_AUTHORITY_RESEARCH",
+      "profile": "research",
+      "restart_policy": "RESTART_ISOLATED_WITH_BACKOFF"
+    },
+    {
+      "archival_behavior": "ARCHIVE_EVIDENCE_BY_EXACT_SHA",
+      "arguments": [
+        "--loop"
+      ],
+      "authority_flags": {
+        "capital_allocator": false,
+        "global_portfolio_coordinator": false,
+        "inventory": false,
+        "ledger": false,
+        "oms": false,
+        "promotion": false,
+        "risk_engine": false,
+        "runtime_identity": false
+      },
+      "config_identity_required": false,
+      "dependencies": [
+        "public_https_proxy"
+      ],
+      "drain_behavior": "STOP_WITHOUT_INVENTORY",
+      "exact_sha_required": true,
+      "executable": "scripts/v7_deribit_rest_collector.py",
+      "fault_domain": "RESEARCH_ISOLATED",
+      "freshness_slo_seconds": 120,
+      "id": "deribit_rest",
+      "inputs": [],
+      "launcher_log": "external_fair/deribit_rest.log",
+      "liveness_slo_seconds": 30,
+      "outputs": [
+        "external_fair/deribit_rest.jsonl",
+        "external_fair/deribit_rest.log"
+      ],
+      "owner_class": "ZERO_AUTHORITY_RESEARCH",
+      "profile": "research",
+      "restart_policy": "RESTART_ISOLATED_WITH_BACKOFF"
+    },
+    {
+      "archival_behavior": "ARCHIVE_EVIDENCE_BY_EXACT_SHA",
+      "arguments": [
+        "--loop"
+      ],
+      "authority_flags": {
+        "capital_allocator": false,
+        "global_portfolio_coordinator": false,
+        "inventory": false,
+        "ledger": false,
+        "oms": false,
+        "promotion": false,
+        "risk_engine": false,
+        "runtime_identity": false
+      },
+      "config_identity_required": false,
+      "dependencies": [
+        "public_https_proxy"
+      ],
+      "drain_behavior": "STOP_WITHOUT_INVENTORY",
+      "exact_sha_required": true,
+      "executable": "scripts/v7_coinbase_l2_rest_collector.py",
+      "fault_domain": "RESEARCH_ISOLATED",
+      "freshness_slo_seconds": 120,
+      "id": "coinbase_l2_rest",
+      "inputs": [],
+      "launcher_log": "external_fair/coinbase_l2_rest.log",
+      "liveness_slo_seconds": 30,
+      "outputs": [
+        "external_fair/coinbase_l2_rest.jsonl",
+        "external_fair/coinbase_l2_rest.log"
+      ],
+      "owner_class": "ZERO_AUTHORITY_RESEARCH",
+      "profile": "research",
+      "restart_policy": "RESTART_ISOLATED_WITH_BACKOFF"
+    },
+    {
+      "archival_behavior": "ARCHIVE_EVIDENCE_BY_EXACT_SHA",
+      "arguments": [
+        "--loop"
+      ],
+      "authority_flags": {
+        "capital_allocator": false,
+        "global_portfolio_coordinator": false,
+        "inventory": false,
+        "ledger": false,
+        "oms": false,
+        "promotion": false,
+        "risk_engine": false,
+        "runtime_identity": false
+      },
+      "config_identity_required": true,
+      "dependencies": [
+        "external_venue_runtime",
+        "coinbase_l2_rest",
+        "deribit_rest"
+      ],
+      "drain_behavior": "STOP_WITHOUT_INVENTORY",
+      "exact_sha_required": true,
+      "executable": "scripts/v7_external_forward_evidence_gate.py",
+      "fault_domain": "OBSERVABILITY_ISOLATED",
+      "freshness_slo_seconds": 120,
+      "id": "external_forward_evidence",
+      "inputs": [
+        "external_fair/external_venues.json",
+        "external_fair/coinbase_l2_rest_status.json",
+        "external_fair/deribit_rest_status.json"
+      ],
+      "launcher_log": "external_fair/forward_evidence.log",
+      "liveness_slo_seconds": 30,
+      "outputs": [
+        "external_fair/forward_evidence_status.json",
+        "external_fair/forward_evidence.log"
+      ],
+      "owner_class": "ZERO_AUTHORITY_OBSERVER",
+      "profile": "observer",
+      "restart_policy": "RESTART_ISOLATED_WITH_BACKOFF"
+    },
+    {
+      "archival_behavior": "EXACT_SHA_ATOMIC_ARCHIVE",
+      "arguments": [
+        "--model-sha",
+        "${SHA}"
+      ],
+      "authority_flags": {
+        "capital_allocator": false,
+        "global_portfolio_coordinator": false,
+        "inventory": false,
+        "ledger": false,
+        "oms": false,
+        "promotion": false,
+        "risk_engine": false,
+        "runtime_identity": false
+      },
+      "config_identity_required": true,
+      "dependencies": [
+        "public_https_proxy",
+        "rtds_monitor",
+        "external_venue_runtime"
+      ],
+      "drain_behavior": "STOP_NEW_PROPOSALS_AND_DRAIN_OBSERVATIONS",
+      "exact_sha_required": true,
+      "executable": "scripts/v7_external_fair_paper_router.py",
+      "fault_domain": "ENGINE_INPUT",
+      "freshness_slo_seconds": 5,
+      "id": "external_fair_router",
+      "inputs": [
+        "config/v7_external_fair.json"
+      ],
+      "launcher_log": "external_fair/paper_router.log",
+      "liveness_slo_seconds": 5,
+      "outputs": [
+        "external_fair/paper_router_status.json",
+        "external_fair/paper_router.log"
+      ],
+      "owner_class": "ECONOMIC_ENGINE_COMPONENT",
+      "profile": "engine",
+      "restart_policy": "FAIL_CLOSED_ENGINE_INPUT"
+    },
+    {
+      "archival_behavior": "EXACT_SHA_ATOMIC_ARCHIVE",
+      "arguments": [
+        "--loop",
+        "--model-sha",
+        "${SHA}"
+      ],
+      "authority_flags": {
+        "capital_allocator": false,
+        "global_portfolio_coordinator": false,
+        "inventory": false,
+        "ledger": false,
+        "oms": false,
+        "promotion": false,
+        "risk_engine": false,
+        "runtime_identity": false
+      },
+      "config_identity_required": true,
+      "dependencies": [
+        "public_https_proxy"
+      ],
+      "drain_behavior": "STOP_AFTER_DEPENDENTS",
+      "exact_sha_required": true,
+      "executable": "scripts/v7_adaptive_universe.py",
+      "fault_domain": "INFRASTRUCTURE",
+      "freshness_slo_seconds": 5,
+      "id": "adaptive_universe",
+      "inputs": [
+        "config/v7_adaptive_universe.json"
+      ],
+      "launcher_log": "universe/collector.log",
+      "liveness_slo_seconds": 5,
+      "outputs": [
+        "universe/current.json",
+        "universe/status.json",
+        "universe/collector.log"
+      ],
+      "owner_class": "RUNTIME_INFRASTRUCTURE",
+      "profile": "infrastructure",
+      "restart_policy": "FAIL_CLOSED_DEPENDENTS"
+    },
+    {
+      "archival_behavior": "EXACT_SHA_ATOMIC_ARCHIVE",
+      "arguments": [
+        "periodic"
+      ],
+      "authority_flags": {
+        "capital_allocator": false,
+        "global_portfolio_coordinator": false,
+        "inventory": false,
+        "ledger": false,
+        "oms": false,
+        "promotion": false,
+        "risk_engine": false,
+        "runtime_identity": false
+      },
+      "config_identity_required": true,
+      "dependencies": [
+        "adaptive_universe"
+      ],
+      "drain_behavior": "STOP_NEW_PROPOSALS_AND_DRAIN_OBSERVATIONS",
+      "exact_sha_required": true,
+      "executable": "scripts/v7_relation_builder.py",
+      "fault_domain": "ENGINE_INPUT",
+      "freshness_slo_seconds": 5,
+      "id": "relation_builder",
+      "inputs": [
+        "universe/current.json"
+      ],
+      "launcher_log": "graph_rv/relation_builder.log",
+      "liveness_slo_seconds": 5,
+      "outputs": [
+        "graph_rv/verified_relations.csv",
+        "graph_rv/relation_builder.log"
+      ],
+      "owner_class": "ECONOMIC_ENGINE_COMPONENT",
+      "profile": "engine",
+      "restart_policy": "FAIL_CLOSED_ENGINE_INPUT"
+    },
+    {
+      "archival_behavior": "EXACT_SHA_ATOMIC_ARCHIVE",
+      "arguments": [
+        "--loop"
+      ],
+      "authority_flags": {
+        "capital_allocator": false,
+        "global_portfolio_coordinator": false,
+        "inventory": false,
+        "ledger": false,
+        "oms": false,
+        "promotion": false,
+        "risk_engine": false,
+        "runtime_identity": false
+      },
+      "config_identity_required": true,
+      "dependencies": [
+        "adaptive_universe",
+        "public_https_proxy"
+      ],
+      "drain_behavior": "STOP_NEW_PROPOSALS_AND_DRAIN_OBSERVATIONS",
+      "exact_sha_required": true,
+      "executable": "${RECORDER}",
+      "fault_domain": "ENGINE_INPUT",
+      "freshness_slo_seconds": 5,
+      "id": "trade_recorder",
+      "inputs": [
+        "config/paper_v7.json"
+      ],
+      "launcher_log": "trade_recorder.log",
+      "liveness_slo_seconds": 5,
+      "outputs": [
+        "trade_tape.csv",
+        "market_data/live_trade_flow.json",
+        "trade_recorder.log"
+      ],
+      "owner_class": "ECONOMIC_ENGINE_COMPONENT",
+      "profile": "engine",
+      "restart_policy": "FAIL_CLOSED_ENGINE_INPUT"
+    },
+    {
+      "archival_behavior": "EXACT_SHA_ATOMIC_ARCHIVE",
+      "arguments": [
+        "--loop",
+        "--model-sha",
+        "${SHA}"
+      ],
+      "authority_flags": {
+        "capital_allocator": false,
+        "global_portfolio_coordinator": false,
+        "inventory": false,
+        "ledger": true,
+        "oms": false,
+        "promotion": false,
+        "risk_engine": false,
+        "runtime_identity": false
+      },
+      "authority_overrides": {
+        "ledger": true
+      },
+      "config_identity_required": true,
+      "dependencies": [],
+      "drain_behavior": "DRAIN_AND_CONFIRM_TERMINAL_STATE",
+      "exact_sha_required": true,
+      "executable": "scripts/v7_ledger_spool.py",
+      "fault_domain": "ECONOMIC_CORE",
+      "freshness_slo_seconds": 5,
+      "id": "ledger_router",
+      "inputs": [
+        "ledger/spool"
+      ],
+      "launcher_log": "ledger_router.log",
+      "liveness_slo_seconds": 5,
+      "outputs": [
+        "ledger/execution.jsonl",
+        "ledger_router.log"
+      ],
+      "owner_class": "CANONICAL_CORE",
+      "profile": "core",
+      "restart_policy": "FAIL_CLOSED_WHOLE_RUNTIME"
+    },
+    {
+      "archival_behavior": "EXACT_SHA_ATOMIC_ARCHIVE",
+      "arguments": [
+        "--loop"
+      ],
+      "authority_flags": {
+        "capital_allocator": true,
+        "global_portfolio_coordinator": true,
+        "inventory": true,
+        "ledger": false,
+        "oms": true,
+        "promotion": false,
+        "risk_engine": true,
+        "runtime_identity": false
+      },
+      "authority_overrides": {
+        "capital_allocator": true,
+        "global_portfolio_coordinator": true,
+        "inventory": true,
+        "oms": true,
+        "risk_engine": true
+      },
+      "config_identity_required": true,
+      "dependencies": [
+        "ledger_router"
+      ],
+      "drain_behavior": "DRAIN_AND_CONFIRM_TERMINAL_STATE",
+      "exact_sha_required": true,
+      "executable": "scripts/v7_global_portfolio_coordinator.py",
+      "fault_domain": "ECONOMIC_CORE",
+      "freshness_slo_seconds": 5,
+      "id": "global_portfolio_coordinator",
+      "inputs": [
+        "opportunities/inbox"
+      ],
+      "launcher_log": "global_portfolio_coordinator.log",
+      "liveness_slo_seconds": 5,
+      "outputs": [
+        "opportunities/receipts",
+        "global_portfolio_coordinator.log"
+      ],
+      "owner_class": "CANONICAL_CORE",
+      "profile": "core",
+      "restart_policy": "FAIL_CLOSED_WHOLE_RUNTIME"
+    },
+    {
+      "archival_behavior": "EXACT_SHA_ATOMIC_ARCHIVE",
+      "arguments": [
+        "periodic"
+      ],
+      "authority_flags": {
+        "capital_allocator": false,
+        "global_portfolio_coordinator": false,
+        "inventory": false,
+        "ledger": false,
+        "oms": false,
+        "promotion": false,
+        "risk_engine": false,
+        "runtime_identity": false
+      },
+      "config_identity_required": true,
+      "dependencies": [
+        "adaptive_universe",
+        "trade_recorder"
+      ],
+      "drain_behavior": "STOP_NEW_PROPOSALS_AND_DRAIN_OBSERVATIONS",
+      "exact_sha_required": true,
+      "executable": "scripts/v7_market_maker_rewards.py",
+      "fault_domain": "ENGINE_INPUT",
+      "freshness_slo_seconds": 5,
+      "id": "maker_reward_selection",
+      "inputs": [
+        "universe/current.json",
+        "market_data/live_trade_flow.json"
+      ],
+      "launcher_log": "micro_maker/reward_selection.log",
+      "liveness_slo_seconds": 5,
+      "outputs": [
+        "micro_maker/reward_selection.json",
+        "micro_maker/reward_selection.log"
+      ],
+      "owner_class": "ECONOMIC_ENGINE_COMPONENT",
+      "profile": "engine",
+      "restart_policy": "FAIL_CLOSED_ENGINE_INPUT"
+    },
+    {
+      "archival_behavior": "ARCHIVE_EVIDENCE_BY_EXACT_SHA",
+      "arguments": [
+        "--model-sha",
+        "${SHA}"
+      ],
+      "authority_flags": {
+        "capital_allocator": false,
+        "global_portfolio_coordinator": false,
+        "inventory": false,
+        "ledger": false,
+        "oms": false,
+        "promotion": false,
+        "risk_engine": false,
+        "runtime_identity": false
+      },
+      "config_identity_required": true,
+      "dependencies": [
+        "adaptive_universe",
+        "maker_reward_selection"
+      ],
+      "drain_behavior": "STOP_WITHOUT_INVENTORY",
+      "exact_sha_required": true,
+      "executable": "scripts/v7_fee_reward_registry.py",
+      "fault_domain": "OBSERVABILITY_ISOLATED",
+      "freshness_slo_seconds": 120,
+      "id": "fee_reward_registry",
+      "inputs": [
+        "universe/current.json",
+        "micro_maker/reward_selection.json"
+      ],
+      "launcher_log": "fee_reward_registry.log",
+      "liveness_slo_seconds": 30,
+      "outputs": [
+        "control/fee_reward_registry.json",
+        "fee_reward_registry.log"
+      ],
+      "owner_class": "ZERO_AUTHORITY_OBSERVER",
+      "profile": "observer",
+      "restart_policy": "RESTART_ISOLATED_WITH_BACKOFF"
+    },
+    {
+      "archival_behavior": "EXACT_SHA_ATOMIC_ARCHIVE",
+      "arguments": [
+        "--model-sha",
+        "${SHA}"
+      ],
+      "authority_flags": {
+        "capital_allocator": false,
+        "global_portfolio_coordinator": false,
+        "inventory": false,
+        "ledger": false,
+        "oms": false,
+        "promotion": false,
+        "risk_engine": false,
+        "runtime_identity": false
+      },
+      "config_identity_required": true,
+      "dependencies": [
+        "relation_builder",
+        "global_portfolio_coordinator"
+      ],
+      "drain_behavior": "STOP_NEW_PROPOSALS_AND_DRAIN_OBSERVATIONS",
+      "exact_sha_required": true,
+      "executable": "${FAST_STRUCTURAL_RUNTIME}",
+      "fault_domain": "ENGINE_INPUT",
+      "freshness_slo_seconds": 5,
+      "id": "fast_structural_detector",
+      "inputs": [
+        "graph_rv/verified_relations.csv",
+        "config/v7_fast_structural_policy.json"
+      ],
+      "launcher_log": "fast_structural/runtime.log",
+      "liveness_slo_seconds": 5,
+      "outputs": [
+        "fast_structural/runtime.log",
+        "opportunities/inbox"
+      ],
+      "owner_class": "ECONOMIC_ENGINE_COMPONENT",
+      "profile": "engine",
+      "restart_policy": "FAIL_CLOSED_ENGINE_INPUT"
+    },
+    {
+      "archival_behavior": "ARCHIVE_EVIDENCE_BY_EXACT_SHA",
+      "arguments": [
+        "scripts/v7_maker_durable_learning.py",
+        "scripts/v7_market_maker_model.py",
+        "scripts/v7_maker_model_registry.py"
+      ],
+      "authority_flags": {
+        "capital_allocator": false,
+        "global_portfolio_coordinator": false,
+        "inventory": false,
+        "ledger": false,
+        "oms": false,
+        "promotion": false,
+        "risk_engine": false,
+        "runtime_identity": false
+      },
+      "config_identity_required": true,
+      "dependencies": [
+        "ledger_router"
+      ],
+      "drain_behavior": "STOP_WITHOUT_INVENTORY",
+      "exact_sha_required": true,
+      "executable": "launcher_subshell",
+      "fault_domain": "OBSERVABILITY_ISOLATED",
+      "freshness_slo_seconds": 120,
+      "id": "maker_model_learning",
+      "inputs": [
+        "ledger/execution.jsonl"
+      ],
+      "launcher_log": "micro_maker/model_registry.log",
+      "liveness_slo_seconds": 30,
+      "outputs": [
+        "micro_maker/model_registry.log"
+      ],
+      "owner_class": "ZERO_AUTHORITY_OBSERVER",
+      "profile": "observer",
+      "restart_policy": "RESTART_ISOLATED_WITH_BACKOFF"
+    },
+    {
+      "archival_behavior": "ARCHIVE_EVIDENCE_BY_EXACT_SHA",
+      "arguments": [
+        "--observer-only"
+      ],
+      "authority_flags": {
+        "capital_allocator": false,
+        "global_portfolio_coordinator": false,
+        "inventory": false,
+        "ledger": false,
+        "oms": false,
+        "promotion": false,
+        "risk_engine": false,
+        "runtime_identity": false
+      },
+      "config_identity_required": true,
+      "dependencies": [
+        "maker_reward_selection",
+        "fee_reward_registry",
+        "trade_recorder"
+      ],
+      "drain_behavior": "STOP_WITHOUT_INVENTORY",
+      "exact_sha_required": true,
+      "executable": "scripts/v7_maker_cohort_supervisor.py",
+      "fault_domain": "OBSERVABILITY_ISOLATED",
+      "freshness_slo_seconds": 120,
+      "id": "maker_observer_cohort",
+      "inputs": [
+        "micro_maker/reward_selection.json",
+        "control/fee_reward_registry.json"
+      ],
+      "launcher_log": "micro_maker/cohort_supervisor.log",
+      "liveness_slo_seconds": 30,
+      "outputs": [
+        "micro_maker/cohort_supervisor.log"
+      ],
+      "owner_class": "ZERO_AUTHORITY_OBSERVER",
+      "profile": "observer",
+      "restart_policy": "RESTART_ISOLATED_WITH_BACKOFF"
+    },
+    {
+      "archival_behavior": "ARCHIVE_EVIDENCE_BY_EXACT_SHA",
+      "arguments": [
+        "periodic"
+      ],
+      "authority_flags": {
+        "capital_allocator": false,
+        "global_portfolio_coordinator": false,
+        "inventory": false,
+        "ledger": false,
+        "oms": false,
+        "promotion": false,
+        "risk_engine": false,
+        "runtime_identity": false
+      },
+      "config_identity_required": true,
+      "dependencies": [
+        "ledger_router"
+      ],
+      "drain_behavior": "STOP_WITHOUT_INVENTORY",
+      "exact_sha_required": true,
+      "executable": "scripts/v7_generate_economic_artifacts.py",
+      "fault_domain": "OBSERVABILITY_ISOLATED",
+      "freshness_slo_seconds": 120,
+      "id": "economic_artifacts",
+      "inputs": [
+        "ledger/execution.jsonl"
+      ],
+      "launcher_log": "economic_artifacts.log",
+      "liveness_slo_seconds": 30,
+      "outputs": [
+        "reports",
+        "economic_artifacts.log"
+      ],
+      "owner_class": "ZERO_AUTHORITY_OBSERVER",
+      "profile": "observer",
+      "restart_policy": "RESTART_ISOLATED_WITH_BACKOFF"
+    },
+    {
+      "archival_behavior": "ARCHIVE_EVIDENCE_BY_EXACT_SHA",
+      "arguments": [
+        "periodic",
+        "--model-sha",
+        "${SHA}"
+      ],
+      "authority_flags": {
+        "capital_allocator": false,
+        "global_portfolio_coordinator": false,
+        "inventory": false,
+        "ledger": false,
+        "oms": false,
+        "promotion": false,
+        "risk_engine": false,
+        "runtime_identity": false
+      },
+      "config_identity_required": true,
+      "dependencies": [
+        "trade_recorder"
+      ],
+      "drain_behavior": "STOP_WITHOUT_INVENTORY",
+      "exact_sha_required": true,
+      "executable": "scripts/v7_graph_rv_executable_intents.py",
+      "fault_domain": "RESEARCH_ISOLATED",
+      "freshness_slo_seconds": 120,
+      "id": "graph_rv_scan",
+      "inputs": [
+        "market_data/shared_state.json"
+      ],
+      "launcher_log": "graph_rv/scan.log",
+      "liveness_slo_seconds": 30,
+      "outputs": [
+        "graph_rv/intents.csv",
+        "graph_rv/scan.log"
+      ],
+      "owner_class": "ZERO_AUTHORITY_RESEARCH",
+      "profile": "research",
+      "restart_policy": "RESTART_ISOLATED_WITH_BACKOFF"
+    },
+    {
+      "archival_behavior": "ARCHIVE_EVIDENCE_BY_EXACT_SHA",
+      "arguments": [
+        "scripts/v7_graph_cost_vector.py",
+        "scripts/v7_joint_execution_policy.py",
+        "scripts/v7_learned_execution_model.py",
+        "scripts/v7_canonical_economics.py",
+        "scripts/v7_evidence_capital_allocator.py"
+      ],
+      "authority_flags": {
+        "capital_allocator": false,
+        "global_portfolio_coordinator": false,
+        "inventory": false,
+        "ledger": false,
+        "oms": false,
+        "promotion": false,
+        "risk_engine": false,
+        "runtime_identity": false
+      },
+      "config_identity_required": true,
+      "dependencies": [
+        "ledger_router"
+      ],
+      "drain_behavior": "STOP_WITHOUT_INVENTORY",
+      "exact_sha_required": true,
+      "executable": "launcher_subshell",
+      "fault_domain": "OBSERVABILITY_ISOLATED",
+      "freshness_slo_seconds": 120,
+      "id": "economic_evidence_loop",
+      "inputs": [
+        "ledger/execution.jsonl"
+      ],
+      "launcher_log": "evidence_capital_allocator.log",
+      "liveness_slo_seconds": 30,
+      "outputs": [
+        "control/evidence_capital_allocator.json",
+        "evidence_capital_allocator.log"
+      ],
+      "owner_class": "ZERO_AUTHORITY_OBSERVER",
+      "profile": "observer",
+      "restart_policy": "RESTART_ISOLATED_WITH_BACKOFF"
+    },
+    {
+      "archival_behavior": "ARCHIVE_EVIDENCE_BY_EXACT_SHA",
+      "arguments": [
+        "periodic",
+        "--max-probe-usd",
+        "125"
+      ],
+      "authority_flags": {
+        "capital_allocator": false,
+        "global_portfolio_coordinator": false,
+        "inventory": false,
+        "ledger": false,
+        "oms": false,
+        "promotion": false,
+        "risk_engine": false,
+        "runtime_identity": false
+      },
+      "config_identity_required": true,
+      "dependencies": [
+        "trade_recorder"
+      ],
+      "drain_behavior": "STOP_WITHOUT_INVENTORY",
+      "exact_sha_required": true,
+      "executable": "scripts/v7_micro_taker_worker.py",
+      "fault_domain": "RESEARCH_ISOLATED",
+      "freshness_slo_seconds": 120,
+      "id": "micro_taker_research",
+      "inputs": [
+        "market_data/shared_state.json",
+        "market_data/live_trade_flow.json"
+      ],
+      "launcher_log": "micro_taker/runtime.log",
+      "liveness_slo_seconds": 30,
+      "outputs": [
+        "micro_taker/status.json",
+        "micro_taker/runtime.log"
+      ],
+      "owner_class": "ZERO_AUTHORITY_RESEARCH",
+      "profile": "research",
+      "restart_policy": "RESTART_ISOLATED_WITH_BACKOFF"
+    },
+    {
+      "archival_behavior": "ARCHIVE_EVIDENCE_BY_EXACT_SHA",
+      "arguments": [
+        "--loop"
+      ],
+      "authority_flags": {
+        "capital_allocator": false,
+        "global_portfolio_coordinator": false,
+        "inventory": false,
+        "ledger": false,
+        "oms": false,
+        "promotion": false,
+        "risk_engine": false,
+        "runtime_identity": false
+      },
+      "config_identity_required": true,
+      "dependencies": [
+        "public_https_proxy"
+      ],
+      "drain_behavior": "STOP_WITHOUT_INVENTORY",
+      "exact_sha_required": true,
+      "executable": "scripts/v7_osint_collector.py",
+      "fault_domain": "RESEARCH_ISOLATED",
+      "freshness_slo_seconds": 120,
+      "id": "osint_collector",
+      "inputs": [
+        "config/v7_osint_sources.json"
+      ],
+      "launcher_log": "osint/collector.log",
+      "liveness_slo_seconds": 30,
+      "outputs": [
+        "osint/raw_events.jsonl",
+        "osint/collector.log"
+      ],
+      "owner_class": "ZERO_AUTHORITY_RESEARCH",
+      "profile": "research",
+      "restart_policy": "RESTART_ISOLATED_WITH_BACKOFF"
+    },
+    {
+      "archival_behavior": "ARCHIVE_EVIDENCE_BY_EXACT_SHA",
+      "arguments": [
+        "--loop"
+      ],
+      "authority_flags": {
+        "capital_allocator": false,
+        "global_portfolio_coordinator": false,
+        "inventory": false,
+        "ledger": false,
+        "oms": false,
+        "promotion": false,
+        "risk_engine": false,
+        "runtime_identity": false
+      },
+      "config_identity_required": true,
+      "dependencies": [
+        "osint_collector"
+      ],
+      "drain_behavior": "STOP_WITHOUT_INVENTORY",
+      "exact_sha_required": true,
+      "executable": "scripts/v7_osint_mapping_collector.py",
+      "fault_domain": "RESEARCH_ISOLATED",
+      "freshness_slo_seconds": 120,
+      "id": "osint_mapping",
+      "inputs": [
+        "osint/raw_events.jsonl",
+        "config/v7_external_mapping_registry.json"
+      ],
+      "launcher_log": "osint/mapping.log",
+      "liveness_slo_seconds": 30,
+      "outputs": [
+        "osint/forward_reactions.jsonl",
+        "osint/mapping.log"
+      ],
+      "owner_class": "ZERO_AUTHORITY_RESEARCH",
+      "profile": "research",
+      "restart_policy": "RESTART_ISOLATED_WITH_BACKOFF"
+    },
+    {
+      "archival_behavior": "ARCHIVE_EVIDENCE_BY_EXACT_SHA",
+      "arguments": [
+        "--loop"
+      ],
+      "authority_flags": {
+        "capital_allocator": false,
+        "global_portfolio_coordinator": false,
+        "inventory": false,
+        "ledger": false,
+        "oms": false,
+        "promotion": false,
+        "risk_engine": false,
+        "runtime_identity": false
+      },
+      "config_identity_required": true,
+      "dependencies": [
+        "public_https_proxy"
+      ],
+      "drain_behavior": "STOP_WITHOUT_INVENTORY",
+      "exact_sha_required": true,
+      "executable": "scripts/v7_market_open_collector.py",
+      "fault_domain": "RESEARCH_ISOLATED",
+      "freshness_slo_seconds": 120,
+      "id": "market_open_collector",
+      "inputs": [],
+      "launcher_log": "market_open/collector.log",
+      "liveness_slo_seconds": 30,
+      "outputs": [
+        "market_open/events.jsonl",
+        "market_open/collector.log"
+      ],
+      "owner_class": "ZERO_AUTHORITY_RESEARCH",
+      "profile": "research",
+      "restart_policy": "RESTART_ISOLATED_WITH_BACKOFF"
+    },
+    {
+      "archival_behavior": "ARCHIVE_EVIDENCE_BY_EXACT_SHA",
+      "arguments": [
+        "--loop"
+      ],
+      "authority_flags": {
+        "capital_allocator": false,
+        "global_portfolio_coordinator": false,
+        "inventory": false,
+        "ledger": false,
+        "oms": false,
+        "promotion": false,
+        "risk_engine": false,
+        "runtime_identity": false
+      },
+      "config_identity_required": true,
+      "dependencies": [
+        "public_https_proxy"
+      ],
+      "drain_behavior": "STOP_WITHOUT_INVENTORY",
+      "exact_sha_required": true,
+      "executable": "scripts/v7_sports_collector.py",
+      "fault_domain": "RESEARCH_ISOLATED",
+      "freshness_slo_seconds": 120,
+      "id": "sports_collector",
+      "inputs": [
+        "config/v7_external_inputs.json",
+        "config/v7_external_mapping_registry.json"
+      ],
+      "launcher_log": "shadow/sports_latency/collector.log",
+      "liveness_slo_seconds": 30,
+      "outputs": [
+        "shadow/sports_latency/events.jsonl",
+        "shadow/sports_latency/collector.log"
+      ],
+      "owner_class": "ZERO_AUTHORITY_RESEARCH",
+      "profile": "research",
+      "restart_policy": "RESTART_ISOLATED_WITH_BACKOFF"
+    },
+    {
+      "archival_behavior": "ARCHIVE_EVIDENCE_BY_EXACT_SHA",
+      "arguments": [
+        "--loop"
+      ],
+      "authority_flags": {
+        "capital_allocator": false,
+        "global_portfolio_coordinator": false,
+        "inventory": false,
+        "ledger": false,
+        "oms": false,
+        "promotion": false,
+        "risk_engine": false,
+        "runtime_identity": false
+      },
+      "config_identity_required": true,
+      "dependencies": [
+        "public_https_proxy"
+      ],
+      "drain_behavior": "STOP_WITHOUT_INVENTORY",
+      "exact_sha_required": true,
+      "executable": "scripts/v7_cross_platform_collector.py",
+      "fault_domain": "RESEARCH_ISOLATED",
+      "freshness_slo_seconds": 120,
+      "id": "cross_platform_collector",
+      "inputs": [
+        "config/v7_external_inputs.json",
+        "config/v7_external_mapping_registry.json"
+      ],
+      "launcher_log": "shadow/cross_platform/collector.log",
+      "liveness_slo_seconds": 30,
+      "outputs": [
+        "shadow/cross_platform/books.jsonl",
+        "shadow/cross_platform/collector.log"
+      ],
+      "owner_class": "ZERO_AUTHORITY_RESEARCH",
+      "profile": "research",
+      "restart_policy": "RESTART_ISOLATED_WITH_BACKOFF"
+    },
+    {
+      "archival_behavior": "ARCHIVE_EVIDENCE_BY_EXACT_SHA",
+      "arguments": [
+        "--loop"
+      ],
+      "authority_flags": {
+        "capital_allocator": false,
+        "global_portfolio_coordinator": false,
+        "inventory": false,
+        "ledger": false,
+        "oms": false,
+        "promotion": false,
+        "risk_engine": false,
+        "runtime_identity": false
+      },
+      "config_identity_required": true,
+      "dependencies": [
+        "public_https_proxy"
+      ],
+      "drain_behavior": "STOP_WITHOUT_INVENTORY",
+      "exact_sha_required": true,
+      "executable": "scripts/v7_kalshi_authenticated_ws_collector.py",
+      "fault_domain": "RESEARCH_ISOLATED",
+      "freshness_slo_seconds": 120,
+      "id": "kalshi_read_only_ws",
+      "inputs": [
+        "config/v7_external_inputs.json"
+      ],
+      "launcher_log": "shadow/cross_platform/kalshi_ws.log",
+      "liveness_slo_seconds": 30,
+      "outputs": [
+        "shadow/cross_platform/kalshi_ws_events.jsonl",
+        "shadow/cross_platform/kalshi_ws.log"
+      ],
+      "owner_class": "ZERO_AUTHORITY_RESEARCH",
+      "profile": "research",
+      "restart_policy": "RESTART_ISOLATED_WITH_BACKOFF"
+    },
+    {
+      "archival_behavior": "ARCHIVE_EVIDENCE_BY_EXACT_SHA",
+      "arguments": [
+        "--model-sha",
+        "${SHA}"
+      ],
+      "authority_flags": {
+        "capital_allocator": false,
+        "global_portfolio_coordinator": false,
+        "inventory": false,
+        "ledger": false,
+        "oms": false,
+        "promotion": false,
+        "risk_engine": false,
+        "runtime_identity": false
+      },
+      "config_identity_required": true,
+      "dependencies": [
+        "sports_collector",
+        "cross_platform_collector",
+        "kalshi_read_only_ws"
+      ],
+      "drain_behavior": "STOP_WITHOUT_INVENTORY",
+      "exact_sha_required": true,
+      "executable": "scripts/v7_research_shadow_supervisor.py",
+      "fault_domain": "RESEARCH_ISOLATED",
+      "freshness_slo_seconds": 120,
+      "id": "research_shadow_supervisor",
+      "inputs": [
+        "config/v7_live_model_scope.json"
+      ],
+      "launcher_log": "research_shadow_supervisor.log",
+      "liveness_slo_seconds": 30,
+      "outputs": [
+        "research_shadow_supervisor.log"
+      ],
+      "owner_class": "ZERO_AUTHORITY_RESEARCH",
+      "profile": "research",
+      "restart_policy": "RESTART_ISOLATED_WITH_BACKOFF"
+    },
+    {
+      "archival_behavior": "ARCHIVE_EVIDENCE_BY_EXACT_SHA",
+      "arguments": [
+        "--model-sha",
+        "${SHA}"
+      ],
+      "authority_flags": {
+        "capital_allocator": false,
+        "global_portfolio_coordinator": false,
+        "inventory": false,
+        "ledger": false,
+        "oms": false,
+        "promotion": false,
+        "risk_engine": false,
+        "runtime_identity": false
+      },
+      "config_identity_required": true,
+      "dependencies": [
+        "trade_recorder"
+      ],
+      "drain_behavior": "STOP_WITHOUT_INVENTORY",
+      "exact_sha_required": true,
+      "executable": "scripts/v7_slow_economic_shadow_supervisor.py",
+      "fault_domain": "RESEARCH_ISOLATED",
+      "freshness_slo_seconds": 120,
+      "id": "slow_research_supervisor",
+      "inputs": [
+        "config/v7_live_model_scope.json"
+      ],
+      "launcher_log": "slow_economic_shadow_supervisor.log",
+      "liveness_slo_seconds": 30,
+      "outputs": [
+        "slow_economic_shadow_supervisor.log"
+      ],
+      "owner_class": "ZERO_AUTHORITY_RESEARCH",
+      "profile": "research",
+      "restart_policy": "RESTART_ISOLATED_WITH_BACKOFF"
+    },
+    {
+      "archival_behavior": "EXACT_SHA_ATOMIC_ARCHIVE",
+      "arguments": [],
+      "authority_flags": {
+        "capital_allocator": false,
+        "global_portfolio_coordinator": false,
+        "inventory": false,
+        "ledger": false,
+        "oms": false,
+        "promotion": false,
+        "risk_engine": false,
+        "runtime_identity": false
+      },
+      "authority_overrides": {},
+      "config_identity_required": true,
+      "dependencies": [
+        "runtime_supervisor"
+      ],
+      "drain_behavior": "DRAIN_AND_CONFIRM_TERMINAL_STATE",
+      "exact_sha_required": true,
+      "executable": "scripts/paper_v7_execution_loop.sh",
+      "fault_domain": "ECONOMIC_CORE",
+      "freshness_slo_seconds": 5,
+      "id": "paper_launcher",
+      "inputs": [
+        "config/paper_v7.json",
+        "config/v7_process_manifest.json"
+      ],
+      "liveness_slo_seconds": 5,
+      "outputs": [
+        "runtime_status.json"
+      ],
+      "owner_class": "CANONICAL_CORE",
+      "profile": "core",
+      "restart_policy": "FAIL_CLOSED_WHOLE_RUNTIME"
+    },
+    {
+      "archival_behavior": "EXACT_SHA_ATOMIC_ARCHIVE",
+      "arguments": [],
+      "authority_flags": {
+        "capital_allocator": false,
+        "global_portfolio_coordinator": false,
+        "inventory": false,
+        "ledger": false,
+        "oms": false,
+        "promotion": false,
+        "risk_engine": false,
+        "runtime_identity": true
+      },
+      "authority_overrides": {
+        "runtime_identity": true
+      },
+      "config_identity_required": true,
+      "dependencies": [],
+      "drain_behavior": "DRAIN_AND_CONFIRM_TERMINAL_STATE",
+      "exact_sha_required": true,
+      "executable": "ops/v7_runtime_supervisor.py",
+      "fault_domain": "ECONOMIC_CORE",
+      "freshness_slo_seconds": 5,
+      "id": "runtime_supervisor",
+      "inputs": [
+        "config/v7_process_manifest.json"
+      ],
+      "liveness_slo_seconds": 5,
+      "outputs": [
+        "supervisor_status.json"
+      ],
+      "owner_class": "CANONICAL_CORE",
+      "profile": "core",
+      "restart_policy": "FAIL_CLOSED_WHOLE_RUNTIME"
+    }
+  ],
+  "research_fault_isolation": true,
+  "schema": "polymarket_v7_process_manifest_validation_v1"
 }
