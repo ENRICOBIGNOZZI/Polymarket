@@ -739,7 +739,7 @@ v7_register_child "$!"
   done
 ) & v7_register_child "$!"
 
-# The professional Maker is an execution-model component of the single crypto
+# The professional Maker is now an execution-model component of the single crypto
 # settlement owner. Keep its exact-WS fillability and fill-conditioned markout
 # observers live, but do not launch the legacy independent PAPER maker runtime.
 (

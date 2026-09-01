@@ -6,7 +6,7 @@
     "ref_count": 25,
     "runtime_output_count": 124,
     "schema_count": 22,
-    "tracked_or_intended_path_count": 696,
+    "tracked_or_intended_path_count": 707,
     "workflow_count": 11
   },
   "entries": [
@@ -66,7 +66,7 @@
       "current_imports_callers_readers_writers": {
         "analysis": "exact path/module references from tracked text; runtime linkage is separately enumerated",
         "static_references": [
-          "scripts/paper_v7_execution_loop.sh:274"
+          "scripts/paper_v7_execution_loop.sh:278"
         ]
       },
       "deletion_gate": "NONE_CANONICAL_SURFACE",
@@ -93,7 +93,7 @@
       "current_imports_callers_readers_writers": {
         "analysis": "exact path/module references from tracked text; runtime linkage is separately enumerated",
         "static_references": [
-          "scripts/paper_v7_execution_loop.sh:286"
+          "scripts/paper_v7_execution_loop.sh:290"
         ]
       },
       "deletion_gate": "NONE_CANONICAL_SURFACE",
@@ -115,12 +115,12 @@
       ]
     },
     {
-      "canonical_replacement": "config/v7_authority_registry.json#BTC_SETTLEMENT_ENGINE",
+      "canonical_replacement": "config/v7_authority_registry.json#CRYPTO_SETTLEMENT_ENGINE",
       "classification": "MERGE_INTO_CANONICAL",
       "current_imports_callers_readers_writers": {
         "analysis": "exact path/module references from tracked text; runtime linkage is separately enumerated",
         "static_references": [
-          "scripts/paper_v7_execution_loop.sh:340"
+          "scripts/paper_v7_execution_loop.sh:344"
         ]
       },
       "deletion_gate": "UNIQUE_BEHAVIOR_EQUIVALENCE_AND_SINGLE_CONSUMER_PROVEN",
@@ -130,7 +130,7 @@
           "engine_component"
         ],
         "executable": false,
-        "owner": "BTC_SETTLEMENT_ENGINE"
+        "owner": "CRYPTO_SETTLEMENT_ENGINE"
       },
       "final_disposition": "merge_then_delete_or_reclassify_canonical",
       "migration_status": "pending_gate",
@@ -144,12 +144,12 @@
       ]
     },
     {
-      "canonical_replacement": "config/v7_authority_registry.json#BTC_SETTLEMENT_ENGINE",
+      "canonical_replacement": "config/v7_authority_registry.json#CRYPTO_SETTLEMENT_ENGINE",
       "classification": "MERGE_INTO_CANONICAL",
       "current_imports_callers_readers_writers": {
         "analysis": "exact path/module references from tracked text; runtime linkage is separately enumerated",
         "static_references": [
-          "scripts/paper_v7_execution_loop.sh:348"
+          "scripts/paper_v7_execution_loop.sh:352"
         ]
       },
       "deletion_gate": "UNIQUE_BEHAVIOR_EQUIVALENCE_AND_SINGLE_CONSUMER_PROVEN",
@@ -159,7 +159,7 @@
           "engine_component"
         ],
         "executable": false,
-        "owner": "BTC_SETTLEMENT_ENGINE"
+        "owner": "CRYPTO_SETTLEMENT_ENGINE"
       },
       "final_disposition": "merge_then_delete_or_reclassify_canonical",
       "migration_status": "pending_gate",
@@ -173,12 +173,12 @@
       ]
     },
     {
-      "canonical_replacement": "config/v7_authority_registry.json#BTC_SETTLEMENT_ENGINE",
+      "canonical_replacement": "config/v7_authority_registry.json#CRYPTO_SETTLEMENT_ENGINE",
       "classification": "MERGE_INTO_CANONICAL",
       "current_imports_callers_readers_writers": {
         "analysis": "exact path/module references from tracked text; runtime linkage is separately enumerated",
         "static_references": [
-          "scripts/paper_v7_execution_loop.sh:357"
+          "scripts/paper_v7_execution_loop.sh:361"
         ]
       },
       "deletion_gate": "UNIQUE_BEHAVIOR_EQUIVALENCE_AND_SINGLE_CONSUMER_PROVEN",
@@ -188,7 +188,7 @@
           "engine_component"
         ],
         "executable": false,
-        "owner": "BTC_SETTLEMENT_ENGINE"
+        "owner": "CRYPTO_SETTLEMENT_ENGINE"
       },
       "final_disposition": "merge_then_delete_or_reclassify_canonical",
       "migration_status": "pending_gate",
@@ -202,12 +202,12 @@
       ]
     },
     {
-      "canonical_replacement": "config/v7_authority_registry.json#BTC_SETTLEMENT_ENGINE",
+      "canonical_replacement": "config/v7_authority_registry.json#CRYPTO_SETTLEMENT_ENGINE",
       "classification": "MERGE_INTO_CANONICAL",
       "current_imports_callers_readers_writers": {
         "analysis": "exact path/module references from tracked text; runtime linkage is separately enumerated",
         "static_references": [
-          "scripts/paper_v7_execution_loop.sh:362"
+          "scripts/paper_v7_execution_loop.sh:366"
         ]
       },
       "deletion_gate": "UNIQUE_BEHAVIOR_EQUIVALENCE_AND_SINGLE_CONSUMER_PROVEN",
@@ -217,7 +217,7 @@
           "engine_component"
         ],
         "executable": false,
-        "owner": "BTC_SETTLEMENT_ENGINE"
+        "owner": "CRYPTO_SETTLEMENT_ENGINE"
       },
       "final_disposition": "merge_then_delete_or_reclassify_canonical",
       "migration_status": "pending_gate",
@@ -231,12 +231,12 @@
       ]
     },
     {
-      "canonical_replacement": "config/v7_authority_registry.json#BTC_SETTLEMENT_ENGINE",
+      "canonical_replacement": "config/v7_authority_registry.json#CRYPTO_SETTLEMENT_ENGINE",
       "classification": "MERGE_INTO_CANONICAL",
       "current_imports_callers_readers_writers": {
         "analysis": "exact path/module references from tracked text; runtime linkage is separately enumerated",
         "static_references": [
-          "scripts/paper_v7_execution_loop.sh:367"
+          "scripts/paper_v7_execution_loop.sh:371"
         ]
       },
       "deletion_gate": "UNIQUE_BEHAVIOR_EQUIVALENCE_AND_SINGLE_CONSUMER_PROVEN",
@@ -246,7 +246,7 @@
           "engine_component"
         ],
         "executable": false,
-        "owner": "BTC_SETTLEMENT_ENGINE"
+        "owner": "CRYPTO_SETTLEMENT_ENGINE"
       },
       "final_disposition": "merge_then_delete_or_reclassify_canonical",
       "migration_status": "pending_gate",
@@ -260,12 +260,12 @@
       ]
     },
     {
-      "canonical_replacement": "config/v7_authority_registry.json#BTC_SETTLEMENT_ENGINE",
+      "canonical_replacement": "config/v7_authority_registry.json#CRYPTO_SETTLEMENT_ENGINE",
       "classification": "MERGE_INTO_CANONICAL",
       "current_imports_callers_readers_writers": {
         "analysis": "exact path/module references from tracked text; runtime linkage is separately enumerated",
         "static_references": [
-          "scripts/paper_v7_execution_loop.sh:375"
+          "scripts/paper_v7_execution_loop.sh:379"
         ]
       },
       "deletion_gate": "UNIQUE_BEHAVIOR_EQUIVALENCE_AND_SINGLE_CONSUMER_PROVEN",
@@ -275,7 +275,7 @@
           "engine_component"
         ],
         "executable": false,
-        "owner": "BTC_SETTLEMENT_ENGINE"
+        "owner": "CRYPTO_SETTLEMENT_ENGINE"
       },
       "final_disposition": "merge_then_delete_or_reclassify_canonical",
       "migration_status": "pending_gate",
@@ -289,12 +289,12 @@
       ]
     },
     {
-      "canonical_replacement": "config/v7_authority_registry.json#BTC_SETTLEMENT_ENGINE",
+      "canonical_replacement": "config/v7_authority_registry.json#CRYPTO_SETTLEMENT_ENGINE",
       "classification": "MERGE_INTO_CANONICAL",
       "current_imports_callers_readers_writers": {
         "analysis": "exact path/module references from tracked text; runtime linkage is separately enumerated",
         "static_references": [
-          "scripts/paper_v7_execution_loop.sh:380"
+          "scripts/paper_v7_execution_loop.sh:384"
         ]
       },
       "deletion_gate": "UNIQUE_BEHAVIOR_EQUIVALENCE_AND_SINGLE_CONSUMER_PROVEN",
@@ -304,7 +304,7 @@
           "engine_component"
         ],
         "executable": false,
-        "owner": "BTC_SETTLEMENT_ENGINE"
+        "owner": "CRYPTO_SETTLEMENT_ENGINE"
       },
       "final_disposition": "merge_then_delete_or_reclassify_canonical",
       "migration_status": "pending_gate",
@@ -323,7 +323,7 @@
       "current_imports_callers_readers_writers": {
         "analysis": "exact path/module references from tracked text; runtime linkage is separately enumerated",
         "static_references": [
-          "scripts/paper_v7_execution_loop.sh:526"
+          "scripts/paper_v7_execution_loop.sh:530"
         ]
       },
       "deletion_gate": "NONE_CANONICAL_SURFACE",
@@ -350,7 +350,7 @@
       "current_imports_callers_readers_writers": {
         "analysis": "exact path/module references from tracked text; runtime linkage is separately enumerated",
         "static_references": [
-          "scripts/paper_v7_execution_loop.sh:588"
+          "scripts/paper_v7_execution_loop.sh:592"
         ]
       },
       "deletion_gate": "DELETE_ONLY_IF_INFORMATION_VALUE_IS_SUPERSEDED",
@@ -372,12 +372,12 @@
       ]
     },
     {
-      "canonical_replacement": "config/v7_authority_registry.json#BTC_SETTLEMENT_ENGINE",
+      "canonical_replacement": "config/v7_authority_registry.json#CRYPTO_SETTLEMENT_ENGINE",
       "classification": "MERGE_INTO_CANONICAL",
       "current_imports_callers_readers_writers": {
         "analysis": "exact path/module references from tracked text; runtime linkage is separately enumerated",
         "static_references": [
-          "scripts/paper_v7_execution_loop.sh:644"
+          "scripts/paper_v7_execution_loop.sh:648"
         ]
       },
       "deletion_gate": "UNIQUE_BEHAVIOR_EQUIVALENCE_AND_SINGLE_CONSUMER_PROVEN",
@@ -387,7 +387,7 @@
           "engine_component"
         ],
         "executable": false,
-        "owner": "BTC_SETTLEMENT_ENGINE"
+        "owner": "CRYPTO_SETTLEMENT_ENGINE"
       },
       "final_disposition": "merge_then_delete_or_reclassify_canonical",
       "migration_status": "pending_gate",
@@ -406,7 +406,7 @@
       "current_imports_callers_readers_writers": {
         "analysis": "exact path/module references from tracked text; runtime linkage is separately enumerated",
         "static_references": [
-          "scripts/paper_v7_execution_loop.sh:652"
+          "scripts/paper_v7_execution_loop.sh:656"
         ]
       },
       "deletion_gate": "NONE_CANONICAL_SURFACE",
@@ -433,7 +433,7 @@
       "current_imports_callers_readers_writers": {
         "analysis": "exact path/module references from tracked text; runtime linkage is separately enumerated",
         "static_references": [
-          "scripts/paper_v7_execution_loop.sh:659"
+          "scripts/paper_v7_execution_loop.sh:663"
         ]
       },
       "deletion_gate": "NONE_CANONICAL_SURFACE",
@@ -455,12 +455,12 @@
       ]
     },
     {
-      "canonical_replacement": "config/v7_authority_registry.json#BTC_SETTLEMENT_ENGINE",
+      "canonical_replacement": "config/v7_authority_registry.json#CRYPTO_SETTLEMENT_ENGINE",
       "classification": "MERGE_INTO_CANONICAL",
       "current_imports_callers_readers_writers": {
         "analysis": "exact path/module references from tracked text; runtime linkage is separately enumerated",
         "static_references": [
-          "scripts/paper_v7_execution_loop.sh:680"
+          "scripts/paper_v7_execution_loop.sh:684"
         ]
       },
       "deletion_gate": "UNIQUE_BEHAVIOR_EQUIVALENCE_AND_SINGLE_CONSUMER_PROVEN",
@@ -470,7 +470,7 @@
           "engine_component"
         ],
         "executable": false,
-        "owner": "BTC_SETTLEMENT_ENGINE"
+        "owner": "CRYPTO_SETTLEMENT_ENGINE"
       },
       "final_disposition": "merge_then_delete_or_reclassify_canonical",
       "migration_status": "pending_gate",
@@ -489,7 +489,7 @@
       "current_imports_callers_readers_writers": {
         "analysis": "exact path/module references from tracked text; runtime linkage is separately enumerated",
         "static_references": [
-          "scripts/paper_v7_execution_loop.sh:691"
+          "scripts/paper_v7_execution_loop.sh:695"
         ]
       },
       "deletion_gate": "NONE_CANONICAL_SURFACE",
@@ -511,12 +511,12 @@
       ]
     },
     {
-      "canonical_replacement": "config/v7_authority_registry.json#BTC_SETTLEMENT_ENGINE",
+      "canonical_replacement": "config/v7_authority_registry.json#CRYPTO_SETTLEMENT_ENGINE",
       "classification": "MERGE_INTO_CANONICAL",
       "current_imports_callers_readers_writers": {
         "analysis": "exact path/module references from tracked text; runtime linkage is separately enumerated",
         "static_references": [
-          "scripts/paper_v7_execution_loop.sh:703"
+          "scripts/paper_v7_execution_loop.sh:707"
         ]
       },
       "deletion_gate": "UNIQUE_BEHAVIOR_EQUIVALENCE_AND_SINGLE_CONSUMER_PROVEN",
@@ -526,7 +526,7 @@
           "engine_component"
         ],
         "executable": false,
-        "owner": "BTC_SETTLEMENT_ENGINE"
+        "owner": "CRYPTO_SETTLEMENT_ENGINE"
       },
       "final_disposition": "merge_then_delete_or_reclassify_canonical",
       "migration_status": "pending_gate",
@@ -540,12 +540,12 @@
       ]
     },
     {
-      "canonical_replacement": "config/v7_authority_registry.json#BTC_SETTLEMENT_ENGINE",
+      "canonical_replacement": "config/v7_authority_registry.json#CRYPTO_SETTLEMENT_ENGINE",
       "classification": "MERGE_INTO_CANONICAL",
       "current_imports_callers_readers_writers": {
         "analysis": "exact path/module references from tracked text; runtime linkage is separately enumerated",
         "static_references": [
-          "scripts/paper_v7_execution_loop.sh:736"
+          "scripts/paper_v7_execution_loop.sh:740"
         ]
       },
       "deletion_gate": "UNIQUE_BEHAVIOR_EQUIVALENCE_AND_SINGLE_CONSUMER_PROVEN",
@@ -555,7 +555,7 @@
           "engine_component"
         ],
         "executable": false,
-        "owner": "BTC_SETTLEMENT_ENGINE"
+        "owner": "CRYPTO_SETTLEMENT_ENGINE"
       },
       "final_disposition": "merge_then_delete_or_reclassify_canonical",
       "migration_status": "pending_gate",
@@ -569,12 +569,12 @@
       ]
     },
     {
-      "canonical_replacement": "config/v7_authority_registry.json#BTC_SETTLEMENT_ENGINE",
+      "canonical_replacement": "config/v7_authority_registry.json#CRYPTO_SETTLEMENT_ENGINE",
       "classification": "MERGE_INTO_CANONICAL",
       "current_imports_callers_readers_writers": {
         "analysis": "exact path/module references from tracked text; runtime linkage is separately enumerated",
         "static_references": [
-          "scripts/paper_v7_execution_loop.sh:763"
+          "scripts/paper_v7_execution_loop.sh:767"
         ]
       },
       "deletion_gate": "UNIQUE_BEHAVIOR_EQUIVALENCE_AND_SINGLE_CONSUMER_PROVEN",
@@ -584,7 +584,7 @@
           "engine_component"
         ],
         "executable": false,
-        "owner": "BTC_SETTLEMENT_ENGINE"
+        "owner": "CRYPTO_SETTLEMENT_ENGINE"
       },
       "final_disposition": "merge_then_delete_or_reclassify_canonical",
       "migration_status": "pending_gate",
@@ -603,7 +603,7 @@
       "current_imports_callers_readers_writers": {
         "analysis": "exact path/module references from tracked text; runtime linkage is separately enumerated",
         "static_references": [
-          "scripts/paper_v7_execution_loop.sh:776"
+          "scripts/paper_v7_execution_loop.sh:780"
         ]
       },
       "deletion_gate": "NONE_CANONICAL_SURFACE",
@@ -630,7 +630,7 @@
       "current_imports_callers_readers_writers": {
         "analysis": "exact path/module references from tracked text; runtime linkage is separately enumerated",
         "static_references": [
-          "scripts/paper_v7_execution_loop.sh:788"
+          "scripts/paper_v7_execution_loop.sh:792"
         ]
       },
       "deletion_gate": "DELETE_ONLY_IF_INFORMATION_VALUE_IS_SUPERSEDED",
@@ -657,7 +657,7 @@
       "current_imports_callers_readers_writers": {
         "analysis": "exact path/module references from tracked text; runtime linkage is separately enumerated",
         "static_references": [
-          "scripts/paper_v7_execution_loop.sh:808"
+          "scripts/paper_v7_execution_loop.sh:812"
         ]
       },
       "deletion_gate": "NONE_CANONICAL_SURFACE",
@@ -687,7 +687,7 @@
       "current_imports_callers_readers_writers": {
         "analysis": "exact path/module references from tracked text; runtime linkage is separately enumerated",
         "static_references": [
-          "scripts/paper_v7_execution_loop.sh:821"
+          "scripts/paper_v7_execution_loop.sh:825"
         ]
       },
       "deletion_gate": "DELETE_ONLY_IF_INFORMATION_VALUE_IS_SUPERSEDED",
@@ -714,7 +714,7 @@
       "current_imports_callers_readers_writers": {
         "analysis": "exact path/module references from tracked text; runtime linkage is separately enumerated",
         "static_references": [
-          "scripts/paper_v7_execution_loop.sh:833"
+          "scripts/paper_v7_execution_loop.sh:837"
         ]
       },
       "deletion_gate": "DELETE_ONLY_IF_INFORMATION_VALUE_IS_SUPERSEDED",
@@ -741,7 +741,7 @@
       "current_imports_callers_readers_writers": {
         "analysis": "exact path/module references from tracked text; runtime linkage is separately enumerated",
         "static_references": [
-          "scripts/paper_v7_execution_loop.sh:849"
+          "scripts/paper_v7_execution_loop.sh:853"
         ]
       },
       "deletion_gate": "DELETE_ONLY_IF_INFORMATION_VALUE_IS_SUPERSEDED",
@@ -768,7 +768,7 @@
       "current_imports_callers_readers_writers": {
         "analysis": "exact path/module references from tracked text; runtime linkage is separately enumerated",
         "static_references": [
-          "scripts/paper_v7_execution_loop.sh:861"
+          "scripts/paper_v7_execution_loop.sh:865"
         ]
       },
       "deletion_gate": "DELETE_ONLY_IF_INFORMATION_VALUE_IS_SUPERSEDED",
@@ -795,7 +795,7 @@
       "current_imports_callers_readers_writers": {
         "analysis": "exact path/module references from tracked text; runtime linkage is separately enumerated",
         "static_references": [
-          "scripts/paper_v7_execution_loop.sh:875"
+          "scripts/paper_v7_execution_loop.sh:879"
         ]
       },
       "deletion_gate": "DELETE_ONLY_IF_INFORMATION_VALUE_IS_SUPERSEDED",
@@ -822,7 +822,7 @@
       "current_imports_callers_readers_writers": {
         "analysis": "exact path/module references from tracked text; runtime linkage is separately enumerated",
         "static_references": [
-          "scripts/paper_v7_execution_loop.sh:889"
+          "scripts/paper_v7_execution_loop.sh:893"
         ]
       },
       "deletion_gate": "DELETE_ONLY_IF_INFORMATION_VALUE_IS_SUPERSEDED",
@@ -849,7 +849,7 @@
       "current_imports_callers_readers_writers": {
         "analysis": "exact path/module references from tracked text; runtime linkage is separately enumerated",
         "static_references": [
-          "scripts/paper_v7_execution_loop.sh:899"
+          "scripts/paper_v7_execution_loop.sh:903"
         ]
       },
       "deletion_gate": "DELETE_ONLY_IF_INFORMATION_VALUE_IS_SUPERSEDED",
@@ -876,7 +876,7 @@
       "current_imports_callers_readers_writers": {
         "analysis": "exact path/module references from tracked text; runtime linkage is separately enumerated",
         "static_references": [
-          "scripts/paper_v7_execution_loop.sh:911"
+          "scripts/paper_v7_execution_loop.sh:915"
         ]
       },
       "deletion_gate": "DELETE_ONLY_IF_INFORMATION_VALUE_IS_SUPERSEDED",
@@ -903,7 +903,7 @@
       "current_imports_callers_readers_writers": {
         "analysis": "exact path/module references from tracked text; runtime linkage is separately enumerated",
         "static_references": [
-          "scripts/paper_v7_execution_loop.sh:921"
+          "scripts/paper_v7_execution_loop.sh:925"
         ]
       },
       "deletion_gate": "DELETE_ONLY_IF_INFORMATION_VALUE_IS_SUPERSEDED",
@@ -1306,6 +1306,7 @@
         "analysis": "exact path/module references from tracked text; runtime linkage is separately enumerated",
         "static_references": [
           "artifacts/v7_unification/path_classification.json",
+          "scripts/v7_crypto_assumption_audit.py",
           "scripts/v7_surface_classification.py"
         ]
       },
@@ -1441,6 +1442,7 @@
         "static_references": [
           "AGENT_DIRECTIVE_V7_UNIFICATION_AND_LEGACY_ERADICATION.md",
           "artifacts/v7_unification/path_classification.json",
+          "scripts/v7_crypto_assumption_audit.py",
           "tests/test_v7_repository_shape.py"
         ]
       },
@@ -1640,7 +1642,7 @@
       ]
     },
     {
-      "canonical_replacement": "config/v7_authority_registry.json#BTC_SETTLEMENT_ENGINE",
+      "canonical_replacement": "config/v7_authority_registry.json#CRYPTO_SETTLEMENT_ENGINE",
       "classification": "MERGE_INTO_CANONICAL",
       "current_imports_callers_readers_writers": {
         "analysis": "exact path/module references from tracked text; runtime linkage is separately enumerated",
@@ -1696,7 +1698,7 @@
       ]
     },
     {
-      "canonical_replacement": "config/v7_authority_registry.json#BTC_SETTLEMENT_ENGINE",
+      "canonical_replacement": "config/v7_authority_registry.json#CRYPTO_SETTLEMENT_ENGINE",
       "classification": "MERGE_INTO_CANONICAL",
       "current_imports_callers_readers_writers": {
         "analysis": "exact path/module references from tracked text; runtime linkage is separately enumerated",
@@ -2495,6 +2497,7 @@
           "AGENT_DIRECTIVE_V7_UNIFICATION_AND_LEGACY_ERADICATION.md",
           "artifacts/v7_unification/path_classification.json",
           "scripts/v7_convergence_audit.py",
+          "scripts/v7_crypto_assumption_audit.py",
           "scripts/v7_cutover_contract.py",
           "scripts/v7_final_convergence_audit.py",
           "tests/test_v7_live_paper_validation_contract.py",
@@ -2905,14 +2908,14 @@
           "artifacts/v7_unification/authority_graph.json",
           "artifacts/v7_unification/path_classification.json",
           "artifacts/v7_unification/phase_2_report.md",
-          "config/v7_btc_settlement_engine.json",
+          "config/v7_crypto_settlement_engine.json",
           "config/v7_live_model_scope.json",
           "config/v7_process_manifest.json",
           "config/v7_research_data_plane.json",
           "config/v7_structural_arb_engine.json",
           "scripts/v7_authority_contract.py",
           "scripts/v7_authority_reachability_audit.py",
-          "scripts/v7_btc_settlement_engine_contract.py",
+          "scripts/v7_crypto_settlement_engine_contract.py",
           "scripts/v7_current_truth_audit.py",
           "scripts/v7_cutover_contract.py",
           "scripts/v7_final_convergence_audit.py",
@@ -2938,43 +2941,6 @@
       "path_or_ref": "config/v7_authority_registry.json",
       "rollback_artifact_tag": "v7-unification-pre-migration-8d9e8e60",
       "surface_id": "path:config/v7_authority_registry.json",
-      "unique_behavior_data_contribution": "tracked repository behavior, evidence, test, configuration, or documentation",
-      "validation_tests": [
-        "tests/test_v7_surface_classification.py"
-      ]
-    },
-    {
-      "canonical_replacement": "config/v7_authority_registry.json#BTC_SETTLEMENT_ENGINE",
-      "classification": "MERGE_INTO_CANONICAL",
-      "current_imports_callers_readers_writers": {
-        "analysis": "exact path/module references from tracked text; runtime linkage is separately enumerated",
-        "static_references": [
-          "AGENT_DIRECTIVE_V7_UNIFICATION_AND_LEGACY_ERADICATION.md",
-          "README.md",
-          "artifacts/v7_unification/path_classification.json",
-          "artifacts/v7_unification/phase_4_report.md",
-          "config/v7_live_model_scope.json",
-          "scripts/v7_btc_settlement_engine_contract.py",
-          "scripts/v7_cutover_contract.py",
-          "tests/test_v7_btc_settlement_engine_contract.py",
-          "tests/test_v7_live_model_scope.py"
-        ]
-      },
-      "deletion_gate": "UNIQUE_BEHAVIOR_EQUIVALENCE_AND_SINGLE_CONSUMER_PROVEN",
-      "disposition_commit": null,
-      "economic_authority": {
-        "capabilities": [
-          "engine_component"
-        ],
-        "executable": false,
-        "owner": "BTC_SETTLEMENT_ENGINE"
-      },
-      "final_disposition": "merge_then_delete_or_reclassify_canonical",
-      "migration_status": "pending_gate",
-      "object_type": "tracked_path",
-      "path_or_ref": "config/v7_btc_settlement_engine.json",
-      "rollback_artifact_tag": "v7-unification-pre-migration-8d9e8e60",
-      "surface_id": "path:config/v7_btc_settlement_engine.json",
       "unique_behavior_data_contribution": "tracked repository behavior, evidence, test, configuration, or documentation",
       "validation_tests": [
         "tests/test_v7_surface_classification.py"
@@ -3037,6 +3003,142 @@
       "path_or_ref": "config/v7_claim_registry.json",
       "rollback_artifact_tag": "v7-unification-pre-migration-8d9e8e60",
       "surface_id": "path:config/v7_claim_registry.json",
+      "unique_behavior_data_contribution": "tracked repository behavior, evidence, test, configuration, or documentation",
+      "validation_tests": [
+        "tests/test_v7_surface_classification.py"
+      ]
+    },
+    {
+      "canonical_replacement": "config/v7_crypto_btc_migration_baseline.json",
+      "classification": "KEEP_CANONICAL",
+      "current_imports_callers_readers_writers": {
+        "analysis": "exact path/module references from tracked text; runtime linkage is separately enumerated",
+        "static_references": [
+          "tests/test_v7_crypto_btc_equivalence.py"
+        ]
+      },
+      "deletion_gate": "NONE_CANONICAL_SURFACE",
+      "disposition_commit": null,
+      "economic_authority": {
+        "capabilities": [],
+        "executable": false,
+        "owner": null
+      },
+      "final_disposition": "retain_canonical",
+      "migration_status": "classified",
+      "object_type": "tracked_path",
+      "path_or_ref": "config/v7_crypto_btc_migration_baseline.json",
+      "rollback_artifact_tag": "v7-unification-pre-migration-8d9e8e60",
+      "surface_id": "path:config/v7_crypto_btc_migration_baseline.json",
+      "unique_behavior_data_contribution": "tracked repository behavior, evidence, test, configuration, or documentation",
+      "validation_tests": [
+        "tests/test_v7_surface_classification.py"
+      ]
+    },
+    {
+      "canonical_replacement": "config/v7_authority_registry.json#CRYPTO_SETTLEMENT_ENGINE",
+      "classification": "MERGE_INTO_CANONICAL",
+      "current_imports_callers_readers_writers": {
+        "analysis": "exact path/module references from tracked text; runtime linkage is separately enumerated",
+        "static_references": [
+          "README.md",
+          "config/v7_live_model_scope.json",
+          "scripts/v7_crypto_settlement_engine_contract.py",
+          "scripts/v7_cutover_contract.py",
+          "tests/test_v7_crypto_settlement_engine_contract.py",
+          "tests/test_v7_live_model_scope.py",
+          "tests/test_v7_repository_shape.py"
+        ]
+      },
+      "deletion_gate": "UNIQUE_BEHAVIOR_EQUIVALENCE_AND_SINGLE_CONSUMER_PROVEN",
+      "disposition_commit": null,
+      "economic_authority": {
+        "capabilities": [
+          "engine_component"
+        ],
+        "executable": false,
+        "owner": "CRYPTO_SETTLEMENT_ENGINE"
+      },
+      "final_disposition": "merge_then_delete_or_reclassify_canonical",
+      "migration_status": "pending_gate",
+      "object_type": "tracked_path",
+      "path_or_ref": "config/v7_crypto_settlement_engine.json",
+      "rollback_artifact_tag": "v7-unification-pre-migration-8d9e8e60",
+      "surface_id": "path:config/v7_crypto_settlement_engine.json",
+      "unique_behavior_data_contribution": "tracked repository behavior, evidence, test, configuration, or documentation",
+      "validation_tests": [
+        "tests/test_v7_surface_classification.py"
+      ]
+    },
+    {
+      "canonical_replacement": "config/v7_crypto_settlement_markets.json",
+      "classification": "KEEP_CANONICAL",
+      "current_imports_callers_readers_writers": {
+        "analysis": "exact path/module references from tracked text; runtime linkage is separately enumerated",
+        "static_references": [
+          "README.md",
+          "config/paper_v7.json",
+          "config/v7_crypto_settlement_engine.json",
+          "config/v7_live_model_scope.json",
+          "docs/v7_world_class/crypto_settlement_engine.md",
+          "scripts/v7_crypto_economic_validation.py",
+          "scripts/v7_crypto_market_discovery.py",
+          "scripts/v7_crypto_settlement_engine_contract.py",
+          "scripts/v7_external_fair_paper_router.py",
+          "tests/test_v7_crypto_btc_equivalence.py",
+          "tests/test_v7_crypto_economic_validation.py",
+          "tests/test_v7_crypto_settlement.py",
+          "tests/test_v7_crypto_settlement_engine_contract.py",
+          "tests/test_v7_repository_shape.py"
+        ]
+      },
+      "deletion_gate": "NONE_CANONICAL_SURFACE",
+      "disposition_commit": null,
+      "economic_authority": {
+        "capabilities": [],
+        "executable": false,
+        "owner": null
+      },
+      "final_disposition": "retain_canonical",
+      "migration_status": "classified",
+      "object_type": "tracked_path",
+      "path_or_ref": "config/v7_crypto_settlement_markets.json",
+      "rollback_artifact_tag": "v7-unification-pre-migration-8d9e8e60",
+      "surface_id": "path:config/v7_crypto_settlement_markets.json",
+      "unique_behavior_data_contribution": "tracked repository behavior, evidence, test, configuration, or documentation",
+      "validation_tests": [
+        "tests/test_v7_surface_classification.py"
+      ]
+    },
+    {
+      "canonical_replacement": "config/v7_crypto_settlement_model_registry.json",
+      "classification": "KEEP_CANONICAL",
+      "current_imports_callers_readers_writers": {
+        "analysis": "exact path/module references from tracked text; runtime linkage is separately enumerated",
+        "static_references": [
+          "README.md",
+          "config/paper_v7.json",
+          "config/v7_crypto_settlement_engine.json",
+          "config/v7_live_model_scope.json",
+          "scripts/v7_crypto_settlement_engine_contract.py",
+          "tests/test_v7_crypto_settlement.py",
+          "tests/test_v7_crypto_settlement_engine_contract.py",
+          "tests/test_v7_repository_shape.py"
+        ]
+      },
+      "deletion_gate": "NONE_CANONICAL_SURFACE",
+      "disposition_commit": null,
+      "economic_authority": {
+        "capabilities": [],
+        "executable": false,
+        "owner": null
+      },
+      "final_disposition": "retain_canonical",
+      "migration_status": "classified",
+      "object_type": "tracked_path",
+      "path_or_ref": "config/v7_crypto_settlement_model_registry.json",
+      "rollback_artifact_tag": "v7-unification-pre-migration-8d9e8e60",
+      "surface_id": "path:config/v7_crypto_settlement_model_registry.json",
       "unique_behavior_data_contribution": "tracked repository behavior, evidence, test, configuration, or documentation",
       "validation_tests": [
         "tests/test_v7_surface_classification.py"
@@ -3147,7 +3249,7 @@
       ]
     },
     {
-      "canonical_replacement": "config/v7_authority_registry.json#BTC_SETTLEMENT_ENGINE",
+      "canonical_replacement": "config/v7_authority_registry.json#CRYPTO_SETTLEMENT_ENGINE",
       "classification": "MERGE_INTO_CANONICAL",
       "current_imports_callers_readers_writers": {
         "analysis": "exact path/module references from tracked text; runtime linkage is separately enumerated",
@@ -3175,7 +3277,7 @@
           "engine_component"
         ],
         "executable": false,
-        "owner": "BTC_SETTLEMENT_ENGINE"
+        "owner": "CRYPTO_SETTLEMENT_ENGINE"
       },
       "final_disposition": "merge_then_delete_or_reclassify_canonical",
       "migration_status": "pending_gate",
@@ -3189,14 +3291,15 @@
       ]
     },
     {
-      "canonical_replacement": "config/v7_authority_registry.json#BTC_SETTLEMENT_ENGINE",
+      "canonical_replacement": "config/v7_authority_registry.json#CRYPTO_SETTLEMENT_ENGINE",
       "classification": "MERGE_INTO_CANONICAL",
       "current_imports_callers_readers_writers": {
         "analysis": "exact path/module references from tracked text; runtime linkage is separately enumerated",
         "static_references": [
           "artifacts/v7_unification/path_classification.json",
           "ops/update_server_v7.sh",
-          "scripts/paper_v7_execution_loop.sh"
+          "scripts/paper_v7_execution_loop.sh",
+          "scripts/v7_crypto_assumption_audit.py"
         ]
       },
       "deletion_gate": "UNIQUE_BEHAVIOR_EQUIVALENCE_AND_SINGLE_CONSUMER_PROVEN",
@@ -3206,7 +3309,7 @@
           "engine_component"
         ],
         "executable": false,
-        "owner": "BTC_SETTLEMENT_ENGINE"
+        "owner": "CRYPTO_SETTLEMENT_ENGINE"
       },
       "final_disposition": "merge_then_delete_or_reclassify_canonical",
       "migration_status": "pending_gate",
@@ -3298,8 +3401,10 @@
       "current_imports_callers_readers_writers": {
         "analysis": "exact path/module references from tracked text; runtime linkage is separately enumerated",
         "static_references": [
+          "README.md",
           "artifacts/v7_unification/path_classification.json",
           "scripts/v7_external_source_registry.py",
+          "tests/test_v7_crypto_settlement.py",
           "tests/test_v7_external_source_registry.py"
         ]
       },
@@ -3521,11 +3626,11 @@
           "config/v7_process_manifest.json",
           "monitoring/v7_monitoring_manifest.json",
           "ops/update_server_v7.sh",
-          "scripts/v7_btc_settlement_engine_contract.py",
+          "scripts/v7_crypto_settlement_engine_contract.py",
           "scripts/v7_cutover_contract.py",
           "scripts/v7_research_data_plane_contract.py",
           "scripts/v7_research_shadow_supervisor.py",
-          "tests/test_v7_btc_settlement_engine_contract.py",
+          "tests/test_v7_crypto_settlement_engine_contract.py",
           "tests/test_v7_cutover_updater.py",
           "tests/test_v7_live_model_scope.py",
           "tests/test_v7_live_paper_validation_contract.py",
@@ -3551,7 +3656,7 @@
       ]
     },
     {
-      "canonical_replacement": "config/v7_authority_registry.json#BTC_SETTLEMENT_ENGINE",
+      "canonical_replacement": "config/v7_authority_registry.json#CRYPTO_SETTLEMENT_ENGINE",
       "classification": "MERGE_INTO_CANONICAL",
       "current_imports_callers_readers_writers": {
         "analysis": "exact path/module references from tracked text; runtime linkage is separately enumerated",
@@ -3569,7 +3674,7 @@
           "engine_component"
         ],
         "executable": false,
-        "owner": "BTC_SETTLEMENT_ENGINE"
+        "owner": "CRYPTO_SETTLEMENT_ENGINE"
       },
       "final_disposition": "merge_then_delete_or_reclassify_canonical",
       "migration_status": "pending_gate",
@@ -3747,7 +3852,7 @@
       ]
     },
     {
-      "canonical_replacement": "config/v7_authority_registry.json#BTC_SETTLEMENT_ENGINE",
+      "canonical_replacement": "config/v7_authority_registry.json#CRYPTO_SETTLEMENT_ENGINE",
       "classification": "MERGE_INTO_CANONICAL",
       "current_imports_callers_readers_writers": {
         "analysis": "exact path/module references from tracked text; runtime linkage is separately enumerated",
@@ -3773,7 +3878,7 @@
           "engine_component"
         ],
         "executable": false,
-        "owner": "BTC_SETTLEMENT_ENGINE"
+        "owner": "CRYPTO_SETTLEMENT_ENGINE"
       },
       "final_disposition": "merge_then_delete_or_reclassify_canonical",
       "migration_status": "pending_gate",
@@ -3959,11 +4064,11 @@
           "artifacts/v7_unification/path_classification.json",
           "config/paper_v7.json",
           "docs/MODELS.md",
-          "scripts/v7_btc_settlement_engine_contract.py",
           "scripts/v7_convergence_audit.py",
+          "scripts/v7_crypto_settlement_engine_contract.py",
           "scripts/v7_cutover_contract.py",
           "scripts/v7_strategy_governance.py",
-          "tests/test_v7_btc_settlement_engine_contract.py",
+          "tests/test_v7_crypto_settlement_engine_contract.py",
           "tests/test_v7_live_model_scope.py"
         ]
       },
@@ -3996,10 +4101,10 @@
           "artifacts/v7_unification/path_classification.json",
           "artifacts/v7_unification/phase_5_report.md",
           "config/v7_live_model_scope.json",
-          "scripts/v7_btc_settlement_engine_contract.py",
+          "scripts/v7_crypto_settlement_engine_contract.py",
           "scripts/v7_cutover_contract.py",
           "scripts/v7_economic_loop_audit.py",
-          "tests/test_v7_btc_settlement_engine_contract.py",
+          "tests/test_v7_crypto_settlement_engine_contract.py",
           "tests/test_v7_live_model_scope.py"
         ]
       },
@@ -4942,34 +5047,6 @@
       ]
     },
     {
-      "canonical_replacement": "config/v7_authority_registry.json#BTC_SETTLEMENT_ENGINE",
-      "classification": "MERGE_INTO_CANONICAL",
-      "current_imports_callers_readers_writers": {
-        "analysis": "exact path/module references from tracked text; runtime linkage is separately enumerated",
-        "static_references": [
-          "artifacts/v7_unification/path_classification.json",
-          "tests/test_v7_repository_shape.py"
-        ]
-      },
-      "deletion_gate": "UNIQUE_BEHAVIOR_EQUIVALENCE_AND_SINGLE_CONSUMER_PROVEN",
-      "disposition_commit": null,
-      "economic_authority": {
-        "capabilities": [],
-        "executable": false,
-        "owner": null
-      },
-      "final_disposition": "merge_then_delete_or_reclassify_canonical",
-      "migration_status": "pending_gate",
-      "object_type": "tracked_path",
-      "path_or_ref": "docs/v7_world_class/btc_settlement_engine.md",
-      "rollback_artifact_tag": "v7-unification-pre-migration-8d9e8e60",
-      "surface_id": "path:docs/v7_world_class/btc_settlement_engine.md",
-      "unique_behavior_data_contribution": "tracked repository behavior, evidence, test, configuration, or documentation",
-      "validation_tests": [
-        "tests/test_v7_surface_classification.py"
-      ]
-    },
-    {
       "canonical_replacement": "docs/v7_world_class/claim_policy.md",
       "classification": "KEEP_CANONICAL",
       "current_imports_callers_readers_writers": {
@@ -4992,6 +5069,33 @@
       "path_or_ref": "docs/v7_world_class/claim_policy.md",
       "rollback_artifact_tag": "v7-unification-pre-migration-8d9e8e60",
       "surface_id": "path:docs/v7_world_class/claim_policy.md",
+      "unique_behavior_data_contribution": "tracked repository behavior, evidence, test, configuration, or documentation",
+      "validation_tests": [
+        "tests/test_v7_surface_classification.py"
+      ]
+    },
+    {
+      "canonical_replacement": "config/v7_authority_registry.json#CRYPTO_SETTLEMENT_ENGINE",
+      "classification": "MERGE_INTO_CANONICAL",
+      "current_imports_callers_readers_writers": {
+        "analysis": "exact path/module references from tracked text; runtime linkage is separately enumerated",
+        "static_references": [
+          "tests/test_v7_repository_shape.py"
+        ]
+      },
+      "deletion_gate": "UNIQUE_BEHAVIOR_EQUIVALENCE_AND_SINGLE_CONSUMER_PROVEN",
+      "disposition_commit": null,
+      "economic_authority": {
+        "capabilities": [],
+        "executable": false,
+        "owner": null
+      },
+      "final_disposition": "merge_then_delete_or_reclassify_canonical",
+      "migration_status": "pending_gate",
+      "object_type": "tracked_path",
+      "path_or_ref": "docs/v7_world_class/crypto_settlement_engine.md",
+      "rollback_artifact_tag": "v7-unification-pre-migration-8d9e8e60",
+      "surface_id": "path:docs/v7_world_class/crypto_settlement_engine.md",
       "unique_behavior_data_contribution": "tracked repository behavior, evidence, test, configuration, or documentation",
       "validation_tests": [
         "tests/test_v7_surface_classification.py"
@@ -5600,7 +5704,7 @@
       ]
     },
     {
-      "canonical_replacement": "config/v7_authority_registry.json#BTC_SETTLEMENT_ENGINE",
+      "canonical_replacement": "config/v7_authority_registry.json#CRYPTO_SETTLEMENT_ENGINE",
       "classification": "MERGE_INTO_CANONICAL",
       "current_imports_callers_readers_writers": {
         "analysis": "exact path/module references from tracked text; runtime linkage is separately enumerated",
@@ -5615,7 +5719,7 @@
           "engine_component"
         ],
         "executable": false,
-        "owner": "BTC_SETTLEMENT_ENGINE"
+        "owner": "CRYPTO_SETTLEMENT_ENGINE"
       },
       "final_disposition": "merge_then_delete_or_reclassify_canonical",
       "migration_status": "pending_gate",
@@ -5629,7 +5733,7 @@
       ]
     },
     {
-      "canonical_replacement": "config/v7_authority_registry.json#BTC_SETTLEMENT_ENGINE",
+      "canonical_replacement": "config/v7_authority_registry.json#CRYPTO_SETTLEMENT_ENGINE",
       "classification": "MERGE_INTO_CANONICAL",
       "current_imports_callers_readers_writers": {
         "analysis": "exact path/module references from tracked text; runtime linkage is separately enumerated",
@@ -5644,7 +5748,7 @@
           "engine_component"
         ],
         "executable": false,
-        "owner": "BTC_SETTLEMENT_ENGINE"
+        "owner": "CRYPTO_SETTLEMENT_ENGINE"
       },
       "final_disposition": "merge_then_delete_or_reclassify_canonical",
       "migration_status": "pending_gate",
@@ -5658,7 +5762,7 @@
       ]
     },
     {
-      "canonical_replacement": "config/v7_authority_registry.json#BTC_SETTLEMENT_ENGINE",
+      "canonical_replacement": "config/v7_authority_registry.json#CRYPTO_SETTLEMENT_ENGINE",
       "classification": "MERGE_INTO_CANONICAL",
       "current_imports_callers_readers_writers": {
         "analysis": "exact path/module references from tracked text; runtime linkage is separately enumerated",
@@ -5673,7 +5777,7 @@
           "engine_component"
         ],
         "executable": false,
-        "owner": "BTC_SETTLEMENT_ENGINE"
+        "owner": "CRYPTO_SETTLEMENT_ENGINE"
       },
       "final_disposition": "merge_then_delete_or_reclassify_canonical",
       "migration_status": "pending_gate",
@@ -5687,7 +5791,7 @@
       ]
     },
     {
-      "canonical_replacement": "config/v7_authority_registry.json#BTC_SETTLEMENT_ENGINE",
+      "canonical_replacement": "config/v7_authority_registry.json#CRYPTO_SETTLEMENT_ENGINE",
       "classification": "MERGE_INTO_CANONICAL",
       "current_imports_callers_readers_writers": {
         "analysis": "exact path/module references from tracked text; runtime linkage is separately enumerated",
@@ -5702,7 +5806,7 @@
           "engine_component"
         ],
         "executable": false,
-        "owner": "BTC_SETTLEMENT_ENGINE"
+        "owner": "CRYPTO_SETTLEMENT_ENGINE"
       },
       "final_disposition": "merge_then_delete_or_reclassify_canonical",
       "migration_status": "pending_gate",
@@ -5716,7 +5820,7 @@
       ]
     },
     {
-      "canonical_replacement": "config/v7_authority_registry.json#BTC_SETTLEMENT_ENGINE",
+      "canonical_replacement": "config/v7_authority_registry.json#CRYPTO_SETTLEMENT_ENGINE",
       "classification": "MERGE_INTO_CANONICAL",
       "current_imports_callers_readers_writers": {
         "analysis": "exact path/module references from tracked text; runtime linkage is separately enumerated",
@@ -5731,7 +5835,7 @@
           "engine_component"
         ],
         "executable": false,
-        "owner": "BTC_SETTLEMENT_ENGINE"
+        "owner": "CRYPTO_SETTLEMENT_ENGINE"
       },
       "final_disposition": "merge_then_delete_or_reclassify_canonical",
       "migration_status": "pending_gate",
@@ -5745,7 +5849,7 @@
       ]
     },
     {
-      "canonical_replacement": "config/v7_authority_registry.json#BTC_SETTLEMENT_ENGINE",
+      "canonical_replacement": "config/v7_authority_registry.json#CRYPTO_SETTLEMENT_ENGINE",
       "classification": "MERGE_INTO_CANONICAL",
       "current_imports_callers_readers_writers": {
         "analysis": "exact path/module references from tracked text; runtime linkage is separately enumerated",
@@ -5760,7 +5864,7 @@
           "engine_component"
         ],
         "executable": false,
-        "owner": "BTC_SETTLEMENT_ENGINE"
+        "owner": "CRYPTO_SETTLEMENT_ENGINE"
       },
       "final_disposition": "merge_then_delete_or_reclassify_canonical",
       "migration_status": "pending_gate",
@@ -5774,7 +5878,7 @@
       ]
     },
     {
-      "canonical_replacement": "config/v7_authority_registry.json#BTC_SETTLEMENT_ENGINE",
+      "canonical_replacement": "config/v7_authority_registry.json#CRYPTO_SETTLEMENT_ENGINE",
       "classification": "MERGE_INTO_CANONICAL",
       "current_imports_callers_readers_writers": {
         "analysis": "exact path/module references from tracked text; runtime linkage is separately enumerated",
@@ -5789,7 +5893,7 @@
           "engine_component"
         ],
         "executable": false,
-        "owner": "BTC_SETTLEMENT_ENGINE"
+        "owner": "CRYPTO_SETTLEMENT_ENGINE"
       },
       "final_disposition": "merge_then_delete_or_reclassify_canonical",
       "migration_status": "pending_gate",
@@ -5803,7 +5907,7 @@
       ]
     },
     {
-      "canonical_replacement": "config/v7_authority_registry.json#BTC_SETTLEMENT_ENGINE",
+      "canonical_replacement": "config/v7_authority_registry.json#CRYPTO_SETTLEMENT_ENGINE",
       "classification": "MERGE_INTO_CANONICAL",
       "current_imports_callers_readers_writers": {
         "analysis": "exact path/module references from tracked text; runtime linkage is separately enumerated",
@@ -5818,7 +5922,7 @@
           "engine_component"
         ],
         "executable": false,
-        "owner": "BTC_SETTLEMENT_ENGINE"
+        "owner": "CRYPTO_SETTLEMENT_ENGINE"
       },
       "final_disposition": "merge_then_delete_or_reclassify_canonical",
       "migration_status": "pending_gate",
@@ -5832,7 +5936,7 @@
       ]
     },
     {
-      "canonical_replacement": "config/v7_authority_registry.json#BTC_SETTLEMENT_ENGINE",
+      "canonical_replacement": "config/v7_authority_registry.json#CRYPTO_SETTLEMENT_ENGINE",
       "classification": "MERGE_INTO_CANONICAL",
       "current_imports_callers_readers_writers": {
         "analysis": "exact path/module references from tracked text; runtime linkage is separately enumerated",
@@ -5848,7 +5952,7 @@
           "engine_component"
         ],
         "executable": false,
-        "owner": "BTC_SETTLEMENT_ENGINE"
+        "owner": "CRYPTO_SETTLEMENT_ENGINE"
       },
       "final_disposition": "merge_then_delete_or_reclassify_canonical",
       "migration_status": "pending_gate",
@@ -5970,7 +6074,7 @@
       ]
     },
     {
-      "canonical_replacement": "config/v7_authority_registry.json#BTC_SETTLEMENT_ENGINE",
+      "canonical_replacement": "config/v7_authority_registry.json#CRYPTO_SETTLEMENT_ENGINE",
       "classification": "MERGE_INTO_CANONICAL",
       "current_imports_callers_readers_writers": {
         "analysis": "exact path/module references from tracked text; runtime linkage is separately enumerated",
@@ -5985,7 +6089,7 @@
           "engine_component"
         ],
         "executable": false,
-        "owner": "BTC_SETTLEMENT_ENGINE"
+        "owner": "CRYPTO_SETTLEMENT_ENGINE"
       },
       "final_disposition": "merge_then_delete_or_reclassify_canonical",
       "migration_status": "pending_gate",
@@ -5999,7 +6103,7 @@
       ]
     },
     {
-      "canonical_replacement": "config/v7_authority_registry.json#BTC_SETTLEMENT_ENGINE",
+      "canonical_replacement": "config/v7_authority_registry.json#CRYPTO_SETTLEMENT_ENGINE",
       "classification": "MERGE_INTO_CANONICAL",
       "current_imports_callers_readers_writers": {
         "analysis": "exact path/module references from tracked text; runtime linkage is separately enumerated",
@@ -6015,7 +6119,7 @@
           "engine_component"
         ],
         "executable": false,
-        "owner": "BTC_SETTLEMENT_ENGINE"
+        "owner": "CRYPTO_SETTLEMENT_ENGINE"
       },
       "final_disposition": "merge_then_delete_or_reclassify_canonical",
       "migration_status": "pending_gate",
@@ -6029,7 +6133,7 @@
       ]
     },
     {
-      "canonical_replacement": "config/v7_authority_registry.json#BTC_SETTLEMENT_ENGINE",
+      "canonical_replacement": "config/v7_authority_registry.json#CRYPTO_SETTLEMENT_ENGINE",
       "classification": "MERGE_INTO_CANONICAL",
       "current_imports_callers_readers_writers": {
         "analysis": "exact path/module references from tracked text; runtime linkage is separately enumerated",
@@ -6044,7 +6148,7 @@
           "engine_component"
         ],
         "executable": false,
-        "owner": "BTC_SETTLEMENT_ENGINE"
+        "owner": "CRYPTO_SETTLEMENT_ENGINE"
       },
       "final_disposition": "merge_then_delete_or_reclassify_canonical",
       "migration_status": "pending_gate",
@@ -6058,7 +6162,7 @@
       ]
     },
     {
-      "canonical_replacement": "config/v7_authority_registry.json#BTC_SETTLEMENT_ENGINE",
+      "canonical_replacement": "config/v7_authority_registry.json#CRYPTO_SETTLEMENT_ENGINE",
       "classification": "MERGE_INTO_CANONICAL",
       "current_imports_callers_readers_writers": {
         "analysis": "exact path/module references from tracked text; runtime linkage is separately enumerated",
@@ -6073,7 +6177,7 @@
           "engine_component"
         ],
         "executable": false,
-        "owner": "BTC_SETTLEMENT_ENGINE"
+        "owner": "CRYPTO_SETTLEMENT_ENGINE"
       },
       "final_disposition": "merge_then_delete_or_reclassify_canonical",
       "migration_status": "pending_gate",
@@ -6794,7 +6898,7 @@
       ]
     },
     {
-      "canonical_replacement": "config/v7_authority_registry.json#BTC_SETTLEMENT_ENGINE",
+      "canonical_replacement": "config/v7_authority_registry.json#CRYPTO_SETTLEMENT_ENGINE",
       "classification": "MERGE_INTO_CANONICAL",
       "current_imports_callers_readers_writers": {
         "analysis": "exact path/module references from tracked text; runtime linkage is separately enumerated",
@@ -6812,7 +6916,7 @@
           "engine_component"
         ],
         "executable": false,
-        "owner": "BTC_SETTLEMENT_ENGINE"
+        "owner": "CRYPTO_SETTLEMENT_ENGINE"
       },
       "final_disposition": "merge_then_delete_or_reclassify_canonical",
       "migration_status": "pending_gate",
@@ -6862,7 +6966,7 @@
       ]
     },
     {
-      "canonical_replacement": "config/v7_authority_registry.json#BTC_SETTLEMENT_ENGINE",
+      "canonical_replacement": "config/v7_authority_registry.json#CRYPTO_SETTLEMENT_ENGINE",
       "classification": "MERGE_INTO_CANONICAL",
       "current_imports_callers_readers_writers": {
         "analysis": "exact path/module references from tracked text; runtime linkage is separately enumerated",
@@ -6881,7 +6985,7 @@
           "engine_component"
         ],
         "executable": false,
-        "owner": "BTC_SETTLEMENT_ENGINE"
+        "owner": "CRYPTO_SETTLEMENT_ENGINE"
       },
       "final_disposition": "merge_then_delete_or_reclassify_canonical",
       "migration_status": "pending_gate",
@@ -6895,7 +6999,7 @@
       ]
     },
     {
-      "canonical_replacement": "config/v7_authority_registry.json#BTC_SETTLEMENT_ENGINE",
+      "canonical_replacement": "config/v7_authority_registry.json#CRYPTO_SETTLEMENT_ENGINE",
       "classification": "MERGE_INTO_CANONICAL",
       "current_imports_callers_readers_writers": {
         "analysis": "exact path/module references from tracked text; runtime linkage is separately enumerated",
@@ -6916,7 +7020,7 @@
           "engine_component"
         ],
         "executable": false,
-        "owner": "BTC_SETTLEMENT_ENGINE"
+        "owner": "CRYPTO_SETTLEMENT_ENGINE"
       },
       "final_disposition": "merge_then_delete_or_reclassify_canonical",
       "migration_status": "pending_gate",
@@ -6930,7 +7034,7 @@
       ]
     },
     {
-      "canonical_replacement": "config/v7_authority_registry.json#BTC_SETTLEMENT_ENGINE",
+      "canonical_replacement": "config/v7_authority_registry.json#CRYPTO_SETTLEMENT_ENGINE",
       "classification": "MERGE_INTO_CANONICAL",
       "current_imports_callers_readers_writers": {
         "analysis": "exact path/module references from tracked text; runtime linkage is separately enumerated",
@@ -6947,7 +7051,7 @@
           "engine_component"
         ],
         "executable": false,
-        "owner": "BTC_SETTLEMENT_ENGINE"
+        "owner": "CRYPTO_SETTLEMENT_ENGINE"
       },
       "final_disposition": "merge_then_delete_or_reclassify_canonical",
       "migration_status": "pending_gate",
@@ -7834,10 +7938,11 @@
           ".github/workflows/ci.yml",
           "artifacts/v7_unification/path_classification.json",
           "artifacts/v7_unification/phase_5_report.md",
-          "config/v7_btc_settlement_engine.json",
+          "config/v7_crypto_settlement_engine.json",
           "config/v7_live_model_scope.json",
           "config/v7_structural_arb_engine.json",
-          "scripts/v7_btc_settlement_engine_contract.py",
+          "scripts/v7_crypto_assumption_audit.py",
+          "scripts/v7_crypto_settlement_engine_contract.py",
           "scripts/v7_current_truth_audit.py",
           "scripts/v7_cutover_contract.py",
           "scripts/v7_implementation_audit.py"
@@ -8255,6 +8360,7 @@
           "docs/RUNTIME.md",
           "ops/update_server_v7.sh",
           "scripts/v7_convergence_audit.py",
+          "scripts/v7_crypto_assumption_audit.py",
           "scripts/v7_cutover_contract.py",
           "scripts/v7_economic_loop_audit.py",
           "scripts/v7_process_manifest.py",
@@ -8511,40 +8617,6 @@
       ]
     },
     {
-      "canonical_replacement": "config/v7_authority_registry.json#BTC_SETTLEMENT_ENGINE",
-      "classification": "MERGE_INTO_CANONICAL",
-      "current_imports_callers_readers_writers": {
-        "analysis": "exact path/module references from tracked text; runtime linkage is separately enumerated",
-        "static_references": [
-          "artifacts/v7_unification/path_classification.json",
-          "artifacts/v7_unification/phase_4_report.md",
-          "docs/v7_world_class/btc_settlement_engine.md",
-          "scripts/paper_v7_execution_loop.sh",
-          "scripts/v7_cutover_contract.py",
-          "tests/test_v7_btc_settlement_engine_contract.py"
-        ]
-      },
-      "deletion_gate": "UNIQUE_BEHAVIOR_EQUIVALENCE_AND_SINGLE_CONSUMER_PROVEN",
-      "disposition_commit": null,
-      "economic_authority": {
-        "capabilities": [
-          "engine_component"
-        ],
-        "executable": false,
-        "owner": "BTC_SETTLEMENT_ENGINE"
-      },
-      "final_disposition": "merge_then_delete_or_reclassify_canonical",
-      "migration_status": "pending_gate",
-      "object_type": "tracked_path",
-      "path_or_ref": "scripts/v7_btc_settlement_engine_contract.py",
-      "rollback_artifact_tag": "v7-unification-pre-migration-8d9e8e60",
-      "surface_id": "path:scripts/v7_btc_settlement_engine_contract.py",
-      "unique_behavior_data_contribution": "tracked repository behavior, evidence, test, configuration, or documentation",
-      "validation_tests": [
-        "tests/test_v7_surface_classification.py"
-      ]
-    },
-    {
       "canonical_replacement": "scripts/v7_build_manifest.py",
       "classification": "KEEP_CANONICAL",
       "current_imports_callers_readers_writers": {
@@ -8772,6 +8844,7 @@
         "analysis": "exact path/module references from tracked text; runtime linkage is separately enumerated",
         "static_references": [
           "artifacts/v7_unification/path_classification.json",
+          "scripts/v7_crypto_assumption_audit.py",
           "scripts/v7_rtds_external_fair_monitor.py",
           "tests/test_v7_contract_registry.py"
         ]
@@ -9257,6 +9330,159 @@
       "path_or_ref": "scripts/v7_cross_sectional_tail_relative_causal.py",
       "rollback_artifact_tag": "v7-unification-pre-migration-8d9e8e60",
       "surface_id": "path:scripts/v7_cross_sectional_tail_relative_causal.py",
+      "unique_behavior_data_contribution": "tracked repository behavior, evidence, test, configuration, or documentation",
+      "validation_tests": [
+        "tests/test_v7_surface_classification.py"
+      ]
+    },
+    {
+      "canonical_replacement": "scripts/v7_crypto_assumption_audit.py",
+      "classification": "KEEP_CANONICAL",
+      "current_imports_callers_readers_writers": {
+        "analysis": "exact path/module references from tracked text; runtime linkage is separately enumerated",
+        "static_references": [
+          "README.md",
+          "tests/test_v7_crypto_assumption_audit.py"
+        ]
+      },
+      "deletion_gate": "NONE_CANONICAL_SURFACE",
+      "disposition_commit": null,
+      "economic_authority": {
+        "capabilities": [],
+        "executable": false,
+        "owner": null
+      },
+      "final_disposition": "retain_canonical",
+      "migration_status": "classified",
+      "object_type": "tracked_path",
+      "path_or_ref": "scripts/v7_crypto_assumption_audit.py",
+      "rollback_artifact_tag": "v7-unification-pre-migration-8d9e8e60",
+      "surface_id": "path:scripts/v7_crypto_assumption_audit.py",
+      "unique_behavior_data_contribution": "tracked repository behavior, evidence, test, configuration, or documentation",
+      "validation_tests": [
+        "tests/test_v7_surface_classification.py"
+      ]
+    },
+    {
+      "canonical_replacement": "scripts/v7_crypto_economic_validation.py",
+      "classification": "KEEP_CANONICAL",
+      "current_imports_callers_readers_writers": {
+        "analysis": "exact path/module references from tracked text; runtime linkage is separately enumerated",
+        "static_references": [
+          "README.md",
+          "tests/test_v7_crypto_economic_validation.py"
+        ]
+      },
+      "deletion_gate": "NONE_CANONICAL_SURFACE",
+      "disposition_commit": null,
+      "economic_authority": {
+        "capabilities": [],
+        "executable": false,
+        "owner": null
+      },
+      "final_disposition": "retain_canonical",
+      "migration_status": "classified",
+      "object_type": "tracked_path",
+      "path_or_ref": "scripts/v7_crypto_economic_validation.py",
+      "rollback_artifact_tag": "v7-unification-pre-migration-8d9e8e60",
+      "surface_id": "path:scripts/v7_crypto_economic_validation.py",
+      "unique_behavior_data_contribution": "tracked repository behavior, evidence, test, configuration, or documentation",
+      "validation_tests": [
+        "tests/test_v7_surface_classification.py"
+      ]
+    },
+    {
+      "canonical_replacement": "scripts/v7_crypto_market_discovery.py",
+      "classification": "KEEP_CANONICAL",
+      "current_imports_callers_readers_writers": {
+        "analysis": "exact path/module references from tracked text; runtime linkage is separately enumerated",
+        "static_references": [
+          "README.md",
+          "tests/test_v7_crypto_settlement.py",
+          "tests/test_v7_repository_shape.py"
+        ]
+      },
+      "deletion_gate": "NONE_CANONICAL_SURFACE",
+      "disposition_commit": null,
+      "economic_authority": {
+        "capabilities": [],
+        "executable": false,
+        "owner": null
+      },
+      "final_disposition": "retain_canonical",
+      "migration_status": "classified",
+      "object_type": "tracked_path",
+      "path_or_ref": "scripts/v7_crypto_market_discovery.py",
+      "rollback_artifact_tag": "v7-unification-pre-migration-8d9e8e60",
+      "surface_id": "path:scripts/v7_crypto_market_discovery.py",
+      "unique_behavior_data_contribution": "tracked repository behavior, evidence, test, configuration, or documentation",
+      "validation_tests": [
+        "tests/test_v7_surface_classification.py"
+      ]
+    },
+    {
+      "canonical_replacement": "scripts/v7_crypto_settlement.py",
+      "classification": "KEEP_CANONICAL",
+      "current_imports_callers_readers_writers": {
+        "analysis": "exact path/module references from tracked text; runtime linkage is separately enumerated",
+        "static_references": [
+          "README.md",
+          "scripts/v7_crypto_economic_validation.py",
+          "scripts/v7_crypto_market_discovery.py",
+          "scripts/v7_crypto_settlement_engine_contract.py",
+          "scripts/v7_external_fair_paper_router.py",
+          "scripts/v7_global_portfolio_coordinator.py",
+          "tests/test_v7_crypto_btc_equivalence.py",
+          "tests/test_v7_crypto_settlement.py",
+          "tests/test_v7_crypto_settlement_engine_contract.py",
+          "tests/test_v7_repository_shape.py"
+        ]
+      },
+      "deletion_gate": "NONE_CANONICAL_SURFACE",
+      "disposition_commit": null,
+      "economic_authority": {
+        "capabilities": [],
+        "executable": false,
+        "owner": null
+      },
+      "final_disposition": "retain_canonical",
+      "migration_status": "classified",
+      "object_type": "tracked_path",
+      "path_or_ref": "scripts/v7_crypto_settlement.py",
+      "rollback_artifact_tag": "v7-unification-pre-migration-8d9e8e60",
+      "surface_id": "path:scripts/v7_crypto_settlement.py",
+      "unique_behavior_data_contribution": "tracked repository behavior, evidence, test, configuration, or documentation",
+      "validation_tests": [
+        "tests/test_v7_surface_classification.py"
+      ]
+    },
+    {
+      "canonical_replacement": "config/v7_authority_registry.json#CRYPTO_SETTLEMENT_ENGINE",
+      "classification": "MERGE_INTO_CANONICAL",
+      "current_imports_callers_readers_writers": {
+        "analysis": "exact path/module references from tracked text; runtime linkage is separately enumerated",
+        "static_references": [
+          "docs/v7_world_class/crypto_settlement_engine.md",
+          "scripts/paper_v7_execution_loop.sh",
+          "scripts/v7_cutover_contract.py",
+          "tests/test_v7_crypto_settlement_engine_contract.py"
+        ]
+      },
+      "deletion_gate": "UNIQUE_BEHAVIOR_EQUIVALENCE_AND_SINGLE_CONSUMER_PROVEN",
+      "disposition_commit": null,
+      "economic_authority": {
+        "capabilities": [
+          "engine_component"
+        ],
+        "executable": false,
+        "owner": "CRYPTO_SETTLEMENT_ENGINE"
+      },
+      "final_disposition": "merge_then_delete_or_reclassify_canonical",
+      "migration_status": "pending_gate",
+      "object_type": "tracked_path",
+      "path_or_ref": "scripts/v7_crypto_settlement_engine_contract.py",
+      "rollback_artifact_tag": "v7-unification-pre-migration-8d9e8e60",
+      "surface_id": "path:scripts/v7_crypto_settlement_engine_contract.py",
       "unique_behavior_data_contribution": "tracked repository behavior, evidence, test, configuration, or documentation",
       "validation_tests": [
         "tests/test_v7_surface_classification.py"
@@ -9886,7 +10112,7 @@
       ]
     },
     {
-      "canonical_replacement": "config/v7_authority_registry.json#BTC_SETTLEMENT_ENGINE",
+      "canonical_replacement": "config/v7_authority_registry.json#CRYPTO_SETTLEMENT_ENGINE",
       "classification": "MERGE_INTO_CANONICAL",
       "current_imports_callers_readers_writers": {
         "analysis": "exact path/module references from tracked text; runtime linkage is separately enumerated",
@@ -9903,7 +10129,7 @@
           "engine_component"
         ],
         "executable": false,
-        "owner": "BTC_SETTLEMENT_ENGINE"
+        "owner": "CRYPTO_SETTLEMENT_ENGINE"
       },
       "final_disposition": "merge_then_delete_or_reclassify_canonical",
       "migration_status": "pending_gate",
@@ -9917,7 +10143,7 @@
       ]
     },
     {
-      "canonical_replacement": "config/v7_authority_registry.json#BTC_SETTLEMENT_ENGINE",
+      "canonical_replacement": "config/v7_authority_registry.json#CRYPTO_SETTLEMENT_ENGINE",
       "classification": "MERGE_INTO_CANONICAL",
       "current_imports_callers_readers_writers": {
         "analysis": "exact path/module references from tracked text; runtime linkage is separately enumerated",
@@ -9933,7 +10159,7 @@
           "engine_component"
         ],
         "executable": false,
-        "owner": "BTC_SETTLEMENT_ENGINE"
+        "owner": "CRYPTO_SETTLEMENT_ENGINE"
       },
       "final_disposition": "merge_then_delete_or_reclassify_canonical",
       "migration_status": "pending_gate",
@@ -9947,7 +10173,7 @@
       ]
     },
     {
-      "canonical_replacement": "config/v7_authority_registry.json#BTC_SETTLEMENT_ENGINE",
+      "canonical_replacement": "config/v7_authority_registry.json#CRYPTO_SETTLEMENT_ENGINE",
       "classification": "MERGE_INTO_CANONICAL",
       "current_imports_callers_readers_writers": {
         "analysis": "exact path/module references from tracked text; runtime linkage is separately enumerated",
@@ -9963,7 +10189,7 @@
           "engine_component"
         ],
         "executable": false,
-        "owner": "BTC_SETTLEMENT_ENGINE"
+        "owner": "CRYPTO_SETTLEMENT_ENGINE"
       },
       "final_disposition": "merge_then_delete_or_reclassify_canonical",
       "migration_status": "pending_gate",
@@ -9977,7 +10203,7 @@
       ]
     },
     {
-      "canonical_replacement": "config/v7_authority_registry.json#BTC_SETTLEMENT_ENGINE",
+      "canonical_replacement": "config/v7_authority_registry.json#CRYPTO_SETTLEMENT_ENGINE",
       "classification": "MERGE_INTO_CANONICAL",
       "current_imports_callers_readers_writers": {
         "analysis": "exact path/module references from tracked text; runtime linkage is separately enumerated",
@@ -9999,7 +10225,7 @@
           "engine_component"
         ],
         "executable": false,
-        "owner": "BTC_SETTLEMENT_ENGINE"
+        "owner": "CRYPTO_SETTLEMENT_ENGINE"
       },
       "final_disposition": "merge_then_delete_or_reclassify_canonical",
       "migration_status": "pending_gate",
@@ -10013,7 +10239,7 @@
       ]
     },
     {
-      "canonical_replacement": "config/v7_authority_registry.json#BTC_SETTLEMENT_ENGINE",
+      "canonical_replacement": "config/v7_authority_registry.json#CRYPTO_SETTLEMENT_ENGINE",
       "classification": "MERGE_INTO_CANONICAL",
       "current_imports_callers_readers_writers": {
         "analysis": "exact path/module references from tracked text; runtime linkage is separately enumerated",
@@ -10030,7 +10256,7 @@
           "engine_component"
         ],
         "executable": false,
-        "owner": "BTC_SETTLEMENT_ENGINE"
+        "owner": "CRYPTO_SETTLEMENT_ENGINE"
       },
       "final_disposition": "merge_then_delete_or_reclassify_canonical",
       "migration_status": "pending_gate",
@@ -10044,7 +10270,7 @@
       ]
     },
     {
-      "canonical_replacement": "config/v7_authority_registry.json#BTC_SETTLEMENT_ENGINE",
+      "canonical_replacement": "config/v7_authority_registry.json#CRYPTO_SETTLEMENT_ENGINE",
       "classification": "MERGE_INTO_CANONICAL",
       "current_imports_callers_readers_writers": {
         "analysis": "exact path/module references from tracked text; runtime linkage is separately enumerated",
@@ -10060,7 +10286,7 @@
           "engine_component"
         ],
         "executable": false,
-        "owner": "BTC_SETTLEMENT_ENGINE"
+        "owner": "CRYPTO_SETTLEMENT_ENGINE"
       },
       "final_disposition": "merge_then_delete_or_reclassify_canonical",
       "migration_status": "pending_gate",
@@ -10509,7 +10735,7 @@
       ]
     },
     {
-      "canonical_replacement": "config/v7_authority_registry.json#BTC_SETTLEMENT_ENGINE",
+      "canonical_replacement": "config/v7_authority_registry.json#CRYPTO_SETTLEMENT_ENGINE",
       "classification": "MERGE_INTO_CANONICAL",
       "current_imports_callers_readers_writers": {
         "analysis": "exact path/module references from tracked text; runtime linkage is separately enumerated",
@@ -11340,7 +11566,7 @@
       ]
     },
     {
-      "canonical_replacement": "config/v7_authority_registry.json#BTC_SETTLEMENT_ENGINE",
+      "canonical_replacement": "config/v7_authority_registry.json#CRYPTO_SETTLEMENT_ENGINE",
       "classification": "MERGE_INTO_CANONICAL",
       "current_imports_callers_readers_writers": {
         "analysis": "exact path/module references from tracked text; runtime linkage is separately enumerated",
@@ -11359,7 +11585,7 @@
           "engine_component"
         ],
         "executable": false,
-        "owner": "BTC_SETTLEMENT_ENGINE"
+        "owner": "CRYPTO_SETTLEMENT_ENGINE"
       },
       "final_disposition": "merge_then_delete_or_reclassify_canonical",
       "migration_status": "pending_gate",
@@ -11373,7 +11599,7 @@
       ]
     },
     {
-      "canonical_replacement": "config/v7_authority_registry.json#BTC_SETTLEMENT_ENGINE",
+      "canonical_replacement": "config/v7_authority_registry.json#CRYPTO_SETTLEMENT_ENGINE",
       "classification": "MERGE_INTO_CANONICAL",
       "current_imports_callers_readers_writers": {
         "analysis": "exact path/module references from tracked text; runtime linkage is separately enumerated",
@@ -11393,7 +11619,7 @@
           "engine_component"
         ],
         "executable": false,
-        "owner": "BTC_SETTLEMENT_ENGINE"
+        "owner": "CRYPTO_SETTLEMENT_ENGINE"
       },
       "final_disposition": "merge_then_delete_or_reclassify_canonical",
       "migration_status": "pending_gate",
@@ -11407,7 +11633,7 @@
       ]
     },
     {
-      "canonical_replacement": "config/v7_authority_registry.json#BTC_SETTLEMENT_ENGINE",
+      "canonical_replacement": "config/v7_authority_registry.json#CRYPTO_SETTLEMENT_ENGINE",
       "classification": "MERGE_INTO_CANONICAL",
       "current_imports_callers_readers_writers": {
         "analysis": "exact path/module references from tracked text; runtime linkage is separately enumerated",
@@ -11425,7 +11651,7 @@
           "engine_component"
         ],
         "executable": false,
-        "owner": "BTC_SETTLEMENT_ENGINE"
+        "owner": "CRYPTO_SETTLEMENT_ENGINE"
       },
       "final_disposition": "merge_then_delete_or_reclassify_canonical",
       "migration_status": "pending_gate",
@@ -11439,7 +11665,7 @@
       ]
     },
     {
-      "canonical_replacement": "config/v7_authority_registry.json#BTC_SETTLEMENT_ENGINE",
+      "canonical_replacement": "config/v7_authority_registry.json#CRYPTO_SETTLEMENT_ENGINE",
       "classification": "MERGE_INTO_CANONICAL",
       "current_imports_callers_readers_writers": {
         "analysis": "exact path/module references from tracked text; runtime linkage is separately enumerated",
@@ -11459,7 +11685,7 @@
           "engine_component"
         ],
         "executable": false,
-        "owner": "BTC_SETTLEMENT_ENGINE"
+        "owner": "CRYPTO_SETTLEMENT_ENGINE"
       },
       "final_disposition": "merge_then_delete_or_reclassify_canonical",
       "migration_status": "pending_gate",
@@ -11473,7 +11699,7 @@
       ]
     },
     {
-      "canonical_replacement": "config/v7_authority_registry.json#BTC_SETTLEMENT_ENGINE",
+      "canonical_replacement": "config/v7_authority_registry.json#CRYPTO_SETTLEMENT_ENGINE",
       "classification": "MERGE_INTO_CANONICAL",
       "current_imports_callers_readers_writers": {
         "analysis": "exact path/module references from tracked text; runtime linkage is separately enumerated",
@@ -11493,7 +11719,7 @@
           "engine_component"
         ],
         "executable": false,
-        "owner": "BTC_SETTLEMENT_ENGINE"
+        "owner": "CRYPTO_SETTLEMENT_ENGINE"
       },
       "final_disposition": "merge_then_delete_or_reclassify_canonical",
       "migration_status": "pending_gate",
@@ -11540,7 +11766,7 @@
       ]
     },
     {
-      "canonical_replacement": "config/v7_authority_registry.json#BTC_SETTLEMENT_ENGINE",
+      "canonical_replacement": "config/v7_authority_registry.json#CRYPTO_SETTLEMENT_ENGINE",
       "classification": "MERGE_INTO_CANONICAL",
       "current_imports_callers_readers_writers": {
         "analysis": "exact path/module references from tracked text; runtime linkage is separately enumerated",
@@ -11558,7 +11784,7 @@
           "engine_component"
         ],
         "executable": false,
-        "owner": "BTC_SETTLEMENT_ENGINE"
+        "owner": "CRYPTO_SETTLEMENT_ENGINE"
       },
       "final_disposition": "merge_then_delete_or_reclassify_canonical",
       "migration_status": "pending_gate",
@@ -11572,7 +11798,7 @@
       ]
     },
     {
-      "canonical_replacement": "config/v7_authority_registry.json#BTC_SETTLEMENT_ENGINE",
+      "canonical_replacement": "config/v7_authority_registry.json#CRYPTO_SETTLEMENT_ENGINE",
       "classification": "MERGE_INTO_CANONICAL",
       "current_imports_callers_readers_writers": {
         "analysis": "exact path/module references from tracked text; runtime linkage is separately enumerated",
@@ -11592,7 +11818,7 @@
           "engine_component"
         ],
         "executable": false,
-        "owner": "BTC_SETTLEMENT_ENGINE"
+        "owner": "CRYPTO_SETTLEMENT_ENGINE"
       },
       "final_disposition": "merge_then_delete_or_reclassify_canonical",
       "migration_status": "pending_gate",
@@ -11606,7 +11832,7 @@
       ]
     },
     {
-      "canonical_replacement": "config/v7_authority_registry.json#BTC_SETTLEMENT_ENGINE",
+      "canonical_replacement": "config/v7_authority_registry.json#CRYPTO_SETTLEMENT_ENGINE",
       "classification": "MERGE_INTO_CANONICAL",
       "current_imports_callers_readers_writers": {
         "analysis": "exact path/module references from tracked text; runtime linkage is separately enumerated",
@@ -11625,7 +11851,7 @@
           "engine_component"
         ],
         "executable": false,
-        "owner": "BTC_SETTLEMENT_ENGINE"
+        "owner": "CRYPTO_SETTLEMENT_ENGINE"
       },
       "final_disposition": "merge_then_delete_or_reclassify_canonical",
       "migration_status": "pending_gate",
@@ -11639,7 +11865,7 @@
       ]
     },
     {
-      "canonical_replacement": "config/v7_authority_registry.json#BTC_SETTLEMENT_ENGINE",
+      "canonical_replacement": "config/v7_authority_registry.json#CRYPTO_SETTLEMENT_ENGINE",
       "classification": "MERGE_INTO_CANONICAL",
       "current_imports_callers_readers_writers": {
         "analysis": "exact path/module references from tracked text; runtime linkage is separately enumerated",
@@ -11656,7 +11882,7 @@
           "engine_component"
         ],
         "executable": false,
-        "owner": "BTC_SETTLEMENT_ENGINE"
+        "owner": "CRYPTO_SETTLEMENT_ENGINE"
       },
       "final_disposition": "merge_then_delete_or_reclassify_canonical",
       "migration_status": "pending_gate",
@@ -11959,10 +12185,12 @@
           ".github/CODEOWNERS",
           "artifacts/v7_unification/path_classification.json",
           "artifacts/v7_unification/phase_5_report.md",
+          "scripts/v7_crypto_assumption_audit.py",
           "scripts/v7_current_truth_audit.py",
           "scripts/v7_global_portfolio_coordinator.py",
           "scripts/v7_implementation_audit.py",
           "scripts/v7_surface_classification.py",
+          "tests/test_v7_crypto_btc_equivalence.py",
           "tests/test_v7_external_fair_paper_router.py",
           "tests/test_v7_opportunity.py"
         ]
@@ -13108,7 +13336,7 @@
       ]
     },
     {
-      "canonical_replacement": "config/v7_authority_registry.json#BTC_SETTLEMENT_ENGINE",
+      "canonical_replacement": "config/v7_authority_registry.json#CRYPTO_SETTLEMENT_ENGINE",
       "classification": "MERGE_INTO_CANONICAL",
       "current_imports_callers_readers_writers": {
         "analysis": "exact path/module references from tracked text; runtime linkage is separately enumerated",
@@ -13129,7 +13357,7 @@
           "engine_component"
         ],
         "executable": false,
-        "owner": "BTC_SETTLEMENT_ENGINE"
+        "owner": "CRYPTO_SETTLEMENT_ENGINE"
       },
       "final_disposition": "merge_then_delete_or_reclassify_canonical",
       "migration_status": "pending_gate",
@@ -14347,7 +14575,7 @@
       ]
     },
     {
-      "canonical_replacement": "config/v7_authority_registry.json#BTC_SETTLEMENT_ENGINE",
+      "canonical_replacement": "config/v7_authority_registry.json#CRYPTO_SETTLEMENT_ENGINE",
       "classification": "MERGE_INTO_CANONICAL",
       "current_imports_callers_readers_writers": {
         "analysis": "exact path/module references from tracked text; runtime linkage is separately enumerated",
@@ -14364,7 +14592,7 @@
           "engine_component"
         ],
         "executable": false,
-        "owner": "BTC_SETTLEMENT_ENGINE"
+        "owner": "CRYPTO_SETTLEMENT_ENGINE"
       },
       "final_disposition": "merge_then_delete_or_reclassify_canonical",
       "migration_status": "pending_gate",
@@ -14378,7 +14606,7 @@
       ]
     },
     {
-      "canonical_replacement": "config/v7_authority_registry.json#BTC_SETTLEMENT_ENGINE",
+      "canonical_replacement": "config/v7_authority_registry.json#CRYPTO_SETTLEMENT_ENGINE",
       "classification": "MERGE_INTO_CANONICAL",
       "current_imports_callers_readers_writers": {
         "analysis": "exact path/module references from tracked text; runtime linkage is separately enumerated",
@@ -14395,7 +14623,7 @@
           "engine_component"
         ],
         "executable": false,
-        "owner": "BTC_SETTLEMENT_ENGINE"
+        "owner": "CRYPTO_SETTLEMENT_ENGINE"
       },
       "final_disposition": "merge_then_delete_or_reclassify_canonical",
       "migration_status": "pending_gate",
@@ -14409,7 +14637,7 @@
       ]
     },
     {
-      "canonical_replacement": "config/v7_authority_registry.json#BTC_SETTLEMENT_ENGINE",
+      "canonical_replacement": "config/v7_authority_registry.json#CRYPTO_SETTLEMENT_ENGINE",
       "classification": "MERGE_INTO_CANONICAL",
       "current_imports_callers_readers_writers": {
         "analysis": "exact path/module references from tracked text; runtime linkage is separately enumerated",
@@ -14426,7 +14654,7 @@
           "engine_component"
         ],
         "executable": false,
-        "owner": "BTC_SETTLEMENT_ENGINE"
+        "owner": "CRYPTO_SETTLEMENT_ENGINE"
       },
       "final_disposition": "merge_then_delete_or_reclassify_canonical",
       "migration_status": "pending_gate",
@@ -14440,7 +14668,7 @@
       ]
     },
     {
-      "canonical_replacement": "config/v7_authority_registry.json#BTC_SETTLEMENT_ENGINE",
+      "canonical_replacement": "config/v7_authority_registry.json#CRYPTO_SETTLEMENT_ENGINE",
       "classification": "MERGE_INTO_CANONICAL",
       "current_imports_callers_readers_writers": {
         "analysis": "exact path/module references from tracked text; runtime linkage is separately enumerated",
@@ -14457,7 +14685,7 @@
           "engine_component"
         ],
         "executable": false,
-        "owner": "BTC_SETTLEMENT_ENGINE"
+        "owner": "CRYPTO_SETTLEMENT_ENGINE"
       },
       "final_disposition": "merge_then_delete_or_reclassify_canonical",
       "migration_status": "pending_gate",
@@ -14471,7 +14699,7 @@
       ]
     },
     {
-      "canonical_replacement": "config/v7_authority_registry.json#BTC_SETTLEMENT_ENGINE",
+      "canonical_replacement": "config/v7_authority_registry.json#CRYPTO_SETTLEMENT_ENGINE",
       "classification": "MERGE_INTO_CANONICAL",
       "current_imports_callers_readers_writers": {
         "analysis": "exact path/module references from tracked text; runtime linkage is separately enumerated",
@@ -14488,7 +14716,7 @@
           "engine_component"
         ],
         "executable": false,
-        "owner": "BTC_SETTLEMENT_ENGINE"
+        "owner": "CRYPTO_SETTLEMENT_ENGINE"
       },
       "final_disposition": "merge_then_delete_or_reclassify_canonical",
       "migration_status": "pending_gate",
@@ -14502,7 +14730,7 @@
       ]
     },
     {
-      "canonical_replacement": "config/v7_authority_registry.json#BTC_SETTLEMENT_ENGINE",
+      "canonical_replacement": "config/v7_authority_registry.json#CRYPTO_SETTLEMENT_ENGINE",
       "classification": "MERGE_INTO_CANONICAL",
       "current_imports_callers_readers_writers": {
         "analysis": "exact path/module references from tracked text; runtime linkage is separately enumerated",
@@ -14519,7 +14747,7 @@
           "engine_component"
         ],
         "executable": false,
-        "owner": "BTC_SETTLEMENT_ENGINE"
+        "owner": "CRYPTO_SETTLEMENT_ENGINE"
       },
       "final_disposition": "merge_then_delete_or_reclassify_canonical",
       "migration_status": "pending_gate",
@@ -14533,7 +14761,7 @@
       ]
     },
     {
-      "canonical_replacement": "config/v7_authority_registry.json#BTC_SETTLEMENT_ENGINE",
+      "canonical_replacement": "config/v7_authority_registry.json#CRYPTO_SETTLEMENT_ENGINE",
       "classification": "MERGE_INTO_CANONICAL",
       "current_imports_callers_readers_writers": {
         "analysis": "exact path/module references from tracked text; runtime linkage is separately enumerated",
@@ -14550,7 +14778,7 @@
           "engine_component"
         ],
         "executable": false,
-        "owner": "BTC_SETTLEMENT_ENGINE"
+        "owner": "CRYPTO_SETTLEMENT_ENGINE"
       },
       "final_disposition": "merge_then_delete_or_reclassify_canonical",
       "migration_status": "pending_gate",
@@ -14564,7 +14792,7 @@
       ]
     },
     {
-      "canonical_replacement": "config/v7_authority_registry.json#BTC_SETTLEMENT_ENGINE",
+      "canonical_replacement": "config/v7_authority_registry.json#CRYPTO_SETTLEMENT_ENGINE",
       "classification": "MERGE_INTO_CANONICAL",
       "current_imports_callers_readers_writers": {
         "analysis": "exact path/module references from tracked text; runtime linkage is separately enumerated",
@@ -14581,7 +14809,7 @@
           "engine_component"
         ],
         "executable": false,
-        "owner": "BTC_SETTLEMENT_ENGINE"
+        "owner": "CRYPTO_SETTLEMENT_ENGINE"
       },
       "final_disposition": "merge_then_delete_or_reclassify_canonical",
       "migration_status": "pending_gate",
@@ -14595,7 +14823,7 @@
       ]
     },
     {
-      "canonical_replacement": "config/v7_authority_registry.json#BTC_SETTLEMENT_ENGINE",
+      "canonical_replacement": "config/v7_authority_registry.json#CRYPTO_SETTLEMENT_ENGINE",
       "classification": "MERGE_INTO_CANONICAL",
       "current_imports_callers_readers_writers": {
         "analysis": "exact path/module references from tracked text; runtime linkage is separately enumerated",
@@ -14611,7 +14839,7 @@
           "engine_component"
         ],
         "executable": false,
-        "owner": "BTC_SETTLEMENT_ENGINE"
+        "owner": "CRYPTO_SETTLEMENT_ENGINE"
       },
       "final_disposition": "merge_then_delete_or_reclassify_canonical",
       "migration_status": "pending_gate",
@@ -14653,7 +14881,7 @@
       ]
     },
     {
-      "canonical_replacement": "config/v7_authority_registry.json#BTC_SETTLEMENT_ENGINE",
+      "canonical_replacement": "config/v7_authority_registry.json#CRYPTO_SETTLEMENT_ENGINE",
       "classification": "MERGE_INTO_CANONICAL",
       "current_imports_callers_readers_writers": {
         "analysis": "exact path/module references from tracked text; runtime linkage is separately enumerated",
@@ -14670,7 +14898,7 @@
           "engine_component"
         ],
         "executable": false,
-        "owner": "BTC_SETTLEMENT_ENGINE"
+        "owner": "CRYPTO_SETTLEMENT_ENGINE"
       },
       "final_disposition": "merge_then_delete_or_reclassify_canonical",
       "migration_status": "pending_gate",
@@ -14772,7 +15000,7 @@
       ]
     },
     {
-      "canonical_replacement": "config/v7_authority_registry.json#BTC_SETTLEMENT_ENGINE",
+      "canonical_replacement": "config/v7_authority_registry.json#CRYPTO_SETTLEMENT_ENGINE",
       "classification": "MERGE_INTO_CANONICAL",
       "current_imports_callers_readers_writers": {
         "analysis": "exact path/module references from tracked text; runtime linkage is separately enumerated",
@@ -14788,7 +15016,7 @@
           "engine_component"
         ],
         "executable": false,
-        "owner": "BTC_SETTLEMENT_ENGINE"
+        "owner": "CRYPTO_SETTLEMENT_ENGINE"
       },
       "final_disposition": "merge_then_delete_or_reclassify_canonical",
       "migration_status": "pending_gate",
@@ -14802,7 +15030,7 @@
       ]
     },
     {
-      "canonical_replacement": "config/v7_authority_registry.json#BTC_SETTLEMENT_ENGINE",
+      "canonical_replacement": "config/v7_authority_registry.json#CRYPTO_SETTLEMENT_ENGINE",
       "classification": "MERGE_INTO_CANONICAL",
       "current_imports_callers_readers_writers": {
         "analysis": "exact path/module references from tracked text; runtime linkage is separately enumerated",
@@ -14819,7 +15047,7 @@
           "engine_component"
         ],
         "executable": false,
-        "owner": "BTC_SETTLEMENT_ENGINE"
+        "owner": "CRYPTO_SETTLEMENT_ENGINE"
       },
       "final_disposition": "merge_then_delete_or_reclassify_canonical",
       "migration_status": "pending_gate",
@@ -14833,7 +15061,7 @@
       ]
     },
     {
-      "canonical_replacement": "config/v7_authority_registry.json#BTC_SETTLEMENT_ENGINE",
+      "canonical_replacement": "config/v7_authority_registry.json#CRYPTO_SETTLEMENT_ENGINE",
       "classification": "MERGE_INTO_CANONICAL",
       "current_imports_callers_readers_writers": {
         "analysis": "exact path/module references from tracked text; runtime linkage is separately enumerated",
@@ -14851,7 +15079,7 @@
           "engine_component"
         ],
         "executable": false,
-        "owner": "BTC_SETTLEMENT_ENGINE"
+        "owner": "CRYPTO_SETTLEMENT_ENGINE"
       },
       "final_disposition": "merge_then_delete_or_reclassify_canonical",
       "migration_status": "pending_gate",
@@ -14865,7 +15093,7 @@
       ]
     },
     {
-      "canonical_replacement": "config/v7_authority_registry.json#BTC_SETTLEMENT_ENGINE",
+      "canonical_replacement": "config/v7_authority_registry.json#CRYPTO_SETTLEMENT_ENGINE",
       "classification": "MERGE_INTO_CANONICAL",
       "current_imports_callers_readers_writers": {
         "analysis": "exact path/module references from tracked text; runtime linkage is separately enumerated",
@@ -14881,7 +15109,7 @@
           "engine_component"
         ],
         "executable": false,
-        "owner": "BTC_SETTLEMENT_ENGINE"
+        "owner": "CRYPTO_SETTLEMENT_ENGINE"
       },
       "final_disposition": "merge_then_delete_or_reclassify_canonical",
       "migration_status": "pending_gate",
@@ -14895,7 +15123,7 @@
       ]
     },
     {
-      "canonical_replacement": "config/v7_authority_registry.json#BTC_SETTLEMENT_ENGINE",
+      "canonical_replacement": "config/v7_authority_registry.json#CRYPTO_SETTLEMENT_ENGINE",
       "classification": "MERGE_INTO_CANONICAL",
       "current_imports_callers_readers_writers": {
         "analysis": "exact path/module references from tracked text; runtime linkage is separately enumerated",
@@ -14911,7 +15139,7 @@
           "engine_component"
         ],
         "executable": false,
-        "owner": "BTC_SETTLEMENT_ENGINE"
+        "owner": "CRYPTO_SETTLEMENT_ENGINE"
       },
       "final_disposition": "merge_then_delete_or_reclassify_canonical",
       "migration_status": "pending_gate",
@@ -14925,7 +15153,7 @@
       ]
     },
     {
-      "canonical_replacement": "config/v7_authority_registry.json#BTC_SETTLEMENT_ENGINE",
+      "canonical_replacement": "config/v7_authority_registry.json#CRYPTO_SETTLEMENT_ENGINE",
       "classification": "MERGE_INTO_CANONICAL",
       "current_imports_callers_readers_writers": {
         "analysis": "exact path/module references from tracked text; runtime linkage is separately enumerated",
@@ -14942,7 +15170,7 @@
           "engine_component"
         ],
         "executable": false,
-        "owner": "BTC_SETTLEMENT_ENGINE"
+        "owner": "CRYPTO_SETTLEMENT_ENGINE"
       },
       "final_disposition": "merge_then_delete_or_reclassify_canonical",
       "migration_status": "pending_gate",
@@ -14956,7 +15184,7 @@
       ]
     },
     {
-      "canonical_replacement": "config/v7_authority_registry.json#BTC_SETTLEMENT_ENGINE",
+      "canonical_replacement": "config/v7_authority_registry.json#CRYPTO_SETTLEMENT_ENGINE",
       "classification": "MERGE_INTO_CANONICAL",
       "current_imports_callers_readers_writers": {
         "analysis": "exact path/module references from tracked text; runtime linkage is separately enumerated",
@@ -14972,7 +15200,7 @@
           "engine_component"
         ],
         "executable": false,
-        "owner": "BTC_SETTLEMENT_ENGINE"
+        "owner": "CRYPTO_SETTLEMENT_ENGINE"
       },
       "final_disposition": "merge_then_delete_or_reclassify_canonical",
       "migration_status": "pending_gate",
@@ -14986,7 +15214,7 @@
       ]
     },
     {
-      "canonical_replacement": "config/v7_authority_registry.json#BTC_SETTLEMENT_ENGINE",
+      "canonical_replacement": "config/v7_authority_registry.json#CRYPTO_SETTLEMENT_ENGINE",
       "classification": "MERGE_INTO_CANONICAL",
       "current_imports_callers_readers_writers": {
         "analysis": "exact path/module references from tracked text; runtime linkage is separately enumerated",
@@ -15003,7 +15231,7 @@
           "engine_component"
         ],
         "executable": false,
-        "owner": "BTC_SETTLEMENT_ENGINE"
+        "owner": "CRYPTO_SETTLEMENT_ENGINE"
       },
       "final_disposition": "merge_then_delete_or_reclassify_canonical",
       "migration_status": "pending_gate",
@@ -15017,7 +15245,7 @@
       ]
     },
     {
-      "canonical_replacement": "config/v7_authority_registry.json#BTC_SETTLEMENT_ENGINE",
+      "canonical_replacement": "config/v7_authority_registry.json#CRYPTO_SETTLEMENT_ENGINE",
       "classification": "MERGE_INTO_CANONICAL",
       "current_imports_callers_readers_writers": {
         "analysis": "exact path/module references from tracked text; runtime linkage is separately enumerated",
@@ -15033,7 +15261,7 @@
           "engine_component"
         ],
         "executable": false,
-        "owner": "BTC_SETTLEMENT_ENGINE"
+        "owner": "CRYPTO_SETTLEMENT_ENGINE"
       },
       "final_disposition": "merge_then_delete_or_reclassify_canonical",
       "migration_status": "pending_gate",
@@ -15360,7 +15588,7 @@
       ]
     },
     {
-      "canonical_replacement": "config/v7_authority_registry.json#BTC_SETTLEMENT_ENGINE",
+      "canonical_replacement": "config/v7_authority_registry.json#CRYPTO_SETTLEMENT_ENGINE",
       "classification": "MERGE_INTO_CANONICAL",
       "current_imports_callers_readers_writers": {
         "analysis": "exact path/module references from tracked text; runtime linkage is separately enumerated",
@@ -15850,34 +16078,6 @@
       "path_or_ref": "tests/test_v7_branch_hygiene.py",
       "rollback_artifact_tag": "v7-unification-pre-migration-8d9e8e60",
       "surface_id": "path:tests/test_v7_branch_hygiene.py",
-      "unique_behavior_data_contribution": "tracked repository behavior, evidence, test, configuration, or documentation",
-      "validation_tests": [
-        "tests/test_v7_surface_classification.py"
-      ]
-    },
-    {
-      "canonical_replacement": "config/v7_authority_registry.json#BTC_SETTLEMENT_ENGINE",
-      "classification": "MERGE_INTO_CANONICAL",
-      "current_imports_callers_readers_writers": {
-        "analysis": "exact path/module references from tracked text; runtime linkage is separately enumerated",
-        "static_references": [
-          "artifacts/v7_unification/path_classification.json",
-          "artifacts/v7_unification/phase_4_report.md"
-        ]
-      },
-      "deletion_gate": "UNIQUE_BEHAVIOR_EQUIVALENCE_AND_SINGLE_CONSUMER_PROVEN",
-      "disposition_commit": null,
-      "economic_authority": {
-        "capabilities": [],
-        "executable": false,
-        "owner": null
-      },
-      "final_disposition": "merge_then_delete_or_reclassify_canonical",
-      "migration_status": "pending_gate",
-      "object_type": "tracked_path",
-      "path_or_ref": "tests/test_v7_btc_settlement_engine_contract.py",
-      "rollback_artifact_tag": "v7-unification-pre-migration-8d9e8e60",
-      "surface_id": "path:tests/test_v7_btc_settlement_engine_contract.py",
       "unique_behavior_data_contribution": "tracked repository behavior, evidence, test, configuration, or documentation",
       "validation_tests": [
         "tests/test_v7_surface_classification.py"
@@ -16542,6 +16742,131 @@
       ]
     },
     {
+      "canonical_replacement": "tests/test_v7_crypto_assumption_audit.py",
+      "classification": "KEEP_CANONICAL",
+      "current_imports_callers_readers_writers": {
+        "analysis": "exact path/module references from tracked text; runtime linkage is separately enumerated",
+        "static_references": []
+      },
+      "deletion_gate": "NONE_CANONICAL_SURFACE",
+      "disposition_commit": null,
+      "economic_authority": {
+        "capabilities": [],
+        "executable": false,
+        "owner": null
+      },
+      "final_disposition": "retain_canonical",
+      "migration_status": "classified",
+      "object_type": "tracked_path",
+      "path_or_ref": "tests/test_v7_crypto_assumption_audit.py",
+      "rollback_artifact_tag": "v7-unification-pre-migration-8d9e8e60",
+      "surface_id": "path:tests/test_v7_crypto_assumption_audit.py",
+      "unique_behavior_data_contribution": "tracked repository behavior, evidence, test, configuration, or documentation",
+      "validation_tests": [
+        "tests/test_v7_surface_classification.py"
+      ]
+    },
+    {
+      "canonical_replacement": "tests/test_v7_crypto_btc_equivalence.py",
+      "classification": "KEEP_CANONICAL",
+      "current_imports_callers_readers_writers": {
+        "analysis": "exact path/module references from tracked text; runtime linkage is separately enumerated",
+        "static_references": []
+      },
+      "deletion_gate": "NONE_CANONICAL_SURFACE",
+      "disposition_commit": null,
+      "economic_authority": {
+        "capabilities": [],
+        "executable": false,
+        "owner": null
+      },
+      "final_disposition": "retain_canonical",
+      "migration_status": "classified",
+      "object_type": "tracked_path",
+      "path_or_ref": "tests/test_v7_crypto_btc_equivalence.py",
+      "rollback_artifact_tag": "v7-unification-pre-migration-8d9e8e60",
+      "surface_id": "path:tests/test_v7_crypto_btc_equivalence.py",
+      "unique_behavior_data_contribution": "tracked repository behavior, evidence, test, configuration, or documentation",
+      "validation_tests": [
+        "tests/test_v7_surface_classification.py"
+      ]
+    },
+    {
+      "canonical_replacement": "tests/test_v7_crypto_economic_validation.py",
+      "classification": "KEEP_CANONICAL",
+      "current_imports_callers_readers_writers": {
+        "analysis": "exact path/module references from tracked text; runtime linkage is separately enumerated",
+        "static_references": []
+      },
+      "deletion_gate": "NONE_CANONICAL_SURFACE",
+      "disposition_commit": null,
+      "economic_authority": {
+        "capabilities": [],
+        "executable": false,
+        "owner": null
+      },
+      "final_disposition": "retain_canonical",
+      "migration_status": "classified",
+      "object_type": "tracked_path",
+      "path_or_ref": "tests/test_v7_crypto_economic_validation.py",
+      "rollback_artifact_tag": "v7-unification-pre-migration-8d9e8e60",
+      "surface_id": "path:tests/test_v7_crypto_economic_validation.py",
+      "unique_behavior_data_contribution": "tracked repository behavior, evidence, test, configuration, or documentation",
+      "validation_tests": [
+        "tests/test_v7_surface_classification.py"
+      ]
+    },
+    {
+      "canonical_replacement": "tests/test_v7_crypto_settlement.py",
+      "classification": "KEEP_CANONICAL",
+      "current_imports_callers_readers_writers": {
+        "analysis": "exact path/module references from tracked text; runtime linkage is separately enumerated",
+        "static_references": []
+      },
+      "deletion_gate": "NONE_CANONICAL_SURFACE",
+      "disposition_commit": null,
+      "economic_authority": {
+        "capabilities": [],
+        "executable": false,
+        "owner": null
+      },
+      "final_disposition": "retain_canonical",
+      "migration_status": "classified",
+      "object_type": "tracked_path",
+      "path_or_ref": "tests/test_v7_crypto_settlement.py",
+      "rollback_artifact_tag": "v7-unification-pre-migration-8d9e8e60",
+      "surface_id": "path:tests/test_v7_crypto_settlement.py",
+      "unique_behavior_data_contribution": "tracked repository behavior, evidence, test, configuration, or documentation",
+      "validation_tests": [
+        "tests/test_v7_surface_classification.py"
+      ]
+    },
+    {
+      "canonical_replacement": "config/v7_authority_registry.json#CRYPTO_SETTLEMENT_ENGINE",
+      "classification": "MERGE_INTO_CANONICAL",
+      "current_imports_callers_readers_writers": {
+        "analysis": "exact path/module references from tracked text; runtime linkage is separately enumerated",
+        "static_references": []
+      },
+      "deletion_gate": "UNIQUE_BEHAVIOR_EQUIVALENCE_AND_SINGLE_CONSUMER_PROVEN",
+      "disposition_commit": null,
+      "economic_authority": {
+        "capabilities": [],
+        "executable": false,
+        "owner": null
+      },
+      "final_disposition": "merge_then_delete_or_reclassify_canonical",
+      "migration_status": "pending_gate",
+      "object_type": "tracked_path",
+      "path_or_ref": "tests/test_v7_crypto_settlement_engine_contract.py",
+      "rollback_artifact_tag": "v7-unification-pre-migration-8d9e8e60",
+      "surface_id": "path:tests/test_v7_crypto_settlement_engine_contract.py",
+      "unique_behavior_data_contribution": "tracked repository behavior, evidence, test, configuration, or documentation",
+      "validation_tests": [
+        "tests/test_v7_surface_classification.py"
+      ]
+    },
+    {
       "canonical_replacement": "tests/test_v7_current_model_state.py",
       "classification": "KEEP_CANONICAL",
       "current_imports_callers_readers_writers": {
@@ -17142,7 +17467,7 @@
       ]
     },
     {
-      "canonical_replacement": "config/v7_authority_registry.json#BTC_SETTLEMENT_ENGINE",
+      "canonical_replacement": "config/v7_authority_registry.json#CRYPTO_SETTLEMENT_ENGINE",
       "classification": "MERGE_INTO_CANONICAL",
       "current_imports_callers_readers_writers": {
         "analysis": "exact path/module references from tracked text; runtime linkage is separately enumerated",
@@ -17170,7 +17495,7 @@
       ]
     },
     {
-      "canonical_replacement": "config/v7_authority_registry.json#BTC_SETTLEMENT_ENGINE",
+      "canonical_replacement": "config/v7_authority_registry.json#CRYPTO_SETTLEMENT_ENGINE",
       "classification": "MERGE_INTO_CANONICAL",
       "current_imports_callers_readers_writers": {
         "analysis": "exact path/module references from tracked text; runtime linkage is separately enumerated",
@@ -17198,7 +17523,7 @@
       ]
     },
     {
-      "canonical_replacement": "config/v7_authority_registry.json#BTC_SETTLEMENT_ENGINE",
+      "canonical_replacement": "config/v7_authority_registry.json#CRYPTO_SETTLEMENT_ENGINE",
       "classification": "MERGE_INTO_CANONICAL",
       "current_imports_callers_readers_writers": {
         "analysis": "exact path/module references from tracked text; runtime linkage is separately enumerated",
@@ -17225,7 +17550,7 @@
       ]
     },
     {
-      "canonical_replacement": "config/v7_authority_registry.json#BTC_SETTLEMENT_ENGINE",
+      "canonical_replacement": "config/v7_authority_registry.json#CRYPTO_SETTLEMENT_ENGINE",
       "classification": "MERGE_INTO_CANONICAL",
       "current_imports_callers_readers_writers": {
         "analysis": "exact path/module references from tracked text; runtime linkage is separately enumerated",
@@ -17252,7 +17577,7 @@
       ]
     },
     {
-      "canonical_replacement": "config/v7_authority_registry.json#BTC_SETTLEMENT_ENGINE",
+      "canonical_replacement": "config/v7_authority_registry.json#CRYPTO_SETTLEMENT_ENGINE",
       "classification": "MERGE_INTO_CANONICAL",
       "current_imports_callers_readers_writers": {
         "analysis": "exact path/module references from tracked text; runtime linkage is separately enumerated",
@@ -17279,7 +17604,7 @@
       ]
     },
     {
-      "canonical_replacement": "config/v7_authority_registry.json#BTC_SETTLEMENT_ENGINE",
+      "canonical_replacement": "config/v7_authority_registry.json#CRYPTO_SETTLEMENT_ENGINE",
       "classification": "MERGE_INTO_CANONICAL",
       "current_imports_callers_readers_writers": {
         "analysis": "exact path/module references from tracked text; runtime linkage is separately enumerated",
@@ -17307,7 +17632,7 @@
       ]
     },
     {
-      "canonical_replacement": "config/v7_authority_registry.json#BTC_SETTLEMENT_ENGINE",
+      "canonical_replacement": "config/v7_authority_registry.json#CRYPTO_SETTLEMENT_ENGINE",
       "classification": "MERGE_INTO_CANONICAL",
       "current_imports_callers_readers_writers": {
         "analysis": "exact path/module references from tracked text; runtime linkage is separately enumerated",
@@ -17334,7 +17659,7 @@
       ]
     },
     {
-      "canonical_replacement": "config/v7_authority_registry.json#BTC_SETTLEMENT_ENGINE",
+      "canonical_replacement": "config/v7_authority_registry.json#CRYPTO_SETTLEMENT_ENGINE",
       "classification": "MERGE_INTO_CANONICAL",
       "current_imports_callers_readers_writers": {
         "analysis": "exact path/module references from tracked text; runtime linkage is separately enumerated",
@@ -17388,7 +17713,7 @@
       ]
     },
     {
-      "canonical_replacement": "config/v7_authority_registry.json#BTC_SETTLEMENT_ENGINE",
+      "canonical_replacement": "config/v7_authority_registry.json#CRYPTO_SETTLEMENT_ENGINE",
       "classification": "MERGE_INTO_CANONICAL",
       "current_imports_callers_readers_writers": {
         "analysis": "exact path/module references from tracked text; runtime linkage is separately enumerated",
@@ -17444,7 +17769,7 @@
       ]
     },
     {
-      "canonical_replacement": "config/v7_authority_registry.json#BTC_SETTLEMENT_ENGINE",
+      "canonical_replacement": "config/v7_authority_registry.json#CRYPTO_SETTLEMENT_ENGINE",
       "classification": "MERGE_INTO_CANONICAL",
       "current_imports_callers_readers_writers": {
         "analysis": "exact path/module references from tracked text; runtime linkage is separately enumerated",
@@ -17472,7 +17797,7 @@
       ]
     },
     {
-      "canonical_replacement": "config/v7_authority_registry.json#BTC_SETTLEMENT_ENGINE",
+      "canonical_replacement": "config/v7_authority_registry.json#CRYPTO_SETTLEMENT_ENGINE",
       "classification": "MERGE_INTO_CANONICAL",
       "current_imports_callers_readers_writers": {
         "analysis": "exact path/module references from tracked text; runtime linkage is separately enumerated",
@@ -17500,7 +17825,7 @@
       ]
     },
     {
-      "canonical_replacement": "config/v7_authority_registry.json#BTC_SETTLEMENT_ENGINE",
+      "canonical_replacement": "config/v7_authority_registry.json#CRYPTO_SETTLEMENT_ENGINE",
       "classification": "MERGE_INTO_CANONICAL",
       "current_imports_callers_readers_writers": {
         "analysis": "exact path/module references from tracked text; runtime linkage is separately enumerated",
@@ -17582,7 +17907,7 @@
       ]
     },
     {
-      "canonical_replacement": "config/v7_authority_registry.json#BTC_SETTLEMENT_ENGINE",
+      "canonical_replacement": "config/v7_authority_registry.json#CRYPTO_SETTLEMENT_ENGINE",
       "classification": "MERGE_INTO_CANONICAL",
       "current_imports_callers_readers_writers": {
         "analysis": "exact path/module references from tracked text; runtime linkage is separately enumerated",
@@ -17610,7 +17935,7 @@
       ]
     },
     {
-      "canonical_replacement": "config/v7_authority_registry.json#BTC_SETTLEMENT_ENGINE",
+      "canonical_replacement": "config/v7_authority_registry.json#CRYPTO_SETTLEMENT_ENGINE",
       "classification": "MERGE_INTO_CANONICAL",
       "current_imports_callers_readers_writers": {
         "analysis": "exact path/module references from tracked text; runtime linkage is separately enumerated",
@@ -17884,7 +18209,7 @@
       ]
     },
     {
-      "canonical_replacement": "config/v7_authority_registry.json#BTC_SETTLEMENT_ENGINE",
+      "canonical_replacement": "config/v7_authority_registry.json#CRYPTO_SETTLEMENT_ENGINE",
       "classification": "MERGE_INTO_CANONICAL",
       "current_imports_callers_readers_writers": {
         "analysis": "exact path/module references from tracked text; runtime linkage is separately enumerated",
@@ -18488,7 +18813,7 @@
       ]
     },
     {
-      "canonical_replacement": "config/v7_authority_registry.json#BTC_SETTLEMENT_ENGINE",
+      "canonical_replacement": "config/v7_authority_registry.json#CRYPTO_SETTLEMENT_ENGINE",
       "classification": "MERGE_INTO_CANONICAL",
       "current_imports_callers_readers_writers": {
         "analysis": "exact path/module references from tracked text; runtime linkage is separately enumerated",
@@ -18515,7 +18840,7 @@
       ]
     },
     {
-      "canonical_replacement": "config/v7_authority_registry.json#BTC_SETTLEMENT_ENGINE",
+      "canonical_replacement": "config/v7_authority_registry.json#CRYPTO_SETTLEMENT_ENGINE",
       "classification": "MERGE_INTO_CANONICAL",
       "current_imports_callers_readers_writers": {
         "analysis": "exact path/module references from tracked text; runtime linkage is separately enumerated",
@@ -18542,7 +18867,7 @@
       ]
     },
     {
-      "canonical_replacement": "config/v7_authority_registry.json#BTC_SETTLEMENT_ENGINE",
+      "canonical_replacement": "config/v7_authority_registry.json#CRYPTO_SETTLEMENT_ENGINE",
       "classification": "MERGE_INTO_CANONICAL",
       "current_imports_callers_readers_writers": {
         "analysis": "exact path/module references from tracked text; runtime linkage is separately enumerated",
@@ -18571,7 +18896,7 @@
       ]
     },
     {
-      "canonical_replacement": "config/v7_authority_registry.json#BTC_SETTLEMENT_ENGINE",
+      "canonical_replacement": "config/v7_authority_registry.json#CRYPTO_SETTLEMENT_ENGINE",
       "classification": "MERGE_INTO_CANONICAL",
       "current_imports_callers_readers_writers": {
         "analysis": "exact path/module references from tracked text; runtime linkage is separately enumerated",
@@ -18598,7 +18923,7 @@
       ]
     },
     {
-      "canonical_replacement": "config/v7_authority_registry.json#BTC_SETTLEMENT_ENGINE",
+      "canonical_replacement": "config/v7_authority_registry.json#CRYPTO_SETTLEMENT_ENGINE",
       "classification": "MERGE_INTO_CANONICAL",
       "current_imports_callers_readers_writers": {
         "analysis": "exact path/module references from tracked text; runtime linkage is separately enumerated",
@@ -18626,7 +18951,7 @@
       ]
     },
     {
-      "canonical_replacement": "config/v7_authority_registry.json#BTC_SETTLEMENT_ENGINE",
+      "canonical_replacement": "config/v7_authority_registry.json#CRYPTO_SETTLEMENT_ENGINE",
       "classification": "MERGE_INTO_CANONICAL",
       "current_imports_callers_readers_writers": {
         "analysis": "exact path/module references from tracked text; runtime linkage is separately enumerated",
@@ -18654,7 +18979,7 @@
       ]
     },
     {
-      "canonical_replacement": "config/v7_authority_registry.json#BTC_SETTLEMENT_ENGINE",
+      "canonical_replacement": "config/v7_authority_registry.json#CRYPTO_SETTLEMENT_ENGINE",
       "classification": "MERGE_INTO_CANONICAL",
       "current_imports_callers_readers_writers": {
         "analysis": "exact path/module references from tracked text; runtime linkage is separately enumerated",
@@ -18681,7 +19006,7 @@
       ]
     },
     {
-      "canonical_replacement": "config/v7_authority_registry.json#BTC_SETTLEMENT_ENGINE",
+      "canonical_replacement": "config/v7_authority_registry.json#CRYPTO_SETTLEMENT_ENGINE",
       "classification": "MERGE_INTO_CANONICAL",
       "current_imports_callers_readers_writers": {
         "analysis": "exact path/module references from tracked text; runtime linkage is separately enumerated",
@@ -18709,7 +19034,7 @@
       ]
     },
     {
-      "canonical_replacement": "config/v7_authority_registry.json#BTC_SETTLEMENT_ENGINE",
+      "canonical_replacement": "config/v7_authority_registry.json#CRYPTO_SETTLEMENT_ENGINE",
       "classification": "MERGE_INTO_CANONICAL",
       "current_imports_callers_readers_writers": {
         "analysis": "exact path/module references from tracked text; runtime linkage is separately enumerated",
@@ -18737,7 +19062,7 @@
       ]
     },
     {
-      "canonical_replacement": "config/v7_authority_registry.json#BTC_SETTLEMENT_ENGINE",
+      "canonical_replacement": "config/v7_authority_registry.json#CRYPTO_SETTLEMENT_ENGINE",
       "classification": "MERGE_INTO_CANONICAL",
       "current_imports_callers_readers_writers": {
         "analysis": "exact path/module references from tracked text; runtime linkage is separately enumerated",
@@ -18764,7 +19089,7 @@
       ]
     },
     {
-      "canonical_replacement": "config/v7_authority_registry.json#BTC_SETTLEMENT_ENGINE",
+      "canonical_replacement": "config/v7_authority_registry.json#CRYPTO_SETTLEMENT_ENGINE",
       "classification": "MERGE_INTO_CANONICAL",
       "current_imports_callers_readers_writers": {
         "analysis": "exact path/module references from tracked text; runtime linkage is separately enumerated",
@@ -18792,7 +19117,7 @@
       ]
     },
     {
-      "canonical_replacement": "config/v7_authority_registry.json#BTC_SETTLEMENT_ENGINE",
+      "canonical_replacement": "config/v7_authority_registry.json#CRYPTO_SETTLEMENT_ENGINE",
       "classification": "MERGE_INTO_CANONICAL",
       "current_imports_callers_readers_writers": {
         "analysis": "exact path/module references from tracked text; runtime linkage is separately enumerated",
@@ -18820,7 +19145,7 @@
       ]
     },
     {
-      "canonical_replacement": "config/v7_authority_registry.json#BTC_SETTLEMENT_ENGINE",
+      "canonical_replacement": "config/v7_authority_registry.json#CRYPTO_SETTLEMENT_ENGINE",
       "classification": "MERGE_INTO_CANONICAL",
       "current_imports_callers_readers_writers": {
         "analysis": "exact path/module references from tracked text; runtime linkage is separately enumerated",
@@ -18847,7 +19172,7 @@
       ]
     },
     {
-      "canonical_replacement": "config/v7_authority_registry.json#BTC_SETTLEMENT_ENGINE",
+      "canonical_replacement": "config/v7_authority_registry.json#CRYPTO_SETTLEMENT_ENGINE",
       "classification": "MERGE_INTO_CANONICAL",
       "current_imports_callers_readers_writers": {
         "analysis": "exact path/module references from tracked text; runtime linkage is separately enumerated",
@@ -18874,7 +19199,7 @@
       ]
     },
     {
-      "canonical_replacement": "config/v7_authority_registry.json#BTC_SETTLEMENT_ENGINE",
+      "canonical_replacement": "config/v7_authority_registry.json#CRYPTO_SETTLEMENT_ENGINE",
       "classification": "MERGE_INTO_CANONICAL",
       "current_imports_callers_readers_writers": {
         "analysis": "exact path/module references from tracked text; runtime linkage is separately enumerated",
@@ -18902,7 +19227,7 @@
       ]
     },
     {
-      "canonical_replacement": "config/v7_authority_registry.json#BTC_SETTLEMENT_ENGINE",
+      "canonical_replacement": "config/v7_authority_registry.json#CRYPTO_SETTLEMENT_ENGINE",
       "classification": "MERGE_INTO_CANONICAL",
       "current_imports_callers_readers_writers": {
         "analysis": "exact path/module references from tracked text; runtime linkage is separately enumerated",
@@ -18929,7 +19254,7 @@
       ]
     },
     {
-      "canonical_replacement": "config/v7_authority_registry.json#BTC_SETTLEMENT_ENGINE",
+      "canonical_replacement": "config/v7_authority_registry.json#CRYPTO_SETTLEMENT_ENGINE",
       "classification": "MERGE_INTO_CANONICAL",
       "current_imports_callers_readers_writers": {
         "analysis": "exact path/module references from tracked text; runtime linkage is separately enumerated",
@@ -18956,7 +19281,7 @@
       ]
     },
     {
-      "canonical_replacement": "config/v7_authority_registry.json#BTC_SETTLEMENT_ENGINE",
+      "canonical_replacement": "config/v7_authority_registry.json#CRYPTO_SETTLEMENT_ENGINE",
       "classification": "MERGE_INTO_CANONICAL",
       "current_imports_callers_readers_writers": {
         "analysis": "exact path/module references from tracked text; runtime linkage is separately enumerated",
@@ -18984,7 +19309,7 @@
       ]
     },
     {
-      "canonical_replacement": "config/v7_authority_registry.json#BTC_SETTLEMENT_ENGINE",
+      "canonical_replacement": "config/v7_authority_registry.json#CRYPTO_SETTLEMENT_ENGINE",
       "classification": "MERGE_INTO_CANONICAL",
       "current_imports_callers_readers_writers": {
         "analysis": "exact path/module references from tracked text; runtime linkage is separately enumerated",
@@ -19011,7 +19336,7 @@
       ]
     },
     {
-      "canonical_replacement": "config/v7_authority_registry.json#BTC_SETTLEMENT_ENGINE",
+      "canonical_replacement": "config/v7_authority_registry.json#CRYPTO_SETTLEMENT_ENGINE",
       "classification": "MERGE_INTO_CANONICAL",
       "current_imports_callers_readers_writers": {
         "analysis": "exact path/module references from tracked text; runtime linkage is separately enumerated",
@@ -19038,7 +19363,7 @@
       ]
     },
     {
-      "canonical_replacement": "config/v7_authority_registry.json#BTC_SETTLEMENT_ENGINE",
+      "canonical_replacement": "config/v7_authority_registry.json#CRYPTO_SETTLEMENT_ENGINE",
       "classification": "MERGE_INTO_CANONICAL",
       "current_imports_callers_readers_writers": {
         "analysis": "exact path/module references from tracked text; runtime linkage is separately enumerated",
@@ -19065,7 +19390,7 @@
       ]
     },
     {
-      "canonical_replacement": "config/v7_authority_registry.json#BTC_SETTLEMENT_ENGINE",
+      "canonical_replacement": "config/v7_authority_registry.json#CRYPTO_SETTLEMENT_ENGINE",
       "classification": "MERGE_INTO_CANONICAL",
       "current_imports_callers_readers_writers": {
         "analysis": "exact path/module references from tracked text; runtime linkage is separately enumerated",
@@ -19092,7 +19417,7 @@
       ]
     },
     {
-      "canonical_replacement": "config/v7_authority_registry.json#BTC_SETTLEMENT_ENGINE",
+      "canonical_replacement": "config/v7_authority_registry.json#CRYPTO_SETTLEMENT_ENGINE",
       "classification": "MERGE_INTO_CANONICAL",
       "current_imports_callers_readers_writers": {
         "analysis": "exact path/module references from tracked text; runtime linkage is separately enumerated",
@@ -19121,7 +19446,7 @@
       ]
     },
     {
-      "canonical_replacement": "config/v7_authority_registry.json#BTC_SETTLEMENT_ENGINE",
+      "canonical_replacement": "config/v7_authority_registry.json#CRYPTO_SETTLEMENT_ENGINE",
       "classification": "MERGE_INTO_CANONICAL",
       "current_imports_callers_readers_writers": {
         "analysis": "exact path/module references from tracked text; runtime linkage is separately enumerated",
@@ -19460,6 +19785,7 @@
           "artifacts/v7_unification/phase_3_report.md",
           "artifacts/v7_unification/phase_5_report.md",
           "scripts/v7_implementation_audit.py",
+          "tests/test_v7_crypto_btc_equivalence.py",
           "tests/test_v7_global_portfolio_coordinator.py"
         ]
       },
@@ -20554,7 +20880,7 @@
       ]
     },
     {
-      "canonical_replacement": "config/v7_authority_registry.json#BTC_SETTLEMENT_ENGINE",
+      "canonical_replacement": "config/v7_authority_registry.json#CRYPTO_SETTLEMENT_ENGINE",
       "classification": "MERGE_INTO_CANONICAL",
       "current_imports_callers_readers_writers": {
         "analysis": "exact path/module references from tracked text; runtime linkage is separately enumerated",
@@ -21476,7 +21802,7 @@
       ]
     },
     {
-      "canonical_replacement": "config/v7_authority_registry.json#BTC_SETTLEMENT_ENGINE",
+      "canonical_replacement": "config/v7_authority_registry.json#CRYPTO_SETTLEMENT_ENGINE",
       "classification": "MERGE_INTO_CANONICAL",
       "current_imports_callers_readers_writers": {
         "analysis": "exact path/module references from tracked text; runtime linkage is separately enumerated",
@@ -21504,7 +21830,7 @@
       ]
     },
     {
-      "canonical_replacement": "config/v7_authority_registry.json#BTC_SETTLEMENT_ENGINE",
+      "canonical_replacement": "config/v7_authority_registry.json#CRYPTO_SETTLEMENT_ENGINE",
       "classification": "MERGE_INTO_CANONICAL",
       "current_imports_callers_readers_writers": {
         "analysis": "exact path/module references from tracked text; runtime linkage is separately enumerated",
@@ -21517,7 +21843,7 @@
           "engine_component"
         ],
         "executable": false,
-        "owner": "BTC_SETTLEMENT_ENGINE"
+        "owner": "CRYPTO_SETTLEMENT_ENGINE"
       },
       "final_disposition": "merge_then_delete_or_reclassify_canonical",
       "migration_status": "unique_commit_audit_pending",
@@ -21532,7 +21858,7 @@
       ]
     },
     {
-      "canonical_replacement": "config/v7_authority_registry.json#BTC_SETTLEMENT_ENGINE",
+      "canonical_replacement": "config/v7_authority_registry.json#CRYPTO_SETTLEMENT_ENGINE",
       "classification": "MERGE_INTO_CANONICAL",
       "current_imports_callers_readers_writers": {
         "analysis": "exact path/module references from tracked text; runtime linkage is separately enumerated",
@@ -21545,7 +21871,7 @@
           "engine_component"
         ],
         "executable": false,
-        "owner": "BTC_SETTLEMENT_ENGINE"
+        "owner": "CRYPTO_SETTLEMENT_ENGINE"
       },
       "final_disposition": "merge_then_delete_or_reclassify_canonical",
       "migration_status": "unique_commit_audit_pending",
@@ -21560,7 +21886,7 @@
       ]
     },
     {
-      "canonical_replacement": "config/v7_authority_registry.json#BTC_SETTLEMENT_ENGINE",
+      "canonical_replacement": "config/v7_authority_registry.json#CRYPTO_SETTLEMENT_ENGINE",
       "classification": "MERGE_INTO_CANONICAL",
       "current_imports_callers_readers_writers": {
         "analysis": "exact path/module references from tracked text; runtime linkage is separately enumerated",
@@ -21573,7 +21899,7 @@
           "engine_component"
         ],
         "executable": false,
-        "owner": "BTC_SETTLEMENT_ENGINE"
+        "owner": "CRYPTO_SETTLEMENT_ENGINE"
       },
       "final_disposition": "merge_then_delete_or_reclassify_canonical",
       "migration_status": "unique_commit_audit_pending",
@@ -21588,7 +21914,7 @@
       ]
     },
     {
-      "canonical_replacement": "config/v7_authority_registry.json#BTC_SETTLEMENT_ENGINE",
+      "canonical_replacement": "config/v7_authority_registry.json#CRYPTO_SETTLEMENT_ENGINE",
       "classification": "MERGE_INTO_CANONICAL",
       "current_imports_callers_readers_writers": {
         "analysis": "exact path/module references from tracked text; runtime linkage is separately enumerated",
@@ -21616,7 +21942,7 @@
       ]
     },
     {
-      "canonical_replacement": "config/v7_authority_registry.json#BTC_SETTLEMENT_ENGINE",
+      "canonical_replacement": "config/v7_authority_registry.json#CRYPTO_SETTLEMENT_ENGINE",
       "classification": "MERGE_INTO_CANONICAL",
       "current_imports_callers_readers_writers": {
         "analysis": "exact path/module references from tracked text; runtime linkage is separately enumerated",
@@ -21644,7 +21970,7 @@
       ]
     },
     {
-      "canonical_replacement": "config/v7_authority_registry.json#BTC_SETTLEMENT_ENGINE",
+      "canonical_replacement": "config/v7_authority_registry.json#CRYPTO_SETTLEMENT_ENGINE",
       "classification": "MERGE_INTO_CANONICAL",
       "current_imports_callers_readers_writers": {
         "analysis": "exact path/module references from tracked text; runtime linkage is separately enumerated",
@@ -21657,7 +21983,7 @@
           "engine_component"
         ],
         "executable": false,
-        "owner": "BTC_SETTLEMENT_ENGINE"
+        "owner": "CRYPTO_SETTLEMENT_ENGINE"
       },
       "final_disposition": "merge_then_delete_or_reclassify_canonical",
       "migration_status": "unique_commit_audit_pending",
@@ -21672,7 +21998,7 @@
       ]
     },
     {
-      "canonical_replacement": "config/v7_authority_registry.json#BTC_SETTLEMENT_ENGINE",
+      "canonical_replacement": "config/v7_authority_registry.json#CRYPTO_SETTLEMENT_ENGINE",
       "classification": "MERGE_INTO_CANONICAL",
       "current_imports_callers_readers_writers": {
         "analysis": "exact path/module references from tracked text; runtime linkage is separately enumerated",
@@ -21685,7 +22011,7 @@
           "engine_component"
         ],
         "executable": false,
-        "owner": "BTC_SETTLEMENT_ENGINE"
+        "owner": "CRYPTO_SETTLEMENT_ENGINE"
       },
       "final_disposition": "merge_then_delete_or_reclassify_canonical",
       "migration_status": "unique_commit_audit_pending",
@@ -21700,7 +22026,7 @@
       ]
     },
     {
-      "canonical_replacement": "config/v7_authority_registry.json#BTC_SETTLEMENT_ENGINE",
+      "canonical_replacement": "config/v7_authority_registry.json#CRYPTO_SETTLEMENT_ENGINE",
       "classification": "MERGE_INTO_CANONICAL",
       "current_imports_callers_readers_writers": {
         "analysis": "exact path/module references from tracked text; runtime linkage is separately enumerated",
@@ -21713,7 +22039,7 @@
           "engine_component"
         ],
         "executable": false,
-        "owner": "BTC_SETTLEMENT_ENGINE"
+        "owner": "CRYPTO_SETTLEMENT_ENGINE"
       },
       "final_disposition": "merge_then_delete_or_reclassify_canonical",
       "migration_status": "unique_commit_audit_pending",
@@ -21746,7 +22072,7 @@
       "object_type": "branch_or_remote_ref",
       "path_or_ref": "refs/heads/codex/v7-unified-system-legacy-eradication",
       "rollback_artifact_tag": "v7-unification-pre-migration-8d9e8e60",
-      "snapshot_object_id": "cc1f8e103b1117509cf9911d6537a860d19f6aa7",
+      "snapshot_object_id": "632c49bb83c162df1fbf43ae31c6e95e93108c40",
       "surface_id": "ref:refs/heads/codex/v7-unified-system-legacy-eradication",
       "unique_behavior_data_contribution": "active migration or canonical upstream ref",
       "validation_tests": [
@@ -21806,7 +22132,7 @@
       ]
     },
     {
-      "canonical_replacement": "config/v7_authority_registry.json#BTC_SETTLEMENT_ENGINE",
+      "canonical_replacement": "config/v7_authority_registry.json#CRYPTO_SETTLEMENT_ENGINE",
       "classification": "MERGE_INTO_CANONICAL",
       "current_imports_callers_readers_writers": {
         "analysis": "exact path/module references from tracked text; runtime linkage is separately enumerated",
@@ -21819,7 +22145,7 @@
           "engine_component"
         ],
         "executable": false,
-        "owner": "BTC_SETTLEMENT_ENGINE"
+        "owner": "CRYPTO_SETTLEMENT_ENGINE"
       },
       "final_disposition": "merge_then_delete_or_reclassify_canonical",
       "migration_status": "unique_commit_audit_pending",
@@ -21834,7 +22160,7 @@
       ]
     },
     {
-      "canonical_replacement": "config/v7_authority_registry.json#BTC_SETTLEMENT_ENGINE",
+      "canonical_replacement": "config/v7_authority_registry.json#CRYPTO_SETTLEMENT_ENGINE",
       "classification": "MERGE_INTO_CANONICAL",
       "current_imports_callers_readers_writers": {
         "analysis": "exact path/module references from tracked text; runtime linkage is separately enumerated",
@@ -21847,7 +22173,7 @@
           "engine_component"
         ],
         "executable": false,
-        "owner": "BTC_SETTLEMENT_ENGINE"
+        "owner": "CRYPTO_SETTLEMENT_ENGINE"
       },
       "final_disposition": "merge_then_delete_or_reclassify_canonical",
       "migration_status": "unique_commit_audit_pending",
@@ -22148,7 +22474,7 @@
       ]
     },
     {
-      "canonical_replacement": "config/v7_authority_registry.json#BTC_SETTLEMENT_ENGINE",
+      "canonical_replacement": "config/v7_authority_registry.json#CRYPTO_SETTLEMENT_ENGINE",
       "classification": "MERGE_INTO_CANONICAL",
       "current_imports_callers_readers_writers": {
         "analysis": "exact path/module references from tracked text; runtime linkage is separately enumerated",
@@ -22163,7 +22489,7 @@
           "engine_component"
         ],
         "executable": false,
-        "owner": "BTC_SETTLEMENT_ENGINE"
+        "owner": "CRYPTO_SETTLEMENT_ENGINE"
       },
       "final_disposition": "merge_then_delete_or_reclassify_canonical",
       "migration_status": "pending_gate",
@@ -22342,7 +22668,7 @@
       ]
     },
     {
-      "canonical_replacement": "config/v7_authority_registry.json#BTC_SETTLEMENT_ENGINE",
+      "canonical_replacement": "config/v7_authority_registry.json#CRYPTO_SETTLEMENT_ENGINE",
       "classification": "MERGE_INTO_CANONICAL",
       "current_imports_callers_readers_writers": {
         "analysis": "exact path/module references from tracked text; runtime linkage is separately enumerated",
@@ -22357,7 +22683,7 @@
           "engine_component"
         ],
         "executable": false,
-        "owner": "BTC_SETTLEMENT_ENGINE"
+        "owner": "CRYPTO_SETTLEMENT_ENGINE"
       },
       "final_disposition": "merge_then_delete_or_reclassify_canonical",
       "migration_status": "pending_gate",
@@ -22371,7 +22697,7 @@
       ]
     },
     {
-      "canonical_replacement": "config/v7_authority_registry.json#BTC_SETTLEMENT_ENGINE",
+      "canonical_replacement": "config/v7_authority_registry.json#CRYPTO_SETTLEMENT_ENGINE",
       "classification": "MERGE_INTO_CANONICAL",
       "current_imports_callers_readers_writers": {
         "analysis": "exact path/module references from tracked text; runtime linkage is separately enumerated",
@@ -22386,7 +22712,7 @@
           "engine_component"
         ],
         "executable": false,
-        "owner": "BTC_SETTLEMENT_ENGINE"
+        "owner": "CRYPTO_SETTLEMENT_ENGINE"
       },
       "final_disposition": "merge_then_delete_or_reclassify_canonical",
       "migration_status": "pending_gate",
@@ -22400,7 +22726,7 @@
       ]
     },
     {
-      "canonical_replacement": "config/v7_authority_registry.json#BTC_SETTLEMENT_ENGINE",
+      "canonical_replacement": "config/v7_authority_registry.json#CRYPTO_SETTLEMENT_ENGINE",
       "classification": "MERGE_INTO_CANONICAL",
       "current_imports_callers_readers_writers": {
         "analysis": "exact path/module references from tracked text; runtime linkage is separately enumerated",
@@ -22415,7 +22741,7 @@
           "engine_component"
         ],
         "executable": false,
-        "owner": "BTC_SETTLEMENT_ENGINE"
+        "owner": "CRYPTO_SETTLEMENT_ENGINE"
       },
       "final_disposition": "merge_then_delete_or_reclassify_canonical",
       "migration_status": "pending_gate",
@@ -22429,7 +22755,7 @@
       ]
     },
     {
-      "canonical_replacement": "config/v7_authority_registry.json#BTC_SETTLEMENT_ENGINE",
+      "canonical_replacement": "config/v7_authority_registry.json#CRYPTO_SETTLEMENT_ENGINE",
       "classification": "MERGE_INTO_CANONICAL",
       "current_imports_callers_readers_writers": {
         "analysis": "exact path/module references from tracked text; runtime linkage is separately enumerated",
@@ -22444,7 +22770,7 @@
           "engine_component"
         ],
         "executable": false,
-        "owner": "BTC_SETTLEMENT_ENGINE"
+        "owner": "CRYPTO_SETTLEMENT_ENGINE"
       },
       "final_disposition": "merge_then_delete_or_reclassify_canonical",
       "migration_status": "pending_gate",
@@ -22458,7 +22784,7 @@
       ]
     },
     {
-      "canonical_replacement": "config/v7_authority_registry.json#BTC_SETTLEMENT_ENGINE",
+      "canonical_replacement": "config/v7_authority_registry.json#CRYPTO_SETTLEMENT_ENGINE",
       "classification": "MERGE_INTO_CANONICAL",
       "current_imports_callers_readers_writers": {
         "analysis": "exact path/module references from tracked text; runtime linkage is separately enumerated",
@@ -22473,7 +22799,7 @@
           "engine_component"
         ],
         "executable": false,
-        "owner": "BTC_SETTLEMENT_ENGINE"
+        "owner": "CRYPTO_SETTLEMENT_ENGINE"
       },
       "final_disposition": "merge_then_delete_or_reclassify_canonical",
       "migration_status": "pending_gate",
@@ -22487,7 +22813,7 @@
       ]
     },
     {
-      "canonical_replacement": "config/v7_authority_registry.json#BTC_SETTLEMENT_ENGINE",
+      "canonical_replacement": "config/v7_authority_registry.json#CRYPTO_SETTLEMENT_ENGINE",
       "classification": "MERGE_INTO_CANONICAL",
       "current_imports_callers_readers_writers": {
         "analysis": "exact path/module references from tracked text; runtime linkage is separately enumerated",
@@ -22502,7 +22828,7 @@
           "engine_component"
         ],
         "executable": false,
-        "owner": "BTC_SETTLEMENT_ENGINE"
+        "owner": "CRYPTO_SETTLEMENT_ENGINE"
       },
       "final_disposition": "merge_then_delete_or_reclassify_canonical",
       "migration_status": "pending_gate",
@@ -22516,7 +22842,7 @@
       ]
     },
     {
-      "canonical_replacement": "config/v7_authority_registry.json#BTC_SETTLEMENT_ENGINE",
+      "canonical_replacement": "config/v7_authority_registry.json#CRYPTO_SETTLEMENT_ENGINE",
       "classification": "MERGE_INTO_CANONICAL",
       "current_imports_callers_readers_writers": {
         "analysis": "exact path/module references from tracked text; runtime linkage is separately enumerated",
@@ -22531,7 +22857,7 @@
           "engine_component"
         ],
         "executable": false,
-        "owner": "BTC_SETTLEMENT_ENGINE"
+        "owner": "CRYPTO_SETTLEMENT_ENGINE"
       },
       "final_disposition": "merge_then_delete_or_reclassify_canonical",
       "migration_status": "pending_gate",
@@ -22545,7 +22871,7 @@
       ]
     },
     {
-      "canonical_replacement": "config/v7_authority_registry.json#BTC_SETTLEMENT_ENGINE",
+      "canonical_replacement": "config/v7_authority_registry.json#CRYPTO_SETTLEMENT_ENGINE",
       "classification": "MERGE_INTO_CANONICAL",
       "current_imports_callers_readers_writers": {
         "analysis": "exact path/module references from tracked text; runtime linkage is separately enumerated",
@@ -22560,7 +22886,7 @@
           "engine_component"
         ],
         "executable": false,
-        "owner": "BTC_SETTLEMENT_ENGINE"
+        "owner": "CRYPTO_SETTLEMENT_ENGINE"
       },
       "final_disposition": "merge_then_delete_or_reclassify_canonical",
       "migration_status": "pending_gate",
@@ -22574,7 +22900,7 @@
       ]
     },
     {
-      "canonical_replacement": "config/v7_authority_registry.json#BTC_SETTLEMENT_ENGINE",
+      "canonical_replacement": "config/v7_authority_registry.json#CRYPTO_SETTLEMENT_ENGINE",
       "classification": "MERGE_INTO_CANONICAL",
       "current_imports_callers_readers_writers": {
         "analysis": "exact path/module references from tracked text; runtime linkage is separately enumerated",
@@ -22589,7 +22915,7 @@
           "engine_component"
         ],
         "executable": false,
-        "owner": "BTC_SETTLEMENT_ENGINE"
+        "owner": "CRYPTO_SETTLEMENT_ENGINE"
       },
       "final_disposition": "merge_then_delete_or_reclassify_canonical",
       "migration_status": "pending_gate",
@@ -22603,7 +22929,7 @@
       ]
     },
     {
-      "canonical_replacement": "config/v7_authority_registry.json#BTC_SETTLEMENT_ENGINE",
+      "canonical_replacement": "config/v7_authority_registry.json#CRYPTO_SETTLEMENT_ENGINE",
       "classification": "MERGE_INTO_CANONICAL",
       "current_imports_callers_readers_writers": {
         "analysis": "exact path/module references from tracked text; runtime linkage is separately enumerated",
@@ -22618,7 +22944,7 @@
           "engine_component"
         ],
         "executable": false,
-        "owner": "BTC_SETTLEMENT_ENGINE"
+        "owner": "CRYPTO_SETTLEMENT_ENGINE"
       },
       "final_disposition": "merge_then_delete_or_reclassify_canonical",
       "migration_status": "pending_gate",
@@ -22632,7 +22958,7 @@
       ]
     },
     {
-      "canonical_replacement": "config/v7_authority_registry.json#BTC_SETTLEMENT_ENGINE",
+      "canonical_replacement": "config/v7_authority_registry.json#CRYPTO_SETTLEMENT_ENGINE",
       "classification": "MERGE_INTO_CANONICAL",
       "current_imports_callers_readers_writers": {
         "analysis": "exact path/module references from tracked text; runtime linkage is separately enumerated",
@@ -22647,7 +22973,7 @@
           "engine_component"
         ],
         "executable": false,
-        "owner": "BTC_SETTLEMENT_ENGINE"
+        "owner": "CRYPTO_SETTLEMENT_ENGINE"
       },
       "final_disposition": "merge_then_delete_or_reclassify_canonical",
       "migration_status": "pending_gate",
@@ -22661,7 +22987,7 @@
       ]
     },
     {
-      "canonical_replacement": "config/v7_authority_registry.json#BTC_SETTLEMENT_ENGINE",
+      "canonical_replacement": "config/v7_authority_registry.json#CRYPTO_SETTLEMENT_ENGINE",
       "classification": "MERGE_INTO_CANONICAL",
       "current_imports_callers_readers_writers": {
         "analysis": "exact path/module references from tracked text; runtime linkage is separately enumerated",
@@ -22676,7 +23002,7 @@
           "engine_component"
         ],
         "executable": false,
-        "owner": "BTC_SETTLEMENT_ENGINE"
+        "owner": "CRYPTO_SETTLEMENT_ENGINE"
       },
       "final_disposition": "merge_then_delete_or_reclassify_canonical",
       "migration_status": "pending_gate",
@@ -22690,7 +23016,7 @@
       ]
     },
     {
-      "canonical_replacement": "config/v7_authority_registry.json#BTC_SETTLEMENT_ENGINE",
+      "canonical_replacement": "config/v7_authority_registry.json#CRYPTO_SETTLEMENT_ENGINE",
       "classification": "MERGE_INTO_CANONICAL",
       "current_imports_callers_readers_writers": {
         "analysis": "exact path/module references from tracked text; runtime linkage is separately enumerated",
@@ -22705,7 +23031,7 @@
           "engine_component"
         ],
         "executable": false,
-        "owner": "BTC_SETTLEMENT_ENGINE"
+        "owner": "CRYPTO_SETTLEMENT_ENGINE"
       },
       "final_disposition": "merge_then_delete_or_reclassify_canonical",
       "migration_status": "pending_gate",
@@ -22719,7 +23045,7 @@
       ]
     },
     {
-      "canonical_replacement": "config/v7_authority_registry.json#BTC_SETTLEMENT_ENGINE",
+      "canonical_replacement": "config/v7_authority_registry.json#CRYPTO_SETTLEMENT_ENGINE",
       "classification": "MERGE_INTO_CANONICAL",
       "current_imports_callers_readers_writers": {
         "analysis": "exact path/module references from tracked text; runtime linkage is separately enumerated",
@@ -22734,7 +23060,7 @@
           "engine_component"
         ],
         "executable": false,
-        "owner": "BTC_SETTLEMENT_ENGINE"
+        "owner": "CRYPTO_SETTLEMENT_ENGINE"
       },
       "final_disposition": "merge_then_delete_or_reclassify_canonical",
       "migration_status": "pending_gate",
@@ -22748,7 +23074,7 @@
       ]
     },
     {
-      "canonical_replacement": "config/v7_authority_registry.json#BTC_SETTLEMENT_ENGINE",
+      "canonical_replacement": "config/v7_authority_registry.json#CRYPTO_SETTLEMENT_ENGINE",
       "classification": "MERGE_INTO_CANONICAL",
       "current_imports_callers_readers_writers": {
         "analysis": "exact path/module references from tracked text; runtime linkage is separately enumerated",
@@ -22763,7 +23089,7 @@
           "engine_component"
         ],
         "executable": false,
-        "owner": "BTC_SETTLEMENT_ENGINE"
+        "owner": "CRYPTO_SETTLEMENT_ENGINE"
       },
       "final_disposition": "merge_then_delete_or_reclassify_canonical",
       "migration_status": "pending_gate",
@@ -22777,7 +23103,7 @@
       ]
     },
     {
-      "canonical_replacement": "config/v7_authority_registry.json#BTC_SETTLEMENT_ENGINE",
+      "canonical_replacement": "config/v7_authority_registry.json#CRYPTO_SETTLEMENT_ENGINE",
       "classification": "MERGE_INTO_CANONICAL",
       "current_imports_callers_readers_writers": {
         "analysis": "exact path/module references from tracked text; runtime linkage is separately enumerated",
@@ -22792,7 +23118,7 @@
           "engine_component"
         ],
         "executable": false,
-        "owner": "BTC_SETTLEMENT_ENGINE"
+        "owner": "CRYPTO_SETTLEMENT_ENGINE"
       },
       "final_disposition": "merge_then_delete_or_reclassify_canonical",
       "migration_status": "pending_gate",
@@ -22806,7 +23132,7 @@
       ]
     },
     {
-      "canonical_replacement": "config/v7_authority_registry.json#BTC_SETTLEMENT_ENGINE",
+      "canonical_replacement": "config/v7_authority_registry.json#CRYPTO_SETTLEMENT_ENGINE",
       "classification": "MERGE_INTO_CANONICAL",
       "current_imports_callers_readers_writers": {
         "analysis": "exact path/module references from tracked text; runtime linkage is separately enumerated",
@@ -22821,7 +23147,7 @@
           "engine_component"
         ],
         "executable": false,
-        "owner": "BTC_SETTLEMENT_ENGINE"
+        "owner": "CRYPTO_SETTLEMENT_ENGINE"
       },
       "final_disposition": "merge_then_delete_or_reclassify_canonical",
       "migration_status": "pending_gate",
@@ -22835,7 +23161,7 @@
       ]
     },
     {
-      "canonical_replacement": "config/v7_authority_registry.json#BTC_SETTLEMENT_ENGINE",
+      "canonical_replacement": "config/v7_authority_registry.json#CRYPTO_SETTLEMENT_ENGINE",
       "classification": "MERGE_INTO_CANONICAL",
       "current_imports_callers_readers_writers": {
         "analysis": "exact path/module references from tracked text; runtime linkage is separately enumerated",
@@ -22850,7 +23176,7 @@
           "engine_component"
         ],
         "executable": false,
-        "owner": "BTC_SETTLEMENT_ENGINE"
+        "owner": "CRYPTO_SETTLEMENT_ENGINE"
       },
       "final_disposition": "merge_then_delete_or_reclassify_canonical",
       "migration_status": "pending_gate",
@@ -22864,7 +23190,7 @@
       ]
     },
     {
-      "canonical_replacement": "config/v7_authority_registry.json#BTC_SETTLEMENT_ENGINE",
+      "canonical_replacement": "config/v7_authority_registry.json#CRYPTO_SETTLEMENT_ENGINE",
       "classification": "MERGE_INTO_CANONICAL",
       "current_imports_callers_readers_writers": {
         "analysis": "exact path/module references from tracked text; runtime linkage is separately enumerated",
@@ -22879,7 +23205,7 @@
           "engine_component"
         ],
         "executable": false,
-        "owner": "BTC_SETTLEMENT_ENGINE"
+        "owner": "CRYPTO_SETTLEMENT_ENGINE"
       },
       "final_disposition": "merge_then_delete_or_reclassify_canonical",
       "migration_status": "pending_gate",
@@ -22893,7 +23219,7 @@
       ]
     },
     {
-      "canonical_replacement": "config/v7_authority_registry.json#BTC_SETTLEMENT_ENGINE",
+      "canonical_replacement": "config/v7_authority_registry.json#CRYPTO_SETTLEMENT_ENGINE",
       "classification": "MERGE_INTO_CANONICAL",
       "current_imports_callers_readers_writers": {
         "analysis": "exact path/module references from tracked text; runtime linkage is separately enumerated",
@@ -22908,7 +23234,7 @@
           "engine_component"
         ],
         "executable": false,
-        "owner": "BTC_SETTLEMENT_ENGINE"
+        "owner": "CRYPTO_SETTLEMENT_ENGINE"
       },
       "final_disposition": "merge_then_delete_or_reclassify_canonical",
       "migration_status": "pending_gate",
@@ -22922,7 +23248,7 @@
       ]
     },
     {
-      "canonical_replacement": "config/v7_authority_registry.json#BTC_SETTLEMENT_ENGINE",
+      "canonical_replacement": "config/v7_authority_registry.json#CRYPTO_SETTLEMENT_ENGINE",
       "classification": "MERGE_INTO_CANONICAL",
       "current_imports_callers_readers_writers": {
         "analysis": "exact path/module references from tracked text; runtime linkage is separately enumerated",
@@ -22937,7 +23263,7 @@
           "engine_component"
         ],
         "executable": false,
-        "owner": "BTC_SETTLEMENT_ENGINE"
+        "owner": "CRYPTO_SETTLEMENT_ENGINE"
       },
       "final_disposition": "merge_then_delete_or_reclassify_canonical",
       "migration_status": "pending_gate",
@@ -22951,7 +23277,7 @@
       ]
     },
     {
-      "canonical_replacement": "config/v7_authority_registry.json#BTC_SETTLEMENT_ENGINE",
+      "canonical_replacement": "config/v7_authority_registry.json#CRYPTO_SETTLEMENT_ENGINE",
       "classification": "MERGE_INTO_CANONICAL",
       "current_imports_callers_readers_writers": {
         "analysis": "exact path/module references from tracked text; runtime linkage is separately enumerated",
@@ -22966,7 +23292,7 @@
           "engine_component"
         ],
         "executable": false,
-        "owner": "BTC_SETTLEMENT_ENGINE"
+        "owner": "CRYPTO_SETTLEMENT_ENGINE"
       },
       "final_disposition": "merge_then_delete_or_reclassify_canonical",
       "migration_status": "pending_gate",
@@ -22980,7 +23306,7 @@
       ]
     },
     {
-      "canonical_replacement": "config/v7_authority_registry.json#BTC_SETTLEMENT_ENGINE",
+      "canonical_replacement": "config/v7_authority_registry.json#CRYPTO_SETTLEMENT_ENGINE",
       "classification": "MERGE_INTO_CANONICAL",
       "current_imports_callers_readers_writers": {
         "analysis": "exact path/module references from tracked text; runtime linkage is separately enumerated",
@@ -22995,7 +23321,7 @@
           "engine_component"
         ],
         "executable": false,
-        "owner": "BTC_SETTLEMENT_ENGINE"
+        "owner": "CRYPTO_SETTLEMENT_ENGINE"
       },
       "final_disposition": "merge_then_delete_or_reclassify_canonical",
       "migration_status": "pending_gate",
@@ -23009,7 +23335,7 @@
       ]
     },
     {
-      "canonical_replacement": "config/v7_authority_registry.json#BTC_SETTLEMENT_ENGINE",
+      "canonical_replacement": "config/v7_authority_registry.json#CRYPTO_SETTLEMENT_ENGINE",
       "classification": "MERGE_INTO_CANONICAL",
       "current_imports_callers_readers_writers": {
         "analysis": "exact path/module references from tracked text; runtime linkage is separately enumerated",
@@ -23024,7 +23350,7 @@
           "engine_component"
         ],
         "executable": false,
-        "owner": "BTC_SETTLEMENT_ENGINE"
+        "owner": "CRYPTO_SETTLEMENT_ENGINE"
       },
       "final_disposition": "merge_then_delete_or_reclassify_canonical",
       "migration_status": "pending_gate",
@@ -23038,7 +23364,7 @@
       ]
     },
     {
-      "canonical_replacement": "config/v7_authority_registry.json#BTC_SETTLEMENT_ENGINE",
+      "canonical_replacement": "config/v7_authority_registry.json#CRYPTO_SETTLEMENT_ENGINE",
       "classification": "MERGE_INTO_CANONICAL",
       "current_imports_callers_readers_writers": {
         "analysis": "exact path/module references from tracked text; runtime linkage is separately enumerated",
@@ -23053,7 +23379,7 @@
           "engine_component"
         ],
         "executable": false,
-        "owner": "BTC_SETTLEMENT_ENGINE"
+        "owner": "CRYPTO_SETTLEMENT_ENGINE"
       },
       "final_disposition": "merge_then_delete_or_reclassify_canonical",
       "migration_status": "pending_gate",
@@ -23067,7 +23393,7 @@
       ]
     },
     {
-      "canonical_replacement": "config/v7_authority_registry.json#BTC_SETTLEMENT_ENGINE",
+      "canonical_replacement": "config/v7_authority_registry.json#CRYPTO_SETTLEMENT_ENGINE",
       "classification": "MERGE_INTO_CANONICAL",
       "current_imports_callers_readers_writers": {
         "analysis": "exact path/module references from tracked text; runtime linkage is separately enumerated",
@@ -23082,7 +23408,7 @@
           "engine_component"
         ],
         "executable": false,
-        "owner": "BTC_SETTLEMENT_ENGINE"
+        "owner": "CRYPTO_SETTLEMENT_ENGINE"
       },
       "final_disposition": "merge_then_delete_or_reclassify_canonical",
       "migration_status": "pending_gate",
@@ -23096,7 +23422,7 @@
       ]
     },
     {
-      "canonical_replacement": "config/v7_authority_registry.json#BTC_SETTLEMENT_ENGINE",
+      "canonical_replacement": "config/v7_authority_registry.json#CRYPTO_SETTLEMENT_ENGINE",
       "classification": "MERGE_INTO_CANONICAL",
       "current_imports_callers_readers_writers": {
         "analysis": "exact path/module references from tracked text; runtime linkage is separately enumerated",
@@ -23111,7 +23437,7 @@
           "engine_component"
         ],
         "executable": false,
-        "owner": "BTC_SETTLEMENT_ENGINE"
+        "owner": "CRYPTO_SETTLEMENT_ENGINE"
       },
       "final_disposition": "merge_then_delete_or_reclassify_canonical",
       "migration_status": "pending_gate",
@@ -24700,7 +25026,7 @@
       ]
     },
     {
-      "canonical_replacement": "config/v7_authority_registry.json#BTC_SETTLEMENT_ENGINE",
+      "canonical_replacement": "config/v7_authority_registry.json#CRYPTO_SETTLEMENT_ENGINE",
       "classification": "MERGE_INTO_CANONICAL",
       "current_imports_callers_readers_writers": {
         "analysis": "exact path/module references from tracked text; runtime linkage is separately enumerated",
@@ -24715,7 +25041,7 @@
           "engine_component"
         ],
         "executable": false,
-        "owner": "BTC_SETTLEMENT_ENGINE"
+        "owner": "CRYPTO_SETTLEMENT_ENGINE"
       },
       "final_disposition": "merge_then_delete_or_reclassify_canonical",
       "migration_status": "pending_gate",
@@ -25840,10 +26166,11 @@
           ".github/workflows/ci.yml",
           "artifacts/v7_unification/path_classification.json",
           "artifacts/v7_unification/phase_5_report.md",
-          "config/v7_btc_settlement_engine.json",
+          "config/v7_crypto_settlement_engine.json",
           "config/v7_live_model_scope.json",
           "config/v7_structural_arb_engine.json",
-          "scripts/v7_btc_settlement_engine_contract.py",
+          "scripts/v7_crypto_assumption_audit.py",
+          "scripts/v7_crypto_settlement_engine_contract.py",
           "scripts/v7_current_truth_audit.py",
           "scripts/v7_cutover_contract.py",
           "scripts/v7_implementation_audit.py"
@@ -26518,5 +26845,5 @@
   "real_capital_at_risk": false,
   "real_order_submission": false,
   "schema": "polymarket_v7_surface_classification_v1",
-  "source_snapshot_sha": "cc1f8e103b1117509cf9911d6537a860d19f6aa7"
+  "source_snapshot_sha": "632c49bb83c162df1fbf43ae31c6e95e93108c40"
 }
