@@ -46,6 +46,13 @@ class V7PaperLoopBash3PortabilityTest(unittest.TestCase):
         ):
             self.assertIn(required, ready)
 
+    def test_limitless_output_directory_exists_before_background_redirect(self) -> None:
+        text = LOOP.read_text(encoding="utf-8")
+        mkdir = 'mkdir -p "$RUN_ROOT/shadow/limitless"'
+        launch = "python3 scripts/v7_limitless_collector.py"
+        self.assertIn(mkdir, text)
+        self.assertLess(text.index(mkdir), text.index(launch))
+
 
 if __name__ == "__main__":
     unittest.main()

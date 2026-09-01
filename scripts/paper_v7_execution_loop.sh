@@ -271,6 +271,7 @@ pids+=("$!")
 
 # Limitless exposes markets, orderbooks and finalized trades through public
 # read-only endpoints. A trading token is intentionally never passed here.
+mkdir -p "$RUN_ROOT/shadow/limitless"
 python3 scripts/v7_limitless_collector.py \
   --repository-root "$ROOT" --config "$EXTERNAL_INPUT_CONFIG" \
   --mappings "$EXTERNAL_MAPPING_REGISTRY" \
