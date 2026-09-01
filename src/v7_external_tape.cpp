@@ -206,10 +206,11 @@ struct ExternalRawTapeRecorder::Impl {
         if (!output) throw std::runtime_error("unable to open V7 raw tape");
         // Keep the high-rate 32 KiB recorder for every ordinary venue.
         // Bybit linear and Deribit have a bounded wider FIFO for volatile or
-        // catch-up multiplexed batches; Coinbase receives complete L2
-        // recovery snapshots and uses its separate large bounded FIFO.
+        // catch-up multiplexed batches. Coinbase and Binance Spot can each
+        // emit a complete recovery/public batch, so they use the separate
+        // large bounded FIFO.
         burst_payloads = source == "bybit-linear" || source == "deribit";
-        large_payloads = source == "coinbase-spot";
+        large_payloads = source == "coinbase-spot" || source == "binance-spot";
         if (burst_payloads) {
             burst_queue = std::make_unique<BurstQueue>();
             burst_producer_record = std::make_unique<BurstRawTapeRecord>();

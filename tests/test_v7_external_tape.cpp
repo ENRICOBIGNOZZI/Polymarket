@@ -90,9 +90,9 @@ int main() {
     const auto raw_path = std::filesystem::temp_directory_path() / "pm_v7_external_raw_tape_test.bin";
     std::filesystem::remove(raw_path);
     {
-        ExternalRawTapeRecorder raw_recorder(raw_path, sha, "run-raw", "session-raw", "binance-spot", 1'000'002);
-        assert(raw_recorder.try_record_raw(VenueId::BinanceSpot, 3, 120, 1'020, R"({"e":"depthUpdate"})"));
-        assert(!raw_recorder.try_record_raw(VenueId::BinanceSpot, 3, 121, 1'021,
+        ExternalRawTapeRecorder raw_recorder(raw_path, sha, "run-raw", "session-raw", "bybit-spot", 1'000'002);
+        assert(raw_recorder.try_record_raw(VenueId::BybitSpot, 3, 120, 1'020, R"({"e":"depthUpdate"})"));
+        assert(!raw_recorder.try_record_raw(VenueId::BybitSpot, 3, 121, 1'021,
                                              std::string(kExternalRawTapePayloadBytes + 1, 'x')));
         const auto raw_snapshot = raw_recorder.snapshot();
         assert(raw_snapshot.accepted == 1);
@@ -111,7 +111,7 @@ int main() {
     assert(raw_input.good());
     assert(std::string(raw_header.magic.data(), raw_header.magic.size()) == "PMV7RAW!");
     assert(raw_header.record_bytes == 0);
-    assert(raw_record.venue == VenueId::BinanceSpot);
+    assert(raw_record.venue == VenueId::BybitSpot);
     assert(raw_payload == R"({"e":"depthUpdate"})");
     std::filesystem::remove(raw_path);
 
@@ -129,11 +129,26 @@ int main() {
     }
     std::filesystem::remove(large_raw_path);
 
+    const auto binance_large_raw_path = std::filesystem::temp_directory_path() / "pm_v7_external_binance_large_raw_tape_test.bin";
+    std::filesystem::remove(binance_large_raw_path);
+    {
+        ExternalRawTapeRecorder raw_recorder(
+            binance_large_raw_path, sha, "run-binance-large-raw", "session-binance-large-raw", "binance-spot", 1'000'004);
+        const std::string full_binance_public_batch((kExternalRawTapePayloadBytes + 64U), 'x');
+        assert(raw_recorder.try_record_raw(VenueId::BinanceSpot, 5, 140, 1'040,
+                                            full_binance_public_batch));
+        const auto raw_snapshot = raw_recorder.snapshot();
+        assert(raw_snapshot.accepted == 1);
+        assert(raw_snapshot.dropped == 0);
+        assert(raw_snapshot.evidence_valid == 1);
+    }
+    std::filesystem::remove(binance_large_raw_path);
+
     const auto burst_raw_path = std::filesystem::temp_directory_path() / "pm_v7_external_burst_raw_tape_test.bin";
     std::filesystem::remove(burst_raw_path);
     {
         ExternalRawTapeRecorder raw_recorder(
-            burst_raw_path, sha, "run-burst-raw", "session-burst-raw", "bybit-linear", 1'000'004);
+            burst_raw_path, sha, "run-burst-raw", "session-burst-raw", "bybit-linear", 1'000'005);
         const std::string volatile_bybit_batch((kExternalRawTapePayloadBytes + 64U), 'x');
         assert(raw_recorder.try_record_raw(VenueId::BybitLinear, 5, 140, 1'040,
                                             volatile_bybit_batch));
@@ -148,7 +163,7 @@ int main() {
     std::filesystem::remove(deribit_burst_raw_path);
     {
         ExternalRawTapeRecorder raw_recorder(
-            deribit_burst_raw_path, sha, "run-deribit-burst-raw", "session-deribit-burst-raw", "deribit", 1'000'005);
+            deribit_burst_raw_path, sha, "run-deribit-burst-raw", "session-deribit-burst-raw", "deribit", 1'000'006);
         const std::string deribit_catchup_batch((kExternalRawTapePayloadBytes + 64U), 'x');
         assert(raw_recorder.try_record_raw(VenueId::Deribit, 6, 150, 1'050,
                                             deribit_catchup_batch));

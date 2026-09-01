@@ -30,9 +30,9 @@ inline constexpr std::size_t kExternalRawTapeQueueCapacity = 256;
 // venue pay the memory cost.
 inline constexpr std::size_t kExternalBurstRawTapePayloadBytes = 64 * 1024;
 inline constexpr std::size_t kExternalBurstRawTapeQueueCapacity = 512;
-// Coinbase's complete BTC-USD L2 recovery snapshot can exceed 1 MiB. Its raw
-// recorder uses this separate bounded queue; other sources retain the compact
-// high-depth path above.
+// Complete L2 recovery/public batches can exceed the ordinary source limit.
+// Coinbase and Binance Spot use this separate bounded queue; other sources
+// retain the compact high-depth path above unless explicitly burst-enabled.
 inline constexpr std::size_t kExternalLargeRawTapePayloadBytes = 2 * 1024 * 1024;
 inline constexpr std::size_t kExternalLargeRawTapeQueueCapacity = 8;
 
