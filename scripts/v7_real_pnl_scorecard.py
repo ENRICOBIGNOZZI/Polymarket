@@ -32,8 +32,10 @@ POLICY = {
     "minimum_event_clusters": 30,
     "minimum_regimes": 3,
     "minimum_capacity_tiers": 3,
+    "minimum_forward_duration_days": 90,
     "confidence_z": 1.96,
     "maximum_drawdown_ratio": 0.15,
+    "minimum_expected_shortfall_95": -0.05,
     "cost_stress_multipliers": (1.0, 1.5, 2.0),
 }
 
@@ -340,6 +342,9 @@ def scorecard(verified_report: dict[str, Any], samples_path: Path, *, attestatio
     for row in capacity_curve:
         row["net_return"] = row["net_pnl_units"] / row["capital_units"] if row["capital_units"] else None
     risk = _drawdown_and_es(base_values, [int(row["capital_units"]) for row in rows])
+    terminal_times = [int(row["terminal_ts_ms"]) for row in rows]
+    forward_duration_days = ((max(terminal_times) - min(terminal_times)) / 86_400_000
+                             if terminal_times else 0.0)
     reconciled_total = sum(base_values)
     lcb_2x = cost_results["2.0x"]["cluster_equal_weighted"]["lower"]
     reward_free_lcb_2x = cost_results["2.0x"]["reward_free_cluster_equal_weighted"]["lower"]
@@ -354,12 +359,17 @@ def scorecard(verified_report: dict[str, Any], samples_path: Path, *, attestatio
         reasons.append("insufficient_forward_regimes")
     if len(capacity_curve) < POLICY["minimum_capacity_tiers"]:
         reasons.append("insufficient_capacity_tiers")
+    if forward_duration_days < POLICY["minimum_forward_duration_days"]:
+        reasons.append("insufficient_forward_duration")
     if lcb_2x is None or lcb_2x <= 0:
         reasons.append("nonpositive_2x_cost_lcb")
     if reward_free_lcb_2x is None or reward_free_lcb_2x <= 0:
         reasons.append("nonpositive_reward_free_2x_cost_lcb")
     if risk["maximum_drawdown_ratio"] is None or risk["maximum_drawdown_ratio"] > POLICY["maximum_drawdown_ratio"]:
         reasons.append("drawdown_limit_not_met")
+    if (risk["expected_shortfall_95"] is None
+            or risk["expected_shortfall_95"] < POLICY["minimum_expected_shortfall_95"]):
+        reasons.append("expected_shortfall_limit_not_met")
     return {
         "schema": SCHEMA,
         "model_sha": model_sha,
@@ -369,6 +379,7 @@ def scorecard(verified_report: dict[str, Any], samples_path: Path, *, attestatio
         "samples": len(rows),
         "event_clusters": len(grouped),
         "regimes": sorted({str(row["regime"]) for row in rows}),
+        "forward_duration_days": forward_duration_days,
         "cost_stress": cost_results,
         "capacity_curve": capacity_curve,
         "risk": risk,

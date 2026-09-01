@@ -1,13 +1,15 @@
 #!/usr/bin/env python3
-"""Prove a complete, paginated Data API activity observation window.
+"""Prove complete, time-bounded Data API activity coverage from sealed pages.
 
-The input consists solely of sealed read-only Data API pages. This module
-checks the page offsets, explicit inclusion of deposits/withdrawals, and a
-terminal short page. It is a decoder; it performs no HTTP request or write.
+The collector must request documented ascending timestamp windows and capture
+every offset page through a short terminal page. This is a decoder only: it
+does not issue HTTP requests or write an evidence tape.
 """
 from __future__ import annotations
 
 from dataclasses import dataclass
+import hashlib
+import json
 import re
 from typing import Any, Iterable
 from urllib.parse import urlparse
@@ -16,7 +18,9 @@ from urllib.parse import urlparse
 ADDRESS_RE = re.compile(r"^0x[0-9a-fA-F]{40}$")
 SHA_RE = re.compile(r"^[0-9a-f]{40}$")
 SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
-QUERY_KEYS = {"user", "offset", "limit", "excludeDepositsWithdrawals"}
+QUERY_KEYS = {"user", "offset", "limit", "start", "end", "sortBy", "sortDirection"}
+MAX_LIMIT = 500
+MAX_OFFSET = 10_000
 
 
 class ActivityCoverageError(ValueError):
@@ -27,13 +31,17 @@ class ActivityCoverageError(ValueError):
 class ActivityCoverage:
     model_sha: str
     wallet: str
-    pages: tuple[tuple[int, str], ...]
+    capture_start_ts: int
+    capture_end_ts: int
+    pages: tuple[tuple[int, int, int, str], ...]
     activity_count: int
 
     def to_dict(self) -> dict[str, Any]:
         return {"schema": "polymarket_v7_data_api_activity_coverage_v1", "model_sha": self.model_sha,
-                "wallet": self.wallet, "pages": [{"offset": offset, "evidence_record_hash": record_hash}
-                                                     for offset, record_hash in self.pages],
+                "wallet": self.wallet, "capture_start_ts": self.capture_start_ts,
+                "capture_end_ts": self.capture_end_ts,
+                "pages": [{"start": start, "end": end, "offset": offset, "evidence_record_hash": record_hash}
+                          for start, end, offset, record_hash in self.pages],
                 "activity_count": self.activity_count}
 
 
@@ -43,13 +51,34 @@ def _wallet(value: Any) -> str:
     return value.lower()
 
 
+def _integer(value: Any, code: str) -> int:
+    if not isinstance(value, str) or not value.isdigit():
+        raise ActivityCoverageError(code)
+    return int(value)
+
+
+def _row_identity(row: dict[str, Any]) -> str:
+    """A full duplicate is never another activity; redeems require outcome identity."""
+    if row.get("type") == "REDEEM":
+        tx, asset, outcome = row.get("transactionHash"), row.get("asset"), row.get("outcomeIndex")
+        if (not isinstance(tx, str) or not tx or not isinstance(asset, str) or not asset
+                or isinstance(outcome, bool) or not isinstance(outcome, int) or outcome < 0):
+            raise ActivityCoverageError("activity:redeem_outcome_identity")
+        return f"REDEEM:{tx.lower()}:{asset}:{outcome}"
+    try:
+        payload = json.dumps(row, sort_keys=True, separators=(",", ":"), ensure_ascii=False,
+                             allow_nan=False).encode("utf-8")
+    except (TypeError, ValueError) as exc:
+        raise ActivityCoverageError("activity:row_not_canonical") from exc
+    return "ROW:" + hashlib.sha256(payload).hexdigest()
+
+
 def activity_coverage(records: Iterable[Any], *, wallet: str) -> ActivityCoverage:
-    """Return coverage only for contiguous pages ending at a short page."""
-    records = tuple(records)
+    """Return a strictly contiguous timestamp-window coverage manifest."""
     wallet = _wallet(wallet)
-    pages: dict[int, tuple[int, str]] = {}
     model_sha: str | None = None
-    for record in records:
+    windows: dict[tuple[int, int], dict[int, tuple[int, list[dict[str, Any]], str]]] = {}
+    for record in tuple(records):
         if (getattr(record, "source", None) != "DATA_API_ACTIVITY"
                 or not isinstance(getattr(record, "model_sha", None), str)
                 or not SHA_RE.fullmatch(record.model_sha)
@@ -64,55 +93,51 @@ def activity_coverage(records: Iterable[Any], *, wallet: str) -> ActivityCoverag
         if (endpoint.scheme != "https" or endpoint.netloc != "data-api.polymarket.com" or endpoint.path != "/activity"
                 or not isinstance(query, dict) or set(query) != QUERY_KEYS or not isinstance(response, list)):
             raise ActivityCoverageError("evidence:activity_request_shape")
-        if query["user"].lower() != wallet or query["excludeDepositsWithdrawals"].lower() != "false":
+        if (str(query.get("user") or "").lower() != wallet or query.get("sortBy") != "TIMESTAMP"
+                or query.get("sortDirection") != "ASC"):
             raise ActivityCoverageError("evidence:activity_request_scope")
-        if not query["offset"].isdigit() or not query["limit"].isdigit() or int(query["limit"]) <= 0:
-            raise ActivityCoverageError("evidence:activity_pagination")
-        offset, limit = int(query["offset"]), int(query["limit"])
-        if len(response) > limit or offset in pages:
+        offset = _integer(query.get("offset"), "evidence:activity_pagination")
+        limit = _integer(query.get("limit"), "evidence:activity_pagination")
+        start = _integer(query.get("start"), "evidence:activity_window")
+        end = _integer(query.get("end"), "evidence:activity_window")
+        if offset > MAX_OFFSET or not 0 < limit <= MAX_LIMIT or end < start or len(response) > limit:
             raise ActivityCoverageError("evidence:activity_pagination")
         if any(not isinstance(item, dict) for item in response):
             raise ActivityCoverageError("evidence:activity_row")
-        pages[offset] = (limit, record.record_hash)
-    if model_sha is None or not pages or 0 not in pages:
+        pages = windows.setdefault((start, end), {})
+        if offset in pages:
+            raise ActivityCoverageError("evidence:activity_duplicate_offset")
+        pages[offset] = (limit, response, record.record_hash)
+    if model_sha is None or not windows:
         raise ActivityCoverageError("coverage:first_page_missing")
-    expected_offset, terminal = 0, False
-    total = 0
-    ordered: list[tuple[int, str]] = []
-    while expected_offset in pages:
-        limit, record_hash = pages.pop(expected_offset)
-        # Length is reloaded via page metadata held by the record's source ID is unavailable;
-        # use the offset advancement invariant below from the captured response count instead.
-        ordered.append((expected_offset, record_hash))
-        # `pages` stores only limit/hash; count is recovered in a dedicated mapping below.
-        expected_offset += limit
-    # Re-run using submitted offsets to avoid treating an unobserved next offset as complete.
-    offsets = [offset for offset, _ in ordered]
-    if pages or offsets != sorted(offsets):
-        raise ActivityCoverageError("coverage:offset_gap_or_extra_page")
-    # A terminal page cannot be inferred after dropping response sizes: retain them in source order.
-    # The decoder intentionally requires callers to include an explicit empty/short terminal page.
-    # See `_coverage_with_counts`, which performs that validation before this return.
-    return _coverage_with_counts(records, wallet=wallet)
-
-
-def _coverage_with_counts(records: Iterable[Any], *, wallet: str) -> ActivityCoverage:
-    """The count-preserving implementation used by ``activity_coverage``."""
-    rows: list[tuple[int, int, int, str, str]] = []
-    for record in records:
-        query, response = record.query, record.response
-        rows.append((int(query["offset"]), int(query["limit"]), len(response), record.record_hash, record.model_sha))
-    rows.sort()
-    expected, total = 0, 0
-    pages: list[tuple[int, str]] = []
-    for index, (offset, limit, count, record_hash, model_sha) in enumerate(rows):
-        if offset != expected or count > limit:
-            raise ActivityCoverageError("coverage:offset_gap")
-        pages.append((offset, record_hash))
-        total += count
-        expected += limit
-        if count < limit:
-            if index != len(rows) - 1:
+    output_pages: list[tuple[int, int, int, str]] = []
+    seen_rows: set[str] = set()
+    count = 0
+    previous_end: int | None = None
+    for (start, end), pages in sorted(windows.items()):
+        if previous_end is not None and start != previous_end + 1:
+            raise ActivityCoverageError("coverage:time_window_gap")
+        previous_end = end
+        expected, terminal = 0, False
+        for offset, (limit, response, record_hash) in sorted(pages.items()):
+            if offset != expected:
+                raise ActivityCoverageError("coverage:offset_gap")
+            if terminal:
                 raise ActivityCoverageError("coverage:page_after_terminal")
-            return ActivityCoverage(model_sha, wallet, tuple(pages), total)
-    raise ActivityCoverageError("coverage:terminal_short_page_missing")
+            for row in response:
+                timestamp = row.get("timestamp")
+                if (isinstance(timestamp, bool) or not isinstance(timestamp, (int, str))
+                        or not str(timestamp).isdigit() or not start <= int(timestamp) <= end):
+                    raise ActivityCoverageError("activity:timestamp_window")
+                identity = _row_identity(row)
+                if identity in seen_rows:
+                    raise ActivityCoverageError("activity:duplicate_row")
+                seen_rows.add(identity)
+            output_pages.append((start, end, offset, record_hash))
+            count += len(response)
+            expected += limit
+            terminal = len(response) < limit
+        if not terminal:
+            raise ActivityCoverageError("coverage:terminal_short_page_missing")
+    first_start, last_end = min(window[0] for window in windows), max(window[1] for window in windows)
+    return ActivityCoverage(model_sha, wallet, first_start, last_end, tuple(output_pages), count)

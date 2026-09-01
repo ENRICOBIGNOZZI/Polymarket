@@ -65,6 +65,10 @@
   },
   "regional_shootout": {
     "duration_hours": 24,
+    "minimum_duration_seconds": 86400,
+    "minimum_successful_samples": 1000,
+    "maximum_failure_rate": 0.01,
+    "maximum_reconnect_rate": 0.01,
     "candidate_regions": ["Frankfurt", "London", "Amsterdam", "New York", "Northern Virginia"],
     "public_probe_endpoint": "https://clob.polymarket.com/time",
     "same_binary_config_and_sha_required": true,

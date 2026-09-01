@@ -20,6 +20,49 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  security-audit:
+    name: security-audit-v7
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          fetch-depth: 0
+      - name: Block on full-history V7 secret findings
+        run: |
+          set -euo pipefail
+          python3 scripts/v7_secret_scan.py --repository-root . --history --fail-on-findings
+          python3 scripts/v7_entropy_secret_scan.py --repository-root . --history --fail-on-findings
+
+  sanitizer:
+    name: sanitizer-v7
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    env:
+      VALIDATION_SHA: ${{ github.event.inputs.expected_sha || github.event.pull_request.head.sha || github.sha }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          ref: ${{ github.event.inputs.expected_sha || github.event.pull_request.head.sha || github.sha }}
+      - name: Verify exact V7 revision
+        run: |
+          set -euo pipefail
+          [[ "$VALIDATION_SHA" =~ ^[0-9a-f]{40}$ ]]
+          test "$(git rev-parse HEAD)" = "$VALIDATION_SHA"
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential cmake pkg-config libcurl4-openssl-dev libboost-all-dev libssl-dev python3
+      - name: ASan and UBSan V7 suite
+        run: |
+          set -euo pipefail
+          cmake -S . -B build-ASan-UBSan -DCMAKE_BUILD_TYPE=Debug \
+            -DCMAKE_CXX_FLAGS="-fsanitize=address,undefined -fno-omit-frame-pointer" \
+            -DCMAKE_EXE_LINKER_FLAGS="-fsanitize=address,undefined"
+          cmake --build build-ASan-UBSan --parallel 2
+          ASAN_OPTIONS=detect_leaks=1 UBSAN_OPTIONS=halt_on_error=1 \
+            ctest --test-dir build-ASan-UBSan --output-on-failure
+
   build-test:
     name: ci-v7-${{ matrix.build_type }}
     runs-on: ubuntu-24.04
@@ -80,5 +123,6 @@ jobs:
           python3 -m json.tool monitoring/grafana/dashboards/polymarket-v7-latency.json >/dev/null
           bash -n scripts/paper_v7_execution_loop.sh
           bash -n ops/update_server_v7.sh
+          python3 scripts/v7_protocol_fuzz.py --iterations 5000
           python3 tests/test_v7_repository_shape.py
           python3 scripts/v7_convergence_audit.py --repository-root . >/dev/null

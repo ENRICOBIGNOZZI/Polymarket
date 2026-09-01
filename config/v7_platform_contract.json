@@ -1,16 +1,26 @@
 {
   "schema_version": 1,
   "execution_mode_on_drift": "SHADOW_LIVE_READ_ONLY",
+  "max_snapshot_age_seconds": 86400,
   "last_verified_at": "2026-08-31T00:00:00Z",
   "official_sources": [
     "https://docs.polymarket.com/v2-migration",
     "https://docs.polymarket.com/resources/contracts",
     "https://docs.polymarket.com/api-reference/trade/send-heartbeat",
+    "https://docs.polymarket.com/api-reference/trade/get-user-orders",
+    "https://docs.polymarket.com/api-reference/trade/get-trades",
+    "https://docs.polymarket.com/api-reference/core/get-user-activity",
+    "https://docs.polymarket.com/api-reference/markets/get-clob-market-info",
+    "https://docs.polymarket.com/api-reference/market-data/get-order-books-request-body",
+    "https://docs.polymarket.com/api-reference/wss/market",
+    "https://docs.polymarket.com/market-makers/liquidity-rewards",
     "https://docs.polymarket.com/trading/matching-engine",
     "https://docs.polymarket.com/api-reference/rate-limits"
   ],
   "api": {"version": "CLOB_V2", "production_url": "https://clob.polymarket.com", "sdk_package": "@polymarket/clob-client-v2", "chain_id": 137},
-  "contracts": {"pUSD": "0xc011a7e12a19f7b1f670d46f03b03f3342e82dfb", "pUSD_decimals": 6, "conditional_tokens": "0x4d97dcd97ec945f40cf65f87097ace5ea0476045", "ctf_exchange": "0xe111180000d2663c0091e4f400237545b87b996b", "neg_risk_ctf_exchange": "0xe2222d279d744050d28e00520010520000310f59", "neg_risk_adapter": "0xd91e80cf2e7be2e162c6513ced06f1dd0da35296"},
-  "protocol": {"l1_auth": "EIP-712 ClobAuthDomain version 1", "l2_auth": "HMAC-SHA256", "exchange_eip712_domain_version": "2", "order_heartbeat_endpoint": "/heartbeats", "order_heartbeat_required": true, "matching_engine_restart_status": 425, "post_restart_post_only_seconds": 120},
+  "contracts": {"pUSD": "0xc011a7e12a19f7b1f670d46f03b03f3342e82dfb", "pUSD_decimals": 6, "conditional_tokens": "0x4d97dcd97ec945f40cf65f87097ace5ea0476045", "ctf_exchange": "0xe111180000d2663c0091e4f400237545b87b996b", "neg_risk_ctf_exchange": "0xe2222d279d744050d28e00520010520000310f59", "ctf_collateral_adapter": "0xada100db00ca00073811820692005400218fce1f", "neg_risk_ctf_collateral_adapter": "0xada2005600dec949baf300f4c6120000bdb6eaab"},
+  "protocol": {"l1_auth": "EIP-712 ClobAuthDomain version 1", "l2_auth": "HMAC-SHA256", "exchange_eip712_domain_version": "2", "order_heartbeat_endpoint": "/heartbeats", "order_heartbeat_required": true, "matching_engine_restart_status": 425, "post_restart_post_only_seconds": 120, "authenticated_orders_endpoint": "/data/orders", "authenticated_trades_endpoint": "/data/trades", "authenticated_pagination": "cursor"},
+  "market_contract": {"exchange_type": {"source": "CLOB_ORDERBOOK_NEG_RISK", "value_required": true}, "negative_risk": {"source": "CLOB_ORDERBOOK_OR_MARKET_INFO", "value_required": true}, "tick_size": {"source": "CLOB_MARKET_INFO", "value_required": true}, "minimum_order_size": {"source": "CLOB_MARKET_INFO", "value_required": true}, "fee_schedule": {"source": "CLOB_MARKET_INFO", "snapshot_hash_required": true}, "reward_schedule": {"source": "CLOB_MARKET_INFO", "snapshot_hash_required": true}, "taker_delay": {"source": "CLOB_MARKET_INFO", "snapshot_hash_required": true}, "settlement_rule": {"source": "PER_MARKET_ARCHIVED_SOURCE", "oracle_hash_required": true, "rule_hash_required": true}, "market_websocket": {"endpoint": "wss://ws-subscriptions-clob.polymarket.com/ws/market", "schema_hash_required": true}, "rate_limit": {"source": "RESPONSE_HEADERS", "tier_header": "Poly-RateLimit-Tier", "tier_required": true}},
+  "data_api": {"activity_endpoint": "https://data-api.polymarket.com/activity", "activity_pagination": "offset", "activity_timestamp_windows_required": true, "activity_sort_by": "TIMESTAMP", "activity_sort_direction": "ASC", "activity_max_limit": 500},
   "market_constraints": {"fee_source_required": true, "tick_size_source_required": true, "minimum_order_size_source_required": true, "settlement_rule_hash_required": true, "websocket_schema_hash_required": true, "rate_limit_source_required": true}
 }

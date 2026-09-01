@@ -22,6 +22,7 @@ from typing import Any
 SCHEMA = "polymarket_v7_security_audit_v1"
 LIVE_CAPS_PATH = "config/v7_live_caps_zero.json"
 SCANNER_PATH = "scripts/v7_secret_scan.py"
+ENTROPY_SCANNER_PATH = "scripts/v7_entropy_secret_scan.py"
 
 
 class SecurityAuditError(ValueError):
@@ -44,6 +45,20 @@ def _scanner() -> Any:
     spec = importlib.util.spec_from_file_location(name, Path(__file__).with_name("v7_secret_scan.py"))
     if spec is None or spec.loader is None:
         raise SecurityAuditError("secret_scanner_unavailable")
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[name] = module
+    spec.loader.exec_module(module)
+    return module
+
+
+def _entropy_scanner() -> Any:
+    name = "v7_entropy_secret_scan_for_security_audit"
+    module = sys.modules.get(name)
+    if module is not None:
+        return module
+    spec = importlib.util.spec_from_file_location(name, Path(__file__).with_name("v7_entropy_secret_scan.py"))
+    if spec is None or spec.loader is None:
+        raise SecurityAuditError("entropy_scanner_unavailable")
     module = importlib.util.module_from_spec(spec)
     sys.modules[name] = module
     spec.loader.exec_module(module)
@@ -78,18 +93,23 @@ def _zero_live_caps(path: Path) -> bool:
     return bool(caps) and all(not isinstance(value, bool) and isinstance(value, int) and value == 0 for value in caps)
 
 
-def audit(root: Path, *, now: datetime | None = None, secret_report: dict[str, Any] | None = None) -> dict[str, Any]:
+def audit(root: Path, *, now: datetime | None = None, secret_report: dict[str, Any] | None = None,
+          entropy_report: dict[str, Any] | None = None) -> dict[str, Any]:
     root = Path(root).resolve()
     caps_path = root / LIVE_CAPS_PATH
     scanner_path = root / SCANNER_PATH
-    if not caps_path.is_file() or not scanner_path.is_file():
+    entropy_scanner_path = root / ENTROPY_SCANNER_PATH
+    if not caps_path.is_file() or not scanner_path.is_file() or not entropy_scanner_path.is_file():
         raise SecurityAuditError("required_security_source_missing")
     now = now or datetime.now(timezone.utc)
     if now.tzinfo is None:
         raise SecurityAuditError("audit_timestamp_timezone_required")
     scan = _redacted_scan(secret_report if secret_report is not None else _scanner().report(root, include_history=True))
+    entropy_scan = _redacted_scan(
+        entropy_report if entropy_report is not None else _entropy_scanner().report(root, include_history=True)
+    )
     caps_zero = _zero_live_caps(caps_path)
-    finding_free = scan["finding_count"] == 0
+    finding_free = scan["finding_count"] == 0 and entropy_scan["finding_count"] == 0
     # These controls cannot be proven from a public checkout.  Never infer them
     # from a green scanner or a safe checked-in default.
     external_controls = {
@@ -99,7 +119,10 @@ def audit(root: Path, *, now: datetime | None = None, secret_report: dict[str, A
     }
     reasons: list[str] = []
     if not finding_free:
-        reasons.append("historical_or_worktree_secret_scan_findings")
+        if scan["finding_count"]:
+            reasons.append("historical_or_worktree_pattern_secret_scan_findings")
+        if entropy_scan["finding_count"]:
+            reasons.append("historical_or_worktree_entropy_secret_scan_findings")
     if not caps_zero:
         reasons.append("checked_in_live_caps_not_zero")
     reasons.extend(sorted(key for key, value in external_controls.items() if value != "VERIFIED"))
@@ -107,9 +130,11 @@ def audit(root: Path, *, now: datetime | None = None, secret_report: dict[str, A
         "schema": SCHEMA,
         "audit_timestamp": now.astimezone(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z"),
         "inputs": {
-            "secret_scan": scan,
+            "pattern_secret_scan": scan,
+            "entropy_secret_scan": entropy_scan,
             "live_caps_sha256": _sha256(caps_path),
             "secret_scanner_sha256": _sha256(scanner_path),
+            "entropy_scanner_sha256": _sha256(entropy_scanner_path),
         },
         "checked_in_live_caps_zero": caps_zero,
         "external_controls": external_controls,
@@ -118,6 +143,7 @@ def audit(root: Path, *, now: datetime | None = None, secret_report: dict[str, A
         "state": "SECURITY_BLOCKED" if not finding_free or not caps_zero else "MORE_EVIDENCE_REQUIRED",
         "commands": [
             "python3 scripts/v7_secret_scan.py --repository-root . --history --fail-on-findings",
+            "python3 scripts/v7_entropy_secret_scan.py --repository-root . --history --fail-on-findings",
             "python3 scripts/v7_security_audit.py --repository-root .",
         ],
     }

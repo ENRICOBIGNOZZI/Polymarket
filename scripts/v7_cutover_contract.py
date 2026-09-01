@@ -10,6 +10,7 @@ from pathlib import Path, PurePosixPath
 from typing import Any
 
 from v7_polymarket_v2_contracts import ContractRegistryError, load as load_v2_contract_registry
+from v7_platform_drift_monitor import DriftError, load as load_platform_contract, validate_registry as validate_platform_contract
 
 SHA40 = re.compile(r"^[0-9a-f]{40}$")
 REQUIRED_COSTS = {"fee", "slippage", "unwind_loss", "capital_cost", "latency_cost"}
@@ -112,13 +113,27 @@ def validate(root: Path, expected_head: str | None) -> dict[str, str]:
         "scripts/v7_osint_mapping_collector.py",
         "scripts/v7_learned_execution_model.py",
         "scripts/v7_polymarket_v2_contracts.py",
+        "scripts/v7_platform_drift_monitor.py",
+        "scripts/v7_platform_contract_archive.py",
         "scripts/v7_real_pnl_evidence.py",
+        "scripts/v7_session_registry.py",
         "scripts/v7_execution_provenance.py",
+        "scripts/v7_dataset_manifest.py",
+        "scripts/v7_maker_probe_design.py",
+        "scripts/v7_simulator_calibration_support.py",
+        "scripts/v7_scenario_risk.py",
+        "scripts/v7_regional_shootout.py",
+        "scripts/v7_implementation_audit.py",
+        "scripts/v7_experiment_registry.py",
+        "scripts/v7_experiment_scheduler.py",
+        "scripts/v7_protocol_fuzz.py",
+        "scripts/v7_replay_parity.py",
         "scripts/v7_real_pnl_verifier.py",
         "scripts/v7_real_pnl_scorecard.py",
         "scripts/v7_generate_pnl_attestation.py",
         "scripts/v7_verify_pnl_attestation.py",
         "scripts/v7_secret_scan.py",
+        "scripts/v7_entropy_secret_scan.py",
         "scripts/v7_security_audit.py",
         "scripts/v7_current_truth_audit.py",
         "scripts/v7_release_provenance.py",
@@ -132,8 +147,17 @@ def validate(root: Path, expected_head: str | None) -> dict[str, str]:
         "schemas/v7/pnl_attestation.schema.json",
         "schemas/v7/public_pnl_attestation.schema.json",
         "schemas/v7/attestation_trust.schema.json",
+        "schemas/v7/experiment.schema.json",
+        "schemas/v7/experiment_run.schema.json",
+        "schemas/v7/simulator_calibration_support.schema.json",
+        "schemas/v7/scenario_risk.schema.json",
         "schemas/v7/world_class_scorecard.schema.json",
+        "schemas/v7/platform_contract.schema.json",
+        "schemas/v7/platform_contract_archive.schema.json",
+        "schemas/v7/session_registry.schema.json",
+        "schemas/v7/replay_parity.schema.json",
         "config/v7_polymarket_v2_contracts.json",
+        "config/v7_platform_contract.json",
         "config/v7_runtime_supervision.json",
         "config/v7_strategy_registry.json",
         "config/v7_live_model_scope.json",
@@ -267,6 +291,7 @@ def validate(root: Path, expected_head: str | None) -> dict[str, str]:
         fail("V7 cutover blocked: real-PnL economic scorecard is required")
     if v7.get("pre_canary_security") != {
             "full_history_secret_scan_required": True,
+            "full_history_entropy_secret_scan_required": True,
             "findings_must_equal": 0,
             "remediation_evidence_required": True}:
         fail("V7 cutover blocked: pre-canary secret-remediation contract invalid")
@@ -274,6 +299,10 @@ def validate(root: Path, expected_head: str | None) -> dict[str, str]:
         load_v2_contract_registry(root / "config/v7_polymarket_v2_contracts.json")
     except ContractRegistryError as exc:
         fail(f"V7 cutover blocked: invalid CLOB V2/pUSD contract registry: {exc}")
+    try:
+        validate_platform_contract(load_platform_contract(root / "config/v7_platform_contract.json"))
+    except DriftError as exc:
+        fail(f"V7 cutover blocked: invalid platform-contract registry: {exc}")
 
     runtime_supervision = load_json(root / "config/v7_runtime_supervision.json")
     if (runtime_supervision.get("schema") != "polymarket_v7_runtime_supervision_v1"

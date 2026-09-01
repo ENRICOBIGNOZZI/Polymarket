@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <chrono>
+#include <cctype>
 #include <cstdint>
 #include <cstdlib>
 #include <iostream>
@@ -15,6 +16,8 @@ namespace {
 
 struct Options {
     std::string endpoint = "https://clob.polymarket.com/time";
+    std::string region;
+    std::string exact_code_sha;
     std::size_t samples = 120;
     std::size_t warmup = 3;
     std::int64_t interval_ms = 500;
@@ -42,6 +45,12 @@ struct Options {
     return static_cast<std::int64_t>(value);
 }
 
+[[nodiscard]] bool exact_sha(std::string_view value) noexcept {
+    return value.size() == 40 && std::all_of(value.begin(), value.end(), [](unsigned char character) {
+        return std::isdigit(character) != 0 || (character >= 'a' && character <= 'f');
+    });
+}
+
 Options options(int argc, char** argv) {
     Options out;
     for (int i = 1; i < argc; ++i) {
@@ -51,6 +60,8 @@ Options options(int argc, char** argv) {
             return argv[i];
         };
         if (argument == "--endpoint") out.endpoint = next();
+        else if (argument == "--region") out.region = next();
+        else if (argument == "--exact-code-sha") out.exact_code_sha = next();
         else if (argument == "--samples") out.samples = static_cast<std::size_t>(integer(next(), "samples"));
         else if (argument == "--warmup") out.warmup = static_cast<std::size_t>(integer(next(), "warmup"));
         else if (argument == "--interval-ms") out.interval_ms = integer(next(), "interval-ms");
@@ -59,6 +70,10 @@ Options options(int argc, char** argv) {
     if (!approved_endpoint(out.endpoint)) {
         throw std::runtime_error("latency probe endpoint must be HTTPS on polymarket.com");
     }
+    if (out.region.empty() || out.region.find_first_of("\"\\\r\n") != std::string::npos) {
+        throw std::runtime_error("region is required");
+    }
+    if (!exact_sha(out.exact_code_sha)) throw std::runtime_error("exact-code-sha must be lowercase SHA-1");
     if (out.samples == 0 || out.samples > 1'000'000) throw std::runtime_error("samples out of range");
     return out;
 }
@@ -86,11 +101,15 @@ void emit_distribution(const char* name, const std::vector<std::int64_t>& values
 int main(int argc, char** argv) {
     try {
         const Options cfg = options(argc, argv);
+        const auto started = std::chrono::system_clock::now();
         pm::HttpClient client;
+        std::size_t warmup_failed = 0;
         for (std::size_t i = 0; i < cfg.warmup; ++i) {
-            const auto response = client.get(cfg.endpoint);
-            if (response.status < 200 || response.status >= 400) {
-                throw std::runtime_error("warmup returned HTTP " + std::to_string(response.status));
+            try {
+                const auto response = client.get(cfg.endpoint);
+                if (response.status < 200 || response.status >= 400) ++warmup_failed;
+            } catch (const std::exception&) {
+                ++warmup_failed;
             }
         }
 
@@ -102,33 +121,51 @@ int main(int argc, char** argv) {
         for (auto* series : {&dns, &tcp, &tls, &first_byte, &total}) series->reserve(cfg.samples);
         std::size_t reused = 0;
         std::size_t new_connections = 0;
+        std::size_t failed = 0;
         std::string primary_ip;
         for (std::size_t i = 0; i < cfg.samples; ++i) {
-            const auto response = client.get(cfg.endpoint);
-            if (response.status < 200 || response.status >= 400) {
-                throw std::runtime_error("probe returned HTTP " + std::to_string(response.status));
+            try {
+                const auto response = client.get(cfg.endpoint);
+                if (response.status < 200 || response.status >= 400) {
+                    ++failed;
+                } else {
+                    dns.push_back(response.timings.dns_ns);
+                    tcp.push_back(response.timings.tcp_connect_ns);
+                    tls.push_back(response.timings.tls_connect_ns);
+                    first_byte.push_back(response.timings.first_byte_ns);
+                    total.push_back(response.timings.total_ns);
+                    reused += response.timings.connection_reused ? 1U : 0U;
+                    new_connections += static_cast<std::size_t>(
+                        std::max<long>(0, response.timings.new_connections));
+                    if (!response.timings.primary_ip.empty()) primary_ip = response.timings.primary_ip;
+                }
+            } catch (const std::exception&) {
+                ++failed;
             }
-            dns.push_back(response.timings.dns_ns);
-            tcp.push_back(response.timings.tcp_connect_ns);
-            tls.push_back(response.timings.tls_connect_ns);
-            first_byte.push_back(response.timings.first_byte_ns);
-            total.push_back(response.timings.total_ns);
-            reused += response.timings.connection_reused ? 1U : 0U;
-            new_connections += static_cast<std::size_t>(
-                std::max<long>(0, response.timings.new_connections));
-            if (!response.timings.primary_ip.empty()) primary_ip = response.timings.primary_ip;
             if (cfg.interval_ms > 0 && i + 1 < cfg.samples) {
                 std::this_thread::sleep_for(std::chrono::milliseconds(cfg.interval_ms));
             }
         }
+        if (total.empty()) throw std::runtime_error("probe had no successful samples");
+        const auto finished = std::chrono::system_clock::now();
+        const auto started_ms = std::chrono::duration_cast<std::chrono::milliseconds>(started.time_since_epoch()).count();
+        const auto finished_ms = std::chrono::duration_cast<std::chrono::milliseconds>(finished.time_since_epoch()).count();
 
         std::cout << "{\"schema\":\"polymarket_v7_regional_latency_probe_v1\""
                   << ",\"endpoint\":\"" << cfg.endpoint << "\""
+                  << ",\"region\":\"" << cfg.region << "\""
+                  << ",\"exact_code_sha\":\"" << cfg.exact_code_sha << "\""
+                  << ",\"started_wall_ms\":" << started_ms
+                  << ",\"finished_wall_ms\":" << finished_ms
                   << ",\"samples\":" << cfg.samples
                   << ",\"warmup\":" << cfg.warmup
+                  << ",\"successful_samples\":" << total.size()
+                  << ",\"failed_samples\":" << failed
+                  << ",\"warmup_failed_samples\":" << warmup_failed
                   << ",\"primary_ip\":\"" << primary_ip << "\""
                   << ",\"connection_reused_samples\":" << reused
                   << ",\"new_connections\":" << new_connections
+                  << ",\"reconnect_count\":" << (new_connections > 0 ? new_connections - 1 : 0)
                   << ",\"timings_ns\":{";
         emit_distribution("dns", dns);
         std::cout << ',';

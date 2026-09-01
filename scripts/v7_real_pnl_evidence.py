@@ -28,6 +28,7 @@ SOURCES = frozenset({"CLOB_USER_WS", "CLOB_USER_TRADES", "CLOB_USER_ORDERS", "DA
 USER_WS_ENDPOINT = "wss://ws-subscriptions-clob.polymarket.com/ws/user"
 USER_WS_HOST = "ws-subscriptions-clob.polymarket.com"
 CLOB_REST_HOST = "clob.polymarket.com"
+CLOB_REST_PATHS = {"CLOB_USER_ORDERS": "/data/orders", "CLOB_USER_TRADES": "/data/trades"}
 USER_WS_WIRE_SCHEMA = "polymarket_v7_clob_user_ws_wire_v2"
 USER_WS_MAX_BYTES = 1_000_000
 SOURCE_RULES = {
@@ -277,6 +278,23 @@ class EvidenceRecord:
         encoded = canonical_bytes(self.response)
         if not encoded:
             raise EvidenceError("response:invalid")
+        if self.source in CLOB_REST_PATHS:
+            expected_query = {"session_key_id_hash", "capture_start_ts_ms", "capture_end_ts_ms", "cursor", "limit"}
+            if (parsed.path != CLOB_REST_PATHS[self.source] or parsed.query or set(self.query) != expected_query
+                    or not SHA256_RE.fullmatch(self.query["session_key_id_hash"])
+                    or any(not self.query[field].isdigit() or int(self.query[field]) <= 0
+                           for field in ("capture_start_ts_ms", "capture_end_ts_ms", "limit"))
+                    or int(self.query["capture_end_ts_ms"]) <= int(self.query["capture_start_ts_ms"])
+                    or not self.query["cursor"]):
+                raise EvidenceError("clob_rest:request_shape")
+            if (not isinstance(self.response, dict) or set(self.response) != {"limit", "next_cursor", "count", "data"}
+                    or isinstance(self.response["limit"], bool) or not isinstance(self.response["limit"], int)
+                    or self.response["limit"] != int(self.query["limit"])
+                    or isinstance(self.response["count"], bool) or not isinstance(self.response["count"], int)
+                    or self.response["count"] < 0 or not isinstance(self.response["next_cursor"], str)
+                    or not isinstance(self.response["data"], list) or self.response["count"] != len(self.response["data"])
+                    or self.response["count"] > self.response["limit"]):
+                raise EvidenceError("clob_rest:response_shape")
         if self.source == "CLOB_USER_WS":
             if not isinstance(self.response, dict) or set(self.response) != {
                     "schema", "wire_json", "wire_sha256", "event"}:

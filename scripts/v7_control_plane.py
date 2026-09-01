@@ -19,6 +19,11 @@ REQUIRED_MODES = {"RESEARCH_ZERO_AUTHORITY", "PAPER_SIMULATED", "SHADOW_LIVE_REA
 CAPABILITY_KEYS = {"public_ingress", "paper_orders", "authenticated_read", "signing", "submit_orders", "cancel_orders", "authoritative_pnl"}
 RISK_TIERS = {"RESEARCH": "RESEARCH_ZERO_AUTHORITY", "PAPER": "PAPER_SIMULATED", "MICRO_LIVE": "MICRO_LIVE", "LIVE_RESTRICTED": "LIVE_RESTRICTED", "LIVE_SCALED": "LIVE_SCALED"}
 RISK_LIMIT_KEYS = {"allowed_mode", "maximum_order_base_units", "maximum_gross_exposure_base_units", "maximum_event_loss_base_units", "maximum_daily_loss_base_units", "maximum_open_order_count"}
+DEPRECATED_CONTROL_ARTIFACTS = (
+    Path("schemas") / "v7" / ("approval" + "_envelope.schema.json"),
+    Path("scripts") / ("v7_" + "approval" + "_envelope.py"),
+    Path("tests") / ("test_v7_" + "approval" + "_envelope.py"),
+)
 class ControlPlaneError(ValueError):
     pass
 
@@ -105,13 +110,18 @@ def validate_claim_registry(value: dict[str, Any]) -> None:
         raise ControlPlaneError("claims:world_class_must_require_real_pnl")
 
 
+def validate_deprecated_control_artifacts_absent(root: Path) -> None:
+    if any((root / path).exists() for path in DEPRECATED_CONTROL_ARTIFACTS):
+        raise ControlPlaneError("deprecated_control_artifact_present")
+
+
 def validate_control_manifest(value: dict[str, Any], modes: dict[str, Any]) -> None:
-    required = {"schema_version", "exact_code_sha", "build_manifest_hash", "config_bundle_hash", "strategy_registry_hash", "model_registry_hash", "policy_hash", "dataset_manifest_hash", "approval_envelope_hash", "execution_mode", "wallet_id_hash", "signer_session_id_hash", "server_id", "region", "run_id", "start_time"}
+    required = {"schema_version", "exact_code_sha", "build_manifest_hash", "config_bundle_hash", "strategy_registry_hash", "model_registry_hash", "policy_hash", "dataset_manifest_hash", "execution_mode", "wallet_id_hash", "signer_session_id_hash", "server_id", "region", "run_id", "start_time"}
     if set(value) != required or value.get("schema_version") != 1:
         raise ControlPlaneError("manifest:schema")
     if not isinstance(value["exact_code_sha"], str) or not SHA1_RE.fullmatch(value["exact_code_sha"]):
         raise ControlPlaneError("manifest:exact_code_sha")
-    for key in {"build_manifest_hash", "config_bundle_hash", "strategy_registry_hash", "model_registry_hash", "policy_hash", "dataset_manifest_hash", "approval_envelope_hash", "wallet_id_hash", "signer_session_id_hash"}:
+    for key in {"build_manifest_hash", "config_bundle_hash", "strategy_registry_hash", "model_registry_hash", "policy_hash", "dataset_manifest_hash", "wallet_id_hash", "signer_session_id_hash"}:
         if not isinstance(value[key], str) or not SHA256_RE.fullmatch(value[key]):
             raise ControlPlaneError(f"manifest:{key}")
     mode = value["execution_mode"]
@@ -133,6 +143,7 @@ def validate_repository(root: Path, manifest: Path | None = None) -> dict[str, s
     validate_risk_tiers(risk_tiers)
     validate_attestation_trust(attestation_trust)
     validate_claim_registry(claims)
+    validate_deprecated_control_artifacts_absent(root)
     paper = load_json(root / "config/paper_v7.json")
     v7 = paper.get("v7")
     if not isinstance(v7, dict) or any(v7.get(key) is not expected for key, expected in {"paper_only": True, "authenticated_execution": False, "real_order_submission": False}.items()):

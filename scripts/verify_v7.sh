@@ -5,6 +5,16 @@ set -euo pipefail
 REPOSITORY_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$REPOSITORY_ROOT"
 
+# A Git commit SHA identifies only a committed source tree.  Building from a
+# dirty checkout and then labelling the resulting manifest with HEAD would
+# falsely create exact-SHA provenance.  Refuse before compiling or emitting
+# any artifact, including when the only divergence is an untracked source.
+if [[ -n "$(git status --porcelain=v1 --untracked-files=all)" ]]; then
+  echo "verify_v7: exact-SHA verification requires a clean worktree" >&2
+  exit 2
+fi
+echo "verify_v7: clean-worktree exact-SHA provenance passed"
+
 BUILD_ROOT="${V7_VERIFY_BUILD_ROOT:-$REPOSITORY_ROOT/build-verify-v7}"
 RELEASE_BUILD="$BUILD_ROOT/Release"
 DEBUG_BUILD="$BUILD_ROOT/Debug"
@@ -93,6 +103,7 @@ PY
 python3 tests/test_v7_repository_shape.py
 python3 tests/test_v7_single_writer_contract.py
 python3 -m unittest discover -s tests -p 'test_v7_*manifest.py'
+python3 scripts/v7_protocol_fuzz.py --iterations "${V7_PROTOCOL_FUZZ_ITERATIONS:-5000}"
 python3 scripts/v7_convergence_audit.py --repository-root . >/dev/null
 
 cmake -S . -B "$RELEASE_BUILD" -DCMAKE_BUILD_TYPE=Release
@@ -138,7 +149,13 @@ if [[ "${V7_VERIFY_SANITIZERS:-0}" == "1" ]]; then
     -DCMAKE_CXX_FLAGS="-fsanitize=address,undefined -fno-omit-frame-pointer" \
     -DCMAKE_EXE_LINKER_FLAGS="-fsanitize=address,undefined"
   cmake --build "$SANITIZER_BUILD" --parallel "$JOBS"
-  ASAN_OPTIONS=detect_leaks=1 UBSAN_OPTIONS=halt_on_error=1 \
+  # AppleClang's ASan runtime does not implement LeakSanitizer. Keep leak
+  # detection enabled on Linux CI while still running ASan/UBSan locally.
+  asan_options="detect_leaks=1"
+  if [[ "$(uname -s)" == "Darwin" ]]; then
+    asan_options="detect_leaks=0"
+  fi
+  ASAN_OPTIONS="$asan_options" UBSAN_OPTIONS=halt_on_error=1 \
     ctest --test-dir "$SANITIZER_BUILD" --output-on-failure
 fi
 

@@ -12,11 +12,12 @@ void test_425_backoff_then_two_minute_post_only_recovery() {
     assert(gate.snapshot().mode == pm::v7::ClobV2VenueMode::RestartBackoff);
     assert(!gate.admit(pm::v7::ClobV2Action::NewOrder, true, 1'001));
     assert(gate.admit(pm::v7::ClobV2Action::Cancel, false, 1'001));
-    assert(gate.observe_engine_recovered(2'000));
+    assert(!gate.observe_engine_recovered(2'000));
+    assert(gate.observe_engine_recovered(1'000'001'000LL));
     assert(gate.snapshot().mode == pm::v7::ClobV2VenueMode::PostOnlyRecovery);
-    assert(!gate.admit(pm::v7::ClobV2Action::NewOrder, false, 2'001));
-    assert(gate.admit(pm::v7::ClobV2Action::NewOrder, true, 2'001));
-    assert(gate.admit(pm::v7::ClobV2Action::NewOrder, false, 120'000'002'000LL));
+    assert(!gate.admit(pm::v7::ClobV2Action::NewOrder, false, 1'000'001'001LL));
+    assert(gate.admit(pm::v7::ClobV2Action::NewOrder, true, 1'000'001'001LL));
+    assert(gate.admit(pm::v7::ClobV2Action::NewOrder, false, 121'000'001'000LL));
 }
 
 void test_cancel_only_and_reconciliation_are_fail_closed_for_new_orders() {

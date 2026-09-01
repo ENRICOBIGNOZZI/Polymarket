@@ -19,16 +19,24 @@ class LiveCapabilityTests(unittest.TestCase):
         capability.validate_checked_in_config(config)
 
     def test_full_history_secret_findings_block_pre_canary_use(self) -> None:
-        with self.assertRaisesRegex(capability.LiveCapabilityError, "secret_scan_not_clean"):
+        with self.assertRaisesRegex(capability.LiveCapabilityError, "pattern_scan_not_clean"):
             capability.validate_pre_canary_security(ROOT)
 
     def test_security_summary_has_no_credential_or_approval_fields(self) -> None:
-        summary = capability.security_summary({"safe_for_authenticated_execution": True})
+        summary = capability.security_summary({
+            "pattern": {"safe_for_authenticated_execution": True},
+            "entropy": {"safe_for_authenticated_execution": True},
+        })
         self.assertEqual(summary, {
             "schema": "polymarket_v7_pre_canary_security_summary_v1",
             "paper_only": True,
-            "full_history_secret_scan_clean": True,
+            "full_history_pattern_secret_scan_clean": True,
+            "full_history_entropy_secret_scan_clean": True,
         })
+
+    def test_security_summary_rejects_missing_entropy_evidence(self) -> None:
+        with self.assertRaisesRegex(capability.LiveCapabilityError, "scans_not_clean"):
+            capability.security_summary({"pattern": {"safe_for_authenticated_execution": True}})
 
 
 if __name__ == "__main__":

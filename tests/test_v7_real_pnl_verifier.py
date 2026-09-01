@@ -83,7 +83,8 @@ class RealPnlVerifierTests(unittest.TestCase):
     def complete_journal(self, root: Path, *, trade_metadata_override: dict | None = None,
                          provenance_lineage_id: str = "order-1",
                          acceptance_event_type: str = "PLACEMENT",
-                         trade_status: str = "TRADE_STATUS_CONFIRMED") -> tuple[Path, Path, Path]:
+                         trade_status: str = "TRADE_STATUS_CONFIRMED",
+                         include_clob_rest: bool = True) -> tuple[Path, Path, Path]:
         evidence_path = evidence.evidence_path(root)
         with evidence.EvidenceTapeWriter(evidence_path, writer_id="test", model_sha=SHA) as writer:
             wallet = writer.append(evidence.EvidenceRecord(
@@ -123,12 +124,30 @@ class RealPnlVerifierTests(unittest.TestCase):
                     "feeRateBps": "0", "timestamp": 1782753357257,
                 },
             }, separators=(",", ":"))))
+            if include_clob_rest:
+                writer.append(evidence.EvidenceRecord(
+                    model_sha=SHA, source="CLOB_USER_ORDERS", source_record_id="orders-page-0",
+                    received_ts_ms=3, request_method="GET", endpoint="https://clob.polymarket.com/data/orders",
+                    query={"session_key_id_hash": "a" * 64, "capture_start_ts_ms": "1",
+                           "capture_end_ts_ms": "10", "cursor": "INITIAL", "limit": "100"},
+                    response={"limit": 100, "next_cursor": "", "count": 0, "data": []},
+                    authenticated_read=True,
+                ))
+                writer.append(evidence.EvidenceRecord(
+                    model_sha=SHA, source="CLOB_USER_TRADES", source_record_id="trades-page-0",
+                    received_ts_ms=3, request_method="GET", endpoint="https://clob.polymarket.com/data/trades",
+                    query={"session_key_id_hash": "a" * 64, "capture_start_ts_ms": "1",
+                           "capture_end_ts_ms": "10", "cursor": "INITIAL", "limit": "100"},
+                    response={"limit": 100, "next_cursor": "", "count": 0, "data": []},
+                    authenticated_read=True,
+                ))
             data = writer.append(evidence.EvidenceRecord(
                 model_sha=SHA, source="DATA_API_ACTIVITY", source_record_id="data-redeem-1",
                 received_ts_ms=3, request_method="GET", endpoint="https://data-api.polymarket.com/activity",
-                query={"user": "0x" + "12" * 20, "offset": "0", "limit": "100",
-                       "excludeDepositsWithdrawals": "false"},
-                response=[{"type": "REDEEM", "transactionHash": "0x" + "ee" * 32, "timestamp": 3}],
+                query={"user": "0x" + "12" * 20, "offset": "0", "limit": "100", "start": "1", "end": "10",
+                       "sortBy": "TIMESTAMP", "sortDirection": "ASC"},
+                response=[{"type": "REDEEM", "transactionHash": "0x" + "ee" * 32,
+                           "asset": "123", "outcomeIndex": 0, "timestamp": 3}],
             ))
             writer.append(evidence.EvidenceRecord(
                 model_sha=SHA, source="DATA_API_POSITIONS", source_record_id="positions-final",
@@ -211,6 +230,12 @@ class RealPnlVerifierTests(unittest.TestCase):
                    if item.model_sha == SHA and item.source == "DATA_API_ACTIVITY"]
         return activity_coverage.activity_coverage(records, wallet="0x" + "12" * 20).to_dict()
 
+    def session_registry(self) -> dict:
+        return {"schema": "polymarket_v7_session_registry_v1", "model_sha": SHA,
+                "wallet_id_hash": "b" * 64, "registry_evidence_hash": "c" * 64,
+                "sessions": [{"session_key_id_hash": "a" * 64, "activated_at_ms": 1,
+                              "retired_at_ms": None, "registration_evidence_hash": "d" * 64}]}
+
     def test_hash_chained_double_entry_journal_reconstructs_terminal_pnl(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             path, evidence_path, provenance_path = self.complete_journal(Path(directory))
@@ -221,9 +246,11 @@ class RealPnlVerifierTests(unittest.TestCase):
             report = verifier.verify(path, model_sha=SHA, observed_balances=self.observed_snapshot(evidence_path),
                                      observed_positions=self.observed_positions(evidence_path),
                                      observed_activity_coverage=self.observed_activity_coverage(evidence_path),
-                                     evidence_path=evidence_path, provenance_path=provenance_path)
+                                     evidence_path=evidence_path, provenance_path=provenance_path,
+                                     session_registry=self.session_registry())
             self.assertEqual(report["state"], "REAL_PNL_RECONCILED_UNSIGNED")
             self.assertEqual(report["reconstructed_realized_pnl_units"], 59_999_995)
+            self.assertTrue(report["session_registry_verified"])
             attestation = verifier.attest(report, operator_id="audit-key-1", signing_key="private-test-key")
             self.assertEqual(attestation["algorithm"], "HMAC-SHA256")
             self.assertEqual(len(attestation["signature"]), 64)
@@ -233,6 +260,18 @@ class RealPnlVerifierTests(unittest.TestCase):
             }, evidence_path=evidence_path)
             self.assertEqual(missing_provenance["state"], "MORE_EVIDENCE_REQUIRED")
             self.assertIn("provenance_tape_missing", missing_provenance["reason_codes"])
+
+    def test_session_registry_must_exactly_cover_observed_clob_sessions(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            path, evidence_path, provenance_path = self.complete_journal(Path(directory))
+            registry = self.session_registry()
+            registry["sessions"][0]["session_key_id_hash"] = "e" * 64
+            with self.assertRaisesRegex(verifier.VerificationError, "session_registry_coverage"):
+                verifier.verify(path, model_sha=SHA, observed_balances=self.observed_snapshot(evidence_path),
+                                observed_positions=self.observed_positions(evidence_path),
+                                observed_activity_coverage=self.observed_activity_coverage(evidence_path),
+                                evidence_path=evidence_path, provenance_path=provenance_path,
+                                session_registry=registry)
 
     def test_clob_fill_metadata_cannot_disagree_with_immutable_v2_trade(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -244,6 +283,30 @@ class RealPnlVerifierTests(unittest.TestCase):
                                      evidence_path=evidence_path, provenance_path=provenance_path)
             self.assertEqual(report["state"], "MORE_EVIDENCE_REQUIRED")
             self.assertIn("journal_clob_fill_evidence_break", report["reason_codes"])
+
+    def test_authenticated_clob_orders_and_trades_are_required_for_real_reconciliation(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            path, evidence_path, provenance_path = self.complete_journal(Path(directory), include_clob_rest=False)
+            report = verifier.verify(path, model_sha=SHA, observed_balances=self.observed_snapshot(evidence_path),
+                                     observed_positions=self.observed_positions(evidence_path),
+                                     observed_activity_coverage=self.observed_activity_coverage(evidence_path),
+                                     evidence_path=evidence_path, provenance_path=provenance_path)
+            self.assertEqual(report["state"], "MORE_EVIDENCE_REQUIRED")
+            self.assertIn("required_independent_sources_missing", report["reason_codes"])
+
+    def test_clob_rest_page_requires_hashed_session_and_complete_ascending_window(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            path = evidence.evidence_path(Path(directory))
+            with evidence.EvidenceTapeWriter(path, writer_id="test", model_sha=SHA) as writer:
+                writer.append(evidence.EvidenceRecord(
+                    model_sha=SHA, source="CLOB_USER_ORDERS", source_record_id="bad-page",
+                    received_ts_ms=1, request_method="GET", endpoint="https://clob.polymarket.com/data/orders",
+                    query={"session_key_id_hash": "a" * 64, "capture_start_ts_ms": "1",
+                           "capture_end_ts_ms": "2", "cursor": "NOT_INITIAL", "limit": "1"},
+                    response={"limit": 1, "next_cursor": "", "count": 0, "data": []}, authenticated_read=True,
+                ))
+            with self.assertRaisesRegex(verifier.VerificationError, "clob_rest_cursor_gap"):
+                verifier._evidence_hashes(path, expected_sha=SHA)
 
     def test_fill_cannot_borrow_a_complete_provenance_lineage_from_another_order(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

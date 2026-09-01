@@ -1,0 +1,38 @@
+{
+  "schema": "polymarket_v7_world_class_status_v1",
+  "model_sha": "0000000000000000000000000000000000000000",
+  "state": "MORE_EVIDENCE_REQUIRED",
+  "world_class_candidate": false,
+  "automatic_promotion": false,
+  "reason_codes": ["real_pnl_evidence_missing"],
+  "economics": {
+    "realized_and_settled_net_pnl_base_units": null,
+    "conservative_net_pnl_base_units": null,
+    "lower_confidence_bound_base_units": null
+  },
+  "execution": {
+    "order_ack_latency": null,
+    "cancel_ack_latency": null,
+    "fill_calibration": null
+  },
+  "accounting": {
+    "unresolved_reconciliation_breaks": null,
+    "independent_verifier_reproducible": false
+  },
+  "reliability": {
+    "chaos_test_pass_rate": null,
+    "production_recovery_verified": false
+  },
+  "security": {
+    "secret_scan_clean": false,
+    "private_release_governance_verified": false
+  },
+  "evidence": {
+    "real_pnl_scorecard_sha256": null,
+    "execution_evidence_sha256": null,
+    "data_research_audit_sha256": null,
+    "reliability_evidence_sha256": null,
+    "security_audit_sha256": null,
+    "benchmark_methodology_sha256": null
+  }
+}

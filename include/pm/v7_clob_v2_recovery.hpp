@@ -70,7 +70,8 @@ public:
     // two-minute post-only period. Reconciliation is still required separately
     // if private order state was interrupted.
     [[nodiscard]] bool observe_engine_recovered(std::int64_t now_ns) noexcept {
-        if (!valid_now(now_ns) || snapshot_.mode != ClobV2VenueMode::RestartBackoff) return false;
+        if (!valid_now(now_ns) || snapshot_.mode != ClobV2VenueMode::RestartBackoff
+            || now_ns < snapshot_.retry_after_ns) return false;
         snapshot_.mode = ClobV2VenueMode::PostOnlyRecovery;
         snapshot_.retry_after_ns = 0;
         snapshot_.post_only_until_ns = now_ns + policy_.post_restart_post_only_ns;

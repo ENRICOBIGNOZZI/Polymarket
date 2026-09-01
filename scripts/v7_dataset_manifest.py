@@ -12,8 +12,10 @@ import csv
 import gzip
 import hashlib
 import json
+import os
 import re
 import sys
+import uuid
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Iterable
@@ -101,8 +103,27 @@ def _display_path(path: Path, base: Path) -> str:
     resolved = path.resolve()
     try:
         return resolved.relative_to(base.resolve()).as_posix()
-    except ValueError:
-        return resolved.as_posix()
+    except ValueError as exc:
+        raise ManifestError(f"source:{path}:outside_base_path") from exc
+
+
+def _safe_manifest_path(base: Path, value: Any, field: str) -> Path:
+    if not isinstance(value, str) or not value:
+        raise ManifestError(f"{field}:path_invalid")
+    relative = Path(value)
+    if relative.is_absolute() or ".." in relative.parts or relative == Path("."):
+        raise ManifestError(f"{field}:path_unsafe")
+    candidate = base / relative
+    current = base
+    for component in relative.parts:
+        current = current / component
+        if current.is_symlink():
+            raise ManifestError(f"{field}:path_symlink")
+    try:
+        candidate.resolve().relative_to(base.resolve())
+    except ValueError as exc:
+        raise ManifestError(f"{field}:outside_base_path") from exc
+    return candidate
 
 
 def build_manifest(
@@ -147,6 +168,8 @@ def build_manifest(
     source_entries: list[dict[str, Any]] = []
     seen: set[Path] = set()
     for raw_path in source_paths:
+        if raw_path.is_symlink():
+            raise ManifestError(f"source:{raw_path}:symlink")
         path = raw_path.resolve()
         if path in seen:
             raise ManifestError(f"source:{raw_path}:duplicate")
@@ -168,6 +191,8 @@ def build_manifest(
 
     universe: dict[str, Any] | None = None
     if universe_snapshot is not None:
+        if universe_snapshot.is_symlink():
+            raise ManifestError("universe_snapshot:symlink")
         if not universe_snapshot.is_file():
             raise ManifestError("universe_snapshot:not_a_file")
         universe = {
@@ -290,16 +315,88 @@ def validate_manifest(value: Any) -> dict[str, Any]:
     return value
 
 
+def verify_manifest_sources(value: Any, *, base_path: Path) -> dict[str, Any]:
+    """Re-read every declared immutable input and reject any byte-level drift.
+
+    Structural validation proves that a manifest did not alter itself.  This
+    verification is intentionally separate: it proves that the files named by
+    the manifest are still the exact captured inputs, without following links
+    outside the declared data-lake root.
+    """
+    manifest = validate_manifest(value)
+    base = Path(base_path).resolve()
+    if not base.is_dir() or base.is_symlink():
+        raise ManifestError("base_path:invalid")
+    verified_sources: list[str] = []
+    byte_hash_only_sources: list[str] = []
+    for source in manifest["source_files"]:
+        path = _safe_manifest_path(base, source["path"], "source")
+        if not path.is_file() or path.is_symlink():
+            raise ManifestError(f"source:{source['path']}:not_regular_file")
+        if path.stat().st_size != source["size_bytes"]:
+            raise ManifestError(f"source:{source['path']}:size_mismatch")
+        if sha256_file(path) != source["sha256"]:
+            raise ManifestError(f"source:{source['path']}:sha256_mismatch")
+        try:
+            observed_rows = infer_row_count(path)
+        except ManifestError as exc:
+            if "row_count_required_for_unknown_format" not in str(exc):
+                raise
+            byte_hash_only_sources.append(source["path"])
+        else:
+            if observed_rows != source["row_count"]:
+                raise ManifestError(f"source:{source['path']}:row_count_mismatch")
+        verified_sources.append(source["path"])
+    universe = manifest["universe_snapshot"]
+    if universe is not None:
+        universe_path = _safe_manifest_path(base, universe["path"], "universe_snapshot")
+        if not universe_path.is_file() or universe_path.is_symlink():
+            raise ManifestError("universe_snapshot:not_regular_file")
+        if sha256_file(universe_path) != universe["sha256"]:
+            raise ManifestError("universe_snapshot:sha256_mismatch")
+    return {
+        "valid": True,
+        "dataset_id": manifest["dataset_id"],
+        "manifest_sha256": manifest["manifest_sha256"],
+        "verified_source_files": verified_sources,
+        "byte_hash_only_source_files": byte_hash_only_sources,
+        "universe_snapshot_verified": universe is not None,
+    }
+
+
 def immutable_write(path: Path, value: dict[str, Any]) -> None:
     payload = canonical_bytes(value) + b"\n"
+    path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
+    if path.parent.is_symlink() or not path.parent.is_dir():
+        raise ManifestError("output:parent_invalid")
+    if path.is_symlink():
+        raise ManifestError("output:symlink")
     if path.exists():
         if path.read_bytes() != payload:
             raise ManifestError("output:immutable_path_collision")
         return
-    temporary = path.with_name(path.name + ".tmp")
-    temporary.write_bytes(payload)
-    temporary.replace(path)
+    temporary = path.with_name(f".{path.name}.{uuid.uuid4().hex}.tmp")
+    flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL
+    flags |= getattr(os, "O_NOFOLLOW", 0)
+    try:
+        descriptor = os.open(temporary, flags, 0o444)
+        with os.fdopen(descriptor, "wb") as handle:
+            handle.write(payload)
+            handle.flush()
+            os.fsync(handle.fileno())
+        try:
+            os.link(temporary, path, follow_symlinks=False)
+        except FileExistsError:
+            if path.is_symlink() or not path.is_file() or path.read_bytes() != payload:
+                raise ManifestError("output:immutable_path_collision")
+    except OSError as exc:
+        raise ManifestError("output:immutable_write_failed") from exc
+    finally:
+        try:
+            temporary.unlink()
+        except FileNotFoundError:
+            pass
 
 
 def _load(path: Path) -> Any:
@@ -329,10 +426,15 @@ def main(argv: list[str] | None = None) -> int:
     create.add_argument("--base-path", type=Path, default=Path.cwd())
     validate = subparsers.add_parser("validate", help="validate a dataset manifest")
     validate.add_argument("manifest", type=Path)
+    validate.add_argument("--verify-sources", action="store_true")
+    validate.add_argument("--base-path", type=Path, default=Path.cwd())
     args = parser.parse_args(argv)
     try:
         if args.command == "validate":
             value = validate_manifest(_load(args.manifest))
+            if args.verify_sources:
+                print(json.dumps(verify_manifest_sources(value, base_path=args.base_path), sort_keys=True))
+                return 0
             print(json.dumps({"valid": True, "dataset_id": value["dataset_id"], "manifest_sha256": value["manifest_sha256"]}, sort_keys=True))
             return 0
         value = build_manifest(

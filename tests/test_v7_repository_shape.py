@@ -192,8 +192,22 @@ class V7RepositoryShapeTest(unittest.TestCase):
         required = by_type["required_status_checks"]["parameters"]["required_status_checks"]
         self.assertEqual(
             {row["context"] for row in required},
-            {"ci-v7-Release", "ci-v7-Debug", "monitoring-v7", "single-writer-v7"},
+            {"ci-v7-Release", "ci-v7-Debug", "security-audit-v7", "sanitizer-v7", "monitoring-v7", "single-writer-v7"},
         )
+
+    def test_ci_runs_both_full_history_secret_scanners(self) -> None:
+        workflow = (ROOT / ".github/workflows/ci.yml").read_text(encoding="utf-8")
+        self.assertIn("name: security-audit-v7", workflow)
+        self.assertIn("fetch-depth: 0", workflow)
+        self.assertIn("scripts/v7_secret_scan.py --repository-root . --history --fail-on-findings", workflow)
+        self.assertIn("scripts/v7_entropy_secret_scan.py --repository-root . --history --fail-on-findings", workflow)
+
+    def test_ci_runs_address_and_undefined_behavior_sanitizers(self) -> None:
+        workflow = (ROOT / ".github/workflows/ci.yml").read_text(encoding="utf-8")
+        self.assertIn("name: sanitizer-v7", workflow)
+        self.assertIn("build-ASan-UBSan", workflow)
+        self.assertIn("-fsanitize=address,undefined", workflow)
+        self.assertIn("ASAN_OPTIONS=detect_leaks=1 UBSAN_OPTIONS=halt_on_error=1", workflow)
 
     def test_forensic_audit_classifies_every_remote_branch_and_external_blocker(self) -> None:
         audit = json.loads((ROOT / "artifacts/v7_repository_convergence_audit.json").read_text(encoding="utf-8"))

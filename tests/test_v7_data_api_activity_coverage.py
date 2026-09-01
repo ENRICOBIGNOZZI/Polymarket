@@ -24,29 +24,64 @@ coverage = load("v7_data_api_activity_coverage")
 SHA, WALLET = "1" * 40, "0x" + "12" * 20
 
 
-def pages(specs: list[tuple[int, int, list[dict]]]):
+def pages(specs: list[tuple]):
     with tempfile.TemporaryDirectory() as directory:
         path = evidence.evidence_path(Path(directory))
         with evidence.EvidenceTapeWriter(path, writer_id="test", model_sha=SHA) as writer:
-            return [writer.append(evidence.EvidenceRecord(
-                model_sha=SHA, source="DATA_API_ACTIVITY", source_record_id=f"page-{offset}", received_ts_ms=1,
-                request_method="GET", endpoint="https://data-api.polymarket.com/activity",
-                query={"user": WALLET, "offset": str(offset), "limit": str(limit),
-                       "excludeDepositsWithdrawals": "false"}, response=response,
-            )) for offset, limit, response in specs]
+            records = []
+            for spec in specs:
+                if len(spec) == 3:
+                    offset, limit, response = spec
+                    start, end = 1, 10
+                else:
+                    start, end, offset, limit, response = spec
+                records.append(writer.append(evidence.EvidenceRecord(
+                    model_sha=SHA, source="DATA_API_ACTIVITY", source_record_id=f"page-{start}-{offset}", received_ts_ms=1,
+                    request_method="GET", endpoint="https://data-api.polymarket.com/activity",
+                    query={"user": WALLET, "offset": str(offset), "limit": str(limit), "start": str(start), "end": str(end),
+                           "sortBy": "TIMESTAMP", "sortDirection": "ASC"}, response=response,
+                )))
+            return records
 
 
 class ActivityCoverageTests(unittest.TestCase):
     def test_contiguous_pages_with_terminal_short_page_are_complete(self) -> None:
-        result = coverage.activity_coverage(pages([(0, 2, [{}, {}]), (2, 2, [{}])]), wallet=WALLET)
+        result = coverage.activity_coverage(pages([(0, 2, [{"timestamp": 1}, {"timestamp": 2}]),
+                                                   (2, 2, [{"timestamp": 3}])]), wallet=WALLET)
         self.assertEqual(result.activity_count, 3)
         self.assertEqual([page["offset"] for page in result.to_dict()["pages"]], [0, 2])
 
     def test_missing_terminal_or_deposit_exclusion_fails_closed(self) -> None:
         with self.assertRaisesRegex(coverage.ActivityCoverageError, "terminal_short"):
-            coverage.activity_coverage(pages([(0, 1, [{}])]), wallet=WALLET)
+            coverage.activity_coverage(pages([(0, 1, [{"timestamp": 1}])]), wallet=WALLET)
         records = pages([(0, 2, [])])
-        altered = records[0].__class__(**{**records[0].__dict__, "query": {**records[0].query, "excludeDepositsWithdrawals": "true"}, "record_hash": None})
+        altered = records[0].__class__(**{**records[0].__dict__, "query": {**records[0].query, "sortDirection": "DESC"}, "record_hash": None})
         altered = altered.seal(records[0].previous_record_hash)
         with self.assertRaisesRegex(coverage.ActivityCoverageError, "scope"):
             coverage.activity_coverage([altered], wallet=WALLET)
+
+    def test_redeem_rows_require_distinct_outcome_identity(self) -> None:
+        rows = [{"type": "REDEEM", "transactionHash": "0xabc", "asset": "yes", "outcomeIndex": 0, "timestamp": 1},
+                {"type": "REDEEM", "transactionHash": "0xabc", "asset": "no", "outcomeIndex": 1, "timestamp": 1}]
+        self.assertEqual(coverage.activity_coverage(pages([(0, 3, rows)]), wallet=WALLET).activity_count, 2)
+        duplicate = [rows[0], dict(rows[0])]
+        with self.assertRaisesRegex(coverage.ActivityCoverageError, "duplicate_row"):
+            coverage.activity_coverage(pages([(0, 3, duplicate)]), wallet=WALLET)
+
+    def test_timestamp_windows_must_be_contiguous_and_independently_terminal(self) -> None:
+        complete = pages([
+            (1, 10, 0, 2, [{"timestamp": 1}]),
+            (11, 20, 0, 2, [{"timestamp": 11}]),
+        ])
+        result = coverage.activity_coverage(complete, wallet=WALLET)
+        self.assertEqual((result.capture_start_ts, result.capture_end_ts, result.activity_count), (1, 20, 2))
+        with self.assertRaisesRegex(coverage.ActivityCoverageError, "time_window_gap"):
+            coverage.activity_coverage(pages([
+                (1, 10, 0, 2, [{"timestamp": 1}]),
+                (12, 20, 0, 2, [{"timestamp": 12}]),
+            ]), wallet=WALLET)
+        with self.assertRaisesRegex(coverage.ActivityCoverageError, "terminal_short"):
+            coverage.activity_coverage(pages([
+                (1, 10, 0, 1, [{"timestamp": 1}]),
+                (11, 20, 0, 2, [{"timestamp": 11}]),
+            ]), wallet=WALLET)

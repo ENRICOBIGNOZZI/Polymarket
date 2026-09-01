@@ -32,6 +32,8 @@
         "required_status_checks": [
           {"context": "ci-v7-Release"},
           {"context": "ci-v7-Debug"},
+          {"context": "security-audit-v7"},
+          {"context": "sanitizer-v7"},
           {"context": "monitoring-v7"},
           {"context": "single-writer-v7"}
         ]

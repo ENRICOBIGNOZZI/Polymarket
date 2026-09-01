@@ -62,14 +62,18 @@ def trust_registry(root: Path, report: dict) -> Path:
     return path
 
 
-def write_samples(path: Path, *, report_sha: str, count: int = 30, pnl: int = 100) -> None:
+def write_samples(path: Path, *, report_sha: str, count: int = 30, pnl: int = 100,
+                  spacing_ms: int = 4 * 86_400_000, pnl_values: list[int] | None = None) -> None:
+    if pnl_values is not None:
+        count = len(pnl_values)
     tip = scorecard.GENESIS_HASH
     rows = []
     for index in range(count):
+        sample_pnl = pnl_values[index] if pnl_values is not None else pnl
         raw = {
             "model_sha": SHA, "report_sha256": report_sha, "sample_id": f"sample-{index}",
             "event_cluster": f"event-{index}", "regime": f"regime-{index % 3}",
-            "terminal_ts_ms": index + 1, "gross_pnl_units": pnl + 2, "fee_units": 1,
+            "terminal_ts_ms": index * spacing_ms + 1, "gross_pnl_units": sample_pnl + 2, "fee_units": 1,
             "slippage_units": 1, "reward_units": 0, "capital_units": 10_000,
             "capacity_tier": index % 3 + 1, "record_hash": None,
         }
@@ -128,6 +132,34 @@ class RealPnlScorecardTests(unittest.TestCase):
             with self.assertRaisesRegex(scorecard.ScorecardError, "record_hash_mismatch"):
                 scorecard.scorecard(report, samples, attestation_public_key=public_key,
                                     attestation_trust_registry=trust)
+
+    def test_short_forward_window_cannot_reach_economic_proof(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            private_key, public_key = key_pair(root)
+            report = verified_report(3_000, private_key=private_key, public_key=public_key)
+            trust = trust_registry(root, report)
+            samples = root / "samples.jsonl"
+            write_samples(samples, report_sha=report["report_sha256"], spacing_ms=1)
+            result = scorecard.scorecard(report, samples, attestation_public_key=public_key,
+                                         attestation_trust_registry=trust)
+            self.assertEqual(result["state"], "MORE_EVIDENCE_REQUIRED")
+            self.assertIn("insufficient_forward_duration", result["reason_codes"])
+
+    def test_expected_shortfall_tail_limit_is_a_hard_gate(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            private_key, public_key = key_pair(root)
+            pnl_values = [100] * 29 + [-2_000]
+            report = verified_report(sum(pnl_values), private_key=private_key, public_key=public_key)
+            trust = trust_registry(root, report)
+            samples = root / "samples.jsonl"
+            write_samples(samples, report_sha=report["report_sha256"], pnl_values=pnl_values)
+            result = scorecard.scorecard(report, samples, attestation_public_key=public_key,
+                                         attestation_trust_registry=trust)
+            self.assertEqual(result["state"], "MORE_EVIDENCE_REQUIRED")
+            self.assertLess(result["risk"]["expected_shortfall_95"], -0.05)
+            self.assertIn("expected_shortfall_limit_not_met", result["reason_codes"])
 
     def test_spliced_report_or_attestation_is_rejected(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

@@ -26,7 +26,20 @@ This removes per-request `curl_easy_init`/`curl_easy_cleanup`. It does not prove
 
 ## Regional shootout
 
-`polymarket_v7_latency_probe` performs read-only repeated GETs against an HTTPS Polymarket endpoint and reports DNS, TCP, TLS, first-byte and total p50/p90/p95/p99/p99.9/max plus connection reuse. Run the same exact SHA and configuration for 24 hours in Frankfurt, London, Amsterdam, New York and Northern Virginia.
+`polymarket_v7_latency_probe` performs read-only repeated GETs against an HTTPS Polymarket endpoint and reports DNS, TCP, TLS, first-byte and total p50/p90/p95/p99/p99.9/max plus connection reuse, failures and reconnects. Run the same exact SHA and configuration for 24 hours in Frankfurt, London, Amsterdam, New York and Northern Virginia:
+
+```text
+polymarket_v7_latency_probe --region Frankfurt --exact-code-sha <40-lowercase-hex-sha>
+python3 scripts/v7_regional_shootout.py --policy config/v7_latency_slo.json \
+  --probe frankfurt.json --probe london.json --probe amsterdam.json \
+  --probe new-york.json --probe northern-virginia.json
+```
+
+The evaluator rejects a mixed SHA, a missing candidate region, short collection
+window, inadequate samples, excessive failure/reconnect rate or malformed
+percentile distribution. It ranks healthy regions by p99.9 then p99 total
+latency, but its output is still read-only evidence and never authorizes live
+execution.
 
 The public probe cannot select a production node by itself. Final selection also requires request-to-ACK, cancel-to-ACK, user-WS confirmation, reconnect and loss measurements. Those authenticated measurements stay blocked until the operator explicitly grants that authority.
 

@@ -44,25 +44,33 @@ def validate_checked_in_config(config: dict[str, Any]) -> None:
     security = v7.get("pre_canary_security")
     if not isinstance(security, dict) or security != {
             "full_history_secret_scan_required": True,
+            "full_history_entropy_secret_scan_required": True,
             "findings_must_equal": 0,
             "remediation_evidence_required": True}:
         raise LiveCapabilityError("config:pre_canary_security_contract")
 
 
 def validate_pre_canary_security(repository_root: Path) -> dict[str, Any]:
-    """Require a fresh redacted full-history secret scan for a future canary."""
-    scanner_path = Path(__file__).with_name("v7_secret_scan.py")
-    spec = importlib.util.spec_from_file_location("v7_secret_scan_pre_canary", scanner_path)
-    if spec is None or spec.loader is None:
-        raise LiveCapabilityError("pre_canary_security:scanner_unavailable")
-    scanner = importlib.util.module_from_spec(spec)
-    sys.modules[spec.name] = scanner
-    spec.loader.exec_module(scanner)
-    result = scanner.report(Path(repository_root), include_history=True)
-    if (result.get("history_scanned") is not True or result.get("finding_count") != 0
-            or result.get("safe_for_authenticated_execution") is not True):
-        raise LiveCapabilityError("pre_canary_security:secret_scan_not_clean")
-    return result
+    """Require fresh, independent full-history scanners for a future canary."""
+    reports: dict[str, dict[str, Any]] = {}
+    scanners = (
+        ("pattern", "v7_secret_scan.py"),
+        ("entropy", "v7_entropy_secret_scan.py"),
+    )
+    for kind, filename in scanners:
+        scanner_path = Path(__file__).with_name(filename)
+        spec = importlib.util.spec_from_file_location(f"v7_{kind}_scan_pre_canary", scanner_path)
+        if spec is None or spec.loader is None:
+            raise LiveCapabilityError(f"pre_canary_security:{kind}_scanner_unavailable")
+        scanner = importlib.util.module_from_spec(spec)
+        sys.modules[spec.name] = scanner
+        spec.loader.exec_module(scanner)
+        result = scanner.report(Path(repository_root), include_history=True)
+        if (result.get("history_scanned") is not True or result.get("finding_count") != 0
+                or result.get("safe_for_authenticated_execution") is not True):
+            raise LiveCapabilityError(f"pre_canary_security:{kind}_scan_not_clean")
+        reports[kind] = result
+    return reports
 
 
 def validate_pre_canary(config_path: Path, *, repository_root: Path) -> dict[str, Any]:
@@ -71,13 +79,17 @@ def validate_pre_canary(config_path: Path, *, repository_root: Path) -> dict[str
     return validate_pre_canary_security(repository_root)
 
 
-def security_summary(scan: dict[str, Any]) -> dict[str, Any]:
-    if scan.get("safe_for_authenticated_execution") is not True:
-        raise LiveCapabilityError("security_summary:scan_not_clean")
+def security_summary(scans: dict[str, Any]) -> dict[str, Any]:
+    required = {"pattern", "entropy"}
+    if set(scans) != required or any(
+            not isinstance(scans[name], dict) or scans[name].get("safe_for_authenticated_execution") is not True
+            for name in required):
+        raise LiveCapabilityError("security_summary:scans_not_clean")
     return {
         "schema": "polymarket_v7_pre_canary_security_summary_v1",
         "paper_only": True,
-        "full_history_secret_scan_clean": True,
+        "full_history_pattern_secret_scan_clean": True,
+        "full_history_entropy_secret_scan_clean": True,
     }
 
 

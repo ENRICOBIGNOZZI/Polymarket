@@ -101,6 +101,20 @@ tape writer seals it, accepts only the current V2 `topic: user` / `type` /
 duplicate JSON keys, and therefore gives fills a direct immutable input to
 reconciliation.
 
+The independent reconciliation capture also requires the authenticated CLOB REST
+views at `/data/orders` and `/data/trades`.  Every captured page retains its
+session identity only as a hash, a closed capture-time window, the paging cursor,
+and the native response envelope (`limit`, `next_cursor`, `count`, `data`).  The
+verifier requires an uninterrupted cursor chain within each window and contiguous
+windows for each source/session. `INITIAL` is the collector's explicit first-page
+sentinel; it is evidence metadata, not a claim about an undocumented wire value.
+
+An independent real-PnL verification also requires a redacted session registry:
+every session identifier is a SHA-256 hash, tied to model SHA, activation window,
+and external registration-evidence hash. It must exactly equal the set observed
+in the authenticated orders and trades captures, with both feeds complete for
+each session. The registry stores neither credentials nor raw session IDs.
+
 `scripts/v7_clob_v2_journal.py` then derives a balanced `TRADE_FILL` entry
 directly from a sealed trade event: pUSD cash and ERC-1155 outcome units are
 converted with `Decimal` to exact six-decimal base units, with explicit CLOB
@@ -163,11 +177,15 @@ page into exact six-decimal outcome-token balances. The verifier independently
 reparses that page and requires it to match the terminal ledger inventory, in
 addition to the direct wallet snapshot.
 
-`scripts/v7_data_api_activity_coverage.py` requires a contiguous `/activity`
-page sequence from offset zero through a short terminal page, explicitly with
-deposits and withdrawals included. The verifier reparses that manifest before
-granting a reconciled PnL state, preventing a selectively collected Activity
-page from standing in for full cash-flow coverage.
+`scripts/v7_data_api_activity_coverage.py` requires contiguous, non-overlapping
+ascending `/activity` timestamp windows, each paged from offset zero through a
+short terminal page. It rejects duplicate rows and requires every REDEEM row to
+retain distinct transaction, outcome-token and outcome-index identity. The
+verifier reparses that manifest before granting a reconciled PnL state,
+preventing a selectively collected Activity page from standing in for complete
+activity coverage. Deposits and withdrawals are independently reconstructed
+from wallet and Polygon evidence; omitted Activity fields are never treated as
+zero.
 
 ## CLOB V2 incident controls
 

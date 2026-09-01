@@ -199,13 +199,28 @@ def outcome(assignment: ProbeAssignment, *, mode: str, terminal_ts_ms: int,
     return value
 
 
-def calibrate(outcomes: Iterable[dict[str, Any]], *, minimum_terminal_per_cell: int = 20) -> dict[str, Any]:
+def calibrate(outcomes: Iterable[dict[str, Any]], *, assignments: Iterable[ProbeAssignment],
+              minimum_terminal_per_cell: int = 20) -> dict[str, Any]:
     """Return conservative funnel calibration; PAPER never earns live credit."""
     if minimum_terminal_per_cell <= 0:
         raise ProbeError("minimum_terminal_per_cell:invalid")
+    registered: dict[str, ProbeAssignment] = {}
+    identities: set[tuple[str, str]] = set()
+    for assignment in assignments:
+        assignment.validate()
+        if assignment.assignment_id in registered:
+            raise ProbeError("assignment:duplicate_assignment_id")
+        registered[assignment.assignment_id] = assignment
+        identities.add((assignment.experiment_id, assignment.model_sha))
+    if not registered:
+        raise ProbeError("assignment:empty")
+    if len(identities) != 1:
+        raise ProbeError("assignment:mixed_experiment_or_model_sha")
+    experiment_id, model_sha = next(iter(identities))
     grouped: dict[tuple[str, ...], list[dict[str, Any]]] = {}
     invalid = 0
     modes: set[str] = set()
+    terminal_assignments: set[str] = set()
     for row in outcomes:
         try:
             if not isinstance(row, dict) or row.get("record_kind") != "PROBE_OUTCOME" or row.get("schema") != SCHEMA:
@@ -221,9 +236,21 @@ def calibrate(outcomes: Iterable[dict[str, Any]], *, minimum_terminal_per_cell: 
                 raise ProbeError("outcome:fill_without_flow")
             if row["mode"] == "LIVE_OBSERVED" and not HASH_RE.fullmatch(str(row.get("evidence_record_hash") or "")):
                 raise ProbeError("outcome:live_requires_evidence_hash")
+            assignment_id = _text("assignment_id", row.get("assignment_id"))
+            assignment = registered.get(assignment_id)
+            if assignment is None:
+                raise ProbeError("outcome:assignment_unregistered")
+            if assignment_id in terminal_assignments:
+                raise ProbeError("outcome:duplicate_assignment")
+            if (row.get("model_sha") != assignment.model_sha or row.get("experiment_id") != assignment.experiment_id
+                    or row.get("assigned_arm") != assignment.assigned_arm or row.get("context") != assignment.context
+                    or row.get("minimum_size_base_units") != assignment.minimum_size_base_units
+                    or row.get("terminal_ts_ms", 0) < assignment.assigned_ts_ms):
+                raise ProbeError("outcome:assignment_mismatch")
         except ProbeError:
             invalid += 1
             continue
+        terminal_assignments.add(assignment_id)
         key = tuple(context[name] for name in REQUIRED_CONTEXT)
         grouped.setdefault(key, []).append(row)
         modes.add(str(row["mode"]))
@@ -247,15 +274,29 @@ def calibrate(outcomes: Iterable[dict[str, Any]], *, minimum_terminal_per_cell: 
             "conservative_any_fill_probability": (reach_lower * fill_lower if reach_lower is not None and fill_lower is not None else None),
             "mature": n >= minimum_terminal_per_cell and reaches > 0,
         })
-    all_live = bool(modes) and modes == {"LIVE_OBSERVED"}
-    return {
-        "schema": "polymarket_v7_maker_probe_calibration_v1", "cells": cells,
+    unresolved_assignments = len(registered) - len(terminal_assignments)
+    reason_codes: list[str] = []
+    if invalid:
+        reason_codes.append("invalid_or_unregistered_outcomes")
+    if unresolved_assignments:
+        reason_codes.append("pre_registered_assignments_not_terminal")
+    all_live = bool(modes) and modes == {"LIVE_OBSERVED"} and not reason_codes
+    state = ("LIVE_CALIBRATION_EVIDENCE" if all_live else
+             "PAPER_DIAGNOSTIC_ONLY" if modes == {"PAPER"} and not invalid else
+             "MORE_EVIDENCE_REQUIRED")
+    report = {
+        "schema": "polymarket_v7_maker_probe_calibration_v1", "experiment_id": experiment_id,
+        "model_sha": model_sha, "cells": cells,
         "terminal_probes": sum(cell["terminal_probes"] for cell in cells),
+        "pre_registered_assignments": len(registered),
+        "unresolved_assignments": unresolved_assignments,
         "invalid_outcomes": invalid, "modes": sorted(modes),
-        "state": "LIVE_CALIBRATION_EVIDENCE" if all_live else "PAPER_DIAGNOSTIC_ONLY",
+        "reason_codes": reason_codes, "state": state,
         "promotion_credit": False,
         "simulation_policy": "use_conservative_any_fill_probability_only_when_cell_mature",
     }
+    report["calibration_sha256"] = digest(report)
+    return report
 
 
 def _outcome_hash_payload(value: dict[str, Any]) -> dict[str, Any]:
@@ -273,10 +314,58 @@ def _validate_sealed_outcome(value: Any, previous_hash: str) -> dict[str, Any]:
         raise ProbeError("outcome_tape:record_hash")
     # Reuse calibration's strict row semantics without allowing an invalid
     # record to be quietly treated as a zero observation.
-    checked = calibrate([value], minimum_terminal_per_cell=1)
-    if checked["invalid_outcomes"]:
-        raise ProbeError("outcome_tape:invalid_outcome")
+    required = {"schema", "assignment_id", "model_sha", "experiment_id", "assigned_arm", "context",
+                "minimum_size_base_units", "mode", "terminal_ts_ms", "flow_reached", "filled_base_units",
+                "cancelled", "evidence_record_hash", "outcome_id", "previous_record_hash", "record_hash",
+                "record_kind"}
+    if set(value) != required or value.get("schema") != SCHEMA:
+        raise ProbeError("outcome_tape:shape")
+    _text("assignment_id", value["assignment_id"])
+    if not SHA_RE.fullmatch(str(value["model_sha"])) or not _text("experiment_id", value["experiment_id"]):
+        raise ProbeError("outcome_tape:identity")
+    _context(value["context"])
+    _positive_int("minimum_size_base_units", value["minimum_size_base_units"])
+    _positive_int("terminal_ts_ms", value["terminal_ts_ms"])
+    if value["mode"] not in MODES or not isinstance(value["flow_reached"], bool) or not isinstance(value["cancelled"], bool):
+        raise ProbeError("outcome_tape:semantics")
+    if (isinstance(value["filled_base_units"], bool) or not isinstance(value["filled_base_units"], int)
+            or not 0 <= value["filled_base_units"] <= value["minimum_size_base_units"]):
+        raise ProbeError("outcome_tape:filled")
+    if not value["flow_reached"] and value["filled_base_units"]:
+        raise ProbeError("outcome_tape:fill_without_flow")
+    if value["mode"] == "LIVE_OBSERVED" and not HASH_RE.fullmatch(str(value["evidence_record_hash"] or "")):
+        raise ProbeError("outcome_tape:live_requires_evidence_hash")
     return value
+
+
+def load_assignments(path: Path) -> tuple[list[ProbeAssignment], str | None]:
+    """Load and verify the immutable pre-outcome assignment chain."""
+    prior = GENESIS_HASH
+    rows: list[ProbeAssignment] = []
+    seen: set[str] = set()
+    for line_number, line in enumerate(Path(path).read_text(encoding="utf-8").splitlines(), start=1):
+        if not line.strip():
+            continue
+        try:
+            raw = json.loads(line)
+            if raw.get("record_kind") != "PROBE_ASSIGNMENT":
+                raise ProbeError("assignment_tape:record_kind")
+            value = dict(raw)
+            value.pop("record_kind", None)
+            if isinstance(value.get("arms"), list):
+                value["arms"] = tuple(value["arms"])
+            row = ProbeAssignment(**value)
+            row.validate()
+        except (json.JSONDecodeError, ProbeError, TypeError) as exc:
+            raise ProbeError(f"assignment_tape:line_{line_number}:{exc}") from exc
+        if row.previous_record_hash != prior:
+            raise ProbeError(f"assignment_tape:line_{line_number}:chain_break")
+        if row.assignment_id in seen:
+            raise ProbeError(f"assignment_tape:line_{line_number}:duplicate_assignment")
+        seen.add(row.assignment_id)
+        rows.append(row)
+        prior = str(row.record_hash)
+    return rows, (prior if rows else None)
 
 
 def append_outcome(path: Path, value: dict[str, Any]) -> dict[str, Any]:
@@ -287,6 +376,7 @@ def append_outcome(path: Path, value: dict[str, Any]) -> dict[str, Any]:
     path.parent.mkdir(parents=True, exist_ok=True)
     prior = GENESIS_HASH
     seen: set[str] = set()
+    assigned: set[str] = set()
     if path.exists():
         for line in path.read_text(encoding="utf-8").splitlines():
             try:
@@ -297,11 +387,17 @@ def append_outcome(path: Path, value: dict[str, Any]) -> dict[str, Any]:
             outcome_id = str(raw.get("outcome_id") or "")
             if outcome_id in seen:
                 raise ProbeError("outcome_tape:duplicate_outcome")
+            assignment_id = str(raw.get("assignment_id") or "")
+            if assignment_id in assigned:
+                raise ProbeError("outcome_tape:duplicate_assignment")
             seen.add(outcome_id)
+            assigned.add(assignment_id)
             prior = str(raw["record_hash"])
     candidate = dict(value)
     if str(candidate.get("outcome_id") or "") in seen:
         raise ProbeError("outcome_tape:duplicate_outcome")
+    if str(candidate.get("assignment_id") or "") in assigned:
+        raise ProbeError("outcome_tape:duplicate_assignment")
     candidate["previous_record_hash"] = prior
     candidate["record_hash"] = digest(_outcome_hash_payload(candidate))
     _validate_sealed_outcome(candidate, prior)
@@ -316,6 +412,7 @@ def append_assignment(path: Path, assignment: ProbeAssignment) -> ProbeAssignmen
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
     prior = GENESIS_HASH
+    seen: set[str] = set()
     if path.exists():
         for line in path.read_text(encoding="utf-8").splitlines():
             raw = json.loads(line)
@@ -329,7 +426,12 @@ def append_assignment(path: Path, assignment: ProbeAssignment) -> ProbeAssignmen
             row.validate()
             if row.previous_record_hash != prior:
                 raise ProbeError("assignment_tape:chain_break")
+            if row.assignment_id in seen:
+                raise ProbeError("assignment_tape:duplicate_assignment")
+            seen.add(row.assignment_id)
             prior = str(row.record_hash)
+    if assignment.assignment_id in seen:
+        raise ProbeError("assignment_tape:duplicate_assignment")
     sealed = assignment.seal(prior)
     with path.open("a", encoding="utf-8") as handle:
         handle.write(json.dumps(asdict(sealed) | {"record_kind": "PROBE_ASSIGNMENT"}, sort_keys=True) + "\n")
@@ -341,6 +443,8 @@ def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--outcomes", type=Path, required=True,
                         help="immutable PROBE_OUTCOME JSONL tape")
+    parser.add_argument("--assignments", type=Path, required=True,
+                        help="immutable pre-outcome PROBE_ASSIGNMENT JSONL tape")
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--minimum-terminal-per-cell", type=int, default=20)
     args = parser.parse_args()
@@ -353,8 +457,10 @@ def main() -> int:
     for row in rows:
         _validate_sealed_outcome(row, prior)
         prior = str(row["record_hash"])
-    report = calibrate(rows, minimum_terminal_per_cell=args.minimum_terminal_per_cell)
+    assignments, assignment_head = load_assignments(args.assignments)
+    report = calibrate(rows, assignments=assignments, minimum_terminal_per_cell=args.minimum_terminal_per_cell)
     report["outcome_tape_head_hash"] = prior if rows else None
+    report["assignment_tape_head_hash"] = assignment_head
     rendered = json.dumps(report, sort_keys=True, indent=2) + "\n"
     temporary = args.output.with_name(args.output.name + f".tmp.{os.getpid()}")
     temporary.write_text(rendered, encoding="utf-8")

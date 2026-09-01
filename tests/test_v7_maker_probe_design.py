@@ -36,20 +36,28 @@ class MakerProbeDesignTests(unittest.TestCase):
             path = Path(directory) / "probes.jsonl"
             sealed = probe.append_assignment(path, first)
             self.assertEqual(sealed.previous_record_hash, probe.GENESIS_HASH)
+            with self.assertRaisesRegex(probe.ProbeError, "duplicate_assignment"):
+                probe.append_assignment(path, first)
             corrupted = first.seal("a" * 64)
             with self.assertRaisesRegex(probe.ProbeError, "chain_break"):
                 path.write_text(json.dumps(probe.asdict(corrupted) | {"record_kind": "PROBE_ASSIGNMENT"}) + "\n", encoding="utf-8")
                 probe.append_assignment(path, first)
 
     def test_two_stage_calibration_is_conservative_and_paper_has_no_credit(self) -> None:
-        assignment = probe.assign(candidate(), experiment_id="maker-probe-v1", model_sha=SHA,
-                                  arms=["CONTROL", "QUEUE_PLUS"], randomization_secret="secret", minimum_size_base_units=10).seal(probe.GENESIS_HASH)
+        assignments = []
+        previous = probe.GENESIS_HASH
+        for identifier in ("candidate-1", "candidate-2", "candidate-3"):
+            assignment = probe.assign(candidate(identifier), experiment_id="maker-probe-v1", model_sha=SHA,
+                                      arms=["CONTROL", "QUEUE_PLUS"], randomization_secret="secret",
+                                      minimum_size_base_units=10).seal(previous)
+            assignments.append(assignment)
+            previous = str(assignment.record_hash)
         values = [
-            probe.outcome(assignment, mode="PAPER", terminal_ts_ms=101, flow_reached=True, filled_base_units=10, cancelled=False),
-            probe.outcome(assignment, mode="PAPER", terminal_ts_ms=102, flow_reached=True, filled_base_units=0, cancelled=True),
-            probe.outcome(assignment, mode="PAPER", terminal_ts_ms=103, flow_reached=False, filled_base_units=0, cancelled=True),
+            probe.outcome(assignments[0], mode="PAPER", terminal_ts_ms=101, flow_reached=True, filled_base_units=10, cancelled=False),
+            probe.outcome(assignments[1], mode="PAPER", terminal_ts_ms=102, flow_reached=True, filled_base_units=0, cancelled=True),
+            probe.outcome(assignments[2], mode="PAPER", terminal_ts_ms=103, flow_reached=False, filled_base_units=0, cancelled=True),
         ]
-        report = probe.calibrate(values, minimum_terminal_per_cell=3)
+        report = probe.calibrate(values, assignments=assignments, minimum_terminal_per_cell=3)
         cell = report["cells"][0]
         self.assertEqual(report["state"], "PAPER_DIAGNOSTIC_ONLY")
         self.assertFalse(report["promotion_credit"])
@@ -62,6 +70,24 @@ class MakerProbeDesignTests(unittest.TestCase):
             self.assertEqual(sealed["previous_record_hash"], probe.GENESIS_HASH)
             with self.assertRaisesRegex(probe.ProbeError, "duplicate_outcome"):
                 probe.append_outcome(path, values[0])
+
+    def test_calibration_requires_registered_unique_terminal_assignments(self) -> None:
+        assignment = probe.assign(candidate(), experiment_id="maker-probe-v1", model_sha=SHA,
+                                  arms=["CONTROL", "QUEUE_PLUS"], randomization_secret="secret",
+                                  minimum_size_base_units=1).seal(probe.GENESIS_HASH)
+        other_assignment = probe.assign(candidate("candidate-other"), experiment_id="maker-probe-v1", model_sha=SHA,
+                                        arms=["CONTROL", "QUEUE_PLUS"], randomization_secret="secret",
+                                        minimum_size_base_units=1).seal(probe.GENESIS_HASH)
+        observed = probe.outcome(assignment, mode="LIVE_OBSERVED", terminal_ts_ms=101, flow_reached=True,
+                                 filled_base_units=1, cancelled=False, evidence_record_hash="a" * 64)
+        report = probe.calibrate([observed], assignments=[other_assignment], minimum_terminal_per_cell=1)
+        self.assertEqual(report["state"], "MORE_EVIDENCE_REQUIRED")
+        self.assertIn("invalid_or_unregistered_outcomes", report["reason_codes"])
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "outcomes.jsonl"
+            probe.append_outcome(path, observed)
+            with self.assertRaisesRegex(probe.ProbeError, "duplicate_assignment"):
+                probe.append_outcome(path, observed | {"outcome_id": "different"})
 
     def test_live_outcome_requires_external_evidence(self) -> None:
         assignment = probe.assign(candidate(), experiment_id="maker-probe-v1", model_sha=SHA,

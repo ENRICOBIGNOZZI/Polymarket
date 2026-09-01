@@ -57,6 +57,7 @@
     "real_pnl_economic_scorecard_required": true,
     "pre_canary_security": {
       "full_history_secret_scan_required": true,
+      "full_history_entropy_secret_scan_required": true,
       "findings_must_equal": 0,
       "remediation_evidence_required": true
     },

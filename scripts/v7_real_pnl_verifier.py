@@ -39,7 +39,7 @@ SOURCES = {"CLOB_USER_WS", "CLOB_API", "DATA_API", "WALLET_RPC", "POLYGON_RPC"}
 # Data API snapshots are evidence inputs, but a final chain settlement must be
 # backed by a Polygon receipt rather than a generic activity row.
 REQUIRED_JOURNAL_SOURCES = {"CLOB_USER_WS", "WALLET_RPC", "POLYGON_RPC"}
-REQUIRED_EVIDENCE_SOURCES = {"CLOB_USER_WS", "DATA_API_ACTIVITY", "DATA_API_POSITIONS", "WALLET_RPC", "POLYGON_RPC"}
+REQUIRED_EVIDENCE_SOURCES = {"CLOB_USER_WS", "CLOB_USER_TRADES", "CLOB_USER_ORDERS", "DATA_API_ACTIVITY", "DATA_API_POSITIONS", "WALLET_RPC", "POLYGON_RPC"}
 GENESIS_HASH = "0" * 64
 EVIDENCE_KIND = "REAL_PNL_EVIDENCE"
 EVIDENCE_SOURCES = {"CLOB_USER_WS", "CLOB_USER_TRADES", "CLOB_USER_ORDERS", "DATA_API_ACTIVITY", "DATA_API_POSITIONS", "WALLET_RPC", "POLYGON_RPC"}
@@ -68,6 +68,7 @@ PROVENANCE_PAYLOAD_KEYS = {
 WALLET_SNAPSHOT_SCHEMA = "polymarket_v7_wallet_balance_snapshot_v1"
 POSITION_SNAPSHOT_SCHEMA = "polymarket_v7_data_api_position_snapshot_v1"
 ACTIVITY_COVERAGE_SCHEMA = "polymarket_v7_data_api_activity_coverage_v1"
+SESSION_REGISTRY_SCHEMA = "polymarket_v7_session_registry_v1"
 CLOB_USER_WS_WIRE_SCHEMA = "polymarket_v7_clob_user_ws_wire_v2"
 # Pre-finality match/mined messages cannot support a settled real-PnL fact.
 CLOB_SETTLED_TRADE_STATUSES = {"TRADE_STATUS_CONFIRMED"}
@@ -613,24 +614,29 @@ def _position_snapshot(value: dict[str, Any] | None, *, model_sha: str,
 
 def _activity_coverage(value: dict[str, Any] | None, *, model_sha: str,
                        evidence_records: dict[str, dict[str, Any]]) -> bool:
-    """Independently verify a contiguous Data API activity pagination window."""
+    """Independently verify contiguous timestamp-window Data API coverage."""
     if value is None:
         return False
-    if not isinstance(value, dict) or set(value) != {"schema", "model_sha", "wallet", "pages", "activity_count"}:
+    if not isinstance(value, dict) or set(value) != {"schema", "model_sha", "wallet", "capture_start_ts", "capture_end_ts", "pages", "activity_count"}:
         raise VerificationError("activity_coverage_shape")
     wallet, pages, declared_count = value.get("wallet"), value.get("pages"), value.get("activity_count")
+    capture_start, capture_end = value.get("capture_start_ts"), value.get("capture_end_ts")
     if (value.get("schema") != ACTIVITY_COVERAGE_SCHEMA or value.get("model_sha") != model_sha
             or not isinstance(wallet, str) or not ADDRESS_RE.fullmatch(wallet) or not isinstance(pages, list)
-            or _integer(declared_count, "activity_coverage_count") < 0 or not pages):
+            or _integer(declared_count, "activity_coverage_count") < 0 or not pages
+            or _integer(capture_start, "activity_coverage_window") < 0
+            or _integer(capture_end, "activity_coverage_window") < _integer(capture_start, "activity_coverage_window")):
         raise VerificationError("activity_coverage_identity")
     wallet = wallet.lower()
-    decoded: list[tuple[int, int, int]] = []
+    decoded: list[tuple[int, int, int, int, int]] = []
     hashes: set[str] = set()
+    row_hashes: set[str] = set()
     for page in pages:
-        if not isinstance(page, dict) or set(page) != {"offset", "evidence_record_hash"}:
+        if not isinstance(page, dict) or set(page) != {"start", "end", "offset", "evidence_record_hash"}:
             raise VerificationError("activity_coverage_page")
-        offset, record_hash = page.get("offset"), page.get("evidence_record_hash")
-        if _integer(offset, "activity_coverage_offset") < 0 or not isinstance(record_hash, str) or not SHA256_RE.fullmatch(record_hash):
+        start, end, offset, record_hash = page.get("start"), page.get("end"), page.get("offset"), page.get("evidence_record_hash")
+        if (_integer(start, "activity_coverage_window") < 0 or _integer(end, "activity_coverage_window") < _integer(start, "activity_coverage_window")
+                or _integer(offset, "activity_coverage_offset") < 0 or not isinstance(record_hash, str) or not SHA256_RE.fullmatch(record_hash)):
             raise VerificationError("activity_coverage_page")
         if record_hash in hashes:
             raise VerificationError("activity_coverage_duplicate_page")
@@ -640,29 +646,154 @@ def _activity_coverage(value: dict[str, Any] | None, *, model_sha: str,
             raise VerificationError("activity_coverage_evidence_source")
         endpoint, query, response = urlparse(str(raw.get("endpoint") or "")), raw.get("query"), raw.get("response")
         if (endpoint.scheme != "https" or endpoint.netloc != "data-api.polymarket.com" or endpoint.path != "/activity"
-                or not isinstance(query, dict) or set(query) != {"user", "offset", "limit", "excludeDepositsWithdrawals"}
+                or not isinstance(query, dict) or set(query) != {"user", "offset", "limit", "start", "end", "sortBy", "sortDirection"}
                 or not isinstance(response, list) or any(not isinstance(row, dict) for row in response)):
             raise VerificationError("activity_coverage_request")
-        if (str(query.get("user") or "").lower() != wallet or str(query.get("excludeDepositsWithdrawals") or "").lower() != "false"
-                or not str(query.get("offset") or "").isdigit() or not str(query.get("limit") or "").isdigit()):
+        if (str(query.get("user") or "").lower() != wallet or query.get("sortBy") != "TIMESTAMP" or query.get("sortDirection") != "ASC"
+                or any(not isinstance(query.get(key), str) or not query[key].isdigit() for key in ("offset", "limit", "start", "end"))):
             raise VerificationError("activity_coverage_request")
-        if int(query["offset"]) != offset or int(query["limit"]) <= 0 or len(response) > int(query["limit"]):
+        if (int(query["start"]) != start or int(query["end"]) != end or int(query["offset"]) != offset
+                or int(query["offset"]) > 10_000 or not 0 < int(query["limit"]) <= 500 or len(response) > int(query["limit"])):
             raise VerificationError("activity_coverage_page")
-        decoded.append((offset, int(query["limit"]), len(response)))
+        for row in response:
+            timestamp = row.get("timestamp")
+            if (isinstance(timestamp, bool) or not isinstance(timestamp, (int, str)) or not str(timestamp).isdigit()
+                    or not start <= int(timestamp) <= end):
+                raise VerificationError("activity_coverage_row_window")
+            if row.get("type") == "REDEEM":
+                tx, asset, outcome = row.get("transactionHash"), row.get("asset"), row.get("outcomeIndex")
+                if (not isinstance(tx, str) or not tx or not isinstance(asset, str) or not asset
+                        or isinstance(outcome, bool) or not isinstance(outcome, int) or outcome < 0):
+                    raise VerificationError("activity_coverage_redeem_identity")
+                identity = "REDEEM:" + tx.lower() + ":" + asset + ":" + str(outcome)
+            else:
+                identity = digest(row)
+            if identity in row_hashes:
+                raise VerificationError("activity_coverage_duplicate_row")
+            row_hashes.add(identity)
+        decoded.append((start, end, offset, int(query["limit"]), len(response)))
     decoded.sort()
-    expected, observed_count = 0, 0
-    for index, (offset, limit, count) in enumerate(decoded):
-        if offset != expected:
+    observed_count, previous_end, expected_offset, terminal = 0, None, 0, False
+    for index, (start, end, offset, limit, count) in enumerate(decoded):
+        if previous_end is None or (start, end) != (decoded[index - 1][0], decoded[index - 1][1]):
+            if previous_end is not None and start != previous_end + 1:
+                raise VerificationError("activity_coverage_time_window_gap")
+            if previous_end is not None and not terminal:
+                raise VerificationError("activity_coverage_terminal_missing")
+            previous_end, expected_offset, terminal = end, 0, False
+        if offset != expected_offset:
             raise VerificationError("activity_coverage_offset_gap")
-        expected += limit
-        observed_count += count
-        if count < limit and index != len(decoded) - 1:
+        if terminal:
             raise VerificationError("activity_coverage_page_after_terminal")
-    if decoded[-1][2] >= decoded[-1][1]:
+        expected_offset += limit
+        observed_count += count
+        terminal = count < limit
+    if not terminal or decoded[0][0] != capture_start or decoded[-1][1] != capture_end:
         raise VerificationError("activity_coverage_terminal_missing")
     if observed_count != declared_count:
         raise VerificationError("activity_coverage_count_mismatch")
     return True
+
+
+def _validate_clob_rest_page(raw: dict[str, Any], endpoint: Any) -> None:
+    source = raw.get("source")
+    expected_path = "/data/orders" if source == "CLOB_USER_ORDERS" else "/data/trades"
+    query, response = raw.get("query"), raw.get("response")
+    expected_query = {"session_key_id_hash", "capture_start_ts_ms", "capture_end_ts_ms", "cursor", "limit"}
+    if (getattr(endpoint, "path", None) != expected_path or getattr(endpoint, "query", None)
+            or not isinstance(query, dict) or set(query) != expected_query
+            or not isinstance(response, dict) or set(response) != {"limit", "next_cursor", "count", "data"}):
+        raise VerificationError("clob_rest_page_shape")
+    if (not isinstance(query["session_key_id_hash"], str) or not SHA256_RE.fullmatch(query["session_key_id_hash"])
+            or any(not isinstance(query[key], str) or not query[key].isdigit() for key in ("capture_start_ts_ms", "capture_end_ts_ms", "limit"))
+            or int(query["capture_start_ts_ms"]) <= 0 or int(query["capture_end_ts_ms"]) <= int(query["capture_start_ts_ms"])
+            or not isinstance(query["cursor"], str) or not query["cursor"] or int(query["limit"]) <= 0
+            or isinstance(response["limit"], bool) or not isinstance(response["limit"], int) or response["limit"] != int(query["limit"])
+            or isinstance(response["count"], bool) or not isinstance(response["count"], int) or response["count"] < 0
+            or not isinstance(response["next_cursor"], str) or not isinstance(response["data"], list)
+            or response["count"] != len(response["data"]) or response["count"] > response["limit"]):
+        raise VerificationError("clob_rest_page_query")
+
+
+def _validate_clob_rest_coverage(pages: list[dict[str, Any]]) -> None:
+    by_stream: dict[tuple[str, str], list[dict[str, Any]]] = {}
+    for page in pages:
+        query = page["query"]
+        by_stream.setdefault((page["source"], query["session_key_id_hash"]), []).append(page)
+    for stream_pages in by_stream.values():
+        windows: dict[tuple[int, int], list[dict[str, Any]]] = {}
+        for page in stream_pages:
+            query = page["query"]
+            windows.setdefault((int(query["capture_start_ts_ms"]), int(query["capture_end_ts_ms"])), []).append(page)
+        previous_end: int | None = None
+        for (start, end), window_pages in sorted(windows.items()):
+            if previous_end is not None and start != previous_end:
+                raise VerificationError("clob_rest_time_window_gap")
+            previous_end = end
+            ordered = sorted(window_pages, key=lambda page: int(page["received_ts_ms"]))
+            expected_cursor = "INITIAL"
+            for index, page in enumerate(ordered):
+                query, response = page["query"], page["response"]
+                if query["cursor"] != expected_cursor:
+                    raise VerificationError("clob_rest_cursor_gap")
+                expected_cursor = response["next_cursor"]
+                if not expected_cursor and index != len(ordered) - 1:
+                    raise VerificationError("clob_rest_page_after_terminal")
+            if ordered and ordered[-1]["response"]["next_cursor"]:
+                raise VerificationError("clob_rest_terminal_page_missing")
+
+
+def _session_registry_coverage(value: dict[str, Any] | None, *, model_sha: str,
+                               evidence_records: dict[str, dict[str, Any]]) -> tuple[bool, str | None]:
+    """Prove that every registered CLOB session has complete REST backfill.
+
+    The registry is intentionally redacted: it contains only session and wallet
+    hashes plus external registration-evidence hashes.  A missing registry never
+    raises a real-PnL state; malformed supplied data is a verifier failure.
+    """
+    if value is None:
+        return False, None
+    required = {"schema", "model_sha", "wallet_id_hash", "sessions", "registry_evidence_hash"}
+    if (not isinstance(value, dict) or set(value) != required or value.get("schema") != SESSION_REGISTRY_SCHEMA
+            or value.get("model_sha") != model_sha or not SHA256_RE.fullmatch(str(value.get("wallet_id_hash")))
+            or not SHA256_RE.fullmatch(str(value.get("registry_evidence_hash")))
+            or not isinstance(value.get("sessions"), list) or not value["sessions"]):
+        raise VerificationError("session_registry_shape")
+    session_fields = {"session_key_id_hash", "activated_at_ms", "retired_at_ms", "registration_evidence_hash"}
+    registered: dict[str, tuple[int, int | None]] = {}
+    previous: str | None = None
+    for session in value["sessions"]:
+        if not isinstance(session, dict) or set(session) != session_fields:
+            raise VerificationError("session_registry_session_shape")
+        session_hash = session.get("session_key_id_hash")
+        activated, retired = session.get("activated_at_ms"), session.get("retired_at_ms")
+        if (not isinstance(session_hash, str) or not SHA256_RE.fullmatch(session_hash)
+                or previous is not None and session_hash <= previous
+                or isinstance(activated, bool) or not isinstance(activated, int) or activated <= 0
+                or retired is not None and (isinstance(retired, bool) or not isinstance(retired, int) or retired <= activated)
+                or not SHA256_RE.fullmatch(str(session.get("registration_evidence_hash")))):
+            raise VerificationError("session_registry_session_identity")
+        registered[session_hash] = (activated, retired)
+        previous = session_hash
+    pages: dict[str, list[dict[str, Any]]] = {}
+    for record in evidence_records.values():
+        if record.get("source") in {"CLOB_USER_ORDERS", "CLOB_USER_TRADES"}:
+            query = record.get("query")
+            if isinstance(query, dict) and isinstance(query.get("session_key_id_hash"), str):
+                pages.setdefault(query["session_key_id_hash"], []).append(record)
+    if set(pages) != set(registered):
+        raise VerificationError("session_registry_coverage")
+    for session_hash, records in pages.items():
+        sources = {record["source"] for record in records}
+        activated, retired = registered[session_hash]
+        if sources != {"CLOB_USER_ORDERS", "CLOB_USER_TRADES"}:
+            raise VerificationError("session_registry_source_coverage")
+        for record in records:
+            query = record["query"]
+            start, end = int(query["capture_start_ts_ms"]), int(query["capture_end_ts_ms"])
+            if start < activated or retired is not None and end > retired:
+                raise VerificationError("session_registry_time_coverage")
+    return True, digest(value)
 
 
 def _evidence_hashes(path: Path, *, expected_sha: str) -> tuple[dict[str, str], set[str], str, dict[str, dict[str, Any]]]:
@@ -676,6 +807,7 @@ def _evidence_hashes(path: Path, *, expected_sha: str) -> tuple[dict[str, str], 
     selected_hashes: dict[str, str] = {}
     selected_sources: set[str] = set()
     selected_records: dict[str, dict[str, Any]] = {}
+    clob_rest_pages: list[dict[str, Any]] = []
     digest_file = file_sha256(path)
     with Path(path).open("r", encoding="utf-8") as handle:
         for line_number, line in enumerate(handle, start=1):
@@ -738,9 +870,13 @@ def _evidence_hashes(path: Path, *, expected_sha: str) -> tuple[dict[str, str], 
             row_identities.add(key)
             tips[row_sha] = str(raw["record_hash"])
             if row_sha == expected_sha:
+                if raw["source"] in {"CLOB_USER_TRADES", "CLOB_USER_ORDERS"}:
+                    _validate_clob_rest_page(raw, parsed)
+                    clob_rest_pages.append(raw)
                 selected_hashes[str(raw["record_hash"])] = str(raw["source"])
                 selected_records[str(raw["record_hash"])] = raw
                 selected_sources.add(str(raw["source"]))
+    _validate_clob_rest_coverage(clob_rest_pages)
     return selected_hashes, selected_sources, digest_file, selected_records
 
 
@@ -847,6 +983,7 @@ def verify(ledger_path: Path, *, model_sha: str,
            observed_activity_coverage: dict[str, Any] | None = None,
            evidence_path: Path | None = None,
            provenance_path: Path | None = None,
+           session_registry: dict[str, Any] | None = None,
            require_live_sources: bool = True) -> dict[str, Any]:
     """Rebuild terminal PnL from exact-SHA journal rows without production code."""
     if not SHA_RE.fullmatch(model_sha):
@@ -859,6 +996,9 @@ def verify(ledger_path: Path, *, model_sha: str,
         evidence_hashes, evidence_sources, evidence_sha256, evidence_records = _evidence_hashes(
             Path(evidence_path), expected_sha=model_sha
         )
+    session_registry_verified, session_registry_sha256 = _session_registry_coverage(
+        session_registry, model_sha=model_sha, evidence_records=evidence_records
+    )
     complete_lineages: dict[str, dict[str, Any]] = {}
     fill_provenance_evidence: dict[str, str] = {}
     fill_provenance_lineage: dict[str, str] = {}
@@ -993,6 +1133,8 @@ def verify(ledger_path: Path, *, model_sha: str,
         reasons.append("evidence_tape_missing")
     elif not evidence_hashes:
         reasons.append("no_exact_sha_evidence_records")
+    if require_live_sources and not session_registry_verified:
+        reasons.append("session_registry_missing_or_unverifiable")
     if evidence_reference_breaks:
         reasons.append("journal_evidence_reference_break")
     if clob_fill_evidence_breaks:
@@ -1028,6 +1170,8 @@ def verify(ledger_path: Path, *, model_sha: str,
         "ledger_sha256": file_sha256(Path(ledger_path)),
         "evidence_tape_path": str(evidence_path) if evidence_path is not None else None,
         "evidence_tape_sha256": evidence_sha256,
+        "session_registry_sha256": session_registry_sha256,
+        "session_registry_verified": session_registry_verified,
         "provenance_tape_path": str(provenance_path) if provenance_path is not None else None,
         "provenance_tape_sha256": provenance_sha256,
         "complete_execution_lineages": sorted(complete_lineages),
@@ -1095,6 +1239,8 @@ def main() -> int:
                         help="traceable v7_wallet_balance_snapshot JSON; flat maps stay diagnostic-only")
     parser.add_argument("--evidence-tape", type=Path, required=True)
     parser.add_argument("--provenance-tape", type=Path, required=True)
+    parser.add_argument("--session-registry", type=Path, required=True,
+                        help="redacted immutable registry of every session-key hash used by the account")
     parser.add_argument("--observed-positions", type=Path, required=True,
                         help="traceable v7_data_api_position_snapshot JSON")
     parser.add_argument("--observed-activity-coverage", type=Path, required=True,
@@ -1104,10 +1250,11 @@ def main() -> int:
     observed = json.loads(args.observed_balances.read_text(encoding="utf-8"))
     positions = json.loads(args.observed_positions.read_text(encoding="utf-8"))
     coverage = json.loads(args.observed_activity_coverage.read_text(encoding="utf-8"))
+    session_registry = json.loads(args.session_registry.read_text(encoding="utf-8"))
     report = verify(args.ledger, model_sha=args.model_sha, observed_balances=observed,
                     observed_positions=positions, observed_activity_coverage=coverage,
                     evidence_path=args.evidence_tape,
-                    provenance_path=args.provenance_tape)
+                    provenance_path=args.provenance_tape, session_registry=session_registry)
     rendered = json.dumps(report, sort_keys=True, indent=2) + "\n"
     if args.output:
         args.output.write_text(rendered, encoding="utf-8")

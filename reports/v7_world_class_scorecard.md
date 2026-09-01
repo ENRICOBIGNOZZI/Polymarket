@@ -6,4 +6,12 @@ immutable real evidence. It does not infer results from PAPER activity.
 
 `REAL_PNL_VERIFIED = FALSE` and `WORLD_CLASS_CANDIDATE = FALSE`.
 
-Source: `artifacts/v7_world_class/scorecard.json`.
+Generate the runtime artifact from the exact checkout with:
+
+```bash
+python3 scripts/v7_world_class_scorecard.py current . \
+  --output artifacts/v7_world_class/scorecard.json
+```
+
+The command never converts PAPER, simulated, or missing evidence into a
+world-class claim.

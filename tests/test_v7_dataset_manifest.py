@@ -38,6 +38,9 @@ class V7DatasetManifestTests(unittest.TestCase):
             self.assertEqual(value["markets"], ["m1", "m2"])
             self.assertRegex(value["manifest_sha256"], r"^[0-9a-f]{64}$")
             dataset.validate_manifest(value)
+            verified = dataset.verify_manifest_sources(value, base_path=root)
+            self.assertEqual(verified["verified_source_files"], ["ticks.csv"])
+            self.assertTrue(verified["universe_snapshot_verified"])
 
             tampered = json.loads(json.dumps(value))
             tampered["row_count"] = 3
@@ -69,6 +72,48 @@ class V7DatasetManifestTests(unittest.TestCase):
             changed["dataset_id"] = "different-id"
             with self.assertRaisesRegex(dataset.ManifestError, "immutable_path_collision"):
                 dataset.immutable_write(output, changed)
+            symlink = root / "manifest-link.json"
+            symlink.symlink_to(output)
+            with self.assertRaisesRegex(dataset.ManifestError, "output:symlink"):
+                dataset.immutable_write(symlink, value)
+
+    def test_source_verification_detects_content_drift_and_rejects_symlinks(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            source = root / "ticks.jsonl"
+            source.write_text('{"market":"m1"}\n', encoding="utf-8")
+            value = dataset.build_manifest(
+                source_paths=[source], collector_sha=SHA, data_sources=["test"],
+                point_in_time_status="NOT_POINT_IN_TIME",
+                start_timestamp="2026-08-28T00:00:00Z", end_timestamp="2026-08-28T00:01:00Z",
+                receive_start_timestamp="2026-08-28T00:00:00Z",
+                receive_end_timestamp="2026-08-28T00:01:00Z", markets=["m1"], events=[],
+                missing_data=[], known_gaps=[], base_path=root,
+            )
+            source.write_text('{"market":"m2"}\n', encoding="utf-8")
+            with self.assertRaisesRegex(dataset.ManifestError, "sha256_mismatch"):
+                dataset.verify_manifest_sources(value, base_path=root)
+
+            source.unlink()
+            source.symlink_to(root / "outside.jsonl")
+            with self.assertRaisesRegex(dataset.ManifestError, "path_symlink"):
+                dataset.verify_manifest_sources(value, base_path=root)
+
+    def test_binary_source_with_explicit_count_is_verified_by_its_immutable_hash(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            source = root / "book.tape"
+            source.write_bytes(b"opaque-captured-bytes")
+            value = dataset.build_manifest(
+                source_paths=[source], row_counts={"book.tape": 7}, collector_sha=SHA,
+                data_sources=["clob_user_ws"], point_in_time_status="NOT_POINT_IN_TIME",
+                start_timestamp="2026-08-28T00:00:00Z", end_timestamp="2026-08-28T00:01:00Z",
+                receive_start_timestamp="2026-08-28T00:00:00Z",
+                receive_end_timestamp="2026-08-28T00:01:00Z", markets=["m1"], events=[],
+                missing_data=[], known_gaps=[], base_path=root,
+            )
+            verified = dataset.verify_manifest_sources(value, base_path=root)
+            self.assertEqual(verified["byte_hash_only_source_files"], ["book.tape"])
 
 
 if __name__ == "__main__":
