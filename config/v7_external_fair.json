@@ -82,6 +82,13 @@
     "persistent_event_driven": true,
     "rest_polling_hft_trigger": false
   },
+  "forward_evidence": {
+    "minimum_duration_seconds": 300,
+    "classification": "PILOT_ENGINEERING_VALIDATION_ONLY",
+    "economic_validation": false,
+    "promotion_authority": false,
+    "real_order_submission": false
+  },
   "causality": {
     "causal_cut_required": true,
     "invariant": "max_input_receive_monotonic_ns<=decision_monotonic_ns",

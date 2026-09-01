@@ -68,6 +68,15 @@ REST observations are labelled `PUBLIC_REST_POLLING` and
 exchange event latency. Sub-millisecond claims are forbidden until supported by
 source-resolution and measured forward evidence.
 
+## Forward PAPER/shadow pilot
+
+The external-information gate uses a five-minute uninterrupted, clean-tape
+threshold for **PILOT_ENGINEERING_VALIDATION_ONLY**. It confirms that the
+exact-SHA collector, normalizers, public REST recovery checks and paper/shadow
+router stayed healthy together; it does not establish profitability, model
+maturity, promotion authority, or permission to submit real orders. Those
+claims continue to require their own out-of-sample and economic evidence.
+
 ## Failure isolation
 
 - Missing Sportradar credentials produces `CREDENTIALS_REQUIRED` and the sports

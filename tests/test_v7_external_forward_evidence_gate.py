@@ -38,6 +38,10 @@ def test_short_clean_run_is_honestly_insufficient() -> None:
     assert result["coinbase_realtime_l2_continuity"] is True
 
 
+def test_default_duration_is_a_five_minute_engineering_pilot() -> None:
+    assert gate.DEFAULT_MIN_DURATION_SECONDS == 300.0
+
+
 def test_duration_and_durable_tapes_are_required() -> None:
     result = gate.evaluate(_runtime(61_000_000_000),
                            {"state": "OPERATIONAL_POLLING", "hft_trigger_eligible": False},

@@ -15,6 +15,7 @@ MAKER_POLICY="${PM_V7_MAKER_POLICY:-config/v7_professional_market_maker.json}"
 FAST_STRUCTURAL_POLICY="${PM_V7_FAST_STRUCTURAL_POLICY:-config/v7_fast_structural.json}"
 FAST_STRUCTURAL_RELATIONS="${PM_V7_FAST_STRUCTURAL_RELATIONS:-config/v7_fast_structural_relations.csv}"
 EXTERNAL_FAIR_POLICY="${PM_V7_EXTERNAL_FAIR_POLICY:-config/v7_external_fair.json}"
+EXTERNAL_FORWARD_MIN_DURATION_SECONDS="${PM_V7_EXTERNAL_FORWARD_MIN_DURATION_SECONDS:-}"
 EXTERNAL_SOURCE_REGISTRY="${PM_V7_EXTERNAL_SOURCE_REGISTRY:-config/v7_external_source_registry.json}"
 CI_REPOSITORY="${PM_V7_CI_REPOSITORY:-ENRICOBIGNOZZI/Polymarket}"
 OSINT_SOURCE_REGISTRY="${PM_V7_OSINT_SOURCE_REGISTRY:-config/v7_osint_sources.json}"
@@ -313,7 +314,8 @@ python3 scripts/v7_external_forward_evidence_gate.py \
   --runtime-status "$RUN_ROOT/external_fair/external_venues.json" \
   --coinbase-rest-status "$RUN_ROOT/external_fair/coinbase_l2_rest_status.json" \
   --deribit-rest-status "$RUN_ROOT/external_fair/deribit_rest_status.json" \
-  --output "$RUN_ROOT/external_fair/forward_evidence_status.json" --loop \
+  --output "$RUN_ROOT/external_fair/forward_evidence_status.json" \
+  --min-duration-seconds "${EXTERNAL_FORWARD_MIN_DURATION_SECONDS:-300}" --loop \
   >> "$RUN_ROOT/external_fair/forward_evidence.log" 2>&1 &
 pids+=("$!")
 

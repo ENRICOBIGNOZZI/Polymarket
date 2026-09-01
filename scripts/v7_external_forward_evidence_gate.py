@@ -15,6 +15,7 @@ from typing import Any
 
 
 SCHEMA = "polymarket_v7_external_forward_evidence_status_v1"
+DEFAULT_MIN_DURATION_SECONDS = 300.0
 EVENT_SOURCES = ("binance_spot", "coinbase_spot", "bybit_spot", "bybit_linear", "deribit", "binance_usdm_market")
 RAW_SOURCES = ("binance_spot", "coinbase_spot", "bybit_spot", "bybit_linear", "deribit", "binance_usdm_depth", "binance_usdm_market")
 
@@ -120,7 +121,9 @@ def main() -> int:
     parser.add_argument("--coinbase-rest-status", type=Path, required=True)
     parser.add_argument("--deribit-rest-status", type=Path, required=True)
     parser.add_argument("--output", type=Path, required=True)
-    parser.add_argument("--min-duration-seconds", type=float, default=86_400.0)
+    # This is an engineering pilot threshold, not a claim of economic
+    # validation or permission to promote the shadow model.
+    parser.add_argument("--min-duration-seconds", type=float, default=DEFAULT_MIN_DURATION_SECONDS)
     parser.add_argument("--interval", type=float, default=30.0)
     parser.add_argument("--loop", action="store_true")
     args = parser.parse_args()
