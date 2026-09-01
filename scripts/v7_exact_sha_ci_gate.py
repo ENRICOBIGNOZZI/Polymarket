@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+from html.parser import HTMLParser
 import json
 import os
 import re
@@ -79,6 +80,85 @@ def fetch_check_runs(repository: str, sha: str, timeout: float) -> list[dict[str
     return rows
 
 
+class _ChecksPageParser(HTMLParser):
+    def __init__(self, required: tuple[str, ...]) -> None:
+        super().__init__()
+        self.required = set(required)
+        self.current: dict[str, Any] | None = None
+        self.div_depth = 0
+        self.rows: list[dict[str, Any]] = []
+
+    def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
+        values = dict(attrs)
+        classes = set(str(values.get("class") or "").split())
+        if self.current is None and tag == "div" and "checks-list-item" in classes:
+            self.current = {"name": None, "aria": "", "href": ""}
+            self.div_depth = 1
+            return
+        if self.current is None:
+            return
+        if tag == "div":
+            self.div_depth += 1
+        aria = str(values.get("aria-label") or "")
+        if aria.startswith("This job "):
+            self.current["aria"] = aria
+        href = str(values.get("href") or "")
+        if tag == "a" and "/actions/runs/" in href and "/job/" in href:
+            self.current["href"] = href
+
+    def handle_data(self, data: str) -> None:
+        if self.current is not None and data.strip() in self.required:
+            self.current["name"] = data.strip()
+
+    def handle_endtag(self, tag: str) -> None:
+        if self.current is None or tag != "div":
+            return
+        self.div_depth -= 1
+        if self.div_depth != 0:
+            return
+        name = self.current.get("name")
+        if name in self.required:
+            aria = str(self.current.get("aria") or "").lower()
+            href = str(self.current.get("href") or "")
+            job_match = re.search(r"/job/([0-9]+)", href)
+            succeeded = "succeeded" in aria
+            completed = succeeded or any(
+                word in aria for word in ("failed", "cancelled", "skipped")
+            )
+            self.rows.append({
+                "id": int(job_match.group(1)) if job_match else None,
+                "name": name,
+                "status": "completed" if completed else "in_progress",
+                "conclusion": "success" if succeeded else None,
+                "completed_at": None,
+                "details_url": f"https://github.com{href}" if href.startswith("/") else href,
+            })
+        self.current = None
+
+
+def fetch_check_runs_html(repository: str, sha: str, timeout: float,
+                          required: tuple[str, ...] = DEFAULT_REQUIRED) -> list[dict[str, Any]]:
+    """Read the exact-commit GitHub checks page when the API is unavailable."""
+    url = f"https://github.com/{repository}/commit/{sha}/checks"
+    request = urllib.request.Request(url, headers={
+        "Accept": "text/html",
+        "User-Agent": "polymarket-v7-exact-sha-gate",
+    })
+    try:
+        with urllib.request.urlopen(request, timeout=timeout) as response:
+            page = response.read().decode("utf-8")
+    except (OSError, urllib.error.URLError, urllib.error.HTTPError, UnicodeDecodeError) as exc:
+        raise RuntimeError(f"exact_sha_ci_html_query_failed:{exc}") from exc
+    if sha not in page:
+        raise RuntimeError("exact_sha_ci_html_sha_missing")
+    parser = _ChecksPageParser(required)
+    parser.feed(page)
+    selected = latest_runs(parser.rows, required)
+    if any(name not in selected for name in required):
+        raise RuntimeError("exact_sha_ci_html_required_checks_missing")
+    return list(selected.values())
+
+
 def atomic_write(path: Path, value: dict[str, Any]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     temporary = path.with_name(f"{path.name}.tmp.{os.getpid()}")
@@ -100,9 +180,15 @@ def main() -> int:
     if not args.timeout_seconds > 0.0:
         raise SystemExit("timeout-seconds must be positive")
     try:
-        value = receipt(args.repository, args.sha,
-                        fetch_check_runs(args.repository, args.sha, args.timeout_seconds),
-                        int(time.time()))
+        try:
+            check_runs = fetch_check_runs(args.repository, args.sha, args.timeout_seconds)
+        except RuntimeError as api_error:
+            try:
+                check_runs = fetch_check_runs_html(
+                    args.repository, args.sha, args.timeout_seconds)
+            except RuntimeError as html_error:
+                raise RuntimeError(f"{api_error};{html_error}") from html_error
+        value = receipt(args.repository, args.sha, check_runs, int(time.time()))
     except RuntimeError as exc:
         print(str(exc), file=sys.stderr)
         return 2

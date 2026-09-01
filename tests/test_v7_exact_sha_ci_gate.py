@@ -34,6 +34,26 @@ class ExactShaCiGateTest(unittest.TestCase):
         self.assertFalse(value["exact_sha_ci_green"])
         self.assertIsNone(value["checks"]["ci-v7-Debug"]["id"])
 
+    def test_official_checks_html_parser_requires_both_successful_jobs(self) -> None:
+        parser = GATE._ChecksPageParser(GATE.DEFAULT_REQUIRED)
+        parser.feed("""
+        <div class="d-flex checks-list-item position-relative">
+          <div><svg aria-label="This job succeeded"></svg>
+          <a href="/owner/repo/actions/runs/10/job/101"><span>ci-v7-Release</span></a></div>
+        </div>
+        <div class="d-flex checks-list-item position-relative">
+          <div><svg aria-label="This job succeeded"></svg>
+          <a href="/owner/repo/actions/runs/10/job/102"><span>ci-v7-Debug</span></a></div>
+        </div>
+        """)
+        value = GATE.receipt("owner/repo", "c" * 40, parser.rows, 1)
+        self.assertTrue(value["exact_sha_ci_green"])
+        self.assertEqual(value["checks"]["ci-v7-Release"]["id"], 101)
+        self.assertEqual(
+            value["checks"]["ci-v7-Debug"]["details_url"],
+            "https://github.com/owner/repo/actions/runs/10/job/102",
+        )
+
 
 if __name__ == "__main__":
     unittest.main()
