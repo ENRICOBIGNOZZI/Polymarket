@@ -45,7 +45,7 @@ class V7PublicDnsRuntimeContractTests(unittest.TestCase):
     def test_service_loads_only_owner_protected_allowlisted_external_credentials(self) -> None:
         entrypoint = (ROOT / "ops" / "v7_service_entrypoint.sh").read_text(encoding="utf-8")
         self.assertIn("v7_credentials.env", entrypoint)
-        self.assertIn("stat.S_IMODE(info.st_mode) & 0o077 == 0", entrypoint)
+        self.assertIn("require(stat.S_IMODE(info.st_mode) & 0o077 == 0", entrypoint)
         self.assertIn("not stat.S_ISLNK(info.st_mode)", entrypoint)
         self.assertIn("PM_V7_SPORTRADAR_API_KEY", entrypoint)
         self.assertIn("PM_V7_KALSHI_PRIVATE_KEY_PATH", entrypoint)

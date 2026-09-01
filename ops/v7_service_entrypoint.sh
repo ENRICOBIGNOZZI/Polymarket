@@ -16,11 +16,15 @@ if [[ -e "$CREDENTIALS_FILE" ]]; then
 import os, stat, sys
 path=sys.argv[1]
 info=os.lstat(path)
-assert stat.S_ISREG(info.st_mode), "credentials file is not regular"
-assert not stat.S_ISLNK(info.st_mode), "credentials file cannot be a symlink"
-assert info.st_uid == os.getuid(), "credentials file owner mismatch"
-assert stat.S_IMODE(info.st_mode) & 0o077 == 0, "credentials file permissions are unsafe"
-assert info.st_size <= 65536, "credentials file is too large"
+def require(condition, message):
+    if not condition:
+        raise SystemExit(message)
+
+require(stat.S_ISREG(info.st_mode), "credentials file is not regular")
+require(not stat.S_ISLNK(info.st_mode), "credentials file cannot be a symlink")
+require(info.st_uid == os.getuid(), "credentials file owner mismatch")
+require(stat.S_IMODE(info.st_mode) & 0o077 == 0, "credentials file permissions are unsafe")
+require(info.st_size <= 65536, "credentials file is too large")
 allowed={
     "PM_V7_SPORTRADAR_API_KEY", "PM_V7_SPORTRADAR_ACCESS_LEVEL",
     "PM_V7_LIMITLESS_API_KEY", "PM_V7_LIMITLESS_ACCOUNT_ADDRESS",
@@ -31,7 +35,7 @@ for number, raw in enumerate(open(path, encoding="utf-8"), 1):
     if not line or line.startswith("#"):
         continue
     key, separator, value=line.partition("=")
-    assert separator and key in allowed and value, f"invalid credentials entry at line {number}"
+    require(separator and key in allowed and value, f"invalid credentials entry at line {number}")
 PY
   while IFS= read -r credential_line || [[ -n "$credential_line" ]]; do
     [[ -z "$credential_line" || "$credential_line" == \#* ]] && continue
