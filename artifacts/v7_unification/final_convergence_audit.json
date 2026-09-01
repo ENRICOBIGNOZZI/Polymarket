@@ -1,0 +1,107 @@
+{
+  "architecture": {
+    "decision_chain": [
+      "ECONOMIC_ENGINE",
+      "V7_GLOBAL_PORTFOLIO_COORDINATOR",
+      "V7_CANONICAL_ALLOCATOR",
+      "V7_CANONICAL_RISK",
+      "V7_CANONICAL_OMS",
+      "V7_CANONICAL_INVENTORY",
+      "V7_CANONICAL_LEDGER"
+    ],
+    "economic_engine_count": 2,
+    "economic_engines": [
+      "BTC_SETTLEMENT_ENGINE",
+      "STRUCTURAL_ARB_ENGINE"
+    ],
+    "known_migration_defect_count": 0,
+    "owner_counts": {
+      "capital_allocator": 1,
+      "global_portfolio_coordinator": 1,
+      "inventory": 1,
+      "ledger": 1,
+      "oms": 1,
+      "promotion": 1,
+      "risk_engine": 1,
+      "runtime_identity": 1
+    },
+    "static_ledger_transport_edge_count": 4,
+    "system_count": 1
+  },
+  "baseline_sha": "8d9e8e603aae4d73842212eedcf8e0e06383127f",
+  "external_blockers": [
+    "external:GitHub_admin",
+    "external:PAPER_host"
+  ],
+  "governance": {
+    "code_owner_review_required": true,
+    "required_checks": [
+      "ci-v7-Debug",
+      "ci-v7-Release",
+      "monitoring-v7",
+      "sanitizer-v7",
+      "security-audit-v7",
+      "single-writer-v7"
+    ],
+    "ruleset_applied": false,
+    "ruleset_manifest_ready": true,
+    "state": "EXTERNAL_BLOCKER"
+  },
+  "readiness": {
+    "economic_state": "MORE_EVIDENCE_REQUIRED",
+    "physical_paper_runtime_state": "EXTERNAL_BLOCKER",
+    "profitability_proven": false,
+    "promotion_ready": false,
+    "technical_repository_state": "VALIDATED_BY_THIS_AUDIT"
+  },
+  "runtime_processes": {
+    "authority_counts": {
+      "capital_allocator": 1,
+      "global_portfolio_coordinator": 1,
+      "inventory": 1,
+      "ledger": 1,
+      "oms": 1,
+      "promotion": 0,
+      "risk_engine": 1,
+      "runtime_identity": 1
+    },
+    "declared_count": 33,
+    "launcher_child_count": 31,
+    "launcher_manifest_parity": true,
+    "research_fault_isolation": true
+  },
+  "safety": {
+    "authenticated_execution": false,
+    "automatic_capital_transfer": false,
+    "automatic_promotion": false,
+    "paper_only": true,
+    "real_capital_at_risk": false,
+    "real_order_submission": false
+  },
+  "sbom": {
+    "format": "SPDX-2.3",
+    "packages": [
+      "Boost",
+      "OpenSSL",
+      "Python",
+      "libcurl",
+      "polymarket-v7"
+    ],
+    "path": "artifacts/v7_sbom.spdx.json"
+  },
+  "schema": "polymarket_v7_final_convergence_audit_v1",
+  "source_snapshot_sha": "cc1f8e103b1117509cf9911d6537a860d19f6aa7",
+  "surfaces": {
+    "classification_counts": {
+      "ARCHIVE_HISTORY_ONLY": 24,
+      "EXTERNAL_BLOCKER": 2,
+      "KEEP_CANONICAL": 577,
+      "KEEP_ZERO_AUTHORITY_RESEARCH": 146,
+      "MERGE_INTO_CANONICAL": 164
+    },
+    "delete_active_legacy_count": 0,
+    "entry_count": 913,
+    "temporary_compatibility_count": 0
+  },
+  "valid": true
+}

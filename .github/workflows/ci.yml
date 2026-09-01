@@ -134,3 +134,4 @@ jobs:
           python3 scripts/v7_protocol_fuzz.py --iterations 5000
           python3 tests/test_v7_repository_shape.py
           python3 scripts/v7_convergence_audit.py --repository-root . >/dev/null
+          python3 scripts/v7_final_convergence_audit.py --repository-root . >/dev/null

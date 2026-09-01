@@ -92,7 +92,7 @@ opened. The collector is read-only and remains a RESEARCH/PAPER component.
 - Missing Sportradar credentials produces `CREDENTIALS_REQUIRED` and the sports
   worker remains alive.
 - Kalshi transport failure disables only cross-platform research.
-- Missing or expired mappings disable only the affected external sleeve.
+- Missing or expired mappings disable only the affected external research family or engine component.
 - Parser failures, stale feed, unresolved gaps, contract changes and unsafe
   authority fields fail closed locally.
 - Maker, structural, graph, canonical OMS, allocator, risk and ledger continue.

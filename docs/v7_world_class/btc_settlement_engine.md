@@ -1,11 +1,11 @@
 # BTC settlement engine
 
-V7 now treats settlement alpha as one economic decision, not three competing
-strategy sleeves. `crypto_settlement_fair` is the registry authority owner;
-`professional_maker` and `crypto_informed_taker` are execution-model
-components. They cannot own capital or submit a second independent decision.
-Structural arbitrage remains separate under `hard_arb`, with
-`fast_structural` retained as a policy challenger.
+V7 treats settlement alpha as one economic decision, not competing strategies.
+`crypto_settlement_fair`, `professional_maker`, and `crypto_informed_taker` are
+components of `BTC_SETTLEMENT_ENGINE`. None is an authority owner. Structural
+arbitrage is the second engine; `hard_arb` and `fast_structural` are its
+components. Both engines publish typed opportunities to the same global
+coordinator and share the canonical allocator, risk, OMS, inventory, and ledger.
 
 ## Decision contract
 

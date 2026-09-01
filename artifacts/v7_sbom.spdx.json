@@ -1,0 +1,75 @@
+{
+  "spdxVersion": "SPDX-2.3",
+  "dataLicense": "CC0-1.0",
+  "SPDXID": "SPDXRef-DOCUMENT",
+  "name": "polymarket-v7-source-sbom",
+  "documentNamespace": "https://github.com/ENRICOBIGNOZZI/Polymarket/sbom/v7-2026-09-01",
+  "creationInfo": {
+    "created": "2026-09-01T00:00:00Z",
+    "creators": ["Tool: Codex V7 repository audit"]
+  },
+  "packages": [
+    {
+      "name": "polymarket-v7",
+      "SPDXID": "SPDXRef-Package-PolymarketV7",
+      "versionInfo": "7.0.0",
+      "downloadLocation": "https://github.com/ENRICOBIGNOZZI/Polymarket",
+      "filesAnalyzed": false,
+      "licenseConcluded": "NOASSERTION",
+      "licenseDeclared": "NOASSERTION",
+      "copyrightText": "NOASSERTION",
+      "primaryPackagePurpose": "APPLICATION"
+    },
+    {
+      "name": "Boost",
+      "SPDXID": "SPDXRef-Package-Boost",
+      "versionInfo": "system-resolved",
+      "downloadLocation": "https://www.boost.org/",
+      "filesAnalyzed": false,
+      "licenseConcluded": "BSL-1.0",
+      "licenseDeclared": "BSL-1.0",
+      "copyrightText": "NOASSERTION",
+      "primaryPackagePurpose": "LIBRARY"
+    },
+    {
+      "name": "OpenSSL",
+      "SPDXID": "SPDXRef-Package-OpenSSL",
+      "versionInfo": "system-resolved",
+      "downloadLocation": "https://www.openssl.org/",
+      "filesAnalyzed": false,
+      "licenseConcluded": "NOASSERTION",
+      "licenseDeclared": "NOASSERTION",
+      "copyrightText": "NOASSERTION",
+      "primaryPackagePurpose": "LIBRARY"
+    },
+    {
+      "name": "libcurl",
+      "SPDXID": "SPDXRef-Package-libcurl",
+      "versionInfo": "pkg-config-resolved",
+      "downloadLocation": "https://curl.se/libcurl/",
+      "filesAnalyzed": false,
+      "licenseConcluded": "curl",
+      "licenseDeclared": "curl",
+      "copyrightText": "NOASSERTION",
+      "primaryPackagePurpose": "LIBRARY"
+    },
+    {
+      "name": "Python",
+      "SPDXID": "SPDXRef-Package-Python",
+      "versionInfo": ">=3.9 standard-library-only runtime",
+      "downloadLocation": "https://www.python.org/",
+      "filesAnalyzed": false,
+      "licenseConcluded": "PSF-2.0",
+      "licenseDeclared": "PSF-2.0",
+      "copyrightText": "NOASSERTION",
+      "primaryPackagePurpose": "RUNTIME"
+    }
+  ],
+  "relationships": [
+    {"spdxElementId":"SPDXRef-DOCUMENT","relationshipType":"DESCRIBES","relatedSpdxElement":"SPDXRef-Package-PolymarketV7"},
+    {"spdxElementId":"SPDXRef-Package-PolymarketV7","relationshipType":"DEPENDS_ON","relatedSpdxElement":"SPDXRef-Package-Boost"},
+    {"spdxElementId":"SPDXRef-Package-PolymarketV7","relationshipType":"DEPENDS_ON","relatedSpdxElement":"SPDXRef-Package-OpenSSL"},
+    {"spdxElementId":"SPDXRef-Package-PolymarketV7","relationshipType":"DEPENDS_ON","relatedSpdxElement":"SPDXRef-Package-libcurl"},
+    {"spdxElementId":"SPDXRef-Package-PolymarketV7","relationshipType":"DEPENDS_ON","relatedSpdxElement":"SPDXRef-Package-Python"}
+  ]
+}

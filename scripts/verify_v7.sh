@@ -105,6 +105,7 @@ python3 tests/test_v7_single_writer_contract.py
 python3 -m unittest discover -s tests -p 'test_v7_*manifest.py'
 python3 scripts/v7_protocol_fuzz.py --iterations "${V7_PROTOCOL_FUZZ_ITERATIONS:-5000}"
 python3 scripts/v7_convergence_audit.py --repository-root . >/dev/null
+python3 scripts/v7_final_convergence_audit.py --repository-root . >/dev/null
 
 cmake -S . -B "$RELEASE_BUILD" -DCMAKE_BUILD_TYPE=Release
 cmake --build "$RELEASE_BUILD" --parallel "$JOBS"

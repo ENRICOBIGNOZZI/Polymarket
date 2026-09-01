@@ -189,11 +189,37 @@ class V7RepositoryShapeTest(unittest.TestCase):
         self.assertIn("deletion", by_type)
         self.assertIn("non_fast_forward", by_type)
         self.assertIn("required_linear_history", by_type)
+        pull_request = by_type["pull_request"]["parameters"]
+        self.assertTrue(pull_request["require_code_owner_review"])
+        self.assertTrue(pull_request["require_last_push_approval"])
+        self.assertEqual(pull_request["required_approving_review_count"], 1)
         required = by_type["required_status_checks"]["parameters"]["required_status_checks"]
         self.assertEqual(
             {row["context"] for row in required},
             {"ci-v7-Release", "ci-v7-Debug", "security-audit-v7", "sanitizer-v7", "monitoring-v7", "single-writer-v7"},
         )
+
+    def test_final_docs_describe_two_engines_and_no_independent_component_authority(self) -> None:
+        readme = (ROOT / "README.md").read_text(encoding="utf-8")
+        btc = (ROOT / "docs/v7_world_class/btc_settlement_engine.md").read_text(encoding="utf-8")
+        dashboard = (ROOT / "monitoring/grafana/dashboards/polymarket-v7.json").read_text(encoding="utf-8")
+        for token in (
+            "BTC_SETTLEMENT_ENGINE", "STRUCTURAL_ARB_ENGINE",
+            "V7_GLOBAL_PORTFOLIO_COORDINATOR", "one allocator", "one risk owner",
+            "one OMS", "one inventory owner", "one append-only ledger writer",
+            "Zero-authority research plane",
+        ):
+            self.assertIn(token, readme)
+        self.assertIn("None is an authority owner", btc)
+        self.assertNotIn("registry authority owner", btc)
+        self.assertNotIn("by Sleeve", dashboard)
+        self.assertNotIn('\"title\":\"Sleeves\"', dashboard)
+
+    def test_source_sbom_covers_declared_build_dependencies(self) -> None:
+        sbom = json.loads((ROOT / "artifacts/v7_sbom.spdx.json").read_text(encoding="utf-8"))
+        self.assertEqual(sbom["spdxVersion"], "SPDX-2.3")
+        names = {package["name"] for package in sbom["packages"]}
+        self.assertEqual(names, {"polymarket-v7", "Boost", "OpenSSL", "libcurl", "Python"})
 
     def test_ci_runs_both_full_history_secret_scanners(self) -> None:
         workflow = (ROOT / ".github/workflows/ci.yml").read_text(encoding="utf-8")

@@ -1,8 +1,8 @@
 {
   "schema_version": 1,
-  "directive_epoch": "2026-08-29T13:15:16Z",
-  "operator_instruction_id": "user-retire-obsolete-generations-20260829",
-  "priority_instruction_id": "user-retire-obsolete-generations-20260829",
+  "directive_epoch": "2026-09-01T00:00:00Z",
+  "operator_instruction_id": "user-v7-unified-economic-system-20260901",
+  "priority_instruction_id": "user-v7-unified-economic-system-20260901",
   "latency_priority_instruction_id": "user-v7-latency-domination-20260828",
   "authority": "latest_explicit_user_instruction",
   "repository": "ENRICOBIGNOZZI/Polymarket",
@@ -49,14 +49,14 @@
     "success": "positive forward realized PAPER fill-conditioned post-cost PnL with causal data, realistic simulated fills, authoritative fees, executable depth, inventory/unwind losses, markout, reward/rebate attribution, cost stress and no leakage"
   },
   "current_priority_order": [
-    "P0 V7 Latency Domination: exact stage timestamps, persistent transport, exact-head p99/p99.9 guardrails, regional shootout and maker cancel-latency optimization before additional alpha features.",
-    "Keep every obsolete operational generation retired; port any uniquely useful capability into V7 without restoring the old runtime.",
     "Keep one V7 runtime, two economic engines, one global portfolio coordinator, one broker authority, one canonical execution ledger, one allocator, one risk guard and one monitoring plane.",
-    "Keep only generation-neutral/common primitives that are actually imported by V7.",
     "BTC_SETTLEMENT_ENGINE compares professional maker, informed taker, cancellation and no-action components on one conservative account-wealth objective.",
     "STRUCTURAL_ARB_ENGINE owns hard-arb and fast-structural components as one capital reservation and lifecycle.",
     "All engine proposals pass through one global portfolio coordinator, allocator, risk engine, OMS, inventory and ledger chain.",
-    "Graph/RV, Ranking, PCA, Local Factor and Micro Taker remain zero-authority research only.",
+    "Graph/RV, Ranking, PCA, Local Factor, Micro Taker, wallet, sports, cross-platform, OSINT and market-open remain zero-authority research only.",
+    "Keep technical readiness separate from economic readiness; exploitation capital requires mature causal forward evidence and positive conservative post-cost bounds.",
+    "Keep exact stage timestamps, persistent transport, exact-head p99/p99.9 guardrails and regional latency evidence without claiming venue latency from synthetic tests.",
+    "Keep every obsolete operational generation and duplicate authority path retired; Git history and the immutable rollback bundle are the archive.",
     "Continuously run the repository-shape audit and V7-only CI/monitoring/runtime smoke tests."
   ],
   "scheduler_assignments": {

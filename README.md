@@ -18,22 +18,22 @@ No wallet, key or authenticated order-submission path belongs in the canonical r
 ## Canonical runtime
 
 ```text
-Public Polymarket market data
+Read-only market, oracle and mapped external data
         |
         v
-V7 strategy/model sleeves
+Canonical causal state + zero-authority research/feature plane
         |
-        v
-Canonical intent/execution routing
-        |
-        v
-scripts/paper_v7_execution_loop.sh
-        |
-        +--> one append-only execution ledger / writer
-        +--> learned execution and empirical joint-state evidence
-        +--> one account-level capital allocator
-        +--> one global portfolio guard / kill switch
-        +--> one Prometheus / Grafana V7 monitoring plane
+        +----------------------+----------------------+
+        |                                             |
+        v                                             v
+BTC_SETTLEMENT_ENGINE                     STRUCTURAL_ARB_ENGINE
+(fair + informed taker + maker)           (hard arb + fast structural)
+        +----------------------+----------------------+
+                               |
+                               v
+V7_GLOBAL_PORTFOLIO_COORDINATOR
+        -> one allocator -> one risk owner -> one OMS
+        -> one inventory owner -> one append-only ledger writer
 ```
 
 Canonical surfaces:
@@ -49,13 +49,26 @@ monitoring/grafana/dashboards/polymarket-v7.json
 ops/update_server_v7.sh
 ```
 
-## Economic sleeves
+## Economic engines
 
-All sleeves share the same runtime, ledger, risk and deployment system.
+Exactly two engines may propose economic actions. Neither owns capital, risk,
+orders, inventory, or the ledger; both use the same global authority chain.
 
-### Professional market maker
+### BTC settlement engine
 
-Primary market-making sleeve. It uses action-specific `JOIN` / `IMPROVE` / `FADE` / one-sided / withdraw decisions, inventory-aware pricing, causal public-flow replay, queue-aware fillability, full-depth executable marks and canonical-ledger evidence. Trading PnL, maker rebates and liquidity rewards are separate quantities. Bounded PAPER exploration receives no promotion credit.
+This engine compares settlement fair value, informed taking, professional
+making, cancellation, and no-action on one conservative account-wealth
+objective. Missing latency, calibration, settlement, capacity, or cost evidence
+forces `CANCEL`/`NOTHING`.
+
+#### Professional market-maker component
+
+The maker component evaluates `JOIN` / `IMPROVE` / `FADE` / one-sided /
+withdraw decisions with causal public-flow replay, queue-aware fillability,
+full-depth executable marks, and fill-conditioned research evidence. It has no
+standalone runtime or execution authority. Trading PnL, rebates, and liquidity
+rewards remain separate quantities; bounded exploration receives no promotion
+credit.
 
 ```text
 config/v7_professional_market_maker.json
@@ -67,36 +80,45 @@ build/polymarket_v7_maker_markout_observer
 scripts/v7_market_maker_status.py
 ```
 
-### Fast structural arbitrage
+#### Settlement-fair and informed-taker components
 
-Shared C++ WebSocket/L2 substrate with dual exchange/receive clocks, lineage invalidation, executable depth and strict freshness semantics.
+Contract correctness is fail-closed: exact rules, outcome mapping, fees, and
+same-oracle binding are mandatory. Counterfactual lifecycle labels stay in the
+research evidence plane; native proposals enter the global coordinator.
 
 ```text
+config/v7_btc_settlement_engine.json
+config/v7_external_fair.json
+scripts/v7_external_fair_paper_router.py
+scripts/v7_same_oracle_adapter.py
+src/v7_external_*.cpp
+```
+
+### Structural arbitrage engine
+
+Hard-arbitrage and fast-structural detection share one engine, one atomic intent,
+and one capital reservation. The C++ WebSocket/L2 substrate preserves dual
+exchange/receive clocks, lineage invalidation, full executable depth, and strict
+freshness. Typed proposals enter the global coordinator; the engine cannot write
+orders, inventory, or the ledger.
+
+```text
+config/v7_structural_arb_engine.json
 src/fast_arb.cpp
 src/fast_ws.cpp
 src/fast_runtime/
 src/v7_fast_structural_runtime.cpp
 include/pm/fast_arb.hpp
+scripts/v7_joint_execution_policy.py
 ```
 
-### Settlement fair and informed taker
-
-PAPER authority is configured for settlement-aware maker repricing/cancel and
-full-depth informed taking. Contract correctness remains fail-closed: exact
-rules, outcome mapping, fee and same-oracle binding are mandatory. Missing
-bindings quarantine only the affected contracts; economic maturity is reported
-but does not add another PAPER gate. Runtime readiness remains false until the
-worker and oracle are actually healthy.
-
-```text
-config/v7_external_fair.json
-scripts/v7_same_oracle_adapter.py
-src/v7_external_*.cpp
-```
+## Zero-authority research plane
 
 ### Graph / relative value
 
-Native V7 multi-leg relative-value execution. Queue affects fillability only; it never creates capital capacity. Economics use direct empirical joint states and explicit partial/unwind losses.
+Multi-leg relative-value research uses direct empirical joint states and
+explicit partial/unwind losses. Queue affects fillability only; it never creates
+capital capacity or execution authority.
 
 ```text
 scripts/v7_graph_rv.py
@@ -104,22 +126,11 @@ scripts/v7_graph_rv_executable_intents.py
 scripts/v7_graph_cost_vector.py
 ```
 
-### Structural arbitrage engine
-
-The native V7 structural engine combines hard-arbitrage and fast-structural
-detection. It proposes typed atomic intents to the global coordinator; full
-depth, authoritative fees, joint completion, timeout, and bounded unwind are
-mandatory contract properties. It does not own execution or the ledger.
-
-```text
-config/v7_structural_arb_engine.json
-src/v7_fast_structural_runtime.cpp
-scripts/v7_joint_execution_policy.py
-```
-
 ### Micro Taker
 
-Selective short-horizon executable round-trip sleeve with entry/exit depth, fee, slippage and adverse-markout accounting.
+Selective short-horizon round-trip research with entry/exit depth, fees,
+slippage, and adverse-markout accounting. It cannot submit or represent an
+executable order.
 
 ```text
 scripts/v7_micro_taker_worker.py
@@ -128,12 +139,13 @@ scripts/v7_micro_taker_core.py
 
 ### Ranking / PCA / Local Factor
 
-V7-native research sleeves. Horizons remain separated and these models do not own runtime state or deployment.
+V7-native research families. Horizons remain separated and these models own no
+capital, risk, OMS, inventory, ledger, promotion, or deployment authority.
 
 ### Strategy-wide registry and research kernels
 
 The complete 15-family economic registry is validated at canonical runtime
-startup. It fixes each sleeve's frequency, authority, action set, independent
+startup. It fixes each family's frequency, authority, action set, independent
 sample unit and strategy-specific execution model. OSINT, sports latency,
 cross-platform, wallet intelligence and market-open are implemented as
 fail-closed research/shadow kernels; they cannot submit orders or auto-promote.
@@ -182,7 +194,9 @@ scripts/v7_capital_allocator.py
 scripts/v7_portfolio_guard.py
 ```
 
-Sleeve allocations are capacity budgets, not independent copies of the account. Cash, gross exposure, market/event exposure, inventory, drawdown and kill state reconcile at account level.
+Engine envelopes and component observation budgets are capacity limits, not
+independent accounts. Cash, exposure, inventory, drawdown, and kill state
+reconcile once at account level.
 
 ## Public trade recorder
 

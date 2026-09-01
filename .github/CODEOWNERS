@@ -7,3 +7,11 @@
 /src/ @ENRICOBIGNOZZI
 /include/ @ENRICOBIGNOZZI
 /monitoring/ @ENRICOBIGNOZZI
+
+# Economic-authority and exact-SHA governance surfaces.
+/config/v7_authority_registry.json @ENRICOBIGNOZZI
+/config/v7_authority_edges.json @ENRICOBIGNOZZI
+/schemas/v7/opportunity_envelope.schema.json @ENRICOBIGNOZZI
+/scripts/v7_global_portfolio_coordinator.py @ENRICOBIGNOZZI
+/scripts/v7_opportunity.py @ENRICOBIGNOZZI
+/artifacts/github_main_ruleset.json @ENRICOBIGNOZZI
