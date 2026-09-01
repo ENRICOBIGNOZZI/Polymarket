@@ -6,7 +6,7 @@
     "ref_count": 41,
     "runtime_output_count": 123,
     "schema_count": 22,
-    "tracked_or_intended_path_count": 693,
+    "tracked_or_intended_path_count": 695,
     "workflow_count": 11
   },
   "entries": [
@@ -1925,6 +1925,7 @@
         "static_references": [
           "AGENT_DIRECTIVE_V7_UNIFICATION_AND_LEGACY_ERADICATION.md",
           "artifacts/v7_unification/phase_2_report.md",
+          "artifacts/v7_unification/phase_9_report.md",
           "scripts/v7_cutover_contract.py",
           "scripts/v7_surface_classification.py",
           "tests/test_v7_surface_classification.py"
@@ -2186,6 +2187,58 @@
       "path_or_ref": "artifacts/v7_unification/phase_8_report.md",
       "rollback_artifact_tag": "v7-unification-pre-migration-8d9e8e60",
       "surface_id": "path:artifacts/v7_unification/phase_8_report.md",
+      "unique_behavior_data_contribution": "tracked repository behavior, evidence, test, configuration, or documentation",
+      "validation_tests": [
+        "tests/test_v7_surface_classification.py"
+      ]
+    },
+    {
+      "canonical_replacement": "artifacts/v7_unification/path_classification.json",
+      "classification": "ARCHIVE_HISTORY_ONLY",
+      "current_imports_callers_readers_writers": {
+        "analysis": "exact path/module references from tracked text; runtime linkage is separately enumerated",
+        "static_references": [
+          "artifacts/v7_unification/phase_9_report.md"
+        ]
+      },
+      "deletion_gate": "NONE_IMMUTABLE_AUDIT_OR_ROLLBACK_EVIDENCE",
+      "disposition_commit": null,
+      "economic_authority": {
+        "capabilities": [],
+        "executable": false,
+        "owner": null
+      },
+      "final_disposition": "retain_as_nonruntime_history",
+      "migration_status": "classified",
+      "object_type": "tracked_path",
+      "path_or_ref": "artifacts/v7_unification/phase_9_canary_attestation.json",
+      "rollback_artifact_tag": "v7-unification-pre-migration-8d9e8e60",
+      "surface_id": "path:artifacts/v7_unification/phase_9_canary_attestation.json",
+      "unique_behavior_data_contribution": "tracked repository behavior, evidence, test, configuration, or documentation",
+      "validation_tests": [
+        "tests/test_v7_surface_classification.py"
+      ]
+    },
+    {
+      "canonical_replacement": "artifacts/v7_unification/path_classification.json",
+      "classification": "ARCHIVE_HISTORY_ONLY",
+      "current_imports_callers_readers_writers": {
+        "analysis": "exact path/module references from tracked text; runtime linkage is separately enumerated",
+        "static_references": []
+      },
+      "deletion_gate": "NONE_IMMUTABLE_AUDIT_OR_ROLLBACK_EVIDENCE",
+      "disposition_commit": null,
+      "economic_authority": {
+        "capabilities": [],
+        "executable": false,
+        "owner": null
+      },
+      "final_disposition": "retain_as_nonruntime_history",
+      "migration_status": "classified",
+      "object_type": "tracked_path",
+      "path_or_ref": "artifacts/v7_unification/phase_9_report.md",
+      "rollback_artifact_tag": "v7-unification-pre-migration-8d9e8e60",
+      "surface_id": "path:artifacts/v7_unification/phase_9_report.md",
       "unique_behavior_data_contribution": "tracked repository behavior, evidence, test, configuration, or documentation",
       "validation_tests": [
         "tests/test_v7_surface_classification.py"
@@ -13497,6 +13550,7 @@
         "static_references": [
           "artifacts/v7_unification/path_classification.json",
           "artifacts/v7_unification/phase_2_report.md",
+          "artifacts/v7_unification/phase_9_report.md",
           "scripts/v7_cutover_contract.py",
           "tests/test_v7_surface_classification.py"
         ]
@@ -13685,6 +13739,7 @@
           "README.md",
           "SECURITY.md",
           "artifacts/v7_unification/path_classification.json",
+          "artifacts/v7_unification/phase_9_report.md",
           "scripts/v7_current_truth_audit.py",
           "scripts/v7_implementation_audit.py",
           "tests/test_v7_current_truth_audit.py",
@@ -18111,7 +18166,8 @@
       "current_imports_callers_readers_writers": {
         "analysis": "exact path/module references from tracked text; runtime linkage is separately enumerated",
         "static_references": [
-          "artifacts/v7_unification/path_classification.json"
+          "artifacts/v7_unification/path_classification.json",
+          "artifacts/v7_unification/phase_9_report.md"
         ]
       },
       "deletion_gate": "NONE_CANONICAL_SURFACE",
@@ -21052,6 +21108,7 @@
         "static_references": [
           "artifacts/v7_unification/path_classification.json",
           "artifacts/v7_unification/phase_2_report.md",
+          "artifacts/v7_unification/phase_9_report.md",
           "scripts/v7_surface_classification.py"
         ]
       },
@@ -21080,6 +21137,7 @@
         "analysis": "exact path/module references from tracked text; runtime linkage is separately enumerated",
         "static_references": [
           "artifacts/v7_unification/path_classification.json",
+          "artifacts/v7_unification/phase_9_report.md",
           "scripts/v7_current_truth_audit.py",
           "scripts/v7_implementation_audit.py",
           "tests/test_v7_current_truth_audit.py"
@@ -22080,7 +22138,7 @@
       "object_type": "branch_or_remote_ref",
       "path_or_ref": "refs/heads/codex/v7-unified-system-legacy-eradication",
       "rollback_artifact_tag": "v7-unification-pre-migration-8d9e8e60",
-      "snapshot_object_id": "937ca8e052a10a7cbf8ef7fdde19896c03a047f2",
+      "snapshot_object_id": "3c32a60d7ca3b5d3d97ae8b74a80a04c0978c2d4",
       "surface_id": "ref:refs/heads/codex/v7-unified-system-legacy-eradication",
       "unique_behavior_data_contribution": "active migration or canonical upstream ref",
       "validation_tests": [
@@ -22214,7 +22272,7 @@
       "object_type": "branch_or_remote_ref",
       "path_or_ref": "refs/remotes/origin/codex/v7-unified-system-legacy-eradication",
       "rollback_artifact_tag": "v7-unification-pre-migration-8d9e8e60",
-      "snapshot_object_id": "937ca8e052a10a7cbf8ef7fdde19896c03a047f2",
+      "snapshot_object_id": "3c32a60d7ca3b5d3d97ae8b74a80a04c0978c2d4",
       "surface_id": "ref:refs/remotes/origin/codex/v7-unified-system-legacy-eradication",
       "unique_behavior_data_contribution": "active migration or canonical upstream ref",
       "validation_tests": [
@@ -26822,5 +26880,5 @@
   "real_capital_at_risk": false,
   "real_order_submission": false,
   "schema": "polymarket_v7_surface_classification_v1",
-  "source_snapshot_sha": "937ca8e052a10a7cbf8ef7fdde19896c03a047f2"
+  "source_snapshot_sha": "3c32a60d7ca3b5d3d97ae8b74a80a04c0978c2d4"
 }

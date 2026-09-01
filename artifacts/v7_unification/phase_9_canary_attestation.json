@@ -1,0 +1,69 @@
+{
+  "schema": "polymarket_v7_phase_9_canary_attestation_v1",
+  "validated_sha": "3c32a60d7ca3b5d3d97ae8b74a80a04c0978c2d4",
+  "baseline_sha": "8d9e8e603aae4d73842212eedcf8e0e06383127f",
+  "validation_scope": "BOUNDED_LOCAL_PUBLIC_DATA_PAPER",
+  "duration_seconds": 121,
+  "runtime_state_observed": "running",
+  "runtime_readiness": "CORE_RUNTIME_ONLY",
+  "paper_only": true,
+  "authenticated_execution": false,
+  "real_order_submission": false,
+  "real_capital_at_risk": false,
+  "economic_new_risk_ready": false,
+  "authorized_alpha_actions": [],
+  "safe_actions": [
+    "CANCEL",
+    "NOTHING"
+  ],
+  "economic_engines": [
+    "BTC_SETTLEMENT_ENGINE",
+    "STRUCTURAL_ARB_ENGINE"
+  ],
+  "single_execution_owner": true,
+  "identities": {
+    "config_git_hash": "2ca95873a3521a09686cfe377a721a8bd8dbab1e",
+    "policy_git_hash": "d4b565f1f811b72727c41065f6c2d11b13fb5a1f",
+    "model_git_hash": "8878606ae0fe19ec2df2f67d1a5f88791a186193",
+    "model_identity_source": "maker_execution_model",
+    "run_id": "3c32a60d7ca3-1788259722-99482",
+    "ledger_id": "3c32a60d7ca3-1788259722-99482:execution",
+    "server_id": "Mac",
+    "resolved_process_manifest_sha256": "f3174e90b933a0a57ceb5dad271e763cd6428ae2f5b0af2da8d6ceb3c8a89856",
+    "resolved_process_count": 33
+  },
+  "remote_ci": {
+    "workflow_run_id": 33498896619,
+    "workflow_url": "https://github.com/ENRICOBIGNOZZI/Polymarket/actions/runs/33498896619",
+    "conclusions": {
+      "ci-v7-Debug": "success",
+      "ci-v7-Release": "success",
+      "sanitizer-v7": "success",
+      "security-audit-v7": "success"
+    },
+    "receipt_required_checks": {
+      "ci-v7-Debug": 99827367656,
+      "ci-v7-Release": 99827367819
+    }
+  },
+  "economics": {
+    "state": "MORE_EVIDENCE_REQUIRED",
+    "promotion_ready": false,
+    "submitted_units": 0,
+    "complete_units": 0,
+    "reason_codes": [
+      "no_mature_full_cost_terminal_observations",
+      "no_submitted_economic_units"
+    ]
+  },
+  "shutdown": {
+    "controlled_sigterm": true,
+    "kill_control_written": true,
+    "final_runtime_state": "stopping"
+  },
+  "external_blockers": [
+    "PAPER_HOST_SSH_AUTHENTICATION_UNAVAILABLE",
+    "GITHUB_ADMIN_AUTHENTICATION_UNAVAILABLE",
+    "MAIN_ONLY_MONITORING_SINGLE_WRITER_AND_LIVE_PAPER_WORKFLOWS_NOT_DISPATCHABLE_FROM_CURRENT_ACCESS"
+  ]
+}
