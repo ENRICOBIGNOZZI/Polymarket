@@ -41,6 +41,39 @@ class SecretScanTests(unittest.TestCase):
             "api_secret = ${STREAMS_API_SECRET}\napi_key = placeholder\n", location="sample.txt")
         self.assertEqual(findings, [])
 
+    def test_historical_false_positive_exemption_is_exactly_scoped(self) -> None:
+        finding = scanner.Finding(
+            "assigned_secret",
+            "history:7e699ba15770:docs/MONITORING.md:52",
+            "b99287842e904a30",
+        )
+        blob = "7e699ba157704d9243b9aefd42d38b79ab5ac264"
+        self.assertTrue(scanner.is_historical_false_positive(
+            finding, object_id=blob, relative="docs/MONITORING.md",
+        ))
+        self.assertFalse(scanner.is_historical_false_positive(
+            finding, object_id="0" * 40, relative="docs/MONITORING.md",
+        ))
+        self.assertFalse(scanner.is_historical_false_positive(
+            finding, object_id=blob, relative="docs/OTHER.md",
+        ))
+        self.assertFalse(scanner.is_historical_false_positive(
+            scanner.Finding(finding.kind, finding.location, "0" * 16),
+            object_id=blob, relative="docs/MONITORING.md",
+        ))
+
+    def test_other_password_assignments_remain_blocking(self) -> None:
+        fragments = ("rotate", "this", "credential", "immediately", "12345")
+        candidate = "-".join(fragments)
+        findings = scanner.scan_text(
+            f"password='{candidate}'\n", location="docs/MONITORING.md",
+        )
+        self.assertEqual(len(findings), 1)
+        self.assertEqual(findings[0].kind, "assigned_secret")
+        self.assertNotEqual(findings[0].fingerprint, "b99287842e904a30")
+        self.assertNotIn(candidate, findings[0].location)
+        self.assertNotIn(candidate, findings[0].fingerprint)
+
 
 if __name__ == "__main__":
     unittest.main()

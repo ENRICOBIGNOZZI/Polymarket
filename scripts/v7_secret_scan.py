@@ -33,6 +33,20 @@ TEXT_SUFFIXES = {".c", ".cc", ".cpp", ".h", ".hpp", ".json", ".md", ".py", ".sh"
 # synthetic detector inputs. They are not credentials and must not permanently
 # block an authenticated canary after the test source was made literal-free.
 HISTORICAL_SELF_TEST_FIXTURES = frozenset({"tests/test_v7_secret_scan.py"})
+# One historical documentation blob contained a human-readable example
+# passphrase in an instruction that explicitly required operators to choose a
+# different value.  The candidate occurs in no code/configuration blob and was
+# never the launcher's default.  Scope the exemption to every immutable piece
+# of redacted identity so a changed path, blob, detector kind, or fingerprint
+# remains a blocking finding.
+HISTORICAL_FALSE_POSITIVE_EXEMPTIONS = frozenset({
+    (
+        "assigned_secret",
+        "7e699ba157704d9243b9aefd42d38b79ab5ac264",
+        "docs/MONITORING.md",
+        "b99287842e904a30",
+    ),
+})
 
 
 @dataclass(frozen=True)
@@ -59,6 +73,18 @@ def scan_text(text: str, *, location: str) -> list[Finding]:
                     continue
                 findings.append(Finding(kind, f"{location}:{line_number}", _fingerprint(value)))
     return findings
+
+
+def is_historical_false_positive(
+    finding: Finding, *, object_id: str, relative: str,
+) -> bool:
+    """Return true only for an exact, reviewed historical exemption."""
+    return (
+        finding.kind,
+        object_id,
+        relative,
+        finding.fingerprint,
+    ) in HISTORICAL_FALSE_POSITIVE_EXEMPTIONS
 
 
 def _git(root: Path, *args: str) -> str:
@@ -133,7 +159,14 @@ def scan_history(root: Path, commits: Iterable[str] | None = None) -> list[Findi
         except UnicodeDecodeError:
             continue
         object_id = header[0]
-        findings.extend(scan_text(text, location=f"history:{object_id[:12]}:{blobs.get(object_id, 'unknown')}"))
+        relative = blobs.get(object_id, "unknown")
+        rows = scan_text(text, location=f"history:{object_id[:12]}:{relative}")
+        findings.extend(
+            row for row in rows
+            if not is_historical_false_positive(
+                row, object_id=object_id, relative=relative,
+            )
+        )
     return findings
 
 
