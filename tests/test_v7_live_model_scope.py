@@ -44,6 +44,10 @@ class V7LiveModelScopeTest(unittest.TestCase):
             scope["btc_settlement_engine_contract"],
             "config/v7_btc_settlement_engine.json",
         )
+        self.assertEqual(
+            scope["structural_arb_engine_contract"],
+            "config/v7_structural_arb_engine.json",
+        )
         self.assertTrue(scope["paper_only"])
         self.assertFalse(scope["authenticated_execution"])
         self.assertFalse(scope["real_order_submission"])

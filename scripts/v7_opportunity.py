@@ -92,6 +92,7 @@ class OpportunityEnvelope:
             "decision_receive_timestamp_ns", "source_event_timestamps_ns", "fair_value",
             "conservative_expected_wealth_change", "cost_vector", "cost_authority",
             "uncertainty", "calibration_status", "latency", "capacity",
+            "execution_plan",
             "inventory_delta", "portfolio_exposure_delta", "settlement", "eligible",
             "reasons", "deterministic_replay_key", "expires_at_ns",
         }
@@ -177,6 +178,58 @@ class OpportunityEnvelope:
             raise OpportunityError("capacity_fields")
         if _finite(capacity.get("executable_size"), "executable_size") < 0.0:
             raise OpportunityError("executable_size")
+        execution = _mapping(value.get("execution_plan"), "execution_plan")
+        if set(execution) != {
+            "atomic_unit_id", "execution_style", "legs", "partial_fill_plan",
+            "timeout_ms", "unwind_plan",
+        }:
+            raise OpportunityError("execution_plan_fields")
+        if not isinstance(execution.get("atomic_unit_id"), str) or not execution["atomic_unit_id"]:
+            raise OpportunityError("atomic_unit_id")
+        if execution.get("execution_style") not in {"SINGLE_LEG", "SEQUENTIAL_ATOMIC_INTENT"}:
+            raise OpportunityError("execution_style")
+        if execution.get("partial_fill_plan") not in {
+            "CANCEL_REMAINDER", "COMPLETE_OR_UNWIND", "NO_NEW_RISK",
+        } or execution.get("unwind_plan") not in {
+            "NONE", "FULL_DEPTH_BOUNDED_UNWIND", "CANCEL_ONLY",
+        }:
+            raise OpportunityError("partial_fill_or_unwind_plan")
+        timeout_ms = execution.get("timeout_ms")
+        if isinstance(timeout_ms, bool) or not isinstance(timeout_ms, int) or timeout_ms < 0:
+            raise OpportunityError("execution_timeout")
+        legs = execution.get("legs")
+        if not isinstance(legs, list) or not legs:
+            raise OpportunityError("execution_legs")
+        leg_ids: set[str] = set()
+        for leg in legs:
+            if not isinstance(leg, dict) or set(leg) != {
+                "leg_id", "market_id", "contract_id", "token_id", "side",
+                "target_quantity", "limit_price", "fee_authority",
+            }:
+                raise OpportunityError("execution_leg_fields")
+            leg_id = leg.get("leg_id")
+            if not isinstance(leg_id, str) or not leg_id or leg_id in leg_ids:
+                raise OpportunityError("execution_leg_identity")
+            leg_ids.add(leg_id)
+            for name in ("market_id", "contract_id", "token_id"):
+                if not isinstance(leg.get(name), str) or not leg[name]:
+                    raise OpportunityError(f"execution_leg:{name}")
+            if leg.get("side") not in {"BUY", "SELL"}:
+                raise OpportunityError("execution_leg:side")
+            if _finite(leg.get("target_quantity"), "execution_leg:quantity") <= 0.0:
+                raise OpportunityError("execution_leg:quantity")
+            price = _finite(leg.get("limit_price"), "execution_leg:price")
+            if not 0.0 <= price <= 1.0:
+                raise OpportunityError("execution_leg:price")
+            if leg.get("fee_authority") not in AUTHORITY_STATES:
+                raise OpportunityError("execution_leg:fee_authority")
+        if action == "ARB" and (
+            len(legs) < 2
+            or execution.get("execution_style") != "SEQUENTIAL_ATOMIC_INTENT"
+            or execution.get("partial_fill_plan") != "COMPLETE_OR_UNWIND"
+            or execution.get("unwind_plan") != "FULL_DEPTH_BOUNDED_UNWIND"
+        ):
+            raise OpportunityError("structural_atomic_execution_plan")
         settlement = _mapping(value.get("settlement"), "settlement")
         if set(settlement) != {"definition", "source", "verified"}:
             raise OpportunityError("settlement_fields")

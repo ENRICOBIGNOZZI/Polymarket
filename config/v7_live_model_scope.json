@@ -73,5 +73,6 @@
     "blocked_config_is_not_operational_evidence": true,
     "automatic_promotion": false
   },
-  "btc_settlement_engine_contract": "config/v7_btc_settlement_engine.json"
+  "btc_settlement_engine_contract": "config/v7_btc_settlement_engine.json",
+  "structural_arb_engine_contract": "config/v7_structural_arb_engine.json"
 }

@@ -19,6 +19,7 @@ from typing import Any
 
 
 CONFIG_SCHEMA = "polymarket_v7_btc_settlement_engine_v1"
+STRUCTURAL_CONFIG_SCHEMA = "polymarket_v7_structural_arb_engine_v1"
 SNAPSHOT_SCHEMA = "polymarket_v7_btc_settlement_runtime_snapshot_v1"
 LATENCY_SCHEMA = "polymarket_v7_empirical_latency_profile_v1"
 MAKER_SCHEMA = "polymarket_v7_maker_execution_evidence_v1"
@@ -104,6 +105,31 @@ def validate_config(config: dict[str, Any]) -> None:
         or fair.get("settlement_source_may_be_replaced_by_predictor") is not False
     ):
         raise ContractError("fair_value_binding")
+    external_updates = config.get("external_update_policy") if isinstance(
+        config.get("external_update_policy"), dict
+    ) else {}
+    if (
+        external_updates.get("oracle_or_external_update_can_cancel_without_polymarket_book_event") is not True
+        or external_updates.get("oracle_or_external_update_can_reprice_without_polymarket_book_event") is not True
+        or external_updates.get("stale_quote_behavior") != "CANCEL_OR_NOTHING"
+    ):
+        raise ContractError("external_update_risk_preemption")
+    maker_boundary = config.get("maker_economics") if isinstance(
+        config.get("maker_economics"), dict
+    ) else {}
+    required_maker_components = {
+        "quote_candidate_generation", "reach_estimation",
+        "conditional_fill_given_reach_estimation", "queue_priority_model",
+        "fill_conditioned_markout", "cancel_latency_stale_risk_model",
+        "inventory_aware_skew", "fee_and_rebate_authority_required",
+        "quote_lifecycle_diagnostics",
+    }
+    if (
+        any(maker_boundary.get(name) is not True for name in required_maker_components)
+        or maker_boundary.get("independent_capital_oms_inventory_ledger_authority") is not False
+        or config.get("risk_actions_preempt_alpha") is not True
+    ):
+        raise ContractError("maker_component_boundary")
     rows = config.get("horizons")
     if not isinstance(rows, list) or len(rows) != 3:
         raise ContractError("horizon_count")
@@ -130,29 +156,50 @@ def validate_config(config: dict[str, Any]) -> None:
                 raise ContractError("research_horizon_has_execution")
     if found != ALLOWED_HORIZONS:
         raise ContractError("horizon_partition")
-    structural = config.get("structural_arb_engine") if isinstance(
-        config.get("structural_arb_engine"), dict) else {}
-    structural_components = set(structural.get("component_families") or [])
+    research = set(config.get("research_zero_authority_families") or [])
+    if len(research) != 10 or research & components:
+        raise ContractError("research_zero_authority_partition")
+
+
+def validate_structural_config(config: dict[str, Any]) -> None:
+    components = set(config.get("component_families") or [])
+    true_fields = {
+        "full_depth_required", "direct_joint_completion_required",
+        "one_atomic_economic_intent_per_bundle", "one_capital_reservation_per_bundle",
+        "partial_fill_plan_required", "timeout_plan_required",
+        "full_depth_bounded_unwind_required",
+    }
     if (
-        structural.get("decision_owner") != "STRUCTURAL_ARB_ENGINE"
-        or structural.get("opportunity_contract") != "schemas/v7/opportunity_envelope.schema.json"
-        or structural.get("global_portfolio_coordinator") != "V7_GLOBAL_PORTFOLIO_COORDINATOR"
-        or structural_components != {"hard_arb", "fast_structural"}
-        or structural.get("component_independent_authority") is not False
-        or structural.get("full_depth_required") is not True
-        or structural.get("direct_joint_completion_required") is not True
-        or structural.get("partial_unwind_required") is not True
+        config.get("schema") != STRUCTURAL_CONFIG_SCHEMA
+        or config.get("version") != 1
+        or config.get("paper_only") is not True
+        or config.get("authenticated_execution") is not False
+        or config.get("real_order_submission") is not False
+        or config.get("real_capital_at_risk") is not False
+        or config.get("automatic_promotion") is not False
+        or config.get("decision_owner") != "STRUCTURAL_ARB_ENGINE"
+        or config.get("authority_registry") != "config/v7_authority_registry.json"
+        or config.get("opportunity_contract") != "schemas/v7/opportunity_envelope.schema.json"
+        or config.get("global_portfolio_coordinator") != "V7_GLOBAL_PORTFOLIO_COORDINATOR"
+        or components != {"hard_arb", "fast_structural"}
+        or config.get("component_independent_authority") is not False
+        or set(config.get("action_space") or []) != {"ARB", "CANCEL", "NOTHING"}
+        or any(config.get(name) is not True for name in true_fields)
+        or config.get("near_miss_evidence_has_execution_authority") is not False
+        or config.get("new_risk_default") != "CANCEL_AND_NOTHING_ONLY"
     ):
         raise ContractError("structural_engine_contract")
-    research = set(config.get("research_zero_authority_families") or [])
-    if len(research) != 10 or research & (components | structural_components):
-        raise ContractError("research_zero_authority_partition")
-    if len(research | components | structural_components) != 15:
-        raise ContractError("economic_engine_family_partition")
+    owners = {
+        "capital_envelope_owner": "V7_CANONICAL_ALLOCATOR",
+        "risk_owner": "V7_CANONICAL_RISK", "oms_owner": "V7_CANONICAL_OMS",
+        "inventory_owner": "V7_CANONICAL_INVENTORY", "ledger_owner": "V7_CANONICAL_LEDGER",
+    }
+    if any(config.get(key) != owner for key, owner in owners.items()):
+        raise ContractError("structural_shared_owner_contract")
 
 
 def validate_registry_authority(
-    config: dict[str, Any], registry: dict[str, Any],
+    config: dict[str, Any], structural: dict[str, Any], registry: dict[str, Any],
 ) -> None:
     if registry.get("schema") != "polymarket_v7_strategy_registry_v1":
         raise ContractError("strategy_registry_schema")
@@ -189,9 +236,7 @@ def validate_registry_authority(
     if independent_paper:
         raise ContractError("component_has_independent_paper_authority")
     component_families = set(config["component_families"])
-    component_families.update(
-        config["structural_arb_engine"]["component_families"]
-    )
+    component_families.update(structural["component_families"])
     if any(authorities.get(family) not in {"SHADOW", "RESEARCH"}
            for family in component_families):
         raise ContractError("component_has_independent_authority")
@@ -200,7 +245,9 @@ def validate_registry_authority(
         raise ContractError("research_family_has_authority")
 
 
-def validate_live_scope(config: dict[str, Any], scope: dict[str, Any]) -> None:
+def validate_live_scope(
+    config: dict[str, Any], structural: dict[str, Any], scope: dict[str, Any],
+) -> None:
     if (
         scope.get("schema") != "polymarket_v7_live_model_scope_v1"
         or scope.get("paper_only") is not True
@@ -224,6 +271,9 @@ def validate_live_scope(config: dict[str, Any], scope: dict[str, Any]) -> None:
     if scope.get("btc_settlement_engine_contract") != \
             "config/v7_btc_settlement_engine.json":
         raise ContractError("live_scope_engine_contract_path")
+    if scope.get("structural_arb_engine_contract") != \
+            "config/v7_structural_arb_engine.json":
+        raise ContractError("live_scope_structural_contract_path")
 
 
 def _horizon(config: dict[str, Any], horizon_seconds: int) -> dict[str, Any]:
@@ -330,14 +380,15 @@ def maker_snapshot(
 
 def freeze(
     config: dict[str, Any], *, code_sha: str, horizon_seconds: int,
-    registry: dict[str, Any],
+    structural_config: dict[str, Any], registry: dict[str, Any],
     live_scope: dict[str, Any],
     latency_profile: dict[str, Any] | None = None,
     maker_evidence: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     validate_config(config)
-    validate_registry_authority(config, registry)
-    validate_live_scope(config, live_scope)
+    validate_structural_config(structural_config)
+    validate_registry_authority(config, structural_config, registry)
+    validate_live_scope(config, structural_config, live_scope)
     if SHA40.fullmatch(code_sha) is None:
         raise ContractError("exact_code_sha")
     horizon = _horizon(config, horizon_seconds)
@@ -395,6 +446,7 @@ def freeze(
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--config", type=Path, default=Path("config/v7_btc_settlement_engine.json"))
+    parser.add_argument("--structural-config", type=Path, default=Path("config/v7_structural_arb_engine.json"))
     parser.add_argument("--registry", type=Path, default=Path("config/v7_strategy_registry.json"))
     parser.add_argument("--live-scope", type=Path, default=Path("config/v7_live_model_scope.json"))
     parser.add_argument("--code-sha", required=True)
@@ -405,6 +457,7 @@ def main() -> int:
     args = parser.parse_args()
     snapshot = freeze(
         _json(args.config), code_sha=args.code_sha,
+        structural_config=_json(args.structural_config),
         horizon_seconds=args.horizon_seconds,
         registry=_json(args.registry),
         live_scope=_json(args.live_scope),

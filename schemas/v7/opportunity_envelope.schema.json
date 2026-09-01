@@ -10,7 +10,7 @@
     "event_id", "contract_id", "mapping_identity", "action", "side",
     "decision_receive_timestamp_ns", "source_event_timestamps_ns", "fair_value",
     "conservative_expected_wealth_change", "cost_vector", "cost_authority",
-    "uncertainty", "calibration_status", "latency", "capacity",
+    "uncertainty", "calibration_status", "latency", "capacity", "execution_plan",
     "inventory_delta", "portfolio_exposure_delta", "settlement", "eligible",
     "reasons", "deterministic_replay_key", "expires_at_ns"
   ],
@@ -44,6 +44,37 @@
     "calibration_status": {"enum": ["MATURE", "IMMATURE", "MISSING", "NOT_APPLICABLE"]},
     "latency": {"type": "object"},
     "capacity": {"type": "object"},
+    "execution_plan": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["atomic_unit_id", "execution_style", "legs", "partial_fill_plan", "timeout_ms", "unwind_plan"],
+      "properties": {
+        "atomic_unit_id": {"type": "string", "minLength": 1},
+        "execution_style": {"enum": ["SINGLE_LEG", "SEQUENTIAL_ATOMIC_INTENT"]},
+        "legs": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["leg_id", "market_id", "contract_id", "token_id", "side", "target_quantity", "limit_price", "fee_authority"],
+            "properties": {
+              "leg_id": {"type": "string", "minLength": 1},
+              "market_id": {"type": "string", "minLength": 1},
+              "contract_id": {"type": "string", "minLength": 1},
+              "token_id": {"type": "string", "minLength": 1},
+              "side": {"enum": ["BUY", "SELL"]},
+              "target_quantity": {"type": "number", "exclusiveMinimum": 0},
+              "limit_price": {"type": "number", "minimum": 0, "maximum": 1},
+              "fee_authority": {"enum": ["AUTHORITATIVE", "CONSERVATIVE_BOUND", "CONSERVATIVE_ZERO"]}
+            }
+          }
+        },
+        "partial_fill_plan": {"enum": ["CANCEL_REMAINDER", "COMPLETE_OR_UNWIND", "NO_NEW_RISK"]},
+        "timeout_ms": {"type": "integer", "minimum": 0},
+        "unwind_plan": {"enum": ["NONE", "FULL_DEPTH_BOUNDED_UNWIND", "CANCEL_ONLY"]}
+      }
+    },
     "inventory_delta": {"type": "number"},
     "portfolio_exposure_delta": {"type": "number"},
     "settlement": {"type": "object"},

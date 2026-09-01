@@ -181,6 +181,7 @@ def validate(root: Path, expected_head: str | None) -> dict[str, str]:
         "config/v7_external_fair.json",
         "config/v7_btc_settlement_engine.json",
         "config/v7_authority_registry.json",
+        "config/v7_structural_arb_engine.json",
         "config/v7_authority_edges.json",
         "scripts/v7_authority_reachability_audit.py",
         "scripts/v7_surface_classification.py",

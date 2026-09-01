@@ -12,6 +12,18 @@ from v7_opportunity import OpportunityEnvelope, OpportunityError, coordinate  # 
 
 
 def envelope(*, engine="BTC_SETTLEMENT_ENGINE", action="TAKE", component="crypto_informed_taker", ev=1.0, key="a") -> dict:
+    structural = engine == "STRUCTURAL_ARB_ENGINE"
+    legs = [{
+        "leg_id": "leg-1", "market_id": "market-1", "contract_id": "contract-1",
+        "token_id": "token-1", "side": "BUY", "target_quantity": 10.0,
+        "limit_price": 0.50, "fee_authority": "AUTHORITATIVE",
+    }]
+    if structural:
+        legs.append({
+            "leg_id": "leg-2", "market_id": "market-2", "contract_id": "contract-2",
+            "token_id": "token-2", "side": "BUY", "target_quantity": 10.0,
+            "limit_price": 0.45, "fee_authority": "AUTHORITATIVE",
+        })
     return {
         "schema": "polymarket_v7_opportunity_envelope_v1",
         "version": 1,
@@ -47,6 +59,14 @@ def envelope(*, engine="BTC_SETTLEMENT_ENGINE", action="TAKE", component="crypto
         "calibration_status": "MATURE",
         "latency": {"profile_id": "latency-1", "profile_valid": True, "economic_percentile": "p99", "arrival_ns": 10},
         "capacity": {"executable_size": 10.0, "depth_provenance": "full-l2-cut-7"},
+        "execution_plan": {
+            "atomic_unit_id": f"atomic-{key}",
+            "execution_style": "SEQUENTIAL_ATOMIC_INTENT" if structural else "SINGLE_LEG",
+            "legs": legs,
+            "partial_fill_plan": "COMPLETE_OR_UNWIND" if structural else "CANCEL_REMAINDER",
+            "timeout_ms": 100,
+            "unwind_plan": "FULL_DEPTH_BOUNDED_UNWIND" if structural else "NONE",
+        },
         "inventory_delta": 10.0,
         "portfolio_exposure_delta": 5.0,
         "settlement": {"definition": "verified rules", "source": "contract registry", "verified": True},
@@ -123,6 +143,23 @@ def test_invalid_or_duplicate_envelope_fails_the_whole_cut_closed() -> None:
     assert decision["action"] == "NOTHING"
 
 
+def test_structural_arbitrage_is_one_atomic_multileg_intent() -> None:
+    value = envelope(
+        engine="STRUCTURAL_ARB_ENGINE", action="ARB", component="fast_structural",
+        key="atomic-structural",
+    )
+    parsed = OpportunityEnvelope.parse(value)
+    assert len(parsed.raw["execution_plan"]["legs"]) == 2
+    broken = copy.deepcopy(value)
+    broken["execution_plan"]["legs"] = broken["execution_plan"]["legs"][:1]
+    try:
+        OpportunityEnvelope.parse(broken)
+    except OpportunityError as exc:
+        assert str(exc) == "structural_atomic_execution_plan"
+    else:
+        raise AssertionError("single-leg structural arbitrage accepted")
+
+
 if __name__ == "__main__":
     test_complete_envelope_parses()
     test_unauthoritative_rebate_fails_closed()
@@ -131,3 +168,4 @@ if __name__ == "__main__":
     test_coordinator_compares_engines_on_one_objective()
     test_coordinator_defaults_to_nothing_without_new_risk_authority()
     test_invalid_or_duplicate_envelope_fails_the_whole_cut_closed()
+    test_structural_arbitrage_is_one_atomic_multileg_intent()

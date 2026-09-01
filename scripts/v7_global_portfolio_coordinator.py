@@ -79,6 +79,37 @@ def _compatibility_envelope(value: dict[str, Any], context: dict[str, Any]) -> d
     if not identity:
         raise OpportunityError("compatibility_identity_missing")
     expected = float(value.get("expected_ev") or 0.0)
+    structured = metadata.get("structured_legs")
+    raw_legs = structured if isinstance(structured, list) else []
+    legs: list[dict[str, Any]] = []
+    for index, leg in enumerate(raw_legs):
+        if not isinstance(leg, dict):
+            continue
+        quantity = float(leg.get("target_quantity") or value.get("intended_size") or 0.0)
+        price = float(leg.get("detector_average_price") or value.get("limit_price") or 0.0)
+        if quantity <= 0.0 or not 0.0 <= price <= 1.0:
+            continue
+        legs.append({
+            "leg_id": str(leg.get("leg_id") or f"leg-{index + 1}"),
+            "market_id": str(leg.get("market_id") or value.get("market_id") or f"unmapped:{identity}"),
+            "contract_id": str(leg.get("token_id") or value.get("token_id") or identity),
+            "token_id": str(leg.get("token_id") or value.get("token_id") or identity),
+            "side": str(leg.get("side") or "BUY").upper(),
+            "target_quantity": quantity,
+            "limit_price": price,
+            "fee_authority": "CONSERVATIVE_ZERO",
+        })
+    if not legs:
+        quantity = max(1e-12, float(value.get("intended_size") or 1e-12))
+        price = min(1.0, max(0.0, float(value.get("limit_price") or 0.0)))
+        legs = [{
+            "leg_id": str(value.get("leg_id") or "leg-1"),
+            "market_id": str(value.get("market_id") or f"unmapped:{identity}"),
+            "contract_id": str(value.get("token_id") or value.get("market_id") or identity),
+            "token_id": str(value.get("token_id") or identity),
+            "side": "BUY", "target_quantity": quantity, "limit_price": price,
+            "fee_authority": "CONSERVATIVE_ZERO",
+        }]
     raw = {
         "schema": "polymarket_v7_opportunity_envelope_v1",
         "version": 1,
@@ -125,6 +156,23 @@ def _compatibility_envelope(value: dict[str, Any], context: dict[str, Any]) -> d
         "capacity": {
             "executable_size": max(0.0, float(value.get("intended_size") or 0.0)),
             "depth_provenance": str(value.get("book_snapshot_id") or "MISSING"),
+        },
+        "execution_plan": {
+            "atomic_unit_id": str(value.get("bundle_id") or identity),
+            "execution_style": (
+                "SEQUENTIAL_ATOMIC_INTENT" if engine_id == "STRUCTURAL_ARB_ENGINE"
+                else "SINGLE_LEG"
+            ),
+            "legs": legs,
+            "partial_fill_plan": (
+                "COMPLETE_OR_UNWIND" if engine_id == "STRUCTURAL_ARB_ENGINE"
+                else "NO_NEW_RISK"
+            ),
+            "timeout_ms": int(value.get("timeout_ms") or 0),
+            "unwind_plan": (
+                "FULL_DEPTH_BOUNDED_UNWIND" if engine_id == "STRUCTURAL_ARB_ENGINE"
+                else "NONE"
+            ),
         },
         "inventory_delta": 0.0,
         "portfolio_exposure_delta": 0.0,

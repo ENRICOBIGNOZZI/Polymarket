@@ -25,6 +25,11 @@
   "action_space": ["MAKE", "TAKE", "CANCEL", "NOTHING"],
   "alpha_selection": "MAX_CONSERVATIVE_EXPECTED_CHANGE_IN_ACCOUNT_WEALTH",
   "risk_actions_preempt_alpha": true,
+  "external_update_policy": {
+    "oracle_or_external_update_can_cancel_without_polymarket_book_event": true,
+    "oracle_or_external_update_can_reprice_without_polymarket_book_event": true,
+    "stale_quote_behavior": "CANCEL_OR_NOTHING"
+  },
   "fair_value": {
     "separate_model_per_horizon": true,
     "fixed_bridge_coefficient_authorized": false,
@@ -67,6 +72,16 @@
     "reach_and_fill_are_separate": true,
     "fill_conditioned_markout_required": true,
     "rebate_requires_execution": true,
+    "quote_candidate_generation": true,
+    "reach_estimation": true,
+    "conditional_fill_given_reach_estimation": true,
+    "queue_priority_model": true,
+    "fill_conditioned_markout": true,
+    "cancel_latency_stale_risk_model": true,
+    "inventory_aware_skew": true,
+    "fee_and_rebate_authority_required": true,
+    "quote_lifecycle_diagnostics": true,
+    "independent_capital_oms_inventory_ledger_authority": false,
     "formula": "P_L(reach)*P_L(fill_given_reach)*(capture+rebate_L-markout_U-cancel_latency_risk)-inventory_cost-cancel_cost-capital_cost"
   },
   "horizons": [
@@ -101,16 +116,6 @@
       "under_five_seconds": "NO_NEW_RISK"
     }
   ],
-  "structural_arb_engine": {
-    "decision_owner": "STRUCTURAL_ARB_ENGINE",
-    "opportunity_contract": "schemas/v7/opportunity_envelope.schema.json",
-    "global_portfolio_coordinator": "V7_GLOBAL_PORTFOLIO_COORDINATOR",
-    "component_families": ["hard_arb", "fast_structural"],
-    "component_independent_authority": false,
-    "full_depth_required": true,
-    "direct_joint_completion_required": true,
-    "partial_unwind_required": true
-  },
   "research_zero_authority_families": [
     "micro_taker",
     "graph_rv",
