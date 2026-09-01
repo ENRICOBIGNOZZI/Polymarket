@@ -496,7 +496,7 @@ def health_reasons(snapshot: dict[str, Any], *, max_runtime_age: int = 180, max_
     if runtime.get("authenticated_execution") is not False or runtime.get("real_order_submission") is not False: reasons.append("authenticated_execution_not_disabled")
     if runtime.get("model_sha") != snapshot.get("sha"): reasons.append("runtime_sha_mismatch")
     if (
-        evidence_allocator.get("schema") != "polymarket_v7_evidence_capital_allocator_v1"
+        evidence_allocator.get("schema") != "polymarket_v7_evidence_capital_allocator_v2"
         or evidence_allocator.get("paper_only") is not True
         or evidence_allocator.get("authenticated_execution") is not False
         or evidence_allocator.get("real_order_submission") is not False

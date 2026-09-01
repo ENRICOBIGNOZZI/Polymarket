@@ -138,7 +138,7 @@ class V7NativeMonitoringTest(unittest.TestCase):
             },
         )
         self._write(root / "control" / "evidence_capital_allocator.json", {
-            "schema": "polymarket_v7_evidence_capital_allocator_v1",
+            "schema": "polymarket_v7_evidence_capital_allocator_v2",
             "timestamp": now - 2, "model_sha": sha,
             "paper_only": True, "authenticated_execution": False,
             "real_order_submission": False, "automatic_transfer": False,
@@ -495,6 +495,20 @@ class V7NativeMonitoringTest(unittest.TestCase):
             self._write(path, value)
             snapshot = exporter.collect_snapshot(run_root, ROOT, now=1_000)
             self.assertIn("authenticated_execution_not_disabled", exporter.health_reasons(snapshot))
+
+    def test_retired_evidence_allocator_schema_fails_health_closed(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            run_root = Path(directory) / "paper_v7_live"
+            self._fixture(run_root)
+            path = run_root / "control" / "evidence_capital_allocator.json"
+            value = json.loads(path.read_text(encoding="utf-8"))
+            value["schema"] = "polymarket_v7_evidence_capital_allocator_v1"
+            self._write(path, value)
+            snapshot = exporter.collect_snapshot(run_root, ROOT, now=1_000)
+            self.assertIn(
+                "evidence_capital_allocator_missing_or_unsafe",
+                exporter.health_reasons(snapshot),
+            )
 
     def test_research_shadow_cannot_claim_active_without_adapter_evidence(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
