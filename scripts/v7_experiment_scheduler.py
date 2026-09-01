@@ -23,7 +23,7 @@ from pathlib import Path
 from typing import Any
 
 
-SCHEMA = "polymarket_v7_experiment_run_v1"
+SCHEMA = "polymarket_v7_experiment_run"
 SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
 IDENTIFIER_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{2,127}$")
 STATUSES = {"COMPLETED", "FAILED", "STOPPED"}

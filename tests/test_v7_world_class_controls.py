@@ -1,6 +1,7 @@
 import importlib.util
 import json
 import os
+import subprocess
 import sys
 import tempfile
 import unittest
@@ -53,7 +54,8 @@ class WorldClassControlsTests(unittest.TestCase):
         self.assertFalse(value["world_class_candidate"])
         self.assertIsNone(value["economics"]["realized_and_settled_net_pnl_base_units"])
         self.assertRegex(value["evidence"]["security_audit_sha256"], r"^[0-9a-f]{64}$")
-        self.assertIn("working_tree_dirty", value["reason_codes"])
+        dirty = bool(subprocess.check_output(["git", "status", "--porcelain"], cwd=ROOT).strip())
+        self.assertEqual("working_tree_dirty" in value["reason_codes"], dirty)
 
     def test_canary_is_blocked_and_cannot_execute(self) -> None:
         result = canary.plan(ROOT, stage="AUTHENTICATED_READ_ONLY")
