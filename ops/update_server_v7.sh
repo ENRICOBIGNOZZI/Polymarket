@@ -267,6 +267,8 @@ def read(rel):
         return {}
     return value if isinstance(value,dict) else {}
 sentinel=read('control/CUTOVER_DRAIN')
+runtime=read('control/runtime_status.json')
+portfolio=read('control/portfolio_state.json')
 external_status=read('external_fair/paper_router_status.json')
 external_state=read('external_fair/paper_router_state.json')
 micro_status=read('micro_taker/status.json')
@@ -274,6 +276,40 @@ micro_state=read('micro_taker/state.json')
 maker_status=read('micro_maker/status.json')
 maker_state=read('micro_maker/state.json')
 assert sentinel.get('nonce') == nonce and sentinel.get('paper_only') is True
+assert runtime.get('paper_only') is True and runtime.get('authenticated_execution') is False
+assert runtime.get('real_order_submission') is False
+assert portfolio.get('paper_only') is True and portfolio.get('authenticated_execution') is False
+assert portfolio.get('killed') is False and not portfolio.get('fatal_sleeves')
+
+# A fail-closed startup can terminate before zero-authority or observer sleeves
+# have materialized their state files. For a stopped process only, prove that
+# absence means "never started": the canonical ledger must be empty, the
+# runtime must have authorized no alpha action, and the portfolio guard must
+# still report the untouched budget with an explicit non-started source.
+ledger_path=root/'ledger/execution.jsonl'
+ledger_empty=ledger_path.exists() and ledger_path.stat().st_size == 0
+sleeves=portfolio.get('sleeves') if isinstance(portfolio.get('sleeves'),dict) else {}
+def prove_never_started(sleeve_name):
+    sleeve=sleeves.get(sleeve_name) if isinstance(sleeves.get(sleeve_name),dict) else {}
+    budget=float(sleeve.get('budget') or 0.0); equity=float(sleeve.get('equity') or 0.0)
+    return (
+        not runtime_alive and ledger_empty
+        and runtime.get('state') in {'stopping','stopped'}
+        and runtime.get('economic_new_risk_ready') is False
+        and runtime.get('authorized_alpha_actions') == []
+        and sleeve.get('source') in {'not_started','zero_authority_budget'}
+        and sleeve.get('killed') is False and abs(equity-budget) <= 1e-9
+    )
+micro_absent=not micro_status and not micro_state
+maker_absent=not maker_status and not maker_state
+if micro_absent:
+    assert prove_never_started('micro_taker')
+    micro_status={'paper_only':True,'authenticated_execution':False,'open_positions':0}
+    micro_state={'positions':{}}
+if maker_absent:
+    assert prove_never_started('micro_maker')
+    maker_status={'paper_only':True,'authenticated_execution':False,'killed':False}
+    maker_state={'inventory':{}}
 assert external_status.get('paper_only') is True and external_status.get('authenticated_execution') is False
 assert micro_status.get('paper_only') is True and micro_status.get('authenticated_execution') is False
 assert maker_status.get('paper_only') is True and maker_status.get('authenticated_execution') is False
