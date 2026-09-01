@@ -24,15 +24,15 @@ inline constexpr std::size_t kExternalTapePayloadBytes = 512;
 inline constexpr std::size_t kExternalTapeQueueCapacity = 4096;
 inline constexpr std::size_t kExternalRawTapePayloadBytes = 32 * 1024;
 inline constexpr std::size_t kExternalRawTapeQueueCapacity = 256;
-// Bybit linear's multiplexed subscription and Deribit's catch-up batches can
-// each emit a transiently larger public frame. They use a bounded
-// source-specific FIFO so those frames are captured without making every
-// venue pay the memory cost.
+// Deribit's catch-up batches can emit a transiently larger public frame. It
+// uses this bounded source-specific FIFO so those frames are captured without
+// making every venue pay the memory cost.
 inline constexpr std::size_t kExternalBurstRawTapePayloadBytes = 64 * 1024;
 inline constexpr std::size_t kExternalBurstRawTapeQueueCapacity = 512;
 // Complete L2 recovery/public batches can exceed the ordinary source limit.
-// Coinbase and Binance Spot use this separate bounded queue; other sources
-// retain the compact high-depth path above unless explicitly burst-enabled.
+// Coinbase, Binance Spot, and Bybit Linear use this separate bounded queue;
+// other sources retain the compact high-depth path above unless explicitly
+// burst-enabled.
 inline constexpr std::size_t kExternalLargeRawTapePayloadBytes = 2 * 1024 * 1024;
 inline constexpr std::size_t kExternalLargeRawTapeQueueCapacity = 8;
 

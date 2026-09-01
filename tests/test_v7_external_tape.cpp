@@ -151,7 +151,7 @@ int main() {
     {
         ExternalRawTapeRecorder raw_recorder(
             burst_raw_path, sha, "run-burst-raw", "session-burst-raw", "bybit-linear", 1'000'005);
-        const std::string volatile_bybit_batch((kExternalRawTapePayloadBytes + 64U), 'x');
+        const std::string volatile_bybit_batch((kExternalBurstRawTapePayloadBytes + 64U), 'x');
         assert(raw_recorder.try_record_raw(VenueId::BybitLinear, 5, 140, 1'040,
                                             volatile_bybit_batch));
         const auto raw_snapshot = raw_recorder.snapshot();
