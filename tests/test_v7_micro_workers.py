@@ -80,7 +80,7 @@ def test_micro_taker_cannot_restore_inventory_or_publish_orders():
 
 
 if __name__ == "__main__":
-    test_maker_uses_canonical_cpp_runtime_and_fill_conditioned_research_core()
+    test_maker_uses_zero_authority_cpp_components_and_fill_conditioned_research_core()
     test_micro_taker_is_zero_authority_round_trip_research()
     test_micro_taker_cannot_restore_inventory_or_publish_orders()
     print("ok 3 v7 micro worker tests")

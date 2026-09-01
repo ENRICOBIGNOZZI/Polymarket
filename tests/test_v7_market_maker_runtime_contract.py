@@ -141,11 +141,11 @@ class ProfessionalMakerRuntimeContractTests(unittest.TestCase):
         directives = json.loads((ROOT / "config" / "operator_directives.json").read_text(encoding="utf-8"))
         self.assertEqual(
             directives["operator_instruction_id"],
-            "user-retire-obsolete-generations-20260829",
+            "user-v7-unified-economic-system-20260901",
         )
         self.assertEqual(
             directives["priority_instruction_id"],
-            "user-retire-obsolete-generations-20260829",
+            "user-v7-unified-economic-system-20260901",
         )
         self.assertTrue(directives["paper_v7_authorization"]["paper_only"])
         self.assertFalse(directives["paper_v7_authorization"]["authenticated_execution"])

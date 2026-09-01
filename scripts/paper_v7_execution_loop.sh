@@ -899,7 +899,7 @@ python3 scripts/v7_kalshi_authenticated_ws_collector.py \
 v7_register_child "$!"
 
 # The exact-SHA supervisor aggregates measured sports/cross evidence and the
-# still configuration-blocked wallet sleeve. It owns no OMS, capital, ledger
+# still configuration-blocked wallet research family. It owns no OMS, capital, ledger
 # writer, order or promotion authority.
 python3 scripts/v7_research_shadow_supervisor.py \
   --repository-root "$ROOT" \
