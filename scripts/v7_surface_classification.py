@@ -271,6 +271,7 @@ def _processes(launcher: str) -> list[tuple[str, str, int]]:
 
 def _ref_classification(root: Path, ref: str) -> tuple[str, str, str]:
     if ref in {
+        "refs/heads/main",
         "refs/heads/codex/v7-unified-system-legacy-eradication",
         "refs/remotes/origin/codex/v7-unified-system-legacy-eradication",
         "refs/remotes/origin/main", "refs/remotes/origin/HEAD",
@@ -426,8 +427,14 @@ def validate_manifest(value: dict[str, Any], *, root: Path | None = None) -> dic
             row["path_or_ref"] for row in entries
             if row["object_type"] in {"tag", "branch_or_remote_ref"}
         }
-        if actual_refs != expected_refs:
-            raise ClassificationError("ref_coverage")
+        # A committed audit may include workstation-local or remote-tracking
+        # refs that are intentionally absent from a clean CI checkout.  CI
+        # must nevertheless fail if *its* visible ref namespace contains an
+        # unclassified ref.  Extra immutable snapshot entries are evidence,
+        # not a reproducibility defect.
+        missing_refs = sorted(expected_refs - actual_refs)
+        if missing_refs:
+            raise ClassificationError(f"ref_coverage:{missing_refs}")
     counts = {name: 0 for name in sorted(CLASSES)}
     for row in entries:
         counts[row["classification"]] += 1

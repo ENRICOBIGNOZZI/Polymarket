@@ -2169,7 +2169,9 @@
       "classification": "ARCHIVE_HISTORY_ONLY",
       "current_imports_callers_readers_writers": {
         "analysis": "exact path/module references from tracked text; runtime linkage is separately enumerated",
-        "static_references": []
+        "static_references": [
+          "artifacts/v7_unification/path_classification.json"
+        ]
       },
       "deletion_gate": "NONE_IMMUTABLE_AUDIT_OR_ROLLBACK_EVIDENCE",
       "disposition_commit": null,
@@ -2900,6 +2902,7 @@
       "current_imports_callers_readers_writers": {
         "analysis": "exact path/module references from tracked text; runtime linkage is separately enumerated",
         "static_references": [
+          "artifacts/v7_unification/path_classification.json",
           "artifacts/v7_unification/phase_8_report.md",
           "artifacts/v7_unification/runtime_process_graph.json",
           "config/v7_process_manifest.json",
@@ -22077,7 +22080,7 @@
       "object_type": "branch_or_remote_ref",
       "path_or_ref": "refs/heads/codex/v7-unified-system-legacy-eradication",
       "rollback_artifact_tag": "v7-unification-pre-migration-8d9e8e60",
-      "snapshot_object_id": "af6dc09658a1ece02d2cdd22d5fa16829824d43e",
+      "snapshot_object_id": "937ca8e052a10a7cbf8ef7fdde19896c03a047f2",
       "surface_id": "ref:refs/heads/codex/v7-unified-system-legacy-eradication",
       "unique_behavior_data_contribution": "active migration or canonical upstream ref",
       "validation_tests": [
@@ -22085,27 +22088,27 @@
       ]
     },
     {
-      "canonical_replacement": "origin/main",
-      "classification": "DELETE_ACTIVE_LEGACY",
+      "canonical_replacement": "refs/heads/main",
+      "classification": "KEEP_CANONICAL",
       "current_imports_callers_readers_writers": {
         "analysis": "exact path/module references from tracked text; runtime linkage is separately enumerated",
         "static_references": []
       },
-      "deletion_gate": "UNIQUE_COMMIT_AND_ACTIVE_REFERENCE_SCAN_CLEAN",
+      "deletion_gate": "NONE_CANONICAL_SURFACE",
       "disposition_commit": null,
       "economic_authority": {
         "capabilities": [],
         "executable": false,
         "owner": null
       },
-      "final_disposition": "delete_after_gate",
-      "migration_status": "deletion_deferred_until_phase_9",
+      "final_disposition": "retain_canonical",
+      "migration_status": "classified",
       "object_type": "branch_or_remote_ref",
       "path_or_ref": "refs/heads/main",
       "rollback_artifact_tag": "v7-unification-pre-migration-8d9e8e60",
       "snapshot_object_id": "4e3d130e0bc3746284bfaf41acbad79f7435746f",
       "surface_id": "ref:refs/heads/main",
-      "unique_behavior_data_contribution": "fully reachable from origin/main; redundant active ref",
+      "unique_behavior_data_contribution": "active migration or canonical upstream ref",
       "validation_tests": [
         "tests/test_v7_surface_classification.py"
       ]
@@ -22211,7 +22214,7 @@
       "object_type": "branch_or_remote_ref",
       "path_or_ref": "refs/remotes/origin/codex/v7-unified-system-legacy-eradication",
       "rollback_artifact_tag": "v7-unification-pre-migration-8d9e8e60",
-      "snapshot_object_id": "124d077394d1625f0e9ca11ef2caf405eb0b8d54",
+      "snapshot_object_id": "937ca8e052a10a7cbf8ef7fdde19896c03a047f2",
       "surface_id": "ref:refs/remotes/origin/codex/v7-unified-system-legacy-eradication",
       "unique_behavior_data_contribution": "active migration or canonical upstream ref",
       "validation_tests": [
@@ -26819,5 +26822,5 @@
   "real_capital_at_risk": false,
   "real_order_submission": false,
   "schema": "polymarket_v7_surface_classification_v1",
-  "source_snapshot_sha": "af6dc09658a1ece02d2cdd22d5fa16829824d43e"
+  "source_snapshot_sha": "937ca8e052a10a7cbf8ef7fdde19896c03a047f2"
 }

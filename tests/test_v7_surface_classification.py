@@ -43,8 +43,25 @@ class SurfaceClassificationTests(unittest.TestCase):
             row["surface_id"]: (row["object_type"], row["classification"])
             for row in generated["entries"]
         }
-        self.assertEqual(actual, expected)
-        self.assertEqual(generated["coverage"], self.value["coverage"])
+        # The checked-in artifact is a complete audit-time ref snapshot.  A
+        # clean CI checkout intentionally has fewer local/remote-tracking refs;
+        # every surface CI can see must still match the audited classification.
+        self.assertEqual(actual, {key: expected[key] for key in actual})
+        for field, count in generated["coverage"].items():
+            if field != "ref_count":
+                self.assertEqual(count, self.value["coverage"][field])
+
+    def test_every_current_ref_is_classified_while_snapshot_extras_are_portable(self) -> None:
+        generated = build_manifest(ROOT)
+        current = {
+            row["surface_id"] for row in generated["entries"]
+            if row["object_type"] in {"branch_or_remote_ref", "tag"}
+        }
+        audited = {
+            row["surface_id"] for row in self.value["entries"]
+            if row["object_type"] in {"branch_or_remote_ref", "tag"}
+        }
+        self.assertLessEqual(current, audited)
 
     def test_research_authority_injection_fails_closed(self) -> None:
         value = copy.deepcopy(self.value)
