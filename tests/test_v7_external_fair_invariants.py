@@ -35,7 +35,6 @@ def main() -> None:
     active["maker"]["external_fair_enabled_for_live_quotes"] = True
     active["taker"].update({"authority": "PAPER", "enabled_for_execution": True})
     active["oracle"]["transport_binding"] = "UNBOUND"
-    active["old_micro_taker_migration"] = {}
     failures = check_external_fair_invariants(active, paper, {
         "execution_authority": "PAPER_EXECUTION_OWNER",
         "single_execution_owner": True,
@@ -43,12 +42,8 @@ def main() -> None:
         "exact_sha_ci_green": True,
     })
     assert "ACTIVE_AUTHORITY_REQUIRES_VERIFIED_ORACLE_TRANSPORT" in failures
-    assert "OLD_MICRO_TAKER_OVERLAP_NOT_PROVEN_REMOVED" in failures
 
     active["oracle"]["transport_binding"] = "VERIFIED_SAME_ORACLE_PROVIDER_TRANSPORT_V1"
-    active["old_micro_taker_migration"] = {
-        "overlapping_execution_authority_removed": True,
-    }
     clean_runtime = {
         "execution_authority": "PAPER_EXECUTION_OWNER",
         "single_execution_owner": True,

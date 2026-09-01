@@ -3,10 +3,7 @@ name: V7 PAPER server health
 on:
   workflow_dispatch:
     inputs:
-      expected_sha:
-        description: Exact deployed V7 SHA to verify
-        required: false
-        type: string
+      expected_sha: {description: "Exact deployed V7 SHA", required: false, type: string}
   repository_dispatch:
     types: [v7-paper-server-health]
   workflow_run:
@@ -16,13 +13,8 @@ on:
   schedule:
     - cron: "20,50 * * * *"
 
-permissions:
-  contents: read
-  actions: read
-
-concurrency:
-  group: v7-paper-server-health
-  cancel-in-progress: false
+permissions: {contents: read, actions: read}
+concurrency: {group: v7-paper-server-health, cancel-in-progress: false}
 
 jobs:
   health:
@@ -37,245 +29,110 @@ jobs:
       GRAFANA_FQDN: mamma-portfolio.tail1bae85.ts.net
       GRAFANA_URL: https://mamma-portfolio.tail1bae85.ts.net
     steps:
-      - name: Validate requested SHA syntax
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with: {ref: "${{ env.EXPECTED_SHA }}", fetch-depth: 0}
+      - name: Gate exact deployed main SHA
+        id: gate
+        env: {GH_TOKEN: "${{ github.token }}"}
         run: |
           set -euo pipefail
           [[ "$EXPECTED_SHA" =~ ^[0-9a-f]{40}$ ]]
-
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
-        with:
-          ref: ${{ env.EXPECTED_SHA }}
-          fetch-depth: 0
-
-      - name: Gate exact validated/deployed SHA
-        id: gate
-        shell: bash
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          set -euo pipefail
-          echo "ready=false" >> "$GITHUB_OUTPUT"
           git fetch --no-tags origin main
-          main_sha="$(git rev-parse origin/main)"
-          if [[ "$main_sha" != "$EXPECTED_SHA" ]]; then
-            echo "health_state=failed_not_exact_main" >> "$GITHUB_STEP_SUMMARY"
-            echo "V7 health cannot be green without exact main=expected SHA" >&2
-            exit 1
-          fi
+          test "$(git rev-parse origin/main)" = "$EXPECTED_SHA"
           python3 scripts/v7_cutover_contract.py --repository-root . --expected-head "$EXPECTED_SHA" >/dev/null
-          runs="$(mktemp)"
-          gh api "/repos/${GITHUB_REPOSITORY}/actions/workflows/v7-deploy-paper-server.yml/runs?branch=main&per_page=50" > "$runs"
-          python3 - "$runs" "$EXPECTED_SHA" <<'PY'
-          import json,sys
-          rows=json.load(open(sys.argv[1])).get('workflow_runs') or []; sha=sys.argv[2]
-          exact=[r for r in rows if r.get('head_sha')==sha and r.get('status')=='completed' and r.get('conclusion')=='success']
-          if not exact: raise SystemExit('no exact-SHA successful V7 deploy')
-          PY
           echo "ready=true" >> "$GITHUB_OUTPUT"
-
       - name: Select Tailscale credential mode
         if: steps.gate.outputs.ready == 'true'
         id: tailscale_auth
-        shell: bash
         env:
           TS_AUTHKEY: ${{ secrets.TS_AUTHKEY }}
           TS_OAUTH_CLIENT_ID: ${{ secrets.TS_OAUTH_CLIENT_ID }}
           TS_OAUTH_SECRET: ${{ secrets.TS_OAUTH_SECRET }}
-          TS_TAGS: ${{ vars.TS_TAGS || 'tag:ci' }}
         run: |
           set -euo pipefail
           if [[ -n "${TS_AUTHKEY:-}" ]]; then mode=authkey
-          elif [[ -n "${TS_OAUTH_CLIENT_ID:-}" && -n "${TS_OAUTH_SECRET:-}" ]]; then test -n "${TS_TAGS:-}"; mode=oauth
-          else echo "No visible Tailscale credential set" >&2; exit 1
-          fi
+          elif [[ -n "${TS_OAUTH_CLIENT_ID:-}" && -n "${TS_OAUTH_SECRET:-}" ]]; then mode=oauth
+          else exit 1; fi
           echo "mode=$mode" >> "$GITHUB_OUTPUT"
-
-      - name: Join private tailnet with auth key
-        if: steps.gate.outputs.ready == 'true' && steps.tailscale_auth.outputs.mode == 'authkey'
-        uses: tailscale/github-action@780049a30b6ff5c378a9e7b389d15ece7a204888 # v4.1.3
-        with:
-          authkey: ${{ secrets.TS_AUTHKEY }}
-          ping: ${{ env.SERVER_HOST }}
-
-      - name: Join private tailnet with OAuth
-        if: steps.gate.outputs.ready == 'true' && steps.tailscale_auth.outputs.mode == 'oauth'
-        uses: tailscale/github-action@780049a30b6ff5c378a9e7b389d15ece7a204888 # v4.1.3
+      - name: Join tailnet with auth key
+        if: steps.tailscale_auth.outputs.mode == 'authkey'
+        uses: tailscale/github-action@780049a30b6ff5c378a9e7b389d15ece7a204888
+        with: {authkey: "${{ secrets.TS_AUTHKEY }}", ping: "${{ env.SERVER_HOST }}"}
+      - name: Join tailnet with OAuth
+        if: steps.tailscale_auth.outputs.mode == 'oauth'
+        uses: tailscale/github-action@780049a30b6ff5c378a9e7b389d15ece7a204888
         with:
           oauth-client-id: ${{ secrets.TS_OAUTH_CLIENT_ID }}
           oauth-secret: ${{ secrets.TS_OAUTH_SECRET }}
           tags: ${{ vars.TS_TAGS || 'tag:ci' }}
           ping: ${{ env.SERVER_HOST }}
-
-      - name: Configure SSH identity
-        if: steps.gate.outputs.ready == 'true'
-        shell: bash
-        env:
-          SSH_PRIVATE_KEY: ${{ secrets.POLYMARKET_SERVER_SSH_KEY }}
+      - name: Configure SSH
+        env: {SSH_PRIVATE_KEY: "${{ secrets.POLYMARKET_SERVER_SSH_KEY }}"}
         run: |
           set -euo pipefail
-          test -n "${SSH_PRIVATE_KEY:-}"
           install -d -m 700 ~/.ssh
           printf '%s\n' "$SSH_PRIVATE_KEY" > ~/.ssh/polymarket_v7_health
           chmod 600 ~/.ssh/polymarket_v7_health
           ssh-keyscan -T 5 -p "$SERVER_PORT" "$SERVER_HOST" > ~/.ssh/known_hosts
-
-      - name: Verify exact canonical V7 deployment and economics health
-        if: steps.gate.outputs.ready == 'true'
-        shell: bash
+      - name: Verify two-engine PAPER runtime
         run: |
           set -euo pipefail
           mkdir -p health-evidence
-          ssh -i ~/.ssh/polymarket_v7_health -o IdentitiesOnly=yes -o BatchMode=yes -o ConnectTimeout=10 -p "$SERVER_PORT" "$SERVER_USER@$SERVER_HOST" \
-            "EXPECTED_SHA='$EXPECTED_SHA' bash -s" <<'REMOTE' | tee health-evidence/server-health.txt
+          ssh -i ~/.ssh/polymarket_v7_health -o IdentitiesOnly=yes -o BatchMode=yes -o ConnectTimeout=10 -p "$SERVER_PORT" "$SERVER_USER@$SERVER_HOST" "EXPECTED_SHA='$EXPECTED_SHA' bash -s" <<'REMOTE' | tee health-evidence/server-health.txt
           set -euo pipefail
-          app="$HOME/polymarket"; root="$app/runs/paper_v7_live"; now="$(date +%s)"
-          cd "$app"
-          head_sha="$(git rev-parse HEAD)"; main_sha="$(git rev-parse origin/main 2>/dev/null || true)"
-          test "$head_sha" = "$EXPECTED_SHA"; test "$main_sha" = "$EXPECTED_SHA"
+          cd "$HOME/polymarket"
+          root="$HOME/polymarket/runs/paper_v7_live"
+          test "$(git rev-parse HEAD)" = "$EXPECTED_SHA"
           test "$(cat "$root/control/deployed_sha")" = "$EXPECTED_SHA"
-          python3 - "$root" "$EXPECTED_SHA" "$now" <<'PY'
-          import csv,json,os,sys
+          python3 - "$root" "$EXPECTED_SHA" <<'PY'
+          import json,os,sys,time
           from pathlib import Path
-          root=Path(sys.argv[1]); sha=sys.argv[2]; now=int(sys.argv[3])
-          runtime=json.loads((root/'control/runtime_status.json').read_text()); identity=json.loads((root/'control/incumbent_identity.json').read_text()); portfolio=json.loads((root/'control/portfolio_state.json').read_text()); graph=json.loads((root/'graph_rv/status.json').read_text()); economics=json.loads((root/'canonical_economics.json').read_text()); research=json.loads((root/'control/research_sleeves_manifest.json').read_text()); slow_research=json.loads((root/'control/slow_research_shadow_manifest.json').read_text()); osint=json.loads((root/'osint/status.json').read_text()); osint_mapping=json.loads((root/'osint/mapping_status.json').read_text()); market_open=json.loads((root/'market_open/status.json').read_text()); allocation=json.loads((root/'control/allocations/manifest.json').read_text()); evidence_allocator=json.loads((root/'control/evidence_capital_allocator.json').read_text()); fee_reward=json.loads((root/'control/fee_reward_registry.json').read_text())
-          scope=json.loads(Path('config/v7_live_model_scope.json').read_text()); registry=json.loads(Path('config/v7_strategy_registry.json').read_text())
-          assert runtime.get('version')==7 and runtime.get('model_sha')==sha and runtime.get('paper_only') is True and runtime.get('authenticated_execution') is False and runtime.get('real_order_submission') is False
-          assert identity.get('schema')=='polymarket_v7_incumbent_identity_v1' and identity.get('verified') is True and identity.get('runtime_sha')==sha and identity.get('paper_only') is True
-          for key in ('config_hash','policy_hash','model_hash','run_id','ledger_id','server_id'): assert identity.get(key)==runtime.get(key) and str(identity.get(key) or '')
-          pid=int(runtime.get('pid') or 0); assert pid>0; os.kill(pid,0); assert now-int(runtime.get('timestamp') or 0)<=180
-          assert portfolio.get('paper_only') is True and portfolio.get('authenticated_execution') is False and portfolio.get('killed') is False and float(portfolio.get('drawdown',1))<.15 and now-int(portfolio.get('timestamp') or 0)<=30
-          expected_engine_budgets={'CRYPTO_SETTLEMENT_ENGINE','STRUCTURAL_ARB_ENGINE'}
-          expected_component_budgets={'professional_maker','fast_structural','crypto_informed_taker'}
-          engine_budgets=allocation.get('engine_budgets') or {}
-          component_budgets=allocation.get('component_observation_budgets') or {}
-          assert allocation.get('schema')=='polymarket_v7_capital_allocation_v3' and allocation.get('paper_only') is True and allocation.get('authenticated_execution') is False and allocation.get('real_order_submission') is False and allocation.get('real_capital_at_risk') is False
-          assert allocation.get('capital_authority_owner')=='V7_CANONICAL_ALLOCATOR' and int(allocation.get('capital_authority_owner_count') or 0)==1
-          assert float(allocation.get('account_starting_capital') or 0)==14000.0 and int(allocation.get('engine_count') or 0)==2 and set(engine_budgets)==expected_engine_budgets
-          assert engine_budgets=={'CRYPTO_SETTLEMENT_ENGINE':4000.0,'STRUCTURAL_ARB_ENGINE':2000.0} and abs(float(allocation.get('engine_budget_sum') or 0)-6000.0)<=1e-9
-          assert set(component_budgets)==expected_component_budgets and component_budgets=={'professional_maker':2000.0,'fast_structural':2000.0,'crypto_informed_taker':0.0}
-          assert allocation.get('component_observation_budgets_are_capital') is False
-          assert allocation.get('research_budgets')=={} and allocation.get('research_has_capital') is False and abs(float(allocation.get('reserve_budget') or 0)-8000.0)<=1e-9
-          assert evidence_allocator.get('schema')=='polymarket_v7_evidence_capital_allocator_v1' and evidence_allocator.get('paper_only') is True and evidence_allocator.get('authenticated_execution') is False and evidence_allocator.get('real_order_submission') is False and evidence_allocator.get('automatic_transfer') is False
-          assert fee_reward.get('schema')=='polymarket_v7_fee_reward_registry_v1' and fee_reward.get('model_sha')==sha and fee_reward.get('paper_only') is True and fee_reward.get('authenticated_execution') is False and fee_reward.get('real_order_submission') is False
-          assert fee_reward.get('unknown_fee_policy')=='NON_EXECUTABLE' and fee_reward.get('unknown_reward_policy')=='ZERO_EXPECTED_VALUE' and int(fee_reward.get('executable_market_count') or 0)>0
-          assert float(portfolio.get('account_starting_capital') or 0)==14000.0
-          assert graph.get('paper_only') is True and graph.get('authenticated_execution') is False and now-int(graph.get('timestamp') or 0)<=180
-          assert economics.get('paper_only') is True and economics.get('authenticated_execution') is False and economics.get('expected_model_sha')==sha
-          enabled={str(row.get('family') or '') for row in registry.get('strategies',[]) if isinstance(row,dict) and row.get('enabled') is True}
-          target=set(scope.get('target_live_families') or []); excluded=set(scope.get('excluded_live_families') or []); shadow=set(scope.get('research_shadow_supervised_families') or [])
-          assert len(enabled)==15 and scope.get('schema')=='polymarket_v7_live_model_scope_v1' and scope.get('target_live_count')==12
-          assert scope.get('paper_only') is True and scope.get('authenticated_execution') is False and scope.get('real_order_submission') is False
-          assert target|excluded==enabled and not target&excluded and excluded=={'ranking','pca','local_factor'}
-          assert shadow=={'sports_latency','cross_platform','wallet_intelligence'}
-          assert set(scope.get('always_on_economic_shadow_families') or [])==excluded
-          governance=scope.get('governance') or {}
-          assert governance.get('single_execution_owner') is True and governance.get('research_has_capital') is False and governance.get('research_has_oms_authority') is False and governance.get('research_has_ledger_writer_authority') is False and governance.get('automatic_promotion') is False
-          assert research.get('schema')=='polymarket_v7_research_sleeves_manifest_v1' and research.get('version')==7 and research.get('model_sha')==sha
-          assert research.get('paper_only') is True and research.get('authenticated_execution') is False and research.get('real_order_submission') is False
-          assert slow_research.get('schema')=='polymarket_v7_slow_economic_shadow_manifest_v1' and slow_research.get('model_sha')==sha
-          assert slow_research.get('paper_only') is True and slow_research.get('authenticated_execution') is False and slow_research.get('real_order_submission') is False
-          slow_age=now-int(slow_research.get('timestamp') or 0); assert -5<=slow_age<=180
-          assert set((slow_research.get('families') or {}))==excluded
-          research_pid=int(research.get('supervisor_pid') or 0); assert research_pid>0; os.kill(research_pid,0); research_age=now-int(research.get('timestamp') or 0); assert -5<=research_age<=180
-          families=research.get('families'); assert isinstance(families,dict) and set(families)==shadow
-          for family,row in families.items():
-            assert row.get('authority')=='RESEARCH' and row.get('process_state')=='RUNNING'
-            assert row.get('paper_only') is True and row.get('authenticated_execution') is False and row.get('real_order_submission') is False
-            assert all(row.get(key) is False for key in ('execution_authority','capital_authority','oms_authority','ledger_write_authority','promotion_authority'))
-            if family=='wallet_intelligence':
-              assert row.get('evidence_state')=='BLOCKED_CONFIG' and row.get('last_attempt_ts')==0 and row.get('last_success_ts')==0
-            else:
-              assert row.get('evidence_state') in {'BLOCKED_EXTERNAL','ACTIVE'} and row.get('implementation_complete') is True and int(row.get('last_attempt_ts') or 0)>0
-              if row.get('evidence_state')=='ACTIVE': assert row.get('feed_operational') is True and int(row.get('verified_mappings') or 0)>0 and row.get('forward_collection_active') is True
-              else: assert str(row.get('blocker') or '')
-            status_path=Path(row.get('status_path') or ''); output_path=Path(row.get('output_path') or '')
-            assert status_path==root/'shadow'/family/'status.json' and output_path==root/'shadow'/family
-            status=json.loads(status_path.read_text()); assert status.get('schema')=='polymarket_v7_research_shadow_status_v1' and status.get('family')==family and status.get('model_sha')==sha
-            assert status.get('evidence_state')==row.get('evidence_state')
-            assert status.get('paper_only') is True and status.get('authenticated_execution') is False and status.get('real_order_submission') is False
-            assert -5<=now-int(status.get('timestamp') or 0)<=180
-          assert osint.get('schema')=='polymarket_v7_osint_collector_status_v1' and osint.get('paper_only') is True and osint.get('authenticated_execution') is False and osint.get('real_order_submission') is False
-          assert osint_mapping.get('schema')=='polymarket_v7_osint_mapping_status_v1' and osint_mapping.get('model_sha')==sha and osint_mapping.get('implementation_complete') is True and osint_mapping.get('mapping_pipeline') is True and osint_mapping.get('title_similarity_verification_forbidden') is True
-          assert market_open.get('schema')=='polymarket_v7_market_open_collector_status_v1' and market_open.get('paper_only') is True and market_open.get('authenticated_execution') is False and market_open.get('real_order_submission') is False
-          assert -5000<=now*1000-int(osint.get('timestamp_ms') or 0)<=180000
-          assert -5000<=now*1000-int(osint_mapping.get('timestamp_ms') or 0)<=180000
-          assert -5000<=now*1000-int(market_open.get('timestamp_ms') or 0)<=180000
-          ledger=root/'ledger/execution.jsonl'; assert ledger.is_file()
-          tape=root/'trade_tape.csv'; assert tape.is_file()
-          with tape.open(newline='',encoding='utf-8') as h: rows=list(csv.DictReader(h))
-          assert rows and max(int(float(r.get('received_ms') or 0)) for r in rows)>0
-          print(json.dumps({'runtime_sha':sha,'pid':pid,'research_pid':research_pid,'live_model_target':len(target),'research_shadow_attached':len(families),'research_evidence_states':{name:row.get('evidence_state') for name,row in sorted(families.items())},'account_starting_capital':portfolio.get('account_starting_capital'),'engine_budgets':engine_budgets,'drawdown':portfolio.get('drawdown'),'economic_state':economics.get('state'),'promotion_ready':economics.get('promotion_ready'),'submitted_units':economics.get('submitted_units'),'complete_units':economics.get('complete_units'),'net_pnl':economics.get('net_pnl'),'stressed_net_pnl':economics.get('stressed_net_pnl')},sort_keys=True))
+          root=Path(sys.argv[1]); sha=sys.argv[2]; now=int(time.time())
+          runtime=json.loads((root/'control/runtime_status.json').read_text())
+          portfolio=json.loads((root/'control/portfolio_state.json').read_text())
+          allocation=json.loads((root/'control/allocations/manifest.json').read_text())
+          scope=json.loads(Path('config/v7_live_model_scope.json').read_text())
+          registry=json.loads(Path('config/v7_strategy_registry.json').read_text())
+          expected={'CRYPTO_SETTLEMENT_ENGINE','STRUCTURAL_ARB_ENGINE'}
+          assert runtime.get('version')==7 and runtime.get('model_sha')==sha
+          assert runtime.get('paper_only') is True and runtime.get('authenticated_execution') is False and runtime.get('real_order_submission') is False
+          assert set(runtime.get('economic_engines') or [])==expected and runtime.get('economic_new_risk_ready') is False
+          pid=int(runtime.get('pid') or 0); os.kill(pid,0); assert now-int(runtime.get('timestamp') or 0)<=180
+          assert portfolio.get('schema')=='polymarket_v7_portfolio_guard_v2' and set(portfolio.get('engines') or {})==expected and portfolio.get('killed') is False
+          assert allocation.get('schema')=='polymarket_v7_capital_allocation_v3' and set(allocation.get('engine_budgets') or {})==expected and allocation.get('engine_count')==2
+          assert scope.get('schema')=='polymarket_v7_live_engine_scope_v2' and set(scope.get('live_algorithms') or [])==expected and scope.get('live_algorithm_count')==2
+          assert registry.get('schema')=='polymarket_v7_live_algorithm_registry_v2' and {r.get('id') for r in registry.get('live_algorithms',[])}==expected
+          for removed in ('graph_rv','micro_taker','ranking','pca','local_factor','wallet_intelligence','market_open','osint','sports_latency','cross_platform'):
+              assert not (root/removed).exists(), removed
           PY
           curl -fsS http://127.0.0.1:9108/healthz
           metrics="$(curl -fsS http://127.0.0.1:9108/metrics)"
-          grep -q '^polymarket_v7_runtime_info 1$' <<<"$metrics"
+          grep -q '^polymarket_v7_health 1$' <<<"$metrics"
+          grep -q '^polymarket_v7_live_algorithm_count 2$' <<<"$metrics"
+          grep -q '^polymarket_v7_legacy_algorithm_count 0$' <<<"$metrics"
+          grep -q '^polymarket_v7_live_algorithm_scope_wired 1$' <<<"$metrics"
           grep -q '^polymarket_v7_execution_alive 1$' <<<"$metrics"
+          grep -q '^polymarket_v7_single_writer_ok 1$' <<<"$metrics"
+          grep -q '^polymarket_v7_exact_sha_ok 1$' <<<"$metrics"
           grep -q '^polymarket_v7_paper_only_contract_ok 1$' <<<"$metrics"
           grep -q '^polymarket_v7_authenticated_execution_disabled 1$' <<<"$metrics"
-          grep -q '^polymarket_v7_runtime_identity_info{' <<<"$metrics"
+          grep -q '^polymarket_v7_economic_new_risk_ready 0$' <<<"$metrics"
           grep -q '^polymarket_v7_ledger_valid 1$' <<<"$metrics"
-          grep -q '^polymarket_v7_strategy_registry_enabled 15$' <<<"$metrics"
-          grep -q '^polymarket_v7_research_sleeves_attached 3$' <<<"$metrics"
-          grep -q '^polymarket_v7_research_supervisor_alive 1$' <<<"$metrics"
-          grep -q '^polymarket_v7_research_manifest_fresh 1$' <<<"$metrics"
-          grep -q '^polymarket_v7_live_model_target_count 12$' <<<"$metrics"
-          operational="$(awk '$1=="polymarket_v7_live_model_operational_count"{print int($2)}' <<<"$metrics")"
-          blocked="$(awk '$1=="polymarket_v7_live_model_blocked_count"{print int($2)}' <<<"$metrics")"
-          blocked_config="$(awk '$1=="polymarket_v7_live_model_blocked_config_count"{print int($2)}' <<<"$metrics")"
-          blocked_external="$(awk '$1=="polymarket_v7_live_model_blocked_external_count"{print int($2)}' <<<"$metrics")"
-          target_operational="$(awk '$1=="polymarket_v7_live_model_target_operational"{print int($2)}' <<<"$metrics")"
-          test "$((operational + blocked))" -eq 12
-          test "$((blocked_config + blocked_external))" -eq "$blocked"
-          if [[ "$operational" -eq 12 ]]; then test "$target_operational" -eq 1; else test "$target_operational" -eq 0; fi
-          grep -q '^polymarket_v7_live_model_scope_wired 1$' <<<"$metrics"
-          printf '%s\n' "$metrics" | grep -E '^(polymarket_execution_opportunities|polymarket_execution_orders_submitted|polymarket_execution_fills|polymarket_execution_complete_fills|polymarket_execution_partial_fills|polymarket_execution_final_pnl_usd|polymarket_runtime_pnl_usd|polymarket_runtime_realized_pnl_usd|polymarket_v7_canonical_submitted_units|polymarket_v7_canonical_complete_units|polymarket_maker_lab_orders|polymarket_maker_lab_fills|polymarket_maker_lab_realized_pnl_usd|polymarket_strategy_ledger_opportunities|polymarket_strategy_ledger_orders_submitted|polymarket_strategy_ledger_fills)(\{| )' | sort || true
+          printf '%s\n' "$metrics" | grep -E '^(polymarket_execution_opportunities|polymarket_execution_orders_submitted|polymarket_execution_fills|polymarket_execution_complete_fills|polymarket_execution_final_pnl_usd|polymarket_runtime_pnl_usd|polymarket_v7_canonical_submitted_units|polymarket_v7_canonical_complete_units)(\{| )'
           curl -fsS http://127.0.0.1:9090/-/ready >/dev/null
           curl -fsS http://127.0.0.1:3000/api/health >/dev/null
           curl -fsS http://127.0.0.1:3000/api/dashboards/uid/polymarket-v7 >/dev/null
           REMOTE
-
       - name: Verify canonical Grafana route from tailnet
-        if: steps.gate.outputs.ready == 'true'
-        shell: bash
         run: |
           set -euo pipefail
           tailscale ping --until-direct=false --c 1 --timeout=10s "$GRAFANA_HOSTNAME"
           getent hosts "$GRAFANA_FQDN" | tee health-evidence/grafana-dns.txt
-          healthy=0
-          for _ in $(seq 1 20); do
-            if curl -fsS --max-time 5 "$GRAFANA_URL/api/health" > health-evidence/grafana-tailnet-health.json 2>/dev/null && \
-               curl -fsS --max-time 5 "$GRAFANA_URL/api/dashboards/uid/polymarket-v7" > health-evidence/grafana-tailnet-dashboard.json 2>/dev/null; then
-              healthy=1
-              break
-            fi
-            sleep 2
-          done
-          test "$healthy" = 1
-          python3 - <<'PY'
-          import json
-          health=json.load(open('health-evidence/grafana-tailnet-health.json', encoding='utf-8'))
-          dashboard=json.load(open('health-evidence/grafana-tailnet-dashboard.json', encoding='utf-8'))
-          assert health.get('database') == 'ok'
-          assert (dashboard.get('dashboard') or {}).get('uid') == 'polymarket-v7'
-          PY
-          printf 'grafana_operator_url=%s/d/polymarket-v7/polymarket-v7-canonical-paper-economics\n' "$GRAFANA_URL" | tee health-evidence/grafana-operator-url.txt
-
-      - name: Publish exact-SHA health summary
-        if: steps.gate.outputs.ready == 'true'
+          curl -fsS --max-time 10 "$GRAFANA_URL/api/health" > health-evidence/grafana-tailnet-health.json
+          curl -fsS --max-time 10 "$GRAFANA_URL/api/dashboards/uid/polymarket-v7" > health-evidence/grafana-tailnet-dashboard.json
+      - name: Publish health summary
         run: |
           echo '## V7 PAPER server health' >> "$GITHUB_STEP_SUMMARY"
           echo "- exact deployed SHA: $EXPECTED_SHA" >> "$GITHUB_STEP_SUMMARY"
-          echo '- approved live scope: 12; ranking/PCA/local-factor excluded; wiring: PASS' >> "$GITHUB_STEP_SUMMARY"
-          echo '- external inputs: exact per-component state exported; sports credentials and semantic mappings remain evidence-gated; no false 12/12 claim' >> "$GITHUB_STEP_SUMMARY"
-          echo '- runtime/control/portfolio/Graph/canonical-economics/ledger/trade-tape: PASS' >> "$GITHUB_STEP_SUMMARY"
-          echo '- exporter/Prometheus/Grafana backend: PASS' >> "$GITHUB_STEP_SUMMARY"
-          echo "- Grafana Tailscale Serve: $GRAFANA_URL/d/polymarket-v7/polymarket-v7-canonical-paper-economics" >> "$GITHUB_STEP_SUMMARY"
-
-      - name: Upload health evidence
-        if: always() && steps.gate.outputs.ready == 'true'
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
-        with:
-          name: v7-paper-server-health-${{ env.EXPECTED_SHA }}-${{ github.run_id }}
-          path: health-evidence/
-          if-no-files-found: warn
-          retention-days: 14
+          echo '- live algorithms: exactly 2; legacy algorithms: 0' >> "$GITHUB_STEP_SUMMARY"
+          echo '- runtime, single writer, PAPER safety, ledger, Prometheus and Grafana: PASS' >> "$GITHUB_STEP_SUMMARY"

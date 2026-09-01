@@ -12,7 +12,7 @@ from pathlib import Path
 from typing import Any
 
 
-SCHEMA = "polymarket_v7_authority_registry_v1"
+SCHEMA = "polymarket_v7_authority_registry_v2"
 OWNER_KEYS = (
     "global_portfolio_coordinator",
     "capital_allocator",
@@ -43,11 +43,6 @@ ENGINE_ACTIONS = {
     "CRYPTO_SETTLEMENT_ENGINE": {"MAKE", "TAKE", "CANCEL", "WITHDRAW", "NOTHING"},
     "STRUCTURAL_ARB_ENGINE": {"ARB", "CANCEL", "NOTHING"},
 }
-RESEARCH_FAMILIES = {
-    "micro_taker", "graph_rv", "ranking", "pca", "local_factor",
-    "wallet_intelligence", "market_open", "osint", "sports_latency",
-    "cross_platform",
-}
 
 
 class AuthorityContractError(ValueError):
@@ -57,7 +52,7 @@ class AuthorityContractError(ValueError):
 def validate(value: dict[str, Any]) -> dict[str, Any]:
     if (
         value.get("schema") != SCHEMA
-        or value.get("version") != 1
+        or value.get("version") != 2
         or value.get("paper_only") is not True
         or value.get("authenticated_execution") is not False
         or value.get("real_order_submission") is not False
@@ -72,7 +67,7 @@ def validate(value: dict[str, Any]) -> dict[str, Any]:
         owner = owners.get(key)
         if not isinstance(owner, str) or not owner or owner != expected:
             raise AuthorityContractError(f"owner_count_or_identity:{key}")
-    engines = value.get("economic_engines")
+    engines = value.get("live_algorithms")
     if not isinstance(engines, dict) or set(engines) != set(ENGINE_COMPONENTS):
         raise AuthorityContractError("economic_engine_partition")
     all_components: set[str] = set()
@@ -87,14 +82,10 @@ def validate(value: dict[str, Any]) -> dict[str, Any]:
         if all_components & components:
             raise AuthorityContractError("component_has_multiple_engine_owners")
         all_components |= components
-    research = set(value.get("research_zero_authority_families") or [])
-    if research != RESEARCH_FAMILIES or research & all_components:
-        raise AuthorityContractError("research_partition")
-    forbidden = set(value.get("research_forbidden_authorities") or [])
-    if forbidden != set(OWNER_KEYS):
-        raise AuthorityContractError("research_forbidden_authority_partition")
+    if value.get("component_independent_authority") is not False:
+        raise AuthorityContractError("component_independent_authority")
     expected_chain = [
-        "ECONOMIC_ENGINE", EXPECTED_OWNERS["global_portfolio_coordinator"],
+        "LIVE_ALGORITHM", EXPECTED_OWNERS["global_portfolio_coordinator"],
         EXPECTED_OWNERS["capital_allocator"], EXPECTED_OWNERS["risk_engine"],
         EXPECTED_OWNERS["oms"], EXPECTED_OWNERS["inventory"],
         EXPECTED_OWNERS["ledger"],
@@ -107,7 +98,7 @@ def validate(value: dict[str, Any]) -> dict[str, Any]:
         "owner_counts": {key: 1 for key in OWNER_KEYS},
         "economic_engine_count": len(engines),
         "component_count": len(all_components),
-        "research_zero_authority_count": len(research),
+        "legacy_algorithm_count": 0,
     }
 
 

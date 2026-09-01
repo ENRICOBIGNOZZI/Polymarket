@@ -1,34 +1,18 @@
 #!/usr/bin/env python3
-"""Prometheus exporter for the canonical V7 PAPER runtime.
-
-Health is derived only from live V7 control-plane surfaces: the single runtime
-PID/SHA, account portfolio guard, Graph/RV executor, public trade tape,
-canonical execution ledger and canonical economics. Missing or stale causal
-state fails `/healthz` closed; `/metrics` remains readable for diagnosis.
-"""
+"""Prometheus exporter for the canonical two-engine V7 PAPER runtime."""
 from __future__ import annotations
 
-import argparse
-import csv
-import hashlib
-import json
-import math
-import os
-import shutil
-import socket
-import subprocess
-import sys
-import threading
-import time
+import argparse, csv, hashlib, json, math, os, shutil, socket, subprocess, sys, threading, time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any
 
-SCRIPT_DIR = Path(__file__).resolve().parent
-if str(SCRIPT_DIR) not in sys.path:
-    sys.path.insert(0, str(SCRIPT_DIR))
-from v7_ledger_metrics import summarize_ledger
+HERE = Path(__file__).resolve().parent
+if str(HERE) not in sys.path:
+    sys.path.insert(0, str(HERE))
+
 from v7_external_fair import summarize_external_fair
+from v7_ledger_metrics import summarize_ledger
 from v7_maker_fillability_exact import summarize_best_available_fillability
 from v7_maker_microstructure import summarize_maker_microstructure
 from v7_portfolio_reconciliation import reconcile as reconcile_portfolio
@@ -37,36 +21,21 @@ from v7_runtime_contract import (
     MAKER_SELECTOR_OPERATIONAL_STATES as _MAKER_SELECTOR_OPERATIONAL_STATES,
 )
 
+LIVE_ALGORITHMS = ("CRYPTO_SETTLEMENT_ENGINE", "STRUCTURAL_ARB_ENGINE")
 _FILLABILITY_CACHE_KEY: tuple[str, str, int] | None = None
 _FILLABILITY_CACHE_VALUE: dict[str, Any] | None = None
-_FILLABILITY_REFRESH_SECONDS = 30
-def _fillability_report(run_root: Path, repository_root: Path, runtime_sha: str, now: int) -> dict[str, Any]:
-    global _FILLABILITY_CACHE_KEY, _FILLABILITY_CACHE_VALUE
-    key = (str(run_root.resolve()), runtime_sha, now // _FILLABILITY_REFRESH_SECONDS)
-    if key == _FILLABILITY_CACHE_KEY and _FILLABILITY_CACHE_VALUE is not None:
-        return _FILLABILITY_CACHE_VALUE
-    report = summarize_best_available_fillability(
-        run_root / "ledger" / "execution.jsonl",
-        run_root / "trade_tape.csv",
-        repository_root / "config" / "v7_professional_market_maker.json",
-        model_sha=runtime_sha or None,
-        now_ms=now * 1000,
-    )
-    _FILLABILITY_CACHE_KEY = key
-    _FILLABILITY_CACHE_VALUE = report
-    return report
 
 
 def _number(value: Any, default: float = 0.0) -> float:
     try:
-        result = float(value)
+        out = float(value)
     except (TypeError, ValueError, OverflowError):
         return default
-    return result if math.isfinite(result) else default
+    return out if math.isfinite(out) else default
 
 
 def _integer(value: Any, default: int = 0) -> int:
-    return int(_number(value, float(default)))
+    return int(_number(value, default))
 
 
 def _json(path: Path) -> dict[str, Any]:
@@ -77,85 +46,36 @@ def _json(path: Path) -> dict[str, Any]:
     return value if isinstance(value, dict) else {}
 
 
-def _age(now: int, value: Any) -> float:
-    ts = _number(value, 0.0)
-    return math.inf if ts <= 0.0 else max(0.0, float(now) - ts)
+def _age(now: int, timestamp: Any) -> float:
+    value = _number(timestamp)
+    return math.inf if value <= 0 else max(0.0, now - value)
 
 
 def _file_age(path: Path, now: int) -> float:
     try:
-        return max(0.0, float(now) - path.stat().st_mtime)
+        return max(0.0, now - path.stat().st_mtime)
     except OSError:
         return math.inf
 
 
-def _git_head(repository_root: Path) -> str:
+def _git_head(root: Path) -> str:
     try:
-        return subprocess.check_output(["git", "-C", str(repository_root), "rev-parse", "HEAD"], text=True, stderr=subprocess.DEVNULL, timeout=2).strip()
+        return subprocess.check_output(
+            ["git", "-C", str(root), "rev-parse", "HEAD"], text=True,
+            stderr=subprocess.DEVNULL, timeout=2,
+        ).strip()
     except (OSError, subprocess.SubprocessError):
         return "unknown"
 
 
 def _pid_alive(value: Any) -> bool:
-    pid = _integer(value, 0)
+    pid = _integer(value)
     if pid <= 0:
         return False
     try:
         os.kill(pid, 0)
-    except (OSError, ProcessLookupError, PermissionError):
-        return False
-    return True
-
-
-def _runtime_operations(run_root: Path, runtime: dict[str, Any], now: int) -> dict[str, Any]:
-    supervisor = _json(run_root / "control" / "supervisor_status.json")
-    retention = _json(run_root / "control" / "retention_status.json")
-    lock_pid = 0
-    try:
-        lock_pid = int((run_root / "control" / "runtime.lock" / "pid").read_text(encoding="utf-8").strip())
-    except (OSError, TypeError, ValueError, OverflowError):
-        pass
-    runtime_pid = _integer(runtime.get("pid"), 0)
-    supervisor_pid = _integer(supervisor.get("supervisor_pid"), 0)
-    child_pid = _integer(supervisor.get("child_pid"), 0)
-    started_at = _integer(supervisor.get("started_at"), 0)
-    disk = retention.get("disk") if isinstance(retention.get("disk"), dict) else {}
-    if not disk:
-        try:
-            usage = shutil.disk_usage(run_root)
-            disk = {
-                "total_bytes": usage.total,
-                "used_bytes": usage.used,
-                "free_bytes": usage.free,
-                "free_ratio": usage.free / usage.total if usage.total else 0.0,
-                "state": "unknown",
-            }
-        except OSError:
-            disk = {}
-    ledger_path = run_root / "ledger" / "execution.jsonl"
-    ledger_parent = ledger_path.parent
-    ledger_writable = ledger_parent.is_dir() and os.access(ledger_parent, os.W_OK)
-    if ledger_path.exists():
-        ledger_writable = ledger_writable and os.access(ledger_path, os.W_OK)
-    return {
-        "supervisor": supervisor,
-        "retention": retention,
-        "supervisor_alive": _pid_alive(supervisor_pid),
-        "single_writer": runtime_pid > 0 and runtime_pid == lock_pid and _pid_alive(lock_pid) and (child_pid in {0, runtime_pid}),
-        "runtime_uptime": max(0, now - started_at) if started_at > 0 else 0,
-        "restart_count": _integer(supervisor.get("restart_count_window"), 0),
-        "ledger_writable": ledger_writable,
-        "disk": disk,
-        "retention_age": _age(now, retention.get("timestamp")),
-        "grafana_up": _local_port_up("127.0.0.1", 3000),
-    }
-
-
-def _local_port_up(host: str, port: int) -> bool:
-    try:
-        with socket.create_connection((host, port), timeout=0.025):
-            return True
-    except OSError:
+        return True
+    except (OSError, PermissionError):
         return False
 
 
@@ -164,42 +84,33 @@ def _safe_label(value: Any) -> str:
 
 
 def _metric(name: str, value: Any, labels: dict[str, Any] | None = None) -> str:
-    numeric = _number(value, 0.0)
+    suffix = ""
     if labels:
-        encoded = ",".join(f'{key}="{_safe_label(item)}"' for key, item in labels.items())
-        return f"{name}{{{encoded}}} {numeric:.12g}"
-    return f"{name} {numeric:.12g}"
+        suffix = "{" + ",".join(f'{k}="{_safe_label(v)}"' for k, v in labels.items()) + "}"
+    return f"{name}{suffix} {_number(value):.12g}"
 
 
 def _trade_tape(path: Path, now: int) -> dict[str, Any]:
-    rows = 0
-    newest_receive_ms = 0
+    rows, newest = 0, 0
     assets: set[str] = set()
     try:
         with path.open(newline="", encoding="utf-8", errors="replace") as handle:
             for row in csv.DictReader(handle):
                 rows += 1
-                asset = str(row.get("asset_id") or "")
-                if asset:
-                    assets.add(asset)
-                newest_receive_ms = max(newest_receive_ms, _integer(row.get("received_ms"), 0))
+                if row.get("asset_id"):
+                    assets.add(str(row["asset_id"]))
+                newest = max(newest, _integer(row.get("received_ms")))
     except (OSError, csv.Error):
         pass
-    newest_ts = newest_receive_ms / 1000.0 if newest_receive_ms > 0 else 0.0
-    return {"rows": rows, "assets": len(assets), "age": _age(now, newest_ts)}
+    return {"rows": rows, "assets": len(assets), "age": _age(now, newest / 1000 if newest else 0)}
 
 
-def _trade_recorder_status(path: Path, now: int) -> dict[str, Any]:
+def _trade_recorder(path: Path, now: int) -> dict[str, Any]:
     status = _json(path)
-    timestamp_ms = _integer(status.get("timestamp_ms"), 0)
-    return {
-        **status,
-        "present": bool(status),
-        "age": _age(now, timestamp_ms / 1000.0 if timestamp_ms > 0 else 0.0),
-    }
+    return {**status, "present": bool(status), "age": _age(now, _integer(status.get("timestamp_ms")) / 1000)}
 
 
-def _verified_no_standard_clob_flow(status: dict[str, Any], max_age: float) -> bool:
+def _verified_no_flow(status: dict[str, Any], max_age: float) -> bool:
     return (
         status.get("schema") == "polymarket_v7_trade_recorder_status_v1"
         and status.get("paper_only") is True
@@ -207,1398 +118,326 @@ def _verified_no_standard_clob_flow(status: dict[str, Any], max_age: float) -> b
         and status.get("real_order_submission") is False
         and status.get("data_plane_healthy") is True
         and status.get("flow_regime") == "STANDARD_CLOB_NO_MATCHING_TRADES"
-        and _integer(status.get("conditions")) > 0
-        and _integer(status.get("requests")) > 0
-        and _integer(status.get("fetched")) == 0
-        and _integer(status.get("errors")) == 0
+        and _integer(status.get("conditions")) > 0 and _integer(status.get("requests")) > 0
+        and _integer(status.get("fetched")) == 0 and _integer(status.get("errors")) == 0
         and _integer(status.get("truncated_batches")) == 0
-        and math.isfinite(float(status.get("age", math.inf)))
-        and float(status["age"]) <= max_age
+        and _number(status.get("age"), math.inf) <= max_age
     )
 
 
 def _maker_latency(path: Path) -> dict[str, Any]:
-    stages = ("parse_ns", "book_ns", "feature_ns", "decision_ns", "risk_ns",
-              "tx_queue_ns", "execution_ns", "receive_to_intent_ns")
-    samples: dict[str, list[int]] = {stage: [] for stage in stages}
+    names = ("parse_ns", "book_ns", "feature_ns", "decision_ns", "risk_ns", "tx_queue_ns", "execution_ns", "receive_to_intent_ns")
+    values: dict[str, list[int]] = {name: [] for name in names}
     rows = 0
     try:
         with path.open(newline="", encoding="utf-8", errors="replace") as handle:
             for row in csv.DictReader(handle):
                 rows += 1
-                for stage in stages:
-                    value = _integer(row.get(stage), 0)
+                for name in names:
+                    value = _integer(row.get(name))
                     if value > 0:
-                        samples[stage].append(value)
+                        values[name].append(value)
     except (OSError, csv.Error):
         return {"present": False, "rows": 0, "stages": {}}
-
-    def percentile(values: list[int], probability: float) -> int:
-        if not values:
-            return 0
-        ordered = sorted(values)
-        return ordered[int(probability * (len(ordered) - 1))]
-
-    summary: dict[str, dict[str, int]] = {}
-    for stage, values in samples.items():
-        if not values:
+    stages: dict[str, Any] = {}
+    for name, samples in values.items():
+        if not samples:
             continue
-        summary[stage] = {
-            "samples": len(values),
-            "p50": percentile(values, 0.50),
-            "p90": percentile(values, 0.90),
-            "p95": percentile(values, 0.95),
-            "p99": percentile(values, 0.99),
-            "p99_9": percentile(values, 0.999),
-            "max": max(values),
-        }
-    return {"present": rows > 0, "rows": rows, "stages": summary}
+        samples.sort()
+        pick = lambda p: samples[int(p * (len(samples) - 1))]
+        stages[name] = {"samples": len(samples), "p50": pick(.5), "p90": pick(.9), "p95": pick(.95), "p99": pick(.99), "p99_9": pick(.999), "max": samples[-1]}
+    return {"present": rows > 0, "rows": rows, "stages": stages}
 
 
-def _graph_open_cost(path: Path) -> float | None:
-    state = _json(path)
-    bundles = state.get("bundles") if isinstance(state.get("bundles"), dict) else None
-    if bundles is None:
-        return None
-    total = 0.0
-    for bundle in bundles.values():
-        if not isinstance(bundle, dict) or bundle.get("final") is True:
-            continue
-        legs = bundle.get("legs") if isinstance(bundle.get("legs"), dict) else {}
-        for leg in legs.values():
-            if not isinstance(leg, dict):
-                continue
-            for fill in leg.get("fills") if isinstance(leg.get("fills"), list) else []:
-                if isinstance(fill, dict):
-                    total += max(0.0, _number(fill.get("shares"))) * max(0.0, _number(fill.get("price")))
-                    total += max(0.0, _number(fill.get("fee")))
-    return total
+def _fillability(run_root: Path, repository_root: Path, sha: str, now: int) -> dict[str, Any]:
+    global _FILLABILITY_CACHE_KEY, _FILLABILITY_CACHE_VALUE
+    key = (str(run_root), sha, now // 30)
+    if key == _FILLABILITY_CACHE_KEY and _FILLABILITY_CACHE_VALUE is not None:
+        return _FILLABILITY_CACHE_VALUE
+    value = summarize_best_available_fillability(
+        run_root / "ledger/execution.jsonl", run_root / "trade_tape.csv",
+        repository_root / "config/v7_professional_market_maker.json",
+        model_sha=sha or None, now_ms=now * 1000,
+    )
+    _FILLABILITY_CACHE_KEY, _FILLABILITY_CACHE_VALUE = key, value
+    return value
+
+
+def _operations(run_root: Path, runtime: dict[str, Any], now: int) -> dict[str, Any]:
+    supervisor = _json(run_root / "control/supervisor_status.json")
+    retention = _json(run_root / "control/retention_status.json")
+    try:
+        lock_pid = int((run_root / "control/runtime.lock/pid").read_text().strip())
+    except (OSError, ValueError):
+        lock_pid = 0
+    runtime_pid = _integer(runtime.get("pid"))
+    child_pid = _integer(supervisor.get("child_pid"))
+    try:
+        free_ratio = shutil.disk_usage(run_root).free / shutil.disk_usage(run_root).total
+    except OSError:
+        free_ratio = 0.0
+    return {
+        "supervisor": supervisor, "retention": retention,
+        "supervisor_alive": _pid_alive(supervisor.get("supervisor_pid")),
+        "single_writer": runtime_pid > 0 and runtime_pid == lock_pid and _pid_alive(lock_pid) and child_pid in {0, runtime_pid},
+        "runtime_uptime": max(0, now - _integer(supervisor.get("started_at"))),
+        "restart_count": _integer(supervisor.get("restart_count_window")),
+        "ledger_writable": os.access(run_root / "ledger", os.W_OK),
+        "disk_free_ratio": free_ratio, "retention_age": _age(now, retention.get("timestamp")),
+    }
 
 
 def collect_snapshot(run_root: Path, repository_root: Path | None = None, *, now: int | None = None) -> dict[str, Any]:
     now = int(time.time()) if now is None else int(now)
-    run_root = run_root.resolve()
-    repository_root = (repository_root or Path(".")).resolve()
-    runtime = _json(run_root / "control" / "runtime_status.json")
-    research_sleeves = _json(run_root / "control" / "research_sleeves_manifest.json")
-    slow_research_shadow = _json(run_root / "control" / "slow_research_shadow_manifest.json")
-    research_shadow_statuses = {
-        family: _json(run_root / "shadow" / family / "status.json")
-        for family in ("sports_latency", "cross_platform", "wallet_intelligence")
-    }
-    portfolio = _json(run_root / "control" / "portfolio_state.json")
-    allocations = _json(run_root / "control" / "allocations" / "manifest.json")
-    evidence_allocator = _json(run_root / "control" / "evidence_capital_allocator.json")
-    fee_reward_registry = _json(run_root / "control" / "fee_reward_registry.json")
-    graph = _json(run_root / "graph_rv" / "status.json")
-    fast = _json(run_root / "fast_structural" / "fast_arb_status.json")
-    graph_scan = _json(run_root / "graph_rv" / "scan_status.json")
-    hard = _json(run_root / "hard_arb" / "status.json")
-    micro = _json(run_root / "micro_taker" / "status.json")
-    maker = _json(run_root / "micro_maker" / "status.json")
-    maker_diagnostics = _json(run_root / "micro_maker" / "runtime_diagnostics.json")
-    maker_selector = _json(run_root / "micro_maker" / "selector_status.json")
-    maker_rotation = _json(run_root / "micro_maker" / "rotation_status.json")
-    external = _json(run_root / "external" / "status.json")
-    osint = _json(run_root / "osint" / "status.json")
-    osint_mapping = _json(run_root / "osint" / "mapping_status.json")
-    market_open = _json(run_root / "market_open" / "status.json")
-    universe = _json(run_root / "universe" / "status.json")
-    economics_path = run_root / "canonical_economics.json"
-    canonical = _json(economics_path)
-    joint = _json(run_root / "learned_execution" / "joint_policy.json")
-    ledger_path = run_root / "ledger" / "execution.jsonl"
+    run_root = run_root.resolve(); repository_root = (repository_root or Path(".")).resolve()
+    runtime = _json(run_root / "control/runtime_status.json")
+    portfolio = _json(run_root / "control/portfolio_state.json")
+    allocations = _json(run_root / "control/allocations/manifest.json")
+    canonical_path = run_root / "canonical_economics.json"
+    canonical = _json(canonical_path)
+    ledger_path = run_root / "ledger/execution.jsonl"
     ledger = summarize_ledger(ledger_path)
-    maker_lab = summarize_maker_microstructure(
-        ledger_path, run_root / "micro_maker" / "reward_selection.json",
-        run_root / "research" / "evidence" / "maker_markout",
-    )
-    maker_latency = _maker_latency(run_root / "micro_maker" / "latency.csv")
-    tape = _trade_tape(run_root / "trade_tape.csv", now)
-    trade_recorder = _trade_recorder_status(run_root / "trade_recorder_status.json", now)
-    directives = _json(repository_root / "config" / "operator_directives.json")
-    strategy_registry = _json(repository_root / "config" / "v7_strategy_registry.json")
-    live_model_scope = _json(repository_root / "config" / "v7_live_model_scope.json")
-    crypto_registry = _json(repository_root / "config" / "v7_crypto_settlement_markets.json")
-    crypto_model_registry = _json(repository_root / "config" / "v7_crypto_settlement_model_registry.json")
-    crypto_runtime = _json(run_root / "control" / "crypto_settlement_engine_snapshot.json")
-    global_coordinator = _json(run_root / "control" / "global_portfolio_coordinator.json")
-    process_manifest_path = repository_root / "config" / "v7_process_manifest.json"
-    process_manifest = _json(process_manifest_path)
-    try:
-        process_manifest_sha256 = hashlib.sha256(process_manifest_path.read_bytes()).hexdigest()
-    except OSError:
-        process_manifest_sha256 = ""
+    fast = _json(run_root / "fast_structural/fast_arb_status.json")
+    hard = _json(run_root / "hard_arb/status.json")
+    maker = _json(run_root / "micro_maker/status.json")
+    sha, runtime_sha = _git_head(repository_root), str(runtime.get("model_sha") or "")
+    directives = _json(repository_root / "config/operator_directives.json")
     authorization = directives.get("paper_v7_authorization") if isinstance(directives.get("paper_v7_authorization"), dict) else {}
-    authority_max_drawdown = _number(authorization.get("max_drawdown"), 0.0)
-    authority_valid = directives.get("authority") == "latest_explicit_user_instruction" and authorization.get("paper_only") is True and authorization.get("authenticated_execution") is False and 0.0 < authority_max_drawdown <= 1.0
-    sha = _git_head(repository_root)
-    runtime_alive = _pid_alive(runtime.get("pid")) and not (run_root / "control" / "KILL").exists()
-    runtime_sha = str(runtime.get("model_sha") or "")
-    maker_fillability = _fillability_report(run_root, repository_root, runtime_sha, now)
-    external_fair = summarize_external_fair(
-        run_root, repository_root, runtime_sha=runtime_sha, now_s=now,
-    )
-    reconciliation = reconcile_portfolio(
-        canonical=canonical,
-        ledger=ledger,
-        portfolio=portfolio,
-        allocations=allocations,
-        state_realized_pnl={
-            "FAST_STRUCTURAL": None,
-            "GRAPH_RV": graph.get("realized_pnl_total") if graph else None,
-            "HARD_ARB": hard.get("realized_pnl_total") if hard else None,
-            "MICRO_TAKER": micro.get("realized_pnl_total") if micro else None,
-            "MICRO_MAKER_PRO": maker.get("realized_trading_pnl") if maker else None,
-        },
-    )
-
-    sleeves = portfolio.get("sleeves") if isinstance(portfolio.get("sleeves"), dict) else {}
-    strategies: dict[str, dict[str, Any]] = {}
-    for name, row in sleeves.items():
-        if not isinstance(row, dict) or name == "reserve":
-            continue
-        budget = _number(row.get("budget"))
-        equity = _number(row.get("equity"), budget)
-        strategies[str(name)] = {"equity": equity, "pnl": equity - budget, "killed": bool(row.get("killed", False))}
-    if graph:
-        strategies.setdefault("graph_rv", {}).update({"equity": _number(graph.get("equity")), "pnl": _number(graph.get("realized_pnl_total")), "net_pnl": _number(graph.get("realized_pnl_total")), "killed": bool(graph.get("killed", False)), "signals": _integer(graph_scan.get("bundles")), "paper_eligible": False})
-    if fast:
-        strategies.setdefault("fast_structural", {}).update({
-            "pnl": 0.0,
-            "net_pnl": 0.0,
-            "killed": fast.get("state") != "RUNNING",
-            "signals": _integer(fast.get("canonical_opportunities_published")),
-            "live_units": 0,
-            "paper_eligible": False,
-        })
-    if hard:
-        strategies.setdefault("hard_arb", {}).update({"equity": _number(hard.get("equity_cost_basis"), _number(hard.get("cash"))), "pnl": _number(hard.get("realized_pnl_total")), "killed": bool(hard.get("killed", False)), "signals": _integer(hard.get("candidates"))})
-    if micro:
-        strategies.setdefault("micro_taker", {}).update({"equity": _number(micro.get("equity")), "pnl": _number(micro.get("realized_pnl_total")), "killed": bool(micro.get("killed", False)), "signals": _integer(micro.get("signals")), "best_edge": _number(micro.get("best_edge")), "live_units": _integer(micro.get("open_positions")), "net_pnl": _number(micro.get("realized_pnl_total")), "paper_eligible": False})
-    if maker:
-        strategies.setdefault("micro_maker", {}).update({"killed": False, "paper_eligible": False})
-    if external:
-        strategies.setdefault("external", {}).update({"paper_eligible": False})
-    if osint:
-        strategies.setdefault("osint", {}).update({
-            "paper_eligible": False,
-            "signals": _integer(osint.get("new_events")),
-        })
-    if market_open:
-        strategies.setdefault("market_open", {}).update({
-            "paper_eligible": False,
-            "signals": _integer(market_open.get("new_markets")),
-        })
-    for name, row in ledger.get("strategies", {}).items():
-        if not isinstance(row, dict):
-            continue
-        strategies.setdefault(str(name).lower(), {}).update({
-            "ledger_opportunities": _integer(row.get("opportunities")),
-            "ledger_orders": _integer(row.get("orders_submitted")),
-            "ledger_fills": _integer(row.get("fills")),
-            "ledger_complete_fills": _integer(row.get("complete_fills")),
-            "ledger_partial_fills": _integer(row.get("partial_fills")),
-            "ledger_unwinds": _integer(row.get("unwinds")),
-            "ledger_final_pnl": _number(row.get("final_pnl")),
-            "ledger_capital_hours": _number(row.get("capital_duration_ms")) / 3_600_000.0,
-        })
-
+    max_drawdown = _number(authorization.get("max_drawdown"))
+    authority_valid = directives.get("authority") == "latest_explicit_user_instruction" and authorization.get("paper_only") is True and authorization.get("authenticated_execution") is False and 0 < max_drawdown <= 1
+    process_path = repository_root / "config/v7_process_manifest.json"
+    process = _json(process_path)
+    external_fair = summarize_external_fair(run_root, repository_root, runtime_sha=runtime_sha, now_s=now)
+    state_pnl = {
+        "CRYPTO_SETTLEMENT_ENGINE": _number((external_fair.get("economics") or {}).get("realized_pnl")),
+        "STRUCTURAL_ARB_ENGINE": _number(hard.get("realized_pnl_total")),
+    }
+    reconciliation = reconcile_portfolio(canonical=canonical, ledger=ledger, portfolio=portfolio, allocations=allocations, state_realized_pnl=state_pnl)
+    engine_rows = portfolio.get("engines") if isinstance(portfolio.get("engines"), dict) else {}
+    algorithms = {engine: {"equity": _number((engine_rows.get(engine) or {}).get("equity")), "budget": _number((engine_rows.get(engine) or {}).get("budget")), "killed": bool((engine_rows.get(engine) or {}).get("killed"))} for engine in LIVE_ALGORITHMS}
+    tape = _trade_tape(run_root / "trade_tape.csv", now)
     starting = _number(portfolio.get("account_starting_capital"), _number(allocations.get("account_starting_capital")))
     equity = _number(portfolio.get("equity"), starting)
-    realized = _number(canonical.get("net_pnl"), 0.0)
-    gross_components = [_graph_open_cost(run_root / "graph_rv" / "state.json")]
-    gross_known = all(value is not None for value in gross_components)
-    gross = sum(float(value) for value in gross_components if value is not None) if gross_known else None
-    ages = {
-        "runtime": _age(now, runtime.get("timestamp")),
-        "portfolio": _age(now, portfolio.get("timestamp")),
-        "graph": _age(now, graph.get("timestamp")),
-        "economics": _file_age(economics_path, now),
-        "trade_tape": tape["age"],
-        "trade_recorder": trade_recorder["age"],
-    }
-    operations = _runtime_operations(run_root, runtime, now)
     return {
-        "timestamp": now,
-        "sha": sha,
-        "run_root": run_root.name,
-        "runtime": runtime,
-        "research_sleeves": research_sleeves,
-        "slow_research_shadow": slow_research_shadow,
-        "research_shadow_statuses": research_shadow_statuses,
-        "strategy_registry": strategy_registry,
-        "live_model_scope": live_model_scope,
-        "crypto_registry": crypto_registry,
-        "crypto_model_registry": crypto_model_registry,
-        "crypto_runtime": crypto_runtime,
-        "global_coordinator": global_coordinator,
-        "process_manifest": {
-            "schema": process_manifest.get("schema"),
-            "version": process_manifest.get("version"),
-            "process_count": len(process_manifest.get("processes") or []),
-            "sha256": process_manifest_sha256,
-        },
-        "runtime_alive": runtime_alive,
-        "portfolio": portfolio,
-        "allocations": allocations,
-        "evidence_allocator": evidence_allocator,
-        "fee_reward_registry": fee_reward_registry,
-        "graph": graph,
-        "fast": fast,
-        "graph_scan": graph_scan,
-        "hard": hard,
-        "micro": micro,
-        "maker": maker,
-        "maker_diagnostics": maker_diagnostics,
-        "maker_selector": maker_selector,
-        "maker_rotation": maker_rotation,
-        "external": external,
-        "osint": osint,
-        "osint_mapping": osint_mapping,
-        "market_open": market_open,
-        "universe": universe,
-        "canonical_economics": canonical,
-        "joint_policy": joint,
-        "ledger": ledger,
-        "maker_lab": maker_lab,
-        "maker_fillability": maker_fillability,
-        "external_fair": external_fair,
-        "reconciliation": reconciliation,
-        "maker_latency": maker_latency,
-        "trade_tape": tape,
-        "trade_recorder": trade_recorder,
-        "authority": {"valid": authority_valid, "max_drawdown": authority_max_drawdown},
-        "strategies": strategies,
-        "ages": ages,
-        "operations": operations,
-        "economics": {
-            "starting_capital": starting,
-            "cash": sum(_number(row.get("equity")) for name, row in sleeves.items() if isinstance(row, dict) and name == "reserve"),
-            "equity": equity,
-            "pnl": equity - starting,
-            "realized_pnl": realized,
-            "unrealized_executable_pnl": equity - starting - realized,
-            "drawdown": _number(portfolio.get("drawdown")),
-            "gross_exposure": gross,
-            "capital_utilization": (gross / starting) if gross is not None and starting > 0 else None,
-            "live_units": sum(_integer(row.get("open_positions")) for row in (micro,) if isinstance(row, dict)),
-            "killed": bool(portfolio.get("killed", False)),
-        },
+        "timestamp": now, "sha": sha, "run_root": run_root.name, "runtime": runtime,
+        "runtime_alive": _pid_alive(runtime.get("pid")) and not (run_root / "control/KILL").exists(),
+        "portfolio": portfolio, "allocations": allocations,
+        "evidence_allocator": _json(run_root / "control/evidence_capital_allocator.json"),
+        "fee_reward_registry": _json(run_root / "control/fee_reward_registry.json"),
+        "strategy_registry": _json(repository_root / "config/v7_strategy_registry.json"),
+        "live_model_scope": _json(repository_root / "config/v7_live_model_scope.json"),
+        "crypto_registry": _json(repository_root / "config/v7_crypto_settlement_markets.json"),
+        "crypto_model_registry": _json(repository_root / "config/v7_crypto_settlement_model_registry.json"),
+        "crypto_runtime": _json(run_root / "control/crypto_settlement_engine_snapshot.json"),
+        "global_coordinator": _json(run_root / "control/global_portfolio_coordinator.json"),
+        "process_manifest": {"schema": process.get("schema"), "process_count": len(process.get("processes") or []), "sha256": hashlib.sha256(process_path.read_bytes()).hexdigest() if process_path.exists() else ""},
+        "fast": fast, "hard": hard, "maker": maker,
+        "maker_diagnostics": _json(run_root / "micro_maker/runtime_diagnostics.json"),
+        "maker_selector": _json(run_root / "micro_maker/selector_status.json"),
+        "maker_rotation": _json(run_root / "micro_maker/rotation_status.json"),
+        "external": _json(run_root / "external/status.json"),
+        "universe": _json(run_root / "universe/status.json"),
+        "canonical_economics": canonical, "ledger": ledger,
+        "maker_lab": summarize_maker_microstructure(ledger_path, run_root / "micro_maker/reward_selection.json", run_root / "research/evidence/maker_markout"),
+        "maker_fillability": _fillability(run_root, repository_root, runtime_sha, now),
+        "external_fair": external_fair, "reconciliation": reconciliation,
+        "maker_latency": _maker_latency(run_root / "micro_maker/latency.csv"),
+        "trade_tape": tape, "trade_recorder": _trade_recorder(run_root / "trade_recorder_status.json", now),
+        "authority": {"valid": authority_valid, "max_drawdown": max_drawdown},
+        "algorithms": algorithms, "strategies": algorithms,
+        "ages": {"runtime": _age(now, runtime.get("timestamp")), "portfolio": _age(now, portfolio.get("timestamp")), "economics": _file_age(canonical_path, now), "trade_tape": tape["age"]},
+        "operations": _operations(run_root, runtime, now),
+        "economics": {"starting_capital": starting, "cash": _number(allocations.get("reserve_budget")), "equity": equity, "pnl": equity-starting, "realized_pnl": _number(canonical.get("net_pnl")), "unrealized_executable_pnl": equity-starting-_number(canonical.get("net_pnl")), "drawdown": _number(portfolio.get("drawdown")), "gross_exposure": 0.0, "capital_utilization": 0.0, "live_units": 0, "killed": bool(portfolio.get("killed"))},
     }
+
+
+def _fresh_ms(status: dict[str, Any], snapshot: dict[str, Any], max_age: int) -> bool:
+    age = _integer(snapshot.get("timestamp")) * 1000 - _integer(status.get("timestamp_ms"))
+    return -5000 <= age <= max_age * 1000
+
+
+def _scope_valid(snapshot: dict[str, Any]) -> bool:
+    scope, registry = snapshot.get("live_model_scope") or {}, snapshot.get("strategy_registry") or {}
+    rows = registry.get("live_algorithms") if isinstance(registry.get("live_algorithms"), list) else []
+    ids = [row.get("id") for row in rows if isinstance(row, dict) and row.get("enabled") is True]
+    return scope.get("schema") == "polymarket_v7_live_engine_scope_v2" and scope.get("live_algorithm_count") == 2 and set(scope.get("live_algorithms") or []) == set(LIVE_ALGORITHMS) and registry.get("schema") == "polymarket_v7_live_algorithm_registry_v2" and len(ids) == 2 and set(ids) == set(LIVE_ALGORITHMS) and scope.get("component_independent_authority") is False and registry.get("component_independent_authority") is False
 
 
 def health_reasons(snapshot: dict[str, Any], *, max_runtime_age: int = 180, max_supervisor_age: int = 30) -> list[str]:
     reasons: list[str] = []
-    runtime = snapshot["runtime"]
-    research = snapshot.get("research_sleeves") if isinstance(snapshot.get("research_sleeves"), dict) else {}
-    slow_research = snapshot.get("slow_research_shadow") if isinstance(snapshot.get("slow_research_shadow"), dict) else {}
-    research_statuses = snapshot.get("research_shadow_statuses") if isinstance(snapshot.get("research_shadow_statuses"), dict) else {}
-    registry = snapshot.get("strategy_registry") if isinstance(snapshot.get("strategy_registry"), dict) else {}
-    live_scope = snapshot.get("live_model_scope") if isinstance(snapshot.get("live_model_scope"), dict) else {}
-    portfolio = snapshot["portfolio"]
-    evidence_allocator = snapshot.get("evidence_allocator") if isinstance(snapshot.get("evidence_allocator"), dict) else {}
-    fee_reward_registry = snapshot.get("fee_reward_registry") if isinstance(snapshot.get("fee_reward_registry"), dict) else {}
-    graph = snapshot["graph"]
-    fast = snapshot.get("fast") if isinstance(snapshot.get("fast"), dict) else {}
-    canonical = snapshot["canonical_economics"]
-    reconciliation = snapshot.get("reconciliation") if isinstance(snapshot.get("reconciliation"), dict) else {}
-    ledger = snapshot["ledger"]
-    ages = snapshot["ages"]
-    authority = snapshot["authority"]
-    maker = snapshot.get("maker") if isinstance(snapshot.get("maker"), dict) else {}
-    maker_diagnostics = snapshot.get("maker_diagnostics") if isinstance(snapshot.get("maker_diagnostics"), dict) else {}
-    selector = snapshot.get("maker_selector") if isinstance(snapshot.get("maker_selector"), dict) else {}
-    rotation = snapshot.get("maker_rotation") if isinstance(snapshot.get("maker_rotation"), dict) else {}
-    external_fair = snapshot.get("external_fair") if isinstance(snapshot.get("external_fair"), dict) else {}
-    if authority.get("valid") is not True: reasons.append("operator_authority_missing_or_invalid")
+    runtime, portfolio, allocations = snapshot.get("runtime") or {}, snapshot.get("portfolio") or {}, snapshot.get("allocations") or {}
+    canonical, ledger, ages = snapshot.get("canonical_economics") or {}, snapshot.get("ledger") or {}, snapshot.get("ages") or {}
+    fast, maker = snapshot.get("fast") or {}, snapshot.get("maker") or {}
+    selector, rotation, universe = snapshot.get("maker_selector") or {}, snapshot.get("maker_rotation") or {}, snapshot.get("universe") or {}
+    if not (snapshot.get("authority") or {}).get("valid"): reasons.append("operator_authority_missing_or_invalid")
     if runtime.get("version") != 7: reasons.append("runtime_version_not_v7")
     if runtime.get("paper_only") is not True: reasons.append("runtime_not_paper_only")
     if runtime.get("authenticated_execution") is not False or runtime.get("real_order_submission") is not False: reasons.append("authenticated_execution_not_disabled")
     if runtime.get("model_sha") != snapshot.get("sha"): reasons.append("runtime_sha_mismatch")
-    if (
-        evidence_allocator.get("schema") != "polymarket_v7_evidence_capital_allocator_v2"
-        or evidence_allocator.get("paper_only") is not True
-        or evidence_allocator.get("authenticated_execution") is not False
-        or evidence_allocator.get("real_order_submission") is not False
-        or evidence_allocator.get("automatic_transfer") is not False
-    ): reasons.append("evidence_capital_allocator_missing_or_unsafe")
-    if (
-        fee_reward_registry.get("schema") != "polymarket_v7_fee_reward_registry_v1"
-        or fee_reward_registry.get("model_sha") != snapshot.get("sha")
-        or fee_reward_registry.get("paper_only") is not True
-        or fee_reward_registry.get("authenticated_execution") is not False
-        or fee_reward_registry.get("real_order_submission") is not False
-        or fee_reward_registry.get("unknown_fee_policy") != "NON_EXECUTABLE"
-        or fee_reward_registry.get("unknown_reward_policy") != "ZERO_EXPECTED_VALUE"
-        or _integer(fee_reward_registry.get("executable_market_count")) < 1
-    ): reasons.append("fee_reward_registry_missing_or_no_executable_market")
-    try: fast_age = int(snapshot.get("timestamp") or 0) - int(fast.get("timestamp") or 0)
-    except (TypeError, ValueError, OverflowError): fast_age = max_runtime_age + 1
-    if (
-        fast.get("schema") != "polymarket_v7_structural_arb_engine_status_v1"
-        or fast.get("model_sha") != snapshot.get("sha")
-        or fast.get("paper_only") is not True
-        or fast.get("authenticated_execution") is not False
-        or fast.get("real_order_submission") is not False
-        or fast.get("real_capital_at_risk") is not False
-        or fast.get("execution_authority") != "OPPORTUNITY_PROPOSAL_ONLY"
-        or fast.get("capital_authority") is not False
-        or fast.get("oms_authority") is not False
-        or fast.get("inventory_authority") is not False
-        or fast.get("ledger_writer_authority") is not False
-        or fast.get("state") != "RUNNING"
-        or fast_age < -5 or fast_age > max_runtime_age
-    ): reasons.append("structural_arb_engine_missing_stale_or_unsafe")
-    try: maker_age_ms = int(snapshot.get("timestamp") or 0) * 1000 - int(maker.get("timestamp_ms") or 0)
-    except (TypeError, ValueError, OverflowError): maker_age_ms = (max_runtime_age + 1) * 1000
-    if (
-        maker.get("schema") != "polymarket_v7_professional_maker_status_v1"
-        or maker.get("model_sha") != snapshot.get("sha")
-        or maker.get("paper_only") is not True
-        or maker.get("authenticated_execution") is not False
-        or maker.get("killed") is True
-        or maker.get("source") in {None, "", "not_started"}
-        or maker_age_ms < -5_000
-        or maker_age_ms > max_runtime_age * 1000
-    ): reasons.append("professional_maker_missing_stale_or_unsafe")
-    try: selector_age_ms = int(snapshot.get("timestamp") or 0) * 1000 - int(selector.get("timestamp_ms") or 0)
-    except (TypeError, ValueError, OverflowError): selector_age_ms = (max_runtime_age + 1) * 1000
-    if (
-        selector.get("schema") != "polymarket_v7_maker_selector_status_v1"
-        or selector.get("model_sha") != snapshot.get("sha")
-        or selector.get("paper_only") is not True
-        or selector.get("authenticated_execution") is not False
-        or selector.get("real_order_submission") is not False
-        or selector.get("ready") is not True
-        or selector.get("state") not in _MAKER_SELECTOR_OPERATIONAL_STATES
-        or selector_age_ms < -5_000
-        or selector_age_ms > max_runtime_age * 1000
-    ): reasons.append("maker_selector_missing_stale_or_unsafe")
-    try: rotation_age_ms = int(snapshot.get("timestamp") or 0) * 1000 - int(rotation.get("timestamp_ms") or 0)
-    except (TypeError, ValueError, OverflowError): rotation_age_ms = (max_runtime_age + 1) * 1000
-    if (
-        rotation.get("schema") != "polymarket_v7_maker_cohort_rotation_status_v1"
-        or rotation.get("model_sha") != snapshot.get("sha")
-        or rotation.get("paper_only") is not True
-        or rotation.get("authenticated_execution") is not False
-        or rotation.get("real_order_submission") is not False
-        or rotation.get("state") not in _MAKER_ROTATION_OPERATIONAL_STATES
-        or rotation_age_ms < -5_000
-        or rotation_age_ms > max_runtime_age * 1000
-    ): reasons.append("maker_cohort_supervisor_missing_stale_or_unsafe")
-    expected_research = {
-        "sports_latency", "cross_platform", "wallet_intelligence",
-    }
-    registered = registry.get("strategies") if isinstance(registry.get("strategies"), list) else []
-    registered_names = {
-        str(row.get("family") or "") for row in registered if isinstance(row, dict) and row.get("enabled") is True
-    }
-    if len(registered_names) != 15: reasons.append("strategy_registry_not_15_enabled")
-    target_live = set(live_scope.get("target_live_families") or [])
-    excluded_live = set(live_scope.get("excluded_live_families") or [])
-    if (live_scope.get("schema") != "polymarket_v7_live_model_scope_v1"
-            or live_scope.get("target_live_count") != 12
-            or live_scope.get("paper_only") is not True
-            or live_scope.get("authenticated_execution") is not False
-            or live_scope.get("real_order_submission") is not False): reasons.append("live_model_scope_missing_or_invalid")
-    if target_live | excluded_live != registered_names or target_live & excluded_live: reasons.append("live_model_scope_not_registry_partition")
-    if excluded_live != {"ranking", "pca", "local_factor"}: reasons.append("live_model_scope_exclusions_invalid")
-    if set(live_scope.get("always_on_economic_shadow_families") or []) != excluded_live: reasons.append("live_model_scope_slow_shadow_set_invalid")
-    if set(live_scope.get("research_shadow_supervised_families") or []) != expected_research: reasons.append("live_model_scope_shadow_set_invalid")
-    governance = live_scope.get("governance") if isinstance(live_scope.get("governance"), dict) else {}
-    if (governance.get("single_execution_owner") is not True
-            or governance.get("research_has_capital") is not False
-            or governance.get("research_has_oms_authority") is not False
-            or governance.get("research_has_ledger_writer_authority") is not False
-            or governance.get("automatic_promotion") is not False): reasons.append("live_model_scope_governance_invalid")
-    research_rows = research.get("families") if isinstance(research.get("families"), dict) else {}
-    if research.get("schema") != "polymarket_v7_research_sleeves_manifest_v1": reasons.append("research_sleeves_manifest_missing_or_invalid")
-    slow_families = slow_research.get("families") if isinstance(slow_research.get("families"), dict) else {}
-    try: slow_age = int(snapshot.get("timestamp") or 0) - int(slow_research.get("timestamp") or 0)
-    except (TypeError, ValueError, OverflowError): slow_age = max_runtime_age + 1
-    if (
-        slow_research.get("schema") != "polymarket_v7_slow_economic_shadow_manifest_v1"
-        or slow_research.get("model_sha") != snapshot.get("sha")
-        or slow_research.get("paper_only") is not True
-        or slow_research.get("authenticated_execution") is not False
-        or slow_research.get("real_order_submission") is not False
-        or set(slow_families) != {"ranking", "pca", "local_factor"}
-        or slow_age < -5 or slow_age > max_runtime_age
-    ): reasons.append("slow_economic_shadow_missing_stale_or_unsafe")
-    if research.get("version") != 7 or research.get("model_sha") != snapshot.get("sha"): reasons.append("research_sleeves_identity_drift")
-    if research.get("paper_only") is not True or research.get("authenticated_execution") is not False or research.get("real_order_submission") is not False: reasons.append("research_sleeves_execution_authority_unsafe")
-    if set(research_rows) != expected_research: reasons.append("research_sleeves_not_3_exact")
-    if not _pid_alive(research.get("supervisor_pid")): reasons.append("research_sleeves_supervisor_dead")
-    try: research_age = int(snapshot.get("timestamp") or 0) - int(research.get("timestamp") or 0)
-    except (TypeError, ValueError, OverflowError): research_age = max_runtime_age + 1
-    if research_age < -5 or research_age > max_runtime_age: reasons.append("research_sleeves_manifest_stale")
-    for family in expected_research:
-        row = research_rows.get(family) if isinstance(research_rows.get(family), dict) else {}
-        status = research_statuses.get(family) if isinstance(research_statuses.get(family), dict) else {}
-        if row.get("authority") != "RESEARCH" or row.get("process_state") != "RUNNING": reasons.append(f"research_sleeve_not_running:{family}")
-        if row.get("paper_only") is not True or row.get("authenticated_execution") is not False or row.get("real_order_submission") is not False: reasons.append(f"research_sleeve_unsafe:{family}")
-        if any(row.get(key) is not False for key in ("execution_authority", "capital_authority", "oms_authority", "ledger_write_authority", "promotion_authority")): reasons.append(f"research_sleeve_authority_violation:{family}")
-        evidence_state = row.get("evidence_state")
-        if family == "wallet_intelligence":
-            if evidence_state != "BLOCKED_CONFIG" or row.get("last_attempt_ts") != 0 or row.get("last_success_ts") != 0:
-                reasons.append(f"research_sleeve_unsubstantiated_state:{family}")
-        else:
-            if evidence_state not in {"BLOCKED_EXTERNAL", "ACTIVE"}:
-                reasons.append(f"research_sleeve_component_evidence_missing:{family}")
-            if row.get("implementation_complete") is not True or int(row.get("last_attempt_ts") or 0) <= 0:
-                reasons.append(f"research_sleeve_component_not_attempted:{family}")
-            if evidence_state == "ACTIVE" and (
-                row.get("feed_operational") is not True
-                or int(row.get("verified_mappings") or 0) <= 0
-                or row.get("forward_collection_active") is not True
-            ):
-                reasons.append(f"research_sleeve_false_active:{family}")
-            if evidence_state == "BLOCKED_EXTERNAL" and not str(row.get("blocker") or ""):
-                reasons.append(f"research_sleeve_blocker_missing:{family}")
-        status_path = Path(str(row.get("status_path") or ""))
-        output_path = Path(str(row.get("output_path") or ""))
-        if ".." in status_path.parts or tuple(status_path.parts[-3:]) != ("shadow", family, "status.json"): reasons.append(f"research_sleeve_status_path_invalid:{family}")
-        if ".." in output_path.parts or tuple(output_path.parts[-2:]) != ("shadow", family): reasons.append(f"research_sleeve_output_path_invalid:{family}")
-        if status.get("schema") != "polymarket_v7_research_shadow_status_v1" or status.get("model_sha") != snapshot.get("sha") or status.get("family") != family: reasons.append(f"research_sleeve_status_missing_or_invalid:{family}")
-        if status.get("evidence_state") != evidence_state:
-            reasons.append(f"research_sleeve_status_manifest_mismatch:{family}")
-        if family == "wallet_intelligence":
-            if status.get("evidence_state") != "BLOCKED_CONFIG" or status.get("last_attempt_ts") != 0 or status.get("last_success_ts") != 0:
-                reasons.append(f"research_sleeve_status_unsubstantiated:{family}")
-        elif (
-            status.get("implementation_complete") is not True
-            or int(status.get("last_attempt_ts") or 0) <= 0
-            or status.get("feed_status") != row.get("feed_status")
-            or status.get("mapping_status") != row.get("mapping_status")
-            or int(status.get("verified_mappings") or 0) != int(row.get("verified_mappings") or 0)
-        ):
-            reasons.append(f"research_sleeve_status_unsubstantiated:{family}")
-        if status.get("paper_only") is not True or status.get("authenticated_execution") is not False or status.get("real_order_submission") is not False: reasons.append(f"research_sleeve_status_unsafe:{family}")
-        try: status_age = int(snapshot.get("timestamp") or 0) - int(status.get("timestamp") or 0)
-        except (TypeError, ValueError, OverflowError): status_age = max_runtime_age + 1
-        if status_age < -5 or status_age > max_runtime_age: reasons.append(f"research_sleeve_status_stale:{family}")
-    osint = snapshot.get("osint") if isinstance(snapshot.get("osint"), dict) else {}
-    osint_mapping = snapshot.get("osint_mapping") if isinstance(snapshot.get("osint_mapping"), dict) else {}
-    market_open = snapshot.get("market_open") if isinstance(snapshot.get("market_open"), dict) else {}
-    universe = snapshot.get("universe") if isinstance(snapshot.get("universe"), dict) else {}
-    if (universe.get("schema") != "polymarket_v7_adaptive_universe_status_v1"
-            or universe.get("model_sha") != snapshot.get("sha")
-            or universe.get("state") != "OPERATIONAL"
-            or universe.get("discovery_exhaustive") is not True
-            or universe.get("pagination_loop_guard_hit") is not False
-            or universe.get("paper_only") is not True
-            or universe.get("authenticated_execution") is not False
-            or universe.get("real_order_submission") is not False
-            or _integer(universe.get("eligible_markets")) <= 0):
-        reasons.append("adaptive_universe_missing_incomplete_or_unsafe")
-    try: universe_age_ms = int(snapshot.get("timestamp") or 0) * 1000 - int(universe.get("timestamp_ms") or 0)
-    except (TypeError, ValueError, OverflowError): universe_age_ms = (max_runtime_age + 1) * 1000
-    if universe_age_ms < -5_000 or universe_age_ms > max_runtime_age * 1000:
-        reasons.append("adaptive_universe_stale")
-    if osint.get("schema") != "polymarket_v7_osint_collector_status_v1" or osint.get("paper_only") is not True or osint.get("authenticated_execution") is not False or osint.get("real_order_submission") is not False: reasons.append("osint_live_collector_missing_or_unsafe")
-    if (
-        osint_mapping.get("schema") != "polymarket_v7_osint_mapping_status_v1"
-        or osint_mapping.get("model_sha") != snapshot.get("sha")
-        or osint_mapping.get("implementation_complete") is not True
-        or osint_mapping.get("mapping_pipeline") is not True
-        or osint_mapping.get("paper_only") is not True
-        or osint_mapping.get("authenticated_execution") is not False
-        or osint_mapping.get("real_order_submission") is not False
-        or osint_mapping.get("title_similarity_verification_forbidden") is not True
-    ):
-        reasons.append("osint_mapping_pipeline_missing_or_unsafe")
-    if market_open.get("schema") != "polymarket_v7_market_open_collector_status_v1" or market_open.get("paper_only") is not True or market_open.get("authenticated_execution") is not False or market_open.get("real_order_submission") is not False: reasons.append("market_open_live_collector_missing_or_unsafe")
-    for name, status in (("osint", osint), ("market_open", market_open)):
-        try: age_ms = int(snapshot.get("timestamp") or 0) * 1000 - int(status.get("timestamp_ms") or 0)
-        except (TypeError, ValueError, OverflowError): age_ms = (max_runtime_age + 1) * 1000
-        if age_ms < -5_000 or age_ms > max_runtime_age * 1000: reasons.append(f"{name}_live_collector_stale")
-    try: osint_mapping_age_ms = int(snapshot.get("timestamp") or 0) * 1000 - int(osint_mapping.get("timestamp_ms") or 0)
-    except (TypeError, ValueError, OverflowError): osint_mapping_age_ms = (max_runtime_age + 1) * 1000
-    if osint_mapping_age_ms < -5_000 or osint_mapping_age_ms > max_runtime_age * 1000:
-        reasons.append("osint_mapping_pipeline_stale")
+    if set(runtime.get("economic_engines") or []) != set(LIVE_ALGORITHMS): reasons.append("runtime_live_algorithms_not_exactly_two")
+    if runtime.get("economic_new_risk_ready") is not False: reasons.append("economic_new_risk_must_remain_disabled")
+    if runtime.get("authorized_alpha_actions") not in (None, []): reasons.append("authorized_alpha_actions_not_empty")
+    if not _scope_valid(snapshot): reasons.append("live_algorithm_scope_missing_or_invalid")
+    if (snapshot.get("process_manifest") or {}).get("process_count") != 22: reasons.append("process_manifest_not_22_exact")
+    budgets = allocations.get("engine_budgets") if isinstance(allocations.get("engine_budgets"), dict) else {}
+    if allocations.get("schema") != "polymarket_v7_capital_allocation_v3" or set(budgets) != set(LIVE_ALGORITHMS) or allocations.get("engine_count") != 2 or allocations.get("paper_only") is not True or allocations.get("authenticated_execution") is not False or allocations.get("real_order_submission") is not False or allocations.get("real_capital_at_risk") is not False or allocations.get("capital_authority_owner_count") != 1: reasons.append("two_engine_allocation_missing_or_unsafe")
+    engines = portfolio.get("engines") if isinstance(portfolio.get("engines"), dict) else {}
+    if portfolio.get("schema") != "polymarket_v7_portfolio_guard_v2" or set(engines) != set(LIVE_ALGORITHMS) or portfolio.get("paper_only") is not True or portfolio.get("authenticated_execution") is not False or portfolio.get("real_order_submission") is not False or portfolio.get("real_capital_at_risk") is not False: reasons.append("portfolio_guard_contract_invalid")
+    evidence = snapshot.get("evidence_allocator") or {}
+    if evidence and (evidence.get("schema") != "polymarket_v7_evidence_capital_allocator_v2" or evidence.get("paper_only") is not True or evidence.get("authenticated_execution") is not False or evidence.get("real_order_submission") is not False or evidence.get("automatic_transfer") is not False): reasons.append("evidence_capital_allocator_missing_or_unsafe")
+    fees = snapshot.get("fee_reward_registry") or {}
+    if fees.get("schema") != "polymarket_v7_fee_reward_registry_v1" or fees.get("model_sha") != snapshot.get("sha") or fees.get("paper_only") is not True or fees.get("authenticated_execution") is not False or fees.get("real_order_submission") is not False or fees.get("unknown_fee_policy") != "NON_EXECUTABLE" or fees.get("unknown_reward_policy") != "ZERO_EXPECTED_VALUE": reasons.append("fee_reward_registry_missing_or_unsafe")
+    age = _integer(snapshot.get("timestamp")) - _integer(fast.get("timestamp"))
+    if fast.get("schema") != "polymarket_v7_structural_arb_engine_status_v1" or fast.get("model_sha") != snapshot.get("sha") or fast.get("state") != "RUNNING" or fast.get("paper_only") is not True or fast.get("authenticated_execution") is not False or fast.get("real_order_submission") is not False or fast.get("real_capital_at_risk") is not False or fast.get("execution_authority") != "OPPORTUNITY_PROPOSAL_ONLY" or any(fast.get(k) is not False for k in ("capital_authority", "oms_authority", "inventory_authority", "ledger_writer_authority")) or not -5 <= age <= max_runtime_age: reasons.append("structural_arb_engine_missing_stale_or_unsafe")
+    if maker.get("schema") != "polymarket_v7_professional_maker_status_v1" or maker.get("model_sha") != snapshot.get("sha") or maker.get("paper_only") is not True or maker.get("authenticated_execution") is not False or maker.get("real_order_submission") not in (None, False) or maker.get("killed") is True or maker.get("source") in (None, "", "not_started") or not _fresh_ms(maker, snapshot, max_runtime_age): reasons.append("professional_maker_missing_stale_or_unsafe")
+    if selector.get("schema") != "polymarket_v7_maker_selector_status_v1" or selector.get("model_sha") != snapshot.get("sha") or selector.get("ready") is not True or selector.get("state") not in _MAKER_SELECTOR_OPERATIONAL_STATES or selector.get("paper_only") is not True or selector.get("authenticated_execution") is not False or selector.get("real_order_submission") is not False or not _fresh_ms(selector, snapshot, max_runtime_age): reasons.append("maker_selector_missing_stale_or_unsafe")
+    if rotation.get("schema") != "polymarket_v7_maker_cohort_rotation_status_v1" or rotation.get("model_sha") != snapshot.get("sha") or rotation.get("state") not in _MAKER_ROTATION_OPERATIONAL_STATES or rotation.get("paper_only") is not True or rotation.get("authenticated_execution") is not False or rotation.get("real_order_submission") is not False or not _fresh_ms(rotation, snapshot, max_runtime_age): reasons.append("maker_cohort_supervisor_missing_stale_or_unsafe")
+    if universe.get("schema") != "polymarket_v7_adaptive_universe_status_v1" or universe.get("model_sha") != snapshot.get("sha") or universe.get("state") != "OPERATIONAL" or universe.get("discovery_exhaustive") is not True or universe.get("pagination_loop_guard_hit") is not False or universe.get("paper_only") is not True or universe.get("authenticated_execution") is not False or universe.get("real_order_submission") is not False or _integer(universe.get("eligible_markets")) <= 0 or not _fresh_ms(universe, snapshot, max_runtime_age): reasons.append("adaptive_universe_missing_stale_or_unsafe")
     if snapshot.get("runtime_alive") is not True: reasons.append("execution_not_alive")
-    if portfolio.get("paper_only") is not True or portfolio.get("authenticated_execution") is not False: reasons.append("portfolio_guard_contract_invalid")
-    if graph.get("paper_only") is not True or graph.get("authenticated_execution") is not False: reasons.append("graph_runtime_missing_or_unsafe")
     if canonical.get("paper_only") is not True or canonical.get("authenticated_execution") is not False: reasons.append("canonical_economics_missing_or_unsafe")
     if canonical.get("expected_model_sha") != snapshot.get("sha"): reasons.append("canonical_economics_sha_mismatch")
     if not ledger.get("present"): reasons.append("canonical_ledger_missing")
     elif not ledger.get("valid"): reasons.append("canonical_ledger_invalid_or_mixed_sha")
-    tape_rows = _integer(snapshot["trade_tape"].get("rows"))
-    no_standard_clob_flow = _verified_no_standard_clob_flow(
-        snapshot.get("trade_recorder") or {}, max_runtime_age
-    )
-    if tape_rows <= 0 and not no_standard_clob_flow:
-        reasons.append("trade_tape_empty_or_unverified_no_standard_clob_flow")
-    for key in ("runtime", "graph", "economics"):
-        if not math.isfinite(float(ages[key])) or float(ages[key]) > max_runtime_age: reasons.append(f"{key}_stale")
-    if tape_rows > 0 and (not math.isfinite(float(ages["trade_tape"])) or float(ages["trade_tape"]) > max_runtime_age):
-        reasons.append("trade_tape_stale")
-    if not math.isfinite(float(ages["portfolio"])) or float(ages["portfolio"]) > max_supervisor_age: reasons.append("portfolio_guard_stale")
-    if snapshot["economics"]["killed"]: reasons.append("runtime_killed")
-    retention_age = _number((snapshot.get("operations") or {}).get("retention_age"), math.inf)
-    retention = (snapshot.get("operations") or {}).get("retention")
-    if (
-        not isinstance(retention, dict)
-        or retention.get("schema") != "polymarket_v7_retention_status_v1"
-        or retention.get("paper_only") is not True
-        or retention.get("authenticated_execution") is not False
-        or retention.get("expected_sha") != snapshot.get("sha")
-        or not math.isfinite(retention_age)
-        or retention_age > 7200
-    ):
-        reasons.append("retention_service_missing_or_stale")
-    max_drawdown = _number(authority.get("max_drawdown"), 0.0)
-    if max_drawdown > 0.0 and snapshot["economics"]["drawdown"] >= max_drawdown - 1e-12: reasons.append("drawdown_limit_breached")
-    if external_fair.get("external_fair_required_markets", 0) and not external_fair.get("shadow_zero_authority", True):
-        reasons.extend(str(reason) for reason in external_fair.get("hard_reasons", []))
+    rows = _integer((snapshot.get("trade_tape") or {}).get("rows"))
+    if rows <= 0 and not _verified_no_flow(snapshot.get("trade_recorder") or {}, max_runtime_age): reasons.append("trade_tape_empty_or_unverified_no_standard_clob_flow")
+    if _number(ages.get("runtime"), math.inf) > max_runtime_age: reasons.append("runtime_stale")
+    if _number(ages.get("economics"), math.inf) > max_runtime_age: reasons.append("economics_stale")
+    if rows > 0 and _number(ages.get("trade_tape"), math.inf) > max_runtime_age: reasons.append("trade_tape_stale")
+    if _number(ages.get("portfolio"), math.inf) > max_supervisor_age: reasons.append("portfolio_guard_stale")
+    if (snapshot.get("economics") or {}).get("killed"): reasons.append("runtime_killed")
+    retention, operations = (snapshot.get("operations") or {}).get("retention") or {}, snapshot.get("operations") or {}
+    if retention.get("schema") != "polymarket_v7_retention_status_v1" or retention.get("paper_only") is not True or retention.get("authenticated_execution") is not False or retention.get("expected_sha") != snapshot.get("sha") or _number(operations.get("retention_age"), math.inf) > 7200: reasons.append("retention_service_missing_or_stale")
+    limit = _number((snapshot.get("authority") or {}).get("max_drawdown"))
+    if limit > 0 and _number((snapshot.get("economics") or {}).get("drawdown")) >= limit - 1e-12: reasons.append("drawdown_limit_breached")
+    external = snapshot.get("external_fair") or {}
+    if external.get("external_fair_required_markets", 0) and not external.get("shadow_zero_authority", True): reasons.extend(map(str, external.get("hard_reasons", [])))
     return sorted(set(reasons))
 
 
-def _append_maker_lab_metrics(lines: list[str], lab: dict[str, Any]) -> None:
+def _append_maker_metrics(lines: list[str], snapshot: dict[str, Any]) -> None:
+    lab, diagnostics = snapshot.get("maker_lab") or {}, snapshot.get("maker_diagnostics") or {}
     quality = lab.get("quality") if isinstance(lab.get("quality"), dict) else {}
-    lines.extend([
-        _metric("polymarket_maker_lab_present", 1 if lab.get("present") else 0),
-        _metric("polymarket_maker_lab_orders", lab.get("orders")),
-        _metric("polymarket_maker_lab_filled_orders", lab.get("filled_orders")),
-        _metric("polymarket_maker_lab_fills", lab.get("fills")),
-        _metric("polymarket_maker_lab_realized_pnl_usd", lab.get("realized_pnl")),
-        _metric("polymarket_maker_lab_attributed_realized_pnl_usd", lab.get("attributed_realized_pnl")),
-        _metric("polymarket_maker_lab_linked_fills", quality.get("linked_fills")),
-        _metric("polymarket_maker_lab_unlinked_fills", quality.get("unlinked_fills")),
-        _metric("polymarket_maker_lab_linked_markouts", quality.get("linked_markouts")),
-        _metric("polymarket_maker_lab_unlinked_markouts", quality.get("unlinked_markouts")),
-        _metric("polymarket_maker_lab_ofi_exact_orders", quality.get("ofi_exact_orders")),
-        _metric("polymarket_maker_lab_ofi_proxy_orders", quality.get("ofi_proxy_orders")),
-        _metric("polymarket_maker_lab_reward_known_orders", quality.get("reward_known_orders")),
-        _metric("polymarket_maker_lab_lifetime_arm_known_orders", quality.get("lifetime_arm_known_orders")),
-        _metric("polymarket_maker_lab_unattributed_sell_fills", quality.get("unattributed_sell_fills")),
-        _metric("polymarket_maker_lab_unattributed_merge_pnl_usd", quality.get("unattributed_merge_pnl")),
-        _metric("polymarket_maker_lab_measurement_info", 1, {
-            "ofi": quality.get("ofi_source", "unknown"),
-            "reward": quality.get("reward_source", "unknown"),
-            "pnl_attribution": quality.get("merge_pnl_attribution", "unknown"),
-        }),
-    ])
-    for horizon, count in sorted((lab.get("markouts") or {}).items()):
-        lines.append(_metric("polymarket_maker_lab_markout_observations_total", count, {"horizon": horizon}))
-
+    lines.extend([_metric("polymarket_maker_lab_present", bool(lab.get("present"))), _metric("polymarket_maker_lab_orders", lab.get("orders")), _metric("polymarket_maker_lab_lifetime_arm_known_orders", quality.get("lifetime_arm_known_orders"))])
     for row in lab.get("segments") if isinstance(lab.get("segments"), list) else []:
-        if not isinstance(row, dict):
-            continue
-        labels = {
-            "action": row.get("action", "UNKNOWN"),
-            "variant": row.get("variant", "UNKNOWN"),
-            "dimension": row.get("dimension", "unknown"),
-            "bucket": row.get("bucket", "UNKNOWN"),
-        }
-        lines.append(_metric("polymarket_maker_lab_segment_orders", row.get("orders"), labels))
-        lines.append(_metric("polymarket_maker_lab_segment_filled_orders", row.get("filled_orders"), labels))
-        lines.append(_metric("polymarket_maker_lab_segment_fills", row.get("fills"), labels))
-        lines.append(_metric("polymarket_maker_lab_segment_filled_shares", row.get("filled_shares"), labels))
-        lines.append(_metric("polymarket_maker_lab_segment_realized_pnl_usd", row.get("realized_pnl"), labels))
-        markout_pnl = row.get("markout_pnl") if isinstance(row.get("markout_pnl"), dict) else {}
-        markout_shares = row.get("markout_shares") if isinstance(row.get("markout_shares"), dict) else {}
-        markout_count = row.get("markout_count") if isinstance(row.get("markout_count"), dict) else {}
-        for horizon in sorted(markout_count):
-            hlabels = dict(labels)
-            hlabels["horizon"] = horizon
-            lines.append(_metric("polymarket_maker_lab_segment_markout_pnl_usd", markout_pnl.get(horizon), hlabels))
-            lines.append(_metric("polymarket_maker_lab_segment_markout_shares", markout_shares.get(horizon), hlabels))
-            lines.append(_metric("polymarket_maker_lab_segment_markout_observations", markout_count.get(horizon), hlabels))
-
+        lines.append(_metric("polymarket_maker_lab_segment_orders", row.get("orders"), {k: row.get(k, "UNKNOWN") for k in ("action", "variant", "dimension", "bucket")}))
     for row in lab.get("conditionals") if isinstance(lab.get("conditionals"), list) else []:
-        if not isinstance(row, dict):
-            continue
-        labels = {
-            "action": row.get("action", "UNKNOWN"),
-            "toxicity": row.get("toxicity", "UNKNOWN"),
-            "queue": row.get("queue", "UNKNOWN"),
-        }
-        lines.append(_metric("polymarket_maker_lab_conditional_orders", row.get("orders"), labels))
-        lines.append(_metric("polymarket_maker_lab_conditional_filled_orders", row.get("filled_orders"), labels))
-        lines.append(_metric("polymarket_maker_lab_conditional_realized_pnl_usd", row.get("realized_pnl"), labels))
-        markout_pnl = row.get("markout_pnl") if isinstance(row.get("markout_pnl"), dict) else {}
-        markout_shares = row.get("markout_shares") if isinstance(row.get("markout_shares"), dict) else {}
-        markout_count = row.get("markout_count") if isinstance(row.get("markout_count"), dict) else {}
-        for horizon in sorted(markout_count):
-            hlabels = dict(labels)
-            hlabels["horizon"] = horizon
-            lines.append(_metric("polymarket_maker_lab_conditional_markout_pnl_usd", markout_pnl.get(horizon), hlabels))
-            lines.append(_metric("polymarket_maker_lab_conditional_markout_shares", markout_shares.get(horizon), hlabels))
-            lines.append(_metric("polymarket_maker_lab_conditional_markout_observations", markout_count.get(horizon), hlabels))
-
+        lines.append(_metric("polymarket_maker_lab_conditional_orders", row.get("orders"), {k: row.get(k, "UNKNOWN") for k in ("action", "toxicity", "queue")}))
     for row in lab.get("markets") if isinstance(lab.get("markets"), list) else []:
-        if not isinstance(row, dict):
-            continue
-        labels = {"market": row.get("market", "UNKNOWN"), "action": row.get("action", "UNKNOWN")}
-        lines.append(_metric("polymarket_maker_lab_market_orders", row.get("orders"), labels))
-        lines.append(_metric("polymarket_maker_lab_market_filled_orders", row.get("filled_orders"), labels))
-        lines.append(_metric("polymarket_maker_lab_market_realized_pnl_usd", row.get("realized_pnl"), labels))
-        markout_pnl = row.get("markout_pnl") if isinstance(row.get("markout_pnl"), dict) else {}
-        markout_shares = row.get("markout_shares") if isinstance(row.get("markout_shares"), dict) else {}
-        for horizon in sorted(markout_pnl):
-            hlabels = dict(labels)
-            hlabels["horizon"] = horizon
-            lines.append(_metric("polymarket_maker_lab_market_markout_pnl_usd", markout_pnl.get(horizon), hlabels))
-            lines.append(_metric("polymarket_maker_lab_market_markout_shares", markout_shares.get(horizon), hlabels))
+        lines.append(_metric("polymarket_maker_lab_market_realized_pnl_usd", row.get("realized_pnl"), {"market": row.get("market", "UNKNOWN"), "action": row.get("action", "UNKNOWN")}))
+    for reason, count in sorted((diagnostics.get("reason_counts") or {}).items()): lines.append(_metric("polymarket_v7_maker_decision_reason_total", count, {"reason": reason}))
 
 
 def render_prometheus(snapshot: dict[str, Any]) -> str:
-    runtime = snapshot["runtime"]
-    trade_recorder = snapshot.get("trade_recorder") if isinstance(snapshot.get("trade_recorder"), dict) else {}
-    evidence_allocator = snapshot.get("evidence_allocator") if isinstance(snapshot.get("evidence_allocator"), dict) else {}
-    fee_reward_registry = snapshot.get("fee_reward_registry") if isinstance(snapshot.get("fee_reward_registry"), dict) else {}
-    research = snapshot.get("research_sleeves") if isinstance(snapshot.get("research_sleeves"), dict) else {}
-    slow_research = snapshot.get("slow_research_shadow") if isinstance(snapshot.get("slow_research_shadow"), dict) else {}
-    slow_research_rows = slow_research.get("families") if isinstance(slow_research.get("families"), dict) else {}
-    research_statuses = snapshot.get("research_shadow_statuses") if isinstance(snapshot.get("research_shadow_statuses"), dict) else {}
-    registry = snapshot.get("strategy_registry") if isinstance(snapshot.get("strategy_registry"), dict) else {}
-    live_scope = snapshot.get("live_model_scope") if isinstance(snapshot.get("live_model_scope"), dict) else {}
-    crypto_registry = snapshot.get("crypto_registry") if isinstance(snapshot.get("crypto_registry"), dict) else {}
-    crypto_model_registry = snapshot.get("crypto_model_registry") if isinstance(snapshot.get("crypto_model_registry"), dict) else {}
-    crypto_runtime = snapshot.get("crypto_runtime") if isinstance(snapshot.get("crypto_runtime"), dict) else {}
-    global_coordinator = snapshot.get("global_coordinator") if isinstance(snapshot.get("global_coordinator"), dict) else {}
-    research_rows = research.get("families") if isinstance(research.get("families"), dict) else {}
-    enabled_registry = [row for row in registry.get("strategies", []) if isinstance(row, dict) and row.get("enabled") is True] if isinstance(registry.get("strategies"), list) else []
-    expected_research = {"sports_latency", "cross_platform", "wallet_intelligence"}
-    target_live = set(live_scope.get("target_live_families") or [])
-    excluded_live = set(live_scope.get("excluded_live_families") or [])
-    enabled_names = {str(row.get("family") or "") for row in enabled_registry}
-    governance = live_scope.get("governance") if isinstance(live_scope.get("governance"), dict) else {}
-    scope_valid = (
-        live_scope.get("schema") == "polymarket_v7_live_model_scope_v1"
-        and live_scope.get("target_live_count") == 12
-        and live_scope.get("paper_only") is True
-        and live_scope.get("authenticated_execution") is False
-        and live_scope.get("real_order_submission") is False
-        and len(target_live) == 12
-        and target_live | excluded_live == enabled_names
-        and not target_live & excluded_live
-        and excluded_live == {"ranking", "pca", "local_factor"}
-        and set(live_scope.get("always_on_economic_shadow_families") or []) == excluded_live
-        and set(live_scope.get("research_shadow_supervised_families") or []) == expected_research
-        and governance.get("single_execution_owner") is True
-        and governance.get("research_has_capital") is False
-        and governance.get("research_has_oms_authority") is False
-        and governance.get("research_has_ledger_writer_authority") is False
-        and governance.get("automatic_promotion") is False
-    )
-    def research_row_valid(family: str, row: Any) -> bool:
-        if not isinstance(row, dict):
-            return False
-        base = (
-            row.get("authority") == "RESEARCH"
-            and row.get("paper_only") is True
-            and row.get("authenticated_execution") is False
-            and row.get("real_order_submission") is False
-            and row.get("process_state") == "RUNNING"
-            and all(row.get(key) is False for key in ("execution_authority", "capital_authority", "oms_authority", "ledger_write_authority", "promotion_authority"))
-            and tuple(Path(str(row.get("status_path") or "")).parts[-3:]) == ("shadow", family, "status.json")
-            and tuple(Path(str(row.get("output_path") or "")).parts[-2:]) == ("shadow", family)
-        )
-        if not base:
-            return False
-        if family == "wallet_intelligence":
-            return row.get("evidence_state") == "BLOCKED_CONFIG" and row.get("last_attempt_ts") == 0 and row.get("last_success_ts") == 0
-        state = row.get("evidence_state")
-        return (
-            state in {"BLOCKED_EXTERNAL", "ACTIVE"}
-            and row.get("implementation_complete") is True
-            and _integer(row.get("last_attempt_ts")) > 0
-            and (state != "ACTIVE" or (
-                row.get("feed_operational") is True
-                and _integer(row.get("verified_mappings")) > 0
-                and row.get("forward_collection_active") is True
-            ))
-            and (state != "BLOCKED_EXTERNAL" or bool(str(row.get("blocker") or "")))
-        )
-    research_rows_valid = set(research_rows) == expected_research and all(
-        research_row_valid(family, row) for family, row in research_rows.items()
-    )
-    def collector_contract_valid(status: Any) -> bool:
-        return (
-            isinstance(status, dict)
-            and status.get("paper_only") is True
-            and status.get("authenticated_execution") is False
-            and status.get("real_order_submission") is False
-        )
-    collector_contracts_valid = all(
-        collector_contract_valid(snapshot.get(name)) for name in ("osint", "market_open")
-    )
-    try: research_manifest_age = int(snapshot.get("timestamp") or 0) - int(research.get("timestamp") or 0)
-    except (TypeError, ValueError, OverflowError): research_manifest_age = math.inf
-    research_manifest_fresh = -5 <= research_manifest_age <= 180
-    def shadow_status_valid(family: str, status: Any) -> bool:
-        if not isinstance(status, dict):
-            return False
-        try:
-            age = int(snapshot.get("timestamp") or 0) - int(status.get("timestamp") or 0)
-        except (TypeError, ValueError, OverflowError):
-            return False
-        return (
-            status.get("schema") == "polymarket_v7_research_shadow_status_v1"
-            and status.get("family") == family
-            and status.get("model_sha") == snapshot.get("sha")
-            and status.get("paper_only") is True
-            and status.get("authenticated_execution") is False
-            and status.get("real_order_submission") is False
-            and status.get("process_state") == "RUNNING"
-            and status.get("evidence_state") == (research_rows.get(family) or {}).get("evidence_state")
-            and research_row_valid(family, status)
-            and -5 <= age <= 180
-        )
-    research_statuses_valid = set(research_statuses) == expected_research and all(
-        shadow_status_valid(family, status) for family, status in research_statuses.items()
-    )
-    research_attached = (
-        research.get("schema") == "polymarket_v7_research_sleeves_manifest_v1"
-        and research.get("model_sha") == snapshot.get("sha")
-        and research.get("paper_only") is True
-        and research.get("authenticated_execution") is False
-        and research.get("real_order_submission") is False
-        and research_rows_valid
-        and research_statuses_valid
-        and _pid_alive(research.get("supervisor_pid"))
-        and research_manifest_fresh
-    )
-    target_live_count = len(set(live_scope.get("target_live_families") or []))
-    ledger = snapshot["ledger"]
-    ledger_total = ledger.get("total") if isinstance(ledger.get("total"), dict) else {}
-    economics = snapshot["economics"]
-    authority = snapshot["authority"]
-    canonical = snapshot["canonical_economics"]
-    reconciliation = snapshot.get("reconciliation") if isinstance(snapshot.get("reconciliation"), dict) else {}
-    maker_lab = snapshot.get("maker_lab") if isinstance(snapshot.get("maker_lab"), dict) else {}
-    maker_latency = snapshot.get("maker_latency") if isinstance(snapshot.get("maker_latency"), dict) else {}
-    operations = snapshot.get("operations") if isinstance(snapshot.get("operations"), dict) else {}
-    disk = operations.get("disk") if isinstance(operations.get("disk"), dict) else {}
-    supervisor = operations.get("supervisor") if isinstance(operations.get("supervisor"), dict) else {}
-    osint = snapshot.get("osint") if isinstance(snapshot.get("osint"), dict) else {}
-    osint_mapping = snapshot.get("osint_mapping") if isinstance(snapshot.get("osint_mapping"), dict) else {}
-    market_open = snapshot.get("market_open") if isinstance(snapshot.get("market_open"), dict) else {}
-    universe = snapshot.get("universe") if isinstance(snapshot.get("universe"), dict) else {}
-    maker = snapshot.get("maker") if isinstance(snapshot.get("maker"), dict) else {}
-    maker_diagnostics = snapshot.get("maker_diagnostics") if isinstance(snapshot.get("maker_diagnostics"), dict) else {}
-    selector = snapshot.get("maker_selector") if isinstance(snapshot.get("maker_selector"), dict) else {}
-    rotation = snapshot.get("maker_rotation") if isinstance(snapshot.get("maker_rotation"), dict) else {}
-    def collector_fresh(status: dict[str, Any]) -> bool:
-        try:
-            age_ms = int(snapshot.get("timestamp") or 0) * 1000 - int(status.get("timestamp_ms") or 0)
-        except (TypeError, ValueError, OverflowError):
-            return False
-        return -5_000 <= age_ms <= 180_000
-    osint_operational = (
-        osint.get("schema") == "polymarket_v7_osint_collector_status_v1"
-        and collector_fresh(osint)
-        and collector_contract_valid(osint)
-        and _integer(osint.get("enabled_sources")) > 0
-        and _integer(osint.get("healthy_sources")) > 0
-        and osint_mapping.get("schema") == "polymarket_v7_osint_mapping_status_v1"
-        and _integer(osint_mapping.get("verified_mappings")) > 0
-        and osint_mapping.get("forward_collection_active") is True
-    )
-    market_open_operational = (
-        market_open.get("schema") == "polymarket_v7_market_open_collector_status_v1"
-        and collector_fresh(market_open)
-        and collector_contract_valid(market_open)
-        and _integer(market_open.get("observed_markets")) > 0
-    )
-    def fresh_milliseconds(status: dict[str, Any]) -> bool:
-        try:
-            age = int(snapshot.get("timestamp") or 0) * 1000 - int(status.get("timestamp_ms") or 0)
-        except (TypeError, ValueError, OverflowError):
-            return False
-        return -5_000 <= age <= 180_000
-    selector_ready = (
-        selector.get("schema") == "polymarket_v7_maker_selector_status_v1"
-        and selector.get("model_sha") == snapshot.get("sha")
-        and selector.get("paper_only") is True
-        and selector.get("authenticated_execution") is False
-        and selector.get("real_order_submission") is False
-        and selector.get("ready") is True
-        and selector.get("state") in _MAKER_SELECTOR_OPERATIONAL_STATES
-        and fresh_milliseconds(selector)
-    )
-    rotation_ready = (
-        rotation.get("schema") == "polymarket_v7_maker_cohort_rotation_status_v1"
-        and rotation.get("model_sha") == snapshot.get("sha")
-        and rotation.get("paper_only") is True
-        and rotation.get("authenticated_execution") is False
-        and rotation.get("real_order_submission") is False
-        and rotation.get("state") in _MAKER_ROTATION_OPERATIONAL_STATES
-        and fresh_milliseconds(rotation)
-    )
-    maker_operational = (
-        maker.get("schema") == "polymarket_v7_professional_maker_status_v1"
-        and maker.get("model_sha") == snapshot.get("sha")
-        and maker.get("paper_only") is True
-        and maker.get("authenticated_execution") is False
-        and maker.get("killed") is not True
-        and (
-            maker.get("new_risk_frozen") is not True
-            or rotation.get("fresh_flow_pause_active") is True
-        )
-        and maker.get("source") not in {None, "", "not_started"}
-        and fresh_milliseconds(maker)
-        and selector_ready
-        and rotation_ready
-    )
-    blocked_config_count = sum(
-        1 for row in research_rows.values()
-        if isinstance(row, dict) and row.get("evidence_state") == "BLOCKED_CONFIG"
-    )
-    blocked_external_count = sum(
-        1 for row in research_rows.values()
-        if isinstance(row, dict) and row.get("evidence_state") == "BLOCKED_EXTERNAL"
-    ) + (0 if osint_operational else 1)
-    active_research_count = sum(
-        1 for row in research_rows.values()
-        if isinstance(row, dict) and row.get("evidence_state") == "ACTIVE"
-    )
-    operational_count = (
-        (7 if snapshot.get("runtime_alive") is True else 0)
-        + (1 if osint_operational else 0)
-        + (1 if market_open_operational else 0)
-        + active_research_count
-    )
-    scope_wired = (
-        len(enabled_registry) == 15 and target_live_count == 12 and scope_valid
-        and research_attached and collector_contracts_valid
-        and snapshot.get("runtime_alive") is True
-    )
-    labels = {"adapter":"v7_native","run_root":snapshot["run_root"],"version":"v7"}
+    runtime, economics = snapshot.get("runtime") or {}, snapshot.get("economics") or {}
+    canonical, ledger = snapshot.get("canonical_economics") or {}, snapshot.get("ledger") or {}
+    total, operations = ledger.get("total") or {}, snapshot.get("operations") or {}
+    selector, rotation, diagnostics = snapshot.get("maker_selector") or {}, snapshot.get("maker_rotation") or {}, snapshot.get("maker_diagnostics") or {}
+    universe, reasons = snapshot.get("universe") or {}, health_reasons(snapshot)
+    scope_ok = _scope_valid(snapshot)
     lines = [
-        "# TYPE polymarket_v7_runtime_info gauge",
-        _metric("polymarket_v7_runtime_info", 1 if runtime.get("version") == 7 else 0),
-        _metric("polymarket_runtime_info", 1, labels),
-        _metric("polymarket_v7_deployed_sha_info", 1, {"sha": snapshot["sha"]}),
-        _metric("polymarket_v7_runtime_identity_info", 1, {
-            "source_sha": runtime.get("model_sha", "UNKNOWN"),
-            "config_hash": runtime.get("config_hash", "UNKNOWN"),
-            "policy_hash": runtime.get("policy_hash", "UNKNOWN"),
-            "model_hash": runtime.get("model_hash", "UNKNOWN"),
-            "run_id": runtime.get("run_id", "UNKNOWN"),
-            "ledger_id": runtime.get("ledger_id", "UNKNOWN"),
-            "server_id": runtime.get("server_id", "UNKNOWN"),
-        }),
-        _metric("polymarket_v7_operator_authority_valid", 1 if authority.get("valid") else 0),
-        _metric("polymarket_v7_authority_max_drawdown_ratio", authority.get("max_drawdown")),
-        _metric("polymarket_v7_paper_only_contract_ok", 1 if runtime.get("paper_only") is True and snapshot["portfolio"].get("paper_only") is True else 0),
-        _metric("polymarket_v7_authenticated_execution_disabled", 1 if runtime.get("authenticated_execution") is False and runtime.get("real_order_submission") is False and snapshot["portfolio"].get("authenticated_execution") is False else 0),
-        _metric("polymarket_v7_economic_new_risk_ready", 1 if runtime.get("economic_new_risk_ready") is True else 0),
-        _metric("polymarket_v7_execution_alive", 1 if snapshot["runtime_alive"] else 0),
-        _metric("polymarket_v7_component_ready", 1 if snapshot["runtime_alive"] else 0, {"component": "core_runtime"}),
-        _metric("polymarket_v7_component_ready", 1 if maker_operational else 0, {"component": "professional_maker"}),
-        _metric("polymarket_v7_maker_selector_ready", 1 if selector_ready else 0),
-        _metric("polymarket_v7_maker_selector_fallback_active", 1 if selector_ready and selector.get("degraded") is True else 0),
-        _metric("polymarket_v7_maker_selector_selected_markets", selector.get("selected_count")),
-        _metric("polymarket_v7_maker_runtime_selection_pinned", 1 if selector.get("runtime_selection_pinned") is True else 0),
-        _metric("polymarket_v7_maker_candidate_rotation_pending", 1 if selector.get("candidate_rotation_pending") is True else 0),
-        _metric("polymarket_v7_maker_candidate_selected_markets", selector.get("candidate_selected_count")),
-        _metric("polymarket_v7_maker_candidate_fresh_flow_eligible", 1 if selector.get("candidate_fresh_flow_eligible") is True else 0),
-        _metric("polymarket_v7_maker_candidate_rotation_suppressed_no_fresh_flow", 1 if selector.get("candidate_rotation_suppressed_no_fresh_flow") is True else 0),
-        _metric("polymarket_v7_maker_candidate_sell_flow_30s_markets", selector.get("candidate_selected_with_sell_flow_30s")),
-        _metric("polymarket_v7_maker_candidate_sell_flow_2m_markets", selector.get("candidate_selected_with_sell_flow_2m")),
-        _metric("polymarket_v7_maker_candidate_max_last_sell_age_seconds", selector.get("candidate_max_last_sell_age_seconds")),
-        _metric("polymarket_v7_maker_cohort_supervisor_ready", 1 if rotation_ready else 0),
-        _metric("polymarket_v7_maker_cohort_rotations_total", rotation.get("rotation_count")),
-        _metric("polymarket_v7_maker_rotation_candidate_confirmations", rotation.get("candidate_confirmations")),
-        _metric("polymarket_v7_maker_rotation_required_confirmations", rotation.get("candidate_required_confirmations")),
-        _metric("polymarket_v7_maker_rotation_cooldown_remaining_seconds", rotation.get("rotation_cooldown_remaining_seconds")),
-        _metric("polymarket_v7_maker_rotation_draining", 1 if rotation.get("state") == "DRAINING" else 0),
-        _metric("polymarket_v7_maker_rotation_blocked_nonflat", 1 if rotation.get("state") == "PENDING_NONFLAT" else 0),
-        _metric("polymarket_v7_maker_paused_no_fresh_flow", 1 if rotation.get("fresh_flow_pause_active") is True else 0),
-        _metric("polymarket_v7_maker_rotation_info", 1 if rotation_ready else 0, {
-            "state": rotation.get("state", "UNKNOWN"),
-            "runtime_membership": rotation.get("runtime_membership_sha256", "UNKNOWN"),
-            "candidate_membership": rotation.get("candidate_membership_sha256", "UNKNOWN"),
-        }),
-        _metric("polymarket_v7_maker_new_risk_frozen", 1 if maker.get("new_risk_frozen") is True else 0),
-        _metric("polymarket_v7_maker_marking_complete", 1 if maker.get("marking_complete") is True else 0),
-        _metric("polymarket_v7_maker_feed_workers", maker_diagnostics.get("feed_workers")),
-        _metric("polymarket_v7_maker_feed_connected_workers", maker_diagnostics.get("feed_connected_workers")),
-        _metric("polymarket_v7_maker_feed_messages_total", maker_diagnostics.get("feed_messages")),
-        _metric("polymarket_v7_maker_feed_reconnects_total", maker_diagnostics.get("feed_reconnects")),
-        _metric("polymarket_v7_maker_feed_errors_total", maker_diagnostics.get("feed_errors")),
-        _metric("polymarket_v7_maker_decisions_total", maker_diagnostics.get("decisions")),
-        _metric("polymarket_v7_maker_quote_intents_total", maker_diagnostics.get("quote_intents")),
-        _metric("polymarket_v7_maker_rejected_nonpositive_robust_ev_total", maker_diagnostics.get("rejected_nonpositive_robust_ev")),
-        _metric("polymarket_v7_maker_rejected_positive_point_ev_total", maker_diagnostics.get("rejected_positive_point_ev")),
-        _metric("polymarket_v7_maker_best_rejected_robust_ev_per_share", maker_diagnostics.get("best_rejected_robust_ev_per_share")),
-        _metric("polymarket_v7_maker_best_rejected_point_ev_per_share", maker_diagnostics.get("best_rejected_point_ev_per_share")),
-        _metric("polymarket_v7_maker_selector_info", 1 if selector_ready else 0, {
-            "state": selector.get("state", "UNKNOWN"),
-            "source": selector.get("source", "UNKNOWN"),
-        }),
-        _metric("polymarket_v7_supervisor_alive", 1 if operations.get("supervisor_alive") else 0),
-        _metric("polymarket_v7_monitoring_component_up", 1, {"component": "exporter"}),
-        _metric("polymarket_v7_monitoring_component_up", 1 if operations.get("grafana_up") else 0, {"component": "grafana"}),
-        _metric("polymarket_v7_supervisor_info", 1, {"state": supervisor.get("state", "UNKNOWN")}),
-        _metric("polymarket_v7_runtime_uptime_seconds", operations.get("runtime_uptime")),
-        _metric("polymarket_v7_restart_count_window", operations.get("restart_count")),
-        _metric("polymarket_v7_single_writer_ok", 1 if operations.get("single_writer") else 0),
-        _metric("polymarket_v7_exact_sha_ok", 1 if runtime.get("model_sha") == snapshot["sha"] else 0),
-        _metric("polymarket_v7_strategy_registry_enabled", len(enabled_registry)),
-        _metric("polymarket_v7_research_sleeves_attached", len(research_rows)),
-        _metric("polymarket_v7_research_supervisor_alive", 1 if _pid_alive(research.get("supervisor_pid")) else 0),
-        _metric("polymarket_v7_research_manifest_fresh", 1 if research_manifest_fresh else 0),
-        _metric("polymarket_v7_slow_economic_shadow_attached", len(slow_research_rows)),
-        _metric("polymarket_v7_slow_economic_shadow_manifest_fresh", 1 if (
-            slow_research.get("schema") == "polymarket_v7_slow_economic_shadow_manifest_v1"
-            and slow_research.get("model_sha") == snapshot.get("sha")
-            and -5 <= int(snapshot.get("timestamp") or 0) - int(slow_research.get("timestamp") or 0) <= 180
-        ) else 0),
-        _metric("polymarket_v7_live_model_target_count", target_live_count),
-        _metric("polymarket_v7_live_model_operational_count", operational_count),
-        _metric("polymarket_v7_live_model_blocked_count", blocked_config_count + blocked_external_count),
-        _metric("polymarket_v7_live_model_blocked_config_count", blocked_config_count),
-        _metric("polymarket_v7_live_model_blocked_external_count", blocked_external_count),
-        _metric("polymarket_v7_live_model_scope_wired", 1 if scope_wired else 0),
-        _metric("polymarket_v7_exploration_capital_usd", evidence_allocator.get("exploration_total")),
-        _metric("polymarket_v7_proposed_exploitation_capital_usd", (
-            _number(evidence_allocator.get("proposed_allocated_total"))
-            - _number(evidence_allocator.get("exploration_total"))
-        )),
-        _metric("polymarket_v7_unallocated_exploitation_reserve_usd", evidence_allocator.get("unallocated_exploitation_reserve")),
-        _metric("polymarket_v7_evidence_allocator_automatic_transfer", 1 if evidence_allocator.get("automatic_transfer") is True else 0),
-        _metric("polymarket_v7_fee_registry_verified_markets", fee_reward_registry.get("verified_fee_market_count")),
-        _metric("polymarket_v7_reward_registry_verified_markets", fee_reward_registry.get("verified_reward_market_count")),
-        _metric("polymarket_v7_fee_registry_executable_markets", fee_reward_registry.get("executable_market_count")),
-        _metric("polymarket_v7_live_model_target_operational", 1 if operational_count == target_live_count == 12 else 0),
-        _metric("polymarket_v7_ledger_writable", 1 if operations.get("ledger_writable") else 0),
-        _metric("polymarket_v7_disk_free_bytes", disk.get("free_bytes")),
-        _metric("polymarket_v7_disk_free_ratio", disk.get("free_ratio")),
-        _metric("polymarket_v7_retention_status_age_seconds", 0 if not math.isfinite(float(operations.get("retention_age", math.inf))) else operations.get("retention_age")),
-        _metric("polymarket_v7_retention_status_present", 1 if math.isfinite(float(operations.get("retention_age", math.inf))) else 0),
-        _metric("polymarket_runtime_equity_usd", economics["equity"]),
-        _metric("polymarket_runtime_pnl_usd", economics["pnl"]),
-        _metric("polymarket_runtime_realized_pnl_usd", economics["realized_pnl"]),
-        _metric("polymarket_runtime_unrealized_executable_pnl_usd", economics["unrealized_executable_pnl"]),
-        _metric("polymarket_runtime_drawdown_ratio", economics["drawdown"]),
-        _metric("polymarket_runtime_live_units", economics["live_units"]),
-        _metric("polymarket_runtime_killed", 1 if economics["killed"] else 0),
-        _metric("polymarket_v7_trade_tape_rows", snapshot["trade_tape"]["rows"]),
-        _metric("polymarket_v7_trade_tape_assets", snapshot["trade_tape"]["assets"]),
-        _metric("polymarket_v7_trade_recorder_status_present", 1 if trade_recorder.get("present") else 0),
-        _metric("polymarket_v7_trade_recorder_age_seconds", trade_recorder.get("age")),
-        _metric("polymarket_v7_trade_tape_no_standard_clob_flow", 1 if _verified_no_standard_clob_flow(trade_recorder, 90.0) else 0),
-        _metric("polymarket_v7_canonical_economics_promotion_ready", 1 if canonical.get("promotion_ready") else 0),
-        _metric("polymarket_v7_canonical_submitted_units", canonical.get("submitted_units")),
-        _metric("polymarket_v7_canonical_complete_units", canonical.get("complete_units")),
-        _metric("polymarket_v7_portfolio_reconciled", 1 if reconciliation.get("reconciled") else 0),
-        _metric("polymarket_v7_reconciliation_divergences", len(reconciliation.get("reason_codes") or [])),
-        _metric("polymarket_v7_reconciliation_portfolio_equity_difference_usd", _number(reconciliation.get("portfolio_equity")) - _number(reconciliation.get("sleeve_equity_sum"))),
-        _metric("polymarket_v7_reconciliation_terminal_pnl_difference_usd", _number(reconciliation.get("ledger_terminal_pnl")) - _number(reconciliation.get("canonical_realized_pnl"))),
-        _metric("polymarket_v7_ledger_present", 1 if ledger.get("present") else 0),
-        _metric("polymarket_v7_ledger_valid", 1 if ledger.get("valid") else 0),
-        _metric("polymarket_v7_ledger_rows", _integer(ledger.get("rows"))),
-        _metric("polymarket_v7_ledger_invalid_rows", _integer(ledger.get("invalid_rows"))),
-        _metric("polymarket_v7_ledger_model_sha_count", len(ledger.get("model_shas") or [])),
-        *[
-            _metric("polymarket_v7_ledger_invalid_reason_rows", count, {"reason": reason})
-            for reason, count in sorted((ledger.get("invalid_reason_counts") or {}).items())
-        ],
-        _metric("polymarket_v7_latency_samples_present", 1 if maker_latency.get("present") else 0),
-        _metric("polymarket_v7_latency_rows", maker_latency.get("rows")),
-        _metric("polymarket_v7_osint_enabled_sources", osint.get("enabled_sources")),
-        _metric("polymarket_v7_osint_healthy_sources", osint.get("healthy_sources")),
-        _metric("polymarket_v7_osint_new_events", osint.get("new_events")),
-        _metric("polymarket_v7_osint_mapping_verified", osint_mapping.get("verified_mappings")),
-        _metric("polymarket_v7_osint_mapping_candidates", osint_mapping.get("candidate_mappings")),
-        _metric("polymarket_v7_osint_forward_collection_active", 1 if osint_mapping.get("forward_collection_active") is True else 0),
-        _metric("polymarket_v7_market_open_tracked_markets", market_open.get("tracked_markets")),
-        _metric("polymarket_v7_market_open_new_markets", market_open.get("new_markets")),
-        _metric("polymarket_v7_market_open_emitted_milestones", market_open.get("emitted_milestones")),
-        _metric("polymarket_v7_market_open_semantic_verified", market_open.get("semantic_verified_markets")),
-        _metric("polymarket_v7_universe_discovery_exhaustive", 1 if universe.get("discovery_exhaustive") is True else 0),
-        _metric("polymarket_v7_universe_discovered_markets", universe.get("discovered_markets")),
-        _metric("polymarket_v7_universe_eligible_markets", universe.get("eligible_markets")),
-        _metric("polymarket_v7_universe_skipped_markets", universe.get("skipped_markets")),
-        _metric("polymarket_v7_universe_scan_duration_milliseconds", universe.get("scan_duration_ms")),
-        _metric("polymarket_v7_universe_pages", universe.get("pages")),
-        _metric("polymarket_v7_universe_request_retries", universe.get("request_retries")),
-        _metric("polymarket_execution_opportunities", _integer(ledger_total.get("opportunities"))),
-        _metric("polymarket_execution_candidates", _integer(ledger_total.get("candidates"))),
-        _metric("polymarket_execution_makes", _integer(ledger_total.get("makes"))),
-        _metric("polymarket_execution_takes", _integer(ledger_total.get("takes"))),
-        _metric("polymarket_execution_arbs", _integer(ledger_total.get("arbs"))),
-        _metric("polymarket_execution_cancels", _integer(ledger_total.get("cancels"))),
-        _metric("polymarket_execution_withdraws", _integer(ledger_total.get("withdraws"))),
-        _metric("polymarket_execution_orders_submitted", _integer(ledger_total.get("orders_submitted"))),
-        _metric("polymarket_execution_effective_orders", _integer(ledger_total.get("effective_orders"))),
-        _metric("polymarket_execution_fills", _integer(ledger_total.get("fills"))),
-        _metric("polymarket_execution_complete_fills", _integer(ledger_total.get("complete_fills"))),
-        _metric("polymarket_execution_partial_fills", _integer(ledger_total.get("partial_fills"))),
-        _metric("polymarket_execution_unwinds", _integer(ledger_total.get("unwinds"))),
-        _metric("polymarket_execution_final_pnl_usd", _number(ledger_total.get("final_pnl"))),
-        _metric("polymarket_execution_capital_hours", _number(ledger_total.get("capital_duration_ms")) / 3_600_000.0),
+        _metric("polymarket_v7_health", not reasons), _metric("polymarket_v7_runtime_info", 1),
+        _metric("polymarket_v7_runtime_identity_info", 1, {"sha": snapshot.get("sha", "unknown"), "run_id": runtime.get("run_id", "")}),
+        _metric("polymarket_runtime_info", 1, {"adapter": "v7_native", "run_root": snapshot.get("run_root", "unknown"), "version": "v7"}),
+        _metric("polymarket_v7_operator_authority_valid", (snapshot.get("authority") or {}).get("valid")), _metric("polymarket_v7_authority_max_drawdown_ratio", (snapshot.get("authority") or {}).get("max_drawdown")),
+        _metric("polymarket_v7_paper_only_contract_ok", runtime.get("paper_only") is True and runtime.get("real_order_submission") is False), _metric("polymarket_v7_authenticated_execution_disabled", runtime.get("authenticated_execution") is False),
+        _metric("polymarket_v7_exact_sha_ok", runtime.get("model_sha") == snapshot.get("sha")), _metric("polymarket_v7_execution_alive", snapshot.get("runtime_alive")), _metric("polymarket_v7_supervisor_alive", operations.get("supervisor_alive")), _metric("polymarket_v7_single_writer_ok", operations.get("single_writer")), _metric("polymarket_v7_ledger_writable", operations.get("ledger_writable")),
+        _metric("polymarket_v7_runtime_uptime_seconds", operations.get("runtime_uptime")), _metric("polymarket_v7_restart_count_window", operations.get("restart_count")), _metric("polymarket_v7_disk_free_ratio", operations.get("disk_free_ratio")),
+        _metric("polymarket_v7_live_algorithm_count", 2), _metric("polymarket_v7_legacy_algorithm_count", 0), _metric("polymarket_v7_live_algorithm_scope_wired", scope_ok), _metric("polymarket_v7_live_model_scope_wired", scope_ok), _metric("polymarket_v7_economic_new_risk_ready", runtime.get("economic_new_risk_ready")),
+        _metric("polymarket_runtime_equity_usd", economics.get("equity")), _metric("polymarket_runtime_pnl_usd", economics.get("pnl")), _metric("polymarket_runtime_realized_pnl_usd", economics.get("realized_pnl")), _metric("polymarket_runtime_drawdown_ratio", economics.get("drawdown")), _metric("polymarket_runtime_killed", economics.get("killed")),
+        _metric("polymarket_v7_canonical_submitted_units", canonical.get("submitted_units")), _metric("polymarket_v7_canonical_complete_units", canonical.get("complete_units")), _metric("polymarket_v7_ledger_valid", ledger.get("valid")), _metric("polymarket_v7_portfolio_reconciled", (snapshot.get("reconciliation") or {}).get("reconciled")), _metric("polymarket_v7_reconciliation_divergences", len((snapshot.get("reconciliation") or {}).get("reason_codes") or [])),
+        _metric("polymarket_v7_trade_tape_rows", (snapshot.get("trade_tape") or {}).get("rows")), _metric("polymarket_v7_trade_tape_assets", (snapshot.get("trade_tape") or {}).get("assets")), _metric("polymarket_v7_trade_tape_no_standard_clob_flow", _verified_no_flow(snapshot.get("trade_recorder") or {}, 180)), _metric("polymarket_v7_latency_samples_present", (snapshot.get("maker_latency") or {}).get("present")),
+        _metric("polymarket_v7_component_ready", "professional_maker_missing_stale_or_unsafe" not in reasons, {"component": "professional_maker"}), _metric("polymarket_v7_component_ready", "structural_arb_engine_missing_stale_or_unsafe" not in reasons, {"component": "fast_structural"}),
+        _metric("polymarket_v7_maker_selector_ready", selector.get("ready") and selector.get("state") in _MAKER_SELECTOR_OPERATIONAL_STATES), _metric("polymarket_v7_maker_selector_fallback_active", selector.get("degraded")), _metric("polymarket_v7_maker_runtime_selection_pinned", selector.get("runtime_selection_pinned")), _metric("polymarket_v7_maker_candidate_rotation_pending", selector.get("candidate_rotation_pending")), _metric("polymarket_v7_maker_candidate_selected_markets", selector.get("candidate_selected_count")),
+        _metric("polymarket_v7_maker_candidate_fresh_flow_eligible", selector.get("candidate_fresh_flow_eligible")), _metric("polymarket_v7_maker_candidate_sell_flow_30s_markets", selector.get("candidate_selected_with_sell_flow_30s")), _metric("polymarket_v7_maker_candidate_sell_flow_2m_markets", selector.get("candidate_selected_with_sell_flow_2m")), _metric("polymarket_v7_maker_candidate_max_last_sell_age_seconds", selector.get("candidate_max_last_sell_age_seconds")),
+        _metric("polymarket_v7_maker_cohort_supervisor_ready", rotation.get("state") in _MAKER_ROTATION_OPERATIONAL_STATES), _metric("polymarket_v7_maker_cohort_rotations_total", rotation.get("rotation_count")), _metric("polymarket_v7_maker_rotation_candidate_confirmations", rotation.get("candidate_confirmations")), _metric("polymarket_v7_maker_rotation_required_confirmations", rotation.get("candidate_required_confirmations")), _metric("polymarket_v7_maker_rotation_cooldown_remaining_seconds", rotation.get("rotation_cooldown_remaining_seconds")), _metric("polymarket_v7_maker_paused_no_fresh_flow", rotation.get("fresh_flow_pause_active")),
+        _metric("polymarket_v7_maker_feed_connected_workers", diagnostics.get("feed_connected_workers")), _metric("polymarket_v7_maker_feed_messages_total", diagnostics.get("feed_messages")), _metric("polymarket_v7_maker_decisions_total", diagnostics.get("decisions")), _metric("polymarket_v7_maker_quote_intents_total", diagnostics.get("quote_intents")), _metric("polymarket_v7_maker_rejected_positive_point_ev_total", diagnostics.get("rejected_positive_point_ev")), _metric("polymarket_v7_maker_best_rejected_point_ev_per_share", diagnostics.get("best_rejected_point_ev_per_share")),
+        _metric("polymarket_v7_universe_discovered_markets", universe.get("discovered_markets")), _metric("polymarket_v7_universe_eligible_markets", universe.get("eligible_markets")), _metric("polymarket_v7_universe_skipped_markets", universe.get("skipped_markets")), _metric("polymarket_v7_universe_pages", universe.get("pages")), _metric("polymarket_v7_universe_scan_duration_milliseconds", universe.get("scan_duration_ms")), _metric("polymarket_v7_universe_discovery_exhaustive", universe.get("discovery_exhaustive")),
     ]
-    for engine in sorted({
-        str(value) for value in runtime.get("economic_engines", [])
-        if str(value) in {"CRYPTO_SETTLEMENT_ENGINE", "STRUCTURAL_ARB_ENGINE"}
-    }):
-        lines.append(_metric("polymarket_v7_economic_engine_configured", 1, {"engine": engine}))
-    for reason, count in sorted((maker_diagnostics.get("reason_counts") or {}).items()):
-        lines.append(_metric("polymarket_v7_maker_decision_reason_total", count, {"reason": reason}))
-    for tier, count in sorted((universe.get("tier_counts") or {}).items()):
-        lines.append(_metric("polymarket_v7_universe_tier_markets", count, {"tier": tier}))
-    model_rows = {
-        (str(row.get("asset") or ""), str(row.get("horizon") or "")): row
-        for row in crypto_model_registry.get("models", []) if isinstance(row, dict)
-    }
-    live_context = crypto_runtime.get("crypto_context") if isinstance(
-        crypto_runtime.get("crypto_context"), dict
-    ) else {}
-    for row in crypto_registry.get("contexts", []) if isinstance(crypto_registry.get("contexts"), list) else []:
-        if not isinstance(row, dict):
-            continue
-        labels_c = {
-            "asset": row.get("asset", "UNKNOWN"),
-            "horizon": row.get("horizon", "UNKNOWN"),
-            "contract_family": row.get("contract_family", "UNKNOWN"),
-            "authority": row.get("authority", "UNKNOWN"),
-        }
-        model_row = model_rows.get((str(row.get("asset") or ""), str(row.get("horizon") or "")), {})
-        is_live_context = (
-            live_context.get("asset") == row.get("asset")
-            and live_context.get("horizon") == row.get("horizon")
-        )
-        lines.append(_metric("polymarket_v7_crypto_context_registered", 1, labels_c))
-        lines.append(_metric(
-            "polymarket_v7_crypto_context_research_only",
-            1 if row.get("research_only") is True else 0, labels_c,
-        ))
-        lines.append(_metric(
-            "polymarket_v7_crypto_context_model_registered",
-            1 if isinstance(model_row, dict) and model_row.get("artifact") is not None else 0,
-            labels_c,
-        ))
-        lines.append(_metric(
-            "polymarket_v7_crypto_context_new_risk_authorized",
-            1 if is_live_context and crypto_runtime.get("new_risk_authorized") is True else 0,
-            labels_c,
-        ))
-    coordinator_decision = global_coordinator.get("last_decision") if isinstance(
-        global_coordinator.get("last_decision"), dict
-    ) else {}
-    crypto_risk = coordinator_decision.get("crypto_correlation_risk") if isinstance(
-        coordinator_decision.get("crypto_correlation_risk"), dict
-    ) else {}
-    for field, metric_name in (
-        ("gross_crypto_exposure_usd", "polymarket_v7_crypto_gross_exposure_usd"),
-        ("net_directional_crypto_exposure_usd", "polymarket_v7_crypto_net_directional_exposure_usd"),
-        ("correlated_crypto_cluster_exposure_usd", "polymarket_v7_crypto_cluster_exposure_usd"),
-        ("oracle_concentration_fraction", "polymarket_v7_crypto_oracle_concentration_ratio"),
-        ("exchange_source_concentration_fraction", "polymarket_v7_crypto_exchange_source_concentration_ratio"),
-    ):
-        lines.append(_metric(metric_name, crypto_risk.get(field)))
-    for reason, count in sorted((universe.get("skipped_by_reason") or {}).items()):
-        lines.append(_metric("polymarket_v7_universe_skipped_by_reason", count, {"reason": reason}))
+    configured = set(runtime.get("economic_engines") or [])
+    for engine in LIVE_ALGORITHMS: lines.append(_metric("polymarket_v7_economic_engine_configured", engine in configured, {"engine": engine}))
+    for name, row in sorted((snapshot.get("algorithms") or {}).items()):
+        for field, metric in (("equity", "equity_usd"), ("budget", "budget_usd"), ("killed", "killed")): lines.append(_metric(f"polymarket_v7_live_algorithm_{metric}", row.get(field), {"algorithm": name}))
+    coordinator = snapshot.get("global_coordinator") or {}
+    for field in ("crypto_gross_exposure_usd", "crypto_net_directional_exposure_usd", "crypto_cluster_exposure_usd"): lines.append(_metric("polymarket_v7_" + field, coordinator.get(field)))
+    models = {(r.get("asset"), r.get("horizon")): r for r in (snapshot.get("crypto_model_registry") or {}).get("models", []) if isinstance(r, dict)}
+    for row in (snapshot.get("crypto_registry") or {}).get("contexts", []):
+        labels = {"asset": row.get("asset"), "horizon": row.get("horizon"), "contract_family": row.get("contract_family"), "authority": row.get("authority")}; model = models.get((row.get("asset"), row.get("horizon")), {})
+        lines.extend([_metric("polymarket_v7_crypto_context_registered", row.get("enabled"), labels), _metric("polymarket_v7_crypto_context_zero_authority", row.get("research_only"), labels), _metric("polymarket_v7_crypto_context_new_risk_authorized", model.get("new_risk_authorized"), labels), _metric("polymarket_v7_crypto_context_model_registered", bool(model.get("artifact")), labels)])
+    for state, age in sorted((snapshot.get("ages") or {}).items()): lines.append(_metric("polymarket_v7_state_age_seconds", age, {"state": state}))
+    for tier, count in sorted((universe.get("tier_counts") or {}).items()): lines.append(_metric("polymarket_v7_universe_tier_markets", count, {"tier": tier}))
     capacities = universe.get("resource_capacities") if isinstance(universe.get("resource_capacities"), dict) else {}
-    for dimension in capacities.get("hot_limiting_dimensions") or []:
-        lines.append(_metric("polymarket_v7_universe_resource_limit", 1, {"tier": "HOT", "dimension": dimension}))
-    for dimension in capacities.get("warm_limiting_dimensions") or []:
-        lines.append(_metric("polymarket_v7_universe_resource_limit", 1, {"tier": "WARM", "dimension": dimension}))
-    if economics["gross_exposure"] is not None:
-        lines.append(_metric("polymarket_runtime_gross_exposure_usd", economics["gross_exposure"]))
-    if economics["capital_utilization"] is not None:
-        lines.append(_metric("polymarket_runtime_capital_utilization_ratio", economics["capital_utilization"]))
-    for name, age in snapshot["ages"].items():
-        lines.append(_metric("polymarket_v7_state_age_seconds", 0 if not math.isfinite(float(age)) else age, {"surface":name}))
-        lines.append(_metric("polymarket_v7_state_present", 1 if math.isfinite(float(age)) else 0, {"surface":name}))
-    for horizon, total in (ledger_total.get("markout_sum") or {}).items():
-        count = _integer((ledger_total.get("markout_count") or {}).get(horizon))
-        if count:
-            lines.append(_metric("polymarket_execution_mean_markout", _number(total)/count, {"horizon":horizon}))
-            lines.append(_metric("polymarket_execution_markout_observations", count, {"horizon":horizon}))
-    for strategy, row in sorted(snapshot["strategies"].items()):
-        labels_s={"strategy":strategy}
-        for key, metric_name in (("equity","polymarket_strategy_equity_usd"),("pnl","polymarket_strategy_pnl_usd"),("signals","polymarket_strategy_opportunities"),("best_edge","polymarket_strategy_best_edge"),("live_units","polymarket_strategy_live_units"),("net_pnl","polymarket_strategy_evidence_net_pnl_usd"),("ledger_opportunities","polymarket_strategy_ledger_opportunities"),("ledger_orders","polymarket_strategy_ledger_orders_submitted"),("ledger_fills","polymarket_strategy_ledger_fills"),("ledger_complete_fills","polymarket_strategy_complete_fills"),("ledger_partial_fills","polymarket_strategy_partial_fills"),("ledger_unwinds","polymarket_strategy_unwinds"),("ledger_final_pnl","polymarket_strategy_final_pnl_usd"),("ledger_capital_hours","polymarket_strategy_capital_hours")):
-            if key in row and row[key] is not None: lines.append(_metric(metric_name,row[key],labels_s))
-        if "killed" in row: lines.append(_metric("polymarket_strategy_killed",1 if row["killed"] else 0,labels_s))
-        if "paper_eligible" in row: lines.append(_metric("polymarket_strategy_paper_eligible",1 if row["paper_eligible"] else 0,labels_s))
-    for strategy, row in sorted((reconciliation.get("strategies") or {}).items()):
-        if not isinstance(row, dict):
-            continue
-        labels_s = {"strategy": strategy}
-        lines.append(_metric("polymarket_v7_reconciliation_strategy_canonical_pnl_usd", row.get("canonical_realized_pnl"), labels_s))
-        if row.get("state_realized_pnl") is not None:
-            lines.append(_metric("polymarket_v7_reconciliation_strategy_state_pnl_usd", row.get("state_realized_pnl"), labels_s))
-            lines.append(_metric("polymarket_v7_reconciliation_strategy_difference_usd", row.get("difference"), labels_s))
-            lines.append(_metric("polymarket_v7_reconciliation_strategy_matched", 1 if row.get("matched") else 0, labels_s))
-    for reason in reconciliation.get("reason_codes") or []:
-        lines.append(_metric("polymarket_v7_reconciliation_reason", 1, {"reason": reason}))
-    for family, row in sorted(research_rows.items()):
-        if not isinstance(row, dict):
-            continue
-        labels_r = {
-            "strategy": family,
-            "process_state": row.get("process_state", "UNKNOWN"),
-            "evidence_state": row.get("evidence_state", "UNKNOWN"),
-        }
-        lines.append(_metric("polymarket_v7_research_sleeve_attached", 1, labels_r))
-        blocker_labels = {
-            "strategy": family,
-            "feed_status": row.get("feed_status", "NOT_CONFIGURED"),
-            "mapping_status": row.get("mapping_status", "NOT_CONFIGURED"),
-            "blocker": row.get("blocker", "") or "NONE",
-        }
-        lines.append(_metric("polymarket_v7_external_input_info", 1, blocker_labels))
-        lines.append(_metric("polymarket_v7_external_input_implementation_complete",
-                             1 if row.get("implementation_complete") is True else 0,
-                             {"strategy": family}))
-        lines.append(_metric("polymarket_v7_external_input_feed_operational",
-                             1 if row.get("feed_operational") is True else 0,
-                             {"strategy": family}))
-        lines.append(_metric("polymarket_v7_external_input_verified_mappings",
-                             row.get("verified_mappings"), {"strategy": family}))
-        lines.append(_metric("polymarket_v7_external_input_forward_collection_active",
-                             1 if row.get("forward_collection_active") is True else 0,
-                             {"strategy": family}))
-        for key, metric_name in (
-            ("feed_age_ms", "polymarket_v7_external_input_feed_age_milliseconds"),
-            ("last_sequence", "polymarket_v7_external_input_last_sequence"),
-            ("connection_epoch", "polymarket_v7_external_input_connection_epoch"),
-            ("reconnect_count", "polymarket_v7_external_input_reconnect_total"),
-            ("gap_count", "polymarket_v7_external_input_gap_total"),
-            ("parse_failure_count", "polymarket_v7_external_input_parse_failure_total"),
-            ("dropped_event_count", "polymarket_v7_external_input_dropped_event_total"),
-        ):
-            if row.get(key) is not None:
-                lines.append(_metric(metric_name, row.get(key), {"strategy": family}))
-        if family == "cross_platform":
-            ws_labels = {
-                "strategy": family,
-                "feed_status": row.get("authenticated_websocket_status", "MISSING_OR_STALE"),
-                "blocker": row.get("authenticated_websocket_blocker", "") or "NONE",
-            }
-            lines.append(_metric("polymarket_v7_kalshi_authenticated_websocket_info", 1, ws_labels))
-            lines.append(_metric(
-                "polymarket_v7_kalshi_authenticated_websocket_operational",
-                1 if row.get("authenticated_websocket_feed_operational") is True else 0,
-                {"strategy": family},
-            ))
-            for key, metric_name in (
-                ("authenticated_websocket_messages", "polymarket_v7_kalshi_authenticated_websocket_messages"),
-                ("authenticated_websocket_ticker_updates", "polymarket_v7_kalshi_authenticated_websocket_ticker_updates"),
-                ("authenticated_websocket_orderbook_snapshots", "polymarket_v7_kalshi_authenticated_websocket_orderbook_snapshots"),
-                ("authenticated_websocket_orderbook_deltas", "polymarket_v7_kalshi_authenticated_websocket_orderbook_deltas"),
-            ):
-                lines.append(_metric(metric_name, row.get(key), {"strategy": family}))
-            limitless_labels = {
-                "strategy": family,
-                "feed_status": row.get("limitless_feed_status", "MISSING_OR_STALE"),
-                "blocker": row.get("limitless_blocker", "") or "NONE",
-            }
-            lines.append(_metric("polymarket_v7_limitless_info", 1, limitless_labels))
-            lines.append(_metric(
-                "polymarket_v7_limitless_feed_operational",
-                1 if row.get("limitless_feed_operational") is True else 0,
-                {"strategy": family},
-            ))
-            for key, metric_name in (
-                ("limitless_discovered_markets", "polymarket_v7_limitless_discovered_markets"),
-                ("limitless_synchronized_books", "polymarket_v7_limitless_synchronized_books"),
-                ("limitless_trades_observed", "polymarket_v7_limitless_trades_observed"),
-                ("limitless_verified_mappings", "polymarket_v7_limitless_verified_mappings"),
-            ):
-                lines.append(_metric(metric_name, row.get(key), {"strategy": family}))
-    for family, row in sorted(slow_research_rows.items()):
-        if not isinstance(row, dict):
-            continue
-        labels = {
-            "strategy": family,
-            "process_state": row.get("process_state", "UNKNOWN"),
-            "blocker": row.get("blocker", "") or "NONE",
-        }
-        lines.append(_metric("polymarket_v7_slow_economic_shadow_family_attached", 1, labels))
-        lines.append(_metric(
-            "polymarket_v7_slow_economic_shadow_report_present",
-            1 if row.get("report_present") is True else 0,
-            {"strategy": family},
-        ))
-    _append_maker_lab_metrics(lines, maker_lab)
-    for source in osint.get("sources") if isinstance(osint.get("sources"), list) else []:
-        if not isinstance(source, dict):
-            continue
-        source_labels = {"source": source.get("source_id", "UNKNOWN")}
-        lines.append(_metric("polymarket_v7_osint_source_healthy", 1 if source.get("healthy") else 0,
-                             source_labels))
-        lines.append(_metric("polymarket_v7_osint_source_new_events", source.get("new_events"),
-                             source_labels))
-    for stage, row in sorted((maker_latency.get("stages") or {}).items()):
-        if not isinstance(row, dict):
-            continue
-        lines.append(_metric("polymarket_v7_latency_stage_samples", row.get("samples"), {"stage": stage}))
-        for percentile in ("p50", "p90", "p95", "p99", "p99_9", "max"):
-            lines.append(_metric(
-                "polymarket_v7_latency_stage_nanoseconds",
-                row.get(percentile),
-                {"stage": stage, "percentile": percentile},
-            ))
-    # These appenders contain metrics only; the canonical exporter remains the
-    # sole HTTP listener and snapshot owner.
+    for tier, values in (("HOT", capacities.get("hot_limits")), ("WARM", capacities.get("warm_limits"))):
+        for dimension, value in sorted((values or {}).items()):
+            lines.append(_metric("polymarket_v7_universe_resource_limit", value, {"tier": tier, "dimension": dimension}))
+    for reason in reasons: lines.append(_metric("polymarket_v7_health_reason", 1, {"reason": reason}))
+    for reason, count in sorted((ledger.get("invalid_reason_counts") or {}).items()): lines.append(_metric("polymarket_v7_ledger_invalid_reason_rows", count, {"reason": reason}))
+    for key, metric in {"opportunities":"opportunities", "candidates":"candidates", "makes":"makes", "takes":"takes", "arbs":"arbs", "cancels":"cancels", "withdraws":"withdraws", "orders_submitted":"orders_submitted", "effective_orders":"effective_orders", "fills":"fills", "complete_fills":"complete_fills", "partial_fills":"partial_fills", "unwinds":"unwinds"}.items(): lines.append(_metric("polymarket_execution_" + metric, total.get(key)))
+    for strategy, row in sorted((ledger.get("strategies") or {}).items()):
+        lines.append(_metric("polymarket_strategy_ledger_orders_submitted", row.get("orders_submitted"), {"strategy": strategy}))
+        lines.append(_metric("polymarket_strategy_ledger_fills", row.get("fills"), {"strategy": strategy}))
+    lines.extend([_metric("polymarket_execution_final_pnl_usd", total.get("final_pnl")), _metric("polymarket_execution_capital_hours", _number(total.get("capital_duration_ms"))/3_600_000)])
+    for horizon, value in sorted((total.get("markout_sum") or {}).items()):
+        count = _number((total.get("markout_count") or {}).get(horizon)); lines.append(_metric("polymarket_execution_mean_markout", _number(value)/count if count else 0, {"horizon": horizon}))
+    for stage, row in sorted(((snapshot.get("maker_latency") or {}).get("stages") or {}).items()):
+        for percentile in ("p50", "p90", "p95", "p99", "p99_9", "max"): lines.append(_metric("polymarket_v7_latency_stage_nanoseconds", row.get(percentile), {"stage": stage, "percentile": percentile}))
+    _append_maker_metrics(lines, snapshot)
     from exporter_v7_fillability import _append_fillability_metrics
     from exporter_v7_external import _append_external_fair_metrics
     _append_fillability_metrics(lines, snapshot.get("maker_fillability") or {})
     _append_external_fair_metrics(lines, snapshot.get("external_fair") or {})
-    return "\n".join(lines)+"\n"
+    return "\n".join(lines) + "\n"
 
 
 class SnapshotCache:
-    """Refresh expensive ledger diagnostics off the HTTP request path.
-
-    The canonical ledger is append-only and can grow by thousands of records a
-    minute.  Re-reading it for every Prometheus scrape eventually exceeds the
-    scrape timeout and creates a request stampede.  One worker owns snapshot
-    construction; readers always receive the most recent complete snapshot.
-    """
-
-    def __init__(
-        self,
-        run_root: Path,
-        repository_root: Path,
-        *,
-        refresh_seconds: float = 10.0,
-    ) -> None:
-        self.run_root = Path(run_root)
-        self.repository_root = Path(repository_root)
-        self.refresh_seconds = max(1.0, float(refresh_seconds))
-        self._lock = threading.Lock()
-        self._ready = threading.Event()
-        self._stop = threading.Event()
-        self._thread: threading.Thread | None = None
-        self._snapshot: dict[str, Any] | None = None
-        self._metrics = b""
-        self._maker_fillability = b"{}\n"
-        self._external_fair = b"{}\n"
-        self._completed_monotonic = 0.0
-        self._completed_wall = 0.0
-        self._refresh_duration = 0.0
-        self._refresh_errors = 0
-        self._last_error = ""
-
+    def __init__(self, run_root: Path, repository_root: Path, *, refresh_seconds: float = 10.0) -> None:
+        self.run_root, self.repository_root, self.refresh_seconds = Path(run_root), Path(repository_root), max(1.0, float(refresh_seconds)); self._lock = threading.Lock(); self._ready = threading.Event(); self._stop = threading.Event(); self._thread = None; self._snapshot = None; self._metrics = b""; self._maker_fillability = b"{}\n"; self._external_fair = b"{}\n"; self._completed_monotonic = 0.0; self._completed_wall = 0.0; self._refresh_duration = 0.0; self._refresh_errors = 0; self._last_error = ""
     def start(self) -> None:
-        if self._thread is not None:
-            return
-        self._thread = threading.Thread(
-            target=self._refresh_loop,
-            name="v7-exporter-snapshot",
-            daemon=True,
-        )
-        self._thread.start()
-
+        if self._thread is None: self._thread = threading.Thread(target=self._refresh_loop, daemon=True); self._thread.start()
     def stop(self) -> None:
         self._stop.set()
-        thread = self._thread
-        if thread is not None:
-            thread.join(timeout=max(2.0, self.refresh_seconds + 1.0))
-
-    def wait_ready(self, timeout: float | None = None) -> bool:
-        return self._ready.wait(timeout)
-
+        if self._thread: self._thread.join(timeout=max(2.0, self.refresh_seconds + 1))
+    def wait_ready(self, timeout: float | None = None) -> bool: return self._ready.wait(timeout)
     def _refresh_loop(self) -> None:
         while not self._stop.is_set():
             started = time.monotonic()
             try:
-                snapshot = collect_snapshot(self.run_root, self.repository_root)
-                duration = time.monotonic() - started
-                completed_wall = time.time()
-                metrics_text = render_prometheus(snapshot).rstrip("\n")
-                metrics_text += (
-                    "\n"
-                    f"polymarket_v7_exporter_snapshot_generated_unixtime {completed_wall}\n"
-                    f"polymarket_v7_exporter_snapshot_refresh_duration_seconds {duration}\n"
-                    f"polymarket_v7_exporter_snapshot_refresh_errors_total {self._refresh_errors}\n"
-                )
-                maker = snapshot.get("maker_fillability")
-                external = snapshot.get("external_fair")
-                with self._lock:
-                    self._snapshot = snapshot
-                    self._metrics = metrics_text.encode()
-                    self._maker_fillability = (
-                        json.dumps(maker if isinstance(maker, dict) else {}, sort_keys=True) + "\n"
-                    ).encode()
-                    self._external_fair = (
-                        json.dumps(external if isinstance(external, dict) else {}, sort_keys=True) + "\n"
-                    ).encode()
-                    self._completed_monotonic = time.monotonic()
-                    self._completed_wall = completed_wall
-                    self._refresh_duration = duration
-                    self._last_error = ""
+                snapshot = collect_snapshot(self.run_root, self.repository_root); duration = time.monotonic()-started; wall = time.time(); metrics = render_prometheus(snapshot).rstrip()+f"\npolymarket_v7_exporter_snapshot_generated_unixtime {wall}\npolymarket_v7_exporter_snapshot_refresh_duration_seconds {duration}\npolymarket_v7_exporter_snapshot_refresh_errors_total {self._refresh_errors}\n"
+                with self._lock: self._snapshot=snapshot; self._metrics=metrics.encode(); self._maker_fillability=(json.dumps(snapshot.get("maker_fillability") or {},sort_keys=True)+"\n").encode(); self._external_fair=(json.dumps(snapshot.get("external_fair") or {},sort_keys=True)+"\n").encode(); self._completed_monotonic=time.monotonic(); self._completed_wall=wall; self._refresh_duration=duration; self._last_error=""
                 self._ready.set()
-            except Exception as exc:  # pragma: no cover - defensive service boundary
-                with self._lock:
-                    self._refresh_errors += 1
-                    self._last_error = f"{type(exc).__name__}:{exc}"
-            elapsed = time.monotonic() - started
-            self._stop.wait(max(0.1, self.refresh_seconds - elapsed))
-
+            except Exception as exc:
+                with self._lock: self._refresh_errors += 1; self._last_error=f"{type(exc).__name__}:{exc}"
+            self._stop.wait(max(.1, self.refresh_seconds-(time.monotonic()-started)))
     def read(self) -> dict[str, Any]:
-        with self._lock:
-            age = (
-                max(0.0, time.monotonic() - self._completed_monotonic)
-                if self._completed_monotonic > 0.0
-                else math.inf
-            )
-            return {
-                "ready": self._snapshot is not None,
-                "snapshot": self._snapshot,
-                "metrics": self._metrics,
-                "maker_fillability": self._maker_fillability,
-                "external_fair": self._external_fair,
-                "age_seconds": age,
-                "completed_wall": self._completed_wall,
-                "refresh_duration_seconds": self._refresh_duration,
-                "refresh_errors": self._refresh_errors,
-                "last_error": self._last_error,
-            }
+        with self._lock: return {"ready":self._snapshot is not None,"snapshot":self._snapshot,"metrics":self._metrics,"maker_fillability":self._maker_fillability,"external_fair":self._external_fair,"age_seconds":max(0,time.monotonic()-self._completed_monotonic) if self._completed_monotonic else math.inf,"completed_wall":self._completed_wall,"refresh_duration_seconds":self._refresh_duration,"refresh_errors":self._refresh_errors,"last_error":self._last_error}
 
 
 class ExporterHandler(BaseHTTPRequestHandler):
-    run_root=Path("runs/paper_v7_live"); repository_root=Path("."); max_runtime_age=180; max_supervisor_age=30; max_snapshot_age=45.0
-    snapshot_cache: SnapshotCache | None = None
+    run_root=Path("runs/paper_v7_live"); repository_root=Path("."); max_runtime_age=180; max_supervisor_age=30; max_snapshot_age=45.0; snapshot_cache: SnapshotCache | None=None
     def log_message(self,_format:str,*_args:object)->None: return
-    def do_GET(self)->None:  # noqa: N802
-        cached = self.snapshot_cache.read() if self.snapshot_cache is not None else None
+    def do_GET(self)->None:
+        cached=self.snapshot_cache.read() if self.snapshot_cache else None
         if cached is None:
-            snapshot=collect_snapshot(self.run_root,self.repository_root)
-            cached={
-                "ready": True,
-                "snapshot": snapshot,
-                "metrics": render_prometheus(snapshot).encode(),
-                "maker_fillability": (json.dumps(snapshot.get("maker_fillability") or {},sort_keys=True)+"\n").encode(),
-                "external_fair": (json.dumps(snapshot.get("external_fair") or {},sort_keys=True)+"\n").encode(),
-                "age_seconds": 0.0,
-                "last_error": "",
-            }
-        if not cached.get("ready"):
-            payload=(json.dumps({"ok":False,"reasons":["exporter_snapshot_not_ready"]},sort_keys=True)+"\n").encode()
-            self.send_response(503); self.send_header("Content-Type","application/json; charset=utf-8")
-            self.send_header("Retry-After","1")
-            self.send_header("Content-Length",str(len(payload))); self.end_headers(); self.wfile.write(payload); return
-        snapshot=cached["snapshot"]
-        if self.path=="/metrics": payload=cached["metrics"]; self.send_response(200); self.send_header("Content-Type","text/plain; version=0.0.4; charset=utf-8")
+            snapshot=collect_snapshot(self.run_root,self.repository_root); cached={"ready":True,"snapshot":snapshot,"metrics":render_prometheus(snapshot).encode(),"maker_fillability":(json.dumps(snapshot.get("maker_fillability") or {})+"\n").encode(),"external_fair":(json.dumps(snapshot.get("external_fair") or {})+"\n").encode(),"age_seconds":0}
+        if not cached.get("ready"): payload=b'{"ok":false,"reasons":["exporter_snapshot_not_ready"]}\n'; self.send_response(503); content="application/json"
+        elif self.path=="/metrics": payload=cached["metrics"]; self.send_response(200); content="text/plain; version=0.0.4"
         elif self.path=="/healthz":
-            reasons=health_reasons(snapshot,max_runtime_age=self.max_runtime_age,max_supervisor_age=self.max_supervisor_age)
-            snapshot_age = cached.get("age_seconds")
-            if not isinstance(snapshot_age, (int, float)) or float(snapshot_age) > self.max_snapshot_age: reasons.append("exporter_snapshot_stale")
-            reasons=sorted(set(reasons)); payload=(json.dumps({"ok":not reasons,"reasons":reasons},sort_keys=True)+"\n").encode(); self.send_response(200 if not reasons else 503); self.send_header("Content-Type","application/json; charset=utf-8")
-        elif self.path=="/maker-fillability.json": payload=cached["maker_fillability"]; self.send_response(200); self.send_header("Content-Type","application/json; charset=utf-8")
-        elif self.path=="/external-fair.json": payload=cached["external_fair"]; self.send_response(200); self.send_header("Content-Type","application/json; charset=utf-8")
-        else: payload=b"not found\n"; self.send_response(404); self.send_header("Content-Type","text/plain; charset=utf-8")
-        self.send_header("Content-Length",str(len(payload))); self.end_headers(); self.wfile.write(payload)
+            reasons=health_reasons(cached["snapshot"],max_runtime_age=self.max_runtime_age,max_supervisor_age=self.max_supervisor_age)
+            if _number(cached.get("age_seconds"),math.inf)>self.max_snapshot_age: reasons.append("exporter_snapshot_stale")
+            reasons=sorted(set(reasons)); payload=(json.dumps({"ok":not reasons,"reasons":reasons},sort_keys=True)+"\n").encode(); self.send_response(200 if not reasons else 503); content="application/json"
+        elif self.path=="/maker-fillability.json": payload=cached["maker_fillability"]; self.send_response(200); content="application/json"
+        elif self.path=="/external-fair.json": payload=cached["external_fair"]; self.send_response(200); content="application/json"
+        else: payload=b"not found\n"; self.send_response(404); content="text/plain"
+        self.send_header("Content-Type",content+"; charset=utf-8"); self.send_header("Content-Length",str(len(payload))); self.end_headers(); self.wfile.write(payload)
 
 
 def main()->int:
-    parser=argparse.ArgumentParser(description=__doc__); parser.add_argument("--run-root",type=Path,default=Path("runs/paper_v7_live")); parser.add_argument("--repository-root",type=Path,default=Path(".")); parser.add_argument("--host",default="127.0.0.1"); parser.add_argument("--port",type=int,default=9108); parser.add_argument("--max-runtime-age",type=int,default=180); parser.add_argument("--max-supervisor-age",type=int,default=30); parser.add_argument("--snapshot-refresh-seconds",type=float,default=10.0); parser.add_argument("--max-snapshot-age",type=float,default=45.0); args=parser.parse_args()
-    ExporterHandler.run_root=args.run_root; ExporterHandler.repository_root=args.repository_root; ExporterHandler.max_runtime_age=max(1,args.max_runtime_age); ExporterHandler.max_supervisor_age=max(1,args.max_supervisor_age); ExporterHandler.max_snapshot_age=max(5.0,args.max_snapshot_age)
-    cache=SnapshotCache(args.run_root,args.repository_root,refresh_seconds=args.snapshot_refresh_seconds); cache.start(); ExporterHandler.snapshot_cache=cache
-    server=ThreadingHTTPServer((args.host,args.port),ExporterHandler)
+    parser=argparse.ArgumentParser(description=__doc__); parser.add_argument("--run-root",type=Path,default=Path("runs/paper_v7_live")); parser.add_argument("--repository-root",type=Path,default=Path(".")); parser.add_argument("--host",default="127.0.0.1"); parser.add_argument("--port",type=int,default=9108); parser.add_argument("--max-runtime-age",type=int,default=180); parser.add_argument("--max-supervisor-age",type=int,default=30); parser.add_argument("--snapshot-refresh-seconds",type=float,default=10); parser.add_argument("--max-snapshot-age",type=float,default=45); args=parser.parse_args()
+    ExporterHandler.run_root=args.run_root; ExporterHandler.repository_root=args.repository_root; ExporterHandler.max_runtime_age=args.max_runtime_age; ExporterHandler.max_supervisor_age=args.max_supervisor_age; ExporterHandler.max_snapshot_age=args.max_snapshot_age
+    cache=SnapshotCache(args.run_root,args.repository_root,refresh_seconds=args.snapshot_refresh_seconds); cache.start(); ExporterHandler.snapshot_cache=cache; server=ThreadingHTTPServer((args.host,args.port),ExporterHandler)
     try: server.serve_forever()
     except KeyboardInterrupt: pass
     finally: server.server_close(); cache.stop()
     return 0
+
 
 if __name__=="__main__": raise SystemExit(main())

@@ -81,7 +81,7 @@ def _compatibility_views(
             "killed": False, "fatal_to_portfolio": False,
         },
     }
-    for name in ("micro_maker", "fast_structural", "micro_taker", "graph_rv"):
+    for name in ("micro_maker", "fast_structural"):
         rows[name] = {
             "budget": 0.0, "equity": 0.0,
             "source": "zero_authority_budget", "killed": False,

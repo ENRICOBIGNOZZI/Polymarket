@@ -1,6 +1,6 @@
 {
-  "schema": "polymarket_v7_authority_registry_v1",
-  "version": 1,
+  "schema": "polymarket_v7_authority_registry_v2",
+  "version": 2,
   "paper_only": true,
   "authenticated_execution": false,
   "real_order_submission": false,
@@ -16,7 +16,7 @@
     "promotion": "V7_OPERATOR_EXACT_SHA_PROMOTION",
     "runtime_identity": "V7_EXACT_SHA_RUNTIME_IDENTITY"
   },
-  "economic_engines": {
+  "live_algorithms": {
     "CRYPTO_SETTLEMENT_ENGINE": {
       "components": [
         "crypto_settlement_fair",
@@ -30,30 +30,9 @@
       "actions": ["ARB", "CANCEL", "NOTHING"]
     }
   },
-  "research_zero_authority_families": [
-    "micro_taker",
-    "graph_rv",
-    "ranking",
-    "pca",
-    "local_factor",
-    "wallet_intelligence",
-    "market_open",
-    "osint",
-    "sports_latency",
-    "cross_platform"
-  ],
-  "research_forbidden_authorities": [
-    "global_portfolio_coordinator",
-    "capital_allocator",
-    "risk_engine",
-    "oms",
-    "inventory",
-    "ledger",
-    "promotion",
-    "runtime_identity"
-  ],
+  "component_independent_authority": false,
   "decision_chain": [
-    "ECONOMIC_ENGINE",
+    "LIVE_ALGORITHM",
     "V7_GLOBAL_PORTFOLIO_COORDINATOR",
     "V7_CANONICAL_ALLOCATOR",
     "V7_CANONICAL_RISK",

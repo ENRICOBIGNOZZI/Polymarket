@@ -11,20 +11,10 @@ namespace pm::v7 {
 enum class StrategyId : std::uint16_t {
     ProfessionalMaker = 1,
     FastStructural = 2,
-    GraphRelativeValue = 3,
-    CrossSectionalRanking = 4,
-    PcaStatArb = 5,
-    LocalFactor = 6,
-    MicroTaker = 7,
-    ExternalInformation = 8,
-    HardArbitrage = 9,
-    CryptoSettlementFair = 10,
-    CryptoInformedTaker = 11,
-    Osint = 12,
-    SportsLatency = 13,
-    CrossPlatform = 14,
-    WalletIntelligence = 15,
-    MarketOpen = 16,
+    CryptoSettlementEngine = 3,
+    HardArbitrage = 4,
+    CryptoSettlementFair = 5,
+    CryptoInformedTaker = 6,
 };
 
 enum class IntentType : std::uint8_t {

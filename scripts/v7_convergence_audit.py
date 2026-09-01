@@ -13,11 +13,10 @@ from v7_strategy_governance import FAMILIES, Registry
 
 
 SCHEDULER_SCHEMA = "polymarket_v7_scheduler_freeze_v1"
-CAPABILITY_SCHEMA = "polymarket_v7_capability_matrix_v1"
+CAPABILITY_SCHEMA = "polymarket_v7_capability_matrix_v2"
 INCUMBENT_SCHEMA = "polymarket_v7_incumbent_identity_v1"
-IMPLEMENTATION_STATES = {"IMPLEMENTATION_COMPLETE", "IMPLEMENTATION_PARTIAL", "IMPLEMENTATION_MISSING"}
-VALIDATION_STATES = {"ENGINEERING_VALIDATED", "FORWARD_EVIDENCE_PENDING", "ECONOMICALLY_VALIDATED", "REJECTED_BY_EVIDENCE"}
-ECONOMIC_STATES = {"VALIDATED", "PROMISING_MORE_EVIDENCE_REQUIRED", "INSUFFICIENT_DATA", "REJECTED"}
+IMPLEMENTATION_STATES = {"LIVE_PAPER"}
+ECONOMIC_STATES = {"MORE_EVIDENCE_REQUIRED", "VALIDATED", "REJECTED"}
 REQUIRED_DOCS = {
     "ARCHITECTURE.md", "RUNTIME.md", "EXECUTION.md", "MODELS.md", "DATA.md",
     "REPLAY.md", "DEPLOYMENT.md", "MONITORING.md", "MODEL_GOVERNANCE.md", "RESEARCH.md",
@@ -83,20 +82,17 @@ def validate_capabilities(root: Path) -> dict[str, Any]:
     matrix = load(root / "config/v7_capability_matrix.json")
     if matrix.get("schema") != CAPABILITY_SCHEMA:
         raise AuditError("invalid_capability_schema")
-    strategies = matrix.get("strategies") or []
-    families = [str(row.get("family") or "") for row in strategies]
-    if len(families) != len(set(families)) or set(families) != FAMILIES:
-        raise AuditError("capability_matrix_must_cover_exactly_15_families")
-    for row in [*(matrix.get("core") or []), *strategies]:
+    strategies = matrix.get("live_algorithms") or []
+    families = [str(row.get("algorithm") or "") for row in strategies]
+    if len(families) != 2 or len(families) != len(set(families)) or set(families) != FAMILIES:
+        raise AuditError("capability_matrix_must_cover_exactly_two_live_algorithms")
+    if matrix.get("legacy_algorithm_count") != 0 or matrix.get("component_independent_authority") is not False:
+        raise AuditError("capability_matrix_legacy_or_component_authority")
+    for row in strategies:
         if row.get("implementation_status") not in IMPLEMENTATION_STATES:
             raise AuditError("invalid_implementation_status")
-        if row.get("validation_status") not in VALIDATION_STATES:
-            raise AuditError("invalid_validation_status")
-    for row in strategies:
         if row.get("economics") not in ECONOMIC_STATES:
             raise AuditError("invalid_economic_status")
-        if not str(row.get("bottleneck") or "").strip():
-            raise AuditError("missing_strategy_bottleneck")
     return matrix
 
 
@@ -150,8 +146,8 @@ def markdown(report: dict[str, Any], matrix: dict[str, Any]) -> str:
         "| Strategy | Implementation | Validation | Economics | Main bottleneck |",
         "|---|---|---|---|---|",
     ]
-    for row in matrix["strategies"]:
-        lines.append(f"| {row['family']} | {row['implementation_status']} | {row['validation_status']} | {row['economics']} | {row['bottleneck']} |")
+    for row in matrix["live_algorithms"]:
+        lines.append(f"| {row['algorithm']} | {row['implementation_status']} | PAPER-only | {row['economics']} | Forward PAPER evidence |")
     lines.extend([
         "", "## Acceptance", "",
         f"- exact-head repository audit: `{report['valid']}`",
@@ -187,7 +183,7 @@ def main() -> int:
     report = {
         "schema": "polymarket_v7_convergence_audit_v1", "valid": True,
         "identity": {"candidate_sha": candidate, "main_sha": main_sha, "deployed_sha": args.deployed_sha},
-        "scheduler_count": len(scheduler), "strategy_count": len(matrix["strategies"]),
+        "scheduler_count": len(scheduler), "live_algorithm_count": len(matrix["live_algorithms"]),
         "canonical_main_equals_candidate": main_equal, "deployed_identity_verified": deployed_verified,
         "engineering_acceptance": bool(main_equal and deployed_verified),
         "paper_only": True, "automatic_promotion": False, "automatic_deployment": False,

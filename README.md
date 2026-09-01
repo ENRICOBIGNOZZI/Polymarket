@@ -121,66 +121,21 @@ include/pm/fast_arb.hpp
 scripts/v7_joint_execution_policy.py
 ```
 
-## Zero-authority research plane
+## Live algorithm scope
 
-### Graph / relative value
+V7 has exactly two live PAPER algorithms:
 
-Multi-leg relative-value research uses direct empirical joint states and
-explicit partial/unwind losses. Queue affects fillability only; it never creates
-capital capacity or execution authority.
+- `CRYPTO_SETTLEMENT_ENGINE`: settlement fair value, professional maker and
+  informed-taker components for registered crypto contexts.
+- `STRUCTURAL_ARB_ENGINE`: hard-arbitrage and fast-structural components over
+  deterministically verified relations.
 
-```text
-scripts/v7_graph_rv.py
-scripts/v7_graph_rv_executable_intents.py
-scripts/v7_graph_cost_vector.py
-```
-
-### Micro Taker
-
-Selective short-horizon round-trip research with entry/exit depth, fees,
-slippage, and adverse-markout accounting. It cannot submit or represent an
-executable order.
-
-```text
-scripts/v7_micro_taker_worker.py
-scripts/v7_micro_taker_core.py
-```
-
-### Ranking / PCA / Local Factor
-
-V7-native research families. Horizons remain separated and these models own no
-capital, risk, OMS, inventory, ledger, promotion, or deployment authority.
-
-### Strategy-wide registry and research kernels
-
-The complete 15-family economic registry is validated at canonical runtime
-startup. It fixes each family's frequency, authority, action set, independent
-sample unit and strategy-specific execution model. OSINT, sports latency,
-cross-platform, wallet intelligence and market-open are implemented as
-fail-closed research/shadow kernels; they cannot submit orders or auto-promote.
-
-```text
-config/v7_strategy_registry.json
-scripts/v7_strategy_governance.py
-scripts/v7_structural_relations.py
-scripts/v7_osint_engine.py
-scripts/v7_osint_pipeline.py
-scripts/v7_osint_collector.py
-scripts/v7_osint_likelihood.py
-config/v7_osint_sources.json
-scripts/v7_sports_latency.py
-scripts/v7_cross_platform.py
-scripts/v7_wallet_intelligence.py
-scripts/v7_wallet_dataset.py
-scripts/v7_market_open.py
-scripts/v7_market_open_pipeline.py
-scripts/v7_market_open_collector.py
-```
-
-Their current authority is explicit in the registry. Code availability is not
-treated as economic validation: promotion requires causal replay,
-chronological OOS, forward shadow/PAPER observations, direct execution-state
-evidence and positive robust net PnL under cost stress.
+Components have no independent capital, risk, OMS, inventory or ledger
+authority. All previously registered non-live algorithm families and their
+collectors, supervisors, configs, dashboards and scheduled workflows have been
+removed. `config/v7_strategy_registry.json` and
+`config/v7_live_model_scope.json` fail closed unless the set is exactly these
+two algorithms.
 
 ## Execution evidence
 
@@ -244,11 +199,10 @@ The retained automation is deliberately small:
 .github/workflows/v7-live-paper-validation.yml
 .github/workflows/v7-deploy-paper-server.yml
 .github/workflows/v7-paper-server-health.yml
-.github/workflows/v7-cross-sectional-ranking-research.yml
 .github/workflows/v7-point-in-time-universe-archive.yml
 ```
 
-CI, monitoring and single-writer checks validate V7 directly. There is no promotion/research/scheduler control-plane layer between them and the V7 code.
+CI, monitoring and single-writer checks validate the two-engine V7 runtime directly.
 
 ## Repository invariant
 

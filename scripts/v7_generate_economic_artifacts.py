@@ -126,18 +126,11 @@ def generate(repo: Path, run_root: Path, output: Path, baseline_path: Path,
     arb = envelope(
         "polymarket_v7_arb_coverage_report_v1", sha, runtime_available,
         strategies={name: strategies.get(name, {}) for name in (
-            "FAST_STRUCTURAL", "HARD_ARB", "GRAPH_RV"
+            "FAST_STRUCTURAL", "HARD_ARB"
         )},
-        verified_relation_registry=load(run_root / "graph_rv" / "relation_registry.json"),
+        verified_relation_registry=load(run_root / "structural_relations" / "relation_registry.json"),
         no_text_similarity_relations=True, partial_bundle_unwind_required=True,
         profitability_proven=False,
-    )
-    research = envelope(
-        "polymarket_v7_research_shadow_report_v1", sha, runtime_available,
-        fast_shadow_manifest=load(run_root / "control" / "research_sleeves_manifest.json"),
-        slow_shadow_manifest=load(run_root / "control" / "slow_research_shadow_manifest.json"),
-        zero_capital=True, oms_authority=False, ledger_writer_authority=False,
-        automatic_promotion=False,
     )
     lineage = envelope(
         "polymarket_v7_lineage_report_v1", sha, runtime_available,
@@ -183,7 +176,6 @@ def generate(repo: Path, run_root: Path, output: Path, baseline_path: Path,
         "v7_external_fair_forecast_to_pnl.json": external,
         "v7_maker_bilateral_fillability_report.json": maker,
         "v7_arb_coverage_report.json": arb,
-        "v7_research_shadow_report.json": research,
         "v7_lineage_report.json": lineage,
         "v7_external_loss_attribution.json": exact_bundle["loss_attribution"],
         "v7_execution_latency_distribution.json": exact_bundle["execution_latency_distribution"],

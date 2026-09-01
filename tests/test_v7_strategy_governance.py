@@ -8,9 +8,9 @@ sys.path.insert(0, str(ROOT / "scripts"))
 import v7_strategy_governance as g
 
 
-def test_registry_covers_exactly_15_and_remains_paper_only():
+def test_registry_covers_exactly_two_live_algorithms_and_remains_paper_only():
     registry = g.Registry.load(ROOT / "config" / "v7_strategy_registry.json")
-    assert len(registry.strategies) == 15
+    assert len(registry.strategies) == 2
     assert {x.family for x in registry.strategies} == g.FAMILIES
     assert registry.paper_only
     assert not registry.authenticated_execution
@@ -21,7 +21,7 @@ def test_registry_covers_exactly_15_and_remains_paper_only():
 
 def test_promotion_never_auto_authorizes_real_money():
     registry = g.Registry.load(ROOT / "config" / "v7_strategy_registry.json")
-    maker = next(x for x in registry.strategies if x.family == "professional_maker")
+    maker = next(x for x in registry.strategies if x.family == "CRYPTO_SETTLEMENT_ENGINE")
     evidence = g.Evidence(1000, True, True, True, True, 10.0, 2.0, 1.0, True, True, True)
     result = g.promotion_assessment(maker, evidence, 100)
     assert result["statistically_eligible"] is True
@@ -39,9 +39,9 @@ def test_evidence_gate_rejects_ticks_disguised_as_independent_samples():
 
 def test_conflict_priority_is_risk_then_structural_then_alpha():
     rows = [
-        g.Candidate("maker", "professional_maker", "MAKE", "MAKER", "e", ("m",), 10, 1, 1, 0),
-        g.Candidate("arb", "hard_arb", "ARB", "STRUCTURAL_GUARANTEE", "e", ("m", "n"), 1, 1, 1, 0),
-        g.Candidate("risk", "professional_maker", "CANCEL", "RISK", "e", ("m",), -1, 1, 1, 0),
+        g.Candidate("maker", "CRYPTO_SETTLEMENT_ENGINE", "MAKE", "MAKER", "e", ("m",), 10, 1, 1, 0),
+        g.Candidate("arb", "STRUCTURAL_ARB_ENGINE", "ARB", "STRUCTURAL_GUARANTEE", "e", ("m", "n"), 1, 1, 1, 0),
+        g.Candidate("risk", "CRYPTO_SETTLEMENT_ENGINE", "CANCEL", "RISK", "e", ("m",), -1, 1, 1, 0),
     ]
     selected = g.resolve_conflicts(rows)
     assert [x.candidate_id for x in selected] == ["risk"]
@@ -49,7 +49,7 @@ def test_conflict_priority_is_risk_then_structural_then_alpha():
 
 def test_full_hard_priority_order_starts_with_global_kill():
     rows = [
-        g.Candidate(name, "professional_maker", "CANCEL", purpose, "e", ("m",), -1, 1, 1, 0)
+        g.Candidate(name, "CRYPTO_SETTLEMENT_ENGINE", "CANCEL", purpose, "e", ("m",), -1, 1, 1, 0)
         for name, purpose in (
             ("maker", "PASSIVE_MAKER"),
             ("risk", "NORMAL_RISK_REDUCTION"),
@@ -60,15 +60,16 @@ def test_full_hard_priority_order_starts_with_global_kill():
     assert g.resolve_conflicts(rows)[0].candidate_id == "global"
 
 
-def test_all_strategy_ids_are_explicit_in_hot_path_contract():
+def test_removed_legacy_strategy_ids_are_absent_from_hot_path_contract():
     text = (ROOT / "include" / "pm" / "v7_intent.hpp").read_text()
-    for name in ("HardArbitrage", "CryptoSettlementFair", "CryptoInformedTaker", "Osint",
-                 "SportsLatency", "CrossPlatform", "WalletIntelligence", "MarketOpen"):
+    for name in ("CryptoSettlementEngine", "HardArbitrage", "CryptoSettlementFair", "CryptoInformedTaker"):
         assert name in text
+    for removed in ("GraphRelativeValue", "MicroTaker", "Osint", "SportsLatency", "CrossPlatform", "WalletIntelligence", "MarketOpen"):
+        assert removed not in text
 
 
 def test_canonical_runtime_preflight_validates_registry_and_forbids_live_authority():
     text = (ROOT / "scripts" / "paper_v7_execution_loop.sh").read_text()
     assert 'v7.get("strategy_registry")' in text
     assert 'registry.get("governance",{}).get("automatic_promotion") is False' in text
-    assert '{"RESEARCH","SHADOW","PAPER"}' in text
+    assert 'row.get("mode") == "PAPER"' in text

@@ -57,7 +57,7 @@ jobs:
           import json
           from pathlib import Path
           m=json.loads(Path('monitoring/v7_monitoring_manifest.json').read_text(encoding='utf-8'))
-          assert m.get('schema') == 'polymarket_v7_monitoring_manifest_v2'
+          assert m.get('schema') == 'polymarket_v7_monitoring_manifest_v3'
           assert m.get('version') == 7
           assert m.get('paper_only') is True
           assert m.get('authenticated_execution') is False
@@ -69,7 +69,7 @@ jobs:
               'control/incumbent_identity.json',
               'control/portfolio_state.json',
               'control/allocations/manifest.json',
-              'graph_rv/status.json',
+              'structural_relations/verified_relations.csv',
               'canonical_economics.json',
               'ledger/execution.jsonl',
               'trade_tape.csv',
@@ -251,23 +251,24 @@ jobs:
           runtime=json.loads((root/'control/runtime_status.json').read_text(encoding='utf-8'))
           identity=json.loads((root/'control/incumbent_identity.json').read_text(encoding='utf-8'))
           portfolio=json.loads((root/'control/portfolio_state.json').read_text(encoding='utf-8'))
-          graph=json.loads((root/'graph_rv/status.json').read_text(encoding='utf-8'))
           economics=json.loads((root/'canonical_economics.json').read_text(encoding='utf-8'))
           assert runtime.get('version') == 7 and runtime.get('model_sha') == sha
           assert runtime.get('paper_only') is True and runtime.get('authenticated_execution') is False
           assert runtime.get('real_order_submission') is False and runtime.get('state') == 'running'
           assert runtime.get('killed') is False
+          assert set(runtime.get('economic_engines') or []) == {'CRYPTO_SETTLEMENT_ENGINE','STRUCTURAL_ARB_ENGINE'}
+          assert runtime.get('economic_new_risk_ready') is False
           assert identity.get('schema') == 'polymarket_v7_incumbent_identity_v1'
           assert identity.get('verified') is True and identity.get('runtime_sha') == sha
           for key in ('config_hash','policy_hash','model_hash','run_id','ledger_id','server_id'):
               assert identity.get(key) == runtime.get(key) and str(identity.get(key) or '')
           pid=int(runtime.get('pid') or 0); assert pid > 0; os.kill(pid,0)
           assert now-int(runtime.get('timestamp') or 0) <= 180
+          assert portfolio.get('schema') == 'polymarket_v7_portfolio_guard_v2'
+          assert set(portfolio.get('engines') or {}) == {'CRYPTO_SETTLEMENT_ENGINE','STRUCTURAL_ARB_ENGINE'}
           assert portfolio.get('paper_only') is True and portfolio.get('authenticated_execution') is False
           assert portfolio.get('killed') is False and float(portfolio.get('drawdown',1)) < .15
           assert now-int(portfolio.get('timestamp') or 0) <= 30
-          assert graph.get('paper_only') is True and graph.get('authenticated_execution') is False
-          assert now-int(graph.get('timestamp') or 0) <= 180
           assert economics.get('paper_only') is True and economics.get('authenticated_execution') is False
           assert economics.get('expected_model_sha') == sha
           with (root/'trade_tape.csv').open(newline='',encoding='utf-8') as handle:
@@ -282,6 +283,9 @@ jobs:
           grep -q '^polymarket_v7_paper_only_contract_ok 1$' <<<"$metrics"
           grep -q '^polymarket_v7_authenticated_execution_disabled 1$' <<<"$metrics"
           grep -q '^polymarket_v7_ledger_valid 1$' <<<"$metrics"
+          grep -q '^polymarket_v7_live_algorithm_count 2$' <<<"$metrics"
+          grep -q '^polymarket_v7_legacy_algorithm_count 0$' <<<"$metrics"
+          grep -q '^polymarket_v7_live_algorithm_scope_wired 1$' <<<"$metrics"
           curl -fsS http://127.0.0.1:9090/-/ready >/dev/null
           curl -fsS http://127.0.0.1:3000/api/health >/dev/null
           uid="$(python3 - <<'PY'

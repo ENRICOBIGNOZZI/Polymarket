@@ -22,7 +22,7 @@ class EconomicArtifactPackTests(unittest.TestCase):
                 "v7_profitability_audit.json", "v7_capability_runtime_proof.json",
                 "v7_reconciliation_report.json", "v7_external_fair_forecast_to_pnl.json",
                 "v7_maker_bilateral_fillability_report.json", "v7_arb_coverage_report.json",
-                "v7_research_shadow_report.json", "v7_lineage_report.json",
+                "v7_lineage_report.json",
                 "v7_external_loss_attribution.json",
                 "v7_execution_latency_distribution.json",
                 "v7_external_policy_replay.json",

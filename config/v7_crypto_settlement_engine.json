@@ -111,17 +111,5 @@
       "taker": {"enabled": true, "minimum_tte_seconds": 5, "maximum_tte_seconds": 120},
       "under_five_seconds": "NO_NEW_RISK"
     }
-  ],
-  "research_zero_authority_families": [
-    "micro_taker",
-    "graph_rv",
-    "ranking",
-    "pca",
-    "local_factor",
-    "wallet_intelligence",
-    "market_open",
-    "osint",
-    "sports_latency",
-    "cross_platform"
   ]
 }

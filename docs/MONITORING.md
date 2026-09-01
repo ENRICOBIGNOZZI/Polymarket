@@ -1,23 +1,5 @@
-# V7 Monitoring
+# V7 monitoring
 
-V7 exposes one monitoring plane and one exporter listener. The canonical manifest is `monitoring/v7_monitoring_manifest.json`.
+Grafana is an operator view for exactly two PAPER algorithms. Prometheus exports `polymarket_v7_live_algorithm_count 2`, `polymarket_v7_legacy_algorithm_count 0` and the fail-closed scope, SHA, single-writer, ledger, portfolio, feed and safety metrics.
 
-Required views cover overview, maker/fillability, structural, external fair, informed taker, graph/RV, event lanes, slow models, capital, risk, execution, latency and model evolution.
-
-Hard health failures include stale or discontinuous feeds, invalid semantics/reference, unknown fees, expired fair value, OMS/inventory mismatch, cancel failure, rate-limit exhaustion and drawdown breach.
-
-The maker fillability surface distinguishes created, effective, rested, reachable, queue-depleted scenarios, eligible, partial and full fills. Exact-WS gaps and drops remain explicit.
-
-The Grafana operator home separates authority from readiness and shows runtime
-identity, single-writer proof, action funnel, data-source health, latency tails,
-disk pressure and restart/quarantine state. Missing external-fair artifacts are
-reported as not ready, never as a healthy P0 stack.
-
-OSINT metrics expose enabled and healthy source counts, newly appended events,
-and per-source health/new-event counts. Because OSINT remains RESEARCH-only,
-source unavailability is diagnostic and does not by itself kill the economic
-PAPER runtime.
-
-Market Open metrics expose tracked markets, genuinely post-bootstrap new
-markets, emitted milestones and the count with verified semantics. The latter
-remains zero unless deterministic rule verification is present.
+No removed algorithm has a panel, alert, metric family or required runtime surface. Crypto context coverage is shown as registered, zero-authority, model-registered and new-risk-authorized without presenting contexts as separate algorithms.

@@ -23,7 +23,7 @@ class FinalConvergenceAuditTests(unittest.TestCase):
         report = build(ROOT)
         self.assertTrue(report["valid"])
         self.assertEqual(report["architecture"]["system_count"], 1)
-        self.assertEqual(report["architecture"]["economic_engine_count"], 2)
+        self.assertEqual(report["architecture"]["live_algorithm_count"], 2)
         self.assertEqual(report["architecture"]["known_migration_defect_count"], 0)
         self.assertEqual(report["surfaces"]["delete_active_legacy_count"], 0)
         self.assertEqual(report["surfaces"]["temporary_compatibility_count"], 0)

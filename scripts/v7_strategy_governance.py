@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
-"""V7-wide strategy, experiment, evidence and allocation contracts.
+"""Governance contracts for the two canonical V7 live algorithms.
 
 This is deliberately a cold-plane control module.  It cannot submit orders,
 change the canonical allocator, or promote a challenger.  Its job is to make
-all strategy families comparable in account-wealth units while preserving the
+both live algorithms comparable in account-wealth units while preserving the
 single V7 runtime/OMS/ledger/risk ownership contract.
 """
 from __future__ import annotations
@@ -17,14 +17,9 @@ from pathlib import Path
 from typing import Any, Iterable, Mapping, Sequence
 
 
-SCHEMA = "polymarket_v7_strategy_registry_v1"
-REPORT_SCHEMA = "polymarket_v7_strategy_report_v1"
-FAMILIES = {
-    "professional_maker", "fast_structural", "hard_arb", "graph_rv",
-    "crypto_settlement_fair", "crypto_informed_taker", "micro_taker",
-    "osint", "sports_latency", "cross_platform", "wallet_intelligence",
-    "market_open", "ranking", "pca", "local_factor",
-}
+SCHEMA = "polymarket_v7_live_algorithm_registry_v2"
+REPORT_SCHEMA = "polymarket_v7_live_algorithm_report_v1"
+FAMILIES = {"CRYPTO_SETTLEMENT_ENGINE", "STRUCTURAL_ARB_ENGINE"}
 FREQUENCIES = {"HFT-0", "FAST-1", "EVENT-2", "SLOW-3"}
 ACTIONS = {"MAKE", "TAKE", "ARB", "CANCEL", "WITHDRAW", "NOTHING"}
 REQUIRED_REPORT_FIELDS = (
@@ -84,16 +79,17 @@ class StrategySpec:
     @staticmethod
     def from_json(raw: Mapping[str, Any]) -> "StrategySpec":
         try:
-            authority = Authority[str(raw["authority"]).upper()]
+            authority = Authority[str(raw["mode"]).upper()]
         except (KeyError, TypeError, ValueError) as exc:
             raise ContractError("invalid_authority") from exc
         out = StrategySpec(
-            family=str(raw.get("family") or ""), priority=str(raw.get("priority") or ""),
-            frequency=str(raw.get("frequency") or ""), authority=authority,
+            family=str(raw.get("id") or ""), priority="P0",
+            frequency="HFT-0", authority=authority,
             actions=tuple(str(x).upper() for x in raw.get("actions") or ()),
-            independent_sample_unit=str(raw.get("independent_sample_unit") or ""),
-            strategy_specific_execution_model=str(raw.get("strategy_specific_execution_model") or ""),
-            enabled=raw.get("enabled") is True, reason=str(raw.get("reason") or ""),
+            independent_sample_unit="independent_market_event_cluster",
+            strategy_specific_execution_model="canonical_engine_execution_model",
+            enabled=raw.get("enabled") is True,
+            reason="canonical live PAPER algorithm",
         )
         out.validate()
         return out
@@ -135,7 +131,7 @@ class Registry:
         ownership = raw.get("ownership") or {}
         safety = raw.get("safety") or {}
         registry = Registry(
-            strategies=tuple(StrategySpec.from_json(x) for x in raw.get("strategies") or ()),
+            strategies=tuple(StrategySpec.from_json(x) for x in raw.get("live_algorithms") or ()),
             paper_only=safety.get("paper_only") is True,
             authenticated_execution=safety.get("authenticated_execution") is True,
             real_order_submission=safety.get("real_order_submission") is True,
@@ -153,7 +149,7 @@ class Registry:
     def validate(self) -> None:
         found = [x.family for x in self.strategies]
         if len(found) != len(set(found)) or set(found) != FAMILIES:
-            raise ContractError(f"strategy_registry_must_cover_exactly_15_families:{sorted(set(FAMILIES)-set(found))}")
+            raise ContractError(f"live_algorithm_registry_must_cover_exactly_two:{sorted(set(FAMILIES)-set(found))}")
         if not self.paper_only or self.authenticated_execution or self.real_order_submission:
             raise ContractError("repository_must_remain_paper_only")
         if self.automatic_promotion:

@@ -8,14 +8,15 @@ LOOP = ROOT / "scripts/paper_v7_execution_loop.sh"
 
 
 class V7PaperLoopBash3PortabilityTest(unittest.TestCase):
-    def test_research_graph_scanner_has_no_execution_worker(self) -> None:
+    def test_only_two_live_algorithms_are_registered(self) -> None:
         text = LOOP.read_text(encoding="utf-8")
         self.assertIn("set -euo pipefail", text)
         self.assertNotIn("joint_args=()", text)
         self.assertNotIn('${joint_args[@]}', text)
-        self.assertIn("v7_graph_rv_executable_intents.py", text)
-        self.assertIn('--status "$RUN_ROOT/graph_rv/status.json"', text)
-        self.assertNotIn("python3 scripts/v7_graph_rv.py", text)
+        self.assertIn("CRYPTO_SETTLEMENT_ENGINE", text)
+        self.assertIn("STRUCTURAL_ARB_ENGINE", text)
+        for removed in ("v7_graph_rv_executable_intents.py", "v7_micro_taker_worker.py", "v7_research_shadow_supervisor.py"):
+            self.assertNotIn(removed, text)
 
     def test_cleanup_empty_pid_array_is_guarded_and_bounded(self) -> None:
         text = LOOP.read_text(encoding="utf-8")
@@ -46,12 +47,10 @@ class V7PaperLoopBash3PortabilityTest(unittest.TestCase):
         ):
             self.assertIn(required, ready)
 
-    def test_limitless_output_directory_exists_before_background_redirect(self) -> None:
+    def test_removed_collectors_are_not_launched(self) -> None:
         text = LOOP.read_text(encoding="utf-8")
-        mkdir = 'mkdir -p "$RUN_ROOT/shadow/limitless"'
-        launch = "python3 scripts/v7_limitless_collector.py"
-        self.assertIn(mkdir, text)
-        self.assertLess(text.index(mkdir), text.index(launch))
+        for removed in ("limitless", "kalshi", "sports_latency", "cross_platform", "osint"):
+            self.assertNotIn(removed, text.lower())
 
 
 if __name__ == "__main__":

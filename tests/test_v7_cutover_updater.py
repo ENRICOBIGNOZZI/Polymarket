@@ -140,7 +140,7 @@ class V7CutoverUpdaterTest(unittest.TestCase):
         self.assertLess(stop, refresh)
         self.assertLess(stop, archive)
         function = text[text.index("cutover_positions_drained(){"):text.index("wait_for_cutover_drain(){")]
-        self.assertIn("external_open == 0 and micro_open == 0", function)
+        self.assertIn("external_open == 0", function)
         self.assertIn("external_open=int(external_status.get('open_positions',-1))", function)
         self.assertIn("counterfactual_open_positions',-1)) == counterfactual_open", function)
         self.assertIn("is the counterfactual SHADOW book", function)
@@ -148,10 +148,6 @@ class V7CutoverUpdaterTest(unittest.TestCase):
         self.assertIn("new_risk_frozen') is True", function)
         self.assertIn("drain_complete') is (maker_open == 0)", function)
         self.assertIn("maker_zero_authority_observer", function)
-        self.assertIn("micro_zero_authority_research", function)
-        self.assertIn("'execution_authority') == 'RESEARCH_ONLY_ZERO_AUTHORITY'", function)
-        self.assertIn("'inventory_state_created') is False", function)
-        self.assertIn("micro_state=dict(micro_state, positions={})", function)
         self.assertIn("'execution_authority') == 'SHADOW_ZERO_AUTHORITY'", function)
         self.assertIn("'capital_authority') is False", function)
         self.assertIn("'ledger_writer_authority') is False", function)
@@ -417,11 +413,9 @@ class V7CutoverUpdaterTest(unittest.TestCase):
             "control/runtime_status.json",
             "control/portfolio_state.json",
             "control/allocations/manifest.json",
-            "control/research_sleeves_manifest.json",
             "external_fair/paper_router_status.json",
-            "scripts/v7_research_shadow_supervisor.py",
             "config/v7_live_model_scope.json",
-            "graph_rv/status.json",
+            "structural_relations/verified_relations.csv",
             "canonical_economics.json",
             "ledger/execution.jsonl",
             "trade_tape.csv",
@@ -515,14 +509,15 @@ class V7CutoverUpdaterTest(unittest.TestCase):
         ):
             self.assertNotIn(forbidden, text)
 
-    def test_monitoring_manifest_is_v2_and_canonical(self) -> None:
+    def test_monitoring_manifest_is_v3_and_two_engine_only(self) -> None:
         manifest = json.loads((ROOT / "monitoring/v7_monitoring_manifest.json").read_text(encoding="utf-8"))
-        self.assertEqual(manifest["schema"], "polymarket_v7_monitoring_manifest_v2")
+        self.assertEqual(manifest["schema"], "polymarket_v7_monitoring_manifest_v3")
         self.assertEqual(manifest["version"], 7)
         self.assertTrue(manifest["paper_only"])
         self.assertFalse(manifest["authenticated_execution"])
         self.assertIn("control/runtime_status.json", manifest["required_surfaces"])
-        self.assertIn("control/research_sleeves_manifest.json", manifest["required_surfaces"])
+        self.assertEqual(manifest["live_algorithm_count"], 2)
+        self.assertEqual(manifest["legacy_algorithm_count"], 0)
         self.assertIn("canonical_economics.json", manifest["required_surfaces"])
         self.assertIn("ledger/execution.jsonl", manifest["required_surfaces"])
         self.assertIn("trade_recorder_status.json", manifest["required_surfaces"])

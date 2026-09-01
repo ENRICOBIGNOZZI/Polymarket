@@ -34,7 +34,6 @@ class CapitalAllocatorTests(unittest.TestCase):
                     "crypto_informed_taker": 0.0,
                     "fast_structural": 0.1,
                 },
-                "research_compute_budget_fractions": {},
                 "reserve_fraction": reserve,
             },
         }
@@ -73,7 +72,7 @@ class CapitalAllocatorTests(unittest.TestCase):
             self.assertEqual(manifest["engine_budget_sum"], 6_000.0)
             self.assertAlmostEqual(manifest["reserve_budget"], 8_000.0)
             self.assertFalse(manifest["component_observation_budgets_are_capital"])
-            self.assertEqual(manifest["research_budgets"], {})
+            self.assertNotIn("research_budgets", manifest)
             maker = json.loads((root / "micro_maker.json").read_text())
             self.assertEqual(maker["starting_capital"], 0.0)
             self.assertEqual(maker["capital_scope"]["observation_budget"], 2_000.0)

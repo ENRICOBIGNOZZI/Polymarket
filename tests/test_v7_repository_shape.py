@@ -167,8 +167,7 @@ class V7RepositoryShapeTest(unittest.TestCase):
             "scripts/v7_canonical_economics.py",
             "scripts/v7_capital_allocator.py",
             "scripts/v7_portfolio_guard.py",
-            "scripts/v7_local_factor_primitives.py",
-            "scripts/v7_pca_stat_arb_primitives.py",
+            "scripts/v7_process_manifest.py",
             "config/paper_v7.json",
             "config/v7_crypto_settlement_engine.json",
             "config/v7_crypto_settlement_markets.json",
@@ -212,7 +211,7 @@ class V7RepositoryShapeTest(unittest.TestCase):
             "CRYPTO_SETTLEMENT_ENGINE", "STRUCTURAL_ARB_ENGINE",
             "V7_GLOBAL_PORTFOLIO_COORDINATOR", "one allocator", "one risk owner",
             "one OMS", "one inventory owner", "one append-only ledger writer",
-            "Zero-authority research plane",
+            "exactly two live PAPER algorithms",
         ):
             self.assertIn(token, readme)
         self.assertIn("None is an authority owner", btc)

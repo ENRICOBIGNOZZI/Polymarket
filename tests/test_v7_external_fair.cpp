@@ -270,7 +270,7 @@ int main() {
 
     auto intent = to_strategy_intent(take, 500, c.event_handle, 123,
                                      fair.model_version, fair.policy_version, now);
-    assert(intent.strategy_id == StrategyId::ExternalInformation);
+    assert(intent.strategy_id == StrategyId::CryptoSettlementEngine);
     assert(intent.urgency == Urgency::Aggressive);
     assert(intent.passive == 0);
     assert(intent.post_only == 0);

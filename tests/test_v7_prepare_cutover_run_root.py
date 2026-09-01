@@ -128,7 +128,7 @@ class V7PrepareCutoverRunRootTest(unittest.TestCase):
             )
             self.assertEqual(
                 result["prior_never_started_sleeves"],
-                ["micro_maker", "micro_taker"],
+                ["micro_maker"],
             )
             self.assertEqual(result["prior_open_positions"]["maker"], 0)
 

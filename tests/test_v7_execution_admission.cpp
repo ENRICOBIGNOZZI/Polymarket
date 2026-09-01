@@ -37,7 +37,7 @@ pm::v7::StrategyIntent aggressive(pm::v7::Side side,
                                   std::int64_t price_tick = 55,
                                   std::int64_t quantity = 1'000'000) {
     auto intent = quote(side, id, price_tick, quantity);
-    intent.strategy_id = pm::v7::StrategyId::ExternalInformation;
+    intent.strategy_id = pm::v7::StrategyId::CryptoSettlementEngine;
     intent.type = pm::v7::IntentType::TargetPosition;
     intent.urgency = pm::v7::Urgency::Aggressive;
     intent.passive = 0;

@@ -112,7 +112,7 @@ def build(root: Path) -> dict[str, Any]:
 
     authority = audit_authority(root, registry, edges)
     if (
-        set(authority["economic_engines"]) != EXPECTED_ENGINES
+        set(authority["live_algorithms"]) != EXPECTED_ENGINES
         or set(authority["owner_counts"]) != EXPECTED_OWNERS
         or any(count != 1 for count in authority["owner_counts"].values())
         or authority["known_migration_defect_count"] != 0
@@ -125,10 +125,9 @@ def build(root: Path) -> dict[str, Any]:
     expected_process_authorities = {key: 1 for key in EXPECTED_OWNERS}
     expected_process_authorities["promotion"] = 0
     if (
-        process["process_count"] != 33
-        or process["launcher_child_count"] != 31
+        process["process_count"] != 22
+        or process["launcher_child_count"] != 20
         or process["launcher_manifest_parity"] is not True
-        or process["research_fault_isolation"] is not True
         or process["authority_counts"] != expected_process_authorities
     ):
         raise FinalConvergenceError("runtime_process_topology")
@@ -163,8 +162,8 @@ def build(root: Path) -> dict[str, Any]:
         },
         "architecture": {
             "system_count": 1,
-            "economic_engine_count": 2,
-            "economic_engines": sorted(EXPECTED_ENGINES),
+            "live_algorithm_count": 2,
+            "live_algorithms": sorted(EXPECTED_ENGINES),
             "owner_counts": authority["owner_counts"],
             "decision_chain": authority["decision_chain"],
             "known_migration_defect_count": 0,
@@ -174,7 +173,7 @@ def build(root: Path) -> dict[str, Any]:
             "declared_count": process["process_count"],
             "launcher_child_count": process["launcher_child_count"],
             "launcher_manifest_parity": True,
-            "research_fault_isolation": True,
+            "legacy_algorithm_count": 0,
             "authority_counts": process["authority_counts"],
         },
         "surfaces": {

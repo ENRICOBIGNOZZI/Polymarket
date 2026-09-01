@@ -29,10 +29,6 @@ COMPONENT_OBSERVERS = {
     "micro_maker": "professional_maker",
     "fast_structural": "fast_structural",
 }
-RESEARCH_VIEWS = {
-    "graph_rv": "graph_rv",
-    "micro_taker": "micro_taker",
-}
 
 
 def atomic_json(path: Path, value: Any) -> None:
@@ -156,13 +152,6 @@ def materialize(base_config: Path, output_dir: Path) -> dict[str, Any]:
             execution_budget=0.0, observation_budget=observations[component],
             canonical_replacement=f"{engine_id.lower()}.json",
         ))
-    for view_id, component in RESEARCH_VIEWS.items():
-        atomic_json(output_dir / f"{view_id}.json", _child(
-            cfg, view_id=view_id, scope_class="RESEARCH_ZERO_AUTHORITY",
-            engine_id=None, component=component,
-            execution_budget=0.0, observation_budget=0.0,
-            canonical_replacement="ZERO_AUTHORITY_RESEARCH_MANIFEST",
-        ))
     manifest = {
         "schema": "polymarket_v7_capital_allocation_v3",
         "paper_only": True,
@@ -179,8 +168,6 @@ def materialize(base_config: Path, output_dir: Path) -> dict[str, Any]:
         "reserve_budget": budgets["reserve"],
         "component_observation_budgets": observations,
         "component_observation_budgets_are_capital": False,
-        "research_budgets": {},
-        "research_has_capital": False,
         "allocated_plus_reserve": sum(budgets.values()),
         "double_counting_forbidden": True,
         "temporary_engine_adapters": ENGINE_ADAPTERS,
@@ -189,8 +176,6 @@ def materialize(base_config: Path, output_dir: Path) -> dict[str, Any]:
             "hard_arb": "STRUCTURAL_ARB_ENGINE",
             "micro_maker": None,
             "fast_structural": None,
-            "micro_taker": None,
-            "graph_rv": None,
         },
         "temporary_adapter_deletion_gate": "DECLARATIVE_PROCESS_MANIFEST_CUTOVER_PROVEN",
     }

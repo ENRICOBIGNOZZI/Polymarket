@@ -45,7 +45,7 @@ class SharedMarketStateTests(unittest.TestCase):
         self.assertIn("polymarket_v7_shared_market_state_v1", producer)
         self.assertIn('"FAST_STRUCTURAL_CPP_WEBSOCKET"', producer)
         self.assertIn('market_data" / "shared_state.json', producer)
-        self.assertIn('--shared-state "$RUN_ROOT/market_data/shared_state.json"', loop)
+        self.assertIn('--run-root "$RUN_ROOT"', loop)
 
     def test_atomic_bundle_uses_publish_clock_not_quiet_book_age(self) -> None:
         state = validate_payload(payload(), expected_sha=SHA, now_ms=10_100)

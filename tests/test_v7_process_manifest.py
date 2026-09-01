@@ -18,21 +18,21 @@ def manifest() -> dict:
 
 def test_manifest_matches_all_31_launcher_children_and_two_runtime_owners() -> None:
     report = resolve(ROOT, manifest())
-    assert report["process_count"] == 33
-    assert report["launcher_child_count"] == 31
+    assert report["process_count"] == 22
+    assert report["launcher_child_count"] == 20
     assert report["launcher_manifest_parity"] is True
-    assert report["research_fault_isolation"] is True
+    assert report["feed_zero_authority"] is True
 
 
-def test_research_process_cannot_gain_authority() -> None:
+def test_feed_process_cannot_gain_authority() -> None:
     value = manifest()
-    value["profiles"]["research"]["authority_flags"]["ledger"] = True
+    value["profiles"]["feed"]["authority_flags"]["ledger"] = True
     try:
         resolve(ROOT, value)
     except ProcessManifestError as exc:
-        assert str(exc).startswith("research_fault_isolation:")
+        assert str(exc).startswith("feed_authority_violation:")
     else:
-        raise AssertionError("research ledger authority accepted")
+        raise AssertionError("feed ledger authority accepted")
 
 
 def test_launcher_child_cannot_escape_manifest_inventory() -> None:
@@ -48,20 +48,7 @@ def test_launcher_child_cannot_escape_manifest_inventory() -> None:
         raise AssertionError("launcher/manifest drift accepted")
 
 
-def test_core_cannot_depend_on_research_fault_domain() -> None:
-    value = manifest()
-    paper = next(row for row in value["processes"] if row["id"] == "paper_launcher")
-    paper["dependencies"].append("micro_taker_research")
-    try:
-        resolve(ROOT, value)
-    except ProcessManifestError as exc:
-        assert str(exc) == "core_depends_on_research:paper_launcher"
-    else:
-        raise AssertionError("canonical core dependency on research accepted")
-
-
 if __name__ == "__main__":
     test_manifest_matches_all_31_launcher_children_and_two_runtime_owners()
-    test_research_process_cannot_gain_authority()
+    test_feed_process_cannot_gain_authority()
     test_launcher_child_cannot_escape_manifest_inventory()
-    test_core_cannot_depend_on_research_fault_domain()

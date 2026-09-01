@@ -51,7 +51,7 @@ def resolve(root: Path, manifest: dict[str, Any]) -> dict[str, Any]:
         raise ProcessManifestError("manifest_identity_or_safety")
     profiles = manifest.get("profiles")
     rows = manifest.get("processes")
-    if not isinstance(profiles, dict) or not isinstance(rows, list) or len(rows) != 33:
+    if not isinstance(profiles, dict) or not isinstance(rows, list) or len(rows) != 22:
         raise ProcessManifestError("profile_or_process_count")
     resolved: list[dict[str, Any]] = []
     ids: set[str] = set()
@@ -127,17 +127,12 @@ def resolve(root: Path, manifest: dict[str, Any]) -> dict[str, Any]:
         unknown = set(row["dependencies"]) - ids
         if unknown:
             raise ProcessManifestError(f"dependency_unknown:{row['id']}:{sorted(unknown)}")
-        if row["owner_class"] == "CANONICAL_CORE" and any(
-            item["id"] in row["dependencies"] and item["owner_class"] == "ZERO_AUTHORITY_RESEARCH"
-            for item in resolved
-        ):
-            raise ProcessManifestError(f"core_depends_on_research:{row['id']}")
-        if row["owner_class"] == "ZERO_AUTHORITY_RESEARCH" and (
+        if row["owner_class"] == "LIVE_ALGORITHM_DATA_FEED" and (
             any(row["authority_flags"].values())
-            or row["restart_policy"] != "RESTART_ISOLATED_WITH_BACKOFF"
+            or row["restart_policy"] != "FAIL_CLOSED_ENGINE_INPUT"
             or row["drain_behavior"] != "STOP_WITHOUT_INVENTORY"
         ):
-            raise ProcessManifestError(f"research_fault_isolation:{row['id']}")
+            raise ProcessManifestError(f"feed_authority_violation:{row['id']}")
     dependencies = {row["id"]: set(row["dependencies"]) for row in resolved}
     visiting: set[str] = set()
     visited: set[str] = set()
@@ -165,7 +160,7 @@ def resolve(root: Path, manifest: dict[str, Any]) -> dict[str, Any]:
         raise ProcessManifestError(f"long_lived_authority_counts:{authority_counts}")
     launcher = (root / manifest["launcher"]).read_text(encoding="utf-8")
     actual_logs = launcher_logs(launcher)
-    if len(actual_logs) != 31 or len(set(actual_logs)) != 31 or set(actual_logs) != declared_logs:
+    if len(actual_logs) != 20 or len(set(actual_logs)) != 20 or set(actual_logs) != declared_logs:
         raise ProcessManifestError("launcher_manifest_parity")
     return {
         "schema": "polymarket_v7_process_manifest_validation_v1",
@@ -173,7 +168,7 @@ def resolve(root: Path, manifest: dict[str, Any]) -> dict[str, Any]:
         "process_count": len(resolved),
         "launcher_child_count": len(actual_logs),
         "launcher_manifest_parity": True,
-        "research_fault_isolation": True,
+        "feed_zero_authority": True,
         "dependency_graph_acyclic": True,
         "authority_counts": authority_counts,
         "processes": resolved,
@@ -192,7 +187,7 @@ def main() -> int:
         result = resolve(root, manifest)
         summary = {key: result[key] for key in (
             "schema", "paper_only", "process_count", "launcher_child_count",
-            "launcher_manifest_parity", "research_fault_isolation",
+            "launcher_manifest_parity", "feed_zero_authority",
             "dependency_graph_acyclic", "authority_counts",
         )}
         rendered = json.dumps(result if args.output else summary, indent=2, sort_keys=True) + "\n"

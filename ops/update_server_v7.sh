@@ -339,8 +339,6 @@ runtime=read('control/runtime_status.json')
 portfolio=read('control/portfolio_state.json')
 external_status=read('external_fair/paper_router_status.json')
 external_state=read('external_fair/paper_router_state.json')
-micro_status=read('micro_taker/status.json')
-micro_state=read('micro_taker/state.json')
 maker_status=read('micro_maker/status.json')
 maker_state=read('micro_maker/state.json')
 assert sentinel.get('nonce') == nonce and sentinel.get('paper_only') is True
@@ -370,53 +368,11 @@ def prove_never_started(sleeve_name):
         and sleeve.get('source') in {'not_started','zero_authority_budget'}
         and sleeve.get('killed') is False and abs(equity-budget) <= 1e-9
     )
-micro_absent=not micro_status and not micro_state
 maker_absent=not maker_status and not maker_state
-if micro_absent:
-    assert prove_never_started('micro_taker')
-    micro_status={'paper_only':True,'authenticated_execution':False,'open_positions':0}
-    micro_state={'positions':{}}
 if maker_absent:
     assert prove_never_started('micro_maker')
     maker_status={'paper_only':True,'authenticated_execution':False,'killed':False}
     maker_state={'inventory':{}}
-micro_zero_authority_research=(
-    bool(micro_status)
-    and micro_status.get('schema') == 'polymarket_v7_micro_taker_status_v1'
-    and micro_status.get('model_sha') == runtime.get('model_sha')
-    and micro_status.get('paper_only') is True
-    and micro_status.get('authenticated_execution') is False
-    and micro_status.get('real_order_submission') is False
-    and micro_status.get('execution_authority') == 'RESEARCH_ONLY_ZERO_AUTHORITY'
-    and micro_status.get('capital_authority') is False
-    and micro_status.get('inventory_authority') is False
-    and micro_status.get('ledger_writer_authority') is False
-    and micro_status.get('order_authority') is False
-    and micro_status.get('oms_authority') is False
-    and micro_status.get('research_only') is True
-    and micro_status.get('inventory_state_created') is False
-    and abs(int(runtime.get('timestamp',0))-int(micro_status.get('timestamp',-31))) <= 30
-    and micro_state.get('positions') is None
-    and (
-        not micro_state
-        or (
-            micro_state.get('schema') == 'polymarket_v7_micro_taker_status_v1'
-            and micro_state.get('model_sha') == runtime.get('model_sha')
-            and micro_state.get('paper_only') is True
-            and micro_state.get('authenticated_execution') is False
-            and micro_state.get('real_order_submission') is False
-            and micro_state.get('execution_authority') == 'RESEARCH_ONLY_ZERO_AUTHORITY'
-            and micro_state.get('inventory_state_created') is False
-        )
-    )
-)
-if micro_zero_authority_research:
-    # The research worker persists model/dataset state under state.json, not an
-    # execution inventory.  Its explicit zero-authority contract and
-    # inventory_state_created=false prove that a missing positions map is an
-    # intentional absence of executable state.
-    micro_status=dict(micro_status, open_positions=0)
-    micro_state=dict(micro_state, positions={})
 maker_zero_authority_observer=(
     bool(maker_status) and not maker_state
     and maker_status.get('schema') == 'polymarket_v7_professional_maker_status_v1'
@@ -442,11 +398,10 @@ if maker_zero_authority_observer:
     # complete proof that it cannot create or retain a PAPER position.
     maker_state={'inventory':{}}
 assert external_status.get('paper_only') is True and external_status.get('authenticated_execution') is False
-assert micro_status.get('paper_only') is True and micro_status.get('authenticated_execution') is False
 assert maker_status.get('paper_only') is True and maker_status.get('authenticated_execution') is False
-external_positions=external_state.get('positions'); micro_positions=micro_state.get('positions')
+external_positions=external_state.get('positions')
 maker_inventory=maker_state.get('inventory')
-assert isinstance(external_positions,dict) and isinstance(micro_positions,dict)
+assert isinstance(external_positions,dict)
 assert isinstance(maker_inventory,dict)
 # paper_router_state.positions is the counterfactual SHADOW book. It is not
 # execution inventory and must never hold an exact-SHA cutover hostage. The
@@ -457,7 +412,6 @@ counterfactual_open=sum(
     1 for row in external_positions.values()
     if isinstance(row,dict) and row.get('settled') is not True
 )
-micro_open=len(micro_positions)
 maker_open=0
 for row in maker_inventory.values():
     assert isinstance(row,dict)
@@ -466,10 +420,9 @@ for row in maker_inventory.values():
     maker_open += int(yes > 1e-9) + int(no > 1e-9)
 assert external_open >= 0
 assert int(external_status.get('counterfactual_open_positions',-1)) == counterfactual_open
-assert int(micro_status.get('open_positions',-1)) == micro_open
-assert external_open == 0 and micro_open == 0
+assert external_open == 0
 assert maker_status.get('killed') is not True
-# Every supported incumbent is drain-aware. External and micro must already be
+# Every supported incumbent is drain-aware. External must already be
 # flat; Maker only needs to prove entry is frozen because its durable inventory
 # is terminalized immediately afterward by target-SHA code.
 if runtime_alive:
@@ -477,12 +430,6 @@ if runtime_alive:
     assert external_status.get('drain_complete') is True
     assert external_status.get('order_submission_enabled') is False
     assert external_status.get('blocker') == 'CUTOVER_DRAIN'
-    assert micro_status.get('drain_requested') is True
-    assert micro_status.get('drain_complete') is True
-    if micro_zero_authority_research:
-        assert micro_status.get('inventory_state_created') is False
-    else:
-        assert micro_status.get('new_risk_frozen') is True
     if maker_zero_authority_observer:
         assert maker_status.get('new_risk_frozen') is True and maker_open == 0
     else:
@@ -685,7 +632,7 @@ import json,sys
 from pathlib import Path
 root=Path(sys.argv[1])
 m=json.loads((root/'monitoring/v7_monitoring_manifest.json').read_text())
-assert m.get('schema')=='polymarket_v7_monitoring_manifest_v2'
+assert m.get('schema')=='polymarket_v7_monitoring_manifest_v3'
 assert m.get('version')==7
 assert m.get('paper_only') is True
 assert m.get('authenticated_execution') is False
@@ -706,15 +653,7 @@ for rel in (
     'scripts/v7_fee_reward_registry.py',
     'scripts/v7_generate_economic_artifacts.py',
     'scripts/v7_exact_sha_ci_gate.py',
-    'scripts/v7_research_shadow_supervisor.py',
-    'scripts/v7_slow_economic_shadow_supervisor.py',
-    'scripts/v7_semantic_mapping.py',
-    'scripts/v7_sports_collector.py',
-    'scripts/v7_cross_platform_collector.py',
-    'scripts/v7_osint_mapping_collector.py',
     'config/v7_live_model_scope.json',
-    'config/v7_external_inputs.json',
-    'config/v7_external_mappings.json',
     'config/v7_external_fair_rule_approvals.json',
     'config/v7_runtime_supervision.json',
     'config/v7_data_retention.json',
@@ -747,12 +686,6 @@ prevalidate_candidate(){
       scripts/v7_portfolio_guard.py \
       scripts/v7_prepare_cutover_run_root.py \
       scripts/v7_finalize_maker_cutover.py \
-      scripts/v7_research_shadow_supervisor.py \
-      scripts/v7_slow_economic_shadow_supervisor.py \
-      scripts/v7_semantic_mapping.py \
-      scripts/v7_sports_collector.py \
-      scripts/v7_cross_platform_collector.py \
-      scripts/v7_osint_mapping_collector.py \
       scripts/v7_rtds_external_fair_monitor.py \
       scripts/v7_external_fair_paper_router.py \
       scripts/v7_evidence_capital_allocator.py \
@@ -772,8 +705,6 @@ prevalidate_candidate(){
     python3 -m json.tool config/v7_runtime_supervision.json >/dev/null
     python3 -m json.tool config/v7_data_retention.json >/dev/null
     python3 -m json.tool config/v7_live_model_scope.json >/dev/null
-    python3 -m json.tool config/v7_external_inputs.json >/dev/null
-    python3 -m json.tool config/v7_external_mappings.json >/dev/null
   )
   # Keep the exact target worktree until cleanup. Cutover marking/finalization
   # must use candidate code, not the older incumbent checkout.
@@ -1121,25 +1052,26 @@ runtime_health(){
 import csv,json,os,sys,time
 from pathlib import Path
 root=Path(sys.argv[1]); sha=sys.argv[2]; now=int(time.time())
-required=[root/'control/runtime_status.json',root/'control/portfolio_state.json',root/'control/allocations/manifest.json',root/'control/evidence_capital_allocator.json',root/'control/fee_reward_registry.json',root/'control/research_sleeves_manifest.json',root/'control/slow_research_shadow_manifest.json',root/'control/retention_status.json',root/'osint/status.json',root/'osint/mapping_status.json',root/'shadow/sports_latency/component_status.json',root/'shadow/cross_platform/component_status.json',root/'market_open/status.json',root/'graph_rv/status.json',root/'external_fair/paper_router_status.json',root/'canonical_economics.json',root/'ledger/execution.jsonl',root/'trade_tape.csv',root/'trade_recorder_status.json']
+required=[root/'control/runtime_status.json',root/'control/portfolio_state.json',root/'control/allocations/manifest.json',root/'control/evidence_capital_allocator.json',root/'control/fee_reward_registry.json',root/'control/retention_status.json',root/'structural_relations/verified_relations.csv',root/'external_fair/paper_router_status.json',root/'canonical_economics.json',root/'ledger/execution.jsonl',root/'trade_tape.csv',root/'trade_recorder_status.json']
 assert all(p.exists() for p in required), [str(p) for p in required if not p.exists()]
 runtime=json.loads((root/'control/runtime_status.json').read_text())
 portfolio=json.loads((root/'control/portfolio_state.json').read_text())
-graph=json.loads((root/'graph_rv/status.json').read_text())
 router=json.loads((root/'external_fair/paper_router_status.json').read_text())
 economics=json.loads((root/'canonical_economics.json').read_text())
 fee_reward=json.loads((root/'control/fee_reward_registry.json').read_text())
 retention=json.loads((root/'control/retention_status.json').read_text())
 assert runtime.get('version')==7 and runtime.get('model_sha')==sha
 assert runtime.get('paper_only') is True and runtime.get('authenticated_execution') is False and runtime.get('real_order_submission') is False
+assert set(runtime.get('economic_engines') or [])=={'CRYPTO_SETTLEMENT_ENGINE','STRUCTURAL_ARB_ENGINE'}
+assert runtime.get('economic_new_risk_ready') is False
 assert all(str(runtime.get(k) or '') for k in ('config_hash','policy_hash','model_hash','run_id','ledger_id','server_id'))
 pid=int(runtime.get('pid') or 0); assert pid>0; os.kill(pid,0)
 assert now-int(runtime.get('timestamp') or 0)<=180
+assert portfolio.get('schema')=='polymarket_v7_portfolio_guard_v2'
+assert set(portfolio.get('engines') or {})=={'CRYPTO_SETTLEMENT_ENGINE','STRUCTURAL_ARB_ENGINE'}
 assert portfolio.get('paper_only') is True and portfolio.get('authenticated_execution') is False
 assert portfolio.get('killed') is False and float(portfolio.get('drawdown',1))<.15
 assert now-int(portfolio.get('timestamp') or 0)<=30
-assert graph.get('paper_only') is True and graph.get('authenticated_execution') is False
-assert now-int(graph.get('timestamp') or 0)<=180
 assert router.get('code_sha')==sha and router.get('state')=='RUNNING'
 assert router.get('paper_only') is True and router.get('authenticated_execution') is False and router.get('real_order_submission') is False
 assert int(router.get('book_requests') or 0)>0
@@ -1153,6 +1085,8 @@ assert fee_reward.get('unknown_fee_policy')=='NON_EXECUTABLE' and fee_reward.get
 assert int(fee_reward.get('market_count') or 0)>0 and int(fee_reward.get('executable_market_count') or 0)>0
 assert retention.get('schema')=='polymarket_v7_retention_status_v1' and retention.get('expected_sha')==sha
 assert retention.get('paper_only') is True and retention.get('authenticated_execution') is False
+for removed in ('graph_rv','micro_taker','ranking','pca','local_factor','wallet_intelligence','market_open','osint','sports_latency','cross_platform'):
+    assert not (root/removed).exists(), removed
 with (root/'trade_tape.csv').open(newline='',encoding='utf-8') as handle: rows=list(csv.DictReader(handle))
 recorder=json.loads((root/'trade_recorder_status.json').read_text())
 if rows:
@@ -1177,28 +1111,12 @@ PY
   grep -q '^polymarket_v7_paper_only_contract_ok 1$' <<<"$metrics" || return 1
   grep -q '^polymarket_v7_authenticated_execution_disabled 1$' <<<"$metrics" || return 1
   grep -q '^polymarket_v7_ledger_valid 1$' <<<"$metrics" || return 1
-  grep -q '^polymarket_v7_strategy_registry_enabled 15$' <<<"$metrics" || return 1
-  grep -q '^polymarket_v7_research_sleeves_attached 3$' <<<"$metrics" || return 1
-  grep -q '^polymarket_v7_research_supervisor_alive 1$' <<<"$metrics" || return 1
-  grep -q '^polymarket_v7_research_manifest_fresh 1$' <<<"$metrics" || return 1
+  grep -q '^polymarket_v7_live_algorithm_count 2$' <<<"$metrics" || return 1
+  grep -q '^polymarket_v7_legacy_algorithm_count 0$' <<<"$metrics" || return 1
   grep -q '^polymarket_external_fair_present 1$' <<<"$metrics" || return 1
   awk '$1=="polymarket_external_fair_router_book_requests_total"{found=1; if ($2+0>0) ok=1} END{exit !(found&&ok)}' <<<"$metrics" || return 1
   curl -fsS http://127.0.0.1:9108/external-fair.json >/dev/null || return 1
-  grep -q '^polymarket_v7_live_model_target_count 12$' <<<"$metrics" || return 1
-  local operational blocked blocked_config blocked_external target_operational
-  operational="$(awk '$1=="polymarket_v7_live_model_operational_count"{print int($2)}' <<<"$metrics")"
-  blocked="$(awk '$1=="polymarket_v7_live_model_blocked_count"{print int($2)}' <<<"$metrics")"
-  blocked_config="$(awk '$1=="polymarket_v7_live_model_blocked_config_count"{print int($2)}' <<<"$metrics")"
-  blocked_external="$(awk '$1=="polymarket_v7_live_model_blocked_external_count"{print int($2)}' <<<"$metrics")"
-  target_operational="$(awk '$1=="polymarket_v7_live_model_target_operational"{print int($2)}' <<<"$metrics")"
-  test "$((operational + blocked))" -eq 12 || return 1
-  test "$((blocked_config + blocked_external))" -eq "$blocked" || return 1
-  if [[ "$operational" -eq 12 ]]; then
-    test "$target_operational" -eq 1 || return 1
-  else
-    test "$target_operational" -eq 0 || return 1
-  fi
-  grep -q '^polymarket_v7_live_model_scope_wired 1$' <<<"$metrics" || return 1
+  grep -q '^polymarket_v7_live_algorithm_scope_wired 1$' <<<"$metrics" || return 1
   curl -fsS http://127.0.0.1:9090/-/ready >/dev/null || return 1
   curl -fsS http://127.0.0.1:3000/api/health >/dev/null || return 1
   curl -fsS "http://127.0.0.1:3000/api/dashboards/uid/$uid" >/dev/null || return 1

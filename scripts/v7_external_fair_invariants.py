@@ -113,10 +113,6 @@ def check_external_fair_invariants(
         transport = str(oracle.get("transport_binding") or "").upper()
         if "UNBOUND" in transport or not transport:
             failures.append("ACTIVE_AUTHORITY_REQUIRES_VERIFIED_ORACLE_TRANSPORT")
-        old_taker = external.get("old_micro_taker_migration")
-        old_taker = old_taker if isinstance(old_taker, dict) else {}
-        if old_taker.get("overlapping_execution_authority_removed") is not True:
-            failures.append("OLD_MICRO_TAKER_OVERLAP_NOT_PROVEN_REMOVED")
         if runtime_status:
             if runtime_status.get("single_execution_owner") is not True:
                 failures.append("RUNTIME_SINGLE_EXECUTION_OWNER_NOT_PROVEN")

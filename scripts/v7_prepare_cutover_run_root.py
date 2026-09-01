@@ -262,14 +262,15 @@ def prepare(
         return {"source": sleeve["source"], "budget": budget, "equity": equity}
 
     if not micro_status and not micro_state:
-        prove_never_started("micro_taker", {"not_started", "zero_authority_budget"})
+        # micro_taker was removed from V7.  Exact absence in a stopped runtime
+        # is the canonical terminal state; no compatibility sleeve is created.
         micro_status = {
             "paper_only": True, "authenticated_execution": False, "open_positions": 0,
         }
         micro_state = {"positions": {}}
-        prior_never_started_sleeves.append("micro_taker")
     if not maker_status and not maker_state:
-        maker_proof = prove_never_started("micro_maker", {"not_started"})
+        maker_proof = prove_never_started(
+            "micro_maker", {"not_started", "zero_authority_budget"})
         absence = maker_receipt.get("absence_proof") \
             if isinstance(maker_receipt.get("absence_proof"), dict) else {}
         if (

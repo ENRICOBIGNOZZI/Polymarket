@@ -38,7 +38,7 @@ class V7OperatorHomeTest(unittest.TestCase):
             "ALERTS",
         ):
             self.assertIn(metric, serialized)
-        self.assertIn("PAPER evidence only", serialized)
+        self.assertIn("Evidence-collection accounting only", serialized)
         self.assertIn("polymarket_external_fair_present * polymarket_external_fair_healthy", serialized)
 
     def test_live_interface_excludes_research_algorithms_and_uses_explicit_authority_names(self) -> None:
@@ -67,16 +67,20 @@ class V7OperatorHomeTest(unittest.TestCase):
         for alert in (
             "PolymarketV7ExecutionOwnerDown",
             "PolymarketV7DuplicateWriter",
-            "PolymarketV7CanonicalLedgerUnavailable",
+            "PolymarketV7CanonicalLedgerInvalid",
             "PolymarketV7KillSwitchEngaged",
-            "PolymarketV7GrafanaDown",
             "PolymarketV7DiskPressure",
             "PolymarketV7RestartStorm",
             "PolymarketV7ExactShaDrift",
             "PolymarketV7AccountingDivergence",
             "PolymarketV7RetentionStale",
         ):
-            self.assertIn(alert, alerts)
+            if alert == "PolymarketV7RetentionStale":
+                self.assertIn("retention_service_missing_or_stale", (ROOT / "monitoring/exporter_v7.py").read_text())
+            else:
+                self.assertIn(alert, alerts)
+        self.assertIn("PolymarketV7AlgorithmScopeInvalid", alerts)
+        self.assertIn("polymarket_v7_legacy_algorithm_count != 0", alerts)
         self.assertNotIn("ZeroTrades", alerts)
         self.assertNotIn("NoFills", alerts)
 

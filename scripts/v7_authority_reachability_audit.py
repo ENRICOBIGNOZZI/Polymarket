@@ -93,7 +93,7 @@ def audit(root: Path, registry: dict[str, Any], edge_registry: dict[str, Any]) -
         "edge_registry": "config/v7_authority_edges.json",
         "owners": registry["owners"],
         "owner_counts": authority_report["owner_counts"],
-        "economic_engines": registry["economic_engines"],
+        "live_algorithms": sorted(registry["live_algorithms"]),
         "decision_chain": registry["decision_chain"],
         "static_ledger_transport_edges": rows,
         "unexplained_edges": [],

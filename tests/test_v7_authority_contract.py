@@ -22,7 +22,7 @@ class AuthorityContractTests(unittest.TestCase):
         self.assertTrue(report["passed"])
         self.assertEqual(report["economic_engine_count"], 2)
         self.assertEqual(report["owner_counts"], {key: 1 for key in OWNER_KEYS})
-        self.assertEqual(report["research_zero_authority_count"], 10)
+        self.assertEqual(report["legacy_algorithm_count"], 0)
 
     def test_duplicate_owner_injection_fails_closed(self) -> None:
         value = copy.deepcopy(registry())
@@ -34,15 +34,15 @@ class AuthorityContractTests(unittest.TestCase):
 
     def test_component_cannot_belong_to_both_engines(self) -> None:
         value = copy.deepcopy(registry())
-        value["economic_engines"]["STRUCTURAL_ARB_ENGINE"]["components"].append(
+        value["live_algorithms"]["STRUCTURAL_ARB_ENGINE"]["components"].append(
             "professional_maker"
         )
         with self.assertRaises(AuthorityContractError):
             validate(value)
 
-    def test_research_family_cannot_enter_an_economic_engine(self) -> None:
+    def test_removed_legacy_family_cannot_enter_a_live_algorithm(self) -> None:
         value = copy.deepcopy(registry())
-        value["economic_engines"]["CRYPTO_SETTLEMENT_ENGINE"]["components"].append("osint")
+        value["live_algorithms"]["CRYPTO_SETTLEMENT_ENGINE"]["components"].append("osint")
         with self.assertRaises(AuthorityContractError):
             validate(value)
 

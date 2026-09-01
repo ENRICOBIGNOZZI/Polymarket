@@ -116,12 +116,6 @@ def validate(root: Path, expected_head: str | None) -> dict[str, str]:
         "scripts/v7_crypto_settlement_engine_contract.py",
         "scripts/v7_fast_structural_feasibility.py",
         "scripts/v7_portfolio_guard.py",
-        "scripts/v7_research_shadow_supervisor.py",
-        "scripts/v7_slow_economic_shadow_supervisor.py",
-        "scripts/v7_semantic_mapping.py",
-        "scripts/v7_sports_collector.py",
-        "scripts/v7_cross_platform_collector.py",
-        "scripts/v7_osint_mapping_collector.py",
         "scripts/v7_learned_execution_model.py",
         "scripts/v7_polymarket_v2_contracts.py",
         "scripts/v7_platform_drift_monitor.py",
@@ -173,19 +167,15 @@ def validate(root: Path, expected_head: str | None) -> dict[str, str]:
         "config/v7_runtime_supervision.json",
         "config/v7_strategy_registry.json",
         "config/v7_live_model_scope.json",
-        "config/v7_external_inputs.json",
-        "config/v7_external_mappings.json",
         "config/v7_frequency_matrix.json",
         "config/v7_external_fair.json",
         "config/v7_crypto_settlement_engine.json",
-        "config/v7_research_data_plane.json",
         "config/v7_process_manifest.json",
         "config/v7_economic_readiness.json",
         "config/v7_authority_registry.json",
         "config/v7_structural_arb_engine.json",
         "config/v7_authority_edges.json",
         "scripts/v7_authority_reachability_audit.py",
-        "scripts/v7_research_data_plane_contract.py",
         "scripts/v7_process_manifest.py",
         "scripts/v7_process_runtime.sh",
         "scripts/v7_surface_classification.py",
@@ -201,70 +191,33 @@ def validate(root: Path, expected_head: str | None) -> dict[str, str]:
             fail(f"V7 cutover blocked: required file missing: {rel}")
 
     registry = load_json(root / "config/v7_strategy_registry.json")
-    enabled_families = {
-        str(row.get("family") or "")
-        for row in registry.get("strategies", [])
+    enabled_algorithms = {
+        str(row.get("id") or "")
+        for row in registry.get("live_algorithms", [])
         if isinstance(row, dict) and row.get("enabled") is True
     }
-    if registry.get("schema") != "polymarket_v7_strategy_registry_v1" or len(enabled_families) != 15:
-        fail("V7 cutover blocked: strategy registry must contain exactly 15 enabled V7 families")
+    expected_algorithms = {"CRYPTO_SETTLEMENT_ENGINE", "STRUCTURAL_ARB_ENGINE"}
+    if (registry.get("schema") != "polymarket_v7_live_algorithm_registry_v2"
+            or enabled_algorithms != expected_algorithms
+            or registry.get("component_independent_authority") is not False):
+        fail("V7 cutover blocked: registry must contain exactly the two live algorithms")
     scope = load_json(root / "config/v7_live_model_scope.json")
-    target_live = set(scope.get("target_live_families") or [])
-    excluded_live = set(scope.get("excluded_live_families") or [])
-    research_shadow = set(scope.get("research_shadow_supervised_families") or [])
-    paper_engines = set(scope.get("paper_execution_engines") or [])
-    if (scope.get("schema") != "polymarket_v7_live_model_scope_v1"
+    paper_engines = set(scope.get("live_algorithms") or [])
+    if (scope.get("schema") != "polymarket_v7_live_engine_scope_v2"
             or scope.get("version") != 7
-            or scope.get("target_live_count") != 12
+            or scope.get("live_algorithm_count") != 2
             or scope.get("paper_only") is not True
             or scope.get("authenticated_execution") is not False
-            or scope.get("real_order_submission") is not False):
-        fail("V7 cutover blocked: live model scope identity/safety contract invalid")
-    if target_live | excluded_live != enabled_families or target_live & excluded_live:
-        fail("V7 cutover blocked: live/excluded model scope must exactly partition the 15-family registry")
-    if excluded_live != {"ranking", "pca", "local_factor"}:
-        fail("V7 cutover blocked: only ranking, pca and local_factor may be excluded from live-PAPER")
-    if set(scope.get("always_on_economic_shadow_families") or []) != excluded_live:
-        fail("V7 cutover blocked: excluded slow families must remain always-on economic shadow")
-    if research_shadow != {"sports_latency", "cross_platform", "wallet_intelligence"}:
-        fail("V7 cutover blocked: research-shadow supervisor scope is not the exact approved three-family set")
-    if paper_engines != {"CRYPTO_SETTLEMENT_ENGINE", "STRUCTURAL_ARB_ENGINE"}:
+            or scope.get("real_order_submission") is not False
+            or scope.get("real_capital_at_risk") is not False
+            or scope.get("component_independent_authority") is not False):
+        fail("V7 cutover blocked: two-algorithm scope identity/safety contract invalid")
+    if paper_engines != expected_algorithms:
         fail("V7 cutover blocked: exactly two economic engines must own PAPER decisions")
-    if set(scope.get("component_shadow_families") or []) != {
-        "crypto_settlement_fair", "professional_maker", "crypto_informed_taker",
-        "hard_arb", "fast_structural",
-    }:
-        fail("V7 cutover blocked: economic components must have zero independent authority")
     governance = scope.get("governance") if isinstance(scope.get("governance"), dict) else {}
     if (governance.get("single_execution_owner") is not True
-            or governance.get("research_has_capital") is not False
-            or governance.get("research_has_oms_authority") is not False
-            or governance.get("research_has_ledger_writer_authority") is not False
             or governance.get("automatic_promotion") is not False):
-        fail("V7 cutover blocked: research-shadow ownership/governance contract invalid")
-
-    external_inputs = load_json(root / "config/v7_external_inputs.json")
-    if (external_inputs.get("schema") != "polymarket_v7_external_inputs_v1"
-            or external_inputs.get("version") != 7
-            or external_inputs.get("paper_only") is not True
-            or external_inputs.get("authenticated_execution") is not False
-            or external_inputs.get("real_order_submission") is not False
-            or external_inputs.get("automatic_promotion") is not False):
-        fail("V7 cutover blocked: external input safety contract invalid")
-    sports = external_inputs.get("sports_latency") if isinstance(external_inputs.get("sports_latency"), dict) else {}
-    if sports.get("primary_provider") != "sportradar_soccer_v4_push":
-        fail("V7 cutover blocked: canonical sports provider is not Sportradar soccer v4 push")
-    cross = external_inputs.get("cross_platform") if isinstance(external_inputs.get("cross_platform"), dict) else {}
-    if cross.get("second_venue") != "kalshi":
-        fail("V7 cutover blocked: canonical read-only second venue is not Kalshi")
-    external_mappings = load_json(root / "config/v7_external_mappings.json")
-    if (external_mappings.get("schema") != "polymarket_v7_external_mapping_registry_v1"
-            or external_mappings.get("version") != 7
-            or external_mappings.get("paper_only") is not True
-            or external_mappings.get("automatic_promotion") is not False
-            or any(not isinstance(external_mappings.get(name), list)
-                   for name in ("osint", "sports_latency", "cross_platform"))):
-        fail("V7 cutover blocked: external semantic mapping registry invalid")
+        fail("V7 cutover blocked: live-algorithm governance contract invalid")
 
     adaptive_universe = load_json(root / "config/v7_adaptive_universe.json")
     if (adaptive_universe.get("schema") != "polymarket_v7_adaptive_universe_config_v1"

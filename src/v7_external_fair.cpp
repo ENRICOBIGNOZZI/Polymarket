@@ -577,7 +577,7 @@ StrategyIntent to_strategy_intent(
     intent.decision_monotonic_ns = decision_monotonic_ns;
     intent.price_tick = action.price_tick;
     intent.quantity_microunits = action.quantity_microunits;
-    intent.strategy_id = StrategyId::ExternalInformation;
+    intent.strategy_id = StrategyId::CryptoSettlementEngine;
     intent.side = action.side;
     intent.expected_edge = action.robust_ev_per_share;
     intent.expected_cost = action.risk_cost + action.capital_time_cost;

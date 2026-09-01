@@ -99,7 +99,7 @@ class V7LivePaperValidationContractTest(unittest.TestCase):
             '"partial_unwind_required"',
             '"cost_vector_required"',
             '"config/v7_live_model_scope.json"',
-            '"scripts/v7_research_shadow_supervisor.py"',
+            '"polymarket_v7_live_algorithm_registry_v2"',
             '"config/v7_polymarket_v2_contracts.json"',
             '"config/v7_risk_tiers.json"',
             '"config/v7_attestation_trust.json"',

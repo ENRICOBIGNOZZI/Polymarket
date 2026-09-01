@@ -18,13 +18,10 @@ EXTERNAL_FAIR_POLICY="${PM_V7_EXTERNAL_FAIR_POLICY:-config/v7_external_fair.json
 EXTERNAL_FORWARD_MIN_DURATION_SECONDS="${PM_V7_EXTERNAL_FORWARD_MIN_DURATION_SECONDS:-}"
 EXTERNAL_SOURCE_REGISTRY="${PM_V7_EXTERNAL_SOURCE_REGISTRY:-config/v7_external_source_registry.json}"
 CI_REPOSITORY="${PM_V7_CI_REPOSITORY:-ENRICOBIGNOZZI/Polymarket}"
-OSINT_SOURCE_REGISTRY="${PM_V7_OSINT_SOURCE_REGISTRY:-config/v7_osint_sources.json}"
 LIVE_MODEL_SCOPE="${PM_V7_LIVE_MODEL_SCOPE:-config/v7_live_model_scope.json}"
 CRYPTO_SETTLEMENT_ENGINE_POLICY="${PM_V7_CRYPTO_SETTLEMENT_ENGINE_POLICY:-config/v7_crypto_settlement_engine.json}"
 CRYPTO_SETTLEMENT_MARKET_REGISTRY="${PM_V7_CRYPTO_SETTLEMENT_MARKET_REGISTRY:-config/v7_crypto_settlement_markets.json}"
 CRYPTO_SETTLEMENT_MODEL_REGISTRY="${PM_V7_CRYPTO_SETTLEMENT_MODEL_REGISTRY:-config/v7_crypto_settlement_model_registry.json}"
-EXTERNAL_INPUT_CONFIG="${PM_V7_EXTERNAL_INPUT_CONFIG:-config/v7_external_inputs.json}"
-EXTERNAL_MAPPING_REGISTRY="${PM_V7_EXTERNAL_MAPPING_REGISTRY:-config/v7_external_mappings.json}"
 ADAPTIVE_UNIVERSE_CONFIG="${PM_V7_ADAPTIVE_UNIVERSE_CONFIG:-config/v7_adaptive_universe.json}"
 # The sole legacy-environment compatibility boundary.  Strategy and collector
 # code consume PM_V7_* names only; no value is logged or written to config.
@@ -34,8 +31,6 @@ export PM_V7_BINANCE_TESTNET_API_KEY="${PM_V7_BINANCE_TESTNET_API_KEY:-${PORTFOL
 export PM_V7_BINANCE_TESTNET_API_SECRET="${PM_V7_BINANCE_TESTNET_API_SECRET:-${PORTFOLIO_BINANCE_TESTNET_API_SECRET:-}}"
 export PM_V7_BINANCE_TESTNET_BASE_URL="${PM_V7_BINANCE_TESTNET_BASE_URL:-${PORTFOLIO_BINANCE_TESTNET_BASE_URL:-}}"
 export PM_V7_BINANCE_TESTNET_MARKET="${PM_V7_BINANCE_TESTNET_MARKET:-${PORTFOLIO_BINANCE_TESTNET_MARKET:-}}"
-export PM_V7_SPORTRADAR_API_KEY="${PM_V7_SPORTRADAR_API_KEY:-${SPORTTRADER_API_KEY:-}}"
-export PM_V7_LIMITLESS_API_KEY="${PM_V7_LIMITLESS_API_KEY:-${LIMITLESS_TOKEN:-}}"
 SHA="$(git rev-parse HEAD)"
 if [[ -z "$EXTERNAL_FORWARD_MIN_DURATION_SECONDS" ]]; then
   EXTERNAL_FORWARD_MIN_DURATION_SECONDS="$(python3 - "$EXTERNAL_FAIR_POLICY" <<'PY'
@@ -79,7 +74,7 @@ ALLOC="$CONTROL/allocations"
 KILL="$CONTROL/KILL"
 MAKER_FREEZE="$CONTROL/MAKER_FREEZE"
 LOCK="$CONTROL/runtime.lock"
-mkdir -p "$CONTROL" "$RUN_ROOT/ledger" "$RUN_ROOT/opportunities/inbox" "$RUN_ROOT/research/evidence" "$RUN_ROOT/market_data" "$RUN_ROOT/universe" "$RUN_ROOT/fast_structural" "$RUN_ROOT/graph_rv" "$RUN_ROOT/hard_arb" "$RUN_ROOT/micro_taker" "$RUN_ROOT/micro_maker" "$RUN_ROOT/external" "$RUN_ROOT/external_fair" "$RUN_ROOT/osint" "$RUN_ROOT/market_open" "$RUN_ROOT/shadow/sports_latency" "$RUN_ROOT/shadow/cross_platform" "$RUN_ROOT/shadow/wallet_intelligence" "$RUN_ROOT/shadow/ranking" "$RUN_ROOT/shadow/pca" "$RUN_ROOT/shadow/local_factor" "$RUN_ROOT/learned_execution"
+mkdir -p "$CONTROL" "$RUN_ROOT/ledger" "$RUN_ROOT/opportunities/inbox" "$RUN_ROOT/research/evidence" "$RUN_ROOT/market_data" "$RUN_ROOT/universe" "$RUN_ROOT/fast_structural" "$RUN_ROOT/structural_relations" "$RUN_ROOT/hard_arb" "$RUN_ROOT/micro_maker" "$RUN_ROOT/external" "$RUN_ROOT/external_fair" "$RUN_ROOT/learned_execution"
 touch "$RUN_ROOT/ledger/execution.jsonl"
 
 # The runtime is not allowed to self-assert CI approval through an environment
@@ -97,86 +92,44 @@ EXACT_SHA_CI_GREEN=true
 python3 scripts/v7_external_source_registry.py --registry "$EXTERNAL_SOURCE_REGISTRY" \
   > "$CONTROL/external_source_registry.json"
 
-python3 - "$CONFIG" "$MAKER_POLICY" "$EXTERNAL_FAIR_POLICY" "$OSINT_SOURCE_REGISTRY" "$LIVE_MODEL_SCOPE" "$EXTERNAL_INPUT_CONFIG" "$EXTERNAL_MAPPING_REGISTRY" "$ADAPTIVE_UNIVERSE_CONFIG" "$WS_JSON_ARENA_OBSERVER_MAX_BYTES" "$WS_JSON_ARENA_FILLABILITY_MAX_BYTES" "$WS_JSON_ARENA_TOTAL_BUDGET_BYTES" <<'PY'
+python3 - "$CONFIG" "$MAKER_POLICY" "$EXTERNAL_FAIR_POLICY" "$LIVE_MODEL_SCOPE" "$ADAPTIVE_UNIVERSE_CONFIG" "$WS_JSON_ARENA_OBSERVER_MAX_BYTES" "$WS_JSON_ARENA_FILLABILITY_MAX_BYTES" "$WS_JSON_ARENA_TOTAL_BUDGET_BYTES" <<'PY'
 import json,sys
 cfg=json.load(open(sys.argv[1]))
 v7=cfg.get("v7") or {}
 maker=json.load(open(sys.argv[2]))
 external=json.load(open(sys.argv[3]))
-osint_sources=json.load(open(sys.argv[4]))
-live_scope=json.load(open(sys.argv[5]))
-external_inputs=json.load(open(sys.argv[6]))
-external_mappings=json.load(open(sys.argv[7]))
-adaptive_universe=json.load(open(sys.argv[8]))
+live_scope=json.load(open(sys.argv[4]))
+adaptive_universe=json.load(open(sys.argv[5]))
 registry_path=v7.get("strategy_registry")
 assert isinstance(registry_path,str) and registry_path
 registry=json.load(open(registry_path))
-families={
-    "professional_maker","fast_structural","hard_arb","graph_rv",
-    "crypto_settlement_fair","crypto_informed_taker","micro_taker","osint",
-    "sports_latency","cross_platform","wallet_intelligence","market_open",
-    "ranking","pca","local_factor",
-}
-registered=[row.get("family") for row in registry.get("strategies",[])]
-assert registry.get("schema")=="polymarket_v7_strategy_registry_v1"
-assert set(registered)==families and len(registered)==len(families)
+algorithms={"CRYPTO_SETTLEMENT_ENGINE","STRUCTURAL_ARB_ENGINE"}
+registered=[row.get("id") for row in registry.get("live_algorithms",[])]
+assert registry.get("schema")=="polymarket_v7_live_algorithm_registry_v2"
+assert set(registered)==algorithms and len(registered)==2
 assert registry.get("safety",{}).get("paper_only") is True
 assert registry.get("safety",{}).get("authenticated_execution") is False
 assert registry.get("safety",{}).get("real_order_submission") is False
 assert registry.get("governance",{}).get("automatic_promotion") is False
-assert all(row.get("authority") in {"RESEARCH","SHADOW"} for row in registry.get("strategies",[]))
-assert not any(row.get("authority")=="PAPER" for row in registry.get("strategies",[]))
-assert osint_sources.get("schema") == "polymarket_v7_osint_source_registry_v1"
-assert osint_sources.get("paper_only") is True
-assert osint_sources.get("authenticated_execution") is False
-assert osint_sources.get("real_order_submission") is False
-assert osint_sources.get("sources")
-target=set(live_scope.get("target_live_families") or [])
-excluded=set(live_scope.get("excluded_live_families") or [])
-shadow=set(live_scope.get("research_shadow_supervised_families") or [])
-assert live_scope.get("schema") == "polymarket_v7_live_model_scope_v1"
-assert live_scope.get("version") == 7 and live_scope.get("target_live_count") == 12
+assert all(row.get("mode") == "PAPER" and row.get("enabled") is True for row in registry.get("live_algorithms",[]))
+assert live_scope.get("schema") == "polymarket_v7_live_engine_scope_v2"
+assert live_scope.get("version") == 7 and live_scope.get("live_algorithm_count") == 2
 assert live_scope.get("paper_only") is True
 assert live_scope.get("authenticated_execution") is False
 assert live_scope.get("real_order_submission") is False
-assert target | excluded == families and not target & excluded
-assert excluded == {"ranking", "pca", "local_factor"}
-assert shadow == {"sports_latency", "cross_platform", "wallet_intelligence"}
-assert set(live_scope.get("paper_execution_engines") or [])=={
-    "CRYPTO_SETTLEMENT_ENGINE","STRUCTURAL_ARB_ENGINE",
-}
-assert set(live_scope.get("component_shadow_families") or [])=={
-    "crypto_settlement_fair","professional_maker","crypto_informed_taker",
-    "hard_arb","fast_structural",
-}
-assert set(live_scope.get("research_zero_authority_families") or [])=={
-    "micro_taker","graph_rv","ranking","pca","local_factor",
-    "wallet_intelligence","market_open","osint","sports_latency","cross_platform",
-}
+assert set(live_scope.get("live_algorithms") or []) == algorithms
+assert len(live_scope.get("legacy_algorithm_families_removed") or []) == 10
 governance=live_scope.get("governance") or {}
 assert governance.get("single_execution_owner") is True
-assert governance.get("research_has_capital") is False
-assert governance.get("research_has_oms_authority") is False
-assert governance.get("research_has_ledger_writer_authority") is False
 assert governance.get("automatic_promotion") is False
-assert external_inputs.get("schema") == "polymarket_v7_external_inputs_v1"
-assert external_inputs.get("version") == 7
-assert external_inputs.get("paper_only") is True
-assert external_inputs.get("authenticated_execution") is False
-assert external_inputs.get("real_order_submission") is False
-assert external_mappings.get("schema") == "polymarket_v7_external_mapping_registry_v1"
-assert external_mappings.get("version") == 7
-assert external_mappings.get("paper_only") is True
-assert external_mappings.get("automatic_promotion") is False
-assert all(isinstance(external_mappings.get(name), list) for name in ("osint","sports_latency","cross_platform"))
 assert adaptive_universe.get("schema") == "polymarket_v7_adaptive_universe_config_v1"
 assert adaptive_universe.get("version") == 7
 assert adaptive_universe.get("paper_only") is True
 assert adaptive_universe.get("authenticated_execution") is False
 assert adaptive_universe.get("real_order_submission") is False
-observer_arena=int(sys.argv[9])
-fillability_arena=int(sys.argv[10])
-total_budget=int(sys.argv[11])
+observer_arena=int(sys.argv[6])
+fillability_arena=int(sys.argv[7])
+total_budget=int(sys.argv[8])
 assert cfg.get("engine_version")==7
 assert cfg.get("paper_only") is True
 assert v7.get("paper_only") is True
@@ -216,9 +169,6 @@ assert fillability_arena >= 16*1024*1024
 assert observer_arena + fillability_arena <= total_budget
 PY
 
-python3 scripts/v7_research_data_plane_contract.py \
-  --repository-root "$ROOT" \
-  > "$CONTROL/research_data_plane_contract.json"
 python3 scripts/v7_process_manifest.py \
   --repository-root "$ROOT" \
   --output "$CONTROL/process_manifest_resolved.json"
@@ -277,17 +227,6 @@ python3 scripts/v7_public_https_proxy.py --host 127.0.0.1 --port "$PUBLIC_PROXY_
   >> "$RUN_ROOT/public_https_proxy.log" 2>&1 &
 v7_register_child "$!"
 
-# Limitless exposes markets, orderbooks and finalized trades through public
-# read-only endpoints. A trading token is intentionally never passed here.
-mkdir -p "$RUN_ROOT/shadow/limitless"
-python3 scripts/v7_limitless_collector.py \
-  --repository-root "$ROOT" --config "$EXTERNAL_INPUT_CONFIG" \
-  --mappings "$EXTERNAL_MAPPING_REGISTRY" \
-  --tape "$RUN_ROOT/shadow/limitless/events.jsonl" \
-  --state "$RUN_ROOT/shadow/limitless/collector_state.json" \
-  --status "$RUN_ROOT/shadow/limitless/component_status.json" --interval 15 --loop \
-  >> "$RUN_ROOT/shadow/limitless/collector.log" 2>&1 &
-v7_register_child "$!"
 proxy_ready=0
 for _ in $(seq 1 50); do
   if python3 - "$PUBLIC_PROXY_PORT" <<'PY' >/dev/null 2>&1
@@ -573,20 +512,20 @@ PY
 
 # Build only deterministically proven same-event NegRisk relations. The C++
 # runtime never receives text-similarity candidates or unverified mappings.
-VERIFIED_RELATIONS="$RUN_ROOT/graph_rv/verified_relations.csv"
+VERIFIED_RELATIONS="$RUN_ROOT/structural_relations/verified_relations.csv"
 python3 scripts/v7_relation_builder.py \
   --universe "$RUN_ROOT/universe/current.json" \
-  --registry "$RUN_ROOT/graph_rv/relation_registry.json" \
+  --registry "$RUN_ROOT/structural_relations/relation_registry.json" \
   --runtime-csv "$VERIFIED_RELATIONS" --model-sha "$SHA" \
-  >> "$RUN_ROOT/graph_rv/relation_builder.log" 2>&1
+  >> "$RUN_ROOT/structural_relations/relation_builder.log" 2>&1
 
 (
   while [[ ! -e "$KILL" ]]; do
     python3 scripts/v7_relation_builder.py \
       --universe "$RUN_ROOT/universe/current.json" \
-      --registry "$RUN_ROOT/graph_rv/relation_registry.json" \
+      --registry "$RUN_ROOT/structural_relations/relation_registry.json" \
       --runtime-csv "$VERIFIED_RELATIONS" --model-sha "$SHA" \
-      >> "$RUN_ROOT/graph_rv/relation_builder.log" 2>&1 || true
+      >> "$RUN_ROOT/structural_relations/relation_builder.log" 2>&1 || true
     sleep 60
   done
 ) & v7_register_child "$!"
@@ -781,22 +720,10 @@ v7_register_child "$!"
 
 (
   while [[ ! -e "$KILL" ]]; do
-    python3 scripts/v7_graph_rv_executable_intents.py \
-      --config "$ALLOC/graph_rv.json" \
-      --shared-state "$RUN_ROOT/market_data/shared_state.json" --model-sha "$SHA" \
-      --output "$RUN_ROOT/graph_rv/intents.csv" \
-      --status "$RUN_ROOT/graph_rv/status.json" \
-      >> "$RUN_ROOT/graph_rv/scan.log" 2>&1 || true
-    sleep 15
-  done
-) & v7_register_child "$!"
-
-(
-  while [[ ! -e "$KILL" ]]; do
     python3 scripts/v7_graph_cost_vector.py --run-root "$RUN_ROOT" --model-sha "$SHA" --slippage-bps 5 \
-      >> "$RUN_ROOT/graph_rv/cost_vector.log" 2>&1 || true
+      >> "$RUN_ROOT/structural_relations/cost_vector.log" 2>&1 || true
     python3 scripts/v7_joint_execution_policy.py --ledger "$RUN_ROOT/ledger/execution.jsonl" --model-sha "$SHA" \
-      --output "$RUN_ROOT/learned_execution/joint_policy.json" --strategy GRAPH_RV --min-bundles 20 \
+      --output "$RUN_ROOT/learned_execution/joint_policy.json" --strategy STRUCTURAL_ARB_ENGINE --min-bundles 20 \
       >> "$RUN_ROOT/learned_execution/joint_policy.log" 2>&1 || true
     python3 scripts/v7_learned_execution_model.py --ledger "$RUN_ROOT/ledger/execution.jsonl" --model-sha "$SHA" \
       --output "$RUN_ROOT/learned_execution/oos_report.json" \
@@ -811,120 +738,7 @@ v7_register_child "$!"
   done
 ) & v7_register_child "$!"
 
-(
-  while [[ ! -e "$KILL" ]]; do
-    python3 scripts/v7_micro_taker_worker.py \
-      --config "$ALLOC/micro_taker.json" --run-dir "$RUN_ROOT/micro_taker" \
-      --shared-state "$RUN_ROOT/market_data/shared_state.json" --model-sha "$SHA" \
-      --live-flow "$RUN_ROOT/market_data/live_trade_flow.json" \
-      --trade-tape "$RUN_ROOT/trade_tape.csv" --markets "$ACTIVE_SCAN_MARKET_BUDGET" --min-liquidity 2 \
-      --horizon-seconds 30 --max-probe-usd 125 --min-edge 0.001 --slippage-bps 5 \
-      >> "$RUN_ROOT/micro_taker/runtime.log" 2>&1 || true
-    sleep 5
-  done
-) & v7_register_child "$!"
-
-# Research-only official-source OSINT tape. It has no model-to-intent bridge,
-# OMS, capital, risk, order, or promotion authority. Source failures are
-# recorded per source and do not mutate or stop the economic PAPER runtime.
-python3 scripts/v7_osint_collector.py \
-  --registry "$OSINT_SOURCE_REGISTRY" \
-  --tape "$RUN_ROOT/osint/raw_events.jsonl" \
-  --state "$RUN_ROOT/osint/collector_state.json" \
-  --status "$RUN_ROOT/osint/status.json" \
-  --interval 60 --loop \
-  >> "$RUN_ROOT/osint/collector.log" 2>&1 &
-v7_register_child "$!"
-
-# Candidate discovery is isolated from verification: lexical similarity may
-# populate a review queue, but only exact attested semantic bundles can activate
-# the verified-only forward reaction path.
-python3 scripts/v7_osint_mapping_collector.py \
-  --repository-root "$ROOT" \
-  --config "$EXTERNAL_INPUT_CONFIG" \
-  --mappings "$EXTERNAL_MAPPING_REGISTRY" \
-  --raw-tape "$RUN_ROOT/osint/raw_events.jsonl" \
-  --candidate-tape "$RUN_ROOT/osint/mapping_candidates.jsonl" \
-  --forward-tape "$RUN_ROOT/osint/forward_reactions.jsonl" \
-  --state "$RUN_ROOT/osint/mapping_state.json" \
-  --status "$RUN_ROOT/osint/mapping_status.json" \
-  --interval 60 --loop \
-  >> "$RUN_ROOT/osint/mapping.log" 2>&1 &
-v7_register_child "$!"
-
-# Research-only market-creation/milestone collector. Its first snapshot is a
-# baseline and can never masquerade as a burst of new listings. Exact semantic
-# verification and a separate race/edge-decay gate are required before any
-# downstream authority can change.
-python3 scripts/v7_market_open_collector.py \
-  --tape "$RUN_ROOT/market_open/events.jsonl" \
-  --state "$RUN_ROOT/market_open/collector_state.json" \
-  --status "$RUN_ROOT/market_open/status.json" \
-  --interval 5 --loop \
-  >> "$RUN_ROOT/market_open/collector.log" 2>&1 &
-v7_register_child "$!"
-
-# Sports uses the credential-gated Sportradar Realtime adapter. Without its key
-# it remains alive and publishes CREDENTIALS_REQUIRED rather than fabricating a
-# feed, latency sample or mapping.
-python3 scripts/v7_sports_collector.py \
-  --repository-root "$ROOT" \
-  --config "$EXTERNAL_INPUT_CONFIG" \
-  --mappings "$EXTERNAL_MAPPING_REGISTRY" \
-  --tape "$RUN_ROOT/shadow/sports_latency/events.jsonl" \
-  --state "$RUN_ROOT/shadow/sports_latency/collector_state.json" \
-  --status "$RUN_ROOT/shadow/sports_latency/component_status.json" \
-  --interval 10 --loop \
-  >> "$RUN_ROOT/shadow/sports_latency/collector.log" 2>&1 &
-v7_register_child "$!"
-
-# Kalshi public REST market data begins collecting immediately. Polling is
-# explicitly distinguished from event latency; semantic equivalence and fees
-# remain independent fail-closed gates.
-python3 scripts/v7_cross_platform_collector.py \
-  --repository-root "$ROOT" \
-  --config "$EXTERNAL_INPUT_CONFIG" \
-  --mappings "$EXTERNAL_MAPPING_REGISTRY" \
-  --tape "$RUN_ROOT/shadow/cross_platform/books.jsonl" \
-  --state "$RUN_ROOT/shadow/cross_platform/collector_state.json" \
-  --status "$RUN_ROOT/shadow/cross_platform/component_status.json" \
-  --interval 30 --loop \
-  >> "$RUN_ROOT/shadow/cross_platform/collector.log" 2>&1 &
-v7_register_child "$!"
-
-# Kalshi authenticated WebSocket is a separate read-only collector.  It opens
-# only when a locally protected, rotated private key and key ID are configured.
-python3 scripts/v7_kalshi_authenticated_ws_collector.py \
-  --repository-root "$ROOT" --config "$EXTERNAL_INPUT_CONFIG" \
-  --tape "$RUN_ROOT/shadow/cross_platform/kalshi_ws_events.jsonl" \
-  --state "$RUN_ROOT/shadow/cross_platform/kalshi_ws_state.json" \
-  --status "$RUN_ROOT/shadow/cross_platform/kalshi_ws_status.json" --loop \
-  >> "$RUN_ROOT/shadow/cross_platform/kalshi_ws.log" 2>&1 &
-v7_register_child "$!"
-
-# The exact-SHA supervisor aggregates measured sports/cross evidence and the
-# still configuration-blocked wallet research family. It owns no OMS, capital, ledger
-# writer, order or promotion authority.
-python3 scripts/v7_research_shadow_supervisor.py \
-  --repository-root "$ROOT" \
-  --run-root "$RUN_ROOT" \
-  --scope "$LIVE_MODEL_SCOPE" \
-  --model-sha "$SHA" \
-  --heartbeat-seconds 5 \
-  >> "$RUN_ROOT/research_shadow_supervisor.log" 2>&1 &
-v7_register_child "$!"
-
-# Ranking, PCA and Local Factor remain outside authoritative live-PAPER, but no
-# longer remain dormant. Their exact-SHA supervisor continuously runs frozen,
-# current-book research evaluations and publishes explicit evidence/blockers.
-python3 scripts/v7_slow_economic_shadow_supervisor.py \
-  --repository-root "$ROOT" --run-root "$RUN_ROOT" \
-  --scope "$LIVE_MODEL_SCOPE" --model-sha "$SHA" \
-  --interval-seconds 7200 --heartbeat-seconds 5 \
-  >> "$RUN_ROOT/slow_economic_shadow_supervisor.log" 2>&1 &
-v7_register_child "$!"
-
-v7_assert_registered_child_count 31
+v7_assert_registered_child_count 20
 write_runtime_status running false
 
 while [[ ! -e "$KILL" ]]; do

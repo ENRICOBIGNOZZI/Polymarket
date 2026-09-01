@@ -163,7 +163,7 @@ read -r DASHBOARD_FILE DATASOURCE_FILE PROVIDER_FILE PROMETHEUS_FILE ALERT_RULES
 import json,sys
 from pathlib import Path, PurePosixPath
 manifest=json.loads(Path(sys.argv[1]).read_text(encoding='utf-8'))
-assert manifest.get('schema') == 'polymarket_v7_monitoring_manifest_v2'
+assert manifest.get('schema') == 'polymarket_v7_monitoring_manifest_v3'
 assert manifest.get('version') == 7
 assert manifest.get('paper_only') is True
 assert manifest.get('authenticated_execution') is False

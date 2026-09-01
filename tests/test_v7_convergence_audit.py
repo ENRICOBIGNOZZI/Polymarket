@@ -23,7 +23,7 @@ class V7ConvergenceAuditTest(unittest.TestCase):
         matrix = MODULE.validate_capabilities(ROOT)
         incumbent = MODULE.validate_repository(ROOT)
         self.assertEqual(len(rows), len(list((ROOT / ".github/workflows").glob("*.yml"))))
-        self.assertEqual(len(matrix["strategies"]), 15)
+        self.assertEqual(len(matrix["live_algorithms"]), 2)
         self.assertFalse(incumbent["verified"])
 
     def test_mutating_schedulers_are_frozen(self) -> None:

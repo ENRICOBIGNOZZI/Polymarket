@@ -335,10 +335,6 @@
       "in_scope": false
     }
   },
-  "old_micro_taker_migration": {
-    "overlapping_execution_authority_removed": true,
-    "canonical_micro_taker_remains_separate_non_settlement_benchmark": true
-  },
   "hot_path": {
     "python": false,
     "rest": false,

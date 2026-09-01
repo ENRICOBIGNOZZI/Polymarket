@@ -63,9 +63,9 @@ class V7MakerFillabilityMonitoringTest(unittest.TestCase):
         self.assertIn('market="m1"', payload)
         self.assertIn('root_cause="QUEUE_COMPETITION_OR_LIFETIME"', payload)
 
-    def test_manifest_routes_existing_canonical_port_through_fillability_wrapper(self) -> None:
+    def test_manifest_routes_canonical_port_through_unified_exporter(self) -> None:
         manifest = json.loads((MONITORING / "v7_monitoring_manifest.json").read_text(encoding="utf-8"))
-        self.assertEqual(manifest["exporter"]["path"], "monitoring/exporter_v7_fillability.py")
+        self.assertEqual(manifest["exporter"]["path"], "monitoring/exporter_v7.py")
         self.assertEqual(manifest["exporter"]["port"], 9108)
         self.assertTrue(manifest["paper_only"])
         self.assertFalse(manifest["authenticated_execution"])
