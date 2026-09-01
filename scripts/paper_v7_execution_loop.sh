@@ -34,6 +34,21 @@ export PM_V7_BINANCE_TESTNET_MARKET="${PM_V7_BINANCE_TESTNET_MARKET:-${PORTFOLIO
 export PM_V7_SPORTRADAR_API_KEY="${PM_V7_SPORTRADAR_API_KEY:-${SPORTTRADER_API_KEY:-}}"
 export PM_V7_LIMITLESS_API_KEY="${PM_V7_LIMITLESS_API_KEY:-${LIMITLESS_TOKEN:-}}"
 SHA="$(git rev-parse HEAD)"
+if [[ -z "$EXTERNAL_FORWARD_MIN_DURATION_SECONDS" ]]; then
+  EXTERNAL_FORWARD_MIN_DURATION_SECONDS="$(python3 - "$EXTERNAL_FAIR_POLICY" <<'PY'
+import json
+import sys
+
+try:
+    value = float(json.load(open(sys.argv[1], encoding="utf-8"))["forward_evidence"]["minimum_duration_seconds"])
+except (KeyError, OSError, TypeError, ValueError, json.JSONDecodeError) as exc:
+    raise SystemExit(f"invalid external fair forward-evidence policy: {exc}")
+if value < 0:
+    raise SystemExit("external fair forward-evidence duration must be non-negative")
+print(value)
+PY
+)"
+fi
 MAKER_CHAMPION_MODEL="$RUN_ROOT/micro_maker/execution_model.json"
 MAKER_CHALLENGER_MODEL="$RUN_ROOT/micro_maker/execution_model_challenger.json"
 MAKER_MODEL_REGISTRY="$RUN_ROOT/micro_maker/model_registry.json"
@@ -315,7 +330,7 @@ python3 scripts/v7_external_forward_evidence_gate.py \
   --coinbase-rest-status "$RUN_ROOT/external_fair/coinbase_l2_rest_status.json" \
   --deribit-rest-status "$RUN_ROOT/external_fair/deribit_rest_status.json" \
   --output "$RUN_ROOT/external_fair/forward_evidence_status.json" \
-  --min-duration-seconds "${EXTERNAL_FORWARD_MIN_DURATION_SECONDS:-300}" --loop \
+  --min-duration-seconds "$EXTERNAL_FORWARD_MIN_DURATION_SECONDS" --loop \
   >> "$RUN_ROOT/external_fair/forward_evidence.log" 2>&1 &
 pids+=("$!")
 

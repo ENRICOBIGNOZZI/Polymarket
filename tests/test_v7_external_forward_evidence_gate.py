@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import sys
 from pathlib import Path
 
@@ -40,6 +41,17 @@ def test_short_clean_run_is_honestly_insufficient() -> None:
 
 def test_default_duration_is_a_five_minute_engineering_pilot() -> None:
     assert gate.DEFAULT_MIN_DURATION_SECONDS == 300.0
+
+
+def test_external_fair_policy_declares_the_same_pilot_duration() -> None:
+    policy = json.loads((ROOT / "config" / "v7_external_fair.json").read_text())
+    assert policy["forward_evidence"] == {
+        "minimum_duration_seconds": 300,
+        "classification": "PILOT_ENGINEERING_VALIDATION_ONLY",
+        "economic_validation": False,
+        "promotion_authority": False,
+        "real_order_submission": False,
+    }
 
 
 def test_duration_and_durable_tapes_are_required() -> None:
