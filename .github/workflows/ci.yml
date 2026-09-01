@@ -113,6 +113,7 @@ jobs:
           python3 -m json.tool config/live_champion.json >/dev/null
           python3 -m json.tool config/operator_directives.json >/dev/null
           python3 -m json.tool config/paper_v7.json >/dev/null
+          python3 -m json.tool config/v7_authority_registry.json >/dev/null
           python3 -m json.tool config/v7_professional_market_maker.json >/dev/null
           python3 -m json.tool config/v7_maker_fillability_experiments.json >/dev/null
           python3 -m json.tool config/v7_strategy_registry.json >/dev/null
@@ -126,8 +127,10 @@ jobs:
           python3 -m json.tool monitoring/v7_monitoring_manifest.json >/dev/null
           python3 -m json.tool monitoring/grafana/dashboards/polymarket-v7-maker-fillability.json >/dev/null
           python3 -m json.tool monitoring/grafana/dashboards/polymarket-v7-latency.json >/dev/null
+          python3 -m json.tool schemas/v7/opportunity_envelope.schema.json >/dev/null
           bash -n scripts/paper_v7_execution_loop.sh
           bash -n ops/update_server_v7.sh
+          python3 scripts/v7_authority_contract.py
           python3 scripts/v7_protocol_fuzz.py --iterations 5000
           python3 tests/test_v7_repository_shape.py
           python3 scripts/v7_convergence_audit.py --repository-root . >/dev/null

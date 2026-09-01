@@ -6,6 +6,9 @@
   "real_order_submission": false,
   "automatic_promotion": false,
   "decision_owner": "BTC_SETTLEMENT_ENGINE",
+  "authority_registry": "config/v7_authority_registry.json",
+  "opportunity_contract": "schemas/v7/opportunity_envelope.schema.json",
+  "global_portfolio_coordinator": "V7_GLOBAL_PORTFOLIO_COORDINATOR",
   "shared_owners": {
     "oms": "V7_CANONICAL_OMS",
     "inventory": "V7_CANONICAL_INVENTORY",
@@ -100,6 +103,8 @@
   ],
   "structural_arb_engine": {
     "decision_owner": "STRUCTURAL_ARB_ENGINE",
+    "opportunity_contract": "schemas/v7/opportunity_envelope.schema.json",
+    "global_portfolio_coordinator": "V7_GLOBAL_PORTFOLIO_COORDINATOR",
     "component_families": ["hard_arb", "fast_structural"],
     "component_independent_authority": false,
     "full_depth_required": true,

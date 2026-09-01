@@ -1,0 +1,64 @@
+{
+  "schema": "polymarket_v7_authority_registry_v1",
+  "version": 1,
+  "paper_only": true,
+  "authenticated_execution": false,
+  "real_order_submission": false,
+  "real_capital_at_risk": false,
+  "automatic_promotion": false,
+  "owners": {
+    "global_portfolio_coordinator": "V7_GLOBAL_PORTFOLIO_COORDINATOR",
+    "capital_allocator": "V7_CANONICAL_ALLOCATOR",
+    "risk_engine": "V7_CANONICAL_RISK",
+    "oms": "V7_CANONICAL_OMS",
+    "inventory": "V7_CANONICAL_INVENTORY",
+    "ledger": "V7_CANONICAL_LEDGER",
+    "promotion": "V7_OPERATOR_EXACT_SHA_PROMOTION",
+    "runtime_identity": "V7_EXACT_SHA_RUNTIME_IDENTITY"
+  },
+  "economic_engines": {
+    "BTC_SETTLEMENT_ENGINE": {
+      "components": [
+        "crypto_settlement_fair",
+        "crypto_informed_taker",
+        "professional_maker"
+      ],
+      "actions": ["MAKE", "TAKE", "CANCEL", "NOTHING"]
+    },
+    "STRUCTURAL_ARB_ENGINE": {
+      "components": ["hard_arb", "fast_structural"],
+      "actions": ["ARB", "CANCEL", "NOTHING"]
+    }
+  },
+  "research_zero_authority_families": [
+    "micro_taker",
+    "graph_rv",
+    "ranking",
+    "pca",
+    "local_factor",
+    "wallet_intelligence",
+    "market_open",
+    "osint",
+    "sports_latency",
+    "cross_platform"
+  ],
+  "research_forbidden_authorities": [
+    "global_portfolio_coordinator",
+    "capital_allocator",
+    "risk_engine",
+    "oms",
+    "inventory",
+    "ledger",
+    "promotion",
+    "runtime_identity"
+  ],
+  "decision_chain": [
+    "ECONOMIC_ENGINE",
+    "V7_GLOBAL_PORTFOLIO_COORDINATOR",
+    "V7_CANONICAL_ALLOCATOR",
+    "V7_CANONICAL_RISK",
+    "V7_CANONICAL_OMS",
+    "V7_CANONICAL_INVENTORY",
+    "V7_CANONICAL_LEDGER"
+  ]
+}

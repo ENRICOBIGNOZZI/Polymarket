@@ -19,6 +19,7 @@ from typing import Any
 
 SOURCE_PATHS = (
     "config/paper_v7.json",
+    "config/v7_authority_registry.json",
     "config/v7_execution_modes.json",
     "config/v7_live_caps_zero.json",
     "config/v7_attestation_trust.json",
@@ -28,6 +29,8 @@ SOURCE_PATHS = (
     "schemas/v7/pnl_attestation.schema.json",
     "schemas/v7/public_pnl_attestation.schema.json",
     "scripts/v7_generate_pnl_attestation.py",
+    "scripts/v7_authority_contract.py",
+    "scripts/v7_opportunity.py",
     "scripts/v7_real_pnl_verifier.py",
     "scripts/v7_real_pnl_scorecard.py",
     "scripts/v7_reconcile_account.py",
@@ -48,6 +51,7 @@ SOURCE_PATHS = (
     "scripts/v7_security_audit.py",
     "scripts/v7_entropy_secret_scan.py",
     "schemas/v7/world_class_scorecard.schema.json",
+    "schemas/v7/opportunity_envelope.schema.json",
     "schemas/v7/platform_contract.schema.json",
     "schemas/v7/platform_contract_archive.schema.json",
     "schemas/v7/session_registry.schema.json",

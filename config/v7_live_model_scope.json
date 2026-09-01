@@ -62,6 +62,9 @@
   ],
   "governance": {
     "single_execution_owner": true,
+    "authority_registry": "config/v7_authority_registry.json",
+    "opportunity_contract": "schemas/v7/opportunity_envelope.schema.json",
+    "global_portfolio_coordinator": "V7_GLOBAL_PORTFOLIO_COORDINATOR",
     "research_has_capital": false,
     "research_has_oms_authority": false,
     "research_has_ledger_writer_authority": false,

@@ -82,6 +82,9 @@ def validate_config(config: dict[str, Any]) -> None:
         or config.get("real_order_submission") is not False
         or config.get("automatic_promotion") is not False
         or config.get("decision_owner") != "BTC_SETTLEMENT_ENGINE"
+        or config.get("authority_registry") != "config/v7_authority_registry.json"
+        or config.get("opportunity_contract") != "schemas/v7/opportunity_envelope.schema.json"
+        or config.get("global_portfolio_coordinator") != "V7_GLOBAL_PORTFOLIO_COORDINATOR"
         or config.get("component_independent_authority") is not False
     ):
         raise ContractError("engine_identity_or_safety")
@@ -132,6 +135,8 @@ def validate_config(config: dict[str, Any]) -> None:
     structural_components = set(structural.get("component_families") or [])
     if (
         structural.get("decision_owner") != "STRUCTURAL_ARB_ENGINE"
+        or structural.get("opportunity_contract") != "schemas/v7/opportunity_envelope.schema.json"
+        or structural.get("global_portfolio_coordinator") != "V7_GLOBAL_PORTFOLIO_COORDINATOR"
         or structural_components != {"hard_arb", "fast_structural"}
         or structural.get("component_independent_authority") is not False
         or structural.get("full_depth_required") is not True

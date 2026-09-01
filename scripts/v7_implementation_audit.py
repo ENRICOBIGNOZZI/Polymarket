@@ -16,6 +16,7 @@ REQUIRED_FILES = (
     "docs/REPLAY_PARITY.md", "docs/EXPERIMENT_SCHEDULER.md", "docs/SIMULATOR_CALIBRATION.md", "docs/SCENARIO_RISK.md",
     "docs/PLATFORM_CONTRACT.md",
     "config/v7_execution_modes.json", "config/v7_platform_contract.json", "config/v7_live_caps_zero.json",
+    "config/v7_authority_registry.json",
     "config/v7_risk_tiers.json", "config/v7_claim_registry.json", "config/v7_runtime_supervision.json",
     "config/v7_attestation_trust.json", "config/v7_polymarket_v2_contracts.json",
     "schemas/v7/order_event.schema.json", "schemas/v7/fill_event.schema.json", "schemas/v7/private_state.schema.json",
@@ -25,6 +26,7 @@ REQUIRED_FILES = (
     "schemas/v7/replay_parity.schema.json", "schemas/v7/simulator_calibration_support.schema.json", "schemas/v7/scenario_risk.schema.json",
     "schemas/v7/attestation_trust.schema.json", "schemas/v7/public_pnl_attestation.schema.json",
     "schemas/v7/control_manifest.schema.json",
+    "schemas/v7/opportunity_envelope.schema.json",
     "scripts/v7_platform_drift_monitor.py", "scripts/v7_platform_contract_archive.py", "scripts/v7_reconcile_account.py",
     "scripts/v7_real_pnl_verifier.py", "scripts/v7_generate_pnl_attestation.py", "scripts/v7_verify_pnl_attestation.py",
     "scripts/v7_live_canary_orchestrator.py", "scripts/v7_world_class_scorecard.py", "scripts/v7_security_audit.py",
@@ -34,6 +36,7 @@ REQUIRED_FILES = (
     "scripts/v7_implementation_audit.py", "scripts/v7_entropy_secret_scan.py", "scripts/v7_protocol_fuzz.py",
     "scripts/v7_session_registry.py", "scripts/v7_artifact_store.py", "scripts/v7_execution_provenance.py",
     "scripts/v7_control_plane.py", "scripts/v7_live_capability.py", "scripts/v7_signer_gateway.py",
+    "scripts/v7_authority_contract.py", "scripts/v7_opportunity.py",
     "scripts/v7_build_manifest.py", "scripts/verify_v7.sh",
     "monitoring/exporter_v7.py", "monitoring/v7_alerts.yml", "monitoring/v7_monitoring_manifest.json",
     "tests/test_v7_real_pnl_verifier.py", "tests/test_v7_replay_parity.py", "tests/test_v7_experiment_scheduler.py",
@@ -42,6 +45,7 @@ REQUIRED_FILES = (
     "tests/test_v7_verify_contract.py", "tests/test_v7_platform_contract.py",
     "tests/test_v7_platform_contract_archive.py", "tests/test_v7_entropy_secret_scan.py",
     "tests/test_v7_protocol_fuzz.py", "tests/test_v7_session_registry.py",
+    "tests/test_v7_authority_contract.py", "tests/test_v7_opportunity.py",
 )
 
 
