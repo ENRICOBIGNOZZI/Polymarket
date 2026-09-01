@@ -1,6 +1,9 @@
 from __future__ import annotations
 
 import json
+import subprocess
+import sys
+import tempfile
 import unittest
 from pathlib import Path
 
@@ -145,6 +148,10 @@ class V7CutoverUpdaterTest(unittest.TestCase):
         self.assertIn("new_risk_frozen') is True", function)
         self.assertIn("drain_complete') is (maker_open == 0)", function)
         self.assertIn("maker_zero_authority_observer", function)
+        self.assertIn("micro_zero_authority_research", function)
+        self.assertIn("'execution_authority') == 'RESEARCH_ONLY_ZERO_AUTHORITY'", function)
+        self.assertIn("'inventory_state_created') is False", function)
+        self.assertIn("micro_state=dict(micro_state, positions={})", function)
         self.assertIn("'execution_authority') == 'SHADOW_ZERO_AUTHORITY'", function)
         self.assertIn("'capital_authority') is False", function)
         self.assertIn("'ledger_writer_authority') is False", function)
@@ -182,6 +189,69 @@ class V7CutoverUpdaterTest(unittest.TestCase):
         self.assertIn("--cutover-zero-recovery", text)
         self.assertIn("$candidate/scripts/v7_market_maker_status.py", text)
         self.assertIn("$candidate/scripts/v7_finalize_maker_cutover.py", text)
+
+    def test_cutover_accepts_research_only_micro_state_without_inventory_map(self) -> None:
+        text = (ROOT / "ops/update_server_v7.sh").read_text(encoding="utf-8")
+        function = text[text.index("cutover_positions_drained(){"):text.index("wait_for_cutover_drain(){")]
+        program = function.split("<<'PY'\n", 1)[1].rsplit("\nPY", 1)[0]
+        sha = "a" * 40
+        nonce = "cutover-test"
+        timestamp = 1_000
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+
+            def write(relative: str, value: dict) -> None:
+                path = root / relative
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_text(json.dumps(value), encoding="utf-8")
+
+            write("control/CUTOVER_DRAIN", {"nonce": nonce, "paper_only": True})
+            write("control/runtime_status.json", {
+                "paper_only": True, "authenticated_execution": False,
+                "real_order_submission": False, "model_sha": sha,
+                "timestamp": timestamp,
+            })
+            write("control/portfolio_state.json", {
+                "paper_only": True, "authenticated_execution": False,
+                "killed": False, "fatal_sleeves": [], "sleeves": {},
+            })
+            write("external_fair/paper_router_status.json", {
+                "paper_only": True, "authenticated_execution": False,
+                "open_positions": 0, "counterfactual_open_positions": 0,
+                "drain_requested": True, "drain_complete": True,
+                "order_submission_enabled": False, "blocker": "CUTOVER_DRAIN",
+            })
+            write("external_fair/paper_router_state.json", {"positions": {}})
+            micro = {
+                "schema": "polymarket_v7_micro_taker_status_v1",
+                "model_sha": sha, "timestamp": timestamp,
+                "paper_only": True, "authenticated_execution": False,
+                "real_order_submission": False,
+                "execution_authority": "RESEARCH_ONLY_ZERO_AUTHORITY",
+                "capital_authority": False, "inventory_authority": False,
+                "ledger_writer_authority": False, "order_authority": False,
+                "oms_authority": False, "research_only": True,
+                "inventory_state_created": False,
+                "drain_requested": True, "drain_complete": True,
+            }
+            write("micro_taker/status.json", micro)
+            write("micro_taker/state.json", micro)
+            write("micro_maker/status.json", {
+                "schema": "polymarket_v7_professional_maker_status_v1",
+                "model_sha": sha, "timestamp": timestamp,
+                "paper_only": True, "authenticated_execution": False,
+                "real_order_submission": False,
+                "execution_authority": "SHADOW_ZERO_AUTHORITY",
+                "capital_authority": False, "ledger_writer_authority": False,
+                "source": "shadow_markout_and_fillability_observers",
+                "observer_pids": {"markout": 1}, "new_risk_frozen": True,
+                "open_orders": 0, "open_positions": 0, "killed": False,
+            })
+            result = subprocess.run(
+                [sys.executable, "-", str(root), nonce, "1"],
+                input=program, text=True, capture_output=True,
+            )
+            self.assertEqual(result.returncode, 0, result.stderr)
 
     def test_cutover_identity_comes_from_deployed_runtime_not_checkout_head(self) -> None:
         text = (ROOT / "ops/update_server_v7.sh").read_text(encoding="utf-8")

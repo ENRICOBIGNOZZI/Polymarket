@@ -24,7 +24,7 @@
       "id": 2,
       "options": {"colorMode": "value", "graphMode": "none", "justifyMode": "auto", "orientation": "auto", "reduceOptions": {"calcs": ["lastNotNull"], "fields": "", "values": false}, "textMode": "auto", "wideLayout": true},
       "targets": [{"expr": "polymarket_external_fair_shadow_zero_authority", "refId": "A"}],
-      "title": "Authority",
+      "title": "Execution Authority (must be ZERO)",
       "type": "stat"
     },
     {
@@ -64,7 +64,7 @@
       "id": 6,
       "options": {"colorMode": "value", "graphMode": "area", "justifyMode": "auto", "orientation": "auto", "reduceOptions": {"calcs": ["lastNotNull"], "fields": "", "values": false}, "textMode": "auto", "wideLayout": true},
       "targets": [{"expr": "polymarket_external_fair_counterfactual_collection_enabled", "refId": "A"}],
-      "title": "Shadow Collector",
+      "title": "Evidence Collector (non-executing)",
       "type": "stat"
     },
     {
@@ -117,7 +117,7 @@
         {"expr": "polymarket_external_fair_actions_total", "legendFormat": "execution {{action}}", "refId": "A"},
         {"expr": "polymarket_external_fair_counterfactual_actions_total", "legendFormat": "shadow {{action}}", "refId": "B"}
       ],
-      "title": "Execution (zero by design) / Shadow Actions",
+      "title": "Orders (must stay zero) / Counterfactual Decisions",
       "type": "timeseries"
     },
     {
@@ -247,7 +247,7 @@
   "time": {"from": "now-6h", "to": "now"},
   "timepicker": {},
   "timezone": "browser",
-  "title": "Polymarket V7 — Settlement-Aware External Fair",
+  "title": "Polymarket V7 — Crypto Settlement Evidence (ZERO AUTHORITY)",
   "uid": "polymarket-v7-external-fair",
   "version": 1,
   "weekStart": ""

@@ -1086,6 +1086,7 @@ def render_prometheus(snapshot: dict[str, Any]) -> str:
         _metric("polymarket_v7_authority_max_drawdown_ratio", authority.get("max_drawdown")),
         _metric("polymarket_v7_paper_only_contract_ok", 1 if runtime.get("paper_only") is True and snapshot["portfolio"].get("paper_only") is True else 0),
         _metric("polymarket_v7_authenticated_execution_disabled", 1 if runtime.get("authenticated_execution") is False and runtime.get("real_order_submission") is False and snapshot["portfolio"].get("authenticated_execution") is False else 0),
+        _metric("polymarket_v7_economic_new_risk_ready", 1 if runtime.get("economic_new_risk_ready") is True else 0),
         _metric("polymarket_v7_execution_alive", 1 if snapshot["runtime_alive"] else 0),
         _metric("polymarket_v7_component_ready", 1 if snapshot["runtime_alive"] else 0, {"component": "core_runtime"}),
         _metric("polymarket_v7_component_ready", 1 if maker_operational else 0, {"component": "professional_maker"}),
@@ -1233,6 +1234,11 @@ def render_prometheus(snapshot: dict[str, Any]) -> str:
         _metric("polymarket_execution_final_pnl_usd", _number(ledger_total.get("final_pnl"))),
         _metric("polymarket_execution_capital_hours", _number(ledger_total.get("capital_duration_ms")) / 3_600_000.0),
     ]
+    for engine in sorted({
+        str(value) for value in runtime.get("economic_engines", [])
+        if str(value) in {"CRYPTO_SETTLEMENT_ENGINE", "STRUCTURAL_ARB_ENGINE"}
+    }):
+        lines.append(_metric("polymarket_v7_economic_engine_configured", 1, {"engine": engine}))
     for reason, count in sorted((maker_diagnostics.get("reason_counts") or {}).items()):
         lines.append(_metric("polymarket_v7_maker_decision_reason_total", count, {"reason": reason}))
     for tier, count in sorted((universe.get("tier_counts") or {}).items()):

@@ -6,7 +6,7 @@
     "ref_count": 25,
     "runtime_output_count": 124,
     "schema_count": 22,
-    "tracked_or_intended_path_count": 710,
+    "tracked_or_intended_path_count": 708,
     "workflow_count": 11
   },
   "entries": [
@@ -1415,7 +1415,8 @@
       "current_imports_callers_readers_writers": {
         "analysis": "exact path/module references from tracked text; runtime linkage is separately enumerated",
         "static_references": [
-          "AGENT_DIRECTIVE_V7_UNIFICATION_AND_LEGACY_ERADICATION.md"
+          "AGENT_DIRECTIVE_V7_UNIFICATION_AND_LEGACY_ERADICATION.md",
+          "artifacts/v7_unification/path_classification.json"
         ]
       },
       "deletion_gate": "NONE_CANONICAL_SURFACE",
@@ -1986,7 +1987,9 @@
       "classification": "KEEP_CANONICAL",
       "current_imports_callers_readers_writers": {
         "analysis": "exact path/module references from tracked text; runtime linkage is separately enumerated",
-        "static_references": []
+        "static_references": [
+          "artifacts/v7_unification/path_classification.json"
+        ]
       },
       "deletion_gate": "NONE_CANONICAL_SURFACE",
       "disposition_commit": null,
@@ -2153,7 +2156,9 @@
       "classification": "ARCHIVE_HISTORY_ONLY",
       "current_imports_callers_readers_writers": {
         "analysis": "exact path/module references from tracked text; runtime linkage is separately enumerated",
-        "static_references": []
+        "static_references": [
+          "artifacts/v7_unification/path_classification.json"
+        ]
       },
       "deletion_gate": "NONE_IMMUTABLE_AUDIT_OR_ROLLBACK_EVIDENCE",
       "disposition_commit": null,
@@ -6758,64 +6763,6 @@
       "path_or_ref": "monitoring/grafana/dashboards/polymarket-v7-latency.json",
       "rollback_artifact_tag": "v7-unification-pre-migration-8d9e8e60",
       "surface_id": "path:monitoring/grafana/dashboards/polymarket-v7-latency.json",
-      "unique_behavior_data_contribution": "tracked repository behavior, evidence, test, configuration, or documentation",
-      "validation_tests": [
-        "tests/test_v7_surface_classification.py"
-      ]
-    },
-    {
-      "canonical_replacement": "monitoring/grafana/dashboards/polymarket-v7-maker-fillability.json",
-      "classification": "KEEP_CANONICAL",
-      "current_imports_callers_readers_writers": {
-        "analysis": "exact path/module references from tracked text; runtime linkage is separately enumerated",
-        "static_references": [
-          ".github/workflows/ci.yml",
-          ".github/workflows/monitoring.yml",
-          "artifacts/v7_unification/path_classification.json",
-          "monitoring/v7_monitoring_manifest.json"
-        ]
-      },
-      "deletion_gate": "NONE_CANONICAL_SURFACE",
-      "disposition_commit": null,
-      "economic_authority": {
-        "capabilities": [],
-        "executable": false,
-        "owner": null
-      },
-      "final_disposition": "retain_canonical",
-      "migration_status": "classified",
-      "object_type": "tracked_path",
-      "path_or_ref": "monitoring/grafana/dashboards/polymarket-v7-maker-fillability.json",
-      "rollback_artifact_tag": "v7-unification-pre-migration-8d9e8e60",
-      "surface_id": "path:monitoring/grafana/dashboards/polymarket-v7-maker-fillability.json",
-      "unique_behavior_data_contribution": "tracked repository behavior, evidence, test, configuration, or documentation",
-      "validation_tests": [
-        "tests/test_v7_surface_classification.py"
-      ]
-    },
-    {
-      "canonical_replacement": "monitoring/grafana/dashboards/polymarket-v7-maker-lab.json",
-      "classification": "KEEP_CANONICAL",
-      "current_imports_callers_readers_writers": {
-        "analysis": "exact path/module references from tracked text; runtime linkage is separately enumerated",
-        "static_references": [
-          "artifacts/v7_unification/path_classification.json",
-          "monitoring/v7_monitoring_manifest.json"
-        ]
-      },
-      "deletion_gate": "NONE_CANONICAL_SURFACE",
-      "disposition_commit": null,
-      "economic_authority": {
-        "capabilities": [],
-        "executable": false,
-        "owner": null
-      },
-      "final_disposition": "retain_canonical",
-      "migration_status": "classified",
-      "object_type": "tracked_path",
-      "path_or_ref": "monitoring/grafana/dashboards/polymarket-v7-maker-lab.json",
-      "rollback_artifact_tag": "v7-unification-pre-migration-8d9e8e60",
-      "surface_id": "path:monitoring/grafana/dashboards/polymarket-v7-maker-lab.json",
       "unique_behavior_data_contribution": "tracked repository behavior, evidence, test, configuration, or documentation",
       "validation_tests": [
         "tests/test_v7_surface_classification.py"
@@ -22169,7 +22116,7 @@
       "object_type": "branch_or_remote_ref",
       "path_or_ref": "refs/heads/codex/v7-unified-system-legacy-eradication",
       "rollback_artifact_tag": "v7-unification-pre-migration-8d9e8e60",
-      "snapshot_object_id": "e9390fabf18aecc7d088b3e880a77e98baefd07f",
+      "snapshot_object_id": "ef49ee85d242acf6f67e5ff6cc316f9a370dcd43",
       "surface_id": "ref:refs/heads/codex/v7-unified-system-legacy-eradication",
       "unique_behavior_data_contribution": "active migration or canonical upstream ref",
       "validation_tests": [
@@ -22221,7 +22168,7 @@
       "object_type": "branch_or_remote_ref",
       "path_or_ref": "refs/remotes/origin/HEAD",
       "rollback_artifact_tag": "v7-unification-pre-migration-8d9e8e60",
-      "snapshot_object_id": "8d9e8e603aae4d73842212eedcf8e0e06383127f",
+      "snapshot_object_id": "ef49ee85d242acf6f67e5ff6cc316f9a370dcd43",
       "surface_id": "ref:refs/remotes/origin/HEAD",
       "unique_behavior_data_contribution": "active migration or canonical upstream ref",
       "validation_tests": [
@@ -22303,7 +22250,7 @@
       "object_type": "branch_or_remote_ref",
       "path_or_ref": "refs/remotes/origin/codex/v7-unified-system-legacy-eradication",
       "rollback_artifact_tag": "v7-unification-pre-migration-8d9e8e60",
-      "snapshot_object_id": "e9390fabf18aecc7d088b3e880a77e98baefd07f",
+      "snapshot_object_id": "ef49ee85d242acf6f67e5ff6cc316f9a370dcd43",
       "surface_id": "ref:refs/remotes/origin/codex/v7-unified-system-legacy-eradication",
       "unique_behavior_data_contribution": "active migration or canonical upstream ref",
       "validation_tests": [
@@ -22329,7 +22276,7 @@
       "object_type": "branch_or_remote_ref",
       "path_or_ref": "refs/remotes/origin/main",
       "rollback_artifact_tag": "v7-unification-pre-migration-8d9e8e60",
-      "snapshot_object_id": "8d9e8e603aae4d73842212eedcf8e0e06383127f",
+      "snapshot_object_id": "ef49ee85d242acf6f67e5ff6cc316f9a370dcd43",
       "surface_id": "ref:refs/remotes/origin/main",
       "unique_behavior_data_contribution": "active migration or canonical upstream ref",
       "validation_tests": [
@@ -26942,5 +26889,5 @@
   "real_capital_at_risk": false,
   "real_order_submission": false,
   "schema": "polymarket_v7_surface_classification_v1",
-  "source_snapshot_sha": "e9390fabf18aecc7d088b3e880a77e98baefd07f"
+  "source_snapshot_sha": "ef49ee85d242acf6f67e5ff6cc316f9a370dcd43"
 }

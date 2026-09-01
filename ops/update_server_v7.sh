@@ -312,6 +312,43 @@ if maker_absent:
     assert prove_never_started('micro_maker')
     maker_status={'paper_only':True,'authenticated_execution':False,'killed':False}
     maker_state={'inventory':{}}
+micro_zero_authority_research=(
+    bool(micro_status)
+    and micro_status.get('schema') == 'polymarket_v7_micro_taker_status_v1'
+    and micro_status.get('model_sha') == runtime.get('model_sha')
+    and micro_status.get('paper_only') is True
+    and micro_status.get('authenticated_execution') is False
+    and micro_status.get('real_order_submission') is False
+    and micro_status.get('execution_authority') == 'RESEARCH_ONLY_ZERO_AUTHORITY'
+    and micro_status.get('capital_authority') is False
+    and micro_status.get('inventory_authority') is False
+    and micro_status.get('ledger_writer_authority') is False
+    and micro_status.get('order_authority') is False
+    and micro_status.get('oms_authority') is False
+    and micro_status.get('research_only') is True
+    and micro_status.get('inventory_state_created') is False
+    and abs(int(runtime.get('timestamp',0))-int(micro_status.get('timestamp',-31))) <= 30
+    and micro_state.get('positions') is None
+    and (
+        not micro_state
+        or (
+            micro_state.get('schema') == 'polymarket_v7_micro_taker_status_v1'
+            and micro_state.get('model_sha') == runtime.get('model_sha')
+            and micro_state.get('paper_only') is True
+            and micro_state.get('authenticated_execution') is False
+            and micro_state.get('real_order_submission') is False
+            and micro_state.get('execution_authority') == 'RESEARCH_ONLY_ZERO_AUTHORITY'
+            and micro_state.get('inventory_state_created') is False
+        )
+    )
+)
+if micro_zero_authority_research:
+    # The research worker persists model/dataset state under state.json, not an
+    # execution inventory.  Its explicit zero-authority contract and
+    # inventory_state_created=false prove that a missing positions map is an
+    # intentional absence of executable state.
+    micro_status=dict(micro_status, open_positions=0)
+    micro_state=dict(micro_state, positions={})
 maker_zero_authority_observer=(
     bool(maker_status) and not maker_state
     and maker_status.get('schema') == 'polymarket_v7_professional_maker_status_v1'
@@ -374,7 +411,10 @@ if runtime_alive:
     assert external_status.get('blocker') == 'CUTOVER_DRAIN'
     assert micro_status.get('drain_requested') is True
     assert micro_status.get('drain_complete') is True
-    assert micro_status.get('new_risk_frozen') is True
+    if micro_zero_authority_research:
+        assert micro_status.get('inventory_state_created') is False
+    else:
+        assert micro_status.get('new_risk_frozen') is True
     if maker_zero_authority_observer:
         assert maker_status.get('new_risk_frozen') is True and maker_open == 0
     else:

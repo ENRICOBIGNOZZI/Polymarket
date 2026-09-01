@@ -24,8 +24,6 @@
     "canonical_operator_home": true,
     "dashboard_uid": "polymarket-v7",
     "dashboard_file": "monitoring/grafana/dashboards/polymarket-v7.json",
-    "maker_fillability_dashboard": "monitoring/grafana/dashboards/polymarket-v7-maker-fillability.json",
-    "maker_lab_dashboard": "monitoring/grafana/dashboards/polymarket-v7-maker-lab.json",
     "external_fair_dashboard": "monitoring/grafana/dashboards/polymarket-v7-external-fair.json",
     "latency_dashboard": "monitoring/grafana/dashboards/polymarket-v7-latency.json",
     "datasource_uid": "prometheus-v7",

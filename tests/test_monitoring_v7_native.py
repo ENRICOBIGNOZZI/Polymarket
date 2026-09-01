@@ -72,6 +72,10 @@ class V7NativeMonitoringTest(unittest.TestCase):
                 "pid": os.getpid(),
                 "state": "running",
                 "killed": False,
+                "economic_engines": [
+                    "CRYPTO_SETTLEMENT_ENGINE", "STRUCTURAL_ARB_ENGINE",
+                ],
+                "economic_new_risk_ready": False,
             },
         )
         self._write(
@@ -361,6 +365,9 @@ class V7NativeMonitoringTest(unittest.TestCase):
             self.assertIn("polymarket_v7_authority_max_drawdown_ratio 0.15", metrics)
             self.assertIn("polymarket_v7_paper_only_contract_ok 1", metrics)
             self.assertIn("polymarket_v7_authenticated_execution_disabled 1", metrics)
+            self.assertIn("polymarket_v7_economic_new_risk_ready 0", metrics)
+            self.assertIn('polymarket_v7_economic_engine_configured{engine="CRYPTO_SETTLEMENT_ENGINE"} 1', metrics)
+            self.assertIn('polymarket_v7_economic_engine_configured{engine="STRUCTURAL_ARB_ENGINE"} 1', metrics)
             self.assertIn('polymarket_v7_crypto_context_registered{asset="BTC",horizon="M5",contract_family="BTC_USD_UPDOWN_5M",authority="SHADOW"} 1', metrics)
             self.assertIn('polymarket_v7_crypto_context_research_only{asset="ETH",horizon="M5",contract_family="ETH_USD_UPDOWN_5M",authority="SHADOW_ZERO_AUTHORITY"} 1', metrics)
             self.assertIn("polymarket_v7_crypto_cluster_exposure_usd 0", metrics)
@@ -611,8 +618,8 @@ class V7NativeMonitoringTest(unittest.TestCase):
             "polymarket_v7_trade_tape_rows",
             "polymarket_v7_state_age_seconds",
             "polymarket_v7_ledger_valid",
-            "polymarket_v7_research_supervisor_alive",
-            "polymarket_v7_live_model_target_operational",
+            "polymarket_v7_economic_engine_configured",
+            "polymarket_v7_economic_new_risk_ready",
         ):
             self.assertIn(metric, serialized)
         for retired in ("polymarket_v7_shadow_alive", "polymarket_v7_market_proxy_markets", "polymarket_strategy_fill_rate"):

@@ -13,7 +13,7 @@ class V7OperatorHomeTest(unittest.TestCase):
         dashboard = json.loads((ROOT / manifest["grafana"]["dashboard_file"]).read_text())
         self.assertTrue(manifest["grafana"]["canonical_operator_home"])
         self.assertEqual(dashboard["uid"], "polymarket-v7")
-        self.assertIn("Operator Home", dashboard["title"])
+        self.assertIn("24/7 PAPER Control Room", dashboard["title"])
         serialized = json.dumps(dashboard)
         for metric in (
             "polymarket_v7_supervisor_alive",
@@ -35,12 +35,29 @@ class V7OperatorHomeTest(unittest.TestCase):
             "polymarket_v7_universe_tier_markets",
             "polymarket_v7_universe_resource_limit",
             "polymarket_v7_portfolio_reconciled",
-            "polymarket_v7_reconciliation_strategy_difference_usd",
             "ALERTS",
         ):
             self.assertIn(metric, serialized)
-        self.assertIn("no aggregate P0 claim", serialized)
+        self.assertIn("PAPER evidence only", serialized)
         self.assertIn("polymarket_external_fair_present * polymarket_external_fair_healthy", serialized)
+
+    def test_live_interface_excludes_research_algorithms_and_uses_explicit_authority_names(self) -> None:
+        manifest = json.loads((ROOT / "monitoring/v7_monitoring_manifest.json").read_text())
+        dashboard = json.loads((ROOT / manifest["grafana"]["dashboard_file"]).read_text())
+        serialized = json.dumps(dashboard)
+        self.assertIn("24/7 PAPER Control Room", dashboard["title"])
+        self.assertIn("Economic New-Risk Authority", serialized)
+        self.assertIn("polymarket_v7_economic_engine_configured", serialized)
+        self.assertIn("Crypto Settlement", serialized)
+        for ambiguous in (
+            "Components and Research", "PnL by Component / Research Family",
+            "Ranking / PCA / Local Factor Shadow Evidence",
+            "12-model target operational", "Canonical Final PnL by Strategy",
+        ):
+            self.assertNotIn(ambiguous, serialized)
+        dashboards = ROOT / "monitoring/grafana/dashboards"
+        self.assertFalse((dashboards / "polymarket-v7-maker-lab.json").exists())
+        self.assertFalse((dashboards / "polymarket-v7-maker-fillability.json").exists())
 
     def test_alert_catalog_has_only_meaningful_operational_failures(self) -> None:
         catalog = json.loads((ROOT / "config/v7_runtime_alerts.json").read_text())

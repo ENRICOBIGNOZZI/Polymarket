@@ -70,27 +70,11 @@ class V7MakerFillabilityMonitoringTest(unittest.TestCase):
         self.assertTrue(manifest["paper_only"])
         self.assertFalse(manifest["authenticated_execution"])
 
-    def test_fillability_dashboard_contains_required_diagnostics(self) -> None:
+    def test_research_fillability_is_not_provisioned_as_a_live_dashboard(self) -> None:
         path = MONITORING / "grafana" / "dashboards" / "polymarket-v7-maker-fillability.json"
-        dashboard = json.loads(path.read_text(encoding="utf-8"))
-        self.assertEqual(dashboard["uid"], "polymarket-v7-maker-fillability")
-        serialized = json.dumps(dashboard)
-        for metric in (
-            "polymarket_maker_fillability_orders",
-            "polymarket_maker_fillability_trade_reachable",
-            "polymarket_maker_fillability_queue_depleted",
-            "polymarket_maker_fillability_opportunities",
-            "polymarket_maker_fillability_zero_fill_reason",
-            "polymarket_maker_fillability_action_fill_opportunities",
-            "polymarket_maker_fillability_market_near_miss_ratio",
-            "polymarket_maker_fillability_priority_resets",
-            "polymarket_maker_fillability_exact_ws_present",
-            "polymarket_maker_fillability_exact_ws_complete",
-            "polymarket_maker_fillability_exact_ws_orders",
-            "polymarket_maker_fillability_exact_ws_trade_reachable",
-            "polymarket_maker_fillability_exact_ws_root_cause_info",
-        ):
-            self.assertIn(metric, serialized)
+        manifest = json.loads((MONITORING / "v7_monitoring_manifest.json").read_text())
+        self.assertFalse(path.exists())
+        self.assertNotIn("maker_fillability_dashboard", manifest["grafana"])
 
     def test_fillability_evidence_is_collected_hourly_and_on_contract_changes(self) -> None:
         workflow = (ROOT / ".github/workflows/v7-maker-fillability-evidence.yml").read_text(
