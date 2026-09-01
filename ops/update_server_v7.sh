@@ -191,7 +191,7 @@ resolve_incumbent_sha(){
   deployed="$run_root/control/deployed_sha"
   runtime="$run_root/control/runtime_status.json"
   if [[ ! -f "$deployed" && ! -f "$runtime" ]]; then
-    git -C "$APP_DIR" rev-parse HEAD
+    printf '%s\n' ABSENT
     return 0
   fi
   python3 - "$deployed" "$runtime" <<'PY'
@@ -1142,17 +1142,30 @@ python3 "$candidate/scripts/v7_exact_sha_ci_gate.py" \
   --output "$STATE_DIR/exact_sha_ci.$EXPECTED_SHA.json" || \
   fail "exact SHA lacks successful Release and Debug CI"
 preflight_legacy_macos_services
-OLD_SHA="$(resolve_incumbent_sha)"
-[[ "$OLD_SHA" =~ ^[0-9a-f]{40}$ ]] || fail "cannot resolve exact deployed incumbent SHA"
-git merge-base --is-ancestor "$OLD_SHA" "$EXPECTED_SHA" >/dev/null 2>&1 || \
-  fail "deployed incumbent $OLD_SHA is not an ancestor of target $EXPECTED_SHA"
+INCUMBENT_SHA="$(resolve_incumbent_sha)"
+INCUMBENT_PRESENT=1
+CHECKOUT_SHA="$(git rev-parse HEAD)"
+if [[ "$INCUMBENT_SHA" == ABSENT ]]; then
+  INCUMBENT_PRESENT=0
+  OLD_SHA=""
+  ANCESTOR_SHA="$CHECKOUT_SHA"
+  log "Fresh installation has no deployed runtime incumbent; skipping position drain and archive"
+else
+  OLD_SHA="$INCUMBENT_SHA"
+  [[ "$OLD_SHA" =~ ^[0-9a-f]{40}$ ]] || fail "cannot resolve exact deployed incumbent SHA"
+  ANCESTOR_SHA="$OLD_SHA"
+fi
+git merge-base --is-ancestor "$ANCESTOR_SHA" "$EXPECTED_SHA" >/dev/null 2>&1 || \
+  fail "current checkout or deployed incumbent $ANCESTOR_SHA is not an ancestor of target $EXPECTED_SHA"
 [[ -z "$(git status --porcelain --untracked-files=no)" ]] || fail "tracked server checkout is dirty"
-request_cutover_drain "$OLD_SHA"
-wait_for_cutover_drain "$OLD_SHA"
+if [[ "$INCUMBENT_PRESENT" == 1 ]]; then
+  request_cutover_drain "$OLD_SHA"
+  wait_for_cutover_drain "$OLD_SHA"
+fi
 MAKER_STATUS_REFRESHER="${POLYMARKET_MAKER_STATUS_REFRESHER:-$candidate/scripts/v7_market_maker_status.py}"
 [[ -f "$MAKER_STATUS_REFRESHER" ]] || fail "maker status refresher missing: $MAKER_STATUS_REFRESHER"
 stop_production_runtime
-if [[ "$OLD_SHA" != "$EXPECTED_SHA" ]]; then
+if [[ "$INCUMBENT_PRESENT" == 1 && "$OLD_SHA" != "$EXPECTED_SHA" ]]; then
   # Refresh from immutable state only after BLUE is stopped. This removes any
   # race with late fills and keeps the finalizer's 15-second mark freshness
   # contract independent of process-shutdown latency.
@@ -1170,7 +1183,7 @@ if [[ "$OLD_SHA" != "$EXPECTED_SHA" ]]; then
 fi
 MAKER_CUTOVER_FINALIZER="${POLYMARKET_MAKER_CUTOVER_FINALIZER:-$candidate/scripts/v7_finalize_maker_cutover.py}"
 [[ -f "$MAKER_CUTOVER_FINALIZER" ]] || fail "maker cutover finalizer missing: $MAKER_CUTOVER_FINALIZER"
-if [[ "$OLD_SHA" != "$EXPECTED_SHA" ]]; then
+if [[ "$INCUMBENT_PRESENT" == 1 && "$OLD_SHA" != "$EXPECTED_SHA" ]]; then
   python3 "$MAKER_CUTOVER_FINALIZER" \
     --run-root "$(production_run_root)" \
     --model-sha "$OLD_SHA" \
@@ -1180,12 +1193,14 @@ fi
 stop_owned_monitoring
 CUTOVER_ARCHIVER="${POLYMARKET_CUTOVER_ARCHIVER:-$APP_DIR/scripts/v7_prepare_cutover_run_root.py}"
 [[ -f "$CUTOVER_ARCHIVER" ]] || fail "cutover archiver missing: $CUTOVER_ARCHIVER"
-python3 "$CUTOVER_ARCHIVER" \
-  --run-root "$(production_run_root)" \
-  --archive-root "$APP_DIR/runs/paper_v7_archives" \
-  --repository-root "$APP_DIR" \
-  --target-sha "$EXPECTED_SHA" | tee -a deploy-evidence.txt
-if [[ "$OLD_SHA" != "$EXPECTED_SHA" ]]; then
+if [[ "$INCUMBENT_PRESENT" == 1 ]]; then
+  python3 "$CUTOVER_ARCHIVER" \
+    --run-root "$(production_run_root)" \
+    --archive-root "$APP_DIR/runs/paper_v7_archives" \
+    --repository-root "$APP_DIR" \
+    --target-sha "$EXPECTED_SHA" | tee -a deploy-evidence.txt
+fi
+if [[ "$(git rev-parse HEAD)" != "$EXPECTED_SHA" ]]; then
   git checkout --detach "$EXPECTED_SHA"
   git reset --hard "$EXPECTED_SHA"
 fi

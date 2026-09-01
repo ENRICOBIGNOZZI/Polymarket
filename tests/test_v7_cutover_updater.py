@@ -193,10 +193,28 @@ class V7CutoverUpdaterTest(unittest.TestCase):
         self.assertIn("runtime_sha != deployed", resolver)
         self.assertIn("incumbent_safety_mismatch", resolver)
         self.assertIn("incumbent_real_submission_enabled", resolver)
-        assignment = text.rindex('OLD_SHA="$(resolve_incumbent_sha)"')
+        self.assertIn("printf '%s\\n' ABSENT", resolver)
+        self.assertNotIn('git -C "$APP_DIR" rev-parse HEAD', resolver)
+        assignment = text.rindex('INCUMBENT_SHA="$(resolve_incumbent_sha)"')
         request = text.rindex('request_cutover_drain "$OLD_SHA"')
         self.assertLess(assignment, request)
         self.assertNotIn('OLD_SHA="$(git rev-parse HEAD)"', text)
+
+    def test_fresh_install_skips_incumbent_drain_finalization_and_archive(self) -> None:
+        text = (ROOT / "ops/update_server_v7.sh").read_text(encoding="utf-8")
+        main = text[text.rindex("preflight_legacy_macos_services\n"):]
+        self.assertIn('if [[ "$INCUMBENT_SHA" == ABSENT ]]; then', main)
+        self.assertIn("INCUMBENT_PRESENT=0", main)
+        self.assertIn("skipping position drain and archive", main)
+        self.assertIn('if [[ "$INCUMBENT_PRESENT" == 1 ]]; then\n  request_cutover_drain', main)
+        self.assertIn(
+            'if [[ "$INCUMBENT_PRESENT" == 1 && "$OLD_SHA" != "$EXPECTED_SHA" ]]; then',
+            main,
+        )
+        archive_guard = main.index('if [[ "$INCUMBENT_PRESENT" == 1 ]]; then', main.index("CUTOVER_ARCHIVER="))
+        archive_call = main.index('python3 "$CUTOVER_ARCHIVER"', archive_guard)
+        self.assertLess(archive_guard, archive_call)
+        self.assertIn('if [[ "$(git rev-parse HEAD)" != "$EXPECTED_SHA" ]]; then', main)
 
     def test_monitoring_processes_are_bounded_and_force_stopped_if_needed(self) -> None:
         text = (ROOT / "ops/update_server_v7.sh").read_text(encoding="utf-8")
@@ -381,7 +399,7 @@ class V7CutoverUpdaterTest(unittest.TestCase):
     def test_legacy_admin_preflight_happens_before_paper_drain(self) -> None:
         text = (ROOT / "ops/update_server_v7.sh").read_text(encoding="utf-8")
         preflight = text.rindex("preflight_legacy_macos_services\n")
-        resolve = text.rindex('OLD_SHA="$(resolve_incumbent_sha)"')
+        resolve = text.rindex('INCUMBENT_SHA="$(resolve_incumbent_sha)"')
         drain = text.rindex('request_cutover_drain "$OLD_SHA"')
         stop = text.rindex("stop_production_runtime\n")
         self.assertLess(preflight, resolve)
