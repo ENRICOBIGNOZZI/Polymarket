@@ -51,7 +51,7 @@ def _state(path: Path) -> dict[str, Any]:
     raise KalshiWsError("ws_state_invalid")
 
 
-def _append(path: Path, state: dict[str, Any], payload: Mapping[str, Any]) -> None:
+def _append(path: Path, state_path: Path, state: dict[str, Any], payload: Mapping[str, Any]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     body = {"schema": TAPE_SCHEMA, "previous_hash": state["last_hash"], **dict(payload)}
     digest = hashlib.sha256(json.dumps(body, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
@@ -59,6 +59,10 @@ def _append(path: Path, state: dict[str, Any], payload: Mapping[str, Any]) -> No
         handle.write(json.dumps({**body, "record_hash": digest}, sort_keys=True, separators=(",", ":")) + "\n")
         handle.flush(); os.fsync(handle.fileno())
     state["last_hash"] = digest
+    # Persist the hash cursor with every fsynced record.  Otherwise an abrupt
+    # process exit can restart the next session from a stale cursor and break
+    # the append-only evidence chain even though the tape itself survived.
+    atomic_json(state_path, state)
 
 
 def credentials(venue: Mapping[str, Any]) -> tuple[str, Path]:
@@ -189,37 +193,80 @@ def run_session(*, repository_root: Path, config_path: Path, tape_path: Path, st
     venue = next((x for x in section.get("venues", []) if isinstance(x, dict) and x.get("venue") == "kalshi"), {})
     policy = section.get("authenticated_websocket") if isinstance(section.get("authenticated_websocket"), dict) else {}
     now = int(time.time() * 1000); state = _state(state_path); messages = snapshots = deltas = tickers = 0
+    last_message_at_ms: int | None = None
     base = {"schema": STATUS_SCHEMA, "version": 7, "family": "cross_platform", "authority": "RESEARCH",
             "model_sha": git_head(repository_root), "timestamp_ms": now, "paper_only": True, "research_only": True,
             "authenticated_execution": False, "real_order_submission": False, "execution_authority": False,
             "capital_authority": False, "oms_authority": False, "ledger_write_authority": False, "promotion_authority": False}
+    def publish(feed_status: str, blocker: str) -> dict[str, Any]:
+        timestamp_ms = int(time.time() * 1000)
+        status = {
+            **base,
+            "timestamp_ms": timestamp_ms,
+            "timestamp": timestamp_ms // 1000,
+            "process_state": "RUNNING",
+            "implementation_complete": True,
+            "feed_operational": feed_status == "OPERATIONAL",
+            "feed_status": feed_status,
+            "transport": "AUTHENTICATED_WEBSOCKET",
+            "websocket_attempted": feed_status != "BLOCKED",
+            "messages": messages,
+            "orderbook_snapshots": snapshots,
+            "orderbook_deltas": deltas,
+            "ticker_updates": tickers,
+            "last_message_at_ms": last_message_at_ms,
+            "feed_age_ms": timestamp_ms - last_message_at_ms if last_message_at_ms is not None else None,
+            "connection_epoch": state["connection_epoch"],
+            "last_attempt_ts": timestamp_ms // 1000,
+            "last_success_ts": timestamp_ms // 1000 if feed_status == "OPERATIONAL" else 0,
+            "blocker": blocker,
+            "reason_codes": [blocker] if blocker else [],
+        }
+        atomic_json(status_path, status)
+        return status
+
+    wire: Wire | None = None
+    status: dict[str, Any]
     try:
         if policy.get("enabled") is not True: raise KalshiWsError("BLOCKED_KALSHI_WS_DISABLED_BY_POLICY")
         key_id, key_path = credentials(venue)
         wire = connect(str(venue.get("websocket_endpoint") or ""), auth_headers(key_id, key_path, now))
         state["connection_epoch"] += 1
+        atomic_json(state_path, state)
         wire.send(1, json.dumps(subscription(policy.get("market_tickers") or [],
                                             ticker_all_markets=policy.get("ticker_stream_all_markets") is True),
                                separators=(",", ":")).encode())
+        # A connected, subscribed socket is operational even before its first
+        # market update.  Publish immediately and refresh on idle timeouts so
+        # the canonical supervisor never sees a healthy long-lived session as
+        # missing or stale.
+        status = publish("OPERATIONAL", "")
         while max_messages is None or messages < max_messages:
             try: opcode, payload = wire.receive()
-            except socket.timeout: continue
+            except socket.timeout:
+                status = publish("OPERATIONAL", "")
+                continue
             if opcode == 0x9: wire.send(0xA, payload); continue
             if opcode == 0x8: raise KalshiWsError("kalshi_ws_closed")
             if opcode != 0x1: continue
             value = json.loads(payload); kind = str(value.get("type") or "") if isinstance(value, dict) else ""
-            _append(tape_path, state, {"received_at_ms": int(time.time() * 1000), "transport": "AUTHENTICATED_WEBSOCKET",
-                                        "connection_epoch": state["connection_epoch"], "message": value})
+            last_message_at_ms = int(time.time() * 1000)
+            _append(tape_path, state_path, state, {"received_at_ms": last_message_at_ms, "transport": "AUTHENTICATED_WEBSOCKET",
+                                                   "connection_epoch": state["connection_epoch"], "message": value})
             messages += 1; snapshots += kind == "orderbook_snapshot"; deltas += kind == "orderbook_delta"; tickers += kind == "ticker"
-        wire.stream.close(); feed_status, blocker = "OPERATIONAL", ""
+            status = publish("OPERATIONAL", "")
+        status = publish("OPERATIONAL", "")
     except Exception as exc:  # credentials and transport fail locally, without leaking detail
         feed_status, blocker = "BLOCKED" if str(exc).startswith("BLOCKED_") else "DOWN", str(exc)
-    atomic_json(state_path, state)
-    status = {**base, "process_state": "RUNNING", "implementation_complete": True, "feed_operational": feed_status == "OPERATIONAL",
-              "feed_status": feed_status, "transport": "AUTHENTICATED_WEBSOCKET", "websocket_attempted": feed_status != "BLOCKED",
-              "messages": messages, "orderbook_snapshots": snapshots, "orderbook_deltas": deltas, "ticker_updates": tickers,
-              "connection_epoch": state["connection_epoch"], "blocker": blocker, "reason_codes": [blocker] if blocker else []}
-    atomic_json(status_path, status); return status
+        status = publish(feed_status, blocker)
+    finally:
+        if wire is not None:
+            try:
+                wire.stream.close()
+            except OSError:
+                pass
+        atomic_json(state_path, state)
+    return status
 
 
 def main(argv: Sequence[str] | None = None) -> int:

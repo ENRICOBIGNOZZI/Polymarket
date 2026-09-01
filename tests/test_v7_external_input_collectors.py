@@ -10,6 +10,7 @@ from v7_function_test_support import function_test_loader, raises
 
 import v7_cross_platform_collector as cross
 import v7_kalshi_authenticated_ws_collector as kalshi_ws
+import v7_limitless_collector as limitless
 import v7_osint_mapping_collector as osint_mapping
 import v7_sports_collector as sports
 from v7_osint_engine import RawEvent, SourceTier
@@ -139,6 +140,84 @@ def test_kalshi_ws_missing_local_credentials_fails_closed_without_a_tape(tmp_pat
     assert status["blocker"] == "BLOCKED_KALSHI_WS_KEY_ID_MISSING"
     assert status["websocket_attempted"] is False
     assert not tape.exists()
+
+
+def test_limitless_public_collector_records_markets_books_and_trades_without_token(tmp_path):
+    class LimitlessClient:
+        connection_epoch = 1
+        reconnect_count = 0
+        def get(self, path):
+            timing = {"request_ms": 2.0}
+            if path == "/markets/active":
+                return {"data": [{"slug": "btc-test", "id": 1, "tokens": {"yes": "yes-token", "no": "no-token"},
+                                   "title": "BTC test", "prices": [0.4, 0.6], "status": "FUNDED"}]}, timing
+            if path.endswith("/orderbook"):
+                return {"bids": [{"price": 0.4, "size": 2}], "asks": [{"price": 0.6, "size": 3}], "tokenId": "yes-token"}, timing
+            if path.endswith("/events"):
+                return {"events": [{"txHash": "0xtrade", "price": 0.4, "matchedSize": "2", "tokenId": "yes-token"}]}, timing
+            raise AssertionError(path)
+        def close(self): pass
+    tape = tmp_path / "events.jsonl"
+    status = limitless.collect_once(
+        repository_root=ROOT, config_path=ROOT / "config" / "v7_external_inputs.json", tape_path=tape,
+        state_path=tmp_path / "state.json", status_path=tmp_path / "status.json", client=LimitlessClient(), now_ms=1_800_000_000_000,
+    )
+    assert status["feed_status"] == "OPERATIONAL" and status["credentials_required"] is False and status["token_used"] is False
+    rows = [json.loads(line) for line in tape.read_text().splitlines()]
+    assert {row["kind"] for row in rows} == {"MARKET_METADATA", "ORDERBOOK_SNAPSHOT", "PREDICTION_MARKET_TRADE"}
+    assert all(row["transport"] == "PUBLIC_REST" for row in rows)
+
+
+def test_kalshi_ws_publishes_live_status_and_persists_hash_cursor(tmp_path, monkeypatch):
+    config = json.loads((ROOT / "config" / "v7_external_inputs.json").read_text())
+    venue = config["cross_platform"]["venues"][0]
+    venue["key_id_env"] = "PM_TEST_KALSHI_KEY_ID"
+    venue["private_key_path_env"] = "PM_TEST_KALSHI_PRIVATE_KEY_PATH"
+    config["cross_platform"]["authenticated_websocket"]["market_tickers"] = ["KXTEST"]
+    config_path = tmp_path / "inputs.json"
+    config_path.write_text(json.dumps(config), encoding="utf-8")
+    key = tmp_path / "kalshi.pem"
+    key.write_text("private-key-material", encoding="utf-8")
+    key.chmod(0o600)
+
+    class Stream:
+        def close(self):
+            pass
+
+    class FakeWire:
+        stream = Stream()
+        sent = []
+
+        def send(self, opcode, payload):
+            self.sent.append((opcode, payload))
+
+        def receive(self):
+            return 1, json.dumps({"type": "ticker", "msg": {"market_ticker": "KXTEST"}}).encode()
+
+    previous_id = os.environ.get("PM_TEST_KALSHI_KEY_ID")
+    previous_path = os.environ.get("PM_TEST_KALSHI_PRIVATE_KEY_PATH")
+    try:
+        os.environ["PM_TEST_KALSHI_KEY_ID"] = "key-id"
+        os.environ["PM_TEST_KALSHI_PRIVATE_KEY_PATH"] = str(key)
+        monkeypatch.setattr(kalshi_ws, "auth_headers", lambda *_: {})
+        monkeypatch.setattr(kalshi_ws, "connect", lambda *_: FakeWire())
+        status = kalshi_ws.run_session(
+            repository_root=ROOT, config_path=config_path,
+            tape_path=tmp_path / "events.jsonl", state_path=tmp_path / "state.json",
+            status_path=tmp_path / "status.json", max_messages=1,
+        )
+        persisted = json.loads((tmp_path / "state.json").read_text())
+        published = json.loads((tmp_path / "status.json").read_text())
+        row = json.loads((tmp_path / "events.jsonl").read_text().splitlines()[0])
+        assert status["feed_status"] == published["feed_status"] == "OPERATIONAL"
+        assert published["messages"] == published["ticker_updates"] == 1
+        assert persisted["last_hash"] == row["record_hash"]
+        assert row["previous_hash"] == "0" * 64
+    finally:
+        if previous_id is None: os.environ.pop("PM_TEST_KALSHI_KEY_ID", None)
+        else: os.environ["PM_TEST_KALSHI_KEY_ID"] = previous_id
+        if previous_path is None: os.environ.pop("PM_TEST_KALSHI_PRIVATE_KEY_PATH", None)
+        else: os.environ["PM_TEST_KALSHI_PRIVATE_KEY_PATH"] = previous_path
 
 
 def test_kalshi_metadata_discovery_pages_to_exhaustion_and_polls_books(tmp_path):

@@ -1280,6 +1280,25 @@ def render_prometheus(snapshot: dict[str, Any]) -> str:
         ):
             if row.get(key) is not None:
                 lines.append(_metric(metric_name, row.get(key), {"strategy": family}))
+        if family == "cross_platform":
+            ws_labels = {
+                "strategy": family,
+                "feed_status": row.get("authenticated_websocket_status", "MISSING_OR_STALE"),
+                "blocker": row.get("authenticated_websocket_blocker", "") or "NONE",
+            }
+            lines.append(_metric("polymarket_v7_kalshi_authenticated_websocket_info", 1, ws_labels))
+            lines.append(_metric(
+                "polymarket_v7_kalshi_authenticated_websocket_operational",
+                1 if row.get("authenticated_websocket_feed_operational") is True else 0,
+                {"strategy": family},
+            ))
+            for key, metric_name in (
+                ("authenticated_websocket_messages", "polymarket_v7_kalshi_authenticated_websocket_messages"),
+                ("authenticated_websocket_ticker_updates", "polymarket_v7_kalshi_authenticated_websocket_ticker_updates"),
+                ("authenticated_websocket_orderbook_snapshots", "polymarket_v7_kalshi_authenticated_websocket_orderbook_snapshots"),
+                ("authenticated_websocket_orderbook_deltas", "polymarket_v7_kalshi_authenticated_websocket_orderbook_deltas"),
+            ):
+                lines.append(_metric(metric_name, row.get(key), {"strategy": family}))
     for family, row in sorted(slow_research_rows.items()):
         if not isinstance(row, dict):
             continue

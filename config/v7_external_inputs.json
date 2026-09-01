@@ -81,6 +81,14 @@
       }
     ]
   },
+  "limitless": {
+    "base_url": "https://api.limitless.exchange",
+    "credentials_required": false,
+    "token_usage": "FORBIDDEN_READ_ONLY_COLLECTOR",
+    "max_markets_per_cycle": 20,
+    "transport": "PUBLIC_REST",
+    "enabled": true
+  },
   "osint": {
     "polymarket_market_endpoint": "https://gamma-api.polymarket.com/markets?active=true&closed=false&limit=500",
     "mapping_interval_seconds": 60,

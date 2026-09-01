@@ -282,6 +282,37 @@ class ResearchShadowSupervisor:
     def _component_status_path(self, family: str) -> Path:
         return self.output_root / family / "component_status.json"
 
+    def _kalshi_ws_status_path(self) -> Path:
+        return self.output_root / "cross_platform" / "kalshi_ws_status.json"
+
+    def _kalshi_ws_status(self, timestamp: int) -> dict[str, Any] | None:
+        status = _json_object(self._kalshi_ws_status_path())
+        try:
+            status_timestamp_ms = int(status.get("timestamp_ms") or 0)
+        except (TypeError, ValueError, OverflowError):
+            return None
+        if (
+            status.get("schema") != "polymarket_v7_kalshi_authenticated_ws_status_v1"
+            or status.get("version") != 7
+            or status.get("family") != "cross_platform"
+            or status.get("model_sha") != self.model_sha
+            or status.get("authority") != "RESEARCH"
+            or status.get("paper_only") is not True
+            or status.get("research_only") is not True
+            or status.get("authenticated_execution") is not False
+            or status.get("real_order_submission") is not False
+            or any(status.get(key) is not False for key in (
+                "execution_authority", "capital_authority", "oms_authority",
+                "ledger_write_authority", "promotion_authority",
+            ))
+            or status.get("implementation_complete") is not True
+            or status.get("transport") != "AUTHENTICATED_WEBSOCKET"
+            or status.get("feed_status") not in {"OPERATIONAL", "BLOCKED", "DOWN"}
+            or not -5_000 <= timestamp * 1000 - status_timestamp_ms <= 180_000
+        ):
+            return None
+        return status
+
     def _external_component_status(self, family: str, timestamp: int) -> dict[str, Any] | None:
         if family not in {"sports_latency", "cross_platform"}:
             return None
@@ -358,6 +389,34 @@ class ResearchShadowSupervisor:
                 "parse_failure_count": int(component.get("parse_failure_count") or 0),
                 "dropped_event_count": int(component.get("dropped_event_count") or 0),
             })
+        if family == "cross_platform":
+            websocket = self._kalshi_ws_status(timestamp)
+            status.update({
+                "authenticated_websocket_status_path": str(self._kalshi_ws_status_path()),
+                "authenticated_websocket_status": (
+                    str(websocket.get("feed_status")) if websocket is not None
+                    else "MISSING_OR_STALE"
+                ),
+                "authenticated_websocket_feed_operational": (
+                    websocket is not None and websocket.get("feed_operational") is True
+                ),
+                "authenticated_websocket_messages": (
+                    int(websocket.get("messages") or 0) if websocket is not None else 0
+                ),
+                "authenticated_websocket_ticker_updates": (
+                    int(websocket.get("ticker_updates") or 0) if websocket is not None else 0
+                ),
+                "authenticated_websocket_orderbook_snapshots": (
+                    int(websocket.get("orderbook_snapshots") or 0) if websocket is not None else 0
+                ),
+                "authenticated_websocket_orderbook_deltas": (
+                    int(websocket.get("orderbook_deltas") or 0) if websocket is not None else 0
+                ),
+                "authenticated_websocket_blocker": (
+                    str(websocket.get("blocker") or "") if websocket is not None
+                    else "KALSHI_WS_STATUS_MISSING_OR_STALE"
+                ),
+            })
         return status
 
     def _initialize(self) -> None:
@@ -404,6 +463,17 @@ class ResearchShadowSupervisor:
                 "parse_failure_count": status.get("parse_failure_count", 0),
                 "dropped_event_count": status.get("dropped_event_count", 0),
             }
+            if family == "cross_platform":
+                families[family].update({
+                    "authenticated_websocket_status_path": status.get("authenticated_websocket_status_path", ""),
+                    "authenticated_websocket_status": status.get("authenticated_websocket_status", "MISSING_OR_STALE"),
+                    "authenticated_websocket_feed_operational": status.get("authenticated_websocket_feed_operational", False),
+                    "authenticated_websocket_messages": status.get("authenticated_websocket_messages", 0),
+                    "authenticated_websocket_ticker_updates": status.get("authenticated_websocket_ticker_updates", 0),
+                    "authenticated_websocket_orderbook_snapshots": status.get("authenticated_websocket_orderbook_snapshots", 0),
+                    "authenticated_websocket_orderbook_deltas": status.get("authenticated_websocket_orderbook_deltas", 0),
+                    "authenticated_websocket_blocker": status.get("authenticated_websocket_blocker", ""),
+                })
         atomic_json(self.manifest_path, {
             "schema": MANIFEST_SCHEMA,
             "version": 7,

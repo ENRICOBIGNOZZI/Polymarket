@@ -244,6 +244,16 @@ fi
 python3 scripts/v7_public_https_proxy.py --host 127.0.0.1 --port "$PUBLIC_PROXY_PORT" \
   >> "$RUN_ROOT/public_https_proxy.log" 2>&1 &
 pids+=("$!")
+
+# Limitless exposes markets, orderbooks and finalized trades through public
+# read-only endpoints. A trading token is intentionally never passed here.
+python3 scripts/v7_limitless_collector.py \
+  --repository-root "$ROOT" --config "$EXTERNAL_INPUT_CONFIG" \
+  --tape "$RUN_ROOT/shadow/limitless/events.jsonl" \
+  --state "$RUN_ROOT/shadow/limitless/collector_state.json" \
+  --status "$RUN_ROOT/shadow/limitless/component_status.json" --interval 15 --loop \
+  >> "$RUN_ROOT/shadow/limitless/collector.log" 2>&1 &
+pids+=("$!")
 proxy_ready=0
 for _ in $(seq 1 50); do
   if python3 - "$PUBLIC_PROXY_PORT" <<'PY' >/dev/null 2>&1
