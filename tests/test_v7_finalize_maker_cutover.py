@@ -122,6 +122,17 @@ class MakerCutoverFinalizerTest(unittest.TestCase):
                 cutover.finalize(root, SHA, NONCE, mark_path=mark, now_ms=now),
                 receipt,
             )
+            next_nonce = f"{'c' * 40}.124.457"
+            sentinel = json.loads((root / "control/CUTOVER_DRAIN").read_text())
+            sentinel["nonce"] = next_nonce
+            write(root / "control/CUTOVER_DRAIN", sentinel)
+            mark_value = json.loads(mark.read_text())
+            mark_value["timestamp_ms"] = now + 1
+            write(mark, mark_value)
+            retried = cutover.finalize(
+                root, SHA, next_nonce, mark_path=mark, now_ms=now + 1)
+            self.assertEqual(retried["nonce"], next_nonce)
+            self.assertTrue(retried["never_started"])
 
     def test_crash_after_state_commit_resumes_with_stale_mark_exactly_once(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

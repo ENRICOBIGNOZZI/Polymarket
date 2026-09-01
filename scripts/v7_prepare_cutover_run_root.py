@@ -234,6 +234,69 @@ def prepare(
     micro_state = read_json(run_root / "micro_taker/state.json")
     maker_status = read_json(run_root / "micro_maker/status.json")
     maker_state = read_json(run_root / "micro_maker/state.json")
+    maker_receipt = read_json(run_root / "control/maker_cutover_liquidation.json")
+    ledger_path = run_root / "ledger/execution.jsonl"
+    spool_path = run_root / "ledger/spool"
+    sleeves = portfolio.get("sleeves") if isinstance(portfolio.get("sleeves"), dict) else {}
+    ledger_empty = ledger_path.exists() and ledger_path.stat().st_size == 0
+    spool_empty = not spool_path.exists() or not any(spool_path.glob("*.json"))
+    prior_never_started_sleeves: list[str] = []
+
+    def prove_never_started(name: str, allowed_sources: set[str]) -> dict:
+        sleeve = sleeves.get(name) if isinstance(sleeves.get(name), dict) else {}
+        try:
+            budget = float(sleeve.get("budget") or 0.0)
+            equity = float(sleeve.get("equity") or 0.0)
+        except (TypeError, ValueError, OverflowError) as exc:
+            raise CutoverArchiveError(f"prior_never_started_invalid:{name}") from exc
+        if (
+            not ledger_empty or not spool_empty
+            or runtime.get("state") not in {"stopping", "stopped"}
+            or runtime.get("economic_new_risk_ready") is not False
+            or runtime.get("authorized_alpha_actions") != []
+            or sleeve.get("source") not in allowed_sources
+            or sleeve.get("killed") is not False
+            or abs(equity - budget) > 1e-9
+        ):
+            raise CutoverArchiveError(f"prior_never_started_invalid:{name}")
+        return {"source": sleeve["source"], "budget": budget, "equity": equity}
+
+    if not micro_status and not micro_state:
+        prove_never_started("micro_taker", {"not_started", "zero_authority_budget"})
+        micro_status = {
+            "paper_only": True, "authenticated_execution": False, "open_positions": 0,
+        }
+        micro_state = {"positions": {}}
+        prior_never_started_sleeves.append("micro_taker")
+    if not maker_status and not maker_state:
+        maker_proof = prove_never_started("micro_maker", {"not_started"})
+        absence = maker_receipt.get("absence_proof") \
+            if isinstance(maker_receipt.get("absence_proof"), dict) else {}
+        if (
+            maker_receipt.get("schema") != "polymarket_v7_maker_cutover_liquidation_v1"
+            or maker_receipt.get("state") != "MAKER_FLAT"
+            or maker_receipt.get("never_started") is not True
+            or maker_receipt.get("model_sha") != previous_sha
+            or maker_receipt.get("paper_only") is not True
+            or maker_receipt.get("authenticated_execution") is not False
+            or maker_receipt.get("real_order_submission") is not False
+            or maker_receipt.get("positions_liquidated") != 0
+            or maker_receipt.get("ledger_record_ids") != []
+            or maker_receipt.get("final_pnl") != 0.0
+            or absence.get("runtime_sha") != previous_sha
+            or absence.get("runtime_state") != runtime.get("state")
+            or absence.get("authorized_alpha_actions") != []
+            or absence.get("ledger_bytes") != 0
+            or absence.get("maker_portfolio_source") != maker_proof["source"]
+            or float(absence.get("maker_budget") or 0.0) != maker_proof["budget"]
+            or float(absence.get("maker_equity") or 0.0) != maker_proof["equity"]
+        ):
+            raise CutoverArchiveError("prior_never_started_receipt_invalid:micro_maker")
+        maker_status = {
+            "paper_only": True, "authenticated_execution": False, "positions": [],
+        }
+        maker_state = {"inventory": {}}
+        prior_never_started_sleeves.append("micro_maker")
     for name, value in (("external_status", external_status), ("external_state", external_state),
                         ("micro_status", micro_status), ("micro_state", micro_state),
                         ("maker_status", maker_status), ("maker_state", maker_state)):
@@ -318,6 +381,7 @@ def prepare(
         "runtime_checkout_drift_detected": runtime_checkout_drift,
         "prior_quarantined_sleeves": prior_quarantined_sleeves,
         "prior_reconciled_fatal_sleeves": prior_reconciled_fatal_sleeves,
+        "prior_never_started_sleeves": sorted(prior_never_started_sleeves),
         "prior_open_positions": durable_open,
     }
     temporary = control / f"cutover_lineage.json.tmp.{os.getpid()}"

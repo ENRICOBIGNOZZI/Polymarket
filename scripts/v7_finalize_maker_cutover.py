@@ -86,16 +86,20 @@ def finalize_never_started(
 ) -> dict[str, Any]:
     """Attest a flat Maker that provably never materialized durable state."""
     if prior_receipt:
-        if (
+        valid_prior_never_started = (
             prior_receipt.get("schema") == "polymarket_v7_maker_cutover_liquidation_v1"
-            and prior_receipt.get("nonce") == nonce
             and prior_receipt.get("model_sha") == model_sha
             and prior_receipt.get("state") == "MAKER_FLAT"
             and prior_receipt.get("never_started") is True
             and prior_receipt.get("positions_liquidated") == 0
-        ):
+            and prior_receipt.get("paper_only") is True
+            and prior_receipt.get("authenticated_execution") is False
+            and prior_receipt.get("real_order_submission") is False
+        )
+        if valid_prior_never_started and prior_receipt.get("nonce") == nonce:
             return prior_receipt
-        raise MakerCutoverError("maker_never_started_receipt_mismatch")
+        if not valid_prior_never_started:
+            raise MakerCutoverError("maker_never_started_receipt_mismatch")
 
     runtime = read_json(root / "control/runtime_status.json")
     portfolio = read_json(root / "control/portfolio_state.json")

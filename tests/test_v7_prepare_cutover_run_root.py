@@ -85,6 +85,53 @@ class V7PrepareCutoverRunRootTest(unittest.TestCase):
             self.assertEqual(result, {"state": "SAME_SHA_RECOVERY", "target_sha": OLD, "archived": False})
             self.assertTrue((run / "forward-tape.jsonl").is_file())
 
+    def test_partial_start_archives_only_with_never_started_receipt(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            tmp_path = Path(directory)
+            run = tmp_path / "paper_v7_live"
+            fixture(run)
+            (run / "ledger/execution.jsonl").write_text("", encoding="utf-8")
+            (run / "micro_taker/status.json").unlink()
+            (run / "micro_taker/state.json").unlink()
+            (run / "micro_maker/status.json").unlink()
+            (run / "micro_maker/state.json").unlink()
+            runtime = json.loads((run / "control/runtime_status.json").read_text())
+            runtime.update({
+                "state": "stopping", "economic_new_risk_ready": False,
+                "authorized_alpha_actions": [],
+            })
+            write_json(run / "control/runtime_status.json", runtime)
+            portfolio = json.loads((run / "control/portfolio_state.json").read_text())
+            portfolio["sleeves"] = {
+                "micro_taker": {"source": "zero_authority_budget", "killed": False,
+                                "budget": 0.0, "equity": 0.0},
+                "micro_maker": {"source": "not_started", "killed": False,
+                                "budget": 2_000.0, "equity": 2_000.0},
+            }
+            write_json(run / "control/portfolio_state.json", portfolio)
+            write_json(run / "control/maker_cutover_liquidation.json", {
+                "schema": "polymarket_v7_maker_cutover_liquidation_v1",
+                "state": "MAKER_FLAT", "never_started": True,
+                "model_sha": OLD, "paper_only": True,
+                "authenticated_execution": False, "real_order_submission": False,
+                "positions_liquidated": 0, "ledger_record_ids": [], "final_pnl": 0.0,
+                "absence_proof": {
+                    "runtime_sha": OLD, "runtime_state": "stopping",
+                    "authorized_alpha_actions": [], "ledger_bytes": 0,
+                    "maker_portfolio_source": "not_started",
+                    "maker_budget": 2_000.0, "maker_equity": 2_000.0,
+                },
+            })
+            result = cutover.prepare(
+                run, tmp_path / "archives", tmp_path, NEW, now=130,
+                ancestor_check=lambda *_: True,
+            )
+            self.assertEqual(
+                result["prior_never_started_sleeves"],
+                ["micro_maker", "micro_taker"],
+            )
+            self.assertEqual(result["prior_open_positions"]["maker"], 0)
+
     def test_stopped_runtime_checkout_drift_uses_immutable_deployed_sha(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             tmp_path = Path(directory)
