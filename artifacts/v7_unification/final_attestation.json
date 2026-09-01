@@ -1,0 +1,78 @@
+{
+  "schema": "polymarket_v7_final_attestation_v1",
+  "baseline_sha": "8d9e8e603aae4d73842212eedcf8e0e06383127f",
+  "validated_code_sha": "15fd020b20500e8f1c3ffdb664e568d7b5e3e66f",
+  "remote_canary_sha": "e9390fabf18aecc7d088b3e880a77e98baefd07f",
+  "paper_only": true,
+  "authenticated_execution": false,
+  "real_order_submission": false,
+  "real_capital_at_risk": false,
+  "automatic_promotion": false,
+  "architecture": {
+    "system_count": 1,
+    "economic_engines": ["CRYPTO_SETTLEMENT_ENGINE", "STRUCTURAL_ARB_ENGINE"],
+    "global_portfolio_coordinator_count": 1,
+    "capital_allocator_count": 1,
+    "risk_owner_count": 1,
+    "oms_count": 1,
+    "inventory_owner_count": 1,
+    "ledger_writer_count": 1,
+    "known_migration_defect_count": 0
+  },
+  "crypto_contexts": {
+    "registered_count": 8,
+    "assets": ["BTC", "ETH", "SOL", "XRP"],
+    "horizons": ["M5", "M15"],
+    "one_minute_registered": false,
+    "non_btc_authority": "SHADOW_ZERO_AUTHORITY",
+    "checked_in_model_artifact_count": 0,
+    "automatic_discovery_execution": false
+  },
+  "verification": {
+    "release_ctest": {"passed": 223, "total": 223},
+    "debug_ctest": {"passed": 223, "total": 223},
+    "asan_ubsan_ctest": {"passed": 223, "total": 223},
+    "python_v7_tests": {"passed": 782},
+    "monitoring_tests": {"passed": 32},
+    "protocol_fuzz_iterations": 5000,
+    "full_history_pattern_secret_findings": 0,
+    "full_history_entropy_secret_findings": 0,
+    "internal_compute_latency_gate_passed": true,
+    "representative_venue_or_network_latency_proven": false
+  },
+  "remote_ci": {
+    "workflow_run_id": 33505208138,
+    "workflow_url": "https://github.com/ENRICOBIGNOZZI/Polymarket/actions/runs/33505208138",
+    "conclusions": {
+      "ci-v7-Debug": "success",
+      "ci-v7-Release": "success",
+      "sanitizer-v7": "success",
+      "security-audit-v7": "success"
+    }
+  },
+  "bounded_paper_canary": {
+    "scope": "LOCAL_PUBLIC_DATA_PAPER",
+    "duration_seconds": 130,
+    "exact_sha_ci_green": true,
+    "runtime_final_state": "stopping",
+    "controlled_sigterm": true,
+    "residual_process_count": 0,
+    "economic_new_risk_ready": false,
+    "authorized_alpha_actions": [],
+    "safe_actions": ["CANCEL", "WITHDRAW", "NOTHING"],
+    "coordinator_state": "IDLE_FAIL_CLOSED",
+    "gross_crypto_exposure_usd": 0.0,
+    "promotion_ready": false,
+    "economic_state": "MORE_EVIDENCE_REQUIRED"
+  },
+  "external_blockers": [
+    "PAPER_HOST_SSH_OWNER_AUTHENTICATION_UNAVAILABLE",
+    "GITHUB_RULESET_REPOSITORY_ADMIN_AUTHENTICATION_UNAVAILABLE",
+    "MAIN_ONLY_MONITORING_SINGLE_WRITER_AND_LIVE_PAPER_WORKFLOWS_NOT_DISPATCHABLE_FROM_FEATURE_BRANCH"
+  ],
+  "rollback": {
+    "tag": "v7-unification-pre-migration-8d9e8e60",
+    "bundle": "/Users/enrico/polymarket-backups/v7-unification-8d9e8e60/polymarket-all-refs.bundle",
+    "bundle_sha256": "6b1fe45289cbb0c14aff6e31960851d197e87f6fe0534d56518f73f9509e6eee"
+  }
+}
