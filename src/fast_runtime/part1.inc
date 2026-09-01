@@ -240,9 +240,26 @@ FastStructuralObservationScope load_fast_structural_observation_scope(
         throw std::runtime_error("Fast Structural allocation must be a JSON object");
     }
     const auto& object = root.as_object();
+    const auto v7_it = object.find("v7");
+    if (v7_it == object.end() || !v7_it->value().is_object()) {
+        throw std::runtime_error("Fast Structural allocation V7 safety scope missing");
+    }
+    const auto& v7 = v7_it->value().as_object();
+    const auto live_it = v7.find("live_capability");
+    if (live_it == v7.end() || !live_it->value().is_object()) {
+        throw std::runtime_error("Fast Structural live capability guard missing");
+    }
+    const auto& live = live_it->value().as_object();
     if (!get_boolean(object, "paper_only", false) ||
-        get_boolean(object, "authenticated_execution", true) ||
-        get_boolean(object, "real_order_submission", true)) {
+        get_text(object, "execution_mode") != "PAPER_SIMULATED" ||
+        !get_boolean(v7, "paper_only", false) ||
+        get_text(v7, "execution_mode") != "PAPER_SIMULATED" ||
+        get_boolean(v7, "authenticated_execution", true) ||
+        get_boolean(v7, "real_order_submission", true) ||
+        get_boolean(live, "live_enabled", true) ||
+        get_number(live, "max_daily_loss", -1.0) != 0.0 ||
+        get_number(live, "max_exposure", -1.0) != 0.0 ||
+        get_number(live, "max_order", -1.0) != 0.0) {
         throw std::runtime_error("Fast Structural allocation violates PAPER safety");
     }
     const auto scope_it = object.find("capital_scope");
