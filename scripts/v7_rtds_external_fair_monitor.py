@@ -790,7 +790,7 @@ class Monitor:
         )
         common = {"paper_only": True, "authenticated_execution": False, "real_order_submission": False}
         shadow_collector_active = bool(
-            router.get("schema") == "polymarket_v7_btc_settlement_engine_status_v1"
+            router.get("schema") == "polymarket_v7_crypto_settlement_engine_status_v1"
             and router.get("code_sha") == self.code_sha
             and router.get("state") == "RUNNING"
             and router.get("paper_only") is True

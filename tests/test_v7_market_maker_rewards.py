@@ -1072,7 +1072,7 @@ class MakerRewardSelectorTests(unittest.TestCase):
                 "allocator_owner": "V7_CANONICAL_ALLOCATOR",
                 "view_id": "micro_maker",
                 "scope_class": "COMPONENT_OBSERVATION",
-                "engine_id": "BTC_SETTLEMENT_ENGINE",
+                "engine_id": "CRYPTO_SETTLEMENT_ENGINE",
                 "component": "professional_maker",
                 "execution_budget": 0.0,
                 "observation_budget": 2000.0,

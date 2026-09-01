@@ -410,7 +410,7 @@ class RtdsExternalFairMonitorTests(unittest.TestCase):
 
             router_receive_ms = time.time_ns() // 1_000_000
             (root / "external" / "paper_router_status.json").write_text(json.dumps({
-                "schema": "polymarket_v7_btc_settlement_engine_status_v1",
+                "schema": "polymarket_v7_crypto_settlement_engine_status_v1",
                 "timestamp": int(time.time()), "code_sha": "a" * 40, "state": "RUNNING",
                 "paper_only": True, "authenticated_execution": False,
                 "real_order_submission": False,

@@ -144,7 +144,7 @@ def main() -> None:
     assert 'event_type="ORDER_SUBMITTED"' in source
     assert 'event_type="FILL"' in source
     assert '"economic_authority": "RESEARCH_EVIDENCE_ONLY"' in source
-    assert '"engine_id": "BTC_SETTLEMENT_ENGINE"' in source
+    assert '"engine_id": "CRYPTO_SETTLEMENT_ENGINE"' in source
     assert '"schema": "polymarket_v7_opportunity_envelope_v1"' in source
     assert '"opportunities" / "inbox"' in source
     assert "spool_event" not in source
@@ -246,11 +246,11 @@ def main() -> None:
         ]
         assert len(proposals) == 1
         proposal = OpportunityEnvelope.parse(proposals[0]).raw
-        assert proposal["engine_id"] == "BTC_SETTLEMENT_ENGINE"
+        assert proposal["engine_id"] == "CRYPTO_SETTLEMENT_ENGINE"
         assert proposal["action"] == "NOTHING"
         research = [
             json.loads(path.read_text())
-            for path in (run_root / "research" / "evidence" / "btc_settlement_counterfactual").glob("*.json")
+            for path in (run_root / "research" / "evidence" / "crypto_settlement_counterfactual").glob("*.json")
         ]
         assert {event["event_type"] for event in research} == {"ORDER_SUBMITTED", "FILL"}
         assert all(event["metadata"]["research_evidence_only"] is True

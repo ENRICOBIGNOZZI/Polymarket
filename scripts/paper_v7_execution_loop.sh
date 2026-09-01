@@ -20,7 +20,9 @@ EXTERNAL_SOURCE_REGISTRY="${PM_V7_EXTERNAL_SOURCE_REGISTRY:-config/v7_external_s
 CI_REPOSITORY="${PM_V7_CI_REPOSITORY:-ENRICOBIGNOZZI/Polymarket}"
 OSINT_SOURCE_REGISTRY="${PM_V7_OSINT_SOURCE_REGISTRY:-config/v7_osint_sources.json}"
 LIVE_MODEL_SCOPE="${PM_V7_LIVE_MODEL_SCOPE:-config/v7_live_model_scope.json}"
-BTC_SETTLEMENT_ENGINE_POLICY="${PM_V7_BTC_SETTLEMENT_ENGINE_POLICY:-config/v7_btc_settlement_engine.json}"
+CRYPTO_SETTLEMENT_ENGINE_POLICY="${PM_V7_CRYPTO_SETTLEMENT_ENGINE_POLICY:-config/v7_crypto_settlement_engine.json}"
+CRYPTO_SETTLEMENT_MARKET_REGISTRY="${PM_V7_CRYPTO_SETTLEMENT_MARKET_REGISTRY:-config/v7_crypto_settlement_markets.json}"
+CRYPTO_SETTLEMENT_MODEL_REGISTRY="${PM_V7_CRYPTO_SETTLEMENT_MODEL_REGISTRY:-config/v7_crypto_settlement_model_registry.json}"
 EXTERNAL_INPUT_CONFIG="${PM_V7_EXTERNAL_INPUT_CONFIG:-config/v7_external_inputs.json}"
 EXTERNAL_MAPPING_REGISTRY="${PM_V7_EXTERNAL_MAPPING_REGISTRY:-config/v7_external_mappings.json}"
 ADAPTIVE_UNIVERSE_CONFIG="${PM_V7_ADAPTIVE_UNIVERSE_CONFIG:-config/v7_adaptive_universe.json}"
@@ -141,7 +143,7 @@ assert target | excluded == families and not target & excluded
 assert excluded == {"ranking", "pca", "local_factor"}
 assert shadow == {"sports_latency", "cross_platform", "wallet_intelligence"}
 assert set(live_scope.get("paper_execution_engines") or [])=={
-    "BTC_SETTLEMENT_ENGINE","STRUCTURAL_ARB_ENGINE",
+    "CRYPTO_SETTLEMENT_ENGINE","STRUCTURAL_ARB_ENGINE",
 }
 assert set(live_scope.get("component_shadow_families") or [])=={
     "crypto_settlement_fair","professional_maker","crypto_informed_taker",
@@ -223,13 +225,15 @@ python3 scripts/v7_process_manifest.py \
 
 # Freeze the horizon/authority contract even during execution-evidence cold
 # start. With no empirical ACK/cancel profile supplied, the resulting snapshot
-# deliberately authorizes CANCEL/NOTHING only.
-python3 scripts/v7_btc_settlement_engine_contract.py \
-  --config "$BTC_SETTLEMENT_ENGINE_POLICY" \
+# deliberately authorizes CANCEL/WITHDRAW/NOTHING only.
+python3 scripts/v7_crypto_settlement_engine_contract.py \
+  --config "$CRYPTO_SETTLEMENT_ENGINE_POLICY" \
   --registry "$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["v7"]["strategy_registry"])' "$CONFIG")" \
-  --live-scope "$LIVE_MODEL_SCOPE" --code-sha "$SHA" --horizon-seconds 300 \
-  --output "$CONTROL/btc_settlement_engine_snapshot.json" \
-  > "$CONTROL/btc_settlement_engine_snapshot.summary.json"
+  --live-scope "$LIVE_MODEL_SCOPE" --market-registry "$CRYPTO_SETTLEMENT_MARKET_REGISTRY" \
+  --model-registry "$CRYPTO_SETTLEMENT_MODEL_REGISTRY" \
+  --code-sha "$SHA" --asset BTC --horizon M5 \
+  --output "$CONTROL/crypto_settlement_engine_snapshot.json" \
+  > "$CONTROL/crypto_settlement_engine_snapshot.summary.json"
 
 if [[ -d "$LOCK" ]]; then
   old="$(cat "$LOCK/pid" 2>/dev/null || true)"
@@ -413,7 +417,7 @@ ok=(status.get("schema")=="polymarket_v7_external_fair_status_v1"
     and fair.get("valid") is True
     and oracle.get("healthy") is True
     and external.get("healthy") is True
-    and value.get("schema")=="polymarket_v7_btc_settlement_engine_status_v1"
+    and value.get("schema")=="polymarket_v7_crypto_settlement_engine_status_v1"
     and value.get("code_sha")==sys.argv[3]
     and value.get("state")=="RUNNING"
     and value.get("paper_only") is True
@@ -454,7 +458,7 @@ write_runtime_status() {
     model_source="cold_start_policy"
   fi
   local tmp="$CONTROL/runtime_status.json.tmp.$$"
-  printf '{"schema":"polymarket_v7_runtime_status_v3","timestamp":%s,"version":7,"paper_only":true,"authenticated_execution":false,"real_order_submission":false,"real_capital_at_risk":false,"model_sha":"%s","config_hash":"%s","policy_hash":"%s","model_hash":"%s","model_identity_source":"%s","run_id":"%s","ledger_id":"%s","server_id":"%s","pid":%s,"state":"%s","killed":%s,"economic_system":"V7_UNIFIED","economic_engines":["BTC_SETTLEMENT_ENGINE","STRUCTURAL_ARB_ENGINE"],"global_portfolio_coordinator":"V7_GLOBAL_PORTFOLIO_COORDINATOR","execution_authority":"V7_CANONICAL_CHAIN","single_execution_owner":true,"canonical_state_reconciled":true,"exact_sha_ci_green":%s,"p0_authority_configured":["BTC_SETTLEMENT_ENGINE","STRUCTURAL_ARB_ENGINE"],"p0_full_stack_ready":%s,"readiness":"%s","external_fair_runtime_ready":%s,"economic_new_risk_ready":false,"economic_decision_state":"CANCEL_NOTHING_ONLY","authorized_alpha_actions":[],"safe_actions":["CANCEL","NOTHING"]}\n' \
+  printf '{"schema":"polymarket_v7_runtime_status_v3","timestamp":%s,"version":7,"paper_only":true,"authenticated_execution":false,"real_order_submission":false,"real_capital_at_risk":false,"model_sha":"%s","config_hash":"%s","policy_hash":"%s","model_hash":"%s","model_identity_source":"%s","run_id":"%s","ledger_id":"%s","server_id":"%s","pid":%s,"state":"%s","killed":%s,"economic_system":"V7_UNIFIED","economic_engines":["CRYPTO_SETTLEMENT_ENGINE","STRUCTURAL_ARB_ENGINE"],"global_portfolio_coordinator":"V7_GLOBAL_PORTFOLIO_COORDINATOR","execution_authority":"V7_CANONICAL_CHAIN","single_execution_owner":true,"canonical_state_reconciled":true,"exact_sha_ci_green":%s,"p0_authority_configured":["CRYPTO_SETTLEMENT_ENGINE","STRUCTURAL_ARB_ENGINE"],"p0_full_stack_ready":%s,"readiness":"%s","external_fair_runtime_ready":%s,"economic_new_risk_ready":false,"economic_decision_state":"SAFE_ACTIONS_ONLY","authorized_alpha_actions":[],"safe_actions":["CANCEL","WITHDRAW","NOTHING"]}\n' \
     "$now" "$SHA" "$CONFIG_HASH" "$POLICY_HASH" "$model_hash" "$model_source" "$RUN_ID" "$LEDGER_ID" "$SERVER_ID" "$$" "$state" "$killed" "$EXACT_SHA_CI_GREEN" "$p0_ready" "$readiness" "$external_ready" > "$tmp"
   mv "$tmp" "$CONTROL/runtime_status.json"
 }
@@ -652,7 +656,7 @@ python3 scripts/v7_ledger_spool.py \
 v7_register_child "$!"
 
 # The only consumer of proposals from both economic engines. Checked-in V7
-# cannot authorize new risk; the coordinator may select CANCEL or emit NOTHING.
+# cannot authorize new risk; the coordinator may select CANCEL/WITHDRAW or emit NOTHING.
 python3 scripts/v7_global_portfolio_coordinator.py \
   --run-root "$RUN_ROOT" --loop --interval 0.1 \
   >> "$RUN_ROOT/global_portfolio_coordinator.log" 2>&1 &
@@ -735,7 +739,7 @@ v7_register_child "$!"
   done
 ) & v7_register_child "$!"
 
-# The professional Maker is now an execution-model component of the single BTC
+# The professional Maker is an execution-model component of the single crypto
 # settlement owner. Keep its exact-WS fillability and fill-conditioned markout
 # observers live, but do not launch the legacy independent PAPER maker runtime.
 (

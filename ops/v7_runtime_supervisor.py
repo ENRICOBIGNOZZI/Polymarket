@@ -61,7 +61,7 @@ def external_fair_ready(run_root: Path, expected_sha: str, *, now: int | None = 
         and fair.get("valid") is True
         and oracle.get("healthy") is True
         and external.get("healthy") is True
-        and router.get("schema") == "polymarket_v7_btc_settlement_engine_status_v1"
+        and router.get("schema") == "polymarket_v7_crypto_settlement_engine_status_v1"
         and router.get("code_sha") == expected_sha
         and router.get("state") == "RUNNING"
         and router.get("paper_only") is True

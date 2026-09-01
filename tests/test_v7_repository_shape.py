@@ -170,6 +170,11 @@ class V7RepositoryShapeTest(unittest.TestCase):
             "scripts/v7_local_factor_primitives.py",
             "scripts/v7_pca_stat_arb_primitives.py",
             "config/paper_v7.json",
+            "config/v7_crypto_settlement_engine.json",
+            "config/v7_crypto_settlement_markets.json",
+            "config/v7_crypto_settlement_model_registry.json",
+            "scripts/v7_crypto_settlement.py",
+            "scripts/v7_crypto_market_discovery.py",
             "config/v7_professional_market_maker.json",
             "monitoring/exporter_v7.py",
             "monitoring/grafana/dashboards/polymarket-v7.json",
@@ -201,10 +206,10 @@ class V7RepositoryShapeTest(unittest.TestCase):
 
     def test_final_docs_describe_two_engines_and_no_independent_component_authority(self) -> None:
         readme = (ROOT / "README.md").read_text(encoding="utf-8")
-        btc = (ROOT / "docs/v7_world_class/btc_settlement_engine.md").read_text(encoding="utf-8")
+        btc = (ROOT / "docs/v7_world_class/crypto_settlement_engine.md").read_text(encoding="utf-8")
         dashboard = (ROOT / "monitoring/grafana/dashboards/polymarket-v7.json").read_text(encoding="utf-8")
         for token in (
-            "BTC_SETTLEMENT_ENGINE", "STRUCTURAL_ARB_ENGINE",
+            "CRYPTO_SETTLEMENT_ENGINE", "STRUCTURAL_ARB_ENGINE",
             "V7_GLOBAL_PORTFOLIO_COORDINATOR", "one allocator", "one risk owner",
             "one OMS", "one inventory owner", "one append-only ledger writer",
             "Zero-authority research plane",
@@ -214,6 +219,8 @@ class V7RepositoryShapeTest(unittest.TestCase):
         self.assertNotIn("registry authority owner", btc)
         self.assertNotIn("by Sleeve", dashboard)
         self.assertNotIn('\"title\":\"Sleeves\"', dashboard)
+        self.assertIn("Crypto Settlement Contexts", dashboard)
+        self.assertIn("{{asset}} {{horizon}}", dashboard)
 
     def test_source_sbom_covers_declared_build_dependencies(self) -> None:
         sbom = json.loads((ROOT / "artifacts/v7_sbom.spdx.json").read_text(encoding="utf-8"))

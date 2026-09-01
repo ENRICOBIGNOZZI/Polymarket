@@ -1,0 +1,103 @@
+{
+  "schema": "polymarket_v7_crypto_settlement_market_registry_v1",
+  "version": 1,
+  "paper_only": true,
+  "authenticated_execution": false,
+  "real_order_submission": false,
+  "real_capital_at_risk": false,
+  "automatic_discovery_execution": false,
+  "decision_owner": "CRYPTO_SETTLEMENT_ENGINE",
+  "supported_assets": ["BTC", "ETH", "SOL", "XRP"],
+  "supported_horizons": ["M1", "M5", "M15", "H1", "H4"],
+  "unregistered_context_policy": "NOTHING",
+  "contexts": [
+    {
+      "asset": "BTC", "horizon": "M5", "horizon_seconds": 300,
+      "contract_family": "BTC_USD_UPDOWN_5M", "enabled": true,
+      "authority": "SHADOW", "research_only": false,
+      "polymarket": {"slug_template": "btc-updown-{horizon_slug}-{window_start_unix}", "horizon_slug": "5m", "observed_live_slug": "btc-updown-5m-1788262200", "verified_at_utc": "2026-09-01T11:30:00Z", "verification_source": "https://gamma-api.polymarket.com"},
+      "settlement": {"oracle_source": "CHAINLINK_DATA_STREAM", "reference_pair": "BTC/USD", "stream_url": "https://data.chain.link/streams/btc-usd-twap-60s-streams", "settlement_window_seconds": 60, "timestamp_semantics": "WINDOW_TWAP_COMPARED_TO_RANGE_START", "comparison_operator": "GREATER_THAN_OR_EQUAL", "rounding_rules": "CHAINLINK_STREAM_NATIVE", "boundary_behavior": "EQUAL_IS_UP", "fallback_resolution": "NONE_FAIL_CLOSED"},
+      "settlement_semantic_hash": "59710f458603c9bc1c0e4094281b172d2a57daa93242845b30da162debd4f6c7",
+      "external_symbols": {"binance_spot":"BTCUSDT","coinbase_spot":"BTC-USD","bybit_spot":"BTCUSDT","binance_perp":"BTCUSDT","bybit_perp":"BTCUSDT","deribit":"BTC-PERPETUAL"},
+      "maker_tte_window_seconds": [120, 300], "taker_tte_window_seconds": [5, 120],
+      "market_mapping_verified": true, "settlement_mapping_verified": true
+    },
+    {
+      "asset": "BTC", "horizon": "M15", "horizon_seconds": 900,
+      "contract_family": "BTC_USD_UPDOWN_15M", "enabled": true,
+      "authority": "SHADOW", "research_only": false,
+      "polymarket": {"slug_template": "btc-updown-{horizon_slug}-{window_start_unix}", "horizon_slug": "15m", "observed_live_slug": "btc-updown-15m-1788262200", "verified_at_utc": "2026-09-01T11:30:00Z", "verification_source": "https://gamma-api.polymarket.com"},
+      "settlement": {"oracle_source": "CHAINLINK_DATA_STREAM", "reference_pair": "BTC/USD", "stream_url": "https://data.chain.link/streams/btc-usd-twap-60s-streams", "settlement_window_seconds": 60, "timestamp_semantics": "WINDOW_TWAP_COMPARED_TO_RANGE_START", "comparison_operator": "GREATER_THAN_OR_EQUAL", "rounding_rules": "CHAINLINK_STREAM_NATIVE", "boundary_behavior": "EQUAL_IS_UP", "fallback_resolution": "NONE_FAIL_CLOSED"},
+      "settlement_semantic_hash": "59710f458603c9bc1c0e4094281b172d2a57daa93242845b30da162debd4f6c7",
+      "external_symbols": {"binance_spot":"BTCUSDT","coinbase_spot":"BTC-USD","bybit_spot":"BTCUSDT","binance_perp":"BTCUSDT","bybit_perp":"BTCUSDT","deribit":"BTC-PERPETUAL"},
+      "maker_tte_window_seconds": [30, 900], "taker_tte_window_seconds": [5, 120],
+      "market_mapping_verified": true, "settlement_mapping_verified": true
+    },
+    {
+      "asset": "ETH", "horizon": "M5", "horizon_seconds": 300,
+      "contract_family": "ETH_USD_UPDOWN_5M", "enabled": true,
+      "authority": "SHADOW_ZERO_AUTHORITY", "research_only": true,
+      "polymarket": {"slug_template": "eth-updown-{horizon_slug}-{window_start_unix}", "horizon_slug": "5m", "observed_live_slug": "eth-updown-5m-1788262200", "verified_at_utc": "2026-09-01T11:30:00Z", "verification_source": "https://gamma-api.polymarket.com"},
+      "settlement": {"oracle_source": "CHAINLINK_DATA_STREAM", "reference_pair": "ETH/USD", "stream_url": "https://data.chain.link/streams/eth-usd-twap-60s-streams", "settlement_window_seconds": 60, "timestamp_semantics": "WINDOW_TWAP_COMPARED_TO_RANGE_START", "comparison_operator": "GREATER_THAN_OR_EQUAL", "rounding_rules": "CHAINLINK_STREAM_NATIVE", "boundary_behavior": "EQUAL_IS_UP", "fallback_resolution": "NONE_FAIL_CLOSED"},
+      "settlement_semantic_hash": "cf7e99de34e38d459a54bc36a6e323c6abd19ba07e5a8369722c2699a6707aac",
+      "external_symbols": {"binance_spot":"ETHUSDT","coinbase_spot":"ETH-USD","bybit_spot":"ETHUSDT","binance_perp":"ETHUSDT","bybit_perp":"ETHUSDT","deribit":"ETH-PERPETUAL"},
+      "maker_tte_window_seconds": [120, 300], "taker_tte_window_seconds": [5, 120],
+      "market_mapping_verified": true, "settlement_mapping_verified": true
+    },
+    {
+      "asset": "ETH", "horizon": "M15", "horizon_seconds": 900,
+      "contract_family": "ETH_USD_UPDOWN_15M", "enabled": true,
+      "authority": "SHADOW_ZERO_AUTHORITY", "research_only": true,
+      "polymarket": {"slug_template": "eth-updown-{horizon_slug}-{window_start_unix}", "horizon_slug": "15m", "observed_live_slug": "eth-updown-15m-1788262200", "verified_at_utc": "2026-09-01T11:30:00Z", "verification_source": "https://gamma-api.polymarket.com"},
+      "settlement": {"oracle_source": "CHAINLINK_DATA_STREAM", "reference_pair": "ETH/USD", "stream_url": "https://data.chain.link/streams/eth-usd-twap-60s-streams", "settlement_window_seconds": 60, "timestamp_semantics": "WINDOW_TWAP_COMPARED_TO_RANGE_START", "comparison_operator": "GREATER_THAN_OR_EQUAL", "rounding_rules": "CHAINLINK_STREAM_NATIVE", "boundary_behavior": "EQUAL_IS_UP", "fallback_resolution": "NONE_FAIL_CLOSED"},
+      "settlement_semantic_hash": "cf7e99de34e38d459a54bc36a6e323c6abd19ba07e5a8369722c2699a6707aac",
+      "external_symbols": {"binance_spot":"ETHUSDT","coinbase_spot":"ETH-USD","bybit_spot":"ETHUSDT","binance_perp":"ETHUSDT","bybit_perp":"ETHUSDT","deribit":"ETH-PERPETUAL"},
+      "maker_tte_window_seconds": [30, 900], "taker_tte_window_seconds": [5, 120],
+      "market_mapping_verified": true, "settlement_mapping_verified": true
+    },
+    {
+      "asset": "SOL", "horizon": "M5", "horizon_seconds": 300,
+      "contract_family": "SOL_USD_UPDOWN_5M", "enabled": true,
+      "authority": "SHADOW_ZERO_AUTHORITY", "research_only": true,
+      "polymarket": {"slug_template": "sol-updown-{horizon_slug}-{window_start_unix}", "horizon_slug": "5m", "observed_live_slug": "sol-updown-5m-1788262200", "verified_at_utc": "2026-09-01T11:30:00Z", "verification_source": "https://gamma-api.polymarket.com"},
+      "settlement": {"oracle_source": "CHAINLINK_DATA_STREAM", "reference_pair": "SOL/USD", "stream_url": "https://data.chain.link/streams/sol-usd-twap-60s-streams", "settlement_window_seconds": 60, "timestamp_semantics": "WINDOW_TWAP_COMPARED_TO_RANGE_START", "comparison_operator": "GREATER_THAN_OR_EQUAL", "rounding_rules": "CHAINLINK_STREAM_NATIVE", "boundary_behavior": "EQUAL_IS_UP", "fallback_resolution": "NONE_FAIL_CLOSED"},
+      "settlement_semantic_hash": "a22521aaa0f025e5026c09c5c0684b76bc0780150944dbcb74a4f4ab57ce1d51",
+      "external_symbols": {"binance_spot":"SOLUSDT","coinbase_spot":"SOL-USD","bybit_spot":"SOLUSDT","binance_perp":"SOLUSDT","bybit_perp":"SOLUSDT","deribit":"SOL_USDC-PERPETUAL"},
+      "maker_tte_window_seconds": [120, 300], "taker_tte_window_seconds": [5, 120],
+      "market_mapping_verified": true, "settlement_mapping_verified": true
+    },
+    {
+      "asset": "SOL", "horizon": "M15", "horizon_seconds": 900,
+      "contract_family": "SOL_USD_UPDOWN_15M", "enabled": true,
+      "authority": "SHADOW_ZERO_AUTHORITY", "research_only": true,
+      "polymarket": {"slug_template": "sol-updown-{horizon_slug}-{window_start_unix}", "horizon_slug": "15m", "observed_live_slug": "sol-updown-15m-1788262200", "verified_at_utc": "2026-09-01T11:30:00Z", "verification_source": "https://gamma-api.polymarket.com"},
+      "settlement": {"oracle_source": "CHAINLINK_DATA_STREAM", "reference_pair": "SOL/USD", "stream_url": "https://data.chain.link/streams/sol-usd-twap-60s-streams", "settlement_window_seconds": 60, "timestamp_semantics": "WINDOW_TWAP_COMPARED_TO_RANGE_START", "comparison_operator": "GREATER_THAN_OR_EQUAL", "rounding_rules": "CHAINLINK_STREAM_NATIVE", "boundary_behavior": "EQUAL_IS_UP", "fallback_resolution": "NONE_FAIL_CLOSED"},
+      "settlement_semantic_hash": "a22521aaa0f025e5026c09c5c0684b76bc0780150944dbcb74a4f4ab57ce1d51",
+      "external_symbols": {"binance_spot":"SOLUSDT","coinbase_spot":"SOL-USD","bybit_spot":"SOLUSDT","binance_perp":"SOLUSDT","bybit_perp":"SOLUSDT","deribit":"SOL_USDC-PERPETUAL"},
+      "maker_tte_window_seconds": [30, 900], "taker_tte_window_seconds": [5, 120],
+      "market_mapping_verified": true, "settlement_mapping_verified": true
+    },
+    {
+      "asset": "XRP", "horizon": "M5", "horizon_seconds": 300,
+      "contract_family": "XRP_USD_UPDOWN_5M", "enabled": true,
+      "authority": "SHADOW_ZERO_AUTHORITY", "research_only": true,
+      "polymarket": {"slug_template": "xrp-updown-{horizon_slug}-{window_start_unix}", "horizon_slug": "5m", "observed_live_slug": "xrp-updown-5m-1788262200", "verified_at_utc": "2026-09-01T11:30:00Z", "verification_source": "https://gamma-api.polymarket.com"},
+      "settlement": {"oracle_source": "CHAINLINK_DATA_STREAM", "reference_pair": "XRP/USD", "stream_url": "https://data.chain.link/streams/xrp-usd-twap-60s-streams", "settlement_window_seconds": 60, "timestamp_semantics": "WINDOW_TWAP_COMPARED_TO_RANGE_START", "comparison_operator": "GREATER_THAN_OR_EQUAL", "rounding_rules": "CHAINLINK_STREAM_NATIVE", "boundary_behavior": "EQUAL_IS_UP", "fallback_resolution": "NONE_FAIL_CLOSED"},
+      "settlement_semantic_hash": "3f5886b065ac99a0481bc99355bc56388f24b0f9009e4dbbbb0e83d2977ae7f4",
+      "external_symbols": {"binance_spot":"XRPUSDT","coinbase_spot":"XRP-USD","bybit_spot":"XRPUSDT","binance_perp":"XRPUSDT","bybit_perp":"XRPUSDT","deribit":"XRP_USDC-PERPETUAL"},
+      "maker_tte_window_seconds": [120, 300], "taker_tte_window_seconds": [5, 120],
+      "market_mapping_verified": true, "settlement_mapping_verified": true
+    },
+    {
+      "asset": "XRP", "horizon": "M15", "horizon_seconds": 900,
+      "contract_family": "XRP_USD_UPDOWN_15M", "enabled": true,
+      "authority": "SHADOW_ZERO_AUTHORITY", "research_only": true,
+      "polymarket": {"slug_template": "xrp-updown-{horizon_slug}-{window_start_unix}", "horizon_slug": "15m", "observed_live_slug": "xrp-updown-15m-1788262200", "verified_at_utc": "2026-09-01T11:30:00Z", "verification_source": "https://gamma-api.polymarket.com"},
+      "settlement": {"oracle_source": "CHAINLINK_DATA_STREAM", "reference_pair": "XRP/USD", "stream_url": "https://data.chain.link/streams/xrp-usd-twap-60s-streams", "settlement_window_seconds": 60, "timestamp_semantics": "WINDOW_TWAP_COMPARED_TO_RANGE_START", "comparison_operator": "GREATER_THAN_OR_EQUAL", "rounding_rules": "CHAINLINK_STREAM_NATIVE", "boundary_behavior": "EQUAL_IS_UP", "fallback_resolution": "NONE_FAIL_CLOSED"},
+      "settlement_semantic_hash": "3f5886b065ac99a0481bc99355bc56388f24b0f9009e4dbbbb0e83d2977ae7f4",
+      "external_symbols": {"binance_spot":"XRPUSDT","coinbase_spot":"XRP-USD","bybit_spot":"XRPUSDT","binance_perp":"XRPUSDT","bybit_perp":"XRPUSDT","deribit":"XRP_USDC-PERPETUAL"},
+      "maker_tte_window_seconds": [30, 900], "taker_tte_window_seconds": [5, 120],
+      "market_mapping_verified": true, "settlement_mapping_verified": true
+    }
+  ]
+}

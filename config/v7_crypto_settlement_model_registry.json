@@ -1,0 +1,20 @@
+{
+  "schema": "polymarket_v7_crypto_settlement_model_registry_v1",
+  "version": 1,
+  "paper_only": true,
+  "authenticated_execution": false,
+  "real_order_submission": false,
+  "automatic_promotion": false,
+  "index": ["asset", "horizon", "settlement_semantic_hash"],
+  "default_status": "UNREGISTERED_SHADOW",
+  "models": [
+    {"asset":"BTC","horizon":"M5","settlement_semantic_hash":"59710f458603c9bc1c0e4094281b172d2a57daa93242845b30da162debd4f6c7","status":"UNREGISTERED_SHADOW","artifact":null,"new_risk_authorized":false},
+    {"asset":"BTC","horizon":"M15","settlement_semantic_hash":"59710f458603c9bc1c0e4094281b172d2a57daa93242845b30da162debd4f6c7","status":"UNREGISTERED_SHADOW","artifact":null,"new_risk_authorized":false},
+    {"asset":"ETH","horizon":"M5","settlement_semantic_hash":"cf7e99de34e38d459a54bc36a6e323c6abd19ba07e5a8369722c2699a6707aac","status":"UNREGISTERED_SHADOW","artifact":null,"new_risk_authorized":false},
+    {"asset":"ETH","horizon":"M15","settlement_semantic_hash":"cf7e99de34e38d459a54bc36a6e323c6abd19ba07e5a8369722c2699a6707aac","status":"UNREGISTERED_SHADOW","artifact":null,"new_risk_authorized":false},
+    {"asset":"SOL","horizon":"M5","settlement_semantic_hash":"a22521aaa0f025e5026c09c5c0684b76bc0780150944dbcb74a4f4ab57ce1d51","status":"UNREGISTERED_SHADOW","artifact":null,"new_risk_authorized":false},
+    {"asset":"SOL","horizon":"M15","settlement_semantic_hash":"a22521aaa0f025e5026c09c5c0684b76bc0780150944dbcb74a4f4ab57ce1d51","status":"UNREGISTERED_SHADOW","artifact":null,"new_risk_authorized":false},
+    {"asset":"XRP","horizon":"M5","settlement_semantic_hash":"3f5886b065ac99a0481bc99355bc56388f24b0f9009e4dbbbb0e83d2977ae7f4","status":"UNREGISTERED_SHADOW","artifact":null,"new_risk_authorized":false},
+    {"asset":"XRP","horizon":"M15","settlement_semantic_hash":"3f5886b065ac99a0481bc99355bc56388f24b0f9009e4dbbbb0e83d2977ae7f4","status":"UNREGISTERED_SHADOW","artifact":null,"new_risk_authorized":false}
+  ]
+}

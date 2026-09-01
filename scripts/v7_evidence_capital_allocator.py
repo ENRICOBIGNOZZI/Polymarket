@@ -369,7 +369,7 @@ def propose(allocation: dict[str, Any], economics: dict[str, Any], *,
             blockers.append("CAUSAL_BENCHMARK_COMPARISON_INCOMPLETE")
         settlement = settlement_evidence.get(strategy) if isinstance(
             settlement_evidence.get(strategy), dict) else {}
-        if strategy == "BTC_SETTLEMENT_ENGINE":
+        if strategy == "CRYPTO_SETTLEMENT_ENGINE":
             if int(finite(settlement.get("settlement_labeled_days"))) < settlement_minimum_days:
                 blockers.append("SETTLEMENT_LABELED_DAYS_BELOW_30")
             if int(finite(settlement.get("settlement_labeled_contracts"))) < settlement_minimum_contracts:
@@ -412,7 +412,7 @@ def propose(allocation: dict[str, Any], economics: dict[str, Any], *,
             "source_health_stratification_complete": source_health_complete,
             "action_class_evidence_complete": action_evidence_complete,
             "attribution_dimensions_complete": attribution_complete,
-            "settlement_model_evidence": settlement if strategy == "BTC_SETTLEMENT_ENGINE" else None,
+            "settlement_model_evidence": settlement if strategy == "CRYPTO_SETTLEMENT_ENGINE" else None,
             "dependence_penalty": dependence_penalty,
             "exploitation_eligible": eligible,
             "evidence_score": score if eligible else None,

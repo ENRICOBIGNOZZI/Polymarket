@@ -52,6 +52,8 @@
     "frequency_matrix": "config/v7_frequency_matrix.json",
     "strategy_registry": "config/v7_strategy_registry.json",
     "contract_registry": "config/v7_polymarket_v2_contracts.json",
+    "crypto_settlement_market_registry": "config/v7_crypto_settlement_markets.json",
+    "crypto_settlement_model_registry": "config/v7_crypto_settlement_model_registry.json",
     "require_v2_contract_registry": true,
     "real_pnl_provenance_required": true,
     "real_pnl_economic_scorecard_required": true,
@@ -67,7 +69,7 @@
     "external_fair_policy": "config/v7_external_fair.json",
     "micro_maker_bootstrap_interval_ms": 500,
     "engine_capital_fractions": {
-      "BTC_SETTLEMENT_ENGINE": 0.2857142857142857,
+      "CRYPTO_SETTLEMENT_ENGINE": 0.2857142857142857,
       "STRUCTURAL_ARB_ENGINE": 0.14285714285714285
     },
     "component_observation_budget_fractions": {
@@ -114,7 +116,7 @@
     ],
     "capital_authority_owner": "V7_CANONICAL_ALLOCATOR",
     "engine_capital_envelope_owners": [
-      "BTC_SETTLEMENT_ENGINE",
+      "CRYPTO_SETTLEMENT_ENGINE",
       "STRUCTURAL_ARB_ENGINE"
     ]
   }

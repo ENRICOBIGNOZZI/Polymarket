@@ -1602,7 +1602,7 @@ def _validated_observation_budget(allocation_path: Path) -> float:
         or scope.get("allocator_owner") != "V7_CANONICAL_ALLOCATOR"
         or scope.get("view_id") != "micro_maker"
         or scope.get("scope_class") != "COMPONENT_OBSERVATION"
-        or scope.get("engine_id") != "BTC_SETTLEMENT_ENGINE"
+        or scope.get("engine_id") != "CRYPTO_SETTLEMENT_ENGINE"
         or scope.get("component") != "professional_maker"
         or scope.get("observation_budget_is_capital") is not False
         or scope.get("independent_capital_authority") is not False

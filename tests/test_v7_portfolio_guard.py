@@ -23,7 +23,7 @@ def allocation(path: Path, btc: float = 60.0, structural: float = 20.0, reserve:
         "capital_authority_owner_count": 1,
         "account_starting_capital": btc + structural + reserve,
         "engine_budgets": {
-            "BTC_SETTLEMENT_ENGINE": btc,
+            "CRYPTO_SETTLEMENT_ENGINE": btc,
             "STRUCTURAL_ARB_ENGINE": structural,
         },
         "reserve_budget": reserve,
@@ -49,7 +49,7 @@ class PortfolioGuardTests(unittest.TestCase):
             }))
             report = assess(root, allocation(root / "manifest.json"), max_drawdown=.15)
             self.assertFalse(report["killed"])
-            self.assertEqual(report["engines"]["BTC_SETTLEMENT_ENGINE"]["source"], "reported")
+            self.assertEqual(report["engines"]["CRYPTO_SETTLEMENT_ENGINE"]["source"], "reported")
             self.assertEqual(report["engines"]["STRUCTURAL_ARB_ENGINE"]["source"], "reported")
             self.assertEqual(report["equity"], 93.0)
 
@@ -73,7 +73,7 @@ class PortfolioGuardTests(unittest.TestCase):
             report = assess(root, allocation(root / "manifest.json"), max_drawdown=.15)
             self.assertFalse(report["killed"])
             self.assertEqual(report["equity"], 100.0)
-            self.assertEqual(report["engines"]["BTC_SETTLEMENT_ENGINE"]["source"], "not_started")
+            self.assertEqual(report["engines"]["CRYPTO_SETTLEMENT_ENGINE"]["source"], "not_started")
 
     def test_component_observer_equity_never_enters_account_equity(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -100,7 +100,7 @@ class PortfolioGuardTests(unittest.TestCase):
             }))
             report = assess(root, allocation(root / "manifest.json"), max_drawdown=.15)
             self.assertTrue(report["killed"])
-            self.assertEqual(report["fatal_engines"], ["BTC_SETTLEMENT_ENGINE"])
+            self.assertEqual(report["fatal_engines"], ["CRYPTO_SETTLEMENT_ENGINE"])
 
 
 if __name__ == "__main__":

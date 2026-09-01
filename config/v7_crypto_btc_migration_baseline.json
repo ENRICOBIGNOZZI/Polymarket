@@ -1,0 +1,34 @@
+{
+  "schema": "polymarket_v7_crypto_btc_migration_baseline_v1",
+  "version": 1,
+  "paper_only": true,
+  "authenticated_execution": false,
+  "real_order_submission": false,
+  "captured_before_generalization": true,
+  "components": ["crypto_settlement_fair", "crypto_informed_taker", "professional_maker"],
+  "alpha_actions": ["MAKE", "TAKE", "CANCEL", "NOTHING"],
+  "contexts": {
+    "M5": {
+      "contract_family": "BTC_USD_UPDOWN_5M",
+      "horizon_seconds": 300,
+      "settlement_semantic_hash": "59710f458603c9bc1c0e4094281b172d2a57daa93242845b30da162debd4f6c7",
+      "maker_tte_window_seconds": [120, 300],
+      "taker_tte_window_seconds": [5, 120]
+    },
+    "M15": {
+      "contract_family": "BTC_USD_UPDOWN_15M",
+      "horizon_seconds": 900,
+      "settlement_semantic_hash": "59710f458603c9bc1c0e4094281b172d2a57daa93242845b30da162debd4f6c7",
+      "maker_tte_window_seconds": [30, 900],
+      "taker_tte_window_seconds": [5, 120]
+    }
+  },
+  "external_symbols": {
+    "binance_spot": "BTCUSDT",
+    "coinbase_spot": "BTC-USD",
+    "bybit_spot": "BTCUSDT",
+    "binance_perp": "BTCUSDT",
+    "bybit_perp": "BTCUSDT",
+    "deribit": "BTC-PERPETUAL"
+  }
+}

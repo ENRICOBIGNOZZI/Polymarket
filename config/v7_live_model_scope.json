@@ -21,7 +21,7 @@
     "market_open"
   ],
   "paper_execution_engines": [
-    "BTC_SETTLEMENT_ENGINE",
+    "CRYPTO_SETTLEMENT_ENGINE",
     "STRUCTURAL_ARB_ENGINE"
   ],
   "component_shadow_families": [
@@ -73,6 +73,8 @@
     "blocked_config_is_not_operational_evidence": true,
     "automatic_promotion": false
   },
-  "btc_settlement_engine_contract": "config/v7_btc_settlement_engine.json",
+  "crypto_settlement_engine_contract": "config/v7_crypto_settlement_engine.json",
+  "crypto_settlement_market_registry": "config/v7_crypto_settlement_markets.json",
+  "crypto_settlement_model_registry": "config/v7_crypto_settlement_model_registry.json",
   "structural_arb_engine_contract": "config/v7_structural_arb_engine.json"
 }

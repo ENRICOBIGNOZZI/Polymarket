@@ -17,13 +17,13 @@
     "runtime_identity": "V7_EXACT_SHA_RUNTIME_IDENTITY"
   },
   "economic_engines": {
-    "BTC_SETTLEMENT_ENGINE": {
+    "CRYPTO_SETTLEMENT_ENGINE": {
       "components": [
         "crypto_settlement_fair",
         "crypto_informed_taker",
         "professional_maker"
       ],
-      "actions": ["MAKE", "TAKE", "CANCEL", "NOTHING"]
+      "actions": ["MAKE", "TAKE", "CANCEL", "WITHDRAW", "NOTHING"]
     },
     "STRUCTURAL_ARB_ENGINE": {
       "components": ["hard_arb", "fast_structural"],

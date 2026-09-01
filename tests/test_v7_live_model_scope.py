@@ -33,7 +33,7 @@ class V7LiveModelScopeTest(unittest.TestCase):
         )
         self.assertEqual(
             set(scope["paper_execution_engines"]),
-            {"BTC_SETTLEMENT_ENGINE", "STRUCTURAL_ARB_ENGINE"},
+            {"CRYPTO_SETTLEMENT_ENGINE", "STRUCTURAL_ARB_ENGINE"},
         )
         self.assertEqual(
             set(scope["component_shadow_families"]),
@@ -41,8 +41,8 @@ class V7LiveModelScopeTest(unittest.TestCase):
         )
         self.assertEqual(len(scope["research_zero_authority_families"]), 10)
         self.assertEqual(
-            scope["btc_settlement_engine_contract"],
-            "config/v7_btc_settlement_engine.json",
+            scope["crypto_settlement_engine_contract"],
+            "config/v7_crypto_settlement_engine.json",
         )
         self.assertEqual(
             scope["structural_arb_engine_contract"],

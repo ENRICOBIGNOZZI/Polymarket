@@ -26,7 +26,7 @@ Canonical causal state + zero-authority research/feature plane
         +----------------------+----------------------+
         |                                             |
         v                                             v
-BTC_SETTLEMENT_ENGINE                     STRUCTURAL_ARB_ENGINE
+CRYPTO_SETTLEMENT_ENGINE                     STRUCTURAL_ARB_ENGINE
 (fair + informed taker + maker)           (hard arb + fast structural)
         +----------------------+----------------------+
                                |
@@ -54,12 +54,14 @@ ops/update_server_v7.sh
 Exactly two engines may propose economic actions. Neither owns capital, risk,
 orders, inventory, or the ledger; both use the same global authority chain.
 
-### BTC settlement engine
+### Crypto settlement engine
 
-This engine compares settlement fair value, informed taking, professional
-making, cancellation, and no-action on one conservative account-wealth
-objective. Missing latency, calibration, settlement, capacity, or cost evidence
-forces `CANCEL`/`NOTHING`.
+`CRYPTO_SETTLEMENT_ENGINE(asset, horizon)` compares settlement fair value,
+informed taking, professional making, cancellation, withdrawal, and no-action
+on one conservative account-wealth objective. BTC, ETH, SOL, and XRP 5m/15m
+contexts are registry-backed; ETH/SOL/XRP start as zero-authority shadow
+contexts. No 1m context is registered. Missing model, latency, calibration,
+settlement, capacity, or cost evidence forces `CANCEL`/`WITHDRAW`/`NOTHING`.
 
 #### Professional market-maker component
 
@@ -87,7 +89,14 @@ same-oracle binding are mandatory. Counterfactual lifecycle labels stay in the
 research evidence plane; native proposals enter the global coordinator.
 
 ```text
-config/v7_btc_settlement_engine.json
+config/v7_crypto_settlement_engine.json
+config/v7_crypto_settlement_markets.json
+config/v7_crypto_settlement_model_registry.json
+config/v7_external_source_registry.json
+scripts/v7_crypto_settlement.py
+scripts/v7_crypto_market_discovery.py
+scripts/v7_crypto_assumption_audit.py
+scripts/v7_crypto_economic_validation.py
 config/v7_external_fair.json
 scripts/v7_external_fair_paper_router.py
 scripts/v7_same_oracle_adapter.py

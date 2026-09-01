@@ -1,11 +1,13 @@
 {
-  "schema": "polymarket_v7_btc_settlement_engine_v1",
+  "schema": "polymarket_v7_crypto_settlement_engine_v1",
   "version": 1,
   "paper_only": true,
   "authenticated_execution": false,
   "real_order_submission": false,
   "automatic_promotion": false,
-  "decision_owner": "BTC_SETTLEMENT_ENGINE",
+  "decision_owner": "CRYPTO_SETTLEMENT_ENGINE",
+  "market_registry": "config/v7_crypto_settlement_markets.json",
+  "model_registry": "config/v7_crypto_settlement_model_registry.json",
   "authority_registry": "config/v7_authority_registry.json",
   "opportunity_contract": "schemas/v7/opportunity_envelope.schema.json",
   "global_portfolio_coordinator": "V7_GLOBAL_PORTFOLIO_COORDINATOR",
@@ -22,7 +24,7 @@
     "professional_maker"
   ],
   "component_independent_authority": false,
-  "action_space": ["MAKE", "TAKE", "CANCEL", "NOTHING"],
+  "action_space": ["MAKE", "TAKE", "CANCEL", "WITHDRAW", "NOTHING"],
   "alpha_selection": "MAX_CONSERVATIVE_EXPECTED_CHANGE_IN_ACCOUNT_WEALTH",
   "risk_actions_preempt_alpha": true,
   "external_update_policy": {
@@ -32,14 +34,18 @@
   },
   "fair_value": {
     "separate_model_per_horizon": true,
+    "separate_frozen_model_per_asset_horizon": true,
+    "model_registry_index": ["asset", "horizon", "settlement_semantic_hash"],
     "fixed_bridge_coefficient_authorized": false,
     "empirical_frozen_artifact_required": true,
-    "settlement_source": "CHAINLINK_60_SECOND_TWAP",
+    "settlement_source": "REGISTRY_VERIFIED_CHAINLINK_TWAP_60S",
     "settlement_source_may_be_replaced_by_predictor": false,
     "predictors": [
       "CHAINLINK_30_SECOND_TWAP",
-      "BTC_USD_SPOT_COMPOSITE",
-      "BTC_USDT_SPOT_COMPOSITE",
+      "ASSET_USD_SPOT_COMPOSITE",
+      "ASSET_USDT_SPOT_COMPOSITE",
+      "BTC_CROSS_ASSET_STATE",
+      "CRYPTO_WIDE_STATE",
       "USD_USDT_BASIS",
       "SPOT_L2_OFI",
       "PERPETUAL_L2_OFI",
@@ -86,9 +92,9 @@
   },
   "horizons": [
     {
-      "id": "BTC_5M",
+      "id": "M5",
       "horizon_seconds": 300,
-      "model_scope": "BTC_USD_UPDOWN_5M",
+      "model_scope": "ASSET_USD_UPDOWN_5M",
       "authority": "SHADOW",
       "research_only": false,
       "maker": {"enabled": true, "minimum_tte_seconds": 120, "maximum_tte_seconds": 300},
@@ -96,23 +102,13 @@
       "under_five_seconds": "NO_NEW_RISK"
     },
     {
-      "id": "BTC_15M",
+      "id": "M15",
       "horizon_seconds": 900,
-      "model_scope": "BTC_USD_UPDOWN_15M",
+      "model_scope": "ASSET_USD_UPDOWN_15M",
       "authority": "SHADOW",
       "research_only": false,
       "maker": {"enabled": true, "minimum_tte_seconds": 30, "maximum_tte_seconds": 900},
       "taker": {"enabled": true, "minimum_tte_seconds": 5, "maximum_tte_seconds": 120},
-      "under_five_seconds": "NO_NEW_RISK"
-    },
-    {
-      "id": "BTC_4H",
-      "horizon_seconds": 14400,
-      "model_scope": "BTC_USD_UPDOWN_4H",
-      "authority": "RESEARCH",
-      "research_only": true,
-      "maker": {"enabled": false, "minimum_tte_seconds": 0, "maximum_tte_seconds": 0},
-      "taker": {"enabled": false, "minimum_tte_seconds": 0, "maximum_tte_seconds": 0},
       "under_five_seconds": "NO_NEW_RISK"
     }
   ],

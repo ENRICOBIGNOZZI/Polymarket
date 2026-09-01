@@ -24,6 +24,7 @@ from typing import Any
 
 from v7_market_common import finite, parse_array, request_json
 from v7_execution_ledger import LedgerEvent
+from v7_crypto_settlement import load_registry as load_crypto_registry, require_context
 
 STRATEGY = "CRYPTO_INFORMED_TAKER"
 MODEL_VERSION = "external-fair-structural-v7-paper"
@@ -581,6 +582,10 @@ class PaperRouter:
         self.policy_sha256 = hashlib.sha256(
             json.dumps(self.config, separators=(",", ":"), sort_keys=True).encode()
         ).hexdigest()
+        contexts = load_crypto_registry(
+            Path(__file__).resolve().parents[1] / "config/v7_crypto_settlement_markets.json"
+        )
+        self.crypto_context = require_context(contexts, "BTC", "M5")
         fair_policy = self.config.get("fair_value") if isinstance(self.config.get("fair_value"), dict) else {}
         self.model_mature = fair_policy.get("default_model_mature") is True
         cohorts = fair_policy.get("live_shadow_cohorts") if isinstance(
@@ -610,7 +615,7 @@ class PaperRouter:
             allocation.get("engine_budgets"), dict
         ) else {}
         starting_capital = max(
-            1.0, finite(budgets.get("BTC_SETTLEMENT_ENGINE"), 4000.0),
+            1.0, finite(budgets.get("CRYPTO_SETTLEMENT_ENGINE"), 4000.0),
         )
         self.state: dict[str, Any] = {
             "model_sha": model_sha, "starting_capital": starting_capital,
@@ -1111,7 +1116,7 @@ class PaperRouter:
         })
         if evidence.event_type != "CANDIDATE":
             target = (
-                self.root / "research" / "evidence" / "btc_settlement_counterfactual"
+                self.root / "research" / "evidence" / "crypto_settlement_counterfactual"
                 / f"{evidence.recorded_ts_ms}.{evidence.record_id}.json"
             )
             atomic_json(target, evidence.to_dict())
@@ -1155,12 +1160,20 @@ class PaperRouter:
             "policy_hash": str(runtime["policy_hash"]),
             "run_id": str(runtime["run_id"]),
             "source_snapshot_identity": str(evidence.book_snapshot_id or identity),
-            "engine_id": "BTC_SETTLEMENT_ENGINE",
+            "engine_id": "CRYPTO_SETTLEMENT_ENGINE",
             "component_provenance": ["crypto_informed_taker", "crypto_settlement_fair"],
             "market_id": market_id,
             "event_id": event_id,
             "contract_id": token_id,
             "mapping_identity": str(metadata.get("contract_rules_hash") or f"unverified:{identity}"),
+            "crypto_context": {
+                "asset": self.crypto_context.asset.value,
+                "horizon": self.crypto_context.horizon.value,
+                "contract_family": self.crypto_context.contract_family,
+                "settlement_semantic_hash": self.crypto_context.settlement_semantic_hash,
+                "authority": self.crypto_context.authority,
+                "research_only": self.crypto_context.research_only,
+            },
             "action": "NOTHING",
             "side": "NONE",
             "decision_receive_timestamp_ns": decision_ms * 1_000_000,
@@ -1195,7 +1208,7 @@ class PaperRouter:
                 "depth_provenance": str(evidence.book_snapshot_id or "MISSING"),
             },
             "execution_plan": {
-                "atomic_unit_id": f"btc-settlement:{identity}",
+                "atomic_unit_id": f"crypto-settlement:BTC:M5:{identity}",
                 "execution_style": "SINGLE_LEG",
                 "legs": [{
                     "leg_id": f"leg-1-{token_id}", "market_id": market_id,
@@ -1210,18 +1223,18 @@ class PaperRouter:
             "portfolio_exposure_delta": 0.0,
             "settlement": {
                 "definition": "counterfactual settlement binding is not promotion evidence",
-                "source": "BTC_SETTLEMENT_ENGINE_EXTERNAL_FAIR_COMPONENT", "verified": False,
+                "source": "CRYPTO_SETTLEMENT_ENGINE_EXTERNAL_FAIR_COMPONENT", "verified": False,
             },
             "eligible": True,
             "reasons": [
                 "ECONOMIC_EVIDENCE_MISSING", "SETTLEMENT_PROMOTION_UNVERIFIED",
                 "NEW_RISK_DISABLED",
             ],
-            "deterministic_replay_key": f"btc-settlement:{identity}",
+            "deterministic_replay_key": f"crypto-settlement:BTC:M5:{identity}",
             "expires_at_ns": decision_ms * 1_000_000 + 1_000_000_000,
         }
         target = self.root / "opportunities" / "inbox" / (
-            f"{decision_ms}.btc-settlement.{identity}.json"
+            f"{decision_ms}.crypto-settlement.BTC.M5.{identity}.json"
         )
         atomic_json(target, envelope)
 
@@ -1857,12 +1870,12 @@ class PaperRouter:
         atomic_json(self.state_path, self.state)
         maturity = self.maturity_diagnostics()
         atomic_json(self.status_path, {
-            "schema": "polymarket_v7_btc_settlement_engine_status_v1", "timestamp": int(time.time()),
+            "schema": "polymarket_v7_crypto_settlement_engine_status_v1", "timestamp": int(time.time()),
             "code_sha": self.sha, "state": "KILLED" if killed else "DRAINING" if drain_requested else "RUNNING", "paper_only": True,
             "authenticated_execution": False, "real_order_submission": False,
             "execution_mode": "SHADOW_COUNTERFACTUAL",
             "policy_sha256": self.policy_sha256,
-            "engine_id": "BTC_SETTLEMENT_ENGINE",
+            "engine_id": "CRYPTO_SETTLEMENT_ENGINE",
             "execution_authority": "OPPORTUNITY_PROPOSAL_ONLY",
             "capital_authority": False, "oms_authority": False,
             "inventory_authority": False, "ledger_writer_authority": False,

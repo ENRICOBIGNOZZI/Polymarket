@@ -17,13 +17,13 @@ class ProfessionalMakerRuntimeContractTests(unittest.TestCase):
         self.assertFalse(v7["real_order_submission"])
         self.assertEqual(v7["capital_authority_owner"], "V7_CANONICAL_ALLOCATOR")
         self.assertEqual(v7["engine_capital_envelope_owners"], [
-            "BTC_SETTLEMENT_ENGINE", "STRUCTURAL_ARB_ENGINE",
+            "CRYPTO_SETTLEMENT_ENGINE", "STRUCTURAL_ARB_ENGINE",
         ])
         self.assertAlmostEqual(float(cfg["starting_capital"]) * float(
             v7["component_observation_budget_fractions"]["professional_maker"]
         ), 2000.0)
         self.assertAlmostEqual(float(cfg["starting_capital"]) * float(
-            v7["engine_capital_fractions"]["BTC_SETTLEMENT_ENGINE"]
+            v7["engine_capital_fractions"]["CRYPTO_SETTLEMENT_ENGINE"]
         ), 4000.0)
         self.assertEqual(v7["micro_maker_policy"], "config/v7_professional_market_maker.json")
         self.assertFalse(any(key.endswith("_capital_fraction") for key in v7))
@@ -153,7 +153,7 @@ class ProfessionalMakerRuntimeContractTests(unittest.TestCase):
         architecture = directives["architecture"]
         self.assertTrue(architecture["single_runtime_owner"])
         self.assertTrue(architecture["single_execution_ledger"])
-        self.assertTrue(architecture["professional_market_maker_is_btc_engine_component"])
+        self.assertTrue(architecture["professional_market_maker_is_crypto_engine_component"])
         self.assertTrue(architecture["hard_arb_and_fast_structural_share_one_engine"])
         self.assertTrue(architecture["single_global_portfolio_coordinator"])
         self.assertEqual(architecture["cleanup_sequence"], "audit_then_port_then_test_then_validate_then_retire_obsolete_generations")

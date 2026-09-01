@@ -16,6 +16,7 @@ from pathlib import Path
 from typing import Any
 
 from v7_opportunity import OpportunityEnvelope, OpportunityError, coordinate, fail_closed_decision
+from v7_crypto_settlement import aggregate_correlated_crypto_risk
 
 
 def atomic_json(path: Path, value: Any) -> None:
@@ -37,10 +38,10 @@ def append_jsonl(path: Path, value: Any) -> None:
 
 
 COMPATIBILITY_COMPONENTS = {
-    "CRYPTO_SETTLEMENT_FAIR": ("BTC_SETTLEMENT_ENGINE", "crypto_settlement_fair"),
-    "CRYPTO_INFORMED_TAKER": ("BTC_SETTLEMENT_ENGINE", "crypto_informed_taker"),
-    "MICRO_MAKER_PRO": ("BTC_SETTLEMENT_ENGINE", "professional_maker"),
-    "PROFESSIONAL_MAKER": ("BTC_SETTLEMENT_ENGINE", "professional_maker"),
+    "CRYPTO_SETTLEMENT_FAIR": ("CRYPTO_SETTLEMENT_ENGINE", "crypto_settlement_fair"),
+    "CRYPTO_INFORMED_TAKER": ("CRYPTO_SETTLEMENT_ENGINE", "crypto_informed_taker"),
+    "MICRO_MAKER_PRO": ("CRYPTO_SETTLEMENT_ENGINE", "professional_maker"),
+    "PROFESSIONAL_MAKER": ("CRYPTO_SETTLEMENT_ENGINE", "professional_maker"),
     "FAST_STRUCTURAL": ("STRUCTURAL_ARB_ENGINE", "fast_structural"),
     "HARD_ARB": ("STRUCTURAL_ARB_ENGINE", "hard_arb"),
 }
@@ -64,6 +65,11 @@ def _compatibility_envelope(value: dict[str, Any], context: dict[str, Any]) -> d
     ):
         raise OpportunityError("compatibility_runtime_identity_missing")
     metadata = value.get("metadata") if isinstance(value.get("metadata"), dict) else {}
+    crypto_context = None
+    if engine_id == "CRYPTO_SETTLEMENT_ENGINE":
+        crypto_context = metadata.get("crypto_context")
+        if not isinstance(crypto_context, dict):
+            raise OpportunityError("compatibility_crypto_context_missing")
     recorded_ms = int(value.get("recorded_ts_ms") or 0)
     decision_ms = int(value.get("decision_ts_ms") or recorded_ms)
     receive_ms = int(value.get("receive_ts_ms") or decision_ms)
@@ -124,6 +130,7 @@ def _compatibility_envelope(value: dict[str, Any], context: dict[str, Any]) -> d
         "event_id": str(value.get("event_id") or f"unmapped:{identity}"),
         "contract_id": str(value.get("token_id") or value.get("market_id") or identity),
         "mapping_identity": str(metadata.get("contract_rules_hash") or f"unverified:{identity}"),
+        "crypto_context": crypto_context,
         # The adapter cannot manufacture missing evidence. It preserves the
         # candidate's economics while forcing its actionable surface to NOTHING.
         "action": "NOTHING",
@@ -233,6 +240,20 @@ def process_cut(run_root: Path, *, now_ns: int | None = None) -> dict[str, Any]:
         decision = coordinate(envelopes, now_ns=current_ns, new_risk_authorized=False)
     else:
         decision = fail_closed_decision(now_ns=current_ns, reasons=["NO_LIVE_OPPORTUNITIES"])
+    crypto_exposures = []
+    for envelope in envelopes:
+        context_row = envelope.get("crypto_context")
+        if envelope.get("engine_id") != "CRYPTO_SETTLEMENT_ENGINE" or not isinstance(context_row, dict):
+            continue
+        settlement = envelope.get("settlement") if isinstance(envelope.get("settlement"), dict) else {}
+        capacity = envelope.get("capacity") if isinstance(envelope.get("capacity"), dict) else {}
+        crypto_exposures.append({
+            "asset": context_row.get("asset"), "horizon": context_row.get("horizon"),
+            "signed_exposure_usd": envelope.get("portfolio_exposure_delta", 0.0),
+            "oracle_source": settlement.get("source", "UNKNOWN"),
+            "exchange_source": capacity.get("depth_provenance", "UNKNOWN"),
+        })
+    decision["crypto_correlation_risk"] = aggregate_correlated_crypto_risk(crypto_exposures)
     decision.update({
         "paper_only": True,
         "authenticated_execution": False,

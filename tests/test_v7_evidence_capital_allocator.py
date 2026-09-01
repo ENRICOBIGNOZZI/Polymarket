@@ -23,7 +23,7 @@ class EvidenceCapitalAllocatorTests(unittest.TestCase):
             "paper_only": True, "authenticated_execution": False,
             "real_order_submission": False, "account_starting_capital": 100.0,
             "engine_budgets": {
-                "BTC_SETTLEMENT_ENGINE": 50.0,
+                "CRYPTO_SETTLEMENT_ENGINE": 50.0,
                 "STRUCTURAL_ARB_ENGINE": 50.0,
             },
         }
@@ -56,7 +56,7 @@ class EvidenceCapitalAllocatorTests(unittest.TestCase):
                 }},
             }
         return {
-            "BTC_SETTLEMENT_ENGINE": row("TAKE"),
+            "CRYPTO_SETTLEMENT_ENGINE": row("TAKE"),
             "STRUCTURAL_ARB_ENGINE": row("ARB"),
         }
 
@@ -84,7 +84,7 @@ class EvidenceCapitalAllocatorTests(unittest.TestCase):
         self.assertFalse(report["automatic_transfer"])
         self.assertTrue(report["manual_promotion_artifact_required"])
         self.assertEqual(
-            report["engines"]["BTC_SETTLEMENT_ENGINE"]["blocking_reasons"],
+            report["engines"]["CRYPTO_SETTLEMENT_ENGINE"]["blocking_reasons"],
             [
                 "INSUFFICIENT_TERMINAL_UNITS", "COMPLETE_COST_TERMINAL_UNITS_MISSING",
                 "INSUFFICIENT_DAY_BLOCKS", "DAY_BLOCK_LCB95_NOT_POSITIVE", "FULL_COST_2X_PNL_NOT_POSITIVE",
@@ -103,19 +103,19 @@ class EvidenceCapitalAllocatorTests(unittest.TestCase):
     def test_only_positive_robust_capacity_bounded_strategy_receives_exploitation(self) -> None:
         economics = {
             "expected_model_sha": "a" * 40,
-            "engine_mature_terminal_units": {"BTC_SETTLEMENT_ENGINE": 400, "STRUCTURAL_ARB_ENGINE": 400},
+            "engine_mature_terminal_units": {"CRYPTO_SETTLEMENT_ENGINE": 400, "STRUCTURAL_ARB_ENGINE": 400},
             "engine_stressed_net_pnl": {
-                "BTC_SETTLEMENT_ENGINE": {"2x": -1.0}, "STRUCTURAL_ARB_ENGINE": {"2x": 2.0},
+                "CRYPTO_SETTLEMENT_ENGINE": {"2x": -1.0}, "STRUCTURAL_ARB_ENGINE": {"2x": 2.0},
             },
-            "engine_capital_hours": {"BTC_SETTLEMENT_ENGINE": 2.0, "STRUCTURAL_ARB_ENGINE": 1.0},
-            "engine_capacity_usd": {"BTC_SETTLEMENT_ENGINE": 20.0, "STRUCTURAL_ARB_ENGINE": 20.0},
-            "engine_drawdown_usd": {"BTC_SETTLEMENT_ENGINE": 1.0, "STRUCTURAL_ARB_ENGINE": 1.0},
+            "engine_capital_hours": {"CRYPTO_SETTLEMENT_ENGINE": 2.0, "STRUCTURAL_ARB_ENGINE": 1.0},
+            "engine_capacity_usd": {"CRYPTO_SETTLEMENT_ENGINE": 20.0, "STRUCTURAL_ARB_ENGINE": 20.0},
+            "engine_drawdown_usd": {"CRYPTO_SETTLEMENT_ENGINE": 1.0, "STRUCTURAL_ARB_ENGINE": 1.0},
             "engine_day_stressed_net_pnl": {
-                "BTC_SETTLEMENT_ENGINE": {f"2026-08-{day:02d}": -0.1 for day in range(1, 31)},
+                "CRYPTO_SETTLEMENT_ENGINE": {f"2026-08-{day:02d}": -0.1 for day in range(1, 31)},
                 "STRUCTURAL_ARB_ENGINE": {f"2026-08-{day:02d}": 0.1 for day in range(1, 31)},
             },
             "engine_evidence_dimensions": self.robust_dimensions(),
-            "engine_settlement_model_evidence": {"BTC_SETTLEMENT_ENGINE": {
+            "engine_settlement_model_evidence": {"CRYPTO_SETTLEMENT_ENGINE": {
                 "settlement_labeled_days": 30,
                 "settlement_labeled_contracts": 2500,
                 "forward_oos_policy_trades": 300,
@@ -127,7 +127,7 @@ class EvidenceCapitalAllocatorTests(unittest.TestCase):
         }
         report = propose(self.allocation(), economics, policy=self.policy())
         self.assertEqual(report["state"], "MANUAL_EXPLOITATION_PROPOSAL")
-        self.assertEqual(report["engines"]["BTC_SETTLEMENT_ENGINE"]["proposed_exploitation"], 0.0)
+        self.assertEqual(report["engines"]["CRYPTO_SETTLEMENT_ENGINE"]["proposed_exploitation"], 0.0)
         # 85% stays cash; the information budget uses 10%, so only 5% is an
         # exploitation pool. Concentration caps one strategy at 25% of it.
         self.assertAlmostEqual(report["engines"]["STRUCTURAL_ARB_ENGINE"]["proposed_exploitation"], 1.25)
@@ -140,16 +140,16 @@ class EvidenceCapitalAllocatorTests(unittest.TestCase):
 
     def test_drawdown_and_missing_capacity_fail_closed(self) -> None:
         economics = {
-            "engine_mature_terminal_units": {"BTC_SETTLEMENT_ENGINE": 400},
-            "engine_stressed_net_pnl": {"BTC_SETTLEMENT_ENGINE": {"2x": 10.0}},
-            "engine_capital_hours": {"BTC_SETTLEMENT_ENGINE": 20.0},
-            "engine_capacity_usd": {"BTC_SETTLEMENT_ENGINE": 0.0},
-            "engine_drawdown_fraction": {"BTC_SETTLEMENT_ENGINE": 0.10},
+            "engine_mature_terminal_units": {"CRYPTO_SETTLEMENT_ENGINE": 400},
+            "engine_stressed_net_pnl": {"CRYPTO_SETTLEMENT_ENGINE": {"2x": 10.0}},
+            "engine_capital_hours": {"CRYPTO_SETTLEMENT_ENGINE": 20.0},
+            "engine_capacity_usd": {"CRYPTO_SETTLEMENT_ENGINE": 0.0},
+            "engine_drawdown_fraction": {"CRYPTO_SETTLEMENT_ENGINE": 0.10},
             "engine_day_stressed_net_pnl": {
-                "BTC_SETTLEMENT_ENGINE": [0.1] * 30,
+                "CRYPTO_SETTLEMENT_ENGINE": [0.1] * 30,
             },
             "engine_evidence_dimensions": self.robust_dimensions(),
-            "engine_settlement_model_evidence": {"BTC_SETTLEMENT_ENGINE": {
+            "engine_settlement_model_evidence": {"CRYPTO_SETTLEMENT_ENGINE": {
                 "settlement_labeled_days": 30, "settlement_labeled_contracts": 2500,
                 "forward_oos_policy_trades": 300, "minimum_conditional_calibration_bin_count": 40,
                 "uncertainty_upper": 0.01, "claimed_edge_lower": 0.02,
@@ -157,7 +157,7 @@ class EvidenceCapitalAllocatorTests(unittest.TestCase):
             "benchmark_policy_comparison": self.benchmark_comparison(),
         }
         report = propose(self.allocation(), economics)
-        reasons = report["engines"]["BTC_SETTLEMENT_ENGINE"]["blocking_reasons"]
+        reasons = report["engines"]["CRYPTO_SETTLEMENT_ENGINE"]["blocking_reasons"]
         self.assertIn("CAPACITY_MISSING_OR_ZERO", reasons)
         self.assertIn("HARD_DRAWDOWN_BREACH", reasons)
         self.assertEqual(report["proposed_exploitation_total"], 0.0)

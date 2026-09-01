@@ -101,7 +101,7 @@ def validate(config: dict[str, Any]) -> list[str]:
     engine_fractions = v7.get("engine_capital_fractions") if isinstance(
         v7.get("engine_capital_fractions"), dict
     ) else {}
-    if set(engine_fractions) != {"BTC_SETTLEMENT_ENGINE", "STRUCTURAL_ARB_ENGINE"}:
+    if set(engine_fractions) != {"CRYPTO_SETTLEMENT_ENGINE", "STRUCTURAL_ARB_ENGINE"}:
         errors.append("v7.engine_capital_fractions must contain exactly two engines")
     sleeve_keys = (*sorted(engine_fractions), "reserve_fraction")
     fractions: list[float] = []
@@ -142,7 +142,7 @@ def authorized_config() -> dict[str, Any]:
             "paper_only": True,
             "capital_authority_owner": "V7_CANONICAL_ALLOCATOR",
             "engine_capital_fractions": {
-                "BTC_SETTLEMENT_ENGINE": 0.40,
+                "CRYPTO_SETTLEMENT_ENGINE": 0.40,
                 "STRUCTURAL_ARB_ENGINE": 0.20,
             },
             "component_observation_budget_fractions": {

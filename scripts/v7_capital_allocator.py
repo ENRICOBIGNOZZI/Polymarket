@@ -20,9 +20,9 @@ from typing import Any
 
 
 ALLOCATOR_OWNER = "V7_CANONICAL_ALLOCATOR"
-ENGINES = ("BTC_SETTLEMENT_ENGINE", "STRUCTURAL_ARB_ENGINE")
+ENGINES = ("CRYPTO_SETTLEMENT_ENGINE", "STRUCTURAL_ARB_ENGINE")
 ENGINE_ADAPTERS = {
-    "external": "BTC_SETTLEMENT_ENGINE",
+    "external": "CRYPTO_SETTLEMENT_ENGINE",
     "hard_arb": "STRUCTURAL_ARB_ENGINE",
 }
 COMPONENT_OBSERVERS = {
@@ -147,7 +147,7 @@ def materialize(base_config: Path, output_dir: Path) -> dict[str, Any]:
         ))
     for view_id, component in COMPONENT_OBSERVERS.items():
         engine_id = (
-            "BTC_SETTLEMENT_ENGINE" if component == "professional_maker"
+            "CRYPTO_SETTLEMENT_ENGINE" if component == "professional_maker"
             else "STRUCTURAL_ARB_ENGINE"
         )
         atomic_json(output_dir / f"{view_id}.json", _child(
@@ -185,7 +185,7 @@ def materialize(base_config: Path, output_dir: Path) -> dict[str, Any]:
         "double_counting_forbidden": True,
         "temporary_engine_adapters": ENGINE_ADAPTERS,
         "temporary_runtime_accounting_views": {
-            "external": "BTC_SETTLEMENT_ENGINE",
+            "external": "CRYPTO_SETTLEMENT_ENGINE",
             "hard_arb": "STRUCTURAL_ARB_ENGINE",
             "micro_maker": None,
             "fast_structural": None,

@@ -11,7 +11,7 @@ sys.path.insert(0, str(ROOT / "scripts"))
 from v7_opportunity import OpportunityEnvelope, OpportunityError, coordinate  # noqa: E402
 
 
-def envelope(*, engine="BTC_SETTLEMENT_ENGINE", action="TAKE", component="crypto_informed_taker", ev=1.0, key="a") -> dict:
+def envelope(*, engine="CRYPTO_SETTLEMENT_ENGINE", action="TAKE", component="crypto_informed_taker", ev=1.0, key="a", asset="BTC", horizon="M5", authority="SHADOW", research_only=False) -> dict:
     structural = engine == "STRUCTURAL_ARB_ENGINE"
     legs = [{
         "leg_id": "leg-1", "market_id": "market-1", "contract_id": "contract-1",
@@ -38,8 +38,14 @@ def envelope(*, engine="BTC_SETTLEMENT_ENGINE", action="TAKE", component="crypto
         "event_id": "event-1",
         "contract_id": "contract-1",
         "mapping_identity": "mapping-1",
+        "crypto_context": ({
+            "asset": asset, "horizon": horizon,
+            "contract_family": f"{asset}_USD_UPDOWN_{horizon}",
+            "settlement_semantic_hash": "d" * 64,
+            "authority": authority, "research_only": research_only,
+        } if not structural else None),
         "action": action,
-        "side": "BUY" if action not in {"ARB", "CANCEL", "NOTHING"} else ("MULTI" if action == "ARB" else "NONE"),
+        "side": "BUY" if action not in {"ARB", "CANCEL", "WITHDRAW", "NOTHING"} else ("MULTI" if action == "ARB" else "NONE"),
         "decision_receive_timestamp_ns": 100,
         "source_event_timestamps_ns": [80, 90],
         "fair_value": {"lower": 0.50, "point": 0.55, "upper": 0.60},
@@ -79,7 +85,7 @@ def envelope(*, engine="BTC_SETTLEMENT_ENGINE", action="TAKE", component="crypto
 
 def test_complete_envelope_parses() -> None:
     parsed = OpportunityEnvelope.parse(envelope())
-    assert parsed.engine_id == "BTC_SETTLEMENT_ENGINE"
+    assert parsed.engine_id == "CRYPTO_SETTLEMENT_ENGINE"
     assert parsed.expected_wealth_change == 1.0
 
 
@@ -113,7 +119,7 @@ def test_risk_cancel_preempts_positive_alpha() -> None:
     cancel["side"] = "NONE"
     decision = coordinate([envelope(ev=10.0), cancel], now_ns=150, new_risk_authorized=True)
     assert decision["action"] == "CANCEL"
-    assert decision["engine_id"] == "BTC_SETTLEMENT_ENGINE"
+    assert decision["engine_id"] == "CRYPTO_SETTLEMENT_ENGINE"
     assert decision["new_risk_authorized"] is False
 
 
@@ -160,6 +166,35 @@ def test_structural_arbitrage_is_one_atomic_multileg_intent() -> None:
         raise AssertionError("single-leg structural arbitrage accepted")
 
 
+def test_crypto_context_is_mandatory_and_zero_authority_cannot_add_risk() -> None:
+    missing = envelope(action="NOTHING")
+    missing["crypto_context"] = None
+    try:
+        OpportunityEnvelope.parse(missing)
+    except OpportunityError as exc:
+        assert str(exc) == "crypto_context"
+    else:
+        raise AssertionError("crypto opportunity without context accepted")
+    zero = envelope(asset="ETH", authority="SHADOW_ZERO_AUTHORITY", research_only=True)
+    try:
+        OpportunityEnvelope.parse(zero)
+    except OpportunityError as exc:
+        assert str(exc) == "crypto_context_zero_authority"
+    else:
+        raise AssertionError("non-BTC research context received new-risk authority")
+    zero["action"] = "NOTHING"
+    zero["side"] = "NONE"
+    assert OpportunityEnvelope.parse(zero).raw["crypto_context"]["asset"] == "ETH"
+
+
+def test_all_crypto_contexts_compete_in_one_global_cut() -> None:
+    eth = envelope(asset="ETH", authority="PAPER", ev=2.0, key="eth")
+    sol = envelope(asset="SOL", authority="PAPER", ev=3.0, key="sol")
+    decision = coordinate([eth, sol], now_ns=150, new_risk_authorized=True)
+    assert decision["selected_replay_key"] == "sol"
+    assert decision["crypto_context"]["asset"] == "SOL"
+
+
 if __name__ == "__main__":
     test_complete_envelope_parses()
     test_unauthoritative_rebate_fails_closed()
@@ -169,3 +204,5 @@ if __name__ == "__main__":
     test_coordinator_defaults_to_nothing_without_new_risk_authority()
     test_invalid_or_duplicate_envelope_fails_the_whole_cut_closed()
     test_structural_arbitrage_is_one_atomic_multileg_intent()
+    test_crypto_context_is_mandatory_and_zero_authority_cannot_add_risk()
+    test_all_crypto_contexts_compete_in_one_global_cut()

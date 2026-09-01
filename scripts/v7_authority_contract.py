@@ -34,13 +34,13 @@ EXPECTED_OWNERS = {
     "runtime_identity": "V7_EXACT_SHA_RUNTIME_IDENTITY",
 }
 ENGINE_COMPONENTS = {
-    "BTC_SETTLEMENT_ENGINE": {
+    "CRYPTO_SETTLEMENT_ENGINE": {
         "crypto_settlement_fair", "crypto_informed_taker", "professional_maker",
     },
     "STRUCTURAL_ARB_ENGINE": {"hard_arb", "fast_structural"},
 }
 ENGINE_ACTIONS = {
-    "BTC_SETTLEMENT_ENGINE": {"MAKE", "TAKE", "CANCEL", "NOTHING"},
+    "CRYPTO_SETTLEMENT_ENGINE": {"MAKE", "TAKE", "CANCEL", "WITHDRAW", "NOTHING"},
     "STRUCTURAL_ARB_ENGINE": {"ARB", "CANCEL", "NOTHING"},
 }
 RESEARCH_FAMILIES = {

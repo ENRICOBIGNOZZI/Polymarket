@@ -319,6 +319,10 @@ def collect_snapshot(run_root: Path, repository_root: Path | None = None, *, now
     directives = _json(repository_root / "config" / "operator_directives.json")
     strategy_registry = _json(repository_root / "config" / "v7_strategy_registry.json")
     live_model_scope = _json(repository_root / "config" / "v7_live_model_scope.json")
+    crypto_registry = _json(repository_root / "config" / "v7_crypto_settlement_markets.json")
+    crypto_model_registry = _json(repository_root / "config" / "v7_crypto_settlement_model_registry.json")
+    crypto_runtime = _json(run_root / "control" / "crypto_settlement_engine_snapshot.json")
+    global_coordinator = _json(run_root / "control" / "global_portfolio_coordinator.json")
     process_manifest_path = repository_root / "config" / "v7_process_manifest.json"
     process_manifest = _json(process_manifest_path)
     try:
@@ -425,6 +429,10 @@ def collect_snapshot(run_root: Path, repository_root: Path | None = None, *, now
         "research_shadow_statuses": research_shadow_statuses,
         "strategy_registry": strategy_registry,
         "live_model_scope": live_model_scope,
+        "crypto_registry": crypto_registry,
+        "crypto_model_registry": crypto_model_registry,
+        "crypto_runtime": crypto_runtime,
+        "global_coordinator": global_coordinator,
         "process_manifest": {
             "schema": process_manifest.get("schema"),
             "version": process_manifest.get("version"),
@@ -847,6 +855,10 @@ def render_prometheus(snapshot: dict[str, Any]) -> str:
     research_statuses = snapshot.get("research_shadow_statuses") if isinstance(snapshot.get("research_shadow_statuses"), dict) else {}
     registry = snapshot.get("strategy_registry") if isinstance(snapshot.get("strategy_registry"), dict) else {}
     live_scope = snapshot.get("live_model_scope") if isinstance(snapshot.get("live_model_scope"), dict) else {}
+    crypto_registry = snapshot.get("crypto_registry") if isinstance(snapshot.get("crypto_registry"), dict) else {}
+    crypto_model_registry = snapshot.get("crypto_model_registry") if isinstance(snapshot.get("crypto_model_registry"), dict) else {}
+    crypto_runtime = snapshot.get("crypto_runtime") if isinstance(snapshot.get("crypto_runtime"), dict) else {}
+    global_coordinator = snapshot.get("global_coordinator") if isinstance(snapshot.get("global_coordinator"), dict) else {}
     research_rows = research.get("families") if isinstance(research.get("families"), dict) else {}
     enabled_registry = [row for row in registry.get("strategies", []) if isinstance(row, dict) and row.get("enabled") is True] if isinstance(registry.get("strategies"), list) else []
     expected_research = {"sports_latency", "cross_platform", "wallet_intelligence"}
@@ -1225,6 +1237,56 @@ def render_prometheus(snapshot: dict[str, Any]) -> str:
         lines.append(_metric("polymarket_v7_maker_decision_reason_total", count, {"reason": reason}))
     for tier, count in sorted((universe.get("tier_counts") or {}).items()):
         lines.append(_metric("polymarket_v7_universe_tier_markets", count, {"tier": tier}))
+    model_rows = {
+        (str(row.get("asset") or ""), str(row.get("horizon") or "")): row
+        for row in crypto_model_registry.get("models", []) if isinstance(row, dict)
+    }
+    live_context = crypto_runtime.get("crypto_context") if isinstance(
+        crypto_runtime.get("crypto_context"), dict
+    ) else {}
+    for row in crypto_registry.get("contexts", []) if isinstance(crypto_registry.get("contexts"), list) else []:
+        if not isinstance(row, dict):
+            continue
+        labels_c = {
+            "asset": row.get("asset", "UNKNOWN"),
+            "horizon": row.get("horizon", "UNKNOWN"),
+            "contract_family": row.get("contract_family", "UNKNOWN"),
+            "authority": row.get("authority", "UNKNOWN"),
+        }
+        model_row = model_rows.get((str(row.get("asset") or ""), str(row.get("horizon") or "")), {})
+        is_live_context = (
+            live_context.get("asset") == row.get("asset")
+            and live_context.get("horizon") == row.get("horizon")
+        )
+        lines.append(_metric("polymarket_v7_crypto_context_registered", 1, labels_c))
+        lines.append(_metric(
+            "polymarket_v7_crypto_context_research_only",
+            1 if row.get("research_only") is True else 0, labels_c,
+        ))
+        lines.append(_metric(
+            "polymarket_v7_crypto_context_model_registered",
+            1 if isinstance(model_row, dict) and model_row.get("artifact") is not None else 0,
+            labels_c,
+        ))
+        lines.append(_metric(
+            "polymarket_v7_crypto_context_new_risk_authorized",
+            1 if is_live_context and crypto_runtime.get("new_risk_authorized") is True else 0,
+            labels_c,
+        ))
+    coordinator_decision = global_coordinator.get("last_decision") if isinstance(
+        global_coordinator.get("last_decision"), dict
+    ) else {}
+    crypto_risk = coordinator_decision.get("crypto_correlation_risk") if isinstance(
+        coordinator_decision.get("crypto_correlation_risk"), dict
+    ) else {}
+    for field, metric_name in (
+        ("gross_crypto_exposure_usd", "polymarket_v7_crypto_gross_exposure_usd"),
+        ("net_directional_crypto_exposure_usd", "polymarket_v7_crypto_net_directional_exposure_usd"),
+        ("correlated_crypto_cluster_exposure_usd", "polymarket_v7_crypto_cluster_exposure_usd"),
+        ("oracle_concentration_fraction", "polymarket_v7_crypto_oracle_concentration_ratio"),
+        ("exchange_source_concentration_fraction", "polymarket_v7_crypto_exchange_source_concentration_ratio"),
+    ):
+        lines.append(_metric(metric_name, crypto_risk.get(field)))
     for reason, count in sorted((universe.get("skipped_by_reason") or {}).items()):
         lines.append(_metric("polymarket_v7_universe_skipped_by_reason", count, {"reason": reason}))
     capacities = universe.get("resource_capacities") if isinstance(universe.get("resource_capacities"), dict) else {}

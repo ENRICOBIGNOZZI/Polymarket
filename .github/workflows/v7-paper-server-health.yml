@@ -144,14 +144,14 @@ jobs:
           for key in ('config_hash','policy_hash','model_hash','run_id','ledger_id','server_id'): assert identity.get(key)==runtime.get(key) and str(identity.get(key) or '')
           pid=int(runtime.get('pid') or 0); assert pid>0; os.kill(pid,0); assert now-int(runtime.get('timestamp') or 0)<=180
           assert portfolio.get('paper_only') is True and portfolio.get('authenticated_execution') is False and portfolio.get('killed') is False and float(portfolio.get('drawdown',1))<.15 and now-int(portfolio.get('timestamp') or 0)<=30
-          expected_engine_budgets={'BTC_SETTLEMENT_ENGINE','STRUCTURAL_ARB_ENGINE'}
+          expected_engine_budgets={'CRYPTO_SETTLEMENT_ENGINE','STRUCTURAL_ARB_ENGINE'}
           expected_component_budgets={'professional_maker','fast_structural','crypto_informed_taker'}
           engine_budgets=allocation.get('engine_budgets') or {}
           component_budgets=allocation.get('component_observation_budgets') or {}
           assert allocation.get('schema')=='polymarket_v7_capital_allocation_v3' and allocation.get('paper_only') is True and allocation.get('authenticated_execution') is False and allocation.get('real_order_submission') is False and allocation.get('real_capital_at_risk') is False
           assert allocation.get('capital_authority_owner')=='V7_CANONICAL_ALLOCATOR' and int(allocation.get('capital_authority_owner_count') or 0)==1
           assert float(allocation.get('account_starting_capital') or 0)==14000.0 and int(allocation.get('engine_count') or 0)==2 and set(engine_budgets)==expected_engine_budgets
-          assert engine_budgets=={'BTC_SETTLEMENT_ENGINE':4000.0,'STRUCTURAL_ARB_ENGINE':2000.0} and abs(float(allocation.get('engine_budget_sum') or 0)-6000.0)<=1e-9
+          assert engine_budgets=={'CRYPTO_SETTLEMENT_ENGINE':4000.0,'STRUCTURAL_ARB_ENGINE':2000.0} and abs(float(allocation.get('engine_budget_sum') or 0)-6000.0)<=1e-9
           assert set(component_budgets)==expected_component_budgets and component_budgets=={'professional_maker':2000.0,'fast_structural':2000.0,'crypto_informed_taker':0.0}
           assert allocation.get('component_observation_budgets_are_capital') is False
           assert allocation.get('research_budgets')=={} and allocation.get('research_has_capital') is False and abs(float(allocation.get('reserve_budget') or 0)-8000.0)<=1e-9

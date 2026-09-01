@@ -56,7 +56,7 @@ def _write_external_state(root: Path, sha: str, *, full: bool = True, books: int
         "external": {"healthy": True},
     }))
     (external / "paper_router_status.json").write_text(json.dumps({
-        "schema": "polymarket_v7_btc_settlement_engine_status_v1",
+        "schema": "polymarket_v7_crypto_settlement_engine_status_v1",
         "code_sha": sha,
         "state": "RUNNING",
         "paper_only": True,

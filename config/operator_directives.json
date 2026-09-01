@@ -37,7 +37,7 @@
     "single_broker_authority": true,
     "single_canonical_integration": true,
     "no_live_expert_averaging": true,
-    "professional_market_maker_is_btc_engine_component": true,
+    "professional_market_maker_is_crypto_engine_component": true,
     "hard_arb_and_fast_structural_share_one_engine": true,
     "single_global_portfolio_coordinator": true,
     "cleanup_sequence": "audit_then_port_then_test_then_validate_then_retire_obsolete_generations",
@@ -50,7 +50,7 @@
   },
   "current_priority_order": [
     "Keep one V7 runtime, two economic engines, one global portfolio coordinator, one broker authority, one canonical execution ledger, one allocator, one risk guard and one monitoring plane.",
-    "BTC_SETTLEMENT_ENGINE compares professional maker, informed taker, cancellation and no-action components on one conservative account-wealth objective.",
+    "CRYPTO_SETTLEMENT_ENGINE compares professional maker, informed taker, cancellation and no-action components on one conservative account-wealth objective.",
     "STRUCTURAL_ARB_ENGINE owns hard-arb and fast-structural components as one capital reservation and lifecycle.",
     "All engine proposals pass through one global portfolio coordinator, allocator, risk engine, OMS, inventory and ledger chain.",
     "Graph/RV, Ranking, PCA, Local Factor, Micro Taker, wallet, sports, cross-platform, OSINT and market-open remain zero-authority research only.",

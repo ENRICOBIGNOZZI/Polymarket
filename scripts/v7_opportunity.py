@@ -14,23 +14,30 @@ from typing import Any, Iterable
 SCHEMA = "polymarket_v7_opportunity_envelope_v1"
 SHA = re.compile(r"^[0-9a-f]{40}$")
 HASH = re.compile(r"^[0-9a-f]{40}(?:[0-9a-f]{24})?$")
+HASH64 = re.compile(r"^[0-9a-f]{64}$")
 ENGINE_COMPONENTS = {
-    "BTC_SETTLEMENT_ENGINE": {
+    "CRYPTO_SETTLEMENT_ENGINE": {
         "crypto_settlement_fair", "crypto_informed_taker", "professional_maker",
     },
     "STRUCTURAL_ARB_ENGINE": {"hard_arb", "fast_structural"},
 }
 ENGINE_ACTIONS = {
-    "BTC_SETTLEMENT_ENGINE": {"MAKE", "TAKE", "CANCEL", "NOTHING"},
+    "CRYPTO_SETTLEMENT_ENGINE": {"MAKE", "TAKE", "CANCEL", "WITHDRAW", "NOTHING"},
     "STRUCTURAL_ARB_ENGINE": {"ARB", "CANCEL", "NOTHING"},
 }
 NEW_RISK_ACTIONS = {"MAKE", "TAKE", "ARB"}
-SAFE_ACTIONS = {"CANCEL", "NOTHING"}
+SAFE_ACTIONS = {"CANCEL", "WITHDRAW", "NOTHING"}
 COST_FIELDS = (
     "fee", "slippage", "unwind_loss", "capital_cost", "latency_cost",
     "adverse_markout", "rebate",
 )
 AUTHORITY_STATES = {"AUTHORITATIVE", "CONSERVATIVE_BOUND", "CONSERVATIVE_ZERO"}
+CRYPTO_ASSETS = {"BTC", "ETH", "SOL", "XRP"}
+CRYPTO_HORIZONS = {"M1", "M5", "M15", "H1", "H4"}
+CRYPTO_CONTEXT_FIELDS = {
+    "asset", "horizon", "contract_family", "settlement_semantic_hash",
+    "authority", "research_only",
+}
 
 
 class OpportunityError(ValueError):
@@ -88,7 +95,7 @@ class OpportunityEnvelope:
         required = {
             "schema", "version", "model_sha", "config_hash", "policy_hash", "run_id",
             "source_snapshot_identity", "engine_id", "component_provenance", "market_id",
-            "event_id", "contract_id", "mapping_identity", "action", "side",
+            "event_id", "contract_id", "mapping_identity", "crypto_context", "action", "side",
             "decision_receive_timestamp_ns", "source_event_timestamps_ns", "fair_value",
             "conservative_expected_wealth_change", "cost_vector", "cost_authority",
             "uncertainty", "calibration_status", "latency", "capacity",
@@ -116,6 +123,28 @@ class OpportunityEnvelope:
         action = str(value.get("action") or "")
         if engine_id not in ENGINE_COMPONENTS or action not in ENGINE_ACTIONS[engine_id]:
             raise OpportunityError("engine_action")
+        crypto_context = value.get("crypto_context")
+        if engine_id == "CRYPTO_SETTLEMENT_ENGINE":
+            context = _mapping(crypto_context, "crypto_context")
+            if set(context) != CRYPTO_CONTEXT_FIELDS:
+                raise OpportunityError("crypto_context_fields")
+            if (
+                context.get("asset") not in CRYPTO_ASSETS
+                or context.get("horizon") not in CRYPTO_HORIZONS
+                or not isinstance(context.get("contract_family"), str)
+                or not context["contract_family"]
+                or not HASH64.fullmatch(str(context.get("settlement_semantic_hash") or ""))
+                or context.get("authority") not in {"SHADOW", "SHADOW_ZERO_AUTHORITY", "PAPER"}
+                or not isinstance(context.get("research_only"), bool)
+            ):
+                raise OpportunityError("crypto_context_identity")
+            if action in NEW_RISK_ACTIONS and (
+                context["research_only"] is True
+                or context["authority"] == "SHADOW_ZERO_AUTHORITY"
+            ):
+                raise OpportunityError("crypto_context_zero_authority")
+        elif crypto_context is not None:
+            raise OpportunityError("structural_crypto_context_forbidden")
         components = value.get("component_provenance")
         if (
             not isinstance(components, list) or not components
@@ -125,6 +154,8 @@ class OpportunityEnvelope:
             raise OpportunityError("component_provenance")
         if value.get("side") not in {"BUY", "SELL", "YES", "NO", "NONE", "MULTI"}:
             raise OpportunityError("side")
+        if action in SAFE_ACTIONS and value.get("side") != "NONE":
+            raise OpportunityError("safe_action_side")
         decision_ns = int(value.get("decision_receive_timestamp_ns") or 0)
         source_ns = value.get("source_event_timestamps_ns")
         expires_ns = int(value.get("expires_at_ns") or 0)
@@ -256,6 +287,7 @@ def fail_closed_decision(*, now_ns: int, reasons: list[str]) -> dict[str, Any]:
         "decision_timestamp_ns": int(now_ns),
         "action": "NOTHING",
         "engine_id": None,
+        "crypto_context": None,
         "selected_replay_key": None,
         "new_risk_authorized": False,
         "reasons": reasons or ["FAIL_CLOSED"],
@@ -281,15 +313,16 @@ def coordinate(
     if errors:
         return fail_closed_decision(now_ns=now_ns, reasons=errors)
     live = [row for row in parsed if row.expires_at_ns >= now_ns and row.eligible]
-    risk = [row for row in live if row.action == "CANCEL"]
+    risk = [row for row in live if row.action in {"CANCEL", "WITHDRAW"}]
     if risk:
         selected = min(risk, key=lambda row: row.replay_key)
         return {
             "schema": "polymarket_v7_global_opportunity_decision_v1",
             "owner": "V7_GLOBAL_PORTFOLIO_COORDINATOR",
             "decision_timestamp_ns": int(now_ns),
-            "action": "CANCEL",
+            "action": selected.action,
             "engine_id": selected.engine_id,
+            "crypto_context": selected.raw["crypto_context"],
             "selected_replay_key": selected.replay_key,
             "new_risk_authorized": False,
             "reasons": ["RISK_ACTION_PREEMPTS_ALPHA"],
@@ -307,6 +340,7 @@ def coordinate(
         "decision_timestamp_ns": int(now_ns),
         "action": selected.action,
         "engine_id": selected.engine_id,
+        "crypto_context": selected.raw["crypto_context"],
         "selected_replay_key": selected.replay_key,
         "new_risk_authorized": True,
         "reasons": ["MAX_CONSERVATIVE_EXPECTED_ACCOUNT_WEALTH_CHANGE"],

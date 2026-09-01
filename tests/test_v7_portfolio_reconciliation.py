@@ -22,7 +22,7 @@ class PortfolioReconciliationTests(unittest.TestCase):
             "portfolio": {
                 "equity": 103.0,
                 "sleeves": {
-                    "btc_settlement_engine": {"equity": 51.0},
+                    "crypto_settlement_engine": {"equity": 51.0},
                     "structural_arb_engine": {"equity": 22.0},
                     "reserve": {"equity": 30.0},
                 },
@@ -30,7 +30,7 @@ class PortfolioReconciliationTests(unittest.TestCase):
             "allocations": {
                 "account_starting_capital": 100.0,
                 "engine_budgets": {
-                    "BTC_SETTLEMENT_ENGINE": 50.0,
+                    "CRYPTO_SETTLEMENT_ENGINE": 50.0,
                     "STRUCTURAL_ARB_ENGINE": 20.0,
                 },
                 "reserve_budget": 30.0,

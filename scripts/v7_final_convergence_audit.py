@@ -15,7 +15,7 @@ from v7_surface_classification import build_manifest, validate_manifest
 
 
 SCHEMA = "polymarket_v7_final_convergence_audit_v1"
-EXPECTED_ENGINES = {"BTC_SETTLEMENT_ENGINE", "STRUCTURAL_ARB_ENGINE"}
+EXPECTED_ENGINES = {"CRYPTO_SETTLEMENT_ENGINE", "STRUCTURAL_ARB_ENGINE"}
 EXPECTED_OWNERS = {
     "global_portfolio_coordinator",
     "capital_allocator",

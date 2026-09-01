@@ -74,7 +74,7 @@ def write_events(path: Path, events) -> None:
 class CanonicalEconomicsTest(unittest.TestCase):
     def test_engine_action_attribution_requires_complete_provenance_dimensions(self) -> None:
         evidence = {
-            "engine_id": "BTC_SETTLEMENT_ENGINE",
+            "engine_id": "CRYPTO_SETTLEMENT_ENGINE",
             "component_provenance": ["professional_maker"],
             "latency_regime": "p99_under_slo",
             "fill_path": "maker_reach_then_fill",
@@ -110,15 +110,15 @@ class CanonicalEconomicsTest(unittest.TestCase):
             path = Path(tmp) / "execution.jsonl"
             write_events(path, [order_event, fill_event, final_event])
             report = econ.assess(path, expected_model_sha=SHA)
-        self.assertEqual(report["engine_mature_terminal_units"], {"BTC_SETTLEMENT_ENGINE": 1})
-        dimensions = report["engine_evidence_dimensions"]["BTC_SETTLEMENT_ENGINE"]
+        self.assertEqual(report["engine_mature_terminal_units"], {"CRYPTO_SETTLEMENT_ENGINE": 1})
+        dimensions = report["engine_evidence_dimensions"]["CRYPTO_SETTLEMENT_ENGINE"]
         self.assertEqual(dimensions["applicable_action_classes"], ["MAKE"])
         self.assertTrue(dimensions["action_classes"]["MAKE"]["complete_cost_vector"])
         self.assertEqual(len(report["economic_attribution"]), 1)
         row = report["economic_attribution"][0]
         self.assertEqual(
             (row["engine"], row["action"], row["component_provenance"], row["market"]),
-            ("BTC_SETTLEMENT_ENGINE", "MAKE", "professional_maker", "market-1"),
+            ("CRYPTO_SETTLEMENT_ENGINE", "MAKE", "professional_maker", "market-1"),
         )
         self.assertTrue(report["attribution_uses_single_canonical_ledger"])
 

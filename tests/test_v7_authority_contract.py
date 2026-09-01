@@ -42,7 +42,7 @@ class AuthorityContractTests(unittest.TestCase):
 
     def test_research_family_cannot_enter_an_economic_engine(self) -> None:
         value = copy.deepcopy(registry())
-        value["economic_engines"]["BTC_SETTLEMENT_ENGINE"]["components"].append("osint")
+        value["economic_engines"]["CRYPTO_SETTLEMENT_ENGINE"]["components"].append("osint")
         with self.assertRaises(AuthorityContractError):
             validate(value)
 

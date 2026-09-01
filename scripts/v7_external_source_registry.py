@@ -56,6 +56,12 @@ def validate(value: dict[str, Any]) -> dict[str, Any]:
             raise SourceRegistryError("source_registry_event_kind_invalid")
         if not isinstance(row["credentials_required"], bool) or not isinstance(row["enabled"], bool):
             raise SourceRegistryError("source_registry_source_boolean_invalid")
+        if row.get("asset") in {"ETH", "SOL", "XRP"} and (
+            row.get("enabled") is not False
+            or row.get("research_only") is not True
+            or row.get("activation_state") != "REGISTERED_NOT_LAUNCHED"
+        ):
+            raise SourceRegistryError("non_btc_source_must_start_registered_not_launched")
         if row["credentials_required"] and not isinstance(row.get("required_env"), list):
             raise SourceRegistryError("source_registry_credential_contract_missing")
     aliases = value.get("environment_compatibility")

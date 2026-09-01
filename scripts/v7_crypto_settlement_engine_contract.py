@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Freeze fail-closed BTC settlement-engine inputs for the bounded C++ kernel.
+"""Freeze fail-closed crypto settlement-engine inputs for the bounded C++ kernel.
 
 This slow-plane tool grants no execution authority.  It converts independently
 versioned horizon, latency and maker-execution evidence into one immutable
@@ -17,14 +17,20 @@ from pathlib import Path
 import re
 from typing import Any
 
+from v7_crypto_settlement import (
+    CryptoAsset, CryptoHorizon, CryptoSettlementError, require_context,
+    validate_model_artifact, validate_model_registry,
+    validate_registry as validate_market_registry,
+)
 
-CONFIG_SCHEMA = "polymarket_v7_btc_settlement_engine_v1"
+
+CONFIG_SCHEMA = "polymarket_v7_crypto_settlement_engine_v1"
 STRUCTURAL_CONFIG_SCHEMA = "polymarket_v7_structural_arb_engine_v1"
-SNAPSHOT_SCHEMA = "polymarket_v7_btc_settlement_runtime_snapshot_v1"
+SNAPSHOT_SCHEMA = "polymarket_v7_crypto_settlement_runtime_snapshot_v1"
 LATENCY_SCHEMA = "polymarket_v7_empirical_latency_profile_v1"
 MAKER_SCHEMA = "polymarket_v7_maker_execution_evidence_v1"
 SHA40 = re.compile(r"[0-9a-f]{40}")
-ALLOWED_HORIZONS = {300, 900, 14_400}
+ALLOWED_HORIZONS = {300, 900}
 REQUIRED_LATENCY_SEGMENTS = (
     "taker_arrival", "maker_place_ack", "maker_cancel_ack",
     "private_ws_confirmation",
@@ -82,26 +88,32 @@ def validate_config(config: dict[str, Any]) -> None:
         or config.get("authenticated_execution") is not False
         or config.get("real_order_submission") is not False
         or config.get("automatic_promotion") is not False
-        or config.get("decision_owner") != "BTC_SETTLEMENT_ENGINE"
+        or config.get("decision_owner") != "CRYPTO_SETTLEMENT_ENGINE"
+        or config.get("market_registry") != "config/v7_crypto_settlement_markets.json"
+        or config.get("model_registry") != "config/v7_crypto_settlement_model_registry.json"
         or config.get("authority_registry") != "config/v7_authority_registry.json"
         or config.get("opportunity_contract") != "schemas/v7/opportunity_envelope.schema.json"
         or config.get("global_portfolio_coordinator") != "V7_GLOBAL_PORTFOLIO_COORDINATOR"
         or config.get("component_independent_authority") is not False
     ):
         raise ContractError("engine_identity_or_safety")
-    if set(config.get("action_space") or []) != {"MAKE", "TAKE", "CANCEL", "NOTHING"}:
+    if set(config.get("action_space") or []) != {"MAKE", "TAKE", "CANCEL", "WITHDRAW", "NOTHING"}:
         raise ContractError("unified_action_space")
     components = set(config.get("component_families") or [])
     if components != {
         "crypto_settlement_fair", "crypto_informed_taker", "professional_maker",
     }:
-        raise ContractError("btc_component_partition")
+        raise ContractError("crypto_component_partition")
     fair = config.get("fair_value") if isinstance(config.get("fair_value"), dict) else {}
     if (
         fair.get("separate_model_per_horizon") is not True
+        or fair.get("separate_frozen_model_per_asset_horizon") is not True
+        or fair.get("model_registry_index") != [
+            "asset", "horizon", "settlement_semantic_hash",
+        ]
         or fair.get("fixed_bridge_coefficient_authorized") is not False
         or fair.get("empirical_frozen_artifact_required") is not True
-        or fair.get("settlement_source") != "CHAINLINK_60_SECOND_TWAP"
+        or fair.get("settlement_source") != "REGISTRY_VERIFIED_CHAINLINK_TWAP_60S"
         or fair.get("settlement_source_may_be_replaced_by_predictor") is not False
     ):
         raise ContractError("fair_value_binding")
@@ -131,7 +143,7 @@ def validate_config(config: dict[str, Any]) -> None:
     ):
         raise ContractError("maker_component_boundary")
     rows = config.get("horizons")
-    if not isinstance(rows, list) or len(rows) != 3:
+    if not isinstance(rows, list) or len(rows) != 2:
         raise ContractError("horizon_count")
     found: set[int] = set()
     scopes: set[str] = set()
@@ -214,7 +226,7 @@ def validate_registry_authority(
         raise ContractError("strategy_registry_partition")
     engines = registry.get("economic_engines") if isinstance(
         registry.get("economic_engines"), dict) else {}
-    expected_owners = {"BTC_SETTLEMENT_ENGINE", "STRUCTURAL_ARB_ENGINE"}
+    expected_owners = {"CRYPTO_SETTLEMENT_ENGINE", "STRUCTURAL_ARB_ENGINE"}
     for name in expected_owners:
         engine = engines.get(name) if isinstance(engines.get(name), dict) else {}
         if (
@@ -222,10 +234,10 @@ def validate_registry_authority(
             or engine.get("component_independent_authority") is not False
         ):
             raise ContractError(f"economic_engine_authority:{name}")
-    if set(engines["BTC_SETTLEMENT_ENGINE"].get("components") or []) != {
+    if set(engines["CRYPTO_SETTLEMENT_ENGINE"].get("components") or []) != {
         "crypto_settlement_fair", "professional_maker", "crypto_informed_taker",
     }:
-        raise ContractError("btc_engine_registry_components")
+        raise ContractError("crypto_engine_registry_components")
     if set(engines["STRUCTURAL_ARB_ENGINE"].get("components") or []) != {
         "hard_arb", "fast_structural",
     }:
@@ -256,7 +268,7 @@ def validate_live_scope(
     ):
         raise ContractError("live_scope_identity_or_safety")
     if set(scope.get("paper_execution_engines") or []) != {
-        "BTC_SETTLEMENT_ENGINE", "STRUCTURAL_ARB_ENGINE",
+        "CRYPTO_SETTLEMENT_ENGINE", "STRUCTURAL_ARB_ENGINE",
     }:
         raise ContractError("live_scope_must_have_two_economic_owners")
     if set(scope.get("component_shadow_families") or []) != {
@@ -268,9 +280,16 @@ def validate_live_scope(
         config["research_zero_authority_families"]
     ):
         raise ContractError("live_scope_research_zero_authority")
-    if scope.get("btc_settlement_engine_contract") != \
-            "config/v7_btc_settlement_engine.json":
+    if scope.get("crypto_settlement_engine_contract") != \
+            "config/v7_crypto_settlement_engine.json":
         raise ContractError("live_scope_engine_contract_path")
+    if (
+        scope.get("crypto_settlement_market_registry") !=
+        "config/v7_crypto_settlement_markets.json"
+        or scope.get("crypto_settlement_model_registry") !=
+        "config/v7_crypto_settlement_model_registry.json"
+    ):
+        raise ContractError("live_scope_crypto_registry_paths")
     if scope.get("structural_arb_engine_contract") != \
             "config/v7_structural_arb_engine.json":
         raise ContractError("live_scope_structural_contract_path")
@@ -379,11 +398,13 @@ def maker_snapshot(
 
 
 def freeze(
-    config: dict[str, Any], *, code_sha: str, horizon_seconds: int,
+    config: dict[str, Any], *, code_sha: str, asset: str, horizon_name: str,
     structural_config: dict[str, Any], registry: dict[str, Any],
-    live_scope: dict[str, Any],
+    live_scope: dict[str, Any], market_registry: dict[str, Any],
+    model_registry: dict[str, Any],
     latency_profile: dict[str, Any] | None = None,
     maker_evidence: dict[str, Any] | None = None,
+    model_artifact: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     validate_config(config)
     validate_structural_config(structural_config)
@@ -391,6 +412,13 @@ def freeze(
     validate_live_scope(config, structural_config, live_scope)
     if SHA40.fullmatch(code_sha) is None:
         raise ContractError("exact_code_sha")
+    try:
+        contexts = validate_market_registry(market_registry)
+        context = require_context(contexts, asset, horizon_name)
+        registered_models = validate_model_registry(model_registry, contexts)
+    except CryptoSettlementError as exc:
+        raise ContractError(str(exc)) from exc
+    horizon_seconds = context.horizon_seconds
     horizon = _horizon(config, horizon_seconds)
     latency_cfg = config["latency"]
     maker_cfg = config["maker_economics"]
@@ -402,17 +430,29 @@ def freeze(
         maker_evidence or {}, code_sha=code_sha,
         minimum_orders=int(maker_cfg["minimum_orders"]),
     )
-    research_only = horizon.get("research_only") is True
+    model_blockers: list[str] = []
+    model_valid = False
+    try:
+        registered = registered_models[(context.asset, context.horizon)]
+        if registered is None:
+            raise CryptoSettlementError("model_unregistered")
+        supplied = validate_model_artifact(model_artifact or registered, context)
+        if _canonical_hash(supplied) != _canonical_hash(registered):
+            raise CryptoSettlementError("model_not_canonical_registry_artifact")
+        model_valid = True
+    except CryptoSettlementError as exc:
+        model_blockers.append(f"MODEL_INVALID:{exc}")
+    research_only = context.research_only or horizon.get("research_only") is True
     maker_policy, taker_policy = horizon["maker"], horizon["taker"]
     maker_enabled = bool(
         not research_only and maker_policy.get("enabled") is True
-        and latency["valid"] and maker["valid"]
+        and latency["valid"] and maker["valid"] and model_valid
     )
     taker_enabled = bool(
         not research_only and taker_policy.get("enabled") is True
-        and latency["valid"]
+        and latency["valid"] and model_valid
     )
-    blockers = sorted(set(latency_blockers + maker_blockers))
+    blockers = sorted(set(latency_blockers + maker_blockers + model_blockers))
     runtime = {
         "schema": SNAPSHOT_SCHEMA,
         "exact_code_sha": code_sha,
@@ -420,7 +460,16 @@ def freeze(
         "paper_only": True,
         "authenticated_execution": False,
         "real_order_submission": False,
-        "decision_owner": "BTC_SETTLEMENT_ENGINE",
+        "decision_owner": "CRYPTO_SETTLEMENT_ENGINE",
+        "crypto_context": {
+            "asset": context.asset.value,
+            "horizon": context.horizon.value,
+            "context_id": context.context_id,
+            "contract_family": context.contract_family,
+            "settlement_semantic_hash": context.settlement_semantic_hash,
+            "authority": context.authority,
+        },
+        "model_binding_valid": model_valid,
         "horizon_policy": {
             "policy_version": int(config["version"]),
             "horizon_seconds": horizon_seconds,
@@ -445,24 +494,31 @@ def freeze(
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--config", type=Path, default=Path("config/v7_btc_settlement_engine.json"))
+    parser.add_argument("--config", type=Path, default=Path("config/v7_crypto_settlement_engine.json"))
     parser.add_argument("--structural-config", type=Path, default=Path("config/v7_structural_arb_engine.json"))
     parser.add_argument("--registry", type=Path, default=Path("config/v7_strategy_registry.json"))
     parser.add_argument("--live-scope", type=Path, default=Path("config/v7_live_model_scope.json"))
+    parser.add_argument("--market-registry", type=Path, default=Path("config/v7_crypto_settlement_markets.json"))
+    parser.add_argument("--model-registry", type=Path, default=Path("config/v7_crypto_settlement_model_registry.json"))
     parser.add_argument("--code-sha", required=True)
-    parser.add_argument("--horizon-seconds", type=int, required=True, choices=sorted(ALLOWED_HORIZONS))
+    parser.add_argument("--asset", required=True, choices=[asset.value for asset in CryptoAsset])
+    parser.add_argument("--horizon", required=True, choices=[horizon.value for horizon in CryptoHorizon])
     parser.add_argument("--latency-profile", type=Path)
     parser.add_argument("--maker-evidence", type=Path)
+    parser.add_argument("--model-artifact", type=Path)
     parser.add_argument("--output", type=Path, required=True)
     args = parser.parse_args()
     snapshot = freeze(
         _json(args.config), code_sha=args.code_sha,
-        structural_config=_json(args.structural_config),
-        horizon_seconds=args.horizon_seconds,
+        structural_config=_json(args.structural_config), asset=args.asset,
+        horizon_name=args.horizon,
         registry=_json(args.registry),
         live_scope=_json(args.live_scope),
+        market_registry=_json(args.market_registry),
+        model_registry=_json(args.model_registry),
         latency_profile=_json(args.latency_profile),
         maker_evidence=_json(args.maker_evidence),
+        model_artifact=_json(args.model_artifact),
     )
     _atomic_json(args.output, snapshot)
     print(json.dumps({

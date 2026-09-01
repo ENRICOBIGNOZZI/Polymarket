@@ -113,7 +113,7 @@ def validate(root: Path, expected_head: str | None) -> dict[str, str]:
         "scripts/v7_external_settlement_model.py",
         "scripts/v7_external_settlement_train.py",
         "scripts/v7_external_settlement_validate.py",
-        "scripts/v7_btc_settlement_engine_contract.py",
+        "scripts/v7_crypto_settlement_engine_contract.py",
         "scripts/v7_fast_structural_feasibility.py",
         "scripts/v7_portfolio_guard.py",
         "scripts/v7_research_shadow_supervisor.py",
@@ -177,7 +177,7 @@ def validate(root: Path, expected_head: str | None) -> dict[str, str]:
         "config/v7_external_mappings.json",
         "config/v7_frequency_matrix.json",
         "config/v7_external_fair.json",
-        "config/v7_btc_settlement_engine.json",
+        "config/v7_crypto_settlement_engine.json",
         "config/v7_research_data_plane.json",
         "config/v7_process_manifest.json",
         "config/v7_economic_readiness.json",
@@ -228,7 +228,7 @@ def validate(root: Path, expected_head: str | None) -> dict[str, str]:
         fail("V7 cutover blocked: excluded slow families must remain always-on economic shadow")
     if research_shadow != {"sports_latency", "cross_platform", "wallet_intelligence"}:
         fail("V7 cutover blocked: research-shadow supervisor scope is not the exact approved three-family set")
-    if paper_engines != {"BTC_SETTLEMENT_ENGINE", "STRUCTURAL_ARB_ENGINE"}:
+    if paper_engines != {"CRYPTO_SETTLEMENT_ENGINE", "STRUCTURAL_ARB_ENGINE"}:
         fail("V7 cutover blocked: exactly two economic engines must own PAPER decisions")
     if set(scope.get("component_shadow_families") or []) != {
         "crypto_settlement_fair", "professional_maker", "crypto_informed_taker",

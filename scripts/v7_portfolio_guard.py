@@ -11,7 +11,7 @@ from pathlib import Path
 from typing import Any
 
 
-ENGINES = ("BTC_SETTLEMENT_ENGINE", "STRUCTURAL_ARB_ENGINE")
+ENGINES = ("CRYPTO_SETTLEMENT_ENGINE", "STRUCTURAL_ARB_ENGINE")
 
 
 def atomic_json(path: Path, value: Any) -> None:
@@ -44,7 +44,7 @@ def _finite_nonnegative(value: Any, name: str) -> float:
 def engine_equity(
     run_root: Path, engine_id: str, budget: float,
 ) -> tuple[float, bool, str, bool]:
-    if engine_id == "BTC_SETTLEMENT_ENGINE":
+    if engine_id == "CRYPTO_SETTLEMENT_ENGINE":
         state = read_json(run_root / "external_fair" / "paper_router_status.json")
         key = "equity"
     elif engine_id == "STRUCTURAL_ARB_ENGINE":
@@ -74,7 +74,7 @@ def _compatibility_views(
 ) -> dict[str, dict[str, Any]]:
     """Temporary drain adapter; never grants component capital authority."""
     rows = {
-        "external": dict(engine_rows["BTC_SETTLEMENT_ENGINE"]),
+        "external": dict(engine_rows["CRYPTO_SETTLEMENT_ENGINE"]),
         "hard_arb": dict(engine_rows["STRUCTURAL_ARB_ENGINE"]),
         "reserve": {
             "budget": reserve, "equity": reserve, "source": "reserve",

@@ -50,7 +50,7 @@ COMPONENT_MARKERS = (
     "fast_structural", "external_fair", "external_execution",
     "external_kernel", "external_state", "external_ingress",
     "external_protocol", "external_replay", "external_tape",
-    "external_ws", "btc_settlement_engine",
+    "external_ws", "crypto_settlement_engine",
 )
 TEMPORARY_PATHS: frozenset[str] = frozenset()
 ARCHIVE_PATHS = frozenset({
@@ -109,7 +109,7 @@ def _authority(name: str, classification: str) -> dict[str, Any]:
         return {"owner": None, "capabilities": [], "executable": False}
     if classification == "KEEP_TEMPORARY_COMPATIBILITY":
         engine = (
-            "BTC_SETTLEMENT_ENGINE" if "external_fair" in lowered
+            "CRYPTO_SETTLEMENT_ENGINE" if "external_fair" in lowered
             else "STRUCTURAL_ARB_ENGINE"
         )
         return {
@@ -132,7 +132,7 @@ def _authority(name: str, classification: str) -> dict[str, Any]:
         owner = (
             "STRUCTURAL_ARB_ENGINE"
             if "hard_arb" in lowered or "fast_structural" in lowered
-            else "BTC_SETTLEMENT_ENGINE"
+            else "CRYPTO_SETTLEMENT_ENGINE"
         )
         return {
             "owner": owner, "capabilities": ["engine_component"],
@@ -153,7 +153,7 @@ def _replacement(name: str, classification: str) -> str | None:
         return (
             "config/v7_authority_registry.json#STRUCTURAL_ARB_ENGINE"
             if "hard_arb" in lowered or "fast_structural" in lowered
-            else "config/v7_authority_registry.json#BTC_SETTLEMENT_ENGINE"
+            else "config/v7_authority_registry.json#CRYPTO_SETTLEMENT_ENGINE"
         )
     if classification == "ARCHIVE_HISTORY_ONLY":
         return "artifacts/v7_unification/path_classification.json"

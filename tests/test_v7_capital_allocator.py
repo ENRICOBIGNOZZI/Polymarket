@@ -26,7 +26,7 @@ class CapitalAllocatorTests(unittest.TestCase):
                 "real_order_submission": False,
                 "capital_authority_owner": ALLOCATOR_OWNER,
                 "engine_capital_fractions": {
-                    "BTC_SETTLEMENT_ENGINE": btc,
+                    "CRYPTO_SETTLEMENT_ENGINE": btc,
                     "STRUCTURAL_ARB_ENGINE": structural,
                 },
                 "component_observation_budget_fractions": {
@@ -42,7 +42,7 @@ class CapitalAllocatorTests(unittest.TestCase):
     def test_engine_envelopes_plus_reserve_equal_account(self) -> None:
         budgets = allocate(self.config(0.4, 0.2, 0.1))
         self.assertAlmostEqual(sum(budgets.values()), 10_000.0)
-        self.assertEqual(budgets["BTC_SETTLEMENT_ENGINE"], 4_000.0)
+        self.assertEqual(budgets["CRYPTO_SETTLEMENT_ENGINE"], 4_000.0)
         self.assertEqual(budgets["STRUCTURAL_ARB_ENGINE"], 2_000.0)
         self.assertAlmostEqual(budgets["reserve"], 4_000.0)
 
@@ -50,7 +50,7 @@ class CapitalAllocatorTests(unittest.TestCase):
         cfg = json.loads((ROOT / "config/paper_v7.json").read_text())
         budgets = allocate(cfg)
         self.assertEqual(set(budgets), {*ENGINES, "reserve"})
-        self.assertEqual(budgets["BTC_SETTLEMENT_ENGINE"], 4_000.0)
+        self.assertEqual(budgets["CRYPTO_SETTLEMENT_ENGINE"], 4_000.0)
         self.assertEqual(budgets["STRUCTURAL_ARB_ENGINE"], 2_000.0)
         self.assertAlmostEqual(budgets["reserve"], 8_000.0)
         self.assertEqual(cfg["v7"]["capital_authority_owner"], ALLOCATOR_OWNER)
@@ -80,7 +80,7 @@ class CapitalAllocatorTests(unittest.TestCase):
             self.assertFalse(maker["capital_scope"]["observation_budget_is_capital"])
             external = json.loads((root / "external.json").read_text())
             self.assertEqual(external["starting_capital"], 4_000.0)
-            self.assertEqual(external["capital_scope"]["engine_id"], "BTC_SETTLEMENT_ENGINE")
+            self.assertEqual(external["capital_scope"]["engine_id"], "CRYPTO_SETTLEMENT_ENGINE")
             self.assertEqual(external["capital_scope"]["scope_class"], "TEMPORARY_ENGINE_ADAPTER")
 
     def test_duplicate_or_unknown_engine_partition_fails_closed(self) -> None:

@@ -7,7 +7,7 @@
   "required": [
     "schema", "version", "model_sha", "config_hash", "policy_hash", "run_id",
     "source_snapshot_identity", "engine_id", "component_provenance", "market_id",
-    "event_id", "contract_id", "mapping_identity", "action", "side",
+    "event_id", "contract_id", "mapping_identity", "crypto_context", "action", "side",
     "decision_receive_timestamp_ns", "source_event_timestamps_ns", "fair_value",
     "conservative_expected_wealth_change", "cost_vector", "cost_authority",
     "uncertainty", "calibration_status", "latency", "capacity", "execution_plan",
@@ -22,13 +22,30 @@
     "policy_hash": {"type": "string", "pattern": "^[0-9a-f]{40,64}$"},
     "run_id": {"type": "string", "minLength": 1},
     "source_snapshot_identity": {"type": "string", "minLength": 1},
-    "engine_id": {"enum": ["BTC_SETTLEMENT_ENGINE", "STRUCTURAL_ARB_ENGINE"]},
+    "engine_id": {"enum": ["CRYPTO_SETTLEMENT_ENGINE", "STRUCTURAL_ARB_ENGINE"]},
     "component_provenance": {"type": "array", "minItems": 1, "items": {"type": "string", "minLength": 1}, "uniqueItems": true},
     "market_id": {"type": "string", "minLength": 1},
     "event_id": {"type": "string", "minLength": 1},
     "contract_id": {"type": "string", "minLength": 1},
     "mapping_identity": {"type": "string", "minLength": 1},
-    "action": {"enum": ["MAKE", "TAKE", "ARB", "CANCEL", "NOTHING"]},
+    "crypto_context": {
+      "oneOf": [
+        {"type": "null"},
+        {
+          "type": "object", "additionalProperties": false,
+          "required": ["asset", "horizon", "contract_family", "settlement_semantic_hash", "authority", "research_only"],
+          "properties": {
+            "asset": {"enum": ["BTC", "ETH", "SOL", "XRP"]},
+            "horizon": {"enum": ["M1", "M5", "M15", "H1", "H4"]},
+            "contract_family": {"type": "string", "minLength": 1},
+            "settlement_semantic_hash": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+            "authority": {"enum": ["SHADOW", "SHADOW_ZERO_AUTHORITY", "PAPER"]},
+            "research_only": {"type": "boolean"}
+          }
+        }
+      ]
+    },
+    "action": {"enum": ["MAKE", "TAKE", "ARB", "CANCEL", "WITHDRAW", "NOTHING"]},
     "side": {"enum": ["BUY", "SELL", "YES", "NO", "NONE", "MULTI"]},
     "decision_receive_timestamp_ns": {"type": "integer", "minimum": 1},
     "source_event_timestamps_ns": {"type": "array", "minItems": 1, "items": {"type": "integer", "minimum": 1}},
@@ -82,5 +99,12 @@
     "reasons": {"type": "array", "minItems": 1, "items": {"type": "string", "minLength": 1}},
     "deterministic_replay_key": {"type": "string", "minLength": 1},
     "expires_at_ns": {"type": "integer", "minimum": 1}
-  }
+  },
+  "allOf": [
+    {
+      "if": {"properties": {"engine_id": {"const": "CRYPTO_SETTLEMENT_ENGINE"}}},
+      "then": {"properties": {"crypto_context": {"type": "object"}}},
+      "else": {"properties": {"crypto_context": {"type": "null"}}}
+    }
+  ]
 }
