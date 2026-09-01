@@ -312,6 +312,30 @@ if maker_absent:
     assert prove_never_started('micro_maker')
     maker_status={'paper_only':True,'authenticated_execution':False,'killed':False}
     maker_state={'inventory':{}}
+maker_zero_authority_observer=(
+    bool(maker_status) and not maker_state
+    and maker_status.get('schema') == 'polymarket_v7_professional_maker_status_v1'
+    and maker_status.get('model_sha') == runtime.get('model_sha')
+    and maker_status.get('paper_only') is True
+    and maker_status.get('authenticated_execution') is False
+    and maker_status.get('real_order_submission') is False
+    and maker_status.get('execution_authority') == 'SHADOW_ZERO_AUTHORITY'
+    and maker_status.get('capital_authority') is False
+    and maker_status.get('ledger_writer_authority') is False
+    and maker_status.get('source') == 'shadow_markout_and_fillability_observers'
+    and abs(int(runtime.get('timestamp',0))-int(maker_status.get('timestamp',-31))) <= 30
+    and isinstance(maker_status.get('observer_pids'),dict)
+    and bool(maker_status.get('observer_pids'))
+    and maker_status.get('new_risk_frozen') is True
+    and int(maker_status.get('open_orders',-1)) == 0
+    and int(maker_status.get('open_positions',-1)) == 0
+    and maker_status.get('killed') is False
+)
+if maker_zero_authority_observer:
+    # The observer cohort intentionally has no executable inventory state. Its
+    # exact-SHA, zero-authority status plus the owned cutover sentinel is the
+    # complete proof that it cannot create or retain a PAPER position.
+    maker_state={'inventory':{}}
 assert external_status.get('paper_only') is True and external_status.get('authenticated_execution') is False
 assert micro_status.get('paper_only') is True and micro_status.get('authenticated_execution') is False
 assert maker_status.get('paper_only') is True and maker_status.get('authenticated_execution') is False
@@ -351,9 +375,12 @@ if runtime_alive:
     assert micro_status.get('drain_requested') is True
     assert micro_status.get('drain_complete') is True
     assert micro_status.get('new_risk_frozen') is True
-    assert maker_status.get('drain_requested') is True
-    assert maker_status.get('new_risk_frozen') is True
-    assert maker_status.get('drain_complete') is (maker_open == 0)
+    if maker_zero_authority_observer:
+        assert maker_status.get('new_risk_frozen') is True and maker_open == 0
+    else:
+        assert maker_status.get('drain_requested') is True
+        assert maker_status.get('new_risk_frozen') is True
+        assert maker_status.get('drain_complete') is (maker_open == 0)
 # A previously stopped incumbent cannot acknowledge a fresh sentinel nonce.
 # Its absence is itself a stronger entry freeze; immutable executable state
 # must still be flat and Maker inventory is finalized by target-SHA code.

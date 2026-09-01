@@ -200,6 +200,37 @@ class MakerCohortSupervisorTests(unittest.TestCase):
         self.assertIn("authenticated_execution\") is not False", supervisor)
         self.assertIn("real_order_submission\") is not False", supervisor)
 
+    def test_zero_authority_observer_attests_cutover_drain_without_state(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            selection_path = root / "micro_maker/reward_selection.json"
+            candidate_path = root / "micro_maker/reward_selection_candidate.json"
+            atomic_json(selection_path, selection())
+            atomic_json(candidate_path, selection())
+            args = self.supervisor_args(root, selection_path, candidate_path)
+            args.observer_only = True
+            supervisor = CohortSupervisor(args)
+            supervisor.processes = {"observer": SimpleNamespace(pid=1234)}
+            supervisor.control.mkdir(parents=True)
+            atomic_json(supervisor.control / "CUTOVER_DRAIN", {
+                "schema": "polymarket_v7_cutover_drain_v1",
+                "paper_only": True,
+            })
+
+            supervisor.write_status("RUNNING")
+
+            status = read_json(root / "micro_maker/status.json")
+            self.assertEqual(status["execution_authority"], "SHADOW_ZERO_AUTHORITY")
+            self.assertFalse(status["capital_authority"])
+            self.assertFalse(status["ledger_writer_authority"])
+            self.assertEqual(status["open_orders"], 0)
+            self.assertEqual(status["open_positions"], 0)
+            self.assertEqual(status["observer_pids"], {"observer": 1234})
+            self.assertTrue(status["new_risk_frozen"])
+            self.assertTrue(status["drain_requested"])
+            self.assertTrue(status["drain_complete"])
+            self.assertFalse((root / "micro_maker/state.json").exists())
+
     def test_flat_handoff_promotes_candidate_atomically(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

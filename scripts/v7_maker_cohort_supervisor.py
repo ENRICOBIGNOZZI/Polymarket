@@ -503,6 +503,7 @@ class CohortSupervisor:
     def write_status(self, state: str, **extra: Any) -> None:
         runtime = read_json(self.selection)
         candidate = read_json(self.candidate)
+        cutover_drain_requested = (self.control / "CUTOVER_DRAIN").exists()
         directional = directional_inventory_markets(
             read_json(self.state), self.args.model_sha
         )
@@ -557,6 +558,8 @@ class CohortSupervisor:
                 "drawdown": 0.0,
                 "killed": False,
                 "new_risk_frozen": True,
+                "drain_requested": cutover_drain_requested,
+                "drain_complete": cutover_drain_requested,
                 "open_orders": 0,
                 "open_positions": 0,
                 "observer_pids": {
