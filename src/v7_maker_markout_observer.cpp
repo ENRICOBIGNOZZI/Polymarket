@@ -385,7 +385,7 @@ public:
     MarkoutEngine(fs::path run_root, std::string model_sha, std::vector<SelectedToken> tokens)
         : run_root_(std::move(run_root)), model_sha_(std::move(model_sha)), tokens_(std::move(tokens)) {
         for (const auto& token : tokens_) token_to_handle_[token.token_id] = token.instrument_handle;
-        fs::create_directories(run_root_ / "ledger" / "spool");
+        fs::create_directories(run_root_ / "research" / "evidence" / "maker_markout");
         bootstrap();
     }
 
@@ -547,6 +547,8 @@ private:
         event["markouts"] = std::move(values);
         json::object metadata;
         metadata["maker_markout_observer"] = true;
+        metadata["research_evidence_only"] = true;
+        metadata["ledger_writer_authority"] = false;
         metadata["fill_conditioned"] = true;
         metadata["full_l10_depth"] = true;
         metadata["future_vwap"] = markout.future_vwap;
@@ -557,7 +559,7 @@ private:
                - static_cast<std::int64_t>(kHorizonSeconds[horizon_index]) * 1000LL);
         event["metadata"] = std::move(metadata);
 
-        const fs::path target = run_root_ / "ledger" / "spool" /
+        const fs::path target = run_root_ / "research" / "evidence" / "maker_markout" /
             (std::to_string(recorded) + "." + record_id + ".json");
         atomic_write(target, json::serialize(event) + "\n");
     }

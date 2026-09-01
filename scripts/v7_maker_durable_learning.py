@@ -2,7 +2,8 @@
 """Persist Maker evidence across cutovers and fit a censored hazard/joint model.
 
 This is a PAPER-only slow-plane component. It copies immutable canonical ledger
-rows into a durable, deduplicated evidence store, excludes incompatible
+rows and fill-conditioned research markouts into a durable, deduplicated
+evidence store, excludes incompatible
 execution semantics from training, and atomically materializes an exact-code
 runtime champion. A cold champion is explicit (`model_state=COLD_START`) rather
 than a silent in-process fallback.
@@ -80,7 +81,7 @@ def identity(row: dict[str, Any]) -> tuple[str, str, str, str]:
     )
 
 
-def jsonl_files(roots: Iterable[pathlib.Path]) -> list[pathlib.Path]:
+def evidence_files(roots: Iterable[pathlib.Path]) -> list[pathlib.Path]:
     output: set[pathlib.Path] = set()
     for root in roots:
         if root.is_file() and (
@@ -90,6 +91,12 @@ def jsonl_files(roots: Iterable[pathlib.Path]) -> list[pathlib.Path]:
         elif root.exists():
             output.update(item.resolve() for item in root.rglob("*.jsonl"))
             output.update(item.resolve() for item in root.rglob("*.jsonl.gz"))
+            output.update(
+                item.resolve() for item in root.rglob("maker_markout/*.json")
+                if item.parent.name == "maker_markout"
+                and item.parent.parent.name == "evidence"
+                and item.parent.parent.parent.name == "research"
+            )
     return sorted(output)
 
 
@@ -1244,15 +1251,21 @@ def main() -> int:
         raise SystemExit("exact 40-hex model SHA required")
     sources = args.source_root or [pathlib.Path("runs/paper_v7_archives"), pathlib.Path("runs/paper_v7_live")]
     policy_hash, config_hash = fnv1a64(args.policy), fnv1a64(args.config)
-    # Maker evidence is canonically spooled into execution.jsonl. Avoid parsing
-    # unrelated RTDS, universe and raw WebSocket tapes that can never satisfy
-    # the MICRO_MAKER_PRO ledger contract.
+    # Economic lifecycle state comes from the canonical ledger. Fill-conditioned
+    # markouts are zero-authority research evidence joined back by fill_id.
+    # Avoid unrelated RTDS, universe, and raw WebSocket tapes.
     source_files = [
-        path for path in jsonl_files(sources)
+        path for path in evidence_files(sources)
         if path.resolve() != args.store.resolve()
         and (
             path.name == "execution.jsonl"
             or (path.name.startswith("execution-") and path.name.endswith(".jsonl.gz"))
+            or (
+                path.suffix == ".json"
+                and path.parent.name == "maker_markout"
+                and path.parent.parent.name == "evidence"
+                and path.parent.parent.parent.name == "research"
+            )
         )
     ]
     evidence_paths = ([args.store] if args.store.exists() else []) + source_files

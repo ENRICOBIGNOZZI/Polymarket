@@ -52,15 +52,6 @@
       "canonical_replacement": "V7_OPERATOR_EXACT_SHA_PROMOTION"
     },
     {
-      "source": "src/v7_maker_markout_observer.cpp",
-      "classification": "MERGE_INTO_CANONICAL",
-      "runtime_reachability": "CANONICAL_LAUNCHER_COMPONENT",
-      "authority_mode": "DIRECT_MARKOUT_ANNOTATION_TO_LEDGER_SPOOL",
-      "severity": "P0_BYPASS",
-      "reason": "maker observer writes economic annotations directly to the ledger transport",
-      "canonical_replacement": "BTC_SETTLEMENT_ENGINE_TO_V7_GLOBAL_PORTFOLIO_COORDINATOR"
-    },
-    {
       "source": "src/v7_market_maker_runtime.cpp",
       "classification": "MERGE_INTO_CANONICAL",
       "runtime_reachability": "CANONICAL_LAUNCHER_COMPONENT",

@@ -310,7 +310,8 @@ def collect_snapshot(run_root: Path, repository_root: Path | None = None, *, now
     ledger_path = run_root / "ledger" / "execution.jsonl"
     ledger = summarize_ledger(ledger_path)
     maker_lab = summarize_maker_microstructure(
-        ledger_path, run_root / "micro_maker" / "reward_selection.json"
+        ledger_path, run_root / "micro_maker" / "reward_selection.json",
+        run_root / "research" / "evidence" / "maker_markout",
     )
     maker_latency = _maker_latency(run_root / "micro_maker" / "latency.csv")
     tape = _trade_tape(run_root / "trade_tape.csv", now)

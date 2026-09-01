@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Fit the V7 maker execution model from the canonical exact-SHA ledger.
+"""Fit the V7 maker model from canonical lifecycle and research evidence.
 
 The decision-facing fill quantity is the posterior expected *filled fraction per
 posted share*, not a Bernoulli indicator that an order received any fill. This
@@ -76,6 +76,26 @@ def read_records(path: Path, model_sha: str) -> list[LedgerEvent]:
                 continue
             if event.model_sha == model_sha and event.strategy == STRATEGY:
                 records.append(event)
+    return records
+
+
+def read_markout_evidence(root: Path | None, model_sha: str) -> list[LedgerEvent]:
+    if root is None or not root.exists():
+        return []
+    records: list[LedgerEvent] = []
+    for path in sorted(root.glob("*.json")):
+        try:
+            raw = json.loads(path.read_text(encoding="utf-8"))
+            event = LedgerEvent.from_dict(raw)
+        except (OSError, json.JSONDecodeError, Exception):
+            continue
+        if (
+            event.model_sha == model_sha
+            and event.strategy == STRATEGY
+            and event.event_type == "MARKOUT"
+            and event.metadata.get("research_evidence_only") is True
+        ):
+            records.append(event)
     return records
 
 
@@ -283,6 +303,7 @@ def fit(records: list[LedgerEvent], *, cold_fill_prior: float = 0.02,
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--ledger", type=Path, required=True)
+    parser.add_argument("--markout-evidence-root", type=Path)
     parser.add_argument("--model-sha", required=True)
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--policy", type=Path, required=True)
@@ -295,6 +316,7 @@ def main() -> int:
     if len(args.model_sha) != 40 or any(ch not in "0123456789abcdef" for ch in args.model_sha):
         raise SystemExit("exact 40-hex model SHA required")
     records = read_records(args.ledger, args.model_sha)
+    records.extend(read_markout_evidence(args.markout_evidence_root, args.model_sha))
     result = fit(
         records,
         cold_fill_prior=args.cold_fill_prior,

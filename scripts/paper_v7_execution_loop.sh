@@ -720,6 +720,7 @@ v7_register_child "$!"
     if [[ -s "$RUN_ROOT/ledger/execution.jsonl" ]]; then
       if python3 scripts/v7_market_maker_model.py \
         --ledger "$RUN_ROOT/ledger/execution.jsonl" \
+        --markout-evidence-root "$RUN_ROOT/research/evidence/maker_markout" \
         --model-sha "$SHA" \
         --policy "$MAKER_POLICY" \
         --config "$ALLOC/micro_maker.json" \

@@ -10,7 +10,7 @@ sys.path.insert(0, str(ROOT / "scripts"))
 
 from v7_maker_durable_learning import (  # noqa: E402
     adverse_markout_models, append_new, compact_evidence, fit_model, hazard_model, identity,
-    jsonl_files, placement_features, rows, shadow_probe_policy_value,
+    evidence_files, placement_features, rows, shadow_probe_policy_value,
 )
 
 SHA = "a" * 40
@@ -41,8 +41,23 @@ class DurableLearningTests(unittest.TestCase):
             expected = record("ORDER_SUBMITTED", "gz-r1", order_id="gz-o1")
             with gzip.open(source, "wt", encoding="utf-8") as handle:
                 handle.write(json.dumps(expected) + "\n")
-            self.assertEqual(jsonl_files([root]), [source.resolve()])
+            self.assertEqual(evidence_files([root]), [source.resolve()])
             self.assertEqual(list(rows([source]))[0]["record_id"], "gz-r1")
+
+    def test_research_markout_files_are_discovered_without_scanning_other_json(self) -> None:
+        with tempfile.TemporaryDirectory() as folder:
+            root = pathlib.Path(folder)
+            evidence = root / "research/evidence/maker_markout/mark.json"
+            evidence.parent.mkdir(parents=True)
+            expected = record(
+                "MARKOUT", "research-mark", order_id="o1", fill_id="f1",
+                markouts={"45s": -0.01},
+            )
+            evidence.write_text(json.dumps(expected) + "\n", encoding="utf-8")
+            unrelated = root / "config.json"
+            unrelated.write_text("{}\n", encoding="utf-8")
+            self.assertEqual(evidence_files([root]), [evidence.resolve()])
+            self.assertEqual(list(rows([evidence]))[0]["record_id"], "research-mark")
 
     def test_compaction_drops_non_training_telemetry_but_keeps_labeled_risk(self) -> None:
         with tempfile.TemporaryDirectory() as folder:

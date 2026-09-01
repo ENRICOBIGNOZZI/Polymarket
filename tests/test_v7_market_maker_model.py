@@ -9,12 +9,28 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "scripts"))
 
 from v7_execution_ledger import LedgerEvent
-from v7_market_maker_model import fit
+from v7_market_maker_model import fit, read_markout_evidence
 
 SHA = "a" * 40
 
 
 class MakerExecutionModelTests(unittest.TestCase):
+    def test_research_markout_reader_requires_explicit_evidence_marker(self) -> None:
+        import json
+        import tempfile
+
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            marked = self.markout(0, -0.01)
+            marked = LedgerEvent(**{
+                **marked.to_dict(),
+                "metadata": {"research_evidence_only": True},
+            })
+            (root / "marked.json").write_text(json.dumps(marked.to_dict()) + "\n")
+            (root / "unmarked.json").write_text(json.dumps(self.markout(1, -0.02).to_dict()) + "\n")
+            records = read_markout_evidence(root, SHA)
+            self.assertEqual([event.fill_id for event in records], ["f0"])
+
     def order(self, index: int, *, action: str = "JOIN", event_id: str = "e1",
               intended_size: float = 10.0) -> LedgerEvent:
         return LedgerEvent(

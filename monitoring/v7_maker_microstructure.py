@@ -499,13 +499,20 @@ def _add_market_markout(target: dict[tuple[str, str], Agg], context: dict[str, s
 def summarize_maker_microstructure(
     ledger_path: Path,
     reward_selection_path: Path | None = None,
+    markout_evidence_root: Path | None = None,
     *,
     use_cache: bool = True,
 ) -> dict[str, Any]:
     global _CACHE_KEY, _CACHE_VALUE
     ledger_path = Path(ledger_path)
     reward_path = Path(reward_selection_path) if reward_selection_path is not None else Path("")
-    cache_key = (_stat_key(ledger_path), _stat_key(reward_path) if reward_selection_path is not None else (-1, -1))
+    markout_root = Path(markout_evidence_root) if markout_evidence_root is not None else None
+    markout_paths = sorted(markout_root.glob("*.json")) if markout_root is not None and markout_root.exists() else []
+    cache_key = (
+        _stat_key(ledger_path),
+        _stat_key(reward_path) if reward_selection_path is not None else (-1, -1),
+        tuple((path.name, _stat_key(path)) for path in markout_paths),
+    )
     if use_cache:
         with _CACHE_LOCK:
             if _CACHE_KEY == cache_key and _CACHE_VALUE is not None:
@@ -517,6 +524,8 @@ def summarize_maker_microstructure(
     result["present"] = True
     rewards = _reward_map(reward_path) if reward_selection_path is not None else {}
     rows = _read_rows(ledger_path)
+    for path in markout_paths:
+        rows.extend(_read_rows(path))
     result["rows"] = len(rows)
 
     segments: dict[tuple[str, str, str, str], Agg] = {}

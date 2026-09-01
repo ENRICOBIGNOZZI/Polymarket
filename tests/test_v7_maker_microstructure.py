@@ -109,6 +109,24 @@ def markout(path: Path, fid: str, oid: str, market: str, token: str, side: str, 
 
 
 class MakerMicrostructureTests(unittest.TestCase):
+    def test_research_markout_evidence_joins_canonical_fill(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            ledger = root / "execution.jsonl"
+            evidence_root = root / "research/evidence/maker_markout"
+            evidence_root.mkdir(parents=True)
+            evidence = evidence_root / "mark.json"
+            candidate(ledger, "c1", "M1", "YES", "YES", "BUY", "JOIN", .39, .41, 10, 10, .1, 1000)
+            order(ledger, "c1", "o1", "M1", "YES", "YES", "BUY", "JOIN", .40, 4, 0, .39, .41, 10, 10, .1, 1000)
+            fill(ledger, "f1", "o1", "M1", "YES", "BUY", .40, 4, 1100)
+            markout(evidence, "f1", "o1", "M1", "YES", "BUY", "10s", -.02, 11100)
+
+            out = summarize_maker_microstructure(
+                ledger, markout_evidence_root=evidence_root, use_cache=False,
+            )
+            self.assertEqual(out["markouts"]["10s"], 1)
+            self.assertEqual(out["quality"]["linked_markouts"], 1)
+
     def test_chain_markout_and_realized_pnl(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             tmp_path = Path(tmp)
