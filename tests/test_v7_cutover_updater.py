@@ -476,6 +476,26 @@ class V7CutoverUpdaterTest(unittest.TestCase):
         self.assertLess(preflight, drain)
         self.assertLess(preflight, stop)
 
+    def test_failed_pre_checkout_cutover_restores_verified_incumbent(self) -> None:
+        text = (ROOT / "ops/update_server_v7.sh").read_text(encoding="utf-8")
+        cleanup = text[text.index("cleanup(){"):text.index("write_status(){")]
+        recovery = text[
+            text.index("restart_stopped_incumbent_on_failure(){"):
+            text.index("cleanup(){")
+        ]
+        self.assertIn("clear_cutover_drain", cleanup)
+        self.assertIn("restart_stopped_incumbent_on_failure || true", cleanup)
+        self.assertIn('RUNTIME_STOPPED_BY_DEPLOY=1', text)
+        self.assertIn('RUNTIME_STOPPED_BY_DEPLOY=0', text)
+        self.assertIn('DEPLOY_COMPLETED=1', text)
+        self.assertIn('control/deployed_sha', recovery)
+        self.assertIn('launchctl kickstart -k', recovery)
+        self.assertIn("economic_new_risk_ready') is False", recovery)
+        self.assertLess(
+            text.rindex('RUNTIME_STOPPED_BY_DEPLOY=1'),
+            text.rindex('python3 "$MAKER_CUTOVER_FINALIZER"'),
+        )
+
     def test_updater_requires_exact_approved_main_sha(self) -> None:
         text = (ROOT / "ops/update_server_v7.sh").read_text(encoding="utf-8")
         self.assertIn('[[ "$MAIN_SHA" == "$EXPECTED_SHA" ]]', text)

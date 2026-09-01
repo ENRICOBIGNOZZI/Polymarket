@@ -159,7 +159,76 @@ PY
 }
 acquire_deploy_lock
 candidate=""
+RUNTIME_STOPPED_BY_DEPLOY=0
+DEPLOY_COMPLETED=0
+INCUMBENT_PRESENT=0
+OLD_SHA=""
+
+restart_stopped_incumbent_on_failure(){
+  [[ "$RUNTIME_STOPPED_BY_DEPLOY" == 1 && "$DEPLOY_COMPLETED" == 0 ]] || return 0
+  [[ "$INCUMBENT_PRESENT" == 1 && "$OLD_SHA" =~ ^[0-9a-f]{40}$ ]] || return 0
+  [[ "$(git -C "$APP_DIR" rev-parse HEAD 2>/dev/null || true)" == "$OLD_SHA" ]] || {
+    log "Failed cutover cannot auto-restart incumbent: active checkout no longer matches $OLD_SHA"
+    return 1
+  }
+  [[ "$(cat "$(production_run_root)/control/deployed_sha" 2>/dev/null || true)" == "$OLD_SHA" ]] || {
+    log "Failed cutover cannot auto-restart incumbent: deployed identity no longer matches $OLD_SHA"
+    return 1
+  }
+
+  log "Restarting verified incumbent V7 PAPER runtime after failed pre-checkout cutover"
+  if [[ "$(uname -s)" == "Darwin" ]]; then
+    local domain="gui/$(id -u)" label="com.polymarket.v7.paper"
+    local plist="$HOME/Library/LaunchAgents/$label.plist" plist_sha=""
+    plist_sha="$(plutil -extract EnvironmentVariables.POLYMARKET_EXPECTED_SHA raw -o - "$plist" 2>/dev/null || true)"
+    [[ "$plist_sha" == "$OLD_SHA" ]] || {
+      log "Failed cutover cannot auto-restart incumbent: launchd identity mismatch"
+      return 1
+    }
+    launchctl kickstart -k "$domain/$label" >/dev/null 2>&1 || return 1
+  else
+    nohup env \
+      POLYMARKET_APP_DIR="$APP_DIR" \
+      PM_V7_RUN_ROOT="$(production_run_root)" \
+      POLYMARKET_EXPECTED_SHA="$OLD_SHA" \
+      PM_TRADE_RECORDER="$APP_DIR/build/polymarket_v7_trade_recorder" \
+      bash "$APP_DIR/ops/v7_service_entrypoint.sh" \
+      >>"$(production_run_root)/deploy-runtime.log" 2>&1 </dev/null &
+  fi
+
+  for _ in $(seq 1 1200); do
+    if python3 - "$(production_run_root)/control/runtime_status.json" "$OLD_SHA" <<'PY' >/dev/null 2>&1
+import json, os, sys
+from pathlib import Path
+status=json.loads(Path(sys.argv[1]).read_text(encoding='utf-8'))
+assert status.get('model_sha') == sys.argv[2]
+assert status.get('state') == 'running'
+assert status.get('paper_only') is True
+assert status.get('authenticated_execution') is False
+assert status.get('real_order_submission') is False
+assert status.get('real_capital_at_risk') is False
+assert status.get('economic_new_risk_ready') is False
+assert status.get('authorized_alpha_actions') == []
+pid=int(status.get('pid') or 0)
+assert pid > 0
+os.kill(pid, 0)
+PY
+    then
+      log "Verified incumbent V7 PAPER runtime restored at $OLD_SHA"
+      return 0
+    fi
+    sleep 0.1
+  done
+  log "ERROR: failed to restore incumbent V7 PAPER runtime at $OLD_SHA"
+  return 1
+}
+
 cleanup(){
+  local cleanup_status=$?
+  clear_cutover_drain
+  if [[ "$cleanup_status" != 0 ]]; then
+    restart_stopped_incumbent_on_failure || true
+  fi
   if [[ -n "$candidate" && -d "$candidate" ]]; then
     git -C "$APP_DIR" worktree remove --force "$candidate" >/dev/null 2>&1 || true
   fi
@@ -167,7 +236,6 @@ cleanup(){
     rm -f "$LOCK_DIR/owner_pid" "$LOCK_DIR/started_at" "$LOCK_DIR/nonce"
     rmdir "$LOCK_DIR" >/dev/null 2>&1 || true
   fi
-  clear_cutover_drain
 }
 trap cleanup EXIT INT TERM
 
@@ -1205,6 +1273,7 @@ fi
 MAKER_STATUS_REFRESHER="${POLYMARKET_MAKER_STATUS_REFRESHER:-$candidate/scripts/v7_market_maker_status.py}"
 [[ -f "$MAKER_STATUS_REFRESHER" ]] || fail "maker status refresher missing: $MAKER_STATUS_REFRESHER"
 stop_production_runtime
+RUNTIME_STOPPED_BY_DEPLOY=1
 if [[ "$INCUMBENT_PRESENT" == 1 && "$OLD_SHA" != "$EXPECTED_SHA" ]]; then
   # Refresh from immutable state only after BLUE is stopped. This removes any
   # race with late fills and keeps the finalizer's 15-second mark freshness
@@ -1248,6 +1317,7 @@ python3 scripts/v7_cutover_contract.py --repository-root "$APP_DIR" --expected-h
 DASHBOARD_UID="$(monitoring_contract "$APP_DIR")"
 build_current_checkout
 start_production_runtime
+RUNTIME_STOPPED_BY_DEPLOY=0
 [[ "$(git rev-parse HEAD)" == "$EXPECTED_SHA" ]] || fail "server checkout drifted immediately after runtime start"
 record_deployed_sha
 write_status running "exact V7 SHA started; monitoring health pending"
@@ -1267,4 +1337,5 @@ fi
 record_deployed_sha
 record_incumbent_identity
 write_status healthy "canonical V7 PAPER runtime and monitoring healthy"
+DEPLOY_COMPLETED=1
 log "V7 deployed exact SHA $EXPECTED_SHA"

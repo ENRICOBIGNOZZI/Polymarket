@@ -94,7 +94,9 @@ class MakerCutoverFinalizerTest(unittest.TestCase):
             write(root / "control/portfolio_state.json", {
                 "paper_only": True, "authenticated_execution": False, "killed": False,
                 "fatal_sleeves": [], "sleeves": {"micro_maker": {
-                    "source": "not_started", "killed": False,
+                    # Production uses this source after the observer-only Maker
+                    # has run without ever receiving execution authority.
+                    "source": "zero_authority_budget", "killed": False,
                     "budget": 2_000.0, "equity": 2_000.0,
                 }},
             })
@@ -117,6 +119,10 @@ class MakerCutoverFinalizerTest(unittest.TestCase):
             self.assertTrue(receipt["never_started"])
             self.assertEqual(receipt["positions_liquidated"], 0)
             self.assertEqual(receipt["ledger_record_ids"], [])
+            self.assertEqual(
+                receipt["absence_proof"]["maker_portfolio_source"],
+                "zero_authority_budget",
+            )
             self.assertFalse((root / "micro_maker/state.json").exists())
             self.assertEqual(
                 cutover.finalize(root, SHA, NONCE, mark_path=mark, now_ms=now),

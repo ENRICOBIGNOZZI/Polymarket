@@ -139,7 +139,11 @@ def finalize_never_started(
         or portfolio.get("authenticated_execution") is not False
         or portfolio.get("killed") is not False
         or portfolio.get("fatal_sleeves") not in (None, [])
-        or maker.get("source") != "not_started"
+        # A zero-authority Maker is deliberately represented by the portfolio
+        # coordinator as an untouched budget even when its observer-only
+        # process has run.  That is economically equivalent to never_started,
+        # provided the canonical ledger/spool are empty and budget == equity.
+        or maker.get("source") not in {"not_started", "zero_authority_budget"}
         or maker.get("killed") is not False
         or abs(number("maker_budget", maker.get("budget"), minimum=0.0)
                - number("maker_equity", maker.get("equity"), minimum=0.0)) > 1e-9
