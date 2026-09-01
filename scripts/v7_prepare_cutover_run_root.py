@@ -292,6 +292,37 @@ def prepare(
             "paper_only": True, "authenticated_execution": False, "open_positions": 0,
         }
         micro_state = {"positions": {}}
+    elif micro_status and micro_state and not isinstance(micro_state.get("positions"), dict):
+        # Older research-only micro-taker observers persisted datasets but, by
+        # contract, never created inventory state.  Retire that legacy payload
+        # only when the stopped exact-SHA runtime, empty canonical ledger, zero
+        # budget and both observer documents independently prove zero authority.
+        prove_never_started(
+            "micro_taker", {"not_started", "zero_authority_budget"})
+        for value in (micro_status, micro_state):
+            if (
+                value.get("schema") != "polymarket_v7_micro_taker_status_v1"
+                or value.get("model_sha") != previous_sha
+                or value.get("paper_only") is not True
+                or value.get("authenticated_execution") is not False
+                or value.get("real_order_submission") is not False
+                or value.get("real_capital_at_risk") is not False
+                or value.get("execution_authority") != "RESEARCH_ONLY_ZERO_AUTHORITY"
+                or value.get("capital_authority") is not False
+                or value.get("inventory_authority") is not False
+                or value.get("ledger_writer_authority") is not False
+                or value.get("oms_authority") is not False
+                or value.get("order_authority") is not False
+                or value.get("promotion_authority") is not False
+                or value.get("research_only") is not True
+                or value.get("inventory_state_created") is not False
+                or value.get("drain_complete") is not True
+                or int(value.get("signals", -1)) != 0
+            ):
+                raise CutoverArchiveError("prior_observer_status_invalid:micro_taker")
+        micro_status = dict(micro_status, open_positions=0)
+        micro_state = {"positions": {}}
+        prior_never_started_sleeves.append("micro_taker")
     if not maker_status and not maker_state:
         maker_proof = prove_never_started(
             "micro_maker", {"not_started", "zero_authority_budget"})

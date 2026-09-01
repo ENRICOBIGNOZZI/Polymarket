@@ -181,6 +181,45 @@ class V7PrepareCutoverRunRootTest(unittest.TestCase):
             self.assertEqual(result["prior_never_started_sleeves"], ["micro_maker"])
             self.assertEqual(result["prior_open_positions"]["maker"], 0)
 
+    def test_legacy_research_observer_without_inventory_map_is_archivable(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            tmp_path = Path(directory)
+            run = tmp_path / "paper_v7_live"
+            fixture(run)
+            (run / "ledger/execution.jsonl").write_text("", encoding="utf-8")
+            runtime = json.loads((run / "control/runtime_status.json").read_text())
+            runtime.update({
+                "state": "stopping", "economic_new_risk_ready": False,
+                "authorized_alpha_actions": [],
+            })
+            write_json(run / "control/runtime_status.json", runtime)
+            portfolio = json.loads((run / "control/portfolio_state.json").read_text())
+            portfolio["sleeves"] = {
+                "micro_taker": {"source": "zero_authority_budget", "killed": False,
+                                "budget": 0.0, "equity": 0.0},
+            }
+            write_json(run / "control/portfolio_state.json", portfolio)
+            observer = {
+                "schema": "polymarket_v7_micro_taker_status_v1",
+                "model_sha": OLD, "paper_only": True,
+                "authenticated_execution": False, "real_order_submission": False,
+                "real_capital_at_risk": False,
+                "execution_authority": "RESEARCH_ONLY_ZERO_AUTHORITY",
+                "capital_authority": False, "inventory_authority": False,
+                "ledger_writer_authority": False, "oms_authority": False,
+                "order_authority": False, "promotion_authority": False,
+                "research_only": True, "inventory_state_created": False,
+                "drain_complete": True, "signals": 0,
+            }
+            write_json(run / "micro_taker/status.json", observer)
+            write_json(run / "micro_taker/state.json", {**observer, "samples": [{"research": True}]})
+            result = cutover.prepare(
+                run, tmp_path / "archives", tmp_path, NEW, now=132,
+                ancestor_check=lambda *_: True,
+            )
+            self.assertEqual(result["prior_never_started_sleeves"], ["micro_taker"])
+            self.assertEqual(result["prior_open_positions"]["micro_taker"], 0)
+
     def test_stopped_runtime_checkout_drift_uses_immutable_deployed_sha(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             tmp_path = Path(directory)
