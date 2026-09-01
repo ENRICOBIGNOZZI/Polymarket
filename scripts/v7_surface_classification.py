@@ -54,7 +54,6 @@ COMPONENT_MARKERS = (
 )
 TEMPORARY_PATHS = frozenset({
     "scripts/v7_external_fair_paper_router.py",
-    "scripts/v7_hard_arb_guard.py",
 })
 ARCHIVE_PATHS = frozenset({
     "AGENT_DIRECTIVE_V7_UNIFICATION_AND_LEGACY_ERADICATION.md",

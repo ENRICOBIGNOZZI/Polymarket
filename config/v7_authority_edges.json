@@ -25,15 +25,6 @@
       "canonical_replacement": "BTC_SETTLEMENT_ENGINE_TO_V7_GLOBAL_PORTFOLIO_COORDINATOR"
     },
     {
-      "source": "scripts/v7_fast_structural_paper_executor.py",
-      "classification": "MERGE_INTO_CANONICAL",
-      "runtime_reachability": "LAUNCHED_WITH_SHADOW_ONLY_FLAG",
-      "authority_mode": "SHADOW_EVIDENCE_PRODUCER_WITH_DORMANT_PAPER_MODE",
-      "severity": "P0_BYPASS",
-      "reason": "the active launcher is shadow-only, but the standalone CLI retains a PAPER ledger path",
-      "canonical_replacement": "STRUCTURAL_ARB_ENGINE_TO_V7_GLOBAL_PORTFOLIO_COORDINATOR"
-    },
-    {
       "source": "scripts/v7_finalize_maker_cutover.py",
       "classification": "KEEP_CANONICAL",
       "runtime_reachability": "CUTOVER_ONLY",
@@ -41,15 +32,6 @@
       "severity": "CONTROLLED",
       "reason": "exact-SHA cutover finalizes existing PAPER lifecycle events through the canonical spool",
       "canonical_replacement": "V7_OPERATOR_EXACT_SHA_PROMOTION"
-    },
-    {
-      "source": "scripts/v7_hard_arb_guard.py",
-      "classification": "KEEP_TEMPORARY_COMPATIBILITY",
-      "runtime_reachability": "LAUNCHED_WITH_ZERO_MARKET_BUDGET",
-      "authority_mode": "DORMANT_PAPER_LEDGER_PATH",
-      "severity": "P0_BYPASS",
-      "reason": "compatibility worker is disabled by launcher sizing but retains independent PAPER lifecycle code",
-      "canonical_replacement": "STRUCTURAL_ARB_ENGINE_TO_V7_GLOBAL_PORTFOLIO_COORDINATOR"
     },
     {
       "source": "scripts/v7_ledger_spool.py",

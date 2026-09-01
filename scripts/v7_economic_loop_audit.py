@@ -239,7 +239,9 @@ def capability_map(repo: pathlib.Path) -> dict[str, Any]:
     loop = (repo / "scripts/paper_v7_execution_loop.sh").read_text(encoding="utf-8")
     relations = (repo / "config/v7_fast_structural_relations.csv").read_text(encoding="utf-8").splitlines()
     split_calls = runtime.count("split_complete_sets(")
-    fast_executor = (repo / "scripts/v7_fast_structural_paper_executor.py").read_text(encoding="utf-8")
+    structural_contract = json.loads(
+        (repo / "config/v7_structural_arb_engine.json").read_text(encoding="utf-8")
+    )
     canonical = (repo / "scripts/v7_canonical_economics.py").read_text(encoding="utf-8")
     fair = (repo / "scripts/v7_rtds_external_fair_monitor.py").read_text(encoding="utf-8")
     fee_registry = (repo / "scripts/v7_fee_reward_registry.py").read_text(encoding="utf-8")
@@ -256,7 +258,16 @@ def capability_map(repo: pathlib.Path) -> dict[str, Any]:
         "micro_taker_canonical_spool_argument": "--ledger-spool" in loop or "--spool" in loop,
         "graph_relation_data_rows": max(0, len([line for line in relations if line.strip()]) - 1),
         "fast_structural_paper_executor_started": "v7_fast_structural_paper_executor.py" in loop,
-        "fast_structural_revalidation_and_unwind": "partial bundle unwind" in fast_executor and "fee_verified" in fast_executor,
+        "fast_structural_revalidation_and_unwind": all(
+            structural_contract.get(key) is True
+            for key in (
+                "full_depth_required",
+                "direct_joint_completion_required",
+                "partial_fill_plan_required",
+                "timeout_plan_required",
+                "full_depth_bounded_unwind_required",
+            )
+        ),
         "canonical_shadow_counterfactual_separation": "shadow_counterfactual" in canonical and "excluded_from_portfolio_equity" in canonical,
         "external_only_and_hybrid_models": "external_only_fair" in fair and "hybrid_fair" in fair,
         "slow_economic_shadow_always_on": "v7_slow_economic_shadow_supervisor.py" in loop,

@@ -594,7 +594,6 @@ for rel in (
     'ops/v7_service_entrypoint.sh',
     'scripts/v7_rtds_external_fair_monitor.py',
     'scripts/v7_external_fair_paper_router.py',
-    'scripts/v7_fast_structural_paper_executor.py',
     'scripts/v7_evidence_capital_allocator.py',
     'scripts/v7_fee_reward_registry.py',
     'scripts/v7_generate_economic_artifacts.py',
@@ -648,7 +647,6 @@ prevalidate_candidate(){
       scripts/v7_osint_mapping_collector.py \
       scripts/v7_rtds_external_fair_monitor.py \
       scripts/v7_external_fair_paper_router.py \
-      scripts/v7_fast_structural_paper_executor.py \
       scripts/v7_evidence_capital_allocator.py \
       scripts/v7_fee_reward_registry.py \
       scripts/v7_generate_economic_artifacts.py \

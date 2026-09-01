@@ -40,6 +40,8 @@ class V7FastAuthoritySentinelContractTest(unittest.TestCase):
             "config/fast_arb_v7_shadow.json",
             "config/fast_arb_policy.json",
             ".github/workflows/fast-arb-hourly.yml",
+            "scripts/v7_fast_structural_paper_executor.py",
+            "scripts/v7_hard_arb_guard.py",
         ):
             with self.subTest(path=rel):
                 self.assertFalse((ROOT / rel).exists())
@@ -78,12 +80,6 @@ class V7FastAuthoritySentinelContractTest(unittest.TestCase):
         firewall = (ROOT / "scripts" / "v7_ledger_spool.py").read_text(encoding="utf-8")
         self.assertIn('"FAST_STRUCTURAL": "STRUCTURAL_ARB_ENGINE"', firewall)
         self.assertIn('run_root / "opportunities" / "inbox"', firewall)
-        executor = (ROOT / "scripts" / "v7_fast_structural_paper_executor.py").read_text(encoding="utf-8")
-        self.assertIn('event_type="ORDER_SUBMITTED"', executor)
-        self.assertIn('event_type="FILL"', executor)
-        self.assertIn('event_type="FINAL"', executor)
-        self.assertIn("synchronized_books", executor)
-        self.assertIn('"SHADOW_ZERO_AUTHORITY" if self.shadow_only', executor)
 
 
 if __name__ == "__main__":

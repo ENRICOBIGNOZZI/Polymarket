@@ -5,10 +5,10 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "scripts"))
 
 from v7_graph_rv_intents import parse_book, rotating_events, structural_scan_budget
-from v7_hard_arb_guard import rotating_window
+from v7_structural_rotation import rotating_window
 
 
-def test_hard_arb_cursor_covers_all_events_without_permanent_first_n_selection():
+def test_canonical_structural_cursor_covers_all_events_without_permanent_first_n_selection():
     values = [f"e{index}" for index in range(7)]
     cursor = 0
     observed = []

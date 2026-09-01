@@ -6,7 +6,7 @@
     "ref_count": 41,
     "runtime_output_count": 123,
     "schema_count": 22,
-    "tracked_or_intended_path_count": 695,
+    "tracked_or_intended_path_count": 697,
     "workflow_count": 11
   },
   "entries": [
@@ -1918,6 +1918,31 @@
       ]
     },
     {
+      "canonical_replacement": "artifacts/v7_unification/legacy_deletion_manifest.json",
+      "classification": "KEEP_CANONICAL",
+      "current_imports_callers_readers_writers": {
+        "analysis": "exact path/module references from tracked text; runtime linkage is separately enumerated",
+        "static_references": []
+      },
+      "deletion_gate": "NONE_CANONICAL_SURFACE",
+      "disposition_commit": null,
+      "economic_authority": {
+        "capabilities": [],
+        "executable": false,
+        "owner": null
+      },
+      "final_disposition": "retain_canonical",
+      "migration_status": "classified",
+      "object_type": "tracked_path",
+      "path_or_ref": "artifacts/v7_unification/legacy_deletion_manifest.json",
+      "rollback_artifact_tag": "v7-unification-pre-migration-8d9e8e60",
+      "surface_id": "path:artifacts/v7_unification/legacy_deletion_manifest.json",
+      "unique_behavior_data_contribution": "tracked repository behavior, evidence, test, configuration, or documentation",
+      "validation_tests": [
+        "tests/test_v7_surface_classification.py"
+      ]
+    },
+    {
       "canonical_replacement": "artifacts/v7_unification/path_classification.json",
       "classification": "KEEP_CANONICAL",
       "current_imports_callers_readers_writers": {
@@ -2198,6 +2223,7 @@
       "current_imports_callers_readers_writers": {
         "analysis": "exact path/module references from tracked text; runtime linkage is separately enumerated",
         "static_references": [
+          "artifacts/v7_unification/path_classification.json",
           "artifacts/v7_unification/phase_9_report.md"
         ]
       },
@@ -2224,7 +2250,9 @@
       "classification": "ARCHIVE_HISTORY_ONLY",
       "current_imports_callers_readers_writers": {
         "analysis": "exact path/module references from tracked text; runtime linkage is separately enumerated",
-        "static_references": []
+        "static_references": [
+          "artifacts/v7_unification/path_classification.json"
+        ]
       },
       "deletion_gate": "NONE_IMMUTABLE_AUDIT_OR_ROLLBACK_EVIDENCE",
       "disposition_commit": null,
@@ -3201,9 +3229,7 @@
         "analysis": "exact path/module references from tracked text; runtime linkage is separately enumerated",
         "static_references": [
           "artifacts/v7_unification/path_classification.json",
-          "scripts/v7_fast_structural_paper_executor.py",
-          "src/fast_runtime/part1.inc",
-          "tests/test_v7_fast_structural_paper_executor.py"
+          "src/fast_runtime/part1.inc"
         ]
       },
       "deletion_gate": "UNIQUE_BEHAVIOR_EQUIVALENCE_AND_SINGLE_CONSUMER_PROVEN",
@@ -3866,11 +3892,14 @@
       "current_imports_callers_readers_writers": {
         "analysis": "exact path/module references from tracked text; runtime linkage is separately enumerated",
         "static_references": [
+          "README.md",
+          "artifacts/v7_unification/legacy_deletion_manifest.json",
           "artifacts/v7_unification/path_classification.json",
           "artifacts/v7_unification/phase_5_report.md",
           "config/v7_live_model_scope.json",
           "scripts/v7_btc_settlement_engine_contract.py",
           "scripts/v7_cutover_contract.py",
+          "scripts/v7_economic_loop_audit.py",
           "tests/test_v7_btc_settlement_engine_contract.py",
           "tests/test_v7_live_model_scope.py"
         ]
@@ -9584,10 +9613,8 @@
           "scripts/v7_cutover_contract.py",
           "scripts/v7_external_fair_ledger.py",
           "scripts/v7_external_fair_paper_router.py",
-          "scripts/v7_fast_structural_paper_executor.py",
           "scripts/v7_finalize_maker_cutover.py",
           "scripts/v7_graph_cost_vector.py",
-          "scripts/v7_hard_arb_guard.py",
           "scripts/v7_joint_execution_policy.py",
           "scripts/v7_learned_execution_hardened.py",
           "scripts/v7_ledger_spool.py",
@@ -9596,7 +9623,6 @@
           "scripts/v7_research_data_plane_contract.py",
           "tests/test_monitoring_v7_ledger.py",
           "tests/test_v7_external_fair_ledger.py",
-          "tests/test_v7_fast_structural_paper_executor.py",
           "tests/test_v7_joint_execution_policy.py",
           "tests/test_v7_ledger_spool.py",
           "tests/test_v7_market_maker_model.py",
@@ -10323,12 +10349,9 @@
         "analysis": "exact path/module references from tracked text; runtime linkage is separately enumerated",
         "static_references": [
           "artifacts/v7_unification/authority_graph.json",
+          "artifacts/v7_unification/legacy_deletion_manifest.json",
           "artifacts/v7_unification/path_classification.json",
-          "config/v7_authority_edges.json",
-          "ops/update_server_v7.sh",
-          "scripts/v7_cutover_contract.py",
-          "scripts/v7_economic_loop_audit.py",
-          "tests/test_v7_fast_structural_paper_executor.py"
+          "tests/test_v7_fast_authority_sentinel_contract.py"
         ]
       },
       "deletion_gate": "UNIQUE_BEHAVIOR_EQUIVALENCE_AND_SINGLE_CONSUMER_PROVEN",
@@ -10610,30 +10633,27 @@
       ]
     },
     {
-      "canonical_replacement": "scripts/v7_opportunity.py",
-      "classification": "KEEP_TEMPORARY_COMPATIBILITY",
+      "canonical_replacement": "config/v7_authority_registry.json#STRUCTURAL_ARB_ENGINE",
+      "classification": "MERGE_INTO_CANONICAL",
       "current_imports_callers_readers_writers": {
         "analysis": "exact path/module references from tracked text; runtime linkage is separately enumerated",
         "static_references": [
-          "README.md",
           "artifacts/v7_unification/authority_graph.json",
+          "artifacts/v7_unification/legacy_deletion_manifest.json",
           "artifacts/v7_unification/path_classification.json",
-          "config/v7_authority_edges.json",
-          "scripts/v7_surface_classification.py",
-          "tests/test_v7_hard_arb_executable_mark.py",
-          "tests/test_v7_structural_rotation.py"
+          "tests/test_v7_fast_authority_sentinel_contract.py"
         ]
       },
-      "deletion_gate": "PHASE_7_DECLARATIVE_PROCESS_CUTOVER_PROVEN",
+      "deletion_gate": "UNIQUE_BEHAVIOR_EQUIVALENCE_AND_SINGLE_CONSUMER_PROVEN",
       "disposition_commit": null,
       "economic_authority": {
         "capabilities": [
-          "temporary_candidate_adapter"
+          "engine_component"
         ],
         "executable": false,
         "owner": "STRUCTURAL_ARB_ENGINE"
       },
-      "final_disposition": "delete_after_gate",
+      "final_disposition": "merge_then_delete_or_reclassify_canonical",
       "migration_status": "pending_gate",
       "object_type": "tracked_path",
       "path_or_ref": "scripts/v7_hard_arb_guard.py",
@@ -10877,9 +10897,7 @@
           "scripts/paper_v7_execution_loop.sh",
           "scripts/v7_cutover_contract.py",
           "scripts/v7_external_fair_paper_router.py",
-          "scripts/v7_fast_structural_paper_executor.py",
           "scripts/v7_finalize_maker_cutover.py",
-          "scripts/v7_hard_arb_guard.py",
           "tests/test_v7_ledger_spool.py",
           "tests/test_v7_live_paper_validation_contract.py"
         ]
@@ -11429,10 +11447,8 @@
         "static_references": [
           "artifacts/v7_unification/path_classification.json",
           "scripts/v7_external_fair_paper_router.py",
-          "scripts/v7_fast_structural_paper_executor.py",
           "scripts/v7_graph_rv_executable_intents.py",
           "scripts/v7_graph_rv_intents.py",
-          "scripts/v7_hard_arb_guard.py",
           "scripts/v7_market_maker_status.py",
           "tests/test_v7_authoritative_fees.py",
           "tests/test_v7_market_maker_status.py"
@@ -13292,9 +13308,7 @@
         "analysis": "exact path/module references from tracked text; runtime linkage is separately enumerated",
         "static_references": [
           "artifacts/v7_unification/path_classification.json",
-          "scripts/v7_fast_structural_paper_executor.py",
           "scripts/v7_graph_rv_executable_intents.py",
-          "scripts/v7_hard_arb_guard.py",
           "scripts/v7_micro_taker_data.py",
           "scripts/v7_micro_taker_worker.py",
           "tests/test_v7_shared_market_state.py"
@@ -13537,6 +13551,34 @@
       "path_or_ref": "scripts/v7_structural_relations.py",
       "rollback_artifact_tag": "v7-unification-pre-migration-8d9e8e60",
       "surface_id": "path:scripts/v7_structural_relations.py",
+      "unique_behavior_data_contribution": "tracked repository behavior, evidence, test, configuration, or documentation",
+      "validation_tests": [
+        "tests/test_v7_surface_classification.py"
+      ]
+    },
+    {
+      "canonical_replacement": "scripts/v7_structural_rotation.py",
+      "classification": "KEEP_CANONICAL",
+      "current_imports_callers_readers_writers": {
+        "analysis": "exact path/module references from tracked text; runtime linkage is separately enumerated",
+        "static_references": [
+          "artifacts/v7_unification/legacy_deletion_manifest.json",
+          "tests/test_v7_structural_rotation.py"
+        ]
+      },
+      "deletion_gate": "NONE_CANONICAL_SURFACE",
+      "disposition_commit": null,
+      "economic_authority": {
+        "capabilities": [],
+        "executable": false,
+        "owner": null
+      },
+      "final_disposition": "retain_canonical",
+      "migration_status": "classified",
+      "object_type": "tracked_path",
+      "path_or_ref": "scripts/v7_structural_rotation.py",
+      "rollback_artifact_tag": "v7-unification-pre-migration-8d9e8e60",
+      "surface_id": "path:scripts/v7_structural_rotation.py",
       "unique_behavior_data_contribution": "tracked repository behavior, evidence, test, configuration, or documentation",
       "validation_tests": [
         "tests/test_v7_surface_classification.py"
@@ -15232,6 +15274,7 @@
         "analysis": "exact path/module references from tracked text; runtime linkage is separately enumerated",
         "static_references": [
           "CMakeLists.txt",
+          "artifacts/v7_unification/legacy_deletion_manifest.json",
           "artifacts/v7_unification/path_classification.json"
         ]
       },
@@ -15618,6 +15661,7 @@
       "current_imports_callers_readers_writers": {
         "analysis": "exact path/module references from tracked text; runtime linkage is separately enumerated",
         "static_references": [
+          "artifacts/v7_unification/legacy_deletion_manifest.json",
           "artifacts/v7_unification/path_classification.json",
           "artifacts/v7_unification/phase_2_report.md"
         ]
@@ -17728,6 +17772,7 @@
       "current_imports_callers_readers_writers": {
         "analysis": "exact path/module references from tracked text; runtime linkage is separately enumerated",
         "static_references": [
+          "artifacts/v7_unification/legacy_deletion_manifest.json",
           "artifacts/v7_unification/path_classification.json"
         ]
       },
@@ -17974,6 +18019,7 @@
       "current_imports_callers_readers_writers": {
         "analysis": "exact path/module references from tracked text; runtime linkage is separately enumerated",
         "static_references": [
+          "artifacts/v7_unification/legacy_deletion_manifest.json",
           "artifacts/v7_unification/path_classification.json"
         ]
       },
@@ -21078,6 +21124,7 @@
       "current_imports_callers_readers_writers": {
         "analysis": "exact path/module references from tracked text; runtime linkage is separately enumerated",
         "static_references": [
+          "artifacts/v7_unification/legacy_deletion_manifest.json",
           "artifacts/v7_unification/path_classification.json",
           "artifacts/v7_unification/phase_6_report.md"
         ]
@@ -22138,7 +22185,7 @@
       "object_type": "branch_or_remote_ref",
       "path_or_ref": "refs/heads/codex/v7-unified-system-legacy-eradication",
       "rollback_artifact_tag": "v7-unification-pre-migration-8d9e8e60",
-      "snapshot_object_id": "3c32a60d7ca3b5d3d97ae8b74a80a04c0978c2d4",
+      "snapshot_object_id": "29aca90b4cd9e910c0106b7b389144fb365db30d",
       "surface_id": "ref:refs/heads/codex/v7-unified-system-legacy-eradication",
       "unique_behavior_data_contribution": "active migration or canonical upstream ref",
       "validation_tests": [
@@ -26880,5 +26927,5 @@
   "real_capital_at_risk": false,
   "real_order_submission": false,
   "schema": "polymarket_v7_surface_classification_v1",
-  "source_snapshot_sha": "3c32a60d7ca3b5d3d97ae8b74a80a04c0978c2d4"
+  "source_snapshot_sha": "29aca90b4cd9e910c0106b7b389144fb365db30d"
 }

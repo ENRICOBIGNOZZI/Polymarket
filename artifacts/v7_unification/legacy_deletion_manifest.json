@@ -1,0 +1,41 @@
+{
+  "schema": "polymarket_v7_legacy_deletion_manifest_v1",
+  "paper_only": true,
+  "authenticated_execution": false,
+  "real_order_submission": false,
+  "real_capital_at_risk": false,
+  "rollback_artifact_tag": "v7-unification-pre-migration-8d9e8e60",
+  "rollback_bundle_sha256": "6b1fe45289cbb0c14aff6e31960851d197e87f6fe0534d56518f73f9509e6eee",
+  "entries": [
+    {
+      "path": "scripts/v7_hard_arb_guard.py",
+      "prior_classification": "KEEP_TEMPORARY_COMPATIBILITY",
+      "deletion_reason": "Dormant standalone PAPER lifecycle writer duplicated the canonical structural engine and bypassed the global coordinator.",
+      "unique_behavior_disposition": "Bounded scan rotation moved to scripts/v7_structural_rotation.py; full-depth, fee, joint-completion, timeout, and unwind requirements remain in config/v7_structural_arb_engine.json and canonical engine tests.",
+      "canonical_replacement": "STRUCTURAL_ARB_ENGINE -> V7_GLOBAL_PORTFOLIO_COORDINATOR",
+      "reference_scan": "All imports, documentation, deployment, cutover, monitoring, authority-registry, and test references removed or redirected in this deletion wave.",
+      "validation_tests": [
+        "tests/test_v7_structural_rotation.py",
+        "tests/test_fast_arb.cpp",
+        "tests/test_v7_fast_structural_feasibility.py",
+        "tests/test_v7_opportunity_contract.py"
+      ],
+      "disposition_commit": "SELF_REFERENTIAL_COMMIT"
+    },
+    {
+      "path": "scripts/v7_fast_structural_paper_executor.py",
+      "prior_classification": "MERGE_INTO_CANONICAL",
+      "deletion_reason": "Unlaunched standalone executor retained independent PAPER order, fill, inventory, and terminal lifecycle authority.",
+      "unique_behavior_disposition": "Atomic structural execution requirements are owned by the typed opportunity contract, canonical joint execution policy, global capital/risk coordinator, OMS, inventory, and ledger chain.",
+      "canonical_replacement": "STRUCTURAL_ARB_ENGINE -> V7_GLOBAL_PORTFOLIO_COORDINATOR -> V7_CANONICAL_OMS",
+      "reference_scan": "All required-file, compile, capability-audit, authority-registry, and implementation-specific test references removed in this deletion wave.",
+      "validation_tests": [
+        "tests/test_v7_joint_execution_policy.py",
+        "tests/test_v7_fast_structural_feasibility.py",
+        "tests/test_v7_opportunity_contract.py",
+        "tests/test_v7_authority_reachability_audit.py"
+      ],
+      "disposition_commit": "SELF_REFERENTIAL_COMMIT"
+    }
+  ]
+}

@@ -116,7 +116,6 @@ def validate(root: Path, expected_head: str | None) -> dict[str, str]:
         "scripts/v7_btc_settlement_engine_contract.py",
         "scripts/v7_fast_structural_feasibility.py",
         "scripts/v7_portfolio_guard.py",
-        "scripts/v7_fast_structural_paper_executor.py",
         "scripts/v7_research_shadow_supervisor.py",
         "scripts/v7_slow_economic_shadow_supervisor.py",
         "scripts/v7_semantic_mapping.py",

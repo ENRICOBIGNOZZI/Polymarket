@@ -103,12 +103,17 @@ scripts/v7_graph_rv_executable_intents.py
 scripts/v7_graph_cost_vector.py
 ```
 
-### Hard Arb
+### Structural arbitrage engine
 
-Native V7 structural complete-set execution research with authoritative fees, full depth, sequential leg revalidation and partial unwind.
+The native V7 structural engine combines hard-arbitrage and fast-structural
+detection. It proposes typed atomic intents to the global coordinator; full
+depth, authoritative fees, joint completion, timeout, and bounded unwind are
+mandatory contract properties. It does not own execution or the ledger.
 
 ```text
-scripts/v7_hard_arb_guard.py
+config/v7_structural_arb_engine.json
+src/v7_fast_structural_runtime.cpp
+scripts/v7_joint_execution_policy.py
 ```
 
 ### Micro Taker
