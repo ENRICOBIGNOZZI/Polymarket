@@ -125,5 +125,20 @@ int main() {
         assert(raw_snapshot.evidence_valid == 1);
     }
     std::filesystem::remove(large_raw_path);
+
+    const auto burst_raw_path = std::filesystem::temp_directory_path() / "pm_v7_external_burst_raw_tape_test.bin";
+    std::filesystem::remove(burst_raw_path);
+    {
+        ExternalRawTapeRecorder raw_recorder(
+            burst_raw_path, sha, "run-burst-raw", "session-burst-raw", "bybit-linear", 1'000'004);
+        const std::string volatile_bybit_batch((kExternalRawTapePayloadBytes + 64U), 'x');
+        assert(raw_recorder.try_record_raw(VenueId::BybitLinear, 5, 140, 1'040,
+                                            volatile_bybit_batch));
+        const auto raw_snapshot = raw_recorder.snapshot();
+        assert(raw_snapshot.accepted == 1);
+        assert(raw_snapshot.dropped == 0);
+        assert(raw_snapshot.evidence_valid == 1);
+    }
+    std::filesystem::remove(burst_raw_path);
     return 0;
 }

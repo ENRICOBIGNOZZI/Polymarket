@@ -24,6 +24,12 @@ inline constexpr std::size_t kExternalTapePayloadBytes = 512;
 inline constexpr std::size_t kExternalTapeQueueCapacity = 4096;
 inline constexpr std::size_t kExternalRawTapePayloadBytes = 32 * 1024;
 inline constexpr std::size_t kExternalRawTapeQueueCapacity = 256;
+// Bybit's linear multiplexed subscription can emit a transiently larger
+// public-trade/liquidation batch during volatile periods.  It gets a bounded
+// source-specific FIFO so that those raw frames are captured without making
+// every venue pay the memory cost.
+inline constexpr std::size_t kExternalBurstRawTapePayloadBytes = 64 * 1024;
+inline constexpr std::size_t kExternalBurstRawTapeQueueCapacity = 512;
 // Coinbase's complete BTC-USD L2 recovery snapshot can exceed 1 MiB. Its raw
 // recorder uses this separate bounded queue; other sources retain the compact
 // high-depth path above.
@@ -90,6 +96,17 @@ struct RawTapeRecord {
     std::uint8_t reserved[3]{};
     std::uint32_t payload_size = 0;
     std::array<std::byte, kExternalRawTapePayloadBytes> payload{};
+};
+
+struct BurstRawTapeRecord {
+    std::uint64_t tape_sequence = 0;
+    std::uint64_t connection_epoch = 0;
+    std::int64_t receive_monotonic_ns = 0;
+    std::int64_t receive_wall_ns = 0;
+    VenueId venue = VenueId::Unknown;
+    std::uint8_t reserved[3]{};
+    std::uint32_t payload_size = 0;
+    std::array<std::byte, kExternalBurstRawTapePayloadBytes> payload{};
 };
 
 struct LargeRawTapeRecord {
@@ -207,6 +224,7 @@ static_assert(std::is_trivially_copyable_v<TapeSessionHeader>);
 static_assert(std::is_trivially_copyable_v<TapeRecord>);
 static_assert(std::is_trivially_copyable_v<TapeRecorderSnapshot>);
 static_assert(std::is_trivially_copyable_v<RawTapeRecord>);
+static_assert(std::is_trivially_copyable_v<BurstRawTapeRecord>);
 static_assert(std::is_trivially_copyable_v<LargeRawTapeRecord>);
 static_assert(std::is_trivially_copyable_v<RawTapeDiskRecordHeader>);
 

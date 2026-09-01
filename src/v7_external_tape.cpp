@@ -174,10 +174,15 @@ struct ExternalRawTapeRecorder::Impl {
     SpscRing<RawTapeRecord, kExternalRawTapeQueueCapacity> queue{};
     RawTapeRecord producer_record{};
     RawTapeRecord writer_record{};
+    using BurstQueue = SpscRing<BurstRawTapeRecord, kExternalBurstRawTapeQueueCapacity>;
+    std::unique_ptr<BurstQueue> burst_queue{};
+    std::unique_ptr<BurstRawTapeRecord> burst_producer_record{};
+    std::unique_ptr<BurstRawTapeRecord> burst_writer_record{};
     using LargeQueue = SpscRing<LargeRawTapeRecord, kExternalLargeRawTapeQueueCapacity>;
     std::unique_ptr<LargeQueue> large_queue{};
     std::unique_ptr<LargeRawTapeRecord> large_producer_record{};
     std::unique_ptr<LargeRawTapeRecord> large_writer_record{};
+    bool burst_payloads = false;
     bool large_payloads = false;
     std::ofstream output;
     std::thread worker;
@@ -197,10 +202,17 @@ struct ExternalRawTapeRecorder::Impl {
         if (!path.parent_path().empty()) std::filesystem::create_directories(path.parent_path());
         output.open(path, std::ios::binary | std::ios::trunc);
         if (!output) throw std::runtime_error("unable to open V7 raw tape");
-        // Keep the high-rate 32 KiB recorder for every venue. Coinbase alone
-        // receives the documented complete L2 recovery snapshot, which needs
-        // a larger but still bounded FIFO and heap-owned scratch records.
+        // Keep the high-rate 32 KiB recorder for every ordinary venue.
+        // Bybit linear has a bounded wider FIFO for volatile multiplexed
+        // batches; Coinbase receives complete L2 recovery snapshots and uses
+        // its separate large bounded FIFO.
+        burst_payloads = source == "bybit-linear";
         large_payloads = source == "coinbase-spot";
+        if (burst_payloads) {
+            burst_queue = std::make_unique<BurstQueue>();
+            burst_producer_record = std::make_unique<BurstRawTapeRecord>();
+            burst_writer_record = std::make_unique<BurstRawTapeRecord>();
+        }
         if (large_payloads) {
             large_queue = std::make_unique<LargeQueue>();
             large_producer_record = std::make_unique<LargeRawTapeRecord>();
@@ -229,7 +241,9 @@ struct ExternalRawTapeRecorder::Impl {
     }
 
     [[nodiscard]] std::size_t queued() const noexcept {
-        return large_payloads ? large_queue->approximate_size() : queue.approximate_size();
+        if (burst_payloads) return burst_queue->approximate_size();
+        if (large_payloads) return large_queue->approximate_size();
+        return queue.approximate_size();
     }
 
     template <class Record>
@@ -256,7 +270,12 @@ struct ExternalRawTapeRecorder::Impl {
     void writer_loop() noexcept {
         while (!stop_requested.load(std::memory_order_acquire) || queued() != 0) {
             bool progressed = false;
-            if (large_payloads) {
+            if (burst_payloads) {
+                while (burst_queue->try_pop(*burst_writer_record)) {
+                    progressed = true;
+                    if (!write_record(*burst_writer_record)) return;
+                }
+            } else if (large_payloads) {
                 while (large_queue->try_pop(*large_writer_record)) {
                     progressed = true;
                     if (!write_record(*large_writer_record)) return;
@@ -307,10 +326,13 @@ bool ExternalRawTapeRecorder::try_record_raw(
         std::memcpy(record.payload.data(), payload.data(), payload.size());
         return queue.try_push(record);
     };
-    const bool queued = impl_->large_payloads
-        ? enqueue(*impl_->large_producer_record, *impl_->large_queue,
-                  kExternalLargeRawTapePayloadBytes)
-        : enqueue(impl_->producer_record, impl_->queue, kExternalRawTapePayloadBytes);
+    const bool queued = impl_->burst_payloads
+        ? enqueue(*impl_->burst_producer_record, *impl_->burst_queue,
+                  kExternalBurstRawTapePayloadBytes)
+        : impl_->large_payloads
+            ? enqueue(*impl_->large_producer_record, *impl_->large_queue,
+                      kExternalLargeRawTapePayloadBytes)
+            : enqueue(impl_->producer_record, impl_->queue, kExternalRawTapePayloadBytes);
     if (!queued) {
         impl_->dropped.fetch_add(1, std::memory_order_relaxed);
         impl_->evidence_valid.store(false, std::memory_order_release);
