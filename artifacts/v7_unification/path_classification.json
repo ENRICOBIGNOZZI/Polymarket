@@ -6,7 +6,7 @@
     "ref_count": 41,
     "runtime_output_count": 123,
     "schema_count": 22,
-    "tracked_or_intended_path_count": 697,
+    "tracked_or_intended_path_count": 693,
     "workflow_count": 11
   },
   "entries": [
@@ -1922,7 +1922,9 @@
       "classification": "KEEP_CANONICAL",
       "current_imports_callers_readers_writers": {
         "analysis": "exact path/module references from tracked text; runtime linkage is separately enumerated",
-        "static_references": []
+        "static_references": [
+          "artifacts/v7_unification/path_classification.json"
+        ]
       },
       "deletion_gate": "NONE_CANONICAL_SURFACE",
       "disposition_commit": null,
@@ -10343,38 +10345,6 @@
       ]
     },
     {
-      "canonical_replacement": "config/v7_authority_registry.json#STRUCTURAL_ARB_ENGINE",
-      "classification": "MERGE_INTO_CANONICAL",
-      "current_imports_callers_readers_writers": {
-        "analysis": "exact path/module references from tracked text; runtime linkage is separately enumerated",
-        "static_references": [
-          "artifacts/v7_unification/authority_graph.json",
-          "artifacts/v7_unification/legacy_deletion_manifest.json",
-          "artifacts/v7_unification/path_classification.json",
-          "tests/test_v7_fast_authority_sentinel_contract.py"
-        ]
-      },
-      "deletion_gate": "UNIQUE_BEHAVIOR_EQUIVALENCE_AND_SINGLE_CONSUMER_PROVEN",
-      "disposition_commit": null,
-      "economic_authority": {
-        "capabilities": [
-          "engine_component"
-        ],
-        "executable": false,
-        "owner": "STRUCTURAL_ARB_ENGINE"
-      },
-      "final_disposition": "merge_then_delete_or_reclassify_canonical",
-      "migration_status": "pending_gate",
-      "object_type": "tracked_path",
-      "path_or_ref": "scripts/v7_fast_structural_paper_executor.py",
-      "rollback_artifact_tag": "v7-unification-pre-migration-8d9e8e60",
-      "surface_id": "path:scripts/v7_fast_structural_paper_executor.py",
-      "unique_behavior_data_contribution": "tracked repository behavior, evidence, test, configuration, or documentation",
-      "validation_tests": [
-        "tests/test_v7_surface_classification.py"
-      ]
-    },
-    {
       "canonical_replacement": "scripts/v7_fee_reward_registry.py",
       "classification": "KEEP_CANONICAL",
       "current_imports_callers_readers_writers": {
@@ -10627,38 +10597,6 @@
       "path_or_ref": "scripts/v7_graph_rv_intents.py",
       "rollback_artifact_tag": "v7-unification-pre-migration-8d9e8e60",
       "surface_id": "path:scripts/v7_graph_rv_intents.py",
-      "unique_behavior_data_contribution": "tracked repository behavior, evidence, test, configuration, or documentation",
-      "validation_tests": [
-        "tests/test_v7_surface_classification.py"
-      ]
-    },
-    {
-      "canonical_replacement": "config/v7_authority_registry.json#STRUCTURAL_ARB_ENGINE",
-      "classification": "MERGE_INTO_CANONICAL",
-      "current_imports_callers_readers_writers": {
-        "analysis": "exact path/module references from tracked text; runtime linkage is separately enumerated",
-        "static_references": [
-          "artifacts/v7_unification/authority_graph.json",
-          "artifacts/v7_unification/legacy_deletion_manifest.json",
-          "artifacts/v7_unification/path_classification.json",
-          "tests/test_v7_fast_authority_sentinel_contract.py"
-        ]
-      },
-      "deletion_gate": "UNIQUE_BEHAVIOR_EQUIVALENCE_AND_SINGLE_CONSUMER_PROVEN",
-      "disposition_commit": null,
-      "economic_authority": {
-        "capabilities": [
-          "engine_component"
-        ],
-        "executable": false,
-        "owner": "STRUCTURAL_ARB_ENGINE"
-      },
-      "final_disposition": "merge_then_delete_or_reclassify_canonical",
-      "migration_status": "pending_gate",
-      "object_type": "tracked_path",
-      "path_or_ref": "scripts/v7_hard_arb_guard.py",
-      "rollback_artifact_tag": "v7-unification-pre-migration-8d9e8e60",
-      "surface_id": "path:scripts/v7_hard_arb_guard.py",
       "unique_behavior_data_contribution": "tracked repository behavior, evidence, test, configuration, or documentation",
       "validation_tests": [
         "tests/test_v7_surface_classification.py"
@@ -13563,6 +13501,7 @@
         "analysis": "exact path/module references from tracked text; runtime linkage is separately enumerated",
         "static_references": [
           "artifacts/v7_unification/legacy_deletion_manifest.json",
+          "artifacts/v7_unification/path_classification.json",
           "tests/test_v7_structural_rotation.py"
         ]
       },
@@ -17795,33 +17734,6 @@
       ]
     },
     {
-      "canonical_replacement": "config/v7_authority_registry.json#STRUCTURAL_ARB_ENGINE",
-      "classification": "MERGE_INTO_CANONICAL",
-      "current_imports_callers_readers_writers": {
-        "analysis": "exact path/module references from tracked text; runtime linkage is separately enumerated",
-        "static_references": [
-          "artifacts/v7_unification/path_classification.json"
-        ]
-      },
-      "deletion_gate": "UNIQUE_BEHAVIOR_EQUIVALENCE_AND_SINGLE_CONSUMER_PROVEN",
-      "disposition_commit": null,
-      "economic_authority": {
-        "capabilities": [],
-        "executable": false,
-        "owner": null
-      },
-      "final_disposition": "merge_then_delete_or_reclassify_canonical",
-      "migration_status": "pending_gate",
-      "object_type": "tracked_path",
-      "path_or_ref": "tests/test_v7_fast_structural_paper_executor.py",
-      "rollback_artifact_tag": "v7-unification-pre-migration-8d9e8e60",
-      "surface_id": "path:tests/test_v7_fast_structural_paper_executor.py",
-      "unique_behavior_data_contribution": "tracked repository behavior, evidence, test, configuration, or documentation",
-      "validation_tests": [
-        "tests/test_v7_surface_classification.py"
-      ]
-    },
-    {
       "canonical_replacement": "tests/test_v7_fee_reward_registry.py",
       "classification": "KEEP_CANONICAL",
       "current_imports_callers_readers_writers": {
@@ -17953,33 +17865,6 @@
       "path_or_ref": "tests/test_v7_graph_cost_vector.py",
       "rollback_artifact_tag": "v7-unification-pre-migration-8d9e8e60",
       "surface_id": "path:tests/test_v7_graph_cost_vector.py",
-      "unique_behavior_data_contribution": "tracked repository behavior, evidence, test, configuration, or documentation",
-      "validation_tests": [
-        "tests/test_v7_surface_classification.py"
-      ]
-    },
-    {
-      "canonical_replacement": "config/v7_authority_registry.json#STRUCTURAL_ARB_ENGINE",
-      "classification": "MERGE_INTO_CANONICAL",
-      "current_imports_callers_readers_writers": {
-        "analysis": "exact path/module references from tracked text; runtime linkage is separately enumerated",
-        "static_references": [
-          "artifacts/v7_unification/path_classification.json"
-        ]
-      },
-      "deletion_gate": "UNIQUE_BEHAVIOR_EQUIVALENCE_AND_SINGLE_CONSUMER_PROVEN",
-      "disposition_commit": null,
-      "economic_authority": {
-        "capabilities": [],
-        "executable": false,
-        "owner": null
-      },
-      "final_disposition": "merge_then_delete_or_reclassify_canonical",
-      "migration_status": "pending_gate",
-      "object_type": "tracked_path",
-      "path_or_ref": "tests/test_v7_hard_arb_executable_mark.py",
-      "rollback_artifact_tag": "v7-unification-pre-migration-8d9e8e60",
-      "surface_id": "path:tests/test_v7_hard_arb_executable_mark.py",
       "unique_behavior_data_contribution": "tracked repository behavior, evidence, test, configuration, or documentation",
       "validation_tests": [
         "tests/test_v7_surface_classification.py"
@@ -22185,7 +22070,7 @@
       "object_type": "branch_or_remote_ref",
       "path_or_ref": "refs/heads/codex/v7-unified-system-legacy-eradication",
       "rollback_artifact_tag": "v7-unification-pre-migration-8d9e8e60",
-      "snapshot_object_id": "29aca90b4cd9e910c0106b7b389144fb365db30d",
+      "snapshot_object_id": "4f5f9865b55f90887d586d659d55e5d0e53caf26",
       "surface_id": "ref:refs/heads/codex/v7-unified-system-legacy-eradication",
       "unique_behavior_data_contribution": "active migration or canonical upstream ref",
       "validation_tests": [
@@ -26927,5 +26812,5 @@
   "real_capital_at_risk": false,
   "real_order_submission": false,
   "schema": "polymarket_v7_surface_classification_v1",
-  "source_snapshot_sha": "29aca90b4cd9e910c0106b7b389144fb365db30d"
+  "source_snapshot_sha": "4f5f9865b55f90887d586d659d55e5d0e53caf26"
 }

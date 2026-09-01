@@ -520,7 +520,7 @@ public:
         csv << opportunity_header() << '\n';
         for (const auto& opportunity : latest) write_opportunity(csv, snapshot_ms, opportunity);
         atomic_write(run_dir_ / "fast_arb_latest.csv", csv.str());
-        for (const auto& opportunity : pending_candidates) spool_candidate(opportunity);
+        for (const auto& opportunity : pending_candidates) publish_opportunity(opportunity);
 
         const std::string shared_snapshot_id = options_.model_sha + ":" +
             std::to_string(updates) + ":" + std::to_string(snapshot_ms);
@@ -581,12 +581,23 @@ public:
         }
 
         json::object status{
+            {"schema", "polymarket_v7_structural_arb_engine_status_v1"},
             {"schema_version", 1},
+            {"timestamp", snapshot_ms / 1000},
             {"timestamp_ms", snapshot_ms},
+            {"model_sha", options_.model_sha},
+            {"engine_id", "STRUCTURAL_ARB_ENGINE"},
+            {"state", stopping ? "STOPPING" : "RUNNING"},
             {"mode", "paper"},
             {"paper_only", true},
             {"authenticated_execution", false},
             {"real_order_submission", false},
+            {"real_capital_at_risk", false},
+            {"execution_authority", "OPPORTUNITY_PROPOSAL_ONLY"},
+            {"capital_authority", false},
+            {"oms_authority", false},
+            {"inventory_authority", false},
+            {"ledger_writer_authority", false},
             {"stopping", stopping},
             {"markets", static_cast<std::int64_t>(markets_.size())},
             {"tokens", static_cast<std::int64_t>(tokens_.size())},
@@ -620,8 +631,8 @@ public:
             {"evaluations", static_cast<std::int64_t>(evaluations)},
             {"executable_observations", static_cast<std::int64_t>(executable)},
             {"hard_executable_observations", static_cast<std::int64_t>(hard_executable)},
-            {"canonical_candidates_spooled", static_cast<std::int64_t>(candidates_spooled_)},
-            {"canonical_candidates_dropped", static_cast<std::int64_t>(candidates_dropped_)},
+            {"canonical_opportunities_published", static_cast<std::int64_t>(opportunities_published_)},
+            {"canonical_opportunities_dropped", static_cast<std::int64_t>(opportunities_dropped_)},
             {"execution_incompatible_observations", static_cast<std::int64_t>(execution_incompatible_observations_)},
             {"passive_maker_observations", static_cast<std::int64_t>(passive_maker_observations_)},
             {"current_opportunities", static_cast<std::int64_t>(latest.size())},

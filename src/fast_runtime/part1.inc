@@ -212,6 +212,13 @@ bool exact_sha(const std::string& value) {
     });
 }
 
+bool identity_hash(const std::string& value) {
+    return (value.size() == 40 || value.size() == 64) &&
+           std::all_of(value.begin(), value.end(), [](unsigned char c) {
+               return std::isdigit(c) || (c >= 'a' && c <= 'f');
+           });
+}
+
 pm::fast::Policy load_policy(const std::string& path) {
     pm::fast::Policy policy;
     std::ifstream input(path);

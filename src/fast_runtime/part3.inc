@@ -63,8 +63,8 @@ private:
     std::uint64_t freshness_age_rejections_ = 0;
     std::uint64_t freshness_skew_rejections_ = 0;
     std::uint64_t candidate_sequence_ = 0;
-    std::uint64_t candidates_spooled_ = 0;
-    std::uint64_t candidates_dropped_ = 0;
+    std::uint64_t opportunities_published_ = 0;
+    std::uint64_t opportunities_dropped_ = 0;
     std::uint64_t execution_incompatible_observations_ = 0;
     std::uint64_t passive_maker_observations_ = 0;
     std::uint64_t raw_last_trade_events_ = 0;
@@ -138,81 +138,163 @@ private:
             << feed_latency << ',' << csv_escape(leg_string(opportunity)) << '\n';
     }
 
-    void spool_candidate(const pm::fast::Opportunity& opportunity) {
-        // This spool is owned by the sequential-FOK executor.  Passive maker
-        // quotes and directional/non-guaranteed observations require a
-        // different execution protocol and must never be misrouted here.
+    struct RuntimeIdentity {
+        std::string config_hash;
+        std::string policy_hash;
+        std::string run_id;
+    };
+
+    std::optional<RuntimeIdentity> runtime_identity() const {
+        try {
+            std::ifstream input(fs::path(options_.run_root) / "control" / "runtime_status.json");
+            if (!input) return std::nullopt;
+            std::stringstream buffer;
+            buffer << input.rdbuf();
+            const auto parsed = json::parse(buffer.str());
+            if (!parsed.is_object()) return std::nullopt;
+            const auto& object = parsed.as_object();
+            if (get_text(object, "schema") != "polymarket_v7_runtime_status_v3" ||
+                get_text(object, "model_sha") != options_.model_sha ||
+                !boolean(object.at("paper_only"), false) ||
+                boolean(object.at("authenticated_execution"), true) ||
+                boolean(object.at("real_order_submission"), true)) {
+                return std::nullopt;
+            }
+            RuntimeIdentity identity{
+                get_text(object, "config_hash"), get_text(object, "policy_hash"),
+                get_text(object, "run_id"),
+            };
+            if (!identity_hash(identity.config_hash) || !identity_hash(identity.policy_hash) ||
+                identity.run_id.empty()) return std::nullopt;
+            return identity;
+        } catch (...) {
+            return std::nullopt;
+        }
+    }
+
+    void publish_opportunity(const pm::fast::Opportunity& opportunity) {
+        // This component is a detector/planner only. It emits one typed atomic
+        // intent to the global coordinator and never writes an order, fill,
+        // inventory mutation, or economic-ledger event.
         if (!opportunity.executable || !opportunity.hard_arbitrage || opportunity.id.empty()
             || opportunity.executable_shares <= 0.0 || !exact_sha(options_.model_sha)
             || opportunity.exchange_ts_ms <= 0 || opportunity.received_ts_ms <= 0
-            || opportunity.decision_ts_ms < opportunity.received_ts_ms) return;
+            || opportunity.decision_ts_ms < opportunity.received_ts_ms
+            || opportunity.decision_ts_ms < opportunity.exchange_ts_ms) return;
+        const auto identity = runtime_identity();
+        if (!identity) {
+            ++opportunities_dropped_;
+            return;
+        }
         const auto recorded = std::max(now_ms(), opportunity.decision_ts_ms);
         const auto sequence = ++candidate_sequence_;
-        const auto identity = std::to_string(std::hash<std::string>{}(opportunity.id));
         const std::string record_id = "cpp-fast-" + std::to_string(recorded) + "-" +
                                       std::to_string(sequence);
-        json::array structured_legs;
-        json::object target_quantities;
-        structured_legs.reserve(opportunity.legs.size());
+        json::array legs;
+        legs.reserve(opportunity.legs.size());
+        double authoritative_fee = 0.0;
+        std::string first_contract;
+        std::string mapping_identity;
         for (std::size_t index = 0; index < opportunity.legs.size(); ++index) {
             const auto& leg = opportunity.legs[index];
             const std::string leg_id = "leg-" + std::to_string(index + 1) + "-" + leg.token_id;
-            structured_legs.emplace_back(json::object{
+            const auto market = markets_.find(leg.market_id);
+            const std::string contract = market == markets_.end() || market->second.condition_id.empty()
+                ? leg.token_id : market->second.condition_id;
+            if (first_contract.empty()) first_contract = contract;
+            if (!mapping_identity.empty()) mapping_identity += ":";
+            mapping_identity += contract;
+            authoritative_fee += std::max(0.0, leg.fee_per_share * leg.shares);
+            legs.emplace_back(json::object{
                 {"leg_id", leg_id}, {"market_id", leg.market_id},
-                {"token_id", leg.token_id}, {"outcome", leg.outcome},
+                {"contract_id", contract}, {"token_id", leg.token_id},
                 {"side", "BUY"}, {"target_quantity", leg.shares},
-                {"detector_average_price", leg.average_price},
-                {"detector_fee_and_slippage_per_share", leg.fee_per_share},
-                {"detector_all_in_cost", leg.all_in_cost},
+                {"limit_price", std::clamp(leg.average_price, 0.0, 1.0)},
+                {"fee_authority", "AUTHORITATIVE"},
             });
-            target_quantities[leg_id] = leg.shares;
         }
-        json::object metadata{
-            {"opportunity_kind", pm::fast::to_string(opportunity.kind)},
-            {"hard_arbitrage", opportunity.hard_arbitrage},
-            {"risk_class", opportunity.risk_class},
-            {"capital_required", opportunity.capital_required},
-            {"payoff_floor", opportunity.payoff_floor},
-            {"raw_edge_per_share", opportunity.raw_edge_per_share},
-            {"legs", leg_string(opportunity)},
-            {"structured_legs", std::move(structured_legs)},
-            {"target_quantities", std::move(target_quantities)},
-            {"execution_owner", "FAST_STRUCTURAL_PAPER_EXECUTOR"},
-            {"execution_compatibility", "SEQUENTIAL_FOK_HARD_ARB"},
-            {"paper_candidate_only", true},
-        };
-        json::object event{
-            {"schema_version", 1},
-            {"event_type", "CANDIDATE"},
-            {"strategy", "FAST_STRUCTURAL"},
+        if (legs.size() < 2 || first_contract.empty() || mapping_identity.empty()) {
+            ++opportunities_dropped_;
+            return;
+        }
+        const auto decision_ns = opportunity.decision_ts_ms * 1'000'000LL;
+        json::object envelope{
+            {"schema", "polymarket_v7_opportunity_envelope_v1"},
+            {"version", 1},
             {"model_sha", options_.model_sha},
-            {"paper_only", true},
-            {"authenticated_execution", false},
-            {"record_id", record_id},
-            {"recorded_ts_ms", recorded},
-            {"opportunity_id", opportunity.id},
-            {"candidate_id", "fast-candidate-" + identity + "-" +
-                             std::to_string(opportunity.decision_ts_ms)},
-            {"bundle_id", "fast-bundle-" + identity + "-" +
-                              std::to_string(opportunity.decision_ts_ms)},
-            {"exchange_ts_ms", opportunity.exchange_ts_ms},
-            {"receive_ts_ms", opportunity.received_ts_ms},
-            {"decision_ts_ms", opportunity.decision_ts_ms},
-            {"book_snapshot_id", "fast-book-" + identity + "-" +
-                                 std::to_string(opportunity.exchange_ts_ms)},
-            {"predicted_alpha", opportunity.net_edge_per_share},
-            {"expected_ev", opportunity.expected_profit},
-            {"intended_action", "ARB"},
-            {"intended_size", opportunity.executable_shares},
-            {"capital_cost", 0.0},
-            {"latency_cost", 0.0},
-            {"metadata", std::move(metadata)},
+            {"config_hash", identity->config_hash},
+            {"policy_hash", identity->policy_hash},
+            {"run_id", identity->run_id},
+            {"source_snapshot_identity", "fast-book-" + opportunity.id + "-" +
+                                             std::to_string(opportunity.exchange_ts_ms)},
+            {"engine_id", "STRUCTURAL_ARB_ENGINE"},
+            {"component_provenance", json::array{"fast_structural"}},
+            {"market_id", opportunity.legs.front().market_id},
+            {"event_id", opportunity.event_id.empty() ? opportunity.id : opportunity.event_id},
+            {"contract_id", first_contract},
+            {"mapping_identity", "structural:" + mapping_identity},
+            {"action", "NOTHING"},
+            {"side", "NONE"},
+            {"decision_receive_timestamp_ns", decision_ns},
+            {"source_event_timestamps_ns", json::array{
+                opportunity.exchange_ts_ms * 1'000'000LL,
+                opportunity.received_ts_ms * 1'000'000LL,
+            }},
+            {"fair_value", json::object{{"lower", 0.0}, {"point", 0.5}, {"upper", 1.0}}},
+            {"conservative_expected_wealth_change", opportunity.expected_profit},
+            {"cost_vector", json::object{
+                {"fee", authoritative_fee}, {"slippage", 0.0}, {"unwind_loss", 0.0},
+                {"capital_cost", 0.0}, {"latency_cost", 0.0},
+                {"adverse_markout", 0.0}, {"rebate", 0.0},
+            }},
+            {"cost_authority", json::object{
+                {"fee", "AUTHORITATIVE"}, {"slippage", "CONSERVATIVE_ZERO"},
+                {"unwind_loss", "CONSERVATIVE_ZERO"}, {"capital_cost", "CONSERVATIVE_ZERO"},
+                {"latency_cost", "CONSERVATIVE_ZERO"},
+                {"adverse_markout", "CONSERVATIVE_ZERO"}, {"rebate", "CONSERVATIVE_ZERO"},
+            }},
+            {"uncertainty", json::object{
+                {"lower_bound", -1.0}, {"upper_bound", 1.0}, {"status", "MISSING"},
+            }},
+            {"calibration_status", "MISSING"},
+            {"latency", json::object{
+                {"profile_id", "missing-economic-latency-profile"},
+                {"profile_valid", false}, {"economic_percentile", "p99"},
+                {"arrival_ns", std::max<std::int64_t>(
+                    0, (opportunity.decision_ts_ms - opportunity.received_ts_ms) * 1'000'000LL)},
+            }},
+            {"capacity", json::object{
+                {"executable_size", opportunity.executable_shares},
+                {"depth_provenance", "full-l2:" + opportunity.id},
+            }},
+            {"execution_plan", json::object{
+                {"atomic_unit_id", "structural:" + opportunity.id + ":" +
+                                       std::to_string(opportunity.decision_ts_ms)},
+                {"execution_style", "SEQUENTIAL_ATOMIC_INTENT"},
+                {"legs", std::move(legs)},
+                {"partial_fill_plan", "COMPLETE_OR_UNWIND"},
+                {"timeout_ms", 0},
+                {"unwind_plan", "FULL_DEPTH_BOUNDED_UNWIND"},
+            }},
+            {"inventory_delta", 0.0},
+            {"portfolio_exposure_delta", 0.0},
+            {"settlement", json::object{
+                {"definition", "structural payoff floor observed; terminal rule binding unavailable"},
+                {"source", "FAST_STRUCTURAL_CPP_PUBLIC_DATA"}, {"verified", false},
+            }},
+            {"eligible", true},
+            {"reasons", json::array{
+                "ECONOMIC_EVIDENCE_MISSING", "SETTLEMENT_BINDING_UNVERIFIED",
+                "NEW_RISK_DISABLED",
+            }},
+            {"deterministic_replay_key", "structural:" + opportunity.id + ":" +
+                                             std::to_string(opportunity.decision_ts_ms)},
+            {"expires_at_ns", decision_ns + 1'000'000'000LL},
         };
-        if (!opportunity.event_id.empty()) event["event_id"] = opportunity.event_id;
-        const fs::path target = fs::path(options_.run_root) / "ledger" / "spool" /
+        const fs::path target = fs::path(options_.run_root) / "opportunities" / "inbox" /
             (std::to_string(recorded) + "." + record_id + ".json");
-        atomic_write(target, json::serialize(event) + "\n");
-        ++candidates_spooled_;
+        atomic_write(target, json::serialize(envelope) + "\n");
+        ++opportunities_published_;
     }
 
     void ensure_logs() {
@@ -835,7 +917,7 @@ private:
                 if (pending_candidates_.size() < kMaxPendingCandidates) {
                     pending_candidates_.push_back(opportunity);
                 } else {
-                    ++candidates_dropped_;
+                    ++opportunities_dropped_;
                 }
             }
         }

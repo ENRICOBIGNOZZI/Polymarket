@@ -291,7 +291,7 @@ def collect_snapshot(run_root: Path, repository_root: Path | None = None, *, now
     evidence_allocator = _json(run_root / "control" / "evidence_capital_allocator.json")
     fee_reward_registry = _json(run_root / "control" / "fee_reward_registry.json")
     graph = _json(run_root / "graph_rv" / "status.json")
-    fast = _json(run_root / "fast_structural" / "paper_executor_status.json")
+    fast = _json(run_root / "fast_structural" / "fast_arb_status.json")
     graph_scan = _json(run_root / "graph_rv" / "scan_status.json")
     hard = _json(run_root / "hard_arb" / "status.json")
     micro = _json(run_root / "micro_taker" / "status.json")
@@ -340,7 +340,7 @@ def collect_snapshot(run_root: Path, repository_root: Path | None = None, *, now
         portfolio=portfolio,
         allocations=allocations,
         state_realized_pnl={
-            "FAST_STRUCTURAL": fast.get("realized_pnl_total") if fast else None,
+            "FAST_STRUCTURAL": None,
             "GRAPH_RV": graph.get("realized_pnl_total") if graph else None,
             "HARD_ARB": hard.get("realized_pnl_total") if hard else None,
             "MICRO_TAKER": micro.get("realized_pnl_total") if micro else None,
@@ -360,12 +360,12 @@ def collect_snapshot(run_root: Path, repository_root: Path | None = None, *, now
         strategies.setdefault("graph_rv", {}).update({"equity": _number(graph.get("equity")), "pnl": _number(graph.get("realized_pnl_total")), "net_pnl": _number(graph.get("realized_pnl_total")), "killed": bool(graph.get("killed", False)), "signals": _integer(graph_scan.get("bundles")), "paper_eligible": False})
     if fast:
         strategies.setdefault("fast_structural", {}).update({
-            "equity": _number(fast.get("equity")),
-            "pnl": _number(fast.get("realized_pnl_total")),
-            "net_pnl": _number(fast.get("realized_pnl_total")),
-            "killed": bool(fast.get("killed", False)),
-            "signals": _integer(fast.get("candidates_seen")),
-            "live_units": _integer(fast.get("open_bundles")) + _integer(fast.get("aborting_bundles")),
+            "pnl": 0.0,
+            "net_pnl": 0.0,
+            "killed": fast.get("state") != "RUNNING",
+            "signals": _integer(fast.get("canonical_opportunities_published")),
+            "live_units": 0,
+            "paper_eligible": False,
         })
     if hard:
         strategies.setdefault("hard_arb", {}).update({"equity": _number(hard.get("equity_cost_basis"), _number(hard.get("cash"))), "pnl": _number(hard.get("realized_pnl_total")), "killed": bool(hard.get("killed", False)), "signals": _integer(hard.get("candidates"))})
@@ -527,18 +527,20 @@ def health_reasons(snapshot: dict[str, Any], *, max_runtime_age: int = 180, max_
     try: fast_age = int(snapshot.get("timestamp") or 0) - int(fast.get("timestamp") or 0)
     except (TypeError, ValueError, OverflowError): fast_age = max_runtime_age + 1
     if (
-        fast.get("schema") != "polymarket_v7_fast_structural_paper_executor_v1"
+        fast.get("schema") != "polymarket_v7_structural_arb_engine_status_v1"
         or fast.get("model_sha") != snapshot.get("sha")
         or fast.get("paper_only") is not True
         or fast.get("authenticated_execution") is not False
         or fast.get("real_order_submission") is not False
-        or fast.get("shadow_only") is not True
-        or fast.get("execution_authority") != "SHADOW_ZERO_AUTHORITY"
+        or fast.get("real_capital_at_risk") is not False
+        or fast.get("execution_authority") != "OPPORTUNITY_PROPOSAL_ONLY"
         or fast.get("capital_authority") is not False
+        or fast.get("oms_authority") is not False
+        or fast.get("inventory_authority") is not False
         or fast.get("ledger_writer_authority") is not False
         or fast.get("state") != "RUNNING"
         or fast_age < -5 or fast_age > max_runtime_age
-    ): reasons.append("fast_structural_executor_missing_stale_or_unsafe")
+    ): reasons.append("structural_arb_engine_missing_stale_or_unsafe")
     try: maker_age_ms = int(snapshot.get("timestamp") or 0) * 1000 - int(maker.get("timestamp_ms") or 0)
     except (TypeError, ValueError, OverflowError): maker_age_ms = (max_runtime_age + 1) * 1000
     if (

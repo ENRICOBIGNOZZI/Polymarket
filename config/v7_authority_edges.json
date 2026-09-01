@@ -52,15 +52,6 @@
       "canonical_replacement": "V7_OPERATOR_EXACT_SHA_PROMOTION"
     },
     {
-      "source": "src/fast_runtime/part3.inc",
-      "classification": "MERGE_INTO_CANONICAL",
-      "runtime_reachability": "CANONICAL_LAUNCHER_COMPONENT",
-      "authority_mode": "DIRECT_EXECUTABLE_CANDIDATE_TO_LEDGER_SPOOL",
-      "severity": "P0_BYPASS",
-      "reason": "structural detector publishes executable candidates directly to the ledger transport instead of the opportunity coordinator",
-      "canonical_replacement": "STRUCTURAL_ARB_ENGINE_TO_V7_GLOBAL_PORTFOLIO_COORDINATOR"
-    },
-    {
       "source": "src/v7_maker_markout_observer.cpp",
       "classification": "MERGE_INTO_CANONICAL",
       "runtime_reachability": "CANONICAL_LAUNCHER_COMPONENT",
