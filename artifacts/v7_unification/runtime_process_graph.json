@@ -1,0 +1,50 @@
+{
+  "schema": "polymarket_v7_runtime_process_graph_v1",
+  "observed_at": "2026-09-01T09:12:46Z",
+  "source_head_sha": "124d077394d1625f0e9ca11ef2caf405eb0b8d54",
+  "static_entrypoints": [
+    {
+      "id": "v7_runtime_supervisor",
+      "path": "ops/v7_runtime_supervisor.py",
+      "owner_class": "CANONICAL_RUNTIME_IDENTITY",
+      "authority": ["restart", "liveness"],
+      "economic_authority": false
+    },
+    {
+      "id": "paper_v7_execution_loop",
+      "path": "scripts/paper_v7_execution_loop.sh",
+      "owner_class": "CANONICAL_EXECUTION_RUNTIME",
+      "authority": ["process_launch", "runtime_status"],
+      "economic_authority": true
+    },
+    {
+      "id": "update_server_v7",
+      "path": "ops/update_server_v7.sh",
+      "owner_class": "EXACT_SHA_CUTOVER",
+      "authority": ["drain", "archive", "promote", "rollback"],
+      "economic_authority": false
+    },
+    {
+      "id": "monitoring_exporter",
+      "path": "monitoring/exporter_v7.py",
+      "owner_class": "ZERO_AUTHORITY_OBSERVER",
+      "authority": [],
+      "economic_authority": false
+    }
+  ],
+  "fault_isolation": {
+    "multiple_processes_allowed": true,
+    "multiple_economic_authorities_allowed": false,
+    "research_may_control_execution_core": false
+  },
+  "live_runtime_inspection": {
+    "state": "EXTERNAL_BLOCKER",
+    "reason": "PAPER-host SSH authentication failed before command execution",
+    "process_identities_verified": false,
+    "active_writer_counts_verified": false,
+    "open_orders_verified": false,
+    "paper_positions_verified": false
+  },
+  "next_proof": "replace launcher-encoded catalogue with a complete declarative process manifest, then compare it to the running PAPER host",
+  "secret_values_recorded": false
+}

@@ -1,0 +1,16 @@
+{
+  "schema": "polymarket_v7_unification_rollback_manifest_v1",
+  "created_at": "2026-09-01T09:12:46Z",
+  "baseline_sha": "8d9e8e603aae4d73842212eedcf8e0e06383127f",
+  "annotated_tag": "v7-unification-pre-migration-8d9e8e60",
+  "tag_target_sha": "8d9e8e603aae4d73842212eedcf8e0e06383127f",
+  "remote_tag_created": true,
+  "offline_bundle": {
+    "location_class": "owner-local-outside-repository",
+    "path_hint": "polymarket-backups/v7-unification-8d9e8e60/polymarket-all-refs.bundle",
+    "sha256": "6b1fe45289cbb0c14aff6e31960851d197e87f6fe0534d56518f73f9509e6eee",
+    "git_bundle_verify": "PASS",
+    "contains_all_refs": true
+  },
+  "secret_values_recorded": false
+}

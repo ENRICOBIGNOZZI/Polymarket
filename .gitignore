@@ -24,6 +24,8 @@ run/
 artifacts/
 !artifacts/
 artifacts/*
+!artifacts/v7_unification/
+!artifacts/v7_unification/**
 !artifacts/github_main_ruleset.json
 !artifacts/v7_repository_convergence_audit.json
 !artifacts/v7_economic_loop_baseline.json

@@ -1,0 +1,59 @@
+{
+  "schema": "polymarket_v7_authority_graph_v1",
+  "observed_at": "2026-09-01T09:12:46Z",
+  "baseline_sha": "8d9e8e603aae4d73842212eedcf8e0e06383127f",
+  "source_head_sha": "124d077394d1625f0e9ca11ef2caf405eb0b8d54",
+  "target_chain": [
+    "BTC_SETTLEMENT_ENGINE|STRUCTURAL_ARB_ENGINE",
+    "V7_GLOBAL_PORTFOLIO_COORDINATOR",
+    "V7_CANONICAL_ALLOCATOR",
+    "V7_CANONICAL_RISK",
+    "V7_CANONICAL_OMS",
+    "V7_CANONICAL_INVENTORY",
+    "V7_CANONICAL_LEDGER"
+  ],
+  "declared_authorities": {
+    "global_portfolio_coordinator": [],
+    "capital": ["crypto_settlement_fair", "hard_arb"],
+    "risk": ["scripts/v7_portfolio_guard.py"],
+    "oms": ["V7_CANONICAL_OMS"],
+    "inventory": ["V7_CANONICAL_INVENTORY"],
+    "ledger": ["V7_CANONICAL_LEDGER"],
+    "runtime_identity": ["scripts/paper_v7_execution_loop.sh", "ops/update_server_v7.sh"],
+    "promotion": ["operator_approved_exact_main_sha"]
+  },
+  "economic_engines": {
+    "BTC_SETTLEMENT_ENGINE": {
+      "components": ["crypto_settlement_fair", "crypto_informed_taker", "professional_maker"],
+      "declared_owner": "crypto_settlement_fair",
+      "target_owner": "BTC_SETTLEMENT_ENGINE"
+    },
+    "STRUCTURAL_ARB_ENGINE": {
+      "components": ["hard_arb", "fast_structural"],
+      "declared_owner": "hard_arb",
+      "target_owner": "STRUCTURAL_ARB_ENGINE"
+    }
+  },
+  "research_zero_authority": [
+    "micro_taker",
+    "graph_rv",
+    "ranking",
+    "pca",
+    "local_factor",
+    "wallet_intelligence",
+    "market_open",
+    "osint",
+    "sports_latency",
+    "cross_platform"
+  ],
+  "baseline_gate": {
+    "passed": false,
+    "unexplained_edges": [
+      "no explicit global portfolio coordinator owner",
+      "capital authority is declared per component family",
+      "engine authority is assigned to internal component families",
+      "runtime identity is split between launcher and deploy script without a single typed owner declaration"
+    ]
+  },
+  "secret_values_recorded": false
+}

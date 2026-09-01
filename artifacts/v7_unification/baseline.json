@@ -1,0 +1,83 @@
+{
+  "schema": "polymarket_v7_unification_baseline_v1",
+  "observed_at": "2026-09-01T09:12:46Z",
+  "repository": "ENRICOBIGNOZZI/Polymarket",
+  "migration_branch": "codex/v7-unified-system-legacy-eradication",
+  "baseline_main_sha": "8d9e8e603aae4d73842212eedcf8e0e06383127f",
+  "starting_head_sha": "124d077394d1625f0e9ca11ef2caf405eb0b8d54",
+  "starting_head_delta": {
+    "ahead_of_main": 4,
+    "behind_main": 0,
+    "content_scope": "unification directive and execution wrappers"
+  },
+  "worktree_clean_at_capture": true,
+  "remote_refs": {
+    "origin/main": "8d9e8e603aae4d73842212eedcf8e0e06383127f",
+    "origin/codex/v7-maker-ttl": "81a2ccda12ce739c91809918db59cd91f5d1628b",
+    "origin/codex/v7-market-ws-envelope": "44ade061eb39389e440cc4aa337f9bfe64780d31",
+    "origin/codex/v7-unified-system-legacy-eradication": "124d077394d1625f0e9ca11ef2caf405eb0b8d54"
+  },
+  "ci": {
+    "main_run_id": 33487840696,
+    "main_run_url": "https://github.com/ENRICOBIGNOZZI/Polymarket/actions/runs/33487840696",
+    "head_sha": "8d9e8e603aae4d73842212eedcf8e0e06383127f",
+    "aggregate_conclusion": "failure",
+    "jobs": {
+      "ci-v7-Debug": "success",
+      "ci-v7-Release": "success",
+      "sanitizer-v7": "success",
+      "security-audit-v7": "failure",
+      "monitoring-v7": "success",
+      "single-writer-v7": "success",
+      "branch-hygiene-v7": "success"
+    },
+    "failure_reason": "one redacted historical assigned_secret finding",
+    "secret_value_recorded": false
+  },
+  "paper_validation": {
+    "run_id": 33488098916,
+    "run_url": "https://github.com/ENRICOBIGNOZZI/Polymarket/actions/runs/33488098916",
+    "conclusion": "success",
+    "substantive_validation_ran": false,
+    "substantive_steps_skipped": true,
+    "discrepancy": "prerequisite-blocked validation was represented as workflow success"
+  },
+  "github_governance": {
+    "main_protection_query": "UNAVAILABLE_HTTP_401",
+    "authenticated_admin_client_available": false,
+    "ruleset_application_state": "EXTERNAL_BLOCKER"
+  },
+  "runtime": {
+    "paper_host": "100.104.183.109",
+    "inspection_state": "EXTERNAL_BLOCKER",
+    "evidence": "SSH authentication failed before any command ran",
+    "credentials_or_values_recorded": false,
+    "minimum_external_action": "provide the existing read-only PAPER-host SSH path or run the redacted runtime audit on the host"
+  },
+  "checked_in_safety": {
+    "paper_only": true,
+    "authenticated_execution": false,
+    "real_order_submission": false,
+    "real_capital_at_risk": false,
+    "automatic_promotion": false
+  },
+  "known_discrepancies": [
+    "paper_v7 uses component-family capital fractions instead of two engine envelopes",
+    "paper_v7 names crypto_settlement_fair and hard_arb as capital authority owners",
+    "strategy registry names component families as engine authority owners",
+    "operator directives describe maker and structural components as primary/secondary sleeves",
+    "paper launcher emits component-family authority names in runtime status",
+    "historical pattern secret scan is red",
+    "substantive PAPER validation is skipped-success",
+    "main protection cannot be verified or applied without a repository-owner API credential"
+  ],
+  "commands": [
+    "git fetch --all --tags --prune",
+    "git status --short --branch",
+    "git rev-parse HEAD origin/main",
+    "python3 scripts/v7_secret_scan.py --repository-root . --history --fail-on-findings",
+    "python3 scripts/v7_entropy_secret_scan.py --repository-root . --history --fail-on-findings",
+    "GitHub public repository/actions API queries",
+    "read-only PAPER-host SSH probe"
+  ]
+}
