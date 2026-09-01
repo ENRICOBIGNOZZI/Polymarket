@@ -871,7 +871,8 @@
       "freshness_slo_seconds": 120,
       "id": "economic_evidence_loop",
       "inputs": [
-        "ledger/execution.jsonl"
+        "ledger/execution.jsonl",
+        "config/v7_economic_readiness.json"
       ],
       "launcher_log": "evidence_capital_allocator.log",
       "liveness_slo_seconds": 30,

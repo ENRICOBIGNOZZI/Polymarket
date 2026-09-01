@@ -30,35 +30,36 @@ def metadata(family: str, horizon: int, **extra):
     return value
 
 
-def order(*, strategy: str, order_id: str, leg_id: str, bundle_id: str | None = None, family: str = "maker_complete_set", horizon: int = 45, required=None, size: float = 1.0, event_id: str = "event-1"):
+def order(*, strategy: str, order_id: str, leg_id: str, bundle_id: str | None = None, family: str = "maker_complete_set", horizon: int = 45, required=None, size: float = 1.0, event_id: str = "event-1", market_id: str | None = None, extra_metadata: dict | None = None):
     now = clock()
     md = metadata(family, horizon)
     if required is not None:
         md["joint_target_legs"] = required
+    md.update(extra_metadata or {})
     return ledger.LedgerEvent(
         event_type="ORDER_SUBMITTED", strategy=strategy, model_sha=SHA, bundle_id=bundle_id,
-        order_id=order_id, leg_id=leg_id, token_id=leg_id, event_id=event_id,
+        order_id=order_id, leg_id=leg_id, token_id=leg_id, event_id=event_id, market_id=market_id,
         exchange_ts_ms=now, receive_ts_ms=now + 1, decision_ts_ms=now + 2,
         book_snapshot_id=f"book-{order_id}", intended_action="POST_ONLY_BUY", intended_size=size,
         side="BUY", limit_price=0.49, metadata=md,
     )
 
 
-def fill(*, strategy: str, order_id: str, fill_id: str, leg_id: str, bundle_id: str | None = None, family: str = "maker_complete_set", horizon: int = 45, size: float = 1.0, fee: float = 0.0, price: float = 0.49, event_id: str = "event-1"):
+def fill(*, strategy: str, order_id: str, fill_id: str, leg_id: str, bundle_id: str | None = None, family: str = "maker_complete_set", horizon: int = 45, size: float = 1.0, fee: float = 0.0, price: float = 0.49, event_id: str = "event-1", market_id: str | None = None, extra_metadata: dict | None = None):
     now = clock()
     return ledger.LedgerEvent(
         event_type="FILL", strategy=strategy, model_sha=SHA, bundle_id=bundle_id,
-        order_id=order_id, fill_id=fill_id, leg_id=leg_id, token_id=leg_id, event_id=event_id,
+        order_id=order_id, fill_id=fill_id, leg_id=leg_id, token_id=leg_id, event_id=event_id, market_id=market_id,
         exchange_ts_ms=now, receive_ts_ms=now + 1, side="BUY", fill_price=price,
-        filled_size=size, fee=fee, fee_source="market:fee_schedule", metadata=metadata(family, horizon),
+        filled_size=size, fee=fee, fee_source="market:fee_schedule", metadata=metadata(family, horizon, **(extra_metadata or {})),
     )
 
 
-def final(*, strategy: str, order_id: str | None = None, bundle_id: str | None = None, family: str = "maker_complete_set", horizon: int = 45, pnl: float = 1.0, slippage: float | None = 0.0, unwind: float | None = 0.0, capital: float | None = 0.0, latency: float | None = 0.0, cost_complete: bool = True, unwind_accounted: bool = True, event_id: str = "event-1"):
-    md = metadata(family, horizon, realized=True, cost_vector_complete=cost_complete, unwind_accounted=unwind_accounted)
+def final(*, strategy: str, order_id: str | None = None, bundle_id: str | None = None, family: str = "maker_complete_set", horizon: int = 45, pnl: float = 1.0, slippage: float | None = 0.0, unwind: float | None = 0.0, capital: float | None = 0.0, latency: float | None = 0.0, cost_complete: bool = True, unwind_accounted: bool = True, event_id: str = "event-1", market_id: str | None = None, extra_metadata: dict | None = None):
+    md = metadata(family, horizon, realized=True, cost_vector_complete=cost_complete, unwind_accounted=unwind_accounted, **(extra_metadata or {}))
     return ledger.LedgerEvent(
         event_type="FINAL", strategy=strategy, model_sha=SHA, bundle_id=bundle_id,
-        order_id=order_id, event_id=event_id, final_pnl=pnl, slippage=slippage,
+        order_id=order_id, event_id=event_id, market_id=market_id, final_pnl=pnl, slippage=slippage,
         unwind_loss=unwind, capital_cost=capital, latency_cost=latency,
         capital_duration_ms=3_600_000, metadata=md,
     )
@@ -71,6 +72,56 @@ def write_events(path: Path, events) -> None:
 
 
 class CanonicalEconomicsTest(unittest.TestCase):
+    def test_engine_action_attribution_requires_complete_provenance_dimensions(self) -> None:
+        evidence = {
+            "engine_id": "BTC_SETTLEMENT_ENGINE",
+            "component_provenance": ["professional_maker"],
+            "latency_regime": "p99_under_slo",
+            "fill_path": "maker_reach_then_fill",
+            "source_health_regime": "all_sources_healthy",
+            "conditional_calibration_stable": True,
+            "rebate_authority": "CONSERVATIVE_ZERO",
+            "executable_capacity_usd": 25.0,
+            "settlement_labeled_days": 30,
+            "settlement_labeled_contracts": 2500,
+            "forward_oos_policy_trades": 300,
+            "minimum_conditional_calibration_bin_count": 40,
+            "uncertainty_upper": 0.01,
+            "claimed_edge_lower": 0.02,
+        }
+        order_event = order(
+            strategy="MICRO_MAKER_PRO", order_id="maker-order", leg_id="YES",
+            family="CRYPTO_SETTLEMENT_FAIR", horizon=300, event_id="event-maker",
+            market_id="market-1", extra_metadata=evidence,
+        )
+        fill_event = fill(
+            strategy="MICRO_MAKER_PRO", order_id="maker-order", fill_id="maker-fill",
+            leg_id="YES", family="CRYPTO_SETTLEMENT_FAIR", horizon=300,
+            fee=0.01, event_id="event-maker", market_id="market-1",
+            extra_metadata=evidence,
+        )
+        final_event = final(
+            strategy="MICRO_MAKER_PRO", order_id="maker-order",
+            family="CRYPTO_SETTLEMENT_FAIR", horizon=300,
+            pnl=0.20, event_id="event-maker", market_id="market-1",
+            extra_metadata=evidence,
+        )
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "execution.jsonl"
+            write_events(path, [order_event, fill_event, final_event])
+            report = econ.assess(path, expected_model_sha=SHA)
+        self.assertEqual(report["engine_mature_terminal_units"], {"BTC_SETTLEMENT_ENGINE": 1})
+        dimensions = report["engine_evidence_dimensions"]["BTC_SETTLEMENT_ENGINE"]
+        self.assertEqual(dimensions["applicable_action_classes"], ["MAKE"])
+        self.assertTrue(dimensions["action_classes"]["MAKE"]["complete_cost_vector"])
+        self.assertEqual(len(report["economic_attribution"]), 1)
+        row = report["economic_attribution"][0]
+        self.assertEqual(
+            (row["engine"], row["action"], row["component_provenance"], row["market"]),
+            ("BTC_SETTLEMENT_ENGINE", "MAKE", "professional_maker", "market-1"),
+        )
+        self.assertTrue(report["attribution_uses_single_canonical_ledger"])
+
     def test_inventory_merge_does_not_manufacture_a_market_fill(self) -> None:
         events = [
             ledger.LedgerEvent(

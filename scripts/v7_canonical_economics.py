@@ -46,6 +46,15 @@ MARKOUT_HORIZONS_SECONDS = (1, 5, 10, 15, 30, 45, 60, 300)
 MIN_EVENT_CLUSTERS_FOR_PROMOTION = 12
 CHRONOLOGICAL_EVENT_FOLDS = 4
 MIN_POSITIVE_EVENT_FOLD_FRACTION = 0.60
+ENGINE_STRATEGIES = {
+    "BTC_SETTLEMENT_ENGINE": {
+        "BTC_SETTLEMENT_ENGINE", "MICRO_MAKER", "MICRO_MAKER_PRO",
+        "EXTERNAL_FAIR", "CRYPTO_SETTLEMENT_FAIR", "CRYPTO_INFORMED_TAKER",
+    },
+    "STRUCTURAL_ARB_ENGINE": {
+        "STRUCTURAL_ARB_ENGINE", "FAST_STRUCTURAL", "HARD_ARB",
+    },
+}
 
 
 class EconomicsContractError(ValueError):
@@ -187,6 +196,16 @@ class UnitState:
     economic_authorities: set[str] = field(default_factory=set)
     counterfactual: bool = False
     internal_inventory_transform: bool = False
+    engine_ids: set[str] = field(default_factory=set)
+    action_classes: set[str] = field(default_factory=set)
+    component_provenance: set[str] = field(default_factory=set)
+    market_ids: set[str] = field(default_factory=set)
+    latency_regimes: set[str] = field(default_factory=set)
+    fill_paths: set[str] = field(default_factory=set)
+    source_health_regimes: set[str] = field(default_factory=set)
+    calibration_stable_observations: list[bool] = field(default_factory=list)
+    settlement_model_evidence: dict[str, float] = field(default_factory=dict)
+    rebate_authority_complete: bool = False
 
     def observe_identity(self, event: Any) -> None:
         metadata = event.metadata if isinstance(event.metadata, dict) else {}
@@ -205,6 +224,58 @@ class UnitState:
             self.reasons.add("strategy_mismatch")
         elif strategy:
             self.strategy = strategy
+        engine = _text(metadata.get("engine_id") or metadata.get("decision_owner"))
+        if engine:
+            self.engine_ids.add(engine)
+        else:
+            normalized_strategy = strategy.upper()
+            for engine_id, strategies in ENGINE_STRATEGIES.items():
+                if normalized_strategy in strategies:
+                    self.engine_ids.add(engine_id)
+        action = _text(getattr(event, "intended_action", None)).upper()
+        if "MAKER" in action or "POST_ONLY" in action or action == "MAKE":
+            self.action_classes.add("MAKE")
+        elif "TAKER" in action or action == "TAKE":
+            self.action_classes.add("TAKE")
+        elif action == "ARB":
+            self.action_classes.add("ARB")
+        components = metadata.get("component_provenance")
+        if isinstance(components, list):
+            self.component_provenance.update(
+                _text(value) for value in components if _text(value))
+        component = _text(metadata.get("component") or metadata.get("component_id"))
+        if component:
+            self.component_provenance.add(component)
+        elif not self.component_provenance and strategy:
+            self.component_provenance.add(strategy.lower())
+        market_id = _text(getattr(event, "market_id", None))
+        if market_id:
+            self.market_ids.add(market_id)
+        latency_regime = _text(metadata.get("latency_regime"))
+        if latency_regime:
+            self.latency_regimes.add(latency_regime)
+        fill_path = _text(metadata.get("fill_path"))
+        if fill_path:
+            self.fill_paths.add(fill_path)
+        source_health = _text(metadata.get("source_health_regime"))
+        if source_health:
+            self.source_health_regimes.add(source_health)
+        if "conditional_calibration_stable" in metadata:
+            self.calibration_stable_observations.append(
+                metadata.get("conditional_calibration_stable") is True)
+        for key in (
+            "settlement_labeled_days", "settlement_labeled_contracts",
+            "forward_oos_policy_trades", "minimum_conditional_calibration_bin_count",
+            "uncertainty_upper", "claimed_edge_lower",
+        ):
+            value = _finite(metadata.get(key))
+            if value is not None:
+                if key == "claimed_edge_lower":
+                    self.settlement_model_evidence[key] = min(
+                        value, self.settlement_model_evidence.get(key, math.inf))
+                else:
+                    self.settlement_model_evidence[key] = max(
+                        value, self.settlement_model_evidence.get(key, -math.inf))
         horizon = _horizon_seconds(event)
         if horizon is not None:
             if self.horizon_seconds is not None and self.horizon_seconds != horizon:
@@ -233,6 +304,12 @@ class UnitState:
                 self.reasons.add(str(exc))
         self.required_contract_explicit = self.required_contract_explicit or explicit
         self.cost_vector_complete_flag = self.cost_vector_complete_flag or _bool_true(metadata.get("cost_vector_complete"))
+        self.rebate_authority_complete = self.rebate_authority_complete or (
+            metadata.get("rebate_authority") in {
+                "AUTHORITATIVE", "CONSERVATIVE_BOUND", "CONSERVATIVE_ZERO",
+            }
+            or metadata.get("rebate_not_applicable") is True
+        )
         for key in (
             "executable_capacity_usd", "capacity_at_decision_usd",
             "market_capacity_usd", "capacity_usd",
@@ -578,6 +655,7 @@ def assess(ledger_path: Path, *, expected_model_sha: str, family: str | None = N
         lambda: defaultdict(float)
     )
     strategy_capacity_observations: dict[str, list[float]] = defaultdict(list)
+    engine_units: dict[str, list[tuple[UnitState, float]]] = defaultdict(list)
     for unit, pnl in event_mature:
         strategy_net_pnl[unit.strategy] += pnl
         strategy_mature_terminal_units[unit.strategy] += 1
@@ -588,6 +666,8 @@ def assess(ledger_path: Path, *, expected_model_sha: str, family: str | None = N
         )
         strategy_capacity_observations[unit.strategy].extend(
             unit.capacity_observations_usd)
+        if len(unit.engine_ids) == 1:
+            engine_units[next(iter(unit.engine_ids))].append((unit, pnl))
         for multiplier in STRESS_MULTIPLIERS:
             strategy_stressed_net_pnl[unit.strategy][f"{multiplier:g}x"] += _stress_pnl(
                 pnl, unit.baseline_cost(), multiplier,
@@ -604,6 +684,144 @@ def assess(ledger_path: Path, *, expected_model_sha: str, family: str | None = N
         strategy: min(values)
         for strategy, values in strategy_capacity_observations.items() if values
     }
+    engine_mature_terminal_units: dict[str, int] = {}
+    engine_complete_cost_terminal_units: dict[str, int] = {}
+    engine_stressed_net_pnl: dict[str, dict[str, float]] = {}
+    engine_capital_hours: dict[str, float] = {}
+    engine_day_stressed_net_pnl: dict[str, dict[str, float]] = {}
+    engine_capacity_usd: dict[str, float] = {}
+    engine_drawdown_usd: dict[str, float] = {}
+    engine_evidence_dimensions: dict[str, dict[str, Any]] = {}
+    engine_settlement_model_evidence: dict[str, dict[str, float]] = {}
+    attribution_groups: dict[tuple[str, str, str, str, str, str, str], dict[str, Any]] = {}
+    for engine_id, rows in sorted(engine_units.items()):
+        engine_mature_terminal_units[engine_id] = len(rows)
+        engine_complete_cost_terminal_units[engine_id] = sum(
+            unit.cost_vector_verifiable() and unit.rebate_authority_complete
+            for unit, _ in rows)
+        engine_stressed_net_pnl[engine_id] = {
+            f"{multiplier:g}x": sum(
+                _stress_pnl(pnl, unit.baseline_cost(), multiplier)
+                for unit, pnl in rows
+            )
+            for multiplier in STRESS_MULTIPLIERS
+        }
+        engine_capital_hours[engine_id] = sum(
+            unit.capital_duration_ms for unit, _ in rows) / 3_600_000.0
+        daily: dict[str, float] = defaultdict(float)
+        capacities: list[float] = []
+        for unit, pnl in rows:
+            daily[str(unit.latest_recorded_ts_ms // 86_400_000)] += _stress_pnl(
+                pnl, unit.baseline_cost(), 2.0)
+            capacities.extend(unit.capacity_observations_usd)
+        engine_day_stressed_net_pnl[engine_id] = dict(sorted(
+            daily.items(), key=lambda item: int(item[0])))
+        if capacities:
+            engine_capacity_usd[engine_id] = min(capacities)
+        cumulative = peak = drawdown = 0.0
+        for value in engine_day_stressed_net_pnl[engine_id].values():
+            cumulative += value
+            peak = max(peak, cumulative)
+            drawdown = max(drawdown, peak - cumulative)
+        engine_drawdown_usd[engine_id] = drawdown
+        action_units: dict[str, list[tuple[UnitState, float]]] = defaultdict(list)
+        for unit, pnl in rows:
+            if len(unit.action_classes) == 1:
+                action_units[next(iter(unit.action_classes))].append((unit, pnl))
+        action_rows: dict[str, dict[str, Any]] = {}
+        for action, action_evidence in sorted(action_units.items()):
+            action_capacities = [
+                value for unit, _ in action_evidence
+                for value in unit.capacity_observations_usd
+            ]
+            action_daily: dict[str, float] = defaultdict(float)
+            for unit, pnl in action_evidence:
+                action_daily[str(unit.latest_recorded_ts_ms // 86_400_000)] += _stress_pnl(
+                    pnl, unit.baseline_cost(), 2.0)
+            action_confidence = [value for value in action_daily.values()]
+            action_rows[action] = {
+                "mature_terminal_units": len(action_evidence),
+                "complete_cost_vector": all(
+                    unit.cost_vector_verifiable() and unit.rebate_authority_complete
+                    for unit, _ in action_evidence),
+                "capital_hours": sum(
+                    unit.capital_duration_ms for unit, _ in action_evidence) / 3_600_000.0,
+                "capacity_usd": min(action_capacities) if action_capacities else None,
+                "drawdown_observed": bool(action_daily),
+                "positive_day_block_lcb": bool(
+                    len(action_confidence) >= 30 and min(action_confidence) > 0.0),
+                "positive_2x_full_cost_pnl": sum(action_confidence) > 0.0,
+                "conditional_calibration_stable": bool(action_evidence) and all(
+                    unit.calibration_stable_observations
+                    and all(unit.calibration_stable_observations)
+                    for unit, _ in action_evidence),
+                "regime_stratified": all(
+                    unit.latency_regimes for unit, _ in action_evidence),
+                "source_health_stratified": all(
+                    unit.source_health_regimes for unit, _ in action_evidence),
+            }
+        attribution_complete = bool(rows) and all(
+            len(unit.engine_ids) == 1 and len(unit.action_classes) == 1
+            and unit.component_provenance and unit.market_ids
+            and unit.horizon_seconds is not None and unit.latency_regimes
+            and unit.fill_paths
+            for unit, _ in rows
+        )
+        engine_evidence_dimensions[engine_id] = {
+            "complete_cost_terminal_units": engine_complete_cost_terminal_units[engine_id],
+            "conditional_calibration_stable": bool(rows) and all(
+                unit.calibration_stable_observations
+                and all(unit.calibration_stable_observations) for unit, _ in rows),
+            "conditional_calibration_count": sum(
+                len(unit.calibration_stable_observations) for unit, _ in rows),
+            "regime_stratification_complete": bool(rows) and all(
+                unit.latency_regimes for unit, _ in rows),
+            "source_health_stratification_complete": bool(rows) and all(
+                unit.source_health_regimes for unit, _ in rows),
+            "attribution_dimensions": [
+                "engine", "action", "component_provenance", "market", "horizon",
+                "latency_regime", "fill_path", "cost_component",
+            ] if attribution_complete else [],
+            "applicable_action_classes": sorted(action_rows),
+            "action_classes": action_rows,
+        }
+        settlement_rows = [
+            unit.settlement_model_evidence for unit, _ in rows
+            if unit.settlement_model_evidence
+        ]
+        if settlement_rows:
+            keys = set().union(*(row.keys() for row in settlement_rows))
+            engine_settlement_model_evidence[engine_id] = {
+                key: (
+                    min(row[key] for row in settlement_rows if key in row)
+                    if key == "claimed_edge_lower"
+                    else max(row[key] for row in settlement_rows if key in row)
+                ) for key in keys
+            }
+        for unit, pnl in rows:
+            if not attribution_complete:
+                continue
+            action = next(iter(unit.action_classes))
+            for component in sorted(unit.component_provenance):
+                for market in sorted(unit.market_ids):
+                    for latency_regime in sorted(unit.latency_regimes):
+                        for fill_path in sorted(unit.fill_paths):
+                            key = (
+                                engine_id, action, component, market,
+                                str(unit.horizon_seconds), latency_regime, fill_path,
+                            )
+                            group = attribution_groups.setdefault(key, {
+                                "mature_terminal_units": 0, "net_pnl": 0.0,
+                                "cost_components": {
+                                    **{name: 0.0 for name in COST_COMPONENTS},
+                                    "rebate": 0.0,
+                                },
+                            })
+                            group["mature_terminal_units"] += 1
+                            group["net_pnl"] += pnl
+                            for name in COST_COMPONENTS:
+                                group["cost_components"][name] += unit.cost_totals[name]
+                            group["cost_components"]["rebate"] += unit.pnl_components["maker_rebates"]
     pnl_decomposition = {
         component: (
             sum(unit.pnl_components[component] for unit, _ in event_mature)
@@ -704,6 +922,39 @@ def assess(ledger_path: Path, *, expected_model_sha: str, family: str | None = N
         "strategy_capacity_semantics": (
             "MINIMUM_EXPLICIT_EXECUTABLE_CAPACITY_ACROSS_MATURE_TERMINAL_UNITS"
         ),
+        "engine_mature_terminal_units": engine_mature_terminal_units,
+        "engine_complete_cost_terminal_units": engine_complete_cost_terminal_units,
+        "engine_stressed_net_pnl": engine_stressed_net_pnl,
+        "engine_capital_hours": engine_capital_hours,
+        "engine_day_stressed_net_pnl": engine_day_stressed_net_pnl,
+        "engine_capacity_usd": engine_capacity_usd,
+        "engine_drawdown_usd": engine_drawdown_usd,
+        "engine_evidence_dimensions": engine_evidence_dimensions,
+        "engine_settlement_model_evidence": engine_settlement_model_evidence,
+        "economic_attribution": [
+            {
+                "engine": key[0], "action": key[1],
+                "component_provenance": key[2], "market": key[3],
+                "horizon_seconds": int(key[4]), "latency_regime": key[5],
+                "fill_path": key[6], **value,
+            }
+            for key, value in sorted(attribution_groups.items())
+        ],
+        "attribution_uses_single_canonical_ledger": True,
+        "benchmark_policy_comparison": {
+            "policy_observation_cut_frozen": False,
+            "trade_reselection_under_stress": False,
+            "benchmarks": {
+                name: {"causal": False, "observation_count": 0}
+                for name in sorted({
+                    "polymarket_mid_diagnostic", "oracle_only_structural_model",
+                    "external_composite_plus_oracle", "settlement_model",
+                    "settlement_plus_microstructure",
+                    "unified_make_take_nothing_policy",
+                })
+            },
+            "state": "MORE_EVIDENCE_REQUIRED",
+        },
         "pnl_decomposition": {
             **pnl_decomposition,
             "fees": costs_by_component["fee"],

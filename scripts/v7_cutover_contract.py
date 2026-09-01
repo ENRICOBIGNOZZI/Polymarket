@@ -182,6 +182,7 @@ def validate(root: Path, expected_head: str | None) -> dict[str, str]:
         "config/v7_btc_settlement_engine.json",
         "config/v7_research_data_plane.json",
         "config/v7_process_manifest.json",
+        "config/v7_economic_readiness.json",
         "config/v7_authority_registry.json",
         "config/v7_structural_arb_engine.json",
         "config/v7_authority_edges.json",

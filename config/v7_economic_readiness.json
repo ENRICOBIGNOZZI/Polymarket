@@ -1,0 +1,41 @@
+{
+  "schema": "polymarket_v7_economic_readiness_policy_v1",
+  "version": 1,
+  "paper_only": true,
+  "authenticated_execution": false,
+  "real_order_submission": false,
+  "real_capital_at_risk": false,
+  "automatic_capital_transfer": false,
+  "automatic_promotion": false,
+  "technical_readiness_may_be_green_while_economic_readiness_is_red": true,
+  "exploitation": {
+    "minimum_mature_terminal_units": 300,
+    "minimum_day_blocks": 30,
+    "require_complete_fee_slippage_rebate_latency_unwind_capital_costs": true,
+    "require_positive_day_block_lcb95": true,
+    "minimum_full_cost_stress_multiplier": 2.0,
+    "require_positive_stressed_pnl": true,
+    "require_observed_capital_hours": true,
+    "require_observed_executable_capacity": true,
+    "require_observed_drawdown": true,
+    "require_stable_conditional_calibration": true,
+    "require_regime_stratification": true,
+    "require_source_health_stratification": true
+  },
+  "settlement_model_floors": {
+    "minimum_settlement_labeled_days": 30,
+    "minimum_settlement_labeled_contracts": 2500,
+    "minimum_forward_oos_policy_trades": 300,
+    "minimum_conditional_calibration_contracts_per_bin": 30,
+    "uncertainty_must_be_below_claimed_edge": true
+  },
+  "capital": {
+    "exploration_fraction_per_engine_envelope": 0.10,
+    "cash_reserve_fraction_floor": 0.85,
+    "maximum_engine_concentration": 0.25,
+    "maximum_step_fraction_of_current_envelope": 0.25,
+    "manual_promotion_artifact_required": true
+  },
+  "attribution_dimensions": ["engine", "action", "component_provenance", "market", "horizon", "latency_regime", "fill_path", "cost_component"],
+  "causal_benchmarks": ["polymarket_mid_diagnostic", "oracle_only_structural_model", "external_composite_plus_oracle", "settlement_model", "settlement_plus_microstructure", "unified_make_take_nothing_policy"]
+}
