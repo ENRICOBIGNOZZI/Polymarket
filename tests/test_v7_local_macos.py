@@ -22,6 +22,11 @@ class V7LocalMacosContractTest(unittest.TestCase):
         self.assertIn("paper_only", text)
         self.assertIn("authenticated_execution", text)
         self.assertIn("real_order_submission", text)
+        self.assertIn("micro_maker/status.json", text)
+        self.assertIn("SHADOW_ZERO_AUTHORITY", text)
+        self.assertIn("capital_authority", text)
+        self.assertIn("ledger_writer_authority", text)
+        self.assertIn("maker_state_path.is_file()", text)
         self.assertNotIn("ssh ", text)
         self.assertNotIn("scp ", text)
 

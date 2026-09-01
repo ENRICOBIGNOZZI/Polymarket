@@ -87,11 +87,29 @@ assert runtime.get('model_sha') == sha
 assert runtime.get('paper_only') is True
 assert runtime.get('authenticated_execution') is False
 assert runtime.get('real_order_submission') is False
-maker=json.loads((root/'micro_maker/state.json').read_text(encoding='utf-8'))
-assert maker.get('paper_only') is True
-assert maker.get('authenticated_execution') is False
-assert maker.get('real_order_submission') is False
-assert maker.get('model_sha') == sha
+maker_status=json.loads((root/'micro_maker/status.json').read_text(encoding='utf-8'))
+assert maker_status.get('paper_only') is True
+assert maker_status.get('authenticated_execution') is False
+assert maker_status.get('real_order_submission') is False
+assert maker_status.get('model_sha') == sha
+assert maker_status.get('state') == 'RUNNING'
+assert maker_status.get('execution_authority') == 'SHADOW_ZERO_AUTHORITY'
+assert maker_status.get('capital_authority') is False
+assert maker_status.get('ledger_writer_authority') is False
+assert int(maker_status.get('open_orders', -1)) == 0
+assert int(maker_status.get('open_positions', -1)) == 0
+
+# The zero-authority maker is observer-only and intentionally may never create
+# execution state.  If a state file exists, it must still attest PAPER safety;
+# absence is valid because status above proves that no inventory authority or
+# ledger-writing authority exists.
+maker_state_path=root/'micro_maker/state.json'
+if maker_state_path.is_file():
+    maker_state=json.loads(maker_state_path.read_text(encoding='utf-8'))
+    assert maker_state.get('paper_only') is True
+    assert maker_state.get('authenticated_execution') is False
+    assert maker_state.get('real_order_submission') is False
+    assert maker_state.get('model_sha') == sha
 PY
 
 log "Local V7 Maker PAPER runtime is healthy on exact SHA $EXPECTED_SHA"
