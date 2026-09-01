@@ -162,6 +162,12 @@ class V7MarketMakerCppRuntimeContractTest(unittest.TestCase):
             'metadata["exploration_action_propensity"]',
             'metadata["exploration_selection_propensity"]',
             'metadata["exploration_assignment_propensity"]',
+            'common("SHADOW_PROBE")',
+            'metadata["economic_authority"] = "SHADOW_COUNTERFACTUAL"',
+            'metadata["execution_authority"] = "SHADOW_ZERO_AUTHORITY"',
+            'metadata["excluded_from_portfolio_equity"] = true',
+            'write_shadow_probe(record, "ASSIGNED")',
+            'write_shadow_probe(record, "TERMINAL_CANCELLED")',
         ):
             with self.subTest(propensity_token=token):
                 self.assertIn(token, self.source)

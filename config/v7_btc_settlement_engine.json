@@ -1,0 +1,121 @@
+{
+  "schema": "polymarket_v7_btc_settlement_engine_v1",
+  "version": 1,
+  "paper_only": true,
+  "authenticated_execution": false,
+  "real_order_submission": false,
+  "automatic_promotion": false,
+  "decision_owner": "BTC_SETTLEMENT_ENGINE",
+  "shared_owners": {
+    "oms": "V7_CANONICAL_OMS",
+    "inventory": "V7_CANONICAL_INVENTORY",
+    "risk": "V7_CANONICAL_RISK",
+    "capital": "V7_CANONICAL_ALLOCATOR",
+    "ledger": "V7_CANONICAL_LEDGER"
+  },
+  "component_families": [
+    "crypto_settlement_fair",
+    "crypto_informed_taker",
+    "professional_maker"
+  ],
+  "component_independent_authority": false,
+  "action_space": ["MAKE", "TAKE", "CANCEL", "NOTHING"],
+  "alpha_selection": "MAX_CONSERVATIVE_EXPECTED_CHANGE_IN_ACCOUNT_WEALTH",
+  "risk_actions_preempt_alpha": true,
+  "fair_value": {
+    "separate_model_per_horizon": true,
+    "fixed_bridge_coefficient_authorized": false,
+    "empirical_frozen_artifact_required": true,
+    "settlement_source": "CHAINLINK_60_SECOND_TWAP",
+    "settlement_source_may_be_replaced_by_predictor": false,
+    "predictors": [
+      "CHAINLINK_30_SECOND_TWAP",
+      "BTC_USD_SPOT_COMPOSITE",
+      "BTC_USDT_SPOT_COMPOSITE",
+      "USD_USDT_BASIS",
+      "SPOT_L2_OFI",
+      "PERPETUAL_L2_OFI",
+      "SPOT_PERP_BASIS",
+      "LIQUIDATIONS",
+      "OPEN_INTEREST_CHANGE",
+      "DERIBIT_VOLATILITY",
+      "POLYMARKET_MICROSTRUCTURE"
+    ],
+    "direct_chainlink_data_streams_role": "SAME_ORACLE_RECOVERY_CHALLENGER",
+    "direct_chainlink_data_streams_execution_authority": false
+  },
+  "latency": {
+    "artifact_schema": "polymarket_v7_empirical_latency_profile_v1",
+    "configured_constants_are_observations": false,
+    "missing_profile_behavior": "CANCEL_AND_NOTHING_ONLY",
+    "minimum_samples": 100,
+    "required_percentiles": ["p50", "p90", "p95", "p99", "p99.9", "max"],
+    "required_segments": [
+      "taker_arrival",
+      "maker_place_ack",
+      "maker_cancel_ack",
+      "private_ws_confirmation"
+    ],
+    "economic_quantile": "p99"
+  },
+  "maker_economics": {
+    "artifact_schema": "polymarket_v7_maker_execution_evidence_v1",
+    "minimum_orders": 50,
+    "reach_and_fill_are_separate": true,
+    "fill_conditioned_markout_required": true,
+    "rebate_requires_execution": true,
+    "formula": "P_L(reach)*P_L(fill_given_reach)*(capture+rebate_L-markout_U-cancel_latency_risk)-inventory_cost-cancel_cost-capital_cost"
+  },
+  "horizons": [
+    {
+      "id": "BTC_5M",
+      "horizon_seconds": 300,
+      "model_scope": "BTC_USD_UPDOWN_5M",
+      "authority": "SHADOW",
+      "research_only": false,
+      "maker": {"enabled": true, "minimum_tte_seconds": 120, "maximum_tte_seconds": 300},
+      "taker": {"enabled": true, "minimum_tte_seconds": 5, "maximum_tte_seconds": 120},
+      "under_five_seconds": "NO_NEW_RISK"
+    },
+    {
+      "id": "BTC_15M",
+      "horizon_seconds": 900,
+      "model_scope": "BTC_USD_UPDOWN_15M",
+      "authority": "SHADOW",
+      "research_only": false,
+      "maker": {"enabled": true, "minimum_tte_seconds": 30, "maximum_tte_seconds": 900},
+      "taker": {"enabled": true, "minimum_tte_seconds": 5, "maximum_tte_seconds": 120},
+      "under_five_seconds": "NO_NEW_RISK"
+    },
+    {
+      "id": "BTC_4H",
+      "horizon_seconds": 14400,
+      "model_scope": "BTC_USD_UPDOWN_4H",
+      "authority": "RESEARCH",
+      "research_only": true,
+      "maker": {"enabled": false, "minimum_tte_seconds": 0, "maximum_tte_seconds": 0},
+      "taker": {"enabled": false, "minimum_tte_seconds": 0, "maximum_tte_seconds": 0},
+      "under_five_seconds": "NO_NEW_RISK"
+    }
+  ],
+  "structural_arb_engine": {
+    "decision_owner": "STRUCTURAL_ARB_ENGINE",
+    "component_families": ["hard_arb", "fast_structural"],
+    "component_independent_authority": false,
+    "full_depth_required": true,
+    "direct_joint_completion_required": true,
+    "partial_unwind_required": true
+  },
+  "research_zero_authority_families": [
+    "micro_taker",
+    "graph_rv",
+    "ranking",
+    "pca",
+    "local_factor",
+    "wallet_intelligence",
+    "market_open",
+    "osint",
+    "sports_latency",
+    "cross_platform"
+  ]
+}

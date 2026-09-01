@@ -20,6 +20,7 @@ EXTERNAL_SOURCE_REGISTRY="${PM_V7_EXTERNAL_SOURCE_REGISTRY:-config/v7_external_s
 CI_REPOSITORY="${PM_V7_CI_REPOSITORY:-ENRICOBIGNOZZI/Polymarket}"
 OSINT_SOURCE_REGISTRY="${PM_V7_OSINT_SOURCE_REGISTRY:-config/v7_osint_sources.json}"
 LIVE_MODEL_SCOPE="${PM_V7_LIVE_MODEL_SCOPE:-config/v7_live_model_scope.json}"
+BTC_SETTLEMENT_ENGINE_POLICY="${PM_V7_BTC_SETTLEMENT_ENGINE_POLICY:-config/v7_btc_settlement_engine.json}"
 EXTERNAL_INPUT_CONFIG="${PM_V7_EXTERNAL_INPUT_CONFIG:-config/v7_external_inputs.json}"
 EXTERNAL_MAPPING_REGISTRY="${PM_V7_EXTERNAL_MAPPING_REGISTRY:-config/v7_external_mappings.json}"
 ADAPTIVE_UNIVERSE_CONFIG="${PM_V7_ADAPTIVE_UNIVERSE_CONFIG:-config/v7_adaptive_universe.json}"
@@ -123,6 +124,11 @@ assert registry.get("safety",{}).get("authenticated_execution") is False
 assert registry.get("safety",{}).get("real_order_submission") is False
 assert registry.get("governance",{}).get("automatic_promotion") is False
 assert all(row.get("authority") in {"RESEARCH","SHADOW","PAPER"} for row in registry.get("strategies",[]))
+paper_authority={
+    row.get("family") for row in registry.get("strategies",[])
+    if row.get("enabled") is True and row.get("authority")=="PAPER"
+}
+assert paper_authority=={"crypto_settlement_fair","hard_arb"}
 assert osint_sources.get("schema") == "polymarket_v7_osint_source_registry_v1"
 assert osint_sources.get("paper_only") is True
 assert osint_sources.get("authenticated_execution") is False
@@ -139,6 +145,14 @@ assert live_scope.get("real_order_submission") is False
 assert target | excluded == families and not target & excluded
 assert excluded == {"ranking", "pca", "local_factor"}
 assert shadow == {"sports_latency", "cross_platform", "wallet_intelligence"}
+assert set(live_scope.get("paper_execution_families") or [])==paper_authority
+assert set(live_scope.get("component_shadow_families") or [])=={
+    "professional_maker","crypto_informed_taker","fast_structural",
+}
+assert set(live_scope.get("research_zero_authority_families") or [])=={
+    "micro_taker","graph_rv","ranking","pca","local_factor",
+    "wallet_intelligence","market_open","osint","sports_latency","cross_platform",
+}
 governance=live_scope.get("governance") or {}
 assert governance.get("single_execution_owner") is True
 assert governance.get("research_has_capital") is False
@@ -202,6 +216,16 @@ assert observer_arena >= 16*1024*1024
 assert fillability_arena >= 16*1024*1024
 assert maker_arena*max_shards + observer_arena + fillability_arena <= total_budget
 PY
+
+# Freeze the horizon/authority contract even during execution-evidence cold
+# start. With no empirical ACK/cancel profile supplied, the resulting snapshot
+# deliberately authorizes CANCEL/NOTHING only.
+python3 scripts/v7_btc_settlement_engine_contract.py \
+  --config "$BTC_SETTLEMENT_ENGINE_POLICY" \
+  --registry "$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["v7"]["strategy_registry"])' "$CONFIG")" \
+  --live-scope "$LIVE_MODEL_SCOPE" --code-sha "$SHA" --horizon-seconds 300 \
+  --output "$CONTROL/btc_settlement_engine_snapshot.json" \
+  > "$CONTROL/btc_settlement_engine_snapshot.summary.json"
 
 if [[ -d "$LOCK" ]]; then
   old="$(cat "$LOCK/pid" 2>/dev/null || true)"
@@ -421,7 +445,7 @@ write_runtime_status() {
     model_source="cold_start_policy"
   fi
   local tmp="$CONTROL/runtime_status.json.tmp.$$"
-  printf '{"schema":"polymarket_v7_runtime_status_v2","timestamp":%s,"version":7,"paper_only":true,"authenticated_execution":false,"real_order_submission":false,"model_sha":"%s","config_hash":"%s","policy_hash":"%s","model_hash":"%s","model_identity_source":"%s","run_id":"%s","ledger_id":"%s","server_id":"%s","pid":%s,"state":"%s","killed":%s,"primary_economic_sleeve":"MICRO_MAKER_PRO","execution_authority":"PAPER_EXECUTION_OWNER","single_execution_owner":true,"canonical_state_reconciled":true,"exact_sha_ci_green":%s,"p0_authority_configured":["professional_maker","crypto_settlement_fair","crypto_informed_taker"],"p0_full_stack_ready":%s,"readiness":"%s","external_fair_runtime_ready":%s}\n' \
+  printf '{"schema":"polymarket_v7_runtime_status_v2","timestamp":%s,"version":7,"paper_only":true,"authenticated_execution":false,"real_order_submission":false,"model_sha":"%s","config_hash":"%s","policy_hash":"%s","model_hash":"%s","model_identity_source":"%s","run_id":"%s","ledger_id":"%s","server_id":"%s","pid":%s,"state":"%s","killed":%s,"primary_economic_sleeve":"BTC_SETTLEMENT_ENGINE","execution_authority":"PAPER_EXECUTION_OWNER","single_execution_owner":true,"canonical_state_reconciled":true,"exact_sha_ci_green":%s,"p0_authority_configured":["crypto_settlement_fair","hard_arb"],"p0_full_stack_ready":%s,"readiness":"%s","external_fair_runtime_ready":%s,"economic_new_risk_ready":false,"economic_decision_state":"CANCEL_NOTHING_ONLY","authorized_alpha_actions":[],"safe_actions":["CANCEL","NOTHING"]}\n' \
     "$now" "$SHA" "$CONFIG_HASH" "$POLICY_HASH" "$model_hash" "$model_source" "$RUN_ID" "$LEDGER_ID" "$SERVER_ID" "$$" "$state" "$killed" "$EXACT_SHA_CI_GREEN" "$p0_ready" "$readiness" "$external_ready" > "$tmp"
   mv "$tmp" "$CONTROL/runtime_status.json"
 }
@@ -654,10 +678,9 @@ python3 scripts/v7_fee_reward_registry.py \
   >> "$RUN_ROOT/fee_reward_registry.log" 2>&1 &
 pids+=("$!")
 
-# V7 Fast Structural is a PAPER-only detector/execution-planning sleeve. It
-# owns neither authenticated transport nor a second account; its child config
-# is pre-partitioned by the canonical allocator and all outputs remain inside
-# the canonical run root.
+# V7 Fast Structural is the zero-authority detector/planning component of the
+# structural-arbitrage owner. It may publish candidates and execution-policy
+# evidence, but it cannot publish simulated orders or fills independently.
 "$FAST_STRUCTURAL_RUNTIME" \
   --config "$ALLOC/fast_structural.json" \
   --policy "$FAST_STRUCTURAL_POLICY" \
@@ -667,14 +690,13 @@ pids+=("$!")
   >> "$RUN_ROOT/fast_structural/runtime.log" 2>&1 &
 pids+=("$!")
 
-# The detector never owns an account writer.  Its PAPER executor consumes only
-# canonical FAST_STRUCTURAL candidates, revalidates each sequential leg on the
-# shared WebSocket state bus, and routes every order/fill/unwind through the
-# same single-writer ledger spool used by the other sleeves.
+# Revalidate candidates in shadow mode. The policy worker owns no capital,
+# order, fill, inventory or canonical-ledger write authority.
 python3 scripts/v7_fast_structural_paper_executor.py \
   --run-root "$RUN_ROOT" --config "$ALLOC/fast_structural.json" \
+  --policy "$FAST_STRUCTURAL_POLICY" \
   --shared-state "$RUN_ROOT/market_data/shared_state.json" --model-sha "$SHA" \
-  --slippage-bps 5 --leg-latency-ms 100 --interval 0.1 \
+  --slippage-bps 5 --leg-latency-ms 100 --interval 0.1 --shadow-only \
   >> "$RUN_ROOT/fast_structural/paper_executor.log" 2>&1 &
 pids+=("$!")
 
@@ -710,13 +732,9 @@ pids+=("$!")
   done
 ) & pids+=("$!")
 
-# Canonical Maker cohort: one immutable selection generation is consumed by
-# the PAPER execution owner and both evidence observers. The cohort supervisor
-# refreshes execution-cell authority in place. A balanced complete-set sleeve
-# can still use a fresh flat handoff, but a directional residual becomes a
-# market-local DRAINING_INVENTORY lane: it cannot add risk and it is never
-# crossed at the current bid merely to chase selector membership. The remaining
-# warm markets continue operating while that passive economic exit is pending.
+# The professional Maker is now an execution-model component of the single BTC
+# settlement owner. Keep its exact-WS fillability and fill-conditioned markout
+# observers live, but do not launch the legacy independent PAPER maker runtime.
 (
   while [[ ! -e "$KILL" ]] && { ! maker_selection_ready || ! fee_registry_ready; }; do sleep 1; done
   [[ ! -e "$KILL" ]] || exit 0
@@ -739,30 +757,10 @@ pids+=("$!")
     --min-rotation-interval-seconds "$MAKER_ROTATION_INTERVAL_SECONDS" \
     --rotation-min-projected-fill-probability "$MAKER_ROTATION_MIN_FILL" \
     --rotation-min-absolute-fill-improvement "$MAKER_ROTATION_MIN_ABSOLUTE_IMPROVEMENT" \
-    --rotation-min-relative-fill-multiplier "$MAKER_ROTATION_MIN_RELATIVE_MULTIPLIER"
+    --rotation-min-relative-fill-multiplier "$MAKER_ROTATION_MIN_RELATIVE_MULTIPLIER" \
+    --observer-only
 ) >> "$RUN_ROOT/micro_maker/cohort_supervisor.log" 2>&1 &
 pids+=("$!")
-
-(
-  while [[ ! -e "$KILL" ]]; do
-    if ! maker_selection_ready || ! fee_registry_ready; then
-      sleep 1
-      continue
-    fi
-    if ! python3 scripts/v7_market_maker_status.py \
-      --state "$RUN_ROOT/micro_maker/state.json" \
-      --config "$ALLOC/micro_maker.json" \
-      --selection "$RUN_ROOT/micro_maker/reward_selection.json" \
-      --fee-registry "$CONTROL/fee_reward_registry.json" \
-      --output "$RUN_ROOT/micro_maker/status.json" \
-      --freeze-path "$MAKER_FREEZE" \
-      >> "$RUN_ROOT/micro_maker/status.log" 2>&1; then
-      printf '{"schema":"polymarket_v7_maker_risk_failure_v1","timestamp":%s,"paper_only":true,"authenticated_execution":false,"model_sha":"%s"}\n' "$(date +%s)" "$SHA" > "$KILL"
-      break
-    fi
-    sleep 1
-  done
-) & pids+=("$!")
 
 # Hourly exact-SHA evidence pack. Reports are observational only and remain
 # outside the repository checkout, so generating them cannot mutate deployed
@@ -783,34 +781,9 @@ pids+=("$!")
       --config "$ALLOC/graph_rv.json" \
       --shared-state "$RUN_ROOT/market_data/shared_state.json" --model-sha "$SHA" \
       --output "$RUN_ROOT/graph_rv/intents.csv" \
-      --status "$RUN_ROOT/graph_rv/scan_status.json" \
+      --status "$RUN_ROOT/graph_rv/status.json" \
       >> "$RUN_ROOT/graph_rv/scan.log" 2>&1 || true
     sleep 15
-  done
-) & pids+=("$!")
-
-(
-  while [[ ! -e "$KILL" ]]; do
-    joint_policy="$RUN_ROOT/learned_execution/joint_policy.json"
-    if [[ -s "$joint_policy" ]]; then
-      python3 scripts/v7_graph_rv.py \
-        --config "$ALLOC/graph_rv.json" \
-        --run-root "$RUN_ROOT" \
-        --intents "$RUN_ROOT/graph_rv/intents.csv" \
-        --trade-tape "$RUN_ROOT/trade_tape.csv" \
-        --joint-model "$joint_policy" \
-        --shared-state "$RUN_ROOT/market_data/shared_state.json" \
-        >> "$RUN_ROOT/graph_rv/execution.log" 2>&1 || true
-    else
-      python3 scripts/v7_graph_rv.py \
-        --config "$ALLOC/graph_rv.json" \
-        --run-root "$RUN_ROOT" \
-        --intents "$RUN_ROOT/graph_rv/intents.csv" \
-        --trade-tape "$RUN_ROOT/trade_tape.csv" \
-        --shared-state "$RUN_ROOT/market_data/shared_state.json" \
-        >> "$RUN_ROOT/graph_rv/execution.log" 2>&1 || true
-    fi
-    sleep 1
   done
 ) & pids+=("$!")
 
@@ -839,8 +812,8 @@ pids+=("$!")
     python3 scripts/v7_hard_arb_guard.py \
       --config "$ALLOC/hard_arb.json" --run-dir "$RUN_ROOT/hard_arb" \
       --shared-state "$RUN_ROOT/market_data/shared_state.json" --model-sha "$SHA" \
-      --markets 0 --min-liquidity 2 --max-events "$STRUCTURAL_SCAN_EVENT_BUDGET" --min-edge 0.00005 \
-      --max-trade-usd 1e100 --slippage-bps 5 --leg-latency-ms 100 \
+      --markets 0 --min-liquidity 2 --max-events "$STRUCTURAL_SCAN_EVENT_BUDGET" --min-edge 0.001 \
+      --max-trade-usd 300 --slippage-bps 5 --leg-latency-ms 100 \
       >> "$RUN_ROOT/hard_arb/runtime.log" 2>&1 || true
     sleep 5
   done
@@ -853,7 +826,8 @@ pids+=("$!")
       --shared-state "$RUN_ROOT/market_data/shared_state.json" --model-sha "$SHA" \
       --live-flow "$RUN_ROOT/market_data/live_trade_flow.json" \
       --trade-tape "$RUN_ROOT/trade_tape.csv" --markets "$ACTIVE_SCAN_MARKET_BUDGET" --min-liquidity 2 \
-      --horizon-seconds 30 --max-trade-usd 1e100 --min-edge 0.00005 --slippage-bps 5 \
+      --horizon-seconds 30 --max-trade-usd 0 --min-edge 0.001 --slippage-bps 5 \
+      --research-only \
       >> "$RUN_ROOT/micro_taker/runtime.log" 2>&1 || true
     sleep 5
   done

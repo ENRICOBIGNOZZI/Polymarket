@@ -46,12 +46,12 @@ void append_maker_pair(
         input.contract, output.fair, input.maker_policy, Side::Buy,
         instrument_is_yes, instrument_handle, output.causal_cut.causal_cut_id,
         touch.best_bid_tick, touch.best_ask_tick, input.tick_size,
-        inventory_fraction, input.decision_monotonic_ns));
+        inventory_fraction, input.latency, input.decision_monotonic_ns));
     push_candidate(output, build_external_make(
         input.contract, output.fair, input.maker_policy, Side::Sell,
         instrument_is_yes, instrument_handle, output.causal_cut.causal_cut_id,
         touch.best_bid_tick, touch.best_ask_tick, input.tick_size,
-        inventory_fraction, input.decision_monotonic_ns));
+        inventory_fraction, input.latency, input.decision_monotonic_ns));
 }
 
 } // namespace
@@ -136,7 +136,27 @@ ExternalKernelOutput run_external_fair_kernel(
         return output;
     }
 
-    if (input.allow_shadow_taker != 0 && input.policy.taker_enabled != 0) {
+    if (!horizon_policy_valid(input.horizon_policy, input.contract)) {
+        output.fail_closed = 1;
+        push_candidate(output, fail_closed_withdraw(
+            input, output.causal_cut.causal_cut_id));
+        output.chosen = choose_unified_action(
+            output.candidates, output.candidate_count, false);
+        return output;
+    }
+
+    const bool latency_ready = execution_latency_valid(input.latency);
+    const bool maker_window = input.horizon_policy.research_only == 0
+        && input.horizon_policy.maker_enabled != 0
+        && input.time_to_expiry_ns >= input.horizon_policy.maker_min_tte_ns
+        && input.time_to_expiry_ns <= input.horizon_policy.maker_max_tte_ns;
+    const bool taker_window = input.horizon_policy.research_only == 0
+        && input.horizon_policy.taker_enabled != 0
+        && input.time_to_expiry_ns >= input.horizon_policy.taker_min_tte_ns
+        && input.time_to_expiry_ns <= input.horizon_policy.taker_max_tte_ns;
+
+    if (latency_ready && taker_window
+        && input.allow_shadow_taker != 0 && input.policy.taker_enabled != 0) {
         push_candidate(output, build_informed_take(
             input.contract,
             output.fair,
@@ -149,7 +169,8 @@ ExternalKernelOutput run_external_fair_kernel(
             input.decision_monotonic_ns,
             input.available_cash,
             input.current_market_exposure,
-            input.expected_taker_latency_seconds));
+            input.latency.taker_arrival_p99_seconds,
+            input.tick_size));
         push_candidate(output, build_informed_take(
             input.contract,
             output.fair,
@@ -162,13 +183,16 @@ ExternalKernelOutput run_external_fair_kernel(
             input.decision_monotonic_ns,
             input.available_cash,
             input.current_market_exposure,
-            input.expected_taker_latency_seconds));
+            input.latency.taker_arrival_p99_seconds,
+            input.tick_size));
     }
 
-    append_maker_pair(output, input, true, input.contract.yes_instrument_handle,
-                      input.yes_touch, input.signed_yes_inventory_fraction);
-    append_maker_pair(output, input, false, input.contract.no_instrument_handle,
-                      input.no_touch, input.signed_no_inventory_fraction);
+    if (latency_ready && maker_window) {
+        append_maker_pair(output, input, true, input.contract.yes_instrument_handle,
+                          input.yes_touch, input.signed_yes_inventory_fraction);
+        append_maker_pair(output, input, false, input.contract.no_instrument_handle,
+                          input.no_touch, input.signed_no_inventory_fraction);
+    }
 
     output.chosen = choose_unified_action(
         output.candidates, output.candidate_count, false);

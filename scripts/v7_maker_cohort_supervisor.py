@@ -531,10 +531,38 @@ class CohortSupervisor:
             "directional_drain_market_count": len(directional),
             "directional_drain_markets": sorted(directional),
             "cohort_pids": {name: process.pid for name, process in self.processes.items()},
+            "cohort_mode": "SHADOW_OBSERVERS_ONLY" if getattr(self.args, "observer_only", False) else "PAPER_EXECUTION_AND_OBSERVERS",
+            "execution_authority": "SHADOW_ZERO_AUTHORITY" if getattr(self.args, "observer_only", False) else "PAPER",
         }
         payload.update(self.rotation_gate_metrics)
         payload.update(extra)
         atomic_json(self.status, payload)
+        if getattr(self.args, "observer_only", False):
+            atomic_json(self.run_root / "micro_maker" / "status.json", {
+                "schema": "polymarket_v7_professional_maker_status_v1",
+                "timestamp": int(time.time()),
+                "timestamp_ms": time.time_ns() // 1_000_000,
+                "paper_only": True,
+                "authenticated_execution": False,
+                "real_order_submission": False,
+                "execution_authority": "SHADOW_ZERO_AUTHORITY",
+                "capital_authority": False,
+                "ledger_writer_authority": False,
+                "model_sha": self.args.model_sha,
+                "source": "shadow_markout_and_fillability_observers",
+                "state": state,
+                "cash": 0.0,
+                "equity": 0.0,
+                "peak": 0.0,
+                "drawdown": 0.0,
+                "killed": False,
+                "new_risk_frozen": True,
+                "open_orders": 0,
+                "open_positions": 0,
+                "observer_pids": {
+                    name: process.pid for name, process in self.processes.items()
+                },
+            })
 
     def command_specs(self) -> dict[str, tuple[list[str], Path, dict[str, str]]]:
         base_env = os.environ.copy()
@@ -546,7 +574,7 @@ class CohortSupervisor:
         fillability_env["PM_V7_WS_JSON_ARENA_MAX_BYTES"] = str(
             self.args.fillability_arena_bytes
         )
-        return {
+        specifications = {
             "maker": ([
                 str(self.args.maker_runtime),
                 "--config", str(self.args.config),
@@ -571,6 +599,9 @@ class CohortSupervisor:
                 "--model-sha", self.args.model_sha,
             ], self.run_root / "micro_maker" / "fillability_observer.log", fillability_env),
         }
+        if getattr(self.args, "observer_only", False):
+            specifications.pop("maker")
+        return specifications
 
     def start_cohort(self) -> None:
         validate_selection(read_json(self.selection), self.args.model_sha)
@@ -618,7 +649,8 @@ class CohortSupervisor:
         self.logs.clear()
 
     def cohort_healthy(self) -> bool:
-        return len(self.processes) == 3 and all(
+        expected = 2 if getattr(self.args, "observer_only", False) else 3
+        return len(self.processes) == expected and all(
             process.poll() is None for process in self.processes.values()
         )
 
@@ -833,6 +865,26 @@ class CohortSupervisor:
                 self.write_status("PENDING_CONFIRMATION")
                 return
             target_cell = str(metrics.get("rotation_target_cell") or "")
+        if getattr(self.args, "observer_only", False):
+            latest = read_json(self.candidate)
+            try:
+                validate_selection(latest, self.args.model_sha)
+            except ValueError:
+                self.reset_pending_confirmation()
+                self.write_status("PENDING_CONFIRMATION", reason="candidate_invalid_before_observer_rotation")
+                return
+            if latest.get("degraded") is True:
+                self.reset_pending_confirmation()
+                self.write_status("PENDING_CONFIRMATION", reason="candidate_degraded_before_observer_rotation")
+                return
+            self.stop_cohort()
+            atomic_json(self.selection, latest)
+            self.rotation_count += 1
+            self.last_rotation_ms = time.time_ns() // 1_000_000
+            self.reset_pending_confirmation()
+            self.start_cohort()
+            self.write_status("RUNNING")
+            return
         now_ms = time.time_ns() // 1_000_000
         current_state = read_json(self.state)
         directional = directional_inventory_markets(
@@ -995,6 +1047,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--maker-arena-bytes", type=int, required=True)
     parser.add_argument("--observer-arena-bytes", type=int, required=True)
     parser.add_argument("--fillability-arena-bytes", type=int, required=True)
+    parser.add_argument("--observer-only", action="store_true")
     parser.add_argument("--poll-seconds", type=float, default=1.0)
     parser.add_argument("--drain-timeout-seconds", type=float, default=20.0)
     parser.add_argument("--candidate-confirmations", type=int, default=2)

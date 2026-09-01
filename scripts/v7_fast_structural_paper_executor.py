@@ -1,11 +1,14 @@
 #!/usr/bin/env python3
-"""Sequential, fail-closed PAPER executor for Fast Structural candidates.
+"""Sequential, fail-closed policy evaluator for Fast Structural candidates.
 
 The C++ WebSocket runtime remains the sole detector and shared-state producer.
 This worker consumes its canonical candidates, revalidates every leg against a
 fresh atomic WebSocket snapshot after an explicit inter-leg delay, and records
 orders, fills, unwind and terminal economics through the single ledger spool.
-It has no authenticated transport and cannot submit a real order.
+In canonical runtime it runs with ``--shadow-only``: it revalidates arrival
+economics but owns no PAPER order, fill, capital, inventory or ledger authority.
+The legacy PAPER simulation path remains testable offline and is never launched
+by the canonical loop.
 """
 from __future__ import annotations
 
@@ -117,7 +120,14 @@ class Executor:
                 or (config.get("v7") or {}).get("authenticated_execution") is not False
                 or (config.get("v7") or {}).get("real_order_submission") is not False):
             raise RuntimeError("fast_structural_executor_requires_safe_paper_config")
+        policy_path = getattr(args, "policy", Path("config/v7_fast_structural.json"))
+        self.policy = load_json(policy_path)
+        if (self.policy.get("paper_only") is not True
+                or self.policy.get("authenticated_execution") is not False
+                or self.policy.get("real_order_submission") is not False):
+            raise RuntimeError("fast_structural_policy_requires_safe_paper_config")
         self.gamma_url = str(config.get("gamma_url") or "").rstrip("/")
+        self.shadow_only = bool(getattr(args, "shadow_only", False))
         start = max(0.0, finite(config.get("starting_capital"), 0.0))
         prior = load_json(self.state_path)
         if prior.get("model_sha") != args.model_sha:
@@ -127,10 +137,15 @@ class Executor:
             "ledger_offset": 0, "seen_candidates": [], "open_bundles": {},
             "aborting_bundles": {}, "realized_pnl_total": 0.0,
             "candidates_seen": 0, "entries": 0, "rejections": {},
+            "shadow_qualified": 0,
             **prior,
         }
         self.state["model_sha"] = args.model_sha
         self.state["starting_capital"] = start
+        if self.shadow_only and (
+            self.state.get("open_bundles") or self.state.get("aborting_bundles")
+        ):
+            raise RuntimeError("shadow_mode_refuses_prior_paper_inventory")
 
     def save(self) -> None:
         self.state["seen_candidates"] = list(self.state.get("seen_candidates") or [])[-50_000:]
@@ -191,6 +206,131 @@ class Executor:
             legs.append({**item, "token_id": token, "leg_id": leg_id, "target_quantity": quantity})
         return legs
 
+    def record_feasibility(
+        self, event: LedgerEvent, legs: list[dict[str, Any]], bundle_id: str,
+    ) -> dict[str, Any]:
+        """Record full-depth economics without granting execution authority."""
+        metadata = event.metadata if isinstance(event.metadata, dict) else {}
+        tokens = [str(leg["token_id"]) for leg in legs]
+        payoff_floor = max(0.0, finite(metadata.get("payoff_floor"), 0.0))
+        opportunity_id = str(event.opportunity_id or f"fast-feasibility-{bundle_id}")
+        feasibility: dict[str, Any] = {
+            "schema": "polymarket_v7_fast_structural_feasibility_observation_v1",
+            "detected": True, "structurally_valid": bool(
+                metadata.get("hard_arbitrage") is True
+                and metadata.get("execution_compatibility") == "SEQUENTIAL_FOK_HARD_ARB"
+                and legs and payoff_floor > 0.0),
+            "full_depth_positive": False, "positive_after_fees": False,
+            "positive_after_latency": False, "capacity_curve": [],
+            "q_star": None, "tau_star_ms": None,
+            "execution_authority": "SHADOW_ZERO_AUTHORITY",
+        }
+        try:
+            books = self.snapshot_books(tokens)
+        except SharedStateError as exc:
+            feasibility["reason"] = type(exc).__name__.upper()
+            books = {}
+        if books and feasibility["structurally_valid"]:
+            target = min(float(leg["target_quantity"]) for leg in legs)
+            quantities = sorted({
+                quantity for quantity in (1.0, 2.0, 5.0, 10.0, 20.0, 50.0, 100.0, target)
+                if quantity > 0.0
+            })
+            latency_bps = max(0.0, finite(
+                self.policy.get("latency_penalty_bps"), 0.0))
+            latency_span_ms = max(1.0, float(self.args.leg_latency_ms) * max(1, len(legs) - 1))
+            max_notional = max(0.0, finite(
+                self.policy.get("max_notional_usd"), 0.0))
+            for quantity in quantities:
+                plans = []
+                for leg in legs:
+                    book = books[str(leg["token_id"])]
+                    plan = walk(
+                        book["asks"], quantity, book, buy=True,
+                        slippage_bps=self.args.slippage_bps, require_full=True,
+                    )
+                    if plan is None:
+                        plans = []
+                        break
+                    plans.append(plan)
+                if not plans:
+                    feasibility["capacity_curve"].append({
+                        "quantity": quantity, "full_depth_complete": False,
+                    })
+                    continue
+                payout = quantity * payoff_floor
+                raw_cost = sum(plan["cash"] - plan["slippage"] for plan in plans)
+                fees = sum(plan["fee"] for plan in plans)
+                stressed_cost = sum(plan["net_cash"] for plan in plans)
+                latency_cost = payout * latency_bps / 10_000.0 * max(1, len(legs) - 1)
+                within_notional = 0.0 < stressed_cost <= max_notional + 1e-12
+                row = {
+                    "quantity": quantity, "full_depth_complete": True,
+                    "within_finite_notional_limit": within_notional,
+                    "payout_floor": payout, "raw_cost": raw_cost, "fees": fees,
+                    "slippage": stressed_cost - raw_cost - fees,
+                    "latency_cost": latency_cost,
+                    "gross_edge": payout - raw_cost,
+                    "net_after_fees": payout - raw_cost - fees,
+                    "net_after_slippage": payout - stressed_cost,
+                    "net_after_latency": payout - stressed_cost - latency_cost,
+                }
+                feasibility["capacity_curve"].append(row)
+            target_row = min(
+                feasibility["capacity_curve"],
+                key=lambda row: abs(float(row["quantity"]) - target),
+            )
+            if target_row.get("full_depth_complete") is True:
+                feasibility["full_depth_positive"] = target_row["gross_edge"] > 0.0
+                feasibility["positive_after_fees"] = target_row["net_after_fees"] > 0.0
+                feasibility["positive_after_latency"] = bool(
+                    target_row["net_after_latency"] > 0.0
+                    and target_row["within_finite_notional_limit"])
+            positive = [
+                row for row in feasibility["capacity_curve"]
+                if row.get("full_depth_complete") is True
+                and row.get("within_finite_notional_limit") is True
+                and finite(row.get("net_after_latency"), -math.inf) > 0.0
+            ]
+            feasibility["q_star"] = max(
+                (float(row["quantity"]) for row in positive), default=None)
+            base = finite(target_row.get("net_after_slippage"), 0.0)
+            baseline_latency_cost = finite(target_row.get("latency_cost"), 0.0)
+            if base > 0.0 and baseline_latency_cost > 0.0:
+                feasibility["tau_star_ms"] = base / (
+                    baseline_latency_cost / latency_span_ms)
+            feasibility["latency_model"] = {
+                "method": "CONFIGURED_LINEAR_PENALTY_DIAGNOSTIC",
+                "baseline_span_ms": latency_span_ms,
+                "latency_penalty_bps": latency_bps,
+            }
+            feasibility["books"] = {
+                token: {
+                    "bids": book.get("bids") or [], "asks": book.get("asks") or [],
+                    "exchange_ts_ms": book.get("exchange_ts_ms"),
+                    "receive_ts_ms": book.get("received_ms"),
+                    "snapshot_id": book.get("bus_snapshot_id"),
+                    "fee_verified": book.get("fee_verified"),
+                    "fee_rate": book.get("fee_rate"),
+                    "fee_exponent": book.get("fee_exponent"),
+                }
+                for token, book in books.items()
+            }
+        emit(self.run_root, LedgerEvent(
+            event_type="OPPORTUNITY", strategy=STRATEGY,
+            model_sha=self.args.model_sha, opportunity_id=opportunity_id,
+            candidate_id=str(event.candidate_id or event.record_id), bundle_id=bundle_id,
+            event_id=str(event.event_id or ""), expected_ev=event.expected_ev,
+            metadata={
+                "fast_structural_feasibility": feasibility,
+                "counterfactual": True,
+                "economic_authority": "SHADOW_COUNTERFACTUAL",
+                "execution_authority": "SHADOW_ZERO_AUTHORITY",
+                "excluded_from_portfolio_equity": True,
+            },
+        ))
+        return feasibility
+
     def execute_candidate(self, event: LedgerEvent) -> None:
         seen = set(str(value) for value in self.state.get("seen_candidates") or [])
         identity = str(event.candidate_id or event.record_id)
@@ -205,6 +345,11 @@ class Executor:
                 or metadata.get("execution_compatibility") != "SEQUENTIAL_FOK_HARD_ARB" or not legs
                 or finite(metadata.get("payoff_floor"), 0.0) <= 0.0):
             self.reject("UNSUPPORTED_OR_UNSTRUCTURED_CANDIDATE")
+            self.save()
+            return
+        feasibility = self.record_feasibility(event, legs, bundle_id)
+        if not feasibility.get("positive_after_latency"):
+            self.reject("FEASIBILITY_NET_EDGE_NONPOSITIVE")
             self.save()
             return
         if bundle_id in self.state.get("open_bundles", {}) or bundle_id in self.state.get("aborting_bundles", {}):
@@ -330,6 +475,30 @@ class Executor:
                 self.state["entries"] = int(self.state.get("entries") or 0) + 1
         self.save()
 
+    def evaluate_candidate_shadow(self, event: LedgerEvent) -> None:
+        seen = set(str(value) for value in self.state.get("seen_candidates") or [])
+        identity = str(event.candidate_id or event.record_id)
+        if identity in seen:
+            return
+        self.state.setdefault("seen_candidates", []).append(identity)
+        self.state["candidates_seen"] = int(self.state.get("candidates_seen") or 0) + 1
+        metadata = event.metadata if isinstance(event.metadata, dict) else {}
+        legs = self.candidate_legs(event)
+        if (
+            metadata.get("hard_arbitrage") is not True
+            or metadata.get("execution_compatibility") != "SEQUENTIAL_FOK_HARD_ARB"
+            or not legs
+            or finite(metadata.get("payoff_floor"), 0.0) <= 0.0
+        ):
+            self.reject("UNSUPPORTED_OR_UNSTRUCTURED_CANDIDATE")
+            return
+        bundle_id = str(event.bundle_id or f"fast-shadow-{identity}")
+        feasibility = self.record_feasibility(event, legs, bundle_id)
+        if feasibility.get("positive_after_latency") is not True:
+            self.reject("FEASIBILITY_NET_EDGE_NONPOSITIVE")
+            return
+        self.state["shadow_qualified"] = int(self.state.get("shadow_qualified") or 0) + 1
+
     def unwind(self) -> None:
         for bundle_id, bundle in list((self.state.get("aborting_bundles") or {}).items()):
             residual: list[dict[str, Any]] = []
@@ -435,6 +604,11 @@ class Executor:
             "schema": SCHEMA, "timestamp": int(time.time()), "model_sha": self.args.model_sha,
             "state": "RUNNING", "paper_only": True, "authenticated_execution": False,
             "real_order_submission": False, "single_oms": True,
+            "shadow_only": self.shadow_only,
+            "execution_authority": "SHADOW_ZERO_AUTHORITY" if self.shadow_only else "PAPER",
+            "capital_authority": False if self.shadow_only else True,
+            "ledger_writer_authority": False if self.shadow_only else True,
+            "observational_spool_authority": self.shadow_only,
             "source_detector": "FAST_STRUCTURAL_CPP_WEBSOCKET",
             "cash": float(self.state.get("cash") or 0.0), "equity": equity,
             "equity_source": "cost_basis_fail_closed",
@@ -442,14 +616,19 @@ class Executor:
             "open_bundles": len(open_bundles), "aborting_bundles": len(aborting),
             "candidates_seen": int(self.state.get("candidates_seen") or 0),
             "entries": int(self.state.get("entries") or 0),
+            "shadow_qualified": int(self.state.get("shadow_qualified") or 0),
             "rejections": self.state.get("rejections") or {}, "killed": False,
         })
 
     def step(self) -> None:
-        self.unwind()
-        self.settle()
-        for candidate in self.read_candidates():
-            self.execute_candidate(candidate)
+        if self.shadow_only:
+            for candidate in self.read_candidates():
+                self.evaluate_candidate_shadow(candidate)
+        else:
+            self.unwind()
+            self.settle()
+            for candidate in self.read_candidates():
+                self.execute_candidate(candidate)
         self.save()
         self.publish()
 
@@ -458,6 +637,7 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--run-root", type=Path, required=True)
     parser.add_argument("--config", type=Path, required=True)
+    parser.add_argument("--policy", type=Path, default=Path("config/v7_fast_structural.json"))
     parser.add_argument("--shared-state", type=Path, required=True)
     parser.add_argument("--model-sha", required=True)
     parser.add_argument("--slippage-bps", type=float, default=5.0)
@@ -465,6 +645,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--max-shared-publish-age-ms", type=int, default=2500)
     parser.add_argument("--interval", type=float, default=0.1)
     parser.add_argument("--once", action="store_true")
+    parser.add_argument("--shadow-only", action="store_true")
     return parser.parse_args()
 
 

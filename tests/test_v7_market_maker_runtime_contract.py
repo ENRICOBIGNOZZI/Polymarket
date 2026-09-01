@@ -9,23 +9,21 @@ ROOT = Path(__file__).resolve().parents[1]
 
 
 class ProfessionalMakerRuntimeContractTests(unittest.TestCase):
-    def test_maker_is_primary_paper_sleeve_and_not_disabled(self) -> None:
+    def test_maker_is_a_funded_observation_component_not_an_authority_owner(self) -> None:
         cfg = json.loads((ROOT / "config" / "paper_v7.json").read_text(encoding="utf-8"))
         v7 = cfg["v7"]
         self.assertTrue(cfg["paper_only"])
         self.assertFalse(v7["authenticated_execution"])
         self.assertFalse(v7["real_order_submission"])
-        target = float(v7["execution_strategy_budget_usd"])
         self.assertAlmostEqual(
             float(cfg["starting_capital"]) * float(v7["micro_maker_capital_fraction"]),
-            target,
+            2000.0,
         )
-        self.assertAlmostEqual(
-            v7["micro_maker_capital_fraction"], v7["relative_value_capital_fraction"]
-        )
+        self.assertEqual(v7["relative_value_capital_fraction"], 0)
+        self.assertEqual(v7["micro_taker_capital_fraction"], 0)
         self.assertAlmostEqual(
             float(cfg["starting_capital"]) * float(v7["external_capital_fraction"]),
-            2.0 * target,
+            4000.0,
         )
         self.assertEqual(v7["micro_maker_policy"], "config/v7_professional_market_maker.json")
         self.assertAlmostEqual(
@@ -55,7 +53,7 @@ class ProfessionalMakerRuntimeContractTests(unittest.TestCase):
         self.assertTrue(policy["execution_model"]["product_of_marginals_forbidden"])
         self.assertTrue(policy["capital"]["queue_never_grants_size"])
 
-    def test_canonical_runtime_starts_only_professional_maker_stack(self) -> None:
+    def test_canonical_runtime_starts_maker_observers_without_independent_authority(self) -> None:
         source = (ROOT / "scripts" / "paper_v7_execution_loop.sh").read_text(encoding="utf-8")
         self.assertIn("polymarket_v7_market_maker_runtime", source)
         self.assertIn("PM_V7_MARKET_MAKER_RUNTIME", source)
@@ -68,8 +66,8 @@ class ProfessionalMakerRuntimeContractTests(unittest.TestCase):
         self.assertIn("--pin-runtime-selection", source)
         self.assertIn('--lookback-seconds "$MAKER_FLOW_LOOKBACK_SECONDS"', source)
         self.assertIn("v7_market_maker_model.py", source)
-        self.assertIn("v7_market_maker_status.py", source)
-        self.assertIn('--fee-registry "$CONTROL/fee_reward_registry.json"', source)
+        self.assertIn("--observer-only", source)
+        self.assertIn("SHADOW_ZERO_AUTHORITY", source)
         self.assertIn("fee_registry_ready", source)
         self.assertIn("v7_ledger_spool.py", source)
         self.assertIn("--loop --interval 0.1", source)

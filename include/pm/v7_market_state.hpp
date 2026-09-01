@@ -88,9 +88,8 @@ private:
     [[nodiscard]] std::int32_t best_ask() const noexcept;
     [[nodiscard]] std::int32_t next_bid(std::int32_t from_exclusive) const noexcept;
     [[nodiscard]] std::int32_t next_ask(std::int32_t from_exclusive) const noexcept;
-    [[nodiscard]] DepthSummary depth_summary(Side side) const noexcept;
-    [[nodiscard]] std::uint8_t fill_ladder(
-        Side side,
+    [[nodiscard]] std::uint8_t fill_side_snapshot(
+        Side side, DepthSummary& depth,
         std::array<PriceLevelE4, kHotDepthLevels>& output) const noexcept;
 
     std::array<std::int64_t, kCanonicalPriceSlots> bid_qty_{};

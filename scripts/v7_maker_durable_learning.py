@@ -17,6 +17,8 @@ import json
 import math
 import os
 import pathlib
+import random
+import statistics
 import tempfile
 import time
 from collections import Counter, defaultdict
@@ -37,6 +39,7 @@ PLACEMENT_FEATURE_NAMES = (
 EXECUTION_SEMANTICS = "maker-paper-v7.2-bilateral-inventory"
 RISK_TRANSFER_EVENTS = {"ORDER_SUBMITTED", "FILL", "MARKOUT"}
 STANDALONE_ECONOMIC_EVENTS = {"FINAL", "INVENTORY_MERGE"}
+PROBE_EVENT = "SHADOW_PROBE"
 
 
 def atomic_json(path: pathlib.Path, value: dict[str, Any]) -> None:
@@ -214,6 +217,8 @@ def compact_evidence(
             keep = (
                 (bool(order_id) and order_id in exact_order_ids)
                 or (order_id in risk_order_ids and event_type in RISK_TRANSFER_EVENTS)
+                or (event_type == PROBE_EVENT
+                    and _metadata_identity_matches(row, policy_hash, config_hash))
                 or (event_type in STANDALONE_ECONOMIC_EVENTS
                     and _metadata_identity_matches(row, policy_hash, config_hash))
             )
@@ -842,6 +847,164 @@ def joint_states(values: list[dict[str, Any]]) -> dict[str, Any]:
     }
 
 
+def _probe_day_lcb95(values: list[float], seed: int) -> float | None:
+    if len(values) < 2:
+        return None
+    generator = random.Random(seed)
+    means = sorted(
+        statistics.fmean(generator.choice(values) for _ in values)
+        for _ in range(4_000)
+    )
+    return means[max(0, math.ceil(0.025 * len(means)) - 1)]
+
+
+def shadow_probe_policy_value(values: list[dict[str, Any]]) -> dict[str, Any]:
+    """Estimate pre-registered maker-arm value on a chronological OOS tail.
+
+    `ECONOMIC` is the frozen policy arm; it is never selected ex post. No-fill
+    terminal episodes contribute zero. Filled episodes require a causal
+    executable markout, and unresolved or malformed probes receive no credit.
+    """
+    probes = [row for row in values if row.get("event_type") == PROBE_EVENT]
+    by_candidate: defaultdict[str, list[dict[str, Any]]] = defaultdict(list)
+    invalid = 0
+    for row in probes:
+        metadata = row.get("metadata") if isinstance(row.get("metadata"), dict) else {}
+        candidate_id = str(row.get("candidate_id") or "")
+        propensity = number(metadata.get("action_propensity"), math.nan)
+        if not (
+            candidate_id and metadata.get("counterfactual") is True
+            and metadata.get("economic_authority") == "SHADOW_COUNTERFACTUAL"
+            and metadata.get("execution_authority") == "SHADOW_ZERO_AUTHORITY"
+            and metadata.get("excluded_from_portfolio_equity") is True
+            and math.isfinite(propensity) and 0.0 < propensity <= 1.0
+        ):
+            invalid += 1
+            continue
+        by_candidate[candidate_id].append(row)
+
+    fills_by_order: defaultdict[str, list[dict[str, Any]]] = defaultdict(list)
+    fill_size: dict[str, float] = {}
+    marks_by_order: defaultdict[str, defaultdict[str, list[float]]] = defaultdict(
+        lambda: defaultdict(lambda: [0.0, 0.0]))
+    for row in values:
+        if row.get("event_type") != "FILL" or not row.get("order_id"):
+            continue
+        order_id = str(row["order_id"])
+        fills_by_order[order_id].append(row)
+        fill_size[str(row.get("fill_id") or "")] = max(
+            0.0, number(row.get("filled_size")))
+    for row in values:
+        order_id = str(row.get("order_id") or "")
+        if row.get("event_type") != "MARKOUT" or order_id not in fills_by_order \
+                or not isinstance(row.get("markouts"), dict):
+            continue
+        shares = fill_size.get(str(row.get("fill_id") or ""), 0.0)
+        if shares <= 0.0:
+            continue
+        for horizon, pnl in row["markouts"].items():
+            if str(horizon) in ADVERSE_HORIZON_PRIORITY:
+                marks_by_order[order_id][str(horizon)][0] += number(pnl) * shares
+                marks_by_order[order_id][str(horizon)][1] += shares
+
+    episodes: list[dict[str, Any]] = []
+    unresolved = unlabeled_fills = 0
+    for candidate_id, lifecycle in by_candidate.items():
+        assignments = [row for row in lifecycle
+                       if (row.get("metadata") or {}).get("probe_phase") == "ASSIGNED"]
+        terminals = [row for row in lifecycle
+                     if (row.get("metadata") or {}).get("terminal") is True]
+        if len(assignments) != 1 or not terminals:
+            unresolved += 1
+            continue
+        assignment = assignments[0]
+        metadata = assignment["metadata"]
+        arm = str(metadata.get("assigned_action_arm") or "")
+        if arm not in {"ECONOMIC", "INFORMATION"}:
+            invalid += 1
+            continue
+        propensity = number(metadata.get("action_propensity"), math.nan)
+        order_id = next((str(row.get("order_id")) for row in lifecycle
+                         if row.get("order_id")), "")
+        fills = fills_by_order.get(order_id, [])
+        filled_shares = sum(max(0.0, number(row.get("filled_size"))) for row in fills)
+        value = 0.0
+        selected_horizon = None
+        if filled_shares > 0.0:
+            horizons = marks_by_order.get(order_id, {})
+            selected_horizon = next(
+                (horizon for horizon in ADVERSE_HORIZON_PRIORITY if horizon in horizons),
+                None,
+            )
+            if selected_horizon is None:
+                unlabeled_fills += 1
+                continue
+            value = horizons[selected_horizon][0]
+        timestamp = int(assignment.get("recorded_ts_ms") or 0)
+        cluster = str(assignment.get("event_id") or assignment.get("market_id") or "UNKNOWN")
+        episodes.append({
+            "candidate_id": candidate_id, "arm": arm, "propensity": propensity,
+            "value": value, "filled": filled_shares > 0.0,
+            "day": timestamp // 86_400_000, "market_day": f"{cluster}:{timestamp // 86_400_000}",
+            "markout_horizon": selected_horizon,
+        })
+
+    days = sorted({row["day"] for row in episodes})
+    oos_days = set(days[-max(1, math.ceil(0.20 * len(days))):]) if days else set()
+    oos = [row for row in episodes if row["day"] in oos_days]
+    arms: dict[str, Any] = {}
+    for arm in ("ECONOMIC", "INFORMATION"):
+        assigned = [row for row in oos if row["arm"] == arm]
+        day_values: list[float] = []
+        for day in sorted(oos_days):
+            daily = [row for row in oos if row["day"] == day]
+            if daily:
+                day_values.append(sum(
+                    row["value"] / row["propensity"]
+                    for row in daily if row["arm"] == arm
+                ) / len(daily))
+        ipw = sum(row["value"] / row["propensity"] for row in assigned) \
+            / len(oos) if oos else None
+        arms[arm] = {
+            "assigned_episodes": len(assigned),
+            "filled_episodes": sum(row["filled"] for row in assigned),
+            "horvitz_thompson_value_per_opportunity": ipw,
+            "day_blocks": len(day_values),
+            "day_block_lcb95": _probe_day_lcb95(
+                day_values, 17 if arm == "ECONOMIC" else 29),
+        }
+    economic = arms["ECONOMIC"]
+    market_days = len({row["market_day"] for row in oos})
+    blockers: list[str] = []
+    if len(oos) < 10_000:
+        blockers.append("MINIMUM_10000_FORWARD_OOS_QUOTE_EPISODES")
+    if sum(row["filled"] for row in oos) < 300:
+        blockers.append("MINIMUM_300_FORWARD_OOS_FILLS")
+    if market_days < 100:
+        blockers.append("MINIMUM_100_FORWARD_OOS_MARKET_DAY_CLUSTERS")
+    if economic["day_block_lcb95"] is None or economic["day_block_lcb95"] <= 0.0:
+        blockers.append("ECONOMIC_ARM_DAY_BLOCK_LCB95_NOT_POSITIVE")
+    if invalid:
+        blockers.append("INVALID_PROBE_RECORDS")
+    if unresolved or unlabeled_fills:
+        blockers.append("INCOMPLETE_PROBE_LIFECYCLES")
+    return {
+        "schema": "polymarket_v7_maker_shadow_probe_policy_value_v1",
+        "authority": "SHADOW_ZERO_AUTHORITY",
+        "estimator": "PREDECLARED_ARM_HORVITZ_THOMPSON_DAY_BLOCK_BOOTSTRAP",
+        "frozen_policy_arm": "ECONOMIC",
+        "selection_sample_reuse": False,
+        "terminal_episodes": len(episodes), "forward_oos_episodes": len(oos),
+        "forward_oos_days": len(oos_days), "forward_oos_market_day_clusters": market_days,
+        "invalid_records": invalid, "unresolved_assignments": unresolved,
+        "filled_episodes_without_causal_markout": unlabeled_fills,
+        "arms": arms, "promotion_gate_pass": not blockers,
+        "automatic_promotion": False, "blocking_reasons": blockers,
+        "reward_value": 0.0,
+        "reward_semantics": "ZERO_UNLESS_OBSERVED_AND_ATTRIBUTABLE_TO_OWN_ACTIVITY",
+    }
+
+
 def fit_model(values: list[dict[str, Any]], *, model_sha: str, policy_hash: str,
               config_hash: str, cold_fill_prior: float,
               fill_prior_strength_orders: float = 20.0) -> dict[str, Any]:
@@ -968,6 +1131,18 @@ def fit_model(values: list[dict[str, Any]], *, model_sha: str, policy_hash: str,
     # discarded every placement label emitted without duplicated hashes.
     placement_policy = learned_placement_policy(
         examples, adverse_placement_examples(compatible_risk_values))
+    probe_policy_value = shadow_probe_policy_value(compatible)
+    predictive_oos_valid = placement_policy.get("valid") is True
+    placement_policy["predictive_oos_valid"] = predictive_oos_valid
+    placement_policy["economic_activation_gate"] = (
+        "PREDECLARED_ECONOMIC_SHADOW_PROBE_POLICY_VALUE_LCB95"
+    )
+    if not probe_policy_value["promotion_gate_pass"]:
+        placement_policy["valid"] = False
+        if predictive_oos_valid:
+            placement_policy["state"] = (
+                "PREDICTIVE_OOS_VALID_AWAITING_POSITIVE_POLICY_VALUE"
+            )
     # Sample size is diagnostic only.  This live accumulator has no untouched
     # chronological OOS window, so it must never confer economic maturity or
     # silently perform the governed challenger -> champion promotion.
@@ -1028,6 +1203,7 @@ def fit_model(values: list[dict[str, Any]], *, model_sha: str, policy_hash: str,
         "chronological_oos_required_for_mature_promotion": True,
         "groups": groups,
         "learned_placement_policy": placement_policy,
+        "shadow_probe_policy_value": probe_policy_value,
         "execution_funnel_labels": {
             "terminal_orders": len(terminal_funnel_examples),
             "outcome_counts": dict(funnel_counts),

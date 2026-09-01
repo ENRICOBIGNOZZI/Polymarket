@@ -8,14 +8,14 @@ LOOP = ROOT / "scripts/paper_v7_execution_loop.sh"
 
 
 class V7PaperLoopBash3PortabilityTest(unittest.TestCase):
-    def test_optional_joint_model_does_not_expand_empty_array_under_set_u(self) -> None:
+    def test_research_graph_scanner_has_no_execution_worker(self) -> None:
         text = LOOP.read_text(encoding="utf-8")
         self.assertIn("set -euo pipefail", text)
         self.assertNotIn("joint_args=()", text)
         self.assertNotIn('${joint_args[@]}', text)
-        self.assertIn('joint_policy="$RUN_ROOT/learned_execution/joint_policy.json"', text)
-        self.assertIn('if [[ -s "$joint_policy" ]]; then', text)
-        self.assertIn('--joint-model "$joint_policy"', text)
+        self.assertIn("v7_graph_rv_executable_intents.py", text)
+        self.assertIn('--status "$RUN_ROOT/graph_rv/status.json"', text)
+        self.assertNotIn("python3 scripts/v7_graph_rv.py", text)
 
     def test_cleanup_empty_pid_array_is_guarded_and_bounded(self) -> None:
         text = LOOP.read_text(encoding="utf-8")

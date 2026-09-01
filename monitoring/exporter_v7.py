@@ -520,6 +520,10 @@ def health_reasons(snapshot: dict[str, Any], *, max_runtime_age: int = 180, max_
         or fast.get("paper_only") is not True
         or fast.get("authenticated_execution") is not False
         or fast.get("real_order_submission") is not False
+        or fast.get("shadow_only") is not True
+        or fast.get("execution_authority") != "SHADOW_ZERO_AUTHORITY"
+        or fast.get("capital_authority") is not False
+        or fast.get("ledger_writer_authority") is not False
         or fast.get("state") != "RUNNING"
         or fast_age < -5 or fast_age > max_runtime_age
     ): reasons.append("fast_structural_executor_missing_stale_or_unsafe")

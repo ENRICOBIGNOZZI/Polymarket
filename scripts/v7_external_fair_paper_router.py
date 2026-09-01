@@ -418,6 +418,145 @@ def executable_sell_value(book: Book, shares: float, schedule: dict[str, Any]) -
     return 0.0
 
 
+def serialize_book(book: Book) -> dict[str, Any]:
+    """Persist the complete visible book needed for arrival-time replay."""
+    return {
+        "token_id": book.token_id,
+        "bids": [[price, size] for price, size in book.bids],
+        "asks": [[price, size] for price, size in book.asks],
+        "tick_size": book.tick_size,
+        "min_order_size": book.min_order_size,
+        "exchange_ts_ms": book.exchange_ts_ms,
+        "receive_ts_ms": book.receive_ts_ms,
+        "snapshot_id": book.snapshot_id,
+    }
+
+
+def opportunity_set(
+    status: dict[str, Any], books: dict[str, Book], policy: dict[str, Any],
+) -> dict[str, Any] | None:
+    """Describe TAKE YES/NO and ABSTAIN from one causal book batch.
+
+    Unlike ``robust_candidates`` this records both sides even when the policy
+    abstains.  It is evidence only: the execution path continues to use the
+    existing fail-closed candidate function.
+    """
+    market = status.get("market") if isinstance(status.get("market"), dict) else {}
+    fair = status.get("fair") if isinstance(status.get("fair"), dict) else {}
+    contract = status.get("contract") if isinstance(status.get("contract"), dict) else {}
+    reference = status.get("settlement_reference") if isinstance(
+        status.get("settlement_reference"), dict) else {}
+    oracle = status.get("oracle") if isinstance(status.get("oracle"), dict) else {}
+    external = status.get("external") if isinstance(status.get("external"), dict) else {}
+    yes_token = str(market.get("yes_token") or "")
+    no_token = str(market.get("no_token") or "")
+    if not yes_token or not no_token or yes_token not in books or no_token not in books:
+        return None
+    market_yes = live_market_yes(books, market)
+    if market_yes is None:
+        return None
+    schedule = market.get("fee_schedule") if isinstance(market.get("fee_schedule"), dict) else {}
+    bucket = tte_policy(fair, policy)
+    threshold = finite(
+        bucket.get("minimum_robust_ev_per_share"),
+        finite(policy.get("minimum_robust_ev_per_share"), math.nan),
+    )
+    execution_risk = finite(
+        bucket.get("execution_risk_per_share"),
+        finite(policy.get("base_execution_risk_per_share"), math.nan),
+    )
+    fair_yes = finite(fair.get("yes"), math.nan)
+    lower = finite(fair.get("lower"), math.nan)
+    upper = finite(fair.get("upper"), math.nan)
+    globally_eligible = bool(
+        status.get("paper_only") is True
+        and status.get("authenticated_execution") is False
+        and status.get("real_order_submission") is False
+        and contract.get("verified") is True
+        and contract.get("rules_hash_recognized") is True
+        and reference.get("valid") is True
+        and (status.get("oracle") or {}).get("healthy") is True
+        and (status.get("external") or {}).get("healthy") is True
+        and fair.get("valid") is True
+        and entry_tte_allowed(fair, policy)
+        and model_market_disagreement_allowed(fair, policy, market_yes)
+        and (not bucket or bucket.get("action") == "TAKER_SHADOW")
+        and math.isfinite(threshold)
+        and math.isfinite(execution_risk)
+    )
+    selected = {
+        row["token_id"]: row for row in robust_candidates(status, books, policy)
+    }
+    actions: list[dict[str, Any]] = []
+    for outcome, token, point_probability, robust_probability in (
+        ("YES", yes_token, fair_yes, lower),
+        ("NO", no_token, 1.0 - fair_yes, 1.0 - upper),
+    ):
+        book = books[token]
+        ask = book.asks[0][0] if book.asks else math.nan
+        fee = fee_per_share(ask, schedule) if math.isfinite(ask) else math.inf
+        robust_ev = robust_probability - ask - fee - execution_risk
+        row = selected.get(token)
+        actions.append({
+            "action": f"TAKE_{outcome}",
+            "outcome": outcome,
+            "token_id": token,
+            "point_probability": point_probability if math.isfinite(point_probability) else None,
+            "robust_probability": robust_probability if math.isfinite(robust_probability) else None,
+            "best_ask": ask if math.isfinite(ask) else None,
+            "best_ask_visible_size": book.asks[0][1] if book.asks else None,
+            "fee_per_share": fee if math.isfinite(fee) else None,
+            "execution_risk_per_share": execution_risk if math.isfinite(execution_risk) else None,
+            "robust_ev_per_share": robust_ev if math.isfinite(robust_ev) else None,
+            "minimum_robust_ev_per_share": threshold if math.isfinite(threshold) else None,
+            "eligible": bool(globally_eligible and row is not None),
+        })
+    eligible = [row for row in actions if row["eligible"]]
+    best = max(eligible, key=lambda row: float(row["robust_ev_per_share"]), default=None)
+    snapshot_id = stable_id(
+        market.get("market_id"), books[yes_token].snapshot_id, books[no_token].snapshot_id,
+    )
+    return {
+        "snapshot_id": snapshot_id,
+        "market_id": str(market.get("market_id") or ""),
+        "event_id": str(market.get("event_id") or ""),
+        "contract_rules_hash": str(contract.get("rules_hash") or ""),
+        "reference_version": int(reference.get("version") or 0),
+        "decision_ts_ms": max(book.receive_ts_ms for book in books.values()),
+        "tte_seconds": finite(fair.get("tte_seconds")),
+        "tte_bucket_id": str(bucket.get("id") or "legacy_entry_window"),
+        "fair_yes": fair_yes if math.isfinite(fair_yes) else None,
+        "fair_yes_lower": lower if math.isfinite(lower) else None,
+        "fair_yes_upper": upper if math.isfinite(upper) else None,
+        "market_yes": market_yes,
+        "fee_schedule": schedule,
+        "oracle": {
+            "value": finite(oracle.get("value")),
+            "age_ns": int(finite(oracle.get("age_ns"), 0.0)),
+        },
+        "settlement_reference_value": finite(reference.get("value")),
+        "external_features": {
+            key: external.get(key) for key in (
+                "composite_price", "composite_microprice", "dispersion_bps",
+                "fresh_venue_count", "age_ns", "return_250ms", "return_1s",
+                "return_5s", "return_30s", "realized_vol_fast",
+                "realized_vol_medium", "realized_vol_slow", "realized_vol_30s",
+                "aggregate_ofi", "aggregate_trade_imbalance",
+            )
+        },
+        "books": {
+            "YES": serialize_book(books[yes_token]),
+            "NO": serialize_book(books[no_token]),
+        },
+        "actions": actions,
+        "decision": best["action"] if best is not None else "ABSTAIN",
+        "selected_robust_ev_per_share": (
+            best["robust_ev_per_share"] if best is not None else None
+        ),
+        "global_policy_gates_passed": globally_eligible,
+    }
+
+
 class PaperRouter:
     def __init__(self, run_root: Path, model_sha: str, config_path: Path, clob_url: str, gamma_url: str):
         self.root = run_root
@@ -477,6 +616,7 @@ class PaperRouter:
             "forecasts": 0, "resolved_forecasts": 0,
             "forecasted_keys": [], "pending_forecasts": {},
             "forecast_settlement_attempted_at": {},
+            "opportunity_sets": 0, "last_opportunity_snapshot_id": "",
             "last_decision": {},
         }
         prior = load(self.state_path)
@@ -531,12 +671,15 @@ class PaperRouter:
         return paths
 
     def compact_durable_evidence(self) -> None:
-        """Deduplicate compatible evidence before old cutover trees are pruned."""
+        """Deduplicate all evidence before old cutover trees are pruned.
+
+        Incompatible policy/SHA rows remain immutable HISTORICAL evidence. They
+        are excluded by ``durable_records`` from runtime state restoration, but
+        must not be erased merely because a new config hash was deployed.
+        """
         records = self.read_counterfactual_records(self.evidence_source_paths())
-        compatible = [
-            row for row in records.values() if self.evidence_compatible(row)
-        ]
-        compatible.sort(key=lambda row: (
+        preserved = list(records.values())
+        preserved.sort(key=lambda row: (
             int(row.get("timestamp_ms") or 0), str(row.get("record_id") or "")
         ))
         self.durable_directory.mkdir(parents=True, exist_ok=True)
@@ -544,7 +687,7 @@ class PaperRouter:
             self.durable_counterfactual_path.name + f".tmp.{os.getpid()}"
         )
         with temporary.open("w", encoding="utf-8") as handle:
-            for row in compatible:
+            for row in preserved:
                 handle.write(json.dumps(row, separators=(",", ":"), sort_keys=True) + "\n")
             handle.flush()
             os.fsync(handle.fileno())
@@ -566,6 +709,7 @@ class PaperRouter:
         fill_finals: dict[str, dict[str, Any]] = {}
         markout_horizons: dict[str, set[int]] = {}
         candidate_ids: set[str] = set()
+        opportunity_ids: set[str] = set()
         for row in records.values():
             event_type = str(row.get("event_type") or "")
             forecast_id = str(row.get("forecast_id") or "")
@@ -588,6 +732,8 @@ class PaperRouter:
                         continue
             if event_type == "CANDIDATE" and row.get("counterfactual_id"):
                 candidate_ids.add(str(row["counterfactual_id"]))
+            elif event_type == "OPPORTUNITY_SET" and row.get("opportunity_id"):
+                opportunity_ids.add(str(row["opportunity_id"]))
 
         seen_keys = {
             f"{row.get('market_id')}:{int(row.get('tte_bucket_seconds') or 0)}"
@@ -613,6 +759,10 @@ class PaperRouter:
                     "fair_valid_until_monotonic_ns", "yes_best_bid", "yes_best_ask",
                     "no_best_bid", "no_best_ask", "market_mid_source", "decision",
                     "yes_token", "no_token", "observed_ms", "resolution_due_ms",
+                    "reference_value", "fee_schedule", "external_features",
+                    "yes_best_bid_visible_size", "yes_best_ask_visible_size",
+                    "no_best_bid_visible_size", "no_best_ask_visible_size",
+                    "yes_min_order_size", "no_min_order_size",
                 )
             }
 
@@ -661,6 +811,7 @@ class PaperRouter:
         self.state["pending_forecasts"] = pending
         self.state["counterfactual_fills"] = len(fills)
         self.state["candidates"] = len(candidate_ids)
+        self.state["opportunity_sets"] = len(opportunity_ids)
         self.state["counterfactual_realized_pnl"] = sum(
             finite(row.get("counterfactual_pnl"), 0.0)
             for row in fill_finals.values()
@@ -998,10 +1149,6 @@ class PaperRouter:
         tte = finite(fair.get("tte_seconds"))
         model_yes = finite(fair.get("yes"))
         market_yes = live_market_yes(books, market)
-        hybrid_yes = (
-            hybrid_probability(model_yes, market_yes, self.hybrid_market_weight)
-            if math.isfinite(model_yes) and market_yes is not None else math.nan
-        )
         challenger_yes = finite(challenger.get("yes"), math.nan)
         challenger_hash = str(challenger.get("probability_model_hash") or "")
         challenger_applied = bool(
@@ -1013,12 +1160,19 @@ class PaperRouter:
         )
         market_id = str(market.get("market_id") or "")
         if not (
-            fair.get("valid") is True and reference.get("valid") is True
+            reference.get("valid") is True
             and market_id and tte is not None and tte >= 0.0
-            and model_yes is not None and 0.0 <= model_yes <= 1.0
             and market_yes is not None and 0.0 <= market_yes <= 1.0
         ):
             return False
+        model_available = bool(
+            fair.get("valid") is True
+            and model_yes is not None and 0.0 <= model_yes <= 1.0
+        )
+        hybrid_yes = (
+            hybrid_probability(model_yes, market_yes, self.hybrid_market_weight)
+            if model_available and market_yes is not None else math.nan
+        )
         bucket = min(FORECAST_TTE_BUCKETS, key=lambda value: (abs(value - tte), -value))
         if abs(bucket - tte) > FORECAST_BUCKET_TOLERANCE_SECONDS:
             return False
@@ -1037,8 +1191,9 @@ class PaperRouter:
             "rules_hash": str(contract.get("rules_hash") or ""),
             "reference_version": int(reference.get("version") or 0),
             "tte_bucket_seconds": bucket, "observed_tte_seconds": tte,
-            "model_yes": model_yes, "market_yes": market_yes,
-            "external_only_yes": model_yes,
+            "model_yes": model_yes if model_available else None,
+            "market_yes": market_yes,
+            "external_only_yes": model_yes if model_available else None,
             "hybrid_yes": hybrid_yes if math.isfinite(hybrid_yes) else None,
             "external_only_model_id": "external_only_fair",
             "hybrid_model_id": "hybrid_fair",
@@ -1050,17 +1205,39 @@ class PaperRouter:
             "registered_challenger_model_hash": (
                 challenger_hash if challenger_applied else ""
             ),
-            "lower": finite(fair.get("lower")), "upper": finite(fair.get("upper")),
+            "lower": finite(fair.get("lower")) if model_available else None,
+            "upper": finite(fair.get("upper")) if model_available else None,
             "oracle_value": finite(oracle.get("value")),
+            "reference_value": finite(reference.get("value")),
+            "fee_schedule": market.get("fee_schedule") if isinstance(
+                market.get("fee_schedule"), dict) else {},
+            "external_features": {
+                key: external.get(key) for key in (
+                    "composite_price", "composite_microprice", "dispersion_bps",
+                    "fresh_venue_count", "age_ns", "return_250ms", "return_1s",
+                    "return_5s", "return_30s", "realized_vol_fast",
+                    "realized_vol_medium", "realized_vol_slow", "realized_vol_30s",
+                    "aggregate_ofi", "aggregate_trade_imbalance",
+                )
+            },
             "external_venue_count": int(external.get("fresh_venue_count") or 0),
             "fair_calculated_monotonic_ns": int(fair.get("calculated_monotonic_ns") or 0),
             "fair_valid_until_monotonic_ns": int(fair.get("valid_until_monotonic_ns") or 0),
             "yes_best_bid": yes_book.bids[0][0] if yes_book and yes_book.bids else None,
             "yes_best_ask": yes_book.asks[0][0] if yes_book and yes_book.asks else None,
+            "yes_best_bid_visible_size": yes_book.bids[0][1] if yes_book and yes_book.bids else None,
+            "yes_best_ask_visible_size": yes_book.asks[0][1] if yes_book and yes_book.asks else None,
             "no_best_bid": no_book.bids[0][0] if no_book and no_book.bids else None,
             "no_best_ask": no_book.asks[0][0] if no_book and no_book.asks else None,
+            "no_best_bid_visible_size": no_book.bids[0][1] if no_book and no_book.bids else None,
+            "no_best_ask_visible_size": no_book.asks[0][1] if no_book and no_book.asks else None,
+            "yes_min_order_size": yes_book.min_order_size if yes_book else None,
+            "no_min_order_size": no_book.min_order_size if no_book else None,
             "market_mid_source": "LIVE_COMPLEMENT_CONSISTENT_CLOB_BATCH",
-            "decision": "SHADOW_FORECAST_ONLY",
+            "decision": (
+                "SHADOW_FEATURE_AND_FORECAST" if model_available
+                else "SHADOW_SETTLEMENT_FEATURE_ONLY"
+            ),
             # Persist enough settlement identity to resume a pending forecast
             # after the ephemeral live run is archived during a cutover.
             "yes_token": yes_token, "no_token": no_token,
@@ -1073,6 +1250,32 @@ class PaperRouter:
         self.state.setdefault("pending_forecasts", {})[forecast_id] = {
             **values,
         }
+        return True
+
+    def record_opportunity_set(self, status: dict[str, Any], books: dict[str, Book]) -> bool:
+        """Persist every distinct causal book batch, including ABSTAIN."""
+        values = opportunity_set(status, books, self.policy)
+        if values is None:
+            return False
+        snapshot_id = str(values["snapshot_id"])
+        if snapshot_id == str(self.state.get("last_opportunity_snapshot_id") or ""):
+            return False
+        # A matching-engine snapshot may legitimately recur after an
+        # intervening update.  Give each observed occurrence its own identity;
+        # otherwise the later timestamp would conflict with the earlier row
+        # under the same record_id and the evidence loader would fail closed.
+        sequence = int(self.state.get("opportunity_sets") or 0) + 1
+        opportunity_suffix = stable_id(
+            self.sha, values['market_id'], snapshot_id,
+            values['decision_ts_ms'], sequence,
+        )
+        opportunity_id = f"external-opportunity-{opportunity_suffix}"
+        self.emit_counterfactual(
+            "OPPORTUNITY_SET", counterfactual_id=opportunity_id,
+            opportunity_id=opportunity_id, **values,
+        )
+        self.state["last_opportunity_snapshot_id"] = snapshot_id
+        self.state["opportunity_sets"] = sequence
         return True
 
     @staticmethod
@@ -1125,7 +1328,11 @@ class PaperRouter:
                 }:
                     continue
                 actual_yes = 1.0 if winning_token == str(forecast.get("yes_token") or "") else 0.0
-                model_brier, model_log_loss = self.forecast_scores(float(forecast["model_yes"]), actual_yes)
+                model_yes = finite(forecast.get("model_yes"))
+                if math.isfinite(model_yes):
+                    model_brier, model_log_loss = self.forecast_scores(model_yes, actual_yes)
+                else:
+                    model_brier = model_log_loss = None
                 hybrid_yes = finite(forecast.get("hybrid_yes"))
                 if math.isfinite(hybrid_yes):
                     hybrid_brier, hybrid_log_loss = self.forecast_scores(hybrid_yes, actual_yes)
@@ -1141,7 +1348,8 @@ class PaperRouter:
                 self.emit_counterfactual(
                     "FORECAST_FINAL", counterfactual_id=forecast_id, forecast_id=forecast_id,
                     market_id=market_id, tte_bucket_seconds=forecast["tte_bucket_seconds"],
-                    model_yes=forecast["model_yes"], market_yes=forecast["market_yes"],
+                    model_yes=model_yes if math.isfinite(model_yes) else None,
+                    market_yes=forecast["market_yes"],
                     actual_yes=actual_yes, winning_token_id=winning_token,
                     model_brier=model_brier, market_brier=market_brier,
                     model_log_loss=model_log_loss, market_log_loss=market_log_loss,
@@ -1557,6 +1765,7 @@ class PaperRouter:
             "orders_submitted": int(self.state.get("orders") or 0), "fills": int(self.state.get("fills") or 0),
             "counterfactual_fills": int(self.state.get("counterfactual_fills") or 0),
             "counterfactual_forecasts": int(self.state.get("forecasts") or 0),
+            "counterfactual_opportunity_sets": int(self.state.get("opportunity_sets") or 0),
             "counterfactual_resolved_forecasts": int(self.state.get("resolved_forecasts") or 0),
             "counterfactual_pending_forecasts": len(
                 self.state.get("pending_forecasts")
@@ -1618,6 +1827,7 @@ class PaperRouter:
                 "reason": "" if market_yes is not None else "CLOB_COMPLEMENT_INCOHERENT",
             }
             self.record_forecast(status, books)
+            self.record_opportunity_set(status, books)
             rows = robust_candidates(status, books, self.policy)
         filled = False
         for row in rows:

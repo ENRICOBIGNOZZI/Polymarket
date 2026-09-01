@@ -13,9 +13,19 @@ from typing import Any
 
 try:
     from v7_economic_loop_audit import build as build_loop_audit
+    from v7_exact_sha_economic_bundle import generate as generate_exact_economic_bundle
+    from v7_fast_structural_feasibility import (
+        build_report as build_fast_structural_feasibility,
+        load_records as load_fast_structural_records,
+    )
     from v7_profitability_audit import audit as profitability_audit
 except ModuleNotFoundError:  # imported as scripts.v7_generate_economic_artifacts
     from scripts.v7_economic_loop_audit import build as build_loop_audit
+    from scripts.v7_exact_sha_economic_bundle import generate as generate_exact_economic_bundle
+    from scripts.v7_fast_structural_feasibility import (
+        build_report as build_fast_structural_feasibility,
+        load_records as load_fast_structural_records,
+    )
     from scripts.v7_profitability_audit import audit as profitability_audit
 
 
@@ -56,6 +66,8 @@ def generate(repo: Path, run_root: Path, output: Path, baseline_path: Path,
     archives = run_root.parent / "paper_v7_archives"
     if include_archives and archives.exists():
         inputs.append(archives)
+    durable = run_root.parent / "paper_v7_durable"
+    economic_inputs = [*inputs, *([durable] if durable.exists() else [])]
     profit = profitability_audit(inputs)
     args = SimpleNamespace(repo=str(repo), ledger_root=[str(path) for path in inputs],
                            prometheus_url=None, kind="postchange")
@@ -134,6 +146,28 @@ def generate(repo: Path, run_root: Path, output: Path, baseline_path: Path,
         exact_sha_required=True, single_canonical_ledger_writer=True,
         durable_maker_learning=True,
     )
+    exact_bundle = generate_exact_economic_bundle(
+        economic_inputs,
+        repo,
+        output / "v7_exact_sha_economic_bundle.json",
+        repo / "config" / "v7_external_fair.json",
+        [
+            path for path in (
+                run_root / "external_fair" / "model_registry" / "fair_value_champion.json",
+                run_root / "external_fair" / "model_registry" / "fair_value_challenger.json",
+            ) if path.is_file()
+        ],
+    )
+    fast_records, fast_quality = load_fast_structural_records(economic_inputs)
+    latency_components = exact_bundle.get("execution_latency_distribution", {}).get(
+        "components", {})
+    decision_latency = latency_components.get("decision_to_arrival", {}) \
+        if isinstance(latency_components, dict) else {}
+    fast_feasibility = build_fast_structural_feasibility(
+        fast_records, fast_quality,
+        p99_latency_ms=decision_latency.get("p99_ms")
+        if isinstance(decision_latency, dict) else None,
+    )
     profit_enveloped = {
         **profit, "repository_head": sha, "paper_only": True,
         "authenticated_execution": False, "real_order_submission": False,
@@ -151,6 +185,11 @@ def generate(repo: Path, run_root: Path, output: Path, baseline_path: Path,
         "v7_arb_coverage_report.json": arb,
         "v7_research_shadow_report.json": research,
         "v7_lineage_report.json": lineage,
+        "v7_external_loss_attribution.json": exact_bundle["loss_attribution"],
+        "v7_execution_latency_distribution.json": exact_bundle["execution_latency_distribution"],
+        "v7_external_policy_replay.json": exact_bundle["policy_replay"],
+        "v7_exact_sha_economic_bundle.json": exact_bundle,
+        "v7_fast_structural_feasibility.json": fast_feasibility,
     }
     for name, value in files.items():
         write(output / name, value)

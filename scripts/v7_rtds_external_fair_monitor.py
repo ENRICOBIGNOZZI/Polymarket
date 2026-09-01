@@ -30,6 +30,12 @@ from v7_adaptive_universe import normalize_market
 from v7_public_https_proxy import DEFAULT_DNS, PublicResolver
 from v7_contract_registry import contract_from_market
 from v7_fair_value_registry import FairModelArtifact, RegistryError, SCHEMA_VERSION
+from v7_external_settlement_model import (
+    FAMILY as SETTLEMENT_MODEL_FAMILY,
+    predict as predict_settlement_model,
+    runtime_features as settlement_runtime_features,
+    validate_parameters as validate_settlement_parameters,
+)
 
 HOST = "ws-live-data.polymarket.com"
 ORACLE_TOPIC = "crypto_prices_twap_sixty"
@@ -71,8 +77,12 @@ def load_registered_calibration(
     try:
         artifact = FairModelArtifact(**raw)
         artifact.validate()
-        intercept = float(artifact.parameters["calibration_intercept"])
-        slope = float(artifact.parameters["calibration_slope"])
+        if artifact.family == SETTLEMENT_MODEL_FAMILY:
+            validate_settlement_parameters(artifact)
+            intercept, slope = 0.0, 1.0
+        else:
+            intercept = float(artifact.parameters["calibration_intercept"])
+            slope = float(artifact.parameters["calibration_slope"])
     except (KeyError, TypeError, ValueError, RegistryError):
         return None, "ARTIFACT_INVALID"
     if (artifact.model_hash != pointer["model_hash"]
@@ -573,9 +583,11 @@ class Monitor:
                 "structural": 0.5, "calibrated": 0.5, "pm_mid": market_yes,
                 "structural_lower": 0.0, "structural_upper": 1.0,
                 "calibration_state": self.champion_load_state,
-                "probability_model_id": "structural_uncalibrated_v1",
+                "probability_model_id": "settlement_model_unavailable",
                 "probability_model_hash": "",
                 "explicit_champion_applied": False,
+                "inference_state": "IMMUTABLE_SETTLEMENT_MODEL_REQUIRED",
+                "model_features": None,
                 "pm_mid_source": (
                     "LIVE_COMPLEMENT_CONSISTENT_CLOB_BATCH" if market_yes is not None
                     else "UNAVAILABLE"
@@ -594,17 +606,15 @@ class Monitor:
         dispersion_bps = max(0.0, float(external.get("dispersion_bps") or 0.0))
         if min(oracle_price, efficient, reference_price) <= 0.0 or dispersion_bps > 50.0:
             return base
-        expected_terminal = oracle_price + 0.70 * (efficient - oracle_price)
-        margin = expected_terminal - reference_price
-        sigma_fraction = math.sqrt(0.00020 ** 2 * max(1e-6, tte) + 0.00010 ** 2
-                                   + 0.0625 * (dispersion_bps / 10_000.0) ** 2)
-        sigma = reference_price * max(0.00005, sigma_fraction)
-        structural = min(1.0 - 1e-9, max(1e-9, 0.5 * math.erfc(-margin / sigma / math.sqrt(2.0))))
-        logit = math.log(structural / (1.0 - structural))
-        uncertainty = 0.15 + 0.05 * (dispersion_bps / 10.0)
-        width = 1.64 * uncertainty
-        logistic = lambda value: 1.0 / (1.0 + math.exp(-value)) if value >= 0 else math.exp(value) / (1.0 + math.exp(value))
-        lower, upper = logistic(logit - width), logistic(logit + width)
+        features = settlement_runtime_features(
+            tte_seconds=tte, reference_price=reference_price,
+            oracle_price=oracle_price, external=external,
+            oracle_age_ns=max(0, now_ns - int(oracle["receive_wall_ns"])),
+        )
+        base["model_features"] = features
+        if features is None:
+            base["inference_state"] = "SETTLEMENT_MODEL_FEATURES_INCOMPLETE"
+            return base
         valid_until = time.monotonic_ns() + min(
             max(0, FRESH_NS - (now_ns - int(oracle["receive_wall_ns"]))),
             max(0, FRESH_NS - int(external.get("age_ns") or 0)),
@@ -613,31 +623,36 @@ class Monitor:
         rule_hash = str(contract.get("normalized_rules_hash") or "")
         champion_scope_valid = bool(
             champion is not None
+            and champion.family == SETTLEMENT_MODEL_FAMILY
             and "BTC" in champion.assets
             and "BTC_USD_UPDOWN_5M" in champion.contract_templates
             and rule_hash in champion.rules_hashes
         )
-        calibrated = calibrated_probability(structural, champion) \
-            if champion_scope_valid and champion is not None else structural
-        calibrated_lower = calibrated_probability(lower, champion) \
-            if champion_scope_valid and champion is not None else lower
-        calibrated_upper = calibrated_probability(upper, champion) \
-            if champion_scope_valid and champion is not None else upper
-        return {**base, "valid": True, "yes": calibrated,
-                "lower": calibrated_lower, "upper": calibrated_upper,
-                "structural_lower": lower, "structural_upper": upper,
-                "structural": structural, "calibrated": calibrated,
-                "calibration_state": (
-                    "EXPLICIT_CHAMPION_APPLIED" if champion_scope_valid
-                    else "EXPLICIT_CHAMPION_SCOPE_MISMATCH" if champion is not None
-                    else self.champion_load_state),
-                "probability_model_id": (
-                    champion.model_version if champion_scope_valid and champion is not None
-                    else "structural_uncalibrated_v1"),
-                "probability_model_hash": (
-                    champion.model_hash if champion_scope_valid and champion is not None else ""),
-                "explicit_champion_applied": champion_scope_valid,
-                "settlement_margin": margin, "settlement_sigma": sigma,
+        if not champion_scope_valid or champion is None:
+            base["calibration_state"] = (
+                "EXPLICIT_CHAMPION_SCOPE_OR_FAMILY_MISMATCH"
+                if champion is not None else self.champion_load_state
+            )
+            return base
+        try:
+            prediction = predict_settlement_model(champion, features)
+        except ValueError:
+            base["inference_state"] = "SETTLEMENT_MODEL_INFERENCE_FAILED"
+            return base
+        return {**base, "valid": True, "yes": prediction["yes"],
+                "lower": prediction["lower"], "upper": prediction["upper"],
+                "structural_lower": prediction["lower"],
+                "structural_upper": prediction["upper"],
+                "structural": prediction["raw_yes"],
+                "calibrated": prediction["yes"],
+                "calibration_state": "IMMUTABLE_SETTLEMENT_CHAMPION_APPLIED",
+                "inference_state": "VALID",
+                "probability_model_id": champion.model_version,
+                "probability_model_hash": champion.model_hash,
+                "explicit_champion_applied": True,
+                "settlement_margin_bps": prediction["predicted_settlement_margin_bps"],
+                "settlement_sigma_bps": prediction["settlement_sigma_bps"],
+                "settlement_mean_uncertainty_bps": prediction["mean_uncertainty_bps"],
                 "calculated_monotonic_ns": time.monotonic_ns(),
                 "valid_until_monotonic_ns": valid_until}
 
@@ -653,13 +668,39 @@ class Monitor:
             "registry_load_state": load_state,
             "explicit_registry_model_applied": False,
         })
-        if external_only.get("valid") is not True or artifact is None:
+        if artifact is None:
             return output
         rules_hash = str(self.active_contract.get("normalized_rules_hash") or "")
         if ("BTC" not in artifact.assets
                 or "BTC_USD_UPDOWN_5M" not in artifact.contract_templates
                 or rules_hash not in artifact.rules_hashes):
             output["registry_load_state"] = "SCOPE_MISMATCH"
+            return output
+        if artifact.family == SETTLEMENT_MODEL_FAMILY:
+            features = external_only.get("model_features")
+            if not isinstance(features, dict):
+                output.update({"valid": False, "registry_load_state": "FEATURES_INCOMPLETE"})
+                return output
+            try:
+                prediction = predict_settlement_model(artifact, features)
+            except ValueError:
+                output.update({"valid": False, "registry_load_state": "INFERENCE_FAILED"})
+                return output
+            output.update({
+                "valid": True,
+                "yes": prediction["yes"], "calibrated": prediction["yes"],
+                "lower": prediction["lower"], "upper": prediction["upper"],
+                "structural": prediction["raw_yes"],
+                "structural_lower": prediction["lower"],
+                "structural_upper": prediction["upper"],
+                "probability_model_id": artifact.model_version,
+                "probability_model_hash": artifact.model_hash,
+                "explicit_registry_model_applied": True,
+                "settlement_margin_bps": prediction["predicted_settlement_margin_bps"],
+                "settlement_sigma_bps": prediction["settlement_sigma_bps"],
+            })
+            return output
+        if external_only.get("valid") is not True:
             return output
         structural = float(external_only["structural"])
         lower = calibrated_probability(float(external_only["structural_lower"]), artifact)
@@ -808,7 +849,20 @@ class Monitor:
             "external": {"healthy": multi_venue_healthy,
                          "fresh_venue_count": int(venue_runtime.get("fresh_venue_count") or (1 if external_fresh else 0)),
                          "dispersion_bps": float(venue_runtime.get("dispersion_bps") or 0.0),
-                         "age_ns": int(venue_runtime.get("age_ns") or external_age), "venues": [{
+                         "age_ns": int(venue_runtime.get("age_ns") or external_age),
+                         "composite_price": float(venue_runtime.get("composite_price") or external.get("price") or 0.0),
+                         "composite_microprice": float(venue_runtime.get("composite_microprice") or external.get("price") or 0.0),
+                         "return_250ms": venue_runtime.get("return_250ms"),
+                         "return_1s": venue_runtime.get("return_1s"),
+                         "return_5s": venue_runtime.get("return_5s"),
+                         "return_30s": venue_runtime.get("return_30s"),
+                         "realized_vol_fast": venue_runtime.get("realized_vol_fast"),
+                         "realized_vol_medium": venue_runtime.get("realized_vol_medium"),
+                         "realized_vol_slow": venue_runtime.get("realized_vol_slow"),
+                         "realized_vol_30s": venue_runtime.get("realized_vol_30s"),
+                         "aggregate_ofi": venue_runtime.get("aggregate_ofi"),
+                         "aggregate_trade_imbalance": venue_runtime.get("aggregate_trade_imbalance"),
+                         "venues": [{
                 "venue": "VENUE_COMPOSITE" if multi_venue_healthy else "BINANCE_SPOT",
                 "healthy": multi_venue_healthy or external_fresh,
                 "age_ns": int(venue_runtime.get("age_ns") or external_age),

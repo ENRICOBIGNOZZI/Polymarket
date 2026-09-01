@@ -26,9 +26,9 @@
     "max_drawdown": 0.15,
     "hard_arb_fixed_dollar_trade_cap_enabled": false,
     "hard_arb_max_trade_fraction": 1.0,
-    "max_trade_usd_disabled_cap_value": 1e100,
-    "hard_arb_max_trade_usd_disabled_cap_value": 1e100,
-    "interpretation": "100% is a hard ceiling, not a target. Kelly, executable depth, authoritative fees, spread/slippage, inventory and unwind risk, adverse markout, capital/latency costs, state integrity and the 15% drawdown kill switch still bind."
+    "max_trade_usd_disabled_cap_value": 300,
+    "hard_arb_max_trade_usd_disabled_cap_value": 300,
+    "interpretation": "100% is a hard percentage ceiling, not a target. Finite $300 defense-in-depth guards remain configured even while the fixed-dollar switch is disabled. Kelly, executable depth, authoritative fees, spread/slippage, inventory and unwind risk, adverse markout, capital/latency costs, state integrity and the 15% drawdown kill switch still bind."
   },
   "architecture": {
     "target": "one slim canonical V7 PAPER codebase",

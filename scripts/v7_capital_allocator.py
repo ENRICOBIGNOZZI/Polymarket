@@ -37,9 +37,15 @@ SLEEVE_STRATEGIES = {
     "external": ("crypto_settlement_fair", "crypto_informed_taker"),
 }
 
-EXECUTION_STRATEGIES = frozenset(
-    strategy for strategies in SLEEVE_STRATEGIES.values() for strategy in strategies
-)
+EXECUTION_OWNER_BY_SLEEVE = {
+    "hard_arb": "hard_arb",
+    "external": "crypto_settlement_fair",
+}
+COMPONENT_OBSERVATION_BY_SLEEVE = {
+    "fast_structural": "fast_structural",
+    "micro_maker": "professional_maker",
+}
+EXECUTION_STRATEGIES = frozenset(EXECUTION_OWNER_BY_SLEEVE.values())
 
 
 def atomic_json(path: Path, value: Any) -> None:
@@ -73,12 +79,10 @@ def strategy_budgets_from_sleeves(
     *,
     target_budget: float | None = None,
 ) -> dict[str, float]:
-    strategy_budgets: dict[str, float] = {}
-    for sleeve, strategies in SLEEVE_STRATEGIES.items():
-        sleeve_budget = float(budgets.get(sleeve, 0.0))
-        per_strategy = sleeve_budget / len(strategies)
-        for strategy in strategies:
-            strategy_budgets[strategy] = per_strategy
+    strategy_budgets = {
+        strategy: float(budgets.get(sleeve, 0.0))
+        for sleeve, strategy in EXECUTION_OWNER_BY_SLEEVE.items()
+    }
     if set(strategy_budgets) != EXECUTION_STRATEGIES:
         raise ValueError("execution_strategy_partition_incomplete")
     if target_budget is not None:
@@ -99,11 +103,12 @@ def materialize(base_config: Path, output_dir: Path) -> dict[str, Any]:
     cfg = json.loads(base_config.read_text(encoding="utf-8"))
     budgets = allocate(cfg)
     v7 = cfg.get("v7") if isinstance(cfg.get("v7"), dict) else {}
-    raw_target = v7.get("execution_strategy_budget_usd")
-    target_budget = float(raw_target) if raw_target is not None else None
-    strategy_budgets = strategy_budgets_from_sleeves(
-        budgets, target_budget=target_budget
-    )
+    strategy_budgets = strategy_budgets_from_sleeves(budgets)
+    component_observation_budgets = {
+        strategy: float(budgets.get(sleeve, 0.0))
+        for sleeve, strategy in COMPONENT_OBSERVATION_BY_SLEEVE.items()
+    }
+    component_observation_budgets["crypto_informed_taker"] = 0.0
     for sleeve, active_key in SLEEVES.items():
         child = json.loads(json.dumps(cfg))
         child["starting_capital"] = budgets[sleeve]
@@ -111,10 +116,23 @@ def materialize(base_config: Path, output_dir: Path) -> dict[str, Any]:
         for other_key in SLEEVES.values():
             child_v7[other_key] = 1.0 if other_key == active_key else 0.0
         child_v7["reserve_fraction"] = 0.0
-        child_strategy_budgets = {
-            strategy: strategy_budgets[strategy]
-            for strategy in SLEEVE_STRATEGIES[sleeve]
-        }
+        if sleeve in EXECUTION_OWNER_BY_SLEEVE:
+            owner = EXECUTION_OWNER_BY_SLEEVE[sleeve]
+            child_strategy_budgets = {owner: strategy_budgets[owner]}
+            authority_class = "PAPER_EXECUTION_OWNER"
+        elif sleeve in COMPONENT_OBSERVATION_BY_SLEEVE:
+            component = COMPONENT_OBSERVATION_BY_SLEEVE[sleeve]
+            child_strategy_budgets = {
+                component: component_observation_budgets[component]
+            }
+            authority_class = "COMPONENT_OBSERVATION_ZERO_INDEPENDENT_AUTHORITY"
+        else:
+            child_strategy_budgets = {
+                strategy: 0.0 for strategy in SLEEVE_STRATEGIES[sleeve]
+            }
+            authority_class = "RESEARCH_ZERO_AUTHORITY"
+        if sleeve == "external":
+            child_strategy_budgets["crypto_informed_taker"] = 0.0
         child["capital_scope"] = {
             "canonical_account_starting_capital": float(cfg["starting_capital"]),
             "sleeve": sleeve,
@@ -122,6 +140,10 @@ def materialize(base_config: Path, output_dir: Path) -> dict[str, Any]:
             "sleeve_internal_fraction": 1.0,
             "strategy_budgets": child_strategy_budgets,
             "strategy_budget_sum": sum(child_strategy_budgets.values()),
+            "authority_class": authority_class,
+            "independent_execution_authority": (
+                authority_class == "PAPER_EXECUTION_OWNER"
+            ),
             "double_counting_forbidden": True,
         }
         atomic_json(output_dir / f"{sleeve}.json", child)
@@ -136,6 +158,11 @@ def materialize(base_config: Path, output_dir: Path) -> dict[str, Any]:
         "strategy_budgets": strategy_budgets,
         "execution_strategy_count": len(strategy_budgets),
         "strategy_budget_sum": sum(strategy_budgets.values()),
+        "component_observation_budgets": component_observation_budgets,
+        "component_observation_budget_sum": sum(
+            component_observation_budgets.values()
+        ),
+        "capital_authority_owners": sorted(EXECUTION_STRATEGIES),
         "research_strategy_budgets": {},
         "research_has_capital": False,
         "allocated_plus_reserve": sum(budgets.values()),

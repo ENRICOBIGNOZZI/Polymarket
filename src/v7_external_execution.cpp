@@ -210,6 +210,7 @@ CandidateAction build_external_make(
     std::int64_t best_ask_tick,
     double tick_size,
     double signed_inventory_fraction,
+    const ExecutionLatencySnapshot& latency,
     std::int64_t now_ns) noexcept {
 
     CandidateAction out;
@@ -227,8 +228,33 @@ CandidateAction build_external_make(
         || best_bid_tick <= 0 || best_ask_tick <= best_bid_tick
         || !finite(signed_inventory_fraction)
         || !finite(maker_policy.inventory_skew_ticks)
-        || !finite(maker_policy.quote_quantity) || maker_policy.quote_quantity <= 0.0) {
+        || !finite(maker_policy.quote_quantity) || maker_policy.quote_quantity <= 0.0
+        || maker_policy.execution_model_version == 0
+        || maker_policy.execution_model_mature == 0
+        || maker_policy.markout_model_mature == 0
+        || !execution_latency_valid(latency)) {
         out.admissible = 0;
+        return out;
+    }
+
+    const auto unit_interval = [](double value) noexcept {
+        return finite(value) && value >= 0.0 && value <= 1.0;
+    };
+    if (!unit_interval(maker_policy.reach_probability_lower)
+        || !unit_interval(maker_policy.fill_given_reach_probability_lower)
+        || !finite(maker_policy.adverse_markout_upper_per_share)
+        || maker_policy.adverse_markout_upper_per_share < 0.0
+        || !finite(maker_policy.maker_rebate_lower_per_share)
+        || maker_policy.maker_rebate_lower_per_share < 0.0
+        || !finite(maker_policy.inventory_cost_per_share)
+        || maker_policy.inventory_cost_per_share < 0.0
+        || !finite(maker_policy.cancel_cost_per_share)
+        || maker_policy.cancel_cost_per_share < 0.0
+        || !finite(maker_policy.capital_cost_per_share)
+        || maker_policy.capital_cost_per_share < 0.0
+        || !finite(maker_policy.cancel_latency_risk_per_second)
+        || maker_policy.cancel_latency_risk_per_second < 0.0
+        || !finite(maker_policy.minimum_robust_ev_per_share)) {
         return out;
     }
 
@@ -265,12 +291,44 @@ CandidateAction build_external_make(
         return out;
     }
 
+    const double reach = maker_policy.reach_probability_lower;
+    const double fill_given_reach = maker_policy.fill_given_reach_probability_lower;
+    const double fill_probability = reach * fill_given_reach;
+    const double latency_markout = maker_policy.cancel_latency_risk_per_second
+        * latency.maker_cancel_p99_seconds;
+    const double conditional_economics = robust_capture
+        + maker_policy.maker_rebate_lower_per_share
+        - maker_policy.adverse_markout_upper_per_share
+        - latency_markout;
+    const double unconditional_cost = maker_policy.inventory_cost_per_share
+        + maker_policy.cancel_cost_per_share
+        + maker_policy.capital_cost_per_share;
+    const double robust_ev = fill_probability * conditional_economics
+        - unconditional_cost;
+    if (!finite(robust_ev)
+        || robust_ev <= maker_policy.minimum_robust_ev_per_share) return out;
+
     out.price_tick = quote_tick;
     out.quantity_microunits = static_cast<std::int64_t>(
         std::llround(maker_policy.quote_quantity * 1'000'000.0));
     out.average_price = price;
-    out.robust_ev_per_share = robust_capture;
-    out.expected_change_in_wealth = maker_policy.quote_quantity * robust_capture;
+    out.robust_ev_per_share = robust_ev;
+    out.expected_change_in_wealth = maker_policy.quote_quantity * robust_ev;
+    out.risk_cost = maker_policy.quote_quantity * (
+        fill_probability * (maker_policy.adverse_markout_upper_per_share
+                            + latency_markout)
+        + unconditional_cost);
+    out.capital_time_cost = maker_policy.quote_quantity
+        * maker_policy.capital_cost_per_share;
+    out.execution_uncertainty = 1.0 - fill_probability;
+    out.reach_probability_lower = reach;
+    out.fill_given_reach_probability_lower = fill_given_reach;
+    out.fill_probability_lower = fill_probability;
+    out.conditional_markout_upper_per_share =
+        maker_policy.adverse_markout_upper_per_share + latency_markout;
+    out.maker_rebate_lower_per_share = maker_policy.maker_rebate_lower_per_share;
+    out.execution_latency_seconds = latency.maker_place_p99_seconds
+        + latency.maker_cancel_p99_seconds;
     out.admissible = out.quantity_microunits > 0 ? 1 : 0;
     return out;
 }

@@ -10,7 +10,7 @@ sys.path.insert(0, str(ROOT / "scripts"))
 
 from v7_maker_durable_learning import (  # noqa: E402
     adverse_markout_models, append_new, compact_evidence, fit_model, hazard_model, identity,
-    jsonl_files, placement_features, rows,
+    jsonl_files, placement_features, rows, shadow_probe_policy_value,
 )
 
 SHA = "a" * 40
@@ -175,6 +175,48 @@ class DurableLearningTests(unittest.TestCase):
         self.assertFalse(model["learned_placement_policy"]["valid"])
         self.assertEqual(
             model["learned_placement_policy"]["state"], "EVIDENCE_ACCUMULATING")
+        self.assertFalse(model["shadow_probe_policy_value"]["promotion_gate_pass"])
+
+    def test_shadow_probe_policy_value_requires_complete_forward_oos_scale(self) -> None:
+        values = []
+        for index in range(20):
+            candidate_id = f"probe-{index}"
+            arm = "ECONOMIC" if index % 2 == 0 else "INFORMATION"
+            timestamp = index * 86_400_000 + 1_000
+            common_metadata = {
+                "policy_hash": "policy", "config_hash": "config",
+                "execution_semantics_version": "maker-paper-v7.2-bilateral-inventory",
+                "counterfactual": True,
+                "economic_authority": "SHADOW_COUNTERFACTUAL",
+                "execution_authority": "SHADOW_ZERO_AUTHORITY",
+                "excluded_from_portfolio_equity": True,
+                "assigned_action_arm": arm, "action_propensity": 0.5,
+            }
+            assignment = record(
+                "SHADOW_PROBE", f"probe-a-{index}", candidate_id=candidate_id,
+                event_id=f"event-{index}", recorded_ts_ms=timestamp,
+            )
+            assignment["metadata"] = common_metadata | {
+                "probe_phase": "ASSIGNED", "terminal": False,
+            }
+            terminal = record(
+                "SHADOW_PROBE", f"probe-t-{index}", candidate_id=candidate_id,
+                event_id=f"event-{index}", recorded_ts_ms=timestamp + 1_000,
+            )
+            terminal["metadata"] = common_metadata | {
+                "probe_phase": "TERMINAL_REJECTED", "terminal": True,
+            }
+            values.extend((assignment, terminal))
+        report = shadow_probe_policy_value(values)
+        self.assertEqual(report["terminal_episodes"], 20)
+        self.assertEqual(report["forward_oos_episodes"], 4)
+        self.assertEqual(report["invalid_records"], 0)
+        self.assertFalse(report["promotion_gate_pass"])
+        self.assertIn(
+            "MINIMUM_10000_FORWARD_OOS_QUOTE_EPISODES",
+            report["blocking_reasons"],
+        )
+        self.assertEqual(report["arms"]["ECONOMIC"]["day_block_lcb95"], 0.0)
 
     def test_terminal_execution_funnel_labels_no_fill_stage(self) -> None:
         submitted = record(

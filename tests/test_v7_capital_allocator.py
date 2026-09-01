@@ -33,22 +33,20 @@ class CapitalAllocatorTests(unittest.TestCase):
         self.assertAlmostEqual(budgets["fast_structural"], 0.0)
         self.assertAlmostEqual(budgets["reserve"], 200.0)
 
-    def test_current_paper_config_assigns_exactly_2k_to_seven_execution_strategies(self) -> None:
+    def test_current_paper_config_assigns_capital_only_to_two_authority_owners(self) -> None:
         cfg = json.loads((ROOT / "config/paper_v7.json").read_text())
         budgets = allocate(cfg)
-        target = float(cfg["v7"]["execution_strategy_budget_usd"])
-        strategy_budgets = strategy_budgets_from_sleeves(
-            budgets, target_budget=target
-        )
+        strategy_budgets = strategy_budgets_from_sleeves(budgets)
         self.assertEqual(float(cfg["starting_capital"]), 14000.0)
         self.assertEqual(set(strategy_budgets), EXECUTION_STRATEGIES)
-        self.assertEqual(len(strategy_budgets), 7)
-        self.assertTrue(
-            all(abs(budget - 2000.0) <= 1e-9 for budget in strategy_budgets.values())
-        )
-        self.assertAlmostEqual(sum(strategy_budgets.values()), 14000.0)
+        self.assertEqual(len(strategy_budgets), 2)
+        self.assertEqual(strategy_budgets, {
+            "crypto_settlement_fair": 4000.0,
+            "hard_arb": 2000.0,
+        })
+        self.assertAlmostEqual(sum(strategy_budgets.values()), 6000.0)
         self.assertAlmostEqual(budgets["external"], 4000.0)
-        self.assertAlmostEqual(budgets["reserve"], 0.0)
+        self.assertAlmostEqual(budgets["reserve"], 4000.0)
         self.assertTrue(cfg["paper_only"])
         self.assertFalse(cfg["v7"]["authenticated_execution"])
         self.assertFalse(cfg["v7"]["real_order_submission"])
@@ -61,8 +59,13 @@ class CapitalAllocatorTests(unittest.TestCase):
             self.assertEqual(
                 manifest["schema"], "polymarket_v7_capital_allocation_v2"
             )
-            self.assertEqual(manifest["execution_strategy_count"], 7)
-            self.assertAlmostEqual(manifest["strategy_budget_sum"], 14000.0)
+            self.assertEqual(manifest["execution_strategy_count"], 2)
+            self.assertAlmostEqual(manifest["strategy_budget_sum"], 6000.0)
+            self.assertEqual(manifest["component_observation_budgets"], {
+                "crypto_informed_taker": 0.0,
+                "fast_structural": 2000.0,
+                "professional_maker": 2000.0,
+            })
             self.assertEqual(manifest["research_strategy_budgets"], {})
             self.assertFalse(manifest["research_has_capital"])
             self.assertFalse(manifest["real_capital_at_risk"])
@@ -71,10 +74,7 @@ class CapitalAllocatorTests(unittest.TestCase):
             )
             self.assertEqual(
                 external["capital_scope"]["strategy_budgets"],
-                {
-                    "crypto_informed_taker": 2000.0,
-                    "crypto_settlement_fair": 2000.0,
-                },
+                {"crypto_informed_taker": 0.0, "crypto_settlement_fair": 4000.0},
             )
             self.assertAlmostEqual(
                 external["capital_scope"]["strategy_budget_sum"], 4000.0
@@ -82,12 +82,12 @@ class CapitalAllocatorTests(unittest.TestCase):
 
     def test_configured_target_mismatch_fails_closed(self) -> None:
         budgets = {
-            "fast_structural": 100.0,
-            "graph_rv": 100.0,
+            "fast_structural": 0.0,
+            "graph_rv": 0.0,
             "hard_arb": 100.0,
-            "micro_taker": 100.0,
-            "micro_maker": 100.0,
-            "external": 100.0,
+            "micro_taker": 0.0,
+            "micro_maker": 0.0,
+            "external": 200.0,
         }
         with self.assertRaises(ValueError):
             strategy_budgets_from_sleeves(budgets, target_budget=100.0)

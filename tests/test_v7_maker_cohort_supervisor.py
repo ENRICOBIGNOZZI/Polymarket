@@ -162,6 +162,8 @@ class MakerCohortSupervisorTests(unittest.TestCase):
             ROOT / "config" / "v7_professional_market_maker.json"
         ).read_text(encoding="utf-8"))
         self.assertIn("v7_maker_cohort_supervisor.py", loop)
+        self.assertIn("--observer-only", loop)
+        self.assertIn("SHADOW_OBSERVERS_ONLY", supervisor)
         self.assertIn('"MAKER_ROTATION_DRAIN"', runtime)
         self.assertIn('root["active_order_count"]', runtime)
         self.assertIn('root["new_risk_frozen"]', runtime)

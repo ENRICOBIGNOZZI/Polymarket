@@ -113,6 +113,9 @@ struct ContractHotSpec {
     std::uint64_t contract_version = 0;
     std::int64_t start_monotonic_ns = 0;
     std::int64_t end_monotonic_ns = 0;
+    // Settlement models are never pooled across 5m/15m/4h contracts.  This
+    // duration is bound to the frozen model and execution-policy snapshots.
+    std::uint32_t horizon_seconds = 0;
     std::uint32_t oracle_window_seconds = 0;
     Comparator comparator = Comparator::GreaterEqual;
     std::uint8_t verified_template = 0;
@@ -287,7 +290,12 @@ struct FairValueModelSnapshot {
     std::uint64_t model_hash_handle = 0;
     std::uint64_t policy_version = 0;
     std::uint64_t feature_schema_version = 0;
-    double bridge_gap_coefficient = 0.70;
+    std::uint32_t horizon_seconds = 0;
+    std::uint32_t reserved_horizon = 0;
+    // No fixed bridge is authorized by construction.  The slow plane must
+    // publish an exact-SHA empirical coefficient set, including zero when the
+    // fitted challenger selects the oracle-only model.
+    double bridge_gap_coefficient = 0.0;
     double external_return_250ms_coefficient = 0.0;
     double external_return_1s_coefficient = 0.0;
     double sigma_per_sqrt_second_fraction = 0.00020;
@@ -308,8 +316,9 @@ struct FairValueModelSnapshot {
     std::int64_t max_oracle_age_ns = 2'000'000'000LL;
     std::int64_t max_external_age_ns = 1'000'000'000LL;
     std::uint32_t min_healthy_venues = 2;
+    std::uint8_t parameters_empirically_fitted = 0;
     std::uint8_t mature = 0;
-    std::array<std::uint8_t, 3> reserved{};
+    std::array<std::uint8_t, 2> reserved{};
 };
 
 struct FairValueSnapshot {
@@ -320,6 +329,8 @@ struct FairValueSnapshot {
     std::uint64_t model_hash_handle = 0;
     std::uint64_t policy_version = 0;
     std::uint64_t feature_schema_version = 0;
+    std::uint32_t horizon_seconds = 0;
+    std::uint32_t reserved_horizon = 0;
     double fair_yes = 0.5;
     double fair_yes_lower = 0.0;
     double fair_yes_upper = 1.0;
@@ -373,6 +384,37 @@ struct AggressiveBook {
     std::uint8_t valid = 0;
 };
 
+// Immutable empirical latency cut selected on the slow plane.  A candidate
+// that takes new risk is inadmissible until a measured profile is available;
+// configured placeholder constants are never promoted to observations.
+struct ExecutionLatencySnapshot {
+    std::uint64_t profile_version = 0;
+    std::uint64_t sample_count = 0;
+    double taker_arrival_p99_seconds = 0.0;
+    double maker_place_p99_seconds = 0.0;
+    double maker_cancel_p99_seconds = 0.0;
+    std::uint8_t empirical = 0;
+    std::uint8_t valid = 0;
+    std::array<std::uint8_t, 6> reserved{};
+};
+
+// Horizon policy is frozen independently for BTC 5m, BTC 15m and 4h
+// research.  Cancels remain available outside new-risk windows.
+struct HorizonExecutionPolicy {
+    std::uint64_t policy_version = 0;
+    std::uint32_t horizon_seconds = 0;
+    std::uint32_t reserved0 = 0;
+    std::int64_t maker_min_tte_ns = 0;
+    std::int64_t maker_max_tte_ns = 0;
+    std::int64_t taker_min_tte_ns = 0;
+    std::int64_t taker_max_tte_ns = 0;
+    std::uint8_t maker_enabled = 0;
+    std::uint8_t taker_enabled = 0;
+    std::uint8_t research_only = 1;
+    std::uint8_t valid = 0;
+    std::array<std::uint8_t, 4> reserved1{};
+};
+
 struct ExternalFairPolicy {
     double maker_cancel_robust_capture_floor = 0.0;
     double taker_minimum_robust_ev_per_share = 0.001;
@@ -381,15 +423,19 @@ struct ExternalFairPolicy {
     double depth_survival_fraction = 0.75;
     double base_taker_execution_risk_per_share = 0.0005;
     double latency_risk_per_second = 0.001;
+    double taker_fill_probability_lower = 0.0;
     double fractional_kelly = 0.10;
     double max_market_capital_fraction = 0.02;
     double max_quantity = 100.0;
     std::int64_t max_fair_age_ns = 1'000'000'000LL;
     std::int64_t max_book_age_ns = 1'000'000'000LL;
+    std::uint64_t taker_execution_model_version = 0;
     std::uint8_t external_fair_required = 1;
     std::uint8_t cancel_overlay_enabled = 1;
     std::uint8_t maker_repricing_enabled = 0;
     std::uint8_t taker_enabled = 0;
+    std::uint8_t taker_execution_model_mature = 0;
+    std::array<std::uint8_t, 7> reserved{};
 };
 
 struct CandidateAction {
@@ -408,6 +454,12 @@ struct CandidateAction {
     double risk_cost = 0.0;
     double capital_time_cost = 0.0;
     double execution_uncertainty = 0.0;
+    double reach_probability_lower = 0.0;
+    double fill_given_reach_probability_lower = 0.0;
+    double fill_probability_lower = 0.0;
+    double conditional_markout_upper_per_share = 0.0;
+    double maker_rebate_lower_per_share = 0.0;
+    double execution_latency_seconds = 0.0;
     std::uint8_t admissible = 0;
     std::uint8_t critical = 0;
     std::array<std::uint8_t, 6> reserved{};
@@ -417,6 +469,11 @@ struct CandidateAction {
 [[nodiscard]] bool causal_cut_valid(const CausalCut& cut) noexcept;
 [[nodiscard]] bool fair_snapshot_valid(const FairValueSnapshot& fair,
                                        std::int64_t now_ns) noexcept;
+[[nodiscard]] bool execution_latency_valid(
+    const ExecutionLatencySnapshot& latency) noexcept;
+[[nodiscard]] bool horizon_policy_valid(
+    const HorizonExecutionPolicy& policy,
+    const ContractHotSpec& contract) noexcept;
 [[nodiscard]] double fee_per_share(double price,
                                    const FeeScheduleSnapshot& fee,
                                    bool taker = true) noexcept;
@@ -456,6 +513,7 @@ struct CandidateAction {
     std::int64_t now_ns,
     double available_capital,
     double current_market_gross_cost,
+    double expected_arrival_latency_seconds,
     double tick_size) noexcept;
 
 [[nodiscard]] CandidateAction choose_unified_action(
@@ -479,6 +537,8 @@ static_assert(std::is_trivially_copyable_v<ExternalVenueEvent>);
 static_assert(std::is_trivially_copyable_v<ExternalAssetSnapshot>);
 static_assert(std::is_trivially_copyable_v<CausalCut>);
 static_assert(std::is_trivially_copyable_v<FairValueSnapshot>);
+static_assert(std::is_trivially_copyable_v<ExecutionLatencySnapshot>);
+static_assert(std::is_trivially_copyable_v<HorizonExecutionPolicy>);
 static_assert(std::is_trivially_copyable_v<CandidateAction>);
 
 } // namespace pm::v7::external_fair

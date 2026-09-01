@@ -50,6 +50,8 @@ constexpr double kSqrt2 = 1.4142135623730950488;
     return model.model_version > 0
         && model.model_hash_handle > 0
         && model.feature_schema_version > 0
+        && model.horizon_seconds > 0
+        && model.parameters_empirically_fitted != 0
         && finite(model.bridge_gap_coefficient)
         && finite(model.external_return_250ms_coefficient)
         && finite(model.external_return_1s_coefficient)
@@ -82,9 +84,11 @@ constexpr double kSqrt2 = 1.4142135623730950488;
     }
     if (candidate.purpose == Purpose::Liquidation) return 2;
     if (candidate.purpose == Purpose::InventoryReduction) return 3;
-    if (candidate.action == Action::Take) return 4;
-    if (candidate.action == Action::Make) return 5;
-    return 6;
+    // MAKE and TAKE are monetization modes of the same settlement fair.  Once
+    // safety/inventory priorities are satisfied, compare their conservative
+    // wealth changes directly instead of privileging one sleeve by name.
+    if (candidate.action == Action::Take || candidate.action == Action::Make) return 4;
+    return 5;
 }
 
 } // namespace
@@ -97,11 +101,40 @@ bool contract_authorized(const ContractHotSpec& contract) noexcept {
         && contract.rules_hash_handle > 0
         && contract.oracle_feed_handle > 0
         && contract.contract_version > 0
+        && (contract.horizon_seconds == 300
+            || contract.horizon_seconds == 900
+            || contract.horizon_seconds == 14'400)
         && contract.oracle_window_seconds > 0
         && contract.verified_template != 0
         && contract.rules_hash_recognized != 0
         && contract.reference_semantics_verified != 0
         && contract.settlement_source_verified != 0;
+}
+
+bool execution_latency_valid(const ExecutionLatencySnapshot& latency) noexcept {
+    return latency.valid != 0 && latency.empirical != 0
+        && latency.profile_version > 0 && latency.sample_count > 0
+        && finite(latency.taker_arrival_p99_seconds)
+        && finite(latency.maker_place_p99_seconds)
+        && finite(latency.maker_cancel_p99_seconds)
+        && latency.taker_arrival_p99_seconds >= 0.0
+        && latency.maker_place_p99_seconds >= 0.0
+        && latency.maker_cancel_p99_seconds >= 0.0;
+}
+
+bool horizon_policy_valid(const HorizonExecutionPolicy& policy,
+                          const ContractHotSpec& contract) noexcept {
+    if (policy.valid == 0 || policy.policy_version == 0
+        || policy.horizon_seconds == 0
+        || policy.horizon_seconds != contract.horizon_seconds) return false;
+    const auto valid_window = [](std::int64_t minimum,
+                                 std::int64_t maximum) noexcept {
+        return minimum >= 0 && maximum >= minimum;
+    };
+    return valid_window(policy.maker_min_tte_ns, policy.maker_max_tte_ns)
+        && valid_window(policy.taker_min_tte_ns, policy.taker_max_tte_ns)
+        && !(policy.research_only != 0
+             && (policy.maker_enabled != 0 || policy.taker_enabled != 0));
 }
 
 bool causal_cut_valid(const CausalCut& cut) noexcept {
@@ -171,6 +204,7 @@ FairValueSnapshot compute_fair_value(
     out.model_hash_handle = model.model_hash_handle;
     out.policy_version = model.policy_version;
     out.feature_schema_version = model.feature_schema_version;
+    out.horizon_seconds = model.horizon_seconds;
     out.model_mature = model.mature;
     out.contract_verified = contract_authorized(contract) ? 1 : 0;
     out.reference_verified = reference.valid != 0 ? 1 : 0;
@@ -179,8 +213,13 @@ FairValueSnapshot compute_fair_value(
     out.calculated_monotonic_ns = decision_monotonic_ns;
     out.model_drift_score = model_drift_score;
 
-    if (!contract_authorized(contract) || !model_valid(model)) return out;
-    if (decision_monotonic_ns <= 0 || time_to_expiry_ns <= 0) return out;
+    if (!contract_authorized(contract) || !model_valid(model)
+        || model.horizon_seconds != contract.horizon_seconds) return out;
+    if (decision_monotonic_ns <= 0 || time_to_expiry_ns <= 0
+        || time_to_expiry_ns
+            > static_cast<std::int64_t>(contract.horizon_seconds) * 1'000'000'000LL) {
+        return out;
+    }
     if (reference.valid == 0 || reference.market_handle != contract.market_handle
         || reference.contract_version != contract.contract_version
         || reference.oracle_feed_handle != contract.oracle_feed_handle
@@ -373,6 +412,7 @@ CandidateAction build_informed_take(
     std::int64_t now_ns,
     double available_capital,
     double current_market_gross_cost,
+    double expected_arrival_latency_seconds,
     double tick_size) noexcept {
 
     CandidateAction out;
@@ -385,12 +425,19 @@ CandidateAction build_informed_take(
 
     if (policy.taker_enabled == 0 || !contract_authorized(contract)
         || !fair_snapshot_valid(fair, now_ns) || fair.model_mature == 0
+        || policy.taker_execution_model_version == 0
+        || policy.taker_execution_model_mature == 0
+        || !finite(policy.taker_fill_probability_lower)
+        || policy.taker_fill_probability_lower <= 0.0
+        || policy.taker_fill_probability_lower > 1.0
         || fee.valid == 0 || fee.authoritative == 0 || fee.market_handle != contract.market_handle
         || book.valid == 0 || book.ask_count == 0 || book.ask_count > book.asks.size()
         || book.receive_monotonic_ns <= 0 || book.receive_monotonic_ns > now_ns
         || now_ns - book.receive_monotonic_ns > policy.max_book_age_ns
         || !finite(available_capital) || available_capital <= 0.0
         || !finite(current_market_gross_cost) || current_market_gross_cost < 0.0
+        || !finite(expected_arrival_latency_seconds)
+        || expected_arrival_latency_seconds < 0.0
         || !finite(tick_size) || tick_size <= 0.0) {
         out.admissible = 0;
         return out;
@@ -399,9 +446,12 @@ CandidateAction build_informed_take(
 
     const double robust_probability = oriented_lower(fair, instrument_is_yes);
     const std::int64_t latency_ns = now_ns - book.receive_monotonic_ns;
+    const double total_latency_seconds =
+        static_cast<double>(latency_ns) / 1'000'000'000.0
+        + expected_arrival_latency_seconds;
     const double execution_risk_per_share = std::max(0.0, policy.base_taker_execution_risk_per_share)
         + std::max(0.0, policy.latency_risk_per_second)
-            * static_cast<double>(latency_ns) / 1'000'000'000.0;
+            * total_latency_seconds;
 
     const BookLevel& first = book.asks[0];
     if (!finite(first.price) || !finite(first.quantity) || first.price <= 0.0
@@ -449,7 +499,7 @@ CandidateAction build_informed_take(
         total_quantity += quantity;
         total_book_cost += quantity * level.price;
         total_execution_risk += quantity * execution_risk_per_share;
-        total_ev += quantity * mev;
+        total_ev += quantity * mev * policy.taker_fill_probability_lower;
         remaining_budget -= quantity * unit_cash_cost;
         last_price = level.price;
         if (remaining_budget <= kEps || total_quantity >= policy.max_quantity - kEps) break;
@@ -466,6 +516,8 @@ CandidateAction build_informed_take(
     out.capital_time_cost = 0.0;
     out.execution_uncertainty = (fair.fair_yes_upper - fair.fair_yes_lower)
         + execution_risk_per_share;
+    out.fill_probability_lower = policy.taker_fill_probability_lower;
+    out.execution_latency_seconds = total_latency_seconds;
     out.admissible = 1;
     return out;
 }
@@ -495,6 +547,7 @@ CandidateAction choose_unified_action(
         const int priority = action_priority(candidate);
         const double score = finite(candidate.expected_change_in_wealth)
             ? candidate.expected_change_in_wealth : -std::numeric_limits<double>::infinity();
+        if (priority >= 4 && score <= 0.0) continue;
         if (priority < best_priority || (priority == best_priority && score > best_score)) {
             best = candidate;
             best_priority = priority;

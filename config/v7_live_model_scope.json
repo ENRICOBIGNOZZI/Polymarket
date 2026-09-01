@@ -21,13 +21,25 @@
     "market_open"
   ],
   "paper_execution_families": [
-    "professional_maker",
-    "fast_structural",
     "hard_arb",
-    "graph_rv",
-    "crypto_settlement_fair",
+    "crypto_settlement_fair"
+  ],
+  "component_shadow_families": [
+    "professional_maker",
     "crypto_informed_taker",
-    "micro_taker"
+    "fast_structural"
+  ],
+  "research_zero_authority_families": [
+    "micro_taker",
+    "graph_rv",
+    "ranking",
+    "pca",
+    "local_factor",
+    "wallet_intelligence",
+    "market_open",
+    "osint",
+    "sports_latency",
+    "cross_platform"
   ],
   "research_collector_families": [
     "osint",
@@ -55,5 +67,6 @@
     "research_has_ledger_writer_authority": false,
     "blocked_config_is_not_operational_evidence": true,
     "automatic_promotion": false
-  }
+  },
+  "btc_settlement_engine_contract": "config/v7_btc_settlement_engine.json"
 }

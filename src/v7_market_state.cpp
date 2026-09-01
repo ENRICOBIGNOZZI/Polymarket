@@ -9,6 +9,24 @@ namespace {
 
 using Occupancy = std::array<std::uint64_t, kOccupancyWords>;
 
+void clear_occupied_levels(std::array<std::int64_t, kCanonicalPriceSlots>& quantities,
+                           Occupancy& occupancy) noexcept {
+    // A venue snapshot is bounded to a few hundred levels, while the canonical
+    // direct-indexed price domain has 10,001 slots per side.  Walk the compact
+    // occupancy index so replacing a sparse snapshot does not write the whole
+    // 160 KiB quantity domain on every book event.
+    for (std::size_t word_index = 0; word_index < occupancy.size(); ++word_index) {
+        std::uint64_t word = occupancy[word_index];
+        while (word != 0) {
+            const auto bit = static_cast<unsigned>(std::countr_zero(word));
+            const auto index = (word_index << 6U) + bit;
+            if (index < quantities.size()) quantities[index] = 0;
+            word &= word - 1;
+        }
+        occupancy[word_index] = 0;
+    }
+}
+
 void set_occupied(Occupancy& bits, std::int32_t index, bool occupied) noexcept {
     if (index < 0 || static_cast<std::size_t>(index) >= kCanonicalPriceSlots) return;
     const auto word = static_cast<std::size_t>(index) >> 6U;
@@ -102,10 +120,8 @@ bool CanonicalL2Book::valid_level(std::int32_t price_e4,
 }
 
 void CanonicalL2Book::clear_levels() noexcept {
-    bid_qty_.fill(0);
-    ask_qty_.fill(0);
-    bid_occupied_.fill(0);
-    ask_occupied_.fill(0);
+    clear_occupied_levels(bid_qty_, bid_occupied_);
+    clear_occupied_levels(ask_qty_, ask_occupied_);
     best_bid_e4_ = 0;
     best_ask_e4_ = 0;
 }
@@ -204,39 +220,27 @@ std::int32_t CanonicalL2Book::next_ask(std::int32_t from_exclusive) const noexce
     return find_next(ask_occupied_, from_exclusive);
 }
 
-DepthSummary CanonicalL2Book::depth_summary(Side side) const noexcept {
-    DepthSummary out;
-    std::int64_t cumulative = 0;
-    std::int32_t price = side == Side::Buy ? best_bid_e4_ : best_ask_e4_;
-    int populated = 0;
-    for (int level = 1; level <= 10 && price > 0; ++level) {
-        const auto quantity = quantity_at(side, price);
-        cumulative += std::max<std::int64_t>(0, quantity);
-        populated = level;
-        if (level == 1) out.l1_microunits = cumulative;
-        if (level == 5) out.l5_microunits = cumulative;
-        if (level == 10) out.l10_microunits = cumulative;
-        price = side == Side::Buy ? next_bid(price) : next_ask(price);
-    }
-    if (populated > 0 && populated < 5) out.l5_microunits = cumulative;
-    if (populated > 0 && populated < 10) out.l10_microunits = cumulative;
-    return out;
-}
-
-std::uint8_t CanonicalL2Book::fill_ladder(
-    Side side,
+std::uint8_t CanonicalL2Book::fill_side_snapshot(
+    Side side, DepthSummary& depth,
     std::array<PriceLevelE4, kHotDepthLevels>& output) const noexcept {
+    depth = {};
     output.fill({});
     if (side == Side::None) return 0;
+
+    std::int64_t cumulative = 0;
     std::int32_t price = side == Side::Buy ? best_bid_e4_ : best_ask_e4_;
     std::uint8_t count = 0;
     while (price > 0 && count < kHotDepthLevels) {
         const auto quantity = quantity_at(side, price);
-        if (quantity > 0) {
-            output[count++] = PriceLevelE4{price, quantity};
-        }
+        cumulative += std::max<std::int64_t>(0, quantity);
+        output[count++] = PriceLevelE4{price, quantity};
+        if (count == 1) depth.l1_microunits = cumulative;
+        if (count == 5) depth.l5_microunits = cumulative;
+        if (count == 10) depth.l10_microunits = cumulative;
         price = side == Side::Buy ? next_bid(price) : next_ask(price);
     }
+    if (count > 0 && count < 5) depth.l5_microunits = cumulative;
+    if (count > 0 && count < 10) depth.l10_microunits = cumulative;
     return count;
 }
 
@@ -250,10 +254,8 @@ BookHotSnapshot CanonicalL2Book::hot_snapshot() const noexcept {
     out.best_ask_e4 = best_ask_e4_;
     out.best_bid_microunits = quantity_at(Side::Buy, best_bid_e4_);
     out.best_ask_microunits = quantity_at(Side::Sell, best_ask_e4_);
-    out.bid_depth = depth_summary(Side::Buy);
-    out.ask_depth = depth_summary(Side::Sell);
-    out.bid_level_count = fill_ladder(Side::Buy, out.bid_levels);
-    out.ask_level_count = fill_ladder(Side::Sell, out.ask_levels);
+    out.bid_level_count = fill_side_snapshot(Side::Buy, out.bid_depth, out.bid_levels);
+    out.ask_level_count = fill_side_snapshot(Side::Sell, out.ask_depth, out.ask_levels);
     out.lineage_continuous = static_cast<std::uint8_t>(lineage_continuous_);
     out.valid = static_cast<std::uint8_t>(
         lineage_continuous_ && state_version_ > 0 && exchange_event_ns_ > 0

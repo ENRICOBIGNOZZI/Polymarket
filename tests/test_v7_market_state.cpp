@@ -78,6 +78,32 @@ void test_delete_best_uses_occupancy_index_without_sorting() {
     assert(book.hot_snapshot().best_ask_e4 == 5300);
 }
 
+void test_replacing_snapshot_clears_only_previous_occupied_levels() {
+    pm::v7::CanonicalL2Book book(100);
+    const std::array<pm::v7::PriceLevelE4, 3> first_bids{{
+        {4800, 2'000'000}, {4700, 3'000'000}, {4600, 4'000'000}}};
+    const std::array<pm::v7::PriceLevelE4, 3> first_asks{{
+        {5200, 2'500'000}, {5300, 3'500'000}, {5400, 4'500'000}}};
+    assert(book.replace_snapshot(first_bids, first_asks, 100, 1000));
+
+    const std::array<pm::v7::PriceLevelE4, 1> next_bids{{{4900, 5'000'000}}};
+    const std::array<pm::v7::PriceLevelE4, 1> next_asks{{{5100, 6'000'000}}};
+    assert(book.replace_snapshot(next_bids, next_asks, 101, 1001));
+
+    assert(book.quantity_at(pm::v7::Side::Buy, 4900) == 5'000'000);
+    assert(book.quantity_at(pm::v7::Side::Sell, 5100) == 6'000'000);
+    for (const auto& level : first_bids) {
+        assert(book.quantity_at(pm::v7::Side::Buy, level.price_e4) == 0);
+    }
+    for (const auto& level : first_asks) {
+        assert(book.quantity_at(pm::v7::Side::Sell, level.price_e4) == 0);
+    }
+    const auto hot = book.hot_snapshot();
+    assert(hot.valid);
+    assert(hot.best_bid_e4 == 4900);
+    assert(hot.best_ask_e4 == 5100);
+}
+
 void test_crossed_or_off_tick_updates_fail_closed() {
     pm::v7::CanonicalL2Book book(100);
     const std::array<pm::v7::PriceLevelE4, 1> bids{{{4800, 1'000'000}}};
@@ -145,6 +171,7 @@ int main() {
     test_snapshot_best_levels_and_cumulative_depth();
     test_hot_l10_ladder_is_ordered_bounded_and_updates();
     test_delete_best_uses_occupancy_index_without_sorting();
+    test_replacing_snapshot_clears_only_previous_occupied_levels();
     test_crossed_or_off_tick_updates_fail_closed();
     test_tick_change_requires_existing_levels_to_remain_valid();
     test_receive_clock_cannot_go_backwards();

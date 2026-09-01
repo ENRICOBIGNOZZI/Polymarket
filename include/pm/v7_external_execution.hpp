@@ -52,9 +52,21 @@ struct TakerPaperFill {
 struct ExternalMakerPolicy {
     double inventory_skew_ticks = 1.0;
     double minimum_robust_capture_per_share = 0.0;
+    double minimum_robust_ev_per_share = 0.0;
     double quote_quantity = 1.0;
+    double reach_probability_lower = 0.0;
+    double fill_given_reach_probability_lower = 0.0;
+    double adverse_markout_upper_per_share = 0.0;
+    double maker_rebate_lower_per_share = 0.0;
+    double inventory_cost_per_share = 0.0;
+    double cancel_cost_per_share = 0.0;
+    double capital_cost_per_share = 0.0;
+    double cancel_latency_risk_per_second = 0.0;
+    std::uint64_t execution_model_version = 0;
+    std::uint8_t execution_model_mature = 0;
+    std::uint8_t markout_model_mature = 0;
     std::uint8_t enabled = 0;
-    std::array<std::uint8_t, 7> reserved{};
+    std::array<std::uint8_t, 5> reserved{};
 };
 
 [[nodiscard]] IntentPurpose to_intent_purpose(Purpose purpose) noexcept;
@@ -103,6 +115,7 @@ struct ExternalMakerPolicy {
     std::int64_t best_ask_tick,
     double tick_size,
     double signed_inventory_fraction,
+    const ExecutionLatencySnapshot& latency,
     std::int64_t now_ns) noexcept;
 
 static_assert(std::is_trivially_copyable_v<OwnOrderView>);

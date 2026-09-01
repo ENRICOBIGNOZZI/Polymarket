@@ -72,6 +72,7 @@ class FastStructuralPaperExecutorTests(unittest.TestCase):
             writer.append(candidate)
         self.args = argparse.Namespace(
             run_root=self.root, config=self.config, shared_state=self.shared,
+            policy=ROOT / "config/v7_fast_structural.json",
             model_sha=SHA, slippage_bps=0.0, leg_latency_ms=0,
             max_shared_publish_age_ms=2500, interval=0.1, once=True,
         )
@@ -84,7 +85,16 @@ class FastStructuralPaperExecutorTests(unittest.TestCase):
         executor.step()
         self.assertEqual(len(executor.state["open_bundles"]), 1)
         spool = [json.loads(path.read_text()) for path in (self.root / "ledger" / "spool").glob("*.json")]
-        self.assertEqual({row["event_type"] for row in spool}, {"ORDER_SUBMITTED", "FILL"})
+        self.assertEqual(
+            {row["event_type"] for row in spool},
+            {"OPPORTUNITY", "ORDER_SUBMITTED", "FILL"},
+        )
+        feasibility = next(
+            row for row in spool if row["event_type"] == "OPPORTUNITY"
+        )["metadata"]["fast_structural_feasibility"]
+        self.assertTrue(feasibility["positive_after_latency"])
+        self.assertEqual(feasibility["q_star"], 20.0)
+        self.assertTrue(feasibility["books"]["yes"]["asks"])
         self.assertAlmostEqual(executor.state["cash"], 96.0)
         with mock.patch("v7_fast_structural_paper_executor.request_json", return_value={"closed": True}):
             executor.step()
@@ -132,13 +142,31 @@ class FastStructuralPaperExecutorTests(unittest.TestCase):
         executor = Executor(self.args)
         executor.step()
         spool_dir = self.root / "ledger" / "spool"
-        self.assertFalse(spool_dir.exists())
+        spool = [json.loads(path.read_text()) for path in spool_dir.glob("*.json")]
+        self.assertEqual({row["event_type"] for row in spool}, {"OPPORTUNITY"})
         self.assertEqual(executor.state["open_bundles"], {})
         self.assertEqual(executor.state["aborting_bundles"], {})
         self.assertEqual(executor.state["cash"], 100.0)
         self.assertEqual(
-            executor.state["rejections"].get("ARRIVAL_BUNDLE_NET_EDGE_NONPOSITIVE"), 1
+            executor.state["rejections"].get("FEASIBILITY_NET_EDGE_NONPOSITIVE"), 1
         )
+
+    def test_canonical_shadow_mode_never_emits_orders_or_fills(self) -> None:
+        self.args.shadow_only = True
+        executor = Executor(self.args)
+        executor.step()
+        spool = [
+            json.loads(path.read_text())
+            for path in (self.root / "ledger" / "spool").glob("*.json")
+        ]
+        self.assertEqual({row["event_type"] for row in spool}, {"OPPORTUNITY"})
+        self.assertEqual(executor.state["entries"], 0)
+        self.assertEqual(executor.state["open_bundles"], {})
+        status = json.loads(executor.status_path.read_text())
+        self.assertTrue(status["shadow_only"])
+        self.assertEqual(status["execution_authority"], "SHADOW_ZERO_AUTHORITY")
+        self.assertFalse(status["capital_authority"])
+        self.assertFalse(status["ledger_writer_authority"])
 
 
 if __name__ == "__main__":

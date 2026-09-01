@@ -1462,6 +1462,7 @@ def main() -> int:
     parser.add_argument("--shared-state", type=Path)
     parser.add_argument("--model-sha", required=True)
     parser.add_argument("--max-shared-publish-age-ms", type=int, default=2500)
+    parser.add_argument("--research-only", action="store_true")
     args = parser.parse_args()
 
     cfg = json.loads(args.config.read_text(encoding="utf-8"))
@@ -1535,6 +1536,8 @@ def main() -> int:
     cash = base.finite(state.get("cash"), start_capital)
     peak = max(start_capital, base.finite(state.get("peak"), start_capital))
     positions = state.get("positions") if isinstance(state.get("positions"), dict) else {}
+    if args.research_only and positions:
+        raise SystemExit("research_only_refuses_prior_paper_positions")
     samples = state.get("samples") if isinstance(state.get("samples"), list) else []
     realized_total = base.finite(state.get("realized_pnl_total"), 0.0)
     failures: list[str] = []
@@ -1790,7 +1793,13 @@ def main() -> int:
         "cash_rejected": 0,
         "opened": 0,
     }
-    if not killed and not new_risk_frozen and model_valid and flow_valid:
+    if (
+        not args.research_only
+        and not killed
+        and not new_risk_frozen
+        and model_valid
+        and flow_valid
+    ):
         ranked: list[tuple[
             float, Any, str, base.Book, economics.RoundTripEconomics, float, float,
         ]] = []
@@ -2071,6 +2080,12 @@ def main() -> int:
         "paper_only": True,
         "authenticated_execution": False,
         "real_order_submission": False,
+        "research_only": args.research_only,
+        "execution_authority": (
+            "RESEARCH_ONLY_ZERO_AUTHORITY" if args.research_only else "PAPER"
+        ),
+        "capital_authority": not args.research_only,
+        "ledger_writer_authority": not args.research_only,
         "cash": cash,
         "equity": equity,
         "peak": peak,
@@ -2142,6 +2157,7 @@ def main() -> int:
     base.atomic_json(state_path, new_state)
     base.atomic_json(args.run_dir / "status.json", {k: new_state[k] for k in (
         "schema", "timestamp", "model_sha", "paper_only", "authenticated_execution", "real_order_submission",
+        "research_only", "execution_authority", "capital_authority", "ledger_writer_authority",
         "cash", "equity", "peak", "drawdown", "killed",
         "new_risk_frozen", "drain_requested", "drain_complete", "marking_complete", "market_capital_ceiling",
         "unmarkable_positions", "marking_contract",

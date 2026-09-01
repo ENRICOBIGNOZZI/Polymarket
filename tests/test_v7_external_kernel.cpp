@@ -18,6 +18,7 @@ ExternalKernelInput input() {
     in.contract.rules_hash_handle = 6;
     in.contract.oracle_feed_handle = 7;
     in.contract.contract_version = 8;
+    in.contract.horizon_seconds = 300;
     in.contract.oracle_window_seconds = 60;
     in.contract.comparator = Comparator::GreaterEqual;
     in.contract.verified_template = 1;
@@ -69,6 +70,7 @@ ExternalKernelInput input() {
     in.model.model_hash_handle = 12;
     in.model.policy_version = 13;
     in.model.feature_schema_version = 14;
+    in.model.horizon_seconds = 300;
     in.model.bridge_gap_coefficient = 0.8;
     in.model.sigma_per_sqrt_second_fraction = 0.0002;
     in.model.bridge_residual_sigma_fraction = 0.0001;
@@ -85,11 +87,15 @@ ExternalKernelInput input() {
     in.model.max_oracle_age_ns = 1'000'000'000LL;
     in.model.max_external_age_ns = 1'000'000'000LL;
     in.model.min_healthy_venues = 2;
+    in.model.parameters_empirically_fitted = 1;
     in.model.mature = 1;
 
     in.policy.cancel_overlay_enabled = 1;
     in.policy.external_fair_required = 1;
     in.policy.taker_enabled = 1;
+    in.policy.taker_execution_model_version = 17;
+    in.policy.taker_execution_model_mature = 1;
+    in.policy.taker_fill_probability_lower = 0.80;
     in.policy.maker_cancel_robust_capture_floor = 0.0;
     in.policy.taker_minimum_robust_ev_per_share = 0.0001;
     in.policy.max_depth_fraction = 0.5;
@@ -98,6 +104,25 @@ ExternalKernelInput input() {
     in.policy.max_market_capital_fraction = 0.1;
     in.policy.max_quantity = 10.0;
     in.policy.max_book_age_ns = 1'000'000'000LL;
+
+    in.latency.profile_version = 15;
+    in.latency.sample_count = 200;
+    in.latency.taker_arrival_p99_seconds = 0.075;
+    in.latency.maker_place_p99_seconds = 0.050;
+    in.latency.maker_cancel_p99_seconds = 0.100;
+    in.latency.empirical = 1;
+    in.latency.valid = 1;
+
+    in.horizon_policy.policy_version = 16;
+    in.horizon_policy.horizon_seconds = 300;
+    in.horizon_policy.maker_min_tte_ns = 120'000'000'000LL;
+    in.horizon_policy.maker_max_tte_ns = 300'000'000'000LL;
+    in.horizon_policy.taker_min_tte_ns = 5'000'000'000LL;
+    in.horizon_policy.taker_max_tte_ns = 120'000'000'000LL;
+    in.horizon_policy.maker_enabled = 1;
+    in.horizon_policy.taker_enabled = 1;
+    in.horizon_policy.research_only = 0;
+    in.horizon_policy.valid = 1;
 
     in.fee.market_handle = 1;
     in.fee.fee_version = 1;
@@ -146,7 +171,6 @@ ExternalKernelInput input() {
     in.time_to_expiry_ns = 30'000'000'000LL;
     in.available_cash = 1'000.0;
     in.current_market_exposure = 0.0;
-    in.expected_taker_latency_seconds = 0.01;
     in.tick_size = 0.01;
     in.trigger_source = TriggerSource::ExternalPriceUpdate;
     in.cancel_path_healthy = 1;
@@ -220,6 +244,38 @@ int main() {
     assert(kill.chosen.action == Action::Withdraw);
     assert(kill.chosen.purpose == Purpose::Risk);
     assert(kill.chosen.critical == 1);
+
+    // A model frozen for another horizon cannot price this contract, and a 4h
+    // research policy cannot accidentally acquire execution authority.
+    auto wrong_horizon = in;
+    wrong_horizon.causal_cut_id = 55;
+    wrong_horizon.model.horizon_seconds = 900;
+    const auto mismatch = run_external_fair_kernel(wrong_horizon);
+    assert(mismatch.fair_valid == 0);
+    assert(mismatch.chosen.action == Action::Withdraw);
+
+    auto research = in;
+    research.causal_cut_id = 56;
+    research.contract.horizon_seconds = 14'400;
+    research.model.horizon_seconds = 14'400;
+    research.time_to_expiry_ns = 30'000'000'000LL;
+    research.horizon_policy.horizon_seconds = 14'400;
+    research.horizon_policy.maker_enabled = 0;
+    research.horizon_policy.taker_enabled = 0;
+    research.horizon_policy.research_only = 1;
+    const auto research_only = run_external_fair_kernel(research);
+    assert(research_only.fair_valid == 1);
+    assert(research_only.chosen.action == Action::Cancel);
+
+    // Alpha abstains when no empirical latency profile is present. Critical
+    // cancellation is still evaluated and remains available.
+    auto no_latency = in;
+    no_latency.causal_cut_id = 57;
+    no_latency.latency.valid = 0;
+    no_latency.resting_quotes[0].active = 0;
+    const auto latency_cold_start = run_external_fair_kernel(no_latency);
+    assert(latency_cold_start.fair_valid == 1);
+    assert(latency_cold_start.chosen.action == Action::Nothing);
 
     std::cout << "v7 external kernel tests passed\n";
     return 0;

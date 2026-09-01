@@ -200,6 +200,9 @@ class V7NativeMonitoringTest(unittest.TestCase):
             "timestamp": now - 5, "model_sha": sha, "state": "RUNNING",
             "paper_only": True, "authenticated_execution": False,
             "real_order_submission": False, "equity": 0.0,
+            "shadow_only": True,
+            "execution_authority": "SHADOW_ZERO_AUTHORITY",
+            "capital_authority": False, "ledger_writer_authority": False,
             "realized_pnl_total": 0.0, "open_bundles": 0,
             "aborting_bundles": 0, "candidates_seen": 0, "killed": False,
         })

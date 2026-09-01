@@ -1,6 +1,7 @@
 #include "pm/v7_external_execution.hpp"
 
 #include <cassert>
+#include <cmath>
 #include <iostream>
 
 using namespace pm::v7;
@@ -18,6 +19,7 @@ ContractHotSpec contract() {
     c.rules_hash_handle = 6;
     c.oracle_feed_handle = 7;
     c.contract_version = 8;
+    c.horizon_seconds = 300;
     c.oracle_window_seconds = 60;
     c.comparator = Comparator::GreaterEqual;
     c.verified_template = 1;
@@ -163,22 +165,53 @@ int main() {
 
     ExternalMakerPolicy maker;
     maker.enabled = 1;
+    maker.execution_model_version = 1;
+    maker.execution_model_mature = 1;
+    maker.markout_model_mature = 1;
     maker.inventory_skew_ticks = 1.0;
     maker.minimum_robust_capture_per_share = 0.001;
+    maker.minimum_robust_ev_per_share = 0.0;
     maker.quote_quantity = 1.0;
+    maker.reach_probability_lower = 0.50;
+    maker.fill_given_reach_probability_lower = 0.40;
+    maker.adverse_markout_upper_per_share = 0.002;
+    maker.maker_rebate_lower_per_share = 0.001;
+    maker.inventory_cost_per_share = 0.0001;
+    maker.cancel_cost_per_share = 0.0001;
+    maker.capital_cost_per_share = 0.0001;
+    maker.cancel_latency_risk_per_second = 0.001;
+    ExecutionLatencySnapshot latency;
+    latency.profile_version = 1;
+    latency.sample_count = 100;
+    latency.taker_arrival_p99_seconds = 0.075;
+    latency.maker_place_p99_seconds = 0.050;
+    latency.maker_cancel_p99_seconds = 0.100;
+    latency.empirical = 1;
+    latency.valid = 1;
     auto bid = build_external_make(contract(), fair(1'000), maker, Side::Buy, true,
-                                   3, 200, 50, 80, 0.01, 0.0, 1'010);
+                                   3, 200, 50, 80, 0.01, 0.0, latency, 1'010);
     assert(bid.admissible == 1);
     assert(bid.action == Action::Make);
     assert(bid.price_tick < 80);
     assert(bid.robust_ev_per_share > maker.minimum_robust_capture_per_share);
+    assert(std::abs(bid.fill_probability_lower - 0.20) < 1e-12);
+    assert(bid.conditional_markout_upper_per_share >
+           maker.adverse_markout_upper_per_share);
 
     // External fair remains directional. Changing the PM mid while preserving
     // the opposite touch constraint cannot move reservation toward PM mid.
     auto bid_wider_book = build_external_make(contract(), fair(1'000), maker, Side::Buy, true,
-                                              3, 201, 20, 95, 0.01, 0.0, 1'010);
+                                              3, 201, 20, 95, 0.01, 0.0, latency, 1'010);
     assert(bid_wider_book.admissible == 1);
     assert(bid_wider_book.price_tick == bid.price_tick);
+
+    // New maker risk fails closed when the empirical latency distribution or
+    // fill-conditioned execution model is unavailable.
+    auto no_latency = latency;
+    no_latency.valid = 0;
+    auto blocked = build_external_make(contract(), fair(1'000), maker, Side::Buy, true,
+                                       3, 202, 50, 80, 0.01, 0.0, no_latency, 1'010);
+    assert(blocked.admissible == 0);
 
     std::cout << "v7 external execution tests passed\n";
     return 0;

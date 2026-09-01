@@ -41,6 +41,8 @@ struct ExternalKernelInput {
     FeeScheduleSnapshot fee{};
     ExternalFairPolicy policy{};
     ExternalMakerPolicy maker_policy{};
+    ExecutionLatencySnapshot latency{};
+    HorizonExecutionPolicy horizon_policy{};
     AggressiveBook yes_book{};
     AggressiveBook no_book{};
     MakerTouchSnapshot yes_touch{};
@@ -54,7 +56,6 @@ struct ExternalKernelInput {
     double model_drift_score = 0.0;
     double available_cash = 0.0;
     double current_market_exposure = 0.0;
-    double expected_taker_latency_seconds = 0.0;
     double signed_yes_inventory_fraction = 0.0;
     double signed_no_inventory_fraction = 0.0;
     double tick_size = 0.01;

@@ -14,7 +14,7 @@ import v7_external_fair_paper_router as router  # noqa: E402
 from v7_external_fair_paper_router import (  # noqa: E402
     Book, entry_tte_allowed, executable_sell_value, fee_per_share,
     hybrid_probability, live_market_yes, model_market_disagreement_allowed,
-    probability_interval_bin_diagnostics, robust_candidates,
+    opportunity_set, probability_interval_bin_diagnostics, robust_candidates,
 )
 
 
@@ -101,6 +101,11 @@ def main() -> None:
     assert len(rows) == 1 and rows[0]["outcome"] == "YES"
     assert rows[0]["robust_ev"] > 0.14
     assert rows[0]["tte_seconds"] == 45.0
+    observed = opportunity_set(snapshot(), live_books, policy)
+    assert observed is not None
+    assert observed["decision"] == "TAKE_YES"
+    assert {row["action"] for row in observed["actions"]} == {"TAKE_YES", "TAKE_NO"}
+    assert observed["books"]["YES"]["asks"] == [[0.58, 100.0]]
     extreme = snapshot(); extreme["fair"]["pm_mid"] = 0.01
     assert not model_market_disagreement_allowed(extreme["fair"], policy)
     # The static Gamma discovery midpoint is diagnostic only. Live coherent
@@ -157,6 +162,33 @@ def main() -> None:
 
     with tempfile.TemporaryDirectory() as directory:
         run_root = Path(directory)
+        (run_root / "external_fair").mkdir()
+        evidence = router.PaperRouter(
+            run_root, "a" * 40, ROOT / "config" / "v7_external_fair.json",
+            "https://clob.invalid", "https://gamma.invalid",
+        )
+        live = snapshot()
+        live["market"].update({"market_id": "recurring", "event_id": "event"})
+        first = {"yes": book("yes", 0.58, 0.57), "no": book("no", 0.43, 0.42)}
+        second = {
+            token: Book(
+                value.token_id, value.bids, value.asks, value.tick_size,
+                value.min_order_size, value.exchange_ts_ms + 1,
+                value.receive_ts_ms + 1, f"{value.snapshot_id}-next",
+            )
+            for token, value in first.items()
+        }
+        assert evidence.record_opportunity_set(live, first)
+        assert evidence.record_opportunity_set(live, second)
+        assert evidence.record_opportunity_set(live, first)
+        opportunity_rows = [
+            json.loads(line) for line in
+            (run_root / "external_fair" / "counterfactuals.jsonl").read_text().splitlines()
+        ]
+        assert len({row["record_id"] for row in opportunity_rows}) == 3
+
+    with tempfile.TemporaryDirectory() as directory:
+        run_root = Path(directory)
         external = run_root / "external_fair"
         external.mkdir(parents=True)
         live = snapshot()
@@ -201,7 +233,7 @@ def main() -> None:
         assert all(event["metadata"]["excluded_from_portfolio_equity"] is True for event in canonical)
         events = [json.loads(line) for line in (external / "counterfactuals.jsonl").read_text().splitlines()]
         event_types = {event["event_type"] for event in events}
-        assert {"FORECAST", "CANDIDATE", "VIRTUAL_FILL"} <= event_types
+        assert {"FORECAST", "OPPORTUNITY_SET", "CANDIDATE", "VIRTUAL_FILL"} <= event_types
         assert all(event["evidence_semantics_version"] == router.EVIDENCE_SEMANTICS_VERSION
                    for event in events)
         durable_tape = run_root / "paper_v7_durable" / "external_fair" / "counterfactuals.jsonl"
@@ -213,6 +245,7 @@ def main() -> None:
         assert status["fills"] == 0
         assert status["counterfactual_fills"] == 1
         assert status["counterfactual_forecasts"] == 1
+        assert status["counterfactual_opportunity_sets"] == 1
         assert status["counterfactual_pending_forecasts"] == 1
         assert status["model_mature"] is False
         assert status["sizing_regime"] == "IMMATURE_SHADOW_FIXED_NOTIONAL"
@@ -288,6 +321,27 @@ def main() -> None:
         assert status["last_decision"]["outcome"] == "CLOB_BOOK_REQUEST_TIMEOUTERROR"
         assert status["rejection_reasons"]["CLOB_BOOK_REQUEST_TIMEOUTERROR"] == 1
 
+        # A policy revision may exclude old rows from active state restoration,
+        # but compaction must preserve those rows as historical audit evidence.
+        historical_before = router.PaperRouter.read_counterfactual_records(
+            [durable_tape]
+        )
+        revised_config = run_root / "revised-external-fair.json"
+        revised_payload = json.loads(
+            (ROOT / "config" / "v7_external_fair.json").read_text()
+        )
+        revised_payload["test_policy_revision"] = 2
+        revised_config.write_text(json.dumps(revised_payload))
+        revised = router.PaperRouter(
+            run_root, "b" * 40, revised_config,
+            "https://clob.invalid", "https://gamma.invalid",
+        )
+        historical_after = router.PaperRouter.read_counterfactual_records(
+            [durable_tape]
+        )
+        assert historical_after.keys() == historical_before.keys()
+        assert revised.durable_records() == {}
+
     with tempfile.TemporaryDirectory() as directory:
         run_root = Path(directory)
         settling = router.PaperRouter(
@@ -320,6 +374,46 @@ def main() -> None:
         assert final["virtual_cashflow"] == 10.0
         assert final["metadata"]["counterfactual"] is True
         assert final["metadata"]["winning_token_id"] == "up-token"
+
+    with tempfile.TemporaryDirectory() as directory:
+        run_root = Path(directory)
+        collector = router.PaperRouter(
+            run_root, "f" * 40, ROOT / "config" / "v7_external_fair.json",
+            "https://clob.invalid", "https://gamma.invalid",
+        )
+        observation = snapshot()
+        observation["code_sha"] = "f" * 40
+        observation["fair"]["valid"] = False
+        observation["fair"]["reason"] = "NO_IMMUTABLE_SETTLEMENT_MODEL"
+        observation["market"].update({
+            "market_id": "feature-only-market", "event_id": "feature-only-event",
+        })
+        books = {"yes": book("yes", 0.61, 0.59), "no": book("no", 0.41, 0.39)}
+        assert collector.record_forecast(observation, books)
+        pending = next(iter(collector.state["pending_forecasts"].values()))
+        assert pending["decision"] == "SHADOW_SETTLEMENT_FEATURE_ONLY"
+        assert pending["model_yes"] is None
+        assert pending["hybrid_yes"] is None
+        assert abs(pending["market_yes"] - 0.60) < 1e-12
+        assert pending["yes_best_ask_visible_size"] == 100.0
+        assert pending["yes_min_order_size"] == 5.0
+        pending["resolution_due_ms"] = router.now_ms() - 10_000
+        resolution = {
+            "closed": True, "outcomes": '["Yes", "No"]',
+            "clobTokenIds": '["yes", "no"]',
+            "outcomePrices": '["0", "1"]',
+        }
+        with mock.patch.object(router, "request_json", return_value=resolution):
+            collector.observe_forecasts()
+        events = [
+            json.loads(line) for line in
+            (run_root / "external_fair" / "counterfactuals.jsonl").read_text().splitlines()
+        ]
+        final = next(event for event in events if event["event_type"] == "FORECAST_FINAL")
+        assert final["actual_yes"] == 0.0
+        assert final["model_brier"] is None
+        assert final["model_log_loss"] is None
+        assert final["market_brier"] is not None
 
     with tempfile.TemporaryDirectory() as directory:
         run_root = Path(directory)

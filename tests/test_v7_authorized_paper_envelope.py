@@ -59,9 +59,12 @@ def validate(config: dict[str, Any]) -> list[str]:
     for key in ("max_trade_fraction", "max_market_fraction", "max_event_fraction", "max_gross_fraction"):
         require_exact(key, config.get(key), float(auth[key]))
 
-    sentinel = number(config.get("max_trade_usd"))
-    if sentinel is None or sentinel < 1e50:
-        errors.append("max_trade_usd must be a nonbinding compatibility sentinel when the fixed-dollar cap is disabled")
+    finite_guard = number(config.get("max_trade_usd"))
+    authorized_guard = float(auth["max_trade_usd_disabled_cap_value"])
+    if finite_guard is None or not 0.0 < finite_guard <= authorized_guard:
+        errors.append(
+            f"max_trade_usd must be a positive finite defense-in-depth guard <= {authorized_guard:g}"
+        )
 
     multi = config.get("multi_strategy") if isinstance(config.get("multi_strategy"), dict) else {}
     if multi.get("paper_only") is not True:
@@ -83,9 +86,13 @@ def validate(config: dict[str, Any]) -> list[str]:
     if v7.get("hard_arb_fixed_dollar_trade_cap_enabled") is not False:
         errors.append("v7.hard_arb_fixed_dollar_trade_cap_enabled must be false")
     require_exact("v7.hard_arb_max_trade_fraction", v7.get("hard_arb_max_trade_fraction"), float(auth["hard_arb_max_trade_fraction"]))
-    hard_sentinel = number(v7.get("hard_arb_max_trade_usd"))
-    if hard_sentinel is None or hard_sentinel < 1e50:
-        errors.append("v7.hard_arb_max_trade_usd must be a nonbinding compatibility sentinel")
+    hard_guard = number(v7.get("hard_arb_max_trade_usd"))
+    authorized_hard_guard = float(auth["hard_arb_max_trade_usd_disabled_cap_value"])
+    if hard_guard is None or not 0.0 < hard_guard <= authorized_hard_guard:
+        errors.append(
+            "v7.hard_arb_max_trade_usd must be a positive finite "
+            f"defense-in-depth guard <= {authorized_hard_guard:g}"
+        )
     floor("v7.intent_min_edge", v7.get("intent_min_edge"), float(auth["min_net_edge"]))
     floor("v7.hard_arb_min_net_edge", v7.get("hard_arb_min_net_edge"), float(auth["min_net_edge"]))
 
@@ -119,7 +126,7 @@ def authorized_config() -> dict[str, Any]:
         "uncertainty_penalty": 0.0,
         "fractional_kelly": 0.25,
         "fixed_dollar_trade_cap_enabled": False,
-        "max_trade_usd": 1e100,
+        "max_trade_usd": 300.0,
         "max_trade_fraction": 1.0,
         "max_market_fraction": 1.0,
         "max_event_fraction": 1.0,
@@ -142,7 +149,7 @@ def authorized_config() -> dict[str, Any]:
             "intent_min_edge": 0.00005,
             "hard_arb_min_net_edge": 0.00005,
             "hard_arb_fixed_dollar_trade_cap_enabled": False,
-            "hard_arb_max_trade_usd": 1e100,
+            "hard_arb_max_trade_usd": 300.0,
             "hard_arb_max_trade_fraction": 1.0,
             "authoritative_fee_required": True,
             "shared_execution_ledger_required": True,
@@ -157,6 +164,8 @@ class V7AuthorizedPaperEnvelopeContractTest(unittest.TestCase):
         auth = authorization()
         self.assertFalse(auth["fixed_dollar_trade_cap_enabled"])
         self.assertFalse(auth["hard_arb_fixed_dollar_trade_cap_enabled"])
+        self.assertEqual(float(auth["max_trade_usd_disabled_cap_value"]), 300.0)
+        self.assertEqual(float(auth["hard_arb_max_trade_usd_disabled_cap_value"]), 300.0)
         for key in ("max_trade_fraction", "max_market_fraction", "max_event_fraction", "max_gross_fraction", "hard_arb_max_trade_fraction"):
             self.assertEqual(float(auth[key]), 1.0)
         self.assertFalse(auth["authenticated_execution"])

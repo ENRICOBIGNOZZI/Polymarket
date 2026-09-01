@@ -14,12 +14,53 @@ from unittest import mock
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "scripts"))
 from v7_fair_value_registry import FairModelArtifact  # noqa: E402
+from v7_external_settlement_dataset import FEATURE_SCHEMA, MODEL_FEATURE_NAMES  # noqa: E402
 spec = importlib.util.spec_from_file_location(
     "rtds_monitor", ROOT / "scripts" / "v7_rtds_external_fair_monitor.py"
 )
 assert spec and spec.loader
 module = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(module)
+
+
+def settlement_pointer(root: Path, rule_hash: str, code_sha: str = "a" * 40) -> Path:
+    artifact = FairModelArtifact.build(
+        family="btc_5m_settlement_margin_linear_v1",
+        model_version="btc5m-settlement-test-v1",
+        feature_schema_version=FEATURE_SCHEMA,
+        code_sha=code_sha,
+        policy_version="test-policy",
+        artifact_role="CHAMPION",
+        training_start_ns=1,
+        training_end_ns=2,
+        training_contracts=100,
+        training_days=30,
+        assets=("BTC",),
+        contract_templates=("BTC_USD_UPDOWN_5M",),
+        rules_hashes=(rule_hash,),
+        parameters={
+            "feature_names": list(MODEL_FEATURE_NAMES),
+            "feature_means": {name: 0.0 for name in MODEL_FEATURE_NAMES},
+            "feature_scales": {name: 1.0 for name in MODEL_FEATURE_NAMES},
+            "coefficients": {name: 0.0 for name in MODEL_FEATURE_NAMES},
+            "intercept": 2.0,
+            "default_residual_sigma_bps": 5.0,
+            "residual_sigma_by_tte": [],
+            "mean_uncertainty_bps": 1.0,
+            "calibration": {"intercept": 0.0, "slope": 1.0},
+        },
+        hyperparameters={}, oos_scores={}, probability_interval_diagnostics={},
+        economic_replay={}, generated_timestamp_ns=3,
+    )
+    artifact_path = root / "settlement-artifact.json"
+    artifact_path.write_text(json.dumps(artifact.__dict__))
+    pointer = root / "settlement-champion.json"
+    pointer.write_text(json.dumps({
+        "schema_version": 2, "role": "CHAMPION",
+        "model_hash": artifact.model_hash, "model_version": artifact.model_version,
+        "artifact": str(artifact_path), "promotion_evidence_hash": "c" * 64,
+    }))
+    return pointer
 
 
 class RtdsExternalFairMonitorTests(unittest.TestCase):
@@ -252,6 +293,27 @@ class RtdsExternalFairMonitorTests(unittest.TestCase):
         source = (ROOT / "scripts" / "v7_rtds_external_fair_monitor.py").read_text()
         self.assertIn('ORACLE_TOPIC = "crypto_prices_twap_sixty"', source)
         self.assertIn('send_frame(stream, 0x1, b"PING")', source)
+        self.assertNotIn("oracle_price + 0.70", source)
+
+    def test_fair_inference_fails_closed_without_immutable_settlement_model(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            monitor = module.Monitor(Path(directory), "a" * 40)
+            monitor.active_market = {"contract_start_epoch": int(time.time()) - 1, "midpoint": 0.5}
+            monitor.active_contract = {
+                "verified_template": True, "rules_hash_recognized": True,
+                "normalized_rules_hash": "b" * 64,
+            }
+            monitor.reference = {"valid": True, "value": 77_000.0}
+            monitor.latest[module.ORACLE_TOPIC] = {
+                "price": 77_001.0, "receive_wall_ns": time.time_ns(),
+            }
+            snapshot = monitor.fair_snapshot(time.time_ns(), True, {
+                "valid": True, "fresh_venue_count": 3, "composite_price": 77_002.0,
+                "dispersion_bps": 1.0, "age_ns": 1,
+                "return_1s": 0.0, "return_5s": 0.0,
+            })
+            self.assertFalse(snapshot["valid"])
+            self.assertEqual(snapshot["inference_state"], "IMMUTABLE_SETTLEMENT_MODEL_REQUIRED")
 
     def test_status_reports_inputs_but_never_fake_fair_readiness(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -305,11 +367,17 @@ class RtdsExternalFairMonitorTests(unittest.TestCase):
                 "code_sha": "a" * 40, "timestamp_ns": time.time_ns(), "valid": True,
                 "fresh_venue_count": 3, "composite_price": 77020.0,
                 "composite_microprice": 77020.0, "dispersion_bps": 1.0,
+                "return_1s": 0.00001, "return_5s": 0.00002,
             }))
+            rule_hash = next(iter(json.loads(
+                (ROOT / "config" / "v7_external_fair_rule_approvals.json").read_text()
+            )["approved_rule_hashes"]))
+            champion_pointer = settlement_pointer(root, rule_hash)
             monitor = module.Monitor(
                 root / "external", "a" * 40, universe_path=universe,
                 approvals_path=ROOT / "config" / "v7_external_fair_rule_approvals.json",
                 external_venues_path=venues,
+                champion_pointer=champion_pointer,
             )
             monitor.connection_epoch = 1
             monitor.ingest({"topic": module.ORACLE_TOPIC, "symbol": "btc/usd",
@@ -334,7 +402,7 @@ class RtdsExternalFairMonitorTests(unittest.TestCase):
             self.assertEqual(status["fair_models"]["comparison_state"], "AWAITING_LIVE_CLOB_BENCHMARK")
             self.assertEqual(
                 status["fair_models"]["execution_model_id"],
-                "structural_uncalibrated_v1",
+                "btc5m-settlement-test-v1",
             )
             self.assertTrue(status["fair_models"]["hybrid_fair"]["uses_polymarket_price_as_feature"])
             self.assertFalse(status["fair_models"]["hybrid_fair"]["valid"])

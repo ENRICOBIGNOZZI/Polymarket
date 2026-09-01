@@ -73,6 +73,9 @@ def test_taker_uses_complete_round_trip_contract():
     assert '"schema": "polymarket_v7_micro_taker_status_v1"' in text
     assert '"model_sha": args.model_sha' in text
     assert '"real_order_submission": False' in text
+    loop = (ROOT / "scripts/paper_v7_execution_loop.sh").read_text(encoding="utf-8")
+    assert "--research-only" in loop
+    assert '"RESEARCH_ONLY_ZERO_AUTHORITY" if args.research_only' in text
     assert '"atomic_book_pairs": book_pair_count' in text
     assert '"missing_book_pairs": missing_book_pair_count' in text
     assert '"feature_ready_markets": len(current)' in text
@@ -85,7 +88,10 @@ def test_taker_freezes_new_risk_when_open_positions_are_unmarkable():
     assert '"reason": "insufficient_exit_depth"' in text
     assert '"reason": "missing_authoritative_fee"' in text
     assert "new_risk_frozen = bool(unmarkable_positions)" in text
-    assert "if not killed and not new_risk_frozen and model_valid and flow_valid:" in text
+    assert "and not killed" in text
+    assert "and not new_risk_frozen" in text
+    assert "and model_valid" in text
+    assert "and flow_valid" in text
     assert '"DEGENERATE_ZERO_TARGET_VARIANCE"' in text
     assert '"duplicate_snapshots_rejected_last_tick"' in text
     assert '"new_risk_frozen": new_risk_frozen' in text

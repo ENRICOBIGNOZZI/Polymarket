@@ -23,12 +23,17 @@ class EconomicArtifactPackTests(unittest.TestCase):
                 "v7_reconciliation_report.json", "v7_external_fair_forecast_to_pnl.json",
                 "v7_maker_bilateral_fillability_report.json", "v7_arb_coverage_report.json",
                 "v7_research_shadow_report.json", "v7_lineage_report.json",
+                "v7_external_loss_attribution.json",
+                "v7_execution_latency_distribution.json",
+                "v7_external_policy_replay.json",
+                "v7_exact_sha_economic_bundle.json",
+                "v7_fast_structural_feasibility.json",
             }
             self.assertEqual(set(files), expected)
             for name in expected:
                 value = json.loads((output / name).read_text())
                 self.assertTrue(value.get("paper_only"))
-                self.assertFalse(value.get("authenticated_execution"))
+                self.assertFalse(value.get("authenticated_execution", value.get("safety", {}).get("authenticated_execution")))
             proof = json.loads((output / "v7_capability_runtime_proof.json").read_text())
             self.assertFalse(proof["runtime_evidence_available"])
             self.assertFalse(proof["profitability_proven"])

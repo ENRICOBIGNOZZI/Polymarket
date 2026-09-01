@@ -20,6 +20,7 @@ ContractHotSpec contract() {
     value.rules_hash_handle = 6;
     value.oracle_feed_handle = 7;
     value.contract_version = 8;
+    value.horizon_seconds = 300;
     value.oracle_window_seconds = 60;
     value.comparator = Comparator::GreaterEqual;
     value.verified_template = 1;
@@ -93,6 +94,7 @@ FairValueModelSnapshot model(bool mature = true) {
     value.model_hash_handle = 18;
     value.policy_version = 19;
     value.feature_schema_version = 20;
+    value.horizon_seconds = 300;
     value.bridge_gap_coefficient = 0.8;
     value.sigma_per_sqrt_second_fraction = 0.0002;
     value.bridge_residual_sigma_fraction = 0.0001;
@@ -112,6 +114,7 @@ FairValueModelSnapshot model(bool mature = true) {
     value.max_oracle_age_ns = 1'000'000'000LL;
     value.max_external_age_ns = 1'000'000'000LL;
     value.min_healthy_venues = 2;
+    value.parameters_empirically_fitted = 1;
     value.mature = mature ? 1 : 0;
     return value;
 }
@@ -169,6 +172,9 @@ int main() {
     // remains positive after authoritative fee and execution-risk terms.
     fee.rate = 0.001;
     policy.taker_enabled = 1;
+    policy.taker_execution_model_version = 1;
+    policy.taker_execution_model_mature = 1;
+    policy.taker_fill_probability_lower = 0.80;
     policy.taker_minimum_robust_ev_per_share = 0.0001;
     policy.max_market_capital_fraction = 0.50;
     policy.fractional_kelly = 0.50;
@@ -184,18 +190,20 @@ int main() {
     book.asks[2] = BookLevel{0.95, 4.0};
     auto take = build_informed_take(c, fair, fee, policy, book, true,
                                     c.yes_instrument_handle, 101, now,
-                                    1'000.0, 0.0, 0.01);
+                                    1'000.0, 0.0, 0.075, 0.01);
     assert(take.action == Action::Take);
     assert(take.admissible == 1);
     assert(take.quantity_microunits > 0);
     assert(take.expected_change_in_wealth > 0.0);
     assert(take.price_tick <= 55);
+    assert(std::abs(take.fill_probability_lower - 0.80) < 1e-12);
+    assert(take.execution_latency_seconds > 0.075);
 
     auto unknown_fee = fee;
     unknown_fee.authoritative = 0;
     auto no_take = build_informed_take(c, fair, unknown_fee, policy, book, true,
                                        c.yes_instrument_handle, 102, now,
-                                       1'000.0, 0.0, 0.01);
+                                       1'000.0, 0.0, 0.075, 0.01);
     assert(no_take.admissible == 0);
 
     std::array<CandidateAction, kMaxUnifiedCandidates> candidates{};
@@ -203,6 +211,22 @@ int main() {
     candidates[1] = cancel;
     auto chosen = choose_unified_action(candidates, 2, false);
     assert(chosen.action == Action::Cancel);
+
+    // Without a safety/inventory priority, MAKE and TAKE compete on the same
+    // conservative wealth scale.  Action names do not decide the winner.
+    CandidateAction maker = take;
+    maker.action = Action::Make;
+    maker.expected_change_in_wealth = take.expected_change_in_wealth + 0.25;
+    candidates[0] = take;
+    candidates[1] = maker;
+    chosen = choose_unified_action(candidates, 2, false);
+    assert(chosen.action == Action::Make);
+    maker.expected_change_in_wealth = -0.01;
+    take.expected_change_in_wealth = -0.02;
+    candidates[0] = take;
+    candidates[1] = maker;
+    chosen = choose_unified_action(candidates, 2, false);
+    assert(chosen.action == Action::Nothing);
 
     auto killed = choose_unified_action(candidates, 2, true);
     assert(killed.action == Action::Withdraw);

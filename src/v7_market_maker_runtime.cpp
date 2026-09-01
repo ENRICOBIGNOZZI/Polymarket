@@ -2903,6 +2903,87 @@ private:
         metadata["queue_model_version"] = "pessimistic-public-print-v1";
     }
 
+    void write_shadow_probe(const TelemetryRecord& record, const char* phase) {
+        // The information arm is a zero-authority observation in the existing
+        // maker runtime.  This record never reaches ExecutionCore and cannot
+        // reserve capital or construct an order; it only mirrors the causal
+        // assignment and the PAPER lifecycle used to label it.
+        if (record.decision.exploration_max_rest_ns <= 0) return;
+        const auto& paper = record.paper;
+        auto event = common("SHADOW_PROBE");
+        attach_market(event, record);
+        if (record.book.valid != 0) attach_book(event, record);
+        const std::uint64_t intent_id = paper.intent_id != 0
+            ? paper.intent_id : record.intent.intent_id;
+        const std::string probe_candidate = candidate_id(intent_id);
+        event["candidate_id"] = probe_candidate;
+        event["model_version"] = std::to_string(record.intent.model_version);
+        if (record.exchange_event_ns > 0) event["exchange_ts_ms"] = exchange_ms(record);
+        if (record.receive_wall_ms > 0) event["receive_ts_ms"] = record.receive_wall_ms;
+        if (record.intent.decision_monotonic_ns > 0) {
+            event["decision_ts_ms"] = decision_wall_ms(record, record.intent);
+        }
+        const Side side = paper.side != Side::None ? paper.side : record.intent.side;
+        if (side != Side::None) event["side"] = side_name(side);
+        const auto price_tick = paper.price_tick != 0
+            ? paper.price_tick : record.intent.price_tick;
+        if (price_tick != 0) {
+            event["limit_price"] = tick_price(price_tick, record.tick_size_e4);
+        }
+        const auto intended = paper.original_microunits > 0
+            ? paper.original_microunits : record.intent.quantity_microunits;
+        if (intended > 0) event["intended_size"] = micro_shares(intended);
+        event["intended_action"] = action_name(record.action);
+        event["expected_ev"] = record.intent.expected_ev;
+        if (paper.order_id != 0) {
+            event["order_id"] = order_id(record.market_handle, paper.order_id);
+        }
+        if (paper.queue.ahead_lower_microunits > 0) {
+            event["queue_ahead"] = micro_shares(
+                paper.queue.ahead_lower_microunits);
+        }
+        if (paper.kind == PaperMakerEventKind::Fill
+            && paper.operational_fill_microunits > 0) {
+            event["filled_size"] = micro_shares(
+                paper.operational_fill_microunits);
+            event["fill_id"] = "mmf-" + std::to_string(record.market_handle) + "-" +
+                telemetry_epoch_ + "-" + std::to_string(paper.order_id) + "-" +
+                hex64(paper.trade_id);
+        }
+        json::object metadata;
+        attach_economic_identity(metadata);
+        metadata["counterfactual"] = true;
+        metadata["economic_authority"] = "SHADOW_COUNTERFACTUAL";
+        metadata["execution_authority"] = "SHADOW_ZERO_AUTHORITY";
+        metadata["excluded_from_portfolio_equity"] = true;
+        metadata["probe_phase"] = phase;
+        metadata["probe_id"] = probe_candidate;
+        metadata["assigned_action_arm"] =
+            record.decision.exploration_information_arm != 0
+                ? "INFORMATION" : "ECONOMIC";
+        metadata["assigned_placement_arm"] = action_name(
+            record.decision.placement_action);
+        metadata["assigned_side_arm"] = side_name(side);
+        metadata["assigned_lifetime_arm"] =
+            record.decision.exploration_persistent != 0
+                ? "PERSISTENT" : "CONTROL";
+        metadata["assignment_propensity"] =
+            record.decision.exploration_assignment_propensity;
+        metadata["action_propensity"] =
+            record.decision.exploration_action_propensity;
+        metadata["side_propensity"] =
+            record.decision.exploration_side_propensity;
+        metadata["lifetime_propensity"] =
+            record.decision.exploration_lifetime_propensity;
+        metadata["flow_reached"] = paper.opposite_flow_prints_seen > 0;
+        metadata["price_reached"] = paper.price_reach_prints_seen > 0;
+        metadata["execution_outcome"] = execution_outcome_name(
+            paper.execution_outcome);
+        metadata["terminal"] = std::string_view(phase).rfind("TERMINAL_", 0) == 0;
+        event["metadata"] = std::move(metadata);
+        spool(std::move(event));
+    }
+
     void spool(json::object event) {
         const std::int64_t recorded = integer(find_value(event, "recorded_ts_ms"), wall_ms());
         const std::string record = text(find_value(event, "record_id"));
@@ -2931,6 +3012,7 @@ private:
         event["latency_cost"] = 0.0;
         attach_metadata(event, record);
         spool(std::move(event));
+        write_shadow_probe(record, "ASSIGNED");
         append_latency(record);
     }
 
@@ -2969,15 +3051,18 @@ private:
             attach_metadata(event, record);
             spool(std::move(event));
             write_order_state(record, "LIVE");
+            write_shadow_probe(record, "QUOTE_LIVE");
             return;
         }
         if (paper.kind == PaperMakerEventKind::CancelRequested) {
             append_latency(record);
             write_order_state(record, "CANCEL_PENDING");
+            write_shadow_probe(record, "CANCEL_PENDING");
             return;
         }
         if (paper.kind == PaperMakerEventKind::Cancelled) {
             write_order_state(record, "CANCELLED");
+            write_shadow_probe(record, "TERMINAL_CANCELLED");
             return;
         }
         if (paper.kind == PaperMakerEventKind::Fill && paper.operational_fill_microunits > 0) {
@@ -2991,6 +3076,14 @@ private:
             if (paper.realized_pnl != 0.0) {
                 maybe_write_market_cycle_final(record, "ORDER_FILL_FLAT");
             }
+            write_shadow_probe(
+                record,
+                paper.order_state == pm::v7::OrderState::Filled
+                    ? "TERMINAL_FILL" : "PARTIAL_FILL");
+            return;
+        }
+        if (paper.kind == PaperMakerEventKind::Rejected) {
+            write_shadow_probe(record, "TERMINAL_REJECTED");
             return;
         }
         if (paper.kind == PaperMakerEventKind::InventorySplitRequested) {

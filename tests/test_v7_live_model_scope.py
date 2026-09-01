@@ -31,6 +31,19 @@ class V7LiveModelScopeTest(unittest.TestCase):
             set(scope["research_shadow_supervised_families"]),
             {"sports_latency", "cross_platform", "wallet_intelligence"},
         )
+        self.assertEqual(
+            set(scope["paper_execution_families"]),
+            {"crypto_settlement_fair", "hard_arb"},
+        )
+        self.assertEqual(
+            set(scope["component_shadow_families"]),
+            {"professional_maker", "crypto_informed_taker", "fast_structural"},
+        )
+        self.assertEqual(len(scope["research_zero_authority_families"]), 10)
+        self.assertEqual(
+            scope["btc_settlement_engine_contract"],
+            "config/v7_btc_settlement_engine.json",
+        )
         self.assertTrue(scope["paper_only"])
         self.assertFalse(scope["authenticated_execution"])
         self.assertFalse(scope["real_order_submission"])

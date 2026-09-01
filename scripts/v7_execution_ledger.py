@@ -18,6 +18,7 @@ _SHA_RE = re.compile(r"^[0-9a-f]{40}$")
 EVENT_TYPES = frozenset(
     {
         "OPPORTUNITY",
+        "SHADOW_PROBE",
         "CANDIDATE",
         "ORDER_SUBMITTED",
         "ORDER_STATE",
