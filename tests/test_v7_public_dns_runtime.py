@@ -42,6 +42,15 @@ class V7PublicDnsRuntimeContractTests(unittest.TestCase):
         self.assertNotIn("PM_V7_EXACT_SHA_CI_GREEN", template)
         self.assertIn("v7_exact_sha_ci_gate.py", updater)
 
+    def test_service_loads_only_owner_protected_allowlisted_external_credentials(self) -> None:
+        entrypoint = (ROOT / "ops" / "v7_service_entrypoint.sh").read_text(encoding="utf-8")
+        self.assertIn("v7_credentials.env", entrypoint)
+        self.assertIn("stat.S_IMODE(info.st_mode) & 0o077 == 0", entrypoint)
+        self.assertIn("not stat.S_ISLNK(info.st_mode)", entrypoint)
+        self.assertIn("PM_V7_SPORTRADAR_API_KEY", entrypoint)
+        self.assertIn("PM_V7_KALSHI_PRIVATE_KEY_PATH", entrypoint)
+        self.assertNotIn('source "$CREDENTIALS_FILE"', entrypoint)
+
     def test_cpp_http_client_explicitly_uses_v7_proxy_only_for_polymarket_https(self) -> None:
         source = (ROOT / "src" / "http.cpp").read_text(encoding="utf-8")
         self.assertIn('std::getenv("PM_V7_HTTPS_PROXY")', source)
