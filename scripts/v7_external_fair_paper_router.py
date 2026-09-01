@@ -1105,6 +1105,14 @@ class PaperRouter:
                 continue
             tokens = [str(value) for value in parse_array(raw.get("clobTokenIds"))]
             prices = [finite(value) for value in parse_array(raw.get("outcomePrices"))]
+            outcomes = [str(value) for value in parse_array(raw.get("outcomes"))]
+            # Preserve the public settlement assertion alongside the derived
+            # label.  Scores alone are not replayable evidence: an auditor
+            # must be able to see that Gamma reported this market closed and
+            # which token price established the binary outcome.
+            settlement_prices = [
+                value if math.isfinite(value) else None for value in prices
+            ]
             winning_index = next((index for index, price in enumerate(prices)
                                   if math.isfinite(price) and price >= 1.0 - 1e-9), -1)
             if winning_index < 0 or winning_index >= len(tokens):
@@ -1153,6 +1161,14 @@ class PaperRouter:
                         "registered_challenger_model_id"),
                     registered_challenger_model_hash=forecast.get(
                         "registered_challenger_model_hash"),
+                    settlement_provider="POLYMARKET_GAMMA_PUBLIC",
+                    settlement_endpoint=(
+                        f"{self.gamma_url}/markets/{urllib.parse.quote(market_id)}"),
+                    settlement_observed_ms=current_ms,
+                    settlement_closed=True,
+                    settlement_outcomes=outcomes,
+                    settlement_token_ids=tokens,
+                    settlement_outcome_prices=settlement_prices,
                 )
                 pending.pop(forecast_id, None)
                 self.state["resolved_forecasts"] = int(self.state.get("resolved_forecasts") or 0) + 1

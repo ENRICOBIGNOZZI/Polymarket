@@ -365,7 +365,8 @@ def main() -> None:
         assert resumed_pending["no_token"] == "no"
         resumed_pending["resolution_due_ms"] = router.now_ms() - 10_000
         resolution = {
-            "closed": True, "clobTokenIds": '["yes", "no"]',
+            "closed": True, "outcomes": '["Yes", "No"]',
+            "clobTokenIds": '["yes", "no"]',
             "outcomePrices": '["1", "0"]',
         }
         with mock.patch.object(router, "request_json", return_value=resolution):
@@ -386,6 +387,12 @@ def main() -> None:
         assert final["external_only_brier"] > final["hybrid_brier"]
         assert final["registered_challenger_brier"] < final["external_only_brier"]
         assert final["registered_challenger_model_hash"] == "f" * 64
+        assert final["settlement_provider"] == "POLYMARKET_GAMMA_PUBLIC"
+        assert final["settlement_endpoint"].endswith("/markets/forecast-market")
+        assert final["settlement_closed"] is True
+        assert final["settlement_outcomes"] == ["Yes", "No"]
+        assert final["settlement_token_ids"] == ["yes", "no"]
+        assert final["settlement_outcome_prices"] == [1.0, 0.0]
 
 
 if __name__ == "__main__":
