@@ -111,6 +111,55 @@ class NativeUniverseArchiveTest(unittest.TestCase):
                 fetcher=counted,
             )
 
+    def test_exhaustive_discovery_has_no_arbitrary_page_cap(self) -> None:
+        calls = 0
+        total_pages = 1002
+
+        def fake(_url: str):
+            nonlocal calls
+            calls += 1
+            next_cursor = "" if calls == total_pages else f"cursor-{calls}"
+            return {
+                "markets": [raw_market(calls, 20.0)],
+                "next_cursor": next_cursor,
+            }
+
+        rows = archive.discover(
+            "https://gamma.example",
+            market_limit=0,
+            min_liquidity=2.0,
+            page_size=1,
+            fetcher=fake,
+        )
+        self.assertEqual(calls, total_pages)
+        self.assertEqual(len(rows), total_pages)
+
+    def test_keyset_repeated_page_with_new_cursor_fails_closed(self) -> None:
+        calls = 0
+        repeated = [raw_market(1, 20.0)]
+
+        def fake(_url: str):
+            nonlocal calls
+            calls += 1
+            return {"markets": repeated, "next_cursor": f"cursor-{calls}"}
+
+        with self.assertRaisesRegex(RuntimeError, "repeated a market page"):
+            archive.discover(
+                "https://gamma.example",
+                market_limit=0,
+                min_liquidity=2.0,
+                fetcher=fake,
+            )
+
+    def test_keyset_empty_continuation_page_fails_closed(self) -> None:
+        with self.assertRaisesRegex(RuntimeError, "empty page with a continuation cursor"):
+            archive.discover(
+                "https://gamma.example",
+                market_limit=0,
+                min_liquidity=2.0,
+                fetcher=lambda _url: {"markets": [], "next_cursor": "still-more"},
+            )
+
     def test_snapshot_is_exact_sha_paper_only_and_hashes_membership(self) -> None:
         markets = [archive.normalized_market(raw_market(1)), archive.normalized_market(raw_market(2))]
         rows = [row for row in markets if row is not None]
