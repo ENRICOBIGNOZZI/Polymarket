@@ -1,0 +1,53 @@
+name: TEMP V7 regenerate surface audit
+
+on:
+  push:
+    branches: [main]
+
+permissions:
+  contents: write
+
+concurrency:
+  group: tmp-v7-regenerate-surface-audit
+  cancel-in-progress: false
+
+jobs:
+  regenerate:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          ref: main
+          fetch-depth: 0
+
+      - name: Regenerate exact V7 surface attestation and self-remove
+        shell: bash
+        run: |
+          set -euo pipefail
+          git fetch --prune origin '+refs/heads/*:refs/remotes/origin/*' '+refs/tags/*:refs/tags/*'
+          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+          test "$(git rev-parse origin/main)" = "$GITHUB_SHA"
+
+          # The one-shot workflow must not become part of the attested surface.
+          git rm .github/workflows/tmp-v7-regenerate-surface-audit.yml
+
+          python3 scripts/v7_surface_classification.py \
+            --repository-root . \
+            --output artifacts/v7_unification/path_classification.json
+          python3 scripts/v7_surface_classification.py \
+            --repository-root . \
+            --validate artifacts/v7_unification/path_classification.json
+          python3 tests/test_v7_surface_classification.py
+          python3 tests/test_v7_final_convergence_audit.py
+
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add artifacts/v7_unification/path_classification.json
+          git diff --cached --check
+          git commit -m 'chore: refresh V7 surface classification'
+
+          # Fail closed rather than overwrite an independently advanced main.
+          git fetch origin main
+          test "$(git rev-parse origin/main)" = "$GITHUB_SHA"
+          git push origin HEAD:main
