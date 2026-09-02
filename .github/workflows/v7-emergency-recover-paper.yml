@@ -1,0 +1,166 @@
+name: V7 emergency recover PAPER runtime
+
+on:
+  push:
+    branches: [codex/v7-maker-ttl]
+    paths:
+      - ".github/workflows/v7-emergency-recover-paper.yml"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: polymarket-v7-emergency-recover-paper
+  cancel-in-progress: false
+
+jobs:
+  recover:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    env:
+      SERVER_HOST: ${{ vars.POLYMARKET_SERVER_HOST || '100.104.183.109' }}
+      SERVER_USER: ${{ vars.POLYMARKET_SERVER_USER || 'enrico' }}
+      SERVER_PORT: ${{ vars.POLYMARKET_SERVER_PORT || '22' }}
+      EXPECTED_SHA: fb4486ad75206b9e993811db7616b9704c15f222
+    steps:
+      - name: Checkout exact canonical main
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          ref: main
+          fetch-depth: 0
+
+      - name: Gate exact canonical SHA
+        shell: bash
+        run: |
+          set -euo pipefail
+          git fetch --no-tags origin main
+          test "$(git rev-parse origin/main)" = "$EXPECTED_SHA"
+          test "$(git rev-parse HEAD)" = "$EXPECTED_SHA"
+          python3 scripts/v7_cutover_contract.py --repository-root . --expected-head "$EXPECTED_SHA" >/dev/null
+
+      - name: Select Tailscale credential mode
+        id: tailscale_auth
+        shell: bash
+        env:
+          TS_AUTHKEY: ${{ secrets.TS_AUTHKEY }}
+          TS_OAUTH_CLIENT_ID: ${{ secrets.TS_OAUTH_CLIENT_ID }}
+          TS_OAUTH_SECRET: ${{ secrets.TS_OAUTH_SECRET }}
+          TS_TAGS: ${{ vars.TS_TAGS || 'tag:ci' }}
+        run: |
+          set -euo pipefail
+          if [[ -n "${TS_AUTHKEY:-}" ]]; then
+            mode=authkey
+          elif [[ -n "${TS_OAUTH_CLIENT_ID:-}" && -n "${TS_OAUTH_SECRET:-}" ]]; then
+            test -n "${TS_TAGS:-}"
+            mode=oauth
+          else
+            echo "No visible Tailscale credential set" >&2
+            exit 1
+          fi
+          echo "mode=$mode" >> "$GITHUB_OUTPUT"
+
+      - name: Join tailnet with auth key
+        if: steps.tailscale_auth.outputs.mode == 'authkey'
+        uses: tailscale/github-action@780049a30b6ff5c378a9e7b389d15ece7a204888
+        with:
+          authkey: ${{ secrets.TS_AUTHKEY }}
+
+      - name: Join tailnet with OAuth
+        if: steps.tailscale_auth.outputs.mode == 'oauth'
+        uses: tailscale/github-action@780049a30b6ff5c378a9e7b389d15ece7a204888
+        with:
+          oauth-client-id: ${{ secrets.TS_OAUTH_CLIENT_ID }}
+          oauth-secret: ${{ secrets.TS_OAUTH_SECRET }}
+          tags: ${{ vars.TS_TAGS || 'tag:ci' }}
+
+      - name: Configure SSH
+        shell: bash
+        env:
+          SSH_PRIVATE_KEY: ${{ secrets.POLYMARKET_SERVER_SSH_KEY }}
+        run: |
+          set -euo pipefail
+          test -n "${SSH_PRIVATE_KEY:-}"
+          install -d -m 700 ~/.ssh
+          printf '%s\n' "$SSH_PRIVATE_KEY" > ~/.ssh/polymarket_v7_recover
+          chmod 600 ~/.ssh/polymarket_v7_recover
+          : > ~/.ssh/known_hosts
+          ready=0
+          for _ in $(seq 1 30); do
+            tailscale ping --timeout=4s -c 1 "$SERVER_HOST" >/dev/null 2>&1 || true
+            if ssh-keyscan -T 3 -p "$SERVER_PORT" "$SERVER_HOST" >> ~/.ssh/known_hosts 2>/dev/null; then
+              ready=1
+              break
+            fi
+            sleep 3
+          done
+          test "$ready" = 1
+
+      - name: Recover canonical PAPER runtime
+        shell: bash
+        run: |
+          set -euo pipefail
+          ssh_common=(
+            -i ~/.ssh/polymarket_v7_recover
+            -o IdentitiesOnly=yes
+            -o BatchMode=yes
+            -o ConnectTimeout=10
+            -o ConnectionAttempts=3
+            -o ServerAliveInterval=15
+            -o ServerAliveCountMax=4
+            -p "$SERVER_PORT"
+          )
+          ssh "${ssh_common[@]}" "$SERVER_USER@$SERVER_HOST" "EXPECTED_SHA='$EXPECTED_SHA' bash -s" <<'REMOTE'
+          set -euo pipefail
+          cd "$HOME/polymarket"
+          git fetch --no-tags origin main
+          test "$(git rev-parse origin/main)" = "$EXPECTED_SHA"
+          test "$(git rev-parse HEAD)" = "$EXPECTED_SHA"
+
+          updater="$(mktemp)"
+          archiver="$(mktemp)"
+          trap 'rm -f "$updater" "$archiver"' EXIT
+          git show "$EXPECTED_SHA:ops/update_server_v7.sh" > "$updater"
+          git show "$EXPECTED_SHA:scripts/v7_prepare_cutover_run_root.py" > "$archiver"
+          chmod 700 "$updater"
+          chmod 600 "$archiver"
+
+          POLYMARKET_APP_DIR="$HOME/polymarket" \
+            POLYMARKET_CUTOVER_ARCHIVER="$archiver" \
+            EXPECTED_DEPLOY_SHA="$EXPECTED_SHA" \
+            POLYMARKET_DEPLOY_REF=main \
+            POLYMARKET_RUNTIME_HEALTH_ATTEMPTS=390 \
+            bash "$updater"
+
+          root="$HOME/polymarket/runs/paper_v7_live"
+          test "$(cat "$root/control/deployed_sha")" = "$EXPECTED_SHA"
+          python3 - "$root" "$EXPECTED_SHA" <<'PY'
+          import json, os, sys, time
+          from pathlib import Path
+          root=Path(sys.argv[1]); sha=sys.argv[2]; now=int(time.time())
+          runtime=json.loads((root/'control/runtime_status.json').read_text(encoding='utf-8'))
+          assert runtime.get('version') == 7
+          assert runtime.get('model_sha') == sha
+          assert runtime.get('paper_only') is True
+          assert runtime.get('authenticated_execution') is False
+          assert runtime.get('real_order_submission') is False
+          assert set(runtime.get('economic_engines') or []) == {'CRYPTO_SETTLEMENT_ENGINE','STRUCTURAL_ARB_ENGINE'}
+          assert runtime.get('economic_new_risk_ready') is False
+          pid=int(runtime.get('pid') or 0)
+          assert pid > 0
+          os.kill(pid,0)
+          assert now-int(runtime.get('timestamp') or 0) <= 180
+          print('runtime_recovered=1')
+          print('runtime_pid='+str(pid))
+          print('runtime_sha='+sha)
+          PY
+          curl -fsS http://127.0.0.1:9108/healthz
+          metrics="$(curl -fsS http://127.0.0.1:9108/metrics)"
+          grep -q '^polymarket_v7_health 1$' <<<"$metrics"
+          grep -q '^polymarket_v7_execution_alive 1$' <<<"$metrics"
+          grep -q '^polymarket_v7_exact_sha_ok 1$' <<<"$metrics"
+          grep -q '^polymarket_v7_paper_only_contract_ok 1$' <<<"$metrics"
+          grep -q '^polymarket_v7_authenticated_execution_disabled 1$' <<<"$metrics"
+          grep -q '^polymarket_v7_ledger_valid 1$' <<<"$metrics"
+          grep -q '^polymarket_v7_live_algorithm_count 2$' <<<"$metrics"
+          grep -q '^polymarket_v7_legacy_algorithm_count 0$' <<<"$metrics"
+          REMOTE
