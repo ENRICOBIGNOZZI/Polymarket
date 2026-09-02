@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """Archive the native V7 point-in-time investable universe.
 
-The archive is fetched directly from Gamma at archive time.  It does not consume
-or translate any V3-V6 market proxy/cache.  Each gzip snapshot is immutable,
+The archive is fetched directly from Gamma at archive time. It does not consume
+or translate any V3-V6 market proxy/cache. Each gzip snapshot is immutable,
 bound to the exact deployed main model SHA, and records the market membership
 that was observable at the capture timestamp.
 """
@@ -44,7 +44,7 @@ def array(value: Any) -> list[Any]:
 
 
 def fetch_json(url: str, timeout: int = 20) -> Any:
-    request = urllib.request.Request(url, headers={"User-Agent": "polymarket-v7-universe/2"})
+    request = urllib.request.Request(url, headers={"User-Agent": "polymarket-v7-universe/3"})
     with urllib.request.urlopen(request, timeout=timeout) as response:
         return json.loads(response.read().decode("utf-8"))
 
@@ -87,41 +87,69 @@ def discover(
     page_size: int = 100,
     fetcher=fetch_json,
 ) -> list[dict[str, Any]]:
+    """Discover the current investable universe using Gamma keyset pagination.
+
+    Gamma's keyset endpoint is used deliberately instead of offset pagination:
+    the latter can reject/shift large exhaustive scans as the live market set
+    changes. Membership filters that are not part of the keyset contract remain
+    fail-closed locally before a market can enter the snapshot.
+    """
     limit = max(0, int(market_limit))
-    page = max(1, min(500, int(page_size)))
+    page = max(1, min(100, int(page_size)))
+    minimum_liquidity = max(0.0, float(min_liquidity))
     out: list[dict[str, Any]] = []
-    offset = 0
+    cursor = ""
     exhaustive = False
-    for _ in range(200):
+
+    for _ in range(1000):
         if limit > 0 and len(out) >= limit:
             break
-        query = urllib.parse.urlencode({
-            "active": "true",
+
+        requested = page if limit <= 0 else min(page, max(1, limit - len(out)))
+        params: dict[str, Any] = {
             "closed": "false",
-            "limit": page if limit <= 0 else min(page, limit - len(out)),
-            "offset": offset,
-            "order": "liquidityNum",
-            "ascending": "false",
-        })
-        value = fetcher(gamma_url.rstrip("/") + "/markets?" + query)
-        rows = value if isinstance(value, list) else value.get("markets", []) if isinstance(value, dict) else []
-        if not rows:
-            break
+            "limit": requested,
+            "liquidity_num_min": minimum_liquidity,
+        }
+        if cursor:
+            params["after_cursor"] = cursor
+        query = urllib.parse.urlencode(params)
+        value = fetcher(gamma_url.rstrip("/") + "/markets/keyset?" + query)
+        if not isinstance(value, dict):
+            raise RuntimeError("Gamma keyset response must be an object")
+        rows = value.get("markets", [])
+        if not isinstance(rows, list):
+            raise RuntimeError("Gamma keyset markets must be a list")
+
         for raw in rows:
             if not isinstance(raw, dict):
                 continue
             market = normalized_market(raw)
-            if market is None or market["liquidity"] + 1e-12 < float(min_liquidity):
+            if (
+                market is None
+                or not market["active"]
+                or market["closed"]
+                or market["liquidity"] + 1e-12 < minimum_liquidity
+            ):
                 continue
             out.append(market)
             if limit > 0 and len(out) >= limit:
                 break
-        if len(rows) < page:
+
+        if limit > 0 and len(out) >= limit:
+            break
+
+        next_cursor = str(value.get("next_cursor") or "").strip()
+        if not next_cursor:
             exhaustive = True
             break
-        offset += len(rows)
+        if next_cursor == cursor:
+            raise RuntimeError("Gamma keyset cursor did not advance")
+        cursor = next_cursor
+
     if limit <= 0 and not exhaustive:
-        raise RuntimeError("Gamma universe pagination guard reached before exhaustion")
+        raise RuntimeError("Gamma universe keyset pagination guard reached before exhaustion")
+
     unique = {row["market_id"]: row for row in out}
     ordered = sorted(unique.values(), key=lambda row: (-float(row["liquidity"]), str(row["market_id"])))
     return ordered if limit <= 0 else ordered[:limit]
@@ -153,7 +181,7 @@ def snapshot(
         "captured_ts_ms": int(captured_ts_ms),
         "captured_ts": int(captured_ts_ms) // 1000,
         "cadence_seconds": int(cadence_seconds),
-        "source": "gamma_active_closed_false_direct",
+        "source": "gamma_keyset_closed_false_direct",
         "gamma_url": gamma_url.rstrip("/"),
         "market_limit": int(market_limit),
         "discovery_exhaustive": int(market_limit) <= 0,
