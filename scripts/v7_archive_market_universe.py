@@ -93,15 +93,20 @@ def discover(
     the latter can reject/shift large exhaustive scans as the live market set
     changes. Membership filters that are not part of the keyset contract remain
     fail-closed locally before a market can enter the snapshot.
+
+    Exhaustive discovery has no arbitrary page-count ceiling. Gamma defines
+    completion by returning an empty ``next_cursor``; safety is enforced by
+    rejecting cursor cycles, repeated pages, and empty continuation pages.
     """
     limit = max(0, int(market_limit))
     page = max(1, min(100, int(page_size)))
     minimum_liquidity = max(0.0, float(min_liquidity))
     out: list[dict[str, Any]] = []
     cursor = ""
-    exhaustive = False
+    seen_cursors: set[str] = set()
+    seen_page_fingerprints: set[str] = set()
 
-    for _ in range(1000):
+    while True:
         if limit > 0 and len(out) >= limit:
             break
 
@@ -120,6 +125,14 @@ def discover(
         rows = value.get("markets", [])
         if not isinstance(rows, list):
             raise RuntimeError("Gamma keyset markets must be a list")
+
+        if rows:
+            fingerprint = hashlib.sha256(
+                json.dumps(rows, sort_keys=True, separators=(",", ":"), default=str).encode("utf-8")
+            ).hexdigest()
+            if fingerprint in seen_page_fingerprints:
+                raise RuntimeError("Gamma keyset repeated a market page before exhaustion")
+            seen_page_fingerprints.add(fingerprint)
 
         for raw in rows:
             if not isinstance(raw, dict):
@@ -141,14 +154,15 @@ def discover(
 
         next_cursor = str(value.get("next_cursor") or "").strip()
         if not next_cursor:
-            exhaustive = True
             break
+        if not rows:
+            raise RuntimeError("Gamma keyset returned an empty page with a continuation cursor")
         if next_cursor == cursor:
             raise RuntimeError("Gamma keyset cursor did not advance")
+        if next_cursor in seen_cursors:
+            raise RuntimeError("Gamma keyset cursor repeated before exhaustion")
+        seen_cursors.add(next_cursor)
         cursor = next_cursor
-
-    if limit <= 0 and not exhaustive:
-        raise RuntimeError("Gamma universe keyset pagination guard reached before exhaustion")
 
     unique = {row["market_id"]: row for row in out}
     ordered = sorted(unique.values(), key=lambda row: (-float(row["liquidity"]), str(row["market_id"])))
