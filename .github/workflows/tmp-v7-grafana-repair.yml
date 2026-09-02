@@ -72,14 +72,7 @@ jobs:
           ts_admin serve --bg --https=443 localhost:3000 >/dev/null
           ts_admin serve --bg --http=80 localhost:3000 >/dev/null
           "$ts" serve status
-          status_json="$("$ts" status --json)"
-          python3 - "$status_json" <<'PY'
-          import json,sys
-          value=json.loads(sys.argv[1])
-          self=value.get('Self') or {}
-          print('tailscale_dns='+str(self.get('DNSName') or ''))
-          print('tailscale_ips='+','.join(self.get('TailscaleIPs') or []))
-          PY
+          printf 'tailscale_ipv4=%s\n' "$("$ts" ip -4)"
           REMOTE
 
       - name: Verify browser routes from independent tailnet peer
