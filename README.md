@@ -202,7 +202,7 @@ The retained automation is deliberately small:
 .github/workflows/v7-point-in-time-universe-archive.yml
 ```
 
-CI, monitoring and single-writer checks validate the two-engine V7 runtime directly.
+CI, monitoring and single-writer checks validate the two-engine V7 runtime directly. Point-in-time universe archival uses Gamma keyset pagination for exhaustive snapshots, while Grafana is exposed tailnet-only through the canonical Tailscale FQDN.
 
 ## Repository invariant
 
