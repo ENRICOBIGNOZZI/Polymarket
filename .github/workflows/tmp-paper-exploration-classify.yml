@@ -1,0 +1,103 @@
+name: TEMP classify PAPER exploration blocker
+
+on:
+  push:
+    branches: [ops/paper-exploration-funnel-fix-20260903]
+    paths:
+      - .github/workflows/tmp-paper-exploration-classify.yml
+      - diagnostics/paper_exploration_live.json
+
+permissions:
+  contents: write
+
+jobs:
+  classify:
+    if: github.event.head_commit.message != 'diagnostics: classify PAPER exploration blocker'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 8
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with: {ref: ops/paper-exploration-funnel-fix-20260903, fetch-depth: 0}
+      - name: Await and classify diagnosis
+        run: |
+          set -euo pipefail
+          for _ in $(seq 1 60); do
+            git fetch origin ops/paper-exploration-funnel-fix-20260903
+            if git show origin/ops/paper-exploration-funnel-fix-20260903:diagnostics/paper_exploration_live.json > /tmp/live.json 2>/dev/null; then break; fi
+            sleep 2
+          done
+          test -s /tmp/live.json
+          mkdir -p diagnostics
+          python3 - <<'PY'
+          from pathlib import Path
+          import json, re
+          d=json.loads(Path('/tmp/live.json').read_text())
+          cfg=d.get('config_external_fair') or {}
+          pe=cfg.get('paper_exploration') if isinstance(cfg.get('paper_exploration'),dict) else {}
+          router=d.get('router_status') or {}
+          state=d.get('router_state_summary') or {}
+          coord=d.get('coordinator') or {}
+          counts=d.get('counts') or {}
+          processes=d.get('processes') or []
+          blob=json.dumps(d,sort_keys=True).upper()
+          def first(*keys):
+              for src in (router,state,coord.get('last_decision') if isinstance(coord.get('last_decision'),dict) else {},coord):
+                  if not isinstance(src,dict): continue
+                  for key in keys:
+                      if key in src and src[key] not in (None,'',[],{}): return src[key]
+              return None
+          last=first('last_attempt_reason','reason','status','state','last_error','error')
+          router_alive=any('v7_external_fair_paper_router' in str(x) for x in processes)
+          coordinator_alive=any('v7_global_portfolio_coordinator' in str(x) for x in processes)
+          inbox=int(counts.get('inbox') or 0); receipts=int(counts.get('receipts') or 0)
+          causes=[]
+          if pe.get('enabled') is not True: causes.append('PAPER_EXPLORATION_CONFIG_DISABLED')
+          if not router_alive: causes.append('PAPER_ROUTER_NOT_RUNNING')
+          if any(x in blob for x in ('DISABLED_FOR_EXECUTION','TAKER_DISABLED','SHADOW_ZERO_AUTHORITY','NOT_SHADOW_AUTHORIZED','NEW_RISK_DISABLED')):
+              causes.append('LEGACY_SHADOW_OR_EXECUTION_GATE')
+          if inbox>0 and receipts==0: causes.append('COORDINATOR_NOT_CONSUMING_CANDIDATES')
+          if receipts>0 and any(x in blob for x in ('NOT_SELECTED','RECEIPT','TIMEOUT')): causes.append('SYNCHRONOUS_RECEIPT_HANDOFF_RACE')
+          if any(x in blob for x in ('NO_ELIGIBLE_MARKET','NO_MARKET','CONTRACT_NOT_FOUND','NO_ACTIVE_CONTRACT')):
+              causes.append('BTC_M5_MARKET_DISCOVERY')
+          if any(x in blob for x in ('FAIR_INVALID','MODEL_UNREGISTERED','NO_FAIR','CALIBRATION_MISSING')):
+              causes.append('IMMATURE_FAIR_BLOCKED_BEFORE_EXPLORATION')
+          if any(x in blob for x in ('STALE','NO_FRESH','ORACLE_AGE','BOUNDARY_MISSING')):
+              causes.append('SOURCE_OR_ORACLE_FRESHNESS')
+          if any(x in blob for x in ('NO_POSITIVE','NEGATIVE_EV','EDGE','BELOW_COST','ROBUST_EV')) and not causes:
+              causes.append('NO_ROBUST_POSITIVE_NET_EDGE')
+          if not causes:
+              if inbox==0 and receipts==0: causes.append('NO_CANDIDATE_REACHED_COORDINATOR')
+              else: causes.append('UNCLASSIFIED_FUNNEL_BLOCKER')
+          out={
+              'schema':'polymarket_v7_paper_exploration_root_cause_v1',
+              'deployed_sha':d.get('deployed_sha'),
+              'router_alive':router_alive,
+              'coordinator_process_visible':coordinator_alive,
+              'paper_exploration_enabled':pe.get('enabled'),
+              'last_reason':last,
+              'inbox_count':inbox,
+              'receipt_count':receipts,
+              'causes':causes,
+              'recommended_repairs':{
+                  'ensure_router_started_for_exploration': 'PAPER_ROUTER_NOT_RUNNING' in causes,
+                  'bypass_legacy_gate_only_for_checked_in_paper_exploration': 'LEGACY_SHADOW_OR_EXECUTION_GATE' in causes or 'NO_CANDIDATE_REACHED_COORDINATOR' in causes,
+                  'deterministically_kick_canonical_coordinator_before_receipt_wait': any(c in causes for c in ('COORDINATOR_NOT_CONSUMING_CANDIDATES','SYNCHRONOUS_RECEIPT_HANDOFF_RACE','NO_CANDIDATE_REACHED_COORDINATOR')),
+                  'repair_btc_m5_registry_binding': 'BTC_M5_MARKET_DISCOVERY' in causes,
+                  'allow_immature_bootstrap_fair_only_inside_bounded_exploration': 'IMMATURE_FAIR_BLOCKED_BEFORE_EXPLORATION' in causes,
+                  'do_not_relax_freshness': 'SOURCE_OR_ORACLE_FRESHNESS' in causes,
+              },
+          }
+          Path('diagnostics/paper_exploration_root_cause.json').write_text(json.dumps(out,indent=2,sort_keys=True)+'\n')
+          print(json.dumps(out,sort_keys=True))
+          PY
+      - name: Commit classification
+        run: |
+          set -euo pipefail
+          git config user.name ENRICOBIGNOZZI
+          git config user.email 88671442+ENRICOBIGNOZZI@users.noreply.github.com
+          git pull --rebase origin ops/paper-exploration-funnel-fix-20260903
+          cp /tmp/live.json diagnostics/paper_exploration_live.json
+          git add diagnostics/paper_exploration_live.json diagnostics/paper_exploration_root_cause.json
+          git diff --cached --quiet && exit 0
+          git commit -m 'diagnostics: classify PAPER exploration blocker'
+          git push origin HEAD:ops/paper-exploration-funnel-fix-20260903
