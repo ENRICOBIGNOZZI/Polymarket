@@ -1,0 +1,83 @@
+name: TEMP V7 self-hosted server diagnostic
+
+on:
+  push:
+    branches: [codex/v7-paper-probe-recovery-20260904]
+    paths: [.github/workflows/tmp-v7-self-hosted-diagnostic.yml]
+
+permissions: {contents: read}
+concurrency: {group: v7-self-hosted-server-diagnostic, cancel-in-progress: false}
+
+jobs:
+  diagnose:
+    runs-on: self-hosted
+    timeout-minutes: 5
+    steps:
+      - name: Read safe local V7 state
+        shell: bash
+        run: |
+          set -euo pipefail
+          app="$HOME/polymarket"
+          root="$app/runs/paper_v7_live"
+          test -d "$app/.git"
+          test -d "$root/control"
+          python3 - "$app" "$root" <<'PY'
+          import json, os, subprocess, sys, time
+          from pathlib import Path
+          app, root = map(Path, sys.argv[1:])
+          def read(path):
+              try:
+                  value=json.loads(path.read_text(encoding='utf-8'))
+                  return value if isinstance(value,dict) else {}
+              except Exception:
+                  return {}
+          def git(*args):
+              return subprocess.check_output(['git','-C',str(app),*args],text=True).strip()
+          runtime=read(root/'control/runtime_status.json')
+          router=read(root/'external_fair/paper_router_status.json')
+          router_state=read(root/'external_fair/paper_router_state.json')
+          fair=read(root/'external_fair/status.json')
+          coordinator=read(root/'control/global_portfolio_coordinator.json')
+          allocation=read(root/'control/allocations/manifest.json')
+          deployed=(root/'control/deployed_sha').read_text(encoding='utf-8').strip()
+          payload={
+              'schema':'polymarket_v7_safe_self_hosted_diagnostic_v1',
+              'observed_at':int(time.time()),
+              'server_head':git('rev-parse','HEAD'),
+              'origin_main':git('rev-parse','origin/main'),
+              'deployed_sha':deployed,
+              'runtime':{k:runtime.get(k) for k in (
+                  'model_sha','state','timestamp','pid','paper_only','authenticated_execution',
+                  'real_order_submission','real_capital_at_risk','economic_engines',
+                  'economic_new_risk_ready','authorized_alpha_actions')},
+              'external_fair_status':{
+                  'code_sha':fair.get('code_sha'),
+                  'contract':fair.get('contract'),
+                  'settlement_reference':fair.get('settlement_reference'),
+                  'oracle':fair.get('oracle'),
+                  'external':fair.get('external'),
+                  'fair':fair.get('fair'),
+                  'market':fair.get('market'),
+              },
+              'router':{
+                  'blocker':router.get('blocker'),
+                  'candidates':router.get('candidates'),
+                  'probe_candidates':router.get('probe_candidates'),
+                  'probe_fills':router.get('probe_fills'),
+                  'book_requests':router.get('book_requests'),
+                  'book_request_failures':router.get('book_request_failures'),
+                  'book_parse_failures':router.get('book_parse_failures'),
+                  'rejection_reasons':router.get('rejection_reasons'),
+                  'wait_reasons':router.get('wait_reasons'),
+                  'last_decision':router.get('last_decision'),
+                  'live_market':router.get('live_market'),
+              },
+              'router_state':{k:router_state.get(k) for k in (
+                  'starting_capital','cash','candidates','probe_candidates','probe_fills',
+                  'counterfactual_fills','nothing','traded_markets','rejection_reasons',
+                  'wait_reasons','last_decision')},
+              'coordinator_last_decision':coordinator.get('last_decision'),
+              'engine_budgets':allocation.get('engine_budgets'),
+          }
+          print(json.dumps(payload,sort_keys=True))
+          PY
