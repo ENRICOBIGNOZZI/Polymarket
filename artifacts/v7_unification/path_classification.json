@@ -3,11 +3,11 @@
   "coverage": {
     "external_blocker_count": 2,
     "process_count": 22,
-    "ref_count": 18,
+    "ref_count": 16,
     "runtime_output_count": 78,
     "schema_count": 22,
-    "tracked_or_intended_path_count": 611,
-    "workflow_count": 15
+    "tracked_or_intended_path_count": 605,
+    "workflow_count": 10
   },
   "entries": [
     {
@@ -772,131 +772,6 @@
       "path_or_ref": ".github/workflows/private-runtime-single-writer-validation.yml",
       "rollback_artifact_tag": "v7-unification-pre-migration-8d9e8e60",
       "surface_id": "path:.github/workflows/private-runtime-single-writer-validation.yml",
-      "unique_behavior_data_contribution": "tracked repository behavior, evidence, test, configuration, or documentation",
-      "validation_tests": [
-        "tests/test_v7_surface_classification.py"
-      ]
-    },
-    {
-      "canonical_replacement": ".github/workflows/tmp-paper-exploration-apply-fix.yml",
-      "classification": "KEEP_CANONICAL",
-      "current_imports_callers_readers_writers": {
-        "analysis": "exact path/module references from tracked text; runtime linkage is separately enumerated",
-        "static_references": []
-      },
-      "deletion_gate": "NONE_CANONICAL_SURFACE",
-      "disposition_commit": null,
-      "economic_authority": {
-        "capabilities": [],
-        "executable": false,
-        "owner": null
-      },
-      "final_disposition": "retain_canonical",
-      "migration_status": "classified",
-      "object_type": "tracked_path",
-      "path_or_ref": ".github/workflows/tmp-paper-exploration-apply-fix.yml",
-      "rollback_artifact_tag": "v7-unification-pre-migration-8d9e8e60",
-      "surface_id": "path:.github/workflows/tmp-paper-exploration-apply-fix.yml",
-      "unique_behavior_data_contribution": "tracked repository behavior, evidence, test, configuration, or documentation",
-      "validation_tests": [
-        "tests/test_v7_surface_classification.py"
-      ]
-    },
-    {
-      "canonical_replacement": ".github/workflows/tmp-paper-exploration-classify.yml",
-      "classification": "KEEP_CANONICAL",
-      "current_imports_callers_readers_writers": {
-        "analysis": "exact path/module references from tracked text; runtime linkage is separately enumerated",
-        "static_references": []
-      },
-      "deletion_gate": "NONE_CANONICAL_SURFACE",
-      "disposition_commit": null,
-      "economic_authority": {
-        "capabilities": [],
-        "executable": false,
-        "owner": null
-      },
-      "final_disposition": "retain_canonical",
-      "migration_status": "classified",
-      "object_type": "tracked_path",
-      "path_or_ref": ".github/workflows/tmp-paper-exploration-classify.yml",
-      "rollback_artifact_tag": "v7-unification-pre-migration-8d9e8e60",
-      "surface_id": "path:.github/workflows/tmp-paper-exploration-classify.yml",
-      "unique_behavior_data_contribution": "tracked repository behavior, evidence, test, configuration, or documentation",
-      "validation_tests": [
-        "tests/test_v7_surface_classification.py"
-      ]
-    },
-    {
-      "canonical_replacement": ".github/workflows/tmp-paper-exploration-diagnostic-commit.yml",
-      "classification": "KEEP_CANONICAL",
-      "current_imports_callers_readers_writers": {
-        "analysis": "exact path/module references from tracked text; runtime linkage is separately enumerated",
-        "static_references": []
-      },
-      "deletion_gate": "NONE_CANONICAL_SURFACE",
-      "disposition_commit": null,
-      "economic_authority": {
-        "capabilities": [],
-        "executable": false,
-        "owner": null
-      },
-      "final_disposition": "retain_canonical",
-      "migration_status": "classified",
-      "object_type": "tracked_path",
-      "path_or_ref": ".github/workflows/tmp-paper-exploration-diagnostic-commit.yml",
-      "rollback_artifact_tag": "v7-unification-pre-migration-8d9e8e60",
-      "surface_id": "path:.github/workflows/tmp-paper-exploration-diagnostic-commit.yml",
-      "unique_behavior_data_contribution": "tracked repository behavior, evidence, test, configuration, or documentation",
-      "validation_tests": [
-        "tests/test_v7_surface_classification.py"
-      ]
-    },
-    {
-      "canonical_replacement": ".github/workflows/tmp-paper-exploration-live-diagnostic.yml",
-      "classification": "KEEP_CANONICAL",
-      "current_imports_callers_readers_writers": {
-        "analysis": "exact path/module references from tracked text; runtime linkage is separately enumerated",
-        "static_references": []
-      },
-      "deletion_gate": "NONE_CANONICAL_SURFACE",
-      "disposition_commit": null,
-      "economic_authority": {
-        "capabilities": [],
-        "executable": false,
-        "owner": null
-      },
-      "final_disposition": "retain_canonical",
-      "migration_status": "classified",
-      "object_type": "tracked_path",
-      "path_or_ref": ".github/workflows/tmp-paper-exploration-live-diagnostic.yml",
-      "rollback_artifact_tag": "v7-unification-pre-migration-8d9e8e60",
-      "surface_id": "path:.github/workflows/tmp-paper-exploration-live-diagnostic.yml",
-      "unique_behavior_data_contribution": "tracked repository behavior, evidence, test, configuration, or documentation",
-      "validation_tests": [
-        "tests/test_v7_surface_classification.py"
-      ]
-    },
-    {
-      "canonical_replacement": ".github/workflows/tmp-paper-exploration-release-controller.yml",
-      "classification": "KEEP_CANONICAL",
-      "current_imports_callers_readers_writers": {
-        "analysis": "exact path/module references from tracked text; runtime linkage is separately enumerated",
-        "static_references": []
-      },
-      "deletion_gate": "NONE_CANONICAL_SURFACE",
-      "disposition_commit": null,
-      "economic_authority": {
-        "capabilities": [],
-        "executable": false,
-        "owner": null
-      },
-      "final_disposition": "retain_canonical",
-      "migration_status": "classified",
-      "object_type": "tracked_path",
-      "path_or_ref": ".github/workflows/tmp-paper-exploration-release-controller.yml",
-      "rollback_artifact_tag": "v7-unification-pre-migration-8d9e8e60",
-      "surface_id": "path:.github/workflows/tmp-paper-exploration-release-controller.yml",
       "unique_behavior_data_contribution": "tracked repository behavior, evidence, test, configuration, or documentation",
       "validation_tests": [
         "tests/test_v7_surface_classification.py"
@@ -7879,31 +7754,6 @@
       "path_or_ref": "scripts/polymarket_fees.py",
       "rollback_artifact_tag": "v7-unification-pre-migration-8d9e8e60",
       "surface_id": "path:scripts/polymarket_fees.py",
-      "unique_behavior_data_contribution": "tracked repository behavior, evidence, test, configuration, or documentation",
-      "validation_tests": [
-        "tests/test_v7_surface_classification.py"
-      ]
-    },
-    {
-      "canonical_replacement": "scripts/tmp_apply_paper_exploration_funnel_fix.py",
-      "classification": "KEEP_CANONICAL",
-      "current_imports_callers_readers_writers": {
-        "analysis": "exact path/module references from tracked text; runtime linkage is separately enumerated",
-        "static_references": []
-      },
-      "deletion_gate": "NONE_CANONICAL_SURFACE",
-      "disposition_commit": null,
-      "economic_authority": {
-        "capabilities": [],
-        "executable": false,
-        "owner": null
-      },
-      "final_disposition": "retain_canonical",
-      "migration_status": "classified",
-      "object_type": "tracked_path",
-      "path_or_ref": "scripts/tmp_apply_paper_exploration_funnel_fix.py",
-      "rollback_artifact_tag": "v7-unification-pre-migration-8d9e8e60",
-      "surface_id": "path:scripts/tmp_apply_paper_exploration_funnel_fix.py",
       "unique_behavior_data_contribution": "tracked repository behavior, evidence, test, configuration, or documentation",
       "validation_tests": [
         "tests/test_v7_surface_classification.py"
@@ -18600,37 +18450,9 @@
       "object_type": "branch_or_remote_ref",
       "path_or_ref": "refs/heads/ops/paper-exploration-funnel-fix-20260903",
       "rollback_artifact_tag": "v7-unification-pre-migration-8d9e8e60",
-      "snapshot_object_id": "546c5165a9cf809392dc3974af81910878184803",
+      "snapshot_object_id": "d9d26cb82e80282bfeab691acfd16eae6c4b1415",
       "surface_id": "ref:refs/heads/ops/paper-exploration-funnel-fix-20260903",
-      "unique_behavior_data_contribution": "6 commit(s) not reachable from origin/main require content audit",
-      "validation_tests": [
-        "tests/test_v7_surface_classification.py"
-      ]
-    },
-    {
-      "canonical_replacement": "config/v7_authority_registry.json#CRYPTO_SETTLEMENT_ENGINE",
-      "classification": "MERGE_INTO_CANONICAL",
-      "current_imports_callers_readers_writers": {
-        "analysis": "exact path/module references from tracked text; runtime linkage is separately enumerated",
-        "static_references": []
-      },
-      "deletion_gate": "UNIQUE_BEHAVIOR_EQUIVALENCE_AND_SINGLE_CONSUMER_PROVEN",
-      "disposition_commit": null,
-      "economic_authority": {
-        "capabilities": [
-          "engine_component"
-        ],
-        "executable": false,
-        "owner": "CRYPTO_SETTLEMENT_ENGINE"
-      },
-      "final_disposition": "merge_then_delete_or_reclassify_canonical",
-      "migration_status": "unique_commit_audit_pending",
-      "object_type": "branch_or_remote_ref",
-      "path_or_ref": "refs/heads/ops/paper-exploration-watchdog-20260903",
-      "rollback_artifact_tag": "v7-unification-pre-migration-8d9e8e60",
-      "snapshot_object_id": "4720f0d8cf02cdacabfe1b87508d73880d8e2998",
-      "surface_id": "ref:refs/heads/ops/paper-exploration-watchdog-20260903",
-      "unique_behavior_data_contribution": "3 commit(s) not reachable from origin/main require content audit",
+      "unique_behavior_data_contribution": "7 commit(s) not reachable from origin/main require content audit",
       "validation_tests": [
         "tests/test_v7_surface_classification.py"
       ]
@@ -18738,37 +18560,9 @@
       "object_type": "branch_or_remote_ref",
       "path_or_ref": "refs/remotes/origin/ops/paper-exploration-funnel-fix-20260903",
       "rollback_artifact_tag": "v7-unification-pre-migration-8d9e8e60",
-      "snapshot_object_id": "546c5165a9cf809392dc3974af81910878184803",
+      "snapshot_object_id": "d9d26cb82e80282bfeab691acfd16eae6c4b1415",
       "surface_id": "ref:refs/remotes/origin/ops/paper-exploration-funnel-fix-20260903",
-      "unique_behavior_data_contribution": "6 commit(s) not reachable from origin/main require content audit",
-      "validation_tests": [
-        "tests/test_v7_surface_classification.py"
-      ]
-    },
-    {
-      "canonical_replacement": "config/v7_authority_registry.json#CRYPTO_SETTLEMENT_ENGINE",
-      "classification": "MERGE_INTO_CANONICAL",
-      "current_imports_callers_readers_writers": {
-        "analysis": "exact path/module references from tracked text; runtime linkage is separately enumerated",
-        "static_references": []
-      },
-      "deletion_gate": "UNIQUE_BEHAVIOR_EQUIVALENCE_AND_SINGLE_CONSUMER_PROVEN",
-      "disposition_commit": null,
-      "economic_authority": {
-        "capabilities": [
-          "engine_component"
-        ],
-        "executable": false,
-        "owner": "CRYPTO_SETTLEMENT_ENGINE"
-      },
-      "final_disposition": "merge_then_delete_or_reclassify_canonical",
-      "migration_status": "unique_commit_audit_pending",
-      "object_type": "branch_or_remote_ref",
-      "path_or_ref": "refs/remotes/origin/ops/paper-exploration-watchdog-20260903",
-      "rollback_artifact_tag": "v7-unification-pre-migration-8d9e8e60",
-      "snapshot_object_id": "4720f0d8cf02cdacabfe1b87508d73880d8e2998",
-      "surface_id": "ref:refs/remotes/origin/ops/paper-exploration-watchdog-20260903",
-      "unique_behavior_data_contribution": "3 commit(s) not reachable from origin/main require content audit",
+      "unique_behavior_data_contribution": "7 commit(s) not reachable from origin/main require content audit",
       "validation_tests": [
         "tests/test_v7_surface_classification.py"
       ]
@@ -21987,131 +21781,6 @@
       ]
     },
     {
-      "canonical_replacement": ".github/workflows/tmp-paper-exploration-apply-fix.yml",
-      "classification": "KEEP_CANONICAL",
-      "current_imports_callers_readers_writers": {
-        "analysis": "exact path/module references from tracked text; runtime linkage is separately enumerated",
-        "static_references": []
-      },
-      "deletion_gate": "NONE_CANONICAL_SURFACE",
-      "disposition_commit": null,
-      "economic_authority": {
-        "capabilities": [],
-        "executable": false,
-        "owner": null
-      },
-      "final_disposition": "retain_canonical",
-      "migration_status": "classified",
-      "object_type": "workflow",
-      "path_or_ref": ".github/workflows/tmp-paper-exploration-apply-fix.yml",
-      "rollback_artifact_tag": "v7-unification-pre-migration-8d9e8e60",
-      "surface_id": "workflow:.github/workflows/tmp-paper-exploration-apply-fix.yml",
-      "unique_behavior_data_contribution": "CI, research, deployment, or cutover control surface",
-      "validation_tests": [
-        "tests/test_v7_surface_classification.py"
-      ]
-    },
-    {
-      "canonical_replacement": ".github/workflows/tmp-paper-exploration-classify.yml",
-      "classification": "KEEP_CANONICAL",
-      "current_imports_callers_readers_writers": {
-        "analysis": "exact path/module references from tracked text; runtime linkage is separately enumerated",
-        "static_references": []
-      },
-      "deletion_gate": "NONE_CANONICAL_SURFACE",
-      "disposition_commit": null,
-      "economic_authority": {
-        "capabilities": [],
-        "executable": false,
-        "owner": null
-      },
-      "final_disposition": "retain_canonical",
-      "migration_status": "classified",
-      "object_type": "workflow",
-      "path_or_ref": ".github/workflows/tmp-paper-exploration-classify.yml",
-      "rollback_artifact_tag": "v7-unification-pre-migration-8d9e8e60",
-      "surface_id": "workflow:.github/workflows/tmp-paper-exploration-classify.yml",
-      "unique_behavior_data_contribution": "CI, research, deployment, or cutover control surface",
-      "validation_tests": [
-        "tests/test_v7_surface_classification.py"
-      ]
-    },
-    {
-      "canonical_replacement": ".github/workflows/tmp-paper-exploration-diagnostic-commit.yml",
-      "classification": "KEEP_CANONICAL",
-      "current_imports_callers_readers_writers": {
-        "analysis": "exact path/module references from tracked text; runtime linkage is separately enumerated",
-        "static_references": []
-      },
-      "deletion_gate": "NONE_CANONICAL_SURFACE",
-      "disposition_commit": null,
-      "economic_authority": {
-        "capabilities": [],
-        "executable": false,
-        "owner": null
-      },
-      "final_disposition": "retain_canonical",
-      "migration_status": "classified",
-      "object_type": "workflow",
-      "path_or_ref": ".github/workflows/tmp-paper-exploration-diagnostic-commit.yml",
-      "rollback_artifact_tag": "v7-unification-pre-migration-8d9e8e60",
-      "surface_id": "workflow:.github/workflows/tmp-paper-exploration-diagnostic-commit.yml",
-      "unique_behavior_data_contribution": "CI, research, deployment, or cutover control surface",
-      "validation_tests": [
-        "tests/test_v7_surface_classification.py"
-      ]
-    },
-    {
-      "canonical_replacement": ".github/workflows/tmp-paper-exploration-live-diagnostic.yml",
-      "classification": "KEEP_CANONICAL",
-      "current_imports_callers_readers_writers": {
-        "analysis": "exact path/module references from tracked text; runtime linkage is separately enumerated",
-        "static_references": []
-      },
-      "deletion_gate": "NONE_CANONICAL_SURFACE",
-      "disposition_commit": null,
-      "economic_authority": {
-        "capabilities": [],
-        "executable": false,
-        "owner": null
-      },
-      "final_disposition": "retain_canonical",
-      "migration_status": "classified",
-      "object_type": "workflow",
-      "path_or_ref": ".github/workflows/tmp-paper-exploration-live-diagnostic.yml",
-      "rollback_artifact_tag": "v7-unification-pre-migration-8d9e8e60",
-      "surface_id": "workflow:.github/workflows/tmp-paper-exploration-live-diagnostic.yml",
-      "unique_behavior_data_contribution": "CI, research, deployment, or cutover control surface",
-      "validation_tests": [
-        "tests/test_v7_surface_classification.py"
-      ]
-    },
-    {
-      "canonical_replacement": ".github/workflows/tmp-paper-exploration-release-controller.yml",
-      "classification": "KEEP_CANONICAL",
-      "current_imports_callers_readers_writers": {
-        "analysis": "exact path/module references from tracked text; runtime linkage is separately enumerated",
-        "static_references": []
-      },
-      "deletion_gate": "NONE_CANONICAL_SURFACE",
-      "disposition_commit": null,
-      "economic_authority": {
-        "capabilities": [],
-        "executable": false,
-        "owner": null
-      },
-      "final_disposition": "retain_canonical",
-      "migration_status": "classified",
-      "object_type": "workflow",
-      "path_or_ref": ".github/workflows/tmp-paper-exploration-release-controller.yml",
-      "rollback_artifact_tag": "v7-unification-pre-migration-8d9e8e60",
-      "surface_id": "workflow:.github/workflows/tmp-paper-exploration-release-controller.yml",
-      "unique_behavior_data_contribution": "CI, research, deployment, or cutover control surface",
-      "validation_tests": [
-        "tests/test_v7_surface_classification.py"
-      ]
-    },
-    {
       "canonical_replacement": ".github/workflows/v7-approved-paper-cutover-orchestrator.yml",
       "classification": "KEEP_CANONICAL",
       "current_imports_callers_readers_writers": {
@@ -22291,5 +21960,5 @@
   "real_capital_at_risk": false,
   "real_order_submission": false,
   "schema": "polymarket_v7_surface_classification_v1",
-  "source_snapshot_sha": "546c5165a9cf809392dc3974af81910878184803"
+  "source_snapshot_sha": "d9d26cb82e80282bfeab691acfd16eae6c4b1415"
 }
