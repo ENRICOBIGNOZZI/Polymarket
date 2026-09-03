@@ -18,6 +18,10 @@ jobs:
           ref: codex/v7-paper-exploration
           fetch-depth: 0
 
+      - name: Install focused test runner
+        shell: bash
+        run: python3 -m pip install --break-system-packages pytest
+
       - name: Repair feature branch contracts
         shell: bash
         run: |
