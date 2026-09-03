@@ -104,6 +104,14 @@ jobs:
           if old not in text:
               raise SystemExit("missing old proposal action assertion")
           text = text.replace(old, 'assert proposal["action"] == "TAKE"', 1)
+          old = 'assert {event["event_type"] for event in research} == {"ORDER_SUBMITTED", "FILL"}'
+          if old not in text:
+              raise SystemExit("missing old research event equality assertion")
+          text = text.replace(
+              old,
+              'assert {"ORDER_SUBMITTED", "FILL"} <= {event["event_type"] for event in research}',
+              1,
+          )
           old = 'assert not (run_root / "ledger" / "spool").exists()'
           if old not in text:
               raise SystemExit("missing old zero-spool assertion")
