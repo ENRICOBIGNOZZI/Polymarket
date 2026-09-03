@@ -3,10 +3,10 @@
   "coverage": {
     "external_blocker_count": 2,
     "process_count": 22,
-    "ref_count": 13,
+    "ref_count": 14,
     "runtime_output_count": 78,
     "schema_count": 22,
-    "tracked_or_intended_path_count": 603,
+    "tracked_or_intended_path_count": 605,
     "workflow_count": 10
   },
   "entries": [
@@ -4593,6 +4593,31 @@
       ]
     },
     {
+      "canonical_replacement": "docs/v7_world_class/paper_exploration.md",
+      "classification": "KEEP_CANONICAL",
+      "current_imports_callers_readers_writers": {
+        "analysis": "exact path/module references from tracked text; runtime linkage is separately enumerated",
+        "static_references": []
+      },
+      "deletion_gate": "NONE_CANONICAL_SURFACE",
+      "disposition_commit": null,
+      "economic_authority": {
+        "capabilities": [],
+        "executable": false,
+        "owner": null
+      },
+      "final_disposition": "retain_canonical",
+      "migration_status": "classified",
+      "object_type": "tracked_path",
+      "path_or_ref": "docs/v7_world_class/paper_exploration.md",
+      "rollback_artifact_tag": "v7-unification-pre-migration-8d9e8e60",
+      "surface_id": "path:docs/v7_world_class/paper_exploration.md",
+      "unique_behavior_data_contribution": "tracked repository behavior, evidence, test, configuration, or documentation",
+      "validation_tests": [
+        "tests/test_v7_surface_classification.py"
+      ]
+    },
+    {
       "canonical_replacement": "docs/v7_world_class/target_architecture.md",
       "classification": "KEEP_CANONICAL",
       "current_imports_callers_readers_writers": {
@@ -8847,6 +8872,7 @@
           "tests/test_v7_joint_execution_policy.py",
           "tests/test_v7_ledger_spool.py",
           "tests/test_v7_market_maker_model.py",
+          "tests/test_v7_paper_exploration_authority.py",
           "tests/test_v7_repository_shape.py"
         ]
       },
@@ -9104,10 +9130,12 @@
           "artifacts/v7_unification/legacy_deletion_manifest.json",
           "artifacts/v7_unification/path_classification.json",
           "artifacts/v7_unification/runtime_process_graph.json",
+          "config/v7_authority_edges.json",
           "config/v7_process_manifest.json",
           "ops/update_server_v7.sh",
           "scripts/paper_v7_execution_loop.sh",
-          "tests/test_v7_external_fair_paper_router.py"
+          "tests/test_v7_external_fair_paper_router.py",
+          "tests/test_v7_paper_exploration_authority.py"
         ]
       },
       "deletion_gate": "UNIQUE_BEHAVIOR_EQUIVALENCE_AND_SINGLE_CONSUMER_PROVEN",
@@ -9733,7 +9761,8 @@
           "config/v7_process_manifest.json",
           "scripts/paper_v7_execution_loop.sh",
           "scripts/v7_cutover_contract.py",
-          "tests/test_v7_global_portfolio_coordinator.py"
+          "tests/test_v7_global_portfolio_coordinator.py",
+          "tests/test_v7_paper_exploration_authority.py"
         ]
       },
       "deletion_gate": "NONE_CANONICAL_SURFACE",
@@ -9985,9 +10014,12 @@
           "ops/update_server_v7.sh",
           "scripts/paper_v7_execution_loop.sh",
           "scripts/v7_cutover_contract.py",
+          "scripts/v7_external_fair_paper_router.py",
           "scripts/v7_finalize_maker_cutover.py",
+          "tests/test_v7_external_fair_paper_router.py",
           "tests/test_v7_ledger_spool.py",
-          "tests/test_v7_live_paper_validation_contract.py"
+          "tests/test_v7_live_paper_validation_contract.py",
+          "tests/test_v7_paper_exploration_authority.py"
         ]
       },
       "deletion_gate": "NONE_CANONICAL_SURFACE",
@@ -10468,7 +10500,8 @@
           "scripts/v7_surface_classification.py",
           "tests/test_v7_crypto_btc_equivalence.py",
           "tests/test_v7_external_fair_paper_router.py",
-          "tests/test_v7_opportunity.py"
+          "tests/test_v7_opportunity.py",
+          "tests/test_v7_paper_exploration_authority.py"
         ]
       },
       "deletion_gate": "NONE_CANONICAL_SURFACE",
@@ -16798,7 +16831,8 @@
           "artifacts/v7_unification/phase_5_report.md",
           "scripts/v7_implementation_audit.py",
           "tests/test_v7_crypto_btc_equivalence.py",
-          "tests/test_v7_global_portfolio_coordinator.py"
+          "tests/test_v7_global_portfolio_coordinator.py",
+          "tests/test_v7_paper_exploration_authority.py"
         ]
       },
       "deletion_gate": "NONE_CANONICAL_SURFACE",
@@ -16870,6 +16904,33 @@
       "path_or_ref": "tests/test_v7_order_tx.cpp",
       "rollback_artifact_tag": "v7-unification-pre-migration-8d9e8e60",
       "surface_id": "path:tests/test_v7_order_tx.cpp",
+      "unique_behavior_data_contribution": "tracked repository behavior, evidence, test, configuration, or documentation",
+      "validation_tests": [
+        "tests/test_v7_surface_classification.py"
+      ]
+    },
+    {
+      "canonical_replacement": "tests/test_v7_paper_exploration_authority.py",
+      "classification": "KEEP_CANONICAL",
+      "current_imports_callers_readers_writers": {
+        "analysis": "exact path/module references from tracked text; runtime linkage is separately enumerated",
+        "static_references": [
+          "artifacts/v7_unification/path_classification.json"
+        ]
+      },
+      "deletion_gate": "NONE_CANONICAL_SURFACE",
+      "disposition_commit": null,
+      "economic_authority": {
+        "capabilities": [],
+        "executable": false,
+        "owner": null
+      },
+      "final_disposition": "retain_canonical",
+      "migration_status": "classified",
+      "object_type": "tracked_path",
+      "path_or_ref": "tests/test_v7_paper_exploration_authority.py",
+      "rollback_artifact_tag": "v7-unification-pre-migration-8d9e8e60",
+      "surface_id": "path:tests/test_v7_paper_exploration_authority.py",
       "unique_behavior_data_contribution": "tracked repository behavior, evidence, test, configuration, or documentation",
       "validation_tests": [
         "tests/test_v7_surface_classification.py"
@@ -18365,27 +18426,29 @@
       ]
     },
     {
-      "canonical_replacement": "refs/heads/main",
-      "classification": "KEEP_CANONICAL",
+      "canonical_replacement": "config/v7_authority_registry.json#CRYPTO_SETTLEMENT_ENGINE",
+      "classification": "MERGE_INTO_CANONICAL",
       "current_imports_callers_readers_writers": {
         "analysis": "exact path/module references from tracked text; runtime linkage is separately enumerated",
         "static_references": []
       },
-      "deletion_gate": "NONE_CANONICAL_SURFACE",
+      "deletion_gate": "UNIQUE_BEHAVIOR_EQUIVALENCE_AND_SINGLE_CONSUMER_PROVEN",
       "disposition_commit": null,
       "economic_authority": {
-        "capabilities": [],
+        "capabilities": [
+          "engine_component"
+        ],
         "executable": false,
-        "owner": null
+        "owner": "CRYPTO_SETTLEMENT_ENGINE"
       },
-      "final_disposition": "retain_canonical",
-      "migration_status": "classified",
+      "final_disposition": "merge_then_delete_or_reclassify_canonical",
+      "migration_status": "unique_commit_audit_pending",
       "object_type": "branch_or_remote_ref",
-      "path_or_ref": "refs/heads/main",
+      "path_or_ref": "refs/heads/codex/v7-paper-exploration",
       "rollback_artifact_tag": "v7-unification-pre-migration-8d9e8e60",
-      "snapshot_object_id": "bfa431ae10f0e8b5c893249e406bd1a26b00871e",
-      "surface_id": "ref:refs/heads/main",
-      "unique_behavior_data_contribution": "active migration or canonical upstream ref",
+      "snapshot_object_id": "ed4e70c3b938ca8bc7b90d5edc3774f10479cbe6",
+      "surface_id": "ref:refs/heads/codex/v7-paper-exploration",
+      "unique_behavior_data_contribution": "10 commit(s) not reachable from origin/main require content audit",
       "validation_tests": [
         "tests/test_v7_surface_classification.py"
       ]
@@ -18447,6 +18510,34 @@
       ]
     },
     {
+      "canonical_replacement": "config/v7_authority_registry.json#CRYPTO_SETTLEMENT_ENGINE",
+      "classification": "MERGE_INTO_CANONICAL",
+      "current_imports_callers_readers_writers": {
+        "analysis": "exact path/module references from tracked text; runtime linkage is separately enumerated",
+        "static_references": []
+      },
+      "deletion_gate": "UNIQUE_BEHAVIOR_EQUIVALENCE_AND_SINGLE_CONSUMER_PROVEN",
+      "disposition_commit": null,
+      "economic_authority": {
+        "capabilities": [
+          "engine_component"
+        ],
+        "executable": false,
+        "owner": "CRYPTO_SETTLEMENT_ENGINE"
+      },
+      "final_disposition": "merge_then_delete_or_reclassify_canonical",
+      "migration_status": "unique_commit_audit_pending",
+      "object_type": "branch_or_remote_ref",
+      "path_or_ref": "refs/remotes/origin/codex/v7-paper-exploration",
+      "rollback_artifact_tag": "v7-unification-pre-migration-8d9e8e60",
+      "snapshot_object_id": "ed4e70c3b938ca8bc7b90d5edc3774f10479cbe6",
+      "surface_id": "ref:refs/remotes/origin/codex/v7-paper-exploration",
+      "unique_behavior_data_contribution": "10 commit(s) not reachable from origin/main require content audit",
+      "validation_tests": [
+        "tests/test_v7_surface_classification.py"
+      ]
+    },
+    {
       "canonical_replacement": "refs/remotes/origin/main",
       "classification": "KEEP_CANONICAL",
       "current_imports_callers_readers_writers": {
@@ -18465,7 +18556,7 @@
       "object_type": "branch_or_remote_ref",
       "path_or_ref": "refs/remotes/origin/main",
       "rollback_artifact_tag": "v7-unification-pre-migration-8d9e8e60",
-      "snapshot_object_id": "bfa431ae10f0e8b5c893249e406bd1a26b00871e",
+      "snapshot_object_id": "cfbb6032ceaf3b1a718f39f25e9db9c86770d1f5",
       "surface_id": "ref:refs/remotes/origin/main",
       "unique_behavior_data_contribution": "active migration or canonical upstream ref",
       "validation_tests": [
@@ -21811,5 +21902,5 @@
   "real_capital_at_risk": false,
   "real_order_submission": false,
   "schema": "polymarket_v7_surface_classification_v1",
-  "source_snapshot_sha": "bfa431ae10f0e8b5c893249e406bd1a26b00871e"
+  "source_snapshot_sha": "ed4e70c3b938ca8bc7b90d5edc3774f10479cbe6"
 }

@@ -67,6 +67,22 @@ def _coordinator_receipt_valid(event: LedgerEvent, engine_id: str) -> bool:
         and (
             event.event_type not in RISK_CREATING_EVENTS
             or receipt.get("new_risk_authorized") is True
+            or (
+                engine_id == "CRYPTO_SETTLEMENT_ENGINE"
+                and isinstance(event.metadata, dict)
+                and event.metadata.get("paper_exploration") is True
+                and event.metadata.get("economic_authority") == "PAPER_EXPLORATION"
+                and receipt.get("paper_exploration_authorized") is True
+                and receipt.get("new_risk_authorized") is False
+                and receipt.get("paper_only") is True
+                and receipt.get("authenticated_execution") is False
+                and receipt.get("real_order_submission") is False
+                and receipt.get("real_capital_at_risk") is False
+                and isinstance(receipt.get("crypto_context"), dict)
+                and receipt["crypto_context"].get("asset") == "BTC"
+                and receipt["crypto_context"].get("horizon") == "M5"
+                and receipt["crypto_context"].get("authority") == "PAPER_EXPLORATION"
+            )
         )
     )
 

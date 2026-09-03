@@ -134,7 +134,7 @@ class OpportunityEnvelope:
                 or not isinstance(context.get("contract_family"), str)
                 or not context["contract_family"]
                 or not HASH64.fullmatch(str(context.get("settlement_semantic_hash") or ""))
-                or context.get("authority") not in {"SHADOW", "SHADOW_ZERO_AUTHORITY", "PAPER"}
+                or context.get("authority") not in {"SHADOW", "SHADOW_ZERO_AUTHORITY", "PAPER_EXPLORATION", "PAPER"}
                 or not isinstance(context.get("research_only"), bool)
             ):
                 raise OpportunityError("crypto_context_identity")
@@ -269,7 +269,25 @@ class OpportunityEnvelope:
             raise OpportunityError("reasons")
         if not isinstance(value.get("eligible"), bool):
             raise OpportunityError("eligible")
-        if action in NEW_RISK_ACTIONS and (
+        exploration = (
+            engine_id == "CRYPTO_SETTLEMENT_ENGINE"
+            and action in {"MAKE", "TAKE"}
+            and isinstance(crypto_context, dict)
+            and crypto_context.get("authority") == "PAPER_EXPLORATION"
+        )
+        if exploration:
+            if (
+                crypto_context.get("asset") != "BTC"
+                or crypto_context.get("horizon") != "M5"
+                or crypto_context.get("research_only") is not False
+                or uncertainty.get("status") not in {"IMMATURE", "MATURE"}
+                or value.get("calibration_status") not in {"IMMATURE", "MATURE", "NOT_APPLICABLE"}
+                or settlement.get("verified") is not True
+                or float(capacity["executable_size"]) <= 0.0
+                or int(latency.get("arrival_ns") or -1) < 0
+            ):
+                raise OpportunityError("paper_exploration_evidence_incomplete")
+        elif action in NEW_RISK_ACTIONS and (
             latency.get("profile_valid") is not True
             or uncertainty.get("status") != "MATURE"
             or value.get("calibration_status") not in {"MATURE", "NOT_APPLICABLE"}
@@ -290,6 +308,7 @@ def fail_closed_decision(*, now_ns: int, reasons: list[str]) -> dict[str, Any]:
         "crypto_context": None,
         "selected_replay_key": None,
         "new_risk_authorized": False,
+        "paper_exploration_authorized": False,
         "reasons": reasons or ["FAIL_CLOSED"],
     }
 
@@ -297,6 +316,7 @@ def fail_closed_decision(*, now_ns: int, reasons: list[str]) -> dict[str, Any]:
 def coordinate(
     raw_envelopes: Iterable[dict[str, Any]], *, now_ns: int,
     new_risk_authorized: bool = False,
+    paper_exploration_authorized: bool = False,
 ) -> dict[str, Any]:
     parsed: list[OpportunityEnvelope] = []
     errors: list[str] = []
@@ -325,11 +345,39 @@ def coordinate(
             "crypto_context": selected.raw["crypto_context"],
             "selected_replay_key": selected.replay_key,
             "new_risk_authorized": False,
+            "paper_exploration_authorized": False,
             "reasons": ["RISK_ACTION_PREEMPTS_ALPHA"],
         }
     candidates = [row for row in live if row.action in NEW_RISK_ACTIONS]
+    exploration_candidates = [
+        row for row in candidates
+        if row.engine_id == "CRYPTO_SETTLEMENT_ENGINE"
+        and isinstance(row.raw.get("crypto_context"), dict)
+        and row.raw["crypto_context"].get("authority") == "PAPER_EXPLORATION"
+    ]
     if not new_risk_authorized:
-        return fail_closed_decision(now_ns=now_ns, reasons=["NEW_RISK_NOT_AUTHORIZED"])
+        if not paper_exploration_authorized:
+            return fail_closed_decision(now_ns=now_ns, reasons=["NEW_RISK_NOT_AUTHORIZED"])
+        positive = [row for row in exploration_candidates if row.expected_wealth_change > 0.0]
+        if not positive:
+            return fail_closed_decision(now_ns=now_ns, reasons=["NO_POSITIVE_PAPER_EXPLORATION_WEALTH_CHANGE"])
+        selected = max(positive, key=lambda row: (row.expected_wealth_change, row.replay_key))
+        return {
+            "schema": "polymarket_v7_global_opportunity_decision_v1",
+            "owner": "V7_GLOBAL_PORTFOLIO_COORDINATOR",
+            "decision_timestamp_ns": int(now_ns),
+            "action": selected.action,
+            "engine_id": selected.engine_id,
+            "crypto_context": selected.raw["crypto_context"],
+            "selected_replay_key": selected.replay_key,
+            "new_risk_authorized": False,
+            "paper_exploration_authorized": True,
+            "paper_only": True,
+            "authenticated_execution": False,
+            "real_order_submission": False,
+            "real_capital_at_risk": False,
+            "reasons": ["PAPER_EXPLORATION_MAX_CONSERVATIVE_EXPECTED_ACCOUNT_WEALTH_CHANGE"],
+        }
     positive = [row for row in candidates if row.expected_wealth_change > 0.0]
     if not positive:
         return fail_closed_decision(now_ns=now_ns, reasons=["NO_POSITIVE_CONSERVATIVE_WEALTH_CHANGE"])
@@ -343,6 +391,7 @@ def coordinate(
         "crypto_context": selected.raw["crypto_context"],
         "selected_replay_key": selected.replay_key,
         "new_risk_authorized": True,
+        "paper_exploration_authorized": False,
         "reasons": ["MAX_CONSERVATIVE_EXPECTED_ACCOUNT_WEALTH_CHANGE"],
     }
 
