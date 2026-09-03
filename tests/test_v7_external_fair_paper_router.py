@@ -24,7 +24,7 @@ def snapshot() -> dict:
     return {
         "code_sha": "a" * 40, "paper_only": True, "authenticated_execution": False,
         "real_order_submission": False,
-        "contract": {"verified": True, "rules_hash_recognized": True},
+        "contract": {"verified": True, "rules_hash_recognized": True, "rules_hash": "d" * 64},
         "settlement_reference": {"valid": True},
         "oracle": {"healthy": True, "continuity": "LIVE_CONTINUOUS"},
         "external": {"healthy": True},
@@ -147,8 +147,10 @@ def main() -> None:
     assert '"engine_id": "CRYPTO_SETTLEMENT_ENGINE"' in source
     assert '"schema": "polymarket_v7_opportunity_envelope_v1"' in source
     assert '"opportunities" / "inbox"' in source
-    assert "spool_event" not in source
-    assert "v7_ledger_spool" not in source
+    assert "from v7_ledger_spool import spool_event" in source
+    assert "spool_event(self.root" in source
+    assert "wait_for_exploration_receipt" in source
+    assert "PAPER_EXPLORATION_NOT_SELECTED" in source
     assert '"VIRTUAL_FILL"' in source
     assert "api_key" not in source.lower()
     assert "signature" not in source.lower()
@@ -238,8 +240,31 @@ def main() -> None:
         assert exploration_size * (
             exploration_row["ask"] + exploration_row["fee_per_share"]
         ) <= 10.0 + 1e-9
+        exploration_receipt = {
+            "schema": "polymarket_v7_global_opportunity_decision_v1",
+            "owner": "V7_GLOBAL_PORTFOLIO_COORDINATOR",
+            "decision_timestamp_ns": time.time_ns(),
+            "action": "TAKE",
+            "engine_id": "CRYPTO_SETTLEMENT_ENGINE",
+            "crypto_context": {
+                "asset": "BTC", "horizon": "M5",
+                "authority": "PAPER_EXPLORATION",
+            },
+            "selected_replay_key": "test-exploration",
+            "new_risk_authorized": False,
+            "paper_exploration_authorized": True,
+            "paper_only": True,
+            "authenticated_execution": False,
+            "real_order_submission": False,
+            "real_capital_at_risk": False,
+            "reasons": ["TEST_COORDINATOR_SELECTION"],
+        }
         with mock.patch.object(router, "request_json", side_effect=public_request):
-            paper.step()
+            with mock.patch.object(
+                paper, "wait_for_exploration_receipt",
+                return_value=exploration_receipt,
+            ):
+                paper.step()
         proposals = [
             json.loads(path.read_text())
             for path in (run_root / "opportunities" / "inbox").glob("*.json")
@@ -247,15 +272,15 @@ def main() -> None:
         assert len(proposals) == 1
         proposal = OpportunityEnvelope.parse(proposals[0]).raw
         assert proposal["engine_id"] == "CRYPTO_SETTLEMENT_ENGINE"
-        assert proposal["action"] == "NOTHING"
+        assert proposal["action"] == "TAKE"
         research = [
             json.loads(path.read_text())
             for path in (run_root / "research" / "evidence" / "crypto_settlement_counterfactual").glob("*.json")
         ]
-        assert {event["event_type"] for event in research} == {"ORDER_SUBMITTED", "FILL"}
+        assert {"ORDER_SUBMITTED", "FILL"} <= {event["event_type"] for event in research}
         assert all(event["metadata"]["research_evidence_only"] is True
                    for event in research)
-        assert not (run_root / "ledger" / "spool").exists()
+        assert (run_root / "ledger" / "spool").exists()
         events = [json.loads(line) for line in (external / "counterfactuals.jsonl").read_text().splitlines()]
         event_types = {event["event_type"] for event in events}
         assert {"FORECAST", "OPPORTUNITY_SET", "CANDIDATE", "VIRTUAL_FILL"} <= event_types

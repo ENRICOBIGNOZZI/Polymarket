@@ -16,6 +16,15 @@
       "canonical_replacement": "V7_OPERATOR_EXACT_SHA_PROMOTION"
     },
     {
+      "source": "scripts/v7_external_fair_paper_router.py",
+      "classification": "MERGE_INTO_CANONICAL",
+      "runtime_reachability": "CANONICAL_RUNTIME",
+      "authority_mode": "COORDINATOR_RECEIPT_GATED_PAPER_EVENT_PRODUCER",
+      "severity": "CONTROLLED",
+      "reason": "emits bounded simulated PAPER lifecycle events only after a matching global-coordinator receipt and never writes the canonical ledger directly",
+      "canonical_replacement": "V7_CANONICAL_LEDGER"
+    },
+    {
       "source": "scripts/v7_finalize_maker_cutover.py",
       "classification": "KEEP_CANONICAL",
       "runtime_reachability": "CUTOVER_ONLY",
