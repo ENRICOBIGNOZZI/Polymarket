@@ -435,9 +435,9 @@ def validate_probe_policy(raw: dict[str, Any] | None) -> dict[str, Any] | None:
         "maximum_model_market_disagreement": (0.05, 0.30),
         "minimum_tte_seconds": (1.0, 30.0),
         "maximum_tte_seconds": (30.0, 180.0),
-        "max_capital_fraction": (0.00001, 0.0005),
-        "max_notional_usd": (0.25, 2.0),
-        "max_loss_usd": (0.25, 2.0),
+        "max_capital_fraction": (0.00001, 0.0025),
+        "max_notional_usd": (0.25, 10.0),
+        "max_loss_usd": (0.25, 10.0),
     }
     for key, (minimum, maximum) in ranges.items():
         value = finite(policy.get(key), math.nan)
@@ -971,6 +971,18 @@ class PaperRouter:
         }
         current_positions.update(restored_positions)
         self.state["positions"] = current_positions
+        committed = sum(
+            float(position.get("entry_cost") or 0.0)
+            + float(position.get("entry_fee") or 0.0)
+            for position in current_positions.values()
+            if isinstance(position, dict) and not position.get("settled")
+        )
+        self.state["cash"] = max(
+            0.0,
+            float(self.state.get("starting_capital") or 0.0)
+            + float(self.state.get("counterfactual_realized_pnl") or 0.0)
+            - committed,
+        )
 
     def reject(self, reason: str) -> None:
         reasons = self.state.setdefault("rejection_reasons", {})
@@ -2128,12 +2140,17 @@ class PaperRouter:
     def publish(self, active_candidates: int, blocker: str = "") -> None:
         positions = self.state.get("positions") if isinstance(self.state.get("positions"), dict) else {}
         open_positions = sum(1 for position in positions.values() if not position.get("settled"))
-        virtual_equity = starting_capital = float(self.state.get("starting_capital") or 0.0)
-        virtual_equity += float(self.state.get("counterfactual_realized_pnl") or 0.0)
-        virtual_equity += sum(
+        starting_capital = float(self.state.get("starting_capital") or 0.0)
+        realized_pnl = float(self.state.get("counterfactual_realized_pnl") or 0.0)
+        committed = sum(
+            float(position.get("entry_cost") or 0.0)
+            + float(position.get("entry_fee") or 0.0)
+            for position in positions.values() if not position.get("settled")
+        )
+        cash = max(0.0, starting_capital + realized_pnl - committed)
+        self.state["cash"] = cash
+        virtual_equity = cash + sum(
             float(position.get("executable_value") or 0.0)
-            - float(position.get("entry_cost") or 0.0)
-            - float(position.get("entry_fee") or 0.0)
             for position in positions.values() if not position.get("settled")
         )
         peak = max(starting_capital, float(self.state.get("peak_equity") or starting_capital), virtual_equity)
@@ -2216,6 +2233,32 @@ class PaperRouter:
             },
             "probe_candidates": int(self.state.get("probe_candidates") or 0),
             "probe_fills": int(self.state.get("probe_fills") or 0),
+            "paper_exploration": {
+                "enabled": self.probe_policy is not None,
+                "authority": "COORDINATOR_RECEIPT_ONLY",
+                "real_money_authority": False,
+                "candidate_attempts": int(self.state.get("candidates") or 0),
+                "selected_orders": int(self.state.get("counterfactual_fills") or 0),
+                "selected_fills": int(self.state.get("counterfactual_fills") or 0),
+                "probe_candidates": int(self.state.get("probe_candidates") or 0),
+                "probe_fills": int(self.state.get("probe_fills") or 0),
+                "open_positions": open_positions,
+                "realized_pnl": realized_pnl,
+                "cash": cash,
+                "equity": virtual_equity,
+                "max_capital_fraction": (
+                    self.probe_policy.get("max_capital_fraction")
+                    if self.probe_policy is not None else 0.0
+                ),
+                "max_notional_usd": (
+                    self.probe_policy.get("max_notional_usd")
+                    if self.probe_policy is not None else 0.0
+                ),
+                "max_loss_usd": (
+                    self.probe_policy.get("max_loss_usd")
+                    if self.probe_policy is not None else 0.0
+                ),
+            },
         })
 
     def step(self) -> None:
