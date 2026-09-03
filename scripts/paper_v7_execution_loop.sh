@@ -279,6 +279,7 @@ python3 scripts/v7_rtds_external_fair_monitor.py \
   --external-venues "$RUN_ROOT/external_fair/external_venues.json" \
   --champion-pointer "$RUN_ROOT/external_fair/model_registry/fair_value_champion.json" \
   --challenger-pointer "$RUN_ROOT/external_fair/model_registry/fair_value_challenger.json" \
+  --external-fair-config "$ROOT/config/v7_external_fair.json" \
   >> "$RUN_ROOT/external_fair/rtds_monitor.log" 2>&1 &
 v7_register_child "$!"
 

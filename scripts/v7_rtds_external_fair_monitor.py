@@ -376,11 +376,147 @@ def observations(value: Any, inherited_topic: str = "") -> Iterator[dict[str, An
     yield row
 
 
+PAPER_BOOTSTRAP_SCHEMA = "polymarket_v7_paper_exploration_bootstrap_v1"
+
+
+def validate_paper_bootstrap_policy(raw: dict[str, Any] | None) -> dict[str, Any] | None:
+    """Validate an explicit PAPER-only mechanistic bootstrap policy.
+
+    This policy is not a trained model, receives no promotion credit and can
+    never grant authenticated or real-money authority. An immutable registered
+    champion always takes precedence when one exists.
+    """
+    if raw is None or raw.get("enabled") is not True:
+        return None
+    required_identity = {
+        "schema": PAPER_BOOTSTRAP_SCHEMA,
+        "model_id": "btc_m5_same_oracle_diffusion_bootstrap_v1",
+        "asset": "BTC",
+        "horizon": "M5",
+        "contract_template": "BTC_USD_UPDOWN_5M",
+        "uses_polymarket_price_as_feature": False,
+        "promotion_credit": False,
+        "real_money_authority": False,
+    }
+    if any(raw.get(key) != value for key, value in required_identity.items()):
+        raise ValueError("paper bootstrap identity or authority contract invalid")
+    numeric_bounds = {
+        "minimum_fresh_venue_count": (3.0, 8.0),
+        "minimum_tte_seconds": (1.0, 30.0),
+        "maximum_tte_seconds": (60.0, 300.0),
+        "minimum_innovation_bps_per_sqrt_second": (0.5, 5.0),
+        "maximum_innovation_bps_per_sqrt_second": (2.0, 20.0),
+        "dispersion_innovation_multiplier": (0.0, 5.0),
+        "minimum_sigma_bps": (5.0, 50.0),
+        "maximum_sigma_bps": (50.0, 300.0),
+        "mean_uncertainty_floor_bps": (2.0, 30.0),
+        "mean_uncertainty_sigma_fraction": (0.1, 1.0),
+        "mean_uncertainty_dispersion_multiplier": (0.0, 10.0),
+        "confidence_z": (1.28, 2.58),
+        "maximum_absolute_mean_margin_bps": (50.0, 500.0),
+    }
+    policy = dict(raw)
+    for key, (minimum, maximum) in numeric_bounds.items():
+        value = _finite(policy.get(key))
+        if value is None or not minimum <= value <= maximum:
+            raise ValueError(f"paper bootstrap parameter invalid:{key}")
+        policy[key] = value
+    policy["minimum_fresh_venue_count"] = int(policy["minimum_fresh_venue_count"])
+    if policy["maximum_tte_seconds"] <= policy["minimum_tte_seconds"]:
+        raise ValueError("paper bootstrap tte interval invalid")
+    if policy["maximum_innovation_bps_per_sqrt_second"] < policy["minimum_innovation_bps_per_sqrt_second"]:
+        raise ValueError("paper bootstrap innovation bounds invalid")
+    if policy["maximum_sigma_bps"] < policy["minimum_sigma_bps"]:
+        raise ValueError("paper bootstrap sigma bounds invalid")
+    canonical = json.dumps(policy, sort_keys=True, separators=(",", ":"))
+    policy["policy_hash"] = hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+    return policy
+
+
+def _normal_cdf(value: float) -> float:
+    return 0.5 * math.erfc(-value / math.sqrt(2.0))
+
+
+def paper_bootstrap_prediction(
+    features: dict[str, Any], external: dict[str, Any], policy: dict[str, Any],
+) -> dict[str, float] | None:
+    """Mechanistic same-oracle probability for bounded PAPER exploration.
+
+    The mean is the external composite's current margin over the exact
+    Chainlink opening reference, blended toward the already observed oracle
+    margin during the final sixty-second TWAP window. Uncertainty is explicitly
+    conservative and increases with remaining time, short-horizon innovations
+    and cross-venue dispersion.
+    """
+    if external.get("valid") is not True or int(external.get("fresh_venue_count") or 0) < int(
+        policy["minimum_fresh_venue_count"]
+    ):
+        return None
+    tte = _finite(features.get("tte_seconds"))
+    observed = _finite(features.get("terminal_window_observed_fraction"))
+    oracle_margin = _finite(features.get("oracle_minus_reference_bps"))
+    external_minus_oracle = _finite(features.get("external_minus_oracle_bps"))
+    return_1s = _finite(features.get("external_return_1s"))
+    return_5s = _finite(features.get("external_return_5s"))
+    dispersion = _finite(external.get("dispersion_bps"))
+    if None in (tte, observed, oracle_margin, external_minus_oracle, return_1s, return_5s, dispersion):
+        return None
+    assert tte is not None and observed is not None and oracle_margin is not None
+    assert external_minus_oracle is not None and return_1s is not None and return_5s is not None
+    assert dispersion is not None
+    if not policy["minimum_tte_seconds"] <= tte <= policy["maximum_tte_seconds"]:
+        return None
+    if not 0.0 <= observed <= 1.0 or dispersion < 0.0 or dispersion > 50.0:
+        return None
+
+    external_reference_margin = oracle_margin + external_minus_oracle
+    mean_margin = observed * oracle_margin + (1.0 - observed) * external_reference_margin
+    maximum_mean = float(policy["maximum_absolute_mean_margin_bps"])
+    mean_margin = min(maximum_mean, max(-maximum_mean, mean_margin))
+
+    one_second_innovation = abs(return_1s) * 10_000.0
+    five_second_innovation = abs(return_5s) * 10_000.0 / math.sqrt(5.0)
+    dispersion_innovation = dispersion * float(policy["dispersion_innovation_multiplier"])
+    innovation = max(
+        float(policy["minimum_innovation_bps_per_sqrt_second"]),
+        one_second_innovation,
+        five_second_innovation,
+        dispersion_innovation,
+    )
+    innovation = min(float(policy["maximum_innovation_bps_per_sqrt_second"]), innovation)
+
+    # The observed fraction of the terminal TWAP is already locked. Preserve a
+    # positive uncertainty floor instead of pretending the end state is known.
+    effective_seconds = max(1.0, tte * max(0.20, 1.0 - 0.80 * observed))
+    sigma = innovation * math.sqrt(effective_seconds)
+    sigma = min(float(policy["maximum_sigma_bps"]), max(float(policy["minimum_sigma_bps"]), sigma))
+    mean_uncertainty = max(
+        float(policy["mean_uncertainty_floor_bps"]),
+        sigma * float(policy["mean_uncertainty_sigma_fraction"]),
+        dispersion * float(policy["mean_uncertainty_dispersion_multiplier"]),
+    )
+    confidence_z = float(policy["confidence_z"])
+    yes = min(1.0 - 1e-9, max(1e-9, _normal_cdf(mean_margin / sigma)))
+    lower = min(yes, _normal_cdf((mean_margin - confidence_z * mean_uncertainty) / sigma))
+    upper = max(yes, _normal_cdf((mean_margin + confidence_z * mean_uncertainty) / sigma))
+    return {
+        "yes": yes,
+        "lower": max(1e-9, lower),
+        "upper": min(1.0 - 1e-9, upper),
+        "raw_yes": yes,
+        "predicted_settlement_margin_bps": mean_margin,
+        "settlement_sigma_bps": sigma,
+        "mean_uncertainty_bps": mean_uncertainty,
+        "innovation_bps_per_sqrt_second": innovation,
+    }
+
+
 class Monitor:
     def __init__(self, root: Path, code_sha: str, *, universe_path: Path | None = None,
                  approvals_path: Path | None = None, external_venues_path: Path | None = None,
                  champion_pointer: Path | None = None,
                  challenger_pointer: Path | None = None,
+                 paper_bootstrap: dict[str, Any] | None = None,
                  gamma_url: str = "https://gamma-api.polymarket.com") -> None:
         self.root, self.code_sha = root, code_sha
         self.universe_path = universe_path
@@ -406,6 +542,7 @@ class Monitor:
             champion_pointer, code_sha=code_sha, expected_role="CHAMPION")
         self.challenger, self.challenger_load_state = load_registered_calibration(
             challenger_pointer, code_sha=code_sha, expected_role="CHALLENGER")
+        self.paper_bootstrap = validate_paper_bootstrap_policy(paper_bootstrap)
         self.approved_rule_hashes: set[str] = set()
         if approvals_path is not None:
             raw = json.loads(approvals_path.read_text(encoding="utf-8"))
@@ -628,31 +765,63 @@ class Monitor:
             and "BTC_USD_UPDOWN_5M" in champion.contract_templates
             and rule_hash in champion.rules_hashes
         )
-        if not champion_scope_valid or champion is None:
-            base["calibration_state"] = (
-                "EXPLICIT_CHAMPION_SCOPE_OR_FAMILY_MISMATCH"
-                if champion is not None else self.champion_load_state
-            )
+        if champion_scope_valid and champion is not None:
+            try:
+                prediction = predict_settlement_model(champion, features)
+            except ValueError:
+                base["inference_state"] = "SETTLEMENT_MODEL_INFERENCE_FAILED"
+                return base
+            return {**base, "valid": True, "yes": prediction["yes"],
+                    "lower": prediction["lower"], "upper": prediction["upper"],
+                    "structural_lower": prediction["lower"],
+                    "structural_upper": prediction["upper"],
+                    "structural": prediction["raw_yes"],
+                    "calibrated": prediction["yes"],
+                    "calibration_state": "IMMUTABLE_SETTLEMENT_CHAMPION_APPLIED",
+                    "inference_state": "VALID",
+                    "probability_model_id": champion.model_version,
+                    "probability_model_hash": champion.model_hash,
+                    "explicit_champion_applied": True,
+                    "paper_exploration_bootstrap": False,
+                    "promotion_eligible": True,
+                    "settlement_margin_bps": prediction["predicted_settlement_margin_bps"],
+                    "settlement_sigma_bps": prediction["settlement_sigma_bps"],
+                    "settlement_mean_uncertainty_bps": prediction["mean_uncertainty_bps"],
+                    "calculated_monotonic_ns": time.monotonic_ns(),
+                    "valid_until_monotonic_ns": valid_until}
+
+        if champion is not None:
+            base["calibration_state"] = "EXPLICIT_CHAMPION_SCOPE_OR_FAMILY_MISMATCH"
             return base
-        try:
-            prediction = predict_settlement_model(champion, features)
-        except ValueError:
-            base["inference_state"] = "SETTLEMENT_MODEL_INFERENCE_FAILED"
+        if self.paper_bootstrap is None:
+            base["calibration_state"] = self.champion_load_state
             return base
-        return {**base, "valid": True, "yes": prediction["yes"],
-                "lower": prediction["lower"], "upper": prediction["upper"],
-                "structural_lower": prediction["lower"],
-                "structural_upper": prediction["upper"],
-                "structural": prediction["raw_yes"],
-                "calibrated": prediction["yes"],
-                "calibration_state": "IMMUTABLE_SETTLEMENT_CHAMPION_APPLIED",
-                "inference_state": "VALID",
-                "probability_model_id": champion.model_version,
-                "probability_model_hash": champion.model_hash,
-                "explicit_champion_applied": True,
-                "settlement_margin_bps": prediction["predicted_settlement_margin_bps"],
-                "settlement_sigma_bps": prediction["settlement_sigma_bps"],
-                "settlement_mean_uncertainty_bps": prediction["mean_uncertainty_bps"],
+        bootstrap_prediction = paper_bootstrap_prediction(features, external, self.paper_bootstrap)
+        if bootstrap_prediction is None:
+            base["calibration_state"] = "PAPER_EXPLORATION_BOOTSTRAP_REJECTED"
+            base["inference_state"] = "PAPER_BOOTSTRAP_INPUTS_OUTSIDE_CONTRACT"
+            return base
+        return {**base, "valid": True,
+                "yes": bootstrap_prediction["yes"],
+                "lower": bootstrap_prediction["lower"],
+                "upper": bootstrap_prediction["upper"],
+                "structural_lower": bootstrap_prediction["lower"],
+                "structural_upper": bootstrap_prediction["upper"],
+                "structural": bootstrap_prediction["raw_yes"],
+                "calibrated": bootstrap_prediction["yes"],
+                "calibration_state": "PAPER_EXPLORATION_BOOTSTRAP_APPLIED",
+                "inference_state": "VALID_PAPER_EXPLORATION_BOOTSTRAP",
+                "probability_model_id": self.paper_bootstrap["model_id"],
+                "probability_model_hash": self.paper_bootstrap["policy_hash"],
+                "explicit_champion_applied": False,
+                "paper_exploration_bootstrap": True,
+                "promotion_eligible": False,
+                "real_money_authority": False,
+                "settlement_margin_bps": bootstrap_prediction["predicted_settlement_margin_bps"],
+                "settlement_sigma_bps": bootstrap_prediction["settlement_sigma_bps"],
+                "settlement_mean_uncertainty_bps": bootstrap_prediction["mean_uncertainty_bps"],
+                "bootstrap_innovation_bps_per_sqrt_second": bootstrap_prediction[
+                    "innovation_bps_per_sqrt_second"],
                 "calculated_monotonic_ns": time.monotonic_ns(),
                 "valid_until_monotonic_ns": valid_until}
 
@@ -1030,15 +1199,19 @@ def main() -> int:
     parser.add_argument("--external-venues", type=Path)
     parser.add_argument("--champion-pointer", type=Path)
     parser.add_argument("--challenger-pointer", type=Path)
+    parser.add_argument("--external-fair-config", type=Path)
     parser.add_argument("--gamma-url", default="https://gamma-api.polymarket.com")
     parser.add_argument("--dns", action="append", default=[])
     args = parser.parse_args()
     if len(args.code_sha) != 40 or any(char not in "0123456789abcdef" for char in args.code_sha):
         raise SystemExit("--code-sha must be a lowercase 40-character Git SHA")
+    external_config = load_json(args.external_fair_config) if args.external_fair_config else {}
     Monitor(args.output_dir.resolve(), args.code_sha, universe_path=args.universe,
             approvals_path=args.approvals, external_venues_path=args.external_venues,
             champion_pointer=args.champion_pointer,
             challenger_pointer=args.challenger_pointer,
+            paper_bootstrap=external_config.get("paper_exploration_bootstrap")
+            if isinstance(external_config.get("paper_exploration_bootstrap"), dict) else None,
             gamma_url=args.gamma_url).run(
         PublicResolver(args.dns or list(DEFAULT_DNS)))
     return 0

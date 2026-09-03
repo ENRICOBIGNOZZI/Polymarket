@@ -340,6 +340,7 @@ class RtdsExternalFairMonitorTests(unittest.TestCase):
         self.assertNotIn("binding_not_configured_contracts_quarantined", launcher)
         self.assertIn("--champion-pointer", launcher)
         self.assertIn("--challenger-pointer", launcher)
+        self.assertIn("--external-fair-config", launcher)
 
     def test_verified_contract_reference_and_multi_venue_produce_valid_fair(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -439,6 +440,114 @@ class RtdsExternalFairMonitorTests(unittest.TestCase):
             self.assertEqual(active["fair"]["pm_mid_source"], "LIVE_COMPLEMENT_CONSISTENT_CLOB_BATCH")
             self.assertTrue(active["fair_models"]["hybrid_fair"]["valid"])
             self.assertEqual(active["fair_models"]["comparison_state"], "LIVE_SHADOW_COMPARISON")
+
+
+    def test_explicit_paper_bootstrap_produces_conservative_non_promotional_fair(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            policy = {
+                "schema": module.PAPER_BOOTSTRAP_SCHEMA,
+                "enabled": True,
+                "model_id": "btc_m5_same_oracle_diffusion_bootstrap_v1",
+                "asset": "BTC", "horizon": "M5",
+                "contract_template": "BTC_USD_UPDOWN_5M",
+                "minimum_fresh_venue_count": 3,
+                "minimum_tte_seconds": 5.0, "maximum_tte_seconds": 300.0,
+                "minimum_innovation_bps_per_sqrt_second": 1.25,
+                "maximum_innovation_bps_per_sqrt_second": 8.0,
+                "dispersion_innovation_multiplier": 0.5,
+                "minimum_sigma_bps": 12.0, "maximum_sigma_bps": 150.0,
+                "mean_uncertainty_floor_bps": 6.0,
+                "mean_uncertainty_sigma_fraction": 0.35,
+                "mean_uncertainty_dispersion_multiplier": 2.0,
+                "confidence_z": 1.64,
+                "maximum_absolute_mean_margin_bps": 250.0,
+                "uses_polymarket_price_as_feature": False,
+                "promotion_credit": False, "real_money_authority": False,
+            }
+            monitor = module.Monitor(Path(directory), "a" * 40, paper_bootstrap=policy)
+            now = int(time.time())
+            start = now - now % 300
+            monitor.active_market = {
+                "contract_start_epoch": start, "midpoint": 0.5,
+                "slug": f"btc-updown-5m-{start}",
+            }
+            monitor.active_contract = {
+                "verified_template": True, "rules_hash_recognized": True,
+                "normalized_rules_hash": "b" * 64,
+            }
+            monitor.reference = {"valid": True, "value": 77_000.0}
+            monitor.latest[module.ORACLE_TOPIC] = {
+                "price": 77_010.0, "receive_wall_ns": time.time_ns(),
+            }
+            snapshot = monitor.fair_snapshot(time.time_ns(), True, {
+                "valid": True, "fresh_venue_count": 3,
+                "composite_price": 77_100.0, "dispersion_bps": 1.0,
+                "age_ns": 1, "return_1s": 0.00002, "return_5s": 0.00004,
+            })
+            self.assertTrue(snapshot["valid"])
+            self.assertEqual(snapshot["calibration_state"], "PAPER_EXPLORATION_BOOTSTRAP_APPLIED")
+            self.assertEqual(snapshot["inference_state"], "VALID_PAPER_EXPLORATION_BOOTSTRAP")
+            self.assertTrue(snapshot["paper_exploration_bootstrap"])
+            self.assertFalse(snapshot["explicit_champion_applied"])
+            self.assertFalse(snapshot["promotion_eligible"])
+            self.assertFalse(snapshot["real_money_authority"])
+            self.assertLess(snapshot["lower"], snapshot["yes"])
+            self.assertLess(snapshot["yes"], snapshot["upper"])
+            self.assertEqual(len(snapshot["probability_model_hash"]), 64)
+            self.assertGreaterEqual(snapshot["settlement_sigma_bps"], 12.0)
+
+    def test_paper_bootstrap_rejects_authority_or_scope_drift(self) -> None:
+        base = {
+            "schema": module.PAPER_BOOTSTRAP_SCHEMA, "enabled": True,
+            "model_id": "btc_m5_same_oracle_diffusion_bootstrap_v1",
+            "asset": "BTC", "horizon": "M5", "contract_template": "BTC_USD_UPDOWN_5M",
+            "minimum_fresh_venue_count": 3,
+            "minimum_tte_seconds": 5.0, "maximum_tte_seconds": 300.0,
+            "minimum_innovation_bps_per_sqrt_second": 1.25,
+            "maximum_innovation_bps_per_sqrt_second": 8.0,
+            "dispersion_innovation_multiplier": 0.5,
+            "minimum_sigma_bps": 12.0, "maximum_sigma_bps": 150.0,
+            "mean_uncertainty_floor_bps": 6.0,
+            "mean_uncertainty_sigma_fraction": 0.35,
+            "mean_uncertainty_dispersion_multiplier": 2.0,
+            "confidence_z": 1.64, "maximum_absolute_mean_margin_bps": 250.0,
+            "uses_polymarket_price_as_feature": False,
+            "promotion_credit": False, "real_money_authority": False,
+        }
+        for key, value in (("asset", "ETH"), ("promotion_credit", True), ("real_money_authority", True)):
+            bad = dict(base); bad[key] = value
+            with self.assertRaises(ValueError):
+                module.validate_paper_bootstrap_policy(bad)
+
+    def test_registered_champion_precedes_paper_bootstrap(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            rule_hash = "b" * 64
+            pointer = settlement_pointer(root, rule_hash)
+            config = json.loads((ROOT / "config" / "v7_external_fair.json").read_text())
+            monitor = module.Monitor(
+                root / "output", "a" * 40, champion_pointer=pointer,
+                paper_bootstrap=config["paper_exploration_bootstrap"],
+            )
+            now = int(time.time()); start = now - now % 300
+            monitor.active_market = {"contract_start_epoch": start, "midpoint": 0.5}
+            monitor.active_contract = {
+                "verified_template": True, "rules_hash_recognized": True,
+                "normalized_rules_hash": rule_hash,
+            }
+            monitor.reference = {"valid": True, "value": 77_000.0}
+            monitor.latest[module.ORACLE_TOPIC] = {
+                "price": 77_010.0, "receive_wall_ns": time.time_ns(),
+            }
+            snapshot = monitor.fair_snapshot(time.time_ns(), True, {
+                "valid": True, "fresh_venue_count": 3,
+                "composite_price": 77_020.0, "dispersion_bps": 1.0,
+                "age_ns": 1, "return_1s": 0.0, "return_5s": 0.0,
+            })
+            self.assertTrue(snapshot["valid"])
+            self.assertTrue(snapshot["explicit_champion_applied"])
+            self.assertFalse(snapshot["paper_exploration_bootstrap"])
+            self.assertEqual(snapshot["calibration_state"], "IMMUTABLE_SETTLEMENT_CHAMPION_APPLIED")
 
 
 if __name__ == "__main__":
