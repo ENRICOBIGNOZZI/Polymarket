@@ -642,6 +642,16 @@ class PaperRouter:
         self.last_book_error = ""
         self.last_attempt_reason = ""
         self.last_live_market: dict[str, Any] = {}
+        _paper_cfg = load(Path(__file__).resolve().parents[1] / "config/v7_external_fair.json")
+        _paper_exploration = _paper_cfg.get("paper_exploration") if isinstance(_paper_cfg.get("paper_exploration"), dict) else {}
+        self.paper_exploration_enabled = bool(
+            _paper_exploration.get("enabled") is True
+            and _paper_exploration.get("authority") == "PAPER_EXPLORATION"
+            and _paper_exploration.get("real_money_authority") is False
+            and _paper_exploration.get("promotion_credit") is False
+        )
+        self.paper_exploration_receipt_timeout_seconds = max(0.25, min(10.0, float(_paper_exploration.get("coordinator_receipt_timeout_seconds") or 3.0)))
+        self.last_coordinator_kick_error: str | None = None
 
     def evidence_compatible(self, row: dict[str, Any]) -> bool:
         """Pool only explicitly compatible, permanently SHADOW observations."""
@@ -1241,7 +1251,31 @@ class PaperRouter:
         atomic_json(target, envelope)
         return envelope["deterministic_replay_key"]
 
-    def wait_for_exploration_receipt(self, replay_key: str, timeout_seconds: float = 1.0) -> dict[str, object] | None:
+    def write_paper_exploration_funnel(self, stage: str, **details: object) -> None:
+        atomic_json(self.root / "external_fair" / "paper_exploration_funnel.json", {
+            "schema": "polymarket_v7_paper_exploration_funnel_v1", "timestamp_ns": time.time_ns(),
+            "model_sha": self.sha, "stage": stage, "paper_exploration_enabled": self.paper_exploration_enabled,
+            "last_attempt_reason": self.last_attempt_reason, "last_coordinator_kick_error": self.last_coordinator_kick_error,
+            "paper_only": True, "authenticated_execution": False, "real_order_submission": False,
+            "real_capital_at_risk": False, "details": details,
+        })
+
+    def kick_global_coordinator(self) -> bool:
+        if not self.paper_exploration_enabled:
+            return False
+        try:
+            from v7_global_portfolio_coordinator import process_cut
+            process_cut(self.root, now_ns=time.time_ns())
+            self.last_coordinator_kick_error = None
+            return True
+        except Exception as exc:
+            self.last_coordinator_kick_error = f"{type(exc).__name__}:{exc}"[:300]
+            self.write_paper_exploration_funnel("COORDINATOR_KICK_FAILED")
+            return False
+
+    def wait_for_exploration_receipt(self, replay_key: str, timeout_seconds: float | None = None) -> dict[str, object] | None:
+        if timeout_seconds is None:
+            timeout_seconds = self.paper_exploration_receipt_timeout_seconds
         path = self.root / "opportunities" / "receipts" / (replay_key.replace("/", "_") + ".json")
         deadline = time.monotonic() + max(0.1, timeout_seconds)
         while time.monotonic() < deadline:
@@ -1714,13 +1748,18 @@ class PaperRouter:
             fee_rate=float(schedule.get("rate") or 0.0), fee_source="GAMMA_AUTHORITATIVE_FEE_SCHEDULE",
             metadata=arrival_metadata,
         ))
+        if replay_key:
+            self.write_paper_exploration_funnel("CANDIDATE_EMITTED", replay_key=replay_key)
+            self.kick_global_coordinator()
         receipt = self.wait_for_exploration_receipt(str(replay_key or "")) if replay_key else None
         if receipt is None:
+            self.write_paper_exploration_funnel("RECEIPT_NOT_GRANTED", replay_key=str(replay_key or ""))
             self.emit_counterfactual("REJECTED", counterfactual_id=counterfactual_id,
                 reason="PAPER_EXPLORATION_NOT_SELECTED", market_id=market_id,
                 event_id=str(market.get("event_id") or ""), token_id=row["token_id"], side="BUY")
             self.last_attempt_reason = "PAPER_EXPLORATION_NOT_SELECTED"
             return False
+        self.write_paper_exploration_funnel("RECEIPT_GRANTED", replay_key=str(replay_key or ""))
         canonical_metadata = {
             **arrival_metadata, "coordinator_receipt": receipt, "paper_exploration": True,
             "economic_authority": "PAPER_EXPLORATION", "counterfactual": False,

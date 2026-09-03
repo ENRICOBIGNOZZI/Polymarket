@@ -52,3 +52,20 @@ def test_router_requires_arrival_and_receipt_before_canonical_fill():
     assert "PAPER_EXPLORATION_NOT_SELECTED" in text
     assert "replay_key = self.emit_shadow_ingress" in text
     assert "paper_exploration" in text
+
+
+# Regression: deterministic live PAPER exploration handoff.
+def test_live_paper_exploration_handoff_is_ordered_and_non_real_money():
+    import json as _json
+    from pathlib import Path as _Path
+    _root=_Path(__file__).resolve().parents[1]
+    _cfg=_json.loads((_root/"config/v7_external_fair.json").read_text())
+    _pe=_cfg["paper_exploration"]
+    assert _pe["enabled"] is True and _pe["authority"]=="PAPER_EXPLORATION"
+    assert _pe["real_money_authority"] is False and _pe["promotion_credit"] is False
+    _source=(_root/"scripts/v7_external_fair_paper_router.py").read_text()
+    _emit=_source.index("replay_key = self.emit_shadow_ingress")
+    _kick=_source.index("self.kick_global_coordinator()",_emit)
+    _wait=_source.index("self.wait_for_exploration_receipt",_kick)
+    assert _emit < _kick < _wait
+    assert "paper_exploration_funnel.json" in _source
