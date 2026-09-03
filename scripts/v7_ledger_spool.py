@@ -82,6 +82,13 @@ def _coordinator_receipt_valid(event: LedgerEvent, engine_id: str) -> bool:
                 and receipt["crypto_context"].get("asset") == "BTC"
                 and receipt["crypto_context"].get("horizon") == "M5"
                 and receipt["crypto_context"].get("authority") == "PAPER_EXPLORATION"
+                and (
+                    (event.metadata.get("paper_bootstrap_probe") is True
+                     and receipt.get("paper_exploration_probe_authorized") is True)
+                    or
+                    (event.metadata.get("paper_bootstrap_probe") is not True
+                     and receipt.get("paper_exploration_probe_authorized") is not True)
+                )
             )
         )
     )

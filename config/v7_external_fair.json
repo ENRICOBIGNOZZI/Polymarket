@@ -243,6 +243,27 @@
     "schema": "polymarket_v7_paper_exploration_bootstrap_v1",
     "uses_polymarket_price_as_feature": false
   },
+  "paper_exploration_probe": {
+    "asset": "BTC",
+    "authority": "PAPER_EXPLORATION",
+    "enabled": true,
+    "horizon": "M5",
+    "max_capital_fraction": 0.0005,
+    "max_loss_usd": 2.0,
+    "max_notional_usd": 2.0,
+    "maximum_model_market_disagreement": 0.2,
+    "maximum_tte_seconds": 180.0,
+    "minimum_model_market_disagreement": 0.08,
+    "minimum_point_ev_per_share": 0.04,
+    "minimum_tte_seconds": 5.0,
+    "one_probe_per_market": true,
+    "promotion_credit": false,
+    "real_money_authority": false,
+    "require_arrival_revalidation": true,
+    "require_no_robust_candidate": true,
+    "required_probability_model_id": "btc_m5_same_oracle_diffusion_bootstrap_v1",
+    "schema": "polymarket_v7_paper_exploration_probe_v1"
+  },
   "paper_only": true,
   "promotion": {
     "automatic_promotion": false,

@@ -90,6 +90,21 @@ class OpportunityEnvelope:
     def eligible(self) -> bool:
         return self.raw["eligible"] is True
 
+    @property
+    def is_probe(self) -> bool:
+        exploration = self.raw.get("exploration")
+        return isinstance(exploration, dict) and exploration.get("mode") == "PAPER_BOOTSTRAP_PROBE"
+
+    @property
+    def probe_point_wealth_change(self) -> float:
+        exploration = self.raw.get("exploration")
+        return float(exploration["point_expected_wealth_change"]) if isinstance(exploration, dict) else float("-inf")
+
+    @property
+    def probe_information_score(self) -> float:
+        exploration = self.raw.get("exploration")
+        return float(exploration["information_score"]) if isinstance(exploration, dict) else float("-inf")
+
     @classmethod
     def parse(cls, value: dict[str, Any]) -> "OpportunityEnvelope":
         required = {
@@ -103,7 +118,8 @@ class OpportunityEnvelope:
             "inventory_delta", "portfolio_exposure_delta", "settlement", "eligible",
             "reasons", "deterministic_replay_key", "expires_at_ns",
         }
-        if not isinstance(value, dict) or set(value) != required:
+        optional = {"exploration"}
+        if not isinstance(value, dict) or frozenset(value) not in {frozenset(required), frozenset(required | optional)}:
             raise OpportunityError("field_partition")
         if value.get("schema") != SCHEMA or value.get("version") != 1:
             raise OpportunityError("schema")
@@ -269,6 +285,43 @@ class OpportunityEnvelope:
             raise OpportunityError("reasons")
         if not isinstance(value.get("eligible"), bool):
             raise OpportunityError("eligible")
+        probe = value.get("exploration")
+        if probe is not None:
+            probe = _mapping(probe, "exploration")
+            if set(probe) != {
+                "mode", "point_expected_wealth_change", "maximum_probe_loss",
+                "probe_loss_cap", "information_score", "promotion_eligible",
+                "robust_candidate", "arrival_revalidated", "model_id", "model_hash",
+            }:
+                raise OpportunityError("exploration_fields")
+            point_change = _finite(probe.get("point_expected_wealth_change"), "probe_point_expected_wealth_change")
+            maximum_loss = _finite(probe.get("maximum_probe_loss"), "probe_maximum_loss")
+            loss_cap = _finite(probe.get("probe_loss_cap"), "probe_loss_cap")
+            information_score = _finite(probe.get("information_score"), "probe_information_score")
+            if (
+                probe.get("mode") != "PAPER_BOOTSTRAP_PROBE"
+                or point_change <= 0.0
+                or maximum_loss <= 0.0
+                or loss_cap <= 0.0
+                or maximum_loss > loss_cap + 1e-9
+                or loss_cap > 2.0 + 1e-9
+                or information_score <= 0.0
+                or probe.get("promotion_eligible") is not False
+                or probe.get("robust_candidate") is not False
+                or probe.get("arrival_revalidated") is not True
+                or probe.get("model_id") != "btc_m5_same_oracle_diffusion_bootstrap_v1"
+                or not HASH64.fullmatch(str(probe.get("model_hash") or ""))
+                or _finite(value.get("conservative_expected_wealth_change"), "expected_wealth_change") < -maximum_loss - 1e-9
+                or _finite(value.get("portfolio_exposure_delta"), "portfolio_exposure_delta") > loss_cap + 1e-9
+                or engine_id != "CRYPTO_SETTLEMENT_ENGINE"
+                or action != "TAKE"
+                or not isinstance(crypto_context, dict)
+                or crypto_context.get("authority") != "PAPER_EXPLORATION"
+                or crypto_context.get("asset") != "BTC"
+                or crypto_context.get("horizon") != "M5"
+            ):
+                raise OpportunityError("paper_exploration_probe_invalid")
+
         exploration = (
             engine_id == "CRYPTO_SETTLEMENT_ENGINE"
             and action in {"MAKE", "TAKE"}
@@ -309,6 +362,7 @@ def fail_closed_decision(*, now_ns: int, reasons: list[str]) -> dict[str, Any]:
         "selected_replay_key": None,
         "new_risk_authorized": False,
         "paper_exploration_authorized": False,
+        "paper_exploration_probe_authorized": False,
         "reasons": reasons or ["FAIL_CLOSED"],
     }
 
@@ -346,6 +400,7 @@ def coordinate(
             "selected_replay_key": selected.replay_key,
             "new_risk_authorized": False,
             "paper_exploration_authorized": False,
+            "paper_exploration_probe_authorized": False,
             "reasons": ["RISK_ACTION_PREEMPTS_ALPHA"],
         }
     candidates = [row for row in live if row.action in NEW_RISK_ACTIONS]
@@ -358,10 +413,40 @@ def coordinate(
     if not new_risk_authorized:
         if not paper_exploration_authorized:
             return fail_closed_decision(now_ns=now_ns, reasons=["NEW_RISK_NOT_AUTHORIZED"])
-        positive = [row for row in exploration_candidates if row.expected_wealth_change > 0.0]
-        if not positive:
+        positive = [
+            row for row in exploration_candidates
+            if not row.is_probe and row.expected_wealth_change > 0.0
+        ]
+        if positive:
+            selected = max(positive, key=lambda row: (row.expected_wealth_change, row.replay_key))
+            return {
+                "schema": "polymarket_v7_global_opportunity_decision_v1",
+                "owner": "V7_GLOBAL_PORTFOLIO_COORDINATOR",
+                "decision_timestamp_ns": int(now_ns),
+                "action": selected.action,
+                "engine_id": selected.engine_id,
+                "crypto_context": selected.raw["crypto_context"],
+                "selected_replay_key": selected.replay_key,
+                "new_risk_authorized": False,
+                "paper_exploration_authorized": True,
+                "paper_exploration_probe_authorized": False,
+                "paper_only": True,
+                "authenticated_execution": False,
+                "real_order_submission": False,
+                "real_capital_at_risk": False,
+                "reasons": ["PAPER_EXPLORATION_MAX_CONSERVATIVE_EXPECTED_ACCOUNT_WEALTH_CHANGE"],
+            }
+        probes = [row for row in exploration_candidates if row.is_probe]
+        if not probes:
             return fail_closed_decision(now_ns=now_ns, reasons=["NO_POSITIVE_PAPER_EXPLORATION_WEALTH_CHANGE"])
-        selected = max(positive, key=lambda row: (row.expected_wealth_change, row.replay_key))
+        selected = max(
+            probes,
+            key=lambda row: (
+                row.probe_information_score,
+                row.probe_point_wealth_change,
+                row.replay_key,
+            ),
+        )
         return {
             "schema": "polymarket_v7_global_opportunity_decision_v1",
             "owner": "V7_GLOBAL_PORTFOLIO_COORDINATOR",
@@ -372,11 +457,13 @@ def coordinate(
             "selected_replay_key": selected.replay_key,
             "new_risk_authorized": False,
             "paper_exploration_authorized": True,
+            "paper_exploration_probe_authorized": True,
             "paper_only": True,
             "authenticated_execution": False,
             "real_order_submission": False,
             "real_capital_at_risk": False,
-            "reasons": ["PAPER_EXPLORATION_MAX_CONSERVATIVE_EXPECTED_ACCOUNT_WEALTH_CHANGE"],
+            "probe": selected.raw["exploration"],
+            "reasons": ["PAPER_EXPLORATION_INFORMATION_GAIN_PROBE"],
         }
     positive = [row for row in candidates if row.expected_wealth_change > 0.0]
     if not positive:
@@ -392,6 +479,7 @@ def coordinate(
         "selected_replay_key": selected.replay_key,
         "new_risk_authorized": True,
         "paper_exploration_authorized": False,
+        "paper_exploration_probe_authorized": False,
         "reasons": ["MAX_CONSERVATIVE_EXPECTED_ACCOUNT_WEALTH_CHANGE"],
     }
 

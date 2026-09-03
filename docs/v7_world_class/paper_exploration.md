@@ -39,3 +39,19 @@ Every deployment containing the bridge must pass exact-SHA Release and Debug CI,
 retain the PAPER-only authority flags, and be rechecked against live Chainlink,
 multi-venue and CLOB inputs after the runtime starts. A successful build alone is
 not evidence of economic activity or profitability.
+
+## Bounded information-gain micro-probes
+
+A valid bootstrap fair may be too uncertain for a positive lower-confidence-bound
+trade. In that cold-start state V7 keeps robust trading unchanged and may submit
+at most one separately labelled BTC M5 PAPER probe per contract. A probe requires
+positive point-estimate EV after authoritative fees and execution risk, a material
+but bounded model-market disagreement, fresh arrival-book revalidation and a hard
+maximum loss of 2 USD (also capped at 5 basis points of the engine sleeve).
+
+The coordinator always prefers positive robust wealth change. Only when no robust
+candidate exists may it issue `paper_exploration_probe_authorized=true`. Probe
+PnL is canonical PAPER evidence but has `promotion_eligible=false`; it cannot be
+used as proof of a mature edge and never grants authenticated or real-money
+authority.
+
