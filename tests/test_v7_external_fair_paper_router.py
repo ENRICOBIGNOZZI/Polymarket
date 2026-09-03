@@ -301,6 +301,12 @@ def main() -> None:
         assert status["counterfactual_forecasts"] == 1
         assert status["counterfactual_opportunity_sets"] == 1
         assert status["counterfactual_pending_forecasts"] == 1
+        assert status["paper_exploration"]["enabled"] is True
+        assert status["paper_exploration"]["selected_orders"] == 1
+        assert status["paper_exploration"]["selected_fills"] == 1
+        assert status["paper_exploration"]["open_positions"] == 1
+        assert status["paper_exploration"]["cash"] < status["paper_exploration"]["equity"]
+        assert status["paper_exploration"]["max_notional_usd"] == 10.0
         assert status["model_mature"] is False
         assert status["sizing_regime"] == "IMMATURE_SHADOW_FIXED_NOTIONAL"
         assert status["market_capital_ceiling"] == 10.0
@@ -363,6 +369,7 @@ def main() -> None:
         # unresolved SHADOW position or its future settlement label.
         assert failing.state["counterfactual_fills"] == 1
         assert len(failing.state["positions"]) == 1
+        assert failing.state["cash"] < failing.state["starting_capital"]
         failed_status = snapshot()
         failed_status["code_sha"] = "b" * 40
         failed_status["market"].update({"market_id": "m2", "event_id": "e2"})

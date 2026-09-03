@@ -95,7 +95,7 @@ def test_bounded_probe_is_selected_only_after_robust_candidates_are_absent():
 def test_probe_caps_and_real_money_drift_fail_closed():
     for mutation in ("loss", "promotion", "model"):
         value=probe_envelope()
-        if mutation=="loss": value["exploration"]["maximum_probe_loss"]=2.01; value["exploration"]["probe_loss_cap"]=2.01
+        if mutation=="loss": value["exploration"]["maximum_probe_loss"]=10.01; value["exploration"]["probe_loss_cap"]=10.01
         elif mutation=="promotion": value["exploration"]["promotion_eligible"]=True
         else: value["exploration"]["model_id"]="unregistered"
         try: OpportunityEnvelope.parse(value)
@@ -115,6 +115,31 @@ def test_ledger_probe_requires_matching_probe_receipt():
         event2=LedgerEvent(event_type="FILL",strategy="CRYPTO_INFORMED_TAKER",model_sha=SHA,order_id="probe-o2",fill_id="probe-f2",side="BUY",token_id="t",exchange_ts_ms=1000,receive_ts_ms=1100,fill_price=.1,filled_size=5,fee=0,fee_source="test:authoritative",metadata=meta)
         spool_event(root,event2); result=drain_spool(root,model_sha=SHA)
         assert result["quarantined"]==1
+
+
+def test_probe_budget_is_venue_feasible_at_five_share_minimum():
+    import v7_external_fair_paper_router as router
+    policy=json.loads((ROOT/"config/v7_external_fair.json").read_text())
+    probe=router.validate_probe_policy(policy["paper_exploration_probe"])
+    now=router.time.monotonic_ns()
+    yes=router.Book("yes",((.49,100.0),),((.50,100.0),),.01,5.0,1000,1000,"y-mid")
+    no=router.Book("no",((.49,100.0),),((.51,100.0),),.01,5.0,1000,1000,"n-mid")
+    status={
+        "paper_only":True,"authenticated_execution":False,"real_order_submission":False,
+        "contract":{"verified":True,"rules_hash_recognized":True},
+        "settlement_reference":{"valid":True},
+        "oracle":{"healthy":True,"continuity":"LIVE_CONTINUOUS"},
+        "external":{"healthy":True},
+        "market":{"yes_token":"yes","no_token":"no","fee_schedule":{"rate":0.0,"exponent":1,"takerOnly":True}},
+        "fair":{"valid":True,"paper_exploration_bootstrap":True,"promotion_eligible":False,"real_money_authority":False,"probability_model_id":"btc_m5_same_oracle_diffusion_bootstrap_v1","probability_model_hash":"f"*64,"yes":.57,"lower":.45,"upper":.69,"tte_seconds":120.0,"calculated_monotonic_ns":now-1,"valid_until_monotonic_ns":now+10_000_000_000},
+    }
+    rows=router.paper_probe_candidates(status,{"yes":yes,"no":no},policy["taker"],probe)
+    assert rows and rows[0]["outcome"]=="YES"
+    with tempfile.TemporaryDirectory() as td:
+        paper=router.PaperRouter(Path(td),"a"*40,ROOT/"config/v7_external_fair.json","https://clob.invalid","https://gamma.invalid")
+        assert paper.order_size(rows[0]) >= 5.0
+        assert probe["max_notional_usd"] == 10.0
+        assert probe["max_loss_usd"] == 10.0
 
 
 def test_live_router_has_distinct_probe_candidate_and_arrival_revalidation_paths():
