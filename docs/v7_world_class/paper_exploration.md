@@ -16,3 +16,5 @@ The authority is deliberately narrow:
 - `real_capital_at_risk=false`.
 
 A missing receipt, stale input, invalid settlement binding, failed arrival revalidation, non-positive conservative EV, or breached PAPER cap results in `NOTHING` and fail-closed accounting.
+
+This authority changes the live PAPER evidence path only; it creates no authenticated venue authority and no real-capital path.
