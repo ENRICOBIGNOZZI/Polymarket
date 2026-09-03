@@ -6,8 +6,8 @@
     "ref_count": 14,
     "runtime_output_count": 78,
     "schema_count": 22,
-    "tracked_or_intended_path_count": 607,
-    "workflow_count": 11
+    "tracked_or_intended_path_count": 605,
+    "workflow_count": 10
   },
   "entries": [
     {
@@ -772,31 +772,6 @@
       "path_or_ref": ".github/workflows/private-runtime-single-writer-validation.yml",
       "rollback_artifact_tag": "v7-unification-pre-migration-8d9e8e60",
       "surface_id": "path:.github/workflows/private-runtime-single-writer-validation.yml",
-      "unique_behavior_data_contribution": "tracked repository behavior, evidence, test, configuration, or documentation",
-      "validation_tests": [
-        "tests/test_v7_surface_classification.py"
-      ]
-    },
-    {
-      "canonical_replacement": ".github/workflows/tmp-v7-paper-probe-economic-repair.yml",
-      "classification": "KEEP_CANONICAL",
-      "current_imports_callers_readers_writers": {
-        "analysis": "exact path/module references from tracked text; runtime linkage is separately enumerated",
-        "static_references": []
-      },
-      "deletion_gate": "NONE_CANONICAL_SURFACE",
-      "disposition_commit": null,
-      "economic_authority": {
-        "capabilities": [],
-        "executable": false,
-        "owner": null
-      },
-      "final_disposition": "retain_canonical",
-      "migration_status": "classified",
-      "object_type": "tracked_path",
-      "path_or_ref": ".github/workflows/tmp-v7-paper-probe-economic-repair.yml",
-      "rollback_artifact_tag": "v7-unification-pre-migration-8d9e8e60",
-      "surface_id": "path:.github/workflows/tmp-v7-paper-probe-economic-repair.yml",
       "unique_behavior_data_contribution": "tracked repository behavior, evidence, test, configuration, or documentation",
       "validation_tests": [
         "tests/test_v7_surface_classification.py"
@@ -7779,31 +7754,6 @@
       "path_or_ref": "scripts/polymarket_fees.py",
       "rollback_artifact_tag": "v7-unification-pre-migration-8d9e8e60",
       "surface_id": "path:scripts/polymarket_fees.py",
-      "unique_behavior_data_contribution": "tracked repository behavior, evidence, test, configuration, or documentation",
-      "validation_tests": [
-        "tests/test_v7_surface_classification.py"
-      ]
-    },
-    {
-      "canonical_replacement": "scripts/tmp_apply_v7_paper_probe_repair.py",
-      "classification": "KEEP_CANONICAL",
-      "current_imports_callers_readers_writers": {
-        "analysis": "exact path/module references from tracked text; runtime linkage is separately enumerated",
-        "static_references": []
-      },
-      "deletion_gate": "NONE_CANONICAL_SURFACE",
-      "disposition_commit": null,
-      "economic_authority": {
-        "capabilities": [],
-        "executable": false,
-        "owner": null
-      },
-      "final_disposition": "retain_canonical",
-      "migration_status": "classified",
-      "object_type": "tracked_path",
-      "path_or_ref": "scripts/tmp_apply_v7_paper_probe_repair.py",
-      "rollback_artifact_tag": "v7-unification-pre-migration-8d9e8e60",
-      "surface_id": "path:scripts/tmp_apply_v7_paper_probe_repair.py",
       "unique_behavior_data_contribution": "tracked repository behavior, evidence, test, configuration, or documentation",
       "validation_tests": [
         "tests/test_v7_surface_classification.py"
@@ -18499,9 +18449,9 @@
       "object_type": "branch_or_remote_ref",
       "path_or_ref": "refs/heads/codex/v7-paper-probe-deploy-20260904",
       "rollback_artifact_tag": "v7-unification-pre-migration-8d9e8e60",
-      "snapshot_object_id": "8ad9ebc1e2400103e8066f36b9d9577286240e41",
+      "snapshot_object_id": "07f5aa1fae8a9850100a836f243dcb5884af5c5d",
       "surface_id": "ref:refs/heads/codex/v7-paper-probe-deploy-20260904",
-      "unique_behavior_data_contribution": "3 commit(s) not reachable from origin/main require content audit",
+      "unique_behavior_data_contribution": "5 commit(s) not reachable from origin/main require content audit",
       "validation_tests": [
         "tests/test_v7_surface_classification.py"
       ]
@@ -18583,9 +18533,9 @@
       "object_type": "branch_or_remote_ref",
       "path_or_ref": "refs/remotes/origin/codex/v7-paper-probe-deploy-20260904",
       "rollback_artifact_tag": "v7-unification-pre-migration-8d9e8e60",
-      "snapshot_object_id": "8ad9ebc1e2400103e8066f36b9d9577286240e41",
+      "snapshot_object_id": "07f5aa1fae8a9850100a836f243dcb5884af5c5d",
       "surface_id": "ref:refs/remotes/origin/codex/v7-paper-probe-deploy-20260904",
-      "unique_behavior_data_contribution": "3 commit(s) not reachable from origin/main require content audit",
+      "unique_behavior_data_contribution": "5 commit(s) not reachable from origin/main require content audit",
       "validation_tests": [
         "tests/test_v7_surface_classification.py"
       ]
@@ -21776,31 +21726,6 @@
       ]
     },
     {
-      "canonical_replacement": ".github/workflows/tmp-v7-paper-probe-economic-repair.yml",
-      "classification": "KEEP_CANONICAL",
-      "current_imports_callers_readers_writers": {
-        "analysis": "exact path/module references from tracked text; runtime linkage is separately enumerated",
-        "static_references": []
-      },
-      "deletion_gate": "NONE_CANONICAL_SURFACE",
-      "disposition_commit": null,
-      "economic_authority": {
-        "capabilities": [],
-        "executable": false,
-        "owner": null
-      },
-      "final_disposition": "retain_canonical",
-      "migration_status": "classified",
-      "object_type": "workflow",
-      "path_or_ref": ".github/workflows/tmp-v7-paper-probe-economic-repair.yml",
-      "rollback_artifact_tag": "v7-unification-pre-migration-8d9e8e60",
-      "surface_id": "workflow:.github/workflows/tmp-v7-paper-probe-economic-repair.yml",
-      "unique_behavior_data_contribution": "CI, research, deployment, or cutover control surface",
-      "validation_tests": [
-        "tests/test_v7_surface_classification.py"
-      ]
-    },
-    {
       "canonical_replacement": ".github/workflows/v7-approved-paper-cutover-orchestrator.yml",
       "classification": "KEEP_CANONICAL",
       "current_imports_callers_readers_writers": {
@@ -21980,5 +21905,5 @@
   "real_capital_at_risk": false,
   "real_order_submission": false,
   "schema": "polymarket_v7_surface_classification_v1",
-  "source_snapshot_sha": "8ad9ebc1e2400103e8066f36b9d9577286240e41"
+  "source_snapshot_sha": "07f5aa1fae8a9850100a836f243dcb5884af5c5d"
 }
