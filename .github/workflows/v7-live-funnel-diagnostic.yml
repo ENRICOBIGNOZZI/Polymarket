@@ -1,6 +1,9 @@
 name: V7 live opportunity funnel diagnostic
 
 on:
+  pull_request:
+    branches: [main]
+    paths: [.github/workflows/v7-live-funnel-diagnostic.yml]
   push:
     branches: [ops/v7-live-funnel-diagnostic-20260903]
     paths: [.github/workflows/v7-live-funnel-diagnostic.yml]
@@ -71,9 +74,7 @@ jobs:
           from __future__ import annotations
           import collections, json, math, sys, time
           from pathlib import Path
-
-          root=Path(sys.argv[1])
-          now=time.time()
+          root=Path(sys.argv[1]); now=time.time()
           def read_json(path):
               try: return json.loads(path.read_text(encoding='utf-8'))
               except Exception: return None
@@ -93,56 +94,26 @@ jobs:
               if depth>4: return '<depth>'
               if isinstance(value,dict):
                   keep={}
-                  interesting={
-                      'schema','state','status','reason','reasons','last_reason','last_attempt_reason','last_error',
-                      'error','valid','killed','drain_complete','paper_only','authenticated_execution','real_order_submission',
-                      'real_capital_at_risk','economic_new_risk_ready','authorized_alpha_actions','model_sha','pid','timestamp',
-                      'market_id','event_id','question','slug','asset','horizon','template_id','tte_seconds','end_time','end_ms',
-                      'yes','no','lower','upper','yes_lower','yes_upper','pm_mid','market_yes','fair_yes','fair_lower','fair_upper',
-                      'probability_model_id','probability_model_hash','paper_exploration_bootstrap','paper_bootstrap_probe',
-                      'promotion_eligible','real_money_authority','fresh_venue_count','venue_count','sources','source','source_count',
-                      'oracle_age_ms','external_age_ms','book_age_ms','chainlink_age_ms','reference_age_ms','dispersion_bps',
-                      'sigma_bps','mean_margin_bps','robust_ev','point_ev','robust_ev_per_share','point_ev_per_share',
-                      'model_market_disagreement','minimum_model_market_disagreement','maximum_model_market_disagreement',
-                      'candidates','counterfactual_fills','probe_candidates','probe_fills','open_positions','positions','traded_markets',
-                      'orders_submitted','fills','complete_fills','final_pnl_usd','runtime_pnl_usd','decision','action','engine_id',
-                      'new_risk_authorized','paper_exploration_authorized','paper_exploration_probe_authorized','selected_replay_key',
-                      'inbox_count','processed','accepted','rejected','quarantined','appended','ledger_rows','spool_count'
-                  }
+                  interesting={'schema','state','status','reason','reasons','last_reason','last_attempt_reason','last_error','error','valid','killed','drain_complete','paper_only','authenticated_execution','real_order_submission','real_capital_at_risk','economic_new_risk_ready','authorized_alpha_actions','model_sha','pid','timestamp','market_id','event_id','question','slug','asset','horizon','template_id','tte_seconds','end_time','end_ms','yes','no','lower','upper','yes_lower','yes_upper','pm_mid','market_yes','fair_yes','fair_lower','fair_upper','probability_model_id','probability_model_hash','paper_exploration_bootstrap','paper_bootstrap_probe','promotion_eligible','real_money_authority','fresh_venue_count','venue_count','sources','source','source_count','oracle_age_ms','external_age_ms','book_age_ms','chainlink_age_ms','reference_age_ms','dispersion_bps','sigma_bps','mean_margin_bps','robust_ev','point_ev','robust_ev_per_share','point_ev_per_share','model_market_disagreement','minimum_model_market_disagreement','maximum_model_market_disagreement','candidates','counterfactual_fills','probe_candidates','probe_fills','open_positions','positions','traded_markets','orders_submitted','fills','complete_fills','final_pnl_usd','runtime_pnl_usd','decision','action','engine_id','new_risk_authorized','paper_exploration_authorized','paper_exploration_probe_authorized','selected_replay_key','inbox_count','processed','accepted','rejected','quarantined','appended','ledger_rows','spool_count'}
                   for k,v in value.items():
                       if k in interesting or any(token in k.lower() for token in ('reason','error','valid','fresh','age','candidate','reject','fill','opportun','fair','oracle','venue','market','probe','bootstrap')):
                           keep[k]=compact(v,depth+1)
                   return keep
-              if isinstance(value,list):
-                  return [compact(v,depth+1) for v in (value[-12:] if len(value)>12 else value)]
-              if isinstance(value,float):
-                  return round(value,8) if math.isfinite(value) else str(value)
+              if isinstance(value,list): return [compact(v,depth+1) for v in (value[-12:] if len(value)>12 else value)]
+              if isinstance(value,float): return round(value,8) if math.isfinite(value) else str(value)
               return value
-
-          key_files=[
-              'control/runtime_status.json','control/portfolio_state.json','control/global_portfolio_coordinator.json',
-              'control/allocations/manifest.json','canonical_economics.json',
-              'external_fair/rtds_status.json','external_fair/rtds_monitor_status.json','external_fair/status.json',
-              'external_fair/paper_router_status.json','external_fair/paper_router_state.json',
-              'external_fair/external_venues.json','external_fair/latest.json','external_fair/fair.json',
-              'external_fair/model_registry/fair_value_champion.json','external_fair/model_registry/fair_value_challenger.json'
-          ]
+          key_files=['control/runtime_status.json','control/portfolio_state.json','control/global_portfolio_coordinator.json','control/allocations/manifest.json','canonical_economics.json','external_fair/rtds_status.json','external_fair/rtds_monitor_status.json','external_fair/status.json','external_fair/paper_router_status.json','external_fair/paper_router_state.json','external_fair/external_venues.json','external_fair/latest.json','external_fair/fair.json','external_fair/model_registry/fair_value_champion.json','external_fair/model_registry/fair_value_challenger.json']
           seen=set()
           for rel in key_files:
               path=root/rel
               if path.exists():
-                  seen.add(path.resolve()); print(f'FILE {rel} age_s={age(path)}')
-                  print(json.dumps(compact(read_json(path)),sort_keys=True))
+                  seen.add(path.resolve()); print(f'FILE {rel} age_s={age(path)}'); print(json.dumps(compact(read_json(path)),sort_keys=True))
           if (root/'external_fair').exists():
               for path in sorted((root/'external_fair').rglob('*.json')):
                   if path.resolve() in seen or path.stat().st_size>2_000_000: continue
                   comp=compact(read_json(path))
-                  if comp not in ({},None,[]):
-                      print(f'FILE {path.relative_to(root)} age_s={age(path)}')
-                      print(json.dumps(comp,sort_keys=True))
-
-          counters=collections.Counter(); event_counts=collections.Counter(); action_counts=collections.Counter()
-          jsonl_paths=[]
+                  if comp not in ({},None,[]): print(f'FILE {path.relative_to(root)} age_s={age(path)}'); print(json.dumps(comp,sort_keys=True))
+          counters=collections.Counter(); event_counts=collections.Counter(); action_counts=collections.Counter(); jsonl_paths=[]
           for base in (root/'external_fair',root/'opportunities',root/'ledger'):
               if base.exists(): jsonl_paths.extend(base.rglob('*.jsonl'))
           for path in sorted(set(jsonl_paths)):
@@ -156,8 +127,7 @@ jobs:
                   def walk(x):
                       if isinstance(x,dict):
                           for k,v in x.items():
-                              if k in ('reason','last_attempt_reason','error','reject_reason') and isinstance(v,(str,int,float,bool)):
-                                  counters[str(v)]+=1
+                              if k in ('reason','last_attempt_reason','error','reject_reason') and isinstance(v,(str,int,float,bool)): counters[str(v)]+=1
                               elif k=='reasons' and isinstance(v,list):
                                   for r in v: counters[str(r)]+=1
                               walk(v)
@@ -166,9 +136,7 @@ jobs:
                   walk(row)
               print(f'JSONL {path.relative_to(root)} rows={len(rows)} age_s={age(path)}')
               for row in rows[-8:]: print('LAST '+json.dumps(compact(row),sort_keys=True))
-          print('EVENT_COUNTS '+json.dumps(event_counts.most_common(80)))
-          print('ACTION_COUNTS '+json.dumps(action_counts.most_common(30)))
-          print('REASON_COUNTS '+json.dumps(counters.most_common(100)))
+          print('EVENT_COUNTS '+json.dumps(event_counts.most_common(80))); print('ACTION_COUNTS '+json.dumps(action_counts.most_common(30))); print('REASON_COUNTS '+json.dumps(counters.most_common(100)))
           for sub in ('opportunities/inbox','opportunities/receipts','ledger/spool','ledger/quarantine'):
               p=root/sub; files=list(p.glob('*')) if p.exists() else []
               print(f'DIR {sub} count={len(files)} newest_age_s={min((age(f) for f in files if f.is_file()),default=None)}')
@@ -181,8 +149,5 @@ jobs:
             tail -n 120 "$f" | grep -Ei 'error|warn|invalid|reject|missing|stale|no_|waiting|bootstrap|probe|candidate|virtual|fair|oracle|venue|market' | tail -n 80 || true
           done
           echo '=== METRICS ==='
-          curl -fsS http://127.0.0.1:9108/metrics 2>/dev/null \
-            | grep -E '^(polymarket_execution_|polymarket_runtime_pnl_usd|polymarket_v7_(canonical|external|fair|oracle|opportun|ledger|health|execution|paper|exact|single|live|economic))' \
-            | head -n 300 || true
+          curl -fsS http://127.0.0.1:9108/metrics 2>/dev/null | grep -E '^(polymarket_execution_|polymarket_runtime_pnl_usd|polymarket_v7_(canonical|external|fair|oracle|opportun|ledger|health|execution|paper|exact|single|live|economic))' | head -n 300 || true
           REMOTE
-# diagnostic trigger 2
