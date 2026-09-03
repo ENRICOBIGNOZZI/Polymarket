@@ -33,3 +33,9 @@ not a trained champion, cannot receive promotion credit, cannot authorize maker
 quotes, cannot authorize authenticated execution, and cannot submit real orders.
 A valid immutable registered champion always takes precedence.
 
+## Release invariant
+
+Every deployment containing the bridge must pass exact-SHA Release and Debug CI,
+retain the PAPER-only authority flags, and be rechecked against live Chainlink,
+multi-venue and CLOB inputs after the runtime starts. A successful build alone is
+not evidence of economic activity or profitability.
