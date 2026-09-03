@@ -1,0 +1,51 @@
+name: TEMP V7 PAPER exploration surface reclassification
+
+on:
+  push:
+    branches:
+      - main
+
+permissions:
+  contents: write
+
+jobs:
+  reclassify:
+    if: ${{ github.actor == github.repository_owner }}
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          ref: codex/v7-paper-exploration
+          fetch-depth: 0
+
+      - name: Regenerate exact feature-tree inventory
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 scripts/v7_surface_classification.py \
+            --repository-root . \
+            --output artifacts/v7_unification/path_classification.json
+          python3 tests/test_v7_surface_classification.py
+
+      - name: Push verified inventory to feature branch
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name "ENRICOBIGNOZZI"
+          git config user.email "88671442+ENRICOBIGNOZZI@users.noreply.github.com"
+          git add artifacts/v7_unification/path_classification.json
+          git commit -m "chore: classify PAPER exploration authority documentation"
+          git push origin HEAD:codex/v7-paper-exploration
+
+      - name: Remove temporary workflow from main
+        if: ${{ success() }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          git fetch origin main
+          git switch -C main origin/main
+          git config user.name "ENRICOBIGNOZZI"
+          git config user.email "88671442+ENRICOBIGNOZZI@users.noreply.github.com"
+          git rm .github/workflows/tmp-v7-paper-exploration-reclassify.yml
+          git commit -m "chore: remove temporary PAPER exploration reclassification workflow"
+          git push origin main
