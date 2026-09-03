@@ -69,17 +69,14 @@ jobs:
           echo '=== STRUCTURED DIAGNOSTIC ==='
           python3 - "$root" <<'PY'
           from __future__ import annotations
-          import collections, json, math, os, sys, time
+          import collections, json, math, sys, time
           from pathlib import Path
 
           root=Path(sys.argv[1])
           now=time.time()
           def read_json(path):
-              try:
-                  value=json.loads(path.read_text(encoding='utf-8'))
-              except Exception:
-                  return None
-              return value
+              try: return json.loads(path.read_text(encoding='utf-8'))
+              except Exception: return None
           def read_jsonl(path):
               rows=[]
               try:
@@ -117,8 +114,7 @@ jobs:
                           keep[k]=compact(v,depth+1)
                   return keep
               if isinstance(value,list):
-                  if len(value)>12: return [compact(v,depth+1) for v in value[-12:]]
-                  return [compact(v,depth+1) for v in value]
+                  return [compact(v,depth+1) for v in (value[-12:] if len(value)>12 else value)]
               if isinstance(value,float):
                   return round(value,8) if math.isfinite(value) else str(value)
               return value
@@ -135,16 +131,15 @@ jobs:
           for rel in key_files:
               path=root/rel
               if path.exists():
-                  seen.add(path.resolve())
-                  print(f'FILE {rel} age_s={age(path)}')
+                  seen.add(path.resolve()); print(f'FILE {rel} age_s={age(path)}')
                   print(json.dumps(compact(read_json(path)),sort_keys=True))
-          for path in sorted((root/'external_fair').rglob('*.json')) if (root/'external_fair').exists() else []:
-              if path.resolve() in seen or path.stat().st_size>2_000_000: continue
-              value=read_json(path)
-              comp=compact(value)
-              if comp not in ({},None,[]):
-                  print(f'FILE {path.relative_to(root)} age_s={age(path)}')
-                  print(json.dumps(comp,sort_keys=True))
+          if (root/'external_fair').exists():
+              for path in sorted((root/'external_fair').rglob('*.json')):
+                  if path.resolve() in seen or path.stat().st_size>2_000_000: continue
+                  comp=compact(read_json(path))
+                  if comp not in ({},None,[]):
+                      print(f'FILE {path.relative_to(root)} age_s={age(path)}')
+                      print(json.dumps(comp,sort_keys=True))
 
           counters=collections.Counter(); event_counts=collections.Counter(); action_counts=collections.Counter()
           jsonl_paths=[]
@@ -170,15 +165,12 @@ jobs:
                           for v in x: walk(v)
                   walk(row)
               print(f'JSONL {path.relative_to(root)} rows={len(rows)} age_s={age(path)}')
-              for row in rows[-8:]:
-                  print('LAST '+json.dumps(compact(row),sort_keys=True))
+              for row in rows[-8:]: print('LAST '+json.dumps(compact(row),sort_keys=True))
           print('EVENT_COUNTS '+json.dumps(event_counts.most_common(80)))
           print('ACTION_COUNTS '+json.dumps(action_counts.most_common(30)))
           print('REASON_COUNTS '+json.dumps(counters.most_common(100)))
-
           for sub in ('opportunities/inbox','opportunities/receipts','ledger/spool','ledger/quarantine'):
-              p=root/sub
-              files=list(p.glob('*')) if p.exists() else []
+              p=root/sub; files=list(p.glob('*')) if p.exists() else []
               print(f'DIR {sub} count={len(files)} newest_age_s={min((age(f) for f in files if f.is_file()),default=None)}')
           PY
           echo '=== PROCESS SNAPSHOT ==='
@@ -193,3 +185,4 @@ jobs:
             | grep -E '^(polymarket_execution_|polymarket_runtime_pnl_usd|polymarket_v7_(canonical|external|fair|oracle|opportun|ledger|health|execution|paper|exact|single|live|economic))' \
             | head -n 300 || true
           REMOTE
+# diagnostic trigger 2
