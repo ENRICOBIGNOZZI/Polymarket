@@ -1,0 +1,195 @@
+name: V7 live opportunity funnel diagnostic
+
+on:
+  push:
+    branches: [ops/v7-live-funnel-diagnostic-20260903]
+    paths: [.github/workflows/v7-live-funnel-diagnostic.yml]
+
+permissions: {contents: read}
+concurrency: {group: v7-live-funnel-diagnostic, cancel-in-progress: false}
+
+jobs:
+  diagnose:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    env:
+      SERVER_HOST: ${{ vars.POLYMARKET_SERVER_HOST || '100.104.183.109' }}
+      SERVER_USER: ${{ vars.POLYMARKET_SERVER_USER || 'enrico' }}
+      SERVER_PORT: ${{ vars.POLYMARKET_SERVER_PORT || '22' }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with: {fetch-depth: 0}
+      - name: Select Tailscale credential mode
+        id: tailscale_auth
+        env:
+          TS_AUTHKEY: ${{ secrets.TS_AUTHKEY }}
+          TS_OAUTH_CLIENT_ID: ${{ secrets.TS_OAUTH_CLIENT_ID }}
+          TS_OAUTH_SECRET: ${{ secrets.TS_OAUTH_SECRET }}
+        run: |
+          set -euo pipefail
+          if [[ -n "${TS_AUTHKEY:-}" ]]; then mode=authkey
+          elif [[ -n "${TS_OAUTH_CLIENT_ID:-}" && -n "${TS_OAUTH_SECRET:-}" ]]; then mode=oauth
+          else echo 'No Tailscale credentials' >&2; exit 1; fi
+          echo "mode=$mode" >> "$GITHUB_OUTPUT"
+      - name: Join tailnet with auth key
+        if: steps.tailscale_auth.outputs.mode == 'authkey'
+        uses: tailscale/github-action@780049a30b6ff5c378a9e7b389d15ece7a204888
+        with: {authkey: "${{ secrets.TS_AUTHKEY }}", ping: "${{ env.SERVER_HOST }}"}
+      - name: Join tailnet with OAuth
+        if: steps.tailscale_auth.outputs.mode == 'oauth'
+        uses: tailscale/github-action@780049a30b6ff5c378a9e7b389d15ece7a204888
+        with:
+          oauth-client-id: ${{ secrets.TS_OAUTH_CLIENT_ID }}
+          oauth-secret: ${{ secrets.TS_OAUTH_SECRET }}
+          tags: ${{ vars.TS_TAGS || 'tag:ci' }}
+          ping: ${{ env.SERVER_HOST }}
+      - name: Configure SSH
+        env: {SSH_PRIVATE_KEY: "${{ secrets.POLYMARKET_SERVER_SSH_KEY }}"}
+        run: |
+          set -euo pipefail
+          install -d -m 700 ~/.ssh
+          printf '%s\n' "$SSH_PRIVATE_KEY" > ~/.ssh/polymarket_diag
+          chmod 600 ~/.ssh/polymarket_diag
+          ssh-keyscan -T 5 -p "$SERVER_PORT" "$SERVER_HOST" > ~/.ssh/known_hosts
+      - name: Read-only live funnel diagnostic
+        run: |
+          set -euo pipefail
+          ssh -i ~/.ssh/polymarket_diag -o IdentitiesOnly=yes -o BatchMode=yes -o ConnectTimeout=10 -p "$SERVER_PORT" "$SERVER_USER@$SERVER_HOST" 'bash -s' <<'REMOTE'
+          set -euo pipefail
+          cd "$HOME/polymarket"
+          root="$HOME/polymarket/runs/paper_v7_live"
+          echo '=== IDENTITY ==='
+          printf 'repo_head=%s\n' "$(git rev-parse HEAD 2>/dev/null || true)"
+          printf 'origin_main=%s\n' "$(git rev-parse origin/main 2>/dev/null || true)"
+          printf 'deployed_sha=%s\n' "$(cat "$root/control/deployed_sha" 2>/dev/null || true)"
+          printf 'utc_now=%s\n' "$(date -u +%FT%TZ)"
+          echo '=== RELEVANT FILES ==='
+          find "$root/external_fair" "$root/opportunities" "$root/control" -maxdepth 4 -type f 2>/dev/null \
+            | sed "s#^$root/##" | sort | grep -E '(external_fair|opportunit|coordinator|runtime_status|portfolio_state|allocation|ledger|KILL|drain)' || true
+          echo '=== STRUCTURED DIAGNOSTIC ==='
+          python3 - "$root" <<'PY'
+          from __future__ import annotations
+          import collections, json, math, os, sys, time
+          from pathlib import Path
+
+          root=Path(sys.argv[1])
+          now=time.time()
+          def read_json(path):
+              try:
+                  value=json.loads(path.read_text(encoding='utf-8'))
+              except Exception:
+                  return None
+              return value
+          def read_jsonl(path):
+              rows=[]
+              try:
+                  for raw in path.read_text(encoding='utf-8',errors='replace').splitlines():
+                      if raw.strip():
+                          try: rows.append(json.loads(raw))
+                          except Exception: pass
+              except Exception: pass
+              return rows
+          def age(path):
+              try: return round(now-path.stat().st_mtime,3)
+              except Exception: return None
+          def compact(value, depth=0):
+              if depth>4: return '<depth>'
+              if isinstance(value,dict):
+                  keep={}
+                  interesting={
+                      'schema','state','status','reason','reasons','last_reason','last_attempt_reason','last_error',
+                      'error','valid','killed','drain_complete','paper_only','authenticated_execution','real_order_submission',
+                      'real_capital_at_risk','economic_new_risk_ready','authorized_alpha_actions','model_sha','pid','timestamp',
+                      'market_id','event_id','question','slug','asset','horizon','template_id','tte_seconds','end_time','end_ms',
+                      'yes','no','lower','upper','yes_lower','yes_upper','pm_mid','market_yes','fair_yes','fair_lower','fair_upper',
+                      'probability_model_id','probability_model_hash','paper_exploration_bootstrap','paper_bootstrap_probe',
+                      'promotion_eligible','real_money_authority','fresh_venue_count','venue_count','sources','source','source_count',
+                      'oracle_age_ms','external_age_ms','book_age_ms','chainlink_age_ms','reference_age_ms','dispersion_bps',
+                      'sigma_bps','mean_margin_bps','robust_ev','point_ev','robust_ev_per_share','point_ev_per_share',
+                      'model_market_disagreement','minimum_model_market_disagreement','maximum_model_market_disagreement',
+                      'candidates','counterfactual_fills','probe_candidates','probe_fills','open_positions','positions','traded_markets',
+                      'orders_submitted','fills','complete_fills','final_pnl_usd','runtime_pnl_usd','decision','action','engine_id',
+                      'new_risk_authorized','paper_exploration_authorized','paper_exploration_probe_authorized','selected_replay_key',
+                      'inbox_count','processed','accepted','rejected','quarantined','appended','ledger_rows','spool_count'
+                  }
+                  for k,v in value.items():
+                      if k in interesting or any(token in k.lower() for token in ('reason','error','valid','fresh','age','candidate','reject','fill','opportun','fair','oracle','venue','market','probe','bootstrap')):
+                          keep[k]=compact(v,depth+1)
+                  return keep
+              if isinstance(value,list):
+                  if len(value)>12: return [compact(v,depth+1) for v in value[-12:]]
+                  return [compact(v,depth+1) for v in value]
+              if isinstance(value,float):
+                  return round(value,8) if math.isfinite(value) else str(value)
+              return value
+
+          key_files=[
+              'control/runtime_status.json','control/portfolio_state.json','control/global_portfolio_coordinator.json',
+              'control/allocations/manifest.json','canonical_economics.json',
+              'external_fair/rtds_status.json','external_fair/rtds_monitor_status.json','external_fair/status.json',
+              'external_fair/paper_router_status.json','external_fair/paper_router_state.json',
+              'external_fair/external_venues.json','external_fair/latest.json','external_fair/fair.json',
+              'external_fair/model_registry/fair_value_champion.json','external_fair/model_registry/fair_value_challenger.json'
+          ]
+          seen=set()
+          for rel in key_files:
+              path=root/rel
+              if path.exists():
+                  seen.add(path.resolve())
+                  print(f'FILE {rel} age_s={age(path)}')
+                  print(json.dumps(compact(read_json(path)),sort_keys=True))
+          for path in sorted((root/'external_fair').rglob('*.json')) if (root/'external_fair').exists() else []:
+              if path.resolve() in seen or path.stat().st_size>2_000_000: continue
+              value=read_json(path)
+              comp=compact(value)
+              if comp not in ({},None,[]):
+                  print(f'FILE {path.relative_to(root)} age_s={age(path)}')
+                  print(json.dumps(comp,sort_keys=True))
+
+          counters=collections.Counter(); event_counts=collections.Counter(); action_counts=collections.Counter()
+          jsonl_paths=[]
+          for base in (root/'external_fair',root/'opportunities',root/'ledger'):
+              if base.exists(): jsonl_paths.extend(base.rglob('*.jsonl'))
+          for path in sorted(set(jsonl_paths)):
+              rows=read_jsonl(path)
+              if not rows: continue
+              for row in rows:
+                  if not isinstance(row,dict): continue
+                  for key in ('event_type','type','state','status'):
+                      if row.get(key): event_counts[f'{path.relative_to(root)}::{key}={row.get(key)}']+=1
+                  if row.get('action'): action_counts[str(row.get('action'))]+=1
+                  def walk(x):
+                      if isinstance(x,dict):
+                          for k,v in x.items():
+                              if k in ('reason','last_attempt_reason','error','reject_reason') and isinstance(v,(str,int,float,bool)):
+                                  counters[str(v)]+=1
+                              elif k=='reasons' and isinstance(v,list):
+                                  for r in v: counters[str(r)]+=1
+                              walk(v)
+                      elif isinstance(x,list):
+                          for v in x: walk(v)
+                  walk(row)
+              print(f'JSONL {path.relative_to(root)} rows={len(rows)} age_s={age(path)}')
+              for row in rows[-8:]:
+                  print('LAST '+json.dumps(compact(row),sort_keys=True))
+          print('EVENT_COUNTS '+json.dumps(event_counts.most_common(80)))
+          print('ACTION_COUNTS '+json.dumps(action_counts.most_common(30)))
+          print('REASON_COUNTS '+json.dumps(counters.most_common(100)))
+
+          for sub in ('opportunities/inbox','opportunities/receipts','ledger/spool','ledger/quarantine'):
+              p=root/sub
+              files=list(p.glob('*')) if p.exists() else []
+              print(f'DIR {sub} count={len(files)} newest_age_s={min((age(f) for f in files if f.is_file()),default=None)}')
+          PY
+          echo '=== PROCESS SNAPSHOT ==='
+          ps aux | grep -E 'paper_v7|v7_external|v7_global_portfolio|v7_rtds|polymarket_v7' | grep -v grep || true
+          echo '=== RELEVANT LOG TAILS ==='
+          find "$root/external_fair" -maxdepth 3 -type f -name '*.log' -print0 2>/dev/null | while IFS= read -r -d '' f; do
+            echo "--- ${f#$root/} ---"
+            tail -n 120 "$f" | grep -Ei 'error|warn|invalid|reject|missing|stale|no_|waiting|bootstrap|probe|candidate|virtual|fair|oracle|venue|market' | tail -n 80 || true
+          done
+          echo '=== METRICS ==='
+          curl -fsS http://127.0.0.1:9108/metrics 2>/dev/null \
+            | grep -E '^(polymarket_execution_|polymarket_runtime_pnl_usd|polymarket_v7_(canonical|external|fair|oracle|opportun|ledger|health|execution|paper|exact|single|live|economic))' \
+            | head -n 300 || true
+          REMOTE
