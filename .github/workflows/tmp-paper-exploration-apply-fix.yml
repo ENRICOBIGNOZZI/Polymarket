@@ -1,0 +1,88 @@
+name: TEMP apply PAPER exploration funnel fix
+
+on:
+  push:
+    branches: [ops/paper-exploration-funnel-fix-20260903]
+    paths: [.github/workflows/tmp-paper-exploration-apply-fix.yml]
+
+permissions:
+  contents: write
+
+jobs:
+  repair:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with: {ref: ops/paper-exploration-funnel-fix-20260903, fetch-depth: 0}
+      - name: Await live diagnosis
+        run: |
+          set -euo pipefail
+          for _ in $(seq 1 90); do
+            git fetch origin ops/paper-exploration-funnel-fix-20260903
+            if git show origin/ops/paper-exploration-funnel-fix-20260903:diagnostics/paper_exploration_root_cause.json >/tmp/root-cause.json 2>/dev/null; then
+              break
+            fi
+            sleep 2
+          done
+          test -s /tmp/root-cause.json
+          git reset --hard origin/ops/paper-exploration-funnel-fix-20260903
+      - name: Apply deterministic funnel repair
+        run: |
+          set -euo pipefail
+          python3 scripts/tmp_apply_paper_exploration_funnel_fix.py
+          python3 -m py_compile scripts/v7_external_fair_paper_router.py scripts/v7_global_portfolio_coordinator.py scripts/v7_opportunity.py
+      - name: Fold regression tests into canonical test surface and remove temporary files
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+          src=Path('tests/test_v7_paper_exploration_funnel_fix.py')
+          dst=Path('tests/test_v7_paper_exploration_authority.py')
+          block=src.read_text(encoding='utf-8')
+          block='\n'.join(line for line in block.splitlines() if not line.startswith('from __future__') and not line.startswith('import ast, json') and not line.startswith('from pathlib import Path') and not line.startswith('ROOT='))
+          prelude='\n\n# Regression: live PAPER exploration funnel must reach the canonical coordinator.\nimport ast as _ast\nimport json as _json\nfrom pathlib import Path as _Path\n_V7_ROOT=_Path(__file__).resolve().parents[1]\n'
+          block=block.replace('ROOT/', '_V7_ROOT/').replace('ast.', '_ast.').replace('json.', '_json.')
+          text=dst.read_text(encoding='utf-8')
+          marker='# Regression: live PAPER exploration funnel must reach the canonical coordinator.'
+          if marker not in text:
+              dst.write_text(text.rstrip()+prelude+block+'\n',encoding='utf-8')
+          src.unlink()
+          PY
+          rm -f \
+            .github/workflows/tmp-paper-exploration-live-diagnostic.yml \
+            .github/workflows/tmp-paper-exploration-diagnostic-commit.yml \
+            .github/workflows/tmp-paper-exploration-classify.yml \
+            .github/workflows/tmp-paper-exploration-apply-fix.yml \
+            scripts/tmp_apply_paper_exploration_funnel_fix.py
+          rm -rf diagnostics
+      - name: Regenerate canonical surface inventory
+        run: |
+          set -euo pipefail
+          help="$(python3 scripts/v7_surface_classification.py --help 2>&1 || true)"
+          if grep -q -- '--output' <<<"$help"; then
+            python3 scripts/v7_surface_classification.py --repository-root . --output artifacts/v7_unification/path_classification.json
+          elif grep -q -- '--write' <<<"$help"; then
+            python3 scripts/v7_surface_classification.py --repository-root . --write
+          else
+            python3 scripts/v7_surface_classification.py --repository-root . > artifacts/v7_unification/path_classification.json
+          fi
+          python3 -m json.tool artifacts/v7_unification/path_classification.json >/dev/null
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential cmake pkg-config libcurl4-openssl-dev libboost-all-dev libssl-dev python3
+      - name: Build and test exact repair
+        run: |
+          set -euo pipefail
+          cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
+          cmake --build build --parallel 2
+          ctest --test-dir build --output-on-failure
+      - name: Commit verified repair
+        run: |
+          set -euo pipefail
+          git config user.name ENRICOBIGNOZZI
+          git config user.email 88671442+ENRICOBIGNOZZI@users.noreply.github.com
+          git add -A
+          git commit -m 'fix: unblock bounded PAPER exploration funnel'
+          git push origin HEAD:ops/paper-exploration-funnel-fix-20260903
