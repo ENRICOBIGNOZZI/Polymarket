@@ -24,6 +24,7 @@ from typing import Any
 
 from v7_market_common import finite, parse_array, request_json
 from v7_execution_ledger import LedgerEvent
+from v7_ledger_spool import spool_event
 from v7_crypto_settlement import load_registry as load_crypto_registry, require_context
 
 STRATEGY = "CRYPTO_INFORMED_TAKER"
@@ -1101,7 +1102,7 @@ class PaperRouter:
             finally:
                 os.close(descriptor)
 
-    def emit_shadow_ingress(self, event: LedgerEvent) -> None:
+    def emit_shadow_ingress(self, event: LedgerEvent) -> str | None:
         """Publish proposals to coordination and lifecycle labels to research."""
         metadata = dict(event.metadata)
         metadata.update({
@@ -1114,13 +1115,13 @@ class PaperRouter:
         evidence = LedgerEvent(**{
             **event.to_dict(), "metadata": metadata,
         })
-        if evidence.event_type != "CANDIDATE":
+        if evidence.event_type != "CANDIDATE" or metadata.get("arrival_revalidated") is not True:
             target = (
                 self.root / "research" / "evidence" / "crypto_settlement_counterfactual"
                 / f"{evidence.recorded_ts_ms}.{evidence.record_id}.json"
             )
             atomic_json(target, evidence.to_dict())
-            return
+            return None
 
         runtime = load(self.root / "control" / "runtime_status.json")
         if (
@@ -1171,11 +1172,11 @@ class PaperRouter:
                 "horizon": self.crypto_context.horizon.value,
                 "contract_family": self.crypto_context.contract_family,
                 "settlement_semantic_hash": self.crypto_context.settlement_semantic_hash,
-                "authority": self.crypto_context.authority,
-                "research_only": self.crypto_context.research_only,
+                "authority": "PAPER_EXPLORATION",
+                "research_only": False,
             },
-            "action": "NOTHING",
-            "side": "NONE",
+            "action": "TAKE",
+            "side": "BUY",
             "decision_receive_timestamp_ns": decision_ms * 1_000_000,
             "source_event_timestamps_ns": sorted({
                 exchange_ms * 1_000_000, receive_ms * 1_000_000,
@@ -1195,8 +1196,8 @@ class PaperRouter:
                 "capital_cost": "CONSERVATIVE_ZERO", "latency_cost": "CONSERVATIVE_ZERO",
                 "adverse_markout": "CONSERVATIVE_ZERO", "rebate": "CONSERVATIVE_ZERO",
             },
-            "uncertainty": {"lower_bound": -1.0, "upper_bound": 1.0, "status": "MISSING"},
-            "calibration_status": "MISSING",
+            "uncertainty": {"lower_bound": fair_lower, "upper_bound": fair_upper, "status": "IMMATURE"},
+            "calibration_status": "IMMATURE",
             "latency": {
                 "profile_id": "missing-economic-latency-profile", "profile_valid": False,
                 "economic_percentile": "p99", "arrival_ns": max(
@@ -1216,19 +1217,20 @@ class PaperRouter:
                     "target_quantity": quantity, "limit_price": limit_price,
                     "fee_authority": "CONSERVATIVE_BOUND" if fee > 0.0 else "CONSERVATIVE_ZERO",
                 }],
-                "partial_fill_plan": "NO_NEW_RISK", "timeout_ms": 0,
-                "unwind_plan": "CANCEL_ONLY",
+                "partial_fill_plan": "CANCEL_REMAINDER", "timeout_ms": 1000,
+                "unwind_plan": "NONE",
             },
-            "inventory_delta": 0.0,
-            "portfolio_exposure_delta": 0.0,
+            "inventory_delta": quantity,
+            "portfolio_exposure_delta": quantity * limit_price,
             "settlement": {
-                "definition": "counterfactual settlement binding is not promotion evidence",
-                "source": "CRYPTO_SETTLEMENT_ENGINE_EXTERNAL_FAIR_COMPONENT", "verified": False,
+                "definition": "registry-verified BTC 5m Chainlink TWAP settlement binding",
+                "source": "REGISTRY_VERIFIED_CHAINLINK_TWAP_60S",
+                "verified": bool(metadata.get("contract_rules_hash")),
             },
             "eligible": True,
             "reasons": [
-                "ECONOMIC_EVIDENCE_MISSING", "SETTLEMENT_PROMOTION_UNVERIFIED",
-                "NEW_RISK_DISABLED",
+                "PAPER_EXPLORATION_ONLY", "ARRIVAL_BOOK_REVALIDATED",
+                "IMMATURE_EVIDENCE_NO_PROMOTION_CREDIT",
             ],
             "deterministic_replay_key": f"crypto-settlement:BTC:M5:{identity}",
             "expires_at_ns": decision_ms * 1_000_000 + 1_000_000_000,
@@ -1237,6 +1239,24 @@ class PaperRouter:
             f"{decision_ms}.crypto-settlement.BTC.M5.{identity}.json"
         )
         atomic_json(target, envelope)
+        return envelope["deterministic_replay_key"]
+
+    def wait_for_exploration_receipt(self, replay_key: str, timeout_seconds: float = 1.0) -> dict[str, object] | None:
+        path = self.root / "opportunities" / "receipts" / (replay_key.replace("/", "_") + ".json")
+        deadline = time.monotonic() + max(0.1, timeout_seconds)
+        while time.monotonic() < deadline:
+            receipt = load(path)
+            if (receipt.get("selected_replay_key") == replay_key
+                    and receipt.get("paper_exploration_authorized") is True
+                    and receipt.get("new_risk_authorized") is False
+                    and receipt.get("paper_only") is True
+                    and receipt.get("authenticated_execution") is False
+                    and receipt.get("real_order_submission") is False
+                    and receipt.get("real_capital_at_risk") is False):
+                path.unlink(missing_ok=True)
+                return receipt
+            time.sleep(0.02)
+        return None
 
     def fetch_book(self, token_id: str) -> Book | None:
         try:
@@ -1671,6 +1691,7 @@ class PaperRouter:
         arrival_decision_ms = max(now_ms(), arrival_book.receive_ts_ms)
         arrival_metadata = {
             **common["metadata"], "robust_net_ev": robust_ev,
+            "arrival_revalidated": True,
             "arrival_snapshot_id": arrival_book.snapshot_id,
             "arrival_tte_seconds": arrival["tte_seconds"],
             "arrival_robust_probability": arrival["robust_probability"],
@@ -1681,6 +1702,40 @@ class PaperRouter:
                 - float(arrival["market_yes"])
             ),
         }
+        replay_key = self.emit_shadow_ingress(LedgerEvent(
+            event_type="CANDIDATE", strategy=STRATEGY, model_sha=self.sha,
+            model_version=MODEL_VERSION, candidate_id=counterfactual_id,
+            order_id=order_id, position_id=position_id, market_id=market_id,
+            event_id=str(market.get("event_id") or ""), token_id=row["token_id"], side="BUY",
+            exchange_ts_ms=arrival_book.exchange_ts_ms, receive_ts_ms=arrival_book.receive_ts_ms,
+            decision_ts_ms=arrival_decision_ms, book_snapshot_id=arrival_book.snapshot_id,
+            limit_price=ask, intended_action="TAKE", intended_size=size,
+            predicted_alpha=arrival["robust_ev"], expected_ev=robust_ev, fee=total_fee,
+            fee_rate=float(schedule.get("rate") or 0.0), fee_source="GAMMA_AUTHORITATIVE_FEE_SCHEDULE",
+            metadata=arrival_metadata,
+        ))
+        receipt = self.wait_for_exploration_receipt(str(replay_key or "")) if replay_key else None
+        if receipt is None:
+            self.emit_counterfactual("REJECTED", counterfactual_id=counterfactual_id,
+                reason="PAPER_EXPLORATION_NOT_SELECTED", market_id=market_id,
+                event_id=str(market.get("event_id") or ""), token_id=row["token_id"], side="BUY")
+            self.last_attempt_reason = "PAPER_EXPLORATION_NOT_SELECTED"
+            return False
+        canonical_metadata = {
+            **arrival_metadata, "coordinator_receipt": receipt, "paper_exploration": True,
+            "economic_authority": "PAPER_EXPLORATION", "counterfactual": False,
+            "excluded_from_portfolio_equity": False, "research_evidence_only": False,
+        }
+        spool_event(self.root, LedgerEvent(
+            event_type="ORDER_SUBMITTED", strategy=STRATEGY, model_sha=self.sha,
+            model_version=MODEL_VERSION, candidate_id=counterfactual_id,
+            order_id=order_id, position_id=position_id, market_id=market_id,
+            event_id=str(market.get("event_id") or ""), token_id=row["token_id"], side="BUY",
+            exchange_ts_ms=arrival_book.exchange_ts_ms, receive_ts_ms=arrival_book.receive_ts_ms,
+            decision_ts_ms=arrival_decision_ms, book_snapshot_id=arrival_book.snapshot_id,
+            limit_price=ask, intended_action="TAKE", intended_size=size, order_state="SUBMITTED_SHADOW",
+            predicted_alpha=arrival["robust_ev"], expected_ev=robust_ev, metadata=canonical_metadata,
+        ))
         self.emit_shadow_ingress(LedgerEvent(
             event_type="ORDER_SUBMITTED", strategy=STRATEGY, model_sha=self.sha,
             model_version=MODEL_VERSION, candidate_id=counterfactual_id,
@@ -1692,6 +1747,16 @@ class PaperRouter:
             intended_action="VIRTUAL_FAK", intended_size=size, order_state="SUBMITTED_SHADOW",
             predicted_alpha=arrival["robust_ev"], expected_ev=robust_ev,
             metadata=arrival_metadata,
+        ))
+        spool_event(self.root, LedgerEvent(
+            event_type="FILL", strategy=STRATEGY, model_sha=self.sha,
+            model_version=MODEL_VERSION, candidate_id=counterfactual_id, order_id=order_id,
+            position_id=position_id, fill_id=fill_id, market_id=market_id,
+            event_id=str(market.get("event_id") or ""), token_id=row["token_id"], side="BUY",
+            exchange_ts_ms=arrival_book.exchange_ts_ms, receive_ts_ms=arrival_book.receive_ts_ms,
+            fill_price=ask, filled_size=size, complete=True, fee=total_fee,
+            fee_rate=float(schedule.get("rate") or 0.0), fee_source="GAMMA_AUTHORITATIVE_FEE_SCHEDULE",
+            slippage=max(0.0, ask - float(common["ask"])) * size, metadata=canonical_metadata,
         ))
         self.emit_shadow_ingress(LedgerEvent(
             event_type="FILL", strategy=STRATEGY, model_sha=self.sha,
@@ -1739,6 +1804,7 @@ class PaperRouter:
             "entry_price": ask, "entry_fee": total_fee, "entry_cost": cost,
             "executable_value": executable_value, "opened_ms": arrival_book.receive_ts_ms,
             "fee_schedule": schedule, "markouts": [], "settled": False,
+            "coordinator_receipt": receipt, "paper_exploration": True,
             "model_yes": finite((arrival_status.get("fair") or {}).get("yes")),
             "market_yes": float(arrival["market_yes"]),
             "market_mid_source": "LIVE_COMPLEMENT_CONSISTENT_CLOB_BATCH",

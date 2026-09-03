@@ -158,7 +158,7 @@ def _compatibility_envelope(value: dict[str, Any], context: dict[str, Any]) -> d
         "calibration_status": "MISSING",
         "latency": {
             "profile_id": "compatibility-missing", "profile_valid": False,
-            "economic_percentile": "p99", "arrival_ns": 0,
+            "economic_percentile": "p99", "arrival_ns": 1,
         },
         "capacity": {
             "executable_size": max(0.0, float(value.get("intended_size") or 0.0)),
@@ -237,7 +237,7 @@ def process_cut(run_root: Path, *, now_ns: int | None = None) -> dict[str, Any]:
     if adapter_errors:
         decision = fail_closed_decision(now_ns=current_ns, reasons=adapter_errors)
     elif envelopes:
-        decision = coordinate(envelopes, now_ns=current_ns, new_risk_authorized=False)
+        decision = coordinate(envelopes, now_ns=current_ns, new_risk_authorized=False, paper_exploration_authorized=True)
     else:
         decision = fail_closed_decision(now_ns=current_ns, reasons=["NO_LIVE_OPPORTUNITIES"])
     crypto_exposures = []
@@ -264,6 +264,7 @@ def process_cut(run_root: Path, *, now_ns: int | None = None) -> dict[str, Any]:
         "valid_envelope_count": len(envelopes),
         "adapter_error_count": len(adapter_errors),
         "new_risk_policy": "CHECKED_IN_DISABLED_NO_RUNTIME_OVERRIDE",
+        "paper_exploration_policy": "BTC_M5_BOUNDED_NO_REAL_MONEY",
     })
     status = {
         "schema": "polymarket_v7_global_portfolio_coordinator_status_v1",
@@ -280,6 +281,15 @@ def process_cut(run_root: Path, *, now_ns: int | None = None) -> dict[str, Any]:
         "last_decision": decision,
     }
     atomic_json(root / "control" / "global_portfolio_coordinator.json", status)
+    if (
+        decision.get("paper_exploration_authorized") is True
+        and decision.get("new_risk_authorized") is False
+        and decision.get("action") in {"MAKE", "TAKE"}
+        and isinstance(decision.get("selected_replay_key"), str)
+        and decision.get("selected_replay_key")
+    ):
+        receipt_name = decision["selected_replay_key"].replace("/", "_") + ".json"
+        atomic_json(root / "opportunities" / "receipts" / receipt_name, decision)
     if files:
         append_jsonl(root / "opportunities" / "decisions.jsonl", decision)
     archive = root / "opportunities" / "archive"

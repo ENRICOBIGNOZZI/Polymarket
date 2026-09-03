@@ -1,165 +1,9 @@
 {
-  "schema_version": 1,
   "architecture": "V7",
-  "component": "settlement_aware_external_fair",
-  "enabled": true,
-  "execution_authority": "SHADOW_ZERO_AUTHORITY",
-  "paper_only": true,
   "authenticated_execution": false,
-  "real_order_submission": false,
-  "incumbent_policy": {
-    "keep_healthy_incumbent_running": true,
-    "mutate_incumbent_worktree": false,
-    "simultaneous_blue_green_execution": false
-  },
-  "scope": {
-    "active_contract_families": [
-      "BTC_USD_UPDOWN_5M"
-    ],
-    "future_inactive_contract_families": [
-      "ETH_USD_UPDOWN",
-      "SOL_USD_UPDOWN",
-      "CRYPTO_15M",
-      "CRYPTO_4H"
-    ],
-    "unsupported_market_behavior": "INCUMBENT_V7_UNCHANGED",
-    "external_fair_required_market_failure": "CANCEL_WITHDRAW_NO_NEW_RISK"
-  },
-  "contract_registry": {
-    "path": "runs/paper_v7_live/external_fair/contract_registry.json",
-    "parser_version": "btc-updown-chainlink-twap-v1",
-    "verified_templates_only": true,
-    "rules_hash_required": true,
-    "rules_hash_binds_resolution_source": true,
-    "explicit_reference_semantics_required": true,
-    "fail_closed": true,
-    "fuzzy_parse_authorizes_execution": false
-  },
-  "oracle": {
-    "provider": "Chainlink",
-    "product": "polymarket_public_rtds_chainlink_twap_sixty",
-    "transport_binding": "POLYMARKET_PUBLIC_RTDS_CHAINLINK_TWAP_SIXTY_V1",
-    "adapter": "scripts/v7_same_oracle_adapter.py",
-    "public_observability_source": "polymarket_rtds_chainlink_btc",
-    "authenticated_chainlink_data_streams": false,
-    "credentials_absent_behavior": "NOT_APPLICABLE_PUBLIC_RTDS_ONLY",
-    "resolution_source_from_contract": true,
-    "hardcoded_window_seconds": null,
-    "max_age_ns": 2000000000,
-    "continuity_states": [
-      "LIVE_CONTINUOUS",
-      "RECOVERED_SAME_ORACLE_SNAPSHOT",
-      "CONTINUITY_UNKNOWN"
-    ],
-    "unknown_continuity_behavior": "INVALID",
-    "exchange_price_may_replace_oracle": false,
-    "recovery_requires_same_oracle_provenance": true
-  },
-  "public_observability_transport": {
-    "provider": "Polymarket RTDS",
-    "websocket_origin": "wss://ws-live-data.polymarket.com",
-    "adapter": "scripts/v7_rtds_external_fair_monitor.py",
-    "chainlink_topic": "crypto_prices_twap_sixty",
-    "external_comparison_topic": "crypto_prices",
-    "credentials_required": false,
-    "execution_authority": "SHADOW_ZERO_AUTHORITY",
-    "may_authorize_contract_or_fair_execution": false,
-    "paid_chainlink_data_streams_in_scope": false
-  },
-  "external_venues": {
-    "instrument_type": "SPOT",
-    "venues": [
-      "BINANCE_SPOT",
-      "COINBASE_SPOT",
-      "BYBIT_SPOT"
-    ],
-    "min_healthy_sources": 2,
-    "max_age_ns": 1000000000,
-    "max_disagreement_bps": 50.0,
-    "single_venue_fallback": false,
-    "receive_time_authoritative": true,
-    "source_timestamps_diagnostic_only": true,
-    "persistent_event_driven": true,
-    "rest_polling_hft_trigger": false
-  },
-  "forward_evidence": {
-    "minimum_duration_seconds": 300,
-    "classification": "PILOT_ENGINEERING_VALIDATION_ONLY",
-    "economic_validation": false,
-    "promotion_authority": false,
-    "real_order_submission": false
-  },
-  "causality": {
-    "causal_cut_required": true,
-    "invariant": "max_input_receive_monotonic_ns<=decision_monotonic_ns",
-    "deterministic_receive_order_replay": true,
-    "future_source_timestamp_rewritten": false,
-    "clock_anomaly_behavior": "QUARANTINE"
-  },
-  "fair_value": {
-    "live_shadow_cohorts": [
-      {
-        "id": "external_only_fair",
-        "uses_polymarket_price_as_feature": false,
-        "authority": "SHADOW"
-      },
-      {
-        "id": "hybrid_fair",
-        "uses_polymarket_price_as_feature": true,
-        "market_prior_logit_weight": 0.35,
-        "authority": "SHADOW"
-      }
-    ],
-    "benchmark_ladder": [
-      "PM_MID_DIAGNOSTIC_ONLY",
-      "ORACLE_ONLY",
-      "EXTERNAL_MEDIAN",
-      "STRUCTURAL",
-      "STRUCTURAL_PLUS_BRIDGE",
-      "FULL_EXTERNAL",
-      "CHAMPION",
-      "CHALLENGER"
-    ],
-    "pm_mid_directional_fallback": false,
-    "pure_external_benchmark_required": true,
-    "yes_no_complementarity_required": true,
-    "probability_bounds_required": true,
-    "default_model_mature": false,
-    "settlement_model_family": "btc_5m_settlement_margin_linear_v1",
-    "settlement_feature_schema": "btc-5m-settlement-margin-causal-v1",
-    "immutable_model_artifact_required": true,
-    "missing_or_invalid_artifact_behavior": "FAIR_INVALID_NO_NEW_RISK",
-    "runtime_parameter_source": "IMMUTABLE_MODEL_ARTIFACT_ONLY",
-    "champion_pointer": "runs/paper_v7_live/external_fair/model_registry/fair_value_champion.json",
-    "challenger_pointer": "runs/paper_v7_live/external_fair/model_registry/fair_value_challenger.json",
-    "max_age_ns": 1000000000,
-    "uncertainty": {
-      "z": 1.64,
-      "max_probability_width": 0.25,
-      "components": [
-        "PARAMETER",
-        "ORACLE_BRIDGE",
-        "CALIBRATION",
-        "VENUE_DISAGREEMENT",
-        "JUMP",
-        "MODEL_DRIFT"
-      ],
-      "execution_uncertainty_is_separate": true
-    },
-    "microstructure": {
-      "enabled": true,
-      "challenger_only_initially": true,
-      "bounded_logit_adjustment": 0.25,
-      "may_dominate_structural_probability": false
-    }
-  },
   "cancel_overlay": {
-    "implemented": true,
-    "enabled": true,
     "authority": "PAPER",
-    "robust_capture_floor_per_share": 0.0,
     "bypass_min_quote_lifetime_for_critical_cancel": true,
-    "external_event_can_trigger_without_pm_event": true,
     "critical_reasons": [
       "FAIR_SHOCK",
       "ORACLE_INVALID",
@@ -171,104 +15,339 @@
       "MODEL_INVALID",
       "RISK",
       "KILL"
+    ],
+    "enabled": true,
+    "external_event_can_trigger_without_pm_event": true,
+    "implemented": true,
+    "robust_capture_floor_per_share": 0.0
+  },
+  "causality": {
+    "causal_cut_required": true,
+    "clock_anomaly_behavior": "QUARANTINE",
+    "deterministic_receive_order_replay": true,
+    "future_source_timestamp_rewritten": false,
+    "invariant": "max_input_receive_monotonic_ns<=decision_monotonic_ns"
+  },
+  "component": "settlement_aware_external_fair",
+  "contract_registry": {
+    "explicit_reference_semantics_required": true,
+    "fail_closed": true,
+    "fuzzy_parse_authorizes_execution": false,
+    "parser_version": "btc-updown-chainlink-twap-v1",
+    "path": "runs/paper_v7_live/external_fair/contract_registry.json",
+    "rules_hash_binds_resolution_source": true,
+    "rules_hash_required": true,
+    "verified_templates_only": true
+  },
+  "enabled": true,
+  "execution_authority": "SHADOW_ZERO_AUTHORITY",
+  "external_venues": {
+    "instrument_type": "SPOT",
+    "max_age_ns": 1000000000,
+    "max_disagreement_bps": 50.0,
+    "min_healthy_sources": 2,
+    "persistent_event_driven": true,
+    "receive_time_authoritative": true,
+    "rest_polling_hft_trigger": false,
+    "single_venue_fallback": false,
+    "source_timestamps_diagnostic_only": true,
+    "venues": [
+      "BINANCE_SPOT",
+      "COINBASE_SPOT",
+      "BYBIT_SPOT"
     ]
   },
+  "fair_value": {
+    "benchmark_ladder": [
+      "PM_MID_DIAGNOSTIC_ONLY",
+      "ORACLE_ONLY",
+      "EXTERNAL_MEDIAN",
+      "STRUCTURAL",
+      "STRUCTURAL_PLUS_BRIDGE",
+      "FULL_EXTERNAL",
+      "CHAMPION",
+      "CHALLENGER"
+    ],
+    "challenger_pointer": "runs/paper_v7_live/external_fair/model_registry/fair_value_challenger.json",
+    "champion_pointer": "runs/paper_v7_live/external_fair/model_registry/fair_value_champion.json",
+    "default_model_mature": false,
+    "immutable_model_artifact_required": true,
+    "live_shadow_cohorts": [
+      {
+        "authority": "SHADOW",
+        "id": "external_only_fair",
+        "uses_polymarket_price_as_feature": false
+      },
+      {
+        "authority": "SHADOW",
+        "id": "hybrid_fair",
+        "market_prior_logit_weight": 0.35,
+        "uses_polymarket_price_as_feature": true
+      }
+    ],
+    "max_age_ns": 1000000000,
+    "microstructure": {
+      "bounded_logit_adjustment": 0.25,
+      "challenger_only_initially": true,
+      "enabled": true,
+      "may_dominate_structural_probability": false
+    },
+    "missing_or_invalid_artifact_behavior": "FAIR_INVALID_NO_NEW_RISK",
+    "pm_mid_directional_fallback": false,
+    "probability_bounds_required": true,
+    "pure_external_benchmark_required": true,
+    "runtime_parameter_source": "IMMUTABLE_MODEL_ARTIFACT_ONLY",
+    "settlement_feature_schema": "btc-5m-settlement-margin-causal-v1",
+    "settlement_model_family": "btc_5m_settlement_margin_linear_v1",
+    "uncertainty": {
+      "components": [
+        "PARAMETER",
+        "ORACLE_BRIDGE",
+        "CALIBRATION",
+        "VENUE_DISAGREEMENT",
+        "JUMP",
+        "MODEL_DRIFT"
+      ],
+      "execution_uncertainty_is_separate": true,
+      "max_probability_width": 0.25,
+      "z": 1.64
+    },
+    "yes_no_complementarity_required": true
+  },
+  "forward_evidence": {
+    "classification": "PILOT_ENGINEERING_VALIDATION_ONLY",
+    "economic_validation": false,
+    "minimum_duration_seconds": 300,
+    "promotion_authority": false,
+    "real_order_submission": false
+  },
+  "gate_classes": {
+    "A_HARD_CORRECTNESS_SAFETY": {
+      "examples": [
+        "INVALID_CONTRACT",
+        "WRONG_OUTCOME_MAPPING",
+        "FUTURE_DATA",
+        "INVALID_L2",
+        "SELF_CROSS",
+        "RISK",
+        "KILL",
+        "ORACLE_UNKNOWN",
+        "FEE_UNKNOWN"
+      ],
+      "may_block_paper": true
+    },
+    "B_ECONOMIC_MATURITY": {
+      "examples": [
+        "INSUFFICIENT_FILLS",
+        "INSUFFICIENT_EVENTS",
+        "WEAK_SIGNIFICANCE",
+        "NEGATIVE_2X_STRESS",
+        "SHORT_FORWARD_HISTORY"
+      ],
+      "may_block_paper": true,
+      "reported_as": "ECONOMIC_CONFIDENCE"
+    },
+    "C_FUTURE_REAL_MONEY": {
+      "in_scope": false,
+      "may_block_paper": false
+    }
+  },
+  "hot_path": {
+    "database": false,
+    "filesystem": false,
+    "global_decision_mutex": false,
+    "hot_model_loading": false,
+    "python": false,
+    "remote_model_inference": false,
+    "rest": false,
+    "synchronous_logging": false,
+    "unbounded_queue": false
+  },
+  "incumbent_policy": {
+    "keep_healthy_incumbent_running": true,
+    "mutate_incumbent_worktree": false,
+    "simultaneous_blue_green_execution": false
+  },
   "maker": {
-    "external_fair_repricing_implemented": true,
     "authority": "PAPER",
+    "economic_maturity_may_block_paper": true,
+    "economic_validation_requires_fill_conditioned_evidence": true,
+    "execution_evidence_maturity": "COLD_START",
+    "execution_model_separate_from_fair_value": true,
     "external_fair_enabled_for_live_quotes": false,
+    "external_fair_repricing_implemented": true,
+    "inventory_skew_remains_active": true,
+    "pm_mid_directional_weight": 0.0,
     "pm_state_role": [
       "BOOK",
       "QUEUE",
       "FILLABILITY",
       "TOXICITY",
       "PLACEMENT"
+    ]
+  },
+  "oracle": {
+    "adapter": "scripts/v7_same_oracle_adapter.py",
+    "authenticated_chainlink_data_streams": false,
+    "continuity_states": [
+      "LIVE_CONTINUOUS",
+      "RECOVERED_SAME_ORACLE_SNAPSHOT",
+      "CONTINUITY_UNKNOWN"
     ],
-    "pm_mid_directional_weight": 0.0,
-    "inventory_skew_remains_active": true,
-    "execution_model_separate_from_fair_value": true,
-    "execution_evidence_maturity": "COLD_START",
-    "economic_validation_requires_fill_conditioned_evidence": true,
-    "economic_maturity_may_block_paper": true
+    "credentials_absent_behavior": "NOT_APPLICABLE_PUBLIC_RTDS_ONLY",
+    "exchange_price_may_replace_oracle": false,
+    "hardcoded_window_seconds": null,
+    "max_age_ns": 2000000000,
+    "product": "polymarket_public_rtds_chainlink_twap_sixty",
+    "provider": "Chainlink",
+    "public_observability_source": "polymarket_rtds_chainlink_btc",
+    "recovery_requires_same_oracle_provenance": true,
+    "resolution_source_from_contract": true,
+    "transport_binding": "POLYMARKET_PUBLIC_RTDS_CHAINLINK_TWAP_SIXTY_V1",
+    "unknown_continuity_behavior": "INVALID"
+  },
+  "paper_exploration": {
+    "active_contract_families": [
+      "BTC_USD_UPDOWN_5M"
+    ],
+    "allow_immature_evidence": true,
+    "authority": "PAPER_EXPLORATION",
+    "enabled": true,
+    "max_capital_fraction": 0.0025,
+    "promotion_credit": false,
+    "real_money_authority": false,
+    "require_arrival_book_revalidation": true,
+    "require_verified_settlement": true
+  },
+  "paper_only": true,
+  "promotion": {
+    "automatic_promotion": false,
+    "calibration_slope_range": [
+      0.75,
+      1.25
+    ],
+    "conditional_calibration_uncertainty_below_claimed_edge_required": true,
+    "day_block_lower_confidence_bound_required": true,
+    "edge_monotonicity_required": true,
+    "exact_code_sha_required": true,
+    "forward_shadow_must_be_frozen": true,
+    "maximum_ece": 0.05,
+    "maximum_mean_probability_interval_width": 0.2,
+    "minimum_conditional_calibration_contracts_per_bin": 30,
+    "minimum_forward_shadow_contracts": 50,
+    "minimum_oos_contracts": 100,
+    "minimum_policy_forward_oos_trades": 300,
+    "minimum_probability_interval_bin_consistency": 0.8,
+    "minimum_probability_interval_bin_size": 3,
+    "minimum_probability_interval_bins": 5,
+    "minimum_settlement_labeled_contracts": 2500,
+    "minimum_settlement_labeled_days": 30,
+    "positive_conservative_net_replay_pnl_required": true,
+    "probability_interval_bins": 10,
+    "rules_scope_match_required": true,
+    "zero_causality_failures_required": true
+  },
+  "public_observability_transport": {
+    "adapter": "scripts/v7_rtds_external_fair_monitor.py",
+    "chainlink_topic": "crypto_prices_twap_sixty",
+    "credentials_required": false,
+    "execution_authority": "SHADOW_ZERO_AUTHORITY",
+    "external_comparison_topic": "crypto_prices",
+    "may_authorize_contract_or_fair_execution": false,
+    "paid_chainlink_data_streams_in_scope": false,
+    "provider": "Polymarket RTDS",
+    "websocket_origin": "wss://ws-live-data.polymarket.com"
+  },
+  "real_order_submission": false,
+  "schema_version": 1,
+  "scope": {
+    "active_contract_families": [
+      "BTC_USD_UPDOWN_5M"
+    ],
+    "external_fair_required_market_failure": "CANCEL_WITHDRAW_NO_NEW_RISK",
+    "future_inactive_contract_families": [
+      "ETH_USD_UPDOWN",
+      "SOL_USD_UPDOWN",
+      "CRYPTO_15M",
+      "CRYPTO_4H"
+    ],
+    "unsupported_market_behavior": "INCUMBENT_V7_UNCHANGED"
   },
   "taker": {
-    "native_v7_implemented": true,
-    "authority": "SHADOW",
-    "enabled_for_execution": false,
-    "counterfactual_enabled": true,
-    "economic_model": "HOLD_TO_SETTLEMENT",
     "authoritative_fee_required": true,
-    "unknown_fee_behavior": "NO_TAKE",
-    "minimum_entry_tte_seconds": 5.0,
+    "authority": "SHADOW",
+    "base_execution_risk_per_share": 0.0005,
+    "counterfactual_enabled": true,
+    "depth_survival_fraction": 0.75,
+    "economic_model": "HOLD_TO_SETTLEMENT",
+    "enabled_for_execution": false,
+    "fractional_kelly": 0.1,
+    "immature_exploration_capital_fraction": 0.0025,
+    "latency_risk_per_second": 0.001,
+    "max_depth_fraction": 0.5,
+    "max_market_capital_fraction": 0.02,
     "maximum_entry_tte_seconds": 300.0,
+    "maximum_model_market_disagreement": 0.2,
+    "minimum_entry_tte_seconds": 5.0,
+    "minimum_robust_ev_per_share": 0.001,
+    "native_v7_implemented": true,
+    "paper_tif": "FAK",
+    "self_cross_policy": "CANCEL_CONFIRM_CANONICAL_STATE_THEN_TAKE",
     "tte_bucket_policy": [
       {
+        "action": "FORECAST_ONLY",
+        "execution_risk_per_share": 0.0015,
         "id": "300_180",
-        "minimum_seconds": 180.0,
         "maximum_seconds": 300.0,
-        "action": "FORECAST_ONLY",
         "minimum_robust_ev_per_share": 0.002,
-        "execution_risk_per_share": 0.0015
+        "minimum_seconds": 180.0
       },
       {
+        "action": "TAKER_SHADOW",
+        "execution_risk_per_share": 0.001,
         "id": "180_60",
-        "minimum_seconds": 60.0,
         "maximum_seconds": 180.0,
-        "action": "TAKER_SHADOW",
         "minimum_robust_ev_per_share": 0.002,
-        "execution_risk_per_share": 0.001
+        "minimum_seconds": 60.0
       },
       {
+        "action": "TAKER_SHADOW",
+        "execution_risk_per_share": 0.0005,
         "id": "60_15",
-        "minimum_seconds": 15.0,
         "maximum_seconds": 60.0,
-        "action": "TAKER_SHADOW",
         "minimum_robust_ev_per_share": 0.001,
-        "execution_risk_per_share": 0.0005
+        "minimum_seconds": 15.0
       },
       {
-        "id": "15_5",
-        "minimum_seconds": 5.0,
-        "maximum_seconds": 15.0,
         "action": "TAKER_SHADOW",
+        "execution_risk_per_share": 0.002,
+        "id": "15_5",
+        "maximum_seconds": 15.0,
         "minimum_robust_ev_per_share": 0.0025,
-        "execution_risk_per_share": 0.002
+        "minimum_seconds": 5.0
       },
       {
-        "id": "under_5",
-        "minimum_seconds": 0.0,
-        "maximum_seconds": 5.0,
         "action": "FORECAST_ONLY",
+        "execution_risk_per_share": 0.01,
+        "id": "under_5",
+        "maximum_seconds": 5.0,
         "minimum_robust_ev_per_share": 0.01,
-        "execution_risk_per_share": 0.01
+        "minimum_seconds": 0.0
       }
     ],
-    "maximum_model_market_disagreement": 0.20,
-    "minimum_robust_ev_per_share": 0.001,
-    "max_depth_fraction": 0.5,
-    "depth_survival_fraction": 0.75,
-    "base_execution_risk_per_share": 0.0005,
-    "latency_risk_per_second": 0.001,
-    "fractional_kelly": 0.1,
-    "max_market_capital_fraction": 0.02,
-    "immature_exploration_capital_fraction": 0.0025,
-    "self_cross_policy": "CANCEL_CONFIRM_CANONICAL_STATE_THEN_TAKE",
-    "paper_tif": "FAK"
+    "unknown_fee_behavior": "NO_TAKE"
+  },
+  "training": {
+    "calibration": "PLATT_INITIAL",
+    "embargo_seconds": 60,
+    "random_shuffle": false,
+    "refit_creates": "CHALLENGER",
+    "refit_min_new_resolved_contracts": 20,
+    "refit_promotes": false,
+    "statistical_unit": "CONTRACT_TTE_BUCKET",
+    "walk_forward": "EXPANDING"
   },
   "unified_action": {
-    "space": [
-      "MAKE",
-      "TAKE",
-      "CANCEL",
-      "WITHDRAW",
-      "NOTHING"
-    ],
-    "purposes": [
-      "ALPHA",
-      "INVENTORY_REDUCTION",
-      "RISK",
-      "LIQUIDATION"
-    ],
     "priority": [
       "KILL",
       "DANGEROUS_CANCEL",
@@ -278,72 +357,22 @@
       "POSITIVE_ROBUST_MAKE",
       "NOTHING"
     ],
-    "single_oms": true,
-    "single_inventory_truth": true,
-    "single_capital_allocator": true,
-    "single_ledger_writer": true
-  },
-  "training": {
-    "statistical_unit": "CONTRACT_TTE_BUCKET",
-    "random_shuffle": false,
-    "walk_forward": "EXPANDING",
-    "embargo_seconds": 60,
-    "calibration": "PLATT_INITIAL",
-    "refit_min_new_resolved_contracts": 20,
-    "refit_creates": "CHALLENGER",
-    "refit_promotes": false
-  },
-  "promotion": {
-    "automatic_promotion": false,
-    "minimum_settlement_labeled_days": 30,
-    "minimum_settlement_labeled_contracts": 2500,
-    "minimum_policy_forward_oos_trades": 300,
-    "minimum_conditional_calibration_contracts_per_bin": 30,
-    "day_block_lower_confidence_bound_required": true,
-    "conditional_calibration_uncertainty_below_claimed_edge_required": true,
-    "minimum_oos_contracts": 100,
-    "minimum_forward_shadow_contracts": 50,
-    "forward_shadow_must_be_frozen": true,
-    "maximum_ece": 0.05,
-    "calibration_slope_range": [
-      0.75,
-      1.25
+    "purposes": [
+      "ALPHA",
+      "INVENTORY_REDUCTION",
+      "RISK",
+      "LIQUIDATION"
     ],
-    "probability_interval_bins": 10,
-    "minimum_probability_interval_bin_size": 3,
-    "minimum_probability_interval_bins": 5,
-    "minimum_probability_interval_bin_consistency": 0.8,
-    "maximum_mean_probability_interval_width": 0.2,
-    "positive_conservative_net_replay_pnl_required": true,
-    "edge_monotonicity_required": true,
-    "zero_causality_failures_required": true,
-    "exact_code_sha_required": true,
-    "rules_scope_match_required": true
-  },
-  "gate_classes": {
-    "A_HARD_CORRECTNESS_SAFETY": {
-      "may_block_paper": true,
-      "examples": ["INVALID_CONTRACT", "WRONG_OUTCOME_MAPPING", "FUTURE_DATA", "INVALID_L2", "SELF_CROSS", "RISK", "KILL", "ORACLE_UNKNOWN", "FEE_UNKNOWN"]
-    },
-    "B_ECONOMIC_MATURITY": {
-      "may_block_paper": true,
-      "reported_as": "ECONOMIC_CONFIDENCE",
-      "examples": ["INSUFFICIENT_FILLS", "INSUFFICIENT_EVENTS", "WEAK_SIGNIFICANCE", "NEGATIVE_2X_STRESS", "SHORT_FORWARD_HISTORY"]
-    },
-    "C_FUTURE_REAL_MONEY": {
-      "may_block_paper": false,
-      "in_scope": false
-    }
-  },
-  "hot_path": {
-    "python": false,
-    "rest": false,
-    "filesystem": false,
-    "database": false,
-    "synchronous_logging": false,
-    "remote_model_inference": false,
-    "hot_model_loading": false,
-    "unbounded_queue": false,
-    "global_decision_mutex": false
+    "single_capital_allocator": true,
+    "single_inventory_truth": true,
+    "single_ledger_writer": true,
+    "single_oms": true,
+    "space": [
+      "MAKE",
+      "TAKE",
+      "CANCEL",
+      "WITHDRAW",
+      "NOTHING"
+    ]
   }
 }
