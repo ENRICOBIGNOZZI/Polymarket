@@ -1,0 +1,367 @@
+name: TEMP V7 PAPER probe economic repair
+
+on:
+  push:
+    branches: [codex/v7-paper-probe-deploy-20260904]
+    paths: [.github/workflows/tmp-v7-paper-probe-economic-repair.yml]
+
+permissions:
+  contents: write
+
+concurrency:
+  group: v7-paper-probe-economic-repair
+  cancel-in-progress: false
+
+jobs:
+  repair:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          ref: codex/v7-paper-probe-deploy-20260904
+          fetch-depth: 0
+
+      - name: Apply causal PAPER economics and immutable-ref audit repairs
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+          import json
+          import re
+
+          def replace(path: str, old: str, new: str, count: int = 1) -> None:
+              p = Path(path)
+              text = p.read_text(encoding="utf-8")
+              if old not in text:
+                  raise SystemExit(f"missing anchor in {path}: {old[:100]!r}")
+              p.write_text(text.replace(old, new, count), encoding="utf-8")
+
+          # Mutable work branches are governed by the dedicated branch-hygiene
+          # workflow. They cannot be part of an immutable runtime snapshot,
+          # otherwise the act of opening a repair branch makes its own CI fail.
+          path = "scripts/v7_surface_classification.py"
+          replace(path,
+          '''The manifest is an audit snapshot.  It covers every tracked or intended-to-be-
+          tracked path, every branch/tag/remote-tracking ref, every checked-in schema and
+          workflow, and every long-lived process/runtime path encoded by the canonical
+          launcher.  Classification never depends on words such as ``old`` or
+          ``legacy`` alone.''',
+          '''The manifest is an immutable repository/runtime audit snapshot. It covers every
+          tracked or intended-to-be-tracked path, canonical branch identity, immutable tag,
+          checked-in schema and workflow, and every long-lived process/runtime path encoded
+          by the canonical launcher. Mutable work branches are audited and retired by the
+          dedicated branch-hygiene workflow; allowing them to alter this snapshot would make
+          opening a review branch invalidate its own CI. Classification never depends on
+          words such as ``old`` or ``legacy`` alone.''')
+          p = Path(path)
+          text = p.read_text(encoding="utf-8")
+          pattern = re.compile(
+              r"def _refs\(root: Path\) -> list\[tuple\[str, str\]\]:\n"
+              r".*?\n\n\ndef equivalent_ref_surface_ids",
+              re.S,
+          )
+          replacement = '''CANONICAL_BRANCH_REFS = frozenset({
+              "refs/heads/main",
+              "refs/remotes/origin/main",
+              "refs/remotes/origin/HEAD",
+          })
+
+
+def is_audited_ref(ref: str) -> bool:
+              """Return whether a ref belongs in the immutable V7 surface snapshot.
+
+              Branches other than main are mutable review/operations state. Their ancestry,
+              open-PR protection and deletion are owned by v7_prune_merged_branches.py.
+              Immutable tags remain here because they are exact rollback/provenance surfaces.
+              """
+              return ref in CANONICAL_BRANCH_REFS or ref.startswith("refs/tags/")
+
+
+def _refs(root: Path) -> list[tuple[str, str]]:
+              lines = _git(
+                  root, "for-each-ref", "--format=%(refname)%09%(objectname)",
+                  "refs/heads", "refs/remotes", "refs/tags",
+              ).splitlines()
+              rows = [tuple(line.split("\\t", 1)) for line in lines if "\\t" in line]
+              return sorted(row for row in rows if is_audited_ref(row[0]))
+
+
+def equivalent_ref_surface_ids'''
+          text, substitutions = pattern.subn(replacement, text, count=1)
+          if substitutions != 1:
+              raise SystemExit("failed to replace mutable-ref enumeration")
+          p.write_text(text, encoding="utf-8")
+
+          replace(path,
+          '''    if ref in {
+                  "refs/heads/main",
+                  "refs/heads/codex/v7-unified-system-legacy-eradication",
+                  "refs/remotes/origin/codex/v7-unified-system-legacy-eradication",
+                  "refs/remotes/origin/main", "refs/remotes/origin/HEAD",
+              }:
+                  return "KEEP_CANONICAL", "active migration or canonical upstream ref", "classified"''',
+          '''    if ref in CANONICAL_BRANCH_REFS:
+                  return "KEEP_CANONICAL", "canonical upstream branch identity", "classified"''')
+
+          test_path = "tests/test_v7_surface_classification.py"
+          replace(test_path,
+          '''    build_manifest,
+              equivalent_ref_surface_ids,
+              validate_manifest,
+          )''',
+          '''    build_manifest,
+              equivalent_ref_surface_ids,
+              is_audited_ref,
+              validate_manifest,
+          )''')
+          replace(test_path,
+          '''    def test_research_authority_injection_fails_closed(self) -> None:
+          ''',
+          '''    def test_mutable_work_refs_are_delegated_to_branch_hygiene(self) -> None:
+                  self.assertTrue(is_audited_ref("refs/heads/main"))
+                  self.assertTrue(is_audited_ref("refs/remotes/origin/main"))
+                  self.assertTrue(is_audited_ref("refs/tags/v7-paper-cutover-example"))
+                  for ref in (
+                      "refs/heads/codex/v7-review",
+                      "refs/remotes/origin/ops/recovery",
+                      "refs/remotes/origin/tmp/diagnostic",
+                      "refs/remotes/origin/research/challenger",
+                  ):
+                      self.assertFalse(is_audited_ref(ref), ref)
+                  workflow = (ROOT / ".github/workflows/v7-merged-branch-hygiene.yml").read_text()
+                  self.assertIn("--include-merged-pr-branches", workflow)
+                  self.assertIn("--include-closed-operational-branches", workflow)
+
+              def test_research_authority_injection_fails_closed(self) -> None:
+          ''')
+
+          # Venue-feasible but still tiny PAPER probes: 5-share CLOB minimums
+          # frequently require more than the former $2 cap around a 50c market.
+          config_path = Path("config/v7_external_fair.json")
+          config = json.loads(config_path.read_text(encoding="utf-8"))
+          probe = config["paper_exploration_probe"]
+          probe["max_capital_fraction"] = 0.0025
+          probe["max_notional_usd"] = 10.0
+          probe["max_loss_usd"] = 10.0
+          probe["minimum_model_market_disagreement"] = 0.05
+          config_path.write_text(json.dumps(config, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+
+          router_path = "scripts/v7_external_fair_paper_router.py"
+          replace(router_path,
+          '''        "max_capital_fraction": (0.00001, 0.0005),
+                  "max_notional_usd": (0.25, 2.0),
+                  "max_loss_usd": (0.25, 2.0),''',
+          '''        "max_capital_fraction": (0.00001, 0.0025),
+                  "max_notional_usd": (0.25, 10.0),
+                  "max_loss_usd": (0.25, 10.0),''')
+          replace(router_path,
+          '''        current_positions.update(restored_positions)
+                  self.state["positions"] = current_positions
+          ''',
+          '''        current_positions.update(restored_positions)
+                  self.state["positions"] = current_positions
+                  committed = sum(
+                      float(position.get("entry_cost") or 0.0)
+                      + float(position.get("entry_fee") or 0.0)
+                      for position in current_positions.values()
+                      if isinstance(position, dict) and not position.get("settled")
+                  )
+                  self.state["cash"] = max(
+                      0.0,
+                      float(self.state.get("starting_capital") or 0.0)
+                      + float(self.state.get("counterfactual_realized_pnl") or 0.0)
+                      - committed,
+                  )
+          ''')
+          replace(router_path,
+          '''        virtual_equity = starting_capital = float(self.state.get("starting_capital") or 0.0)
+                  virtual_equity += float(self.state.get("counterfactual_realized_pnl") or 0.0)
+                  virtual_equity += sum(
+                      float(position.get("executable_value") or 0.0)
+                      - float(position.get("entry_cost") or 0.0)
+                      - float(position.get("entry_fee") or 0.0)
+                      for position in positions.values() if not position.get("settled")
+                  )''',
+          '''        starting_capital = float(self.state.get("starting_capital") or 0.0)
+                  realized_pnl = float(self.state.get("counterfactual_realized_pnl") or 0.0)
+                  committed = sum(
+                      float(position.get("entry_cost") or 0.0)
+                      + float(position.get("entry_fee") or 0.0)
+                      for position in positions.values() if not position.get("settled")
+                  )
+                  cash = max(0.0, starting_capital + realized_pnl - committed)
+                  self.state["cash"] = cash
+                  virtual_equity = cash + sum(
+                      float(position.get("executable_value") or 0.0)
+                      for position in positions.values() if not position.get("settled")
+                  )''')
+          replace(router_path,
+          '''            "orders_submitted": int(self.state.get("orders") or 0), "fills": int(self.state.get("fills") or 0),
+                  "counterfactual_fills": int(self.state.get("counterfactual_fills") or 0),''',
+          '''            "orders_submitted": int(self.state.get("counterfactual_fills") or 0),
+                  "fills": int(self.state.get("counterfactual_fills") or 0),
+                  "counterfactual_fills": int(self.state.get("counterfactual_fills") or 0),''')
+          replace(router_path,
+          '''            "counterfactual_equity": virtual_equity,
+                  "open_positions": 0, "realized_pnl": 0.0,
+                  "cash": starting_capital, "equity": starting_capital,
+                  "counterfactual_peak_equity": peak, "counterfactual_drawdown": drawdown,
+                  "peak_equity": starting_capital, "drawdown": 0.0, "killed": killed,''',
+          '''            "counterfactual_equity": virtual_equity,
+                  "open_positions": open_positions, "realized_pnl": realized_pnl,
+                  "cash": cash, "equity": virtual_equity,
+                  "counterfactual_peak_equity": peak, "counterfactual_drawdown": drawdown,
+                  "peak_equity": peak, "drawdown": drawdown, "killed": killed,''')
+          replace(router_path,
+          '''            "actions": {"MAKE": 0, "TAKE": 0, "CANCEL": 0,
+                              "WITHDRAW": 0, "NOTHING": int(self.state.get("nothing") or 0)},''',
+          '''            "actions": {
+                      "MAKE": 0,
+                      "TAKE": int(self.state.get("counterfactual_fills") or 0),
+                      "CANCEL": 0,
+                      "WITHDRAW": 0,
+                      "NOTHING": int(self.state.get("nothing") or 0),
+                  },''')
+          replace(router_path,
+          '''            "probe_candidates": int(self.state.get("probe_candidates") or 0),
+                  "probe_fills": int(self.state.get("probe_fills") or 0),
+              })''',
+          '''            "probe_candidates": int(self.state.get("probe_candidates") or 0),
+                  "probe_fills": int(self.state.get("probe_fills") or 0),
+                  "paper_exploration": {
+                      "enabled": self.probe_policy is not None,
+                      "authority": "COORDINATOR_RECEIPT_ONLY",
+                      "real_money_authority": False,
+                      "candidate_attempts": int(self.state.get("candidates") or 0),
+                      "orders_submitted": int(self.state.get("counterfactual_fills") or 0),
+                      "fills": int(self.state.get("counterfactual_fills") or 0),
+                      "probe_candidates": int(self.state.get("probe_candidates") or 0),
+                      "probe_fills": int(self.state.get("probe_fills") or 0),
+                      "open_positions": open_positions,
+                      "realized_pnl": realized_pnl,
+                      "cash": cash,
+                      "equity": virtual_equity,
+                      "max_capital_fraction": (
+                          self.probe_policy.get("max_capital_fraction")
+                          if self.probe_policy is not None else 0.0
+                      ),
+                      "max_notional_usd": (
+                          self.probe_policy.get("max_notional_usd")
+                          if self.probe_policy is not None else 0.0
+                      ),
+                      "max_loss_usd": (
+                          self.probe_policy.get("max_loss_usd")
+                          if self.probe_policy is not None else 0.0
+                      ),
+                  },
+              })''')
+
+          opportunity_path = "scripts/v7_opportunity.py"
+          replace(opportunity_path,
+          '''CRYPTO_CONTEXT_FIELDS = {
+              "asset", "horizon", "contract_family", "settlement_semantic_hash",
+              "authority", "research_only",
+          }
+          ''',
+          '''CRYPTO_CONTEXT_FIELDS = {
+              "asset", "horizon", "contract_family", "settlement_semantic_hash",
+              "authority", "research_only",
+          }
+          MAX_PAPER_PROBE_LOSS_USD = 10.0
+          ''')
+          replace(opportunity_path,
+                  'or loss_cap > 2.0 + 1e-9',
+                  'or loss_cap > MAX_PAPER_PROBE_LOSS_USD + 1e-9')
+
+          # Update the existing regressions; no new tracked path is introduced.
+          test_path = "tests/test_v7_external_fair_paper_router.py"
+          replace(test_path, '        assert status["fills"] == 0\n        assert status["counterfactual_fills"] == 1',
+                             '        assert status["orders_submitted"] == 1\n        assert status["fills"] == 1\n        assert status["counterfactual_fills"] == 1', 1)
+          replace(test_path, '        assert status["fills"] == 0\n        assert status["counterfactual_fills"] == 1',
+                             '        assert status["orders_submitted"] == 1\n        assert status["fills"] == 1\n        assert status["counterfactual_fills"] == 1', 1)
+          replace(test_path, '        assert status["fills"] == 0\n        (run_root / "control" / "CUTOVER_DRAIN").unlink()',
+                             '        assert status["orders_submitted"] == 1\n        assert status["fills"] == 1\n        (run_root / "control" / "CUTOVER_DRAIN").unlink()')
+          replace(test_path,
+          '''        assert status["counterfactual_pending_forecasts"] == 1
+                  assert status["model_mature"] is False''',
+          '''        assert status["counterfactual_pending_forecasts"] == 1
+                  assert status["open_positions"] == 1
+                  assert status["cash"] < status["counterfactual_equity"]
+                  assert status["paper_exploration"]["enabled"] is True
+                  assert status["paper_exploration"]["orders_submitted"] == 1
+                  assert status["paper_exploration"]["fills"] == 1
+                  assert status["paper_exploration"]["max_notional_usd"] == 10.0
+                  assert status["model_mature"] is False''')
+          replace(test_path,
+          '''        assert failing.state["counterfactual_fills"] == 1
+                  assert len(failing.state["positions"]) == 1''',
+          '''        assert failing.state["counterfactual_fills"] == 1
+                  assert len(failing.state["positions"]) == 1
+                  assert failing.state["cash"] < failing.state["starting_capital"]''')
+
+          test_path = "tests/test_v7_paper_exploration_authority.py"
+          replace(test_path,
+                  'if mutation=="loss": value["exploration"]["maximum_probe_loss"]=2.01; value["exploration"]["probe_loss_cap"]=2.01',
+                  'if mutation=="loss": value["exploration"]["maximum_probe_loss"]=10.01; value["exploration"]["probe_loss_cap"]=10.01')
+          replace(test_path,
+          '''def test_live_router_has_distinct_probe_candidate_and_arrival_revalidation_paths():
+          ''',
+          '''def test_probe_budget_is_venue_feasible_at_five_share_minimum():
+              import v7_external_fair_paper_router as router
+              policy=json.loads((ROOT/"config/v7_external_fair.json").read_text())
+              probe=router.validate_probe_policy(policy["paper_exploration_probe"])
+              now=router.time.monotonic_ns()
+              yes=router.Book("yes",((.49,100.0),),((.50,100.0),),.01,5.0,1000,1000,"y-mid")
+              no=router.Book("no",((.49,100.0),),((.51,100.0),),.01,5.0,1000,1000,"n-mid")
+              status={
+                  "paper_only":True,"authenticated_execution":False,"real_order_submission":False,
+                  "contract":{"verified":True,"rules_hash_recognized":True},
+                  "settlement_reference":{"valid":True},
+                  "oracle":{"healthy":True,"continuity":"LIVE_CONTINUOUS"},
+                  "external":{"healthy":True},
+                  "market":{"yes_token":"yes","no_token":"no","fee_schedule":{"rate":0.0,"exponent":1,"takerOnly":True}},
+                  "fair":{"valid":True,"paper_exploration_bootstrap":True,"promotion_eligible":False,"real_money_authority":False,"probability_model_id":"btc_m5_same_oracle_diffusion_bootstrap_v1","probability_model_hash":"f"*64,"yes":.57,"lower":.45,"upper":.69,"tte_seconds":120.0,"calculated_monotonic_ns":now-1,"valid_until_monotonic_ns":now+10_000_000_000},
+              }
+              rows=router.paper_probe_candidates(status,{"yes":yes,"no":no},policy["taker"],probe)
+              assert rows and rows[0]["outcome"]=="YES"
+              with tempfile.TemporaryDirectory() as td:
+                  paper=router.PaperRouter(Path(td),"a"*40,ROOT/"config/v7_external_fair.json","https://clob.invalid","https://gamma.invalid")
+                  assert paper.order_size(rows[0]) >= 5.0
+                  assert probe["max_notional_usd"] == 10.0
+                  assert probe["max_loss_usd"] == 10.0
+
+
+def test_live_router_has_distinct_probe_candidate_and_arrival_revalidation_paths():
+          ''')
+          PY
+
+          # The current workflow is a one-shot builder, not a retained runtime surface.
+          git rm .github/workflows/tmp-v7-paper-probe-economic-repair.yml
+
+      - name: Run focused regressions before publishing the repair
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 -m pytest -q \
+            tests/test_v7_surface_classification.py \
+            tests/test_v7_final_convergence_audit.py \
+            tests/test_v7_external_fair_paper_router.py \
+            tests/test_v7_paper_exploration_authority.py \
+            tests/test_v7_opportunity.py \
+            tests/test_v7_global_portfolio_coordinator.py \
+            tests/test_v7_ledger_spool.py \
+            tests/test_v7_portfolio_guard.py \
+            tests/test_monitoring_v7_external_fair.py \
+            tests/test_monitoring_v7_native.py
+
+      - name: Commit the coherent repair branch
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name ENRICOBIGNOZZI
+          git config user.email 88671442+ENRICOBIGNOZZI@users.noreply.github.com
+          git add scripts tests config
+          git commit -m 'fix: make bounded BTC M5 PAPER probes executable and observable'
+          git push origin HEAD:codex/v7-paper-probe-deploy-20260904
