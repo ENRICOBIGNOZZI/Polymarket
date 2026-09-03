@@ -50,6 +50,12 @@ jobs:
 
           test_path = Path("tests/test_v7_external_fair_paper_router.py")
           text = test_path.read_text(encoding="utf-8")
+          old_contract = '"contract": {"verified": True, "rules_hash_recognized": True},'
+          new_contract = '"contract": {"verified": True, "rules_hash_recognized": True, "rules_hash": "d" * 64},'
+          if old_contract not in text:
+              raise SystemExit("missing settlement-bound test contract fixture")
+          text = text.replace(old_contract, new_contract, 1)
+
           old_static = '''    assert "spool_event" not in source
               assert "v7_ledger_spool" not in source
           '''
