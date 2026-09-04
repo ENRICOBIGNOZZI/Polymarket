@@ -15,21 +15,33 @@ if constant in text:
 elif dynamic not in text:
     raise SystemExit("durable restore source precondition unavailable")
 
-c2d_counters = '''        self.state["counterfactual_fills"] = len(fills)
-        self.state["orders"] = int(self.state.get("orders") or 0) + len(fills)
-        self.state["fills"] = int(self.state.get("fills") or 0) + len(fills)
-        self.state["probe_fills"] = int(self.state.get("probe_fills") or 0) + sum(
-            int((row.get("metadata") or {}).get("paper_bootstrap_probe") is True)
-            for row in fills
+# c2d restored two evidence counters between counterfactual_fills and realized
+# PnL. Move them just after the realized-PnL reduction so the pinned patch can
+# match its historical anchor without losing either counter.
+layout = '''        self.state["counterfactual_fills"] = len(fills)
+        self.state["candidates"] = len(candidate_ids)
+        self.state["opportunity_sets"] = len(opportunity_ids)
+        self.state["counterfactual_realized_pnl"] = sum(
+'''
+normalized = '''        self.state["counterfactual_fills"] = len(fills)
+        self.state["counterfactual_realized_pnl"] = sum(
+'''
+if layout in text:
+    text = text.replace(layout, normalized, 1)
+    tail = '''            for row in fill_finals.values()
         )
-        self.state["counterfactual_realized_pnl"] = sum(
+        self.state["traded_markets"] = sorted({
 '''
-normalized_counters = '''        self.state["counterfactual_fills"] = len(fills)
-        self.state["counterfactual_realized_pnl"] = sum(
+    relocated = '''            for row in fill_finals.values()
+        )
+        self.state["candidates"] = len(candidate_ids)
+        self.state["opportunity_sets"] = len(opportunity_ids)
+        self.state["traded_markets"] = sorted({
 '''
-if c2d_counters in text:
-    text = text.replace(c2d_counters, normalized_counters, 1)
-elif normalized_counters not in text:
+    if tail not in text:
+        raise SystemExit("durable restore reduction tail unavailable")
+    text = text.replace(tail, relocated, 1)
+elif normalized not in text:
     raise SystemExit("durable restore counter precondition unavailable")
 
 SOURCE.write_text(text, encoding="utf-8")
