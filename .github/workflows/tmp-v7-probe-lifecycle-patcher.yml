@@ -21,6 +21,18 @@ jobs:
         with:
           ref: codex/v7-paper-probe-recovery-20260904
           fetch-depth: 0
+      - name: Normalize durable restore source
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          path=Path('scripts/v7_external_fair_paper_router.py')
+          text=path.read_text(encoding='utf-8')
+          old='                "market_mid_source": "LIVE_COMPLEMENT_CONSISTENT_CLOB_BATCH",\n'
+          new='                "market_mid_source": metadata.get("market_mid_source"),\n'
+          if old not in text:
+              raise SystemExit('durable restore source anchor missing')
+          path.write_text(text.replace(old,new,1),encoding='utf-8')
+          PY
       - name: Apply deterministic recovery patch
         run: python3 scripts/tmp_apply_v7_probe_lifecycle_recovery.py
       - name: Compile Python surfaces
