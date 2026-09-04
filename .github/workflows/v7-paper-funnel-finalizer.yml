@@ -1,0 +1,266 @@
+name: V7 PAPER funnel finalizer
+
+on:
+  push:
+    branches: [codex/v7-maker-ttl]
+    paths: [.github/workflows/v7-paper-funnel-finalizer.yml]
+
+permissions:
+  contents: write
+  actions: write
+
+concurrency:
+  group: v7-paper-funnel-finalizer
+  cancel-in-progress: false
+
+jobs:
+  finalize:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 75
+    env:
+      SERVER_HOST: ${{ vars.POLYMARKET_SERVER_HOST || '100.104.183.109' }}
+      SERVER_USER: ${{ vars.POLYMARKET_SERVER_USER || 'enrico' }}
+      SERVER_PORT: ${{ vars.POLYMARKET_SERVER_PORT || '22' }}
+      REPORT: diagnostics/v7_paper_funnel_finalizer.json
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          ref: codex/v7-maker-ttl
+          fetch-depth: 0
+      - name: Initialize report
+        run: |
+          mkdir -p diagnostics
+          python3 - <<'PY'
+          import json,time
+          from pathlib import Path
+          Path('diagnostics/v7_paper_funnel_finalizer.json').write_text(json.dumps({
+            'schema':'polymarket_v7_paper_funnel_finalizer_v1','started_at':int(time.time()),
+            'status':'STARTED','paper_only':True,'authenticated_execution':False,
+            'real_order_submission':False,'real_capital_at_risk':False,'stages':{}
+          },indent=2,sort_keys=True)+'\n')
+          PY
+      - name: Wait for prior repair controllers
+        env: {GH_TOKEN: "${{ github.token }}"}
+        shell: bash
+        run: |
+          set -euo pipefail
+          for _ in $(seq 1 120); do
+            busy="$(gh api "/repos/${GITHUB_REPOSITORY}/actions/runs?per_page=100" --jq '[.workflow_runs[] | select((.name=="V7 one-shot PAPER funnel repair" or .name=="V7 PAPER funnel repair supervisor") and (.status=="queued" or .status=="in_progress" or .status=="waiting" or .status=="pending"))] | length' 2>/dev/null || echo 0)"
+            [[ "$busy" == 0 ]] && break
+            sleep 10
+          done
+      - name: Resolve current canonical main and verify production fix
+        id: main
+        shell: bash
+        run: |
+          set -euo pipefail
+          git fetch --no-tags origin main
+          sha="$(git rev-parse origin/main)"
+          rm -rf /tmp/v7-final-main
+          git worktree add --detach /tmp/v7-final-main "$sha"
+          cd /tmp/v7-final-main
+          python3 - <<'PY'
+          from pathlib import Path
+          import json
+          router=Path('scripts/v7_external_fair_paper_router.py').read_text(encoding='utf-8')
+          config=json.loads(Path('config/v7_external_fair.json').read_text())
+          paper=json.loads(Path('config/paper_v7.json').read_text())
+          assert 'def wait_for_exploration_receipt' in router
+          assert 'process_global_portfolio_cut(self.root' in router, 'coordinator cut missing before receipt wait'
+          wait=router[router.index('def wait_for_exploration_receipt'):]
+          wait=wait[:wait.index('\n    def ',5)]
+          assert wait.index('process_global_portfolio_cut(self.root') < wait.index('while time.monotonic()')
+          exploration=config.get('paper_exploration') or {}
+          assert exploration.get('enabled') is True
+          assert exploration.get('authority')=='PAPER_EXPLORATION'
+          assert exploration.get('real_money_authority') is False
+          assert 'BTC_USD_UPDOWN_5M' in (exploration.get('active_contract_families') or [])
+          assert 0 < float(exploration.get('max_capital_fraction') or 0) <= .0025
+          budget=((paper.get('v7') or {}).get('component_observation_budget_fractions') or {}).get('crypto_informed_taker')
+          assert 0 < float(budget or 0) <= .0025
+          PY
+          python3 scripts/v7_cutover_contract.py --repository-root . --expected-head "$sha"
+          echo "sha=$sha" >> "$GITHUB_OUTPUT"
+          python3 - "$GITHUB_WORKSPACE/$REPORT" "$sha" <<'PY'
+          import json,sys,time
+          from pathlib import Path
+          p=Path(sys.argv[1]);d=json.loads(p.read_text());d['stages']['main_contract']={'ok':True,'sha':sys.argv[2],'at':int(time.time())};p.write_text(json.dumps(d,indent=2,sort_keys=True)+'\n')
+          PY
+      - name: Ensure exact-SHA Release and Debug are green
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SHA: ${{ steps.main.outputs.sha }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          green() {
+            gh api -H 'Accept: application/vnd.github+json' "/repos/${GITHUB_REPOSITORY}/commits/${SHA}/check-runs?per_page=100" --jq '[.check_runs[] | select((.name=="ci-v7-Release" or .name=="ci-v7-Debug") and .status=="completed" and .conclusion=="success") | .name] | unique | length' | grep -qx 2
+          }
+          green || gh workflow run ci.yml --ref main -f expected_sha="$SHA" || true
+          for _ in $(seq 1 240); do green && break; sleep 10; done
+          green
+          python3 - "$REPORT" "$SHA" <<'PY'
+          import json,sys,time
+          from pathlib import Path
+          p=Path(sys.argv[1]);d=json.loads(p.read_text());d['stages']['exact_sha_ci']={'ok':True,'sha':sys.argv[2],'release':True,'debug':True,'at':int(time.time())};p.write_text(json.dumps(d,indent=2,sort_keys=True)+'\n')
+          PY
+      - name: Select Tailscale mode
+        id: ts
+        env:
+          TS_AUTHKEY: ${{ secrets.TS_AUTHKEY }}
+          TS_OAUTH_CLIENT_ID: ${{ secrets.TS_OAUTH_CLIENT_ID }}
+          TS_OAUTH_SECRET: ${{ secrets.TS_OAUTH_SECRET }}
+        run: |
+          if [[ -n "${TS_AUTHKEY:-}" ]]; then mode=authkey
+          elif [[ -n "${TS_OAUTH_CLIENT_ID:-}" && -n "${TS_OAUTH_SECRET:-}" ]]; then mode=oauth
+          else exit 1; fi
+          echo "mode=$mode" >> "$GITHUB_OUTPUT"
+      - name: Join tailnet with auth key
+        if: steps.ts.outputs.mode == 'authkey'
+        uses: tailscale/github-action@780049a30b6ff5c378a9e7b389d15ece7a204888
+        with: {authkey: "${{ secrets.TS_AUTHKEY }}", ping: "${{ env.SERVER_HOST }}"}
+      - name: Join tailnet with OAuth
+        if: steps.ts.outputs.mode == 'oauth'
+        uses: tailscale/github-action@780049a30b6ff5c378a9e7b389d15ece7a204888
+        with:
+          oauth-client-id: ${{ secrets.TS_OAUTH_CLIENT_ID }}
+          oauth-secret: ${{ secrets.TS_OAUTH_SECRET }}
+          tags: ${{ vars.TS_TAGS || 'tag:ci' }}
+          ping: ${{ env.SERVER_HOST }}
+      - name: Configure SSH
+        env: {SSH_PRIVATE_KEY: "${{ secrets.POLYMARKET_SERVER_SSH_KEY }}"}
+        run: |
+          install -d -m 700 ~/.ssh
+          printf '%s\n' "$SSH_PRIVATE_KEY" > ~/.ssh/polymarket_finalizer
+          chmod 600 ~/.ssh/polymarket_finalizer
+          ssh-keyscan -T 5 -p "$SERVER_PORT" "$SERVER_HOST" > ~/.ssh/known_hosts
+      - name: Reconcile exact deployment and stale service
+        env: {SHA: "${{ steps.main.outputs.sha }}"}
+        shell: bash
+        run: |
+          set -euo pipefail
+          ssh_common=(-i ~/.ssh/polymarket_finalizer -o IdentitiesOnly=yes -o BatchMode=yes -o ConnectTimeout=10 -p "$SERVER_PORT")
+          ssh "${ssh_common[@]}" "$SERVER_USER@$SERVER_HOST" "SHA='$SHA' bash -s" <<'REMOTE'
+          set -euo pipefail
+          cd "$HOME/polymarket"
+          if [[ "$(uname -s)" == Darwin ]]; then
+            for candidate in /opt/homebrew/bin/brew /usr/local/bin/brew; do
+              if [[ -x "$candidate" ]]; then eval "$("$candidate" shellenv)"; break; fi
+            done
+          fi
+          git fetch --no-tags origin main
+          test "$(git rev-parse origin/main)" = "$SHA"
+          root="$HOME/polymarket/runs/paper_v7_live"
+          deployed="$(cat "$root/control/deployed_sha" 2>/dev/null || true)"
+          healthy=0
+          if [[ "$deployed" == "$SHA" ]]; then
+            healthy="$(python3 - "$root/control/runtime_status.json" "$SHA" <<'PY'
+          import json,os,sys,time
+          from pathlib import Path
+          try:
+              r=json.loads(Path(sys.argv[1]).read_text());pid=int(r.get('pid') or 0)
+              ok=(r.get('model_sha')==sys.argv[2] and r.get('state')=='running' and r.get('paper_only') is True and r.get('authenticated_execution') is False and r.get('real_order_submission') is False and r.get('real_capital_at_risk') is False and int(time.time())-int(r.get('timestamp') or 0)<=180)
+              if ok:os.kill(pid,0)
+              print(1 if ok else 0)
+          except Exception:print(0)
+          PY
+          )"
+          fi
+          if [[ "$healthy" != 1 ]]; then
+            updater="$(mktemp)";archiver="$(mktemp)";trap 'rm -f "$updater" "$archiver"' EXIT
+            git show "$SHA:ops/update_server_v7.sh" > "$updater"
+            git show "$SHA:scripts/v7_prepare_cutover_run_root.py" > "$archiver"
+            chmod 700 "$updater";chmod 600 "$archiver"
+            POLYMARKET_APP_DIR="$HOME/polymarket" POLYMARKET_CUTOVER_ARCHIVER="$archiver" EXPECTED_DEPLOY_SHA="$SHA" POLYMARKET_DEPLOY_REF=main POLYMARKET_RUNTIME_HEALTH_ATTEMPTS=600 bash "$updater"
+          fi
+          REMOTE
+          python3 - "$REPORT" "$SHA" <<'PY'
+          import json,sys,time
+          from pathlib import Path
+          p=Path(sys.argv[1]);d=json.loads(p.read_text());d['stages']['deployment']={'ok':True,'sha':sys.argv[2],'at':int(time.time())};p.write_text(json.dumps(d,indent=2,sort_keys=True)+'\n')
+          PY
+      - name: Observe forward funnel until activity or timeout
+        env: {SHA: "${{ steps.main.outputs.sha }}"}
+        shell: bash
+        run: |
+          set -euo pipefail
+          ssh_common=(-i ~/.ssh/polymarket_finalizer -o IdentitiesOnly=yes -o BatchMode=yes -o ConnectTimeout=10 -p "$SERVER_PORT")
+          mkdir -p /tmp/v7-samples
+          active=0
+          for i in $(seq 1 40); do
+            ssh "${ssh_common[@]}" "$SERVER_USER@$SERVER_HOST" "SHA='$SHA' bash -s" <<'REMOTE' > "/tmp/v7-samples/$i.json"
+          set -euo pipefail
+          python3 - <<'PY'
+          import collections,json,os,subprocess,time,urllib.request
+          from pathlib import Path
+          root=Path.home()/"polymarket/runs/paper_v7_live";sha=os.environ['SHA']
+          def load(p):
+              try:v=json.loads(p.read_text());return v if isinstance(v,dict) else {}
+              except Exception:return {}
+          runtime=load(root/'control/runtime_status.json');assert (root/'control/deployed_sha').read_text().strip()==sha
+          assert runtime.get('model_sha')==sha and runtime.get('state')=='running' and runtime.get('paper_only') is True
+          assert runtime.get('authenticated_execution') is False and runtime.get('real_order_submission') is False and runtime.get('real_capital_at_risk') is False
+          os.kill(int(runtime.get('pid') or 0),0)
+          metrics={};text=urllib.request.urlopen('http://127.0.0.1:9108/metrics',timeout=5).read().decode()
+          for line in text.splitlines():
+              if line.startswith(('polymarket_execution_','polymarket_runtime_pnl_usd','polymarket_v7_canonical_','polymarket_v7_health','polymarket_v7_execution_alive','polymarket_v7_ledger_valid','polymarket_v7_single_writer_ok','polymarket_v7_exact_sha_ok')):
+                  metrics[line.rsplit(' ',1)[0]]=line.rsplit(' ',1)[-1]
+          reasons=collections.Counter();events=collections.Counter();latest=[]
+          for surface,rel in {'counterfactual':'external_fair/counterfactuals.jsonl','research':'external_fair/research_evidence.jsonl','decisions':'opportunities/decisions.jsonl','ledger':'ledger/execution.jsonl'}.items():
+              p=root/rel
+              try:lines=p.read_text(errors='replace').splitlines()[-10000:]
+              except Exception:lines=[]
+              rows=[]
+              for raw in lines:
+                  try:r=json.loads(raw)
+                  except Exception:continue
+                  if not isinstance(r,dict):continue
+                  rows.append(r);events[f"{surface}:{r.get('event_type') or r.get('action') or r.get('state') or 'UNKNOWN'}"]+=1
+                  for k in ('reason','last_attempt_reason','rejection_reason','status','state'):
+                      if isinstance(r.get(k),str) and r[k]:reasons[f'{surface}:{k}:{r[k]}']+=1
+                  if isinstance(r.get('reasons'),list):
+                      for x in r['reasons']:
+                          if isinstance(x,str):reasons[f'{surface}:reasons:{x}']+=1
+              latest.extend([{'surface':surface,**{k:r.get(k) for k in ('timestamp','timestamp_ms','decision_timestamp_ns','event_type','action','state','reason','reasons','last_attempt_reason','expected_ev','predicted_alpha','filled_size','complete','new_risk_authorized','paper_exploration_authorized','model_sha') if k in r}} for r in rows[-5:]])
+          def total(name):
+              vals=[float(v) for k,v in metrics.items() if k.split('{',1)[0]==name];return sum(vals) if vals else 0.0
+          activity={'opportunities':total('polymarket_execution_opportunities'),'orders':total('polymarket_execution_orders_submitted'),'fills':total('polymarket_execution_fills'),'complete_fills':total('polymarket_execution_complete_fills'),'pnl':total('polymarket_execution_final_pnl_usd')}
+          candidate_events=sum(v for k,v in events.items() if 'CANDIDATE' in k)
+          out={'at':int(time.time()),'sha':sha,'runtime':{k:runtime.get(k) for k in ('state','model_sha','pid','paper_only','authenticated_execution','real_order_submission','real_capital_at_risk','economic_engines')},'activity':activity,'candidate_events':candidate_events,'router_status':load(root/'external_fair/paper_router_status.json'),'coordinator':load(root/'control/global_portfolio_coordinator.json'),'metrics':metrics,'events':dict(events.most_common()),'reject_funnel':dict(reasons.most_common(100)),'latest':latest[-30:]}
+          print(json.dumps(out,indent=2,sort_keys=True))
+          PY
+          REMOTE
+            if python3 - "/tmp/v7-samples/$i.json" <<'PY'
+          import json,sys
+          d=json.load(open(sys.argv[1]));a=d['activity']
+          raise SystemExit(0 if (a['opportunities']>0 or a['orders']>0 or a['fills']>0 or d.get('candidate_events',0)>0) else 1)
+          PY
+            then active=1;break;fi
+            sleep 30
+          done
+          last="$(ls /tmp/v7-samples/*.json | sort -V | tail -1)"
+          python3 - "$REPORT" "$last" "$active" <<'PY'
+          import json,sys,time
+          from pathlib import Path
+          p=Path(sys.argv[1]);d=json.loads(p.read_text());sample=json.loads(Path(sys.argv[2]).read_text());active=sys.argv[3]=='1';d['stages']['forward_observation']={'ok':True,'at':int(time.time()),'samples':int(Path(sys.argv[2]).stem)};d['forward_evidence']=sample;d['economic_pipeline_active']=active;d['status']='VERIFIED_ACTIVE' if active else 'VERIFIED_ZERO_WITH_NAMED_REJECT_FUNNEL';p.write_text(json.dumps(d,indent=2,sort_keys=True)+'\n')
+          PY
+      - name: Persist finalizer report
+        if: always()
+        shell: bash
+        run: |
+          set +e
+          python3 - "$REPORT" <<'PY'
+          import json,sys,time
+          from pathlib import Path
+          p=Path(sys.argv[1])
+          try:d=json.loads(p.read_text())
+          except Exception:d={'schema':'polymarket_v7_paper_funnel_finalizer_v1','status':'FAILED','stages':{}}
+          d['finished_at']=int(time.time())
+          if d.get('status')=='STARTED':d['status']='FAILED_BEFORE_FORWARD_EVIDENCE'
+          p.parent.mkdir(parents=True,exist_ok=True);p.write_text(json.dumps(d,indent=2,sort_keys=True)+'\n')
+          PY
+          git config user.name ENRICOBIGNOZZI
+          git config user.email 88671442+ENRICOBIGNOZZI@users.noreply.github.com
+          git add "$REPORT"
+          git commit -m 'ops: persist final V7 PAPER funnel attestation' || true
+          git push origin HEAD:codex/v7-maker-ttl || true
