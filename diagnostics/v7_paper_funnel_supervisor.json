@@ -1,0 +1,16 @@
+{
+  "finished_at": 1788481382,
+  "paper_only_required": true,
+  "real_money_authority_required": false,
+  "schema": "polymarket_v7_paper_funnel_supervisor_v1",
+  "stages": {
+    "reconcile": {
+      "at": 1788481219,
+      "changed": true,
+      "ok": true,
+      "sha": "d42a22c687056758cbb12da5dde4a2223caa8a41"
+    }
+  },
+  "started_at": 1788481214,
+  "status": "FAILED_BEFORE_FORWARD_VERIFICATION"
+}
