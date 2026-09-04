@@ -152,13 +152,15 @@ assert int(maker.get("market_selection",{}).get("max_active_markets",0)) == max_
 observation_fractions=v7.get("component_observation_budget_fractions") or {}
 expected_maker_observation_budget=float(cfg.get("starting_capital",0))*float(observation_fractions.get("professional_maker",0))
 assert abs(float(maker.get("market_selection",{}).get("reward_sleeve_capital_usd",0))-expected_maker_observation_budget) <= 1e-9
-assert external.get("execution_authority") == "SHADOW_ZERO_AUTHORITY"
+assert external.get("execution_authority") == "PAPER_EXECUTION_OWNER"
 assert external.get("paper_only") is True
 assert external.get("authenticated_execution") is False
 assert external.get("real_order_submission") is False
-assert external.get("taker",{}).get("authority") == "SHADOW"
-assert external.get("taker",{}).get("enabled_for_execution") is False
+assert external.get("taker",{}).get("authority") == "PAPER"
+assert external.get("taker",{}).get("enabled_for_execution") is True
+assert external.get("taker",{}).get("execution_scope") == "PAPER_EXPLORATION_ONLY"
 assert external.get("taker",{}).get("counterfactual_enabled") is True
+assert external.get("paper_exploration",{}).get("accounting_mode") == "CANONICAL_PAPER_ACCOUNT"
 assert external.get("fair_value",{}).get("default_model_mature") is False
 assert external.get("maker",{}).get("external_fair_enabled_for_live_quotes") is False
 assert external.get("maker",{}).get("economic_maturity_may_block_paper") is True
@@ -345,7 +347,7 @@ external=status.get("external") if isinstance(status.get("external"),dict) else 
 decision=value.get("last_decision") if isinstance(value.get("last_decision"),dict) else {}
 ok=(status.get("schema")=="polymarket_v7_external_fair_status_v1"
     and status.get("code_sha")==sys.argv[3]
-    and status.get("state")=="FULL_FAIR_SHADOW_OPERATIONAL"
+    and status.get("state")=="FULL_FAIR_PAPER_OPERATIONAL"
     and status.get("paper_only") is True
     and status.get("authenticated_execution") is False
     and status.get("real_order_submission") is False
@@ -363,12 +365,12 @@ ok=(status.get("schema")=="polymarket_v7_external_fair_status_v1"
     and value.get("paper_only") is True
     and value.get("authenticated_execution") is False
     and value.get("real_order_submission") is False
-    and value.get("execution_authority")=="OPPORTUNITY_PROPOSAL_ONLY"
+    and value.get("execution_authority")=="PAPER_EXECUTION_OWNER"
     and value.get("capital_authority") is False
     and value.get("oms_authority") is False
     and value.get("inventory_authority") is False
     and value.get("ledger_writer_authority") is False
-    and value.get("order_submission_enabled") is False
+    and value.get("order_submission_enabled") is True
     and value.get("counterfactual_collection_enabled") is True
     and value.get("killed") is False
     and not value.get("blocker")
@@ -398,7 +400,7 @@ write_runtime_status() {
     model_source="cold_start_policy"
   fi
   local tmp="$CONTROL/runtime_status.json.tmp.$$"
-  printf '{"schema":"polymarket_v7_runtime_status_v3","timestamp":%s,"version":7,"paper_only":true,"authenticated_execution":false,"real_order_submission":false,"real_capital_at_risk":false,"model_sha":"%s","config_hash":"%s","policy_hash":"%s","model_hash":"%s","model_identity_source":"%s","run_id":"%s","ledger_id":"%s","server_id":"%s","pid":%s,"state":"%s","killed":%s,"economic_system":"V7_UNIFIED","economic_engines":["CRYPTO_SETTLEMENT_ENGINE","STRUCTURAL_ARB_ENGINE"],"global_portfolio_coordinator":"V7_GLOBAL_PORTFOLIO_COORDINATOR","execution_authority":"V7_CANONICAL_CHAIN","single_execution_owner":true,"canonical_state_reconciled":true,"exact_sha_ci_green":%s,"p0_authority_configured":["CRYPTO_SETTLEMENT_ENGINE","STRUCTURAL_ARB_ENGINE"],"p0_full_stack_ready":%s,"readiness":"%s","external_fair_runtime_ready":%s,"economic_new_risk_ready":false,"economic_decision_state":"SAFE_ACTIONS_ONLY","authorized_alpha_actions":[],"safe_actions":["CANCEL","WITHDRAW","NOTHING"]}\n' \
+  printf '{"schema":"polymarket_v7_runtime_status_v3","timestamp":%s,"version":7,"paper_only":true,"authenticated_execution":false,"real_order_submission":false,"real_capital_at_risk":false,"model_sha":"%s","config_hash":"%s","policy_hash":"%s","model_hash":"%s","model_identity_source":"%s","run_id":"%s","ledger_id":"%s","server_id":"%s","pid":%s,"state":"%s","killed":%s,"economic_system":"V7_UNIFIED","economic_engines":["CRYPTO_SETTLEMENT_ENGINE","STRUCTURAL_ARB_ENGINE"],"global_portfolio_coordinator":"V7_GLOBAL_PORTFOLIO_COORDINATOR","execution_authority":"V7_CANONICAL_CHAIN","single_execution_owner":true,"canonical_state_reconciled":true,"exact_sha_ci_green":%s,"p0_authority_configured":["CRYPTO_SETTLEMENT_ENGINE","STRUCTURAL_ARB_ENGINE"],"p0_full_stack_ready":%s,"readiness":"%s","external_fair_runtime_ready":%s,"economic_new_risk_ready":false,"paper_exploration_ready":true,"paper_account_mode":"ACTIVE_SIMULATED","economic_decision_state":"BOUNDED_PAPER_EXPLORATION","authorized_alpha_actions":[],"authorized_paper_actions":["PAPER_EXPLORATION"],"safe_actions":["CANCEL","WITHDRAW","NOTHING"]}\n' \
     "$now" "$SHA" "$CONFIG_HASH" "$POLICY_HASH" "$model_hash" "$model_source" "$RUN_ID" "$LEDGER_ID" "$SERVER_ID" "$$" "$state" "$killed" "$EXACT_SHA_CI_GREEN" "$p0_ready" "$readiness" "$external_ready" > "$tmp"
   mv "$tmp" "$CONTROL/runtime_status.json"
 }

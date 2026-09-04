@@ -142,8 +142,22 @@ def check_external_fair_invariants(
     taker_executes = taker.get("enabled_for_execution") is True
     if not model_mature and maker.get("external_fair_enabled_for_live_quotes") is not False:
         failures.append("IMMATURE_EXTERNAL_FAIR_MAY_NOT_REPRICE_MAKER")
-    if not model_mature and taker_executes:
-        failures.append("IMMATURE_TAKER_MAY_NOT_EXECUTE")
+    exploration = external.get("paper_exploration") if isinstance(
+        external.get("paper_exploration"), dict) else {}
+    bounded = bool(
+        taker_executes and str(taker.get("authority") or "").upper() == "PAPER"
+        and taker.get("execution_scope") == "PAPER_EXPLORATION_ONLY"
+        and exploration.get("enabled") is True
+        and exploration.get("authority") == "PAPER_EXPLORATION"
+        and exploration.get("accounting_mode") == "CANONICAL_PAPER_ACCOUNT"
+        and exploration.get("allow_immature_evidence") is True
+        and exploration.get("require_arrival_book_revalidation") is True
+        and exploration.get("require_verified_settlement") is True
+        and exploration.get("promotion_credit") is False
+        and exploration.get("real_money_authority") is False
+        and 0.0 < float(exploration.get("max_capital_fraction") or 0.0) <= 0.0025)
+    if not model_mature and taker_executes and not bounded:
+        failures.append("IMMATURE_TAKER_MAY_ONLY_RUN_BOUNDED_PAPER_EXPLORATION")
     if not taker_executes:
         if str(taker.get("authority") or "").upper() != "SHADOW":
             failures.append("DISABLED_TAKER_MUST_BE_SHADOW")
@@ -151,6 +165,8 @@ def check_external_fair_invariants(
             failures.append("SHADOW_TAKER_REQUIRES_COUNTERFACTUAL_COLLECTION")
     elif str(taker.get("authority") or "").upper() != "PAPER":
         failures.append("EXECUTING_TAKER_REQUIRES_PAPER_AUTHORITY")
+    elif not model_mature and taker.get("execution_scope") != "PAPER_EXPLORATION_ONLY":
+        failures.append("IMMATURE_TAKER_EXECUTION_SCOPE_INVALID")
     if authority == "PAPER_CANCEL_ONLY_OWNER":
         if cancel.get("enabled") is not True:
             failures.append("CANCEL_ONLY_OWNER_REQUIRES_CANCEL_OVERLAY")
