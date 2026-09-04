@@ -25,6 +25,7 @@ from typing import Any
 from v7_market_common import finite, parse_array, request_json
 from v7_execution_ledger import LedgerEvent
 from v7_ledger_spool import spool_event
+from v7_global_portfolio_coordinator import process_cut as process_global_portfolio_cut
 from v7_crypto_settlement import load_registry as load_crypto_registry, require_context
 
 STRATEGY = "CRYPTO_INFORMED_TAKER"
@@ -1390,6 +1391,9 @@ class PaperRouter:
         self, replay_key: str, *, probe: bool = False, timeout_seconds: float = 2.0,
     ) -> dict[str, object] | None:
         path = self.root / "opportunities" / "receipts" / (replay_key.replace("/", "_") + ".json")
+        # Candidate publication and coordinator receipt issuance must be
+        # one causal transaction in the sequential canonical PAPER loop.
+        process_global_portfolio_cut(self.root, now_ns=time.time_ns())
         deadline = time.monotonic() + max(0.1, timeout_seconds)
         while time.monotonic() < deadline:
             receipt = load(path)

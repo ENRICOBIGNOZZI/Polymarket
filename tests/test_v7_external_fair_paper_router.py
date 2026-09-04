@@ -545,3 +545,12 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
+
+
+def test_arrival_candidate_runs_canonical_coordinator_before_receipt_poll() -> None:
+    text = (ROOT / "scripts/v7_external_fair_paper_router.py").read_text(encoding="utf-8")
+    assert "from v7_global_portfolio_coordinator import process_cut as process_global_portfolio_cut" in text
+    start = text.index("def wait_for_exploration_receipt")
+    end = text.index("\n    def ", start + 5)
+    body = text[start:end]
+    assert body.index("process_global_portfolio_cut(self.root") < body.index("while time.monotonic()")
