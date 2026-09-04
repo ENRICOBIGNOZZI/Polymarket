@@ -41,9 +41,6 @@ if layout in text:
 elif normalized not in text:
     raise SystemExit("durable restore counter precondition unavailable")
 
-# Normalize the c2d implementation to the historical function body expected by
-# the pinned patch. Function-boundary replacement is resilient to formatting
-# changes inside the body and the pinned patch then installs the tested version.
 start = text.find("    def order_size(self, row: dict[str, Any]) -> float:\n")
 end = text.find("    def common(self, status: dict[str, Any], row: dict[str, Any], order_id: str, size: float) -> dict[str, Any]:\n", start)
 if start < 0 or end < 0:
@@ -79,6 +76,19 @@ legacy_order_size = '''    def order_size(self, row: dict[str, Any]) -> float:
 
 '''
 text = text[:start] + legacy_order_size + text[end:]
+
+c2d_size_reject = '''        size = self.order_size(row)
+        if size <= 0.0:
+            self.last_attempt_reason = "BELOW_MINIMUM_EXECUTABLE_SIZE"
+            return False'''
+legacy_size_reject = '''        size = self.order_size(row)
+        if size <= 0.0:
+            self.last_attempt_reason = "INVALID_SIZE"
+            return False'''
+if c2d_size_reject in text:
+    text = text.replace(c2d_size_reject, legacy_size_reject, 1)
+elif legacy_size_reject not in text:
+    raise SystemExit("minimum-size rejection precondition unavailable")
 
 SOURCE.write_text(text, encoding="utf-8")
 original = subprocess.check_output(
