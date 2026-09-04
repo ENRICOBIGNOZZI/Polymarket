@@ -4,6 +4,7 @@ from __future__ import annotations
 import subprocess
 from pathlib import Path
 
+SOURCE_COMMIT = "df227d8b38d995340c452d6b28399ccb09a54c78"
 SOURCE = Path("scripts/v7_external_fair_paper_router.py")
 text = SOURCE.read_text(encoding="utf-8")
 constant = '                "market_mid_source": "LIVE_COMPLEMENT_CONSISTENT_CLOB_BATCH",\n'
@@ -14,8 +15,8 @@ elif dynamic not in text:
     raise SystemExit("durable restore source precondition unavailable")
 
 original = subprocess.check_output(
-    ["git", "show", "HEAD^:scripts/tmp_apply_v7_probe_lifecycle_recovery.py"],
+    ["git", "show", f"{SOURCE_COMMIT}:scripts/tmp_apply_v7_probe_lifecycle_recovery.py"],
     text=True,
 )
 namespace = {"__name__": "__main__", "__file__": str(Path(__file__).resolve())}
-exec(compile(original, str(Path(__file__).resolve()) + ":parent", "exec"), namespace)
+exec(compile(original, str(Path(__file__).resolve()) + ":pinned", "exec"), namespace)
