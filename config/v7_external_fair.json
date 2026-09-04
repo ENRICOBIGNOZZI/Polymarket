@@ -40,7 +40,7 @@
     "verified_templates_only": true
   },
   "enabled": true,
-  "execution_authority": "SHADOW_ZERO_AUTHORITY",
+  "execution_authority": "PAPER_EXECUTION_OWNER",
   "external_venues": {
     "instrument_type": "SPOT",
     "max_age_ns": 1000000000,
@@ -145,7 +145,9 @@
         "SHORT_FORWARD_HISTORY"
       ],
       "may_block_paper": true,
-      "reported_as": "ECONOMIC_CONFIDENCE"
+      "reported_as": "ECONOMIC_CONFIDENCE",
+      "may_block_bounded_paper_exploration": false,
+      "may_block_mature_paper_exploitation": true
     },
     "C_FUTURE_REAL_MONEY": {
       "in_scope": false,
@@ -217,7 +219,8 @@
     "promotion_credit": false,
     "real_money_authority": false,
     "require_arrival_book_revalidation": true,
-    "require_verified_settlement": true
+    "require_verified_settlement": true,
+    "accounting_mode": "CANONICAL_PAPER_ACCOUNT"
   },
   "paper_exploration_bootstrap": {
     "asset": "BTC",
@@ -320,12 +323,12 @@
   },
   "taker": {
     "authoritative_fee_required": true,
-    "authority": "SHADOW",
+    "authority": "PAPER",
     "base_execution_risk_per_share": 0.0005,
     "counterfactual_enabled": true,
     "depth_survival_fraction": 0.75,
     "economic_model": "HOLD_TO_SETTLEMENT",
-    "enabled_for_execution": false,
+    "enabled_for_execution": true,
     "fractional_kelly": 0.1,
     "immature_exploration_capital_fraction": 0.0025,
     "latency_risk_per_second": 0.001,
@@ -380,7 +383,8 @@
         "minimum_seconds": 0.0
       }
     ],
-    "unknown_fee_behavior": "NO_TAKE"
+    "unknown_fee_behavior": "NO_TAKE",
+    "execution_scope": "PAPER_EXPLORATION_ONLY"
   },
   "training": {
     "calibration": "PLATT_INITIAL",

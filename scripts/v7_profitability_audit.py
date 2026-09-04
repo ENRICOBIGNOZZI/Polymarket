@@ -276,7 +276,8 @@ def external_metrics(events: list[dict[str, Any]]) -> dict[str, Any]:
         ),
         "model_reliability": calibration(model_scores),
         "missing_model_forecasts": missing_model, "missing_market_benchmarks": missing_market,
-        "execution_gate": "BLOCK_PAPER_EXECUTION_UNTIL_OOS_BENCHMARKS_PASS",
+        "execution_gate": "ALLOW_BOUNDED_PAPER_EXPLORATION_ONLY",
+        "mature_exploitation_gate": "BLOCK_UNTIL_OOS_BENCHMARKS_PASS",
     }
 
 
@@ -490,7 +491,7 @@ def audit(inputs: Iterable[Path]) -> dict[str, Any]:
         "selected_sleeves_realized_pnl": total_realized,
         "profitability_proven": bool(
             not quality["fail_closed"] and total_realized > 0.0
-            and external["execution_gate"] != "BLOCK_PAPER_EXECUTION_UNTIL_OOS_BENCHMARKS_PASS"
+            and external["mature_exploitation_gate"] != "BLOCK_UNTIL_OOS_BENCHMARKS_PASS"
             and maker["unique_terminal_units"] >= 1000
         ),
         "limitations": [
