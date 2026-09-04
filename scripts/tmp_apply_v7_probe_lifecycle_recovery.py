@@ -15,9 +15,6 @@ if constant in text:
 elif dynamic not in text:
     raise SystemExit("durable restore source precondition unavailable")
 
-# c2d restored two evidence counters between counterfactual_fills and realized
-# PnL. Move them just after the realized-PnL reduction so the pinned patch can
-# match its historical anchor without losing either counter.
 layout = '''        self.state["counterfactual_fills"] = len(fills)
         self.state["candidates"] = len(candidate_ids)
         self.state["opportunity_sets"] = len(opportunity_ids)
@@ -43,6 +40,45 @@ if layout in text:
     text = text.replace(tail, relocated, 1)
 elif normalized not in text:
     raise SystemExit("durable restore counter precondition unavailable")
+
+# Normalize the c2d implementation to the historical function body expected by
+# the pinned patch. Function-boundary replacement is resilient to formatting
+# changes inside the body and the pinned patch then installs the tested version.
+start = text.find("    def order_size(self, row: dict[str, Any]) -> float:\n")
+end = text.find("    def common(self, status: dict[str, Any], row: dict[str, Any], order_id: str, size: float) -> dict[str, Any]:\n", start)
+if start < 0 or end < 0:
+    raise SystemExit("order_size function boundaries unavailable")
+legacy_order_size = '''    def order_size(self, row: dict[str, Any]) -> float:
+        book: Book = row["book"]
+        ask = float(row["ask"])
+        fee = float(row["fee_per_share"])
+        execution_risk = float(row["execution_risk"])
+        max_depth_fraction = min(1.0, max(0.0, float(self.policy.get("max_depth_fraction", 0.5))))
+        depth_survival = min(1.0, max(0.0, float(self.policy.get("depth_survival_fraction", 0.75))))
+        depth_fraction = min(max_depth_fraction, depth_survival)
+        visible = book.asks[0][1] if book.asks else 0.0
+        if row.get("paper_bootstrap_probe") is True:
+            if self.probe_policy is None:
+                return 0.0
+            available_notional = min(
+                float(self.state.get("starting_capital") or 0.0)
+                * float(self.probe_policy["max_capital_fraction"]),
+                float(self.probe_policy["max_notional_usd"]),
+                float(self.probe_policy["max_loss_usd"]),
+            )
+        else:
+            fraction_key = "max_market_capital_fraction" if self.model_mature else "immature_exploration_capital_fraction"
+            fraction = float(self.policy.get(fraction_key, 0.02 if self.model_mature else 0.0025))
+            available_notional = max(0.0, float(self.state["starting_capital"]) * fraction)
+        unit_budget_cost = max(1e-9, ask + fee + execution_risk)
+        size = min(visible * depth_fraction, available_notional / unit_budget_cost)
+        size = math.floor(size * 100.0 + 1e-9) / 100.0
+        if size + 1e-9 < book.min_order_size:
+            return 0.0
+        return size
+
+'''
+text = text[:start] + legacy_order_size + text[end:]
 
 SOURCE.write_text(text, encoding="utf-8")
 original = subprocess.check_output(
