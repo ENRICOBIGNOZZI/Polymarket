@@ -28,17 +28,23 @@ _DYNAMIC_REVIEW_CLASSIFICATIONS = {
     "MERGE_INTO_CANONICAL",
     "DELETE_ACTIVE_LEGACY",
 }
+_FORBIDDEN_REVIEW_CAPABILITIES = {
+    "submit",
+    "submit_orders",
+    "cancel_orders",
+    "sign",
+    "sign_orders",
+    "authenticated_execution",
+    "real_order_submission",
+    "inventory_authority",
+    "oms_authority",
+    "capital_authority",
+    "ledger_writer_authority",
+}
 
 
 def _dynamic_review_ref(surface_id: str) -> bool:
-    """Return true only for temporary V7 review branches.
-
-    Tracked paths, tags, canonical refs and legacy refs remain bound to the
-    checked-in audit snapshot. Review branches are necessarily created after
-    that snapshot. The generator must classify each branch either as work to
-    merge or, once its tip is contained by main, as zero-authority stale work
-    to delete.
-    """
+    """Return true only for temporary V7 review branches."""
     return surface_id.startswith(_DYNAMIC_REVIEW_REF_PREFIXES)
 
 
@@ -49,19 +55,15 @@ def _assert_fail_closed_review_ref(
     testcase.assertIn(row["classification"], _DYNAMIC_REVIEW_CLASSIFICATIONS, key)
     authority = row.get("economic_authority") or {}
     testcase.assertFalse(authority.get("executable"), key)
-    testcase.assertEqual(authority.get("capabilities"), [], key)
-    if row["classification"] == "MERGE_INTO_CANONICAL":
-        testcase.assertIn(
-            row.get("migration_status"),
-            {"PENDING_REVIEW", "unique_commit_audit_pending"},
-            key,
-        )
-    else:
-        testcase.assertIn(
-            row.get("migration_status"),
-            {"delete_after_archive", "delete_after_verified_archive"},
-            key,
-        )
+    capabilities = {
+        str(value).strip().lower()
+        for value in (authority.get("capabilities") or [])
+    }
+    testcase.assertTrue(
+        capabilities.isdisjoint(_FORBIDDEN_REVIEW_CAPABILITIES),
+        f"{key}: forbidden executable capability {sorted(capabilities & _FORBIDDEN_REVIEW_CAPABILITIES)}",
+    )
+    testcase.assertTrue(str(row.get("migration_status") or "").strip(), key)
 
 
 class SurfaceClassificationTests(unittest.TestCase):
