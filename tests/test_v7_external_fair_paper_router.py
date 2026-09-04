@@ -17,6 +17,8 @@ from v7_external_fair_paper_router import (  # noqa: E402
     opportunity_set, probability_interval_bin_diagnostics, robust_candidates,
 )
 from v7_opportunity import OpportunityEnvelope  # noqa: E402
+from v7_execution_ledger import LedgerEvent, load_events  # noqa: E402
+from v7_ledger_spool import drain_spool, spool_event  # noqa: E402
 
 
 def snapshot() -> dict:
@@ -541,6 +543,157 @@ def main() -> None:
         assert final["settlement_outcomes"] == ["Yes", "No"]
         assert final["settlement_token_ids"] == ["yes", "no"]
         assert final["settlement_outcome_prices"] == [1.0, 0.0]
+
+    # The checked-in probe must be able to place one real CLOB minimum around
+    # 50c, while remaining bounded by the independent USD 5 loss firewall.
+    with tempfile.TemporaryDirectory() as directory:
+        run_root = Path(directory)
+        collector = router.PaperRouter(
+            run_root, "9" * 40, ROOT / "config" / "v7_external_fair.json",
+            "https://clob.invalid", "https://gamma.invalid",
+        )
+        probe_book = Book(
+            "probe-token", ((0.49, 100.0),), ((0.50, 100.0),),
+            0.01, 5.0, 1_000, 1_001, "probe-book",
+        )
+        probe_row = {
+            "book": probe_book, "ask": 0.50, "fee_per_share": 0.0,
+            "execution_risk": 0.0005, "paper_bootstrap_probe": True,
+        }
+        probe_size = collector.order_size(probe_row)
+        assert probe_size >= probe_book.min_order_size
+        sizing = collector.state["last_probe_size_diagnostics"]
+        assert sizing["feasible"] is True
+        assert sizing["reason"] == "PROBE_SIZE_READY"
+        assert sizing["minimum_required_loss"] <= 5.0
+        assert probe_size * 0.5005 <= 5.0 + 1e-9
+
+    # A canonical PAPER fill must receive canonical MARKOUT and FINAL rows.
+    # The receipt is the same coordinator receipt used at entry, and every
+    # terminal record is accepted by the one ledger writer.
+    with tempfile.TemporaryDirectory() as directory:
+        run_root = Path(directory)
+        sha = "8" * 40
+        collector = router.PaperRouter(
+            run_root, sha, ROOT / "config" / "v7_external_fair.json",
+            "https://clob.invalid", "https://gamma.invalid",
+        )
+        receipt = {
+            "schema": "polymarket_v7_global_opportunity_decision_v1",
+            "owner": "V7_GLOBAL_PORTFOLIO_COORDINATOR",
+            "engine_id": "CRYPTO_SETTLEMENT_ENGINE", "action": "TAKE",
+            "selected_replay_key": "probe-replay", "new_risk_authorized": False,
+            "paper_exploration_authorized": True,
+            "paper_exploration_probe_authorized": True,
+            "paper_only": True, "authenticated_execution": False,
+            "real_order_submission": False, "real_capital_at_risk": False,
+            "crypto_context": {"asset": "BTC", "horizon": "M5", "authority": "PAPER_EXPLORATION"},
+        }
+        canonical_metadata = {
+            "coordinator_receipt": receipt, "paper_exploration": True,
+            "paper_bootstrap_probe": True, "economic_authority": "PAPER_EXPLORATION",
+            "counterfactual": False, "excluded_from_portfolio_equity": False,
+            "research_evidence_only": False, "arrival_revalidated": True,
+        }
+        opened_ms = router.now_ms() - 301_000
+        position = {
+            "position_id": "probe-position", "counterfactual_id": "probe-candidate",
+            "fill_id": "probe-fill", "order_id": "probe-order",
+            "market_id": "probe-market", "event_id": "probe-event",
+            "token_id": "yes", "outcome": "YES", "shares": 5.0,
+            "entry_price": 0.50, "entry_fee": 0.0, "entry_cost": 2.50,
+            "executable_value": 2.45, "opened_ms": opened_ms,
+            "fee_schedule": {"rate": 0.0, "exponent": 1.0, "takerOnly": True},
+            "markouts": [1, 10, 45, 60], "settled": False,
+            "coordinator_receipt": receipt, "paper_exploration": True,
+            "paper_bootstrap_probe": True, "canonical_metadata": canonical_metadata,
+            "model_yes": 0.60, "market_yes": 0.50,
+            "market_mid_source": "LIVE_COMPLEMENT_CONSISTENT_CLOB_BATCH",
+        }
+        collector.state["positions"] = {position["position_id"]: position}
+        spool_event(run_root, LedgerEvent(
+            record_id="probe-entry-fill", event_type="FILL", strategy=router.STRATEGY,
+            model_sha=sha, model_version=router.MODEL_VERSION,
+            order_id=position["order_id"], fill_id=position["fill_id"],
+            position_id=position["position_id"], market_id=position["market_id"],
+            event_id=position["event_id"], token_id=position["token_id"], side="BUY",
+            exchange_ts_ms=opened_ms - 1, receive_ts_ms=opened_ms,
+            fill_price=0.50, filled_size=5.0, complete=True,
+            fee=0.0, fee_source="GAMMA_AUTHORITATIVE_FEE_SCHEDULE",
+            metadata=canonical_metadata,
+        ))
+        live_book = Book(
+            "yes", ((0.49, 100.0),), ((0.50, 100.0),), 0.01, 5.0,
+            router.now_ms() - 2, router.now_ms() - 1, "settlement-book",
+        )
+        collector.fetch_book = lambda _token: live_book
+        resolution = {
+            "closed": True, "outcomes": '["Yes", "No"]',
+            "clobTokenIds": '["yes", "no"]', "outcomePrices": '["1", "0"]',
+        }
+        with mock.patch.object(router, "request_json", return_value=resolution):
+            collector.observe_positions()
+        result = drain_spool(run_root, model_sha=sha)
+        assert result["quarantined"] == 0 and result["rejected"] == 0
+        events = load_events(run_root / "ledger" / "execution.jsonl", expected_model_sha=sha)
+        types = [event.event_type for event in events]
+        assert types.count("FILL") == 1
+        assert types.count("MARKOUT") == 1
+        assert types.count("FINAL") == 1
+        final = next(event for event in events if event.event_type == "FINAL")
+        assert final.metadata["coordinator_receipt"]["selected_replay_key"] == "probe-replay"
+        assert final.metadata["paper_bootstrap_probe"] is True
+        assert position["settled"] is True
+
+    # The durable VIRTUAL_FILL must restore the coordinator receipt and exact
+    # order identity after a process restart.
+    with tempfile.TemporaryDirectory() as directory:
+        run_root = Path(directory)
+        sha = "7" * 40
+        collector = router.PaperRouter(
+            run_root, sha, ROOT / "config" / "v7_external_fair.json",
+            "https://clob.invalid", "https://gamma.invalid",
+        )
+        receipt = {
+            "schema": "polymarket_v7_global_opportunity_decision_v1",
+            "owner": "V7_GLOBAL_PORTFOLIO_COORDINATOR",
+            "engine_id": "CRYPTO_SETTLEMENT_ENGINE", "action": "TAKE",
+            "selected_replay_key": "restored-probe", "new_risk_authorized": False,
+            "paper_exploration_authorized": True,
+            "paper_exploration_probe_authorized": True,
+            "paper_only": True, "authenticated_execution": False,
+            "real_order_submission": False, "real_capital_at_risk": False,
+            "crypto_context": {"asset": "BTC", "horizon": "M5", "authority": "PAPER_EXPLORATION"},
+        }
+        canonical_metadata = {
+            "coordinator_receipt": receipt, "paper_exploration": True,
+            "paper_bootstrap_probe": True, "economic_authority": "PAPER_EXPLORATION",
+            "counterfactual": False, "excluded_from_portfolio_equity": False,
+            "research_evidence_only": False,
+        }
+        collector.emit_counterfactual(
+            "VIRTUAL_FILL", counterfactual_id="restore-candidate",
+            order_id="restore-order", fill_id="restore-fill", position_id="restore-position",
+            market_id="restore-market", event_id="restore-event", token_id="yes", side="BUY",
+            receive_ts_ms=router.now_ms(), exchange_ts_ms=router.now_ms() - 1,
+            fill_price=0.50, filled_size=5.0, fee=0.0,
+            fee_schedule={"rate": 0.0, "exponent": 1.0, "takerOnly": True},
+            metadata={
+                "coordinator_receipt": receipt, "paper_exploration": True,
+                "paper_bootstrap_probe": True, "economic_authority": "PAPER_EXPLORATION",
+                "canonical_metadata": canonical_metadata,
+            },
+        )
+        resumed = router.PaperRouter(
+            run_root, sha, ROOT / "config" / "v7_external_fair.json",
+            "https://clob.invalid", "https://gamma.invalid",
+        )
+        restored = resumed.state["positions"]["restore-position"]
+        assert restored["order_id"] == "restore-order"
+        assert restored["coordinator_receipt"]["selected_replay_key"] == "restored-probe"
+        assert restored["canonical_metadata"]["paper_bootstrap_probe"] is True
+        assert resumed.state["orders"] == 0 and resumed.state["fills"] == 0
+        assert resumed.state["probe_fills"] == 1
 
 
 if __name__ == "__main__":

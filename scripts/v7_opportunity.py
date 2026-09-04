@@ -304,7 +304,7 @@ class OpportunityEnvelope:
                 or maximum_loss <= 0.0
                 or loss_cap <= 0.0
                 or maximum_loss > loss_cap + 1e-9
-                or loss_cap > 2.0 + 1e-9
+                or loss_cap > 5.0 + 1e-9
                 or information_score <= 0.0
                 or probe.get("promotion_eligible") is not False
                 or probe.get("robust_candidate") is not False
