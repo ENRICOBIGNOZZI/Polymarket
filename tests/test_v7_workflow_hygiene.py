@@ -63,6 +63,7 @@ def test_tailnet_workflows_prefer_ephemeral_trust_credentials():
         assert oidc in workflow and oauth in workflow and authkey in workflow
         assert workflow.index(oidc) < workflow.index(oauth) < workflow.index(authkey)
         assert "audience: ${{ secrets.TS_AUDIENCE }}" in workflow
-        assert "args: --ephemeral" in workflow
+        assert "--ephemeral" not in workflow
+        assert workflow.count("statedir: ''") == workflow.count("uses: tailscale/github-action@") == 3
         assert "version: 1.94.2" in workflow
         assert "ping: ${{ env.SERVER_HOST }}" in workflow
