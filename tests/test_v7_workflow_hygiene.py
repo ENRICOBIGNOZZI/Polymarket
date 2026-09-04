@@ -44,3 +44,25 @@ def test_paper_deploy_health_window_covers_exhaustive_universe_startup():
     workflow = (ROOT / ".github/workflows/v7-deploy-paper-server.yml").read_text()
     assert "POLYMARKET_RUNTIME_HEALTH_ATTEMPTS=390" in workflow
     assert "POLYMARKET_RUNTIME_HEALTH_ATTEMPTS=60" not in workflow
+
+
+def test_tailnet_workflows_prefer_ephemeral_trust_credentials():
+    names = (
+        "v7-deploy-paper-server.yml",
+        "v7-paper-server-health.yml",
+        "v7-maker-fillability-evidence.yml",
+        "v7-point-in-time-universe-archive.yml",
+    )
+    oidc = 'if [[ -n "${TS_OAUTH_CLIENT_ID:-}" && -n "${TS_AUDIENCE:-}" ]]'
+    oauth = 'elif [[ -n "${TS_OAUTH_CLIENT_ID:-}" && -n "${TS_OAUTH_SECRET:-}" ]]'
+    authkey = 'elif [[ -n "${TS_AUTHKEY:-}" ]]'
+    for name in names:
+        workflow = (ROOT / ".github/workflows" / name).read_text()
+        assert "id-token: write" in workflow
+        assert "TS_AUDIENCE: ${{ secrets.TS_AUDIENCE }}" in workflow
+        assert oidc in workflow and oauth in workflow and authkey in workflow
+        assert workflow.index(oidc) < workflow.index(oauth) < workflow.index(authkey)
+        assert "audience: ${{ secrets.TS_AUDIENCE }}" in workflow
+        assert "args: --ephemeral" in workflow
+        assert "version: 1.94.2" in workflow
+        assert "ping: ${{ env.SERVER_HOST }}" in workflow

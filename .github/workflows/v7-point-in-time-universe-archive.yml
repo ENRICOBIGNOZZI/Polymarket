@@ -7,6 +7,7 @@ on:
 
 permissions:
   contents: read
+  id-token: write
 
 concurrency:
   group: polymarket-v7-point-in-time-universe-archive
@@ -21,32 +22,40 @@ jobs:
       SERVER_USER: ${{ vars.POLYMARKET_SERVER_USER || 'enrico' }}
       SERVER_PORT: ${{ vars.POLYMARKET_SERVER_PORT || '22' }}
     steps:
-      - name: Select existing Tailscale credential mode
+      - name: Select ephemeral Tailscale credential mode
         id: tailscale_auth
         shell: bash
         env:
           TS_AUTHKEY: ${{ secrets.TS_AUTHKEY }}
           TS_OAUTH_CLIENT_ID: ${{ secrets.TS_OAUTH_CLIENT_ID }}
           TS_OAUTH_SECRET: ${{ secrets.TS_OAUTH_SECRET }}
+          TS_AUDIENCE: ${{ secrets.TS_AUDIENCE }}
           TS_TAGS: ${{ vars.TS_TAGS || 'tag:ci' }}
         run: |
           set -euo pipefail
-          if [[ -n "${TS_AUTHKEY:-}" ]]; then
-            mode=authkey
+          test -n "${TS_TAGS:-}"
+          if [[ -n "${TS_OAUTH_CLIENT_ID:-}" && -n "${TS_AUDIENCE:-}" ]]; then
+            mode=oidc
           elif [[ -n "${TS_OAUTH_CLIENT_ID:-}" && -n "${TS_OAUTH_SECRET:-}" ]]; then
-            test -n "${TS_TAGS:-}"
             mode=oauth
+          elif [[ -n "${TS_AUTHKEY:-}" ]]; then
+            mode=authkey
+            echo "::warning title=Tailscale auth-key fallback::TS_AUTHKEY must be reusable, tagged, pre-approved when required, and ephemeral. The workflow also forces --ephemeral."
           else
-            echo "No visible Tailscale credential set" >&2
+            echo "No visible Tailscale OIDC, OAuth, or auth-key credential set" >&2
             exit 1
           fi
           echo "mode=$mode" >> "$GITHUB_OUTPUT"
 
-      - name: Join private tailnet with auth key
-        if: steps.tailscale_auth.outputs.mode == 'authkey'
+      - name: Join private tailnet with workload identity
+        if: steps.tailscale_auth.outputs.mode == 'oidc'
         uses: tailscale/github-action@780049a30b6ff5c378a9e7b389d15ece7a204888 # v4.1.3
         with:
-          authkey: ${{ secrets.TS_AUTHKEY }}
+          oauth-client-id: ${{ secrets.TS_OAUTH_CLIENT_ID }}
+          audience: ${{ secrets.TS_AUDIENCE }}
+          tags: ${{ vars.TS_TAGS || 'tag:ci' }}
+          version: 1.94.2
+          hostname: gh-universe-${{ github.run_id }}-${{ github.run_attempt }}
           ping: ${{ env.SERVER_HOST }}
 
       - name: Join private tailnet with OAuth
@@ -56,6 +65,18 @@ jobs:
           oauth-client-id: ${{ secrets.TS_OAUTH_CLIENT_ID }}
           oauth-secret: ${{ secrets.TS_OAUTH_SECRET }}
           tags: ${{ vars.TS_TAGS || 'tag:ci' }}
+          version: 1.94.2
+          hostname: gh-universe-${{ github.run_id }}-${{ github.run_attempt }}
+          ping: ${{ env.SERVER_HOST }}
+
+      - name: Join private tailnet with ephemeral auth key
+        if: steps.tailscale_auth.outputs.mode == 'authkey'
+        uses: tailscale/github-action@780049a30b6ff5c378a9e7b389d15ece7a204888 # v4.1.3
+        with:
+          authkey: ${{ secrets.TS_AUTHKEY }}
+          args: --ephemeral
+          version: 1.94.2
+          hostname: gh-universe-${{ github.run_id }}-${{ github.run_attempt }}
           ping: ${{ env.SERVER_HOST }}
 
       - name: Configure SSH identity
