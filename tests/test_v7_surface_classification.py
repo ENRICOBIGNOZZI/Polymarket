@@ -24,6 +24,10 @@ _DYNAMIC_REVIEW_REF_PREFIXES = (
     "ref:refs/heads/fix/v7-",
     "ref:refs/remotes/origin/fix/v7-",
 )
+_DYNAMIC_REVIEW_CLASSIFICATIONS = {
+    "MERGE_INTO_CANONICAL",
+    "DELETE_ACTIVE_LEGACY",
+}
 
 
 def _dynamic_review_ref(surface_id: str) -> bool:
@@ -31,10 +35,33 @@ def _dynamic_review_ref(surface_id: str) -> bool:
 
     Tracked paths, tags, canonical refs and legacy refs remain bound to the
     checked-in audit snapshot. Review branches are necessarily created after
-    that snapshot; the generator still classifies each of them fail-closed as
-    work that must be merged into the canonical V7 line before deployment.
+    that snapshot. The generator must classify each branch either as work to
+    merge or, once its tip is contained by main, as zero-authority stale work
+    to delete.
     """
     return surface_id.startswith(_DYNAMIC_REVIEW_REF_PREFIXES)
+
+
+def _assert_fail_closed_review_ref(
+    testcase: unittest.TestCase, key: str, row: dict,
+) -> None:
+    testcase.assertEqual(row["object_type"], "branch_or_remote_ref", key)
+    testcase.assertIn(row["classification"], _DYNAMIC_REVIEW_CLASSIFICATIONS, key)
+    authority = row.get("economic_authority") or {}
+    testcase.assertFalse(authority.get("executable"), key)
+    testcase.assertEqual(authority.get("capabilities"), [], key)
+    if row["classification"] == "MERGE_INTO_CANONICAL":
+        testcase.assertIn(
+            row.get("migration_status"),
+            {"PENDING_REVIEW", "unique_commit_audit_pending"},
+            key,
+        )
+    else:
+        testcase.assertIn(
+            row.get("migration_status"),
+            {"delete_after_archive", "delete_after_verified_archive"},
+            key,
+        )
 
 
 class SurfaceClassificationTests(unittest.TestCase):
@@ -45,9 +72,6 @@ class SurfaceClassificationTests(unittest.TestCase):
         )
 
     def test_manifest_covers_audited_paths_refs_schemas_workflows_processes_and_outputs(self) -> None:
-        # Validate the immutable audit snapshot intrinsically. Current
-        # short-lived review refs are checked separately below because their
-        # creation necessarily postdates the snapshot.
         report = validate_manifest(self.value)
         self.assertTrue(report["passed"])
         types = {row["object_type"] for row in self.value["entries"]}
@@ -65,10 +89,6 @@ class SurfaceClassificationTests(unittest.TestCase):
         actual_rows = {
             row["surface_id"]: row for row in generated["entries"]
         }
-        # The checked-in artifact is the complete audit-time surface snapshot.
-        # A clean CI checkout can contain additional PR refs. Those refs are
-        # accepted only under the narrow V7 review namespaces and only when the
-        # generator classifies them as noncanonical work with zero authority.
         for key, row in actual_rows.items():
             value = (row["object_type"], row["classification"])
             audited_key = next(
@@ -80,14 +100,7 @@ class SurfaceClassificationTests(unittest.TestCase):
                 self.assertEqual(value, expected[audited_key], key)
                 continue
             self.assertTrue(_dynamic_review_ref(key), key)
-            self.assertEqual(
-                value,
-                ("branch_or_remote_ref", "MERGE_INTO_CANONICAL"),
-                key,
-            )
-            authority = row.get("economic_authority") or {}
-            self.assertFalse(authority.get("executable"), key)
-            self.assertEqual(authority.get("capabilities"), [], key)
+            _assert_fail_closed_review_ref(self, key, row)
         for field, count in generated["coverage"].items():
             if field != "ref_count":
                 self.assertEqual(count, self.value["coverage"][field])
@@ -109,11 +122,8 @@ class SurfaceClassificationTests(unittest.TestCase):
         }
         self.assertEqual(missing, set())
         for key, row in current_rows.items():
-            if not _dynamic_review_ref(key):
-                continue
-            self.assertEqual(row["object_type"], "branch_or_remote_ref", key)
-            self.assertEqual(row["classification"], "MERGE_INTO_CANONICAL", key)
-            self.assertEqual(row["migration_status"], "PENDING_REVIEW", key)
+            if _dynamic_review_ref(key):
+                _assert_fail_closed_review_ref(self, key, row)
 
     def test_branch_ref_namespace_aliases_are_portable(self) -> None:
         local = "ref:refs/heads/codex/example"
