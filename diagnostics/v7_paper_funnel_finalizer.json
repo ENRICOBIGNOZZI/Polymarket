@@ -1,0 +1,11 @@
+{
+  "authenticated_execution": false,
+  "finished_at": 1788481653,
+  "paper_only": true,
+  "real_capital_at_risk": false,
+  "real_order_submission": false,
+  "schema": "polymarket_v7_paper_funnel_finalizer_v1",
+  "stages": {},
+  "started_at": 1788481650,
+  "status": "FAILED_BEFORE_FORWARD_EVIDENCE"
+}
