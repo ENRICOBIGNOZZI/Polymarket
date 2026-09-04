@@ -213,5 +213,20 @@ class NativeUniverseArchiveTest(unittest.TestCase):
         self.assertNotIn("market_proxy_cache.json", text)
 
 
+class NativeCppDiscoveryContractTest(unittest.TestCase):
+    def test_native_api_uses_gamma_keyset_cursor_not_offset(self) -> None:
+        text = (ROOT / "src" / "api.cpp").read_text(encoding="utf-8")
+        start = text.index("std::vector<Market> PolymarketApi::discover_markets")
+        end = text.index("std::optional<Market> PolymarketApi::fetch_market_by_id", start)
+        implementation = text[start:end]
+        self.assertIn('"/markets/keyset?', implementation)
+        self.assertIn('"&after_cursor="', implementation)
+        self.assertNotIn('"&offset="', implementation)
+        self.assertIn('object.find("next_cursor")', implementation)
+        self.assertIn("cursor did not advance", implementation)
+        self.assertIn("repeated a page before exhaustion", implementation)
+        self.assertIn("url_encode_component(cursor)", implementation)
+
+
 if __name__ == "__main__":
     unittest.main()
