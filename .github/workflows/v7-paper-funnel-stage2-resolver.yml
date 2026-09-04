@@ -1,0 +1,209 @@
+name: V7 PAPER funnel stage-two resolver
+
+on:
+  push:
+    branches: [codex/v7-maker-ttl]
+    paths: [.github/workflows/v7-paper-funnel-stage2-resolver.yml]
+
+permissions:
+  contents: write
+  actions: read
+
+concurrency:
+  group: v7-paper-funnel-stage-two-resolver
+  cancel-in-progress: false
+
+jobs:
+  resolve:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 65
+    env:
+      SERVER_HOST: ${{ vars.POLYMARKET_SERVER_HOST || '100.104.183.109' }}
+      SERVER_USER: ${{ vars.POLYMARKET_SERVER_USER || 'enrico' }}
+      SERVER_PORT: ${{ vars.POLYMARKET_SERVER_PORT || '22' }}
+      REPORT: diagnostics/v7_paper_funnel_stage2.json
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          ref: codex/v7-maker-ttl
+          fetch-depth: 0
+      - name: Await forward attestation and decide
+        id: gate
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p diagnostics
+          found=0
+          for _ in $(seq 1 150); do
+            git fetch --no-tags origin codex/v7-maker-ttl
+            if git show origin/codex/v7-maker-ttl:diagnostics/v7_paper_funnel_finalizer.json > /tmp/finalizer.json 2>/dev/null; then
+              found=1; break
+            fi
+            sleep 10
+          done
+          if [[ "$found" == 0 ]]; then
+            printf '%s\n' '{"status":"FINALIZER_REPORT_MISSING"}' > /tmp/finalizer.json
+          fi
+          active="$(python3 - <<'PY'
+          import json
+          d=json.load(open('/tmp/finalizer.json'))
+          print('true' if d.get('economic_pipeline_active') is True or d.get('status')=='VERIFIED_ACTIVE' else 'false')
+          PY
+          )"
+          echo "active=$active" >> "$GITHUB_OUTPUT"
+          python3 - "$REPORT" "$active" <<'PY'
+          import json,sys,time
+          from pathlib import Path
+          source=json.load(open('/tmp/finalizer.json'))
+          Path(sys.argv[1]).write_text(json.dumps({'schema':'polymarket_v7_paper_funnel_stage2_v1','started_at':int(time.time()),'status':'NOOP_ALREADY_ACTIVE' if sys.argv[2]=='true' else 'REMEDIATION_REQUIRED','source_finalizer_status':source.get('status'),'source_activity':(source.get('forward_evidence') or {}).get('activity'),'paper_only':True,'authenticated_execution':False,'real_order_submission':False,'real_capital_at_risk':False},indent=2,sort_keys=True)+'\n')
+          PY
+      - name: Select Tailscale mode
+        if: steps.gate.outputs.active != 'true'
+        id: ts
+        env:
+          TS_AUTHKEY: ${{ secrets.TS_AUTHKEY }}
+          TS_OAUTH_CLIENT_ID: ${{ secrets.TS_OAUTH_CLIENT_ID }}
+          TS_OAUTH_SECRET: ${{ secrets.TS_OAUTH_SECRET }}
+        run: |
+          if [[ -n "${TS_AUTHKEY:-}" ]]; then mode=authkey
+          elif [[ -n "${TS_OAUTH_CLIENT_ID:-}" && -n "${TS_OAUTH_SECRET:-}" ]]; then mode=oauth
+          else exit 1; fi
+          echo "mode=$mode" >> "$GITHUB_OUTPUT"
+      - name: Join tailnet with auth key
+        if: steps.gate.outputs.active != 'true' && steps.ts.outputs.mode == 'authkey'
+        uses: tailscale/github-action@780049a30b6ff5c378a9e7b389d15ece7a204888
+        with: {authkey: "${{ secrets.TS_AUTHKEY }}", ping: "${{ env.SERVER_HOST }}"}
+      - name: Join tailnet with OAuth
+        if: steps.gate.outputs.active != 'true' && steps.ts.outputs.mode == 'oauth'
+        uses: tailscale/github-action@780049a30b6ff5c378a9e7b389d15ece7a204888
+        with:
+          oauth-client-id: ${{ secrets.TS_OAUTH_CLIENT_ID }}
+          oauth-secret: ${{ secrets.TS_OAUTH_SECRET }}
+          tags: ${{ vars.TS_TAGS || 'tag:ci' }}
+          ping: ${{ env.SERVER_HOST }}
+      - name: Configure SSH
+        if: steps.gate.outputs.active != 'true'
+        env: {SSH_PRIVATE_KEY: "${{ secrets.POLYMARKET_SERVER_SSH_KEY }}"}
+        run: |
+          install -d -m 700 ~/.ssh
+          printf '%s\n' "$SSH_PRIVATE_KEY" > ~/.ssh/polymarket_stage2
+          chmod 600 ~/.ssh/polymarket_stage2
+          ssh-keyscan -T 5 -p "$SERVER_PORT" "$SERVER_HOST" > ~/.ssh/known_hosts
+      - name: Diagnose and repair only mechanical blockers
+        if: steps.gate.outputs.active != 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+          ssh -i ~/.ssh/polymarket_stage2 -o IdentitiesOnly=yes -o BatchMode=yes -o ConnectTimeout=10 -p "$SERVER_PORT" "$SERVER_USER@$SERVER_HOST" 'bash -s' <<'REMOTE' > /tmp/mechanical_repair.json
+          set -euo pipefail
+          cd "$HOME/polymarket"
+          if [[ "$(uname -s)" == Darwin ]]; then
+            for candidate in /opt/homebrew/bin/brew /usr/local/bin/brew; do
+              if [[ -x "$candidate" ]]; then eval "$("$candidate" shellenv)"; break; fi
+            done
+          fi
+          root="$HOME/polymarket/runs/paper_v7_live"
+          python3 - <<'PY' > /tmp/pre.json
+          import json,time,urllib.request
+          from pathlib import Path
+          root=Path.home()/"polymarket/runs/paper_v7_live"
+          def load(p):
+              try:v=json.loads(p.read_text());return v if isinstance(v,dict) else {}
+              except Exception:return {}
+          r=load(root/'control/runtime_status.json');s=load(root/'external_fair/paper_router_status.json');c=load(root/'control/global_portfolio_coordinator.json')
+          print(json.dumps({'at':int(time.time()),'runtime':r,'router':s,'coordinator':c},sort_keys=True))
+          PY
+          action=NONE
+          stale="$(python3 - <<'PY'
+          import json,time
+          d=json.load(open('/tmp/pre.json'));r=d.get('runtime') or {};s=d.get('router') or {}
+          timestamps=[int(x) for x in (r.get('timestamp'),s.get('timestamp')) if isinstance(x,(int,float)) and x>0]
+          print(1 if (not timestamps or int(time.time())-max(timestamps)>180 or r.get('state')!='running') else 0)
+          PY
+          )"
+          reason="$(python3 - <<'PY'
+          import json
+          d=json.load(open('/tmp/pre.json'));s=d.get('router') or {};print(str(s.get('last_attempt_reason') or s.get('reason') or 'UNKNOWN'))
+          PY
+          )"
+          if [[ "$stale" == 1 || "$reason" =~ (STALE|BOOTSTRAP|NO_EXTERNAL|NO_FAIR|NO_MARKET|NO_ELIGIBLE|MISSING_BOUNDARY) ]]; then
+            if [[ "$(uname -s)" == Darwin ]]; then
+              launchctl kickstart -k "gui/$(id -u)/com.polymarket.v7.paper"
+            fi
+            action=RESTART_CANONICAL_PAPER_RUNTIME
+          elif [[ "$reason" =~ (PAPER_EXPLORATION_NOT_SELECTED|NEW_RISK_NOT_AUTHORIZED) ]]; then
+            # Code must already contain the receipt-starvation repair; restart makes
+            # the exact deployed worker load it.  Never bypass the coordinator.
+            grep -q 'process_global_portfolio_cut(self.root' scripts/v7_external_fair_paper_router.py
+            if [[ "$(uname -s)" == Darwin ]]; then
+              launchctl kickstart -k "gui/$(id -u)/com.polymarket.v7.paper"
+            fi
+            action=RELOAD_RECEIPT_REPAIR
+          fi
+          printf '{"mechanical_action":"%s","pre_reason":"%s","stale":%s}\n' "$action" "$reason" "$stale"
+          REMOTE
+          python3 -m json.tool /tmp/mechanical_repair.json >/dev/null
+      - name: Wait for feed/bootstrap and remeasure
+        if: steps.gate.outputs.active != 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+          sleep 900
+          ssh -i ~/.ssh/polymarket_stage2 -o IdentitiesOnly=yes -o BatchMode=yes -o ConnectTimeout=10 -p "$SERVER_PORT" "$SERVER_USER@$SERVER_HOST" 'bash -s' <<'REMOTE' > /tmp/stage2_forward.json
+          set -euo pipefail
+          python3 - <<'PY'
+          import collections,json,os,time,urllib.request
+          from pathlib import Path
+          root=Path.home()/"polymarket/runs/paper_v7_live"
+          def load(p):
+              try:v=json.loads(p.read_text());return v if isinstance(v,dict) else {}
+              except Exception:return {}
+          r=load(root/'control/runtime_status.json');assert r.get('state')=='running' and r.get('paper_only') is True and r.get('authenticated_execution') is False and r.get('real_order_submission') is False and r.get('real_capital_at_risk') is False;os.kill(int(r.get('pid') or 0),0)
+          metrics={};text=urllib.request.urlopen('http://127.0.0.1:9108/metrics',timeout=5).read().decode()
+          for line in text.splitlines():
+              if line.startswith(('polymarket_execution_','polymarket_runtime_pnl_usd','polymarket_v7_canonical_','polymarket_v7_health','polymarket_v7_execution_alive','polymarket_v7_ledger_valid','polymarket_v7_single_writer_ok','polymarket_v7_exact_sha_ok')):metrics[line.rsplit(' ',1)[0]]=line.rsplit(' ',1)[-1]
+          def total(name):
+              vals=[float(v) for k,v in metrics.items() if k.split('{',1)[0]==name];return sum(vals) if vals else 0.0
+          reasons=collections.Counter();events=collections.Counter()
+          for surface,rel in {'counterfactual':'external_fair/counterfactuals.jsonl','research':'external_fair/research_evidence.jsonl','decisions':'opportunities/decisions.jsonl','ledger':'ledger/execution.jsonl'}.items():
+              p=root/rel
+              try:lines=p.read_text(errors='replace').splitlines()[-10000:]
+              except Exception:lines=[]
+              for raw in lines:
+                  try:x=json.loads(raw)
+                  except Exception:continue
+                  if not isinstance(x,dict):continue
+                  events[f"{surface}:{x.get('event_type') or x.get('action') or x.get('state') or 'UNKNOWN'}"]+=1
+                  for k in ('reason','last_attempt_reason','rejection_reason','status','state'):
+                      if isinstance(x.get(k),str) and x[k]:reasons[f'{surface}:{k}:{x[k]}']+=1
+                  if isinstance(x.get('reasons'),list):
+                      for q in x['reasons']:
+                          if isinstance(q,str):reasons[f'{surface}:reasons:{q}']+=1
+          activity={'opportunities':total('polymarket_execution_opportunities'),'orders':total('polymarket_execution_orders_submitted'),'fills':total('polymarket_execution_fills'),'complete_fills':total('polymarket_execution_complete_fills'),'pnl':total('polymarket_execution_final_pnl_usd')}
+          active=bool(activity['opportunities']>0 or activity['orders']>0 or activity['fills']>0 or any('CANDIDATE' in k for k in events))
+          print(json.dumps({'at':int(time.time()),'active':active,'activity':activity,'runtime':r,'router_status':load(root/'external_fair/paper_router_status.json'),'coordinator':load(root/'control/global_portfolio_coordinator.json'),'metrics':metrics,'events':dict(events.most_common()),'reject_funnel':dict(reasons.most_common(150))},indent=2,sort_keys=True))
+          PY
+          REMOTE
+          python3 -m json.tool /tmp/stage2_forward.json >/dev/null
+          python3 - "$REPORT" /tmp/mechanical_repair.json /tmp/stage2_forward.json <<'PY'
+          import json,sys,time
+          from pathlib import Path
+          p=Path(sys.argv[1]);d=json.loads(p.read_text());repair=json.load(open(sys.argv[2]));f=json.load(open(sys.argv[3]));d['mechanical_repair']=repair;d['forward_evidence']=f;d['economic_pipeline_active']=f['active'];d['status']='RESOLVED_ACTIVE' if f['active'] else 'MECHANICS_HEALTHY_REMAINING_ECONOMIC_FILTER';d['finished_at']=int(time.time());p.write_text(json.dumps(d,indent=2,sort_keys=True)+'\n')
+          PY
+      - name: Persist stage-two report
+        if: always()
+        run: |
+          set +e
+          python3 - "$REPORT" <<'PY'
+          import json,sys,time
+          from pathlib import Path
+          p=Path(sys.argv[1])
+          try:d=json.loads(p.read_text())
+          except Exception:d={'schema':'polymarket_v7_paper_funnel_stage2_v1','status':'FAILED'}
+          d.setdefault('finished_at',int(time.time()));p.parent.mkdir(parents=True,exist_ok=True);p.write_text(json.dumps(d,indent=2,sort_keys=True)+'\n')
+          PY
+          git config user.name ENRICOBIGNOZZI
+          git config user.email 88671442+ENRICOBIGNOZZI@users.noreply.github.com
+          git add "$REPORT"
+          git commit -m 'ops: persist V7 PAPER stage-two resolution' || true
+          git push origin HEAD:codex/v7-maker-ttl || true
