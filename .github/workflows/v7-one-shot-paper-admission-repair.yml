@@ -1,0 +1,183 @@
+name: One-shot PAPER admission source repair
+
+on:
+  push:
+    branches: [fix/v7-paper-exploration-final-ledger-20260904]
+    paths: [.github/workflows/v7-one-shot-paper-admission-repair.yml]
+
+permissions:
+  contents: write
+
+jobs:
+  repair-source-only:
+    if: github.repository == 'ENRICOBIGNOZZI/Polymarket' && github.ref == 'refs/heads/fix/v7-paper-exploration-final-ledger-20260904'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 2
+      - name: Verify reviewed parent and apply only the admission source and test patch
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD^)" = b3791810445661788222a018de32547cb8264542
+          test "$(git diff --name-only HEAD^ HEAD)" = .github/workflows/v7-one-shot-paper-admission-repair.yml
+          python3 - <<'PY'
+          import ast
+          import hashlib
+          from pathlib import Path
+
+          source = Path('scripts/v7_external_fair_paper_router.py')
+          tests = Path('tests/test_v7_external_fair_paper_router.py')
+          for path, expected in [
+              (source, 'cdffeb24d6f21f05df290db287d8d56976fd7243'),
+              (tests, 'c3510a0b64f37e145076ade8c89a31d4147bb522'),
+          ]:
+              raw = path.read_bytes()
+              digest = hashlib.sha1(b'blob ' + str(len(raw)).encode() + b'\0' + raw).hexdigest()
+              if digest != expected:
+                  raise SystemExit('Refusing unreviewed source: ' + str(path))
+          old = '''        if self.drain_path.exists():
+                      blocker = "CUTOVER_DRAIN"
+                      rows = []
+                  elif not status:
+          '''
+          # Assemble the exact indentation independently of YAML indentation.
+          old = '\n'.join([
+              '        if self.drain_path.exists():',
+              '            blocker = "CUTOVER_DRAIN"',
+              '            rows = []',
+              '        elif not status:',
+          ]) + '\n'
+          guards = []
+          for key, reason in [
+              ('canonical_order_reconciliation', 'PAPER_EXPLORATION_ORDER_RECONCILIATION_INCOMPLETE'),
+              ('canonical_final_reconciliation', 'PAPER_EXPLORATION_FINAL_RECONCILIATION_INCOMPLETE'),
+              ('paper_exploration_account', 'PAPER_EXPLORATION_ACCOUNT_RECONCILIATION_INCOMPLETE'),
+          ]:
+              guards.extend([
+                  '        elif (',
+                  f'            not isinstance(self.state.get("{key}"), dict)',
+                  f'            or self.state["{key}"].get("complete") is not True',
+                  '        ):',
+                  f'            blocker = "{reason}"',
+                  '            rows = []',
+              ])
+          text = source.read_text()
+          if text.count(old) != 1:
+              raise SystemExit('Admission context is not unique')
+          new = old.replace('        elif not status:\n', '\n'.join(guards) + '\n        elif not status:\n')
+          fixed = text.replace(old, new, 1)
+          ast.parse(fixed)
+          source.write_text(fixed)
+
+          regression = '''
+          def test_paper_account_admission_controls_actual_step() -> None:
+              """Exercise the real step method; external effects and attempts are mocked."""
+              checks = (
+                  ("canonical_order_reconciliation", "PAPER_EXPLORATION_ORDER_RECONCILIATION_INCOMPLETE"),
+                  ("canonical_final_reconciliation", "PAPER_EXPLORATION_FINAL_RECONCILIATION_INCOMPLETE"),
+                  ("paper_exploration_account", "PAPER_EXPLORATION_ACCOUNT_RECONCILIATION_INCOMPLETE"),
+              )
+              def make_collector():
+                  collector = router.PaperRouter.__new__(router.PaperRouter)
+                  collector.sha = "a" * 40
+                  collector.source = Path("unused-source.json")
+                  collector.root = Path("unused-test-root")
+                  collector.drain_path = mock.Mock()
+                  collector.drain_path.exists.return_value = False
+                  collector.state = {key: {"complete": True} for key, _ in checks}
+                  collector.policy = {}
+                  collector.probe_policy = {}
+                  collector.last_book_error = ""
+                  collector.last_attempt_reason = ""
+                  collector.last_live_market = {}
+                  for name in ("record_forecast", "record_opportunity_set", "observe_positions",
+                               "reconcile_canonical_account", "observe_forecasts", "publish",
+                               "reject", "wait"):
+                      setattr(collector, name, mock.Mock())
+                  collector.books_for = mock.Mock(return_value={})
+                  collector.attempt = mock.Mock(return_value=True)
+                  return collector
+              observation = {"code_sha": "a" * 40, "market": {}, "fair": {}}
+              with mock.patch.object(router, "load", return_value=observation), \\
+                   mock.patch.object(router, "live_market_yes", return_value=0.5), \\
+                   mock.patch.object(router, "robust_candidates", return_value=[{"robust_ev": 0.1}]), \\
+                   mock.patch.object(router, "reconcile_paper_exploration_orphan_orders", return_value={"complete": True}), \\
+                   mock.patch.object(router, "reconcile_paper_exploration_finals", return_value={"complete": True}):
+                  for key, reason in checks:
+                      for invalid in (None, False, "invalid", [], {}, {"complete": False},
+                                      {"complete": "true"}, {"complete": 1}):
+                          collector = make_collector()
+                          collector.state[key] = invalid
+                          collector.step()
+                          collector.attempt.assert_not_called()
+                          collector.books_for.assert_not_called()
+                          collector.reject.assert_called_once_with(reason)
+                          collector.observe_positions.assert_called_once()
+                          collector.reconcile_canonical_account.assert_called_once()
+                          collector.observe_forecasts.assert_called_once()
+                          collector.publish.assert_called_once_with(0, reason)
+                      collector = make_collector()
+                      del collector.state[key]
+                      collector.step()
+                      collector.attempt.assert_not_called()
+                      collector.reject.assert_called_once_with(reason)
+                  healthy = make_collector()
+                  healthy.step()
+                  healthy.attempt.assert_called_once()
+                  healthy.publish.assert_called_once_with(1, "")
+                  assert healthy.state["last_decision"]["outcome"] == "VIRTUAL_FILL"
+                  drained = make_collector()
+                  drained.drain_path.exists.return_value = True
+                  drained.state["paper_exploration_account"] = None
+                  drained.step()
+                  drained.attempt.assert_not_called()
+                  drained.reject.assert_called_once_with("CUTOVER_DRAIN")
+                  drained.observe_positions.assert_called_once()
+                  recovered = make_collector()
+                  recovered.state["paper_exploration_account"] = {"complete": False}
+                  def restore_account():
+                      recovered.state["paper_exploration_account"] = {"complete": True}
+                  recovered.reconcile_canonical_account.side_effect = restore_account
+                  recovered.step()
+                  recovered.attempt.assert_not_called()
+                  recovered.step()
+                  recovered.attempt.assert_called_once()
+                  assert recovered.observe_positions.call_count == 2
+          '''
+          import textwrap
+          regression = textwrap.dedent(regression)
+          test_text = tests.read_text()
+          marker = 'if __name__ == "__main__":\n    main()'
+          if test_text.count(marker) != 1 or 'def test_paper_account_admission_controls_actual_step' in test_text:
+              raise SystemExit('Test context is not unique')
+          updated_tests = test_text.replace(marker, regression + '\n\n' + marker + '\n    test_paper_account_admission_controls_actual_step()', 1)
+          ast.parse(updated_tests)
+          tests.write_text(updated_tests)
+          print('Patched only the reviewed PAPER router and its existing regression suite')
+          PY
+      - name: Run existing router tests and actual step admission regressions without venue access
+        run: |
+          set -euo pipefail
+          python3 tests/test_v7_external_fair_paper_router.py
+          python3 -m py_compile scripts/v7_external_fair_paper_router.py tests/test_v7_external_fair_paper_router.py
+          git diff --check
+      - name: Commit verified source changes only to the existing draft branch
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import subprocess
+          changed = set(subprocess.check_output(['git','diff','--name-only'], text=True).splitlines())
+          expected = {'scripts/v7_external_fair_paper_router.py','tests/test_v7_external_fair_paper_router.py'}
+          if changed != expected:
+              raise SystemExit('Unexpected changed files: ' + repr(changed))
+          PY
+          git config user.name 'V7 source repair'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add -- scripts/v7_external_fair_paper_router.py tests/test_v7_external_fair_paper_router.py
+          git commit -m 'fix: block PAPER entries on incomplete canonical account reconciliation'
+          git push origin HEAD:refs/heads/fix/v7-paper-exploration-final-ledger-20260904
