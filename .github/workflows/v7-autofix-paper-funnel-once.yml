@@ -1,0 +1,238 @@
+name: V7 one-shot PAPER funnel repair
+
+on:
+  push:
+    branches: [main]
+    paths: [.github/workflows/v7-autofix-paper-funnel-once.yml]
+
+permissions:
+  contents: write
+  actions: write
+
+concurrency:
+  group: v7-one-shot-paper-funnel-repair
+  cancel-in-progress: false
+
+jobs:
+  repair-test-deploy:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    env:
+      SERVER_HOST: ${{ vars.POLYMARKET_SERVER_HOST || '100.104.183.109' }}
+      SERVER_USER: ${{ vars.POLYMARKET_SERVER_USER || 'enrico' }}
+      SERVER_PORT: ${{ vars.POLYMARKET_SERVER_PORT || '22' }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          ref: main
+          fetch-depth: 0
+      - name: Apply only the proven coordinator-receipt repair
+        id: patch
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+          import re
+
+          router=Path('scripts/v7_external_fair_paper_router.py')
+          text=router.read_text(encoding='utf-8')
+          changed=False
+
+          import_line='from v7_global_portfolio_coordinator import process_cut as process_global_portfolio_cut\n'
+          if 'def wait_for_exploration_receipt' in text and 'process_global_portfolio_cut' not in text:
+              anchor='from v7_ledger_spool import spool_event\n'
+              if anchor not in text:
+                  raise SystemExit('router import anchor missing')
+              text=text.replace(anchor,anchor+import_line,1)
+              changed=True
+
+          if 'def wait_for_exploration_receipt' in text and 'process_global_portfolio_cut(self.root' not in text:
+              pattern=re.compile(
+                  r'(    def wait_for_exploration_receipt\(.*?\n)(.*?)(?=\n    def )',
+                  re.S,
+              )
+              match=pattern.search(text)
+              if not match:
+                  raise SystemExit('wait_for_exploration_receipt body not found')
+              body=match.group(2)
+              marker='        deadline = time.monotonic() + max(0.1, timeout_seconds)\n'
+              if marker not in body:
+                  marker='        deadline=time.monotonic()+max(0.1,timeout_seconds)\n'
+              if marker not in body:
+                  raise SystemExit('receipt deadline anchor missing')
+              injection=(
+                  '        # The router and coordinator are invoked sequentially by the canonical\n'
+                  '        # PAPER loop.  Waiting before the coordinator cut creates a deterministic\n'
+                  '        # receipt starvation cycle.  Execute the same single canonical cut here,\n'
+                  '        # after the arrival-revalidated candidate is durable and before polling.\n'
+                  '        # This grants only PAPER_EXPLORATION; mature/new-money authority remains\n'
+                  '        # false and the ledger firewall still requires the coordinator receipt.\n'
+                  '        process_global_portfolio_cut(self.root, now_ns=time.time_ns())\n'
+              )
+              body=body.replace(marker,injection+marker,1)
+              text=text[:match.start(2)]+body+text[match.end(2):]
+              changed=True
+
+          router.write_text(text,encoding='utf-8')
+
+          test=Path('tests/test_v7_external_fair_paper_router.py')
+          source=test.read_text(encoding='utf-8')
+          test_name='test_arrival_candidate_runs_canonical_coordinator_before_receipt_poll'
+          if changed and test_name not in source:
+              source += '''\n\ndef test_arrival_candidate_runs_canonical_coordinator_before_receipt_poll() -> None:\n    text = (ROOT / "scripts/v7_external_fair_paper_router.py").read_text(encoding="utf-8")\n    assert "from v7_global_portfolio_coordinator import process_cut as process_global_portfolio_cut" in text\n    start = text.index("def wait_for_exploration_receipt")\n    end = text.index("\\n    def ", start + 5)\n    body = text[start:end]\n    assert body.index("process_global_portfolio_cut(self.root") < body.index("while time.monotonic()")\n    assert "new_risk_authorized" not in body\n''' 
+              test.write_text(source,encoding='utf-8')
+
+          # Remove every temporary diagnostic surface created during investigation,
+          # including this workflow.  The final tree contains only the production fix.
+          for rel in (
+              '.github/workflows/v7-autofix-paper-funnel-once.yml',
+              '.github/workflows/tmp-diagnose-current-main.yml',
+              'diagnostics/.keep',
+              'diagnostics/v7_live_funnel_note.md',
+              'diagnostics/v7-live-funnel-diagnostic-bootstrap.txt',
+              'diagnostics/README.md',
+              'BRANCH_PROBE',
+          ):
+              Path(rel).unlink(missing_ok=True)
+          print('changed=true' if changed else 'changed=false')
+          PY
+          if git diff --quiet -- scripts/v7_external_fair_paper_router.py tests/test_v7_external_fair_paper_router.py; then
+            echo 'changed=false' >> "$GITHUB_OUTPUT"
+          else
+            echo 'changed=true' >> "$GITHUB_OUTPUT"
+          fi
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential cmake pkg-config libcurl4-openssl-dev libboost-all-dev libssl-dev python3
+      - name: Full Release verification on final clean tree
+        shell: bash
+        run: |
+          set -euo pipefail
+          cmake -S . -B build-repair -DCMAKE_BUILD_TYPE=Release
+          cmake --build build-repair --parallel 2
+          ctest --test-dir build-repair --output-on-failure
+      - name: Commit clean repair to main
+        id: commit
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name ENRICOBIGNOZZI
+          git config user.email 88671442+ENRICOBIGNOZZI@users.noreply.github.com
+          git add -A
+          if git diff --cached --quiet; then
+            final_sha="$(git rev-parse HEAD)"
+          else
+            git commit -m 'fix: close V7 PAPER coordinator receipt starvation'
+            git push origin HEAD:main
+            final_sha="$(git rev-parse HEAD)"
+          fi
+          echo "sha=$final_sha" >> "$GITHUB_OUTPUT"
+      - name: Trigger and await exact-SHA canonical CI
+        env:
+          GH_TOKEN: ${{ github.token }}
+          FINAL_SHA: ${{ steps.commit.outputs.sha }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          gh workflow run ci.yml --ref main -f expected_sha="$FINAL_SHA" || true
+          green() {
+            gh api -H 'Accept: application/vnd.github+json' \
+              "/repos/${GITHUB_REPOSITORY}/commits/${FINAL_SHA}/check-runs?per_page=100" \
+              --jq '[.check_runs[] | select((.name=="ci-v7-Release" or .name=="ci-v7-Debug") and .status=="completed" and .conclusion=="success") | .name] | unique | length' \
+              | grep -qx 2
+          }
+          for _ in $(seq 1 210); do
+            green && exit 0
+            sleep 10
+          done
+          gh api "/repos/${GITHUB_REPOSITORY}/commits/${FINAL_SHA}/check-runs?per_page=100" \
+            --jq '.check_runs[] | select(.name=="ci-v7-Release" or .name=="ci-v7-Debug") | [.name,.status,.conclusion,.details_url] | @tsv' >&2
+          exit 1
+      - name: Select Tailscale credential mode
+        id: tailscale_auth
+        env:
+          TS_AUTHKEY: ${{ secrets.TS_AUTHKEY }}
+          TS_OAUTH_CLIENT_ID: ${{ secrets.TS_OAUTH_CLIENT_ID }}
+          TS_OAUTH_SECRET: ${{ secrets.TS_OAUTH_SECRET }}
+        run: |
+          if [[ -n "${TS_AUTHKEY:-}" ]]; then mode=authkey
+          elif [[ -n "${TS_OAUTH_CLIENT_ID:-}" && -n "${TS_OAUTH_SECRET:-}" ]]; then mode=oauth
+          else exit 1; fi
+          echo "mode=$mode" >> "$GITHUB_OUTPUT"
+      - name: Join tailnet with auth key
+        if: steps.tailscale_auth.outputs.mode == 'authkey'
+        uses: tailscale/github-action@780049a30b6ff5c378a9e7b389d15ece7a204888
+        with: {authkey: "${{ secrets.TS_AUTHKEY }}", ping: "${{ env.SERVER_HOST }}"}
+      - name: Join tailnet with OAuth
+        if: steps.tailscale_auth.outputs.mode == 'oauth'
+        uses: tailscale/github-action@780049a30b6ff5c378a9e7b389d15ece7a204888
+        with:
+          oauth-client-id: ${{ secrets.TS_OAUTH_CLIENT_ID }}
+          oauth-secret: ${{ secrets.TS_OAUTH_SECRET }}
+          tags: ${{ vars.TS_TAGS || 'tag:ci' }}
+          ping: ${{ env.SERVER_HOST }}
+      - name: Configure SSH
+        env: {SSH_PRIVATE_KEY: "${{ secrets.POLYMARKET_SERVER_SSH_KEY }}"}
+        run: |
+          install -d -m 700 ~/.ssh
+          printf '%s\n' "$SSH_PRIVATE_KEY" > ~/.ssh/polymarket_repair
+          chmod 600 ~/.ssh/polymarket_repair
+          ssh-keyscan -T 5 -p "$SERVER_PORT" "$SERVER_HOST" > ~/.ssh/known_hosts
+      - name: Deploy final exact SHA with canonical updater
+        env: {FINAL_SHA: "${{ steps.commit.outputs.sha }}"}
+        shell: bash
+        run: |
+          set -euo pipefail
+          ssh -i ~/.ssh/polymarket_repair -o IdentitiesOnly=yes -o BatchMode=yes -o ConnectTimeout=10 -p "$SERVER_PORT" "$SERVER_USER@$SERVER_HOST" "FINAL_SHA='$FINAL_SHA' bash -s" <<'REMOTE'
+          set -euo pipefail
+          cd "$HOME/polymarket"
+          if [[ "$(uname -s)" == Darwin ]]; then
+            for candidate in /opt/homebrew/bin/brew /usr/local/bin/brew; do
+              if [[ -x "$candidate" ]]; then eval "$("$candidate" shellenv)"; break; fi
+            done
+          fi
+          git fetch --no-tags origin main
+          test "$(git rev-parse origin/main)" = "$FINAL_SHA"
+          updater="$(mktemp)"; archiver="$(mktemp)"
+          trap 'rm -f "$updater" "$archiver"' EXIT
+          git show "$FINAL_SHA:ops/update_server_v7.sh" > "$updater"
+          git show "$FINAL_SHA:scripts/v7_prepare_cutover_run_root.py" > "$archiver"
+          chmod 700 "$updater"; chmod 600 "$archiver"
+          POLYMARKET_APP_DIR="$HOME/polymarket" \
+          POLYMARKET_CUTOVER_ARCHIVER="$archiver" \
+          EXPECTED_DEPLOY_SHA="$FINAL_SHA" \
+          POLYMARKET_DEPLOY_REF=main \
+          POLYMARKET_RUNTIME_HEALTH_ATTEMPTS=600 \
+          bash "$updater"
+          REMOTE
+      - name: Verify exact runtime and bounded authority
+        env: {FINAL_SHA: "${{ steps.commit.outputs.sha }}"}
+        shell: bash
+        run: |
+          set -euo pipefail
+          ssh -i ~/.ssh/polymarket_repair -o IdentitiesOnly=yes -o BatchMode=yes -o ConnectTimeout=10 -p "$SERVER_PORT" "$SERVER_USER@$SERVER_HOST" "FINAL_SHA='$FINAL_SHA' bash -s" <<'REMOTE'
+          set -euo pipefail
+          root="$HOME/polymarket/runs/paper_v7_live"
+          cd "$HOME/polymarket"
+          test "$(git rev-parse HEAD)" = "$FINAL_SHA"
+          test "$(cat "$root/control/deployed_sha")" = "$FINAL_SHA"
+          python3 - "$root" "$FINAL_SHA" <<'PY'
+          import json,os,sys,time
+          from pathlib import Path
+          root=Path(sys.argv[1]); sha=sys.argv[2]
+          runtime=json.loads((root/'control/runtime_status.json').read_text())
+          assert runtime.get('model_sha')==sha and runtime.get('state')=='running'
+          assert runtime.get('paper_only') is True
+          assert runtime.get('authenticated_execution') is False
+          assert runtime.get('real_order_submission') is False
+          assert runtime.get('real_capital_at_risk') is False
+          assert set(runtime.get('economic_engines') or [])=={'CRYPTO_SETTLEMENT_ENGINE','STRUCTURAL_ARB_ENGINE'}
+          pid=int(runtime.get('pid') or 0); os.kill(pid,0)
+          print(json.dumps({'sha':sha,'pid':pid,'paper_only':True,'real_money':False}))
+          PY
+          curl -fsS http://127.0.0.1:9108/healthz
+          curl -fsS http://127.0.0.1:9090/-/ready >/dev/null
+          curl -fsS http://127.0.0.1:3000/api/health >/dev/null
+          REMOTE
