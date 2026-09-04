@@ -423,6 +423,7 @@ def validate_probe_policy(raw: dict[str, Any] | None) -> dict[str, Any] | None:
         "one_probe_per_market": True,
         "require_no_robust_candidate": True,
         "require_arrival_revalidation": True,
+        "require_minimum_order_feasible": True,
         "promotion_credit": False,
         "real_money_authority": False,
     }
@@ -435,9 +436,9 @@ def validate_probe_policy(raw: dict[str, Any] | None) -> dict[str, Any] | None:
         "maximum_model_market_disagreement": (0.05, 0.30),
         "minimum_tte_seconds": (1.0, 30.0),
         "maximum_tte_seconds": (30.0, 180.0),
-        "max_capital_fraction": (0.00001, 0.0005),
-        "max_notional_usd": (0.25, 2.0),
-        "max_loss_usd": (0.25, 2.0),
+        "max_capital_fraction": (0.00001, 0.0025),
+        "max_notional_usd": (0.25, 5.0),
+        "max_loss_usd": (0.25, 5.0),
     }
     for key, (minimum, maximum) in ranges.items():
         value = finite(policy.get(key), math.nan)
@@ -532,6 +533,111 @@ def paper_probe_candidates(
                 "probability_model_hash": fair.get("probability_model_hash"),
             })
     return sorted(rows, key=lambda row: (-row["point_ev"], row["outcome"]))
+
+
+def paper_probe_diagnostics(
+    status: dict[str, Any], books: dict[str, Book], policy: dict[str, Any],
+    probe_policy: dict[str, Any] | None,
+) -> dict[str, Any]:
+    result: dict[str, Any] = {
+        "enabled": probe_policy is not None,
+        "eligible": False,
+        "reason": "PAPER_PROBE_DISABLED" if probe_policy is None else "PAPER_PROBE_UNASSESSED",
+        "tte_seconds": None,
+        "model_market_disagreement": None,
+        "best_point_ev_per_share": None,
+        "minimum_point_ev_per_share": (
+            probe_policy.get("minimum_point_ev_per_share") if probe_policy else None
+        ),
+    }
+    if probe_policy is None:
+        return result
+    fair = status.get("fair") if isinstance(status.get("fair"), dict) else {}
+    result["probability_model_id"] = fair.get("probability_model_id")
+    if (
+        fair.get("valid") is not True
+        or fair.get("paper_exploration_bootstrap") is not True
+        or fair.get("promotion_eligible") is not False
+        or fair.get("real_money_authority") is not False
+        or fair.get("probability_model_id") != probe_policy["required_probability_model_id"]
+        or not identity_hash(fair.get("probability_model_hash"))
+    ):
+        result["reason"] = "PAPER_PROBE_BOOTSTRAP_FAIR_UNAVAILABLE"
+        return result
+    contract = status.get("contract") if isinstance(status.get("contract"), dict) else {}
+    reference = status.get("settlement_reference") if isinstance(status.get("settlement_reference"), dict) else {}
+    oracle = status.get("oracle") if isinstance(status.get("oracle"), dict) else {}
+    external = status.get("external") if isinstance(status.get("external"), dict) else {}
+    market = status.get("market") if isinstance(status.get("market"), dict) else {}
+    if not (
+        status.get("paper_only") is True
+        and status.get("authenticated_execution") is False
+        and status.get("real_order_submission") is False
+        and contract.get("verified") is True
+        and contract.get("rules_hash_recognized") is True
+        and reference.get("valid") is True
+        and oracle.get("healthy") is True
+        and oracle.get("continuity") != "CONTINUITY_UNKNOWN"
+        and external.get("healthy") is True
+    ):
+        result["reason"] = "PAPER_PROBE_INFRASTRUCTURE_INELIGIBLE"
+        return result
+    tte = finite(fair.get("tte_seconds"), math.nan)
+    result["tte_seconds"] = tte if math.isfinite(tte) else None
+    if not probe_policy["minimum_tte_seconds"] <= tte <= probe_policy["maximum_tte_seconds"]:
+        result["reason"] = "PAPER_PROBE_TTE_OUTSIDE_WINDOW"
+        return result
+    bucket = tte_policy(fair, policy)
+    if bucket and bucket.get("action") != "TAKER_SHADOW":
+        result["reason"] = "PAPER_PROBE_TTE_POLICY_DISABLED"
+        return result
+    calculated = int(fair.get("calculated_monotonic_ns") or 0)
+    valid_until = int(fair.get("valid_until_monotonic_ns") or 0)
+    current = time.monotonic_ns()
+    if calculated <= 0 or calculated > current or valid_until < current:
+        result["reason"] = "PAPER_PROBE_FAIR_EXPIRED"
+        return result
+    market_yes = live_market_yes(books, market)
+    fair_yes = finite(fair.get("yes"), math.nan)
+    result["market_yes"] = market_yes
+    result["fair_yes"] = fair_yes if math.isfinite(fair_yes) else None
+    if market_yes is None or not math.isfinite(fair_yes):
+        result["reason"] = "PAPER_PROBE_LIVE_MARKET_UNAVAILABLE"
+        return result
+    disagreement = abs(fair_yes - market_yes)
+    result["model_market_disagreement"] = disagreement
+    if not probe_policy["minimum_model_market_disagreement"] <= disagreement <= probe_policy["maximum_model_market_disagreement"]:
+        result["reason"] = "PAPER_PROBE_DISAGREEMENT_OUTSIDE_WINDOW"
+        return result
+    schedule = market.get("fee_schedule") if isinstance(market.get("fee_schedule"), dict) else {}
+    execution_risk = float(bucket.get(
+        "execution_risk_per_share", policy.get("base_execution_risk_per_share", 0.0005)
+    ))
+    point_evs: dict[str, float] = {}
+    for outcome, token, point_probability in (
+        ("YES", str(market.get("yes_token") or ""), fair_yes),
+        ("NO", str(market.get("no_token") or ""), 1.0 - fair_yes),
+    ):
+        book = books.get(token)
+        if book is None or not book.asks:
+            continue
+        ask = book.asks[0][0]
+        value = point_probability - ask - fee_per_share(ask, schedule) - execution_risk
+        if math.isfinite(value):
+            point_evs[outcome] = value
+    result["point_evs_per_share"] = point_evs
+    if not point_evs:
+        result["reason"] = "PAPER_PROBE_BOOK_UNAVAILABLE"
+        return result
+    result["best_point_ev_per_share"] = max(point_evs.values())
+    candidates = paper_probe_candidates(status, books, policy, probe_policy)
+    if candidates:
+        result["eligible"] = True
+        result["reason"] = "PAPER_PROBE_CANDIDATE_READY"
+        result["candidate_count"] = len(candidates)
+        return result
+    result["reason"] = "PAPER_PROBE_POINT_EV_BELOW_THRESHOLD"
+    return result
 
 
 def executable_sell_value(book: Book, shares: float, schedule: dict[str, Any]) -> float:
@@ -760,6 +866,7 @@ class PaperRouter:
             "forecast_settlement_attempted_at": {},
             "opportunity_sets": 0, "last_opportunity_snapshot_id": "",
             "last_decision": {},
+            "last_probe_diagnostics": {}, "last_probe_size_diagnostics": {},
         }
         prior = load(self.state_path)
         if prior.get("model_sha") == model_sha:
@@ -926,7 +1033,7 @@ class PaperRouter:
                 "position_id": position_id,
                 "counterfactual_id": str(row.get("counterfactual_id") or ""),
                 "fill_id": fill_id,
-                "order_id": str(row.get("counterfactual_id") or ""),
+                "order_id": str(row.get("order_id") or row.get("counterfactual_id") or ""),
                 "market_id": str(row.get("market_id") or ""),
                 "event_id": str(row.get("event_id") or ""),
                 "token_id": str(row.get("token_id") or ""),
@@ -944,7 +1051,23 @@ class PaperRouter:
                 "settled": False,
                 "model_yes": finite(metadata.get("fair_yes")),
                 "market_yes": finite(metadata.get("arrival_pm_mid")),
-                "market_mid_source": "LIVE_COMPLEMENT_CONSISTENT_CLOB_BATCH",
+                "market_mid_source": metadata.get("market_mid_source"),
+                "coordinator_receipt": metadata.get("coordinator_receipt"),
+                "paper_exploration": metadata.get("paper_exploration") is True,
+                "paper_bootstrap_probe": metadata.get("paper_bootstrap_probe") is True,
+                "canonical_metadata": (
+                    metadata.get("canonical_metadata")
+                    if isinstance(metadata.get("canonical_metadata"), dict)
+                    else {
+                        "coordinator_receipt": metadata.get("coordinator_receipt"),
+                        "paper_exploration": metadata.get("paper_exploration") is True,
+                        "paper_bootstrap_probe": metadata.get("paper_bootstrap_probe") is True,
+                        "economic_authority": metadata.get("economic_authority"),
+                        "counterfactual": False,
+                        "excluded_from_portfolio_equity": False,
+                        "research_evidence_only": False,
+                    }
+                ),
             }
 
         self.state["forecasts"] = len(forecasts)
@@ -952,12 +1075,16 @@ class PaperRouter:
         self.state["forecasted_keys"] = sorted(seen_keys)[-10_000:]
         self.state["pending_forecasts"] = pending
         self.state["counterfactual_fills"] = len(fills)
-        self.state["candidates"] = len(candidate_ids)
-        self.state["opportunity_sets"] = len(opportunity_ids)
+        self.state["probe_fills"] = sum(
+            int((row.get("metadata") or {}).get("paper_bootstrap_probe") is True)
+            for row in fills.values()
+        )
         self.state["counterfactual_realized_pnl"] = sum(
             finite(row.get("counterfactual_pnl"), 0.0)
             for row in fill_finals.values()
         )
+        self.state["candidates"] = len(candidate_ids)
+        self.state["opportunity_sets"] = len(opportunity_ids)
         self.state["traded_markets"] = sorted({
             str(row.get("market_id") or "") for row in fills.values()
             if row.get("market_id")
@@ -1690,42 +1817,59 @@ class PaperRouter:
 
     def order_size(self, row: dict[str, Any]) -> float:
         book: Book = row["book"]
-        ask, visible = book.asks[0]
-        depth_fraction = min(
-            float(self.policy.get("max_depth_fraction", 0.5)),
-            float(self.policy.get("depth_survival_fraction", 0.75)),
-        )
-        starting_capital = float(self.state.get("starting_capital") or 0.0)
-        cash = float(self.state.get("cash") or 0.0)
-        if row.get("paper_bootstrap_probe") is True:
+        ask = float(row["ask"])
+        fee = float(row["fee_per_share"])
+        execution_risk = float(row["execution_risk"])
+        max_depth_fraction = min(1.0, max(0.0, float(self.policy.get("max_depth_fraction", 0.5))))
+        depth_survival = min(1.0, max(0.0, float(self.policy.get("depth_survival_fraction", 0.75))))
+        depth_fraction = min(max_depth_fraction, depth_survival)
+        visible = book.asks[0][1] if book.asks else 0.0
+        is_probe = row.get("paper_bootstrap_probe") is True
+        if is_probe:
             if self.probe_policy is None:
+                self.state["last_probe_size_diagnostics"] = {
+                    "feasible": False, "reason": "PAPER_PROBE_DISABLED",
+                }
                 return 0.0
-            capital_ceiling = min(
-                starting_capital * float(self.probe_policy["max_capital_fraction"]),
+            available_notional = min(
+                float(self.state.get("starting_capital") or 0.0)
+                * float(self.probe_policy["max_capital_fraction"]),
                 float(self.probe_policy["max_notional_usd"]),
                 float(self.probe_policy["max_loss_usd"]),
             )
-            available_notional = min(capital_ceiling, cash)
-        elif self.model_mature:
-            capital_ceiling = starting_capital * float(
-                self.policy.get("max_market_capital_fraction", 0.02)
-            )
-            probability = max(1e-6, min(1.0 - 1e-6, float(row["robust_probability"])))
-            kelly = max(0.0, float(row["robust_ev"])) / (probability * (1.0 - probability))
-            kelly_notional = cash * float(self.policy.get("fractional_kelly", 0.1)) * kelly
-            available_notional = min(capital_ceiling, kelly_notional, cash)
         else:
-            # Kelly sizing is not mathematically defensible before probability
-            # calibration is mature. Shadow observations use a fixed virtual
-            # notional so their economics stay comparable across contracts.
-            capital_ceiling = starting_capital * float(
-                self.policy.get("immature_exploration_capital_fraction", 0.0025)
-            )
-            available_notional = min(capital_ceiling, cash)
-        unit_budget_cost = ask + row["fee_per_share"] + (row["execution_risk"] if row.get("paper_bootstrap_probe") is True else 0.0)
-        size = min(visible * max(0.0, depth_fraction), available_notional / max(unit_budget_cost, 1e-9))
-        size = math.floor(size * 100.0) / 100.0
-        return size if size + 1e-9 >= book.min_order_size else 0.0
+            fraction_key = "max_market_capital_fraction" if self.model_mature else "immature_exploration_capital_fraction"
+            fraction = float(self.policy.get(fraction_key, 0.02 if self.model_mature else 0.0025))
+            available_notional = max(0.0, float(self.state["starting_capital"]) * fraction)
+        unit_budget_cost = max(1e-9, ask + fee + execution_risk)
+        raw_size = min(visible * depth_fraction, available_notional / unit_budget_cost)
+        size = math.floor(raw_size * 100.0 + 1e-9) / 100.0
+        if is_probe:
+            minimum_required_loss = book.min_order_size * unit_budget_cost
+            if visible * depth_fraction + 1e-9 < book.min_order_size:
+                reason = "PROBE_CONSERVATIVE_DEPTH_BELOW_MINIMUM"
+            elif available_notional + 1e-9 < minimum_required_loss:
+                reason = "PROBE_MINIMUM_ORDER_UNAFFORDABLE"
+            elif size + 1e-9 < book.min_order_size:
+                reason = "PROBE_MINIMUM_ORDER_UNEXECUTABLE"
+            else:
+                reason = "PROBE_SIZE_READY"
+            self.state["last_probe_size_diagnostics"] = {
+                "feasible": reason == "PROBE_SIZE_READY",
+                "reason": reason,
+                "capital_ceiling": available_notional,
+                "minimum_required_loss": minimum_required_loss,
+                "minimum_order_size": book.min_order_size,
+                "visible_top_size": visible,
+                "conservative_visible_size": visible * depth_fraction,
+                "depth_fraction": depth_fraction,
+                "unit_budget_cost": unit_budget_cost,
+                "raw_size": raw_size,
+                "rounded_size": size,
+            }
+        if size + 1e-9 < book.min_order_size:
+            return 0.0
+        return size
 
     def common(self, status: dict[str, Any], row: dict[str, Any], order_id: str, size: float) -> dict[str, Any]:
         market, fair, contract, reference = (
@@ -1820,7 +1964,10 @@ class PaperRouter:
         self.state.setdefault("attempted_at", {})[key] = current_ms
         size = self.order_size(row)
         if size <= 0.0:
-            self.last_attempt_reason = "BELOW_MINIMUM_EXECUTABLE_SIZE"
+            diagnostics = self.state.get("last_probe_size_diagnostics") if is_probe else {}
+            self.last_attempt_reason = str(
+                diagnostics.get("reason") if isinstance(diagnostics, dict) else ""
+            ) or "INVALID_SIZE"
             return False
         counterfactual_id = f"external-shadow-{stable_id(self.sha, market_id, row['outcome'], current_ms)}"
         common = self.common(status, row, counterfactual_id, size)
@@ -1935,13 +2082,14 @@ class PaperRouter:
             "excluded_from_portfolio_equity": False, "research_evidence_only": False,
         }
         spool_event(self.root, LedgerEvent(
+            record_id=f"external-paper-order-{stable_id(order_id)}",
             event_type="ORDER_SUBMITTED", strategy=STRATEGY, model_sha=self.sha,
             model_version=MODEL_VERSION, candidate_id=counterfactual_id,
             order_id=order_id, position_id=position_id, market_id=market_id,
             event_id=str(market.get("event_id") or ""), token_id=row["token_id"], side="BUY",
             exchange_ts_ms=arrival_book.exchange_ts_ms, receive_ts_ms=arrival_book.receive_ts_ms,
             decision_ts_ms=arrival_decision_ms, book_snapshot_id=arrival_book.snapshot_id,
-            limit_price=ask, intended_action="TAKE", intended_size=size, order_state="SUBMITTED_SHADOW",
+            limit_price=ask, intended_action="TAKE", intended_size=size, order_state="SUBMITTED_PAPER",
             predicted_alpha=arrival["robust_ev"], expected_ev=robust_ev, metadata=canonical_metadata,
         ))
         self.emit_shadow_ingress(LedgerEvent(
@@ -1957,6 +2105,7 @@ class PaperRouter:
             metadata=arrival_metadata,
         ))
         spool_event(self.root, LedgerEvent(
+            record_id=f"external-paper-fill-{stable_id(fill_id)}",
             event_type="FILL", strategy=STRATEGY, model_sha=self.sha,
             model_version=MODEL_VERSION, candidate_id=counterfactual_id, order_id=order_id,
             position_id=position_id, fill_id=fill_id, market_id=market_id,
@@ -1982,7 +2131,7 @@ class PaperRouter:
         self.emit_counterfactual(
             "VIRTUAL_FILL", counterfactual_id=counterfactual_id,
             strategy=STRATEGY, model_version=MODEL_VERSION,
-            fill_id=fill_id, position_id=position_id, market_id=market_id,
+            order_id=order_id, fill_id=fill_id, position_id=position_id, market_id=market_id,
             event_id=str(market.get("event_id") or ""), token_id=row["token_id"], side="BUY",
             exchange_ts_ms=arrival_book.exchange_ts_ms, receive_ts_ms=arrival_book.receive_ts_ms,
             fill_price=ask, filled_size=size, fee=total_fee,
@@ -2000,6 +2149,14 @@ class PaperRouter:
                     float((arrival_status.get("fair") or {}).get("yes"))
                     - float(arrival["market_yes"])
                 ),
+                "coordinator_receipt": receipt,
+                "paper_exploration": True,
+                "paper_bootstrap_probe": is_probe,
+                "economic_authority": "PAPER_EXPLORATION",
+                "counterfactual": False,
+                "excluded_from_portfolio_equity": False,
+                "research_evidence_only": False,
+                "canonical_metadata": canonical_metadata,
             },
         )
         self.state["counterfactual_fills"] = int(self.state.get("counterfactual_fills") or 0) + 1
@@ -2016,12 +2173,38 @@ class PaperRouter:
             "fee_schedule": schedule, "markouts": [], "settled": False,
             "coordinator_receipt": receipt, "paper_exploration": True,
             "paper_bootstrap_probe": is_probe,
+            "canonical_metadata": canonical_metadata,
             "model_yes": finite((arrival_status.get("fair") or {}).get("yes")),
             "market_yes": float(arrival["market_yes"]),
             "market_mid_source": "LIVE_COMPLEMENT_CONSISTENT_CLOB_BATCH",
         }
         self.last_attempt_reason = "VIRTUAL_FILL"
         return True
+
+    def canonical_position_metadata(self, position: dict[str, Any]) -> dict[str, Any]:
+        metadata = position.get("canonical_metadata")
+        if not isinstance(metadata, dict):
+            metadata = {
+                "coordinator_receipt": position.get("coordinator_receipt"),
+                "paper_exploration": position.get("paper_exploration") is True,
+                "paper_bootstrap_probe": position.get("paper_bootstrap_probe") is True,
+                "economic_authority": "PAPER_EXPLORATION",
+                "counterfactual": False,
+                "excluded_from_portfolio_equity": False,
+                "research_evidence_only": False,
+            }
+        receipt = metadata.get("coordinator_receipt")
+        if not isinstance(receipt, dict):
+            raise RuntimeError("PAPER_POSITION_COORDINATOR_RECEIPT_MISSING")
+        if (
+            metadata.get("paper_exploration") is not True
+            or metadata.get("economic_authority") != "PAPER_EXPLORATION"
+            or metadata.get("counterfactual") is not False
+            or metadata.get("excluded_from_portfolio_equity") is not False
+            or metadata.get("research_evidence_only") is not False
+        ):
+            raise RuntimeError("PAPER_POSITION_AUTHORITY_INVALID")
+        return dict(metadata)
 
     def observe_positions(self) -> None:
         current_ms = now_ms()
@@ -2037,7 +2220,33 @@ class PaperRouter:
                     liquidation = executable_sell_value(book, float(position["shares"]), schedule)
                     position["executable_value"] = liquidation
                     per_share = (liquidation - float(position["entry_cost"]) - float(position["entry_fee"])) / float(position["shares"])
+                    canonical_metadata = (
+                        self.canonical_position_metadata(position)
+                        if position.get("paper_exploration") is True else None
+                    )
                     for horizon in due:
+                        if canonical_metadata is not None:
+                            canonical_markout_metadata = {
+                                **canonical_metadata,
+                                "model_family": STRATEGY,
+                                "horizon_seconds": 300,
+                                "markout_horizon_seconds": horizon,
+                                "full_visible_depth": True,
+                                "fill_conditioned": True,
+                            }
+                            spool_event(self.root, LedgerEvent(
+                                record_id=f"external-paper-markout-{stable_id(position['fill_id'], horizon, book.snapshot_id)}",
+                                event_type="MARKOUT", strategy=STRATEGY, model_sha=self.sha,
+                                model_version=MODEL_VERSION,
+                                order_id=str(position["order_id"]), fill_id=str(position["fill_id"]),
+                                position_id=str(position["position_id"]), market_id=str(position["market_id"]),
+                                event_id=str(position["event_id"]), token_id=str(position["token_id"]),
+                                side="BUY", exchange_ts_ms=book.exchange_ts_ms,
+                                receive_ts_ms=book.receive_ts_ms, book_snapshot_id=book.snapshot_id,
+                                executable_liquidation_value=liquidation,
+                                markouts={f"{horizon}s": per_share},
+                                metadata=canonical_markout_metadata,
+                            ))
                         self.emit_counterfactual(
                             "VIRTUAL_MARKOUT", strategy=STRATEGY, model_version=MODEL_VERSION,
                             counterfactual_id=str(position["counterfactual_id"]),
@@ -2081,12 +2290,43 @@ class PaperRouter:
             resolved = outcomes[winning_index] if winning_index < len(outcomes) else ""
             payout = float(position["shares"]) if winning_token == str(position["token_id"]) else 0.0
             pnl = payout - float(position["entry_cost"]) - float(position["entry_fee"])
-            self.state["counterfactual_realized_pnl"] = float(
-                self.state.get("counterfactual_realized_pnl") or 0.0
-            ) + pnl
-            position["settled"] = True
-            position["resolved_outcome"] = resolved
             won = winning_token == str(position["token_id"])
+            if position.get("paper_exploration") is True:
+                canonical_metadata = {
+                    **self.canonical_position_metadata(position),
+                    "model_family": STRATEGY,
+                    "horizon_seconds": 300,
+                    "realized": True,
+                    "unwind_accounted": True,
+                    "cost_vector_complete": True,
+                    "settlement_outcome": resolved,
+                    "winning_token_id": winning_token,
+                    "won": won,
+                    "hold_to_settlement": True,
+                    "settlement_source": "POLYMARKET_GAMMA_PUBLIC",
+                    "settlement_timestamp_ms": current_ms,
+                    "settled_size": float(position["shares"]),
+                    "entry_notional": float(position["entry_cost"]),
+                    "entry_fees": float(position["entry_fee"]),
+                    "terminal_id": f"external-paper:{position['position_id']}:final",
+                    "pnl_decomposition": {
+                        "trading_pnl": pnl, "spread_capture": 0.0,
+                        "adverse_markout": 0.0, "inventory_pnl": 0.0,
+                        "maker_rebates": 0.0, "liquidity_rewards": 0.0,
+                        "own_reward_share_verified": False,
+                    },
+                }
+                spool_event(self.root, LedgerEvent(
+                    record_id=f"external-paper-final-{stable_id(position['position_id'], winning_token)}",
+                    event_type="FINAL", strategy=STRATEGY, model_sha=self.sha,
+                    model_version=MODEL_VERSION, order_id=str(position["order_id"]),
+                    position_id=str(position["position_id"]), market_id=str(position["market_id"]),
+                    event_id=str(position["event_id"]), token_id=str(position["token_id"]), side="BUY",
+                    final_pnl=pnl, realized_cashflow=pnl, fee=0.0, slippage=0.0,
+                    unwind_loss=0.0, capital_cost=0.0, latency_cost=0.0,
+                    capital_duration_ms=current_ms - int(position["opened_ms"]),
+                    metadata=canonical_metadata,
+                ))
             self.emit_counterfactual(
                 "VIRTUAL_FINAL", strategy=STRATEGY, model_version=MODEL_VERSION,
                 counterfactual_id=str(position["counterfactual_id"]),
@@ -2124,6 +2364,11 @@ class PaperRouter:
                     },
                 },
             ))
+            self.state["counterfactual_realized_pnl"] = float(
+                self.state.get("counterfactual_realized_pnl") or 0.0
+            ) + pnl
+            position["settled"] = True
+            position["resolved_outcome"] = resolved
 
     def publish(self, active_candidates: int, blocker: str = "") -> None:
         positions = self.state.get("positions") if isinstance(self.state.get("positions"), dict) else {}
@@ -2216,6 +2461,16 @@ class PaperRouter:
             },
             "probe_candidates": int(self.state.get("probe_candidates") or 0),
             "probe_fills": int(self.state.get("probe_fills") or 0),
+            "probe_diagnostics": self.state.get("last_probe_diagnostics") or {},
+            "probe_size_diagnostics": self.state.get("last_probe_size_diagnostics") or {},
+            "probe_capital_ceiling": (
+                min(
+                    float(self.state.get("starting_capital") or 0.0)
+                    * float(self.probe_policy["max_capital_fraction"]),
+                    float(self.probe_policy["max_notional_usd"]),
+                    float(self.probe_policy["max_loss_usd"]),
+                ) if self.probe_policy is not None else 0.0
+            ),
         })
 
     def step(self) -> None:
@@ -2225,6 +2480,11 @@ class PaperRouter:
         market_yes: float | None = None
         robust_rows: list[dict[str, Any]] = []
         probe_rows: list[dict[str, Any]] = []
+        probe_diagnostics: dict[str, Any] = {
+            "enabled": self.probe_policy is not None,
+            "eligible": False,
+            "reason": "PAPER_PROBE_UNASSESSED",
+        }
         if self.drain_path.exists():
             blocker = "CUTOVER_DRAIN"
             rows = []
@@ -2255,6 +2515,10 @@ class PaperRouter:
             }
             self.record_forecast(status, books)
             self.record_opportunity_set(status, books)
+            probe_diagnostics = paper_probe_diagnostics(
+                status, books, self.policy, self.probe_policy
+            )
+            self.state["last_probe_diagnostics"] = probe_diagnostics
             robust_rows = robust_candidates(status, books, self.policy)
             if not robust_rows:
                 probe_rows = paper_probe_candidates(
@@ -2289,6 +2553,12 @@ class PaperRouter:
                     "PAPER_PROBE_CANDIDATE_NOT_FILLED"
                     if probe_rows else "ROBUST_CANDIDATE_NOT_FILLED"
                 )
+            elif (
+                self.probe_policy is not None
+                and probe_diagnostics.get("reason")
+                not in {"PAPER_PROBE_CANDIDATE_READY", "PAPER_PROBE_UNASSESSED"}
+            ):
+                reason = str(probe_diagnostics["reason"])
             elif (status.get("fair") or {}).get("valid") and not entry_tte_allowed(
                     status.get("fair") or {}, self.policy):
                 reason = "ENTRY_TTE_OUTSIDE_WINDOW"
@@ -2305,7 +2575,10 @@ class PaperRouter:
             "market_id": str((status.get("market") or {}).get("market_id") or ""),
             "books": len(books),
             "robust_candidates": len(robust_rows),
-            "probe_candidates": len(probe_rows),
+                "probe_candidate_count": len(probe_rows),
+                "probe_diagnostics": probe_diagnostics,
+                "probe_size_diagnostics": self.state.get("last_probe_size_diagnostics") or {},
+                "candidate_count": len(rows),
             "candidate_mode": "ROBUST" if robust_rows else ("PAPER_BOOTSTRAP_PROBE" if probe_rows else "NONE"),
             "outcome": reason,
             "live_market_yes": market_yes,

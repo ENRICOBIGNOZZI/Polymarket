@@ -95,7 +95,7 @@ def test_bounded_probe_is_selected_only_after_robust_candidates_are_absent():
 def test_probe_caps_and_real_money_drift_fail_closed():
     for mutation in ("loss", "promotion", "model"):
         value=probe_envelope()
-        if mutation=="loss": value["exploration"]["maximum_probe_loss"]=2.01; value["exploration"]["probe_loss_cap"]=2.01
+        if mutation=="loss": value["exploration"]["maximum_probe_loss"]=5.01; value["exploration"]["probe_loss_cap"]=5.01
         elif mutation=="promotion": value["exploration"]["promotion_eligible"]=True
         else: value["exploration"]["model_id"]="unregistered"
         try: OpportunityEnvelope.parse(value)

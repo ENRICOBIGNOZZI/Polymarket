@@ -47,7 +47,7 @@ trade. In that cold-start state V7 keeps robust trading unchanged and may submit
 at most one separately labelled BTC M5 PAPER probe per contract. A probe requires
 positive point-estimate EV after authoritative fees and execution risk, a material
 but bounded model-market disagreement, fresh arrival-book revalidation and a hard
-maximum loss of 2 USD (also capped at 5 basis points of the engine sleeve).
+maximum loss of 5 USD (also capped at 25 basis points of the engine sleeve).
 
 The coordinator always prefers positive robust wealth change. Only when no robust
 candidate exists may it issue `paper_exploration_probe_authorized=true`. Probe
