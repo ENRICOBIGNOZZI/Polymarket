@@ -17,6 +17,7 @@ from v7_external_fair_paper_router import (  # noqa: E402
     opportunity_set, probability_interval_bin_diagnostics, robust_candidates,
 )
 from v7_opportunity import OpportunityEnvelope  # noqa: E402
+from v7_ledger_spool import drain_spool  # noqa: E402
 
 
 def snapshot() -> dict:
@@ -298,8 +299,24 @@ def main() -> None:
         assert status["ledger_writer_authority"] is False
         assert status["order_submission_enabled"] is False
         assert status["counterfactual_collection_enabled"] is True
-        assert status["fills"] == 0
+        assert status["orders_submitted"] == 1
+        assert status["fills"] == 1
+        assert status["open_positions"] == 1
         assert status["counterfactual_fills"] == 1
+        account = status["paper_exploration_account"]
+        assert account["complete"] is True
+        assert account["orders_submitted"] == 1
+        assert account["fills"] == 1
+        assert account["terminal_positions"] == 0
+        assert account["open_positions"] == 1
+        assert account["issues"] == []
+        assert account["invalid_spool_records"] == []
+        assert status["paper_exploration_accounting_active"] is True
+        assert status["simulated_paper_account_authority"] == (
+            "V7_CANONICAL_LEDGER_AND_SINGLE_WRITER_SPOOL"
+        )
+        assert status["cash"] == account["cash"]
+        assert status["equity"] == account["equity"]
         assert status["counterfactual_forecasts"] == 1
         assert status["counterfactual_opportunity_sets"] == 1
         assert status["counterfactual_pending_forecasts"] == 1
@@ -340,7 +357,7 @@ def main() -> None:
         with mock.patch.object(router, "request_json", side_effect=public_request_extreme):
             paper.step()
         status = json.loads((external / "paper_router_status.json").read_text())
-        assert status["fills"] == 0
+        assert status["fills"] == 1
         assert status["counterfactual_fills"] == 1
         assert status["last_decision"]["outcome"] == "MODEL_MARKET_DISAGREEMENT_LIMIT"
         assert status["rejection_reasons"]["MODEL_MARKET_DISAGREEMENT_LIMIT"] == 1
@@ -351,20 +368,23 @@ def main() -> None:
         status = json.loads((external / "paper_router_status.json").read_text())
         assert status["state"] == "DRAINING"
         assert status["drain_requested"] is True
-        assert status["drain_complete"] is True
+        assert status["drain_complete"] is False
         assert status["order_submission_enabled"] is False
         assert status["blocker"] == "CUTOVER_DRAIN"
-        assert status["fills"] == 0
+        assert status["fills"] == 1
+        assert status["open_positions"] == 1
         (run_root / "control" / "CUTOVER_DRAIN").unlink()
 
         failing = router.PaperRouter(
             run_root, "b" * 40, ROOT / "config" / "v7_external_fair.json",
             "https://clob.invalid", "https://gamma.invalid",
         )
-        # A cutover changes exact execution SHA but must not erase a compatible
-        # unresolved SHADOW position or its future settlement label.
+        # Compatible research evidence survives, but canonical PAPER inventory
+        # is exact-SHA. Production cutover must flatten/block the old position;
+        # it must never relabel that risk under the target SHA.
         assert failing.state["counterfactual_fills"] == 1
-        assert len(failing.state["positions"]) == 1
+        assert failing.state["positions"] == {}
+        assert failing.state["paper_exploration_account"]["open_positions"] == 0
         failed_status = snapshot()
         failed_status["code_sha"] = "b" * 40
         failed_status["market"].update({"market_id": "m2", "event_id": "e2"})
@@ -405,6 +425,69 @@ def main() -> None:
             "https://clob.invalid", "https://gamma.invalid",
         )
         opened_ms = router.now_ms() - 301_000
+        settlement_receipt = {
+            "schema": "polymarket_v7_global_opportunity_decision_v1",
+            "owner": "V7_GLOBAL_PORTFOLIO_COORDINATOR",
+            "action": "TAKE",
+            "engine_id": "CRYPTO_SETTLEMENT_ENGINE",
+            "selected_replay_key": "settlement-test",
+            "new_risk_authorized": False,
+            "paper_exploration_authorized": True,
+            "paper_exploration_probe_authorized": False,
+            "paper_only": True,
+            "authenticated_execution": False,
+            "real_order_submission": False,
+            "real_capital_at_risk": False,
+            "crypto_context": {
+                "asset": "BTC", "horizon": "M5",
+                "authority": "PAPER_EXPLORATION",
+            },
+        }
+        canonical_order = router.LedgerEvent(
+            event_type="ORDER_SUBMITTED", strategy=router.STRATEGY,
+            model_sha="c" * 40, model_version=router.MODEL_VERSION,
+            candidate_id="shadow-up", order_id="order-up",
+            position_id="position-up", market_id="market-up-down",
+            event_id="event-up-down", token_id="up-token", side="BUY",
+            exchange_ts_ms=opened_ms - 1, receive_ts_ms=opened_ms,
+            decision_ts_ms=opened_ms + 1, book_snapshot_id="settlement-snapshot",
+            limit_price=0.4, intended_action="TAKE", intended_size=10.0,
+            order_state="SUBMITTED_SHADOW",
+            metadata={
+                "coordinator_receipt": settlement_receipt,
+                "paper_exploration": True,
+                "paper_bootstrap_probe": False,
+                "economic_authority": "PAPER_EXPLORATION",
+                "counterfactual": False,
+                "excluded_from_portfolio_equity": False,
+                "research_evidence_only": False,
+                "outcome": "YES", "fair_yes": 0.7, "arrival_pm_mid": 0.6,
+            },
+        )
+        canonical_fill = router.LedgerEvent(
+            event_type="FILL", strategy=router.STRATEGY, model_sha="c" * 40,
+            model_version=router.MODEL_VERSION, candidate_id="shadow-up",
+            order_id="order-up", fill_id="fill-up", position_id="position-up",
+            market_id="market-up-down", event_id="event-up-down",
+            token_id="up-token", side="BUY",
+            exchange_ts_ms=opened_ms - 1, receive_ts_ms=opened_ms,
+            fill_price=0.4, filled_size=10.0, complete=True,
+            fee=0.2, fee_source="test:authoritative",
+            metadata={
+                "coordinator_receipt": settlement_receipt,
+                "paper_exploration": True,
+                "paper_bootstrap_probe": False,
+                "economic_authority": "PAPER_EXPLORATION",
+                "counterfactual": False,
+                "excluded_from_portfolio_equity": False,
+                "research_evidence_only": False,
+                "outcome": "YES", "fair_yes": 0.7, "pm_mid": 0.6,
+                "robust_net_ev": 0.5,
+            },
+        )
+        router.spool_event(run_root, canonical_order)
+        router.spool_event(run_root, canonical_fill)
+        assert drain_spool(run_root, model_sha="c" * 40)["appended"] == 2
         settling.state["positions"] = {"position-up": {
             "position_id": "position-up", "counterfactual_id": "shadow-up", "fill_id": "fill-up",
             "order_id": "order-up",
@@ -430,6 +513,202 @@ def main() -> None:
         assert final["virtual_cashflow"] == 10.0
         assert final["metadata"]["counterfactual"] is True
         assert final["metadata"]["winning_token_id"] == "up-token"
+        drained = drain_spool(run_root, model_sha="c" * 40)
+        assert drained["appended"] == 1 and drained["quarantined"] == 0
+        canonical = [
+            json.loads(line)
+            for line in (run_root / "ledger" / "execution.jsonl").read_text().splitlines()
+            if line.strip()
+        ]
+        assert [row["event_type"] for row in canonical] == [
+            "ORDER_SUBMITTED", "FILL", "FINAL",
+        ]
+        canonical_final = canonical[-1]
+        assert canonical_final["fill_id"] == "fill-up"
+        assert canonical_final["position_id"] == "position-up"
+        assert canonical_final["final_pnl"] == 5.8
+        assert canonical_final["realized_cashflow"] == 10.0
+        assert canonical_final["metadata"]["paper_exploration"] is True
+        assert canonical_final["metadata"]["counterfactual"] is False
+        assert canonical_final["metadata"]["excluded_from_portfolio_equity"] is False
+        assert canonical_final["metadata"]["canonical_terminal_reconciled_from"] == "VIRTUAL_FINAL"
+        retried = router.reconcile_paper_exploration_finals(
+            run_root, "c" * 40
+        )
+        assert retried["complete"] is True
+        assert retried["spooled_this_pass"] == 0
+        assert drain_spool(run_root, model_sha="c" * 40)["appended"] == 0
+        settled_account = settling.reconcile_canonical_account()
+        assert settled_account["complete"] is True
+        assert settled_account["orders_submitted"] == 1
+        assert settled_account["fills"] == 1
+        assert settled_account["terminal_positions"] == 1
+        assert settled_account["open_positions"] == 0
+        assert settled_account["cash"] == 4005.8
+        assert settled_account["equity"] == 4005.8
+        assert settled_account["realized_pnl"] == 5.8
+        resumed_account = router.PaperRouter(
+            run_root, "c" * 40, ROOT / "config" / "v7_external_fair.json",
+            "https://clob.invalid", "https://gamma.invalid",
+        )
+        assert resumed_account.state["cash"] == 4005.8
+        assert resumed_account.state["realized_pnl"] == 5.8
+        assert resumed_account.state["positions"] == {}
+        assert resumed_account.state["paper_exploration_account"]["complete"] is True
+
+    # Crash gap: the durable settlement fact may exist before its canonical
+    # terminal record. Reconciliation must spool exactly one FINAL even when
+    # retried before and after the single writer drains it.
+    with tempfile.TemporaryDirectory() as directory:
+        run_root = Path(directory)
+        model_sha = "d" * 40
+        receipt = {
+            "schema": "polymarket_v7_global_opportunity_decision_v1",
+            "owner": "V7_GLOBAL_PORTFOLIO_COORDINATOR",
+            "action": "TAKE", "engine_id": "CRYPTO_SETTLEMENT_ENGINE",
+            "selected_replay_key": "crash-gap",
+            "new_risk_authorized": False,
+            "paper_exploration_authorized": True,
+            "paper_exploration_probe_authorized": True,
+            "paper_only": True, "authenticated_execution": False,
+            "real_order_submission": False, "real_capital_at_risk": False,
+            "crypto_context": {
+                "asset": "BTC", "horizon": "M5",
+                "authority": "PAPER_EXPLORATION",
+            },
+        }
+        fill = router.LedgerEvent(
+            event_type="FILL", strategy=router.STRATEGY, model_sha=model_sha,
+            model_version=router.MODEL_VERSION, candidate_id="crash-candidate",
+            order_id="crash-order", fill_id="crash-fill",
+            position_id="crash-position", market_id="crash-market",
+            event_id="crash-event", token_id="crash-token", side="BUY",
+            exchange_ts_ms=1_000, receive_ts_ms=1_001,
+            fill_price=0.2, filled_size=5.0, complete=True,
+            fee=0.05, fee_source="test:authoritative",
+            metadata={
+                "coordinator_receipt": receipt, "paper_exploration": True,
+                "paper_bootstrap_probe": True,
+                "economic_authority": "PAPER_EXPLORATION",
+                "counterfactual": False,
+                "excluded_from_portfolio_equity": False,
+                "research_evidence_only": False,
+                "outcome": "YES", "fair_yes": 0.3, "pm_mid": 0.2,
+            },
+        )
+        router.spool_event(run_root, fill)
+        assert drain_spool(run_root, model_sha=model_sha)["appended"] == 1
+        tape = run_root / "external_fair" / "counterfactuals.jsonl"
+        tape.parent.mkdir(parents=True)
+        virtual_final = {
+            "schema": "polymarket_v7_external_fair_counterfactual_v1",
+            "record_id": "crash-virtual-final",
+            "event_type": "VIRTUAL_FINAL",
+            "model_sha": model_sha,
+            "model_version": router.MODEL_VERSION,
+            "execution_authority": "SHADOW_ZERO_AUTHORITY",
+            "paper_only": True, "authenticated_execution": False,
+            "real_order_submission": False,
+            "timestamp_ms": router.now_ms(),
+            "fill_id": "crash-fill", "position_id": "crash-position",
+            "market_id": "crash-market", "event_id": "crash-event",
+            "token_id": "crash-token", "side": "BUY",
+            "counterfactual_pnl": -1.05, "virtual_cashflow": 0.0,
+            "capital_duration_ms": 301_000,
+            "metadata": {
+                "settlement_outcome": "Down",
+                "winning_token_id": "other-token", "won": False,
+                "hold_to_settlement": True,
+            },
+        }
+        tape.write_text(json.dumps(virtual_final) + "\n")
+        first = router.reconcile_paper_exploration_finals(run_root, model_sha)
+        assert first["complete"] is True and first["spooled_this_pass"] == 1
+        second = router.reconcile_paper_exploration_finals(run_root, model_sha)
+        assert second["complete"] is True and second["spooled_this_pass"] == 0
+        assert drain_spool(run_root, model_sha=model_sha)["appended"] == 1
+        third = router.reconcile_paper_exploration_finals(run_root, model_sha)
+        assert third["complete"] is True and third["spooled_this_pass"] == 0
+        ledger_rows = [
+            json.loads(line) for line in
+            (run_root / "ledger" / "execution.jsonl").read_text().splitlines()
+        ]
+        assert [row["event_type"] for row in ledger_rows] == ["FILL", "FINAL"]
+        assert ledger_rows[-1]["final_pnl"] == -1.05
+        assert ledger_rows[-1]["realized_cashflow"] == 0.0
+        assert ledger_rows[-1]["metadata"]["paper_bootstrap_probe"] is True
+
+    # Crash after ORDER_SUBMITTED but before a virtual FAK fill: recovery
+    # closes one deterministic NONFILL and leaves cash/inventory untouched.
+    with tempfile.TemporaryDirectory() as directory:
+        run_root = Path(directory)
+        model_sha = "e" * 40
+        receipt = {
+            "schema": "polymarket_v7_global_opportunity_decision_v1",
+            "owner": "V7_GLOBAL_PORTFOLIO_COORDINATOR",
+            "action": "TAKE", "engine_id": "CRYPTO_SETTLEMENT_ENGINE",
+            "selected_replay_key": "orphan-order",
+            "new_risk_authorized": False,
+            "paper_exploration_authorized": True,
+            "paper_exploration_probe_authorized": True,
+            "paper_only": True, "authenticated_execution": False,
+            "real_order_submission": False, "real_capital_at_risk": False,
+            "crypto_context": {
+                "asset": "BTC", "horizon": "M5",
+                "authority": "PAPER_EXPLORATION",
+            },
+        }
+        order = router.LedgerEvent(
+            event_type="ORDER_SUBMITTED", strategy=router.STRATEGY,
+            model_sha=model_sha, model_version=router.MODEL_VERSION,
+            record_id="orphan-order-record", recorded_ts_ms=10_000,
+            candidate_id="orphan-candidate", order_id="orphan-order",
+            position_id="orphan-position", market_id="orphan-market",
+            event_id="orphan-event", token_id="orphan-token", side="BUY",
+            exchange_ts_ms=9_998, receive_ts_ms=9_999,
+            decision_ts_ms=10_000, book_snapshot_id="orphan-snapshot",
+            limit_price=0.25, intended_action="TAKE", intended_size=4.0,
+            order_state="SUBMITTED_SHADOW",
+            metadata={
+                "coordinator_receipt": receipt, "paper_exploration": True,
+                "paper_bootstrap_probe": True,
+                "economic_authority": "PAPER_EXPLORATION",
+                "counterfactual": False,
+                "excluded_from_portfolio_equity": False,
+                "research_evidence_only": False,
+            },
+        )
+        router.spool_event(run_root, order)
+        recovered = router.reconcile_paper_exploration_orphan_orders(
+            run_root, model_sha, current_ms=12_000,
+        )
+        assert recovered["complete"] is True
+        assert recovered["spooled_this_pass"] == 1
+        retried = router.reconcile_paper_exploration_orphan_orders(
+            run_root, model_sha, current_ms=13_000,
+        )
+        assert retried["complete"] is True
+        assert retried["spooled_this_pass"] == 0
+        assert drain_spool(run_root, model_sha=model_sha)["appended"] == 2
+        account = router.reconstruct_paper_exploration_account(
+            run_root, model_sha, 4000.0,
+        )
+        assert account["complete"] is True
+        assert account["orders_submitted"] == 1
+        assert account["fills"] == 0
+        assert account["terminal_nonfills"] == 1
+        assert account["open_positions"] == 0
+        assert account["cash"] == 4000.0
+        assert account["realized_pnl"] == 0.0
+        ledger_rows = [
+            json.loads(line) for line in
+            (run_root / "ledger" / "execution.jsonl").read_text().splitlines()
+        ]
+        assert [row["event_type"] for row in ledger_rows] == [
+            "ORDER_SUBMITTED", "ORDER_STATE",
+        ]
+        assert ledger_rows[-1]["order_state"] == "NONFILL"
+        assert ledger_rows[-1]["metadata"]["no_fill_fabricated"] is True
 
     with tempfile.TemporaryDirectory() as directory:
         run_root = Path(directory)
@@ -545,8 +824,85 @@ def main() -> None:
         assert final["settlement_outcome_prices"] == [1.0, 0.0]
 
 
+
+def test_paper_account_admission_controls_actual_step() -> None:
+    """Exercise the real step method; external effects and attempts are mocked."""
+    checks = (
+        ("canonical_order_reconciliation", "PAPER_EXPLORATION_ORDER_RECONCILIATION_INCOMPLETE"),
+        ("canonical_final_reconciliation", "PAPER_EXPLORATION_FINAL_RECONCILIATION_INCOMPLETE"),
+        ("paper_exploration_account", "PAPER_EXPLORATION_ACCOUNT_RECONCILIATION_INCOMPLETE"),
+    )
+    def make_collector():
+        collector = router.PaperRouter.__new__(router.PaperRouter)
+        collector.sha = "a" * 40
+        collector.source = Path("unused-source.json")
+        collector.root = Path("unused-test-root")
+        collector.drain_path = mock.Mock()
+        collector.drain_path.exists.return_value = False
+        collector.state = {key: {"complete": True} for key, _ in checks}
+        collector.policy = {}
+        collector.probe_policy = {}
+        collector.last_book_error = ""
+        collector.last_attempt_reason = ""
+        collector.last_live_market = {}
+        for name in ("record_forecast", "record_opportunity_set", "observe_positions",
+                     "reconcile_canonical_account", "observe_forecasts", "publish",
+                     "reject", "wait"):
+            setattr(collector, name, mock.Mock())
+        collector.books_for = mock.Mock(return_value={})
+        collector.attempt = mock.Mock(return_value=True)
+        return collector
+    observation = {"code_sha": "a" * 40, "market": {}, "fair": {}}
+    with mock.patch.object(router, "load", return_value=observation), \
+         mock.patch.object(router, "live_market_yes", return_value=0.5), \
+         mock.patch.object(router, "robust_candidates", return_value=[{"robust_ev": 0.1}]), \
+         mock.patch.object(router, "reconcile_paper_exploration_orphan_orders", return_value={"complete": True}), \
+         mock.patch.object(router, "reconcile_paper_exploration_finals", return_value={"complete": True}):
+        for key, reason in checks:
+            for invalid in (None, False, "invalid", [], {}, {"complete": False},
+                            {"complete": "true"}, {"complete": 1}):
+                collector = make_collector()
+                collector.state[key] = invalid
+                collector.step()
+                collector.attempt.assert_not_called()
+                collector.books_for.assert_not_called()
+                collector.reject.assert_called_once_with(reason)
+                collector.observe_positions.assert_called_once()
+                collector.reconcile_canonical_account.assert_called_once()
+                collector.observe_forecasts.assert_called_once()
+                collector.publish.assert_called_once_with(0, reason)
+            collector = make_collector()
+            del collector.state[key]
+            collector.step()
+            collector.attempt.assert_not_called()
+            collector.reject.assert_called_once_with(reason)
+        healthy = make_collector()
+        healthy.step()
+        healthy.attempt.assert_called_once()
+        healthy.publish.assert_called_once_with(1, "")
+        assert healthy.state["last_decision"]["outcome"] == "VIRTUAL_FILL"
+        drained = make_collector()
+        drained.drain_path.exists.return_value = True
+        drained.state["paper_exploration_account"] = None
+        drained.step()
+        drained.attempt.assert_not_called()
+        drained.reject.assert_called_once_with("CUTOVER_DRAIN")
+        drained.observe_positions.assert_called_once()
+        recovered = make_collector()
+        recovered.state["paper_exploration_account"] = {"complete": False}
+        def restore_account():
+            recovered.state["paper_exploration_account"] = {"complete": True}
+        recovered.reconcile_canonical_account.side_effect = restore_account
+        recovered.step()
+        recovered.attempt.assert_not_called()
+        recovered.step()
+        recovered.attempt.assert_called_once()
+        assert recovered.observe_positions.call_count == 2
+
+
 if __name__ == "__main__":
     main()
+    test_paper_account_admission_controls_actual_step()
 
 
 def test_arrival_candidate_runs_canonical_coordinator_before_receipt_poll() -> None:

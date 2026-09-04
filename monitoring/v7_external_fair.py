@@ -124,6 +124,13 @@ def summarize_external_fair(
     model = _dict(status.get("model"))
     tape = _dict(status.get("tape"))
     paper_router = _dict(status.get("paper_router"))
+    order_reconciliation = _dict(
+        paper_router.get("canonical_order_reconciliation")
+    )
+    terminal_reconciliation = _dict(
+        paper_router.get("canonical_final_reconciliation")
+    )
+    paper_account = _dict(paper_router.get("paper_exploration_account"))
     blockers = sorted({str(value) for value in _list(status.get("blockers")) if str(value)})
 
     continuity = str(oracle.get("continuity") or "CONTINUITY_UNKNOWN").upper()
@@ -189,6 +196,90 @@ def summarize_external_fair(
         if not bool(tape.get("evidence_valid", True)):
             hard_reasons.append("EXTERNAL_TAPE_INVALID")
         hard_reasons.extend(blockers)
+    account_number_fields = (
+        "starting_capital", "cash", "equity", "realized_pnl",
+        "entry_debit", "settlement_payout", "marked_open_value",
+        "peak_equity", "drawdown",
+    )
+    account_numbers_valid = all(
+        isinstance(paper_account.get(field), (int, float))
+        and not isinstance(paper_account.get(field), bool)
+        and math.isfinite(float(paper_account[field]))
+        for field in account_number_fields
+    )
+    account_orders = max(0, _integer(paper_account.get("orders_submitted"), 0))
+    account_fills = max(0, _integer(paper_account.get("fills"), 0))
+    account_terminals = max(0, _integer(paper_account.get("terminal_positions"), 0))
+    account_open = max(0, _integer(paper_account.get("open_positions"), 0))
+    account_cash = _number(paper_account.get("cash"), math.nan)
+    account_equity = _number(paper_account.get("equity"), math.nan)
+    account_pnl = _number(paper_account.get("realized_pnl"), math.nan)
+    account_start = _number(paper_account.get("starting_capital"), math.nan)
+    account_entry_debit = _number(paper_account.get("entry_debit"), math.nan)
+    account_payout = _number(paper_account.get("settlement_payout"), math.nan)
+    account_marked_open = _number(paper_account.get("marked_open_value"), math.nan)
+    account_identity_ok = bool(
+        account_numbers_valid
+        and account_orders >= account_fills >= account_terminals
+        and account_open == account_fills - account_terminals
+        and abs(account_cash - (account_start - account_entry_debit + account_payout)) <= 1e-7
+        and abs(account_equity - (account_cash + account_marked_open)) <= 1e-7
+        and abs(_number(paper_router.get("cash"), math.nan) - account_cash) <= 1e-7
+        and abs(_number(paper_router.get("equity"), math.nan) - account_equity) <= 1e-7
+        and abs(_number(paper_router.get("realized_pnl"), math.nan) - account_pnl) <= 1e-7
+        and max(0, _integer(paper_router.get("orders_submitted"), 0)) == account_orders
+        and max(0, _integer(paper_router.get("fills"), 0)) == account_fills
+        and max(0, _integer(paper_router.get("open_positions"), 0)) == account_open
+    )
+    if paper_router and (
+        order_reconciliation.get("schema")
+        != "polymarket_v7_paper_exploration_order_reconciliation_v1"
+        or order_reconciliation.get("model_sha") != status_sha
+        or order_reconciliation.get("paper_only") is not True
+        or order_reconciliation.get("authenticated_execution") is not False
+        or order_reconciliation.get("real_order_submission") is not False
+        or order_reconciliation.get("complete") is not True
+        or order_reconciliation.get("unresolved_orders") not in (None, [])
+        or order_reconciliation.get("invalid_spool_records") not in (None, [])
+        or order_reconciliation.get("conflicts") not in (None, [])
+    ):
+        hard_reasons.append(
+            "PAPER_EXPLORATION_ORDER_RECONCILIATION_INCOMPLETE"
+        )
+    if paper_router and (
+        terminal_reconciliation.get("schema")
+        != "polymarket_v7_paper_exploration_final_reconciliation_v1"
+        or terminal_reconciliation.get("model_sha") != status_sha
+        or terminal_reconciliation.get("paper_only") is not True
+        or terminal_reconciliation.get("authenticated_execution") is not False
+        or terminal_reconciliation.get("real_order_submission") is not False
+        or terminal_reconciliation.get("complete") is not True
+        or terminal_reconciliation.get("missing_canonical_fills") not in (None, [])
+        or terminal_reconciliation.get("invalid_virtual_finals") not in (None, [])
+    ):
+        hard_reasons.append(
+            "PAPER_EXPLORATION_FINAL_RECONCILIATION_INCOMPLETE"
+        )
+    if paper_router and (
+        paper_account.get("schema")
+        != "polymarket_v7_paper_exploration_account_v1"
+        or paper_account.get("model_sha") != status_sha
+        or paper_account.get("paper_only") is not True
+        or paper_account.get("authenticated_execution") is not False
+        or paper_account.get("real_order_submission") is not False
+        or paper_account.get("real_capital_at_risk") is not False
+        or paper_account.get("accounting_owner")
+        != "V7_CANONICAL_LEDGER_AND_SINGLE_WRITER_SPOOL"
+        or paper_account.get("execution_authority")
+        != "SIMULATED_PAPER_EXPLORATION_ONLY"
+        or paper_account.get("complete") is not True
+        or paper_account.get("issues") not in (None, [])
+        or paper_account.get("invalid_spool_records") not in (None, [])
+        or not account_identity_ok
+    ):
+        hard_reasons.append(
+            "PAPER_EXPLORATION_ACCOUNT_RECONCILIATION_INCOMPLETE"
+        )
 
     champion = _model_pointer(
         external_root / "model_registry" / "fair_value_champion.json"
@@ -292,6 +383,79 @@ def summarize_external_fair(
                 for reason, count in _dict(paper_router.get("rejection_reasons")).items()
             },
             "last_decision": _dict(paper_router.get("last_decision")),
+            "cash": _number(paper_router.get("cash"), 0.0),
+            "equity": _number(paper_router.get("equity"), 0.0),
+            "realized_pnl": _number(paper_router.get("realized_pnl"), 0.0),
+            "open_positions": max(0, _integer(paper_router.get("open_positions"), 0)),
+            "canonical_order_reconciliation": {
+                "present": bool(order_reconciliation),
+                "complete": order_reconciliation.get("complete") is True,
+                "orders": max(0, _integer(order_reconciliation.get("orders"), 0)),
+                "filled_orders": max(0, _integer(
+                    order_reconciliation.get("filled_orders"), 0
+                )),
+                "terminal_nonfills": max(0, _integer(
+                    order_reconciliation.get("terminal_nonfills"), 0
+                )),
+                "unresolved_orders": len(_list(
+                    order_reconciliation.get("unresolved_orders")
+                )),
+                "invalid_spool_records": len(_list(
+                    order_reconciliation.get("invalid_spool_records")
+                )),
+                "conflicts": len(_list(order_reconciliation.get("conflicts"))),
+            },
+            "canonical_final_reconciliation": {
+                "present": bool(terminal_reconciliation),
+                "complete": terminal_reconciliation.get("complete") is True,
+                "expected_terminal_positions": max(0, _integer(
+                    terminal_reconciliation.get("expected_terminal_positions"), 0
+                )),
+                "canonical_or_spooled_terminal_positions": max(0, _integer(
+                    terminal_reconciliation.get(
+                        "canonical_or_spooled_terminal_positions"
+                    ), 0
+                )),
+                "missing_canonical_fills": len(_list(
+                    terminal_reconciliation.get("missing_canonical_fills")
+                )),
+                "invalid_virtual_finals": len(_list(
+                    terminal_reconciliation.get("invalid_virtual_finals")
+                )),
+                "invalid_spool_records_observed": max(0, _integer(
+                    terminal_reconciliation.get("invalid_spool_records_observed"), 0
+                )),
+            },
+            "paper_exploration_account": {
+                "present": bool(paper_account),
+                "complete": paper_account.get("complete") is True,
+                "identity_ok": account_identity_ok,
+                "orders_submitted": account_orders,
+                "fills": account_fills,
+                "terminal_nonfills": max(0, _integer(
+                    paper_account.get("terminal_nonfills"), 0
+                )),
+                "terminal_positions": account_terminals,
+                "open_positions": account_open,
+                "probe_fills": max(0, _integer(paper_account.get("probe_fills"), 0)),
+                "starting_capital": _number(paper_account.get("starting_capital"), 0.0),
+                "entry_debit": _number(paper_account.get("entry_debit"), 0.0),
+                "settlement_payout": _number(paper_account.get("settlement_payout"), 0.0),
+                "marked_open_value": _number(paper_account.get("marked_open_value"), 0.0),
+                "cash": _number(paper_account.get("cash"), 0.0),
+                "realized_pnl": _number(paper_account.get("realized_pnl"), 0.0),
+                "equity": _number(paper_account.get("equity"), 0.0),
+                "peak_equity": _number(paper_account.get("peak_equity"), 0.0),
+                "drawdown": max(0.0, _number(paper_account.get("drawdown"), 0.0)),
+                "issues": len(_list(paper_account.get("issues"))),
+                "invalid_spool_records": len(_list(
+                    paper_account.get("invalid_spool_records")
+                )),
+                "accounting_owner": str(paper_account.get("accounting_owner") or ""),
+                "execution_authority": str(
+                    paper_account.get("execution_authority") or ""
+                ),
+            },
         },
         "purposes": purposes,
         "cancel": {
