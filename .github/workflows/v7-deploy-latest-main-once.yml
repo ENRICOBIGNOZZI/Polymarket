@@ -1,0 +1,187 @@
+name: V7 deploy latest main once
+
+on:
+  push:
+    branches: [codex/v7-maker-ttl]
+    paths: [.github/workflows/v7-deploy-latest-main-once.yml]
+
+permissions:
+  contents: read
+  actions: write
+
+concurrency:
+  group: v7-deploy-latest-main-once
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    env:
+      SERVER_HOST: ${{ vars.POLYMARKET_SERVER_HOST || '100.104.183.109' }}
+      SERVER_USER: ${{ vars.POLYMARKET_SERVER_USER || 'enrico' }}
+      SERVER_PORT: ${{ vars.POLYMARKET_SERVER_PORT || '22' }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          ref: codex/v7-maker-ttl
+          fetch-depth: 0
+      - name: Resolve and validate canonical main
+        id: target
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          git fetch --no-tags origin main
+          target="$(git rev-parse origin/main)"
+          [[ "$target" =~ ^[0-9a-f]{40}$ ]]
+          git worktree add --detach /tmp/v7-main "$target"
+          python3 /tmp/v7-main/scripts/v7_cutover_contract.py --repository-root /tmp/v7-main --expected-head "$target"
+          echo "sha=$target" >> "$GITHUB_OUTPUT"
+          printf 'TARGET_SHA=%s\n' "$target" | tee target.env
+      - name: Ensure exact-SHA Release and Debug CI
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TARGET_SHA: ${{ steps.target.outputs.sha }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          green() {
+            gh api -H 'Accept: application/vnd.github+json' \
+              "/repos/${GITHUB_REPOSITORY}/commits/${TARGET_SHA}/check-runs?per_page=100" \
+              --jq '[.check_runs[] | select((.name=="ci-v7-Release" or .name=="ci-v7-Debug") and .status=="completed" and .conclusion=="success") | .name] | unique | length' \
+              | grep -qx 2
+          }
+          if ! green; then
+            gh workflow run ci.yml --ref main -f expected_sha="$TARGET_SHA"
+            for _ in $(seq 1 180); do
+              green && exit 0
+              sleep 10
+            done
+            echo 'Exact-SHA Release/Debug did not become green' >&2
+            gh api "/repos/${GITHUB_REPOSITORY}/commits/${TARGET_SHA}/check-runs?per_page=100" \
+              --jq '.check_runs[] | select(.name=="ci-v7-Release" or .name=="ci-v7-Debug") | [.name,.status,.conclusion,.details_url] | @tsv' >&2
+            exit 1
+          fi
+      - name: Select Tailscale credential mode
+        id: tailscale_auth
+        env:
+          TS_AUTHKEY: ${{ secrets.TS_AUTHKEY }}
+          TS_OAUTH_CLIENT_ID: ${{ secrets.TS_OAUTH_CLIENT_ID }}
+          TS_OAUTH_SECRET: ${{ secrets.TS_OAUTH_SECRET }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ -n "${TS_AUTHKEY:-}" ]]; then mode=authkey
+          elif [[ -n "${TS_OAUTH_CLIENT_ID:-}" && -n "${TS_OAUTH_SECRET:-}" ]]; then mode=oauth
+          else echo 'No Tailscale credentials' >&2; exit 1; fi
+          echo "mode=$mode" >> "$GITHUB_OUTPUT"
+      - name: Join tailnet with auth key
+        if: steps.tailscale_auth.outputs.mode == 'authkey'
+        uses: tailscale/github-action@780049a30b6ff5c378a9e7b389d15ece7a204888
+        with:
+          authkey: ${{ secrets.TS_AUTHKEY }}
+          ping: ${{ env.SERVER_HOST }}
+      - name: Join tailnet with OAuth
+        if: steps.tailscale_auth.outputs.mode == 'oauth'
+        uses: tailscale/github-action@780049a30b6ff5c378a9e7b389d15ece7a204888
+        with:
+          oauth-client-id: ${{ secrets.TS_OAUTH_CLIENT_ID }}
+          oauth-secret: ${{ secrets.TS_OAUTH_SECRET }}
+          tags: ${{ vars.TS_TAGS || 'tag:ci' }}
+          ping: ${{ env.SERVER_HOST }}
+      - name: Configure SSH
+        env:
+          SSH_PRIVATE_KEY: ${{ secrets.POLYMARKET_SERVER_SSH_KEY }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          install -d -m 700 ~/.ssh
+          printf '%s\n' "$SSH_PRIVATE_KEY" > ~/.ssh/polymarket_once
+          chmod 600 ~/.ssh/polymarket_once
+          ssh-keyscan -T 5 -p "$SERVER_PORT" "$SERVER_HOST" > ~/.ssh/known_hosts
+      - name: Deploy exact current main through canonical updater
+        env:
+          TARGET_SHA: ${{ steps.target.outputs.sha }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          ssh_common=(-i ~/.ssh/polymarket_once -o IdentitiesOnly=yes -o BatchMode=yes -o ConnectTimeout=10 -p "$SERVER_PORT")
+          ssh "${ssh_common[@]}" "$SERVER_USER@$SERVER_HOST" "TARGET_SHA='$TARGET_SHA' bash -s" <<'REMOTE'
+          set -euo pipefail
+          cd "$HOME/polymarket"
+          if [[ "$(uname -s)" == Darwin ]]; then
+            for candidate in /opt/homebrew/bin/brew /usr/local/bin/brew; do
+              if [[ -x "$candidate" ]]; then eval "$("$candidate" shellenv)"; break; fi
+            done
+          fi
+          git fetch --no-tags origin main
+          test "$(git rev-parse origin/main)" = "$TARGET_SHA"
+          updater="$(mktemp)"; archiver="$(mktemp)"
+          trap 'rm -f "$updater" "$archiver"' EXIT
+          git show "$TARGET_SHA:ops/update_server_v7.sh" > "$updater"
+          git show "$TARGET_SHA:scripts/v7_prepare_cutover_run_root.py" > "$archiver"
+          chmod 700 "$updater"; chmod 600 "$archiver"
+          POLYMARKET_APP_DIR="$HOME/polymarket" \
+          POLYMARKET_CUTOVER_ARCHIVER="$archiver" \
+          EXPECTED_DEPLOY_SHA="$TARGET_SHA" \
+          POLYMARKET_DEPLOY_REF=main \
+          POLYMARKET_RUNTIME_HEALTH_ATTEMPTS=600 \
+          bash "$updater"
+          REMOTE
+      - name: Verify deployed runtime and print economic funnel
+        env:
+          TARGET_SHA: ${{ steps.target.outputs.sha }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          ssh -i ~/.ssh/polymarket_once -o IdentitiesOnly=yes -o BatchMode=yes -o ConnectTimeout=10 -p "$SERVER_PORT" "$SERVER_USER@$SERVER_HOST" "TARGET_SHA='$TARGET_SHA' bash -s" <<'REMOTE'
+          set -euo pipefail
+          cd "$HOME/polymarket"
+          root="$HOME/polymarket/runs/paper_v7_live"
+          test "$(git rev-parse HEAD)" = "$TARGET_SHA"
+          test "$(cat "$root/control/deployed_sha")" = "$TARGET_SHA"
+          python3 - "$root" "$TARGET_SHA" <<'PY'
+          import collections,json,os,sys,time,urllib.request
+          from pathlib import Path
+          root=Path(sys.argv[1]); sha=sys.argv[2]; now=int(time.time())
+          def load(p):
+              try:
+                  v=json.loads(p.read_text()); return v if isinstance(v,dict) else {}
+              except Exception:return {}
+          runtime=load(root/'control/runtime_status.json')
+          assert runtime.get('model_sha')==sha and runtime.get('state')=='running'
+          assert runtime.get('paper_only') is True
+          assert runtime.get('authenticated_execution') is False
+          assert runtime.get('real_order_submission') is False
+          assert runtime.get('real_capital_at_risk') is False
+          pid=int(runtime.get('pid') or 0); os.kill(pid,0)
+          print('RUNTIME',json.dumps({k:runtime.get(k) for k in ('model_sha','state','pid','economic_engines','economic_new_risk_ready','authorized_alpha_actions')},sort_keys=True))
+          for rel in ('external_fair/paper_router_status.json','control/global_portfolio_coordinator.json','control/portfolio_state.json'):
+              print(rel,json.dumps(load(root/rel),sort_keys=True)[:20000])
+          text=urllib.request.urlopen('http://127.0.0.1:9108/metrics',timeout=5).read().decode()
+          for line in text.splitlines():
+              if any(line.startswith(prefix) for prefix in (
+                  'polymarket_execution_','polymarket_runtime_pnl_usd','polymarket_v7_canonical_',
+                  'polymarket_v7_health','polymarket_v7_execution_alive','polymarket_v7_ledger_valid',
+                  'polymarket_v7_single_writer_ok','polymarket_v7_exact_sha_ok')):
+                  print(line)
+          reasons=collections.Counter()
+          for rel in ('external_fair/counterfactuals.jsonl','external_fair/research_evidence.jsonl','opportunities/decisions.jsonl'):
+              p=root/rel
+              if not p.exists(): continue
+              for raw in p.read_text(errors='replace').splitlines()[-5000:]:
+                  try: row=json.loads(raw)
+                  except Exception: continue
+                  for key in ('reason','last_attempt_reason','rejection_reason','status','state'):
+                      if isinstance(row.get(key),str): reasons[f'{rel}:{key}:{row[key]}']+=1
+                  if isinstance(row.get('reasons'),list):
+                      for reason in row['reasons']:
+                          if isinstance(reason,str): reasons[f'{rel}:reasons:{reason}']+=1
+          print('REJECT_FUNNEL',json.dumps(reasons.most_common(100)))
+          PY
+          curl -fsS http://127.0.0.1:9108/healthz
+          curl -fsS http://127.0.0.1:9090/-/ready >/dev/null
+          curl -fsS http://127.0.0.1:3000/api/health >/dev/null
+          REMOTE
