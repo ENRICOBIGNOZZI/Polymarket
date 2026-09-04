@@ -46,6 +46,25 @@ std::string as_string(const json::value& v) {
     return {};
 }
 
+std::string url_encode_component(const std::string& value) {
+    static constexpr char hex[] = "0123456789ABCDEF";
+    std::string encoded;
+    encoded.reserve(value.size());
+    for (const unsigned char c : value) {
+        const bool unreserved =
+            (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') ||
+            (c >= '0' && c <= '9') || c == '-' || c == '_' || c == '.' || c == '~';
+        if (unreserved) {
+            encoded.push_back(static_cast<char>(c));
+        } else {
+            encoded.push_back('%');
+            encoded.push_back(hex[(c >> 4) & 0x0f]);
+            encoded.push_back(hex[c & 0x0f]);
+        }
+    }
+    return encoded;
+}
+
 std::vector<std::string> string_array(const json::object& o, const char* key) {
     std::vector<std::string> out;
     auto it = o.find(key);
@@ -242,44 +261,81 @@ PolymarketApi::PolymarketApi(Config cfg) : cfg_(std::move(cfg)) {}
 
 std::vector<Market> PolymarketApi::discover_markets(std::size_t limit, double min_liquidity) const {
     const std::size_t requested = limit;
-    const std::size_t page_size = std::clamp<std::size_t>(cfg_.gamma_page_size, 1, 500);
+    const std::size_t page_size = std::clamp<std::size_t>(cfg_.gamma_page_size, 1, 100);
     std::vector<Market> out;
-    out.reserve(requested);
+    if (requested != 0) out.reserve(requested);
     std::unordered_set<std::string> seen;
-    std::size_t offset = 0;
+    std::unordered_set<std::string> seen_cursors;
+    std::unordered_set<std::string> seen_pages;
+    std::string cursor;
 
     std::size_t pages = 0;
-    while ((requested == 0 || out.size() < requested) && pages < 200) {
+    constexpr std::size_t max_pages = 10000;
+    while ((requested == 0 || out.size() < requested) && pages < max_pages) {
         std::ostringstream u;
-        u << cfg_.gamma_url << "/markets?active=true&closed=false&limit=" << page_size
-          << "&offset=" << offset << "&order=liquidityNum&ascending=false"
+        u << cfg_.gamma_url << "/markets/keyset?closed=false&limit=" << page_size
           << "&liquidity_num_min=" << std::setprecision(12) << min_liquidity;
+        if (!cursor.empty()) u << "&after_cursor=" << url_encode_component(cursor);
+
         const auto r = http_.get(u.str());
         if (r.status < 200 || r.status >= 300) {
-            throw std::runtime_error("Gamma markets HTTP " + std::to_string(r.status) + ": " + r.body.substr(0, 300));
+            throw std::runtime_error("Gamma markets keyset HTTP " + std::to_string(r.status) +
+                                     ": " + r.body.substr(0, 300));
         }
         const auto root = json::parse(r.body);
-        const json::array* arr = nullptr;
-        if (root.is_array()) arr = &root.as_array();
-        else if (root.is_object()) {
-            auto it = root.as_object().find("markets");
-            if (it != root.as_object().end() && it->value().is_array()) arr = &it->value().as_array();
+        if (!root.is_object()) {
+            throw std::runtime_error("Unexpected Gamma markets keyset response");
         }
-        if (!arr) throw std::runtime_error("Unexpected Gamma markets response");
+        const auto& object = root.as_object();
+        const auto markets_it = object.find("markets");
+        if (markets_it == object.end() || !markets_it->value().is_array()) {
+            throw std::runtime_error("Gamma markets keyset response missing markets array");
+        }
+        const auto& arr = markets_it->value().as_array();
 
-        for (const auto& v : *arr) {
+        std::string page_identity;
+        page_identity.reserve(arr.size() * 40);
+        for (const auto& v : arr) {
+            if (!v.is_object()) continue;
+            const auto& raw = v.as_object();
+            if (const auto id = raw.find("id"); id != raw.end()) {
+                page_identity += as_string(id->value());
+            }
+            page_identity.push_back(':');
+            if (const auto condition = raw.find("conditionId"); condition != raw.end()) {
+                page_identity += as_string(condition->value());
+            }
+            page_identity.push_back('\n');
+        }
+        if (!arr.empty() && !seen_pages.insert(page_identity).second) {
+            throw std::runtime_error("Gamma markets keyset repeated a page before exhaustion");
+        }
+
+        for (const auto& v : arr) {
             if (!v.is_object()) continue;
             if (auto m = parse_market_object(v.as_object(), min_liquidity)) {
                 if (seen.insert(m->id).second) out.push_back(std::move(*m));
                 if (requested != 0 && out.size() >= requested) break;
             }
         }
-        if (arr->size() < page_size) break;
-        offset += page_size;
+        if (requested != 0 && out.size() >= requested) break;
+
+        std::string next_cursor;
+        if (const auto next = object.find("next_cursor"); next != object.end()) {
+            next_cursor = as_string(next->value());
+        }
+        if (next_cursor.empty()) break;
+        if (arr.empty()) {
+            throw std::runtime_error("Gamma markets keyset returned an empty continuation page");
+        }
+        if (next_cursor == cursor || !seen_cursors.insert(next_cursor).second) {
+            throw std::runtime_error("Gamma markets keyset cursor did not advance");
+        }
+        cursor = std::move(next_cursor);
         ++pages;
     }
-    if (requested == 0 && pages >= 200) {
-        throw std::runtime_error("Gamma market pagination guard reached before exhaustion");
+    if ((requested == 0 || out.size() < requested) && pages >= max_pages) {
+        throw std::runtime_error("Gamma markets keyset pagination guard reached before exhaustion");
     }
     return out;
 }
