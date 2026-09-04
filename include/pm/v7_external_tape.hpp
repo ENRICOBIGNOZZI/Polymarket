@@ -32,6 +32,15 @@ inline constexpr std::size_t kExternalRawTapeQueueCapacity = 256;
 // frames retain the compact high-depth path above.
 inline constexpr std::size_t kExternalLargeRawTapePayloadBytes = 2 * 1024 * 1024;
 inline constexpr std::size_t kExternalLargeRawTapeQueueCapacity = 8;
+inline constexpr std::uint64_t kExternalTapeDefaultSegmentMaxBytes =
+    256ULL * 1024ULL * 1024ULL;
+inline constexpr std::int64_t kExternalTapeDefaultSegmentMaxAgeNs =
+    15LL * 60LL * 1'000'000'000LL;
+
+struct TapeSegmentationPolicy {
+    std::uint64_t maximum_segment_bytes = kExternalTapeDefaultSegmentMaxBytes;
+    std::int64_t maximum_segment_age_ns = kExternalTapeDefaultSegmentMaxAgeNs;
+};
 
 enum class TapeRecordKind : std::uint16_t {
     OracleEvent = 1,
@@ -77,6 +86,8 @@ struct TapeRecorderSnapshot {
     std::uint64_t dropped_payload_too_large = 0;
     std::uint64_t dropped_queue_full = 0;
     std::size_t queued = 0;
+    std::uint64_t closed_segments = 0;
+    std::uint64_t active_segment_bytes = 0;
     std::uint8_t evidence_valid = 1;
     std::uint8_t writer_healthy = 1;
     std::array<std::uint8_t, 6> reserved{};
@@ -164,7 +175,8 @@ public:
                          std::string run_id,
                          std::string session_id,
                          std::string source,
-                         std::int64_t creation_wall_ns);
+                         std::int64_t creation_wall_ns,
+                         TapeSegmentationPolicy segmentation = {});
     ~ExternalTapeRecorder();
 
     ExternalTapeRecorder(const ExternalTapeRecorder&) = delete;
@@ -190,7 +202,8 @@ public:
                             std::string run_id,
                             std::string session_id,
                             std::string source,
-                            std::int64_t creation_wall_ns);
+                            std::int64_t creation_wall_ns,
+                            TapeSegmentationPolicy segmentation = {});
     ~ExternalRawTapeRecorder();
 
     ExternalRawTapeRecorder(const ExternalRawTapeRecorder&) = delete;
@@ -208,11 +221,15 @@ private:
     std::unique_ptr<Impl> impl_;
 };
 
+static_assert(std::is_trivially_copyable_v<TapeSegmentationPolicy>);
 static_assert(std::is_trivially_copyable_v<TapeSessionHeader>);
+static_assert(sizeof(TapeSessionHeader) == 232, "binary retention parses this ABI");
 static_assert(std::is_trivially_copyable_v<TapeRecord>);
+static_assert(sizeof(TapeRecord) == 544, "normalized tape record ABI drift");
 static_assert(std::is_trivially_copyable_v<TapeRecorderSnapshot>);
 static_assert(std::is_trivially_copyable_v<RawTapeRecord>);
 static_assert(std::is_trivially_copyable_v<LargeRawTapeRecord>);
 static_assert(std::is_trivially_copyable_v<RawTapeDiskRecordHeader>);
+static_assert(sizeof(RawTapeDiskRecordHeader) == 40, "raw tape disk ABI drift");
 
 } // namespace pm::v7::external_fair
