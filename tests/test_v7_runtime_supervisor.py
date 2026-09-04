@@ -69,6 +69,37 @@ def _write_external_state(root: Path, sha: str, *, full: bool = True, books: int
         "ledger_writer_authority": False,
         "order_submission_enabled": False,
         "counterfactual_collection_enabled": True,
+        "simulated_paper_account_authority": "V7_CANONICAL_LEDGER_AND_SINGLE_WRITER_SPOOL",
+        "paper_exploration_accounting_active": True,
+        "canonical_order_reconciliation": {
+            "schema": "polymarket_v7_paper_exploration_order_reconciliation_v1",
+            "model_sha": sha, "paper_only": True,
+            "authenticated_execution": False, "real_order_submission": False,
+            "complete": True, "unresolved_orders": [],
+            "invalid_spool_records": [], "conflicts": [],
+        },
+        "canonical_final_reconciliation": {
+            "schema": "polymarket_v7_paper_exploration_final_reconciliation_v1",
+            "model_sha": sha, "paper_only": True,
+            "authenticated_execution": False, "real_order_submission": False,
+            "complete": True, "missing_canonical_fills": [],
+            "invalid_virtual_finals": [],
+        },
+        "paper_exploration_account": {
+            "schema": "polymarket_v7_paper_exploration_account_v1",
+            "model_sha": sha, "paper_only": True,
+            "authenticated_execution": False, "real_order_submission": False,
+            "real_capital_at_risk": False,
+            "accounting_owner": "V7_CANONICAL_LEDGER_AND_SINGLE_WRITER_SPOOL",
+            "execution_authority": "SIMULATED_PAPER_EXPLORATION_ONLY",
+            "complete": True, "issues": [], "invalid_spool_records": [],
+            "starting_capital": 4000.0, "cash": 4000.0, "equity": 4000.0,
+            "realized_pnl": 0.0, "entry_debit": 0.0,
+            "settlement_payout": 0.0, "orders_submitted": 0,
+            "fills": 0, "terminal_positions": 0, "open_positions": 0,
+        },
+        "orders_submitted": 0, "fills": 0, "open_positions": 0,
+        "cash": 4000.0, "equity": 4000.0, "realized_pnl": 0.0,
         "killed": False,
         "blocker": "",
         "book_requests": 7,
@@ -82,6 +113,22 @@ def test_external_fair_readiness_requires_complete_chain_and_two_books(tmp_path:
     _write_external_state(tmp_path, sha)
     assert supervisor.external_fair_ready(tmp_path, sha, now=1_001)
     _write_external_state(tmp_path, sha, books=0)
+    assert not supervisor.external_fair_ready(tmp_path, sha, now=1_001)
+    _write_external_state(tmp_path, sha)
+    router_path = tmp_path / "external_fair" / "paper_router_status.json"
+    router_status = json.loads(router_path.read_text())
+    router_status["canonical_final_reconciliation"]["complete"] = False
+    router_path.write_text(json.dumps(router_status))
+    assert not supervisor.external_fair_ready(tmp_path, sha, now=1_001)
+    _write_external_state(tmp_path, sha)
+    router_status = json.loads(router_path.read_text())
+    router_status["canonical_order_reconciliation"]["complete"] = False
+    router_path.write_text(json.dumps(router_status))
+    assert not supervisor.external_fair_ready(tmp_path, sha, now=1_001)
+    _write_external_state(tmp_path, sha)
+    router_status = json.loads(router_path.read_text())
+    router_status["cash"] = 3999.0
+    router_path.write_text(json.dumps(router_status))
     assert not supervisor.external_fair_ready(tmp_path, sha, now=1_001)
     _write_external_state(tmp_path, sha, full=False)
     assert not supervisor.external_fair_ready(tmp_path, sha, now=1_001)

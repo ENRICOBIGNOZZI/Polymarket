@@ -23,7 +23,9 @@ from pathlib import Path
 from typing import Any
 
 from v7_market_common import finite, parse_array, request_json
-from v7_execution_ledger import LedgerEvent
+from v7_execution_ledger import (
+    LedgerEvent, canonical_ledger_path, iter_records,
+)
 from v7_ledger_spool import spool_event
 from v7_global_portfolio_coordinator import process_cut as process_global_portfolio_cut
 from v7_crypto_settlement import load_registry as load_crypto_registry, require_context
@@ -67,6 +69,718 @@ def stable_id(*parts: Any) -> str:
 def identity_hash(value: Any) -> bool:
     text = str(value or "")
     return len(text) in {40, 64} and all(ch in "0123456789abcdef" for ch in text)
+
+
+def canonical_exploration_final_record_id(
+    model_sha: str, position_id: str, fill_id: str,
+) -> str:
+    return stable_id(
+        "PAPER_EXPLORATION_CANONICAL_FINAL_V1", model_sha, position_id, fill_id,
+    )
+
+
+def _paper_exploration_evidence_paths(run_root: Path) -> list[Path]:
+    family_root = run_root.parent if run_root.name == "paper_v7_live" else run_root
+    return [
+        family_root / "paper_v7_durable" / "external_fair" / "counterfactuals.jsonl",
+        run_root / "external_fair" / "counterfactuals.jsonl",
+    ]
+
+
+def _read_complete_counterfactual_records(paths: list[Path]) -> dict[str, dict[str, Any]]:
+    records: dict[str, dict[str, Any]] = {}
+    canonical: dict[str, str] = {}
+    for source in paths:
+        if not source.is_file():
+            continue
+        payload = source.read_bytes()
+        for line_number, raw in enumerate(payload.splitlines(keepends=True), start=1):
+            if not raw.strip():
+                continue
+            if not raw.endswith(b"\n"):
+                # The active writer may be between write(2) and fsync(2). A later
+                # reconciliation pass will consume the completed record.
+                continue
+            try:
+                row = json.loads(raw)
+            except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+                raise RuntimeError(
+                    f"paper_exploration_counterfactual_invalid:{source}:{line_number}"
+                ) from exc
+            if not isinstance(row, dict) or not row.get("record_id"):
+                raise RuntimeError(
+                    f"paper_exploration_counterfactual_shape:{source}:{line_number}"
+                )
+            record_id = str(row["record_id"])
+            rendered = json.dumps(row, separators=(",", ":"), sort_keys=True)
+            prior = canonical.get(record_id)
+            if prior is not None and prior != rendered:
+                raise RuntimeError(
+                    f"paper_exploration_counterfactual_conflict:{record_id}"
+                )
+            canonical[record_id] = rendered
+            records.setdefault(record_id, row)
+    return records
+
+
+def reconcile_paper_exploration_finals(
+    run_root: Path, model_sha: str,
+) -> dict[str, Any]:
+    """Crash-safely complete canonical PAPER_EXPLORATION terminal lifecycles.
+
+    The durable VIRTUAL_FINAL is the settlement fact. The matching canonical
+    FILL supplies the coordinator receipt and exact execution identity. A
+    deterministic FINAL id plus canonical/spool inspection makes retries
+    idempotent across crashes before or after the ledger router appends it.
+    """
+    root = Path(run_root)
+    records = _read_complete_counterfactual_records(
+        _paper_exploration_evidence_paths(root)
+    )
+    virtual_finals: dict[str, dict[str, Any]] = {}
+    for row in records.values():
+        if (
+            row.get("event_type") == "VIRTUAL_FINAL"
+            and row.get("model_sha") == model_sha
+            and row.get("paper_only") is True
+            and row.get("authenticated_execution") is False
+            and row.get("real_order_submission") is False
+            and row.get("execution_authority") == "SHADOW_ZERO_AUTHORITY"
+            and row.get("fill_id")
+        ):
+            virtual_finals.setdefault(str(row["fill_id"]), row)
+
+    existing_record_ids: set[str] = set()
+    terminal_positions: set[str] = set()
+    fills: dict[str, LedgerEvent] = {}
+    ledger = canonical_ledger_path(root)
+    if ledger.is_file():
+        for record in iter_records(ledger):
+            if not isinstance(record, LedgerEvent) or record.model_sha != model_sha:
+                continue
+            existing_record_ids.add(record.record_id)
+            if record.strategy.upper() != STRATEGY:
+                continue
+            if record.event_type == "FILL" and record.fill_id:
+                fills.setdefault(record.fill_id, record)
+            elif (
+                record.event_type == "FINAL"
+                and record.position_id
+                and record.metadata.get("paper_exploration") is True
+                and record.metadata.get("economic_authority") == "PAPER_EXPLORATION"
+                and record.metadata.get("counterfactual") is False
+                and record.metadata.get("excluded_from_portfolio_equity") is False
+            ):
+                terminal_positions.add(record.position_id)
+
+    spool_invalid = 0
+    spool = root / "ledger" / "spool"
+    for item in sorted(spool.glob("*.json")) if spool.is_dir() else []:
+        try:
+            raw = json.loads(item.read_text(encoding="utf-8"))
+            if isinstance(raw, dict) and raw.get("record_kind") == "ECONOMIC_JOURNAL":
+                continue
+            record = LedgerEvent.from_dict(raw)
+        except Exception:
+            spool_invalid += 1
+            continue
+        if record.model_sha != model_sha:
+            continue
+        existing_record_ids.add(record.record_id)
+        if record.strategy.upper() != STRATEGY:
+            continue
+        if record.event_type == "FILL" and record.fill_id:
+            fills.setdefault(record.fill_id, record)
+        elif (
+            record.event_type == "FINAL"
+            and record.position_id
+            and record.metadata.get("paper_exploration") is True
+            and record.metadata.get("economic_authority") == "PAPER_EXPLORATION"
+            and record.metadata.get("counterfactual") is False
+            and record.metadata.get("excluded_from_portfolio_equity") is False
+        ):
+            terminal_positions.add(record.position_id)
+
+    spooled = 0
+    missing_fill: list[str] = []
+    invalid_final: list[str] = []
+    for fill_id, virtual_final in sorted(virtual_finals.items()):
+        position_id = str(virtual_final.get("position_id") or "")
+        if not position_id:
+            invalid_final.append(fill_id)
+            continue
+        final_id = canonical_exploration_final_record_id(
+            model_sha, position_id, fill_id
+        )
+        if final_id in existing_record_ids or position_id in terminal_positions:
+            continue
+        fill = fills.get(fill_id)
+        if fill is None:
+            missing_fill.append(fill_id)
+            continue
+        fill_metadata = dict(fill.metadata)
+        receipt = fill_metadata.get("coordinator_receipt")
+        if (
+            fill_metadata.get("paper_exploration") is not True
+            or fill_metadata.get("economic_authority") != "PAPER_EXPLORATION"
+            or not isinstance(receipt, dict)
+        ):
+            missing_fill.append(fill_id)
+            continue
+        pnl = finite(virtual_final.get("counterfactual_pnl"), math.nan)
+        payout = finite(virtual_final.get("virtual_cashflow"), math.nan)
+        shares = finite(fill.filled_size, math.nan)
+        entry_price = finite(fill.fill_price, math.nan)
+        entry_fee = finite(fill.fee, math.nan)
+        settlement = virtual_final.get("metadata")
+        settlement = settlement if isinstance(settlement, dict) else {}
+        if (
+            not math.isfinite(pnl)
+            or not math.isfinite(payout) or payout < 0.0
+            or not math.isfinite(shares) or shares <= 0.0
+            or not math.isfinite(entry_price) or not 0.0 <= entry_price <= 1.0
+            or not math.isfinite(entry_fee) or entry_fee < 0.0
+        ):
+            invalid_final.append(fill_id)
+            continue
+        entry_debit = shares * entry_price + entry_fee
+        won = settlement.get("won")
+        expected_payout = shares if won is True else 0.0 if won is False else None
+        if (
+            payout > shares + 1e-7
+            or abs(pnl - (payout - entry_debit)) > 1e-7
+            or (expected_payout is not None and abs(payout - expected_payout) > 1e-7)
+        ):
+            invalid_final.append(fill_id)
+            continue
+        recorded_ms = max(
+            int(virtual_final.get("timestamp_ms") or 0),
+            int(fill.recorded_ts_ms) + 1,
+        )
+        duration = virtual_final.get("capital_duration_ms")
+        try:
+            duration_ms = max(0, int(duration)) if duration is not None else None
+        except (TypeError, ValueError, OverflowError):
+            duration_ms = None
+        metadata = {
+            **fill_metadata,
+            "paper_exploration": True,
+            "economic_authority": "PAPER_EXPLORATION",
+            "counterfactual": False,
+            "excluded_from_portfolio_equity": False,
+            "research_evidence_only": False,
+            "canonical_terminal_reconciled_from": "VIRTUAL_FINAL",
+            "virtual_final_record_id": str(virtual_final.get("record_id") or ""),
+            "realized": True,
+            "unwind_accounted": True,
+            "cost_vector_complete": True,
+            "terminal_id": f"paper-exploration:{position_id}:final",
+            "settlement_outcome": settlement.get("settlement_outcome"),
+            "winning_token_id": settlement.get("winning_token_id"),
+            "won": settlement.get("won"),
+            "hold_to_settlement": settlement.get("hold_to_settlement") is True,
+            "entry_debit": entry_debit,
+            "settlement_payout": payout,
+            "cash_identity_verified": True,
+            "pnl_decomposition": {
+                "trading_pnl": pnl,
+                "spread_capture": 0.0,
+                "adverse_markout": 0.0,
+                "inventory_pnl": 0.0,
+                "maker_rebates": 0.0,
+                "liquidity_rewards": 0.0,
+                "own_reward_share_verified": False,
+            },
+        }
+        spool_event(root, LedgerEvent(
+            event_type="FINAL", strategy=fill.strategy, model_sha=model_sha,
+            model_version=fill.model_version, record_id=final_id,
+            recorded_ts_ms=recorded_ms, candidate_id=fill.candidate_id,
+            order_id=fill.order_id, fill_id=fill_id, position_id=position_id,
+            market_id=fill.market_id, event_id=fill.event_id,
+            token_id=fill.token_id, side=fill.side, intended_action="TAKE",
+            final_pnl=pnl, realized_cashflow=payout, fee=0.0, slippage=0.0,
+            unwind_loss=0.0, capital_cost=0.0, latency_cost=0.0,
+            capital_duration_ms=duration_ms, metadata=metadata,
+        ))
+        existing_record_ids.add(final_id)
+        terminal_positions.add(position_id)
+        spooled += 1
+
+    expected_positions = {
+        str(row.get("position_id") or "") for row in virtual_finals.values()
+        if row.get("position_id")
+    }
+    completed = len(expected_positions & terminal_positions)
+    report = {
+        "schema": "polymarket_v7_paper_exploration_final_reconciliation_v1",
+        "model_sha": model_sha,
+        "paper_only": True,
+        "authenticated_execution": False,
+        "real_order_submission": False,
+        "expected_terminal_positions": len(expected_positions),
+        "canonical_or_spooled_terminal_positions": completed,
+        "spooled_this_pass": spooled,
+        "missing_canonical_fills": sorted(missing_fill),
+        "invalid_virtual_finals": sorted(invalid_final),
+        "invalid_spool_records_observed": spool_invalid,
+    }
+    report["complete"] = (
+        completed == len(expected_positions)
+        and not missing_fill
+        and not invalid_final
+    )
+    return report
+
+
+
+def _canonical_paper_exploration_event(event: LedgerEvent) -> bool:
+    metadata = event.metadata if isinstance(event.metadata, dict) else {}
+    return (
+        event.strategy.upper() == STRATEGY
+        and metadata.get("paper_exploration") is True
+        and metadata.get("economic_authority") == "PAPER_EXPLORATION"
+        and metadata.get("counterfactual") is False
+        and metadata.get("excluded_from_portfolio_equity") is False
+        and metadata.get("research_evidence_only") is False
+    )
+
+
+def _canonical_and_spooled_events(
+    run_root: Path, model_sha: str,
+) -> tuple[list[LedgerEvent], list[str]]:
+    """Load exact-SHA ledger plus not-yet-drained spool without double counting."""
+    root = Path(run_root)
+    by_record_id: dict[str, LedgerEvent] = {}
+    canonical: dict[str, str] = {}
+    ledger = canonical_ledger_path(root)
+    if ledger.is_file():
+        for record in iter_records(ledger):
+            if not isinstance(record, LedgerEvent) or record.model_sha != model_sha:
+                continue
+            rendered = json.dumps(
+                record.to_dict(), separators=(",", ":"), sort_keys=True,
+            )
+            prior = canonical.get(record.record_id)
+            if prior is not None and prior != rendered:
+                raise RuntimeError(
+                    f"paper_exploration_record_id_conflict:{record.record_id}"
+                )
+            canonical[record.record_id] = rendered
+            by_record_id.setdefault(record.record_id, record)
+
+    invalid_spool: list[str] = []
+    spool = root / "ledger" / "spool"
+    for item in sorted(spool.glob("*.json")) if spool.is_dir() else []:
+        try:
+            raw = json.loads(item.read_text(encoding="utf-8"))
+            if isinstance(raw, dict) and raw.get("record_kind") == "ECONOMIC_JOURNAL":
+                continue
+            record = LedgerEvent.from_dict(raw)
+        except Exception:
+            invalid_spool.append(item.name)
+            continue
+        if record.model_sha != model_sha:
+            continue
+        rendered = json.dumps(
+            record.to_dict(), separators=(",", ":"), sort_keys=True,
+        )
+        prior = canonical.get(record.record_id)
+        if prior is not None and prior != rendered:
+            raise RuntimeError(
+                f"paper_exploration_record_id_conflict:{record.record_id}"
+            )
+        canonical[record.record_id] = rendered
+        by_record_id.setdefault(record.record_id, record)
+    events = sorted(
+        by_record_id.values(), key=lambda event: (
+            int(event.recorded_ts_ms), event.record_id,
+        )
+    )
+    return events, invalid_spool
+
+
+def canonical_exploration_nonfill_record_id(
+    model_sha: str, order_id: str,
+) -> str:
+    return stable_id(
+        "PAPER_EXPLORATION_CANONICAL_NONFILL_V1", model_sha, order_id,
+    )
+
+
+def reconcile_paper_exploration_orphan_orders(
+    run_root: Path, model_sha: str, *, current_ms: int | None = None,
+    orphan_age_ms: int = 1_000,
+) -> dict[str, Any]:
+    """Close crash-stranded virtual FAK orders without inventing a fill."""
+    root = Path(run_root)
+    now = now_ms() if current_ms is None else int(current_ms)
+    events, invalid_spool = _canonical_and_spooled_events(root, model_sha)
+    orders: dict[str, LedgerEvent] = {}
+    filled_orders: set[str] = set()
+    terminal_orders: set[str] = set()
+    existing_ids = {event.record_id for event in events}
+    conflicts: list[str] = []
+    for event in events:
+        if not _canonical_paper_exploration_event(event):
+            continue
+        order_id = str(event.order_id or "")
+        if event.event_type == "ORDER_SUBMITTED" and order_id:
+            prior = orders.get(order_id)
+            if prior is not None and prior.record_id != event.record_id:
+                conflicts.append(f"duplicate_order:{order_id}")
+            else:
+                orders[order_id] = event
+        elif event.event_type == "FILL" and order_id:
+            filled_orders.add(order_id)
+        elif (
+            event.event_type == "ORDER_STATE"
+            and order_id
+            and event.complete is True
+            and event.order_state in {"CANCELLED", "EXPIRED", "REJECTED", "NONFILL"}
+        ):
+            terminal_orders.add(order_id)
+
+    spooled = 0
+    pending: list[str] = []
+    for order_id, order in sorted(orders.items()):
+        if order_id in filled_orders or order_id in terminal_orders:
+            continue
+        age = now - int(order.recorded_ts_ms)
+        if age < orphan_age_ms:
+            pending.append(order_id)
+            continue
+        record_id = canonical_exploration_nonfill_record_id(model_sha, order_id)
+        if record_id in existing_ids:
+            terminal_orders.add(order_id)
+            continue
+        metadata = dict(order.metadata)
+        metadata.update({
+            "paper_exploration": True,
+            "economic_authority": "PAPER_EXPLORATION",
+            "counterfactual": False,
+            "excluded_from_portfolio_equity": False,
+            "research_evidence_only": False,
+            "recovered_after_process_interruption": True,
+            "no_fill_fabricated": True,
+            "terminal_id": f"paper-exploration:{order_id}:nonfill",
+        })
+        spool_event(root, LedgerEvent(
+            event_type="ORDER_STATE", strategy=order.strategy,
+            model_sha=model_sha, model_version=order.model_version,
+            record_id=record_id, recorded_ts_ms=max(now, order.recorded_ts_ms + 1),
+            candidate_id=order.candidate_id, order_id=order_id,
+            position_id=order.position_id, market_id=order.market_id,
+            event_id=order.event_id, token_id=order.token_id, side=order.side,
+            intended_action=order.intended_action, intended_size=order.intended_size,
+            order_state="NONFILL", complete=True,
+            cancel_reason="PAPER_EXPLORATION_PROCESS_INTERRUPTED_BEFORE_FILL",
+            metadata=metadata,
+        ))
+        existing_ids.add(record_id)
+        terminal_orders.add(order_id)
+        spooled += 1
+
+    unresolved = sorted(set(orders) - filled_orders - terminal_orders)
+    report = {
+        "schema": "polymarket_v7_paper_exploration_order_reconciliation_v1",
+        "model_sha": model_sha, "paper_only": True,
+        "authenticated_execution": False, "real_order_submission": False,
+        "orders": len(orders), "filled_orders": len(filled_orders & set(orders)),
+        "terminal_nonfills": len(terminal_orders & set(orders)),
+        "spooled_this_pass": spooled,
+        "pending_within_grace": sorted(pending),
+        "unresolved_orders": unresolved,
+        "invalid_spool_records": sorted(invalid_spool),
+        "conflicts": sorted(set(conflicts)),
+    }
+    report["complete"] = (
+        not unresolved and not invalid_spool and not conflicts
+    )
+    return report
+
+
+def reconstruct_paper_exploration_account(
+    run_root: Path,
+    model_sha: str,
+    starting_capital: float,
+    *,
+    cached_positions: dict[str, Any] | None = None,
+    prior_peak_equity: float | None = None,
+) -> dict[str, Any]:
+    """Rebuild the exact-SHA simulated account from canonical lifecycle facts.
+
+    State JSON is only a cache for executable marks. ORDER/FILL/FINAL records in
+    the canonical ledger plus its undrained single-writer spool own cash, PnL,
+    inventory identity and counters. Any ambiguity fails closed.
+    """
+    if not math.isfinite(starting_capital) or starting_capital <= 0.0:
+        raise RuntimeError("paper_exploration_starting_capital_invalid")
+    events, invalid_spool = _canonical_and_spooled_events(run_root, model_sha)
+    orders: dict[str, LedgerEvent] = {}
+    fills: dict[str, LedgerEvent] = {}
+    finals_by_position: dict[str, LedgerEvent] = {}
+    finals_by_fill: dict[str, LedgerEvent] = {}
+    order_terminals: dict[str, LedgerEvent] = {}
+    issues: list[str] = []
+
+    def bind(
+        bucket: dict[str, LedgerEvent], key: str | None,
+        event: LedgerEvent, label: str,
+    ) -> None:
+        identity = str(key or "")
+        if not identity:
+            issues.append(f"{label}_identity_missing:{event.record_id}")
+            return
+        prior = bucket.get(identity)
+        if prior is not None and prior.record_id != event.record_id:
+            issues.append(f"duplicate_{label}:{identity}")
+            return
+        bucket[identity] = event
+
+    account_events = [
+        event for event in events if _canonical_paper_exploration_event(event)
+    ]
+    for event in account_events:
+        if event.event_type == "ORDER_SUBMITTED":
+            bind(orders, event.order_id, event, "order")
+        elif event.event_type == "FILL":
+            bind(fills, event.fill_id, event, "fill")
+        elif event.event_type == "ORDER_STATE" and event.complete is True:
+            bind(order_terminals, event.order_id, event, "order_terminal")
+        elif event.event_type == "FINAL":
+            bind(finals_by_position, event.position_id, event, "position_final")
+            bind(finals_by_fill, event.fill_id, event, "fill_final")
+
+    filled_order_ids = {str(fill.order_id or "") for fill in fills.values()}
+    for order_id in orders:
+        has_fill = order_id in filled_order_ids
+        has_terminal = order_id in order_terminals
+        if not has_fill and not has_terminal:
+            issues.append(f"order_without_fill_or_terminal:{order_id}")
+        if has_fill and has_terminal:
+            issues.append(f"filled_order_has_nonfill_terminal:{order_id}")
+    for order_id in order_terminals:
+        if order_id not in orders:
+            issues.append(f"terminal_without_order:{order_id}")
+
+    fills_by_position: dict[str, LedgerEvent] = {}
+    total_entry_debit = 0.0
+    total_settlement_payout = 0.0
+    realized_pnl = 0.0
+    terminal_positions = 0
+    for fill_id, fill in fills.items():
+        if not fill.order_id or fill.order_id not in orders:
+            issues.append(f"fill_without_order:{fill_id}")
+        else:
+            order = orders[fill.order_id]
+            if (
+                order.position_id != fill.position_id
+                or order.market_id != fill.market_id
+                or order.token_id != fill.token_id
+                or order.side != fill.side
+            ):
+                issues.append(f"order_fill_identity_mismatch:{fill_id}")
+        position_id = str(fill.position_id or "")
+        if not position_id:
+            issues.append(f"fill_position_missing:{fill_id}")
+            continue
+        prior_fill = fills_by_position.get(position_id)
+        if prior_fill is not None and prior_fill.fill_id != fill_id:
+            issues.append(f"multiple_fills_per_position:{position_id}")
+        else:
+            fills_by_position[position_id] = fill
+        entry_price = finite(fill.fill_price, math.nan)
+        shares = finite(fill.filled_size, math.nan)
+        fee = finite(fill.fee, math.nan)
+        if (
+            not math.isfinite(entry_price) or not 0.0 <= entry_price <= 1.0
+            or not math.isfinite(shares) or shares <= 0.0
+            or not math.isfinite(fee) or fee < 0.0
+        ):
+            issues.append(f"fill_economics_invalid:{fill_id}")
+            continue
+        total_entry_debit += entry_price * shares + fee
+
+    for position_id, final in finals_by_position.items():
+        fill = fills_by_position.get(position_id)
+        if fill is None:
+            issues.append(f"final_without_fill:{position_id}")
+            continue
+        if final.fill_id != fill.fill_id:
+            issues.append(f"final_fill_identity_mismatch:{position_id}")
+            continue
+        payout = finite(final.realized_cashflow, math.nan)
+        pnl = finite(final.final_pnl, math.nan)
+        shares = finite(fill.filled_size, math.nan)
+        entry_debit = (
+            finite(fill.fill_price, math.nan) * shares
+            + finite(fill.fee, math.nan)
+        )
+        if (
+            not math.isfinite(payout) or payout < 0.0
+            or not math.isfinite(pnl)
+            or not math.isfinite(entry_debit)
+            or not math.isfinite(shares)
+        ):
+            issues.append(f"final_economics_invalid:{position_id}")
+            continue
+        if payout > shares + 1e-7:
+            issues.append(f"final_payout_above_binary_par:{position_id}")
+        expected_pnl = payout - entry_debit
+        if abs(pnl - expected_pnl) > 1e-7:
+            issues.append(f"final_pnl_cash_identity_mismatch:{position_id}")
+        won = final.metadata.get("won")
+        if isinstance(won, bool):
+            expected_payout = shares if won else 0.0
+            if abs(payout - expected_payout) > 1e-7:
+                issues.append(f"final_binary_payout_mismatch:{position_id}")
+        total_settlement_payout += payout
+        realized_pnl += pnl
+        terminal_positions += 1
+
+    for fill_id, final in finals_by_fill.items():
+        if fill_id not in fills:
+            issues.append(f"final_references_unknown_fill:{fill_id}")
+        elif final.position_id not in finals_by_position:
+            issues.append(f"final_position_index_missing:{fill_id}")
+
+    cached = cached_positions if isinstance(cached_positions, dict) else {}
+    evidence = _read_complete_counterfactual_records(
+        _paper_exploration_evidence_paths(Path(run_root))
+    )
+    virtual_fills: dict[str, dict[str, Any]] = {}
+    markout_horizons: dict[str, set[int]] = {}
+    for row in evidence.values():
+        if row.get("model_sha") != model_sha:
+            continue
+        fill_id = str(row.get("fill_id") or "")
+        if row.get("event_type") == "VIRTUAL_FILL" and fill_id:
+            virtual_fills.setdefault(fill_id, row)
+        elif row.get("event_type") == "VIRTUAL_MARKOUT" and fill_id:
+            for key in (row.get("markouts") or {}):
+                try:
+                    markout_horizons.setdefault(fill_id, set()).add(
+                        int(str(key).removesuffix("s"))
+                    )
+                except ValueError:
+                    continue
+
+    open_positions: dict[str, dict[str, Any]] = {}
+    open_entry_debit = 0.0
+    marked_open_value = 0.0
+    for position_id, fill in fills_by_position.items():
+        if position_id in finals_by_position:
+            continue
+        fill_id = str(fill.fill_id or "")
+        metadata = fill.metadata if isinstance(fill.metadata, dict) else {}
+        shares = float(fill.filled_size)
+        price = float(fill.fill_price)
+        fee = float(fill.fee)
+        debit = shares * price + fee
+        open_entry_debit += debit
+        prior = cached.get(position_id)
+        prior = prior if isinstance(prior, dict) else {}
+        if str(prior.get("fill_id") or "") != fill_id:
+            prior = {}
+        virtual = virtual_fills.get(fill_id, {})
+        executable = finite(prior.get("executable_value"), 0.0)
+        if not math.isfinite(executable) or executable < 0.0:
+            executable = 0.0
+        executable = min(executable, shares)
+        marked_open_value += executable
+        fee_schedule = virtual.get("fee_schedule")
+        if not isinstance(fee_schedule, dict):
+            fee_schedule = prior.get("fee_schedule")
+        if not isinstance(fee_schedule, dict):
+            fee_schedule = {
+                "rate": float(fill.fee_rate or 0.0),
+                "exponent": 1,
+                "takerOnly": True,
+            }
+        markouts = set(markout_horizons.get(fill_id, set()))
+        for value in prior.get("markouts", []) if isinstance(
+            prior.get("markouts"), list
+        ) else []:
+            try:
+                markouts.add(int(value))
+            except (TypeError, ValueError):
+                continue
+        open_positions[position_id] = {
+            "position_id": position_id,
+            "counterfactual_id": str(fill.candidate_id or ""),
+            "fill_id": fill_id,
+            "order_id": str(fill.order_id or ""),
+            "market_id": str(fill.market_id or ""),
+            "event_id": str(fill.event_id or ""),
+            "token_id": str(fill.token_id or ""),
+            "outcome": str(metadata.get("outcome") or ""),
+            "shares": shares,
+            "entry_price": price,
+            "entry_fee": fee,
+            "entry_cost": shares * price,
+            "entry_debit": debit,
+            "executable_value": executable,
+            "opened_ms": int(fill.receive_ts_ms or fill.recorded_ts_ms),
+            "fee_schedule": fee_schedule,
+            "markouts": sorted(markouts),
+            "settled": False,
+            "coordinator_receipt": metadata.get("coordinator_receipt"),
+            "paper_exploration": True,
+            "paper_bootstrap_probe": metadata.get("paper_bootstrap_probe") is True,
+            "model_yes": finite(metadata.get("fair_yes")),
+            "market_yes": finite(metadata.get("arrival_pm_mid")),
+            "market_mid_source": "LIVE_COMPLEMENT_CONSISTENT_CLOB_BATCH",
+        }
+
+    cash = starting_capital - total_entry_debit + total_settlement_payout
+    equity = cash + marked_open_value
+    if cash < -1e-7:
+        issues.append("paper_account_cash_negative")
+    if not math.isfinite(cash) or not math.isfinite(equity):
+        issues.append("paper_account_nonfinite")
+    prior_peak = finite(prior_peak_equity, starting_capital)
+    if not math.isfinite(prior_peak) or prior_peak < starting_capital:
+        prior_peak = starting_capital
+    peak = max(starting_capital, prior_peak, equity)
+    drawdown = max(0.0, 1.0 - equity / peak) if peak > 0.0 else 1.0
+    account = {
+        "schema": "polymarket_v7_paper_exploration_account_v1",
+        "model_sha": model_sha,
+        "paper_only": True,
+        "authenticated_execution": False,
+        "real_order_submission": False,
+        "real_capital_at_risk": False,
+        "accounting_owner": "V7_CANONICAL_LEDGER_AND_SINGLE_WRITER_SPOOL",
+        "execution_authority": "SIMULATED_PAPER_EXPLORATION_ONLY",
+        "starting_capital": starting_capital,
+        "orders_submitted": len(orders),
+        "fills": len(fills),
+        "terminal_nonfills": len(order_terminals),
+        "terminal_positions": terminal_positions,
+        "open_positions": len(open_positions),
+        "probe_fills": sum(
+            event.metadata.get("paper_bootstrap_probe") is True
+            for event in fills.values()
+        ),
+        "traded_markets": sorted({
+            str(event.market_id) for event in fills.values() if event.market_id
+        }),
+        "entry_debit": total_entry_debit,
+        "settlement_payout": total_settlement_payout,
+        "open_entry_debit": open_entry_debit,
+        "marked_open_value": marked_open_value,
+        "cash": cash,
+        "realized_pnl": realized_pnl,
+        "equity": equity,
+        "peak_equity": peak,
+        "drawdown": drawdown,
+        "invalid_spool_records": sorted(invalid_spool),
+        "issues": sorted(set(issues)),
+        "positions": open_positions,
+    }
+    account["complete"] = not account["issues"] and not invalid_spool
+    return account
 
 
 def expected_calibration_error(
@@ -761,12 +1475,22 @@ class PaperRouter:
             "forecast_settlement_attempted_at": {},
             "opportunity_sets": 0, "last_opportunity_snapshot_id": "",
             "last_decision": {},
+            "canonical_order_reconciliation": {},
+            "canonical_final_reconciliation": {},
+            "paper_exploration_account": {},
         }
         prior = load(self.state_path)
         if prior.get("model_sha") == model_sha:
             self.state.update(prior)
         self.compact_durable_evidence()
         self.restore_durable_state()
+        self.state["canonical_order_reconciliation"] = (
+            reconcile_paper_exploration_orphan_orders(self.root, self.sha)
+        )
+        self.state["canonical_final_reconciliation"] = (
+            reconcile_paper_exploration_finals(self.root, self.sha)
+        )
+        self.reconcile_canonical_account()
         self.last_book_error = ""
         self.last_attempt_reason = ""
         self.last_live_market: dict[str, Any] = {}
@@ -972,6 +1696,38 @@ class PaperRouter:
         }
         current_positions.update(restored_positions)
         self.state["positions"] = current_positions
+
+    def reconcile_canonical_account(self) -> dict[str, Any]:
+        account = reconstruct_paper_exploration_account(
+            self.root, self.sha,
+            float(self.state.get("starting_capital") or 0.0),
+            cached_positions=(
+                self.state.get("positions")
+                if isinstance(self.state.get("positions"), dict) else {}
+            ),
+            prior_peak_equity=finite(
+                (self.state.get("paper_exploration_account") or {}).get(
+                    "peak_equity"
+                ) if isinstance(
+                    self.state.get("paper_exploration_account"), dict
+                ) else self.state.get("peak_equity"),
+                float(self.state.get("starting_capital") or 0.0),
+            ),
+        )
+        positions = account.pop("positions")
+        self.state["positions"] = positions
+        self.state["orders"] = int(account["orders_submitted"])
+        self.state["fills"] = int(account["fills"])
+        self.state["realized_pnl"] = float(account["realized_pnl"])
+        self.state["cash"] = float(account["cash"])
+        self.state["peak_equity"] = float(account["peak_equity"])
+        self.state["probe_fills"] = int(account["probe_fills"])
+        self.state["traded_markets"] = sorted(
+            set(self.state.get("traded_markets") or [])
+            | set(account.get("traded_markets") or [])
+        )
+        self.state["paper_exploration_account"] = account
+        return account
 
     def reject(self, reason: str) -> None:
         reasons = self.state.setdefault("rejection_reasons", {})
@@ -2030,8 +2786,9 @@ class PaperRouter:
         self.last_attempt_reason = "VIRTUAL_FILL"
         return True
 
-    def observe_positions(self) -> None:
+    def observe_positions(self) -> int:
         current_ms = now_ms()
+        settled_positions = 0
         for position in list((self.state.get("positions") or {}).values()):
             if position.get("settled"):
                 continue
@@ -2093,6 +2850,7 @@ class PaperRouter:
             ) + pnl
             position["settled"] = True
             position["resolved_outcome"] = resolved
+            settled_positions += 1
             won = winning_token == str(position["token_id"])
             self.emit_counterfactual(
                 "VIRTUAL_FINAL", strategy=STRATEGY, model_version=MODEL_VERSION,
@@ -2113,9 +2871,10 @@ class PaperRouter:
             self.emit_shadow_ingress(LedgerEvent(
                 event_type="FINAL", strategy=STRATEGY, model_sha=self.sha,
                 model_version=MODEL_VERSION, order_id=str(position["order_id"]),
+                fill_id=str(position["fill_id"]),
                 position_id=str(position["position_id"]), market_id=str(position["market_id"]),
                 event_id=str(position["event_id"]), token_id=str(position["token_id"]), side="BUY",
-                final_pnl=pnl, realized_cashflow=pnl, fee=0.0, slippage=0.0,
+                final_pnl=pnl, realized_cashflow=payout, fee=0.0, slippage=0.0,
                 unwind_loss=0.0, capital_cost=0.0, latency_cost=0.0,
                 capital_duration_ms=current_ms - int(position["opened_ms"]),
                 metadata={
@@ -2131,11 +2890,23 @@ class PaperRouter:
                     },
                 },
             ))
+        if settled_positions:
+            self.state["canonical_final_reconciliation"] = (
+                reconcile_paper_exploration_finals(self.root, self.sha)
+            )
+        return settled_positions
 
     def publish(self, active_candidates: int, blocker: str = "") -> None:
         positions = self.state.get("positions") if isinstance(self.state.get("positions"), dict) else {}
-        open_positions = sum(1 for position in positions.values() if not position.get("settled"))
-        virtual_equity = starting_capital = float(self.state.get("starting_capital") or 0.0)
+        paper_account = self.state.get("paper_exploration_account")
+        paper_account = paper_account if isinstance(paper_account, dict) else {}
+        starting_capital = float(self.state.get("starting_capital") or 0.0)
+        paper_open_positions = int(paper_account.get("open_positions") or 0)
+        paper_cash = finite(paper_account.get("cash"), starting_capital)
+        paper_equity = finite(paper_account.get("equity"), starting_capital)
+        paper_peak = finite(paper_account.get("peak_equity"), starting_capital)
+        paper_drawdown = finite(paper_account.get("drawdown"), 0.0)
+        virtual_equity = starting_capital
         virtual_equity += float(self.state.get("counterfactual_realized_pnl") or 0.0)
         virtual_equity += sum(
             float(position.get("executable_value") or 0.0)
@@ -2143,13 +2914,52 @@ class PaperRouter:
             - float(position.get("entry_fee") or 0.0)
             for position in positions.values() if not position.get("settled")
         )
-        peak = max(starting_capital, float(self.state.get("peak_equity") or starting_capital), virtual_equity)
-        drawdown = max(0.0, 1.0 - virtual_equity / peak) if peak > 0.0 else 1.0
+        counterfactual_peak = max(
+            starting_capital,
+            finite(self.state.get("counterfactual_peak_equity"), starting_capital),
+            virtual_equity,
+        )
+        counterfactual_drawdown = (
+            max(0.0, 1.0 - virtual_equity / counterfactual_peak)
+            if counterfactual_peak > 0.0 else 1.0
+        )
         killed = bool(self.state.get("killed")) or (self.root / "control" / "KILL").exists()
         drain_requested = self.drain_path.exists()
+        order_reconciliation = self.state.get("canonical_order_reconciliation")
+        order_reconciliation = (
+            order_reconciliation
+            if isinstance(order_reconciliation, dict) else {}
+        )
+        terminal_reconciliation = self.state.get("canonical_final_reconciliation")
+        terminal_reconciliation = (
+            terminal_reconciliation
+            if isinstance(terminal_reconciliation, dict) else {}
+        )
         if drain_requested:
             blocker = "CUTOVER_DRAIN"
-        self.state["peak_equity"] = peak
+        if (
+            order_reconciliation
+            and order_reconciliation.get("complete") is not True
+            and not blocker
+        ):
+            blocker = "PAPER_EXPLORATION_ORDER_RECONCILIATION_INCOMPLETE"
+        if (
+            terminal_reconciliation
+            and terminal_reconciliation.get("complete") is not True
+            and not blocker
+        ):
+            blocker = "PAPER_EXPLORATION_FINAL_RECONCILIATION_INCOMPLETE"
+        if paper_account.get("complete") is not True and not blocker:
+            blocker = "PAPER_EXPLORATION_ACCOUNT_RECONCILIATION_INCOMPLETE"
+        drain_complete = bool(
+            drain_requested
+            and paper_open_positions == 0
+            and order_reconciliation.get("complete") is True
+            and terminal_reconciliation.get("complete") is True
+            and paper_account.get("complete") is True
+        )
+        self.state["peak_equity"] = paper_peak
+        self.state["counterfactual_peak_equity"] = counterfactual_peak
         self.state["killed"] = killed
         atomic_json(self.state_path, self.state)
         maturity = self.maturity_diagnostics()
@@ -2157,12 +2967,14 @@ class PaperRouter:
             "schema": "polymarket_v7_crypto_settlement_engine_status_v1", "timestamp": int(time.time()),
             "code_sha": self.sha, "state": "KILLED" if killed else "DRAINING" if drain_requested else "RUNNING", "paper_only": True,
             "authenticated_execution": False, "real_order_submission": False,
-            "execution_mode": "SHADOW_COUNTERFACTUAL",
+            "execution_mode": "SHADOW_COUNTERFACTUAL_WITH_CANONICAL_PAPER_EXPLORATION",
             "policy_sha256": self.policy_sha256,
             "engine_id": "CRYPTO_SETTLEMENT_ENGINE",
             "execution_authority": "OPPORTUNITY_PROPOSAL_ONLY",
             "capital_authority": False, "oms_authority": False,
             "inventory_authority": False, "ledger_writer_authority": False,
+            "simulated_paper_account_authority": "V7_CANONICAL_LEDGER_AND_SINGLE_WRITER_SPOOL",
+            "paper_exploration_accounting_active": paper_account.get("complete") is True,
             "model_mature": self.model_mature,
             "economic_confidence": (
                 "PAPER_PROMOTION_ELIGIBLE_MANUAL_REVIEW"
@@ -2198,15 +3010,18 @@ class PaperRouter:
                 self.state.get("pending_forecasts")
                 if isinstance(self.state.get("pending_forecasts"), dict) else {}
             ),
-            "counterfactual_open_positions": open_positions,
+            "counterfactual_open_positions": paper_open_positions,
             "counterfactual_realized_pnl": float(self.state.get("counterfactual_realized_pnl") or 0.0),
             "counterfactual_equity": virtual_equity,
-            "open_positions": 0, "realized_pnl": 0.0,
-            "cash": starting_capital, "equity": starting_capital,
-            "counterfactual_peak_equity": peak, "counterfactual_drawdown": drawdown,
-            "peak_equity": starting_capital, "drawdown": 0.0, "killed": killed,
+            "open_positions": paper_open_positions,
+            "realized_pnl": float(paper_account.get("realized_pnl") or 0.0),
+            "cash": paper_cash, "equity": paper_equity,
+            "counterfactual_peak_equity": counterfactual_peak,
+            "counterfactual_drawdown": counterfactual_drawdown,
+            "peak_equity": paper_peak, "drawdown": paper_drawdown, "killed": killed,
             "order_submission_enabled": False,
-            "drain_requested": drain_requested, "drain_complete": drain_requested,
+            "real_venue_order_submission_enabled": False,
+            "drain_requested": drain_requested, "drain_complete": drain_complete,
             "blocker": blocker,
             "live_market": self.last_live_market,
             "book_requests": int(self.state.get("book_requests") or 0),
@@ -2215,14 +3030,21 @@ class PaperRouter:
             "rejection_reasons": self.state.get("rejection_reasons") or {},
             "wait_reasons": self.state.get("wait_reasons") or {},
             "last_decision": self.state.get("last_decision") or {},
-            "actions": {"MAKE": 0, "TAKE": 0, "CANCEL": 0,
-                        "WITHDRAW": 0, "NOTHING": int(self.state.get("nothing") or 0)},
+            "actions": {
+                "MAKE": 0,
+                "TAKE": int(paper_account.get("fills") or 0),
+                "CANCEL": 0, "WITHDRAW": 0,
+                "NOTHING": int(self.state.get("nothing") or 0),
+            },
             "counterfactual_actions": {
                 "TAKE": int(self.state.get("counterfactual_fills") or 0),
                 "PAPER_BOOTSTRAP_PROBE": int(self.state.get("probe_fills") or 0),
             },
             "probe_candidates": int(self.state.get("probe_candidates") or 0),
             "probe_fills": int(self.state.get("probe_fills") or 0),
+            "canonical_order_reconciliation": order_reconciliation,
+            "canonical_final_reconciliation": terminal_reconciliation,
+            "paper_exploration_account": paper_account,
         })
 
     def step(self) -> None:
@@ -2326,6 +3148,18 @@ class PaperRouter:
             "best_point_ev_per_share": max((float(row.get("point_ev", row["robust_ev"])) for row in rows), default=None),
         }
         self.observe_positions()
+        self.state["canonical_order_reconciliation"] = (
+            reconcile_paper_exploration_orphan_orders(self.root, self.sha)
+        )
+        terminal_reconciliation = self.state.get("canonical_final_reconciliation")
+        if (
+            not isinstance(terminal_reconciliation, dict)
+            or terminal_reconciliation.get("complete") is not True
+        ):
+            self.state["canonical_final_reconciliation"] = (
+                reconcile_paper_exploration_finals(self.root, self.sha)
+            )
+        self.reconcile_canonical_account()
         self.observe_forecasts()
         self.publish(len(rows), blocker)
 
@@ -2346,9 +3180,16 @@ def main() -> int:
     parser.add_argument("--clob-url", default="https://clob.polymarket.com")
     parser.add_argument("--gamma-url", default="https://gamma-api.polymarket.com")
     parser.add_argument("--interval", type=float, default=1.0)
+    parser.add_argument("--reconcile-only", action="store_true")
     args = parser.parse_args()
     if len(args.model_sha) != 40 or any(ch not in "0123456789abcdef" for ch in args.model_sha):
         raise SystemExit("exact model SHA required")
+    if args.reconcile_only:
+        report = reconcile_paper_exploration_finals(
+            args.run_root.resolve(), args.model_sha
+        )
+        print(json.dumps(report, sort_keys=True))
+        return 0 if report["complete"] else 2
     PaperRouter(args.run_root.resolve(), args.model_sha, args.config.resolve(), args.clob_url, args.gamma_url).run(args.interval)
     return 0
 

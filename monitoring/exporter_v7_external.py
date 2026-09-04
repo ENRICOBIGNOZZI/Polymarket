@@ -128,6 +128,82 @@ def _append_external_fair_metrics(lines: list[str], report: dict[str, Any]) -> N
         metric("polymarket_external_fair_router_book_request_failures_total", router.get("book_request_failures")),
         metric("polymarket_external_fair_router_book_parse_failures_total", router.get("book_parse_failures")),
     ])
+    order_reconciliation = router.get("canonical_order_reconciliation") if isinstance(
+        router.get("canonical_order_reconciliation"), dict
+    ) else {}
+    terminal = router.get("canonical_final_reconciliation") if isinstance(
+        router.get("canonical_final_reconciliation"), dict
+    ) else {}
+    account = router.get("paper_exploration_account") if isinstance(
+        router.get("paper_exploration_account"), dict
+    ) else {}
+    lines.extend([
+        metric(
+            "polymarket_external_fair_canonical_order_reconciliation_complete",
+            1 if order_reconciliation.get("complete") else 0,
+        ),
+        metric(
+            "polymarket_external_fair_canonical_orders_reconciled",
+            order_reconciliation.get("orders"),
+        ),
+        metric(
+            "polymarket_external_fair_canonical_order_nonfills",
+            order_reconciliation.get("terminal_nonfills"),
+        ),
+        metric(
+            "polymarket_external_fair_canonical_orders_unresolved",
+            order_reconciliation.get("unresolved_orders"),
+        ),
+        metric(
+            "polymarket_external_fair_canonical_order_conflicts",
+            order_reconciliation.get("conflicts"),
+        ),
+        metric(
+            "polymarket_external_fair_canonical_final_reconciliation_complete",
+            1 if terminal.get("complete") else 0,
+        ),
+        metric(
+            "polymarket_external_fair_canonical_terminal_positions_expected",
+            terminal.get("expected_terminal_positions"),
+        ),
+        metric(
+            "polymarket_external_fair_canonical_terminal_positions_present",
+            terminal.get("canonical_or_spooled_terminal_positions"),
+        ),
+        metric(
+            "polymarket_external_fair_canonical_terminal_missing_fills",
+            terminal.get("missing_canonical_fills"),
+        ),
+        metric(
+            "polymarket_external_fair_canonical_terminal_invalid_finals",
+            terminal.get("invalid_virtual_finals"),
+        ),
+        metric(
+            "polymarket_external_fair_paper_account_complete",
+            1 if account.get("complete") else 0,
+        ),
+        metric(
+            "polymarket_external_fair_paper_account_identity_ok",
+            1 if account.get("identity_ok") else 0,
+        ),
+        metric("polymarket_external_fair_paper_account_orders", account.get("orders_submitted")),
+        metric("polymarket_external_fair_paper_account_fills", account.get("fills")),
+        metric("polymarket_external_fair_paper_account_terminal_nonfills", account.get("terminal_nonfills")),
+        metric("polymarket_external_fair_paper_account_terminal_positions", account.get("terminal_positions")),
+        metric("polymarket_external_fair_paper_account_open_positions", account.get("open_positions")),
+        metric("polymarket_external_fair_paper_account_entry_debit_usd", account.get("entry_debit")),
+        metric("polymarket_external_fair_paper_account_settlement_payout_usd", account.get("settlement_payout")),
+        metric("polymarket_external_fair_paper_account_cash_usd", account.get("cash")),
+        metric("polymarket_external_fair_paper_account_realized_pnl_usd", account.get("realized_pnl")),
+        metric("polymarket_external_fair_paper_account_equity_usd", account.get("equity")),
+        metric("polymarket_external_fair_paper_account_drawdown", account.get("drawdown")),
+        metric("polymarket_external_fair_paper_account_issues", account.get("issues")),
+        metric("polymarket_external_fair_paper_account_invalid_spool_records", account.get("invalid_spool_records")),
+        metric("polymarket_external_fair_paper_account_owner_info", 1, {
+            "owner": account.get("accounting_owner", "UNKNOWN"),
+            "authority": account.get("execution_authority", "UNKNOWN"),
+        }),
+    ])
     for reason, count in sorted((router.get("rejection_reasons") or {}).items()):
         lines.append(metric("polymarket_external_fair_router_rejections_total", count, {"reason": reason}))
     last_decision = router.get("last_decision") if isinstance(router.get("last_decision"), dict) else {}

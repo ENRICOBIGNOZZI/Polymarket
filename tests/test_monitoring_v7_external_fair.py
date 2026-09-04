@@ -75,6 +75,8 @@ def status(authority: str = "SHADOW_ZERO_AUTHORITY") -> dict:
         "counterfactual_actions": {"TAKE": 7},
         "paper_router": {
             "active_candidates": 1, "orders_submitted": 2, "fills": 1,
+            "open_positions": 0, "cash": 4000.8,
+            "equity": 4000.8, "realized_pnl": 0.8,
             "counterfactual_collection_enabled": True,
             "counterfactual_candidates": 8, "counterfactual_fills": 7,
             "counterfactual_open_positions": 2,
@@ -83,6 +85,39 @@ def status(authority: str = "SHADOW_ZERO_AUTHORITY") -> dict:
             "book_requests": 9, "book_request_failures": 2, "book_parse_failures": 1,
             "rejection_reasons": {"NO_ROBUST_EV": 4},
             "last_decision": {"outcome": "NO_ROBUST_EV"},
+            "canonical_order_reconciliation": {
+                "schema": "polymarket_v7_paper_exploration_order_reconciliation_v1",
+                "model_sha": SHA, "paper_only": True,
+                "authenticated_execution": False, "real_order_submission": False,
+                "complete": True, "orders": 2, "filled_orders": 1,
+                "terminal_nonfills": 1, "unresolved_orders": [],
+                "invalid_spool_records": [], "conflicts": [],
+            },
+            "canonical_final_reconciliation": {
+                "schema": "polymarket_v7_paper_exploration_final_reconciliation_v1",
+                "model_sha": SHA, "paper_only": True,
+                "authenticated_execution": False, "real_order_submission": False,
+                "complete": True, "expected_terminal_positions": 1,
+                "canonical_or_spooled_terminal_positions": 1,
+                "missing_canonical_fills": [], "invalid_virtual_finals": [],
+                "invalid_spool_records_observed": 0,
+            },
+            "paper_exploration_account": {
+                "schema": "polymarket_v7_paper_exploration_account_v1",
+                "model_sha": SHA, "paper_only": True,
+                "authenticated_execution": False, "real_order_submission": False,
+                "real_capital_at_risk": False,
+                "accounting_owner": "V7_CANONICAL_LEDGER_AND_SINGLE_WRITER_SPOOL",
+                "execution_authority": "SIMULATED_PAPER_EXPLORATION_ONLY",
+                "complete": True, "orders_submitted": 2, "fills": 1,
+                "terminal_nonfills": 1, "terminal_positions": 1,
+                "open_positions": 0, "probe_fills": 1,
+                "starting_capital": 4000.0, "entry_debit": 1.2,
+                "settlement_payout": 2.0, "marked_open_value": 0.0,
+                "cash": 4000.8, "realized_pnl": 0.8, "equity": 4000.8,
+                "peak_equity": 4000.8, "drawdown": 0.0,
+                "issues": [], "invalid_spool_records": [],
+            },
         },
         "purposes": {"ALPHA": 3, "INVENTORY_REDUCTION": 1, "RISK": 5, "LIQUIDATION": 0},
         "cancel": {"fair_shock": 3, "latency_p50_ms": 1.0, "latency_p99_ms": 5.0},
@@ -138,8 +173,44 @@ def main() -> None:
         assert 'polymarket_external_fair_oracle_continuity_info{continuity="LIVE_CONTINUOUS"} 1' in text
         assert 'polymarket_external_fair_venue_healthy{venue="BINANCE_SPOT"} 1' in text
         assert "polymarket_external_fair_router_book_requests_total 9" in text
+        assert "polymarket_external_fair_canonical_final_reconciliation_complete 1" in text
+        assert "polymarket_external_fair_canonical_order_reconciliation_complete 1" in text
+        assert "polymarket_external_fair_canonical_order_nonfills 1" in text
+        assert "polymarket_external_fair_canonical_terminal_positions_expected 1" in text
+        assert "polymarket_external_fair_canonical_terminal_positions_present 1" in text
+        assert "polymarket_external_fair_paper_account_complete 1" in text
+        assert "polymarket_external_fair_paper_account_identity_ok 1" in text
+        assert "polymarket_external_fair_paper_account_orders 2" in text
+        assert "polymarket_external_fair_paper_account_fills 1" in text
+        assert "polymarket_external_fair_paper_account_terminal_positions 1" in text
+        assert "polymarket_external_fair_paper_account_cash_usd 4000.8" in text
+        assert "polymarket_external_fair_paper_account_realized_pnl_usd 0.8" in text
         assert 'polymarket_external_fair_router_rejections_total{reason="NO_ROBUST_EV"} 4' in text
         assert "polymarket_external_fair_blockers 1" in text
+
+        incomplete = status()
+        incomplete["paper_router"]["canonical_final_reconciliation"]["complete"] = False
+        write_json(run_root / "external_fair" / "status.json", incomplete)
+        incomplete_report = summarize_external_fair(
+            run_root, repo, runtime_sha=SHA, now_s=1
+        )
+        assert incomplete_report["healthy"] is False
+        assert "PAPER_EXPLORATION_FINAL_RECONCILIATION_INCOMPLETE" in (
+            incomplete_report["hard_reasons"]
+        )
+
+        incomplete_order = status()
+        incomplete_order["paper_router"]["canonical_order_reconciliation"]["complete"] = False
+        write_json(run_root / "external_fair" / "status.json", incomplete_order)
+        order_report = summarize_external_fair(run_root, repo, runtime_sha=SHA, now_s=1)
+        assert "PAPER_EXPLORATION_ORDER_RECONCILIATION_INCOMPLETE" in order_report["hard_reasons"]
+
+        divergent_account = status()
+        divergent_account["paper_router"]["cash"] = 3999.0
+        write_json(run_root / "external_fair" / "status.json", divergent_account)
+        account_report = summarize_external_fair(run_root, repo, runtime_sha=SHA, now_s=1)
+        assert "PAPER_EXPLORATION_ACCOUNT_RECONCILIATION_INCOMPLETE" in account_report["hard_reasons"]
+        assert account_report["paper_router"]["paper_exploration_account"]["identity_ok"] is False
 
         # An active required market with invalid oracle must become a hard reason.
         active = status("PAPER_EXECUTION_OWNER")
