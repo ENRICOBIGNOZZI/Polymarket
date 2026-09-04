@@ -249,6 +249,61 @@ class V7CutoverUpdaterTest(unittest.TestCase):
             )
             self.assertEqual(result.returncode, 0, result.stderr)
 
+    def test_cutover_accepts_stopped_zero_authority_observer_without_live_pids(self) -> None:
+        text = (ROOT / "ops/update_server_v7.sh").read_text(encoding="utf-8")
+        function = text[text.index("cutover_positions_drained(){"):text.index("wait_for_cutover_drain(){")]
+        program = function.split("<<'PY'\n", 1)[1].rsplit("\nPY", 1)[0]
+        sha = "b" * 40
+        nonce = "stopped-zero-authority"
+        timestamp = 2_000
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+
+            def write(relative: str, value: dict) -> None:
+                path = root / relative
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_text(json.dumps(value), encoding="utf-8")
+
+            write("control/CUTOVER_DRAIN", {"nonce": nonce, "paper_only": True})
+            write("control/runtime_status.json", {
+                "paper_only": True, "authenticated_execution": False,
+                "real_order_submission": False, "model_sha": sha,
+                "timestamp": timestamp, "state": "stopping",
+                "economic_new_risk_ready": False, "authorized_alpha_actions": [],
+            })
+            write("control/portfolio_state.json", {
+                "paper_only": True, "authenticated_execution": False,
+                "killed": False, "fatal_sleeves": [], "sleeves": {},
+            })
+            write("external_fair/paper_router_status.json", {
+                "paper_only": True, "authenticated_execution": False,
+                "open_positions": 0, "counterfactual_open_positions": 1,
+                "drain_requested": False, "drain_complete": False,
+                "order_submission_enabled": False, "blocker": "",
+            })
+            write("external_fair/paper_router_state.json", {
+                "positions": {"counterfactual": {"settled": False}},
+            })
+            write("micro_maker/status.json", {
+                "schema": "polymarket_v7_professional_maker_status_v1",
+                "model_sha": sha, "timestamp": timestamp,
+                "paper_only": True, "authenticated_execution": False,
+                "real_order_submission": False,
+                "execution_authority": "SHADOW_ZERO_AUTHORITY",
+                "capital_authority": False, "ledger_writer_authority": False,
+                "source": "shadow_markout_and_fillability_observers",
+                "observer_pids": {}, "new_risk_frozen": True,
+                "open_orders": 0, "open_positions": 0, "killed": False,
+            })
+            ledger = root / "ledger/execution.jsonl"
+            ledger.parent.mkdir(parents=True, exist_ok=True)
+            ledger.write_text('{"historical":"paper"}\n', encoding="utf-8")
+            result = subprocess.run(
+                [sys.executable, "-", str(root), nonce, "0"],
+                input=program, text=True, capture_output=True,
+            )
+            self.assertEqual(result.returncode, 0, result.stderr)
+
     def test_cutover_identity_comes_from_deployed_runtime_not_checkout_head(self) -> None:
         text = (ROOT / "ops/update_server_v7.sh").read_text(encoding="utf-8")
         resolver = text[text.index("resolve_incumbent_sha(){"):text.index("clear_cutover_drain(){")]
