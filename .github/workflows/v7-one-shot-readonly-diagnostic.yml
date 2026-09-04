@@ -1,16 +1,16 @@
 name: One-shot V7 read-only server diagnostic
 on:
   push:
-    branches: [ops/v7-readonly-diagnostic-20260905]
+    branches: [fix/v7-readonly-diagnostic-20260905]
     paths: [.github/workflows/v7-one-shot-readonly-diagnostic.yml]
 permissions:
   contents: read
   id-token: write
 jobs:
   inspect-only:
-    if: github.repository == 'ENRICOBIGNOZZI/Polymarket' && github.ref == 'refs/heads/ops/v7-readonly-diagnostic-20260905'
+    if: github.repository == 'ENRICOBIGNOZZI/Polymarket' && github.ref == 'refs/heads/fix/v7-readonly-diagnostic-20260905'
     runs-on: ubuntu-24.04
-    timeout-minutes: 5
+    timeout-minutes: 4
     env:
       SERVER_HOST: ${{ vars.POLYMARKET_SERVER_HOST || '100.104.183.109' }}
       SERVER_USER: ${{ vars.POLYMARKET_SERVER_USER || 'enrico' }}
@@ -44,6 +44,9 @@ jobs:
           audience: ${{ secrets.TS_AUDIENCE }}
           tags: ${{ vars.TS_TAGS || 'tag:ci' }}
           version: 1.94.2
+          statedir: ''
+          timeout: 45s
+          retry: 1
           hostname: gh-diagnostic-${{ github.run_id }}-${{ github.run_attempt }}
       - name: Join ephemeral tailnet using OAuth
         if: steps.auth.outputs.mode == 'oauth'
@@ -53,14 +56,19 @@ jobs:
           oauth-secret: ${{ secrets.TS_OAUTH_SECRET }}
           tags: ${{ vars.TS_TAGS || 'tag:ci' }}
           version: 1.94.2
+          statedir: ''
+          timeout: 45s
+          retry: 1
           hostname: gh-diagnostic-${{ github.run_id }}-${{ github.run_attempt }}
-      - name: Join tailnet using existing ephemeral auth key
+      - name: Join tailnet using existing auth key and in-memory ephemeral state
         if: steps.auth.outputs.mode == 'authkey'
         uses: tailscale/github-action@780049a30b6ff5c378a9e7b389d15ece7a204888
         with:
           authkey: ${{ secrets.TS_AUTHKEY }}
-          args: --ephemeral
+          statedir: ''
           version: 1.94.2
+          timeout: 45s
+          retry: 1
           hostname: gh-diagnostic-${{ github.run_id }}-${{ github.run_attempt }}
       - name: Read server identity, storage and whitelisted runtime counters only
         env:
@@ -75,7 +83,7 @@ jobs:
           chmod 600 "$key"
           ssh-keyscan -T 5 -p "$SERVER_PORT" "$SERVER_HOST" > ~/.ssh/known_hosts
           ssh -i "$key" -o IdentitiesOnly=yes -o BatchMode=yes -o ConnectTimeout=10 -o ServerAliveInterval=5 -o ServerAliveCountMax=2 -p "$SERVER_PORT" "$SERVER_USER@$SERVER_HOST" 'cd "$HOME/polymarket" && python3 -' <<'PY'
-          import json, os, re, shutil, subprocess, time
+          import json, re, shutil, subprocess, time
           from pathlib import Path
           base=Path.cwd(); root=base/'runs/paper_v7_live'
           def command(args):
