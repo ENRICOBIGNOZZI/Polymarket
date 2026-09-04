@@ -1,0 +1,34 @@
+name: TEMP V7 probe lifecycle recovery patcher v4
+
+on:
+  push:
+    branches: [codex/v7-paper-probe-recovery-20260904]
+    paths: [.github/workflows/tmp-v7-probe-lifecycle-patcher-v4.yml]
+
+permissions:
+  contents: write
+
+jobs:
+  patch-and-test:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          ref: codex/v7-paper-probe-recovery-20260904
+          fetch-depth: 0
+      - run: python3 scripts/tmp_apply_v7_probe_lifecycle_recovery.py
+      - run: |
+          python3 -m py_compile scripts/v7_external_fair_paper_router.py scripts/v7_opportunity.py scripts/v7_ledger_spool.py tests/test_v7_external_fair_paper_router.py tests/test_v7_paper_exploration_authority.py
+          python3 tests/test_v7_external_fair_paper_router.py
+          python3 tests/test_v7_paper_exploration_authority.py
+          python3 tests/test_v7_opportunity.py
+          python3 tests/test_v7_ledger_spool.py
+          python3 tests/test_v7_prepare_cutover_run_root.py
+      - name: Commit tested recovery
+        run: |
+          git config user.name ENRICOBIGNOZZI
+          git config user.email 88671442+ENRICOBIGNOZZI@users.noreply.github.com
+          git add config/v7_external_fair.json docs/v7_world_class/paper_exploration.md scripts/v7_external_fair_paper_router.py scripts/v7_opportunity.py tests/test_v7_external_fair_paper_router.py tests/test_v7_paper_exploration_authority.py
+          git commit -m 'fix: make V7 PAPER probes executable and terminal'
+          git push origin HEAD:codex/v7-paper-probe-recovery-20260904
