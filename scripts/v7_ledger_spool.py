@@ -42,6 +42,32 @@ RESEARCH_STRATEGIES = {
 CANDIDATE_EVENTS = {"CANDIDATE", "OPPORTUNITY"}
 RISK_CREATING_EVENTS = {"ORDER_SUBMITTED", "FILL", "INVENTORY_SPLIT"}
 
+LEDGER_EVENT_CAUSAL_PRIORITY = {
+    "CAPITAL_RESERVE": 10,
+    "INVENTORY_SPLIT_REQUESTED": 20,
+    "INVENTORY_SPLIT": 30,
+    "ORDER_SUBMITTED": 40,
+    "ORDER_STATE": 50,
+    "FILL": 60,
+    "POSITION_MARK": 70,
+    "MARKOUT": 80,
+    "EXIT": 90,
+    "INVENTORY_MERGE": 100,
+    "INVENTORY_LIQUIDATION": 110,
+    "FINAL": 120,
+    "CAPITAL_RELEASE": 130,
+}
+
+
+def _causal_append_key(
+    item: tuple[Path, LedgerEvent | EconomicJournalEntry],
+) -> tuple[int, int, str]:
+    path, record = item
+    if isinstance(record, LedgerEvent):
+        priority = LEDGER_EVENT_CAUSAL_PRIORITY.get(record.event_type, 75)
+        return (record.recorded_ts_ms, priority, path.name)
+    return (record.observed_ts_ms, 75, path.name)
+
 
 def _atomic_payload(directory: Path, name: str, value: dict[str, object]) -> Path:
     directory.mkdir(parents=True, exist_ok=True)
@@ -243,6 +269,7 @@ def _drain_with_existing(
         events.append((path, event))
 
     if events:
+        events.sort(key=_causal_append_key)
         with CanonicalLedgerWriter(ledger_path, writer_id=writer_id, model_sha=model_sha) as writer:
             for path, event in events:
                 if isinstance(event, LedgerEvent):

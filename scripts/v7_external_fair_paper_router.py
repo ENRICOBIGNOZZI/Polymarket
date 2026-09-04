@@ -1945,9 +1945,11 @@ class PaperRouter:
             "excluded_from_portfolio_equity": False, "research_evidence_only": False,
             "ledger_writer_authority": False,
         }
+        canonical_order_recorded_ms = max(now_ms(), arrival_decision_ms)
         spool_event(self.root, LedgerEvent(
             event_type="ORDER_SUBMITTED", strategy=STRATEGY, model_sha=self.sha,
             model_version=MODEL_VERSION, candidate_id=counterfactual_id,
+            recorded_ts_ms=canonical_order_recorded_ms,
             order_id=order_id, position_id=position_id, market_id=market_id,
             event_id=str(market.get("event_id") or ""), token_id=row["token_id"], side="BUY",
             exchange_ts_ms=arrival_book.exchange_ts_ms, receive_ts_ms=arrival_book.receive_ts_ms,
@@ -1970,6 +1972,7 @@ class PaperRouter:
         spool_event(self.root, LedgerEvent(
             event_type="FILL", strategy=STRATEGY, model_sha=self.sha,
             model_version=MODEL_VERSION, candidate_id=counterfactual_id, order_id=order_id,
+            recorded_ts_ms=canonical_order_recorded_ms + 1,
             position_id=position_id, fill_id=fill_id, market_id=market_id,
             event_id=str(market.get("event_id") or ""), token_id=row["token_id"], side="BUY",
             exchange_ts_ms=arrival_book.exchange_ts_ms, receive_ts_ms=arrival_book.receive_ts_ms,
