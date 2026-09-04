@@ -178,6 +178,14 @@ struct ExternalRawTapeRecorder::Impl {
     std::unique_ptr<LargeQueue> large_queue{};
     std::unique_ptr<LargeRawTapeRecord> large_producer_record{};
     std::unique_ptr<LargeRawTapeRecord> large_writer_record{};
+    // Payload storage remains split by size, but publication has one FIFO.
+    // Draining either payload queue first can reorder frames (large #1,
+    // small #2). Peeking both heads also races with concurrent publication.
+    // A descriptor is published only AFTER its payload; its release/acquire
+    // handoff makes the matching payload visible to the sole file writer.
+    static constexpr std::size_t kPublicationCapacity =
+        std::bit_ceil(kExternalRawTapeQueueCapacity + kExternalLargeRawTapeQueueCapacity);
+    SpscRing<std::uint8_t, kPublicationCapacity> publication_queue{};
     std::ofstream output;
     std::thread worker;
     std::atomic<bool> stop_requested{false};
@@ -233,6 +241,11 @@ struct ExternalRawTapeRecorder::Impl {
         return result;
     }
 
+    void fail_writer() noexcept {
+        writer_healthy.store(false, std::memory_order_release);
+        evidence_valid.store(false, std::memory_order_release);
+    }
+
     template <class Record>
     [[nodiscard]] bool write_record(const Record& record) noexcept {
         RawTapeDiskRecordHeader disk;
@@ -246,8 +259,7 @@ struct ExternalRawTapeRecorder::Impl {
         output.write(reinterpret_cast<const char*>(record.payload.data()),
                      static_cast<std::streamsize>(record.payload_size));
         if (!output) {
-            writer_healthy.store(false, std::memory_order_release);
-            evidence_valid.store(false, std::memory_order_release);
+            fail_writer();
             return false;
         }
         written.fetch_add(1, std::memory_order_relaxed);
@@ -255,26 +267,30 @@ struct ExternalRawTapeRecorder::Impl {
     }
 
     void writer_loop() noexcept {
-        while (!stop_requested.load(std::memory_order_acquire) || queued() != 0) {
+        while ((!stop_requested.load(std::memory_order_acquire) || queued() != 0)
+               && writer_healthy.load(std::memory_order_acquire)) {
             bool progressed = false;
-            // The ordinary path must stay compact even for a source that
-            // occasionally sends a recovery batch. Only the exceptional
-            // frame goes through its wider FIFO.
-            while (queue.try_pop(writer_record)) {
+            std::uint8_t large = 0;
+            while (publication_queue.try_pop(large)) {
                 progressed = true;
-                if (!write_record(writer_record)) return;
-            }
-            while (large_queue->try_pop(*large_writer_record)) {
-                progressed = true;
-                if (!write_record(*large_writer_record)) return;
+                if (large != 0) {
+                    if (!large_queue->try_pop(*large_writer_record)) {
+                        fail_writer();
+                        return;
+                    }
+                    if (!write_record(*large_writer_record)) return;
+                } else {
+                    if (!queue.try_pop(writer_record)) {
+                        fail_writer();
+                        return;
+                    }
+                    if (!write_record(writer_record)) return;
+                }
             }
             if (!progressed) std::this_thread::sleep_for(std::chrono::microseconds(100));
         }
         output.flush();
-        if (!output) {
-            writer_healthy.store(false, std::memory_order_release);
-            evidence_valid.store(false, std::memory_order_release);
-        }
+        if (!output) fail_writer();
     }
 };
 
@@ -314,13 +330,24 @@ bool ExternalRawTapeRecorder::try_record_raw(
         impl_->evidence_valid.store(false, std::memory_order_release);
         return false;
     }
-    const bool queued = payload.size() <= kExternalRawTapePayloadBytes
-        ? enqueue(impl_->producer_record, impl_->queue)
-        : enqueue(*impl_->large_producer_record, *impl_->large_queue);
+    const bool large = payload.size() > kExternalRawTapePayloadBytes;
+    const bool queued = large
+        ? enqueue(*impl_->large_producer_record, *impl_->large_queue)
+        : enqueue(impl_->producer_record, impl_->queue);
     if (!queued) {
         impl_->dropped.fetch_add(1, std::memory_order_relaxed);
         impl_->dropped_queue_full.fetch_add(1, std::memory_order_relaxed);
         impl_->evidence_valid.store(false, std::memory_order_release);
+        return false;
+    }
+    // Capacity is at least the sum of the payload queues. Every outstanding
+    // descriptor owns a payload slot, so a successful payload enqueue has a
+    // descriptor slot. Treat a violated invariant as evidence loss, not as
+    // permission to write an out-of-order frame or hang during shutdown.
+    if (!impl_->publication_queue.try_push(large ? 1 : 0)) {
+        impl_->dropped.fetch_add(1, std::memory_order_relaxed);
+        impl_->dropped_queue_full.fetch_add(1, std::memory_order_relaxed);
+        impl_->fail_writer();
         return false;
     }
     impl_->accepted.fetch_add(1, std::memory_order_relaxed);
