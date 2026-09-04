@@ -824,8 +824,85 @@ def main() -> None:
         assert final["settlement_outcome_prices"] == [1.0, 0.0]
 
 
+
+def test_paper_account_admission_controls_actual_step() -> None:
+    """Exercise the real step method; external effects and attempts are mocked."""
+    checks = (
+        ("canonical_order_reconciliation", "PAPER_EXPLORATION_ORDER_RECONCILIATION_INCOMPLETE"),
+        ("canonical_final_reconciliation", "PAPER_EXPLORATION_FINAL_RECONCILIATION_INCOMPLETE"),
+        ("paper_exploration_account", "PAPER_EXPLORATION_ACCOUNT_RECONCILIATION_INCOMPLETE"),
+    )
+    def make_collector():
+        collector = router.PaperRouter.__new__(router.PaperRouter)
+        collector.sha = "a" * 40
+        collector.source = Path("unused-source.json")
+        collector.root = Path("unused-test-root")
+        collector.drain_path = mock.Mock()
+        collector.drain_path.exists.return_value = False
+        collector.state = {key: {"complete": True} for key, _ in checks}
+        collector.policy = {}
+        collector.probe_policy = {}
+        collector.last_book_error = ""
+        collector.last_attempt_reason = ""
+        collector.last_live_market = {}
+        for name in ("record_forecast", "record_opportunity_set", "observe_positions",
+                     "reconcile_canonical_account", "observe_forecasts", "publish",
+                     "reject", "wait"):
+            setattr(collector, name, mock.Mock())
+        collector.books_for = mock.Mock(return_value={})
+        collector.attempt = mock.Mock(return_value=True)
+        return collector
+    observation = {"code_sha": "a" * 40, "market": {}, "fair": {}}
+    with mock.patch.object(router, "load", return_value=observation), \
+         mock.patch.object(router, "live_market_yes", return_value=0.5), \
+         mock.patch.object(router, "robust_candidates", return_value=[{"robust_ev": 0.1}]), \
+         mock.patch.object(router, "reconcile_paper_exploration_orphan_orders", return_value={"complete": True}), \
+         mock.patch.object(router, "reconcile_paper_exploration_finals", return_value={"complete": True}):
+        for key, reason in checks:
+            for invalid in (None, False, "invalid", [], {}, {"complete": False},
+                            {"complete": "true"}, {"complete": 1}):
+                collector = make_collector()
+                collector.state[key] = invalid
+                collector.step()
+                collector.attempt.assert_not_called()
+                collector.books_for.assert_not_called()
+                collector.reject.assert_called_once_with(reason)
+                collector.observe_positions.assert_called_once()
+                collector.reconcile_canonical_account.assert_called_once()
+                collector.observe_forecasts.assert_called_once()
+                collector.publish.assert_called_once_with(0, reason)
+            collector = make_collector()
+            del collector.state[key]
+            collector.step()
+            collector.attempt.assert_not_called()
+            collector.reject.assert_called_once_with(reason)
+        healthy = make_collector()
+        healthy.step()
+        healthy.attempt.assert_called_once()
+        healthy.publish.assert_called_once_with(1, "")
+        assert healthy.state["last_decision"]["outcome"] == "VIRTUAL_FILL"
+        drained = make_collector()
+        drained.drain_path.exists.return_value = True
+        drained.state["paper_exploration_account"] = None
+        drained.step()
+        drained.attempt.assert_not_called()
+        drained.reject.assert_called_once_with("CUTOVER_DRAIN")
+        drained.observe_positions.assert_called_once()
+        recovered = make_collector()
+        recovered.state["paper_exploration_account"] = {"complete": False}
+        def restore_account():
+            recovered.state["paper_exploration_account"] = {"complete": True}
+        recovered.reconcile_canonical_account.side_effect = restore_account
+        recovered.step()
+        recovered.attempt.assert_not_called()
+        recovered.step()
+        recovered.attempt.assert_called_once()
+        assert recovered.observe_positions.call_count == 2
+
+
 if __name__ == "__main__":
     main()
+    test_paper_account_admission_controls_actual_step()
 
 
 def test_arrival_candidate_runs_canonical_coordinator_before_receipt_poll() -> None:

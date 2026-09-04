@@ -3057,6 +3057,24 @@ class PaperRouter:
         if self.drain_path.exists():
             blocker = "CUTOVER_DRAIN"
             rows = []
+        elif (
+            not isinstance(self.state.get("canonical_order_reconciliation"), dict)
+            or self.state["canonical_order_reconciliation"].get("complete") is not True
+        ):
+            blocker = "PAPER_EXPLORATION_ORDER_RECONCILIATION_INCOMPLETE"
+            rows = []
+        elif (
+            not isinstance(self.state.get("canonical_final_reconciliation"), dict)
+            or self.state["canonical_final_reconciliation"].get("complete") is not True
+        ):
+            blocker = "PAPER_EXPLORATION_FINAL_RECONCILIATION_INCOMPLETE"
+            rows = []
+        elif (
+            not isinstance(self.state.get("paper_exploration_account"), dict)
+            or self.state["paper_exploration_account"].get("complete") is not True
+        ):
+            blocker = "PAPER_EXPLORATION_ACCOUNT_RECONCILIATION_INCOMPLETE"
+            rows = []
         elif not status:
             # The RTDS monitor and router are started together. Before its
             # first atomic status publication there is no identity to compare,
