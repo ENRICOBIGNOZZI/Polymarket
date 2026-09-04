@@ -13,6 +13,7 @@ from pathlib import Path
 from typing import Callable
 
 SHA40 = re.compile(r"^[0-9a-f]{40}$")
+MAKER_LEDGER_STRATEGIES = frozenset({"MICRO_MAKER_PRO", "MICRO_MAKER", "PROFESSIONAL_MAKER"})
 
 
 class CutoverArchiveError(RuntimeError):
@@ -55,7 +56,7 @@ def validate_ledger(
     repository_root: Path,
     target_sha: str,
     ancestor_check: Callable[[Path, str, str], bool],
-) -> tuple[int, str, dict[str, int]]:
+) -> tuple[int, str, dict[str, int], dict[str, dict[str, int]]]:
     try:
         handle = path.open("rb")
     except FileNotFoundError:
@@ -63,6 +64,7 @@ def validate_ledger(
     digest = hashlib.sha256()
     rows = 0
     model_sha_counts: dict[str, int] = {}
+    strategy_counts_by_sha: dict[str, dict[str, int]] = {}
     ancestry: dict[str, bool] = {}
     with handle:
         for number, raw in enumerate(handle, start=1):
@@ -88,7 +90,16 @@ def validate_ledger(
             if not ancestry[model_sha]:
                 raise CutoverArchiveError(f"ledger_sha_not_ancestor:{number}")
             model_sha_counts[model_sha] = model_sha_counts.get(model_sha, 0) + 1
-    return rows, digest.hexdigest(), dict(sorted(model_sha_counts.items()))
+            if value.get("record_kind") != "ECONOMIC_JOURNAL":
+                strategy = str(value.get("strategy") or "").strip().upper()
+                if strategy:
+                    bucket = strategy_counts_by_sha.setdefault(model_sha, {})
+                    bucket[strategy] = bucket.get(strategy, 0) + 1
+    normalized_strategies = {
+        sha: dict(sorted(counts.items()))
+        for sha, counts in sorted(strategy_counts_by_sha.items())
+    }
+    return rows, digest.hexdigest(), dict(sorted(model_sha_counts.items())), normalized_strategies
 
 
 def prepare(
@@ -146,7 +157,7 @@ def prepare(
     if deployed_sha and runtime_sha and runtime_sha != deployed_sha and not runtime_checkout_drift:
         raise CutoverArchiveError("previous_deployed_runtime_sha_mismatch")
     if previous_sha == target_sha:
-        _, _, model_sha_counts = validate_ledger(
+        _, _, model_sha_counts, _ = validate_ledger(
             run_root / "ledger/execution.jsonl", repository_root, target_sha, ancestor_check,
         )
         if any(model_sha != target_sha for model_sha in model_sha_counts):
@@ -237,12 +248,23 @@ def prepare(
     maker_receipt = read_json(run_root / "control/maker_cutover_liquidation.json")
     ledger_path = run_root / "ledger/execution.jsonl"
     spool_path = run_root / "ledger/spool"
+    ledger_rows, ledger_sha256, ledger_model_sha_counts, ledger_strategy_counts = validate_ledger(
+        ledger_path, repository_root, target_sha, ancestor_check,
+    )
+    ledger_bytes = ledger_path.stat().st_size if ledger_path.exists() else 0
+    exact_sha_strategy_counts = ledger_strategy_counts.get(previous_sha, {})
+    maker_ledger_rows = sum(
+        int(exact_sha_strategy_counts.get(strategy, 0))
+        for strategy in MAKER_LEDGER_STRATEGIES
+    )
     sleeves = portfolio.get("sleeves") if isinstance(portfolio.get("sleeves"), dict) else {}
-    ledger_empty = ledger_path.exists() and ledger_path.stat().st_size == 0
+    ledger_empty = ledger_path.exists() and ledger_bytes == 0
     spool_empty = not spool_path.exists() or not any(spool_path.glob("*.json"))
     prior_never_started_sleeves: list[str] = []
 
-    def prove_never_started(name: str, allowed_sources: set[str]) -> dict:
+    def prove_never_started(
+        name: str, allowed_sources: set[str], *, require_ledger_empty: bool = True,
+    ) -> dict:
         sleeve = sleeves.get(name) if isinstance(sleeves.get(name), dict) else {}
         try:
             budget = float(sleeve.get("budget") or 0.0)
@@ -250,7 +272,7 @@ def prepare(
         except (TypeError, ValueError, OverflowError) as exc:
             raise CutoverArchiveError(f"prior_never_started_invalid:{name}") from exc
         if (
-            not ledger_empty or not spool_empty
+            (require_ledger_empty and not ledger_empty) or not spool_empty
             or runtime.get("state") not in {"stopping", "stopped"}
             or runtime.get("economic_new_risk_ready") is not False
             or runtime.get("authorized_alpha_actions") != []
@@ -264,8 +286,20 @@ def prepare(
     def verify_maker_never_started_receipt(maker_proof: dict) -> None:
         absence = maker_receipt.get("absence_proof") \
             if isinstance(maker_receipt.get("absence_proof"), dict) else {}
+        nonempty_ledger_proof_invalid = ledger_bytes > 0 and (
+            absence.get("checked_model_sha") != previous_sha
+            or absence.get("maker_strategies") != sorted(MAKER_LEDGER_STRATEGIES)
+            or absence.get("ledger_records") != ledger_rows
+            or absence.get("ledger_sha256") != ledger_sha256
+            or absence.get("exact_sha_records") != ledger_model_sha_counts.get(previous_sha, 0)
+            or absence.get("exact_sha_execution_events") != sum(exact_sha_strategy_counts.values())
+            or absence.get("exact_sha_maker_events") != 0
+        )
         if (
-            maker_receipt.get("schema") != "polymarket_v7_maker_cutover_liquidation_v1"
+            not ledger_path.exists()
+            or maker_ledger_rows != 0
+            or nonempty_ledger_proof_invalid
+            or maker_receipt.get("schema") != "polymarket_v7_maker_cutover_liquidation_v1"
             or maker_receipt.get("state") != "MAKER_FLAT"
             or maker_receipt.get("never_started") is not True
             or maker_receipt.get("model_sha") != previous_sha
@@ -278,7 +312,7 @@ def prepare(
             or absence.get("runtime_sha") != previous_sha
             or absence.get("runtime_state") != runtime.get("state")
             or absence.get("authorized_alpha_actions") != []
-            or absence.get("ledger_bytes") != 0
+            or absence.get("ledger_bytes") != ledger_bytes
             or absence.get("maker_portfolio_source") != maker_proof["source"]
             or float(absence.get("maker_budget") or 0.0) != maker_proof["budget"]
             or float(absence.get("maker_equity") or 0.0) != maker_proof["equity"]
@@ -325,7 +359,8 @@ def prepare(
         prior_never_started_sleeves.append("micro_taker")
     if not maker_status and not maker_state:
         maker_proof = prove_never_started(
-            "micro_maker", {"not_started", "zero_authority_budget"})
+            "micro_maker", {"not_started", "zero_authority_budget"},
+            require_ledger_empty=False)
         verify_maker_never_started_receipt(maker_proof)
         maker_status = {
             "paper_only": True, "authenticated_execution": False, "positions": [],
@@ -338,7 +373,8 @@ def prepare(
         # file. Accept that absence only when both its exact-SHA zero-authority
         # status and the post-stop liquidation receipt prove it never started.
         maker_proof = prove_never_started(
-            "micro_maker", {"not_started", "zero_authority_budget"})
+            "micro_maker", {"not_started", "zero_authority_budget"},
+            require_ledger_empty=False)
         if (
             maker_status.get("schema") != "polymarket_v7_professional_maker_status_v1"
             or maker_status.get("model_sha") != previous_sha
@@ -416,9 +452,6 @@ def prepare(
     if open_summary:
         raise CutoverArchiveError(f"prior_open_positions:{open_summary}")
 
-    ledger_rows, ledger_sha256, ledger_model_sha_counts = validate_ledger(
-        run_root / "ledger/execution.jsonl", repository_root, target_sha, ancestor_check,
-    )
     archived_at = int(now if now is not None else time.time())
     archive_root.mkdir(parents=True, exist_ok=True)
     destination = archive_root / f"cutover-{previous_sha}-{archived_at}-{os.getpid()}"
@@ -440,6 +473,7 @@ def prepare(
         "ledger_rows": ledger_rows,
         "ledger_sha256": ledger_sha256,
         "ledger_model_sha_counts": ledger_model_sha_counts,
+        "ledger_strategy_counts": ledger_strategy_counts,
         "runtime_checkout_drift_detected": runtime_checkout_drift,
         "prior_quarantined_sleeves": prior_quarantined_sleeves,
         "prior_reconciled_fatal_sleeves": prior_reconciled_fatal_sleeves,

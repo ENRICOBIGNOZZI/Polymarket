@@ -12,11 +12,12 @@ import time
 from pathlib import Path
 from typing import Any
 
-from v7_execution_ledger import LedgerEvent
+from v7_execution_ledger import LedgerEvent, iter_records
 from v7_ledger_spool import drain_spool, spool_events
 
 
 STRATEGY = "MICRO_MAKER_PRO"
+MAKER_LEDGER_STRATEGIES = frozenset({"MICRO_MAKER_PRO", "MICRO_MAKER", "PROFESSIONAL_MAKER"})
 
 
 class MakerCutoverError(RuntimeError):
@@ -76,6 +77,45 @@ def maker_flat(state: dict[str, Any]) -> bool:
     return True
 
 
+def maker_ledger_absence_proof(path: Path, model_sha: str) -> dict[str, Any]:
+    """Validate the shared ledger and prove no exact-SHA Maker event exists."""
+    if not path.exists():
+        raise MakerCutoverError("maker_never_started_ledger_missing")
+    total_records = 0
+    exact_sha_records = 0
+    exact_sha_execution_events = 0
+    try:
+        for record in iter_records(path):
+            total_records += 1
+            if getattr(record, "model_sha", None) != model_sha:
+                continue
+            exact_sha_records += 1
+            if not isinstance(record, LedgerEvent):
+                continue
+            exact_sha_execution_events += 1
+            if record.strategy.strip().upper() in MAKER_LEDGER_STRATEGIES:
+                raise MakerCutoverError("maker_never_started_ledger_contains_maker_events")
+    except MakerCutoverError:
+        raise
+    except Exception as exc:
+        raise MakerCutoverError("maker_never_started_ledger_invalid") from exc
+
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return {
+        "checked_model_sha": model_sha,
+        "maker_strategies": sorted(MAKER_LEDGER_STRATEGIES),
+        "ledger_bytes": path.stat().st_size,
+        "ledger_records": total_records,
+        "ledger_sha256": digest.hexdigest(),
+        "exact_sha_records": exact_sha_records,
+        "exact_sha_execution_events": exact_sha_execution_events,
+        "exact_sha_maker_events": 0,
+    }
+
+
 def finalize_never_started(
     root: Path,
     model_sha: str,
@@ -127,6 +167,7 @@ def finalize_never_started(
     status_ms = int(number("status_timestamp_ms", status.get("timestamp_ms"), minimum=1.0))
     if current_ms < status_ms or current_ms - status_ms > 15_000:
         raise MakerCutoverError("maker_mark_stale")
+    ledger_proof = maker_ledger_absence_proof(ledger, model_sha)
     if (
         runtime.get("model_sha") != model_sha
         or runtime.get("paper_only") is not True
@@ -141,14 +182,13 @@ def finalize_never_started(
         or portfolio.get("fatal_sleeves") not in (None, [])
         # A zero-authority Maker is deliberately represented by the portfolio
         # coordinator as an untouched budget even when its observer-only
-        # process has run.  That is economically equivalent to never_started,
-        # provided the canonical ledger/spool are empty and budget == equity.
+        # process has run. That is economically equivalent to never_started
+        # when the exact-SHA shared ledger contains no Maker events, the spool
+        # is empty, and budget == equity. Other PAPER strategies may coexist.
         or maker.get("source") not in {"not_started", "zero_authority_budget"}
         or maker.get("killed") is not False
         or abs(number("maker_budget", maker.get("budget"), minimum=0.0)
                - number("maker_equity", maker.get("equity"), minimum=0.0)) > 1e-9
-        or not ledger.exists()
-        or ledger.stat().st_size != 0
         or (spool.exists() and any(spool.glob("*.json")))
     ):
         raise MakerCutoverError("maker_never_started_proof_invalid")
@@ -157,7 +197,7 @@ def finalize_never_started(
         "runtime_sha": runtime["model_sha"],
         "runtime_state": runtime["state"],
         "authorized_alpha_actions": [],
-        "ledger_bytes": 0,
+        **ledger_proof,
         "maker_portfolio_source": maker["source"],
         "maker_budget": number("maker_budget", maker["budget"], minimum=0.0),
         "maker_equity": number("maker_equity", maker["equity"], minimum=0.0),
