@@ -78,51 +78,66 @@ class MakerCutoverFinalizerTest(unittest.TestCase):
             # The receipt makes a completed retry idempotent.
             self.assertEqual(cutover.finalize(root, SHA, NONCE, now_ms=now), receipt)
 
-    def test_never_started_maker_is_flattened_from_canonical_absence_proof(self) -> None:
+    def _never_started_fixture(
+        self, root: Path, now: int, *, ledger_strategy: str | None = None,
+    ) -> Path:
+        write(root / "control/CUTOVER_DRAIN", {
+            "schema": "polymarket_v7_cutover_drain_v1", "nonce": NONCE,
+            "current_sha": SHA, "target_sha": "b" * 40, "paper_only": True,
+        })
+        write(root / "control/runtime_status.json", {
+            "model_sha": SHA, "paper_only": True, "authenticated_execution": False,
+            "real_order_submission": False, "state": "stopping",
+            "economic_new_risk_ready": False, "authorized_alpha_actions": [],
+        })
+        write(root / "control/portfolio_state.json", {
+            "paper_only": True, "authenticated_execution": False, "killed": False,
+            "fatal_sleeves": [], "sleeves": {"micro_maker": {
+                "source": "zero_authority_budget", "killed": False,
+                "budget": 2_000.0, "equity": 2_000.0,
+            }},
+        })
+        ledger = root / "ledger/execution.jsonl"
+        ledger.parent.mkdir(parents=True)
+        if ledger_strategy is None:
+            ledger.write_text("", encoding="utf-8")
+        else:
+            event = cutover.LedgerEvent(
+                event_type="FINAL", strategy=ledger_strategy, model_sha=SHA,
+                recorded_ts_ms=now - 10, final_pnl=0.0,
+            )
+            ledger.write_text(json.dumps(event.to_dict()) + "\n", encoding="utf-8")
+        mark = root / "control/maker_cutover_mark.json"
+        write(mark, {
+            "schema": "polymarket_v7_professional_maker_status_v1",
+            "timestamp_ms": now - 1, "paper_only": True,
+            "authenticated_execution": False, "real_order_submission": False,
+            "model_sha": None, "marking_complete": True, "killed": False,
+            "drain_requested": True, "new_risk_frozen": True,
+            "drain_complete": True, "degraded": False,
+            "source": "not_started", "unmarkable_tokens": [],
+        })
+        return mark
+
+    def test_never_started_maker_accepts_shared_non_maker_ledger(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             now = 1_788_040_000_000
-            write(root / "control/CUTOVER_DRAIN", {
-                "schema": "polymarket_v7_cutover_drain_v1", "nonce": NONCE,
-                "current_sha": SHA, "target_sha": "b" * 40, "paper_only": True,
-            })
-            write(root / "control/runtime_status.json", {
-                "model_sha": SHA, "paper_only": True, "authenticated_execution": False,
-                "real_order_submission": False, "state": "stopping",
-                "economic_new_risk_ready": False, "authorized_alpha_actions": [],
-            })
-            write(root / "control/portfolio_state.json", {
-                "paper_only": True, "authenticated_execution": False, "killed": False,
-                "fatal_sleeves": [], "sleeves": {"micro_maker": {
-                    # Production uses this source after the observer-only Maker
-                    # has run without ever receiving execution authority.
-                    "source": "zero_authority_budget", "killed": False,
-                    "budget": 2_000.0, "equity": 2_000.0,
-                }},
-            })
-            ledger = root / "ledger/execution.jsonl"
-            ledger.parent.mkdir(parents=True)
-            ledger.write_text("", encoding="utf-8")
-            mark = root / "control/maker_cutover_mark.json"
-            write(mark, {
-                "schema": "polymarket_v7_professional_maker_status_v1",
-                "timestamp_ms": now - 1, "paper_only": True,
-                "authenticated_execution": False, "real_order_submission": False,
-                "model_sha": None, "marking_complete": True, "killed": False,
-                "drain_requested": True, "new_risk_frozen": True,
-                "drain_complete": True, "degraded": False,
-                "source": "not_started", "unmarkable_tokens": [],
-            })
-            receipt = cutover.finalize(
-                root, SHA, NONCE, mark_path=mark, now_ms=now)
+            mark = self._never_started_fixture(
+                root, now, ledger_strategy="CRYPTO_INFORMED_TAKER")
+            receipt = cutover.finalize(root, SHA, NONCE, mark_path=mark, now_ms=now)
             self.assertEqual(receipt["state"], "MAKER_FLAT")
             self.assertTrue(receipt["never_started"])
             self.assertEqual(receipt["positions_liquidated"], 0)
             self.assertEqual(receipt["ledger_record_ids"], [])
-            self.assertEqual(
-                receipt["absence_proof"]["maker_portfolio_source"],
-                "zero_authority_budget",
-            )
+            proof = receipt["absence_proof"]
+            self.assertEqual(proof["maker_portfolio_source"], "zero_authority_budget")
+            self.assertEqual(proof["ledger_records"], 1)
+            self.assertEqual(proof["exact_sha_records"], 1)
+            self.assertEqual(proof["exact_sha_execution_events"], 1)
+            self.assertEqual(proof["exact_sha_maker_events"], 0)
+            self.assertGreater(proof["ledger_bytes"], 0)
+            self.assertEqual(len(proof["ledger_sha256"]), 64)
             self.assertFalse((root / "micro_maker/state.json").exists())
             self.assertEqual(
                 cutover.finalize(root, SHA, NONCE, mark_path=mark, now_ms=now),
@@ -139,6 +154,18 @@ class MakerCutoverFinalizerTest(unittest.TestCase):
                 root, SHA, next_nonce, mark_path=mark, now_ms=now + 1)
             self.assertEqual(retried["nonce"], next_nonce)
             self.assertTrue(retried["never_started"])
+
+    def test_never_started_maker_rejects_exact_sha_maker_ledger_event(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            now = 1_788_040_000_000
+            mark = self._never_started_fixture(
+                root, now, ledger_strategy="MICRO_MAKER_PRO")
+            with self.assertRaisesRegex(
+                cutover.MakerCutoverError,
+                "maker_never_started_ledger_contains_maker_events",
+            ):
+                cutover.finalize(root, SHA, NONCE, mark_path=mark, now_ms=now)
 
     def test_crash_after_state_commit_resumes_with_stale_mark_exactly_once(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

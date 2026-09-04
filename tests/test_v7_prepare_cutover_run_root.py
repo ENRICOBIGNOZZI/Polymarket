@@ -137,7 +137,12 @@ class V7PrepareCutoverRunRootTest(unittest.TestCase):
             tmp_path = Path(directory)
             run = tmp_path / "paper_v7_live"
             fixture(run)
-            (run / "ledger/execution.jsonl").write_text("", encoding="utf-8")
+            ledger_record = {
+                "paper_only": True, "authenticated_execution": False,
+                "model_sha": OLD, "strategy": "CRYPTO_INFORMED_TAKER",
+            }
+            ledger_payload = (json.dumps(ledger_record, sort_keys=True) + "\n").encode()
+            (run / "ledger/execution.jsonl").write_bytes(ledger_payload)
             (run / "micro_maker/state.json").unlink()
             runtime = json.loads((run / "control/runtime_status.json").read_text())
             runtime.update({
@@ -169,7 +174,15 @@ class V7PrepareCutoverRunRootTest(unittest.TestCase):
                 "positions_liquidated": 0, "ledger_record_ids": [], "final_pnl": 0.0,
                 "absence_proof": {
                     "runtime_sha": OLD, "runtime_state": "stopping",
-                    "authorized_alpha_actions": [], "ledger_bytes": 0,
+                    "authorized_alpha_actions": [],
+                    "checked_model_sha": OLD,
+                    "maker_strategies": sorted(cutover.MAKER_LEDGER_STRATEGIES),
+                    "ledger_bytes": len(ledger_payload),
+                    "ledger_records": 1,
+                    "ledger_sha256": hashlib.sha256(ledger_payload).hexdigest(),
+                    "exact_sha_records": 1,
+                    "exact_sha_execution_events": 1,
+                    "exact_sha_maker_events": 0,
                     "maker_portfolio_source": "zero_authority_budget",
                     "maker_budget": 0.0, "maker_equity": 0.0,
                 },
