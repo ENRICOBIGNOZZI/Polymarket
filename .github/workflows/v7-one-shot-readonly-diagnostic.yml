@@ -1,0 +1,132 @@
+name: One-shot V7 read-only server diagnostic
+on:
+  push:
+    branches: [ops/v7-readonly-diagnostic-20260905]
+    paths: [.github/workflows/v7-one-shot-readonly-diagnostic.yml]
+permissions:
+  contents: read
+  id-token: write
+jobs:
+  inspect-only:
+    if: github.repository == 'ENRICOBIGNOZZI/Polymarket' && github.ref == 'refs/heads/ops/v7-readonly-diagnostic-20260905'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    env:
+      SERVER_HOST: ${{ vars.POLYMARKET_SERVER_HOST || '100.104.183.109' }}
+      SERVER_USER: ${{ vars.POLYMARKET_SERVER_USER || 'enrico' }}
+      SERVER_PORT: ${{ vars.POLYMARKET_SERVER_PORT || '22' }}
+    steps:
+      - name: Select existing ephemeral tailnet authentication
+        id: auth
+        env:
+          TS_AUTHKEY: ${{ secrets.TS_AUTHKEY }}
+          TS_OAUTH_CLIENT_ID: ${{ secrets.TS_OAUTH_CLIENT_ID }}
+          TS_OAUTH_SECRET: ${{ secrets.TS_OAUTH_SECRET }}
+          TS_AUDIENCE: ${{ secrets.TS_AUDIENCE }}
+        run: |
+          set -euo pipefail
+          if [[ -n "${TS_OAUTH_CLIENT_ID:-}" && -n "${TS_AUDIENCE:-}" ]]; then
+            mode=oidc
+          elif [[ -n "${TS_OAUTH_CLIENT_ID:-}" && -n "${TS_OAUTH_SECRET:-}" ]]; then
+            mode=oauth
+          elif [[ -n "${TS_AUTHKEY:-}" ]]; then
+            mode=authkey
+          else
+            echo 'No existing Tailscale authentication is available to this workflow' >&2
+            exit 1
+          fi
+          echo "mode=$mode" >> "$GITHUB_OUTPUT"
+      - name: Join ephemeral tailnet using workload identity
+        if: steps.auth.outputs.mode == 'oidc'
+        uses: tailscale/github-action@780049a30b6ff5c378a9e7b389d15ece7a204888
+        with:
+          oauth-client-id: ${{ secrets.TS_OAUTH_CLIENT_ID }}
+          audience: ${{ secrets.TS_AUDIENCE }}
+          tags: ${{ vars.TS_TAGS || 'tag:ci' }}
+          version: 1.94.2
+          hostname: gh-diagnostic-${{ github.run_id }}-${{ github.run_attempt }}
+      - name: Join ephemeral tailnet using OAuth
+        if: steps.auth.outputs.mode == 'oauth'
+        uses: tailscale/github-action@780049a30b6ff5c378a9e7b389d15ece7a204888
+        with:
+          oauth-client-id: ${{ secrets.TS_OAUTH_CLIENT_ID }}
+          oauth-secret: ${{ secrets.TS_OAUTH_SECRET }}
+          tags: ${{ vars.TS_TAGS || 'tag:ci' }}
+          version: 1.94.2
+          hostname: gh-diagnostic-${{ github.run_id }}-${{ github.run_attempt }}
+      - name: Join tailnet using existing ephemeral auth key
+        if: steps.auth.outputs.mode == 'authkey'
+        uses: tailscale/github-action@780049a30b6ff5c378a9e7b389d15ece7a204888
+        with:
+          authkey: ${{ secrets.TS_AUTHKEY }}
+          args: --ephemeral
+          version: 1.94.2
+          hostname: gh-diagnostic-${{ github.run_id }}-${{ github.run_attempt }}
+      - name: Read server identity, storage and whitelisted runtime counters only
+        env:
+          SSH_PRIVATE_KEY: ${{ secrets.POLYMARKET_SERVER_SSH_KEY }}
+        run: |
+          set -euo pipefail
+          test -n "${SSH_PRIVATE_KEY:-}" || { echo 'No existing server SSH key is available' >&2; exit 1; }
+          install -d -m 700 ~/.ssh
+          key=~/.ssh/v7-diagnostic
+          trap 'rm -f "$key"' EXIT
+          printf '%s\n' "$SSH_PRIVATE_KEY" > "$key"
+          chmod 600 "$key"
+          ssh-keyscan -T 5 -p "$SERVER_PORT" "$SERVER_HOST" > ~/.ssh/known_hosts
+          ssh -i "$key" -o IdentitiesOnly=yes -o BatchMode=yes -o ConnectTimeout=10 -o ServerAliveInterval=5 -o ServerAliveCountMax=2 -p "$SERVER_PORT" "$SERVER_USER@$SERVER_HOST" 'cd "$HOME/polymarket" && python3 -' <<'PY'
+          import json, os, re, shutil, subprocess, time
+          from pathlib import Path
+          base=Path.cwd(); root=base/'runs/paper_v7_live'
+          def command(args):
+              try:
+                  result=subprocess.run(args,capture_output=True,text=True,timeout=10)
+                  return {'returncode':result.returncode,'output':result.stdout[:6000]}
+              except Exception as error:
+                  return {'error':type(error).__name__}
+          fields={
+              'schema','version','timestamp','timestamp_ms','updated_at','model_sha','code_sha',
+              'pid','mode','execution_mode','runtime_mode','status','healthy','complete','ready',
+              'paper_only','authenticated_execution','real_order_submission','real_capital_at_risk',
+              'economic_new_risk_ready','economic_engines','reason','blocker','issues',
+              'orders','orders_submitted','fills','open_positions','terminal_positions',
+              'cash','equity','starting_capital','realized_pnl','unrealized_pnl','drawdown',
+              'counterfactual_fills','counterfactual_forecasts','counterfactual_resolved_forecasts',
+              'counterfactual_open_positions','counterfactual_realized_pnl','counterfactual_equity',
+              'canonical_order_reconciliation','canonical_final_reconciliation','paper_exploration_account',
+              'rejection_reasons','wait_reasons','last_decision','book_requests','book_request_failures',
+              'book_parse_failures','drain_requested','drain_complete','killed','disk','last_error',
+              'restart_count','services','workers','execution_state','maturity','model_mature',
+          }
+          def sample():
+              paths={root/'canonical_economics.json',root/'control/runtime_status.json',
+                     root/'control/supervisor_status.json',root/'control/retention_status.json'}
+              paths.update(root.glob('*/*status*.json'))
+              out={}
+              for path in sorted(paths):
+                  entry={'exists':path.is_file()}
+                  if path.is_file() and not path.is_symlink():
+                      stat=path.stat(); entry.update(bytes=stat.st_size,age_seconds=round(time.time()-stat.st_mtime,3))
+                      if stat.st_size<=300000:
+                          try:
+                              value=json.loads(path.read_text())
+                              if isinstance(value,dict):
+                                  entry['values']={k:v for k,v in value.items() if k in fields}
+                          except Exception as error:
+                              entry['read_error']=type(error).__name__
+                  out[str(path.relative_to(root))]=entry
+              return out
+          usage=shutil.disk_usage(base)
+          result={'schema':'v7_readonly_diagnostic_v1','observed_utc':time.strftime('%Y-%m-%dT%H:%M:%SZ',time.gmtime()),
+                  'server_modified':False,'git_head':command(['git','rev-parse','HEAD']),
+                  'git_status':command(['git','status','--short']),
+                  'disk':{'total':usage.total,'free':usage.free,'free_ratio':usage.free/usage.total}}
+          deployed=root/'control/deployed_sha'
+          if deployed.is_file():
+              raw=deployed.read_text().strip()
+              result['deployed_sha']=raw if re.fullmatch('[0-9a-f]{40}',raw) else 'INVALID_SHA'
+          result['first']=sample()
+          time.sleep(2)
+          result['second']=sample()
+          print(json.dumps(result,sort_keys=True))
+          PY
