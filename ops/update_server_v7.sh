@@ -386,7 +386,11 @@ maker_zero_authority_observer=(
     and maker_status.get('source') == 'shadow_markout_and_fillability_observers'
     and abs(int(runtime.get('timestamp',0))-int(maker_status.get('timestamp',-31))) <= 30
     and isinstance(maker_status.get('observer_pids'),dict)
-    and bool(maker_status.get('observer_pids'))
+    # A live incumbent must still prove an owned observer cohort. Once the
+    # runtime is stopped, an empty PID map is the terminal state: zero capital,
+    # zero ledger authority, zero orders and zero positions already prove that
+    # this shadow sleeve cannot retain or create PAPER risk.
+    and (bool(maker_status.get('observer_pids')) or not runtime_alive)
     and maker_status.get('new_risk_frozen') is True
     and int(maker_status.get('open_orders',-1)) == 0
     and int(maker_status.get('open_positions',-1)) == 0
