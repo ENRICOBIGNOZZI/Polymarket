@@ -149,6 +149,8 @@ def main() -> None:
     assert '"opportunities" / "inbox"' in source
     assert "from v7_ledger_spool import spool_event" in source
     assert "spool_event(self.root" in source
+    assert "recorded_ts_ms=canonical_order_recorded_ms," in source
+    assert "recorded_ts_ms=canonical_order_recorded_ms + 1," in source
     assert "wait_for_exploration_receipt" in source
     assert "PAPER_EXPLORATION_NOT_SELECTED" in source
     assert '"VIRTUAL_FILL"' in source
