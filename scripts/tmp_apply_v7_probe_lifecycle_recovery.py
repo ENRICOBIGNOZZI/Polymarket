@@ -90,6 +90,20 @@ if c2d_size_reject in text:
 elif legacy_size_reject not in text:
     raise SystemExit("minimum-size rejection precondition unavailable")
 
+c2d_snapshot = '''            "robust_candidates": len(robust_rows),
+            "probe_candidates": len(probe_rows),
+            "candidate_mode": "ROBUST" if robust_rows else ("PAPER_BOOTSTRAP_PROBE" if probe_rows else "NONE"),
+'''
+legacy_snapshot = '''            "robust_candidates": len(robust_rows),
+            "probe_candidate_count": len(probe_rows),
+            "candidate_count": len(rows),
+            "candidate_mode": "ROBUST" if robust_rows else ("PAPER_BOOTSTRAP_PROBE" if probe_rows else "NONE"),
+'''
+if c2d_snapshot in text:
+    text = text.replace(c2d_snapshot, legacy_snapshot, 1)
+elif legacy_snapshot not in text:
+    raise SystemExit("decision snapshot precondition unavailable")
+
 SOURCE.write_text(text, encoding="utf-8")
 original = subprocess.check_output(
     ["git", "show", f"{SOURCE_COMMIT}:scripts/tmp_apply_v7_probe_lifecycle_recovery.py"],
