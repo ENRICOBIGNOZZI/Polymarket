@@ -207,6 +207,44 @@ class LedgerSpoolTests(unittest.TestCase):
             self.assertEqual(result["rejected"], 1)
             self.assertFalse(canonical_ledger_path(root).exists())
 
+    def test_same_millisecond_fill_cannot_precede_its_order(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            order = LedgerEvent(
+                event_type="ORDER_SUBMITTED", strategy="CANONICAL_TEST",
+                model_sha=SHA, record_id="z-order", recorded_ts_ms=2_000,
+                order_id="order-1", side="BUY", limit_price=0.5,
+                exchange_ts_ms=1_900, receive_ts_ms=1_950,
+                decision_ts_ms=1_990, book_snapshot_id="book-1",
+                intended_action="TAKE", intended_size=1.0,
+                order_state="SUBMITTED_SHADOW",
+            )
+            fill = LedgerEvent(
+                event_type="FILL", strategy="CANONICAL_TEST",
+                model_sha=SHA, record_id="a-fill", recorded_ts_ms=2_000,
+                order_id="order-1", fill_id="fill-1", token_id="token-1",
+                side="BUY", exchange_ts_ms=1_900, receive_ts_ms=1_950,
+                fill_price=0.5, filled_size=1.0, complete=True,
+                fee=0.0, fee_source="test:authoritative",
+            )
+            spool_event(root, order)
+            spool_event(root, fill)
+            self.assertEqual(
+                [path.name for path in sorted((root / "ledger/spool").glob("*.json"))],
+                ["0000000002000.a-fill.json", "0000000002000.z-order.json"],
+            )
+            result = drain_spool(root, model_sha=SHA)
+            self.assertEqual(result["appended"], 2)
+            rows = [
+                json.loads(line)
+                for line in canonical_ledger_path(root).read_text().splitlines()
+                if line.strip()
+            ]
+            self.assertEqual(
+                [row["event_type"] for row in rows],
+                ["ORDER_SUBMITTED", "FILL"],
+            )
+
     def test_journal_facts_use_the_same_spool_and_canonical_writer(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
