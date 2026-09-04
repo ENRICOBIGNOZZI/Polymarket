@@ -111,3 +111,35 @@ original = subprocess.check_output(
 )
 namespace = {"__name__": "__main__", "__file__": str(Path(__file__).resolve())}
 exec(compile(original, str(Path(__file__).resolve()) + ":pinned", "exec"), namespace)
+
+# The router proposes and simulates; it must never claim the single-writer's
+# canonical order/fill counters. Ledger-derived exporters own those metrics.
+patched = SOURCE.read_text(encoding="utf-8")
+patched = patched.replace(
+    '''        self.state["orders"] = len(fills)
+        self.state["fills"] = len(fills)
+        self.state["probe_fills"] = sum(
+''',
+    '''        self.state["probe_fills"] = sum(
+''',
+    1,
+)
+patched = patched.replace(
+    '''        self.state["orders"] = int(self.state.get("orders") or 0) + 1
+        self.state["fills"] = int(self.state.get("fills") or 0) + 1
+        self.state["counterfactual_fills"] = int(self.state.get("counterfactual_fills") or 0) + 1
+''',
+    '''        self.state["counterfactual_fills"] = int(self.state.get("counterfactual_fills") or 0) + 1
+''',
+    1,
+)
+SOURCE.write_text(patched, encoding="utf-8")
+
+test_path = Path("tests/test_v7_external_fair_paper_router.py")
+test_text = test_path.read_text(encoding="utf-8")
+test_text = test_text.replace(
+    '        assert resumed.state["orders"] == 1 and resumed.state["fills"] == 1\n        assert resumed.state["probe_fills"] == 1\n',
+    '        assert resumed.state["orders"] == 0 and resumed.state["fills"] == 0\n        assert resumed.state["probe_fills"] == 1\n',
+    1,
+)
+test_path.write_text(test_text, encoding="utf-8")
