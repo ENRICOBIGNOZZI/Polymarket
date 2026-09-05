@@ -21,12 +21,15 @@ def main() -> None:
     assert "observed_runtime_sha" in source
     assert "--collector-sha" in entry
     assert "--runtime-sha" in entry
+    assert "--evidence-root" in entry
+    assert "research evidence root must differ" in entry
+    assert "research evidence root must be outside observed live run root" in source
+    assert 'evidence_dir(evidence_root / "normalized_events")' in source
     assert "MarketWsEventKind::BookChanged" in source
     assert "ExternalTapeRecorder" in source
     assert "TapeSegmentOptions{kSegmentBytes, kSegmentSeconds}" in source
     assert "64ULL * 1024ULL * 1024ULL" in source
     assert "kSegmentSeconds = 300" in source
-    assert 'external_fair/normalized_events' in source
     assert "external_fair/status.json" in source
     assert "CryptoBookTapePayload" in source
     assert "kCryptoBookTapeSchemaVersion" in source
