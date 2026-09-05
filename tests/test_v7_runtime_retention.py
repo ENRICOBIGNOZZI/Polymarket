@@ -6,10 +6,12 @@ import os
 import sys
 import tempfile
 import unittest
+from unittest import mock
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "monitoring"))
+import v7_retention as retention_module
 
 from v7_retention import (
     compact_cutover_archives,
@@ -133,6 +135,35 @@ class V7RuntimeRetentionTest(unittest.TestCase):
             config = json.loads((ROOT / "config/v7_data_retention.json").read_text())
             with self.assertRaisesRegex(ValueError, "SHA drift"):
                 run_retention(run_root, config, SHA, dry_run=False, durable_archive_confirmed=False, now=1000)
+
+
+
+    def test_closed_tapes_roundtrip_open_protection_and_corrupt_archive(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory) / "paper_v7_archives"; archive = root / ("cutover-" + SHA + "-1-2")
+            control = archive / "control"; control.mkdir(parents=True)
+            (control / "runtime_status.json").write_text(json.dumps({"model_sha": SHA, "paper_only": True, "authenticated_execution": False, "real_order_submission": False}))
+            folder = archive / "external_fair/raw"; folder.mkdir(parents=True)
+            source = folder / "venue.1.bin"; payload = b"PMV7RAW!" + b"x" * 10000
+            source.write_bytes(payload); os.utime(source, (1, 1))
+            ledger = archive / "ledger"; ledger.mkdir(); (ledger / "execution.jsonl").write_text("preserve")
+            with mock.patch.object(retention_module, "_tape_file_closed", return_value=False):
+                report = retention_module.compress_closed_cutover_tapes(root,now=10000,dry_run=False)
+                self.assertTrue(source.exists()); self.assertEqual(len(report["skipped"]),1)
+            with mock.patch.object(retention_module, "_tape_file_closed", return_value=True):
+                report = retention_module.compress_closed_cutover_tapes(root,now=10000,dry_run=True)
+                self.assertTrue(source.exists()); self.assertEqual(len(report["archived"]),1)
+                report = retention_module.compress_closed_cutover_tapes(root,now=10000,dry_run=False)
+                self.assertFalse(source.exists()); self.assertEqual(report["failures"],[])
+                self.assertEqual(gzip.open(source.with_name(source.name+".gz"),"rb").read(),payload)
+                self.assertEqual((ledger/"execution.jsonl").read_text(),"preserve")
+                self.assertEqual(len(retention_module.compress_closed_cutover_tapes(root,now=10000,dry_run=False)["archived"]),0)
+                source.write_bytes(b"changed source"); os.utime(source,(1,1))
+                report = retention_module.compress_closed_cutover_tapes(root,now=10000,dry_run=False)
+                self.assertTrue(source.exists()); self.assertEqual(len(report["failures"]),1)
+                source.unlink(); source.symlink_to(ledger/"execution.jsonl")
+                report = retention_module.compress_closed_cutover_tapes(root,now=10000,dry_run=False)
+                self.assertTrue(source.is_symlink()); self.assertEqual(len(report["failures"]),1)
 
 
 if __name__ == "__main__":

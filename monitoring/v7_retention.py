@@ -358,6 +358,105 @@ def compact_cutover_archives(
     }
 
 
+
+
+def _tape_file_closed(path: Path) -> bool:
+    import subprocess
+    binary = shutil.which("lsof")
+    if binary is None: return False
+    result = subprocess.run([binary, "-t", "--", str(path)], text=True, capture_output=True, timeout=10)
+    return result.returncode == 1 and not result.stdout.strip()
+
+
+def _tape_identity(path: Path):
+    import stat
+    info = path.lstat()
+    if not stat.S_ISREG(info.st_mode) or info.st_nlink != 1:
+        raise ValueError("tape must be a single-link regular file")
+    return (info.st_dev, info.st_ino, info.st_size, info.st_mtime_ns, info.st_ctime_ns)
+
+
+def _sync_directory(path: Path) -> None:
+    descriptor = os.open(path, os.O_RDONLY)
+    try: os.fsync(descriptor)
+    finally: os.close(descriptor)
+
+
+def compress_closed_cutover_tapes(archive_root: Path, *, now: int, dry_run: bool,
+                                  minimum_age_seconds: int = 3600) -> dict[str, Any]:
+    # Only inactive cutover raw/normalized tapes. Byte preservation is not an
+    # attestation of economic validity. Live/durable roots and ledgers excluded.
+    import contextlib
+    import fcntl
+    import subprocess
+    result = {"archived": [], "skipped": [], "failures": [], "reclaimed_bytes": 0,
+              "dry_run": dry_run, "active_tapes_rotated": False}
+    if not archive_root.is_dir() or archive_root.is_symlink(): return result
+    root = archive_root.resolve(); lock_path = root / ".closed-tape-retention.lock"
+    if lock_path.is_symlink(): raise ValueError("unsafe tape-retention lock")
+    context = contextlib.nullcontext(None) if dry_run else lock_path.open("a")
+    with context as lock:
+        if lock is not None:
+            try: fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            except BlockingIOError:
+                result["skipped"].append({"reason": "retention_already_running"}); return result
+        for archive in sorted(root.glob("cutover-*")):
+            if archive.is_symlink() or not _safe_cutover_archive(archive): continue
+            for subdir in ("raw", "normalized_events"):
+                folder = archive / "external_fair" / subdir
+                if folder.is_symlink() or folder.parent.is_symlink(): continue
+                for source in sorted(folder.glob("*.bin")):
+                    temporary = None
+                    try:
+                        before = _tape_identity(source)
+                        if now - source.stat().st_mtime < minimum_age_seconds:
+                            result["skipped"].append({"path": str(source), "reason": "recent"}); continue
+                        if not _tape_file_closed(source):
+                            result["skipped"].append({"path": str(source), "reason": "open_or_unverifiable"}); continue
+                        target = source.with_name(source.name + ".gz")
+                        if target.is_symlink(): raise ValueError("archive target is symlink")
+                        if dry_run:
+                            result["archived"].append({"source": str(source), "source_bytes": before[2]}); continue
+                        if shutil.disk_usage(root).free < before[2] + 1024**3:
+                            result["skipped"].append({"path": str(source), "reason": "compression_workspace_insufficient"}); continue
+                        digest = hashlib.sha256(); size = 0
+                        if not target.exists():
+                            candidate = target.with_name(target.name + f".tmp.{os.getpid()}")
+                            with candidate.open("xb") as raw_output:
+                                temporary = candidate
+                                with source.open("rb") as input_file, gzip.GzipFile(fileobj=raw_output, mode="wb", filename="", mtime=0, compresslevel=1) as compressed:
+                                    while block := input_file.read(1024*1024):
+                                        digest.update(block); size += len(block); compressed.write(block)
+                                raw_output.flush(); os.fsync(raw_output.fileno())
+                            if _gzip_digest(temporary) != (digest.hexdigest(), size): raise ValueError("tape gzip verification failed")
+                            if _tape_identity(source) != before: raise ValueError("tape changed during compression")
+                            os.link(temporary, target); temporary.unlink(); temporary = None
+                            _sync_directory(target.parent)
+                        else:
+                            with source.open("rb") as handle:
+                                while block := handle.read(1024*1024): digest.update(block); size += len(block)
+                        if _gzip_digest(target) != (digest.hexdigest(), size) or size != before[2]: raise ValueError("existing tape archive mismatch")
+                        if _tape_identity(source) != before or not _tape_file_closed(source): raise ValueError("tape changed or opened before retirement")
+                        manifest = archive / "lossless_compression_manifest.jsonl"
+                        if manifest.is_symlink(): raise ValueError("unsafe tape manifest")
+                        row = {"source": str(source.relative_to(root)), "archive": str(target.relative_to(root)),
+                               "source_bytes": size, "gzip_bytes": target.stat().st_size,
+                               "source_sha256": digest.hexdigest(), "decompressed_sha256_verified": True,
+                               "economic_evidence_validity_assessed": False, "timestamp": now}
+                        with manifest.open("a") as handle:
+                            handle.write(json.dumps(row, sort_keys=True)+"\n"); handle.flush(); os.fsync(handle.fileno())
+                        _sync_directory(archive)
+                        if _tape_identity(source) != before: raise ValueError("tape changed before unlink")
+                        source.unlink(); _sync_directory(source.parent)
+                        row["source_removed_after_verification"] = True
+                        result["archived"].append(row); result["reclaimed_bytes"] += size - row["gzip_bytes"]
+                    except (OSError, ValueError, subprocess.SubprocessError) as exc:
+                        result["failures"].append({"source": str(source), "reason": str(exc)})
+                    finally:
+                        if temporary is not None: temporary.unlink(missing_ok=True)
+    return result
+
+
 def run_retention(
     run_root: Path,
     config: dict[str, Any],
@@ -389,6 +488,9 @@ def run_retention(
     cutover_compaction = compact_cutover_archives(
         run_root.parent / archive_name, cutover_policy, now=now, dry_run=dry_run,
     )
+    closed_tapes = compress_closed_cutover_tapes(
+        run_root.parent / archive_name, now=now, dry_run=dry_run,
+    )
     disk = disk_state(run_root, config["disk"])
     result = {
         "schema": "polymarket_v7_retention_status_v1",
@@ -402,6 +504,7 @@ def run_retention(
         "expired_rotated_segments": expired,
         "pruned_ledger_checkpoints": pruned,
         "cutover_archive_compaction": cutover_compaction,
+        "closed_cutover_tape_compression": closed_tapes,
         "durable_archive_confirmed": durable_archive_confirmed,
         "dry_run": dry_run,
     }

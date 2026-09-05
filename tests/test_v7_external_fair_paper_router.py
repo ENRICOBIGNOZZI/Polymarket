@@ -954,9 +954,82 @@ def test_actual_step_distinguishes_missing_reference_from_no_edge() -> None:
         assert collector.state["last_decision"]["upstream_blockers"] == observation["blockers"]
 
 
+
+
+def test_incremental_counterfactual_index_parity_and_invalidation() -> None:
+    def row(identity, kind="OPPORTUNITY_SET", sha="a" * 40, value=1):
+        return {"record_id": identity, "event_type": kind, "model_sha": sha,
+                "timestamp_ms": 1, "value": value}
+    def write(path, rows, mode="wb"):
+        with path.open(mode) as handle:
+            for value in rows:
+                handle.write((json.dumps(value, sort_keys=True) + "\n").encode())
+    def reference(paths):
+        result = {}
+        for path in paths:
+            if not path.exists(): continue
+            with path.open("rb") as handle:
+                for line in handle:
+                    if not line.endswith(b"\n") or not line.strip(): continue
+                    value = json.loads(line); key = value["record_id"]
+                    if key in result: assert result[key] == value
+                    result.setdefault(key, value)
+        return result
+    with tempfile.TemporaryDirectory() as directory:
+        a, b = [Path(directory) / name for name in ("durable", "active")]
+        write(a, [row(str(i)) for i in range(1000)])
+        write(b, [row("fill", "VIRTUAL_FILL"), row("other", sha="b" * 40)])
+        paths = [a, b]; index = router._CounterfactualIndex(paths)
+        try:
+            assert list(index.iter_records()) == list(reference(paths).items())
+            assert len(dict(index.iter_records())) == 1002
+            assert index.metrics["last_bytes_read"] == 0
+            assert index.metrics["last_records_decoded"] == 0
+            write(a, [row("fill", "VIRTUAL_FILL")], "ab")
+            assert list(index.iter_records()) == list(reference(paths).items())
+            assert index.metrics["last_records_decoded"] == 1
+            selected = dict(index.iter_records(event_types=("VIRTUAL_FILL",), model_sha="a"*40))
+            assert selected == {"fill": row("fill", "VIRTUAL_FILL")}
+            partial = json.dumps(row("partial")).encode()
+            with b.open("ab") as handle: handle.write(partial[:20])
+            assert "partial" not in dict(index.iter_records())
+            with b.open("ab") as handle: handle.write(partial[20:] + b"\n")
+            assert list(index.iter_records()) == list(reference(paths).items())
+            write(b, [row("1", value=2)], "ab")
+            for _ in range(2):
+                try: dict(index.iter_records(event_types=("VIRTUAL_FILL",)))
+                except RuntimeError as exc: assert "conflict" in str(exc)
+                else: raise AssertionError("conflicting source accepted")
+            write(b, [row("fixed")])
+            assert list(index.iter_records()) == list(reference(paths).items())
+            replacement = Path(directory) / "replacement"
+            write(replacement, [row("replacement")]); replacement.replace(a)
+            assert list(index.iter_records()) == list(reference(paths).items())
+            write(a, [row("replacement", value=2)])
+            assert dict(index.iter_records())["replacement"]["value"] == 2
+            a.unlink()
+            assert list(index.iter_records()) == list(reference(paths).items())
+            with b.open("ab") as handle: handle.write(b"{malformed}\n")
+            try: dict(index.iter_records())
+            except RuntimeError as exc: assert "invalid" in str(exc)
+            else: raise AssertionError("malformed complete record accepted")
+            write(b, [row("fixed")]); assert list(index.iter_records()) == list(reference(paths).items())
+            a.symlink_to(b)
+            try: dict(index.iter_records())
+            except RuntimeError as exc: assert "symlink" in str(exc)
+            else: raise AssertionError("symlink accepted")
+            a.unlink()
+        finally:
+            index.close()
+        rebuilt = router._CounterfactualIndex(paths)
+        try: assert list(rebuilt.iter_records()) == list(reference(paths).items())
+        finally: rebuilt.close()
+
+
 if __name__ == "__main__":
     main()
     test_paper_account_admission_controls_actual_step()
+    test_incremental_counterfactual_index_parity_and_invalidation()
     test_empty_candidate_input_reason_is_not_false_no_edge()
     test_actual_step_distinguishes_missing_reference_from_no_edge()
 

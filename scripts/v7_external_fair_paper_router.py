@@ -87,40 +87,207 @@ def _paper_exploration_evidence_paths(run_root: Path) -> list[Path]:
     ]
 
 
-def _read_complete_counterfactual_records(paths: list[Path]) -> dict[str, dict[str, Any]]:
-    records: dict[str, dict[str, Any]] = {}
-    canonical: dict[str, str] = {}
-    for source in paths:
-        if not source.is_file():
-            continue
-        payload = source.read_bytes()
-        for line_number, raw in enumerate(payload.splitlines(keepends=True), start=1):
-            if not raw.strip():
-                continue
-            if not raw.endswith(b"\n"):
-                # The active writer may be between write(2) and fsync(2). A later
-                # reconciliation pass will consume the completed record.
-                continue
+class _CounterfactualIndex:
+    """Disposable disk-backed cache; sources remain the only evidence.
+
+    Rebuild on every process start, replacement, truncation or same-size rewrite.
+    Append-boundary guards do not detect arbitrary interior edits concurrent
+    with append: those require a separate full audit of the append-only source.
+    """
+    MAX_LINE_BYTES = 16 * 1024 * 1024
+    GUARD_BYTES = 4096
+
+    def __init__(self, paths):
+        import sqlite3
+        self.paths = tuple(Path(path).absolute() for path in paths)
+        self.db = sqlite3.connect("")
+        self.db.execute("PRAGMA temp_store=FILE")
+        self.db.execute("PRAGMA cache_size=-2048")
+        self.db.execute("PRAGMA mmap_size=0")
+        self.db.execute("""CREATE TABLE records (
+            id TEXT PRIMARY KEY, payload TEXT NOT NULL, event_type TEXT,
+            model_sha TEXT, stamp INTEGER, rank INTEGER, source_offset INTEGER
+        )""")
+        self.db.execute("CREATE INDEX event_sha ON records(event_type,model_sha)")
+        self.db.execute("CREATE INDEX source_order ON records(rank,source_offset)")
+        self.db.execute("CREATE INDEX time_order ON records(stamp,id)")
+        self.states = {}
+        self.invalid = False
+        self.metrics = {"bytes_read": 0, "records_decoded": 0,
+                        "rebuilds": 0, "last_bytes_read": 0,
+                        "last_records_decoded": 0, "last_refresh_seconds": 0.0}
+
+    def close(self):
+        self.db.close()
+
+    @staticmethod
+    def _file_identity(info):
+        return (info.st_dev, info.st_ino, info.st_size,
+                info.st_mtime_ns, info.st_ctime_ns)
+
+    def _guards(self, handle, offset):
+        n = min(offset, self.GUARD_BYTES)
+        handle.seek(0)
+        prefix = hashlib.sha256(handle.read(n)).digest()
+        handle.seek(offset - n)
+        suffix = hashlib.sha256(handle.read(n)).digest()
+        return prefix, suffix
+
+    def refresh(self):
+        started = time.monotonic()
+        snapshots = {}
+        reset = self.invalid
+        for path in self.paths:
             try:
-                row = json.loads(raw)
-            except (UnicodeDecodeError, json.JSONDecodeError) as exc:
-                raise RuntimeError(
-                    f"paper_exploration_counterfactual_invalid:{source}:{line_number}"
-                ) from exc
-            if not isinstance(row, dict) or not row.get("record_id"):
-                raise RuntimeError(
-                    f"paper_exploration_counterfactual_shape:{source}:{line_number}"
-                )
-            record_id = str(row["record_id"])
-            rendered = json.dumps(row, separators=(",", ":"), sort_keys=True)
-            prior = canonical.get(record_id)
-            if prior is not None and prior != rendered:
-                raise RuntimeError(
-                    f"paper_exploration_counterfactual_conflict:{record_id}"
-                )
-            canonical[record_id] = rendered
-            records.setdefault(record_id, row)
-    return records
+                if path.is_symlink():
+                    raise RuntimeError(f"paper_exploration_evidence_symlink:{path}")
+                info = path.stat()
+                if not path.is_file():
+                    raise RuntimeError(f"paper_exploration_evidence_not_file:{path}")
+            except FileNotFoundError:
+                if path in self.states: reset = True
+                continue
+            snapshots[path] = info
+            old = self.states.get(path)
+            if old is None:
+                continue
+            sig = self._file_identity(info)
+            previous = old["file_identity"]
+            if sig[:2] != previous[:2] or sig[2] < previous[2]:
+                reset = True
+            elif sig[2] == previous[2] and sig[3:] != previous[3:]:
+                reset = True
+            elif sig != previous:
+                with path.open("rb") as handle:
+                    if self._guards(handle, old["offset"]) != old["guards"]:
+                        reset = True
+        decoded = read_bytes = 0
+        pending = {} if reset else dict(self.states)
+        try:
+            with self.db:
+                if reset:
+                    self.db.execute("DELETE FROM records")
+                for rank, path in enumerate(self.paths):
+                    info = snapshots.get(path)
+                    if info is None:
+                        continue
+                    old = pending.get(path)
+                    file_identity = self._file_identity(info)
+                    if old is not None and old["file_identity"] == file_identity:
+                        continue
+                    offset = old["offset"] if old else 0
+                    lines = old["lines"] if old else 0
+                    with path.open("rb") as handle:
+                        if self._file_identity(os.fstat(handle.fileno()))[:2] != file_identity[:2]:
+                            raise RuntimeError("paper_exploration_evidence_replaced_during_read")
+                        handle.seek(offset)
+                        while offset < info.st_size:
+                            start = offset
+                            raw = handle.readline(min(self.MAX_LINE_BYTES + 1,
+                                                      info.st_size - offset))
+                            read_bytes += len(raw)
+                            if not raw:
+                                raise RuntimeError("paper_exploration_evidence_truncated_during_read")
+                            if len(raw) > self.MAX_LINE_BYTES:
+                                raise RuntimeError("paper_exploration_evidence_record_too_large")
+                            if not raw.endswith(b"\n"):
+                                break
+                            offset += len(raw)
+                            lines += 1
+                            if not raw.strip():
+                                continue
+                            try:
+                                row = json.loads(raw)
+                            except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+                                raise RuntimeError(
+                                    f"paper_exploration_counterfactual_invalid:{path}:{lines}"
+                                ) from exc
+                            if not isinstance(row, dict) or not row.get("record_id"):
+                                raise RuntimeError(f"paper_exploration_counterfactual_shape:{path}:{lines}")
+                            decoded += 1
+                            identity = str(row["record_id"])
+                            rendered = json.dumps(row, separators=(",", ":"), sort_keys=True)
+                            prior = self.db.execute(
+                                "SELECT payload,rank,source_offset FROM records WHERE id=?",
+                                (identity,),
+                            ).fetchone()
+                            if prior is not None:
+                                if prior[0] != rendered:
+                                    raise RuntimeError(f"paper_exploration_counterfactual_conflict:{identity}")
+                                if (rank, start) < (prior[1], prior[2]):
+                                    self.db.execute(
+                                        "UPDATE records SET rank=?,source_offset=? WHERE id=?",
+                                        (rank, start, identity),
+                                    )
+                            else:
+                                self.db.execute(
+                                    "INSERT INTO records VALUES (?,?,?,?,?,?,?)",
+                                    (identity, rendered, str(row.get("event_type") or ""),
+                                     str(row.get("model_sha") or ""),
+                                     int(row.get("timestamp_ms") or 0), rank, start),
+                                )
+                        after = os.fstat(handle.fileno())
+                        current = path.stat()
+                        if ((after.st_dev, after.st_ino) != file_identity[:2]
+                                or (current.st_dev, current.st_ino) != file_identity[:2]
+                                or after.st_size < info.st_size):
+                            raise RuntimeError("paper_exploration_evidence_changed_during_read")
+                        if (after.st_size == info.st_size
+                                and self._file_identity(after)[3:] != file_identity[3:]):
+                            raise RuntimeError("paper_exploration_evidence_rewritten_during_read")
+                        pending[path] = {"file_identity": file_identity, "offset": offset,
+                                         "lines": lines, "guards": self._guards(handle, offset)}
+            self.states = pending
+            self.invalid = False
+            self.metrics["rebuilds"] += int(reset)
+        except Exception:
+            self.invalid = True
+            raise
+        finally:
+            self.metrics["bytes_read"] += read_bytes
+            self.metrics["records_decoded"] += decoded
+            self.metrics["last_bytes_read"] = read_bytes
+            self.metrics["last_records_decoded"] = decoded
+            self.metrics["last_refresh_seconds"] = time.monotonic() - started
+
+    def iter_records(self, *, event_types=None, model_sha=None, chronological=False):
+        self.refresh()
+        clauses, parameters = [], []
+        if event_types is not None:
+            values = tuple(event_types)
+            if not values:
+                return
+            clauses.append("event_type IN (" + ",".join("?" for _ in values) + ")")
+            parameters.extend(values)
+        if model_sha is not None:
+            clauses.append("model_sha=?")
+            parameters.append(model_sha)
+        query = "SELECT id,payload FROM records"
+        if clauses:
+            query += " WHERE " + " AND ".join(clauses)
+        query += " ORDER BY " + ("stamp,id" if chronological else "rank,source_offset")
+        for identity, payload in self.db.execute(query, parameters):
+            yield identity, json.loads(payload)
+
+
+_COUNTERFACTUAL_INDEXES = {}
+
+
+def _counterfactual_index(paths):
+    # Only two private page caches; eviction never discards canonical evidence.
+    key = (os.getpid(), tuple(str(Path(path).absolute()) for path in paths))
+    if key not in _COUNTERFACTUAL_INDEXES:
+        if len(_COUNTERFACTUAL_INDEXES) >= 2:
+            first = next(iter(_COUNTERFACTUAL_INDEXES))
+            _COUNTERFACTUAL_INDEXES.pop(first).close()
+        _COUNTERFACTUAL_INDEXES[key] = _CounterfactualIndex(paths)
+    return _COUNTERFACTUAL_INDEXES[key]
+
+
+def _read_complete_counterfactual_records(paths, *, event_types=None, model_sha=None):
+    return dict(_counterfactual_index(paths).iter_records(
+        event_types=event_types, model_sha=model_sha,
+    ))
 
 
 def reconcile_paper_exploration_finals(
@@ -135,7 +302,8 @@ def reconcile_paper_exploration_finals(
     """
     root = Path(run_root)
     records = _read_complete_counterfactual_records(
-        _paper_exploration_evidence_paths(root)
+        _paper_exploration_evidence_paths(root),
+        event_types=("VIRTUAL_FINAL",), model_sha=model_sha,
     )
     virtual_finals: dict[str, dict[str, Any]] = {}
     for row in records.values():
@@ -647,7 +815,8 @@ def reconstruct_paper_exploration_account(
 
     cached = cached_positions if isinstance(cached_positions, dict) else {}
     evidence = _read_complete_counterfactual_records(
-        _paper_exploration_evidence_paths(Path(run_root))
+        _paper_exploration_evidence_paths(Path(run_root)),
+        event_types=("VIRTUAL_FILL", "VIRTUAL_MARKOUT"), model_sha=model_sha,
     )
     virtual_fills: dict[str, dict[str, Any]] = {}
     markout_horizons: dict[str, set[int]] = {}
@@ -1549,20 +1718,7 @@ class PaperRouter:
 
     @staticmethod
     def read_counterfactual_records(paths: list[Path]) -> dict[str, dict[str, Any]]:
-        records: dict[str, dict[str, Any]] = {}
-        for path in paths:
-            try:
-                with path.open(encoding="utf-8") as handle:
-                    for line in handle:
-                        try:
-                            row = json.loads(line)
-                        except json.JSONDecodeError:
-                            continue
-                        if isinstance(row, dict) and row.get("record_id"):
-                            records.setdefault(str(row["record_id"]), row)
-            except OSError:
-                continue
-        return records
+        return dict(_counterfactual_index(paths).iter_records())
 
     def evidence_source_paths(self) -> list[Path]:
         paths = [self.durable_counterfactual_path, self.counterfactual_path]
@@ -1579,32 +1735,30 @@ class PaperRouter:
         are excluded by ``durable_records`` from runtime state restoration, but
         must not be erased merely because a new config hash was deployed.
         """
-        records = self.read_counterfactual_records(self.evidence_source_paths())
-        preserved = list(records.values())
-        preserved.sort(key=lambda row: (
-            int(row.get("timestamp_ms") or 0), str(row.get("record_id") or "")
-        ))
+        index = _counterfactual_index(self.evidence_source_paths())
         self.durable_directory.mkdir(parents=True, exist_ok=True)
         temporary = self.durable_counterfactual_path.with_name(
             self.durable_counterfactual_path.name + f".tmp.{os.getpid()}"
         )
         with temporary.open("w", encoding="utf-8") as handle:
-            for row in preserved:
+            for _, row in index.iter_records(chronological=True):
                 handle.write(json.dumps(row, separators=(",", ":"), sort_keys=True) + "\n")
             handle.flush()
             os.fsync(handle.fileno())
         os.replace(temporary, self.durable_counterfactual_path)
 
-    def durable_records(self) -> dict[str, dict[str, Any]]:
-        return {
-            record_id: row for record_id, row in self.read_counterfactual_records(
-                [self.durable_counterfactual_path, self.counterfactual_path]
-            ).items() if self.evidence_compatible(row)
-        }
+    def iter_durable_records(self, *, event_types=None):
+        paths = [self.durable_counterfactual_path, self.counterfactual_path]
+        for identity, row in _counterfactual_index(paths).iter_records(event_types=event_types):
+            if self.evidence_compatible(row):
+                yield identity, row
+
+    def durable_records(self, *, event_types=None) -> dict[str, dict[str, Any]]:
+        return dict(self.iter_durable_records(event_types=event_types))
 
     def restore_durable_state(self) -> None:
         """Restore unresolved forecasts and virtual positions across cutovers."""
-        records = self.durable_records()
+        records = self.iter_durable_records()
         forecasts: dict[str, dict[str, Any]] = {}
         forecast_finals: set[str] = set()
         fills: dict[str, dict[str, Any]] = {}
@@ -1612,7 +1766,7 @@ class PaperRouter:
         markout_horizons: dict[str, set[int]] = {}
         candidate_ids: set[str] = set()
         opportunity_ids: set[str] = set()
-        for row in records.values():
+        for _, row in records:
             event_type = str(row.get("event_type") or "")
             forecast_id = str(row.get("forecast_id") or "")
             fill_id = str(row.get("fill_id") or "")
@@ -1733,6 +1887,7 @@ class PaperRouter:
         self.state["positions"] = current_positions
 
     def reconcile_canonical_account(self) -> dict[str, Any]:
+        started = time.monotonic()
         account = reconstruct_paper_exploration_account(
             self.root, self.sha,
             float(self.state.get("starting_capital") or 0.0),
@@ -1762,6 +1917,7 @@ class PaperRouter:
             | set(account.get("traded_markets") or [])
         )
         self.state["paper_exploration_account"] = account
+        self.state["account_reconcile_seconds"] = time.monotonic() - started
         return account
 
     def reject(self, reason: str) -> None:
@@ -1774,7 +1930,7 @@ class PaperRouter:
 
     def maturity_diagnostics(self) -> dict[str, Any]:
         """Fail-closed settlement-cluster gate; never grants authority automatically."""
-        records = self.durable_records()
+        records = self.durable_records(event_types=("FORECAST_FINAL", "VIRTUAL_FILL", "VIRTUAL_FINAL"))
         # A process may crash after appending a final but before publishing its
         # state. Deduplicate by the causal forecast identity so retries cannot
         # overweight one settlement cluster.
@@ -3080,9 +3236,14 @@ class PaperRouter:
             "canonical_order_reconciliation": order_reconciliation,
             "canonical_final_reconciliation": terminal_reconciliation,
             "paper_exploration_account": paper_account,
+            "account_reconcile_seconds": self.state.get("account_reconcile_seconds"),
+            "counterfactual_index": dict(_counterfactual_index(
+                _paper_exploration_evidence_paths(self.root)).metrics),
         })
 
     def step(self) -> None:
+        # Validate new evidence before considering any new PAPER entry.
+        _counterfactual_index(_paper_exploration_evidence_paths(self.root)).refresh()
         status = load(self.source)
         blocker = ""
         books: dict[str, Book] = {}
