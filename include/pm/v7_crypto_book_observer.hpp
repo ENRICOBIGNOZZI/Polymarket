@@ -13,7 +13,8 @@ class CryptoBookObserver final {
 public:
     CryptoBookObserver(std::filesystem::path run_root,
                        std::filesystem::path config_path,
-                       std::string model_sha,
+                       std::string collector_code_sha,
+                       std::string observed_runtime_sha,
                        std::string ws_url);
     ~CryptoBookObserver();
 
