@@ -44,9 +44,6 @@ jobs:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
           ref: ${{ github.event.inputs.expected_sha || github.event.pull_request.head.sha || github.sha }}
-          # The V7 pre-canary contract scans repository history. A shallow
-          # checkout would silently turn a known historical finding into a
-          # false clean result and make test_v7_live_capability fail.
           fetch-depth: 0
       - name: Verify exact V7 revision
         run: |
@@ -91,10 +88,6 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y build-essential cmake pkg-config libcurl4-openssl-dev libboost-all-dev libssl-dev python3
-      - name: Build V7
-        run: |
-          cmake -S . -B build-${{ matrix.build_type }} -DCMAKE_BUILD_TYPE=${{ matrix.build_type }}
-          cmake --build build-${{ matrix.build_type }} --parallel 2
       - name: Generate V7 surface audit candidate
         if: matrix.build_type == 'Debug'
         run: |
@@ -109,6 +102,10 @@ jobs:
           name: v7-surface-audit-${{ github.event.pull_request.head.sha || github.sha }}
           path: /tmp/path_classification.json
           if-no-files-found: error
+      - name: Build V7
+        run: |
+          cmake -S . -B build-${{ matrix.build_type }} -DCMAKE_BUILD_TYPE=${{ matrix.build_type }}
+          cmake --build build-${{ matrix.build_type }} --parallel 2
       - name: Test V7 only
         run: ctest --test-dir build-${{ matrix.build_type }} --output-on-failure
       - name: Enforce V7 internal latency SLO
