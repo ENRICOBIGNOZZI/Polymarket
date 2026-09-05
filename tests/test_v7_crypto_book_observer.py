@@ -8,6 +8,7 @@ ROOT = Path(__file__).resolve().parents[1]
 def main() -> None:
     source = (ROOT / "src/v7_crypto_book_observer.cpp").read_text()
     header = (ROOT / "include/pm/v7_crypto_book_observer.hpp").read_text()
+    tape = (ROOT / "include/pm/v7_crypto_book_tape.hpp").read_text()
     entry = (ROOT / "src/v7_crypto_book_observer_main.cpp").read_text()
     cmake = (ROOT / "CMakeLists.txt").read_text()
     loop = (ROOT / "scripts/paper_v7_execution_loop.sh").read_text()
@@ -21,8 +22,12 @@ def main() -> None:
     assert "TapeSegmentOptions{kSegmentBytes, kSegmentSeconds}" in source
     assert "64ULL * 1024ULL * 1024ULL" in source
     assert "kSegmentSeconds = 300" in source
+    assert 'external_fair/normalized_events' in source
     assert "external_fair/status.json" in source
-    assert "code_sha" in source
+    assert "CryptoBookTapePayload" in source
+    assert "kCryptoBookTapeSchemaVersion" in source
+    assert "CryptoBookTapePayload" in tape
+    assert "BookHotSnapshot book" in tape
     assert "class CryptoBookObserver" in header
     assert "polymarket_v7_crypto_book_observer" in cmake
     assert "CryptoBookObserver observer" in entry
