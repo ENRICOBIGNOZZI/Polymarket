@@ -62,7 +62,7 @@ jobs:
             mode=oauth
           elif [[ -n "${TS_AUTHKEY:-}" ]]; then
             mode=authkey
-            echo "::warning title=Tailscale auth-key fallback::TS_AUTHKEY must be reusable, tagged, pre-approved when required, and ephemeral. The workflow also forces --ephemeral."
+            echo "::warning title=Tailscale auth-key fallback::TS_AUTHKEY must be reusable, tagged, pre-approved when required, and ephemeral. The workflow uses in-memory daemon state for ephemeral nodes."
           else
             echo "No visible Tailscale OIDC, OAuth, or auth-key credential set" >&2
             exit 1
@@ -76,6 +76,7 @@ jobs:
           audience: ${{ secrets.TS_AUDIENCE }}
           tags: ${{ vars.TS_TAGS || 'tag:ci' }}
           version: 1.94.2
+          statedir: ''
           hostname: gh-health-${{ github.run_id }}-${{ github.run_attempt }}
           ping: ${{ env.SERVER_HOST }}
       - name: Join tailnet with OAuth
@@ -86,6 +87,7 @@ jobs:
           oauth-secret: ${{ secrets.TS_OAUTH_SECRET }}
           tags: ${{ vars.TS_TAGS || 'tag:ci' }}
           version: 1.94.2
+          statedir: ''
           hostname: gh-health-${{ github.run_id }}-${{ github.run_attempt }}
           ping: ${{ env.SERVER_HOST }}
       - name: Join tailnet with ephemeral auth key
@@ -93,8 +95,8 @@ jobs:
         uses: tailscale/github-action@780049a30b6ff5c378a9e7b389d15ece7a204888
         with:
           authkey: ${{ secrets.TS_AUTHKEY }}
-          args: --ephemeral
           version: 1.94.2
+          statedir: ''
           hostname: gh-health-${{ github.run_id }}-${{ github.run_attempt }}
           ping: ${{ env.SERVER_HOST }}
       - name: Configure SSH

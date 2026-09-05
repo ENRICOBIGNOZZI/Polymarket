@@ -47,6 +47,8 @@ def test_paper_deploy_health_window_covers_exhaustive_universe_startup():
 
 
 def test_tailnet_workflows_prefer_ephemeral_trust_credentials():
+    # The pinned action documents empty statedir as in-memory state.
+    # Ephemeral state is not a tailscale up --ephemeral CLI option.
     names = (
         "v7-deploy-paper-server.yml",
         "v7-paper-server-health.yml",
@@ -63,6 +65,7 @@ def test_tailnet_workflows_prefer_ephemeral_trust_credentials():
         assert oidc in workflow and oauth in workflow and authkey in workflow
         assert workflow.index(oidc) < workflow.index(oauth) < workflow.index(authkey)
         assert "audience: ${{ secrets.TS_AUDIENCE }}" in workflow
-        assert "args: --ephemeral" in workflow
+        assert "--ephemeral" not in workflow
+        assert workflow.count("statedir: ''") == workflow.count("uses: tailscale/github-action@") == 3
         assert "version: 1.94.2" in workflow
         assert "ping: ${{ env.SERVER_HOST }}" in workflow
