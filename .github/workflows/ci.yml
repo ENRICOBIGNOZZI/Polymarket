@@ -95,6 +95,20 @@ jobs:
         run: |
           cmake -S . -B build-${{ matrix.build_type }} -DCMAKE_BUILD_TYPE=${{ matrix.build_type }}
           cmake --build build-${{ matrix.build_type }} --parallel 2
+      - name: Generate V7 surface audit candidate
+        if: matrix.build_type == 'Debug'
+        run: |
+          set -euo pipefail
+          python3 scripts/v7_surface_classification.py \
+            --repository-root . \
+            --output /tmp/path_classification.json
+      - name: Upload V7 surface audit candidate
+        if: matrix.build_type == 'Debug'
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: v7-surface-audit-${{ github.event.pull_request.head.sha || github.sha }}
+          path: /tmp/path_classification.json
+          if-no-files-found: error
       - name: Test V7 only
         run: ctest --test-dir build-${{ matrix.build_type }} --output-on-failure
       - name: Enforce V7 internal latency SLO
