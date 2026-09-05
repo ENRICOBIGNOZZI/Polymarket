@@ -44,9 +44,6 @@ jobs:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
           ref: ${{ github.event.inputs.expected_sha || github.event.pull_request.head.sha || github.sha }}
-          # The V7 pre-canary contract scans repository history. A shallow
-          # checkout would silently turn a known historical finding into a
-          # false clean result and make test_v7_live_capability fail.
           fetch-depth: 0
       - name: Verify exact V7 revision
         run: |

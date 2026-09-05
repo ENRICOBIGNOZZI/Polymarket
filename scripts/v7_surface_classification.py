@@ -44,6 +44,9 @@ RESEARCH_MARKERS = (
     "micro_taker", "research_shadow", "slow_economic_shadow",
     "fair_value_research", "external_settlement_train",
     "external_settlement_validate", "external_settlement_dataset",
+    # Explicit sub-second research evidence only. These surfaces have no OMS,
+    # capital, inventory, signer or production-process authority.
+    "crypto_book_observer", "crypto_book_tape",
 )
 COMPONENT_MARKERS = (
     "market_maker", "maker_", "professional_market_maker", "hard_arb",
