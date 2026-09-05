@@ -1,3 +1,7 @@
+// Assertions in this test invoke the enqueue API; they must run in Release too.
+#ifdef NDEBUG
+#undef NDEBUG
+#endif
 #include "pm/v7_external_fair.hpp"
 #include "pm/v7_external_tape.hpp"
 
@@ -258,7 +262,8 @@ int main() {
         std::this_thread::sleep_for(std::chrono::milliseconds(30));
         ::_exit(0); // Deliberately no C++ destructors: must not publish .bin.
     }
-    int child_status=0;assert(::waitpid(child,&child_status,0)==child);assert(WIFEXITED(child_status));
+    int child_status=0;const auto waited=::waitpid(child,&child_status,0);
+    assert(waited==child);assert(WIFEXITED(child_status));
     assert(std::filesystem::exists(crashed/"crash.segment-000000.bin.open"));
     assert(!std::filesystem::exists(crashed/"crash.segment-000000.bin"));
     std::filesystem::remove_all(segmented);
