@@ -58,6 +58,18 @@ static_assert(sizeof(CryptoBookTapePayload) <= pm::v7::external_fair::kExternalT
         return (ch >= '0' && ch <= '9') || (ch >= 'a' && ch <= 'f');
     });
 }
+[[nodiscard]] fs::path absolute_normalized(const fs::path& path) {
+    return fs::absolute(path).lexically_normal();
+}
+[[nodiscard]] bool same_or_descendant(const fs::path& child, const fs::path& parent) {
+    const auto c = absolute_normalized(child);
+    const auto p = absolute_normalized(parent);
+    auto ci = c.begin();
+    for (auto pi = p.begin(); pi != p.end(); ++pi, ++ci) {
+        if (ci == c.end() || *ci != *pi) return false;
+    }
+    return true;
+}
 [[nodiscard]] std::string read_file(const fs::path& path) {
     std::ifstream in(path);
     if (!in) throw std::runtime_error("cannot open " + path.string());
@@ -125,7 +137,7 @@ struct ActiveMarket {
 } // namespace
 
 struct CryptoBookObserver::Impl {
-    fs::path run_root, config_path, status_path, evidence_dir, observer_status;
+    fs::path observed_run_root, evidence_root, config_path, status_path, evidence_dir, observer_status;
     std::string collector_code_sha, observed_runtime_sha, ws_url;
     std::string market_id, event_id, yes_token, no_token, last_error;
     std::vector<std::string> ids;
@@ -138,16 +150,20 @@ struct CryptoBookObserver::Impl {
     std::int64_t last_poll_ms = 0;
     std::string state = "waiting_for_market";
 
-    Impl(fs::path root, fs::path config, std::string collector_sha,
-         std::string runtime_sha, std::string url)
-        : run_root(std::move(root)), config_path(std::move(config)),
-          status_path(run_root / "external_fair/status.json"),
-          evidence_dir(run_root / "external_fair/normalized_events"),
-          observer_status(run_root / "external_fair/clob_book_tape_status.json"),
+    Impl(fs::path runtime_root, fs::path research_root, fs::path config,
+         std::string collector_sha, std::string runtime_sha, std::string url)
+        : observed_run_root(std::move(runtime_root)), evidence_root(std::move(research_root)),
+          config_path(std::move(config)),
+          status_path(observed_run_root / "external_fair/status.json"),
+          evidence_dir(evidence_root / "normalized_events"),
+          observer_status(evidence_root / "status.json"),
           collector_code_sha(std::move(collector_sha)),
           observed_runtime_sha(std::move(runtime_sha)), ws_url(std::move(url)) {
         if (!exact_sha(collector_code_sha) || !exact_sha(observed_runtime_sha)) {
             throw std::invalid_argument("crypto book observer exact collector/runtime SHAs required");
+        }
+        if (same_or_descendant(evidence_root, observed_run_root)) {
+            throw std::invalid_argument("research evidence root must be outside observed live run root");
         }
         fs::create_directories(evidence_dir);
     }
@@ -206,7 +222,7 @@ struct CryptoBookObserver::Impl {
             {"yes_token", yes_token}, {"no_token", no_token}, {"yes_instrument_handle", 1},
             {"no_instrument_handle", 2}, {"yes_tick_e4", yes_tick}, {"no_tick_e4", no_tick},
             {"tape_base", base.filename().string()}, {"started_ms", wall_ms()}};
-        atomic_write(evidence_dir / ("btc-m5-book." + market_id + "." + std::to_string(::getpid()) + ".manifest.json"),
+        atomic_write(evidence_root / ("btc-m5-book." + market_id + "." + std::to_string(::getpid()) + ".manifest.json"),
                      json::serialize(manifest) + "\n");
 
         feed = std::make_unique<pm::fast::MarketWebSocketFeed>(
@@ -280,11 +296,11 @@ struct CryptoBookObserver::Impl {
 };
 
 CryptoBookObserver::CryptoBookObserver(
-    fs::path root, fs::path config, std::string collector_sha,
-    std::string runtime_sha, std::string url)
-    : impl_(std::make_unique<Impl>(std::move(root), std::move(config),
-                                   std::move(collector_sha), std::move(runtime_sha),
-                                   std::move(url))) {}
+    fs::path runtime_root, fs::path research_root, fs::path config,
+    std::string collector_sha, std::string runtime_sha, std::string url)
+    : impl_(std::make_unique<Impl>(std::move(runtime_root), std::move(research_root),
+                                   std::move(config), std::move(collector_sha),
+                                   std::move(runtime_sha), std::move(url))) {}
 CryptoBookObserver::~CryptoBookObserver() { if (impl_) impl_->stop(); }
 void CryptoBookObserver::poll() noexcept { if (impl_) impl_->poll(); }
 void CryptoBookObserver::write_status(bool stopped) noexcept { if (impl_) impl_->write_status(stopped); }
