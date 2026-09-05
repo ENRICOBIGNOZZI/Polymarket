@@ -20,6 +20,57 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  surface-audit-regenerate:
+    name: surface-audit-regenerate
+    if: github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          fetch-depth: 0
+      - name: Regenerate only if audited surface changed
+        id: regenerate
+        run: |
+          set -euo pipefail
+          python3 scripts/v7_surface_classification.py --repository-root . --output /tmp/path_classification.json
+          python3 - <<'PY'
+          import json
+          from pathlib import Path
+          old = json.loads(Path('artifacts/v7_unification/path_classification.json').read_text())
+          new = json.loads(Path('/tmp/path_classification.json').read_text())
+          def signature(value):
+              return {
+                  row['surface_id']: (row['object_type'], row['classification'])
+                  for row in value['entries']
+              }
+          old_coverage = {k: v for k, v in old['coverage'].items() if k != 'ref_count'}
+          new_coverage = {k: v for k, v in new['coverage'].items() if k != 'ref_count'}
+          changed = signature(old) != signature(new) or old_coverage != new_coverage
+          Path('/tmp/surface_changed').write_text('1' if changed else '0')
+          if changed:
+              Path('artifacts/v7_unification/path_classification.json').write_text(
+                  json.dumps(new, sort_keys=True, indent=2) + '\n'
+              )
+          PY
+      - name: Commit generated audit snapshot
+        env:
+          HEAD_BRANCH: ${{ github.event.pull_request.head.ref }}
+        run: |
+          set -euo pipefail
+          if [ "$(cat /tmp/surface_changed)" != 1 ]; then
+            echo "surface snapshot already matches"
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add artifacts/v7_unification/path_classification.json
+          git commit -m "governance: regenerate V7 surface audit snapshot"
+          git push origin "HEAD:${HEAD_BRANCH}"
+
   security-audit:
     name: security-audit-v7
     runs-on: ubuntu-24.04
@@ -84,20 +135,6 @@ jobs:
           set -euo pipefail
           [[ "$VALIDATION_SHA" =~ ^[0-9a-f]{40}$ ]]
           test "$(git rev-parse HEAD)" = "$VALIDATION_SHA"
-      - name: Generate V7 surface audit candidate
-        if: matrix.build_type == 'Debug'
-        run: |
-          set -euo pipefail
-          python3 scripts/v7_surface_classification.py \
-            --repository-root . \
-            --output /tmp/path_classification.json
-      - name: Upload V7 surface audit candidate
-        if: matrix.build_type == 'Debug'
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
-        with:
-          name: v7-surface-audit-${{ github.event.pull_request.head.sha || github.sha }}
-          path: /tmp/path_classification.json
-          if-no-files-found: error
       - name: Install dependencies
         run: |
           sudo apt-get update
