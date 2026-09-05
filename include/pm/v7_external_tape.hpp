@@ -157,6 +157,13 @@ template <class T>
     return true;
 }
 
+// Rotation is opt-in for legacy replay callers. Production per-venue tapes
+// use bounded closed segments; only the file writer performs filesystem work.
+struct TapeSegmentOptions {
+    std::uint64_t maximum_bytes = 0;
+    std::uint64_t maximum_seconds = 0;
+};
+
 class ExternalTapeRecorder final {
 public:
     ExternalTapeRecorder(std::filesystem::path path,
@@ -164,7 +171,8 @@ public:
                          std::string run_id,
                          std::string session_id,
                          std::string source,
-                         std::int64_t creation_wall_ns);
+                         std::int64_t creation_wall_ns,
+                         TapeSegmentOptions segments = {});
     ~ExternalTapeRecorder();
 
     ExternalTapeRecorder(const ExternalTapeRecorder&) = delete;
@@ -190,7 +198,8 @@ public:
                             std::string run_id,
                             std::string session_id,
                             std::string source,
-                            std::int64_t creation_wall_ns);
+                            std::int64_t creation_wall_ns,
+                         TapeSegmentOptions segments = {});
     ~ExternalRawTapeRecorder();
 
     ExternalRawTapeRecorder(const ExternalRawTapeRecorder&) = delete;

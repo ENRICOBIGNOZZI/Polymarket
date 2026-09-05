@@ -23,6 +23,47 @@ SHA = "c" * 40
 
 
 class V7RuntimeRetentionTest(unittest.TestCase):
+    def test_operator_four_percent_threshold_preserves_absolute_floor(self) -> None:
+        from unittest import mock
+        from collections import namedtuple
+        import v7_retention as module
+        config = json.loads((ROOT / "config/v7_data_retention.json").read_text())
+        policy = config["disk"]
+        self.assertEqual(policy["critical_free_ratio"], 0.04)
+        self.assertEqual(policy["minimum_free_bytes"], 5 * 1024**3)
+        self.assertEqual(policy["warning_free_ratio"], 0.20)
+        Usage = namedtuple("Usage", "total used free")
+        total = 500 * 1024**3
+        for fraction, expected in ((0.039, "critical"), (0.04, "critical"),
+                                   (0.041, "warning"), (0.10, "warning")):
+            free = int(total * fraction)
+            with mock.patch.object(module.shutil, "disk_usage", return_value=Usage(total,total-free,free)):
+                self.assertEqual(module.disk_state(ROOT, policy)["state"], expected)
+        with mock.patch.object(module.shutil, "disk_usage", return_value=Usage(20*1024**3,16*1024**3,4*1024**3)):
+            self.assertEqual(module.disk_state(ROOT, policy)["state"], "critical")
+
+    def test_only_closed_named_segments_in_active_run_are_compressed(self) -> None:
+        from unittest import mock
+        import v7_retention as module
+        with tempfile.TemporaryDirectory() as tmp:
+            parent=Path(tmp); active=parent/"paper_v7_live"
+            control=active/"control"; control.mkdir(parents=True)
+            (control/"runtime_status.json").write_text(json.dumps({"model_sha":SHA,"paper_only":True,
+                "authenticated_execution":False,"real_order_submission":False}))
+            folder=active/"external_fair/raw";folder.mkdir(parents=True)
+            closed=folder/"feed.123.segment-000001.bin";closed.write_bytes(b"closed-payload"*1000)
+            opened=folder/"feed.123.segment-000002.bin.open";opened.write_bytes(b"open-payload")
+            legacy=folder/"feed.123.bin";legacy.write_bytes(b"legacy-active")
+            os.utime(closed,(1,1))
+            with mock.patch.object(module,"_tape_file_closed",return_value=True):
+                report=module.compress_closed_cutover_tapes(parent/"paper_v7_archives",now=1000,
+                    dry_run=False,active_run_root=active)
+            self.assertEqual(report["failures"],[])
+            self.assertEqual(len(report["archived"]),1)
+            self.assertEqual(report["archived"][0]["scope"],"ACTIVE_RUN_CLOSED_SEGMENT")
+            self.assertFalse(closed.exists());self.assertTrue(opened.exists());self.assertTrue(legacy.exists())
+            self.assertEqual(gzip.open(str(closed)+".gz","rb").read(),b"closed-payload"*1000)
+
     def test_old_cutovers_keep_verified_ledger_and_drop_only_derived_files(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             archive_root = Path(directory) / "paper_v7_archives"

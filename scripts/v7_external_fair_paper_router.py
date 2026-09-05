@@ -2515,6 +2515,21 @@ class PaperRouter:
         values = opportunity_set(status, books, self.policy)
         if values is None:
             return False
+        challenger = (status.get("fair_models") or {}).get("registered_challenger") or {}
+        available = (challenger.get("valid") is True
+                     and challenger.get("explicit_registry_model_applied") is True
+                     and challenger.get("registry_role") == "CHALLENGER")
+        values["frozen_comparison"] = {
+            "schema": "polymarket_v7_forward_comparison_observation_v1",
+            "market_probability": values.get("market_yes"),
+            "structural_probability": values.get("fair_yes"),
+            "challenger_probability": challenger.get("yes") if available else None,
+            "challenger_hash": challenger.get("probability_model_hash") if available else None,
+            "forward_start_ns": challenger.get("forward_start_ns") if available else None,
+            "frozen_at_ns": challenger.get("frozen_at_ns") if available else None,
+            "challenger_features": (status.get("fair") or {}).get("model_features") if available else None,
+            "no_money_authority": True,
+        }
         snapshot_id = str(values["snapshot_id"])
         if snapshot_id == str(self.state.get("last_opportunity_snapshot_id") or ""):
             return False

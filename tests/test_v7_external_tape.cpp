@@ -5,6 +5,12 @@
 #include <filesystem>
 #include <fstream>
 #include <string>
+#include <vector>
+#include <algorithm>
+#include <thread>
+#include <chrono>
+#include <unistd.h>
+#include <sys/wait.h>
 
 using namespace pm::v7::external_fair;
 
@@ -175,5 +181,87 @@ int main() {
         assert(raw_snapshot.evidence_valid == 1);
     }
     std::filesystem::remove(deribit_burst_raw_path);
+
+    // Bounded segments have independent headers, global sequence continuity,
+    // and no .bin publication until the writer has closed the whole segment.
+    const auto segmented = std::filesystem::temp_directory_path() /
+        ("pm_v7_segments_" + std::to_string(::getpid()));
+    std::filesystem::remove_all(segmented);
+    std::filesystem::create_directories(segmented);
+    {
+        ExternalTapeRecorder recorder(segmented/"normalized.bin",sha,"run-seg","session-seg","binance",1'000'010,
+            TapeSegmentOptions{sizeof(TapeSessionHeader)+2*sizeof(TapeRecord),0});
+        for(std::uint64_t sequence=1;sequence<=7;++sequence)
+            assert(recorder.try_record(make_tape_record(TapeRecordKind::OracleEvent,sequence,100+sequence,1,oracle)));
+    }
+    std::vector<std::filesystem::path> parts;
+    for(const auto& entry:std::filesystem::directory_iterator(segmented)) {
+        assert(entry.path().extension()!=".open");
+        if(entry.path().extension()==".bin")parts.push_back(entry.path());
+    }
+    std::sort(parts.begin(),parts.end());assert(parts.size()==4);
+    std::uint64_t sequence=0;
+    for(const auto& part:parts) {
+        assert(std::filesystem::file_size(part)<=sizeof(TapeSessionHeader)+2*sizeof(TapeRecord));
+        std::ifstream stream(part,std::ios::binary);TapeSessionHeader h{};
+        stream.read(reinterpret_cast<char*>(&h),sizeof(h));assert(stream.good());
+        assert(std::string(h.code_sha.data())==sha);assert(h.record_bytes==sizeof(TapeRecord));
+        TapeRecord r{};
+        while(stream.read(reinterpret_cast<char*>(&r),sizeof(r)))assert(r.tape_sequence==++sequence);
+        assert(stream.eof() && stream.gcount()==0);
+    }
+    assert(sequence==7);
+    const auto raw_segments=segmented/"raw";std::filesystem::create_directory(raw_segments);
+    {
+        ExternalRawTapeRecorder recorder(raw_segments/"mixed.bin",sha,"run-seg","session-raw-seg","binance",1'000'011,
+            TapeSegmentOptions{1024,0});
+        for(int i=0;i<6;++i) {
+            const std::string payload(i%2==0?20:kExternalRawTapePayloadBytes+10,char('a'+i));
+            assert(recorder.try_record_raw(VenueId::BinanceSpot,1,100+i,1000+i,payload));
+        }
+    }
+    parts.clear();for(const auto& entry:std::filesystem::directory_iterator(raw_segments)) {
+        assert(entry.path().extension()==".bin");parts.push_back(entry.path());
+    }
+    std::sort(parts.begin(),parts.end());sequence=0;
+    for(const auto& part:parts) {
+        std::ifstream stream(part,std::ios::binary);TapeSessionHeader h{};
+        stream.read(reinterpret_cast<char*>(&h),sizeof(h));assert(stream.good());
+        assert(std::string(h.magic.data(),8)=="PMV7RAW!");
+        RawTapeDiskRecordHeader r{};
+        while(stream.read(reinterpret_cast<char*>(&r),sizeof(r))) {
+            assert(r.tape_sequence==++sequence);
+            std::string payload(r.payload_size,'\0');stream.read(payload.data(),payload.size());assert(stream.good());
+            assert(payload==std::string(sequence%2==1?20:kExternalRawTapePayloadBytes+10,char('a'+sequence-1)));
+        }
+        assert(stream.eof() && stream.gcount()==0);
+    }
+    assert(sequence==6);
+    const auto timed=segmented/"timed";std::filesystem::create_directory(timed);
+    {
+        ExternalTapeRecorder recorder(timed/"clock.bin",sha,"run-age","session-age","binance",1'000'012,
+            TapeSegmentOptions{0,1});
+        assert(recorder.try_record(make_tape_record(TapeRecordKind::OracleEvent,1,100,1,oracle)));
+        const auto deadline=std::chrono::steady_clock::now()+std::chrono::seconds(5);
+        while(!std::filesystem::exists(timed/"clock.segment-000000.bin") && std::chrono::steady_clock::now()<deadline)
+            std::this_thread::sleep_for(std::chrono::milliseconds(10));
+        assert(std::filesystem::exists(timed/"clock.segment-000000.bin"));
+        assert(std::filesystem::exists(timed/"clock.segment-000001.bin.open"));
+        assert(recorder.snapshot().writer_healthy==1);
+    }
+    const auto crashed=segmented/"crashed";std::filesystem::create_directory(crashed);
+    const auto child=::fork();assert(child>=0);
+    if(child==0) {
+        ExternalTapeRecorder recorder(crashed/"crash.bin",sha,"run-crash","session-crash","binance",1'000'013,
+            TapeSegmentOptions{4096,300});
+        assert(recorder.try_record(make_tape_record(TapeRecordKind::OracleEvent,1,100,1,oracle)));
+        std::this_thread::sleep_for(std::chrono::milliseconds(30));
+        ::_exit(0); // Deliberately no C++ destructors: must not publish .bin.
+    }
+    int child_status=0;assert(::waitpid(child,&child_status,0)==child);assert(WIFEXITED(child_status));
+    assert(std::filesystem::exists(crashed/"crash.segment-000000.bin.open"));
+    assert(!std::filesystem::exists(crashed/"crash.segment-000000.bin"));
+    std::filesystem::remove_all(segmented);
+
     return 0;
 }

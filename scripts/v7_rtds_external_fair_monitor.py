@@ -30,6 +30,9 @@ from v7_adaptive_universe import normalize_market
 from v7_public_https_proxy import DEFAULT_DNS, PublicResolver
 from v7_contract_registry import contract_from_market
 from v7_fair_value_registry import FairModelArtifact, RegistryError, SCHEMA_VERSION
+from v7_external_fair_challenger import (
+    RESIDUAL_FAMILY, predict_residual, validate_residual_parameters,
+)
 from v7_external_settlement_model import (
     FAMILY as SETTLEMENT_MODEL_FAMILY,
     predict as predict_settlement_model,
@@ -77,7 +80,12 @@ def load_registered_calibration(
     try:
         artifact = FairModelArtifact(**raw)
         artifact.validate()
-        if artifact.family == SETTLEMENT_MODEL_FAMILY:
+        if artifact.family == RESIDUAL_FAMILY:
+            if expected_role != "CHALLENGER":
+                raise ValueError("residual_is_research_challenger_only")
+            validate_residual_parameters(artifact)
+            intercept, slope = 0.0, 1.0
+        elif artifact.family == SETTLEMENT_MODEL_FAMILY:
             validate_settlement_parameters(artifact)
             intercept, slope = 0.0, 1.0
         else:
@@ -844,6 +852,29 @@ class Monitor:
                 or "BTC_USD_UPDOWN_5M" not in artifact.contract_templates
                 or rules_hash not in artifact.rules_hashes):
             output["registry_load_state"] = "SCOPE_MISMATCH"
+            return output
+        if artifact.family == RESIDUAL_FAMILY:
+            # Point-probability research, never a validated risk interval or champion.
+            forward_start = int(artifact.hyperparameters.get("forward_oos_starts_after_ns") or 0)
+            start_ns = int(self.active_market.get("contract_start_epoch") or 0) * 1_000_000_000
+            features = external_only.get("model_features")
+            if (role != "CHALLENGER" or external_only.get("valid") is not True
+                    or not isinstance(features, dict) or start_ns < forward_start):
+                output.update(valid=False, registry_load_state="AWAITING_FORWARD_CONTRACT_OR_INPUTS")
+                return output
+            try:
+                probability = predict_residual(artifact, float(external_only["yes"]), features)
+            except (KeyError, TypeError, ValueError):
+                output.update(valid=False, registry_load_state="RESIDUAL_INFERENCE_INVALID")
+                return output
+            output.update({
+                "yes": probability, "calibrated": probability, "lower": 0.0, "upper": 1.0,
+                "probability_interval_validated": False, "promotion_eligible": False,
+                "probability_model_id": artifact.model_version, "probability_model_hash": artifact.model_hash,
+                "explicit_registry_model_applied": True, "uses_polymarket_price_as_feature": False,
+                "forward_start_ns": forward_start, "frozen_at_ns": artifact.generated_timestamp_ns,
+                "family": RESIDUAL_FAMILY, "execution_authority": "SHADOW_ZERO_AUTHORITY",
+            })
             return output
         if artifact.family == SETTLEMENT_MODEL_FAMILY:
             features = external_only.get("model_features")

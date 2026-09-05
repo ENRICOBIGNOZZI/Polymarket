@@ -4,7 +4,7 @@
   "paper_only": true,
   "disk": {
     "warning_free_ratio": 0.20,
-    "critical_free_ratio": 0.10,
+    "critical_free_ratio": 0.04,
     "minimum_free_bytes": 5368709120
   },
   "canonical_ledger": {

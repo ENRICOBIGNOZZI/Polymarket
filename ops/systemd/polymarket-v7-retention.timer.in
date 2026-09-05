@@ -1,10 +1,10 @@
 [Unit]
-Description=Hourly Polymarket V7 PAPER retention
+Description=Five-minute Polymarket V7 PAPER retention
 
 [Timer]
 OnBootSec=5min
-OnUnitActiveSec=1h
-RandomizedDelaySec=2min
+OnUnitActiveSec=5min
+RandomizedDelaySec=30s
 Persistent=true
 
 [Install]

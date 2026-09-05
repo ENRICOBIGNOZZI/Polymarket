@@ -55,3 +55,61 @@ PnL is canonical PAPER evidence but has `promotion_eligible=false`; it cannot be
 used as proof of a mature edge and never grants authenticated or real-money
 authority.
 
+
+
+## Operator-approved capacity and frozen economic comparison (2026-09-05)
+
+The operator explicitly changed `critical_free_ratio` from 0.10 to 0.04.
+The absolute 5 GiB minimum and 20% warning are unchanged. Lowering this
+threshold does not free storage or demonstrate profitability.
+
+Per-venue raw and normalized C++ recorders now close segments at 64 MiB or
+300 seconds in the writer thread. Each segment has its own session header;
+record sequence numbers do not reset. A complete segment is flushed, closed,
+fsynced, and renamed from `.bin.open` to `.bin`. A crash leaves `.open` evidence
+untouched. Legacy callers that do not request segmentation retain their API.
+The existing retention service runs every five minutes and may compress only
+closed, sufficiently old `.segment-NNNNNN.bin` files in the active run, as well
+as inactive cutover tapes. It verifies a full gzip round trip before retirement.
+No ledger, live open tape, or unrelated project is an eligible source.
+
+The previous calibration trainer filtered v1 evidence although the router
+produces v2. The replacement uses verified v2 FORECAST/FORECAST_FINAL pairs,
+matching market/token identities, exact binary public settlement assertions,
+and labels available strictly before freeze. Sources are identified by complete
+prefix length and SHA-256; selected training rows have their own content hash.
+A ridge-regularized logistic residual is fitted with equal market weights.
+It corrects structural logits using oracle/reference basis, spot/oracle basis,
+short external returns and the fraction of the final window observed. Feature
+scaling is fitted only on training data. Polymarket prices are not model inputs.
+
+The existing registry publishes this as a CHALLENGER only. It does not replace
+the champion or grant execution authority. Its parameter hash, policy hash,
+training identities and protocol are frozen; reuse never silently refits it.
+Forward observations start with the next full contract after publication.
+The monitor emits its point probability separately and marks its probability
+interval as unvalidated. The router binds that prediction and feature vector
+to each complete observed opportunity/book snapshot in the existing tape.
+
+Run the independent, zero-authority comparison without altering the account:
+
+```sh
+python3 scripts/v7_external_fair_challenger.py --evaluate \
+  --tape runs/paper_v7_durable/external_fair/counterfactuals.jsonl \
+  --tape runs/paper_v7_live/external_fair/counterfactuals.jsonl \
+  --registry runs/paper_v7_live/external_fair/model_registry \
+  --config config/v7_external_fair.json --model-sha "$(git rev-parse HEAD)" \
+  --status runs/paper_v7_live/reports/frozen_economic_comparison.json
+```
+
+The market, structural, and challenger cohorts use the same predeclared rule:
+2 USD maximum debit, one attempt per contract, 4-cent point EV after fees and
+an execution-risk allowance, a 250 ms assumed arrival delay, an observed
+arrival no more than two seconds later, and a conservative visible-depth
+fraction. The initial ask is the limit price. Missing arrival data is NONFILL,
+not an interpolated fill. Token/fee drift or stale books are non-executable.
+The report includes every research decision's source record ID, simulated
+arrival/fill identity, fees, independently observed settlement and reconciled
+hypothetical cash. These are snapshot-based research outcomes, NOT venue
+fills, NOT canonical PAPER orders and NOT probe performance. Probability
+losses cannot be substituted for trading PnL, and no automatic promotion exists.
