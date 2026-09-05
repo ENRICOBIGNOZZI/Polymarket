@@ -102,14 +102,16 @@ struct ActiveMarket {
     std::string market_id, event_id, yes_token, no_token;
 };
 
-[[nodiscard]] ActiveMarket active_market(const fs::path& status_path, const std::string& sha) {
+[[nodiscard]] ActiveMarket active_market(
+    const fs::path& status_path, const std::string& expected_runtime_sha) {
     const auto root = read_json(status_path);
     if (!root.is_object()) throw std::runtime_error("external fair status not object");
     const auto& object = root.as_object();
-    if (text(find(object, "code_sha")) != sha || !flag(find(object, "paper_only"), false)
+    if (text(find(object, "code_sha")) != expected_runtime_sha
+        || !flag(find(object, "paper_only"), false)
         || flag(find(object, "authenticated_execution"), true)
         || flag(find(object, "real_order_submission"), true)) {
-        throw std::runtime_error("external fair status authority mismatch");
+        throw std::runtime_error("external fair status authority/runtime identity mismatch");
     }
     const auto* market_value = find(object, "market");
     if (market_value == nullptr || !market_value->is_object()) return {};
@@ -124,7 +126,8 @@ struct ActiveMarket {
 
 struct CryptoBookObserver::Impl {
     fs::path run_root, config_path, status_path, evidence_dir, observer_status;
-    std::string model_sha, ws_url, market_id, event_id, yes_token, no_token, last_error;
+    std::string collector_code_sha, observed_runtime_sha, ws_url;
+    std::string market_id, event_id, yes_token, no_token, last_error;
     std::vector<std::string> ids;
     std::unique_ptr<pm::v7::MarketWsShard> decoder;
     std::unique_ptr<pm::fast::MarketWebSocketFeed> feed;
@@ -135,13 +138,17 @@ struct CryptoBookObserver::Impl {
     std::int64_t last_poll_ms = 0;
     std::string state = "waiting_for_market";
 
-    Impl(fs::path root, fs::path config, std::string sha, std::string url)
+    Impl(fs::path root, fs::path config, std::string collector_sha,
+         std::string runtime_sha, std::string url)
         : run_root(std::move(root)), config_path(std::move(config)),
           status_path(run_root / "external_fair/status.json"),
           evidence_dir(run_root / "external_fair/normalized_events"),
           observer_status(run_root / "external_fair/clob_book_tape_status.json"),
-          model_sha(std::move(sha)), ws_url(std::move(url)) {
-        if (!exact_sha(model_sha)) throw std::invalid_argument("crypto book observer exact SHA required");
+          collector_code_sha(std::move(collector_sha)),
+          observed_runtime_sha(std::move(runtime_sha)), ws_url(std::move(url)) {
+        if (!exact_sha(collector_code_sha) || !exact_sha(observed_runtime_sha)) {
+            throw std::invalid_argument("crypto book observer exact collector/runtime SHAs required");
+        }
         fs::create_directories(evidence_dir);
     }
 
@@ -185,14 +192,15 @@ struct CryptoBookObserver::Impl {
         decoder = std::make_unique<MarketWsShard>(std::move(bindings));
 
         const auto base = evidence_dir / ("btc-m5-book." + market_id + "." + std::to_string(::getpid()) + ".bin");
-        const std::string run_id = model_sha.substr(0, 12) + "-" + std::to_string(::getpid());
+        const std::string run_id = collector_code_sha.substr(0, 12) + "-" + std::to_string(::getpid());
         const std::string session_id = market_id + "-" + std::to_string(wall_ms());
         recorder = std::make_unique<ExternalTapeRecorder>(
-            base, model_sha, run_id, session_id, "btc-m5-clob-book", wall_ns(),
+            base, collector_code_sha, run_id, session_id, "btc-m5-clob-book", wall_ns(),
             TapeSegmentOptions{kSegmentBytes, kSegmentSeconds});
 
         json::object manifest{{"schema", "polymarket_v7_btc_m5_clob_book_session_v1"},
-            {"payload_schema_version", kCryptoBookTapeSchemaVersion}, {"model_sha", model_sha},
+            {"payload_schema_version", kCryptoBookTapeSchemaVersion},
+            {"collector_code_sha", collector_code_sha}, {"observed_runtime_sha", observed_runtime_sha},
             {"paper_only", true}, {"authenticated_execution", false}, {"real_order_submission", false},
             {"execution_authority", "RESEARCH_EVIDENCE_ONLY"}, {"market_id", market_id}, {"event_id", event_id},
             {"yes_token", yes_token}, {"no_token", no_token}, {"yes_instrument_handle", 1},
@@ -237,7 +245,7 @@ struct CryptoBookObserver::Impl {
     void poll() noexcept {
         const auto now = wall_ms(); if (now - last_poll_ms < 250) return; last_poll_ms = now;
         try {
-            const auto market = active_market(status_path, model_sha);
+            const auto market = active_market(status_path, observed_runtime_sha);
             if (market.market_id.empty()) { state = "waiting_for_market"; return; }
             if (market.market_id != market_id || !feed || !recorder) start_session(market);
         } catch (const std::exception& error) {
@@ -251,8 +259,9 @@ struct CryptoBookObserver::Impl {
             const auto network = feed ? feed->snapshot() : pm::fast::FeedSnapshot{};
             json::object value{{"schema", "polymarket_v7_btc_m5_clob_book_tape_status_v1"},
                 {"payload_schema_version", kCryptoBookTapeSchemaVersion}, {"timestamp_ms", wall_ms()},
-                {"model_sha", model_sha}, {"paper_only", true}, {"authenticated_execution", false},
-                {"real_order_submission", false}, {"execution_authority", "RESEARCH_EVIDENCE_ONLY"},
+                {"collector_code_sha", collector_code_sha}, {"observed_runtime_sha", observed_runtime_sha},
+                {"paper_only", true}, {"authenticated_execution", false}, {"real_order_submission", false},
+                {"execution_authority", "RESEARCH_EVIDENCE_ONLY"},
                 {"state", stopped ? "stopped" : state}, {"market_id", market_id}, {"event_id", event_id},
                 {"yes_token", yes_token}, {"no_token", no_token}, {"accepted", tape.accepted},
                 {"written", tape.written}, {"queued", tape.queued}, {"dropped", tape.dropped + dropped.load()},
@@ -270,8 +279,12 @@ struct CryptoBookObserver::Impl {
     void stop() noexcept { stop_session(); state = "stopped"; write_status(true); }
 };
 
-CryptoBookObserver::CryptoBookObserver(fs::path root, fs::path config, std::string sha, std::string url)
-    : impl_(std::make_unique<Impl>(std::move(root), std::move(config), std::move(sha), std::move(url))) {}
+CryptoBookObserver::CryptoBookObserver(
+    fs::path root, fs::path config, std::string collector_sha,
+    std::string runtime_sha, std::string url)
+    : impl_(std::make_unique<Impl>(std::move(root), std::move(config),
+                                   std::move(collector_sha), std::move(runtime_sha),
+                                   std::move(url))) {}
 CryptoBookObserver::~CryptoBookObserver() { if (impl_) impl_->stop(); }
 void CryptoBookObserver::poll() noexcept { if (impl_) impl_->poll(); }
 void CryptoBookObserver::write_status(bool stopped) noexcept { if (impl_) impl_->write_status(stopped); }
