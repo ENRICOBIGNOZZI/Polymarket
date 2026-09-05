@@ -17,6 +17,10 @@ def main() -> None:
     assert '"paper_only", true' in source
     assert '"authenticated_execution", false' in source
     assert '"real_order_submission", false' in source
+    assert "collector_code_sha" in source
+    assert "observed_runtime_sha" in source
+    assert "--collector-sha" in entry
+    assert "--runtime-sha" in entry
     assert "MarketWsEventKind::BookChanged" in source
     assert "ExternalTapeRecorder" in source
     assert "TapeSegmentOptions{kSegmentBytes, kSegmentSeconds}" in source
