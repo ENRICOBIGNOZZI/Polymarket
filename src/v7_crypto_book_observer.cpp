@@ -3,6 +3,7 @@
 #include "pm/api.hpp"
 #include "pm/config.hpp"
 #include "pm/fast_ws.hpp"
+#include "pm/v7_crypto_book_tape.hpp"
 #include "pm/v7_external_tape.hpp"
 #include "pm/v7_market_ws.hpp"
 
@@ -37,6 +38,7 @@ using pm::v7::external_fair::TapeSegmentOptions;
 constexpr std::size_t kOutputCapacity = 512;
 constexpr std::uint64_t kSegmentBytes = 64ULL * 1024ULL * 1024ULL;
 constexpr std::uint64_t kSegmentSeconds = 300;
+static_assert(sizeof(CryptoBookTapePayload) <= pm::v7::external_fair::kExternalTapePayloadBytes);
 
 [[nodiscard]] std::int64_t wall_ms() noexcept {
     return std::chrono::duration_cast<std::chrono::milliseconds>(
@@ -96,19 +98,6 @@ void atomic_write(const fs::path& path, std::string_view content) {
     return value > 0 && 10'000 % value == 0 ? value : 0;
 }
 
-struct BookTapePayload {
-    std::uint64_t connection_epoch = 0;
-    std::int64_t receive_wall_ms = 0;
-    std::uint64_t market_handle = 0;
-    std::uint64_t event_handle = 0;
-    std::uint8_t event_kind = 0;
-    std::uint8_t outcome = 0; // 1 YES, 2 NO
-    std::array<std::uint8_t, 6> reserved{};
-    BookHotSnapshot book{};
-};
-static_assert(std::is_trivially_copyable_v<BookTapePayload>);
-static_assert(sizeof(BookTapePayload) <= pm::v7::external_fair::kExternalTapePayloadBytes);
-
 struct ActiveMarket {
     std::string market_id, event_id, yes_token, no_token;
 };
@@ -149,7 +138,7 @@ struct CryptoBookObserver::Impl {
     Impl(fs::path root, fs::path config, std::string sha, std::string url)
         : run_root(std::move(root)), config_path(std::move(config)),
           status_path(run_root / "external_fair/status.json"),
-          evidence_dir(run_root / "external_fair/clob_books"),
+          evidence_dir(run_root / "external_fair/normalized_events"),
           observer_status(run_root / "external_fair/clob_book_tape_status.json"),
           model_sha(std::move(sha)), ws_url(std::move(url)) {
         if (!exact_sha(model_sha)) throw std::invalid_argument("crypto book observer exact SHA required");
@@ -159,10 +148,11 @@ struct CryptoBookObserver::Impl {
     void record_gap() noexcept {
         if (!recorder) return;
         for (std::uint64_t handle = 1; handle <= 2; ++handle) {
-            BookTapePayload payload; payload.connection_epoch = connection_epoch.load();
-            payload.receive_wall_ms = wall_ms(); payload.market_handle = 1; payload.event_handle = 1;
+            CryptoBookTapePayload payload;
+            payload.connection_epoch = connection_epoch.load(); payload.receive_wall_ms = wall_ms();
+            payload.market_handle = 1; payload.event_handle = 1;
             payload.event_kind = static_cast<std::uint8_t>(MarketWsEventKind::LineageInvalidated);
-            payload.outcome = static_cast<std::uint8_t>(handle);
+            payload.outcome = handle == 1 ? CryptoBookOutcome::Yes : CryptoBookOutcome::No;
             const auto seq = sequence.fetch_add(1, std::memory_order_relaxed) + 1;
             auto record = pm::v7::external_fair::make_tape_record(
                 TapeRecordKind::PmState, seq, monotonic_ns(), handle, payload);
@@ -194,7 +184,7 @@ struct CryptoBookObserver::Impl {
         std::vector<TokenBinding> bindings{{yes_token, 1, 1, 1, yes_tick}, {no_token, 1, 1, 2, no_tick}};
         decoder = std::make_unique<MarketWsShard>(std::move(bindings));
 
-        const auto base = evidence_dir / ("btc-m5." + market_id + "." + std::to_string(::getpid()) + ".bin");
+        const auto base = evidence_dir / ("btc-m5-book." + market_id + "." + std::to_string(::getpid()) + ".bin");
         const std::string run_id = model_sha.substr(0, 12) + "-" + std::to_string(::getpid());
         const std::string session_id = market_id + "-" + std::to_string(wall_ms());
         recorder = std::make_unique<ExternalTapeRecorder>(
@@ -202,12 +192,13 @@ struct CryptoBookObserver::Impl {
             TapeSegmentOptions{kSegmentBytes, kSegmentSeconds});
 
         json::object manifest{{"schema", "polymarket_v7_btc_m5_clob_book_session_v1"},
-            {"model_sha", model_sha}, {"paper_only", true}, {"authenticated_execution", false},
-            {"real_order_submission", false}, {"execution_authority", "RESEARCH_EVIDENCE_ONLY"},
-            {"market_id", market_id}, {"event_id", event_id}, {"yes_token", yes_token}, {"no_token", no_token},
-            {"yes_instrument_handle", 1}, {"no_instrument_handle", 2}, {"yes_tick_e4", yes_tick},
-            {"no_tick_e4", no_tick}, {"tape_base", base.filename().string()}, {"started_ms", wall_ms()}};
-        atomic_write(evidence_dir / ("btc-m5." + market_id + "." + std::to_string(::getpid()) + ".manifest.json"),
+            {"payload_schema_version", kCryptoBookTapeSchemaVersion}, {"model_sha", model_sha},
+            {"paper_only", true}, {"authenticated_execution", false}, {"real_order_submission", false},
+            {"execution_authority", "RESEARCH_EVIDENCE_ONLY"}, {"market_id", market_id}, {"event_id", event_id},
+            {"yes_token", yes_token}, {"no_token", no_token}, {"yes_instrument_handle", 1},
+            {"no_instrument_handle", 2}, {"yes_tick_e4", yes_tick}, {"no_tick_e4", no_tick},
+            {"tape_base", base.filename().string()}, {"started_ms", wall_ms()}};
+        atomic_write(evidence_dir / ("btc-m5-book." + market_id + "." + std::to_string(::getpid()) + ".manifest.json"),
                      json::serialize(manifest) + "\n");
 
         feed = std::make_unique<pm::fast::MarketWebSocketFeed>(
@@ -222,10 +213,12 @@ struct CryptoBookObserver::Impl {
                     if (event.kind != MarketWsEventKind::BookChanged
                         && event.kind != MarketWsEventKind::TickSizeChanged
                         && event.kind != MarketWsEventKind::LineageInvalidated) continue;
-                    BookTapePayload payload; payload.connection_epoch = connection_epoch.load();
-                    payload.receive_wall_ms = receive.wall_ms; payload.market_handle = event.market_handle;
-                    payload.event_handle = event.event_handle; payload.event_kind = static_cast<std::uint8_t>(event.kind);
-                    payload.outcome = static_cast<std::uint8_t>(event.instrument_handle); payload.book = event.book;
+                    CryptoBookTapePayload payload;
+                    payload.connection_epoch = connection_epoch.load(); payload.receive_wall_ms = receive.wall_ms;
+                    payload.market_handle = event.market_handle; payload.event_handle = event.event_handle;
+                    payload.event_kind = static_cast<std::uint8_t>(event.kind);
+                    payload.outcome = event.instrument_handle == 1 ? CryptoBookOutcome::Yes : CryptoBookOutcome::No;
+                    payload.book = event.book;
                     const auto seq = sequence.fetch_add(1, std::memory_order_relaxed) + 1;
                     const auto record = pm::v7::external_fair::make_tape_record(
                         TapeRecordKind::PmState, seq, receive.monotonic_ns, event.instrument_handle, payload);
@@ -257,12 +250,13 @@ struct CryptoBookObserver::Impl {
             const auto tape = recorder ? recorder->snapshot() : pm::v7::external_fair::TapeRecorderSnapshot{};
             const auto network = feed ? feed->snapshot() : pm::fast::FeedSnapshot{};
             json::object value{{"schema", "polymarket_v7_btc_m5_clob_book_tape_status_v1"},
-                {"timestamp_ms", wall_ms()}, {"model_sha", model_sha}, {"paper_only", true},
-                {"authenticated_execution", false}, {"real_order_submission", false},
-                {"execution_authority", "RESEARCH_EVIDENCE_ONLY"}, {"state", stopped ? "stopped" : state},
-                {"market_id", market_id}, {"event_id", event_id}, {"yes_token", yes_token}, {"no_token", no_token},
-                {"accepted", tape.accepted}, {"written", tape.written}, {"queued", tape.queued},
-                {"dropped", tape.dropped + dropped.load()}, {"writer_healthy", tape.writer_healthy != 0},
+                {"payload_schema_version", kCryptoBookTapeSchemaVersion}, {"timestamp_ms", wall_ms()},
+                {"model_sha", model_sha}, {"paper_only", true}, {"authenticated_execution", false},
+                {"real_order_submission", false}, {"execution_authority", "RESEARCH_EVIDENCE_ONLY"},
+                {"state", stopped ? "stopped" : state}, {"market_id", market_id}, {"event_id", event_id},
+                {"yes_token", yes_token}, {"no_token", no_token}, {"accepted", tape.accepted},
+                {"written", tape.written}, {"queued", tape.queued}, {"dropped", tape.dropped + dropped.load()},
+                {"writer_healthy", tape.writer_healthy != 0},
                 {"evidence_valid", tape.evidence_valid != 0 && decoder_failures.load() == 0 && dropped.load() == 0},
                 {"decoder_failures", decoder_failures.load()}, {"reconnects", reconnects.load()},
                 {"connection_epoch", connection_epoch.load()}, {"last_exchange_event_ns", last_exchange_ns.load()},
