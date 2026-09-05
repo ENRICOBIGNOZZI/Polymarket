@@ -84,10 +84,6 @@ jobs:
           set -euo pipefail
           [[ "$VALIDATION_SHA" =~ ^[0-9a-f]{40}$ ]]
           test "$(git rev-parse HEAD)" = "$VALIDATION_SHA"
-      - name: Install dependencies
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y build-essential cmake pkg-config libcurl4-openssl-dev libboost-all-dev libssl-dev python3
       - name: Generate V7 surface audit candidate
         if: matrix.build_type == 'Debug'
         run: |
@@ -102,6 +98,10 @@ jobs:
           name: v7-surface-audit-${{ github.event.pull_request.head.sha || github.sha }}
           path: /tmp/path_classification.json
           if-no-files-found: error
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential cmake pkg-config libcurl4-openssl-dev libboost-all-dev libssl-dev python3
       - name: Build V7
         run: |
           cmake -S . -B build-${{ matrix.build_type }} -DCMAKE_BUILD_TYPE=${{ matrix.build_type }}
