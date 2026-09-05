@@ -7,6 +7,17 @@ EXPECTED_SHA="${POLYMARKET_EXPECTED_SHA:?POLYMARKET_EXPECTED_SHA is required}"
 STATUS="$RUN_ROOT/control/supervisor_status.json"
 CREDENTIALS_FILE="${PM_V7_CREDENTIALS_FILE:-$(dirname "$APP_DIR")/.config/polymarket/v7_credentials.env}"
 
+# MACOS_SHARED_MONOTONIC_PREFLIGHT
+# Python before 3.10 uses a process-local monotonic epoch on macOS. Fair-value
+# validity timestamps cross worker boundaries and require the shared epoch.
+python3 - <<'PY'
+import sys
+if sys.platform == "darwin" and sys.version_info < (3, 10):
+    print("V7 blocked: macOS requires Python >=3.10 for cross-process monotonic timestamps; configure the service PATH to the validated interpreter", file=sys.stderr)
+    raise SystemExit(78)
+PY
+# END_MACOS_SHARED_MONOTONIC_PREFLIGHT
+
 # Optional market-data credentials live outside Git and outside the run root.
 # Parse a strict KEY=VALUE file rather than sourcing shell code.  Only the
 # explicit read-only/research adapters' names are accepted, and an existing

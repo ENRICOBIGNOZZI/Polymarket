@@ -1073,6 +1073,41 @@ def parse_book(raw: Any, receive_ts_ms: int) -> Book | None:
     )
 
 
+def candidate_input_rejection_reason(status: dict[str, Any], *, current_ns: int | None = None) -> str:
+    """Explain an empty candidate set without changing admission or EV gates."""
+    if (status.get("paper_only") is not True
+            or status.get("authenticated_execution") is not False
+            or status.get("real_order_submission") is not False):
+        return "PAPER_SAFETY_CONTRACT_INVALID"
+    def section(name: str) -> dict[str, Any]:
+        value = status.get(name)
+        return value if isinstance(value, dict) else {}
+    contract = section("contract")
+    if contract.get("verified") is not True or contract.get("rules_hash_recognized") is not True:
+        return "CONTRACT_RULES_NOT_VERIFIED"
+    if section("settlement_reference").get("valid") is not True:
+        return "SETTLEMENT_REFERENCE_NOT_CAPTURED"
+    oracle = section("oracle")
+    if oracle.get("healthy") is not True or oracle.get("continuity") == "CONTINUITY_UNKNOWN":
+        return "ORACLE_NOT_READY"
+    if section("external").get("healthy") is not True:
+        return "EXTERNAL_FEEDS_NOT_READY"
+    fair = section("fair")
+    if fair.get("valid") is not True:
+        return "FAIR_VALUE_INVALID"
+    try:
+        calculated = int(fair.get("calculated_monotonic_ns") or 0)
+        valid_until = int(fair.get("valid_until_monotonic_ns") or 0)
+    except (TypeError, ValueError, OverflowError):
+        return "FAIR_SNAPSHOT_CLOCK_INVALID"
+    now = time.monotonic_ns() if current_ns is None else current_ns
+    if calculated <= 0 or calculated > now or valid_until < calculated:
+        return "FAIR_SNAPSHOT_CLOCK_INVALID"
+    if valid_until < now:
+        return "FAIR_SNAPSHOT_EXPIRED"
+    return ""
+
+
 def robust_candidates(status: dict[str, Any], books: dict[str, Book], policy: dict[str, Any]) -> list[dict[str, Any]]:
     if status.get("paper_only") is not True or status.get("authenticated_execution") is not False:
         return []
@@ -3125,6 +3160,8 @@ class PaperRouter:
                 reason = "CLOB_BOOKS_UNAVAILABLE"
             elif market_yes is None:
                 reason = "CLOB_COMPLEMENT_INCOHERENT"
+            elif not rows and (input_reason := candidate_input_rejection_reason(status)):
+                reason = input_reason
             elif (status.get("fair") or {}).get("valid") and entry_tte_allowed(
                     status.get("fair") or {}, self.policy) and not model_market_disagreement_allowed(
                         status.get("fair") or {}, self.policy, market_yes):
@@ -3155,6 +3192,7 @@ class PaperRouter:
             "probe_candidates": len(probe_rows),
             "candidate_mode": "ROBUST" if robust_rows else ("PAPER_BOOTSTRAP_PROBE" if probe_rows else "NONE"),
             "outcome": reason,
+            "upstream_blockers": list(status.get("blockers") or []) if isinstance(status.get("blockers"), list) else [],
             "live_market_yes": market_yes,
             "gamma_discovery_mid_diagnostic": (status.get("fair") or {}).get(
                 "gamma_discovery_mid_diagnostic"
