@@ -247,7 +247,11 @@ int main() {
             TapeSegmentOptions{0,1});
         assert(recorder.try_record(make_tape_record(TapeRecordKind::OracleEvent,1,100,1,oracle)));
         const auto deadline=std::chrono::steady_clock::now()+std::chrono::seconds(5);
-        while(!std::filesystem::exists(timed/"clock.segment-000000.bin") && std::chrono::steady_clock::now()<deadline)
+        // Closed publication precedes directory synchronization and opening
+        // the next segment. Wait for both observable states, not their atomicity.
+        while((!std::filesystem::exists(timed/"clock.segment-000000.bin")
+               || !std::filesystem::exists(timed/"clock.segment-000001.bin.open"))
+              && std::chrono::steady_clock::now()<deadline)
             std::this_thread::sleep_for(std::chrono::milliseconds(10));
         assert(std::filesystem::exists(timed/"clock.segment-000000.bin"));
         assert(std::filesystem::exists(timed/"clock.segment-000001.bin.open"));
