@@ -112,6 +112,15 @@ add_executable(polymarket_v7_external_tape_replay src/v7_external_tape_replay.cp
 target_link_libraries(polymarket_v7_external_tape_replay PRIVATE pm_v7_external)
 target_compile_options(polymarket_v7_external_tape_replay PRIVATE -Wall -Wextra -Wpedantic)
 
+# Research-only high-frequency BTC M5 CLOB books. It reuses the canonical
+# public WebSocket decoder and segmented evidence tape, but is not launched by
+# the production process manifest and owns no execution authority.
+add_executable(polymarket_v7_crypto_book_observer
+  src/v7_crypto_book_observer.cpp
+  src/v7_crypto_book_observer_main.cpp)
+target_link_libraries(polymarket_v7_crypto_book_observer PRIVATE pm_v7_external pm_fast_arb pm_core)
+target_compile_options(polymarket_v7_crypto_book_observer PRIVATE -Wall -Wextra -Wpedantic)
+
 include(CTest)
 if(BUILD_TESTING)
   find_package(Python3 REQUIRED COMPONENTS Interpreter)
