@@ -383,7 +383,8 @@ def _sync_directory(path: Path) -> None:
 
 
 def compress_closed_cutover_tapes(archive_root: Path, *, now: int, dry_run: bool,
-                                  minimum_age_seconds: int = 3600) -> dict[str, Any]:
+                                  minimum_age_seconds: int = 3600,
+                                  active_run_root: Path | None = None) -> dict[str, Any]:
     # Only inactive cutover raw/normalized tapes. Byte preservation is not an
     # attestation of economic validity. Live/durable roots and ledgers excluded.
     import contextlib
@@ -391,7 +392,10 @@ def compress_closed_cutover_tapes(archive_root: Path, *, now: int, dry_run: bool
     import subprocess
     result = {"archived": [], "skipped": [], "failures": [], "reclaimed_bytes": 0,
               "dry_run": dry_run, "active_tapes_rotated": False}
-    if not archive_root.is_dir() or archive_root.is_symlink(): return result
+    if archive_root.is_symlink(): return result
+    if not archive_root.is_dir():
+        if active_run_root is None or dry_run: return result
+        archive_root.mkdir(parents=True, exist_ok=True)
     root = archive_root.resolve(); lock_path = root / ".closed-tape-retention.lock"
     if lock_path.is_symlink(): raise ValueError("unsafe tape-retention lock")
     context = contextlib.nullcontext(None) if dry_run else lock_path.open("a")
@@ -400,16 +404,30 @@ def compress_closed_cutover_tapes(archive_root: Path, *, now: int, dry_run: bool
             try: fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
             except BlockingIOError:
                 result["skipped"].append({"reason": "retention_already_running"}); return result
-        for archive in sorted(root.glob("cutover-*")):
-            if archive.is_symlink() or not _safe_cutover_archive(archive): continue
+        scopes = [(archive, False) for archive in sorted(root.glob("cutover-*"))
+                  if not archive.is_symlink() and _safe_cutover_archive(archive)]
+        if active_run_root is not None:
+            active = Path(active_run_root)
+            runtime = _json(active / "control/runtime_status.json")
+            if (active.is_symlink() or not active.is_dir() or runtime.get("paper_only") is not True
+                    or runtime.get("authenticated_execution") is not False
+                    or runtime.get("real_order_submission") is not False
+                    or SHA40.fullmatch(str(runtime.get("model_sha") or "")) is None):
+                raise ValueError("unsafe active segment scope")
+            scopes.append((active.resolve(), True))
+        for archive, active_scope in scopes:
+            relative_root = archive if active_scope else root
             for subdir in ("raw", "normalized_events"):
                 folder = archive / "external_fair" / subdir
                 if folder.is_symlink() or folder.parent.is_symlink(): continue
-                for source in sorted(folder.glob("*.bin")):
+                pattern = "*.segment-*.bin" if active_scope else "*.bin"
+                for source in sorted(folder.glob(pattern)):
+                    if active_scope and not re.fullmatch(r".+\.segment-[0-9]{6,}\.bin", source.name):
+                        continue
                     temporary = None
                     try:
                         before = _tape_identity(source)
-                        if now - source.stat().st_mtime < minimum_age_seconds:
+                        if now - source.stat().st_mtime < (60 if active_scope else minimum_age_seconds):
                             result["skipped"].append({"path": str(source), "reason": "recent"}); continue
                         if not _tape_file_closed(source):
                             result["skipped"].append({"path": str(source), "reason": "open_or_unverifiable"}); continue
@@ -439,7 +457,8 @@ def compress_closed_cutover_tapes(archive_root: Path, *, now: int, dry_run: bool
                         if _tape_identity(source) != before or not _tape_file_closed(source): raise ValueError("tape changed or opened before retirement")
                         manifest = archive / "lossless_compression_manifest.jsonl"
                         if manifest.is_symlink(): raise ValueError("unsafe tape manifest")
-                        row = {"source": str(source.relative_to(root)), "archive": str(target.relative_to(root)),
+                        row = {"source": str(source.relative_to(relative_root)), "archive": str(target.relative_to(relative_root)),
+                               "scope": "ACTIVE_RUN_CLOSED_SEGMENT" if active_scope else "INACTIVE_CUTOVER",
                                "source_bytes": size, "gzip_bytes": target.stat().st_size,
                                "source_sha256": digest.hexdigest(), "decompressed_sha256_verified": True,
                                "economic_evidence_validity_assessed": False, "timestamp": now}
@@ -490,6 +509,7 @@ def run_retention(
     )
     closed_tapes = compress_closed_cutover_tapes(
         run_root.parent / archive_name, now=now, dry_run=dry_run,
+        active_run_root=run_root if (run_root / "control/runtime_status.json").is_file() else None,
     )
     disk = disk_state(run_root, config["disk"])
     result = {

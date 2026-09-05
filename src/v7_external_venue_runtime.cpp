@@ -1084,7 +1084,8 @@ int main(int argc, char** argv) {
             const auto session = "external-events-" + std::to_string(::getpid());
             return std::make_unique<ExternalTapeRecorder>(
                 normalized_event_tape_dir / (source + "." + std::to_string(::getpid()) + ".bin"),
-                model_sha, "paper-v7", session, std::move(source), wall_now_ns());
+                model_sha, "paper-v7", session, std::move(source), wall_now_ns(),
+                pm::v7::external_fair::TapeSegmentOptions{64ULL * 1024 * 1024, 300});
         };
         auto binance_event_tape = normalized_event_tape("binance-spot");
         auto coinbase_event_tape = normalized_event_tape("coinbase-spot");
@@ -1097,7 +1098,8 @@ int main(int argc, char** argv) {
             const auto session = "external-raw-" + std::to_string(::getpid());
             return std::make_unique<ExternalRawTapeRecorder>(
                 raw_tape_dir / (source + "." + std::to_string(::getpid()) + ".bin"),
-                model_sha, "paper-v7", session, std::move(source), wall_now_ns());
+                model_sha, "paper-v7", session, std::move(source), wall_now_ns(),
+                pm::v7::external_fair::TapeSegmentOptions{64ULL * 1024 * 1024, 300});
         };
         auto binance_raw_tape = raw_tape("binance-spot");
         auto coinbase_raw_tape = raw_tape("coinbase-spot");

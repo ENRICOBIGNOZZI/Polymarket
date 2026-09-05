@@ -6,6 +6,10 @@
 #include <stdexcept>
 #include <string_view>
 #include <thread>
+#include <iomanip>
+#include <sstream>
+#include <fcntl.h>
+#include <unistd.h>
 
 namespace pm::v7::external_fair {
 namespace {
@@ -31,11 +35,91 @@ void copy_fixed(std::array<char, N>& target,
     return true;
 }
 
+// Only this writer-side object owns publication of a closed segment. A
+// crash leaves .open evidence intact; retention never treats it as closed.
+class SegmentOutput {
+    std::ofstream stream_;
+    std::filesystem::path base_, active_, closed_;
+    TapeSessionHeader header_{};
+    TapeSegmentOptions options_{};
+    std::chrono::steady_clock::time_point opened_{};
+    std::uint64_t index_ = 0, bytes_ = 0;
+    bool segmented_ = false, healthy_ = true;
+
+    static void sync_path(const std::filesystem::path& path) {
+        const int fd = ::open(path.c_str(), O_RDONLY);
+        if (fd < 0) throw std::runtime_error("unable to open tape for synchronization");
+        const int result = ::fsync(fd);
+        ::close(fd);
+        if (result != 0) throw std::runtime_error("unable to synchronize tape publication");
+    }
+    void open_segment() {
+        closed_ = base_;
+        if (segmented_) {
+            std::ostringstream suffix;
+            suffix << base_.stem().string() << ".segment-" << std::setw(6)
+                   << std::setfill('0') << index_++ << ".bin";
+            closed_ = base_.parent_path() / suffix.str();
+        }
+        active_ = segmented_ ? std::filesystem::path(closed_.string()+".open") : closed_;
+        if (std::filesystem::exists(active_) || (segmented_ && std::filesystem::exists(closed_)))
+            throw std::runtime_error("refusing to overwrite tape segment");
+        if (!active_.parent_path().empty()) std::filesystem::create_directories(active_.parent_path());
+        stream_.clear(); stream_.open(active_, std::ios::binary | std::ios::trunc);
+        if (!stream_) throw std::runtime_error("unable to open tape segment");
+        stream_.write(reinterpret_cast<const char*>(&header_),sizeof(header_));
+        stream_.flush();
+        if (!stream_) throw std::runtime_error("unable to write segment header");
+        bytes_=sizeof(header_); opened_=std::chrono::steady_clock::now();
+    }
+    bool age_due() const noexcept {
+        return segmented_ && options_.maximum_seconds > 0 && bytes_ > sizeof(header_)
+            && std::chrono::steady_clock::now()-opened_ >= std::chrono::seconds(options_.maximum_seconds);
+    }
+public:
+    void start(const std::filesystem::path& path, const TapeSessionHeader& header, TapeSegmentOptions options) {
+        base_=path;header_=header;options_=options;
+        segmented_=options.maximum_bytes>0 || options.maximum_seconds>0;
+        if (options.maximum_bytes>0 && options.maximum_bytes<=sizeof(header_))
+            throw std::invalid_argument("tape segment limit must exceed its header");
+        open_segment();
+    }
+    explicit operator bool() const noexcept { return healthy_ && static_cast<bool>(stream_); }
+    void write(const char* data, std::streamsize count) {
+        stream_.write(data,count); bytes_+=static_cast<std::uint64_t>(count);
+        if (!stream_) healthy_=false;
+    }
+    void flush() { if(stream_.is_open()){stream_.flush();if(!stream_)healthy_=false;} }
+    bool finish() noexcept {
+        if(!stream_.is_open())return healthy_;
+        try {
+            flush();stream_.close();
+            if(!healthy_ || stream_.fail()){healthy_=false;return false;}
+            if(segmented_) {
+                sync_path(active_);
+                if(std::filesystem::exists(closed_))throw std::runtime_error("closed tape already exists");
+                std::filesystem::rename(active_,closed_);
+                sync_path(closed_.parent_path().empty()?std::filesystem::path("."):closed_.parent_path());
+            }
+            return true;
+        } catch(...) {healthy_=false;return false;}
+    }
+    bool prepare(std::uint64_t record_bytes) noexcept {
+        try {
+            const bool full=segmented_ && options_.maximum_bytes>0 && bytes_>sizeof(header_)
+                && record_bytes>options_.maximum_bytes-std::min(bytes_,options_.maximum_bytes);
+            if(full || age_due()) {if(!finish())return false;open_segment();}
+            return healthy_;
+        } catch(...) {healthy_=false;return false;}
+    }
+    bool rotate_if_due() noexcept { return prepare(0); }
+};
+
 } // namespace
 
 struct ExternalTapeRecorder::Impl {
     SpscRing<TapeRecord, kExternalTapeQueueCapacity> queue{};
-    std::ofstream output;
+    SegmentOutput output;
     std::thread worker;
     std::atomic<bool> stop_requested{false};
     std::atomic<std::uint64_t> next_event_sequence{0};
@@ -50,7 +134,7 @@ struct ExternalTapeRecorder::Impl {
          std::string run_id,
          std::string session_id,
          std::string source,
-         std::int64_t creation_wall_ns) {
+         std::int64_t creation_wall_ns, TapeSegmentOptions segments) {
         if (!exact_sha(code_sha)) {
             throw std::invalid_argument("code_sha must be exact 40-char lowercase hex");
         }
@@ -63,8 +147,7 @@ struct ExternalTapeRecorder::Impl {
         if (!path.parent_path().empty()) {
             std::filesystem::create_directories(path.parent_path());
         }
-        output.open(path, std::ios::binary | std::ios::trunc);
-        if (!output) throw std::runtime_error("unable to open V7 external tape");
+
 
         TapeSessionHeader header;
         header.record_bytes = static_cast<std::uint32_t>(sizeof(TapeRecord));
@@ -73,9 +156,7 @@ struct ExternalTapeRecorder::Impl {
         copy_fixed(header.run_id, run_id, "run_id");
         copy_fixed(header.session_id, session_id, "session_id");
         copy_fixed(header.source, source, "source");
-        output.write(reinterpret_cast<const char*>(&header), sizeof(header));
-        output.flush();
-        if (!output) throw std::runtime_error("unable to write V7 tape header");
+        output.start(path,header,segments);
 
         worker = std::thread([this] { writer_loop(); });
     }
@@ -93,6 +174,11 @@ struct ExternalTapeRecorder::Impl {
             bool progressed = false;
             while (queue.try_pop(record)) {
                 progressed = true;
+                if (!output.prepare(sizeof(record))) {
+                    writer_healthy.store(false, std::memory_order_release);
+                    evidence_valid.store(false, std::memory_order_release);
+                    return;
+                }
                 output.write(reinterpret_cast<const char*>(&record), sizeof(record));
                 if (!output) {
                     writer_healthy.store(false, std::memory_order_release);
@@ -101,10 +187,16 @@ struct ExternalTapeRecorder::Impl {
                 }
                 written.fetch_add(1, std::memory_order_relaxed);
             }
-            if (!progressed) std::this_thread::sleep_for(std::chrono::microseconds(100));
+            if (!progressed) {
+                if (!output.rotate_if_due()) {
+                    writer_healthy.store(false, std::memory_order_release);
+                    evidence_valid.store(false, std::memory_order_release);
+                    return;
+                }
+                std::this_thread::sleep_for(std::chrono::microseconds(100));
+            }
         }
-        output.flush();
-        if (!output) {
+        if (!output.finish()) {
             writer_healthy.store(false, std::memory_order_release);
             evidence_valid.store(false, std::memory_order_release);
         }
@@ -116,10 +208,10 @@ ExternalTapeRecorder::ExternalTapeRecorder(std::filesystem::path path,
                                            std::string run_id,
                                            std::string session_id,
                                            std::string source,
-                                           std::int64_t creation_wall_ns)
+                                           std::int64_t creation_wall_ns, TapeSegmentOptions segments)
     : impl_(std::make_unique<Impl>(std::move(path), std::move(code_sha),
                                    std::move(run_id), std::move(session_id),
-                                   std::move(source), creation_wall_ns)) {}
+                                   std::move(source), creation_wall_ns, segments)) {}
 
 ExternalTapeRecorder::~ExternalTapeRecorder() = default;
 
@@ -186,7 +278,7 @@ struct ExternalRawTapeRecorder::Impl {
     static constexpr std::size_t kPublicationCapacity =
         std::bit_ceil(kExternalRawTapeQueueCapacity + kExternalLargeRawTapeQueueCapacity);
     SpscRing<std::uint8_t, kPublicationCapacity> publication_queue{};
-    std::ofstream output;
+    SegmentOutput output;
     std::thread worker;
     std::atomic<bool> stop_requested{false};
     std::atomic<std::uint64_t> next_sequence{0};
@@ -199,13 +291,12 @@ struct ExternalRawTapeRecorder::Impl {
     std::atomic<bool> writer_healthy{true};
 
     Impl(std::filesystem::path path, std::string code_sha, std::string run_id,
-         std::string session_id, std::string source, std::int64_t creation_wall_ns) {
+         std::string session_id, std::string source, std::int64_t creation_wall_ns, TapeSegmentOptions segments) {
         if (!exact_sha(code_sha)) throw std::invalid_argument("code_sha must be exact 40-char lowercase hex");
         if (creation_wall_ns <= 0) throw std::invalid_argument("creation_wall_ns must be positive");
         if (std::filesystem::exists(path)) throw std::invalid_argument("V7 raw tape path already exists");
         if (!path.parent_path().empty()) std::filesystem::create_directories(path.parent_path());
-        output.open(path, std::ios::binary | std::ios::trunc);
-        if (!output) throw std::runtime_error("unable to open V7 raw tape");
+
         // Keep the high-rate 32 KiB recorder for every ordinary venue.
         // All live WebSocket clients admit recovery-sized frames. Keep their
         // ordinary traffic on the compact FIFO, and reserve this bounded
@@ -223,9 +314,7 @@ struct ExternalRawTapeRecorder::Impl {
         copy_fixed(header.run_id, run_id, "run_id");
         copy_fixed(header.session_id, session_id, "session_id");
         copy_fixed(header.source, source, "source");
-        output.write(reinterpret_cast<const char*>(&header), sizeof(header));
-        output.flush();
-        if (!output) throw std::runtime_error("unable to write V7 raw tape header");
+        output.start(path,header,segments);
         worker = std::thread([this] { writer_loop(); });
     }
 
@@ -255,6 +344,9 @@ struct ExternalRawTapeRecorder::Impl {
         disk.receive_wall_ns = record.receive_wall_ns;
         disk.venue = record.venue;
         disk.payload_size = record.payload_size;
+        if (!output.prepare(sizeof(disk)+record.payload_size)) {
+            fail_writer();return false;
+        }
         output.write(reinterpret_cast<const char*>(&disk), sizeof(disk));
         output.write(reinterpret_cast<const char*>(record.payload.data()),
                      static_cast<std::streamsize>(record.payload_size));
@@ -287,19 +379,21 @@ struct ExternalRawTapeRecorder::Impl {
                     if (!write_record(writer_record)) return;
                 }
             }
-            if (!progressed) std::this_thread::sleep_for(std::chrono::microseconds(100));
+            if (!progressed) {
+                if (!output.rotate_if_due()) {fail_writer();return;}
+                std::this_thread::sleep_for(std::chrono::microseconds(100));
+            }
         }
-        output.flush();
-        if (!output) fail_writer();
+        if (!output.finish()) fail_writer();
     }
 };
 
 ExternalRawTapeRecorder::ExternalRawTapeRecorder(
     std::filesystem::path path, std::string code_sha, std::string run_id,
-    std::string session_id, std::string source, std::int64_t creation_wall_ns)
+    std::string session_id, std::string source, std::int64_t creation_wall_ns, TapeSegmentOptions segments)
     : impl_(std::make_unique<Impl>(std::move(path), std::move(code_sha),
                                    std::move(run_id), std::move(session_id),
-                                   std::move(source), creation_wall_ns)) {}
+                                   std::move(source), creation_wall_ns, segments)) {}
 
 ExternalRawTapeRecorder::~ExternalRawTapeRecorder() = default;
 
