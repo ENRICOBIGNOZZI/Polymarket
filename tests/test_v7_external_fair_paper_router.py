@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import sys
+import copy
 import json
 import tempfile
 import time
@@ -900,9 +901,64 @@ def test_paper_account_admission_controls_actual_step() -> None:
         assert recovered.observe_positions.call_count == 2
 
 
+def test_empty_candidate_input_reason_is_not_false_no_edge() -> None:
+    base = snapshot()
+    now = time.monotonic_ns()
+    base["fair"].update(calculated_monotonic_ns=now - 1, valid_until_monotonic_ns=now + 10_000_000_000)
+    assert router.candidate_input_rejection_reason(base, current_ns=now) == ""
+    cases = [
+        ("contract", "verified", False, "CONTRACT_RULES_NOT_VERIFIED"),
+        ("settlement_reference", "valid", False, "SETTLEMENT_REFERENCE_NOT_CAPTURED"),
+        ("oracle", "healthy", False, "ORACLE_NOT_READY"),
+        ("external", "healthy", False, "EXTERNAL_FEEDS_NOT_READY"),
+        ("fair", "valid", False, "FAIR_VALUE_INVALID"),
+        ("fair", "calculated_monotonic_ns", now + 1, "FAIR_SNAPSHOT_CLOCK_INVALID"),
+        ("fair", "calculated_monotonic_ns", "bad", "FAIR_SNAPSHOT_CLOCK_INVALID"),
+        ("fair", "valid_until_monotonic_ns", now - 1, "FAIR_SNAPSHOT_EXPIRED"),
+    ]
+    for section, key, value, expected in cases:
+        observation = copy.deepcopy(base)
+        observation[section][key] = value
+        if expected == "FAIR_SNAPSHOT_EXPIRED":
+            observation["fair"]["calculated_monotonic_ns"] = now - 10
+        assert router.candidate_input_rejection_reason(observation, current_ns=now) == expected
+
+
+def test_actual_step_distinguishes_missing_reference_from_no_edge() -> None:
+    checks = ("canonical_order_reconciliation", "canonical_final_reconciliation", "paper_exploration_account")
+    for missing, expected in ((True, "SETTLEMENT_REFERENCE_NOT_CAPTURED"), (False, "NO_ROBUST_EV")):
+        collector = router.PaperRouter.__new__(router.PaperRouter)
+        collector.sha = "a" * 40
+        collector.source = Path("unused-test-source")
+        collector.root = Path("unused-test-root")
+        collector.drain_path = mock.Mock()
+        collector.drain_path.exists.return_value = False
+        collector.state = {key: {"complete": True} for key in checks}
+        collector.policy = {"minimum_entry_tte_seconds": 5.0, "maximum_entry_tte_seconds": 300.0, "maximum_model_market_disagreement": 0.2}; collector.probe_policy = None
+        collector.last_book_error = ""; collector.last_attempt_reason = ""
+        for name in ("record_forecast", "record_opportunity_set", "observe_positions", "reconcile_canonical_account", "observe_forecasts", "publish", "reject", "wait", "attempt"):
+            setattr(collector, name, mock.Mock())
+        books = {"yes": book("yes", 0.61, 0.59), "no": book("no", 0.41, 0.39)}
+        collector.books_for = mock.Mock(return_value=books)
+        observation = snapshot()
+        observation["fair"].update(yes=0.60, lower=0.40, upper=0.80)
+        observation["settlement_reference"]["valid"] = not missing
+        observation["blockers"] = ["SETTLEMENT_REFERENCE_NOT_CAPTURED"] if missing else []
+        with mock.patch.object(router, "load", return_value=observation), \
+             mock.patch.object(router, "reconcile_paper_exploration_orphan_orders", return_value={"complete": True}), \
+             mock.patch.object(router, "reconcile_paper_exploration_finals", return_value={"complete": True}):
+            collector.step()
+        collector.attempt.assert_not_called()
+        collector.reject.assert_called_once_with(expected)
+        assert collector.state["last_decision"]["outcome"] == expected
+        assert collector.state["last_decision"]["upstream_blockers"] == observation["blockers"]
+
+
 if __name__ == "__main__":
     main()
     test_paper_account_admission_controls_actual_step()
+    test_empty_candidate_input_reason_is_not_false_no_edge()
+    test_actual_step_distinguishes_missing_reference_from_no_edge()
 
 
 def test_arrival_candidate_runs_canonical_coordinator_before_receipt_poll() -> None:
