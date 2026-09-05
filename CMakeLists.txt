@@ -244,6 +244,10 @@ if(BUILD_TESTING)
   target_link_libraries(pm_v7_external_tape_tests PRIVATE pm_v7_external)
   add_test(NAME pm_v7_external_tape_tests COMMAND pm_v7_external_tape_tests)
 
+  add_executable(pm_v7_crypto_book_tape_tests tests/test_v7_crypto_book_tape.cpp)
+  target_link_libraries(pm_v7_crypto_book_tape_tests PRIVATE pm_v7_external)
+  add_test(NAME pm_v7_crypto_book_tape_tests COMMAND pm_v7_crypto_book_tape_tests)
+
   add_executable(pm_v7_external_replay_tests tests/test_v7_external_replay.cpp)
   target_link_libraries(pm_v7_external_replay_tests PRIVATE pm_v7_external)
   add_test(NAME pm_v7_external_replay_tests COMMAND pm_v7_external_replay_tests)
