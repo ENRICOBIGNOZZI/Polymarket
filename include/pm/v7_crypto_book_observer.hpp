@@ -11,7 +11,8 @@ namespace pm::v7::research {
 // owns orders, inventory, capital, signatures or authenticated execution.
 class CryptoBookObserver final {
 public:
-    CryptoBookObserver(std::filesystem::path run_root,
+    CryptoBookObserver(std::filesystem::path observed_run_root,
+                       std::filesystem::path evidence_root,
                        std::filesystem::path config_path,
                        std::string collector_code_sha,
                        std::string observed_runtime_sha,
