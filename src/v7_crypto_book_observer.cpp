@@ -293,6 +293,7 @@ struct CryptoBookObserver::Impl {
                 {"writer_healthy", tape.writer_healthy != 0},
                 {"evidence_valid", tape.evidence_valid != 0 && decoder_failures.load() == 0 && dropped.load() == 0},
                 {"decoder_failures", decoder_failures.load()}, {"reconnects", reconnects.load()},
+                {"trade_events", trade_events.load()},
                 {"connection_epoch", connection_epoch.load()}, {"last_exchange_event_ns", last_exchange_ns.load()},
                 {"last_receive_wall_ms", last_receive_wall_ms.load()}, {"feed_workers", network.workers},
                 {"feed_connected_workers", network.connected_workers}, {"feed_messages", network.messages},
