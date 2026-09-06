@@ -23,6 +23,8 @@ _DYNAMIC_REVIEW_REF_PREFIXES = (
     "ref:refs/remotes/origin/codex/v7-",
     "ref:refs/heads/fix/v7-",
     "ref:refs/remotes/origin/fix/v7-",
+    "ref:refs/heads/research/v7-",
+    "ref:refs/remotes/origin/research/v7-",
 )
 _DYNAMIC_REVIEW_CLASSIFICATIONS = {
     "MERGE_INTO_CANONICAL",
@@ -44,7 +46,7 @@ _FORBIDDEN_REVIEW_CAPABILITIES = {
 
 
 def _dynamic_review_ref(surface_id: str) -> bool:
-    """Return true only for temporary V7 review branches."""
+    """Return true only for temporary V7 codex/fix/research review branches."""
     return surface_id.startswith(_DYNAMIC_REVIEW_REF_PREFIXES)
 
 
@@ -126,6 +128,14 @@ class SurfaceClassificationTests(unittest.TestCase):
         for key, row in current_rows.items():
             if _dynamic_review_ref(key):
                 _assert_fail_closed_review_ref(self, key, row)
+
+    def test_review_namespaces_include_zero_authority_research_branches(self) -> None:
+        for key in (
+            "ref:refs/heads/research/v7-example",
+            "ref:refs/remotes/origin/research/v7-example",
+        ):
+            self.assertTrue(_dynamic_review_ref(key))
+        self.assertFalse(_dynamic_review_ref("ref:refs/heads/research/unsafe"))
 
     def test_branch_ref_namespace_aliases_are_portable(self) -> None:
         local = "ref:refs/heads/codex/example"

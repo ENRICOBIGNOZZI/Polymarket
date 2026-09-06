@@ -1,22 +1,120 @@
 {
-  "schema": "polymarket_v7_maker_fillability_experiment_registry_v1",
-  "paper_only": true,
   "authenticated_execution": false,
-  "real_order_submission": false,
-  "single_variable_changes_only": true,
-  "simulator_relaxation_forbidden": true,
+  "experiments": [
+    {
+      "challenger_policy": "NONE",
+      "end_time": null,
+      "experiment_id": "fillability-bootstrap-observe-only-v1",
+      "failure_rule": "evidence remains insufficient or contradicts causal execution semantics",
+      "hypothesis": "identify whether zero fills are caused primarily by flow reachability, queue depletion, quote lifetime/churn, market selection, or execution-model inconsistency",
+      "incumbent_policy": "CANONICAL_V7_MAKER",
+      "markets": "CURRENT_CANONICAL_SELECTION",
+      "minimum_evidence": {
+        "orders": 34,
+        "require_exact_sha": true,
+        "require_queue_uncertainty": true,
+        "require_trade_tape": true
+      },
+      "primary_metric": "fillability_funnel",
+      "primary_variable": "NONE_OBSERVATION_ONLY",
+      "result": "RUNNING_DATA_ACCUMULATION",
+      "secondary_metrics": [
+        "trade_reachability",
+        "lower_queue_depletion",
+        "expected_queue_depletion",
+        "pessimistic_queue_depletion",
+        "near_miss_ratio",
+        "cancel_before_flow",
+        "priority_reset_rate"
+      ],
+      "start_time": null,
+      "success_rule": "root cause is identified without changing simulator assumptions"
+    },
+    {
+      "automatic_promotion": false,
+      "challenger_policy": "BINANCE_100MS_LOG_RETURN_ABS_GE_0.3BP_WITH_COINBASE_NONOPPOSING_CONFIRMATION_CANCEL_STALE_SIDE",
+      "end_time": null,
+      "execution_authority": "RESEARCH_ZERO_AUTHORITY",
+      "experiment_id": "btc-m5-external-cancel-overlay-forward-v1",
+      "failure_rule": "primary 500ms improvement <= 0, stressed 3x-queue/200ms-cancel improvement <= 0, or causal evidence invalid",
+      "frozen_rule": {
+        "baseline_action": "JOIN",
+        "cancel_latency_ms": 100,
+        "cancel_latency_stress_ms": [
+          150,
+          200
+        ],
+        "confirmation": "NON_OPPOSING",
+        "confirmation_source": "COINBASE_SPOT_TOP_OF_BOOK",
+        "evaluation_horizons_ms": [
+          250,
+          500,
+          1000
+        ],
+        "minimum_absolute_log_return_bp": 0.3,
+        "queue_ahead_multiplier": 1.5,
+        "queue_stress_multipliers": [
+          2.0,
+          3.0
+        ],
+        "retuning_after_freeze": false,
+        "shock_source": "BINANCE_SPOT_TRADES",
+        "shock_window_ms": 100,
+        "trigger_cooldown_ms": 250
+      },
+      "hypothesis": "sub-second external BTC shocks identify the maker side most exposed to adverse selection; cancelling only that stale side before Polymarket reprices improves fill-conditioned markout",
+      "incumbent_policy": "BTC_M5_PASSIVE_JOIN_WITHOUT_EXTERNAL_CANCEL_OVERLAY",
+      "markets": "FUTURE_BTC_USD_UPDOWN_5M_AFTER_FREEZE_COMMIT",
+      "minimum_evidence": {
+        "avoidable_fill_events": 50,
+        "independent_markets_with_triggers": 30,
+        "quote_size_shares": 5.0,
+        "require_exact_book_tape_schema": 2,
+        "require_receive_time_causality": true
+      },
+      "primary_metric": "equal_weight_fill_conditioned_500ms_adverse_markout_improvement_per_share",
+      "primary_variable": "EXTERNAL_SHOCK_STALE_SIDE_CANCEL_OVERLAY",
+      "promotion_credit": false,
+      "quote_submission": false,
+      "real_money_authority": false,
+      "result": "FROZEN_AWAITING_FORWARD_EVIDENCE",
+      "secondary_metrics": [
+        "250ms_adverse_markout_improvement",
+        "1000ms_adverse_markout_improvement",
+        "avoidable_fills_after_cancel_latency",
+        "unavoidable_fills_before_cancel_latency",
+        "leave_best_market_out_improvement",
+        "positive_improvement_market_fraction",
+        "queue_stress_2x",
+        "queue_stress_3x",
+        "cancel_latency_150ms",
+        "cancel_latency_200ms"
+      ],
+      "start_time": "MERGE_COMMIT_TIMESTAMP",
+      "success_rule": "primary 500ms improvement > 0; leave-best-market-out improvement > 0; positive-improvement market fraction >= 0.70; queue-ahead 3x with 200ms cancel latency remains > 0; zero causality violations"
+    }
+  ],
+  "paper_only": true,
   "promotion_credit_for_exploration": false,
   "randomized_probe_protocol": {
-    "enabled": true,
-    "checked_in_live_enabled": false,
-    "execution_authority": "RESEARCH_ZERO_AUTHORITY",
-    "minimum_size_base_units_only": true,
     "assignment_before_outcome_required": true,
-    "randomization_unit": "candidate_id",
-    "required_strata": ["queue_bucket", "spread_bucket", "tte_bucket", "volatility_bucket", "activity_bucket", "quote_lifetime_bucket"],
+    "checked_in_live_enabled": false,
+    "enabled": true,
+    "execution_authority": "RESEARCH_ZERO_AUTHORITY",
     "live_observed_outcome_requires_immutable_evidence_hash": true,
-    "promotion_credit": false
+    "minimum_size_base_units_only": true,
+    "promotion_credit": false,
+    "randomization_unit": "candidate_id",
+    "required_strata": [
+      "queue_bucket",
+      "spread_bucket",
+      "tte_bucket",
+      "volatility_bucket",
+      "activity_bucket",
+      "quote_lifetime_bucket"
+    ]
   },
+  "real_order_submission": false,
   "required_fields": [
     "experiment_id",
     "hypothesis",
@@ -33,35 +131,7 @@
     "failure_rule",
     "result"
   ],
-  "experiments": [
-    {
-      "experiment_id": "fillability-bootstrap-observe-only-v1",
-      "hypothesis": "identify whether zero fills are caused primarily by flow reachability, queue depletion, quote lifetime/churn, market selection, or execution-model inconsistency",
-      "primary_variable": "NONE_OBSERVATION_ONLY",
-      "incumbent_policy": "CANONICAL_V7_MAKER",
-      "challenger_policy": "NONE",
-      "markets": "CURRENT_CANONICAL_SELECTION",
-      "start_time": null,
-      "end_time": null,
-      "minimum_evidence": {
-        "orders": 34,
-        "require_exact_sha": true,
-        "require_trade_tape": true,
-        "require_queue_uncertainty": true
-      },
-      "primary_metric": "fillability_funnel",
-      "secondary_metrics": [
-        "trade_reachability",
-        "lower_queue_depletion",
-        "expected_queue_depletion",
-        "pessimistic_queue_depletion",
-        "near_miss_ratio",
-        "cancel_before_flow",
-        "priority_reset_rate"
-      ],
-      "success_rule": "root cause is identified without changing simulator assumptions",
-      "failure_rule": "evidence remains insufficient or contradicts causal execution semantics",
-      "result": "RUNNING_DATA_ACCUMULATION"
-    }
-  ]
+  "schema": "polymarket_v7_maker_fillability_experiment_registry_v1",
+  "simulator_relaxation_forbidden": true,
+  "single_variable_changes_only": true
 }

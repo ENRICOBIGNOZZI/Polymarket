@@ -130,5 +130,26 @@ class V7MakerFillabilityTest(unittest.TestCase):
         self.assertEqual(sum(row["orders"] for row in out["markets"]), 2)
 
 
+    def test_btc_m5_external_cancel_overlay_forward_protocol_is_frozen_zero_authority(self) -> None:
+        registry = json.loads((ROOT / "config/v7_maker_fillability_experiments.json").read_text())
+        experiment = next(row for row in registry["experiments"]
+                          if row["experiment_id"] == "btc-m5-external-cancel-overlay-forward-v1")
+        self.assertEqual(experiment["execution_authority"], "RESEARCH_ZERO_AUTHORITY")
+        self.assertFalse(experiment["quote_submission"])
+        self.assertFalse(experiment["promotion_credit"])
+        self.assertFalse(experiment["real_money_authority"])
+        rule = experiment["frozen_rule"]
+        self.assertEqual(rule["shock_source"], "BINANCE_SPOT_TRADES")
+        self.assertEqual(rule["confirmation_source"], "COINBASE_SPOT_TOP_OF_BOOK")
+        self.assertEqual(rule["shock_window_ms"], 100)
+        self.assertEqual(rule["minimum_absolute_log_return_bp"], 0.3)
+        self.assertEqual(rule["cancel_latency_ms"], 100)
+        self.assertEqual(rule["baseline_action"], "JOIN")
+        self.assertEqual(rule["queue_ahead_multiplier"], 1.5)
+        self.assertEqual(rule["queue_stress_multipliers"], [2.0, 3.0])
+        self.assertEqual(rule["cancel_latency_stress_ms"], [150, 200])
+        self.assertFalse(rule["retuning_after_freeze"])
+
+
 if __name__ == "__main__":
     unittest.main()
