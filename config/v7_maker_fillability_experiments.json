@@ -37,6 +37,9 @@
       "execution_authority": "RESEARCH_ZERO_AUTHORITY",
       "experiment_id": "btc-m5-external-cancel-overlay-forward-v1",
       "failure_rule": "primary 500ms improvement <= 0, stressed 3x-queue/200ms-cancel improvement <= 0, or causal evidence invalid",
+      "freeze_boundary_strictly_after": true,
+      "freeze_merge_sha": "612038cc601c7c6a7da942ed49a1e7bb6a23b291",
+      "freeze_merge_timestamp_utc": "2026-09-06T22:57:14Z",
       "frozen_rule": {
         "baseline_action": "JOIN",
         "cancel_latency_ms": 100,
@@ -90,7 +93,7 @@
         "cancel_latency_150ms",
         "cancel_latency_200ms"
       ],
-      "start_time": "MERGE_COMMIT_TIMESTAMP",
+      "start_time": "2026-09-06T22:57:14Z",
       "success_rule": "primary 500ms improvement > 0; leave-best-market-out improvement > 0; positive-improvement market fraction >= 0.70; queue-ahead 3x with 200ms cancel latency remains > 0; zero causality violations"
     }
   ],

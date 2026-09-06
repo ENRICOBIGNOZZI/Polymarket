@@ -129,7 +129,6 @@ class V7MakerFillabilityTest(unittest.TestCase):
         self.assertEqual(sum(row["orders"] for row in out["actions"]), 2)
         self.assertEqual(sum(row["orders"] for row in out["markets"]), 2)
 
-
     def test_btc_m5_external_cancel_overlay_forward_protocol_is_frozen_zero_authority(self) -> None:
         registry = json.loads((ROOT / "config/v7_maker_fillability_experiments.json").read_text())
         experiment = next(row for row in registry["experiments"]
@@ -138,6 +137,13 @@ class V7MakerFillabilityTest(unittest.TestCase):
         self.assertFalse(experiment["quote_submission"])
         self.assertFalse(experiment["promotion_credit"])
         self.assertFalse(experiment["real_money_authority"])
+        self.assertTrue(experiment["freeze_boundary_strictly_after"])
+        self.assertEqual(
+            experiment["freeze_merge_sha"],
+            "612038cc601c7c6a7da942ed49a1e7bb6a23b291",
+        )
+        self.assertEqual(experiment["freeze_merge_timestamp_utc"], "2026-09-06T22:57:14Z")
+        self.assertEqual(experiment["start_time"], "2026-09-06T22:57:14Z")
         rule = experiment["frozen_rule"]
         self.assertEqual(rule["shock_source"], "BINANCE_SPOT_TRADES")
         self.assertEqual(rule["confirmation_source"], "COINBASE_SPOT_TOP_OF_BOOK")
