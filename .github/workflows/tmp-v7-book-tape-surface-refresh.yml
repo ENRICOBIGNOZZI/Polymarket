@@ -1,0 +1,35 @@
+name: TEMP V7 book-tape surface refresh
+
+on:
+  push:
+    branches:
+      - research/v7-btc-m5-book-tape-clean-20260907
+
+permissions:
+  contents: write
+
+jobs:
+  refresh:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          ref: research/v7-btc-m5-book-tape-clean-20260907
+          fetch-depth: 0
+      - name: Regenerate audit without temporary workflow
+        run: |
+          set -euo pipefail
+          rm .github/workflows/tmp-v7-book-tape-surface-refresh.yml
+          python3 scripts/v7_surface_classification.py \
+            --repository-root . \
+            --output artifacts/v7_unification/path_classification.json
+          python3 tests/test_v7_surface_classification.py
+      - name: Commit regenerated audit only
+        run: |
+          set -euo pipefail
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add artifacts/v7_unification/path_classification.json
+          git commit -m 'chore: regenerate V7 book-tape surface audit'
+          git push origin HEAD:research/v7-btc-m5-book-tape-clean-20260907
