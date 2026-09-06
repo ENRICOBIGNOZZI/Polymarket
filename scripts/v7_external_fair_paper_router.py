@@ -1686,6 +1686,12 @@ class PaperRouter:
         prior = load(self.state_path)
         if prior.get("model_sha") == model_sha:
             self.state.update(prior)
+        # A recoverable process crash may persist killed=True before the
+        # supervisor shuts down the tree.  On an admitted exact-SHA restart,
+        # the active KILL marker is the authority; stale cached state is not.
+        # Risk/operator kill markers remain fail-closed because the supervisor
+        # never admits that restart while the marker is active.
+        self.state["killed"] = (self.root / "control" / "KILL").exists()
         self.compact_durable_evidence()
         self.restore_durable_state()
         self.state["canonical_order_reconciliation"] = (
