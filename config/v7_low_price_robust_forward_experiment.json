@@ -1,0 +1,32 @@
+{
+  "schema": "polymarket_v7_low_price_robust_forward_experiment_v1",
+  "paper_only": true,
+  "authenticated_execution": false,
+  "real_order_submission": false,
+  "real_capital_at_risk": false,
+  "frozen_at_timestamp_ms": 1788708166764,
+  "frozen_code_sha": "a45a2817d56b942917153e369808043ada257b39",
+  "frozen_policy_sha256": "635d01daa9b984e2739080a075cf3488f0266eb813dc7c605a9fd9974e38f17c",
+  "strategy": "CRYPTO_INFORMED_TAKER",
+  "selection": {
+    "paper_bootstrap_probe": false,
+    "maximum_fill_price_exclusive": 0.05,
+    "robust_net_ev_required_positive": true,
+    "existing_arrival_revalidation_required": true,
+    "existing_fee_depth_latency_and_risk_rules_unchanged": true,
+    "one_trade_per_market": true
+  },
+  "evaluation": {
+    "minimum_independent_terminal_markets": 50,
+    "primary_metric": "net_terminal_pnl_after_authoritative_fees",
+    "market_benchmark": "arrival_pm_mid_held_outcome_probability",
+    "market_win_count_test": "exact_one_sided_poisson_binomial",
+    "maximum_market_benchmark_p_value": 0.05,
+    "total_net_pnl_required_positive": true,
+    "leave_best_trade_out_pnl_required_positive": true,
+    "two_x_fee_and_execution_risk_stress_required_positive": true,
+    "accounting_and_causality_violations_allowed": 0
+  },
+  "historical_discovery_sample_is_excluded_from_forward_claim": true,
+  "automatic_promotion": false
+}
