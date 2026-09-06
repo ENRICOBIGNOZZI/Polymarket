@@ -8,7 +8,7 @@
 
 namespace pm::v7::research {
 
-inline constexpr std::uint32_t kCryptoBookTapeSchemaVersion = 1;
+inline constexpr std::uint32_t kCryptoBookTapeSchemaVersion = 2;
 
 enum class CryptoBookOutcome : std::uint8_t {
     Yes = 1,
@@ -27,6 +27,10 @@ struct CryptoBookTapePayload {
     std::uint8_t event_kind = 0;
     CryptoBookOutcome outcome = CryptoBookOutcome::Yes;
     std::array<std::uint8_t, 2> reserved{};
+    std::int32_t trade_price_e4 = 0;
+    std::int64_t trade_quantity_microunits = 0;
+    std::int8_t trade_side = 0; // +1 buyer initiated, -1 seller initiated.
+    std::array<std::uint8_t, 7> trade_reserved{};
     BookHotSnapshot book{};
 };
 

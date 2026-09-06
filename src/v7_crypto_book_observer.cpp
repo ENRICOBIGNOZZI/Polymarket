@@ -31,6 +31,7 @@ namespace fs = std::filesystem;
 namespace json = boost::json;
 using pm::v7::MarketWsEvent;
 using pm::v7::MarketWsEventKind;
+using pm::v7::Side;
 using pm::v7::external_fair::ExternalTapeRecorder;
 using pm::v7::external_fair::TapeRecordKind;
 using pm::v7::external_fair::TapeSegmentOptions;
@@ -145,7 +146,7 @@ struct CryptoBookObserver::Impl {
     std::unique_ptr<pm::fast::MarketWebSocketFeed> feed;
     std::unique_ptr<ExternalTapeRecorder> recorder;
     std::atomic<std::uint64_t> sequence{0}, connection_epoch{1}, dropped{0};
-    std::atomic<std::uint64_t> decoder_failures{0}, reconnects{0};
+    std::atomic<std::uint64_t> decoder_failures{0}, reconnects{0}, trade_events{0};
     std::atomic<std::int64_t> last_exchange_ns{0}, last_receive_wall_ms{0};
     std::int64_t last_poll_ms = 0;
     std::string state = "waiting_for_market";
@@ -203,7 +204,7 @@ struct CryptoBookObserver::Impl {
         market_id = market.market_id; event_id = market.event_id;
         yes_token = market.yes_token; no_token = market.no_token; ids = requested;
         sequence.store(0); connection_epoch.store(1); dropped.store(0); decoder_failures.store(0);
-        reconnects.store(0); last_exchange_ns.store(0); last_receive_wall_ms.store(0);
+        reconnects.store(0); trade_events.store(0); last_exchange_ns.store(0); last_receive_wall_ms.store(0);
         std::vector<TokenBinding> bindings{{yes_token, 1, 1, 1, yes_tick}, {no_token, 1, 1, 2, no_tick}};
         decoder = std::make_unique<MarketWsShard>(std::move(bindings));
 
@@ -238,6 +239,7 @@ struct CryptoBookObserver::Impl {
                     const auto& event = events[i];
                     if (event.instrument_handle < 1 || event.instrument_handle > 2) continue;
                     if (event.kind != MarketWsEventKind::BookChanged
+                        && event.kind != MarketWsEventKind::Trade
                         && event.kind != MarketWsEventKind::TickSizeChanged
                         && event.kind != MarketWsEventKind::LineageInvalidated) continue;
                     CryptoBookTapePayload payload;
@@ -245,7 +247,11 @@ struct CryptoBookObserver::Impl {
                     payload.market_handle = event.market_handle; payload.event_handle = event.event_handle;
                     payload.event_kind = static_cast<std::uint8_t>(event.kind);
                     payload.outcome = event.instrument_handle == 1 ? CryptoBookOutcome::Yes : CryptoBookOutcome::No;
+                    payload.trade_price_e4 = event.price_e4;
+                    payload.trade_quantity_microunits = event.quantity_microunits;
+                    payload.trade_side = event.side == Side::Buy ? 1 : event.side == Side::Sell ? -1 : 0;
                     payload.book = event.book;
+                    if (event.kind == MarketWsEventKind::Trade) trade_events.fetch_add(1, std::memory_order_relaxed);
                     const auto seq = sequence.fetch_add(1, std::memory_order_relaxed) + 1;
                     const auto record = pm::v7::external_fair::make_tape_record(
                         TapeRecordKind::PmState, seq, receive.monotonic_ns, event.instrument_handle, payload);

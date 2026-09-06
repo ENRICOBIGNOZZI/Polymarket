@@ -16,7 +16,10 @@ int main() {
     source.market_handle = 11;
     source.event_handle = 12;
     source.schema_version = kCryptoBookTapeSchemaVersion;
-    source.event_kind = static_cast<std::uint8_t>(MarketWsEventKind::BookChanged);
+    source.event_kind = static_cast<std::uint8_t>(MarketWsEventKind::Trade);
+    source.trade_price_e4 = 5000;
+    source.trade_quantity_microunits = 3250000;
+    source.trade_side = -1;
     source.outcome = CryptoBookOutcome::Yes;
     source.book.state_version = 99;
     source.book.exchange_event_ns = 1'788'620'000'100'000'000LL;
@@ -45,6 +48,9 @@ int main() {
     assert(decoded.receive_wall_ms == source.receive_wall_ms);
     assert(decoded.schema_version == kCryptoBookTapeSchemaVersion);
     assert(decoded.event_kind == source.event_kind);
+    assert(decoded.trade_price_e4 == 5000);
+    assert(decoded.trade_quantity_microunits == 3250000);
+    assert(decoded.trade_side == -1);
     assert(decoded.outcome == CryptoBookOutcome::Yes);
     assert(decoded.book.state_version == source.book.state_version);
     assert(decoded.book.exchange_event_ns == source.book.exchange_event_ns);
