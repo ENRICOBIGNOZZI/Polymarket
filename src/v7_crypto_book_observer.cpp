@@ -225,8 +225,11 @@ struct CryptoBookObserver::Impl {
         atomic_write(evidence_root / ("btc-m5-book." + market_id + "." + std::to_string(::getpid()) + ".manifest.json"),
                      json::serialize(manifest) + "\n");
 
+        // YES and NO share one single-writer MarketWsShard. Keep both tokens
+        // on one WebSocket worker; multiple workers would concurrently mutate
+        // the same decoder/JSON arena and violate its ownership contract.
         feed = std::make_unique<pm::fast::MarketWebSocketFeed>(
-            ws_url, ids, 1,
+            ws_url, ids, ids.size(),
             [this](std::string_view frame, const pm::fast::FeedReceiveStamp& receive, std::size_t) {
                 std::array<MarketWsEvent, kOutputCapacity> events{};
                 const auto result = decoder->process_frame(frame, receive, events);

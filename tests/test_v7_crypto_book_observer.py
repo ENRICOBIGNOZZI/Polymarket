@@ -26,6 +26,8 @@ def main() -> None:
     assert "research evidence root must be outside observed live run root" in source
     assert 'evidence_dir(evidence_root / "normalized_events")' in source
     assert "MarketWsEventKind::BookChanged" in source
+    assert "ws_url, ids, ids.size()," in source
+    assert "ws_url, ids, 1," not in source
     assert "ExternalTapeRecorder" in source
     assert "TapeSegmentOptions{kSegmentBytes, kSegmentSeconds}" in source
     assert "64ULL * 1024ULL * 1024ULL" in source
