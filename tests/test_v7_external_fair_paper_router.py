@@ -1026,12 +1026,37 @@ def test_incremental_counterfactual_index_parity_and_invalidation() -> None:
         finally: rebuilt.close()
 
 
+def test_recoverable_restart_does_not_keep_stale_router_kill_latched():
+    with tempfile.TemporaryDirectory() as directory:
+        run_root = Path(directory)
+        external = run_root / "external_fair"
+        external.mkdir(parents=True)
+        (external / "paper_router_state.json").write_text(json.dumps({
+            "model_sha": "a" * 40, "starting_capital": 4000.0,
+            "cash": 4000.0, "peak_equity": 4000.0, "killed": True,
+        }))
+        recovered = router.PaperRouter(
+            run_root, "a" * 40, ROOT / "config" / "v7_external_fair.json",
+            "https://clob.invalid", "https://gamma.invalid",
+        )
+        assert recovered.state["killed"] is False
+        control = run_root / "control"
+        control.mkdir()
+        (control / "KILL").write_text("{}\n")
+        blocked = router.PaperRouter(
+            run_root, "a" * 40, ROOT / "config" / "v7_external_fair.json",
+            "https://clob.invalid", "https://gamma.invalid",
+        )
+        assert blocked.state["killed"] is True
+
+
 if __name__ == "__main__":
     main()
     test_paper_account_admission_controls_actual_step()
     test_incremental_counterfactual_index_parity_and_invalidation()
     test_empty_candidate_input_reason_is_not_false_no_edge()
     test_actual_step_distinguishes_missing_reference_from_no_edge()
+    test_recoverable_restart_does_not_keep_stale_router_kill_latched()
 
 
 def test_arrival_candidate_runs_canonical_coordinator_before_receipt_poll() -> None:
