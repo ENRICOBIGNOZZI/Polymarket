@@ -873,12 +873,16 @@ MakerDecision MakerHotPath::on_market_update(
     Candidate* best = nullptr;
     double best_observed_robust_ev = -std::numeric_limits<double>::infinity();
     double best_observed_uncertainty = 0.0;
+    const SideEconomics* best_observed_side = nullptr;
+    Action best_observed_action = Action::Withdraw;
     for (std::size_t i = 0; i < candidate_count; ++i) {
         auto& candidate = candidates[i];
         for (const auto* side : {&candidate.bid, &candidate.ask}) {
             if (finite(side->robust_ev) && side->robust_ev > best_observed_robust_ev) {
                 best_observed_robust_ev = side->robust_ev;
                 best_observed_uncertainty = side->uncertainty;
+                best_observed_side = side;
+                best_observed_action = candidate.action;
             }
         }
         if (inventory_one_sided) {
@@ -894,13 +898,40 @@ MakerDecision MakerHotPath::on_market_update(
         if (best == nullptr || candidate.score > best->score) best = &candidate;
     }
 
+    const auto publish_best_rejected = [&]() noexcept {
+        if (best_observed_side == nullptr) return;
+        decision.placement_action = best_observed_action;
+        const auto& side = *best_observed_side;
+        if (side.side == Side::Buy) {
+            decision.bid_fill_probability = side.fill_probability;
+            decision.bid_statistical_fill_probability = side.statistical_fill_probability;
+            decision.bid_flow_reach_probability = side.flow_reach_probability;
+            decision.bid_queue_depletion_probability = side.queue_depletion_probability;
+            decision.bid_opposite_flow_shares_per_second = side.opposite_flow_shares_per_second;
+            decision.bid_opposite_flow_prints_per_second = side.opposite_flow_prints_per_second;
+            decision.bid_causal_funnel_identified = static_cast<std::uint8_t>(side.causal_funnel_identified);
+            decision.bid_exact_cell_baseline = static_cast<std::uint8_t>(side.exact_cell_baseline);
+        } else if (side.side == Side::Sell) {
+            decision.ask_fill_probability = side.fill_probability;
+            decision.ask_statistical_fill_probability = side.statistical_fill_probability;
+            decision.ask_flow_reach_probability = side.flow_reach_probability;
+            decision.ask_queue_depletion_probability = side.queue_depletion_probability;
+            decision.ask_opposite_flow_shares_per_second = side.opposite_flow_shares_per_second;
+            decision.ask_opposite_flow_prints_per_second = side.opposite_flow_prints_per_second;
+            decision.ask_causal_funnel_identified = static_cast<std::uint8_t>(side.causal_funnel_identified);
+            decision.ask_exact_cell_baseline = static_cast<std::uint8_t>(side.exact_cell_baseline);
+        }
+    };
+
     const bool economic_quote = best != nullptr && finite(best->score)
                              && best->score > model.min_robust_ev_per_share;
-    const std::int64_t now = monotonic_ns();
+    const std::int64_t compute_now_ns = monotonic_ns();
+    const std::int64_t policy_now_ns = update.socket_receive_monotonic_ns > 0
+        ? update.socket_receive_monotonic_ns : compute_now_ns;
     const bool lifetime_hold = quotes.last_quote_monotonic_ns > 0
-        && now - quotes.last_quote_monotonic_ns < model.min_quote_lifetime_ns;
+        && policy_now_ns - quotes.last_quote_monotonic_ns < model.min_quote_lifetime_ns;
     const std::int64_t exploration_elapsed = last_exploration_quote_ns_ > 0
-        ? std::max<std::int64_t>(0, now - last_exploration_quote_ns_)
+        ? std::max<std::int64_t>(0, policy_now_ns - last_exploration_quote_ns_)
         : std::numeric_limits<std::int64_t>::max();
     const bool exploration_quote_active = exploration_side_ == Side::Sell
         ? quotes.ask_active != 0 : quotes.bid_active != 0;
@@ -964,6 +995,7 @@ MakerDecision MakerHotPath::on_market_update(
         if (finite(best_observed_robust_ev)) {
             decision.robust_ev = best_observed_robust_ev;
             decision.ev_uncertainty = best_observed_uncertainty;
+            publish_best_rejected();
         }
         // A transient feature update must not turn a freshly accepted quote into
         // an immediate cancel. The old path bypassed min_quote_lifetime here,
@@ -1017,7 +1049,7 @@ MakerDecision MakerHotPath::on_market_update(
                 decision.reason = DecisionReason::ExplorationExpired;
                 append_intent(decision, make_intent(++intent_sequence_, update, model,
                                                     IntentType::CancelQuote, exploration_side_,
-                                                    exploration_quote_tick, 0.0, nullptr, now));
+                                                    exploration_quote_tick, 0.0, nullptr, policy_now_ns));
                 exploration_active_ = 0;
                 exploration_side_ = Side::None;
             } else if (exploration_configured) {
@@ -1051,7 +1083,7 @@ MakerDecision MakerHotPath::on_market_update(
                                                                 IntentType::CancelQuote,
                                                                 exploration_side_,
                                                                 exploration_quote_tick, 0.0,
-                                                                nullptr, now));
+                                                                nullptr, policy_now_ns));
                         }
                         exploration_active_ = 0;
                         exploration_side_ = Side::None;
@@ -1068,7 +1100,7 @@ MakerDecision MakerHotPath::on_market_update(
                         && !quotes.cancel_pending) {
                         append_intent(decision, make_intent(++intent_sequence_, update, model,
                                                             IntentType::CancelQuote, exploration_side_,
-                                                            exploration_quote_tick, 0.0, nullptr, now));
+                                                            exploration_quote_tick, 0.0, nullptr, policy_now_ns));
                     }
                 }
             } else {
@@ -1184,7 +1216,7 @@ MakerDecision MakerHotPath::on_market_update(
                 auto exploration_intent = make_intent(
                     ++intent_sequence_, update, model, IntentType::Quote,
                     choice.economics->side, choice.economics->price_tick,
-                    choice.economics->quote_shares, &authorized_exploration, now);
+                    choice.economics->quote_shares, &authorized_exploration, policy_now_ns);
                 // This is an execution contract, not just decision metadata.
                 // A quiet market may emit no later book/trade event, so the
                 // single OMS owner must be able to terminate the assigned arm
@@ -1215,7 +1247,7 @@ MakerDecision MakerHotPath::on_market_update(
                     decision.exploration_assignment_propensity;
                 exploration_information_arm_ =
                     decision.exploration_information_arm;
-                last_exploration_quote_ns_ = now;
+                last_exploration_quote_ns_ = policy_now_ns;
                 const std::int64_t end_ns = monotonic_ns();
                 decision.latency.decision_ns = end_ns - decision_start_ns;
                 decision.latency.receive_to_intent_ns = update.socket_receive_monotonic_ns > 0
@@ -1279,13 +1311,13 @@ MakerDecision MakerHotPath::on_market_update(
             if (lifetime_hold) return;
             append_intent(decision, make_intent(++intent_sequence_, update, model,
                                                 IntentType::CancelQuote, side, active_tick,
-                                                0.0, nullptr, now));
+                                                0.0, nullptr, policy_now_ns));
             return;
         }
         if (wanted && !quotes.cancel_pending) {
             append_intent(decision, make_intent(++intent_sequence_, update, model,
                                                 IntentType::Quote, side, economics.price_tick,
-                                                economics.quote_shares, &economics, now));
+                                                economics.quote_shares, &economics, policy_now_ns));
         }
     };
 

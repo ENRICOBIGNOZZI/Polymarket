@@ -924,6 +924,18 @@ void test_exploration_minimum_rest_survives_transient_negative_ev() {
     assert(held.reason == pm::v7::maker::DecisionReason::ExplorationHold);
     assert(held.intent_count == 0);
     assert(held.exploration_max_rest_ns == model.exploration_max_rest_ns);
+
+    // Replay must age policy state on the recorded owner clock, not CPU time.
+    // Advancing receive-monotonic time alone beyond minimum_rest must release
+    // the exploration hold without sleeping the test process.
+    const auto held_receive_ns = update.socket_receive_monotonic_ns;
+    quotes.last_quote_monotonic_ns = held_receive_ns;
+    update.state_version += 1;
+    update.socket_receive_monotonic_ns = held_receive_ns + model.exploration_min_rest_ns + 1;
+    const auto replay_aged = hot.on_market_update(update, inventory, quotes, risk, negative);
+    assert(replay_aged.reason != pm::v7::maker::DecisionReason::ExplorationHold);
+    assert(replay_aged.intent_count == 1);
+    assert(replay_aged.intents[0].type == pm::v7::IntentType::CancelQuote);
 }
 
 void test_exploration_minimum_rest_survives_transient_exploit_promotion() {
@@ -1009,6 +1021,10 @@ void test_negative_exploration_adjusted_ev_has_no_execution_authority() {
     assert(decision.reason == pm::v7::maker::DecisionReason::NoEconomicQuote);
     assert(decision.intent_count == 1);
     assert(decision.intents[0].type == pm::v7::IntentType::Withdraw);
+    assert(decision.placement_action != pm::v7::maker::Action::Withdraw);
+    assert(decision.bid_statistical_fill_probability > 0.0
+           || decision.ask_statistical_fill_probability > 0.0);
+    assert(decision.bid_fill_probability > 0.0 || decision.ask_fill_probability > 0.0);
 }
 
 void test_global_kill_preempts_quote() {
