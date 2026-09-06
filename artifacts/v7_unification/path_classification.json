@@ -6,8 +6,8 @@
     "ref_count": 21,
     "runtime_output_count": 78,
     "schema_count": 22,
-    "tracked_or_intended_path_count": 613,
-    "workflow_count": 11
+    "tracked_or_intended_path_count": 612,
+    "workflow_count": 10
   },
   "entries": [
     {
@@ -772,31 +772,6 @@
       "path_or_ref": ".github/workflows/private-runtime-single-writer-validation.yml",
       "rollback_artifact_tag": "v7-unification-pre-migration-8d9e8e60",
       "surface_id": "path:.github/workflows/private-runtime-single-writer-validation.yml",
-      "unique_behavior_data_contribution": "tracked repository behavior, evidence, test, configuration, or documentation",
-      "validation_tests": [
-        "tests/test_v7_surface_classification.py"
-      ]
-    },
-    {
-      "canonical_replacement": ".github/workflows/tmp-v7-book-tape-surface-refresh.yml",
-      "classification": "KEEP_CANONICAL",
-      "current_imports_callers_readers_writers": {
-        "analysis": "exact path/module references from tracked text; runtime linkage is separately enumerated",
-        "static_references": []
-      },
-      "deletion_gate": "NONE_CANONICAL_SURFACE",
-      "disposition_commit": null,
-      "economic_authority": {
-        "capabilities": [],
-        "executable": false,
-        "owner": null
-      },
-      "final_disposition": "retain_canonical",
-      "migration_status": "classified",
-      "object_type": "tracked_path",
-      "path_or_ref": ".github/workflows/tmp-v7-book-tape-surface-refresh.yml",
-      "rollback_artifact_tag": "v7-unification-pre-migration-8d9e8e60",
-      "surface_id": "path:.github/workflows/tmp-v7-book-tape-surface-refresh.yml",
       "unique_behavior_data_contribution": "tracked repository behavior, evidence, test, configuration, or documentation",
       "validation_tests": [
         "tests/test_v7_surface_classification.py"
@@ -5088,6 +5063,7 @@
       "current_imports_callers_readers_writers": {
         "analysis": "exact path/module references from tracked text; runtime linkage is separately enumerated",
         "static_references": [
+          "artifacts/v7_unification/path_classification.json",
           "tests/test_v7_crypto_book_observer.py"
         ]
       },
@@ -5115,6 +5091,7 @@
       "current_imports_callers_readers_writers": {
         "analysis": "exact path/module references from tracked text; runtime linkage is separately enumerated",
         "static_references": [
+          "artifacts/v7_unification/path_classification.json",
           "tests/test_v7_crypto_book_observer.py"
         ]
       },
@@ -12363,6 +12340,7 @@
         "analysis": "exact path/module references from tracked text; runtime linkage is separately enumerated",
         "static_references": [
           "CMakeLists.txt",
+          "artifacts/v7_unification/path_classification.json",
           "tests/test_v7_crypto_book_observer.py"
         ]
       },
@@ -12391,6 +12369,7 @@
         "analysis": "exact path/module references from tracked text; runtime linkage is separately enumerated",
         "static_references": [
           "CMakeLists.txt",
+          "artifacts/v7_unification/path_classification.json",
           "tests/test_v7_crypto_book_observer.py"
         ]
       },
@@ -14363,7 +14342,9 @@
       "classification": "KEEP_ZERO_AUTHORITY_RESEARCH",
       "current_imports_callers_readers_writers": {
         "analysis": "exact path/module references from tracked text; runtime linkage is separately enumerated",
-        "static_references": []
+        "static_references": [
+          "artifacts/v7_unification/path_classification.json"
+        ]
       },
       "deletion_gate": "DELETE_ONLY_IF_INFORMATION_VALUE_IS_SUPERSEDED",
       "disposition_commit": null,
@@ -14389,7 +14370,8 @@
       "current_imports_callers_readers_writers": {
         "analysis": "exact path/module references from tracked text; runtime linkage is separately enumerated",
         "static_references": [
-          "CMakeLists.txt"
+          "CMakeLists.txt",
+          "artifacts/v7_unification/path_classification.json"
         ]
       },
       "deletion_gate": "DELETE_ONLY_IF_INFORMATION_VALUE_IS_SUPERSEDED",
@@ -18673,9 +18655,9 @@
       "object_type": "branch_or_remote_ref",
       "path_or_ref": "refs/heads/research/v7-btc-m5-book-tape-clean-20260907",
       "rollback_artifact_tag": "v7-unification-pre-migration-8d9e8e60",
-      "snapshot_object_id": "50da55dd8cd33b24d3c0aa987cb8920cf1f5b5f5",
+      "snapshot_object_id": "e824d103d40220427ee200fb5d2934ef6f48cc37",
       "surface_id": "ref:refs/heads/research/v7-btc-m5-book-tape-clean-20260907",
-      "unique_behavior_data_contribution": "4 commit(s) not reachable from origin/main require content audit",
+      "unique_behavior_data_contribution": "6 commit(s) not reachable from origin/main require content audit",
       "validation_tests": [
         "tests/test_v7_surface_classification.py"
       ]
@@ -18979,9 +18961,9 @@
       "object_type": "branch_or_remote_ref",
       "path_or_ref": "refs/remotes/origin/research/v7-btc-m5-book-tape-clean-20260907",
       "rollback_artifact_tag": "v7-unification-pre-migration-8d9e8e60",
-      "snapshot_object_id": "50da55dd8cd33b24d3c0aa987cb8920cf1f5b5f5",
+      "snapshot_object_id": "e824d103d40220427ee200fb5d2934ef6f48cc37",
       "surface_id": "ref:refs/remotes/origin/research/v7-btc-m5-book-tape-clean-20260907",
-      "unique_behavior_data_contribution": "4 commit(s) not reachable from origin/main require content audit",
+      "unique_behavior_data_contribution": "6 commit(s) not reachable from origin/main require content audit",
       "validation_tests": [
         "tests/test_v7_surface_classification.py"
       ]
@@ -22146,31 +22128,6 @@
       ]
     },
     {
-      "canonical_replacement": ".github/workflows/tmp-v7-book-tape-surface-refresh.yml",
-      "classification": "KEEP_CANONICAL",
-      "current_imports_callers_readers_writers": {
-        "analysis": "exact path/module references from tracked text; runtime linkage is separately enumerated",
-        "static_references": []
-      },
-      "deletion_gate": "NONE_CANONICAL_SURFACE",
-      "disposition_commit": null,
-      "economic_authority": {
-        "capabilities": [],
-        "executable": false,
-        "owner": null
-      },
-      "final_disposition": "retain_canonical",
-      "migration_status": "classified",
-      "object_type": "workflow",
-      "path_or_ref": ".github/workflows/tmp-v7-book-tape-surface-refresh.yml",
-      "rollback_artifact_tag": "v7-unification-pre-migration-8d9e8e60",
-      "surface_id": "workflow:.github/workflows/tmp-v7-book-tape-surface-refresh.yml",
-      "unique_behavior_data_contribution": "CI, research, deployment, or cutover control surface",
-      "validation_tests": [
-        "tests/test_v7_surface_classification.py"
-      ]
-    },
-    {
       "canonical_replacement": ".github/workflows/v7-approved-paper-cutover-orchestrator.yml",
       "classification": "KEEP_CANONICAL",
       "current_imports_callers_readers_writers": {
@@ -22350,5 +22307,5 @@
   "real_capital_at_risk": false,
   "real_order_submission": false,
   "schema": "polymarket_v7_surface_classification_v1",
-  "source_snapshot_sha": "50da55dd8cd33b24d3c0aa987cb8920cf1f5b5f5"
+  "source_snapshot_sha": "e824d103d40220427ee200fb5d2934ef6f48cc37"
 }
