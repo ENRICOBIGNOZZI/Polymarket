@@ -155,13 +155,31 @@ class CryptoExecutionAlphaRuntimeTests(unittest.TestCase):
         self.assertIn("CANONICAL_EXTERNAL_CANCEL_SIGNAL_INACTIVE_OR_MISSING", reasons)
         signal = {
             "schema": CANCEL_SIGNAL_SCHEMA, "rule_sha256": CANCEL_RULE_SHA,
-            "receive_time_causal": True, "active": True, "mandatory_risk_cancel": True,
+            "paper_only": True, "authenticated_execution": False,
+            "real_order_submission": False,
+            "execution_authority": "SIGNAL_ONLY_ZERO_AUTHORITY",
+            "receive_time_causal": True, "shock_source": "BINANCE_SPOT_TRADES",
+            "shock_window_ms": 100, "minimum_absolute_log_return_bp": 0.3,
+            "confirmation_source": "COINBASE_SPOT_TOP_OF_BOOK",
+            "confirmation": "NON_OPPOSING", "trigger_cooldown_ms": 250,
+            "evaluation_tick_ms": 25, "history_valid": True,
+            "threshold_crossed": True, "confirmation_non_opposing": True,
+            "cooldown_blocked": False, "direction": "UP",
+            "stale_sides": ["YES_SELL", "NO_BUY"],
+            "trigger_monotonic_ns": 1_000_000_000,
+            "evaluated_monotonic_ns": 1_000_000_000,
+            "active": True, "mandatory_risk_cancel": True,
             "active_quote_size_shares": 5.0, "cancel_cost": 0.001,
         }
         active, reasons = cancel_evidence(report, signal)
         self.assertTrue(active.mature and active.signal_active and active.mandatory_risk_cancel)
         self.assertGreater(active.avoidable_fill_probability_lower, 0.0)
         self.assertEqual(reasons, [])
+        drifted = dict(signal)
+        drifted["shock_window_ms"] = 250
+        rejected, reasons = cancel_evidence(report, drifted)
+        self.assertFalse(rejected.signal_active)
+        self.assertIn("CANONICAL_EXTERNAL_CANCEL_SIGNAL_INACTIVE_OR_MISSING", reasons)
 
 
 if __name__ == "__main__":

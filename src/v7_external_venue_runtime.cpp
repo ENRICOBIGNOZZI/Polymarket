@@ -1068,6 +1068,8 @@ int main(int argc, char** argv) {
         if (output.empty() || model_sha.size() != 40) {
             throw std::invalid_argument("--output and exact --model-sha are required");
         }
+        const fs::path cancel_signal_output =
+            output.parent_path() / "external_cancel_signal.json";
         std::signal(SIGINT, signal_handler);
         std::signal(SIGTERM, signal_handler);
 
@@ -1158,6 +1160,8 @@ int main(int argc, char** argv) {
         std::jthread binance_usdm_market_thread([&](std::stop_token token) { binance_usdm_market.run(token); });
 #endif
 
+        std::uint64_t status_tick = 0;
+        std::size_t drained_since_status = 0;
         while (!stopping.load(std::memory_order_relaxed)) {
             const auto drained = binance_ingress.drain_into(state, policy)
                 + coinbase_ingress.drain_into(state, policy)
@@ -1165,7 +1169,51 @@ int main(int argc, char** argv) {
                 + bybit_linear_ingress.drain_into(state, policy)
                 + deribit_ingress.drain_into(state, policy)
                 + binance_usdm_market_ingress.drain_into(state, policy);
+            drained_since_status += drained;
             const auto now_mono = monotonic_now_ns();
+            const auto cancel_signal = state.external_cancel_signal(now_mono);
+            const char* direction = cancel_signal.direction > 0 ? "UP"
+                : cancel_signal.direction < 0 ? "DOWN" : "NONE";
+            json::array stale_sides;
+            if (cancel_signal.direction > 0) {
+                stale_sides.emplace_back("YES_SELL");
+                stale_sides.emplace_back("NO_BUY");
+            } else if (cancel_signal.direction < 0) {
+                stale_sides.emplace_back("YES_BUY");
+                stale_sides.emplace_back("NO_SELL");
+            }
+            atomic_write(cancel_signal_output, {
+                {"schema", "polymarket_v7_btc_m5_external_cancel_live_signal_v1"},
+                {"rule_sha256", "9e8c7e6a1d7e4a87cd9977396bcbbb228f96b4e35e4a34e84e1514e9e9630254"},
+                {"code_sha", model_sha},
+                {"paper_only", true}, {"authenticated_execution", false},
+                {"real_order_submission", false}, {"receive_time_causal", true},
+                {"execution_authority", "SIGNAL_ONLY_ZERO_AUTHORITY"},
+                {"shock_source", "BINANCE_SPOT_TRADES"}, {"shock_window_ms", 100},
+                {"minimum_absolute_log_return_bp", 0.3},
+                {"confirmation_source", "COINBASE_SPOT_TOP_OF_BOOK"},
+                {"confirmation", "NON_OPPOSING"}, {"trigger_cooldown_ms", 250},
+                {"evaluation_tick_ms", 25},
+                {"evaluated_monotonic_ns", cancel_signal.evaluated_monotonic_ns},
+                {"trigger_monotonic_ns", cancel_signal.trigger_monotonic_ns},
+                {"last_trigger_monotonic_ns", cancel_signal.last_trigger_monotonic_ns},
+                {"binance_return_100ms_bp", cancel_signal.binance_return_100ms_bp},
+                {"coinbase_return_100ms_bp", cancel_signal.coinbase_return_100ms_bp},
+                {"history_valid", cancel_signal.history_valid != 0},
+                {"threshold_crossed", cancel_signal.threshold_crossed != 0},
+                {"confirmation_non_opposing", cancel_signal.confirmation_non_opposing != 0},
+                {"cooldown_blocked", cancel_signal.cooldown_blocked != 0},
+                {"direction", direction}, {"stale_sides", std::move(stale_sides)},
+                {"active", cancel_signal.active != 0},
+                {"active_quote_size_shares", 0.0},
+                {"mandatory_risk_cancel", false}, {"cancel_cost", 0.0},
+            });
+            if ((status_tick++ % 4U) != 0U) {
+                std::this_thread::sleep_for(std::chrono::milliseconds(25));
+                continue;
+            }
+            const auto drained_for_status = drained_since_status;
+            drained_since_status = 0;
             const auto snapshot = state.snapshot(now_mono, policy);
             TapeRecorderSnapshot tape_status;
             if (normalized_tape != nullptr) {
@@ -1219,7 +1267,7 @@ int main(int argc, char** argv) {
                 {"aggregate_trade_imbalance", snapshot.aggregate_trade_imbalance},
                 {"latest_input_receive_monotonic_ns", snapshot.latest_input_receive_monotonic_ns},
                 {"derivative_contexts", derivative_context_json(snapshot)},
-                {"drained_last_cycle", drained},
+                {"drained_last_cycle", drained_for_status},
                 {"normalized_snapshot_tape", tape_json(tape_status, normalized_tape != nullptr)},
                 {"normalized_event_tapes", {
                     {"binance_spot", tape_json(binance_event_tape ? binance_event_tape->snapshot() : TapeRecorderSnapshot{}, binance_event_tape != nullptr)},
@@ -1248,7 +1296,7 @@ int main(int argc, char** argv) {
                 {"binance_usdm", usdm_json(binance_usdm_observer.metrics())},
                 {"venues", std::move(venues)},
             });
-            std::this_thread::sleep_for(std::chrono::milliseconds(100));
+            std::this_thread::sleep_for(std::chrono::milliseconds(25));
         }
 
 #if !defined(__APPLE__)

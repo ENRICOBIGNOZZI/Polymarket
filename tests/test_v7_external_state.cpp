@@ -48,6 +48,24 @@ ExternalVenueEvent book(VenueId venue, std::uint64_t seq, std::int64_t receive_n
     return event;
 }
 
+ExternalVenueEvent trade(VenueId venue, std::uint64_t seq, std::int64_t receive_ns,
+                         double price, double size = 1.0, std::int8_t side = 1) {
+    ExternalVenueEvent event;
+    event.asset_handle = 500;
+    event.source_sequence = seq;
+    event.connection_epoch = 1;
+    event.venue = venue;
+    event.event_type = ExternalEventType::Trade;
+    event.exchange_event_ns = receive_ns - 10;
+    event.local_receive_monotonic_ns = receive_ns;
+    event.local_receive_wall_ns = receive_ns + 1'000;
+    event.trade_price = price;
+    event.trade_size = size;
+    event.trade_side = side;
+    event.healthy = 1;
+    return event;
+}
+
 ExternalVenueEvent derivative_context(VenueId venue, std::int64_t receive_ns) {
     ExternalVenueEvent event;
     event.asset_handle = 500;
@@ -193,6 +211,66 @@ int main() {
     late_trade.trade_side = 1;
     assert(book_freshness.on_venue_event(late_trade, short_age));
     assert(book_freshness.snapshot(320, short_age).valid == 0);
+
+    // The live external-cancel signal exactly mirrors the frozen research
+    // economics: Binance trade 100ms log-return >= 0.3bp, Coinbase top-of-book
+    // non-opposing confirmation, and a 250ms trigger cooldown. All times are
+    // local receive-monotonic times; no later event may confirm an earlier cut.
+    constexpr std::int64_t ms = 1'000'000LL;
+    const std::int64_t t0 = 1'000 * ms;
+    ExternalAssetState cancel_signal_state(500);
+    assert(cancel_signal_state.on_venue_event(
+        trade(VenueId::BinanceSpot, 1, t0, 100.0), policy));
+    assert(cancel_signal_state.on_venue_event(
+        book(VenueId::CoinbaseSpot, 1, t0, 99.99, 100.01, 1, 1), policy));
+    const std::int64_t t1 = t0 + 100 * ms;
+    assert(cancel_signal_state.on_venue_event(
+        trade(VenueId::BinanceSpot, 2, t1, 100.0 * std::exp(0.4 / 10'000.0)), policy));
+    assert(cancel_signal_state.on_venue_event(
+        book(VenueId::CoinbaseSpot, 2, t1, 100.0, 100.02, 1, 1), policy));
+    const auto positive_signal = cancel_signal_state.external_cancel_signal(t1);
+    assert(positive_signal.history_valid == 1);
+    assert(positive_signal.threshold_crossed == 1);
+    assert(positive_signal.confirmation_non_opposing == 1);
+    assert(positive_signal.direction == 1);
+    assert(positive_signal.active == 1);
+    assert(std::abs(positive_signal.binance_return_100ms_bp - 0.4) < 1e-6);
+
+    // A repeated evaluation of the same cut cannot create a duplicate trigger.
+    assert(cancel_signal_state.external_cancel_signal(t1).active == 0);
+    const std::int64_t t2 = t1 + 100 * ms;
+    assert(cancel_signal_state.on_venue_event(
+        trade(VenueId::BinanceSpot, 3, t2, 100.0 * std::exp(0.8 / 10'000.0)), policy));
+    assert(cancel_signal_state.on_venue_event(
+        book(VenueId::CoinbaseSpot, 3, t2, 100.01, 100.03, 1, 1), policy));
+    const auto blocked_signal = cancel_signal_state.external_cancel_signal(t2);
+    assert(blocked_signal.threshold_crossed == 1);
+    assert(blocked_signal.confirmation_non_opposing == 1);
+    assert(blocked_signal.cooldown_blocked == 1);
+    assert(blocked_signal.active == 0);
+
+    const std::int64_t t3 = t1 + 250 * ms;
+    assert(cancel_signal_state.on_venue_event(
+        trade(VenueId::BinanceSpot, 4, t3, 100.0 * std::exp(1.2 / 10'000.0)), policy));
+    assert(cancel_signal_state.on_venue_event(
+        book(VenueId::CoinbaseSpot, 4, t3, 100.02, 100.04, 1, 1), policy));
+    const auto released_signal = cancel_signal_state.external_cancel_signal(t3);
+    assert(released_signal.active == 1);
+    assert(released_signal.cooldown_blocked == 0);
+
+    ExternalAssetState opposed_signal_state(500);
+    assert(opposed_signal_state.on_venue_event(
+        trade(VenueId::BinanceSpot, 1, t0, 100.0), policy));
+    assert(opposed_signal_state.on_venue_event(
+        book(VenueId::CoinbaseSpot, 1, t0, 99.99, 100.01, 1, 1), policy));
+    assert(opposed_signal_state.on_venue_event(
+        trade(VenueId::BinanceSpot, 2, t1, 100.0 * std::exp(0.4 / 10'000.0)), policy));
+    assert(opposed_signal_state.on_venue_event(
+        book(VenueId::CoinbaseSpot, 2, t1, 99.98, 100.0, 1, 1), policy));
+    const auto opposed_signal = opposed_signal_state.external_cancel_signal(t1);
+    assert(opposed_signal.threshold_crossed == 1);
+    assert(opposed_signal.confirmation_non_opposing == 0);
+    assert(opposed_signal.active == 0);
 
     external.on_oracle_snapshot(recovered);
     auto with_oracle = external.snapshot(221, policy);

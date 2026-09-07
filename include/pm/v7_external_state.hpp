@@ -27,6 +27,21 @@ struct ExternalStatePolicy {
     double flow_alpha = 0.10;
 };
 
+struct ExternalCancelSignalSnapshot {
+    double binance_return_100ms_bp = 0.0;
+    double coinbase_return_100ms_bp = 0.0;
+    std::int64_t evaluated_monotonic_ns = 0;
+    std::int64_t trigger_monotonic_ns = 0;
+    std::int64_t last_trigger_monotonic_ns = 0;
+    std::int8_t direction = 0;
+    std::uint8_t history_valid = 0;
+    std::uint8_t confirmation_non_opposing = 0;
+    std::uint8_t threshold_crossed = 0;
+    std::uint8_t cooldown_blocked = 0;
+    std::uint8_t active = 0;
+    std::array<std::uint8_t, 3> reserved{};
+};
+
 struct CausalStateInputs {
     std::uint64_t pm_state_version = 0;
     std::uint64_t oracle_state_version = 0;
@@ -76,6 +91,10 @@ public:
     void on_oracle_snapshot(const OracleSnapshot& oracle) noexcept;
     [[nodiscard]] ExternalAssetSnapshot snapshot(std::int64_t now_ns,
                                                  const ExternalStatePolicy& policy) const noexcept;
+    [[nodiscard]] ExternalCancelSignalSnapshot external_cancel_signal(
+        std::int64_t evaluation_ns, double minimum_absolute_log_return_bp = 0.3,
+        std::int64_t shock_window_ns = 100'000'000LL,
+        std::int64_t cooldown_ns = 250'000'000LL) noexcept;
     [[nodiscard]] std::uint64_t state_version() const noexcept { return state_version_; }
 
 private:
@@ -132,6 +151,15 @@ private:
     [[nodiscard]] double lagged_return(std::int64_t now_ns,
                                        std::int64_t horizon_ns,
                                        double current_price) const noexcept;
+    template <std::size_t N>
+    [[nodiscard]] static bool venue_return_bp_at(
+        const std::array<PriceSample, N>& history, std::size_t count,
+        std::int64_t evaluation_ns, std::int64_t horizon_ns,
+        double* return_bp) noexcept;
+    template <std::size_t N>
+    static void record_venue_price_sample(
+        std::array<PriceSample, N>& history, std::size_t& head, std::size_t& count,
+        std::int64_t receive_ns, double price) noexcept;
     void record_price_sample(std::int64_t receive_ns, double price) noexcept;
 
     std::uint64_t asset_handle_ = 0;
@@ -141,6 +169,14 @@ private:
     std::array<PriceSample, 256> history_{};
     std::size_t history_head_ = 0;
     std::size_t history_count_ = 0;
+    std::array<PriceSample, 4096> binance_trade_history_{};
+    std::size_t binance_trade_history_head_ = 0;
+    std::size_t binance_trade_history_count_ = 0;
+    std::array<PriceSample, 4096> coinbase_book_history_{};
+    std::size_t coinbase_book_history_head_ = 0;
+    std::size_t coinbase_book_history_count_ = 0;
+    std::int64_t last_cancel_evaluation_ns_ = 0;
+    std::int64_t last_cancel_trigger_ns_ = 0;
     double ew_var_fast_ = 0.0;
     double ew_var_medium_ = 0.0;
     double ew_var_slow_ = 0.0;

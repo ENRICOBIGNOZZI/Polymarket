@@ -117,13 +117,38 @@ def cancel_evidence(report: dict[str, Any], signal: dict[str, Any]) -> tuple[Can
     )
     if not mature:
         reasons.append("EXTERNAL_CANCEL_FORWARD_EVIDENCE_PENDING")
-    signal_valid = (
-        mature
-        and signal.get("schema") == CANCEL_SIGNAL_SCHEMA
-        and signal.get("rule_sha256") == CANCEL_RULE_SHA
-        and signal.get("receive_time_causal") is True
-        and signal.get("active") is True
+    direction = str(signal.get("direction") or "NONE")
+    stale_sides = signal.get("stale_sides") if isinstance(signal.get("stale_sides"), list) else []
+    expected_stale = (
+        ["YES_SELL", "NO_BUY"] if direction == "UP"
+        else ["YES_BUY", "NO_SELL"] if direction == "DOWN"
+        else []
     )
+    signal_semantics_valid = (
+        signal.get("schema") == CANCEL_SIGNAL_SCHEMA
+        and signal.get("rule_sha256") == CANCEL_RULE_SHA
+        and signal.get("paper_only") is True
+        and signal.get("authenticated_execution") is False
+        and signal.get("real_order_submission") is False
+        and signal.get("execution_authority") == "SIGNAL_ONLY_ZERO_AUTHORITY"
+        and signal.get("receive_time_causal") is True
+        and signal.get("shock_source") == "BINANCE_SPOT_TRADES"
+        and int(signal.get("shock_window_ms") or 0) == 100
+        and abs(finite(signal.get("minimum_absolute_log_return_bp"), -1.0) - 0.3) <= 1e-12
+        and signal.get("confirmation_source") == "COINBASE_SPOT_TOP_OF_BOOK"
+        and signal.get("confirmation") == "NON_OPPOSING"
+        and int(signal.get("trigger_cooldown_ms") or 0) == 250
+        and int(signal.get("evaluation_tick_ms") or 0) == 25
+        and signal.get("history_valid") is True
+        and signal.get("threshold_crossed") is True
+        and signal.get("confirmation_non_opposing") is True
+        and signal.get("cooldown_blocked") is False
+        and direction in {"UP", "DOWN"}
+        and stale_sides == expected_stale
+        and int(signal.get("trigger_monotonic_ns") or 0) > 0
+        and int(signal.get("evaluated_monotonic_ns") or 0) >= int(signal.get("trigger_monotonic_ns") or 0)
+    )
+    signal_valid = mature and signal_semantics_valid and signal.get("active") is True
     if mature and not signal_valid:
         reasons.append("CANONICAL_EXTERNAL_CANCEL_SIGNAL_INACTIVE_OR_MISSING")
     probability_lower = wilson_lower(avoidable, episodes) if mature else 0.0
@@ -404,8 +429,10 @@ def process_cut(
     cancel_signal_path: Path | None, comparison_size_shares: float,
 ) -> dict[str, Any]:
     policy = load(external_policy_path)
-    cancel_report = load(cancel_report_path) if cancel_report_path else {}
-    cancel_signal = load(cancel_signal_path) if cancel_signal_path else {}
+    report_path = cancel_report_path or root / "control" / "btc_m5_external_cancel_forward_report.json"
+    signal_path = cancel_signal_path or root / "external_fair" / "external_cancel_signal.json"
+    cancel_report = load(report_path)
+    cancel_signal = load(signal_path)
     state, blockers, context = build_state(
         root, comparison_size_shares=comparison_size_shares,
         external_policy=policy, cancel_report=cancel_report, cancel_signal=cancel_signal,

@@ -610,7 +610,7 @@ v7_register_child "$!"
 mkdir -p "$RUN_ROOT/crypto_execution_alpha"
 python3 scripts/v7_crypto_execution_alpha_runtime.py \
   --run-root "$RUN_ROOT" --external-policy "$EXTERNAL_FAIR_POLICY" \
-  --comparison-size-shares 5 --loop --interval 0.25 \
+  --comparison-size-shares 5 --loop --interval 0.025 \
   >> "$RUN_ROOT/crypto_execution_alpha/runtime.log" 2>&1 &
 v7_register_child "$!"
 
@@ -756,7 +756,7 @@ v7_register_child "$!"
   done
 ) & v7_register_child "$!"
 
-v7_assert_registered_child_count 20
+v7_assert_registered_child_count 21
 write_runtime_status running false
 
 while [[ ! -e "$KILL" ]]; do

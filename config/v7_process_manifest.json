@@ -157,6 +157,7 @@
       "inputs": [],
       "outputs": [
         "external_fair/external_venues.json",
+        "external_fair/external_cancel_signal.json",
         "external_fair/external_venues.log"
       ],
       "dependencies": [
@@ -408,7 +409,9 @@
         "control/crypto_settlement_engine_snapshot.json",
         "external_fair/status.json",
         "external_fair/paper_router_status.json",
-        "micro_maker/execution_model.json"
+        "micro_maker/execution_model.json",
+        "external_fair/external_cancel_signal.json",
+        "control/btc_m5_external_cancel_forward_report.json"
       ],
       "outputs": [
         "crypto_execution_alpha/status.json",
