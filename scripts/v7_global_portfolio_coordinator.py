@@ -25,6 +25,7 @@ from v7_crypto_execution_alpha import (
     load_config as load_execution_alpha_config,
     select_crypto_markets,
 )
+from v7_maker_opportunity_bridge import build_maker_opportunities
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -298,6 +299,43 @@ def _execution_alpha_cut(
     return filtered, diagnostics
 
 
+def _selected_envelope(envelopes: list[dict[str, Any]], replay_key: Any) -> dict[str, Any] | None:
+    key = str(replay_key or "")
+    return next(
+        (row for row in envelopes if str(row.get("deterministic_replay_key") or "") == key),
+        None,
+    )
+
+
+def _publish_make_authorization(root: Path, decision: dict[str, Any], envelopes: list[dict[str, Any]]) -> None:
+    """Publish coordinator-owned PAPER intent; this does not simulate a fill."""
+    if (
+        decision.get("action") != "MAKE"
+        or decision.get("paper_exploration_authorized") is not True
+        or decision.get("new_risk_authorized") is not False
+        or not decision.get("selected_replay_key")
+    ):
+        return
+    envelope = _selected_envelope(envelopes, decision.get("selected_replay_key"))
+    if not isinstance(envelope, dict):
+        return
+    key = str(decision["selected_replay_key"])
+    identity = __import__("hashlib").sha256(key.encode()).hexdigest()
+    atomic_json(root / "micro_maker" / "authorized_make" / f"{identity}.json", {
+        "schema": "polymarket_v7_authorized_make_intent_v1",
+        "paper_only": True,
+        "authenticated_execution": False,
+        "real_order_submission": False,
+        "real_capital_at_risk": False,
+        "owner": "V7_GLOBAL_PORTFOLIO_COORDINATOR",
+        "execution_authority": "SIMULATED_PAPER_ONLY",
+        "selected_replay_key": key,
+        "decision": decision,
+        "opportunity_envelope": envelope,
+        "expires_at_ns": int(envelope.get("expires_at_ns") or 0),
+    })
+
+
 def process_cut(run_root: Path, *, now_ns: int | None = None) -> dict[str, Any]:
     root = Path(run_root)
     current_ns = int(now_ns if now_ns is not None else time.time_ns())
@@ -321,6 +359,24 @@ def process_cut(run_root: Path, *, now_ns: int | None = None) -> dict[str, Any]:
             envelopes.append(envelope_from_ingress(raw, context))
         except (OSError, json.JSONDecodeError, OpportunityError, ValueError) as exc:
             adapter_errors.append(f"ADAPTER_REJECTED:{index}:{exc}")
+
+    try:
+        maker_envelopes, maker_diagnostics = build_maker_opportunities(
+            root, now_ns=current_ns, repository_root=ROOT,
+        )
+        envelopes.extend(maker_envelopes)
+    except Exception as exc:  # maker fault containment: disable maker, preserve other engines
+        maker_envelopes = []
+        maker_diagnostics = {
+            "schema": "polymarket_v7_maker_opportunity_bridge_v1",
+            "paper_only": True,
+            "authenticated_execution": False,
+            "real_order_submission": False,
+            "state": "FAIL_CLOSED",
+            "reasons": [f"UNEXPECTED_BRIDGE_ERROR:{type(exc).__name__}:{exc}"],
+            "candidate_cells": 0,
+            "typed_make_opportunities": 0,
+        }
 
     execution_alpha_diagnostics: dict[str, Any] = {
         "schema": "polymarket_v7_crypto_execution_alpha_selection_v1",
@@ -370,6 +426,7 @@ def process_cut(run_root: Path, *, now_ns: int | None = None) -> dict[str, Any]:
             "exchange_source": capacity.get("depth_provenance", "UNKNOWN"),
         })
     decision["crypto_correlation_risk"] = aggregate_correlated_crypto_risk(crypto_exposures)
+    execution_alpha_diagnostics["maker_opportunity_bridge"] = maker_diagnostics
     decision["crypto_execution_alpha"] = execution_alpha_diagnostics
     decision.update({
         "paper_only": True,
@@ -378,6 +435,7 @@ def process_cut(run_root: Path, *, now_ns: int | None = None) -> dict[str, Any]:
         "real_capital_at_risk": False,
         "economic_engine_count": 2,
         "input_count": len(files),
+        "generated_maker_opportunity_count": len(maker_envelopes),
         "valid_envelope_count": len(envelopes),
         "selected_envelope_count": len(selected_envelopes),
         "adapter_error_count": len(adapter_errors),
@@ -393,7 +451,7 @@ def process_cut(run_root: Path, *, now_ns: int | None = None) -> dict[str, Any]:
         "real_order_submission": False,
         "real_capital_at_risk": False,
         "state": (
-            "IDLE_FAIL_CLOSED" if not files
+            "IDLE_FAIL_CLOSED" if not files and not maker_envelopes
             else "FAIL_CLOSED" if decision["action"] == "NOTHING"
             else "SAFE_ACTION"
         ),
@@ -409,7 +467,8 @@ def process_cut(run_root: Path, *, now_ns: int | None = None) -> dict[str, Any]:
     ):
         receipt_name = decision["selected_replay_key"].replace("/", "_") + ".json"
         atomic_json(root / "opportunities" / "receipts" / receipt_name, decision)
-    if files:
+    _publish_make_authorization(root, decision, selected_envelopes)
+    if files or maker_envelopes:
         append_jsonl(root / "opportunities" / "decisions.jsonl", decision)
     archive = root / "opportunities" / "archive"
     archive.mkdir(parents=True, exist_ok=True)
