@@ -324,7 +324,7 @@ def make_envelope(state: MarketState, report: dict[str, Any], context: dict[str,
             "settlement_semantic_hash": str(crypto.get("settlement_semantic_hash") or ""),
             "authority": "PAPER_EXPLORATION", "research_only": False,
         },
-        "action": "MAKE", "side": "BUY",
+        "action": "MAKE", "side": book.outcome,
         "decision_receive_timestamp_ns": decision_ns,
         "source_event_timestamps_ns": source_ns,
         "fair_value": {
@@ -333,6 +333,31 @@ def make_envelope(state: MarketState, report: dict[str, Any], context: dict[str,
             "upper": state.fair_upper_yes if book.outcome == "YES" else 1.0 - state.fair_lower_yes,
         },
         "conservative_expected_wealth_change": float(selected["conservative_expected_wealth_change"]),
+        "execution_alpha": {
+            "schema": "polymarket_v7_execution_alpha_packet_v1",
+            "action": "MAKE",
+            "evidence_status": "MATURE",
+            "fill_probability": {
+                "lower": float(selected["expected_fill_probability"]),
+                "point": max(
+                    float(selected["expected_fill_probability"]),
+                    min(1.0, float(state.maker.fill_probability_point)),
+                ),
+                "upper": max(
+                    float(selected["expected_fill_probability"]),
+                    min(1.0, float(state.maker.fill_probability_point)),
+                ),
+            },
+            "queue_ahead_shares": max(0.0, float(book.bid_size)),
+            "action_ev": {
+                "conservative": float(selected["conservative_expected_wealth_change"]),
+                "point": float(selected["point_expected_wealth_change"]),
+            },
+            "attribution": {name: float(attribution.get(name, 0.0)) for name in (
+                "settlement_alpha", "spread_capture", "rebate", "fees", "slippage",
+                "adverse_selection", "latency", "inventory", "unwind", "cancel", "capital",
+            )},
+        },
         "cost_vector": {
             "fee": max(0.0, -finite(attribution.get("fees"), 0.0)),
             "slippage": max(0.0, -finite(attribution.get("slippage"), 0.0)),

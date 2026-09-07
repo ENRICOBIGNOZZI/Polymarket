@@ -62,6 +62,45 @@ def _finite(value: Any, name: str) -> float:
     return number
 
 
+def _validate_execution_alpha(value: Any, *, action: str, expected_wealth_change: float) -> None:
+    packet = _mapping(value, "execution_alpha")
+    required = {
+        "schema", "action", "evidence_status", "fill_probability",
+        "queue_ahead_shares", "action_ev", "attribution",
+    }
+    if set(packet) != required or packet.get("schema") != "polymarket_v7_execution_alpha_packet_v1":
+        raise OpportunityError("execution_alpha_shape")
+    if packet.get("action") != action or packet.get("evidence_status") not in {"MATURE", "IMMATURE"}:
+        raise OpportunityError("execution_alpha_identity")
+    fill = _mapping(packet.get("fill_probability"), "execution_alpha_fill")
+    if set(fill) != {"lower", "point", "upper"}:
+        raise OpportunityError("execution_alpha_fill_shape")
+    lower = _finite(fill.get("lower"), "execution_alpha_fill_lower")
+    point = _finite(fill.get("point"), "execution_alpha_fill_point")
+    upper = _finite(fill.get("upper"), "execution_alpha_fill_upper")
+    if not 0.0 <= lower <= point <= upper <= 1.0:
+        raise OpportunityError("execution_alpha_fill_bounds")
+    if _finite(packet.get("queue_ahead_shares"), "execution_alpha_queue") < 0.0:
+        raise OpportunityError("execution_alpha_queue")
+    action_ev = _mapping(packet.get("action_ev"), "execution_alpha_action_ev")
+    if set(action_ev) != {"conservative", "point"}:
+        raise OpportunityError("execution_alpha_action_ev_shape")
+    conservative = _finite(action_ev.get("conservative"), "execution_alpha_conservative_ev")
+    _finite(action_ev.get("point"), "execution_alpha_point_ev")
+    tolerance = 1e-9 * max(1.0, abs(conservative), abs(expected_wealth_change))
+    if abs(conservative - expected_wealth_change) > tolerance:
+        raise OpportunityError("execution_alpha_ev_mismatch")
+    attribution = _mapping(packet.get("attribution"), "execution_alpha_attribution")
+    expected_attribution = {
+        "settlement_alpha", "spread_capture", "rebate", "fees", "slippage",
+        "adverse_selection", "latency", "inventory", "unwind", "cancel", "capital",
+    }
+    if set(attribution) != expected_attribution:
+        raise OpportunityError("execution_alpha_attribution_shape")
+    for name in expected_attribution:
+        _finite(attribution.get(name), f"execution_alpha_attribution:{name}")
+
+
 @dataclass(frozen=True)
 class OpportunityEnvelope:
     raw: dict[str, Any]
@@ -118,8 +157,11 @@ class OpportunityEnvelope:
             "inventory_delta", "portfolio_exposure_delta", "settlement", "eligible",
             "reasons", "deterministic_replay_key", "expires_at_ns",
         }
-        optional = {"exploration"}
-        if not isinstance(value, dict) or frozenset(value) not in {frozenset(required), frozenset(required | optional)}:
+        optional = {"exploration", "execution_alpha"}
+        if not isinstance(value, dict):
+            raise OpportunityError("field_partition")
+        fields = set(value)
+        if not required <= fields or not fields <= required | optional:
             raise OpportunityError("field_partition")
         if value.get("schema") != SCHEMA or value.get("version") != 1:
             raise OpportunityError("schema")
@@ -187,7 +229,16 @@ class OpportunityEnvelope:
         lower, point, upper = (_finite(fair[name], f"fair_value:{name}") for name in ("lower", "point", "upper"))
         if not 0.0 <= lower <= point <= upper <= 1.0:
             raise OpportunityError("fair_value_bounds")
-        _finite(value.get("conservative_expected_wealth_change"), "expected_wealth_change")
+        expected_wealth_change = _finite(
+            value.get("conservative_expected_wealth_change"), "expected_wealth_change"
+        )
+        if value.get("execution_alpha") is not None:
+            if engine_id != "CRYPTO_SETTLEMENT_ENGINE" or action not in {"MAKE", "TAKE", "CANCEL", "NOTHING"}:
+                raise OpportunityError("execution_alpha_action_or_engine")
+            _validate_execution_alpha(
+                value["execution_alpha"], action=action,
+                expected_wealth_change=expected_wealth_change,
+            )
         _finite(value.get("inventory_delta"), "inventory_delta")
         _finite(value.get("portfolio_exposure_delta"), "portfolio_exposure_delta")
         costs = _mapping(value.get("cost_vector"), "cost_vector")
