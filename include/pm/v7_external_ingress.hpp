@@ -7,6 +7,7 @@
 #include <atomic>
 #include <cstddef>
 #include <cstdint>
+#include <span>
 #include <string_view>
 #include <type_traits>
 
@@ -56,6 +57,13 @@ public:
     [[nodiscard]] std::size_t drain_into(
         ExternalAssetState& state,
         const ExternalStatePolicy& policy,
+        std::size_t max_events = kExternalIngressQueueCapacity) noexcept;
+
+    // Owner-thread primitive for causal merging across independent venue SPSC
+    // queues. Events are removed in each venue FIFO order; the caller may then
+    // sort the bounded batch by receive-time before mutating shared state.
+    [[nodiscard]] std::size_t drain_events(
+        std::span<ExternalVenueEvent> output,
         std::size_t max_events = kExternalIngressQueueCapacity) noexcept;
 
     void mark_disconnected(std::uint64_t connection_epoch) noexcept;

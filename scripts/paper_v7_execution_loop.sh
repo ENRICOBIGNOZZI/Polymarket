@@ -9,6 +9,9 @@ RUN_ROOT="${PM_V7_RUN_ROOT:-runs/paper_v7_live}"
 RECORDER="${PM_TRADE_RECORDER:-build/polymarket_v7_trade_recorder}"
 MARKOUT_OBSERVER="${PM_V7_MAKER_MARKOUT_OBSERVER:-build/polymarket_v7_maker_markout_observer}"
 FILLABILITY_OBSERVER="${PM_V7_MAKER_FILLABILITY_OBSERVER:-build/polymarket_v7_maker_fillability_observer}"
+AUTHORIZED_MAKER_EXECUTOR="${PM_V7_AUTHORIZED_MAKER_EXECUTOR:-build/polymarket_v7_authorized_maker_paper_executor}"
+CRYPTO_BOOK_OBSERVER="${PM_V7_CRYPTO_BOOK_OBSERVER:-build/polymarket_v7_crypto_book_observer}"
+EXTERNAL_CANCEL_TAPE_DUMP="${PM_V7_EXTERNAL_CANCEL_TAPE_DUMP:-build/polymarket_v7_research_external_cancel_tape_dump}"
 EXTERNAL_VENUE_RUNTIME="${PM_V7_EXTERNAL_VENUE_RUNTIME:-build/polymarket_v7_external_venue_runtime}"
 FAST_STRUCTURAL_RUNTIME="${PM_V7_FAST_STRUCTURAL_RUNTIME:-build/polymarket_v7_fast_structural_runtime}"
 MAKER_POLICY="${PM_V7_MAKER_POLICY:-config/v7_professional_market_maker.json}"
@@ -23,6 +26,7 @@ CRYPTO_SETTLEMENT_ENGINE_POLICY="${PM_V7_CRYPTO_SETTLEMENT_ENGINE_POLICY:-config
 CRYPTO_SETTLEMENT_MARKET_REGISTRY="${PM_V7_CRYPTO_SETTLEMENT_MARKET_REGISTRY:-config/v7_crypto_settlement_markets.json}"
 CRYPTO_SETTLEMENT_MODEL_REGISTRY="${PM_V7_CRYPTO_SETTLEMENT_MODEL_REGISTRY:-config/v7_crypto_settlement_model_registry.json}"
 ADAPTIVE_UNIVERSE_CONFIG="${PM_V7_ADAPTIVE_UNIVERSE_CONFIG:-config/v7_adaptive_universe.json}"
+EXTERNAL_CANCEL_EXPERIMENT_REGISTRY="${PM_V7_EXTERNAL_CANCEL_EXPERIMENT_REGISTRY:-config/v7_maker_fillability_experiments.json}"
 # The sole legacy-environment compatibility boundary.  Strategy and collector
 # code consume PM_V7_* names only; no value is logged or written to config.
 export PM_V7_BINANCE_API_KEY="${PM_V7_BINANCE_API_KEY:-${PORTFOLIO_BINANCE_API_KEY:-}}"
@@ -53,6 +57,18 @@ MAKER_MODEL_REGISTRY="$RUN_ROOT/micro_maker/model_registry.json"
 DURABLE_ROOT="${PM_V7_DURABLE_ROOT:-runs/paper_v7_durable}"
 MAKER_DURABLE_STORE="$DURABLE_ROOT/micro_maker/evidence.jsonl"
 MAKER_DURABLE_STATUS="$DURABLE_ROOT/micro_maker/status.json"
+EXTERNAL_CANCEL_RESEARCH_ROOT="$DURABLE_ROOT/external_cancel"
+EXTERNAL_CANCEL_BOOK_ROOT="$EXTERNAL_CANCEL_RESEARCH_ROOT/books/$SHA"
+EXTERNAL_CANCEL_RULE_SHA="$(python3 - "$EXTERNAL_CANCEL_EXPERIMENT_REGISTRY" <<'PY'
+import hashlib,json,sys
+value=json.load(open(sys.argv[1],encoding="utf-8"))
+row=next(x for x in value.get("experiments",[]) if x.get("experiment_id")=="btc-m5-external-cancel-overlay-forward-v1")
+rule=row["frozen_rule"]
+assert rule.get("retuning_after_freeze") is False
+raw=json.dumps(rule,sort_keys=True,separators=(",",":")).encode()
+print(hashlib.sha256(raw).hexdigest())
+PY
+)"
 PUBLIC_PROXY_PORT="${PM_V7_PUBLIC_PROXY_PORT:-19109}"
 PUBLIC_PROXY="http://127.0.0.1:$PUBLIC_PROXY_PORT"
 WS_PUBLIC_HOST="ws-subscriptions-clob.polymarket.com"
@@ -74,7 +90,7 @@ ALLOC="$CONTROL/allocations"
 KILL="$CONTROL/KILL"
 MAKER_FREEZE="$CONTROL/MAKER_FREEZE"
 LOCK="$CONTROL/runtime.lock"
-mkdir -p "$CONTROL" "$RUN_ROOT/ledger" "$RUN_ROOT/opportunities/inbox" "$RUN_ROOT/research/evidence" "$RUN_ROOT/market_data" "$RUN_ROOT/universe" "$RUN_ROOT/fast_structural" "$RUN_ROOT/structural_relations" "$RUN_ROOT/hard_arb" "$RUN_ROOT/micro_maker" "$RUN_ROOT/external" "$RUN_ROOT/external_fair" "$RUN_ROOT/learned_execution"
+mkdir -p "$CONTROL" "$RUN_ROOT/ledger" "$RUN_ROOT/opportunities/inbox" "$RUN_ROOT/research/evidence" "$RUN_ROOT/market_data" "$RUN_ROOT/universe" "$RUN_ROOT/fast_structural" "$RUN_ROOT/structural_relations" "$RUN_ROOT/hard_arb" "$RUN_ROOT/micro_maker" "$RUN_ROOT/external" "$RUN_ROOT/external_fair" "$RUN_ROOT/learned_execution" "$EXTERNAL_CANCEL_RESEARCH_ROOT" "$EXTERNAL_CANCEL_BOOK_ROOT"
 touch "$RUN_ROOT/ledger/execution.jsonl"
 
 # The runtime is not allowed to self-assert CI approval through an environment
@@ -288,6 +304,8 @@ v7_register_child "$!"
   --tape "$RUN_ROOT/external_fair/tapes/external_venues.${SHA}.$$.bin" --model-sha "$SHA" \
   --normalized-event-tape-dir "$RUN_ROOT/external_fair/normalized_events" \
   --raw-tape-dir "$RUN_ROOT/external_fair/raw" \
+  --external-cancel-signal "$RUN_ROOT/external_fair/external_cancel_signal.json" \
+  --external-cancel-rule-sha256 "$EXTERNAL_CANCEL_RULE_SHA" \
   >> "$RUN_ROOT/external_fair/external_venues.log" 2>&1 &
 v7_register_child "$!"
 
@@ -321,6 +339,25 @@ v7_register_child "$!"
 python3 scripts/v7_external_fair_paper_router.py \
   --run-root "$RUN_ROOT" --model-sha "$SHA" --config "$EXTERNAL_FAIR_POLICY" --interval 1 \
   >> "$RUN_ROOT/external_fair/paper_router.log" 2>&1 &
+v7_register_child "$!"
+
+# Zero-authority CLOB observer for the frozen BTC M5 external-cancel experiment.
+# Evidence lives outside the ephemeral run root and cannot publish opportunities.
+"$CRYPTO_BOOK_OBSERVER" \
+  --config "$CONFIG" --observed-run-root "$RUN_ROOT" \
+  --evidence-root "$EXTERNAL_CANCEL_BOOK_ROOT" \
+  --collector-sha "$SHA" --runtime-sha "$SHA" \
+  >> "$RUN_ROOT/research/external_cancel_book_observer.log" 2>&1 &
+v7_register_child "$!"
+
+# Durable forward evaluator. It consumes only closed tapes, accumulates episodes
+# across PAPER runs and writes an explicit false/true activation fact.
+python3 scripts/v7_external_cancel_forward_runtime.py \
+  --run-root "$RUN_ROOT" --research-root "$EXTERNAL_CANCEL_RESEARCH_ROOT" \
+  --registry "$EXTERNAL_CANCEL_EXPERIMENT_REGISTRY" \
+  --tape-dump "$EXTERNAL_CANCEL_TAPE_DUMP" --model-sha "$SHA" \
+  --interval 30 --loop \
+  >> "$RUN_ROOT/research/external_cancel_forward_runtime.log" 2>&1 &
 v7_register_child "$!"
 
 CONFIG_HASH="$(git hash-object "$CONFIG")"
@@ -455,6 +492,18 @@ fi
 if [[ ! -x "$FILLABILITY_OBSERVER" ]]; then
   echo "missing V7 maker exact-WS fillability observer executable: $FILLABILITY_OBSERVER" >&2
   exit 78
+fi
+if [[ ! -x "$AUTHORIZED_MAKER_EXECUTOR" ]]; then
+  echo "missing V7 coordinator-authorized maker PAPER executor: $AUTHORIZED_MAKER_EXECUTOR" >&2
+  exit 80
+fi
+if [[ ! -x "$CRYPTO_BOOK_OBSERVER" ]]; then
+  echo "missing zero-authority BTC M5 CLOB evidence observer: $CRYPTO_BOOK_OBSERVER" >&2
+  exit 81
+fi
+if [[ ! -x "$EXTERNAL_CANCEL_TAPE_DUMP" ]]; then
+  echo "missing frozen external-cancel tape decoder: $EXTERNAL_CANCEL_TAPE_DUMP" >&2
+  exit 82
 fi
 if [[ ! -x "$FAST_STRUCTURAL_RUNTIME" ]]; then
   echo "missing V7 Fast Structural PAPER runtime executable: $FAST_STRUCTURAL_RUNTIME" >&2
@@ -703,7 +752,16 @@ v7_register_child "$!"
     --rotation-min-projected-fill-probability "$MAKER_ROTATION_MIN_FILL" \
     --rotation-min-absolute-fill-improvement "$MAKER_ROTATION_MIN_ABSOLUTE_IMPROVEMENT" \
     --rotation-min-relative-fill-multiplier "$MAKER_ROTATION_MIN_RELATIVE_MULTIPLIER"
-) >> "$RUN_ROOT/micro_maker/cohort_supervisor.log" 2>&1 &
+ ) >> "$RUN_ROOT/micro_maker/cohort_supervisor.log" 2>&1 &
+v7_register_child "$!"
+
+# The only executor for coordinator-authorized maker MAKE intents.  It owns no
+# decision, capital, signer, broker or ledger authority: it revalidates the
+# receipt and feeds the existing pessimistic PAPER queue engine, then writes
+# lifecycle events only into the canonical ledger spool.
+"$AUTHORIZED_MAKER_EXECUTOR" \
+  --run-root "$RUN_ROOT" --model-sha "$SHA" \
+  >> "$RUN_ROOT/micro_maker/authorized_make_executor.log" 2>&1 &
 v7_register_child "$!"
 
 # Hourly exact-SHA evidence pack. Reports are observational only and remain
@@ -739,7 +797,7 @@ v7_register_child "$!"
   done
 ) & v7_register_child "$!"
 
-v7_assert_registered_child_count 20
+v7_assert_registered_child_count 23
 write_runtime_status running false
 
 while [[ ! -e "$KILL" ]]; do

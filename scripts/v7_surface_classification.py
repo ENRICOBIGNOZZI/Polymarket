@@ -309,7 +309,15 @@ def _ref_classification(root: Path, ref: str) -> tuple[str, str, str]:
         try:
             unique_count = int(_git(root, "rev-list", "--count", f"origin/main..{ref}").strip())
         except (subprocess.CalledProcessError, ValueError):
-            unique_count = 0
+            # Missing upstream-main materialization is epistemic uncertainty,
+            # never evidence that a branch has zero unique work.  Keep the
+            # surface pending canonical merge/audit rather than incorrectly
+            # declaring it redundant and deletable.
+            return (
+                "MERGE_INTO_CANONICAL",
+                "origin/main unavailable; branch content audit required",
+                "unique_commit_audit_pending",
+            )
         if unique_count:
             return (
                 "MERGE_INTO_CANONICAL",

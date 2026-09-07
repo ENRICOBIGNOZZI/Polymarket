@@ -51,7 +51,7 @@ def resolve(root: Path, manifest: dict[str, Any]) -> dict[str, Any]:
         raise ProcessManifestError("manifest_identity_or_safety")
     profiles = manifest.get("profiles")
     rows = manifest.get("processes")
-    if not isinstance(profiles, dict) or not isinstance(rows, list) or len(rows) != 22:
+    if not isinstance(profiles, dict) or not isinstance(rows, list) or len(rows) != 25:
         raise ProcessManifestError("profile_or_process_count")
     resolved: list[dict[str, Any]] = []
     ids: set[str] = set()
@@ -160,7 +160,7 @@ def resolve(root: Path, manifest: dict[str, Any]) -> dict[str, Any]:
         raise ProcessManifestError(f"long_lived_authority_counts:{authority_counts}")
     launcher = (root / manifest["launcher"]).read_text(encoding="utf-8")
     actual_logs = launcher_logs(launcher)
-    if len(actual_logs) != 20 or len(set(actual_logs)) != 20 or set(actual_logs) != declared_logs:
+    if len(actual_logs) != 23 or len(set(actual_logs)) != 23 or set(actual_logs) != declared_logs:
         raise ProcessManifestError("launcher_manifest_parity")
     return {
         "schema": "polymarket_v7_process_manifest_validation_v1",

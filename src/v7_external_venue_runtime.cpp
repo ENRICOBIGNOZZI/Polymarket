@@ -58,6 +58,14 @@ std::int64_t wall_now_ns() noexcept {
         std::chrono::system_clock::now().time_since_epoch()).count();
 }
 
+bool exact_lower_hex(std::string_view value, std::size_t length) noexcept {
+    if (value.size() != length) return false;
+    for (const char ch : value) {
+        if (!((ch >= '0' && ch <= '9') || (ch >= 'a' && ch <= 'f'))) return false;
+    }
+    return true;
+}
+
 void atomic_write(const fs::path& path, const json::object& value) {
     fs::create_directories(path.parent_path());
     const auto temporary = path.string() + ".tmp." + std::to_string(::getpid());
@@ -94,6 +102,60 @@ json::object tape_json(const TapeRecorderSnapshot& value, bool enabled) {
         {"dropped_payload_too_large", value.dropped_payload_too_large},
         {"dropped_queue_full", value.dropped_queue_full}, {"queued", value.queued},
         {"evidence_valid", value.evidence_valid != 0}, {"writer_healthy", value.writer_healthy != 0},
+    };
+}
+
+json::object external_cancel_signal_json(
+    const ExternalCancelSignalSnapshot& signal,
+    std::string_view model_sha,
+    std::string_view rule_sha256,
+    std::int64_t publish_monotonic_ns,
+    std::int64_t publish_wall_ns,
+    std::int64_t started_monotonic_ns) {
+    const char* direction = signal.direction > 0 ? "UP" : signal.direction < 0 ? "DOWN" : "NONE";
+    const char* stale_buy_outcome = signal.direction > 0 ? "NO" : signal.direction < 0 ? "YES" : "NONE";
+    const auto trigger_wall_ns = signal.trigger_receive_monotonic_ns > 0
+        && publish_monotonic_ns >= signal.trigger_receive_monotonic_ns
+        ? publish_wall_ns - (publish_monotonic_ns - signal.trigger_receive_monotonic_ns) : 0;
+    const auto valid_until_wall_ns = signal.valid_until_monotonic_ns > 0
+        && publish_monotonic_ns >= signal.trigger_receive_monotonic_ns
+        ? trigger_wall_ns + (signal.valid_until_monotonic_ns - signal.trigger_receive_monotonic_ns) : 0;
+    return {
+        {"schema", "polymarket_v7_btc_m5_external_cancel_live_signal_v1"},
+        {"experiment_id", "btc-m5-external-cancel-overlay-forward-v1"},
+        {"code_sha", model_sha},
+        {"rule_sha256", rule_sha256},
+        {"paper_only", true},
+        {"authenticated_execution", false},
+        {"real_order_submission", false},
+        {"real_money_authority", false},
+        {"automatic_promotion", false},
+        {"execution_authority", "ZERO_AUTHORITY_SIGNAL_ONLY"},
+        {"shock_source", "BINANCE_SPOT_TRADES"},
+        {"confirmation_source", "COINBASE_SPOT_TOP_OF_BOOK"},
+        {"confirmation", "NON_OPPOSING"},
+        {"shock_window_ms", 100},
+        {"minimum_absolute_log_return_bp", 0.30},
+        {"trigger_cooldown_ms", 250},
+        {"trigger_grid_ms", 25},
+        {"overlap_warmup_ms", 300},
+        {"maximum_live_signal_age_ms", 100},
+        {"signal_version", signal.signal_version},
+        {"started_monotonic_ns", started_monotonic_ns},
+        {"publish_monotonic_ns", publish_monotonic_ns},
+        {"publish_wall_ns", publish_wall_ns},
+        {"evaluated_grid_monotonic_ns", signal.evaluated_grid_monotonic_ns},
+        {"trigger_receive_monotonic_ns", signal.trigger_receive_monotonic_ns},
+        {"trigger_receive_wall_ns", trigger_wall_ns},
+        {"valid_until_monotonic_ns", signal.valid_until_monotonic_ns},
+        {"valid_until_wall_ns", valid_until_wall_ns},
+        {"binance_return_100ms_bp", signal.binance_return_100ms_bp},
+        {"coinbase_return_100ms_bp", signal.coinbase_return_100ms_bp},
+        {"direction", direction},
+        {"stale_buy_outcome", stale_buy_outcome},
+        {"supported_cancel_side", "BUY"},
+        {"confirmed_non_opposing", signal.confirmed_non_opposing != 0},
+        {"valid", signal.valid != 0},
     };
 }
 
@@ -1055,6 +1117,8 @@ int main(int argc, char** argv) {
         fs::path tape_path;
         fs::path raw_tape_dir;
         fs::path normalized_event_tape_dir;
+        fs::path external_cancel_signal_path;
+        std::string external_cancel_rule_sha256;
         std::string model_sha;
         for (int index = 1; index < argc; ++index) {
             const std::string argument = argv[index];
@@ -1062,11 +1126,21 @@ int main(int argc, char** argv) {
             else if (argument == "--tape" && index + 1 < argc) tape_path = argv[++index];
             else if (argument == "--raw-tape-dir" && index + 1 < argc) raw_tape_dir = argv[++index];
             else if (argument == "--normalized-event-tape-dir" && index + 1 < argc) normalized_event_tape_dir = argv[++index];
+            else if (argument == "--external-cancel-signal" && index + 1 < argc) external_cancel_signal_path = argv[++index];
+            else if (argument == "--external-cancel-rule-sha256" && index + 1 < argc) external_cancel_rule_sha256 = argv[++index];
             else if (argument == "--model-sha" && index + 1 < argc) model_sha = argv[++index];
             else throw std::invalid_argument("unknown or incomplete argument: " + argument);
         }
-        if (output.empty() || model_sha.size() != 40) {
+        if (output.empty() || !exact_lower_hex(model_sha, 40)) {
             throw std::invalid_argument("--output and exact --model-sha are required");
+        }
+        if (external_cancel_signal_path.empty()
+            != external_cancel_rule_sha256.empty()) {
+            throw std::invalid_argument("external cancel signal path and rule SHA must be supplied together");
+        }
+        if (!external_cancel_rule_sha256.empty()
+            && !exact_lower_hex(external_cancel_rule_sha256, 64)) {
+            throw std::invalid_argument("--external-cancel-rule-sha256 must be exact 64-hex");
         }
         std::signal(SIGINT, signal_handler);
         std::signal(SIGTERM, signal_handler);
@@ -1110,7 +1184,13 @@ int main(int argc, char** argv) {
         auto binance_usdm_market_raw_tape = raw_tape("binance-usdm-market");
         std::uint64_t tape_sequence = 0;
         ExternalStatePolicy policy;
+        policy.external_cancel_enabled = external_cancel_signal_path.empty() ? 0 : 1;
         ExternalAssetState state(asset_handle);
+        if (!external_cancel_signal_path.empty()) {
+            atomic_write(external_cancel_signal_path, external_cancel_signal_json(
+                ExternalCancelSignalSnapshot{}, model_sha, external_cancel_rule_sha256,
+                started_monotonic_ns, wall_now_ns(), started_monotonic_ns));
+        }
         ExternalVenueIngress binance_ingress(VenueId::BinanceSpot, asset_handle, binance_event_tape.get());
         ExternalVenueIngress coinbase_ingress(VenueId::CoinbaseSpot, asset_handle, coinbase_event_tape.get());
         ExternalVenueIngress bybit_ingress(VenueId::BybitSpot, asset_handle, bybit_event_tape.get());
@@ -1158,14 +1238,69 @@ int main(int argc, char** argv) {
         std::jthread binance_usdm_market_thread([&](std::stop_token token) { binance_usdm_market.run(token); });
 #endif
 
+        std::vector<ExternalVenueEvent> causal_spot_batch(
+            2 * kExternalIngressQueueCapacity);
+        std::uint64_t last_cancel_signal_version = 0;
+        std::uint8_t last_cancel_signal_valid = 0;
         while (!stopping.load(std::memory_order_relaxed)) {
-            const auto drained = binance_ingress.drain_into(state, policy)
-                + coinbase_ingress.drain_into(state, policy)
+            std::size_t causal_count = 0;
+            causal_count += binance_ingress.drain_events(std::span<ExternalVenueEvent>(
+                causal_spot_batch.data() + causal_count,
+                causal_spot_batch.size() - causal_count));
+            causal_count += coinbase_ingress.drain_events(std::span<ExternalVenueEvent>(
+                causal_spot_batch.data() + causal_count,
+                causal_spot_batch.size() - causal_count));
+            std::sort(
+                causal_spot_batch.begin(),
+                causal_spot_batch.begin() + static_cast<std::ptrdiff_t>(causal_count),
+                [](const ExternalVenueEvent& left, const ExternalVenueEvent& right) {
+                    if (left.local_receive_monotonic_ns != right.local_receive_monotonic_ns) {
+                        return left.local_receive_monotonic_ns < right.local_receive_monotonic_ns;
+                    }
+                    if (left.local_receive_wall_ns != right.local_receive_wall_ns) {
+                        return left.local_receive_wall_ns < right.local_receive_wall_ns;
+                    }
+                    if (left.venue != right.venue) {
+                        return static_cast<std::uint8_t>(left.venue)
+                            < static_cast<std::uint8_t>(right.venue);
+                    }
+                    return left.source_sequence < right.source_sequence;
+                });
+            std::size_t causal_index = 0;
+            while (causal_index < causal_count) {
+                const auto receive_ns = causal_spot_batch[causal_index]
+                    .local_receive_monotonic_ns;
+                if (policy.external_cancel_enabled != 0 && receive_ns > 1) {
+                    (void)state.advance_external_cancel_signal(receive_ns - 1, policy);
+                }
+                std::size_t group_end = causal_index;
+                while (group_end < causal_count
+                       && causal_spot_batch[group_end].local_receive_monotonic_ns
+                           == receive_ns) {
+                    (void)state.on_venue_event(causal_spot_batch[group_end], policy);
+                    ++group_end;
+                }
+                if (policy.external_cancel_enabled != 0) {
+                    (void)state.advance_external_cancel_signal(receive_ns, policy);
+                }
+                causal_index = group_end;
+            }
+            const auto drained = causal_count
                 + bybit_ingress.drain_into(state, policy)
                 + bybit_linear_ingress.drain_into(state, policy)
                 + deribit_ingress.drain_into(state, policy)
                 + binance_usdm_market_ingress.drain_into(state, policy);
             const auto now_mono = monotonic_now_ns();
+            const auto cancel_signal = state.advance_external_cancel_signal(now_mono, policy);
+            if (!external_cancel_signal_path.empty()
+                && (cancel_signal.signal_version != last_cancel_signal_version
+                    || cancel_signal.valid != last_cancel_signal_valid)) {
+                atomic_write(external_cancel_signal_path, external_cancel_signal_json(
+                    cancel_signal, model_sha, external_cancel_rule_sha256,
+                    now_mono, wall_now_ns(), started_monotonic_ns));
+                last_cancel_signal_version = cancel_signal.signal_version;
+                last_cancel_signal_valid = cancel_signal.valid;
+            }
             const auto snapshot = state.snapshot(now_mono, policy);
             TapeRecorderSnapshot tape_status;
             if (normalized_tape != nullptr) {
@@ -1218,6 +1353,9 @@ int main(int argc, char** argv) {
                 {"aggregate_ofi", snapshot.aggregate_ofi},
                 {"aggregate_trade_imbalance", snapshot.aggregate_trade_imbalance},
                 {"latest_input_receive_monotonic_ns", snapshot.latest_input_receive_monotonic_ns},
+                {"external_cancel_signal", external_cancel_signal_json(
+                    cancel_signal, model_sha, external_cancel_rule_sha256,
+                    now_mono, wall_now_ns(), started_monotonic_ns)},
                 {"derivative_contexts", derivative_context_json(snapshot)},
                 {"drained_last_cycle", drained},
                 {"normalized_snapshot_tape", tape_json(tape_status, normalized_tape != nullptr)},
@@ -1248,7 +1386,7 @@ int main(int argc, char** argv) {
                 {"binance_usdm", usdm_json(binance_usdm_observer.metrics())},
                 {"venues", std::move(venues)},
             });
-            std::this_thread::sleep_for(std::chrono::milliseconds(100));
+            std::this_thread::sleep_for(std::chrono::milliseconds(25));
         }
 
 #if !defined(__APPLE__)

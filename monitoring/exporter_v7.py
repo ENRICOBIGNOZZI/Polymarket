@@ -278,7 +278,7 @@ def health_reasons(snapshot: dict[str, Any], *, max_runtime_age: int = 180, max_
     if runtime.get("economic_new_risk_ready") is not False: reasons.append("economic_new_risk_must_remain_disabled")
     if runtime.get("authorized_alpha_actions") not in (None, []): reasons.append("authorized_alpha_actions_not_empty")
     if not _scope_valid(snapshot): reasons.append("live_algorithm_scope_missing_or_invalid")
-    if (snapshot.get("process_manifest") or {}).get("process_count") != 22: reasons.append("process_manifest_not_22_exact")
+    if (snapshot.get("process_manifest") or {}).get("process_count") != 25: reasons.append("process_manifest_not_25_exact")
     budgets = allocations.get("engine_budgets") if isinstance(allocations.get("engine_budgets"), dict) else {}
     if allocations.get("schema") != "polymarket_v7_capital_allocation_v3" or set(budgets) != set(LIVE_ALGORITHMS) or allocations.get("engine_count") != 2 or allocations.get("paper_only") is not True or allocations.get("authenticated_execution") is not False or allocations.get("real_order_submission") is not False or allocations.get("real_capital_at_risk") is not False or allocations.get("capital_authority_owner_count") != 1: reasons.append("two_engine_allocation_missing_or_unsafe")
     engines = portfolio.get("engines") if isinstance(portfolio.get("engines"), dict) else {}

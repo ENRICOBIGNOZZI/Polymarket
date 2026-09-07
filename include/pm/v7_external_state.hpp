@@ -25,6 +25,32 @@ struct ExternalStatePolicy {
     double vol_medium_alpha = 0.05;
     double vol_slow_alpha = 0.01;
     double flow_alpha = 0.10;
+
+    // Frozen BTC M5 external-cancel trigger. Disabled by default and enabled
+    // only by the canonical PAPER runtime after the checked-in experiment
+    // registry has been validated. These are execution semantics, not model
+    // parameters: changing them requires a new experiment identity.
+    std::uint8_t external_cancel_enabled = 0;
+    std::array<std::uint8_t, 7> external_cancel_reserved{};
+    std::int64_t external_cancel_shock_window_ns = 100'000'000LL;
+    std::int64_t external_cancel_grid_ns = 25'000'000LL;
+    std::int64_t external_cancel_cooldown_ns = 250'000'000LL;
+    std::int64_t external_cancel_warmup_ns = 300'000'000LL;
+    std::int64_t external_cancel_signal_ttl_ns = 100'000'000LL;
+    double external_cancel_min_abs_return_bp = 0.30;
+};
+
+struct ExternalCancelSignalSnapshot {
+    std::uint64_t signal_version = 0;
+    std::int64_t trigger_receive_monotonic_ns = 0;
+    std::int64_t evaluated_grid_monotonic_ns = 0;
+    std::int64_t valid_until_monotonic_ns = 0;
+    double binance_return_100ms_bp = 0.0;
+    double coinbase_return_100ms_bp = 0.0;
+    std::int8_t direction = 0; // +1 BTC up => stale NO BUY; -1 => stale YES BUY.
+    std::uint8_t confirmed_non_opposing = 0;
+    std::uint8_t valid = 0;
+    std::array<std::uint8_t, 5> reserved{};
 };
 
 struct CausalStateInputs {
@@ -76,6 +102,11 @@ public:
     void on_oracle_snapshot(const OracleSnapshot& oracle) noexcept;
     [[nodiscard]] ExternalAssetSnapshot snapshot(std::int64_t now_ns,
                                                  const ExternalStatePolicy& policy) const noexcept;
+    // Advances only the frozen receive-time trigger grid. The caller must feed
+    // Binance/Coinbase events in global receive-time order before advancing
+    // past their timestamps; otherwise the signal is not causally valid.
+    [[nodiscard]] ExternalCancelSignalSnapshot advance_external_cancel_signal(
+        std::int64_t now_ns, const ExternalStatePolicy& policy) noexcept;
     [[nodiscard]] std::uint64_t state_version() const noexcept { return state_version_; }
 
 private:
@@ -118,6 +149,12 @@ private:
         double price = 0.0;
     };
 
+    struct ExternalCancelGridSample {
+        std::int64_t grid_ns = 0;
+        double binance_trade_price = 0.0;
+        double coinbase_mid_price = 0.0;
+    };
+
     [[nodiscard]] static std::size_t venue_index(VenueId venue) noexcept;
     [[nodiscard]] static std::size_t derivative_context_index(VenueId venue) noexcept;
     [[nodiscard]] double compute_composite(std::int64_t now_ns,
@@ -133,6 +170,9 @@ private:
                                        std::int64_t horizon_ns,
                                        double current_price) const noexcept;
     void record_price_sample(std::int64_t receive_ns, double price) noexcept;
+    void record_external_cancel_grid_sample(std::int64_t grid_ns) noexcept;
+    [[nodiscard]] const ExternalCancelGridSample* external_cancel_grid_at_or_before(
+        std::int64_t grid_ns) const noexcept;
 
     std::uint64_t asset_handle_ = 0;
     std::uint64_t state_version_ = 0;
@@ -148,6 +188,18 @@ private:
     double aggregate_trade_imbalance_ = 0.0;
     double last_composite_ = 0.0;
     std::int64_t latest_receive_ns_ = 0;
+
+    PriceSample external_cancel_binance_trade_{};
+    PriceSample external_cancel_coinbase_mid_{};
+    std::int64_t external_cancel_first_binance_ns_ = 0;
+    std::int64_t external_cancel_first_coinbase_ns_ = 0;
+    std::int64_t external_cancel_grid_start_ns_ = 0;
+    std::int64_t external_cancel_next_grid_ns_ = 0;
+    std::int64_t external_cancel_last_trigger_ns_ = 0;
+    std::array<ExternalCancelGridSample, 32> external_cancel_grid_history_{};
+    std::size_t external_cancel_grid_head_ = 0;
+    std::size_t external_cancel_grid_count_ = 0;
+    ExternalCancelSignalSnapshot external_cancel_signal_{};
 };
 
 [[nodiscard]] CausalCut make_causal_cut(
@@ -158,6 +210,7 @@ private:
     const CausalStateInputs& inputs) noexcept;
 
 static_assert(std::is_trivially_copyable_v<ExternalStatePolicy>);
+static_assert(std::is_trivially_copyable_v<ExternalCancelSignalSnapshot>);
 static_assert(std::is_trivially_copyable_v<CausalStateInputs>);
 
 } // namespace pm::v7::external_fair

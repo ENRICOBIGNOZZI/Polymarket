@@ -21,6 +21,8 @@ from v7_surface_classification import (  # noqa: E402
 _DYNAMIC_REVIEW_REF_PREFIXES = (
     "ref:refs/heads/codex/v7-",
     "ref:refs/remotes/origin/codex/v7-",
+    "ref:refs/heads/feature/v7-",
+    "ref:refs/remotes/origin/feature/v7-",
     "ref:refs/heads/fix/v7-",
     "ref:refs/remotes/origin/fix/v7-",
     "ref:refs/heads/research/v7-",
@@ -48,7 +50,7 @@ _FORBIDDEN_REVIEW_CAPABILITIES = {
 
 
 def _dynamic_review_ref(surface_id: str) -> bool:
-    """Return true only for temporary V7 codex/fix/research/chore review branches."""
+    """Return true only for temporary fail-closed V7 review branches."""
     return surface_id.startswith(_DYNAMIC_REVIEW_REF_PREFIXES)
 
 
@@ -86,6 +88,7 @@ class SurfaceClassificationTests(unittest.TestCase):
             "workflow", "process", "runtime_output", "external_action",
         } <= types)
 
+
     def test_generator_reproduces_classification_at_same_repository_tree(self) -> None:
         generated = build_manifest(ROOT)
         expected = {
@@ -96,20 +99,29 @@ class SurfaceClassificationTests(unittest.TestCase):
             row["surface_id"]: row for row in generated["entries"]
         }
         for key, row in actual_rows.items():
-            value = (row["object_type"], row["classification"])
+            current = (row["object_type"], row["classification"])
             audited_key = next(
                 (candidate for candidate in equivalent_ref_surface_ids(key)
                  if candidate in expected),
                 None,
             )
             if audited_key is not None:
-                self.assertEqual(value, expected[audited_key], key)
+                self.assertEqual(current, expected[audited_key], key)
                 continue
             self.assertTrue(_dynamic_review_ref(key), key)
             _assert_fail_closed_review_ref(self, key, row)
+        expected_tracked = int(
+            self.value["coverage"]["tracked_or_intended_path_count"]
+        )
         for field, count in generated["coverage"].items():
-            if field != "ref_count":
-                self.assertEqual(count, self.value["coverage"][field])
+            if field == "ref_count":
+                continue
+            expected_count = (
+                expected_tracked
+                if field == "tracked_or_intended_path_count"
+                else self.value["coverage"][field]
+            )
+            self.assertEqual(count, expected_count, field)
 
     def test_every_current_ref_is_audited_or_fail_closed_dynamic_review_work(self) -> None:
         generated = build_manifest(ROOT)
@@ -131,14 +143,13 @@ class SurfaceClassificationTests(unittest.TestCase):
             if _dynamic_review_ref(key):
                 _assert_fail_closed_review_ref(self, key, row)
 
-    def test_review_namespaces_include_zero_authority_research_and_chore_branches(self) -> None:
-        for key in (
-            "ref:refs/heads/research/v7-example",
-            "ref:refs/remotes/origin/research/v7-example",
-            "ref:refs/heads/chore/v7-example",
-            "ref:refs/remotes/origin/chore/v7-example",
-        ):
-            self.assertTrue(_dynamic_review_ref(key))
+    def test_review_namespaces_are_fail_closed_and_explicit(self) -> None:
+        for namespace in ("feature", "research", "chore"):
+            for prefix in ("refs/heads", "refs/remotes/origin"):
+                self.assertTrue(_dynamic_review_ref(
+                    f"ref:{prefix}/{namespace}/v7-example"
+                ))
+        self.assertFalse(_dynamic_review_ref("ref:refs/heads/feature/unsafe"))
         self.assertFalse(_dynamic_review_ref("ref:refs/heads/research/unsafe"))
         self.assertFalse(_dynamic_review_ref("ref:refs/heads/chore/unsafe"))
 
