@@ -73,6 +73,12 @@ class V7PublicDnsRuntimeContractTests(unittest.TestCase):
         self.assertIn("SSL_set_tlsext_host_name", source)
         self.assertIn("ssl::host_name_verification(endpoint.host)", source)
         self.assertIn("ws.handshake(endpoint.host, endpoint.target)", source)
+        self.assertIn("asio::steady_timer stop_poll(io);", source)
+        self.assertIn("stop_poll.expires_after(std::chrono::milliseconds(50));", source)
+        self.assertIn("if (stop.stop_requested())", source)
+        self.assertIn("socket.shutdown(tcp::socket::shutdown_both, ignored);", source)
+        self.assertIn("socket.close(ignored);", source)
+        self.assertIn("io.stop();", source)
 
 
 if __name__ == "__main__":
