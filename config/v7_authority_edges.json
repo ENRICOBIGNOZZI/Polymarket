@@ -50,6 +50,15 @@
       "severity": "CONTROLLED",
       "reason": "exact-SHA cutover preparation verifies spool state without creating economic events",
       "canonical_replacement": "V7_OPERATOR_EXACT_SHA_PROMOTION"
+    },
+    {
+      "source": "src/v7_authorized_maker_paper_executor.cpp",
+      "classification": "MERGE_INTO_CANONICAL",
+      "runtime_reachability": "CANONICAL_RUNTIME",
+      "authority_mode": "COORDINATOR_RECEIPT_GATED_PAPER_EVENT_PRODUCER",
+      "severity": "CONTROLLED",
+      "reason": "consumes only coordinator-authorized MAKE intents, revalidates PAPER execution constraints, and emits simulated lifecycle events through the canonical spool without direct ledger or authenticated-order authority",
+      "canonical_replacement": "V7_CANONICAL_LEDGER"
     }
   ]
 }
