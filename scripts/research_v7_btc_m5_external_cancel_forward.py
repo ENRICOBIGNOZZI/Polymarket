@@ -8,8 +8,8 @@ from datetime import datetime,timezone
 from pathlib import Path
 from typing import Any,Iterable
 
-SCHEMA="polymarket_v7_btc_m5_external_cancel_forward_report_v2"
-EPISODE_SCHEMA="polymarket_v7_btc_m5_external_cancel_forward_episode_v2"
+SCHEMA="polymarket_v7_btc_m5_external_cancel_forward_report_v3"
+EPISODE_SCHEMA="polymarket_v7_btc_m5_external_cancel_forward_episode_v3"
 DEFAULT_EXPERIMENT_ID="btc-m5-external-cancel-overlay-forward-v1"
 PRIMARY_HORIZON_MS=500
 STRESS_KEY="queue_3x_cancel_200ms"
