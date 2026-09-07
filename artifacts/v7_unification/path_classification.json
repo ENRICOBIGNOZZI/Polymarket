@@ -3,7 +3,7 @@
   "coverage": {
     "external_blocker_count": 2,
     "process_count": 22,
-    "ref_count": 31,
+    "ref_count": 32,
     "runtime_output_count": 78,
     "schema_count": 22,
     "tracked_or_intended_path_count": 617,
@@ -12287,7 +12287,8 @@
       "current_imports_callers_readers_writers": {
         "analysis": "exact path/module references from tracked text; runtime linkage is separately enumerated",
         "static_references": [
-          "CMakeLists.txt"
+          "CMakeLists.txt",
+          "artifacts/v7_unification/path_classification.json"
         ]
       },
       "deletion_gate": "DELETE_ONLY_IF_INFORMATION_VALUE_IS_SUPERSEDED",
@@ -19138,27 +19139,29 @@
       ]
     },
     {
-      "canonical_replacement": "origin/main",
-      "classification": "DELETE_ACTIVE_LEGACY",
+      "canonical_replacement": "config/v7_authority_registry.json#CRYPTO_SETTLEMENT_ENGINE",
+      "classification": "MERGE_INTO_CANONICAL",
       "current_imports_callers_readers_writers": {
         "analysis": "exact path/module references from tracked text; runtime linkage is separately enumerated",
         "static_references": []
       },
-      "deletion_gate": "UNIQUE_COMMIT_AND_ACTIVE_REFERENCE_SCAN_CLEAN",
+      "deletion_gate": "UNIQUE_BEHAVIOR_EQUIVALENCE_AND_SINGLE_CONSUMER_PROVEN",
       "disposition_commit": null,
       "economic_authority": {
-        "capabilities": [],
+        "capabilities": [
+          "engine_component"
+        ],
         "executable": false,
-        "owner": null
+        "owner": "CRYPTO_SETTLEMENT_ENGINE"
       },
-      "final_disposition": "delete_after_gate",
-      "migration_status": "deletion_deferred_until_phase_9",
+      "final_disposition": "merge_then_delete_or_reclassify_canonical",
+      "migration_status": "unique_commit_audit_pending",
       "object_type": "branch_or_remote_ref",
       "path_or_ref": "refs/heads/research/v7-btc-m5-external-cancel-episode-producer-20260907",
       "rollback_artifact_tag": "v7-unification-pre-migration-8d9e8e60",
-      "snapshot_object_id": "7674dc8a1f210533e7fe10ddea311e50be5e4de6",
+      "snapshot_object_id": "fcc9a81becb32263606b28904c083c96f6de5750",
       "surface_id": "ref:refs/heads/research/v7-btc-m5-external-cancel-episode-producer-20260907",
-      "unique_behavior_data_contribution": "fully reachable from origin/main; redundant active ref",
+      "unique_behavior_data_contribution": "1 commit(s) not reachable from origin/main require content audit",
       "validation_tests": [
         "tests/test_v7_surface_classification.py"
       ]
@@ -19379,6 +19382,34 @@
       "snapshot_object_id": "7674dc8a1f210533e7fe10ddea311e50be5e4de6",
       "surface_id": "ref:refs/remotes/origin/main",
       "unique_behavior_data_contribution": "active migration or canonical upstream ref",
+      "validation_tests": [
+        "tests/test_v7_surface_classification.py"
+      ]
+    },
+    {
+      "canonical_replacement": "config/v7_authority_registry.json#CRYPTO_SETTLEMENT_ENGINE",
+      "classification": "MERGE_INTO_CANONICAL",
+      "current_imports_callers_readers_writers": {
+        "analysis": "exact path/module references from tracked text; runtime linkage is separately enumerated",
+        "static_references": []
+      },
+      "deletion_gate": "UNIQUE_BEHAVIOR_EQUIVALENCE_AND_SINGLE_CONSUMER_PROVEN",
+      "disposition_commit": null,
+      "economic_authority": {
+        "capabilities": [
+          "engine_component"
+        ],
+        "executable": false,
+        "owner": "CRYPTO_SETTLEMENT_ENGINE"
+      },
+      "final_disposition": "merge_then_delete_or_reclassify_canonical",
+      "migration_status": "unique_commit_audit_pending",
+      "object_type": "branch_or_remote_ref",
+      "path_or_ref": "refs/remotes/origin/research/v7-btc-m5-external-cancel-episode-producer-20260907",
+      "rollback_artifact_tag": "v7-unification-pre-migration-8d9e8e60",
+      "snapshot_object_id": "fcc9a81becb32263606b28904c083c96f6de5750",
+      "surface_id": "ref:refs/remotes/origin/research/v7-btc-m5-external-cancel-episode-producer-20260907",
+      "unique_behavior_data_contribution": "1 commit(s) not reachable from origin/main require content audit",
       "validation_tests": [
         "tests/test_v7_surface_classification.py"
       ]
@@ -22722,5 +22753,5 @@
   "real_capital_at_risk": false,
   "real_order_submission": false,
   "schema": "polymarket_v7_surface_classification_v1",
-  "source_snapshot_sha": "7674dc8a1f210533e7fe10ddea311e50be5e4de6"
+  "source_snapshot_sha": "fcc9a81becb32263606b28904c083c96f6de5750"
 }
