@@ -104,6 +104,15 @@ add_executable(polymarket_v7_maker_fillability_observer src/v7_maker_fillability
 target_link_libraries(polymarket_v7_maker_fillability_observer PRIVATE pm_v7_common pm_fast_arb pm_core)
 target_compile_options(polymarket_v7_maker_fillability_observer PRIVATE -Wall -Wextra -Wpedantic)
 
+# Receipt-gated PAPER executor. It never makes an economic decision and never
+# talks to authenticated endpoints: it consumes only coordinator-authorized
+# MAKE intents and reuses the canonical queue-aware MakerPaperMarketEngine plus
+# the fillability observer's public-trade tape.
+add_executable(polymarket_v7_authorized_maker_paper_executor
+  src/v7_authorized_maker_paper_executor.cpp)
+target_link_libraries(polymarket_v7_authorized_maker_paper_executor PRIVATE pm_v7_hft pm_json Threads::Threads)
+target_compile_options(polymarket_v7_authorized_maker_paper_executor PRIVATE -Wall -Wextra -Wpedantic)
+
 add_executable(polymarket_v7_external_venue_runtime src/v7_external_venue_runtime.cpp)
 target_link_libraries(polymarket_v7_external_venue_runtime PRIVATE pm_v7_external)
 target_compile_options(polymarket_v7_external_venue_runtime PRIVATE -Wall -Wextra -Wpedantic)
