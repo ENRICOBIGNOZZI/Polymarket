@@ -233,7 +233,7 @@ struct SelectionEvidence {
         || text(find_value(root, "model_sha")) != model_sha) {
         return result;
     }
-    result.generated_at_ms = integer(find_value(root, "generated_at_ms"));
+    result.generated_at_ms = integer(find_value(root, "timestamp_ms"));
     const auto* markets = child_array(root, "markets");
     if (markets == nullptr) return result;
     for (const auto& item : *markets) {

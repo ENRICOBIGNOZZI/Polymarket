@@ -56,7 +56,7 @@ def selection() -> dict:
         "real_order_submission": False,
         "model_sha": SHA,
         "source": "adaptive_universe_recent_flow",
-        "generated_at_ms": 1_000,
+        "timestamp_ms": 1_000,
         "markets": [{
             "market_id": "market-1",
             "event_id": "event-1",
@@ -219,8 +219,55 @@ def test_semantic_hash_mismatch_fails_closed() -> None:
         assert status["reasons"] == ["SETTLEMENT_SEMANTIC_HASH_MISMATCH"]
 
 
+def test_sell_cell_is_not_advertised_before_canonical_inventory_bridge() -> None:
+    with tempfile.TemporaryDirectory() as directory:
+        run_root = Path(directory)
+        setup_run(run_root)
+        value = selection()
+        quote = dict(value["markets"][0]["quote_opportunities"][0])
+        quote["quote_side"] = "SELL"
+        value["markets"][0]["quote_opportunities"] = [quote]
+        value["markets"][0]["authorized_execution_cells"] = [{
+            "outcome": "YES", "token_id": "yes-token", "quote_side": "SELL",
+            "action": "JOIN", "maximum_quote_shares": 5.0,
+        }]
+        write(run_root / "micro_maker/reward_selection.json", value)
+        with mock.patch.object(bridge, "require_context", return_value=context()):
+            rows, status = bridge.build_maker_opportunities(
+                run_root, now_ns=2_000_000_000, repository_root=ROOT,
+            )
+        assert rows == []
+        assert status["rejected"]["SELL_REQUIRES_CANONICAL_INVENTORY_BRIDGE"] == 1
+        assert status["supported_execution_sides"] == ["BUY"]
+
+
+def test_canonical_selector_timestamp_is_receive_time_causal_and_stale_fails_closed() -> None:
+    with tempfile.TemporaryDirectory() as directory:
+        run_root = Path(directory)
+        setup_run(run_root)
+        with mock.patch.object(bridge, "require_context", return_value=context()):
+            rows, _ = bridge.build_maker_opportunities(
+                run_root, now_ns=2_000_000_000, repository_root=ROOT,
+            )
+        assert len(rows) == 1
+        assert rows[0]["source_event_timestamps_ns"] == [1_000_000_000]
+        assert rows[0]["execution_alpha"]["feature_receive_timestamp_ns"] == 1_000_000_000
+
+        value = selection()
+        value["timestamp_ms"] = 1
+        write(run_root / "micro_maker/reward_selection.json", value)
+        with mock.patch.object(bridge, "require_context", return_value=context()):
+            rows, status = bridge.build_maker_opportunities(
+                run_root, now_ns=30_000_000_000, repository_root=ROOT,
+            )
+        assert rows == []
+        assert "MAKER_SELECTION_STALE_OR_NONCAUSAL" in status["reasons"]
+
+
 if __name__ == "__main__":
     test_mature_positive_cell_becomes_typed_make_opportunity()
     test_immature_fill_model_does_not_manufacture_make_authority()
     test_unverified_settlement_fair_fails_closed()
     test_semantic_hash_mismatch_fails_closed()
+    test_sell_cell_is_not_advertised_before_canonical_inventory_bridge()
+    test_canonical_selector_timestamp_is_receive_time_causal_and_stale_fails_closed()

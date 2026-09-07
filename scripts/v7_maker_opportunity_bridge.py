@@ -189,7 +189,7 @@ def _maker_cost_buffers(policy: dict[str, Any], group: dict[str, Any]) -> tuple[
 def _feature_packet(
     *, opportunity: dict[str, Any], fair_status: dict[str, Any], fill_band: tuple[float, float, float, str],
     group: dict[str, Any], action_ev_point: float, action_ev_conservative: float,
-    decision_ns: int, model_hash: str,
+    decision_ns: int, feature_receive_ns: int, model_hash: str,
 ) -> dict[str, Any]:
     lower_fill, point_fill, upper_fill, evidence_status = fill_band
     external = fair_status.get("external") if isinstance(fair_status.get("external"), dict) else {}
@@ -203,7 +203,7 @@ def _feature_packet(
         "schema": "polymarket_v7_execution_alpha_packet_v1",
         "model_id": "maker_execution_alpha_bridge_v1",
         "model_hash": model_hash,
-        "feature_receive_timestamp_ns": decision_ns,
+        "feature_receive_timestamp_ns": feature_receive_ns,
         "features": {
             "queue_ahead": _finite(opportunity.get("queue_ahead_shares")),
             "spread": spread,
@@ -271,6 +271,19 @@ def build_maker_opportunities(
         or not isinstance(selection.get("markets"), list)
     ):
         reasons.append("MAKER_SELECTION_NOT_READY")
+    selection_ts_ms = int(_finite(selection.get("timestamp_ms"), 0.0) or 0.0)
+    decision_ms = decision_ns // 1_000_000
+    refresh_seconds = max(1.0, _finite(
+        ((policy.get("market_selection") or {}).get("recent_flow") or {}).get(
+            "selector_refresh_seconds"), 5.0
+    ) or 5.0)
+    selection_max_age_ms = int(max(5_000.0, 3_000.0 * refresh_seconds))
+    if (
+        selection_ts_ms <= 0
+        or selection_ts_ms > decision_ms
+        or decision_ms - selection_ts_ms > selection_max_age_ms
+    ):
+        reasons.append("MAKER_SELECTION_STALE_OR_NONCAUSAL")
     if (
         model.get("schema") != MODEL_SCHEMA
         or model.get("paper_only") is not True
@@ -356,9 +369,14 @@ def build_maker_opportunities(
         outcome = str(cell.get("outcome") or "").upper()
         side = str(cell.get("quote_side") or "").upper()
         token = str(cell.get("token_id") or "")
+        if side != "BUY":
+            rejected["SELL_REQUIRES_CANONICAL_INVENTORY_BRIDGE"] = rejected.get(
+                "SELL_REQUIRES_CANONICAL_INVENTORY_BRIDGE", 0
+            ) + 1
+            continue
         price = _quote_price(opportunity, action)
         fair_triplet = _outcome_fair(fair, outcome)
-        if action not in {"JOIN", "IMPROVE1"} or side not in {"BUY", "SELL"} or price is None or fair_triplet is None:
+        if action not in {"JOIN", "IMPROVE1"} or side != "BUY" or price is None or fair_triplet is None:
             rejected["INVALID_QUOTE_CELL"] = rejected.get("INVALID_QUOTE_CELL", 0) + 1
             continue
         group = _model_group(model, action, outcome, side)
@@ -406,11 +424,11 @@ def build_maker_opportunities(
             opportunity=opportunity, fair_status=fair_status, fill_band=fill_band,
             group=group, action_ev_point=point_ev,
             action_ev_conservative=conservative_ev, decision_ns=decision_ns,
-            model_hash=model_hash,
+            feature_receive_ns=selection_ts_ms * 1_000_000, model_hash=model_hash,
         )
         identity = _stable_id(
             model_sha, market_status.get("market_id"), token, outcome, side, action,
-            f"{price:.8f}", selection.get("generated_at_ms"), model_hash,
+            f"{price:.8f}", selection_ts_ms, model_hash,
         )
         raw = {
             "schema": "polymarket_v7_opportunity_envelope_v1",
@@ -420,7 +438,7 @@ def build_maker_opportunities(
             "policy_hash": str(runtime.get("policy_hash") or ""),
             "run_id": str(runtime.get("run_id") or ""),
             "source_snapshot_identity": _stable_id(
-                "maker-bridge", selection.get("generated_at_ms"), model_hash,
+                "maker-bridge", selection_ts_ms, model_hash,
                 fair.get("probability_model_hash"), market_status.get("market_id"),
             ),
             "engine_id": "CRYPTO_SETTLEMENT_ENGINE",
@@ -433,7 +451,7 @@ def build_maker_opportunities(
             "action": "MAKE",
             "side": "YES" if outcome == "YES" else "NO",
             "decision_receive_timestamp_ns": decision_ns,
-            "source_event_timestamps_ns": [decision_ns],
+            "source_event_timestamps_ns": [selection_ts_ms * 1_000_000],
             "fair_value": {"lower": fair_triplet[0], "point": fair_triplet[1], "upper": fair_triplet[2]},
             "conservative_expected_wealth_change": conservative_ev,
             "cost_vector": {
@@ -533,4 +551,7 @@ def build_maker_opportunities(
         "model_hash": model_hash,
         "market_id": market_status.get("market_id"),
         "decision_timestamp_ns": decision_ns,
+        "selection_timestamp_ms": selection_ts_ms,
+        "supported_execution_sides": ["BUY"],
+        "inventory_bridge_state": "SELL_DISABLED_UNTIL_CANONICAL_INVENTORY_AUTHORITY",
     }
