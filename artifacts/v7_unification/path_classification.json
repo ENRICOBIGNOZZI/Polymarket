@@ -3,10 +3,10 @@
   "coverage": {
     "external_blocker_count": 2,
     "process_count": 22,
-    "ref_count": 18,
+    "ref_count": 31,
     "runtime_output_count": 78,
     "schema_count": 22,
-    "tracked_or_intended_path_count": 614,
+    "tracked_or_intended_path_count": 617,
     "workflow_count": 10
   },
   "entries": [
@@ -3163,6 +3163,7 @@
           ".github/workflows/v7-maker-fillability-evidence.yml",
           "artifacts/v7_unification/path_classification.json",
           "scripts/research_v7_btc_m5_external_cancel_forward.py",
+          "tests/test_research_v7_btc_m5_external_cancel_episode_build.py",
           "tests/test_research_v7_btc_m5_external_cancel_forward.py",
           "tests/test_v7_maker_fillability.py"
         ]
@@ -7855,6 +7856,36 @@
       "current_imports_callers_readers_writers": {
         "analysis": "exact path/module references from tracked text; runtime linkage is separately enumerated",
         "static_references": [
+          "artifacts/v7_unification/path_classification.json",
+          "tests/test_research_v7_btc_m5_external_cancel_episode_build.py"
+        ]
+      },
+      "deletion_gate": "DELETE_ONLY_IF_INFORMATION_VALUE_IS_SUPERSEDED",
+      "disposition_commit": null,
+      "economic_authority": {
+        "capabilities": [],
+        "executable": false,
+        "owner": null
+      },
+      "final_disposition": "retain_zero_authority",
+      "migration_status": "classified",
+      "object_type": "tracked_path",
+      "path_or_ref": "scripts/research_v7_btc_m5_external_cancel_episode_build.py",
+      "rollback_artifact_tag": "v7-unification-pre-migration-8d9e8e60",
+      "surface_id": "path:scripts/research_v7_btc_m5_external_cancel_episode_build.py",
+      "unique_behavior_data_contribution": "tracked repository behavior, evidence, test, configuration, or documentation",
+      "validation_tests": [
+        "tests/test_v7_surface_classification.py"
+      ]
+    },
+    {
+      "canonical_replacement": "config/v7_authority_registry.json#research_zero_authority_families",
+      "classification": "KEEP_ZERO_AUTHORITY_RESEARCH",
+      "current_imports_callers_readers_writers": {
+        "analysis": "exact path/module references from tracked text; runtime linkage is separately enumerated",
+        "static_references": [
+          "artifacts/v7_unification/path_classification.json",
+          "tests/test_research_v7_btc_m5_external_cancel_episode_build.py",
           "tests/test_research_v7_btc_m5_external_cancel_forward.py"
         ]
       },
@@ -12251,6 +12282,33 @@
       ]
     },
     {
+      "canonical_replacement": "config/v7_authority_registry.json#research_zero_authority_families",
+      "classification": "KEEP_ZERO_AUTHORITY_RESEARCH",
+      "current_imports_callers_readers_writers": {
+        "analysis": "exact path/module references from tracked text; runtime linkage is separately enumerated",
+        "static_references": [
+          "CMakeLists.txt"
+        ]
+      },
+      "deletion_gate": "DELETE_ONLY_IF_INFORMATION_VALUE_IS_SUPERSEDED",
+      "disposition_commit": null,
+      "economic_authority": {
+        "capabilities": [],
+        "executable": false,
+        "owner": null
+      },
+      "final_disposition": "retain_zero_authority",
+      "migration_status": "classified",
+      "object_type": "tracked_path",
+      "path_or_ref": "src/research_v7_external_cancel_tape_dump.cpp",
+      "rollback_artifact_tag": "v7-unification-pre-migration-8d9e8e60",
+      "surface_id": "path:src/research_v7_external_cancel_tape_dump.cpp",
+      "unique_behavior_data_contribution": "tracked repository behavior, evidence, test, configuration, or documentation",
+      "validation_tests": [
+        "tests/test_v7_surface_classification.py"
+      ]
+    },
+    {
       "canonical_replacement": "src/v7_binance_l2.cpp",
       "classification": "KEEP_CANONICAL",
       "current_imports_callers_readers_writers": {
@@ -13658,7 +13716,36 @@
       "classification": "KEEP_ZERO_AUTHORITY_RESEARCH",
       "current_imports_callers_readers_writers": {
         "analysis": "exact path/module references from tracked text; runtime linkage is separately enumerated",
-        "static_references": []
+        "static_references": [
+          "artifacts/v7_unification/path_classification.json"
+        ]
+      },
+      "deletion_gate": "DELETE_ONLY_IF_INFORMATION_VALUE_IS_SUPERSEDED",
+      "disposition_commit": null,
+      "economic_authority": {
+        "capabilities": [],
+        "executable": false,
+        "owner": null
+      },
+      "final_disposition": "retain_zero_authority",
+      "migration_status": "classified",
+      "object_type": "tracked_path",
+      "path_or_ref": "tests/test_research_v7_btc_m5_external_cancel_episode_build.py",
+      "rollback_artifact_tag": "v7-unification-pre-migration-8d9e8e60",
+      "surface_id": "path:tests/test_research_v7_btc_m5_external_cancel_episode_build.py",
+      "unique_behavior_data_contribution": "tracked repository behavior, evidence, test, configuration, or documentation",
+      "validation_tests": [
+        "tests/test_v7_surface_classification.py"
+      ]
+    },
+    {
+      "canonical_replacement": "config/v7_authority_registry.json#research_zero_authority_families",
+      "classification": "KEEP_ZERO_AUTHORITY_RESEARCH",
+      "current_imports_callers_readers_writers": {
+        "analysis": "exact path/module references from tracked text; runtime linkage is separately enumerated",
+        "static_references": [
+          "artifacts/v7_unification/path_classification.json"
+        ]
       },
       "deletion_gate": "DELETE_ONLY_IF_INFORMATION_VALUE_IS_SUPERSEDED",
       "disposition_commit": null,
@@ -18707,10 +18794,10 @@
       "final_disposition": "merge_then_delete_or_reclassify_canonical",
       "migration_status": "unique_commit_audit_pending",
       "object_type": "branch_or_remote_ref",
-      "path_or_ref": "refs/heads/research/v7-btc-m5-external-cancel-evaluator-20260907",
+      "path_or_ref": "refs/heads/codex/v7-gamma-keyset-pagination",
       "rollback_artifact_tag": "v7-unification-pre-migration-8d9e8e60",
-      "snapshot_object_id": "7a3804e98aac41c69ea94badd750b5c21e7a2345",
-      "surface_id": "ref:refs/heads/research/v7-btc-m5-external-cancel-evaluator-20260907",
+      "snapshot_object_id": "a2260d8c181d4aef101660c6daba48556235ee10",
+      "surface_id": "ref:refs/heads/codex/v7-gamma-keyset-pagination",
       "unique_behavior_data_contribution": "3 commit(s) not reachable from origin/main require content audit",
       "validation_tests": [
         "tests/test_v7_surface_classification.py"
@@ -18735,11 +18822,397 @@
       "final_disposition": "merge_then_delete_or_reclassify_canonical",
       "migration_status": "unique_commit_audit_pending",
       "object_type": "branch_or_remote_ref",
-      "path_or_ref": "refs/remotes/origin/codex/v7-active-paper-account-20260904",
+      "path_or_ref": "refs/heads/fix/v7-bounded-external-tapes-20260904",
       "rollback_artifact_tag": "v7-unification-pre-migration-8d9e8e60",
-      "snapshot_object_id": "28032752c9a1e25d421042068a5a481589329275",
-      "surface_id": "ref:refs/remotes/origin/codex/v7-active-paper-account-20260904",
-      "unique_behavior_data_contribution": "7 commit(s) not reachable from origin/main require content audit",
+      "snapshot_object_id": "f64de812f5ff8f1db2eecd4af72008f77cafa1a3",
+      "surface_id": "ref:refs/heads/fix/v7-bounded-external-tapes-20260904",
+      "unique_behavior_data_contribution": "2 commit(s) not reachable from origin/main require content audit",
+      "validation_tests": [
+        "tests/test_v7_surface_classification.py"
+      ]
+    },
+    {
+      "canonical_replacement": "config/v7_authority_registry.json#CRYPTO_SETTLEMENT_ENGINE",
+      "classification": "MERGE_INTO_CANONICAL",
+      "current_imports_callers_readers_writers": {
+        "analysis": "exact path/module references from tracked text; runtime linkage is separately enumerated",
+        "static_references": []
+      },
+      "deletion_gate": "UNIQUE_BEHAVIOR_EQUIVALENCE_AND_SINGLE_CONSUMER_PROVEN",
+      "disposition_commit": null,
+      "economic_authority": {
+        "capabilities": [
+          "engine_component"
+        ],
+        "executable": false,
+        "owner": "CRYPTO_SETTLEMENT_ENGINE"
+      },
+      "final_disposition": "merge_then_delete_or_reclassify_canonical",
+      "migration_status": "unique_commit_audit_pending",
+      "object_type": "branch_or_remote_ref",
+      "path_or_ref": "refs/heads/fix/v7-economic-forward-disk4-20260905",
+      "rollback_artifact_tag": "v7-unification-pre-migration-8d9e8e60",
+      "snapshot_object_id": "a74eb7c9dd5ea8637d2140a8dd2f6e0aafe947ff",
+      "surface_id": "ref:refs/heads/fix/v7-economic-forward-disk4-20260905",
+      "unique_behavior_data_contribution": "3 commit(s) not reachable from origin/main require content audit",
+      "validation_tests": [
+        "tests/test_v7_surface_classification.py"
+      ]
+    },
+    {
+      "canonical_replacement": "config/v7_authority_registry.json#CRYPTO_SETTLEMENT_ENGINE",
+      "classification": "MERGE_INTO_CANONICAL",
+      "current_imports_callers_readers_writers": {
+        "analysis": "exact path/module references from tracked text; runtime linkage is separately enumerated",
+        "static_references": []
+      },
+      "deletion_gate": "UNIQUE_BEHAVIOR_EQUIVALENCE_AND_SINGLE_CONSUMER_PROVEN",
+      "disposition_commit": null,
+      "economic_authority": {
+        "capabilities": [
+          "engine_component"
+        ],
+        "executable": false,
+        "owner": "CRYPTO_SETTLEMENT_ENGINE"
+      },
+      "final_disposition": "merge_then_delete_or_reclassify_canonical",
+      "migration_status": "unique_commit_audit_pending",
+      "object_type": "branch_or_remote_ref",
+      "path_or_ref": "refs/heads/fix/v7-freeze-experiment-surface-20260906",
+      "rollback_artifact_tag": "v7-unification-pre-migration-8d9e8e60",
+      "snapshot_object_id": "aafccaa37bb1a8ecf535a6856bb6967c6224640e",
+      "surface_id": "ref:refs/heads/fix/v7-freeze-experiment-surface-20260906",
+      "unique_behavior_data_contribution": "1 commit(s) not reachable from origin/main require content audit",
+      "validation_tests": [
+        "tests/test_v7_surface_classification.py"
+      ]
+    },
+    {
+      "canonical_replacement": "config/v7_authority_registry.json#CRYPTO_SETTLEMENT_ENGINE",
+      "classification": "MERGE_INTO_CANONICAL",
+      "current_imports_callers_readers_writers": {
+        "analysis": "exact path/module references from tracked text; runtime linkage is separately enumerated",
+        "static_references": []
+      },
+      "deletion_gate": "UNIQUE_BEHAVIOR_EQUIVALENCE_AND_SINGLE_CONSUMER_PROVEN",
+      "disposition_commit": null,
+      "economic_authority": {
+        "capabilities": [
+          "engine_component"
+        ],
+        "executable": false,
+        "owner": "CRYPTO_SETTLEMENT_ENGINE"
+      },
+      "final_disposition": "merge_then_delete_or_reclassify_canonical",
+      "migration_status": "unique_commit_audit_pending",
+      "object_type": "branch_or_remote_ref",
+      "path_or_ref": "refs/heads/fix/v7-incremental-evidence-20260905",
+      "rollback_artifact_tag": "v7-unification-pre-migration-8d9e8e60",
+      "snapshot_object_id": "bc154c3cf8425c8354d02237bab5647fe0cde504",
+      "surface_id": "ref:refs/heads/fix/v7-incremental-evidence-20260905",
+      "unique_behavior_data_contribution": "1 commit(s) not reachable from origin/main require content audit",
+      "validation_tests": [
+        "tests/test_v7_surface_classification.py"
+      ]
+    },
+    {
+      "canonical_replacement": "config/v7_authority_registry.json#CRYPTO_SETTLEMENT_ENGINE",
+      "classification": "MERGE_INTO_CANONICAL",
+      "current_imports_callers_readers_writers": {
+        "analysis": "exact path/module references from tracked text; runtime linkage is separately enumerated",
+        "static_references": []
+      },
+      "deletion_gate": "UNIQUE_BEHAVIOR_EQUIVALENCE_AND_SINGLE_CONSUMER_PROVEN",
+      "disposition_commit": null,
+      "economic_authority": {
+        "capabilities": [
+          "engine_component"
+        ],
+        "executable": false,
+        "owner": "CRYPTO_SETTLEMENT_ENGINE"
+      },
+      "final_disposition": "merge_then_delete_or_reclassify_canonical",
+      "migration_status": "unique_commit_audit_pending",
+      "object_type": "branch_or_remote_ref",
+      "path_or_ref": "refs/heads/fix/v7-ledger-causal-order-20260904",
+      "rollback_artifact_tag": "v7-unification-pre-migration-8d9e8e60",
+      "snapshot_object_id": "f64de812f5ff8f1db2eecd4af72008f77cafa1a3",
+      "surface_id": "ref:refs/heads/fix/v7-ledger-causal-order-20260904",
+      "unique_behavior_data_contribution": "2 commit(s) not reachable from origin/main require content audit",
+      "validation_tests": [
+        "tests/test_v7_surface_classification.py"
+      ]
+    },
+    {
+      "canonical_replacement": "config/v7_authority_registry.json#CRYPTO_SETTLEMENT_ENGINE",
+      "classification": "MERGE_INTO_CANONICAL",
+      "current_imports_callers_readers_writers": {
+        "analysis": "exact path/module references from tracked text; runtime linkage is separately enumerated",
+        "static_references": []
+      },
+      "deletion_gate": "UNIQUE_BEHAVIOR_EQUIVALENCE_AND_SINGLE_CONSUMER_PROVEN",
+      "disposition_commit": null,
+      "economic_authority": {
+        "capabilities": [
+          "engine_component"
+        ],
+        "executable": false,
+        "owner": "CRYPTO_SETTLEMENT_ENGINE"
+      },
+      "final_disposition": "merge_then_delete_or_reclassify_canonical",
+      "migration_status": "unique_commit_audit_pending",
+      "object_type": "branch_or_remote_ref",
+      "path_or_ref": "refs/heads/fix/v7-macos-clock-and-rejection-20260905",
+      "rollback_artifact_tag": "v7-unification-pre-migration-8d9e8e60",
+      "snapshot_object_id": "ee3cde88449e240a4594cc8d88cd309712406d90",
+      "surface_id": "ref:refs/heads/fix/v7-macos-clock-and-rejection-20260905",
+      "unique_behavior_data_contribution": "1 commit(s) not reachable from origin/main require content audit",
+      "validation_tests": [
+        "tests/test_v7_surface_classification.py"
+      ]
+    },
+    {
+      "canonical_replacement": "config/v7_authority_registry.json#CRYPTO_SETTLEMENT_ENGINE",
+      "classification": "MERGE_INTO_CANONICAL",
+      "current_imports_callers_readers_writers": {
+        "analysis": "exact path/module references from tracked text; runtime linkage is separately enumerated",
+        "static_references": []
+      },
+      "deletion_gate": "UNIQUE_BEHAVIOR_EQUIVALENCE_AND_SINGLE_CONSUMER_PROVEN",
+      "disposition_commit": null,
+      "economic_authority": {
+        "capabilities": [
+          "engine_component"
+        ],
+        "executable": false,
+        "owner": "CRYPTO_SETTLEMENT_ENGINE"
+      },
+      "final_disposition": "merge_then_delete_or_reclassify_canonical",
+      "migration_status": "unique_commit_audit_pending",
+      "object_type": "branch_or_remote_ref",
+      "path_or_ref": "refs/heads/fix/v7-maker-ledger-absence-proof-20260904",
+      "rollback_artifact_tag": "v7-unification-pre-migration-8d9e8e60",
+      "snapshot_object_id": "e65854c13b84dd37df17447184e083812d2050df",
+      "surface_id": "ref:refs/heads/fix/v7-maker-ledger-absence-proof-20260904",
+      "unique_behavior_data_contribution": "2 commit(s) not reachable from origin/main require content audit",
+      "validation_tests": [
+        "tests/test_v7_surface_classification.py"
+      ]
+    },
+    {
+      "canonical_replacement": "config/v7_authority_registry.json#CRYPTO_SETTLEMENT_ENGINE",
+      "classification": "MERGE_INTO_CANONICAL",
+      "current_imports_callers_readers_writers": {
+        "analysis": "exact path/module references from tracked text; runtime linkage is separately enumerated",
+        "static_references": []
+      },
+      "deletion_gate": "UNIQUE_BEHAVIOR_EQUIVALENCE_AND_SINGLE_CONSUMER_PROVEN",
+      "disposition_commit": null,
+      "economic_authority": {
+        "capabilities": [
+          "engine_component"
+        ],
+        "executable": false,
+        "owner": "CRYPTO_SETTLEMENT_ENGINE"
+      },
+      "final_disposition": "merge_then_delete_or_reclassify_canonical",
+      "migration_status": "unique_commit_audit_pending",
+      "object_type": "branch_or_remote_ref",
+      "path_or_ref": "refs/heads/fix/v7-paper-exploration-final-ledger-20260904",
+      "rollback_artifact_tag": "v7-unification-pre-migration-8d9e8e60",
+      "snapshot_object_id": "b3791810445661788222a018de32547cb8264542",
+      "surface_id": "ref:refs/heads/fix/v7-paper-exploration-final-ledger-20260904",
+      "unique_behavior_data_contribution": "1 commit(s) not reachable from origin/main require content audit",
+      "validation_tests": [
+        "tests/test_v7_surface_classification.py"
+      ]
+    },
+    {
+      "canonical_replacement": "config/v7_authority_registry.json#CRYPTO_SETTLEMENT_ENGINE",
+      "classification": "MERGE_INTO_CANONICAL",
+      "current_imports_callers_readers_writers": {
+        "analysis": "exact path/module references from tracked text; runtime linkage is separately enumerated",
+        "static_references": []
+      },
+      "deletion_gate": "UNIQUE_BEHAVIOR_EQUIVALENCE_AND_SINGLE_CONSUMER_PROVEN",
+      "disposition_commit": null,
+      "economic_authority": {
+        "capabilities": [
+          "engine_component"
+        ],
+        "executable": false,
+        "owner": "CRYPTO_SETTLEMENT_ENGINE"
+      },
+      "final_disposition": "merge_then_delete_or_reclassify_canonical",
+      "migration_status": "unique_commit_audit_pending",
+      "object_type": "branch_or_remote_ref",
+      "path_or_ref": "refs/heads/fix/v7-router-recoverable-kill-latch-20260906",
+      "rollback_artifact_tag": "v7-unification-pre-migration-8d9e8e60",
+      "snapshot_object_id": "3a8748acbf01eedf6f175acaad3fc2f03cffdcd2",
+      "surface_id": "ref:refs/heads/fix/v7-router-recoverable-kill-latch-20260906",
+      "unique_behavior_data_contribution": "1 commit(s) not reachable from origin/main require content audit",
+      "validation_tests": [
+        "tests/test_v7_surface_classification.py"
+      ]
+    },
+    {
+      "canonical_replacement": "config/v7_authority_registry.json#CRYPTO_SETTLEMENT_ENGINE",
+      "classification": "MERGE_INTO_CANONICAL",
+      "current_imports_callers_readers_writers": {
+        "analysis": "exact path/module references from tracked text; runtime linkage is separately enumerated",
+        "static_references": []
+      },
+      "deletion_gate": "UNIQUE_BEHAVIOR_EQUIVALENCE_AND_SINGLE_CONSUMER_PROVEN",
+      "disposition_commit": null,
+      "economic_authority": {
+        "capabilities": [
+          "engine_component"
+        ],
+        "executable": false,
+        "owner": "CRYPTO_SETTLEMENT_ENGINE"
+      },
+      "final_disposition": "merge_then_delete_or_reclassify_canonical",
+      "migration_status": "unique_commit_audit_pending",
+      "object_type": "branch_or_remote_ref",
+      "path_or_ref": "refs/heads/fix/v7-single-coordinator-owner-20260906",
+      "rollback_artifact_tag": "v7-unification-pre-migration-8d9e8e60",
+      "snapshot_object_id": "5ed16e3ed95362a403186ddcdd800c7739bbc7c3",
+      "surface_id": "ref:refs/heads/fix/v7-single-coordinator-owner-20260906",
+      "unique_behavior_data_contribution": "3 commit(s) not reachable from origin/main require content audit",
+      "validation_tests": [
+        "tests/test_v7_surface_classification.py"
+      ]
+    },
+    {
+      "canonical_replacement": "config/v7_authority_registry.json#CRYPTO_SETTLEMENT_ENGINE",
+      "classification": "MERGE_INTO_CANONICAL",
+      "current_imports_callers_readers_writers": {
+        "analysis": "exact path/module references from tracked text; runtime linkage is separately enumerated",
+        "static_references": []
+      },
+      "deletion_gate": "UNIQUE_BEHAVIOR_EQUIVALENCE_AND_SINGLE_CONSUMER_PROVEN",
+      "disposition_commit": null,
+      "economic_authority": {
+        "capabilities": [
+          "engine_component"
+        ],
+        "executable": false,
+        "owner": "CRYPTO_SETTLEMENT_ENGINE"
+      },
+      "final_disposition": "merge_then_delete_or_reclassify_canonical",
+      "migration_status": "unique_commit_audit_pending",
+      "object_type": "branch_or_remote_ref",
+      "path_or_ref": "refs/heads/fix/v7-stopped-zero-authority-drain-20260904",
+      "rollback_artifact_tag": "v7-unification-pre-migration-8d9e8e60",
+      "snapshot_object_id": "aadf8904ca1e512e678ed44fdf04d8246f31161b",
+      "surface_id": "ref:refs/heads/fix/v7-stopped-zero-authority-drain-20260904",
+      "unique_behavior_data_contribution": "2 commit(s) not reachable from origin/main require content audit",
+      "validation_tests": [
+        "tests/test_v7_surface_classification.py"
+      ]
+    },
+    {
+      "canonical_replacement": "refs/heads/main",
+      "classification": "KEEP_CANONICAL",
+      "current_imports_callers_readers_writers": {
+        "analysis": "exact path/module references from tracked text; runtime linkage is separately enumerated",
+        "static_references": []
+      },
+      "deletion_gate": "NONE_CANONICAL_SURFACE",
+      "disposition_commit": null,
+      "economic_authority": {
+        "capabilities": [],
+        "executable": false,
+        "owner": null
+      },
+      "final_disposition": "retain_canonical",
+      "migration_status": "classified",
+      "object_type": "branch_or_remote_ref",
+      "path_or_ref": "refs/heads/main",
+      "rollback_artifact_tag": "v7-unification-pre-migration-8d9e8e60",
+      "snapshot_object_id": "4e3d130e0bc3746284bfaf41acbad79f7435746f",
+      "surface_id": "ref:refs/heads/main",
+      "unique_behavior_data_contribution": "active migration or canonical upstream ref",
+      "validation_tests": [
+        "tests/test_v7_surface_classification.py"
+      ]
+    },
+    {
+      "canonical_replacement": "origin/main",
+      "classification": "DELETE_ACTIVE_LEGACY",
+      "current_imports_callers_readers_writers": {
+        "analysis": "exact path/module references from tracked text; runtime linkage is separately enumerated",
+        "static_references": []
+      },
+      "deletion_gate": "UNIQUE_COMMIT_AND_ACTIVE_REFERENCE_SCAN_CLEAN",
+      "disposition_commit": null,
+      "economic_authority": {
+        "capabilities": [],
+        "executable": false,
+        "owner": null
+      },
+      "final_disposition": "delete_after_gate",
+      "migration_status": "deletion_deferred_until_phase_9",
+      "object_type": "branch_or_remote_ref",
+      "path_or_ref": "refs/heads/research/v7-btc-m5-external-cancel-episode-producer-20260907",
+      "rollback_artifact_tag": "v7-unification-pre-migration-8d9e8e60",
+      "snapshot_object_id": "7674dc8a1f210533e7fe10ddea311e50be5e4de6",
+      "surface_id": "ref:refs/heads/research/v7-btc-m5-external-cancel-episode-producer-20260907",
+      "unique_behavior_data_contribution": "fully reachable from origin/main; redundant active ref",
+      "validation_tests": [
+        "tests/test_v7_surface_classification.py"
+      ]
+    },
+    {
+      "canonical_replacement": "config/v7_authority_registry.json#CRYPTO_SETTLEMENT_ENGINE",
+      "classification": "MERGE_INTO_CANONICAL",
+      "current_imports_callers_readers_writers": {
+        "analysis": "exact path/module references from tracked text; runtime linkage is separately enumerated",
+        "static_references": []
+      },
+      "deletion_gate": "UNIQUE_BEHAVIOR_EQUIVALENCE_AND_SINGLE_CONSUMER_PROVEN",
+      "disposition_commit": null,
+      "economic_authority": {
+        "capabilities": [
+          "engine_component"
+        ],
+        "executable": false,
+        "owner": "CRYPTO_SETTLEMENT_ENGINE"
+      },
+      "final_disposition": "merge_then_delete_or_reclassify_canonical",
+      "migration_status": "unique_commit_audit_pending",
+      "object_type": "branch_or_remote_ref",
+      "path_or_ref": "refs/heads/research/v7-btc-m5-external-cancel-freeze-20260906",
+      "rollback_artifact_tag": "v7-unification-pre-migration-8d9e8e60",
+      "snapshot_object_id": "479ee61b3f7f7400ff8bc6ba88fe7482ab25c4a7",
+      "surface_id": "ref:refs/heads/research/v7-btc-m5-external-cancel-freeze-20260906",
+      "unique_behavior_data_contribution": "1 commit(s) not reachable from origin/main require content audit",
+      "validation_tests": [
+        "tests/test_v7_surface_classification.py"
+      ]
+    },
+    {
+      "canonical_replacement": "refs/remotes/origin/HEAD",
+      "classification": "KEEP_CANONICAL",
+      "current_imports_callers_readers_writers": {
+        "analysis": "exact path/module references from tracked text; runtime linkage is separately enumerated",
+        "static_references": []
+      },
+      "deletion_gate": "NONE_CANONICAL_SURFACE",
+      "disposition_commit": null,
+      "economic_authority": {
+        "capabilities": [],
+        "executable": false,
+        "owner": null
+      },
+      "final_disposition": "retain_canonical",
+      "migration_status": "classified",
+      "object_type": "branch_or_remote_ref",
+      "path_or_ref": "refs/remotes/origin/HEAD",
+      "rollback_artifact_tag": "v7-unification-pre-migration-8d9e8e60",
+      "snapshot_object_id": "7674dc8a1f210533e7fe10ddea311e50be5e4de6",
+      "surface_id": "ref:refs/remotes/origin/HEAD",
+      "unique_behavior_data_contribution": "active migration or canonical upstream ref",
       "validation_tests": [
         "tests/test_v7_surface_classification.py"
       ]
@@ -18903,37 +19376,9 @@
       "object_type": "branch_or_remote_ref",
       "path_or_ref": "refs/remotes/origin/main",
       "rollback_artifact_tag": "v7-unification-pre-migration-8d9e8e60",
-      "snapshot_object_id": "4540c4b5a52185f3039d6fd59d02df55bdcaafb1",
+      "snapshot_object_id": "7674dc8a1f210533e7fe10ddea311e50be5e4de6",
       "surface_id": "ref:refs/remotes/origin/main",
       "unique_behavior_data_contribution": "active migration or canonical upstream ref",
-      "validation_tests": [
-        "tests/test_v7_surface_classification.py"
-      ]
-    },
-    {
-      "canonical_replacement": "config/v7_authority_registry.json#CRYPTO_SETTLEMENT_ENGINE",
-      "classification": "MERGE_INTO_CANONICAL",
-      "current_imports_callers_readers_writers": {
-        "analysis": "exact path/module references from tracked text; runtime linkage is separately enumerated",
-        "static_references": []
-      },
-      "deletion_gate": "UNIQUE_BEHAVIOR_EQUIVALENCE_AND_SINGLE_CONSUMER_PROVEN",
-      "disposition_commit": null,
-      "economic_authority": {
-        "capabilities": [
-          "engine_component"
-        ],
-        "executable": false,
-        "owner": "CRYPTO_SETTLEMENT_ENGINE"
-      },
-      "final_disposition": "merge_then_delete_or_reclassify_canonical",
-      "migration_status": "unique_commit_audit_pending",
-      "object_type": "branch_or_remote_ref",
-      "path_or_ref": "refs/remotes/origin/research/v7-btc-m5-external-cancel-evaluator-20260907",
-      "rollback_artifact_tag": "v7-unification-pre-migration-8d9e8e60",
-      "snapshot_object_id": "7a3804e98aac41c69ea94badd750b5c21e7a2345",
-      "surface_id": "ref:refs/remotes/origin/research/v7-btc-m5-external-cancel-evaluator-20260907",
-      "unique_behavior_data_contribution": "3 commit(s) not reachable from origin/main require content audit",
       "validation_tests": [
         "tests/test_v7_surface_classification.py"
       ]
@@ -22277,5 +22722,5 @@
   "real_capital_at_risk": false,
   "real_order_submission": false,
   "schema": "polymarket_v7_surface_classification_v1",
-  "source_snapshot_sha": "7a3804e98aac41c69ea94badd750b5c21e7a2345"
+  "source_snapshot_sha": "7674dc8a1f210533e7fe10ddea311e50be5e4de6"
 }
