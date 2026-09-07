@@ -1,0 +1,41 @@
+{
+  "asset": "BTC",
+  "authenticated_execution": false,
+  "automatic_promotion": false,
+  "frozen_candidate_count": 3,
+  "gating_threshold_grid": [
+    0.0,
+    0.002,
+    0.005,
+    0.01,
+    0.02,
+    0.04
+  ],
+  "horizon": "M5",
+  "new_generation_requires_new_forward_boundary": true,
+  "paper_exploration_probe_only_if_screen_passes": true,
+  "paper_only": true,
+  "production_gates_unchanged": true,
+  "real_order_submission": false,
+  "ridge_grid": [
+    0.01,
+    0.1,
+    1.0,
+    10.0,
+    100.0
+  ],
+  "schema": "polymarket_v7_data_evolution_24h_v1",
+  "screening": {
+    "bootstrap_draws": 10000,
+    "kill_global_brier_disadvantage": 0.1,
+    "maximum_global_brier_disadvantage": 0.05,
+    "minimum_forward_contracts": 120,
+    "minimum_forward_rows": 250,
+    "minimum_policy_actions": 20,
+    "minimum_positive_market_fraction": 0.55,
+    "primary_lcb_quantile": 0.025,
+    "require_zero_causality_failures": true,
+    "stress_cost_multiplier": 2.0
+  },
+  "window_seconds": 86400
+}
