@@ -55,6 +55,20 @@ def validate_parameters(artifact: FairModelArtifact) -> None:
     slope = finite(calibration.get("slope"))
     if intercept is None or slope is None or not 0.05 <= slope <= 5.0:
         raise ValueError("settlement_model_calibration_invalid")
+    for bucket in parameters.get("mean_uncertainty_by_tte", []) or []:
+        if not isinstance(bucket, dict):
+            raise ValueError("settlement_model_uncertainty_bucket")
+        minimum = finite(bucket.get("minimum_seconds")); maximum = finite(bucket.get("maximum_seconds"))
+        value = finite(bucket.get("mean_uncertainty_bps"))
+        if None in (minimum, maximum, value) or minimum > maximum or value < 0.0:
+            raise ValueError("settlement_model_uncertainty_bucket")
+    for bucket in parameters.get("calibration_by_tte", []) or []:
+        if not isinstance(bucket, dict):
+            raise ValueError("settlement_model_calibration_bucket")
+        minimum = finite(bucket.get("minimum_seconds")); maximum = finite(bucket.get("maximum_seconds"))
+        bi = finite(bucket.get("intercept")); bs = finite(bucket.get("slope"))
+        if None in (minimum, maximum, bi, bs) or minimum > maximum or not 0.05 <= bs <= 5.0:
+            raise ValueError("settlement_model_calibration_bucket")
 
 
 def runtime_features(
@@ -103,6 +117,27 @@ def _sigma_for_tte(parameters: dict[str, Any], tte: float) -> float:
     return float(parameters["default_residual_sigma_bps"])
 
 
+def _uncertainty_for_tte(parameters: dict[str, Any], tte: float) -> float:
+    for bucket in parameters.get("mean_uncertainty_by_tte", []) or []:
+        if not isinstance(bucket, dict):
+            continue
+        minimum = finite(bucket.get("minimum_seconds")); maximum = finite(bucket.get("maximum_seconds"))
+        value = finite(bucket.get("mean_uncertainty_bps"))
+        if None not in (minimum, maximum, value) and minimum <= tte <= maximum and value >= 0.0:
+            return float(value)
+    return float(parameters["mean_uncertainty_bps"])
+
+
+def _calibration_for_tte(parameters: dict[str, Any], tte: float) -> dict[str, Any]:
+    for bucket in parameters.get("calibration_by_tte", []) or []:
+        if not isinstance(bucket, dict):
+            continue
+        minimum = finite(bucket.get("minimum_seconds")); maximum = finite(bucket.get("maximum_seconds"))
+        if None not in (minimum, maximum) and minimum <= tte <= maximum:
+            return bucket
+    return parameters["calibration"]
+
+
 def _logistic_calibrate(probability: float, calibration: dict[str, Any]) -> float:
     probability = min(1.0 - 1e-9, max(1e-9, probability))
     value = float(calibration["intercept"]) + float(calibration["slope"]) * math.log(
@@ -125,12 +160,12 @@ def predict(artifact: FairModelArtifact, features: dict[str, Any]) -> dict[str, 
         mean_margin += float(parameters["coefficients"][name]) * standardized
     tte = float(features["tte_seconds"])
     sigma = _sigma_for_tte(parameters, tte)
-    mean_uncertainty = float(parameters["mean_uncertainty_bps"])
+    mean_uncertainty = _uncertainty_for_tte(parameters, tte)
     normal = lambda margin: 0.5 * math.erfc(-margin / sigma / math.sqrt(2.0))
     raw = min(1.0 - 1e-9, max(1e-9, normal(mean_margin)))
     lower_raw = min(1.0 - 1e-9, max(1e-9, normal(mean_margin - 1.64 * mean_uncertainty)))
     upper_raw = min(1.0 - 1e-9, max(1e-9, normal(mean_margin + 1.64 * mean_uncertainty)))
-    calibration = parameters["calibration"]
+    calibration = _calibration_for_tte(parameters, tte)
     probability = _logistic_calibrate(raw, calibration)
     lower = _logistic_calibrate(lower_raw, calibration)
     upper = _logistic_calibrate(upper_raw, calibration)
