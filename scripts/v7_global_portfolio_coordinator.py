@@ -9,6 +9,7 @@ and emits a deterministic fail-closed decision receipt.
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import os
 import time
@@ -212,6 +213,64 @@ def envelope_from_ingress(value: dict[str, Any], context: dict[str, Any]) -> dic
     return envelope.raw
 
 
+def _selected_envelope(
+    envelopes: list[dict[str, Any]], replay_key: Any,
+) -> dict[str, Any] | None:
+    key = str(replay_key or "")
+    if not key:
+        return None
+    return next(
+        (row for row in envelopes if str(row.get("deterministic_replay_key") or "") == key),
+        None,
+    )
+
+
+def _publish_make_authorization(
+    root: Path, decision: dict[str, Any], envelopes: list[dict[str, Any]],
+) -> bool:
+    """Project one coordinator receipt into the queue-aware PAPER maker worker."""
+    if (
+        decision.get("action") != "MAKE"
+        or decision.get("paper_exploration_authorized") is not True
+        or decision.get("new_risk_authorized") is not False
+        or decision.get("paper_only") is not True
+        or decision.get("authenticated_execution") is not False
+        or decision.get("real_order_submission") is not False
+        or decision.get("real_capital_at_risk") is not False
+    ):
+        return False
+    envelope = _selected_envelope(envelopes, decision.get("selected_replay_key"))
+    if not isinstance(envelope, dict):
+        return False
+    alpha = envelope.get("execution_alpha")
+    if (
+        envelope.get("engine_id") != "CRYPTO_SETTLEMENT_ENGINE"
+        or envelope.get("action") != "MAKE"
+        or not isinstance(alpha, dict)
+        or alpha.get("evidence_status") != "MATURE"
+        or float(envelope.get("conservative_expected_wealth_change") or 0.0) <= 0.0
+    ):
+        return False
+    replay_key = str(envelope.get("deterministic_replay_key") or "")
+    if not replay_key:
+        return False
+    identity = hashlib.sha256(replay_key.encode()).hexdigest()
+    atomic_json(root / "micro_maker" / "authorized_make" / f"{identity}.json", {
+        "schema": "polymarket_v7_authorized_make_intent_v1",
+        "paper_only": True,
+        "authenticated_execution": False,
+        "real_order_submission": False,
+        "real_capital_at_risk": False,
+        "owner": "V7_GLOBAL_PORTFOLIO_COORDINATOR",
+        "execution_authority": "SIMULATED_PAPER_ONLY",
+        "selected_replay_key": replay_key,
+        "decision": decision,
+        "opportunity_envelope": envelope,
+        "expires_at_ns": int(envelope.get("expires_at_ns") or 0),
+    })
+    return True
+
+
 def process_cut(run_root: Path, *, now_ns: int | None = None) -> dict[str, Any]:
     root = Path(run_root)
     current_ns = int(now_ns if now_ns is not None else time.time_ns())
@@ -290,6 +349,8 @@ def process_cut(run_root: Path, *, now_ns: int | None = None) -> dict[str, Any]:
     ):
         receipt_name = decision["selected_replay_key"].replace("/", "_") + ".json"
         atomic_json(root / "opportunities" / "receipts" / receipt_name, decision)
+    make_authorization_published = _publish_make_authorization(root, decision, envelopes)
+    decision["make_authorization_published"] = make_authorization_published
     if files:
         append_jsonl(root / "opportunities" / "decisions.jsonl", decision)
     archive = root / "opportunities" / "archive"

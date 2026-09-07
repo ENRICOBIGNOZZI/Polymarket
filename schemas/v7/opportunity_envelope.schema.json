@@ -373,6 +373,7 @@
       "required": [
         "schema",
         "action",
+        "outcome",
         "evidence_status",
         "fill_probability",
         "queue_ahead_shares",
@@ -389,6 +390,13 @@
             "TAKE",
             "CANCEL",
             "NOTHING"
+          ]
+        },
+        "outcome": {
+          "enum": [
+            "YES",
+            "NO",
+            "NONE"
           ]
         },
         "evidence_status": {

@@ -20,7 +20,7 @@ def main() -> None:
     assert "polymarket_v7_external_venue_runtime" in cmake
     assert 'source scripts/v7_process_runtime.sh' in launcher
     assert 'v7_register_child "$!"' in launcher
-    assert "v7_assert_registered_child_count 21" in launcher
+    assert "v7_assert_registered_child_count 23" in launcher
     assert "external_venues.json" in launcher
     assert '"external_cancel_signal.json"' in source
     assert '"shock_window_ms", 100' in source

@@ -94,7 +94,52 @@ def test_component_candidate_is_typed_by_temporary_adapter_and_forced_to_nothing
         assert decision["adapter_error_count"] == 0
 
 
+def test_positive_mature_make_publishes_one_receipt_gated_paper_authorization() -> None:
+    with tempfile.TemporaryDirectory() as directory:
+        root = Path(directory)
+        value = envelope(action="MAKE", ev=1.25, key="maker-paper", authority="PAPER_EXPLORATION")
+        value["execution_alpha"] = {
+            "schema": "polymarket_v7_execution_alpha_packet_v1",
+            "action": "MAKE", "outcome": "YES", "evidence_status": "MATURE",
+            "fill_probability": {"lower": 0.4, "point": 0.5, "upper": 0.6},
+            "queue_ahead_shares": 12.0,
+            "action_ev": {"conservative": 1.25, "point": 1.5},
+            "attribution": {
+                "settlement_alpha": 1.25, "spread_capture": 0.0, "rebate": 0.0,
+                "fees": 0.0, "slippage": 0.0, "adverse_selection": 0.0,
+                "latency": 0.0, "inventory": 0.0, "unwind": 0.0,
+                "cancel": 0.0, "capital": 0.0,
+            },
+        }
+        write(root / "opportunities/inbox/make.json", value)
+        status = process_cut(root, now_ns=150)
+        decision = status["last_decision"]
+        assert decision["action"] == "MAKE"
+        assert decision["paper_exploration_authorized"] is True
+        assert decision["new_risk_authorized"] is False
+        files = list((root / "micro_maker/authorized_make").glob("*.json"))
+        assert len(files) == 1
+        authorization = json.loads(files[0].read_text())
+        assert authorization["owner"] == "V7_GLOBAL_PORTFOLIO_COORDINATOR"
+        assert authorization["execution_authority"] == "SIMULATED_PAPER_ONLY"
+        assert authorization["selected_replay_key"] == "maker-paper"
+        assert authorization["opportunity_envelope"]["execution_alpha"]["outcome"] == "YES"
+
+
+def test_take_never_publishes_maker_authorization() -> None:
+    with tempfile.TemporaryDirectory() as directory:
+        root = Path(directory)
+        value = envelope(action="TAKE", ev=1.0, key="take-paper", authority="PAPER_EXPLORATION")
+        write(root / "opportunities/inbox/take.json", value)
+        status = process_cut(root, now_ns=150)
+        assert status["last_decision"]["action"] == "TAKE"
+        assert not (root / "micro_maker/authorized_make").exists()
+
+
 if __name__ == "__main__":
     test_one_consumer_compares_both_engines_but_cannot_authorize_new_risk()
     test_cancel_preempts_and_is_the_only_actionable_safe_output()
     test_untyped_compatibility_candidate_fails_closed_and_is_archived()
+    test_component_candidate_is_typed_by_temporary_adapter_and_forced_to_nothing()
+    test_positive_mature_make_publishes_one_receipt_gated_paper_authorization()
+    test_take_never_publishes_maker_authorization()

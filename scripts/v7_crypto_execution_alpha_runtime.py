@@ -336,6 +336,7 @@ def make_envelope(state: MarketState, report: dict[str, Any], context: dict[str,
         "execution_alpha": {
             "schema": "polymarket_v7_execution_alpha_packet_v1",
             "action": "MAKE",
+            "outcome": book.outcome,
             "evidence_status": "MATURE",
             "fill_probability": {
                 "lower": float(selected["expected_fill_probability"]),
@@ -463,6 +464,25 @@ def process_cut(
         external_policy=policy, cancel_report=cancel_report, cancel_signal=cancel_signal,
     )
     output_root = root / "crypto_execution_alpha"
+    if state is not None:
+        runtime_state = load(output_root / "state.json")
+        selection_identity = ":".join((
+            state.market_id, state.event_id, state.yes.token_id, state.no.token_id,
+        ))
+        if runtime_state.get("fillability_selection_identity") != selection_identity:
+            atomic_json(output_root / "btc_m5_fillability_selection.json", {
+                "schema": "polymarket_v7_crypto_execution_alpha_fillability_selection_v1",
+                "timestamp_ms": time.time_ns() // 1_000_000,
+                "model_sha": str(context["runtime"].get("model_sha") or ""),
+                "paper_only": True, "authenticated_execution": False,
+                "real_order_submission": False, "execution_authority": False,
+                "markets": [{
+                    "market_id": state.market_id, "event_id": state.event_id,
+                    "yes_token": state.yes.token_id, "no_token": state.no.token_id,
+                }],
+            })
+            runtime_state["fillability_selection_identity"] = selection_identity
+            atomic_json(output_root / "state.json", runtime_state)
     if state is None:
         status = {
             "schema": STATUS_SCHEMA, "timestamp_ns": time.time_ns(),

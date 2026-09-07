@@ -3343,6 +3343,7 @@ class PaperRouter:
                     "token_id": token_id,
                     "best_bid": book.bids[0][0], "best_ask": book.asks[0][0],
                     "best_bid_size": book.bids[0][1], "best_ask_size": book.asks[0][1],
+                    "tick_size": book.tick_size, "min_order_size": book.min_order_size,
                     "exchange_ts_ms": book.exchange_ts_ms,
                     "receive_ts_ms": book.receive_ts_ms,
                     "snapshot_id": book.snapshot_id,

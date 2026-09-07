@@ -9,6 +9,7 @@ RUN_ROOT="${PM_V7_RUN_ROOT:-runs/paper_v7_live}"
 RECORDER="${PM_TRADE_RECORDER:-build/polymarket_v7_trade_recorder}"
 MARKOUT_OBSERVER="${PM_V7_MAKER_MARKOUT_OBSERVER:-build/polymarket_v7_maker_markout_observer}"
 FILLABILITY_OBSERVER="${PM_V7_MAKER_FILLABILITY_OBSERVER:-build/polymarket_v7_maker_fillability_observer}"
+AUTHORIZED_MAKER_PAPER_EXECUTOR="${PM_V7_AUTHORIZED_MAKER_PAPER_EXECUTOR:-build/polymarket_v7_authorized_maker_paper_executor}"
 EXTERNAL_VENUE_RUNTIME="${PM_V7_EXTERNAL_VENUE_RUNTIME:-build/polymarket_v7_external_venue_runtime}"
 FAST_STRUCTURAL_RUNTIME="${PM_V7_FAST_STRUCTURAL_RUNTIME:-build/polymarket_v7_fast_structural_runtime}"
 MAKER_POLICY="${PM_V7_MAKER_POLICY:-config/v7_professional_market_maker.json}"
@@ -456,6 +457,10 @@ if [[ ! -x "$FILLABILITY_OBSERVER" ]]; then
   echo "missing V7 maker exact-WS fillability observer executable: $FILLABILITY_OBSERVER" >&2
   exit 78
 fi
+if [[ ! -x "$AUTHORIZED_MAKER_PAPER_EXECUTOR" ]]; then
+  echo "missing V7 authorized maker PAPER executor executable: $AUTHORIZED_MAKER_PAPER_EXECUTOR" >&2
+  exit 81
+fi
 if [[ ! -x "$FAST_STRUCTURAL_RUNTIME" ]]; then
   echo "missing V7 Fast Structural PAPER runtime executable: $FAST_STRUCTURAL_RUNTIME" >&2
   exit 79
@@ -614,6 +619,30 @@ python3 scripts/v7_crypto_execution_alpha_runtime.py \
   >> "$RUN_ROOT/crypto_execution_alpha/runtime.log" 2>&1 &
 v7_register_child "$!"
 
+# Dedicated BTC M5 public-trade evidence lane for coordinator-authorized MAKE.
+# It reuses the canonical fillability observer binary but writes to a separate
+# zero-authority evidence directory and hot-reloads on each 5-minute contract roll.
+mkdir -p "$RUN_ROOT/crypto_execution_alpha/fillability"
+(
+  while [[ ! -e "$KILL" ]] && [[ ! -s "$RUN_ROOT/crypto_execution_alpha/btc_m5_fillability_selection.json" ]]; do sleep 0.1; done
+  [[ ! -e "$KILL" ]] || exit 0
+  exec "$FILLABILITY_OBSERVER" \
+    --config "$CONFIG" \
+    --selection "$RUN_ROOT/crypto_execution_alpha/btc_m5_fillability_selection.json" \
+    --run-root "$RUN_ROOT" \
+    --output-dir "$RUN_ROOT/crypto_execution_alpha/fillability" \
+    --model-sha "$SHA"
+) >> "$RUN_ROOT/crypto_execution_alpha/fillability/runtime.log" 2>&1 &
+v7_register_child "$!"
+
+# Receipt-gated queue-aware PAPER execution worker. It cannot decide trades,
+# cannot reach authenticated venue endpoints, and writes lifecycle events only
+# to the existing canonical ledger spool.
+"$AUTHORIZED_MAKER_PAPER_EXECUTOR" \
+  --run-root "$RUN_ROOT" --model-sha "$SHA" \
+  >> "$RUN_ROOT/micro_maker/authorized_make_executor.log" 2>&1 &
+v7_register_child "$!"
+
 # Slow-plane reward selection only. It may perform REST discovery, but it never
 # decides/cancels quotes and is not a second maker runtime.
 (
@@ -756,7 +785,7 @@ v7_register_child "$!"
   done
 ) & v7_register_child "$!"
 
-v7_assert_registered_child_count 21
+v7_assert_registered_child_count 23
 write_runtime_status running false
 
 while [[ ! -e "$KILL" ]]; do

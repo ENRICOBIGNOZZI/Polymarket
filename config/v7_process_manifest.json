@@ -377,7 +377,8 @@
       ],
       "outputs": [
         "opportunities/receipts",
-        "global_portfolio_coordinator.log"
+        "global_portfolio_coordinator.log",
+        "micro_maker/authorized_make"
       ],
       "dependencies": [
         "ledger_router"
@@ -418,7 +419,8 @@
         "crypto_execution_alpha/decisions.jsonl",
         "crypto_execution_alpha/maker_probe_recommendations.jsonl",
         "crypto_execution_alpha/runtime.log",
-        "opportunities/inbox"
+        "opportunities/inbox",
+        "crypto_execution_alpha/btc_m5_fillability_selection.json"
       ],
       "dependencies": [
         "external_fair_router",
@@ -427,6 +429,65 @@
       "exact_sha_required": true,
       "config_identity_required": true,
       "launcher_log": "crypto_execution_alpha/runtime.log"
+    },
+    {
+      "id": "crypto_execution_alpha_fillability",
+      "executable": "${FILLABILITY_OBSERVER}",
+      "arguments": [
+        "--selection",
+        "${RUN_ROOT}/crypto_execution_alpha/btc_m5_fillability_selection.json",
+        "--output-dir",
+        "${RUN_ROOT}/crypto_execution_alpha/fillability",
+        "--model-sha",
+        "${SHA}"
+      ],
+      "profile": "observer",
+      "inputs": [
+        "config/paper_v7.json",
+        "crypto_execution_alpha/btc_m5_fillability_selection.json"
+      ],
+      "outputs": [
+        "crypto_execution_alpha/fillability/fillability_ws.jsonl",
+        "crypto_execution_alpha/fillability/fillability_ws_status.json",
+        "crypto_execution_alpha/fillability/runtime.log"
+      ],
+      "dependencies": [
+        "crypto_execution_alpha"
+      ],
+      "exact_sha_required": true,
+      "config_identity_required": true,
+      "launcher_log": "crypto_execution_alpha/fillability/runtime.log"
+    },
+    {
+      "id": "authorized_maker_paper_executor",
+      "executable": "${AUTHORIZED_MAKER_PAPER_EXECUTOR}",
+      "arguments": [
+        "--run-root",
+        "${RUN_ROOT}",
+        "--model-sha",
+        "${SHA}"
+      ],
+      "profile": "engine",
+      "inputs": [
+        "micro_maker/authorized_make",
+        "external_fair/paper_router_status.json",
+        "crypto_execution_alpha/fillability/fillability_ws.jsonl",
+        "crypto_execution_alpha/fillability/fillability_ws_status.json"
+      ],
+      "outputs": [
+        "micro_maker/authorized_make_executor_status.json",
+        "micro_maker/authorized_make_executor.log",
+        "ledger/spool"
+      ],
+      "dependencies": [
+        "global_portfolio_coordinator",
+        "crypto_execution_alpha_fillability",
+        "ledger_router",
+        "external_fair_router"
+      ],
+      "exact_sha_required": true,
+      "config_identity_required": true,
+      "launcher_log": "micro_maker/authorized_make_executor.log"
     },
     {
       "id": "maker_reward_selection",

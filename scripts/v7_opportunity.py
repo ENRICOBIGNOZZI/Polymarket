@@ -65,13 +65,18 @@ def _finite(value: Any, name: str) -> float:
 def _validate_execution_alpha(value: Any, *, action: str, expected_wealth_change: float) -> None:
     packet = _mapping(value, "execution_alpha")
     required = {
-        "schema", "action", "evidence_status", "fill_probability",
+        "schema", "action", "outcome", "evidence_status", "fill_probability",
         "queue_ahead_shares", "action_ev", "attribution",
     }
     if set(packet) != required or packet.get("schema") != "polymarket_v7_execution_alpha_packet_v1":
         raise OpportunityError("execution_alpha_shape")
     if packet.get("action") != action or packet.get("evidence_status") not in {"MATURE", "IMMATURE"}:
         raise OpportunityError("execution_alpha_identity")
+    outcome = packet.get("outcome")
+    if (action in {"MAKE", "TAKE"} and outcome not in {"YES", "NO"}) or (
+        action in {"CANCEL", "NOTHING"} and outcome != "NONE"
+    ):
+        raise OpportunityError("execution_alpha_outcome")
     fill = _mapping(packet.get("fill_probability"), "execution_alpha_fill")
     if set(fill) != {"lower", "point", "upper"}:
         raise OpportunityError("execution_alpha_fill_shape")

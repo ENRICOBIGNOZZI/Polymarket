@@ -104,6 +104,14 @@ add_executable(polymarket_v7_maker_fillability_observer src/v7_maker_fillability
 target_link_libraries(polymarket_v7_maker_fillability_observer PRIVATE pm_v7_common pm_fast_arb pm_core)
 target_compile_options(polymarket_v7_maker_fillability_observer PRIVATE -Wall -Wextra -Wpedantic)
 
+# Receipt-gated queue-aware PAPER executor. It consumes only coordinator-authorized
+# MAKE intents and writes simulated lifecycle events to the existing ledger spool.
+# It has no authenticated venue client, signer, inventory owner, or direct ledger authority.
+add_executable(polymarket_v7_authorized_maker_paper_executor
+    src/v7_authorized_maker_paper_executor.cpp)
+target_link_libraries(polymarket_v7_authorized_maker_paper_executor PRIVATE pm_v7_hft pm_json Threads::Threads)
+target_compile_options(polymarket_v7_authorized_maker_paper_executor PRIVATE -Wall -Wextra -Wpedantic)
+
 add_executable(polymarket_v7_external_venue_runtime src/v7_external_venue_runtime.cpp)
 target_link_libraries(polymarket_v7_external_venue_runtime PRIVATE pm_v7_external)
 target_compile_options(polymarket_v7_external_venue_runtime PRIVATE -Wall -Wextra -Wpedantic)
@@ -220,6 +228,12 @@ if(BUILD_TESTING)
   add_executable(pm_v7_maker_execution_policy_tests tests/test_v7_maker_execution_policy.cpp)
   target_link_libraries(pm_v7_maker_execution_policy_tests PRIVATE pm_v7_hft)
   add_test(NAME pm_v7_maker_execution_policy_tests COMMAND pm_v7_maker_execution_policy_tests)
+
+  add_test(
+    NAME v7_authorized_maker_paper_executor_integration
+    COMMAND ${Python3_EXECUTABLE}
+      "${CMAKE_CURRENT_SOURCE_DIR}/tests/integration_v7_authorized_maker_paper_executor.py"
+      --binary $<TARGET_FILE:polymarket_v7_authorized_maker_paper_executor>)
 
   add_executable(pm_v7_external_fair_tests tests/test_v7_external_fair.cpp)
   target_link_libraries(pm_v7_external_fair_tests PRIVATE pm_v7_external)
