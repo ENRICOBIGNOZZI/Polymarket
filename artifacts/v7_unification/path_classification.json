@@ -2802,6 +2802,7 @@
       "current_imports_callers_readers_writers": {
         "analysis": "exact path/module references from tracked text; runtime linkage is separately enumerated",
         "static_references": [
+          "artifacts/v7_unification/path_classification.json",
           "tests/test_v7_data_evolution_24h.py"
         ]
       },
@@ -8916,6 +8917,7 @@
       "current_imports_callers_readers_writers": {
         "analysis": "exact path/module references from tracked text; runtime linkage is separately enumerated",
         "static_references": [
+          "artifacts/v7_unification/path_classification.json",
           "tests/test_v7_data_evolution_24h.py"
         ]
       },
@@ -15260,7 +15262,9 @@
       "classification": "KEEP_CANONICAL",
       "current_imports_callers_readers_writers": {
         "analysis": "exact path/module references from tracked text; runtime linkage is separately enumerated",
-        "static_references": []
+        "static_references": [
+          "artifacts/v7_unification/path_classification.json"
+        ]
       },
       "deletion_gate": "NONE_CANONICAL_SURFACE",
       "disposition_commit": null,
@@ -19521,9 +19525,9 @@
       "object_type": "branch_or_remote_ref",
       "path_or_ref": "refs/heads/codex/v7-unified-alpha-stack-20260907",
       "rollback_artifact_tag": "v7-unification-pre-migration-8d9e8e60",
-      "snapshot_object_id": "f0c5d9f9a3f9450c319e3eb3f1723fa3ed64b921",
+      "snapshot_object_id": "137d867bc16a7a8e16756e11404e071ef93444fe",
       "surface_id": "ref:refs/heads/codex/v7-unified-alpha-stack-20260907",
-      "unique_behavior_data_contribution": "22 commit(s) not reachable from origin/main require content audit",
+      "unique_behavior_data_contribution": "23 commit(s) not reachable from origin/main require content audit",
       "validation_tests": [
         "tests/test_v7_surface_classification.py"
       ]
@@ -23059,5 +23063,5 @@
   "real_capital_at_risk": false,
   "real_order_submission": false,
   "schema": "polymarket_v7_surface_classification_v1",
-  "source_snapshot_sha": "f0c5d9f9a3f9450c319e3eb3f1723fa3ed64b921"
+  "source_snapshot_sha": "137d867bc16a7a8e16756e11404e071ef93444fe"
 }
