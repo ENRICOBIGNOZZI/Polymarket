@@ -2,9 +2,10 @@
 """Single runtime consumer for both V7 economic-engine opportunity cuts.
 
 Checked-in operation is PAPER observation only: this coordinator has no flag
-that can authorize new risk. It validates fully typed envelopes, compares both
-engines on conservative expected account-wealth change, gives CANCEL priority,
-and emits a deterministic fail-closed decision receipt.
+that can authorize real new risk. It validates fully typed envelopes, compares
+both engines on conservative expected account-wealth change, gives CANCEL
+priority, concentrates ordinary crypto risk on the best market windows, and
+keeps minimum-size PAPER exploration on a separate information-gain lane.
 """
 from __future__ import annotations
 
@@ -17,6 +18,17 @@ from typing import Any
 
 from v7_opportunity import OpportunityEnvelope, OpportunityError, coordinate, fail_closed_decision
 from v7_crypto_settlement import aggregate_correlated_crypto_risk
+from v7_crypto_execution_alpha import (
+    ExecutionAlphaError,
+    action_competition,
+    information_rank,
+    load_config as load_execution_alpha_config,
+    select_crypto_markets,
+)
+
+
+ROOT = Path(__file__).resolve().parents[1]
+EXECUTION_ALPHA_CONFIG = ROOT / "config" / "v7_crypto_execution_alpha.json"
 
 
 def atomic_json(path: Path, value: Any) -> None:
@@ -131,8 +143,10 @@ def _compatibility_envelope(value: dict[str, Any], context: dict[str, Any]) -> d
         "contract_id": str(value.get("token_id") or value.get("market_id") or identity),
         "mapping_identity": str(metadata.get("contract_rules_hash") or f"unverified:{identity}"),
         "crypto_context": crypto_context,
-        # The adapter cannot manufacture missing evidence. It preserves the
-        # candidate's economics while forcing its actionable surface to NOTHING.
+        # The adapter cannot manufacture missing settlement, latency or
+        # calibration evidence. Preserve diagnostic economics but force the
+        # actionable surface to NOTHING until the producer emits a typed
+        # opportunity envelope of its own.
         "action": "NOTHING",
         "side": "NONE",
         "decision_receive_timestamp_ns": decision_ns,
@@ -212,6 +226,78 @@ def envelope_from_ingress(value: dict[str, Any], context: dict[str, Any]) -> dic
     return envelope.raw
 
 
+def _is_paper_probe(envelope: dict[str, Any]) -> bool:
+    exploration = envelope.get("exploration")
+    return isinstance(exploration, dict) and exploration.get("mode") == "PAPER_BOOTSTRAP_PROBE"
+
+
+def _execution_alpha_cut(
+    envelopes: list[dict[str, Any]], config: dict[str, Any],
+) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+    """Concentrate ordinary crypto risk while preserving safe/probe actions.
+
+    CANCEL/WITHDRAW are never filtered. Structural opportunities keep their own
+    engine selection. Minimum-size PAPER probes are deliberately exempt from the
+    top-market economic filter so the experiment can learn underrepresented
+    strata; at most one probe is left in the cut, selected before outcome using
+    declared information value.
+    """
+    ordinary_crypto = [
+        row for row in envelopes
+        if row.get("engine_id") == "CRYPTO_SETTLEMENT_ENGINE"
+        and row.get("action") in {"MAKE", "TAKE"}
+        and not _is_paper_probe(row)
+    ]
+    selection = select_crypto_markets(ordinary_crypto, config)
+    retained = selection.retained_replay_keys
+    probes = [
+        row for row in envelopes
+        if row.get("engine_id") == "CRYPTO_SETTLEMENT_ENGINE"
+        and row.get("action") in {"MAKE", "TAKE"}
+        and _is_paper_probe(row)
+    ]
+    best_probe_key = None
+    if probes:
+        best_probe = max(probes, key=lambda row: information_rank(row, config))
+        best_probe_key = str(best_probe.get("deterministic_replay_key") or "")
+
+    filtered: list[dict[str, Any]] = []
+    filtered_economic = 0
+    filtered_probes = 0
+    for row in envelopes:
+        engine = row.get("engine_id")
+        action = row.get("action")
+        replay_key = str(row.get("deterministic_replay_key") or "")
+        if engine != "CRYPTO_SETTLEMENT_ENGINE" or action not in {"MAKE", "TAKE"}:
+            filtered.append(row)
+            continue
+        if _is_paper_probe(row):
+            if replay_key == best_probe_key:
+                filtered.append(row)
+            else:
+                filtered_probes += 1
+            continue
+        if replay_key in retained:
+            filtered.append(row)
+        else:
+            filtered_economic += 1
+
+    diagnostics = dict(selection.diagnostics)
+    diagnostics.update({
+        "action_competition": action_competition(envelopes),
+        "ordinary_crypto_candidate_count": len(ordinary_crypto),
+        "paper_probe_candidate_count": len(probes),
+        "selected_probe_replay_key": best_probe_key,
+        "filtered_ordinary_crypto_candidates": filtered_economic,
+        "filtered_paper_probe_candidates": filtered_probes,
+        "coordinator_input_after_selection": len(filtered),
+        "risk_actions_never_filtered": True,
+        "structural_engine_never_filtered": True,
+        "paper_probe_market_filter_exemption": "ONE_INFORMATION_RANKED_MINIMUM_SIZE_PROBE",
+    })
+    return filtered, diagnostics
+
+
 def process_cut(run_root: Path, *, now_ns: int | None = None) -> dict[str, Any]:
     root = Path(run_root)
     current_ns = int(now_ns if now_ns is not None else time.time_ns())
@@ -223,6 +309,7 @@ def process_cut(run_root: Path, *, now_ns: int | None = None) -> dict[str, Any]:
             context = {}
     except (OSError, json.JSONDecodeError):
         context = {}
+
     files = sorted(inbox.glob("*.json")) if inbox.exists() else []
     envelopes: list[dict[str, Any]] = []
     adapter_errors: list[str] = []
@@ -234,12 +321,41 @@ def process_cut(run_root: Path, *, now_ns: int | None = None) -> dict[str, Any]:
             envelopes.append(envelope_from_ingress(raw, context))
         except (OSError, json.JSONDecodeError, OpportunityError, ValueError) as exc:
             adapter_errors.append(f"ADAPTER_REJECTED:{index}:{exc}")
+
+    execution_alpha_diagnostics: dict[str, Any] = {
+        "schema": "polymarket_v7_crypto_execution_alpha_selection_v1",
+        "state": "NOT_EVALUATED",
+    }
+    selected_envelopes = envelopes
+    if not adapter_errors:
+        try:
+            execution_config = load_execution_alpha_config(EXECUTION_ALPHA_CONFIG)
+            selected_envelopes, execution_alpha_diagnostics = _execution_alpha_cut(
+                envelopes, execution_config,
+            )
+            execution_alpha_diagnostics["state"] = "EVALUATED"
+            execution_alpha_diagnostics["config_path"] = str(EXECUTION_ALPHA_CONFIG)
+        except (OSError, json.JSONDecodeError, ExecutionAlphaError, ValueError) as exc:
+            adapter_errors.append(f"EXECUTION_ALPHA_FAIL_CLOSED:{type(exc).__name__}:{exc}")
+            execution_alpha_diagnostics = {
+                "schema": "polymarket_v7_crypto_execution_alpha_selection_v1",
+                "state": "FAIL_CLOSED",
+                "config_path": str(EXECUTION_ALPHA_CONFIG),
+                "error": f"{type(exc).__name__}:{exc}",
+            }
+
     if adapter_errors:
         decision = fail_closed_decision(now_ns=current_ns, reasons=adapter_errors)
-    elif envelopes:
-        decision = coordinate(envelopes, now_ns=current_ns, new_risk_authorized=False, paper_exploration_authorized=True)
+    elif selected_envelopes:
+        decision = coordinate(
+            selected_envelopes,
+            now_ns=current_ns,
+            new_risk_authorized=False,
+            paper_exploration_authorized=True,
+        )
     else:
         decision = fail_closed_decision(now_ns=current_ns, reasons=["NO_LIVE_OPPORTUNITIES"])
+
     crypto_exposures = []
     for envelope in envelopes:
         context_row = envelope.get("crypto_context")
@@ -254,6 +370,7 @@ def process_cut(run_root: Path, *, now_ns: int | None = None) -> dict[str, Any]:
             "exchange_source": capacity.get("depth_provenance", "UNKNOWN"),
         })
     decision["crypto_correlation_risk"] = aggregate_correlated_crypto_risk(crypto_exposures)
+    decision["crypto_execution_alpha"] = execution_alpha_diagnostics
     decision.update({
         "paper_only": True,
         "authenticated_execution": False,
@@ -262,9 +379,11 @@ def process_cut(run_root: Path, *, now_ns: int | None = None) -> dict[str, Any]:
         "economic_engine_count": 2,
         "input_count": len(files),
         "valid_envelope_count": len(envelopes),
+        "selected_envelope_count": len(selected_envelopes),
         "adapter_error_count": len(adapter_errors),
         "new_risk_policy": "CHECKED_IN_DISABLED_NO_RUNTIME_OVERRIDE",
         "paper_exploration_policy": "BTC_M5_BOUNDED_NO_REAL_MONEY",
+        "market_selection_policy": "TOP_CONSERVATIVE_OPPORTUNITY_VALUE_WITH_SEPARATE_INFORMATION_PROBES",
     })
     status = {
         "schema": "polymarket_v7_global_portfolio_coordinator_status_v1",
