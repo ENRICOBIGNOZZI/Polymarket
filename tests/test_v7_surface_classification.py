@@ -12,6 +12,7 @@ sys.path.insert(0, str(ROOT / "scripts"))
 
 from v7_surface_classification import (  # noqa: E402
     ClassificationError,
+    _refs,
     build_manifest,
     equivalent_ref_surface_ids,
     validate_manifest,
@@ -160,6 +161,24 @@ class SurfaceClassificationTests(unittest.TestCase):
         self.assertFalse(_dynamic_review_ref("ref:refs/heads/feature/unsafe"))
         self.assertFalse(_dynamic_review_ref("ref:refs/heads/research/unsafe"))
         self.assertFalse(_dynamic_review_ref("ref:refs/heads/chore/unsafe"))
+
+    def test_symbolic_remote_head_is_not_an_independent_surface(self) -> None:
+        import subprocess
+        import tempfile
+        with tempfile.TemporaryDirectory() as directory:
+            repo = Path(directory)
+            subprocess.run(["git", "init", "-q", "-b", "main", str(repo)], check=True)
+            subprocess.run(["git", "-C", str(repo), "config", "user.email", "audit@example.invalid"], check=True)
+            subprocess.run(["git", "-C", str(repo), "config", "user.name", "V7 Audit"], check=True)
+            (repo / "x").write_text("x", encoding="utf-8")
+            subprocess.run(["git", "-C", str(repo), "add", "x"], check=True)
+            subprocess.run(["git", "-C", str(repo), "commit", "-q", "-m", "init"], check=True)
+            head = subprocess.check_output(["git", "-C", str(repo), "rev-parse", "HEAD"], text=True).strip()
+            subprocess.run(["git", "-C", str(repo), "update-ref", "refs/remotes/origin/main", head], check=True)
+            subprocess.run(["git", "-C", str(repo), "symbolic-ref", "refs/remotes/origin/HEAD", "refs/remotes/origin/main"], check=True)
+            refs = {ref for ref, _ in _refs(repo)}
+            self.assertIn("refs/remotes/origin/main", refs)
+            self.assertNotIn("refs/remotes/origin/HEAD", refs)
 
     def test_branch_ref_namespace_aliases_are_portable(self) -> None:
         local = "ref:refs/heads/codex/example"
