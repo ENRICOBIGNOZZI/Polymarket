@@ -602,6 +602,18 @@ python3 scripts/v7_global_portfolio_coordinator.py \
   >> "$RUN_ROOT/global_portfolio_coordinator.log" 2>&1 &
 v7_register_child "$!"
 
+# Unified crypto execution-alpha decision layer. It consumes the router's exact
+# causal CLOB snapshot and existing settlement/maker evidence, then publishes
+# only mature positive MAKE proposals into the existing coordinator inbox.
+# TAKE remains owned by the arrival-revalidated router; this process owns no
+# OMS, inventory, capital, ledger, signer or real-order authority.
+mkdir -p "$RUN_ROOT/crypto_execution_alpha"
+python3 scripts/v7_crypto_execution_alpha_runtime.py \
+  --run-root "$RUN_ROOT" --external-policy "$EXTERNAL_FAIR_POLICY" \
+  --comparison-size-shares 5 --loop --interval 0.25 \
+  >> "$RUN_ROOT/crypto_execution_alpha/runtime.log" 2>&1 &
+v7_register_child "$!"
+
 # Slow-plane reward selection only. It may perform REST discovery, but it never
 # decides/cancels quotes and is not a second maker runtime.
 (
@@ -714,6 +726,11 @@ v7_register_child "$!"
     python3 scripts/v7_generate_economic_artifacts.py \
       --repo "$ROOT" --run-root "$RUN_ROOT" --output "$RUN_ROOT/reports" \
       --baseline "$ROOT/artifacts/v7_economic_loop_baseline.json" \
+      >> "$RUN_ROOT/economic_artifacts.log" 2>&1 || true
+    python3 scripts/v7_crypto_pnl_attribution_report.py \
+      --decisions "$RUN_ROOT/crypto_execution_alpha/decisions.jsonl" \
+      --ledger "$RUN_ROOT/ledger/execution.jsonl" \
+      --output "$RUN_ROOT/reports/crypto_pnl_attribution.json" \
       >> "$RUN_ROOT/economic_artifacts.log" 2>&1 || true
     sleep 3600
   done

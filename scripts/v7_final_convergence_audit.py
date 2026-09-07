@@ -125,8 +125,8 @@ def build(root: Path) -> dict[str, Any]:
     expected_process_authorities = {key: 1 for key in EXPECTED_OWNERS}
     expected_process_authorities["promotion"] = 0
     if (
-        process["process_count"] != 22
-        or process["launcher_child_count"] != 20
+        process["process_count"] != 23
+        or process["launcher_child_count"] != 21
         or process["launcher_manifest_parity"] is not True
         or process["authority_counts"] != expected_process_authorities
     ):
