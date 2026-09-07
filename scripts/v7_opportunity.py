@@ -10,6 +10,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Iterable
 
+from v7_crypto_execution_alpha import ExecutionAlphaError, validate_execution_alpha_packet
+
 
 SCHEMA = "polymarket_v7_opportunity_envelope_v1"
 SHA = re.compile(r"^[0-9a-f]{40}$")
@@ -60,50 +62,6 @@ def _finite(value: Any, name: str) -> float:
     if not math.isfinite(number):
         raise OpportunityError(name)
     return number
-
-
-def _validate_execution_alpha(value: Any, *, action: str, expected_wealth_change: float) -> None:
-    packet = _mapping(value, "execution_alpha")
-    required = {
-        "schema", "action", "outcome", "evidence_status", "fill_probability",
-        "queue_ahead_shares", "action_ev", "attribution",
-    }
-    if set(packet) != required or packet.get("schema") != "polymarket_v7_execution_alpha_packet_v1":
-        raise OpportunityError("execution_alpha_shape")
-    if packet.get("action") != action or packet.get("evidence_status") not in {"MATURE", "IMMATURE"}:
-        raise OpportunityError("execution_alpha_identity")
-    outcome = packet.get("outcome")
-    if (action in {"MAKE", "TAKE"} and outcome not in {"YES", "NO"}) or (
-        action in {"CANCEL", "NOTHING"} and outcome != "NONE"
-    ):
-        raise OpportunityError("execution_alpha_outcome")
-    fill = _mapping(packet.get("fill_probability"), "execution_alpha_fill")
-    if set(fill) != {"lower", "point", "upper"}:
-        raise OpportunityError("execution_alpha_fill_shape")
-    lower = _finite(fill.get("lower"), "execution_alpha_fill_lower")
-    point = _finite(fill.get("point"), "execution_alpha_fill_point")
-    upper = _finite(fill.get("upper"), "execution_alpha_fill_upper")
-    if not 0.0 <= lower <= point <= upper <= 1.0:
-        raise OpportunityError("execution_alpha_fill_bounds")
-    if _finite(packet.get("queue_ahead_shares"), "execution_alpha_queue") < 0.0:
-        raise OpportunityError("execution_alpha_queue")
-    action_ev = _mapping(packet.get("action_ev"), "execution_alpha_action_ev")
-    if set(action_ev) != {"conservative", "point"}:
-        raise OpportunityError("execution_alpha_action_ev_shape")
-    conservative = _finite(action_ev.get("conservative"), "execution_alpha_conservative_ev")
-    _finite(action_ev.get("point"), "execution_alpha_point_ev")
-    tolerance = 1e-9 * max(1.0, abs(conservative), abs(expected_wealth_change))
-    if abs(conservative - expected_wealth_change) > tolerance:
-        raise OpportunityError("execution_alpha_ev_mismatch")
-    attribution = _mapping(packet.get("attribution"), "execution_alpha_attribution")
-    expected_attribution = {
-        "settlement_alpha", "spread_capture", "rebate", "fees", "slippage",
-        "adverse_selection", "latency", "inventory", "unwind", "cancel", "capital",
-    }
-    if set(attribution) != expected_attribution:
-        raise OpportunityError("execution_alpha_attribution_shape")
-    for name in expected_attribution:
-        _finite(attribution.get(name), f"execution_alpha_attribution:{name}")
 
 
 @dataclass(frozen=True)
@@ -237,15 +195,31 @@ class OpportunityEnvelope:
         expected_wealth_change = _finite(
             value.get("conservative_expected_wealth_change"), "expected_wealth_change"
         )
-        if value.get("execution_alpha") is not None:
-            if engine_id != "CRYPTO_SETTLEMENT_ENGINE" or action not in {"MAKE", "TAKE", "CANCEL", "NOTHING"}:
-                raise OpportunityError("execution_alpha_action_or_engine")
-            _validate_execution_alpha(
-                value["execution_alpha"], action=action,
-                expected_wealth_change=expected_wealth_change,
-            )
         _finite(value.get("inventory_delta"), "inventory_delta")
         _finite(value.get("portfolio_exposure_delta"), "portfolio_exposure_delta")
+
+        execution_alpha = value.get("execution_alpha")
+        if execution_alpha is not None:
+            if engine_id != "CRYPTO_SETTLEMENT_ENGINE" or action not in {"MAKE", "TAKE", "CANCEL", "NOTHING"}:
+                raise OpportunityError("execution_alpha_action_or_engine")
+            try:
+                packet = validate_execution_alpha_packet(
+                    execution_alpha, decision_ns=decision_ns, action=action,
+                )
+            except ExecutionAlphaError as exc:
+                raise OpportunityError(f"execution_alpha:{exc}") from exc
+            packet_ev = float(packet["action_ev"][action]["conservative"])
+            tolerance = 1e-9 * max(1.0, abs(packet_ev), abs(expected_wealth_change))
+            if abs(packet_ev - expected_wealth_change) > tolerance:
+                raise OpportunityError("execution_alpha_ev_mismatch")
+            if (
+                action in NEW_RISK_ACTIONS
+                and isinstance(crypto_context, dict)
+                and crypto_context.get("authority") != "PAPER_EXPLORATION"
+                and packet.get("evidence_status") != "MATURE"
+            ):
+                raise OpportunityError("execution_alpha_immature_new_risk")
+
         costs = _mapping(value.get("cost_vector"), "cost_vector")
         authority = _mapping(value.get("cost_authority"), "cost_authority")
         if set(costs) != set(COST_FIELDS) or set(authority) != set(COST_FIELDS):
@@ -354,6 +328,10 @@ class OpportunityEnvelope:
             maximum_loss = _finite(probe.get("maximum_probe_loss"), "probe_maximum_loss")
             loss_cap = _finite(probe.get("probe_loss_cap"), "probe_loss_cap")
             information_score = _finite(probe.get("information_score"), "probe_information_score")
+            probe_model_by_action = {
+                "TAKE": "btc_m5_same_oracle_diffusion_bootstrap_v1",
+                "MAKE": "btc_m5_maker_execution_bootstrap_probe_v1",
+            }
             if (
                 probe.get("mode") != "PAPER_BOOTSTRAP_PROBE"
                 or point_change <= 0.0
@@ -365,12 +343,12 @@ class OpportunityEnvelope:
                 or probe.get("promotion_eligible") is not False
                 or probe.get("robust_candidate") is not False
                 or probe.get("arrival_revalidated") is not True
-                or probe.get("model_id") != "btc_m5_same_oracle_diffusion_bootstrap_v1"
+                or probe.get("model_id") != probe_model_by_action.get(action)
                 or not HASH64.fullmatch(str(probe.get("model_hash") or ""))
-                or _finite(value.get("conservative_expected_wealth_change"), "expected_wealth_change") < -maximum_loss - 1e-9
+                or expected_wealth_change < -maximum_loss - 1e-9
                 or _finite(value.get("portfolio_exposure_delta"), "portfolio_exposure_delta") > loss_cap + 1e-9
                 or engine_id != "CRYPTO_SETTLEMENT_ENGINE"
-                or action != "TAKE"
+                or action not in {"MAKE", "TAKE"}
                 or not isinstance(crypto_context, dict)
                 or crypto_context.get("authority") != "PAPER_EXPLORATION"
                 or crypto_context.get("asset") != "BTC"

@@ -104,11 +104,12 @@ add_executable(polymarket_v7_maker_fillability_observer src/v7_maker_fillability
 target_link_libraries(polymarket_v7_maker_fillability_observer PRIVATE pm_v7_common pm_fast_arb pm_core)
 target_compile_options(polymarket_v7_maker_fillability_observer PRIVATE -Wall -Wextra -Wpedantic)
 
-# Receipt-gated queue-aware PAPER executor. It consumes only coordinator-authorized
-# MAKE intents and writes simulated lifecycle events to the existing ledger spool.
-# It has no authenticated venue client, signer, inventory owner, or direct ledger authority.
+# Receipt-gated PAPER executor. It never makes an economic decision and never
+# talks to authenticated endpoints: it consumes only coordinator-authorized
+# MAKE intents and reuses the canonical queue-aware MakerPaperMarketEngine plus
+# the fillability observer's public-trade tape.
 add_executable(polymarket_v7_authorized_maker_paper_executor
-    src/v7_authorized_maker_paper_executor.cpp)
+  src/v7_authorized_maker_paper_executor.cpp)
 target_link_libraries(polymarket_v7_authorized_maker_paper_executor PRIVATE pm_v7_hft pm_json Threads::Threads)
 target_compile_options(polymarket_v7_authorized_maker_paper_executor PRIVATE -Wall -Wextra -Wpedantic)
 
@@ -229,12 +230,6 @@ if(BUILD_TESTING)
   target_link_libraries(pm_v7_maker_execution_policy_tests PRIVATE pm_v7_hft)
   add_test(NAME pm_v7_maker_execution_policy_tests COMMAND pm_v7_maker_execution_policy_tests)
 
-  add_test(
-    NAME v7_authorized_maker_paper_executor_integration
-    COMMAND ${Python3_EXECUTABLE}
-      "${CMAKE_CURRENT_SOURCE_DIR}/tests/integration_v7_authorized_maker_paper_executor.py"
-      --binary $<TARGET_FILE:polymarket_v7_authorized_maker_paper_executor>)
-
   add_executable(pm_v7_external_fair_tests tests/test_v7_external_fair.cpp)
   target_link_libraries(pm_v7_external_fair_tests PRIVATE pm_v7_external)
   add_test(NAME pm_v7_external_fair_tests COMMAND pm_v7_external_fair_tests)
@@ -283,11 +278,18 @@ if(BUILD_TESTING)
   target_link_libraries(pm_v7_coinbase_l2_tests PRIVATE pm_v7_external)
   add_test(NAME pm_v7_coinbase_l2_tests COMMAND pm_v7_coinbase_l2_tests)
 
+  add_test(NAME test_v7_authorized_make_cancel_runtime
+    COMMAND ${Python3_EXECUTABLE}
+      "${CMAKE_CURRENT_SOURCE_DIR}/tests/test_v7_authorized_make_cancel_runtime.py"
+      --executor $<TARGET_FILE:polymarket_v7_authorized_maker_paper_executor>)
+
   file(GLOB V7_PY_TESTS CONFIGURE_DEPENDS
     "${CMAKE_CURRENT_SOURCE_DIR}/tests/test_v7_*.py"
     "${CMAKE_CURRENT_SOURCE_DIR}/tests/test_monitoring_v7_*.py")
   foreach(test_file IN LISTS V7_PY_TESTS)
     get_filename_component(test_name "${test_file}" NAME_WE)
-    add_test(NAME "${test_name}" COMMAND ${Python3_EXECUTABLE} "${test_file}")
+    if(NOT test_name STREQUAL "test_v7_authorized_make_cancel_runtime")
+      add_test(NAME "${test_name}" COMMAND ${Python3_EXECUTABLE} "${test_file}")
+    endif()
   endforeach()
 endif()

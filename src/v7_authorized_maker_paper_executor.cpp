@@ -42,13 +42,8 @@ using pm::v7::maker::PaperMakerResult;
 
 constexpr double kMicrounitsPerShare = 1'000'000.0;
 constexpr double kPriceScaleE4 = 10'000.0;
-constexpr std::int64_t kArrivalBookMaxAgeMs = 5'000;
+constexpr std::int64_t kSelectionMaxAgeMs = 5'000;
 constexpr std::int64_t kFillabilityStatusMaxAgeMs = 5'000;
-
-class RetryableAuthorizationError final : public std::runtime_error {
-public:
-    using std::runtime_error::runtime_error;
-};
 
 [[nodiscard]] std::int64_t wall_ms() noexcept {
     return std::chrono::duration_cast<std::chrono::milliseconds>(
@@ -216,54 +211,52 @@ struct Options {
     return options;
 }
 
-struct ArrivalBookEvidence {
-    std::string outcome;
-    std::int64_t receive_ts_ms = 0;
+struct SelectionEvidence {
+    std::int64_t generated_at_ms = 0;
     std::int32_t tick_size_e4 = 0;
-    double min_order_size = 0.0;
     double best_bid = 0.0;
     double best_ask = 0.0;
-    double best_bid_size = 0.0;
+    double queue_ahead_shares = 0.0;
     bool found = false;
 };
 
-[[nodiscard]] ArrivalBookEvidence arrival_book_evidence(
+[[nodiscard]] SelectionEvidence selection_evidence(
     const fs::path& path, std::string_view model_sha, std::string_view market_id,
     std::string_view token_id) {
-    ArrivalBookEvidence result;
-    if (!fs::exists(path)) return result;
+    SelectionEvidence result;
     const auto value = read_json(path);
     if (!value.is_object()) return result;
     const auto& root = value.as_object();
     if (!boolean(find_value(root, "paper_only"))
         || boolean(find_value(root, "authenticated_execution"), true)
         || boolean(find_value(root, "real_order_submission"), true)
-        || text(find_value(root, "code_sha")) != model_sha) {
+        || text(find_value(root, "model_sha")) != model_sha) {
         return result;
     }
-    const auto* live = child_object(root, "live_market");
-    if (live == nullptr || !boolean(find_value(*live, "valid"))
-        || text(find_value(*live, "market_id")) != market_id) {
-        return result;
-    }
-    result.receive_ts_ms = integer(find_value(*live, "receive_ts_ms"));
-    const auto* books = child_object(*live, "execution_alpha_books");
-    if (books == nullptr) return result;
-    for (const char* outcome : {"YES", "NO"}) {
-        const auto* book = child_object(*books, outcome);
-        if (book == nullptr || text(find_value(*book, "token_id")) != token_id) continue;
-        const double tick = number(find_value(*book, "tick_size"));
-        if (!(tick > 0.0 && tick < 1.0)) return result;
-        result.tick_size_e4 = static_cast<std::int32_t>(std::llround(tick * kPriceScaleE4));
-        if (result.tick_size_e4 <= 0 || 10'000 % result.tick_size_e4 != 0) return result;
-        result.outcome = outcome;
-        result.min_order_size = std::max(0.0, number(find_value(*book, "min_order_size")));
-        result.best_bid = number(find_value(*book, "best_bid"));
-        result.best_ask = number(find_value(*book, "best_ask"));
-        result.best_bid_size = std::max(0.0, number(find_value(*book, "best_bid_size")));
-        result.found = result.best_bid > 0.0 && result.best_ask > result.best_bid
-            && result.best_ask < 1.0 && result.best_bid_size >= 0.0;
-        return result;
+    result.generated_at_ms = integer(find_value(root, "timestamp_ms"));
+    const auto* markets = child_array(root, "markets");
+    if (markets == nullptr) return result;
+    for (const auto& item : *markets) {
+        if (!item.is_object()) continue;
+        const auto& market = item.as_object();
+        if (text(find_value(market, "market_id")) != market_id) continue;
+        const auto* opportunities = child_array(market, "quote_opportunities");
+        if (opportunities == nullptr) continue;
+        for (const auto& raw : *opportunities) {
+            if (!raw.is_object()) continue;
+            const auto& quote = raw.as_object();
+            if (text(find_value(quote, "token_id")) != token_id) continue;
+            const double tick = number(find_value(quote, "tick_size"));
+            if (!(tick > 0.0 && tick < 1.0)) continue;
+            const auto tick_e4 = static_cast<std::int32_t>(std::llround(tick * kPriceScaleE4));
+            if (tick_e4 <= 0 || 10'000 % tick_e4 != 0) continue;
+            result.tick_size_e4 = tick_e4;
+            result.best_bid = number(find_value(quote, "best_bid"));
+            result.best_ask = number(find_value(quote, "best_ask"));
+            result.queue_ahead_shares = std::max(0.0, number(find_value(quote, "queue_ahead_shares")));
+            result.found = result.best_bid > 0.0 && result.best_ask > result.best_bid && result.best_ask < 1.0;
+            return result;
+        }
     }
     return result;
 }
@@ -276,7 +269,6 @@ struct FillabilityStatus {
 [[nodiscard]] FillabilityStatus fillability_status(
     const fs::path& path, std::string_view model_sha) {
     FillabilityStatus result;
-    if (!fs::exists(path)) return result;
     const auto value = read_json(path);
     if (!value.is_object()) return result;
     const auto& root = value.as_object();
@@ -310,6 +302,9 @@ struct Authorization {
     double conservative_ev = 0.0;
     double fill_probability = 0.0;
     double queue_ahead_shares = 0.0;
+    double probe_maximum_loss = 0.0;
+    double probe_loss_cap = 0.0;
+    bool paper_probe = false;
     std::uint32_t horizon_ms = 0;
     std::int64_t expires_at_ns = 0;
 };
@@ -332,12 +327,16 @@ struct Authorization {
     const auto* envelope = child_object(root, "opportunity_envelope");
     if (decision == nullptr || envelope == nullptr) throw std::runtime_error("authorization payload missing");
     const auto* crypto = child_object(*envelope, "crypto_context");
+    const auto* exploration = child_object(*envelope, "exploration");
+    const bool paper_probe = exploration != nullptr
+        && text(find_value(*exploration, "mode")) == "PAPER_BOOTSTRAP_PROBE";
     if (text(find_value(*decision, "schema")) != "polymarket_v7_global_opportunity_decision_v1"
         || text(find_value(*decision, "owner")) != "V7_GLOBAL_PORTFOLIO_COORDINATOR"
         || text(find_value(*decision, "action")) != "MAKE"
         || text(find_value(*decision, "engine_id")) != "CRYPTO_SETTLEMENT_ENGINE"
         || boolean(find_value(*decision, "new_risk_authorized"), true)
         || !boolean(find_value(*decision, "paper_exploration_authorized"))
+        || (paper_probe && !boolean(find_value(*decision, "paper_exploration_probe_authorized")))
         || !boolean(find_value(*decision, "paper_only"))
         || boolean(find_value(*decision, "authenticated_execution"), true)
         || boolean(find_value(*decision, "real_order_submission"), true)
@@ -377,23 +376,33 @@ struct Authorization {
     out.market_id = text(find_value(*envelope, "market_id"));
     out.event_id = text(find_value(*envelope, "event_id"));
     out.token_id = text(find_value(leg, "token_id"));
-    const auto* alpha = child_object(*envelope, "execution_alpha");
-    out.outcome = alpha == nullptr ? std::string{} : text(find_value(*alpha, "outcome"));
+    out.outcome = text(find_value(*envelope, "side"));
     out.order_side = Side::Buy;
     out.limit_price = number(find_value(leg, "limit_price"));
     out.quantity_shares = number(find_value(leg, "target_quantity"));
     out.conservative_ev = number(find_value(*envelope, "conservative_expected_wealth_change"));
+    out.paper_probe = paper_probe;
+    if (paper_probe) {
+        out.probe_maximum_loss = number(find_value(*exploration, "maximum_probe_loss"));
+        out.probe_loss_cap = number(find_value(*exploration, "probe_loss_cap"));
+    }
     out.horizon_ms = static_cast<std::uint32_t>(std::max<std::int64_t>(0, integer(find_value(*plan, "timeout_ms"))));
     out.expires_at_ns = integer(find_value(*envelope, "expires_at_ns"));
+    const auto* alpha = child_object(*envelope, "execution_alpha");
     const auto* fill = alpha == nullptr ? nullptr : child_object(*alpha, "fill_probability");
+    const auto* features = alpha == nullptr ? nullptr : child_object(*alpha, "features");
     out.fill_probability = fill == nullptr ? 0.0 : number(find_value(*fill, "point"));
-    out.queue_ahead_shares = alpha == nullptr ? 0.0
-        : std::max(0.0, number(find_value(*alpha, "queue_ahead_shares")));
+    out.queue_ahead_shares = features == nullptr ? 0.0 : std::max(0.0, number(find_value(*features, "queue_ahead")));
     if (out.market_id.empty() || out.event_id.empty() || out.token_id.empty()
         || (out.outcome != "YES" && out.outcome != "NO")
         || !(out.limit_price > 0.0 && out.limit_price < 1.0)
         || !(out.quantity_shares > 0.0)
-        || !(out.conservative_ev > 0.0)
+        || (!out.paper_probe && !(out.conservative_ev > 0.0))
+        || (out.paper_probe && (!(out.probe_maximum_loss > 0.0)
+            || !(out.probe_loss_cap > 0.0 && out.probe_loss_cap <= 2.0)
+            || out.probe_maximum_loss > out.probe_loss_cap + 1e-9
+            || out.conservative_ev < -out.probe_maximum_loss - 1e-9
+            || out.quantity_shares * out.limit_price > out.probe_loss_cap + 1e-9))
         || !(out.fill_probability > 0.0 && out.fill_probability <= 1.0)
         || out.expires_at_ns <= wall_ns()) {
         throw std::runtime_error("authorization economics/ttl invalid");
@@ -401,16 +410,114 @@ struct Authorization {
     return out;
 }
 
+struct CancelAuthorization {
+    fs::path source_path;
+    json::object receipt;
+    json::object envelope;
+    std::string replay_key;
+    std::string target_replay_key;
+    std::string target_order_id;
+    std::string market_id;
+    std::string event_id;
+    std::string token_id;
+    std::string side;
+    double target_quantity_shares = 0.0;
+    double target_price = 0.0;
+    std::int64_t expires_at_ns = 0;
+};
+
+[[nodiscard]] CancelAuthorization parse_cancel_authorization(
+    const fs::path& path, std::string_view model_sha) {
+    const auto value = read_json(path);
+    if (!value.is_object()) throw std::runtime_error("cancel authorization not object");
+    const auto& root = value.as_object();
+    if (text(find_value(root, "schema")) != "polymarket_v7_authorized_cancel_intent_v1"
+        || !boolean(find_value(root, "paper_only"))
+        || boolean(find_value(root, "authenticated_execution"), true)
+        || boolean(find_value(root, "real_order_submission"), true)
+        || boolean(find_value(root, "real_capital_at_risk"), true)
+        || text(find_value(root, "owner")) != "V7_GLOBAL_PORTFOLIO_COORDINATOR"
+        || text(find_value(root, "execution_authority")) != "SIMULATED_PAPER_CANCEL_ONLY") {
+        throw std::runtime_error("cancel authorization safety/owner invalid");
+    }
+    const auto* decision = child_object(root, "decision");
+    const auto* envelope = child_object(root, "opportunity_envelope");
+    if (decision == nullptr || envelope == nullptr) {
+        throw std::runtime_error("cancel authorization payload missing");
+    }
+    const auto* crypto = child_object(*envelope, "crypto_context");
+    const auto* reasons = child_array(*envelope, "reasons");
+    bool frozen_gate = false;
+    if (reasons != nullptr) {
+        for (const auto& reason : *reasons) {
+            if (text(&reason) == "FROZEN_FORWARD_CANCEL_GATE_PASS") frozen_gate = true;
+        }
+    }
+    if (text(find_value(*decision, "schema")) != "polymarket_v7_global_opportunity_decision_v1"
+        || text(find_value(*decision, "owner")) != "V7_GLOBAL_PORTFOLIO_COORDINATOR"
+        || text(find_value(*decision, "action")) != "CANCEL"
+        || text(find_value(*decision, "engine_id")) != "CRYPTO_SETTLEMENT_ENGINE"
+        || boolean(find_value(*decision, "new_risk_authorized"), true)
+        || text(find_value(*envelope, "schema")) != "polymarket_v7_opportunity_envelope_v1"
+        || text(find_value(*envelope, "model_sha")) != model_sha
+        || text(find_value(*envelope, "engine_id")) != "CRYPTO_SETTLEMENT_ENGINE"
+        || text(find_value(*envelope, "action")) != "CANCEL"
+        || text(find_value(*envelope, "side")) != "NONE"
+        || crypto == nullptr
+        || text(find_value(*crypto, "asset")) != "BTC"
+        || text(find_value(*crypto, "horizon")) != "M5"
+        || !frozen_gate) {
+        throw std::runtime_error("cancel authorization decision/envelope invalid");
+    }
+    const std::string replay_key = text(find_value(*envelope, "deterministic_replay_key"));
+    if (replay_key.empty() || text(find_value(*decision, "selected_replay_key")) != replay_key) {
+        throw std::runtime_error("cancel authorization replay identity mismatch");
+    }
+    const auto* plan = child_object(*envelope, "execution_plan");
+    const auto* legs = plan == nullptr ? nullptr : child_array(*plan, "legs");
+    if (legs == nullptr || legs->size() != 1 || !(*legs)[0].is_object()) {
+        throw std::runtime_error("cancel authorization requires one target leg");
+    }
+    const auto& leg = (*legs)[0].as_object();
+    if (text(find_value(leg, "side")) != "BUY") {
+        throw std::runtime_error("external cancel lane supports BUY quotes only");
+    }
+    CancelAuthorization out;
+    out.source_path = path;
+    out.receipt = *decision;
+    out.envelope = *envelope;
+    out.replay_key = replay_key;
+    out.target_replay_key = text(find_value(*plan, "atomic_unit_id"));
+    out.target_order_id = text(find_value(leg, "leg_id"));
+    out.market_id = text(find_value(*envelope, "market_id"));
+    out.event_id = text(find_value(*envelope, "event_id"));
+    out.token_id = text(find_value(leg, "token_id"));
+    out.side = text(find_value(leg, "side"));
+    out.target_quantity_shares = number(find_value(leg, "target_quantity"));
+    out.target_price = number(find_value(leg, "limit_price"));
+    out.expires_at_ns = integer(find_value(*envelope, "expires_at_ns"));
+    if (out.target_replay_key.empty() || out.target_order_id.empty()
+        || out.market_id.empty() || out.event_id.empty() || out.token_id.empty()
+        || out.side != "BUY" || !(out.target_quantity_shares > 0.0)
+        || !(out.target_price > 0.0 && out.target_price < 1.0)
+        || out.expires_at_ns <= wall_ns()) {
+        throw std::runtime_error("cancel authorization target/ttl invalid");
+    }
+    return out;
+}
+
 struct OrderContext {
     Authorization authorization;
+    json::object latest_cancel_receipt;
+    json::object latest_cancel_envelope;
     std::uint64_t order_id = 0;
     std::uint64_t instrument_handle = 0;
     std::int32_t tick_size_e4 = 0;
     double remaining_shares = 0.0;
-    bool cancel_requested = false;
-    std::int64_t cancel_requested_monotonic_ns = 0;
     std::int64_t arrival_receive_monotonic_ns = 0;
     std::int64_t arrival_exchange_event_ns = 0;
+    std::int64_t cancel_requested_monotonic_ns = 0;
+    bool cancel_requested = false;
     fs::path live_authorization_path;
     bool terminal = false;
 };
@@ -434,9 +541,9 @@ public:
           cancel_authorization_dir_(options_.run_root / "micro_maker" / "authorized_cancel"),
           cancel_archive_dir_(cancel_authorization_dir_ / "archive"),
           cancel_rejected_dir_(cancel_authorization_dir_ / "rejected"),
-          router_status_path_(options_.run_root / "external_fair" / "paper_router_status.json"),
-          fillability_status_path_(options_.run_root / "crypto_execution_alpha" / "fillability" / "fillability_ws_status.json"),
-          trade_tape_path_(options_.run_root / "crypto_execution_alpha" / "fillability" / "fillability_ws.jsonl"),
+          selection_path_(options_.run_root / "micro_maker" / "reward_selection.json"),
+          fillability_status_path_(options_.run_root / "micro_maker" / "fillability_ws_status.json"),
+          trade_tape_path_(options_.run_root / "micro_maker" / "fillability_ws.jsonl"),
           status_path_(options_.run_root / "micro_maker" / "authorized_make_executor_status.json"),
           spool_dir_(options_.run_root / "ledger" / "spool") {
         fs::create_directories(authorization_dir_);
@@ -453,8 +560,8 @@ public:
     }
 
     void run_once() {
-        process_cancel_authorizations();
         process_authorizations();
+        process_cancel_authorizations();
         drain_trade_tape();
         advance_time();
         write_status();
@@ -496,152 +603,6 @@ private:
         return inserted->second;
     }
 
-    void process_cancel_authorizations() {
-        std::error_code error;
-        std::vector<fs::path> paths;
-        for (const auto& entry : fs::directory_iterator(cancel_authorization_dir_, error)) {
-            if (error || !entry.is_regular_file() || entry.path().extension() != ".json") continue;
-            paths.push_back(entry.path());
-        }
-        std::sort(paths.begin(), paths.end());
-        for (const auto& path : paths) {
-            try {
-                submit_cancel(path);
-            } catch (const RetryableAuthorizationError& exc) {
-                ++deferred_cancel_authorizations_;
-                last_error_ = exc.what();
-            } catch (const std::exception& exc) {
-                ++rejected_cancel_authorizations_;
-                last_error_ = exc.what();
-                move_file(path, cancel_rejected_dir_);
-            }
-        }
-    }
-
-    void submit_cancel(const fs::path& path) {
-        const auto value = read_json(path);
-        if (!value.is_object()) throw std::runtime_error("cancel authorization not object");
-        const auto& root = value.as_object();
-        if (text(find_value(root, "schema")) != "polymarket_v7_authorized_cancel_intent_v1"
-            || !boolean(find_value(root, "paper_only"))
-            || boolean(find_value(root, "authenticated_execution"), true)
-            || boolean(find_value(root, "real_order_submission"), true)
-            || boolean(find_value(root, "real_capital_at_risk"), true)
-            || text(find_value(root, "owner")) != "V7_GLOBAL_PORTFOLIO_COORDINATOR"
-            || text(find_value(root, "execution_authority")) != "SIMULATED_PAPER_ONLY") {
-            throw std::runtime_error("cancel authorization safety/owner invalid");
-        }
-        const auto* decision = child_object(root, "decision");
-        const auto* envelope = child_object(root, "opportunity_envelope");
-        if (decision == nullptr || envelope == nullptr) {
-            throw std::runtime_error("cancel authorization payload missing");
-        }
-        const auto* crypto = child_object(*envelope, "crypto_context");
-        if (text(find_value(*decision, "schema")) != "polymarket_v7_global_opportunity_decision_v1"
-            || text(find_value(*decision, "owner")) != "V7_GLOBAL_PORTFOLIO_COORDINATOR"
-            || text(find_value(*decision, "action")) != "CANCEL"
-            || text(find_value(*decision, "engine_id")) != "CRYPTO_SETTLEMENT_ENGINE"
-            || boolean(find_value(*decision, "new_risk_authorized"), true)
-            || !boolean(find_value(*decision, "paper_only"))
-            || boolean(find_value(*decision, "authenticated_execution"), true)
-            || boolean(find_value(*decision, "real_order_submission"), true)
-            || boolean(find_value(*decision, "real_capital_at_risk"), true)
-            || text(find_value(*envelope, "schema")) != "polymarket_v7_opportunity_envelope_v1"
-            || text(find_value(*envelope, "model_sha")) != options_.model_sha
-            || text(find_value(*envelope, "engine_id")) != "CRYPTO_SETTLEMENT_ENGINE"
-            || text(find_value(*envelope, "action")) != "CANCEL"
-            || text(find_value(*envelope, "side")) != "NONE"
-            || crypto == nullptr
-            || text(find_value(*crypto, "asset")) != "BTC"
-            || text(find_value(*crypto, "horizon")) != "M5") {
-            throw std::runtime_error("cancel authorization decision/envelope invalid");
-        }
-        const std::string replay_key = text(find_value(*envelope, "deterministic_replay_key"));
-        if (replay_key.empty() || text(find_value(*decision, "selected_replay_key")) != replay_key) {
-            throw std::runtime_error("cancel authorization replay identity mismatch");
-        }
-        const auto expires_at_ns = integer(find_value(*envelope, "expires_at_ns"));
-        if (expires_at_ns <= wall_ns()) {
-            ++expired_cancel_authorizations_;
-            move_file(path, cancel_archive_dir_);
-            return;
-        }
-        const auto* plan = child_object(*envelope, "execution_plan");
-        const auto* legs = plan == nullptr ? nullptr : child_array(*plan, "legs");
-        if (plan == nullptr || legs == nullptr || legs->size() != 1 || !(*legs)[0].is_object()
-            || text(find_value(*plan, "unwind_plan")) != "CANCEL_ONLY"
-            || text(find_value(*plan, "partial_fill_plan")) != "CANCEL_REMAINDER") {
-            throw std::runtime_error("cancel execution plan invalid");
-        }
-        const auto& leg = (*legs)[0].as_object();
-        const std::string target_order_id = text(find_value(leg, "leg_id"));
-        const std::string target_replay_key = text(find_value(*plan, "atomic_unit_id"));
-        const std::string target_market = text(find_value(leg, "market_id"));
-        const std::string target_token = text(find_value(leg, "token_id"));
-        const std::string target_side = text(find_value(leg, "side"));
-        const double target_quantity = number(find_value(leg, "target_quantity"));
-        const double target_price = number(find_value(leg, "limit_price"));
-        if (target_order_id.empty() || target_replay_key.empty() || target_market.empty()
-            || target_token.empty() || target_side != "BUY" || !(target_quantity > 0.0)
-            || !(target_price > 0.0 && target_price < 1.0)) {
-            throw std::runtime_error("cancel target invalid");
-        }
-        const auto token_it = token_to_order_.find(target_token);
-        if (token_it == token_to_order_.end()) {
-            ++cancel_target_gone_;
-            move_file(path, cancel_archive_dir_);
-            return;
-        }
-        const auto order_it = orders_.find(token_it->second);
-        if (order_it == orders_.end() || order_it->second.terminal) {
-            ++cancel_target_gone_;
-            move_file(path, cancel_archive_dir_);
-            return;
-        }
-        OrderContext& context = order_it->second;
-        if (std::to_string(context.order_id) != target_order_id
-            || context.authorization.replay_key != target_replay_key
-            || context.authorization.market_id != target_market
-            || context.authorization.token_id != target_token
-            || context.authorization.order_side != Side::Buy
-            || std::abs(context.authorization.limit_price - target_price) > 1e-12
-            || target_quantity + 1e-9 < context.remaining_shares) {
-            throw std::runtime_error("cancel target identity drift");
-        }
-        if (context.cancel_requested) {
-            ++duplicate_cancel_authorizations_;
-            move_file(path, cancel_archive_dir_);
-            return;
-        }
-        auto market_it = markets_.find(context.authorization.market_id);
-        if (market_it == markets_.end()) throw RetryableAuthorizationError("cancel market state unavailable");
-        StrategyIntent intent;
-        intent.intent_id = mix64(fnv1a(replay_key));
-        intent.market_handle = market_it->second.market_handle;
-        intent.event_handle = fnv1a(context.authorization.event_id);
-        intent.instrument_handle = context.instrument_handle;
-        intent.decision_monotonic_ns = monotonic_ns();
-        intent.exchange_event_ns = std::max<std::int64_t>(1, context.arrival_exchange_event_ns);
-        intent.strategy_id = StrategyId::ProfessionalMaker;
-        intent.type = IntentType::CancelQuote;
-        intent.side = Side::Buy;
-        const auto result = market_it->second.engine->apply_intent(intent, 0, 0);
-        if (!result.applied || result.rejected || result.invariant_violation) {
-            throw std::runtime_error("queue-aware paper engine rejected authorized CANCEL");
-        }
-        bool requested = false;
-        for (std::size_t index = 0; index < result.event_count; ++index) {
-            if (result.events[index].kind == PaperMakerEventKind::CancelRequested) {
-                requested = true;
-                break;
-            }
-        }
-        if (!requested) throw std::runtime_error("paper engine did not emit CancelRequested");
-        handle_result(result, context.authorization.market_id, nullptr);
-        move_file(path, cancel_archive_dir_);
-        ++cancel_authorizations_;
-    }
-
     void process_authorizations() {
         std::error_code error;
         std::vector<fs::path> paths;
@@ -653,9 +614,6 @@ private:
         for (const auto& path : paths) {
             try {
                 submit(path);
-            } catch (const RetryableAuthorizationError& exc) {
-                ++deferred_authorizations_;
-                last_error_ = exc.what();
             } catch (const std::exception& exc) {
                 ++rejected_authorizations_;
                 last_error_ = exc.what();
@@ -664,34 +622,109 @@ private:
         }
     }
 
+    void process_cancel_authorizations() {
+        std::error_code error;
+        std::vector<fs::path> paths;
+        for (const auto& entry : fs::directory_iterator(cancel_authorization_dir_, error)) {
+            if (error || !entry.is_regular_file() || entry.path().extension() != ".json") continue;
+            paths.push_back(entry.path());
+        }
+        std::sort(paths.begin(), paths.end());
+        for (const auto& path : paths) {
+            try {
+                apply_cancel(path);
+            } catch (const std::exception& exc) {
+                ++rejected_cancel_authorizations_;
+                last_error_ = exc.what();
+                move_file(path, cancel_rejected_dir_);
+            }
+        }
+    }
+
+    void apply_cancel(const fs::path& path) {
+        CancelAuthorization cancellation = parse_cancel_authorization(path, options_.model_sha);
+        const auto token_it = token_to_order_.find(cancellation.token_id);
+        if (token_it == token_to_order_.end()) {
+            ++cancel_noop_terminal_;
+            move_file(path, cancel_archive_dir_);
+            return;
+        }
+        auto order_it = orders_.find(token_it->second);
+        if (order_it == orders_.end() || order_it->second.terminal) {
+            ++cancel_noop_terminal_;
+            move_file(path, cancel_archive_dir_);
+            return;
+        }
+        OrderContext& context = order_it->second;
+        if (std::to_string(context.order_id) != cancellation.target_order_id
+            || context.authorization.replay_key != cancellation.target_replay_key
+            || context.authorization.market_id != cancellation.market_id
+            || context.authorization.event_id != cancellation.event_id
+            || context.authorization.token_id != cancellation.token_id
+            || context.authorization.order_side != Side::Buy
+            || std::abs(context.authorization.limit_price - cancellation.target_price) > 1e-12
+            || cancellation.target_quantity_shares + 1e-9 < context.remaining_shares) {
+            throw std::runtime_error("cancel target does not match exact active PAPER order");
+        }
+        if (context.cancel_requested) {
+            ++cancel_noop_terminal_;
+            move_file(path, cancel_archive_dir_);
+            return;
+        }
+        auto market_it = markets_.find(cancellation.market_id);
+        if (market_it == markets_.end()) {
+            throw std::runtime_error("cancel target market runtime missing");
+        }
+        const auto now = monotonic_ns();
+        StrategyIntent intent;
+        intent.intent_id = mix64(fnv1a(cancellation.replay_key));
+        intent.market_handle = market_it->second.market_handle;
+        intent.event_handle = fnv1a(cancellation.event_id);
+        intent.instrument_handle = context.instrument_handle;
+        intent.decision_monotonic_ns = now;
+        intent.exchange_event_ns = std::max<std::int64_t>(1, context.arrival_exchange_event_ns);
+        intent.strategy_id = StrategyId::ProfessionalMaker;
+        intent.type = IntentType::CancelQuote;
+        intent.side = Side::Buy;
+        intent.urgency = Urgency::Critical;
+        intent.purpose = IntentPurpose::Risk;
+        intent.passive = 1;
+        intent.post_only = 1;
+        context.latest_cancel_receipt = cancellation.receipt;
+        context.latest_cancel_envelope = cancellation.envelope;
+        PaperMakerResult result = market_it->second.engine->apply_intent(
+            intent, 0, context.tick_size_e4);
+        if (result.rejected || result.invariant_violation) {
+            context.latest_cancel_receipt.clear();
+            context.latest_cancel_envelope.clear();
+            throw std::runtime_error("queue-aware PAPER engine rejected coordinator CANCEL");
+        }
+        handle_result(result, cancellation.market_id, nullptr);
+        ++coordinator_cancel_requests_;
+        move_file(path, cancel_archive_dir_);
+    }
+
     void submit(const fs::path& path) {
         Authorization authorization = parse_authorization(path, options_.model_sha);
-        const ArrivalBookEvidence arrival = arrival_book_evidence(
-            router_status_path_, options_.model_sha, authorization.market_id, authorization.token_id);
+        const SelectionEvidence selection = selection_evidence(
+            selection_path_, options_.model_sha, authorization.market_id, authorization.token_id);
         const auto now = wall_ms();
-        if (!arrival.found || arrival.outcome != authorization.outcome
-            || arrival.receive_ts_ms <= 0 || now < arrival.receive_ts_ms
-            || now - arrival.receive_ts_ms > kArrivalBookMaxAgeMs) {
-            throw RetryableAuthorizationError("fresh causal arrival book unavailable");
+        if (!selection.found || selection.generated_at_ms <= 0 || now < selection.generated_at_ms
+            || now - selection.generated_at_ms > kSelectionMaxAgeMs) {
+            throw std::runtime_error("fresh maker selection unavailable");
         }
-        if (authorization.limit_price >= arrival.best_ask - 1e-12) {
+        if (authorization.limit_price >= selection.best_ask - 1e-12) {
             throw std::runtime_error("post-only arrival revalidation failed");
         }
         const FillabilityStatus fillability = fillability_status(fillability_status_path_, options_.model_sha);
-        if (!fillability.valid) throw RetryableAuthorizationError("fillability tape/status not causally ready");
+        if (!fillability.valid) throw std::runtime_error("fillability tape/status not causally ready");
 
         MarketRuntime& market = market_runtime(authorization.market_id);
         const std::uint64_t instrument = authorization.outcome == "YES" ? market.yes_handle : market.no_handle;
-        const double tick = static_cast<double>(arrival.tick_size_e4) / kPriceScaleE4;
+        const double tick = static_cast<double>(selection.tick_size_e4) / kPriceScaleE4;
         const auto price_tick = static_cast<std::int64_t>(std::llround(authorization.limit_price / tick));
         if (price_tick <= 0 || std::abs(price_tick * tick - authorization.limit_price) > 1e-8) {
             throw std::runtime_error("authorized price is off tick");
-        }
-        if (std::abs(authorization.limit_price - arrival.best_bid) > 0.5 * tick + 1e-12) {
-            throw std::runtime_error("arrival touch changed; queue state no longer identified");
-        }
-        if (authorization.quantity_shares + 1e-9 < arrival.min_order_size) {
-            throw std::runtime_error("authorized quantity below current minimum order size");
         }
         const auto quantity = shares_to_micro(authorization.quantity_shares);
         if (quantity <= 0) throw std::runtime_error("authorized quantity invalid");
@@ -719,9 +752,9 @@ private:
         intent.ev_uncertainty = 0.0;
 
         const auto visible_queue = shares_to_micro(std::max(
-            authorization.queue_ahead_shares, arrival.best_bid_size));
+            authorization.queue_ahead_shares, selection.queue_ahead_shares));
         PaperMakerResult result = market.engine->apply_intent(
-            intent, visible_queue, arrival.tick_size_e4);
+            intent, visible_queue, selection.tick_size_e4);
         if (!result.applied || result.rejected || result.invariant_violation) {
             throw std::runtime_error("queue-aware paper engine rejected authorized MAKE");
         }
@@ -741,10 +774,10 @@ private:
         context.authorization = std::move(authorization);
         context.order_id = live->order_id;
         context.instrument_handle = instrument;
-        context.tick_size_e4 = arrival.tick_size_e4;
-        context.remaining_shares = authorization.quantity_shares;
+        context.tick_size_e4 = selection.tick_size_e4;
+        context.remaining_shares = context.authorization.quantity_shares;
         context.arrival_receive_monotonic_ns = live->timestamp_ns;
-        context.arrival_exchange_event_ns = fillability.last_exchange_event_ns;
+        context.arrival_exchange_event_ns = intent.exchange_event_ns;
         context.live_authorization_path = live_path;
         const std::uint64_t order_id = context.order_id;
         token_to_order_[context.authorization.token_id] = order_id;
@@ -820,14 +853,6 @@ private:
         trade.receive_monotonic_ns = receive_monotonic;
         PaperMakerResult result = market_it->second.engine->on_public_trade(trade);
         ++trade_rows_consumed_;
-        trade_active_orders_seen_ += result.active_orders_seen;
-        trade_causally_pre_arrival_ += result.causally_pre_arrival;
-        trade_cancel_effective_before_ += result.cancel_effective_before_trade;
-        trade_wrong_aggressor_side_ += result.wrong_aggressor_side;
-        trade_price_not_crossing_ += result.price_not_crossing;
-        trade_eligible_orders_ += result.eligible_orders;
-        trade_queue_not_depleted_ += result.queue_not_depleted;
-        trade_operational_fill_microunits_ += std::max<std::int64_t>(0, result.operational_fill_microunits);
         handle_result(result, context.authorization.market_id, &row);
     }
 
@@ -848,12 +873,12 @@ private:
             auto it = orders_.find(event.order_id);
             if (it == orders_.end()) continue;
             if (event.kind == PaperMakerEventKind::Fill) {
-                emit_fill(event, it->second, trade_row);
                 if (event.operational_fill_microunits > 0) {
                     it->second.remaining_shares = std::max(
                         0.0, it->second.remaining_shares
                             - micro_to_shares(event.operational_fill_microunits));
                 }
+                emit_fill(event, it->second, trade_row);
                 ++fills_;
             } else if (event.kind == PaperMakerEventKind::CancelRequested) {
                 it->second.cancel_requested = true;
@@ -874,6 +899,7 @@ private:
     [[nodiscard]] json::object common_metadata(const OrderContext& context) const {
         json::object metadata;
         metadata["paper_exploration"] = true;
+        metadata["paper_bootstrap_probe"] = context.authorization.paper_probe;
         metadata["economic_authority"] = "PAPER_EXPLORATION";
         metadata["execution_authority"] = "SIMULATED_PAPER_ONLY";
         metadata["coordinator_receipt"] = context.authorization.receipt;
@@ -881,6 +907,12 @@ private:
         metadata["opportunity_envelope"] = context.authorization.envelope;
         if (const auto* alpha = child_object(context.authorization.envelope, "execution_alpha")) {
             metadata["execution_alpha"] = *alpha;
+        }
+        if (!context.latest_cancel_receipt.empty()) {
+            metadata["external_cancel_coordinator_receipt"] = context.latest_cancel_receipt;
+        }
+        if (!context.latest_cancel_envelope.empty()) {
+            metadata["external_cancel_opportunity_envelope"] = context.latest_cancel_envelope;
         }
         return metadata;
     }
@@ -928,8 +960,6 @@ private:
         row["intended_size"] = context.authorization.quantity_shares;
         row["order_state"] = "LIVE";
         row["timeout_ms"] = context.authorization.horizon_ms;
-        row["paper_arrival_receive_monotonic_ns"] = context.arrival_receive_monotonic_ns;
-        row["paper_arrival_exchange_event_ns"] = context.arrival_exchange_event_ns;
         row["metadata"] = common_metadata(context);
         spool(std::move(row));
     }
@@ -1048,14 +1078,8 @@ private:
         status["model_sha"] = options_.model_sha;
         status["active_orders"] = static_cast<std::uint64_t>(orders_.size());
         json::array active_order_details;
-        std::vector<std::uint64_t> active_order_ids;
-        active_order_ids.reserve(orders_.size());
-        for (const auto& [order_id, _] : orders_) active_order_ids.push_back(order_id);
-        std::sort(active_order_ids.begin(), active_order_ids.end());
-        for (const auto order_id : active_order_ids) {
-            const auto it = orders_.find(order_id);
-            if (it == orders_.end()) continue;
-            const auto& context = it->second;
+        for (const auto& [order_id, context] : orders_) {
+            if (context.terminal) continue;
             active_order_details.emplace_back(json::object{
                 {"order_id", std::to_string(order_id)},
                 {"replay_key", context.authorization.replay_key},
@@ -1078,22 +1102,10 @@ private:
         status["fills"] = fills_;
         status["trade_rows_consumed"] = trade_rows_consumed_;
         status["invalid_trade_rows"] = invalid_trade_rows_;
-        status["trade_active_orders_seen"] = trade_active_orders_seen_;
-        status["trade_causally_pre_arrival"] = trade_causally_pre_arrival_;
-        status["trade_cancel_effective_before"] = trade_cancel_effective_before_;
-        status["trade_wrong_aggressor_side"] = trade_wrong_aggressor_side_;
-        status["trade_price_not_crossing"] = trade_price_not_crossing_;
-        status["trade_eligible_orders"] = trade_eligible_orders_;
-        status["trade_queue_not_depleted"] = trade_queue_not_depleted_;
-        status["trade_operational_fill_microunits"] = trade_operational_fill_microunits_;
         status["rejected_authorizations"] = rejected_authorizations_;
-        status["deferred_authorizations"] = deferred_authorizations_;
-        status["cancel_authorizations"] = cancel_authorizations_;
+        status["coordinator_cancel_requests"] = coordinator_cancel_requests_;
         status["rejected_cancel_authorizations"] = rejected_cancel_authorizations_;
-        status["deferred_cancel_authorizations"] = deferred_cancel_authorizations_;
-        status["expired_cancel_authorizations"] = expired_cancel_authorizations_;
-        status["duplicate_cancel_authorizations"] = duplicate_cancel_authorizations_;
-        status["cancel_target_gone"] = cancel_target_gone_;
+        status["cancel_noop_terminal"] = cancel_noop_terminal_;
         status["restart_orphans"] = restart_orphans_;
         status["spooled_events"] = spooled_events_;
         status["last_error"] = last_error_;
@@ -1112,7 +1124,7 @@ private:
     fs::path cancel_authorization_dir_;
     fs::path cancel_archive_dir_;
     fs::path cancel_rejected_dir_;
-    fs::path router_status_path_;
+    fs::path selection_path_;
     fs::path fillability_status_path_;
     fs::path trade_tape_path_;
     fs::path status_path_;
@@ -1127,22 +1139,10 @@ private:
     std::uint64_t fills_ = 0;
     std::uint64_t trade_rows_consumed_ = 0;
     std::uint64_t invalid_trade_rows_ = 0;
-    std::uint64_t trade_active_orders_seen_ = 0;
-    std::uint64_t trade_causally_pre_arrival_ = 0;
-    std::uint64_t trade_cancel_effective_before_ = 0;
-    std::uint64_t trade_wrong_aggressor_side_ = 0;
-    std::uint64_t trade_price_not_crossing_ = 0;
-    std::uint64_t trade_eligible_orders_ = 0;
-    std::uint64_t trade_queue_not_depleted_ = 0;
-    std::int64_t trade_operational_fill_microunits_ = 0;
     std::uint64_t rejected_authorizations_ = 0;
-    std::uint64_t deferred_authorizations_ = 0;
-    std::uint64_t cancel_authorizations_ = 0;
+    std::uint64_t coordinator_cancel_requests_ = 0;
     std::uint64_t rejected_cancel_authorizations_ = 0;
-    std::uint64_t deferred_cancel_authorizations_ = 0;
-    std::uint64_t expired_cancel_authorizations_ = 0;
-    std::uint64_t duplicate_cancel_authorizations_ = 0;
-    std::uint64_t cancel_target_gone_ = 0;
+    std::uint64_t cancel_noop_terminal_ = 0;
     std::uint64_t restart_orphans_ = 0;
     std::uint64_t spooled_events_ = 0;
     std::uint64_t event_sequence_ = 0;

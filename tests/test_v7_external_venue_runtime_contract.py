@@ -22,11 +22,12 @@ def main() -> None:
     assert 'v7_register_child "$!"' in launcher
     assert "v7_assert_registered_child_count 23" in launcher
     assert "external_venues.json" in launcher
-    assert '"external_cancel_signal.json"' in source
+    assert '"--external-cancel-signal"' in source
+    assert "advance_external_cancel_signal" in source
     assert '"shock_window_ms", 100' in source
-    assert '"minimum_absolute_log_return_bp", 0.3' in source
+    assert '"minimum_absolute_log_return_bp", 0.30' in source
     assert '"trigger_cooldown_ms", 250' in source
-    assert '"evaluation_tick_ms", 25' in source
+    assert '"trigger_grid_ms", 25' in source
     assert "std::make_unique<beast::flat_static_buffer" in websocket
     assert "flat_static_buffer<kMaxWsMessageBytes> buffer;" not in websocket
     assert "constexpr std::size_t kMaxWsMessageBytes = 2U << 20;" in websocket

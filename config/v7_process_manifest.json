@@ -157,7 +157,6 @@
       "inputs": [],
       "outputs": [
         "external_fair/external_venues.json",
-        "external_fair/external_cancel_signal.json",
         "external_fair/external_venues.log"
       ],
       "dependencies": [
@@ -274,6 +273,70 @@
       "launcher_log": "external_fair/paper_router.log"
     },
     {
+      "id": "external_cancel_book_observer",
+      "executable": "${CRYPTO_BOOK_OBSERVER}",
+      "arguments": [
+        "--collector-sha",
+        "${SHA}",
+        "--runtime-sha",
+        "${SHA}"
+      ],
+      "profile": "observer",
+      "inputs": [
+        "external_fair/status.json"
+      ],
+      "outputs": [
+        "research/external_cancel_book_observer.log",
+        "${EXTERNAL_CANCEL_BOOK_ROOT}"
+      ],
+      "dependencies": [
+        "external_fair_router",
+        "external_venue_runtime"
+      ],
+      "exact_sha_required": true,
+      "config_identity_required": true,
+      "launcher_log": "research/external_cancel_book_observer.log"
+    },
+    {
+      "id": "external_cancel_forward_runtime",
+      "executable": "scripts/v7_external_cancel_forward_runtime.py",
+      "arguments": [
+        "--loop",
+        "--model-sha",
+        "${SHA}",
+        "--execution-alpha-config",
+        "config/v7_crypto_execution_alpha.json",
+        "--baseline-report",
+        "${DURABLE_ROOT}/research/btc_m5_external_cancel_forward_report_v3.json",
+        "--baseline-manifest",
+        "${DURABLE_ROOT}/research/btc_m5_external_cancel_evidence_manifest_v1.json",
+        "--baseline-protocol",
+        "${DURABLE_ROOT}/research/btc_m5_external_cancel_episode_protocol_v3.json"
+      ],
+      "profile": "observer",
+      "inputs": [
+        "${EXTERNAL_CANCEL_BOOK_ROOT}",
+        "external_fair/normalized_events",
+        "micro_maker/execution_model.json",
+        "config/v7_crypto_execution_alpha.json",
+        "${DURABLE_ROOT}/research/btc_m5_external_cancel_forward_report_v3.json",
+        "${DURABLE_ROOT}/research/btc_m5_external_cancel_evidence_manifest_v1.json",
+        "${DURABLE_ROOT}/research/btc_m5_external_cancel_episode_protocol_v3.json"
+      ],
+      "outputs": [
+        "research/external_cancel_forward_runtime.log",
+        "control/external_cancel_activation.json",
+        "${EXTERNAL_CANCEL_RESEARCH_ROOT}/forward_report.json"
+      ],
+      "dependencies": [
+        "external_cancel_book_observer",
+        "external_venue_runtime"
+      ],
+      "exact_sha_required": true,
+      "config_identity_required": true,
+      "launcher_log": "research/external_cancel_forward_runtime.log"
+    },
+    {
       "id": "adaptive_universe",
       "executable": "scripts/v7_adaptive_universe.py",
       "arguments": [
@@ -377,8 +440,7 @@
       ],
       "outputs": [
         "opportunities/receipts",
-        "global_portfolio_coordinator.log",
-        "micro_maker/authorized_make"
+        "global_portfolio_coordinator.log"
       ],
       "dependencies": [
         "ledger_router"
@@ -393,106 +455,6 @@
         "oms": true,
         "inventory": true
       }
-    },
-    {
-      "id": "crypto_execution_alpha",
-      "executable": "scripts/v7_crypto_execution_alpha_runtime.py",
-      "arguments": [
-        "--loop",
-        "--comparison-size-shares",
-        "5.0",
-        "--cancel-report",
-        "${DURABLE_ROOT}/research/btc_m5_external_cancel_forward_report_v3.json",
-        "--cancel-signal",
-        "${RUN_ROOT}/external_fair/external_cancel_signal.json"
-      ],
-      "profile": "engine",
-      "inputs": [
-        "config/v7_crypto_settlement_engine.json",
-        "config/v7_external_fair.json",
-        "control/runtime_status.json",
-        "control/crypto_settlement_engine_snapshot.json",
-        "external_fair/status.json",
-        "external_fair/paper_router_status.json",
-        "micro_maker/execution_model.json",
-        "external_fair/external_cancel_signal.json",
-        "${DURABLE_ROOT}/research/btc_m5_external_cancel_forward_report_v3.json"
-      ],
-      "outputs": [
-        "crypto_execution_alpha/status.json",
-        "crypto_execution_alpha/decisions.jsonl",
-        "crypto_execution_alpha/maker_probe_recommendations.jsonl",
-        "crypto_execution_alpha/runtime.log",
-        "opportunities/inbox",
-        "crypto_execution_alpha/btc_m5_fillability_selection.json"
-      ],
-      "dependencies": [
-        "external_fair_router",
-        "global_portfolio_coordinator"
-      ],
-      "exact_sha_required": true,
-      "config_identity_required": true,
-      "launcher_log": "crypto_execution_alpha/runtime.log"
-    },
-    {
-      "id": "crypto_execution_alpha_fillability",
-      "executable": "${FILLABILITY_OBSERVER}",
-      "arguments": [
-        "--selection",
-        "${RUN_ROOT}/crypto_execution_alpha/btc_m5_fillability_selection.json",
-        "--output-dir",
-        "${RUN_ROOT}/crypto_execution_alpha/fillability",
-        "--model-sha",
-        "${SHA}"
-      ],
-      "profile": "observer",
-      "inputs": [
-        "config/paper_v7.json",
-        "crypto_execution_alpha/btc_m5_fillability_selection.json"
-      ],
-      "outputs": [
-        "crypto_execution_alpha/fillability/fillability_ws.jsonl",
-        "crypto_execution_alpha/fillability/fillability_ws_status.json",
-        "crypto_execution_alpha/fillability/runtime.log"
-      ],
-      "dependencies": [
-        "crypto_execution_alpha"
-      ],
-      "exact_sha_required": true,
-      "config_identity_required": true,
-      "launcher_log": "crypto_execution_alpha/fillability/runtime.log"
-    },
-    {
-      "id": "authorized_maker_paper_executor",
-      "executable": "${AUTHORIZED_MAKER_PAPER_EXECUTOR}",
-      "arguments": [
-        "--run-root",
-        "${RUN_ROOT}",
-        "--model-sha",
-        "${SHA}"
-      ],
-      "profile": "engine",
-      "inputs": [
-        "micro_maker/authorized_make",
-        "micro_maker/authorized_cancel",
-        "external_fair/paper_router_status.json",
-        "crypto_execution_alpha/fillability/fillability_ws.jsonl",
-        "crypto_execution_alpha/fillability/fillability_ws_status.json"
-      ],
-      "outputs": [
-        "micro_maker/authorized_make_executor_status.json",
-        "micro_maker/authorized_make_executor.log",
-        "ledger/spool"
-      ],
-      "dependencies": [
-        "global_portfolio_coordinator",
-        "crypto_execution_alpha_fillability",
-        "ledger_router",
-        "external_fair_router"
-      ],
-      "exact_sha_required": true,
-      "config_identity_required": true,
-      "launcher_log": "micro_maker/authorized_make_executor.log"
     },
     {
       "id": "maker_reward_selection",
@@ -611,6 +573,32 @@
       "launcher_log": "micro_maker/cohort_supervisor.log"
     },
     {
+      "id": "authorized_maker_paper_executor",
+      "executable": "${AUTHORIZED_MAKER_EXECUTOR}",
+      "arguments": [
+        "--model-sha",
+        "${SHA}"
+      ],
+      "profile": "engine",
+      "inputs": [
+        "micro_maker/authorized_make",
+        "micro_maker/authorized_cancel",
+        "micro_maker/fillability_ws.jsonl"
+      ],
+      "outputs": [
+        "micro_maker/authorized_make_executor_status.json",
+        "ledger/spool",
+        "micro_maker/authorized_make_executor.log"
+      ],
+      "dependencies": [
+        "global_portfolio_coordinator",
+        "maker_observer_cohort"
+      ],
+      "exact_sha_required": true,
+      "config_identity_required": true,
+      "launcher_log": "micro_maker/authorized_make_executor.log"
+    },
+    {
       "id": "economic_artifacts",
       "executable": "scripts/v7_generate_economic_artifacts.py",
       "arguments": [
@@ -618,16 +606,14 @@
       ],
       "profile": "observer",
       "inputs": [
-        "ledger/execution.jsonl",
-        "crypto_execution_alpha/decisions.jsonl"
+        "ledger/execution.jsonl"
       ],
       "outputs": [
         "reports",
         "economic_artifacts.log"
       ],
       "dependencies": [
-        "ledger_router",
-        "crypto_execution_alpha"
+        "ledger_router"
       ],
       "exact_sha_required": true,
       "config_identity_required": true,

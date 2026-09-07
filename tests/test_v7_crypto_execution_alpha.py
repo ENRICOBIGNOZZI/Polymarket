@@ -1,220 +1,152 @@
 from __future__ import annotations
 
+import json
 import sys
-import unittest
 from pathlib import Path
 
-ROOT = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(ROOT))
 
-from scripts.v7_crypto_execution_alpha import (
-    ATTRIBUTION_FIELDS,
-    CancelEvidence,
-    ExecutionAlphaError,
-    MakerEvidence,
-    MarketState,
-    OutcomeBook,
-    TakerEvidence,
-    aggregate_attribution,
-    evaluate_market,
-    outcome_fair,
-    select_top_markets,
+ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT / "scripts"))
+
+from v7_crypto_execution_alpha import (  # noqa: E402
+    action_competition,
+    information_rank,
+    load_config,
+    market_score,
+    select_crypto_markets,
+    validate_execution_alpha_packet,
 )
 
 
-class CryptoExecutionAlphaTests(unittest.TestCase):
-    def state(
-        self, *,
-        fair=(0.70, 0.75, 0.80),
-        yes=(0.49, 0.50, 50.0, 50.0),
-        no=(0.49, 0.50, 50.0, 50.0),
-        maker_mature=False,
-        maker_reach=0.8,
-        maker_fill_given_reach=0.8,
-        maker_point_fill=0.8,
-        maker_adverse=0.002,
-        taker_mature=True,
-        taker_fill=1.0,
-        taker_slippage=0.0,
-        cancel_active=False,
-        cancel_mandatory=False,
-        cancel_mature=False,
-        cancel_probability=0.0,
-        cancel_avoided_loss=0.0,
-        target_size=10.0,
-        market_id="m1",
-    ) -> MarketState:
-        return MarketState(
-            market_id=market_id,
-            event_id=f"e-{market_id}",
-            asset="BTC",
-            horizon="M5",
-            fair_lower_yes=fair[0],
-            fair_point_yes=fair[1],
-            fair_upper_yes=fair[2],
-            yes=OutcomeBook("YES", f"yes-{market_id}", yes[0], yes[1], yes[2], yes[3]),
-            no=OutcomeBook("NO", f"no-{market_id}", no[0], no[1], no[2], no[3]),
-            fee_schedule={"rate": 0.0, "exponent": 1.0, "takerOnly": True},
-            maker=MakerEvidence(
-                reach_probability_lower=maker_reach,
-                fill_given_reach_probability_lower=maker_fill_given_reach,
-                fill_probability_point=maker_point_fill,
-                adverse_markout_upper_per_share=maker_adverse,
-                toxic_fill_probability_upper=0.25,
-                rebate_per_share=0.0,
-                rebate_authoritative=False,
-                cancel_latency_risk_per_share=0.0,
-                inventory_cost_per_share=0.0,
-                cancel_cost_per_quote=0.0,
-                capital_cost_per_quote=0.0,
-                mature=maker_mature,
-            ),
-            taker=TakerEvidence(
-                fill_probability_lower=taker_fill,
-                slippage_per_share=taker_slippage,
-                latency_risk_per_share=0.0,
-                unwind_loss_per_share=0.0,
-                capital_cost_per_trade=0.0,
-                mature=taker_mature,
-            ),
-            cancel=CancelEvidence(
-                signal_active=cancel_active,
-                mandatory_risk_cancel=cancel_mandatory,
-                quote_size=5.0,
-                avoidable_fill_probability_lower=cancel_probability,
-                avoided_adverse_loss_lower_per_share=cancel_avoided_loss,
-                cancel_cost=0.0,
-                mature=cancel_mature,
-                target_order_id="1" if cancel_active else "",
-                target_replay_key="make-replay" if cancel_active else "",
-                target_outcome="YES" if cancel_active else "",
-                target_token_id=f"yes-{market_id}" if cancel_active else "",
-                target_side="BUY" if cancel_active else "",
-                target_price=yes[0] if cancel_active else 0.0,
-            ),
-            target_size=target_size,
-            tte_seconds=60.0,
-            settlement_verified=True,
-            fair_mature=True,
-            source_snapshot_identity=f"snap-{market_id}",
-        )
+CONFIG = load_config(ROOT / "config" / "v7_crypto_execution_alpha.json")
 
-    def assert_attribution_identity(self, report: dict) -> None:
-        for candidate in report["candidates"]:
-            self.assertEqual(set(candidate["attribution"]), set(ATTRIBUTION_FIELDS))
-            self.assertAlmostEqual(
-                candidate["conservative_expected_wealth_change"],
-                sum(candidate["attribution"].values()),
-                places=12,
-            )
 
-    def test_take_wins_when_settlement_lower_bound_clears_crossing_cost(self) -> None:
-        report = evaluate_market(self.state())
-        selected = report["selected_action"]
-        self.assertEqual((selected["action"], selected["outcome"]), ("TAKE", "YES"))
-        self.assertGreater(selected["conservative_expected_wealth_change"], 0.0)
-        self.assertGreater(selected["attribution"]["settlement_alpha"], 0.0)
-        self.assertLess(selected["attribution"]["spread_capture"], 0.0)
-        self.assert_attribution_identity(report)
+def packet(action: str, *, quality: float = 1.0) -> dict:
+    features = {
+        "queue_ahead": 5.0 / quality,
+        "spread": 0.01 * quality,
+        "book_imbalance": 0.3 * quality,
+        "recent_aggressive_flow": 8.0 * quality,
+        "quote_lifetime_ms": 250.0,
+        "tte_seconds": 90.0 * quality,
+        "binance_shock_bp": 0.4 * quality,
+        "coinbase_shock_bp": 0.3 * quality,
+        "bybit_shock_bp": 0.35 * quality,
+        "cross_venue_disagreement_bp": 0.1 / quality,
+        "oracle_distance_bp": 0.2 * quality,
+        "volatility_bp": 2.0 * quality,
+        "latency_ms": 20.0 / quality,
+    }
+    return {
+        "schema": "polymarket_v7_execution_alpha_packet_v1",
+        "model_id": "execution-alpha-test",
+        "model_hash": "d" * 64,
+        "feature_receive_timestamp_ns": 90,
+        "features": features,
+        "fill_probability": {"lower": min(0.95, 0.20 * quality), "point": min(0.97, 0.30 * quality), "upper": min(0.99, 0.40 * quality)},
+        "markout_per_share": {"lower": -0.005 / quality, "point": -0.002 / quality, "upper": 0.001},
+        "toxic_fill_probability": {"lower": 0.05, "point": min(0.8, 0.10 / quality + 0.05), "upper": min(0.9, 0.20 / quality + 0.05)},
+        "action_ev": {
+            "MAKE": {"point": 1.0, "conservative": 0.5},
+            "TAKE": {"point": 1.2, "conservative": 0.7},
+            "CANCEL": {"point": 0.1, "conservative": 0.05},
+            "NOTHING": {"point": 0.0, "conservative": 0.0},
+        },
+        "selected_action": action,
+        "evidence_status": "IMMATURE",
+    }
 
-    def test_mature_make_can_beat_expensive_take(self) -> None:
-        report = evaluate_market(self.state(
-            fair=(0.54, 0.56, 0.58),
-            yes=(0.50, 0.52, 50.0, 50.0),
-            no=(0.48, 0.50, 50.0, 50.0),
-            maker_mature=True,
-            maker_adverse=0.002,
-            taker_slippage=0.03,
-        ))
-        selected = report["selected_action"]
-        self.assertEqual((selected["action"], selected["outcome"]), ("MAKE", "YES"))
-        self.assertGreater(selected["attribution"]["spread_capture"], 0.0)
-        self.assertLess(selected["attribution"]["adverse_selection"], 0.0)
-        self.assertTrue(selected["evidence_mature"])
-        self.assert_attribution_identity(report)
 
-    def test_immature_maker_cannot_create_conservative_alpha_but_can_request_information(self) -> None:
-        report = evaluate_market(self.state(
-            fair=(0.51, 0.80, 0.90),
-            yes=(0.49, 0.90, 50.0, 50.0),
-            no=(0.09, 0.51, 50.0, 50.0),
-            maker_mature=False,
-            maker_point_fill=0.9,
-            taker_slippage=0.02,
-        ))
-        self.assertEqual(report["selected_action"]["action"], "NOTHING")
-        self.assertEqual(report["best_point_action"]["action"], "MAKE")
-        self.assertTrue(report["maker_information_probe_recommended"])
-        make = next(row for row in report["candidates"] if row["action"] == "MAKE" and row["outcome"] == "YES")
-        self.assertEqual(make["expected_fill_probability"], 0.0)
-        self.assertGreater(make["point_expected_wealth_change"], make["conservative_expected_wealth_change"])
-        self.assertIn("MAKER_EXECUTION_EVIDENCE_IMMATURE_CONSERVATIVE_FILL_ZERO", make["reason_codes"])
+def envelope(*, market: str, action: str = "MAKE", ev: float = 1.0, quality: float = 1.0, key: str | None = None) -> dict:
+    return {
+        "engine_id": "CRYPTO_SETTLEMENT_ENGINE",
+        "action": action,
+        "market_id": market,
+        "crypto_context": {"asset": "BTC", "horizon": "M5"},
+        "deterministic_replay_key": key or f"{market}-{action}",
+        "conservative_expected_wealth_change": ev,
+        "fair_value": {"lower": 0.56, "point": 0.60, "upper": 0.64},
+        "capacity": {"executable_size": 10.0 * quality},
+        "latency": {"arrival_ns": int(20_000_000 / quality)},
+        "cost_vector": {"adverse_markout": 0.002 / quality},
+        "execution_plan": {"legs": [{"limit_price": 0.50}]},
+        "uncertainty": {"lower_bound": -0.1, "upper_bound": 0.2},
+        "execution_alpha": packet(action, quality=quality),
+    }
 
-    def test_mandatory_cancel_preempts_positive_alpha(self) -> None:
-        report = evaluate_market(self.state(
-            cancel_active=True,
-            cancel_mandatory=True,
-            cancel_mature=True,
-            cancel_probability=0.5,
-            cancel_avoided_loss=0.04,
-        ))
-        selected = report["selected_action"]
-        self.assertEqual(selected["action"], "CANCEL")
-        self.assertEqual(report["selection_reason"], "RISK_CANCEL_PREEMPTS_ALPHA")
-        self.assertIn("MANDATORY_RISK_CANCEL", selected["reason_codes"])
 
-    def test_nothing_wins_when_every_new_risk_action_is_nonpositive(self) -> None:
-        report = evaluate_market(self.state(
-            fair=(0.49, 0.50, 0.51),
-            yes=(0.49, 0.51, 50.0, 50.0),
-            no=(0.49, 0.51, 50.0, 50.0),
-            maker_mature=True,
-            maker_adverse=0.02,
-            taker_slippage=0.02,
-        ))
-        self.assertEqual(report["selected_action"]["action"], "NOTHING")
-        self.assertEqual(report["selection_reason"], "NO_POSITIVE_CONSERVATIVE_ACTION_VALUE")
+def test_frozen_external_cancel_official_v3_evidence_is_pinned() -> None:
+    official = CONFIG["execution_alpha"]["cancel"]["official_v3_evidence"]
+    assert official["promotion_boundary_ms"] == 1788781327887
+    assert official["protocol_sha256"] == "85e54afef180426dab0519c701f764ea5863076ac88566648122553576bd8a04"
+    assert official["baseline_report_sha256"] == "c2cb36b2df6de713d8d9c630eac6685fb5f935fa3bdffffa0b8ec321cbe56d96"
+    assert official["baseline_manifest_sha256"] == "2619efb8d80daaf583ad24df6c9bcf2bc05dc868dfa3db7139fcd806a28a3f4a"
+    assert official["minimum_independent_markets"] == 30
+    assert official["minimum_avoidable_fill_events"] == 50
+    assert official["require_positive_market_cluster_bootstrap_lower"] is True
 
-    def test_yes_no_fair_is_exactly_complementary(self) -> None:
-        state = self.state(fair=(0.21, 0.34, 0.61))
-        yes = outcome_fair(state, "YES")
-        no = outcome_fair(state, "NO")
-        self.assertEqual(yes, (0.21, 0.34, 0.61))
-        self.assertEqual(no, (0.39, 0.6599999999999999, 0.79))
-        self.assertAlmostEqual(yes[0] + no[2], 1.0)
-        self.assertAlmostEqual(yes[1] + no[1], 1.0)
-        self.assertAlmostEqual(yes[2] + no[0], 1.0)
 
-    def test_market_selection_keeps_only_top_conservative_opportunities(self) -> None:
-        reports = [
-            evaluate_market(self.state(fair=(0.52, 0.54, 0.56), market_id="a")),
-            evaluate_market(self.state(fair=(0.65, 0.70, 0.75), market_id="b")),
-            evaluate_market(self.state(fair=(0.80, 0.85, 0.90), market_id="c")),
-            evaluate_market(self.state(fair=(0.49, 0.50, 0.51), market_id="d", taker_slippage=0.02)),
-        ]
-        selected = select_top_markets(reports, top_fraction=0.50)
-        self.assertEqual(len(selected), 2)
-        self.assertEqual(selected[0]["market_id"], "c")
-        self.assertNotIn("d", {row["market_id"] for row in selected})
-        attribution = aggregate_attribution(selected)
-        self.assertAlmostEqual(
-            attribution["total_expected_wealth_change"],
-            attribution["settlement_alpha"] + attribution["execution_alpha"],
-        )
+def test_packet_enforces_receive_time_and_action_identity() -> None:
+    value = packet("MAKE")
+    assert validate_execution_alpha_packet(value, decision_ns=100, action="MAKE")["model_id"] == "execution-alpha-test"
+    bad = json.loads(json.dumps(value))
+    bad["feature_receive_timestamp_ns"] = 101
+    try:
+        validate_execution_alpha_packet(bad, decision_ns=100, action="MAKE")
+    except ValueError as exc:
+        assert str(exc) == "packet_feature_clock"
+    else:
+        raise AssertionError("future execution feature cut accepted")
 
-    def test_unauthoritative_rebate_fails_closed(self) -> None:
-        state = self.state()
-        bad = MarketState(**{
-            **state.__dict__,
-            "maker": MakerEvidence(**{
-                **state.maker.__dict__,
-                "rebate_per_share": 0.001,
-                "rebate_authoritative": False,
-            }),
-        })
-        with self.assertRaisesRegex(ExecutionAlphaError, "unauthoritative_rebate"):
-            evaluate_market(bad)
+
+def test_market_selection_concentrates_budget_on_top_fraction() -> None:
+    rows = [
+        envelope(market="m1", ev=0.2, quality=0.5),
+        envelope(market="m2", ev=0.3, quality=0.8),
+        envelope(market="m3", ev=0.4, quality=1.0),
+        envelope(market="m4", ev=0.5, quality=2.0),
+    ]
+    result = select_crypto_markets(rows, CONFIG)
+    assert result.diagnostics["market_count"] == 4
+    assert result.diagnostics["retained_market_count"] == 1
+    assert result.diagnostics["retained_market_keys"] == ["BTC|M5|m4"]
+    assert result.retained_replay_keys == frozenset({"m4-MAKE"})
+
+
+def test_market_score_exposes_component_decomposition() -> None:
+    score = market_score(envelope(market="m1"), CONFIG)
+    assert 0.0 <= score["score"] <= 1.0
+    assert set(score["components"]) >= {
+        "predictability", "mispricing", "depth", "latency", "fillability", "adverse_selection",
+    }
+    assert score["components"]["missing_execution_features"] == []
+
+
+def test_make_and_take_compete_on_the_same_market() -> None:
+    rows = [
+        envelope(market="m1", action="MAKE", ev=0.6, key="make"),
+        envelope(market="m1", action="TAKE", ev=1.2, key="take"),
+    ]
+    result = action_competition(rows)["BTC|M5|m1"]
+    assert result["best_action"] == "TAKE"
+    assert result["actions"]["MAKE"]["conservative_ev"] == 0.6
+    assert result["actions"]["TAKE"]["conservative_ev"] == 1.2
+
+
+def test_information_rank_rewards_uncertainty_without_promotion_credit() -> None:
+    low = envelope(market="m1", action="TAKE", key="low")
+    high = envelope(market="m2", action="TAKE", key="high")
+    low["exploration"] = {"information_score": 1.0, "point_expected_wealth_change": 0.1}
+    high["exploration"] = {"information_score": 1.0, "point_expected_wealth_change": 0.1}
+    low["uncertainty"] = {"lower_bound": -0.01, "upper_bound": 0.01}
+    high["uncertainty"] = {"lower_bound": -0.5, "upper_bound": 0.5}
+    assert information_rank(high, CONFIG) > information_rank(low, CONFIG)
 
 
 if __name__ == "__main__":
-    unittest.main()
+    test_frozen_external_cancel_official_v3_evidence_is_pinned()
+    test_packet_enforces_receive_time_and_action_identity()
+    test_market_selection_concentrates_budget_on_top_fraction()
+    test_market_score_exposes_component_decomposition()
+    test_make_and_take_compete_on_the_same_market()
+    test_information_rank_rewards_uncertainty_without_promotion_credit()

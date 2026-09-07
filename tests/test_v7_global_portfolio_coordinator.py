@@ -12,6 +12,7 @@ sys.path.insert(0, str(ROOT / "tests"))
 
 from v7_global_portfolio_coordinator import process_cut  # noqa: E402
 from test_v7_opportunity import envelope  # noqa: E402
+from test_v7_crypto_execution_alpha import packet as execution_packet  # noqa: E402
 
 
 def write(path: Path, value: dict) -> None:
@@ -98,19 +99,10 @@ def test_positive_mature_make_publishes_one_receipt_gated_paper_authorization() 
     with tempfile.TemporaryDirectory() as directory:
         root = Path(directory)
         value = envelope(action="MAKE", ev=1.25, key="maker-paper", authority="PAPER_EXPLORATION")
-        value["execution_alpha"] = {
-            "schema": "polymarket_v7_execution_alpha_packet_v1",
-            "action": "MAKE", "outcome": "YES", "evidence_status": "MATURE",
-            "fill_probability": {"lower": 0.4, "point": 0.5, "upper": 0.6},
-            "queue_ahead_shares": 12.0,
-            "action_ev": {"conservative": 1.25, "point": 1.5},
-            "attribution": {
-                "settlement_alpha": 1.25, "spread_capture": 0.0, "rebate": 0.0,
-                "fees": 0.0, "slippage": 0.0, "adverse_selection": 0.0,
-                "latency": 0.0, "inventory": 0.0, "unwind": 0.0,
-                "cancel": 0.0, "capital": 0.0,
-            },
-        }
+        alpha = execution_packet("MAKE")
+        alpha["evidence_status"] = "MATURE"
+        alpha["action_ev"]["MAKE"] = {"conservative": 1.25, "point": 1.5}
+        value["execution_alpha"] = alpha
         write(root / "opportunities/inbox/make.json", value)
         status = process_cut(root, now_ns=150)
         decision = status["last_decision"]
@@ -123,7 +115,7 @@ def test_positive_mature_make_publishes_one_receipt_gated_paper_authorization() 
         assert authorization["owner"] == "V7_GLOBAL_PORTFOLIO_COORDINATOR"
         assert authorization["execution_authority"] == "SIMULATED_PAPER_ONLY"
         assert authorization["selected_replay_key"] == "maker-paper"
-        assert authorization["opportunity_envelope"]["execution_alpha"]["outcome"] == "YES"
+        assert authorization["opportunity_envelope"]["execution_alpha"]["selected_action"] == "MAKE"
 
 
 def test_take_never_publishes_maker_authorization() -> None:
