@@ -106,7 +106,15 @@ class SurfaceClassificationTests(unittest.TestCase):
                 None,
             )
             if audited_key is not None:
-                self.assertEqual(current, expected[audited_key], key)
+                if current != expected[audited_key] and _dynamic_review_ref(key):
+                    # A review branch legitimately transitions from pending
+                    # merge to redundant/deletable once main contains it.
+                    _assert_fail_closed_review_ref(self, key, row)
+                    self.assertIn(
+                        expected[audited_key][1], _DYNAMIC_REVIEW_CLASSIFICATIONS, key
+                    )
+                else:
+                    self.assertEqual(current, expected[audited_key], key)
                 continue
             self.assertTrue(_dynamic_review_ref(key), key)
             _assert_fail_closed_review_ref(self, key, row)
