@@ -115,7 +115,13 @@ def main() -> None:
         )
         artifact.validate()
         assert report["split_contracts"] == {"train": 7, "validation": 2, "test": 3}
+        assert artifact.parameters["uncertainty_method"] == "validation_market_cluster_bias_plus_standard_error_v1"
+        assert len(artifact.parameters["mean_uncertainty_by_tte"]) == 4
+        assert len(artifact.parameters["calibration_by_tte"]) == 4
         inference = predict(artifact, training_rows[-1]["features"])
+        matching = next(bucket for bucket in artifact.parameters["mean_uncertainty_by_tte"]
+                        if bucket["minimum_seconds"] <= training_rows[-1]["features"]["tte_seconds"] <= bucket["maximum_seconds"])
+        assert abs(inference["mean_uncertainty_bps"] - matching["mean_uncertainty_bps"]) < 1e-12
         assert 0.0 < inference["lower"] <= inference["yes"] <= inference["upper"] < 1.0
         assert inference["settlement_sigma_bps"] > 0.0
 
