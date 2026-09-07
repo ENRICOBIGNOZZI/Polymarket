@@ -328,6 +328,10 @@ class OpportunityEnvelope:
             maximum_loss = _finite(probe.get("maximum_probe_loss"), "probe_maximum_loss")
             loss_cap = _finite(probe.get("probe_loss_cap"), "probe_loss_cap")
             information_score = _finite(probe.get("information_score"), "probe_information_score")
+            probe_model_by_action = {
+                "TAKE": "btc_m5_same_oracle_diffusion_bootstrap_v1",
+                "MAKE": "btc_m5_maker_execution_bootstrap_probe_v1",
+            }
             if (
                 probe.get("mode") != "PAPER_BOOTSTRAP_PROBE"
                 or point_change <= 0.0
@@ -339,12 +343,12 @@ class OpportunityEnvelope:
                 or probe.get("promotion_eligible") is not False
                 or probe.get("robust_candidate") is not False
                 or probe.get("arrival_revalidated") is not True
-                or probe.get("model_id") != "btc_m5_same_oracle_diffusion_bootstrap_v1"
+                or probe.get("model_id") != probe_model_by_action.get(action)
                 or not HASH64.fullmatch(str(probe.get("model_hash") or ""))
                 or expected_wealth_change < -maximum_loss - 1e-9
                 or _finite(value.get("portfolio_exposure_delta"), "portfolio_exposure_delta") > loss_cap + 1e-9
                 or engine_id != "CRYPTO_SETTLEMENT_ENGINE"
-                or action != "TAKE"
+                or action not in {"MAKE", "TAKE"}
                 or not isinstance(crypto_context, dict)
                 or crypto_context.get("authority") != "PAPER_EXPLORATION"
                 or crypto_context.get("asset") != "BTC"

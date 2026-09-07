@@ -26,6 +26,7 @@ from v7_crypto_execution_alpha import (
     select_crypto_markets,
 )
 from v7_maker_opportunity_bridge import build_maker_opportunities
+from v7_external_cancel_opportunity_bridge import build_external_cancel_opportunities
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -307,6 +308,40 @@ def _selected_envelope(envelopes: list[dict[str, Any]], replay_key: Any) -> dict
     )
 
 
+def _publish_cancel_authorization(root: Path, decision: dict[str, Any], envelopes: list[dict[str, Any]]) -> None:
+    """Publish coordinator-owned PAPER cancel intent for the maker executor."""
+    if (
+        decision.get("action") != "CANCEL"
+        or decision.get("new_risk_authorized") is not False
+        or not decision.get("selected_replay_key")
+    ):
+        return
+    envelope = _selected_envelope(envelopes, decision.get("selected_replay_key"))
+    if not isinstance(envelope, dict):
+        return
+    if (
+        envelope.get("engine_id") != "CRYPTO_SETTLEMENT_ENGINE"
+        or envelope.get("action") != "CANCEL"
+        or "FROZEN_FORWARD_CANCEL_GATE_PASS" not in (envelope.get("reasons") or [])
+    ):
+        return
+    key = str(decision["selected_replay_key"])
+    identity = __import__("hashlib").sha256(key.encode()).hexdigest()
+    atomic_json(root / "micro_maker" / "authorized_cancel" / f"{identity}.json", {
+        "schema": "polymarket_v7_authorized_cancel_intent_v1",
+        "paper_only": True,
+        "authenticated_execution": False,
+        "real_order_submission": False,
+        "real_capital_at_risk": False,
+        "owner": "V7_GLOBAL_PORTFOLIO_COORDINATOR",
+        "execution_authority": "SIMULATED_PAPER_CANCEL_ONLY",
+        "selected_replay_key": key,
+        "decision": decision,
+        "opportunity_envelope": envelope,
+        "expires_at_ns": int(envelope.get("expires_at_ns") or 0),
+    })
+
+
 def _publish_make_authorization(root: Path, decision: dict[str, Any], envelopes: list[dict[str, Any]]) -> None:
     """Publish coordinator-owned PAPER intent; this does not simulate a fill."""
     if (
@@ -378,6 +413,24 @@ def process_cut(run_root: Path, *, now_ns: int | None = None) -> dict[str, Any]:
             "typed_make_opportunities": 0,
         }
 
+    try:
+        cancel_envelopes, cancel_diagnostics = build_external_cancel_opportunities(
+            root, now_ns=current_ns,
+        )
+        envelopes.extend(cancel_envelopes)
+    except Exception as exc:  # cancel fault containment: never block other safe decisions
+        cancel_envelopes = []
+        cancel_diagnostics = {
+            "schema": "polymarket_v7_external_cancel_opportunity_bridge_v1",
+            "paper_only": True,
+            "authenticated_execution": False,
+            "real_order_submission": False,
+            "state": "FAIL_CLOSED",
+            "reasons": [f"UNEXPECTED_CANCEL_BRIDGE_ERROR:{type(exc).__name__}:{exc}"],
+            "active_make_files": 0,
+            "cancel_opportunities": 0,
+        }
+
     execution_alpha_diagnostics: dict[str, Any] = {
         "schema": "polymarket_v7_crypto_execution_alpha_selection_v1",
         "state": "NOT_EVALUATED",
@@ -427,6 +480,7 @@ def process_cut(run_root: Path, *, now_ns: int | None = None) -> dict[str, Any]:
         })
     decision["crypto_correlation_risk"] = aggregate_correlated_crypto_risk(crypto_exposures)
     execution_alpha_diagnostics["maker_opportunity_bridge"] = maker_diagnostics
+    execution_alpha_diagnostics["external_cancel_opportunity_bridge"] = cancel_diagnostics
     decision["crypto_execution_alpha"] = execution_alpha_diagnostics
     decision.update({
         "paper_only": True,
@@ -436,6 +490,7 @@ def process_cut(run_root: Path, *, now_ns: int | None = None) -> dict[str, Any]:
         "economic_engine_count": 2,
         "input_count": len(files),
         "generated_maker_opportunity_count": len(maker_envelopes),
+        "generated_cancel_opportunity_count": len(cancel_envelopes),
         "valid_envelope_count": len(envelopes),
         "selected_envelope_count": len(selected_envelopes),
         "adapter_error_count": len(adapter_errors),
@@ -468,6 +523,7 @@ def process_cut(run_root: Path, *, now_ns: int | None = None) -> dict[str, Any]:
         receipt_name = decision["selected_replay_key"].replace("/", "_") + ".json"
         atomic_json(root / "opportunities" / "receipts" / receipt_name, decision)
     _publish_make_authorization(root, decision, selected_envelopes)
+    _publish_cancel_authorization(root, decision, selected_envelopes)
     if files or maker_envelopes:
         append_jsonl(root / "opportunities" / "decisions.jsonl", decision)
     archive = root / "opportunities" / "archive"

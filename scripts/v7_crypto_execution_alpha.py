@@ -112,6 +112,22 @@ def validate_config(value: dict[str, Any]) -> None:
         raise ExecutionAlphaError("config_execution_alpha")
     if tuple(execution.get("required_feature_groups") or []) != FEATURE_NAMES:
         raise ExecutionAlphaError("config_feature_contract")
+    cancel = execution.get("cancel") if isinstance(execution.get("cancel"), dict) else {}
+    live_trigger = cancel.get("live_trigger") if isinstance(cancel.get("live_trigger"), dict) else {}
+    if (
+        cancel.get("external_cancel_overlay_experiment_id")
+            != "btc-m5-external-cancel-overlay-forward-v1"
+        or cancel.get("promotion_requires_frozen_forward_gate") is not True
+        or live_trigger.get("trigger_grid_ms") != 25
+        or live_trigger.get("overlap_warmup_ms") != 300
+        or live_trigger.get("maximum_signal_age_ms") != 100
+        or live_trigger.get("supported_cancel_side") != "BUY"
+        or live_trigger.get("protocol_origin_commit")
+            != "fcc9a81becb32263606b28904c083c96f6de5750"
+        or live_trigger.get("receive_time_global_merge_required") is not True
+        or live_trigger.get("same_timestamp_atomic_group_required") is not True
+    ):
+        raise ExecutionAlphaError("config_external_cancel_live_trigger")
     selection = value.get("market_selection")
     if not isinstance(selection, dict) or selection.get("enabled") is not True:
         raise ExecutionAlphaError("config_market_selection")

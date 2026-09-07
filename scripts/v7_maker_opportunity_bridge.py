@@ -362,6 +362,7 @@ def build_maker_opportunities(
     model_hash = _sha256(model)
     output: list[dict[str, Any]] = []
     rejected: dict[str, int] = {}
+    probe_count = 0
 
     for market, cell in cells:
         opportunity = cell.get("quote_opportunity") if isinstance(cell.get("quote_opportunity"), dict) else {}
@@ -369,6 +370,12 @@ def build_maker_opportunities(
         outcome = str(cell.get("outcome") or "").upper()
         side = str(cell.get("quote_side") or "").upper()
         token = str(cell.get("token_id") or "")
+        control_probe_cell = (
+            market.get("control_exploration_authorized") is True
+            and str(cell.get("authority_basis") or "") in {
+                "POSITIVE_FLOW_CONTROL", "LOW_SAMPLE_FRESH_FLOW_CONTROL", "COLD_START_CONTROL"
+            }
+        )
         if side != "BUY":
             rejected["SELL_REQUIRES_CANONICAL_INVENTORY_BRIDGE"] = rejected.get(
                 "SELL_REQUIRES_CANONICAL_INVENTORY_BRIDGE", 0
@@ -396,15 +403,33 @@ def build_maker_opportunities(
         # Proposal size is PAPER evidence size and cannot exceed the configured
         # low-sample quote. Capital/risk/OMS remain downstream owners.
         size = max(1e-6, min(size, configured_size))
+        provisional_point_ev = fill_point * point_per_fill * size
+        provisional_conservative_ev = fill_lower * conservative_per_fill * size
+        needs_probe = (
+            control_probe_cell
+            and provisional_point_ev > 0.0
+            and (evidence_status != "MATURE" or provisional_conservative_ev <= 0.0)
+        )
+        probe_loss_cap = 2.0
+        if needs_probe:
+            # The probe cannot expose more than two PAPER dollars even when the
+            # selector's ordinary low-sample quote is larger. This lane is for
+            # information, not for manufacturing economic PnL.
+            size = min(size, probe_loss_cap / max(price, 1e-9))
         point_ev = fill_point * point_per_fill * size
         conservative_ev = fill_lower * conservative_per_fill * size
+        maximum_probe_loss = size * price if needs_probe else 0.0
+        if needs_probe:
+            conservative_ev = max(
+                -maximum_probe_loss, min(0.0, fill_point * conservative_per_fill * size)
+            )
         if not math.isfinite(point_ev) or not math.isfinite(conservative_ev):
             rejected["NONFINITE_ECONOMICS"] = rejected.get("NONFINITE_ECONOMICS", 0) + 1
             continue
         if point_ev <= 0.0:
             rejected["NONPOSITIVE_POINT_EV"] = rejected.get("NONPOSITIVE_POINT_EV", 0) + 1
             continue
-        if evidence_status != "MATURE" or conservative_ev <= 0.0:
+        if not needs_probe and (evidence_status != "MATURE" or conservative_ev <= 0.0):
             rejected["INSUFFICIENT_CONSERVATIVE_EXECUTION_EVIDENCE"] = rejected.get(
                 "INSUFFICIENT_CONSERVATIVE_EXECUTION_EVIDENCE", 0
             ) + 1
@@ -429,6 +454,7 @@ def build_maker_opportunities(
         identity = _stable_id(
             model_sha, market_status.get("market_id"), token, outcome, side, action,
             f"{price:.8f}", selection_ts_ms, model_hash,
+            "PAPER_BOOTSTRAP_PROBE" if needs_probe else "ROBUST_MAKE",
         )
         raw = {
             "schema": "polymarket_v7_opportunity_envelope_v1",
@@ -475,9 +501,9 @@ def build_maker_opportunities(
             "uncertainty": {
                 "lower_bound": conservative_ev,
                 "upper_bound": max(conservative_ev, point_ev),
-                "status": "MATURE",
+                "status": "IMMATURE" if needs_probe else "MATURE",
             },
-            "calibration_status": "MATURE",
+            "calibration_status": "IMMATURE" if needs_probe else "MATURE",
             "latency": {
                 "profile_id": "maker-bridge-receive-time-causal-v1",
                 "profile_valid": True,
@@ -513,12 +539,18 @@ def build_maker_opportunities(
                 "verified": True,
             },
             "eligible": True,
-            "reasons": [
+            "reasons": ([
+                "VERIFIED_SETTLEMENT_FAIR",
+                "CONTROL_EXPLORATION_CELL",
+                "POSITIVE_POINT_MAKER_EV",
+                "ZERO_PROMOTION_CREDIT_INFORMATION_PROBE",
+                f"PLACEMENT_{action}",
+            ] if needs_probe else [
                 "VERIFIED_SETTLEMENT_FAIR",
                 "MATURE_FILL_EVENT_LOWER_BOUND",
                 "POSITIVE_CONSERVATIVE_MAKER_EV",
                 f"PLACEMENT_{action}",
-            ],
+            ]),
             "deterministic_replay_key": f"maker:{identity}",
             "expires_at_ns": decision_ns + min(
                 5_000_000_000,
@@ -526,12 +558,28 @@ def build_maker_opportunities(
             ),
             "execution_alpha": packet,
         }
+        if needs_probe:
+            orders = max(0, int(_finite(group.get("orders"), 0.0) or 0.0))
+            raw["exploration"] = {
+                "mode": "PAPER_BOOTSTRAP_PROBE",
+                "point_expected_wealth_change": point_ev,
+                "maximum_probe_loss": maximum_probe_loss,
+                "probe_loss_cap": probe_loss_cap,
+                "information_score": 1.0 + max(0.0, 50.0 - orders) / 50.0,
+                "promotion_eligible": False,
+                "robust_candidate": False,
+                "arrival_revalidated": True,
+                "model_id": "btc_m5_maker_execution_bootstrap_probe_v1",
+                "model_hash": model_hash,
+            }
         try:
             parsed = OpportunityEnvelope.parse(raw)
         except OpportunityError:
             rejected["CANONICAL_ENVELOPE_REJECTED"] = rejected.get("CANONICAL_ENVELOPE_REJECTED", 0) + 1
             continue
         output.append(parsed.raw)
+        if needs_probe:
+            probe_count += 1
 
     output.sort(key=lambda row: (
         -float(row.get("conservative_expected_wealth_change") or 0.0),
@@ -546,6 +594,7 @@ def build_maker_opportunities(
         "reasons": [],
         "candidate_cells": len(cells),
         "typed_make_opportunities": len(output),
+        "typed_make_probe_opportunities": probe_count,
         "rejected": rejected,
         "model_state": model.get("model_state"),
         "model_hash": model_hash,

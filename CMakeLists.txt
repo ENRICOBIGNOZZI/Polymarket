@@ -278,11 +278,18 @@ if(BUILD_TESTING)
   target_link_libraries(pm_v7_coinbase_l2_tests PRIVATE pm_v7_external)
   add_test(NAME pm_v7_coinbase_l2_tests COMMAND pm_v7_coinbase_l2_tests)
 
+  add_test(NAME test_v7_authorized_make_cancel_runtime
+    COMMAND ${Python3_EXECUTABLE}
+      "${CMAKE_CURRENT_SOURCE_DIR}/tests/test_v7_authorized_make_cancel_runtime.py"
+      --executor $<TARGET_FILE:polymarket_v7_authorized_maker_paper_executor>)
+
   file(GLOB V7_PY_TESTS CONFIGURE_DEPENDS
     "${CMAKE_CURRENT_SOURCE_DIR}/tests/test_v7_*.py"
     "${CMAKE_CURRENT_SOURCE_DIR}/tests/test_monitoring_v7_*.py")
   foreach(test_file IN LISTS V7_PY_TESTS)
     get_filename_component(test_name "${test_file}" NAME_WE)
-    add_test(NAME "${test_name}" COMMAND ${Python3_EXECUTABLE} "${test_file}")
+    if(NOT test_name STREQUAL "test_v7_authorized_make_cancel_runtime")
+      add_test(NAME "${test_name}" COMMAND ${Python3_EXECUTABLE} "${test_file}")
+    endif()
   endforeach()
 endif()

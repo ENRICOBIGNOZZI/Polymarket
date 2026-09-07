@@ -92,6 +92,16 @@ std::size_t ExternalVenueIngress::drain_into(
     return count;
 }
 
+std::size_t ExternalVenueIngress::drain_events(
+    std::span<ExternalVenueEvent> output,
+    std::size_t max_events) noexcept {
+    const std::size_t limit = std::min(output.size(), max_events);
+    std::size_t count = 0;
+    while (count < limit && queue_.try_pop(output[count])) ++count;
+    drained_events_.fetch_add(count, std::memory_order_relaxed);
+    return count;
+}
+
 void ExternalVenueIngress::mark_disconnected(
     std::uint64_t connection_epoch) noexcept {
     const auto previous = connection_epoch_.exchange(

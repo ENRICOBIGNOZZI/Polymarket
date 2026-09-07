@@ -302,6 +302,9 @@ struct Authorization {
     double conservative_ev = 0.0;
     double fill_probability = 0.0;
     double queue_ahead_shares = 0.0;
+    double probe_maximum_loss = 0.0;
+    double probe_loss_cap = 0.0;
+    bool paper_probe = false;
     std::uint32_t horizon_ms = 0;
     std::int64_t expires_at_ns = 0;
 };
@@ -324,12 +327,16 @@ struct Authorization {
     const auto* envelope = child_object(root, "opportunity_envelope");
     if (decision == nullptr || envelope == nullptr) throw std::runtime_error("authorization payload missing");
     const auto* crypto = child_object(*envelope, "crypto_context");
+    const auto* exploration = child_object(*envelope, "exploration");
+    const bool paper_probe = exploration != nullptr
+        && text(find_value(*exploration, "mode")) == "PAPER_BOOTSTRAP_PROBE";
     if (text(find_value(*decision, "schema")) != "polymarket_v7_global_opportunity_decision_v1"
         || text(find_value(*decision, "owner")) != "V7_GLOBAL_PORTFOLIO_COORDINATOR"
         || text(find_value(*decision, "action")) != "MAKE"
         || text(find_value(*decision, "engine_id")) != "CRYPTO_SETTLEMENT_ENGINE"
         || boolean(find_value(*decision, "new_risk_authorized"), true)
         || !boolean(find_value(*decision, "paper_exploration_authorized"))
+        || (paper_probe && !boolean(find_value(*decision, "paper_exploration_probe_authorized")))
         || !boolean(find_value(*decision, "paper_only"))
         || boolean(find_value(*decision, "authenticated_execution"), true)
         || boolean(find_value(*decision, "real_order_submission"), true)
@@ -374,6 +381,11 @@ struct Authorization {
     out.limit_price = number(find_value(leg, "limit_price"));
     out.quantity_shares = number(find_value(leg, "target_quantity"));
     out.conservative_ev = number(find_value(*envelope, "conservative_expected_wealth_change"));
+    out.paper_probe = paper_probe;
+    if (paper_probe) {
+        out.probe_maximum_loss = number(find_value(*exploration, "maximum_probe_loss"));
+        out.probe_loss_cap = number(find_value(*exploration, "probe_loss_cap"));
+    }
     out.horizon_ms = static_cast<std::uint32_t>(std::max<std::int64_t>(0, integer(find_value(*plan, "timeout_ms"))));
     out.expires_at_ns = integer(find_value(*envelope, "expires_at_ns"));
     const auto* alpha = child_object(*envelope, "execution_alpha");
@@ -385,7 +397,12 @@ struct Authorization {
         || (out.outcome != "YES" && out.outcome != "NO")
         || !(out.limit_price > 0.0 && out.limit_price < 1.0)
         || !(out.quantity_shares > 0.0)
-        || !(out.conservative_ev > 0.0)
+        || (!out.paper_probe && !(out.conservative_ev > 0.0))
+        || (out.paper_probe && (!(out.probe_maximum_loss > 0.0)
+            || !(out.probe_loss_cap > 0.0 && out.probe_loss_cap <= 2.0)
+            || out.probe_maximum_loss > out.probe_loss_cap + 1e-9
+            || out.conservative_ev < -out.probe_maximum_loss - 1e-9
+            || out.quantity_shares * out.limit_price > out.probe_loss_cap + 1e-9))
         || !(out.fill_probability > 0.0 && out.fill_probability <= 1.0)
         || out.expires_at_ns <= wall_ns()) {
         throw std::runtime_error("authorization economics/ttl invalid");
@@ -393,8 +410,93 @@ struct Authorization {
     return out;
 }
 
+struct CancelAuthorization {
+    fs::path source_path;
+    json::object receipt;
+    json::object envelope;
+    std::string replay_key;
+    std::string market_id;
+    std::string event_id;
+    std::string token_id;
+    std::int64_t expires_at_ns = 0;
+};
+
+[[nodiscard]] CancelAuthorization parse_cancel_authorization(
+    const fs::path& path, std::string_view model_sha) {
+    const auto value = read_json(path);
+    if (!value.is_object()) throw std::runtime_error("cancel authorization not object");
+    const auto& root = value.as_object();
+    if (text(find_value(root, "schema")) != "polymarket_v7_authorized_cancel_intent_v1"
+        || !boolean(find_value(root, "paper_only"))
+        || boolean(find_value(root, "authenticated_execution"), true)
+        || boolean(find_value(root, "real_order_submission"), true)
+        || boolean(find_value(root, "real_capital_at_risk"), true)
+        || text(find_value(root, "owner")) != "V7_GLOBAL_PORTFOLIO_COORDINATOR"
+        || text(find_value(root, "execution_authority")) != "SIMULATED_PAPER_CANCEL_ONLY") {
+        throw std::runtime_error("cancel authorization safety/owner invalid");
+    }
+    const auto* decision = child_object(root, "decision");
+    const auto* envelope = child_object(root, "opportunity_envelope");
+    if (decision == nullptr || envelope == nullptr) {
+        throw std::runtime_error("cancel authorization payload missing");
+    }
+    const auto* crypto = child_object(*envelope, "crypto_context");
+    const auto* reasons = child_array(*envelope, "reasons");
+    bool frozen_gate = false;
+    if (reasons != nullptr) {
+        for (const auto& reason : *reasons) {
+            if (text(&reason) == "FROZEN_FORWARD_CANCEL_GATE_PASS") frozen_gate = true;
+        }
+    }
+    if (text(find_value(*decision, "schema")) != "polymarket_v7_global_opportunity_decision_v1"
+        || text(find_value(*decision, "owner")) != "V7_GLOBAL_PORTFOLIO_COORDINATOR"
+        || text(find_value(*decision, "action")) != "CANCEL"
+        || text(find_value(*decision, "engine_id")) != "CRYPTO_SETTLEMENT_ENGINE"
+        || boolean(find_value(*decision, "new_risk_authorized"), true)
+        || text(find_value(*envelope, "schema")) != "polymarket_v7_opportunity_envelope_v1"
+        || text(find_value(*envelope, "model_sha")) != model_sha
+        || text(find_value(*envelope, "engine_id")) != "CRYPTO_SETTLEMENT_ENGINE"
+        || text(find_value(*envelope, "action")) != "CANCEL"
+        || text(find_value(*envelope, "side")) != "NONE"
+        || crypto == nullptr
+        || text(find_value(*crypto, "asset")) != "BTC"
+        || text(find_value(*crypto, "horizon")) != "M5"
+        || !frozen_gate) {
+        throw std::runtime_error("cancel authorization decision/envelope invalid");
+    }
+    const std::string replay_key = text(find_value(*envelope, "deterministic_replay_key"));
+    if (replay_key.empty() || text(find_value(*decision, "selected_replay_key")) != replay_key) {
+        throw std::runtime_error("cancel authorization replay identity mismatch");
+    }
+    const auto* plan = child_object(*envelope, "execution_plan");
+    const auto* legs = plan == nullptr ? nullptr : child_array(*plan, "legs");
+    if (legs == nullptr || legs->size() != 1 || !(*legs)[0].is_object()) {
+        throw std::runtime_error("cancel authorization requires one target leg");
+    }
+    const auto& leg = (*legs)[0].as_object();
+    if (text(find_value(leg, "side")) != "BUY") {
+        throw std::runtime_error("external cancel lane supports BUY quotes only");
+    }
+    CancelAuthorization out;
+    out.source_path = path;
+    out.receipt = *decision;
+    out.envelope = *envelope;
+    out.replay_key = replay_key;
+    out.market_id = text(find_value(*envelope, "market_id"));
+    out.event_id = text(find_value(*envelope, "event_id"));
+    out.token_id = text(find_value(leg, "token_id"));
+    out.expires_at_ns = integer(find_value(*envelope, "expires_at_ns"));
+    if (out.market_id.empty() || out.event_id.empty() || out.token_id.empty()
+        || out.expires_at_ns <= wall_ns()) {
+        throw std::runtime_error("cancel authorization target/ttl invalid");
+    }
+    return out;
+}
+
 struct OrderContext {
     Authorization authorization;
+    json::object latest_cancel_receipt;
+    json::object latest_cancel_envelope;
     std::uint64_t order_id = 0;
     std::uint64_t instrument_handle = 0;
     std::int32_t tick_size_e4 = 0;
@@ -418,6 +520,9 @@ public:
           archive_dir_(authorization_dir_ / "archive"),
           orphaned_dir_(authorization_dir_ / "orphaned"),
           rejected_dir_(authorization_dir_ / "rejected"),
+          cancel_authorization_dir_(options_.run_root / "micro_maker" / "authorized_cancel"),
+          cancel_archive_dir_(cancel_authorization_dir_ / "archive"),
+          cancel_rejected_dir_(cancel_authorization_dir_ / "rejected"),
           selection_path_(options_.run_root / "micro_maker" / "reward_selection.json"),
           fillability_status_path_(options_.run_root / "micro_maker" / "fillability_ws_status.json"),
           trade_tape_path_(options_.run_root / "micro_maker" / "fillability_ws.jsonl"),
@@ -428,6 +533,9 @@ public:
         fs::create_directories(archive_dir_);
         fs::create_directories(orphaned_dir_);
         fs::create_directories(rejected_dir_);
+        fs::create_directories(cancel_authorization_dir_);
+        fs::create_directories(cancel_archive_dir_);
+        fs::create_directories(cancel_rejected_dir_);
         fs::create_directories(spool_dir_);
         quarantine_restart_live_authorizations();
         open_trade_tape_at_end();
@@ -435,6 +543,7 @@ public:
 
     void run_once() {
         process_authorizations();
+        process_cancel_authorizations();
         drain_trade_tape();
         advance_time();
         write_status();
@@ -493,6 +602,78 @@ private:
                 move_file(path, rejected_dir_);
             }
         }
+    }
+
+    void process_cancel_authorizations() {
+        std::error_code error;
+        std::vector<fs::path> paths;
+        for (const auto& entry : fs::directory_iterator(cancel_authorization_dir_, error)) {
+            if (error || !entry.is_regular_file() || entry.path().extension() != ".json") continue;
+            paths.push_back(entry.path());
+        }
+        std::sort(paths.begin(), paths.end());
+        for (const auto& path : paths) {
+            try {
+                apply_cancel(path);
+            } catch (const std::exception& exc) {
+                ++rejected_cancel_authorizations_;
+                last_error_ = exc.what();
+                move_file(path, cancel_rejected_dir_);
+            }
+        }
+    }
+
+    void apply_cancel(const fs::path& path) {
+        CancelAuthorization cancellation = parse_cancel_authorization(path, options_.model_sha);
+        const auto token_it = token_to_order_.find(cancellation.token_id);
+        if (token_it == token_to_order_.end()) {
+            ++cancel_noop_terminal_;
+            move_file(path, cancel_archive_dir_);
+            return;
+        }
+        auto order_it = orders_.find(token_it->second);
+        if (order_it == orders_.end() || order_it->second.terminal) {
+            ++cancel_noop_terminal_;
+            move_file(path, cancel_archive_dir_);
+            return;
+        }
+        OrderContext& context = order_it->second;
+        if (context.authorization.market_id != cancellation.market_id
+            || context.authorization.event_id != cancellation.event_id
+            || context.authorization.token_id != cancellation.token_id) {
+            throw std::runtime_error("cancel target does not match active PAPER order");
+        }
+        auto market_it = markets_.find(cancellation.market_id);
+        if (market_it == markets_.end()) {
+            throw std::runtime_error("cancel target market runtime missing");
+        }
+        const auto now = monotonic_ns();
+        StrategyIntent intent;
+        intent.intent_id = mix64(fnv1a(cancellation.replay_key));
+        intent.market_handle = market_it->second.market_handle;
+        intent.event_handle = fnv1a(cancellation.event_id);
+        intent.instrument_handle = context.instrument_handle;
+        intent.decision_monotonic_ns = now;
+        intent.exchange_event_ns = now; // CancelQuote only requires a positive causal control timestamp.
+        intent.strategy_id = StrategyId::ProfessionalMaker;
+        intent.type = IntentType::CancelQuote;
+        intent.side = Side::Buy;
+        intent.urgency = Urgency::Critical;
+        intent.purpose = IntentPurpose::Risk;
+        intent.passive = 1;
+        intent.post_only = 1;
+        context.latest_cancel_receipt = cancellation.receipt;
+        context.latest_cancel_envelope = cancellation.envelope;
+        PaperMakerResult result = market_it->second.engine->apply_intent(
+            intent, 0, context.tick_size_e4);
+        if (result.rejected || result.invariant_violation) {
+            context.latest_cancel_receipt.clear();
+            context.latest_cancel_envelope.clear();
+            throw std::runtime_error("queue-aware PAPER engine rejected coordinator CANCEL");
+        }
+        handle_result(result, cancellation.market_id, nullptr);
+        ++coordinator_cancel_requests_;
+        move_file(path, cancel_archive_dir_);
     }
 
     void submit(const fs::path& path) {
@@ -680,6 +861,7 @@ private:
     [[nodiscard]] json::object common_metadata(const OrderContext& context) const {
         json::object metadata;
         metadata["paper_exploration"] = true;
+        metadata["paper_bootstrap_probe"] = context.authorization.paper_probe;
         metadata["economic_authority"] = "PAPER_EXPLORATION";
         metadata["execution_authority"] = "SIMULATED_PAPER_ONLY";
         metadata["coordinator_receipt"] = context.authorization.receipt;
@@ -687,6 +869,12 @@ private:
         metadata["opportunity_envelope"] = context.authorization.envelope;
         if (const auto* alpha = child_object(context.authorization.envelope, "execution_alpha")) {
             metadata["execution_alpha"] = *alpha;
+        }
+        if (!context.latest_cancel_receipt.empty()) {
+            metadata["external_cancel_coordinator_receipt"] = context.latest_cancel_receipt;
+        }
+        if (!context.latest_cancel_envelope.empty()) {
+            metadata["external_cancel_opportunity_envelope"] = context.latest_cancel_envelope;
         }
         return metadata;
     }
@@ -857,6 +1045,9 @@ private:
         status["trade_rows_consumed"] = trade_rows_consumed_;
         status["invalid_trade_rows"] = invalid_trade_rows_;
         status["rejected_authorizations"] = rejected_authorizations_;
+        status["coordinator_cancel_requests"] = coordinator_cancel_requests_;
+        status["rejected_cancel_authorizations"] = rejected_cancel_authorizations_;
+        status["cancel_noop_terminal"] = cancel_noop_terminal_;
         status["restart_orphans"] = restart_orphans_;
         status["spooled_events"] = spooled_events_;
         status["last_error"] = last_error_;
@@ -872,6 +1063,9 @@ private:
     fs::path archive_dir_;
     fs::path orphaned_dir_;
     fs::path rejected_dir_;
+    fs::path cancel_authorization_dir_;
+    fs::path cancel_archive_dir_;
+    fs::path cancel_rejected_dir_;
     fs::path selection_path_;
     fs::path fillability_status_path_;
     fs::path trade_tape_path_;
@@ -888,6 +1082,9 @@ private:
     std::uint64_t trade_rows_consumed_ = 0;
     std::uint64_t invalid_trade_rows_ = 0;
     std::uint64_t rejected_authorizations_ = 0;
+    std::uint64_t coordinator_cancel_requests_ = 0;
+    std::uint64_t rejected_cancel_authorizations_ = 0;
+    std::uint64_t cancel_noop_terminal_ = 0;
     std::uint64_t restart_orphans_ = 0;
     std::uint64_t spooled_events_ = 0;
     std::uint64_t event_sequence_ = 0;

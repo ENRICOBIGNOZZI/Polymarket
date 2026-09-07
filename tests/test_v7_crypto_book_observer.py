@@ -42,9 +42,12 @@ def main() -> None:
     assert "class CryptoBookObserver" in header
     assert "polymarket_v7_crypto_book_observer" in cmake
     assert "CryptoBookObserver observer" in entry
-    # Research binary exists for explicit evidence collection only. The
-    # canonical process manifest/loop must not gain another runtime owner.
-    assert "polymarket_v7_crypto_book_observer" not in loop
+    # The PAPER launcher may run this as a zero-authority evidence collector;
+    # its durable evidence root is distinct from the observed live run root.
+    assert "CRYPTO_BOOK_OBSERVER" in loop
+    assert '--evidence-root "$EXTERNAL_CANCEL_BOOK_ROOT"' in loop
+    assert '--observed-run-root "$RUN_ROOT"' in loop
+    assert "v7_external_cancel_forward_runtime.py" in loop
     assert "PM_V7_REAL_ORDER_SUBMISSION" not in entry
 
 

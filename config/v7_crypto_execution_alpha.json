@@ -7,7 +7,13 @@
   "real_capital_at_risk": false,
   "automatic_promotion": false,
   "decision_owner": "CRYPTO_SETTLEMENT_ENGINE",
-  "action_space": ["MAKE", "TAKE", "CANCEL", "WITHDRAW", "NOTHING"],
+  "action_space": [
+    "MAKE",
+    "TAKE",
+    "CANCEL",
+    "WITHDRAW",
+    "NOTHING"
+  ],
   "objective": "MAX_CONSERVATIVE_EXPECTED_CHANGE_IN_ACCOUNT_WEALTH",
   "risk_actions_preempt_alpha": true,
   "minimum_positive_conservative_ev_usd": 0.0,
@@ -41,7 +47,16 @@
     "cancel": {
       "formula": "avoided_toxic_fill_loss_lower-cancel_cost",
       "external_cancel_overlay_experiment_id": "btc-m5-external-cancel-overlay-forward-v1",
-      "promotion_requires_frozen_forward_gate": true
+      "promotion_requires_frozen_forward_gate": true,
+      "live_trigger": {
+        "trigger_grid_ms": 25,
+        "overlap_warmup_ms": 300,
+        "maximum_signal_age_ms": 100,
+        "supported_cancel_side": "BUY",
+        "protocol_origin_commit": "fcc9a81becb32263606b28904c083c96f6de5750",
+        "receive_time_global_merge_required": true,
+        "same_timestamp_atomic_group_required": true
+      }
     },
     "nothing_ev_usd": 0.0
   },
@@ -53,13 +68,13 @@
     "score_weights": {
       "predictability": 0.14,
       "mispricing": 0.22,
-      "spread_capture": 0.10,
+      "spread_capture": 0.1,
       "depth": 0.08,
       "flow": 0.08,
       "latency": 0.08,
       "tte": 0.08,
       "fillability": 0.12,
-      "adverse_selection": 0.10
+      "adverse_selection": 0.1
     },
     "score_semantics": "BOUNDED_MONOTONE_COMPONENTS_NO_TRAINED_WEIGHTS_UNTIL_FORWARD_EVIDENCE",
     "capital_and_quote_budget": "RETAINED_MARKETS_ONLY"

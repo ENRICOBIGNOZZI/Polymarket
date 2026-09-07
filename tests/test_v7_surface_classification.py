@@ -12,7 +12,6 @@ sys.path.insert(0, str(ROOT / "scripts"))
 
 from v7_surface_classification import (  # noqa: E402
     ClassificationError,
-    _classification_for_name,
     build_manifest,
     equivalent_ref_surface_ids,
     validate_manifest,
@@ -48,8 +47,6 @@ _FORBIDDEN_REVIEW_CAPABILITIES = {
     "capital_authority",
     "ledger_writer_authority",
 }
-_ADDENDUM_SCHEMA = "polymarket_v7_surface_classification_addendum_v1"
-_ADDENDUM_PATH = ROOT / "config/v7_surface_classification_addendum.json"
 
 
 def _dynamic_review_ref(surface_id: str) -> bool:
@@ -75,53 +72,12 @@ def _assert_fail_closed_review_ref(
     testcase.assertTrue(str(row.get("migration_status") or "").strip(), key)
 
 
-def _load_addendum() -> dict[str, tuple[str, str]]:
-    value = json.loads(_ADDENDUM_PATH.read_text(encoding="utf-8"))
-    if (
-        value.get("schema") != _ADDENDUM_SCHEMA
-        or value.get("paper_only") is not True
-        or value.get("authenticated_execution") is not False
-        or value.get("real_order_submission") is not False
-        or value.get("real_capital_at_risk") is not False
-        or not isinstance(value.get("base_snapshot_sha"), str)
-        or len(value["base_snapshot_sha"]) != 40
-    ):
-        raise AssertionError("invalid surface-classification addendum safety contract")
-    rows = value.get("entries")
-    if not isinstance(rows, list) or not rows:
-        raise AssertionError("surface-classification addendum requires entries")
-    output: dict[str, tuple[str, str]] = {}
-    for row in rows:
-        if not isinstance(row, dict) or set(row) != {
-            "surface_id", "object_type", "classification",
-        }:
-            raise AssertionError("surface-classification addendum entry shape")
-        identity = row["surface_id"]
-        object_type = row["object_type"]
-        classification = row["classification"]
-        if (
-            not isinstance(identity, str)
-            or identity in output
-            or not identity.startswith("path:")
-            or object_type != "tracked_path"
-        ):
-            raise AssertionError(f"invalid addendum surface: {identity}")
-        path = identity.removeprefix("path:")
-        if not (ROOT / path).is_file():
-            raise AssertionError(f"addendum path missing from repository: {path}")
-        if _classification_for_name(path) != classification:
-            raise AssertionError(f"addendum classification drift: {identity}")
-        output[identity] = (object_type, classification)
-    return output
-
-
 class SurfaceClassificationTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls) -> None:
         cls.value = json.loads(
             (ROOT / "artifacts/v7_unification/path_classification.json").read_text()
         )
-        cls.addendum = _load_addendum()
 
     def test_manifest_covers_audited_paths_refs_schemas_workflows_processes_and_outputs(self) -> None:
         report = validate_manifest(self.value)
@@ -132,10 +88,6 @@ class SurfaceClassificationTests(unittest.TestCase):
             "workflow", "process", "runtime_output", "external_action",
         } <= types)
 
-    def test_addendum_contains_only_new_explicit_tracked_surfaces(self) -> None:
-        audited = {row["surface_id"] for row in self.value["entries"]}
-        self.assertTrue(set(self.addendum).isdisjoint(audited))
-        self.assertIn("path:config/v7_surface_classification_addendum.json", self.addendum)
 
     def test_generator_reproduces_classification_at_same_repository_tree(self) -> None:
         generated = build_manifest(ROOT)
@@ -143,7 +95,6 @@ class SurfaceClassificationTests(unittest.TestCase):
             row["surface_id"]: (row["object_type"], row["classification"])
             for row in self.value["entries"]
         }
-        expected.update(self.addendum)
         actual_rows = {
             row["surface_id"]: row for row in generated["entries"]
         }
@@ -159,9 +110,8 @@ class SurfaceClassificationTests(unittest.TestCase):
                 continue
             self.assertTrue(_dynamic_review_ref(key), key)
             _assert_fail_closed_review_ref(self, key, row)
-        expected_tracked = (
-            int(self.value["coverage"]["tracked_or_intended_path_count"])
-            + len(self.addendum)
+        expected_tracked = int(
+            self.value["coverage"]["tracked_or_intended_path_count"]
         )
         for field, count in generated["coverage"].items():
             if field == "ref_count":

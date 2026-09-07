@@ -48,6 +48,25 @@ ExternalVenueEvent book(VenueId venue, std::uint64_t seq, std::int64_t receive_n
     return event;
 }
 
+
+ExternalVenueEvent trade(VenueId venue, std::uint64_t seq, std::int64_t receive_ns,
+                         double price, int side = 1) {
+    ExternalVenueEvent event;
+    event.asset_handle = 500;
+    event.source_sequence = seq;
+    event.connection_epoch = 1;
+    event.venue = venue;
+    event.event_type = ExternalEventType::Trade;
+    event.exchange_event_ns = receive_ns - 10;
+    event.local_receive_monotonic_ns = receive_ns;
+    event.local_receive_wall_ns = receive_ns + 1'000;
+    event.trade_price = price;
+    event.trade_size = 1.0;
+    event.trade_side = static_cast<std::int8_t>(side);
+    event.healthy = 1;
+    return event;
+}
+
 ExternalVenueEvent derivative_context(VenueId venue, std::int64_t receive_ns) {
     ExternalVenueEvent event;
     event.asset_handle = 500;
@@ -209,6 +228,90 @@ int main() {
     auto insufficient = external.snapshot(231, policy);
     assert(insufficient.valid == 0);
     assert(insufficient.venue_count_fresh == 2);
+
+    // Frozen external-cancel trigger: exact 25ms grid, 100ms Binance
+    // trade return, non-opposing Coinbase midpoint confirmation, and 250ms
+    // cooldown.  Same-timestamp source events are applied as one receive-time
+    // group before the grid point is evaluated.
+    ExternalStatePolicy cancel_policy;
+    cancel_policy.external_cancel_enabled = 1;
+    constexpr std::int64_t base = 1'000'000'000LL;
+    ExternalAssetState cancel_state(500);
+    auto apply_cancel_group = [&](std::int64_t receive_ns,
+                                  const ExternalVenueEvent& first_event,
+                                  const ExternalVenueEvent& second_event) {
+        (void)cancel_state.advance_external_cancel_signal(receive_ns - 1, cancel_policy);
+        assert(cancel_state.on_venue_event(first_event, cancel_policy));
+        assert(cancel_state.on_venue_event(second_event, cancel_policy));
+        return cancel_state.advance_external_cancel_signal(receive_ns, cancel_policy);
+    };
+    auto initial_signal = apply_cancel_group(
+        base,
+        trade(VenueId::BinanceSpot, 1, base, 100.0),
+        book(VenueId::CoinbaseSpot, 1, base, 99.5, 100.5, 1, 1));
+    assert(initial_signal.signal_version == 0);
+    assert(cancel_state.advance_external_cancel_signal(
+        base + 300'000'000LL, cancel_policy).signal_version == 0);
+    auto up_signal = apply_cancel_group(
+        base + 400'000'000LL,
+        trade(VenueId::BinanceSpot, 2, base + 400'000'000LL, 100.004),
+        book(VenueId::CoinbaseSpot, 2, base + 400'000'000LL,
+             99.502, 100.502, 1, 1));
+    assert(up_signal.valid == 1);
+    assert(up_signal.signal_version == 1);
+    assert(up_signal.direction == 1);
+    assert(up_signal.confirmed_non_opposing == 1);
+    assert(up_signal.binance_return_100ms_bp > 0.30);
+    assert(up_signal.coinbase_return_100ms_bp > 0.0);
+    assert(up_signal.valid_until_monotonic_ns == base + 500'000'000LL);
+    assert(cancel_state.advance_external_cancel_signal(
+        base + 501'000'000LL, cancel_policy).valid == 0);
+
+    ExternalAssetState opposing_state(500);
+    auto apply_opposing_group = [&](std::int64_t receive_ns,
+                                    const ExternalVenueEvent& first_event,
+                                    const ExternalVenueEvent& second_event) {
+        (void)opposing_state.advance_external_cancel_signal(receive_ns - 1, cancel_policy);
+        assert(opposing_state.on_venue_event(first_event, cancel_policy));
+        assert(opposing_state.on_venue_event(second_event, cancel_policy));
+        return opposing_state.advance_external_cancel_signal(receive_ns, cancel_policy);
+    };
+    (void)apply_opposing_group(
+        base,
+        trade(VenueId::BinanceSpot, 1, base, 100.0),
+        book(VenueId::CoinbaseSpot, 1, base, 99.5, 100.5, 1, 1));
+    (void)opposing_state.advance_external_cancel_signal(
+        base + 300'000'000LL, cancel_policy);
+    const auto opposed = apply_opposing_group(
+        base + 400'000'000LL,
+        trade(VenueId::BinanceSpot, 2, base + 400'000'000LL, 100.004),
+        book(VenueId::CoinbaseSpot, 2, base + 400'000'000LL,
+             99.498, 100.498, 1, 1));
+    assert(opposed.signal_version == 0);
+    assert(opposed.valid == 0);
+
+    ExternalAssetState down_state(500);
+    auto apply_down_group = [&](std::int64_t receive_ns,
+                                const ExternalVenueEvent& first_event,
+                                const ExternalVenueEvent& second_event) {
+        (void)down_state.advance_external_cancel_signal(receive_ns - 1, cancel_policy);
+        assert(down_state.on_venue_event(first_event, cancel_policy));
+        assert(down_state.on_venue_event(second_event, cancel_policy));
+        return down_state.advance_external_cancel_signal(receive_ns, cancel_policy);
+    };
+    (void)apply_down_group(
+        base,
+        trade(VenueId::BinanceSpot, 1, base, 100.0),
+        book(VenueId::CoinbaseSpot, 1, base, 99.5, 100.5, 1, 1));
+    (void)down_state.advance_external_cancel_signal(
+        base + 300'000'000LL, cancel_policy);
+    const auto down = apply_down_group(
+        base + 400'000'000LL,
+        trade(VenueId::BinanceSpot, 2, base + 400'000'000LL, 99.996),
+        book(VenueId::CoinbaseSpot, 2, base + 400'000'000LL,
+             99.498, 100.498, 1, 1));
+    assert(down.signal_version == 1);
+    assert(down.direction == -1);
 
     CausalStateInputs inputs;
     inputs.pm_state_version = 1;

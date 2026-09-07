@@ -63,11 +63,13 @@ def selection() -> dict:
             "yes_token": "yes-token",
             "no_token": "no-token",
             "quote_opportunities": [quote],
+            "control_exploration_authorized": True,
             "authorized_execution_cells": [{
                 "outcome": "YES",
                 "token_id": "yes-token",
                 "quote_side": "BUY",
                 "action": "JOIN",
+                "authority_basis": "POSITIVE_FLOW_CONTROL",
                 "maximum_quote_shares": 5.0,
             }],
         }],
@@ -176,10 +178,35 @@ def test_mature_positive_cell_becomes_typed_make_opportunity() -> None:
         assert row["crypto_context"]["research_only"] is False
 
 
-def test_immature_fill_model_does_not_manufacture_make_authority() -> None:
+def test_immature_control_cell_becomes_bounded_zero_promotion_paper_probe() -> None:
     with tempfile.TemporaryDirectory() as directory:
         run_root = Path(directory)
         setup_run(run_root, mature=False)
+        with mock.patch.object(bridge, "require_context", return_value=context()):
+            rows, status = bridge.build_maker_opportunities(
+                run_root, now_ns=2_000_000_000, repository_root=ROOT,
+            )
+        assert len(rows) == 1
+        row = OpportunityEnvelope.parse(rows[0]).raw
+        assert row["action"] == "MAKE"
+        assert row["exploration"]["mode"] == "PAPER_BOOTSTRAP_PROBE"
+        assert row["exploration"]["promotion_eligible"] is False
+        assert row["exploration"]["robust_candidate"] is False
+        assert row["exploration"]["model_id"] == "btc_m5_maker_execution_bootstrap_probe_v1"
+        assert row["exploration"]["probe_loss_cap"] <= 2.0
+        leg = row["execution_plan"]["legs"][0]
+        assert leg["target_quantity"] * leg["limit_price"] <= 2.0 + 1e-9
+        assert row["execution_alpha"]["evidence_status"] == "IMMATURE"
+        assert status["typed_make_probe_opportunities"] == 1
+
+
+def test_immature_noncontrol_cell_still_cannot_manufacture_make_authority() -> None:
+    with tempfile.TemporaryDirectory() as directory:
+        run_root = Path(directory)
+        setup_run(run_root, mature=False)
+        value = selection()
+        value["markets"][0]["control_exploration_authorized"] = False
+        write(run_root / "micro_maker/reward_selection.json", value)
         with mock.patch.object(bridge, "require_context", return_value=context()):
             rows, status = bridge.build_maker_opportunities(
                 run_root, now_ns=2_000_000_000, repository_root=ROOT,
@@ -266,7 +293,8 @@ def test_canonical_selector_timestamp_is_receive_time_causal_and_stale_fails_clo
 
 if __name__ == "__main__":
     test_mature_positive_cell_becomes_typed_make_opportunity()
-    test_immature_fill_model_does_not_manufacture_make_authority()
+    test_immature_control_cell_becomes_bounded_zero_promotion_paper_probe()
+    test_immature_noncontrol_cell_still_cannot_manufacture_make_authority()
     test_unverified_settlement_fair_fails_closed()
     test_semantic_hash_mismatch_fails_closed()
     test_sell_cell_is_not_advertised_before_canonical_inventory_bridge()
