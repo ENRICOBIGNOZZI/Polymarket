@@ -45,7 +45,7 @@ int main(int argc, char** argv) {
     const std::string mode = argv[1];
     std::cout << std::setprecision(17);
     if (mode == "--book") {
-        std::cout << "seq,receive_ms,receive_mono_ns,outcome,kind,bid,ask,bidq,askq,bid5,ask5,bid10,ask10,trade_price,trade_qty,trade_side\n";
+        std::cout << "seq,receive_ms,receive_mono_ns,outcome,kind,book_valid,lineage_continuous,bid,ask,bidq,askq,bid5,ask5,bid10,ask10,trade_price,trade_qty,trade_side\n";
         bool ok = true;
         for (int i=2;i<argc;++i) ok = read_tape(argv[i], [&](const TapeRecord& r) {
             if (r.kind != TapeRecordKind::PmState || r.payload_size != sizeof(CryptoBookTapePayload)) return;
@@ -54,6 +54,7 @@ int main(int argc, char** argv) {
             auto q=[](std::int64_t x){ return static_cast<double>(x)/1e6; };
             std::cout << r.tape_sequence << ',' << p.receive_wall_ms << ',' << r.receive_monotonic_ns << ','
                 << static_cast<int>(p.outcome) << ',' << static_cast<int>(p.event_kind) << ','
+                << static_cast<int>(p.book.valid) << ',' << static_cast<int>(p.book.lineage_continuous) << ','
                 << static_cast<double>(p.book.best_bid_e4)/1e4 << ',' << static_cast<double>(p.book.best_ask_e4)/1e4 << ','
                 << q(p.book.best_bid_microunits) << ',' << q(p.book.best_ask_microunits) << ','
                 << q(p.book.bid_depth.l5_microunits) << ',' << q(p.book.ask_depth.l5_microunits) << ','
