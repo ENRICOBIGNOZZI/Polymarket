@@ -2,10 +2,17 @@ from __future__ import annotations
 
 import json
 import tempfile
+import time
 import unittest
 from pathlib import Path
+import sys
+
+ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT))
 
 from scripts.v7_crypto_execution_alpha_runtime import (
+    CANCEL_EXPERIMENT_ID,
+    CANCEL_FREEZE_SHA,
     CANCEL_REPORT_SCHEMA,
     CANCEL_RULE_SHA,
     CANCEL_SIGNAL_SCHEMA,
@@ -144,8 +151,17 @@ class CryptoExecutionAlphaRuntimeTests(unittest.TestCase):
 
     def test_cancel_requires_both_frozen_forward_pass_and_exact_live_signal(self) -> None:
         report = {
-            "schema": CANCEL_REPORT_SCHEMA, "state": "PASS", "rule_sha256": CANCEL_RULE_SHA,
-            "market_count": 30, "avoidable_fill_events": 60, "episode_count": 300,
+            "schema": CANCEL_REPORT_SCHEMA, "experiment_id": CANCEL_EXPERIMENT_ID,
+            "freeze_merge_sha": CANCEL_FREEZE_SHA, "state": "PASS",
+            "rule_sha256": CANCEL_RULE_SHA, "paper_only": True,
+            "authenticated_execution": False, "real_order_submission": False,
+            "real_money_authority": False, "automatic_promotion": False,
+            "reason_codes": [], "market_count": 30, "minimum_markets": 30,
+            "avoidable_fill_events": 60, "minimum_avoidable_fill_events": 50,
+            "episode_count": 300,
+            "equal_weight_500ms_improvement_per_share": 0.02,
+            "leave_best_market_out_500ms_improvement_per_share": 0.01,
+            "positive_market_fraction": 0.8,
             "stress_3x_queue_200ms_cancel_improvement_per_share": 0.01,
             "bootstrap95_market_cluster_500ms_improvement": [0.005, 0.03],
         }
@@ -155,8 +171,8 @@ class CryptoExecutionAlphaRuntimeTests(unittest.TestCase):
         self.assertIn("CANONICAL_EXTERNAL_CANCEL_SIGNAL_INACTIVE_OR_MISSING", reasons)
         signal = {
             "schema": CANCEL_SIGNAL_SCHEMA, "rule_sha256": CANCEL_RULE_SHA,
-            "paper_only": True, "authenticated_execution": False,
-            "real_order_submission": False,
+            "code_sha": "a" * 40, "paper_only": True,
+            "authenticated_execution": False, "real_order_submission": False,
             "execution_authority": "SIGNAL_ONLY_ZERO_AUTHORITY",
             "receive_time_causal": True, "shock_source": "BINANCE_SPOT_TRADES",
             "shock_window_ms": 100, "minimum_absolute_log_return_bp": 0.3,
@@ -167,19 +183,108 @@ class CryptoExecutionAlphaRuntimeTests(unittest.TestCase):
             "cooldown_blocked": False, "direction": "UP",
             "stale_sides": ["YES_SELL", "NO_BUY"],
             "trigger_monotonic_ns": 1_000_000_000,
-            "evaluated_monotonic_ns": 1_000_000_000,
-            "active": True, "mandatory_risk_cancel": True,
-            "active_quote_size_shares": 5.0, "cancel_cost": 0.001,
+            "evaluated_monotonic_ns": 1_000_000_000, "active": True,
         }
-        active, reasons = cancel_evidence(report, signal)
+        maker_status = {
+            "schema": "polymarket_v7_authorized_maker_paper_executor_status_v1",
+            "timestamp_ms": time.time_ns() // 1_000_000, "model_sha": "a" * 40,
+            "paper_only": True, "authenticated_execution": False,
+            "real_order_submission": False, "real_capital_at_risk": False,
+            "execution_authority": "SIMULATED_PAPER_ONLY",
+            "active_order_details": [{
+                "order_id": "7", "replay_key": "make-no", "market_id": "m1",
+                "event_id": "e1", "token_id": "no1", "outcome": "NO",
+                "side": "BUY", "limit_price": 0.48, "remaining_shares": 5.0,
+                "cancel_requested": False,
+            }],
+        }
+        active, reasons = cancel_evidence(
+            report, signal, maker_status, market_id="m1", expected_model_sha="a" * 40,
+        )
         self.assertTrue(active.mature and active.signal_active and active.mandatory_risk_cancel)
+        self.assertEqual((active.target_order_id, active.target_outcome, active.target_token_id), ("7", "NO", "no1"))
         self.assertGreater(active.avoidable_fill_probability_lower, 0.0)
         self.assertEqual(reasons, [])
-        drifted = dict(signal)
-        drifted["shock_window_ms"] = 250
-        rejected, reasons = cancel_evidence(report, drifted)
+        drifted = dict(signal); drifted["shock_window_ms"] = 250
+        rejected, reasons = cancel_evidence(
+            report, drifted, maker_status, market_id="m1", expected_model_sha="a" * 40,
+        )
         self.assertFalse(rejected.signal_active)
         self.assertIn("CANONICAL_EXTERNAL_CANCEL_SIGNAL_INACTIVE_OR_MISSING", reasons)
+
+        no_target = dict(maker_status); no_target["active_order_details"] = []
+        rejected, reasons = cancel_evidence(
+            report, signal, no_target, market_id="m1", expected_model_sha="a" * 40,
+        )
+        self.assertFalse(rejected.signal_active)
+        self.assertIn("NO_MATCHING_ACTIVE_STALE_PAPER_QUOTE", reasons)
+
+
+
+    def test_process_cut_publishes_targeted_cancel_envelope_only_for_matching_live_order(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td); self.fixture(root, mature_maker=True)
+            policy = root / "policy.json"; self.policy(policy, risk=0.03)
+            report = {
+                "schema": CANCEL_REPORT_SCHEMA, "experiment_id": CANCEL_EXPERIMENT_ID,
+                "freeze_merge_sha": CANCEL_FREEZE_SHA, "state": "PASS",
+                "rule_sha256": CANCEL_RULE_SHA, "paper_only": True,
+                "authenticated_execution": False, "real_order_submission": False,
+                "real_money_authority": False, "automatic_promotion": False,
+                "reason_codes": [], "market_count": 54, "minimum_markets": 30,
+                "avoidable_fill_events": 297, "minimum_avoidable_fill_events": 50,
+                "episode_count": 2620,
+                "equal_weight_500ms_improvement_per_share": 0.045,
+                "leave_best_market_out_500ms_improvement_per_share": 0.041,
+                "positive_market_fraction": 0.98,
+                "stress_3x_queue_200ms_cancel_improvement_per_share": 0.045,
+                "bootstrap95_market_cluster_500ms_improvement": [0.034, 0.059],
+            }
+            signal = {
+                "schema": CANCEL_SIGNAL_SCHEMA, "rule_sha256": CANCEL_RULE_SHA,
+                "code_sha": "a" * 40, "paper_only": True,
+                "authenticated_execution": False, "real_order_submission": False,
+                "execution_authority": "SIGNAL_ONLY_ZERO_AUTHORITY",
+                "receive_time_causal": True, "shock_source": "BINANCE_SPOT_TRADES",
+                "shock_window_ms": 100, "minimum_absolute_log_return_bp": 0.3,
+                "confirmation_source": "COINBASE_SPOT_TOP_OF_BOOK",
+                "confirmation": "NON_OPPOSING", "trigger_cooldown_ms": 250,
+                "evaluation_tick_ms": 25, "history_valid": True,
+                "threshold_crossed": True, "confirmation_non_opposing": True,
+                "cooldown_blocked": False, "direction": "UP",
+                "stale_sides": ["YES_SELL", "NO_BUY"],
+                "trigger_monotonic_ns": 123456789,
+                "evaluated_monotonic_ns": 123456789, "active": True,
+            }
+            report_path = root / "report.json"; report_path.write_text(json.dumps(report))
+            signal_path = root / "signal.json"; signal_path.write_text(json.dumps(signal))
+            (root / "micro_maker" / "authorized_make_executor_status.json").write_text(json.dumps({
+                "schema": "polymarket_v7_authorized_maker_paper_executor_status_v1",
+                "timestamp_ms": time.time_ns() // 1_000_000, "model_sha": "a" * 40,
+                "paper_only": True, "authenticated_execution": False,
+                "real_order_submission": False, "real_capital_at_risk": False,
+                "execution_authority": "SIMULATED_PAPER_ONLY",
+                "active_order_details": [{
+                    "order_id": "7", "replay_key": "make-no", "market_id": "m1",
+                    "event_id": "e1", "token_id": "no1", "outcome": "NO",
+                    "side": "BUY", "limit_price": 0.48, "remaining_shares": 5.0,
+                    "cancel_requested": False,
+                }],
+            }))
+            status = process_cut(
+                root, external_policy_path=policy, cancel_report_path=report_path,
+                cancel_signal_path=signal_path, comparison_size_shares=5.0,
+            )
+            self.assertEqual(status["report"]["selected_action"]["action"], "CANCEL")
+            self.assertTrue(status["cancel_opportunity_published"])
+            files = list((root / "opportunities" / "inbox").glob("*.json"))
+            self.assertEqual(len(files), 1)
+            envelope = json.loads(files[0].read_text())
+            parsed = OpportunityEnvelope.parse(envelope)
+            self.assertEqual((parsed.action, envelope["side"]), ("CANCEL", "NONE"))
+            self.assertEqual(envelope["execution_plan"]["atomic_unit_id"], "make-no")
+            self.assertEqual(envelope["execution_plan"]["legs"][0]["leg_id"], "7")
+            self.assertEqual(envelope["execution_plan"]["legs"][0]["token_id"], "no1")
 
 
 if __name__ == "__main__":

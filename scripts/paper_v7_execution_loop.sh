@@ -54,6 +54,7 @@ MAKER_MODEL_REGISTRY="$RUN_ROOT/micro_maker/model_registry.json"
 DURABLE_ROOT="${PM_V7_DURABLE_ROOT:-runs/paper_v7_durable}"
 MAKER_DURABLE_STORE="$DURABLE_ROOT/micro_maker/evidence.jsonl"
 MAKER_DURABLE_STATUS="$DURABLE_ROOT/micro_maker/status.json"
+EXTERNAL_CANCEL_FORWARD_REPORT="${PM_V7_EXTERNAL_CANCEL_FORWARD_REPORT:-$DURABLE_ROOT/research/btc_m5_external_cancel_forward_report_v3.json}"
 PUBLIC_PROXY_PORT="${PM_V7_PUBLIC_PROXY_PORT:-19109}"
 PUBLIC_PROXY="http://127.0.0.1:$PUBLIC_PROXY_PORT"
 WS_PUBLIC_HOST="ws-subscriptions-clob.polymarket.com"
@@ -609,12 +610,15 @@ v7_register_child "$!"
 
 # Unified crypto execution-alpha decision layer. It consumes the router's exact
 # causal CLOB snapshot and existing settlement/maker evidence, then publishes
-# only mature positive MAKE proposals into the existing coordinator inbox.
-# TAKE remains owned by the arrival-revalidated router; this process owns no
+# mature positive MAKE proposals or frozen-rule CANCEL risk actions into the
+# existing coordinator inbox. TAKE remains owned by the arrival-revalidated
+# router; this process owns no
 # OMS, inventory, capital, ledger, signer or real-order authority.
 mkdir -p "$RUN_ROOT/crypto_execution_alpha"
 python3 scripts/v7_crypto_execution_alpha_runtime.py \
   --run-root "$RUN_ROOT" --external-policy "$EXTERNAL_FAIR_POLICY" \
+  --cancel-report "$EXTERNAL_CANCEL_FORWARD_REPORT" \
+  --cancel-signal "$RUN_ROOT/external_fair/external_cancel_signal.json" \
   --comparison-size-shares 5 --loop --interval 0.025 \
   >> "$RUN_ROOT/crypto_execution_alpha/runtime.log" 2>&1 &
 v7_register_child "$!"

@@ -271,6 +271,56 @@ def _publish_make_authorization(
     return True
 
 
+def _publish_cancel_authorization(
+    root: Path, decision: dict[str, Any], envelopes: list[dict[str, Any]],
+) -> bool:
+    """Project one coordinator-owned safe CANCEL into the PAPER maker worker."""
+    if (
+        decision.get("action") != "CANCEL"
+        or decision.get("new_risk_authorized") is not False
+        or decision.get("paper_only") is not True
+        or decision.get("authenticated_execution") is not False
+        or decision.get("real_order_submission") is not False
+        or decision.get("real_capital_at_risk") is not False
+    ):
+        return False
+    envelope = _selected_envelope(envelopes, decision.get("selected_replay_key"))
+    if not isinstance(envelope, dict):
+        return False
+    alpha = envelope.get("execution_alpha")
+    plan = envelope.get("execution_plan") if isinstance(envelope.get("execution_plan"), dict) else {}
+    legs = plan.get("legs") if isinstance(plan.get("legs"), list) else []
+    if (
+        envelope.get("engine_id") != "CRYPTO_SETTLEMENT_ENGINE"
+        or envelope.get("action") != "CANCEL"
+        or not isinstance(alpha, dict)
+        or alpha.get("evidence_status") != "MATURE"
+        or len(legs) != 1
+        or not isinstance(legs[0], dict)
+        or plan.get("unwind_plan") != "CANCEL_ONLY"
+        or plan.get("partial_fill_plan") != "CANCEL_REMAINDER"
+    ):
+        return False
+    replay_key = str(envelope.get("deterministic_replay_key") or "")
+    if not replay_key:
+        return False
+    identity = hashlib.sha256(replay_key.encode()).hexdigest()
+    atomic_json(root / "micro_maker" / "authorized_cancel" / f"{identity}.json", {
+        "schema": "polymarket_v7_authorized_cancel_intent_v1",
+        "paper_only": True,
+        "authenticated_execution": False,
+        "real_order_submission": False,
+        "real_capital_at_risk": False,
+        "owner": "V7_GLOBAL_PORTFOLIO_COORDINATOR",
+        "execution_authority": "SIMULATED_PAPER_ONLY",
+        "selected_replay_key": replay_key,
+        "decision": decision,
+        "opportunity_envelope": envelope,
+        "expires_at_ns": int(envelope.get("expires_at_ns") or 0),
+    })
+    return True
+
+
 def process_cut(run_root: Path, *, now_ns: int | None = None) -> dict[str, Any]:
     root = Path(run_root)
     current_ns = int(now_ns if now_ns is not None else time.time_ns())
@@ -350,7 +400,9 @@ def process_cut(run_root: Path, *, now_ns: int | None = None) -> dict[str, Any]:
         receipt_name = decision["selected_replay_key"].replace("/", "_") + ".json"
         atomic_json(root / "opportunities" / "receipts" / receipt_name, decision)
     make_authorization_published = _publish_make_authorization(root, decision, envelopes)
+    cancel_authorization_published = _publish_cancel_authorization(root, decision, envelopes)
     decision["make_authorization_published"] = make_authorization_published
+    decision["cancel_authorization_published"] = cancel_authorization_published
     if files:
         append_jsonl(root / "opportunities" / "decisions.jsonl", decision)
     archive = root / "opportunities" / "archive"

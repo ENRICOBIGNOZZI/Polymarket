@@ -156,6 +156,12 @@ class CancelEvidence:
     avoided_adverse_loss_lower_per_share: float
     cancel_cost: float
     mature: bool
+    target_order_id: str = ""
+    target_replay_key: str = ""
+    target_outcome: str = ""
+    target_token_id: str = ""
+    target_side: str = ""
+    target_price: float = 0.0
 
     def validate(self) -> None:
         if self.quote_size < 0.0 or self.cancel_cost < 0.0:
@@ -164,6 +170,15 @@ class CancelEvidence:
             raise ExecutionAlphaError("cancel_probability")
         if self.avoided_adverse_loss_lower_per_share < 0.0:
             raise ExecutionAlphaError("cancel_avoided_loss")
+        if self.signal_active or self.mandatory_risk_cancel:
+            if (
+                not self.target_order_id or not self.target_replay_key
+                or self.target_outcome not in OUTCOMES or not self.target_token_id
+                or self.target_side not in {"BUY", "SELL"}
+                or not 0.0 < self.target_price < 1.0
+                or self.quote_size <= 0.0
+            ):
+                raise ExecutionAlphaError("cancel_target")
 
 
 @dataclass(frozen=True)
@@ -354,7 +369,10 @@ def cancel_candidate(state: MarketState) -> ActionCandidate:
     if not state.cancel.mature:
         reasons.append("EXTERNAL_CANCEL_EVIDENCE_IMMATURE")
     return _finalize_candidate(
-        action="CANCEL", outcome="NONE", token_id="", price=0.0,
+        action="CANCEL",
+        outcome=state.cancel.target_outcome if state.cancel.signal_active else "NONE",
+        token_id=state.cancel.target_token_id if state.cancel.signal_active else "",
+        price=state.cancel.target_price if state.cancel.signal_active else 0.0,
         size=max(0.0, state.cancel.quote_size), fill_probability=0.0,
         attribution=attribution, point_delta=0.0,
         eligible=state.cancel.signal_active or state.cancel.mandatory_risk_cancel,

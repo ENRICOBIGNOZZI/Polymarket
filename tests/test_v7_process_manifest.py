@@ -24,6 +24,17 @@ def test_manifest_matches_all_declared_launcher_children_and_two_runtime_owners(
     assert report["feed_zero_authority"] is True
 
 
+def test_crypto_execution_alpha_consumes_durable_forward_cancel_evidence() -> None:
+    value = manifest()
+    row = next(item for item in value["processes"] if item["id"] == "crypto_execution_alpha")
+    durable = "${DURABLE_ROOT}/research/btc_m5_external_cancel_forward_report_v3.json"
+    assert durable in row["inputs"]
+    assert row["arguments"][row["arguments"].index("--cancel-report") + 1] == durable
+    launcher = (ROOT / "scripts/paper_v7_execution_loop.sh").read_text(encoding="utf-8")
+    assert 'EXTERNAL_CANCEL_FORWARD_REPORT="${PM_V7_EXTERNAL_CANCEL_FORWARD_REPORT:-$DURABLE_ROOT/research/btc_m5_external_cancel_forward_report_v3.json}"' in launcher
+    assert '--cancel-report "$EXTERNAL_CANCEL_FORWARD_REPORT"' in launcher
+
+
 def test_feed_process_cannot_gain_authority() -> None:
     value = manifest()
     value["profiles"]["feed"]["authority_flags"]["ledger"] = True
@@ -50,5 +61,6 @@ def test_launcher_child_cannot_escape_manifest_inventory() -> None:
 
 if __name__ == "__main__":
     test_manifest_matches_all_declared_launcher_children_and_two_runtime_owners()
+    test_crypto_execution_alpha_consumes_durable_forward_cancel_evidence()
     test_feed_process_cannot_gain_authority()
     test_launcher_child_cannot_escape_manifest_inventory()

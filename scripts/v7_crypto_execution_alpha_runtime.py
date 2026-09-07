@@ -35,6 +35,8 @@ STATUS_SCHEMA = "polymarket_v7_crypto_execution_alpha_runtime_v1"
 CANCEL_REPORT_SCHEMA = "polymarket_v7_btc_m5_external_cancel_forward_report_v3"
 CANCEL_SIGNAL_SCHEMA = "polymarket_v7_btc_m5_external_cancel_live_signal_v1"
 CANCEL_RULE_SHA = "9e8c7e6a1d7e4a87cd9977396bcbbb228f96b4e35e4a34e84e1514e9e9630254"
+CANCEL_EXPERIMENT_ID = "btc-m5-external-cancel-overlay-forward-v1"
+CANCEL_FREEZE_SHA = "612038cc601c7c6a7da942ed49a1e7bb6a23b291"
 
 
 def load(path: Path) -> dict[str, Any]:
@@ -98,8 +100,13 @@ def tte_execution_risk(policy: dict[str, Any], tte: float) -> float:
     return max(0.0, finite(execution.get("base_execution_risk_per_share"), 0.0))
 
 
-def cancel_evidence(report: dict[str, Any], signal: dict[str, Any]) -> tuple[CancelEvidence, list[str]]:
+def cancel_evidence(
+    report: dict[str, Any], signal: dict[str, Any],
+    maker_status: dict[str, Any] | None = None, *, market_id: str = "",
+    expected_model_sha: str = "",
+) -> tuple[CancelEvidence, list[str]]:
     reasons: list[str] = []
+    maker_status = maker_status if isinstance(maker_status, dict) else {}
     bootstrap = report.get("bootstrap95_market_cluster_500ms_improvement")
     lower_markout = 0.0
     if isinstance(bootstrap, list) and len(bootstrap) == 2:
@@ -107,16 +114,32 @@ def cancel_evidence(report: dict[str, Any], signal: dict[str, Any]) -> tuple[Can
     markets = int(report.get("market_count") or 0)
     avoidable = int(report.get("avoidable_fill_events") or 0)
     episodes = int(report.get("episode_count") or 0)
+    minimum_markets = int(report.get("minimum_markets") or 0)
+    minimum_avoidable = int(report.get("minimum_avoidable_fill_events") or 0)
+    primary = finite(report.get("equal_weight_500ms_improvement_per_share"), 0.0)
+    leave_best = finite(report.get("leave_best_market_out_500ms_improvement_per_share"), 0.0)
+    positive_fraction = finite(report.get("positive_market_fraction"), 0.0)
     stress = finite(report.get("stress_3x_queue_200ms_cancel_improvement_per_share"), 0.0)
     mature = (
         report.get("schema") == CANCEL_REPORT_SCHEMA
+        and report.get("experiment_id") == CANCEL_EXPERIMENT_ID
+        and report.get("freeze_merge_sha") == CANCEL_FREEZE_SHA
         and report.get("state") == "PASS"
         and report.get("rule_sha256") == CANCEL_RULE_SHA
-        and markets >= 30 and avoidable >= 50 and episodes > 0
-        and lower_markout > 0.0 and stress > 0.0
+        and report.get("paper_only") is True
+        and report.get("authenticated_execution") is False
+        and report.get("real_order_submission") is False
+        and report.get("real_money_authority") is False
+        and report.get("automatic_promotion") is False
+        and report.get("reason_codes") == []
+        and minimum_markets == 30 and minimum_avoidable == 50
+        and markets >= minimum_markets and avoidable >= minimum_avoidable and episodes > 0
+        and primary > 0.0 and leave_best > 0.0 and positive_fraction >= 0.70
+        and stress > 0.0 and lower_markout > 0.0
     )
     if not mature:
         reasons.append("EXTERNAL_CANCEL_FORWARD_EVIDENCE_PENDING")
+
     direction = str(signal.get("direction") or "NONE")
     stale_sides = signal.get("stale_sides") if isinstance(signal.get("stale_sides"), list) else []
     expected_stale = (
@@ -127,6 +150,7 @@ def cancel_evidence(report: dict[str, Any], signal: dict[str, Any]) -> tuple[Can
     signal_semantics_valid = (
         signal.get("schema") == CANCEL_SIGNAL_SCHEMA
         and signal.get("rule_sha256") == CANCEL_RULE_SHA
+        and (not expected_model_sha or signal.get("code_sha") == expected_model_sha)
         and signal.get("paper_only") is True
         and signal.get("authenticated_execution") is False
         and signal.get("real_order_submission") is False
@@ -147,19 +171,69 @@ def cancel_evidence(report: dict[str, Any], signal: dict[str, Any]) -> tuple[Can
         and stale_sides == expected_stale
         and int(signal.get("trigger_monotonic_ns") or 0) > 0
         and int(signal.get("evaluated_monotonic_ns") or 0) >= int(signal.get("trigger_monotonic_ns") or 0)
+        and signal.get("active") is True
     )
-    signal_valid = mature and signal_semantics_valid and signal.get("active") is True
+    signal_valid = mature and signal_semantics_valid
     if mature and not signal_valid:
         reasons.append("CANONICAL_EXTERNAL_CANCEL_SIGNAL_INACTIVE_OR_MISSING")
+
+    now_ms = time.time_ns() // 1_000_000
+    maker_timestamp = int(maker_status.get("timestamp_ms") or 0)
+    maker_status_valid = (
+        maker_status.get("schema") == "polymarket_v7_authorized_maker_paper_executor_status_v1"
+        and maker_status.get("paper_only") is True
+        and maker_status.get("authenticated_execution") is False
+        and maker_status.get("real_order_submission") is False
+        and maker_status.get("real_capital_at_risk") is False
+        and maker_status.get("execution_authority") == "SIMULATED_PAPER_ONLY"
+        and (not expected_model_sha or maker_status.get("model_sha") == expected_model_sha)
+        and maker_timestamp > 0 and maker_timestamp <= now_ms
+        and now_ms - maker_timestamp <= 2_000
+        and isinstance(maker_status.get("active_order_details"), list)
+    )
+    target: dict[str, Any] = {}
+    if signal_valid and maker_status_valid:
+        candidates = []
+        for row in maker_status.get("active_order_details") or []:
+            if not isinstance(row, dict) or row.get("cancel_requested") is True:
+                continue
+            outcome = str(row.get("outcome") or "")
+            side = str(row.get("side") or "")
+            stale_identity = f"{outcome}_{side}"
+            if (
+                outcome not in {"YES", "NO"} or side not in {"BUY", "SELL"}
+                or stale_identity not in expected_stale
+                or (market_id and str(row.get("market_id") or "") != market_id)
+                or not str(row.get("order_id") or "")
+                or not str(row.get("replay_key") or "")
+                or not str(row.get("token_id") or "")
+                or finite(row.get("remaining_shares"), 0.0) <= 0.0
+                or not 0.0 < finite(row.get("limit_price"), 0.0) < 1.0
+            ):
+                continue
+            candidates.append(row)
+        if candidates:
+            target = sorted(
+                candidates, key=lambda row: (str(row.get("order_id") or ""), str(row.get("replay_key") or ""))
+            )[0]
+    target_active = signal_valid and bool(target)
+    if signal_valid and not target_active:
+        reasons.append("NO_MATCHING_ACTIVE_STALE_PAPER_QUOTE")
     probability_lower = wilson_lower(avoidable, episodes) if mature else 0.0
     return CancelEvidence(
-        signal_active=signal_valid,
-        mandatory_risk_cancel=signal_valid and signal.get("mandatory_risk_cancel") is True,
-        quote_size=max(0.0, finite(signal.get("active_quote_size_shares"), 0.0)) if signal_valid else 0.0,
+        signal_active=target_active,
+        mandatory_risk_cancel=target_active,
+        quote_size=max(0.0, finite(target.get("remaining_shares"), 0.0)) if target_active else 0.0,
         avoidable_fill_probability_lower=probability_lower,
         avoided_adverse_loss_lower_per_share=lower_markout if mature else 0.0,
-        cancel_cost=max(0.0, finite(signal.get("cancel_cost"), 0.0)) if signal_valid else 0.0,
+        cancel_cost=0.0,
         mature=mature,
+        target_order_id=str(target.get("order_id") or "") if target_active else "",
+        target_replay_key=str(target.get("replay_key") or "") if target_active else "",
+        target_outcome=str(target.get("outcome") or "") if target_active else "",
+        target_token_id=str(target.get("token_id") or "") if target_active else "",
+        target_side=str(target.get("side") or "") if target_active else "",
+        target_price=finite(target.get("limit_price"), 0.0) if target_active else 0.0,
     ), reasons
 
 
@@ -184,6 +258,7 @@ def build_state(
     router = load(root / "external_fair" / "paper_router_status.json")
     engine = load(root / "control" / "crypto_settlement_engine_snapshot.json")
     maker_model = load(root / "micro_maker" / "execution_model.json")
+    maker_executor = load(root / "micro_maker" / "authorized_make_executor_status.json")
     if (
         runtime.get("schema") != "polymarket_v7_runtime_status_v3"
         or runtime.get("paper_only") is not True
@@ -256,10 +331,14 @@ def build_state(
         capital_cost_per_trade=0.0,
         mature=taker_mature,
     )
-    cancel, cancel_reasons = cancel_evidence(cancel_report, cancel_signal)
+    market_id = str(market.get("market_id") or live.get("market_id") or "")
+    cancel, cancel_reasons = cancel_evidence(
+        cancel_report, cancel_signal, maker_executor, market_id=market_id,
+        expected_model_sha=str(runtime.get("model_sha") or ""),
+    )
     blockers.extend(cancel_reasons)
     state = MarketState(
-        market_id=str(market.get("market_id") or live.get("market_id") or ""),
+        market_id=market_id,
         event_id=str(market.get("event_id") or ""),
         asset="BTC", horizon="M5",
         fair_lower_yes=finite(fair.get("lower"), 0.0),
@@ -274,7 +353,10 @@ def build_state(
         fair_mature=(fair_status.get("model") or {}).get("mature") is True,
         source_snapshot_identity=str(live.get("snapshot_id") or ""),
     )
-    return state, blockers, {"runtime": runtime, "fair": fair_status, "router": router, "engine": engine}
+    return state, blockers, {
+        "runtime": runtime, "fair": fair_status, "router": router, "engine": engine,
+        "cancel_signal": cancel_signal, "maker_executor": maker_executor,
+    }
 
 
 def make_envelope(state: MarketState, report: dict[str, Any], context: dict[str, Any]) -> dict[str, Any] | None:
@@ -412,6 +494,146 @@ def make_envelope(state: MarketState, report: dict[str, Any], context: dict[str,
     return envelope
 
 
+def make_cancel_envelope(
+    state: MarketState, report: dict[str, Any], context: dict[str, Any],
+) -> dict[str, Any] | None:
+    selected = report.get("selected_action") if isinstance(report.get("selected_action"), dict) else {}
+    target = state.cancel
+    if (
+        selected.get("action") != "CANCEL"
+        or target.signal_active is not True
+        or target.mandatory_risk_cancel is not True
+        or target.mature is not True
+        or not target.target_order_id
+        or not target.target_replay_key
+        or target.target_outcome not in {"YES", "NO"}
+        or target.target_side not in {"BUY", "SELL"}
+        or target.quote_size <= 0.0
+        or not 0.0 < target.target_price < 1.0
+    ):
+        return None
+    runtime = context["runtime"]
+    engine = context["engine"]
+    crypto = engine.get("crypto_context") if isinstance(engine.get("crypto_context"), dict) else {}
+    signal = context.get("cancel_signal") if isinstance(context.get("cancel_signal"), dict) else {}
+    decision_ns = time.time_ns()
+    source_books = ((context["router"].get("live_market") or {}).get("execution_alpha_books") or {})
+    source_ns = sorted({
+        int((row.get("exchange_ts_ms") or 0) * 1_000_000)
+        for row in source_books.values()
+        if isinstance(row, dict) and int(row.get("exchange_ts_ms") or 0) > 0
+    } | {
+        int((row.get("receive_ts_ms") or 0) * 1_000_000)
+        for row in source_books.values()
+        if isinstance(row, dict) and int(row.get("receive_ts_ms") or 0) > 0
+    })
+    if not source_ns or max(source_ns) > decision_ns:
+        return None
+    attribution = selected.get("attribution") if isinstance(selected.get("attribution"), dict) else {}
+    lower, point, upper = (
+        (state.fair_lower_yes, state.fair_point_yes, state.fair_upper_yes)
+        if target.target_outcome == "YES"
+        else (1.0 - state.fair_upper_yes, 1.0 - state.fair_point_yes, 1.0 - state.fair_lower_yes)
+    )
+    trigger_ns = int(signal.get("trigger_monotonic_ns") or 0)
+    replay_key = (
+        f"crypto-execution-alpha:CANCEL:{target.target_order_id}:"
+        f"{target.target_replay_key}:{trigger_ns}"
+    )
+    envelope = {
+        "schema": "polymarket_v7_opportunity_envelope_v1", "version": 1,
+        "model_sha": str(runtime.get("model_sha") or ""),
+        "config_hash": str(runtime.get("config_hash") or ""),
+        "policy_hash": str(runtime.get("policy_hash") or ""),
+        "run_id": str(runtime.get("run_id") or ""),
+        "source_snapshot_identity": f"{state.source_snapshot_identity}:cancel:{trigger_ns}",
+        "engine_id": "CRYPTO_SETTLEMENT_ENGINE",
+        "component_provenance": ["crypto_settlement_fair", "professional_maker"],
+        "market_id": state.market_id, "event_id": state.event_id,
+        "contract_id": target.target_token_id,
+        "mapping_identity": str(crypto.get("settlement_semantic_hash") or ""),
+        "crypto_context": {
+            "asset": str(crypto.get("asset") or "BTC"),
+            "horizon": str(crypto.get("horizon") or "M5"),
+            "contract_family": str(crypto.get("contract_family") or "BTC_USD_UPDOWN_5M"),
+            "settlement_semantic_hash": str(crypto.get("settlement_semantic_hash") or ""),
+            "authority": "PAPER_EXPLORATION", "research_only": False,
+        },
+        "action": "CANCEL", "side": "NONE",
+        "decision_receive_timestamp_ns": decision_ns,
+        "source_event_timestamps_ns": source_ns,
+        "fair_value": {"lower": lower, "point": point, "upper": upper},
+        "conservative_expected_wealth_change": float(selected["conservative_expected_wealth_change"]),
+        "execution_alpha": {
+            "schema": "polymarket_v7_execution_alpha_packet_v1",
+            "action": "CANCEL", "outcome": "NONE", "evidence_status": "MATURE",
+            "fill_probability": {"lower": 0.0, "point": 0.0, "upper": 0.0},
+            "queue_ahead_shares": 0.0,
+            "action_ev": {
+                "conservative": float(selected["conservative_expected_wealth_change"]),
+                "point": float(selected["point_expected_wealth_change"]),
+            },
+            "attribution": {name: float(attribution.get(name, 0.0)) for name in (
+                "settlement_alpha", "spread_capture", "rebate", "fees", "slippage",
+                "adverse_selection", "latency", "inventory", "unwind", "cancel", "capital",
+            )},
+        },
+        "cost_vector": {
+            "fee": max(0.0, -finite(attribution.get("fees"), 0.0)),
+            "slippage": max(0.0, -finite(attribution.get("slippage"), 0.0)),
+            "unwind_loss": max(0.0, -finite(attribution.get("unwind"), 0.0)),
+            "capital_cost": max(0.0, -finite(attribution.get("capital"), 0.0)),
+            "latency_cost": max(0.0, -finite(attribution.get("latency"), 0.0)),
+            "adverse_markout": 0.0, "rebate": 0.0,
+        },
+        "cost_authority": {
+            "fee": "CONSERVATIVE_ZERO", "slippage": "CONSERVATIVE_ZERO",
+            "unwind_loss": "CONSERVATIVE_ZERO", "capital_cost": "CONSERVATIVE_ZERO",
+            "latency_cost": "CONSERVATIVE_ZERO", "adverse_markout": "CONSERVATIVE_ZERO",
+            "rebate": "CONSERVATIVE_ZERO",
+        },
+        "uncertainty": {"lower_bound": 0.0, "upper_bound": 0.0, "status": "MATURE"},
+        "calibration_status": "NOT_APPLICABLE",
+        "latency": {
+            "profile_id": "frozen-external-cancel-100ms", "profile_valid": True,
+            "economic_percentile": "p99", "arrival_ns": 100_000_000,
+        },
+        "capacity": {
+            "executable_size": float(target.quote_size),
+            "depth_provenance": target.target_replay_key,
+        },
+        "execution_plan": {
+            "atomic_unit_id": target.target_replay_key,
+            "execution_style": "SINGLE_LEG",
+            "legs": [{
+                "leg_id": target.target_order_id, "market_id": state.market_id,
+                "contract_id": target.target_token_id, "token_id": target.target_token_id,
+                "side": target.target_side, "target_quantity": float(target.quote_size),
+                "limit_price": float(target.target_price), "fee_authority": "CONSERVATIVE_ZERO",
+            }],
+            "partial_fill_plan": "CANCEL_REMAINDER", "timeout_ms": 100,
+            "unwind_plan": "CANCEL_ONLY",
+        },
+        "inventory_delta": 0.0, "portfolio_exposure_delta": 0.0,
+        "settlement": {
+            "definition": "registry-verified crypto settlement binding",
+            "source": "REGISTRY_VERIFIED_CHAINLINK_TWAP_60S", "verified": True,
+        },
+        "eligible": True,
+        "reasons": [
+            "FROZEN_EXTERNAL_STALE_QUOTE_CANCEL", f"RULE_SHA256:{CANCEL_RULE_SHA}",
+            "PAPER_ONLY_NO_AUTOMATIC_PROMOTION",
+        ],
+        "deterministic_replay_key": replay_key,
+        "expires_at_ns": decision_ns + 250_000_000,
+    }
+    try:
+        OpportunityEnvelope.parse(envelope)
+    except (OpportunityError, ValueError):
+        return None
+    return envelope
+
+
 def bucket(value: float, cuts: tuple[float, ...], names: tuple[str, ...]) -> str:
     for cut, name in zip(cuts, names):
         if value <= cut:
@@ -495,7 +717,15 @@ def process_cut(
     report = evaluate_market(state)
     report["market_selection_value"] = market_selection_value(report)
     report["attribution_total"] = aggregate_attribution([report])
-    envelope = make_envelope(state, report, context)
+    selected_action = (
+        (report.get("selected_action") or {}).get("action")
+        if isinstance(report.get("selected_action"), dict) else "NOTHING"
+    )
+    envelope = (
+        make_envelope(state, report, context) if selected_action == "MAKE"
+        else make_cancel_envelope(state, report, context) if selected_action == "CANCEL"
+        else None
+    )
     runtime_state = load(output_root / "state.json")
     published = False
     if envelope is not None and runtime_state.get("last_published_replay_key") != envelope["deterministic_replay_key"]:
@@ -516,7 +746,10 @@ def process_cut(
         "timestamp_ns": time.time_ns(), "paper_only": True,
         "authenticated_execution": False, "real_order_submission": False,
         "report": report, "blockers": blockers,
-        "make_opportunity_published": published,
+        "opportunity_published": published,
+        "published_action": selected_action if published else "NONE",
+        "make_opportunity_published": published and selected_action == "MAKE",
+        "cancel_opportunity_published": published and selected_action == "CANCEL",
         "take_proposal_owner": "EXISTING_ARRIVAL_REVALIDATED_EXTERNAL_FAIR_ROUTER",
         "maker_execution_owner": "EXISTING_PROFESSIONAL_MAKER_RUNTIME",
         "cancel_activation_policy": "FROZEN_FORWARD_PASS_PLUS_CANONICAL_LIVE_SIGNAL_REQUIRED",
@@ -527,7 +760,10 @@ def process_cut(
         "paper_only": True, "authenticated_execution": False,
         "real_order_submission": False, "state": "RUNNING",
         "blockers": blockers, "report": report,
-        "make_opportunity_published": published,
+        "opportunity_published": published,
+        "published_action": selected_action if published else "NONE",
+        "make_opportunity_published": published and selected_action == "MAKE",
+        "cancel_opportunity_published": published and selected_action == "CANCEL",
         "maker_probe_recommended": recommendation is not None,
     }
     atomic_json(output_root / "status.json", status)

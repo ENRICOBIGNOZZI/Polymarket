@@ -400,7 +400,11 @@
       "arguments": [
         "--loop",
         "--comparison-size-shares",
-        "5.0"
+        "5.0",
+        "--cancel-report",
+        "${DURABLE_ROOT}/research/btc_m5_external_cancel_forward_report_v3.json",
+        "--cancel-signal",
+        "${RUN_ROOT}/external_fair/external_cancel_signal.json"
       ],
       "profile": "engine",
       "inputs": [
@@ -412,7 +416,7 @@
         "external_fair/paper_router_status.json",
         "micro_maker/execution_model.json",
         "external_fair/external_cancel_signal.json",
-        "control/btc_m5_external_cancel_forward_report.json"
+        "${DURABLE_ROOT}/research/btc_m5_external_cancel_forward_report_v3.json"
       ],
       "outputs": [
         "crypto_execution_alpha/status.json",
@@ -470,6 +474,7 @@
       "profile": "engine",
       "inputs": [
         "micro_maker/authorized_make",
+        "micro_maker/authorized_cancel",
         "external_fair/paper_router_status.json",
         "crypto_execution_alpha/fillability/fillability_ws.jsonl",
         "crypto_execution_alpha/fillability/fillability_ws_status.json"

@@ -4,7 +4,7 @@
     "external_blocker_count": 2,
     "process_count": 25,
     "ref_count": 33,
-    "runtime_output_count": 86,
+    "runtime_output_count": 87,
     "schema_count": 22,
     "tracked_or_intended_path_count": 628,
     "workflow_count": 10
@@ -66,7 +66,7 @@
       "current_imports_callers_readers_writers": {
         "analysis": "exact path/module references from tracked text; runtime linkage is separately enumerated",
         "static_references": [
-          "scripts/paper_v7_execution_loop.sh:229"
+          "scripts/paper_v7_execution_loop.sh:230"
         ]
       },
       "deletion_gate": "NONE_CANONICAL_SURFACE",
@@ -93,7 +93,7 @@
       "current_imports_callers_readers_writers": {
         "analysis": "exact path/module references from tracked text; runtime linkage is separately enumerated",
         "static_references": [
-          "scripts/paper_v7_execution_loop.sh:285"
+          "scripts/paper_v7_execution_loop.sh:286"
         ]
       },
       "deletion_gate": "UNIQUE_BEHAVIOR_EQUIVALENCE_AND_SINGLE_CONSUMER_PROVEN",
@@ -122,7 +122,7 @@
       "current_imports_callers_readers_writers": {
         "analysis": "exact path/module references from tracked text; runtime linkage is separately enumerated",
         "static_references": [
-          "scripts/paper_v7_execution_loop.sh:293"
+          "scripts/paper_v7_execution_loop.sh:294"
         ]
       },
       "deletion_gate": "UNIQUE_BEHAVIOR_EQUIVALENCE_AND_SINGLE_CONSUMER_PROVEN",
@@ -151,7 +151,7 @@
       "current_imports_callers_readers_writers": {
         "analysis": "exact path/module references from tracked text; runtime linkage is separately enumerated",
         "static_references": [
-          "scripts/paper_v7_execution_loop.sh:302"
+          "scripts/paper_v7_execution_loop.sh:303"
         ]
       },
       "deletion_gate": "UNIQUE_BEHAVIOR_EQUIVALENCE_AND_SINGLE_CONSUMER_PROVEN",
@@ -180,7 +180,7 @@
       "current_imports_callers_readers_writers": {
         "analysis": "exact path/module references from tracked text; runtime linkage is separately enumerated",
         "static_references": [
-          "scripts/paper_v7_execution_loop.sh:307"
+          "scripts/paper_v7_execution_loop.sh:308"
         ]
       },
       "deletion_gate": "UNIQUE_BEHAVIOR_EQUIVALENCE_AND_SINGLE_CONSUMER_PROVEN",
@@ -209,7 +209,7 @@
       "current_imports_callers_readers_writers": {
         "analysis": "exact path/module references from tracked text; runtime linkage is separately enumerated",
         "static_references": [
-          "scripts/paper_v7_execution_loop.sh:312"
+          "scripts/paper_v7_execution_loop.sh:313"
         ]
       },
       "deletion_gate": "UNIQUE_BEHAVIOR_EQUIVALENCE_AND_SINGLE_CONSUMER_PROVEN",
@@ -238,7 +238,7 @@
       "current_imports_callers_readers_writers": {
         "analysis": "exact path/module references from tracked text; runtime linkage is separately enumerated",
         "static_references": [
-          "scripts/paper_v7_execution_loop.sh:320"
+          "scripts/paper_v7_execution_loop.sh:321"
         ]
       },
       "deletion_gate": "UNIQUE_BEHAVIOR_EQUIVALENCE_AND_SINGLE_CONSUMER_PROVEN",
@@ -267,7 +267,7 @@
       "current_imports_callers_readers_writers": {
         "analysis": "exact path/module references from tracked text; runtime linkage is separately enumerated",
         "static_references": [
-          "scripts/paper_v7_execution_loop.sh:325"
+          "scripts/paper_v7_execution_loop.sh:326"
         ]
       },
       "deletion_gate": "UNIQUE_BEHAVIOR_EQUIVALENCE_AND_SINGLE_CONSUMER_PROVEN",
@@ -296,7 +296,7 @@
       "current_imports_callers_readers_writers": {
         "analysis": "exact path/module references from tracked text; runtime linkage is separately enumerated",
         "static_references": [
-          "scripts/paper_v7_execution_loop.sh:475"
+          "scripts/paper_v7_execution_loop.sh:476"
         ]
       },
       "deletion_gate": "NONE_CANONICAL_SURFACE",
@@ -323,7 +323,7 @@
       "current_imports_callers_readers_writers": {
         "analysis": "exact path/module references from tracked text; runtime linkage is separately enumerated",
         "static_references": [
-          "scripts/paper_v7_execution_loop.sh:537"
+          "scripts/paper_v7_execution_loop.sh:538"
         ]
       },
       "deletion_gate": "NONE_CANONICAL_SURFACE",
@@ -350,7 +350,7 @@
       "current_imports_callers_readers_writers": {
         "analysis": "exact path/module references from tracked text; runtime linkage is separately enumerated",
         "static_references": [
-          "scripts/paper_v7_execution_loop.sh:593"
+          "scripts/paper_v7_execution_loop.sh:594"
         ]
       },
       "deletion_gate": "UNIQUE_BEHAVIOR_EQUIVALENCE_AND_SINGLE_CONSUMER_PROVEN",
@@ -379,7 +379,7 @@
       "current_imports_callers_readers_writers": {
         "analysis": "exact path/module references from tracked text; runtime linkage is separately enumerated",
         "static_references": [
-          "scripts/paper_v7_execution_loop.sh:601"
+          "scripts/paper_v7_execution_loop.sh:602"
         ]
       },
       "deletion_gate": "NONE_CANONICAL_SURFACE",
@@ -406,7 +406,7 @@
       "current_imports_callers_readers_writers": {
         "analysis": "exact path/module references from tracked text; runtime linkage is separately enumerated",
         "static_references": [
-          "scripts/paper_v7_execution_loop.sh:608"
+          "scripts/paper_v7_execution_loop.sh:609"
         ]
       },
       "deletion_gate": "NONE_CANONICAL_SURFACE",
@@ -428,27 +428,25 @@
       ]
     },
     {
-      "canonical_replacement": "config/v7_authority_registry.json#CRYPTO_SETTLEMENT_ENGINE",
-      "classification": "MERGE_INTO_CANONICAL",
+      "canonical_replacement": "\"$EXTERNAL_CANCEL_FORWARD_REPORT\"",
+      "classification": "KEEP_CANONICAL",
       "current_imports_callers_readers_writers": {
         "analysis": "exact path/module references from tracked text; runtime linkage is separately enumerated",
         "static_references": [
-          "scripts/paper_v7_execution_loop.sh:620"
+          "scripts/paper_v7_execution_loop.sh:623"
         ]
       },
-      "deletion_gate": "UNIQUE_BEHAVIOR_EQUIVALENCE_AND_SINGLE_CONSUMER_PROVEN",
+      "deletion_gate": "NONE_CANONICAL_SURFACE",
       "disposition_commit": null,
       "economic_authority": {
-        "capabilities": [
-          "engine_component"
-        ],
+        "capabilities": [],
         "executable": false,
-        "owner": "CRYPTO_SETTLEMENT_ENGINE"
+        "owner": null
       },
-      "final_disposition": "merge_then_delete_or_reclassify_canonical",
-      "migration_status": "pending_gate",
+      "final_disposition": "retain_canonical",
+      "migration_status": "classified",
       "object_type": "process",
-      "path_or_ref": "\"$EXTERNAL_FAIR_POLICY\"",
+      "path_or_ref": "\"$EXTERNAL_CANCEL_FORWARD_REPORT\"",
       "rollback_artifact_tag": "v7-unification-pre-migration-8d9e8e60",
       "surface_id": "launcher_process:14:crypto_execution_alpha/runtime.log",
       "unique_behavior_data_contribution": "long-lived launcher child; log=$RUN_ROOT/crypto_execution_alpha/runtime.log",
@@ -462,7 +460,7 @@
       "current_imports_callers_readers_writers": {
         "analysis": "exact path/module references from tracked text; runtime linkage is separately enumerated",
         "static_references": [
-          "scripts/paper_v7_execution_loop.sh:636"
+          "scripts/paper_v7_execution_loop.sh:639"
         ]
       },
       "deletion_gate": "NONE_CANONICAL_SURFACE",
@@ -489,7 +487,7 @@
       "current_imports_callers_readers_writers": {
         "analysis": "exact path/module references from tracked text; runtime linkage is separately enumerated",
         "static_references": [
-          "scripts/paper_v7_execution_loop.sh:644"
+          "scripts/paper_v7_execution_loop.sh:647"
         ]
       },
       "deletion_gate": "NONE_CANONICAL_SURFACE",
@@ -516,7 +514,7 @@
       "current_imports_callers_readers_writers": {
         "analysis": "exact path/module references from tracked text; runtime linkage is separately enumerated",
         "static_references": [
-          "scripts/paper_v7_execution_loop.sh:665"
+          "scripts/paper_v7_execution_loop.sh:668"
         ]
       },
       "deletion_gate": "UNIQUE_BEHAVIOR_EQUIVALENCE_AND_SINGLE_CONSUMER_PROVEN",
@@ -545,7 +543,7 @@
       "current_imports_callers_readers_writers": {
         "analysis": "exact path/module references from tracked text; runtime linkage is separately enumerated",
         "static_references": [
-          "scripts/paper_v7_execution_loop.sh:676"
+          "scripts/paper_v7_execution_loop.sh:679"
         ]
       },
       "deletion_gate": "NONE_CANONICAL_SURFACE",
@@ -572,7 +570,7 @@
       "current_imports_callers_readers_writers": {
         "analysis": "exact path/module references from tracked text; runtime linkage is separately enumerated",
         "static_references": [
-          "scripts/paper_v7_execution_loop.sh:688"
+          "scripts/paper_v7_execution_loop.sh:691"
         ]
       },
       "deletion_gate": "UNIQUE_BEHAVIOR_EQUIVALENCE_AND_SINGLE_CONSUMER_PROVEN",
@@ -601,7 +599,7 @@
       "current_imports_callers_readers_writers": {
         "analysis": "exact path/module references from tracked text; runtime linkage is separately enumerated",
         "static_references": [
-          "scripts/paper_v7_execution_loop.sh:721"
+          "scripts/paper_v7_execution_loop.sh:724"
         ]
       },
       "deletion_gate": "UNIQUE_BEHAVIOR_EQUIVALENCE_AND_SINGLE_CONSUMER_PROVEN",
@@ -630,7 +628,7 @@
       "current_imports_callers_readers_writers": {
         "analysis": "exact path/module references from tracked text; runtime linkage is separately enumerated",
         "static_references": [
-          "scripts/paper_v7_execution_loop.sh:748"
+          "scripts/paper_v7_execution_loop.sh:751"
         ]
       },
       "deletion_gate": "UNIQUE_BEHAVIOR_EQUIVALENCE_AND_SINGLE_CONSUMER_PROVEN",
@@ -659,7 +657,7 @@
       "current_imports_callers_readers_writers": {
         "analysis": "exact path/module references from tracked text; runtime linkage is separately enumerated",
         "static_references": [
-          "scripts/paper_v7_execution_loop.sh:766"
+          "scripts/paper_v7_execution_loop.sh:769"
         ]
       },
       "deletion_gate": "NONE_CANONICAL_SURFACE",
@@ -686,7 +684,7 @@
       "current_imports_callers_readers_writers": {
         "analysis": "exact path/module references from tracked text; runtime linkage is separately enumerated",
         "static_references": [
-          "scripts/paper_v7_execution_loop.sh:786"
+          "scripts/paper_v7_execution_loop.sh:789"
         ]
       },
       "deletion_gate": "NONE_CANONICAL_SURFACE",
@@ -12551,6 +12549,7 @@
         "analysis": "exact path/module references from tracked text; runtime linkage is separately enumerated",
         "static_references": [
           "CMakeLists.txt",
+          "artifacts/v7_unification/path_classification.json",
           "config/v7_authority_edges.json"
         ]
       },
@@ -13761,7 +13760,8 @@
       "current_imports_callers_readers_writers": {
         "analysis": "exact path/module references from tracked text; runtime linkage is separately enumerated",
         "static_references": [
-          "CMakeLists.txt"
+          "CMakeLists.txt",
+          "artifacts/v7_unification/path_classification.json"
         ]
       },
       "deletion_gate": "UNIQUE_BEHAVIOR_EQUIVALENCE_AND_SINGLE_CONSUMER_PROVEN",
@@ -19226,9 +19226,9 @@
       "object_type": "branch_or_remote_ref",
       "path_or_ref": "refs/heads/feature/v7-unified-execution-alpha-20260907",
       "rollback_artifact_tag": "v7-unification-pre-migration-8d9e8e60",
-      "snapshot_object_id": "7b12814e48cfb1465182efbb65105fd045667f99",
+      "snapshot_object_id": "575389ee9ec16590ecfe3172cd6636ddf8ea45e0",
       "surface_id": "ref:refs/heads/feature/v7-unified-execution-alpha-20260907",
-      "unique_behavior_data_contribution": "16 commit(s) not reachable from origin/main require content audit",
+      "unique_behavior_data_contribution": "17 commit(s) not reachable from origin/main require content audit",
       "validation_tests": [
         "tests/test_v7_surface_classification.py"
       ]
@@ -19782,9 +19782,9 @@
       "object_type": "branch_or_remote_ref",
       "path_or_ref": "refs/remotes/origin/feature/v7-unified-execution-alpha-20260907",
       "rollback_artifact_tag": "v7-unification-pre-migration-8d9e8e60",
-      "snapshot_object_id": "7b12814e48cfb1465182efbb65105fd045667f99",
+      "snapshot_object_id": "575389ee9ec16590ecfe3172cd6636ddf8ea45e0",
       "surface_id": "ref:refs/remotes/origin/feature/v7-unified-execution-alpha-20260907",
-      "unique_behavior_data_contribution": "16 commit(s) not reachable from origin/main require content audit",
+      "unique_behavior_data_contribution": "17 commit(s) not reachable from origin/main require content audit",
       "validation_tests": [
         "tests/test_v7_surface_classification.py"
       ]
@@ -20805,6 +20805,35 @@
       "path_or_ref": "$RUN_ROOT/external_fair/deribit_rest_status.json",
       "rollback_artifact_tag": "v7-unification-pre-migration-8d9e8e60",
       "surface_id": "runtime_output:$RUN_ROOT/external_fair/deribit_rest_status.json",
+      "unique_behavior_data_contribution": "launcher-declared runtime state, evidence, tape, status, or log surface",
+      "validation_tests": [
+        "tests/test_v7_surface_classification.py"
+      ]
+    },
+    {
+      "canonical_replacement": "config/v7_authority_registry.json#CRYPTO_SETTLEMENT_ENGINE",
+      "classification": "MERGE_INTO_CANONICAL",
+      "current_imports_callers_readers_writers": {
+        "analysis": "exact path/module references from tracked text; runtime linkage is separately enumerated",
+        "static_references": [
+          "scripts/paper_v7_execution_loop.sh"
+        ]
+      },
+      "deletion_gate": "UNIQUE_BEHAVIOR_EQUIVALENCE_AND_SINGLE_CONSUMER_PROVEN",
+      "disposition_commit": null,
+      "economic_authority": {
+        "capabilities": [
+          "engine_component"
+        ],
+        "executable": false,
+        "owner": "CRYPTO_SETTLEMENT_ENGINE"
+      },
+      "final_disposition": "merge_then_delete_or_reclassify_canonical",
+      "migration_status": "pending_gate",
+      "object_type": "runtime_output",
+      "path_or_ref": "$RUN_ROOT/external_fair/external_cancel_signal.json",
+      "rollback_artifact_tag": "v7-unification-pre-migration-8d9e8e60",
+      "surface_id": "runtime_output:$RUN_ROOT/external_fair/external_cancel_signal.json",
       "unique_behavior_data_contribution": "launcher-declared runtime state, evidence, tape, status, or log surface",
       "validation_tests": [
         "tests/test_v7_surface_classification.py"
@@ -23398,5 +23427,5 @@
   "real_capital_at_risk": false,
   "real_order_submission": false,
   "schema": "polymarket_v7_surface_classification_v1",
-  "source_snapshot_sha": "7b12814e48cfb1465182efbb65105fd045667f99"
+  "source_snapshot_sha": "575389ee9ec16590ecfe3172cd6636ddf8ea45e0"
 }

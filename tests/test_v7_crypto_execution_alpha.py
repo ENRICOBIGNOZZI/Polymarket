@@ -1,6 +1,11 @@
 from __future__ import annotations
 
+import sys
 import unittest
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT))
 
 from scripts.v7_crypto_execution_alpha import (
     ATTRIBUTION_FIELDS,
@@ -80,6 +85,12 @@ class CryptoExecutionAlphaTests(unittest.TestCase):
                 avoided_adverse_loss_lower_per_share=cancel_avoided_loss,
                 cancel_cost=0.0,
                 mature=cancel_mature,
+                target_order_id="1" if cancel_active else "",
+                target_replay_key="make-replay" if cancel_active else "",
+                target_outcome="YES" if cancel_active else "",
+                target_token_id=f"yes-{market_id}" if cancel_active else "",
+                target_side="BUY" if cancel_active else "",
+                target_price=yes[0] if cancel_active else 0.0,
             ),
             target_size=target_size,
             tte_seconds=60.0,
