@@ -324,7 +324,9 @@ def make_envelope(state: MarketState, report: dict[str, Any], context: dict[str,
         "latency": {
             "profile_id": str((engine.get("latency") or {}).get("profile_version") or "maker-evidence"),
             "profile_valid": (engine.get("latency") or {}).get("valid") is True,
-            "economic_percentile": "p99", "arrival_ns": 0,
+            "economic_percentile": "p99", "arrival_ns": max(
+                1, int(max(0.0, finite((engine.get("latency") or {}).get("maker_place_p99_seconds"), 0.0)) * 1_000_000_000)
+            ),
         },
         "capacity": {"executable_size": float(selected["size"]), "depth_provenance": state.source_snapshot_identity},
         "execution_plan": {
@@ -365,7 +367,10 @@ def bucket(value: float, cuts: tuple[float, ...], names: tuple[str, ...]) -> str
 def probe_recommendation(state: MarketState, report: dict[str, Any], context: dict[str, Any]) -> dict[str, Any] | None:
     if report.get("maker_information_probe_recommended") is not True:
         return None
-    point = report.get("best_point_action") if isinstance(report.get("best_point_action"), dict) else {}
+    point = (
+        report.get("maker_information_probe_candidate")
+        if isinstance(report.get("maker_information_probe_candidate"), dict) else {}
+    )
     if point.get("action") != "MAKE":
         return None
     fair_status = context["fair"]

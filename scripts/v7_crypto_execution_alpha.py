@@ -398,6 +398,16 @@ def evaluate_market(state: MarketState) -> dict[str, Any]:
         else:
             selection_reason = "MAX_CONSERVATIVE_EXPECTED_CHANGE_IN_ACCOUNT_WEALTH"
     best_point = max(candidates, key=lambda row: (row.point_expected_wealth_change, row.information_score, row.action, row.outcome))
+    maker_probe_rows = [
+        row for row in candidates
+        if row.action == "MAKE" and not row.evidence_mature
+        and row.point_expected_wealth_change > 0.0 and row.information_score > 0.0
+    ]
+    maker_probe = max(
+        maker_probe_rows,
+        key=lambda row: (row.information_score, row.point_expected_wealth_change, row.outcome),
+        default=None,
+    )
     report = {
         "schema": SCHEMA,
         "paper_only": True,
@@ -413,10 +423,8 @@ def evaluate_market(state: MarketState) -> dict[str, Any]:
         "selected_action": selected.to_dict(),
         "selection_reason": selection_reason,
         "best_point_action": best_point.to_dict(),
-        "maker_information_probe_recommended": (
-            best_point.action == "MAKE" and best_point.information_score > 0.0
-            and not state.maker.mature
-        ),
+        "maker_information_probe_recommended": maker_probe is not None,
+        "maker_information_probe_candidate": maker_probe.to_dict() if maker_probe is not None else None,
         "candidates": [row.to_dict() for row in candidates],
         "settlement_alpha_and_execution_alpha_separated": True,
         "attribution_identity": list(ATTRIBUTION_FIELDS),
