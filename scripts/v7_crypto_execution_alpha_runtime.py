@@ -17,17 +17,18 @@ import time
 from pathlib import Path
 from typing import Any
 
-from v7_crypto_execution_alpha import (
-    CancelEvidence,
-    MakerEvidence,
-    MarketState,
-    OutcomeBook,
-    TakerEvidence,
-    aggregate_attribution,
-    evaluate_market,
-    market_selection_value,
-)
-from v7_opportunity import OpportunityEnvelope, OpportunityError
+try:
+    from v7_crypto_execution_alpha import (
+        CancelEvidence, MakerEvidence, MarketState, OutcomeBook, TakerEvidence,
+        aggregate_attribution, evaluate_market, market_selection_value,
+    )
+    from v7_opportunity import OpportunityEnvelope, OpportunityError
+except ModuleNotFoundError:  # package import under unittest
+    from scripts.v7_crypto_execution_alpha import (
+        CancelEvidence, MakerEvidence, MarketState, OutcomeBook, TakerEvidence,
+        aggregate_attribution, evaluate_market, market_selection_value,
+    )
+    from scripts.v7_opportunity import OpportunityEnvelope, OpportunityError
 
 
 STATUS_SCHEMA = "polymarket_v7_crypto_execution_alpha_runtime_v1"
