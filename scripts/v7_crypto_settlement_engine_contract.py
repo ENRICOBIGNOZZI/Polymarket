@@ -142,6 +142,43 @@ def validate_config(config: dict[str, Any]) -> None:
         or config.get("risk_actions_preempt_alpha") is not True
     ):
         raise ContractError("maker_component_boundary")
+    execution_alpha = config.get("execution_alpha") if isinstance(
+        config.get("execution_alpha"), dict
+    ) else {}
+    market_selection = execution_alpha.get("market_selection") if isinstance(
+        execution_alpha.get("market_selection"), dict
+    ) else {}
+    expected_attribution = [
+        "settlement_alpha", "spread_capture", "rebate", "fees", "slippage",
+        "adverse_selection", "latency", "inventory", "unwind", "cancel", "capital",
+    ]
+    if (
+        execution_alpha.get("schema") != "polymarket_v7_crypto_execution_alpha_policy_v1"
+        or execution_alpha.get("paper_only") is not True
+        or execution_alpha.get("authenticated_execution") is not False
+        or execution_alpha.get("real_order_submission") is not False
+        or execution_alpha.get("automatic_promotion") is not False
+        or float(execution_alpha.get("comparison_size_shares") or 0.0) <= 0.0
+        or execution_alpha.get("selection_objective") != "MAX_CONSERVATIVE_EXPECTED_CHANGE_IN_ACCOUNT_WEALTH"
+        or execution_alpha.get("take_proposal_owner") != "EXISTING_ARRIVAL_REVALIDATED_EXTERNAL_FAIR_ROUTER"
+        or execution_alpha.get("make_proposal_owner") != "V7_CRYPTO_EXECUTION_ALPHA"
+        or execution_alpha.get("cancel_activation") != "FROZEN_FORWARD_PASS_PLUS_CANONICAL_LIVE_SIGNAL"
+        or execution_alpha.get("maker_immature_fill_lower") != "ZERO"
+        or execution_alpha.get("retroactive_attribution_imputation") is not False
+        or execution_alpha.get("attribution_fields") != expected_attribution
+    ):
+        raise ContractError("execution_alpha_contract")
+    try:
+        top_fraction = float(market_selection.get("top_fraction"))
+        minimum_value = float(market_selection.get("minimum_expected_wealth_change"))
+    except (TypeError, ValueError, OverflowError) as exc:
+        raise ContractError("execution_alpha_market_selection") from exc
+    if (
+        not 0.0 < top_fraction <= 1.0
+        or minimum_value < 0.0
+        or market_selection.get("paper_shadow_only") is not True
+    ):
+        raise ContractError("execution_alpha_market_selection")
     rows = config.get("horizons")
     if not isinstance(rows, list) or len(rows) != 2:
         raise ContractError("horizon_count")

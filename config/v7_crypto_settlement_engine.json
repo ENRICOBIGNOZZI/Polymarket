@@ -24,7 +24,13 @@
     "professional_maker"
   ],
   "component_independent_authority": false,
-  "action_space": ["MAKE", "TAKE", "CANCEL", "WITHDRAW", "NOTHING"],
+  "action_space": [
+    "MAKE",
+    "TAKE",
+    "CANCEL",
+    "WITHDRAW",
+    "NOTHING"
+  ],
   "alpha_selection": "MAX_CONSERVATIVE_EXPECTED_CHANGE_IN_ACCOUNT_WEALTH",
   "risk_actions_preempt_alpha": true,
   "external_update_policy": {
@@ -35,7 +41,11 @@
   "fair_value": {
     "separate_model_per_horizon": true,
     "separate_frozen_model_per_asset_horizon": true,
-    "model_registry_index": ["asset", "horizon", "settlement_semantic_hash"],
+    "model_registry_index": [
+      "asset",
+      "horizon",
+      "settlement_semantic_hash"
+    ],
     "fixed_bridge_coefficient_authorized": false,
     "empirical_frozen_artifact_required": true,
     "settlement_source": "REGISTRY_VERIFIED_CHAINLINK_TWAP_60S",
@@ -63,7 +73,14 @@
     "configured_constants_are_observations": false,
     "missing_profile_behavior": "CANCEL_AND_NOTHING_ONLY",
     "minimum_samples": 100,
-    "required_percentiles": ["p50", "p90", "p95", "p99", "p99.9", "max"],
+    "required_percentiles": [
+      "p50",
+      "p90",
+      "p95",
+      "p99",
+      "p99.9",
+      "max"
+    ],
     "required_segments": [
       "taker_arrival",
       "maker_place_ack",
@@ -97,8 +114,16 @@
       "model_scope": "ASSET_USD_UPDOWN_5M",
       "authority": "SHADOW",
       "research_only": false,
-      "maker": {"enabled": true, "minimum_tte_seconds": 120, "maximum_tte_seconds": 300},
-      "taker": {"enabled": true, "minimum_tte_seconds": 5, "maximum_tte_seconds": 120},
+      "maker": {
+        "enabled": true,
+        "minimum_tte_seconds": 120,
+        "maximum_tte_seconds": 300
+      },
+      "taker": {
+        "enabled": true,
+        "minimum_tte_seconds": 5,
+        "maximum_tte_seconds": 120
+      },
       "under_five_seconds": "NO_NEW_RISK"
     },
     {
@@ -107,9 +132,49 @@
       "model_scope": "ASSET_USD_UPDOWN_15M",
       "authority": "SHADOW",
       "research_only": false,
-      "maker": {"enabled": true, "minimum_tte_seconds": 30, "maximum_tte_seconds": 900},
-      "taker": {"enabled": true, "minimum_tte_seconds": 5, "maximum_tte_seconds": 120},
+      "maker": {
+        "enabled": true,
+        "minimum_tte_seconds": 30,
+        "maximum_tte_seconds": 900
+      },
+      "taker": {
+        "enabled": true,
+        "minimum_tte_seconds": 5,
+        "maximum_tte_seconds": 120
+      },
       "under_five_seconds": "NO_NEW_RISK"
     }
-  ]
+  ],
+  "execution_alpha": {
+    "schema": "polymarket_v7_crypto_execution_alpha_policy_v1",
+    "paper_only": true,
+    "authenticated_execution": false,
+    "real_order_submission": false,
+    "automatic_promotion": false,
+    "comparison_size_shares": 5.0,
+    "selection_objective": "MAX_CONSERVATIVE_EXPECTED_CHANGE_IN_ACCOUNT_WEALTH",
+    "take_proposal_owner": "EXISTING_ARRIVAL_REVALIDATED_EXTERNAL_FAIR_ROUTER",
+    "make_proposal_owner": "V7_CRYPTO_EXECUTION_ALPHA",
+    "cancel_activation": "FROZEN_FORWARD_PASS_PLUS_CANONICAL_LIVE_SIGNAL",
+    "maker_immature_fill_lower": "ZERO",
+    "retroactive_attribution_imputation": false,
+    "market_selection": {
+      "top_fraction": 0.2,
+      "minimum_expected_wealth_change": 0.0,
+      "paper_shadow_only": true
+    },
+    "attribution_fields": [
+      "settlement_alpha",
+      "spread_capture",
+      "rebate",
+      "fees",
+      "slippage",
+      "adverse_selection",
+      "latency",
+      "inventory",
+      "unwind",
+      "cancel",
+      "capital"
+    ]
+  }
 }
