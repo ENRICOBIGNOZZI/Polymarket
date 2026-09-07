@@ -82,7 +82,11 @@ def wilson_lower(successes: int, trials: int, z: float = 1.96) -> float:
 
 
 def tte_execution_risk(policy: dict[str, Any], tte: float) -> float:
-    execution = policy.get("execution") if isinstance(policy.get("execution"), dict) else {}
+    # Consume the exact checked-in taker policy used by the canonical PAPER router.
+    # The `execution` fallback exists only for small isolated test fixtures.
+    execution = policy.get("taker") if isinstance(policy.get("taker"), dict) else (
+        policy.get("execution") if isinstance(policy.get("execution"), dict) else {}
+    )
     buckets = execution.get("tte_bucket_policy") if isinstance(execution.get("tte_bucket_policy"), list) else []
     for row in buckets:
         if not isinstance(row, dict):

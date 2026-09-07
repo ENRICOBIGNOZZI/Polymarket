@@ -81,7 +81,7 @@ class CryptoExecutionAlphaRuntimeTests(unittest.TestCase):
     @staticmethod
     def policy(path: Path, *, risk: float = 0.03) -> None:
         path.write_text(json.dumps({
-            "execution": {
+            "taker": {
                 "base_execution_risk_per_share": risk,
                 "tte_bucket_policy": [{
                     "minimum_seconds": 0.0, "maximum_seconds": 300.0,
