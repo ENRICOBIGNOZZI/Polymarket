@@ -11,6 +11,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import math
 import os
 import shutil
 import subprocess
@@ -86,6 +87,68 @@ def _checked_hash(value: Any, field: str) -> str:
     if not HASH64.fullmatch(raw):
         raise ValueError(f"seed_hash_invalid:{field}")
     return raw
+
+
+def semantic_report_compare(
+    expected: Any, actual: Any, *, path: str = "$",
+    rel_tol: float = 1e-14, abs_tol: float = 1e-15,
+) -> tuple[bool, float, list[str]]:
+    """Compare deterministic evidence across Python/libm runtimes.
+
+    Evidence files themselves remain byte/hash immutable.  Recomputed floating
+    aggregates may differ by a few ulps across Python/libm implementations, so
+    only finite non-boolean floats receive a machine-scale tolerance.  Types,
+    keys, sequence lengths, integers, booleans, strings and nulls remain exact.
+    """
+    mismatches: list[str] = []
+    max_abs_delta = 0.0
+
+    def walk(left: Any, right: Any, where: str) -> None:
+        nonlocal max_abs_delta
+        if isinstance(left, bool) or isinstance(right, bool):
+            if type(left) is not type(right) or left != right:
+                mismatches.append(where)
+            return
+        numeric_left = isinstance(left, (int, float)) and not isinstance(left, bool)
+        numeric_right = isinstance(right, (int, float)) and not isinstance(right, bool)
+        if numeric_left or numeric_right:
+            if not (numeric_left and numeric_right):
+                mismatches.append(where); return
+            # Integer-valued contract fields stay exact even though bool is a
+            # subclass of int and has already been handled above.
+            if isinstance(left, int) and isinstance(right, int):
+                if left != right:
+                    mismatches.append(where)
+                return
+            a, b = float(left), float(right)
+            if not (math.isfinite(a) and math.isfinite(b)):
+                if a != b:
+                    mismatches.append(where)
+                return
+            delta = abs(a - b)
+            max_abs_delta = max(max_abs_delta, delta)
+            if not math.isclose(a, b, rel_tol=rel_tol, abs_tol=abs_tol):
+                mismatches.append(where)
+            return
+        if isinstance(left, dict) or isinstance(right, dict):
+            if not (isinstance(left, dict) and isinstance(right, dict)):
+                mismatches.append(where); return
+            if set(left) != set(right):
+                mismatches.append(where + ".<keys>"); return
+            for key in sorted(left):
+                walk(left[key], right[key], f"{where}.{key}")
+            return
+        if isinstance(left, list) or isinstance(right, list):
+            if not (isinstance(left, list) and isinstance(right, list)) or len(left) != len(right):
+                mismatches.append(where); return
+            for index, (a, b) in enumerate(zip(left, right)):
+                walk(a, b, f"{where}[{index}]")
+            return
+        if type(left) is not type(right) or left != right:
+            mismatches.append(where)
+
+    walk(expected, actual, path)
+    return not mismatches, max_abs_delta, mismatches[:20]
 
 
 def _under(path: Path, root: Path) -> bool:
@@ -342,8 +405,9 @@ def import_seed_evidence(
         raise ValueError("seed_decoder_hash_drift")
     stored_report = load(stored_report_path)
     recomputed = forward.evaluate(registry, sorted(copied_paths), experiment_id=EXPERIMENT_ID)
-    if recomputed != stored_report or sha256_json(recomputed) != sha256_json(stored_report):
-        raise ValueError("seed_report_recompute_mismatch")
+    semantic_match, max_abs_numeric_delta, mismatch_paths = semantic_report_compare(stored_report, recomputed)
+    if not semantic_match:
+        raise ValueError("seed_report_recompute_mismatch:" + ",".join(mismatch_paths))
     activation = evaluate_activation(recomputed)
     if recomputed.get("state") != "PASS" or activation.get("paper_execution_alpha_overlay_eligible") is not True:
         raise ValueError("seed_report_does_not_pass_frozen_gate")
@@ -354,6 +418,10 @@ def import_seed_evidence(
         "execution_authority": "RESEARCH_ZERO_AUTHORITY",
         "seed_manifest_sha256": manifest_sha, "protocol_sha256": protocol_sha,
         "stored_report_sha256": stored_report_sha, "recomputed_report_sha256": sha256_json(recomputed),
+        "report_exact_json_match": recomputed == stored_report,
+        "report_semantic_match": semantic_match,
+        "report_max_abs_numeric_delta": max_abs_numeric_delta,
+        "report_numeric_rel_tol": 1e-14, "report_numeric_abs_tol": 1e-15,
         "rule_sha256": sha256_json(exp["frozen_rule"]),
         "original_freeze_boundary_ms": freeze_ms(exp), "promotion_boundary_ms": promotion_boundary,
         "market_count": market_count,

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import copy
 import json
 import sys
 import tempfile
@@ -192,6 +193,36 @@ def test_verified_seed_pack_is_recomputed_before_activation_and_corruption_fails
             raise AssertionError("corrupted seed episode accepted")
 
 
+def test_semantic_report_compare_accepts_only_machine_scale_float_roundoff() -> None:
+    expected = {
+        "state": "PASS", "count": 297, "ok": True,
+        "metric": 0.045985559324039804,
+        "interval": [0.034682619849294834, 0.05950677014191439],
+        "nested": {"stress": 0.04540448581594608},
+    }
+    actual = copy.deepcopy(expected)
+    actual["metric"] = 0.04598555932403981
+    actual["interval"][0] = 0.03468261984929484
+    actual["nested"]["stress"] = 0.04540448581594609
+    matched, max_delta, paths = runtime.semantic_report_compare(expected, actual)
+    assert matched is True and paths == [] and 0.0 < max_delta < 1e-15
+
+    drifted = copy.deepcopy(actual)
+    drifted["metric"] += 1e-8
+    matched, _, paths = runtime.semantic_report_compare(expected, drifted)
+    assert matched is False and "$.metric" in paths
+
+    wrong_count = copy.deepcopy(actual)
+    wrong_count["count"] = 298
+    matched, _, paths = runtime.semantic_report_compare(expected, wrong_count)
+    assert matched is False and "$.count" in paths
+
+    wrong_flag = copy.deepcopy(actual)
+    wrong_flag["ok"] = 1
+    matched, _, paths = runtime.semantic_report_compare(expected, wrong_flag)
+    assert matched is False and "$.ok" in paths
+
+
 def test_launcher_binds_existing_durable_seed_pack_without_new_authority() -> None:
     launcher = (ROOT / "scripts/paper_v7_execution_loop.sh").read_text(encoding="utf-8")
     manifest = json.loads((ROOT / "config/v7_process_manifest.json").read_text(encoding="utf-8"))
@@ -208,4 +239,5 @@ if __name__ == "__main__":
     test_no_closed_markets_materializes_explicit_ineligible_activation()
     test_runtime_failure_overwrites_any_prior_true_activation()
     test_verified_seed_pack_is_recomputed_before_activation_and_corruption_fails_closed()
+    test_semantic_report_compare_accepts_only_machine_scale_float_roundoff()
     test_launcher_binds_existing_durable_seed_pack_without_new_authority()
