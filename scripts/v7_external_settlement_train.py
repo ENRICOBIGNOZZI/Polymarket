@@ -161,10 +161,13 @@ def _weighted_sigma(rows: list[dict[str, Any]], model: dict[str, Any]) -> float:
     return math.sqrt(sum(weight * error * error for weight, error in zip(weights, errors)) / sum(weights))
 
 
+TTE_BUCKETS = ((0.0, 15.0), (15.0, 60.0), (60.0, 180.0), (180.0, 300.0))
+
+
 def residual_sigma_buckets(rows: list[dict[str, Any]], model: dict[str, Any]) -> tuple[float, list[dict[str, Any]]]:
     default = max(1e-6, _weighted_sigma(rows, model))
     output: list[dict[str, Any]] = []
-    for minimum, maximum in ((0.0, 15.0), (15.0, 60.0), (60.0, 180.0), (180.0, 300.0)):
+    for minimum, maximum in TTE_BUCKETS:
         selected = [
             row for row in rows
             if minimum <= float(row["features"]["tte_seconds"]) <= maximum
@@ -177,6 +180,43 @@ def residual_sigma_buckets(rows: list[dict[str, Any]], model: dict[str, Any]) ->
             "contracts": len({row["market_id"] for row in selected}),
         })
     return default, output
+
+
+def _sigma_from_buckets(buckets: list[dict[str, Any]], tte: float, default: float) -> float:
+    for bucket in buckets:
+        if float(bucket["minimum_seconds"]) <= tte <= float(bucket["maximum_seconds"]):
+            return float(bucket["sigma_bps"])
+    return default
+
+
+def _cluster_uncertainty(rows: list[dict[str, Any]], model: dict[str, Any], floor: float) -> dict[str, Any]:
+    by_market: dict[str, list[float]] = defaultdict(list)
+    for row in rows:
+        by_market[str(row["market_id"])].append(
+            float(row["target_settlement_margin_bps"]) - predict_margin(model, row))
+    values = [statistics.fmean(v) for v in by_market.values()]
+    if not values:
+        return {"contracts": 0, "bias_abs_bps": None, "standard_error_bps": None, "mean_uncertainty_bps": floor}
+    mean = statistics.fmean(values)
+    se = statistics.stdev(values) / math.sqrt(len(values)) if len(values) > 1 else abs(mean)
+    return {"contracts": len(values), "bias_abs_bps": abs(mean), "standard_error_bps": se,
+            "mean_uncertainty_bps": max(floor, math.hypot(mean, se))}
+
+
+def mean_uncertainty_buckets(validation: list[dict[str, Any]], model: dict[str, Any], default_sigma: float) -> tuple[float, list[dict[str, Any]]]:
+    floor = max(0.25, 0.05 * default_sigma)
+    global_stats = _cluster_uncertainty(validation, model, floor)
+    global_value = float(global_stats["mean_uncertainty_bps"])
+    output = []
+    for minimum, maximum in TTE_BUCKETS:
+        selected = [r for r in validation if minimum <= float(r["features"]["tte_seconds"]) <= maximum]
+        stats = _cluster_uncertainty(selected, model, floor)
+        use_local = int(stats["contracts"]) >= 5
+        output.append({"minimum_seconds": minimum, "maximum_seconds": maximum,
+                       "mean_uncertainty_bps": float(stats["mean_uncertainty_bps"]) if use_local else global_value,
+                       "contracts": int(stats["contracts"]), "local_estimate_used": use_local,
+                       "bias_abs_bps": stats["bias_abs_bps"], "standard_error_bps": stats["standard_error_bps"]})
+    return global_value, output
 
 
 def _normal_probability(margin: float, sigma: float) -> float:
@@ -217,6 +257,34 @@ def calibrated(probability: float, intercept: float, slope: float) -> float:
     return 1.0 / (1.0 + math.exp(-value)) if value >= 0.0 else math.exp(value) / (1.0 + math.exp(value))
 
 
+def calibration_buckets(validation: list[dict[str, Any]], model: dict[str, Any],
+                        sigma_buckets: list[dict[str, Any]], default_sigma: float,
+                        global_intercept: float, global_slope: float) -> list[dict[str, Any]]:
+    output = []
+    for minimum, maximum in TTE_BUCKETS:
+        selected = [r for r in validation if minimum <= float(r["features"]["tte_seconds"]) <= maximum]
+        markets = len({str(r["market_id"]) for r in selected})
+        use_local = markets >= 8 and len({int(r["actual_yes"]) for r in selected}) == 2
+        if use_local:
+            margins = [predict_margin(model, r) for r in selected]
+            raw = [_normal_probability(m, _sigma_from_buckets(sigma_buckets, float(r["features"]["tte_seconds"]), default_sigma))
+                   for m, r in zip(margins, selected)]
+            intercept, slope = fit_platt(selected, raw)
+        else:
+            intercept, slope = global_intercept, global_slope
+        output.append({"minimum_seconds": minimum, "maximum_seconds": maximum,
+                       "intercept": intercept, "slope": slope, "contracts": markets,
+                       "local_estimate_used": use_local})
+    return output
+
+
+def _calibration_from_buckets(buckets: list[dict[str, Any]], tte: float, fallback: tuple[float, float]) -> tuple[float, float]:
+    for bucket in buckets:
+        if float(bucket["minimum_seconds"]) <= tte <= float(bucket["maximum_seconds"]):
+            return float(bucket["intercept"]), float(bucket["slope"])
+    return fallback
+
+
 def scores(rows: list[dict[str, Any]], probabilities: list[float], margins: list[float]) -> dict[str, Any]:
     if not rows:
         return {"rows": 0, "contracts": 0, "brier": None, "log_loss": None, "margin_rmse_bps": None}
@@ -250,23 +318,35 @@ def train_artifact(
     model = fit_ridge(split["train"], ridge)
     default_sigma, sigma_buckets = residual_sigma_buckets(split["train"], model)
     validation_margins = [predict_margin(model, row) for row in split["validation"]]
-    validation_raw = [_normal_probability(value, default_sigma) for value in validation_margins]
+    validation_raw = [
+        _normal_probability(margin, _sigma_from_buckets(
+            sigma_buckets, float(row["features"]["tte_seconds"]), default_sigma))
+        for margin, row in zip(validation_margins, split["validation"])
+    ]
     calibration_intercept, calibration_slope = fit_platt(split["validation"], validation_raw)
+    uncertainty, uncertainty_buckets = mean_uncertainty_buckets(split["validation"], model, default_sigma)
+    calibration_tte = calibration_buckets(split["validation"], model, sigma_buckets, default_sigma,
+                                          calibration_intercept, calibration_slope)
     model.update({
         "default_residual_sigma_bps": default_sigma,
         "residual_sigma_by_tte": sigma_buckets,
-        "mean_uncertainty_bps": max(default_sigma * 0.25, default_sigma / math.sqrt(max(1, len({row['observed_day'] for row in split['train']})))),
+        "mean_uncertainty_bps": uncertainty,
+        "mean_uncertainty_by_tte": uncertainty_buckets,
         "calibration": {"intercept": calibration_intercept, "slope": calibration_slope},
+        "calibration_by_tte": calibration_tte,
+        "uncertainty_method": "validation_market_cluster_bias_plus_standard_error_v1",
         "target": "terminal_chainlink_twap_margin_bps_vs_contract_reference",
         "settlement_window_decomposition": "UNAVAILABLE_RAW_TWAP_CONSTITUENTS",
     })
     split_scores: dict[str, Any] = {}
     for name, values in split.items():
         margins = [predict_margin(model, row) for row in values]
-        probabilities = [
-            calibrated(_normal_probability(margin, default_sigma), calibration_intercept, calibration_slope)
-            for margin in margins
-        ]
+        probabilities = []
+        for margin, row in zip(margins, values):
+            tte = float(row["features"]["tte_seconds"])
+            sigma = _sigma_from_buckets(sigma_buckets, tte, default_sigma)
+            ci, cs = _calibration_from_buckets(calibration_tte, tte, (calibration_intercept, calibration_slope))
+            probabilities.append(calibrated(_normal_probability(margin, sigma), ci, cs))
         split_scores[name] = scores(values, probabilities, margins)
     train_rows = split["train"]
     fitting_rows = [*split["train"], *split["validation"]]
