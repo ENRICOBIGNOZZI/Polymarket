@@ -3,10 +3,10 @@
   "coverage": {
     "external_blocker_count": 2,
     "process_count": 25,
-    "ref_count": 39,
+    "ref_count": 40,
     "runtime_output_count": 82,
     "schema_count": 22,
-    "tracked_or_intended_path_count": 642,
+    "tracked_or_intended_path_count": 643,
     "workflow_count": 10
   },
   "entries": [
@@ -10099,6 +10099,7 @@
           "artifacts/v7_unification/path_classification.json",
           "config/v7_authority_edges.json",
           "ops/update_server_v7.sh",
+          "tests/test_v7_authorized_maker_cutover.py",
           "tests/test_v7_finalize_maker_cutover.py"
         ]
       },
@@ -10554,6 +10555,9 @@
           "config/v7_authority_edges.json",
           "ops/update_server_v7.sh",
           "scripts/v7_external_fair_paper_router.py",
+          "scripts/v7_finalize_maker_cutover.py",
+          "scripts/v7_prepare_cutover_run_root.py",
+          "tests/test_v7_authorized_maker_cutover.py",
           "tests/test_v7_maker_accounting.py"
         ]
       },
@@ -11211,6 +11215,7 @@
           "artifacts/v7_unification/path_classification.json",
           "config/v7_authority_edges.json",
           "ops/update_server_v7.sh",
+          "tests/test_v7_authorized_maker_cutover.py",
           "tests/test_v7_live_paper_validation_contract.py",
           "tests/test_v7_prepare_cutover_run_root.py"
         ]
@@ -14373,6 +14378,33 @@
       "path_or_ref": "tests/test_v7_authorized_make_cancel_runtime.py",
       "rollback_artifact_tag": "v7-unification-pre-migration-8d9e8e60",
       "surface_id": "path:tests/test_v7_authorized_make_cancel_runtime.py",
+      "unique_behavior_data_contribution": "tracked repository behavior, evidence, test, configuration, or documentation",
+      "validation_tests": [
+        "tests/test_v7_surface_classification.py"
+      ]
+    },
+    {
+      "canonical_replacement": "config/v7_authority_registry.json#CRYPTO_SETTLEMENT_ENGINE",
+      "classification": "MERGE_INTO_CANONICAL",
+      "current_imports_callers_readers_writers": {
+        "analysis": "exact path/module references from tracked text; runtime linkage is separately enumerated",
+        "static_references": [
+          "artifacts/v7_unification/path_classification.json"
+        ]
+      },
+      "deletion_gate": "UNIQUE_BEHAVIOR_EQUIVALENCE_AND_SINGLE_CONSUMER_PROVEN",
+      "disposition_commit": null,
+      "economic_authority": {
+        "capabilities": [],
+        "executable": false,
+        "owner": null
+      },
+      "final_disposition": "merge_then_delete_or_reclassify_canonical",
+      "migration_status": "pending_gate",
+      "object_type": "tracked_path",
+      "path_or_ref": "tests/test_v7_authorized_maker_cutover.py",
+      "rollback_artifact_tag": "v7-unification-pre-migration-8d9e8e60",
+      "surface_id": "path:tests/test_v7_authorized_maker_cutover.py",
       "unique_behavior_data_contribution": "tracked repository behavior, evidence, test, configuration, or documentation",
       "validation_tests": [
         "tests/test_v7_surface_classification.py"
@@ -19729,6 +19761,32 @@
       "final_disposition": "merge_then_delete_or_reclassify_canonical",
       "migration_status": "unique_commit_audit_pending",
       "object_type": "branch_or_remote_ref",
+      "path_or_ref": "refs/heads/fix/v7-authorized-maker-cutover-20260908",
+      "rollback_artifact_tag": "v7-unification-pre-migration-8d9e8e60",
+      "snapshot_object_id": "68025f666f2616e85c9d69e833c514490205d66b",
+      "surface_id": "ref:refs/heads/fix/v7-authorized-maker-cutover-20260908",
+      "unique_behavior_data_contribution": "1 commit(s) not reachable from origin/main require content audit",
+      "validation_tests": [
+        "tests/test_v7_surface_classification.py"
+      ]
+    },
+    {
+      "canonical_replacement": "config/v7_authority_registry.json#CRYPTO_SETTLEMENT_ENGINE",
+      "classification": "MERGE_INTO_CANONICAL",
+      "current_imports_callers_readers_writers": {
+        "analysis": "exact path/module references from tracked text; runtime linkage is separately enumerated",
+        "static_references": []
+      },
+      "deletion_gate": "UNIQUE_BEHAVIOR_EQUIVALENCE_AND_SINGLE_CONSUMER_PROVEN",
+      "disposition_commit": null,
+      "economic_authority": {
+        "capabilities": [],
+        "executable": false,
+        "owner": null
+      },
+      "final_disposition": "merge_then_delete_or_reclassify_canonical",
+      "migration_status": "unique_commit_audit_pending",
+      "object_type": "branch_or_remote_ref",
       "path_or_ref": "refs/heads/fix/v7-bounded-external-tapes-20260904",
       "rollback_artifact_tag": "v7-unification-pre-migration-8d9e8e60",
       "snapshot_object_id": "f64de812f5ff8f1db2eecd4af72008f77cafa1a3",
@@ -19817,27 +19875,27 @@
       ]
     },
     {
-      "canonical_replacement": "config/v7_authority_registry.json#CRYPTO_SETTLEMENT_ENGINE",
-      "classification": "MERGE_INTO_CANONICAL",
+      "canonical_replacement": "origin/main",
+      "classification": "DELETE_ACTIVE_LEGACY",
       "current_imports_callers_readers_writers": {
         "analysis": "exact path/module references from tracked text; runtime linkage is separately enumerated",
         "static_references": []
       },
-      "deletion_gate": "UNIQUE_BEHAVIOR_EQUIVALENCE_AND_SINGLE_CONSUMER_PROVEN",
+      "deletion_gate": "UNIQUE_COMMIT_AND_ACTIVE_REFERENCE_SCAN_CLEAN",
       "disposition_commit": null,
       "economic_authority": {
         "capabilities": [],
         "executable": false,
         "owner": null
       },
-      "final_disposition": "merge_then_delete_or_reclassify_canonical",
-      "migration_status": "unique_commit_audit_pending",
+      "final_disposition": "delete_after_gate",
+      "migration_status": "deletion_deferred_until_phase_9",
       "object_type": "branch_or_remote_ref",
       "path_or_ref": "refs/heads/fix/v7-frozen-maker-provenance-20260908",
       "rollback_artifact_tag": "v7-unification-pre-migration-8d9e8e60",
-      "snapshot_object_id": "ed1557653a442369019dc162173018749590308c",
+      "snapshot_object_id": "e42807ac920e89c528aebd1557c2031828bab200",
       "surface_id": "ref:refs/heads/fix/v7-frozen-maker-provenance-20260908",
-      "unique_behavior_data_contribution": "2 commit(s) not reachable from origin/main require content audit",
+      "unique_behavior_data_contribution": "fully reachable from origin/main; redundant active ref",
       "validation_tests": [
         "tests/test_v7_surface_classification.py"
       ]
@@ -20259,27 +20317,27 @@
       ]
     },
     {
-      "canonical_replacement": "config/v7_authority_registry.json#CRYPTO_SETTLEMENT_ENGINE",
-      "classification": "MERGE_INTO_CANONICAL",
+      "canonical_replacement": "origin/main",
+      "classification": "DELETE_ACTIVE_LEGACY",
       "current_imports_callers_readers_writers": {
         "analysis": "exact path/module references from tracked text; runtime linkage is separately enumerated",
         "static_references": []
       },
-      "deletion_gate": "UNIQUE_BEHAVIOR_EQUIVALENCE_AND_SINGLE_CONSUMER_PROVEN",
+      "deletion_gate": "UNIQUE_COMMIT_AND_ACTIVE_REFERENCE_SCAN_CLEAN",
       "disposition_commit": null,
       "economic_authority": {
         "capabilities": [],
         "executable": false,
         "owner": null
       },
-      "final_disposition": "merge_then_delete_or_reclassify_canonical",
-      "migration_status": "unique_commit_audit_pending",
+      "final_disposition": "delete_after_gate",
+      "migration_status": "deletion_deferred_until_phase_9",
       "object_type": "branch_or_remote_ref",
       "path_or_ref": "refs/remotes/origin/fix/v7-frozen-maker-provenance-20260908",
       "rollback_artifact_tag": "v7-unification-pre-migration-8d9e8e60",
-      "snapshot_object_id": "26985cf859751bcf8d5407685bb1553889ed8a07",
+      "snapshot_object_id": "e42807ac920e89c528aebd1557c2031828bab200",
       "surface_id": "ref:refs/remotes/origin/fix/v7-frozen-maker-provenance-20260908",
-      "unique_behavior_data_contribution": "1 commit(s) not reachable from origin/main require content audit",
+      "unique_behavior_data_contribution": "fully reachable from origin/main; redundant active ref",
       "validation_tests": [
         "tests/test_v7_surface_classification.py"
       ]
@@ -20355,7 +20413,7 @@
       "object_type": "branch_or_remote_ref",
       "path_or_ref": "refs/remotes/origin/main",
       "rollback_artifact_tag": "v7-unification-pre-migration-8d9e8e60",
-      "snapshot_object_id": "6ce16dedbc43b124b29eb90ca96e0230824b0d05",
+      "snapshot_object_id": "fae2ce1b1101f8052847c929ce26968451a2693f",
       "surface_id": "ref:refs/remotes/origin/main",
       "unique_behavior_data_contribution": "active migration or canonical upstream ref",
       "validation_tests": [
@@ -23837,5 +23895,5 @@
   "real_capital_at_risk": false,
   "real_order_submission": false,
   "schema": "polymarket_v7_surface_classification_v1",
-  "source_snapshot_sha": "ed1557653a442369019dc162173018749590308c"
+  "source_snapshot_sha": "68025f666f2616e85c9d69e833c514490205d66b"
 }

@@ -152,3 +152,62 @@ def settlement_event(position: dict[str, Any], raw: dict[str, Any], received_ms:
         side='BUY',intended_action='MAKE',final_pnl=pnl,realized_cashflow=payout,
         fee=0.,slippage=0.,unwind_loss=0.,capital_cost=0.,latency_cost=0.,
         capital_duration_ms=received_ms-int(position['opened_ms']),metadata=metadata)
+
+
+def authorized_maker_flat_proof(root, model_sha: str) -> dict[str, Any]:
+    """Strict post-stop ledger proof; absence of an old Maker state is irrelevant."""
+    from pathlib import Path
+    from v7_execution_ledger import iter_records
+    root = Path(root)
+    def read(name):
+        p = root / name
+        if p.is_symlink():raise ValueError('authorized_maker_cutover:symlink')
+        return json.loads(p.read_text())
+    runtime = read('control/runtime_status.json')
+    executor_path = root / 'micro_maker/authorized_make_executor_status.json'
+    executor = read('micro_maker/authorized_make_executor_status.json')
+    if (runtime.get('model_sha') != model_sha or runtime.get('state') not in {'stopping','stopped'}
+            or runtime.get('economic_new_risk_ready') is not False
+            or runtime.get('authorized_alpha_actions') != []):
+        raise ValueError('authorized_maker_cutover:runtime_not_stopped_safe')
+    for value in (runtime, executor):
+        if (value.get('model_sha') != model_sha or value.get('paper_only') is not True
+                or value.get('authenticated_execution') is not False
+                or value.get('real_order_submission') is not False):
+            raise ValueError('authorized_maker_cutover:identity_or_authority')
+    if executor.get('active_orders') != 0:
+        raise ValueError('authorized_maker_cutover:live_orders')
+    spool = root / 'ledger/spool'
+    if spool.exists() and any(spool.glob('*.json')):
+        raise ValueError('authorized_maker_cutover:undrained_spool')
+    ledger = root / 'ledger/execution.jsonl'
+    if not ledger.is_file() or ledger.is_symlink():
+        raise ValueError('authorized_maker_cutover:ledger_missing')
+    records = list(iter_records(ledger))
+    # Revalidate the public event representation instead of comparing Python
+    # class identities. File-based module loaders can instantiate an equivalent
+    # LedgerEvent class; silently skipping it would manufacture a flat account.
+    events = []
+    for record in records:
+        if getattr(record, 'model_sha', None) == model_sha and hasattr(record, 'event_type'):
+            if not callable(getattr(record, 'to_dict', None)):
+                raise ValueError('authorized_maker_cutover:unrecognized_event_representation')
+            events.append(LedgerEvent.from_dict(record.to_dict()))
+    for e in events:
+        if (e.strategy.upper() in {'MICRO_MAKER_PRO','MICRO_MAKER','PROFESSIONAL_MAKER'}
+                and e.event_type in {'ORDER_SUBMITTED','FILL','FINAL','ORDER_STATE','INVENTORY_LIQUIDATION'}
+                and not canonical_maker(e)):
+            raise ValueError('authorized_maker_cutover:unrecognized_maker_authority')
+    projection = project_maker(events, {})
+    if projection['issues'] or projection['positions'] or projection['pending_orders']:
+        raise ValueError('authorized_maker_cutover:unreconciled_inventory_or_orders')
+    return {'checked_model_sha':model_sha,'runtime_state':runtime['state'],
+            'ledger_sha256':hashlib.sha256(ledger.read_bytes()).hexdigest(),
+            'ledger_bytes':ledger.stat().st_size,'ledger_records':len(records),
+            'executor_status_sha256':hashlib.sha256(executor_path.read_bytes()).hexdigest(),
+            'orders_submitted':projection['orders_submitted'],'fills':projection['fills'],
+            'terminal_positions':projection['terminal_positions'],'pending_orders':0,
+            'open_positions':0,'active_orders':0,'issues':[],
+            'historical_realized_pnl':projection['realized_pnl'],
+            'historical_entry_debit':projection['entry_debit'],
+            'historical_settlement_payout':projection['settlement_payout']}
