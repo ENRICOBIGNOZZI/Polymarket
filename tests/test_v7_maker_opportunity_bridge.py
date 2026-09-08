@@ -83,6 +83,9 @@ def model(*, mature: bool = True) -> dict:
         "authenticated_execution": False,
         "real_order_submission": False,
         "model_sha": SHA,
+        "policy_hash": "1e44b8d2ba4e8428",
+        "config_hash": "88c9d5e1ebcc34ad",
+        "execution_semantics_version": "maker-paper-v7.2-bilateral-inventory",
         "model_state": "MATURE" if mature else "EVIDENCE_ACCUMULATING",
         "artifact_role": "research",
         "research_runtime_model": True,
@@ -208,6 +211,11 @@ def test_mature_positive_cell_becomes_typed_make_opportunity() -> None:
         assert row["action"] == "MAKE"
         assert row["engine_id"] == "CRYPTO_SETTLEMENT_ENGINE"
         assert row["component_provenance"] == ["professional_maker"]
+        assert row["maker_execution_identity"] == {
+            "policy_hash": "1e44b8d2ba4e8428",
+            "config_hash": "88c9d5e1ebcc34ad",
+            "execution_semantics_version": "maker-paper-v7.2-bilateral-inventory",
+        }
         assert row["execution_plan"]["legs"][0]["side"] == "BUY"
         assert row["conservative_expected_wealth_change"] > 0.0
         assert row["execution_alpha"]["fill_probability"]["lower"] > 0.0

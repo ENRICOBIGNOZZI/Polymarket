@@ -32,6 +32,7 @@ BRIDGE_SCHEMA = "polymarket_v7_maker_opportunity_bridge_v1"
 MODEL_SCHEMA = "polymarket_v7_maker_execution_model_v1"
 STATUS_SCHEMA = "polymarket_v7_external_fair_status_v1"
 RUNTIME_SCHEMA = "polymarket_v7_runtime_status_v3"
+EXECUTION_SEMANTICS = "maker-paper-v7.2-bilateral-inventory"
 
 
 class MakerBridgeError(ValueError):
@@ -67,6 +68,13 @@ def _sha256(value: Any) -> str:
 
 def _stable_id(*parts: Any) -> str:
     return hashlib.sha256("|".join(str(part) for part in parts).encode()).hexdigest()
+
+
+def _maker_identity_hash(value: Any) -> str | None:
+    text = str(value or "")
+    if len(text) != 16 or any(ch not in "0123456789abcdef" for ch in text):
+        return None
+    return text
 
 
 def wilson_lower(successes: int, trials: int, z: float = 1.96) -> float:
@@ -337,6 +345,9 @@ def build_maker_opportunities(
         or decision_ms - selection_ts_ms > selection_max_age_ms
     ):
         reasons.append("MAKER_SELECTION_STALE_OR_NONCAUSAL")
+    maker_policy_hash = _maker_identity_hash(model.get("policy_hash"))
+    maker_config_hash = _maker_identity_hash(model.get("config_hash"))
+    maker_execution_semantics = str(model.get("execution_semantics_version") or "")
     if (
         model.get("schema") != MODEL_SCHEMA
         or model.get("paper_only") is not True
@@ -345,6 +356,9 @@ def build_maker_opportunities(
         or model.get("model_sha") != model_sha
         or model.get("artifact_role") != "research"
         or model.get("research_runtime_model") is not True
+        or maker_policy_hash is None
+        or maker_config_hash is None
+        or maker_execution_semantics != EXECUTION_SEMANTICS
     ):
         reasons.append("MAKER_EXECUTION_MODEL_NOT_READY")
     contract = fair_status.get("contract") if isinstance(fair_status.get("contract"), dict) else {}
@@ -553,6 +567,11 @@ def build_maker_opportunities(
             "config_hash": str(runtime.get("config_hash") or ""),
             "policy_hash": str(runtime.get("policy_hash") or ""),
             "run_id": str(runtime.get("run_id") or ""),
+            "maker_execution_identity": {
+                "policy_hash": maker_policy_hash,
+                "config_hash": maker_config_hash,
+                "execution_semantics_version": maker_execution_semantics,
+            },
             "source_snapshot_identity": _stable_id(
                 "maker-bridge", selection_ts_ms, model_hash,
                 fair.get("probability_model_hash"), market_status.get("market_id"),

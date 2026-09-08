@@ -44,6 +44,7 @@ constexpr double kMicrounitsPerShare = 1'000'000.0;
 constexpr double kPriceScaleE4 = 10'000.0;
 constexpr std::int64_t kSelectionMaxAgeMs = 5'000;
 constexpr std::int64_t kFillabilityStatusMaxAgeMs = 5'000;
+constexpr std::string_view kMakerExecutionSemantics = "maker-paper-v7.2-bilateral-inventory";
 
 [[nodiscard]] std::int64_t wall_ms() noexcept {
     return std::chrono::duration_cast<std::chrono::milliseconds>(
@@ -65,6 +66,14 @@ constexpr std::int64_t kFillabilityStatusMaxAgeMs = 5'000;
 
 [[nodiscard]] bool exact_sha(std::string_view value) noexcept {
     if (value.size() != 40) return false;
+    for (const char ch : value) {
+        if (!((ch >= '0' && ch <= '9') || (ch >= 'a' && ch <= 'f'))) return false;
+    }
+    return true;
+}
+
+[[nodiscard]] bool exact_hex64_identity(std::string_view value) noexcept {
+    if (value.size() != 16) return false;
     for (const char ch : value) {
         if (!((ch >= '0' && ch <= '9') || (ch >= 'a' && ch <= 'f'))) return false;
     }
@@ -296,6 +305,9 @@ struct Authorization {
     std::string event_id;
     std::string token_id;
     std::string outcome;
+    std::string maker_policy_hash;
+    std::string maker_config_hash;
+    std::string maker_execution_semantics;
     Side order_side = Side::None;
     double limit_price = 0.0;
     double quantity_shares = 0.0;
@@ -328,6 +340,7 @@ struct Authorization {
     if (decision == nullptr || envelope == nullptr) throw std::runtime_error("authorization payload missing");
     const auto* crypto = child_object(*envelope, "crypto_context");
     const auto* exploration = child_object(*envelope, "exploration");
+    const auto* maker_identity = child_object(*envelope, "maker_execution_identity");
     const bool paper_probe = exploration != nullptr
         && text(find_value(*exploration, "mode")) == "PAPER_BOOTSTRAP_PROBE";
     if (text(find_value(*decision, "schema")) != "polymarket_v7_global_opportunity_decision_v1"
@@ -346,6 +359,10 @@ struct Authorization {
         || text(find_value(*envelope, "engine_id")) != "CRYPTO_SETTLEMENT_ENGINE"
         || text(find_value(*envelope, "action")) != "MAKE"
         || crypto == nullptr
+        || maker_identity == nullptr
+        || !exact_hex64_identity(text(find_value(*maker_identity, "policy_hash")))
+        || !exact_hex64_identity(text(find_value(*maker_identity, "config_hash")))
+        || text(find_value(*maker_identity, "execution_semantics_version")) != kMakerExecutionSemantics
         || text(find_value(*crypto, "asset")) != "BTC"
         || text(find_value(*crypto, "horizon")) != "M5"
         || text(find_value(*crypto, "authority")) != "PAPER_EXPLORATION"
@@ -377,6 +394,9 @@ struct Authorization {
     out.event_id = text(find_value(*envelope, "event_id"));
     out.token_id = text(find_value(leg, "token_id"));
     out.outcome = text(find_value(*envelope, "side"));
+    out.maker_policy_hash = text(find_value(*maker_identity, "policy_hash"));
+    out.maker_config_hash = text(find_value(*maker_identity, "config_hash"));
+    out.maker_execution_semantics = text(find_value(*maker_identity, "execution_semantics_version"));
     out.order_side = Side::Buy;
     out.limit_price = number(find_value(leg, "limit_price"));
     out.quantity_shares = number(find_value(leg, "target_quantity"));
@@ -930,6 +950,9 @@ private:
         metadata["paper_bootstrap_probe"] = context.authorization.paper_probe;
         metadata["economic_authority"] = "PAPER_EXPLORATION";
         metadata["execution_authority"] = "SIMULATED_PAPER_ONLY";
+        metadata["policy_hash"] = context.authorization.maker_policy_hash;
+        metadata["config_hash"] = context.authorization.maker_config_hash;
+        metadata["execution_semantics_version"] = context.authorization.maker_execution_semantics;
         metadata["coordinator_receipt"] = context.authorization.receipt;
         metadata["opportunity_replay_key"] = context.authorization.replay_key;
         metadata["opportunity_envelope"] = context.authorization.envelope;
