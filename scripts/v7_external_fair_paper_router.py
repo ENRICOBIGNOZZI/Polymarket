@@ -898,6 +898,10 @@ def reconstruct_paper_exploration_account(
             "entry_debit": debit,
             "executable_value": executable,
             "opened_ms": int(fill.receive_ts_ms or fill.recorded_ts_ms),
+            "resolution_due_ms": int(
+                metadata.get("resolution_due_ms")
+                or int(fill.receive_ts_ms or fill.recorded_ts_ms) + 300_000
+            ),
             "fee_schedule": fee_schedule,
             "markouts": sorted(markouts),
             "settled": False,
@@ -3020,6 +3024,9 @@ class PaperRouter:
         position_id = str(common["position_id"])
         order_id = str(common["order_id"])
         arrival_decision_ms = max(now_ms(), arrival_book.receive_ts_ms)
+        resolution_due_ms = arrival_book.receive_ts_ms + max(
+            0, int(round(float(arrival["tte_seconds"]) * 1000.0))
+        )
         arrival_metadata = {
             **common["metadata"], "robust_net_ev": robust_ev,
             "point_net_ev": point_ev,
@@ -3033,6 +3040,7 @@ class PaperRouter:
             "arrival_revalidated": True,
             "arrival_snapshot_id": arrival_book.snapshot_id,
             "arrival_tte_seconds": arrival["tte_seconds"],
+            "resolution_due_ms": resolution_due_ms,
             "arrival_robust_probability": arrival["robust_probability"],
             "arrival_robust_ev_per_share": arrival["robust_ev"],
             "arrival_pm_mid": arrival["market_yes"],
@@ -3150,6 +3158,7 @@ class PaperRouter:
             "token_id": row["token_id"], "outcome": row["outcome"], "shares": size,
             "entry_price": ask, "entry_fee": total_fee, "entry_cost": cost,
             "executable_value": executable_value, "opened_ms": arrival_book.receive_ts_ms,
+            "resolution_due_ms": resolution_due_ms,
             "fee_schedule": schedule, "markouts": [], "settled": False,
             "coordinator_receipt": receipt, "paper_exploration": True,
             "paper_bootstrap_probe": is_probe,
@@ -3215,8 +3224,13 @@ class PaperRouter:
                                       "full_visible_depth": True, "fill_conditioned": True},
                         ))
                         position.setdefault("markouts", []).append(horizon)
-            if age_seconds < 300:
+            resolution_due_ms = int(
+                position.get("resolution_due_ms") or (int(position["opened_ms"]) + 300_000)
+            )
+            if (current_ms < resolution_due_ms + 5_000
+                    or current_ms - int(position.get("settlement_attempt_ms") or 0) < 5_000):
                 continue
+            position["settlement_attempt_ms"] = current_ms
             try:
                 raw = request_json(f"{self.gamma_url}/markets/{urllib.parse.quote(str(position['market_id']))}", timeout=4)
             except Exception:

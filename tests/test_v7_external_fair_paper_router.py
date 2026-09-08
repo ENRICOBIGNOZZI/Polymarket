@@ -328,6 +328,9 @@ def main() -> None:
         assert status["fills"] == 1
         assert status["open_positions"] == 1
         assert status["counterfactual_fills"] == 1
+        live_position = next(iter(paper.state["positions"].values()))
+        assert live_position["resolution_due_ms"] > live_position["opened_ms"]
+        assert live_position["resolution_due_ms"] - live_position["opened_ms"] < 300_000
         account = status["paper_exploration_account"]
         assert account["complete"] is True
         assert account["orders_submitted"] == 1
@@ -449,7 +452,8 @@ def main() -> None:
             run_root, "c" * 40, ROOT / "config" / "v7_external_fair.json",
             "https://clob.invalid", "https://gamma.invalid",
         )
-        opened_ms = router.now_ms() - 301_000
+        opened_ms = router.now_ms() - 120_000
+        resolution_due_ms = router.now_ms() - 6_000
         settlement_receipt = {
             "schema": "polymarket_v7_global_opportunity_decision_v1",
             "owner": "V7_GLOBAL_PORTFOLIO_COORDINATOR",
@@ -521,6 +525,7 @@ def main() -> None:
             "market_id": "market-up-down", "event_id": "event-up-down", "token_id": "up-token",
             "outcome": "YES", "shares": 10.0, "entry_price": 0.4, "entry_cost": 4.0,
             "entry_fee": 0.2, "executable_value": 0.0, "opened_ms": opened_ms,
+            "resolution_due_ms": resolution_due_ms,
             "fee_schedule": {"rate": 0.07, "exponent": 1},
             "markouts": list(router.HORIZONS), "settled": False,
         }}
