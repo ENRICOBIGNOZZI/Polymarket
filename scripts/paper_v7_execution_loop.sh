@@ -307,13 +307,15 @@ python3 scripts/v7_external_fair_paper_router.py \
 v7_register_child "$!"
 
 # Zero-authority HFT research tape.  It labels frozen rich external feature cuts
-# with the first PM repricing observed at 100/250/500/1000ms.  Training is never
+# with the continuous receive-time book state at 100/250/500/1000ms. Training is never
 # performed here; a lead/lag model is frozen explicitly only after enough markets.
 python3 scripts/v7_external_lead_lag_collector.py \
   --fair-status "$RUN_ROOT/external_fair/status.json" \
   --router-status "$RUN_ROOT/external_fair/paper_router_status.json" \
   --output "$DURABLE_ROOT/external_fair/pm_lead_lag.jsonl" \
   --status "$RUN_ROOT/external_fair/lead_lag_collector_status.json" \
+  --book-tape "$RUN_ROOT/micro_maker/book_observations/current.jsonl" \
+  --book-status "$RUN_ROOT/micro_maker/fillability_ws_status.json" \
   --model-sha "$SHA" --interval-ms 25 \
   >> "$RUN_ROOT/external_fair/lead_lag_collector.log" 2>&1 &
 v7_register_child "$!"

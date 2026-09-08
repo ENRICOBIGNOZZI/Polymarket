@@ -14,9 +14,11 @@ from typing import Any
 from v7_external_rich_model import FEATURE_NAMES, design, number
 from v7_external_lead_lag_model import SCHEMA, FAMILY, validate
 from v7_external_lead_lag_collector import horizon_eligible, MAX_LABEL_DELAY_MS
+from v7_causal_book import TARGET as BOOK_TARGET
 
 OBS_SCHEMA = "polymarket_v7_external_pm_lead_lag_observation_v1"
 HORIZONS = (100, 250, 500, 1000)
+LEGACY_TARGET = "FIRST_OBSERVED_SNAPSHOT_AFTER_THRESHOLD"
 
 
 def solve(matrix: list[list[float]], rhs: list[float]) -> list[float]:
@@ -31,7 +33,7 @@ def solve(matrix: list[list[float]], rhs: list[float]) -> list[float]:
     return [row[-1] for row in a]
 
 
-def load_rows(paths: list[Path], code_sha: str) -> list[dict[str, Any]]:
+def load_rows(paths: list[Path], code_sha: str, target_semantics: str = LEGACY_TARGET) -> list[dict[str, Any]]:
     unique: dict[tuple[str,int], dict[str, Any]] = {}
     for path in paths:
         if not path.exists():
@@ -43,6 +45,8 @@ def load_rows(paths: list[Path], code_sha: str) -> list[dict[str, Any]]:
                     or row.get("paper_only") is not True or row.get("authenticated_execution") is not False
                     or row.get("real_order_submission") is not False or row.get("model_sha") != code_sha
                     or row.get("execution_authority") != "ZERO_AUTHORITY_RESEARCH_ONLY"):
+                continue
+            if row.get("target_semantics", LEGACY_TARGET) != target_semantics:
                 continue
             h=int(row.get("horizon_ms") or 0); origin=str(row.get("origin_id") or "")
             target=number(row.get("delta_logit")); realized=number(row.get("realized_horizon_ms"))
@@ -113,6 +117,9 @@ def score(rows: list[dict[str,Any]], spec: dict[str,Any] | None) -> dict[str,Any
 
 
 def train(rows: list[dict[str,Any]], code_sha: str) -> tuple[dict[str,Any],dict[str,Any]]:
+    semantics = {r.get("target_semantics", LEGACY_TARGET) for r in rows}
+    if len(semantics) != 1 or not semantics <= {LEGACY_TARGET, BOOK_TARGET}:
+        raise ValueError("lead_lag:mixed_or_unknown_target_semantics")
     parts=split(rows); models={}; report={}
     for horizon in HORIZONS:
         hp={k:[r for r in v if int(r["horizon_ms"])==horizon] for k,v in parts.items()}
@@ -137,7 +144,7 @@ def train(rows: list[dict[str,Any]], code_sha: str) -> tuple[dict[str,Any],dict[
            "generated_timestamp_ns":now,"forward_oos_starts_after_ns":boundary,"dataset_sha256":digest,
            "training_markets":len({r["market_id"] for r in rows}),"models":models,
            "maximum_label_delay_ms":MAX_LABEL_DELAY_MS,
-           "target_semantics":"FIRST_OBSERVED_SNAPSHOT_WITHIN_TOLERANCE"}
+           "target_semantics":next(iter(semantics))}
     validate(model)
     return model,{"schema":"polymarket_v7_external_pm_lead_lag_training_report_v1","model_sha":code_sha,
                   "paper_only":True,"research_only":True,"dataset_sha256":digest,"horizons":report,
@@ -152,5 +159,6 @@ def atomic(path: Path, value: dict[str,Any]) -> None:
 def main() -> int:
     ap=argparse.ArgumentParser(description=__doc__); ap.add_argument("--tape",action="append",type=Path,required=True)
     ap.add_argument("--model-sha",required=True); ap.add_argument("--output",type=Path,required=True); ap.add_argument("--report",type=Path,required=True)
-    args=ap.parse_args(); rows=load_rows(args.tape,args.model_sha); model,report=train(rows,args.model_sha); atomic(args.output,model); atomic(args.report,report); return 0
+    ap.add_argument("--target-semantics", choices=(LEGACY_TARGET, BOOK_TARGET), default=LEGACY_TARGET)
+    args=ap.parse_args(); rows=load_rows(args.tape,args.model_sha,args.target_semantics); model,report=train(rows,args.model_sha); atomic(args.output,model); atomic(args.report,report); return 0
 if __name__=="__main__": raise SystemExit(main())

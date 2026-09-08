@@ -2,6 +2,7 @@
 #include "pm/config.hpp"
 #include "pm/fast_ws.hpp"
 #include "pm/v7_market_ws.hpp"
+#include "pm/v7_maker_lane.hpp"
 #include "pm/v7_spsc.hpp"
 
 #include <boost/json.hpp>
@@ -204,6 +205,29 @@ load_selected_pairs(const fs::path& path) {
     return output;
 }
 
+// The current fair-market pair is observed independently of maker eligibility.
+// This adds public data coverage only; selection and authorization stay upstream.
+[[nodiscard]] std::vector<std::pair<std::string, std::pair<std::string, std::string>>>
+fair_observation_pairs(const Options& options) {
+    try {
+        const auto root = read_json(fs::path(options.run_root) / "external_fair" / "status.json");
+        if (!root.is_object()) return {};
+        const auto& object = root.as_object();
+        if (text(find_value(object, "code_sha")) != options.model_sha
+            || !boolean(find_value(object, "paper_only"), false)
+            || boolean(find_value(object, "authenticated_execution"), true)
+            || boolean(find_value(object, "real_order_submission"), true)) return {};
+        const auto* raw = find_value(object, "market");
+        if (!raw || !raw->is_object()) return {};
+        const auto& market = raw->as_object();
+        const auto id = text(find_value(market, "market_id"));
+        const auto yes = text(find_value(market, "yes_token"));
+        const auto no = text(find_value(market, "no_token"));
+        if (id.empty() || yes.empty() || no.empty() || yes == no) return {};
+        return {{id + "\n" + text(find_value(market, "event_id")), {yes, no}}};
+    } catch (const std::exception&) { return {}; }
+}
+
 [[nodiscard]] std::vector<SelectedToken> build_tokens(const Options& options, const pm::Config& config) {
     std::vector<std::pair<std::string, std::pair<std::string, std::string>>> pairs;
     while (!g_stop.load(std::memory_order_relaxed)) {
@@ -218,6 +242,13 @@ load_selected_pairs(const fs::path& path) {
         std::this_thread::sleep_for(std::chrono::milliseconds(250));
     }
     if (pairs.empty()) throw std::runtime_error("fillability selection unavailable");
+
+    for (const auto& fair : fair_observation_pairs(options)) {
+        const bool included = std::any_of(pairs.begin(), pairs.end(), [&](const auto& pair) {
+            return pair.second == fair.second;
+        });
+        if (!included) pairs.push_back(fair);
+    }
 
     std::vector<std::string> ids;
     ids.reserve(pairs.size() * 2);
@@ -259,6 +290,10 @@ load_selected_pairs(const fs::path& path) {
 }
 
 struct TradeEvidence {
+    MarketWsEventKind kind = MarketWsEventKind::Trade;
+    pm::v7::BookHotSnapshot book{};
+    pm::v7::maker::Features features{};
+    bool features_valid = false;
     std::uint64_t instrument_handle = 0;
     std::uint64_t state_version = 0;
     std::uint64_t connection_epoch = 0;
@@ -288,61 +323,103 @@ public:
             max_handle = std::max<std::size_t>(max_handle, token.instrument_handle);
         }
         by_handle_.resize(max_handle + 1, nullptr);
+        lanes_.resize(max_handle + 1);
+        feature_start_ns_.resize(max_handle + 1, 0);
+        latest_books_.resize(max_handle + 1);
         for (const auto& token : tokens_) by_handle_[token.instrument_handle] = &token;
+        for (const auto& token : tokens_) {
+            lanes_[token.instrument_handle] = std::make_unique<pm::v7::maker::MakerInstrumentLane>(1);
+        }
         decoder_ = std::make_unique<pm::v7::MarketWsShard>(std::move(bindings));
         fs::create_directories(output_dir_);
         evidence_path_ = output_dir_ / "fillability_ws.jsonl";
         status_path_ = output_dir_ / "fillability_ws_status.json";
         output_.open(evidence_path_, std::ios::app);
         if (!output_) throw std::runtime_error("cannot open exact-WS fillability evidence file");
+        fs::create_directories(output_dir_ / "book_observations");
+        book_path_ = output_dir_ / "book_observations" / "current.jsonl";
+        book_output_.open(book_path_, std::ios::app);
+        if (!book_output_) throw std::runtime_error("cannot open canonical book evidence file");
+        session_id_ = std::to_string(wall_ms()) + "-" + std::to_string(::getpid());
+    }
+
+    void on_frame(std::string_view payload, const pm::fast::FeedReceiveStamp& receive) {
+        std::array<MarketWsEvent, kWsOutputCapacity> events{};
+        const auto result = decoder_->process_frame(payload, receive, events);
+        raw_last_trade_events_.fetch_add(
+            result.raw_last_trade_events, std::memory_order_relaxed);
+        valid_trade_prints_.fetch_add(result.trade_events, std::memory_order_relaxed);
+        missing_side_.fetch_add(result.trade_missing_side, std::memory_order_relaxed);
+        missing_size_.fetch_add(result.trade_missing_size, std::memory_order_relaxed);
+        invalid_quantity_.fetch_add(
+            result.trade_invalid_quantity, std::memory_order_relaxed);
+        invalid_price_.fetch_add(result.trade_invalid_price, std::memory_order_relaxed);
+        invalid_timestamp_.fetch_add(
+            result.trade_invalid_timestamp, std::memory_order_relaxed);
+        unknown_asset_.fetch_add(
+            result.ignored_unknown_assets, std::memory_order_relaxed);
+        if (result.invalid_frame || result.output_overflow || result.arena_exhausted) {
+            decoder_failures_.fetch_add(1, std::memory_order_relaxed);
+        }
+        for (std::size_t i = 0; i < result.output_count; ++i) {
+            const auto& event = events[i];
+            if (event.instrument_handle == 0 || event.instrument_handle >= lanes_.size()) continue;
+            if (event.kind == MarketWsEventKind::Trade && (
+                event.price_e4 <= 0 || event.quantity_microunits <= 0
+                || event.exchange_event_ns <= 0 || event.side == Side::None)) {
+                continue;
+            }
+            TradeEvidence row;
+            row.kind = event.kind;
+            row.book = event.book;
+            auto& lane = lanes_[event.instrument_handle];
+            auto& started = feature_start_ns_[event.instrument_handle];
+            if (!event.book.valid || !event.book.lineage_continuous
+                || event.kind == MarketWsEventKind::LineageInvalidated
+                || event.kind == MarketWsEventKind::TickSizeChanged) {
+                // All path-dependent estimates restart across gaps and
+                // tick regimes. The first full book starts a new cut.
+                *lane = pm::v7::maker::MakerInstrumentLane(1);
+                started = 0;
+            } else {
+                if (started == 0) started = receive.monotonic_ns;
+                pm::v7::maker::MakerLaneContext context;
+                context.risk.new_risk_frozen = 1;
+                row.features = lane->on_market_event(event, context, feature_model_).features;
+                row.features_valid = receive.monotonic_ns - started >= 1'000'000'000;
+            }
+            row.instrument_handle = event.instrument_handle;
+            row.state_version = event.state_version;
+            row.connection_epoch = connection_epoch_.load(std::memory_order_relaxed);
+            row.exchange_event_ns = event.exchange_event_ns;
+            row.receive_wall_ms = receive.wall_ms;
+            row.receive_monotonic_ns = receive.monotonic_ns;
+            row.price_e4 = event.price_e4;
+            row.quantity_microunits = event.quantity_microunits;
+            row.aggressor_side = event.side;
+            row.lineage_continuous = event.book.lineage_continuous;
+            if (!queue_->try_push(row)) dropped_.fetch_add(1, std::memory_order_relaxed);
+        }
+    }
+
+    void on_reconnect() {
+        decoder_->invalidate_all_lineage();
+        connection_epoch_.fetch_add(1, std::memory_order_relaxed);
+        reconnects_.fetch_add(1, std::memory_order_relaxed);
+        for (std::size_t i=1; i<lanes_.size(); ++i) {
+            if (lanes_[i]) *lanes_[i] = pm::v7::maker::MakerInstrumentLane(1);
+            feature_start_ns_[i] = 0;
+        }
     }
 
     void start() {
         feed_ = std::make_unique<pm::fast::MarketWebSocketFeed>(
             ws_url_, ids_, std::max<std::size_t>(1, ids_.size()),
             [this](std::string_view payload, const pm::fast::FeedReceiveStamp& receive, std::size_t) {
-                std::array<MarketWsEvent, kWsOutputCapacity> events{};
-                const auto result = decoder_->process_frame(payload, receive, events);
-                raw_last_trade_events_.fetch_add(
-                    result.raw_last_trade_events, std::memory_order_relaxed);
-                valid_trade_prints_.fetch_add(result.trade_events, std::memory_order_relaxed);
-                missing_side_.fetch_add(result.trade_missing_side, std::memory_order_relaxed);
-                missing_size_.fetch_add(result.trade_missing_size, std::memory_order_relaxed);
-                invalid_quantity_.fetch_add(
-                    result.trade_invalid_quantity, std::memory_order_relaxed);
-                invalid_price_.fetch_add(result.trade_invalid_price, std::memory_order_relaxed);
-                invalid_timestamp_.fetch_add(
-                    result.trade_invalid_timestamp, std::memory_order_relaxed);
-                unknown_asset_.fetch_add(
-                    result.ignored_unknown_assets, std::memory_order_relaxed);
-                if (result.output_overflow || result.arena_exhausted) {
-                    decoder_failures_.fetch_add(1, std::memory_order_relaxed);
-                }
-                for (std::size_t i = 0; i < result.output_count; ++i) {
-                    const auto& event = events[i];
-                    if (event.kind != MarketWsEventKind::Trade || event.instrument_handle == 0
-                        || event.price_e4 <= 0 || event.quantity_microunits <= 0
-                        || event.exchange_event_ns <= 0 || event.side == Side::None) {
-                        continue;
-                    }
-                    TradeEvidence row;
-                    row.instrument_handle = event.instrument_handle;
-                    row.state_version = event.state_version;
-                    row.connection_epoch = connection_epoch_.load(std::memory_order_relaxed);
-                    row.exchange_event_ns = event.exchange_event_ns;
-                    row.receive_wall_ms = receive.wall_ms;
-                    row.receive_monotonic_ns = receive.monotonic_ns;
-                    row.price_e4 = event.price_e4;
-                    row.quantity_microunits = event.quantity_microunits;
-                    row.aggressor_side = event.side;
-                    row.lineage_continuous = event.book.lineage_continuous;
-                    if (!queue_.try_push(row)) dropped_.fetch_add(1, std::memory_order_relaxed);
-                }
+                on_frame(payload, receive);
             },
             [this](std::size_t, std::string_view) {
-                decoder_->invalidate_all_lineage();
-                connection_epoch_.fetch_add(1, std::memory_order_relaxed);
-                reconnects_.fetch_add(1, std::memory_order_relaxed);
+                on_reconnect();
             });
         feed_->start();
     }
@@ -351,17 +428,37 @@ public:
         if (feed_) feed_->stop();
         drain();
         output_.flush();
+        book_output_.flush();
+        if (!output_ || !book_output_) throw std::runtime_error("cannot flush canonical observer evidence");
         write_status(true);
     }
 
     void drain() {
         TradeEvidence row;
         bool wrote = false;
-        while (queue_.try_pop(row)) {
-            write(row);
+        while (queue_->try_pop(row)) {
+            if (row.kind == MarketWsEventKind::Trade) write(row);
+            write_book(row);
             wrote = true;
         }
-        if (wrote) output_.flush();
+        if (wrote) { output_.flush(); book_output_.flush(); }
+        if (book_output_.tellp() >= 64 * 1024 * 1024) {
+            book_output_.close();
+            const auto sealed = book_path_.parent_path() / (session_id_ + ".segment-"
+                + std::to_string(1'000'000 + book_segment_++) + ".jsonl");
+            fs::rename(book_path_, sealed);
+            book_output_.open(book_path_, std::ios::app);
+            if (!book_output_) throw std::runtime_error("cannot rotate causal book evidence");
+        }
+        if (wall_ms() - last_book_publish_ms_ >= 50) {
+            for (std::size_t i=1; i<latest_books_.size(); ++i) {
+                if (latest_books_[i].empty()) continue;
+                atomic_write(output_dir_ / "book_features" / (by_handle_[i]->token_id + ".json"),
+                             latest_books_[i]);
+                latest_books_[i].clear();
+            }
+            last_book_publish_ms_ = wall_ms();
+        }
     }
 
     void write_status(bool stopped = false) {
@@ -373,6 +470,10 @@ public:
         root["authenticated_execution"] = false;
         root["real_order_submission"] = false;
         root["model_sha"] = model_sha_;
+        root["observer_session_id"] = session_id_;
+        root["book_events_written"] = book_events_written_;
+        root["book_watermark_receive_wall_ms"] = book_watermark_wall_ms_;
+        root["book_watermark_receive_monotonic_ns"] = book_watermark_monotonic_ns_;
         root["state"] = stopped ? "stopped" : "running";
         root["events_written"] = events_written_;
         root["dropped_events"] = dropped_.load(std::memory_order_relaxed);
@@ -400,6 +501,51 @@ public:
     }
 
 private:
+    void write_book(const TradeEvidence& row) {
+        if (row.instrument_handle >= by_handle_.size()) return;
+        const auto* token = by_handle_[row.instrument_handle];
+        if (!token) return;
+        const auto& f = row.features;
+        json::object features{
+            {"spread_ticks", f.spread_ticks}, {"imbalance", f.imbalance}, {"ofi", f.ofi},
+            {"ew_vol_ticks", f.ew_vol_ticks}, {"short_return_ticks", f.short_return_ticks},
+            {"trade_intensity", f.trade_intensity}, {"cancel_intensity", f.cancel_intensity},
+            {"aggressive_buy_prints_per_second", f.aggressive_buy_prints_per_second},
+            {"aggressive_sell_prints_per_second", f.aggressive_sell_prints_per_second},
+            {"local_latency_ms", f.local_latency_ms}, {"inventory_fraction", nullptr},
+        };
+        const bool valid = row.book.valid && row.book.lineage_continuous
+            && dropped_.load(std::memory_order_relaxed) == 0
+            && decoder_failures_.load(std::memory_order_relaxed) == 0;
+        json::object value{
+            {"schema", "polymarket_v7_causal_book_observation_v1"},
+            {"model_sha", model_sha_}, {"paper_only", true},
+            {"authenticated_execution", false}, {"real_order_submission", false},
+            {"execution_authority", "ZERO_AUTHORITY_RESEARCH_ONLY"},
+            {"observer_session_id", session_id_}, {"connection_epoch", row.connection_epoch},
+            {"observer_sequence", ++book_events_written_}, {"market_id", token->market_id},
+            {"token_id", token->token_id}, {"state_version", row.state_version},
+            {"receive_wall_ms", row.receive_wall_ms}, {"receive_monotonic_ns", row.receive_monotonic_ns},
+            {"exchange_event_ns", row.book.exchange_event_ns},
+            {"book_receive_monotonic_ns", row.book.receive_monotonic_ns},
+            {"event_kind", static_cast<std::uint64_t>(row.kind)},
+            {"valid", valid}, {"lineage_continuous", row.book.lineage_continuous != 0},
+            {"features_valid", valid && row.features_valid},
+            {"tick_size", e4_price(row.book.tick_size_e4)},
+            {"best_bid", e4_price(row.book.best_bid_e4)}, {"best_ask", e4_price(row.book.best_ask_e4)},
+            {"bid_depth_l1", micro_shares(row.book.bid_depth.l1_microunits)},
+            {"ask_depth_l1", micro_shares(row.book.ask_depth.l1_microunits)},
+            {"placement_features", std::move(features)},
+            {"feature_semantics", "CANONICAL_MAKER_LANE_OBSERVED_FLOW_V1"},
+            {"cancel_intensity_semantics", "L5_CONTRACTION_MINUS_OBSERVED_TRADES_NORMALIZED_EW_PROXY"},
+        };
+        const auto serialized = json::serialize(value) + "\n";
+        book_output_ << serialized;
+        latest_books_[row.instrument_handle] = serialized;
+        book_watermark_wall_ms_ = std::max(book_watermark_wall_ms_, row.receive_wall_ms);
+        book_watermark_monotonic_ns_ = std::max(book_watermark_monotonic_ns_, row.receive_monotonic_ns);
+    }
+
     void write(const TradeEvidence& row) {
         if (row.instrument_handle >= by_handle_.size()) return;
         const auto* token = by_handle_[row.instrument_handle];
@@ -436,9 +582,22 @@ private:
     std::string model_sha_;
     std::vector<std::string> ids_;
     std::vector<const SelectedToken*> by_handle_;
+    std::vector<std::unique_ptr<pm::v7::maker::MakerInstrumentLane>> lanes_;
+    std::vector<std::int64_t> feature_start_ns_;
+    std::vector<std::string> latest_books_;
+    pm::v7::maker::MakerModelSnapshot feature_model_;
+    std::string session_id_;
+    std::ofstream book_output_;
+    fs::path book_path_;
+    std::uint64_t book_segment_ = 0;
+    std::uint64_t book_events_written_ = 0;
+    std::int64_t last_book_publish_ms_ = 0;
+    std::int64_t book_watermark_wall_ms_ = 0;
+    std::int64_t book_watermark_monotonic_ns_ = 0;
     std::unique_ptr<pm::v7::MarketWsShard> decoder_;
     std::unique_ptr<pm::fast::MarketWebSocketFeed> feed_;
-    pm::v7::SpscRing<TradeEvidence, kEvidenceCapacity> queue_{};
+    std::unique_ptr<pm::v7::SpscRing<TradeEvidence, kEvidenceCapacity>> queue_ =
+        std::make_unique<pm::v7::SpscRing<TradeEvidence, kEvidenceCapacity>>();
     std::ofstream output_;
     fs::path evidence_path_;
     fs::path status_path_;
@@ -469,6 +628,7 @@ int main(int argc, char** argv) {
         const Options options = parse_options(argc, argv);
         const pm::Config config = pm::load_config(options.config);
         while (!g_stop.load(std::memory_order_relaxed)) {
+            const auto fair_pairs = fair_observation_pairs(options);
             auto tokens = build_tokens(options, config);
             std::error_code stamp_error;
             const auto selection_stamp = fs::last_write_time(options.selection, stamp_error);
@@ -485,7 +645,8 @@ int main(int argc, char** argv) {
                     last_status_ms = now;
                     std::error_code current_error;
                     const auto current_stamp = fs::last_write_time(options.selection, current_error);
-                    reload = !stamp_error && !current_error && current_stamp != selection_stamp;
+                    reload = (!stamp_error && !current_error && current_stamp != selection_stamp)
+                        || fair_observation_pairs(options) != fair_pairs;
                 }
                 std::this_thread::sleep_for(std::chrono::milliseconds(10));
             }

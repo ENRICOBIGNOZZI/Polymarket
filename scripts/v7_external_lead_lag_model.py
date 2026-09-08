@@ -51,7 +51,10 @@ def predict_delta_logit(model: dict[str, Any], features: dict[str, Any], horizon
 
 
 def predict_probability(model: dict[str, Any], features: dict[str, Any], market_probability: float,
-                        horizon_ms: int) -> dict[str, float]:
+                        horizon_ms: int, *, prior_semantics: str = "ROUTER_SNAPSHOT") -> dict[str, float]:
+    if (model.get("target_semantics") == "CAUSAL_BOOK_STATE_AT_HORIZON"
+            and prior_semantics != "CAUSAL_BOOK_STATE_AT_ORIGIN"):
+        raise ValueError("lead_lag:causal_book_prior_required")
     p0 = number(market_probability)
     if p0 is None or not 0 <= p0 <= 1:
         raise ValueError("lead_lag:market_probability")
