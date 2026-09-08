@@ -3442,6 +3442,7 @@
           "scripts/v7_cutover_contract.py",
           "scripts/v7_final_convergence_audit.py",
           "scripts/v7_process_manifest.py",
+          "tests/test_v7_external_cancel_forward_runtime.py",
           "tests/test_v7_external_cancel_seed_replay.py",
           "tests/test_v7_process_manifest.py"
         ]
@@ -7940,6 +7941,7 @@
           "scripts/verify_v7.sh",
           "tests/test_v7_crypto_book_observer.py",
           "tests/test_v7_cutover_updater.py",
+          "tests/test_v7_external_cancel_forward_runtime.py",
           "tests/test_v7_external_cancel_seed_replay.py",
           "tests/test_v7_external_source_registry.py",
           "tests/test_v7_fast_authority_sentinel_contract.py",
@@ -15820,7 +15822,9 @@
       "classification": "KEEP_CANONICAL",
       "current_imports_callers_readers_writers": {
         "analysis": "exact path/module references from tracked text; runtime linkage is separately enumerated",
-        "static_references": []
+        "static_references": [
+          "artifacts/v7_unification/path_classification.json"
+        ]
       },
       "deletion_gate": "NONE_CANONICAL_SURFACE",
       "disposition_commit": null,
@@ -19618,9 +19622,9 @@
       "object_type": "branch_or_remote_ref",
       "path_or_ref": "refs/heads/feature/v7-unified-alpha-converged-20260907",
       "rollback_artifact_tag": "v7-unification-pre-migration-8d9e8e60",
-      "snapshot_object_id": "7d3a117894b697e57acf4e4b8435be5944e15c79",
+      "snapshot_object_id": "847466a3be04f89d10e511a2b084a1694ff59c00",
       "surface_id": "ref:refs/heads/feature/v7-unified-alpha-converged-20260907",
-      "unique_behavior_data_contribution": "19 commit(s) not reachable from origin/main require content audit",
+      "unique_behavior_data_contribution": "21 commit(s) not reachable from origin/main require content audit",
       "validation_tests": [
         "tests/test_v7_surface_classification.py"
       ]
@@ -20156,29 +20160,27 @@
       ]
     },
     {
-      "canonical_replacement": "config/v7_authority_registry.json#CRYPTO_SETTLEMENT_ENGINE",
-      "classification": "MERGE_INTO_CANONICAL",
+      "canonical_replacement": "origin/main",
+      "classification": "DELETE_ACTIVE_LEGACY",
       "current_imports_callers_readers_writers": {
         "analysis": "exact path/module references from tracked text; runtime linkage is separately enumerated",
         "static_references": []
       },
-      "deletion_gate": "UNIQUE_BEHAVIOR_EQUIVALENCE_AND_SINGLE_CONSUMER_PROVEN",
+      "deletion_gate": "UNIQUE_COMMIT_AND_ACTIVE_REFERENCE_SCAN_CLEAN",
       "disposition_commit": null,
       "economic_authority": {
-        "capabilities": [
-          "engine_component"
-        ],
+        "capabilities": [],
         "executable": false,
-        "owner": "CRYPTO_SETTLEMENT_ENGINE"
+        "owner": null
       },
-      "final_disposition": "merge_then_delete_or_reclassify_canonical",
-      "migration_status": "unique_commit_audit_pending",
+      "final_disposition": "delete_after_gate",
+      "migration_status": "deletion_deferred_until_phase_9",
       "object_type": "branch_or_remote_ref",
       "path_or_ref": "refs/remotes/origin/fix/v7-cross-python-seed-recompute-20260907",
       "rollback_artifact_tag": "v7-unification-pre-migration-8d9e8e60",
       "snapshot_object_id": "1820c75818c23671912557b6f5a0b708900df926",
       "surface_id": "ref:refs/remotes/origin/fix/v7-cross-python-seed-recompute-20260907",
-      "unique_behavior_data_contribution": "1 commit(s) not reachable from origin/main require content audit",
+      "unique_behavior_data_contribution": "fully reachable from origin/main; redundant active ref",
       "validation_tests": [
         "tests/test_v7_surface_classification.py"
       ]
@@ -20230,7 +20232,7 @@
       "object_type": "branch_or_remote_ref",
       "path_or_ref": "refs/remotes/origin/main",
       "rollback_artifact_tag": "v7-unification-pre-migration-8d9e8e60",
-      "snapshot_object_id": "d0839ff6198c4a6fe693a60d508cddc9c263768e",
+      "snapshot_object_id": "686ca8dcb3de15a120ffd76ac615992eb98bf4b2",
       "surface_id": "ref:refs/remotes/origin/main",
       "unique_behavior_data_contribution": "active migration or canonical upstream ref",
       "validation_tests": [
@@ -23686,5 +23688,5 @@
   "real_capital_at_risk": false,
   "real_order_submission": false,
   "schema": "polymarket_v7_surface_classification_v1",
-  "source_snapshot_sha": "7d3a117894b697e57acf4e4b8435be5944e15c79"
+  "source_snapshot_sha": "847466a3be04f89d10e511a2b084a1694ff59c00"
 }
