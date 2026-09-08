@@ -19,6 +19,7 @@ import json
 import math
 import os
 import statistics
+import threading
 import time
 import urllib.parse
 from dataclasses import dataclass
@@ -1657,11 +1658,16 @@ class PaperRouter:
             self.config.get("paper_exploration_probe")
             if isinstance(self.config.get("paper_exploration_probe"), dict) else None
         )
+        ml = self.config.get("paper_ml_probe") if isinstance(
+            self.config.get("paper_ml_probe"), dict) else {}
         if self.probe_policy is not None:
-            ml = self.config.get("paper_ml_probe") or {}
             self.probe_policy["allow_frozen_rich_ml"] = bool(
                 ml.get("enabled") is True and ml.get("research_only") is True
                 and ml.get("real_order_submission") is False)
+        refresh_ms = finite(ml.get("pm_prior_refresh_interval_ms"), 250.0)
+        if not 100.0 <= refresh_ms <= 1000.0:
+            raise RuntimeError("external_fair_pm_prior_refresh_interval_invalid")
+        self.pm_prior_refresh_interval = refresh_ms / 1000.0
         self.policy_sha256 = hashlib.sha256(
             json.dumps(self.config, separators=(",", ":"), sort_keys=True).encode()
         ).hexdigest()
@@ -1741,6 +1747,7 @@ class PaperRouter:
         self.last_book_error = ""
         self.last_attempt_reason = ""
         self.last_live_market: dict[str, Any] = {}
+        self.pm_prior_path = self.directory / "pm_prior.json"
 
     def evidence_compatible(self, row: dict[str, Any]) -> bool:
         """Pool only explicitly compatible, permanently SHADOW observations."""
@@ -2438,6 +2445,71 @@ class PaperRouter:
             self.state["book_parse_failures"] = int(self.state.get("book_parse_failures") or 0) + 1
             self.last_book_error = "CLOB_BOOK_SNAPSHOT_INCOMPLETE"
         return output
+
+    def refresh_pm_prior(self) -> dict[str, Any]:
+        """Publish a fast causal PM prior without economic reconciliation."""
+        status = load(self.source)
+        if status.get("code_sha") != self.sha:
+            return {}
+        market = status.get("market") if isinstance(status.get("market"), dict) else {}
+        tokens = [str(token) for token in (market.get("yes_token"), market.get("no_token")) if token]
+        if len(tokens) != 2 or tokens[0] == tokens[1]:
+            return {}
+        try:
+            rows = request_json(
+                f"{self.clob_url}/books", [{"token_id": token} for token in tokens], timeout=2
+            )
+        except Exception:
+            return {}
+        received = now_ms()
+        books: dict[str, Book] = {}
+        for raw in rows if isinstance(rows, list) else []:
+            book = parse_book(raw, received)
+            if book is not None and book.token_id in tokens:
+                books[book.token_id] = book
+        market_yes = live_market_yes(books, market)
+        if market_yes is None or len(books) != 2:
+            return {}
+        execution_alpha_books: dict[str, Any] = {}
+        for outcome, token_id in (("YES", tokens[0]), ("NO", tokens[1])):
+            book = books.get(token_id)
+            if book is None or not book.bids or not book.asks:
+                return {}
+            execution_alpha_books[outcome] = {
+                "token_id": token_id,
+                "best_bid": book.bids[0][0], "best_ask": book.asks[0][0],
+                "best_bid_size": book.bids[0][1], "best_ask_size": book.asks[0][1],
+                "tick_size": book.tick_size, "min_order_size": book.min_order_size,
+                "exchange_ts_ms": book.exchange_ts_ms, "receive_ts_ms": book.receive_ts_ms,
+                "snapshot_id": book.snapshot_id,
+            }
+        book_values = list(books.values())
+        live_market = {
+            "market_id": str(market.get("market_id") or ""),
+            "yes": market_yes, "valid": True,
+            "source": "LIVE_COMPLEMENT_CONSISTENT_CLOB_BATCH",
+            "receive_ts_ms": max(book.receive_ts_ms for book in book_values),
+            "exchange_ts_ms": max(book.exchange_ts_ms for book in book_values),
+            "snapshot_id": stable_id(*(book.snapshot_id for book in book_values)),
+            "execution_alpha_books": execution_alpha_books, "reason": "",
+        }
+        payload = {
+            "schema": "polymarket_v7_pm_prior_snapshot_v1",
+            "timestamp_ms": received, "code_sha": self.sha,
+            "paper_only": True, "authenticated_execution": False,
+            "real_order_submission": False, "execution_authority": False,
+            "live_market": live_market,
+        }
+        atomic_json(self.pm_prior_path, payload)
+        return payload
+
+    def pm_prior_loop(self) -> None:
+        while True:
+            try:
+                self.refresh_pm_prior()
+            except Exception:
+                pass
+            time.sleep(self.pm_prior_refresh_interval)
 
     def record_forecast(self, status: dict[str, Any], books: dict[str, Book]) -> bool:
         """Persist one trade-independent forecast near each canonical TTE bucket."""
@@ -3525,6 +3597,7 @@ class PaperRouter:
         self.publish(len(rows), blocker)
 
     def run(self, interval: float) -> None:
+        threading.Thread(target=self.pm_prior_loop, name="v7-pm-prior", daemon=True).start()
         while True:
             try:
                 self.step()

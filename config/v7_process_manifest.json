@@ -177,6 +177,7 @@
       "launcher_log": "external_fair/paper_router.log",
       "outputs": [
         "external_fair/paper_router_status.json",
+        "external_fair/pm_prior.json",
         "external_fair/paper_router.log"
       ],
       "profile": "engine"

@@ -262,6 +262,7 @@
     "maximum_pm_external_skew_ms": 750.0,
     "maximum_pm_prior_age_ms": 500.0,
     "missing_information": "EXPLICIT_MASK_NOT_FABRICATED",
+    "pm_prior_refresh_interval_ms": 250.0,
     "probability_interval_validated": false,
     "real_order_submission": false,
     "research_only": true,

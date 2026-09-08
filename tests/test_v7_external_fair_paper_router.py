@@ -83,6 +83,29 @@ def main() -> None:
     assert skewed is not None and skewed.exchange_ts_ms == receive_ms
     raw_book["timestamp"] = str(receive_ms + router.MAX_CLOB_CLOCK_SKEW_MS + 1)
     assert router.parse_book(raw_book, receive_ms) is None
+    with tempfile.TemporaryDirectory() as d:
+        pr = object.__new__(router.PaperRouter)
+        pr.sha = "a" * 40
+        pr.clob_url = "https://clob.test"
+        pr.source = Path(d) / "status.json"
+        pr.pm_prior_path = Path(d) / "pm_prior.json"
+        pr.source.write_text(json.dumps({
+            "code_sha": pr.sha,
+            "market": {"market_id": "m", "yes_token": "yes", "no_token": "no"},
+        }))
+        yes_raw = {**raw_book, "asset_id": "yes", "timestamp": str(receive_ms),
+                   "bids": [{"price": "0.54", "size": "10"}],
+                   "asks": [{"price": "0.55", "size": "10"}], "hash": "y"}
+        no_raw = {**yes_raw, "asset_id": "no",
+                  "bids": [{"price": "0.45", "size": "10"}],
+                  "asks": [{"price": "0.46", "size": "10"}], "hash": "n"}
+        with mock.patch.object(router, "request_json", return_value=[yes_raw, no_raw]),              mock.patch.object(router, "now_ms", return_value=receive_ms):
+            prior = pr.refresh_pm_prior()
+        assert prior["schema"] == "polymarket_v7_pm_prior_snapshot_v1"
+        assert prior["live_market"]["valid"] is True
+        assert prior["live_market"]["snapshot_id"]
+        assert json.loads(pr.pm_prior_path.read_text())["code_sha"] == pr.sha
+
     raw_book["timestamp"] = str(receive_ms)
     raw_book["asks"] = []
     one_sided = router.parse_book(raw_book, receive_ms)

@@ -156,6 +156,21 @@ def router_live_market_snapshot(
     }
 
 
+def preferred_pm_prior_snapshot(
+    fast_prior: dict[str, object], router: dict[str, object], *,
+    code_sha: str, market_id: str, now_ms: int,
+) -> dict[str, object] | None:
+    """Prefer the fast causal PM prior and fall back to the router snapshot."""
+    snapshot = router_live_market_snapshot(
+        fast_prior, code_sha=code_sha, market_id=market_id, now_ms=now_ms
+    )
+    if snapshot is not None:
+        return snapshot
+    return router_live_market_snapshot(
+        router, code_sha=code_sha, market_id=market_id, now_ms=now_ms
+    )
+
+
 def router_live_market_yes(
     router: dict[str, Any], *, code_sha: str, market_id: str, now_ms: int,
 ) -> float | None:
@@ -977,9 +992,10 @@ class Monitor:
         multi_venue_healthy = bool(venue_runtime.get("valid") and int(venue_runtime.get("fresh_venue_count") or 0) >= 2)
         continuity = "LIVE_CONTINUOUS" if oracle_healthy and self.accepted >= 2 else "CONTINUITY_UNKNOWN"
         router = load_json(self.root / "paper_router_status.json")
+        fast_prior = load_json(self.root / "pm_prior.json")
         market_id = str(self.active_market.get("market_id") or "")
-        live_market_snapshot = router_live_market_snapshot(
-            router, code_sha=self.code_sha, market_id=market_id,
+        live_market_snapshot = preferred_pm_prior_snapshot(
+            fast_prior, router, code_sha=self.code_sha, market_id=market_id,
             now_ms=now // 1_000_000,
         )
         live_market_yes = (

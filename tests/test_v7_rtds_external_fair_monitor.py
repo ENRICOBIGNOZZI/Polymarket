@@ -42,6 +42,17 @@ class MonitorTests(unittest.TestCase):
         self.assertEqual(snap["snapshot_id"],"s");self.assertEqual(snap["age_ms"],100)
         self.assertIsNone(module.router_live_market_snapshot(router,code_sha="a"*40,market_id="m",now_ms=7000))
 
+    def test_fast_pm_prior_is_preferred_and_stale_fast_falls_back(self):
+        fast={"code_sha":"a"*40,"live_market":{"valid":True,"source":"LIVE_COMPLEMENT_CONSISTENT_CLOB_BATCH",
+            "market_id":"m","yes":.61,"snapshot_id":"fast","receive_ts_ms":1080,"exchange_ts_ms":1079}}
+        slow={"code_sha":"a"*40,"live_market":{"valid":True,"source":"LIVE_COMPLEMENT_CONSISTENT_CLOB_BATCH",
+            "market_id":"m","yes":.55,"snapshot_id":"slow","receive_ts_ms":1000,"exchange_ts_ms":999}}
+        snap=module.preferred_pm_prior_snapshot(fast,slow,code_sha="a"*40,market_id="m",now_ms=1100)
+        self.assertEqual(snap["snapshot_id"],"fast")
+        fast["live_market"]["receive_ts_ms"]=0
+        snap=module.preferred_pm_prior_snapshot(fast,slow,code_sha="a"*40,market_id="m",now_ms=1100)
+        self.assertEqual(snap["snapshot_id"],"slow")
+
     def test_external_snapshot_rejects_future_or_wrong_sha(self):
         with tempfile.TemporaryDirectory() as d:
             p=Path(d)/"external.json";p.write_text(json.dumps({"code_sha":"a"*40,"timestamp_ns":101,"valid":True}))
