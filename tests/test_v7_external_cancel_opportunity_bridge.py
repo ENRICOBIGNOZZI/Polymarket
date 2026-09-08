@@ -12,7 +12,7 @@ import v7_external_cancel_opportunity_bridge as bridge  # noqa: E402
 from v7_opportunity import OpportunityEnvelope  # noqa: E402
 
 SHA = "a" * 40
-RULE = bridge.FROZEN_RULE_SHA
+RULE_OBJ, RULE = bridge._research_rule()
 SEMANTIC = "c" * 64
 NOW = 10_000_000_000
 
@@ -31,38 +31,23 @@ def runtime() -> dict:
     }
 
 
-def activation(active: bool = True) -> dict:
-    return {
-        "schema": bridge.ACTIVATION_SCHEMA, "experiment_id": bridge.EXPERIMENT_ID,
-        "paper_only": True, "authenticated_execution": False,
-        "real_order_submission": False, "real_money_authority": False,
-        "automatic_promotion": False,
-        "paper_execution_alpha_overlay_eligible": active,
-        "manual_exact_sha_promotion_required": True,
-        "frozen_rule_retuning_allowed": False,
-        "failed_checks": [] if active else ["state_pass"],
-        "evidence": {
-            "rule_sha256": bridge.FROZEN_RULE_SHA,
-            "official_v3_provenance_verified": True,
-            "official_v3_promotion_boundary_ms": bridge.OFFICIAL_V3_PROMOTION_BOUNDARY_MS,
-            "official_v3_protocol_reference_sha256": bridge.OFFICIAL_V3_PROTOCOL_SHA,
-            "activation_report_sha256": "f" * 64,
-        },
-    }
-
-
 def signal(*, stale: str = "YES", valid_until: int = NOW + 50_000_000) -> dict:
     return {
-        "schema": bridge.SIGNAL_SCHEMA, "experiment_id": bridge.EXPERIMENT_ID,
+        "schema": bridge.SIGNAL_SCHEMA, "rule_id": bridge.RULE_ID,
         "code_sha": SHA, "rule_sha256": RULE,
         "paper_only": True, "authenticated_execution": False,
         "real_order_submission": False, "real_money_authority": False,
-        "automatic_promotion": False, "execution_authority": "ZERO_AUTHORITY_SIGNAL_ONLY",
-        "shock_source": "BINANCE_SPOT_TRADES", "confirmation_source": "COINBASE_SPOT_TOP_OF_BOOK",
-        "confirmation": "NON_OPPOSING", "shock_window_ms": 100,
-        "minimum_absolute_log_return_bp": 0.30, "trigger_cooldown_ms": 250,
-        "trigger_grid_ms": 25, "overlap_warmup_ms": 300,
-        "maximum_live_signal_age_ms": 100, "supported_cancel_side": "BUY",
+        "research_only": True, "execution_authority": "ZERO_AUTHORITY_SIGNAL_ONLY",
+        "shock_source": RULE_OBJ["shock_source"],
+        "confirmation_source": RULE_OBJ["confirmation_source"],
+        "confirmation": RULE_OBJ["confirmation"],
+        "shock_window_ms": RULE_OBJ["shock_window_ms"],
+        "minimum_absolute_log_return_bp": RULE_OBJ["minimum_absolute_log_return_bp"],
+        "trigger_cooldown_ms": RULE_OBJ["trigger_cooldown_ms"],
+        "trigger_grid_ms": RULE_OBJ["trigger_grid_ms"],
+        "overlap_warmup_ms": RULE_OBJ["overlap_warmup_ms"],
+        "maximum_signal_age_ms": RULE_OBJ["maximum_signal_age_ms"],
+        "supported_cancel_side": RULE_OBJ["supported_cancel_side"],
         "confirmed_non_opposing": True, "valid": True, "signal_version": 7,
         "stale_buy_outcome": stale, "trigger_receive_wall_ns": NOW - 10_000_000,
         "publish_wall_ns": NOW - 5_000_000, "valid_until_wall_ns": valid_until,
@@ -109,9 +94,8 @@ def make_envelope(outcome: str = "YES") -> dict:
     return OpportunityEnvelope.parse(raw).raw
 
 
-def setup_case(root: Path, *, outcome: str = "YES", gate: bool = True, live_signal: dict | None = None) -> None:
+def setup_case(root: Path, *, outcome: str = "YES", live_signal: dict | None = None) -> None:
     write(root / "control/runtime_status.json", runtime())
-    write(root / "control/external_cancel_activation.json", activation(gate))
     write(root / "external_fair/external_cancel_signal.json", live_signal or signal(stale=outcome))
     envelope = make_envelope(outcome)
     write(root / "micro_maker/authorized_make/live/order.json", {
@@ -136,7 +120,7 @@ def setup_case(root: Path, *, outcome: str = "YES", gate: bool = True, live_sign
     })
 
 
-def test_active_frozen_signal_builds_typed_cancel() -> None:
+def test_active_research_signal_builds_typed_cancel() -> None:
     with tempfile.TemporaryDirectory() as directory:
         root = Path(directory); setup_case(root)
         rows, status = bridge.build_external_cancel_opportunities(root, now_ns=NOW)
@@ -152,11 +136,15 @@ def test_active_frozen_signal_builds_typed_cancel() -> None:
         assert status["exact_order_targeting"] is True
 
 
-def test_inactive_forward_gate_fails_closed() -> None:
+def test_wrong_rule_hash_fails_closed() -> None:
     with tempfile.TemporaryDirectory() as directory:
-        root = Path(directory); setup_case(root, gate=False)
+        root = Path(directory)
+        bad = signal()
+        bad["rule_sha256"] = "0" * 64
+        setup_case(root, live_signal=bad)
         rows, status = bridge.build_external_cancel_opportunities(root, now_ns=NOW)
-        assert rows == [] and "EXTERNAL_CANCEL_FORWARD_GATE_NOT_ACTIVE" in status["reasons"]
+        assert rows == []
+        assert "EXTERNAL_CANCEL_LIVE_SIGNAL_NOT_ACTIVE" in status["reasons"]
 
 
 def test_signal_only_targets_stale_buy_outcome() -> None:
@@ -196,8 +184,8 @@ def test_expired_signal_fails_closed() -> None:
 
 
 if __name__ == "__main__":
-    test_active_frozen_signal_builds_typed_cancel()
-    test_inactive_forward_gate_fails_closed()
+    test_active_research_signal_builds_typed_cancel()
+    test_wrong_rule_hash_fails_closed()
     test_signal_only_targets_stale_buy_outcome()
     test_expired_signal_fails_closed()
     test_same_token_replacement_order_does_not_match_stale_authorization()

@@ -2,8 +2,8 @@
 
 No writer, process, order submission or second account lives here. The existing
 router reconstructs positions from the canonical ledger/spool and sends verified
-terminal events to the existing single ledger writer. Old numeric order IDs are
-qualified by market; new executor IDs are already globally qualified.
+terminal events to the existing single ledger writer. Order identities are
+qualified by market and current executor identifiers are globally unique.
 """
 from __future__ import annotations
 import hashlib
@@ -11,6 +11,9 @@ import json
 import math
 from typing import Any
 from v7_execution_ledger import LedgerEvent
+
+ENGINE = 'CRYPTO_SETTLEMENT_ENGINE'
+COMPONENT = 'professional_maker'
 
 
 def _number(value: Any, name: str) -> float:
@@ -25,7 +28,7 @@ def _number(value: Any, name: str) -> float:
 def canonical_maker(event: LedgerEvent) -> bool:
     m = event.metadata or {}
     receipt = m.get('coordinator_receipt') or {}
-    return (event.strategy.upper() == 'MICRO_MAKER_PRO'
+    return (event.strategy.upper() == ENGINE and m.get('component') == COMPONENT
         and event.paper_only is True and event.authenticated_execution is False
         and m.get('paper_exploration') is True
         and m.get('economic_authority') == 'PAPER_EXPLORATION'
@@ -73,8 +76,9 @@ def project_maker(events: list[LedgerEvent], cached: dict[str, Any]) -> dict[str
             issues.append('maker_fill_economics:' + str(key)); continue
         total_shares_by_order[order_key] = total_shares_by_order.get(order_key, 0.) + quantity
         cost = price * quantity; debit += cost + fee
-        identity = f.position_id or 'maker-position-legacy-' + hashlib.sha256(
-            (f.model_sha + '|' + str(f.market_id) + '|' + str(f.fill_id)).encode()).hexdigest()
+        identity = str(f.position_id or "")
+        if not identity:
+            issues.append('maker_fill_position_id_missing:' + str(key)); continue
         final = finals.get(key)
         if final is not None:
             paid = _number(final.realized_cashflow, 'payout'); pnl = _number(final.final_pnl, 'pnl')
@@ -145,7 +149,7 @@ def settlement_event(position: dict[str, Any], raw: dict[str, Any], received_ms:
         terminal_id=record_id,pnl_decomposition={'trading_pnl':pnl,'spread_capture':0.,
         'adverse_markout':0.,'inventory_pnl':0.,'maker_rebates':0.,'liquidity_rewards':0.,
         'own_reward_share_verified':False})
-    return LedgerEvent(event_type='FINAL',strategy='MICRO_MAKER_PRO',model_sha=position['model_sha'],
+    return LedgerEvent(event_type='FINAL',strategy=ENGINE,model_sha=position['model_sha'],
         model_version=position.get('model_version'),record_id=record_id,recorded_ts_ms=received_ms,
         order_id=position['order_id'],fill_id=position['fill_id'],position_id=position['position_id'],
         market_id=position['market_id'],event_id=position['event_id'],token_id=position['token_id'],
@@ -155,7 +159,7 @@ def settlement_event(position: dict[str, Any], raw: dict[str, Any], received_ms:
 
 
 def authorized_maker_flat_proof(root, model_sha: str) -> dict[str, Any]:
-    """Strict post-stop ledger proof; absence of an old Maker state is irrelevant."""
+    """Strict post-stop ledger proof from current canonical Maker evidence."""
     from pathlib import Path
     from v7_execution_ledger import iter_records
     root = Path(root)
@@ -194,7 +198,7 @@ def authorized_maker_flat_proof(root, model_sha: str) -> dict[str, Any]:
                 raise ValueError('authorized_maker_cutover:unrecognized_event_representation')
             events.append(LedgerEvent.from_dict(record.to_dict()))
     for e in events:
-        if (e.strategy.upper() in {'MICRO_MAKER_PRO','MICRO_MAKER','PROFESSIONAL_MAKER'}
+        if (e.strategy.upper() == ENGINE and (e.metadata or {}).get('component') == COMPONENT
                 and e.event_type in {'ORDER_SUBMITTED','FILL','FINAL','ORDER_STATE','INVENTORY_LIQUIDATION'}
                 and not canonical_maker(e)):
             raise ValueError('authorized_maker_cutover:unrecognized_maker_authority')

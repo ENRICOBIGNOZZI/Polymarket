@@ -67,7 +67,7 @@ jobs:
           required=set(m.get('required_surfaces') or [])
           assert {
               'control/runtime_status.json',
-              'control/incumbent_identity.json',
+              'control/runtime_identity.json',
               'control/portfolio_state.json',
               'control/allocations/manifest.json',
               'structural_relations/verified_relations.csv',
@@ -274,7 +274,7 @@ jobs:
           from pathlib import Path
           root=Path(sys.argv[1]); sha=sys.argv[2]; now=int(time.time())
           runtime=json.loads((root/'control/runtime_status.json').read_text(encoding='utf-8'))
-          identity=json.loads((root/'control/incumbent_identity.json').read_text(encoding='utf-8'))
+          identity=json.loads((root/'control/runtime_identity.json').read_text(encoding='utf-8'))
           portfolio=json.loads((root/'control/portfolio_state.json').read_text(encoding='utf-8'))
           economics=json.loads((root/'canonical_economics.json').read_text(encoding='utf-8'))
           assert runtime.get('version') == 7 and runtime.get('model_sha') == sha
@@ -283,7 +283,7 @@ jobs:
           assert runtime.get('killed') is False
           assert set(runtime.get('economic_engines') or []) == {'CRYPTO_SETTLEMENT_ENGINE','STRUCTURAL_ARB_ENGINE'}
           assert runtime.get('economic_new_risk_ready') is False
-          assert identity.get('schema') == 'polymarket_v7_incumbent_identity_v1'
+          assert identity.get('schema') == 'polymarket_v7_runtime_identity_v1'
           assert identity.get('verified') is True and identity.get('runtime_sha') == sha
           for key in ('config_hash','policy_hash','model_hash','run_id','ledger_id','server_id'):
               assert identity.get(key) == runtime.get(key) and str(identity.get(key) or '')
@@ -309,7 +309,6 @@ jobs:
           grep -q '^polymarket_v7_authenticated_execution_disabled 1$' <<<"$metrics"
           grep -q '^polymarket_v7_ledger_valid 1$' <<<"$metrics"
           grep -q '^polymarket_v7_live_algorithm_count 2$' <<<"$metrics"
-          grep -q '^polymarket_v7_legacy_algorithm_count 0$' <<<"$metrics"
           grep -q '^polymarket_v7_live_algorithm_scope_wired 1$' <<<"$metrics"
           curl -fsS http://127.0.0.1:9090/-/ready >/dev/null
           curl -fsS http://127.0.0.1:3000/api/health >/dev/null

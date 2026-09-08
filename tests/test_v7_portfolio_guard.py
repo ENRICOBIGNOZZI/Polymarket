@@ -86,8 +86,8 @@ class PortfolioGuardTests(unittest.TestCase):
             }))
             report = assess(root, allocation(root / "manifest.json"), max_drawdown=.15)
             self.assertEqual(report["equity"], 100.0)
-            self.assertEqual(report["sleeves"]["micro_maker"]["budget"], 0.0)
-            self.assertEqual(report["sleeves"]["micro_maker"]["source"], "zero_authority_budget")
+            self.assertNotIn("sleeves", report)
+            self.assertEqual(set(report["engines"]), {"CRYPTO_SETTLEMENT_ENGINE", "STRUCTURAL_ARB_ENGINE"})
 
     def test_unsafe_or_unmarkable_engine_kills_account(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

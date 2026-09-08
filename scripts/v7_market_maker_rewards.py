@@ -23,7 +23,6 @@ except ModuleNotFoundError:
 import argparse
 from dataclasses import asdict, dataclass
 from datetime import datetime, timezone
-import csv
 import hashlib
 import json
 import math
@@ -54,7 +53,7 @@ def _exact_cell_identity(
 def _load_exact_cell_evidence(
     path: Path | None, *, model_sha: str,
 ) -> dict[tuple[str, str, str, str], dict[str, Any]]:
-    """Load optional exact-policy selector feedback from the Maker champion.
+    """Load optional exact-policy selector feedback from the current research execution model.
 
     Invalid or stale feedback cannot grant authority and is therefore ignored.
     The C++ runtime remains the only component allowed to admit a quote.
@@ -117,7 +116,7 @@ def _annotate_exact_cell_evidence(
         "filled_orders": max(0, int(finite(raw.get("filled_orders"), 0.0))),
         "last_terminal_ts_ms": max(
             0, int(finite(raw.get("last_terminal_ts_ms"), 0.0))),
-        "role": "RANKING_ONLY_NO_EXECUTION_OR_PROMOTION_AUTHORITY",
+        "role": "RANKING_ONLY_NO_EXECUTION_OR_RISK_AUTHORITY",
     }
     return result
 
@@ -636,21 +635,27 @@ def _inject_settlement_anchor(
         and fee_exponent >= 0.0
         and fee_schedule.get("takerOnly") is True
     )
-    fair_mode_ready = (
-        fair.get("explicit_champion_applied") is True
-        or (
-            fair.get("explicit_champion_applied") is False
-            and fair.get("paper_exploration_bootstrap") is True
-            and fair.get("inference_state") == "VALID_PAPER_EXPLORATION_BOOTSTRAP"
-            and fair.get("calibration_state") == "PAPER_EXPLORATION_BOOTSTRAP_APPLIED"
-            and fair.get("probability_model_id") == "btc_m5_same_oracle_diffusion_bootstrap_v1"
-            and fair.get("promotion_eligible") is False
-            and fair.get("real_money_authority") is False
-            and fair.get("uses_polymarket_price_as_feature") is False
-            and fair.get("authority") == "SHADOW"
+    research_fair_ready = (
+        fair.get("research_model") is True
+        and fair.get("research_model_state") == "FROZEN_INFERENCE_ONLY"
+        and fair.get("real_money_authority") is False
+        and fair.get("authority") == "SHADOW"
+        and (
+            fair.get("probability_interval_validated") is True
+            or is_paper_learning_fair(fair, model_sha)
         )
     )
-    fair_mode_ready = fair_mode_ready or is_paper_learning_fair(fair, model_sha)
+    structural_fallback_ready = (
+        fair.get("paper_exploration_bootstrap") is True
+        and fair.get("inference_state") == "VALID_PAPER_EXPLORATION_BOOTSTRAP"
+        and fair.get("calibration_state") == "PAPER_EXPLORATION_BOOTSTRAP_APPLIED"
+        and fair.get("probability_model_id") == "btc_m5_same_oracle_diffusion_bootstrap_v1"
+        and fair.get("research_only") is True
+        and fair.get("real_money_authority") is False
+        and fair.get("uses_polymarket_price_as_feature") is False
+        and fair.get("authority") == "SHADOW"
+    )
+    fair_mode_ready = research_fair_ready or structural_fallback_ready
     fair_ready = (
         fair_status.get("schema") == "polymarket_v7_external_fair_status_v1"
         and fair_status.get("paper_only") is True
@@ -907,7 +912,7 @@ def _inject_settlement_anchor(
         "settlement_anchor": True,
         "settlement_anchor_fair_probability": fair_yes,
         "settlement_anchor_fill_probability_source": fill_source,
-        "settlement_anchor_promotion_credit": False,
+        "settlement_anchor_research_only": True,
         "settlement_anchor_real_money_authority": False,
         "settlement_anchor_identity_source": identity_source,
         "fee_schedule": fee_schedule,
@@ -1440,14 +1445,13 @@ def _canonical_live_flow_aggregates(
 
 def _recent_flow_snapshot(
     universe_path: Path,
-    trade_tape_path: Path,
     selection_cfg: dict[str, Any],
     capacity_cfg: dict[str, Any],
     resource_capacity: int,
     *,
     model_sha: str,
     now_ms: int,
-    live_flow_path: Path | None = None,
+    live_flow_path: Path,
     exact_cell_evidence: dict[
         tuple[str, str, str, str], dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
@@ -1455,8 +1459,8 @@ def _recent_flow_snapshot(
     flow_cfg = selection_cfg.get("recent_flow")
     if not isinstance(flow_cfg, dict) or flow_cfg.get("enabled") is not True:
         raise ValueError("maker_recent_flow_disabled")
-    if live_flow_path is None and not trade_tape_path.is_file():
-        raise ValueError("maker_recent_flow_tape_missing")
+    if not live_flow_path.is_file():
+        raise ValueError("maker_recent_flow_live_flow_missing")
     universe = json.loads(universe_path.read_text(encoding="utf-8"))
     if (
         universe.get("schema") != UNIVERSE_SCHEMA
@@ -1480,85 +1484,11 @@ def _recent_flow_snapshot(
     maximum_tape_age_ms = max(
         1_000, int(float(flow_cfg.get("maximum_tape_age_seconds", 30.0)) * 1000.0)
     )
-    aggregates: dict[str, dict[str, Any]] = {}
-    latest_receive_ms = 0
-    flow_source = "REST_TRADE_TAPE_COMPATIBILITY"
-    if live_flow_path is not None:
-        aggregates, latest_receive_ms = _canonical_live_flow_aggregates(
-            live_flow_path, model_sha=model_sha, now_ms=now_ms,
-            maximum_age_ms=maximum_tape_age_ms,
-        )
-        flow_source = "FULL_UNIVERSE_CPP_WEBSOCKET"
-        raw_rows: list[dict[str, Any]] = []
-    else:
-        seen_prints: set[tuple[str, str, str, str, str, str]] = set()
-        with trade_tape_path.open(newline="", encoding="utf-8") as handle:
-            raw_rows = list(csv.DictReader(handle))
-    for raw in raw_rows:
-            condition_id = str(raw.get("condition_id") or "")
-            receive_ms = int(finite(raw.get("received_ms"), 0.0))
-            latest_receive_ms = max(latest_receive_ms, receive_ms)
-            if not condition_id or receive_ms < now_ms - lookback_ms or receive_ms > now_ms + 5_000:
-                continue
-            identity = (
-                condition_id,
-                str(raw.get("transaction_hash") or ""),
-                str(raw.get("asset_id") or ""),
-                str(raw.get("timestamp") or ""),
-                str(raw.get("price") or ""),
-                str(raw.get("size") or ""),
-            )
-            if identity in seen_prints:
-                continue
-            seen_prints.add(identity)
-            size = max(0.0, finite(raw.get("size")))
-            price = min(1.0, max(0.0, finite(raw.get("price"))))
-            item = aggregates.setdefault(condition_id, {
-                "prints": 0,
-                "shares": 0.0,
-                "notional": 0.0,
-                "buy_prints_5s": 0,
-                "buy_prints_30s": 0,
-                "buy_prints_2m": 0,
-                "buy_prints_10m": 0,
-                "buy_shares_10m": 0.0,
-                "buy_notional_10m": 0.0,
-                "last_buy_receive_ms": 0,
-                "sell_prints_5s": 0,
-                "sell_prints_30s": 0,
-                "sell_prints_2m": 0,
-                "sell_prints_10m": 0,
-                "sell_shares_10m": 0.0,
-                "sell_notional_10m": 0.0,
-                "last_receive_ms": 0,
-                "last_sell_receive_ms": 0,
-                "transactions": set(),
-            })
-            item["prints"] += 1
-            item["shares"] += size
-            item["notional"] += size * price
-            item["last_receive_ms"] = max(int(item["last_receive_ms"]), receive_ms)
-            trade_side = str(raw.get("side") or "").upper()
-            if trade_side in {"BUY", "SELL"}:
-                age_ms = max(0, now_ms - receive_ms)
-                prefix = "buy" if trade_side == "BUY" else "sell"
-                if age_ms <= 5_000:
-                    item[f"{prefix}_prints_5s"] += 1
-                if age_ms <= 30_000:
-                    item[f"{prefix}_prints_30s"] += 1
-                if age_ms <= 120_000:
-                    item[f"{prefix}_prints_2m"] += 1
-                if age_ms <= 600_000:
-                    item[f"{prefix}_prints_10m"] += 1
-                    item[f"{prefix}_shares_10m"] += size
-                    item[f"{prefix}_notional_10m"] += size * price
-                    key = f"last_{prefix}_receive_ms"
-                    item[key] = max(int(item[key]), receive_ms)
-            tx_hash = str(raw.get("transaction_hash") or "")
-            if tx_hash:
-                item["transactions"].add(tx_hash)
-    if latest_receive_ms <= 0 or now_ms - latest_receive_ms > maximum_tape_age_ms:
-        raise ValueError(f"maker_recent_flow_tape_stale:{now_ms - latest_receive_ms}")
+    aggregates, latest_receive_ms = _canonical_live_flow_aggregates(
+        live_flow_path, model_sha=model_sha, now_ms=now_ms,
+        maximum_age_ms=maximum_tape_age_ms,
+    )
+    flow_source = "FULL_UNIVERSE_CPP_WEBSOCKET"
 
     minimum_prints = max(1, int(flow_cfg.get("minimum_prints", 2)))
     minimum_side_prints_2m = max(1, int(flow_cfg.get(
@@ -1933,7 +1863,7 @@ def _recent_flow_snapshot(
             break
     # Execution remains limited to explicit cell authority, but membership is a
     # broad observation universe.  Keeping those identities warm lets authority
-    # follow flow in-place without destroying incumbent queues. Observation
+    # follow flow in-place without destroying current queues. Observation
     # rows carry no inventory seed and cannot emit an order.
     operational_floor = min(
         resource_capacity,
@@ -2087,7 +2017,7 @@ def _validated_config(config_path: Path) -> tuple[dict[str, Any], dict[str, Any]
         or not 0.0 < finite(anchor.get("minimum_point_edge_per_share"), 0.0) < 0.25
         or anchor.get("fill_probability_source") != "EXECUTION_MODEL_GLOBAL_POSTERIOR"
         or anchor.get("evict_observation_only_market") is not True
-        or anchor.get("promotion_credit") is not False
+        or anchor.get("research_only") is not True
         or anchor.get("real_money_authority") is not False
     ):
         raise ValueError("maker settlement anchor config invalid")
@@ -2396,7 +2326,6 @@ def build_snapshot(
     config_path: Path,
     *,
     fallback_universe_path: Path | None = None,
-    trade_tape_path: Path | None = None,
     live_flow_path: Path | None = None,
     model_sha: str = "",
     deadline_seconds: float | None = None,
@@ -2437,7 +2366,7 @@ def build_snapshot(
     if (
         flow_cfg.get("enabled") is True
         and fallback_universe_path is not None
-        and (live_flow_path is not None or trade_tape_path is not None)
+        and live_flow_path is not None
     ):
         flow_wait_seconds = max(0.0, float(flow_cfg.get("initial_wait_seconds", 0.0)))
         flow_deadline = time.monotonic() + flow_wait_seconds
@@ -2445,7 +2374,7 @@ def build_snapshot(
         while True:
             try:
                 return _recent_flow_snapshot(
-                    fallback_universe_path, trade_tape_path, selection_cfg, capacity_cfg,
+                    fallback_universe_path, selection_cfg, capacity_cfg,
                     resource_capacity, model_sha=model_sha,
                     now_ms=time.time_ns() // 1_000_000 if now_ms is None else int(now_ms),
                     live_flow_path=live_flow_path,
@@ -2650,7 +2579,6 @@ def main() -> int:
     parser.add_argument("--pin-runtime-selection", action="store_true")
     parser.add_argument("--status", type=Path)
     parser.add_argument("--fallback-universe", type=Path)
-    parser.add_argument("--trade-tape", type=Path)
     parser.add_argument("--live-flow", type=Path)
     parser.add_argument("--allocation", type=Path)
     parser.add_argument("--execution-model", type=Path)
@@ -2662,7 +2590,6 @@ def main() -> int:
     snapshot = build_snapshot(
         args.config,
         fallback_universe_path=args.fallback_universe,
-        trade_tape_path=args.trade_tape,
         live_flow_path=args.live_flow,
         allocation_path=args.allocation,
         execution_model_path=args.execution_model,

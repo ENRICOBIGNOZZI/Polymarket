@@ -146,7 +146,7 @@ def test_economic_truth() -> None:
     assert replay["replay_scope"] == "SELECTED_HISTORICAL_FILLS_ONLY"
     assert replay["historical_terminal_fills"] == 2
     assert any(row["policy"] == "EXIT_1S" for row in replay["exit_policy_comparison_base_observed_costs"])
-    assert replay["promotion"]["eligible"] is False
+    assert replay["economic_evidence"]["supported"] is False
 
     with_opportunities = [
         *rows,

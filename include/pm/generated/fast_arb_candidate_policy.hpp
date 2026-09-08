@@ -4,7 +4,6 @@
 // Research-only: this header cannot activate authenticated order submission.
 namespace pm::fast::generated {
 inline constexpr bool kResearchReady = false;
-inline constexpr bool kPromotionReady = false;
 inline constexpr bool kRealOrderSubmission = false;
 inline constexpr double kMinNetEdge = 0.0005000000;
 inline constexpr double kSlippageBps = 2.0000000000;

@@ -1,35 +1,5 @@
 {
-  "schema": "polymarket_v7_authority_registry_v2",
-  "version": 2,
-  "paper_only": true,
   "authenticated_execution": false,
-  "real_order_submission": false,
-  "real_capital_at_risk": false,
-  "automatic_promotion": false,
-  "owners": {
-    "global_portfolio_coordinator": "V7_GLOBAL_PORTFOLIO_COORDINATOR",
-    "capital_allocator": "V7_CANONICAL_ALLOCATOR",
-    "risk_engine": "V7_CANONICAL_RISK",
-    "oms": "V7_CANONICAL_OMS",
-    "inventory": "V7_CANONICAL_INVENTORY",
-    "ledger": "V7_CANONICAL_LEDGER",
-    "promotion": "V7_OPERATOR_EXACT_SHA_PROMOTION",
-    "runtime_identity": "V7_EXACT_SHA_RUNTIME_IDENTITY"
-  },
-  "live_algorithms": {
-    "CRYPTO_SETTLEMENT_ENGINE": {
-      "components": [
-        "crypto_settlement_fair",
-        "crypto_informed_taker",
-        "professional_maker"
-      ],
-      "actions": ["MAKE", "TAKE", "CANCEL", "WITHDRAW", "NOTHING"]
-    },
-    "STRUCTURAL_ARB_ENGINE": {
-      "components": ["hard_arb", "fast_structural"],
-      "actions": ["ARB", "CANCEL", "NOTHING"]
-    }
-  },
   "component_independent_authority": false,
   "decision_chain": [
     "LIVE_ALGORITHM",
@@ -39,5 +9,46 @@
     "V7_CANONICAL_OMS",
     "V7_CANONICAL_INVENTORY",
     "V7_CANONICAL_LEDGER"
-  ]
+  ],
+  "live_algorithms": {
+    "CRYPTO_SETTLEMENT_ENGINE": {
+      "actions": [
+        "MAKE",
+        "TAKE",
+        "CANCEL",
+        "WITHDRAW",
+        "NOTHING"
+      ],
+      "components": [
+        "crypto_settlement_fair",
+        "crypto_informed_taker",
+        "professional_maker"
+      ]
+    },
+    "STRUCTURAL_ARB_ENGINE": {
+      "actions": [
+        "ARB",
+        "CANCEL",
+        "NOTHING"
+      ],
+      "components": [
+        "hard_arb",
+        "fast_structural"
+      ]
+    }
+  },
+  "owners": {
+    "capital_allocator": "V7_CANONICAL_ALLOCATOR",
+    "global_portfolio_coordinator": "V7_GLOBAL_PORTFOLIO_COORDINATOR",
+    "inventory": "V7_CANONICAL_INVENTORY",
+    "ledger": "V7_CANONICAL_LEDGER",
+    "oms": "V7_CANONICAL_OMS",
+    "risk_engine": "V7_CANONICAL_RISK",
+    "runtime_identity": "V7_EXACT_SHA_RUNTIME_IDENTITY"
+  },
+  "paper_only": true,
+  "real_capital_at_risk": false,
+  "real_order_submission": false,
+  "schema": "polymarket_v7_authority_registry_v2",
+  "version": 2
 }

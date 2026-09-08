@@ -23,7 +23,7 @@ class V7MakerFillabilityMonitoringTest(unittest.TestCase):
             "exact_sha_ok": True,
             "root_cause": "QUEUE_COMPETITION_OR_LIFETIME",
             "simulator_bug_suspected": "NO",
-            "next_experiment": "single_dimension_lifetime_or_placement_challenger",
+            "next_experiment": "single_dimension_lifetime_or_placement_candidate",
             "funnel": {
                 "orders": 34,
                 "orders_effective": 34,
@@ -76,25 +76,12 @@ class V7MakerFillabilityMonitoringTest(unittest.TestCase):
         self.assertFalse(path.exists())
         self.assertNotIn("maker_fillability_dashboard", manifest["grafana"])
 
-    def test_fillability_evidence_is_collected_hourly_and_on_contract_changes(self) -> None:
-        workflow = (ROOT / ".github/workflows/v7-maker-fillability-evidence.yml").read_text(
-            encoding="utf-8"
-        )
-        self.assertIn('cron: "17 * * * *"', workflow)
-        self.assertIn("github.event_name == 'schedule'", workflow)
-        self.assertIn("github.event_name == 'push'", workflow)
-        self.assertIn('"config/v7_professional_market_maker.json"', workflow)
-        self.assertIn('"src/v7_maker_fillability_observer.cpp"', workflow)
-
-    def test_fillability_collection_has_exact_sha_offline_fallback(self) -> None:
-        workflow = (ROOT / ".github/workflows/v7-maker-fillability-evidence.yml").read_text(
-            encoding="utf-8"
-        )
-        self.assertIn("test \"$runtime_sha\" = \"$deployed_sha\"", workflow)
-        self.assertIn("if curl -fsS http://127.0.0.1:9108/maker-fillability.json", workflow)
-        self.assertIn("python3 scripts/v7_maker_fillability_report.py", workflow)
-        self.assertIn('--model-sha "$runtime_sha"', workflow)
-        self.assertIn("tmp_report=\"$(mktemp)\"", workflow)
+    def test_fillability_evidence_is_runtime_native(self) -> None:
+        loop = (ROOT / "scripts/paper_v7_execution_loop.sh").read_text(encoding="utf-8")
+        manifest = json.loads((ROOT / "config/v7_process_manifest.json").read_text())
+        self.assertIn("FILLABILITY_OBSERVER", loop)
+        self.assertTrue(any(row.get("id") == "maker_observer_cohort" for row in manifest["processes"]))
+        self.assertIn("--fillability-observer", loop)
 
 
 if __name__ == "__main__":

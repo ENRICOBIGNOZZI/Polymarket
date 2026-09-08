@@ -8,7 +8,7 @@ This module accepts only canonical ledger evidence:
 - frozen-observation cost stress at 1x/1.5x/2x without trade reselection;
 - dynamic strategy/model-family and horizon identity (no silent dropping of unknown V7 families);
 - fail-closed completion/PnL maturity for multi-leg states;
-- promotion inference clusters repeated economic units by canonical ``event_id`` and preserves chronology.
+- evidence inference clusters repeated economic units by canonical ``event_id`` and preserves chronology.
 
 It is an evidence consumer only. It cannot submit orders, mutate allocation, change risk,
 or enable authenticated/real-money execution.
@@ -43,17 +43,12 @@ PNL_COMPONENTS = (
 )
 STRESS_MULTIPLIERS = (1.0, 1.5, 2.0)
 MARKOUT_HORIZONS_SECONDS = (1, 5, 10, 15, 30, 45, 60, 300)
-MIN_EVENT_CLUSTERS_FOR_PROMOTION = 12
+MIN_EVENT_CLUSTERS_FOR_EVIDENCE = 12
 CHRONOLOGICAL_EVENT_FOLDS = 4
 MIN_POSITIVE_EVENT_FOLD_FRACTION = 0.60
 ENGINE_STRATEGIES = {
-    "CRYPTO_SETTLEMENT_ENGINE": {
-        "CRYPTO_SETTLEMENT_ENGINE", "MICRO_MAKER", "MICRO_MAKER_PRO",
-        "EXTERNAL_FAIR", "CRYPTO_SETTLEMENT_FAIR", "CRYPTO_INFORMED_TAKER",
-    },
-    "STRUCTURAL_ARB_ENGINE": {
-        "STRUCTURAL_ARB_ENGINE", "FAST_STRUCTURAL", "HARD_ARB",
-    },
+    "CRYPTO_SETTLEMENT_ENGINE": {"CRYPTO_SETTLEMENT_ENGINE"},
+    "STRUCTURAL_ARB_ENGINE": {"STRUCTURAL_ARB_ENGINE"},
 }
 
 
@@ -339,8 +334,8 @@ class UnitState:
         the merge event is not itself an order submission or a public-market
         fill.  Only canonical ORDER_SUBMITTED/FILL lineage may establish a
         submitted or completed economic unit.  This deliberately under-counts
-        legacy merge-only records whose source fills cannot be joined to the
-        position instead of promoting synthetic execution evidence.
+        merge-only records whose source fills cannot be joined to the
+        position instead of counting synthetic execution evidence.
         """
         if event.event_type != "INVENTORY_MERGE":
             return
@@ -595,7 +590,7 @@ def assess(ledger_path: Path, *, expected_model_sha: str, family: str | None = N
 
     # Shadow counterfactual evidence belongs in the same append-only ledger for
     # lineage and replay, but it must never inflate authoritative PAPER equity,
-    # PnL or promotion statistics.
+    # PnL or evidence statistics.
     selected = [unit for unit in eligible if not unit.counterfactual]
     shadow_selected = [unit for unit in eligible if unit.counterfactual]
 
@@ -856,9 +851,9 @@ def assess(ledger_path: Path, *, expected_model_sha: str, family: str | None = N
         global_reasons.append("no_mature_full_cost_terminal_observations")
     if mature and len(event_mature) != len(mature):
         global_reasons.append("economic_event_identity_incomplete")
-    if event_mature and distinct_event_clusters < MIN_EVENT_CLUSTERS_FOR_PROMOTION:
+    if event_mature and distinct_event_clusters < MIN_EVENT_CLUSTERS_FOR_EVIDENCE:
         global_reasons.append("insufficient_distinct_event_clusters")
-    if distinct_event_clusters >= MIN_EVENT_CLUSTERS_FOR_PROMOTION:
+    if distinct_event_clusters >= MIN_EVENT_CLUSTERS_FOR_EVIDENCE:
         if positive_fold_fraction is None or positive_fold_fraction + 1e-12 < MIN_POSITIVE_EVENT_FOLD_FRACTION:
             global_reasons.append("event_cluster_chronological_stability_gate")
 
@@ -878,7 +873,7 @@ def assess(ledger_path: Path, *, expected_model_sha: str, family: str | None = N
         "family_filter": family,
         "horizon_seconds_filter": horizon_seconds,
         "state": state,
-        "promotion_ready": state == "ECONOMIC_EVIDENCE_READY",
+        "economic_evidence_ready": state == "ECONOMIC_EVIDENCE_READY",
         "economic_units": len(selected),
         "shadow_counterfactual": {
             "economic_units": len(shadow_selected),
@@ -900,7 +895,7 @@ def assess(ledger_path: Path, *, expected_model_sha: str, family: str | None = N
         "mature_terminal_units": len(mature),
         "event_eligible_mature_terminal_units": len(event_mature),
         "distinct_event_clusters": distinct_event_clusters,
-        "minimum_event_clusters_for_promotion": MIN_EVENT_CLUSTERS_FOR_PROMOTION,
+        "minimum_event_clusters_for_evidence": MIN_EVENT_CLUSTERS_FOR_EVIDENCE,
         "event_cluster_stress": cluster_stress,
         "event_cluster_order_chronological": ordered_clusters,
         "chronological_event_folds_2x": chronological_folds_2x,

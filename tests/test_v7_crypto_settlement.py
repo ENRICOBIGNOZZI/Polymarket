@@ -9,7 +9,6 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "scripts"))
 
-from v7_crypto_market_discovery import discover  # noqa: E402
 from v7_crypto_settlement import (  # noqa: E402
     CryptoSettlementError, aggregate_correlated_crypto_risk,
     assemble_causal_feature_groups, healthy_source_composite, load_registry,
@@ -85,26 +84,6 @@ def test_model_registry_is_complete_indexed_and_zero_authority() -> None:
     assert set(models) == set(contexts)
     assert all(artifact is None for artifact in models.values())
     assert all(row["new_risk_authorized"] is False for row in value["models"])
-
-
-def test_discovery_never_executes_and_rejects_unknown_semantics() -> None:
-    contexts = load_registry(REGISTRY)
-    eth = require_context(contexts, "ETH", "M5")
-    description = (
-        "This market uses the time-weighted average price and resolves Up when it is "
-        "greater than or equal to the start. " + eth.raw["settlement"]["stream_url"]
-    )
-    result = discover([
-        {"slug": "eth-updown-5m-1788262200", "description": description},
-        {"slug": "doge-updown-5m-1788262200", "description": description},
-        {"slug": "sol-updown-5m-1788262200", "description": "spot price"},
-    ], REGISTRY)
-    assert len(result["accepted"]) == 1
-    assert result["accepted"][0]["authority"] == "SHADOW_ZERO_AUTHORITY"
-    assert result["accepted"][0]["new_risk_authorized"] is False
-    assert {row["reason"] for row in result["rejected"]} == {
-        "UNRECOGNIZED_CRYPTO_CONTEXT", "SETTLEMENT_SEMANTICS_MISMATCH",
-    }
 
 
 def test_correlated_crypto_risk_has_no_fake_asset_diversification() -> None:
@@ -217,7 +196,6 @@ if __name__ == "__main__":
     test_eight_verified_contexts_and_no_one_minute_instantiation()
     test_asset_horizon_and_settlement_hash_model_isolation()
     test_model_registry_is_complete_indexed_and_zero_authority()
-    test_discovery_never_executes_and_rejects_unknown_semantics()
     test_correlated_crypto_risk_has_no_fake_asset_diversification()
     test_cross_asset_features_are_receive_time_causal_and_asset_isolated()
     test_source_composite_drops_stale_and_unhealthy_then_renormalizes()

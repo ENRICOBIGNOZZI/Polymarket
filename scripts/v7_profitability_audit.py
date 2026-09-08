@@ -1,9 +1,8 @@
 #!/usr/bin/env python3
 """Deduplicated cross-run economic audit for V7 PAPER evidence.
 
-Archives can overlap at retention boundaries, while old C++ runtimes reused
-record_id counters after a SHA cutover. This tool deduplicates by the durable
-(model_sha, record_id) identity and reports legacy cross-SHA ID collisions.
+Archives can overlap at retention boundaries. This tool deduplicates by the durable
+(model_sha, record_id) identity and reports cross-SHA record-id collisions.
 """
 from __future__ import annotations
 
@@ -16,8 +15,9 @@ from collections import Counter, defaultdict
 from pathlib import Path
 from typing import Any, Iterable, Iterator
 
-EXTERNAL = "CRYPTO_INFORMED_TAKER"
-MAKER = "MICRO_MAKER_PRO"
+ENGINE = "CRYPTO_SETTLEMENT_ENGINE"
+TAKER_COMPONENT = "crypto_informed_taker"
+MAKER_COMPONENT = "professional_maker"
 MARKOUT_HORIZONS = ("1s", "5s", "10s", "15s", "30s", "45s", "60s", "300s")
 
 
@@ -95,11 +95,11 @@ def load_unique(inputs: Iterable[Path]) -> tuple[list[dict[str, Any]], dict[str,
                 if prior != value:
                     conflicts += 1
     ordered = sorted(unique.values(), key=lambda row: (int(row.get("recorded_ts_ms") or 0), str(row["record_id"])))
-    legacy_collisions = sum(len(shas) > 1 for shas in record_shas.values())
+    cross_sha_collisions = sum(len(shas) > 1 for shas in record_shas.values())
     quality = {
         "ledger_files": len(paths), "raw_records": raw, "unique_records": len(ordered),
         "duplicate_records_removed": duplicates, "conflicting_duplicate_record_ids": conflicts,
-        "legacy_record_id_collisions_across_sha": legacy_collisions,
+        "record_id_collisions_across_sha": cross_sha_collisions,
         "malformed_records": malformed, "records_missing_record_id": missing_ids,
         "fail_closed": conflicts > 0 or malformed > 0 or missing_ids > 0,
     }
@@ -211,12 +211,17 @@ def calibration(probabilities: list[tuple[float, float]]) -> list[dict[str, Any]
     ]
 
 
+def _component(event: dict[str, Any]) -> str:
+    metadata = event.get("metadata") if isinstance(event.get("metadata"), dict) else {}
+    return str(metadata.get("component") or metadata.get("model_family") or "")
+
+
 def external_metrics(events: list[dict[str, Any]]) -> dict[str, Any]:
     fills: dict[tuple[str, str], dict[str, Any]] = {}
     finals: dict[tuple[str, str], dict[str, Any]] = {}
     counts = Counter()
     for event in events:
-        if event.get("strategy") != EXTERNAL:
+        if event.get("strategy") != ENGINE or _component(event) != TAKER_COMPONENT:
             continue
         kind = str(event.get("event_type") or "")
         counts[kind] += 1
@@ -288,7 +293,7 @@ def maker_metrics(events: list[dict[str, Any]]) -> dict[str, Any]:
     pnl: list[float] = []
     markouts: dict[str, list[float]] = defaultdict(list)
     for event in events:
-        if event.get("strategy") != MAKER:
+        if event.get("strategy") != ENGINE or _component(event) != MAKER_COMPONENT:
             continue
         kind = str(event.get("event_type") or "")
         counts[kind] += 1
@@ -318,7 +323,7 @@ def maker_metrics(events: list[dict[str, Any]]) -> dict[str, Any]:
             horizon: {"n": len(markouts[horizon]), "mean": mean(markouts[horizon])}
             for horizon in MARKOUT_HORIZONS
         },
-        "promotion_gate": "MORE_EVIDENCE_REQUIRED",
+        "evidence_state": "MORE_EVIDENCE_REQUIRED",
     }
 
 
@@ -475,6 +480,7 @@ def audit(inputs: Iterable[Path]) -> dict[str, Any]:
     counterfactual = counterfactual_metrics(inputs)
     quality["fail_closed"] = bool(quality["fail_closed"] or counterfactual["fail_closed"])
     strategies = Counter(str(event.get("strategy") or "UNKNOWN") for event in events)
+    components = Counter(_component(event) or "engine_level" for event in events)
     external = external_metrics(events)
     maker = maker_metrics(events)
     all_strategies = strategy_economics(events)
@@ -484,6 +490,7 @@ def audit(inputs: Iterable[Path]) -> dict[str, Any]:
         "scope": "PAPER_ONLY_DEDUPLICATED_CROSS_RUN",
         "data_quality": quality,
         "strategy_record_counts": dict(sorted(strategies.items())),
+        "component_record_counts": dict(sorted(components.items())),
         "external_fair": external, "professional_maker": maker,
         "external_fair_counterfactual": counterfactual,
         "strategy_economics": all_strategies,

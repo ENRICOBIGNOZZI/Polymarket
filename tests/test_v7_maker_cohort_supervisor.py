@@ -264,12 +264,12 @@ class MakerCohortSupervisorTests(unittest.TestCase):
             self.assertEqual(supervisor.rotation_cooldown_remaining_seconds(70_000), 240.0)
 
     def test_rotation_requires_materially_superior_new_fill_cell(self) -> None:
-        current = selection("incumbent")
-        candidate = selection("incumbent")
+        current = selection("current")
+        candidate = selection("current")
         candidate["markets"][0]["authorized_execution_cells"][0][
             "projected_fill_probability"] = 0.60
         candidate["markets"].append({
-            "condition_id": "condition-2", "market_id": "challenger",
+            "condition_id": "condition-2", "market_id": "candidate",
             "yes_token": "yes-2", "no_token": "no-2",
             "inventory_seed_authorized": False,
             "authorized_execution_cells": [{
@@ -291,7 +291,7 @@ class MakerCohortSupervisorTests(unittest.TestCase):
         self.assertFalse(allowed)
         self.assertEqual(
             metrics["rotation_gate_reason"],
-            "CHALLENGER_FILL_NOT_MATERIALLY_SUPERIOR",
+            "CANDIDATE_FILL_NOT_MATERIALLY_SUPERIOR",
         )
         candidate["markets"][0]["authorized_execution_cells"][0][
             "projected_fill_probability"] = 0.0
@@ -303,15 +303,15 @@ class MakerCohortSupervisorTests(unittest.TestCase):
         )
         self.assertTrue(allowed)
         self.assertEqual(
-            metrics["rotation_target_cell"], "challenger|yes-2|JOIN|BUY")
+            metrics["rotation_target_cell"], "candidate|yes-2|JOIN|BUY")
 
     def test_subpercent_rotation_gate_does_not_apply_five_point_hurdle(self) -> None:
-        current = selection("incumbent")
+        current = selection("current")
         current["markets"][0]["authorized_execution_cells"][0][
             "projected_fill_probability"] = 0.003
         candidate = json.loads(json.dumps(current))
         candidate["markets"].append({
-            "condition_id": "condition-2", "market_id": "challenger",
+            "condition_id": "condition-2", "market_id": "candidate",
             "yes_token": "yes-2", "no_token": "no-2",
             "inventory_seed_authorized": False,
             "authorized_execution_cells": [{
@@ -330,19 +330,19 @@ class MakerCohortSupervisorTests(unittest.TestCase):
         )
 
         self.assertTrue(allowed)
-        self.assertTrue(metrics["incumbent_below_minimum_fill_probability"])
+        self.assertTrue(metrics["current_below_minimum_fill_probability"])
         self.assertEqual(
-            metrics["required_challenger_projected_fill_probability"], 0.004)
+            metrics["required_candidate_projected_fill_probability"], 0.004)
         self.assertEqual(metrics["configured_absolute_fill_improvement"], 0.05)
         self.assertEqual(metrics["effective_absolute_fill_improvement"], 0.004)
 
     def test_subpercent_exploit_rotation_keeps_relative_and_bounded_absolute_hurdles(self) -> None:
-        current = selection("incumbent")
+        current = selection("current")
         current["markets"][0]["authorized_execution_cells"][0][
             "projected_fill_probability"] = 0.006
         candidate = json.loads(json.dumps(current))
         candidate["markets"].append({
-            "condition_id": "condition-2", "market_id": "challenger",
+            "condition_id": "condition-2", "market_id": "candidate",
             "yes_token": "yes-2", "no_token": "no-2",
             "inventory_seed_authorized": False,
             "authorized_execution_cells": [{
@@ -361,9 +361,9 @@ class MakerCohortSupervisorTests(unittest.TestCase):
         )
 
         self.assertFalse(allowed)
-        self.assertFalse(metrics["incumbent_below_minimum_fill_probability"])
+        self.assertFalse(metrics["current_below_minimum_fill_probability"])
         self.assertEqual(
-            metrics["required_challenger_projected_fill_probability"], 0.01)
+            metrics["required_candidate_projected_fill_probability"], 0.01)
         candidate["markets"][1]["authorized_execution_cells"][0][
             "projected_fill_probability"] = 0.011
         allowed, _ = rotation_gate(
@@ -512,12 +512,12 @@ class MakerCohortSupervisorTests(unittest.TestCase):
             candidate["timestamp_ms"] = 2_000
             candidate["markets"][0]["authorized_execution_cells"][0][
                 "projected_fill_probability"] = 0.75
-            challenger = json.loads(json.dumps(reserve))
-            challenger.update({
+            new_row = json.loads(json.dumps(reserve))
+            new_row.update({
                 "market_id": "new", "condition_id": "new-condition",
                 "yes_token": "new-yes", "no_token": "new-no",
             })
-            candidate["markets"].append(challenger)
+            candidate["markets"].append(new_row)
             candidate["selected_count"] = 2
             atomic_json(selection_path, current)
             atomic_json(candidate_path, candidate)

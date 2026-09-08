@@ -4,7 +4,7 @@
 The WebSocket runtime owns the low-latency BTC perpetual context.  This
 collector deliberately covers discovery and slow-changing derivative fields
 through public REST polling, and marks every observation as polling data.  It
-has no execution, capital, OMS, ledger, or promotion authority.
+has no execution, capital, OMS, ledger, or risk authority.
 """
 from __future__ import annotations
 
@@ -269,7 +269,7 @@ def collect_once(*, timeout_s: float = 10.0) -> tuple[dict[str, Any], dict[str, 
         "local_receive_monotonic_ns": receive_mono,
         "paper_only": True, "authenticated_execution": False, "real_order_submission": False,
         "execution_authority": False, "capital_authority": False, "oms_authority": False,
-        "ledger_writer_authority": False, "promotion_authority": False,
+        "ledger_writer_authority": False,
     }
     status = {"schema": "polymarket_v7_deribit_rest_status_v1", "state": "OPERATIONAL",
               "transport": "PUBLIC_REST_POLLING", "polling_latency_not_event_latency": True,

@@ -11,7 +11,7 @@ from v7_learned_execution_model import (
 SHA='a'*40
 
 def ev(kind, oid='', **kw):
-    d=dict(event_type=kind,strategy='GRAPH_RV',model_sha=SHA,paper_only=True,authenticated_execution=False,
+    d=dict(event_type=kind,strategy='STRUCTURAL_ARB_ENGINE',model_sha=SHA,paper_only=True,authenticated_execution=False,
         order_id=oid or None,candidate_id=None,opportunity_id=None,bundle_id=None,fill_id=None,leg_id=None,
         token_id=None,side=None,book_snapshot_id=None,recorded_ts_ms=10_000,receive_ts_ms=None,decision_ts_ms=None,
         exchange_ts_ms=None,bid=None,ask=None,bid_depth=None,ask_depth=None,queue_ahead=None,intended_size=None,
@@ -19,7 +19,7 @@ def ev(kind, oid='', **kw):
         limit_price=None,fee=None,fee_source=None,executable_liquidation_value=None,complete=None,order_state=None,
         markouts={},metadata={}); d.update(kw); return SimpleNamespace(**d)
 
-def sub(oid,ts,q,*,bundle=None,leg=None,strategy='GRAPH_RV',ids=None,count=2,imb=0.0):
+def sub(oid,ts,q,*,bundle=None,leg=None,strategy='STRUCTURAL_ARB_ENGINE',ids=None,count=2,imb=0.0):
     bd=100*(1+imb); md={}
     if bundle and count is not None:
         md['expected_leg_count']=count
@@ -29,15 +29,15 @@ def sub(oid,ts,q,*,bundle=None,leg=None,strategy='GRAPH_RV',ids=None,count=2,imb
         bid=.49,ask=.51,bid_depth=bd,ask_depth=200-bd,queue_ahead=q,intended_size=10.,limit_price=.49,
         intended_action='JOIN_MAKER',predicted_alpha=.01,expected_ev=.002,timeout_ms=60_000,metadata=md)
 
-def fill(oid,ts,qty=10.,*,fid=None,bundle=None,leg=None,strategy='GRAPH_RV',token=None,complete=None):
+def fill(oid,ts,qty=10.,*,fid=None,bundle=None,leg=None,strategy='STRUCTURAL_ARB_ENGINE',token=None,complete=None):
     if complete is None: complete=qty>=10
     return ev('FILL',oid,strategy=strategy,bundle_id=bundle,leg_id=leg,fill_id=fid or f'f-{oid}',token_id=token or f't-{oid}',side='BUY',
         recorded_ts_ms=ts,exchange_ts_ms=ts-2,receive_ts_ms=ts-1,fill_price=.5,filled_size=qty,fee=.001,
         fee_source='test_authoritative',complete=complete)
 
-def timeout(oid,ts,strategy='GRAPH_RV'): return ev('ORDER_STATE',oid,strategy=strategy,recorded_ts_ms=ts,order_state='TIMEOUT')
+def timeout(oid,ts,strategy='STRUCTURAL_ARB_ENGINE'): return ev('ORDER_STATE',oid,strategy=strategy,recorded_ts_ms=ts,order_state='TIMEOUT')
 
-def mark(oid,fill_ts,val,h='60s',*,fid=None,bundle=None,leg=None,strategy='GRAPH_RV',token=None,delta=100):
+def mark(oid,fill_ts,val,h='60s',*,fid=None,bundle=None,leg=None,strategy='STRUCTURAL_ARB_ENGINE',token=None,delta=100):
     ms={'1s':1000,'10s':10000,'45s':45000,'60s':60000,'300s':300000}[h]; ts=fill_ts+ms+delta
     return ev('MARKOUT',oid,strategy=strategy,bundle_id=bundle,leg_id=leg,fill_id=fid or f'f-{oid}',token_id=token or f't-{oid}',side='BUY',
         recorded_ts_ms=ts,exchange_ts_ms=ts-2,receive_ts_ms=ts-1,book_snapshot_id=f'm-{oid}-{h}',
@@ -78,14 +78,14 @@ def test_fill_and_markout_models_oos():
         q=float(i%100); oid=f'o{i}'; ts=1000+i*100
         events += [sub(oid,ts,q), fill(oid,ts+20) if q<40 else timeout(oid,ts+20)]
     r=analyze(events,SHA,min_order_train=120,min_order_test=40,min_markout_train=999,min_markout_test=999,min_joint_train=999,min_joint_test=999,bandwidth=.5)
-    fm=r['strategy_models']['GRAPH_RV']['fill_model']; assert fm['state']=='OOS_SCORED' and fm['oos_brier']<.35*fm['baseline_brier']
+    fm=r['strategy_models']['STRUCTURAL_ARB_ENGINE']['fill_model']; assert fm['state']=='OOS_SCORED' and fm['oos_brier']<.35*fm['baseline_brier']
     events=[]
     for i in range(320):
         im=-.9+1.8*(i%80)/79; oid=f'm{i}'; ts=1000+i*100000; events.append(sub(oid,ts,10 if i%4!=3 else 90,imb=im))
         if i%4!=3: fts=ts+20; events += [fill(oid,fts),mark(oid,fts,.02*im-.003)]
         else: events.append(timeout(oid,ts+20))
     r=analyze(events,SHA,min_order_train=160,min_order_test=60,min_markout_train=80,min_markout_test=20,min_joint_train=999,min_joint_test=999,bandwidth=.5)
-    mm=r['strategy_models']['GRAPH_RV']['markout_models']['60s']; assert mm['state']=='OOS_SCORED' and mm['oos_rmse']<mm['baseline_rmse']
+    mm=r['strategy_models']['STRUCTURAL_ARB_ENGINE']['markout_models']['60s']; assert mm['state']=='OOS_SCORED' and mm['oos_rmse']<mm['baseline_rmse']
 
 def test_bundle_completeness_and_ordered_asymmetry():
     rows=[sub('a',1000,5,bundle='ok',leg='1',ids=['2','1']),timeout('a',1100),sub('b',1010,90,bundle='ok',leg='2',ids=['2','1']),timeout('b',1110),
@@ -101,23 +101,23 @@ def test_partial_joint_state_and_no_candidate_coalescing():
     o,_=build_orders(rows,SHA); j,st=build_joint(o); assert len(j)==1 and j[0].state=='COMPLETE|PARTIAL' and st['skipped_missing_bundle_id']==2
 
 def test_joint_distribution_not_marginal_product_and_stratified():
-    base=[JointExample(str(i),'GRAPH_RV',('1','2'),2,i,i,(0.,)*4,'COMPLETE|COMPLETE' if i%2==0 else 'NO_FILL|NO_FILL') for i in range(200)]
+    base=[JointExample(str(i),'STRUCTURAL_ARB_ENGINE',('1','2'),2,i,i,(0.,)*4,'COMPLETE|COMPLETE' if i%2==0 else 'NO_FILL|NO_FILL') for i in range(200)]
     k=Kernel.fit([r.x for r in base],1.); lab=[r.state for r in base]; d=predict_distribution(k,base[0].x,lab)
     direct=-.5*(math.log(d['COMPLETE|COMPLETE'])+math.log(d['NO_FILL|NO_FILL']))
     marginal=-.5*(math.log(product_marginal_probability(lab,'COMPLETE|COMPLETE'))+math.log(product_marginal_probability(lab,'NO_FILL|NO_FILL'))); assert direct+.5<marginal
     rows=[]
-    for strategy,sig,off in [('GRAPH_RV',('buy','sell'),0),('GRAPH_RV',('left','right'),10000),('HARD_ARB',('buy','sell'),20000)]:
+    for strategy,sig,off in [('STRUCTURAL_ARB_ENGINE',('buy','sell'),0),('STRUCTURAL_ARB_ENGINE',('left','right'),10000),('CRYPTO_SETTLEMENT_ENGINE',('buy','sell'),20000)]:
         for i in range(80): rows.append(JointExample(f'{strategy}-{sig}-{i}',strategy,sig,2,off+i*100,off+i*100+10,(float(i%5),)*4,'COMPLETE|COMPLETE' if i%2==0 else 'NO_FILL|NO_FILL'))
-    r=joint_report(rows,1.,.25,0,40,15); assert set(r)=={'GRAPH_RV::buy|sell','GRAPH_RV::left|right','HARD_ARB::buy|sell'}
+    r=joint_report(rows,1.,.25,0,40,15); assert set(r)=={'STRUCTURAL_ARB_ENGINE::buy|sell','STRUCTURAL_ARB_ENGINE::left|right','CRYPTO_SETTLEMENT_ENGINE::buy|sell'}
 
 def test_strategy_stratification_and_fail_closed_report_contract():
     events=[]
-    for strategy,rev,base in [('GRAPH_RV',False,1000),('MICRO_MAKER',True,100000)]:
+    for strategy,rev,base in [('STRUCTURAL_ARB_ENGINE',False,1000),('CRYPTO_SETTLEMENT_ENGINE',True,100000)]:
         for i in range(120):
             q=float(i%60); oid=f'{strategy}-{i}'; ts=base+i*100; s=sub(oid,ts,q,strategy=strategy); f=fill(oid,ts+20,strategy=strategy) if (q>=30 if rev else q<30) else timeout(oid,ts+20,strategy)
             events += [s,f]
     r=analyze(events,SHA,min_order_train=60,min_order_test=20,min_markout_train=999,min_markout_test=999,min_joint_train=999,min_joint_test=999,bandwidth=.5)
-    assert set(r['strategy_models'])=={'GRAPH_RV','MICRO_MAKER'} and 'fill_model' not in r and r['promotion_allowed'] is False and r['decision']=='MORE_EVIDENCE_REQUIRED'
+    assert set(r['strategy_models'])=={'STRUCTURAL_ARB_ENGINE','CRYPTO_SETTLEMENT_ENGINE'} and 'fill_model' not in r and r['research_only'] is True and r['decision']=='MORE_EVIDENCE_REQUIRED'
     c=r['causal_contract']; assert c['markout_horizon_maturity']=='exchange_and_receive_clock_enforced' and c['markout_fill_coverage']=='all_fills_required_per_order_horizon'
     assert c['order_model_pooling']=='strategy_stratified_only' and c['joint_pooling']=='strategy_and_leg_signature_stratified' and c['product_of_marginals_role']=='benchmark_only'
 

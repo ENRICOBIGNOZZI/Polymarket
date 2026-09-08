@@ -194,10 +194,10 @@ def test_maker_cannot_regain_independent_economic_authority() -> None:
 def test_execution_alpha_contract_is_fail_closed_and_nonretroactive() -> None:
     value = copy.deepcopy(config())
     validate_config(value)
-    assert value["execution_alpha"]["maker_immature_fill_lower"] == "ZERO"
+    assert value["execution_alpha"]["maker_immature_fill_lower"] == "CURRENT_RUN_POSTERIOR_LOWER_90_AFTER_20_ORDERS_2_CLUSTERS"
     assert value["execution_alpha"]["retroactive_attribution_imputation"] is False
     broken = copy.deepcopy(value)
-    broken["execution_alpha"]["maker_immature_fill_lower"] = "POINT_ESTIMATE"
+    broken["execution_alpha"]["maker_immature_fill_lower"] = "ZERO"
     try:
         validate_config(broken)
     except ValueError as exc:

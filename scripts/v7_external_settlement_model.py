@@ -5,12 +5,12 @@ from __future__ import annotations
 import math
 from typing import Any
 
-try:
-    from v7_external_settlement_dataset import FEATURE_SCHEMA, MODEL_FEATURE_NAMES
-    from v7_fair_value_registry import FairModelArtifact
-except ModuleNotFoundError:
-    from scripts.v7_external_settlement_dataset import FEATURE_SCHEMA, MODEL_FEATURE_NAMES
-    from scripts.v7_fair_value_registry import FairModelArtifact
+FEATURE_SCHEMA = "btc-m5-settlement-runtime-structural-v1"
+MODEL_FEATURE_NAMES = (
+    "tte_seconds", "terminal_window_observed_fraction", "oracle_minus_reference_bps",
+    "external_minus_oracle_bps", "external_return_1s", "external_return_5s",
+    "oracle_age_ms", "external_age_ms",
+)
 
 
 FAMILY = "btc_5m_settlement_margin_linear_v1"
@@ -101,80 +101,3 @@ def runtime_features(
     if any(values.get(name) is None for name in MODEL_FEATURE_NAMES):
         return None
     return {name: float(values[name]) for name in MODEL_FEATURE_NAMES}
-
-
-def _sigma_for_tte(parameters: dict[str, Any], tte: float) -> float:
-    for bucket in parameters.get("residual_sigma_by_tte") if isinstance(
-        parameters.get("residual_sigma_by_tte"), list) else []:
-        if not isinstance(bucket, dict):
-            continue
-        minimum, maximum, sigma = (
-            finite(bucket.get("minimum_seconds")), finite(bucket.get("maximum_seconds")),
-            finite(bucket.get("sigma_bps")),
-        )
-        if None not in (minimum, maximum, sigma) and minimum <= tte <= maximum and sigma > 0.0:
-            return sigma
-    return float(parameters["default_residual_sigma_bps"])
-
-
-def _uncertainty_for_tte(parameters: dict[str, Any], tte: float) -> float:
-    for bucket in parameters.get("mean_uncertainty_by_tte", []) or []:
-        if not isinstance(bucket, dict):
-            continue
-        minimum = finite(bucket.get("minimum_seconds")); maximum = finite(bucket.get("maximum_seconds"))
-        value = finite(bucket.get("mean_uncertainty_bps"))
-        if None not in (minimum, maximum, value) and minimum <= tte <= maximum and value >= 0.0:
-            return float(value)
-    return float(parameters["mean_uncertainty_bps"])
-
-
-def _calibration_for_tte(parameters: dict[str, Any], tte: float) -> dict[str, Any]:
-    for bucket in parameters.get("calibration_by_tte", []) or []:
-        if not isinstance(bucket, dict):
-            continue
-        minimum = finite(bucket.get("minimum_seconds")); maximum = finite(bucket.get("maximum_seconds"))
-        if None not in (minimum, maximum) and minimum <= tte <= maximum:
-            return bucket
-    return parameters["calibration"]
-
-
-def _logistic_calibrate(probability: float, calibration: dict[str, Any]) -> float:
-    probability = min(1.0 - 1e-9, max(1e-9, probability))
-    value = float(calibration["intercept"]) + float(calibration["slope"]) * math.log(
-        probability / (1.0 - probability)
-    )
-    return 1.0 / (1.0 + math.exp(-value)) if value >= 0.0 else math.exp(value) / (1.0 + math.exp(value))
-
-
-def predict(artifact: FairModelArtifact, features: dict[str, Any]) -> dict[str, float]:
-    validate_parameters(artifact)
-    parameters = artifact.parameters
-    mean_margin = float(parameters["intercept"])
-    for name in parameters["feature_names"]:
-        value = finite(features.get(name))
-        if value is None:
-            raise ValueError(f"settlement_model_feature_missing:{name}")
-        standardized = (value - float(parameters["feature_means"][name])) / float(
-            parameters["feature_scales"][name]
-        )
-        mean_margin += float(parameters["coefficients"][name]) * standardized
-    tte = float(features["tte_seconds"])
-    sigma = _sigma_for_tte(parameters, tte)
-    mean_uncertainty = _uncertainty_for_tte(parameters, tte)
-    normal = lambda margin: 0.5 * math.erfc(-margin / sigma / math.sqrt(2.0))
-    raw = min(1.0 - 1e-9, max(1e-9, normal(mean_margin)))
-    lower_raw = min(1.0 - 1e-9, max(1e-9, normal(mean_margin - 1.64 * mean_uncertainty)))
-    upper_raw = min(1.0 - 1e-9, max(1e-9, normal(mean_margin + 1.64 * mean_uncertainty)))
-    calibration = _calibration_for_tte(parameters, tte)
-    probability = _logistic_calibrate(raw, calibration)
-    lower = _logistic_calibrate(lower_raw, calibration)
-    upper = _logistic_calibrate(upper_raw, calibration)
-    return {
-        "yes": probability,
-        "lower": min(lower, probability),
-        "upper": max(upper, probability),
-        "raw_yes": raw,
-        "predicted_settlement_margin_bps": mean_margin,
-        "settlement_sigma_bps": sigma,
-        "mean_uncertainty_bps": mean_uncertainty,
-    }

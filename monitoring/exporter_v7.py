@@ -222,7 +222,6 @@ def collect_snapshot(run_root: Path, repository_root: Path | None = None, *, now
         "timestamp": now, "sha": sha, "run_root": run_root.name, "runtime": runtime,
         "runtime_alive": _pid_alive(runtime.get("pid")) and not (run_root / "control/KILL").exists(),
         "portfolio": portfolio, "allocations": allocations,
-        "evidence_allocator": _json(run_root / "control/evidence_capital_allocator.json"),
         "fee_reward_registry": _json(run_root / "control/fee_reward_registry.json"),
         "strategy_registry": _json(repository_root / "config/v7_strategy_registry.json"),
         "live_model_scope": _json(repository_root / "config/v7_live_model_scope.json"),
@@ -278,13 +277,11 @@ def health_reasons(snapshot: dict[str, Any], *, max_runtime_age: int = 180, max_
     if runtime.get("economic_new_risk_ready") is not False: reasons.append("economic_new_risk_must_remain_disabled")
     if runtime.get("authorized_alpha_actions") not in (None, []): reasons.append("authorized_alpha_actions_not_empty")
     if not _scope_valid(snapshot): reasons.append("live_algorithm_scope_missing_or_invalid")
-    if (snapshot.get("process_manifest") or {}).get("process_count") != 25: reasons.append("process_manifest_not_25_exact")
+    if (snapshot.get("process_manifest") or {}).get("process_count") != 23: reasons.append("process_manifest_not_23_exact")
     budgets = allocations.get("engine_budgets") if isinstance(allocations.get("engine_budgets"), dict) else {}
     if allocations.get("schema") != "polymarket_v7_capital_allocation_v3" or set(budgets) != set(LIVE_ALGORITHMS) or allocations.get("engine_count") != 2 or allocations.get("paper_only") is not True or allocations.get("authenticated_execution") is not False or allocations.get("real_order_submission") is not False or allocations.get("real_capital_at_risk") is not False or allocations.get("capital_authority_owner_count") != 1: reasons.append("two_engine_allocation_missing_or_unsafe")
     engines = portfolio.get("engines") if isinstance(portfolio.get("engines"), dict) else {}
     if portfolio.get("schema") != "polymarket_v7_portfolio_guard_v2" or set(engines) != set(LIVE_ALGORITHMS) or portfolio.get("paper_only") is not True or portfolio.get("authenticated_execution") is not False or portfolio.get("real_order_submission") is not False or portfolio.get("real_capital_at_risk") is not False: reasons.append("portfolio_guard_contract_invalid")
-    evidence = snapshot.get("evidence_allocator") or {}
-    if evidence and (evidence.get("schema") != "polymarket_v7_evidence_capital_allocator_v2" or evidence.get("paper_only") is not True or evidence.get("authenticated_execution") is not False or evidence.get("real_order_submission") is not False or evidence.get("automatic_transfer") is not False): reasons.append("evidence_capital_allocator_missing_or_unsafe")
     fees = snapshot.get("fee_reward_registry") or {}
     if fees.get("schema") != "polymarket_v7_fee_reward_registry_v1" or fees.get("model_sha") != snapshot.get("sha") or fees.get("paper_only") is not True or fees.get("authenticated_execution") is not False or fees.get("real_order_submission") is not False or fees.get("unknown_fee_policy") != "NON_EXECUTABLE" or fees.get("unknown_reward_policy") != "ZERO_EXPECTED_VALUE": reasons.append("fee_reward_registry_missing_or_unsafe")
     age = _integer(snapshot.get("timestamp")) - _integer(fast.get("timestamp"))
@@ -342,7 +339,7 @@ def render_prometheus(snapshot: dict[str, Any]) -> str:
         _metric("polymarket_v7_paper_only_contract_ok", runtime.get("paper_only") is True and runtime.get("real_order_submission") is False), _metric("polymarket_v7_authenticated_execution_disabled", runtime.get("authenticated_execution") is False),
         _metric("polymarket_v7_exact_sha_ok", runtime.get("model_sha") == snapshot.get("sha")), _metric("polymarket_v7_execution_alive", snapshot.get("runtime_alive")), _metric("polymarket_v7_supervisor_alive", operations.get("supervisor_alive")), _metric("polymarket_v7_single_writer_ok", operations.get("single_writer")), _metric("polymarket_v7_ledger_writable", operations.get("ledger_writable")),
         _metric("polymarket_v7_runtime_uptime_seconds", operations.get("runtime_uptime")), _metric("polymarket_v7_restart_count_window", operations.get("restart_count")), _metric("polymarket_v7_disk_free_ratio", operations.get("disk_free_ratio")),
-        _metric("polymarket_v7_live_algorithm_count", 2), _metric("polymarket_v7_legacy_algorithm_count", 0), _metric("polymarket_v7_live_algorithm_scope_wired", scope_ok), _metric("polymarket_v7_live_model_scope_wired", scope_ok), _metric("polymarket_v7_economic_new_risk_ready", runtime.get("economic_new_risk_ready")),
+        _metric("polymarket_v7_live_algorithm_count", 2), _metric("polymarket_v7_live_algorithm_scope_wired", scope_ok), _metric("polymarket_v7_live_model_scope_wired", scope_ok), _metric("polymarket_v7_economic_new_risk_ready", runtime.get("economic_new_risk_ready")),
         _metric("polymarket_runtime_equity_usd", economics.get("equity")), _metric("polymarket_runtime_pnl_usd", economics.get("pnl")), _metric("polymarket_runtime_realized_pnl_usd", economics.get("realized_pnl")), _metric("polymarket_runtime_drawdown_ratio", economics.get("drawdown")), _metric("polymarket_runtime_killed", economics.get("killed")),
         _metric("polymarket_v7_canonical_submitted_units", canonical.get("submitted_units")), _metric("polymarket_v7_canonical_complete_units", canonical.get("complete_units")), _metric("polymarket_v7_ledger_valid", ledger.get("valid")), _metric("polymarket_v7_portfolio_reconciled", (snapshot.get("reconciliation") or {}).get("reconciled")), _metric("polymarket_v7_reconciliation_divergences", len((snapshot.get("reconciliation") or {}).get("reason_codes") or [])),
         _metric("polymarket_v7_trade_tape_rows", (snapshot.get("trade_tape") or {}).get("rows")), _metric("polymarket_v7_trade_tape_assets", (snapshot.get("trade_tape") or {}).get("assets")), _metric("polymarket_v7_trade_tape_no_standard_clob_flow", _verified_no_flow(snapshot.get("trade_recorder") or {}, 180)), _metric("polymarket_v7_latency_samples_present", (snapshot.get("maker_latency") or {}).get("present")),

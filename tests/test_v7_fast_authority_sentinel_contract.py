@@ -11,15 +11,15 @@ class V7FastAuthoritySentinelContractTest(unittest.TestCase):
     def test_current_v7_authority_is_paper_only(self) -> None:
         directives = json.loads((ROOT / "config" / "operator_directives.json").read_text(encoding="utf-8"))
         auth = directives["paper_v7_authorization"]
-        champion = json.loads((ROOT / "config" / "live_champion.json").read_text(encoding="utf-8"))
+        scope = json.loads((ROOT / "config" / "v7_live_model_scope.json").read_text(encoding="utf-8"))
 
         self.assertTrue(auth["paper_only"])
         self.assertFalse(auth["authenticated_execution"])
-        self.assertTrue(champion["paper_only"])
-        self.assertFalse(champion["authenticated_execution"])
-        self.assertFalse(champion["real_order_submission"])
-        self.assertEqual(champion["version"], 7)
-        self.assertEqual(champion["loop"], "scripts/paper_v7_execution_loop.sh")
+        self.assertTrue(scope["paper_only"])
+        self.assertFalse(scope["authenticated_execution"])
+        self.assertFalse(scope["real_order_submission"])
+        self.assertEqual(scope["version"], 7)
+        self.assertTrue(scope["runtime_invariants"]["single_execution_owner"])
         self.assertFalse(auth["fixed_dollar_trade_cap_enabled"])
         self.assertEqual(auth["max_drawdown"], 0.15)
 
@@ -98,8 +98,8 @@ class V7FastAuthoritySentinelContractTest(unittest.TestCase):
         self.assertNotIn("v7_hard_arb_guard.py", loop)
         self.assertIn("v7_global_portfolio_coordinator.py", loop)
         firewall = (ROOT / "scripts" / "v7_ledger_spool.py").read_text(encoding="utf-8")
-        self.assertIn('"FAST_STRUCTURAL": "STRUCTURAL_ARB_ENGINE"', firewall)
-        self.assertIn('run_root / "opportunities" / "inbox"', firewall)
+        self.assertIn('ENGINE_IDS = {"CRYPTO_SETTLEMENT_ENGINE", "STRUCTURAL_ARB_ENGINE"}', firewall)
+        self.assertNotIn('ENGINE_STRATEGIES', firewall)
 
 
 if __name__ == "__main__":

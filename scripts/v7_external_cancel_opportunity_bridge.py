@@ -1,11 +1,7 @@
 #!/usr/bin/env python3
-"""Build receipt-gated PAPER CANCEL opportunities from the frozen BTC M5 overlay.
+"""Build PAPER CANCEL opportunities from the current BTC M5 research rule.
 
-This module has zero execution authority.  It requires three independent facts:
-(1) the frozen forward experiment passed the activation gate, (2) the live
-receive-time trigger is current and rule-identical, and (3) a matching BUY-only
-maker PAPER authorization is still active.  It only emits typed opportunity
-envelopes; the global coordinator remains the sole decision owner.
+This module has zero execution authority. It requires a current receive-time signal that is hash-identical to the checked-in research rule and a matching active BUY-only PAPER maker order. The global coordinator remains the sole decision owner.
 """
 from __future__ import annotations
 
@@ -17,13 +13,10 @@ from typing import Any
 from v7_opportunity import OpportunityEnvelope, OpportunityError
 
 
-BRIDGE_SCHEMA = "polymarket_v7_external_cancel_opportunity_bridge_v1"
-ACTIVATION_SCHEMA = "polymarket_v7_external_cancel_activation_v1"
-SIGNAL_SCHEMA = "polymarket_v7_btc_m5_external_cancel_live_signal_v1"
-EXPERIMENT_ID = "btc-m5-external-cancel-overlay-forward-v1"
-FROZEN_RULE_SHA = "9e8c7e6a1d7e4a87cd9977396bcbbb228f96b4e35e4a34e84e1514e9e9630254"
-OFFICIAL_V3_PROMOTION_BOUNDARY_MS = 1788781327887
-OFFICIAL_V3_PROTOCOL_SHA = "85e54afef180426dab0519c701f764ea5863076ac88566648122553576bd8a04"
+BRIDGE_SCHEMA = "polymarket_v7_external_cancel_opportunity_bridge_v2"
+SIGNAL_SCHEMA = "polymarket_v7_btc_m5_external_cancel_live_signal_v2"
+RULE_ID = "btc-m5-external-cancel-v1"
+CONFIG_PATH = Path(__file__).resolve().parents[1] / "config" / "v7_crypto_execution_alpha.json"
 
 
 def _load(path: Path) -> dict[str, Any]:
@@ -38,60 +31,64 @@ def _stable(*parts: Any) -> str:
     return hashlib.sha256("|".join(str(part) for part in parts).encode()).hexdigest()
 
 
-def _activation_ready(value: dict[str, Any]) -> tuple[bool, str]:
-    evidence = value.get("evidence") if isinstance(value.get("evidence"), dict) else {}
-    rule_sha = str(evidence.get("rule_sha256") or "")
+def _canonical_hash(value: dict[str, Any]) -> str:
+    return hashlib.sha256(json.dumps(value, sort_keys=True, separators=(",", "")).encode()).hexdigest()
+
+
+def _research_rule(path: Path = CONFIG_PATH) -> tuple[dict[str, Any], str]:
+    value = _load(path)
+    execution = value.get("execution_alpha") if isinstance(value.get("execution_alpha"), dict) else {}
+    cancel = execution.get("cancel") if isinstance(execution.get("cancel"), dict) else {}
+    rule = cancel.get("research_rule") if isinstance(cancel.get("research_rule"), dict) else {}
     ready = (
-        value.get("schema") == ACTIVATION_SCHEMA
-        and value.get("experiment_id") == EXPERIMENT_ID
-        and value.get("paper_only") is True
+        value.get("paper_only") is True
         and value.get("authenticated_execution") is False
         and value.get("real_order_submission") is False
-        and value.get("real_money_authority") is False
-        and value.get("automatic_promotion") is False
-        and value.get("paper_execution_alpha_overlay_eligible") is True
-        and value.get("manual_exact_sha_promotion_required") is True
-        and value.get("frozen_rule_retuning_allowed") is False
-        and value.get("failed_checks") == []
-        and rule_sha == FROZEN_RULE_SHA
-        and evidence.get("official_v3_provenance_verified") is True
-        and int(evidence.get("official_v3_promotion_boundary_ms") or 0)
-            == OFFICIAL_V3_PROMOTION_BOUNDARY_MS
-        and evidence.get("official_v3_protocol_reference_sha256")
-            == OFFICIAL_V3_PROTOCOL_SHA
-        and isinstance(evidence.get("activation_report_sha256"), str)
-        and len(evidence.get("activation_report_sha256")) == 64
+        and cancel.get("research_only") is True
+        and rule.get("rule_id") == RULE_ID
+        and rule.get("shock_source") == "BINANCE_SPOT_TRADES"
+        and rule.get("confirmation_source") == "COINBASE_SPOT_TOP_OF_BOOK"
+        and rule.get("confirmation") == "NON_OPPOSING"
+        and rule.get("shock_window_ms") == 100
+        and float(rule.get("minimum_absolute_log_return_bp") or 0.0) == 0.30
+        and rule.get("trigger_cooldown_ms") == 250
+        and rule.get("trigger_grid_ms") == 25
+        and rule.get("overlap_warmup_ms") == 300
+        and rule.get("maximum_signal_age_ms") == 100
+        and rule.get("supported_cancel_side") == "BUY"
+        and rule.get("receive_time_global_merge_required") is True
+        and rule.get("same_timestamp_atomic_group_required") is True
     )
-    return ready, rule_sha
+    return (dict(rule), _canonical_hash(rule)) if ready else ({}, "")
 
 
 def _signal_ready(
-    value: dict[str, Any], *, model_sha: str, rule_sha: str, now_ns: int,
+    value: dict[str, Any], *, model_sha: str, rule: dict[str, Any], rule_sha: str, now_ns: int,
 ) -> tuple[bool, str]:
     trigger_wall = int(value.get("trigger_receive_wall_ns") or 0)
     valid_until_wall = int(value.get("valid_until_wall_ns") or 0)
     publish_wall = int(value.get("publish_wall_ns") or 0)
     ready = (
         value.get("schema") == SIGNAL_SCHEMA
-        and value.get("experiment_id") == EXPERIMENT_ID
+        and value.get("rule_id") == RULE_ID
         and value.get("code_sha") == model_sha
         and value.get("rule_sha256") == rule_sha
         and value.get("paper_only") is True
         and value.get("authenticated_execution") is False
         and value.get("real_order_submission") is False
         and value.get("real_money_authority") is False
-        and value.get("automatic_promotion") is False
+        and value.get("research_only") is True
         and value.get("execution_authority") == "ZERO_AUTHORITY_SIGNAL_ONLY"
-        and value.get("shock_source") == "BINANCE_SPOT_TRADES"
-        and value.get("confirmation_source") == "COINBASE_SPOT_TOP_OF_BOOK"
-        and value.get("confirmation") == "NON_OPPOSING"
-        and value.get("shock_window_ms") == 100
-        and float(value.get("minimum_absolute_log_return_bp") or 0.0) == 0.30
-        and value.get("trigger_cooldown_ms") == 250
-        and value.get("trigger_grid_ms") == 25
-        and value.get("overlap_warmup_ms") == 300
-        and value.get("maximum_live_signal_age_ms") == 100
-        and value.get("supported_cancel_side") == "BUY"
+        and value.get("shock_source") == rule.get("shock_source")
+        and value.get("confirmation_source") == rule.get("confirmation_source")
+        and value.get("confirmation") == rule.get("confirmation")
+        and value.get("shock_window_ms") == rule.get("shock_window_ms")
+        and float(value.get("minimum_absolute_log_return_bp") or 0.0) == float(rule.get("minimum_absolute_log_return_bp") or 0.0)
+        and value.get("trigger_cooldown_ms") == rule.get("trigger_cooldown_ms")
+        and value.get("trigger_grid_ms") == rule.get("trigger_grid_ms")
+        and value.get("overlap_warmup_ms") == rule.get("overlap_warmup_ms")
+        and value.get("maximum_signal_age_ms") == rule.get("maximum_signal_age_ms")
+        and value.get("supported_cancel_side") == rule.get("supported_cancel_side")
         and value.get("confirmed_non_opposing") is True
         and value.get("valid") is True
         and int(value.get("signal_version") or 0) > 0
@@ -193,16 +190,16 @@ def build_external_cancel_opportunities(
     root = Path(run_root)
     runtime = _load(root / "control" / "runtime_status.json")
     model_sha = str(runtime.get("model_sha") or "")
-    activation = _load(root / "control" / "external_cancel_activation.json")
     signal = _load(root / "external_fair" / "external_cancel_signal.json")
     active_orders, executor_ready = _active_executor_orders(
         root / "micro_maker" / "authorized_make_executor_status.json",
         model_sha=model_sha, now_ns=now_ns,
     )
-    activation_ok, rule_sha = _activation_ready(activation)
+    rule, rule_sha = _research_rule()
+    rule_ok = bool(rule and rule_sha)
     signal_ok, stale_outcome = _signal_ready(
-        signal, model_sha=model_sha, rule_sha=rule_sha, now_ns=now_ns,
-    ) if activation_ok else (False, "")
+        signal, model_sha=model_sha, rule=rule, rule_sha=rule_sha, now_ns=now_ns,
+    ) if rule_ok else (False, "")
 
     reasons: list[str] = []
     if (
@@ -213,9 +210,9 @@ def build_external_cancel_opportunities(
         or len(model_sha) != 40
     ):
         reasons.append("RUNTIME_IDENTITY_NOT_READY")
-    if not activation_ok:
-        reasons.append("EXTERNAL_CANCEL_FORWARD_GATE_NOT_ACTIVE")
-    if activation_ok and not signal_ok:
+    if not rule_ok:
+        reasons.append("EXTERNAL_CANCEL_RESEARCH_RULE_NOT_READY")
+    if rule_ok and not signal_ok:
         reasons.append("EXTERNAL_CANCEL_LIVE_SIGNAL_NOT_ACTIVE")
     if not executor_ready:
         reasons.append("MAKER_EXECUTOR_ACTIVE_ORDER_STATE_NOT_READY")
@@ -293,7 +290,7 @@ def build_external_cancel_opportunities(
             "uncertainty": {"lower_bound": 0.0, "upper_bound": 0.0, "status": "MATURE"},
             "calibration_status": "NOT_APPLICABLE",
             "latency": {
-                "profile_id": "frozen-btc-m5-external-cancel-v1",
+                "profile_id": "btc-m5-external-cancel-research-v1",
                 "profile_valid": True, "economic_percentile": "p99",
                 "arrival_ns": max(0, int(now_ns) - trigger_wall),
             },
@@ -314,7 +311,7 @@ def build_external_cancel_opportunities(
             "settlement": original["settlement"],
             "eligible": True,
             "reasons": [
-                "FROZEN_FORWARD_CANCEL_GATE_PASS",
+                "RESEARCH_CANCEL_RULE_MATCH",
                 "LIVE_RECEIVE_TIME_TRIGGER_ACTIVE",
                 f"STALE_BUY_OUTCOME_{stale_outcome}",
                 f"CANCEL_SIGNAL_VERSION_{signal_version}",

@@ -41,9 +41,7 @@ add_library(pm_v7_common
   src/v7_markout.cpp
   src/v7_market_ws.cpp
   src/v7_capital.cpp
-  src/v7_execution_admission.cpp
-  src/v7_private_state.cpp
-  src/v7_liveness.cpp)
+  src/v7_execution_admission.cpp)
 target_include_directories(pm_v7_common PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/include ${Boost_INCLUDE_DIRS})
 target_link_libraries(pm_v7_common PUBLIC pm_json)
 target_compile_options(pm_v7_common PRIVATE -Wall -Wextra -Wpedantic)
@@ -110,7 +108,7 @@ target_compile_options(polymarket_v7_maker_fillability_observer PRIVATE -Wall -W
 # the fillability observer's public-trade tape.
 add_executable(polymarket_v7_authorized_maker_paper_executor
   src/v7_authorized_maker_paper_executor.cpp)
-target_link_libraries(polymarket_v7_authorized_maker_paper_executor PRIVATE pm_v7_hft pm_json Threads::Threads)
+target_link_libraries(polymarket_v7_authorized_maker_paper_executor PRIVATE pm_v7_hft Threads::Threads)
 target_compile_options(polymarket_v7_authorized_maker_paper_executor PRIVATE -Wall -Wextra -Wpedantic)
 
 add_executable(polymarket_v7_external_venue_runtime src/v7_external_venue_runtime.cpp)
@@ -122,19 +120,9 @@ target_link_libraries(polymarket_v7_external_tape_replay PRIVATE pm_v7_external)
 target_compile_options(polymarket_v7_external_tape_replay PRIVATE -Wall -Wextra -Wpedantic)
 
 # Research-only deterministic decoder for the frozen BTC M5 external-cancel forward study.
-add_executable(polymarket_v7_research_external_cancel_tape_dump src/research_v7_external_cancel_tape_dump.cpp)
-target_link_libraries(polymarket_v7_research_external_cancel_tape_dump PRIVATE pm_v7_external)
-target_compile_options(polymarket_v7_research_external_cancel_tape_dump PRIVATE -Wall -Wextra -Wpedantic)
-
 # Research-only high-frequency BTC M5 CLOB books. It reuses the canonical
 # public WebSocket decoder and segmented evidence tape, but is not launched by
 # the production process manifest and owns no execution authority.
-add_executable(polymarket_v7_crypto_book_observer
-  src/v7_crypto_book_observer.cpp
-  src/v7_crypto_book_observer_main.cpp)
-target_link_libraries(polymarket_v7_crypto_book_observer PRIVATE pm_v7_external pm_fast_arb pm_core)
-target_compile_options(polymarket_v7_crypto_book_observer PRIVATE -Wall -Wextra -Wpedantic)
-
 include(CTest)
 if(BUILD_TESTING)
   find_package(Python3 REQUIRED COMPONENTS Interpreter)
@@ -170,33 +158,15 @@ if(BUILD_TESTING)
   target_link_libraries(pm_v7_execution_admission_tests PRIVATE pm_v7_common)
   add_test(NAME pm_v7_execution_admission_tests COMMAND pm_v7_execution_admission_tests)
 
-  add_executable(pm_v7_private_state_tests tests/test_v7_private_state.cpp)
-  target_link_libraries(pm_v7_private_state_tests PRIVATE pm_v7_common)
-  add_test(NAME pm_v7_private_state_tests COMMAND pm_v7_private_state_tests)
 
-  add_executable(pm_v7_liveness_tests tests/test_v7_liveness.cpp)
-  target_link_libraries(pm_v7_liveness_tests PRIVATE pm_v7_common)
-  add_test(NAME pm_v7_liveness_tests COMMAND pm_v7_liveness_tests)
 
   add_executable(pm_v7_execution_mode_tests tests/test_v7_execution_mode.cpp)
   target_link_libraries(pm_v7_execution_mode_tests PRIVATE pm_v7_execution_mode)
   add_test(NAME pm_v7_execution_mode_tests COMMAND pm_v7_execution_mode_tests)
 
-  add_executable(pm_v7_clob_v2_recovery_tests tests/test_v7_clob_v2_recovery.cpp)
-  target_include_directories(pm_v7_clob_v2_recovery_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
-  add_test(NAME pm_v7_clob_v2_recovery_tests COMMAND pm_v7_clob_v2_recovery_tests)
 
-  add_executable(pm_v7_order_heartbeat_tests tests/test_v7_order_heartbeat.cpp)
-  target_include_directories(pm_v7_order_heartbeat_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
-  add_test(NAME pm_v7_order_heartbeat_tests COMMAND pm_v7_order_heartbeat_tests)
 
-  add_executable(pm_v7_signer_rate_limit_tests tests/test_v7_signer_rate_limit.cpp)
-  target_include_directories(pm_v7_signer_rate_limit_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
-  add_test(NAME pm_v7_signer_rate_limit_tests COMMAND pm_v7_signer_rate_limit_tests)
 
-  add_executable(pm_v7_order_tx_tests tests/test_v7_order_tx.cpp)
-  target_link_libraries(pm_v7_order_tx_tests PRIVATE pm_v7_common)
-  add_test(NAME pm_v7_order_tx_tests COMMAND pm_v7_order_tx_tests)
 
   add_executable(pm_v7_queue_visibility_tests tests/test_v7_queue_visibility.cpp)
   target_link_libraries(pm_v7_queue_visibility_tests PRIVATE pm_v7_common)

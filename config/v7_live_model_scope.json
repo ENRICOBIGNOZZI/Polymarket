@@ -1,15 +1,9 @@
 {
-  "schema": "polymarket_v7_live_engine_scope_v2",
-  "version": 7,
-  "paper_only": true,
   "authenticated_execution": false,
-  "real_order_submission": false,
-  "real_capital_at_risk": false,
-  "live_algorithm_count": 2,
-  "live_algorithms": [
-    "CRYPTO_SETTLEMENT_ENGINE",
-    "STRUCTURAL_ARB_ENGINE"
-  ],
+  "component_independent_authority": false,
+  "crypto_settlement_engine_contract": "config/v7_crypto_settlement_engine.json",
+  "crypto_settlement_market_registry": "config/v7_crypto_settlement_markets.json",
+  "crypto_settlement_model_registry": "config/v7_crypto_settlement_model_registry.json",
   "internal_engine_components": {
     "CRYPTO_SETTLEMENT_ENGINE": [
       "crypto_settlement_fair",
@@ -21,28 +15,23 @@
       "fast_structural"
     ]
   },
-  "component_independent_authority": false,
-  "legacy_algorithm_families_removed": [
-    "micro_taker",
-    "graph_rv",
-    "ranking",
-    "pca",
-    "local_factor",
-    "wallet_intelligence",
-    "market_open",
-    "osint",
-    "sports_latency",
-    "cross_platform"
+  "live_algorithm_count": 2,
+  "live_algorithms": [
+    "CRYPTO_SETTLEMENT_ENGINE",
+    "STRUCTURAL_ARB_ENGINE"
   ],
-  "governance": {
-    "single_execution_owner": true,
+  "paper_only": true,
+  "real_capital_at_risk": false,
+  "real_order_submission": false,
+  "runtime_invariants": {
     "authority_registry": "config/v7_authority_registry.json",
-    "opportunity_contract": "schemas/v7/opportunity_envelope.schema.json",
     "global_portfolio_coordinator": "V7_GLOBAL_PORTFOLIO_COORDINATOR",
-    "automatic_promotion": false
+    "opportunity_contract": "schemas/v7/opportunity_envelope.schema.json",
+    "paper_only": true,
+    "real_order_submission": false,
+    "single_execution_owner": true
   },
-  "crypto_settlement_engine_contract": "config/v7_crypto_settlement_engine.json",
-  "crypto_settlement_market_registry": "config/v7_crypto_settlement_markets.json",
-  "crypto_settlement_model_registry": "config/v7_crypto_settlement_model_registry.json",
-  "structural_arb_engine_contract": "config/v7_structural_arb_engine.json"
+  "schema": "polymarket_v7_live_engine_scope_v2",
+  "structural_arb_engine_contract": "config/v7_structural_arb_engine.json",
+  "version": 7
 }

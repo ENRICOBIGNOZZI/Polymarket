@@ -32,7 +32,7 @@ def test_collect_once_discovers_future_and_surface_without_authority(monkeypatch
     assert len(row["option_surface"]) == 1
     assert row["option_surface"][0]["mark_iv"] == 50.0
     assert row["polling_latency_not_event_latency"] is True
-    assert row["execution_authority"] is False and row["promotion_authority"] is False
+    assert row["execution_authority"] is False
 
 
 def test_surface_rejects_missing_usable_points() -> None:

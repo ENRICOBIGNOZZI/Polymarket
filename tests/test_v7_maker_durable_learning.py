@@ -10,7 +10,7 @@ sys.path.insert(0, str(ROOT / "scripts"))
 
 from v7_maker_durable_learning import (  # noqa: E402
     adverse_markout_models, append_new, compact_evidence, fit_model, hazard_model, identity,
-    evidence_files, placement_features, rows, shadow_probe_policy_value, materialize_frozen_champion,
+    evidence_files, placement_features, rows, research_policy_value, materialize_research_model,
 )
 
 SHA = "a" * 40
@@ -19,10 +19,11 @@ SHA = "a" * 40
 def record(event_type: str, record_id: str, **extra):
     value = {
         "event_type": event_type, "record_id": record_id,
-        "strategy": "MICRO_MAKER_PRO", "model_sha": SHA,
+        "strategy": "CRYPTO_SETTLEMENT_ENGINE", "model_sha": SHA,
         "paper_only": True, "authenticated_execution": False,
         "recorded_ts_ms": 1_000,
         "metadata": {
+            "component": "professional_maker", "model_family": "professional_maker",
             "policy_hash": "policy", "config_hash": "config",
             "execution_semantics_version": "maker-paper-v7.2-bilateral-inventory",
             "outcome": "YES", "action": "JOIN", "execution_side": "BUY",
@@ -33,33 +34,20 @@ def record(event_type: str, record_id: str, **extra):
 
 
 class DurableLearningTests(unittest.TestCase):
-    def test_periodic_refit_never_rewrites_published_champion(self) -> None:
+    def test_research_model_is_atomically_refit_in_place(self) -> None:
         with tempfile.TemporaryDirectory() as folder:
-            p=pathlib.Path(folder)/"execution_model.json"
+            path=pathlib.Path(folder)/"execution_model.json"
             model=fit_model([],model_sha=SHA,policy_hash="p",config_hash="c",cold_fill_prior=.02)
-            first=materialize_frozen_champion(p,model);raw=p.read_bytes()
-            changed=dict(model);changed["generated_ts_ms"]+=300_000
-            changed["model_state"]="FUTURE_REFIT"
-            reused=materialize_frozen_champion(p,changed)
-            self.assertEqual(p.read_bytes(),raw)
-            self.assertEqual(reused["generated_ts_ms"],first["generated_ts_ms"])
-            self.assertNotEqual(reused["model_state"],"FUTURE_REFIT")
-            changed["model_sha"]="b"*40
-            with self.assertRaisesRegex(ValueError,"requires_new_run"):
-                materialize_frozen_champion(p,changed)
-            self.assertEqual(p.read_bytes(),raw)
-
-
-    def test_verified_cutover_gzip_remains_a_readable_evidence_source(self) -> None:
-        with tempfile.TemporaryDirectory() as folder:
-            root = pathlib.Path(folder)
-            source = root / "archive/canonical-ledger/execution-digest-100.jsonl.gz"
-            source.parent.mkdir(parents=True)
-            expected = record("ORDER_SUBMITTED", "gz-r1", order_id="gz-o1")
-            with gzip.open(source, "wt", encoding="utf-8") as handle:
-                handle.write(json.dumps(expected) + "\n")
-            self.assertEqual(evidence_files([root]), [source.resolve()])
-            self.assertEqual(list(rows([source]))[0]["record_id"], "gz-r1")
+            first=materialize_research_model(path,model)
+            self.assertEqual(first["artifact_role"],"research")
+            self.assertTrue(first["research_runtime_model"])
+            changed=dict(model);changed["generated_ts_ms"]+=300_000;changed["model_state"]="EVIDENCE_ACCUMULATING"
+            second=materialize_research_model(path,changed)
+            self.assertEqual(json.loads(path.read_text())["generated_ts_ms"],second["generated_ts_ms"])
+            self.assertNotEqual(first["generated_ts_ms"],second["generated_ts_ms"])
+            unsafe=dict(model);unsafe["real_order_submission"]=True
+            with self.assertRaisesRegex(ValueError,"safety_contract"):
+                materialize_research_model(path,unsafe)
 
     def test_research_markout_files_are_discovered_without_scanning_other_json(self) -> None:
         with tempfile.TemporaryDirectory() as folder:
@@ -76,59 +64,26 @@ class DurableLearningTests(unittest.TestCase):
             self.assertEqual(evidence_files([root]), [evidence.resolve()])
             self.assertEqual(list(rows([evidence]))[0]["record_id"], "research-mark")
 
-    def test_compaction_drops_non_training_telemetry_but_keeps_labeled_risk(self) -> None:
+    def test_compaction_keeps_only_current_run_exact_policy_lifecycle(self) -> None:
         with tempfile.TemporaryDirectory() as folder:
             root = pathlib.Path(folder)
             source = root / "execution.jsonl"
             store = root / "evidence.jsonl"
-            current_order = record(
-                "ORDER_SUBMITTED", "current-order", order_id="current",
-                intended_size=5.0,
-            )
-            current_state = record(
-                "ORDER_STATE", "current-state", order_id="current",
-                order_state="CANCELLED",
-            )
-            candidate = record("CANDIDATE", "candidate")
-            old_order = record(
-                "ORDER_SUBMITTED", "old-order", order_id="old-marked",
-                intended_size=5.0,
-            )
+            current_order = record("ORDER_SUBMITTED", "current-order", order_id="current", intended_size=5.0)
+            current_state = record("ORDER_STATE", "current-state", order_id="current", order_state="CANCELLED")
+            current_fill = record("FILL", "current-fill", order_id="current", filled_size=1.0)
+            current_fill["metadata"] = {"component": "professional_maker"}
+            old_order = record("ORDER_SUBMITTED", "old-order", order_id="old", intended_size=5.0)
             old_order["metadata"]["policy_hash"] = "old-policy"
-            old_fill = record("FILL", "old-fill", order_id="old-marked", filled_size=5.0)
-            old_fill["metadata"] = {}
-            old_mark = record(
-                "MARKOUT", "old-mark", order_id="old-marked",
-                markouts={"45s": -0.01},
-            )
-            old_mark["metadata"] = {}
-            old_unlabeled = record(
-                "ORDER_SUBMITTED", "old-unlabeled", order_id="old-unlabeled",
-                intended_size=5.0,
-            )
-            old_unlabeled["metadata"]["policy_hash"] = "old-policy"
-            source.write_text("".join(
-                json.dumps(row) + "\n" for row in (
-                    current_order, current_state, candidate, old_order,
-                    old_fill, old_mark, old_unlabeled,
-                )
-            ), encoding="utf-8")
+            candidate = record("CANDIDATE", "candidate")
+            source.write_text("".join(json.dumps(row)+"\n" for row in (current_order,current_state,current_fill,old_order,candidate)), encoding="utf-8")
+            values,status=compact_evidence([source],store_path=store,policy_hash="policy",config_hash="config")
+            self.assertEqual({row["record_id"] for row in values},{"current-order","current-state","current-fill"})
+            self.assertEqual(status["exact_policy_orders"],1)
+            self.assertEqual(status["evidence_scope"],"CURRENT_RUN_EXACT_POLICY_ONLY")
+            self.assertEqual(status["retained_records"],3)
 
-            values, status = compact_evidence(
-                [source], store_path=store,
-                policy_hash="policy", config_hash="config",
-            )
-
-            self.assertEqual(
-                {row["record_id"] for row in values},
-                {"current-order", "current-state", "old-order", "old-fill", "old-mark"},
-            )
-            self.assertEqual(status["exact_policy_orders"], 1)
-            self.assertEqual(status["risk_labeled_cross_policy_orders"], 1)
-            self.assertEqual(status["retained_records"], 5)
-            self.assertEqual(len(store.read_text(encoding="utf-8").splitlines()), 5)
-
-    def test_append_store_deduplicates_across_cutover_sources(self) -> None:
+    def test_append_store_deduplicates_within_current_run(self) -> None:
         with tempfile.TemporaryDirectory() as folder:
             store = pathlib.Path(folder) / "evidence.jsonl"
             row = record("ORDER_SUBMITTED", "r1", order_id="o1", intended_size=5.0)
@@ -197,7 +152,8 @@ class DurableLearningTests(unittest.TestCase):
         model = fit_model([], model_sha=SHA, policy_hash="policy",
                           config_hash="config", cold_fill_prior=0.02)
         self.assertEqual(model["model_state"], "COLD_START")
-        self.assertEqual(model["promotion_state"], "COLD_START_CHAMPION")
+        self.assertEqual(model["artifact_role"], "research")
+        self.assertTrue(model["research_runtime_model"])
         self.assertFalse(model["joint_cycle_model"]["uses_product_of_marginals"])
         self.assertEqual(model["groups"]["GLOBAL"]["fill_probability"], 0.02)
         self.assertEqual(
@@ -207,9 +163,9 @@ class DurableLearningTests(unittest.TestCase):
         self.assertFalse(model["learned_placement_policy"]["valid"])
         self.assertEqual(
             model["learned_placement_policy"]["state"], "EVIDENCE_ACCUMULATING")
-        self.assertFalse(model["shadow_probe_policy_value"]["promotion_gate_pass"])
+        self.assertFalse(model["research_policy_value"]["research_value_supported"])
 
-    def test_shadow_probe_policy_value_requires_complete_forward_oos_scale(self) -> None:
+    def test_research_policy_value_reports_strict_economic_support_separately(self) -> None:
         values = []
         for index in range(20):
             candidate_id = f"probe-{index}"
@@ -239,11 +195,11 @@ class DurableLearningTests(unittest.TestCase):
                 "probe_phase": "TERMINAL_REJECTED", "terminal": True,
             }
             values.extend((assignment, terminal))
-        report = shadow_probe_policy_value(values)
+        report = research_policy_value(values)
         self.assertEqual(report["terminal_episodes"], 20)
         self.assertEqual(report["forward_oos_episodes"], 4)
         self.assertEqual(report["invalid_records"], 0)
-        self.assertFalse(report["promotion_gate_pass"])
+        self.assertFalse(report["research_value_supported"])
         self.assertIn(
             "MINIMUM_10000_FORWARD_OOS_QUOTE_EPISODES",
             report["blocking_reasons"],
@@ -345,7 +301,7 @@ class DurableLearningTests(unittest.TestCase):
         self.assertEqual(cells["market-2"]["price_reach_rate"], 1.0)
         self.assertEqual(
             cells["market-1"]["role"],
-            "SELECTOR_FEEDBACK_ONLY_NO_AUTHORITY_OR_PROMOTION_CREDIT",
+            "SELECTOR_FEEDBACK_ONLY_NO_EXECUTION_AUTHORITY",
         )
 
     def test_placement_features_are_side_oriented_and_complete(self) -> None:
@@ -374,14 +330,6 @@ class DurableLearningTests(unittest.TestCase):
         self.assertEqual(features[11], 0.0)
         self.assertEqual(features[12], 0.0)
 
-    def test_incompatible_policy_is_stored_but_not_trained(self) -> None:
-        row = record("ORDER_SUBMITTED", "r1", order_id="o1", intended_size=5.0)
-        row["metadata"]["policy_hash"] = "old"
-        model = fit_model([row], model_sha=SHA, policy_hash="policy",
-                          config_hash="config", cold_fill_prior=0.02)
-        self.assertEqual(model["training_window"]["records"], 0)
-        self.assertEqual(model["excluded_incompatible_records"]["policy_hash"], 1)
-
     def test_in_sample_size_never_claims_mature_without_oos(self) -> None:
         values = []
         for index in range(60):
@@ -394,11 +342,12 @@ class DurableLearningTests(unittest.TestCase):
         model = fit_model(values, model_sha=SHA, policy_hash="policy",
                           config_hash="config", cold_fill_prior=0.02)
         self.assertEqual(model["model_state"], "EVIDENCE_ACCUMULATING")
-        self.assertEqual(model["promotion_state"], "PAPER_LEARNING_CHAMPION")
-        self.assertFalse(model["economically_mature"])
+        self.assertEqual(model["artifact_role"], "research")
+        self.assertTrue(model["research_runtime_model"])
         self.assertIsNone(model["validation_window"])
+        self.assertIn(model["economic_evidence_state"], {"SUPPORTED", "DIAGNOSTIC_ACCUMULATING"})
 
-    def test_fill_conditioned_markout_raises_risk_floor_without_promotion_credit(self) -> None:
+    def test_fill_conditioned_markout_raises_current_run_risk_floor(self) -> None:
         order = record(
             "ORDER_SUBMITTED", "order", order_id="o1", intended_size=5.0,
             intended_action="IMPROVE1", side="SELL",
@@ -413,26 +362,14 @@ class DurableLearningTests(unittest.TestCase):
         self.assertEqual(risk["GLOBAL"]["adverse_markout_event_clusters"], 1)
         self.assertEqual(risk["GLOBAL"]["adverse_markout_horizon_priority"][0], "45s")
 
-        # A prior policy cannot improve the new policy's fill estimate, but its
-        # same-semantics adverse mark remains a conservative risk floor in its
-        # homologous execution cell. Sparse cross-policy losses must not become
-        # a universal GLOBAL floor that disables every unexplored cell.
-        order["metadata"]["policy_hash"] = "old-policy"
         model = fit_model(
             [order, fill, mark_1, mark_45], model_sha=SHA,
             policy_hash="policy", config_hash="config", cold_fill_prior=0.02,
         )
-        self.assertEqual(model["groups"]["GLOBAL"]["fill_probability"], 0.02)
-        self.assertEqual(model["groups"]["GLOBAL"]["adverse_markout_per_share"], 0.002)
-        self.assertAlmostEqual(
-            model["groups"]["IMPROVE1|YES|SELL"]["adverse_markout_per_share"], expected)
-        self.assertEqual(
-            model["groups"]["IMPROVE1|YES|SELL"]["adverse_markout_observations"], 1)
-        self.assertAlmostEqual(
-            model["cross_policy_global_adverse_diagnostic"]["adverse_markout_per_share"],
-            expected)
-        self.assertFalse(model["groups"]["GLOBAL"]["mature"])
-        self.assertGreater(model["risk_only_cross_policy_records"], 0)
+        self.assertGreater(model["groups"]["GLOBAL"]["adverse_markout_per_share"], 0.002)
+        self.assertEqual(model["groups"]["GLOBAL"]["adverse_markout_observations"], 1)
+        self.assertEqual(model["current_run_global_adverse"]["adverse_markout_observations"], 1)
+
 
     def test_symmetric_outcome_markout_pools_action_side_without_fill_credit(self) -> None:
         order = record(
@@ -440,7 +377,6 @@ class DurableLearningTests(unittest.TestCase):
             intended_action="JOIN", side="SELL",
         )
         order["metadata"]["outcome"] = "YES"
-        order["metadata"]["policy_hash"] = "old-policy"
         fill = record("FILL", "fill", order_id="o1", filled_size=5.0)
         mark = record("MARKOUT", "mark", order_id="o1", markouts={"45s": -0.05})
 
@@ -456,7 +392,7 @@ class DurableLearningTests(unittest.TestCase):
         self.assertEqual(model["groups"]["JOIN|NO|SELL"]["orders"], 0)
         self.assertEqual(model["groups"]["JOIN|NO|SELL"]["filled_orders"], 0)
 
-    def test_placement_markout_inherits_compatibility_from_submitted_order(self) -> None:
+    def test_placement_markout_inherits_identity_from_current_submitted_order(self) -> None:
         order = record(
             "ORDER_SUBMITTED", "order", order_id="o1", event_id="event-1",
             intended_size=5.0, intended_action="JOIN", side="SELL",

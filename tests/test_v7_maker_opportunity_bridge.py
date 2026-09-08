@@ -84,19 +84,25 @@ def model(*, mature: bool = True) -> dict:
         "real_order_submission": False,
         "model_sha": SHA,
         "model_state": "MATURE" if mature else "EVIDENCE_ACCUMULATING",
+        "artifact_role": "research",
+        "research_runtime_model": True,
         "groups": {
             "JOIN:YES:BUY": {
                 "mature": mature,
                 "orders": 100 if mature else 10,
                 "filled_orders": 50 if mature else 1,
+                "event_clusters": 20 if mature else 1,
                 "fill_probability": 0.50,
+                "fill_probability_lower_90": 0.35 if mature else 0.0,
                 "adverse_markout_per_share": 0.001,
             },
             "GLOBAL": {
                 "mature": mature,
                 "orders": 100 if mature else 10,
                 "filled_orders": 50 if mature else 1,
+                "event_clusters": 20 if mature else 1,
                 "fill_probability": 0.50,
+                "fill_probability_lower_90": 0.35 if mature else 0.0,
                 "adverse_markout_per_share": 0.001,
             },
         },
@@ -127,7 +133,11 @@ def fair_status() -> dict:
         },
         "fair": {
             "valid": True,
-            "explicit_champion_applied": True,
+            "research_model": True,
+            "research_model_state": "FROZEN_INFERENCE_ONLY",
+            "probability_interval_validated": True,
+            "real_money_authority": False,
+            "authority": "SHADOW",
             "lower": 0.65,
             "yes": 0.70,
             "upper": 0.75,
@@ -141,12 +151,13 @@ def fair_status() -> dict:
 def bootstrap_fair_status() -> dict:
     value = fair_status()
     value["fair"].update({
-        "explicit_champion_applied": False,
+        "research_model": False,
+        "probability_interval_validated": False,
         "paper_exploration_bootstrap": True,
         "inference_state": "VALID_PAPER_EXPLORATION_BOOTSTRAP",
         "calibration_state": "PAPER_EXPLORATION_BOOTSTRAP_APPLIED",
         "probability_model_id": "btc_m5_same_oracle_diffusion_bootstrap_v1",
-        "promotion_eligible": False,
+        "research_only": True,
         "real_money_authority": False,
         "uses_polymarket_price_as_feature": False,
         "authority": "SHADOW",
@@ -205,7 +216,46 @@ def test_mature_positive_cell_becomes_typed_make_opportunity() -> None:
         assert row["crypto_context"]["research_only"] is False
 
 
-def test_immature_control_cell_becomes_bounded_zero_promotion_paper_probe() -> None:
+def test_make_rejects_rich_pm_prior_that_is_stale_or_already_repriced() -> None:
+    with tempfile.TemporaryDirectory() as directory:
+        run_root=Path(directory);setup_run(run_root,mature=False)
+        fair=fair_status();fair['fair'].update({
+            'uses_polymarket_price_as_feature':True,'market_prior_causal_cut_valid':True,
+            'pm_mid':.51,'pm_mid_receive_ts_ms':1800})
+        write(run_root/'external_fair/status.json',fair)
+        with mock.patch.object(bridge,'_paper_crypto_context',return_value=context()):
+            rows,status=bridge.build_maker_opportunities(run_root,now_ns=2_000_000_000,repository_root=ROOT)
+        assert len(rows)==1,status
+        fair['fair']['pm_mid']=.40;write(run_root/'external_fair/status.json',fair)
+        with mock.patch.object(bridge,'_paper_crypto_context',return_value=context()):
+            rows,status=bridge.build_maker_opportunities(run_root,now_ns=2_000_000_000,repository_root=ROOT)
+        assert rows==[];assert status['rejected']['RICH_PM_PRIOR_STALE_OR_REPRICED']==1
+        fair['fair']['pm_mid']=.51;fair['fair']['pm_mid_receive_ts_ms']=1000;write(run_root/'external_fair/status.json',fair)
+        with mock.patch.object(bridge,'_paper_crypto_context',return_value=context()):
+            rows,status=bridge.build_maker_opportunities(run_root,now_ns=2_000_000_000,repository_root=ROOT)
+        assert rows==[];assert status['rejected']['RICH_PM_PRIOR_STALE_OR_REPRICED']==1
+
+
+def test_current_run_research_model_updates_fill_posterior_directly() -> None:
+    with tempfile.TemporaryDirectory() as directory:
+        run_root=Path(directory);setup_run(run_root,mature=False)
+        research=model(mature=False)
+        research["groups"]["JOIN:YES:BUY"].update(
+            fill_probability=.0044,fill_probability_lower_90=.0008,orders=71,filled_orders=0,event_clusters=5,mature=False)
+        research["groups"]["GLOBAL"].update(
+            fill_probability=.0044,fill_probability_lower_90=.0008,orders=71,filled_orders=0,event_clusters=5,mature=False)
+        write(run_root/"micro_maker/execution_model.json",research)
+        with mock.patch.object(bridge,"_paper_crypto_context",return_value=context()):
+            rows,status=bridge.build_maker_opportunities(run_root,now_ns=2_000_000_000,repository_root=ROOT)
+        assert len(rows)==1,status
+        row=OpportunityEnvelope.parse(rows[0]).raw
+        assert status["research_execution_model"] is True
+        assert status["research_evidence_scope"]=="CURRENT_RUN_ONLY"
+        assert abs(row["execution_alpha"]["fill_probability"]["point"]-.0044)<1e-12
+        assert row["execution_alpha"]["evidence_status"]=="IMMATURE"
+        assert row["exploration"]["research_only"] is True
+
+def test_immature_control_cell_becomes_bounded_research_paper_probe() -> None:
     with tempfile.TemporaryDirectory() as directory:
         run_root = Path(directory)
         setup_run(run_root, mature=False)
@@ -217,7 +267,7 @@ def test_immature_control_cell_becomes_bounded_zero_promotion_paper_probe() -> N
         row = OpportunityEnvelope.parse(rows[0]).raw
         assert row["action"] == "MAKE"
         assert row["exploration"]["mode"] == "PAPER_BOOTSTRAP_PROBE"
-        assert row["exploration"]["promotion_eligible"] is False
+        assert row["exploration"]["research_only"] is True
         assert row["exploration"]["robust_candidate"] is False
         assert row["exploration"]["model_id"] == "btc_m5_maker_execution_bootstrap_probe_v1"
         assert row["exploration"]["probe_loss_cap"] <= 2.0
@@ -239,11 +289,11 @@ def test_bootstrap_fair_can_only_power_loss_capped_paper_probe() -> None:
         assert len(rows) == 1
         row = OpportunityEnvelope.parse(rows[0]).raw
         assert row["exploration"]["mode"] == "PAPER_BOOTSTRAP_PROBE"
-        assert row["exploration"]["promotion_eligible"] is False
+        assert row["exploration"]["research_only"] is True
         assert row["exploration"]["robust_candidate"] is False
         assert row["conservative_expected_wealth_change"] <= 0.0
-        assert "PAPER_EXPLORATION_BOOTSTRAP_FAIR" in row["reasons"]
-        assert "EXPLICIT_FAIR_CHAMPION" not in row["reasons"]
+        assert "STRUCTURAL_RESEARCH_FALLBACK" in row["reasons"]
+        assert "FROZEN_RESEARCH_FAIR" not in row["reasons"]
         leg = row["execution_plan"]["legs"][0]
         assert leg["target_quantity"] * leg["limit_price"] <= 2.0 + 1e-9
         assert status["typed_make_probe_opportunities"] == 1
@@ -278,9 +328,9 @@ def test_settlement_anchor_cold_prior_cell_becomes_only_paper_probe() -> None:
         assert len(rows) == 1, status
         row = OpportunityEnvelope.parse(rows[0]).raw
         assert row["exploration"]["mode"] == "PAPER_BOOTSTRAP_PROBE"
-        assert row["exploration"]["promotion_eligible"] is False
+        assert row["exploration"]["research_only"] is True
         assert row["exploration"]["robust_candidate"] is False
-        assert "PAPER_EXPLORATION_BOOTSTRAP_FAIR" in row["reasons"]
+        assert "STRUCTURAL_RESEARCH_FALLBACK" in row["reasons"]
         assert row["execution_alpha"]["fill_probability"]["point"] > 0.0
         assert row["execution_plan"]["legs"][0]["target_quantity"] \
             * row["execution_plan"]["legs"][0]["limit_price"] <= 2.0 + 1e-9
@@ -301,12 +351,12 @@ def test_bootstrap_fair_cannot_power_noncontrol_or_robust_make() -> None:
             )
         assert rows == []
         assert status["state"] == "NO_EXECUTABLE_MAKE"
-        assert status["rejected"]["BOOTSTRAP_FAIR_REQUIRES_PAPER_PROBE"] == 1
+        assert status["rejected"]["POINT_ONLY_FAIR_REQUIRES_PAPER_PROBE"] == 1
 
 
-def test_bootstrap_fair_that_claims_promotion_or_pm_feature_fails_closed() -> None:
+def test_bootstrap_fair_with_invalid_research_flag_or_pm_feature_fails_closed() -> None:
     for mutation in (
-        lambda fair: fair.update(promotion_eligible=True),
+        lambda fair: fair.update(research_only=False),
         lambda fair: fair.update(uses_polymarket_price_as_feature=True),
         lambda fair: fair.update(real_money_authority=True),
     ):
@@ -321,7 +371,7 @@ def test_bootstrap_fair_that_claims_promotion_or_pm_feature_fails_closed() -> No
             )
             assert rows == []
             assert status["state"] == "FAIL_CLOSED"
-            assert "SETTLEMENT_FAIR_NOT_MATURE_OR_VERIFIED" in status["reasons"]
+            assert "SETTLEMENT_RESEARCH_FAIR_NOT_READY" in status["reasons"]
 
 
 def test_immature_noncontrol_cell_still_cannot_manufacture_make_authority() -> None:
@@ -352,7 +402,7 @@ def test_unverified_settlement_fair_fails_closed() -> None:
         )
         assert rows == []
         assert status["state"] == "FAIL_CLOSED"
-        assert "SETTLEMENT_FAIR_NOT_MATURE_OR_VERIFIED" in status["reasons"]
+        assert "SETTLEMENT_RESEARCH_FAIR_NOT_READY" in status["reasons"]
 
 
 def test_semantic_hash_mismatch_fails_closed() -> None:
@@ -417,11 +467,11 @@ def test_canonical_selector_timestamp_is_receive_time_causal_and_stale_fails_clo
 
 if __name__ == "__main__":
     test_mature_positive_cell_becomes_typed_make_opportunity()
-    test_immature_control_cell_becomes_bounded_zero_promotion_paper_probe()
+    test_immature_control_cell_becomes_bounded_research_paper_probe()
     test_bootstrap_fair_can_only_power_loss_capped_paper_probe()
     test_settlement_anchor_cold_prior_cell_becomes_only_paper_probe()
     test_bootstrap_fair_cannot_power_noncontrol_or_robust_make()
-    test_bootstrap_fair_that_claims_promotion_or_pm_feature_fails_closed()
+    test_bootstrap_fair_with_invalid_research_flag_or_pm_feature_fails_closed()
     test_immature_noncontrol_cell_still_cannot_manufacture_make_authority()
     test_unverified_settlement_fair_fails_closed()
     test_semantic_hash_mismatch_fails_closed()

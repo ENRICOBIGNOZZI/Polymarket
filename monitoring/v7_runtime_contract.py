@@ -103,22 +103,6 @@ def _ledger_contract(path: Path, expected_sha: str) -> tuple[list[str], int]:
     return reasons, rows
 
 
-def _paper_inventory(portfolio: dict[str, Any]) -> bool:
-    sleeves = portfolio.get("sleeves")
-    if not isinstance(sleeves, dict):
-        return False
-    for row in sleeves.values():
-        if not isinstance(row, dict):
-            continue
-        for key in ("open_positions", "live_units", "pending_orders", "inventory"):
-            try:
-                if abs(float(row.get(key) or 0.0)) > 0.0:
-                    return True
-            except (TypeError, ValueError, OverflowError):
-                return True
-    return False
-
-
 def assess_reconciliation(
     run_root: Path,
     expected_sha: str,
@@ -141,7 +125,25 @@ def assess_reconciliation(
     runtime = read_json(run_root / "control" / "runtime_status.json")
     portfolio = read_json(run_root / "control" / "portfolio_state.json")
     kill = read_json(run_root / "control" / "KILL")
+    account = read_json(run_root / "external_fair" / "paper_router_status.json")
+    executor = read_json(run_root / "micro_maker" / "authorized_make_executor_status.json")
     lock_pid_path = run_root / "control" / "runtime.lock" / "pid"
+    inventory_present = False
+    for name, value, fields in (
+        ("paper_account", account, ("open_positions", "pending_maker_orders")),
+        ("maker_executor", executor, ("active_orders",)),
+    ):
+        if not value:
+            continue
+        if value.get("paper_only") is not True or value.get("authenticated_execution") is not False:
+            unsafe.append(f"{name}_contract_unsafe")
+            continue
+        try:
+            inventory_present = inventory_present or any(int(value.get(field) or 0) > 0 for field in fields)
+        except (TypeError, ValueError, OverflowError):
+            unsafe.append(f"{name}_inventory_invalid")
+    if inventory_present:
+        recoverable.append("paper_inventory_reconciliation_required")
 
     if lock_pid_path.exists():
         try:
@@ -174,7 +176,6 @@ def assess_reconciliation(
             else:
                 unsafe.append("runtime_killed")
 
-    inventory_present = _paper_inventory(portfolio)
     if portfolio:
         if portfolio.get("paper_only") is not True or portfolio.get("authenticated_execution") is not False:
             unsafe.append("paper_inventory_contract_unsafe")
@@ -187,8 +188,6 @@ def assess_reconciliation(
             drawdown, maximum = math.inf, 0.15
         if not math.isfinite(drawdown) or drawdown >= maximum:
             unsafe.append("portfolio_drawdown_limit")
-        if inventory_present:
-            recoverable.append("paper_inventory_rebuild_required")
 
     ledger_reasons, rows = _ledger_contract(run_root / "ledger" / "execution.jsonl", expected_sha)
     unsafe.extend(ledger_reasons)

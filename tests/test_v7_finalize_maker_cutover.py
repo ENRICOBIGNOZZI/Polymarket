@@ -1,338 +1,64 @@
 from __future__ import annotations
-
-import json
-import sys
-import tempfile
-import unittest
+import json,sys,tempfile,unittest
 from pathlib import Path
-from unittest.mock import patch
-
-ROOT = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(ROOT / "scripts"))
-
+ROOT=Path(__file__).resolve().parents[1]
+sys.path.insert(0,str(ROOT/'scripts'))
 import v7_finalize_maker_cutover as cutover
+SHA='a'*40
+NONCE=f"{'b'*40}.123.456"
 
+def write(path:Path,value:dict)->None:
+    path.parent.mkdir(parents=True,exist_ok=True)
+    path.write_text(json.dumps(value)+'\n',encoding='utf-8')
 
-SHA = "a" * 40
-NONCE = f"{'b' * 40}.123.456"
+def fixture(root:Path)->None:
+    write(root/'control/CUTOVER_DRAIN',{
+        'schema':'polymarket_v7_cutover_drain_v1','nonce':NONCE,
+        'current_sha':SHA,'target_sha':'b'*40,'paper_only':True})
+    write(root/'control/runtime_status.json',{
+        'model_sha':SHA,'state':'stopped','paper_only':True,
+        'authenticated_execution':False,'real_order_submission':False,
+        'economic_new_risk_ready':False,'authorized_alpha_actions':[]})
+    write(root/'micro_maker/authorized_make_executor_status.json',{
+        'schema':'polymarket_v7_authorized_maker_paper_executor_status_v1',
+        'model_sha':SHA,'paper_only':True,'authenticated_execution':False,
+        'real_order_submission':False,'active_orders':0})
+    write(root/'external_fair/paper_router_status.json',{
+        'schema':'polymarket_v7_external_fair_paper_router_status_v1',
+        'model_sha':SHA,'paper_only':True,'authenticated_execution':False,
+        'real_order_submission':False,'open_positions':0,'pending_maker_orders':0})
+    ledger=root/'ledger/execution.jsonl';ledger.parent.mkdir(parents=True);ledger.write_text('',encoding='utf-8')
 
+class FinalizerTests(unittest.TestCase):
+    def test_flat_current_paper_state_produces_deterministic_proof(self):
+        with tempfile.TemporaryDirectory() as d:
+            root=Path(d);fixture(root)
+            out=cutover.finalize(root,SHA,NONCE,now_ms=123456)
+            self.assertEqual(out['state'],'MAKER_FLAT')
+            self.assertEqual(out['paper_account_open_positions'],0)
+            self.assertEqual(out['canonical_flat_proof']['active_orders'],0)
+            self.assertEqual(len(out['proof_sha256']),64)
+            saved=json.loads((root/'control/maker_cutover_flat_proof.json').read_text())
+            self.assertEqual(saved,out)
 
-def write(path: Path, value: dict) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(value) + "\n", encoding="utf-8")
+    def test_active_maker_order_fails_closed(self):
+        with tempfile.TemporaryDirectory() as d:
+            root=Path(d);fixture(root)
+            p=root/'micro_maker/authorized_make_executor_status.json';v=json.loads(p.read_text());v['active_orders']=1;write(p,v)
+            with self.assertRaisesRegex(cutover.MakerCutoverError,'live_orders'):
+                cutover.finalize(root,SHA,NONCE)
 
+    def test_open_paper_position_fails_closed(self):
+        with tempfile.TemporaryDirectory() as d:
+            root=Path(d);fixture(root)
+            p=root/'external_fair/paper_router_status.json';v=json.loads(p.read_text());v['open_positions']=1;write(p,v)
+            with self.assertRaisesRegex(cutover.MakerCutoverError,'paper_account_not_flat'):
+                cutover.finalize(root,SHA,NONCE)
 
-class MakerCutoverFinalizerTest(unittest.TestCase):
-    def fixture(self, root: Path, now: int) -> None:
-        write(root / "control/CUTOVER_DRAIN", {
-            "schema": "polymarket_v7_cutover_drain_v1", "nonce": NONCE,
-            "current_sha": SHA, "target_sha": "b" * 40, "paper_only": True,
-        })
-        write(root / "micro_maker/state.json", {
-            "paper_only": True, "authenticated_execution": False, "model_sha": SHA,
-            "starting_capital": 100.0, "cash": 95.0, "realized_trading_pnl": 0.0,
-            "inventory": {"m1": {
-                "condition_id": "c1", "yes_token": "yes", "no_token": "no",
-                "yes_shares": 10.0, "no_shares": 0.0,
-                "yes_cost": 5.0, "no_cost": 0.0,
-            }},
-        })
-        write(root / "micro_maker/status.json", {
-            "schema": "polymarket_v7_professional_maker_status_v1",
-            "timestamp_ms": now - 1, "paper_only": True, "authenticated_execution": False,
-            "model_sha": SHA, "marking_complete": True, "killed": False,
-            "drain_requested": True, "new_risk_frozen": True,
-            "cash": 95.0, "equity": 99.79,
-            "positions": [{
-                "market_id": "m1", "condition_id": "c1", "token_id": "yes",
-                "shares": 10.0, "full_depth_vwap": 0.49,
-                "gross_executable_liquidation_value": 4.9,
-                "exit_fee": 0.1, "exit_fee_source": "test-authoritative",
-                "slippage_haircut": 0.01, "net_executable_liquidation_value": 4.79,
-                "exchange_ts_ms": now - 3, "receive_ts_ms": now - 2,
-                "book_snapshot_id": "snapshot-1",
-            }],
-        })
+    def test_wrong_drain_identity_fails_closed(self):
+        with tempfile.TemporaryDirectory() as d:
+            root=Path(d);fixture(root)
+            with self.assertRaisesRegex(cutover.MakerCutoverError,'cutover_drain_identity_mismatch'):
+                cutover.finalize(root,SHA,'wrong')
 
-    def test_verified_inventory_is_flattened_with_terminal_ledger_records(self) -> None:
-        with tempfile.TemporaryDirectory() as directory:
-            root = Path(directory)
-            now = 1_788_040_000_000
-            self.fixture(root, now)
-            receipt = cutover.finalize(root, SHA, NONCE, now_ms=now)
-            self.assertEqual(receipt["state"], "MAKER_FLAT")
-            self.assertEqual(receipt["positions_liquidated"], 1)
-            self.assertAlmostEqual(receipt["final_pnl"], -0.21)
-            state = json.loads((root / "micro_maker/state.json").read_text())
-            self.assertEqual(state["inventory"]["m1"]["yes_shares"], 0.0)
-            self.assertAlmostEqual(state["cash"], 99.79)
-            status = json.loads((root / "micro_maker/status.json").read_text())
-            self.assertEqual(status["positions"], [])
-            self.assertTrue(status["drain_complete"])
-            events = [json.loads(line) for line in (root / "ledger/execution.jsonl").read_text().splitlines()]
-            self.assertEqual([row["event_type"] for row in events], ["FILL", "FINAL"])
-            self.assertLess(events[0]["recorded_ts_ms"], events[1]["recorded_ts_ms"])
-            self.assertEqual(events[0]["side"], "SELL")
-            self.assertEqual(events[0]["metadata"]["purpose"], "LIQUIDATION")
-            self.assertAlmostEqual(events[1]["final_pnl"], -0.21)
-            # The receipt makes a completed retry idempotent.
-            self.assertEqual(cutover.finalize(root, SHA, NONCE, now_ms=now), receipt)
-
-    def _never_started_fixture(
-        self, root: Path, now: int, *, ledger_strategy: str | None = None,
-    ) -> Path:
-        write(root / "control/CUTOVER_DRAIN", {
-            "schema": "polymarket_v7_cutover_drain_v1", "nonce": NONCE,
-            "current_sha": SHA, "target_sha": "b" * 40, "paper_only": True,
-        })
-        write(root / "control/runtime_status.json", {
-            "model_sha": SHA, "paper_only": True, "authenticated_execution": False,
-            "real_order_submission": False, "state": "stopping",
-            "economic_new_risk_ready": False, "authorized_alpha_actions": [],
-        })
-        write(root / "control/portfolio_state.json", {
-            "paper_only": True, "authenticated_execution": False, "killed": False,
-            "fatal_sleeves": [], "sleeves": {"micro_maker": {
-                "source": "zero_authority_budget", "killed": False,
-                "budget": 2_000.0, "equity": 2_000.0,
-            }},
-        })
-        ledger = root / "ledger/execution.jsonl"
-        ledger.parent.mkdir(parents=True)
-        if ledger_strategy is None:
-            ledger.write_text("", encoding="utf-8")
-        else:
-            event = cutover.LedgerEvent(
-                event_type="FINAL", strategy=ledger_strategy, model_sha=SHA,
-                recorded_ts_ms=now - 10, final_pnl=0.0,
-            )
-            ledger.write_text(json.dumps(event.to_dict()) + "\n", encoding="utf-8")
-        mark = root / "control/maker_cutover_mark.json"
-        write(mark, {
-            "schema": "polymarket_v7_professional_maker_status_v1",
-            "timestamp_ms": now - 1, "paper_only": True,
-            "authenticated_execution": False, "real_order_submission": False,
-            "model_sha": None, "marking_complete": True, "killed": False,
-            "drain_requested": True, "new_risk_frozen": True,
-            "drain_complete": True, "degraded": False,
-            "source": "not_started", "unmarkable_tokens": [],
-        })
-        return mark
-
-    def test_never_started_maker_accepts_shared_non_maker_ledger(self) -> None:
-        with tempfile.TemporaryDirectory() as directory:
-            root = Path(directory)
-            now = 1_788_040_000_000
-            mark = self._never_started_fixture(
-                root, now, ledger_strategy="CRYPTO_INFORMED_TAKER")
-            receipt = cutover.finalize(root, SHA, NONCE, mark_path=mark, now_ms=now)
-            self.assertEqual(receipt["state"], "MAKER_FLAT")
-            self.assertTrue(receipt["never_started"])
-            self.assertEqual(receipt["positions_liquidated"], 0)
-            self.assertEqual(receipt["ledger_record_ids"], [])
-            proof = receipt["absence_proof"]
-            self.assertEqual(proof["maker_portfolio_source"], "zero_authority_budget")
-            self.assertEqual(proof["ledger_records"], 1)
-            self.assertEqual(proof["exact_sha_records"], 1)
-            self.assertEqual(proof["exact_sha_execution_events"], 1)
-            self.assertEqual(proof["exact_sha_maker_events"], 0)
-            self.assertGreater(proof["ledger_bytes"], 0)
-            self.assertEqual(len(proof["ledger_sha256"]), 64)
-            self.assertFalse((root / "micro_maker/state.json").exists())
-            self.assertEqual(
-                cutover.finalize(root, SHA, NONCE, mark_path=mark, now_ms=now),
-                receipt,
-            )
-            next_nonce = f"{'c' * 40}.124.457"
-            sentinel = json.loads((root / "control/CUTOVER_DRAIN").read_text())
-            sentinel["nonce"] = next_nonce
-            write(root / "control/CUTOVER_DRAIN", sentinel)
-            mark_value = json.loads(mark.read_text())
-            mark_value["timestamp_ms"] = now + 1
-            write(mark, mark_value)
-            retried = cutover.finalize(
-                root, SHA, next_nonce, mark_path=mark, now_ms=now + 1)
-            self.assertEqual(retried["nonce"], next_nonce)
-            self.assertTrue(retried["never_started"])
-
-    def test_never_started_maker_rejects_exact_sha_maker_ledger_event(self) -> None:
-        with tempfile.TemporaryDirectory() as directory:
-            root = Path(directory)
-            now = 1_788_040_000_000
-            mark = self._never_started_fixture(
-                root, now, ledger_strategy="MICRO_MAKER_PRO")
-            with self.assertRaisesRegex(
-                cutover.MakerCutoverError,
-                "maker_never_started_ledger_contains_maker_events",
-            ):
-                cutover.finalize(root, SHA, NONCE, mark_path=mark, now_ms=now)
-
-    def test_crash_after_state_commit_resumes_with_stale_mark_exactly_once(self) -> None:
-        with tempfile.TemporaryDirectory() as directory:
-            root = Path(directory)
-            now = 1_788_040_000_000
-            self.fixture(root, now)
-            original_atomic = cutover.atomic_json
-            crashed = False
-
-            def crash_before_status(path: Path, value: dict) -> None:
-                nonlocal crashed
-                if path == root / "micro_maker/status.json" and not crashed:
-                    crashed = True
-                    raise OSError("simulated crash")
-                original_atomic(path, value)
-
-            with patch.object(cutover, "atomic_json", side_effect=crash_before_status):
-                with self.assertRaisesRegex(OSError, "simulated crash"):
-                    cutover.finalize(root, SHA, NONCE, now_ms=now)
-            pending = json.loads((root / "control/maker_cutover_liquidation.json").read_text())
-            self.assertEqual(pending["state"], "LIQUIDATION_PENDING")
-            # Recovery is driven by the journal, so an expired market mark does
-            # not strand a transaction that already committed its ledger/state.
-            receipt = cutover.finalize(root, SHA, NONCE, now_ms=now + 60_000)
-            self.assertEqual(receipt["state"], "MAKER_FLAT")
-            events = (root / "ledger/execution.jsonl").read_text().splitlines()
-            self.assertEqual(len(events), 2)
-            state = json.loads((root / "micro_maker/state.json").read_text())
-            self.assertEqual(state["inventory"]["m1"]["yes_shares"], 0.0)
-
-    def test_complement_buy_and_merge_is_audited_as_the_actual_execution(self) -> None:
-        with tempfile.TemporaryDirectory() as directory:
-            root = Path(directory)
-            now = 1_788_040_000_000
-            self.fixture(root, now)
-            status_path = root / "micro_maker/status.json"
-            status = json.loads(status_path.read_text())
-            mark = status["positions"][0]
-            mark.update({
-                "liquidation_method": "COMPLEMENT_BUY_AND_MERGE",
-                "execution_token_id": "no", "execution_side": "BUY",
-                "full_depth_vwap": 0.51,
-            })
-            write(status_path, status)
-            receipt = cutover.finalize(root, SHA, NONCE, now_ms=now)
-            self.assertEqual(receipt["liquidations"][0]["liquidation_method"], "COMPLEMENT_BUY_AND_MERGE")
-            events = [json.loads(line) for line in (root / "ledger/execution.jsonl").read_text().splitlines()]
-            self.assertEqual(events[0]["side"], "BUY")
-            self.assertEqual(events[0]["token_id"], "no")
-            self.assertTrue(events[0]["metadata"]["complete_set_merge"])
-            self.assertEqual(events[0]["metadata"]["inventory_token_id"], "yes")
-
-    def test_balanced_complete_set_is_merged_at_par_without_exchange_fill(self) -> None:
-        with tempfile.TemporaryDirectory() as directory:
-            root = Path(directory)
-            now = 1_788_040_000_000
-            self.fixture(root, now)
-            state_path = root / "micro_maker/state.json"
-            state = json.loads(state_path.read_text())
-            state["cash"] = 90.0
-            row = state["inventory"]["m1"]
-            row.update({
-                "yes_shares": 10.0, "no_shares": 10.0,
-                "yes_cost": 4.2, "no_cost": 5.8,
-            })
-            write(state_path, state)
-            status_path = root / "micro_maker/status.json"
-            status = json.loads(status_path.read_text())
-            status["cash"] = 90.0
-            status["equity"] = 100.0
-            status["positions"] = [{
-                "market_id": "m1", "condition_id": "c1",
-                "token_id": "yes", "complement_token_id": "no",
-                "execution_token_id": "", "execution_side": "MERGE",
-                "liquidation_method": "DETERMINISTIC_COMPLETE_SET_REDEMPTION",
-                "shares": 10.0, "full_depth_vwap": 1.0,
-                "gross_executable_liquidation_value": 10.0,
-                "exit_fee": 0.0, "exit_fee_source": "ctf:binary-complete-set-redemption",
-                "slippage_haircut": 0.0, "net_executable_liquidation_value": 10.0,
-                "valuation_policy": "VERIFIED_BINARY_COMPLETE_SET_PAR",
-                "requires_order_book_liquidity": False,
-            }]
-            write(status_path, status)
-            receipt = cutover.finalize(root, SHA, NONCE, now_ms=now)
-            self.assertEqual(receipt["state"], "MAKER_FLAT")
-            self.assertEqual(receipt["positions_liquidated"], 1)
-            self.assertAlmostEqual(receipt["net_cashflow"], 10.0)
-            self.assertAlmostEqual(receipt["final_pnl"], 0.0)
-            final_state = json.loads(state_path.read_text())
-            self.assertAlmostEqual(final_state["cash"], 100.0)
-            self.assertEqual(final_state["inventory"]["m1"]["yes_shares"], 0.0)
-            self.assertEqual(final_state["inventory"]["m1"]["no_shares"], 0.0)
-            events = [json.loads(line) for line in
-                      (root / "ledger/execution.jsonl").read_text().splitlines()]
-            self.assertEqual([event["event_type"] for event in events], ["FINAL"])
-            self.assertEqual(
-                events[0]["metadata"]["purpose"], "DETERMINISTIC_COMPLETE_SET_MERGE")
-            self.assertTrue(events[0]["metadata"]["no_exchange_order_needed"])
-
-    def test_invalid_spool_record_is_preserved_with_hash_before_liquidation(self) -> None:
-        with tempfile.TemporaryDirectory() as directory:
-            root = Path(directory)
-            now = 1_788_040_000_000
-            self.fixture(root, now)
-            invalid = root / "ledger/spool/invalid.json"
-            invalid.parent.mkdir(parents=True)
-            payload = b'{"not":"a ledger event"}\n'
-            invalid.write_bytes(payload)
-            receipt = cutover.finalize(root, SHA, NONCE, now_ms=now)
-            self.assertEqual(receipt["rejected_spool_records"], 1)
-            reconciliations = list((root / "control").glob("spool_reconciliation.*.json"))
-            self.assertEqual(len(reconciliations), 1)
-            reconciliation = json.loads(reconciliations[0].read_text())
-            self.assertEqual(reconciliation["rejected_count"], 1)
-            quarantined = root / reconciliation["quarantine"] / "invalid.json"
-            self.assertEqual(quarantined.read_bytes(), payload)
-            self.assertFalse(invalid.exists())
-
-    def test_stale_or_incomplete_mark_fails_closed(self) -> None:
-        with tempfile.TemporaryDirectory() as directory:
-            root = Path(directory)
-            now = 1_788_040_000_000
-            self.fixture(root, now)
-            status = json.loads((root / "micro_maker/status.json").read_text())
-            status["marking_complete"] = False
-            write(root / "micro_maker/status.json", status)
-            with self.assertRaisesRegex(cutover.MakerCutoverError, "maker_not_safely_marked"):
-                cutover.finalize(root, SHA, NONCE, now_ms=now)
-
-    def test_unmarkable_paper_inventory_is_written_off_without_fabricated_fill(self) -> None:
-        with tempfile.TemporaryDirectory() as directory:
-            root = Path(directory)
-            now = 1_788_040_000_000
-            self.fixture(root, now)
-            status_path = root / "micro_maker/status.json"
-            status = json.loads(status_path.read_text())
-            status["source"] = "paper_cutover_conservative_zero_recovery"
-            status["zero_recovery_writeoffs"] = 1
-            status["positions"][0] = {
-                "market_id": "m1", "condition_id": "c1", "token_id": "yes",
-                "execution_token_id": "yes", "execution_side": "WRITE_OFF",
-                "shares": 10.0,
-                "liquidation_method": "CONSERVATIVE_ZERO_RECOVERY_WRITE_OFF",
-                "full_depth_vwap": 0.0,
-                "gross_executable_liquidation_value": 0.0,
-                "exit_fee": 0.0, "exit_fee_source": "paper-cutover-zero-recovery-v1",
-                "slippage_haircut": 0.0, "net_executable_liquidation_value": 0.0,
-                "valuation_policy": "PAPER_CUTOVER_ZERO_RECOVERY",
-                "unmarkable_reason": "insufficient_direct_and_complement_depth",
-            }
-            write(status_path, status)
-            receipt = cutover.finalize(root, SHA, NONCE, now_ms=now)
-            self.assertEqual(receipt["state"], "MAKER_FLAT")
-            self.assertEqual(receipt["zero_recovery_writeoffs"], 1)
-            self.assertAlmostEqual(receipt["final_pnl"], -5.0)
-            self.assertAlmostEqual(receipt["net_cashflow"], 0.0)
-            events = [json.loads(line) for line in
-                      (root / "ledger/execution.jsonl").read_text().splitlines()]
-            self.assertEqual([row["event_type"] for row in events], ["FINAL"])
-            self.assertEqual(events[0]["metadata"]["purpose"], "PAPER_CUTOVER_WRITE_OFF")
-            self.assertTrue(events[0]["metadata"]["no_exchange_fill_fabricated"])
-            self.assertEqual(events[0]["metadata"]["valuation_policy"],
-                             "PAPER_CUTOVER_ZERO_RECOVERY")
-            state = json.loads((root / "micro_maker/state.json").read_text())
-            self.assertEqual(state["inventory"]["m1"]["yes_shares"], 0.0)
-            self.assertAlmostEqual(state["cash"], 95.0)
-
-
-if __name__ == "__main__":
-    unittest.main()
+if __name__=='__main__':unittest.main()

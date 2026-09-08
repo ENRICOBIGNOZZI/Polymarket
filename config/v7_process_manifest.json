@@ -1,45 +1,629 @@
 {
-  "schema": "polymarket_v7_process_manifest_v1",
-  "version": 1,
-  "paper_only": true,
   "authenticated_execution": false,
-  "real_order_submission": false,
-  "real_capital_at_risk": false,
-  "automatic_promotion": false,
-  "launcher": "scripts/paper_v7_execution_loop.sh",
   "authority_registry": "config/v7_authority_registry.json",
-  "profiles": {
-    "core": {"owner_class":"CANONICAL_CORE","restart_policy":"FAIL_CLOSED_WHOLE_RUNTIME","liveness_slo_seconds":5,"freshness_slo_seconds":5,"fault_domain":"ECONOMIC_CORE","authority_flags":{"global_portfolio_coordinator":false,"capital_allocator":false,"risk_engine":false,"oms":false,"inventory":false,"ledger":false,"promotion":false,"runtime_identity":false},"drain_behavior":"DRAIN_AND_CONFIRM_TERMINAL_STATE","archival_behavior":"EXACT_SHA_ATOMIC_ARCHIVE"},
-    "engine": {"owner_class":"LIVE_ALGORITHM_COMPONENT","restart_policy":"FAIL_CLOSED_ENGINE_INPUT","liveness_slo_seconds":5,"freshness_slo_seconds":5,"fault_domain":"LIVE_ALGORITHM","authority_flags":{"global_portfolio_coordinator":false,"capital_allocator":false,"risk_engine":false,"oms":false,"inventory":false,"ledger":false,"promotion":false,"runtime_identity":false},"drain_behavior":"STOP_NEW_PROPOSALS_AND_DRAIN_OBSERVATIONS","archival_behavior":"EXACT_SHA_ATOMIC_ARCHIVE"},
-    "feed": {"owner_class":"LIVE_ALGORITHM_DATA_FEED","restart_policy":"FAIL_CLOSED_ENGINE_INPUT","liveness_slo_seconds":30,"freshness_slo_seconds":120,"fault_domain":"DATA_FEED","authority_flags":{"global_portfolio_coordinator":false,"capital_allocator":false,"risk_engine":false,"oms":false,"inventory":false,"ledger":false,"promotion":false,"runtime_identity":false},"drain_behavior":"STOP_WITHOUT_INVENTORY","archival_behavior":"EXACT_SHA_ATOMIC_ARCHIVE"},
-    "observer": {"owner_class":"LIVE_ALGORITHM_OBSERVER","restart_policy":"RESTART_ISOLATED_WITH_BACKOFF","liveness_slo_seconds":30,"freshness_slo_seconds":120,"fault_domain":"OBSERVABILITY","authority_flags":{"global_portfolio_coordinator":false,"capital_allocator":false,"risk_engine":false,"oms":false,"inventory":false,"ledger":false,"promotion":false,"runtime_identity":false},"drain_behavior":"STOP_WITHOUT_INVENTORY","archival_behavior":"EXACT_SHA_ATOMIC_ARCHIVE"},
-    "infrastructure": {"owner_class":"RUNTIME_INFRASTRUCTURE","restart_policy":"FAIL_CLOSED_DEPENDENTS","liveness_slo_seconds":5,"freshness_slo_seconds":5,"fault_domain":"INFRASTRUCTURE","authority_flags":{"global_portfolio_coordinator":false,"capital_allocator":false,"risk_engine":false,"oms":false,"inventory":false,"ledger":false,"promotion":false,"runtime_identity":false},"drain_behavior":"STOP_AFTER_DEPENDENTS","archival_behavior":"EXACT_SHA_ATOMIC_ARCHIVE"}
-  },
+  "launcher": "scripts/paper_v7_execution_loop.sh",
+  "paper_only": true,
   "processes": [
-    {"id":"public_https_proxy","executable":"scripts/v7_public_https_proxy.py","arguments":["--host","127.0.0.1","--port","${PUBLIC_PROXY_PORT}"],"profile":"infrastructure","inputs":[],"outputs":["public_https_proxy.log"],"dependencies":[],"exact_sha_required":true,"config_identity_required":false,"launcher_log":"public_https_proxy.log"},
-    {"id":"rtds_monitor","executable":"scripts/v7_rtds_external_fair_monitor.py","arguments":[],"profile":"engine","inputs":["universe/current.json","external_fair/external_venues.json"],"outputs":["external_fair/rtds_monitor.log"],"dependencies":["public_https_proxy","adaptive_universe","external_venue_runtime"],"exact_sha_required":true,"config_identity_required":true,"launcher_log":"external_fair/rtds_monitor.log"},
-    {"id":"external_venue_runtime","executable":"${EXTERNAL_VENUE_RUNTIME}","arguments":["--model-sha","${SHA}"],"profile":"engine","inputs":[],"outputs":["external_fair/external_venues.json","external_fair/external_venues.log"],"dependencies":["public_https_proxy"],"exact_sha_required":true,"config_identity_required":true,"launcher_log":"external_fair/external_venues.log"},
-    {"id":"binance_usdm_rest","executable":"scripts/v7_binance_usdm_rest_collector.py","arguments":["--loop"],"profile":"feed","inputs":[],"outputs":["external_fair/binance_usdm_rest.jsonl","external_fair/binance_usdm_rest.log"],"dependencies":["public_https_proxy"],"exact_sha_required":true,"config_identity_required":false,"launcher_log":"external_fair/binance_usdm_rest.log"},
-    {"id":"deribit_rest","executable":"scripts/v7_deribit_rest_collector.py","arguments":["--loop"],"profile":"feed","inputs":[],"outputs":["external_fair/deribit_rest.jsonl","external_fair/deribit_rest.log"],"dependencies":["public_https_proxy"],"exact_sha_required":true,"config_identity_required":false,"launcher_log":"external_fair/deribit_rest.log"},
-    {"id":"coinbase_l2_rest","executable":"scripts/v7_coinbase_l2_rest_collector.py","arguments":["--loop"],"profile":"feed","inputs":[],"outputs":["external_fair/coinbase_l2_rest.jsonl","external_fair/coinbase_l2_rest.log"],"dependencies":["public_https_proxy"],"exact_sha_required":true,"config_identity_required":false,"launcher_log":"external_fair/coinbase_l2_rest.log"},
-    {"id":"external_forward_evidence","executable":"scripts/v7_external_forward_evidence_gate.py","arguments":["--loop"],"profile":"observer","inputs":["external_fair/external_venues.json","external_fair/coinbase_l2_rest_status.json","external_fair/deribit_rest_status.json"],"outputs":["external_fair/forward_evidence_status.json","external_fair/forward_evidence.log"],"dependencies":["external_venue_runtime","coinbase_l2_rest","deribit_rest"],"exact_sha_required":true,"config_identity_required":true,"launcher_log":"external_fair/forward_evidence.log"},
-    {"id":"external_fair_router","executable":"scripts/v7_external_fair_paper_router.py","arguments":["--model-sha","${SHA}"],"profile":"engine","inputs":["config/v7_external_fair.json"],"outputs":["external_fair/paper_router_status.json","external_fair/paper_router.log"],"dependencies":["public_https_proxy","rtds_monitor","external_venue_runtime"],"exact_sha_required":true,"config_identity_required":true,"launcher_log":"external_fair/paper_router.log"},
-    {"id":"external_cancel_book_observer","executable":"${CRYPTO_BOOK_OBSERVER}","arguments":["--collector-sha","${SHA}","--runtime-sha","${SHA}"],"profile":"observer","inputs":["external_fair/status.json"],"outputs":["research/external_cancel_book_observer.log","${EXTERNAL_CANCEL_BOOK_ROOT}"],"dependencies":["external_fair_router","external_venue_runtime"],"exact_sha_required":true,"config_identity_required":true,"launcher_log":"research/external_cancel_book_observer.log"},
-    {"id":"external_cancel_forward_runtime","executable":"scripts/v7_external_cancel_forward_runtime.py","arguments":["--loop","--model-sha","${SHA}","--execution-alpha-config","config/v7_crypto_execution_alpha.json","--baseline-report","${DURABLE_ROOT}/research/btc_m5_external_cancel_forward_report_v3.json","--baseline-manifest","${DURABLE_ROOT}/research/btc_m5_external_cancel_evidence_manifest_v1.json","--baseline-protocol","${DURABLE_ROOT}/research/btc_m5_external_cancel_episode_protocol_v3.json","--seed-manifest","${EXTERNAL_CANCEL_SEED_MANIFEST}","--repository-root","${ROOT}"],"profile":"observer","inputs":["${EXTERNAL_CANCEL_BOOK_ROOT}","external_fair/normalized_events","micro_maker/execution_model.json","config/v7_crypto_execution_alpha.json","${DURABLE_ROOT}/research/btc_m5_external_cancel_forward_report_v3.json","${DURABLE_ROOT}/research/btc_m5_external_cancel_evidence_manifest_v1.json","${DURABLE_ROOT}/research/btc_m5_external_cancel_episode_protocol_v3.json","${EXTERNAL_CANCEL_SEED_MANIFEST}"],"outputs":["research/external_cancel_forward_runtime.log","control/external_cancel_activation.json","${EXTERNAL_CANCEL_RESEARCH_ROOT}/forward_report.json","${EXTERNAL_CANCEL_RESEARCH_ROOT}/seed"],"dependencies":["external_cancel_book_observer","external_venue_runtime"],"exact_sha_required":true,"config_identity_required":true,"launcher_log":"research/external_cancel_forward_runtime.log"},
-    {"id":"adaptive_universe","executable":"scripts/v7_adaptive_universe.py","arguments":["--loop","--model-sha","${SHA}"],"profile":"infrastructure","inputs":["config/v7_adaptive_universe.json"],"outputs":["universe/current.json","universe/status.json","universe/collector.log"],"dependencies":["public_https_proxy"],"exact_sha_required":true,"config_identity_required":true,"launcher_log":"universe/collector.log"},
-    {"id":"relation_builder","executable":"scripts/v7_relation_builder.py","arguments":["periodic"],"profile":"engine","inputs":["universe/current.json"],"outputs":["structural_relations/verified_relations.csv","structural_relations/relation_builder.log"],"dependencies":["adaptive_universe"],"exact_sha_required":true,"config_identity_required":true,"launcher_log":"structural_relations/relation_builder.log"},
-    {"id":"trade_recorder","executable":"${RECORDER}","arguments":["--loop"],"profile":"engine","inputs":["config/paper_v7.json"],"outputs":["trade_tape.csv","market_data/live_trade_flow.json","trade_recorder.log"],"dependencies":["adaptive_universe","public_https_proxy"],"exact_sha_required":true,"config_identity_required":true,"launcher_log":"trade_recorder.log"},
-    {"id":"ledger_router","executable":"scripts/v7_ledger_spool.py","arguments":["--loop","--model-sha","${SHA}"],"profile":"core","inputs":["ledger/spool"],"outputs":["ledger/execution.jsonl","ledger_router.log"],"dependencies":[],"exact_sha_required":true,"config_identity_required":true,"launcher_log":"ledger_router.log","authority_overrides":{"ledger":true}},
-    {"id":"global_portfolio_coordinator","executable":"scripts/v7_global_portfolio_coordinator.py","arguments":["--loop"],"profile":"core","inputs":["opportunities/inbox"],"outputs":["opportunities/receipts","global_portfolio_coordinator.log"],"dependencies":["ledger_router"],"exact_sha_required":true,"config_identity_required":true,"launcher_log":"global_portfolio_coordinator.log","authority_overrides":{"global_portfolio_coordinator":true,"capital_allocator":true,"risk_engine":true,"oms":true,"inventory":true}},
-    {"id":"maker_reward_selection","executable":"scripts/v7_market_maker_rewards.py","arguments":["periodic"],"profile":"engine","inputs":["universe/current.json","market_data/live_trade_flow.json","external_fair/status.json"],"outputs":["micro_maker/reward_selection.json","micro_maker/reward_selection.log"],"dependencies":["adaptive_universe","trade_recorder","rtds_monitor"],"exact_sha_required":true,"config_identity_required":true,"launcher_log":"micro_maker/reward_selection.log"},
-    {"id":"fee_reward_registry","executable":"scripts/v7_fee_reward_registry.py","arguments":["--model-sha","${SHA}"],"profile":"observer","inputs":["universe/current.json","micro_maker/reward_selection.json"],"outputs":["control/fee_reward_registry.json","fee_reward_registry.log"],"dependencies":["adaptive_universe","maker_reward_selection"],"exact_sha_required":true,"config_identity_required":true,"launcher_log":"fee_reward_registry.log"},
-    {"id":"fast_structural_detector","executable":"${FAST_STRUCTURAL_RUNTIME}","arguments":["--model-sha","${SHA}"],"profile":"engine","inputs":["structural_relations/verified_relations.csv","config/v7_fast_structural.json"],"outputs":["fast_structural/runtime.log","opportunities/inbox"],"dependencies":["relation_builder","global_portfolio_coordinator"],"exact_sha_required":true,"config_identity_required":true,"launcher_log":"fast_structural/runtime.log"},
-    {"id":"maker_model_learning","executable":"launcher_subshell","arguments":["scripts/v7_maker_durable_learning.py","scripts/v7_market_maker_model.py","scripts/v7_maker_model_registry.py"],"profile":"observer","inputs":["ledger/execution.jsonl"],"outputs":["micro_maker/model_registry.log"],"dependencies":["ledger_router"],"exact_sha_required":true,"config_identity_required":true,"launcher_log":"micro_maker/model_registry.log"},
-    {"id":"maker_observer_cohort","executable":"scripts/v7_maker_cohort_supervisor.py","arguments":["--observer-only"],"profile":"observer","inputs":["micro_maker/reward_selection.json","control/fee_reward_registry.json"],"outputs":["micro_maker/cohort_supervisor.log"],"dependencies":["maker_reward_selection","fee_reward_registry","trade_recorder"],"exact_sha_required":true,"config_identity_required":true,"launcher_log":"micro_maker/cohort_supervisor.log"},
-    {"id":"authorized_maker_paper_executor","executable":"${AUTHORIZED_MAKER_EXECUTOR}","arguments":["--model-sha","${SHA}"],"profile":"engine","inputs":["micro_maker/authorized_make","micro_maker/authorized_cancel","micro_maker/fillability_ws.jsonl"],"outputs":["micro_maker/authorized_make_executor_status.json","ledger/spool","micro_maker/authorized_make_executor.log"],"dependencies":["global_portfolio_coordinator","maker_observer_cohort"],"exact_sha_required":true,"config_identity_required":true,"launcher_log":"micro_maker/authorized_make_executor.log"},
-    {"id":"economic_artifacts","executable":"scripts/v7_generate_economic_artifacts.py","arguments":["periodic"],"profile":"observer","inputs":["ledger/execution.jsonl"],"outputs":["reports","economic_artifacts.log"],"dependencies":["ledger_router"],"exact_sha_required":true,"config_identity_required":true,"launcher_log":"economic_artifacts.log"},
-    {"id":"economic_evidence_loop","executable":"launcher_subshell","arguments":["scripts/v7_graph_cost_vector.py","scripts/v7_joint_execution_policy.py","scripts/v7_learned_execution_model.py","scripts/v7_canonical_economics.py","scripts/v7_evidence_capital_allocator.py"],"profile":"observer","inputs":["ledger/execution.jsonl","config/v7_economic_readiness.json"],"outputs":["control/evidence_capital_allocator.json","evidence_capital_allocator.log"],"dependencies":["ledger_router"],"exact_sha_required":true,"config_identity_required":true,"launcher_log":"evidence_capital_allocator.log"},
-    {"id":"paper_launcher","executable":"scripts/paper_v7_execution_loop.sh","arguments":[],"profile":"core","inputs":["config/paper_v7.json","config/v7_process_manifest.json"],"outputs":["runtime_status.json"],"dependencies":["runtime_supervisor"],"exact_sha_required":true,"config_identity_required":true,"authority_overrides":{}},
-    {"id":"runtime_supervisor","executable":"ops/v7_runtime_supervisor.py","arguments":[],"profile":"core","inputs":["config/v7_process_manifest.json"],"outputs":["supervisor_status.json"],"dependencies":[],"exact_sha_required":true,"config_identity_required":true,"authority_overrides":{"runtime_identity":true}}
-  ]
+    {
+      "arguments": [
+        "--host",
+        "127.0.0.1",
+        "--port",
+        "${PUBLIC_PROXY_PORT}"
+      ],
+      "config_identity_required": false,
+      "dependencies": [],
+      "exact_sha_required": true,
+      "executable": "scripts/v7_public_https_proxy.py",
+      "id": "public_https_proxy",
+      "inputs": [],
+      "launcher_log": "public_https_proxy.log",
+      "outputs": [
+        "public_https_proxy.log"
+      ],
+      "profile": "infrastructure"
+    },
+    {
+      "arguments": [],
+      "config_identity_required": true,
+      "dependencies": [
+        "public_https_proxy",
+        "adaptive_universe",
+        "external_venue_runtime"
+      ],
+      "exact_sha_required": true,
+      "executable": "scripts/v7_rtds_external_fair_monitor.py",
+      "id": "rtds_monitor",
+      "inputs": [
+        "universe/current.json",
+        "external_fair/external_venues.json"
+      ],
+      "launcher_log": "external_fair/rtds_monitor.log",
+      "outputs": [
+        "external_fair/rtds_monitor.log"
+      ],
+      "profile": "engine"
+    },
+    {
+      "arguments": [
+        "--model-sha",
+        "${SHA}"
+      ],
+      "config_identity_required": true,
+      "dependencies": [
+        "public_https_proxy"
+      ],
+      "exact_sha_required": true,
+      "executable": "${EXTERNAL_VENUE_RUNTIME}",
+      "id": "external_venue_runtime",
+      "inputs": [],
+      "launcher_log": "external_fair/external_venues.log",
+      "outputs": [
+        "external_fair/external_venues.json",
+        "external_fair/external_venues.log"
+      ],
+      "profile": "engine"
+    },
+    {
+      "arguments": [
+        "--fair-status",
+        "external_fair/status.json",
+        "--router-status",
+        "external_fair/paper_router_status.json",
+        "--output",
+        "${DURABLE_ROOT}/external_fair/pm_lead_lag.jsonl",
+        "--status",
+        "external_fair/lead_lag_collector_status.json",
+        "--model-sha",
+        "${SHA}",
+        "--interval-ms",
+        "25"
+      ],
+      "config_identity_required": true,
+      "dependencies": [
+        "rtds_monitor",
+        "external_fair_router",
+        "external_venue_runtime"
+      ],
+      "exact_sha_required": true,
+      "executable": "scripts/v7_external_lead_lag_collector.py",
+      "id": "external_pm_lead_lag_collector",
+      "inputs": [
+        "external_fair/status.json",
+        "external_fair/paper_router_status.json"
+      ],
+      "launcher_log": "external_fair/lead_lag_collector.log",
+      "outputs": [
+        "external_fair/lead_lag_collector_status.json",
+        "${DURABLE_ROOT}/external_fair/pm_lead_lag.jsonl",
+        "external_fair/lead_lag_collector.log"
+      ],
+      "profile": "observer"
+    },
+    {
+      "arguments": [
+        "--loop"
+      ],
+      "config_identity_required": false,
+      "dependencies": [
+        "public_https_proxy"
+      ],
+      "exact_sha_required": true,
+      "executable": "scripts/v7_binance_usdm_rest_collector.py",
+      "id": "binance_usdm_rest",
+      "inputs": [],
+      "launcher_log": "external_fair/binance_usdm_rest.log",
+      "outputs": [
+        "external_fair/binance_usdm_rest.jsonl",
+        "external_fair/binance_usdm_rest.log"
+      ],
+      "profile": "feed"
+    },
+    {
+      "arguments": [
+        "--loop"
+      ],
+      "config_identity_required": false,
+      "dependencies": [
+        "public_https_proxy"
+      ],
+      "exact_sha_required": true,
+      "executable": "scripts/v7_deribit_rest_collector.py",
+      "id": "deribit_rest",
+      "inputs": [],
+      "launcher_log": "external_fair/deribit_rest.log",
+      "outputs": [
+        "external_fair/deribit_rest.jsonl",
+        "external_fair/deribit_rest.log"
+      ],
+      "profile": "feed"
+    },
+    {
+      "arguments": [
+        "--loop"
+      ],
+      "config_identity_required": false,
+      "dependencies": [
+        "public_https_proxy"
+      ],
+      "exact_sha_required": true,
+      "executable": "scripts/v7_coinbase_l2_rest_collector.py",
+      "id": "coinbase_l2_rest",
+      "inputs": [],
+      "launcher_log": "external_fair/coinbase_l2_rest.log",
+      "outputs": [
+        "external_fair/coinbase_l2_rest.jsonl",
+        "external_fair/coinbase_l2_rest.log"
+      ],
+      "profile": "feed"
+    },
+    {
+      "arguments": [
+        "--model-sha",
+        "${SHA}"
+      ],
+      "config_identity_required": true,
+      "dependencies": [
+        "public_https_proxy",
+        "rtds_monitor",
+        "external_venue_runtime"
+      ],
+      "exact_sha_required": true,
+      "executable": "scripts/v7_external_fair_paper_router.py",
+      "id": "external_fair_router",
+      "inputs": [
+        "config/v7_external_fair.json"
+      ],
+      "launcher_log": "external_fair/paper_router.log",
+      "outputs": [
+        "external_fair/paper_router_status.json",
+        "external_fair/pm_prior.json",
+        "external_fair/paper_router.log"
+      ],
+      "profile": "engine"
+    },
+    {
+      "arguments": [
+        "--loop",
+        "--model-sha",
+        "${SHA}"
+      ],
+      "config_identity_required": true,
+      "dependencies": [
+        "public_https_proxy"
+      ],
+      "exact_sha_required": true,
+      "executable": "scripts/v7_adaptive_universe.py",
+      "id": "adaptive_universe",
+      "inputs": [
+        "config/v7_adaptive_universe.json"
+      ],
+      "launcher_log": "universe/collector.log",
+      "outputs": [
+        "universe/current.json",
+        "universe/status.json",
+        "universe/collector.log"
+      ],
+      "profile": "infrastructure"
+    },
+    {
+      "arguments": [
+        "periodic"
+      ],
+      "config_identity_required": true,
+      "dependencies": [
+        "adaptive_universe"
+      ],
+      "exact_sha_required": true,
+      "executable": "scripts/v7_relation_builder.py",
+      "id": "relation_builder",
+      "inputs": [
+        "universe/current.json"
+      ],
+      "launcher_log": "structural_relations/relation_builder.log",
+      "outputs": [
+        "structural_relations/verified_relations.csv",
+        "structural_relations/relation_builder.log"
+      ],
+      "profile": "engine"
+    },
+    {
+      "arguments": [
+        "--loop"
+      ],
+      "config_identity_required": true,
+      "dependencies": [
+        "adaptive_universe",
+        "public_https_proxy"
+      ],
+      "exact_sha_required": true,
+      "executable": "${RECORDER}",
+      "id": "trade_recorder",
+      "inputs": [
+        "config/paper_v7.json"
+      ],
+      "launcher_log": "trade_recorder.log",
+      "outputs": [
+        "trade_tape.csv",
+        "market_data/live_trade_flow.json",
+        "trade_recorder.log"
+      ],
+      "profile": "engine"
+    },
+    {
+      "arguments": [
+        "--loop",
+        "--model-sha",
+        "${SHA}"
+      ],
+      "authority_overrides": {
+        "ledger": true
+      },
+      "config_identity_required": true,
+      "dependencies": [],
+      "exact_sha_required": true,
+      "executable": "scripts/v7_ledger_spool.py",
+      "id": "ledger_router",
+      "inputs": [
+        "ledger/spool"
+      ],
+      "launcher_log": "ledger_router.log",
+      "outputs": [
+        "ledger/execution.jsonl",
+        "ledger_router.log"
+      ],
+      "profile": "core"
+    },
+    {
+      "arguments": [
+        "--loop"
+      ],
+      "authority_overrides": {
+        "capital_allocator": true,
+        "global_portfolio_coordinator": true,
+        "inventory": true,
+        "oms": true,
+        "risk_engine": true
+      },
+      "config_identity_required": true,
+      "dependencies": [
+        "ledger_router"
+      ],
+      "exact_sha_required": true,
+      "executable": "scripts/v7_global_portfolio_coordinator.py",
+      "id": "global_portfolio_coordinator",
+      "inputs": [
+        "opportunities/inbox"
+      ],
+      "launcher_log": "global_portfolio_coordinator.log",
+      "outputs": [
+        "opportunities/receipts",
+        "global_portfolio_coordinator.log"
+      ],
+      "profile": "core"
+    },
+    {
+      "arguments": [
+        "periodic"
+      ],
+      "config_identity_required": true,
+      "dependencies": [
+        "adaptive_universe",
+        "trade_recorder",
+        "rtds_monitor"
+      ],
+      "exact_sha_required": true,
+      "executable": "scripts/v7_market_maker_rewards.py",
+      "id": "maker_reward_selection",
+      "inputs": [
+        "universe/current.json",
+        "market_data/live_trade_flow.json",
+        "external_fair/status.json"
+      ],
+      "launcher_log": "micro_maker/reward_selection.log",
+      "outputs": [
+        "micro_maker/reward_selection.json",
+        "micro_maker/reward_selection.log"
+      ],
+      "profile": "engine"
+    },
+    {
+      "arguments": [
+        "--model-sha",
+        "${SHA}"
+      ],
+      "config_identity_required": true,
+      "dependencies": [
+        "adaptive_universe",
+        "maker_reward_selection"
+      ],
+      "exact_sha_required": true,
+      "executable": "scripts/v7_fee_reward_registry.py",
+      "id": "fee_reward_registry",
+      "inputs": [
+        "universe/current.json",
+        "micro_maker/reward_selection.json"
+      ],
+      "launcher_log": "fee_reward_registry.log",
+      "outputs": [
+        "control/fee_reward_registry.json",
+        "fee_reward_registry.log"
+      ],
+      "profile": "observer"
+    },
+    {
+      "arguments": [
+        "--model-sha",
+        "${SHA}"
+      ],
+      "config_identity_required": true,
+      "dependencies": [
+        "relation_builder",
+        "global_portfolio_coordinator"
+      ],
+      "exact_sha_required": true,
+      "executable": "${FAST_STRUCTURAL_RUNTIME}",
+      "id": "fast_structural_detector",
+      "inputs": [
+        "structural_relations/verified_relations.csv",
+        "config/v7_fast_structural.json"
+      ],
+      "launcher_log": "fast_structural/runtime.log",
+      "outputs": [
+        "fast_structural/runtime.log",
+        "opportunities/inbox"
+      ],
+      "profile": "engine"
+    },
+    {
+      "arguments": [
+        "scripts/v7_maker_durable_learning.py"
+      ],
+      "config_identity_required": true,
+      "dependencies": [
+        "ledger_router"
+      ],
+      "exact_sha_required": true,
+      "executable": "launcher_subshell",
+      "id": "maker_model_learning",
+      "inputs": [
+        "ledger/execution.jsonl"
+      ],
+      "launcher_log": "micro_maker/durable_learning.log",
+      "outputs": [
+        "micro_maker/execution_model.json",
+        "micro_maker/research_learning_status.json",
+        "micro_maker/durable_learning.log"
+      ],
+      "profile": "observer"
+    },
+    {
+      "arguments": [
+        "--observer-only"
+      ],
+      "config_identity_required": true,
+      "dependencies": [
+        "maker_reward_selection",
+        "fee_reward_registry",
+        "trade_recorder"
+      ],
+      "exact_sha_required": true,
+      "executable": "scripts/v7_maker_cohort_supervisor.py",
+      "id": "maker_observer_cohort",
+      "inputs": [
+        "micro_maker/reward_selection.json",
+        "control/fee_reward_registry.json"
+      ],
+      "launcher_log": "micro_maker/cohort_supervisor.log",
+      "outputs": [
+        "micro_maker/cohort_supervisor.log"
+      ],
+      "profile": "observer"
+    },
+    {
+      "arguments": [
+        "--model-sha",
+        "${SHA}"
+      ],
+      "config_identity_required": true,
+      "dependencies": [
+        "global_portfolio_coordinator",
+        "maker_observer_cohort"
+      ],
+      "exact_sha_required": true,
+      "executable": "${AUTHORIZED_MAKER_EXECUTOR}",
+      "id": "authorized_maker_paper_executor",
+      "inputs": [
+        "micro_maker/authorized_make",
+        "micro_maker/authorized_cancel",
+        "micro_maker/fillability_ws.jsonl"
+      ],
+      "launcher_log": "micro_maker/authorized_make_executor.log",
+      "outputs": [
+        "micro_maker/authorized_make_executor_status.json",
+        "ledger/spool",
+        "micro_maker/authorized_make_executor.log"
+      ],
+      "profile": "engine"
+    },
+    {
+      "arguments": [
+        "periodic"
+      ],
+      "config_identity_required": true,
+      "dependencies": [
+        "ledger_router"
+      ],
+      "exact_sha_required": true,
+      "executable": "scripts/v7_generate_economic_artifacts.py",
+      "id": "economic_artifacts",
+      "inputs": [
+        "ledger/execution.jsonl"
+      ],
+      "launcher_log": "economic_artifacts.log",
+      "outputs": [
+        "reports",
+        "economic_artifacts.log"
+      ],
+      "profile": "observer"
+    },
+    {
+      "arguments": [
+        "scripts/v7_joint_execution_policy.py",
+        "scripts/v7_learned_execution_model.py",
+        "scripts/v7_canonical_economics.py"
+      ],
+      "config_identity_required": true,
+      "dependencies": [
+        "ledger_router"
+      ],
+      "exact_sha_required": true,
+      "executable": "launcher_subshell",
+      "id": "economic_evidence_loop",
+      "inputs": [
+        "ledger/execution.jsonl"
+      ],
+      "launcher_log": "canonical_economics.log",
+      "outputs": [
+        "canonical_economics.json",
+        "canonical_economics.log",
+        "learned_execution/joint_policy.json",
+        "learned_execution/oos_report.json"
+      ],
+      "profile": "observer"
+    },
+    {
+      "arguments": [],
+      "authority_overrides": {},
+      "config_identity_required": true,
+      "dependencies": [
+        "runtime_supervisor"
+      ],
+      "exact_sha_required": true,
+      "executable": "scripts/paper_v7_execution_loop.sh",
+      "id": "paper_launcher",
+      "inputs": [
+        "config/paper_v7.json",
+        "config/v7_process_manifest.json"
+      ],
+      "outputs": [
+        "runtime_status.json"
+      ],
+      "profile": "core"
+    },
+    {
+      "arguments": [],
+      "authority_overrides": {
+        "runtime_identity": true
+      },
+      "config_identity_required": true,
+      "dependencies": [],
+      "exact_sha_required": true,
+      "executable": "ops/v7_runtime_supervisor.py",
+      "id": "runtime_supervisor",
+      "inputs": [
+        "config/v7_process_manifest.json"
+      ],
+      "outputs": [
+        "supervisor_status.json"
+      ],
+      "profile": "core"
+    }
+  ],
+  "profiles": {
+    "core": {
+      "archival_behavior": "EXACT_SHA_ATOMIC_ARCHIVE",
+      "authority_flags": {
+        "capital_allocator": false,
+        "global_portfolio_coordinator": false,
+        "inventory": false,
+        "ledger": false,
+        "oms": false,
+        "risk_engine": false,
+        "runtime_identity": false
+      },
+      "drain_behavior": "DRAIN_AND_CONFIRM_TERMINAL_STATE",
+      "fault_domain": "ECONOMIC_CORE",
+      "freshness_slo_seconds": 5,
+      "liveness_slo_seconds": 5,
+      "owner_class": "CANONICAL_CORE",
+      "restart_policy": "FAIL_CLOSED_WHOLE_RUNTIME"
+    },
+    "engine": {
+      "archival_behavior": "EXACT_SHA_ATOMIC_ARCHIVE",
+      "authority_flags": {
+        "capital_allocator": false,
+        "global_portfolio_coordinator": false,
+        "inventory": false,
+        "ledger": false,
+        "oms": false,
+        "risk_engine": false,
+        "runtime_identity": false
+      },
+      "drain_behavior": "STOP_NEW_PROPOSALS_AND_DRAIN_OBSERVATIONS",
+      "fault_domain": "LIVE_ALGORITHM",
+      "freshness_slo_seconds": 5,
+      "liveness_slo_seconds": 5,
+      "owner_class": "LIVE_ALGORITHM_COMPONENT",
+      "restart_policy": "FAIL_CLOSED_ENGINE_INPUT"
+    },
+    "feed": {
+      "archival_behavior": "EXACT_SHA_ATOMIC_ARCHIVE",
+      "authority_flags": {
+        "capital_allocator": false,
+        "global_portfolio_coordinator": false,
+        "inventory": false,
+        "ledger": false,
+        "oms": false,
+        "risk_engine": false,
+        "runtime_identity": false
+      },
+      "drain_behavior": "STOP_WITHOUT_INVENTORY",
+      "fault_domain": "DATA_FEED",
+      "freshness_slo_seconds": 120,
+      "liveness_slo_seconds": 30,
+      "owner_class": "LIVE_ALGORITHM_DATA_FEED",
+      "restart_policy": "FAIL_CLOSED_ENGINE_INPUT"
+    },
+    "infrastructure": {
+      "archival_behavior": "EXACT_SHA_ATOMIC_ARCHIVE",
+      "authority_flags": {
+        "capital_allocator": false,
+        "global_portfolio_coordinator": false,
+        "inventory": false,
+        "ledger": false,
+        "oms": false,
+        "risk_engine": false,
+        "runtime_identity": false
+      },
+      "drain_behavior": "STOP_AFTER_DEPENDENTS",
+      "fault_domain": "INFRASTRUCTURE",
+      "freshness_slo_seconds": 5,
+      "liveness_slo_seconds": 5,
+      "owner_class": "RUNTIME_INFRASTRUCTURE",
+      "restart_policy": "FAIL_CLOSED_DEPENDENTS"
+    },
+    "observer": {
+      "archival_behavior": "EXACT_SHA_ATOMIC_ARCHIVE",
+      "authority_flags": {
+        "capital_allocator": false,
+        "global_portfolio_coordinator": false,
+        "inventory": false,
+        "ledger": false,
+        "oms": false,
+        "risk_engine": false,
+        "runtime_identity": false
+      },
+      "drain_behavior": "STOP_WITHOUT_INVENTORY",
+      "fault_domain": "OBSERVABILITY",
+      "freshness_slo_seconds": 120,
+      "liveness_slo_seconds": 30,
+      "owner_class": "LIVE_ALGORITHM_OBSERVER",
+      "restart_policy": "RESTART_ISOLATED_WITH_BACKOFF"
+    }
+  },
+  "real_capital_at_risk": false,
+  "real_order_submission": false,
+  "schema": "polymarket_v7_process_manifest_v1",
+  "version": 1
 }

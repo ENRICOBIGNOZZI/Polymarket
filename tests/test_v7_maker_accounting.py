@@ -7,12 +7,18 @@ from v7_maker_accounting import project_maker,settlement_event
 SHA='a'*40
 
 def event(kind,market='m1',quantity=5.,fill='f1'):
-    metadata={'paper_exploration':True,'economic_authority':'PAPER_EXPLORATION',
+    metadata={'component':'professional_maker','model_family':'professional_maker','paper_exploration':True,'economic_authority':'PAPER_EXPLORATION',
         'paper_bootstrap_probe':True,'coordinator_receipt':{
-            'owner':'V7_GLOBAL_PORTFOLIO_COORDINATOR','action':'MAKE','paper_only':True,
-            'paper_exploration_authorized':True,'authenticated_execution':False,'real_order_submission':False}}
-    return LedgerEvent(event_type=kind,strategy='MICRO_MAKER_PRO',model_sha=SHA,
+            'schema':'polymarket_v7_global_opportunity_decision_v1',
+            'owner':'V7_GLOBAL_PORTFOLIO_COORDINATOR','engine_id':'CRYPTO_SETTLEMENT_ENGINE',
+            'selected_replay_key':'maker-test','action':'MAKE','new_risk_authorized':False,
+            'paper_only':True,'paper_exploration_authorized':True,
+            'paper_exploration_probe_authorized':True,'authenticated_execution':False,
+            'real_order_submission':False,'real_capital_at_risk':False,
+            'crypto_context':{'asset':'BTC','horizon':'M5','authority':'PAPER_EXPLORATION'}}}
+    return LedgerEvent(event_type=kind,strategy='CRYPTO_SETTLEMENT_ENGINE',model_sha=SHA,
         recorded_ts_ms=1000,record_id=kind+'-'+market+'-'+fill,order_id='1',
+        position_id=(f"maker-position-{market}-{fill}" if kind=='FILL' else None),
         market_id=market,event_id='e1',token_id=market+'-yes',side='BUY',
         intended_action='MAKE',intended_size=5.,fill_id=fill if kind=='FILL' else None,
         fill_price=.4 if kind=='FILL' else None,filled_size=quantity if kind=='FILL' else None,
@@ -26,7 +32,7 @@ class MakerAccountingTests(unittest.TestCase):
         self.assertEqual(p['issues'],[]);self.assertEqual(p['entry_debit'],2.)
         self.assertEqual(len(p['positions']),1);self.assertEqual(p['marked_open_value'],0.)
         self.assertEqual(p['pending_orders'],0)
-    def test_same_old_native_id_different_market_never_collides(self):
+    def test_same_native_id_different_market_never_collides(self):
         es=[event(k,m) for m in ['m1','m2'] for k in ['ORDER_SUBMITTED','FILL']]
         p=project_maker(es,{})
         self.assertEqual(p['issues'],[]);self.assertEqual(p['fills'],2)

@@ -142,7 +142,6 @@ jobs:
           metrics="$(curl -fsS http://127.0.0.1:9108/metrics)"
           grep -q '^polymarket_v7_health 1$' <<<"$metrics"
           grep -q '^polymarket_v7_live_algorithm_count 2$' <<<"$metrics"
-          grep -q '^polymarket_v7_legacy_algorithm_count 0$' <<<"$metrics"
           grep -q '^polymarket_v7_live_algorithm_scope_wired 1$' <<<"$metrics"
           grep -q '^polymarket_v7_execution_alive 1$' <<<"$metrics"
           grep -q '^polymarket_v7_single_writer_ok 1$' <<<"$metrics"

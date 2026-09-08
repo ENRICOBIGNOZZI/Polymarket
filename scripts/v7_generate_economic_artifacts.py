@@ -8,11 +8,9 @@ import os
 from pathlib import Path
 import subprocess
 import time
-from types import SimpleNamespace
 from typing import Any
 
 try:
-    from v7_economic_loop_audit import build as build_loop_audit
     from v7_exact_sha_economic_bundle import generate as generate_exact_economic_bundle
     from v7_fast_structural_feasibility import (
         build_report as build_fast_structural_feasibility,
@@ -20,7 +18,6 @@ try:
     )
     from v7_profitability_audit import audit as profitability_audit
 except ModuleNotFoundError:  # imported as scripts.v7_generate_economic_artifacts
-    from scripts.v7_economic_loop_audit import build as build_loop_audit
     from scripts.v7_exact_sha_economic_bundle import generate as generate_exact_economic_bundle
     from scripts.v7_fast_structural_feasibility import (
         build_report as build_fast_structural_feasibility,
@@ -55,7 +52,7 @@ def envelope(schema: str, sha: str, runtime_available: bool, **values: Any) -> d
     }
 
 
-def generate(repo: Path, run_root: Path, output: Path, baseline_path: Path,
+def generate(repo: Path, run_root: Path, output: Path,
              *, include_archives: bool = False) -> dict[str, dict[str, Any]]:
     sha = subprocess.check_output(["git", "-C", str(repo), "rev-parse", "HEAD"], text=True).strip()
     ledger = run_root / "ledger" / "execution.jsonl"
@@ -69,31 +66,6 @@ def generate(repo: Path, run_root: Path, output: Path, baseline_path: Path,
     durable = run_root.parent / "paper_v7_durable"
     economic_inputs = [*inputs, *([durable] if durable.exists() else [])]
     profit = profitability_audit(inputs)
-    args = SimpleNamespace(repo=str(repo), ledger_root=[str(path) for path in inputs],
-                           prometheus_url=None, kind="postchange")
-    postchange = build_loop_audit(args)
-    postchange["input_runtime_model_sha"] = input_runtime_model_sha or None
-    postchange["exact_sha_runtime_evidence_available"] = runtime_available
-    if not runtime_available:
-        postchange["interpretation"]["runtime_evidence_state"] = "INCUMBENT_OR_UNAVAILABLE_NOT_POSTCHANGE_SHA"
-    baseline = load(baseline_path)
-    capability = envelope(
-        "polymarket_v7_capability_runtime_proof_v1", sha, runtime_available,
-        source="repository_call_site_analysis_plus_optional_exact_sha_runtime",
-        input_runtime_model_sha=input_runtime_model_sha or None,
-        exact_sha_runtime=input_runtime_model_sha == sha,
-        capabilities=postchange["capability_runtime_proof"],
-        profitability_proven=False,
-    )
-    replay = envelope(
-        "polymarket_v7_replay_comparison_v1", sha, runtime_available,
-        baseline_repository_head=baseline.get("repository_head"),
-        baseline_capabilities=baseline.get("capability_runtime_proof", {}),
-        postchange_capabilities=postchange["capability_runtime_proof"],
-        baseline_ledger=baseline.get("ledger", {}), postchange_ledger=postchange.get("ledger", {}),
-        comparison_scope="CAPABILITY_AND_AVAILABLE_DEDUPLICATED_PAPER_EVIDENCE",
-        economic_claim="NO_PROFITABILITY_CLAIM_WITHOUT_FORWARD_TERMINAL_EVIDENCE",
-    )
     canonical = load(run_root / "canonical_economics.json")
     reconciliation_runtime = load(run_root / "control" / "portfolio_reconciliation.json")
     reconciliation = envelope(
@@ -144,12 +116,9 @@ def generate(repo: Path, run_root: Path, output: Path, baseline_path: Path,
         repo,
         output / "v7_exact_sha_economic_bundle.json",
         repo / "config" / "v7_external_fair.json",
-        [
-            path for path in (
-                run_root / "external_fair" / "model_registry" / "fair_value_champion.json",
-                run_root / "external_fair" / "model_registry" / "fair_value_challenger.json",
-            ) if path.is_file()
-        ],
+        [path for path in (
+            run_root.parent / "paper_v7_durable" / "external_fair" / "rich_research_model.json",
+        ) if path.is_file()],
     )
     fast_records, fast_quality = load_fast_structural_records(economic_inputs)
     latency_components = exact_bundle.get("execution_latency_distribution", {}).get(
@@ -168,10 +137,7 @@ def generate(repo: Path, run_root: Path, output: Path, baseline_path: Path,
         "exact_sha_runtime_evidence_available": runtime_available,
     }
     files = {
-        "v7_economic_loop_postchange.json": postchange,
-        "v7_replay_comparison.json": replay,
         "v7_profitability_audit.json": profit_enveloped,
-        "v7_capability_runtime_proof.json": capability,
         "v7_reconciliation_report.json": reconciliation,
         "v7_external_fair_forecast_to_pnl.json": external,
         "v7_maker_bilateral_fillability_report.json": maker,
@@ -193,10 +159,9 @@ def main() -> int:
     parser.add_argument("--repo", type=Path, default=Path("."))
     parser.add_argument("--run-root", type=Path, default=Path("runs/paper_v7_live"))
     parser.add_argument("--output", type=Path, default=Path("artifacts"))
-    parser.add_argument("--baseline", type=Path, default=Path("artifacts/v7_economic_loop_baseline.json"))
     parser.add_argument("--include-archives", action="store_true")
     args = parser.parse_args()
-    generate(args.repo.resolve(), args.run_root.resolve(), args.output.resolve(), args.baseline.resolve(),
+    generate(args.repo.resolve(), args.run_root.resolve(), args.output.resolve(),
              include_archives=args.include_archives)
     return 0
 

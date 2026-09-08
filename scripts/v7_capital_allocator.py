@@ -21,10 +21,6 @@ from typing import Any
 
 ALLOCATOR_OWNER = "V7_CANONICAL_ALLOCATOR"
 ENGINES = ("CRYPTO_SETTLEMENT_ENGINE", "STRUCTURAL_ARB_ENGINE")
-ENGINE_ADAPTERS = {
-    "external": "CRYPTO_SETTLEMENT_ENGINE",
-    "hard_arb": "STRUCTURAL_ARB_ENGINE",
-}
 COMPONENT_OBSERVERS = {
     "micro_maker": "professional_maker",
     "fast_structural": "fast_structural",
@@ -134,13 +130,6 @@ def materialize(base_config: Path, output_dir: Path) -> dict[str, Any]:
             execution_budget=budgets[engine_id], observation_budget=0.0,
             canonical_replacement=f"{engine_id.lower()}.json",
         ))
-    for view_id, engine_id in ENGINE_ADAPTERS.items():
-        atomic_json(output_dir / f"{view_id}.json", _child(
-            cfg, view_id=view_id, scope_class="TEMPORARY_ENGINE_ADAPTER",
-            engine_id=engine_id, component=view_id,
-            execution_budget=budgets[engine_id], observation_budget=0.0,
-            canonical_replacement=f"{engine_id.lower()}.json",
-        ))
     for view_id, component in COMPONENT_OBSERVERS.items():
         engine_id = (
             "CRYPTO_SETTLEMENT_ENGINE" if component == "professional_maker"
@@ -170,14 +159,6 @@ def materialize(base_config: Path, output_dir: Path) -> dict[str, Any]:
         "component_observation_budgets_are_capital": False,
         "allocated_plus_reserve": sum(budgets.values()),
         "double_counting_forbidden": True,
-        "temporary_engine_adapters": ENGINE_ADAPTERS,
-        "temporary_runtime_accounting_views": {
-            "external": "CRYPTO_SETTLEMENT_ENGINE",
-            "hard_arb": "STRUCTURAL_ARB_ENGINE",
-            "micro_maker": None,
-            "fast_structural": None,
-        },
-        "temporary_adapter_deletion_gate": "DECLARATIVE_PROCESS_MANIFEST_CUTOVER_PROVEN",
     }
     atomic_json(output_dir / "manifest.json", manifest)
     return manifest

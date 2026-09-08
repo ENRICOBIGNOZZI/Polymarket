@@ -1,53 +1,18 @@
 {
-  "schema_version": 1,
-  "directive_epoch": "2026-09-01T00:00:00Z",
-  "operator_instruction_id": "user-v7-unified-economic-system-20260901",
-  "priority_instruction_id": "user-v7-unified-economic-system-20260901",
-  "latency_priority_instruction_id": "user-v7-latency-domination-20260828",
-  "authority": "latest_explicit_user_instruction",
-  "repository": "ENRICOBIGNOZZI/Polymarket",
-  "scope": "two_live_algorithms_and_paper_runtime",
-  "rule": "V7 supports exactly CRYPTO_SETTLEMENT_ENGINE and STRUCTURAL_ARB_ENGINE. Every algorithm that does not run in the canonical live PAPER runtime is legacy and must remain deleted with its configs, adapters, workflows, monitoring and documentation. Components are not independent algorithms. PAPER-only safety remains mandatory; authenticated_execution=false and real_order_submission=false.",
-  "paper_v7_authorization": {
-    "paper_only": true,
-    "authenticated_execution": false,
-    "real_order_submission": false,
-    "real_capital_at_risk": false,
-    "market_limit": 1000,
-    "min_liquidity": 2.0,
-    "min_net_edge": 0.00005,
-    "uncertainty_penalty": 0.0,
-    "fractional_kelly_ceiling": 0.25,
-    "fixed_dollar_trade_cap_enabled": false,
-    "max_trade_fraction": 1.0,
-    "max_market_fraction": 1.0,
-    "max_event_fraction": 1.0,
-    "max_gross_fraction": 1.0,
-    "max_drawdown": 0.15,
-    "hard_arb_fixed_dollar_trade_cap_enabled": false,
-    "hard_arb_max_trade_fraction": 1.0,
-    "max_trade_usd_disabled_cap_value": 300,
-    "hard_arb_max_trade_usd_disabled_cap_value": 300,
-    "interpretation": "100% is a hard percentage ceiling, not a target. Finite $300 defense-in-depth guards remain configured even while the fixed-dollar switch is disabled. Kelly, executable depth, authoritative fees, spread/slippage, inventory and unwind risk, adverse markout, capital/latency costs, state integrity and the 15% drawdown kill switch still bind."
-  },
   "architecture": {
-    "target": "one slim canonical V7 PAPER codebase",
-    "single_execution_ledger": true,
-    "single_runtime_owner": true,
-    "single_broker_authority": true,
-    "single_canonical_integration": true,
+    "cleanup_sequence": "audit_then_port_then_test_then_validate_then_retire_obsolete_generations",
+    "hard_arb_and_fast_structural_share_one_engine": true,
     "no_live_expert_averaging": true,
     "professional_market_maker_is_crypto_engine_component": true,
-    "hard_arb_and_fast_structural_share_one_engine": true,
+    "retired_generation_rule": "Obsolete operational generations must remain absent after their unique useful capabilities are ported to V7 and the exact replacement is green and healthy in live-PAPER. Git history is the archive.",
+    "single_broker_authority": true,
+    "single_canonical_integration": true,
+    "single_execution_ledger": true,
     "single_global_portfolio_coordinator": true,
-    "cleanup_sequence": "audit_then_port_then_test_then_validate_then_retire_obsolete_generations",
-    "retired_generation_rule": "Obsolete operational generations must remain absent after their unique useful capabilities are ported to V7 and the exact replacement is green and healthy in live-PAPER. Git history is the archive."
+    "single_runtime_owner": true,
+    "target": "one slim canonical V7 PAPER codebase"
   },
-  "economic_objective": {
-    "decision_ev": "P(fill_or_joint_completion|X,a) * E[alpha_or_spread_capture-costs-adverse_markout|fill,X,a] - E[partial_or_inventory_unwind_loss|X,a] - capital_cost - latency_cost + conservatively_haircut_maker_rebate + conservatively_haircut_liquidity_reward",
-    "multi_leg_rule": "Estimate the empirical joint completion/state distribution; product or minimum of marginal fill probabilities is not an accepted substitute.",
-    "success": "positive forward realized PAPER fill-conditioned post-cost PnL with causal data, realistic simulated fills, authoritative fees, executable depth, inventory/unwind losses, markout, reward/rebate attribution, cost stress and no leakage"
-  },
+  "authority": "latest_explicit_user_instruction",
   "current_priority_order": [
     "Keep one V7 runtime, two economic engines, one global portfolio coordinator, one broker authority, one canonical execution ledger, one allocator, one risk guard and one monitoring plane.",
     "CRYPTO_SETTLEMENT_ENGINE compares professional maker, informed taker, cancellation and no-action components on one conservative account-wealth objective.",
@@ -59,20 +24,11 @@
     "Keep every obsolete operational generation and duplicate authority path retired; Git history and the immutable rollback bundle are the archive.",
     "Continuously run the repository-shape audit and V7-only CI/monitoring/runtime smoke tests."
   ],
-  "scheduler_assignments": {
-    "registry": "config/v7_scheduler_freeze.json",
-    "automatic_deployment": false,
-    "automatic_champion_promotion": false,
-    "manual_exact_sha_cutover_required": true
-  },
-  "latency_engineering": {
-    "policy": "config/v7_latency_slo.json",
-    "architecture_is_not_live_latency_proof": true,
-    "internal_p99_target_ns": 1000000,
-    "persistent_transport_required": true,
-    "regional_shootout_required": true,
-    "authenticated_order_cancel_probe_authorized": false,
-    "top_percentile_claim_authorized": false
+  "directive_epoch": "2026-09-01T00:00:00Z",
+  "economic_objective": {
+    "decision_ev": "P(fill_or_joint_completion|X,a) * E[alpha_or_spread_capture-costs-adverse_markout|fill,X,a] - E[partial_or_inventory_unwind_loss|X,a] - capital_cost - latency_cost + conservatively_haircut_maker_rebate + conservatively_haircut_liquidity_reward",
+    "multi_leg_rule": "Estimate the empirical joint completion/state distribution; product or minimum of marginal fill probabilities is not an accepted substitute.",
+    "success": "positive forward realized PAPER fill-conditioned post-cost PnL with causal data, realistic simulated fills, authoritative fees, executable depth, inventory/unwind losses, markout, reward/rebate attribution, cost stress and no leakage"
   },
   "forbidden_regressions": [
     "Do not create V8/V9/V10 or another numerical runtime generation.",
@@ -80,5 +36,43 @@
     "Do not add or restore V3/V4/V5/V6 runtime logic or retired-generation wrappers.",
     "Do not add authenticated or real-money execution.",
     "Do not use product/minimum of marginal fill probabilities as a generic multi-leg joint completion estimator."
-  ]
+  ],
+  "latency_engineering": {
+    "architecture_is_not_live_latency_proof": true,
+    "authenticated_order_cancel_probe_authorized": false,
+    "internal_p99_target_ns": 1000000,
+    "persistent_transport_required": true,
+    "policy": "config/v7_latency_slo.json",
+    "regional_shootout_required": true,
+    "top_percentile_claim_authorized": false
+  },
+  "latency_priority_instruction_id": "user-v7-latency-domination-20260828",
+  "operator_instruction_id": "user-v7-unified-economic-system-20260901",
+  "paper_v7_authorization": {
+    "authenticated_execution": false,
+    "fixed_dollar_trade_cap_enabled": false,
+    "fractional_kelly_ceiling": 0.25,
+    "hard_arb_fixed_dollar_trade_cap_enabled": false,
+    "hard_arb_max_trade_fraction": 1.0,
+    "hard_arb_max_trade_usd_disabled_cap_value": 300,
+    "interpretation": "100% is a hard percentage ceiling, not a target. Finite $300 defense-in-depth guards remain configured even while the fixed-dollar switch is disabled. Kelly, executable depth, authoritative fees, spread/slippage, inventory and unwind risk, adverse markout, capital/latency costs, state integrity and the 15% drawdown kill switch still bind.",
+    "market_limit": 1000,
+    "max_drawdown": 0.15,
+    "max_event_fraction": 1.0,
+    "max_gross_fraction": 1.0,
+    "max_market_fraction": 1.0,
+    "max_trade_fraction": 1.0,
+    "max_trade_usd_disabled_cap_value": 300,
+    "min_liquidity": 2.0,
+    "min_net_edge": 5e-05,
+    "paper_only": true,
+    "real_capital_at_risk": false,
+    "real_order_submission": false,
+    "uncertainty_penalty": 0.0
+  },
+  "priority_instruction_id": "user-v7-unified-economic-system-20260901",
+  "repository": "ENRICOBIGNOZZI/Polymarket",
+  "rule": "V7 supports exactly CRYPTO_SETTLEMENT_ENGINE and STRUCTURAL_ARB_ENGINE. Every algorithm that does not run in the canonical live PAPER runtime is legacy and must remain deleted with its configs, adapters, workflows, monitoring and documentation. Components are not independent algorithms. PAPER-only safety remains mandatory; authenticated_execution=false and real_order_submission=false.",
+  "schema_version": 1,
+  "scope": "two_live_algorithms_and_paper_runtime"
 }

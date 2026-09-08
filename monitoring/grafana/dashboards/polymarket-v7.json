@@ -1,5 +1,7 @@
 {
-  "annotations": {"list": []},
+  "annotations": {
+    "list": []
+  },
   "editable": false,
   "fiscalYearStartMonth": 0,
   "graphTooltip": 1,
@@ -7,63 +9,2019 @@
   "links": [],
   "liveNow": false,
   "panels": [
-    {"id":1,"type":"stat","title":"Observed PAPER Equity","description":"Evidence-collection accounting only; no real capital is at risk.","gridPos":{"h":4,"w":4,"x":0,"y":0},"datasource":{"type":"prometheus","uid":"prometheus-v7"},"targets":[{"expr":"polymarket_runtime_equity_usd","refId":"A"}],"fieldConfig":{"defaults":{"unit":"currencyUSD"},"overrides":[]},"options":{"reduceOptions":{"calcs":["lastNotNull"],"fields":"","values":false},"colorMode":"value","graphMode":"area","justifyMode":"auto","orientation":"auto","textMode":"auto"}},
-    {"id":2,"type":"stat","title":"Observed PAPER PnL","description":"Counterfactual/PAPER result; not realized account profit.","gridPos":{"h":4,"w":4,"x":4,"y":0},"datasource":{"type":"prometheus","uid":"prometheus-v7"},"targets":[{"expr":"polymarket_runtime_pnl_usd","refId":"A"}],"fieldConfig":{"defaults":{"unit":"currencyUSD"},"overrides":[]},"options":{"reduceOptions":{"calcs":["lastNotNull"],"fields":"","values":false},"colorMode":"value","graphMode":"area","justifyMode":"auto","orientation":"auto","textMode":"auto"}},
-    {"id":3,"type":"stat","title":"Canonical PAPER PnL","description":"PnL from canonical PAPER economic units only.","gridPos":{"h":4,"w":4,"x":8,"y":0},"datasource":{"type":"prometheus","uid":"prometheus-v7"},"targets":[{"expr":"polymarket_runtime_realized_pnl_usd","refId":"A"}],"fieldConfig":{"defaults":{"unit":"currencyUSD"},"overrides":[]},"options":{"reduceOptions":{"calcs":["lastNotNull"],"fields":"","values":false},"colorMode":"value","graphMode":"area","justifyMode":"auto","orientation":"auto","textMode":"auto"}},
-    {"id":4,"type":"stat","title":"Drawdown","gridPos":{"h":4,"w":4,"x":12,"y":0},"datasource":{"type":"prometheus","uid":"prometheus-v7"},"targets":[{"expr":"polymarket_runtime_drawdown_ratio","refId":"A"}],"fieldConfig":{"defaults":{"unit":"percentunit","max":0.15,"min":0},"overrides":[]},"options":{"reduceOptions":{"calcs":["lastNotNull"],"fields":"","values":false},"colorMode":"value","graphMode":"area","justifyMode":"auto","orientation":"auto","textMode":"auto"}},
-    {"id":5,"type":"stat","title":"Economic New-Risk Authority","description":"Must remain BLOCKED until forward economic evidence passes. This is independent of 24/7 runtime health.","gridPos":{"h":4,"w":4,"x":16,"y":0},"datasource":{"type":"prometheus","uid":"prometheus-v7"},"targets":[{"expr":"polymarket_v7_economic_new_risk_ready","refId":"A"}],"fieldConfig":{"defaults":{"mappings":[{"type":"value","options":{"0":{"text":"BLOCKED — EVIDENCE"},"1":{"text":"PAPER AUTHORIZED"}}}]},"overrides":[]},"options":{"reduceOptions":{"calcs":["lastNotNull"],"fields":"","values":false},"colorMode":"value","graphMode":"none","justifyMode":"auto","orientation":"auto","textMode":"auto"}},
-    {"id":6,"type":"stat","title":"24/7 PAPER Runtime","description":"Process availability only; ALIVE does not mean an algorithm has execution authority.","gridPos":{"h":4,"w":4,"x":20,"y":0},"datasource":{"type":"prometheus","uid":"prometheus-v7"},"targets":[{"expr":"polymarket_v7_execution_alive","refId":"A"}],"fieldConfig":{"defaults":{"mappings":[{"type":"value","options":{"0":{"text":"DOWN"},"1":{"text":"ALIVE — PAPER"}}}]},"overrides":[]},"options":{"reduceOptions":{"calcs":["lastNotNull"],"fields":"","values":false},"colorMode":"value","graphMode":"none","justifyMode":"auto","orientation":"auto","textMode":"auto"}},
-
-    {"id":10,"type":"timeseries","title":"Equity / PnL","gridPos":{"h":8,"w":12,"x":0,"y":4},"datasource":{"type":"prometheus","uid":"prometheus-v7"},"targets":[{"expr":"polymarket_runtime_equity_usd","legendFormat":"equity","refId":"A"},{"expr":"polymarket_runtime_pnl_usd","legendFormat":"pnl","refId":"B"},{"expr":"polymarket_runtime_realized_pnl_usd","legendFormat":"canonical realized","refId":"C"}],"fieldConfig":{"defaults":{"unit":"currencyUSD"},"overrides":[]},"options":{"legend":{"displayMode":"table","placement":"bottom","calcs":["lastNotNull","min","max"]},"tooltip":{"mode":"multi","sort":"desc"}}},
-    {"id":11,"type":"timeseries","title":"The Two Live Algorithms — PAPER","description":"Exactly two algorithms are admitted: Crypto Settlement Engine and Structural Arbitrage Engine. Internal components have no independent authority.","gridPos":{"h":8,"w":12,"x":12,"y":4},"datasource":{"type":"prometheus","uid":"prometheus-v7"},"targets":[{"expr":"polymarket_v7_economic_engine_configured","legendFormat":"{{engine}}","refId":"A"},{"expr":"polymarket_v7_live_algorithm_count","legendFormat":"live algorithm count","refId":"B"},{"expr":"polymarket_v7_legacy_algorithm_count","legendFormat":"legacy count","refId":"C"},{"expr":"polymarket_v7_economic_new_risk_ready","legendFormat":"new-risk authority","refId":"D"}],"fieldConfig":{"defaults":{"unit":"short","min":0},"overrides":[]},"options":{"legend":{"displayMode":"table","placement":"bottom","calcs":["lastNotNull"]},"tooltip":{"mode":"multi","sort":"desc"}}},
-
-    {"id":20,"type":"row","title":"Canonical Economics / Completion","gridPos":{"h":1,"w":24,"x":0,"y":12},"collapsed":false,"panels":[]},
-    {"id":21,"type":"stat","title":"Economic Completion Rate","gridPos":{"h":4,"w":4,"x":0,"y":13},"datasource":{"type":"prometheus","uid":"prometheus-v7"},"targets":[{"expr":"polymarket_v7_canonical_complete_units / clamp_min(polymarket_v7_canonical_submitted_units, 1)","refId":"A"}],"fieldConfig":{"defaults":{"unit":"percentunit","min":0,"max":1},"overrides":[]},"options":{"reduceOptions":{"calcs":["lastNotNull"],"fields":"","values":false},"colorMode":"value","graphMode":"area","justifyMode":"auto","orientation":"auto","textMode":"auto"}},
-    {"id":22,"type":"stat","title":"Submitted Economic Units","gridPos":{"h":4,"w":4,"x":4,"y":13},"datasource":{"type":"prometheus","uid":"prometheus-v7"},"targets":[{"expr":"polymarket_v7_canonical_submitted_units","refId":"A"}],"fieldConfig":{"defaults":{"unit":"short"},"overrides":[]},"options":{"reduceOptions":{"calcs":["lastNotNull"],"fields":"","values":false},"colorMode":"value","graphMode":"area","justifyMode":"auto","orientation":"auto","textMode":"auto"}},
-    {"id":23,"type":"stat","title":"Completed Economic Units","gridPos":{"h":4,"w":4,"x":8,"y":13},"datasource":{"type":"prometheus","uid":"prometheus-v7"},"targets":[{"expr":"polymarket_v7_canonical_complete_units","refId":"A"}],"fieldConfig":{"defaults":{"unit":"short"},"overrides":[]},"options":{"reduceOptions":{"calcs":["lastNotNull"],"fields":"","values":false},"colorMode":"value","graphMode":"area","justifyMode":"auto","orientation":"auto","textMode":"auto"}},
-    {"id":24,"type":"stat","title":"Partial Fill Events","gridPos":{"h":4,"w":4,"x":12,"y":13},"datasource":{"type":"prometheus","uid":"prometheus-v7"},"targets":[{"expr":"polymarket_execution_partial_fills","refId":"A"}],"fieldConfig":{"defaults":{"unit":"short"},"overrides":[]},"options":{"reduceOptions":{"calcs":["lastNotNull"],"fields":"","values":false},"colorMode":"value","graphMode":"area","justifyMode":"auto","orientation":"auto","textMode":"auto"}},
-    {"id":25,"type":"stat","title":"Unwinds","gridPos":{"h":4,"w":4,"x":16,"y":13},"datasource":{"type":"prometheus","uid":"prometheus-v7"},"targets":[{"expr":"polymarket_execution_unwinds","refId":"A"}],"fieldConfig":{"defaults":{"unit":"short"},"overrides":[]},"options":{"reduceOptions":{"calcs":["lastNotNull"],"fields":"","values":false},"colorMode":"value","graphMode":"area","justifyMode":"auto","orientation":"auto","textMode":"auto"}},
-    {"id":26,"type":"stat","title":"Capital Hours","gridPos":{"h":4,"w":4,"x":20,"y":13},"datasource":{"type":"prometheus","uid":"prometheus-v7"},"targets":[{"expr":"polymarket_execution_capital_hours","refId":"A"}],"fieldConfig":{"defaults":{"unit":"h"},"overrides":[]},"options":{"reduceOptions":{"calcs":["lastNotNull"],"fields":"","values":false},"colorMode":"value","graphMode":"area","justifyMode":"auto","orientation":"auto","textMode":"auto"}},
-    {"id":27,"type":"timeseries","title":"Orders / Fills / Completion Events","gridPos":{"h":8,"w":12,"x":0,"y":17},"datasource":{"type":"prometheus","uid":"prometheus-v7"},"targets":[{"expr":"polymarket_execution_orders_submitted","legendFormat":"orders","refId":"A"},{"expr":"polymarket_execution_fills","legendFormat":"fills","refId":"B"},{"expr":"polymarket_execution_complete_fills","legendFormat":"complete leg fills","refId":"C"},{"expr":"polymarket_execution_partial_fills","legendFormat":"partial leg fills","refId":"D"}],"fieldConfig":{"defaults":{"unit":"short"},"overrides":[]},"options":{"legend":{"displayMode":"table","placement":"bottom","calcs":["lastNotNull"]},"tooltip":{"mode":"multi","sort":"desc"}}},
-    {"id":28,"type":"timeseries","title":"Executable Markout by Horizon","gridPos":{"h":8,"w":12,"x":12,"y":17},"datasource":{"type":"prometheus","uid":"prometheus-v7"},"targets":[{"expr":"polymarket_execution_mean_markout","legendFormat":"{{horizon}}","refId":"A"}],"fieldConfig":{"defaults":{"unit":"none"},"overrides":[]},"options":{"legend":{"displayMode":"table","placement":"bottom","calcs":["lastNotNull"]},"tooltip":{"mode":"multi","sort":"desc"}}},
-
-    {"id":40,"type":"row","title":"Runtime / Data / Evidence Health","gridPos":{"h":1,"w":24,"x":0,"y":33},"collapsed":false,"panels":[]},
-    {"id":41,"type":"stat","title":"Ledger Valid","gridPos":{"h":4,"w":4,"x":0,"y":34},"datasource":{"type":"prometheus","uid":"prometheus-v7"},"targets":[{"expr":"polymarket_v7_ledger_valid","refId":"A"}],"fieldConfig":{"defaults":{"mappings":[{"type":"value","options":{"0":{"text":"INVALID/MISSING"},"1":{"text":"VALID"}}}]},"overrides":[]},"options":{"reduceOptions":{"calcs":["lastNotNull"],"fields":"","values":false},"colorMode":"value","graphMode":"none","justifyMode":"auto","orientation":"auto","textMode":"auto"}},
-    {"id":42,"type":"stat","title":"Trade Tape Rows","gridPos":{"h":4,"w":4,"x":4,"y":34},"datasource":{"type":"prometheus","uid":"prometheus-v7"},"targets":[{"expr":"polymarket_v7_trade_tape_rows","refId":"A"}],"fieldConfig":{"defaults":{"unit":"short"},"overrides":[]},"options":{"reduceOptions":{"calcs":["lastNotNull"],"fields":"","values":false},"colorMode":"value","graphMode":"area","justifyMode":"auto","orientation":"auto","textMode":"auto"}},
-    {"id":43,"type":"stat","title":"Trade Tape Assets","gridPos":{"h":4,"w":4,"x":8,"y":34},"datasource":{"type":"prometheus","uid":"prometheus-v7"},"targets":[{"expr":"polymarket_v7_trade_tape_assets","refId":"A"}],"fieldConfig":{"defaults":{"unit":"short"},"overrides":[]},"options":{"reduceOptions":{"calcs":["lastNotNull"],"fields":"","values":false},"colorMode":"value","graphMode":"area","justifyMode":"auto","orientation":"auto","textMode":"auto"}},
-    {"id":44,"type":"stat","title":"PAPER Contract","gridPos":{"h":4,"w":4,"x":12,"y":34},"datasource":{"type":"prometheus","uid":"prometheus-v7"},"targets":[{"expr":"polymarket_v7_paper_only_contract_ok","refId":"A"}],"fieldConfig":{"defaults":{"mappings":[{"type":"value","options":{"0":{"text":"INVALID"},"1":{"text":"PAPER"}}}]},"overrides":[]},"options":{"reduceOptions":{"calcs":["lastNotNull"],"fields":"","values":false},"colorMode":"value","graphMode":"none","justifyMode":"auto","orientation":"auto","textMode":"auto"}},
-    {"id":45,"type":"stat","title":"Authenticated Execution Disabled","gridPos":{"h":4,"w":4,"x":16,"y":34},"datasource":{"type":"prometheus","uid":"prometheus-v7"},"targets":[{"expr":"polymarket_v7_authenticated_execution_disabled","refId":"A"}],"fieldConfig":{"defaults":{"mappings":[{"type":"value","options":{"0":{"text":"UNSAFE"},"1":{"text":"DISABLED"}}}]},"overrides":[]},"options":{"reduceOptions":{"calcs":["lastNotNull"],"fields":"","values":false},"colorMode":"value","graphMode":"none","justifyMode":"auto","orientation":"auto","textMode":"auto"}},
-    {"id":46,"type":"stat","title":"Kill Switch","gridPos":{"h":4,"w":4,"x":20,"y":34},"datasource":{"type":"prometheus","uid":"prometheus-v7"},"targets":[{"expr":"polymarket_runtime_killed","refId":"A"}],"fieldConfig":{"defaults":{"mappings":[{"type":"value","options":{"0":{"text":"OK"},"1":{"text":"KILLED"}}}]},"overrides":[]},"options":{"reduceOptions":{"calcs":["lastNotNull"],"fields":"","values":false},"colorMode":"value","graphMode":"none","justifyMode":"auto","orientation":"auto","textMode":"auto"}},
-    {"id":47,"type":"timeseries","title":"Canonical Surface Freshness","gridPos":{"h":8,"w":24,"x":0,"y":38},"datasource":{"type":"prometheus","uid":"prometheus-v7"},"targets":[{"expr":"polymarket_v7_state_age_seconds","legendFormat":"{{surface}}","refId":"A"}],"fieldConfig":{"defaults":{"unit":"s"},"overrides":[]},"options":{"legend":{"displayMode":"table","placement":"bottom","calcs":["lastNotNull","max"]},"tooltip":{"mode":"multi","sort":"desc"}}},
-
-    {"id":60,"type":"row","title":"24/7 Operator Home","gridPos":{"h":1,"w":24,"x":0,"y":46},"collapsed":false,"panels":[]},
-    {"id":61,"type":"stat","title":"Supervisor","gridPos":{"h":4,"w":4,"x":0,"y":47},"datasource":{"type":"prometheus","uid":"prometheus-v7"},"targets":[{"expr":"polymarket_v7_supervisor_alive","refId":"A"}],"fieldConfig":{"defaults":{"mappings":[{"type":"value","options":{"0":{"text":"DOWN"},"1":{"text":"ALIVE"}}}]},"overrides":[]},"options":{"reduceOptions":{"calcs":["lastNotNull"],"fields":"","values":false},"colorMode":"value","graphMode":"none","textMode":"auto"}},
-    {"id":62,"type":"stat","title":"Single Writer","gridPos":{"h":4,"w":4,"x":4,"y":47},"datasource":{"type":"prometheus","uid":"prometheus-v7"},"targets":[{"expr":"polymarket_v7_single_writer_ok","refId":"A"}],"fieldConfig":{"defaults":{"mappings":[{"type":"value","options":{"0":{"text":"FAILED"},"1":{"text":"PROVEN"}}}]},"overrides":[]},"options":{"reduceOptions":{"calcs":["lastNotNull"],"fields":"","values":false},"colorMode":"value","graphMode":"none","textMode":"auto"}},
-    {"id":63,"type":"stat","title":"Exact SHA","gridPos":{"h":4,"w":4,"x":8,"y":47},"datasource":{"type":"prometheus","uid":"prometheus-v7"},"targets":[{"expr":"polymarket_v7_exact_sha_ok","refId":"A"}],"fieldConfig":{"defaults":{"mappings":[{"type":"value","options":{"0":{"text":"DRIFT"},"1":{"text":"MATCH"}}}]},"overrides":[]},"options":{"reduceOptions":{"calcs":["lastNotNull"],"fields":"","values":false},"colorMode":"value","graphMode":"none","textMode":"auto"}},
-    {"id":64,"type":"stat","title":"Uptime","gridPos":{"h":4,"w":4,"x":12,"y":47},"datasource":{"type":"prometheus","uid":"prometheus-v7"},"targets":[{"expr":"polymarket_v7_runtime_uptime_seconds","refId":"A"}],"fieldConfig":{"defaults":{"unit":"s"},"overrides":[]},"options":{"reduceOptions":{"calcs":["lastNotNull"],"fields":"","values":false},"colorMode":"value","graphMode":"area","textMode":"auto"}},
-    {"id":65,"type":"stat","title":"Restarts / Window","gridPos":{"h":4,"w":4,"x":16,"y":47},"datasource":{"type":"prometheus","uid":"prometheus-v7"},"targets":[{"expr":"polymarket_v7_restart_count_window","refId":"A"}],"fieldConfig":{"defaults":{"unit":"short"},"overrides":[]},"options":{"reduceOptions":{"calcs":["lastNotNull"],"fields":"","values":false},"colorMode":"value","graphMode":"area","textMode":"auto"}},
-    {"id":66,"type":"stat","title":"Disk Free","gridPos":{"h":4,"w":4,"x":20,"y":47},"datasource":{"type":"prometheus","uid":"prometheus-v7"},"targets":[{"expr":"polymarket_v7_disk_free_ratio","refId":"A"}],"fieldConfig":{"defaults":{"unit":"percentunit","min":0,"max":1},"overrides":[]},"options":{"reduceOptions":{"calcs":["lastNotNull"],"fields":"","values":false},"colorMode":"value","graphMode":"area","textMode":"auto"}},
-    {"id":67,"type":"timeseries","title":"Action Funnel","gridPos":{"h":8,"w":12,"x":0,"y":51},"datasource":{"type":"prometheus","uid":"prometheus-v7"},"targets":[{"expr":"polymarket_execution_opportunities","legendFormat":"opportunities","refId":"A"},{"expr":"polymarket_execution_candidates","legendFormat":"candidates","refId":"B"},{"expr":"polymarket_execution_makes","legendFormat":"makes","refId":"C"},{"expr":"polymarket_execution_takes","legendFormat":"takes","refId":"D"},{"expr":"polymarket_execution_arbs","legendFormat":"arbs","refId":"E"},{"expr":"polymarket_execution_cancels","legendFormat":"cancels","refId":"F"},{"expr":"polymarket_execution_withdraws","legendFormat":"withdraws","refId":"G"},{"expr":"polymarket_execution_orders_submitted","legendFormat":"orders","refId":"H"},{"expr":"polymarket_execution_effective_orders","legendFormat":"effective orders","refId":"I"},{"expr":"polymarket_execution_fills","legendFormat":"fills","refId":"J"}],"fieldConfig":{"defaults":{"unit":"short"},"overrides":[]},"options":{"legend":{"displayMode":"table","placement":"bottom","calcs":["lastNotNull"]},"tooltip":{"mode":"multi","sort":"desc"}}},
-    {"id":68,"type":"timeseries","title":"24/7 Runtime and Economic Data Health","description":"Fail-closed health for the two live PAPER algorithms and their canonical data plane.","gridPos":{"h":8,"w":12,"x":12,"y":51},"datasource":{"type":"prometheus","uid":"prometheus-v7"},"targets":[{"expr":"polymarket_v7_health","legendFormat":"overall health","refId":"A"},{"expr":"polymarket_v7_live_algorithm_scope_wired","legendFormat":"two-algorithm scope","refId":"B"},{"expr":"polymarket_external_fair_present * polymarket_external_fair_healthy","legendFormat":"crypto settlement evidence feed","refId":"C"},{"expr":"polymarket_external_fair_present * polymarket_external_fair_oracle_healthy","legendFormat":"settlement oracle","refId":"D"},{"expr":"polymarket_v7_ledger_writable","legendFormat":"canonical ledger writable","refId":"E"},{"expr":"polymarket_v7_component_ready","legendFormat":"component {{component}}","refId":"F"}],"fieldConfig":{"defaults":{"unit":"short","min":0},"overrides":[]},"options":{"legend":{"displayMode":"table","placement":"bottom","calcs":["lastNotNull","min"]},"tooltip":{"mode":"multi","sort":"desc"}}},
-    {"id":69,"type":"timeseries","title":"Internal Stage Latency p99 / p99.9","gridPos":{"h":8,"w":12,"x":0,"y":59},"datasource":{"type":"prometheus","uid":"prometheus-v7"},"targets":[{"expr":"polymarket_v7_latency_stage_nanoseconds{percentile=~\"p99|p99_9\"} / 1e6","legendFormat":"{{stage}} {{percentile}}","refId":"A"}],"fieldConfig":{"defaults":{"unit":"ms"},"overrides":[]},"options":{"legend":{"displayMode":"table","placement":"bottom","calcs":["lastNotNull","max"]},"tooltip":{"mode":"multi","sort":"desc"}}},
-    {"id":70,"type":"timeseries","title":"Meaningful Active Alerts","gridPos":{"h":8,"w":12,"x":12,"y":59},"datasource":{"type":"prometheus","uid":"prometheus-v7"},"targets":[{"expr":"ALERTS{alertstate=\"firing\"}","legendFormat":"{{alertname}} {{severity}}","refId":"A"}],"fieldConfig":{"defaults":{"unit":"short","min":0},"overrides":[]},"options":{"legend":{"displayMode":"table","placement":"bottom","calcs":["lastNotNull"]},"tooltip":{"mode":"multi","sort":"desc"}}},
-    {"id":73,"type":"row","title":"Adaptive Full-Market Coverage","gridPos":{"h":1,"w":24,"x":0,"y":75},"collapsed":false,"panels":[]},
-    {"id":74,"type":"timeseries","title":"Universe Coverage / HOT-WARM-COLD","gridPos":{"h":8,"w":12,"x":0,"y":76},"datasource":{"type":"prometheus","uid":"prometheus-v7"},"targets":[{"expr":"polymarket_v7_universe_discovered_markets","legendFormat":"discovered","refId":"A"},{"expr":"polymarket_v7_universe_eligible_markets","legendFormat":"eligible","refId":"B"},{"expr":"polymarket_v7_universe_tier_markets","legendFormat":"{{tier}}","refId":"C"},{"expr":"polymarket_v7_universe_skipped_markets","legendFormat":"skipped","refId":"D"}],"fieldConfig":{"defaults":{"unit":"short","min":0},"overrides":[]},"options":{"legend":{"displayMode":"table","placement":"bottom","calcs":["lastNotNull"]},"tooltip":{"mode":"multi","sort":"desc"}}},
-    {"id":75,"type":"timeseries","title":"Universe Exhaustiveness / Discovery Cost","gridPos":{"h":8,"w":12,"x":12,"y":76},"datasource":{"type":"prometheus","uid":"prometheus-v7"},"targets":[{"expr":"polymarket_v7_universe_discovery_exhaustive","legendFormat":"exhaustive","refId":"A"},{"expr":"polymarket_v7_universe_pages","legendFormat":"pages","refId":"B"},{"expr":"polymarket_v7_universe_scan_duration_milliseconds","legendFormat":"scan ms","refId":"C"},{"expr":"polymarket_v7_universe_resource_limit","legendFormat":"limit {{tier}}/{{dimension}}","refId":"D"}],"fieldConfig":{"defaults":{"unit":"short","min":0},"overrides":[]},"options":{"legend":{"displayMode":"table","placement":"bottom","calcs":["lastNotNull"]},"tooltip":{"mode":"multi","sort":"desc"}}},
-    {"id":76,"type":"row","title":"Canonical Portfolio Reconciliation","gridPos":{"h":1,"w":24,"x":0,"y":84},"collapsed":false,"panels":[]},
-    {"id":77,"type":"stat","title":"Ledger / Component State / Portfolio Reconciled","gridPos":{"h":5,"w":6,"x":0,"y":85},"datasource":{"type":"prometheus","uid":"prometheus-v7"},"targets":[{"expr":"polymarket_v7_portfolio_reconciled","refId":"A"}],"fieldConfig":{"defaults":{"mappings":[{"type":"value","options":{"0":{"text":"DIVERGED"},"1":{"text":"RECONCILED"}}}],"thresholds":{"mode":"absolute","steps":[{"color":"red","value":null},{"color":"green","value":1}]}},"overrides":[]},"options":{"reduceOptions":{"calcs":["lastNotNull"],"fields":"","values":false},"colorMode":"background","graphMode":"none","textMode":"auto"}},
-    {"id":78,"type":"stat","title":"Accounting Divergences","gridPos":{"h":5,"w":6,"x":6,"y":85},"datasource":{"type":"prometheus","uid":"prometheus-v7"},"targets":[{"expr":"polymarket_v7_reconciliation_divergences","refId":"A"}],"fieldConfig":{"defaults":{"unit":"short","thresholds":{"mode":"absolute","steps":[{"color":"green","value":null},{"color":"red","value":1}]}},"overrides":[]},"options":{"reduceOptions":{"calcs":["lastNotNull"],"fields":"","values":false},"colorMode":"background","graphMode":"none","textMode":"auto"}},
-    {"id":86,"type":"row","title":"Crypto Settlement Contexts","gridPos":{"h":1,"w":24,"x":0,"y":110},"collapsed":false,"panels":[]},
-    {"id":87,"type":"timeseries","title":"Crypto Settlement Context Coverage","description":"All contexts belong to Crypto Settlement Engine; zero-authority contexts collect PAPER evidence but cannot add risk.","gridPos":{"h":8,"w":14,"x":0,"y":111},"datasource":{"type":"prometheus","uid":"prometheus-v7"},"targets":[{"expr":"polymarket_v7_crypto_context_registered","legendFormat":"context {{asset}} {{horizon}} {{contract_family}}","refId":"A"},{"expr":"polymarket_v7_crypto_context_zero_authority","legendFormat":"ZERO AUTHORITY {{asset}} {{horizon}}","refId":"B"},{"expr":"polymarket_v7_crypto_context_model_registered","legendFormat":"model evidence {{asset}} {{horizon}}","refId":"C"},{"expr":"polymarket_v7_crypto_context_new_risk_authorized","legendFormat":"NEW-RISK AUTHORITY {{asset}} {{horizon}}","refId":"D"}],"fieldConfig":{"defaults":{"unit":"short","min":0,"max":1},"overrides":[]},"options":{"legend":{"displayMode":"table","placement":"bottom","calcs":["lastNotNull"]},"tooltip":{"mode":"multi","sort":"desc"}}},
-    {"id":88,"type":"timeseries","title":"Global Correlated Crypto Risk","gridPos":{"h":8,"w":10,"x":14,"y":111},"datasource":{"type":"prometheus","uid":"prometheus-v7"},"targets":[{"expr":"polymarket_v7_crypto_gross_exposure_usd","legendFormat":"gross crypto","refId":"A"},{"expr":"polymarket_v7_crypto_net_directional_exposure_usd","legendFormat":"net directional","refId":"B"},{"expr":"polymarket_v7_crypto_cluster_exposure_usd","legendFormat":"correlated cluster","refId":"C"}],"fieldConfig":{"defaults":{"unit":"currencyUSD","min":0},"overrides":[]},"options":{"legend":{"displayMode":"table","placement":"bottom","calcs":["lastNotNull","max"]},"tooltip":{"mode":"multi","sort":"desc"}}}
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus-v7"
+      },
+      "description": "Evidence-collection accounting only; no real capital is at risk.",
+      "fieldConfig": {
+        "defaults": {
+          "unit": "currencyUSD"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 4,
+        "w": 4,
+        "x": 0,
+        "y": 0
+      },
+      "id": 1,
+      "options": {
+        "colorMode": "value",
+        "graphMode": "area",
+        "justifyMode": "auto",
+        "orientation": "auto",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "textMode": "auto"
+      },
+      "targets": [
+        {
+          "expr": "polymarket_runtime_equity_usd",
+          "refId": "A"
+        }
+      ],
+      "title": "Observed PAPER Equity",
+      "type": "stat"
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus-v7"
+      },
+      "description": "Counterfactual/PAPER result; not realized account profit.",
+      "fieldConfig": {
+        "defaults": {
+          "unit": "currencyUSD"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 4,
+        "w": 4,
+        "x": 4,
+        "y": 0
+      },
+      "id": 2,
+      "options": {
+        "colorMode": "value",
+        "graphMode": "area",
+        "justifyMode": "auto",
+        "orientation": "auto",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "textMode": "auto"
+      },
+      "targets": [
+        {
+          "expr": "polymarket_runtime_pnl_usd",
+          "refId": "A"
+        }
+      ],
+      "title": "Observed PAPER PnL",
+      "type": "stat"
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus-v7"
+      },
+      "description": "PnL from canonical PAPER economic units only.",
+      "fieldConfig": {
+        "defaults": {
+          "unit": "currencyUSD"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 4,
+        "w": 4,
+        "x": 8,
+        "y": 0
+      },
+      "id": 3,
+      "options": {
+        "colorMode": "value",
+        "graphMode": "area",
+        "justifyMode": "auto",
+        "orientation": "auto",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "textMode": "auto"
+      },
+      "targets": [
+        {
+          "expr": "polymarket_runtime_realized_pnl_usd",
+          "refId": "A"
+        }
+      ],
+      "title": "Canonical PAPER PnL",
+      "type": "stat"
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus-v7"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "max": 0.15,
+          "min": 0,
+          "unit": "percentunit"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 4,
+        "w": 4,
+        "x": 12,
+        "y": 0
+      },
+      "id": 4,
+      "options": {
+        "colorMode": "value",
+        "graphMode": "area",
+        "justifyMode": "auto",
+        "orientation": "auto",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "textMode": "auto"
+      },
+      "targets": [
+        {
+          "expr": "polymarket_runtime_drawdown_ratio",
+          "refId": "A"
+        }
+      ],
+      "title": "Drawdown",
+      "type": "stat"
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus-v7"
+      },
+      "description": "Must remain BLOCKED until forward economic evidence passes. This is independent of 24/7 runtime health.",
+      "fieldConfig": {
+        "defaults": {
+          "mappings": [
+            {
+              "options": {
+                "0": {
+                  "text": "BLOCKED \u2014 EVIDENCE"
+                },
+                "1": {
+                  "text": "PAPER AUTHORIZED"
+                }
+              },
+              "type": "value"
+            }
+          ]
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 4,
+        "w": 4,
+        "x": 16,
+        "y": 0
+      },
+      "id": 5,
+      "options": {
+        "colorMode": "value",
+        "graphMode": "none",
+        "justifyMode": "auto",
+        "orientation": "auto",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "textMode": "auto"
+      },
+      "targets": [
+        {
+          "expr": "polymarket_v7_economic_new_risk_ready",
+          "refId": "A"
+        }
+      ],
+      "title": "Economic New-Risk Authority",
+      "type": "stat"
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus-v7"
+      },
+      "description": "Process availability only; ALIVE does not mean an algorithm has execution authority.",
+      "fieldConfig": {
+        "defaults": {
+          "mappings": [
+            {
+              "options": {
+                "0": {
+                  "text": "DOWN"
+                },
+                "1": {
+                  "text": "ALIVE \u2014 PAPER"
+                }
+              },
+              "type": "value"
+            }
+          ]
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 4,
+        "w": 4,
+        "x": 20,
+        "y": 0
+      },
+      "id": 6,
+      "options": {
+        "colorMode": "value",
+        "graphMode": "none",
+        "justifyMode": "auto",
+        "orientation": "auto",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "textMode": "auto"
+      },
+      "targets": [
+        {
+          "expr": "polymarket_v7_execution_alive",
+          "refId": "A"
+        }
+      ],
+      "title": "24/7 PAPER Runtime",
+      "type": "stat"
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus-v7"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "currencyUSD"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 4
+      },
+      "id": 10,
+      "options": {
+        "legend": {
+          "calcs": [
+            "lastNotNull",
+            "min",
+            "max"
+          ],
+          "displayMode": "table",
+          "placement": "bottom"
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "expr": "polymarket_runtime_equity_usd",
+          "legendFormat": "equity",
+          "refId": "A"
+        },
+        {
+          "expr": "polymarket_runtime_pnl_usd",
+          "legendFormat": "pnl",
+          "refId": "B"
+        },
+        {
+          "expr": "polymarket_runtime_realized_pnl_usd",
+          "legendFormat": "canonical realized",
+          "refId": "C"
+        }
+      ],
+      "title": "Equity / PnL",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus-v7"
+      },
+      "description": "Exactly two algorithms are admitted: Crypto Settlement Engine and Structural Arbitrage Engine. Internal components have no independent authority.",
+      "fieldConfig": {
+        "defaults": {
+          "min": 0,
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 4
+      },
+      "id": 11,
+      "options": {
+        "legend": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "displayMode": "table",
+          "placement": "bottom"
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "expr": "polymarket_v7_economic_engine_configured",
+          "legendFormat": "{{engine}}",
+          "refId": "A"
+        },
+        {
+          "expr": "polymarket_v7_live_algorithm_count",
+          "legendFormat": "live algorithm count",
+          "refId": "B"
+        },
+        {
+          "expr": "polymarket_v7_economic_new_risk_ready",
+          "legendFormat": "new-risk authority",
+          "refId": "D"
+        }
+      ],
+      "title": "The Two Live Algorithms \u2014 PAPER",
+      "type": "timeseries"
+    },
+    {
+      "collapsed": false,
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 12
+      },
+      "id": 20,
+      "panels": [],
+      "title": "Canonical Economics / Completion",
+      "type": "row"
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus-v7"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "max": 1,
+          "min": 0,
+          "unit": "percentunit"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 4,
+        "w": 4,
+        "x": 0,
+        "y": 13
+      },
+      "id": 21,
+      "options": {
+        "colorMode": "value",
+        "graphMode": "area",
+        "justifyMode": "auto",
+        "orientation": "auto",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "textMode": "auto"
+      },
+      "targets": [
+        {
+          "expr": "polymarket_v7_canonical_complete_units / clamp_min(polymarket_v7_canonical_submitted_units, 1)",
+          "refId": "A"
+        }
+      ],
+      "title": "Economic Completion Rate",
+      "type": "stat"
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus-v7"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 4,
+        "w": 4,
+        "x": 4,
+        "y": 13
+      },
+      "id": 22,
+      "options": {
+        "colorMode": "value",
+        "graphMode": "area",
+        "justifyMode": "auto",
+        "orientation": "auto",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "textMode": "auto"
+      },
+      "targets": [
+        {
+          "expr": "polymarket_v7_canonical_submitted_units",
+          "refId": "A"
+        }
+      ],
+      "title": "Submitted Economic Units",
+      "type": "stat"
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus-v7"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 4,
+        "w": 4,
+        "x": 8,
+        "y": 13
+      },
+      "id": 23,
+      "options": {
+        "colorMode": "value",
+        "graphMode": "area",
+        "justifyMode": "auto",
+        "orientation": "auto",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "textMode": "auto"
+      },
+      "targets": [
+        {
+          "expr": "polymarket_v7_canonical_complete_units",
+          "refId": "A"
+        }
+      ],
+      "title": "Completed Economic Units",
+      "type": "stat"
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus-v7"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 4,
+        "w": 4,
+        "x": 12,
+        "y": 13
+      },
+      "id": 24,
+      "options": {
+        "colorMode": "value",
+        "graphMode": "area",
+        "justifyMode": "auto",
+        "orientation": "auto",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "textMode": "auto"
+      },
+      "targets": [
+        {
+          "expr": "polymarket_execution_partial_fills",
+          "refId": "A"
+        }
+      ],
+      "title": "Partial Fill Events",
+      "type": "stat"
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus-v7"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 4,
+        "w": 4,
+        "x": 16,
+        "y": 13
+      },
+      "id": 25,
+      "options": {
+        "colorMode": "value",
+        "graphMode": "area",
+        "justifyMode": "auto",
+        "orientation": "auto",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "textMode": "auto"
+      },
+      "targets": [
+        {
+          "expr": "polymarket_execution_unwinds",
+          "refId": "A"
+        }
+      ],
+      "title": "Unwinds",
+      "type": "stat"
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus-v7"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "h"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 4,
+        "w": 4,
+        "x": 20,
+        "y": 13
+      },
+      "id": 26,
+      "options": {
+        "colorMode": "value",
+        "graphMode": "area",
+        "justifyMode": "auto",
+        "orientation": "auto",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "textMode": "auto"
+      },
+      "targets": [
+        {
+          "expr": "polymarket_execution_capital_hours",
+          "refId": "A"
+        }
+      ],
+      "title": "Capital Hours",
+      "type": "stat"
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus-v7"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 17
+      },
+      "id": 27,
+      "options": {
+        "legend": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "displayMode": "table",
+          "placement": "bottom"
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "expr": "polymarket_execution_orders_submitted",
+          "legendFormat": "orders",
+          "refId": "A"
+        },
+        {
+          "expr": "polymarket_execution_fills",
+          "legendFormat": "fills",
+          "refId": "B"
+        },
+        {
+          "expr": "polymarket_execution_complete_fills",
+          "legendFormat": "complete leg fills",
+          "refId": "C"
+        },
+        {
+          "expr": "polymarket_execution_partial_fills",
+          "legendFormat": "partial leg fills",
+          "refId": "D"
+        }
+      ],
+      "title": "Orders / Fills / Completion Events",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus-v7"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "none"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 17
+      },
+      "id": 28,
+      "options": {
+        "legend": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "displayMode": "table",
+          "placement": "bottom"
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "expr": "polymarket_execution_mean_markout",
+          "legendFormat": "{{horizon}}",
+          "refId": "A"
+        }
+      ],
+      "title": "Executable Markout by Horizon",
+      "type": "timeseries"
+    },
+    {
+      "collapsed": false,
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 33
+      },
+      "id": 40,
+      "panels": [],
+      "title": "Runtime / Data / Evidence Health",
+      "type": "row"
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus-v7"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "mappings": [
+            {
+              "options": {
+                "0": {
+                  "text": "INVALID/MISSING"
+                },
+                "1": {
+                  "text": "VALID"
+                }
+              },
+              "type": "value"
+            }
+          ]
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 4,
+        "w": 4,
+        "x": 0,
+        "y": 34
+      },
+      "id": 41,
+      "options": {
+        "colorMode": "value",
+        "graphMode": "none",
+        "justifyMode": "auto",
+        "orientation": "auto",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "textMode": "auto"
+      },
+      "targets": [
+        {
+          "expr": "polymarket_v7_ledger_valid",
+          "refId": "A"
+        }
+      ],
+      "title": "Ledger Valid",
+      "type": "stat"
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus-v7"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 4,
+        "w": 4,
+        "x": 4,
+        "y": 34
+      },
+      "id": 42,
+      "options": {
+        "colorMode": "value",
+        "graphMode": "area",
+        "justifyMode": "auto",
+        "orientation": "auto",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "textMode": "auto"
+      },
+      "targets": [
+        {
+          "expr": "polymarket_v7_trade_tape_rows",
+          "refId": "A"
+        }
+      ],
+      "title": "Trade Tape Rows",
+      "type": "stat"
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus-v7"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 4,
+        "w": 4,
+        "x": 8,
+        "y": 34
+      },
+      "id": 43,
+      "options": {
+        "colorMode": "value",
+        "graphMode": "area",
+        "justifyMode": "auto",
+        "orientation": "auto",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "textMode": "auto"
+      },
+      "targets": [
+        {
+          "expr": "polymarket_v7_trade_tape_assets",
+          "refId": "A"
+        }
+      ],
+      "title": "Trade Tape Assets",
+      "type": "stat"
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus-v7"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "mappings": [
+            {
+              "options": {
+                "0": {
+                  "text": "INVALID"
+                },
+                "1": {
+                  "text": "PAPER"
+                }
+              },
+              "type": "value"
+            }
+          ]
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 4,
+        "w": 4,
+        "x": 12,
+        "y": 34
+      },
+      "id": 44,
+      "options": {
+        "colorMode": "value",
+        "graphMode": "none",
+        "justifyMode": "auto",
+        "orientation": "auto",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "textMode": "auto"
+      },
+      "targets": [
+        {
+          "expr": "polymarket_v7_paper_only_contract_ok",
+          "refId": "A"
+        }
+      ],
+      "title": "PAPER Contract",
+      "type": "stat"
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus-v7"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "mappings": [
+            {
+              "options": {
+                "0": {
+                  "text": "UNSAFE"
+                },
+                "1": {
+                  "text": "DISABLED"
+                }
+              },
+              "type": "value"
+            }
+          ]
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 4,
+        "w": 4,
+        "x": 16,
+        "y": 34
+      },
+      "id": 45,
+      "options": {
+        "colorMode": "value",
+        "graphMode": "none",
+        "justifyMode": "auto",
+        "orientation": "auto",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "textMode": "auto"
+      },
+      "targets": [
+        {
+          "expr": "polymarket_v7_authenticated_execution_disabled",
+          "refId": "A"
+        }
+      ],
+      "title": "Authenticated Execution Disabled",
+      "type": "stat"
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus-v7"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "mappings": [
+            {
+              "options": {
+                "0": {
+                  "text": "OK"
+                },
+                "1": {
+                  "text": "KILLED"
+                }
+              },
+              "type": "value"
+            }
+          ]
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 4,
+        "w": 4,
+        "x": 20,
+        "y": 34
+      },
+      "id": 46,
+      "options": {
+        "colorMode": "value",
+        "graphMode": "none",
+        "justifyMode": "auto",
+        "orientation": "auto",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "textMode": "auto"
+      },
+      "targets": [
+        {
+          "expr": "polymarket_runtime_killed",
+          "refId": "A"
+        }
+      ],
+      "title": "Kill Switch",
+      "type": "stat"
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus-v7"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 24,
+        "x": 0,
+        "y": 38
+      },
+      "id": 47,
+      "options": {
+        "legend": {
+          "calcs": [
+            "lastNotNull",
+            "max"
+          ],
+          "displayMode": "table",
+          "placement": "bottom"
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "expr": "polymarket_v7_state_age_seconds",
+          "legendFormat": "{{surface}}",
+          "refId": "A"
+        }
+      ],
+      "title": "Canonical Surface Freshness",
+      "type": "timeseries"
+    },
+    {
+      "collapsed": false,
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 46
+      },
+      "id": 60,
+      "panels": [],
+      "title": "24/7 Operator Home",
+      "type": "row"
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus-v7"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "mappings": [
+            {
+              "options": {
+                "0": {
+                  "text": "DOWN"
+                },
+                "1": {
+                  "text": "ALIVE"
+                }
+              },
+              "type": "value"
+            }
+          ]
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 4,
+        "w": 4,
+        "x": 0,
+        "y": 47
+      },
+      "id": 61,
+      "options": {
+        "colorMode": "value",
+        "graphMode": "none",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "textMode": "auto"
+      },
+      "targets": [
+        {
+          "expr": "polymarket_v7_supervisor_alive",
+          "refId": "A"
+        }
+      ],
+      "title": "Supervisor",
+      "type": "stat"
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus-v7"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "mappings": [
+            {
+              "options": {
+                "0": {
+                  "text": "FAILED"
+                },
+                "1": {
+                  "text": "PROVEN"
+                }
+              },
+              "type": "value"
+            }
+          ]
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 4,
+        "w": 4,
+        "x": 4,
+        "y": 47
+      },
+      "id": 62,
+      "options": {
+        "colorMode": "value",
+        "graphMode": "none",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "textMode": "auto"
+      },
+      "targets": [
+        {
+          "expr": "polymarket_v7_single_writer_ok",
+          "refId": "A"
+        }
+      ],
+      "title": "Single Writer",
+      "type": "stat"
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus-v7"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "mappings": [
+            {
+              "options": {
+                "0": {
+                  "text": "DRIFT"
+                },
+                "1": {
+                  "text": "MATCH"
+                }
+              },
+              "type": "value"
+            }
+          ]
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 4,
+        "w": 4,
+        "x": 8,
+        "y": 47
+      },
+      "id": 63,
+      "options": {
+        "colorMode": "value",
+        "graphMode": "none",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "textMode": "auto"
+      },
+      "targets": [
+        {
+          "expr": "polymarket_v7_exact_sha_ok",
+          "refId": "A"
+        }
+      ],
+      "title": "Exact SHA",
+      "type": "stat"
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus-v7"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 4,
+        "w": 4,
+        "x": 12,
+        "y": 47
+      },
+      "id": 64,
+      "options": {
+        "colorMode": "value",
+        "graphMode": "area",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "textMode": "auto"
+      },
+      "targets": [
+        {
+          "expr": "polymarket_v7_runtime_uptime_seconds",
+          "refId": "A"
+        }
+      ],
+      "title": "Uptime",
+      "type": "stat"
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus-v7"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 4,
+        "w": 4,
+        "x": 16,
+        "y": 47
+      },
+      "id": 65,
+      "options": {
+        "colorMode": "value",
+        "graphMode": "area",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "textMode": "auto"
+      },
+      "targets": [
+        {
+          "expr": "polymarket_v7_restart_count_window",
+          "refId": "A"
+        }
+      ],
+      "title": "Restarts / Window",
+      "type": "stat"
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus-v7"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "max": 1,
+          "min": 0,
+          "unit": "percentunit"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 4,
+        "w": 4,
+        "x": 20,
+        "y": 47
+      },
+      "id": 66,
+      "options": {
+        "colorMode": "value",
+        "graphMode": "area",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "textMode": "auto"
+      },
+      "targets": [
+        {
+          "expr": "polymarket_v7_disk_free_ratio",
+          "refId": "A"
+        }
+      ],
+      "title": "Disk Free",
+      "type": "stat"
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus-v7"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 51
+      },
+      "id": 67,
+      "options": {
+        "legend": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "displayMode": "table",
+          "placement": "bottom"
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "expr": "polymarket_execution_opportunities",
+          "legendFormat": "opportunities",
+          "refId": "A"
+        },
+        {
+          "expr": "polymarket_execution_candidates",
+          "legendFormat": "candidates",
+          "refId": "B"
+        },
+        {
+          "expr": "polymarket_execution_makes",
+          "legendFormat": "makes",
+          "refId": "C"
+        },
+        {
+          "expr": "polymarket_execution_takes",
+          "legendFormat": "takes",
+          "refId": "D"
+        },
+        {
+          "expr": "polymarket_execution_arbs",
+          "legendFormat": "arbs",
+          "refId": "E"
+        },
+        {
+          "expr": "polymarket_execution_cancels",
+          "legendFormat": "cancels",
+          "refId": "F"
+        },
+        {
+          "expr": "polymarket_execution_withdraws",
+          "legendFormat": "withdraws",
+          "refId": "G"
+        },
+        {
+          "expr": "polymarket_execution_orders_submitted",
+          "legendFormat": "orders",
+          "refId": "H"
+        },
+        {
+          "expr": "polymarket_execution_effective_orders",
+          "legendFormat": "effective orders",
+          "refId": "I"
+        },
+        {
+          "expr": "polymarket_execution_fills",
+          "legendFormat": "fills",
+          "refId": "J"
+        }
+      ],
+      "title": "Action Funnel",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus-v7"
+      },
+      "description": "Fail-closed health for the two live PAPER algorithms and their canonical data plane.",
+      "fieldConfig": {
+        "defaults": {
+          "min": 0,
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 51
+      },
+      "id": 68,
+      "options": {
+        "legend": {
+          "calcs": [
+            "lastNotNull",
+            "min"
+          ],
+          "displayMode": "table",
+          "placement": "bottom"
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "expr": "polymarket_v7_health",
+          "legendFormat": "overall health",
+          "refId": "A"
+        },
+        {
+          "expr": "polymarket_v7_live_algorithm_scope_wired",
+          "legendFormat": "two-algorithm scope",
+          "refId": "B"
+        },
+        {
+          "expr": "polymarket_external_fair_present * polymarket_external_fair_healthy",
+          "legendFormat": "crypto settlement evidence feed",
+          "refId": "C"
+        },
+        {
+          "expr": "polymarket_external_fair_present * polymarket_external_fair_oracle_healthy",
+          "legendFormat": "settlement oracle",
+          "refId": "D"
+        },
+        {
+          "expr": "polymarket_v7_ledger_writable",
+          "legendFormat": "canonical ledger writable",
+          "refId": "E"
+        },
+        {
+          "expr": "polymarket_v7_component_ready",
+          "legendFormat": "component {{component}}",
+          "refId": "F"
+        }
+      ],
+      "title": "24/7 Runtime and Economic Data Health",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus-v7"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "ms"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 59
+      },
+      "id": 69,
+      "options": {
+        "legend": {
+          "calcs": [
+            "lastNotNull",
+            "max"
+          ],
+          "displayMode": "table",
+          "placement": "bottom"
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "expr": "polymarket_v7_latency_stage_nanoseconds{percentile=~\"p99|p99_9\"} / 1e6",
+          "legendFormat": "{{stage}} {{percentile}}",
+          "refId": "A"
+        }
+      ],
+      "title": "Internal Stage Latency p99 / p99.9",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus-v7"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "min": 0,
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 59
+      },
+      "id": 70,
+      "options": {
+        "legend": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "displayMode": "table",
+          "placement": "bottom"
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "expr": "ALERTS{alertstate=\"firing\"}",
+          "legendFormat": "{{alertname}} {{severity}}",
+          "refId": "A"
+        }
+      ],
+      "title": "Meaningful Active Alerts",
+      "type": "timeseries"
+    },
+    {
+      "collapsed": false,
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 75
+      },
+      "id": 73,
+      "panels": [],
+      "title": "Adaptive Full-Market Coverage",
+      "type": "row"
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus-v7"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "min": 0,
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 76
+      },
+      "id": 74,
+      "options": {
+        "legend": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "displayMode": "table",
+          "placement": "bottom"
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "expr": "polymarket_v7_universe_discovered_markets",
+          "legendFormat": "discovered",
+          "refId": "A"
+        },
+        {
+          "expr": "polymarket_v7_universe_eligible_markets",
+          "legendFormat": "eligible",
+          "refId": "B"
+        },
+        {
+          "expr": "polymarket_v7_universe_tier_markets",
+          "legendFormat": "{{tier}}",
+          "refId": "C"
+        },
+        {
+          "expr": "polymarket_v7_universe_skipped_markets",
+          "legendFormat": "skipped",
+          "refId": "D"
+        }
+      ],
+      "title": "Universe Coverage / HOT-WARM-COLD",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus-v7"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "min": 0,
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 76
+      },
+      "id": 75,
+      "options": {
+        "legend": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "displayMode": "table",
+          "placement": "bottom"
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "expr": "polymarket_v7_universe_discovery_exhaustive",
+          "legendFormat": "exhaustive",
+          "refId": "A"
+        },
+        {
+          "expr": "polymarket_v7_universe_pages",
+          "legendFormat": "pages",
+          "refId": "B"
+        },
+        {
+          "expr": "polymarket_v7_universe_scan_duration_milliseconds",
+          "legendFormat": "scan ms",
+          "refId": "C"
+        },
+        {
+          "expr": "polymarket_v7_universe_resource_limit",
+          "legendFormat": "limit {{tier}}/{{dimension}}",
+          "refId": "D"
+        }
+      ],
+      "title": "Universe Exhaustiveness / Discovery Cost",
+      "type": "timeseries"
+    },
+    {
+      "collapsed": false,
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 84
+      },
+      "id": 76,
+      "panels": [],
+      "title": "Canonical Portfolio Reconciliation",
+      "type": "row"
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus-v7"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "mappings": [
+            {
+              "options": {
+                "0": {
+                  "text": "DIVERGED"
+                },
+                "1": {
+                  "text": "RECONCILED"
+                }
+              },
+              "type": "value"
+            }
+          ],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "red",
+                "value": null
+              },
+              {
+                "color": "green",
+                "value": 1
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 5,
+        "w": 6,
+        "x": 0,
+        "y": 85
+      },
+      "id": 77,
+      "options": {
+        "colorMode": "background",
+        "graphMode": "none",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "textMode": "auto"
+      },
+      "targets": [
+        {
+          "expr": "polymarket_v7_portfolio_reconciled",
+          "refId": "A"
+        }
+      ],
+      "title": "Ledger / Component State / Portfolio Reconciled",
+      "type": "stat"
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus-v7"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "red",
+                "value": 1
+              }
+            ]
+          },
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 5,
+        "w": 6,
+        "x": 6,
+        "y": 85
+      },
+      "id": 78,
+      "options": {
+        "colorMode": "background",
+        "graphMode": "none",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "textMode": "auto"
+      },
+      "targets": [
+        {
+          "expr": "polymarket_v7_reconciliation_divergences",
+          "refId": "A"
+        }
+      ],
+      "title": "Accounting Divergences",
+      "type": "stat"
+    },
+    {
+      "collapsed": false,
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 110
+      },
+      "id": 86,
+      "panels": [],
+      "title": "Crypto Settlement Contexts",
+      "type": "row"
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus-v7"
+      },
+      "description": "All contexts belong to Crypto Settlement Engine; zero-authority contexts collect PAPER evidence but cannot add risk.",
+      "fieldConfig": {
+        "defaults": {
+          "max": 1,
+          "min": 0,
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 14,
+        "x": 0,
+        "y": 111
+      },
+      "id": 87,
+      "options": {
+        "legend": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "displayMode": "table",
+          "placement": "bottom"
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "expr": "polymarket_v7_crypto_context_registered",
+          "legendFormat": "context {{asset}} {{horizon}} {{contract_family}}",
+          "refId": "A"
+        },
+        {
+          "expr": "polymarket_v7_crypto_context_zero_authority",
+          "legendFormat": "ZERO AUTHORITY {{asset}} {{horizon}}",
+          "refId": "B"
+        },
+        {
+          "expr": "polymarket_v7_crypto_context_model_registered",
+          "legendFormat": "model evidence {{asset}} {{horizon}}",
+          "refId": "C"
+        },
+        {
+          "expr": "polymarket_v7_crypto_context_new_risk_authorized",
+          "legendFormat": "NEW-RISK AUTHORITY {{asset}} {{horizon}}",
+          "refId": "D"
+        }
+      ],
+      "title": "Crypto Settlement Context Coverage",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus-v7"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "min": 0,
+          "unit": "currencyUSD"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 10,
+        "x": 14,
+        "y": 111
+      },
+      "id": 88,
+      "options": {
+        "legend": {
+          "calcs": [
+            "lastNotNull",
+            "max"
+          ],
+          "displayMode": "table",
+          "placement": "bottom"
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "expr": "polymarket_v7_crypto_gross_exposure_usd",
+          "legendFormat": "gross crypto",
+          "refId": "A"
+        },
+        {
+          "expr": "polymarket_v7_crypto_net_directional_exposure_usd",
+          "legendFormat": "net directional",
+          "refId": "B"
+        },
+        {
+          "expr": "polymarket_v7_crypto_cluster_exposure_usd",
+          "legendFormat": "correlated cluster",
+          "refId": "C"
+        }
+      ],
+      "title": "Global Correlated Crypto Risk",
+      "type": "timeseries"
+    }
   ],
   "refresh": "10s",
   "schemaVersion": 39,
-  "tags": ["polymarket","v7","paper","canonical-ledger"],
-  "templating": {"list": []},
-  "time": {"from":"now-6h","to":"now"},
+  "tags": [
+    "polymarket",
+    "v7",
+    "paper",
+    "canonical-ledger"
+  ],
+  "templating": {
+    "list": []
+  },
+  "time": {
+    "from": "now-6h",
+    "to": "now"
+  },
   "timezone": "browser",
-  "title": "Polymarket V7 — 24/7 PAPER Control Room",
+  "title": "Polymarket V7 \u2014 24/7 PAPER Control Room",
   "uid": "polymarket-v7",
   "version": 15
 }

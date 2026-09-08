@@ -17,13 +17,17 @@ SHA = "a" * 40
 def emit(path: Path, **row):
     base = {
         "schema_version": 1,
-        "strategy": "MICRO_MAKER_PRO",
+        "strategy": "CRYPTO_SETTLEMENT_ENGINE",
         "model_sha": SHA,
         "paper_only": True,
         "authenticated_execution": False,
         "recorded_ts_ms": 1000,
     }
     base.update(row)
+    metadata = base.get("metadata") if isinstance(base.get("metadata"), dict) else {}
+    metadata.setdefault("component", "professional_maker")
+    metadata.setdefault("model_family", "professional_maker")
+    base["metadata"] = metadata
     with path.open("a", encoding="utf-8") as out:
         out.write(json.dumps(base) + "\n")
 

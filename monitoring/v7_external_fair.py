@@ -2,7 +2,7 @@
 """Read-only monitoring summary for the V7 settlement-aware external-fair plane.
 
 The component reports its observed PAPER or zero-authority state explicitly.
-Missing status must not take the incumbent runtime down. Once a market is
+Missing status must not take the current runtime down. Once a market is
 explicitly external_fair_required, status fields are surfaced so Prometheus
 rules can fail closed on invalid contract/oracle/external/fair state.
 """
@@ -57,19 +57,19 @@ def _load_json(path: Path) -> dict[str, Any]:
     return raw if isinstance(raw, dict) else {}
 
 
-def _model_pointer(path: Path) -> dict[str, Any]:
+def _research_model_summary(path: Path) -> dict[str, Any]:
     raw = _load_json(path)
     if not raw:
         return {}
     model_hash = str(raw.get("model_hash") or "")
     return {
-        "role": str(raw.get("role") or "UNKNOWN"),
         "model_version": str(raw.get("model_version") or ""),
         "model_hash": model_hash,
         "model_hash_valid": bool(re.fullmatch(r"[0-9a-f]{64}", model_hash)),
-        "published_timestamp_ns": _integer(
-            raw.get("published_timestamp_ns", raw.get("promoted_timestamp_ns")), 0
-        ),
+        "feature_schema_version": str(raw.get("feature_schema_version") or ""),
+        "training_contracts": max(0, _integer(raw.get("training_contracts"), 0)),
+        "training_end_ns": max(0, _integer(raw.get("training_end_ns"), 0)),
+        "generated_timestamp_ns": max(0, _integer(raw.get("generated_timestamp_ns"), 0)),
     }
 
 
@@ -281,11 +281,9 @@ def summarize_external_fair(
             "PAPER_EXPLORATION_ACCOUNT_RECONCILIATION_INCOMPLETE"
         )
 
-    champion = _model_pointer(
-        external_root / "model_registry" / "fair_value_champion.json"
-    )
-    challenger = _model_pointer(
-        external_root / "model_registry" / "fair_value_challenger.json"
+    family_root = run_root.parent if run_root.name == "paper_v7_live" else run_root
+    research_model = _research_model_summary(
+        family_root / "paper_v7_durable" / "external_fair" / "rich_research_model.json"
     )
 
     return {
@@ -486,8 +484,7 @@ def summarize_external_fair(
             "markout": _number(economics.get("markout"), 0.0),
         },
         "model": {
-            "champion": champion,
-            "challenger": challenger,
+            "research_model": research_model,
             "mature": bool(model.get("mature", False)),
             "log_loss": _number(model.get("log_loss"), 0.0),
             "brier": _number(model.get("brier"), 0.0),

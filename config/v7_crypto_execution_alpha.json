@@ -1,12 +1,4 @@
 {
-  "schema": "polymarket_v7_crypto_execution_alpha_config_v1",
-  "version": 1,
-  "paper_only": true,
-  "authenticated_execution": false,
-  "real_order_submission": false,
-  "real_capital_at_risk": false,
-  "automatic_promotion": false,
-  "decision_owner": "CRYPTO_SETTLEMENT_ENGINE",
   "action_space": [
     "MAKE",
     "TAKE",
@@ -14,10 +6,35 @@
     "WITHDRAW",
     "NOTHING"
   ],
-  "objective": "MAX_CONSERVATIVE_EXPECTED_CHANGE_IN_ACCOUNT_WEALTH",
-  "risk_actions_preempt_alpha": true,
-  "minimum_positive_conservative_ev_usd": 0.0,
+  "authenticated_execution": false,
+  "decision_owner": "CRYPTO_SETTLEMENT_ENGINE",
   "execution_alpha": {
+    "cancel": {
+      "formula": "avoided_toxic_fill_loss_lower-cancel_cost",
+      "research_only": true,
+      "research_rule": {
+        "confirmation": "NON_OPPOSING",
+        "confirmation_source": "COINBASE_SPOT_TOP_OF_BOOK",
+        "maximum_signal_age_ms": 100,
+        "minimum_absolute_log_return_bp": 0.3,
+        "overlap_warmup_ms": 300,
+        "receive_time_global_merge_required": true,
+        "rule_id": "btc-m5-external-cancel-v1",
+        "same_timestamp_atomic_group_required": true,
+        "shock_source": "BINANCE_SPOT_TRADES",
+        "shock_window_ms": 100,
+        "supported_cancel_side": "BUY",
+        "trigger_cooldown_ms": 250,
+        "trigger_grid_ms": 25
+      }
+    },
+    "maker": {
+      "fill_probability_source": "V7_MAKER_EXECUTION_MODEL",
+      "formula": "P_fill_lower*(spread_capture+settlement_edge+markout_lower)-inventory_cost-unwind_cost-cancel_latency_cost",
+      "markout_source": "FILL_CONDITIONED_CAUSAL_MARKOUT",
+      "toxic_fill_source": "EXTERNAL_CANCEL_FORWARD_PLUS_MAKER_MARKOUT"
+    },
+    "nothing_ev_usd": 0.0,
     "required_feature_groups": [
       "queue_ahead",
       "spread",
@@ -33,70 +50,45 @@
       "volatility_bp",
       "latency_ms"
     ],
-    "maker": {
-      "fill_probability_source": "V7_MAKER_EXECUTION_MODEL",
-      "markout_source": "FILL_CONDITIONED_CAUSAL_MARKOUT",
-      "toxic_fill_source": "EXTERNAL_CANCEL_FORWARD_PLUS_MAKER_MARKOUT",
-      "formula": "P_fill_lower*(spread_capture+settlement_edge+markout_lower)-inventory_cost-unwind_cost-cancel_latency_cost"
-    },
     "taker": {
-      "formula": "settlement_edge_lower-fee-slippage-latency_cost-adverse_selection_cost",
       "arrival_revalidation_required": true,
+      "formula": "settlement_edge_lower-fee-slippage-latency_cost-adverse_selection_cost",
       "visible_depth_bound_required": true
-    },
-    "cancel": {
-      "formula": "avoided_toxic_fill_loss_lower-cancel_cost",
-      "external_cancel_overlay_experiment_id": "btc-m5-external-cancel-overlay-forward-v1",
-      "promotion_requires_frozen_forward_gate": true,
-      "live_trigger": {
-        "trigger_grid_ms": 25,
-        "overlap_warmup_ms": 300,
-        "maximum_signal_age_ms": 100,
-        "supported_cancel_side": "BUY",
-        "protocol_origin_commit": "fcc9a81becb32263606b28904c083c96f6de5750",
-        "receive_time_global_merge_required": true,
-        "same_timestamp_atomic_group_required": true
-      },
-      "official_v3_evidence": {
-        "promotion_boundary_ms": 1788781327887,
-        "protocol_sha256": "85e54afef180426dab0519c701f764ea5863076ac88566648122553576bd8a04",
-        "baseline_report_sha256": "c2cb36b2df6de713d8d9c630eac6685fb5f935fa3bdffffa0b8ec321cbe56d96",
-        "baseline_manifest_sha256": "2619efb8d80daaf583ad24df6c9bcf2bc05dc868dfa3db7139fcd806a28a3f4a",
-        "rule_sha256": "9e8c7e6a1d7e4a87cd9977396bcbbb228f96b4e35e4a34e84e1514e9e9630254",
-        "freeze_merge_sha": "612038cc601c7c6a7da942ed49a1e7bb6a23b291",
-        "minimum_independent_markets": 30,
-        "minimum_avoidable_fill_events": 50,
-        "minimum_positive_market_fraction": 0.7,
-        "require_positive_market_cluster_bootstrap_lower": true
-      }
-    },
-    "nothing_ev_usd": 0.0
+    }
   },
   "market_selection": {
+    "capital_and_quote_budget": "RETAINED_MARKETS_ONLY",
     "enabled": true,
     "minimum_candidate_markets": 2,
-    "top_fraction": 0.25,
     "minimum_markets_retained": 1,
+    "score_semantics": "BOUNDED_MONOTONE_COMPONENTS_NO_TRAINED_WEIGHTS_UNTIL_FORWARD_EVIDENCE",
     "score_weights": {
-      "predictability": 0.14,
-      "mispricing": 0.22,
-      "spread_capture": 0.1,
+      "adverse_selection": 0.1,
       "depth": 0.08,
+      "fillability": 0.12,
       "flow": 0.08,
       "latency": 0.08,
-      "tte": 0.08,
-      "fillability": 0.12,
-      "adverse_selection": 0.1
+      "mispricing": 0.22,
+      "predictability": 0.14,
+      "spread_capture": 0.1,
+      "tte": 0.08
     },
-    "score_semantics": "BOUNDED_MONOTONE_COMPONENTS_NO_TRAINED_WEIGHTS_UNTIL_FORWARD_EVIDENCE",
-    "capital_and_quote_budget": "RETAINED_MARKETS_ONLY"
+    "top_fraction": 0.25
   },
+  "minimum_positive_conservative_ev_usd": 0.0,
+  "objective": "MAX_CONSERVATIVE_EXPECTED_CHANGE_IN_ACCOUNT_WEALTH",
   "paper_exploration": {
-    "enabled": true,
-    "authority": "PAPER_EXPLORATION",
-    "promotion_credit": false,
-    "minimum_size_only": true,
     "assignment_before_outcome_required": true,
+    "authority": "PAPER_EXPLORATION",
+    "enabled": true,
+    "information_gain_priority": [
+      "fill_probability_uncertainty",
+      "toxic_fill_probability_uncertainty",
+      "markout_uncertainty",
+      "queue_depletion_uncertainty"
+    ],
+    "minimum_size_only": true,
+    "research_only": true,
     "strata": [
       "queue_bucket",
       "spread_bucket",
@@ -104,16 +96,10 @@
       "volatility_bucket",
       "activity_bucket",
       "quote_lifetime_bucket"
-    ],
-    "information_gain_priority": [
-      "fill_probability_uncertainty",
-      "toxic_fill_probability_uncertainty",
-      "markout_uncertainty",
-      "queue_depletion_uncertainty"
     ]
   },
+  "paper_only": true,
   "pnl_attribution": {
-    "required": true,
     "components": [
       "settlement_alpha",
       "spread_capture",
@@ -126,6 +112,12 @@
       "unwind",
       "other"
     ],
-    "identity": "realized_pnl=sum(components)"
-  }
+    "identity": "realized_pnl=sum(components)",
+    "required": true
+  },
+  "real_capital_at_risk": false,
+  "real_order_submission": false,
+  "risk_actions_preempt_alpha": true,
+  "schema": "polymarket_v7_crypto_execution_alpha_config_v1",
+  "version": 1
 }

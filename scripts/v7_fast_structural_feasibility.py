@@ -186,12 +186,11 @@ def build_report(records: list[dict[str, Any]], quality: dict[str, Any], *,
             tau_eligible >= 20 and inaccessible_fraction is not None
             and inaccessible_fraction >= 0.80),
         "freeze_rule": "P99_LATENCY_EXCEEDS_TAU_STAR_FOR_AT_LEAST_80_PERCENT_OF_20_OPPORTUNITIES",
-        "promotion_eligible": bool(
+        "economic_evidence_sufficient": bool(
             funnel["terminal"] >= 50 and not quality.get("fail_closed")
             and not (tau_eligible >= 20 and inaccessible_fraction is not None
                      and inaccessible_fraction >= 0.80)),
         "minimum_terminal_bundles": 50,
-        "automatic_promotion": False,
     }
     payload = json.dumps(report, sort_keys=True, separators=(",", ":"), allow_nan=False)
     report["content_sha256"] = hashlib.sha256(payload.encode()).hexdigest()
@@ -222,7 +221,7 @@ def main() -> int:
         "detected": report["funnel"]["detected"],
         "terminal": report["funnel"]["terminal"],
         "freeze_recommended": report["freeze_recommended"],
-        "promotion_eligible": report["promotion_eligible"],
+        "economic_evidence_sufficient": report["economic_evidence_sufficient"],
     }, sort_keys=True))
     return 0
 

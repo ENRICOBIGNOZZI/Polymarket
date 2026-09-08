@@ -84,7 +84,7 @@ class V7RuntimeRetentionTest(unittest.TestCase):
                     "paper_only": True,
                     "authenticated_execution": False,
                     "model_sha": f"{index:040x}",
-                    "strategy": "MICRO_MAKER_PRO",
+                    "strategy": "CRYPTO_SETTLEMENT_ENGINE",
                 }) + "\n").encode()
                 ledger.write_bytes(payload)
                 payloads[archive.name] = payload

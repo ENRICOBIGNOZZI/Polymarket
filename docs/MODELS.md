@@ -1,65 +1,25 @@
-# V7 algorithms
+# V7 models
 
-The live PAPER registry contains exactly two algorithms:
+V7 separates prediction from execution.
 
-- `CRYPTO_SETTLEMENT_ENGINE`, with settlement-fair, professional-maker and informed-taker components.
-- `STRUCTURAL_ARB_ENGINE`, with hard-arbitrage and fast-structural components.
+## Settlement / fair-value model
 
-Components are implementation details and have no independent authority. A third algorithm, an unknown identifier or a component promoted to algorithm status fails the startup and monitoring contracts.
+The BTC M5 fair-value model is an offline research artifact. Training is explicit on receive-time-causal, whole-market-separated data. Once written, the artifact is immutable during runtime and the PAPER loop performs inference only. Runtime restarts never retrain it.
 
-## Frozen, rich external-information PAPER model
+The model may use the Polymarket midpoint as a causal prior and correct its log-odds with external information. Every such inference records the exact PM snapshot identity and receive time; stale or already-repriced priors are rejected at action time.
 
-The single CRYPTO_SETTLEMENT_ENGINE fair owner can run `btc_m5_rich_external_logit_v1`.
-Its target is the verified BTC M5 binary settlement; it compares an independent
-external-information logistic model with a logistic correction to the causal
-Polymarket prior. Features include oracle/spot margins and time interactions,
-spot microprice, cross-venue dispersion, order flow and observed volatility.
-Perpetual basis, funding, OI velocity and option IV are recorded with their
-receive-time provenance, and are fitted only when historical training coverage
-supports them. Optional absence is explicit, not a fabricated zero.
+The external feature state includes spot and perpetual L2 state, microprice, OFI, trade imbalance, cross-venue dispersion, fast returns and jump state, basis, funding, open-interest level/velocity, liquidation rates and Deribit volatility/term/skew features when they are causally available. Features with no historical labeled coverage are collected but are not assigned invented coefficients.
 
-The previous 256-event return history has been replaced by 10ms time buckets.
-Unavailable history is published as null with an availability bit. Historical
-pre-fix returns are excluded from the new model rather than treated as flat prices.
+## Short-horizon repricing model
 
-Startup training uses settled original forecast cuts, label-availability embargoes,
-whole-market train/validation/audit splits and equal-market weighting. Six compact
-models compete on validation Brier/log loss. Audit results are diagnostic only.
-A new immutable CHALLENGER is bound to code/policy/data hashes and a future whole
-contract boundary. No training, network request or model mutation occurs inside
-its inference function. No automatic champion promotion is introduced.
+The lead/lag research dataset freezes one rich external feature cut and labels the subsequent Polymarket repricing at 100, 250, 500 and 1000 ms. Training is offline and explicit. This model is intended to estimate information lead for MAKE/CANCEL rather than settlement probability.
 
-Its uncertainty interval remains [0,1] until independently validated. It can
-therefore enter ONLY the existing loss-capped, zero-promotion-credit PAPER probe
-lane, never mature robust MAKE/TAKE authority. The verified external-cancel rule
-is unchanged and remains a separate risk action. A failed or absent learned model
-leaves the declared bootstrap fallback visible; it is not silently called ML.
+## Maker execution model
 
-### Immutable Maker publication during evidence refits
+The Maker execution model is the only adaptive model in the PAPER runtime. It learns from the current run only and is refit periodically from canonical order/fill/markout evidence. It estimates censored fill/survival behavior, queue/funnel state, placement effects and fill-conditioned adverse markout.
 
-The durable Maker learner materializes the execution-model snapshot once per
-exact-SHA/policy/config run. Periodic fitting updates evidence and the separate
-challenger flow; it must never overwrite the published champion, including its
-generation timestamp. The external-cancel protocol refuses any subsequent change
-to that identity. Newly decoded episodes pass the same causal validator before
-admission. Sessions which started before publication are not forward evidence.
+Fill probability uses a declared Beta prior and current-run evidence. After at least 20 orders and 2 independent market clusters, the PAPER decision plane may use a conservative posterior lower bound instead of forcing the fill lower bound to zero. Evidence confidence is reported separately and never fabricates fills.
 
-The prior mutable publication timestamp invalidated 2,525 diagnostic episodes in
-142 old-runtime files. These must be quarantined with content hashes, never
-backdated or credited toward promotion. The independently hash-pinned official v3
-seed is separate evidence and must still pass full recomputation.
+## Decision plane
 
-### Unified Maker cash/inventory and exact order identity
-
-The canonical crypto account now reconstructs BOTH informed-taker and authorized
-Maker fills from the same ledger/spool. Maker partial fills have separate durable
-positions and verified binary settlement FINALs. An open Maker position subtracts
-its entry debit and contributes only an evidenced executable mark (otherwise zero)
-to shared equity. Duplicate/orphan/overfill or non-binary settlement records fail
-closed. Historical numeric Maker order IDs are qualified by market in the read
-projection; the corrected executor emits globally qualified market/replay IDs.
-
-The same crypto account owner, not a new worker or ledger writer, performs Maker
-settlement. The coordinator and Maker executor honor canonical drain/kill markers.
-Cutover checks actual authorized-Maker active orders and ledger positions; a
-zero-authority observer report cannot conceal an unsettled executable fill.
+All model outputs compete inside one coordinator. The action set is MAKE, TAKE, CANCEL, WITHDRAW or NOTHING. Cancellation may be triggered directly by the configured receive-time-causal external shock rule. No model owns capital, inventory, an OMS or a second ledger.

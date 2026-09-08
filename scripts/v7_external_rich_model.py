@@ -2,7 +2,7 @@
 """Compact, frozen, receive-time-causal BTC M5 logistic model.
 
 One existing fair owner consumes this module. No network, OMS, registry writes,
-training, mutable weights or implicit promotion occur during inference.
+training, mutable weights or implicit deployment occur during inference.
 Intervals are deliberately [0, 1]: a research point estimate is NOT a validated
 conditional probability confidence bound. Only bounded PAPER probes may use it.
 """
@@ -13,7 +13,7 @@ import re
 from typing import Any
 
 FAMILY = "btc_m5_rich_external_logit_v1"
-FEATURE_SCHEMA = "btc-m5-rich-external-causal-v1"
+FEATURE_SCHEMA = "btc-m5-rich-external-causal-v2"
 HISTORY_SEMANTICS = "receive_time_bucketed_composite_v2"
 MODEL_PREFIX = "btc-m5-rich-logit-"
 
@@ -41,10 +41,18 @@ FEATURE_NAMES = (
     "log_tte", "oracle_margin_bp", "spot_oracle_basis_bp", "spot_margin_bp",
     "terminal_fraction", "oracle_margin_time_scaled", "basis_terminal_interaction",
     "microprice_shift_bp", "dispersion_bp", "ofi", "trade_imbalance",
-    "vol_fast_bp", "vol_medium_bp", "vol_slow_bp", "log_vol_ratio",
-    "external_age_ms", "return_100ms_bp", "return_250ms_bp", "return_1s_bp", "return_5s_bp",
+    "vol_fast_bp", "vol_medium_bp", "vol_slow_bp", "log_vol_ratio", "jump_score",
+    "external_age_ms", "return_50ms_bp", "return_100ms_bp", "return_250ms_bp", "return_1s_bp", "return_5s_bp",
     "binance_perp_basis_bp", "bybit_perp_basis_bp", "deribit_perp_basis_bp",
-    "binance_funding", "bybit_funding", "binance_oi_velocity", "deribit_atm_iv",
+    "binance_perp_microprice_basis_bp", "binance_perp_depth_imbalance_l20", "binance_perp_trade_imbalance",
+    "bybit_perp_microprice_basis_bp", "bybit_perp_depth_imbalance_l10", "bybit_perp_trade_flow",
+    "deribit_perp_book_basis_bp", "deribit_trade_flow",
+    "binance_funding", "bybit_funding", "deribit_funding_8h",
+    "binance_open_interest_log", "binance_oi_velocity", "bybit_open_interest_log", "deribit_open_interest_log",
+    "deribit_atm_iv", "deribit_vol_term_slope", "deribit_put_call_skew", "deribit_butterfly",
+    "deribit_nearest_future_basis_bp", "deribit_historical_volatility",
+    "binance_liquidation_signed_btc_per_s", "binance_liquidation_total_btc_per_s",
+    "bybit_liquidation_signed_btc_per_s", "bybit_liquidation_total_btc_per_s",
 )
 
 
@@ -82,9 +90,10 @@ def features(origin: dict[str, Any]) -> dict[str, float | None]:
     vf, vs = values["vol_fast_bp"], values["vol_slow_bp"]
     if vf is not None and vs is not None and vf >= 0 and vs > 0:
         values["log_vol_ratio"] = math.log1p(vf / vs)
+    values["jump_score"] = number(ext.get("jump_score"))
     if ext.get("feature_semantics_version") == HISTORY_SEMANTICS:
         availability = ext.get("return_history_available") or {}
-        for horizon in ("100ms", "250ms", "1s", "5s"):
+        for horizon in ("50ms", "100ms", "250ms", "1s", "5s"):
             v = number(ext.get("return_" + horizon))
             if availability.get(horizon) is True and v is not None:
                 values["return_" + horizon + "_bp"] = 10000 * v
@@ -97,14 +106,24 @@ def features(origin: dict[str, Any]) -> dict[str, float | None]:
     if context:
         if received is None or observed is None or received > observed_ns:
             raise ValueError("rich_model:future_context")
-        for key in ("binance_perp_basis_bp", "bybit_perp_basis_bp", "deribit_perp_basis_bp",
-                    "binance_funding", "bybit_funding", "binance_oi_velocity", "deribit_atm_iv"):
+        for key in (
+            "binance_perp_basis_bp", "bybit_perp_basis_bp", "deribit_perp_basis_bp",
+            "binance_perp_microprice_basis_bp", "binance_perp_depth_imbalance_l20", "binance_perp_trade_imbalance",
+            "bybit_perp_microprice_basis_bp", "bybit_perp_depth_imbalance_l10", "bybit_perp_trade_flow",
+            "deribit_perp_book_basis_bp", "deribit_trade_flow",
+            "binance_funding", "bybit_funding", "deribit_funding_8h",
+            "binance_open_interest_log", "binance_oi_velocity", "bybit_open_interest_log", "deribit_open_interest_log",
+            "deribit_atm_iv", "deribit_vol_term_slope", "deribit_put_call_skew", "deribit_butterfly",
+            "deribit_nearest_future_basis_bp", "deribit_historical_volatility",
+            "binance_liquidation_signed_btc_per_s", "binance_liquidation_total_btc_per_s",
+            "bybit_liquidation_signed_btc_per_s", "bybit_liquidation_total_btc_per_s",
+        ):
             values[key] = number((context.get("features") or {}).get(key))
     return values
 
 
 def contextual_features(runtime: dict[str, Any], usdm: dict[str, Any], options: dict[str, Any],
-                        now_ns: int) -> dict[str, Any]:
+                        now_ns: int, liquidation_rates: dict[str, float] | None = None) -> dict[str, Any]:
     """Receive-time snapshots only; no remote requests and no synthetic clocks.
 
     Fast derivative context TTL=3s; slow OI TTL=20s; options TTL=60s.
@@ -135,25 +154,70 @@ def contextual_features(runtime: dict[str, Any], usdm: dict[str, Any], options: 
             funding = number(ctx.get("funding_rate"))
             if prefix != "deribit" and mask & 4 and funding is not None:
                 out["features"][prefix + "_funding"] = funding
+    spot = number(runtime.get("composite_price"))
+    if pub is not None and 0 < pub <= now_ns and now_ns - pub <= 3_000_000_000 and spot is not None and spot > 0:
+        bu = runtime.get("binance_usdm") if isinstance(runtime.get("binance_usdm"), dict) else {}
+        if bu.get("valid") is True:
+            micro = number(bu.get("perp_microprice")); bid_depth = number(bu.get("perp_bid_depth_l20")); ask_depth = number(bu.get("perp_ask_depth_l20"))
+            if micro is not None and micro > 0:
+                out["features"]["binance_perp_microprice_basis_bp"] = 10000 * math.log(micro / spot)
+            if bid_depth is not None and ask_depth is not None and bid_depth + ask_depth > 0:
+                out["features"]["binance_perp_depth_imbalance_l20"] = (bid_depth - ask_depth) / (bid_depth + ask_depth)
+            flow = number(bu.get("perp_trade_imbalance"))
+            if flow is not None: out["features"]["binance_perp_trade_imbalance"] = flow
+        by_l2 = runtime.get("bybit_linear_l2") if isinstance(runtime.get("bybit_linear_l2"), dict) else {}
+        if by_l2.get("valid") is True:
+            micro = number(by_l2.get("microprice"))
+            if micro is not None and micro > 0:
+                out["features"]["bybit_perp_microprice_basis_bp"] = 10000 * math.log(micro / spot)
+            imbalance = number(by_l2.get("imbalance_l10"))
+            if imbalance is not None: out["features"]["bybit_perp_depth_imbalance_l10"] = imbalance
+        by = runtime.get("bybit_linear") if isinstance(runtime.get("bybit_linear"), dict) else {}
+        if by.get("valid") is True:
+            flow = number(by.get("signed_trade_flow")); oi = number(by.get("open_interest"))
+            if flow is not None: out["features"]["bybit_perp_trade_flow"] = flow
+            if oi is not None and oi >= 0: out["features"]["bybit_open_interest_log"] = math.log1p(oi)
+        de = runtime.get("deribit") if isinstance(runtime.get("deribit"), dict) else {}
+        if de.get("valid") is True:
+            bid, ask = number(de.get("best_bid")), number(de.get("best_ask"))
+            if bid is not None and ask is not None and min(bid, ask) > 0 and ask >= bid:
+                out["features"]["deribit_perp_book_basis_bp"] = 10000 * math.log((0.5 * (bid + ask)) / spot)
+            flow = number(de.get("signed_trade_flow")); oi = number(de.get("open_interest")); f8 = number(de.get("funding_8h"))
+            if flow is not None: out["features"]["deribit_trade_flow"] = flow
+            if oi is not None and oi >= 0: out["features"]["deribit_open_interest_log"] = math.log1p(oi)
+            if f8 is not None: out["features"]["deribit_funding_8h"] = f8
+    if liquidation_rates:
+        for key in (
+            "binance_liquidation_signed_btc_per_s", "binance_liquidation_total_btc_per_s",
+            "bybit_liquidation_signed_btc_per_s", "bybit_liquidation_total_btc_per_s",
+        ):
+            value = number(liquidation_rates.get(key))
+            if value is not None: out["features"][key] = value
     u = usdm.get("latest") or {}
     if usdm.get("state") == "OPERATIONAL" and put("BINANCE_OI_REST", u,
             (u.get("open_interest_request") or {}).get("local_receive_wall_ns"), 20_000_000_000):
-        velocity = number(u.get("open_interest_velocity"))
-        if velocity is not None:
-            out["features"]["binance_oi_velocity"] = velocity
+        velocity = number(u.get("open_interest_velocity")); oi = number(u.get("open_interest"))
+        if velocity is not None: out["features"]["binance_oi_velocity"] = velocity
+        if oi is not None and oi >= 0: out["features"]["binance_open_interest_log"] = math.log1p(oi)
     opt = options.get("latest") or {}
     if options.get("state") == "OPERATIONAL" and options.get("option_surface_valid") is True and put(
             "DERIBIT_OPTIONS_REST", opt,
             (opt.get("option_summary_request") or {}).get("local_receive_wall_ns"), 60_000_000_000):
-        eligible = []
-        for row in opt.get("option_surface", []):
-            expiry, strike, spot, iv = (number(row.get(k)) for k in ("expiry_ms", "strike", "underlying_price", "mark_iv"))
-            if any(v is None for v in (expiry, strike, spot, iv)):
-                continue
-            if expiry * 1e6 > now_ns and min(strike, spot, iv) > 0 and iv <= 1000:
-                eligible.append((expiry, abs(math.log(strike / spot)), str(row.get("instrument_id", "")), iv))
-        if eligible:
-            out["features"]["deribit_atm_iv"] = min(eligible)[3]
+        surface = opt.get("option_surface_features") if isinstance(opt.get("option_surface_features"), dict) else {}
+        mapping = {
+            "deribit_atm_iv": "atm_iv", "deribit_vol_term_slope": "vol_term_slope_iv_per_day",
+            "deribit_put_call_skew": "put_call_skew_moneyness_proxy", "deribit_butterfly": "butterfly_iv_moneyness_proxy",
+        }
+        for target, source in mapping.items():
+            value = number(surface.get(source))
+            if value is not None: out["features"][target] = value
+        future = opt.get("nearest_future") if isinstance(opt.get("nearest_future"), dict) else {}
+        value = number(future.get("basis_bps_to_perpetual"))
+        if value is not None: out["features"]["deribit_nearest_future_basis_bp"] = value
+        hist = opt.get("historical_volatility")
+        if isinstance(hist, list) and len(hist) >= 2:
+            value = number(hist[1])
+            if value is not None: out["features"]["deribit_historical_volatility"] = value
     return out
 
 
@@ -185,8 +249,6 @@ def validate_parameters(artifact: Any) -> None:
         raise ValueError("rich_model:scale")
     if artifact.probability_interval_diagnostics.get("validated") is not False:
         raise ValueError("rich_model:research_interval_claim")
-    if artifact.hyperparameters.get("automatic_promotion") is not False:
-        raise ValueError("rich_model:promotion_authority")
 
 
 def predict(artifact: Any, raw: dict[str, Any], market_probability: float) -> float:
@@ -199,18 +261,20 @@ def predict(artifact: Any, raw: dict[str, Any], market_probability: float) -> fl
     return min(1.0 - 1e-9, max(1e-9, sigmoid(z)))
 
 
-def is_paper_learning_fair(fair: dict[str, Any], code_sha: str) -> bool:
-    """No unbounded risk or champion status can be inferred from an ML point."""
+def is_paper_learning_fair(fair: dict[str, Any], code_sha: str | None = None) -> bool:
+    """A frozen PAPER research point estimate; never real-order authority."""
     return bool(
         fair.get("valid") is True and fair.get("paper_exploration_learned") is True
-        and fair.get("explicit_champion_applied") is False
-        and fair.get("promotion_eligible") is False and fair.get("real_money_authority") is False
+        and fair.get("research_model") is True
+        and fair.get("research_model_state") == "FROZEN_INFERENCE_ONLY"
+        and fair.get("real_money_authority") is False
         and fair.get("probability_interval_validated") is False
         and fair.get("lower") == 0.0 and fair.get("upper") == 1.0
-        and fair.get("family") == FAMILY and fair.get("model_code_sha") == code_sha
-        and fair.get("registry_role") == "CHALLENGER" and fair.get("registry_load_state") == "LOADED"
+        and fair.get("family") == FAMILY
         and fair.get("inference_state") == "VALID_PAPER_LEARNED_PROBE"
         and fair.get("authority") == "SHADOW"
+        and (fair.get("uses_polymarket_price_as_feature") is not True
+             or fair.get("market_prior_causal_cut_valid") is True)
         and re.fullmatch(r"[0-9a-f]{64}", str(fair.get("probability_model_hash", "")))
         and str(fair.get("probability_model_id", "")).startswith(MODEL_PREFIX)
     )

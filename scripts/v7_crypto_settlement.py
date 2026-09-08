@@ -223,7 +223,6 @@ def validate_model_registry(
         or value.get("paper_only") is not True
         or value.get("authenticated_execution") is not False
         or value.get("real_order_submission") is not False
-        or value.get("automatic_promotion") is not False
     ):
         raise CryptoSettlementError("model_registry_identity_or_safety")
     rows = value.get("models")
@@ -248,7 +247,7 @@ def validate_model_registry(
             continue
         validated = validate_model_artifact(artifact, context)
         if row.get("status") != "FROZEN" or row.get("new_risk_authorized") is not False:
-            raise CryptoSettlementError("model_registry_promotion_forbidden")
+            raise CryptoSettlementError("model_registry_authority_invalid")
         output[key] = validated
     if set(output) != set(contexts):
         raise CryptoSettlementError("model_registry_partition")

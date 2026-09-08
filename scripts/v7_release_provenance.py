@@ -16,7 +16,12 @@ def git(root: Path, *args: str) -> str:
 def report(root: Path) -> dict:
     sha = git(root, "rev-parse", "HEAD")
     status = git(root, "status", "--porcelain")
-    files = ["config/paper_v7.json", "config/v7_execution_modes.json", "config/v7_live_caps_zero.json", "config/v7_platform_contract.json"]
+    files = [
+        "config/paper_v7.json", "config/v7_execution_modes.json",
+        "config/v7_live_caps_zero.json", "config/v7_live_model_scope.json",
+        "config/v7_process_manifest.json", "config/v7_external_source_registry.json",
+        "config/v7_external_fair.json", "config/v7_professional_market_maker.json",
+    ]
     hashes = {item: hashlib.sha256((root / item).read_bytes()).hexdigest() for item in files}
     return {"schema_version": 1, "exact_code_sha": sha, "worktree_clean": not bool(status),
             "configuration_hashes": hashes, "signed_release_verified": False,

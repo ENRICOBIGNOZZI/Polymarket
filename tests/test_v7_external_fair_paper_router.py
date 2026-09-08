@@ -83,6 +83,29 @@ def main() -> None:
     assert skewed is not None and skewed.exchange_ts_ms == receive_ms
     raw_book["timestamp"] = str(receive_ms + router.MAX_CLOB_CLOCK_SKEW_MS + 1)
     assert router.parse_book(raw_book, receive_ms) is None
+    with tempfile.TemporaryDirectory() as d:
+        pr = object.__new__(router.PaperRouter)
+        pr.sha = "a" * 40
+        pr.clob_url = "https://clob.test"
+        pr.source = Path(d) / "status.json"
+        pr.pm_prior_path = Path(d) / "pm_prior.json"
+        pr.source.write_text(json.dumps({
+            "code_sha": pr.sha,
+            "market": {"market_id": "m", "yes_token": "yes", "no_token": "no"},
+        }))
+        yes_raw = {**raw_book, "asset_id": "yes", "timestamp": str(receive_ms),
+                   "bids": [{"price": "0.54", "size": "10"}],
+                   "asks": [{"price": "0.55", "size": "10"}], "hash": "y"}
+        no_raw = {**yes_raw, "asset_id": "no",
+                  "bids": [{"price": "0.45", "size": "10"}],
+                  "asks": [{"price": "0.46", "size": "10"}], "hash": "n"}
+        with mock.patch.object(router, "request_json", return_value=[yes_raw, no_raw]),              mock.patch.object(router, "now_ms", return_value=receive_ms):
+            prior = pr.refresh_pm_prior()
+        assert prior["schema"] == "polymarket_v7_pm_prior_snapshot_v1"
+        assert prior["live_market"]["valid"] is True
+        assert prior["live_market"]["snapshot_id"]
+        assert json.loads(pr.pm_prior_path.read_text())["code_sha"] == pr.sha
+
     raw_book["timestamp"] = str(receive_ms)
     raw_book["asks"] = []
     one_sided = router.parse_book(raw_book, receive_ms)
@@ -94,6 +117,7 @@ def main() -> None:
     assert router.parse_book(raw_book, receive_ms) is None
     policy = {
         "minimum_entry_tte_seconds": 5.0, "maximum_entry_tte_seconds": 60.0,
+        "tte_bucket_policy": [{"id":"test-5-60","minimum_seconds":5.0,"maximum_seconds":60.0,"action":"TAKER_SHADOW"}],
         "maximum_model_market_disagreement": 0.20,
         "minimum_robust_ev_per_share": 0.001, "base_execution_risk_per_share": 0.0005,
     }
@@ -455,6 +479,7 @@ def main() -> None:
             limit_price=0.4, intended_action="TAKE", intended_size=10.0,
             order_state="SUBMITTED_SHADOW",
             metadata={
+                "component": "crypto_informed_taker", "model_family": "crypto_informed_taker",
                 "coordinator_receipt": settlement_receipt,
                 "paper_exploration": True,
                 "paper_bootstrap_probe": False,
@@ -475,6 +500,7 @@ def main() -> None:
             fill_price=0.4, filled_size=10.0, complete=True,
             fee=0.2, fee_source="test:authoritative",
             metadata={
+                "component": "crypto_informed_taker", "model_family": "crypto_informed_taker",
                 "coordinator_receipt": settlement_receipt,
                 "paper_exploration": True,
                 "paper_bootstrap_probe": False,
@@ -588,6 +614,7 @@ def main() -> None:
             fill_price=0.2, filled_size=5.0, complete=True,
             fee=0.05, fee_source="test:authoritative",
             metadata={
+                "component": "crypto_informed_taker", "model_family": "crypto_informed_taker",
                 "coordinator_receipt": receipt, "paper_exploration": True,
                 "paper_bootstrap_probe": True,
                 "economic_authority": "PAPER_EXPLORATION",
@@ -671,6 +698,7 @@ def main() -> None:
             limit_price=0.25, intended_action="TAKE", intended_size=4.0,
             order_state="SUBMITTED_SHADOW",
             metadata={
+                "component": "crypto_informed_taker", "model_family": "crypto_informed_taker",
                 "coordinator_receipt": receipt, "paper_exploration": True,
                 "paper_bootstrap_probe": True,
                 "economic_authority": "PAPER_EXPLORATION",
@@ -763,11 +791,11 @@ def main() -> None:
         observation["fair_models"] = {
             "hybrid_fair": {"yes": 0.70},
             "external_only_fair": observation["fair"],
-            "registered_challenger": {
+            "research_model": {
                 "valid": True,
                 "yes": 0.75,
-                "explicit_registry_model_applied": True,
-                "probability_model_id": "frozen-challenger",
+                "research_model": True, "research_model_state": "FROZEN_INFERENCE_ONLY",
+                "probability_model_id": "frozen-research-model",
                 "probability_model_hash": "f" * 64,
             },
         }
@@ -778,8 +806,8 @@ def main() -> None:
         pending = next(iter(collector.state["pending_forecasts"].values()))
         assert abs(pending["market_yes"] - 0.80) < 1e-12
         assert 0.60 < pending["hybrid_yes"] < 0.80
-        assert pending["registered_challenger_yes"] == 0.75
-        assert pending["registered_challenger_model_hash"] == "f" * 64
+        assert pending["research_model_yes"] == 0.75
+        assert pending["research_model_model_hash"] == "f" * 64
         assert pending["market_mid_source"] == "LIVE_COMPLEMENT_CONSISTENT_CLOB_BATCH"
         # Simulate an exact-SHA cutover before settlement. The ephemeral state
         # is intentionally unavailable; pending identity must come from the
@@ -815,8 +843,8 @@ def main() -> None:
         assert final["actual_yes"] == 1.0
         assert final["model_brier"] > final["market_brier"]
         assert final["external_only_brier"] > final["hybrid_brier"]
-        assert final["registered_challenger_brier"] < final["external_only_brier"]
-        assert final["registered_challenger_model_hash"] == "f" * 64
+        assert final["research_model_brier"] < final["external_only_brier"]
+        assert final["research_model_model_hash"] == "f" * 64
         assert final["settlement_provider"] == "POLYMARKET_GAMMA_PUBLIC"
         assert final["settlement_endpoint"].endswith("/markets/forecast-market")
         assert final["settlement_closed"] is True
@@ -934,7 +962,9 @@ def test_actual_step_distinguishes_missing_reference_from_no_edge() -> None:
         collector.drain_path = mock.Mock()
         collector.drain_path.exists.return_value = False
         collector.state = {key: {"complete": True} for key in checks}
-        collector.policy = {"minimum_entry_tte_seconds": 5.0, "maximum_entry_tte_seconds": 300.0, "maximum_model_market_disagreement": 0.2}; collector.probe_policy = None
+        collector.policy = {"minimum_entry_tte_seconds": 5.0, "maximum_entry_tte_seconds": 300.0,
+                            "tte_bucket_policy": [{"id":"test-5-300","minimum_seconds":5.0,"maximum_seconds":300.0,"action":"TAKER_SHADOW"}],
+                            "maximum_model_market_disagreement": 0.2}; collector.probe_policy = None
         collector.last_book_error = ""; collector.last_attempt_reason = ""
         for name in ("record_forecast", "record_opportunity_set", "observe_positions", "reconcile_canonical_account", "observe_forecasts", "publish", "reject", "wait", "attempt"):
             setattr(collector, name, mock.Mock())

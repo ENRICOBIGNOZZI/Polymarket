@@ -161,28 +161,28 @@ acquire_deploy_lock
 candidate=""
 RUNTIME_STOPPED_BY_DEPLOY=0
 DEPLOY_COMPLETED=0
-INCUMBENT_PRESENT=0
+RUNTIME_PRESENT=0
 OLD_SHA=""
 
-restart_stopped_incumbent_on_failure(){
+restart_stopped_runtime_on_failure(){
   [[ "$RUNTIME_STOPPED_BY_DEPLOY" == 1 && "$DEPLOY_COMPLETED" == 0 ]] || return 0
-  [[ "$INCUMBENT_PRESENT" == 1 && "$OLD_SHA" =~ ^[0-9a-f]{40}$ ]] || return 0
+  [[ "$RUNTIME_PRESENT" == 1 && "$OLD_SHA" =~ ^[0-9a-f]{40}$ ]] || return 0
   [[ "$(git -C "$APP_DIR" rev-parse HEAD 2>/dev/null || true)" == "$OLD_SHA" ]] || {
-    log "Failed cutover cannot auto-restart incumbent: active checkout no longer matches $OLD_SHA"
+    log "Failed cutover cannot auto-restart runtime: active checkout no longer matches $OLD_SHA"
     return 1
   }
   [[ "$(cat "$(production_run_root)/control/deployed_sha" 2>/dev/null || true)" == "$OLD_SHA" ]] || {
-    log "Failed cutover cannot auto-restart incumbent: deployed identity no longer matches $OLD_SHA"
+    log "Failed cutover cannot auto-restart runtime: deployed identity no longer matches $OLD_SHA"
     return 1
   }
 
-  log "Restarting verified incumbent V7 PAPER runtime after failed pre-checkout cutover"
+  log "Restarting verified runtime V7 PAPER runtime after failed pre-checkout cutover"
   if [[ "$(uname -s)" == "Darwin" ]]; then
     local domain="gui/$(id -u)" label="com.polymarket.v7.paper"
     local plist="$HOME/Library/LaunchAgents/$label.plist" plist_sha=""
     plist_sha="$(plutil -extract EnvironmentVariables.POLYMARKET_EXPECTED_SHA raw -o - "$plist" 2>/dev/null || true)"
     [[ "$plist_sha" == "$OLD_SHA" ]] || {
-      log "Failed cutover cannot auto-restart incumbent: launchd identity mismatch"
+      log "Failed cutover cannot auto-restart runtime: launchd identity mismatch"
       return 1
     }
     launchctl kickstart -k "$domain/$label" >/dev/null 2>&1 || return 1
@@ -214,12 +214,12 @@ assert pid > 0
 os.kill(pid, 0)
 PY
     then
-      log "Verified incumbent V7 PAPER runtime restored at $OLD_SHA"
+      log "Verified runtime V7 PAPER runtime restored at $OLD_SHA"
       return 0
     fi
     sleep 0.1
   done
-  log "ERROR: failed to restore incumbent V7 PAPER runtime at $OLD_SHA"
+  log "ERROR: failed to restore runtime V7 PAPER runtime at $OLD_SHA"
   return 1
 }
 
@@ -227,7 +227,7 @@ cleanup(){
   local cleanup_status=$?
   clear_cutover_drain
   if [[ "$cleanup_status" != 0 ]]; then
-    restart_stopped_incumbent_on_failure || true
+    restart_stopped_runtime_on_failure || true
   fi
   if [[ -n "$candidate" && -d "$candidate" ]]; then
     git -C "$APP_DIR" worktree remove --force "$candidate" >/dev/null 2>&1 || true
@@ -253,7 +253,7 @@ write_status(){
 
 production_run_root(){ printf '%s\n' "$APP_DIR/runs/paper_v7_live"; }
 
-resolve_incumbent_sha(){
+resolve_runtime_sha(){
   local run_root deployed runtime
   run_root="$(production_run_root)"
   deployed="$run_root/control/deployed_sha"
@@ -271,14 +271,14 @@ try:
     deployed=deployed_path.read_text(encoding='utf-8').strip()
     runtime=json.loads(runtime_path.read_text(encoding='utf-8'))
 except (OSError,json.JSONDecodeError) as exc:
-    raise SystemExit(f'incumbent_identity_unreadable:{type(exc).__name__}')
+    raise SystemExit(f'runtime_identity_unreadable:{type(exc).__name__}')
 runtime_sha=str(runtime.get('model_sha') or '')
 if not sha_pattern.fullmatch(deployed) or runtime_sha != deployed:
-    raise SystemExit('incumbent_identity_mismatch')
+    raise SystemExit('runtime_identity_mismatch')
 if runtime.get('paper_only') is not True or runtime.get('authenticated_execution') is not False:
-    raise SystemExit('incumbent_safety_mismatch')
+    raise SystemExit('runtime_safety_mismatch')
 if runtime.get('real_order_submission') is not False:
-    raise SystemExit('incumbent_real_submission_enabled')
+    raise SystemExit('runtime_real_submission_enabled')
 print(deployed)
 PY
 }
@@ -319,15 +319,11 @@ PY
 }
 
 cutover_positions_drained(){
-  local run_root="$(production_run_root)" runtime_pid="" runtime_alive=0
-  runtime_pid="$(production_pid)"
-  if [[ "$runtime_pid" =~ ^[1-9][0-9]*$ ]] && kill -0 "$runtime_pid" 2>/dev/null; then
-    runtime_alive=1
-  fi
-  python3 - "$run_root" "$LOCK_NONCE" "$runtime_alive" "$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)/scripts" <<'PY'
-import json, sys
+  local current_sha="$1" run_root="$(production_run_root)"
+  python3 - "$run_root" "$LOCK_NONCE" "$current_sha" "$EXPECTED_SHA" <<'PY'
+import json,sys
 from pathlib import Path
-root=Path(sys.argv[1]); nonce=sys.argv[2]; runtime_alive=sys.argv[3] == '1'
+root=Path(sys.argv[1]); nonce,current_sha,target_sha=sys.argv[2:]
 def read(rel):
     try:
         value=json.loads((root/rel).read_text(encoding='utf-8'))
@@ -337,131 +333,24 @@ def read(rel):
 sentinel=read('control/CUTOVER_DRAIN')
 runtime=read('control/runtime_status.json')
 portfolio=read('control/portfolio_state.json')
-external_status=read('external_fair/paper_router_status.json')
-external_state=read('external_fair/paper_router_state.json')
-maker_status=read('micro_maker/status.json')
-maker_state=read('micro_maker/state.json')
-assert sentinel.get('nonce') == nonce and sentinel.get('paper_only') is True
-assert runtime.get('paper_only') is True and runtime.get('authenticated_execution') is False
-assert runtime.get('real_order_submission') is False
-assert portfolio.get('paper_only') is True and portfolio.get('authenticated_execution') is False
-assert portfolio.get('killed') is False and not portfolio.get('fatal_sleeves')
-
-# A fail-closed startup can terminate before zero-authority or observer sleeves
-# have materialized their state files. For a stopped process only, prove that
-# absence means "never started": the canonical ledger must be empty, the
-# runtime must have authorized no alpha action, and the portfolio guard must
-# still report the untouched budget with an explicit non-started source.
-ledger_path=root/'ledger/execution.jsonl'
-ledger_empty=ledger_path.exists() and ledger_path.stat().st_size == 0
-spool_path=root/'ledger/spool'
-spool_empty=not spool_path.exists() or not any(spool_path.glob('*.json'))
-sleeves=portfolio.get('sleeves') if isinstance(portfolio.get('sleeves'),dict) else {}
-def prove_never_started(sleeve_name):
-    sleeve=sleeves.get(sleeve_name) if isinstance(sleeves.get(sleeve_name),dict) else {}
-    budget=float(sleeve.get('budget') or 0.0); equity=float(sleeve.get('equity') or 0.0)
-    return (
-        not runtime_alive and ledger_empty and spool_empty
-        and runtime.get('state') in {'stopping','stopped'}
-        and runtime.get('economic_new_risk_ready') is False
-        and runtime.get('authorized_alpha_actions') == []
-        and sleeve.get('source') in {'not_started','zero_authority_budget'}
-        and sleeve.get('killed') is False and abs(equity-budget) <= 1e-9
-    )
-maker_absent=not maker_status and not maker_state
-if maker_absent:
-    assert prove_never_started('micro_maker')
-    maker_status={'paper_only':True,'authenticated_execution':False,'killed':False}
-    maker_state={'inventory':{}}
-maker_zero_authority_observer=(
-    bool(maker_status) and not maker_state
-    and maker_status.get('schema') == 'polymarket_v7_professional_maker_status_v1'
-    and maker_status.get('model_sha') == runtime.get('model_sha')
-    and maker_status.get('paper_only') is True
-    and maker_status.get('authenticated_execution') is False
-    and maker_status.get('real_order_submission') is False
-    and maker_status.get('execution_authority') == 'SHADOW_ZERO_AUTHORITY'
-    and maker_status.get('capital_authority') is False
-    and maker_status.get('ledger_writer_authority') is False
-    and maker_status.get('source') == 'shadow_markout_and_fillability_observers'
-    and abs(int(runtime.get('timestamp',0))-int(maker_status.get('timestamp',-31))) <= 30
-    and isinstance(maker_status.get('observer_pids'),dict)
-    # A live incumbent must still prove an owned observer cohort. Once the
-    # runtime is stopped, an empty PID map is the terminal state: zero capital,
-    # zero ledger authority, zero orders and zero positions already prove that
-    # this shadow sleeve cannot retain or create PAPER risk.
-    and (bool(maker_status.get('observer_pids')) or not runtime_alive)
-    and maker_status.get('new_risk_frozen') is True
-    and int(maker_status.get('open_orders',-1)) == 0
-    and int(maker_status.get('open_positions',-1)) == 0
-    and maker_status.get('killed') is False
-)
-if maker_zero_authority_observer:
-    # The observer cohort intentionally has no executable inventory state. Its
-    # exact-SHA, zero-authority status plus the owned cutover sentinel is the
-    # complete proof that it cannot create or retain a PAPER position.
-    maker_state={'inventory':{}}
-assert external_status.get('paper_only') is True and external_status.get('authenticated_execution') is False
-assert maker_status.get('paper_only') is True and maker_status.get('authenticated_execution') is False
-external_positions=external_state.get('positions')
-maker_inventory=maker_state.get('inventory')
-assert isinstance(external_positions,dict)
-assert isinstance(maker_inventory,dict)
-# paper_router_state.positions is the counterfactual SHADOW book. It is not
-# execution inventory and must never hold an exact-SHA cutover hostage. The
-# router status owns the zero-authority execution-position contract; durable
-# state is reconciled separately only as counterfactual evidence.
-external_open=int(external_status.get('open_positions',-1))
-counterfactual_open=sum(
-    1 for row in external_positions.values()
-    if isinstance(row,dict) and row.get('settled') is not True
-)
-maker_open=0
-for row in maker_inventory.values():
-    assert isinstance(row,dict)
-    yes=float(row.get('yes_shares') or 0.0); no=float(row.get('no_shares') or 0.0)
-    assert yes >= 0.0 and no >= 0.0
-    maker_open += int(yes > 1e-9) + int(no > 1e-9)
-assert external_open >= 0
-assert int(external_status.get('counterfactual_open_positions',-1)) == counterfactual_open
-assert external_open == 0
-# A zero-authority observer status is NOT proof that its separate receipt-gated
-# Maker executor has no inventory. Inspect canonical Maker fills and terminal
-# records with the target code, before any old run root can be archived.
-authorized_executor=read('micro_maker/authorized_make_executor_status.json')
-if authorized_executor:
-    assert authorized_executor.get('model_sha') == runtime.get('model_sha')
-    assert authorized_executor.get('paper_only') is True
-    assert authorized_executor.get('authenticated_execution') is False
-    assert authorized_executor.get('real_order_submission') is False
-    assert int(authorized_executor.get('active_orders',-1)) == 0
-    assert len(sys.argv) >= 5, 'target accounting verifier missing'
-    sys.path.insert(0, sys.argv[4])
-    from v7_external_fair_paper_router import _canonical_and_spooled_events
-    from v7_maker_accounting import project_maker
-    maker_events, maker_bad_spool = _canonical_and_spooled_events(root, runtime['model_sha'])
-    canonical_maker = project_maker(maker_events, {})
-    assert not maker_bad_spool and not canonical_maker['issues']
-    assert not canonical_maker['positions'], 'unsettled canonical Maker inventory'
-    assert canonical_maker['pending_orders'] == 0, 'unreconciled Maker orders'
-assert maker_status.get('killed') is not True
-# Every supported incumbent is drain-aware. External must already be
-# flat; Maker only needs to prove entry is frozen because its durable inventory
-# is terminalized immediately afterward by target-SHA code.
-if runtime_alive:
-    assert external_status.get('drain_requested') is True
-    assert external_status.get('drain_complete') is True
-    assert external_status.get('order_submission_enabled') is False
-    assert external_status.get('blocker') == 'CUTOVER_DRAIN'
-    if maker_zero_authority_observer:
-        assert maker_status.get('new_risk_frozen') is True and maker_open == 0
-    else:
-        assert maker_status.get('drain_requested') is True
-        assert maker_status.get('new_risk_frozen') is True
-        assert maker_status.get('drain_complete') is (maker_open == 0)
-# A previously stopped incumbent cannot acknowledge a fresh sentinel nonce.
-# Its absence is itself a stronger entry freeze; immutable executable state
-# must still be flat and Maker inventory is finalized by target-SHA code.
+account=read('external_fair/paper_router_status.json')
+executor=read('micro_maker/authorized_make_executor_status.json')
+assert sentinel.get('schema')=='polymarket_v7_cutover_drain_v1'
+assert sentinel.get('nonce')==nonce and sentinel.get('current_sha')==current_sha
+assert sentinel.get('target_sha')==target_sha and sentinel.get('paper_only') is True
+for value in (runtime,portfolio,account,executor):
+    assert value and value.get('paper_only') is True
+    assert value.get('authenticated_execution') is False
+    assert value.get('real_order_submission') in (None,False)
+assert runtime.get('model_sha')==current_sha
+assert portfolio.get('killed') is False and not portfolio.get('fatal_engines')
+assert account.get('model_sha') in (None,'',current_sha)
+assert executor.get('model_sha')==current_sha
+assert int(account.get('open_positions') or 0)==0
+assert int(account.get('pending_maker_orders') or 0)==0
+assert int(executor.get('active_orders') or 0)==0
+spool=root/'ledger/spool'
+assert not spool.exists() or not any(spool.glob('*.json'))
 PY
 }
 
@@ -469,13 +358,13 @@ wait_for_cutover_drain(){
   local current_sha="$1"
   [[ "$current_sha" != "$EXPECTED_SHA" ]] || return 0
   for _ in $(seq 1 "$POSITION_DRAIN_ATTEMPTS"); do
-    if cutover_positions_drained >/dev/null 2>&1; then
-      log "PAPER entry drain complete; durable Maker inventory is frozen for target-SHA finalization"
+    if cutover_positions_drained "$current_sha" >/dev/null 2>&1; then
+      log "PAPER drain complete: account flat, Maker flat, spool drained"
       return 0
     fi
     sleep 1
   done
-  fail "PAPER position drain did not reach zero terminally-accounted positions"
+  fail "PAPER drain did not reach a flat, terminally-accounted state"
 }
 
 record_deployed_sha(){
@@ -486,7 +375,7 @@ record_deployed_sha(){
   mv "$tmp" "$run_root/control/deployed_sha"
 }
 
-record_incumbent_identity(){
+record_runtime_identity(){
   local run_root="$(production_run_root)"
   python3 - "$run_root" "$EXPECTED_SHA" <<'PY'
 import json,os,sys,time
@@ -500,10 +389,10 @@ assert runtime.get('authenticated_execution') is False
 assert runtime.get('real_order_submission') is False
 assert all(str(runtime.get(key) or '').strip() for key in required)
 value={
-    'schema':'polymarket_v7_incumbent_identity_v1',
+    'schema':'polymarket_v7_runtime_identity_v1',
     'recorded_at':int(time.time()),
     'paper_only':True,
-    'execution_authority':'FROZEN_BLUE_CHAMPION',
+    'execution_authority':'PAPER_RUNTIME',
     'runtime_sha':expected,
     'config_hash':runtime['config_hash'],
     'policy_hash':runtime['policy_hash'],
@@ -514,7 +403,7 @@ value={
     'server_id':runtime['server_id'],
     'verified':True,
 }
-path=root/'control/incumbent_identity.json'; tmp=path.with_suffix(f'.tmp.{os.getpid()}')
+path=root/'control/runtime_identity.json'; tmp=path.with_suffix(f'.tmp.{os.getpid()}')
 tmp.write_text(json.dumps(value,sort_keys=True)+'\n',encoding='utf-8'); os.replace(tmp,path)
 PY
 }
@@ -672,7 +561,6 @@ for rel in (
     'ops/v7_service_entrypoint.sh',
     'scripts/v7_rtds_external_fair_monitor.py',
     'scripts/v7_external_fair_paper_router.py',
-    'scripts/v7_evidence_capital_allocator.py',
     'scripts/v7_fee_reward_registry.py',
     'scripts/v7_generate_economic_artifacts.py',
     'scripts/v7_exact_sha_ci_gate.py',
@@ -711,7 +599,6 @@ prevalidate_candidate(){
       scripts/v7_finalize_maker_cutover.py \
       scripts/v7_rtds_external_fair_monitor.py \
       scripts/v7_external_fair_paper_router.py \
-      scripts/v7_evidence_capital_allocator.py \
       scripts/v7_fee_reward_registry.py \
       scripts/v7_generate_economic_artifacts.py \
       monitoring/exporter_v7.py \
@@ -721,7 +608,7 @@ prevalidate_candidate(){
       monitoring/v7_portfolio_reconciliation.py \
       ops/v7_runtime_supervisor.py
     bash -n scripts/paper_v7_execution_loop.sh ops/update_server_v7.sh ops/v7_service_entrypoint.sh
-    python3 -m json.tool config/live_champion.json >/dev/null
+    python3 -m json.tool config/v7_live_model_scope.json >/dev/null
     python3 -m json.tool config/paper_v7.json >/dev/null
     python3 -m json.tool monitoring/v7_monitoring_manifest.json >/dev/null
     python3 -m json.tool monitoring/grafana/dashboards/polymarket-v7.json >/dev/null
@@ -730,7 +617,7 @@ prevalidate_candidate(){
     python3 -m json.tool config/v7_live_model_scope.json >/dev/null
   )
   # Keep the exact target worktree until cleanup. Cutover marking/finalization
-  # must use candidate code, not the older incumbent checkout.
+  # must use candidate code, not the older runtime checkout.
 }
 
 build_current_checkout(){
@@ -842,61 +729,6 @@ stop_owned_monitoring(){
   done
 }
 
-preflight_legacy_macos_services(){
-  [[ "$(uname -s)" == "Darwin" ]] || return 0
-  local label system_plist privileged_required=0
-  for label in \
-    com.polymarket.paper \
-    com.polymarket.exporter \
-    com.polymarket.prometheus \
-    com.polymarket.grafana; do
-    system_plist="/Library/LaunchDaemons/$label.plist"
-    if [[ -e "$system_plist" ]] || launchctl print "system/$label" >/dev/null 2>&1; then
-      privileged_required=1
-    fi
-  done
-  if [[ "$privileged_required" == 1 && "$(id -u)" != 0 ]]; then
-    sudo -n true >/dev/null 2>&1 || fail \
-      "legacy system LaunchDaemons require administrator authorization before PAPER drain; run sudo -v and retry"
-  fi
-}
-
-retire_legacy_macos_services(){
-  [[ "$(uname -s)" == "Darwin" ]] || return 0
-  local domain="gui/$(id -u)" label user_plist system_plist
-  # Exact retired labels only. Canonical com.polymarket.v7.* services are never
-  # matched by this list, and unknown launchd jobs remain untouched.
-  for label in \
-    com.polymarket.paper \
-    com.polymarket.exporter \
-    com.polymarket.prometheus \
-    com.polymarket.grafana; do
-    launchctl bootout "$domain/$label" >/dev/null 2>&1 || true
-    if launchctl print "system/$label" >/dev/null 2>&1; then
-      if [[ "$(id -u)" == 0 ]]; then
-        launchctl bootout "system/$label" >/dev/null 2>&1 ||
-          fail "cannot unload retired launchd service: system/$label"
-      else
-        sudo -n launchctl bootout "system/$label" >/dev/null 2>&1 ||
-          fail "cannot unload retired launchd service: system/$label"
-      fi
-    fi
-    user_plist="$HOME/Library/LaunchAgents/$label.plist"
-    [[ ! -e "$user_plist" ]] || rm -f "$user_plist"
-    system_plist="/Library/LaunchDaemons/$label.plist"
-    if [[ -e "$system_plist" ]]; then
-      if [[ "$(id -u)" == 0 ]]; then
-        rm -f "$system_plist" || fail "cannot remove retired launchd service: $system_plist"
-      else
-        sudo -n rm -f "$system_plist" || fail "cannot remove retired launchd service: $system_plist"
-      fi
-    fi
-    launchctl print "system/$label" >/dev/null 2>&1 &&
-      fail "retired launchd service remains loaded: system/$label"
-    [[ ! -e "$system_plist" ]] || fail "retired launchd service remains installed: $system_plist"
-  done
-}
-
 stop_stale_monitoring_listener(){
   local name="$1" port="$2" expected="$3" pid command_line pids
   command -v lsof >/dev/null 2>&1 || return 0
@@ -931,7 +763,6 @@ start_monitoring(){
   local monitoring_state="$APP_DIR/runs/monitoring/config"
   if [[ "$(uname -s)" == "Darwin" ]]; then
     local domain="gui/$(id -u)" label template destination
-    retire_legacy_macos_services
     for label in exporter prometheus grafana retention; do
       launchctl bootout "$domain/com.polymarket.v7.$label" >/dev/null 2>&1 || true
     done
@@ -1075,7 +906,7 @@ runtime_health(){
 import csv,json,os,sys,time
 from pathlib import Path
 root=Path(sys.argv[1]); sha=sys.argv[2]; now=int(time.time())
-required=[root/'control/runtime_status.json',root/'control/portfolio_state.json',root/'control/allocations/manifest.json',root/'control/evidence_capital_allocator.json',root/'control/fee_reward_registry.json',root/'control/retention_status.json',root/'structural_relations/verified_relations.csv',root/'external_fair/paper_router_status.json',root/'canonical_economics.json',root/'ledger/execution.jsonl',root/'trade_tape.csv',root/'trade_recorder_status.json']
+required=[root/'control/runtime_status.json',root/'control/portfolio_state.json',root/'control/allocations/manifest.json',root/'control/fee_reward_registry.json',root/'control/retention_status.json',root/'structural_relations/verified_relations.csv',root/'external_fair/paper_router_status.json',root/'canonical_economics.json',root/'ledger/execution.jsonl',root/'trade_tape.csv',root/'trade_recorder_status.json']
 assert all(p.exists() for p in required), [str(p) for p in required if not p.exists()]
 runtime=json.loads((root/'control/runtime_status.json').read_text())
 portfolio=json.loads((root/'control/portfolio_state.json').read_text())
@@ -1108,8 +939,6 @@ assert fee_reward.get('unknown_fee_policy')=='NON_EXECUTABLE' and fee_reward.get
 assert int(fee_reward.get('market_count') or 0)>0 and int(fee_reward.get('executable_market_count') or 0)>0
 assert retention.get('schema')=='polymarket_v7_retention_status_v1' and retention.get('expected_sha')==sha
 assert retention.get('paper_only') is True and retention.get('authenticated_execution') is False
-for removed in ('graph_rv','micro_taker','ranking','pca','local_factor','wallet_intelligence','market_open','osint','sports_latency','cross_platform'):
-    assert not (root/removed).exists(), removed
 with (root/'trade_tape.csv').open(newline='',encoding='utf-8') as handle: rows=list(csv.DictReader(handle))
 recorder=json.loads((root/'trade_recorder_status.json').read_text())
 if rows:
@@ -1135,7 +964,6 @@ PY
   grep -q '^polymarket_v7_authenticated_execution_disabled 1$' <<<"$metrics" || return 1
   grep -q '^polymarket_v7_ledger_valid 1$' <<<"$metrics" || return 1
   grep -q '^polymarket_v7_live_algorithm_count 2$' <<<"$metrics" || return 1
-  grep -q '^polymarket_v7_legacy_algorithm_count 0$' <<<"$metrics" || return 1
   grep -q '^polymarket_external_fair_present 1$' <<<"$metrics" || return 1
   awk '$1=="polymarket_external_fair_router_book_requests_total"{found=1; if ($2+0>0) ok=1} END{exit !(found&&ok)}' <<<"$metrics" || return 1
   curl -fsS http://127.0.0.1:9108/external-fair.json >/dev/null || return 1
@@ -1190,60 +1018,40 @@ python3 "$candidate/scripts/v7_exact_sha_ci_gate.py" \
   --repository "$CI_REPOSITORY" --sha "$EXPECTED_SHA" \
   --output "$STATE_DIR/exact_sha_ci.$EXPECTED_SHA.json" || \
   fail "exact SHA lacks successful Release and Debug CI"
-preflight_legacy_macos_services
-INCUMBENT_SHA="$(resolve_incumbent_sha)"
-INCUMBENT_PRESENT=1
+RUNTIME_SHA="$(resolve_runtime_sha)"
+RUNTIME_PRESENT=1
 CHECKOUT_SHA="$(git rev-parse HEAD)"
-if [[ "$INCUMBENT_SHA" == ABSENT ]]; then
-  INCUMBENT_PRESENT=0
+if [[ "$RUNTIME_SHA" == ABSENT ]]; then
+  RUNTIME_PRESENT=0
   OLD_SHA=""
   ANCESTOR_SHA="$CHECKOUT_SHA"
-  log "Fresh installation has no deployed runtime incumbent; skipping position drain and archive"
+  log "Fresh installation has no deployed runtime; skipping position drain and archive"
 else
-  OLD_SHA="$INCUMBENT_SHA"
-  [[ "$OLD_SHA" =~ ^[0-9a-f]{40}$ ]] || fail "cannot resolve exact deployed incumbent SHA"
+  OLD_SHA="$RUNTIME_SHA"
+  [[ "$OLD_SHA" =~ ^[0-9a-f]{40}$ ]] || fail "cannot resolve exact deployed runtime SHA"
   ANCESTOR_SHA="$OLD_SHA"
 fi
 git merge-base --is-ancestor "$ANCESTOR_SHA" "$EXPECTED_SHA" >/dev/null 2>&1 || \
-  fail "current checkout or deployed incumbent $ANCESTOR_SHA is not an ancestor of target $EXPECTED_SHA"
+  fail "current checkout or deployed runtime $ANCESTOR_SHA is not an ancestor of target $EXPECTED_SHA"
 [[ -z "$(git status --porcelain --untracked-files=no)" ]] || fail "tracked server checkout is dirty"
-if [[ "$INCUMBENT_PRESENT" == 1 ]]; then
+if [[ "$RUNTIME_PRESENT" == 1 ]]; then
   request_cutover_drain "$OLD_SHA"
   wait_for_cutover_drain "$OLD_SHA"
-fi
-MAKER_STATUS_REFRESHER="${POLYMARKET_MAKER_STATUS_REFRESHER:-$candidate/scripts/v7_market_maker_status.py}"
-[[ -f "$MAKER_STATUS_REFRESHER" ]] || fail "maker status refresher missing: $MAKER_STATUS_REFRESHER"
-stop_production_runtime
-RUNTIME_STOPPED_BY_DEPLOY=1
-if [[ "$INCUMBENT_PRESENT" == 1 && "$OLD_SHA" != "$EXPECTED_SHA" ]]; then
-  # Refresh from immutable state only after BLUE is stopped. This removes any
-  # race with late fills and keeps the finalizer's 15-second mark freshness
-  # contract independent of process-shutdown latency.
-  env https_proxy=http://127.0.0.1:19109 http_proxy=http://127.0.0.1:19109 \
-    HTTPS_PROXY=http://127.0.0.1:19109 HTTP_PROXY=http://127.0.0.1:19109 \
-    no_proxy=127.0.0.1,localhost NO_PROXY=127.0.0.1,localhost \
-    python3 "$MAKER_STATUS_REFRESHER" \
-      --state "$(production_run_root)/micro_maker/state.json" \
-      --config "$(production_run_root)/control/allocations/micro_maker.json" \
-      --selection "$(production_run_root)/micro_maker/reward_selection.json" \
-      --fee-registry "$(production_run_root)/control/fee_reward_registry.json" \
-      --output "$(production_run_root)/control/maker_cutover_mark.json" \
-      --cutover-zero-recovery \
-      >/dev/null
+  stop_production_runtime
+  RUNTIME_STOPPED_BY_DEPLOY=1
 fi
 MAKER_CUTOVER_FINALIZER="${POLYMARKET_MAKER_CUTOVER_FINALIZER:-$candidate/scripts/v7_finalize_maker_cutover.py}"
 [[ -f "$MAKER_CUTOVER_FINALIZER" ]] || fail "maker cutover finalizer missing: $MAKER_CUTOVER_FINALIZER"
-if [[ "$INCUMBENT_PRESENT" == 1 && "$OLD_SHA" != "$EXPECTED_SHA" ]]; then
+if [[ "$RUNTIME_PRESENT" == 1 && "$OLD_SHA" != "$EXPECTED_SHA" ]]; then
   python3 "$MAKER_CUTOVER_FINALIZER" \
     --run-root "$(production_run_root)" \
     --model-sha "$OLD_SHA" \
-    --nonce "$LOCK_NONCE" \
-    --mark "$(production_run_root)/control/maker_cutover_mark.json" | tee -a deploy-evidence.txt
+    --nonce "$LOCK_NONCE" | tee -a deploy-evidence.txt
 fi
 stop_owned_monitoring
 CUTOVER_ARCHIVER="${POLYMARKET_CUTOVER_ARCHIVER:-$candidate/scripts/v7_prepare_cutover_run_root.py}"
 [[ -f "$CUTOVER_ARCHIVER" ]] || fail "cutover archiver missing: $CUTOVER_ARCHIVER"
-if [[ "$INCUMBENT_PRESENT" == 1 ]]; then
+if [[ "$RUNTIME_PRESENT" == 1 ]]; then
   python3 "$CUTOVER_ARCHIVER" \
     --run-root "$(production_run_root)" \
     --archive-root "$APP_DIR/runs/paper_v7_archives" \
@@ -1276,7 +1084,7 @@ if [[ "$healthy" != 1 ]]; then
 fi
 [[ "$(git rev-parse HEAD)" == "$EXPECTED_SHA" ]] || fail "server checkout drifted after deployment"
 record_deployed_sha
-record_incumbent_identity
+record_runtime_identity
 write_status healthy "canonical V7 PAPER runtime and monitoring healthy"
 DEPLOY_COMPLETED=1
 log "V7 deployed exact SHA $EXPECTED_SHA"

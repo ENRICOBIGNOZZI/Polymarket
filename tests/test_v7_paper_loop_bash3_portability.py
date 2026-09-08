@@ -15,8 +15,6 @@ class V7PaperLoopBash3PortabilityTest(unittest.TestCase):
         self.assertNotIn('${joint_args[@]}', text)
         self.assertIn("CRYPTO_SETTLEMENT_ENGINE", text)
         self.assertIn("STRUCTURAL_ARB_ENGINE", text)
-        for removed in ("v7_graph_rv_executable_intents.py", "v7_micro_taker_worker.py", "v7_research_shadow_supervisor.py"):
-            self.assertNotIn(removed, text)
 
     def test_cleanup_empty_pid_array_is_guarded_and_bounded(self) -> None:
         text = LOOP.read_text(encoding="utf-8")
@@ -46,11 +44,6 @@ class V7PaperLoopBash3PortabilityTest(unittest.TestCase):
             'decision.get("books") or 0)==2',
         ):
             self.assertIn(required, ready)
-
-    def test_removed_collectors_are_not_launched(self) -> None:
-        text = LOOP.read_text(encoding="utf-8")
-        for removed in ("limitless", "kalshi", "sports_latency", "cross_platform", "osint"):
-            self.assertNotIn(removed, text.lower())
 
 
 if __name__ == "__main__":

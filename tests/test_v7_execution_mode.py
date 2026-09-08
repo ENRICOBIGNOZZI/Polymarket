@@ -24,12 +24,12 @@ class ExecutionModeContractTests(unittest.TestCase):
     def test_canonical_configs_agree_on_paper_simulated(self) -> None:
         paper = json.loads((ROOT / "config/paper_v7.json").read_text(encoding="utf-8"))
         supervision = json.loads((ROOT / "config/v7_runtime_supervision.json").read_text(encoding="utf-8"))
-        champion = json.loads((ROOT / "config/live_champion.json").read_text(encoding="utf-8"))
+        scope = json.loads((ROOT / "config/v7_live_model_scope.json").read_text(encoding="utf-8"))
         self.assertEqual(paper["execution_mode"], "PAPER_SIMULATED")
         self.assertEqual(paper["v7"]["execution_mode"], "PAPER_SIMULATED")
         self.assertEqual(paper["v7"]["execution_modes_policy"], "config/v7_execution_modes.json")
         self.assertEqual(supervision["execution_mode"], "PAPER_SIMULATED")
-        self.assertEqual(champion["execution_mode"], "PAPER_SIMULATED")
+        self.assertTrue(scope["paper_only"]); self.assertFalse(scope["real_order_submission"])
 
 
 if __name__ == "__main__":

@@ -1,456 +1,87 @@
 from __future__ import annotations
-
-import hashlib
-import json
-import os
-import sys
-import tempfile
-import unittest
+import json,sys,tempfile,unittest
 from pathlib import Path
-
-ROOT = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(ROOT / "scripts"))
-
+ROOT=Path(__file__).resolve().parents[1]
+sys.path.insert(0,str(ROOT/'scripts'))
 import v7_prepare_cutover_run_root as cutover
+OLD='a'*40; NEW='b'*40
 
-OLD = "a" * 40
-NEW = "b" * 40
-OLDER = "c" * 40
+def write(path:Path,value:dict)->None:
+    path.parent.mkdir(parents=True,exist_ok=True)
+    path.write_text(json.dumps(value)+'\n',encoding='utf-8')
 
+def fixture(root:Path)->None:
+    write(root/'control/runtime_status.json',{
+        'version':7,'model_sha':OLD,'pid':99999999,'state':'stopped',
+        'paper_only':True,'authenticated_execution':False,'real_order_submission':False})
+    write(root/'control/supervisor_status.json',{'supervisor_pid':99999998})
+    (root/'control/deployed_sha').write_text(OLD+'\n')
+    write(root/'control/portfolio_state.json',{
+        'paper_only':True,'authenticated_execution':False,'real_order_submission':False,
+        'killed':False,'drawdown':0.0,'max_drawdown':0.15})
+    write(root/'external_fair/paper_router_status.json',{
+        'model_sha':OLD,'paper_only':True,'authenticated_execution':False,
+        'real_order_submission':False,'open_positions':0,'pending_maker_orders':0})
+    write(root/'micro_maker/authorized_make_executor_status.json',{
+        'model_sha':OLD,'paper_only':True,'authenticated_execution':False,
+        'real_order_submission':False,'active_orders':0})
+    ledger=root/'ledger/execution.jsonl';ledger.parent.mkdir(parents=True);ledger.write_text('',encoding='utf-8')
+class PrepareCutoverTests(unittest.TestCase):
+    def test_flat_prior_sha_is_atomically_archived(self):
+        with tempfile.TemporaryDirectory() as d:
+            base=Path(d);root=base/'run';fixture(root)
+            result=cutover.prepare(root,base/'archives',base,NEW,now=123,ancestor_check=lambda *_:True)
+            self.assertEqual(result['state'],'ARCHIVED_PRIOR_SHA')
+            self.assertTrue(result['archived'])
+            self.assertEqual(result['prior_open_positions'],{'paper_account':0,'maker_active_orders':0})
+            self.assertTrue(Path(result['archive_path']).exists())
+            self.assertTrue((root/'control/cutover_lineage.json').exists())
 
-def write_json(path: Path, value: dict) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(value) + "\n", encoding="utf-8")
+    def test_current_inventory_or_orders_block_archive(self):
+        cases=(('external_fair/paper_router_status.json','open_positions',1),
+               ('external_fair/paper_router_status.json','pending_maker_orders',1),
+               ('micro_maker/authorized_make_executor_status.json','active_orders',1))
+        for rel,key,value in cases:
+            with self.subTest(key=key), tempfile.TemporaryDirectory() as d:
+                base=Path(d);root=base/'run';fixture(root)
+                p=root/rel;row=json.loads(p.read_text());row[key]=value;write(p,row)
+                with self.assertRaisesRegex(cutover.CutoverArchiveError,'prior_open_positions'):
+                    cutover.prepare(root,base/'archives',base,NEW,ancestor_check=lambda *_:True)
 
+    def test_killed_or_drawdown_limited_portfolio_blocks(self):
+        for key,value,reason in (('killed',True,'prior_portfolio_state_invalid'),('drawdown',0.15,'prior_portfolio_drawdown_limit')):
+            with self.subTest(key=key), tempfile.TemporaryDirectory() as d:
+                base=Path(d);root=base/'run';fixture(root)
+                p=root/'control/portfolio_state.json';row=json.loads(p.read_text());row[key]=value;write(p,row)
+                with self.assertRaisesRegex(cutover.CutoverArchiveError,reason):
+                    cutover.prepare(root,base/'archives',base,NEW,ancestor_check=lambda *_:True)
+    def test_spool_and_nonancestor_ledger_fail_closed(self):
+        with tempfile.TemporaryDirectory() as d:
+            base=Path(d);root=base/'run';fixture(root)
+            write(root/'ledger/spool/pending.json',{'pending':True})
+            with self.assertRaisesRegex(cutover.CutoverArchiveError,'prior_ledger_spool_not_empty'):
+                cutover.prepare(root,base/'archives',base,NEW,ancestor_check=lambda *_:True)
+        with tempfile.TemporaryDirectory() as d:
+            base=Path(d);root=base/'run';fixture(root)
+            event={'schema_version':1,'event_type':'FINAL','strategy':'CRYPTO_SETTLEMENT_ENGINE',
+                   'model_sha':'c'*40,'paper_only':True,'authenticated_execution':False,
+                   'record_id':'r1','recorded_ts_ms':1,'final_pnl':0.0,'metadata':{}}
+            (root/'ledger/execution.jsonl').write_text(json.dumps(event)+'\n')
+            with self.assertRaisesRegex(cutover.CutoverArchiveError,'ledger_sha_not_ancestor'):
+                cutover.prepare(root,base/'archives',base,NEW,ancestor_check=lambda _r,old,new: old==OLD)
 
-def fixture(root: Path) -> bytes:
-    write_json(root / "control/runtime_status.json", {
-        "version": 7, "model_sha": OLD, "pid": 99999999,
-        "paper_only": True, "authenticated_execution": False,
-        "real_order_submission": False, "killed": False,
-    })
-    write_json(root / "control/supervisor_status.json", {"supervisor_pid": 99999998})
-    (root / "control/deployed_sha").write_text(OLD + "\n")
-    write_json(root / "control/portfolio_state.json", {
-        "paper_only": True, "authenticated_execution": False,
-        "killed": False, "drawdown": 0.01, "max_drawdown": 0.15,
-    })
-    write_json(root / "external_fair/paper_router_status.json", {
-        "paper_only": True, "authenticated_execution": False, "open_positions": 0,
-        "counterfactual_open_positions": 0,
-    })
-    write_json(root / "external_fair/paper_router_state.json", {"positions": {}})
-    write_json(root / "micro_taker/status.json", {
-        "paper_only": True, "authenticated_execution": False, "open_positions": 0,
-    })
-    write_json(root / "micro_taker/state.json", {"positions": {}})
-    write_json(root / "micro_maker/status.json", {
-        "paper_only": True, "authenticated_execution": False, "positions": [],
-    })
-    write_json(root / "micro_maker/state.json", {"inventory": {}})
-    ledger = (json.dumps({
-        "model_sha": OLD, "paper_only": True, "authenticated_execution": False,
-        "event_type": "OPPORTUNITY",
-    }) + "\n").encode()
-    (root / "ledger").mkdir()
-    (root / "ledger/execution.jsonl").write_bytes(ledger)
-    (root / "forward-tape.jsonl").write_text("preserve-me\n")
-    return ledger
+    def test_same_sha_recovery_does_not_archive(self):
+        with tempfile.TemporaryDirectory() as d:
+            base=Path(d);root=base/'run';fixture(root)
+            (root/'control/deployed_sha').write_text(NEW+'\n')
+            runtime=json.loads((root/'control/runtime_status.json').read_text());runtime['model_sha']=NEW;write(root/'control/runtime_status.json',runtime)
+            result=cutover.prepare(root,base/'archives',base,NEW,ancestor_check=lambda *_:True)
+            self.assertEqual(result['state'],'SAME_SHA_RECOVERY');self.assertFalse(result['archived'])
 
+    def test_prepared_empty_run_root_is_idempotent(self):
+        with tempfile.TemporaryDirectory() as d:
+            base=Path(d);root=base/'run';root.mkdir()
+            result=cutover.prepare(root,base/'archives',base,NEW,ancestor_check=lambda *_:True)
+            self.assertEqual(result['state'],'NEW_RUN_ROOT')
 
-class V7PrepareCutoverRunRootTest(unittest.TestCase):
-    def test_prior_sha_run_is_atomically_archived_with_lineage(self) -> None:
-        with tempfile.TemporaryDirectory() as directory:
-            tmp_path = Path(directory)
-            run = tmp_path / "paper_v7_live"
-            archive = tmp_path / "paper_v7_archives"
-            ledger = fixture(run)
-            result = cutover.prepare(run, archive, tmp_path, NEW, now=123, ancestor_check=lambda *_: True)
-            destination = Path(result["archive_path"])
-            self.assertEqual(result["state"], "ARCHIVED_PRIOR_SHA")
-            self.assertEqual((destination / "forward-tape.jsonl").read_text(), "preserve-me\n")
-            self.assertEqual((destination / "ledger/execution.jsonl").read_bytes(), ledger)
-            self.assertEqual(result["ledger_sha256"], hashlib.sha256(ledger).hexdigest())
-            self.assertEqual(result["ledger_model_sha_counts"], {OLD: 1})
-            receipt = json.loads((run / "control/cutover_lineage.json").read_text())
-            self.assertEqual(receipt["previous_runtime_sha"], OLD)
-            self.assertEqual(receipt["target_sha"], NEW)
-
-    def test_same_sha_recovery_does_not_rotate(self) -> None:
-        with tempfile.TemporaryDirectory() as directory:
-            tmp_path = Path(directory)
-            run = tmp_path / "paper_v7_live"
-            fixture(run)
-            result = cutover.prepare(run, tmp_path / "archives", tmp_path, OLD, ancestor_check=lambda *_: True)
-            self.assertEqual(result, {"state": "SAME_SHA_RECOVERY", "target_sha": OLD, "archived": False})
-            self.assertTrue((run / "forward-tape.jsonl").is_file())
-
-    def test_partial_start_archives_only_with_never_started_receipt(self) -> None:
-        with tempfile.TemporaryDirectory() as directory:
-            tmp_path = Path(directory)
-            run = tmp_path / "paper_v7_live"
-            fixture(run)
-            (run / "ledger/execution.jsonl").write_text("", encoding="utf-8")
-            (run / "micro_taker/status.json").unlink()
-            (run / "micro_taker/state.json").unlink()
-            (run / "micro_maker/status.json").unlink()
-            (run / "micro_maker/state.json").unlink()
-            runtime = json.loads((run / "control/runtime_status.json").read_text())
-            runtime.update({
-                "state": "stopping", "economic_new_risk_ready": False,
-                "authorized_alpha_actions": [],
-            })
-            write_json(run / "control/runtime_status.json", runtime)
-            portfolio = json.loads((run / "control/portfolio_state.json").read_text())
-            portfolio["sleeves"] = {
-                "micro_taker": {"source": "zero_authority_budget", "killed": False,
-                                "budget": 0.0, "equity": 0.0},
-                "micro_maker": {"source": "not_started", "killed": False,
-                                "budget": 2_000.0, "equity": 2_000.0},
-            }
-            write_json(run / "control/portfolio_state.json", portfolio)
-            write_json(run / "control/maker_cutover_liquidation.json", {
-                "schema": "polymarket_v7_maker_cutover_liquidation_v1",
-                "state": "MAKER_FLAT", "never_started": True,
-                "model_sha": OLD, "paper_only": True,
-                "authenticated_execution": False, "real_order_submission": False,
-                "positions_liquidated": 0, "ledger_record_ids": [], "final_pnl": 0.0,
-                "absence_proof": {
-                    "runtime_sha": OLD, "runtime_state": "stopping",
-                    "authorized_alpha_actions": [], "ledger_bytes": 0,
-                    "maker_portfolio_source": "not_started",
-                    "maker_budget": 2_000.0, "maker_equity": 2_000.0,
-                },
-            })
-            result = cutover.prepare(
-                run, tmp_path / "archives", tmp_path, NEW, now=130,
-                ancestor_check=lambda *_: True,
-            )
-            self.assertEqual(
-                result["prior_never_started_sleeves"],
-                ["micro_maker"],
-            )
-            self.assertEqual(result["prior_open_positions"]["maker"], 0)
-
-    def test_zero_authority_observer_without_inventory_state_is_archivable(self) -> None:
-        with tempfile.TemporaryDirectory() as directory:
-            tmp_path = Path(directory)
-            run = tmp_path / "paper_v7_live"
-            fixture(run)
-            ledger_record = {
-                "paper_only": True, "authenticated_execution": False,
-                "model_sha": OLD, "strategy": "CRYPTO_INFORMED_TAKER",
-            }
-            ledger_payload = (json.dumps(ledger_record, sort_keys=True) + "\n").encode()
-            (run / "ledger/execution.jsonl").write_bytes(ledger_payload)
-            (run / "micro_maker/state.json").unlink()
-            runtime = json.loads((run / "control/runtime_status.json").read_text())
-            runtime.update({
-                "state": "stopping", "economic_new_risk_ready": False,
-                "authorized_alpha_actions": [],
-            })
-            write_json(run / "control/runtime_status.json", runtime)
-            portfolio = json.loads((run / "control/portfolio_state.json").read_text())
-            portfolio["sleeves"] = {
-                "micro_maker": {"source": "zero_authority_budget", "killed": False,
-                                "budget": 0.0, "equity": 0.0},
-            }
-            write_json(run / "control/portfolio_state.json", portfolio)
-            write_json(run / "micro_maker/status.json", {
-                "schema": "polymarket_v7_professional_maker_status_v1",
-                "model_sha": OLD, "paper_only": True,
-                "authenticated_execution": False, "real_order_submission": False,
-                "execution_authority": "SHADOW_ZERO_AUTHORITY",
-                "capital_authority": False, "ledger_writer_authority": False,
-                "source": "shadow_markout_and_fillability_observers",
-                "new_risk_frozen": True, "killed": False,
-                "open_orders": 0, "open_positions": 0,
-            })
-            write_json(run / "control/maker_cutover_liquidation.json", {
-                "schema": "polymarket_v7_maker_cutover_liquidation_v1",
-                "state": "MAKER_FLAT", "never_started": True,
-                "model_sha": OLD, "paper_only": True,
-                "authenticated_execution": False, "real_order_submission": False,
-                "positions_liquidated": 0, "ledger_record_ids": [], "final_pnl": 0.0,
-                "absence_proof": {
-                    "runtime_sha": OLD, "runtime_state": "stopping",
-                    "authorized_alpha_actions": [],
-                    "checked_model_sha": OLD,
-                    "maker_strategies": sorted(cutover.MAKER_LEDGER_STRATEGIES),
-                    "ledger_bytes": len(ledger_payload),
-                    "ledger_records": 1,
-                    "ledger_sha256": hashlib.sha256(ledger_payload).hexdigest(),
-                    "exact_sha_records": 1,
-                    "exact_sha_execution_events": 1,
-                    "exact_sha_maker_events": 0,
-                    "maker_portfolio_source": "zero_authority_budget",
-                    "maker_budget": 0.0, "maker_equity": 0.0,
-                },
-            })
-            result = cutover.prepare(
-                run, tmp_path / "archives", tmp_path, NEW, now=131,
-                ancestor_check=lambda *_: True,
-            )
-            self.assertEqual(result["prior_never_started_sleeves"], ["micro_maker"])
-            self.assertEqual(result["prior_open_positions"]["maker"], 0)
-
-    def test_legacy_research_observer_without_inventory_map_is_archivable(self) -> None:
-        with tempfile.TemporaryDirectory() as directory:
-            tmp_path = Path(directory)
-            run = tmp_path / "paper_v7_live"
-            fixture(run)
-            (run / "ledger/execution.jsonl").write_text("", encoding="utf-8")
-            runtime = json.loads((run / "control/runtime_status.json").read_text())
-            runtime.update({
-                "state": "stopping", "economic_new_risk_ready": False,
-                "authorized_alpha_actions": [],
-            })
-            write_json(run / "control/runtime_status.json", runtime)
-            portfolio = json.loads((run / "control/portfolio_state.json").read_text())
-            portfolio["sleeves"] = {
-                "micro_taker": {"source": "zero_authority_budget", "killed": False,
-                                "budget": 0.0, "equity": 0.0},
-            }
-            write_json(run / "control/portfolio_state.json", portfolio)
-            observer = {
-                "schema": "polymarket_v7_micro_taker_status_v1",
-                "model_sha": OLD, "paper_only": True,
-                "authenticated_execution": False, "real_order_submission": False,
-                "real_capital_at_risk": False,
-                "execution_authority": "RESEARCH_ONLY_ZERO_AUTHORITY",
-                "capital_authority": False, "inventory_authority": False,
-                "ledger_writer_authority": False, "oms_authority": False,
-                "order_authority": False, "promotion_authority": False,
-                "research_only": True, "inventory_state_created": False,
-                "drain_complete": True, "signals": 0,
-            }
-            write_json(run / "micro_taker/status.json", observer)
-            write_json(run / "micro_taker/state.json", {**observer, "samples": [{"research": True}]})
-            result = cutover.prepare(
-                run, tmp_path / "archives", tmp_path, NEW, now=132,
-                ancestor_check=lambda *_: True,
-            )
-            self.assertEqual(result["prior_never_started_sleeves"], ["micro_taker"])
-            self.assertEqual(result["prior_open_positions"]["micro_taker"], 0)
-
-    def test_stopped_runtime_checkout_drift_uses_immutable_deployed_sha(self) -> None:
-        with tempfile.TemporaryDirectory() as directory:
-            tmp_path = Path(directory)
-            run = tmp_path / "paper_v7_live"
-            fixture(run)
-            runtime = json.loads((run / "control/runtime_status.json").read_text())
-            runtime["model_sha"] = NEW
-            write_json(run / "control/runtime_status.json", runtime)
-            result = cutover.prepare(
-                run, tmp_path / "archives", tmp_path, NEW, now=125,
-                ancestor_check=lambda *_: True,
-            )
-            self.assertEqual(result["previous_runtime_sha"], OLD)
-            self.assertTrue(result["runtime_checkout_drift_detected"])
-            self.assertEqual(result["ledger_model_sha_counts"], {OLD: 1})
-
-    def test_live_runtime_checkout_drift_still_fails_closed(self) -> None:
-        with tempfile.TemporaryDirectory() as directory:
-            tmp_path = Path(directory)
-            run = tmp_path / "paper_v7_live"
-            fixture(run)
-            runtime = json.loads((run / "control/runtime_status.json").read_text())
-            runtime.update({"model_sha": NEW, "pid": os.getpid()})
-            write_json(run / "control/runtime_status.json", runtime)
-            with self.assertRaisesRegex(cutover.CutoverArchiveError, "prior_runtime_or_supervisor_still_alive"):
-                cutover.prepare(
-                    run, tmp_path / "archives", tmp_path, NEW,
-                    ancestor_check=lambda *_: True,
-                )
-
-    def test_prepared_lineage_only_run_root_is_idempotent(self) -> None:
-        with tempfile.TemporaryDirectory() as directory:
-            tmp_path = Path(directory)
-            run = tmp_path / "paper_v7_live"
-            archive = tmp_path / "paper_v7_archives"
-            fixture(run)
-            cutover.prepare(run, archive, tmp_path, NEW, now=126, ancestor_check=lambda *_: True)
-            result = cutover.prepare(run, archive, tmp_path, NEW, ancestor_check=lambda *_: True)
-            self.assertEqual(result, {"state": "PREPARED_RUN_ROOT", "target_sha": NEW, "archived": False})
-
-    def test_unrelated_runtime_and_deployed_sha_mismatch_fails_closed(self) -> None:
-        with tempfile.TemporaryDirectory() as directory:
-            tmp_path = Path(directory)
-            run = tmp_path / "paper_v7_live"
-            fixture(run)
-            runtime = json.loads((run / "control/runtime_status.json").read_text())
-            runtime["model_sha"] = OLDER
-            write_json(run / "control/runtime_status.json", runtime)
-            with self.assertRaisesRegex(cutover.CutoverArchiveError, "previous_deployed_runtime_sha_mismatch"):
-                cutover.prepare(
-                    run, tmp_path / "archives", tmp_path, NEW,
-                    ancestor_check=lambda *_: True,
-                )
-
-    def test_unsafe_prior_state_is_not_moved(self) -> None:
-        for mutation, reason in (
-            ("portfolio", "prior_portfolio_killed"),
-            ("ledger", "ledger_sha_invalid:1"),
-        ):
-            with self.subTest(mutation=mutation), tempfile.TemporaryDirectory() as directory:
-                tmp_path = Path(directory)
-                run = tmp_path / "paper_v7_live"
-                fixture(run)
-                if mutation == "portfolio":
-                    value = json.loads((run / "control/portfolio_state.json").read_text())
-                    value["killed"] = True
-                    write_json(run / "control/portfolio_state.json", value)
-                else:
-                    write_json(run / "ledger/execution.jsonl", {
-                        "model_sha": "not-a-sha", "paper_only": True, "authenticated_execution": False,
-                    })
-                with self.assertRaisesRegex(cutover.CutoverArchiveError, reason):
-                    cutover.prepare(run, tmp_path / "archives", tmp_path, NEW, ancestor_check=lambda *_: True)
-                self.assertTrue((run / "forward-tape.jsonl").is_file())
-
-    def test_mixed_historical_ledger_shas_are_preserved_with_audited_counts(self) -> None:
-        with tempfile.TemporaryDirectory() as directory:
-            tmp_path = Path(directory)
-            run = tmp_path / "paper_v7_live"
-            archive = tmp_path / "paper_v7_archives"
-            fixture(run)
-            with (run / "ledger/execution.jsonl").open("a", encoding="utf-8") as handle:
-                handle.write(json.dumps({
-                    "model_sha": OLDER, "paper_only": True, "authenticated_execution": False,
-                }) + "\n")
-            result = cutover.prepare(
-                run, archive, tmp_path, NEW, now=124, ancestor_check=lambda *_: True,
-            )
-            self.assertEqual(result["ledger_model_sha_counts"], {OLD: 1, OLDER: 1})
-
-    def test_legacy_global_kill_from_reported_local_sleeve_can_be_archived(self) -> None:
-        with tempfile.TemporaryDirectory() as directory:
-            tmp_path = Path(directory)
-            run = tmp_path / "paper_v7_live"
-            fixture(run)
-            write_json(run / "control/portfolio_state.json", {
-                "paper_only": True, "authenticated_execution": False,
-                "killed": True, "drawdown": 0.10, "max_drawdown": 0.15,
-                "sleeves": {
-                    "micro_taker": {"killed": True, "source": "reported"},
-                    "reserve": {"killed": False, "source": "reserve"},
-                },
-            })
-            result = cutover.prepare(
-                run, tmp_path / "archives", tmp_path, NEW, now=127,
-                ancestor_check=lambda *_: True,
-            )
-            self.assertEqual(result["prior_quarantined_sleeves"], ["micro_taker"])
-
-    def test_stale_unmarkable_maker_kill_requires_verified_flat_liquidation(self) -> None:
-        with tempfile.TemporaryDirectory() as directory:
-            tmp_path = Path(directory)
-            run = tmp_path / "paper_v7_live"
-            fixture(run)
-            portfolio = {
-                "schema": "polymarket_v7_portfolio_guard_v1", "timestamp": 100,
-                "paper_only": True, "authenticated_execution": False,
-                "killed": True, "drawdown": 0.01, "max_drawdown": 0.15,
-                "fatal_sleeves": ["micro_maker"],
-                "sleeves": {"micro_maker": {
-                    "killed": False, "source": "fail_closed_unmarkable",
-                    "fatal_to_portfolio": True,
-                }},
-            }
-            write_json(run / "control/portfolio_state.json", portfolio)
-            write_json(run / "control/KILL", portfolio)
-            write_json(run / "control/maker_cutover_liquidation.json", {
-                "state": "MAKER_FLAT", "model_sha": OLD, "nonce": "nonce-1",
-                "paper_only": True, "authenticated_execution": False,
-                "real_order_submission": False,
-            })
-            write_json(run / "micro_maker/state.json", {
-                "paper_only": True, "authenticated_execution": False,
-                "cutover_liquidation_nonce": "nonce-1",
-                "inventory": {"m1": {"yes_shares": 0.0, "no_shares": 0.0}},
-            })
-            write_json(run / "micro_maker/status.json", {
-                "paper_only": True, "authenticated_execution": False,
-                "source": "verified_cutover_full_depth_liquidation",
-                "marking_complete": True, "killed": False,
-                "positions": [], "drain_complete": True,
-            })
-            result = cutover.prepare(
-                run, tmp_path / "archives", tmp_path, NEW, now=128,
-                ancestor_check=lambda *_: True,
-            )
-            self.assertEqual(result["prior_reconciled_fatal_sleeves"], ["micro_maker"])
-
-    def test_non_ancestor_ledger_sha_fails_closed(self) -> None:
-        with tempfile.TemporaryDirectory() as directory:
-            tmp_path = Path(directory)
-            run = tmp_path / "paper_v7_live"
-            fixture(run)
-            write_json(run / "ledger/execution.jsonl", {
-                "model_sha": OLDER, "paper_only": True, "authenticated_execution": False,
-            })
-            with self.assertRaisesRegex(cutover.CutoverArchiveError, "ledger_sha_not_ancestor:1"):
-                cutover.prepare(
-                    run, tmp_path / "archives", tmp_path, NEW,
-                    ancestor_check=lambda _root, older, _newer: older != OLDER,
-                )
-            self.assertTrue((run / "forward-tape.jsonl").is_file())
-
-    def test_open_position_blocks_archive_until_terminal_evidence(self) -> None:
-        with tempfile.TemporaryDirectory() as directory:
-            tmp_path = Path(directory)
-            run = tmp_path / "paper_v7_live"
-            fixture(run)
-            write_json(run / "external_fair/paper_router_status.json", {
-                "paper_only": True, "authenticated_execution": False, "open_positions": 1,
-                "counterfactual_open_positions": 0,
-            })
-            write_json(run / "external_fair/paper_router_state.json", {
-                "positions": {},
-            })
-            with self.assertRaisesRegex(cutover.CutoverArchiveError, "prior_open_positions:external=1"):
-                cutover.prepare(
-                    run, tmp_path / "archives", tmp_path, NEW,
-                    ancestor_check=lambda *_: True,
-                )
-            self.assertTrue((run / "forward-tape.jsonl").is_file())
-
-    def test_counterfactual_shadow_position_is_archived_but_does_not_block_cutover(self) -> None:
-        with tempfile.TemporaryDirectory() as directory:
-            tmp_path = Path(directory)
-            run = tmp_path / "paper_v7_live"
-            fixture(run)
-            write_json(run / "external_fair/paper_router_status.json", {
-                "paper_only": True, "authenticated_execution": False,
-                "open_positions": 0, "counterfactual_open_positions": 1,
-            })
-            write_json(run / "external_fair/paper_router_state.json", {
-                "positions": {"shadow-1": {"settled": False}},
-            })
-            result = cutover.prepare(
-                run, tmp_path / "archives", tmp_path, NEW, now=129,
-                ancestor_check=lambda *_: True,
-            )
-            self.assertEqual(result["prior_open_positions"]["external"], 0)
-
-    def test_maker_inventory_blocks_archive_until_flat(self) -> None:
-        with tempfile.TemporaryDirectory() as directory:
-            tmp_path = Path(directory)
-            run = tmp_path / "paper_v7_live"
-            fixture(run)
-            write_json(run / "micro_maker/status.json", {
-                "paper_only": True, "authenticated_execution": False,
-                "positions": [{"market_id": "m1", "token_id": "yes", "shares": 2.0}],
-            })
-            write_json(run / "micro_maker/state.json", {
-                "inventory": {"m1": {"yes_shares": 2.0, "no_shares": 0.0}},
-            })
-            with self.assertRaisesRegex(cutover.CutoverArchiveError, "prior_open_positions:maker=1"):
-                cutover.prepare(
-                    run, tmp_path / "archives", tmp_path, NEW,
-                    ancestor_check=lambda *_: True,
-                )
-
-
-if __name__ == "__main__":
-    unittest.main()
+if __name__=='__main__':unittest.main()

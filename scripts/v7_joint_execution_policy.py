@@ -25,7 +25,7 @@ def atomic_json(path: Path, value: Any) -> None:
     os.replace(tmp, path)
 
 
-def build(ledger_path: Path, *, model_sha: str, strategy: str = "GRAPH_RV", min_bundles: int = 20) -> dict[str, Any]:
+def build(ledger_path: Path, *, model_sha: str, strategy: str = "STRUCTURAL_ARB_ENGINE", min_bundles: int = 20) -> dict[str, Any]:
     bundles: dict[str, dict[str, Any]] = {}
     for event in iter_events(ledger_path, expected_model_sha=model_sha):
         if event.strategy != strategy or not event.bundle_id:
@@ -95,7 +95,7 @@ def main() -> int:
     parser.add_argument("--ledger", type=Path, required=True)
     parser.add_argument("--model-sha", required=True)
     parser.add_argument("--output", type=Path, required=True)
-    parser.add_argument("--strategy", default="GRAPH_RV")
+    parser.add_argument("--strategy", default="STRUCTURAL_ARB_ENGINE")
     parser.add_argument("--min-bundles", type=int, default=20)
     args = parser.parse_args()
     report = build(args.ledger, model_sha=args.model_sha, strategy=args.strategy, min_bundles=max(1, args.min_bundles))

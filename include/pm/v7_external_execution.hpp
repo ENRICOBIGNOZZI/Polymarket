@@ -101,7 +101,7 @@ struct ExternalMakerPolicy {
     AggressiveTimeInForce tif,
     std::int64_t arrival_monotonic_ns) noexcept;
 
-// Shadow/PAPER external-fair maker challenger. PM book state is used only for
+// Shadow/PAPER external-fair maker research path. PM book state is used only for
 // post-only placement. Directional fair comes directly from FairValueSnapshot.
 [[nodiscard]] CandidateAction build_external_make(
     const ContractHotSpec& contract,

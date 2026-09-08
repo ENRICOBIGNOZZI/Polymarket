@@ -356,7 +356,7 @@ class Supervisor:
             failure: Any = None
             while not self.stopping and self.child.poll() is None:
                 elapsed = time.monotonic() - launched
-                # runtime_status may still describe the stopped incumbent for a
+                # runtime_status may still describe the stopped runtime for a
                 # moment; do not mistake that stale file for the new child.
                 if elapsed < min(2.0, float(self.startup_grace)):
                     self.status("starting", assessment.reasons)

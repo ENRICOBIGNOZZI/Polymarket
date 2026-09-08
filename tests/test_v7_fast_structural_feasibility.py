@@ -52,7 +52,7 @@ def test_funnel_capacity_and_inaccessible_latency_freeze() -> None:
     assert report["capacity"]["q_star_p50"] == 5.0
     assert report["latency"]["p99_exceeds_tau_star_fraction"] == 1.0
     assert report["freeze_recommended"] is True
-    assert report["promotion_eligible"] is False
+    assert report["economic_evidence_sufficient"] is False
     assert report["automatic_strategy_state_change"] is False
 
 

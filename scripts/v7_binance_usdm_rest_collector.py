@@ -2,7 +2,7 @@
 """Bounded public Binance USD-M slow-state collector for V7.
 
 This intentionally labels REST observations as polling observations. It owns no
-execution, capital, OMS, ledger, or promotion authority.
+execution, capital, OMS, ledger, or risk authority.
 """
 from __future__ import annotations
 
