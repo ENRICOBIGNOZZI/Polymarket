@@ -19622,9 +19622,9 @@
       "object_type": "branch_or_remote_ref",
       "path_or_ref": "refs/heads/feature/v7-unified-alpha-converged-20260907",
       "rollback_artifact_tag": "v7-unification-pre-migration-8d9e8e60",
-      "snapshot_object_id": "847466a3be04f89d10e511a2b084a1694ff59c00",
+      "snapshot_object_id": "de1155e3e0b74821ec9e56ad3943356b11be9504",
       "surface_id": "ref:refs/heads/feature/v7-unified-alpha-converged-20260907",
-      "unique_behavior_data_contribution": "21 commit(s) not reachable from origin/main require content audit",
+      "unique_behavior_data_contribution": "23 commit(s) not reachable from origin/main require content audit",
       "validation_tests": [
         "tests/test_v7_surface_classification.py"
       ]
@@ -20176,10 +20176,10 @@
       "final_disposition": "delete_after_gate",
       "migration_status": "deletion_deferred_until_phase_9",
       "object_type": "branch_or_remote_ref",
-      "path_or_ref": "refs/remotes/origin/fix/v7-cross-python-seed-recompute-20260907",
+      "path_or_ref": "refs/remotes/origin/fix/v7-maker-bootstrap-fair-probe-20260907",
       "rollback_artifact_tag": "v7-unification-pre-migration-8d9e8e60",
-      "snapshot_object_id": "1820c75818c23671912557b6f5a0b708900df926",
-      "surface_id": "ref:refs/remotes/origin/fix/v7-cross-python-seed-recompute-20260907",
+      "snapshot_object_id": "686ca8dcb3de15a120ffd76ac615992eb98bf4b2",
+      "surface_id": "ref:refs/remotes/origin/fix/v7-maker-bootstrap-fair-probe-20260907",
       "unique_behavior_data_contribution": "fully reachable from origin/main; redundant active ref",
       "validation_tests": [
         "tests/test_v7_surface_classification.py"
@@ -23688,5 +23688,5 @@
   "real_capital_at_risk": false,
   "real_order_submission": false,
   "schema": "polymarket_v7_surface_classification_v1",
-  "source_snapshot_sha": "847466a3be04f89d10e511a2b084a1694ff59c00"
+  "source_snapshot_sha": "de1155e3e0b74821ec9e56ad3943356b11be9504"
 }
