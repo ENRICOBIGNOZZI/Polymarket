@@ -77,7 +77,15 @@
         "--model-sha",
         "${SHA}",
         "--interval-ms",
-        "25"
+        "25",
+        "--book-tape",
+        "micro_maker/book_observations/current.jsonl",
+        "--book-status",
+        "micro_maker/fillability_ws_status.json",
+        "--profit-root",
+        "${DURABLE_ROOT}/profit_experiments/${SHA}",
+        "--run-root",
+        "${RUN_ROOT}"
       ],
       "config_identity_required": true,
       "dependencies": [
@@ -90,13 +98,20 @@
       "id": "external_pm_lead_lag_collector",
       "inputs": [
         "external_fair/status.json",
-        "external_fair/paper_router_status.json"
+        "external_fair/paper_router_status.json",
+        "config/v7_profit_experiment.json",
+        "micro_maker/book_observations/current.jsonl",
+        "micro_maker/fillability_ws_status.json",
+        "ledger/execution.jsonl"
       ],
       "launcher_log": "external_fair/lead_lag_collector.log",
       "outputs": [
         "external_fair/lead_lag_collector_status.json",
         "${DURABLE_ROOT}/external_fair/pm_lead_lag.jsonl",
-        "external_fair/lead_lag_collector.log"
+        "external_fair/lead_lag_collector.log",
+        "profit_experiment_status.json",
+        "${DURABLE_ROOT}/profit_experiments/${SHA}/manifest.json",
+        "${DURABLE_ROOT}/profit_experiments/${SHA}/observations.jsonl"
       ],
       "profile": "observer"
     },
@@ -471,7 +486,9 @@
       "arguments": [
         "scripts/v7_joint_execution_policy.py",
         "scripts/v7_learned_execution_model.py",
-        "scripts/v7_canonical_economics.py"
+        "scripts/v7_canonical_economics.py",
+        "scripts/v7_profit_attribution.py",
+        "scripts/v7_profit_report.py"
       ],
       "config_identity_required": true,
       "dependencies": [
@@ -481,14 +498,20 @@
       "executable": "launcher_subshell",
       "id": "economic_evidence_loop",
       "inputs": [
-        "ledger/execution.jsonl"
+        "ledger/execution.jsonl",
+        "${DURABLE_ROOT}/profit_experiments/${SHA}/observations.jsonl"
       ],
-      "launcher_log": "canonical_economics.log",
+      "launcher_log": "profit_experiment_report.log",
       "outputs": [
         "canonical_economics.json",
         "canonical_economics.log",
         "learned_execution/joint_policy.json",
-        "learned_execution/oos_report.json"
+        "learned_execution/oos_report.json",
+        "profit_attribution.json",
+        "profit_attribution.csv",
+        "profit_attribution.log",
+        "profit_experiment_report.json",
+        "profit_experiment_report.log"
       ],
       "profile": "observer"
     },
