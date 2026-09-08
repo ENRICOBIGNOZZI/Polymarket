@@ -201,7 +201,7 @@ def test_verified_seed_pack_is_recomputed_before_activation_and_corruption_fails
 def test_launcher_binds_existing_durable_seed_pack_without_new_authority() -> None:
     launcher = (ROOT / "scripts/paper_v7_execution_loop.sh").read_text(encoding="utf-8")
     manifest = json.loads((ROOT / "config/v7_process_manifest.json").read_text(encoding="utf-8"))
-    assert 'EXTERNAL_CANCEL_SEED_MANIFEST="${PM_V7_EXTERNAL_CANCEL_SEED_MANIFEST:-$EXTERNAL_CANCEL_BASELINE_MANIFEST}"' in launcher
+    assert 'EXTERNAL_CANCEL_SEED_MANIFEST="${PM_V7_EXTERNAL_CANCEL_SEED_MANIFEST:-$DURABLE_ROOT/research/btc_m5_external_cancel_evidence_manifest_v1.json}"' in launcher
     assert '--seed-manifest "$EXTERNAL_CANCEL_SEED_MANIFEST"' in launcher
     row = next(item for item in manifest["processes"] if item["id"] == "external_cancel_forward_runtime")
     assert "${EXTERNAL_CANCEL_SEED_MANIFEST}" in row["inputs"]
