@@ -12,6 +12,7 @@ sys.path.insert(0, str(ROOT / "scripts"))
 
 from v7_surface_classification import (  # noqa: E402
     ClassificationError,
+    _authority,
     _refs,
     build_manifest,
     equivalent_ref_surface_ids,
@@ -154,14 +155,17 @@ class SurfaceClassificationTests(unittest.TestCase):
         self.assertFalse(_dynamic_review_ref("ref:refs/heads/feature/unsafe"))
         self.assertFalse(_dynamic_review_ref("ref:refs/heads/research/unsafe"))
         self.assertFalse(_dynamic_review_ref("ref:refs/heads/chore/unsafe"))
-        # Ref names cannot self-grant authority through semantic substrings.
-        generated = build_manifest(ROOT)
-        review = next(
-            row for row in generated["entries"]
-            if row["surface_id"] == "ref:refs/heads/fix/v7-cutover-tag-surface-audit-20260908"
-        )
-        self.assertFalse(review["economic_authority"]["executable"])
-        self.assertEqual(review["economic_authority"]["capabilities"], [])
+        # Ref names cannot self-grant authority through semantic substrings,
+        # independent of whether a checkout materializes the review branch.
+        for ref_name, classification in (
+            ("refs/heads/fix/v7-cutover-example", "MERGE_INTO_CANONICAL"),
+            ("refs/remotes/origin/feature/v7-capital_allocator-example", "MERGE_INTO_CANONICAL"),
+            ("refs/tags/v7-paper-cutover-" + "b" * 40, "ARCHIVE_HISTORY_ONLY"),
+        ):
+            authority = _authority(ref_name, classification)
+            self.assertFalse(authority["executable"], ref_name)
+            self.assertEqual(authority["capabilities"], [], ref_name)
+            self.assertIsNone(authority["owner"], ref_name)
         valid = "ref:refs/tags/v7-paper-cutover-" + "a" * 40
         self.assertTrue(_dynamic_review_ref(valid))
         self.assertTrue(is_exact_cutover_tag_surface_id(valid))
