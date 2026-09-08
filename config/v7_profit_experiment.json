@@ -1,6 +1,6 @@
 {
   "schema": "polymarket_v7_profit_experiment_protocol_v1",
-  "protocol_id": "profit-causes-20260908-v1",
+  "protocol_id": "profit-causes-20260909-v2",
   "paper_only": true,
   "authenticated_execution": false,
   "real_order_submission": false,
@@ -74,7 +74,9 @@
       30000
     ],
     "post_only_required": true,
-    "preserve_anchor_probe_loss_cap": true
+    "preserve_anchor_probe_loss_cap": true,
+    "required_replay_evidence": "CONTINUOUS_TRANSPORT_VALID_PRINTS_AND_VALID_ARRIVAL_BOOK",
+    "markout_evidence": "VALID_BOOK_AT_EACH_MARKOUT_OTHERWISE_CENSORED"
   },
   "inference": {
     "unit": "CONTRACT",

@@ -6,6 +6,8 @@ canonical native queue engine and the receive-sequenced public observer tape.
 from __future__ import annotations
 from collections import Counter
 import json
+import gzip
+import hashlib
 import math
 import os
 from pathlib import Path
@@ -32,6 +34,24 @@ def atomic(path,row):
     path.parent.mkdir(parents=True,exist_ok=True)
     temp=path.with_name(path.name+f'.tmp.{os.getpid()}')
     temp.write_text(json.dumps(row,sort_keys=True,allow_nan=False)+'\n');os.replace(temp,path)
+
+
+def preserve_source(root, source):
+    """Immutable compressed evidence; reports read references, not entire tapes."""
+    payload=json.dumps(source,sort_keys=True,separators=(',',':'),allow_nan=False).encode()
+    sha=hashlib.sha256(payload).hexdigest();relative=Path('sources')/(sha+'.json.gz');path=root/relative
+    path.parent.mkdir(parents=True,exist_ok=True)
+    if not path.exists():
+        temp=path.with_name(path.name+f'.tmp.{os.getpid()}')
+        with temp.open('xb') as stream:
+            stream.write(gzip.compress(payload,mtime=0));stream.flush();os.fsync(stream.fileno())
+        try:os.link(temp,path)
+        finally:temp.unlink()
+    if path.is_symlink():raise ValueError('unsafe research source path')
+    compressed=path.read_bytes()
+    if hashlib.sha256(gzip.decompress(compressed)).hexdigest()!=sha:raise ValueError('research source hash mismatch')
+    return {'source_sha256':sha,'source_path':str(relative),'source_compressed_sha256':hashlib.sha256(compressed).hexdigest(),
+            'source_uncompressed_bytes':len(payload),'source_compressed_bytes':len(compressed),'source_book_rows':len(source['path'])}
 
 
 def rows(path):
@@ -175,7 +195,7 @@ class ProfitExperiments:
             if now/1e6<anchor['origin_ms']+42000:continue
             result=replay_anchor(anchor,self.book,status,self.protocol,self.binary)
             self.emit('MAKER_COMPARISON',market_id=market,token_id=anchor['token_id'],anchor_record_id=anchor['order']['record_id'],
-                      source_sha256=digest(result['source']),**{k:v for k,v in result.items() if k!='source'},source=result['source'])
+                      **preserve_source(self.output,result['source']),**{k:v for k,v in result.items() if k!='source'})
             self.maker_pending.pop(market)
 
 
@@ -195,12 +215,22 @@ def replay_anchor(anchor,book,status,protocol,binary):
     if origin and (start-origin['receive_wall_ms']>protocol['maker']['maximum_feature_age_ms'] or origin.get('features_valid') is not True):reason='STALE_OR_INCOMPLETE_FEATURES'
     if not m.get('arrival_receive_monotonic_ns') or not m.get('arrival_exchange_event_ns'):reason='MISSING_NATIVE_ARRIVAL_CLOCK'
     path=[r for r in history if arrival<=r.get('receive_monotonic_ns',0)<=arrival+42000*1000000]
-    if any('public_trade' not in r or r.get('valid') is not True or r.get('lineage_continuous') is not True for r in path):reason='TRADE_OR_BOOK_EVIDENCE_CENSORED'
     if origin and any(r.get('tick_size')!=origin['tick_size'] for r in path):reason='TICK_REGIME_CHANGED'
+    invalid_books=sum(r.get('valid') is not True or r.get('lineage_continuous') is not True for r in path)
     output=[];source={'anchor':anchor,'origin_book':origin,'path':path}
     for arm in protocol['maker']['arms']:
-        row={'arm':arm['id'],'state':reason or 'OBSERVED','operational_filled_shares':None,'fills':[],'counterfactual':True}
-        if not reason:
+        arm_reason=reason
+        execution_path=[r for r in path if r.get('receive_monotonic_ns',0)<=arrival+(arm['lifetime_ms']+100)*1000000]
+        if any('public_trade' not in r for r in execution_path):arm_reason='MISSING_TRADE_PAYLOAD_CENSORED'
+        if any(r.get('public_trade') and (r.get('valid') is not True or r.get('lineage_continuous') is not True) for r in execution_path):
+            arm_reason='TRADE_LINEAGE_CENSORED'
+        # The native resting-order engine consumes public prints, not book
+        # deltas. An invalid intermediate book without a lost/invalid print is
+        # therefore not a missing queue input. Transport gaps remain censored.
+        row={'arm':arm['id'],'state':arm_reason or 'OBSERVED','operational_filled_shares':None,'fills':[],'counterfactual':True,
+             'intermediate_invalid_book_rows':invalid_books,
+             'replay_input_basis':'CONTINUOUS_TRANSPORT_VALID_PRINTS_AND_VALID_ARRIVAL_BOOK'}
+        if not arm_reason:
             qty=math.floor(order['intended_size']*1e6)/1e6;tick=origin['tick_size'];price=origin['best_bid']+(tick if arm['placement']=='IMPROVE1' else 0)
             cap=(m.get('opportunity_envelope') or {}).get('exploration',{}).get('probe_loss_cap')
             if not finite(cap):cap=order['intended_size']*order['limit_price']
@@ -224,6 +254,8 @@ def replay_anchor(anchor,book,status,protocol,binary):
                         fill['markouts']={}
                         for h in protocol['maker']['markout_horizons_ms']:
                             cut=next((r for r in reversed(history) if r.get('receive_monotonic_ns',0)<=fill['receive_monotonic_ns']+h*1000000),None)
+                            if cut and (cut.get('valid') is not True or cut.get('lineage_continuous') is not True
+                                        or not 0<cut['best_bid']<cut['best_ask']<1):cut=None
                             fill['markouts'][str(h)]={'mid_minus_fill':(cut['best_bid']+cut['best_ask'])/2-price,
                                 'best_bid_minus_fill':cut['best_bid']-price,'bid_depth_l1':cut['bid_depth_l1'],
                                 'liquidation_depth_sufficient':cut['bid_depth_l1']>=fill['quantity'],'source_cut':cut} if cut else None

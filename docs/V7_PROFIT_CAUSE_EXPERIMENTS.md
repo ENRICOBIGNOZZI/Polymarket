@@ -90,3 +90,29 @@ Legacy model stage ambiguity remains visible and no missing model is guessed
 from nearby forecasts. Decimal cash and probability decompositions have separate
 reconciliation flags, each checked to a microdollar. Entry fees are counted once;
 modeled slippage already represented in fill price is not charged again.
+
+
+## Protocol v2: distinguish trade inputs from book-state observations
+
+The first v1 forward Maker window contained 81 valid public prints and 29
+intermediate book invalidations; no print had invalid lineage. V1 censored all
+four variants because it required every book update through 42 seconds to be
+valid. This was stricter than the native queue engine's input contract: a
+resting quote advances on public prints and timers, not subsequent book deltas.
+
+Protocol v2 keeps the arrival-book, feature freshness, tick, transport/session,
+sequence and status gates. Every trade consumed during each arm's own lifetime
+and cancel window must retain valid lineage. Missing payloads or invalid prints
+censor that arm. Intermediate book invalidations are counted explicitly; a
+markout whose as-of book is invalid remains missing, even if a later snapshot
+recovers. No later book is substituted for the target. This changes research
+observation eligibility only, not canonical PAPER execution or fee assumptions.
+V1 outputs and their identity are retained. V2 begins under a new immutable
+manifest and future boundary; old comparisons are not relabelled as v2 evidence.
+
+V2 writes each full book path once as an immutable gzip sidecar addressed by its
+uncompressed SHA-256. The observation includes its relative path, compressed
+hash, byte counts and row count. Compression is verified before publication.
+The collector's restart scan and the minute report read the compact observation
+stream; they do not repeatedly deserialize tens of megabytes of book evidence
+per contract. Sidecars retain the complete replay input for audit and export.

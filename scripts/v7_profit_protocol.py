@@ -24,6 +24,8 @@ def validate(protocol):
         raise ValueError('profit_protocol:measurement_grid')
     if maker['comparison']!='PAIRED_NATIVE_ENGINE_RESEARCH_REPLAY_NO_ADDITIONAL_ROUTER':
         raise ValueError('profit_protocol:execution_owner')
+    if maker.get('required_replay_evidence')!='CONTINUOUS_TRANSPORT_VALID_PRINTS_AND_VALID_ARRIVAL_BOOK' or maker.get('markout_evidence')!='VALID_BOOK_AT_EACH_MARKOUT_OTHERWISE_CENSORED':
+        raise ValueError('profit_protocol:replay_observation_requirements')
     if maker['post_only_required'] is not True or maker['preserve_anchor_probe_loss_cap'] is not True:
         raise ValueError('profit_protocol:execution_boundaries')
     if [(x.get('id'),x.get('placement'),x.get('lifetime_ms')) for x in maker['arms']] != [('JOIN_5S','JOIN',5000),('FLOW_JOIN_5S','JOIN',5000),('JOIN_10S','JOIN',10000),('IMPROVE1_5S','IMPROVE1',5000)]:
