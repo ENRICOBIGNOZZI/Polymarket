@@ -202,6 +202,7 @@ load_selected_pairs(const fs::path& path) {
         output.push_back({market + "\n" + event, {yes, no}});
     }
     if (output.empty()) throw std::runtime_error("fillability observer has no selected markets");
+    std::sort(output.begin(), output.end());
     return output;
 }
 
@@ -639,8 +640,7 @@ int main(int argc, char** argv) {
         while (!g_stop.load(std::memory_order_relaxed)) {
             const auto fair_pairs = fair_observation_pairs(options);
             auto tokens = build_tokens(options, config);
-            std::error_code stamp_error;
-            const auto selection_stamp = fs::last_write_time(options.selection, stamp_error);
+            const auto selected_pairs = load_selected_pairs(options.selection);
             ExactWsObserver observer(
                 std::move(tokens), options.ws_url, options.output_dir, options.model_sha);
             observer.start();
@@ -652,9 +652,9 @@ int main(int argc, char** argv) {
                 if (now - last_status_ms >= 1000) {
                     observer.write_status();
                     last_status_ms = now;
-                    std::error_code current_error;
-                    const auto current_stamp = fs::last_write_time(options.selection, current_error);
-                    reload = (!stamp_error && !current_error && current_stamp != selection_stamp)
+                    // Price/feature refreshes do not change the subscription.
+                    // Restarting on every mtime update erased queue evidence.
+                    reload = load_selected_pairs(options.selection) != selected_pairs
                         || fair_observation_pairs(options) != fair_pairs;
                 }
                 std::this_thread::sleep_for(std::chrono::milliseconds(10));

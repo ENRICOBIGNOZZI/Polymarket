@@ -34,6 +34,10 @@ int main() {
         };
         const auto row = read_last(directory / "book_observations" / "current.jsonl");
         assert(row.at("features_valid").as_bool());
+        const auto& print = row.at("public_trade").as_object();
+        assert(print.at("aggressor_side").as_string() == "SELL");
+        assert(print.at("size").as_double() == 2.0);
+        assert(print.at("exchange_event_ns").as_int64() == 1'700'000'001'200'000'000LL);
         const auto& features = row.at("placement_features").as_object();
         assert(std::abs(features.at("spread_ticks").as_double() - 4.0) < 1e-12);
         assert(std::abs(features.at("imbalance").as_double() + 1.0/3.0) < 1e-12);
@@ -46,8 +50,16 @@ int main() {
         send(snapshot(1'700'000'001'300), 1300);
         const auto reset = read_last(directory / "book_observations" / "current.jsonl");
         assert(!reset.at("features_valid").as_bool());
+        assert(reset.at("public_trade").is_null());
         assert(reset.at("connection_epoch").as_int64() == 2);
         observer.stop();
     }
+    const auto selection = directory / "selection.json";
+    { std::ofstream out(selection); out << R"({"timestamp_ms":1,"markets":[{"market_id":"m","event_id":"e","yes_token":"y","no_token":"n","price":0.4}]})"; }
+    const auto before = load_selected_pairs(selection);
+    { std::ofstream out(selection); out << R"({"timestamp_ms":2,"markets":[{"market_id":"m","event_id":"e","yes_token":"y","no_token":"n","price":0.5}]})"; }
+    assert(load_selected_pairs(selection) == before);
+    { std::ofstream out(selection); out << R"({"timestamp_ms":3,"markets":[{"market_id":"m2","event_id":"e2","yes_token":"y2","no_token":"n2"}]})"; }
+    assert(load_selected_pairs(selection) != before);
     fs::remove_all(directory);
 }
