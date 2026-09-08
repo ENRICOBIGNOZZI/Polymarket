@@ -3,7 +3,7 @@
   "coverage": {
     "external_blocker_count": 2,
     "process_count": 25,
-    "ref_count": 33,
+    "ref_count": 34,
     "runtime_output_count": 82,
     "schema_count": 22,
     "tracked_or_intended_path_count": 641,
@@ -19583,11 +19583,9 @@
       "deletion_gate": "UNIQUE_BEHAVIOR_EQUIVALENCE_AND_SINGLE_CONSUMER_PROVEN",
       "disposition_commit": null,
       "economic_authority": {
-        "capabilities": [
-          "engine_component"
-        ],
+        "capabilities": [],
         "executable": false,
-        "owner": "CRYPTO_SETTLEMENT_ENGINE"
+        "owner": null
       },
       "final_disposition": "merge_then_delete_or_reclassify_canonical",
       "migration_status": "unique_commit_audit_pending",
@@ -19602,57 +19600,53 @@
       ]
     },
     {
-      "canonical_replacement": "config/v7_authority_registry.json#CRYPTO_SETTLEMENT_ENGINE",
-      "classification": "MERGE_INTO_CANONICAL",
+      "canonical_replacement": "origin/main",
+      "classification": "DELETE_ACTIVE_LEGACY",
       "current_imports_callers_readers_writers": {
         "analysis": "exact path/module references from tracked text; runtime linkage is separately enumerated",
         "static_references": []
       },
-      "deletion_gate": "UNIQUE_BEHAVIOR_EQUIVALENCE_AND_SINGLE_CONSUMER_PROVEN",
+      "deletion_gate": "UNIQUE_COMMIT_AND_ACTIVE_REFERENCE_SCAN_CLEAN",
       "disposition_commit": null,
       "economic_authority": {
-        "capabilities": [
-          "engine_component"
-        ],
+        "capabilities": [],
         "executable": false,
-        "owner": "CRYPTO_SETTLEMENT_ENGINE"
+        "owner": null
       },
-      "final_disposition": "merge_then_delete_or_reclassify_canonical",
-      "migration_status": "unique_commit_audit_pending",
+      "final_disposition": "delete_after_gate",
+      "migration_status": "deletion_deferred_until_phase_9",
       "object_type": "branch_or_remote_ref",
       "path_or_ref": "refs/heads/feature/v7-unified-alpha-converged-20260907",
       "rollback_artifact_tag": "v7-unification-pre-migration-8d9e8e60",
-      "snapshot_object_id": "de1155e3e0b74821ec9e56ad3943356b11be9504",
+      "snapshot_object_id": "03912be39fd32d275f5f6dd42a08cb5feabbc68a",
       "surface_id": "ref:refs/heads/feature/v7-unified-alpha-converged-20260907",
-      "unique_behavior_data_contribution": "23 commit(s) not reachable from origin/main require content audit",
+      "unique_behavior_data_contribution": "fully reachable from origin/main; redundant active ref",
       "validation_tests": [
         "tests/test_v7_surface_classification.py"
       ]
     },
     {
-      "canonical_replacement": "config/v7_authority_registry.json#CRYPTO_SETTLEMENT_ENGINE",
-      "classification": "MERGE_INTO_CANONICAL",
+      "canonical_replacement": "origin/main",
+      "classification": "DELETE_ACTIVE_LEGACY",
       "current_imports_callers_readers_writers": {
         "analysis": "exact path/module references from tracked text; runtime linkage is separately enumerated",
         "static_references": []
       },
-      "deletion_gate": "UNIQUE_BEHAVIOR_EQUIVALENCE_AND_SINGLE_CONSUMER_PROVEN",
+      "deletion_gate": "UNIQUE_COMMIT_AND_ACTIVE_REFERENCE_SCAN_CLEAN",
       "disposition_commit": null,
       "economic_authority": {
-        "capabilities": [
-          "engine_component"
-        ],
+        "capabilities": [],
         "executable": false,
-        "owner": "CRYPTO_SETTLEMENT_ENGINE"
+        "owner": null
       },
-      "final_disposition": "merge_then_delete_or_reclassify_canonical",
-      "migration_status": "unique_commit_audit_pending",
+      "final_disposition": "delete_after_gate",
+      "migration_status": "deletion_deferred_until_phase_9",
       "object_type": "branch_or_remote_ref",
       "path_or_ref": "refs/heads/feature/v7-unified-execution-alpha-20260907",
       "rollback_artifact_tag": "v7-unification-pre-migration-8d9e8e60",
       "snapshot_object_id": "532441c622ddd6b8baa3482961cf1fcde2cb3d95",
       "surface_id": "ref:refs/heads/feature/v7-unified-execution-alpha-20260907",
-      "unique_behavior_data_contribution": "18 commit(s) not reachable from origin/main require content audit",
+      "unique_behavior_data_contribution": "fully reachable from origin/main; redundant active ref",
       "validation_tests": [
         "tests/test_v7_surface_classification.py"
       ]
@@ -19667,11 +19661,9 @@
       "deletion_gate": "UNIQUE_BEHAVIOR_EQUIVALENCE_AND_SINGLE_CONSUMER_PROVEN",
       "disposition_commit": null,
       "economic_authority": {
-        "capabilities": [
-          "engine_component"
-        ],
+        "capabilities": [],
         "executable": false,
-        "owner": "CRYPTO_SETTLEMENT_ENGINE"
+        "owner": null
       },
       "final_disposition": "merge_then_delete_or_reclassify_canonical",
       "migration_status": "unique_commit_audit_pending",
@@ -19695,11 +19687,35 @@
       "deletion_gate": "UNIQUE_BEHAVIOR_EQUIVALENCE_AND_SINGLE_CONSUMER_PROVEN",
       "disposition_commit": null,
       "economic_authority": {
-        "capabilities": [
-          "engine_component"
-        ],
+        "capabilities": [],
         "executable": false,
-        "owner": "CRYPTO_SETTLEMENT_ENGINE"
+        "owner": null
+      },
+      "final_disposition": "merge_then_delete_or_reclassify_canonical",
+      "migration_status": "unique_commit_audit_pending",
+      "object_type": "branch_or_remote_ref",
+      "path_or_ref": "refs/heads/fix/v7-cutover-tag-surface-audit-20260908",
+      "rollback_artifact_tag": "v7-unification-pre-migration-8d9e8e60",
+      "snapshot_object_id": "4f887ddf7625bbb590bc81f95c7bf4fa4bb0385e",
+      "surface_id": "ref:refs/heads/fix/v7-cutover-tag-surface-audit-20260908",
+      "unique_behavior_data_contribution": "1 commit(s) not reachable from origin/main require content audit",
+      "validation_tests": [
+        "tests/test_v7_surface_classification.py"
+      ]
+    },
+    {
+      "canonical_replacement": "config/v7_authority_registry.json#CRYPTO_SETTLEMENT_ENGINE",
+      "classification": "MERGE_INTO_CANONICAL",
+      "current_imports_callers_readers_writers": {
+        "analysis": "exact path/module references from tracked text; runtime linkage is separately enumerated",
+        "static_references": []
+      },
+      "deletion_gate": "UNIQUE_BEHAVIOR_EQUIVALENCE_AND_SINGLE_CONSUMER_PROVEN",
+      "disposition_commit": null,
+      "economic_authority": {
+        "capabilities": [],
+        "executable": false,
+        "owner": null
       },
       "final_disposition": "merge_then_delete_or_reclassify_canonical",
       "migration_status": "unique_commit_audit_pending",
@@ -19723,11 +19739,9 @@
       "deletion_gate": "UNIQUE_BEHAVIOR_EQUIVALENCE_AND_SINGLE_CONSUMER_PROVEN",
       "disposition_commit": null,
       "economic_authority": {
-        "capabilities": [
-          "engine_component"
-        ],
+        "capabilities": [],
         "executable": false,
-        "owner": "CRYPTO_SETTLEMENT_ENGINE"
+        "owner": null
       },
       "final_disposition": "merge_then_delete_or_reclassify_canonical",
       "migration_status": "unique_commit_audit_pending",
@@ -19751,11 +19765,9 @@
       "deletion_gate": "UNIQUE_BEHAVIOR_EQUIVALENCE_AND_SINGLE_CONSUMER_PROVEN",
       "disposition_commit": null,
       "economic_authority": {
-        "capabilities": [
-          "engine_component"
-        ],
+        "capabilities": [],
         "executable": false,
-        "owner": "CRYPTO_SETTLEMENT_ENGINE"
+        "owner": null
       },
       "final_disposition": "merge_then_delete_or_reclassify_canonical",
       "migration_status": "unique_commit_audit_pending",
@@ -19779,11 +19791,9 @@
       "deletion_gate": "UNIQUE_BEHAVIOR_EQUIVALENCE_AND_SINGLE_CONSUMER_PROVEN",
       "disposition_commit": null,
       "economic_authority": {
-        "capabilities": [
-          "engine_component"
-        ],
+        "capabilities": [],
         "executable": false,
-        "owner": "CRYPTO_SETTLEMENT_ENGINE"
+        "owner": null
       },
       "final_disposition": "merge_then_delete_or_reclassify_canonical",
       "migration_status": "unique_commit_audit_pending",
@@ -19807,11 +19817,9 @@
       "deletion_gate": "UNIQUE_BEHAVIOR_EQUIVALENCE_AND_SINGLE_CONSUMER_PROVEN",
       "disposition_commit": null,
       "economic_authority": {
-        "capabilities": [
-          "engine_component"
-        ],
+        "capabilities": [],
         "executable": false,
-        "owner": "CRYPTO_SETTLEMENT_ENGINE"
+        "owner": null
       },
       "final_disposition": "merge_then_delete_or_reclassify_canonical",
       "migration_status": "unique_commit_audit_pending",
@@ -19835,11 +19843,9 @@
       "deletion_gate": "UNIQUE_BEHAVIOR_EQUIVALENCE_AND_SINGLE_CONSUMER_PROVEN",
       "disposition_commit": null,
       "economic_authority": {
-        "capabilities": [
-          "engine_component"
-        ],
+        "capabilities": [],
         "executable": false,
-        "owner": "CRYPTO_SETTLEMENT_ENGINE"
+        "owner": null
       },
       "final_disposition": "merge_then_delete_or_reclassify_canonical",
       "migration_status": "unique_commit_audit_pending",
@@ -19863,11 +19869,9 @@
       "deletion_gate": "UNIQUE_BEHAVIOR_EQUIVALENCE_AND_SINGLE_CONSUMER_PROVEN",
       "disposition_commit": null,
       "economic_authority": {
-        "capabilities": [
-          "engine_component"
-        ],
+        "capabilities": [],
         "executable": false,
-        "owner": "CRYPTO_SETTLEMENT_ENGINE"
+        "owner": null
       },
       "final_disposition": "merge_then_delete_or_reclassify_canonical",
       "migration_status": "unique_commit_audit_pending",
@@ -19891,11 +19895,9 @@
       "deletion_gate": "UNIQUE_BEHAVIOR_EQUIVALENCE_AND_SINGLE_CONSUMER_PROVEN",
       "disposition_commit": null,
       "economic_authority": {
-        "capabilities": [
-          "engine_component"
-        ],
+        "capabilities": [],
         "executable": false,
-        "owner": "CRYPTO_SETTLEMENT_ENGINE"
+        "owner": null
       },
       "final_disposition": "merge_then_delete_or_reclassify_canonical",
       "migration_status": "unique_commit_audit_pending",
@@ -19919,11 +19921,9 @@
       "deletion_gate": "UNIQUE_BEHAVIOR_EQUIVALENCE_AND_SINGLE_CONSUMER_PROVEN",
       "disposition_commit": null,
       "economic_authority": {
-        "capabilities": [
-          "engine_component"
-        ],
+        "capabilities": [],
         "executable": false,
-        "owner": "CRYPTO_SETTLEMENT_ENGINE"
+        "owner": null
       },
       "final_disposition": "merge_then_delete_or_reclassify_canonical",
       "migration_status": "unique_commit_audit_pending",
@@ -19947,11 +19947,9 @@
       "deletion_gate": "UNIQUE_BEHAVIOR_EQUIVALENCE_AND_SINGLE_CONSUMER_PROVEN",
       "disposition_commit": null,
       "economic_authority": {
-        "capabilities": [
-          "engine_component"
-        ],
+        "capabilities": [],
         "executable": false,
-        "owner": "CRYPTO_SETTLEMENT_ENGINE"
+        "owner": null
       },
       "final_disposition": "merge_then_delete_or_reclassify_canonical",
       "migration_status": "unique_commit_audit_pending",
@@ -20001,11 +19999,9 @@
       "deletion_gate": "UNIQUE_BEHAVIOR_EQUIVALENCE_AND_SINGLE_CONSUMER_PROVEN",
       "disposition_commit": null,
       "economic_authority": {
-        "capabilities": [
-          "engine_component"
-        ],
+        "capabilities": [],
         "executable": false,
-        "owner": "CRYPTO_SETTLEMENT_ENGINE"
+        "owner": null
       },
       "final_disposition": "merge_then_delete_or_reclassify_canonical",
       "migration_status": "unique_commit_audit_pending",
@@ -20029,11 +20025,9 @@
       "deletion_gate": "UNIQUE_BEHAVIOR_EQUIVALENCE_AND_SINGLE_CONSUMER_PROVEN",
       "disposition_commit": null,
       "economic_authority": {
-        "capabilities": [
-          "engine_component"
-        ],
+        "capabilities": [],
         "executable": false,
-        "owner": "CRYPTO_SETTLEMENT_ENGINE"
+        "owner": null
       },
       "final_disposition": "merge_then_delete_or_reclassify_canonical",
       "migration_status": "unique_commit_audit_pending",
@@ -20057,11 +20051,9 @@
       "deletion_gate": "UNIQUE_BEHAVIOR_EQUIVALENCE_AND_SINGLE_CONSUMER_PROVEN",
       "disposition_commit": null,
       "economic_authority": {
-        "capabilities": [
-          "engine_component"
-        ],
+        "capabilities": [],
         "executable": false,
-        "owner": "CRYPTO_SETTLEMENT_ENGINE"
+        "owner": null
       },
       "final_disposition": "merge_then_delete_or_reclassify_canonical",
       "migration_status": "unique_commit_audit_pending",
@@ -20085,11 +20077,9 @@
       "deletion_gate": "UNIQUE_BEHAVIOR_EQUIVALENCE_AND_SINGLE_CONSUMER_PROVEN",
       "disposition_commit": null,
       "economic_authority": {
-        "capabilities": [
-          "engine_component"
-        ],
+        "capabilities": [],
         "executable": false,
-        "owner": "CRYPTO_SETTLEMENT_ENGINE"
+        "owner": null
       },
       "final_disposition": "merge_then_delete_or_reclassify_canonical",
       "migration_status": "unique_commit_audit_pending",
@@ -20113,11 +20103,9 @@
       "deletion_gate": "UNIQUE_BEHAVIOR_EQUIVALENCE_AND_SINGLE_CONSUMER_PROVEN",
       "disposition_commit": null,
       "economic_authority": {
-        "capabilities": [
-          "engine_component"
-        ],
+        "capabilities": [],
         "executable": false,
-        "owner": "CRYPTO_SETTLEMENT_ENGINE"
+        "owner": null
       },
       "final_disposition": "merge_then_delete_or_reclassify_canonical",
       "migration_status": "unique_commit_audit_pending",
@@ -20141,46 +20129,18 @@
       "deletion_gate": "UNIQUE_BEHAVIOR_EQUIVALENCE_AND_SINGLE_CONSUMER_PROVEN",
       "disposition_commit": null,
       "economic_authority": {
-        "capabilities": [
-          "engine_component"
-        ],
-        "executable": false,
-        "owner": "CRYPTO_SETTLEMENT_ENGINE"
-      },
-      "final_disposition": "merge_then_delete_or_reclassify_canonical",
-      "migration_status": "unique_commit_audit_pending",
-      "object_type": "branch_or_remote_ref",
-      "path_or_ref": "refs/remotes/origin/feature/v7-unified-execution-alpha-20260907",
-      "rollback_artifact_tag": "v7-unification-pre-migration-8d9e8e60",
-      "snapshot_object_id": "532441c622ddd6b8baa3482961cf1fcde2cb3d95",
-      "surface_id": "ref:refs/remotes/origin/feature/v7-unified-execution-alpha-20260907",
-      "unique_behavior_data_contribution": "18 commit(s) not reachable from origin/main require content audit",
-      "validation_tests": [
-        "tests/test_v7_surface_classification.py"
-      ]
-    },
-    {
-      "canonical_replacement": "origin/main",
-      "classification": "DELETE_ACTIVE_LEGACY",
-      "current_imports_callers_readers_writers": {
-        "analysis": "exact path/module references from tracked text; runtime linkage is separately enumerated",
-        "static_references": []
-      },
-      "deletion_gate": "UNIQUE_COMMIT_AND_ACTIVE_REFERENCE_SCAN_CLEAN",
-      "disposition_commit": null,
-      "economic_authority": {
         "capabilities": [],
         "executable": false,
         "owner": null
       },
-      "final_disposition": "delete_after_gate",
-      "migration_status": "deletion_deferred_until_phase_9",
+      "final_disposition": "merge_then_delete_or_reclassify_canonical",
+      "migration_status": "unique_commit_audit_pending",
       "object_type": "branch_or_remote_ref",
       "path_or_ref": "refs/remotes/origin/fix/v7-maker-bootstrap-fair-probe-20260907",
       "rollback_artifact_tag": "v7-unification-pre-migration-8d9e8e60",
-      "snapshot_object_id": "686ca8dcb3de15a120ffd76ac615992eb98bf4b2",
+      "snapshot_object_id": "18ef9957c4187ce80f13f0ae37d66c81c92ee0cf",
       "surface_id": "ref:refs/remotes/origin/fix/v7-maker-bootstrap-fair-probe-20260907",
-      "unique_behavior_data_contribution": "fully reachable from origin/main; redundant active ref",
+      "unique_behavior_data_contribution": "2 commit(s) not reachable from origin/main require content audit",
       "validation_tests": [
         "tests/test_v7_surface_classification.py"
       ]
@@ -20195,11 +20155,9 @@
       "deletion_gate": "UNIQUE_BEHAVIOR_EQUIVALENCE_AND_SINGLE_CONSUMER_PROVEN",
       "disposition_commit": null,
       "economic_authority": {
-        "capabilities": [
-          "engine_component"
-        ],
+        "capabilities": [],
         "executable": false,
-        "owner": "CRYPTO_SETTLEMENT_ENGINE"
+        "owner": null
       },
       "final_disposition": "merge_then_delete_or_reclassify_canonical",
       "migration_status": "unique_commit_audit_pending",
@@ -20232,7 +20190,7 @@
       "object_type": "branch_or_remote_ref",
       "path_or_ref": "refs/remotes/origin/main",
       "rollback_artifact_tag": "v7-unification-pre-migration-8d9e8e60",
-      "snapshot_object_id": "686ca8dcb3de15a120ffd76ac615992eb98bf4b2",
+      "snapshot_object_id": "b9de70a05290e5b35b8421d80986720a67e7e52a",
       "surface_id": "ref:refs/remotes/origin/main",
       "unique_behavior_data_contribution": "active migration or canonical upstream ref",
       "validation_tests": [
@@ -20390,6 +20348,32 @@
       "rollback_artifact_tag": "v7-unification-pre-migration-8d9e8e60",
       "snapshot_object_id": "ebbf95dc46d14a818e413c5ea087b36cdd7581e5",
       "surface_id": "ref:refs/tags/v7-paper-cutover-a9d232b305c6c80483d31e69fe3f5c4fff5d8fa7",
+      "unique_behavior_data_contribution": "historical exact-SHA cutover provenance",
+      "validation_tests": [
+        "tests/test_v7_surface_classification.py"
+      ]
+    },
+    {
+      "canonical_replacement": "artifacts/v7_unification/path_classification.json",
+      "classification": "ARCHIVE_HISTORY_ONLY",
+      "current_imports_callers_readers_writers": {
+        "analysis": "exact path/module references from tracked text; runtime linkage is separately enumerated",
+        "static_references": []
+      },
+      "deletion_gate": "NONE_IMMUTABLE_AUDIT_OR_ROLLBACK_EVIDENCE",
+      "disposition_commit": null,
+      "economic_authority": {
+        "capabilities": [],
+        "executable": false,
+        "owner": null
+      },
+      "final_disposition": "retain_as_nonruntime_history",
+      "migration_status": "classified",
+      "object_type": "tag",
+      "path_or_ref": "refs/tags/v7-paper-cutover-b9de70a05290e5b35b8421d80986720a67e7e52a",
+      "rollback_artifact_tag": "v7-unification-pre-migration-8d9e8e60",
+      "snapshot_object_id": "b9de70a05290e5b35b8421d80986720a67e7e52a",
+      "surface_id": "ref:refs/tags/v7-paper-cutover-b9de70a05290e5b35b8421d80986720a67e7e52a",
       "unique_behavior_data_contribution": "historical exact-SHA cutover provenance",
       "validation_tests": [
         "tests/test_v7_surface_classification.py"
@@ -23688,5 +23672,5 @@
   "real_capital_at_risk": false,
   "real_order_submission": false,
   "schema": "polymarket_v7_surface_classification_v1",
-  "source_snapshot_sha": "de1155e3e0b74821ec9e56ad3943356b11be9504"
+  "source_snapshot_sha": "4f887ddf7625bbb590bc81f95c7bf4fa4bb0385e"
 }
