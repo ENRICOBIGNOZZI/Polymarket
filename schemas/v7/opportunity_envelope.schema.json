@@ -5,367 +5,54 @@
   "type": "object",
   "additionalProperties": false,
   "required": [
-    "schema",
-    "version",
-    "model_sha",
-    "config_hash",
-    "policy_hash",
-    "run_id",
-    "source_snapshot_identity",
-    "engine_id",
-    "component_provenance",
-    "market_id",
-    "event_id",
-    "contract_id",
-    "mapping_identity",
-    "crypto_context",
-    "action",
-    "side",
-    "decision_receive_timestamp_ns",
-    "source_event_timestamps_ns",
-    "fair_value",
-    "conservative_expected_wealth_change",
-    "cost_vector",
-    "cost_authority",
-    "uncertainty",
-    "calibration_status",
-    "latency",
-    "capacity",
-    "execution_plan",
-    "inventory_delta",
-    "portfolio_exposure_delta",
-    "settlement",
-    "eligible",
-    "reasons",
-    "deterministic_replay_key",
-    "expires_at_ns"
+    "schema", "version", "model_sha", "config_hash", "policy_hash", "run_id",
+    "source_snapshot_identity", "engine_id", "component_provenance", "market_id",
+    "event_id", "contract_id", "mapping_identity", "crypto_context", "action", "side",
+    "decision_receive_timestamp_ns", "source_event_timestamps_ns", "fair_value",
+    "conservative_expected_wealth_change", "cost_vector", "cost_authority",
+    "uncertainty", "calibration_status", "latency", "capacity", "execution_plan",
+    "inventory_delta", "portfolio_exposure_delta", "settlement", "eligible",
+    "reasons", "deterministic_replay_key", "expires_at_ns"
   ],
   "properties": {
-    "schema": {
-      "const": "polymarket_v7_opportunity_envelope_v1"
-    },
-    "version": {
-      "const": 1
-    },
-    "model_sha": {
-      "type": "string",
-      "pattern": "^[0-9a-f]{40}$"
-    },
-    "config_hash": {
-      "type": "string",
-      "pattern": "^[0-9a-f]{40,64}$"
-    },
-    "policy_hash": {
-      "type": "string",
-      "pattern": "^[0-9a-f]{40,64}$"
-    },
-    "run_id": {
-      "type": "string",
-      "minLength": 1
-    },
-    "source_snapshot_identity": {
-      "type": "string",
-      "minLength": 1
-    },
-    "engine_id": {
-      "enum": [
-        "CRYPTO_SETTLEMENT_ENGINE",
-        "STRUCTURAL_ARB_ENGINE"
-      ]
-    },
-    "component_provenance": {
-      "type": "array",
-      "minItems": 1,
-      "items": {
-        "type": "string",
-        "minLength": 1
-      },
-      "uniqueItems": true
-    },
-    "market_id": {
-      "type": "string",
-      "minLength": 1
-    },
-    "event_id": {
-      "type": "string",
-      "minLength": 1
-    },
-    "contract_id": {
-      "type": "string",
-      "minLength": 1
-    },
-    "mapping_identity": {
-      "type": "string",
-      "minLength": 1
-    },
+    "schema": {"const": "polymarket_v7_opportunity_envelope_v1"},
+    "version": {"const": 1},
+    "model_sha": {"type": "string", "pattern": "^[0-9a-f]{40}$"},
+    "config_hash": {"type": "string", "pattern": "^[0-9a-f]{40,64}$"},
+    "policy_hash": {"type": "string", "pattern": "^[0-9a-f]{40,64}$"},
+    "run_id": {"type": "string", "minLength": 1},
+    "source_snapshot_identity": {"type": "string", "minLength": 1},
+    "engine_id": {"enum": ["CRYPTO_SETTLEMENT_ENGINE", "STRUCTURAL_ARB_ENGINE"]},
+    "component_provenance": {"type": "array", "minItems": 1, "items": {"type": "string", "minLength": 1}, "uniqueItems": true},
+    "market_id": {"type": "string", "minLength": 1},
+    "event_id": {"type": "string", "minLength": 1},
+    "contract_id": {"type": "string", "minLength": 1},
+    "mapping_identity": {"type": "string", "minLength": 1},
     "crypto_context": {
       "oneOf": [
+        {"type": "null"},
         {
-          "type": "null"
-        },
-        {
-          "type": "object",
-          "additionalProperties": false,
-          "required": [
-            "asset",
-            "horizon",
-            "contract_family",
-            "settlement_semantic_hash",
-            "authority",
-            "research_only"
-          ],
+          "type": "object", "additionalProperties": false,
+          "required": ["asset", "horizon", "contract_family", "settlement_semantic_hash", "authority", "research_only"],
           "properties": {
-            "asset": {
-              "enum": [
-                "BTC",
-                "ETH",
-                "SOL",
-                "XRP"
-              ]
-            },
-            "horizon": {
-              "enum": [
-                "M1",
-                "M5",
-                "M15",
-                "H1",
-                "H4"
-              ]
-            },
-            "contract_family": {
-              "type": "string",
-              "minLength": 1
-            },
-            "settlement_semantic_hash": {
-              "type": "string",
-              "pattern": "^[0-9a-f]{64}$"
-            },
-            "authority": {
-              "enum": [
-                "SHADOW",
-                "SHADOW_ZERO_AUTHORITY",
-                "PAPER",
-                "PAPER_EXPLORATION"
-              ]
-            },
-            "research_only": {
-              "type": "boolean"
-            }
+            "asset": {"enum": ["BTC", "ETH", "SOL", "XRP"]},
+            "horizon": {"enum": ["M1", "M5", "M15", "H1", "H4"]},
+            "contract_family": {"type": "string", "minLength": 1},
+            "settlement_semantic_hash": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+            "authority": {"enum": ["SHADOW", "SHADOW_ZERO_AUTHORITY", "PAPER", "PAPER_EXPLORATION"]},
+            "research_only": {"type": "boolean"}
           }
         }
       ]
     },
-    "action": {
-      "enum": [
-        "MAKE",
-        "TAKE",
-        "ARB",
-        "CANCEL",
-        "WITHDRAW",
-        "NOTHING"
-      ]
-    },
-    "side": {
-      "enum": [
-        "BUY",
-        "SELL",
-        "YES",
-        "NO",
-        "NONE",
-        "MULTI"
-      ]
-    },
-    "decision_receive_timestamp_ns": {
-      "type": "integer",
-      "minimum": 1
-    },
-    "source_event_timestamps_ns": {
-      "type": "array",
-      "minItems": 1,
-      "items": {
-        "type": "integer",
-        "minimum": 1
-      }
-    },
+    "action": {"enum": ["MAKE", "TAKE", "ARB", "CANCEL", "WITHDRAW", "NOTHING"]},
+    "side": {"enum": ["BUY", "SELL", "YES", "NO", "NONE", "MULTI"]},
+    "decision_receive_timestamp_ns": {"type": "integer", "minimum": 1},
+    "source_event_timestamps_ns": {"type": "array", "minItems": 1, "items": {"type": "integer", "minimum": 1}},
     "fair_value": {
-      "type": "object",
-      "additionalProperties": false,
-      "required": [
-        "lower",
-        "point",
-        "upper"
-      ],
-      "properties": {
-        "lower": {
-          "type": "number",
-          "minimum": 0,
-          "maximum": 1
-        },
-        "point": {
-          "type": "number",
-          "minimum": 0,
-          "maximum": 1
-        },
-        "upper": {
-          "type": "number",
-          "minimum": 0,
-          "maximum": 1
-        }
-      }
-    },
-    "conservative_expected_wealth_change": {
-      "type": "number"
-    },
-    "cost_vector": {
-      "type": "object"
-    },
-    "cost_authority": {
-      "type": "object"
-    },
-    "uncertainty": {
-      "type": "object"
-    },
-    "calibration_status": {
-      "enum": [
-        "MATURE",
-        "IMMATURE",
-        "MISSING",
-        "NOT_APPLICABLE"
-      ]
-    },
-    "latency": {
-      "type": "object"
-    },
-    "capacity": {
-      "type": "object"
-    },
-    "execution_plan": {
-      "type": "object",
-      "additionalProperties": false,
-      "required": [
-        "atomic_unit_id",
-        "execution_style",
-        "legs",
-        "partial_fill_plan",
-        "timeout_ms",
-        "unwind_plan"
-      ],
-      "properties": {
-        "atomic_unit_id": {
-          "type": "string",
-          "minLength": 1
-        },
-        "execution_style": {
-          "enum": [
-            "SINGLE_LEG",
-            "SEQUENTIAL_ATOMIC_INTENT"
-          ]
-        },
-        "legs": {
-          "type": "array",
-          "minItems": 1,
-          "items": {
-            "type": "object",
-            "additionalProperties": false,
-            "required": [
-              "leg_id",
-              "market_id",
-              "contract_id",
-              "token_id",
-              "side",
-              "target_quantity",
-              "limit_price",
-              "fee_authority"
-            ],
-            "properties": {
-              "leg_id": {
-                "type": "string",
-                "minLength": 1
-              },
-              "market_id": {
-                "type": "string",
-                "minLength": 1
-              },
-              "contract_id": {
-                "type": "string",
-                "minLength": 1
-              },
-              "token_id": {
-                "type": "string",
-                "minLength": 1
-              },
-              "side": {
-                "enum": [
-                  "BUY",
-                  "SELL"
-                ]
-              },
-              "target_quantity": {
-                "type": "number",
-                "exclusiveMinimum": 0
-              },
-              "limit_price": {
-                "type": "number",
-                "minimum": 0,
-                "maximum": 1
-              },
-              "fee_authority": {
-                "enum": [
-                  "AUTHORITATIVE",
-                  "CONSERVATIVE_BOUND",
-                  "CONSERVATIVE_ZERO"
-                ]
-              }
-            }
-          }
-        },
-        "partial_fill_plan": {
-          "enum": [
-            "CANCEL_REMAINDER",
-            "COMPLETE_OR_UNWIND",
-            "NO_NEW_RISK"
-          ]
-        },
-        "timeout_ms": {
-          "type": "integer",
-          "minimum": 0
-        },
-        "unwind_plan": {
-          "enum": [
-            "NONE",
-            "FULL_DEPTH_BOUNDED_UNWIND",
-            "CANCEL_ONLY"
-          ]
-        }
-      }
-    },
-    "inventory_delta": {
-      "type": "number"
-    },
-    "portfolio_exposure_delta": {
-      "type": "number"
-    },
-    "settlement": {
-      "type": "object"
-    },
-    "eligible": {
-      "type": "boolean"
-    },
-    "reasons": {
-      "type": "array",
-      "minItems": 1,
-      "items": {
-        "type": "string",
-        "minLength": 1
-      }
-    },
-    "deterministic_replay_key": {
-      "type": "string",
-      "minLength": 1
-    },
-    "expires_at_ns": {
-      "type": "integer",
-      "minimum": 1
+      "type": "object", "additionalProperties": false,
+      "required": ["lower", "point", "upper"],
+      "properties": {"lower": {"type": "number", "minimum": 0, "maximum": 1}, "point": {"type": "number", "minimum": 0, "maximum": 1}, "upper": {"type": "number", "minimum": 0, "maximum": 1}}
     },
     "execution_alpha": {
       "type": "object",
@@ -504,31 +191,58 @@
           }
         }
       }
-    }
+    },
+    "conservative_expected_wealth_change": {"type": "number"},
+    "cost_vector": {"type": "object"},
+    "cost_authority": {"type": "object"},
+    "uncertainty": {"type": "object"},
+    "calibration_status": {"enum": ["MATURE", "IMMATURE", "MISSING", "NOT_APPLICABLE"]},
+    "latency": {"type": "object"},
+    "capacity": {"type": "object"},
+    "execution_plan": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["atomic_unit_id", "execution_style", "legs", "partial_fill_plan", "timeout_ms", "unwind_plan"],
+      "properties": {
+        "atomic_unit_id": {"type": "string", "minLength": 1},
+        "execution_style": {"enum": ["SINGLE_LEG", "SEQUENTIAL_ATOMIC_INTENT"]},
+        "legs": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["leg_id", "market_id", "contract_id", "token_id", "side", "target_quantity", "limit_price", "fee_authority"],
+            "properties": {
+              "leg_id": {"type": "string", "minLength": 1},
+              "market_id": {"type": "string", "minLength": 1},
+              "contract_id": {"type": "string", "minLength": 1},
+              "token_id": {"type": "string", "minLength": 1},
+              "side": {"enum": ["BUY", "SELL"]},
+              "target_quantity": {"type": "number", "exclusiveMinimum": 0},
+              "limit_price": {"type": "number", "minimum": 0, "maximum": 1},
+              "fee_authority": {"enum": ["AUTHORITATIVE", "CONSERVATIVE_BOUND", "CONSERVATIVE_ZERO"]}
+            }
+          }
+        },
+        "partial_fill_plan": {"enum": ["CANCEL_REMAINDER", "COMPLETE_OR_UNWIND", "NO_NEW_RISK"]},
+        "timeout_ms": {"type": "integer", "minimum": 0},
+        "unwind_plan": {"enum": ["NONE", "FULL_DEPTH_BOUNDED_UNWIND", "CANCEL_ONLY"]}
+      }
+    },
+    "inventory_delta": {"type": "number"},
+    "portfolio_exposure_delta": {"type": "number"},
+    "settlement": {"type": "object"},
+    "eligible": {"type": "boolean"},
+    "reasons": {"type": "array", "minItems": 1, "items": {"type": "string", "minLength": 1}},
+    "deterministic_replay_key": {"type": "string", "minLength": 1},
+    "expires_at_ns": {"type": "integer", "minimum": 1}
   },
   "allOf": [
     {
-      "if": {
-        "properties": {
-          "engine_id": {
-            "const": "CRYPTO_SETTLEMENT_ENGINE"
-          }
-        }
-      },
-      "then": {
-        "properties": {
-          "crypto_context": {
-            "type": "object"
-          }
-        }
-      },
-      "else": {
-        "properties": {
-          "crypto_context": {
-            "type": "null"
-          }
-        }
-      }
+      "if": {"properties": {"engine_id": {"const": "CRYPTO_SETTLEMENT_ENGINE"}}},
+      "then": {"properties": {"crypto_context": {"type": "object"}}},
+      "else": {"properties": {"crypto_context": {"type": "null"}}}
     }
   ]
 }
