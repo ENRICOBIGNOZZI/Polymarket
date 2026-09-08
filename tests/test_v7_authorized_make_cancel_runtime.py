@@ -253,9 +253,15 @@ def run(executor: Path) -> None:
             write(root / "control/CUTOVER_DRAIN", {"paper_only":True})
             drained = wait_for(root, lambda r: r.get("terminal_orders") == 2 and r.get("active_orders") == 0)
             assert drained["last_terminal_reason"] == "CANCELLED"
+            # A previous rejection can already be present in the status file.
+            # Observe a NEW receipt consumption, not a stale absolute count.
+            prior_rejections = int(drained.get("rejected_authorizations", 0))
             coordinator._publish_make_authorization(root, decision2, maker2)
-            refused = wait_for(root, lambda r: r.get("rejected_authorizations",0) >= 1)
+            refused = wait_for(root, lambda r:
+                int(r.get("rejected_authorizations", 0)) > prior_rejections
+                and r.get("last_error") == "CANONICAL_DRAIN_OR_KILL_NO_NEW_MAKE")
             assert refused["submitted_orders"] == 2
+            assert refused["active_orders"] == 0
             assert refused["last_error"] == "CANONICAL_DRAIN_OR_KILL_NO_NEW_MAKE"
         finally:
             process.terminate()
