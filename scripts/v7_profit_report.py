@@ -98,7 +98,7 @@ def summarize(observations,manifest,settlements):
                 for delay in config['delays_ms']:
                     for stress in config['cost_stress_multipliers']:grouped[prefix+f'|delay{delay}|cost{stress}']
     estimates={key:interval([sum(v)/len(v) for v in contracts.values()],protocol,family) for key,contracts in grouped.items()}
-    maker_groups=defaultdict(lambda:defaultdict(list));maker_coverage=Counter();paired=defaultdict(list)
+    maker_groups=defaultdict(lambda:defaultdict(list));maker_coverage=Counter();markout_coverage=Counter();paired=defaultdict(list)
     for row in makers:
         outcome=settlements.get(row['market_id']);arm_pnl={}
         for arm in row['arms']:
@@ -108,6 +108,7 @@ def summarize(observations,manifest,settlements):
             maker_groups[aid+'|any_operational_fill'][row['market_id']].append(float(qty>0))
             for horizon in protocol['maker']['markout_horizons_ms']:
                 cuts=[(f['quantity'],(f.get('markouts') or {}).get(str(horizon))) for f in arm['fills']]
+                for _,cut in cuts:markout_coverage[aid+f'|{horizon}ms|'+('OBSERVED' if cut else 'BOOK_AT_MARKOUT_CENSORED')]+=1
                 if qty>0 and cuts and all(v is not None for _,v in cuts):
                     maker_groups[aid+f'|mid_markout_{horizon}ms'][row['market_id']].append(sum(q*v['mid_minus_fill'] for q,v in cuts)/qty)
             if not outcome or row['token_id'] not in outcome['tokens']:continue
@@ -124,7 +125,8 @@ def summarize(observations,manifest,settlements):
         'manifest_sha256':manifest['manifest_sha256'],'timestamp_ms':time.time_ns()//1000000,'counts':dict(counts),
         'selected_contracts':len({r['market_id'] for r in selections.values()}),'resolved_selected_contracts':len(resolved),
         'signal_cells':estimates,'fixed_signal_delay_margin_change':{k:interval([sum(v)/len(v) for v in c.values()],protocol,family) for k,c in decision_decay.items()},
-        'maker_coverage':dict(maker_coverage),'maker_metrics':{k:interval([sum(v)/len(v) for v in c.values()],protocol,family) for k,c in maker_groups.items()},
+        'maker_coverage':dict(maker_coverage),'maker_markout_coverage':dict(markout_coverage),
+        'maker_metrics':{k:interval([sum(v)/len(v) for v in c.values()],protocol,family) for k,c in maker_groups.items()},
         'maker_paired_net_delta_vs_join5s':{k:interval(v,protocol,family) for k,v in paired.items()},
         'censored_labels':dict(censors),'economic_conclusion':'FORWARD_RESEARCH_NO_PROFITABILITY_CLAIM_OR_POLICY_PROMOTION',
         'limitations':['L1 prices and aggregate features, not full depth or queue position verification.',

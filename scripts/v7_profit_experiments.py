@@ -195,12 +195,22 @@ def replay_anchor(anchor,book,status,protocol,binary):
     if origin and (start-origin['receive_wall_ms']>protocol['maker']['maximum_feature_age_ms'] or origin.get('features_valid') is not True):reason='STALE_OR_INCOMPLETE_FEATURES'
     if not m.get('arrival_receive_monotonic_ns') or not m.get('arrival_exchange_event_ns'):reason='MISSING_NATIVE_ARRIVAL_CLOCK'
     path=[r for r in history if arrival<=r.get('receive_monotonic_ns',0)<=arrival+42000*1000000]
-    if any('public_trade' not in r or r.get('valid') is not True or r.get('lineage_continuous') is not True for r in path):reason='TRADE_OR_BOOK_EVIDENCE_CENSORED'
     if origin and any(r.get('tick_size')!=origin['tick_size'] for r in path):reason='TICK_REGIME_CHANGED'
+    invalid_books=sum(r.get('valid') is not True or r.get('lineage_continuous') is not True for r in path)
     output=[];source={'anchor':anchor,'origin_book':origin,'path':path}
     for arm in protocol['maker']['arms']:
-        row={'arm':arm['id'],'state':reason or 'OBSERVED','operational_filled_shares':None,'fills':[],'counterfactual':True}
-        if not reason:
+        arm_reason=reason
+        execution_path=[r for r in path if r.get('receive_monotonic_ns',0)<=arrival+(arm['lifetime_ms']+100)*1000000]
+        if any('public_trade' not in r for r in execution_path):arm_reason='MISSING_TRADE_PAYLOAD_CENSORED'
+        if any(r.get('public_trade') and (r.get('valid') is not True or r.get('lineage_continuous') is not True) for r in execution_path):
+            arm_reason='TRADE_LINEAGE_CENSORED'
+        # The native resting-order engine consumes public prints, not book
+        # deltas. An invalid intermediate book without a lost/invalid print is
+        # therefore not a missing queue input. Transport gaps remain censored.
+        row={'arm':arm['id'],'state':arm_reason or 'OBSERVED','operational_filled_shares':None,'fills':[],'counterfactual':True,
+             'intermediate_invalid_book_rows':invalid_books,
+             'replay_input_basis':'CONTINUOUS_TRANSPORT_VALID_PRINTS_AND_VALID_ARRIVAL_BOOK'}
+        if not arm_reason:
             qty=math.floor(order['intended_size']*1e6)/1e6;tick=origin['tick_size'];price=origin['best_bid']+(tick if arm['placement']=='IMPROVE1' else 0)
             cap=(m.get('opportunity_envelope') or {}).get('exploration',{}).get('probe_loss_cap')
             if not finite(cap):cap=order['intended_size']*order['limit_price']
@@ -224,6 +234,8 @@ def replay_anchor(anchor,book,status,protocol,binary):
                         fill['markouts']={}
                         for h in protocol['maker']['markout_horizons_ms']:
                             cut=next((r for r in reversed(history) if r.get('receive_monotonic_ns',0)<=fill['receive_monotonic_ns']+h*1000000),None)
+                            if cut and (cut.get('valid') is not True or cut.get('lineage_continuous') is not True
+                                        or not 0<cut['best_bid']<cut['best_ask']<1):cut=None
                             fill['markouts'][str(h)]={'mid_minus_fill':(cut['best_bid']+cut['best_ask'])/2-price,
                                 'best_bid_minus_fill':cut['best_bid']-price,'bid_depth_l1':cut['bid_depth_l1'],
                                 'liquidation_depth_sufficient':cut['bid_depth_l1']>=fill['quantity'],'source_cut':cut} if cut else None
