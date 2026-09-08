@@ -64,7 +64,8 @@ def run(executor: Path) -> None:
         now_ms = time.time_ns() // 1_000_000
         runtime = fixture.runtime(); runtime["model_sha"] = SHA
         selection = fixture.selection(); selection["timestamp_ms"] = now_ms
-        selection['markets'][0]['quote_opportunities'][0]['placement_features'] = {
+        observed_features = {
+            'spread_ticks':2.,
             'imbalance':.2,'ofi':.1,'ew_vol_ticks':.3,'trade_intensity':2.,
             'cancel_intensity':.4,'short_return_ticks':-.1,'inventory_fraction':.05,
             'local_latency_ms':10.,'aggressive_sell_prints_per_second':1.,
@@ -82,6 +83,22 @@ def run(executor: Path) -> None:
             "authenticated_execution": False, "real_order_submission": False,
             "evidence_complete": True, "timestamp_ms": now_ms,
             "last_exchange_event_ns": time.monotonic_ns(),
+            "observer_session_id": "test-observer", "connection_epoch": 1,
+        })
+        write(root / "micro_maker/book_features/yes-token.json", {
+            "schema":"polymarket_v7_causal_book_observation_v1", "model_sha":SHA,
+            "paper_only":True,"authenticated_execution":False,"real_order_submission":False,
+            "observer_session_id":"test-observer","connection_epoch":1,"observer_sequence":10,
+            "market_id":"market-1","token_id":"yes-token","receive_wall_ms":now_ms,
+            "valid":True,"features_valid":True,"lineage_continuous":True,
+            "tick_size":.01,"best_bid":.50,"best_ask":.52,"bid_depth_l1":5.,
+            "placement_features":observed_features,
+        })
+        write(root / "external_fair/paper_router_status.json", {
+            "code_sha":SHA,"timestamp":now_ms/1000,
+            "paper_exploration_account":{"model_sha":SHA,"complete":True,
+                "paper_only":True,"authenticated_execution":False,"real_order_submission":False,
+                "open_positions":0,"pending_maker_orders":0},
         })
         (root / "micro_maker/fillability_ws.jsonl").touch()
 
@@ -221,6 +238,9 @@ def run(executor: Path) -> None:
             assert exact_execution_cell(order)==('market-1','yes-token','JOIN','BUY')
             example = order_examples(evidence)[0]
             assert example['features'] is not None
+            assert order['metadata']['placement_features_source']=='CANONICAL_MAKER_LANE_OBSERVED_FLOW_V1'
+            assert order['metadata']['placement_features_snapshot_id']=='test-observer:10'
+            assert example['features'][8]==0.0  # Identified flat account, not observer imputation.
             assert example['execution_outcome']=='PARTIAL_FILL'
             assert example['opposite_flow_prints_seen']>=1
             assert example['price_reach_shares_seen']>=8.

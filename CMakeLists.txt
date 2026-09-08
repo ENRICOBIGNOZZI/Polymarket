@@ -99,7 +99,7 @@ target_link_libraries(polymarket_v7_maker_markout_observer PRIVATE pm_v7_common 
 target_compile_options(polymarket_v7_maker_markout_observer PRIVATE -Wall -Wextra -Wpedantic)
 
 add_executable(polymarket_v7_maker_fillability_observer src/v7_maker_fillability_observer.cpp)
-target_link_libraries(polymarket_v7_maker_fillability_observer PRIVATE pm_v7_common pm_fast_arb pm_core)
+target_link_libraries(polymarket_v7_maker_fillability_observer PRIVATE pm_v7_hft pm_v7_common pm_fast_arb pm_core)
 target_compile_options(polymarket_v7_maker_fillability_observer PRIVATE -Wall -Wextra -Wpedantic)
 
 # Receipt-gated PAPER executor. It never makes an economic decision and never
@@ -126,6 +126,14 @@ target_compile_options(polymarket_v7_external_tape_replay PRIVATE -Wall -Wextra 
 include(CTest)
 if(BUILD_TESTING)
   find_package(Python3 REQUIRED COMPONENTS Interpreter)
+  add_executable(pm_v7_causal_book_observer_tests tests/test_v7_causal_book_observer.cpp)
+  target_link_libraries(pm_v7_causal_book_observer_tests PRIVATE pm_v7_hft pm_fast_arb pm_core)
+  target_compile_options(pm_v7_causal_book_observer_tests PRIVATE -UNDEBUG)
+  add_test(NAME pm_v7_causal_book_observer_tests COMMAND pm_v7_causal_book_observer_tests)
+  add_executable(pm_v7_observed_feature_admission_tests tests/test_v7_observed_feature_admission.cpp)
+  target_link_libraries(pm_v7_observed_feature_admission_tests PRIVATE pm_v7_hft Threads::Threads)
+  target_compile_options(pm_v7_observed_feature_admission_tests PRIVATE -UNDEBUG)
+  add_test(NAME pm_v7_observed_feature_admission_tests COMMAND pm_v7_observed_feature_admission_tests)
   add_executable(pm_fast_arb_tests tests/test_fast_arb.cpp)
   target_link_libraries(pm_fast_arb_tests PRIVATE pm_fast_arb)
   add_test(NAME pm_fast_arb_tests COMMAND pm_fast_arb_tests)

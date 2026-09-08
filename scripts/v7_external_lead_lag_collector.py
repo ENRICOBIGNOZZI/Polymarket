@@ -3,7 +3,9 @@
 
 Research observer only.  It never authorizes trading.  Each origin is one frozen
 rich external feature cut plus the exact PM prior snapshot used at that cut.
-Labels are the first observed PM snapshots at/after 100/250/500/1000 ms.
+With --book-tape, labels use the continuous receive-time book state at each
+horizon; absent coverage is censored. The legacy router-snapshot mode remains
+available for explicit comparisons and has separate target semantics.
 """
 from __future__ import annotations
 
@@ -18,6 +20,7 @@ import time
 from typing import Any
 
 from v7_fair_model_artifact import canonical_hash
+from v7_causal_book import BookTimeline, TARGET as BOOK_TARGET
 
 SCHEMA = "polymarket_v7_external_pm_lead_lag_observation_v1"
 STATUS_SCHEMA = "polymarket_v7_external_pm_lead_lag_collector_status_v1"
@@ -124,6 +127,8 @@ def valid_origin(fair_status: dict[str, Any], live: dict[str, Any], model_sha: s
     ).hexdigest()
     return {
         "origin_id": origin_id, "market_id": live["market_id"],
+        "yes_token": str(market.get("yes_token") or ""),
+        "no_token": str(market.get("no_token") or ""),
         "origin_observed_wall_ns": observed_ns, "origin_pm_yes": p0,
         "origin_pm_snapshot_id": prior_snapshot_id,
         "origin_pm_receive_ts_ms": prior_receive_ms,
@@ -135,7 +140,8 @@ def valid_origin(fair_status: dict[str, Any], live: dict[str, Any], model_sha: s
 
 class Collector:
     def __init__(self, fair_path: Path, router_path: Path, output: Path, status: Path,
-                 model_sha: str, interval_ms: int = 25) -> None:
+                 model_sha: str, interval_ms: int = 25,
+                 book_tape: Path | None = None, book_status: Path | None = None) -> None:
         self.fair_path, self.router_path = fair_path, router_path
         self.output, self.status, self.model_sha = output, status, model_sha
         self.interval_ms = max(10, min(250, interval_ms))
@@ -144,13 +150,21 @@ class Collector:
         self.last_router_snapshot_id = ""
         self.origins = self.labels = self.market_rollover_censors = self.invalid_reads = 0
         self.late_labels = 0
+        self.book_censors = 0
+        if (book_tape is None) != (book_status is None):
+            raise ValueError("book tape and status must be supplied together")
+        self.book = BookTimeline(book_tape, model_sha) if book_tape else None
+        self.book_status = book_status
         self.started_ns = time.time_ns()
 
     def tick(self) -> None:
+        if self.book:
+            self.book.poll()
         router = load(self.router_path)
         live = valid_router_live(router, self.model_sha)
         if live is None:
             self.invalid_reads += 1
+            if self.book: self.label_books()
             return
         fair_status = load(self.fair_path)
         origin = valid_origin(fair_status, live, self.model_sha)
@@ -158,6 +172,9 @@ class Collector:
             self.pending.append(origin)
             self.last_origin_id = origin["origin_id"]
             self.origins += 1
+        if self.book:
+            self.label_books()
+            return
         if live["snapshot_id"] == self.last_router_snapshot_id:
             return
         self.last_router_snapshot_id = live["snapshot_id"]
@@ -203,6 +220,45 @@ class Collector:
                 keep.append(row)
         self.pending = keep
 
+    def label_books(self) -> None:
+        status = load(self.book_status)
+        now_ms = time.time_ns() / 1_000_000
+        keep = deque(maxlen=10000)
+        for row in self.pending:
+            origin_ms = row["origin_observed_wall_ns"] / 1_000_000
+            for horizon in HORIZONS_MS:
+                target_ms = origin_ms + horizon
+                if horizon in row["labels"] or now_ms < target_ms:
+                    continue
+                evidence = self.book.label(row["market_id"], row["yes_token"], row["no_token"],
+                                           origin_ms, target_ms, status)
+                if evidence is None and now_ms < target_ms + 2000:
+                    continue
+                eligible = evidence is not None
+                payload = {k: row[k] for k in ("origin_id", "market_id", "yes_token", "no_token",
+                    "origin_observed_wall_ns", "rich_feature_sha256", "rich_model_features")}
+                payload.update({"schema": SCHEMA, "model_sha": self.model_sha,
+                    "paper_only": True, "authenticated_execution": False, "real_order_submission": False,
+                    "execution_authority": "ZERO_AUTHORITY_RESEARCH_ONLY",
+                    "horizon_ms": horizon, "target_semantics": BOOK_TARGET,
+                    "label_target_ts_ms": target_ms, "realized_horizon_ms": horizon if eligible else None,
+                    "nominal_horizon_eligible": eligible,
+                    "label_state": "CAUSAL_BOOK_OBSERVED" if eligible else "BOOK_GAP_CENSORED",
+                    "origin_fair_prior_yes": row["origin_pm_yes"],
+                    "origin_fair_prior_snapshot_id": row["origin_pm_snapshot_id"],
+                    "delta_probability": None, "delta_logit": None})
+                if evidence:
+                    payload.update(evidence)
+                    payload["delta_probability"] = evidence["label_pm_yes"] - evidence["origin_pm_yes"]
+                    payload["delta_logit"] = logit(evidence["label_pm_yes"]) - logit(evidence["origin_pm_yes"])
+                else:
+                    self.book_censors += 1
+                append_jsonl(self.output, payload)
+                row["labels"].add(horizon)
+                self.labels += 1
+            if len(row["labels"]) < len(HORIZONS_MS): keep.append(row)
+        self.pending = keep
+
     def publish(self) -> None:
         atomic_json(self.status, {
             "schema": STATUS_SCHEMA, "paper_only": True, "authenticated_execution": False,
@@ -212,7 +268,10 @@ class Collector:
             "market_rollover_censors": self.market_rollover_censors, "invalid_reads": self.invalid_reads,
             "horizons_ms": list(HORIZONS_MS), "interval_ms": self.interval_ms,
             "late_labels": self.late_labels,
-            "nominal_horizon_eligible_labels": self.labels - self.late_labels,
+            "book_gap_censors": self.book_censors,
+            "book_timeline_gaps": self.book.gaps if self.book else None,
+            "target_semantics": BOOK_TARGET if self.book else "FIRST_OBSERVED_SNAPSHOT_AFTER_THRESHOLD",
+            "nominal_horizon_eligible_labels": self.labels - self.late_labels - self.book_censors,
             "maximum_label_delay_ms": MAX_LABEL_DELAY_MS,
             "state": "COLLECTING" if self.origins else "AWAITING_CAUSAL_RICH_FEATURE_CUT",
         })
@@ -235,11 +294,13 @@ def main() -> int:
     ap.add_argument("--status", type=Path, required=True)
     ap.add_argument("--model-sha", required=True)
     ap.add_argument("--interval-ms", type=int, default=25)
+    ap.add_argument("--book-tape", type=Path)
+    ap.add_argument("--book-status", type=Path)
     args = ap.parse_args()
     if len(args.model_sha) != 40 or any(c not in "0123456789abcdef" for c in args.model_sha):
         raise SystemExit("invalid --model-sha")
     Collector(args.fair_status, args.router_status, args.output, args.status,
-              args.model_sha, args.interval_ms).run()
+              args.model_sha, args.interval_ms, args.book_tape, args.book_status).run()
     return 0
 
 

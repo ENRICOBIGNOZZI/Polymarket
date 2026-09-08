@@ -228,6 +228,9 @@ struct SelectionEvidence {
     double queue_ahead_shares = 0.0;
     bool found = false;
     json::object placement_features;
+    std::string feature_source = "CAUSAL_SELECTION_SNAPSHOT";
+    std::string feature_snapshot_id;
+    std::int64_t feature_timestamp_ms = 0;
 };
 
 [[nodiscard]] SelectionEvidence selection_evidence(
@@ -244,6 +247,7 @@ struct SelectionEvidence {
         return result;
     }
     result.generated_at_ms = integer(find_value(root, "timestamp_ms"));
+    result.feature_timestamp_ms = result.generated_at_ms;
     const auto* markets = child_array(root, "markets");
     if (markets == nullptr) return result;
     for (const auto& item : *markets) {
@@ -288,6 +292,84 @@ struct SelectionEvidence {
         }
     }
     return result;
+}
+
+// Read the existing observer's latest causal feature cut. The optional
+// selection fallback remains explicit; an absent microstructure observation
+// never becomes a synthetic zero-valued training example.
+void enrich_observed_features(SelectionEvidence& selection, const fs::path& root,
+                             std::string_view sha, std::string_view market,
+                             std::string_view token, double limit_price, bool executor_flat) {
+    auto optional_read = [](const fs::path& path) -> json::value {
+        try { return read_json(path); } catch (const std::runtime_error&) { return {}; }
+    };
+    const auto value = optional_read(root / "micro_maker" / "book_features" / (std::string(token) + ".json"));
+    const auto status_value = optional_read(root / "micro_maker" / "fillability_ws_status.json");
+    if (!value.is_object() || !status_value.is_object()) return;
+    const auto& row = value.as_object();
+    const auto& status = status_value.as_object();
+    const auto now = wall_ms();
+    const auto received = integer(find_value(row, "receive_wall_ms"));
+    const auto status_ms = integer(find_value(status, "timestamp_ms"));
+    if (text(find_value(row, "schema")) != "polymarket_v7_causal_book_observation_v1"
+        || text(find_value(row, "model_sha")) != sha
+        || text(find_value(row, "market_id")) != market || text(find_value(row, "token_id")) != token
+        || !boolean(find_value(row, "paper_only")) || boolean(find_value(row, "authenticated_execution"), true)
+        || boolean(find_value(row, "real_order_submission"), true)
+        || !boolean(find_value(row, "valid")) || !boolean(find_value(row, "features_valid"))
+        || !boolean(find_value(row, "lineage_continuous"))
+        || received <= 0 || received > now || now - received > 500
+        || status_ms <= 0 || status_ms > now || now - status_ms > 2000
+        || text(find_value(status, "model_sha")) != sha || text(find_value(status, "state")) != "running"
+        || !boolean(find_value(status, "paper_only"))
+        || boolean(find_value(status, "authenticated_execution"), true)
+        || boolean(find_value(status, "real_order_submission"), true)
+        || !boolean(find_value(status, "evidence_complete"))
+        || text(find_value(row, "observer_session_id")).empty()
+        || text(find_value(row, "observer_session_id")) != text(find_value(status, "observer_session_id"))
+        || integer(find_value(row, "connection_epoch")) != integer(find_value(status, "connection_epoch"))) return;
+    const auto* features = child_object(row, "placement_features");
+    if (!features) return;
+    const double tick = number(find_value(row, "tick_size"));
+    const double bid = number(find_value(row, "best_bid"));
+    const double ask = number(find_value(row, "best_ask"));
+    if (!(tick > 0 && bid > 0 && ask > bid && ask < 1)
+        || static_cast<std::int32_t>(std::llround(tick * 10000)) != selection.tick_size_e4) return;
+    selection.placement_features = *features;
+    selection.placement_features["distance_from_touch_ticks"] = (bid - limit_price) / tick;
+    // Arrival post-only validation uses the fresh observed ask. Keep the
+    // original selection clock so enrichment cannot refresh stale authority.
+    selection.best_bid = bid;
+    selection.best_ask = ask;
+    if (std::abs(limit_price - bid) < 1e-9) {
+        selection.queue_ahead_shares = std::max(selection.queue_ahead_shares,
+                                               number(find_value(row, "bid_depth_l1")));
+    }
+    // Market-data observers have no inventory authority. Zero exposure is
+    // identified only by a fresh, complete canonical flat-account proof and
+    // no outstanding local reservations. Non-flat accounts stay missing.
+    selection.placement_features["inventory_fraction"] = nullptr;
+    const auto account_value = optional_read(root / "external_fair" / "paper_router_status.json");
+    if (executor_flat && account_value.is_object()) {
+        const auto& account_status = account_value.as_object();
+        const auto* account = child_object(account_status, "paper_exploration_account");
+        const auto account_ms = static_cast<std::int64_t>(number(find_value(account_status, "timestamp")) * 1000.0);
+        if (account && account_ms > 0 && account_ms <= now && now - account_ms <= 2500
+            && text(find_value(account_status, "code_sha")) == sha
+            && text(find_value(*account, "model_sha")) == sha
+            && boolean(find_value(*account, "complete"))
+            && boolean(find_value(*account, "paper_only"))
+            && !boolean(find_value(*account, "authenticated_execution"), true)
+            && !boolean(find_value(*account, "real_order_submission"), true)
+            && integer(find_value(*account, "open_positions"), -1) == 0
+            && integer(find_value(*account, "pending_maker_orders"), -1) == 0) {
+            selection.placement_features["inventory_fraction"] = 0.0;
+        }
+    }
+    selection.feature_timestamp_ms = received;
+    selection.feature_source = "CANONICAL_MAKER_LANE_OBSERVED_FLOW_V1";
+    selection.feature_snapshot_id = text(find_value(row, "observer_session_id")) + ":"
+        + std::to_string(integer(find_value(row, "observer_sequence")));
 }
 
 struct FillabilityStatus {
@@ -765,8 +847,11 @@ private:
     void submit(const fs::path& path) {
         if (risk_frozen()) throw std::runtime_error("CANONICAL_DRAIN_OR_KILL_NO_NEW_MAKE");
         Authorization authorization = parse_authorization(path, options_.model_sha);
-        const SelectionEvidence selection = selection_evidence(
+        SelectionEvidence selection = selection_evidence(
             selection_path_, options_.model_sha, authorization.market_id, authorization.token_id);
+        enrich_observed_features(selection, options_.run_root, options_.model_sha,
+                                 authorization.market_id, authorization.token_id,
+                                 authorization.limit_price, orders_.empty());
         const auto now = wall_ms();
         if (!selection.found || selection.generated_at_ms <= 0 || now < selection.generated_at_ms
             || now - selection.generated_at_ms > kSelectionMaxAgeMs) {
@@ -976,8 +1061,9 @@ private:
             }
         }
         metadata["placement_features"] = context.selection.placement_features;
-        metadata["placement_features_timestamp_ms"] = context.selection.generated_at_ms;
-        metadata["placement_features_source"] = "CAUSAL_SELECTION_SNAPSHOT";
+        metadata["placement_features_timestamp_ms"] = context.selection.feature_timestamp_ms;
+        metadata["placement_features_source"] = context.selection.feature_source;
+        metadata["placement_features_snapshot_id"] = context.selection.feature_snapshot_id;
         metadata["placement_features_schema"] = "maker-placement-observed-v1";
         metadata["native_market_order_id"] = std::to_string(context.order_id);
         metadata["paper_bootstrap_probe"] = context.authorization.paper_probe;

@@ -303,6 +303,8 @@ def placement_features(order: dict[str, Any]) -> list[float] | None:
         "FADE1": 1.0,
         "FADE2": 2.0,
     }.get(action, 0.0)
+    if "distance_from_touch_ticks" in raw:
+        distance_from_touch = number(raw["distance_from_touch_ticks"], math.nan)
     values = [
         1.0,
         number(raw.get("spread_ticks"), math.nan),

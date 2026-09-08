@@ -385,8 +385,9 @@ def _sync_directory(path: Path) -> None:
 def compress_closed_cutover_tapes(archive_root: Path, *, now: int, dry_run: bool,
                                   minimum_age_seconds: int = 3600,
                                   active_run_root: Path | None = None) -> dict[str, Any]:
-    # Only inactive cutover raw/normalized tapes. Byte preservation is not an
-    # attestation of economic validity. Live/durable roots and ledgers excluded.
+    # Inactive cutover tapes and producer-sealed segments in the active run.
+    # Current files and ledgers are excluded. Byte preservation does not attest
+    # economic validity; book JSONL follows the same verified-gzip contract.
     import contextlib
     import fcntl
     import subprocess
@@ -417,12 +418,14 @@ def compress_closed_cutover_tapes(archive_root: Path, *, now: int, dry_run: bool
             scopes.append((active.resolve(), True))
         for archive, active_scope in scopes:
             relative_root = archive if active_scope else root
-            for subdir in ("raw", "normalized_events"):
-                folder = archive / "external_fair" / subdir
+            for relative, suffix in (("external_fair/raw", "bin"),
+                                     ("external_fair/normalized_events", "bin"),
+                                     ("micro_maker/book_observations", "jsonl")):
+                folder = archive / relative
                 if folder.is_symlink() or folder.parent.is_symlink(): continue
-                pattern = "*.segment-*.bin" if active_scope else "*.bin"
+                pattern = f"*.segment-*.{suffix}" if active_scope else f"*.{suffix}"
                 for source in sorted(folder.glob(pattern)):
-                    if active_scope and not re.fullmatch(r".+\.segment-[0-9]{6,}\.bin", source.name):
+                    if active_scope and not re.fullmatch(r".+\.segment-[0-9]{6,}\." + suffix, source.name):
                         continue
                     temporary = None
                     try:
