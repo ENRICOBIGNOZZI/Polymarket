@@ -75,6 +75,17 @@ def envelope(*, market: str, action: str = "MAKE", ev: float = 1.0, quality: flo
     }
 
 
+def test_frozen_external_cancel_official_v3_evidence_is_pinned() -> None:
+    official = CONFIG["execution_alpha"]["cancel"]["official_v3_evidence"]
+    assert official["promotion_boundary_ms"] == 1788781327887
+    assert official["protocol_sha256"] == "85e54afef180426dab0519c701f764ea5863076ac88566648122553576bd8a04"
+    assert official["baseline_report_sha256"] == "c2cb36b2df6de713d8d9c630eac6685fb5f935fa3bdffffa0b8ec321cbe56d96"
+    assert official["baseline_manifest_sha256"] == "2619efb8d80daaf583ad24df6c9bcf2bc05dc868dfa3db7139fcd806a28a3f4a"
+    assert official["minimum_independent_markets"] == 30
+    assert official["minimum_avoidable_fill_events"] == 50
+    assert official["require_positive_market_cluster_bootstrap_lower"] is True
+
+
 def test_packet_enforces_receive_time_and_action_identity() -> None:
     value = packet("MAKE")
     assert validate_execution_alpha_packet(value, decision_ns=100, action="MAKE")["model_id"] == "execution-alpha-test"
@@ -133,6 +144,7 @@ def test_information_rank_rewards_uncertainty_without_promotion_credit() -> None
 
 
 if __name__ == "__main__":
+    test_frozen_external_cancel_official_v3_evidence_is_pinned()
     test_packet_enforces_receive_time_and_action_identity()
     test_market_selection_concentrates_budget_on_top_fraction()
     test_market_score_exposes_component_decomposition()

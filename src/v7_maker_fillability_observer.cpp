@@ -135,6 +135,7 @@ struct Options {
     std::string config = "config/paper_v7.json";
     std::string selection;
     std::string run_root = "runs/paper_v7_live";
+    std::string output_dir;
     std::string model_sha;
     std::string ws_url = "wss://ws-subscriptions-clob.polymarket.com/ws/market";
 };
@@ -150,12 +151,16 @@ Options parse_options(int argc, char** argv) {
         if (arg == "--config") options.config = next();
         else if (arg == "--selection") options.selection = next();
         else if (arg == "--run-root") options.run_root = next();
+        else if (arg == "--output-dir") options.output_dir = next();
         else if (arg == "--model-sha") options.model_sha = next();
         else if (arg == "--ws-url") options.ws_url = next();
         else throw std::runtime_error("unknown argument: " + arg);
     }
     if (options.selection.empty()) {
         options.selection = options.run_root + "/micro_maker/reward_selection.json";
+    }
+    if (options.output_dir.empty()) {
+        options.output_dir = options.run_root + "/micro_maker";
     }
     if (!exact_sha(options.model_sha)) throw std::runtime_error("--model-sha must be exact 40-hex SHA");
     return options;
@@ -271,9 +276,9 @@ static_assert(std::is_trivially_copyable_v<TradeEvidence>);
 class ExactWsObserver final {
 public:
     ExactWsObserver(std::vector<SelectedToken> tokens, std::string ws_url,
-                    fs::path run_root, std::string model_sha)
+                    fs::path output_dir, std::string model_sha)
         : tokens_(std::move(tokens)), ws_url_(std::move(ws_url)),
-          run_root_(std::move(run_root)), model_sha_(std::move(model_sha)) {
+          output_dir_(std::move(output_dir)), model_sha_(std::move(model_sha)) {
         std::vector<pm::v7::TokenBinding> bindings;
         std::size_t max_handle = 0;
         for (const auto& token : tokens_) {
@@ -285,9 +290,9 @@ public:
         by_handle_.resize(max_handle + 1, nullptr);
         for (const auto& token : tokens_) by_handle_[token.instrument_handle] = &token;
         decoder_ = std::make_unique<pm::v7::MarketWsShard>(std::move(bindings));
-        fs::create_directories(run_root_ / "micro_maker");
-        evidence_path_ = run_root_ / "micro_maker" / "fillability_ws.jsonl";
-        status_path_ = run_root_ / "micro_maker" / "fillability_ws_status.json";
+        fs::create_directories(output_dir_);
+        evidence_path_ = output_dir_ / "fillability_ws.jsonl";
+        status_path_ = output_dir_ / "fillability_ws_status.json";
         output_.open(evidence_path_, std::ios::app);
         if (!output_) throw std::runtime_error("cannot open exact-WS fillability evidence file");
     }
@@ -427,7 +432,7 @@ private:
 
     std::vector<SelectedToken> tokens_;
     std::string ws_url_;
-    fs::path run_root_;
+    fs::path output_dir_;
     std::string model_sha_;
     std::vector<std::string> ids_;
     std::vector<const SelectedToken*> by_handle_;
@@ -463,20 +468,29 @@ int main(int argc, char** argv) {
         std::signal(SIGTERM, signal_handler);
         const Options options = parse_options(argc, argv);
         const pm::Config config = pm::load_config(options.config);
-        auto tokens = build_tokens(options, config);
-        ExactWsObserver observer(std::move(tokens), options.ws_url, options.run_root, options.model_sha);
-        observer.start();
-        std::int64_t last_status_ms = 0;
         while (!g_stop.load(std::memory_order_relaxed)) {
-            observer.drain();
-            const auto now = wall_ms();
-            if (now - last_status_ms >= 1000) {
-                observer.write_status();
-                last_status_ms = now;
+            auto tokens = build_tokens(options, config);
+            std::error_code stamp_error;
+            const auto selection_stamp = fs::last_write_time(options.selection, stamp_error);
+            ExactWsObserver observer(
+                std::move(tokens), options.ws_url, options.output_dir, options.model_sha);
+            observer.start();
+            std::int64_t last_status_ms = 0;
+            bool reload = false;
+            while (!g_stop.load(std::memory_order_relaxed) && !reload) {
+                observer.drain();
+                const auto now = wall_ms();
+                if (now - last_status_ms >= 1000) {
+                    observer.write_status();
+                    last_status_ms = now;
+                    std::error_code current_error;
+                    const auto current_stamp = fs::last_write_time(options.selection, current_error);
+                    reload = !stamp_error && !current_error && current_stamp != selection_stamp;
+                }
+                std::this_thread::sleep_for(std::chrono::milliseconds(10));
             }
-            std::this_thread::sleep_for(std::chrono::milliseconds(10));
+            observer.stop();
         }
-        observer.stop();
         return 0;
     } catch (const std::exception& error) {
         std::cerr << "polymarket_v7_maker_fillability_observer: " << error.what() << '\n';

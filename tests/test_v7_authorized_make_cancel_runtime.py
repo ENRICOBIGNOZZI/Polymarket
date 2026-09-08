@@ -18,7 +18,7 @@ import v7_maker_opportunity_bridge as maker_bridge  # noqa: E402
 import test_v7_maker_opportunity_bridge as fixture  # noqa: E402
 
 SHA = "a" * 40
-RULE_SHA = "b" * 64
+RULE_SHA = cancel_bridge.FROZEN_RULE_SHA
 
 
 def write(path: Path, value: dict) -> None:
@@ -42,6 +42,18 @@ def wait_for(root: Path, predicate, *, attempts: int = 150) -> dict:
             return status
         time.sleep(0.02)
     raise AssertionError(f"executor status condition not reached: {read_status(root)}")
+
+
+def spool_rows(root: Path) -> list[dict]:
+    rows = []
+    for path in sorted((root / "ledger/spool").glob("*.json")):
+        try:
+            value = json.loads(path.read_text())
+        except (OSError, json.JSONDecodeError):
+            continue
+        if isinstance(value, dict):
+            rows.append(value)
+    return rows
 
 
 def run(executor: Path) -> None:
@@ -90,7 +102,14 @@ def run(executor: Path) -> None:
             stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
         )
         try:
-            wait_for(root, lambda row: int(row.get("submitted_orders") or 0) == 1)
+            submitted = wait_for(
+                root,
+                lambda row: int(row.get("submitted_orders") or 0) == 1
+                and len(row.get("active_order_details") or []) == 1,
+            )
+            active_before_cancel = submitted["active_order_details"][0]
+            assert active_before_cancel["order_id"]
+            assert active_before_cancel["replay_key"] == maker_rows[0]["deterministic_replay_key"]
             trigger_ns = time.time_ns()
             write(root / "control/external_cancel_activation.json", {
                 "schema": cancel_bridge.ACTIVATION_SCHEMA,
@@ -101,7 +120,13 @@ def run(executor: Path) -> None:
                 "paper_execution_alpha_overlay_eligible": True,
                 "manual_exact_sha_promotion_required": True,
                 "frozen_rule_retuning_allowed": False, "failed_checks": [],
-                "evidence": {"rule_sha256": RULE_SHA},
+                "evidence": {
+                    "rule_sha256": RULE_SHA,
+                    "official_v3_provenance_verified": True,
+                    "official_v3_promotion_boundary_ms": cancel_bridge.OFFICIAL_V3_PROMOTION_BOUNDARY_MS,
+                    "official_v3_protocol_reference_sha256": cancel_bridge.OFFICIAL_V3_PROTOCOL_SHA,
+                    "activation_report_sha256": "f" * 64,
+                },
             })
             write(root / "external_fair/external_cancel_signal.json", {
                 "schema": cancel_bridge.SIGNAL_SCHEMA,
@@ -132,19 +157,71 @@ def run(executor: Path) -> None:
                 new_risk_authorized=False, paper_exploration_authorized=True,
             )
             assert cancel_decision["action"] == "CANCEL"
+            target = cancel_rows[0]["execution_plan"]
+            assert target["atomic_unit_id"] == active_before_cancel["replay_key"]
+            assert target["legs"][0]["leg_id"] == active_before_cancel["order_id"]
             coordinator._publish_cancel_authorization(
                 root, cancel_decision, cancel_rows,
             )
-            final = wait_for(
+            requested = wait_for(
                 root,
                 lambda row: int(row.get("coordinator_cancel_requests") or 0) == 1
+                and len(row.get("active_order_details") or []) == 1
+                and row["active_order_details"][0].get("cancel_requested") is True,
+            )
+            active = requested["active_order_details"][0]
+            cancel_ns = int(active["cancel_requested_monotonic_ns"])
+            arrival_exchange_ns = int(active["arrival_exchange_event_ns"])
+            # The canonical PaperMakerMarketEngine has 100 ms cancel latency.
+            # One 8-share SELL print consumes the 7.5-share pessimistic queue
+            # ahead and fills only 0.5 share before cancellation becomes
+            # effective. A much larger print after +150 ms must not fill the
+            # remaining 4.5 shares.
+            trade_rows = [
+                {
+                    "schema": "polymarket_v7_maker_fillability_ws_trade_v1",
+                    "model_sha": SHA, "paper_only": True,
+                    "authenticated_execution": False, "real_order_submission": False,
+                    "observer_sequence": 101, "market_id": "market-1",
+                    "event_id": "event-1", "token_id": "yes-token",
+                    "instrument_handle": 1, "state_version": 101, "connection_epoch": 1,
+                    "exchange_event_ns": arrival_exchange_ns + 10_000_000,
+                    "receive_wall_ms": time.time_ns() // 1_000_000,
+                    "receive_monotonic_ns": cancel_ns + 50_000_000,
+                    "aggressor_side": "SELL", "price": 0.50, "size": 8.0,
+                    "lineage_continuous": True,
+                },
+                {
+                    "schema": "polymarket_v7_maker_fillability_ws_trade_v1",
+                    "model_sha": SHA, "paper_only": True,
+                    "authenticated_execution": False, "real_order_submission": False,
+                    "observer_sequence": 102, "market_id": "market-1",
+                    "event_id": "event-1", "token_id": "yes-token",
+                    "instrument_handle": 1, "state_version": 102, "connection_epoch": 1,
+                    "exchange_event_ns": arrival_exchange_ns + 20_000_000,
+                    "receive_wall_ms": time.time_ns() // 1_000_000,
+                    "receive_monotonic_ns": cancel_ns + 150_000_000,
+                    "aggressor_side": "SELL", "price": 0.50, "size": 100.0,
+                    "lineage_continuous": True,
+                },
+            ]
+            with (root / "micro_maker/fillability_ws.jsonl").open("a", encoding="utf-8") as handle:
+                for trade in trade_rows:
+                    handle.write(json.dumps(trade) + "\n")
+                handle.flush()
+            final = wait_for(
+                root,
+                lambda row: int(row.get("trade_rows_consumed") or 0) >= 2
                 and int(row.get("terminal_orders") or 0) == 1,
             )
             assert final["active_orders"] == 0
             assert final["last_terminal_reason"] == "CANCELLED"
             assert final["rejected_authorizations"] == 0
             assert final["rejected_cancel_authorizations"] == 0
-            assert final["fills"] == 0
+            assert final["fills"] >= 1
+            fills = [row for row in spool_rows(root) if row.get("event_type") == "FILL"]
+            assert len(fills) == 1
+            assert abs(float(fills[0]["filled_size"]) - 0.5) < 1e-12
         finally:
             process.terminate()
             try:

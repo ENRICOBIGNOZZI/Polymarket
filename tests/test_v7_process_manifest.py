@@ -24,6 +24,26 @@ def test_manifest_matches_all_23_launcher_children_and_two_runtime_owners() -> N
     assert report["feed_zero_authority"] is True
 
 
+def test_external_cancel_forward_runtime_consumes_hash_pinned_durable_baseline() -> None:
+    value = manifest()
+    row = next(item for item in value["processes"] if item["id"] == "external_cancel_forward_runtime")
+    expected = {
+        "${DURABLE_ROOT}/research/btc_m5_external_cancel_forward_report_v3.json",
+        "${DURABLE_ROOT}/research/btc_m5_external_cancel_evidence_manifest_v1.json",
+        "${DURABLE_ROOT}/research/btc_m5_external_cancel_episode_protocol_v3.json",
+        "config/v7_crypto_execution_alpha.json",
+    }
+    assert expected <= set(row["inputs"])
+    args = row["arguments"]
+    assert args[args.index("--baseline-report") + 1] in expected
+    assert args[args.index("--baseline-manifest") + 1] in expected
+    assert args[args.index("--baseline-protocol") + 1] in expected
+    launcher = (ROOT / "scripts/paper_v7_execution_loop.sh").read_text(encoding="utf-8")
+    assert '--baseline-report "$EXTERNAL_CANCEL_BASELINE_REPORT"' in launcher
+    assert '--baseline-manifest "$EXTERNAL_CANCEL_BASELINE_MANIFEST"' in launcher
+    assert '--baseline-protocol "$EXTERNAL_CANCEL_BASELINE_PROTOCOL"' in launcher
+
+
 def test_feed_process_cannot_gain_authority() -> None:
     value = manifest()
     value["profiles"]["feed"]["authority_flags"]["ledger"] = True
@@ -50,5 +70,6 @@ def test_launcher_child_cannot_escape_manifest_inventory() -> None:
 
 if __name__ == "__main__":
     test_manifest_matches_all_23_launcher_children_and_two_runtime_owners()
+    test_external_cancel_forward_runtime_consumes_hash_pinned_durable_baseline()
     test_feed_process_cannot_gain_authority()
     test_launcher_child_cannot_escape_manifest_inventory()

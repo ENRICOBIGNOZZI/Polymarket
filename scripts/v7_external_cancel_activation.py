@@ -19,6 +19,11 @@ from typing import Any
 REPORT_SCHEMA = "polymarket_v7_btc_m5_external_cancel_forward_report_v3"
 OUTPUT_SCHEMA = "polymarket_v7_external_cancel_activation_v1"
 EXPERIMENT_ID = "btc-m5-external-cancel-overlay-forward-v1"
+FROZEN_RULE_SHA = "9e8c7e6a1d7e4a87cd9977396bcbbb228f96b4e35e4a34e84e1514e9e9630254"
+FREEZE_MERGE_SHA = "612038cc601c7c6a7da942ed49a1e7bb6a23b291"
+MINIMUM_MARKETS = 30
+MINIMUM_AVOIDABLE_FILLS = 50
+MINIMUM_POSITIVE_MARKET_FRACTION = 0.70
 
 
 class ActivationError(ValueError):
@@ -68,10 +73,26 @@ def evaluate_activation(report: dict[str, Any]) -> dict[str, Any]:
     minimum_avoidable = _integer(
         report.get("minimum_avoidable_fill_events"), "minimum_avoidable_fill_events"
     )
+    if (
+        report.get("rule_sha256") != FROZEN_RULE_SHA
+        or report.get("freeze_merge_sha") != FREEZE_MERGE_SHA
+        or minimum_markets != MINIMUM_MARKETS
+        or minimum_avoidable != MINIMUM_AVOIDABLE_FILLS
+    ):
+        raise ActivationError("frozen_forward_identity_or_thresholds")
     primary = report.get("equal_weight_500ms_improvement_per_share")
     leave_best = report.get("leave_best_market_out_500ms_improvement_per_share")
     positive_fraction = report.get("positive_market_fraction")
     stress = report.get("stress_3x_queue_200ms_cancel_improvement_per_share")
+    bootstrap = report.get("bootstrap95_market_cluster_500ms_improvement")
+    bootstrap_lower = None
+    bootstrap_upper = None
+    if isinstance(bootstrap, list) and len(bootstrap) == 2:
+        try:
+            bootstrap_lower = _finite(bootstrap[0], "bootstrap_lower")
+            bootstrap_upper = _finite(bootstrap[1], "bootstrap_upper")
+        except ActivationError:
+            bootstrap_lower = bootstrap_upper = None
 
     checks: dict[str, bool] = {
         "state_pass": state == "PASS",
@@ -83,8 +104,9 @@ def evaluate_activation(report: dict[str, Any]) -> dict[str, Any]:
         checks.update({
             "primary_500ms_positive": _finite(primary, "primary_500ms") > 0.0,
             "leave_best_market_out_positive": _finite(leave_best, "leave_best_market_out") > 0.0,
-            "positive_market_fraction_ge_70pct": _finite(positive_fraction, "positive_market_fraction") >= 0.70,
+            "positive_market_fraction_ge_70pct": _finite(positive_fraction, "positive_market_fraction") >= MINIMUM_POSITIVE_MARKET_FRACTION,
             "queue_3x_cancel_200ms_positive": _finite(stress, "stress_3x_queue_200ms") > 0.0,
+            "market_cluster_bootstrap_lower_positive": bootstrap_lower is not None and bootstrap_lower > 0.0,
         })
     else:
         checks.update({
@@ -92,6 +114,7 @@ def evaluate_activation(report: dict[str, Any]) -> dict[str, Any]:
             "leave_best_market_out_positive": False,
             "positive_market_fraction_ge_70pct": False,
             "queue_3x_cancel_200ms_positive": False,
+            "market_cluster_bootstrap_lower_positive": False,
         })
 
     eligible = all(checks.values())
@@ -120,6 +143,7 @@ def evaluate_activation(report: dict[str, Any]) -> dict[str, Any]:
             "leave_best_market_out_500ms_improvement_per_share": leave_best,
             "positive_market_fraction": positive_fraction,
             "stress_3x_queue_200ms_cancel_improvement_per_share": stress,
+            "bootstrap95_market_cluster_500ms_improvement": bootstrap,
             "freeze_merge_sha": report.get("freeze_merge_sha"),
             "rule_sha256": report.get("rule_sha256"),
         },

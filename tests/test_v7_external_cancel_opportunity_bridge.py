@@ -12,7 +12,7 @@ import v7_external_cancel_opportunity_bridge as bridge  # noqa: E402
 from v7_opportunity import OpportunityEnvelope  # noqa: E402
 
 SHA = "a" * 40
-RULE = "b" * 64
+RULE = bridge.FROZEN_RULE_SHA
 SEMANTIC = "c" * 64
 NOW = 10_000_000_000
 
@@ -41,7 +41,13 @@ def activation(active: bool = True) -> dict:
         "manual_exact_sha_promotion_required": True,
         "frozen_rule_retuning_allowed": False,
         "failed_checks": [] if active else ["state_pass"],
-        "evidence": {"rule_sha256": RULE},
+        "evidence": {
+            "rule_sha256": bridge.FROZEN_RULE_SHA,
+            "official_v3_provenance_verified": True,
+            "official_v3_promotion_boundary_ms": bridge.OFFICIAL_V3_PROMOTION_BOUNDARY_MS,
+            "official_v3_protocol_reference_sha256": bridge.OFFICIAL_V3_PROTOCOL_SHA,
+            "activation_report_sha256": "f" * 64,
+        },
     }
 
 
@@ -115,6 +121,19 @@ def setup(root: Path, *, outcome: str = "YES", gate: bool = True, live_signal: d
         "decision": {"action": "MAKE", "engine_id": "CRYPTO_SETTLEMENT_ENGINE"},
         "opportunity_envelope": envelope,
     })
+    write(root / "micro_maker/authorized_make_executor_status.json", {
+        "schema": bridge.EXECUTOR_STATUS_SCHEMA, "timestamp_ms": NOW // 1_000_000,
+        "model_sha": SHA, "paper_only": True, "authenticated_execution": False,
+        "real_order_submission": False, "real_capital_at_risk": False,
+        "execution_authority": "SIMULATED_PAPER_ONLY",
+        "active_order_details": [{
+            "order_id": "17", "replay_key": envelope["deterministic_replay_key"],
+            "market_id": envelope["market_id"], "event_id": envelope["event_id"],
+            "token_id": envelope["execution_plan"]["legs"][0]["token_id"],
+            "outcome": outcome, "side": "BUY", "limit_price": 0.50,
+            "remaining_shares": 3.5, "cancel_requested": False,
+        }],
+    })
 
 
 def test_active_frozen_signal_builds_typed_cancel() -> None:
@@ -125,8 +144,12 @@ def test_active_frozen_signal_builds_typed_cancel() -> None:
         row = OpportunityEnvelope.parse(rows[0]).raw
         assert row["action"] == "CANCEL" and row["side"] == "NONE"
         assert row["execution_plan"]["legs"][0]["side"] == "BUY"
+        assert row["execution_plan"]["legs"][0]["leg_id"] == "17"
+        assert row["execution_plan"]["legs"][0]["target_quantity"] == 3.5
+        assert row["execution_plan"]["atomic_unit_id"] == "maker-yes"
         assert row["execution_plan"]["unwind_plan"] == "CANCEL_ONLY"
         assert row["source_event_timestamps_ns"] == [NOW - 10_000_000]
+        assert status["exact_order_targeting"] is True
 
 
 def test_inactive_forward_gate_fails_closed() -> None:
@@ -141,6 +164,28 @@ def test_signal_only_targets_stale_buy_outcome() -> None:
         root = Path(directory); setup(root, outcome="YES", live_signal=signal(stale="NO"))
         rows, status = bridge.build_external_cancel_opportunities(root, now_ns=NOW)
         assert rows == [] and status["state"] == "NO_MATCHING_ACTIVE_BUY_QUOTES"
+
+
+def test_same_token_replacement_order_does_not_match_stale_authorization() -> None:
+    with tempfile.TemporaryDirectory() as directory:
+        root = Path(directory); setup(root)
+        status_path = root / "micro_maker/authorized_make_executor_status.json"
+        status = json.loads(status_path.read_text())
+        status["active_order_details"][0]["replay_key"] = "replacement-make"
+        status["active_order_details"][0]["order_id"] = "999"
+        write(status_path, status)
+        rows, diagnostics = bridge.build_external_cancel_opportunities(root, now_ns=NOW)
+        assert rows == []
+        assert diagnostics["state"] == "NO_MATCHING_ACTIVE_BUY_QUOTES"
+
+
+def test_missing_executor_order_state_fails_closed() -> None:
+    with tempfile.TemporaryDirectory() as directory:
+        root = Path(directory); setup(root)
+        (root / "micro_maker/authorized_make_executor_status.json").unlink()
+        rows, diagnostics = bridge.build_external_cancel_opportunities(root, now_ns=NOW)
+        assert rows == []
+        assert "MAKER_EXECUTOR_ACTIVE_ORDER_STATE_NOT_READY" in diagnostics["reasons"]
 
 
 def test_expired_signal_fails_closed() -> None:

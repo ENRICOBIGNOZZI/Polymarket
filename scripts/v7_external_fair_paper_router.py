@@ -2718,6 +2718,27 @@ class PaperRouter:
             * float(self.probe_policy["max_capital_fraction"]),
         ) if is_probe and self.probe_policy is not None else 0.0
         maximum_probe_loss = size * (book.asks[0][0] + float(row["fee_per_share"]) + float(row["execution_risk"])) if is_probe else 0.0
+        market_mid_outcome = (
+            float(row["market_yes"]) if row["outcome"] == "YES"
+            else 1.0 - float(row["market_yes"])
+        )
+        robust_probability = float(row["robust_probability"])
+        point_probability = float(row.get("point_probability", robust_probability))
+        ask = float(book.asks[0][0])
+        fee_cost = float(row["fee_per_share"])
+        latency_cost = float(row["execution_risk"])
+        def attribution(probability: float) -> dict[str, float | bool]:
+            components = {
+                "settlement_alpha": size * (probability - market_mid_outcome),
+                "crossing_and_spread": size * (market_mid_outcome - ask),
+                "fees": -size * fee_cost,
+                "execution_latency_risk": -size * latency_cost,
+            }
+            components["total_expected_wealth_change"] = sum(components.values())
+            components["identity_verified"] = True
+            return components
+        expected_pnl_attribution = attribution(robust_probability)
+        point_pnl_attribution = attribution(point_probability)
         return dict(
             strategy=STRATEGY, model_sha=self.sha, model_version=MODEL_VERSION,
             candidate_id=order_id, order_id=order_id, position_id=position_id,
@@ -2747,7 +2768,10 @@ class PaperRouter:
                 ),
                 "contract_rules_hash": contract.get("rules_hash"),
                 "reference_version": reference.get("version"), "expected_fee_per_share": row["fee_per_share"],
-                "expected_execution_risk": row["execution_risk"], "economic_maturity": "MORE_EVIDENCE_REQUIRED",
+                "expected_execution_risk": row["execution_risk"],
+                "expected_pnl_attribution": expected_pnl_attribution,
+                "point_pnl_attribution": point_pnl_attribution,
+                "economic_maturity": "MORE_EVIDENCE_REQUIRED",
                 "tte_seconds": row["tte_seconds"], "robust_probability": row["robust_probability"],
                 "robust_ev_per_share": robust_ev,
                 "point_probability": row.get("point_probability", row.get("robust_probability")),
@@ -3307,15 +3331,33 @@ class PaperRouter:
             market = status.get("market") if isinstance(status.get("market"), dict) else {}
             market_yes = live_market_yes(books, market)
             book_values = list(books.values())
+            execution_alpha_books = {}
+            for outcome, token_id in (
+                ("YES", str(market.get("yes_token") or "")),
+                ("NO", str(market.get("no_token") or "")),
+            ):
+                book = books.get(token_id)
+                if book is None or not book.bids or not book.asks:
+                    continue
+                execution_alpha_books[outcome] = {
+                    "token_id": token_id,
+                    "best_bid": book.bids[0][0], "best_ask": book.asks[0][0],
+                    "best_bid_size": book.bids[0][1], "best_ask_size": book.asks[0][1],
+                    "tick_size": book.tick_size, "min_order_size": book.min_order_size,
+                    "exchange_ts_ms": book.exchange_ts_ms,
+                    "receive_ts_ms": book.receive_ts_ms,
+                    "snapshot_id": book.snapshot_id,
+                }
             self.last_live_market = {
                 "market_id": str(market.get("market_id") or ""),
                 "yes": market_yes,
-                "valid": market_yes is not None,
+                "valid": market_yes is not None and len(execution_alpha_books) == 2,
                 "source": "LIVE_COMPLEMENT_CONSISTENT_CLOB_BATCH",
                 "receive_ts_ms": max((book.receive_ts_ms for book in book_values), default=0),
                 "exchange_ts_ms": max((book.exchange_ts_ms for book in book_values), default=0),
                 "snapshot_id": stable_id(*(book.snapshot_id for book in book_values)),
-                "reason": "" if market_yes is not None else "CLOB_COMPLEMENT_INCOHERENT",
+                "execution_alpha_books": execution_alpha_books,
+                "reason": "" if market_yes is not None and len(execution_alpha_books) == 2 else "CLOB_COMPLEMENT_INCOHERENT",
             }
             self.record_forecast(status, books)
             self.record_opportunity_set(status, books)

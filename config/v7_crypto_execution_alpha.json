@@ -56,6 +56,18 @@
         "protocol_origin_commit": "fcc9a81becb32263606b28904c083c96f6de5750",
         "receive_time_global_merge_required": true,
         "same_timestamp_atomic_group_required": true
+      },
+      "official_v3_evidence": {
+        "promotion_boundary_ms": 1788781327887,
+        "protocol_sha256": "85e54afef180426dab0519c701f764ea5863076ac88566648122553576bd8a04",
+        "baseline_report_sha256": "c2cb36b2df6de713d8d9c630eac6685fb5f935fa3bdffffa0b8ec321cbe56d96",
+        "baseline_manifest_sha256": "2619efb8d80daaf583ad24df6c9bcf2bc05dc868dfa3db7139fcd806a28a3f4a",
+        "rule_sha256": "9e8c7e6a1d7e4a87cd9977396bcbbb228f96b4e35e4a34e84e1514e9e9630254",
+        "freeze_merge_sha": "612038cc601c7c6a7da942ed49a1e7bb6a23b291",
+        "minimum_independent_markets": 30,
+        "minimum_avoidable_fill_events": 50,
+        "minimum_positive_market_fraction": 0.7,
+        "require_positive_market_cluster_bootstrap_lower": true
       }
     },
     "nothing_ev_usd": 0.0

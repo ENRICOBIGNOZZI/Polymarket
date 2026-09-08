@@ -128,6 +128,20 @@ def validate_config(value: dict[str, Any]) -> None:
         or live_trigger.get("same_timestamp_atomic_group_required") is not True
     ):
         raise ExecutionAlphaError("config_external_cancel_live_trigger")
+    official = cancel.get("official_v3_evidence") if isinstance(cancel.get("official_v3_evidence"), dict) else {}
+    if (
+        official.get("promotion_boundary_ms") != 1788781327887
+        or official.get("protocol_sha256") != "85e54afef180426dab0519c701f764ea5863076ac88566648122553576bd8a04"
+        or official.get("baseline_report_sha256") != "c2cb36b2df6de713d8d9c630eac6685fb5f935fa3bdffffa0b8ec321cbe56d96"
+        or official.get("baseline_manifest_sha256") != "2619efb8d80daaf583ad24df6c9bcf2bc05dc868dfa3db7139fcd806a28a3f4a"
+        or official.get("rule_sha256") != "9e8c7e6a1d7e4a87cd9977396bcbbb228f96b4e35e4a34e84e1514e9e9630254"
+        or official.get("freeze_merge_sha") != "612038cc601c7c6a7da942ed49a1e7bb6a23b291"
+        or official.get("minimum_independent_markets") != 30
+        or official.get("minimum_avoidable_fill_events") != 50
+        or official.get("minimum_positive_market_fraction") != 0.70
+        or official.get("require_positive_market_cluster_bootstrap_lower") is not True
+    ):
+        raise ExecutionAlphaError("config_external_cancel_official_v3_evidence")
     selection = value.get("market_selection")
     if not isinstance(selection, dict) or selection.get("enabled") is not True:
         raise ExecutionAlphaError("config_market_selection")

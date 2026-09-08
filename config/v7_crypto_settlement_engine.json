@@ -111,5 +111,37 @@
       "taker": {"enabled": true, "minimum_tte_seconds": 5, "maximum_tte_seconds": 120},
       "under_five_seconds": "NO_NEW_RISK"
     }
-  ]
+  ],
+  "execution_alpha": {
+    "schema": "polymarket_v7_crypto_execution_alpha_policy_v1",
+    "paper_only": true,
+    "authenticated_execution": false,
+    "real_order_submission": false,
+    "automatic_promotion": false,
+    "comparison_size_shares": 5.0,
+    "selection_objective": "MAX_CONSERVATIVE_EXPECTED_CHANGE_IN_ACCOUNT_WEALTH",
+    "take_proposal_owner": "EXISTING_ARRIVAL_REVALIDATED_EXTERNAL_FAIR_ROUTER",
+    "make_proposal_owner": "V7_CRYPTO_EXECUTION_ALPHA",
+    "cancel_activation": "FROZEN_FORWARD_PASS_PLUS_CANONICAL_LIVE_SIGNAL",
+    "maker_immature_fill_lower": "ZERO",
+    "retroactive_attribution_imputation": false,
+    "market_selection": {
+      "top_fraction": 0.2,
+      "minimum_expected_wealth_change": 0.0,
+      "paper_shadow_only": true
+    },
+    "attribution_fields": [
+      "settlement_alpha",
+      "spread_capture",
+      "rebate",
+      "fees",
+      "slippage",
+      "adverse_selection",
+      "latency",
+      "inventory",
+      "unwind",
+      "cancel",
+      "capital"
+    ]
+  }
 }

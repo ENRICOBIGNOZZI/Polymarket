@@ -415,9 +415,14 @@ struct CancelAuthorization {
     json::object receipt;
     json::object envelope;
     std::string replay_key;
+    std::string target_replay_key;
+    std::string target_order_id;
     std::string market_id;
     std::string event_id;
     std::string token_id;
+    std::string side;
+    double target_quantity_shares = 0.0;
+    double target_price = 0.0;
     std::int64_t expires_at_ns = 0;
 };
 
@@ -482,11 +487,19 @@ struct CancelAuthorization {
     out.receipt = *decision;
     out.envelope = *envelope;
     out.replay_key = replay_key;
+    out.target_replay_key = text(find_value(*plan, "atomic_unit_id"));
+    out.target_order_id = text(find_value(leg, "leg_id"));
     out.market_id = text(find_value(*envelope, "market_id"));
     out.event_id = text(find_value(*envelope, "event_id"));
     out.token_id = text(find_value(leg, "token_id"));
+    out.side = text(find_value(leg, "side"));
+    out.target_quantity_shares = number(find_value(leg, "target_quantity"));
+    out.target_price = number(find_value(leg, "limit_price"));
     out.expires_at_ns = integer(find_value(*envelope, "expires_at_ns"));
-    if (out.market_id.empty() || out.event_id.empty() || out.token_id.empty()
+    if (out.target_replay_key.empty() || out.target_order_id.empty()
+        || out.market_id.empty() || out.event_id.empty() || out.token_id.empty()
+        || out.side != "BUY" || !(out.target_quantity_shares > 0.0)
+        || !(out.target_price > 0.0 && out.target_price < 1.0)
         || out.expires_at_ns <= wall_ns()) {
         throw std::runtime_error("cancel authorization target/ttl invalid");
     }
@@ -500,6 +513,11 @@ struct OrderContext {
     std::uint64_t order_id = 0;
     std::uint64_t instrument_handle = 0;
     std::int32_t tick_size_e4 = 0;
+    double remaining_shares = 0.0;
+    std::int64_t arrival_receive_monotonic_ns = 0;
+    std::int64_t arrival_exchange_event_ns = 0;
+    std::int64_t cancel_requested_monotonic_ns = 0;
+    bool cancel_requested = false;
     fs::path live_authorization_path;
     bool terminal = false;
 };
@@ -638,10 +656,20 @@ private:
             return;
         }
         OrderContext& context = order_it->second;
-        if (context.authorization.market_id != cancellation.market_id
+        if (std::to_string(context.order_id) != cancellation.target_order_id
+            || context.authorization.replay_key != cancellation.target_replay_key
+            || context.authorization.market_id != cancellation.market_id
             || context.authorization.event_id != cancellation.event_id
-            || context.authorization.token_id != cancellation.token_id) {
-            throw std::runtime_error("cancel target does not match active PAPER order");
+            || context.authorization.token_id != cancellation.token_id
+            || context.authorization.order_side != Side::Buy
+            || std::abs(context.authorization.limit_price - cancellation.target_price) > 1e-12
+            || cancellation.target_quantity_shares + 1e-9 < context.remaining_shares) {
+            throw std::runtime_error("cancel target does not match exact active PAPER order");
+        }
+        if (context.cancel_requested) {
+            ++cancel_noop_terminal_;
+            move_file(path, cancel_archive_dir_);
+            return;
         }
         auto market_it = markets_.find(cancellation.market_id);
         if (market_it == markets_.end()) {
@@ -654,7 +682,7 @@ private:
         intent.event_handle = fnv1a(cancellation.event_id);
         intent.instrument_handle = context.instrument_handle;
         intent.decision_monotonic_ns = now;
-        intent.exchange_event_ns = now; // CancelQuote only requires a positive causal control timestamp.
+        intent.exchange_event_ns = std::max<std::int64_t>(1, context.arrival_exchange_event_ns);
         intent.strategy_id = StrategyId::ProfessionalMaker;
         intent.type = IntentType::CancelQuote;
         intent.side = Side::Buy;
@@ -747,6 +775,9 @@ private:
         context.order_id = live->order_id;
         context.instrument_handle = instrument;
         context.tick_size_e4 = selection.tick_size_e4;
+        context.remaining_shares = context.authorization.quantity_shares;
+        context.arrival_receive_monotonic_ns = live->timestamp_ns;
+        context.arrival_exchange_event_ns = intent.exchange_event_ns;
         context.live_authorization_path = live_path;
         const std::uint64_t order_id = context.order_id;
         token_to_order_[context.authorization.token_id] = order_id;
@@ -842,9 +873,16 @@ private:
             auto it = orders_.find(event.order_id);
             if (it == orders_.end()) continue;
             if (event.kind == PaperMakerEventKind::Fill) {
+                if (event.operational_fill_microunits > 0) {
+                    it->second.remaining_shares = std::max(
+                        0.0, it->second.remaining_shares
+                            - micro_to_shares(event.operational_fill_microunits));
+                }
                 emit_fill(event, it->second, trade_row);
                 ++fills_;
             } else if (event.kind == PaperMakerEventKind::CancelRequested) {
+                it->second.cancel_requested = true;
+                it->second.cancel_requested_monotonic_ns = event.timestamp_ns;
                 emit_order_state(event, it->second, "CANCEL_REQUESTED");
             } else if (event.kind == PaperMakerEventKind::Cancelled) {
                 emit_order_state(event, it->second, "CANCELLED");
@@ -1039,6 +1077,26 @@ private:
         status["execution_authority"] = "SIMULATED_PAPER_ONLY";
         status["model_sha"] = options_.model_sha;
         status["active_orders"] = static_cast<std::uint64_t>(orders_.size());
+        json::array active_order_details;
+        for (const auto& [order_id, context] : orders_) {
+            if (context.terminal) continue;
+            active_order_details.emplace_back(json::object{
+                {"order_id", std::to_string(order_id)},
+                {"replay_key", context.authorization.replay_key},
+                {"market_id", context.authorization.market_id},
+                {"event_id", context.authorization.event_id},
+                {"token_id", context.authorization.token_id},
+                {"outcome", context.authorization.outcome},
+                {"side", "BUY"},
+                {"limit_price", context.authorization.limit_price},
+                {"remaining_shares", context.remaining_shares},
+                {"cancel_requested", context.cancel_requested},
+                {"cancel_requested_monotonic_ns", context.cancel_requested_monotonic_ns},
+                {"arrival_receive_monotonic_ns", context.arrival_receive_monotonic_ns},
+                {"arrival_exchange_event_ns", context.arrival_exchange_event_ns},
+            });
+        }
+        status["active_order_details"] = std::move(active_order_details);
         status["submitted_orders"] = submitted_orders_;
         status["terminal_orders"] = terminal_orders_;
         status["fills"] = fills_;

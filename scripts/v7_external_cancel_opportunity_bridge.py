@@ -21,6 +21,9 @@ BRIDGE_SCHEMA = "polymarket_v7_external_cancel_opportunity_bridge_v1"
 ACTIVATION_SCHEMA = "polymarket_v7_external_cancel_activation_v1"
 SIGNAL_SCHEMA = "polymarket_v7_btc_m5_external_cancel_live_signal_v1"
 EXPERIMENT_ID = "btc-m5-external-cancel-overlay-forward-v1"
+FROZEN_RULE_SHA = "9e8c7e6a1d7e4a87cd9977396bcbbb228f96b4e35e4a34e84e1514e9e9630254"
+OFFICIAL_V3_PROMOTION_BOUNDARY_MS = 1788781327887
+OFFICIAL_V3_PROTOCOL_SHA = "85e54afef180426dab0519c701f764ea5863076ac88566648122553576bd8a04"
 
 
 def _load(path: Path) -> dict[str, Any]:
@@ -50,8 +53,14 @@ def _activation_ready(value: dict[str, Any]) -> tuple[bool, str]:
         and value.get("manual_exact_sha_promotion_required") is True
         and value.get("frozen_rule_retuning_allowed") is False
         and value.get("failed_checks") == []
-        and len(rule_sha) == 64
-        and all(ch in "0123456789abcdef" for ch in rule_sha)
+        and rule_sha == FROZEN_RULE_SHA
+        and evidence.get("official_v3_provenance_verified") is True
+        and int(evidence.get("official_v3_promotion_boundary_ms") or 0)
+            == OFFICIAL_V3_PROMOTION_BOUNDARY_MS
+        and evidence.get("official_v3_protocol_reference_sha256")
+            == OFFICIAL_V3_PROTOCOL_SHA
+        and isinstance(evidence.get("activation_report_sha256"), str)
+        and len(evidence.get("activation_report_sha256")) == 64
     )
     return ready, rule_sha
 
@@ -90,6 +99,61 @@ def _signal_ready(
         and 0 < trigger_wall <= publish_wall <= now_ns < valid_until_wall
     )
     return ready, str(value.get("stale_buy_outcome") or "")
+
+
+EXECUTOR_STATUS_SCHEMA = "polymarket_v7_authorized_maker_paper_executor_status_v1"
+EXECUTOR_STATUS_MAX_AGE_MS = 5_000
+
+
+def _active_executor_orders(
+    path: Path, *, model_sha: str, now_ns: int,
+) -> tuple[dict[tuple[str, str, str], dict[str, Any]], bool]:
+    value = _load(path)
+    now_ms = int(now_ns) // 1_000_000
+    timestamp_ms = int(value.get("timestamp_ms") or 0)
+    ready = (
+        value.get("schema") == EXECUTOR_STATUS_SCHEMA
+        and value.get("model_sha") == model_sha
+        and value.get("paper_only") is True
+        and value.get("authenticated_execution") is False
+        and value.get("real_order_submission") is False
+        and value.get("real_capital_at_risk") is False
+        and value.get("execution_authority") == "SIMULATED_PAPER_ONLY"
+        and 0 < timestamp_ms <= now_ms
+        and now_ms - timestamp_ms <= EXECUTOR_STATUS_MAX_AGE_MS
+    )
+    rows = value.get("active_order_details") if isinstance(value.get("active_order_details"), list) else []
+    output: dict[tuple[str, str, str], dict[str, Any]] = {}
+    if not ready:
+        return output, False
+    for raw in rows:
+        if not isinstance(raw, dict):
+            continue
+        replay = str(raw.get("replay_key") or "")
+        market = str(raw.get("market_id") or "")
+        token = str(raw.get("token_id") or "")
+        order_id = str(raw.get("order_id") or "")
+        outcome = str(raw.get("outcome") or "")
+        side = str(raw.get("side") or "")
+        try:
+            remaining = float(raw.get("remaining_shares") or 0.0)
+            price = float(raw.get("limit_price") or 0.0)
+        except (TypeError, ValueError, OverflowError):
+            continue
+        if (
+            not replay or not market or not token or not order_id
+            or outcome not in {"YES", "NO"} or side != "BUY"
+            or not remaining > 0.0 or not 0.0 < price < 1.0
+            or raw.get("cancel_requested") is True
+        ):
+            continue
+        output[(replay, market, token)] = {
+            "order_id": order_id, "replay_key": replay, "market_id": market,
+            "event_id": str(raw.get("event_id") or ""), "token_id": token,
+            "outcome": outcome, "side": side, "remaining_shares": remaining,
+            "limit_price": price,
+        }
+    return output, True
 
 
 def _active_make(path: Path, *, model_sha: str) -> dict[str, Any] | None:
@@ -131,6 +195,10 @@ def build_external_cancel_opportunities(
     model_sha = str(runtime.get("model_sha") or "")
     activation = _load(root / "control" / "external_cancel_activation.json")
     signal = _load(root / "external_fair" / "external_cancel_signal.json")
+    active_orders, executor_ready = _active_executor_orders(
+        root / "micro_maker" / "authorized_make_executor_status.json",
+        model_sha=model_sha, now_ns=now_ns,
+    )
     activation_ok, rule_sha = _activation_ready(activation)
     signal_ok, stale_outcome = _signal_ready(
         signal, model_sha=model_sha, rule_sha=rule_sha, now_ns=now_ns,
@@ -149,6 +217,8 @@ def build_external_cancel_opportunities(
         reasons.append("EXTERNAL_CANCEL_FORWARD_GATE_NOT_ACTIVE")
     if activation_ok and not signal_ok:
         reasons.append("EXTERNAL_CANCEL_LIVE_SIGNAL_NOT_ACTIVE")
+    if not executor_ready:
+        reasons.append("MAKER_EXECUTOR_ACTIVE_ORDER_STATE_NOT_READY")
     if reasons:
         return [], {
             "schema": BRIDGE_SCHEMA, "paper_only": True,
@@ -173,8 +243,21 @@ def build_external_cancel_opportunities(
         if original.get("side") != stale_outcome:
             continue
         plan = original["execution_plan"]
-        leg = dict(plan["legs"][0])
-        replay = _stable(rule_sha, signal_version, original["deterministic_replay_key"])
+        original_leg = plan["legs"][0]
+        original_replay = str(original.get("deterministic_replay_key") or "")
+        exact = active_orders.get((
+            original_replay, str(original.get("market_id") or ""),
+            str(original_leg.get("token_id") or ""),
+        ))
+        if exact is None or exact["outcome"] != stale_outcome:
+            continue
+        leg = dict(original_leg)
+        leg["leg_id"] = exact["order_id"]
+        leg["target_quantity"] = exact["remaining_shares"]
+        leg["limit_price"] = exact["limit_price"]
+        replay = _stable(
+            rule_sha, signal_version, exact["order_id"], exact["replay_key"],
+        )
         raw = {
             "schema": "polymarket_v7_opportunity_envelope_v1",
             "version": 1,
@@ -215,11 +298,11 @@ def build_external_cancel_opportunities(
                 "arrival_ns": max(0, int(now_ns) - trigger_wall),
             },
             "capacity": {
-                "executable_size": float(leg.get("target_quantity") or 0.0),
+                "executable_size": float(exact["remaining_shares"]),
                 "depth_provenance": str(original.get("source_snapshot_identity") or ""),
             },
             "execution_plan": {
-                "atomic_unit_id": f"cancel-{replay[:24]}",
+                "atomic_unit_id": exact["replay_key"],
                 "execution_style": "SINGLE_LEG",
                 "legs": [leg],
                 "partial_fill_plan": "CANCEL_REMAINDER",
@@ -250,6 +333,7 @@ def build_external_cancel_opportunities(
         "state": "ACTIVE" if output else "NO_MATCHING_ACTIVE_BUY_QUOTES",
         "reasons": [], "rule_sha256": rule_sha,
         "signal_version": signal_version, "stale_buy_outcome": stale_outcome,
-        "active_make_files": len(files), "rejected_active_make_files": rejected,
-        "cancel_opportunities": len(output),
+        "active_make_files": len(files), "active_executor_orders": len(active_orders),
+        "rejected_active_make_files": rejected, "cancel_opportunities": len(output),
+        "exact_order_targeting": True,
     }

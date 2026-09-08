@@ -191,6 +191,40 @@ def test_maker_cannot_regain_independent_economic_authority() -> None:
         raise AssertionError("maker independent authority accepted")
 
 
+def test_execution_alpha_contract_is_fail_closed_and_nonretroactive() -> None:
+    value = copy.deepcopy(config())
+    validate_config(value)
+    assert value["execution_alpha"]["maker_immature_fill_lower"] == "ZERO"
+    assert value["execution_alpha"]["retroactive_attribution_imputation"] is False
+    broken = copy.deepcopy(value)
+    broken["execution_alpha"]["maker_immature_fill_lower"] = "POINT_ESTIMATE"
+    try:
+        validate_config(broken)
+    except ValueError as exc:
+        assert str(exc) == "execution_alpha_contract"
+    else:
+        raise AssertionError("immature maker point fill accepted as conservative evidence")
+
+
+def test_execution_alpha_market_selection_must_remain_shadow_and_bounded() -> None:
+    value = copy.deepcopy(config())
+    value["execution_alpha"]["market_selection"]["paper_shadow_only"] = False
+    try:
+        validate_config(value)
+    except ValueError as exc:
+        assert str(exc) == "execution_alpha_market_selection"
+    else:
+        raise AssertionError("market selection acquired execution authority")
+    value = copy.deepcopy(config())
+    value["execution_alpha"]["market_selection"]["top_fraction"] = 1.1
+    try:
+        validate_config(value)
+    except ValueError as exc:
+        assert str(exc) == "execution_alpha_market_selection"
+    else:
+        raise AssertionError("invalid market-selection fraction accepted")
+
+
 def test_external_updates_retain_cancel_and_reprice_preemption() -> None:
     value = copy.deepcopy(config())
     value["external_update_policy"]["oracle_or_external_update_can_cancel_without_polymarket_book_event"] = False
@@ -221,5 +255,7 @@ if __name__ == "__main__":
     test_maker_and_taker_evidence_gates_are_independent()
     test_unregistered_or_noncanonical_model_cannot_be_injected()
     test_maker_cannot_regain_independent_economic_authority()
+    test_execution_alpha_contract_is_fail_closed_and_nonretroactive()
+    test_execution_alpha_market_selection_must_remain_shadow_and_bounded()
     test_external_updates_retain_cancel_and_reprice_preemption()
     test_structural_engine_has_one_atomic_bundle_and_shared_owners()

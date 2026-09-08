@@ -30,8 +30,9 @@ def report(state: str = "PASS") -> dict:
         "positive_market_fraction": 0.80,
         "stress_3x_queue_200ms_cancel_improvement_per_share": 0.0005,
         "reason_codes": [],
-        "freeze_merge_sha": "a" * 40,
-        "rule_sha256": "b" * 64,
+        "freeze_merge_sha": "612038cc601c7c6a7da942ed49a1e7bb6a23b291",
+        "rule_sha256": "9e8c7e6a1d7e4a87cd9977396bcbbb228f96b4e35e4a34e84e1514e9e9630254",
+        "bootstrap95_market_cluster_500ms_improvement": [0.0002, 0.003],
     }
 
 
@@ -71,6 +72,27 @@ def test_pass_with_nonempty_reason_codes_is_rejected() -> None:
     result = evaluate_activation(value)
     assert result["paper_execution_alpha_overlay_eligible"] is False
     assert result["checks"]["reason_codes_empty"] is False
+
+
+def test_spoofed_rule_or_weakened_thresholds_are_rejected() -> None:
+    for field, value in (("rule_sha256", "0" * 64), ("minimum_markets", 1),
+                         ("minimum_avoidable_fill_events", 1)):
+        candidate = report()
+        candidate[field] = value
+        try:
+            evaluate_activation(candidate)
+        except ValueError as exc:
+            assert str(exc) == "frozen_forward_identity_or_thresholds"
+        else:
+            raise AssertionError(f"spoofed frozen field accepted: {field}")
+
+
+def test_pass_with_nonpositive_bootstrap_lower_is_rejected() -> None:
+    value = report()
+    value["bootstrap95_market_cluster_500ms_improvement"] = [-0.001, 0.003]
+    result = evaluate_activation(value)
+    assert result["paper_execution_alpha_overlay_eligible"] is False
+    assert result["checks"]["market_cluster_bootstrap_lower_positive"] is False
 
 
 def test_unsafe_authority_claim_is_rejected() -> None:

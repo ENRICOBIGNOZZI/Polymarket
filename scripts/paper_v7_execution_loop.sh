@@ -55,11 +55,14 @@ MAKER_CHAMPION_MODEL="$RUN_ROOT/micro_maker/execution_model.json"
 MAKER_CHALLENGER_MODEL="$RUN_ROOT/micro_maker/execution_model_challenger.json"
 MAKER_MODEL_REGISTRY="$RUN_ROOT/micro_maker/model_registry.json"
 DURABLE_ROOT="${PM_V7_DURABLE_ROOT:-runs/paper_v7_durable}"
-EXTERNAL_CANCEL_SEED_MANIFEST="${PM_V7_EXTERNAL_CANCEL_SEED_MANIFEST:-$DURABLE_ROOT/research/btc_m5_external_cancel_evidence_manifest_v1.json}"
 MAKER_DURABLE_STORE="$DURABLE_ROOT/micro_maker/evidence.jsonl"
 MAKER_DURABLE_STATUS="$DURABLE_ROOT/micro_maker/status.json"
 EXTERNAL_CANCEL_RESEARCH_ROOT="$DURABLE_ROOT/external_cancel"
 EXTERNAL_CANCEL_BOOK_ROOT="$EXTERNAL_CANCEL_RESEARCH_ROOT/books/$SHA"
+EXTERNAL_CANCEL_BASELINE_REPORT="${PM_V7_EXTERNAL_CANCEL_BASELINE_REPORT:-$DURABLE_ROOT/research/btc_m5_external_cancel_forward_report_v3.json}"
+EXTERNAL_CANCEL_BASELINE_MANIFEST="${PM_V7_EXTERNAL_CANCEL_BASELINE_MANIFEST:-$DURABLE_ROOT/research/btc_m5_external_cancel_evidence_manifest_v1.json}"
+EXTERNAL_CANCEL_SEED_MANIFEST="${PM_V7_EXTERNAL_CANCEL_SEED_MANIFEST:-$DURABLE_ROOT/research/btc_m5_external_cancel_evidence_manifest_v1.json}"
+EXTERNAL_CANCEL_BASELINE_PROTOCOL="${PM_V7_EXTERNAL_CANCEL_BASELINE_PROTOCOL:-$DURABLE_ROOT/research/btc_m5_external_cancel_episode_protocol_v3.json}"
 EXTERNAL_CANCEL_RULE_SHA="$(python3 - "$EXTERNAL_CANCEL_EXPERIMENT_REGISTRY" <<'PY'
 import hashlib,json,sys
 value=json.load(open(sys.argv[1],encoding="utf-8"))
@@ -357,7 +360,11 @@ python3 scripts/v7_external_cancel_forward_runtime.py \
   --run-root "$RUN_ROOT" --research-root "$EXTERNAL_CANCEL_RESEARCH_ROOT" \
   --registry "$EXTERNAL_CANCEL_EXPERIMENT_REGISTRY" \
   --tape-dump "$EXTERNAL_CANCEL_TAPE_DUMP" --model-sha "$SHA" \
-  --seed-manifest "$EXTERNAL_CANCEL_SEED_MANIFEST" \
+  --execution-alpha-config "$ROOT/config/v7_crypto_execution_alpha.json" \
+  --baseline-report "$EXTERNAL_CANCEL_BASELINE_REPORT" \
+  --baseline-manifest "$EXTERNAL_CANCEL_BASELINE_MANIFEST" \
+  --baseline-protocol "$EXTERNAL_CANCEL_BASELINE_PROTOCOL" \
+  --seed-manifest "$EXTERNAL_CANCEL_SEED_MANIFEST" --repository-root "$ROOT" \
   --interval 30 --loop \
   >> "$RUN_ROOT/research/external_cancel_forward_runtime.log" 2>&1 &
 v7_register_child "$!"

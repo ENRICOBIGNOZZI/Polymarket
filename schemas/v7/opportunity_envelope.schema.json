@@ -39,7 +39,7 @@
             "horizon": {"enum": ["M1", "M5", "M15", "H1", "H4"]},
             "contract_family": {"type": "string", "minLength": 1},
             "settlement_semantic_hash": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
-            "authority": {"enum": ["SHADOW", "SHADOW_ZERO_AUTHORITY", "PAPER"]},
+            "authority": {"enum": ["SHADOW", "SHADOW_ZERO_AUTHORITY", "PAPER", "PAPER_EXPLORATION"]},
             "research_only": {"type": "boolean"}
           }
         }
@@ -53,6 +53,144 @@
       "type": "object", "additionalProperties": false,
       "required": ["lower", "point", "upper"],
       "properties": {"lower": {"type": "number", "minimum": 0, "maximum": 1}, "point": {"type": "number", "minimum": 0, "maximum": 1}, "upper": {"type": "number", "minimum": 0, "maximum": 1}}
+    },
+    "execution_alpha": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schema",
+        "action",
+        "outcome",
+        "evidence_status",
+        "fill_probability",
+        "queue_ahead_shares",
+        "action_ev",
+        "attribution"
+      ],
+      "properties": {
+        "schema": {
+          "const": "polymarket_v7_execution_alpha_packet_v1"
+        },
+        "action": {
+          "enum": [
+            "MAKE",
+            "TAKE",
+            "CANCEL",
+            "NOTHING"
+          ]
+        },
+        "outcome": {
+          "enum": [
+            "YES",
+            "NO",
+            "NONE"
+          ]
+        },
+        "evidence_status": {
+          "enum": [
+            "MATURE",
+            "IMMATURE"
+          ]
+        },
+        "fill_probability": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "lower",
+            "point",
+            "upper"
+          ],
+          "properties": {
+            "lower": {
+              "type": "number",
+              "minimum": 0,
+              "maximum": 1
+            },
+            "point": {
+              "type": "number",
+              "minimum": 0,
+              "maximum": 1
+            },
+            "upper": {
+              "type": "number",
+              "minimum": 0,
+              "maximum": 1
+            }
+          }
+        },
+        "queue_ahead_shares": {
+          "type": "number",
+          "minimum": 0
+        },
+        "action_ev": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "conservative",
+            "point"
+          ],
+          "properties": {
+            "conservative": {
+              "type": "number"
+            },
+            "point": {
+              "type": "number"
+            }
+          }
+        },
+        "attribution": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "settlement_alpha",
+            "spread_capture",
+            "rebate",
+            "fees",
+            "slippage",
+            "adverse_selection",
+            "latency",
+            "inventory",
+            "unwind",
+            "cancel",
+            "capital"
+          ],
+          "properties": {
+            "settlement_alpha": {
+              "type": "number"
+            },
+            "spread_capture": {
+              "type": "number"
+            },
+            "rebate": {
+              "type": "number"
+            },
+            "fees": {
+              "type": "number"
+            },
+            "slippage": {
+              "type": "number"
+            },
+            "adverse_selection": {
+              "type": "number"
+            },
+            "latency": {
+              "type": "number"
+            },
+            "inventory": {
+              "type": "number"
+            },
+            "unwind": {
+              "type": "number"
+            },
+            "cancel": {
+              "type": "number"
+            },
+            "capital": {
+              "type": "number"
+            }
+          }
+        }
+      }
     },
     "conservative_expected_wealth_change": {"type": "number"},
     "cost_vector": {"type": "object"},
