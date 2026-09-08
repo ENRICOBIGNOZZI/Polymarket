@@ -4,6 +4,7 @@ import copy
 import json
 import sys
 import unittest
+from unittest import mock
 from pathlib import Path
 
 
@@ -154,14 +155,20 @@ class SurfaceClassificationTests(unittest.TestCase):
         self.assertFalse(_dynamic_review_ref("ref:refs/heads/feature/unsafe"))
         self.assertFalse(_dynamic_review_ref("ref:refs/heads/research/unsafe"))
         self.assertFalse(_dynamic_review_ref("ref:refs/heads/chore/unsafe"))
-        # Ref names cannot self-grant authority through semantic substrings.
-        generated = build_manifest(ROOT)
-        review = next(
-            row for row in generated["entries"]
-            if row["surface_id"] == "ref:refs/heads/fix/v7-cutover-tag-surface-audit-20260908"
-        )
-        self.assertFalse(review["economic_authority"]["executable"])
-        self.assertEqual(review["economic_authority"]["capabilities"], [])
+        # Enumerate explicit fixtures: a clean CI checkout has no local review
+        # branches. Test both namespaces without requiring workstation refs.
+        # Ref names containing "cutover" must never self-grant authority.
+        review_refs = [
+            (f"{prefix}/fix/v7-cutover-tag-surface-audit-20260908", "a" * 40)
+            for prefix in ("refs/heads", "refs/remotes/origin")
+        ]
+        with mock.patch("v7_surface_classification._refs", return_value=review_refs):
+            generated = build_manifest(ROOT)
+        generated_refs = {row["surface_id"]: row for row in generated["entries"]}
+        for ref, _ in review_refs:
+            review = generated_refs[f"ref:{ref}"]
+            self.assertFalse(review["economic_authority"]["executable"])
+            self.assertEqual(review["economic_authority"]["capabilities"], [])
         valid = "ref:refs/tags/v7-paper-cutover-" + "a" * 40
         self.assertTrue(_dynamic_review_ref(valid))
         self.assertTrue(is_exact_cutover_tag_surface_id(valid))
