@@ -72,6 +72,11 @@ class RichModelTests(unittest.TestCase):
         for r in changed[80:]:r['actual']=1-r['actual']
         a,_=train(changed,'a'*40,'c'*64,[],1_800_000_000_000_000_000)
         self.assertEqual(a.parameters,self.artifact.parameters)
+    def test_shrinkage_grid_includes_market_baseline(self):
+        self.assertTrue(any(c['ridge']==10000. and c['correction_shrinkage']==0.
+                            for c in self.report['candidate_validation']))
+        self.assertLessEqual(self.report['split_scores']['validation']['brier'],
+                             self.report['market_baseline_scores']['validation']['brier']+1e-12)
     def test_future_training_label_rejected(self):
         with self.assertRaisesRegex(ValueError,'future_training_label'):
             train(self.rows,'a'*40,'c'*64,[],1_600_000_000_000_000_000)

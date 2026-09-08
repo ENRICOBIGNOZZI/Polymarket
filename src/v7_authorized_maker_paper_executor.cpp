@@ -227,6 +227,7 @@ struct SelectionEvidence {
     double best_ask = 0.0;
     double queue_ahead_shares = 0.0;
     bool found = false;
+    json::object placement_features;
 };
 
 [[nodiscard]] SelectionEvidence selection_evidence(
@@ -255,6 +256,7 @@ struct SelectionEvidence {
             if (!raw.is_object()) continue;
             const auto& quote = raw.as_object();
             if (text(find_value(quote, "token_id")) != token_id) continue;
+            if (text(find_value(quote, "quote_side")) != "BUY") continue;
             const double tick = number(find_value(quote, "tick_size"));
             if (!(tick > 0.0 && tick < 1.0)) continue;
             const auto tick_e4 = static_cast<std::int32_t>(std::llround(tick * kPriceScaleE4));
@@ -263,6 +265,24 @@ struct SelectionEvidence {
             result.best_bid = number(find_value(quote, "best_bid"));
             result.best_ask = number(find_value(quote, "best_ask"));
             result.queue_ahead_shares = std::max(0.0, number(find_value(quote, "queue_ahead_shares")));
+            // Preserve missing measurements explicitly. These are selection
+            // observations, with their original clock, not fresh arrival data.
+            for (const auto* name : {"imbalance", "ofi", "ew_vol_ticks", "trade_intensity",
+                    "cancel_intensity", "short_return_ticks", "inventory_fraction", "local_latency_ms",
+                    "aggressive_buy_prints_per_second", "aggressive_sell_prints_per_second"}) {
+                result.placement_features[name] = nullptr;
+            }
+            if (const auto* features = child_object(quote, "placement_features")) {
+                for (auto& field : result.placement_features) {
+                    if (const auto* value = find_value(*features, std::string(field.key()))) {
+                        field.value() = *value;
+                    }
+                }
+            }
+            result.placement_features["spread_ticks"] = (result.best_ask - result.best_bid) / tick;
+            if (const auto* rate = find_value(quote, "opposite_flow_prints_per_second")) {
+                result.placement_features["aggressive_sell_prints_per_second"] = *rate;
+            }
             result.found = result.best_bid > 0.0 && result.best_ask > result.best_bid && result.best_ask < 1.0;
             return result;
         }
@@ -528,6 +548,7 @@ struct CancelAuthorization {
 
 struct OrderContext {
     Authorization authorization;
+    SelectionEvidence selection;
     json::object latest_cancel_receipt;
     json::object latest_cancel_envelope;
     std::uint64_t order_id = 0;
@@ -810,6 +831,7 @@ private:
         move_file(path, live_dir_);
         OrderContext context;
         context.authorization = std::move(authorization);
+        context.selection = selection;
         context.order_id = live->order_id;
         context.external_order_id = "maker-order-" + context.authorization.market_id + "-"
             + std::to_string(live->order_id) + "-" + context.authorization.replay_key;
@@ -924,9 +946,9 @@ private:
             } else if (event.kind == PaperMakerEventKind::CancelRequested) {
                 it->second.cancel_requested = true;
                 it->second.cancel_requested_monotonic_ns = event.timestamp_ns;
-                emit_order_state(it->second, "CANCEL_REQUESTED");
+                emit_order_state(it->second, "CANCEL_REQUESTED", event);
             } else if (event.kind == PaperMakerEventKind::Cancelled) {
-                emit_order_state(it->second, "CANCELLED");
+                emit_order_state(it->second, "CANCELLED", event);
                 terminalize(it->first, "CANCELLED");
             }
             if (event.kind == PaperMakerEventKind::Fill
@@ -946,6 +968,17 @@ private:
         metadata["excluded_from_portfolio_equity"] = false;
         metadata["research_evidence_only"] = false;
         metadata["outcome"] = context.authorization.outcome;
+        metadata["placement_action"] = "UNKNOWN";
+        if (const auto* reasons = child_array(context.authorization.envelope, "reasons")) {
+            for (const auto& reason : *reasons) {
+                const std::string value = text(&reason);
+                if (value.rfind("PLACEMENT_", 0) == 0) metadata["placement_action"] = value.substr(10);
+            }
+        }
+        metadata["placement_features"] = context.selection.placement_features;
+        metadata["placement_features_timestamp_ms"] = context.selection.generated_at_ms;
+        metadata["placement_features_source"] = "CAUSAL_SELECTION_SNAPSHOT";
+        metadata["placement_features_schema"] = "maker-placement-observed-v1";
         metadata["native_market_order_id"] = std::to_string(context.order_id);
         metadata["paper_bootstrap_probe"] = context.authorization.paper_probe;
         metadata["economic_authority"] = "PAPER_EXPLORATION";
@@ -1004,6 +1037,8 @@ private:
         row["book_snapshot_id"] = text(find_value(context.authorization.envelope, "source_snapshot_identity"));
         row["side"] = "BUY";
         row["queue_ahead"] = micro_to_shares(event.queue.ahead_expected_microunits);
+        row["bid"] = context.selection.best_bid;
+        row["ask"] = context.selection.best_ask;
         row["limit_price"] = context.authorization.limit_price;
         row["predicted_fill_probability"] = context.authorization.fill_probability;
         row["expected_ev"] = context.authorization.conservative_ev;
@@ -1053,6 +1088,7 @@ private:
         row["intended_action"] = "MAKE";
         row["intended_size"] = context.authorization.quantity_shares;
         row["filled_size"] = micro_to_shares(event.operational_fill_microunits);
+        row["order_state"] = event.order_state == pm::v7::OrderState::Filled ? "FILLED" : "PARTIALLY_FILLED";
         row["fee"] = 0.0;
         row["fee_rate"] = 0.0;
         row["fee_source"] = "POLYMARKET_MAKER_ZERO";
@@ -1061,13 +1097,31 @@ private:
         metadata["pessimistic_fill_size"] = micro_to_shares(event.pessimistic_fill_microunits);
         metadata["expected_fill_size"] = micro_to_shares(event.expected_fill_microunits);
         metadata["optimistic_fill_size"] = micro_to_shares(event.optimistic_fill_microunits);
-        metadata["execution_outcome"] = static_cast<std::uint64_t>(event.execution_outcome);
+        add_execution_outcome(metadata, event);
         row["metadata"] = std::move(metadata);
         spool(std::move(row));
     }
 
+    static void add_execution_outcome(json::object& metadata, const PaperMakerEvent& event) {
+        using pm::v7::maker::PaperExecutionOutcome;
+        const char* outcome = "OPEN_CENSORED";
+        switch (event.execution_outcome) {
+            case PaperExecutionOutcome::Filled: outcome = "FILLED"; break;
+            case PaperExecutionOutcome::PartialFill: outcome = "PARTIAL_FILL"; break;
+            case PaperExecutionOutcome::NoOppositeFlow: outcome = "NO_OPPOSITE_FLOW"; break;
+            case PaperExecutionOutcome::PriceNotReached: outcome = "PRICE_NOT_REACHED"; break;
+            case PaperExecutionOutcome::QueueNotDepleted: outcome = "QUEUE_NOT_DEPLETED"; break;
+            case PaperExecutionOutcome::Pending: break;
+        }
+        metadata["execution_outcome"] = outcome;
+        metadata["opposite_flow_prints_seen"] = event.opposite_flow_prints_seen;
+        metadata["price_reach_prints_seen"] = event.price_reach_prints_seen;
+        metadata["opposite_flow_shares_seen"] = micro_to_shares(event.opposite_flow_microunits_seen);
+        metadata["price_reach_shares_seen"] = micro_to_shares(event.price_reach_microunits_seen);
+    }
+
     void emit_order_state(
-        const OrderContext& context, std::string_view state) {
+        const OrderContext& context, std::string_view state, const PaperMakerEvent& event) {
         const auto now = wall_ms();
         json::object row;
         row["schema_version"] = 1;
@@ -1088,7 +1142,9 @@ private:
         row["intended_action"] = "MAKE";
         row["order_state"] = state;
         if (state == "CANCELLED") row["cancel_reason"] = "PAPER_ECONOMIC_HORIZON_OR_AUTHORITY_TERMINAL";
-        row["metadata"] = common_metadata(context);
+        auto metadata = common_metadata(context);
+        add_execution_outcome(metadata, event);
+        row["metadata"] = std::move(metadata);
         spool(std::move(row));
     }
 

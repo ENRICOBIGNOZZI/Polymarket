@@ -253,6 +253,11 @@ if(BUILD_TESTING)
       "${CMAKE_CURRENT_SOURCE_DIR}/tests/test_v7_authorized_make_cancel_runtime.py"
       --executor $<TARGET_FILE:polymarket_v7_authorized_maker_paper_executor>)
 
+  add_test(NAME test_v7_trade_recorder_recovery
+    COMMAND ${Python3_EXECUTABLE}
+      "${CMAKE_CURRENT_SOURCE_DIR}/tests/integration_v7_trade_recorder_recovery.py"
+      --binary $<TARGET_FILE:polymarket_v7_trade_recorder>)
+
   file(GLOB V7_PY_TESTS CONFIGURE_DEPENDS
     "${CMAKE_CURRENT_SOURCE_DIR}/tests/test_v7_*.py"
     "${CMAKE_CURRENT_SOURCE_DIR}/tests/test_monitoring_v7_*.py")

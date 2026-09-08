@@ -16,6 +16,7 @@ import v7_external_cancel_opportunity_bridge as cancel_bridge  # noqa: E402
 import v7_global_portfolio_coordinator as coordinator  # noqa: E402
 import v7_maker_opportunity_bridge as maker_bridge  # noqa: E402
 import test_v7_maker_opportunity_bridge as fixture  # noqa: E402
+from v7_maker_durable_learning import order_examples, exact_execution_cell
 
 SHA = "a" * 40
 _RULE, RULE_SHA = cancel_bridge._research_rule()
@@ -63,6 +64,12 @@ def run(executor: Path) -> None:
         now_ms = time.time_ns() // 1_000_000
         runtime = fixture.runtime(); runtime["model_sha"] = SHA
         selection = fixture.selection(); selection["timestamp_ms"] = now_ms
+        selection['markets'][0]['quote_opportunities'][0]['placement_features'] = {
+            'imbalance':.2,'ofi':.1,'ew_vol_ticks':.3,'trade_intensity':2.,
+            'cancel_intensity':.4,'short_return_ticks':-.1,'inventory_fraction':.05,
+            'local_latency_ms':10.,'aggressive_sell_prints_per_second':1.,
+            'aggressive_buy_prints_per_second':.5,
+        }
         model = fixture.model(mature=True); model["model_sha"] = SHA
         fair = fixture.fair_status(); fair["code_sha"] = SHA
         write(root / "control/runtime_status.json", runtime)
@@ -208,6 +215,15 @@ def run(executor: Path) -> None:
             assert abs(float(fills[0]["filled_size"]) - 0.5) < 1e-12
             assert fills[0]["position_id"]
             assert fills[0]["metadata"]["excluded_from_portfolio_equity"] is False
+            evidence = spool_rows(root)
+            order = next(row for row in evidence if row['event_type']=='ORDER_SUBMITTED')
+            assert order['intended_action']=='MAKE'
+            assert exact_execution_cell(order)==('market-1','yes-token','JOIN','BUY')
+            example = order_examples(evidence)[0]
+            assert example['features'] is not None
+            assert example['execution_outcome']=='PARTIAL_FILL'
+            assert example['opposite_flow_prints_seen']>=1
+            assert example['price_reach_shares_seen']>=8.
             # A different market's engine also starts at native ID 1. Its public
             # order identity and executor-map entry must nevertheless be unique.
             def second_market(value):

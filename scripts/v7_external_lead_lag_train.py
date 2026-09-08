@@ -13,6 +13,7 @@ import statistics, time
 from typing import Any
 from v7_external_rich_model import FEATURE_NAMES, design, number
 from v7_external_lead_lag_model import SCHEMA, FAMILY, validate
+from v7_external_lead_lag_collector import horizon_eligible, MAX_LABEL_DELAY_MS
 
 OBS_SCHEMA = "polymarket_v7_external_pm_lead_lag_observation_v1"
 HORIZONS = (100, 250, 500, 1000)
@@ -46,8 +47,9 @@ def load_rows(paths: list[Path], code_sha: str) -> list[dict[str, Any]]:
             h=int(row.get("horizon_ms") or 0); origin=str(row.get("origin_id") or "")
             target=number(row.get("delta_logit")); realized=number(row.get("realized_horizon_ms"))
             features=row.get("rich_model_features") if isinstance(row.get("rich_model_features"),dict) else None
-            if (h not in HORIZONS or not origin or target is None or realized is None or realized < h
-                    or realized > h+250 or features is None or not str(row.get("market_id") or "")):
+            if (not origin or target is None or realized is None or not horizon_eligible(h, realized)
+                    or row.get("nominal_horizon_eligible") is False
+                    or features is None or not str(row.get("market_id") or "")):
                 continue
             key=(origin,h)
             if key in unique and unique[key] != row: raise ValueError("lead_lag:conflicting_observation")
@@ -133,7 +135,9 @@ def train(rows: list[dict[str,Any]], code_sha: str) -> tuple[dict[str,Any],dict[
            "authenticated_execution":False,"real_order_submission":False,"research_only":True,
            "execution_authority":"ZERO_AUTHORITY_SIGNAL_ONLY","training_lifecycle":"EXPLICIT_FROZEN_ARTIFACT_ONLY",
            "generated_timestamp_ns":now,"forward_oos_starts_after_ns":boundary,"dataset_sha256":digest,
-           "training_markets":len({r["market_id"] for r in rows}),"models":models}
+           "training_markets":len({r["market_id"] for r in rows}),"models":models,
+           "maximum_label_delay_ms":MAX_LABEL_DELAY_MS,
+           "target_semantics":"FIRST_OBSERVED_SNAPSHOT_WITHIN_TOLERANCE"}
     validate(model)
     return model,{"schema":"polymarket_v7_external_pm_lead_lag_training_report_v1","model_sha":code_sha,
                   "paper_only":True,"research_only":True,"dataset_sha256":digest,"horizons":report,
