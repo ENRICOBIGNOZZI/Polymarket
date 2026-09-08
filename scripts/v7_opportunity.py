@@ -17,6 +17,8 @@ SCHEMA = "polymarket_v7_opportunity_envelope_v1"
 SHA = re.compile(r"^[0-9a-f]{40}$")
 HASH = re.compile(r"^[0-9a-f]{40}(?:[0-9a-f]{24})?$")
 HASH64 = re.compile(r"^[0-9a-f]{64}$")
+HASH16 = re.compile(r"^[0-9a-f]{16}$")
+MAKER_EXECUTION_SEMANTICS = "maker-paper-v7.2-bilateral-inventory"
 ENGINE_COMPONENTS = {
     "CRYPTO_SETTLEMENT_ENGINE": {
         "crypto_settlement_fair", "crypto_informed_taker", "professional_maker",
@@ -120,7 +122,7 @@ class OpportunityEnvelope:
             "inventory_delta", "portfolio_exposure_delta", "settlement", "eligible",
             "reasons", "deterministic_replay_key", "expires_at_ns",
         }
-        optional = {"exploration", "execution_alpha"}
+        optional = {"exploration", "execution_alpha", "maker_execution_identity"}
         if not isinstance(value, dict):
             raise OpportunityError("field_partition")
         fields = set(value)
@@ -173,6 +175,20 @@ class OpportunityEnvelope:
             or not set(components) <= ENGINE_COMPONENTS[engine_id]
         ):
             raise OpportunityError("component_provenance")
+        maker_identity = value.get("maker_execution_identity")
+        if maker_identity is not None:
+            identity_map = _mapping(maker_identity, "maker_execution_identity")
+            if set(identity_map) != {"policy_hash", "config_hash", "execution_semantics_version"}:
+                raise OpportunityError("maker_execution_identity_fields")
+            if (
+                not HASH16.fullmatch(str(identity_map.get("policy_hash") or ""))
+                or not HASH16.fullmatch(str(identity_map.get("config_hash") or ""))
+                or identity_map.get("execution_semantics_version") != MAKER_EXECUTION_SEMANTICS
+                or engine_id != "CRYPTO_SETTLEMENT_ENGINE"
+                or action != "MAKE"
+                or "professional_maker" not in components
+            ):
+                raise OpportunityError("maker_execution_identity")
         if value.get("side") not in {"BUY", "SELL", "YES", "NO", "NONE", "MULTI"}:
             raise OpportunityError("side")
         if action in SAFE_ACTIONS and value.get("side") != "NONE":
