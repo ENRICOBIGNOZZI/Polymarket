@@ -303,6 +303,7 @@ double ExternalAssetState::compute_composite(
         const double weight = finite(policy.venue_weights[i])
             ? std::max(0.0, policy.venue_weights[i]) : 0.0;
         if (weight <= 0.0) continue;
+        if (candidate_count >= candidates.size()) break;
         candidates[candidate_count++] = Candidate{i, std::log(venue.mid), weight};
         candidate_weight_sum += weight;
     }
@@ -312,8 +313,17 @@ double ExternalAssetState::compute_composite(
     // elements is bounded, allocation-free, and deterministic.
     double median_log = 0.0;
     if (candidate_count > 0 && candidate_weight_sum > kEps) {
-        std::sort(candidates.begin(), candidates.begin() + static_cast<std::ptrdiff_t>(candidate_count),
-                  [](const Candidate& left, const Candidate& right) { return left.log_mid < right.log_mid; });
+        // At most six venues: bounded insertion sort avoids allocator/runtime
+        // variability and makes the candidate bound explicit to the compiler.
+        for (std::size_t i = 1; i < candidate_count; ++i) {
+            Candidate value = candidates[i];
+            std::size_t j = i;
+            while (j > 0 && value.log_mid < candidates[j - 1].log_mid) {
+                candidates[j] = candidates[j - 1];
+                --j;
+            }
+            candidates[j] = value;
+        }
         double accumulated_weight = 0.0;
         for (std::size_t i = 0; i < candidate_count; ++i) {
             accumulated_weight += candidates[i].weight;

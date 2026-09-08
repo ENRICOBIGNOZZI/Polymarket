@@ -63,7 +63,7 @@ class MonitorTests(unittest.TestCase):
     def test_structural_bootstrap_is_active_fallback_without_model_governance(self):
         cfg=json.loads((ROOT/"config/v7_external_fair.json").read_text())
         m=module.Monitor(Path(tempfile.mkdtemp()),"a"*40,paper_bootstrap=cfg["paper_exploration_bootstrap"])
-        now=time.time_ns();start=int(now/1e9)//300*300
+        start=1_800_000_000;now=(start+120)*1_000_000_000
         m.active_market={"contract_start_epoch":start,"midpoint":.5};m.active_contract={"verified_template":True,
             "rules_hash_recognized":True,"normalized_rules_hash":"b"*64};m.reference={"valid":True,"value":77000.0}
         m.latest[module.ORACLE_TOPIC]={"price":77010.0,"receive_wall_ns":now-10_000_000}
