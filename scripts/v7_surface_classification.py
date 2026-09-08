@@ -84,11 +84,25 @@ def _paths(root: Path) -> list[str]:
 
 
 def _refs(root: Path) -> list[tuple[str, str]]:
+    # Remote tracking HEAD (for example ``refs/remotes/origin/HEAD``) is a
+    # symbolic alias to a concrete branch, not an independent code surface.
+    # Whether Git materializes this alias is clone/config dependent, so
+    # including it makes an otherwise identical repository audit non-portable.
     lines = _git(
-        root, "for-each-ref", "--format=%(refname)%09%(objectname)",
+        root, "for-each-ref",
+        "--format=%(refname)%09%(objectname)%09%(symref)",
         "refs/heads", "refs/remotes", "refs/tags",
     ).splitlines()
-    return sorted(tuple(line.split("\t", 1)) for line in lines if "\t" in line)
+    refs: list[tuple[str, str]] = []
+    for line in lines:
+        parts = line.split("\t", 2)
+        if len(parts) != 3:
+            continue
+        ref, object_id, symbolic_target = parts
+        if symbolic_target:
+            continue
+        refs.append((ref, object_id))
+    return sorted(refs)
 
 
 def equivalent_ref_surface_ids(surface_id: str) -> tuple[str, ...]:

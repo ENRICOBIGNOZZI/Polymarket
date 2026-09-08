@@ -61,6 +61,7 @@ EXTERNAL_CANCEL_RESEARCH_ROOT="$DURABLE_ROOT/external_cancel"
 EXTERNAL_CANCEL_BOOK_ROOT="$EXTERNAL_CANCEL_RESEARCH_ROOT/books/$SHA"
 EXTERNAL_CANCEL_BASELINE_REPORT="${PM_V7_EXTERNAL_CANCEL_BASELINE_REPORT:-$DURABLE_ROOT/research/btc_m5_external_cancel_forward_report_v3.json}"
 EXTERNAL_CANCEL_BASELINE_MANIFEST="${PM_V7_EXTERNAL_CANCEL_BASELINE_MANIFEST:-$DURABLE_ROOT/research/btc_m5_external_cancel_evidence_manifest_v1.json}"
+EXTERNAL_CANCEL_SEED_MANIFEST="${PM_V7_EXTERNAL_CANCEL_SEED_MANIFEST:-$EXTERNAL_CANCEL_BASELINE_MANIFEST}"
 EXTERNAL_CANCEL_BASELINE_PROTOCOL="${PM_V7_EXTERNAL_CANCEL_BASELINE_PROTOCOL:-$DURABLE_ROOT/research/btc_m5_external_cancel_episode_protocol_v3.json}"
 EXTERNAL_CANCEL_RULE_SHA="$(python3 - "$EXTERNAL_CANCEL_EXPERIMENT_REGISTRY" <<'PY'
 import hashlib,json,sys
@@ -363,6 +364,7 @@ python3 scripts/v7_external_cancel_forward_runtime.py \
   --baseline-report "$EXTERNAL_CANCEL_BASELINE_REPORT" \
   --baseline-manifest "$EXTERNAL_CANCEL_BASELINE_MANIFEST" \
   --baseline-protocol "$EXTERNAL_CANCEL_BASELINE_PROTOCOL" \
+  --seed-manifest "$EXTERNAL_CANCEL_SEED_MANIFEST" --repository-root "$ROOT" \
   --interval 30 --loop \
   >> "$RUN_ROOT/research/external_cancel_forward_runtime.log" 2>&1 &
 v7_register_child "$!"

@@ -311,7 +311,11 @@
         "--baseline-manifest",
         "${DURABLE_ROOT}/research/btc_m5_external_cancel_evidence_manifest_v1.json",
         "--baseline-protocol",
-        "${DURABLE_ROOT}/research/btc_m5_external_cancel_episode_protocol_v3.json"
+        "${DURABLE_ROOT}/research/btc_m5_external_cancel_episode_protocol_v3.json",
+        "--seed-manifest",
+        "${EXTERNAL_CANCEL_SEED_MANIFEST}",
+        "--repository-root",
+        "${ROOT}"
       ],
       "profile": "observer",
       "inputs": [
@@ -321,12 +325,14 @@
         "config/v7_crypto_execution_alpha.json",
         "${DURABLE_ROOT}/research/btc_m5_external_cancel_forward_report_v3.json",
         "${DURABLE_ROOT}/research/btc_m5_external_cancel_evidence_manifest_v1.json",
-        "${DURABLE_ROOT}/research/btc_m5_external_cancel_episode_protocol_v3.json"
+        "${DURABLE_ROOT}/research/btc_m5_external_cancel_episode_protocol_v3.json",
+        "${EXTERNAL_CANCEL_SEED_MANIFEST}"
       ],
       "outputs": [
         "research/external_cancel_forward_runtime.log",
         "control/external_cancel_activation.json",
-        "${EXTERNAL_CANCEL_RESEARCH_ROOT}/forward_report.json"
+        "${EXTERNAL_CANCEL_RESEARCH_ROOT}/forward_report.json",
+        "${EXTERNAL_CANCEL_RESEARCH_ROOT}/seed"
       ],
       "dependencies": [
         "external_cancel_book_observer",

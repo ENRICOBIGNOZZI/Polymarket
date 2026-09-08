@@ -41,6 +41,46 @@ class FinalConvergenceError(ValueError):
     pass
 
 
+_REVIEW_REF_PREFIXES = (
+    "refs/heads/codex/v7-",
+    "refs/remotes/origin/codex/v7-",
+    "refs/heads/feature/v7-",
+    "refs/remotes/origin/feature/v7-",
+    "refs/heads/fix/v7-",
+    "refs/remotes/origin/fix/v7-",
+    "refs/heads/research/v7-",
+    "refs/remotes/origin/research/v7-",
+    "refs/heads/chore/v7-",
+    "refs/remotes/origin/chore/v7-",
+)
+
+
+def safe_redundant_review_ref(row: dict[str, Any]) -> bool:
+    """True only for a zero-authority merged review branch awaiting ref cleanup.
+
+    A branch becoming fully reachable from ``origin/main`` is repository hygiene,
+    not a second runtime system.  Tracked paths, processes, outputs, tags, unknown
+    namespaces, executable authority, or ambiguous reachability never qualify.
+    """
+    authority = row.get("economic_authority")
+    return (
+        row.get("classification") == "DELETE_ACTIVE_LEGACY"
+        and row.get("object_type") == "branch_or_remote_ref"
+        and isinstance(row.get("path_or_ref"), str)
+        and row["path_or_ref"].startswith(_REVIEW_REF_PREFIXES)
+        and isinstance(authority, dict)
+        and authority.get("owner") is None
+        and authority.get("capabilities") == []
+        and authority.get("executable") is False
+        and row.get("migration_status") == "deletion_deferred_until_phase_9"
+        and str(row.get("unique_behavior_data_contribution") or "").startswith(
+            "fully reachable from origin/main; redundant active ref"
+        )
+        and row.get("final_disposition") == "delete_after_gate"
+        and row.get("deletion_gate") == "UNIQUE_COMMIT_AND_ACTIVE_REFERENCE_SCAN_CLEAN"
+    )
+
+
 def load(path: Path) -> dict[str, Any]:
     value = json.loads(path.read_text(encoding="utf-8"))
     if not isinstance(value, dict):
@@ -135,7 +175,15 @@ def build(root: Path) -> dict[str, Any]:
     surface = build_manifest(root)
     surface_validation = validate_manifest(surface, root=root)
     classifications = Counter(row["classification"] for row in surface["entries"])
-    if classifications["DELETE_ACTIVE_LEGACY"] or classifications["KEEP_TEMPORARY_COMPATIBILITY"]:
+    redundant_review_refs = [
+        row for row in surface["entries"] if safe_redundant_review_ref(row)
+    ]
+    unsafe_delete_legacy = [
+        row for row in surface["entries"]
+        if row["classification"] == "DELETE_ACTIVE_LEGACY"
+        and not safe_redundant_review_ref(row)
+    ]
+    if unsafe_delete_legacy or classifications["KEEP_TEMPORARY_COMPATIBILITY"]:
         raise FinalConvergenceError("legacy_or_temporary_surface_remains")
 
     checks = validate_ruleset(load(root / "artifacts/github_main_ruleset.json"))
@@ -179,7 +227,11 @@ def build(root: Path) -> dict[str, Any]:
         "surfaces": {
             "entry_count": surface_validation["entry_count"],
             "classification_counts": dict(sorted(classifications.items())),
-            "delete_active_legacy_count": 0,
+            "delete_active_legacy_count": len(unsafe_delete_legacy),
+            "redundant_review_ref_count": len(redundant_review_refs),
+            "redundant_review_refs": sorted(
+                row["surface_id"] for row in redundant_review_refs
+            ),
             "temporary_compatibility_count": 0,
         },
         "governance": {
