@@ -184,7 +184,15 @@ def authorized_maker_flat_proof(root, model_sha: str) -> dict[str, Any]:
     if not ledger.is_file() or ledger.is_symlink():
         raise ValueError('authorized_maker_cutover:ledger_missing')
     records = list(iter_records(ledger))
-    events = [e for e in records if isinstance(e, LedgerEvent) and e.model_sha == model_sha]
+    # Revalidate the public event representation instead of comparing Python
+    # class identities. File-based module loaders can instantiate an equivalent
+    # LedgerEvent class; silently skipping it would manufacture a flat account.
+    events = []
+    for record in records:
+        if getattr(record, 'model_sha', None) == model_sha and hasattr(record, 'event_type'):
+            if not callable(getattr(record, 'to_dict', None)):
+                raise ValueError('authorized_maker_cutover:unrecognized_event_representation')
+            events.append(LedgerEvent.from_dict(record.to_dict()))
     for e in events:
         if (e.strategy.upper() in {'MICRO_MAKER_PRO','MICRO_MAKER','PROFESSIONAL_MAKER'}
                 and e.event_type in {'ORDER_SUBMITTED','FILL','FINAL','ORDER_STATE','INVENTORY_LIQUIDATION'}
