@@ -723,8 +723,9 @@ class Monitor:
             value = json.loads(self.external_venues_path.read_text(encoding="utf-8"))
         except (OSError, json.JSONDecodeError):
             return {}
-        age_ns = max(0, now_ns - int(value.get("timestamp_ns") or 0))
-        if value.get("code_sha") != self.code_sha or age_ns > FRESH_NS:
+        published_ns = int(value.get("timestamp_ns") or 0)
+        age_ns = now_ns - published_ns
+        if value.get("code_sha") != self.code_sha or published_ns <= 0 or not 0 <= age_ns <= FRESH_NS:
             return {}
         value["age_ns"] = age_ns
         return value

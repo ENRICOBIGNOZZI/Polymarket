@@ -168,7 +168,7 @@ def test_signal_only_targets_stale_buy_outcome() -> None:
 
 def test_same_token_replacement_order_does_not_match_stale_authorization() -> None:
     with tempfile.TemporaryDirectory() as directory:
-        root = Path(directory); setup(root)
+        root = Path(directory); setup_case(root)
         status_path = root / "micro_maker/authorized_make_executor_status.json"
         status = json.loads(status_path.read_text())
         status["active_order_details"][0]["replay_key"] = "replacement-make"
@@ -181,7 +181,7 @@ def test_same_token_replacement_order_does_not_match_stale_authorization() -> No
 
 def test_missing_executor_order_state_fails_closed() -> None:
     with tempfile.TemporaryDirectory() as directory:
-        root = Path(directory); setup(root)
+        root = Path(directory); setup_case(root)
         (root / "micro_maker/authorized_make_executor_status.json").unlink()
         rows, diagnostics = bridge.build_external_cancel_opportunities(root, now_ns=NOW)
         assert rows == []
@@ -200,3 +200,5 @@ if __name__ == "__main__":
     test_inactive_forward_gate_fails_closed()
     test_signal_only_targets_stale_buy_outcome()
     test_expired_signal_fails_closed()
+    test_same_token_replacement_order_does_not_match_stale_authorization()
+    test_missing_executor_order_state_fails_closed()

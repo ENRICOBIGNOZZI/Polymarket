@@ -114,6 +114,33 @@ class RichModelTests(unittest.TestCase):
         self.assertTrue(m.router.paper_probe_candidates(status,books,policy['taker'],probes))
         status['real_order_submission']=True
         self.assertEqual(m.router.paper_probe_candidates(status,books,policy['taker'],probes),[])
+    def test_external_snapshot_rejects_future_publication(self):
+        import v7_rtds_external_fair_monitor as module
+        with tempfile.TemporaryDirectory() as directory:
+            p=Path(directory)/'external.json'
+            p.write_text(json.dumps({'code_sha':'a'*40,'timestamp_ns':101}))
+            monitor=module.Monitor(Path(directory),'a'*40,external_venues_path=p)
+            self.assertEqual(monitor.external_snapshot(100),{})
+            self.assertEqual(monitor.external_snapshot(102)['age_ns'],1)
+    def test_live_rich_inference_original_feature_cut_and_forward_scope(self):
+        import v7_rtds_external_fair_monitor as module
+        with tempfile.TemporaryDirectory() as directory:
+            monitor=module.Monitor(Path(directory),'a'*40)
+            monitor.challenger=self.artifact;monitor.challenger_load_state='LOADED'
+            boundary=self.artifact.hyperparameters['forward_oos_starts_after_ns'];now=boundary+100_000_000_000
+            monitor.active_market={'contract_start_epoch':boundary//1_000_000_000}
+            monitor.active_contract={'normalized_rules_hash':'b'*64}
+            monitor.reference={'valid':True,'value':100.}
+            monitor.latest[module.ORACLE_TOPIC]={'price':100.1}
+            base={'valid':True,'tte_seconds':200.,'pm_mid':.5,'explicit_champion_applied':False}
+            ext=origin()['external_features'];context={'observed_wall_ns':now,'features':{}}
+            fair=monitor.rich_paper_snapshot(base,ext,context,now)
+            self.assertTrue(is_paper_learning_fair(fair,'a'*40),fair)
+            self.assertEqual(canonical_hash(fair['rich_feature_cut']),fair['rich_feature_sha256'])
+            self.assertEqual(features(fair['rich_feature_cut']),fair['rich_model_features'])
+            monitor.active_market['contract_start_epoch']-=300
+            self.assertFalse(monitor.rich_paper_snapshot(base,ext,context,now)['valid'])
+
     def test_registry_loads_challenger_but_not_champion(self):
         import v7_rtds_external_fair_monitor as monitor
         with tempfile.TemporaryDirectory() as directory:
