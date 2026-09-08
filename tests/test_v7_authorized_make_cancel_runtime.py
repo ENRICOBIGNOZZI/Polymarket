@@ -66,17 +66,15 @@ def run(executor: Path) -> None:
         })
         (root / "micro_maker/fillability_ws.jsonl").touch()
 
-        original_require_context = maker_bridge.require_context
-        maker_bridge.require_context = lambda **_: fixture.context() | {
-            "authority": "SHADOW", "research_only": False,
-        }
+        original_paper_context = maker_bridge._paper_crypto_context
+        maker_bridge._paper_crypto_context = lambda _registry: fixture.context()
         try:
             now_ns = time.time_ns()
             maker_rows, maker_diag = maker_bridge.build_maker_opportunities(
                 root, now_ns=now_ns, repository_root=ROOT,
             )
         finally:
-            maker_bridge.require_context = original_require_context
+            maker_bridge._paper_crypto_context = original_paper_context
         assert maker_rows, maker_diag
         make_decision = coordinator.coordinate(
             maker_rows, now_ns=now_ns,
