@@ -34,3 +34,17 @@ therefore enter ONLY the existing loss-capped, zero-promotion-credit PAPER probe
 lane, never mature robust MAKE/TAKE authority. The verified external-cancel rule
 is unchanged and remains a separate risk action. A failed or absent learned model
 leaves the declared bootstrap fallback visible; it is not silently called ML.
+
+### Immutable Maker publication during evidence refits
+
+The durable Maker learner materializes the execution-model snapshot once per
+exact-SHA/policy/config run. Periodic fitting updates evidence and the separate
+challenger flow; it must never overwrite the published champion, including its
+generation timestamp. The external-cancel protocol refuses any subsequent change
+to that identity. Newly decoded episodes pass the same causal validator before
+admission. Sessions which started before publication are not forward evidence.
+
+The prior mutable publication timestamp invalidated 2,525 diagnostic episodes in
+142 old-runtime files. These must be quarantined with content hashes, never
+backdated or credited toward promotion. The independently hash-pinned official v3
+seed is separate evidence and must still pass full recomputation.

@@ -675,7 +675,11 @@ def evaluate_once(
         promotion_boundary_ms=int(pins["promotion_boundary_ms"]),
     )
     protocol_path = research_root / "protocol" / f"{model_sha}.json"
-    atomic_json(protocol_path, protocol)
+    if protocol_path.exists():
+        if load(protocol_path) != protocol:
+            raise ValueError("external_cancel_protocol_identity_changed_after_freeze")
+    else:
+        atomic_json(protocol_path, protocol)
 
     baseline, baseline_provenance = verify_immutable_baseline(
         report_path=baseline_report, manifest_path=baseline_manifest,
@@ -707,6 +711,13 @@ def evaluate_once(
     failed: dict[str, str] = {}
     if ext and tape_dump.is_file():
         for market, (manifest, segments) in sessions.items():
+            session = load(manifest)
+            started_ms = int(session.get("started_ms") or 0)
+            # Closed observer sessions carry their actual start receive time.
+            # A missing start is not silently invented; producer validation remains authoritative.
+            if started_ms and started_ms <= published_ms:
+                failed[market] = "SESSION_STARTED_BEFORE_FROZEN_MAKER_PUBLICATION"
+                continue
             output = episodes_root / f"{market}.{model_sha}.jsonl"
             summary = summaries_root / f"{market}.{model_sha}.json"
             if output.exists() and summary.exists():
@@ -722,9 +733,13 @@ def evaluate_once(
             command.insert(1, str(Path(__file__).with_name("research_v7_btc_m5_external_cancel_episode_build.py")))
             try:
                 subprocess.run(command, check=True, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, text=True)
+                for episode in forward.iter_jsonl([output]):
+                    forward.validate_episode(episode, freeze_ms=freeze_ms(exp),
+                        expected_rule_hash=protocol["canonical_rule_sha256"],
+                        quote_size=float(protocol["incumbent_proxy"]["quote_size_shares"]), book_schema=2)
                 processed += 1
-            except subprocess.CalledProcessError as exc:
-                failed[market] = (exc.stderr or f"exit:{exc.returncode}")[-500:]
+            except (subprocess.CalledProcessError, forward.EvidenceError) as exc:
+                failed[market] = (getattr(exc, "stderr", None) or str(exc))[-500:]
                 output.unlink(missing_ok=True)
                 summary.unlink(missing_ok=True)
 
