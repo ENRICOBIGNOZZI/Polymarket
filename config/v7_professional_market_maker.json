@@ -51,6 +51,21 @@
       "markets_per_shard": 8,
       "derivation": "max_active_markets=shard_count_budget*markets_per_shard"
     },
+    "settlement_anchor": {
+      "enabled": true,
+      "maximum_slots": 1,
+      "paper_exploration_only": true,
+      "maximum_control_markets": 5,
+      "required_slug_prefix": "btc-updown-5m-",
+      "clob_url": "https://clob.polymarket.com",
+      "request_timeout_seconds": 4.0,
+      "maximum_clock_skew_ms": 250,
+      "minimum_point_edge_per_share": 0.005,
+      "fill_probability_source": "EXECUTION_MODEL_GLOBAL_POSTERIOR",
+      "evict_observation_only_market": true,
+      "promotion_credit": false,
+      "real_money_authority": false
+    },
     "min_liquidity": 25.0,
     "min_volume_24h": 100.0,
     "min_mid": 0.02,

@@ -39,7 +39,7 @@ def test_unscoped_or_malformed_restart_budget_starts_a_new_exact_sha_counter(tmp
 
 def _write_external_state(root: Path, sha: str, *, full: bool = True, books: int = 2) -> None:
     external = root / "external_fair"
-    external.mkdir(parents=True)
+    external.mkdir(parents=True, exist_ok=True)
     (external / "status.json").write_text(json.dumps({
         "schema": "polymarket_v7_external_fair_status_v1",
         "code_sha": sha,

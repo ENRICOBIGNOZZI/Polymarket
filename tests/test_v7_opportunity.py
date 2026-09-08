@@ -89,6 +89,13 @@ def test_complete_envelope_parses() -> None:
     assert parsed.expected_wealth_change == 1.0
 
 
+def test_zero_arrival_latency_is_valid_and_not_missing() -> None:
+    value = envelope()
+    value["latency"]["arrival_ns"] = 0
+    parsed = OpportunityEnvelope.parse(value)
+    assert parsed.raw["latency"]["arrival_ns"] == 0
+
+
 def test_unauthoritative_rebate_fails_closed() -> None:
     value = envelope()
     value["cost_vector"]["rebate"] = 0.01

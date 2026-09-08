@@ -675,6 +675,7 @@ v7_register_child "$!"
       --trade-tape "$RUN_ROOT/trade_tape.csv" \
       --allocation "$ALLOC/micro_maker.json" \
       --execution-model "$MAKER_CHAMPION_MODEL" \
+      --settlement-fair-status "$RUN_ROOT/external_fair/status.json" \
       --model-sha "$SHA" \
       >> "$RUN_ROOT/micro_maker/reward_selection.log" 2>&1 || true
     sleep "$MAKER_SELECTOR_REFRESH_SECONDS"

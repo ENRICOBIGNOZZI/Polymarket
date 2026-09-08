@@ -248,7 +248,7 @@ class OpportunityEnvelope:
             raise OpportunityError("latency_fields")
         if latency.get("economic_percentile") not in {"p90", "p95", "p99", "p99.9"}:
             raise OpportunityError("latency_percentile")
-        if int(latency.get("arrival_ns") or -1) < 0:
+        if _finite(latency.get("arrival_ns"), "latency_arrival") < 0.0:
             raise OpportunityError("latency_arrival")
         capacity = _mapping(value.get("capacity"), "capacity")
         if set(capacity) != {"executable_size", "depth_provenance"}:
@@ -371,7 +371,7 @@ class OpportunityEnvelope:
                 or value.get("calibration_status") not in {"IMMATURE", "MATURE", "NOT_APPLICABLE"}
                 or settlement.get("verified") is not True
                 or float(capacity["executable_size"]) <= 0.0
-                or int(latency.get("arrival_ns") or -1) < 0
+                or _finite(latency.get("arrival_ns"), "latency_arrival") < 0.0
             ):
                 raise OpportunityError("paper_exploration_evidence_incomplete")
         elif action in NEW_RISK_ACTIONS and (
