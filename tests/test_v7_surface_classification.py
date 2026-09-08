@@ -4,6 +4,7 @@ import copy
 import json
 import sys
 import unittest
+from unittest import mock
 from pathlib import Path
 
 
@@ -15,22 +16,12 @@ from v7_surface_classification import (  # noqa: E402
     _refs,
     build_manifest,
     equivalent_ref_surface_ids,
+    is_dynamic_review_surface_id,
+    is_exact_cutover_tag_surface_id,
     validate_manifest,
 )
 
 
-_DYNAMIC_REVIEW_REF_PREFIXES = (
-    "ref:refs/heads/codex/v7-",
-    "ref:refs/remotes/origin/codex/v7-",
-    "ref:refs/heads/feature/v7-",
-    "ref:refs/remotes/origin/feature/v7-",
-    "ref:refs/heads/fix/v7-",
-    "ref:refs/remotes/origin/fix/v7-",
-    "ref:refs/heads/research/v7-",
-    "ref:refs/remotes/origin/research/v7-",
-    "ref:refs/heads/chore/v7-",
-    "ref:refs/remotes/origin/chore/v7-",
-)
 _DYNAMIC_REVIEW_CLASSIFICATIONS = {
     "MERGE_INTO_CANONICAL",
     "DELETE_ACTIVE_LEGACY",
@@ -51,15 +42,18 @@ _FORBIDDEN_REVIEW_CAPABILITIES = {
 
 
 def _dynamic_review_ref(surface_id: str) -> bool:
-    """Return true only for temporary fail-closed V7 review branches."""
-    return surface_id.startswith(_DYNAMIC_REVIEW_REF_PREFIXES)
+    return is_dynamic_review_surface_id(surface_id)
 
 
 def _assert_fail_closed_review_ref(
     testcase: unittest.TestCase, key: str, row: dict,
 ) -> None:
-    testcase.assertEqual(row["object_type"], "branch_or_remote_ref", key)
-    testcase.assertIn(row["classification"], _DYNAMIC_REVIEW_CLASSIFICATIONS, key)
+    if is_exact_cutover_tag_surface_id(key):
+        testcase.assertEqual(row["object_type"], "tag", key)
+        testcase.assertEqual(row["classification"], "ARCHIVE_HISTORY_ONLY", key)
+    else:
+        testcase.assertEqual(row["object_type"], "branch_or_remote_ref", key)
+        testcase.assertIn(row["classification"], _DYNAMIC_REVIEW_CLASSIFICATIONS, key)
     authority = row.get("economic_authority") or {}
     testcase.assertFalse(authority.get("executable"), key)
     capabilities = {
@@ -161,6 +155,33 @@ class SurfaceClassificationTests(unittest.TestCase):
         self.assertFalse(_dynamic_review_ref("ref:refs/heads/feature/unsafe"))
         self.assertFalse(_dynamic_review_ref("ref:refs/heads/research/unsafe"))
         self.assertFalse(_dynamic_review_ref("ref:refs/heads/chore/unsafe"))
+        # Enumerate explicit fixtures: a clean CI checkout has no local review
+        # branches. Test both namespaces without requiring workstation refs.
+        # Ref names containing "cutover" must never self-grant authority.
+        review_refs = [
+            (f"{prefix}/fix/v7-cutover-tag-surface-audit-20260908", "a" * 40)
+            for prefix in ("refs/heads", "refs/remotes/origin")
+        ]
+        with mock.patch("v7_surface_classification._refs", return_value=review_refs):
+            generated = build_manifest(ROOT)
+        generated_refs = {row["surface_id"]: row for row in generated["entries"]}
+        for ref, _ in review_refs:
+            review = generated_refs[f"ref:{ref}"]
+            self.assertFalse(review["economic_authority"]["executable"])
+            self.assertEqual(review["economic_authority"]["capabilities"], [])
+        valid = "ref:refs/tags/v7-paper-cutover-" + "a" * 40
+        self.assertTrue(_dynamic_review_ref(valid))
+        self.assertTrue(is_exact_cutover_tag_surface_id(valid))
+        for invalid in (
+            "ref:refs/tags/v7-paper-cutover-" + "a" * 39,
+            "ref:refs/tags/v7-paper-cutover-" + "a" * 41,
+            "ref:refs/tags/v7-paper-cutover-" + "A" * 40,
+            "ref:refs/tags/v7-paper-cutover-" + "a" * 40 + "-extra",
+            "ref:refs/tags/v7-paper-cutover-latest",
+            "ref:refs/tags/unrelated-" + "a" * 40,
+        ):
+            self.assertFalse(_dynamic_review_ref(invalid), invalid)
+            self.assertFalse(is_exact_cutover_tag_surface_id(invalid), invalid)
 
     def test_symbolic_remote_head_is_not_an_independent_surface(self) -> None:
         import subprocess

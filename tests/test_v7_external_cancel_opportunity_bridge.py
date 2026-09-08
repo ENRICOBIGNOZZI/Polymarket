@@ -109,7 +109,7 @@ def make_envelope(outcome: str = "YES") -> dict:
     return OpportunityEnvelope.parse(raw).raw
 
 
-def setup(root: Path, *, outcome: str = "YES", gate: bool = True, live_signal: dict | None = None) -> None:
+def setup_case(root: Path, *, outcome: str = "YES", gate: bool = True, live_signal: dict | None = None) -> None:
     write(root / "control/runtime_status.json", runtime())
     write(root / "control/external_cancel_activation.json", activation(gate))
     write(root / "external_fair/external_cancel_signal.json", live_signal or signal(stale=outcome))
@@ -138,7 +138,7 @@ def setup(root: Path, *, outcome: str = "YES", gate: bool = True, live_signal: d
 
 def test_active_frozen_signal_builds_typed_cancel() -> None:
     with tempfile.TemporaryDirectory() as directory:
-        root = Path(directory); setup(root)
+        root = Path(directory); setup_case(root)
         rows, status = bridge.build_external_cancel_opportunities(root, now_ns=NOW)
         assert status["state"] == "ACTIVE" and len(rows) == 1
         row = OpportunityEnvelope.parse(rows[0]).raw
@@ -154,21 +154,21 @@ def test_active_frozen_signal_builds_typed_cancel() -> None:
 
 def test_inactive_forward_gate_fails_closed() -> None:
     with tempfile.TemporaryDirectory() as directory:
-        root = Path(directory); setup(root, gate=False)
+        root = Path(directory); setup_case(root, gate=False)
         rows, status = bridge.build_external_cancel_opportunities(root, now_ns=NOW)
         assert rows == [] and "EXTERNAL_CANCEL_FORWARD_GATE_NOT_ACTIVE" in status["reasons"]
 
 
 def test_signal_only_targets_stale_buy_outcome() -> None:
     with tempfile.TemporaryDirectory() as directory:
-        root = Path(directory); setup(root, outcome="YES", live_signal=signal(stale="NO"))
+        root = Path(directory); setup_case(root, outcome="YES", live_signal=signal(stale="NO"))
         rows, status = bridge.build_external_cancel_opportunities(root, now_ns=NOW)
         assert rows == [] and status["state"] == "NO_MATCHING_ACTIVE_BUY_QUOTES"
 
 
 def test_same_token_replacement_order_does_not_match_stale_authorization() -> None:
     with tempfile.TemporaryDirectory() as directory:
-        root = Path(directory); setup(root)
+        root = Path(directory); setup_case(root)
         status_path = root / "micro_maker/authorized_make_executor_status.json"
         status = json.loads(status_path.read_text())
         status["active_order_details"][0]["replay_key"] = "replacement-make"
@@ -181,7 +181,7 @@ def test_same_token_replacement_order_does_not_match_stale_authorization() -> No
 
 def test_missing_executor_order_state_fails_closed() -> None:
     with tempfile.TemporaryDirectory() as directory:
-        root = Path(directory); setup(root)
+        root = Path(directory); setup_case(root)
         (root / "micro_maker/authorized_make_executor_status.json").unlink()
         rows, diagnostics = bridge.build_external_cancel_opportunities(root, now_ns=NOW)
         assert rows == []
@@ -190,7 +190,7 @@ def test_missing_executor_order_state_fails_closed() -> None:
 
 def test_expired_signal_fails_closed() -> None:
     with tempfile.TemporaryDirectory() as directory:
-        root = Path(directory); setup(root, live_signal=signal(valid_until=NOW))
+        root = Path(directory); setup_case(root, live_signal=signal(valid_until=NOW))
         rows, status = bridge.build_external_cancel_opportunities(root, now_ns=NOW)
         assert rows == [] and "EXTERNAL_CANCEL_LIVE_SIGNAL_NOT_ACTIVE" in status["reasons"]
 
@@ -200,3 +200,5 @@ if __name__ == "__main__":
     test_inactive_forward_gate_fails_closed()
     test_signal_only_targets_stale_buy_outcome()
     test_expired_signal_fails_closed()
+    test_same_token_replacement_order_does_not_match_stale_authorization()
+    test_missing_executor_order_state_fails_closed()

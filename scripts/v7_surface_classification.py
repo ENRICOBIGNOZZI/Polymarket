@@ -42,7 +42,7 @@ RESEARCH_MARKERS = (
     "wallet_intelligence", "wallet_dataset", "market_open", "osint",
     "sports_latency", "sports_collector", "cross_platform", "graph_rv",
     "micro_taker", "research_shadow", "slow_economic_shadow",
-    "fair_value_research", "external_settlement_train",
+    "fair_value_research", "external_rich_train", "external_settlement_train",
     "external_settlement_validate", "external_settlement_dataset",
     # Explicit sub-second research evidence only. These surfaces have no OMS,
     # capital, inventory, signer or production-process authority.
@@ -66,6 +66,37 @@ ARCHIVE_PATHS = frozenset({
 
 class ClassificationError(ValueError):
     pass
+
+
+_DYNAMIC_REVIEW_BRANCH_PREFIXES = (
+    "refs/heads/codex/v7-", "refs/remotes/origin/codex/v7-",
+    "refs/heads/feature/v7-", "refs/remotes/origin/feature/v7-",
+    "refs/heads/fix/v7-", "refs/remotes/origin/fix/v7-",
+    "refs/heads/research/v7-", "refs/remotes/origin/research/v7-",
+    "refs/heads/chore/v7-", "refs/remotes/origin/chore/v7-",
+)
+_CUTOVER_TAG_RE = re.compile(r"^refs/tags/v7-paper-cutover-[0-9a-f]{40}$")
+
+
+def is_dynamic_review_surface_id(surface_id: str) -> bool:
+    """Recognize only fail-closed V7 review branches or exact-SHA cutover tags.
+
+    The cutover tag is created *after* the repository audit snapshot exists, so
+    it must be an explicitly admitted dynamic provenance surface.  The strict
+    40-lowercase-hex suffix prevents arbitrary tags from bypassing audit.
+    """
+    if not surface_id.startswith("ref:"):
+        return False
+    ref = surface_id[len("ref:"):]
+    return ref.startswith(_DYNAMIC_REVIEW_BRANCH_PREFIXES) or bool(
+        _CUTOVER_TAG_RE.fullmatch(ref)
+    )
+
+
+def is_exact_cutover_tag_surface_id(surface_id: str) -> bool:
+    if not surface_id.startswith("ref:"):
+        return False
+    return bool(_CUTOVER_TAG_RE.fullmatch(surface_id[len("ref:"):]))
 
 
 def _git(root: Path, *args: str) -> str:
@@ -144,6 +175,11 @@ def _classification_for_name(name: str) -> str:
 
 def _authority(name: str, classification: str) -> dict[str, Any]:
     lowered = name.lower()
+    # Git refs are audit/provenance surfaces only.  A branch/tag name must
+    # never acquire economic authority merely because it contains an owner
+    # marker such as ``cutover`` or ``capital_allocator``.
+    if lowered.startswith(("refs/heads/", "refs/remotes/", "refs/tags/")):
+        return {"owner": None, "capabilities": [], "executable": False}
     if lowered.startswith(("tests/", "docs/", "artifacts/", "schemas/", ".github/")):
         return {"owner": None, "capabilities": [], "executable": False}
     if classification in {"KEEP_ZERO_AUTHORITY_RESEARCH", "ARCHIVE_HISTORY_ONLY"}:

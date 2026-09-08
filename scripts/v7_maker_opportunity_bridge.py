@@ -14,6 +14,8 @@ selection/latency/unwind buffers.  Immature evidence can still be reported in
 diagnostics but cannot manufacture positive conservative EV.
 """
 from __future__ import annotations
+from v7_external_rich_model import is_paper_learning_fair
+
 
 import hashlib
 import json
@@ -237,6 +239,19 @@ def _feature_packet(
     }
 
 
+
+def _paper_crypto_context(registry: dict[Any, Any]) -> dict[str, Any]:
+    """Adapt the canonical verified BTC/M5 context to OpportunityEnvelope fields."""
+    context = require_context(registry, "BTC", "M5")
+    return {
+        "asset": context.asset.value,
+        "horizon": context.horizon.value,
+        "contract_family": context.contract_family,
+        "settlement_semantic_hash": context.settlement_semantic_hash,
+        "authority": "PAPER_EXPLORATION",
+        "research_only": False,
+    }
+
 def build_maker_opportunities(
     run_root: Path,
     *,
@@ -298,21 +313,36 @@ def build_maker_opportunities(
     external = fair_status.get("external") if isinstance(fair_status.get("external"), dict) else {}
     fair = fair_status.get("fair") if isinstance(fair_status.get("fair"), dict) else {}
     market_status = fair_status.get("market") if isinstance(fair_status.get("market"), dict) else {}
-    if (
-        fair_status.get("schema") != STATUS_SCHEMA
-        or fair_status.get("paper_only") is not True
-        or fair_status.get("authenticated_execution") is not False
-        or fair_status.get("real_order_submission") is not False
-        or fair_status.get("code_sha") != model_sha
-        or fair_status.get("state") != "FULL_FAIR_SHADOW_OPERATIONAL"
-        or contract.get("verified") is not True
-        or contract.get("rules_hash_recognized") is not True
-        or reference.get("valid") is not True
-        or oracle.get("healthy") is not True
-        or external.get("healthy") is not True
-        or fair.get("valid") is not True
-        or fair.get("explicit_champion_applied") is not True
-    ):
+    fair_common_ready = (
+        fair_status.get("schema") == STATUS_SCHEMA
+        and fair_status.get("paper_only") is True
+        and fair_status.get("authenticated_execution") is False
+        and fair_status.get("real_order_submission") is False
+        and fair_status.get("code_sha") == model_sha
+        and fair_status.get("state") == "FULL_FAIR_SHADOW_OPERATIONAL"
+        and contract.get("verified") is True
+        and contract.get("rules_hash_recognized") is True
+        and reference.get("valid") is True
+        and oracle.get("healthy") is True
+        and external.get("healthy") is True
+        and fair.get("valid") is True
+    )
+    fair_champion_ready = fair_common_ready and fair.get("explicit_champion_applied") is True
+    fair_bootstrap_probe_ready = (
+        fair_common_ready
+        and fair.get("explicit_champion_applied") is False
+        and fair.get("paper_exploration_bootstrap") is True
+        and fair.get("inference_state") == "VALID_PAPER_EXPLORATION_BOOTSTRAP"
+        and fair.get("calibration_state") == "PAPER_EXPLORATION_BOOTSTRAP_APPLIED"
+        and fair.get("probability_model_id") == "btc_m5_same_oracle_diffusion_bootstrap_v1"
+        and fair.get("promotion_eligible") is False
+        and fair.get("real_money_authority") is False
+        and fair.get("uses_polymarket_price_as_feature") is False
+        and fair.get("authority") == "SHADOW"
+    )
+    fair_bootstrap_probe_ready = fair_bootstrap_probe_ready or (
+        fair_common_ready and is_paper_learning_fair(fair, model_sha))
+    if not (fair_champion_ready or fair_bootstrap_probe_ready):
         reasons.append("SETTLEMENT_FAIR_NOT_MATURE_OR_VERIFIED")
     if reasons:
         return [], {
@@ -327,10 +357,7 @@ def build_maker_opportunities(
         }
 
     try:
-        context = require_context(
-            asset="BTC", horizon="M5", at_unix_ms=decision_ns // 1_000_000,
-            registry=registry,
-        )
+        context = _paper_crypto_context(registry)
     except Exception as exc:
         return [], {
             "schema": BRIDGE_SCHEMA,
@@ -342,10 +369,6 @@ def build_maker_opportunities(
             "candidate_cells": 0,
             "typed_make_opportunities": 0,
         }
-    context = dict(context)
-    context["authority"] = "PAPER_EXPLORATION"
-    context["research_only"] = False
-
     semantic_hash = str(context.get("settlement_semantic_hash") or "")
     fair_semantic = str(fair.get("settlement_semantic_hash") or semantic_hash)
     if fair_semantic != semantic_hash:
@@ -373,7 +396,8 @@ def build_maker_opportunities(
         control_probe_cell = (
             market.get("control_exploration_authorized") is True
             and str(cell.get("authority_basis") or "") in {
-                "POSITIVE_FLOW_CONTROL", "LOW_SAMPLE_FRESH_FLOW_CONTROL", "COLD_START_CONTROL"
+                "POSITIVE_FLOW_CONTROL", "LOW_SAMPLE_FRESH_FLOW_CONTROL", "COLD_START_CONTROL",
+                "SETTLEMENT_ANCHOR_COLD_START_CONTROL"
             }
         )
         if side != "BUY":
@@ -408,7 +432,11 @@ def build_maker_opportunities(
         needs_probe = (
             control_probe_cell
             and provisional_point_ev > 0.0
-            and (evidence_status != "MATURE" or provisional_conservative_ev <= 0.0)
+            and (
+                fair_bootstrap_probe_ready
+                or evidence_status != "MATURE"
+                or provisional_conservative_ev <= 0.0
+            )
         )
         probe_loss_cap = 2.0
         if needs_probe:
@@ -428,6 +456,11 @@ def build_maker_opportunities(
             continue
         if point_ev <= 0.0:
             rejected["NONPOSITIVE_POINT_EV"] = rejected.get("NONPOSITIVE_POINT_EV", 0) + 1
+            continue
+        if fair_bootstrap_probe_ready and not needs_probe:
+            rejected["BOOTSTRAP_FAIR_REQUIRES_PAPER_PROBE"] = rejected.get(
+                "BOOTSTRAP_FAIR_REQUIRES_PAPER_PROBE", 0
+            ) + 1
             continue
         if not needs_probe and (evidence_status != "MATURE" or conservative_ev <= 0.0):
             rejected["INSUFFICIENT_CONSERVATIVE_EXECUTION_EVIDENCE"] = rejected.get(
@@ -540,13 +573,16 @@ def build_maker_opportunities(
             },
             "eligible": True,
             "reasons": ([
-                "VERIFIED_SETTLEMENT_FAIR",
+                "VERIFIED_SETTLEMENT_RULE",
+                (("PAPER_LEARNED_FAIR" if fair.get("paper_exploration_learned") is True else "PAPER_EXPLORATION_BOOTSTRAP_FAIR")
+                 if fair_bootstrap_probe_ready else "EXPLICIT_FAIR_CHAMPION"),
                 "CONTROL_EXPLORATION_CELL",
                 "POSITIVE_POINT_MAKER_EV",
                 "ZERO_PROMOTION_CREDIT_INFORMATION_PROBE",
                 f"PLACEMENT_{action}",
             ] if needs_probe else [
-                "VERIFIED_SETTLEMENT_FAIR",
+                "VERIFIED_SETTLEMENT_RULE",
+                "EXPLICIT_FAIR_CHAMPION",
                 "MATURE_FILL_EVENT_LOWER_BOUND",
                 "POSITIVE_CONSERVATIVE_MAKER_EV",
                 f"PLACEMENT_{action}",
@@ -574,8 +610,12 @@ def build_maker_opportunities(
             }
         try:
             parsed = OpportunityEnvelope.parse(raw)
-        except OpportunityError:
-            rejected["CANONICAL_ENVELOPE_REJECTED"] = rejected.get("CANONICAL_ENVELOPE_REJECTED", 0) + 1
+        except OpportunityError as exc:
+            rejected["CANONICAL_ENVELOPE_REJECTED"] = rejected.get(
+                "CANONICAL_ENVELOPE_REJECTED", 0
+            ) + 1
+            reason = f"CANONICAL_ENVELOPE_REJECTED:{exc}"
+            rejected[reason] = rejected.get(reason, 0) + 1
             continue
         output.append(parsed.raw)
         if needs_probe:

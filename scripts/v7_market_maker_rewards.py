@@ -10,6 +10,15 @@ this selector records pool/configuration facts and a ranking score.  It does not
 invent a guaranteed reward share when competition evidence is unavailable.
 """
 from __future__ import annotations
+try:
+    from v7_external_rich_model import is_paper_learning_fair
+except ModuleNotFoundError:
+    # Standalone file-based test loaders need the canonical sibling directory.
+    import sys
+    from pathlib import Path as _ModulePath
+    sys.path.insert(0, str(_ModulePath(__file__).resolve().parent))
+    from v7_external_rich_model import is_paper_learning_fair
+
 
 import argparse
 from dataclasses import asdict, dataclass
@@ -482,6 +491,482 @@ def request_json(url: str, *, timeout: float = 20.0) -> Any:
     req = urllib.request.Request(url, headers={"User-Agent": "polymarket-v7-maker/1"})
     with urllib.request.urlopen(req, timeout=timeout) as response:
         return json.loads(response.read().decode("utf-8"))
+
+
+def _settlement_anchor_book(
+    raw: Any, *, token_id: str, receive_ms: int, maximum_clock_skew_ms: int,
+) -> dict[str, Any] | None:
+    if not isinstance(raw, dict) or str(raw.get("asset_id") or "") != token_id:
+        return None
+    bids: list[tuple[float, float]] = []
+    asks: list[tuple[float, float]] = []
+    for key, output in (("bids", bids), ("asks", asks)):
+        rows = raw.get(key) if isinstance(raw.get(key), list) else []
+        for row in rows:
+            if not isinstance(row, dict):
+                continue
+            price = finite(row.get("price"), -1.0)
+            size = finite(row.get("size"), 0.0)
+            if 0.0 < price < 1.0 and size > 0.0:
+                output.append((price, size))
+    bids.sort(reverse=True)
+    asks.sort()
+    if not bids or not asks or not 0.0 < bids[0][0] < asks[0][0] < 1.0:
+        return None
+    exchange_ms = int(finite(raw.get("timestamp"), 0.0))
+    if 0 < exchange_ms < 10_000_000_000:
+        exchange_ms *= 1_000
+    if (
+        exchange_ms <= 0
+        or exchange_ms > receive_ms + max(0, maximum_clock_skew_ms)
+    ):
+        return None
+    tick = finite(raw.get("tick_size"), 0.0)
+    tick_e4 = int(round(tick * 10_000.0))
+    if (
+        not 0.0 < tick < 1.0
+        or tick_e4 <= 0
+        or 10_000 % tick_e4 != 0
+        or abs(tick - tick_e4 / 10_000.0) > 1e-9
+    ):
+        return None
+    return {
+        "token_id": token_id,
+        "best_bid": bids[0][0],
+        "best_ask": asks[0][0],
+        "best_bid_size": bids[0][1],
+        "best_ask_size": asks[0][1],
+        "tick_size": tick,
+        "min_order_size": max(0.0, finite(raw.get("min_order_size"), 0.0)),
+        "exchange_timestamp_ms": min(exchange_ms, receive_ms),
+        "receive_timestamp_ms": receive_ms,
+        "snapshot_id": str(raw.get("hash") or ""),
+    }
+
+
+def _settlement_anchor_global_fill_probability(
+    execution_model_path: Path | None, *, model_sha: str,
+) -> tuple[float, str]:
+    if execution_model_path is None or not execution_model_path.is_file():
+        return 0.0, "MODEL_MISSING"
+    try:
+        model = json.loads(execution_model_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return 0.0, "MODEL_INVALID"
+    groups = model.get("groups") if isinstance(model.get("groups"), dict) else {}
+    global_group = groups.get("GLOBAL") if isinstance(groups.get("GLOBAL"), dict) else {}
+    probability = finite(global_group.get("fill_probability"), -1.0)
+    if (
+        model.get("schema") != EXECUTION_MODEL_SCHEMA
+        or model.get("paper_only") is not True
+        or model.get("authenticated_execution") is not False
+        or model.get("real_order_submission") is not False
+        or model.get("model_sha") != model_sha
+        or not 0.0 < probability <= 1.0
+    ):
+        return 0.0, "MODEL_NOT_CAUSALLY_USABLE"
+    orders = max(0, int(finite(global_group.get("orders"), 0.0)))
+    return probability, (
+        "EXECUTION_MODEL_GLOBAL_POSTERIOR"
+        if orders > 0 else "EXECUTION_MODEL_COLD_PRIOR"
+    )
+
+
+def _inject_settlement_anchor(
+    snapshot: dict[str, Any], *,
+    fair_status_path: Path | None,
+    universe_path: Path | None,
+    execution_model_path: Path | None,
+    selection_cfg: dict[str, Any],
+    model_sha: str,
+    now_ms: int,
+    now_monotonic_ns: int | None = None,
+    request_fn: Callable[..., Any] = request_json,
+) -> dict[str, Any]:
+    """Reserve one existing maker observation slot for the verified BTC M5 contract.
+
+    The anchor is PAPER research authority only.  It neither increases resource
+    capacity nor bypasses the selector/executor contracts.  A public CLOB book
+    and the execution model's own GLOBAL posterior are required before a JOIN
+    control cell is published.
+    """
+    anchor_cfg = selection_cfg.get("settlement_anchor")
+    result = snapshot
+    result["settlement_anchor_state"] = "DISABLED"
+    result["settlement_anchor_authorized"] = False
+    result["settlement_anchor_market_id"] = ""
+    result["settlement_anchor_evicted_market_id"] = ""
+    result["settlement_anchor_fill_probability_source"] = ""
+    result["settlement_anchor_identity_source"] = ""
+    if not isinstance(anchor_cfg, dict) or anchor_cfg.get("enabled") is not True:
+        return result
+    result["settlement_anchor_state"] = "AWAITING_INPUT"
+    if fair_status_path is None or universe_path is None:
+        return result
+    try:
+        fair_status = json.loads(fair_status_path.read_text(encoding="utf-8"))
+        universe = json.loads(universe_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        result["settlement_anchor_state"] = "INPUT_INVALID"
+        return result
+    fair = fair_status.get("fair") if isinstance(fair_status.get("fair"), dict) else {}
+    market = fair_status.get("market") if isinstance(fair_status.get("market"), dict) else {}
+    contract = fair_status.get("contract") if isinstance(fair_status.get("contract"), dict) else {}
+    reference = fair_status.get("settlement_reference") if isinstance(
+        fair_status.get("settlement_reference"), dict) else {}
+    oracle = fair_status.get("oracle") if isinstance(fair_status.get("oracle"), dict) else {}
+    external = fair_status.get("external") if isinstance(fair_status.get("external"), dict) else {}
+    current_mono = time.monotonic_ns() if now_monotonic_ns is None else int(now_monotonic_ns)
+    calculated_mono = int(finite(fair.get("calculated_monotonic_ns"), 0.0))
+    valid_until_mono = int(finite(fair.get("valid_until_monotonic_ns"), 0.0))
+    slug = str(market.get("slug") or "")
+    market_id = str(market.get("market_id") or "")
+    condition_id = str(market.get("condition_id") or "")
+    event_id = str(market.get("event_id") or "")
+    question = str(market.get("question") or "")
+    yes_token = str(market.get("yes_token") or "")
+    no_token = str(market.get("no_token") or "")
+    fair_yes = finite(fair.get("yes"), -1.0)
+    fee_schedule = market.get("fee_schedule") if isinstance(
+        market.get("fee_schedule"), dict) else {}
+    fee_rate = finite(fee_schedule.get("rate"), -1.0)
+    fee_exponent = finite(fee_schedule.get("exponent"), -1.0)
+    maker_fee_safe = (
+        fee_rate >= 0.0
+        and fee_exponent >= 0.0
+        and fee_schedule.get("takerOnly") is True
+    )
+    fair_mode_ready = (
+        fair.get("explicit_champion_applied") is True
+        or (
+            fair.get("explicit_champion_applied") is False
+            and fair.get("paper_exploration_bootstrap") is True
+            and fair.get("inference_state") == "VALID_PAPER_EXPLORATION_BOOTSTRAP"
+            and fair.get("calibration_state") == "PAPER_EXPLORATION_BOOTSTRAP_APPLIED"
+            and fair.get("probability_model_id") == "btc_m5_same_oracle_diffusion_bootstrap_v1"
+            and fair.get("promotion_eligible") is False
+            and fair.get("real_money_authority") is False
+            and fair.get("uses_polymarket_price_as_feature") is False
+            and fair.get("authority") == "SHADOW"
+        )
+    )
+    fair_mode_ready = fair_mode_ready or is_paper_learning_fair(fair, model_sha)
+    fair_ready = (
+        fair_status.get("schema") == "polymarket_v7_external_fair_status_v1"
+        and fair_status.get("paper_only") is True
+        and fair_status.get("authenticated_execution") is False
+        and fair_status.get("real_order_submission") is False
+        and fair_status.get("code_sha") == model_sha
+        and fair_status.get("state") == "FULL_FAIR_SHADOW_OPERATIONAL"
+        and contract.get("verified") is True
+        and contract.get("rules_hash_recognized") is True
+        and reference.get("valid") is True
+        and oracle.get("healthy") is True
+        and external.get("healthy") is True
+        and fair.get("valid") is True
+        and fair_mode_ready
+        and 0.0 < fair_yes < 1.0
+        and calculated_mono > 0
+        and calculated_mono <= current_mono <= valid_until_mono
+        and slug.startswith(str(anchor_cfg.get("required_slug_prefix") or ""))
+        and market_id and condition_id and event_id
+        and yes_token and no_token and yes_token != no_token
+        and market.get("active") is True
+        and market.get("closed") is not True
+        and market.get("accepting_orders") is True
+        and maker_fee_safe
+    )
+    if not fair_ready:
+        result["settlement_anchor_state"] = "FAIR_NOT_READY"
+        return result
+    if (
+        universe.get("schema") != UNIVERSE_SCHEMA
+        or universe.get("paper_only") is not True
+        or universe.get("authenticated_execution") is not False
+        or universe.get("real_order_submission") is not False
+        or universe.get("execution_authority") is not False
+        or universe.get("discovery_exhaustive") is not True
+        or universe.get("pagination_loop_guard_hit") is not False
+        or universe.get("model_sha") != model_sha
+    ):
+        result["settlement_anchor_state"] = "UNIVERSE_NOT_READY"
+        return result
+    universe_matches = [
+        row for row in (universe.get("markets") if isinstance(universe.get("markets"), list) else [])
+        if isinstance(row, dict) and str(row.get("market_id") or "") == market_id
+    ]
+    if universe_matches:
+        if len(universe_matches) != 1:
+            result["settlement_anchor_state"] = "UNIVERSE_IDENTITY_CONFLICT"
+            return result
+        universe_row = universe_matches[0]
+        tokens = universe_row.get("clob_token_ids") if isinstance(
+            universe_row.get("clob_token_ids"), list) else []
+        events = universe_row.get("event_ids") if isinstance(
+            universe_row.get("event_ids"), list) else []
+        universe_identity_ok = (
+            str(universe_row.get("condition_id") or "") == condition_id
+            and len(tokens) >= 2
+            and str(tokens[0]) == yes_token and str(tokens[1]) == no_token
+            and events and str(events[0]) == event_id
+            and universe_row.get("active") is True
+            and universe_row.get("closed") is not True
+            and universe_row.get("accepting_orders") is True
+        )
+        if not universe_identity_ok:
+            result["settlement_anchor_state"] = "UNIVERSE_IDENTITY_CONFLICT"
+            return result
+        identity_row = universe_row
+        identity_source = "ADAPTIVE_UNIVERSE"
+    else:
+        # The settlement monitor deliberately has a targeted exact-slug binding
+        # for the current 5m contract because the generic universe can filter a
+        # still-open market below its 24h-volume floor.  Reuse that already
+        # verified binding rather than creating a second Gamma discovery owner.
+        identity_row = {
+            "condition_id": condition_id,
+            "market_id": market_id,
+            "event_ids": [event_id],
+            "question": question,
+            "slug": slug,
+            "clob_token_ids": [yes_token, no_token],
+            "liquidity": max(0.0, finite(market.get("liquidity"))),
+            "volume_24h": max(0.0, finite(market.get("volume_24h"))),
+            "active": True,
+            "closed": False,
+            "accepting_orders": True,
+            "fee_schedule": fee_schedule,
+            "fees_enabled": market.get("fees_enabled") is True,
+            "fees_enabled_explicit": market.get("fees_enabled_explicit") is True,
+        }
+        identity_source = "VERIFIED_SETTLEMENT_BINDING"
+    fill_probability, fill_source = _settlement_anchor_global_fill_probability(
+        execution_model_path, model_sha=model_sha,
+    )
+    if fill_probability <= 0.0:
+        result["settlement_anchor_state"] = "FILL_PRIOR_NOT_READY"
+        return result
+    clob_url = str(anchor_cfg.get("clob_url") or "").rstrip("/")
+    timeout = finite(anchor_cfg.get("request_timeout_seconds"), 4.0)
+    skew = int(anchor_cfg.get("maximum_clock_skew_ms") or 0)
+    books: dict[str, dict[str, Any]] = {}
+    try:
+        for token in (yes_token, no_token):
+            received = time.time_ns() // 1_000_000
+            raw = request_fn(
+                f"{clob_url}/book?token_id={urllib.parse.quote(token)}",
+                timeout=timeout,
+            )
+            book = _settlement_anchor_book(
+                raw, token_id=token, receive_ms=received,
+                maximum_clock_skew_ms=skew,
+            )
+            if book is None:
+                raise ValueError("book_invalid")
+            books[token] = book
+    except Exception:
+        result["settlement_anchor_state"] = "CLOB_BOOK_NOT_READY"
+        return result
+    minimum_edge = finite(anchor_cfg.get("minimum_point_edge_per_share"), 0.005)
+    fair_points = {yes_token: ("YES", fair_yes), no_token: ("NO", 1.0 - fair_yes)}
+    choices: list[tuple[float, str, str, dict[str, Any]]] = []
+    quote_opportunities: list[dict[str, Any]] = []
+    for token in (yes_token, no_token):
+        outcome, fair_point = fair_points[token]
+        book = books[token]
+        edge = fair_point - float(book["best_bid"])
+        quote = {
+            "outcome": outcome,
+            "token_id": token,
+            "quote_side": "BUY",
+            "required_aggressor_side": "SELL",
+            "book_evidence_valid": True,
+            "opposite_flow_is_fresh": False,
+            "opposite_prints_30s": 0,
+            "opposite_prints_2m": 0,
+            "opposite_prints_10m": 0,
+            "opposite_shares_2m": 0.0,
+            "opposite_shares_10m": 0.0,
+            "last_opposite_flow_age_ms": -1,
+            "opposite_flow_freshness": 0.0,
+            "opposite_flow_shares_per_second": 0.0,
+            "opposite_flow_prints_per_second": 0.0,
+            "expected_opposite_prints_at_horizon": 0.0,
+            "expected_opposite_shares_at_horizon": 0.0,
+            "conditional_opposite_shares_given_reach": 0.0,
+            "market_side_score": edge,
+            "tick_size": float(book["tick_size"]),
+            "best_bid": float(book["best_bid"]),
+            "best_ask": float(book["best_ask"]),
+            "queue_ahead_shares": float(book["best_bid_size"]),
+            "inside_ticks": max(0, int(round(
+                (float(book["best_ask"]) - float(book["best_bid"]))
+                / float(book["tick_size"])
+            )) - 1),
+            "improve1_available": False,
+            "projected_flow_reach_probability": 0.0,
+            "projected_join_queue_depletion_probability": 0.0,
+            "projected_join_fill_probability": fill_probability,
+            "projected_improve1_fill_probability": 0.0,
+            "projected_best_fill_probability": fill_probability,
+            "fill_probability_source": fill_source,
+            "settlement_point_edge_per_share": edge,
+            "clob_book_receive_timestamp_ms": int(book["receive_timestamp_ms"]),
+            "clob_book_exchange_timestamp_ms": int(book["exchange_timestamp_ms"]),
+            "clob_book_snapshot_id": str(book["snapshot_id"]),
+            "authorized_actions": [],
+        }
+        quote_opportunities.append(quote)
+        if edge + 1e-12 >= minimum_edge:
+            choices.append((edge, token, outcome, quote))
+    if not choices:
+        result["settlement_anchor_state"] = "NO_POSITIVE_POINT_EDGE"
+        return result
+    choices.sort(key=lambda item: (-item[0], item[1]))
+    edge, chosen_token, chosen_outcome, _ = choices[0]
+    existing_controls = sum(
+        1 for row in result.get("markets", [])
+        if isinstance(row, dict) and row.get("control_exploration_authorized") is True
+    )
+    maximum_controls = min(
+        int(anchor_cfg.get("maximum_control_markets") or 0),
+        int((selection_cfg.get("recent_flow") or {}).get(
+            "control_exploration_maximum_markets", 0) or 0),
+    )
+    can_authorize = existing_controls < maximum_controls
+    cell = {
+        "outcome": chosen_outcome,
+        "token_id": chosen_token,
+        "action": "JOIN",
+        "quote_side": "BUY",
+        "authority_basis": "SETTLEMENT_ANCHOR_COLD_START_CONTROL",
+        "projected_flow_reach_probability": 0.0,
+        "projected_queue_depletion_probability": 0.0,
+        "projected_fill_probability": fill_probability,
+        "fill_probability_source": fill_source,
+        "settlement_point_edge_per_share": edge,
+    }
+    exact_evidence = _load_exact_cell_evidence(
+        execution_model_path, model_sha=model_sha,
+    )
+    anchor_row = {
+        "condition_id": str(identity_row.get("condition_id") or ""),
+        "market_id": market_id,
+        "event_id": event_id,
+        "slug": slug,
+        "question": str(identity_row.get("question") or ""),
+        "yes_token": yes_token,
+        "no_token": no_token,
+        "volume_24h": max(0.0, finite(identity_row.get("volume_24h"))),
+        "liquidity": max(0.0, finite(identity_row.get("liquidity"))),
+        "midpoint": 0.5 * (float(books[yes_token]["best_bid"]) + float(books[yes_token]["best_ask"])),
+        "spread": float(books[yes_token]["best_ask"]) - float(books[yes_token]["best_bid"]),
+        "market_competitiveness": 0.0,
+        "rewards_max_spread_cents": 0.0,
+        "rewards_min_size": 0.0,
+        "native_daily_rate": 0.0,
+        "sponsored_daily_rate": 0.0,
+        "total_daily_rate": 0.0,
+        "reward_intensity": 0.0,
+        "selection_score": edge,
+        "best_projected_fill_probability": fill_probability,
+        "bid_opportunity_score": edge,
+        "ask_opportunity_score": 0.0,
+        "bilateral_market_making_score": 0.0,
+        "complete_set_cycle_score": 0.0,
+        "reward_capture_score": 0.0,
+        "side_mode": "SETTLEMENT_ANCHOR",
+        "quote_opportunities": quote_opportunities,
+        "execution_role": "SETTLEMENT_ANCHOR_CONTROL" if can_authorize else "SETTLEMENT_ANCHOR_OBSERVATION",
+        "control_exploration_authorized": can_authorize,
+        "authorized_execution_cells": [
+            _annotate_exact_cell_evidence({"market_id": market_id}, cell, exact_evidence)
+        ] if can_authorize else [],
+        "authorized_execution_cell_count": 1 if can_authorize else 0,
+        "inventory_seed_authorized": False,
+        "recent_prints": 0,
+        "recent_unique_transactions": 0,
+        "recent_share_volume": 0.0,
+        "recent_notional_usd": 0.0,
+        "recent_flow_to_liquidity": 0.0,
+        "recent_last_trade_age_ms": -1,
+        "recent_buy_prints_5s": 0,
+        "recent_buy_prints_30s": 0,
+        "recent_buy_prints_2m": 0,
+        "recent_buy_prints_10m": 0,
+        "recent_buy_share_volume_10m": 0.0,
+        "recent_buy_notional_usd_10m": 0.0,
+        "recent_last_buy_age_ms": -1,
+        "recent_sell_prints_5s": 0,
+        "recent_sell_prints_30s": 0,
+        "recent_sell_prints_2m": 0,
+        "recent_sell_prints_10m": 0,
+        "recent_sell_share_volume_10m": 0.0,
+        "recent_sell_notional_usd_10m": 0.0,
+        "recent_last_sell_age_ms": -1,
+        "settlement_anchor": True,
+        "settlement_anchor_fair_probability": fair_yes,
+        "settlement_anchor_fill_probability_source": fill_source,
+        "settlement_anchor_promotion_credit": False,
+        "settlement_anchor_real_money_authority": False,
+        "settlement_anchor_identity_source": identity_source,
+        "fee_schedule": fee_schedule,
+        "fees_enabled": market.get("fees_enabled") is True,
+        "fees_enabled_explicit": market.get("fees_enabled_explicit") is True,
+    }
+    markets = result.get("markets") if isinstance(result.get("markets"), list) else []
+    existing_index = next((
+        index for index, row in enumerate(markets)
+        if isinstance(row, dict) and str(row.get("market_id") or "") == market_id
+    ), None)
+    evicted_market_id = ""
+    if existing_index is not None:
+        markets[existing_index] = anchor_row
+    elif len(markets) < int(result.get("resource_capacity_markets") or 0):
+        markets.append(anchor_row)
+    elif anchor_cfg.get("evict_observation_only_market") is True:
+        evictable = [
+            (finite(row.get("selection_score")), index)
+            for index, row in enumerate(markets)
+            if isinstance(row, dict)
+            and int(row.get("authorized_execution_cell_count") or 0) == 0
+            and row.get("control_exploration_authorized") is not True
+            and row.get("settlement_anchor") is not True
+        ]
+        if not evictable:
+            result["settlement_anchor_state"] = "NO_SAFE_CAPACITY_SLOT"
+            return result
+        _, index = min(evictable, key=lambda item: (item[0], item[1]))
+        evicted_market_id = str(markets[index].get("market_id") or "")
+        markets[index] = anchor_row
+    else:
+        result["settlement_anchor_state"] = "NO_SAFE_CAPACITY_SLOT"
+        return result
+    result["markets"] = markets
+    result["selected_count"] = len(markets)
+    result["authorized_execution_cell_count"] = sum(
+        len(row.get("authorized_execution_cells") or [])
+        for row in markets if isinstance(row, dict)
+    )
+    result["control_exploration_cell_count"] = sum(
+        len(row.get("authorized_execution_cells") or [])
+        for row in markets if isinstance(row, dict)
+        and row.get("control_exploration_authorized") is True
+    )
+    result["control_exploration_market_count"] = sum(
+        1 for row in markets if isinstance(row, dict)
+        and row.get("control_exploration_authorized") is True
+    )
+    result["unused_resource_capacity_markets"] = max(
+        0, int(result.get("resource_capacity_markets") or 0) - len(markets)
+    )
+    result["settlement_anchor_state"] = "AUTHORIZED" if can_authorize else "OBSERVATION_ONLY_CONTROL_CAP"
+    result["settlement_anchor_authorized"] = can_authorize
+    result["settlement_anchor_market_id"] = market_id
+    result["settlement_anchor_evicted_market_id"] = evicted_market_id
+    result["settlement_anchor_fill_probability_source"] = fill_source
+    result["settlement_anchor_identity_source"] = identity_source
+    return result
 
 
 def atomic_json(path: Path, value: Any) -> None:
@@ -1587,6 +2072,25 @@ def _validated_config(config_path: Path) -> tuple[dict[str, Any], dict[str, Any]
     configured_capacity = int(selection_cfg.get("max_active_markets", 0))
     if resource_capacity <= 0 or configured_capacity != resource_capacity:
         raise ValueError("maker market capacity must equal declared shard resource capacity")
+    anchor = selection_cfg.get("settlement_anchor")
+    if (
+        not isinstance(anchor, dict)
+        or anchor.get("enabled") is not True
+        or int(anchor.get("maximum_slots") or 0) != 1
+        or anchor.get("paper_exploration_only") is not True
+        or int(anchor.get("maximum_control_markets") or 0) < 1
+        or int(anchor.get("maximum_control_markets") or 0) > resource_capacity
+        or str(anchor.get("required_slug_prefix") or "") != "btc-updown-5m-"
+        or str(anchor.get("clob_url") or "").rstrip("/") != "https://clob.polymarket.com"
+        or not 0.1 <= finite(anchor.get("request_timeout_seconds"), 0.0) <= 10.0
+        or not 0 <= int(anchor.get("maximum_clock_skew_ms") or -1) <= 1_000
+        or not 0.0 < finite(anchor.get("minimum_point_edge_per_share"), 0.0) < 0.25
+        or anchor.get("fill_probability_source") != "EXECUTION_MODEL_GLOBAL_POSTERIOR"
+        or anchor.get("evict_observation_only_market") is not True
+        or anchor.get("promotion_credit") is not False
+        or anchor.get("real_money_authority") is not False
+    ):
+        raise ValueError("maker settlement anchor config invalid")
     return cfg, selection_cfg, capacity_cfg, resource_capacity
 
 
@@ -2126,6 +2630,15 @@ def selector_status(
         "candidate_max_last_sell_age_seconds": (
             max(candidate_last_sell_ages) if candidate_last_sell_ages else -1.0
         ),
+        "settlement_anchor_state": candidate.get("settlement_anchor_state", "DISABLED"),
+        "settlement_anchor_authorized": candidate.get("settlement_anchor_authorized") is True,
+        "settlement_anchor_market_id": str(candidate.get("settlement_anchor_market_id") or ""),
+        "settlement_anchor_fill_probability_source": str(
+            candidate.get("settlement_anchor_fill_probability_source") or ""
+        ),
+        "settlement_anchor_identity_source": str(
+            candidate.get("settlement_anchor_identity_source") or ""
+        ),
     }
 
 
@@ -2141,6 +2654,7 @@ def main() -> int:
     parser.add_argument("--live-flow", type=Path)
     parser.add_argument("--allocation", type=Path)
     parser.add_argument("--execution-model", type=Path)
+    parser.add_argument("--settlement-fair-status", type=Path)
     parser.add_argument("--model-sha", default="")
     parser.add_argument("--deadline-seconds", type=float)
     parser.add_argument("--request-timeout-seconds", type=float)
@@ -2156,6 +2670,17 @@ def main() -> int:
         deadline_seconds=args.deadline_seconds,
         request_timeout_seconds=args.request_timeout_seconds,
     )
+    if args.settlement_fair_status is not None:
+        _, selection_cfg, _, _ = _validated_config(args.config)
+        snapshot = _inject_settlement_anchor(
+            snapshot,
+            fair_status_path=args.settlement_fair_status,
+            universe_path=args.fallback_universe,
+            execution_model_path=args.execution_model,
+            selection_cfg=selection_cfg,
+            model_sha=args.model_sha.lower(),
+            now_ms=int(snapshot.get("timestamp_ms") or time.time_ns() // 1_000_000),
+        )
     runtime_snapshot, pinned = publish_runtime_selection(
         snapshot,
         args.output,

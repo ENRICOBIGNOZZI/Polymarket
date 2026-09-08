@@ -381,27 +381,49 @@ double ExternalAssetState::compute_composite(
 
 void ExternalAssetState::record_price_sample(std::int64_t receive_ns, double price) noexcept {
     if (receive_ns <= 0 || !finite(price) || price <= 0.0) return;
+    if (history_count_ > 0) {
+        auto& latest = history_[(history_head_ + history_.size() - 1) % history_.size()];
+        if (receive_ns < latest.receive_ns) return; // never retimestamp future state backward
+        if (receive_ns / kPriceBucketNs == latest.receive_ns / kPriceBucketNs) {
+            latest = PriceSample{receive_ns, price};
+            return;
+        }
+    }
     history_[history_head_] = PriceSample{receive_ns, price};
     history_head_ = (history_head_ + 1) % history_.size();
     history_count_ = std::min(history_.size(), history_count_ + 1);
 }
 
-double ExternalAssetState::lagged_return(std::int64_t now_ns,
-                                         std::int64_t horizon_ns,
-                                         double current_price) const noexcept {
-    if (history_count_ == 0 || current_price <= 0.0 || horizon_ns <= 0) return 0.0;
-    const std::int64_t target = now_ns - horizon_ns;
-    std::int64_t best_time = std::numeric_limits<std::int64_t>::min();
-    double best_price = 0.0;
-    for (std::size_t i = 0; i < history_count_; ++i) {
-        const auto& sample = history_[i];
-        if (sample.receive_ns > 0 && sample.receive_ns <= target
-            && sample.receive_ns > best_time && sample.price > 0.0) {
-            best_time = sample.receive_ns;
-            best_price = sample.price;
-        }
+const ExternalAssetState::PriceSample* ExternalAssetState::price_sample_at_or_before(
+    std::int64_t target_ns) const noexcept {
+    // Binary search the logical, chronologically ordered circular buffer.
+    const auto oldest = (history_head_ + history_.size() - history_count_) % history_.size();
+    std::size_t lo = 0, hi = history_count_;
+    while (lo < hi) {
+        const auto mid = lo + (hi - lo) / 2;
+        if (history_[(oldest + mid) % history_.size()].receive_ns <= target_ns) lo = mid + 1;
+        else hi = mid;
     }
-    return best_price > 0.0 ? std::log(current_price / best_price) : 0.0;
+    if (lo == 0) return nullptr;
+    const auto& sample = history_[(oldest + lo - 1) % history_.size()];
+    // No bridging a historical outage with a very stale endpoint.
+    if (target_ns - sample.receive_ns > 250'000'000LL) return nullptr;
+    return &sample;
+}
+
+bool ExternalAssetState::return_history_available(std::int64_t now_ns,
+    std::int64_t horizon_ns) const noexcept {
+    return horizon_ns > 0 && now_ns >= horizon_ns
+        && price_sample_at_or_before(now_ns - horizon_ns) != nullptr;
+}
+
+double ExternalAssetState::lagged_return(std::int64_t now_ns,
+    std::int64_t horizon_ns, double current_price) const noexcept {
+    if (!finite(current_price) || current_price <= 0.0 || horizon_ns <= 0 || now_ns < horizon_ns) return 0.0;
+    const auto* sample = price_sample_at_or_before(now_ns - horizon_ns);
+    // POD tape ABI remains unchanged; JSON consumers receive an explicit
+    // availability bit and null, not this legacy numeric sentinel.
+    return sample != nullptr ? std::log(current_price / sample->price) : 0.0;
 }
 
 void ExternalAssetState::record_external_cancel_grid_sample(

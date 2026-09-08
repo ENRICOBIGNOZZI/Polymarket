@@ -9,6 +9,8 @@ records enter the common opportunity coordinator. Nothing from this component
 can reach portfolio cash or authoritative PAPER PnL directly.
 """
 from __future__ import annotations
+from v7_external_rich_model import is_paper_learning_fair
+
 
 import argparse
 import hashlib
@@ -1376,14 +1378,14 @@ def paper_probe_candidates(
     if probe_policy is None:
         return []
     fair = status.get("fair") if isinstance(status.get("fair"), dict) else {}
-    if (
-        fair.get("valid") is not True
-        or fair.get("paper_exploration_bootstrap") is not True
-        or fair.get("promotion_eligible") is not False
-        or fair.get("real_money_authority") is not False
-        or fair.get("probability_model_id") != probe_policy["required_probability_model_id"]
-        or not identity_hash(fair.get("probability_model_hash"))
-    ):
+    learned = (probe_policy.get("allow_frozen_rich_ml") is True
+               and is_paper_learning_fair(fair, str(status.get("code_sha") or "")))
+    bootstrap = (fair.get("valid") is True
+        and fair.get("paper_exploration_bootstrap") is True
+        and fair.get("promotion_eligible") is False and fair.get("real_money_authority") is False
+        and fair.get("probability_model_id") == probe_policy["required_probability_model_id"]
+        and identity_hash(fair.get("probability_model_hash")))
+    if not (bootstrap or learned):
         return []
     contract = status.get("contract") if isinstance(status.get("contract"), dict) else {}
     reference = status.get("settlement_reference") if isinstance(status.get("settlement_reference"), dict) else {}
@@ -1585,7 +1587,8 @@ def opportunity_set(
         "external_features": {
             key: external.get(key) for key in (
                 "composite_price", "composite_microprice", "dispersion_bps",
-                "fresh_venue_count", "age_ns", "return_250ms", "return_1s",
+                "fresh_venue_count", "age_ns", "feature_semantics_version",
+                "return_history_available", "return_100ms", "return_250ms", "return_1s",
                 "return_5s", "return_30s", "realized_vol_fast",
                 "realized_vol_medium", "realized_vol_slow", "realized_vol_30s",
                 "aggregate_ofi", "aggregate_trade_imbalance",
@@ -1624,6 +1627,11 @@ class PaperRouter:
             self.config.get("paper_exploration_probe")
             if isinstance(self.config.get("paper_exploration_probe"), dict) else None
         )
+        if self.probe_policy is not None:
+            ml = self.config.get("paper_ml_probe") or {}
+            self.probe_policy["allow_frozen_rich_ml"] = bool(
+                ml.get("enabled") is True and ml.get("promotion_credit") is False
+                and ml.get("automatic_promotion") is False and ml.get("real_order_submission") is False)
         self.policy_sha256 = hashlib.sha256(
             json.dumps(self.config, separators=(",", ":"), sort_keys=True).encode()
         ).hexdigest()
@@ -1812,6 +1820,9 @@ class PaperRouter:
                     "counterfactual_id", "forecast_id", "market_id", "event_id",
                     "rules_hash", "reference_version", "tte_bucket_seconds",
                     "observed_tte_seconds", "model_yes", "market_yes",
+                    "external_context", "rich_feature_cut", "rich_feature_sha256",
+                    "execution_probability_model_id", "execution_probability_model_hash",
+                    "paper_exploration_learned", "independent_baseline_yes",
                     "external_only_yes", "hybrid_yes", "external_only_model_id",
                     "hybrid_model_id", "registered_challenger_yes",
                     "registered_challenger_model_id",
@@ -2410,6 +2421,8 @@ class PaperRouter:
             status.get("fair_models"), dict) else {}
         challenger = fair_models.get("registered_challenger") if isinstance(
             fair_models.get("registered_challenger"), dict) else {}
+        independent = fair_models.get("external_only_fair") or fair
+        independent_yes = finite(independent.get("yes")) if independent.get("valid") is True else math.nan
         tte = finite(fair.get("tte_seconds"))
         model_yes = finite(fair.get("yes"))
         market_yes = live_market_yes(books, market)
@@ -2434,8 +2447,8 @@ class PaperRouter:
             and model_yes is not None and 0.0 <= model_yes <= 1.0
         )
         hybrid_yes = (
-            hybrid_probability(model_yes, market_yes, self.hybrid_market_weight)
-            if model_available and market_yes is not None else math.nan
+            hybrid_probability(independent_yes, market_yes, self.hybrid_market_weight)
+            if math.isfinite(independent_yes) and market_yes is not None else math.nan
         )
         bucket = min(FORECAST_TTE_BUCKETS, key=lambda value: (abs(value - tte), -value))
         if abs(bucket - tte) > FORECAST_BUCKET_TOLERANCE_SECONDS:
@@ -2450,6 +2463,13 @@ class PaperRouter:
         observed_ms = now_ms()
         resolution_due_ms = observed_ms + int(tte * 1000.0)
         values = {
+            "external_context": status.get("external_context", {}),
+            "rich_feature_cut": fair.get("rich_feature_cut"),
+            "rich_feature_sha256": fair.get("rich_feature_sha256"),
+            "execution_probability_model_id": fair.get("probability_model_id"),
+            "execution_probability_model_hash": fair.get("probability_model_hash"),
+            "paper_exploration_learned": fair.get("paper_exploration_learned") is True,
+            "independent_baseline_yes": (status.get("fair_models", {}).get("external_only_fair") or {}).get("yes"),
             "counterfactual_id": forecast_id, "forecast_id": forecast_id,
             "market_id": market_id, "event_id": str(market.get("event_id") or ""),
             "rules_hash": str(contract.get("rules_hash") or ""),
@@ -2457,7 +2477,7 @@ class PaperRouter:
             "tte_bucket_seconds": bucket, "observed_tte_seconds": tte,
             "model_yes": model_yes if model_available else None,
             "market_yes": market_yes,
-            "external_only_yes": model_yes if model_available else None,
+            "external_only_yes": independent_yes if math.isfinite(independent_yes) else None,
             "hybrid_yes": hybrid_yes if math.isfinite(hybrid_yes) else None,
             "external_only_model_id": "external_only_fair",
             "hybrid_model_id": "hybrid_fair",
@@ -2478,7 +2498,8 @@ class PaperRouter:
             "external_features": {
                 key: external.get(key) for key in (
                     "composite_price", "composite_microprice", "dispersion_bps",
-                    "fresh_venue_count", "age_ns", "return_250ms", "return_1s",
+                    "fresh_venue_count", "age_ns", "feature_semantics_version",
+                "return_history_available", "return_100ms", "return_250ms", "return_1s",
                     "return_5s", "return_30s", "realized_vol_fast",
                     "realized_vol_medium", "realized_vol_slow", "realized_vol_30s",
                     "aggregate_ofi", "aggregate_trade_imbalance",
@@ -2525,6 +2546,11 @@ class PaperRouter:
         available = (challenger.get("valid") is True
                      and challenger.get("explicit_registry_model_applied") is True
                      and challenger.get("registry_role") == "CHALLENGER")
+        current_fair = status.get("fair") or {}
+        values["external_context"] = status.get("external_context", {})
+        values["rich_feature_cut"] = current_fair.get("rich_feature_cut")
+        values["rich_feature_sha256"] = current_fair.get("rich_feature_sha256")
+        values["execution_probability_model_hash"] = current_fair.get("probability_model_hash")
         values["frozen_comparison"] = {
             "schema": "polymarket_v7_forward_comparison_observation_v1",
             "market_probability": values.get("market_yes"),
@@ -2612,6 +2638,11 @@ class PaperRouter:
                     model_brier, model_log_loss = self.forecast_scores(model_yes, actual_yes)
                 else:
                     model_brier = model_log_loss = None
+                independent_yes = finite(forecast.get("external_only_yes"), model_yes)
+                if math.isfinite(independent_yes):
+                    independent_brier, independent_log_loss = self.forecast_scores(independent_yes, actual_yes)
+                else:
+                    independent_brier = independent_log_loss = None
                 hybrid_yes = finite(forecast.get("hybrid_yes"))
                 if math.isfinite(hybrid_yes):
                     hybrid_brier, hybrid_log_loss = self.forecast_scores(hybrid_yes, actual_yes)
@@ -2632,8 +2663,8 @@ class PaperRouter:
                     actual_yes=actual_yes, winning_token_id=winning_token,
                     model_brier=model_brier, market_brier=market_brier,
                     model_log_loss=model_log_loss, market_log_loss=market_log_loss,
-                    external_only_brier=model_brier,
-                    external_only_log_loss=model_log_loss,
+                    external_only_brier=independent_brier,
+                    external_only_log_loss=independent_log_loss,
                     hybrid_yes=hybrid_yes if math.isfinite(hybrid_yes) else None,
                     hybrid_brier=hybrid_brier, hybrid_log_loss=hybrid_log_loss,
                     lower=forecast.get("lower"), upper=forecast.get("upper"),
@@ -2752,6 +2783,9 @@ class PaperRouter:
             predicted_fill_probability=1.0, expected_ev=robust_ev * size,
             intended_action="TAKE", intended_size=size,
             metadata={
+                "paper_exploration_learned": fair.get("paper_exploration_learned") is True,
+                "rich_feature_sha256": fair.get("rich_feature_sha256"),
+                "probability_model_code_sha": fair.get("model_code_sha"),
                 "authority": "SHADOW_ZERO_AUTHORITY", "virtual_tif": "FAK",
                 "outcome": row["outcome"], "execution_side": "BUY",
                 "fair_yes": fair.get("yes"), "fair_lower": fair.get("lower"),

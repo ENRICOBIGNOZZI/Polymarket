@@ -281,7 +281,7 @@ export PM_V7_WS_RESOLVE_IPS
 # Freeze one exact-SHA calibration challenger from already-settled SHADOW
 # contracts before the RTDS monitor starts. This publishes no execution
 # authority; every subsequent settlement is immutable forward OOS evidence.
-python3 scripts/v7_external_fair_challenger.py \
+python3 scripts/v7_external_rich_train.py \
   --tape "$RUN_ROOT/../paper_v7_durable/external_fair/counterfactuals.jsonl" \
   --tape "$RUN_ROOT/external_fair/counterfactuals.jsonl" \
   --registry "$RUN_ROOT/external_fair/model_registry" \
@@ -675,6 +675,7 @@ v7_register_child "$!"
       --trade-tape "$RUN_ROOT/trade_tape.csv" \
       --allocation "$ALLOC/micro_maker.json" \
       --execution-model "$MAKER_CHAMPION_MODEL" \
+      --settlement-fair-status "$RUN_ROOT/external_fair/status.json" \
       --model-sha "$SHA" \
       >> "$RUN_ROOT/micro_maker/reward_selection.log" 2>&1 || true
     sleep "$MAKER_SELECTOR_REFRESH_SECONDS"

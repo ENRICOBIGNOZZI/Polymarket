@@ -248,7 +248,7 @@ class OpportunityEnvelope:
             raise OpportunityError("latency_fields")
         if latency.get("economic_percentile") not in {"p90", "p95", "p99", "p99.9"}:
             raise OpportunityError("latency_percentile")
-        if int(latency.get("arrival_ns") or -1) < 0:
+        if _finite(latency.get("arrival_ns"), "latency_arrival") < 0.0:
             raise OpportunityError("latency_arrival")
         capacity = _mapping(value.get("capacity"), "capacity")
         if set(capacity) != {"executable_size", "depth_provenance"}:
@@ -332,6 +332,11 @@ class OpportunityEnvelope:
                 "TAKE": "btc_m5_same_oracle_diffusion_bootstrap_v1",
                 "MAKE": "btc_m5_maker_execution_bootstrap_probe_v1",
             }
+            recognized_probe_model = probe.get("model_id") == probe_model_by_action.get(action)
+            if action == "TAKE" and re.fullmatch(
+                r"btc-m5-rich-logit-[0-9a-f]{16}", str(probe.get("model_id") or "")
+            ):
+                recognized_probe_model = True
             if (
                 probe.get("mode") != "PAPER_BOOTSTRAP_PROBE"
                 or point_change <= 0.0
@@ -343,7 +348,7 @@ class OpportunityEnvelope:
                 or probe.get("promotion_eligible") is not False
                 or probe.get("robust_candidate") is not False
                 or probe.get("arrival_revalidated") is not True
-                or probe.get("model_id") != probe_model_by_action.get(action)
+                or not recognized_probe_model
                 or not HASH64.fullmatch(str(probe.get("model_hash") or ""))
                 or expected_wealth_change < -maximum_loss - 1e-9
                 or _finite(value.get("portfolio_exposure_delta"), "portfolio_exposure_delta") > loss_cap + 1e-9
@@ -371,7 +376,7 @@ class OpportunityEnvelope:
                 or value.get("calibration_status") not in {"IMMATURE", "MATURE", "NOT_APPLICABLE"}
                 or settlement.get("verified") is not True
                 or float(capacity["executable_size"]) <= 0.0
-                or int(latency.get("arrival_ns") or -1) < 0
+                or _finite(latency.get("arrival_ns"), "latency_arrival") < 0.0
             ):
                 raise OpportunityError("paper_exploration_evidence_incomplete")
         elif action in NEW_RISK_ACTIONS and (
