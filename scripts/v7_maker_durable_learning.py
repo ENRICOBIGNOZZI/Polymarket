@@ -1236,6 +1236,36 @@ def fit_model(values: list[dict[str, Any]], *, model_sha: str, policy_hash: str,
     }
 
 
+def materialize_frozen_champion(path: pathlib.Path, candidate: dict[str, Any]) -> dict[str, Any]:
+    """Create the runtime snapshot once. Periodic evidence fits cannot promote.
+
+    Replacing even only generated_ts_ms would relabel past quotes using a future
+    model publication. A code/policy change requires the canonical new run root.
+    """
+    if path.is_symlink():
+        raise ValueError("maker_champion_symlink")
+    if path.exists():
+        existing = json.loads(path.read_text(encoding="utf-8"))
+        identity = ("schema", "model_sha", "code_sha", "policy_hash", "config_hash",
+                    "execution_semantics_version", "paper_only", "authenticated_execution",
+                    "real_order_submission", "artifact_role")
+        if (not isinstance(existing, dict)
+                or any(existing.get(k) != candidate.get(k) for k in identity)
+                or existing.get("paper_only") is not True
+                or existing.get("authenticated_execution") is not False
+                or existing.get("real_order_submission") is not False
+                or not isinstance(existing.get("generated_ts_ms"), int)
+                or existing["generated_ts_ms"] <= 0):
+            raise ValueError("maker_champion_identity_change_requires_new_run")
+        return existing
+    path.parent.mkdir(parents=True, exist_ok=True)
+    fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+    with os.fdopen(fd, "w", encoding="utf-8") as handle:
+        json.dump(candidate, handle, sort_keys=True, indent=2, allow_nan=False)
+        handle.write("\n"); handle.flush(); os.fsync(handle.fileno())
+    return candidate
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--source-root", action="append", type=pathlib.Path, default=[])
@@ -1285,7 +1315,7 @@ def main() -> int:
         config_hash=config_hash, cold_fill_prior=max(1e-6, min(0.5, args.cold_fill_prior)),
         fill_prior_strength_orders=fill_prior_strength_orders,
     )
-    atomic_json(args.champion, model)
+    frozen_model = materialize_frozen_champion(args.champion, model)
     status = {
         "schema": STORE_SCHEMA,
         "timestamp_ms": time.time_ns() // 1_000_000,
@@ -1307,6 +1337,10 @@ def main() -> int:
         "model_state": model["model_state"],
         "fill_prior_strength_orders": fill_prior_strength_orders,
         "champion_path": str(args.champion),
+        "champion_generated_ts_ms": frozen_model["generated_ts_ms"],
+        "champion_frozen_across_refits": True,
+        "refit_promotion_authority": False,
+        "refit_model_state": model["model_state"],
         "champion_sha256": hashlib.sha256(args.champion.read_bytes()).hexdigest(),
     }
     atomic_json(args.store_status, status)

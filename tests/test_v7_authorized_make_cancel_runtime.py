@@ -220,6 +220,49 @@ def run(executor: Path) -> None:
             fills = [row for row in spool_rows(root) if row.get("event_type") == "FILL"]
             assert len(fills) == 1
             assert abs(float(fills[0]["filled_size"]) - 0.5) < 1e-12
+            assert fills[0]["position_id"]
+            assert fills[0]["metadata"]["excluded_from_portfolio_equity"] is False
+            # A different market's engine also starts at native ID 1. Its public
+            # order identity and executor-map entry must nevertheless be unique.
+            def second_market(value):
+                rendered = json.dumps(value)
+                for old, new in (("market-1", "market-2"), ("event-1", "event-2"),
+                                 ("yes-token", "yes-token-2"), ("no-token", "no-token-2")):
+                    rendered = rendered.replace(old, new)
+                return json.loads(rendered)
+            selection2 = second_market(fixture.selection())
+            selection2["timestamp_ms"] = time.time_ns() // 1_000_000
+            write(root / "micro_maker/reward_selection.json", selection2)
+            write(root / "external_fair/status.json", second_market(fixture.fair_status()))
+            maker_bridge._paper_crypto_context = lambda _registry: fixture.context()
+            try:
+                now_ns = time.time_ns()
+                maker2, diag2 = maker_bridge.build_maker_opportunities(root, now_ns=now_ns, repository_root=ROOT)
+            finally:
+                maker_bridge._paper_crypto_context = original_paper_context
+            assert maker2, diag2
+            decision2 = coordinator.coordinate(maker2, now_ns=now_ns,
+                new_risk_authorized=False, paper_exploration_authorized=True)
+            coordinator._publish_make_authorization(root, decision2, maker2)
+            next_order = wait_for(root, lambda r: r.get("submitted_orders") == 2 and r.get("active_orders") == 1)
+            new_id = next_order["active_order_details"][0]["order_id"]
+            assert new_id != active_before_cancel["order_id"]
+            assert next_order["active_order_details"][0]["market_id"] == "market-2"
+            # Canonical drain is a real cancel, not a fake terminal state. It
+            # must use the same 100ms cancel lifecycle and reject new MAKEs.
+            write(root / "control/CUTOVER_DRAIN", {"paper_only":True})
+            drained = wait_for(root, lambda r: r.get("terminal_orders") == 2 and r.get("active_orders") == 0)
+            assert drained["last_terminal_reason"] == "CANCELLED"
+            # A previous rejection can already be present in the status file.
+            # Observe a NEW receipt consumption, not a stale absolute count.
+            prior_rejections = int(drained.get("rejected_authorizations", 0))
+            coordinator._publish_make_authorization(root, decision2, maker2)
+            refused = wait_for(root, lambda r:
+                int(r.get("rejected_authorizations", 0)) > prior_rejections
+                and r.get("last_error") == "CANONICAL_DRAIN_OR_KILL_NO_NEW_MAKE")
+            assert refused["submitted_orders"] == 2
+            assert refused["active_orders"] == 0
+            assert refused["last_error"] == "CANONICAL_DRAIN_OR_KILL_NO_NEW_MAKE"
         finally:
             process.terminate()
             try:

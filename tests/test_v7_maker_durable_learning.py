@@ -10,7 +10,7 @@ sys.path.insert(0, str(ROOT / "scripts"))
 
 from v7_maker_durable_learning import (  # noqa: E402
     adverse_markout_models, append_new, compact_evidence, fit_model, hazard_model, identity,
-    evidence_files, placement_features, rows, shadow_probe_policy_value,
+    evidence_files, placement_features, rows, shadow_probe_policy_value, materialize_frozen_champion,
 )
 
 SHA = "a" * 40
@@ -33,6 +33,23 @@ def record(event_type: str, record_id: str, **extra):
 
 
 class DurableLearningTests(unittest.TestCase):
+    def test_periodic_refit_never_rewrites_published_champion(self) -> None:
+        with tempfile.TemporaryDirectory() as folder:
+            p=pathlib.Path(folder)/"execution_model.json"
+            model=fit_model([],model_sha=SHA,policy_hash="p",config_hash="c",cold_fill_prior=.02)
+            first=materialize_frozen_champion(p,model);raw=p.read_bytes()
+            changed=dict(model);changed["generated_ts_ms"]+=300_000
+            changed["model_state"]="FUTURE_REFIT"
+            reused=materialize_frozen_champion(p,changed)
+            self.assertEqual(p.read_bytes(),raw)
+            self.assertEqual(reused["generated_ts_ms"],first["generated_ts_ms"])
+            self.assertNotEqual(reused["model_state"],"FUTURE_REFIT")
+            changed["model_sha"]="b"*40
+            with self.assertRaisesRegex(ValueError,"requires_new_run"):
+                materialize_frozen_champion(p,changed)
+            self.assertEqual(p.read_bytes(),raw)
+
+
     def test_verified_cutover_gzip_remains_a_readable_evidence_source(self) -> None:
         with tempfile.TemporaryDirectory() as folder:
             root = pathlib.Path(folder)

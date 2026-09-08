@@ -34,3 +34,32 @@ therefore enter ONLY the existing loss-capped, zero-promotion-credit PAPER probe
 lane, never mature robust MAKE/TAKE authority. The verified external-cancel rule
 is unchanged and remains a separate risk action. A failed or absent learned model
 leaves the declared bootstrap fallback visible; it is not silently called ML.
+
+### Immutable Maker publication during evidence refits
+
+The durable Maker learner materializes the execution-model snapshot once per
+exact-SHA/policy/config run. Periodic fitting updates evidence and the separate
+challenger flow; it must never overwrite the published champion, including its
+generation timestamp. The external-cancel protocol refuses any subsequent change
+to that identity. Newly decoded episodes pass the same causal validator before
+admission. Sessions which started before publication are not forward evidence.
+
+The prior mutable publication timestamp invalidated 2,525 diagnostic episodes in
+142 old-runtime files. These must be quarantined with content hashes, never
+backdated or credited toward promotion. The independently hash-pinned official v3
+seed is separate evidence and must still pass full recomputation.
+
+### Unified Maker cash/inventory and exact order identity
+
+The canonical crypto account now reconstructs BOTH informed-taker and authorized
+Maker fills from the same ledger/spool. Maker partial fills have separate durable
+positions and verified binary settlement FINALs. An open Maker position subtracts
+its entry debit and contributes only an evidenced executable mark (otherwise zero)
+to shared equity. Duplicate/orphan/overfill or non-binary settlement records fail
+closed. Historical numeric Maker order IDs are qualified by market in the read
+projection; the corrected executor emits globally qualified market/replay IDs.
+
+The same crypto account owner, not a new worker or ledger writer, performs Maker
+settlement. The coordinator and Maker executor honor canonical drain/kill markers.
+Cutover checks actual authorized-Maker active orders and ledger positions; a
+zero-authority observer report cannot conceal an unsettled executable fill.

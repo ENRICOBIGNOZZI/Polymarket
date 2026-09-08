@@ -157,6 +157,24 @@ def test_no_closed_markets_materializes_explicit_ineligible_activation() -> None
         assert activation["forward_state"] == "FORWARD_EVIDENCE_INSUFFICIENT"
 
 
+def test_protocol_refuses_future_refit_timestamp_reinterpretation() -> None:
+    with tempfile.TemporaryDirectory() as directory:
+        root=Path(directory);run=root/"run";research=root/"research"
+        model={"schema":"polymarket_v7_maker_execution_model_v1","paper_only":True,
+               "authenticated_execution":False,"real_order_submission":False,
+               "model_sha":SHA,"generated_ts_ms":1000}
+        path=run/"micro_maker/execution_model.json";write(path,model)
+        args=dict(run_root=run,research_root=research,registry=REGISTRY,
+                  tape_dump=root/"missing",model_sha=SHA)
+        runtime.evaluate_once(**args)
+        protocol=research/"protocol"/(SHA+".json");raw=protocol.read_bytes()
+        model["generated_ts_ms"]=2000;write(path,model)
+        try:runtime.evaluate_once(**args)
+        except ValueError as exc:assert str(exc)=="external_cancel_protocol_identity_changed_after_freeze"
+        else:raise AssertionError("future model publication replaced frozen protocol")
+        assert protocol.read_bytes()==raw
+
+
 def test_runtime_failure_overwrites_any_prior_true_activation() -> None:
     import subprocess
     with tempfile.TemporaryDirectory() as directory:
@@ -340,6 +358,7 @@ if __name__ == "__main__":
     test_external_segments_include_closed_gzip_but_never_open_files()
     test_no_closed_markets_materializes_explicit_ineligible_activation()
     test_runtime_failure_overwrites_any_prior_true_activation()
+    test_protocol_refuses_future_refit_timestamp_reinterpretation()
     test_verified_seed_pack_is_recomputed_before_activation_and_corruption_fails_closed()
     test_semantic_report_compare_accepts_only_machine_scale_float_roundoff()
     test_launcher_binds_existing_durable_seed_pack_without_new_authority()

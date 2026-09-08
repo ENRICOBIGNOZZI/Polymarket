@@ -10,6 +10,7 @@ can reach portfolio cash or authoritative PAPER PnL directly.
 """
 from __future__ import annotations
 from v7_external_rich_model import is_paper_learning_fair
+from v7_maker_accounting import project_maker, settlement_event as maker_settlement_event
 
 
 import argparse
@@ -903,6 +904,18 @@ def reconstruct_paper_exploration_account(
             "market_mid_source": "LIVE_COMPLEMENT_CONSISTENT_CLOB_BATCH",
         }
 
+    maker = project_maker(events, cached)
+    total_entry_debit += maker["entry_debit"]
+    total_settlement_payout += maker["settlement_payout"]
+    realized_pnl += maker["realized_pnl"]
+    marked_open_value += maker["marked_open_value"]
+    open_entry_debit += maker["open_entry_debit"]
+    terminal_positions += maker["terminal_positions"]
+    if set(open_positions) & set(maker["positions"]):
+        issues.append("maker_taker_position_id_collision")
+    open_positions.update(maker["positions"])
+    issues.extend(maker["issues"])
+
     cash = starting_capital - total_entry_debit + total_settlement_payout
     equity = cash + marked_open_value
     if cash < -1e-7:
@@ -924,18 +937,19 @@ def reconstruct_paper_exploration_account(
         "accounting_owner": "V7_CANONICAL_LEDGER_AND_SINGLE_WRITER_SPOOL",
         "execution_authority": "SIMULATED_PAPER_EXPLORATION_ONLY",
         "starting_capital": starting_capital,
-        "orders_submitted": len(orders),
-        "fills": len(fills),
-        "terminal_nonfills": len(order_terminals),
+        "orders_submitted": len(orders) + maker["orders_submitted"],
+        "fills": len(fills) + maker["fills"],
+        "terminal_nonfills": len(order_terminals) + maker["terminal_nonfills"],
+        "pending_maker_orders": maker["pending_orders"],
         "terminal_positions": terminal_positions,
         "open_positions": len(open_positions),
         "probe_fills": sum(
             event.metadata.get("paper_bootstrap_probe") is True
             for event in fills.values()
-        ),
+        ) + maker["probe_fills"],
         "traded_markets": sorted({
             str(event.market_id) for event in fills.values() if event.market_id
-        }),
+        } | set(maker["traded_markets"])),
         "entry_debit": total_entry_debit,
         "settlement_payout": total_settlement_payout,
         "open_entry_debit": open_entry_debit,
@@ -947,6 +961,7 @@ def reconstruct_paper_exploration_account(
         "drawdown": drawdown,
         "invalid_spool_records": sorted(invalid_spool),
         "issues": sorted(set(issues)),
+        "maker_accounting": {k:v for k,v in maker.items() if k != "positions"},
         "positions": open_positions,
     }
     account["complete"] = not account["issues"] and not invalid_spool
@@ -3061,6 +3076,21 @@ class PaperRouter:
         settled_positions = 0
         for position in list((self.state.get("positions") or {}).values()):
             if position.get("settled"):
+                continue
+            if position.get("canonical_maker") is True:
+                if (current_ms < int(position["opened_ms"]) + 300_000
+                        or current_ms - int(position.get("settlement_attempt_ms") or 0) < 5_000):
+                    continue
+                position["settlement_attempt_ms"] = current_ms
+                try:
+                    raw = request_json(f"{self.gamma_url}/markets/{urllib.parse.quote(str(position['market_id']))}", timeout=4)
+                    event = maker_settlement_event(position, raw, now_ms()) if isinstance(raw, dict) else None
+                except (OSError, ValueError, TypeError):
+                    continue
+                if event is not None:
+                    spool_event(self.root, event)
+                    position["settled"] = True
+                    settled_positions += 1
                 continue
             age_seconds = max(0.0, (current_ms - int(position["opened_ms"])) / 1000.0)
             due = [horizon for horizon in HORIZONS if horizon <= age_seconds and horizon not in position.get("markouts", [])]
