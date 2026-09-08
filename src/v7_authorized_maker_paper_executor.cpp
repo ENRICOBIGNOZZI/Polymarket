@@ -511,6 +511,7 @@ struct OrderContext {
     json::object latest_cancel_receipt;
     json::object latest_cancel_envelope;
     std::uint64_t order_id = 0;
+    std::string external_order_id;
     std::uint64_t instrument_handle = 0;
     std::int32_t tick_size_e4 = 0;
     double remaining_shares = 0.0;
@@ -560,6 +561,12 @@ public:
     }
 
     void run_once() {
+        if (risk_frozen()) {
+            for (auto& [market_id, market] : markets_) {
+                auto result = market.engine->cancel_all(monotonic_ns());
+                handle_result(result, market_id, nullptr);
+            }
+        }
         process_authorizations();
         process_cancel_authorizations();
         drain_trade_tape();
@@ -601,6 +608,16 @@ private:
             runtime.market_handle, runtime.yes_handle, runtime.no_handle, policy);
         auto [inserted, _] = markets_.emplace(key, std::move(runtime));
         return inserted->second;
+    }
+
+    [[nodiscard]] bool risk_frozen() const {
+        return fs::exists(options_.run_root / "control" / "CUTOVER_DRAIN")
+            || fs::exists(options_.run_root / "control" / "KILL")
+            || fs::exists(options_.run_root / "control" / "MAKER_FREEZE");
+    }
+
+    [[nodiscard]] static std::string local_order_key(std::string_view market, std::uint64_t native_id) {
+        return std::string(market) + ":" + std::to_string(native_id);
     }
 
     void process_authorizations() {
@@ -656,7 +673,7 @@ private:
             return;
         }
         OrderContext& context = order_it->second;
-        if (std::to_string(context.order_id) != cancellation.target_order_id
+        if (context.external_order_id != cancellation.target_order_id
             || context.authorization.replay_key != cancellation.target_replay_key
             || context.authorization.market_id != cancellation.market_id
             || context.authorization.event_id != cancellation.event_id
@@ -705,6 +722,7 @@ private:
     }
 
     void submit(const fs::path& path) {
+        if (risk_frozen()) throw std::runtime_error("CANONICAL_DRAIN_OR_KILL_NO_NEW_MAKE");
         Authorization authorization = parse_authorization(path, options_.model_sha);
         const SelectionEvidence selection = selection_evidence(
             selection_path_, options_.model_sha, authorization.market_id, authorization.token_id);
@@ -726,7 +744,7 @@ private:
         if (price_tick <= 0 || std::abs(price_tick * tick - authorization.limit_price) > 1e-8) {
             throw std::runtime_error("authorized price is off tick");
         }
-        const auto quantity = shares_to_micro(authorization.quantity_shares);
+        const auto quantity = static_cast<std::int64_t>(std::floor(authorization.quantity_shares * 1'000'000.0));
         if (quantity <= 0) throw std::runtime_error("authorized quantity invalid");
         StrategyIntent intent;
         intent.intent_id = mix64(fnv1a(authorization.replay_key));
@@ -773,13 +791,15 @@ private:
         OrderContext context;
         context.authorization = std::move(authorization);
         context.order_id = live->order_id;
+        context.external_order_id = "maker-order-" + context.authorization.market_id + "-"
+            + std::to_string(live->order_id) + "-" + context.authorization.replay_key;
         context.instrument_handle = instrument;
         context.tick_size_e4 = selection.tick_size_e4;
-        context.remaining_shares = context.authorization.quantity_shares;
+        context.remaining_shares = micro_to_shares(quantity);
         context.arrival_receive_monotonic_ns = live->timestamp_ns;
         context.arrival_exchange_event_ns = intent.exchange_event_ns;
         context.live_authorization_path = live_path;
-        const std::uint64_t order_id = context.order_id;
+        const std::string order_id = local_order_key(context.authorization.market_id, context.order_id);
         token_to_order_[context.authorization.token_id] = order_id;
         orders_.emplace(order_id, std::move(context));
         emit_order_submitted(*live, orders_.at(order_id));
@@ -865,12 +885,13 @@ private:
     }
 
     void handle_result(
-        const PaperMakerResult& result, std::string_view market_id,
+        const PaperMakerResult& result, std::string market_id,
         const json::object* trade_row) {
         for (std::size_t index = 0; index < result.event_count; ++index) {
             const auto& event = result.events[index];
             if (event.order_id == 0) continue;
-            auto it = orders_.find(event.order_id);
+            const auto order_key = local_order_key(market_id, event.order_id);
+            auto it = orders_.find(order_key);
             if (it == orders_.end()) continue;
             if (event.kind == PaperMakerEventKind::Fill) {
                 if (event.operational_fill_microunits > 0) {
@@ -890,7 +911,7 @@ private:
             }
             if (event.kind == PaperMakerEventKind::Fill
                 && event.order_state == pm::v7::OrderState::Filled) {
-                terminalize(event.order_id, "FILLED");
+                terminalize(order_key, "FILLED");
             }
         }
         (void)market_id;
@@ -899,6 +920,11 @@ private:
     [[nodiscard]] json::object common_metadata(const OrderContext& context) const {
         json::object metadata;
         metadata["paper_exploration"] = true;
+        metadata["counterfactual"] = false;
+        metadata["excluded_from_portfolio_equity"] = false;
+        metadata["research_evidence_only"] = false;
+        metadata["outcome"] = context.authorization.outcome;
+        metadata["native_market_order_id"] = std::to_string(context.order_id);
         metadata["paper_bootstrap_probe"] = context.authorization.paper_probe;
         metadata["economic_authority"] = "PAPER_EXPLORATION";
         metadata["execution_authority"] = "SIMULATED_PAPER_ONLY";
@@ -932,7 +958,7 @@ private:
         const auto exchange_ms = std::min<std::int64_t>(now, event.timestamp_ns > 0
             ? integer(find_value(context.authorization.envelope, "decision_receive_timestamp_ns"), now * 1'000'000) / 1'000'000
             : now);
-        const std::string order_id = std::to_string(event.order_id);
+        const std::string order_id = context.external_order_id;
         json::object row;
         row["schema_version"] = 1;
         row["event_type"] = "ORDER_SUBMITTED";
@@ -971,7 +997,7 @@ private:
         const auto receive_ms = integer(find_value(*trade_row, "receive_wall_ms"), wall_ms());
         const auto exchange_ns = integer(find_value(*trade_row, "exchange_event_ns"));
         const auto recorded = std::max(wall_ms(), receive_ms);
-        const std::string order_id = std::to_string(event.order_id);
+        const std::string order_id = context.external_order_id;
         const std::string fill_id = order_id + ":" + std::to_string(event.trade_id);
         const double fill_price = static_cast<double>(event.price_tick)
             * static_cast<double>(event.tick_size_e4) / kPriceScaleE4;
@@ -982,11 +1008,12 @@ private:
         row["model_sha"] = options_.model_sha;
         row["paper_only"] = true;
         row["authenticated_execution"] = false;
-        row["record_id"] = "maker-fill-" + hex64(mix64(event.order_id ^ event.trade_id));
+        row["record_id"] = "maker-fill-" + fill_id;
         row["recorded_ts_ms"] = recorded;
         row["opportunity_id"] = context.authorization.replay_key;
         row["order_id"] = order_id;
         row["fill_id"] = fill_id;
+        row["position_id"] = "maker-position-" + fill_id;
         row["market_id"] = context.authorization.market_id;
         row["event_id"] = context.authorization.event_id;
         row["token_id"] = context.authorization.token_id;
@@ -1025,11 +1052,11 @@ private:
         row["model_sha"] = options_.model_sha;
         row["paper_only"] = true;
         row["authenticated_execution"] = false;
-        row["record_id"] = "maker-state-" + std::to_string(event.order_id) + "-" +
+        row["record_id"] = "maker-state-" + context.external_order_id + "-" +
             std::string(state) + "-" + std::to_string(++event_sequence_);
         row["recorded_ts_ms"] = now;
         row["opportunity_id"] = context.authorization.replay_key;
-        row["order_id"] = std::to_string(event.order_id);
+        row["order_id"] = context.external_order_id;
         row["market_id"] = context.authorization.market_id;
         row["event_id"] = context.authorization.event_id;
         row["token_id"] = context.authorization.token_id;
@@ -1041,7 +1068,7 @@ private:
         spool(std::move(row));
     }
 
-    void terminalize(std::uint64_t order_id, std::string_view reason) {
+    void terminalize(const std::string& order_id, std::string_view reason) {
         auto it = orders_.find(order_id);
         if (it == orders_.end() || it->second.terminal) return;
         it->second.terminal = true;
@@ -1081,7 +1108,7 @@ private:
         for (const auto& [order_id, context] : orders_) {
             if (context.terminal) continue;
             active_order_details.emplace_back(json::object{
-                {"order_id", std::to_string(order_id)},
+                {"order_id", context.external_order_id},
                 {"replay_key", context.authorization.replay_key},
                 {"market_id", context.authorization.market_id},
                 {"event_id", context.authorization.event_id},
@@ -1132,8 +1159,8 @@ private:
     std::ifstream trade_tape_;
     std::streamoff trade_offset_ = -1;
     std::unordered_map<std::string, MarketRuntime> markets_;
-    std::unordered_map<std::uint64_t, OrderContext> orders_;
-    std::unordered_map<std::string, std::uint64_t> token_to_order_;
+    std::unordered_map<std::string, OrderContext> orders_;
+    std::unordered_map<std::string, std::string> token_to_order_;
     std::uint64_t submitted_orders_ = 0;
     std::uint64_t terminal_orders_ = 0;
     std::uint64_t fills_ = 0;

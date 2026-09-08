@@ -269,6 +269,13 @@ def build_maker_opportunities(
     registry = load_crypto_registry(repo / "config" / "v7_crypto_settlement_markets.json")
 
     reasons: list[str] = []
+    if any((root / "control" / name).exists() for name in ("CUTOVER_DRAIN", "KILL", "MAKER_FREEZE")):
+        reasons.append("CANONICAL_DRAIN_OR_KILL")
+    account_status = _load(root / "external_fair" / "paper_router_status.json")
+    account = account_status.get("paper_exploration_account") or {}
+    selected_market = str((fair_status.get("market") or {}).get("market_id") or "")
+    if selected_market and selected_market in (account.get("traded_markets") or []):
+        reasons.append("CANONICAL_CRYPTO_MARKET_ALREADY_FILLED")
     model_sha = str(runtime.get("model_sha") or "")
     if (
         runtime.get("schema") != RUNTIME_SCHEMA

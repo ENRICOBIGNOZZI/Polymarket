@@ -453,6 +453,11 @@ def process_cut(run_root: Path, *, now_ns: int | None = None) -> dict[str, Any]:
                 "error": f"{type(exc).__name__}:{exc}",
             }
 
+    drain_active = any((root / "control" / name).exists() for name in ("CUTOVER_DRAIN", "KILL", "MAKER_FREEZE"))
+    if drain_active:
+        selected_envelopes = [row for row in selected_envelopes if row.get("action") in {"CANCEL", "WITHDRAW", "NOTHING"}]
+        execution_alpha_diagnostics["canonical_drain_new_risk_blocked"] = True
+
     if adapter_errors:
         decision = fail_closed_decision(now_ns=current_ns, reasons=adapter_errors)
     elif selected_envelopes:

@@ -59,6 +59,15 @@
       "severity": "CONTROLLED",
       "reason": "consumes only coordinator-authorized MAKE intents, revalidates PAPER execution constraints, and emits simulated lifecycle events through the canonical spool without direct ledger or authenticated-order authority",
       "canonical_replacement": "V7_CANONICAL_LEDGER"
+    },
+    {
+      "source": "scripts/v7_maker_accounting.py",
+      "classification": "MERGE_INTO_CANONICAL",
+      "runtime_reachability": "CANONICAL_RUNTIME",
+      "authority_mode": "READ_ONLY_TYPED_SETTLEMENT_EVENT_FACTORY",
+      "severity": "CONTROLLED",
+      "reason": "pure canonical Maker position projection and verified settlement event construction, called by the existing crypto account owner; no process, orders, spool writes or ledger file writer",
+      "canonical_replacement": "V7_CANONICAL_LEDGER"
     }
   ]
 }

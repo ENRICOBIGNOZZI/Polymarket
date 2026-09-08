@@ -324,7 +324,7 @@ cutover_positions_drained(){
   if [[ "$runtime_pid" =~ ^[1-9][0-9]*$ ]] && kill -0 "$runtime_pid" 2>/dev/null; then
     runtime_alive=1
   fi
-  python3 - "$run_root" "$LOCK_NONCE" "$runtime_alive" <<'PY'
+  python3 - "$run_root" "$LOCK_NONCE" "$runtime_alive" "$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)/scripts" <<'PY'
 import json, sys
 from pathlib import Path
 root=Path(sys.argv[1]); nonce=sys.argv[2]; runtime_alive=sys.argv[3] == '1'
@@ -425,6 +425,25 @@ for row in maker_inventory.values():
 assert external_open >= 0
 assert int(external_status.get('counterfactual_open_positions',-1)) == counterfactual_open
 assert external_open == 0
+# A zero-authority observer status is NOT proof that its separate receipt-gated
+# Maker executor has no inventory. Inspect canonical Maker fills and terminal
+# records with the target code, before any old run root can be archived.
+authorized_executor=read('micro_maker/authorized_make_executor_status.json')
+if authorized_executor:
+    assert authorized_executor.get('model_sha') == runtime.get('model_sha')
+    assert authorized_executor.get('paper_only') is True
+    assert authorized_executor.get('authenticated_execution') is False
+    assert authorized_executor.get('real_order_submission') is False
+    assert int(authorized_executor.get('active_orders',-1)) == 0
+    assert len(sys.argv) >= 5, 'target accounting verifier missing'
+    sys.path.insert(0, sys.argv[4])
+    from v7_external_fair_paper_router import _canonical_and_spooled_events
+    from v7_maker_accounting import project_maker
+    maker_events, maker_bad_spool = _canonical_and_spooled_events(root, runtime['model_sha'])
+    canonical_maker = project_maker(maker_events, {})
+    assert not maker_bad_spool and not canonical_maker['issues']
+    assert not canonical_maker['positions'], 'unsettled canonical Maker inventory'
+    assert canonical_maker['pending_orders'] == 0, 'unreconciled Maker orders'
 assert maker_status.get('killed') is not True
 # Every supported incumbent is drain-aware. External must already be
 # flat; Maker only needs to prove entry is frozen because its durable inventory

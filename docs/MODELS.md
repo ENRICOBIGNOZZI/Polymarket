@@ -48,3 +48,18 @@ The prior mutable publication timestamp invalidated 2,525 diagnostic episodes in
 142 old-runtime files. These must be quarantined with content hashes, never
 backdated or credited toward promotion. The independently hash-pinned official v3
 seed is separate evidence and must still pass full recomputation.
+
+### Unified Maker cash/inventory and exact order identity
+
+The canonical crypto account now reconstructs BOTH informed-taker and authorized
+Maker fills from the same ledger/spool. Maker partial fills have separate durable
+positions and verified binary settlement FINALs. An open Maker position subtracts
+its entry debit and contributes only an evidenced executable mark (otherwise zero)
+to shared equity. Duplicate/orphan/overfill or non-binary settlement records fail
+closed. Historical numeric Maker order IDs are qualified by market in the read
+projection; the corrected executor emits globally qualified market/replay IDs.
+
+The same crypto account owner, not a new worker or ledger writer, performs Maker
+settlement. The coordinator and Maker executor honor canonical drain/kill markers.
+Cutover checks actual authorized-Maker active orders and ledger positions; a
+zero-authority observer report cannot conceal an unsettled executable fill.
