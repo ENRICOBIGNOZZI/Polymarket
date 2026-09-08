@@ -8,12 +8,24 @@ import unittest
 from unittest.mock import patch
 ROOT=Path(__file__).resolve().parents[1]
 sys.path.insert(0,str(ROOT/'scripts'))
-from v7_profit_experiments import ProfitExperiments,replay_anchor,AUTH,LedgerTail
+from v7_profit_experiments import ProfitExperiments,replay_anchor,AUTH,LedgerTail,preserve_source
 from v7_profit_protocol import freeze
 from v7_profit_report import summarize,settlement,interval
 from test_v7_causal_book import CausalBookTests,SHA
 
 class ExperimentTests(CausalBookTests):
+    def test_book_paths_are_lossless_immutable_sidecars(self):
+        import gzip
+        from v7_profit_protocol import digest
+        root=Path(self.directory.name);source={'path':[{'sequence':i,'price':.5} for i in range(1000)]}
+        reference=preserve_source(root,source);path=root/reference['source_path'];before=path.read_bytes()
+        self.assertEqual(json.loads(gzip.decompress(before)),source)
+        self.assertEqual(reference['source_sha256'],digest(source))
+        self.assertLess(reference['source_compressed_bytes'],reference['source_uncompressed_bytes'])
+        self.assertEqual(preserve_source(root,source),reference)
+        self.assertEqual(path.read_bytes(),before)
+        path.write_bytes(gzip.compress(b'{}'))
+        with self.assertRaisesRegex(ValueError,'source hash mismatch'):preserve_source(root,source)
     def test_forward_selection_delays_restart_and_fixed_signal(self):
         root=Path(self.directory.name);self.book.retention_ms=60000
         self.seed()

@@ -109,3 +109,10 @@ recovers. No later book is substituted for the target. This changes research
 observation eligibility only, not canonical PAPER execution or fee assumptions.
 V1 outputs and their identity are retained. V2 begins under a new immutable
 manifest and future boundary; old comparisons are not relabelled as v2 evidence.
+
+V2 writes each full book path once as an immutable gzip sidecar addressed by its
+uncompressed SHA-256. The observation includes its relative path, compressed
+hash, byte counts and row count. Compression is verified before publication.
+The collector's restart scan and the minute report read the compact observation
+stream; they do not repeatedly deserialize tens of megabytes of book evidence
+per contract. Sidecars retain the complete replay input for audit and export.

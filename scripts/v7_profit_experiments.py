@@ -6,6 +6,8 @@ canonical native queue engine and the receive-sequenced public observer tape.
 from __future__ import annotations
 from collections import Counter
 import json
+import gzip
+import hashlib
 import math
 import os
 from pathlib import Path
@@ -32,6 +34,24 @@ def atomic(path,row):
     path.parent.mkdir(parents=True,exist_ok=True)
     temp=path.with_name(path.name+f'.tmp.{os.getpid()}')
     temp.write_text(json.dumps(row,sort_keys=True,allow_nan=False)+'\n');os.replace(temp,path)
+
+
+def preserve_source(root, source):
+    """Immutable compressed evidence; reports read references, not entire tapes."""
+    payload=json.dumps(source,sort_keys=True,separators=(',',':'),allow_nan=False).encode()
+    sha=hashlib.sha256(payload).hexdigest();relative=Path('sources')/(sha+'.json.gz');path=root/relative
+    path.parent.mkdir(parents=True,exist_ok=True)
+    if not path.exists():
+        temp=path.with_name(path.name+f'.tmp.{os.getpid()}')
+        with temp.open('xb') as stream:
+            stream.write(gzip.compress(payload,mtime=0));stream.flush();os.fsync(stream.fileno())
+        try:os.link(temp,path)
+        finally:temp.unlink()
+    if path.is_symlink():raise ValueError('unsafe research source path')
+    compressed=path.read_bytes()
+    if hashlib.sha256(gzip.decompress(compressed)).hexdigest()!=sha:raise ValueError('research source hash mismatch')
+    return {'source_sha256':sha,'source_path':str(relative),'source_compressed_sha256':hashlib.sha256(compressed).hexdigest(),
+            'source_uncompressed_bytes':len(payload),'source_compressed_bytes':len(compressed),'source_book_rows':len(source['path'])}
 
 
 def rows(path):
@@ -175,7 +195,7 @@ class ProfitExperiments:
             if now/1e6<anchor['origin_ms']+42000:continue
             result=replay_anchor(anchor,self.book,status,self.protocol,self.binary)
             self.emit('MAKER_COMPARISON',market_id=market,token_id=anchor['token_id'],anchor_record_id=anchor['order']['record_id'],
-                      source_sha256=digest(result['source']),**{k:v for k,v in result.items() if k!='source'},source=result['source'])
+                      **preserve_source(self.output,result['source']),**{k:v for k,v in result.items() if k!='source'})
             self.maker_pending.pop(market)
 
 
