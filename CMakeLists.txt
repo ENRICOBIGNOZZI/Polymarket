@@ -110,6 +110,9 @@ add_executable(polymarket_v7_authorized_maker_paper_executor
   src/v7_authorized_maker_paper_executor.cpp)
 target_link_libraries(polymarket_v7_authorized_maker_paper_executor PRIVATE pm_v7_hft Threads::Threads)
 target_compile_options(polymarket_v7_authorized_maker_paper_executor PRIVATE -Wall -Wextra -Wpedantic)
+add_executable(polymarket_v7_maker_research_replay src/v7_maker_research_replay.cpp)
+target_link_libraries(polymarket_v7_maker_research_replay PRIVATE pm_v7_hft)
+target_compile_options(polymarket_v7_maker_research_replay PRIVATE -Wall -Wextra -Wpedantic)
 
 add_executable(polymarket_v7_external_venue_runtime src/v7_external_venue_runtime.cpp)
 target_link_libraries(polymarket_v7_external_venue_runtime PRIVATE pm_v7_external)
@@ -260,6 +263,9 @@ if(BUILD_TESTING)
     COMMAND ${Python3_EXECUTABLE}
       "${CMAKE_CURRENT_SOURCE_DIR}/tests/test_v7_authorized_make_cancel_runtime.py"
       --executor $<TARGET_FILE:polymarket_v7_authorized_maker_paper_executor>)
+  add_test(NAME test_v7_profit_native_replay
+    COMMAND ${Python3_EXECUTABLE} "${CMAKE_CURRENT_SOURCE_DIR}/tests/integration_v7_profit_replay.py"
+      --binary $<TARGET_FILE:polymarket_v7_maker_research_replay>)
 
   add_test(NAME test_v7_trade_recorder_recovery
     COMMAND ${Python3_EXECUTABLE}

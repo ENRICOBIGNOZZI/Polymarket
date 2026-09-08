@@ -202,6 +202,7 @@ load_selected_pairs(const fs::path& path) {
         output.push_back({market + "\n" + event, {yes, no}});
     }
     if (output.empty()) throw std::runtime_error("fillability observer has no selected markets");
+    std::sort(output.begin(), output.end());
     return output;
 }
 
@@ -539,6 +540,14 @@ private:
             {"feature_semantics", "CANONICAL_MAKER_LANE_OBSERVED_FLOW_V1"},
             {"cancel_intensity_semantics", "L5_CONTRACTION_MINUS_OBSERVED_TRADES_NORMALIZED_EW_PROXY"},
         };
+        value["public_trade"] = nullptr;
+        if (row.kind == MarketWsEventKind::Trade) {
+            value["public_trade"] = json::object{
+                {"aggressor_side", side_name(row.aggressor_side)},
+                {"price", e4_price(row.price_e4)},
+                {"size", micro_shares(row.quantity_microunits)},
+                {"exchange_event_ns", row.exchange_event_ns}};
+        }
         const auto serialized = json::serialize(value) + "\n";
         book_output_ << serialized;
         latest_books_[row.instrument_handle] = serialized;
@@ -557,6 +566,7 @@ private:
         event["authenticated_execution"] = false;
         event["real_order_submission"] = false;
         event["observer_sequence"] = ++sequence_;
+        event["observer_session_id"] = session_id_;
         event["market_id"] = token->market_id;
         if (!token->event_id.empty()) event["event_id"] = token->event_id;
         event["token_id"] = token->token_id;
@@ -630,8 +640,7 @@ int main(int argc, char** argv) {
         while (!g_stop.load(std::memory_order_relaxed)) {
             const auto fair_pairs = fair_observation_pairs(options);
             auto tokens = build_tokens(options, config);
-            std::error_code stamp_error;
-            const auto selection_stamp = fs::last_write_time(options.selection, stamp_error);
+            const auto selected_pairs = load_selected_pairs(options.selection);
             ExactWsObserver observer(
                 std::move(tokens), options.ws_url, options.output_dir, options.model_sha);
             observer.start();
@@ -643,9 +652,9 @@ int main(int argc, char** argv) {
                 if (now - last_status_ms >= 1000) {
                     observer.write_status();
                     last_status_ms = now;
-                    std::error_code current_error;
-                    const auto current_stamp = fs::last_write_time(options.selection, current_error);
-                    reload = (!stamp_error && !current_error && current_stamp != selection_stamp)
+                    // Price/feature refreshes do not change the subscription.
+                    // Restarting on every mtime update erased queue evidence.
+                    reload = load_selected_pairs(options.selection) != selected_pairs
                         || fair_observation_pairs(options) != fair_pairs;
                 }
                 std::this_thread::sleep_for(std::chrono::milliseconds(10));

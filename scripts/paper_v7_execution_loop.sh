@@ -316,6 +316,7 @@ python3 scripts/v7_external_lead_lag_collector.py \
   --status "$RUN_ROOT/external_fair/lead_lag_collector_status.json" \
   --book-tape "$RUN_ROOT/micro_maker/book_observations/current.jsonl" \
   --book-status "$RUN_ROOT/micro_maker/fillability_ws_status.json" \
+  --profit-root "$DURABLE_ROOT/profit_experiments/$SHA" --run-root "$RUN_ROOT" \
   --model-sha "$SHA" --interval-ms 25 \
   >> "$RUN_ROOT/external_fair/lead_lag_collector.log" 2>&1 &
 v7_register_child "$!"
@@ -718,6 +719,11 @@ v7_register_child "$!"
       >> "$RUN_ROOT/learned_execution/model.log" 2>&1 || true
     python3 scripts/v7_canonical_economics.py --ledger "$RUN_ROOT/ledger/execution.jsonl" --expected-model-sha "$SHA" \
       --output "$RUN_ROOT/canonical_economics.json" >> "$RUN_ROOT/canonical_economics.log" 2>&1 || true
+    python3 scripts/v7_profit_attribution.py --ledger "$RUN_ROOT/ledger/execution.jsonl" --run-root "$RUN_ROOT" \
+      --output "$RUN_ROOT/profit_attribution.json" --csv "$RUN_ROOT/profit_attribution.csv" \
+      >> "$RUN_ROOT/profit_attribution.log" 2>&1 || true
+    python3 scripts/v7_profit_report.py --experiment-root "$DURABLE_ROOT/profit_experiments/$SHA" \
+      --output "$RUN_ROOT/profit_experiment_report.json" >> "$RUN_ROOT/profit_experiment_report.log" 2>&1 || true
     sleep 60
   done
 ) & v7_register_child "$!"

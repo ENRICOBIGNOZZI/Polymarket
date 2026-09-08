@@ -757,9 +757,35 @@ private:
             } catch (const std::exception& exc) {
                 ++rejected_authorizations_;
                 last_error_ = exc.what();
+                record_rejected_attempt(path, exc.what());
                 move_file(path, rejected_dir_);
             }
         }
+    }
+
+    void record_rejected_attempt(const fs::path& path, std::string_view reason) {
+        json::object row{{"schema", "polymarket_v7_maker_authorization_attempt_v1"},
+            {"model_sha", options_.model_sha}, {"paper_only", true},
+            {"authenticated_execution", false}, {"real_order_submission", false},
+            {"execution_authority", "ZERO_AUTHORITY_RESEARCH_ONLY"},
+            {"timestamp_ms", wall_ms()}, {"result", "REJECTED"}, {"reason", reason},
+            {"attempt_id", std::to_string(::getpid()) + ":" + std::to_string(wall_ms())
+                + ":" + std::to_string(rejected_authorizations_)},
+            {"source_file", path.filename().string()}, {"replay_key", nullptr}};
+        try {
+            const auto payload = read_json(path);
+            if (payload.is_object()) {
+                if (const auto* envelope = child_object(payload.as_object(), "opportunity_envelope")) {
+                    row["replay_key"] = text(find_value(*envelope, "deterministic_replay_key"));
+                    row["source_model_sha"] = text(find_value(*envelope, "model_sha"));
+                    row["market_id"] = text(find_value(*envelope, "market_id"));
+                    row["token_id"] = text(find_value(*envelope, "contract_id"));
+                }
+            }
+        } catch (const std::exception&) { row["identity_state"] = "UNREADABLE_AUTHORIZATION"; }
+        std::ofstream stream(options_.run_root / "micro_maker" / "authorization_attempts.jsonl", std::ios::app);
+        stream << json::serialize(row) << '\n'; stream.flush();
+        if (!stream) throw std::runtime_error("cannot preserve maker rejection evidence");
     }
 
     void process_cancel_authorizations() {
@@ -1021,13 +1047,17 @@ private:
             auto it = orders_.find(order_key);
             if (it == orders_.end()) continue;
             if (event.kind == PaperMakerEventKind::Fill) {
+                ++simulation_fill_events_;
+                if (event.operational_fill_microunits <= 0) ++zero_quantity_fill_events_;
                 if (event.operational_fill_microunits > 0) {
                     it->second.remaining_shares = std::max(
                         0.0, it->second.remaining_shares
                             - micro_to_shares(event.operational_fill_microunits));
                 }
-                emit_fill(event, it->second, trade_row);
-                ++fills_;
+                if (emit_fill(event, it->second, trade_row)) {
+                    ++fills_;
+                    operational_fill_microunits_ += event.operational_fill_microunits;
+                }
             } else if (event.kind == PaperMakerEventKind::CancelRequested) {
                 it->second.cancel_requested = true;
                 it->second.cancel_requested_monotonic_ns = event.timestamp_ns;
@@ -1062,6 +1092,8 @@ private:
         }
         metadata["placement_features"] = context.selection.placement_features;
         metadata["placement_features_timestamp_ms"] = context.selection.feature_timestamp_ms;
+        metadata["arrival_receive_monotonic_ns"] = context.arrival_receive_monotonic_ns;
+        metadata["arrival_exchange_event_ns"] = context.arrival_exchange_event_ns;
         metadata["placement_features_source"] = context.selection.feature_source;
         metadata["placement_features_snapshot_id"] = context.selection.feature_snapshot_id;
         metadata["placement_features_schema"] = "maker-placement-observed-v1";
@@ -1136,10 +1168,10 @@ private:
         spool(std::move(row));
     }
 
-    void emit_fill(
+    bool emit_fill(
         const PaperMakerEvent& event, const OrderContext& context,
         const json::object* trade_row) {
-        if (event.operational_fill_microunits <= 0 || trade_row == nullptr) return;
+        if (event.operational_fill_microunits <= 0 || trade_row == nullptr) return false;
         const auto receive_ms = integer(find_value(*trade_row, "receive_wall_ms"), wall_ms());
         const auto exchange_ns = integer(find_value(*trade_row, "exchange_event_ns"));
         const auto recorded = std::max(wall_ms(), receive_ms);
@@ -1186,6 +1218,7 @@ private:
         add_execution_outcome(metadata, event);
         row["metadata"] = std::move(metadata);
         spool(std::move(row));
+        return true;
     }
 
     static void add_execution_outcome(json::object& metadata, const PaperMakerEvent& event) {
@@ -1293,6 +1326,10 @@ private:
         status["submitted_orders"] = submitted_orders_;
         status["terminal_orders"] = terminal_orders_;
         status["fills"] = fills_;
+        status["fills_semantics"] = "POSITIVE_QUANTITY_CANONICAL_FILL_RECORDS_SPOOLED_THIS_PROCESS";
+        status["simulation_fill_events"] = simulation_fill_events_;
+        status["zero_quantity_fill_events"] = zero_quantity_fill_events_;
+        status["operational_filled_shares"] = micro_to_shares(operational_fill_microunits_);
         status["trade_rows_consumed"] = trade_rows_consumed_;
         status["invalid_trade_rows"] = invalid_trade_rows_;
         status["rejected_authorizations"] = rejected_authorizations_;
@@ -1330,6 +1367,9 @@ private:
     std::uint64_t submitted_orders_ = 0;
     std::uint64_t terminal_orders_ = 0;
     std::uint64_t fills_ = 0;
+    std::uint64_t simulation_fill_events_ = 0;
+    std::uint64_t zero_quantity_fill_events_ = 0;
+    std::int64_t operational_fill_microunits_ = 0;
     std::uint64_t trade_rows_consumed_ = 0;
     std::uint64_t invalid_trade_rows_ = 0;
     std::uint64_t rejected_authorizations_ = 0;

@@ -119,6 +119,19 @@ def run(executor: Path) -> None:
         assert make_decision["action"] == "MAKE"
         coordinator._publish_make_authorization(root, make_decision, maker_rows)
 
+        # Model/registry initialization can take longer than the live feature
+        # freshness budget on a cold CI worker. Publish a fresh observation at
+        # native admission, as the running observer does, without refreshing
+        # the original selection/authorization timestamp.
+        publish_ms = time.time_ns() // 1_000_000
+        for relative in ('micro_maker/book_features/yes-token.json', 'micro_maker/fillability_ws_status.json',
+                         'external_fair/paper_router_status.json'):
+            value = json.loads((root/relative).read_text())
+            if 'receive_wall_ms' in value: value['receive_wall_ms'] = publish_ms
+            if 'timestamp_ms' in value: value['timestamp_ms'] = publish_ms
+            if 'timestamp' in value: value['timestamp'] = publish_ms/1000
+            write(root/relative,value)
+
         process = subprocess.Popen(
             [str(executor), "--run-root", str(root), "--model-sha", SHA],
             stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
@@ -132,6 +145,22 @@ def run(executor: Path) -> None:
             active_before_cancel = submitted["active_order_details"][0]
             assert active_before_cancel["order_id"]
             assert active_before_cancel["replay_key"] == maker_rows[0]["deterministic_replay_key"]
+            diagnostic = {
+                "schema":"polymarket_v7_maker_fillability_ws_trade_v1", "model_sha":SHA,
+                "paper_only":True,"authenticated_execution":False,"real_order_submission":False,
+                "observer_sequence":100,"market_id":"market-1","event_id":"event-1","token_id":"yes-token",
+                "instrument_handle":1,"state_version":100,"connection_epoch":1,
+                "exchange_event_ns":int(active_before_cancel['arrival_exchange_event_ns'])+1_000_000,
+                "receive_wall_ms":time.time_ns()//1_000_000,
+                "receive_monotonic_ns":int(active_before_cancel['arrival_receive_monotonic_ns'])+1_000_000,
+                "aggressor_side":"SELL","price":.50,"size":6.25,"lineage_continuous":True,
+            }
+            with (root/'micro_maker/fillability_ws.jsonl').open('a') as stream:
+                stream.write(json.dumps(diagnostic)+'\n')
+            diagnostic_status = wait_for(root, lambda row: row.get('zero_quantity_fill_events') == 1)
+            assert diagnostic_status['simulation_fill_events']==1
+            assert diagnostic_status['fills']==0 and diagnostic_status['operational_filled_shares']==0
+            assert not any(row['event_type']=='FILL' for row in spool_rows(root))
             trigger_ns = time.time_ns()
             write(root / "external_fair/external_cancel_signal.json", {
                 "schema": cancel_bridge.SIGNAL_SCHEMA,
@@ -196,7 +225,7 @@ def run(executor: Path) -> None:
                     "exchange_event_ns": arrival_exchange_ns + 10_000_000,
                     "receive_wall_ms": time.time_ns() // 1_000_000,
                     "receive_monotonic_ns": cancel_ns + 50_000_000,
-                    "aggressor_side": "SELL", "price": 0.50, "size": 8.0,
+                    "aggressor_side": "SELL", "price": 0.50, "size": 1.75,
                     "lineage_continuous": True,
                 },
                 {
@@ -233,11 +262,15 @@ def run(executor: Path) -> None:
             assert fills[0]["position_id"]
             assert fills[0]["metadata"]["excluded_from_portfolio_equity"] is False
             evidence = spool_rows(root)
+            economic_status = read_status(root)
+            assert economic_status['fills']==1
+            assert economic_status['simulation_fill_events']==2
+            assert economic_status['operational_filled_shares']==.5
             order = next(row for row in evidence if row['event_type']=='ORDER_SUBMITTED')
             assert order['intended_action']=='MAKE'
             assert exact_execution_cell(order)==('market-1','yes-token','JOIN','BUY')
             example = order_examples(evidence)[0]
-            assert example['features'] is not None
+            assert example['features'] is not None, order.get('metadata',{}).get('placement_features')
             assert order['metadata']['placement_features_source']=='CANONICAL_MAKER_LANE_OBSERVED_FLOW_V1'
             assert order['metadata']['placement_features_snapshot_id']=='test-observer:10'
             assert example['features'][8]==0.0  # Identified flat account, not observer imputation.

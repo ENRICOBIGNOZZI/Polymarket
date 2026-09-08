@@ -1,0 +1,91 @@
+{
+  "schema": "polymarket_v7_profit_experiment_protocol_v1",
+  "protocol_id": "profit-causes-20260908-v1",
+  "paper_only": true,
+  "authenticated_execution": false,
+  "real_order_submission": false,
+  "execution_authority": "ZERO_AUTHORITY_RESEARCH_ONLY",
+  "signal": {
+    "margin_edges": [
+      0.0,
+      0.01,
+      0.03,
+      0.1,
+      1.0
+    ],
+    "tte_edges_seconds": [
+      0,
+      60,
+      180,
+      301
+    ],
+    "selection": "FIRST_CAUSAL_OBSERVATION_PER_CONTRACT_OUTCOME_MARGIN_TTE_CELL",
+    "minimum_point_margin_after_costs": 0.0,
+    "execution_risk_per_share": 0.001,
+    "standardized_quote_quantity": 1.0,
+    "quantity_semantics": "L1_PRICE_DIAGNOSTIC_NOT_A_SUBMITTED_VENUE_ORDER",
+    "delays_ms": [
+      0,
+      100,
+      250,
+      500,
+      1000
+    ],
+    "cost_stress_multipliers": [
+      1.0,
+      1.5,
+      2.0
+    ],
+    "label_grace_ms": 2000
+  },
+  "maker": {
+    "comparison": "PAIRED_NATIVE_ENGINE_RESEARCH_REPLAY_NO_ADDITIONAL_ROUTER",
+    "anchor": "FIRST_CANONICAL_MAKER_ORDER_PER_CONTRACT",
+    "quantity": "COMMON_QUANTITY_AT_MOST_ANCHOR_AND_WORST_ARM_LOSS_CAP",
+    "queue": "CANONICAL_PESSIMISTIC_OPERATIONAL",
+    "arms": [
+      {
+        "id": "JOIN_5S",
+        "placement": "JOIN",
+        "lifetime_ms": 5000
+      },
+      {
+        "id": "FLOW_JOIN_5S",
+        "placement": "JOIN",
+        "lifetime_ms": 5000,
+        "minimum_opposite_prints_per_second": 0.2
+      },
+      {
+        "id": "JOIN_10S",
+        "placement": "JOIN",
+        "lifetime_ms": 10000
+      },
+      {
+        "id": "IMPROVE1_5S",
+        "placement": "IMPROVE1",
+        "lifetime_ms": 5000
+      }
+    ],
+    "maximum_feature_age_ms": 500,
+    "markout_horizons_ms": [
+      1000,
+      5000,
+      10000,
+      30000
+    ],
+    "post_only_required": true,
+    "preserve_anchor_probe_loss_cap": true
+  },
+  "inference": {
+    "unit": "CONTRACT",
+    "minimum_contracts_for_interval": 12,
+    "chronological_folds": 3,
+    "interval_method": "CONTRACT_BLOCK_PERCENTILE_BOOTSTRAP_BONFERRONI_APPROXIMATE",
+    "familywise_alpha": 0.05,
+    "automatic_promotion": false,
+    "automatic_sizing_change": false,
+    "economic_claim_requires_positive_lower_bound_and_cost_stress": true,
+    "bootstrap_draws": 20000,
+    "bootstrap_seed": 20260908
+  }
+}

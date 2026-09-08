@@ -1,0 +1,66 @@
+"""Immutable prospective research identity; no trading permission."""
+from __future__ import annotations
+import hashlib
+import json
+import os
+from pathlib import Path
+
+SCHEMA='polymarket_v7_profit_experiment_manifest_v1'
+
+def digest(value):
+    return hashlib.sha256(json.dumps(value,sort_keys=True,separators=(',',':'),allow_nan=False).encode()).hexdigest()
+
+def validate(protocol):
+    if (protocol.get('schema')!='polymarket_v7_profit_experiment_protocol_v1'
+            or protocol.get('paper_only') is not True or protocol.get('authenticated_execution') is not False
+            or protocol.get('real_order_submission') is not False
+            or protocol.get('execution_authority')!='ZERO_AUTHORITY_RESEARCH_ONLY'):
+        raise ValueError('profit_protocol:authority')
+    signal=protocol['signal'];maker=protocol['maker'];inference=protocol['inference']
+    for edges in (signal['margin_edges'],signal['tte_edges_seconds']):
+        if len(edges)<2 or any(isinstance(v,bool) or not isinstance(v,(int,float)) for v in edges) or sorted(set(edges))!=edges:
+            raise ValueError('profit_protocol:bins')
+    if signal['delays_ms'] != [0,100,250,500,1000] or signal['cost_stress_multipliers'] != [1.,1.5,2.]:
+        raise ValueError('profit_protocol:measurement_grid')
+    if maker['comparison']!='PAIRED_NATIVE_ENGINE_RESEARCH_REPLAY_NO_ADDITIONAL_ROUTER':
+        raise ValueError('profit_protocol:execution_owner')
+    if maker['post_only_required'] is not True or maker['preserve_anchor_probe_loss_cap'] is not True:
+        raise ValueError('profit_protocol:execution_boundaries')
+    if [(x.get('id'),x.get('placement'),x.get('lifetime_ms')) for x in maker['arms']] != [('JOIN_5S','JOIN',5000),('FLOW_JOIN_5S','JOIN',5000),('JOIN_10S','JOIN',10000),('IMPROVE1_5S','IMPROVE1',5000)]:
+        raise ValueError('profit_protocol:maker_arms')
+    if inference.get('bootstrap_draws')!=20000 or inference.get('bootstrap_seed')!=20260908 or inference.get('minimum_contracts_for_interval')!=12:
+        raise ValueError('profit_protocol:inference_identity')
+    if inference['automatic_promotion'] is not False or inference['automatic_sizing_change'] is not False:
+        raise ValueError('profit_protocol:no_promotion')
+    digest(protocol)  # Reject nonfinite JSON.
+
+def freeze(path: Path, protocol: dict, code_sha: str, model_hash: str, now_ns: int):
+    validate(protocol)
+    for value,length in ((code_sha,40),(model_hash,64)):
+        if len(value)!=length or any(c not in '0123456789abcdef' for c in value):
+            raise ValueError('profit_protocol:exact_identity')
+    identity={'protocol_sha256':digest(protocol),'code_sha':code_sha,'frozen_model_hash':model_hash}
+    if path.exists():
+        existing=json.loads(path.read_text())
+        if existing.get('schema')!=SCHEMA or any(existing.get(k)!=v for k,v in identity.items()):
+            raise ValueError('profit_protocol:immutable_identity_changed')
+        if digest({k:v for k,v in existing.items() if k!='manifest_sha256'})!=existing.get('manifest_sha256'):
+            raise ValueError('profit_protocol:manifest_hash_mismatch')
+        return existing
+    value={'schema':SCHEMA,**identity,'protocol':protocol,'created_ns':now_ns,
+        'forward_start_ns':((now_ns//300_000_000_000)+1)*300_000_000_000,
+        'paper_only':True,'authenticated_execution':False,'real_order_submission':False,
+        'execution_authority':'ZERO_AUTHORITY_RESEARCH_ONLY'}
+    value['manifest_sha256']=digest(value)
+    path.parent.mkdir(parents=True,exist_ok=True)
+    temporary=path.with_name(path.name+f'.tmp.{os.getpid()}')
+    with temporary.open('x') as stream:
+        stream.write(json.dumps(value,sort_keys=True,indent=2)+'\n');stream.flush();os.fsync(stream.fileno())
+    try:os.link(temporary,path)  # Publish atomically without replacing a prior identity.
+    finally:temporary.unlink()
+    return value
+
+def bin_index(value,edges):
+    for index,(low,high) in enumerate(zip(edges,edges[1:])):
+        if low<=value<high:return index
+    return None

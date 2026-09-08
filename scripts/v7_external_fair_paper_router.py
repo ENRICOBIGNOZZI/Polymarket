@@ -1316,6 +1316,9 @@ def robust_candidates(status: dict[str, Any], books: dict[str, Book], policy: di
     ):
         return []
     calculated = int(fair.get("calculated_monotonic_ns") or 0)
+    fair_yes = finite(fair.get("yes"), math.nan)
+    if not math.isfinite(fair_yes) or not 0 <= fair_yes <= 1:
+        return []
     valid_until = int(fair.get("valid_until_monotonic_ns") or 0)
     current = time.monotonic_ns()
     if calculated <= 0 or calculated > current or valid_until < current:
@@ -1342,6 +1345,10 @@ def robust_candidates(status: dict[str, Any], books: dict[str, Book], policy: di
                 "outcome": outcome, "token_id": token, "book": book, "ask": ask,
                 "fee_per_share": fee, "execution_risk": execution_risk,
                 "robust_probability": robust_value, "robust_ev": robust_ev,
+                "point_probability": fair_yes if outcome == "YES" else 1.0 - fair_yes,
+                "point_ev": (fair_yes if outcome == "YES" else 1.0 - fair_yes) - ask - fee - execution_risk,
+                "probability_model_id": fair.get("probability_model_id"),
+                "probability_model_hash": fair.get("probability_model_hash"),
                 "market_yes": market_yes,
                 "tte_seconds": float(fair["tte_seconds"]),
                 "tte_bucket_id": str(bucket.get("id") or "UNBUCKETED_INVALID"),
@@ -3029,6 +3036,15 @@ class PaperRouter:
         )
         arrival_metadata = {
             **common["metadata"], "robust_net_ev": robust_ev,
+            "decision_point_probability": common["metadata"].get("point_probability"),
+            "decision_probability_model_id": common["metadata"].get("probability_model_id"),
+            "decision_probability_model_hash": common["metadata"].get("probability_model_hash"),
+            "decision_limit_price": common.get("limit_price"),
+            "decision_observed_ts_ms": common.get("decision_ts_ms"),
+            "arrival_point_probability": arrival.get("point_probability"),
+            "arrival_execution_risk_per_share": arrival.get("execution_risk"),
+            "arrival_fee_per_share": fee_share,
+            "arrival_best_ask": ask,
             "point_net_ev": point_ev,
             "point_expected_wealth_change": point_ev,
             "maximum_probe_loss": maximum_probe_loss,
@@ -3039,6 +3055,7 @@ class PaperRouter:
             "probability_model_hash": arrival.get("probability_model_hash"),
             "arrival_revalidated": True,
             "arrival_snapshot_id": arrival_book.snapshot_id,
+            "arrival_receive_ts_ms": arrival_book.receive_ts_ms,
             "arrival_tte_seconds": arrival["tte_seconds"],
             "resolution_due_ms": resolution_due_ms,
             "arrival_robust_probability": arrival["robust_probability"],
@@ -3134,18 +3151,7 @@ class PaperRouter:
             fee_rate=float(schedule.get("rate") or 0.0), fee_source="GAMMA_AUTHORITATIVE_FEE_SCHEDULE",
             fee_schedule=schedule,
             slippage=max(0.0, ask - float(common["ask"])) * size,
-            metadata={
-                **common["metadata"], "robust_net_ev": robust_ev,
-                "arrival_snapshot_id": arrival_book.snapshot_id,
-                "arrival_tte_seconds": arrival["tte_seconds"],
-                "arrival_robust_probability": arrival["robust_probability"],
-                "arrival_robust_ev_per_share": arrival["robust_ev"],
-                "arrival_pm_mid": arrival["market_yes"],
-                "arrival_model_market_disagreement": abs(
-                    float((arrival_status.get("fair") or {}).get("yes"))
-                    - float(arrival["market_yes"])
-                ),
-            },
+            metadata=arrival_metadata,
         )
         self.state["counterfactual_fills"] = int(self.state.get("counterfactual_fills") or 0) + 1
         if is_probe:
