@@ -56,13 +56,13 @@ jobs:
           fi
           python3 - <<'PY'
           import json
-          m=json.load(open('config/live_champion.json'))
-          assert m.get('enabled') is True and m.get('version') == 7
-          assert m.get('loop') == 'scripts/paper_v7_execution_loop.sh'
-          assert m.get('config') == 'config/paper_v7.json'
+          m=json.load(open('config/v7_live_model_scope.json'))
+          assert m.get('version') == 7 and m.get('live_algorithm_count') == 2
           assert m.get('paper_only') is True
           assert m.get('authenticated_execution') is False
           assert m.get('real_order_submission') is False
+          inv=m.get('runtime_invariants') or {}
+          assert inv.get('single_execution_owner') is True
           PY
           all_exact_green=true
           for pair in \
@@ -156,9 +156,9 @@ jobs:
           assert float(portfolio.get('drawdown',1)) <= .15 + 1e-12 and portfolio.get('killed') is False
           assert economics.get('expected_model_sha') == sha
           assert economics.get('paper_only') is True and economics.get('authenticated_execution') is False
-          ready=bool(economics.get('promotion_ready'))
+          ready=bool(economics.get('economic_evidence_ready'))
           with out.open('a') as f: f.write(f'economic_ready={str(ready).lower()}\n')
-          print(json.dumps({'state':economics.get('state'),'promotion_ready':ready,'submitted_units':economics.get('submitted_units'),'complete_units':economics.get('complete_units'),'net_pnl':economics.get('net_pnl'),'stressed_net_pnl':economics.get('stressed_net_pnl'),'reason_codes':economics.get('reason_codes')},sort_keys=True))
+          print(json.dumps({'state':economics.get('state'),'economic_evidence_ready':ready,'submitted_units':economics.get('submitted_units'),'complete_units':economics.get('complete_units'),'net_pnl':economics.get('net_pnl'),'stressed_net_pnl':economics.get('stressed_net_pnl'),'reason_codes':economics.get('reason_codes')},sort_keys=True))
           PY
           cleanup
           trap - EXIT INT TERM
@@ -170,23 +170,13 @@ jobs:
         run: |
           set -euo pipefail
           if [[ "${{ steps.economics.outputs.economic_ready }}" == "true" ]]; then
-            echo "economic_readiness=promotion_ready" >> "$GITHUB_STEP_SUMMARY"
+            echo "economic_readiness=evidence_ready" >> "$GITHUB_STEP_SUMMARY"
           else
             echo "economic_readiness=more_evidence_required" >> "$GITHUB_STEP_SUMMARY"
           fi
-          echo "PAPER deployment is a technical/safety evidence-collection state; it is not a real-money or profitability promotion." >> "$GITHUB_STEP_SUMMARY"
+          echo "PAPER deployment is a technical/safety research state; economic evidence is reported separately." >> "$GITHUB_STEP_SUMMARY"
 
-      - name: Regenerate redacted current-truth evidence
-        if: steps.gate.outputs.ready == 'true'
-        shell: bash
-        run: |
-          set -euo pipefail
-          python3 scripts/v7_current_truth_audit.py \
-            --root . \
-            --json-output "$SMOKE_ROOT/current_truth.json" \
-            --markdown-output "$SMOKE_ROOT/current_truth.md"
-
-      - name: Record release provenance and read-only canary preflight
+      - name: Record exact-SHA release provenance
         if: steps.gate.outputs.ready == 'true'
         shell: bash
         run: |
@@ -194,10 +184,6 @@ jobs:
           python3 scripts/v7_release_provenance.py \
             --repository-root . \
             --output "$SMOKE_ROOT/release_provenance.json"
-          python3 scripts/v7_live_canary_orchestrator.py \
-            --repository-root . \
-            --stage AUTHENTICATED_READ_ONLY \
-            > "$SMOKE_ROOT/live_canary_preflight.json"
 
       - name: Record immutable main-SHA validation result
         if: steps.gate.outputs.ready == 'true'

@@ -26,7 +26,7 @@ class V7MakerExplorationPolicyFallbackTest(unittest.TestCase):
         self.assertIn("confidence_z > std::max(0.0, model.robust_ev_z)", function)
         self.assertIn("model.exploration_enabled = 0", function)
 
-    def test_canonical_cold_start_exploration_is_small_and_non_promotional(self) -> None:
+    def test_canonical_cold_start_exploration_is_small_and_research_only(self) -> None:
         policy = json.loads(
             (ROOT / "config" / "v7_professional_market_maker.json").read_text(encoding="utf-8")
         )
@@ -35,7 +35,7 @@ class V7MakerExplorationPolicyFallbackTest(unittest.TestCase):
         self.assertFalse(policy["authenticated_execution"])
         self.assertFalse(policy["real_order_submission"])
         self.assertTrue(exploration["enabled"])
-        self.assertFalse(exploration["promotion_credit"])
+        self.assertTrue(exploration["research_only"])
         # Cold-start quotes buy information under strict notional/concurrency
         # caps. Exploit continues to use its independent 1.64-sigma gate.
         self.assertEqual(exploration["confidence_z"], 0.00)

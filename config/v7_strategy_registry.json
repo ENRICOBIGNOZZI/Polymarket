@@ -1,53 +1,58 @@
 {
-  "schema": "polymarket_v7_live_algorithm_registry_v2",
-  "version": 2,
-  "safety": {
-    "paper_only": true,
-    "authenticated_execution": false,
-    "real_order_submission": false,
-    "real_capital_at_risk": false,
-    "maximum_drawdown": 0.15
-  },
-  "ownership": {
-    "single_runtime_owner": true,
-    "single_global_portfolio_coordinator": true,
-    "single_oms": true,
-    "single_ledger": true,
-    "single_inventory": true,
-    "single_allocator": true,
-    "single_risk": true
-  },
+  "component_independent_authority": false,
   "live_algorithms": [
     {
-      "id": "CRYPTO_SETTLEMENT_ENGINE",
-      "display_name": "Crypto Settlement Engine",
-      "mode": "PAPER",
-      "enabled": true,
-      "new_risk_authorized": false,
+      "actions": [
+        "MAKE",
+        "TAKE",
+        "CANCEL",
+        "WITHDRAW",
+        "NOTHING"
+      ],
       "components": [
         "crypto_settlement_fair",
         "professional_maker",
         "crypto_informed_taker"
       ],
-      "actions": ["MAKE", "TAKE", "CANCEL", "WITHDRAW", "NOTHING"]
+      "display_name": "Crypto Settlement Engine",
+      "enabled": true,
+      "id": "CRYPTO_SETTLEMENT_ENGINE",
+      "mode": "PAPER",
+      "new_risk_authorized": false
     },
     {
-      "id": "STRUCTURAL_ARB_ENGINE",
+      "actions": [
+        "ARB",
+        "CANCEL",
+        "NOTHING"
+      ],
+      "components": [
+        "hard_arb",
+        "fast_structural"
+      ],
       "display_name": "Structural Arbitrage Engine",
-      "mode": "PAPER",
       "enabled": true,
-      "new_risk_authorized": false,
-      "components": ["hard_arb", "fast_structural"],
-      "actions": ["ARB", "CANCEL", "NOTHING"]
+      "id": "STRUCTURAL_ARB_ENGINE",
+      "mode": "PAPER",
+      "new_risk_authorized": false
     }
   ],
-  "component_independent_authority": false,
-  "governance": {
-    "automatic_promotion": false,
-    "chronological_oos_required": true,
-    "causal_replay_required": true,
-    "forward_paper_required": true,
-    "real_money_gates_out_of_scope": true,
-    "operator_promotion_required": true
-  }
+  "ownership": {
+    "single_allocator": true,
+    "single_global_portfolio_coordinator": true,
+    "single_inventory": true,
+    "single_ledger": true,
+    "single_oms": true,
+    "single_risk": true,
+    "single_runtime_owner": true
+  },
+  "safety": {
+    "authenticated_execution": false,
+    "maximum_drawdown": 0.15,
+    "paper_only": true,
+    "real_capital_at_risk": false,
+    "real_order_submission": false
+  },
+  "schema": "polymarket_v7_live_algorithm_registry_v2",
+  "version": 2
 }

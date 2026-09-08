@@ -6,7 +6,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'scripts'))
 from v7_external_rich_model import (FEATURE_SCHEMA, FAMILY, HISTORY_SEMANTICS, features,
     contextual_features, predict, validate_parameters, is_paper_learning_fair)
 from v7_external_rich_train import build_rows, split_rows, train
-from v7_fair_value_registry import FairModelArtifact, canonical_hash
+from v7_fair_model_artifact import FairModelArtifact, canonical_hash
 
 
 def origin(i=0):
@@ -38,7 +38,7 @@ class RichModelTests(unittest.TestCase):
         a=self.artifact;validate_parameters(a)
         self.assertEqual(a.family,FAMILY);self.assertFalse(a.probability_interval_diagnostics['validated'])
         self.assertTrue(0 < predict(a,self.rows[-1]['features'],.55) < 1)
-        self.assertFalse(a.hyperparameters['automatic_promotion'])
+        self.assertTrue(a.hyperparameters['research_only'])
     def test_old_missing_history_never_flat_feature(self):
         o=origin(); self.assertIsNone(features(o)['return_5s_bp'])
         o['external_features'].update(feature_semantics_version=HISTORY_SEMANTICS,return_history_available={'5s':True})
@@ -57,6 +57,16 @@ class RichModelTests(unittest.TestCase):
         sets=[{r['market_id'] for r in v} for v in p.values()]
         self.assertFalse(sets[0]&sets[1] or sets[1]&sets[2] or sets[0]&sets[2])
         self.assertLess(max(r['label_received_ms'] for r in p['train']), min(r['market_start_ms'] for r in p['validation']))
+    def test_sparse_real_derivative_feature_is_not_dropped_by_old_90pct_gate(self):
+        changed=copy.deepcopy(self.rows)
+        for i,row in enumerate(changed[:12]):
+            row['features']['binance_perp_basis_bp']=float(i)-5.5
+        artifact,_=train(changed,'a'*40,'c'*64,[],1_800_000_000_000_000_000)
+        self.assertIn('binance_perp_basis_bp',artifact.parameters['feature_names'])
+        coverage=artifact.parameters['feature_coverage']['binance_perp_basis_bp']['market_weight_fraction']
+        self.assertLess(coverage,.90)
+        self.assertGreater(coverage,.05)
+
     def test_audit_labels_do_not_select_model(self):
         changed=copy.deepcopy(self.rows)
         for r in changed[80:]:r['actual']=1-r['actual']
@@ -68,23 +78,21 @@ class RichModelTests(unittest.TestCase):
     def test_hash_tampering_rejected(self):
         a=copy.deepcopy(self.artifact);a.parameters['coefficients'][0]+=1
         with self.assertRaises(ValueError):validate_parameters(a)
-    def test_probe_cannot_become_champion_or_real(self):
-        f=dict(valid=True,paper_exploration_learned=True,explicit_champion_applied=False,
-            promotion_eligible=False,real_money_authority=False,probability_interval_validated=False,
-            lower=0.,upper=1.,family=FAMILY,model_code_sha='a'*40,registry_role='CHALLENGER',
-            registry_load_state='LOADED',inference_state='VALID_PAPER_LEARNED_PROBE',authority='SHADOW',
-            probability_model_hash=self.artifact.model_hash,probability_model_id=self.artifact.model_version)
-        self.assertTrue(is_paper_learning_fair(f,'a'*40))
-        for k,v in [('promotion_eligible',True),('real_money_authority',True),('lower',.01),
-                    ('explicit_champion_applied',True),('registry_role','CHAMPION')]:
-            self.assertFalse(is_paper_learning_fair({**f,k:v},'a'*40))
-        self.assertFalse(is_paper_learning_fair(f,'d'*40))
-    def learned_fair(self):
-        return dict(valid=True,paper_exploration_learned=True,explicit_champion_applied=False,
-            paper_exploration_bootstrap=False,promotion_eligible=False,real_money_authority=False,
-            probability_interval_validated=False,lower=0.,upper=1.,yes=.70,family=FAMILY,
-            model_code_sha='a'*40,registry_role='CHALLENGER',registry_load_state='LOADED',
+    def test_research_probe_has_no_real_authority(self):
+        f=dict(valid=True,paper_exploration_learned=True,research_model=True,
+            research_model_state='FROZEN_INFERENCE_ONLY',real_money_authority=False,
+            probability_interval_validated=False,lower=0.,upper=1.,family=FAMILY,
             inference_state='VALID_PAPER_LEARNED_PROBE',authority='SHADOW',
+            probability_model_hash=self.artifact.model_hash,probability_model_id=self.artifact.model_version)
+        self.assertTrue(is_paper_learning_fair(f))
+        for k,v in [('real_money_authority',True),('lower',.01),('research_model',False),
+                    ('research_model_state','MUTABLE')]:
+            self.assertFalse(is_paper_learning_fair({**f,k:v}))
+    def learned_fair(self):
+        return dict(valid=True,paper_exploration_learned=True,research_model=True,
+            research_model_state='FROZEN_INFERENCE_ONLY',paper_exploration_bootstrap=False,
+            real_money_authority=False,probability_interval_validated=False,lower=0.,upper=1.,yes=.70,
+            family=FAMILY,inference_state='VALID_PAPER_LEARNED_PROBE',authority='SHADOW',
             probability_model_hash=self.artifact.model_hash,probability_model_id=self.artifact.model_version)
     def load_fixture(self, name):
         path=Path(__file__).with_name(name+'.py')
@@ -100,7 +108,7 @@ class RichModelTests(unittest.TestCase):
                 opportunities,diag=m.bridge.build_maker_opportunities(r,now_ns=2_000_000_000,repository_root=m.ROOT)
             self.assertEqual(len(opportunities),1,diag)
             parsed=m.OpportunityEnvelope.parse(opportunities[0]).raw
-            self.assertFalse(parsed['exploration']['promotion_eligible'])
+            self.assertTrue(parsed['exploration']['research_only'])
             self.assertFalse(parsed['exploration']['robust_candidate'])
             self.assertLessEqual(parsed['exploration']['maximum_probe_loss'],2.)
     def test_learned_taker_respects_explicit_switch_and_hard_guards(self):
@@ -109,11 +117,61 @@ class RichModelTests(unittest.TestCase):
         policy=json.loads((Path(__file__).resolve().parents[1]/'config/v7_external_fair.json').read_text())
         probes=m.router.validate_probe_policy(policy['paper_exploration_probe'])
         books={'yes':m.book('yes',.52,.50),'no':m.book('no',.50,.48)}
-        self.assertEqual(m.router.paper_probe_candidates(status,books,policy['taker'],probes),[])
-        probes['allow_frozen_rich_ml']=True
         self.assertTrue(m.router.paper_probe_candidates(status,books,policy['taker'],probes))
+        disabled=dict(probes);disabled['allow_frozen_rich_ml']=False
+        self.assertEqual(m.router.paper_probe_candidates(status,books,policy['taker'],disabled),[])
         status['real_order_submission']=True
         self.assertEqual(m.router.paper_probe_candidates(status,books,policy['taker'],probes),[])
+    def test_rich_taker_revalidates_pm_prior_at_arrival(self):
+        m=self.load_fixture('test_v7_external_fair_paper_router')
+        status=m.snapshot();fair=self.learned_fair();fair.update(
+            uses_polymarket_price_as_feature=True,market_prior_causal_cut_valid=True,
+            pm_mid=.50,pm_mid_receive_ts_ms=1001)
+        status['fair'].update(fair)
+        policy=json.loads((Path(__file__).resolve().parents[1]/'config/v7_external_fair.json').read_text())
+        probes=m.router.validate_probe_policy(policy['paper_exploration_probe'])
+        books={'yes':m.book('yes',.52,.50),'no':m.book('no',.50,.48)}
+        self.assertTrue(m.router.paper_probe_candidates(status,books,policy['taker'],probes))
+        status['fair']['pm_mid']=.40
+        self.assertEqual(m.router.paper_probe_candidates(status,books,policy['taker'],probes),[])
+        status['fair']['pm_mid']=.50;status['fair']['pm_mid_receive_ts_ms']=1
+        self.assertEqual(m.router.paper_probe_candidates(status,books,policy['taker'],probes),[])
+
+    def test_runtime_is_inference_only_unless_explicit_freeze_is_requested(self):
+        config=json.loads((Path(__file__).resolve().parents[1]/'config/v7_external_fair.json').read_text())
+        ml=config['paper_ml_probe']
+        self.assertFalse(ml['runtime_training']);self.assertTrue(ml['inference_only_runtime'])
+        self.assertEqual(ml['training_lifecycle'],'EXPLICIT_FROZEN_ARTIFACT_ONLY')
+        launcher=(Path(__file__).resolve().parents[1]/'scripts/paper_v7_execution_loop.sh').read_text()
+        guard='if [[ "${PM_V7_FREEZE_RICH_MODEL:-0}" == "1" ]]; then'
+        self.assertIn(guard,launcher)
+        self.assertIn('{"state":"INFERENCE_ONLY","runtime_training":false}',launcher)
+
+    def test_liquidation_rates_are_receive_time_causal_and_reset_safe(self):
+        import v7_rtds_external_fair_monitor as module
+        with tempfile.TemporaryDirectory() as directory:
+            monitor=module.Monitor(Path(directory),'a'*40)
+            first={"timestamp_ns":1_000_000_000,"composite_price":100.0,
+                   "binance_usdm":{"valid":True,"liquidation_buy_notional":100.0,
+                                   "liquidation_sell_notional":50.0},
+                   "bybit_linear":{"valid":True,"liquidation_buy_notional":0.0,
+                                   "liquidation_sell_notional":0.0}}
+            self.assertEqual(monitor.liquidation_rate_features(first,1_000_000_000),{})
+            second={"timestamp_ns":2_000_000_000,"composite_price":100.0,
+                    "binance_usdm":{"valid":True,"liquidation_buy_notional":120.0,
+                                    "liquidation_sell_notional":60.0},
+                    "bybit_linear":{"valid":True,"liquidation_buy_notional":5.0,
+                                    "liquidation_sell_notional":15.0}}
+            rates=monitor.liquidation_rate_features(second,2_000_000_000)
+            self.assertAlmostEqual(rates["binance_liquidation_signed_btc_per_s"],.1)
+            self.assertAlmostEqual(rates["binance_liquidation_total_btc_per_s"],.3)
+            self.assertAlmostEqual(rates["bybit_liquidation_signed_btc_per_s"],-.1)
+            reset={"timestamp_ns":3_000_000_000,"composite_price":100.0,
+                   "binance_usdm":{"valid":True,"liquidation_buy_notional":1.0,
+                                   "liquidation_sell_notional":1.0}}
+            self.assertNotIn("binance_liquidation_total_btc_per_s",
+                             monitor.liquidation_rate_features(reset,3_000_000_000))
+
     def test_external_snapshot_rejects_future_publication(self):
         import v7_rtds_external_fair_monitor as module
         with tempfile.TemporaryDirectory() as directory:
@@ -126,13 +184,13 @@ class RichModelTests(unittest.TestCase):
         import v7_rtds_external_fair_monitor as module
         with tempfile.TemporaryDirectory() as directory:
             monitor=module.Monitor(Path(directory),'a'*40)
-            monitor.challenger=self.artifact;monitor.challenger_load_state='LOADED'
+            monitor.research_model=self.artifact;monitor.research_model_load_state='LOADED'
             boundary=self.artifact.hyperparameters['forward_oos_starts_after_ns'];now=boundary+100_000_000_000
             monitor.active_market={'contract_start_epoch':boundary//1_000_000_000}
             monitor.active_contract={'normalized_rules_hash':'b'*64}
             monitor.reference={'valid':True,'value':100.}
             monitor.latest[module.ORACLE_TOPIC]={'price':100.1}
-            base={'valid':True,'tte_seconds':200.,'pm_mid':.5,'explicit_champion_applied':False}
+            base={'valid':True,'tte_seconds':200.,'pm_mid':.5}
             ext=origin()['external_features'];context={'observed_wall_ns':now,'features':{}}
             fair=monitor.rich_paper_snapshot(base,ext,context,now)
             self.assertTrue(is_paper_learning_fair(fair,'a'*40),fair)
@@ -141,17 +199,46 @@ class RichModelTests(unittest.TestCase):
             monitor.active_market['contract_start_epoch']-=300
             self.assertFalse(monitor.rich_paper_snapshot(base,ext,context,now)['valid'])
 
-    def test_registry_loads_challenger_but_not_champion(self):
+    def test_market_offset_rich_model_requires_identified_fresh_causal_pm_prior_in_production(self):
+        import v7_rtds_external_fair_monitor as module
+        with tempfile.TemporaryDirectory() as directory:
+            monitor=module.Monitor(Path(directory),'a'*40)
+            monitor.research_model=self.artifact;monitor.research_model_load_state='LOADED'
+            monitor.paper_ml_policy={'causal_pm_prior_required':True,
+                'maximum_pm_prior_age_ms':500.0,'maximum_pm_external_skew_ms':750.0}
+            boundary=self.artifact.hyperparameters['forward_oos_starts_after_ns'];now=boundary+100_000_000_000
+            now_ms=now//1_000_000
+            monitor.active_market={'contract_start_epoch':boundary//1_000_000_000}
+            monitor.active_contract={'normalized_rules_hash':'b'*64}
+            monitor.reference={'valid':True,'value':100.}
+            monitor.latest[module.ORACLE_TOPIC]={'price':100.1}
+            base={'valid':True,'tte_seconds':200.,'pm_mid':.5,
+                'pm_mid_snapshot_id':'pm-snap-1','pm_mid_receive_ts_ms':now_ms-100,
+                'pm_mid_exchange_ts_ms':now_ms-101,'pm_mid_age_ms':100}
+            ext=origin()['external_features'];ext['timestamp_ns']=now-50_000_000
+            context={'observed_wall_ns':now,'features':{}}
+            fair=monitor.rich_paper_snapshot(base,ext,context,now)
+            self.assertTrue(fair['valid'],fair)
+            self.assertTrue(fair['market_prior_causal_cut_valid'])
+            self.assertEqual(fair['market_prior_snapshot_id'],'pm-snap-1')
+            stale=dict(base);stale['pm_mid_age_ms']=501
+            self.assertEqual(monitor.rich_paper_snapshot(stale,ext,context,now)['reason'],
+                             'PM_PRIOR_STALE_OR_UNIDENTIFIED')
+            skewed=dict(ext);skewed['timestamp_ns']=now+700_000_000
+            self.assertEqual(monitor.rich_paper_snapshot(base,skewed,context,now)['reason'],
+                             'PM_EXTERNAL_CAUSAL_SKEW')
+
+    def test_direct_research_model_loader_has_no_sha_deployment_coupling(self):
         import v7_rtds_external_fair_monitor as monitor
         with tempfile.TemporaryDirectory() as directory:
-            from v7_fair_value_registry import FairValueRegistry
-            reg=FairValueRegistry(Path(directory));pointer=reg.publish_challenger(self.artifact)
-            loaded,state=monitor.load_registered_calibration(pointer,code_sha='a'*40,expected_role='CHALLENGER')
+            path=Path(directory)/'research.json';path.write_text(json.dumps(self.artifact.__dict__))
+            loaded,state=monitor.load_rich_research_model(path)
             self.assertEqual(state,'LOADED');self.assertEqual(loaded.model_hash,self.artifact.model_hash)
-            raw=json.loads(pointer.read_text());raw.update(role='CHAMPION',promotion_evidence_hash='d'*64)
-            pointer.write_text(json.dumps(raw))
-            loaded,state=monitor.load_registered_calibration(pointer,code_sha='a'*40,expected_role='CHAMPION')
-            self.assertIsNone(loaded)
+            # Runtime code SHA is intentionally not part of this loader contract.
+            self.assertNotEqual(loaded.code_sha,'d'*40)
+            raw=json.loads(path.read_text());raw['artifact_role']='INVALID_ROLE';path.write_text(json.dumps(raw))
+            loaded,state=monitor.load_rich_research_model(path)
+            self.assertIsNone(loaded);self.assertEqual(state,'RESEARCH_MODEL_INVALID')
 
     def test_builder_requires_verified_binary_settlement(self):
         o=origin();common=dict(schema='polymarket_v7_external_fair_counterfactual_v1',

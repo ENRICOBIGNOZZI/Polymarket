@@ -154,9 +154,16 @@ def _selection_lookup(selection: dict[str, Any], yes_token: str, no_token: str) 
 
 def _model_group(model: dict[str, Any], action: str, outcome: str, side: str) -> dict[str, Any]:
     groups = model.get("groups") if isinstance(model.get("groups"), dict) else {}
-    value = groups.get(_group_key(action, outcome, side))
-    if isinstance(value, dict):
-        return value
+    keys = (
+        _group_key(action, outcome, side),
+        f"{action.upper()}|{outcome.upper()}|{side.upper()}",
+        f"MAKE:{outcome.upper()}:{side.upper()}",
+        f"MAKE|{outcome.upper()}|{side.upper()}",
+    )
+    for key in keys:
+        value = groups.get(key)
+        if isinstance(value, dict):
+            return value
     global_group = groups.get("GLOBAL")
     return global_group if isinstance(global_group, dict) else {}
 
@@ -171,11 +178,35 @@ def _fill_band(cell: dict[str, Any], opportunity: dict[str, Any], group: dict[st
     learned = _clamp(_finite(group.get("fill_probability"), projected) or projected)
     point = min(projected, learned) if projected > 0.0 and learned > 0.0 else max(projected, learned)
     orders = int(_finite(group.get("orders"), 0.0) or 0.0)
-    filled_orders = int(_finite(group.get("filled_orders"), _finite(group.get("fills"), 0.0)) or 0.0)
-    mature = group.get("mature") is True and orders >= 50 and filled_orders >= 20
-    lower = min(point, wilson_lower(filled_orders, orders)) if mature else 0.0
+    event_clusters = int(_finite(group.get("event_clusters"), 0.0) or 0.0)
+    adaptive_ready = orders >= 20 and event_clusters >= 2
+    posterior_lower = _clamp(_finite(group.get("fill_probability_lower_90"), 0.0) or 0.0)
+    lower = min(point, posterior_lower) if adaptive_ready else 0.0
     upper = _clamp(max(point, projected, learned))
-    return lower, point, upper, "MATURE" if mature else "IMMATURE"
+    return lower, point, upper, "MATURE" if adaptive_ready else "IMMATURE"
+
+
+def _rich_prior_alignment(
+    fair: dict[str, Any], opportunity: dict[str, Any], outcome: str,
+    decision_ms: int, policy: dict[str, Any],
+) -> tuple[bool, float | None, float | None]:
+    if fair.get("uses_polymarket_price_as_feature") is not True:
+        return True, None, None
+    if fair.get("market_prior_causal_cut_valid") is not True:
+        return False, None, None
+    prior = _finite(fair.get("pm_mid"))
+    prior_receive_ms = _finite(fair.get("pm_mid_receive_ts_ms"))
+    bid = _finite(opportunity.get("best_bid")); ask = _finite(opportunity.get("best_ask"))
+    if prior is None or prior_receive_ms is None or bid is None or ask is None or not 0 <= prior <= 1:
+        return False, None, None
+    token_mid = 0.5 * (bid + ask)
+    current_yes = token_mid if outcome == "YES" else 1.0 - token_mid
+    drift = abs(prior - current_yes)
+    age_ms = decision_ms - prior_receive_ms
+    execution = policy.get("execution_model") if isinstance(policy.get("execution_model"), dict) else {}
+    max_drift = max(0.0, _finite(execution.get("maximum_rich_pm_prior_drift"), 0.03) or 0.03)
+    max_age = max(100.0, _finite(execution.get("maximum_rich_pm_prior_age_ms"), 750.0) or 750.0)
+    return bool(-250 <= age_ms <= max_age and drift <= max_drift), drift, age_ms
 
 
 def _maker_cost_buffers(policy: dict[str, Any], group: dict[str, Any]) -> tuple[float, float, float]:
@@ -312,6 +343,8 @@ def build_maker_opportunities(
         or model.get("authenticated_execution") is not False
         or model.get("real_order_submission") is not False
         or model.get("model_sha") != model_sha
+        or model.get("artifact_role") != "research"
+        or model.get("research_runtime_model") is not True
     ):
         reasons.append("MAKER_EXECUTION_MODEL_NOT_READY")
     contract = fair_status.get("contract") if isinstance(fair_status.get("contract"), dict) else {}
@@ -334,23 +367,32 @@ def build_maker_opportunities(
         and external.get("healthy") is True
         and fair.get("valid") is True
     )
-    fair_champion_ready = fair_common_ready and fair.get("explicit_champion_applied") is True
-    fair_bootstrap_probe_ready = (
+    research_fair_ready = (
         fair_common_ready
-        and fair.get("explicit_champion_applied") is False
+        and fair.get("research_model") is True
+        and fair.get("research_model_state") == "FROZEN_INFERENCE_ONLY"
+        and fair.get("real_money_authority") is False
+        and fair.get("authority") == "SHADOW"
+    )
+    if research_fair_ready and fair.get("probability_interval_validated") is not True:
+        research_fair_ready = is_paper_learning_fair(fair, model_sha)
+    structural_fallback_ready = (
+        fair_common_ready
         and fair.get("paper_exploration_bootstrap") is True
         and fair.get("inference_state") == "VALID_PAPER_EXPLORATION_BOOTSTRAP"
         and fair.get("calibration_state") == "PAPER_EXPLORATION_BOOTSTRAP_APPLIED"
         and fair.get("probability_model_id") == "btc_m5_same_oracle_diffusion_bootstrap_v1"
-        and fair.get("promotion_eligible") is False
+        and fair.get("research_only") is True
         and fair.get("real_money_authority") is False
         and fair.get("uses_polymarket_price_as_feature") is False
         and fair.get("authority") == "SHADOW"
     )
-    fair_bootstrap_probe_ready = fair_bootstrap_probe_ready or (
-        fair_common_ready and is_paper_learning_fair(fair, model_sha))
-    if not (fair_champion_ready or fair_bootstrap_probe_ready):
-        reasons.append("SETTLEMENT_FAIR_NOT_MATURE_OR_VERIFIED")
+    research_or_fallback_ready = research_fair_ready or structural_fallback_ready
+    point_only_fair_requires_probe = structural_fallback_ready or (
+        research_fair_ready and fair.get("probability_interval_validated") is not True
+    )
+    if not research_or_fallback_ready:
+        reasons.append("SETTLEMENT_RESEARCH_FAIR_NOT_READY")
     if reasons:
         return [], {
             "schema": BRIDGE_SCHEMA,
@@ -417,6 +459,14 @@ def build_maker_opportunities(
         if action not in {"JOIN", "IMPROVE1"} or side != "BUY" or price is None or fair_triplet is None:
             rejected["INVALID_QUOTE_CELL"] = rejected.get("INVALID_QUOTE_CELL", 0) + 1
             continue
+        prior_aligned, prior_drift, prior_age_ms = _rich_prior_alignment(
+            fair, opportunity, outcome, decision_ms, policy
+        )
+        if not prior_aligned:
+            rejected["RICH_PM_PRIOR_STALE_OR_REPRICED"] = rejected.get(
+                "RICH_PM_PRIOR_STALE_OR_REPRICED", 0
+            ) + 1
+            continue
         group = _model_group(model, action, outcome, side)
         fill_band = _fill_band(cell, opportunity, group)
         fill_lower, fill_point, _fill_upper, evidence_status = fill_band
@@ -440,7 +490,7 @@ def build_maker_opportunities(
             control_probe_cell
             and provisional_point_ev > 0.0
             and (
-                fair_bootstrap_probe_ready
+                point_only_fair_requires_probe
                 or evidence_status != "MATURE"
                 or provisional_conservative_ev <= 0.0
             )
@@ -464,9 +514,9 @@ def build_maker_opportunities(
         if point_ev <= 0.0:
             rejected["NONPOSITIVE_POINT_EV"] = rejected.get("NONPOSITIVE_POINT_EV", 0) + 1
             continue
-        if fair_bootstrap_probe_ready and not needs_probe:
-            rejected["BOOTSTRAP_FAIR_REQUIRES_PAPER_PROBE"] = rejected.get(
-                "BOOTSTRAP_FAIR_REQUIRES_PAPER_PROBE", 0
+        if point_only_fair_requires_probe and not needs_probe:
+            rejected["POINT_ONLY_FAIR_REQUIRES_PAPER_PROBE"] = rejected.get(
+                "POINT_ONLY_FAIR_REQUIRES_PAPER_PROBE", 0
             ) + 1
             continue
         if not needs_probe and (evidence_status != "MATURE" or conservative_ev <= 0.0):
@@ -581,15 +631,14 @@ def build_maker_opportunities(
             "eligible": True,
             "reasons": ([
                 "VERIFIED_SETTLEMENT_RULE",
-                (("PAPER_LEARNED_FAIR" if fair.get("paper_exploration_learned") is True else "PAPER_EXPLORATION_BOOTSTRAP_FAIR")
-                 if fair_bootstrap_probe_ready else "EXPLICIT_FAIR_CHAMPION"),
+                ("FROZEN_RESEARCH_FAIR" if research_fair_ready else "STRUCTURAL_RESEARCH_FALLBACK"),
                 "CONTROL_EXPLORATION_CELL",
                 "POSITIVE_POINT_MAKER_EV",
-                "ZERO_PROMOTION_CREDIT_INFORMATION_PROBE",
+                "RESEARCH_INFORMATION_PROBE",
                 f"PLACEMENT_{action}",
             ] if needs_probe else [
                 "VERIFIED_SETTLEMENT_RULE",
-                "EXPLICIT_FAIR_CHAMPION",
+                "FROZEN_RESEARCH_FAIR",
                 "MATURE_FILL_EVENT_LOWER_BOUND",
                 "POSITIVE_CONSERVATIVE_MAKER_EV",
                 f"PLACEMENT_{action}",
@@ -609,7 +658,7 @@ def build_maker_opportunities(
                 "maximum_probe_loss": maximum_probe_loss,
                 "probe_loss_cap": probe_loss_cap,
                 "information_score": 1.0 + max(0.0, 50.0 - orders) / 50.0,
-                "promotion_eligible": False,
+                "research_only": True,
                 "robust_candidate": False,
                 "arrival_revalidated": True,
                 "model_id": "btc_m5_maker_execution_bootstrap_probe_v1",
@@ -645,6 +694,8 @@ def build_maker_opportunities(
         "rejected": rejected,
         "model_state": model.get("model_state"),
         "model_hash": model_hash,
+        "research_execution_model": True,
+        "research_evidence_scope": "CURRENT_RUN_ONLY",
         "market_id": market_status.get("market_id"),
         "decision_timestamp_ns": decision_ns,
         "selection_timestamp_ms": selection_ts_ms,

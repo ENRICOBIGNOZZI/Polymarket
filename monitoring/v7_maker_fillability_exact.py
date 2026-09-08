@@ -307,7 +307,7 @@ def replay_exact_ws(
         next_experiment = "market_selection_or_quote_placement"
     elif funnel["fill_opportunity_pessimistic"] == 0:
         root = "QUEUE_COMPETITION_OR_LIFETIME"
-        next_experiment = "single_dimension_lifetime_or_placement_challenger"
+        next_experiment = "single_dimension_lifetime_or_placement_candidate"
     elif bug == "SAME_FEED_REPLAY_REQUIRED":
         root = "PESSIMISTIC_OPPORTUNITY_WITHOUT_RECORDED_FILL"
         next_experiment = "deterministic_same_feed_replay"

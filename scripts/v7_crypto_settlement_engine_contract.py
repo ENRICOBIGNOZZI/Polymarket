@@ -87,7 +87,6 @@ def validate_config(config: dict[str, Any]) -> None:
         or config.get("paper_only") is not True
         or config.get("authenticated_execution") is not False
         or config.get("real_order_submission") is not False
-        or config.get("automatic_promotion") is not False
         or config.get("decision_owner") != "CRYPTO_SETTLEMENT_ENGINE"
         or config.get("market_registry") != "config/v7_crypto_settlement_markets.json"
         or config.get("model_registry") != "config/v7_crypto_settlement_model_registry.json"
@@ -157,13 +156,12 @@ def validate_config(config: dict[str, Any]) -> None:
         or execution_alpha.get("paper_only") is not True
         or execution_alpha.get("authenticated_execution") is not False
         or execution_alpha.get("real_order_submission") is not False
-        or execution_alpha.get("automatic_promotion") is not False
         or float(execution_alpha.get("comparison_size_shares") or 0.0) <= 0.0
         or execution_alpha.get("selection_objective") != "MAX_CONSERVATIVE_EXPECTED_CHANGE_IN_ACCOUNT_WEALTH"
         or execution_alpha.get("take_proposal_owner") != "EXISTING_ARRIVAL_REVALIDATED_EXTERNAL_FAIR_ROUTER"
         or execution_alpha.get("make_proposal_owner") != "V7_CRYPTO_EXECUTION_ALPHA"
-        or execution_alpha.get("cancel_activation") != "FROZEN_FORWARD_PASS_PLUS_CANONICAL_LIVE_SIGNAL"
-        or execution_alpha.get("maker_immature_fill_lower") != "ZERO"
+        or execution_alpha.get("cancel_activation") != "CURRENT_RESEARCH_RULE_HASH_PLUS_CAUSAL_LIVE_SIGNAL"
+        or execution_alpha.get("maker_immature_fill_lower") != "CURRENT_RUN_POSTERIOR_LOWER_90_AFTER_20_ORDERS_2_CLUSTERS"
         or execution_alpha.get("retroactive_attribution_imputation") is not False
         or execution_alpha.get("attribution_fields") != expected_attribution
     ):
@@ -222,7 +220,6 @@ def validate_structural_config(config: dict[str, Any]) -> None:
         or config.get("authenticated_execution") is not False
         or config.get("real_order_submission") is not False
         or config.get("real_capital_at_risk") is not False
-        or config.get("automatic_promotion") is not False
         or config.get("decision_owner") != "STRUCTURAL_ARB_ENGINE"
         or config.get("authority_registry") != "config/v7_authority_registry.json"
         or config.get("opportunity_contract") != "schemas/v7/opportunity_envelope.schema.json"

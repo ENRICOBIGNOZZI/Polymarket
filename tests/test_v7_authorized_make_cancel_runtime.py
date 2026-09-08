@@ -18,7 +18,7 @@ import v7_maker_opportunity_bridge as maker_bridge  # noqa: E402
 import test_v7_maker_opportunity_bridge as fixture  # noqa: E402
 
 SHA = "a" * 40
-RULE_SHA = cancel_bridge.FROZEN_RULE_SHA
+_RULE, RULE_SHA = cancel_bridge._research_rule()
 
 
 def write(path: Path, value: dict) -> None:
@@ -109,37 +109,23 @@ def run(executor: Path) -> None:
             assert active_before_cancel["order_id"]
             assert active_before_cancel["replay_key"] == maker_rows[0]["deterministic_replay_key"]
             trigger_ns = time.time_ns()
-            write(root / "control/external_cancel_activation.json", {
-                "schema": cancel_bridge.ACTIVATION_SCHEMA,
-                "experiment_id": cancel_bridge.EXPERIMENT_ID,
-                "paper_only": True, "authenticated_execution": False,
-                "real_order_submission": False, "real_money_authority": False,
-                "automatic_promotion": False,
-                "paper_execution_alpha_overlay_eligible": True,
-                "manual_exact_sha_promotion_required": True,
-                "frozen_rule_retuning_allowed": False, "failed_checks": [],
-                "evidence": {
-                    "rule_sha256": RULE_SHA,
-                    "official_v3_provenance_verified": True,
-                    "official_v3_promotion_boundary_ms": cancel_bridge.OFFICIAL_V3_PROMOTION_BOUNDARY_MS,
-                    "official_v3_protocol_reference_sha256": cancel_bridge.OFFICIAL_V3_PROTOCOL_SHA,
-                    "activation_report_sha256": "f" * 64,
-                },
-            })
             write(root / "external_fair/external_cancel_signal.json", {
                 "schema": cancel_bridge.SIGNAL_SCHEMA,
-                "experiment_id": cancel_bridge.EXPERIMENT_ID,
+                "rule_id": cancel_bridge.RULE_ID,
                 "code_sha": SHA, "rule_sha256": RULE_SHA,
                 "paper_only": True, "authenticated_execution": False,
                 "real_order_submission": False, "real_money_authority": False,
-                "automatic_promotion": False,
+                "research_only": True,
                 "execution_authority": "ZERO_AUTHORITY_SIGNAL_ONLY",
-                "shock_source": "BINANCE_SPOT_TRADES",
-                "confirmation_source": "COINBASE_SPOT_TOP_OF_BOOK",
-                "confirmation": "NON_OPPOSING", "shock_window_ms": 100,
-                "minimum_absolute_log_return_bp": 0.30,
-                "trigger_cooldown_ms": 250, "trigger_grid_ms": 25,
-                "overlap_warmup_ms": 300, "maximum_live_signal_age_ms": 100,
+                "shock_source": _RULE["shock_source"],
+                "confirmation_source": _RULE["confirmation_source"],
+                "confirmation": _RULE["confirmation"],
+                "shock_window_ms": _RULE["shock_window_ms"],
+                "minimum_absolute_log_return_bp": _RULE["minimum_absolute_log_return_bp"],
+                "trigger_cooldown_ms": _RULE["trigger_cooldown_ms"],
+                "trigger_grid_ms": _RULE["trigger_grid_ms"],
+                "overlap_warmup_ms": _RULE["overlap_warmup_ms"],
+                "maximum_signal_age_ms": _RULE["maximum_signal_age_ms"],
                 "supported_cancel_side": "BUY", "confirmed_non_opposing": True,
                 "valid": True, "signal_version": 1, "stale_buy_outcome": "YES",
                 "trigger_receive_wall_ns": trigger_ns - 5_000_000,

@@ -23,15 +23,15 @@ def main() -> None:
         live = root / "live" / "ledger"
         archive.mkdir(parents=True); live.mkdir(parents=True)
         rows = [
-            event("o1", "ORDER_SUBMITTED", "MICRO_MAKER_PRO", order_id="order-1"),
-            event("mf1", "FILL", "MICRO_MAKER_PRO", order_id="order-1", fill_id="maker-fill-1"),
-            event("mm1", "MARKOUT", "MICRO_MAKER_PRO", fill_id="maker-fill-1", markouts={"1s": -0.02}),
-            event("mfin", "FINAL", "MICRO_MAKER_PRO", position_id="maker-pos-1", final_pnl=-0.5),
-            event("ef1", "FILL", "CRYPTO_INFORMED_TAKER", position_id="external-pos", fill_id="external-fill",
-                  fill_price=0.7, filled_size=10, metadata={"outcome": "YES", "fair_yes": 0.9,
+            event("o1", "ORDER_SUBMITTED", "CRYPTO_SETTLEMENT_ENGINE", order_id="order-1", metadata={"component":"professional_maker"}),
+            event("mf1", "FILL", "CRYPTO_SETTLEMENT_ENGINE", order_id="order-1", fill_id="maker-fill-1", metadata={"component":"professional_maker"}),
+            event("mm1", "MARKOUT", "CRYPTO_SETTLEMENT_ENGINE", fill_id="maker-fill-1", markouts={"1s": -0.02}, metadata={"component":"professional_maker"}),
+            event("mfin", "FINAL", "CRYPTO_SETTLEMENT_ENGINE", position_id="maker-pos-1", final_pnl=-0.5, metadata={"component":"professional_maker"}),
+            event("ef1", "FILL", "CRYPTO_SETTLEMENT_ENGINE", position_id="external-pos", fill_id="external-fill",
+                  fill_price=0.7, filled_size=10, metadata={"component":"crypto_informed_taker", "outcome": "YES", "fair_yes": 0.9,
                                                            "pm_mid": 0.7, "robust_net_ev": 2.0}),
-            event("efin", "FINAL", "CRYPTO_INFORMED_TAKER", position_id="external-pos",
-                  fill_id="external-fill", final_pnl=-7.0, realized_cashflow=0.0),
+            event("efin", "FINAL", "CRYPTO_SETTLEMENT_ENGINE", position_id="external-pos",
+                  fill_id="external-fill", final_pnl=-7.0, realized_cashflow=0.0, metadata={"component":"crypto_informed_taker"}),
         ]
         (archive / "execution.jsonl").write_text("".join(json.dumps(row) + "\n" for row in rows))
         (live / "execution.jsonl").write_text(json.dumps(rows[0]) + "\n")

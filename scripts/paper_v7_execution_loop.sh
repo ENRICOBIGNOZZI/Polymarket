@@ -10,15 +10,13 @@ RECORDER="${PM_TRADE_RECORDER:-build/polymarket_v7_trade_recorder}"
 MARKOUT_OBSERVER="${PM_V7_MAKER_MARKOUT_OBSERVER:-build/polymarket_v7_maker_markout_observer}"
 FILLABILITY_OBSERVER="${PM_V7_MAKER_FILLABILITY_OBSERVER:-build/polymarket_v7_maker_fillability_observer}"
 AUTHORIZED_MAKER_EXECUTOR="${PM_V7_AUTHORIZED_MAKER_EXECUTOR:-build/polymarket_v7_authorized_maker_paper_executor}"
-CRYPTO_BOOK_OBSERVER="${PM_V7_CRYPTO_BOOK_OBSERVER:-build/polymarket_v7_crypto_book_observer}"
-EXTERNAL_CANCEL_TAPE_DUMP="${PM_V7_EXTERNAL_CANCEL_TAPE_DUMP:-build/polymarket_v7_research_external_cancel_tape_dump}"
 EXTERNAL_VENUE_RUNTIME="${PM_V7_EXTERNAL_VENUE_RUNTIME:-build/polymarket_v7_external_venue_runtime}"
 FAST_STRUCTURAL_RUNTIME="${PM_V7_FAST_STRUCTURAL_RUNTIME:-build/polymarket_v7_fast_structural_runtime}"
 MAKER_POLICY="${PM_V7_MAKER_POLICY:-config/v7_professional_market_maker.json}"
 FAST_STRUCTURAL_POLICY="${PM_V7_FAST_STRUCTURAL_POLICY:-config/v7_fast_structural.json}"
 FAST_STRUCTURAL_RELATIONS="${PM_V7_FAST_STRUCTURAL_RELATIONS:-config/v7_fast_structural_relations.csv}"
 EXTERNAL_FAIR_POLICY="${PM_V7_EXTERNAL_FAIR_POLICY:-config/v7_external_fair.json}"
-EXTERNAL_FORWARD_MIN_DURATION_SECONDS="${PM_V7_EXTERNAL_FORWARD_MIN_DURATION_SECONDS:-}"
+CRYPTO_EXECUTION_ALPHA_CONFIG="${PM_V7_CRYPTO_EXECUTION_ALPHA_CONFIG:-config/v7_crypto_execution_alpha.json}"
 EXTERNAL_SOURCE_REGISTRY="${PM_V7_EXTERNAL_SOURCE_REGISTRY:-config/v7_external_source_registry.json}"
 CI_REPOSITORY="${PM_V7_CI_REPOSITORY:-ENRICOBIGNOZZI/Polymarket}"
 LIVE_MODEL_SCOPE="${PM_V7_LIVE_MODEL_SCOPE:-config/v7_live_model_scope.json}"
@@ -26,49 +24,19 @@ CRYPTO_SETTLEMENT_ENGINE_POLICY="${PM_V7_CRYPTO_SETTLEMENT_ENGINE_POLICY:-config
 CRYPTO_SETTLEMENT_MARKET_REGISTRY="${PM_V7_CRYPTO_SETTLEMENT_MARKET_REGISTRY:-config/v7_crypto_settlement_markets.json}"
 CRYPTO_SETTLEMENT_MODEL_REGISTRY="${PM_V7_CRYPTO_SETTLEMENT_MODEL_REGISTRY:-config/v7_crypto_settlement_model_registry.json}"
 ADAPTIVE_UNIVERSE_CONFIG="${PM_V7_ADAPTIVE_UNIVERSE_CONFIG:-config/v7_adaptive_universe.json}"
-EXTERNAL_CANCEL_EXPERIMENT_REGISTRY="${PM_V7_EXTERNAL_CANCEL_EXPERIMENT_REGISTRY:-config/v7_maker_fillability_experiments.json}"
-# The sole legacy-environment compatibility boundary.  Strategy and collector
-# code consume PM_V7_* names only; no value is logged or written to config.
-export PM_V7_BINANCE_API_KEY="${PM_V7_BINANCE_API_KEY:-${PORTFOLIO_BINANCE_API_KEY:-}}"
-export PM_V7_BINANCE_API_SECRET="${PM_V7_BINANCE_API_SECRET:-${PORTFOLIO_BINANCE_API_SECRET:-}}"
-export PM_V7_BINANCE_TESTNET_API_KEY="${PM_V7_BINANCE_TESTNET_API_KEY:-${PORTFOLIO_BINANCE_TESTNET_API_KEY:-}}"
-export PM_V7_BINANCE_TESTNET_API_SECRET="${PM_V7_BINANCE_TESTNET_API_SECRET:-${PORTFOLIO_BINANCE_TESTNET_API_SECRET:-}}"
-export PM_V7_BINANCE_TESTNET_BASE_URL="${PM_V7_BINANCE_TESTNET_BASE_URL:-${PORTFOLIO_BINANCE_TESTNET_BASE_URL:-}}"
-export PM_V7_BINANCE_TESTNET_MARKET="${PM_V7_BINANCE_TESTNET_MARKET:-${PORTFOLIO_BINANCE_TESTNET_MARKET:-}}"
 SHA="$(git rev-parse HEAD)"
-if [[ -z "$EXTERNAL_FORWARD_MIN_DURATION_SECONDS" ]]; then
-  EXTERNAL_FORWARD_MIN_DURATION_SECONDS="$(python3 - "$EXTERNAL_FAIR_POLICY" <<'PY'
-import json
-import sys
-
-try:
-    value = float(json.load(open(sys.argv[1], encoding="utf-8"))["forward_evidence"]["minimum_duration_seconds"])
-except (KeyError, OSError, TypeError, ValueError, json.JSONDecodeError) as exc:
-    raise SystemExit(f"invalid external fair forward-evidence policy: {exc}")
-if value < 0:
-    raise SystemExit("external fair forward-evidence duration must be non-negative")
-print(value)
-PY
-)"
-fi
-MAKER_CHAMPION_MODEL="$RUN_ROOT/micro_maker/execution_model.json"
-MAKER_CHALLENGER_MODEL="$RUN_ROOT/micro_maker/execution_model_challenger.json"
-MAKER_MODEL_REGISTRY="$RUN_ROOT/micro_maker/model_registry.json"
+MAKER_RESEARCH_MODEL="$RUN_ROOT/micro_maker/execution_model.json"
 DURABLE_ROOT="${PM_V7_DURABLE_ROOT:-runs/paper_v7_durable}"
-MAKER_DURABLE_STORE="$DURABLE_ROOT/micro_maker/evidence.jsonl"
-MAKER_DURABLE_STATUS="$DURABLE_ROOT/micro_maker/status.json"
-EXTERNAL_CANCEL_RESEARCH_ROOT="$DURABLE_ROOT/external_cancel"
-EXTERNAL_CANCEL_BOOK_ROOT="$EXTERNAL_CANCEL_RESEARCH_ROOT/books/$SHA"
-EXTERNAL_CANCEL_BASELINE_REPORT="${PM_V7_EXTERNAL_CANCEL_BASELINE_REPORT:-$DURABLE_ROOT/research/btc_m5_external_cancel_forward_report_v3.json}"
-EXTERNAL_CANCEL_BASELINE_MANIFEST="${PM_V7_EXTERNAL_CANCEL_BASELINE_MANIFEST:-$DURABLE_ROOT/research/btc_m5_external_cancel_evidence_manifest_v1.json}"
-EXTERNAL_CANCEL_SEED_MANIFEST="${PM_V7_EXTERNAL_CANCEL_SEED_MANIFEST:-$DURABLE_ROOT/research/btc_m5_external_cancel_evidence_manifest_v1.json}"
-EXTERNAL_CANCEL_BASELINE_PROTOCOL="${PM_V7_EXTERNAL_CANCEL_BASELINE_PROTOCOL:-$DURABLE_ROOT/research/btc_m5_external_cancel_episode_protocol_v3.json}"
-EXTERNAL_CANCEL_RULE_SHA="$(python3 - "$EXTERNAL_CANCEL_EXPERIMENT_REGISTRY" <<'PY'
+RICH_RESEARCH_MODEL="$DURABLE_ROOT/external_fair/rich_research_model.json"
+MAKER_RESEARCH_STORE="$RUN_ROOT/micro_maker/research_evidence.jsonl"
+MAKER_RESEARCH_STATUS="$RUN_ROOT/micro_maker/research_learning_status.json"
+EXTERNAL_CANCEL_RULE_SHA="$(python3 - "$CRYPTO_EXECUTION_ALPHA_CONFIG" <<PY
 import hashlib,json,sys
 value=json.load(open(sys.argv[1],encoding="utf-8"))
-row=next(x for x in value.get("experiments",[]) if x.get("experiment_id")=="btc-m5-external-cancel-overlay-forward-v1")
-rule=row["frozen_rule"]
-assert rule.get("retuning_after_freeze") is False
+rule=value["execution_alpha"]["cancel"]["research_rule"]
+assert value.get("paper_only") is True
+assert value.get("real_order_submission") is False
+assert value["execution_alpha"]["cancel"].get("research_only") is True
 raw=json.dumps(rule,sort_keys=True,separators=(",",":")).encode()
 print(hashlib.sha256(raw).hexdigest())
 PY
@@ -84,17 +52,16 @@ WS_PUBLIC_HOST="ws-subscriptions-clob.polymarket.com"
 WS_JSON_ARENA_OBSERVER_MAX_BYTES="${PM_V7_WS_JSON_ARENA_OBSERVER_MAX_BYTES:-1073741824}"
 WS_JSON_ARENA_FILLABILITY_MAX_BYTES="${PM_V7_WS_JSON_ARENA_FILLABILITY_MAX_BYTES:-536870912}"
 WS_JSON_ARENA_TOTAL_BUDGET_BYTES="${PM_V7_WS_JSON_ARENA_TOTAL_BUDGET_BYTES:-4294967296}"
-# Bind the C++ slow-path execution-cell loader explicitly to the same exact SHA
-# and *champion* model file passed to the canonical Maker runtime. Challenger
-# refits are registered separately and can never be hot-reloaded by this loop.
+# Research mode: one current-run execution model, continuously refit from the
+# current PAPER ledger. No model-version or deployment lifecycle exists.
 export PM_V7_MODEL_SHA="$SHA"
-export PM_V7_MAKER_EXECUTION_MODEL="$MAKER_CHAMPION_MODEL"
+export PM_V7_MAKER_EXECUTION_MODEL="$MAKER_RESEARCH_MODEL"
 CONTROL="$RUN_ROOT/control"
 ALLOC="$CONTROL/allocations"
 KILL="$CONTROL/KILL"
 MAKER_FREEZE="$CONTROL/MAKER_FREEZE"
 LOCK="$CONTROL/runtime.lock"
-mkdir -p "$CONTROL" "$RUN_ROOT/ledger" "$RUN_ROOT/opportunities/inbox" "$RUN_ROOT/research/evidence" "$RUN_ROOT/market_data" "$RUN_ROOT/universe" "$RUN_ROOT/fast_structural" "$RUN_ROOT/structural_relations" "$RUN_ROOT/hard_arb" "$RUN_ROOT/micro_maker" "$RUN_ROOT/external" "$RUN_ROOT/external_fair" "$RUN_ROOT/learned_execution" "$EXTERNAL_CANCEL_RESEARCH_ROOT" "$EXTERNAL_CANCEL_BOOK_ROOT"
+mkdir -p "$CONTROL" "$RUN_ROOT/ledger" "$RUN_ROOT/opportunities/inbox" "$RUN_ROOT/research/evidence" "$RUN_ROOT/market_data" "$RUN_ROOT/universe" "$RUN_ROOT/fast_structural" "$RUN_ROOT/structural_relations" "$RUN_ROOT/hard_arb" "$RUN_ROOT/micro_maker" "$RUN_ROOT/external" "$RUN_ROOT/external_fair" "$RUN_ROOT/learned_execution"
 touch "$RUN_ROOT/ledger/execution.jsonl"
 
 # The runtime is not allowed to self-assert CI approval through an environment
@@ -108,7 +75,7 @@ EXACT_SHA_CI_GREEN=true
 
 # Source registration is an authority boundary, not a best-effort manifest.
 # Collectors may only publish information; this registry cannot grant OMS,
-# capital, ledger, execution, or promotion authority.
+# capital, ledger, or execution authority.
 python3 scripts/v7_external_source_registry.py --registry "$EXTERNAL_SOURCE_REGISTRY" \
   > "$CONTROL/external_source_registry.json"
 
@@ -130,7 +97,6 @@ assert set(registered)==algorithms and len(registered)==2
 assert registry.get("safety",{}).get("paper_only") is True
 assert registry.get("safety",{}).get("authenticated_execution") is False
 assert registry.get("safety",{}).get("real_order_submission") is False
-assert registry.get("governance",{}).get("automatic_promotion") is False
 assert all(row.get("mode") == "PAPER" and row.get("enabled") is True for row in registry.get("live_algorithms",[]))
 assert live_scope.get("schema") == "polymarket_v7_live_engine_scope_v2"
 assert live_scope.get("version") == 7 and live_scope.get("live_algorithm_count") == 2
@@ -138,10 +104,11 @@ assert live_scope.get("paper_only") is True
 assert live_scope.get("authenticated_execution") is False
 assert live_scope.get("real_order_submission") is False
 assert set(live_scope.get("live_algorithms") or []) == algorithms
-assert len(live_scope.get("legacy_algorithm_families_removed") or []) == 10
-governance=live_scope.get("governance") or {}
-assert governance.get("single_execution_owner") is True
-assert governance.get("automatic_promotion") is False
+invariants=live_scope.get("runtime_invariants") or {}
+assert invariants.get("single_execution_owner") is True
+assert invariants.get("global_portfolio_coordinator") == "V7_GLOBAL_PORTFOLIO_COORDINATOR"
+assert invariants.get("paper_only") is True
+assert invariants.get("real_order_submission") is False
 assert adaptive_universe.get("schema") == "polymarket_v7_adaptive_universe_config_v1"
 assert adaptive_universe.get("version") == 7
 assert adaptive_universe.get("paper_only") is True
@@ -218,17 +185,13 @@ echo $$ > "$LOCK/pid"
 rm -f "$KILL" "$MAKER_FREEZE"
 
 python3 scripts/v7_capital_allocator.py --config "$CONFIG" --output-dir "$ALLOC" >/dev/null
-python3 scripts/v7_evidence_capital_allocator.py \
-  --allocation "$ALLOC/manifest.json" --economics "$RUN_ROOT/canonical_economics.json" \
-  --output "$CONTROL/evidence_capital_allocator.json" >/dev/null
-# Materialize an exact-SHA PAPER champion before the C++ cohort starts. The
-# append-only store lives outside the ephemeral live run root and therefore
-# survives archive rotation and code cutovers. Incompatible policy/config
-# generations remain auditable but cannot train the active snapshot.
+# Research mode starts from zero legacy execution evidence.  Only the current
+# run may train the Maker execution model; archive/durable evidence is ignored.
+: > "$MAKER_RESEARCH_STORE"
 python3 scripts/v7_maker_durable_learning.py \
-  --source-root runs/paper_v7_archives --source-root "$RUN_ROOT" \
-  --store "$MAKER_DURABLE_STORE" --store-status "$MAKER_DURABLE_STATUS" \
-  --champion "$MAKER_CHAMPION_MODEL" --policy "$MAKER_POLICY" \
+  --source-root "$RUN_ROOT" \
+  --store "$MAKER_RESEARCH_STORE" --store-status "$MAKER_RESEARCH_STATUS" \
+  --output-model "$MAKER_RESEARCH_MODEL" --policy "$MAKER_POLICY" \
   --config "$ALLOC/micro_maker.json" --model-sha "$SHA" \
   >> "$RUN_ROOT/micro_maker/durable_learning.log" 2>&1
 pids=()
@@ -278,16 +241,23 @@ fi
 [[ -n "$PM_V7_WS_RESOLVE_IPS" ]] || { echo "public WS DNS resolution returned no addresses" >&2; exit 77; }
 export PM_V7_WS_RESOLVE_IPS
 
-# Freeze one exact-SHA calibration challenger from already-settled SHADOW
-# contracts before the RTDS monitor starts. This publishes no execution
-# authority; every subsequent settlement is immutable forward OOS evidence.
-python3 scripts/v7_external_rich_train.py \
-  --tape "$RUN_ROOT/../paper_v7_durable/external_fair/counterfactuals.jsonl" \
-  --tape "$RUN_ROOT/external_fair/counterfactuals.jsonl" \
-  --registry "$RUN_ROOT/external_fair/model_registry" \
-  --config "$EXTERNAL_FAIR_POLICY" --model-sha "$SHA" \
-  --status "$RUN_ROOT/external_fair/challenger_status.json" \
-  >> "$RUN_ROOT/external_fair/challenger.log" 2>&1 || true
+# Fair-value ML is an offline frozen artifact. Runtime startup never silently
+# retrains it: doing so would make restart timing part of the model definition.
+# An operator/research workflow may set PM_V7_FREEZE_RICH_MODEL=1 exactly once
+# after enough settled receive-time-causal evidence has accumulated. The normal
+# runtime is inference-only and consumes the immutable research artifact.
+if [[ "${PM_V7_FREEZE_RICH_MODEL:-0}" == "1" ]]; then
+  python3 scripts/v7_external_rich_train.py \
+    --tape "$DURABLE_ROOT/external_fair/counterfactuals.jsonl" \
+    --tape "$RUN_ROOT/external_fair/counterfactuals.jsonl" \
+    --output-model "$RICH_RESEARCH_MODEL" --replace-research-model \
+    --config "$EXTERNAL_FAIR_POLICY" --model-sha "$SHA" \
+    --status "$RUN_ROOT/external_fair/research_model_status.json" \
+    >> "$RUN_ROOT/external_fair/research_model.log" 2>&1
+else
+  printf '%s\n' '{"state":"INFERENCE_ONLY","runtime_training":false}' \
+    >> "$RUN_ROOT/external_fair/research_model.log"
+fi
 
 # Paid Chainlink Data Streams are intentionally out of scope. Public RTDS
 # provides the Chainlink 60-second TWAP observability tape. It never replaces
@@ -297,8 +267,7 @@ python3 scripts/v7_rtds_external_fair_monitor.py \
   --universe "$RUN_ROOT/universe/current.json" \
   --approvals "config/v7_external_fair_rule_approvals.json" \
   --external-venues "$RUN_ROOT/external_fair/external_venues.json" \
-  --champion-pointer "$RUN_ROOT/external_fair/model_registry/fair_value_champion.json" \
-  --challenger-pointer "$RUN_ROOT/external_fair/model_registry/fair_value_challenger.json" \
+  --research-model "$RICH_RESEARCH_MODEL" \
   --external-fair-config "$ROOT/config/v7_external_fair.json" \
   >> "$RUN_ROOT/external_fair/rtds_monitor.log" 2>&1 &
 v7_register_child "$!"
@@ -331,42 +300,22 @@ python3 scripts/v7_coinbase_l2_rest_collector.py \
   --tape "$RUN_ROOT/external_fair/coinbase_l2_rest.jsonl" --interval 5 --loop \
   >> "$RUN_ROOT/external_fair/coinbase_l2_rest.log" 2>&1 &
 v7_register_child "$!"
-python3 scripts/v7_external_forward_evidence_gate.py \
-  --runtime-status "$RUN_ROOT/external_fair/external_venues.json" \
-  --coinbase-rest-status "$RUN_ROOT/external_fair/coinbase_l2_rest_status.json" \
-  --deribit-rest-status "$RUN_ROOT/external_fair/deribit_rest_status.json" \
-  --output "$RUN_ROOT/external_fair/forward_evidence_status.json" \
-  --min-duration-seconds "$EXTERNAL_FORWARD_MIN_DURATION_SECONDS" --loop \
-  >> "$RUN_ROOT/external_fair/forward_evidence.log" 2>&1 &
-v7_register_child "$!"
 
 python3 scripts/v7_external_fair_paper_router.py \
   --run-root "$RUN_ROOT" --model-sha "$SHA" --config "$EXTERNAL_FAIR_POLICY" --interval 1 \
   >> "$RUN_ROOT/external_fair/paper_router.log" 2>&1 &
 v7_register_child "$!"
 
-# Zero-authority CLOB observer for the frozen BTC M5 external-cancel experiment.
-# Evidence lives outside the ephemeral run root and cannot publish opportunities.
-"$CRYPTO_BOOK_OBSERVER" \
-  --config "$CONFIG" --observed-run-root "$RUN_ROOT" \
-  --evidence-root "$EXTERNAL_CANCEL_BOOK_ROOT" \
-  --collector-sha "$SHA" --runtime-sha "$SHA" \
-  >> "$RUN_ROOT/research/external_cancel_book_observer.log" 2>&1 &
-v7_register_child "$!"
-
-# Durable forward evaluator. It consumes only closed tapes, accumulates episodes
-# across PAPER runs and writes an explicit false/true activation fact.
-python3 scripts/v7_external_cancel_forward_runtime.py \
-  --run-root "$RUN_ROOT" --research-root "$EXTERNAL_CANCEL_RESEARCH_ROOT" \
-  --registry "$EXTERNAL_CANCEL_EXPERIMENT_REGISTRY" \
-  --tape-dump "$EXTERNAL_CANCEL_TAPE_DUMP" --model-sha "$SHA" \
-  --execution-alpha-config "$ROOT/config/v7_crypto_execution_alpha.json" \
-  --baseline-report "$EXTERNAL_CANCEL_BASELINE_REPORT" \
-  --baseline-manifest "$EXTERNAL_CANCEL_BASELINE_MANIFEST" \
-  --baseline-protocol "$EXTERNAL_CANCEL_BASELINE_PROTOCOL" \
-  --seed-manifest "$EXTERNAL_CANCEL_SEED_MANIFEST" --repository-root "$ROOT" \
-  --interval 30 --loop \
-  >> "$RUN_ROOT/research/external_cancel_forward_runtime.log" 2>&1 &
+# Zero-authority HFT research tape.  It labels frozen rich external feature cuts
+# with the first PM repricing observed at 100/250/500/1000ms.  Training is never
+# performed here; a lead/lag model is frozen explicitly only after enough markets.
+python3 scripts/v7_external_lead_lag_collector.py \
+  --fair-status "$RUN_ROOT/external_fair/status.json" \
+  --router-status "$RUN_ROOT/external_fair/paper_router_status.json" \
+  --output "$DURABLE_ROOT/external_fair/pm_lead_lag.jsonl" \
+  --status "$RUN_ROOT/external_fair/lead_lag_collector_status.json" \
+  --model-sha "$SHA" --interval-ms 25 \
+  >> "$RUN_ROOT/external_fair/lead_lag_collector.log" 2>&1 &
 v7_register_child "$!"
 
 CONFIG_HASH="$(git hash-object "$CONFIG")"
@@ -436,8 +385,8 @@ write_runtime_status() {
     external_ready=true
   fi
   local model_hash model_source
-  if [[ -s "$MAKER_CHAMPION_MODEL" ]]; then
-    model_hash="$(git hash-object "$MAKER_CHAMPION_MODEL")"
+  if [[ -s "$MAKER_RESEARCH_MODEL" ]]; then
+    model_hash="$(git hash-object "$MAKER_RESEARCH_MODEL")"
     model_source="maker_execution_model"
   else
     model_hash="$POLICY_HASH"
@@ -505,14 +454,6 @@ fi
 if [[ ! -x "$AUTHORIZED_MAKER_EXECUTOR" ]]; then
   echo "missing V7 coordinator-authorized maker PAPER executor: $AUTHORIZED_MAKER_EXECUTOR" >&2
   exit 80
-fi
-if [[ ! -x "$CRYPTO_BOOK_OBSERVER" ]]; then
-  echo "missing zero-authority BTC M5 CLOB evidence observer: $CRYPTO_BOOK_OBSERVER" >&2
-  exit 81
-fi
-if [[ ! -x "$EXTERNAL_CANCEL_TAPE_DUMP" ]]; then
-  echo "missing frozen external-cancel tape decoder: $EXTERNAL_CANCEL_TAPE_DUMP" >&2
-  exit 82
 fi
 if [[ ! -x "$FAST_STRUCTURAL_RUNTIME" ]]; then
   echo "missing V7 Fast Structural PAPER runtime executable: $FAST_STRUCTURAL_RUNTIME" >&2
@@ -629,7 +570,6 @@ ok=(obj.get("schema")=="polymarket_v7_fee_reward_registry_v1"
     and obj.get("model_sha")==sys.argv[2]
     and obj.get("unknown_fee_policy")=="NON_EXECUTABLE"
     and obj.get("unknown_reward_policy")=="ZERO_EXPECTED_VALUE"
-    and obj.get("automatic_promotion") is False
     and len(rows)>0
     and int(obj.get("executable_market_count") or 0)>0 and fresh_verified)
 raise SystemExit(0 if ok else 1)
@@ -672,9 +612,8 @@ v7_register_child "$!"
       --status "$RUN_ROOT/micro_maker/selector_status.json" \
       --fallback-universe "$RUN_ROOT/universe/current.json" \
       --live-flow "$RUN_ROOT/market_data/live_trade_flow.json" \
-      --trade-tape "$RUN_ROOT/trade_tape.csv" \
       --allocation "$ALLOC/micro_maker.json" \
-      --execution-model "$MAKER_CHAMPION_MODEL" \
+      --execution-model "$MAKER_RESEARCH_MODEL" \
       --settlement-fair-status "$RUN_ROOT/external_fair/status.json" \
       --model-sha "$SHA" \
       >> "$RUN_ROOT/micro_maker/reward_selection.log" 2>&1 || true
@@ -705,35 +644,16 @@ v7_register_child "$!"
   >> "$RUN_ROOT/fast_structural/runtime.log" 2>&1 &
 v7_register_child "$!"
 
-# Slow-plane exact-SHA fill/markout fit. A refit is a CHALLENGER only. It is
-# written to a separate artifact and registered for OOS/shadow-PAPER review.
-# This loop NEVER overwrites the runtime champion and NEVER auto-promotes.
+# Current-run research execution fit. It directly updates the PAPER research
+# model every 60 seconds. There is no model registry and no legacy evidence.
 (
   while [[ ! -e "$KILL" ]]; do
     python3 scripts/v7_maker_durable_learning.py \
-      --source-root runs/paper_v7_archives --source-root "$RUN_ROOT" \
-      --store "$MAKER_DURABLE_STORE" --store-status "$MAKER_DURABLE_STATUS" \
-      --champion "$MAKER_CHAMPION_MODEL" --policy "$MAKER_POLICY" \
+      --source-root "$RUN_ROOT" \
+      --store "$MAKER_RESEARCH_STORE" --store-status "$MAKER_RESEARCH_STATUS" \
+      --output-model "$MAKER_RESEARCH_MODEL" --policy "$MAKER_POLICY" \
       --config "$ALLOC/micro_maker.json" --model-sha "$SHA" \
       >> "$RUN_ROOT/micro_maker/durable_learning.log" 2>&1 || true
-    if [[ -s "$RUN_ROOT/ledger/execution.jsonl" ]]; then
-      if python3 scripts/v7_market_maker_model.py \
-        --ledger "$RUN_ROOT/ledger/execution.jsonl" \
-        --markout-evidence-root "$RUN_ROOT/research/evidence/maker_markout" \
-        --model-sha "$SHA" \
-        --policy "$MAKER_POLICY" \
-        --config "$ALLOC/micro_maker.json" \
-        --artifact-role challenger \
-        --output "$MAKER_CHALLENGER_MODEL" \
-        >> "$RUN_ROOT/micro_maker/model.log" 2>&1; then
-        python3 scripts/v7_maker_model_registry.py \
-          --registry "$MAKER_MODEL_REGISTRY" \
-          --model-sha "$SHA" \
-          --challenger "$MAKER_CHALLENGER_MODEL" \
-          --champion "$MAKER_CHAMPION_MODEL" \
-          >> "$RUN_ROOT/micro_maker/model_registry.log" 2>&1 || true
-      fi
-    fi
     sleep 60
   done
 ) & v7_register_child "$!"
@@ -751,7 +671,7 @@ v7_register_child "$!"
     --maker-policy "$MAKER_POLICY" \
     --selection "$RUN_ROOT/micro_maker/reward_selection.json" \
     --candidate "$RUN_ROOT/micro_maker/reward_selection_candidate.json" \
-    --model "$MAKER_CHAMPION_MODEL" \
+    --model "$MAKER_RESEARCH_MODEL" \
     --model-sha "$SHA" \
     --markout-observer "$MARKOUT_OBSERVER" \
     --fillability-observer "$FILLABILITY_OBSERVER" \
@@ -781,7 +701,6 @@ v7_register_child "$!"
   while [[ ! -e "$KILL" ]]; do
     python3 scripts/v7_generate_economic_artifacts.py \
       --repo "$ROOT" --run-root "$RUN_ROOT" --output "$RUN_ROOT/reports" \
-      --baseline "$ROOT/artifacts/v7_economic_loop_baseline.json" \
       >> "$RUN_ROOT/economic_artifacts.log" 2>&1 || true
     sleep 3600
   done
@@ -789,8 +708,6 @@ v7_register_child "$!"
 
 (
   while [[ ! -e "$KILL" ]]; do
-    python3 scripts/v7_graph_cost_vector.py --run-root "$RUN_ROOT" --model-sha "$SHA" --slippage-bps 5 \
-      >> "$RUN_ROOT/structural_relations/cost_vector.log" 2>&1 || true
     python3 scripts/v7_joint_execution_policy.py --ledger "$RUN_ROOT/ledger/execution.jsonl" --model-sha "$SHA" \
       --output "$RUN_ROOT/learned_execution/joint_policy.json" --strategy STRUCTURAL_ARB_ENGINE --min-bundles 20 \
       >> "$RUN_ROOT/learned_execution/joint_policy.log" 2>&1 || true
@@ -799,15 +716,11 @@ v7_register_child "$!"
       >> "$RUN_ROOT/learned_execution/model.log" 2>&1 || true
     python3 scripts/v7_canonical_economics.py --ledger "$RUN_ROOT/ledger/execution.jsonl" --expected-model-sha "$SHA" \
       --output "$RUN_ROOT/canonical_economics.json" >> "$RUN_ROOT/canonical_economics.log" 2>&1 || true
-    python3 scripts/v7_evidence_capital_allocator.py \
-      --allocation "$ALLOC/manifest.json" --economics "$RUN_ROOT/canonical_economics.json" \
-      --output "$CONTROL/evidence_capital_allocator.json" \
-      >> "$RUN_ROOT/evidence_capital_allocator.log" 2>&1 || true
     sleep 60
   done
 ) & v7_register_child "$!"
 
-v7_assert_registered_child_count 23
+v7_assert_registered_child_count 21
 write_runtime_status running false
 
 while [[ ! -e "$KILL" ]]; do

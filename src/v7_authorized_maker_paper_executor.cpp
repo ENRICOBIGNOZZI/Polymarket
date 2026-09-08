@@ -447,10 +447,10 @@ struct CancelAuthorization {
     }
     const auto* crypto = child_object(*envelope, "crypto_context");
     const auto* reasons = child_array(*envelope, "reasons");
-    bool frozen_gate = false;
+    bool research_rule_match = false;
     if (reasons != nullptr) {
         for (const auto& reason : *reasons) {
-            if (text(&reason) == "FROZEN_FORWARD_CANCEL_GATE_PASS") frozen_gate = true;
+            if (text(&reason) == "RESEARCH_CANCEL_RULE_MATCH") research_rule_match = true;
         }
     }
     if (text(find_value(*decision, "schema")) != "polymarket_v7_global_opportunity_decision_v1"
@@ -466,7 +466,7 @@ struct CancelAuthorization {
         || crypto == nullptr
         || text(find_value(*crypto, "asset")) != "BTC"
         || text(find_value(*crypto, "horizon")) != "M5"
-        || !frozen_gate) {
+        || !research_rule_match) {
         throw std::runtime_error("cancel authorization decision/envelope invalid");
     }
     const std::string replay_key = text(find_value(*envelope, "deterministic_replay_key"));
@@ -904,9 +904,9 @@ private:
             } else if (event.kind == PaperMakerEventKind::CancelRequested) {
                 it->second.cancel_requested = true;
                 it->second.cancel_requested_monotonic_ns = event.timestamp_ns;
-                emit_order_state(event, it->second, "CANCEL_REQUESTED");
+                emit_order_state(it->second, "CANCEL_REQUESTED");
             } else if (event.kind == PaperMakerEventKind::Cancelled) {
-                emit_order_state(event, it->second, "CANCELLED");
+                emit_order_state(it->second, "CANCELLED");
                 terminalize(it->first, "CANCELLED");
             }
             if (event.kind == PaperMakerEventKind::Fill
@@ -919,6 +919,8 @@ private:
 
     [[nodiscard]] json::object common_metadata(const OrderContext& context) const {
         json::object metadata;
+        metadata["component"] = "professional_maker";
+        metadata["model_family"] = "professional_maker";
         metadata["paper_exploration"] = true;
         metadata["counterfactual"] = false;
         metadata["excluded_from_portfolio_equity"] = false;
@@ -962,7 +964,7 @@ private:
         json::object row;
         row["schema_version"] = 1;
         row["event_type"] = "ORDER_SUBMITTED";
-        row["strategy"] = "MICRO_MAKER_PRO";
+        row["strategy"] = "CRYPTO_SETTLEMENT_ENGINE";
         row["model_sha"] = options_.model_sha;
         row["paper_only"] = true;
         row["authenticated_execution"] = false;
@@ -1004,7 +1006,7 @@ private:
         json::object row;
         row["schema_version"] = 1;
         row["event_type"] = "FILL";
-        row["strategy"] = "MICRO_MAKER_PRO";
+        row["strategy"] = "CRYPTO_SETTLEMENT_ENGINE";
         row["model_sha"] = options_.model_sha;
         row["paper_only"] = true;
         row["authenticated_execution"] = false;
@@ -1042,13 +1044,12 @@ private:
     }
 
     void emit_order_state(
-        const PaperMakerEvent& event, const OrderContext& context,
-        std::string_view state) {
+        const OrderContext& context, std::string_view state) {
         const auto now = wall_ms();
         json::object row;
         row["schema_version"] = 1;
         row["event_type"] = "ORDER_STATE";
-        row["strategy"] = "MICRO_MAKER_PRO";
+        row["strategy"] = "CRYPTO_SETTLEMENT_ENGINE";
         row["model_sha"] = options_.model_sha;
         row["paper_only"] = true;
         row["authenticated_execution"] = false;

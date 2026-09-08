@@ -65,11 +65,8 @@
       "STRUCTURAL",
       "STRUCTURAL_PLUS_BRIDGE",
       "FULL_EXTERNAL",
-      "CHAMPION",
-      "CHALLENGER"
+      "RICH_RESEARCH"
     ],
-    "challenger_pointer": "runs/paper_v7_live/external_fair/model_registry/fair_value_challenger.json",
-    "champion_pointer": "runs/paper_v7_live/external_fair/model_registry/fair_value_champion.json",
     "default_model_mature": false,
     "immutable_model_artifact_required": true,
     "live_shadow_cohorts": [
@@ -88,7 +85,6 @@
     "max_age_ns": 1000000000,
     "microstructure": {
       "bounded_logit_adjustment": 0.25,
-      "challenger_only_initially": true,
       "enabled": true,
       "may_dominate_structural_probability": false
     },
@@ -113,13 +109,6 @@
       "z": 1.64
     },
     "yes_no_complementarity_required": true
-  },
-  "forward_evidence": {
-    "classification": "PILOT_ENGINEERING_VALIDATION_ONLY",
-    "economic_validation": false,
-    "minimum_duration_seconds": 300,
-    "promotion_authority": false,
-    "real_order_submission": false
   },
   "gate_classes": {
     "A_HARD_CORRECTNESS_SAFETY": {
@@ -162,11 +151,6 @@
     "rest": false,
     "synchronous_logging": false,
     "unbounded_queue": false
-  },
-  "incumbent_policy": {
-    "keep_healthy_incumbent_running": true,
-    "mutate_incumbent_worktree": false,
-    "simultaneous_blue_green_execution": false
   },
   "maker": {
     "authority": "PAPER",
@@ -214,10 +198,10 @@
     "authority": "PAPER_EXPLORATION",
     "enabled": true,
     "max_capital_fraction": 0.0025,
-    "promotion_credit": false,
     "real_money_authority": false,
     "require_arrival_book_revalidation": true,
-    "require_verified_settlement": true
+    "require_verified_settlement": true,
+    "research_only": true
   },
   "paper_exploration_bootstrap": {
     "asset": "BTC",
@@ -238,12 +222,13 @@
     "minimum_sigma_bps": 12.0,
     "minimum_tte_seconds": 5.0,
     "model_id": "btc_m5_same_oracle_diffusion_bootstrap_v1",
-    "promotion_credit": false,
     "real_money_authority": false,
+    "research_only": true,
     "schema": "polymarket_v7_paper_exploration_bootstrap_v1",
     "uses_polymarket_price_as_feature": false
   },
   "paper_exploration_probe": {
+    "allow_frozen_rich_ml": true,
     "asset": "BTC",
     "authority": "PAPER_EXPLORATION",
     "enabled": true,
@@ -252,60 +237,41 @@
     "max_loss_usd": 2.0,
     "max_notional_usd": 2.0,
     "maximum_model_market_disagreement": 0.2,
+    "maximum_rich_pm_prior_arrival_age_ms": 750.0,
+    "maximum_rich_pm_prior_drift": 0.03,
     "maximum_tte_seconds": 180.0,
     "minimum_model_market_disagreement": 0.08,
     "minimum_point_ev_per_share": 0.04,
     "minimum_tte_seconds": 5.0,
     "one_probe_per_market": true,
-    "promotion_credit": false,
     "real_money_authority": false,
     "require_arrival_revalidation": true,
     "require_no_robust_candidate": true,
     "required_probability_model_id": "btc_m5_same_oracle_diffusion_bootstrap_v1",
+    "research_only": true,
     "schema": "polymarket_v7_paper_exploration_probe_v1"
   },
   "paper_ml_probe": {
+    "all_available_external_features_with_missingness_indicators": true,
     "authority": "PAPER_EXPLORATION",
-    "automatic_promotion": false,
+    "causal_pm_prior_required": true,
     "enabled": true,
     "family": "btc_m5_rich_external_logit_v1",
+    "inference_only_runtime": true,
     "maximum_loss_per_probe_usd": 2.0,
+    "maximum_pm_external_skew_ms": 750.0,
+    "maximum_pm_prior_age_ms": 500.0,
     "missing_information": "EXPLICIT_MASK_NOT_FABRICATED",
     "probability_interval_validated": false,
-    "promotion_credit": false,
     "real_order_submission": false,
+    "research_only": true,
+    "runtime_training": false,
     "sampling_unit": "settlement_market",
+    "training_lifecycle": "EXPLICIT_FROZEN_ARTIFACT_ONLY",
     "training_selection": "chronological_label_available_validation",
     "unchanged_canonical_caps_required": true
   },
   "paper_only": true,
-  "promotion": {
-    "automatic_promotion": false,
-    "calibration_slope_range": [
-      0.75,
-      1.25
-    ],
-    "conditional_calibration_uncertainty_below_claimed_edge_required": true,
-    "day_block_lower_confidence_bound_required": true,
-    "edge_monotonicity_required": true,
-    "exact_code_sha_required": true,
-    "forward_shadow_must_be_frozen": true,
-    "maximum_ece": 0.05,
-    "maximum_mean_probability_interval_width": 0.2,
-    "minimum_conditional_calibration_contracts_per_bin": 30,
-    "minimum_forward_shadow_contracts": 50,
-    "minimum_oos_contracts": 100,
-    "minimum_policy_forward_oos_trades": 300,
-    "minimum_probability_interval_bin_consistency": 0.8,
-    "minimum_probability_interval_bin_size": 3,
-    "minimum_probability_interval_bins": 5,
-    "minimum_settlement_labeled_contracts": 2500,
-    "minimum_settlement_labeled_days": 30,
-    "positive_conservative_net_replay_pnl_required": true,
-    "probability_interval_bins": 10,
-    "rules_scope_match_required": true,
-    "zero_causality_failures_required": true
-  },
   "public_observability_transport": {
     "adapter": "scripts/v7_rtds_external_fair_monitor.py",
     "chainlink_topic": "crypto_prices_twap_sixty",
@@ -318,6 +284,13 @@
     "websocket_origin": "wss://ws-live-data.polymarket.com"
   },
   "real_order_submission": false,
+  "research_diagnostics": {
+    "authority": "DIAGNOSTIC_ONLY",
+    "maximum_ece_reference": 0.05,
+    "minimum_probability_interval_bin_size": 3,
+    "probability_interval_bins": 10,
+    "sampling_unit": "settlement_market"
+  },
   "schema_version": 1,
   "scope": {
     "active_contract_families": [
@@ -330,7 +303,7 @@
       "CRYPTO_15M",
       "CRYPTO_4H"
     ],
-    "unsupported_market_behavior": "INCUMBENT_V7_UNCHANGED"
+    "unsupported_market_behavior": "CURRENT_V7_UNCHANGED"
   },
   "taker": {
     "authoritative_fee_required": true,
@@ -400,7 +373,6 @@
     "calibration": "PLATT_INITIAL",
     "embargo_seconds": 60,
     "random_shuffle": false,
-    "refit_creates": "CHALLENGER",
     "refit_min_new_resolved_contracts": 20,
     "refit_promotes": false,
     "statistical_unit": "CONTRACT_TTE_BUCKET",

@@ -20,7 +20,6 @@ OWNER_KEYS = (
     "oms",
     "inventory",
     "ledger",
-    "promotion",
     "runtime_identity",
 )
 EXPECTED_OWNERS = {
@@ -30,7 +29,6 @@ EXPECTED_OWNERS = {
     "oms": "V7_CANONICAL_OMS",
     "inventory": "V7_CANONICAL_INVENTORY",
     "ledger": "V7_CANONICAL_LEDGER",
-    "promotion": "V7_OPERATOR_EXACT_SHA_PROMOTION",
     "runtime_identity": "V7_EXACT_SHA_RUNTIME_IDENTITY",
 }
 ENGINE_COMPONENTS = {
@@ -57,7 +55,6 @@ def validate(value: dict[str, Any]) -> dict[str, Any]:
         or value.get("authenticated_execution") is not False
         or value.get("real_order_submission") is not False
         or value.get("real_capital_at_risk") is not False
-        or value.get("automatic_promotion") is not False
     ):
         raise AuthorityContractError("identity_or_safety")
     owners = value.get("owners")

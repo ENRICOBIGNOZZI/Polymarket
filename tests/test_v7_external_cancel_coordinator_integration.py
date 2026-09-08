@@ -24,7 +24,7 @@ def cancel_envelope() -> dict:
     value["portfolio_exposure_delta"] = 0.0
     value["execution_plan"]["unwind_plan"] = "CANCEL_ONLY"
     value["reasons"] = [
-        "FROZEN_FORWARD_CANCEL_GATE_PASS",
+        "RESEARCH_CANCEL_RULE_MATCH",
         "LIVE_RECEIVE_TIME_TRIGGER_ACTIVE",
         "STALE_BUY_OUTCOME_YES",
     ]

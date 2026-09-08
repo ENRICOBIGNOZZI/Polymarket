@@ -27,10 +27,10 @@ class LedgerSpoolTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             event = LedgerEvent(
-                event_type="OPPORTUNITY",
-                strategy="CANONICAL_TEST",
+                event_type="FINAL",
+                strategy="CRYPTO_SETTLEMENT_ENGINE",
                 model_sha=SHA,
-                opportunity_id="opp-1",
+                position_id="pos-1", final_pnl=0.0, metadata={"cutover": True, "component": "crypto_informed_taker"},
             )
             path = spool_event(root, event)
             self.assertTrue(path.exists())
@@ -50,16 +50,16 @@ class LedgerSpoolTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             first = LedgerEvent(
-                event_type="OPPORTUNITY",
-                strategy="CANONICAL_TEST",
-                model_sha=SHA,
-                opportunity_id="opp-cache-1",
+                event_type="FINAL",
+                strategy="CRYPTO_SETTLEMENT_ENGINE",
+                model_sha=SHA, position_id="pos-cache-1", final_pnl=0.0,
+                metadata={"cutover": True, "component": "crypto_informed_taker"},
             )
             second = LedgerEvent(
-                event_type="OPPORTUNITY",
-                strategy="CANONICAL_TEST",
-                model_sha=SHA,
-                opportunity_id="opp-cache-2",
+                event_type="FINAL",
+                strategy="CRYPTO_SETTLEMENT_ENGINE",
+                model_sha=SHA, position_id="pos-cache-2", final_pnl=0.0,
+                metadata={"cutover": True, "component": "crypto_informed_taker"},
             )
             existing = _existing_record_ids(canonical_ledger_path(root))
             self.assertEqual(existing, set())
@@ -91,12 +91,12 @@ class LedgerSpoolTests(unittest.TestCase):
             rows = [json.loads(line) for line in canonical_ledger_path(root).read_text().splitlines() if line.strip()]
             self.assertEqual(len(rows), 2)
 
-    def test_graph_events_must_arrive_with_canonical_execution_side(self) -> None:
+    def test_non_engine_strategy_is_quarantined(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             event = LedgerEvent(
                 event_type="FILL",
-                strategy="GRAPH_RV",
+                strategy="UNSUPPORTED_ENGINE",
                 model_sha=SHA,
                 bundle_id="b",
                 order_id="o",
@@ -119,32 +119,29 @@ class LedgerSpoolTests(unittest.TestCase):
             self.assertEqual(raw["metadata"]["execution_side"], "BUY")
             result = drain_spool(root, model_sha=SHA)
             self.assertEqual(result["appended"], 0)
-            self.assertEqual(result["routed_research"], 1)
+            self.assertEqual(result["quarantined"], 1)
             self.assertFalse(canonical_ledger_path(root).exists())
 
-    def test_engine_candidate_is_routed_to_the_single_opportunity_inbox(self) -> None:
+    def test_engine_candidate_in_spool_is_quarantined(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             event = LedgerEvent(
-                event_type="CANDIDATE", strategy="FAST_STRUCTURAL",
+                event_type="CANDIDATE", strategy="STRUCTURAL_ARB_ENGINE",
                 model_sha=SHA, candidate_id="candidate-1",
                 exchange_ts_ms=1000, receive_ts_ms=1100,
                 decision_ts_ms=1200, book_snapshot_id="book-1",
             )
             spool_event(root, event)
             result = drain_spool(root, model_sha=SHA)
-            self.assertEqual(result["routed_opportunities"], 1)
+            self.assertEqual(result["quarantined"], 1)
             self.assertEqual(result["appended"], 0)
-            paths = list((root / "opportunities/inbox").glob("*.json"))
-            self.assertEqual(len(paths), 1)
-            ingress = json.loads(paths[0].read_text())
-            self.assertEqual(ingress["ingress"]["engine_id"], "STRUCTURAL_ARB_ENGINE")
+            self.assertFalse((root / "opportunities/inbox").exists())
 
     def test_component_fill_without_coordinator_receipt_is_quarantined(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             event = LedgerEvent(
-                event_type="FILL", strategy="HARD_ARB", model_sha=SHA,
+                event_type="FILL", strategy="STRUCTURAL_ARB_ENGINE", model_sha=SHA,
                 order_id="order-1", fill_id="fill-1", side="BUY",
                 token_id="token-1", exchange_ts_ms=1000, receive_ts_ms=1100,
                 fill_price=0.5, filled_size=1.0, fee=0.0,
@@ -168,7 +165,7 @@ class LedgerSpoolTests(unittest.TestCase):
                 "new_risk_authorized": True,
             }
             event = LedgerEvent(
-                event_type="FILL", strategy="HARD_ARB", model_sha=SHA,
+                event_type="FILL", strategy="STRUCTURAL_ARB_ENGINE", model_sha=SHA,
                 order_id="order-1", fill_id="fill-1", side="BUY",
                 token_id="token-1", exchange_ts_ms=1000, receive_ts_ms=1100,
                 fill_price=0.5, filled_size=1.0, fee=0.0,
@@ -184,7 +181,7 @@ class LedgerSpoolTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             event = LedgerEvent(
                 event_type="FILL",
-                strategy="GRAPH_RV",
+                strategy="UNSUPPORTED_ENGINE",
                 model_sha=SHA,
                 bundle_id="b",
                 order_id="o",
@@ -201,7 +198,7 @@ class LedgerSpoolTests(unittest.TestCase):
     def test_mixed_sha_spool_fails_closed(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
-            spool_event(root, LedgerEvent(event_type="OPPORTUNITY", strategy="GRAPH_RV", model_sha="2" * 40))
+            spool_event(root, LedgerEvent(event_type="OPPORTUNITY", strategy="UNSUPPORTED_ENGINE", model_sha="2" * 40))
             result = drain_spool(root, model_sha=SHA)
             self.assertEqual(result["appended"], 0)
             self.assertEqual(result["rejected"], 1)
@@ -211,21 +208,21 @@ class LedgerSpoolTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             order = LedgerEvent(
-                event_type="ORDER_SUBMITTED", strategy="CANONICAL_TEST",
+                event_type="ORDER_SUBMITTED", strategy="CRYPTO_SETTLEMENT_ENGINE",
                 model_sha=SHA, record_id="z-order", recorded_ts_ms=2_000,
                 order_id="order-1", side="BUY", limit_price=0.5,
                 exchange_ts_ms=1_900, receive_ts_ms=1_950,
                 decision_ts_ms=1_990, book_snapshot_id="book-1",
                 intended_action="TAKE", intended_size=1.0,
-                order_state="SUBMITTED_SHADOW",
+                order_state="SUBMITTED_SHADOW", metadata={"cutover": True, "component": "crypto_informed_taker"},
             )
             fill = LedgerEvent(
-                event_type="FILL", strategy="CANONICAL_TEST",
+                event_type="FILL", strategy="CRYPTO_SETTLEMENT_ENGINE",
                 model_sha=SHA, record_id="a-fill", recorded_ts_ms=2_000,
                 order_id="order-1", fill_id="fill-1", token_id="token-1",
                 side="BUY", exchange_ts_ms=1_900, receive_ts_ms=1_950,
                 fill_price=0.5, filled_size=1.0, complete=True,
-                fee=0.0, fee_source="test:authoritative",
+                fee=0.0, fee_source="test:authoritative", metadata={"cutover": True, "component": "crypto_informed_taker"},
             )
             spool_event(root, order)
             spool_event(root, fill)

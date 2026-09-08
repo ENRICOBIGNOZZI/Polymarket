@@ -256,13 +256,12 @@ def _append_external_fair_metrics(lines: list[str], report: dict[str, Any]) -> N
         metric("polymarket_external_fair_model_coverage", model.get("coverage")),
         metric("polymarket_external_fair_model_drift_score", model.get("drift_score")),
     ])
-    for role in ("champion", "challenger"):
-        pointer = model.get(role) if isinstance(model.get(role), dict) else {}
-        lines.append(metric("polymarket_external_fair_model_info", 1 if pointer else 0, {
-            "role": role.upper(),
-            "version": pointer.get("model_version", ""),
-            "hash": pointer.get("model_hash", ""),
-        }))
+    research = model.get("research_model") if isinstance(model.get("research_model"), dict) else {}
+    lines.append(metric("polymarket_external_fair_model_info", 1 if research else 0, {
+        "role": "RESEARCH",
+        "version": research.get("model_version", ""),
+        "hash": research.get("model_hash", ""),
+    }))
 
     latency = report.get("latency") if isinstance(report.get("latency"), dict) else {}
     for stage, quantiles in sorted(latency.items()):

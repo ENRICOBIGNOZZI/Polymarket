@@ -40,7 +40,7 @@ Canonical surfaces:
 
 ```text
 config/paper_v7.json
-config/live_champion.json
+config/v7_live_model_scope.json
 runs/paper_v7_live/
 runs/paper_v7_live/ledger/execution.jsonl
 monitoring/exporter_v7.py
@@ -69,13 +69,12 @@ The maker component evaluates `JOIN` / `IMPROVE` / `FADE` / one-sided /
 withdraw decisions with causal public-flow replay, queue-aware fillability,
 full-depth executable marks, and fill-conditioned research evidence. It has no
 standalone runtime or execution authority. Trading PnL, rebates, and liquidity
-rewards remain separate quantities; bounded exploration receives no promotion
+rewards remain separate quantities; bounded exploration remains research-only
 credit.
 
 ```text
 config/v7_professional_market_maker.json
 scripts/v7_market_maker_core.py
-scripts/v7_market_maker_model.py
 scripts/v7_market_maker_rewards.py
 build/polymarket_v7_maker_fillability_observer
 build/polymarket_v7_maker_markout_observer
@@ -95,7 +94,6 @@ config/v7_crypto_settlement_model_registry.json
 config/v7_external_source_registry.json
 scripts/v7_crypto_settlement.py
 scripts/v7_crypto_market_discovery.py
-scripts/v7_crypto_assumption_audit.py
 scripts/v7_crypto_economic_validation.py
 config/v7_external_fair.json
 scripts/v7_external_fair_paper_router.py
@@ -208,4 +206,4 @@ CI, monitoring and single-writer checks validate the two-engine V7 runtime direc
 
 Do not add alternate numerical runtimes, compatibility PAPER loops, duplicate maker engines, duplicate ledgers, duplicate state writers, generic deployment entrypoints or authenticated execution. `tests/test_v7_repository_shape.py` enforces the slim V7-only repository shape.
 
-Canonical documentation: [architecture](docs/ARCHITECTURE.md), [runtime](docs/RUNTIME.md), [execution](docs/EXECUTION.md), [latency](docs/LATENCY.md), [models](docs/MODELS.md), [data](docs/DATA.md), [replay](docs/REPLAY.md), [deployment](docs/DEPLOYMENT.md), [monitoring](docs/MONITORING.md), [model governance](docs/MODEL_GOVERNANCE.md), and [research](docs/RESEARCH.md).
+Canonical documentation: [architecture](docs/ARCHITECTURE.md), [runtime](docs/RUNTIME.md), [execution](docs/EXECUTION.md), [latency](docs/LATENCY.md), [models](docs/MODELS.md), [data](docs/DATA.md), [replay](docs/REPLAY.md), [deployment](docs/DEPLOYMENT.md), [monitoring](docs/MONITORING.md), and [research](docs/RESEARCH.md).

@@ -16,15 +16,14 @@ class PortfolioReconciliationTests(unittest.TestCase):
         return {
             "canonical": {
                 "net_pnl": 3.0,
-                "strategy_net_pnl": {"HARD_ARB": 1.0, "MICRO_TAKER": 2.0},
+                "strategy_net_pnl": {"STRUCTURAL_ARB_ENGINE": 1.0, "CRYPTO_SETTLEMENT_ENGINE": 2.0},
             },
             "ledger": {"total": {"final_pnl": 3.0}},
             "portfolio": {
                 "equity": 103.0,
-                "sleeves": {
-                    "crypto_settlement_engine": {"equity": 51.0},
-                    "structural_arb_engine": {"equity": 22.0},
-                    "reserve": {"equity": 30.0},
+                "engines": {
+                    "CRYPTO_SETTLEMENT_ENGINE": {"equity": 51.0},
+                    "STRUCTURAL_ARB_ENGINE": {"equity": 22.0},
                 },
             },
             "allocations": {
@@ -35,7 +34,7 @@ class PortfolioReconciliationTests(unittest.TestCase):
                 },
                 "reserve_budget": 30.0,
             },
-            "state_realized_pnl": {"HARD_ARB": 1.0, "MICRO_TAKER": 2.0},
+            "state_realized_pnl": {"STRUCTURAL_ARB_ENGINE": 1.0, "CRYPTO_SETTLEMENT_ENGINE": 2.0},
         }
 
     def test_all_accounting_surfaces_reconcile(self) -> None:
@@ -45,12 +44,12 @@ class PortfolioReconciliationTests(unittest.TestCase):
 
     def test_strategy_and_portfolio_divergence_fail_closed(self) -> None:
         values = self.inputs()
-        values["state_realized_pnl"]["HARD_ARB"] = 9.0
+        values["state_realized_pnl"]["STRUCTURAL_ARB_ENGINE"] = 9.0
         values["portfolio"]["equity"] = 999.0
         report = reconcile(**values)
         self.assertFalse(report["reconciled"])
-        self.assertIn("portfolio_sleeve_equity_divergence", report["reason_codes"])
-        self.assertIn("strategy_realized_pnl_divergence:HARD_ARB", report["reason_codes"])
+        self.assertIn("portfolio_engine_equity_divergence", report["reason_codes"])
+        self.assertIn("strategy_realized_pnl_divergence:STRUCTURAL_ARB_ENGINE", report["reason_codes"])
 
     def test_raw_terminal_and_canonical_economic_pnl_cannot_disagree_silently(self) -> None:
         values = self.inputs()

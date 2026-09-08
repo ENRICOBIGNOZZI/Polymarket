@@ -39,10 +39,10 @@ def test_ledger_accepts_only_explicit_paper_exploration_receipt():
         root=Path(td)
         receipt={"schema":"polymarket_v7_global_opportunity_decision_v1","owner":"V7_GLOBAL_PORTFOLIO_COORDINATOR","engine_id":"CRYPTO_SETTLEMENT_ENGINE","action":"TAKE","selected_replay_key":"explore","new_risk_authorized":False,"paper_exploration_authorized":True,"paper_exploration_probe_authorized":False,"paper_only":True,"authenticated_execution":False,"real_order_submission":False,"real_capital_at_risk":False,"crypto_context":{"asset":"BTC","horizon":"M5","authority":"PAPER_EXPLORATION"}}
         meta={"coordinator_receipt":receipt,"paper_exploration":True,"economic_authority":"PAPER_EXPLORATION"}
-        ev=LedgerEvent(event_type="FILL",strategy="CRYPTO_INFORMED_TAKER",model_sha=SHA,order_id="o",fill_id="f",side="BUY",token_id="t",exchange_ts_ms=1000,receive_ts_ms=1100,fill_price=.5,filled_size=1,fee=0,fee_source="test:authoritative",metadata=meta)
+        ev=LedgerEvent(event_type="FILL",strategy="CRYPTO_SETTLEMENT_ENGINE",model_sha=SHA,order_id="o",fill_id="f",side="BUY",token_id="t",exchange_ts_ms=1000,receive_ts_ms=1100,fill_price=.5,filled_size=1,fee=0,fee_source="test:authoritative",metadata=meta)
         spool_event(root,ev); r=drain_spool(root,model_sha=SHA); assert r["appended"]==1 and r["quarantined"]==0
         receipt["real_order_submission"]=True
-        ev2=LedgerEvent(event_type="FILL",strategy="CRYPTO_INFORMED_TAKER",model_sha=SHA,order_id="o2",fill_id="f2",side="BUY",token_id="t",exchange_ts_ms=1000,receive_ts_ms=1100,fill_price=.5,filled_size=1,fee=0,fee_source="test:authoritative",metadata=meta)
+        ev2=LedgerEvent(event_type="FILL",strategy="CRYPTO_SETTLEMENT_ENGINE",model_sha=SHA,order_id="o2",fill_id="f2",side="BUY",token_id="t",exchange_ts_ms=1000,receive_ts_ms=1100,fill_price=.5,filled_size=1,fee=0,fee_source="test:authoritative",metadata=meta)
         spool_event(root,ev2); r=drain_spool(root,model_sha=SHA); assert r["quarantined"]==1
 
 def test_router_requires_arrival_and_receipt_before_canonical_fill():
@@ -66,7 +66,7 @@ def probe_envelope():
         "maximum_probe_loss":0.80,
         "probe_loss_cap":1.00,
         "information_score":0.15,
-        "promotion_eligible":False,
+        "research_only":True,
         "robust_candidate":False,
         "arrival_revalidated":True,
         "model_id":"btc_m5_same_oracle_diffusion_bootstrap_v1",
@@ -93,10 +93,10 @@ def test_bounded_probe_is_selected_only_after_robust_candidates_are_absent():
 
 
 def test_probe_caps_and_real_money_drift_fail_closed():
-    for mutation in ("loss", "promotion", "model"):
+    for mutation in ("loss", "research_flag", "model"):
         value=probe_envelope()
         if mutation=="loss": value["exploration"]["maximum_probe_loss"]=2.01; value["exploration"]["probe_loss_cap"]=2.01
-        elif mutation=="promotion": value["exploration"]["promotion_eligible"]=True
+        elif mutation=="research_flag": value["exploration"]["research_only"]=False
         else: value["exploration"]["model_id"]="unregistered"
         try: OpportunityEnvelope.parse(value)
         except OpportunityError as exc: assert str(exc)=="paper_exploration_probe_invalid"
@@ -108,11 +108,11 @@ def test_ledger_probe_requires_matching_probe_receipt():
         root=Path(td)
         receipt={"schema":"polymarket_v7_global_opportunity_decision_v1","owner":"V7_GLOBAL_PORTFOLIO_COORDINATOR","engine_id":"CRYPTO_SETTLEMENT_ENGINE","action":"TAKE","selected_replay_key":"probe","new_risk_authorized":False,"paper_exploration_authorized":True,"paper_exploration_probe_authorized":True,"paper_only":True,"authenticated_execution":False,"real_order_submission":False,"real_capital_at_risk":False,"crypto_context":{"asset":"BTC","horizon":"M5","authority":"PAPER_EXPLORATION"}}
         meta={"coordinator_receipt":receipt,"paper_exploration":True,"paper_bootstrap_probe":True,"economic_authority":"PAPER_EXPLORATION"}
-        event=LedgerEvent(event_type="FILL",strategy="CRYPTO_INFORMED_TAKER",model_sha=SHA,order_id="probe-o",fill_id="probe-f",side="BUY",token_id="t",exchange_ts_ms=1000,receive_ts_ms=1100,fill_price=.1,filled_size=5,fee=0,fee_source="test:authoritative",metadata=meta)
+        event=LedgerEvent(event_type="FILL",strategy="CRYPTO_SETTLEMENT_ENGINE",model_sha=SHA,order_id="probe-o",fill_id="probe-f",side="BUY",token_id="t",exchange_ts_ms=1000,receive_ts_ms=1100,fill_price=.1,filled_size=5,fee=0,fee_source="test:authoritative",metadata=meta)
         spool_event(root,event); result=drain_spool(root,model_sha=SHA)
         assert result["appended"]==1 and result["quarantined"]==0
         receipt["paper_exploration_probe_authorized"]=False
-        event2=LedgerEvent(event_type="FILL",strategy="CRYPTO_INFORMED_TAKER",model_sha=SHA,order_id="probe-o2",fill_id="probe-f2",side="BUY",token_id="t",exchange_ts_ms=1000,receive_ts_ms=1100,fill_price=.1,filled_size=5,fee=0,fee_source="test:authoritative",metadata=meta)
+        event2=LedgerEvent(event_type="FILL",strategy="CRYPTO_SETTLEMENT_ENGINE",model_sha=SHA,order_id="probe-o2",fill_id="probe-f2",side="BUY",token_id="t",exchange_ts_ms=1000,receive_ts_ms=1100,fill_price=.1,filled_size=5,fee=0,fee_source="test:authoritative",metadata=meta)
         spool_event(root,event2); result=drain_spool(root,model_sha=SHA)
         assert result["quarantined"]==1
 
@@ -131,7 +131,7 @@ def test_live_router_has_distinct_probe_candidate_and_arrival_revalidation_paths
         "oracle":{"healthy":True,"continuity":"LIVE_CONTINUOUS"},
         "external":{"healthy":True},
         "market":{"yes_token":"yes","no_token":"no","fee_schedule":{"rate":0.0,"exponent":1,"takerOnly":True}},
-        "fair":{"valid":True,"paper_exploration_bootstrap":True,"promotion_eligible":False,"real_money_authority":False,"probability_model_id":"btc_m5_same_oracle_diffusion_bootstrap_v1","probability_model_hash":"f"*64,"yes":.775,"lower":.567,"upper":.911,"tte_seconds":120.0,"calculated_monotonic_ns":now-1,"valid_until_monotonic_ns":now+10_000_000_000},
+        "fair":{"valid":True,"paper_exploration_bootstrap":True,"research_only":True,"real_money_authority":False,"probability_model_id":"btc_m5_same_oracle_diffusion_bootstrap_v1","probability_model_hash":"f"*64,"yes":.775,"lower":.567,"upper":.911,"tte_seconds":120.0,"calculated_monotonic_ns":now-1,"valid_until_monotonic_ns":now+10_000_000_000},
     }
     assert router.robust_candidates(status,{"yes":yes,"no":no},policy["taker"])==[]
     rows=router.paper_probe_candidates(status,{"yes":yes,"no":no},policy["taker"],probe)

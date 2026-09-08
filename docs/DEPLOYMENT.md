@@ -1,6 +1,6 @@
 # V7 Deployment
 
-Deployment is a manual exact-SHA blue/green cutover. Automatic deployment and automatic champion promotion are disabled in `config/v7_scheduler_freeze.json`.
+Deployment is an exact-SHA PAPER cutover. The runtime identity receipt records the deployed SHA, config, policy, model, run and ledger identities.
 
 The candidate must be current `main`, pass exact-head CI/monitoring/single-writer validation, and complete deterministic replay plus bounded live-PAPER validation. Deployment accepts only an explicitly approved 40-character SHA that is still the exact tip of `main`; the checked-out artifact and runtime identity must match that SHA.
 

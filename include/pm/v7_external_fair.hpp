@@ -294,7 +294,7 @@ struct FairValueModelSnapshot {
     std::uint32_t reserved_horizon = 0;
     // No fixed bridge is authorized by construction.  The slow plane must
     // publish an exact-SHA empirical coefficient set, including zero when the
-    // fitted challenger selects the oracle-only model.
+    // fitted research model selects the oracle-only specification.
     double bridge_gap_coefficient = 0.0;
     double external_return_250ms_coefficient = 0.0;
     double external_return_1s_coefficient = 0.0;

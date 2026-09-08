@@ -19,32 +19,6 @@ struct LoadedRecord {
     std::uint32_t schema_version = 0;
 };
 
-// The only changed V2 payload is ExternalVenueEvent. Keep the pre-context
-// layout explicit so normalized V1 evidence remains inspectable and replayed
-// rather than being decoded as a new POD layout by accident.
-struct ExternalVenueEventV1 {
-    std::uint64_t asset_handle = 0;
-    std::uint64_t source_sequence = 0;
-    std::uint64_t connection_epoch = 0;
-    VenueId venue = VenueId::Unknown;
-    ExternalEventType event_type = ExternalEventType::BookTop;
-    std::uint16_t reserved0 = 0;
-    std::int64_t exchange_event_ns = 0;
-    std::int64_t local_receive_monotonic_ns = 0;
-    std::int64_t local_receive_wall_ns = 0;
-    double bid = 0.0;
-    double ask = 0.0;
-    double bid_size = 0.0;
-    double ask_size = 0.0;
-    double trade_price = 0.0;
-    double trade_size = 0.0;
-    std::int8_t trade_side = 0;
-    std::uint8_t gap = 0;
-    std::uint8_t stale = 0;
-    std::uint8_t healthy = 0;
-};
-
-static_assert(std::is_trivially_copyable_v<ExternalVenueEventV1>);
 
 [[nodiscard]] bool valid_sha(std::string_view sha) noexcept {
     if (sha.size() != 40) return false;
@@ -95,38 +69,7 @@ void fnv_mix(std::uint64_t& hash, const void* data, std::size_t size) noexcept {
 [[nodiscard]] bool decode_external_venue_event(
     const TapeRecord& record, std::uint32_t schema_version,
     ExternalVenueEvent& event) noexcept {
-    if ((schema_version >= 2 && schema_version <= kExternalTapeSchemaVersion)
-        // A V1 header paired with the V2-sized payload can only have been
-        // produced during the writer-side migration. Preserve that evidence
-        // by recognizing the unambiguous payload size; ordinary V1 remains
-        // decoded through the explicit legacy layout below.
-        || (schema_version == 1 && record.payload_size == sizeof(ExternalVenueEvent))) {
-        return decode_tape_payload(record, event);
-    }
-    if (schema_version != 1 || record.payload_size != sizeof(ExternalVenueEventV1)) {
-        return false;
-    }
-    ExternalVenueEventV1 legacy;
-    std::memcpy(&legacy, record.payload.data(), sizeof(legacy));
-    event.asset_handle = legacy.asset_handle;
-    event.source_sequence = legacy.source_sequence;
-    event.connection_epoch = legacy.connection_epoch;
-    event.venue = legacy.venue;
-    event.event_type = legacy.event_type;
-    event.exchange_event_ns = legacy.exchange_event_ns;
-    event.local_receive_monotonic_ns = legacy.local_receive_monotonic_ns;
-    event.local_receive_wall_ns = legacy.local_receive_wall_ns;
-    event.bid = legacy.bid;
-    event.ask = legacy.ask;
-    event.bid_size = legacy.bid_size;
-    event.ask_size = legacy.ask_size;
-    event.trade_price = legacy.trade_price;
-    event.trade_size = legacy.trade_size;
-    event.trade_side = legacy.trade_side;
-    event.gap = legacy.gap;
-    event.stale = legacy.stale;
-    event.healthy = legacy.healthy;
-    return true;
+    return schema_version == kExternalTapeSchemaVersion && decode_tape_payload(record, event);
 }
 
 } // namespace
@@ -151,8 +94,7 @@ ExternalReplaySummary replay_external_tapes(
             TapeSessionHeader header;
             input.read(reinterpret_cast<char*>(&header), sizeof(header));
             if (!input || !same_magic(header)
-                || header.schema_version < kExternalTapeOldestReplaySchemaVersion
-                || header.schema_version > kExternalTapeSchemaVersion
+                || header.schema_version != kExternalTapeSchemaVersion
                 || header.record_bytes != sizeof(TapeRecord)
                 || cstring_view(header.code_sha) != expected_code_sha) {
                 ++summary.header_failures;

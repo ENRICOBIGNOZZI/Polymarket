@@ -121,15 +121,15 @@ json::object external_cancel_signal_json(
         && publish_monotonic_ns >= signal.trigger_receive_monotonic_ns
         ? trigger_wall_ns + (signal.valid_until_monotonic_ns - signal.trigger_receive_monotonic_ns) : 0;
     return {
-        {"schema", "polymarket_v7_btc_m5_external_cancel_live_signal_v1"},
-        {"experiment_id", "btc-m5-external-cancel-overlay-forward-v1"},
+        {"schema", "polymarket_v7_btc_m5_external_cancel_live_signal_v2"},
+        {"rule_id", "btc-m5-external-cancel-v1"},
         {"code_sha", model_sha},
         {"rule_sha256", rule_sha256},
         {"paper_only", true},
         {"authenticated_execution", false},
         {"real_order_submission", false},
         {"real_money_authority", false},
-        {"automatic_promotion", false},
+        {"research_only", true},
         {"execution_authority", "ZERO_AUTHORITY_SIGNAL_ONLY"},
         {"shock_source", "BINANCE_SPOT_TRADES"},
         {"confirmation_source", "COINBASE_SPOT_TOP_OF_BOOK"},
@@ -139,7 +139,7 @@ json::object external_cancel_signal_json(
         {"trigger_cooldown_ms", 250},
         {"trigger_grid_ms", 25},
         {"overlap_warmup_ms", 300},
-        {"maximum_live_signal_age_ms", 100},
+        {"maximum_signal_age_ms", 100},
         {"signal_version", signal.signal_version},
         {"started_monotonic_ns", started_monotonic_ns},
         {"publish_monotonic_ns", publish_monotonic_ns},
@@ -1346,11 +1346,14 @@ int main(int argc, char** argv) {
                 {"venue_outlier_mask", snapshot.venue_outlier_mask},
                 {"feature_semantics_version", "receive_time_bucketed_composite_v2"},
                 {"return_history_available", {
+                    {"50ms", state.return_history_available(now_mono, 50000000LL)},
                     {"100ms", state.return_history_available(now_mono, 100000000LL)},
                     {"250ms", state.return_history_available(now_mono, 250000000LL)},
                     {"1s", state.return_history_available(now_mono, 1000000000LL)},
                     {"5s", state.return_history_available(now_mono, 5000000000LL)},
                 }},
+                {"return_50ms", state.return_history_available(now_mono, 50000000LL)
+                    ? json::value(snapshot.venue_composite_return_50ms) : json::value(nullptr)},
                 {"return_100ms", state.return_history_available(now_mono, 100000000LL)
                     ? json::value(snapshot.venue_composite_return_100ms) : json::value(nullptr)},
                 {"return_250ms", state.return_history_available(now_mono, 250000000LL)
@@ -1362,6 +1365,8 @@ int main(int argc, char** argv) {
                 {"realized_vol_fast", snapshot.realized_vol_fast},
                 {"realized_vol_medium", snapshot.realized_vol_medium},
                 {"realized_vol_slow", snapshot.realized_vol_slow},
+                {"fast_slow_vol_ratio", snapshot.fast_slow_vol_ratio},
+                {"jump_score", snapshot.jump_score},
                 {"aggregate_ofi", snapshot.aggregate_ofi},
                 {"aggregate_trade_imbalance", snapshot.aggregate_trade_imbalance},
                 {"latest_input_receive_monotonic_ns", snapshot.latest_input_receive_monotonic_ns},

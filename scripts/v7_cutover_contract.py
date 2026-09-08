@@ -9,8 +9,6 @@ import subprocess
 from pathlib import Path, PurePosixPath
 from typing import Any
 
-from v7_polymarket_v2_contracts import ContractRegistryError, load as load_v2_contract_registry
-from v7_platform_drift_monitor import DriftError, load as load_platform_contract, validate_registry as validate_platform_contract
 
 SHA40 = re.compile(r"^[0-9a-f]{40}$")
 REQUIRED_COSTS = {"fee", "slippage", "unwind_loss", "capital_cost", "latency_cost"}
@@ -72,119 +70,38 @@ def validate(root: Path, expected_head: str | None) -> dict[str, str]:
             or authorization.get("real_capital_at_risk") is not False):
         fail("V7 cutover blocked: operator PAPER/authenticated boundary invalid")
 
-    manifest = load_json(root / "config/live_champion.json")
-    if (manifest.get("enabled") is not True or manifest.get("version") != 7
-            or isinstance(manifest.get("version"), bool)
-            or manifest.get("execution_mode") != "PAPER_SIMULATED"):
-        fail("V7 cutover blocked: enabled champion version must be exactly 7")
-    if manifest.get("paper_only") is not True or manifest.get("authenticated_execution") is not False:
-        fail("V7 cutover blocked: champion must be PAPER-only with authenticated execution disabled")
-    if manifest.get("real_order_submission") not in (None, False):
-        fail("V7 cutover blocked: champion real_order_submission must be false")
-
-    loop_rel = safe_relative(manifest.get("loop"), "champion loop")
-    config_rel = safe_relative(manifest.get("config"), "champion config")
-    run_root_rel = safe_relative(manifest.get("run_root"), "champion run_root")
-    if loop_rel != "scripts/paper_v7_execution_loop.sh":
-        fail(f"V7 cutover blocked: canonical loop must be scripts/paper_v7_execution_loop.sh, got {loop_rel}")
-    if config_rel != "config/paper_v7.json":
-        fail(f"V7 cutover blocked: canonical config must be config/paper_v7.json, got {config_rel}")
-    if run_root_rel != "runs/paper_v7_live":
-        fail(f"V7 cutover blocked: canonical run_root must be runs/paper_v7_live, got {run_root_rel}")
+    # Research PAPER runtime has one canonical loop/config/run root; no published
+    # deployment manifest exists in research mode.
+    loop_rel = "scripts/paper_v7_execution_loop.sh"
+    config_rel = "config/paper_v7.json"
+    run_root_rel = "runs/paper_v7_live"
 
     required_files = (
-        loop_rel,
-        config_rel,
-        "scripts/v7_execution_ledger.py",
-        "scripts/v7_ledger_spool.py",
-        "scripts/v7_global_portfolio_coordinator.py",
-        "scripts/v7_canonical_economics.py",
-        "scripts/v7_joint_execution_policy.py",
-        "scripts/v7_capital_allocator.py",
-        "scripts/v7_evidence_capital_allocator.py",
-        "scripts/v7_fee_reward_registry.py",
-        "scripts/v7_generate_economic_artifacts.py",
-        "scripts/v7_external_economic_common.py",
-        "scripts/v7_external_loss_attribution.py",
-        "scripts/v7_execution_latency_distribution.py",
-        "scripts/v7_external_policy_replay.py",
-        "scripts/v7_exact_sha_economic_bundle.py",
-        "scripts/v7_external_settlement_dataset.py",
-        "scripts/v7_external_settlement_model.py",
-        "scripts/v7_external_settlement_train.py",
-        "scripts/v7_external_settlement_validate.py",
-        "scripts/v7_crypto_settlement_engine_contract.py",
-        "scripts/v7_fast_structural_feasibility.py",
-        "scripts/v7_portfolio_guard.py",
-        "scripts/v7_learned_execution_model.py",
-        "scripts/v7_polymarket_v2_contracts.py",
-        "scripts/v7_platform_drift_monitor.py",
-        "scripts/v7_platform_contract_archive.py",
-        "scripts/v7_real_pnl_evidence.py",
-        "scripts/v7_session_registry.py",
-        "scripts/v7_execution_provenance.py",
-        "scripts/v7_dataset_manifest.py",
-        "scripts/v7_maker_probe_design.py",
-        "scripts/v7_maker_durable_learning.py",
-        "scripts/v7_simulator_calibration_support.py",
-        "scripts/v7_scenario_risk.py",
-        "scripts/v7_regional_shootout.py",
-        "scripts/v7_implementation_audit.py",
-        "scripts/v7_experiment_registry.py",
-        "scripts/v7_experiment_scheduler.py",
-        "scripts/v7_protocol_fuzz.py",
-        "scripts/v7_replay_parity.py",
-        "scripts/v7_real_pnl_verifier.py",
-        "scripts/v7_real_pnl_scorecard.py",
-        "scripts/v7_generate_pnl_attestation.py",
-        "scripts/v7_verify_pnl_attestation.py",
-        "scripts/v7_secret_scan.py",
-        "scripts/v7_entropy_secret_scan.py",
-        "scripts/v7_security_audit.py",
-        "scripts/v7_current_truth_audit.py",
-        "scripts/v7_release_provenance.py",
-        "scripts/v7_live_canary_orchestrator.py",
-        "scripts/v7_reconcile_account.py",
-        "scripts/v7_world_class_scorecard.py",
-        "config/v7_execution_modes.json",
-        "config/v7_risk_tiers.json",
-        "config/v7_attestation_trust.json",
-        "schemas/v7/execution_mode.schema.json",
-        "schemas/v7/pnl_attestation.schema.json",
-        "schemas/v7/public_pnl_attestation.schema.json",
-        "schemas/v7/attestation_trust.schema.json",
-        "schemas/v7/experiment.schema.json",
-        "schemas/v7/experiment_run.schema.json",
-        "schemas/v7/simulator_calibration_support.schema.json",
-        "schemas/v7/scenario_risk.schema.json",
-        "schemas/v7/world_class_scorecard.schema.json",
-        "schemas/v7/platform_contract.schema.json",
-        "schemas/v7/platform_contract_archive.schema.json",
-        "schemas/v7/session_registry.schema.json",
-        "schemas/v7/replay_parity.schema.json",
-        "config/v7_polymarket_v2_contracts.json",
-        "config/v7_platform_contract.json",
-        "config/v7_runtime_supervision.json",
-        "config/v7_strategy_registry.json",
-        "config/v7_live_model_scope.json",
-        "config/v7_frequency_matrix.json",
-        "config/v7_external_fair.json",
-        "config/v7_crypto_settlement_engine.json",
-        "config/v7_process_manifest.json",
-        "config/v7_economic_readiness.json",
-        "config/v7_authority_registry.json",
+        loop_rel, config_rel,
+        "scripts/v7_execution_ledger.py", "scripts/v7_ledger_spool.py",
+        "scripts/v7_global_portfolio_coordinator.py", "scripts/v7_opportunity.py",
+        "scripts/v7_canonical_economics.py", "scripts/v7_capital_allocator.py",
+        "scripts/v7_portfolio_guard.py", "scripts/v7_fee_reward_registry.py",
+        "scripts/v7_generate_economic_artifacts.py", "scripts/v7_exact_sha_economic_bundle.py",
+        "scripts/v7_external_loss_attribution.py", "scripts/v7_execution_latency_distribution.py",
+        "scripts/v7_external_policy_replay.py", "scripts/v7_learned_execution_model.py",
+        "scripts/v7_joint_execution_policy.py", "scripts/v7_maker_durable_learning.py",
+        "scripts/v7_maker_opportunity_bridge.py", "scripts/v7_market_maker_rewards.py",
+        "scripts/v7_external_cancel_opportunity_bridge.py", "scripts/v7_external_fair_paper_router.py",
+        "scripts/v7_rtds_external_fair_monitor.py", "scripts/v7_external_rich_model.py",
+        "scripts/v7_fair_model_artifact.py", "scripts/v7_external_lead_lag_collector.py",
+        "scripts/v7_crypto_settlement_engine_contract.py", "scripts/v7_crypto_settlement.py",
+        "scripts/v7_process_manifest.py", "scripts/v7_process_runtime.sh",
+        "scripts/v7_secret_scan.py", "scripts/v7_entropy_secret_scan.py",
+        "scripts/v7_security_audit.py", "scripts/v7_release_provenance.py",
+        "config/v7_execution_modes.json", "config/v7_runtime_supervision.json",
+        "config/v7_strategy_registry.json", "config/v7_live_model_scope.json",
+        "config/v7_external_fair.json", "config/v7_crypto_execution_alpha.json",
+        "config/v7_crypto_settlement_engine.json", "config/v7_crypto_settlement_markets.json",
+        "config/v7_crypto_settlement_model_registry.json", "config/v7_professional_market_maker.json",
+        "config/v7_process_manifest.json", "config/v7_authority_registry.json",
         "config/v7_structural_arb_engine.json",
-        "config/v7_authority_edges.json",
-        "scripts/v7_authority_reachability_audit.py",
-        "scripts/v7_process_manifest.py",
-        "scripts/v7_process_runtime.sh",
-        "scripts/v7_surface_classification.py",
-        "artifacts/v7_unification/path_classification.json",
-        "schemas/v7/opportunity_envelope.schema.json",
-        "config/v7_scheduler_freeze.json",
-        "config/v7_capability_matrix.json",
-        "config/v7_incumbent_identity.json",
-        "scripts/v7_convergence_audit.py",
+        "config/v7_adaptive_universe.json", "schemas/v7/opportunity_envelope.schema.json",
     )
     for rel in required_files:
         if not (root / rel).is_file():
@@ -214,10 +131,10 @@ def validate(root: Path, expected_head: str | None) -> dict[str, str]:
         fail("V7 cutover blocked: two-algorithm scope identity/safety contract invalid")
     if paper_engines != expected_algorithms:
         fail("V7 cutover blocked: exactly two economic engines must own PAPER decisions")
-    governance = scope.get("governance") if isinstance(scope.get("governance"), dict) else {}
-    if (governance.get("single_execution_owner") is not True
-            or governance.get("automatic_promotion") is not False):
-        fail("V7 cutover blocked: live-algorithm governance contract invalid")
+    invariants = scope.get("runtime_invariants") if isinstance(scope.get("runtime_invariants"), dict) else {}
+    if (invariants.get("single_execution_owner") is not True
+            or invariants.get("global_portfolio_coordinator") != "V7_GLOBAL_PORTFOLIO_COORDINATOR"):
+        fail("V7 cutover blocked: runtime invariant contract invalid")
 
     adaptive_universe = load_json(root / "config/v7_adaptive_universe.json")
     if (adaptive_universe.get("schema") != "polymarket_v7_adaptive_universe_config_v1"
@@ -269,28 +186,6 @@ def validate(root: Path, expected_head: str | None) -> dict[str, str]:
     if (v7.get("execution_mode") != "PAPER_SIMULATED"
             or v7.get("execution_modes_policy") != "config/v7_execution_modes.json"):
         fail("V7 cutover blocked: canonical typed execution mode is invalid")
-    if (v7.get("contract_registry") != "config/v7_polymarket_v2_contracts.json"
-            or v7.get("require_v2_contract_registry") is not True):
-        fail("V7 cutover blocked: pinned CLOB V2/pUSD registry is required")
-    if v7.get("real_pnl_provenance_required") is not True:
-        fail("V7 cutover blocked: immutable real-PnL execution provenance is required")
-    if v7.get("real_pnl_economic_scorecard_required") is not True:
-        fail("V7 cutover blocked: real-PnL economic scorecard is required")
-    if v7.get("pre_canary_security") != {
-            "full_history_secret_scan_required": True,
-            "full_history_entropy_secret_scan_required": True,
-            "findings_must_equal": 0,
-            "remediation_evidence_required": True}:
-        fail("V7 cutover blocked: pre-canary secret-remediation contract invalid")
-    try:
-        load_v2_contract_registry(root / "config/v7_polymarket_v2_contracts.json")
-    except ContractRegistryError as exc:
-        fail(f"V7 cutover blocked: invalid CLOB V2/pUSD contract registry: {exc}")
-    try:
-        validate_platform_contract(load_platform_contract(root / "config/v7_platform_contract.json"))
-    except DriftError as exc:
-        fail(f"V7 cutover blocked: invalid platform-contract registry: {exc}")
-
     runtime_supervision = load_json(root / "config/v7_runtime_supervision.json")
     if (runtime_supervision.get("schema") != "polymarket_v7_runtime_supervision_v1"
             or runtime_supervision.get("version") != 7
@@ -301,49 +196,6 @@ def validate(root: Path, expected_head: str | None) -> dict[str, str]:
             or runtime_supervision.get("real_order_submission") is not False
             or runtime_supervision.get("real_capital_at_risk") is not False):
         fail("V7 cutover blocked: runtime supervision safety contract invalid")
-    clob_recovery = runtime_supervision.get("clob_v2_recovery")
-    if not isinstance(clob_recovery, dict) or (
-            clob_recovery.get("http_425_backoff_initial_seconds") != 1
-            or clob_recovery.get("http_425_backoff_max_seconds") != 30
-            or clob_recovery.get("post_restart_post_only_seconds") != 120
-            or clob_recovery.get("cancel_only_allows_cancel") is not True
-            or clob_recovery.get("private_reconciliation_required_after_stream_disconnect") is not True
-            or clob_recovery.get("paper_only") is not True
-            or clob_recovery.get("authenticated_execution") is not False
-            or clob_recovery.get("real_order_submission") is not False):
-        fail("V7 cutover blocked: CLOB V2 restart/reconciliation policy invalid")
-    failure_domains = runtime_supervision.get("failure_domains")
-    if (not isinstance(failure_domains, dict)
-            or failure_domains.get("matching_engine_restart") != {
-                "scope": "venue", "action": "cancel_and_backoff_until_post_only_recovery", "critical": True}
-            or failure_domains.get("matching_engine_cancel_only") != {
-                "scope": "venue", "action": "cancel_only_until_reconciled", "critical": True}
-            or failure_domains.get("order_heartbeat_expired") != {
-                "scope": "account", "action": "cancel_all_and_reconcile", "critical": True}
-            or failure_domains.get("signer_rate_limit") != {
-                "scope": "signer", "action": "quarantine_signer_and_reconcile", "critical": True}):
-        fail("V7 cutover blocked: CLOB V2 matching-engine failure actions invalid")
-    order_heartbeat = runtime_supervision.get("order_heartbeat")
-    if not isinstance(order_heartbeat, dict) or (
-            order_heartbeat.get("interval_seconds") != 5
-            or order_heartbeat.get("maximum_ack_age_seconds") != 10
-            or order_heartbeat.get("missing_ack_action") != "cancel_all_and_reconcile"
-            or order_heartbeat.get("paper_only") is not True
-            or order_heartbeat.get("authenticated_execution") is not False
-            or order_heartbeat.get("real_order_submission") is not False):
-        fail("V7 cutover blocked: order-heartbeat safety policy invalid")
-    signer_rate_limit = runtime_supervision.get("signer_rate_limit")
-    if not isinstance(signer_rate_limit, dict) or (
-            signer_rate_limit.get("rolling_window_seconds") != 1
-            or signer_rate_limit.get("maximum_regular_requests") != 10
-            or signer_rate_limit.get("maximum_emergency_requests") != 10
-            or signer_rate_limit.get("maximum_total_requests") != 20
-            or signer_rate_limit.get("reserve_emergency_for") != ["cancel", "heartbeat"]
-            or signer_rate_limit.get("clock_regression_action") != "quarantine_signer_and_reconcile"
-            or signer_rate_limit.get("paper_only") is not True
-            or signer_rate_limit.get("authenticated_execution") is not False
-            or signer_rate_limit.get("real_order_submission") is not False):
-        fail("V7 cutover blocked: per-signer rate-limit policy invalid")
     if set(v7.get("cost_vector_required") or []) != REQUIRED_COSTS:
         fail("V7 cutover blocked: complete fee/slippage/unwind/capital/latency cost vector required")
     if sorted(int(x) for x in v7.get("markout_horizons_seconds") or []) != [1,10,45,60,300]:
@@ -359,7 +211,7 @@ def validate(root: Path, expected_head: str | None) -> dict[str, str]:
             fail(f"invalid expected SHA: {expected_head!r}")
         if head != expected_head:
             fail(f"V7 cutover blocked: checkout {head} != expected {expected_head}")
-    return {"V7_CUTOVER_SHA": head,"V7_CHAMPION_VERSION":"7","V7_CHAMPION_LOOP":loop_rel,"V7_CHAMPION_CONFIG":config_rel,"V7_CHAMPION_RUN_ROOT":run_root_rel}
+    return {"V7_CUTOVER_SHA": head,"V7_RUNTIME_VERSION":"7","V7_RUNTIME_LOOP":loop_rel,"V7_RUNTIME_CONFIG":config_rel,"V7_RUNTIME_RUN_ROOT":run_root_rel}
 
 
 def main() -> int:

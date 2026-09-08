@@ -58,6 +58,57 @@ def _universe(path: Path, *, timestamp_ms: int, model_sha: str = SHA, markets=No
     return path
 
 
+def _live_flow_from_tape(tape: Path, output: Path, now_ms: int) -> Path:
+    groups = {}
+    seen = set()
+    with tape.open(newline="", encoding="utf-8") as handle:
+        for raw in csv.DictReader(handle):
+            identity = tuple(str(raw.get(key) or "") for key in (
+                "condition_id", "transaction_hash", "asset_id", "timestamp", "price", "size"))
+            if identity in seen:
+                continue
+            seen.add(identity)
+            condition = str(raw.get("condition_id") or "")
+            token = str(raw.get("asset_id") or "")
+            received = int(float(raw.get("received_ms") or 0))
+            side = str(raw.get("side") or "").upper()
+            size = max(0.0, float(raw.get("size") or 0.0))
+            price = min(1.0, max(0.0, float(raw.get("price") or 0.0)))
+            key = (condition, token)
+            row = groups.setdefault(key, {
+                "condition_id": condition, "token_id": token, "last_receive_ts_ms": 0,
+                "tick_size": 0.01, "best_bid": 0.49, "best_ask": 0.50,
+                "best_bid_depth": 1000.0, "best_ask_depth": 1000.0,
+                "buy_prints_5s": 0, "buy_prints_30s": 0, "buy_prints_120s": 0, "buy_prints_600s": 0,
+                "buy_shares_120s": 0.0, "buy_shares_600s": 0.0, "buy_notional_600s": 0.0,
+                "last_buy_receive_ts_ms_600s": 0,
+                "sell_prints_5s": 0, "sell_prints_30s": 0, "sell_prints_120s": 0, "sell_prints_600s": 0,
+                "sell_shares_120s": 0.0, "sell_shares_600s": 0.0, "sell_notional_600s": 0.0,
+                "last_sell_receive_ts_ms_600s": 0,
+            })
+            row["last_receive_ts_ms"] = max(row["last_receive_ts_ms"], received)
+            age = max(0, now_ms - received)
+            if side not in {"BUY", "SELL"}:
+                continue
+            prefix = side.lower()
+            for window, limit in (("5s",5000),("30s",30000),("120s",120000),("600s",600000)):
+                if age <= limit:
+                    row[f"{prefix}_prints_{window}"] += 1
+            if age <= 120000:
+                row[f"{prefix}_shares_120s"] += size
+            if age <= 600000:
+                row[f"{prefix}_shares_600s"] += size
+                row[f"{prefix}_notional_600s"] += size * price
+                row[f"last_{prefix}_receive_ts_ms_600s"] = max(row[f"last_{prefix}_receive_ts_ms_600s"], received)
+    output.write_text(json.dumps({
+        "schema": rewards.LIVE_FLOW_SCHEMA, "timestamp_ms": now_ms,
+        "producer": "FAST_STRUCTURAL_CPP_WEBSOCKET", "model_sha": SHA,
+        "paper_only": True, "authenticated_execution": False, "real_order_submission": False,
+        "rows": list(groups.values()),
+    }), encoding="utf-8")
+    return output
+
+
 def _anchor_fair_status(*, now_mono: int, market_id: str = "btc5", event_id: str = "e-btc5") -> dict:
     return {
         "schema": "polymarket_v7_external_fair_status_v1",
@@ -83,12 +134,13 @@ def _anchor_fair_status(*, now_mono: int, market_id: str = "btc5", event_id: str
             "valid": True, "yes": 0.70, "lower": 0.55, "upper": 0.82,
             "calculated_monotonic_ns": now_mono - 1_000,
             "valid_until_monotonic_ns": now_mono + 1_000,
-            "explicit_champion_applied": False,
+            "research_model": False,
+            "probability_interval_validated": False,
             "paper_exploration_bootstrap": True,
             "inference_state": "VALID_PAPER_EXPLORATION_BOOTSTRAP",
             "calibration_state": "PAPER_EXPLORATION_BOOTSTRAP_APPLIED",
             "probability_model_id": "btc_m5_same_oracle_diffusion_bootstrap_v1",
-            "promotion_eligible": False, "real_money_authority": False,
+            "research_only": True, "real_money_authority": False,
             "uses_polymarket_price_as_feature": False, "authority": "SHADOW",
         },
     }
@@ -248,7 +300,7 @@ class MakerRewardSelectorTests(unittest.TestCase):
         anchor = next(row for row in result["markets"] if row.get("settlement_anchor") is True)
         self.assertEqual(anchor["condition_id"], "c-btc5")
         self.assertEqual(anchor["fee_schedule"]["takerOnly"], True)
-        self.assertFalse(anchor["settlement_anchor_promotion_credit"])
+        self.assertTrue(anchor["settlement_anchor_research_only"])
         self.assertFalse(anchor["settlement_anchor_real_money_authority"])
 
     def test_settlement_anchor_fails_closed_on_universe_identity_conflict(self) -> None:
@@ -371,7 +423,7 @@ class MakerRewardSelectorTests(unittest.TestCase):
             root = Path(directory)
             universe = _universe(root / "current.json", timestamp_ms=1_000_000, markets=[_anchor_universe_row()])
             value = _anchor_fair_status(now_mono=now_mono)
-            value["fair"]["promotion_eligible"] = True
+            value["fair"]["research_only"] = False
             fair = root / "fair.json"; fair.write_text(json.dumps(value))
             model = _anchor_execution_model(root / "model.json")
             _, selection_cfg, _, _ = rewards._validated_config(ROOT / "config" / "v7_professional_market_maker.json")
@@ -427,7 +479,7 @@ class MakerRewardSelectorTests(unittest.TestCase):
             actual["control_selection_reason"], "FRESH_CAUSAL_PROJECTED_FILL")
         self.assertEqual(
             actual["durable_exact_cell_evidence"]["role"],
-            "RANKING_ONLY_NO_EXECUTION_OR_PROMOTION_AUTHORITY",
+            "RANKING_ONLY_NO_EXECUTION_OR_RISK_AUTHORITY",
         )
 
     def test_cold_control_moves_to_untried_exact_cell_after_no_flow(self) -> None:
@@ -723,7 +775,7 @@ class MakerRewardSelectorTests(unittest.TestCase):
                 ROOT / "config" / "v7_professional_market_maker.json"
             )
             snapshot = rewards._recent_flow_snapshot(
-                universe, root / "unused.csv", selection_cfg, capacity_cfg, capacity,
+                universe, selection_cfg, capacity_cfg, capacity,
                 model_sha=SHA, now_ms=now_ms, live_flow_path=live_flow,
             )
         self.assertEqual(
@@ -781,7 +833,7 @@ class MakerRewardSelectorTests(unittest.TestCase):
             snapshot = rewards.build_snapshot(
                 ROOT / "config" / "v7_professional_market_maker.json",
                 fallback_universe_path=Path("universe.json"),
-                trade_tape_path=Path("trades.csv"),
+                live_flow_path=Path("live_flow.json"),
                 model_sha=SHA,
                 now_ms=1_000_000,
             )
@@ -835,8 +887,9 @@ class MakerRewardSelectorTests(unittest.TestCase):
             selection_cfg["recent_flow"]["minimum_markets"] = 2
             selection_cfg["recent_flow"]["minimum_operational_markets"] = 2
             snapshot = rewards._recent_flow_snapshot(
-                universe, tape, selection_cfg, capacity_cfg, capacity,
+                universe, selection_cfg, capacity_cfg, capacity,
                 model_sha=SHA, now_ms=now_ms,
+                live_flow_path=_live_flow_from_tape(tape, root / "live_trade_flow.json", now_ms),
             )
         self.assertEqual([row["market_id"] for row in snapshot["markets"]], ["active", "second"])
         self.assertEqual(snapshot["markets"][0]["recent_prints"], 5)
@@ -884,8 +937,9 @@ class MakerRewardSelectorTests(unittest.TestCase):
             self.assertEqual(selection_cfg["recent_flow"]["minimum_markets"], 1)
             self.assertEqual(selection_cfg["recent_flow"]["lookback_seconds"], 1800)
             snapshot = rewards._recent_flow_snapshot(
-                universe_path, tape, selection_cfg, capacity_cfg, capacity,
+                universe_path, selection_cfg, capacity_cfg, capacity,
                 model_sha=SHA, now_ms=now_ms,
+                live_flow_path=_live_flow_from_tape(tape, root / "live_trade_flow.json", now_ms),
             )
             fallback = rewards._fallback_snapshot(
                 universe_path, selection_cfg, capacity_cfg, capacity,
@@ -925,8 +979,9 @@ class MakerRewardSelectorTests(unittest.TestCase):
                 ROOT / "config" / "v7_professional_market_maker.json"
             )
             snapshot = rewards._recent_flow_snapshot(
-                universe, tape, selection_cfg, capacity_cfg, capacity,
+                universe, selection_cfg, capacity_cfg, capacity,
                 model_sha=SHA, now_ms=now_ms,
+                live_flow_path=_live_flow_from_tape(tape, root / "live_trade_flow.json", now_ms),
             )
         row = snapshot["markets"][0]
         self.assertEqual(row["side_mode"], "INVENTORY_BACKED_ASK")
@@ -971,8 +1026,9 @@ class MakerRewardSelectorTests(unittest.TestCase):
             selection_cfg["recent_flow"]["minimum_operational_markets"] = 3
             selection_cfg["recent_flow"]["maximum_zero_flow_reserve_markets"] = 2
             snapshot = rewards._recent_flow_snapshot(
-                universe, tape, selection_cfg, capacity_cfg, capacity,
+                universe, selection_cfg, capacity_cfg, capacity,
                 model_sha=SHA, now_ms=now_ms,
+                live_flow_path=_live_flow_from_tape(tape, root / "live_trade_flow.json", now_ms),
             )
         self.assertEqual(snapshot["selected_count"], 3)
         self.assertEqual(snapshot["stable_reserve_added"], 2)
@@ -1016,8 +1072,9 @@ class MakerRewardSelectorTests(unittest.TestCase):
                 ROOT / "config" / "v7_professional_market_maker.json"
             )
             snapshot = rewards._recent_flow_snapshot(
-                universe, tape, selection_cfg, capacity_cfg, capacity,
+                universe, selection_cfg, capacity_cfg, capacity,
                 model_sha=SHA, now_ms=now_ms,
+                live_flow_path=_live_flow_from_tape(tape, root / "live_trade_flow.json", now_ms),
             )
         self.assertEqual(snapshot["selected_count"], 3)
         self.assertEqual(snapshot["stable_reserve_added"], 2)
@@ -1060,8 +1117,9 @@ class MakerRewardSelectorTests(unittest.TestCase):
                 ROOT / "config" / "v7_professional_market_maker.json"
             )
             snapshot = rewards._recent_flow_snapshot(
-                universe, tape, selection_cfg, capacity_cfg, capacity,
+                universe, selection_cfg, capacity_cfg, capacity,
                 model_sha=SHA, now_ms=now_ms,
+                live_flow_path=_live_flow_from_tape(tape, root / "live_trade_flow.json", now_ms),
             )
         self.assertEqual([row["market_id"] for row in snapshot["markets"]], ["fresh", "stale"])
         self.assertEqual(snapshot["minimum_side_prints_2m"], 2)
@@ -1112,13 +1170,12 @@ class MakerRewardSelectorTests(unittest.TestCase):
             config_path = root / "maker.json"
             config_path.write_text(json.dumps(config), encoding="utf-8")
             universe_path = _universe(root / "current.json", timestamp_ms=now_ms, markets=[generic])
-            tape = root / "trade_tape.csv"
-            tape.write_text("timestamp,received_ms,condition_id,asset_id,side,price,size,transaction_hash\n", encoding="utf-8")
-            with mock.patch.object(rewards, "_primary_snapshot") as primary:
+            live_flow = root / "live_flow.json"
+            with mock.patch.object(rewards, "_recent_flow_snapshot", side_effect=ValueError("maker_live_flow_trade_stale")),                  mock.patch.object(rewards, "_primary_snapshot") as primary:
                 snapshot = rewards.build_snapshot(
                     config_path,
                     fallback_universe_path=universe_path,
-                    trade_tape_path=tape,
+                    live_flow_path=live_flow,
                     model_sha=SHA,
                     now_ms=now_ms,
                     deadline_seconds=0.01,
@@ -1238,8 +1295,9 @@ class MakerRewardSelectorTests(unittest.TestCase):
                 ROOT / "config" / "v7_professional_market_maker.json"
             )
             snapshot = rewards._recent_flow_snapshot(
-                universe, tape, selection_cfg, capacity_cfg, capacity,
+                universe, selection_cfg, capacity_cfg, capacity,
                 model_sha=SHA, now_ms=now_ms,
+                live_flow_path=_live_flow_from_tape(tape, root / "live_trade_flow.json", now_ms),
             )
         self.assertEqual(snapshot["selected_count"], 1)
         self.assertEqual(snapshot["markets"][0]["market_id"], "tail")

@@ -6,7 +6,7 @@ replays the PAPER inventory accounting to attribute realized trading PnL to the
 microstructure state in which the contributing maker quote was submitted.
 
 It is intentionally evidence-only: it never changes quoting, capital, risk,
-orders, model promotion, or the canonical ledger.
+orders, model deployment, or the canonical ledger.
 """
 from __future__ import annotations
 
@@ -17,7 +17,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
-STRATEGY = "MICRO_MAKER_PRO"
+STRATEGY = "CRYPTO_SETTLEMENT_ENGINE"
+COMPONENT = "professional_maker"
 HORIZONS = ("1s", "10s", "45s", "60s", "300s")
 DIMENSIONS = (
     "spread", "imbalance", "ofi", "toxicity", "queue", "inventory", "latency",
@@ -543,7 +544,8 @@ def summarize_maker_microstructure(
     attributed_realized = 0.0
 
     for row in rows:
-        if str(row.get("strategy") or "") != STRATEGY:
+        if (str(row.get("strategy") or "") != STRATEGY
+                or _metadata(row).get("component") != COMPONENT):
             continue
         if row.get("paper_only") is not True or row.get("authenticated_execution") is not False:
             continue

@@ -247,59 +247,59 @@ def rotation_gate(
     minimum_absolute_improvement: float,
     minimum_relative_multiplier: float,
 ) -> tuple[bool, dict[str, Any]]:
-    """Require a material new fill cell before destroying incumbent queues."""
+    """Require a material new fill cell before destroying current queues."""
     runtime_ids = {
         str(row.get("market_id") or "")
         for row in runtime.get("markets", []) if isinstance(row, dict)
     }
-    incumbent = projected_cells(candidate, market_ids=runtime_ids)
-    challenger = projected_cells(candidate, exclude_market_ids=runtime_ids)
-    incumbent_probability = incumbent[0][0] if incumbent else 0.0
-    challenger_probability = challenger[0][0] if challenger else 0.0
-    challenger_cell = challenger[0][1] if challenger else ""
+    current_cells = projected_cells(candidate, market_ids=runtime_ids)
+    candidate_cells = projected_cells(candidate, exclude_market_ids=runtime_ids)
+    current_probability = current_cells[0][0] if current_cells else 0.0
+    candidate_probability = candidate_cells[0][0] if candidate_cells else 0.0
+    candidate_cell = candidate_cells[0][1] if candidate_cells else ""
     minimum_probability = max(0.0, minimum_projected_fill_probability)
     # A recent-flow snapshot is an observation contract, not proof that the
-    # incumbent execution cell is fillable. Treat a zero/sub-threshold cell as
+    # current execution cell is fillable. Treat a zero/sub-threshold cell as
     # cold start even when the surrounding 40-market cohort is fresh.
     cold_start = (
         not fresh_flow_eligible(runtime)
-        or incumbent_probability < minimum_probability
+        or current_probability < minimum_probability
     )
     # Projected maker fills are commonly sub-percent. A configuration value
     # from a coarser probability regime must not silently demand a five-point
-    # absolute jump from a 0.3% incumbent. Bound the absolute increment by the
+    # absolute jump from a 0.3% current. Bound the absolute increment by the
     # minimum economically admissible probability; the relative hurdle still
-    # protects incumbent queue priority at larger probabilities.
+    # protects current queue priority at larger probabilities.
     effective_absolute_improvement = min(
         max(0.0, minimum_absolute_improvement), minimum_probability)
     threshold = max(
         minimum_probability,
-        incumbent_probability + effective_absolute_improvement,
-        incumbent_probability * max(1.0, minimum_relative_multiplier),
+        current_probability + effective_absolute_improvement,
+        current_probability * max(1.0, minimum_relative_multiplier),
     )
-    allowed = bool(challenger_cell) and (
-        (cold_start and challenger_probability >= minimum_probability)
-        or (not cold_start and challenger_probability >= threshold)
+    allowed = bool(candidate_cell) and (
+        (cold_start and candidate_probability >= minimum_probability)
+        or (not cold_start and candidate_probability >= threshold)
     )
     reason = (
         "COLD_START_TO_FILLABLE_CELL" if allowed and cold_start
         else "MATERIAL_NEW_FILL_CELL" if allowed
-        else "NO_NEW_PROJECTED_FILL_CELL" if not challenger_cell
-        else "CHALLENGER_FILL_NOT_MATERIALLY_SUPERIOR"
+        else "NO_NEW_PROJECTED_FILL_CELL" if not candidate_cell
+        else "CANDIDATE_FILL_NOT_MATERIALLY_SUPERIOR"
     )
     return allowed, {
         "rotation_gate_reason": reason,
-        "rotation_target_cell": challenger_cell,
-        "incumbent_projected_fill_probability": incumbent_probability,
-        "challenger_projected_fill_probability": challenger_probability,
-        "required_challenger_projected_fill_probability": (
+        "rotation_target_cell": candidate_cell,
+        "current_projected_fill_probability": current_probability,
+        "candidate_projected_fill_probability": candidate_probability,
+        "required_candidate_projected_fill_probability": (
             minimum_probability if cold_start else threshold
         ),
         "configured_absolute_fill_improvement": max(
             0.0, minimum_absolute_improvement),
         "effective_absolute_fill_improvement": effective_absolute_improvement,
-        "incumbent_below_minimum_fill_probability": (
-            incumbent_probability < minimum_probability),
+        "current_below_minimum_fill_probability": (
+            current_probability < minimum_probability),
     }
 
 
@@ -576,16 +576,16 @@ class CohortSupervisor:
         }
         projected_rows: list[dict[str, Any]] = []
         overlap = 0
-        for market_id, incumbent in runtime_rows.items():
-            challenger = candidate_rows.get(market_id)
-            if challenger is not None and all(
-                str(challenger.get(key) or "") == str(incumbent.get(key) or "")
+        for market_id, current_row in runtime_rows.items():
+            candidate_row = candidate_rows.get(market_id)
+            if candidate_row is not None and all(
+                str(candidate_row.get(key) or "") == str(current_row.get(key) or "")
                 for key in ("condition_id", "yes_token", "no_token")
             ):
-                projected_rows.append(dict(challenger))
+                projected_rows.append(dict(candidate_row))
                 overlap += 1
                 continue
-            observation = dict(incumbent)
+            observation = dict(current_row)
             observation.update({
                 "execution_role": "WARM_RUNTIME_OBSERVATION",
                 "control_exploration_authorized": False,

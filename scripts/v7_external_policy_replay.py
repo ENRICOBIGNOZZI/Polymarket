@@ -461,9 +461,8 @@ def build_replay(
         "exit_policy_comparison_base_observed_costs": exit_policy_comparison(historical),
         "capacity_curve": capacity_curve(eligible_opportunities),
         "best_scenario_not_selected": True,
-        "promotion": {
-            "automatic": False,
-            "eligible": False,
+        "economic_evidence": {
+            "supported": False,
             "reason": "FORWARD_FROZEN_POLICY_AND_INDEPENDENT_OOS_GATES_REQUIRED",
         },
         "limitations": [

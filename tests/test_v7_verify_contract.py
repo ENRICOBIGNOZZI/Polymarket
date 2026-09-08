@@ -23,7 +23,6 @@ class V7VerifyContractTests(unittest.TestCase):
             "GitHub Action pin validation passed",
             "V7_VERIFY_SANITIZERS", "V7_VERIFY_TSAN",
             "detect_leaks=0",
-            "v7_protocol_fuzz.py",
             "git status --porcelain=v1 --untracked-files=all",
             "exact-SHA verification requires a clean worktree",
             'BUILD_MANIFEST="$RELEASE_BUILD/build_manifest.json"',

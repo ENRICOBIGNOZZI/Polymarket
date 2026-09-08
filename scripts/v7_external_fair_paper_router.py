@@ -32,7 +32,8 @@ from v7_execution_ledger import (
 from v7_ledger_spool import spool_event
 from v7_crypto_settlement import load_registry as load_crypto_registry, require_context
 
-STRATEGY = "CRYPTO_INFORMED_TAKER"
+STRATEGY = "CRYPTO_SETTLEMENT_ENGINE"
+COMPONENT = "crypto_informed_taker"
 MODEL_VERSION = "external-fair-structural-v7-paper"
 # Evidence produced by the same declared semantics may survive an exact-SHA
 # cutover.  Bump this whenever forecast labels, settlement semantics or virtual
@@ -329,7 +330,8 @@ def reconcile_paper_exploration_finals(
             if not isinstance(record, LedgerEvent) or record.model_sha != model_sha:
                 continue
             existing_record_ids.add(record.record_id)
-            if record.strategy.upper() != STRATEGY:
+            if (record.strategy.upper() != STRATEGY
+                    or (record.metadata or {}).get("component") != COMPONENT):
                 continue
             if record.event_type == "FILL" and record.fill_id:
                 fills.setdefault(record.fill_id, record)
@@ -357,7 +359,8 @@ def reconcile_paper_exploration_finals(
         if record.model_sha != model_sha:
             continue
         existing_record_ids.add(record.record_id)
-        if record.strategy.upper() != STRATEGY:
+        if (record.strategy.upper() != STRATEGY
+                or (record.metadata or {}).get("component") != COMPONENT):
             continue
         if record.event_type == "FILL" and record.fill_id:
             fills.setdefault(record.fill_id, record)
@@ -508,6 +511,7 @@ def _canonical_paper_exploration_event(event: LedgerEvent) -> bool:
     metadata = event.metadata if isinstance(event.metadata, dict) else {}
     return (
         event.strategy.upper() == STRATEGY
+        and metadata.get("component") == COMPONENT
         and metadata.get("paper_exploration") is True
         and metadata.get("economic_authority") == "PAPER_EXPLORATION"
         and metadata.get("counterfactual") is False
@@ -1126,16 +1130,9 @@ def entry_tte_allowed(fair: dict[str, Any], policy: dict[str, Any]) -> bool:
     tte = finite(fair.get("tte_seconds"))
     minimum = finite(policy.get("minimum_entry_tte_seconds"))
     maximum = finite(policy.get("maximum_entry_tte_seconds"))
-    legacy_allowed = (
-        math.isfinite(tte)
-        and math.isfinite(minimum)
-        and math.isfinite(maximum)
-        and 0.0 <= minimum <= maximum
-        and minimum <= tte <= maximum
-    )
     buckets = policy.get("tte_bucket_policy")
     if not isinstance(buckets, list) or not buckets:
-        return legacy_allowed
+        return False
     return any(
         isinstance(bucket, dict)
         and finite(bucket.get("minimum_seconds"), math.nan) <= tte
@@ -1342,7 +1339,7 @@ def robust_candidates(status: dict[str, Any], books: dict[str, Book], policy: di
                 "robust_probability": robust_value, "robust_ev": robust_ev,
                 "market_yes": market_yes,
                 "tte_seconds": float(fair["tte_seconds"]),
-                "tte_bucket_id": str(bucket.get("id") or "legacy_entry_window"),
+                "tte_bucket_id": str(bucket.get("id") or "UNBUCKETED_INVALID"),
             })
     return sorted(rows, key=lambda row: (-row["robust_ev"], row["outcome"]))
 
@@ -1358,14 +1355,18 @@ def validate_probe_policy(raw: dict[str, Any] | None) -> dict[str, Any] | None:
         "one_probe_per_market": True,
         "require_no_robust_candidate": True,
         "require_arrival_revalidation": True,
-        "promotion_credit": False,
+        "research_only": True,
         "real_money_authority": False,
     }
     if any(raw.get(key) != value for key, value in expected.items()):
         raise RuntimeError("paper_exploration_probe_authority_invalid")
     policy = dict(raw)
+    if not isinstance(policy.get("allow_frozen_rich_ml"), bool):
+        raise RuntimeError("paper_exploration_probe_parameter_invalid:allow_frozen_rich_ml")
     ranges = {
         "minimum_point_ev_per_share": (0.01, 0.25),
+        "maximum_rich_pm_prior_drift": (0.005, 0.10),
+        "maximum_rich_pm_prior_arrival_age_ms": (100.0, 2000.0),
         "minimum_model_market_disagreement": (0.01, 0.25),
         "maximum_model_market_disagreement": (0.05, 0.30),
         "minimum_tte_seconds": (1.0, 30.0),
@@ -1397,7 +1398,7 @@ def paper_probe_candidates(
                and is_paper_learning_fair(fair, str(status.get("code_sha") or "")))
     bootstrap = (fair.get("valid") is True
         and fair.get("paper_exploration_bootstrap") is True
-        and fair.get("promotion_eligible") is False and fair.get("real_money_authority") is False
+        and fair.get("research_only") is True and fair.get("real_money_authority") is False
         and fair.get("probability_model_id") == probe_policy["required_probability_model_id"]
         and identity_hash(fair.get("probability_model_hash")))
     if not (bootstrap or learned):
@@ -1434,6 +1435,19 @@ def paper_probe_candidates(
     fair_yes = finite(fair.get("yes"), math.nan)
     if market_yes is None or not math.isfinite(fair_yes):
         return []
+    prior_drift = 0.0
+    if learned and fair.get("uses_polymarket_price_as_feature") is True:
+        prior = finite(fair.get("pm_mid"), math.nan)
+        prior_receive_ms = finite(fair.get("pm_mid_receive_ts_ms"), math.nan)
+        newest_book_ms = max((book.receive_ts_ms for book in books.values()), default=0)
+        prior_age_at_candidate_ms = newest_book_ms - prior_receive_ms
+        if (not math.isfinite(prior) or not math.isfinite(prior_receive_ms)
+                or prior_age_at_candidate_ms < -250
+                or prior_age_at_candidate_ms > probe_policy["maximum_rich_pm_prior_arrival_age_ms"]):
+            return []
+        prior_drift = abs(prior - market_yes)
+        if prior_drift > probe_policy["maximum_rich_pm_prior_drift"]:
+            return []
     disagreement = abs(fair_yes - market_yes)
     if not probe_policy["minimum_model_market_disagreement"] <= disagreement <= probe_policy["maximum_model_market_disagreement"]:
         return []
@@ -1460,8 +1474,9 @@ def paper_probe_candidates(
                 "point_probability": point_probability, "point_ev": point_ev,
                 "robust_probability": robust_probability, "robust_ev": robust_ev,
                 "market_yes": market_yes, "model_market_disagreement": disagreement,
+                "pm_prior_arrival_drift": prior_drift,
                 "tte_seconds": tte,
-                "tte_bucket_id": str(bucket.get("id") or "legacy_entry_window"),
+                "tte_bucket_id": str(bucket.get("id") or "UNBUCKETED_INVALID"),
                 "paper_bootstrap_probe": True,
                 "probability_model_id": fair.get("probability_model_id"),
                 "probability_model_hash": fair.get("probability_model_hash"),
@@ -1588,7 +1603,7 @@ def opportunity_set(
         "reference_version": int(reference.get("version") or 0),
         "decision_ts_ms": max(book.receive_ts_ms for book in books.values()),
         "tte_seconds": finite(fair.get("tte_seconds")),
-        "tte_bucket_id": str(bucket.get("id") or "legacy_entry_window"),
+        "tte_bucket_id": str(bucket.get("id") or "UNBUCKETED_INVALID"),
         "fair_yes": fair_yes if math.isfinite(fair_yes) else None,
         "fair_yes_lower": lower if math.isfinite(lower) else None,
         "fair_yes_upper": upper if math.isfinite(upper) else None,
@@ -1645,8 +1660,8 @@ class PaperRouter:
         if self.probe_policy is not None:
             ml = self.config.get("paper_ml_probe") or {}
             self.probe_policy["allow_frozen_rich_ml"] = bool(
-                ml.get("enabled") is True and ml.get("promotion_credit") is False
-                and ml.get("automatic_promotion") is False and ml.get("real_order_submission") is False)
+                ml.get("enabled") is True and ml.get("research_only") is True
+                and ml.get("real_order_submission") is False)
         self.policy_sha256 = hashlib.sha256(
             json.dumps(self.config, separators=(",", ":"), sort_keys=True).encode()
         ).hexdigest()
@@ -1757,7 +1772,7 @@ class PaperRouter:
         return paths
 
     def compact_durable_evidence(self) -> None:
-        """Deduplicate all evidence before old cutover trees are pruned.
+        """Deduplicate evidence by canonical current-run identity.
 
         Incompatible policy/SHA rows remain immutable HISTORICAL evidence. They
         are excluded by ``durable_records`` from runtime state restoration, but
@@ -1839,9 +1854,9 @@ class PaperRouter:
                     "execution_probability_model_id", "execution_probability_model_hash",
                     "paper_exploration_learned", "independent_baseline_yes",
                     "external_only_yes", "hybrid_yes", "external_only_model_id",
-                    "hybrid_model_id", "registered_challenger_yes",
-                    "registered_challenger_model_id",
-                    "registered_challenger_model_hash", "lower", "upper", "oracle_value",
+                    "hybrid_model_id", "research_model_yes",
+                    "research_model_model_id",
+                    "research_model_model_hash", "lower", "upper", "oracle_value",
                     "external_venue_count", "fair_calculated_monotonic_ns",
                     "fair_valid_until_monotonic_ns", "yes_best_bid", "yes_best_ask",
                     "no_best_bid", "no_best_ask", "market_mid_source", "decision",
@@ -2028,43 +2043,44 @@ class PaperRouter:
             cluster_predictions, cluster_actuals)
         interval_diagnostics = probability_interval_bin_diagnostics(
             cluster_predictions, cluster_actuals, cluster_lowers, cluster_uppers,
-            bins=int((self.config.get("promotion") or {}).get(
+            bins=int((self.config.get("research_diagnostics") or {}).get(
                 "probability_interval_bins", 10)),
-            minimum_bin_size=int((self.config.get("promotion") or {}).get(
+            minimum_bin_size=int((self.config.get("research_diagnostics") or {}).get(
                 "minimum_probability_interval_bin_size", 3)),
         )
-        challenger_pointer = load(
-            self.directory / "model_registry" / "fair_value_challenger.json")
-        current_challenger_hash = str(challenger_pointer.get("model_hash") or "")
-        challenger_by_market: dict[str, list[dict[str, Any]]] = {}
+        current_status = load(self.source)
+        current_fair = current_status.get("fair") if isinstance(current_status.get("fair"), dict) else {}
+        current_research_hash = str(current_fair.get("probability_model_hash") or "") \
+            if current_fair.get("research_model") is True else ""
+        research_by_market: dict[str, list[dict[str, Any]]] = {}
         for row in forecasts:
-            probability = finite(row.get("registered_challenger_yes"), math.nan)
-            model_hash = str(row.get("registered_challenger_model_hash") or "")
+            probability = finite(row.get("research_model_yes"), math.nan)
+            model_hash = str(row.get("research_model_model_hash") or "")
             market_id = str(row.get("market_id") or "")
             if (
-                math.isfinite(probability) and len(current_challenger_hash) == 64
-                and model_hash == current_challenger_hash and market_id
+                math.isfinite(probability) and len(current_research_hash) == 64
+                and model_hash == current_research_hash and market_id
             ):
-                challenger_by_market.setdefault(market_id, []).append(row)
-        challenger_model_losses: list[float] = []
-        challenger_market_losses: list[float] = []
-        for rows in challenger_by_market.values():
-            challenger_pairs = [
-                (finite(row.get("registered_challenger_brier"), math.nan),
+                research_by_market.setdefault(market_id, []).append(row)
+        research_model_losses: list[float] = []
+        research_market_losses: list[float] = []
+        for rows in research_by_market.values():
+            research_model_pairs = [
+                (finite(row.get("research_model_brier"), math.nan),
                  finite(row.get("market_brier"), math.nan))
                 for row in rows
             ]
-            challenger_pairs = [pair for pair in challenger_pairs
+            research_model_pairs = [pair for pair in research_model_pairs
                                 if all(math.isfinite(value) for value in pair)]
-            if challenger_pairs:
-                challenger_model_losses.append(statistics.fmean(
-                    value[0] for value in challenger_pairs))
-                challenger_market_losses.append(statistics.fmean(
-                    value[1] for value in challenger_pairs))
-        challenger_delta = (
-            statistics.fmean(challenger_model_losses)
-            - statistics.fmean(challenger_market_losses)
-            if challenger_model_losses and challenger_market_losses else None
+            if research_model_pairs:
+                research_model_losses.append(statistics.fmean(
+                    value[0] for value in research_model_pairs))
+                research_market_losses.append(statistics.fmean(
+                    value[1] for value in research_model_pairs))
+        research_delta = (
+            statistics.fmean(research_model_losses)
+            - statistics.fmean(research_market_losses)
+            if research_model_losses and research_market_losses else None
         )
         fills = {
             str(row.get("fill_id")): row for row in records.values()
@@ -2086,25 +2102,25 @@ class PaperRouter:
             stressed_2x += pnl - max(0.0, finite(fill.get("fee"), 0.0)) \
                 - max(0.0, finite(fill.get("slippage"), 0.0))
             matched_finals += 1
-        promotion = self.config.get("promotion") if isinstance(
-            self.config.get("promotion"), dict) else {}
-        minimum = int(promotion.get("minimum_forward_shadow_contracts") or 50)
-        slope_range = promotion.get("calibration_slope_range") or [0.75, 1.25]
+        diagnostics_policy = self.config.get("research_diagnostics") if isinstance(
+            self.config.get("research_diagnostics"), dict) else {}
+        minimum = int(diagnostics_policy.get("minimum_forward_shadow_contracts") or 50)
+        slope_range = diagnostics_policy.get("calibration_slope_range") or [0.75, 1.25]
         interval_consistency = interval_diagnostics["consistency_rate"]
         interval_bin_count = int(interval_diagnostics["eligible_bin_count"])
         interval_width = interval_diagnostics["mean_probability_band_width"]
         minimum_interval_bins = int(
-            promotion.get("minimum_probability_interval_bins") or 5)
+            diagnostics_policy.get("minimum_probability_interval_bins") or 5)
         minimum_interval_consistency = float(
-            promotion.get("minimum_probability_interval_bin_consistency") or 0.80)
+            diagnostics_policy.get("minimum_probability_interval_bin_consistency") or 0.80)
         maximum_interval_width = float(
-            promotion.get("maximum_mean_probability_interval_width") or 0.20)
+            diagnostics_policy.get("maximum_mean_probability_interval_width") or 0.20)
         reasons: list[str] = []
         if len(by_market) < minimum:
             reasons.append("INSUFFICIENT_INDEPENDENT_SETTLEMENT_MARKETS")
         if delta_upper is None or delta_upper >= 0.0:
             reasons.append("MODEL_NOT_CLUSTER_ROBUST_BETTER_THAN_PM")
-        if calibration_error is None or calibration_error > float(promotion.get("maximum_ece", 0.05)):
+        if calibration_error is None or calibration_error > float(diagnostics_policy.get("maximum_ece", 0.05)):
             reasons.append("CALIBRATION_ERROR_GATE")
         if slope is None or not float(slope_range[0]) <= slope <= float(slope_range[1]):
             reasons.append("CALIBRATION_SLOPE_GATE")
@@ -2121,8 +2137,7 @@ class PaperRouter:
         if len(final_markets) < minimum or matched_finals < minimum or stressed_2x <= 0.0:
             reasons.append("POSITIVE_2X_COST_STRESS_GATE")
         return {
-            "eligible_for_manual_paper_promotion": not reasons,
-            "automatic_promotion": False,
+            "research_evidence_sufficient": not reasons,
             "independent_settlement_markets": len(by_market),
             "minimum_independent_settlement_markets": minimum,
             "forecast_rows": len(forecasts),
@@ -2148,25 +2163,25 @@ class PaperRouter:
                 "probability_interval_diagnostics"),
             "virtual_final_markets": len(final_markets),
             "virtual_2x_cost_stress_pnl": stressed_2x,
-            "registered_challenger_forward": {
+            "research_model_forward": {
                 "state": (
-                    "FORWARD_EVIDENCE_ACCUMULATING" if challenger_by_market
+                    "FORWARD_EVIDENCE_ACCUMULATING" if research_by_market
                     else "AWAITING_FORWARD_SETTLEMENTS"
                 ),
-                "independent_settlement_markets": len(challenger_by_market),
+                "independent_settlement_markets": len(research_by_market),
                 "model_hash": (
-                    current_challenger_hash if len(current_challenger_hash) == 64
+                    current_research_hash if len(current_research_hash) == 64
                     else None
                 ),
                 "model_brier_cluster_equal_weighted": (
-                    statistics.fmean(challenger_model_losses)
-                    if challenger_model_losses else None
+                    statistics.fmean(research_model_losses)
+                    if research_model_losses else None
                 ),
                 "market_brier_cluster_equal_weighted": (
-                    statistics.fmean(challenger_market_losses)
-                    if challenger_market_losses else None
+                    statistics.fmean(research_market_losses)
+                    if research_market_losses else None
                 ),
-                "model_minus_market_brier_mean": challenger_delta,
+                "model_minus_market_brier_mean": research_delta,
                 "execution_authority": "SHADOW_ZERO_AUTHORITY",
             },
             "blocking_reasons": reasons,
@@ -2340,7 +2355,7 @@ class PaperRouter:
             "eligible": True,
             "reasons": [
                 "PAPER_EXPLORATION_ONLY", "ARRIVAL_BOOK_REVALIDATED",
-                "IMMATURE_EVIDENCE_NO_PROMOTION_CREDIT",
+                "IMMATURE_EVIDENCE_RESEARCH_ONLY",
             ],
             "deterministic_replay_key": f"crypto-settlement:BTC:M5:{identity}",
             "expires_at_ns": decision_ms * 1_000_000 + 1_000_000_000,
@@ -2352,7 +2367,7 @@ class PaperRouter:
                 "maximum_probe_loss": float(metadata.get("maximum_probe_loss") or 0.0),
                 "probe_loss_cap": float(metadata.get("probe_loss_cap") or 0.0),
                 "information_score": float(metadata.get("information_score") or 0.0),
-                "promotion_eligible": False,
+                "research_only": True,
                 "robust_candidate": False,
                 "arrival_revalidated": True,
                 "model_id": str(metadata.get("probability_model_id") or ""),
@@ -2434,21 +2449,22 @@ class PaperRouter:
         external = status.get("external") if isinstance(status.get("external"), dict) else {}
         fair_models = status.get("fair_models") if isinstance(
             status.get("fair_models"), dict) else {}
-        challenger = fair_models.get("registered_challenger") if isinstance(
-            fair_models.get("registered_challenger"), dict) else {}
+        research_model = fair_models.get("research_model") if isinstance(
+            fair_models.get("research_model"), dict) else {}
         independent = fair_models.get("external_only_fair") or fair
         independent_yes = finite(independent.get("yes")) if independent.get("valid") is True else math.nan
         tte = finite(fair.get("tte_seconds"))
         model_yes = finite(fair.get("yes"))
         market_yes = live_market_yes(books, market)
-        challenger_yes = finite(challenger.get("yes"), math.nan)
-        challenger_hash = str(challenger.get("probability_model_hash") or "")
-        challenger_applied = bool(
-            challenger.get("valid") is True
-            and challenger.get("explicit_registry_model_applied") is True
-            and math.isfinite(challenger_yes)
-            and 0.0 <= challenger_yes <= 1.0
-            and len(challenger_hash) == 64
+        research_model_yes_value = finite(research_model.get("yes"), math.nan)
+        research_model_hash = str(research_model.get("probability_model_hash") or "")
+        research_model_applied = bool(
+            research_model.get("valid") is True
+            and research_model.get("research_model") is True
+            and research_model.get("research_model_state") == "FROZEN_INFERENCE_ONLY"
+            and math.isfinite(research_model_yes_value)
+            and 0.0 <= research_model_yes_value <= 1.0
+            and len(research_model_hash) == 64
         )
         market_id = str(market.get("market_id") or "")
         if not (
@@ -2496,13 +2512,13 @@ class PaperRouter:
             "hybrid_yes": hybrid_yes if math.isfinite(hybrid_yes) else None,
             "external_only_model_id": "external_only_fair",
             "hybrid_model_id": "hybrid_fair",
-            "registered_challenger_yes": challenger_yes if challenger_applied else None,
-            "registered_challenger_model_id": (
-                str(challenger.get("probability_model_id") or "")
-                if challenger_applied else ""
+            "research_model_yes": research_model_yes_value if research_model_applied else None,
+            "research_model_model_id": (
+                str(research_model.get("probability_model_id") or "")
+                if research_model_applied else ""
             ),
-            "registered_challenger_model_hash": (
-                challenger_hash if challenger_applied else ""
+            "research_model_model_hash": (
+                research_model_hash if research_model_applied else ""
             ),
             "lower": finite(fair.get("lower")) if model_available else None,
             "upper": finite(fair.get("upper")) if model_available else None,
@@ -2557,10 +2573,10 @@ class PaperRouter:
         values = opportunity_set(status, books, self.policy)
         if values is None:
             return False
-        challenger = (status.get("fair_models") or {}).get("registered_challenger") or {}
-        available = (challenger.get("valid") is True
-                     and challenger.get("explicit_registry_model_applied") is True
-                     and challenger.get("registry_role") == "CHALLENGER")
+        research_model = (status.get("fair_models") or {}).get("research_model") or {}
+        available = (research_model.get("valid") is True
+                     and research_model.get("research_model") is True
+                     and research_model.get("research_model_state") == "FROZEN_INFERENCE_ONLY")
         current_fair = status.get("fair") or {}
         values["external_context"] = status.get("external_context", {})
         values["rich_feature_cut"] = current_fair.get("rich_feature_cut")
@@ -2570,11 +2586,11 @@ class PaperRouter:
             "schema": "polymarket_v7_forward_comparison_observation_v1",
             "market_probability": values.get("market_yes"),
             "structural_probability": values.get("fair_yes"),
-            "challenger_probability": challenger.get("yes") if available else None,
-            "challenger_hash": challenger.get("probability_model_hash") if available else None,
-            "forward_start_ns": challenger.get("forward_start_ns") if available else None,
-            "frozen_at_ns": challenger.get("frozen_at_ns") if available else None,
-            "challenger_features": (status.get("fair") or {}).get("model_features") if available else None,
+            "research_probability": research_model.get("yes") if available else None,
+            "research_model_hash": research_model.get("probability_model_hash") if available else None,
+            "forward_start_ns": research_model.get("forward_start_ns") if available else None,
+            "frozen_at_ns": research_model.get("frozen_at_ns") if available else None,
+            "research_features": research_model.get("rich_model_features") if available else None,
             "no_money_authority": True,
         }
         snapshot_id = str(values["snapshot_id"])
@@ -2664,12 +2680,12 @@ class PaperRouter:
                 else:
                     hybrid_brier = hybrid_log_loss = None
                 market_brier, market_log_loss = self.forecast_scores(float(forecast["market_yes"]), actual_yes)
-                challenger_yes = finite(forecast.get("registered_challenger_yes"))
-                if math.isfinite(challenger_yes):
-                    challenger_brier, challenger_log_loss = self.forecast_scores(
-                        challenger_yes, actual_yes)
+                research_model_yes_value = finite(forecast.get("research_model_yes"))
+                if math.isfinite(research_model_yes_value):
+                    research_model_brier_value, research_model_log_loss_value = self.forecast_scores(
+                        research_model_yes_value, actual_yes)
                 else:
-                    challenger_brier = challenger_log_loss = None
+                    research_model_brier_value = research_model_log_loss_value = None
                 self.emit_counterfactual(
                     "FORECAST_FINAL", counterfactual_id=forecast_id, forecast_id=forecast_id,
                     market_id=market_id, tte_bucket_seconds=forecast["tte_bucket_seconds"],
@@ -2686,14 +2702,14 @@ class PaperRouter:
                     observed_tte_seconds=forecast.get("observed_tte_seconds"),
                     external_only_model_id=forecast.get("external_only_model_id"),
                     hybrid_model_id=forecast.get("hybrid_model_id"),
-                    registered_challenger_yes=(
-                        challenger_yes if math.isfinite(challenger_yes) else None),
-                    registered_challenger_brier=challenger_brier,
-                    registered_challenger_log_loss=challenger_log_loss,
-                    registered_challenger_model_id=forecast.get(
-                        "registered_challenger_model_id"),
-                    registered_challenger_model_hash=forecast.get(
-                        "registered_challenger_model_hash"),
+                    research_model_yes=(
+                        research_model_yes_value if math.isfinite(research_model_yes_value) else None),
+                    research_model_brier=research_model_brier_value,
+                    research_model_log_loss=research_model_log_loss_value,
+                    research_model_model_id=forecast.get(
+                        "research_model_model_id"),
+                    research_model_model_hash=forecast.get(
+                        "research_model_model_hash"),
                     settlement_provider="POLYMARKET_GAMMA_PUBLIC",
                     settlement_endpoint=(
                         f"{self.gamma_url}/markets/{urllib.parse.quote(market_id)}"),
@@ -2798,6 +2814,7 @@ class PaperRouter:
             predicted_fill_probability=1.0, expected_ev=robust_ev * size,
             intended_action="TAKE", intended_size=size,
             metadata={
+                "component": COMPONENT, "model_family": COMPONENT,
                 "paper_exploration_learned": fair.get("paper_exploration_learned") is True,
                 "rich_feature_sha256": fair.get("rich_feature_sha256"),
                 "probability_model_code_sha": fair.get("model_code_sha"),
@@ -2833,11 +2850,11 @@ class PaperRouter:
                     if is_probe else 0.0
                 ),
                 "paper_bootstrap_probe": is_probe,
-                "promotion_eligible": False if is_probe else None,
+                "research_only": True if is_probe else None,
                 "probability_model_id": row.get("probability_model_id"),
                 "probability_model_hash": row.get("probability_model_hash"),
-                "tte_bucket_id": row.get("tte_bucket_id", "legacy_entry_window"),
-                "model_family": STRATEGY, "horizon_seconds": 300,
+                "tte_bucket_id": row.get("tte_bucket_id", "UNBUCKETED_INVALID"),
+                "model_family": COMPONENT, "component": COMPONENT, "horizon_seconds": 300,
             },
         )
 
@@ -3122,7 +3139,7 @@ class PaperRouter:
                             receive_ts_ms=book.receive_ts_ms, book_snapshot_id=book.snapshot_id,
                             executable_liquidation_value=liquidation,
                             markouts={f"{horizon}s": per_share},
-                            metadata={"model_family": STRATEGY, "horizon_seconds": 300,
+                            metadata={"model_family": COMPONENT, "component": COMPONENT, "horizon_seconds": 300,
                                       "full_visible_depth": True, "fill_conditioned": True},
                         ))
                         position.setdefault("markouts", []).append(horizon)
@@ -3165,7 +3182,7 @@ class PaperRouter:
                     "won": won, "hold_to_settlement": True, "counterfactual": True,
                     "model_yes": position.get("model_yes"),
                     "market_yes": position.get("market_yes"),
-                    "model_family": STRATEGY, "horizon_seconds": 300,
+                    "model_family": COMPONENT, "component": COMPONENT, "horizon_seconds": 300,
                 },
             )
             self.emit_shadow_ingress(LedgerEvent(
@@ -3178,7 +3195,7 @@ class PaperRouter:
                 unwind_loss=0.0, capital_cost=0.0, latency_cost=0.0,
                 capital_duration_ms=current_ms - int(position["opened_ms"]),
                 metadata={
-                    "model_family": STRATEGY, "horizon_seconds": 300,
+                    "model_family": COMPONENT, "component": COMPONENT, "horizon_seconds": 300,
                     "realized": True, "unwind_accounted": True,
                     "cost_vector_complete": True,
                     "terminal_id": f"external-shadow:{position['position_id']}:final",
@@ -3277,8 +3294,8 @@ class PaperRouter:
             "paper_exploration_accounting_active": paper_account.get("complete") is True,
             "model_mature": self.model_mature,
             "economic_confidence": (
-                "PAPER_PROMOTION_ELIGIBLE_MANUAL_REVIEW"
-                if maturity["eligible_for_manual_paper_promotion"]
+                "PAPER_ECONOMIC_EVIDENCE_READY"
+                if maturity["research_evidence_sufficient"]
                 else "MORE_EVIDENCE_REQUIRED"),
             "maturity": maturity,
             "active_candidates": active_candidates,

@@ -23,7 +23,7 @@ SHA_B = "b" * 40
 def candidate(**overrides):
     values = dict(
         event_type="CANDIDATE",
-        strategy="MICRO_TAKER",
+        strategy="CRYPTO_SETTLEMENT_ENGINE",
         model_sha=SHA_A,
         recorded_ts_ms=1_030,
         exchange_ts_ms=1_000,
@@ -49,7 +49,7 @@ def candidate(**overrides):
 def fill(**overrides):
     values = dict(
         event_type="FILL",
-        strategy="FAST_STRUCTURAL_ARB",
+        strategy="STRUCTURAL_ARB_ENGINE",
         model_sha=SHA_A,
         recorded_ts_ms=2_030,
         exchange_ts_ms=2_000,
@@ -76,7 +76,7 @@ def fill(**overrides):
 def markout(**overrides):
     values = dict(
         event_type="MARKOUT",
-        strategy="FAST_STRUCTURAL_ARB",
+        strategy="STRUCTURAL_ARB_ENGINE",
         model_sha=SHA_A,
         recorded_ts_ms=3_030,
         exchange_ts_ms=3_000,
@@ -140,7 +140,7 @@ class CanonicalExecutionLedgerTest(unittest.TestCase):
     def test_position_mark_requires_causal_executable_liquidation_value(self) -> None:
         position_mark = ledger.LedgerEvent(
             event_type="POSITION_MARK",
-            strategy="MICRO_TAKER",
+            strategy="CRYPTO_SETTLEMENT_ENGINE",
             model_sha=SHA_A,
             recorded_ts_ms=4_030,
             exchange_ts_ms=4_000,
@@ -154,7 +154,7 @@ class CanonicalExecutionLedgerTest(unittest.TestCase):
         with self.assertRaisesRegex(ledger.LedgerContractError, "missing_executable_liquidation_value"):
             ledger.LedgerEvent(
                 event_type="POSITION_MARK",
-                strategy="MICRO_TAKER",
+                strategy="CRYPTO_SETTLEMENT_ENGINE",
                 model_sha=SHA_A,
                 recorded_ts_ms=4_030,
                 exchange_ts_ms=4_000,
@@ -165,7 +165,7 @@ class CanonicalExecutionLedgerTest(unittest.TestCase):
         with self.assertRaisesRegex(ledger.LedgerContractError, "missing_causal_book"):
             ledger.LedgerEvent(
                 event_type="POSITION_MARK",
-                strategy="MICRO_TAKER",
+                strategy="CRYPTO_SETTLEMENT_ENGINE",
                 model_sha=SHA_A,
                 recorded_ts_ms=4_030,
                 receive_ts_ms=4_010,
@@ -223,7 +223,7 @@ class CanonicalExecutionLedgerTest(unittest.TestCase):
     def test_final_requires_realized_pnl(self) -> None:
         ledger.LedgerEvent(
             event_type="FINAL",
-            strategy="GRAPH_RV",
+            strategy="STRUCTURAL_ARB_ENGINE",
             model_sha=SHA_A,
             recorded_ts_ms=5_000,
             final_pnl=-0.25,
@@ -232,7 +232,7 @@ class CanonicalExecutionLedgerTest(unittest.TestCase):
         with self.assertRaisesRegex(ledger.LedgerContractError, "final:missing_pnl"):
             ledger.LedgerEvent(
                 event_type="FINAL",
-                strategy="GRAPH_RV",
+                strategy="STRUCTURAL_ARB_ENGINE",
                 model_sha=SHA_A,
                 recorded_ts_ms=5_000,
             ).validate()
@@ -240,7 +240,7 @@ class CanonicalExecutionLedgerTest(unittest.TestCase):
     def test_inventory_split_is_explicit_and_cannot_create_pnl(self) -> None:
         event = ledger.LedgerEvent(
             event_type="INVENTORY_SPLIT",
-            strategy="micro_maker_pro",
+            strategy="CRYPTO_SETTLEMENT_ENGINE",
             model_sha=SHA_A,
             recorded_ts_ms=5_000,
             market_id="market-1",
@@ -257,7 +257,7 @@ class CanonicalExecutionLedgerTest(unittest.TestCase):
     def test_inventory_liquidation_requires_causal_book_and_authoritative_fee(self) -> None:
         event = ledger.LedgerEvent(
             event_type="INVENTORY_LIQUIDATION",
-            strategy="MICRO_MAKER_PRO",
+            strategy="CRYPTO_SETTLEMENT_ENGINE",
             model_sha=SHA_A,
             recorded_ts_ms=5_000,
             exchange_ts_ms=4_990,

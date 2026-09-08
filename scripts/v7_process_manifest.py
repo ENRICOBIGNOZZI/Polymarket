@@ -12,7 +12,7 @@ from typing import Any
 SCHEMA = "polymarket_v7_process_manifest_v1"
 AUTHORITY_KEYS = {
     "global_portfolio_coordinator", "capital_allocator", "risk_engine", "oms",
-    "inventory", "ledger", "promotion", "runtime_identity",
+    "inventory", "ledger", "runtime_identity",
 }
 
 
@@ -44,14 +44,13 @@ def resolve(root: Path, manifest: dict[str, Any]) -> dict[str, Any]:
         or manifest.get("authenticated_execution") is not False
         or manifest.get("real_order_submission") is not False
         or manifest.get("real_capital_at_risk") is not False
-        or manifest.get("automatic_promotion") is not False
         or manifest.get("launcher") != "scripts/paper_v7_execution_loop.sh"
         or manifest.get("authority_registry") != "config/v7_authority_registry.json"
     ):
         raise ProcessManifestError("manifest_identity_or_safety")
     profiles = manifest.get("profiles")
     rows = manifest.get("processes")
-    if not isinstance(profiles, dict) or not isinstance(rows, list) or len(rows) != 25:
+    if not isinstance(profiles, dict) or not isinstance(rows, list) or len(rows) != 23:
         raise ProcessManifestError("profile_or_process_count")
     resolved: list[dict[str, Any]] = []
     ids: set[str] = set()
@@ -155,12 +154,11 @@ def resolve(root: Path, manifest: dict[str, Any]) -> dict[str, Any]:
         for key in AUTHORITY_KEYS
     }
     expected_counts = {key: 1 for key in AUTHORITY_KEYS}
-    expected_counts["promotion"] = 0
     if authority_counts != expected_counts:
         raise ProcessManifestError(f"long_lived_authority_counts:{authority_counts}")
     launcher = (root / manifest["launcher"]).read_text(encoding="utf-8")
     actual_logs = launcher_logs(launcher)
-    if len(actual_logs) != 23 or len(set(actual_logs)) != 23 or set(actual_logs) != declared_logs:
+    if len(actual_logs) != 21 or len(set(actual_logs)) != 21 or set(actual_logs) != declared_logs:
         raise ProcessManifestError("launcher_manifest_parity")
     return {
         "schema": "polymarket_v7_process_manifest_validation_v1",

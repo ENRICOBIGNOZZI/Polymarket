@@ -44,7 +44,8 @@ using pm::v7::Side;
 constexpr std::size_t kWsOutputCapacity = 512;
 constexpr double kPriceScaleE4 = 10'000.0;
 constexpr double kMicrounitsPerShare = 1'000'000.0;
-constexpr std::string_view kStrategy = "MICRO_MAKER_PRO";
+constexpr std::string_view kStrategy = "CRYPTO_SETTLEMENT_ENGINE";
+constexpr std::string_view kComponent = "professional_maker";
 constexpr std::array<int, 5> kHorizonSeconds{{1, 10, 45, 60, 300}};
 constexpr std::array<std::string_view, 5> kHorizonLabels{{"1s", "10s", "45s", "60s", "300s"}};
 
@@ -479,6 +480,9 @@ private:
         const auto& event = value.as_object();
         if (text(find_value(event, "model_sha")) != model_sha_
             || text(find_value(event, "strategy")) != kStrategy) return;
+        const auto* source_metadata = find_value(event, "metadata");
+        if (source_metadata == nullptr || !source_metadata->is_object()
+            || text(find_value(source_metadata->as_object(), "component")) != kComponent) return;
         const std::string type = text(find_value(event, "event_type"));
         if (type == "FILL") {
             PendingFill fill;
@@ -546,6 +550,8 @@ private:
         values[kHorizonLabels[horizon_index]] = markout.pnl_per_share;
         event["markouts"] = std::move(values);
         json::object metadata;
+        metadata["component"] = kComponent;
+        metadata["model_family"] = kComponent;
         metadata["maker_markout_observer"] = true;
         metadata["research_evidence_only"] = true;
         metadata["ledger_writer_authority"] = false;

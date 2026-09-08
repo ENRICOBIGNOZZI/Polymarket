@@ -27,14 +27,13 @@ class V7SingleWriterContractTest(unittest.TestCase):
             self.assertIn(required, text)
         self.assertNotIn('trap cleanup EXIT INT TERM', text)
 
-    def test_champion_points_only_to_v7_runtime(self) -> None:
-        manifest = json.loads((ROOT / "config/live_champion.json").read_text(encoding="utf-8"))
-        self.assertTrue(manifest["enabled"])
-        self.assertEqual(manifest["version"], 7)
-        self.assertEqual(manifest["loop"], "scripts/paper_v7_execution_loop.sh")
-        self.assertTrue(manifest["paper_only"])
-        self.assertFalse(manifest["authenticated_execution"])
-        self.assertFalse(manifest["real_order_submission"])
+    def test_live_scope_has_one_v7_execution_owner(self) -> None:
+        scope = json.loads((ROOT / "config/v7_live_model_scope.json").read_text(encoding="utf-8"))
+        self.assertEqual(scope["version"], 7)
+        self.assertTrue(scope["paper_only"])
+        self.assertFalse(scope["real_order_submission"])
+        self.assertTrue(scope["runtime_invariants"]["single_execution_owner"])
+        self.assertEqual(scope["runtime_invariants"]["global_portfolio_coordinator"], "V7_GLOBAL_PORTFOLIO_COORDINATOR")
 
     def test_every_main_sha_gets_exact_single_writer_proof(self) -> None:
         workflow = (ROOT / ".github/workflows/private-runtime-single-writer-validation.yml").read_text(encoding="utf-8")

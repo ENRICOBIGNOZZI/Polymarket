@@ -305,10 +305,7 @@ void populate_execution_cells(MakerModelSnapshot& model) noexcept {
             const std::uint32_t clusters = std::max(order_clusters, markout_clusters);
             const auto* markout_observations = find_value(
                 group, "adverse_markout_observations");
-            // Read the canonical durable-learning field while retaining the
-            // legacy name for old test/replay artifacts.
-            const std::uint32_t markouts = count(markout_observations != nullptr
-                ? markout_observations : find_value(group, "adverse_markout_n"));
+            const std::uint32_t markouts = count(markout_observations);
 
             const double raw_fill = std::clamp(
                 number(find_value(group, "fill_probability"), global_fill), 1e-6, 1.0 - 1e-6);
@@ -350,7 +347,7 @@ void populate_execution_cells(MakerModelSnapshot& model) noexcept {
             // Outcome labels do not alter passive queue mechanics. A toxic
             // JOIN/SELL observation on YES is therefore a valid conservative
             // risk floor for JOIN/SELL on NO (and vice versa), but never fill
-            // evidence and never promotion credit.
+            // evidence and never execution authority.
             cell.adverse_markout_per_share = symmetric_markouts > 0
                 ? std::max(exact_adverse, symmetric_adverse) : exact_adverse;
             cell.fill_weight = fill_weight;

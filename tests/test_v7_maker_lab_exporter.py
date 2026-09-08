@@ -19,7 +19,7 @@ class MakerLabExporterTests(unittest.TestCase):
             ledger = Path(tmp) / "execution.jsonl"
             ledger.write_text(json.dumps({
                 "event_type": "MARKOUT",
-                "strategy": "MICRO_MAKER_PRO",
+                "strategy": "CRYPTO_SETTLEMENT_ENGINE",
                 "model_sha": "b" * 40,
                 "paper_only": True,
                 "authenticated_execution": False,

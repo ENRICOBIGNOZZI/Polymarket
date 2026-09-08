@@ -15,11 +15,8 @@
 
 namespace pm::v7::external_fair {
 
-// V2 extends ExternalVenueEvent with derivative-context fields; V3 extends
-// ExternalAssetSnapshot with the Binance USD-M context slot. Replayers retain
-// explicit V1/V2 compatibility; writers never reuse an old payload ABI.
+// Current external evidence tape schema. Research runs do not replay older payload ABIs.
 inline constexpr std::uint32_t kExternalTapeSchemaVersion = 3;
-inline constexpr std::uint32_t kExternalTapeOldestReplaySchemaVersion = 1;
 inline constexpr std::size_t kExternalTapePayloadBytes = 512;
 inline constexpr std::size_t kExternalTapeQueueCapacity = 4096;
 inline constexpr std::size_t kExternalRawTapePayloadBytes = 32 * 1024;
@@ -157,7 +154,7 @@ template <class T>
     return true;
 }
 
-// Rotation is opt-in for legacy replay callers. Production per-venue tapes
+// Rotation is opt-in. Production per-venue tapes
 // use bounded closed segments; only the file writer performs filesystem work.
 struct TapeSegmentOptions {
     std::uint64_t maximum_bytes = 0;

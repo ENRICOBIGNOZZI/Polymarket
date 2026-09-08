@@ -200,7 +200,7 @@ def analyze(events: Sequence[Any], sha: str, *, test_fraction: float = 0.25, emb
     return {
         "schema": "polymarket_v7_learned_execution_research_v4", "model_sha": sha,
         "paper_only": True, "authenticated_execution": False, "read_only": True,
-        "promotion_allowed": False, "decision": "MORE_EVIDENCE_REQUIRED",
+        "research_only": True, "decision": "MORE_EVIDENCE_REQUIRED",
         "causal_contract": {
             "predictors_from": "ORDER_SUBMITTED_only", "missing_executable_book_inputs": "exclude_not_zero_impute",
             "exact_execution_lineage": "strategy_order_fill_markout_token_side_leg_bundle",

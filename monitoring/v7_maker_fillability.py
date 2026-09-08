@@ -19,7 +19,8 @@ from collections import Counter, defaultdict
 from pathlib import Path
 from typing import Any, Iterable
 
-STRATEGY = "MICRO_MAKER_PRO"
+STRATEGY = "CRYPTO_SETTLEMENT_ENGINE"
+COMPONENT = "professional_maker"
 DEFAULT_SUBMISSION_LATENCY_MS = 1.0
 DEFAULT_EXPECTED_QUEUE_MULTIPLIER = 1.25
 DEFAULT_UPPER_QUEUE_MULTIPLIER = 1.50
@@ -99,7 +100,8 @@ def _read_ledger(path: Path, model_sha: str | None) -> tuple[list[dict[str, Any]
             except json.JSONDecodeError:
                 invalid += 1
                 continue
-            if not isinstance(row, dict) or str(row.get("strategy") or "") != STRATEGY:
+            if (not isinstance(row, dict) or str(row.get("strategy") or "") != STRATEGY
+                    or _metadata(row).get("component") != COMPONENT):
                 continue
             sha = str(row.get("model_sha") or "")
             if sha:
@@ -252,9 +254,9 @@ def _root_cause(funnel: dict[str, int], orders: list[dict[str, Any]]) -> tuple[s
     if funnel["fill_opportunity_pessimistic"] > 0 and funnel["full_fills"] + funnel["partial_fills"] == 0:
         return "PESSIMISTIC_OPPORTUNITY_WITHOUT_FILL", "INSUFFICIENT_EVIDENCE", "deterministic_exact_ws_replay"
     if pess < 0.05:
-        return "QUEUE_COMPETITION_OR_LIFETIME", "NO", "single_dimension_lifetime_or_placement_challenger"
+        return "QUEUE_COMPETITION_OR_LIFETIME", "NO", "single_dimension_lifetime_or_placement_candidate"
     if cancelled_before_flow / n > 0.50:
-        return "LIFETIME_OR_CHURN", "NO", "ordinary_quote_lifetime_challenger"
+        return "LIFETIME_OR_CHURN", "NO", "ordinary_quote_lifetime_candidate"
     return "DATA_ACCUMULATION", "NO", "continue_bounded_paper_exploration"
 
 

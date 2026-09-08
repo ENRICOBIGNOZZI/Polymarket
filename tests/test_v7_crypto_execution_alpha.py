@@ -75,16 +75,20 @@ def envelope(*, market: str, action: str = "MAKE", ev: float = 1.0, quality: flo
     }
 
 
-def test_frozen_external_cancel_official_v3_evidence_is_pinned() -> None:
-    official = CONFIG["execution_alpha"]["cancel"]["official_v3_evidence"]
-    assert official["promotion_boundary_ms"] == 1788781327887
-    assert official["protocol_sha256"] == "85e54afef180426dab0519c701f764ea5863076ac88566648122553576bd8a04"
-    assert official["baseline_report_sha256"] == "c2cb36b2df6de713d8d9c630eac6685fb5f935fa3bdffffa0b8ec321cbe56d96"
-    assert official["baseline_manifest_sha256"] == "2619efb8d80daaf583ad24df6c9bcf2bc05dc868dfa3db7139fcd806a28a3f4a"
-    assert official["minimum_independent_markets"] == 30
-    assert official["minimum_avoidable_fill_events"] == 50
-    assert official["require_positive_market_cluster_bootstrap_lower"] is True
-
+def test_external_cancel_research_rule_is_direct_and_causal() -> None:
+    cancel = CONFIG["execution_alpha"]["cancel"]
+    rule = cancel["research_rule"]
+    assert cancel["research_only"] is True
+    assert rule["rule_id"] == "btc-m5-external-cancel-v1"
+    assert rule["shock_source"] == "BINANCE_SPOT_TRADES"
+    assert rule["confirmation_source"] == "COINBASE_SPOT_TOP_OF_BOOK"
+    assert rule["shock_window_ms"] == 100
+    assert rule["minimum_absolute_log_return_bp"] == 0.3
+    assert rule["trigger_cooldown_ms"] == 250
+    assert rule["trigger_grid_ms"] == 25
+    assert rule["maximum_signal_age_ms"] == 100
+    assert rule["receive_time_global_merge_required"] is True
+    assert rule["same_timestamp_atomic_group_required"] is True
 
 def test_packet_enforces_receive_time_and_action_identity() -> None:
     value = packet("MAKE")
@@ -133,7 +137,7 @@ def test_make_and_take_compete_on_the_same_market() -> None:
     assert result["actions"]["TAKE"]["conservative_ev"] == 1.2
 
 
-def test_information_rank_rewards_uncertainty_without_promotion_credit() -> None:
+def test_information_rank_rewards_uncertainty_in_research() -> None:
     low = envelope(market="m1", action="TAKE", key="low")
     high = envelope(market="m2", action="TAKE", key="high")
     low["exploration"] = {"information_score": 1.0, "point_expected_wealth_change": 0.1}
@@ -144,9 +148,9 @@ def test_information_rank_rewards_uncertainty_without_promotion_credit() -> None
 
 
 if __name__ == "__main__":
-    test_frozen_external_cancel_official_v3_evidence_is_pinned()
+    test_external_cancel_research_rule_is_direct_and_causal()
     test_packet_enforces_receive_time_and_action_identity()
     test_market_selection_concentrates_budget_on_top_fraction()
     test_market_score_exposes_component_decomposition()
     test_make_and_take_compete_on_the_same_market()
-    test_information_rank_rewards_uncertainty_without_promotion_credit()
+    test_information_rank_rewards_uncertainty_in_research()

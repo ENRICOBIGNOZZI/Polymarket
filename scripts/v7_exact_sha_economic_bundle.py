@@ -133,7 +133,6 @@ def build_bundle(
             "authenticated_execution": False,
             "real_order_submission": False,
             "real_capital_at_risk": False,
-            "automatic_promotion": False,
         },
         "identity": {
             "config": config_identity,

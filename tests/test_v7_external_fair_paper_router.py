@@ -94,6 +94,7 @@ def main() -> None:
     assert router.parse_book(raw_book, receive_ms) is None
     policy = {
         "minimum_entry_tte_seconds": 5.0, "maximum_entry_tte_seconds": 60.0,
+        "tte_bucket_policy": [{"id":"test-5-60","minimum_seconds":5.0,"maximum_seconds":60.0,"action":"TAKER_SHADOW"}],
         "maximum_model_market_disagreement": 0.20,
         "minimum_robust_ev_per_share": 0.001, "base_execution_risk_per_share": 0.0005,
     }
@@ -455,6 +456,7 @@ def main() -> None:
             limit_price=0.4, intended_action="TAKE", intended_size=10.0,
             order_state="SUBMITTED_SHADOW",
             metadata={
+                "component": "crypto_informed_taker", "model_family": "crypto_informed_taker",
                 "coordinator_receipt": settlement_receipt,
                 "paper_exploration": True,
                 "paper_bootstrap_probe": False,
@@ -475,6 +477,7 @@ def main() -> None:
             fill_price=0.4, filled_size=10.0, complete=True,
             fee=0.2, fee_source="test:authoritative",
             metadata={
+                "component": "crypto_informed_taker", "model_family": "crypto_informed_taker",
                 "coordinator_receipt": settlement_receipt,
                 "paper_exploration": True,
                 "paper_bootstrap_probe": False,
@@ -588,6 +591,7 @@ def main() -> None:
             fill_price=0.2, filled_size=5.0, complete=True,
             fee=0.05, fee_source="test:authoritative",
             metadata={
+                "component": "crypto_informed_taker", "model_family": "crypto_informed_taker",
                 "coordinator_receipt": receipt, "paper_exploration": True,
                 "paper_bootstrap_probe": True,
                 "economic_authority": "PAPER_EXPLORATION",
@@ -671,6 +675,7 @@ def main() -> None:
             limit_price=0.25, intended_action="TAKE", intended_size=4.0,
             order_state="SUBMITTED_SHADOW",
             metadata={
+                "component": "crypto_informed_taker", "model_family": "crypto_informed_taker",
                 "coordinator_receipt": receipt, "paper_exploration": True,
                 "paper_bootstrap_probe": True,
                 "economic_authority": "PAPER_EXPLORATION",
@@ -763,11 +768,11 @@ def main() -> None:
         observation["fair_models"] = {
             "hybrid_fair": {"yes": 0.70},
             "external_only_fair": observation["fair"],
-            "registered_challenger": {
+            "research_model": {
                 "valid": True,
                 "yes": 0.75,
-                "explicit_registry_model_applied": True,
-                "probability_model_id": "frozen-challenger",
+                "research_model": True, "research_model_state": "FROZEN_INFERENCE_ONLY",
+                "probability_model_id": "frozen-research-model",
                 "probability_model_hash": "f" * 64,
             },
         }
@@ -778,8 +783,8 @@ def main() -> None:
         pending = next(iter(collector.state["pending_forecasts"].values()))
         assert abs(pending["market_yes"] - 0.80) < 1e-12
         assert 0.60 < pending["hybrid_yes"] < 0.80
-        assert pending["registered_challenger_yes"] == 0.75
-        assert pending["registered_challenger_model_hash"] == "f" * 64
+        assert pending["research_model_yes"] == 0.75
+        assert pending["research_model_model_hash"] == "f" * 64
         assert pending["market_mid_source"] == "LIVE_COMPLEMENT_CONSISTENT_CLOB_BATCH"
         # Simulate an exact-SHA cutover before settlement. The ephemeral state
         # is intentionally unavailable; pending identity must come from the
@@ -815,8 +820,8 @@ def main() -> None:
         assert final["actual_yes"] == 1.0
         assert final["model_brier"] > final["market_brier"]
         assert final["external_only_brier"] > final["hybrid_brier"]
-        assert final["registered_challenger_brier"] < final["external_only_brier"]
-        assert final["registered_challenger_model_hash"] == "f" * 64
+        assert final["research_model_brier"] < final["external_only_brier"]
+        assert final["research_model_model_hash"] == "f" * 64
         assert final["settlement_provider"] == "POLYMARKET_GAMMA_PUBLIC"
         assert final["settlement_endpoint"].endswith("/markets/forecast-market")
         assert final["settlement_closed"] is True
@@ -934,7 +939,9 @@ def test_actual_step_distinguishes_missing_reference_from_no_edge() -> None:
         collector.drain_path = mock.Mock()
         collector.drain_path.exists.return_value = False
         collector.state = {key: {"complete": True} for key in checks}
-        collector.policy = {"minimum_entry_tte_seconds": 5.0, "maximum_entry_tte_seconds": 300.0, "maximum_model_market_disagreement": 0.2}; collector.probe_policy = None
+        collector.policy = {"minimum_entry_tte_seconds": 5.0, "maximum_entry_tte_seconds": 300.0,
+                            "tte_bucket_policy": [{"id":"test-5-300","minimum_seconds":5.0,"maximum_seconds":300.0,"action":"TAKER_SHADOW"}],
+                            "maximum_model_market_disagreement": 0.2}; collector.probe_policy = None
         collector.last_book_error = ""; collector.last_attempt_reason = ""
         for name in ("record_forecast", "record_opportunity_set", "observe_positions", "reconcile_canonical_account", "observe_forecasts", "publish", "reject", "wait", "attempt"):
             setattr(collector, name, mock.Mock())

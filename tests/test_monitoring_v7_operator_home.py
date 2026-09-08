@@ -51,7 +51,6 @@ class V7OperatorHomeTest(unittest.TestCase):
         self.assertIn("Crypto Settlement", serialized)
         for ambiguous in (
             "Components and Research", "PnL by Component / Research Family",
-            "Ranking / PCA / Local Factor Shadow Evidence",
             "12-model target operational", "Canonical Final PnL by Strategy",
         ):
             self.assertNotIn(ambiguous, serialized)
@@ -60,10 +59,7 @@ class V7OperatorHomeTest(unittest.TestCase):
         self.assertFalse((dashboards / "polymarket-v7-maker-fillability.json").exists())
 
     def test_alert_catalog_has_only_meaningful_operational_failures(self) -> None:
-        catalog = json.loads((ROOT / "config/v7_runtime_alerts.json").read_text())
         alerts = (ROOT / "monitoring/v7_alerts.yml").read_text()
-        self.assertEqual(catalog["policy"], "meaningful_failures_only")
-        self.assertTrue(catalog["suppress_zero_trade_windows"])
         for alert in (
             "PolymarketV7ExecutionOwnerDown",
             "PolymarketV7DuplicateWriter",
@@ -80,7 +76,6 @@ class V7OperatorHomeTest(unittest.TestCase):
             else:
                 self.assertIn(alert, alerts)
         self.assertIn("PolymarketV7AlgorithmScopeInvalid", alerts)
-        self.assertIn("polymarket_v7_legacy_algorithm_count != 0", alerts)
         self.assertNotIn("ZeroTrades", alerts)
         self.assertNotIn("NoFills", alerts)
 

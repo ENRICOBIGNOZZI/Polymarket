@@ -69,27 +69,6 @@ def engine_equity(
     return value, bool(state.get("killed")), source, fatal
 
 
-def _compatibility_views(
-    engine_rows: dict[str, dict[str, Any]], reserve: float,
-) -> dict[str, dict[str, Any]]:
-    """Temporary drain adapter; never grants component capital authority."""
-    rows = {
-        "external": dict(engine_rows["CRYPTO_SETTLEMENT_ENGINE"]),
-        "hard_arb": dict(engine_rows["STRUCTURAL_ARB_ENGINE"]),
-        "reserve": {
-            "budget": reserve, "equity": reserve, "source": "reserve",
-            "killed": False, "fatal_to_portfolio": False,
-        },
-    }
-    for name in ("micro_maker", "fast_structural"):
-        rows[name] = {
-            "budget": 0.0, "equity": 0.0,
-            "source": "zero_authority_budget", "killed": False,
-            "fatal_to_portfolio": False,
-        }
-    return rows
-
-
 def assess(run_root: Path, allocation_manifest: Path, *, max_drawdown: float) -> dict[str, Any]:
     manifest = read_json(allocation_manifest)
     budgets = manifest.get("engine_budgets") if isinstance(manifest.get("engine_budgets"), dict) else {}
@@ -130,7 +109,6 @@ def assess(run_root: Path, allocation_manifest: Path, *, max_drawdown: float) ->
     peak = max(account, float(previous.get("peak", account)), equity)
     drawdown = max(0.0, 1.0 - equity / peak) if peak > 0 else 1.0
     killed = fatal_state or drawdown >= max(0.0, min(1.0, float(max_drawdown)))
-    compatibility = _compatibility_views(states, reserve)
     report = {
         "schema": "polymarket_v7_portfolio_guard_v2",
         "timestamp": int(time.time()),
@@ -148,13 +126,6 @@ def assess(run_root: Path, allocation_manifest: Path, *, max_drawdown: float) ->
         "locally_killed_engines": locally_killed,
         "fatal_engines": fatal_engines,
         "engines": states,
-        "temporary_component_drain_views": compatibility,
-        # Temporary compatibility fields are consumed only by the pre-v3
-        # cutover archiver. They grant no authority and have an explicit gate.
-        "sleeves": compatibility,
-        "locally_killed_sleeves": [],
-        "fatal_sleeves": [],
-        "temporary_compatibility_deletion_gate": "CUTOVER_ARCHIVER_V3_PROVEN",
     }
     atomic_json(run_root / "control" / "portfolio_state.json", report)
     kill_path = run_root / "control" / "KILL"

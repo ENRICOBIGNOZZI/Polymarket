@@ -11,7 +11,7 @@ from typing import Any
 ROLES = {"EXACT_SETTLEMENT_SOURCE", "SETTLEMENT_OBSERVABILITY_SOURCE", "SEMANTIC_EQUIVALENT_MARKET", "LOGICAL_CONSTRAINT_SOURCE", "CORRELATED_PREDICTOR", "MICROSTRUCTURE_PREDICTOR", "VOLATILITY_PREDICTOR", "CONTEXTUAL_EVENT_SOURCE"}
 EVENT_KINDS = {"BOOK_SNAPSHOT", "BOOK_DELTA", "BEST_BID_ASK", "TRADE", "MARK_PRICE", "INDEX_PRICE", "FUNDING", "OPEN_INTEREST", "LIQUIDATION", "OPTION_TICKER", "OPTION_SURFACE", "VOLATILITY_INDEX", "ORACLE_OBSERVATION", "PREDICTION_MARKET_BOOK", "PREDICTION_MARKET_TRADE", "MARKET_METADATA", "SPORTS_STATE", "SPORTS_EVENT", "OFFICIAL_ANNOUNCEMENT", "CORRECTION", "HEARTBEAT", "SOURCE_STATUS"}
 REQUIRED = {"source_id", "provider", "venue", "asset", "instrument_id", "instrument_type", "channel", "event_kinds", "role", "transport", "credentials_required", "enabled"}
-DENIED_AUTHORITY = {"execution_authority", "capital_authority", "oms_authority", "ledger_writer_authority", "promotion_authority"}
+DENIED_AUTHORITY = {"execution_authority", "capital_authority", "oms_authority", "ledger_writer_authority"}
 
 
 class SourceRegistryError(ValueError):
@@ -64,9 +64,6 @@ def validate(value: dict[str, Any]) -> dict[str, Any]:
             raise SourceRegistryError("non_btc_source_must_start_registered_not_launched")
         if row["credentials_required"] and not isinstance(row.get("required_env"), list):
             raise SourceRegistryError("source_registry_credential_contract_missing")
-    aliases = value.get("environment_compatibility")
-    if not isinstance(aliases, dict) or any(not key.startswith("PM_V7_") or not isinstance(value, list) for key, value in aliases.items()):
-        raise SourceRegistryError("source_registry_environment_compatibility_invalid")
     return {"schema": value["schema"], "source_count": len(sources), "source_ids": sorted(ids), "registry_sha256": _canonical_hash(value)}
 
 

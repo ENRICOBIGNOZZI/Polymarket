@@ -1,64 +1,54 @@
 {
-  "schema": "polymarket_v7_monitoring_manifest_v3",
-  "version": 7,
-  "paper_only": true,
   "authenticated_execution": false,
-  "real_order_submission": false,
-  "real_capital_at_risk": false,
-  "run_root": "runs/paper_v7_live",
-  "live_algorithms": ["CRYPTO_SETTLEMENT_ENGINE", "STRUCTURAL_ARB_ENGINE"],
-  "live_algorithm_count": 2,
-  "legacy_algorithm_count": 0,
   "exporter": {
-    "path": "monitoring/exporter_v7.py",
-    "host": "127.0.0.1",
-    "port": 9108,
+    "external_fair_path": "/external-fair.json",
     "health_path": "/healthz",
-    "metrics_path": "/metrics",
-    "maker_fillability_path": "/maker-fillability.json",
-    "external_fair_path": "/external-fair.json"
-  },
-  "prometheus": {
-    "config": "monitoring/prometheus_v7.yml",
-    "alert_rules": "monitoring/v7_alerts.yml",
     "host": "127.0.0.1",
-    "port": 9090
+    "maker_fillability_path": "/maker-fillability.json",
+    "metrics_path": "/metrics",
+    "path": "monitoring/exporter_v7.py",
+    "port": 9108
+  },
+  "freshness_seconds": {
+    "economics": 180,
+    "external_fair_oracle": 2,
+    "portfolio": 30,
+    "runtime": 180,
+    "trade_recorder": 180,
+    "trade_tape": 180
   },
   "grafana": {
     "canonical_operator_home": true,
-    "dashboard_uid": "polymarket-v7",
     "dashboard_file": "monitoring/grafana/dashboards/polymarket-v7.json",
-    "external_fair_dashboard": "monitoring/grafana/dashboards/polymarket-v7-external-fair.json",
-    "latency_dashboard": "monitoring/grafana/dashboards/polymarket-v7-latency.json",
-    "datasource_uid": "prometheus-v7",
+    "dashboard_uid": "polymarket-v7",
     "datasource_file": "monitoring/grafana/provisioning/datasources/prometheus-v7.yml",
-    "provider_file": "monitoring/grafana/provisioning/dashboards/v7.yml",
+    "datasource_uid": "prometheus-v7",
+    "external_fair_dashboard": "monitoring/grafana/dashboards/polymarket-v7-external-fair.json",
     "host": "127.0.0.1",
-    "port": 3000
+    "latency_dashboard": "monitoring/grafana/dashboards/polymarket-v7-latency.json",
+    "port": 3000,
+    "provider_file": "monitoring/grafana/provisioning/dashboards/v7.yml"
   },
-  "supervision": {
-    "policy": "config/v7_runtime_supervision.json",
-    "supervisor": "ops/v7_runtime_supervisor.py",
-    "entrypoint": "ops/v7_service_entrypoint.sh",
-    "status": "control/supervisor_status.json",
-    "single_writer_metric": "polymarket_v7_single_writer_ok",
-    "exact_sha_metric": "polymarket_v7_exact_sha_ok",
-    "bounded_restart_metric": "polymarket_v7_restart_count_window",
-    "live_algorithm_scope_metric": "polymarket_v7_live_algorithm_scope_wired",
-    "live_algorithms_expected": 2,
-    "legacy_algorithms_expected": 0,
-    "adaptive_universe_config": "config/v7_adaptive_universe.json",
-    "adaptive_universe_status": "universe/status.json",
-    "fee_reward_registry": "control/fee_reward_registry.json",
-    "maker_cohort_rotation_status": "micro_maker/rotation_status.json",
-    "structural_relations": "structural_relations/verified_relations.csv"
+  "legacy_algorithm_count": 0,
+  "live_algorithm_count": 2,
+  "live_algorithms": [
+    "CRYPTO_SETTLEMENT_ENGINE",
+    "STRUCTURAL_ARB_ENGINE"
+  ],
+  "paper_only": true,
+  "prometheus": {
+    "alert_rules": "monitoring/v7_alerts.yml",
+    "config": "monitoring/prometheus_v7.yml",
+    "host": "127.0.0.1",
+    "port": 9090
   },
+  "real_capital_at_risk": false,
+  "real_order_submission": false,
   "required_surfaces": [
     "control/runtime_status.json",
-    "control/incumbent_identity.json",
+    "control/runtime_identity.json",
     "control/portfolio_state.json",
     "control/allocations/manifest.json",
-    "control/evidence_capital_allocator.json",
     "control/fee_reward_registry.json",
     "control/retention_status.json",
     "control/crypto_settlement_engine_snapshot.json",
@@ -74,12 +64,31 @@
     "trade_tape.csv",
     "trade_recorder_status.json"
   ],
-  "freshness_seconds": {"portfolio": 30, "runtime": 180, "economics": 180, "trade_tape": 180, "trade_recorder": 180, "external_fair_oracle": 2},
   "retention": {
+    "canonical_ledger_mode": "immutable_checkpoint_never_delete",
+    "durable_archive_required_before_local_prune": true,
     "policy": "config/v7_data_retention.json",
     "runner": "monitoring/v7_retention.py",
-    "status": "control/retention_status.json",
-    "canonical_ledger_mode": "immutable_checkpoint_never_delete",
-    "durable_archive_required_before_local_prune": true
-  }
+    "status": "control/retention_status.json"
+  },
+  "run_root": "runs/paper_v7_live",
+  "schema": "polymarket_v7_monitoring_manifest_v3",
+  "supervision": {
+    "adaptive_universe_config": "config/v7_adaptive_universe.json",
+    "adaptive_universe_status": "universe/status.json",
+    "bounded_restart_metric": "polymarket_v7_restart_count_window",
+    "entrypoint": "ops/v7_service_entrypoint.sh",
+    "exact_sha_metric": "polymarket_v7_exact_sha_ok",
+    "fee_reward_registry": "control/fee_reward_registry.json",
+    "legacy_algorithms_expected": 0,
+    "live_algorithm_scope_metric": "polymarket_v7_live_algorithm_scope_wired",
+    "live_algorithms_expected": 2,
+    "maker_cohort_rotation_status": "micro_maker/rotation_status.json",
+    "policy": "config/v7_runtime_supervision.json",
+    "single_writer_metric": "polymarket_v7_single_writer_ok",
+    "status": "control/supervisor_status.json",
+    "structural_relations": "structural_relations/verified_relations.csv",
+    "supervisor": "ops/v7_runtime_supervisor.py"
+  },
+  "version": 7
 }

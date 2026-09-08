@@ -23,18 +23,16 @@ class V7LivePaperValidationContractTest(unittest.TestCase):
             "validation_state=READY_FOR_SUBSTANTIVE_PAPER_VALIDATION",
             "No substantive PAPER validation ran.",
             "scripts/v7_cutover_contract.py",
-            "scripts/v7_current_truth_audit.py",
             "scripts/v7_release_provenance.py",
-            "scripts/v7_live_canary_orchestrator.py",
             "scripts/paper_v7_execution_loop.sh",
             "polymarket_v7_trade_recorder",
             "scripts/v7_ledger_spool.py",
             "scripts/v7_canonical_economics.py",
             "scripts/v7_portfolio_guard.py",
             "economic_ready",
-            "promotion_ready",
+            "economic_evidence_ready",
             "Record economic readiness separately from PAPER deployment",
-            "PAPER deployment is a technical/safety evidence-collection state",
+            "PAPER deployment is a technical/safety research state",
             "Record immutable main-SHA validation result",
             "validated_main_sha=$VALIDATION_SHA",
             "paper_deployment_mode=evidence_collection",
@@ -82,66 +80,24 @@ class V7LivePaperValidationContractTest(unittest.TestCase):
     def test_cutover_contract_reads_v7_safety_authority(self) -> None:
         text = (ROOT / "scripts/v7_cutover_contract.py").read_text(encoding="utf-8")
         for required in (
-            '"config/operator_directives.json"',
-            '"latest_explicit_user_instruction"',
-            '"paper_v7_authorization"',
-            '"config/live_champion.json"',
-            '"scripts/paper_v7_execution_loop.sh"',
-            '"config/paper_v7.json"',
-            '"market_limit"',
-            '"fractional_kelly_ceiling"',
-            '"max_drawdown"',
-            '"authoritative_fee_required"',
-            '"shared_execution_ledger_required"',
-            '"single_canonical_ledger_writer"',
-            '"joint_fill_state_required_for_multileg"',
-            '"queue_never_grants_size"',
-            '"partial_unwind_required"',
-            '"cost_vector_required"',
-            '"config/v7_live_model_scope.json"',
-            '"polymarket_v7_live_algorithm_registry_v2"',
-            '"config/v7_polymarket_v2_contracts.json"',
-            '"config/v7_risk_tiers.json"',
-            '"config/v7_attestation_trust.json"',
-            '"config/v7_runtime_supervision.json"',
-            '"clob_v2_recovery"',
-            '"matching_engine_restart"',
-            '"order_heartbeat"',
-            '"order_heartbeat_expired"',
-            '"signer_rate_limit"',
-            '"quarantine_signer_and_reconcile"',
-            '"scripts/v7_execution_provenance.py"',
-            '"scripts/v7_dataset_manifest.py"',
-            '"scripts/v7_maker_probe_design.py"',
-            '"scripts/v7_experiment_registry.py"',
-            '"scripts/v7_protocol_fuzz.py"',
-            '"real_pnl_provenance_required"',
-            '"scripts/v7_real_pnl_scorecard.py"',
-            '"scripts/v7_generate_pnl_attestation.py"',
-            '"scripts/v7_verify_pnl_attestation.py"',
-            '"schemas/v7/public_pnl_attestation.schema.json"',
-            '"schemas/v7/attestation_trust.schema.json"',
-            '"real_pnl_economic_scorecard_required"',
-            '"scripts/v7_secret_scan.py"',
-            '"scripts/v7_entropy_secret_scan.py"',
-            '"scripts/v7_security_audit.py"',
+            '"config/operator_directives.json"', '"latest_explicit_user_instruction"',
+            '"paper_v7_authorization"', '"scripts/paper_v7_execution_loop.sh"',
+            '"config/paper_v7.json"', '"market_limit"', '"fractional_kelly_ceiling"',
+            '"max_drawdown"', '"single_canonical_ledger_writer"', '"cost_vector_required"',
+            '"config/v7_live_model_scope.json"', '"polymarket_v7_live_algorithm_registry_v2"',
+            '"config/v7_runtime_supervision.json"', '"scripts/v7_secret_scan.py"',
+            '"scripts/v7_entropy_secret_scan.py"', '"scripts/v7_security_audit.py"',
             '"scripts/v7_release_provenance.py"',
-            '"scripts/v7_live_canary_orchestrator.py"',
-            '"scripts/v7_reconcile_account.py"',
-            '"scripts/v7_world_class_scorecard.py"',
-            '"pre_canary_security"',
         ):
             self.assertIn(required, text)
 
-    def test_champion_is_one_safe_v7_runtime(self) -> None:
-        manifest = json.loads((ROOT / "config/live_champion.json").read_text(encoding="utf-8"))
-        self.assertTrue(manifest["enabled"])
-        self.assertEqual(manifest["version"], 7)
-        self.assertTrue(manifest["paper_only"])
-        self.assertFalse(manifest["authenticated_execution"])
-        self.assertFalse(manifest["real_order_submission"])
-        self.assertEqual(manifest["loop"], "scripts/paper_v7_execution_loop.sh")
-        self.assertEqual(manifest["config"], "config/paper_v7.json")
+    def test_live_scope_is_one_safe_v7_runtime(self) -> None:
+        scope = json.loads((ROOT / "config/v7_live_model_scope.json").read_text(encoding="utf-8"))
+        self.assertEqual(scope["version"], 7)
+        self.assertTrue(scope["paper_only"])
+        self.assertFalse(scope["authenticated_execution"])
+        self.assertFalse(scope["real_order_submission"])
+        self.assertTrue(scope["runtime_invariants"]["single_execution_owner"])
 
 
 if __name__ == "__main__":

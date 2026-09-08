@@ -26,19 +26,8 @@ from v7_execution_ledger import (
 )
 
 
-ENGINE_STRATEGIES = {
-    "CRYPTO_SETTLEMENT_FAIR": "CRYPTO_SETTLEMENT_ENGINE",
-    "CRYPTO_INFORMED_TAKER": "CRYPTO_SETTLEMENT_ENGINE",
-    "MICRO_MAKER_PRO": "CRYPTO_SETTLEMENT_ENGINE",
-    "PROFESSIONAL_MAKER": "CRYPTO_SETTLEMENT_ENGINE",
-    "FAST_STRUCTURAL": "STRUCTURAL_ARB_ENGINE",
-    "HARD_ARB": "STRUCTURAL_ARB_ENGINE",
-}
-RESEARCH_STRATEGIES = {
-    "GRAPH_RV", "MICRO_TAKER", "RANKING", "PCA", "LOCAL_FACTOR",
-    "WALLET_INTELLIGENCE", "MARKET_OPEN", "OSINT", "SPORTS_LATENCY",
-    "CROSS_PLATFORM",
-}
+ENGINE_IDS = {"CRYPTO_SETTLEMENT_ENGINE", "STRUCTURAL_ARB_ENGINE"}
+
 CANDIDATE_EVENTS = {"CANDIDATE", "OPPORTUNITY"}
 RISK_CREATING_EVENTS = {"ORDER_SUBMITTED", "FILL", "INVENTORY_SPLIT"}
 
@@ -125,21 +114,15 @@ def _authority_route(run_root: Path, event: LedgerEvent) -> str:
     strategy = event.strategy.upper()
     payload = event.to_dict()
     filename = f"{event.recorded_ts_ms:013d}.{event.record_id}.json"
-    if strategy in RESEARCH_STRATEGIES:
-        _atomic_payload(run_root / "research" / "evidence", filename, payload)
-        return "RESEARCH_EVIDENCE"
-    engine_id = ENGINE_STRATEGIES.get(strategy)
-    if engine_id is None:
-        return "APPEND"
+    if strategy not in ENGINE_IDS:
+        _atomic_payload(run_root / "opportunities" / "quarantine", filename, payload)
+        return "QUARANTINED"
+    engine_id = strategy
     if event.event_type in CANDIDATE_EVENTS:
-        payload["ingress"] = {
-            "schema": "polymarket_v7_opportunity_ingress_v1",
-            "engine_id": engine_id,
-            "owner": "V7_GLOBAL_PORTFOLIO_COORDINATOR",
-            "temporary_adapter": "V7_LEDGER_SPOOL_CANDIDATE_INGRESS",
-        }
-        _atomic_payload(run_root / "opportunities" / "inbox", filename, payload)
-        return "OPPORTUNITY_INGRESS"
+        # Current producers publish canonical OpportunityEnvelope objects directly.
+        # A candidate arriving through the ledger spool is a non-canonical authority path.
+        _atomic_payload(run_root / "opportunities" / "quarantine", filename, payload)
+        return "QUARANTINED"
     metadata = event.metadata if isinstance(event.metadata, dict) else {}
     if metadata.get("cutover") is True and event.event_type in {
         "ORDER_SUBMITTED", "FILL", "FINAL", "EXIT", "INVENTORY_LIQUIDATION",

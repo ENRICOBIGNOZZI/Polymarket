@@ -16,12 +16,13 @@ class EconomicArtifactPackTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             output = root / "artifacts"
-            files = generate(ROOT, root / "missing-run", output, ROOT / "artifacts/v7_economic_loop_baseline.json")
+            files = generate(ROOT, root / "missing-run", output)
             expected = {
-                "v7_economic_loop_postchange.json", "v7_replay_comparison.json",
-                "v7_profitability_audit.json", "v7_capability_runtime_proof.json",
-                "v7_reconciliation_report.json", "v7_external_fair_forecast_to_pnl.json",
-                "v7_maker_bilateral_fillability_report.json", "v7_arb_coverage_report.json",
+                "v7_profitability_audit.json",
+                "v7_reconciliation_report.json",
+                "v7_external_fair_forecast_to_pnl.json",
+                "v7_maker_bilateral_fillability_report.json",
+                "v7_arb_coverage_report.json",
                 "v7_lineage_report.json",
                 "v7_external_loss_attribution.json",
                 "v7_execution_latency_distribution.json",
@@ -33,10 +34,14 @@ class EconomicArtifactPackTests(unittest.TestCase):
             for name in expected:
                 value = json.loads((output / name).read_text())
                 self.assertTrue(value.get("paper_only"))
-                self.assertFalse(value.get("authenticated_execution", value.get("safety", {}).get("authenticated_execution")))
-            proof = json.loads((output / "v7_capability_runtime_proof.json").read_text())
-            self.assertFalse(proof["runtime_evidence_available"])
-            self.assertFalse(proof["profitability_proven"])
+                self.assertFalse(
+                    value.get(
+                        "authenticated_execution",
+                        value.get("safety", {}).get("authenticated_execution"),
+                    )
+                )
+            profitability = json.loads((output / "v7_profitability_audit.json").read_text())
+            self.assertFalse(profitability["exact_sha_runtime_evidence_available"])
 
 
 if __name__ == "__main__":

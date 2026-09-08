@@ -6,7 +6,7 @@ V7 has an HFT-oriented architecture. That is not evidence that the deployed path
 2. representative public-feed replay and forward PAPER measurement;
 3. geographically distributed network/CLOB request, ACK, cancel and user-WS evidence.
 
-Only layer 1 is enforced in CI today. Layer 2 requires an exact-head forward artifact. Layer 3 has not been proven and authenticated order/cancel probes are blocked while execution authority remains disabled.
+Latency is measured separately for feed arrival, local feature/inference work, coordinator/executor work and PAPER decision-to-arrival simulation. Public-feed and PAPER measurements are not evidence about a real-money order path.
 
 ## Historical baseline
 
@@ -22,7 +22,7 @@ The release benchmark covers synthetic WS bytes through canonical L2 and maker i
 
 `HttpClient` owns one libcurl easy handle for its lifetime. Requests reset options without destroying the handle, retaining libcurl connection, DNS and TLS session caches. TCP keepalive and HTTP/2-over-TLS negotiation are enabled. The handle is serialized for a dedicated I/O owner and is never called from the market-data or maker-decision path.
 
-This removes per-request `curl_easy_init`/`curl_easy_cleanup`. It does not prove that an authenticated order path is safe or fast. Connection prewarming, signing, request-to-ACK and user-WS confirmation remain mandatory before any future authenticated authority.
+This removes per-request `curl_easy_init`/`curl_easy_cleanup`. It is an implementation optimization for the public-data/PAPER path.
 
 ## Regional shootout
 
@@ -41,8 +41,8 @@ percentile distribution. It ranks healthy regions by p99.9 then p99 total
 latency, but its output is still read-only evidence and never authorizes live
 execution.
 
-The public probe cannot select a production node by itself. Final selection also requires request-to-ACK, cancel-to-ACK, user-WS confirmation, reconnect and loss measurements. Those authenticated measurements stay blocked until the operator explicitly grants that authority.
+The public probe is used only to characterize data-path latency and regional stability for the PAPER research system.
 
 ## Venue-aware policy
 
-Applicable crypto takers can enter a 250 ms delay while resting orders remain cancelable. Maker toxic-quote cancellation is therefore the critical latency objective. Per-signer order and cancel token buckets make blind cancel/repost loops both wasteful and potentially rate-limited; V7 preserves queue priority when a quote remains economic and lets critical toxicity cancels override dwell.
+Applicable crypto takers can enter a 250 ms delay while resting orders remain cancelable. Maker toxic-quote cancellation is therefore the critical latency objective. Blind cancel/repost loops destroy queue priority; V7 preserves a resting quote while it remains economic and lets critical toxicity cancels override dwell.

@@ -320,7 +320,7 @@ class OpportunityEnvelope:
             probe = _mapping(probe, "exploration")
             if set(probe) != {
                 "mode", "point_expected_wealth_change", "maximum_probe_loss",
-                "probe_loss_cap", "information_score", "promotion_eligible",
+                "probe_loss_cap", "information_score", "research_only",
                 "robust_candidate", "arrival_revalidated", "model_id", "model_hash",
             }:
                 raise OpportunityError("exploration_fields")
@@ -345,7 +345,7 @@ class OpportunityEnvelope:
                 or maximum_loss > loss_cap + 1e-9
                 or loss_cap > 2.0 + 1e-9
                 or information_score <= 0.0
-                or probe.get("promotion_eligible") is not False
+                or probe.get("research_only") is not True
                 or probe.get("robust_candidate") is not False
                 or probe.get("arrival_revalidated") is not True
                 or not recognized_probe_model

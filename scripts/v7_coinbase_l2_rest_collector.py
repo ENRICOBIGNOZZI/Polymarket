@@ -112,7 +112,7 @@ def collect_once(*, timeout_s: float = 10.0) -> tuple[dict[str, Any], dict[str, 
         "request": request, "local_receive_monotonic_ns": request["local_receive_monotonic_ns"],
         "paper_only": True, "authenticated_execution": False, "real_order_submission": False,
         "execution_authority": False, "capital_authority": False, "oms_authority": False,
-        "ledger_writer_authority": False, "promotion_authority": False,
+        "ledger_writer_authority": False,
     }
     status = {
         "schema": "polymarket_v7_coinbase_l2_rest_status_v1", "state": "OPERATIONAL_POLLING",

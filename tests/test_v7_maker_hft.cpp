@@ -938,7 +938,7 @@ void test_exploration_minimum_rest_survives_transient_negative_ev() {
     assert(replay_aged.intents[0].type == pm::v7::IntentType::CancelQuote);
 }
 
-void test_exploration_minimum_rest_survives_transient_exploit_promotion() {
+void test_exploration_minimum_rest_survives_transient_exploit_transition() {
     pm::v7::maker::MakerHotPath hot;
     auto update = normal_update();
     auto exploratory = profitable_model();
@@ -1093,7 +1093,7 @@ int main() {
     test_exploration_never_emits_uncovered_sell();
     test_persistent_lifetime_arm_is_explicit_and_bounded();
     test_exploration_minimum_rest_survives_transient_negative_ev();
-    test_exploration_minimum_rest_survives_transient_exploit_promotion();
+    test_exploration_minimum_rest_survives_transient_exploit_transition();
     test_negative_exploration_adjusted_ev_has_no_execution_authority();
     test_global_kill_preempts_quote();
     test_new_risk_freeze_withdraws_without_irreversible_kill();

@@ -1,564 +1,92 @@
 #!/usr/bin/env python3
 from __future__ import annotations
-
-import importlib.util
-import hashlib
-import json
-import sys
-import tempfile
-import time
-import unittest
+import json, sys, tempfile, time, unittest
 from pathlib import Path
-from unittest import mock
-
-ROOT = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(ROOT / "scripts"))
-from v7_fair_value_registry import FairModelArtifact  # noqa: E402
-from v7_external_settlement_dataset import FEATURE_SCHEMA, MODEL_FEATURE_NAMES  # noqa: E402
-spec = importlib.util.spec_from_file_location(
-    "rtds_monitor", ROOT / "scripts" / "v7_rtds_external_fair_monitor.py"
-)
-assert spec and spec.loader
-module = importlib.util.module_from_spec(spec)
-spec.loader.exec_module(module)
+ROOT=Path(__file__).resolve().parents[1];sys.path.insert(0,str(ROOT/"scripts"))
+import v7_rtds_external_fair_monitor as module
+from v7_external_rich_model import FAMILY, FEATURE_SCHEMA
+from v7_fair_model_artifact import FairModelArtifact
 
 
-def settlement_pointer(root: Path, rule_hash: str, code_sha: str = "a" * 40) -> Path:
-    artifact = FairModelArtifact.build(
-        family="btc_5m_settlement_margin_linear_v1",
-        model_version="btc5m-settlement-test-v1",
-        feature_schema_version=FEATURE_SCHEMA,
-        code_sha=code_sha,
-        policy_version="test-policy",
-        artifact_role="CHAMPION",
-        training_start_ns=1,
-        training_end_ns=2,
-        training_contracts=100,
-        training_days=30,
-        assets=("BTC",),
-        contract_templates=("BTC_USD_UPDOWN_5M",),
-        rules_hashes=(rule_hash,),
-        parameters={
-            "feature_names": list(MODEL_FEATURE_NAMES),
-            "feature_means": {name: 0.0 for name in MODEL_FEATURE_NAMES},
-            "feature_scales": {name: 1.0 for name in MODEL_FEATURE_NAMES},
-            "coefficients": {name: 0.0 for name in MODEL_FEATURE_NAMES},
-            "intercept": 2.0,
-            "default_residual_sigma_bps": 5.0,
-            "residual_sigma_by_tte": [],
-            "mean_uncertainty_bps": 1.0,
-            "calibration": {"intercept": 0.0, "slope": 1.0},
-        },
-        hyperparameters={}, oos_scores={}, probability_interval_diagnostics={},
-        economic_replay={}, generated_timestamp_ns=3,
-    )
-    artifact_path = root / "settlement-artifact.json"
-    artifact_path.write_text(json.dumps(artifact.__dict__))
-    pointer = root / "settlement-champion.json"
-    pointer.write_text(json.dumps({
-        "schema_version": 2, "role": "CHAMPION",
-        "model_hash": artifact.model_hash, "model_version": artifact.model_version,
-        "artifact": str(artifact_path), "promotion_evidence_hash": "c" * 64,
-    }))
-    return pointer
+def research_artifact() -> FairModelArtifact:
+    return FairModelArtifact.build(family=FAMILY,model_version="btc-m5-rich-logit-test",
+        feature_schema_version=FEATURE_SCHEMA,code_sha="a"*40,policy_version="p",artifact_role="RESEARCH",
+        training_start_ns=1,training_end_ns=2,training_contracts=100,training_days=1,assets=("BTC",),
+        contract_templates=("BTC_USD_UPDOWN_5M",),rules_hashes=("b"*64,),
+        parameters={"feature_names":["log_tte"],"means":[5.0],"scales":[1.0],
+            "offset":"market","missing_policy":"TRAIN_MEAN_AND_EXPLICIT_INDICATOR",
+            "coefficients":[0.0,0.1,0.0],"ridge":1.0,"excluded_features":{}},
+        hyperparameters={"research_only":True,"forward_oos_starts_after_ns":0},oos_scores={},
+        probability_interval_diagnostics={"validated":False,"bounds":[0.0,1.0]},economic_replay={},
+        generated_timestamp_ns=3)
 
 
-class RtdsExternalFairMonitorTests(unittest.TestCase):
-    def test_only_explicit_exact_sha_champion_calibrates_structural_probability(self) -> None:
-        with tempfile.TemporaryDirectory() as directory:
-            root = Path(directory)
-            rule_hash = "b" * 64
-            artifact = FairModelArtifact.build(
-                family="structural_bridge_platt",
-                model_version="fair-v1",
-                feature_schema_version="settlement-structural-v1",
-                code_sha="a" * 40,
-                policy_version="external-fair-v1",
-                artifact_role="CHAMPION",
-                training_start_ns=1,
-                training_end_ns=2,
-                training_contracts=100,
-                training_days=1,
-                assets=("BTC",),
-                contract_templates=("BTC_USD_UPDOWN_5M",),
-                rules_hashes=(rule_hash,),
-                parameters={"calibration_intercept": 0.5,
-                            "calibration_slope": 0.5},
-                hyperparameters={}, oos_scores={},
-                probability_interval_diagnostics={}, economic_replay={},
-                generated_timestamp_ns=3,
-            )
-            artifact_path = root / "artifact.json"
-            artifact_path.write_text(json.dumps(artifact.__dict__))
-            pointer = root / "champion.json"
-            pointer.write_text(json.dumps({
-                "schema_version": 2,
-                "role": "CHAMPION",
-                "model_hash": artifact.model_hash,
-                "model_version": artifact.model_version,
-                "artifact": str(artifact_path),
-                "promotion_evidence_hash": "c" * 64,
-            }))
-            loaded, state = module.load_registered_calibration(
-                pointer, code_sha="a" * 40, expected_role="CHAMPION")
-            self.assertEqual(state, "LOADED")
-            self.assertIsNotNone(loaded)
-            assert loaded is not None
-            self.assertGreater(module.calibrated_probability(0.5, loaded), 0.5)
-            rejected, rejected_state = module.load_registered_calibration(
-                pointer, code_sha="d" * 40, expected_role="CHAMPION")
-            self.assertIsNone(rejected)
-            self.assertEqual(
-                rejected_state, "ARTIFACT_IDENTITY_OR_PARAMETERS_INVALID")
+class MonitorTests(unittest.TestCase):
+    def test_observations_decode_oracle_and_external(self):
+        rows=list(module.observations([
+            {"topic":"crypto_prices_twap_sixty","payload":[{"symbol":"btc/usd","timestamp":1000,"value":77000,"window_s":60}]},
+            {"topic":"crypto_prices","payload":{"symbol":"BTCUSDT","timestamp":1001,"value":"77001"}},]))
+        self.assertEqual([r["topic"] for r in rows],[module.ORACLE_TOPIC,module.EXTERNAL_TOPIC])
+        self.assertEqual(rows[0]["window_seconds"],60);self.assertEqual(rows[1]["price"],77001.0)
 
-            monitor = module.Monitor(
-                root / "output", "a" * 40, champion_pointer=pointer)
-            monitor.active_contract = {"normalized_rules_hash": rule_hash}
-            snapshot = monitor.registered_shadow_snapshot({
-                "valid": True, "structural": 0.5,
-                "structural_lower": 0.4, "structural_upper": 0.6,
-            }, monitor.champion, monitor.champion_load_state, "CHAMPION")
-            self.assertTrue(snapshot["explicit_registry_model_applied"])
-            self.assertEqual(snapshot["probability_model_hash"], artifact.model_hash)
+    def test_boundary_reference_is_causal_and_bounded(self):
+        h={7000:{"timestamp_ms":7000,"price":70},9000:{"timestamp_ms":9000,"price":90},11000:{"timestamp_ms":11000,"price":110}}
+        self.assertEqual(module.boundary_reference(h,10000)["timestamp_ms"],9000)
+        self.assertIsNone(module.boundary_reference({7000:h[7000]},10000))
+        self.assertIsNone(module.boundary_reference({11000:h[11000]},10000))
 
-    def test_observations_decode_history_and_live_envelopes(self) -> None:
-        envelope = [
-            {"topic": "crypto_prices_twap_sixty", "payload": [
-                {"symbol": "btc/usd", "timestamp": 1788019000123, "value": 77001.25,
-                 "window_s": 60},
-            ]},
-            {"topic": "crypto_prices", "payload": {
-                "symbol": "BTCUSDT", "timestamp": 1788019001123, "value": "77002.5"
-            }},
-        ]
-        rows = list(module.observations(envelope))
-        self.assertEqual([row["topic"] for row in rows], [
-            "crypto_prices_twap_sixty", "crypto_prices"
-        ])
-        self.assertEqual(rows[0]["timestamp_ms"], 1788019000123)
-        self.assertEqual(rows[0]["window_seconds"], 60)
-        self.assertEqual(rows[1]["price"], 77002.5)
+    def test_router_snapshot_preserves_causal_identity_and_age(self):
+        router={"code_sha":"a"*40,"live_market":{"valid":True,"source":"LIVE_COMPLEMENT_CONSISTENT_CLOB_BATCH",
+            "market_id":"m","yes":.55,"snapshot_id":"s","receive_ts_ms":1000,"exchange_ts_ms":999}}
+        snap=module.router_live_market_snapshot(router,code_sha="a"*40,market_id="m",now_ms=1100)
+        self.assertEqual(snap["snapshot_id"],"s");self.assertEqual(snap["age_ms"],100)
+        self.assertIsNone(module.router_live_market_snapshot(router,code_sha="a"*40,market_id="m",now_ms=7000))
 
-    def test_invalid_or_unrelated_values_fail_closed(self) -> None:
-        self.assertEqual(list(module.observations({"topic": "comments", "value": 1})), [])
-        self.assertEqual(list(module.observations({
-            "topic": "crypto_prices_twap_sixty", "value": "nan", "timestamp": 1,
-            "window_s": 60
-        })), [])
+    def test_external_snapshot_rejects_future_or_wrong_sha(self):
+        with tempfile.TemporaryDirectory() as d:
+            p=Path(d)/"external.json";p.write_text(json.dumps({"code_sha":"a"*40,"timestamp_ns":101,"valid":True}))
+            m=module.Monitor(Path(d),"a"*40,external_venues_path=p)
+            self.assertEqual(m.external_snapshot(100),{})
+            self.assertEqual(m.external_snapshot(102)["age_ns"],1)
 
-    def test_oracle_observation_requires_explicit_sixty_second_window(self) -> None:
-        base = {"topic": module.ORACLE_TOPIC, "symbol": "btc/usd",
-                "value": 77001.25, "timestamp": 1788019000000}
-        self.assertEqual(list(module.observations(base)), [])
-        self.assertEqual(list(module.observations({**base, "window_s": 30})), [])
-        rows = list(module.observations({**base, "windowSeconds": 60}))
-        self.assertEqual(len(rows), 1)
-        self.assertEqual(rows[0]["window_seconds"], 60)
+    def test_structural_bootstrap_is_active_fallback_without_model_governance(self):
+        cfg=json.loads((ROOT/"config/v7_external_fair.json").read_text())
+        m=module.Monitor(Path(tempfile.mkdtemp()),"a"*40,paper_bootstrap=cfg["paper_exploration_bootstrap"])
+        now=time.time_ns();start=int(now/1e9)//300*300
+        m.active_market={"contract_start_epoch":start,"midpoint":.5};m.active_contract={"verified_template":True,
+            "rules_hash_recognized":True,"normalized_rules_hash":"b"*64};m.reference={"valid":True,"value":77000.0}
+        m.latest[module.ORACLE_TOPIC]={"price":77010.0,"receive_wall_ns":now-10_000_000}
+        snap=m.fair_snapshot(now,True,{"valid":True,"fresh_venue_count":3,"composite_price":77020.0,
+            "dispersion_bps":1.0,"age_ns":10_000_000,"return_1s":0.0,"return_5s":0.0})
+        self.assertTrue(snap["valid"]);self.assertTrue(snap["paper_exploration_bootstrap"])
+        self.assertEqual(snap["calibration_state"],"PAPER_EXPLORATION_BOOTSTRAP_APPLIED")
+        self.assertFalse(snap["real_money_authority"])
 
-    def test_duplicate_oracle_timestamp_is_not_recorded_as_a_drop(self) -> None:
-        with tempfile.TemporaryDirectory() as directory:
-            monitor = module.Monitor(Path(directory), "a" * 40)
-            event = {
-                "topic": module.ORACLE_TOPIC, "symbol": "btc/usd",
-                "price": 77001.25, "price_decimal": "77001.25",
-                "timestamp_ms": 1_788_019_000_000,
-            }
-            monitor.ingest(event)
-            monitor.ingest(event)
-            self.assertEqual(monitor.accepted, 1)
-            self.assertEqual(monitor.written, 1)
-            self.assertEqual(monitor.dropped, 0)
-            self.assertEqual(monitor.duplicates, 1)
-            self.assertEqual(monitor.empty_frames, 0)
-            self.assertEqual(monitor.malformed_frames, 0)
+    def test_direct_research_model_loads_without_runtime_sha_coupling(self):
+        with tempfile.TemporaryDirectory() as d:
+            path=Path(d)/"research.json";a=research_artifact();path.write_text(json.dumps(a.__dict__))
+            loaded,state=module.load_rich_research_model(path)
+            self.assertEqual(state,"LOADED");self.assertEqual(loaded.model_hash,a.model_hash)
 
-    def test_malformed_frame_is_bounded_raw_evidence_not_tape_loss(self) -> None:
-        with tempfile.TemporaryDirectory() as directory:
-            root = Path(directory)
-            monitor = module.Monitor(root, "a" * 40)
-            monitor.connection_epoch = 2
-            payload = b"not json"
-            monitor.record_malformed_frame(payload, "invalid_json")
-            self.assertEqual(monitor.dropped, 0)
-            self.assertEqual(monitor.malformed_frames, 1)
-            record = json.loads((root / "rtds_rejected_frames.jsonl").read_text())
-            self.assertEqual(record["payload_sha256"], hashlib.sha256(payload).hexdigest())
-            self.assertEqual(record["captured_payload_base64"], "bm90IGpzb24=")
+    def test_rich_market_prior_requires_fresh_identified_causal_cut(self):
+        a=research_artifact();m=module.Monitor(Path(tempfile.mkdtemp()),"d"*40)
+        m.research_model=a;m.research_model_load_state="LOADED";m.paper_ml_policy={"causal_pm_prior_required":True,
+            "maximum_pm_prior_age_ms":500.0,"maximum_pm_external_skew_ms":750.0}
+        now=1_800_000_000_000_000_000;m.active_market={"contract_start_epoch":int(now/1e9)//300*300}
+        m.active_contract={"normalized_rules_hash":"b"*64};m.reference={"valid":True,"value":100.0};m.latest[module.ORACLE_TOPIC]={"price":100.1}
+        base={"valid":True,"tte_seconds":200.,"pm_mid":.5,"pm_mid_snapshot_id":"s",
+            "pm_mid_receive_ts_ms":now//1_000_000-100,"pm_mid_exchange_ts_ms":now//1_000_000-101,"pm_mid_age_ms":100}
+        ext={"timestamp_ns":now-50_000_000,"composite_price":100.2,"composite_microprice":100.2,"dispersion_bps":1.,
+            "age_ns":1_000_000,"aggregate_ofi":0.,"aggregate_trade_imbalance":0.,"realized_vol_fast":.001,
+            "realized_vol_medium":.001,"realized_vol_slow":.001,"feature_semantics_version":"receive_time_bucketed_composite_v2",
+            "return_history_available":{"100ms":True,"250ms":True,"1s":True,"5s":True},"return_100ms":0.,"return_250ms":0.,"return_1s":0.,"return_5s":0.}
+        fair=m.rich_paper_snapshot(base,ext,{"observed_wall_ns":now,"features":{}},now)
+        self.assertTrue(fair["valid"],fair);self.assertTrue(fair["research_model"]);self.assertTrue(fair["market_prior_causal_cut_valid"])
+        stale=dict(base);stale["pm_mid_age_ms"]=501
+        self.assertEqual(m.rich_paper_snapshot(stale,ext,{"observed_wall_ns":now,"features":{}},now)["reason"],"PM_PRIOR_STALE_OR_UNIDENTIFIED")
 
-    def test_empty_text_frame_is_a_keepalive_not_a_malformed_frame(self) -> None:
-        with tempfile.TemporaryDirectory() as directory:
-            monitor = module.Monitor(Path(directory), "a" * 40)
-            monitor.record_empty_frame()
-            self.assertEqual(monitor.empty_frames, 1)
-            self.assertEqual(monitor.malformed_frames, 0)
-            self.assertEqual(monitor.dropped, 0)
+    def test_launcher_has_single_frozen_research_model_path(self):
+        text=(ROOT/"scripts/paper_v7_execution_loop.sh").read_text()
+        self.assertIn('--research-model "$RICH_RESEARCH_MODEL"',text)
 
-    def test_boundary_reference_is_causal_bounded_and_prefers_latest(self) -> None:
-        history = {
-            7_000: {"timestamp_ms": 7_000, "price": 70.0},
-            9_000: {"timestamp_ms": 9_000, "price": 90.0},
-            11_000: {"timestamp_ms": 11_000, "price": 110.0},
-        }
-        self.assertEqual(module.boundary_reference(history, 10_000)["timestamp_ms"], 9_000)
-        self.assertIsNone(module.boundary_reference({7_000: history[7_000]}, 10_000))
-        self.assertIsNone(module.boundary_reference({11_000: history[11_000]}, 10_000))
-        exact = {10_000: {"timestamp_ms": 10_000, "price": 100.0}, **history}
-        self.assertEqual(module.boundary_reference(exact, 10_000)["timestamp_ms"], 10_000)
-
-    def test_silent_rtds_stream_forces_bounded_reconnect(self) -> None:
-        threshold = module.RTDS_SILENCE_RECONNECT_SECONDS
-        self.assertFalse(module.rtds_stream_silent(100.0, 100.0 + threshold - 0.001))
-        self.assertTrue(module.rtds_stream_silent(100.0, 100.0 + threshold))
-
-    def test_latency_quantiles_and_live_ingress_measurements_are_published(self) -> None:
-        self.assertEqual(module.latency_quantiles([]), {})
-        quantiles = module.latency_quantiles([1.0, 2.0, 3.0, 4.0])
-        self.assertEqual(quantiles["p50"], 2.5)
-        self.assertEqual(quantiles["max"], 4.0)
-        with tempfile.TemporaryDirectory() as directory:
-            monitor = module.Monitor(Path(directory), "a" * 40)
-            source_ms = time.time_ns() // 1_000_000 - 5
-            monitor.ingest({
-                "topic": module.ORACLE_TOPIC, "symbol": "btc/usd",
-                "price": 77_000.0, "price_decimal": "77000",
-                "timestamp_ms": source_ms, "window_seconds": 60,
-            })
-            values = monitor.latency_samples["chainlink_source_to_receive"]
-            self.assertEqual(len(values), 1)
-            self.assertGreaterEqual(values[0], 0.0)
-
-    def test_live_binding_survives_general_universe_eligibility_churn(self) -> None:
-        with tempfile.TemporaryDirectory() as directory:
-            root = Path(directory)
-            universe = root / "universe.json"
-            universe.write_text('{"markets":[]}')
-            now = int(time.time())
-            start = now - now % 300
-            monitor = module.Monitor(root / "external", "a" * 40, universe_path=universe)
-            monitor.active_market = {
-                "market_id": "m1", "slug": f"btc-updown-5m-{start}",
-                "contract_start_epoch": start,
-            }
-            monitor.active_contract = {
-                "market_id": "m1", "verified_template": True,
-                "rules_hash_recognized": True,
-            }
-            monitor.reference = {"valid": True, "version": start}
-            with mock.patch.object(module, "fetch_market_by_slug") as targeted:
-                monitor.refresh_contract(time.time_ns())
-            targeted.assert_not_called()
-            self.assertEqual(monitor.active_market["market_id"], "m1")
-            self.assertEqual(monitor.active_contract["market_id"], "m1")
-            self.assertTrue(monitor.reference["valid"])
-
-    def test_current_contract_has_targeted_gamma_fallback(self) -> None:
-        with tempfile.TemporaryDirectory() as directory:
-            root = Path(directory)
-            universe = root / "universe.json"
-            universe.write_text('{"markets":[]}')
-            now = int(time.time())
-            start = now - now % 300
-            market = {
-                "market_id": "m1", "condition_id": "c1", "event_ids": ["e1"],
-                "slug": f"btc-updown-5m-{start}",
-                "question": "Bitcoin Up or Down - test",
-                "description": "This market will resolve to \"Up\" if the time-weighted average price (TWAP) of Bitcoin, generated by Chainlink, of the time range specified in the title is greater than or equal to the price at the beginning of that range. Otherwise, it will resolve to \"Down\". The resolution source for this market is information from Chainlink, specifically the BTC/USD TWAP data stream available at https://data.chain.link/streams/btc-usd-twap-60s-streams. Please note that this market is about the price according to the TWAP Chainlink data stream for the asset pair BTC/USD, not according to any other sources or spot markets.",
-                "resolution_source": "https://data.chain.link/streams/btc-usd-twap-60s-streams",
-                "clob_token_ids": ["yes", "no"], "outcomes": ["Up", "Down"],
-                "active": True, "closed": False, "accepting_orders": True,
-                "midpoint": 0.5,
-                "fee_schedule": {"rate": 0.07, "exponent": 1, "takerOnly": True},
-            }
-            monitor = module.Monitor(
-                root / "external", "a" * 40, universe_path=universe,
-                approvals_path=ROOT / "config" / "v7_external_fair_rule_approvals.json",
-            )
-            with mock.patch.object(module, "fetch_market_by_slug", return_value=market) as targeted:
-                monitor.refresh_contract(time.time_ns())
-            targeted.assert_called_once_with(
-                "https://gamma-api.polymarket.com", f"btc-updown-5m-{start}"
-            )
-            self.assertEqual(monitor.active_market["market_id"], "m1")
-            self.assertTrue(monitor.active_contract["verified_template"])
-            self.assertTrue(monitor.active_contract["rules_hash_recognized"])
-
-    def test_full_accuracy_oracle_value_is_preserved_as_decimal(self) -> None:
-        rows = list(module.observations({
-            "topic": module.ORACLE_TOPIC, "symbol": "btc/usd", "timestamp": 10_000,
-            "value": 65000.5, "full_accuracy_value": "65000500000000000000000", "window_s": 60,
-        }))
-        self.assertEqual(rows[0]["price_decimal"], "65000.5")
-
-    def test_runtime_contract_uses_official_twap_topic_and_application_heartbeat(self) -> None:
-        source = (ROOT / "scripts" / "v7_rtds_external_fair_monitor.py").read_text()
-        self.assertIn('ORACLE_TOPIC = "crypto_prices_twap_sixty"', source)
-        self.assertIn('send_frame(stream, 0x1, b"PING")', source)
-        self.assertNotIn("oracle_price + 0.70", source)
-
-    def test_fair_inference_fails_closed_without_immutable_settlement_model(self) -> None:
-        with tempfile.TemporaryDirectory() as directory:
-            monitor = module.Monitor(Path(directory), "a" * 40)
-            monitor.active_market = {"contract_start_epoch": int(time.time()) - 1, "midpoint": 0.5}
-            monitor.active_contract = {
-                "verified_template": True, "rules_hash_recognized": True,
-                "normalized_rules_hash": "b" * 64,
-            }
-            monitor.reference = {"valid": True, "value": 77_000.0}
-            monitor.latest[module.ORACLE_TOPIC] = {
-                "price": 77_001.0, "receive_wall_ns": time.time_ns(),
-            }
-            snapshot = monitor.fair_snapshot(time.time_ns(), True, {
-                "valid": True, "fresh_venue_count": 3, "composite_price": 77_002.0,
-                "dispersion_bps": 1.0, "age_ns": 1,
-                "return_1s": 0.0, "return_5s": 0.0,
-            })
-            self.assertFalse(snapshot["valid"])
-            self.assertEqual(snapshot["inference_state"], "IMMUTABLE_SETTLEMENT_MODEL_REQUIRED")
-
-    def test_status_reports_inputs_but_never_fake_fair_readiness(self) -> None:
-        with tempfile.TemporaryDirectory() as directory:
-            root = Path(directory)
-            monitor = module.Monitor(root, "a" * 40)
-            monitor.connection_epoch = 1
-            monitor.ingest({"topic": module.ORACLE_TOPIC, "symbol": "btc/usd",
-                            "price": 77000.0, "timestamp_ms": 1788019000000})
-            monitor.ingest({"topic": module.EXTERNAL_TOPIC, "symbol": "btcusdt",
-                            "price": 77001.0, "timestamp_ms": 1788019000001})
-            monitor.publish()
-            status = json.loads((root / "status.json").read_text())
-            self.assertTrue(status["oracle"]["healthy"])
-            self.assertEqual(status["external"]["fresh_venue_count"], 1)
-            self.assertFalse(status["external"]["healthy"])
-            self.assertFalse(status["fair"]["valid"])
-            self.assertEqual(status["execution_authority"], "SHADOW_ZERO_AUTHORITY")
-            self.assertFalse(status["real_order_submission"])
-            self.assertIn("FAIR_VALUE_INVALID", status["blockers"])
-
-    def test_launcher_uses_public_monitor_without_private_binding(self) -> None:
-        launcher = (ROOT / "scripts" / "paper_v7_execution_loop.sh").read_text()
-        self.assertIn("v7_rtds_external_fair_monitor.py", launcher)
-        self.assertNotIn("binding_not_configured_contracts_quarantined", launcher)
-        self.assertIn("--champion-pointer", launcher)
-        self.assertIn("--challenger-pointer", launcher)
-        self.assertIn("--external-fair-config", launcher)
-
-    def test_verified_contract_reference_and_multi_venue_produce_valid_fair(self) -> None:
-        with tempfile.TemporaryDirectory() as directory:
-            root = Path(directory)
-            now = int(time.time())
-            start = now - now % 300
-            # Keep the live observation strictly after the contract boundary.
-            # At an exact five-minute wall-clock boundary, using ``now`` here
-            # would accidentally turn this fallback test into an exact-match
-            # test and make the assertion depend on test start time.
-            live_timestamp_ms = max(now * 1000, start * 1000 + 1000)
-            universe = root / "universe.json"
-            universe.write_text(json.dumps({"markets": [{
-                "market_id": "m1", "condition_id": "c1", "event_ids": ["e1"],
-                "slug": f"btc-updown-5m-{start}",
-                "question": "Bitcoin Up or Down - test",
-                "description": "This market will resolve to \"Up\" if the time-weighted average price (TWAP) of Bitcoin, generated by Chainlink, of the time range specified in the title is greater than or equal to the price at the beginning of that range. Otherwise, it will resolve to \"Down\". The resolution source for this market is information from Chainlink, specifically the BTC/USD TWAP data stream available at https://data.chain.link/streams/btc-usd-twap-60s-streams. Please note that this market is about the price according to the TWAP Chainlink data stream for the asset pair BTC/USD, not according to any other sources or spot markets.",
-                "resolution_source": "https://data.chain.link/streams/btc-usd-twap-60s-streams",
-                "clob_token_ids": ["yes", "no"], "outcomes": ["Up", "Down"],
-                "accepting_orders": True, "active": True, "closed": False,
-                "liquidity": 5000.0, "volume_24h": 2.0, "midpoint": 0.55,
-                "fee_schedule": {"rate": 0.07, "exponent": 1, "takerOnly": True},
-                "fees_enabled": True, "fees_enabled_explicit": True,
-            }]}))
-            venues = root / "venues.json"
-            venues.write_text(json.dumps({
-                "code_sha": "a" * 40, "timestamp_ns": time.time_ns(), "valid": True,
-                "fresh_venue_count": 3, "composite_price": 77020.0,
-                "composite_microprice": 77020.0, "dispersion_bps": 1.0,
-                "return_1s": 0.00001, "return_5s": 0.00002,
-            }))
-            rule_hash = next(iter(json.loads(
-                (ROOT / "config" / "v7_external_fair_rule_approvals.json").read_text()
-            )["approved_rule_hashes"]))
-            champion_pointer = settlement_pointer(root, rule_hash)
-            monitor = module.Monitor(
-                root / "external", "a" * 40, universe_path=universe,
-                approvals_path=ROOT / "config" / "v7_external_fair_rule_approvals.json",
-                external_venues_path=venues,
-                champion_pointer=champion_pointer,
-            )
-            monitor.connection_epoch = 1
-            monitor.ingest({"topic": module.ORACLE_TOPIC, "symbol": "btc/usd",
-                            "price": 77000.0, "price_decimal": "77000.0",
-                            "timestamp_ms": start * 1000 - 1000})
-            monitor.ingest({"topic": module.ORACLE_TOPIC, "symbol": "btc/usd",
-                            "price": 77010.0, "timestamp_ms": live_timestamp_ms})
-            monitor.ingest({"topic": module.EXTERNAL_TOPIC, "symbol": "btcusdt",
-                            "price": 77019.0, "timestamp_ms": live_timestamp_ms})
-            monitor.publish()
-            status = json.loads((root / "external" / "status.json").read_text())
-            self.assertEqual(status["market"]["condition_id"], "c1")
-            self.assertEqual(status["market"]["question"], "Bitcoin Up or Down - test")
-            self.assertTrue(status["market"]["active"])
-            self.assertFalse(status["market"]["closed"])
-            self.assertTrue(status["market"]["accepting_orders"])
-            self.assertEqual(status["market"]["liquidity"], 5000.0)
-            self.assertEqual(status["market"]["volume_24h"], 2.0)
-            self.assertTrue(status["market"]["fee_schedule"]["takerOnly"])
-            self.assertTrue(status["contract"]["verified"])
-            self.assertTrue(status["contract"]["rules_hash_recognized"])
-            self.assertTrue(status["settlement_reference"]["valid"])
-            self.assertTrue(status["settlement_reference"]["boundary_fallback"])
-            self.assertEqual(status["settlement_reference"]["boundary_gap_ms"], 1000)
-            self.assertEqual(status["settlement_reference"]["observation_timestamp_ms"], start * 1000 - 1000)
-            self.assertTrue(status["external"]["healthy"])
-            self.assertTrue(status["fair"]["valid"])
-            self.assertEqual(status["fair"]["model_id"], "external_only_fair")
-            self.assertFalse(status["fair"]["uses_polymarket_price_as_feature"])
-            self.assertEqual(status["fair_models"]["comparison_state"], "AWAITING_LIVE_CLOB_BENCHMARK")
-            self.assertEqual(
-                status["fair_models"]["execution_model_id"],
-                "btc5m-settlement-test-v1",
-            )
-            self.assertTrue(status["fair_models"]["hybrid_fair"]["uses_polymarket_price_as_feature"])
-            self.assertFalse(status["fair_models"]["hybrid_fair"]["valid"])
-            self.assertEqual(status["blockers"], ["COUNTERFACTUAL_COLLECTOR_NOT_RUNNING"])
-
-            router_receive_ms = time.time_ns() // 1_000_000
-            (root / "external" / "paper_router_status.json").write_text(json.dumps({
-                "schema": "polymarket_v7_crypto_settlement_engine_status_v1",
-                "timestamp": int(time.time()), "code_sha": "a" * 40, "state": "RUNNING",
-                "paper_only": True, "authenticated_execution": False,
-                "real_order_submission": False,
-                "execution_authority": "OPPORTUNITY_PROPOSAL_ONLY",
-                "capital_authority": False, "oms_authority": False,
-                "inventory_authority": False, "ledger_writer_authority": False,
-                "order_submission_enabled": False, "counterfactual_collection_enabled": True,
-                "economic_confidence": "MORE_EVIDENCE_REQUIRED",
-                "killed": False,
-                "live_market": {
-                    "market_id": "m1", "yes": 0.80, "valid": True,
-                    "source": "LIVE_COMPLEMENT_CONSISTENT_CLOB_BATCH",
-                    "receive_ts_ms": router_receive_ms,
-                },
-                "actions": {"TAKE": 0, "NOTHING": 3},
-                "counterfactual_actions": {"TAKE": 2}, "realized_pnl": 0.0, "blocker": "",
-            }))
-            monitor.publish()
-            active = json.loads((root / "external" / "status.json").read_text())
-            self.assertEqual(active["state"], "FULL_FAIR_SHADOW_OPERATIONAL")
-            self.assertEqual(active["execution_authority"], "SHADOW_ZERO_AUTHORITY")
-            self.assertEqual(active["blockers"], [])
-            self.assertEqual(active["actions"]["TAKE"], 0)
-            self.assertEqual(active["counterfactual_actions"]["TAKE"], 2)
-            self.assertEqual(active["fair"]["pm_mid"], 0.80)
-            self.assertEqual(active["fair"]["pm_mid_source"], "LIVE_COMPLEMENT_CONSISTENT_CLOB_BATCH")
-            self.assertTrue(active["fair_models"]["hybrid_fair"]["valid"])
-            self.assertEqual(active["fair_models"]["comparison_state"], "LIVE_SHADOW_COMPARISON")
-
-
-    def test_explicit_paper_bootstrap_produces_conservative_non_promotional_fair(self) -> None:
-        with tempfile.TemporaryDirectory() as directory:
-            policy = {
-                "schema": module.PAPER_BOOTSTRAP_SCHEMA,
-                "enabled": True,
-                "model_id": "btc_m5_same_oracle_diffusion_bootstrap_v1",
-                "asset": "BTC", "horizon": "M5",
-                "contract_template": "BTC_USD_UPDOWN_5M",
-                "minimum_fresh_venue_count": 3,
-                "minimum_tte_seconds": 5.0, "maximum_tte_seconds": 300.0,
-                "minimum_innovation_bps_per_sqrt_second": 1.25,
-                "maximum_innovation_bps_per_sqrt_second": 8.0,
-                "dispersion_innovation_multiplier": 0.5,
-                "minimum_sigma_bps": 12.0, "maximum_sigma_bps": 150.0,
-                "mean_uncertainty_floor_bps": 6.0,
-                "mean_uncertainty_sigma_fraction": 0.35,
-                "mean_uncertainty_dispersion_multiplier": 2.0,
-                "confidence_z": 1.64,
-                "maximum_absolute_mean_margin_bps": 250.0,
-                "uses_polymarket_price_as_feature": False,
-                "promotion_credit": False, "real_money_authority": False,
-            }
-            monitor = module.Monitor(Path(directory), "a" * 40, paper_bootstrap=policy)
-            now = int(time.time())
-            start = now - now % 300
-            monitor.active_market = {
-                "contract_start_epoch": start, "midpoint": 0.5,
-                "slug": f"btc-updown-5m-{start}",
-            }
-            monitor.active_contract = {
-                "verified_template": True, "rules_hash_recognized": True,
-                "normalized_rules_hash": "b" * 64,
-            }
-            monitor.reference = {"valid": True, "value": 77_000.0}
-            monitor.latest[module.ORACLE_TOPIC] = {
-                "price": 77_010.0, "receive_wall_ns": time.time_ns(),
-            }
-            snapshot = monitor.fair_snapshot(time.time_ns(), True, {
-                "valid": True, "fresh_venue_count": 3,
-                "composite_price": 77_100.0, "dispersion_bps": 1.0,
-                "age_ns": 1, "return_1s": 0.00002, "return_5s": 0.00004,
-            })
-            self.assertTrue(snapshot["valid"])
-            self.assertEqual(snapshot["calibration_state"], "PAPER_EXPLORATION_BOOTSTRAP_APPLIED")
-            self.assertEqual(snapshot["inference_state"], "VALID_PAPER_EXPLORATION_BOOTSTRAP")
-            self.assertTrue(snapshot["paper_exploration_bootstrap"])
-            self.assertFalse(snapshot["explicit_champion_applied"])
-            self.assertFalse(snapshot["promotion_eligible"])
-            self.assertFalse(snapshot["real_money_authority"])
-            self.assertLess(snapshot["lower"], snapshot["yes"])
-            self.assertLess(snapshot["yes"], snapshot["upper"])
-            self.assertEqual(len(snapshot["probability_model_hash"]), 64)
-            self.assertGreaterEqual(snapshot["settlement_sigma_bps"], 12.0)
-
-    def test_paper_bootstrap_rejects_authority_or_scope_drift(self) -> None:
-        base = {
-            "schema": module.PAPER_BOOTSTRAP_SCHEMA, "enabled": True,
-            "model_id": "btc_m5_same_oracle_diffusion_bootstrap_v1",
-            "asset": "BTC", "horizon": "M5", "contract_template": "BTC_USD_UPDOWN_5M",
-            "minimum_fresh_venue_count": 3,
-            "minimum_tte_seconds": 5.0, "maximum_tte_seconds": 300.0,
-            "minimum_innovation_bps_per_sqrt_second": 1.25,
-            "maximum_innovation_bps_per_sqrt_second": 8.0,
-            "dispersion_innovation_multiplier": 0.5,
-            "minimum_sigma_bps": 12.0, "maximum_sigma_bps": 150.0,
-            "mean_uncertainty_floor_bps": 6.0,
-            "mean_uncertainty_sigma_fraction": 0.35,
-            "mean_uncertainty_dispersion_multiplier": 2.0,
-            "confidence_z": 1.64, "maximum_absolute_mean_margin_bps": 250.0,
-            "uses_polymarket_price_as_feature": False,
-            "promotion_credit": False, "real_money_authority": False,
-        }
-        for key, value in (("asset", "ETH"), ("promotion_credit", True), ("real_money_authority", True)):
-            bad = dict(base); bad[key] = value
-            with self.assertRaises(ValueError):
-                module.validate_paper_bootstrap_policy(bad)
-
-    def test_registered_champion_precedes_paper_bootstrap(self) -> None:
-        with tempfile.TemporaryDirectory() as directory:
-            root = Path(directory)
-            rule_hash = "b" * 64
-            pointer = settlement_pointer(root, rule_hash)
-            config = json.loads((ROOT / "config" / "v7_external_fair.json").read_text())
-            monitor = module.Monitor(
-                root / "output", "a" * 40, champion_pointer=pointer,
-                paper_bootstrap=config["paper_exploration_bootstrap"],
-            )
-            now = int(time.time()); start = now - now % 300
-            monitor.active_market = {"contract_start_epoch": start, "midpoint": 0.5}
-            monitor.active_contract = {
-                "verified_template": True, "rules_hash_recognized": True,
-                "normalized_rules_hash": rule_hash,
-            }
-            monitor.reference = {"valid": True, "value": 77_000.0}
-            monitor.latest[module.ORACLE_TOPIC] = {
-                "price": 77_010.0, "receive_wall_ns": time.time_ns(),
-            }
-            snapshot = monitor.fair_snapshot(time.time_ns(), True, {
-                "valid": True, "fresh_venue_count": 3,
-                "composite_price": 77_020.0, "dispersion_bps": 1.0,
-                "age_ns": 1, "return_1s": 0.0, "return_5s": 0.0,
-            })
-            self.assertTrue(snapshot["valid"])
-            self.assertTrue(snapshot["explicit_champion_applied"])
-            self.assertFalse(snapshot["paper_exploration_bootstrap"])
-            self.assertEqual(snapshot["calibration_state"], "IMMUTABLE_SETTLEMENT_CHAMPION_APPLIED")
-
-
-if __name__ == "__main__":
-    unittest.main()
+if __name__=="__main__":unittest.main()

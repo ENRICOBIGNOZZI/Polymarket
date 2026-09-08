@@ -96,10 +96,14 @@ class CapitalAllocatorTests(unittest.TestCase):
             self.assertEqual(fast["v7"]["live_capability"]["max_daily_loss"], 0.0)
             self.assertEqual(fast["v7"]["live_capability"]["max_exposure"], 0.0)
             self.assertEqual(fast["v7"]["live_capability"]["max_order"], 0.0)
-            external = json.loads((root / "external.json").read_text())
-            self.assertEqual(external["starting_capital"], 4_000.0)
-            self.assertEqual(external["capital_scope"]["engine_id"], "CRYPTO_SETTLEMENT_ENGINE")
-            self.assertEqual(external["capital_scope"]["scope_class"], "TEMPORARY_ENGINE_ADAPTER")
+            crypto = json.loads((root / "crypto_settlement_engine.json").read_text())
+            structural = json.loads((root / "structural_arb_engine.json").read_text())
+            self.assertEqual(crypto["starting_capital"], 4_000.0)
+            self.assertEqual(structural["starting_capital"], 2_000.0)
+            self.assertEqual(crypto["capital_scope"]["scope_class"], "ENGINE_ENVELOPE")
+            self.assertEqual(structural["capital_scope"]["scope_class"], "ENGINE_ENVELOPE")
+            self.assertFalse((root / "external.json").exists())
+            self.assertFalse((root / "hard_arb.json").exists())
 
     def test_duplicate_or_unknown_engine_partition_fails_closed(self) -> None:
         cfg = self.config(0.4, 0.2, 0.1)

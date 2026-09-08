@@ -22,7 +22,7 @@ groups:
         labels: {severity: critical}
         annotations: {summary: "Authenticated execution is not disabled"}
       - alert: PolymarketV7AlgorithmScopeInvalid
-        expr: (polymarket_v7_live_algorithm_count != 2) or (polymarket_v7_legacy_algorithm_count != 0) or (polymarket_v7_live_algorithm_scope_wired < 1)
+        expr: (polymarket_v7_live_algorithm_count != 2) or (polymarket_v7_live_algorithm_scope_wired < 1)
         for: 0s
         labels: {severity: critical}
         annotations: {summary: "Live scope is not exactly the two canonical algorithms"}

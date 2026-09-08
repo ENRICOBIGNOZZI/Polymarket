@@ -12,7 +12,7 @@ namespace pm::v7::external_fair {
 struct ExternalStatePolicy {
     // Deribit, Bybit linear and Binance USD-M are contextual derivative
     // predictors by default, not price contributors to the spot composite.
-    // Promotion requires an explicit, evidence-backed weight change in the
+    // Any weight change requires explicit, evidence-backed policy in the
     // single V7 policy owner.
     std::array<double, kVenueCount> venue_weights{0.34, 0.33, 0.33, 0.0, 0.0, 0.0};
     std::int64_t max_venue_age_ns = 1'000'000'000LL;

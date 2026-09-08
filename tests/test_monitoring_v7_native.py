@@ -43,7 +43,6 @@ class V7NativeMonitoringTest(unittest.TestCase):
                 "STRUCTURAL_ARB_ENGINE":{"budget":4500.0,"equity":4500.0,"killed":False},
             },"sleeves":{"external":{"equity":5000.0},"hard_arb":{"equity":4500.0},"reserve":{"equity":500.0}},
         })
-        self._write(root / "control/evidence_capital_allocator.json", {"schema":"polymarket_v7_evidence_capital_allocator_v2","paper_only":True,"authenticated_execution":False,"real_order_submission":False,"automatic_transfer":False})
         self._write(root / "control/fee_reward_registry.json", {"schema":"polymarket_v7_fee_reward_registry_v1","model_sha":sha,"paper_only":True,"authenticated_execution":False,"real_order_submission":False,"unknown_fee_policy":"NON_EXECUTABLE","unknown_reward_policy":"ZERO_EXPECTED_VALUE"})
         self._write(root / "control/retention_status.json", {"schema":"polymarket_v7_retention_status_v1","timestamp":now-10,"paper_only":True,"authenticated_execution":False,"expected_sha":sha})
         self._write(root / "fast_structural/fast_arb_status.json", {
@@ -69,10 +68,8 @@ class V7NativeMonitoringTest(unittest.TestCase):
             root=Path(directory)/"paper_v7_live"; self._fixture(root); snapshot=exporter.collect_snapshot(root,ROOT,now=1000)
             self.assertEqual(exporter.health_reasons(snapshot),[])
             metrics=exporter.render_prometheus(snapshot)
-            for expected in ("polymarket_v7_live_algorithm_count 2","polymarket_v7_legacy_algorithm_count 0","polymarket_v7_live_algorithm_scope_wired 1",'polymarket_v7_economic_engine_configured{engine="CRYPTO_SETTLEMENT_ENGINE"} 1','polymarket_v7_economic_engine_configured{engine="STRUCTURAL_ARB_ENGINE"} 1'):
+            for expected in ("polymarket_v7_live_algorithm_count 2","polymarket_v7_live_algorithm_scope_wired 1",'polymarket_v7_economic_engine_configured{engine="CRYPTO_SETTLEMENT_ENGINE"} 1','polymarket_v7_economic_engine_configured{engine="STRUCTURAL_ARB_ENGINE"} 1'):
                 self.assertIn(expected,metrics)
-            for removed in ("graph_rv","micro_taker","osint","sports_latency","cross_platform","wallet_intelligence"):
-                self.assertNotIn(removed,metrics.lower())
 
     def test_runtime_cannot_add_third_algorithm(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -98,8 +95,6 @@ class V7NativeMonitoringTest(unittest.TestCase):
     def test_dashboard_and_alerts_use_two_engine_contract(self) -> None:
         dashboard=(ROOT/"monitoring/grafana/dashboards/polymarket-v7.json").read_text().lower(); alerts=(ROOT/"monitoring/v7_alerts.yml").read_text().lower()
         self.assertIn("polymarket_v7_live_algorithm_count",dashboard)
-        for removed in ("osint","research_shadow","slow_economic_shadow"):
-            self.assertNotIn(removed,dashboard); self.assertNotIn(removed,alerts)
 
 
 if __name__=="__main__": unittest.main()

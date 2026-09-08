@@ -32,7 +32,7 @@ def reconcile(
         allocations.get("engine_budgets"), dict
     ) else {}
     reserve = _finite(allocations.get("reserve_budget"))
-    sleeves = portfolio.get("sleeves") if isinstance(portfolio.get("sleeves"), dict) else {}
+    engines = portfolio.get("engines") if isinstance(portfolio.get("engines"), dict) else {}
     account = _finite(allocations.get("account_starting_capital"))
     budget_sum = sum(value for value in (_finite(raw) for raw in engine_budgets.values()) if value is not None)
     if reserve is not None:
@@ -41,12 +41,13 @@ def reconcile(
         reasons.append("allocation_sum_divergence")
 
     portfolio_equity = _finite(portfolio.get("equity"))
-    sleeve_equities = [_finite(row.get("equity")) for row in sleeves.values() if isinstance(row, dict)]
-    sleeve_equity_sum = sum(value for value in sleeve_equities if value is not None)
-    if portfolio_equity is None or not sleeves or any(value is None for value in sleeve_equities):
+    engine_equities = [_finite(row.get("equity")) for row in engines.values() if isinstance(row, dict)]
+    engine_equity_sum = sum(value for value in engine_equities if value is not None)
+    total_engine_equity = engine_equity_sum + (reserve or 0.0)
+    if portfolio_equity is None or not engines or any(value is None for value in engine_equities):
         reasons.append("portfolio_equity_unverifiable")
-    elif not _close(portfolio_equity, sleeve_equity_sum):
-        reasons.append("portfolio_sleeve_equity_divergence")
+    elif not _close(portfolio_equity, total_engine_equity):
+        reasons.append("portfolio_engine_equity_divergence")
 
     canonical_total = _finite(canonical.get("net_pnl"))
     canonical_by_strategy_raw = canonical.get("strategy_net_pnl")
@@ -96,7 +97,7 @@ def reconcile(
         "account_starting_capital": account,
         "allocation_budget_sum": budget_sum,
         "portfolio_equity": portfolio_equity,
-        "sleeve_equity_sum": sleeve_equity_sum,
+        "engine_equity_sum_plus_reserve": total_engine_equity,
         "canonical_realized_pnl": canonical_total,
         "canonical_strategy_realized_pnl_sum": canonical_strategy_sum,
         "ledger_terminal_pnl": ledger_total,

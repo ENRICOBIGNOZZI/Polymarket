@@ -6,4 +6,4 @@ The runtime owns one execution authority, OMS path, physical inventory truth, ca
 
 High-frequency state changes are event-driven in C++. Python is restricted to control-plane work, research, reporting and model fitting. Every action is bound to receive-time causal state and exact code/model/policy identity.
 
-Blue is the frozen live-PAPER incumbent and the only writer. Green may replay and shadow but has zero execution authority until an explicitly approved, exact-SHA cutover.
+The runtime has one PAPER decision plane and one canonical writer. Research models may generate bounded PAPER proposals or zero-authority evidence, but all MAKE/TAKE/CANCEL actions flow through the same coordinator, allocator/risk chain, executor and ledger.

@@ -5,14 +5,13 @@ This is a PAPER-only slow-plane component. It copies immutable canonical ledger
 rows and fill-conditioned research markouts into a durable, deduplicated
 evidence store, excludes incompatible
 execution semantics from training, and atomically materializes an exact-code
-runtime champion. A cold champion is explicit (`model_state=COLD_START`) rather
+runtime research model. A cold model is explicit (`model_state=COLD_START`) rather
 than a silent in-process fallback.
 """
 
 from __future__ import annotations
 
 import argparse
-import gzip
 import hashlib
 import json
 import math
@@ -27,7 +26,8 @@ from typing import Any, Iterable
 
 MODEL_SCHEMA = "polymarket_v7_maker_execution_model_v1"
 STORE_SCHEMA = "polymarket_v7_maker_durable_evidence_v1"
-STRATEGY = "MICRO_MAKER_PRO"
+STRATEGY = "CRYPTO_SETTLEMENT_ENGINE"
+COMPONENT = "professional_maker"
 HORIZONS_SECONDS = (1, 5, 15, 30, 60, 300)
 ADVERSE_HORIZON_PRIORITY = ("45s", "60s", "10s", "1s", "300s")
 PLACEMENT_FEATURE_NAMES = (
@@ -84,13 +84,10 @@ def identity(row: dict[str, Any]) -> tuple[str, str, str, str]:
 def evidence_files(roots: Iterable[pathlib.Path]) -> list[pathlib.Path]:
     output: set[pathlib.Path] = set()
     for root in roots:
-        if root.is_file() and (
-            root.suffix == ".jsonl" or root.name.endswith(".jsonl.gz")
-        ):
+        if root.is_file() and root.suffix == ".jsonl":
             output.add(root.resolve())
         elif root.exists():
             output.update(item.resolve() for item in root.rglob("*.jsonl"))
-            output.update(item.resolve() for item in root.rglob("*.jsonl.gz"))
             output.update(
                 item.resolve() for item in root.rglob("maker_markout/*.json")
                 if item.parent.name == "maker_markout"
@@ -103,8 +100,7 @@ def evidence_files(roots: Iterable[pathlib.Path]) -> list[pathlib.Path]:
 def rows(paths: Iterable[pathlib.Path]) -> Iterable[dict[str, Any]]:
     for path in paths:
         try:
-            opener = gzip.open if path.suffix == ".gz" else open
-            with opener(path, "rt", encoding="utf-8") as handle:
+            with open(path, "rt", encoding="utf-8") as handle:
                 for line in handle:
                     try:
                         row = json.loads(line)
@@ -115,6 +111,8 @@ def rows(paths: Iterable[pathlib.Path]) -> Iterable[dict[str, Any]]:
                         and row.get("paper_only") is True
                         and row.get("authenticated_execution") is False
                         and str(row.get("strategy") or "").upper() == STRATEGY
+                        and isinstance(row.get("metadata"), dict)
+                        and row["metadata"].get("component") == COMPONENT
                     ):
                         yield row
         except OSError:
@@ -189,29 +187,21 @@ def compact_evidence(
     paths: list[pathlib.Path], *, store_path: pathlib.Path,
     policy_hash: str, config_hash: str,
 ) -> tuple[list[dict[str, Any]], dict[str, int]]:
-    """Keep trainable lifecycle rows and labeled cross-policy risk only.
+    """Compact only the current run's exact policy/config Maker lifecycle.
 
-    CANDIDATE/OPPORTUNITY telemetry made the durable store exceed two GB even
-    though it never enters a fill or markout fit.  Two streaming passes retain
-    the exact current policy's order lifecycle plus same-semantics historical
-    orders that actually have a MARKOUT.  The source archives remain the
-    recoverable canonical record; this file is a compact training projection.
+    Research mode intentionally does not import cross-cutover or cross-policy
+    evidence.  Linked FILL/MARKOUT rows may omit duplicated policy/config
+    fields, so their order identity is inherited from an exact current order.
     """
     exact_order_ids: set[str] = set()
-    same_semantics_order_ids: set[str] = set()
-    marked_order_ids: set[str] = set()
     scanned_rows = 0
-    for row in rows(paths):
+    cached_rows = list(rows(paths))
+    for row in cached_rows:
         scanned_rows += 1
         order_id = str(row.get("order_id") or "")
-        if row.get("event_type") == "ORDER_SUBMITTED" and order_id:
-            if _same_execution_semantics(row):
-                same_semantics_order_ids.add(order_id)
-            if _metadata_identity_matches(row, policy_hash, config_hash):
-                exact_order_ids.add(order_id)
-        elif row.get("event_type") == "MARKOUT" and order_id:
-            marked_order_ids.add(order_id)
-    risk_order_ids = same_semantics_order_ids & marked_order_ids
+        if (row.get("event_type") == "ORDER_SUBMITTED" and order_id
+                and _metadata_identity_matches(row, policy_hash, config_hash)):
+            exact_order_ids.add(order_id)
 
     retained: dict[tuple[str, str, str, str], dict[str, Any]] = {}
     existing_keys: set[tuple[str, str, str, str]] = set()
@@ -223,7 +213,6 @@ def compact_evidence(
             order_id = str(row.get("order_id") or "")
             keep = (
                 (bool(order_id) and order_id in exact_order_ids)
-                or (order_id in risk_order_ids and event_type in RISK_TRANSFER_EVENTS)
                 or (event_type == PROBE_EVENT
                     and _metadata_identity_matches(row, policy_hash, config_hash))
                 or (event_type in STANDALONE_ECONOMIC_EVENTS
@@ -242,7 +231,7 @@ def compact_evidence(
         "retained_records": len(values),
         "new_records": sum(key not in existing_keys for key in retained),
         "exact_policy_orders": len(exact_order_ids),
-        "risk_labeled_cross_policy_orders": len(risk_order_ids - exact_order_ids),
+        "evidence_scope": "CURRENT_RUN_EXACT_POLICY_ONLY",
     }
 
 
@@ -462,7 +451,7 @@ def exact_execution_cell_evidence(
                 (int(row.get("start_ts_ms") or 0) for row in sample), default=0),
             "last_terminal_ts_ms": max(
                 (int(row.get("terminal_ts_ms") or 0) for row in terminal), default=0),
-            "role": "SELECTOR_FEEDBACK_ONLY_NO_AUTHORITY_OR_PROMOTION_CREDIT",
+            "role": "SELECTOR_FEEDBACK_ONLY_NO_EXECUTION_AUTHORITY",
         })
     return {
         "identity": ["market_id", "token_id", "action", "quote_side"],
@@ -693,9 +682,17 @@ def hazard_model(
     # Shrink the expected filled fraction toward the declared cold prior. This
     # affects quote admission only; the pessimistic queue simulator still
     # decides whether a PAPER fill actually occurs from causal public flow.
-    posterior_filled_fraction = (
-        observed_filled_fraction_mass + cold_fill_prior * prior_strength
-    ) / (len(sample) + prior_strength)
+    posterior_alpha = max(1e-9, observed_filled_fraction_mass + cold_fill_prior * prior_strength)
+    posterior_beta = max(1e-9, len(sample) - observed_filled_fraction_mass
+                         + (1.0 - cold_fill_prior) * prior_strength)
+    posterior_filled_fraction = posterior_alpha / (posterior_alpha + posterior_beta)
+    # Logit-normal approximation to a one-sided 90% beta credible lower bound.
+    # Unlike Wilson with zero observed fills, this remains small but positive
+    # because the explicit cold prior contributes real pseudo-evidence.
+    logit_mean = math.log(posterior_alpha / posterior_beta)
+    logit_sd = math.sqrt(1.0 / posterior_alpha + 1.0 / posterior_beta)
+    lower_logit = logit_mean - 1.2815515655446004 * logit_sd
+    posterior_lower_90 = 1.0 / (1.0 + math.exp(-max(-40.0, min(40.0, lower_logit))))
     return {
         "orders": len(sample),
         "filled_orders": len(filled),
@@ -708,6 +705,7 @@ def hazard_model(
             observed_filled_fraction_mass / len(sample) if sample else None
         ),
         "expected_filled_fraction_60s": posterior_filled_fraction,
+        "fill_probability_lower_90": min(posterior_filled_fraction, posterior_lower_90),
         "fill_prior_mean": cold_fill_prior,
         "fill_prior_strength_orders": prior_strength,
         "expected_filled_fraction_given_fill": sum(filled) / len(filled) if filled else 0.0,
@@ -800,7 +798,7 @@ def adverse_markout_models(
             "adverse_markout_dollars": observed_adverse,
             "adverse_markout_prior_filled_shares": prior,
             "adverse_markout_horizon_priority": list(ADVERSE_HORIZON_PRIORITY),
-            "adverse_markout_role": "RISK_ONLY_UPWARD_FLOOR_NO_PROMOTION_CREDIT",
+            "adverse_markout_role": "CURRENT_RUN_RISK_FLOOR",
         }
     return output
 
@@ -865,7 +863,7 @@ def _probe_day_lcb95(values: list[float], seed: int) -> float | None:
     return means[max(0, math.ceil(0.025 * len(means)) - 1)]
 
 
-def shadow_probe_policy_value(values: list[dict[str, Any]]) -> dict[str, Any]:
+def research_policy_value(values: list[dict[str, Any]]) -> dict[str, Any]:
     """Estimate pre-registered maker-arm value on a chronological OOS tail.
 
     `ECONOMIC` is the frozen policy arm; it is never selected ex post. No-fill
@@ -996,8 +994,8 @@ def shadow_probe_policy_value(values: list[dict[str, Any]]) -> dict[str, Any]:
     if unresolved or unlabeled_fills:
         blockers.append("INCOMPLETE_PROBE_LIFECYCLES")
     return {
-        "schema": "polymarket_v7_maker_shadow_probe_policy_value_v1",
-        "authority": "SHADOW_ZERO_AUTHORITY",
+        "schema": "polymarket_v7_maker_research_policy_value_v1",
+        "authority": "RESEARCH_DIAGNOSTIC_ONLY",
         "estimator": "PREDECLARED_ARM_HORVITZ_THOMPSON_DAY_BLOCK_BOOTSTRAP",
         "frozen_policy_arm": "ECONOMIC",
         "selection_sample_reuse": False,
@@ -1005,8 +1003,8 @@ def shadow_probe_policy_value(values: list[dict[str, Any]]) -> dict[str, Any]:
         "forward_oos_days": len(oos_days), "forward_oos_market_day_clusters": market_days,
         "invalid_records": invalid, "unresolved_assignments": unresolved,
         "filled_episodes_without_causal_markout": unlabeled_fills,
-        "arms": arms, "promotion_gate_pass": not blockers,
-        "automatic_promotion": False, "blocking_reasons": blockers,
+        "arms": arms, "research_value_supported": not blockers,
+        "blocking_reasons": blockers,
         "reward_value": 0.0,
         "reward_semantics": "ZERO_UNLESS_OBSERVED_AND_ATTRIBUTABLE_TO_OWN_ACTIVITY",
     }
@@ -1015,59 +1013,25 @@ def shadow_probe_policy_value(values: list[dict[str, Any]]) -> dict[str, Any]:
 def fit_model(values: list[dict[str, Any]], *, model_sha: str, policy_hash: str,
               config_hash: str, cold_fill_prior: float,
               fill_prior_strength_orders: float = 20.0) -> dict[str, Any]:
-    compatible = []
-    incompatible = Counter()
-    for row in values:
-        metadata = row.get("metadata") if isinstance(row.get("metadata"), dict) else {}
-        reason = None
-        if str(metadata.get("policy_hash") or "unknown") != policy_hash:
-            reason = "policy_hash"
-        elif str(metadata.get("config_hash") or "unknown") != config_hash:
-            reason = "config_hash"
-        elif str(metadata.get("execution_semantics_version") or "") != EXECUTION_SEMANTICS:
-            reason = "execution_semantics_version"
-        if reason:
-            incompatible[reason] += 1
-        else:
-            compatible.append(row)
-    # Adverse marks may safely transfer across policy/config hashes when the
-    # execution semantics are identical, but only as a risk-increasing floor.
-    # They receive no fill-probability or promotion credit. MARKOUT rows do not
-    # duplicate order metadata, so select eligible order identities first and
-    # then attach their causally linked FILL/MARKOUT records.
-    risk_order_ids = {
+    exact_order_ids = {
         str(row.get("order_id")) for row in values
         if row.get("event_type") == "ORDER_SUBMITTED" and row.get("order_id")
-        and isinstance(row.get("metadata"), dict)
-        and row["metadata"].get("execution_semantics_version")
-            == EXECUTION_SEMANTICS
+        and _metadata_identity_matches(row, policy_hash, config_hash)
     }
-    risk_values = [
-        row for row in values if str(row.get("order_id") or "") in risk_order_ids
-    ]
-    adverse_models = adverse_markout_models(risk_values)
-    symmetric_outcome_adverse = adverse_markout_models(
-        risk_values, pool_outcomes=True)
-    # Policy/config changes invalidate fill and promotion credit, but linked
-    # same-semantics markouts remain useful in their exact action/outcome/side
-    # cell.  Do not promote three sparse toxic fills into a universal GLOBAL
-    # cost: doing so creates another absorbing state in which every cell stops
-    # quoting and no counter-evidence can ever be collected.  GLOBAL execution
-    # risk therefore uses only current-identity orders; cross-policy evidence is
-    # transferred to its homologous execution cell and is still surfaced as a
-    # global diagnostic below.
-    compatible_order_ids = {
-        str(row.get("order_id")) for row in compatible
-        if row.get("event_type") == "ORDER_SUBMITTED" and row.get("order_id")
-    }
-    compatible_risk_values = [
-        row for row in values
-        if str(row.get("order_id") or "") in compatible_order_ids
-    ]
-    compatible_adverse_models = adverse_markout_models(compatible_risk_values)
-    # Order compatibility is established at ORDER_SUBMITTED. Lifecycle child
-    # rows inherit that identity through order_id and need not repeat hashes.
-    examples = order_examples(compatible_risk_values)
+    compatible: list[dict[str, Any]] = []
+    incompatible = Counter()
+    for row in values:
+        order_id = str(row.get("order_id") or "")
+        event_type = str(row.get("event_type") or "")
+        exact_standalone = (event_type in {PROBE_EVENT, *STANDALONE_ECONOMIC_EVENTS}
+                            and _metadata_identity_matches(row, policy_hash, config_hash))
+        if (order_id and order_id in exact_order_ids) or exact_standalone:
+            compatible.append(row)
+        else:
+            incompatible["outside_current_run_exact_policy"] += 1
+    adverse_models = adverse_markout_models(compatible)
+    symmetric_outcome_adverse = adverse_markout_models(compatible, pool_outcomes=True)
+    examples = order_examples(compatible)
     grouped: dict[str, list[dict[str, Any]]] = defaultdict(list)
     for row in examples:
         grouped[row["group"]].append(row)
@@ -1077,7 +1041,7 @@ def fit_model(values: list[dict[str, Any]], *, model_sha: str, policy_hash: str,
     # YES and NO tokens have identical queue mechanics once action and
     # execution side are fixed. Ensure both exact cells exist so the native
     # loader can apply the cross-outcome risk floor without granting any fill
-    # or promotion credit to the unobserved counterpart.
+    # or economic activation credit to the unobserved counterpart.
     for pooled_key in symmetric_outcome_adverse:
         if pooled_key == "GLOBAL":
             continue
@@ -1101,8 +1065,7 @@ def fit_model(values: list[dict[str, Any]], *, model_sha: str, policy_hash: str,
         # cell, including GLOBAL, consumes its own shrunk posterior.
         execution_fill = empirical_fill if sample else cold_fill_prior
         adverse = (
-            compatible_adverse_models.get("GLOBAL", {})
-            if key == "GLOBAL" else adverse_models.get(key, {})
+            adverse_models.get("GLOBAL", {}) if key == "GLOBAL" else adverse_models.get(key, {})
         )
         groups[key] = {
             **hazard,
@@ -1121,7 +1084,7 @@ def fit_model(values: list[dict[str, Any]], *, model_sha: str, policy_hash: str,
             "adverse_markout_filled_shares": number(
                 adverse.get("adverse_markout_filled_shares")),
             "adverse_markout_dollars": number(adverse.get("adverse_markout_dollars")),
-            "adverse_markout_role": "RISK_ONLY_UPWARD_FLOOR_NO_PROMOTION_CREDIT",
+            "adverse_markout_role": "CURRENT_RUN_RISK_FLOOR",
             "mature": mature,
             "maturity_requirements": {
                 "minimum_orders": 50,
@@ -1137,22 +1100,16 @@ def fit_model(values: list[dict[str, Any]], *, model_sha: str, policy_hash: str,
     # causally linked rows back in.  Filtering MARKOUT row-by-row here silently
     # discarded every placement label emitted without duplicated hashes.
     placement_policy = learned_placement_policy(
-        examples, adverse_placement_examples(compatible_risk_values))
-    probe_policy_value = shadow_probe_policy_value(compatible)
+        examples, adverse_placement_examples(compatible))
+    policy_value = research_policy_value(compatible)
     predictive_oos_valid = placement_policy.get("valid") is True
     placement_policy["predictive_oos_valid"] = predictive_oos_valid
-    placement_policy["economic_activation_gate"] = (
-        "PREDECLARED_ECONOMIC_SHADOW_PROBE_POLICY_VALUE_LCB95"
+    placement_policy["economic_evidence_supported"] = bool(policy_value["research_value_supported"])
+    placement_policy["economic_evidence_state"] = (
+        "SUPPORTED" if policy_value["research_value_supported"] else "DIAGNOSTIC_ACCUMULATING"
     )
-    if not probe_policy_value["promotion_gate_pass"]:
-        placement_policy["valid"] = False
-        if predictive_oos_valid:
-            placement_policy["state"] = (
-                "PREDICTIVE_OOS_VALID_AWAITING_POSITIVE_POLICY_VALUE"
-            )
-    # Sample size is diagnostic only.  This live accumulator has no untouched
-    # chronological OOS window, so it must never confer economic maturity or
-    # silently perform the governed challenger -> champion promotion.
+    # Sample size and policy-value confidence remain diagnostics in research mode.
+    # They do not veto a predictively valid PAPER execution model.
     has_evidence = bool(examples)
     funnel_counts = Counter(row["execution_outcome"] for row in examples)
     terminal_funnel_examples = [
@@ -1166,7 +1123,7 @@ def fit_model(values: list[dict[str, Any]], *, model_sha: str, policy_hash: str,
                  for row in terminal_funnel_examples)
     return {
         "schema": MODEL_SCHEMA,
-        "strategy": STRATEGY,
+        "strategy": STRATEGY, "component": COMPONENT,
         "family": "censored_survival_hazard_joint_cycle_v4",
         "version": generated,
         "generated_ts_ms": generated,
@@ -1194,10 +1151,9 @@ def fit_model(values: list[dict[str, Any]], *, model_sha: str, policy_hash: str,
         "queue_model_version": "pessimistic-public-print-v1",
         "inventory_regime": "seeded_complete_set_bilateral_v1",
         "selection_generation": "bilateral_aggressor_flow_v1",
-        "artifact_role": "champion",
-        "promotion_state": "PAPER_LEARNING_CHAMPION" if has_evidence else "COLD_START_CHAMPION",
+        "artifact_role": "research",
         "model_state": "EVIDENCE_ACCUMULATING" if has_evidence else "COLD_START",
-        "eligible_for_live_reload": True,
+        "research_runtime_model": True,
         "training_window": {
             "start_ts_ms": min(timestamps) if timestamps else None,
             "end_ts_ms": max(timestamps) if timestamps else None,
@@ -1206,11 +1162,12 @@ def fit_model(values: list[dict[str, Any]], *, model_sha: str, policy_hash: str,
             "event_clusters": len({row["event_cluster"] for row in examples}),
         },
         "validation_window": None,
-        "economically_mature": False,
-        "chronological_oos_required_for_mature_promotion": True,
+        "economic_evidence_state": (
+            "SUPPORTED" if policy_value["research_value_supported"] else "DIAGNOSTIC_ACCUMULATING"
+        ),
         "groups": groups,
         "learned_placement_policy": placement_policy,
-        "shadow_probe_policy_value": probe_policy_value,
+        "research_policy_value": policy_value,
         "execution_funnel_labels": {
             "terminal_orders": len(terminal_funnel_examples),
             "outcome_counts": dict(funnel_counts),
@@ -1225,53 +1182,39 @@ def fit_model(values: list[dict[str, Any]], *, model_sha: str, policy_hash: str,
             "semantics": "NO_OPPOSITE_FLOW->PRICE_NOT_REACHED->QUEUE_NOT_DEPLETED->FILL",
         },
         "exact_execution_cells": exact_execution_cell_evidence(examples),
-        "cross_policy_global_adverse_diagnostic": adverse_models.get("GLOBAL", {}),
+        "current_run_global_adverse": adverse_models.get("GLOBAL", {}),
         "risk_only_symmetric_outcome_adverse": {
             key: value for key, value in symmetric_outcome_adverse.items()
             if key != "GLOBAL"
         },
         "joint_cycle_model": joint_states(compatible),
         "excluded_incompatible_records": dict(incompatible),
-        "risk_only_cross_policy_records": max(0, len(risk_values) - len(compatible)),
     }
 
 
-def materialize_frozen_champion(path: pathlib.Path, candidate: dict[str, Any]) -> dict[str, Any]:
-    """Create the runtime snapshot once. Periodic evidence fits cannot promote.
+def materialize_research_model(path: pathlib.Path, candidate: dict[str, Any]) -> dict[str, Any]:
+    """Atomically publish the current PAPER research fit.
 
-    Replacing even only generated_ts_ms would relabel past quotes using a future
-    model publication. A code/policy change requires the canonical new run root.
+    Research mode has no model-version or deployment lifecycle.  The model
+    remains PAPER-only and has zero real-order authority; every refit is merely
+    the latest estimate from the current run's causal execution evidence.
     """
     if path.is_symlink():
-        raise ValueError("maker_champion_symlink")
-    if path.exists():
-        existing = json.loads(path.read_text(encoding="utf-8"))
-        identity = ("schema", "model_sha", "code_sha", "policy_hash", "config_hash",
-                    "execution_semantics_version", "paper_only", "authenticated_execution",
-                    "real_order_submission", "artifact_role")
-        if (not isinstance(existing, dict)
-                or any(existing.get(k) != candidate.get(k) for k in identity)
-                or existing.get("paper_only") is not True
-                or existing.get("authenticated_execution") is not False
-                or existing.get("real_order_submission") is not False
-                or not isinstance(existing.get("generated_ts_ms"), int)
-                or existing["generated_ts_ms"] <= 0):
-            raise ValueError("maker_champion_identity_change_requires_new_run")
-        return existing
-    path.parent.mkdir(parents=True, exist_ok=True)
-    fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
-    with os.fdopen(fd, "w", encoding="utf-8") as handle:
-        json.dump(candidate, handle, sort_keys=True, indent=2, allow_nan=False)
-        handle.write("\n"); handle.flush(); os.fsync(handle.fileno())
+        raise ValueError("maker_research_model_symlink")
+    if (candidate.get("paper_only") is not True
+            or candidate.get("authenticated_execution") is not False
+            or candidate.get("real_order_submission") is not False
+            or candidate.get("artifact_role") != "research"):
+        raise ValueError("maker_research_model_safety_contract")
+    atomic_json(path, candidate)
     return candidate
-
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--source-root", action="append", type=pathlib.Path, default=[])
     parser.add_argument("--store", type=pathlib.Path, required=True)
     parser.add_argument("--store-status", type=pathlib.Path, required=True)
-    parser.add_argument("--champion", type=pathlib.Path, required=True)
+    parser.add_argument("--output-model", type=pathlib.Path, required=True)
     parser.add_argument("--policy", type=pathlib.Path, required=True)
     parser.add_argument("--config", type=pathlib.Path, required=True)
     parser.add_argument("--model-sha", required=True)
@@ -1315,7 +1258,7 @@ def main() -> int:
         config_hash=config_hash, cold_fill_prior=max(1e-6, min(0.5, args.cold_fill_prior)),
         fill_prior_strength_orders=fill_prior_strength_orders,
     )
-    frozen_model = materialize_frozen_champion(args.champion, model)
+    research_model = materialize_research_model(args.output_model, model)
     status = {
         "schema": STORE_SCHEMA,
         "timestamp_ms": time.time_ns() // 1_000_000,
@@ -1330,18 +1273,16 @@ def main() -> int:
         "stored_records": compaction["retained_records"],
         "scanned_strategy_rows": compaction["scanned_strategy_rows"],
         "exact_policy_orders": compaction["exact_policy_orders"],
-        "risk_labeled_cross_policy_orders": (
-            compaction["risk_labeled_cross_policy_orders"]),
-        "store_projection": "TRAINABLE_LIFECYCLE_PLUS_LABELED_RISK_V1",
+        "store_projection": "CURRENT_RUN_EXACT_POLICY_LIFECYCLE_V1",
         "compatible_training_records": model["training_window"]["records"],
         "model_state": model["model_state"],
         "fill_prior_strength_orders": fill_prior_strength_orders,
-        "champion_path": str(args.champion),
-        "champion_generated_ts_ms": frozen_model["generated_ts_ms"],
-        "champion_frozen_across_refits": True,
-        "refit_promotion_authority": False,
-        "refit_model_state": model["model_state"],
-        "champion_sha256": hashlib.sha256(args.champion.read_bytes()).hexdigest(),
+        "research_model_path": str(args.output_model),
+        "research_model_generated_ts_ms": research_model["generated_ts_ms"],
+        "research_model_state": research_model["model_state"],
+        "research_model_sha256": hashlib.sha256(args.output_model.read_bytes()).hexdigest(),
+        "evidence_scope": "CURRENT_RUN_ONLY",
+        "research_runtime": "DIRECT_CURRENT_RUN_MODEL",
     }
     atomic_json(args.store_status, status)
     print(json.dumps(status, sort_keys=True))

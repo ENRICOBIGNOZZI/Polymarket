@@ -22,7 +22,7 @@ def test_polling_snapshot_is_explicitly_non_realtime_and_non_executing(monkeypat
     assert row["best_bid"] == 100.0 and row["best_ask"] == 101.0
     assert row["bid_depth_l20"] == 4.0 and row["ask_depth_l20"] == 5.0
     assert row["realtime_l2_continuity"] is False and row["hft_trigger_eligible"] is False
-    assert row["execution_authority"] is False and row["promotion_authority"] is False
+    assert row["execution_authority"] is False
 
 
 def test_crossed_or_unordered_snapshots_fail_closed(monkeypatch) -> None:

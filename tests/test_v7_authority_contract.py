@@ -42,7 +42,7 @@ class AuthorityContractTests(unittest.TestCase):
 
     def test_removed_legacy_family_cannot_enter_a_live_algorithm(self) -> None:
         value = copy.deepcopy(registry())
-        value["live_algorithms"]["CRYPTO_SETTLEMENT_ENGINE"]["components"].append("osint")
+        value["live_algorithms"]["CRYPTO_SETTLEMENT_ENGINE"]["components"].append("unsupported_component")
         with self.assertRaises(AuthorityContractError):
             validate(value)
 

@@ -17,7 +17,7 @@ void write_model(const std::filesystem::path& path, const std::string& sha) {
     std::ofstream out(path, std::ios::trunc);
     out << R"({
   "schema": "polymarket_v7_maker_execution_model_v1",
-  "strategy": "MICRO_MAKER_PRO",
+  "strategy": "CRYPTO_SETTLEMENT_ENGINE",
   "paper_only": true,
   "authenticated_execution": false,
   "model_sha": ")" << sha << R"(",

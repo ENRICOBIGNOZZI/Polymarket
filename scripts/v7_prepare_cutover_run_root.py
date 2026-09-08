@@ -2,8 +2,6 @@
 """Atomically preserve a prior V7 PAPER run before an exact-SHA cutover."""
 from __future__ import annotations
 
-from v7_maker_accounting import authorized_maker_flat_proof
-
 import argparse
 import hashlib
 import json
@@ -15,8 +13,6 @@ from pathlib import Path
 from typing import Callable
 
 SHA40 = re.compile(r"^[0-9a-f]{40}$")
-MAKER_LEDGER_STRATEGIES = frozenset({"MICRO_MAKER_PRO", "MICRO_MAKER", "PROFESSIONAL_MAKER"})
-
 
 class CutoverArchiveError(RuntimeError):
     pass
@@ -104,6 +100,7 @@ def validate_ledger(
     return rows, digest.hexdigest(), dict(sorted(model_sha_counts.items())), normalized_strategies
 
 
+
 def prepare(
     run_root: Path,
     archive_root: Path,
@@ -171,11 +168,12 @@ def prepare(
         raise CutoverArchiveError("prior_runtime_safety_contract_invalid")
 
     portfolio = read_json(run_root / "control/portfolio_state.json")
-    prior_quarantined_sleeves: list[str] = []
-    prior_reconciled_fatal_sleeves: list[str] = []
     if portfolio:
-        if portfolio.get("paper_only") is not True or portfolio.get("authenticated_execution") is not False:
-            raise CutoverArchiveError("prior_portfolio_safety_contract_invalid")
+        if (portfolio.get("paper_only") is not True
+                or portfolio.get("authenticated_execution") is not False
+                or portfolio.get("real_order_submission") is not False
+                or portfolio.get("killed") is True):
+            raise CutoverArchiveError("prior_portfolio_state_invalid")
         try:
             drawdown = float(portfolio.get("drawdown") or 0.0)
             maximum = float(portfolio.get("max_drawdown") or 0.15)
@@ -183,303 +181,42 @@ def prepare(
             raise CutoverArchiveError("prior_portfolio_drawdown_invalid") from exc
         if drawdown >= maximum:
             raise CutoverArchiveError("prior_portfolio_drawdown_limit")
-        if portfolio.get("killed") is True:
-            sleeves = portfolio.get("sleeves") if isinstance(portfolio.get("sleeves"), dict) else {}
-            prior_quarantined_sleeves = sorted(
-                name for name, row in sleeves.items()
-                if isinstance(row, dict) and row.get("killed") is True and row.get("source") == "reported"
-            )
-            fatal = [
-                name for name, row in sleeves.items()
-                if isinstance(row, dict) and row.get("killed") is True and row.get("source") != "reported"
-            ]
-            maker_row = sleeves.get("micro_maker") if isinstance(sleeves.get("micro_maker"), dict) else {}
-            maker_status = read_json(run_root / "micro_maker/status.json")
-            maker_state = read_json(run_root / "micro_maker/state.json")
-            maker_receipt = read_json(run_root / "control/maker_cutover_liquidation.json")
-            kill_receipt = read_json(run_root / "control/KILL")
-            maker_inventory = maker_state.get("inventory") if isinstance(maker_state.get("inventory"), dict) else {}
-            maker_flat = bool(maker_inventory) and all(
-                isinstance(row, dict)
-                and float(row.get("yes_shares") or 0.0) <= 1e-9
-                and float(row.get("no_shares") or 0.0) <= 1e-9
-                for row in maker_inventory.values()
-            )
-            recovered_maker_fatal = (
-                portfolio.get("fatal_sleeves") == ["micro_maker"]
-                and maker_row.get("source") == "fail_closed_unmarkable"
-                and maker_row.get("fatal_to_portfolio") is True
-                and maker_row.get("killed") is False
-                and kill_receipt.get("schema") == portfolio.get("schema")
-                and kill_receipt.get("timestamp") == portfolio.get("timestamp")
-                and kill_receipt.get("killed") is True
-                and maker_receipt.get("state") == "MAKER_FLAT"
-                and maker_receipt.get("model_sha") == previous_sha
-                and maker_receipt.get("paper_only") is True
-                and maker_receipt.get("authenticated_execution") is False
-                and maker_receipt.get("real_order_submission") is False
-                and maker_state.get("cutover_liquidation_nonce") == maker_receipt.get("nonce")
-                and maker_state.get("paper_only") is True
-                and maker_state.get("authenticated_execution") is False
-                and maker_flat
-                and maker_status.get("source") in {
-                    "verified_cutover_full_depth_liquidation",
-                    "paper_cutover_conservative_zero_recovery",
-                }
-                and maker_status.get("marking_complete") is True
-                and maker_status.get("killed") is False
-                and maker_status.get("positions") == []
-                and maker_status.get("drain_complete") is True
-            )
-            if recovered_maker_fatal:
-                prior_reconciled_fatal_sleeves = ["micro_maker"]
-            if (not prior_quarantined_sleeves and not recovered_maker_fatal) or fatal:
-                raise CutoverArchiveError("prior_portfolio_killed")
 
-    # A SHA cutover must never turn live PAPER inventory into an orphaned
-    # archive.  Status and durable worker state are cross-checked after the
-    # process tree has stopped; any open position blocks the transition until
-    # its real PAPER exit/settlement or an explicit conservative zero-recovery
-    # write-off has emitted terminal evidence.
-    external_status = read_json(run_root / "external_fair/paper_router_status.json")
-    external_state = read_json(run_root / "external_fair/paper_router_state.json")
-    micro_status = read_json(run_root / "micro_taker/status.json")
-    micro_state = read_json(run_root / "micro_taker/state.json")
-    maker_status = read_json(run_root / "micro_maker/status.json")
-    maker_state = read_json(run_root / "micro_maker/state.json")
-    maker_receipt = read_json(run_root / "control/maker_cutover_liquidation.json")
+    # The current PAPER account and executor are the only inventory surfaces.
+    # Cutover requires both to be flat after the runtime has stopped.
+    account = read_json(run_root / "external_fair/paper_router_status.json")
+    executor = read_json(run_root / "micro_maker/authorized_make_executor_status.json")
+    for name, value in (("paper_account", account), ("maker_executor", executor)):
+        if not value:
+            raise CutoverArchiveError(f"prior_position_state_missing:{name}")
+        if (value.get("paper_only") is not True
+                or value.get("authenticated_execution") is not False
+                or value.get("real_order_submission") is not False):
+            raise CutoverArchiveError(f"prior_position_state_unsafe:{name}")
+    if account.get("model_sha") not in (None, "", previous_sha):
+        raise CutoverArchiveError("prior_paper_account_sha_mismatch")
+    if executor.get("model_sha") != previous_sha:
+        raise CutoverArchiveError("prior_maker_executor_sha_mismatch")
+    try:
+        account_open = int(account.get("open_positions") or 0)
+        pending_maker = int(account.get("pending_maker_orders") or 0)
+        active_maker = int(executor.get("active_orders") or 0)
+    except (TypeError, ValueError, OverflowError) as exc:
+        raise CutoverArchiveError("prior_open_positions_invalid") from exc
+    if account_open < 0 or pending_maker < 0 or active_maker < 0:
+        raise CutoverArchiveError("prior_open_positions_invalid")
+    if account_open or pending_maker or active_maker:
+        raise CutoverArchiveError(
+            f"prior_open_positions:account={account_open},pending_maker={pending_maker},active_maker={active_maker}")
+
     ledger_path = run_root / "ledger/execution.jsonl"
     spool_path = run_root / "ledger/spool"
     ledger_rows, ledger_sha256, ledger_model_sha_counts, ledger_strategy_counts = validate_ledger(
         ledger_path, repository_root, target_sha, ancestor_check,
     )
-    ledger_bytes = ledger_path.stat().st_size if ledger_path.exists() else 0
-    exact_sha_strategy_counts = ledger_strategy_counts.get(previous_sha, {})
-    maker_ledger_rows = sum(
-        int(exact_sha_strategy_counts.get(strategy, 0))
-        for strategy in MAKER_LEDGER_STRATEGIES
-    )
-    sleeves = portfolio.get("sleeves") if isinstance(portfolio.get("sleeves"), dict) else {}
-    ledger_empty = ledger_path.exists() and ledger_bytes == 0
-    spool_empty = not spool_path.exists() or not any(spool_path.glob("*.json"))
-    prior_never_started_sleeves: list[str] = []
-
-    def prove_never_started(
-        name: str, allowed_sources: set[str], *, require_ledger_empty: bool = True,
-    ) -> dict:
-        sleeve = sleeves.get(name) if isinstance(sleeves.get(name), dict) else {}
-        try:
-            budget = float(sleeve.get("budget") or 0.0)
-            equity = float(sleeve.get("equity") or 0.0)
-        except (TypeError, ValueError, OverflowError) as exc:
-            raise CutoverArchiveError(f"prior_never_started_invalid:{name}") from exc
-        if (
-            (require_ledger_empty and not ledger_empty) or not spool_empty
-            or runtime.get("state") not in {"stopping", "stopped"}
-            or runtime.get("economic_new_risk_ready") is not False
-            or runtime.get("authorized_alpha_actions") != []
-            or sleeve.get("source") not in allowed_sources
-            or sleeve.get("killed") is not False
-            or abs(equity - budget) > 1e-9
-        ):
-            raise CutoverArchiveError(f"prior_never_started_invalid:{name}")
-        return {"source": sleeve["source"], "budget": budget, "equity": equity}
-
-    def verify_maker_never_started_receipt(maker_proof: dict) -> None:
-        absence = maker_receipt.get("absence_proof") \
-            if isinstance(maker_receipt.get("absence_proof"), dict) else {}
-        nonempty_ledger_proof_invalid = ledger_bytes > 0 and (
-            absence.get("checked_model_sha") != previous_sha
-            or absence.get("maker_strategies") != sorted(MAKER_LEDGER_STRATEGIES)
-            or absence.get("ledger_records") != ledger_rows
-            or absence.get("ledger_sha256") != ledger_sha256
-            or absence.get("exact_sha_records") != ledger_model_sha_counts.get(previous_sha, 0)
-            or absence.get("exact_sha_execution_events") != sum(exact_sha_strategy_counts.values())
-            or absence.get("exact_sha_maker_events") != 0
-        )
-        if (
-            not ledger_path.exists()
-            or maker_ledger_rows != 0
-            or nonempty_ledger_proof_invalid
-            or maker_receipt.get("schema") != "polymarket_v7_maker_cutover_liquidation_v1"
-            or maker_receipt.get("state") != "MAKER_FLAT"
-            or maker_receipt.get("never_started") is not True
-            or maker_receipt.get("model_sha") != previous_sha
-            or maker_receipt.get("paper_only") is not True
-            or maker_receipt.get("authenticated_execution") is not False
-            or maker_receipt.get("real_order_submission") is not False
-            or maker_receipt.get("positions_liquidated") != 0
-            or maker_receipt.get("ledger_record_ids") != []
-            or maker_receipt.get("final_pnl") != 0.0
-            or absence.get("runtime_sha") != previous_sha
-            or absence.get("runtime_state") != runtime.get("state")
-            or absence.get("authorized_alpha_actions") != []
-            or absence.get("ledger_bytes") != ledger_bytes
-            or absence.get("maker_portfolio_source") != maker_proof["source"]
-            or float(absence.get("maker_budget") or 0.0) != maker_proof["budget"]
-            or float(absence.get("maker_equity") or 0.0) != maker_proof["equity"]
-        ):
-            raise CutoverArchiveError("prior_never_started_receipt_invalid:micro_maker")
-
-    if not micro_status and not micro_state:
-        # micro_taker was removed from V7.  Exact absence in a stopped runtime
-        # is the canonical terminal state; no compatibility sleeve is created.
-        micro_status = {
-            "paper_only": True, "authenticated_execution": False, "open_positions": 0,
-        }
-        micro_state = {"positions": {}}
-    elif micro_status and micro_state and not isinstance(micro_state.get("positions"), dict):
-        # Older research-only micro-taker observers persisted datasets but, by
-        # contract, never created inventory state.  Retire that legacy payload
-        # only when the stopped exact-SHA runtime, empty canonical ledger, zero
-        # budget and both observer documents independently prove zero authority.
-        prove_never_started(
-            "micro_taker", {"not_started", "zero_authority_budget"})
-        for value in (micro_status, micro_state):
-            if (
-                value.get("schema") != "polymarket_v7_micro_taker_status_v1"
-                or value.get("model_sha") != previous_sha
-                or value.get("paper_only") is not True
-                or value.get("authenticated_execution") is not False
-                or value.get("real_order_submission") is not False
-                or value.get("real_capital_at_risk") is not False
-                or value.get("execution_authority") != "RESEARCH_ONLY_ZERO_AUTHORITY"
-                or value.get("capital_authority") is not False
-                or value.get("inventory_authority") is not False
-                or value.get("ledger_writer_authority") is not False
-                or value.get("oms_authority") is not False
-                or value.get("order_authority") is not False
-                or value.get("promotion_authority") is not False
-                or value.get("research_only") is not True
-                or value.get("inventory_state_created") is not False
-                or value.get("drain_complete") is not True
-                or int(value.get("signals", -1)) != 0
-            ):
-                raise CutoverArchiveError("prior_observer_status_invalid:micro_taker")
-        micro_status = dict(micro_status, open_positions=0)
-        micro_state = {"positions": {}}
-        prior_never_started_sleeves.append("micro_taker")
-    authorized_executor_path = run_root / "micro_maker/authorized_make_executor_status.json"
-    if authorized_executor_path.exists() and not maker_state:
-        try:
-            canonical_flat = authorized_maker_flat_proof(run_root, previous_sha)
-        except (ValueError, OSError) as exc:
-            raise CutoverArchiveError(str(exc)) from exc
-        sentinel = read_json(run_root / "control/CUTOVER_DRAIN")
-        if (maker_receipt.get("schema") != "polymarket_v7_maker_cutover_liquidation_v1"
-                or maker_receipt.get("state") != "MAKER_FLAT"
-                or maker_receipt.get("never_started") is not False
-                or maker_receipt.get("authorized_maker_reconciled") is not True
-                or maker_receipt.get("model_sha") != previous_sha
-                or maker_receipt.get("nonce") != sentinel.get("nonce")
-                or not maker_receipt.get("nonce")
-                or maker_receipt.get("paper_only") is not True
-                or maker_receipt.get("authenticated_execution") is not False
-                or maker_receipt.get("real_order_submission") is not False
-                or maker_receipt.get("canonical_flat_proof") != canonical_flat
-                or maker_receipt.get("final_state_digest") != hashlib.sha256(
-                    json.dumps(canonical_flat,sort_keys=True,separators=(",",":")).encode()).hexdigest()
-                or maker_receipt.get("positions_liquidated") != 0
-                or maker_receipt.get("net_cashflow") != 0.0
-                or maker_receipt.get("final_pnl") != 0.0):
-            raise CutoverArchiveError("authorized_maker_cutover_receipt_invalid")
-        maker_status = {"paper_only":True,"authenticated_execution":False,"positions":[],
-                        "source":"CANONICAL_AUTHORIZED_MAKER_LEDGER_RECONCILED"}
-        maker_state = {"inventory":{}}
-    elif not maker_status and not maker_state:
-        maker_proof = prove_never_started(
-            "micro_maker", {"not_started", "zero_authority_budget"},
-            require_ledger_empty=False)
-        verify_maker_never_started_receipt(maker_proof)
-        maker_status = {
-            "paper_only": True, "authenticated_execution": False, "positions": [],
-        }
-        maker_state = {"inventory": {}}
-        prior_never_started_sleeves.append("micro_maker")
-    elif maker_status and not maker_state:
-        # The professional-maker cohort is an observer component of the crypto
-        # settlement algorithm. It intentionally creates no durable inventory
-        # file. Accept that absence only when both its exact-SHA zero-authority
-        # status and the post-stop liquidation receipt prove it never started.
-        maker_proof = prove_never_started(
-            "micro_maker", {"not_started", "zero_authority_budget"},
-            require_ledger_empty=False)
-        if (
-            maker_status.get("schema") != "polymarket_v7_professional_maker_status_v1"
-            or maker_status.get("model_sha") != previous_sha
-            or maker_status.get("paper_only") is not True
-            or maker_status.get("authenticated_execution") is not False
-            or maker_status.get("real_order_submission") is not False
-            or maker_status.get("execution_authority") != "SHADOW_ZERO_AUTHORITY"
-            or maker_status.get("capital_authority") is not False
-            or maker_status.get("ledger_writer_authority") is not False
-            or maker_status.get("source") != "shadow_markout_and_fillability_observers"
-            or maker_status.get("new_risk_frozen") is not True
-            or maker_status.get("killed") is not False
-            or int(maker_status.get("open_orders", -1)) != 0
-            or int(maker_status.get("open_positions", -1)) != 0
-        ):
-            raise CutoverArchiveError("prior_observer_status_invalid:micro_maker")
-        verify_maker_never_started_receipt(maker_proof)
-        maker_status = dict(maker_status, positions=[])
-        maker_state = {"inventory": {}}
-        prior_never_started_sleeves.append("micro_maker")
-    for name, value in (("external_status", external_status), ("external_state", external_state),
-                        ("micro_status", micro_status), ("micro_state", micro_state),
-                        ("maker_status", maker_status), ("maker_state", maker_state)):
-        if not value:
-            raise CutoverArchiveError(f"prior_position_state_missing:{name}")
-    for name, value in (("external_status", external_status), ("micro_status", micro_status),
-                        ("maker_status", maker_status)):
-        if value.get("paper_only") is not True or value.get("authenticated_execution") is not False:
-            raise CutoverArchiveError(f"prior_position_state_unsafe:{name}")
-    external_positions = external_state.get("positions")
-    micro_positions = micro_state.get("positions")
-    maker_inventory = maker_state.get("inventory")
-    if (not isinstance(external_positions, dict) or not isinstance(micro_positions, dict)
-            or not isinstance(maker_inventory, dict)):
-        raise CutoverArchiveError("prior_position_state_invalid")
-    maker_open = 0
-    for row in maker_inventory.values():
-        if not isinstance(row, dict):
-            raise CutoverArchiveError("prior_position_state_invalid")
-        try:
-            yes_shares = float(row.get("yes_shares") or 0.0)
-            no_shares = float(row.get("no_shares") or 0.0)
-        except (TypeError, ValueError, OverflowError) as exc:
-            raise CutoverArchiveError("prior_position_state_invalid") from exc
-        if yes_shares < 0.0 or no_shares < 0.0:
-            raise CutoverArchiveError("prior_position_state_invalid")
-        maker_open += int(yes_shares > 1e-9) + int(no_shares > 1e-9)
-    try:
-        external_open = int(external_status["open_positions"])
-        counterfactual_open = int(external_status["counterfactual_open_positions"])
-        reported_open = {
-            "external": external_open,
-            "maker": len(maker_status["positions"]),
-            "micro_taker": int(micro_status["open_positions"]),
-        }
-    except (KeyError, TypeError, ValueError, OverflowError) as exc:
-        raise CutoverArchiveError("prior_open_positions_invalid") from exc
-    durable_counterfactual_open = sum(
-        1 for row in external_positions.values()
-        if isinstance(row, dict) and row.get("settled") is not True
-    )
-    if counterfactual_open != durable_counterfactual_open:
-        raise CutoverArchiveError("prior_counterfactual_positions_state_mismatch")
-    # External state.positions is explicitly the SHADOW counterfactual book.
-    # It is archived as evidence but is not executable inventory and therefore
-    # cannot block an exact-SHA transition.
-    durable_open = {
-        "external": external_open,
-        "maker": maker_open,
-        "micro_taker": len(micro_positions),
-    }
-    if any(value < 0 for value in reported_open.values()) or reported_open != durable_open:
-        raise CutoverArchiveError("prior_open_positions_state_mismatch")
-    open_summary = ",".join(f"{name}={value}" for name, value in sorted(durable_open.items()) if value)
-    if open_summary:
-        raise CutoverArchiveError(f"prior_open_positions:{open_summary}")
+    if spool_path.exists() and any(spool_path.glob("*.json")):
+        raise CutoverArchiveError("prior_ledger_spool_not_empty")
+    durable_open = {"paper_account": account_open, "maker_active_orders": active_maker}
 
     archived_at = int(now if now is not None else time.time())
     archive_root.mkdir(parents=True, exist_ok=True)
@@ -504,9 +241,6 @@ def prepare(
         "ledger_model_sha_counts": ledger_model_sha_counts,
         "ledger_strategy_counts": ledger_strategy_counts,
         "runtime_checkout_drift_detected": runtime_checkout_drift,
-        "prior_quarantined_sleeves": prior_quarantined_sleeves,
-        "prior_reconciled_fatal_sleeves": prior_reconciled_fatal_sleeves,
-        "prior_never_started_sleeves": sorted(prior_never_started_sleeves),
         "prior_open_positions": durable_open,
     }
     temporary = control / f"cutover_lineage.json.tmp.{os.getpid()}"

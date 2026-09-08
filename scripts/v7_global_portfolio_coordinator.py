@@ -51,182 +51,20 @@ def append_jsonl(path: Path, value: Any) -> None:
         os.close(descriptor)
 
 
-COMPATIBILITY_COMPONENTS = {
-    "CRYPTO_SETTLEMENT_FAIR": ("CRYPTO_SETTLEMENT_ENGINE", "crypto_settlement_fair"),
-    "CRYPTO_INFORMED_TAKER": ("CRYPTO_SETTLEMENT_ENGINE", "crypto_informed_taker"),
-    "MICRO_MAKER_PRO": ("CRYPTO_SETTLEMENT_ENGINE", "professional_maker"),
-    "PROFESSIONAL_MAKER": ("CRYPTO_SETTLEMENT_ENGINE", "professional_maker"),
-    "FAST_STRUCTURAL": ("STRUCTURAL_ARB_ENGINE", "fast_structural"),
-    "HARD_ARB": ("STRUCTURAL_ARB_ENGINE", "hard_arb"),
-}
-
-
-def _compatibility_envelope(value: dict[str, Any], context: dict[str, Any]) -> dict[str, Any]:
-    strategy = str(value.get("strategy") or "").upper()
-    ownership = COMPATIBILITY_COMPONENTS.get(strategy)
-    if ownership is None:
-        raise OpportunityError("compatibility_strategy_unowned")
-    engine_id, component = ownership
-    ingress = value.get("ingress") if isinstance(value.get("ingress"), dict) else {}
-    if ingress.get("engine_id") != engine_id:
-        raise OpportunityError("compatibility_engine_mismatch")
-    if (
-        context.get("schema") != "polymarket_v7_runtime_status_v3"
-        or context.get("model_sha") != value.get("model_sha")
-        or not isinstance(context.get("config_hash"), str)
-        or not isinstance(context.get("policy_hash"), str)
-        or not isinstance(context.get("run_id"), str)
-    ):
-        raise OpportunityError("compatibility_runtime_identity_missing")
-    metadata = value.get("metadata") if isinstance(value.get("metadata"), dict) else {}
-    crypto_context = None
-    if engine_id == "CRYPTO_SETTLEMENT_ENGINE":
-        crypto_context = metadata.get("crypto_context")
-        if not isinstance(crypto_context, dict):
-            raise OpportunityError("compatibility_crypto_context_missing")
-    recorded_ms = int(value.get("recorded_ts_ms") or 0)
-    decision_ms = int(value.get("decision_ts_ms") or recorded_ms)
-    receive_ms = int(value.get("receive_ts_ms") or decision_ms)
-    exchange_ms = int(value.get("exchange_ts_ms") or receive_ms)
-    if min(recorded_ms, decision_ms, receive_ms, exchange_ms) <= 0:
-        raise OpportunityError("compatibility_causal_clock_missing")
-    decision_ns = max(recorded_ms, decision_ms, receive_ms, exchange_ms) * 1_000_000
-    source_ns = sorted({exchange_ms * 1_000_000, receive_ms * 1_000_000})
-    identity = str(
-        value.get("candidate_id") or value.get("opportunity_id")
-        or value.get("record_id") or ""
-    )
-    if not identity:
-        raise OpportunityError("compatibility_identity_missing")
-    expected = float(value.get("expected_ev") or 0.0)
-    structured = metadata.get("structured_legs")
-    raw_legs = structured if isinstance(structured, list) else []
-    legs: list[dict[str, Any]] = []
-    for index, leg in enumerate(raw_legs):
-        if not isinstance(leg, dict):
-            continue
-        quantity = float(leg.get("target_quantity") or value.get("intended_size") or 0.0)
-        price = float(leg.get("detector_average_price") or value.get("limit_price") or 0.0)
-        if quantity <= 0.0 or not 0.0 <= price <= 1.0:
-            continue
-        legs.append({
-            "leg_id": str(leg.get("leg_id") or f"leg-{index + 1}"),
-            "market_id": str(leg.get("market_id") or value.get("market_id") or f"unmapped:{identity}"),
-            "contract_id": str(leg.get("token_id") or value.get("token_id") or identity),
-            "token_id": str(leg.get("token_id") or value.get("token_id") or identity),
-            "side": str(leg.get("side") or "BUY").upper(),
-            "target_quantity": quantity,
-            "limit_price": price,
-            "fee_authority": "CONSERVATIVE_ZERO",
-        })
-    if not legs:
-        quantity = max(1e-12, float(value.get("intended_size") or 1e-12))
-        price = min(1.0, max(0.0, float(value.get("limit_price") or 0.0)))
-        legs = [{
-            "leg_id": str(value.get("leg_id") or "leg-1"),
-            "market_id": str(value.get("market_id") or f"unmapped:{identity}"),
-            "contract_id": str(value.get("token_id") or value.get("market_id") or identity),
-            "token_id": str(value.get("token_id") or identity),
-            "side": "BUY", "target_quantity": quantity, "limit_price": price,
-            "fee_authority": "CONSERVATIVE_ZERO",
-        }]
-    raw = {
-        "schema": "polymarket_v7_opportunity_envelope_v1",
-        "version": 1,
-        "model_sha": value["model_sha"],
-        "config_hash": context["config_hash"],
-        "policy_hash": context["policy_hash"],
-        "run_id": context["run_id"],
-        "source_snapshot_identity": str(value.get("book_snapshot_id") or identity),
-        "engine_id": engine_id,
-        "component_provenance": [component],
-        "market_id": str(value.get("market_id") or f"unmapped:{identity}"),
-        "event_id": str(value.get("event_id") or f"unmapped:{identity}"),
-        "contract_id": str(value.get("token_id") or value.get("market_id") or identity),
-        "mapping_identity": str(metadata.get("contract_rules_hash") or f"unverified:{identity}"),
-        "crypto_context": crypto_context,
-        # The adapter cannot manufacture missing settlement, latency or
-        # calibration evidence. Preserve diagnostic economics but force the
-        # actionable surface to NOTHING until the producer emits a typed
-        # opportunity envelope of its own.
-        "action": "NOTHING",
-        "side": "NONE",
-        "decision_receive_timestamp_ns": decision_ns,
-        "source_event_timestamps_ns": source_ns,
-        "fair_value": {"lower": 0.0, "point": 0.5, "upper": 1.0},
-        "conservative_expected_wealth_change": expected,
-        "cost_vector": {
-            "fee": max(0.0, float(value.get("fee") or 0.0)),
-            "slippage": max(0.0, float(value.get("slippage") or 0.0)),
-            "unwind_loss": max(0.0, float(value.get("unwind_loss") or 0.0)),
-            "capital_cost": max(0.0, float(value.get("capital_cost") or 0.0)),
-            "latency_cost": max(0.0, float(value.get("latency_cost") or 0.0)),
-            "adverse_markout": 0.0,
-            "rebate": 0.0,
-        },
-        "cost_authority": {
-            "fee": "CONSERVATIVE_ZERO", "slippage": "CONSERVATIVE_ZERO",
-            "unwind_loss": "CONSERVATIVE_ZERO", "capital_cost": "CONSERVATIVE_ZERO",
-            "latency_cost": "CONSERVATIVE_ZERO", "adverse_markout": "CONSERVATIVE_ZERO",
-            "rebate": "CONSERVATIVE_ZERO",
-        },
-        "uncertainty": {"lower_bound": -1.0, "upper_bound": 1.0, "status": "MISSING"},
-        "calibration_status": "MISSING",
-        "latency": {
-            "profile_id": "compatibility-missing", "profile_valid": False,
-            "economic_percentile": "p99", "arrival_ns": 1,
-        },
-        "capacity": {
-            "executable_size": max(0.0, float(value.get("intended_size") or 0.0)),
-            "depth_provenance": str(value.get("book_snapshot_id") or "MISSING"),
-        },
-        "execution_plan": {
-            "atomic_unit_id": str(value.get("bundle_id") or identity),
-            "execution_style": (
-                "SEQUENTIAL_ATOMIC_INTENT" if engine_id == "STRUCTURAL_ARB_ENGINE"
-                else "SINGLE_LEG"
-            ),
-            "legs": legs,
-            "partial_fill_plan": (
-                "COMPLETE_OR_UNWIND" if engine_id == "STRUCTURAL_ARB_ENGINE"
-                else "NO_NEW_RISK"
-            ),
-            "timeout_ms": int(value.get("timeout_ms") or 0),
-            "unwind_plan": (
-                "FULL_DEPTH_BOUNDED_UNWIND" if engine_id == "STRUCTURAL_ARB_ENGINE"
-                else "NONE"
-            ),
-        },
-        "inventory_delta": 0.0,
-        "portfolio_exposure_delta": 0.0,
-        "settlement": {
-            "definition": "compatibility adapter has no verified settlement binding",
-            "source": "V7_LEDGER_SPOOL_CANDIDATE_INGRESS", "verified": False,
-        },
-        "eligible": True,
-        "reasons": ["TEMPORARY_ADAPTER_FORCES_CANCEL_NOTHING_ONLY"],
-        "deterministic_replay_key": f"compat:{engine_id}:{identity}",
-        "expires_at_ns": decision_ns + 1_000_000_000,
-    }
-    return OpportunityEnvelope.parse(raw).raw
-
-
 def envelope_from_ingress(value: dict[str, Any], context: dict[str, Any]) -> dict[str, Any]:
     if value.get("schema") == "polymarket_v7_opportunity_envelope_v1":
-        OpportunityEnvelope.parse(value)
-        return value
+        return OpportunityEnvelope.parse(value).raw
     metadata = value.get("metadata") if isinstance(value.get("metadata"), dict) else {}
     embedded = metadata.get("opportunity_envelope")
     if not isinstance(embedded, dict):
-        return _compatibility_envelope(value, context)
+        raise OpportunityError("canonical_opportunity_envelope_required")
     envelope = OpportunityEnvelope.parse(embedded)
     if envelope.raw["model_sha"] != value.get("model_sha"):
-        raise OpportunityError("compatibility_model_sha_mismatch")
+        raise OpportunityError("embedded_model_sha_mismatch")
     ingress = value.get("ingress") if isinstance(value.get("ingress"), dict) else {}
-    if envelope.engine_id != ingress.get("engine_id"):
-        raise OpportunityError("compatibility_engine_mismatch")
+    if ingress and envelope.engine_id != ingress.get("engine_id"):
+        raise OpportunityError("embedded_engine_mismatch")
     return envelope.raw
-
 
 def _is_paper_probe(envelope: dict[str, Any]) -> bool:
     exploration = envelope.get("exploration")
@@ -322,7 +160,7 @@ def _publish_cancel_authorization(root: Path, decision: dict[str, Any], envelope
     if (
         envelope.get("engine_id") != "CRYPTO_SETTLEMENT_ENGINE"
         or envelope.get("action") != "CANCEL"
-        or "FROZEN_FORWARD_CANCEL_GATE_PASS" not in (envelope.get("reasons") or [])
+        or "RESEARCH_CANCEL_RULE_MATCH" not in (envelope.get("reasons") or [])
     ):
         return
     key = str(decision["selected_replay_key"])

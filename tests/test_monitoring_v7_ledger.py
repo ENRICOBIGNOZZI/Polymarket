@@ -27,7 +27,7 @@ class V7LedgerMonitoringTest(unittest.TestCase):
         return {
             "schema_version": 1,
             "event_type": event_type,
-            "strategy": "graph_rv",
+            "strategy": "STRUCTURAL_ARB_ENGINE",
             "model_sha": "a" * 40,
             "paper_only": True,
             "authenticated_execution": False,
@@ -115,7 +115,7 @@ class V7LedgerMonitoringTest(unittest.TestCase):
                 "paper_only": True,
                 "authenticated_execution": False,
                 "expected_model_sha": "a" * 40,
-                "promotion_ready": False,
+                "economic_evidence_ready": False,
                 "submitted_units": 1,
                 "complete_units": 0,
             },
