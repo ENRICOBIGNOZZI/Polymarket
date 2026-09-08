@@ -7,7 +7,7 @@ import sys
 import tempfile
 import unittest
 sys.path.insert(0,str(Path(__file__).resolve().parents[1]/'scripts'))
-from v7_profit_attribution import analyze, read_sources, opportunity_funnel
+from v7_profit_attribution import analyze, read_sources, opportunity_funnel, learning_coverage
 
 SHA='a'*40
 
@@ -27,6 +27,13 @@ def fixture():
     return [order,one,two,final]
 
 class AttributionTests(unittest.TestCase):
+    def test_markout_coverage_counts_fill_ids_not_observer_attempts(self):
+        values=fixture();values[0]['metadata']['component']='professional_maker'
+        mark={**values[1],'event_type':'MARKOUT','markouts':{'1s':-.01},'filled_size':None}
+        coverage=learning_coverage(values+[mark,mark])['fill_conditioned_markout_coverage']
+        self.assertEqual(coverage['1s']['observed'],1)
+        self.assertEqual(coverage['1s']['positive_quantity_fills'],2)
+        self.assertEqual(coverage['5s']['missing_or_nonfinite_after_horizon'],2)
     def test_legacy_conservative_bound_is_not_mistaken_for_point_forecast(self):
         values=fixture();values[0]['metadata'].update(fair_yes=.6,outcome='NO',point_probability=.1)
         result=analyze(values)['positions'][0]

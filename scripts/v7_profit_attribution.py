@@ -186,7 +186,23 @@ def learning_coverage(values):
         absent=[name for name in required if dec(raw.get(name)) is None]
         for name in absent: missing[name]+=1
         if not absent: missing['INVALID_ACTION_SIDE_SIZE_OR_QUEUE']+=1
+    order_ids={str(row.get('order_id')) for row in orders}
+    fills={str(row['fill_id']):row for row in values if row.get('event_type')=='FILL' and row.get('fill_id')
+           and str(row.get('order_id')) in order_ids and (dec(row.get('filled_size')) or ZERO)>0}
+    marks=defaultdict(dict)
+    for row in values:
+        if row.get('event_type')=='MARKOUT' and str(row.get('fill_id')) in fills:
+            for horizon,value in (row.get('markouts') or {}).items():
+                if dec(value) is not None:marks[str(row['fill_id'])][horizon]=value
+    coverage={}
+    now_ms=time.time_ns()//1000000
+    for horizon in (1,5,10,30):
+        observed=sum(f'{horizon}s' in marks[fid] for fid in fills)
+        pending=sum(f'{horizon}s' not in marks[fid] and now_ms-(row.get('receive_ts_ms') or row.get('recorded_ts_ms') or 0)<horizon*1000 for fid,row in fills.items())
+        coverage[f'{horizon}s']={'positive_quantity_fills':len(fills),'observed':observed,'horizon_not_yet_due':pending,
+            'missing_or_nonfinite_after_horizon':len(fills)-observed-pending}
     return {'orders':len(orders),'complete_vectors':complete,'complete_fraction':complete/len(orders) if orders else None,
+            'fill_conditioned_markout_coverage':coverage,
             'missing_fields_overlapping':dict(missing),'excluded_orders':len(orders)-complete}
 
 
@@ -281,6 +297,18 @@ def main():
     ap=argparse.ArgumentParser(description=__doc__);ap.add_argument('--ledger',type=Path,action='append',required=True);ap.add_argument('--output',type=Path,required=True)
     ap.add_argument('--run-root',type=Path);ap.add_argument('--csv',type=Path)
     args=ap.parse_args();values,sources=read_sources(args.ledger)
+    if args.run_root:
+        markout_paths=sorted((args.run_root/'research/evidence/maker_markout').glob('*.json'))
+        if markout_paths:
+            marks,mark_sources=read_sources(markout_paths)
+            if any(row.get('event_type')!='MARKOUT' for row in marks):raise ValueError('non-markout research source')
+            # Exact fill identity joins; research labels never create cash rows.
+            existing={(row['model_sha'],row['record_id']):row for row in values}
+            for row in marks:
+                key=(row['model_sha'],row['record_id'])
+                if key in existing and existing[key]!=row:raise ValueError('conflicting markout source')
+                existing[key]=row
+            values=list(existing.values());sources.extend(mark_sources)
     def auxiliary(relative):
         if args.run_root is None:return []
         path=args.run_root/relative
