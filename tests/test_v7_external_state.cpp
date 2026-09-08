@@ -313,6 +313,28 @@ int main() {
     assert(down.signal_version == 1);
     assert(down.direction == -1);
 
+    // Burst traffic must not erase the five-second history. 6,001 updates
+    // reproduce the old 256-event-ring defect: missing history looked like zero.
+    ExternalAssetState burst_state(500);
+    ExternalStatePolicy burst_policy;
+    burst_policy.min_healthy_venues = 1;
+    burst_policy.venue_weights.fill(0.0);
+    burst_policy.venue_weights[0] = 1.0;
+    constexpr std::int64_t burst_start = 10'000'000'000LL;
+    for (int i = 0; i <= 6000; ++i) {
+        const double mid = 100.0 + 0.001 * i;
+        assert(burst_state.on_venue_event(book(VenueId::BinanceSpot,
+            static_cast<std::uint64_t>(i + 1), burst_start + i * 1'000'000LL,
+            mid - 0.005, mid + 0.005, 1, 1), burst_policy));
+    }
+    assert(burst_state.return_history_available(burst_start + 6'000'000'000LL, 5'000'000'000LL));
+    assert(!burst_state.return_history_available(burst_start + 6'000'000'000LL, 30'000'000'000LL));
+    assert(!burst_state.return_history_available(burst_start + 20'000'000'000LL, 5'000'000'000LL));
+    const auto burst = burst_state.snapshot(burst_start + 6'000'000'000LL, burst_policy);
+    std::cerr << "burst_5s_return=" << burst.venue_composite_return_5s << "\n";
+    assert(std::abs(burst.venue_composite_return_5s - std::log(106.0 / 101.0)) < 0.0002);
+    assert(std::abs(burst.venue_composite_return_1s - std::log(106.0 / 105.0)) < 0.0002);
+
     CausalStateInputs inputs;
     inputs.pm_state_version = 1;
     inputs.oracle_state_version = 2;

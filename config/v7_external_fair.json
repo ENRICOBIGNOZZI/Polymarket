@@ -264,6 +264,20 @@
     "required_probability_model_id": "btc_m5_same_oracle_diffusion_bootstrap_v1",
     "schema": "polymarket_v7_paper_exploration_probe_v1"
   },
+  "paper_ml_probe": {
+    "authority": "PAPER_EXPLORATION",
+    "automatic_promotion": false,
+    "enabled": true,
+    "family": "btc_m5_rich_external_logit_v1",
+    "maximum_loss_per_probe_usd": 2.0,
+    "missing_information": "EXPLICIT_MASK_NOT_FABRICATED",
+    "probability_interval_validated": false,
+    "promotion_credit": false,
+    "real_order_submission": false,
+    "sampling_unit": "settlement_market",
+    "training_selection": "chronological_label_available_validation",
+    "unchanged_canonical_caps_required": true
+  },
   "paper_only": true,
   "promotion": {
     "automatic_promotion": false,

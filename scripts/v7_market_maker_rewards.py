@@ -10,6 +10,15 @@ this selector records pool/configuration facts and a ranking score.  It does not
 invent a guaranteed reward share when competition evidence is unavailable.
 """
 from __future__ import annotations
+try:
+    from v7_external_rich_model import is_paper_learning_fair
+except ModuleNotFoundError:
+    # Standalone file-based test loaders need the canonical sibling directory.
+    import sys
+    from pathlib import Path as _ModulePath
+    sys.path.insert(0, str(_ModulePath(__file__).resolve().parent))
+    from v7_external_rich_model import is_paper_learning_fair
+
 
 import argparse
 from dataclasses import asdict, dataclass
@@ -641,6 +650,7 @@ def _inject_settlement_anchor(
             and fair.get("authority") == "SHADOW"
         )
     )
+    fair_mode_ready = fair_mode_ready or is_paper_learning_fair(fair, model_sha)
     fair_ready = (
         fair_status.get("schema") == "polymarket_v7_external_fair_status_v1"
         and fair_status.get("paper_only") is True

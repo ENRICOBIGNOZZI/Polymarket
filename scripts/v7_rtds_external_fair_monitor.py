@@ -40,6 +40,11 @@ from v7_external_settlement_model import (
     validate_parameters as validate_settlement_parameters,
 )
 
+from v7_external_rich_model import (
+    FAMILY as RICH_FAMILY, features as rich_features, predict as rich_predict,
+    validate_parameters as validate_rich_parameters, contextual_features,
+)
+
 HOST = "ws-live-data.polymarket.com"
 ORACLE_TOPIC = "crypto_prices_twap_sixty"
 EXTERNAL_TOPIC = "crypto_prices"
@@ -80,7 +85,12 @@ def load_registered_calibration(
     try:
         artifact = FairModelArtifact(**raw)
         artifact.validate()
-        if artifact.family == RESIDUAL_FAMILY:
+        if artifact.family == RICH_FAMILY:
+            if expected_role != "CHALLENGER":
+                raise ValueError("rich_model_is_paper_probe_challenger_only")
+            validate_rich_parameters(artifact)
+            intercept, slope = 0.0, 1.0
+        elif artifact.family == RESIDUAL_FAMILY:
             if expected_role != "CHALLENGER":
                 raise ValueError("residual_is_research_challenger_only")
             validate_residual_parameters(artifact)
@@ -551,6 +561,7 @@ class Monitor:
         self.challenger, self.challenger_load_state = load_registered_calibration(
             challenger_pointer, code_sha=code_sha, expected_role="CHALLENGER")
         self.paper_bootstrap = validate_paper_bootstrap_policy(paper_bootstrap)
+        self.paper_ml_enabled = False
         self.approved_rule_hashes: set[str] = set()
         if approvals_path is not None:
             raw = json.loads(approvals_path.read_text(encoding="utf-8"))
@@ -853,6 +864,8 @@ class Monitor:
                 or rules_hash not in artifact.rules_hashes):
             output["registry_load_state"] = "SCOPE_MISMATCH"
             return output
+        if artifact.family == RICH_FAMILY:
+            return {"valid": False, "authority": "SHADOW", "reason": "USE_RICH_CAUSAL_FEATURE_CUT"}
         if artifact.family == RESIDUAL_FAMILY:
             # Point-probability research, never a validated risk interval or champion.
             forward_start = int(artifact.hyperparameters.get("forward_oos_starts_after_ns") or 0)
@@ -916,6 +929,54 @@ class Monitor:
             "explicit_registry_model_applied": True,
         })
         return output
+
+    def rich_paper_snapshot(self, baseline: dict[str, Any], external: dict[str, Any],
+                            context: dict[str, Any], now_ns: int) -> dict[str, Any]:
+        """Frozen learned point estimate, never a mature fair-value authority."""
+        artifact = self.challenger
+        invalid = {"valid": False, "reason": "RICH_MODEL_NOT_READY", "authority": "SHADOW"}
+        if (artifact is None or artifact.family != RICH_FAMILY
+                or self.challenger_load_state != "LOADED" or baseline.get("valid") is not True):
+            return invalid
+        rule = str(self.active_contract.get("normalized_rules_hash") or "")
+        start_ns = int(self.active_market.get("contract_start_epoch") or 0) * 1_000_000_000
+        if (rule not in artifact.rules_hashes or "BTC" not in artifact.assets
+                or "BTC_USD_UPDOWN_5M" not in artifact.contract_templates
+                or start_ns < int(artifact.hyperparameters.get("forward_oos_starts_after_ns") or 0)):
+            return {**invalid, "reason": "AWAITING_NEW_FORWARD_CONTRACT"}
+        origin = {"observed_ms": now_ns // 1_000_000, "observed_wall_ns": now_ns,
+                  "oracle_value": self.latest.get(ORACLE_TOPIC, {}).get("price"),
+                  "reference_value": self.reference.get("value"),
+                  "observed_tte_seconds": baseline.get("tte_seconds"),
+                  "market_probability": baseline.get("pm_mid"),
+                  "external_features": {k: external.get(k) for k in (
+                      "composite_price", "composite_microprice", "dispersion_bps", "age_ns",
+                      "aggregate_ofi", "aggregate_trade_imbalance", "realized_vol_fast",
+                      "realized_vol_medium", "realized_vol_slow", "feature_semantics_version",
+                      "return_history_available", "return_100ms", "return_250ms", "return_1s", "return_5s")},
+                  "external_context": context}
+        try:
+            features = rich_features(origin)
+            probability = rich_predict(artifact, features, baseline.get("pm_mid"))
+        except (ValueError, TypeError, KeyError) as exc:
+            return {**invalid, "reason": "RICH_INPUTS_INVALID:" + str(exc)}
+        feature_payload = json.dumps(origin, sort_keys=True, separators=(",", ":"), allow_nan=False)
+        return {**baseline, "yes": probability, "calibrated": probability,
+                "lower": 0.0, "upper": 1.0, "structural_lower": 0.0, "structural_upper": 1.0,
+                "family": RICH_FAMILY, "model_id": "learned_paper_fair", "authority": "SHADOW",
+                "probability_model_id": artifact.model_version, "probability_model_hash": artifact.model_hash,
+                "model_code_sha": artifact.code_sha, "explicit_champion_applied": False,
+                "explicit_registry_model_applied": True, "registry_role": "CHALLENGER",
+                "registry_load_state": "LOADED", "paper_exploration_bootstrap": False,
+                "paper_exploration_learned": True, "promotion_eligible": False,
+                "real_money_authority": False, "probability_interval_validated": False,
+                "uses_polymarket_price_as_feature": artifact.parameters["offset"] == "market",
+                "inference_state": "VALID_PAPER_LEARNED_PROBE",
+                "calibration_state": "FROZEN_RICH_ML_PAPER_PROBE_ONLY",
+                "rich_feature_cut": origin, "rich_model_features": features,
+                "rich_feature_sha256": hashlib.sha256(feature_payload.encode()).hexdigest(),
+                "forward_start_ns": artifact.hyperparameters["forward_oos_starts_after_ns"],
+                "frozen_at_ns": artifact.generated_timestamp_ns}
 
     def hybrid_fair_snapshot(self, external_only: dict[str, Any]) -> dict[str, Any]:
         """Build the separate market-prior cohort without changing the external benchmark.
@@ -985,6 +1046,15 @@ class Monitor:
         hybrid_fair = self.hybrid_fair_snapshot(fair)
         challenger_fair = self.registered_shadow_snapshot(
             fair, self.challenger, self.challenger_load_state, "CHALLENGER")
+        independent_fair = dict(fair)
+        context = contextual_features(venue_runtime,
+            load_json(self.root / "binance_usdm_rest_status.json"),
+            load_json(self.root / "deribit_rest_status.json"), now)
+        learned_fair = self.rich_paper_snapshot(independent_fair, venue_runtime, context, now)
+        if learned_fair.get("valid") is True:
+            challenger_fair = learned_fair
+            if self.paper_ml_enabled and independent_fair.get("explicit_champion_applied") is not True:
+                fair = learned_fair
         self.latency_samples["fair_compute"].append(
             max(0.0, (time.monotonic_ns() - fair_started) / 1_000_000.0)
         )
@@ -1065,6 +1135,9 @@ class Monitor:
                          "age_ns": int(venue_runtime.get("age_ns") or external_age),
                          "composite_price": float(venue_runtime.get("composite_price") or external.get("price") or 0.0),
                          "composite_microprice": float(venue_runtime.get("composite_microprice") or external.get("price") or 0.0),
+                         "feature_semantics_version": venue_runtime.get("feature_semantics_version"),
+                         "return_history_available": venue_runtime.get("return_history_available", {}),
+                         "return_100ms": venue_runtime.get("return_100ms"),
                          "return_250ms": venue_runtime.get("return_250ms"),
                          "return_1s": venue_runtime.get("return_1s"),
                          "return_5s": venue_runtime.get("return_5s"),
@@ -1083,9 +1156,11 @@ class Monitor:
                 "microprice": float(venue_runtime.get("composite_microprice") or external.get("price") or 0.0),
                 "spread_bps": 0.0, "weight": 1.0, "basis_bps": 0.0,
                 "disabled": not (multi_venue_healthy or external_fresh)}]},
+            "external_context": context,
             "fair": fair,
             "fair_models": {
-                "external_only_fair": fair,
+                "external_only_fair": independent_fair,
+                "learned_paper_fair": learned_fair,
                 "hybrid_fair": hybrid_fair,
                 "registered_challenger": challenger_fair,
                 "execution_model_id": fair.get("probability_model_id"),
@@ -1246,14 +1321,20 @@ def main() -> int:
     if len(args.code_sha) != 40 or any(char not in "0123456789abcdef" for char in args.code_sha):
         raise SystemExit("--code-sha must be a lowercase 40-character Git SHA")
     external_config = load_json(args.external_fair_config) if args.external_fair_config else {}
-    Monitor(args.output_dir.resolve(), args.code_sha, universe_path=args.universe,
+    monitor = Monitor(args.output_dir.resolve(), args.code_sha, universe_path=args.universe,
             approvals_path=args.approvals, external_venues_path=args.external_venues,
             champion_pointer=args.champion_pointer,
             challenger_pointer=args.challenger_pointer,
             paper_bootstrap=external_config.get("paper_exploration_bootstrap")
             if isinstance(external_config.get("paper_exploration_bootstrap"), dict) else None,
-            gamma_url=args.gamma_url).run(
-        PublicResolver(args.dns or list(DEFAULT_DNS)))
+            gamma_url=args.gamma_url)
+    ml = external_config.get("paper_ml_probe") or {}
+    if ml.get("enabled") is True:
+        if (ml.get("automatic_promotion") is not False or ml.get("real_order_submission") is not False
+                or ml.get("promotion_credit") is not False or ml.get("family") != RICH_FAMILY):
+            raise SystemExit("invalid PAPER ML authority")
+        monitor.paper_ml_enabled = True
+    monitor.run(PublicResolver(args.dns or list(DEFAULT_DNS)))
     return 0
 
 

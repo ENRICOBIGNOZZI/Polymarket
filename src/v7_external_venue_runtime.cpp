@@ -1344,9 +1344,21 @@ int main(int argc, char** argv) {
                 {"fresh_venue_count", snapshot.venue_count_fresh},
                 {"venue_health_mask", snapshot.venue_health_mask},
                 {"venue_outlier_mask", snapshot.venue_outlier_mask},
-                {"return_250ms", snapshot.venue_composite_return_250ms},
-                {"return_1s", snapshot.venue_composite_return_1s},
-                {"return_5s", snapshot.venue_composite_return_5s},
+                {"feature_semantics_version", "receive_time_bucketed_composite_v2"},
+                {"return_history_available", {
+                    {"100ms", state.return_history_available(now_mono, 100000000LL)},
+                    {"250ms", state.return_history_available(now_mono, 250000000LL)},
+                    {"1s", state.return_history_available(now_mono, 1000000000LL)},
+                    {"5s", state.return_history_available(now_mono, 5000000000LL)},
+                }},
+                {"return_100ms", state.return_history_available(now_mono, 100000000LL)
+                    ? json::value(snapshot.venue_composite_return_100ms) : json::value(nullptr)},
+                {"return_250ms", state.return_history_available(now_mono, 250000000LL)
+                    ? json::value(snapshot.venue_composite_return_250ms) : json::value(nullptr)},
+                {"return_1s", state.return_history_available(now_mono, 1000000000LL)
+                    ? json::value(snapshot.venue_composite_return_1s) : json::value(nullptr)},
+                {"return_5s", state.return_history_available(now_mono, 5000000000LL)
+                    ? json::value(snapshot.venue_composite_return_5s) : json::value(nullptr)},
                 {"realized_vol_fast", snapshot.realized_vol_fast},
                 {"realized_vol_medium", snapshot.realized_vol_medium},
                 {"realized_vol_slow", snapshot.realized_vol_slow},

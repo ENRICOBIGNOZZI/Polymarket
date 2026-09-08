@@ -42,7 +42,7 @@ RESEARCH_MARKERS = (
     "wallet_intelligence", "wallet_dataset", "market_open", "osint",
     "sports_latency", "sports_collector", "cross_platform", "graph_rv",
     "micro_taker", "research_shadow", "slow_economic_shadow",
-    "fair_value_research", "external_settlement_train",
+    "fair_value_research", "external_rich_train", "external_settlement_train",
     "external_settlement_validate", "external_settlement_dataset",
     # Explicit sub-second research evidence only. These surfaces have no OMS,
     # capital, inventory, signer or production-process authority.

@@ -107,6 +107,9 @@ public:
     // past their timestamps; otherwise the signal is not causally valid.
     [[nodiscard]] ExternalCancelSignalSnapshot advance_external_cancel_signal(
         std::int64_t now_ns, const ExternalStatePolicy& policy) noexcept;
+    // Receive-time, bounded 10ms history; false is not a flat-price observation.
+    [[nodiscard]] bool return_history_available(std::int64_t now_ns,
+        std::int64_t horizon_ns) const noexcept;
     [[nodiscard]] std::uint64_t state_version() const noexcept { return state_version_; }
 
 private:
@@ -169,6 +172,7 @@ private:
     [[nodiscard]] double lagged_return(std::int64_t now_ns,
                                        std::int64_t horizon_ns,
                                        double current_price) const noexcept;
+    [[nodiscard]] const PriceSample* price_sample_at_or_before(std::int64_t target_ns) const noexcept;
     void record_price_sample(std::int64_t receive_ns, double price) noexcept;
     void record_external_cancel_grid_sample(std::int64_t grid_ns) noexcept;
     [[nodiscard]] const ExternalCancelGridSample* external_cancel_grid_at_or_before(
@@ -178,7 +182,9 @@ private:
     std::uint64_t state_version_ = 0;
     std::array<VenueState, kVenueCount> venues_{};
     OracleSnapshot oracle_{};
-    std::array<PriceSample, 256> history_{};
+    // Time buckets retain at least 40 seconds independently of event rate.
+    static constexpr std::int64_t kPriceBucketNs = 10'000'000LL;
+    std::array<PriceSample, 4096> history_{};
     std::size_t history_head_ = 0;
     std::size_t history_count_ = 0;
     double ew_var_fast_ = 0.0;

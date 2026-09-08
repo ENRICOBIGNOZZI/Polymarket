@@ -113,3 +113,20 @@ arrival/fill identity, fees, independently observed settlement and reconciled
 hypothetical cash. These are snapshot-based research outcomes, NOT venue
 fills, NOT canonical PAPER orders and NOT probe performance. Probability
 losses cannot be substituted for trading PnL, and no automatic promotion exists.
+
+## Unified learned PAPER probes (2026-09-08)
+
+An exact-SHA frozen `btc_m5_rich_external_logit_v1` CHALLENGER may supply the
+point forecast for the existing bounded information-probe lane. It is explicitly
+`paper_exploration_learned=true`, not a structural bootstrap or a promoted champion.
+Existing one-per-market, fee, arrival, causality, $2 loss/notional ceilings and
+canonical allocator limits remain mandatory. The Maker settlement anchor similarly
+admits only an explicitly labeled bounded probe while its execution evidence is
+immature. A raw probability does not grant robust economic authority.
+
+FORECAST and OPPORTUNITY_SET records include the original hashed ML feature cut,
+source receive times, source availability, model identity and independent baseline.
+Pending settlements, abstentions, rejections and nonfills remain evidence. Changes
+to feature semantics create a new model generation; frozen G0/v3 evidence is not
+rewritten. Historical reports and canonical ledgers are not obsolete runtime code
+and are preserved. Retired migration-agent launchers are removed from the tree.

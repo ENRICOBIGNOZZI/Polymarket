@@ -14,6 +14,8 @@ selection/latency/unwind buffers.  Immature evidence can still be reported in
 diagnostics but cannot manufacture positive conservative EV.
 """
 from __future__ import annotations
+from v7_external_rich_model import is_paper_learning_fair
+
 
 import hashlib
 import json
@@ -338,6 +340,8 @@ def build_maker_opportunities(
         and fair.get("uses_polymarket_price_as_feature") is False
         and fair.get("authority") == "SHADOW"
     )
+    fair_bootstrap_probe_ready = fair_bootstrap_probe_ready or (
+        fair_common_ready and is_paper_learning_fair(fair, model_sha))
     if not (fair_champion_ready or fair_bootstrap_probe_ready):
         reasons.append("SETTLEMENT_FAIR_NOT_MATURE_OR_VERIFIED")
     if reasons:
@@ -570,7 +574,7 @@ def build_maker_opportunities(
             "eligible": True,
             "reasons": ([
                 "VERIFIED_SETTLEMENT_RULE",
-                ("PAPER_EXPLORATION_BOOTSTRAP_FAIR"
+                (("PAPER_LEARNED_FAIR" if fair.get("paper_exploration_learned") is True else "PAPER_EXPLORATION_BOOTSTRAP_FAIR")
                  if fair_bootstrap_probe_ready else "EXPLICIT_FAIR_CHAMPION"),
                 "CONTROL_EXPLORATION_CELL",
                 "POSITIVE_POINT_MAKER_EV",
