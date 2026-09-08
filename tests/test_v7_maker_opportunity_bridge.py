@@ -138,13 +138,29 @@ def fair_status() -> dict:
     }
 
 
+def bootstrap_fair_status() -> dict:
+    value = fair_status()
+    value["fair"].update({
+        "explicit_champion_applied": False,
+        "paper_exploration_bootstrap": True,
+        "inference_state": "VALID_PAPER_EXPLORATION_BOOTSTRAP",
+        "calibration_state": "PAPER_EXPLORATION_BOOTSTRAP_APPLIED",
+        "probability_model_id": "btc_m5_same_oracle_diffusion_bootstrap_v1",
+        "promotion_eligible": False,
+        "real_money_authority": False,
+        "uses_polymarket_price_as_feature": False,
+        "authority": "SHADOW",
+    })
+    return value
+
+
 def context() -> dict:
     return {
         "asset": "BTC",
         "horizon": "M5",
         "contract_family": "CRYPTO_UPDOWN",
         "settlement_semantic_hash": SEMANTIC,
-        "authority": "SHADOW",
+        "authority": "PAPER_EXPLORATION",
         "research_only": False,
     }
 
@@ -156,11 +172,22 @@ def setup_run(root: Path, *, mature: bool = True) -> None:
     write(root / "external_fair/status.json", fair_status())
 
 
+def test_real_canonical_crypto_context_adapter_is_callable() -> None:
+    registry = bridge.load_crypto_registry(ROOT / "config" / "v7_crypto_settlement_markets.json")
+    context_value = bridge._paper_crypto_context(registry)
+    assert context_value["asset"] == "BTC"
+    assert context_value["horizon"] == "M5"
+    assert context_value["authority"] == "PAPER_EXPLORATION"
+    assert context_value["research_only"] is False
+    assert len(context_value["settlement_semantic_hash"]) == 64
+    assert context_value["contract_family"]
+
+
 def test_mature_positive_cell_becomes_typed_make_opportunity() -> None:
     with tempfile.TemporaryDirectory() as directory:
         run_root = Path(directory)
         setup_run(run_root)
-        with mock.patch.object(bridge, "require_context", return_value=context()):
+        with mock.patch.object(bridge, "_paper_crypto_context", return_value=context()):
             rows, status = bridge.build_maker_opportunities(
                 run_root, now_ns=2_000_000_000, repository_root=ROOT,
             )
@@ -182,7 +209,7 @@ def test_immature_control_cell_becomes_bounded_zero_promotion_paper_probe() -> N
     with tempfile.TemporaryDirectory() as directory:
         run_root = Path(directory)
         setup_run(run_root, mature=False)
-        with mock.patch.object(bridge, "require_context", return_value=context()):
+        with mock.patch.object(bridge, "_paper_crypto_context", return_value=context()):
             rows, status = bridge.build_maker_opportunities(
                 run_root, now_ns=2_000_000_000, repository_root=ROOT,
             )
@@ -200,6 +227,103 @@ def test_immature_control_cell_becomes_bounded_zero_promotion_paper_probe() -> N
         assert status["typed_make_probe_opportunities"] == 1
 
 
+def test_bootstrap_fair_can_only_power_loss_capped_paper_probe() -> None:
+    with tempfile.TemporaryDirectory() as directory:
+        run_root = Path(directory)
+        setup_run(run_root, mature=True)
+        write(run_root / "external_fair/status.json", bootstrap_fair_status())
+        with mock.patch.object(bridge, "_paper_crypto_context", return_value=context()):
+            rows, status = bridge.build_maker_opportunities(
+                run_root, now_ns=2_000_000_000, repository_root=ROOT,
+            )
+        assert len(rows) == 1
+        row = OpportunityEnvelope.parse(rows[0]).raw
+        assert row["exploration"]["mode"] == "PAPER_BOOTSTRAP_PROBE"
+        assert row["exploration"]["promotion_eligible"] is False
+        assert row["exploration"]["robust_candidate"] is False
+        assert row["conservative_expected_wealth_change"] <= 0.0
+        assert "PAPER_EXPLORATION_BOOTSTRAP_FAIR" in row["reasons"]
+        assert "EXPLICIT_FAIR_CHAMPION" not in row["reasons"]
+        leg = row["execution_plan"]["legs"][0]
+        assert leg["target_quantity"] * leg["limit_price"] <= 2.0 + 1e-9
+        assert status["typed_make_probe_opportunities"] == 1
+
+
+def test_settlement_anchor_cold_prior_cell_becomes_only_paper_probe() -> None:
+    with tempfile.TemporaryDirectory() as directory:
+        run_root = Path(directory)
+        setup_run(run_root, mature=False)
+        value = selection()
+        value["markets"][0]["execution_role"] = "SETTLEMENT_ANCHOR_CONTROL"
+        value["markets"][0]["settlement_anchor"] = True
+        value["markets"][0]["authorized_execution_cells"][0].update({
+            "authority_basis": "SETTLEMENT_ANCHOR_COLD_START_CONTROL",
+            "projected_fill_probability": 0.02,
+            "fill_probability_source": "EXECUTION_MODEL_COLD_PRIOR",
+            "settlement_point_edge_per_share": 0.20,
+        })
+        value["markets"][0]["quote_opportunities"][0].update({
+            "projected_join_fill_probability": 0.02,
+            "projected_best_fill_probability": 0.02,
+            "fill_probability_source": "EXECUTION_MODEL_COLD_PRIOR",
+            "opposite_flow_shares_per_second": 0.0,
+            "last_opposite_flow_age_ms": -1,
+        })
+        write(run_root / "micro_maker/reward_selection.json", value)
+        write(run_root / "external_fair/status.json", bootstrap_fair_status())
+        with mock.patch.object(bridge, "_paper_crypto_context", return_value=context()):
+            rows, status = bridge.build_maker_opportunities(
+                run_root, now_ns=2_000_000_000, repository_root=ROOT,
+            )
+        assert len(rows) == 1, status
+        row = OpportunityEnvelope.parse(rows[0]).raw
+        assert row["exploration"]["mode"] == "PAPER_BOOTSTRAP_PROBE"
+        assert row["exploration"]["promotion_eligible"] is False
+        assert row["exploration"]["robust_candidate"] is False
+        assert "PAPER_EXPLORATION_BOOTSTRAP_FAIR" in row["reasons"]
+        assert row["execution_alpha"]["fill_probability"]["point"] > 0.0
+        assert row["execution_plan"]["legs"][0]["target_quantity"] \
+            * row["execution_plan"]["legs"][0]["limit_price"] <= 2.0 + 1e-9
+        assert status["typed_make_probe_opportunities"] == 1
+
+
+def test_bootstrap_fair_cannot_power_noncontrol_or_robust_make() -> None:
+    with tempfile.TemporaryDirectory() as directory:
+        run_root = Path(directory)
+        setup_run(run_root, mature=True)
+        value = selection()
+        value["markets"][0]["control_exploration_authorized"] = False
+        write(run_root / "micro_maker/reward_selection.json", value)
+        write(run_root / "external_fair/status.json", bootstrap_fair_status())
+        with mock.patch.object(bridge, "_paper_crypto_context", return_value=context()):
+            rows, status = bridge.build_maker_opportunities(
+                run_root, now_ns=2_000_000_000, repository_root=ROOT,
+            )
+        assert rows == []
+        assert status["state"] == "NO_EXECUTABLE_MAKE"
+        assert status["rejected"]["BOOTSTRAP_FAIR_REQUIRES_PAPER_PROBE"] == 1
+
+
+def test_bootstrap_fair_that_claims_promotion_or_pm_feature_fails_closed() -> None:
+    for mutation in (
+        lambda fair: fair.update(promotion_eligible=True),
+        lambda fair: fair.update(uses_polymarket_price_as_feature=True),
+        lambda fair: fair.update(real_money_authority=True),
+    ):
+        with tempfile.TemporaryDirectory() as directory:
+            run_root = Path(directory)
+            setup_run(run_root, mature=False)
+            value = bootstrap_fair_status()
+            mutation(value["fair"])
+            write(run_root / "external_fair/status.json", value)
+            rows, status = bridge.build_maker_opportunities(
+                run_root, now_ns=2_000_000_000, repository_root=ROOT,
+            )
+            assert rows == []
+            assert status["state"] == "FAIL_CLOSED"
+            assert "SETTLEMENT_FAIR_NOT_MATURE_OR_VERIFIED" in status["reasons"]
+
+
 def test_immature_noncontrol_cell_still_cannot_manufacture_make_authority() -> None:
     with tempfile.TemporaryDirectory() as directory:
         run_root = Path(directory)
@@ -207,7 +331,7 @@ def test_immature_noncontrol_cell_still_cannot_manufacture_make_authority() -> N
         value = selection()
         value["markets"][0]["control_exploration_authorized"] = False
         write(run_root / "micro_maker/reward_selection.json", value)
-        with mock.patch.object(bridge, "require_context", return_value=context()):
+        with mock.patch.object(bridge, "_paper_crypto_context", return_value=context()):
             rows, status = bridge.build_maker_opportunities(
                 run_root, now_ns=2_000_000_000, repository_root=ROOT,
             )
@@ -237,7 +361,7 @@ def test_semantic_hash_mismatch_fails_closed() -> None:
         setup_run(run_root)
         other = context()
         other["settlement_semantic_hash"] = "f" * 64
-        with mock.patch.object(bridge, "require_context", return_value=other):
+        with mock.patch.object(bridge, "_paper_crypto_context", return_value=other):
             rows, status = bridge.build_maker_opportunities(
                 run_root, now_ns=2_000_000_000, repository_root=ROOT,
             )
@@ -259,7 +383,7 @@ def test_sell_cell_is_not_advertised_before_canonical_inventory_bridge() -> None
             "action": "JOIN", "maximum_quote_shares": 5.0,
         }]
         write(run_root / "micro_maker/reward_selection.json", value)
-        with mock.patch.object(bridge, "require_context", return_value=context()):
+        with mock.patch.object(bridge, "_paper_crypto_context", return_value=context()):
             rows, status = bridge.build_maker_opportunities(
                 run_root, now_ns=2_000_000_000, repository_root=ROOT,
             )
@@ -272,7 +396,7 @@ def test_canonical_selector_timestamp_is_receive_time_causal_and_stale_fails_clo
     with tempfile.TemporaryDirectory() as directory:
         run_root = Path(directory)
         setup_run(run_root)
-        with mock.patch.object(bridge, "require_context", return_value=context()):
+        with mock.patch.object(bridge, "_paper_crypto_context", return_value=context()):
             rows, _ = bridge.build_maker_opportunities(
                 run_root, now_ns=2_000_000_000, repository_root=ROOT,
             )
@@ -283,7 +407,7 @@ def test_canonical_selector_timestamp_is_receive_time_causal_and_stale_fails_clo
         value = selection()
         value["timestamp_ms"] = 1
         write(run_root / "micro_maker/reward_selection.json", value)
-        with mock.patch.object(bridge, "require_context", return_value=context()):
+        with mock.patch.object(bridge, "_paper_crypto_context", return_value=context()):
             rows, status = bridge.build_maker_opportunities(
                 run_root, now_ns=30_000_000_000, repository_root=ROOT,
             )
@@ -294,6 +418,10 @@ def test_canonical_selector_timestamp_is_receive_time_causal_and_stale_fails_clo
 if __name__ == "__main__":
     test_mature_positive_cell_becomes_typed_make_opportunity()
     test_immature_control_cell_becomes_bounded_zero_promotion_paper_probe()
+    test_bootstrap_fair_can_only_power_loss_capped_paper_probe()
+    test_settlement_anchor_cold_prior_cell_becomes_only_paper_probe()
+    test_bootstrap_fair_cannot_power_noncontrol_or_robust_make()
+    test_bootstrap_fair_that_claims_promotion_or_pm_feature_fails_closed()
     test_immature_noncontrol_cell_still_cannot_manufacture_make_authority()
     test_unverified_settlement_fair_fails_closed()
     test_semantic_hash_mismatch_fails_closed()
