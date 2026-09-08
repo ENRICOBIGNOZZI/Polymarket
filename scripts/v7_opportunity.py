@@ -122,7 +122,7 @@ class OpportunityEnvelope:
             "inventory_delta", "portfolio_exposure_delta", "settlement", "eligible",
             "reasons", "deterministic_replay_key", "expires_at_ns",
         }
-        optional = {"exploration", "execution_alpha", "maker_execution_identity"}
+        optional = {"exploration", "execution_alpha", "maker_execution_identity", "settlement_model"}
         if not isinstance(value, dict):
             raise OpportunityError("field_partition")
         fields = set(value)
@@ -176,6 +176,25 @@ class OpportunityEnvelope:
         ):
             raise OpportunityError("component_provenance")
         maker_identity = value.get("maker_execution_identity")
+        settlement_model = value.get("settlement_model")
+        if settlement_model is not None:
+            if engine_id != "CRYPTO_SETTLEMENT_ENGINE" or action not in {"MAKE", "TAKE"}:
+                raise OpportunityError("settlement_model_action")
+            model = _mapping(settlement_model, "settlement_model")
+            if set(model) != {"model_id", "model_hash", "code_sha", "token_probability", "observed_at_ns", "rich_feature_sha256"}:
+                raise OpportunityError("settlement_model_fields")
+            for field, pattern in (("model_hash", HASH64), ("code_sha", SHA), ("rich_feature_sha256", HASH64)):
+                if model[field] is not None and not pattern.fullmatch(str(model[field])):
+                    raise OpportunityError("settlement_model_identity")
+            if model['model_id'] is not None and (not isinstance(model['model_id'], str) or not model['model_id']):
+                raise OpportunityError("settlement_model_id")
+            probability = _finite(model['token_probability'], "settlement_model_probability")
+            if not 0 <= probability <= 1 or probability != _finite(_mapping(value.get('fair_value'), 'fair_value').get('point'), 'fair_point'):
+                raise OpportunityError("settlement_model_probability")
+            observed = model['observed_at_ns']
+            decision = value.get('decision_receive_timestamp_ns')
+            if type(observed) is not int or type(decision) is not int or observed <= 0 or observed > decision:
+                raise OpportunityError("settlement_model_clock")
         if maker_identity is not None:
             identity_map = _mapping(maker_identity, "maker_execution_identity")
             if set(identity_map) != {"policy_hash", "config_hash", "execution_semantics_version"}:

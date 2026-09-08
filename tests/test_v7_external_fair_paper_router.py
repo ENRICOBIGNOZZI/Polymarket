@@ -366,6 +366,11 @@ def main() -> None:
         assert fill["metadata"]["gamma_discovery_mid_diagnostic"] == 0.485
         assert fill["metadata"]["robust_ev_per_share"] > 0.14
         assert fill["metadata"]["arrival_robust_ev_per_share"] > 0.14
+        assert fill["metadata"]["decision_point_probability"] == fill["metadata"]["point_probability"]
+        assert fill["metadata"]["arrival_point_probability"] is not None
+        assert fill["metadata"]["decision_limit_price"] > 0
+        assert fill["metadata"]["arrival_best_ask"] > 0
+        assert fill["metadata"]["decision_observed_ts_ms"] <= fill["metadata"]["arrival_receive_ts_ms"]
 
         extreme_live = snapshot()
         extreme_live["market"].update({"market_id": "m-disagreement", "event_id": "e-disagreement"})

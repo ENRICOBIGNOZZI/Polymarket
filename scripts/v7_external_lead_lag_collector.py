@@ -155,6 +155,7 @@ class Collector:
             raise ValueError("book tape and status must be supplied together")
         self.book = BookTimeline(book_tape, model_sha) if book_tape else None
         self.book_status = book_status
+        self.profit = None
         self.started_ns = time.time_ns()
 
     def tick(self) -> None:
@@ -162,12 +163,14 @@ class Collector:
             self.book.poll()
         router = load(self.router_path)
         live = valid_router_live(router, self.model_sha)
+        fair_status = load(self.fair_path)
+        origin = valid_origin(fair_status, live, self.model_sha) if live else None
+        if self.profit:
+            self.profit.tick(fair_status, origin, load(self.book_status))
         if live is None:
             self.invalid_reads += 1
             if self.book: self.label_books()
             return
-        fair_status = load(self.fair_path)
-        origin = valid_origin(fair_status, live, self.model_sha)
         if origin is not None and origin["origin_id"] != self.last_origin_id:
             self.pending.append(origin)
             self.last_origin_id = origin["origin_id"]
@@ -296,11 +299,22 @@ def main() -> int:
     ap.add_argument("--interval-ms", type=int, default=25)
     ap.add_argument("--book-tape", type=Path)
     ap.add_argument("--book-status", type=Path)
+    ap.add_argument("--profit-root", type=Path)
+    ap.add_argument("--run-root", type=Path)
+    ap.add_argument("--profit-protocol", type=Path, default=Path("config/v7_profit_experiment.json"))
+    ap.add_argument("--replay-binary", type=Path, default=Path("build/polymarket_v7_maker_research_replay"))
     args = ap.parse_args()
     if len(args.model_sha) != 40 or any(c not in "0123456789abcdef" for c in args.model_sha):
         raise SystemExit("invalid --model-sha")
-    Collector(args.fair_status, args.router_status, args.output, args.status,
-              args.model_sha, args.interval_ms, args.book_tape, args.book_status).run()
+    collector = Collector(args.fair_status, args.router_status, args.output, args.status,
+              args.model_sha, args.interval_ms, args.book_tape, args.book_status)
+    if args.profit_root:
+        if not collector.book or not args.run_root: raise SystemExit("profit experiments require book and run root")
+        from v7_profit_experiments import ProfitExperiments
+        collector.book.retention_ms = 60000
+        collector.profit = ProfitExperiments(args.run_root,args.profit_root,args.profit_protocol,
+                                             collector.book,args.model_sha,args.replay_binary.resolve())
+    collector.run()
     return 0
 
 

@@ -10,8 +10,9 @@ TARGET = "CAUSAL_BOOK_STATE_AT_HORIZON"
 
 
 class BookTimeline:
-    def __init__(self, path: Path, model_sha: str):
+    def __init__(self, path: Path, model_sha: str, retention_ms: int = 10000):
         self.path, self.model_sha = path, model_sha
+        self.retention_ms = retention_ms
         self.handle = None
         self.history = defaultdict(lambda: deque(maxlen=20000))
         self.session = ""
@@ -60,7 +61,7 @@ class BookTimeline:
         history = self.history[(market, token)]
         history.append(row)
         # Keep the last observation preceding the rolling window as well.
-        while len(history) > 1 and history[1]["receive_wall_ms"] < received - 10000:
+        while len(history) > 1 and history[1]["receive_wall_ms"] < received - self.retention_ms:
             history.popleft()
 
     def poll(self):
@@ -109,7 +110,7 @@ class BookTimeline:
             watermark = int(status.get("book_watermark_receive_wall_ms") or 0)
         except (ValueError, TypeError, OverflowError): return None
         now = time.time_ns() // 1000000
-        if (not 0 < origin_ms < target_ms <= now or yes_token == no_token
+        if (not 0 < origin_ms <= target_ms <= now or yes_token == no_token
                 or not 0 <= now - published <= 2000
                 or status.get("paper_only") is not True
                 or status.get("authenticated_execution") is not False

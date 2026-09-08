@@ -237,6 +237,9 @@ def collect_snapshot(run_root: Path, repository_root: Path | None = None, *, now
         "external": _json(run_root / "external/status.json"),
         "universe": _json(run_root / "universe/status.json"),
         "canonical_economics": canonical, "ledger": ledger,
+        "profit_attribution": _json(run_root / "profit_attribution.json"),
+        "profit_experiments": {"collector": _json(run_root / "profit_experiment_status.json"),
+            "report": _json(run_root / "profit_experiment_report.json")},
         "maker_lab": summarize_maker_microstructure(ledger_path, run_root / "micro_maker/reward_selection.json", run_root / "research/evidence/maker_markout"),
         "maker_fillability": _fillability(run_root, repository_root, runtime_sha, now),
         "external_fair": external_fair, "reconciliation": reconciliation,
@@ -423,6 +426,10 @@ class ExporterHandler(BaseHTTPRequestHandler):
             reasons=sorted(set(reasons)); payload=(json.dumps({"ok":not reasons,"reasons":reasons},sort_keys=True)+"\n").encode(); self.send_response(200 if not reasons else 503); content="application/json"
         elif self.path=="/maker-fillability.json": payload=cached["maker_fillability"]; self.send_response(200); content="application/json"
         elif self.path=="/external-fair.json": payload=cached["external_fair"]; self.send_response(200); content="application/json"
+        elif self.path in {"/profit-attribution.json", "/profit-experiments.json"}:
+            key="profit_attribution" if self.path=="/profit-attribution.json" else "profit_experiments"
+            value=cached["snapshot"].get(key) or {}
+            payload=(json.dumps(value,sort_keys=True)+"\n").encode(); self.send_response(200); content="application/json"
         else: payload=b"not found\n"; self.send_response(404); content="text/plain"
         self.send_header("Content-Type",content+"; charset=utf-8"); self.send_header("Content-Length",str(len(payload))); self.end_headers(); self.wfile.write(payload)
 

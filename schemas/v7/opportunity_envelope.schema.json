@@ -15,6 +15,18 @@
     "reasons", "deterministic_replay_key", "expires_at_ns"
   ],
   "properties": {
+    "settlement_model": {
+      "type": "object", "additionalProperties": false,
+      "required": ["model_id", "model_hash", "code_sha", "token_probability", "observed_at_ns", "rich_feature_sha256"],
+      "properties": {
+        "model_id": {"type": ["string", "null"], "minLength": 1},
+        "model_hash": {"type": ["string", "null"], "pattern": "^[0-9a-f]{64}$"},
+        "code_sha": {"type": ["string", "null"], "pattern": "^[0-9a-f]{40}$"},
+        "token_probability": {"type": "number", "minimum": 0, "maximum": 1},
+        "observed_at_ns": {"type": "integer", "minimum": 1},
+        "rich_feature_sha256": {"type": ["string", "null"], "pattern": "^[0-9a-f]{64}$"}
+      }
+    },
     "schema": {"const": "polymarket_v7_opportunity_envelope_v1"},
     "version": {"const": 1},
     "model_sha": {"type": "string", "pattern": "^[0-9a-f]{40}$"},

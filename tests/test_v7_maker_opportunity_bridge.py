@@ -209,6 +209,18 @@ def test_mature_positive_cell_becomes_typed_make_opportunity() -> None:
         assert len(rows) == 1
         row = OpportunityEnvelope.parse(rows[0]).raw
         assert row["action"] == "MAKE"
+        assert row["settlement_model"]["token_probability"] == row["fair_value"]["point"]
+        assert row["settlement_model"]["model_hash"] == "e" * 64
+        import copy
+        for field, value in (("observed_at_ns", row["decision_receive_timestamp_ns"] + 1), ("token_probability", 0.1)):
+            invalid = copy.deepcopy(row)
+            invalid["settlement_model"][field] = value
+            try:
+                OpportunityEnvelope.parse(invalid)
+            except ValueError:
+                pass
+            else:
+                raise AssertionError("inconsistent settlement model provenance accepted")
         assert row["engine_id"] == "CRYPTO_SETTLEMENT_ENGINE"
         assert row["component_provenance"] == ["professional_maker"]
         assert row["maker_execution_identity"] == {

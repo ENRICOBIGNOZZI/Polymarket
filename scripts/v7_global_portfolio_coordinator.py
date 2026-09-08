@@ -325,6 +325,18 @@ def process_cut(run_root: Path, *, now_ns: int | None = None) -> dict[str, Any]:
     execution_alpha_diagnostics["maker_opportunity_bridge"] = maker_diagnostics
     execution_alpha_diagnostics["external_cancel_opportunity_bridge"] = cancel_diagnostics
     decision["crypto_execution_alpha"] = execution_alpha_diagnostics
+    # Identity-level evidence, distinct from how many times the cut was tried.
+    # Retain all valid inputs, including those rejected by portfolio selection.
+    retained_keys = {row.get("deterministic_replay_key") for row in selected_envelopes}
+    decision["opportunity_inputs"] = [{
+        "replay_key": row.get("deterministic_replay_key"),
+        "model_sha": row.get("model_sha"), "market_id": row.get("market_id"),
+        "token_id": row.get("contract_id"), "action": row.get("action"),
+        "component_provenance": row.get("component_provenance"),
+        "source_snapshot_identity": row.get("source_snapshot_identity"),
+        "paper_probe": isinstance(row.get("exploration"), dict),
+        "retained_after_execution_selection": row.get("deterministic_replay_key") in retained_keys,
+    } for row in envelopes]
     decision.update({
         "paper_only": True,
         "authenticated_execution": False,

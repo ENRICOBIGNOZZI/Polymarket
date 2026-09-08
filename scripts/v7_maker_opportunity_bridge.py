@@ -586,6 +586,14 @@ def build_maker_opportunities(
             "decision_receive_timestamp_ns": decision_ns,
             "source_event_timestamps_ns": [selection_ts_ms * 1_000_000],
             "fair_value": {"lower": fair_triplet[0], "point": fair_triplet[1], "upper": fair_triplet[2]},
+            "settlement_model": {
+                "model_id": fair.get("probability_model_id"),
+                "model_hash": fair.get("probability_model_hash"),
+                "code_sha": fair.get("probability_model_code_sha"),
+                "token_probability": fair_triplet[1],
+                "observed_at_ns": decision_ns,
+                "rich_feature_sha256": fair.get("rich_feature_sha256"),
+            },
             "conservative_expected_wealth_change": conservative_ev,
             "cost_vector": {
                 "fee": 0.0,
