@@ -2,6 +2,8 @@
 """Atomically preserve a prior V7 PAPER run before an exact-SHA cutover."""
 from __future__ import annotations
 
+from v7_maker_accounting import authorized_maker_flat_proof
+
 import argparse
 import hashlib
 import json
@@ -357,7 +359,34 @@ def prepare(
         micro_status = dict(micro_status, open_positions=0)
         micro_state = {"positions": {}}
         prior_never_started_sleeves.append("micro_taker")
-    if not maker_status and not maker_state:
+    authorized_executor_path = run_root / "micro_maker/authorized_make_executor_status.json"
+    if authorized_executor_path.exists() and not maker_state:
+        try:
+            canonical_flat = authorized_maker_flat_proof(run_root, previous_sha)
+        except (ValueError, OSError) as exc:
+            raise CutoverArchiveError(str(exc)) from exc
+        sentinel = read_json(run_root / "control/CUTOVER_DRAIN")
+        if (maker_receipt.get("schema") != "polymarket_v7_maker_cutover_liquidation_v1"
+                or maker_receipt.get("state") != "MAKER_FLAT"
+                or maker_receipt.get("never_started") is not False
+                or maker_receipt.get("authorized_maker_reconciled") is not True
+                or maker_receipt.get("model_sha") != previous_sha
+                or maker_receipt.get("nonce") != sentinel.get("nonce")
+                or not maker_receipt.get("nonce")
+                or maker_receipt.get("paper_only") is not True
+                or maker_receipt.get("authenticated_execution") is not False
+                or maker_receipt.get("real_order_submission") is not False
+                or maker_receipt.get("canonical_flat_proof") != canonical_flat
+                or maker_receipt.get("final_state_digest") != hashlib.sha256(
+                    json.dumps(canonical_flat,sort_keys=True,separators=(",",":")).encode()).hexdigest()
+                or maker_receipt.get("positions_liquidated") != 0
+                or maker_receipt.get("net_cashflow") != 0.0
+                or maker_receipt.get("final_pnl") != 0.0):
+            raise CutoverArchiveError("authorized_maker_cutover_receipt_invalid")
+        maker_status = {"paper_only":True,"authenticated_execution":False,"positions":[],
+                        "source":"CANONICAL_AUTHORIZED_MAKER_LEDGER_RECONCILED"}
+        maker_state = {"inventory":{}}
+    elif not maker_status and not maker_state:
         maker_proof = prove_never_started(
             "micro_maker", {"not_started", "zero_authority_budget"},
             require_ledger_empty=False)

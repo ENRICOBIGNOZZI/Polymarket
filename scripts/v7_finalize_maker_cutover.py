@@ -14,6 +14,7 @@ from typing import Any
 
 from v7_execution_ledger import LedgerEvent, iter_records
 from v7_ledger_spool import drain_spool, spool_events
+from v7_maker_accounting import authorized_maker_flat_proof
 
 
 STRATEGY = "MICRO_MAKER_PRO"
@@ -391,6 +392,25 @@ def finalize(
     if sentinel.get("current_sha") != model_sha or sentinel.get("paper_only") is not True:
         raise MakerCutoverError("cutover_drain_safety_mismatch")
     current_ms = int(time.time_ns() // 1_000_000 if now_ms is None else now_ms)
+    if (root / "micro_maker/authorized_make_executor_status.json").exists() and not state_path.exists():
+        # This Maker DID execute through the canonical crypto account. Prove
+        # actual fills/settlements/zero resting orders, never "no Maker events".
+        try:
+            proof = authorized_maker_flat_proof(root, model_sha)
+        except (ValueError, OSError) as exc:
+            raise MakerCutoverError(str(exc)) from exc
+        receipt = {
+            "schema":"polymarket_v7_maker_cutover_liquidation_v1", "state":"MAKER_FLAT",
+            "timestamp_ms":current_ms,"paper_only":True,"authenticated_execution":False,
+            "real_order_submission":False,"model_sha":model_sha,"nonce":nonce,
+            "never_started":False,"authorized_maker_reconciled":True,
+            "positions_liquidated":0,"net_cashflow":0.0,"final_pnl":0.0,
+            "liquidations":[],"zero_recovery_writeoffs":0,"rejected_spool_records":0,
+            "ledger_record_ids":[],"canonical_flat_proof":proof,
+            "final_state_digest":object_digest(proof),
+        }
+        atomic_json(receipt_path, receipt)
+        return receipt
     if not state_path.exists() and status.get("source") == "not_started":
         return finalize_never_started(
             root, model_sha, nonce, status, prior_receipt, current_ms)
