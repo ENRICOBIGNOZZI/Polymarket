@@ -9,7 +9,7 @@ ROOT=Path(__file__).resolve().parents[1]
 sys.path.insert(0,str(ROOT/'scripts'))
 from v7_external_lead_lag_collector import Collector, SCHEMA as OBS_SCHEMA
 from v7_external_lead_lag_model import validate, predict_probability
-from v7_external_lead_lag_train import train
+from v7_external_lead_lag_train import train, load_rows
 from v7_fair_model_artifact import canonical_hash
 
 SHA='a'*40
@@ -44,6 +44,23 @@ def fair_origin()->dict:
 
 
 class LeadLagTests(unittest.TestCase):
+    def test_late_snapshots_are_preserved_but_excluded_from_nominal_training(self):
+        with tempfile.TemporaryDirectory() as d:
+            root=Path(d); fair=root/'fair.json'; route=root/'router.json'; tape=root/'leadlag.jsonl'
+            write(fair,fair_origin()); write(route,router(1000,.5,'s0'))
+            c=Collector(fair,route,tape,root/'status.json',SHA); c.tick()
+            write(route,router(1350,.6,'s1')); c.tick()
+            values=[json.loads(x) for x in tape.read_text().splitlines()]
+            self.assertEqual(len(values),2)
+            self.assertTrue(all(x['label_state']=='LATE_SNAPSHOT_CENSORED' for x in values))
+            self.assertEqual(load_rows([tape],SHA),[])
+            # Legacy rows must receive the same check, even without the flag.
+            for row in values: row.pop('nominal_horizon_eligible')
+            tape.write_text(''.join(json.dumps(row)+'\n' for row in values))
+            self.assertEqual(load_rows([tape],SHA),[])
+            c.publish()
+            self.assertEqual(json.loads((root/'status.json').read_text())['late_labels'],2)
+
     def test_collector_labels_four_receive_time_horizons_without_execution_authority(self):
         with tempfile.TemporaryDirectory() as d:
             root=Path(d); fair=root/'fair.json'; route=root/'router.json'; tape=root/'leadlag.jsonl'; status=root/'status.json'

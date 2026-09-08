@@ -11,6 +11,7 @@ sys.path.insert(0, str(ROOT / "scripts"))
 from v7_maker_durable_learning import (  # noqa: E402
     adverse_markout_models, append_new, compact_evidence, fit_model, hazard_model, identity,
     evidence_files, placement_features, rows, research_policy_value, materialize_research_model,
+    placement_action, exact_execution_cell, order_examples,
 )
 
 SHA = "a" * 40
@@ -34,6 +35,21 @@ def record(event_type: str, record_id: str, **extra):
 
 
 class DurableLearningTests(unittest.TestCase):
+    def test_make_placement_and_legacy_terminal_classification(self):
+        order=record('ORDER_SUBMITTED','submit',order_id='o',market_id='m',token_id='t',
+                     side='BUY',intended_action='MAKE',intended_size=2.)
+        order['metadata']['opportunity_envelope']={'reasons':['PLACEMENT_JOIN']}
+        self.assertEqual(placement_action(order),'JOIN')
+        self.assertEqual(exact_execution_cell(order),('m','t','JOIN','BUY'))
+        order['metadata']['placement_action']='IMPROVE1'
+        self.assertEqual(placement_action(order),'IMPROVE1')
+        terminal=record('ORDER_STATE','cancel',order_id='o',recorded_ts_ms=2000,order_state='CANCELLED')
+        row=order_examples([order,terminal])[0]
+        self.assertEqual(row['execution_outcome'],'TERMINAL_UNCLASSIFIED')
+        self.assertIsNotNone(row['placement_exclusion_reason'])
+        terminal['metadata']['execution_outcome']=4
+        self.assertEqual(order_examples([order,terminal])[0]['execution_outcome'],'PRICE_NOT_REACHED')
+
     def test_research_model_is_atomically_refit_in_place(self) -> None:
         with tempfile.TemporaryDirectory() as folder:
             path=pathlib.Path(folder)/"execution_model.json"

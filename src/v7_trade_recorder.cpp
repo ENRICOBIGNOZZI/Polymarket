@@ -153,9 +153,19 @@ public:
         }
     }
 
-    void tick(std::size_t market_limit, double min_liquidity) {
+    bool tick(std::size_t market_limit, double min_liquidity) {
         const auto started_ms = now_ms();
-        const auto markets = api_.discover_markets(market_limit, min_liquidity);
+        std::vector<pm::Market> markets;
+        try {
+            markets = api_.discover_markets(market_limit, min_liquidity);
+        } catch (const std::runtime_error& error) {
+            // A failed public discovery is an incomplete observation, not a
+            // reason to terminate the whole PAPER stack. Never reuse a stale
+            // universe or report a healthy scan; the next loop retries.
+            persist_status(started_ms, 0, 0, 1, 0, 0, 1, 0);
+            std::cerr << "trade_recorder discovery failed: " << error.what() << '\n';
+            return false;
+        }
         std::unordered_map<std::string, const pm::Market*> by_condition;
         std::vector<std::string> conditions;
         conditions.reserve(markets.size());
@@ -266,6 +276,7 @@ public:
                   << " seen=" << seen_.size()
                   << " elapsed_ms=" << (now_ms() - started_ms) << '\n';
         std::cout.flush();
+        return errors == 0 && truncated_batches == 0;
     }
 
 private:
@@ -415,7 +426,7 @@ int main(int argc, char** argv) {
         }
         V7TradeRecorder recorder(std::move(config), run_dir, data_url, batch, lookback_seconds);
         do {
-            recorder.tick(markets, min_liquidity);
+            if (!recorder.tick(markets, min_liquidity) && !loop) return 1;
             if (loop) std::this_thread::sleep_for(std::chrono::seconds(std::max(1, interval_seconds)));
         } while (loop);
         return 0;

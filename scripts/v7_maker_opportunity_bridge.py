@@ -185,9 +185,7 @@ def _fill_band(cell: dict[str, Any], opportunity: dict[str, Any], group: dict[st
     projected = _clamp(_finite(opportunity.get(projected_key), 0.0) or 0.0)
     learned = _clamp(_finite(group.get("fill_probability"), projected) or projected)
     point = min(projected, learned) if projected > 0.0 and learned > 0.0 else max(projected, learned)
-    orders = int(_finite(group.get("orders"), 0.0) or 0.0)
-    event_clusters = int(_finite(group.get("event_clusters"), 0.0) or 0.0)
-    adaptive_ready = orders >= 20 and event_clusters >= 2
+    adaptive_ready = group.get("mature") is True
     posterior_lower = _clamp(_finite(group.get("fill_probability_lower_90"), 0.0) or 0.0)
     lower = min(point, posterior_lower) if adaptive_ready else 0.0
     upper = _clamp(max(point, projected, learned))
@@ -258,7 +256,7 @@ def _feature_packet(
             "cross_venue_disagreement_bp": _finite(external.get("dispersion_bps")),
             "oracle_distance_bp": None,
             "volatility_bp": volatility,
-            "latency_ms": _finite(opportunity.get("last_opposite_flow_age_ms"), 0.0),
+            "latency_ms": max(0.0, (decision_ns - feature_receive_ns) / 1_000_000.0),
         },
         "fill_probability": {"lower": lower_fill, "point": point_fill, "upper": upper_fill},
         "markout_per_share": {"lower": -max(0.01, 2.0 * adverse), "point": -adverse, "upper": 0.0},

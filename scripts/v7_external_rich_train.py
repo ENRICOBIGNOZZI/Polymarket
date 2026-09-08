@@ -281,9 +281,12 @@ def train(rows: list[dict[str, Any]], code_sha: str, policy_hash: str,
         raise ValueError("rich_train:insufficient_temporal_partitions")
     candidates = []
     for offset in ("none", "market"):
-        for ridge in (1.0, 10.0, 100.0):
+        for ridge in (1.0, 10.0, 100.0, 1000.0, 10000.0):
             p = fit(parts["train"], ridge, offset)
-            candidates.append({"parameters": p, "validation": score(parts["validation"], p)})
+            for shrinkage in ((0.0, 0.25, 0.5, 1.0) if offset == "market" else (1.0,)):
+                candidate = dict(p, coefficients=[shrinkage*x for x in p['coefficients']],
+                                 correction_shrinkage=shrinkage)
+                candidates.append({"parameters": candidate, "validation": score(parts["validation"], candidate)})
     best = min(candidates, key=lambda c: (c["validation"]["brier"], c["validation"]["log_loss"],
                                          c["parameters"]["offset"] != "market", -c["parameters"]["ridge"]))
     generated_ns = time.time_ns() if generated_ns is None else generated_ns
@@ -321,8 +324,10 @@ def train(rows: list[dict[str, Any]], code_sha: str, policy_hash: str,
         "split_scores": {name: score(v, best["parameters"]) for name,v in parts.items()},
         "market_baseline_scores": {name: score(v, None) for name,v in parts.items()},
         "candidate_validation": [{"offset": c["parameters"]["offset"], "ridge": c["parameters"]["ridge"],
+                                   "correction_shrinkage": c["parameters"]["correction_shrinkage"],
                                    **c["validation"]} for c in candidates],
         "selected_offset": best["parameters"]["offset"], "selected_ridge": best["parameters"]["ridge"],
+        "selected_correction_shrinkage": best["parameters"]["correction_shrinkage"],
         "active_features": best["parameters"]["feature_names"], "excluded_features": best["parameters"]["excluded_features"],
         "feature_coverage": best["parameters"]["feature_coverage"],
         "forward_start_ns": boundary_ns, "paper_only": True, "authenticated_execution": False,

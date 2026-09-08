@@ -243,9 +243,24 @@ def number(value: Any, default: float = 0.0) -> float:
     return result if math.isfinite(result) else default
 
 
+def placement_action(order: dict[str, Any]) -> str:
+    """Placement is distinct from the coordinator's economic MAKE action."""
+    metadata = order.get("metadata") if isinstance(order.get("metadata"), dict) else {}
+    explicit = metadata.get("placement_action") or order.get("placement_action")
+    if explicit:
+        return str(explicit).upper()
+    action = str(order.get("intended_action") or metadata.get("action") or "UNKNOWN").upper()
+    if action == "MAKE":
+        envelope = metadata.get("opportunity_envelope") or {}
+        placements = {str(reason)[10:] for reason in envelope.get("reasons", [])
+                      if str(reason).startswith("PLACEMENT_")}
+        return placements.pop() if len(placements) == 1 else "UNKNOWN"
+    return action
+
+
 def group_key(order: dict[str, Any]) -> str:
     metadata = order.get("metadata") if isinstance(order.get("metadata"), dict) else {}
-    action = str(order.get("intended_action") or metadata.get("action") or "UNKNOWN").upper()
+    action = placement_action(order)
     outcome = str(metadata.get("outcome") or "UNKNOWN").upper()
     side = str(order.get("side") or metadata.get("execution_side") or "UNKNOWN").upper()
     return f"{action}|{outcome}|{side}"
@@ -256,8 +271,7 @@ def exact_execution_cell(order: dict[str, Any]) -> tuple[str, str, str, str] | N
     metadata = order.get("metadata") if isinstance(order.get("metadata"), dict) else {}
     market_id = str(order.get("market_id") or "")
     token_id = str(order.get("token_id") or "")
-    action = str(
-        order.get("intended_action") or metadata.get("action") or "").upper()
+    action = placement_action(order)
     side = str(order.get("side") or metadata.get("execution_side") or "").upper()
     if not market_id or not token_id or action not in {
         "JOIN", "IMPROVE1", "ONE_SIDED", "FADE1", "FADE2",
@@ -280,7 +294,9 @@ def placement_features(order: dict[str, Any]) -> list[float] | None:
         else "aggressive_buy_prints_per_second"), math.nan)
     intended_size = number(order.get("intended_size"), math.nan)
     queue_ahead = number(order.get("queue_ahead"), math.nan)
-    action = str(order.get("intended_action") or metadata.get("action") or "").upper()
+    action = placement_action(order)
+    if action not in {"JOIN", "IMPROVE1", "FADE1", "FADE2", "ONE_SIDED"}:
+        return None
     distance_from_touch = {
         "IMPROVE1": -1.0,
         "JOIN": 0.0,
@@ -344,8 +360,11 @@ def order_examples(values: list[dict[str, Any]]) -> list[dict[str, Any]]:
                 terminal_state = state
                 metadata = row.get("metadata") if isinstance(
                     row.get("metadata"), dict) else {}
-                execution_outcome = str(
-                    metadata.get("execution_outcome") or execution_outcome).upper()
+                raw_outcome = metadata.get("execution_outcome")
+                execution_outcome = {
+                    0: "OPEN_CENSORED", 1: "FILLED", 2: "PARTIAL_FILL",
+                    3: "NO_OPPOSITE_FLOW", 4: "PRICE_NOT_REACHED", 5: "QUEUE_NOT_DEPLETED",
+                }.get(raw_outcome, str(raw_outcome or "TERMINAL_UNCLASSIFIED").upper())
                 opposite_flow_prints_seen = max(
                     opposite_flow_prints_seen,
                     int(number(metadata.get("opposite_flow_prints_seen"))))
@@ -383,15 +402,15 @@ def order_examples(values: list[dict[str, Any]]) -> list[dict[str, Any]]:
             "side": str(order.get("side") or "UNKNOWN"),
             "market_id": str(order.get("market_id") or ""),
             "token_id": str(order.get("token_id") or ""),
-            "action": str(
-                order.get("intended_action")
-                or order_metadata.get("action") or "UNKNOWN"
-            ).upper(),
+            "action": placement_action(order),
             "outcome": str(
                 order_metadata.get("outcome") or "UNKNOWN"
             ).upper(),
             "exact_execution_cell": exact_execution_cell(order),
             "features": placement_features(order),
+            "placement_exclusion_reason": (
+                None if placement_features(order) is not None
+                else "MISSING_OR_INVALID_PLACEMENT_FEATURES_OR_ACTION"),
         })
     return output
 
@@ -415,7 +434,7 @@ def exact_execution_cell_evidence(
     for (market_id, token_id, action, side), sample in sorted(grouped.items()):
         terminal = [
             row for row in sample
-            if str(row.get("execution_outcome") or "") != "OPEN_CENSORED"
+            if str(row.get("execution_outcome") or "") not in {"OPEN_CENSORED", "TERMINAL_UNCLASSIFIED"}
         ]
         outcome_counts = Counter(
             str(row.get("execution_outcome") or "UNKNOWN") for row in terminal)
@@ -585,6 +604,10 @@ def learned_placement_policy(order_rows: list[dict[str, Any]],
         "feature_names": list(PLACEMENT_FEATURE_NAMES),
         "valid": False,
         "fill_examples": len(fill_rows),
+        "excluded_orders": len(order_rows) - len(fill_rows),
+        "exclusion_counts": dict(Counter(
+            row.get("placement_exclusion_reason") or "MISSING_PLACEMENT_FEATURES"
+            for row in order_rows if row.get("features") is None)),
         "markout_examples": len(markout_rows),
         "event_clusters": len(clusters),
         "activation_requirements": {
@@ -1113,7 +1136,7 @@ def fit_model(values: list[dict[str, Any]], *, model_sha: str, policy_hash: str,
     has_evidence = bool(examples)
     funnel_counts = Counter(row["execution_outcome"] for row in examples)
     terminal_funnel_examples = [
-        row for row in examples if row["execution_outcome"] != "OPEN_CENSORED"
+        row for row in examples if row["execution_outcome"] not in {"OPEN_CENSORED", "TERMINAL_UNCLASSIFIED"}
     ]
     reached = sum(row["price_reach_prints_seen"] > 0
                   for row in terminal_funnel_examples)

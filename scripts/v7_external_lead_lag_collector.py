@@ -22,6 +22,11 @@ from v7_fair_model_artifact import canonical_hash
 SCHEMA = "polymarket_v7_external_pm_lead_lag_observation_v1"
 STATUS_SCHEMA = "polymarket_v7_external_pm_lead_lag_collector_status_v1"
 HORIZONS_MS = (100, 250, 500, 1000)
+MAX_LABEL_DELAY_MS = 50
+
+
+def horizon_eligible(horizon: int, realized: float) -> bool:
+    return horizon in HORIZONS_MS and math.isfinite(realized) and horizon <= realized <= horizon + MAX_LABEL_DELAY_MS
 
 
 def load(path: Path) -> dict[str, Any]:
@@ -112,7 +117,7 @@ def valid_origin(fair_status: dict[str, Any], live: dict[str, Any], model_sha: s
     prior_receive_ms = int(prior.get("receive_ts_ms") or fair.get("pm_mid_receive_ts_ms") or 0)
     prior_exchange_ms = int(prior.get("exchange_ts_ms") or fair.get("pm_mid_exchange_ts_ms") or 0)
     if (observed_ns <= 0 or p0 is None or not 0 <= p0 <= 1 or not prior_snapshot_id
-            or prior_receive_ms <= 0 or prior_receive_ms * 1_000_000 > observed_ns + 250_000_000):
+            or prior_receive_ms <= 0 or prior_receive_ms * 1_000_000 > observed_ns):
         return None
     origin_id = hashlib.sha256(
         f"{model_sha}|{live['market_id']}|{sha}|{prior_snapshot_id}|{observed_ns}".encode()
@@ -138,6 +143,7 @@ class Collector:
         self.last_origin_id = ""
         self.last_router_snapshot_id = ""
         self.origins = self.labels = self.market_rollover_censors = self.invalid_reads = 0
+        self.late_labels = 0
         self.started_ns = time.time_ns()
 
     def tick(self) -> None:
@@ -165,12 +171,19 @@ class Collector:
                 if horizon in row["labels"] or live["receive_ts_ms"] < origin_ms + horizon:
                     continue
                 realized = live["receive_ts_ms"] - origin_ms
+                eligible = horizon_eligible(horizon, realized)
+                self.late_labels += int(not eligible)
                 payload = {
                     "schema": SCHEMA, "paper_only": True, "authenticated_execution": False,
                     "real_order_submission": False, "execution_authority": "ZERO_AUTHORITY_RESEARCH_ONLY",
                     "model_sha": self.model_sha, "origin_id": row["origin_id"],
                     "market_id": row["market_id"], "horizon_ms": horizon,
                     "realized_horizon_ms": realized,
+                    "label_delay_ms": realized - horizon,
+                    "maximum_label_delay_ms": MAX_LABEL_DELAY_MS,
+                    "nominal_horizon_eligible": eligible,
+                    "label_state": "OBSERVED_WITHIN_TOLERANCE" if eligible else "LATE_SNAPSHOT_CENSORED",
+                    "target_semantics": "FIRST_OBSERVED_SNAPSHOT_AFTER_THRESHOLD",
                     "origin_observed_wall_ns": row["origin_observed_wall_ns"],
                     "origin_pm_yes": row["origin_pm_yes"],
                     "origin_pm_snapshot_id": row["origin_pm_snapshot_id"],
@@ -198,6 +211,9 @@ class Collector:
             "origins": self.origins, "labels": self.labels, "pending_origins": len(self.pending),
             "market_rollover_censors": self.market_rollover_censors, "invalid_reads": self.invalid_reads,
             "horizons_ms": list(HORIZONS_MS), "interval_ms": self.interval_ms,
+            "late_labels": self.late_labels,
+            "nominal_horizon_eligible_labels": self.labels - self.late_labels,
+            "maximum_label_delay_ms": MAX_LABEL_DELAY_MS,
             "state": "COLLECTING" if self.origins else "AWAITING_CAUSAL_RICH_FEATURE_CUT",
         })
 
