@@ -1,6 +1,6 @@
-# Older-detail retention under the 30 GB budget
+# Older-detail retention under the 40 GB managed budget
 
-The user authorized continued collection with lossy aggregation of older detail on 2026-09-09. The managed budget is 30,000,000,000 decimal bytes across `runs`, counting physical hardlinks once. At 25 GB the retention worker attempts to return to 24 GB. This is measured reclamation, **not a hard filesystem quota on independent producer writes**. A status above the target or cap is surfaced explicitly.
+The user superseded the earlier 30 GB constraint on 2026-09-09 and authorized using the managed data area up to 40,000,000,000 decimal bytes. Across `runs`, physical hardlinks are counted once. Lossy external-tape aggregation now starts at 38 GB and attempts to return to 36 GB; 40 GB is the managed ceiling, not the normal operating target. This is measured reclamation, **not a hard filesystem quota on independent producer writes**. A status above the target or cap is surfaced explicitly.
 
 Only closed schema-3 external raw and normalized tape files are eligible, in validated cutover archives or numbered live segments. Both filesystem age and latest observation age must exceed one hour. Canonical ledgers, decisions, outcomes, model/config identities, PM books, unknown formats and all other paths remain protected. Source families with captured partial or overwritten revisions are deferred; their older revisions are not silently dropped.
 

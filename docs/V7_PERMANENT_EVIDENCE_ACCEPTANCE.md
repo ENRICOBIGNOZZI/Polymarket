@@ -1,3 +1,7 @@
+## Superseding storage budget — 2026-09-09
+
+The user superseded the earlier 30 GB constraint and authorized the managed `runs` data area up to **40,000,000,000 decimal bytes**. Current policy preserves raw detail until the 38 GB retention trigger when possible, then targets 36 GB; historical 30 GB measurements below remain audit history rather than the active limit.
+
 # Permanent economic evidence acceptance audit
 
 User specification: all 20 phases in the 9 September 2026 permanent decision-intelligence request. PAPER-only; no capital, sizing, interval or execution-authority changes.

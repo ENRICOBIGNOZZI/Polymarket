@@ -17,7 +17,7 @@ class PermanentEvidenceTests(unittest.TestCase):
     def test_data_budget_defers_duplicate_capture_without_deleting_source(self):
         with tempfile.TemporaryDirectory() as tmp:
             root=Path(tmp);live=root/'live';live.mkdir();source=live/'source.jsonl';source.write_text('{"x":1}\n')
-            with mock.patch('v7_permanent_evidence.allocated_data_bytes',return_value=30_000_000_000):
+            with mock.patch('v7_permanent_evidence.allocated_data_bytes',return_value=40_000_000_000):
                 result=collect(live,root/'durable',root/'archives')
             self.assertEqual(result['state'],'ARCHIVE_COPY_DEFERRED_DATA_BUDGET')
             self.assertEqual(source.read_text(),'{"x":1}\n')

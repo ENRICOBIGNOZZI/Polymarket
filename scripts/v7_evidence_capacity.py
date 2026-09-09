@@ -14,6 +14,7 @@ from pathlib import Path
 import shutil
 import time
 from v7_evidence_store import AUTH,digest,canonical,immutable
+from v7_storage_budget import MAX_MANAGED_DATA_BYTES, RETENTION_TRIGGER_BYTES, RETENTION_TARGET_BYTES, WARNING_DATA_BYTES, CRITICAL_DATA_BYTES
 
 
 def allocated_data_bytes(roots):
@@ -32,7 +33,7 @@ def allocated_data_bytes(roots):
     return total
 
 
-def capacity(records,free_bytes,total_bytes,*,reserve_bytes=20*1024**3,data_bytes=None,maximum_data_bytes=30_000_000_000):
+def capacity(records,free_bytes,total_bytes,*,reserve_bytes=20*1024**3,data_bytes=None,maximum_data_bytes=MAX_MANAGED_DATA_BYTES,compaction_trigger_bytes=RETENTION_TRIGGER_BYTES):
     groups=defaultdict(dict)
     for row in records:
         if row.get('scope')!='ACTIVE_RUN_CLOSED_SEGMENT' or row.get('decompressed_sha256_verified') is not True:continue
@@ -42,8 +43,9 @@ def capacity(records,free_bytes,total_bytes,*,reserve_bytes=20*1024**3,data_byte
     result={'schema':'polymarket_v7_permanent_evidence_capacity_v1',**AUTH,'timestamp_ms':time.time_ns()//1_000_000,
       'free_bytes':free_bytes,'total_bytes':total_bytes,'reserve_bytes':reserve_bytes,'rate_estimate':None,
       'data_allocated_bytes':data_bytes,'maximum_total_data_bytes':maximum_data_bytes,'external_storage_allowed':False,
+      'warning_bytes':WARNING_DATA_BYTES,'retention_target_bytes':RETENTION_TARGET_BYTES,'retention_trigger_bytes':compaction_trigger_bytes,'critical_bytes':CRITICAL_DATA_BYTES,
       'budget_state':'UNKNOWN_USAGE' if data_bytes is None else 'CAP_EXCEEDED_COMPACTION_REQUIRED' if data_bytes>maximum_data_bytes else 'WITHIN_CAP',
-      'state':'DATA_BUDGET_COMPACTION_REQUIRED' if data_bytes is not None and data_bytes>=25_000_000_000 else 'INSUFFICIENT_REPEAT_COMPRESSION_MEASUREMENTS',
+      'state':'DATA_BUDGET_COMPACTION_REQUIRED' if data_bytes is not None and data_bytes>=compaction_trigger_bytes else 'INSUFFICIENT_REPEAT_COMPRESSION_MEASUREMENTS',
       'minimum_reduction_bytes_to_current_cap':max(0,data_bytes-maximum_data_bytes) if data_bytes is not None else None,
       'automatic_deletion':False}
     if len(stamps)<2:return result
@@ -57,7 +59,7 @@ def capacity(records,free_bytes,total_bytes,*,reserve_bytes=20*1024**3,data_byte
     raw_daily=raw*86400/duration;compressed_daily=compressed*86400/duration;usable=max(0,free_bytes-reserve_bytes)
     runway=usable/compressed_daily if compressed_daily else None
     budget_days=max(0,maximum_data_bytes-data_bytes)/compressed_daily if data_bytes is not None and compressed_daily else None
-    result.update(state='DATA_BUDGET_COMPACTION_REQUIRED' if data_bytes is not None and data_bytes>=25_000_000_000 else 'CAPACITY_WARNING' if runway is not None and runway<30 else 'OBSERVED_SCOPE_CAPACITY_AVAILABLE',
+    result.update(state='DATA_BUDGET_COMPACTION_REQUIRED' if data_bytes is not None and data_bytes>=compaction_trigger_bytes else 'CAPACITY_WARNING' if runway is not None and runway<30 else 'OBSERVED_SCOPE_CAPACITY_AVAILABLE',
       rate_estimate={'start_s':first,'end_s':last,'measurement_seconds':duration,'verified_unique_segments':len(selected),
        'source_sha256s':sorted(selected),'raw_bytes':raw,'compressed_bytes':compressed,
        'raw_GB_per_day':raw_daily/1e9,'compressed_GB_per_day':compressed_daily/1e9,

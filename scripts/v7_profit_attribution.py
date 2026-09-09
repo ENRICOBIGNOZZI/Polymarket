@@ -87,6 +87,82 @@ def archived_ledgers(root):
     return paths, inventory
 
 
+AUXILIARY_STREAMS={
+    'decisions':'opportunities/decisions.jsonl',
+    'authorization_attempts':'micro_maker/authorization_attempts.jsonl',
+    'authorization_publications':'opportunities/authorization_publications.jsonl',
+}
+
+
+def read_auxiliary(root, *, sealed=False):
+    """Freeze observed prefixes and source context; never rewrite original rows."""
+    root=Path(root);outputs={kind:[] for kind in AUXILIARY_STREAMS};sources=[];inventory={}
+    runtime=root/'control/runtime_status.json';context={}
+    if (root/'control').is_symlink() or runtime.is_symlink():raise ValueError('unsafe runtime identity source')
+    if runtime.is_file():
+        raw=runtime.read_bytes();value=json.loads(raw)
+        sha=value.get('model_sha')
+        if re.fullmatch('[0-9a-f]{40}',str(sha or '')) and value.get('paper_only') is True and value.get('authenticated_execution') is False and value.get('real_order_submission') is not True:
+            if sealed and not root.name.startswith('cutover-'+sha+'-'):raise ValueError('archived auxiliary/runtime SHA conflict')
+            context={'model_sha':sha,'run_id':value.get('run_id'),'runtime_source_sha256':hashlib.sha256(raw).hexdigest(),
+                     'identity_source':'OBSERVED_RUNTIME_GENERATION_METADATA; NOT_RECORD_SPECIFIC_MODEL_IDENTITY'}
+            sources.append({'path':str(runtime),'sha256':context['runtime_source_sha256'],'prefix_bytes':len(raw),'source_role':'auxiliary_generation_identity'})
+    for kind,relative in AUXILIARY_STREAMS.items():
+        base=root/relative
+        if base.parent.is_symlink():raise ValueError('unsafe auxiliary source directory')
+        paths=[p for p in [base,Path(str(base)+'.gz')] if p.exists()]
+        paths+=sorted(base.parent.glob(base.name+'.segment-*.jsonl.gz'))
+        paths+=sorted(p for p in base.parent.glob(base.name+'.*') if re.fullmatch(re.escape(base.name)+r'\.[0-9]+(?:\.gz)?',p.name))
+        inventory[kind]={'source_files':len(paths),'coverage':'OBSERVED_RETAINED_SOURCES' if paths else 'NO_RETAINED_SOURCE; NOT_ZERO_ATTEMPTS'}
+        for path in paths:
+            if path.is_symlink() or not path.is_file():raise ValueError('unsafe auxiliary source')
+            h=hashlib.sha256();size=count=0;partial=False
+            opener=gzip.open if path.suffix=='.gz' else open
+            with opener(path,'rb') as f:
+                limit=None if path.suffix=='.gz' else os.fstat(f.fileno()).st_size
+                while limit is None or f.tell()<limit:
+                    line=f.readline() if limit is None else f.readline(limit-f.tell())
+                    if not line:break
+                    if not line.endswith(b'\n'):
+                        if sealed or path!=base:raise ValueError('incomplete sealed auxiliary source: '+str(path))
+                        partial=True;break
+                    h.update(line);size+=len(line);count+=1
+                    if not line.strip():continue
+                    row=json.loads(line)
+                    if not isinstance(row,dict) or row.get('paper_only') is not True or row.get('authenticated_execution') is not False or row.get('real_order_submission') is True:raise ValueError('non-PAPER auxiliary source')
+                    if any(k.startswith('_evidence_') for k in row):raise ValueError('reserved auxiliary provenance field')
+                    row['_evidence_record_sha256']=hashlib.sha256(json.dumps(row,sort_keys=True,separators=(',',':'),allow_nan=False).encode()).hexdigest()
+                    row['_evidence_generation']=context
+                    outputs[kind].append(row)
+            sources.append({'path':str(path),'source_role':kind,'sha256':h.hexdigest(),'decompressed_prefix_bytes':size,
+                            'complete_lines':count,'partial_tail_waiting':partial,'sealed':sealed or path!=base})
+    return outputs,sources,inventory
+
+
+def auxiliary_record_hash(value):
+    original={k:v for k,v in value.items() if not k.startswith('_evidence_')}
+    return hashlib.sha256(json.dumps(original,sort_keys=True,separators=(',',':'),allow_nan=False).encode()).hexdigest()
+
+
+def compact_funnel(funnel):
+    """Small permanent stage/attempt summary; detailed opportunities stay in attribution."""
+    fields=('distinct_opportunities','attempt_totals','with_submitted_orders','with_operational_fills',
+            'with_authorization_rejections','stages','authorization_generation','archive_coverage',
+            'unidentified_or_legacy_observations','limitations','statistical_unit')
+    result={k:funnel[k] for k in fields if k in funnel};by_code=defaultdict(list);reasons=Counter()
+    for row in funnel.get('opportunities',[]):
+        by_code[row['model_sha']].append(row);reasons.update(row.get('rejection_reasons',{}))
+    result['authorization_rejection_reasons']=dict(reasons)
+    result['generations']={sha:{'distinct_opportunities':len(rows),
+        'coordinator_opportunity_attempts':sum(r['coordinator_attempts'] for r in rows),
+        'selected_opportunities':sum(r['selected_attempts']>0 for r in rows),
+        'authorization_rejection_attempts':sum(r['authorization_rejection_attempts'] for r in rows),
+        'with_orders':sum(bool(r['order_ids']) for r in rows),'with_fills':sum(bool(r['fill_ids']) for r in rows),
+        'with_settlement':sum(bool(r['settled_position_ids']) for r in rows)} for sha,rows in sorted(by_code.items())}
+    result['auxiliary_source_inventory']=funnel.get('auxiliary_source_inventory',[])
+    return result
+
+
 def historical_summary(report):
     """Accounting strata remain separate from the current deployed generation."""
     if (report.get('paper_only') is not True or report.get('authenticated_execution') is not False
@@ -115,6 +191,7 @@ def historical_summary(report):
             'unexplained_pnl_usd':str(report['unattributed_ledger_pnl']), 'generations':generations,
             'archive_inventory':report.get('archive_inventory', []),
             'source_count':len(report.get('sources', [])),
+            'opportunity_funnel':compact_funnel(report.get('opportunity_funnel',{})),
             'missing_values_are_unknown':True, 'automatic_promotion':False}
 
 
@@ -320,7 +397,8 @@ def order_replay_identity(value):
 
 def opportunity_funnel(values, decisions=(), attempts=()):
     """Stable upstream identities are not independent statistical trials."""
-    groups={}; unidentified=0;attempt_ids=set();generation_observed=False
+    groups={}; unidentified=0;attempt_ids={};decision_ids={};generation_observed=False
+    duplicates=Counter();decision_count=attempt_count=legacy_selected_count=0
     def group(sha,key):
         return groups.setdefault((sha,key), {'model_sha':sha,'replay_key':key,'coordinator_attempts':0,
             'selected_attempts':0,'portfolio_not_selected_attempts':0,'execution_selection_filtered_attempts':0,
@@ -331,20 +409,41 @@ def opportunity_funnel(values, decisions=(), attempts=()):
             'operational_filled_shares':ZERO,'terminal_outcomes':set()})
     for decision in decisions:
         inputs=decision.get('opportunity_inputs') or []
-        if not inputs: unidentified+=1
+        context=decision.get('_evidence_generation') or {}
+        shas=tuple(sorted({item.get('model_sha') for item in inputs if item.get('model_sha')})) or ((context['model_sha'],) if context.get('model_sha') else ())
+        clock=decision.get('decision_timestamp_ns')
+        if shas and isinstance(clock,int) and not isinstance(clock,bool) and clock>0:
+            identity=(shas,decision.get('owner'),clock);fingerprint=auxiliary_record_hash(decision)
+            if identity in decision_ids:
+                if decision_ids[identity]!=fingerprint:raise ValueError('conflicting coordinator attempt identity')
+                duplicates['coordinator_decisions']+=1;continue
+            decision_ids[identity]=fingerprint
+        decision_count+=1
+        if not inputs:
+            selected=decision.get('selected_replay_key')
+            if selected and context.get('model_sha'):
+                inputs=[{'model_sha':context['model_sha'],'replay_key':selected}]
+                legacy_selected_count+=1
+            else:unidentified+=1
         for item in inputs:
             if not item.get('model_sha') or not item.get('replay_key'): unidentified+=1;continue
             row=group(item['model_sha'],item['replay_key']);row['coordinator_attempts']+=1
+            row['identity_sources'].add('EXPLICIT_COORDINATOR_INPUT' if decision.get('opportunity_inputs') else 'LEGACY_SELECTED_KEY_WITH_RUNTIME_GENERATION')
             row['selected_attempts']+=int(item['replay_key']==decision.get('selected_replay_key'))
             row['portfolio_not_selected_attempts']+=int(item['replay_key']!=decision.get('selected_replay_key'))
             row['execution_selection_filtered_attempts']+=int(item.get('retained_after_execution_selection') is False)
-            row['market_id']=item.get('market_id');row['paper_probe']=item.get('paper_probe')
+            if item.get('market_id') is not None:row['market_id']=item['market_id']
+            if item.get('paper_probe') is not None:row['paper_probe']=item['paper_probe']
     for attempt in attempts:
         attempt_id=attempt.get('attempt_id')
         if attempt_id:
             identity=(attempt.get('model_sha'),attempt_id)
-            if identity in attempt_ids:continue
-            attempt_ids.add(identity)
+            fingerprint=auxiliary_record_hash(attempt)
+            if identity in attempt_ids:
+                if attempt_ids[identity]!=fingerprint:raise ValueError('conflicting authorization attempt identity')
+                duplicates['authorization_attempts']+=1;continue
+            attempt_ids[identity]=fingerprint
+        attempt_count+=1
         if not attempt.get('model_sha') or not attempt.get('replay_key'): unidentified+=1;continue
         row=group(attempt['model_sha'],attempt['replay_key'])
         if attempt.get('result','REJECTED')=='REJECTED':
@@ -397,6 +496,9 @@ def opportunity_funnel(values, decisions=(), attempts=()):
     for row in groups.values():
         output.append({k:sorted(v) if isinstance(v,set) else dict(v) if isinstance(v,Counter) else v for k,v in row.items()})
     return {'opportunities':output,'distinct_opportunities':len(output),
+        'attempt_totals':{'coordinator_decisions':decision_count,'coordinator_opportunity_inputs':sum(r['coordinator_attempts'] for r in output),
+            'authorization_records':attempt_count,'legacy_selected_only_decisions':legacy_selected_count,
+            'exact_duplicate_records_excluded':dict(duplicates)},
         'with_submitted_orders':sum(bool(r['order_ids']) for r in output),'with_operational_fills':sum(bool(r['fill_ids']) for r in output),
         'with_authorization_rejections':sum(r['authorization_rejection_attempts']>0 for r in output),
         'stages':{name:sum(bool(r[field]) for r in output) for name,field in {
@@ -409,7 +511,9 @@ def opportunity_funnel(values, decisions=(), attempts=()):
             'attempts_observed':sum(r['authorization_generated_attempts'] for r in output) if generation_observed else None,
             'submitted_order_lower_bound':sum(len(r['order_ids']) for r in output),
             'coverage':'EXPLICIT_PUBLICATION_EVENTS_ONLY; LEGACY_ATTEMPT_TOTAL_UNKNOWN'},
-        'limitations':['Authorization generation is counted only where an explicit generation event exists; submitted orders are a separate lower bound.',
+        'limitations':['Legacy decisions without an input list expose at most the selected key; other candidates remain unknown.',
+            'Decision attempts are deduplicated only with an observed generation, owner and positive decision timestamp; unidentified attempts are not silently collapsed.',
+            'Authorization generation is counted only where an explicit generation event exists; submitted orders are a separate lower bound.',
             'Flow/reach/queue stages apply to Maker evidence; missing Taker stages are not zero-flow observations.',
             'A profitable shared position is not allocated to an individual opportunity without leg accounting.'],
         'unidentified_or_legacy_observations':unidentified,'statistical_unit':'CONTRACT_NOT_ATTEMPT_OR_OPPORTUNITY'}
@@ -501,33 +605,33 @@ def main():
     if args.archive_root and args.run_root:ap.error('--run-root auxiliary observations require current --ledger scope')
     paths, inventory = archived_ledgers(args.archive_root) if args.archive_root else (args.ledger, [])
     values,sources=read_sources(paths,require_complete=bool(args.archive_root))
-    if args.run_root:
-        markout_paths=sorted((args.run_root/'research/evidence/maker_markout').glob('*.json'))
-        if markout_paths:
-            marks,mark_sources=read_sources(markout_paths)
-            if any(row.get('event_type')!='MARKOUT' for row in marks):raise ValueError('non-markout research source')
-            # Exact fill identity joins; research labels never create cash rows.
-            existing={(row['model_sha'],row['record_id']):row for row in values}
-            for row in marks:
-                key=(row['model_sha'],row['record_id'])
-                if key in existing and existing[key]!=row:raise ValueError('conflicting markout source')
-                existing[key]=row
-            values=list(existing.values());sources.extend(mark_sources)
-    def auxiliary(relative):
-        if args.run_root is None:return []
-        path=args.run_root/relative
-        if not path.exists():return []
-        with path.open('rb') as stream:
-            data=stream.read(os.fstat(stream.fileno()).st_size)
-        data=data[:data.rfind(b'\n')+1]
-        sources.append({'path':str(path),'prefix_bytes':len(data),'sha256':hashlib.sha256(data).hexdigest()})
-        return [json.loads(line) for line in data.splitlines() if line.strip()]
-    report=analyze(values,sources,decisions=auxiliary('opportunities/decisions.jsonl'),
-        attempts=auxiliary('micro_maker/authorization_attempts.jsonl')+auxiliary('opportunities/authorization_publications.jsonl'))
+    roots=[Path(item['archive']) for item in inventory] if args.archive_root else [args.run_root] if args.run_root else []
+    markout_paths=[]
+    for root in roots:
+        folder=root/'research/evidence/maker_markout'
+        if any(p.is_symlink() for p in [root/'research',root/'research/evidence',folder]):raise ValueError('unsafe markout source directory')
+        markout_paths+=sorted(folder.glob('*.json'))+sorted(folder.glob('*.json.gz'))
+    if markout_paths:
+        marks,mark_sources=read_sources(markout_paths,require_complete=True)
+        if any(row.get('event_type')!='MARKOUT' for row in marks):raise ValueError('non-markout research source')
+        # Exact identities join descriptive labels; these files cannot introduce cash.
+        existing={(row['model_sha'],row['record_id']):row for row in values}
+        for row in marks:
+            key=(row['model_sha'],row['record_id'])
+            if key in existing and existing[key]!=row:raise ValueError('conflicting markout source')
+            existing[key]=row
+        values=list(existing.values());sources.extend({**p,'source_role':'maker_markout'} for p in mark_sources)
+    decisions=[];attempts=[];auxiliary_inventory=[]
+    for root in roots:
+        streams,proofs,coverage=read_auxiliary(root,sealed=bool(args.archive_root))
+        decisions.extend(streams['decisions']);attempts.extend(streams['authorization_attempts']);attempts.extend(streams['authorization_publications'])
+        sources.extend(proofs);auxiliary_inventory.append({'run_root':str(root),'streams':coverage})
+    report=analyze(values,sources,decisions=decisions,attempts=attempts)
+    report['opportunity_funnel']['auxiliary_source_inventory']=auxiliary_inventory
     if args.archive_root:
         report['archive_inventory']=inventory
+        report['opportunity_funnel']['archive_coverage']='ALL_RETAINED_LEDGER_AND_DECLARED_COORDINATOR_AUTHORIZATION_STREAMS; MISSING_SOURCES_AND_LEGACY_INPUTS_EXPLICIT'
         report['historical_summary']=historical_summary(report)
-        report['opportunity_funnel']['archive_coverage']='LEDGER_OBSERVED_STAGES_ONLY; ARCHIVED_COORDINATOR_AND_REJECTION_STREAMS_NOT_INCLUDED'
     args.output.parent.mkdir(parents=True,exist_ok=True);tmp=args.output.with_suffix('.tmp')
     encoded=(json.dumps(report,default=str,sort_keys=True,indent=2)+'\n').encode()
     tmp.write_bytes(gzip.compress(encoded,mtime=0) if args.output.suffix=='.gz' else encoded);os.replace(tmp,args.output)

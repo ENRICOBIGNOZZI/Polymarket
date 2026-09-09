@@ -35,6 +35,10 @@ class DecisionReportTests(unittest.TestCase):
         self.assertEqual(str(report['historical_canonical']['net_pnl_usd']),'2.27')
         self.assertIn('MAKER_EXECUTION',report['intervention_ranking']['provisional_next_test'])
         self.assertIn('Archived evidence remains visible',memo(report))
+        self.assertIn('Archived funnel:',memo(report))
+        self.assertEqual(report['historical_data_quality']['metrics']['missing_arrival_probability']['count'],2)
+        self.assertEqual(report['historical_data_quality']['metrics']['missing_arrival_probability']['affected_contracts'],1)
+        self.assertEqual(report['historical_canonical']['opportunity_funnel']['distinct_opportunities'],0)
         corrupted=copy.deepcopy(historical);corrupted['canonical_final_pnl']='1000'
         with self.assertRaisesRegex(ValueError,'historical position population'):
             diagnose(attribution,experiments,{},historical=corrupted)

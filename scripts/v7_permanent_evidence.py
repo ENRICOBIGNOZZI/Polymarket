@@ -16,6 +16,7 @@ import time
 from v7_evidence_catalog import classify
 from v7_evidence_store import AUTH, EvidenceStore, canonical, digest, immutable
 from v7_evidence_capacity import allocated_data_bytes
+from v7_storage_budget import MAX_MANAGED_DATA_BYTES, PERMANENT_COPY_HEADROOM_BYTES
 
 
 def load(path):
@@ -65,14 +66,14 @@ def sources(run_root,durable_root,archive_root,repository_root):
 
 
 def collect(run_root,durable_root,archive_root,repository_root=None,*,maximum_seconds=40,maximum_bytes=512*1024**2,
-            maximum_total_data_bytes=30_000_000_000):
+            maximum_total_data_bytes=MAX_MANAGED_DATA_BYTES):
     run_root=Path(run_root).resolve();durable_root=Path(durable_root).resolve();archive_root=Path(archive_root).resolve()
     permanent=durable_root/'permanent_evidence';permanent.mkdir(parents=True,exist_ok=True)
     started=time.monotonic();now=time.time_ns()
     usage=allocated_data_bytes([run_root.parent])
     # This guards additional archival copies. Producer storage remains separately
     # measured: do not misreport a paused backfill as enforcement on all writers.
-    copy_budget=max(0,maximum_total_data_bytes-usage-256*1024**2)
+    copy_budget=max(0,maximum_total_data_bytes-usage-PERMANENT_COPY_HEADROOM_BYTES)
     maximum_bytes=min(maximum_bytes,copy_budget)
     budget={'all_data_allocated_bytes':usage,'maximum_total_data_bytes':maximum_total_data_bytes,
             'copy_budget_bytes':copy_budget,'producer_budget_enforcement':'NOT_ATTESTED_BY_COPY_GUARD'}

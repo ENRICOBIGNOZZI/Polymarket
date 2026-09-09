@@ -1,6 +1,6 @@
 {
   "schema": "polymarket_v7_data_retention_v1",
-  "version": 8,
+  "version": 9,
   "paper_only": true,
   "disk": {
     "warning_free_ratio": 0.2,
@@ -85,21 +85,22 @@
     "model_independent_survival": true,
     "compression_requires_decompressed_hash_verification": true,
     "derived_discard_requires_exact_source_provenance": true,
-    "maximum_total_data_bytes": 30000000000,
+    "maximum_total_data_bytes": 40000000000,
     "budget_unit": "DECIMAL_GB_ALL_MANAGED_DATA_INCLUDING_LIVE_ARCHIVES_AND_PERMANENT_STORE",
-    "target_compaction_bytes": 24000000000,
-    "warning_bytes": 25000000000,
-    "critical_bytes": 28000000000,
+    "target_compaction_bytes": 36000000000,
+    "warning_bytes": 34000000000,
+    "critical_bytes": 39000000000,
     "external_storage_allowed": false,
     "information_loss_allowed": true,
     "compression_policy": "LOSSLESS_FIRST; EXPLICIT_VERIFIED_LOSSY_OLDER_EXTERNAL_TAPE_AGGREGATES",
-    "budget_exhaustion_policy": "CONTINUE_COLLECTION; AGGREGATE_OLDER_ALLOWLISTED_DETAIL; SURFACE_UNCOVERED_PRODUCER_CAPACITY"
+    "budget_exhaustion_policy": "CONTINUE_COLLECTION; AGGREGATE_OLDER_ALLOWLISTED_DETAIL; SURFACE_UNCOVERED_PRODUCER_CAPACITY",
+    "budget_authorization": "USER_AUTHORIZED_MANAGED_DATA_UP_TO_40GB_20260909"
   },
   "aggregate_retention": {
     "enabled": true,
     "authorization": "USER_AUTHORIZED_CONTINUOUS_COLLECTION_WITH_OLDER_DETAIL_AGGREGATED_20260909",
-    "target_bytes": 24000000000,
-    "trigger_bytes": 25000000000,
+    "target_bytes": 36000000000,
+    "trigger_bytes": 38000000000,
     "minimum_age_seconds": 3600,
     "maximum_seconds_per_pass": 240,
     "hard_filesystem_quota": false,
