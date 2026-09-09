@@ -128,6 +128,22 @@ def main() -> None:
     assert len(rows) == 1 and rows[0]["outcome"] == "YES"
     assert rows[0]["robust_ev"] > 0.14
     assert rows[0]["tte_seconds"] == 45.0
+    bootstrap_status = snapshot()
+    bootstrap_status["fair"].update({
+        "paper_exploration_bootstrap": True, "research_only": True,
+        "real_money_authority": False,
+        "probability_model_id": router.BOOTSTRAP_PROBABILITY_MODEL_ID,
+        "probability_model_hash": "b" * 64,
+    })
+    # Research-only bootstrap evidence can only enter the bounded probe lane.
+    assert robust_candidates(bootstrap_status, live_books, policy) == []
+    probe_policy = router.validate_probe_policy(json.loads(
+        (ROOT / "config" / "v7_external_fair.json").read_text()
+    )["paper_exploration_probe"])
+    bootstrap_probes = router.paper_probe_candidates(
+        bootstrap_status, live_books, policy, probe_policy
+    )
+    assert bootstrap_probes and all(row["paper_bootstrap_probe"] is True for row in bootstrap_probes)
     observed = opportunity_set(snapshot(), live_books, policy)
     assert observed is not None
     assert observed["decision"] == "TAKE_YES"

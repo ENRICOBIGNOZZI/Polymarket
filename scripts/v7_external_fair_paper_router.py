@@ -51,6 +51,7 @@ HORIZONS = (1, 10, 45, 60, 300)
 FORECAST_TTE_BUCKETS = (240, 180, 120, 90, 60, 45, 30, 20, 15, 10, 5)
 FORECAST_BUCKET_TOLERANCE_SECONDS = 1.25
 MAX_CLOB_CLOCK_SKEW_MS = 250
+BOOTSTRAP_PROBABILITY_MODEL_ID = "btc_m5_same_oracle_diffusion_bootstrap_v1"
 
 
 def load(path: Path) -> dict[str, Any]:
@@ -1435,6 +1436,11 @@ def robust_candidates(status: dict[str, Any], books: dict[str, Book], policy: di
     oracle, external, fair, market = (
         status.get("oracle") or {}, status.get("external") or {}, status.get("fair") or {}, status.get("market") or {},
     )
+    # The structural bootstrap is explicitly research-only. It may generate
+    # bounded PAPER probes, but must never be promoted implicitly into the
+    # ordinary robust Taker path merely because its interval clears a gate.
+    if fair.get("probability_model_id") == BOOTSTRAP_PROBABILITY_MODEL_ID:
+        return []
     if not (contract.get("verified") and contract.get("rules_hash_recognized") and reference.get("valid")
             and oracle.get("healthy") and oracle.get("continuity") != "CONTINUITY_UNKNOWN"
             and external.get("healthy") and fair.get("valid")):
@@ -1494,7 +1500,7 @@ def validate_probe_policy(raw: dict[str, Any] | None) -> dict[str, Any] | None:
         "schema": "polymarket_v7_paper_exploration_probe_v1",
         "authority": "PAPER_EXPLORATION",
         "asset": "BTC", "horizon": "M5",
-        "required_probability_model_id": "btc_m5_same_oracle_diffusion_bootstrap_v1",
+        "required_probability_model_id": BOOTSTRAP_PROBABILITY_MODEL_ID,
         "one_probe_per_market": True,
         "require_no_robust_candidate": True,
         "require_arrival_revalidation": True,
