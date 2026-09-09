@@ -109,7 +109,7 @@ def scorecard(attribution, cohorts, statuses, previous=None):
         for field, count in coverage.get('missing_fields_overlapping', {}).items():
             add('missing_maker_feature|'+code+'|'+field, count, coverage['orders'], scope=code)
     return {'schema':'polymarket_v7_economic_data_quality_v1','metrics':metrics,
-            'unexplained_pnl_usd':attribution['unattributed_ledger_pnl'],
+            'unexplained_pnl_usd':str(attribution['unattributed_ledger_pnl']),
             'limitations':['Fill metrics cover canonical closed positions in the supplied ledger prefix.',
                 'Source status counters lack event-level contract/notional/first-occurrence attribution; those fields remain unknown.',
                 'Counter reset or unknown session identity suppresses trend deltas. Censor categories are not pooled as independent contracts.']}
@@ -206,6 +206,7 @@ def diagnose(attribution, experiments, statuses, benchmark=None, previous=None, 
             'gross_pnl_usd':gross,'costs_usd':costs,'components_ranked_by_realized_loss':accounting,
             'component_probe_model_strata':attribution['strata_by_component_probe_model']},
         'historical_canonical':historical_summary(historical) if historical is not None else None,
+        'historical_data_quality':scorecard(historical,[],{},(previous or {}).get('historical_data_quality',{}).get('metrics')) if historical is not None else None,
         'forecast':forecasts,'fixed_signal_delay':delays,'opportunity_funnel':attribution['opportunity_funnel'],
         'maker_outcomes_by_sha':attribution['maker_outcomes_by_sha'],
         'maker_profit_causes':maker_causes,
@@ -229,6 +230,13 @@ def memo(report):
         f"unexplained historical PnL ${history['unexplained_pnl_usd']}. Each generation is reported separately; "
         'these totals are not current-runtime performance or a comparison of model quality.' if history else
         'Archived accounting is unavailable in this report; absence is not zero historical PnL.')
+    if history and history.get('opportunity_funnel'):
+        funnel=history['opportunity_funnel'];attempts=funnel.get('attempt_totals',{})
+        history_text+=(f" Archived funnel: {funnel.get('distinct_opportunities','UNKNOWN')} identified opportunities, "
+                       f"{attempts.get('coordinator_decisions','UNKNOWN')} coordinator decisions and "
+                       f"{attempts.get('authorization_records','UNKNOWN')} authorization records. "
+                       'Missing legacy candidate inputs and absent streams remain explicit; these are observed populations, not complete latent opportunity counts.')
+
     return '\n'.join([
         '# NEXT_ECONOMIC_ACTION', '', 'Computed from the exact source hashes in the accompanying decision report. Source state: '+report['state']+'. This is not a profitability claim.', '',
         history_text, '',
