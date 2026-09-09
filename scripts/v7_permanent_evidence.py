@@ -79,7 +79,7 @@ def collect(run_root,durable_root,archive_root,repository_root=None,*,maximum_se
     if maximum_bytes<=0:
         status={'schema':'polymarket_v7_permanent_evidence_status_v1',**AUTH,'timestamp_ms':now//1_000_000,
                 'state':'ARCHIVE_COPY_DEFERRED_DATA_BUDGET','data_budget':budget,
-                'no_unique_source_deletion':True,'backfill_pass_complete':False}
+                'collector_deletes_unique_sources':False,'older_external_detail_may_be_aggregated':True,'backfill_pass_complete':False}
         atomic(run_root/'permanent_evidence_status.json',status)
         return status
     entries=sources(run_root,durable_root,archive_root,repository_root)
@@ -120,7 +120,7 @@ def collect(run_root,durable_root,archive_root,repository_root=None,*,maximum_se
       'sources_discovered':len(entries),'sources_considered':considered,'sources_indexed':indexed,'source_revisions':revisions,
       'counts':dict(counts),'new_uncompressed_bytes':new_bytes,'capture_errors':errors,'receipt':str(receipt_path),
       'incomplete_source_prefixes':incomplete,'backfill_pass_complete':next_key is None and incomplete==0 and not counts['CLOSED_GZIP_COPY_DEFERRED_BUDGET'],'next_source':next_key,'collection_seconds':time.monotonic()-started,
-      'disk_free_bytes':disk.free,'disk_total_bytes':disk.total,'no_unique_source_deletion':True,
+      'disk_free_bytes':disk.free,'disk_total_bytes':disk.total,'collector_deletes_unique_sources':False,'older_external_detail_may_be_aggregated':True,
       'data_budget':budget,
       'state':'CAPTURE_ERRORS_VISIBLE' if errors else 'BACKFILL_IN_PROGRESS' if next_key or incomplete or counts['CLOSED_GZIP_COPY_DEFERRED_BUDGET'] else 'COLLECTING'}
     atomic(run_root/'permanent_evidence_status.json',status)

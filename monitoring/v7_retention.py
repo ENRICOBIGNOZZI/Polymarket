@@ -4,7 +4,8 @@
 The active canonical ledger and causal CSV streams are never truncated. The
 tool checkpoints complete ledger bytes and verifies their PAPER/SHA contract.
 Closed tapes are compressed with byte verification; shared immutable packs are
-retained. Age never authorizes deletion of unique evidence or checkpoints.
+retained except allowlisted older external tapes after verified lossy aggregation
+under explicit user policy. Canonical checkpoints never expire.
 """
 from __future__ import annotations
 
@@ -520,6 +521,17 @@ def run_retention(
         active_run_root=run_root if (run_root / "control/runtime_status.json").is_file() else None,
         permanent_store_root=run_root.parent / 'paper_v7_durable/permanent_evidence/store',
     )
+    aggregate_policy=config.get('aggregate_retention',{})
+    aggregates={'state':'DISABLED'}
+    if aggregate_policy.get('enabled') and run_root.name=='paper_v7_live' and run_root.parent.name=='runs':
+        import sys
+        sys.path.insert(0,str(Path(__file__).resolve().parents[1]/'scripts'))
+        from v7_aggregate_retention import run as aggregate_run, POLICY
+        if aggregate_policy.get('authorization')!=POLICY:raise ValueError('invalid lossy retention authorization')
+        aggregates=aggregate_run(run_root.parent,
+            target_bytes=int(aggregate_policy['target_bytes']),trigger_bytes=int(aggregate_policy['trigger_bytes']),
+            minimum_age_seconds=int(aggregate_policy['minimum_age_seconds']),
+            maximum_seconds=float(aggregate_policy['maximum_seconds_per_pass']),dry_run=dry_run)
     disk = disk_state(run_root, config["disk"])
     result = {
         "schema": "polymarket_v7_retention_status_v1",
@@ -528,6 +540,7 @@ def run_retention(
         "authenticated_execution": False,
         "expected_sha": expected_sha,
         "disk": disk,
+        "aggregate_retention": aggregates,
         "ledger_checkpoint": checkpoint,
         "rotated_append_reopen_streams": rotated,
         "expired_rotated_segments": expired,
