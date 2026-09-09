@@ -23,6 +23,7 @@ from v7_evidence_capacity import allocated_data_bytes
 from v7_evidence_store import AUTH, EvidenceStore, canonical, digest, immutable, fsync_dir
 from v7_lossless_data_compaction import closed, file_hash, stable
 from v7_permanent_evidence import atomic
+from v7_storage_budget import MAX_MANAGED_DATA_BYTES, RETENTION_TARGET_BYTES, RETENTION_TRIGGER_BYTES
 
 HEADER=struct.Struct('<8sIIq41s65s65s33s4x')
 RAW=struct.Struct('<QQqqB3xI')
@@ -248,11 +249,11 @@ def resume_expiries(store,runs,check_closed=closed):
     return completed
 
 
-def run(runs, *, target_bytes=24_000_000_000, trigger_bytes=25_000_000_000, maximum_seconds=300, minimum_age_seconds=3600, dry_run=False):
-    if not 0<target_bytes<trigger_bytes<=28_000_000_000 or minimum_age_seconds<3600 or not 0<maximum_seconds<=600:raise ValueError('unsafe aggregate retention bounds')
+def run(runs, *, target_bytes=RETENTION_TARGET_BYTES, trigger_bytes=RETENTION_TRIGGER_BYTES, maximum_seconds=300, minimum_age_seconds=3600, dry_run=False):
+    if not 0<target_bytes<trigger_bytes<MAX_MANAGED_DATA_BYTES or minimum_age_seconds<3600 or not 0<maximum_seconds<=600:raise ValueError('unsafe aggregate retention bounds')
     runs=Path(runs).resolve();root=runs/'paper_v7_durable/permanent_evidence/store'
     if runs.name!='runs':raise ValueError('explicit managed runs directory required')
-    started=time.monotonic();usage=allocated_data_bytes([runs]);result={'policy':POLICY,**AUTH,'before_bytes':usage,'maximum_total_data_bytes':30_000_000_000,'hard_quota_enforced':False,'retired':[],'deferred':[]}
+    started=time.monotonic();usage=allocated_data_bytes([runs]);result={'policy':POLICY,**AUTH,'before_bytes':usage,'maximum_total_data_bytes':MAX_MANAGED_DATA_BYTES,'hard_quota_enforced':False,'retired':[],'deferred':[]}
     if usage>=trigger_bytes:
         paths=[]
         for parent in [runs/'paper_v7_live',runs/'paper_v7_archives']:
@@ -272,7 +273,7 @@ def run(runs, *, target_bytes=24_000_000_000, trigger_bytes=25_000_000_000, maxi
                 try:result['retired'].append(retire(path,runs,store,minimum_age_seconds=minimum_age_seconds))
                 except (OSError,ValueError,EOFError) as exc:result['deferred'].append({'path':str(path),'reason':str(exc)})
     result.update(timestamp_ms=time.time_ns()//1_000_000,after_bytes=allocated_data_bytes([runs]))
-    result['state']='CAP_EXCEEDED' if result['after_bytes']>30_000_000_000 else 'ABOVE_TARGET_MORE_RETENTION_NEEDED' if result['after_bytes']>target_bytes else 'WITHIN_TARGET'
+    result['state']='CAP_EXCEEDED' if result['after_bytes']>MAX_MANAGED_DATA_BYTES else 'ABOVE_TARGET_MORE_RETENTION_NEEDED' if result['after_bytes']>target_bytes else 'WITHIN_TARGET'
     if not dry_run:atomic(runs/'paper_v7_durable/permanent_evidence/aggregate_retention_status.json',result)
     return result
 
