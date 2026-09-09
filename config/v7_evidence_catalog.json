@@ -717,7 +717,10 @@
         "profit_experiments/**/observations.jsonl*",
         "profit_experiments/**/manifest.json",
         "profit_experiments/**/sources/*.json.gz",
-        "profit_experiments/**/settlements.json"
+        "profit_experiments/**/settlements.json",
+        "profit_experiments/**/confirmatory_window_closure.json",
+        "profit_experiments/**/confirmatory_final.json",
+        "profit_experiments/**/final_analysis_sources/*.py.gz"
       ],
       "producer": "existing profit collector / report loop",
       "consumers": [
@@ -789,7 +792,8 @@
         "coordinator/decisions.jsonl*",
         "global_portfolio/decisions.jsonl*",
         "control/decisions.jsonl*",
-        "opportunities/decisions.jsonl*"
+        "opportunities/decisions.jsonl*",
+        "global_portfolio_coordinator.events.jsonl*"
       ],
       "producer": "v7_global_portfolio_coordinator.py",
       "consumers": [
@@ -930,7 +934,8 @@
         "micro_maker/research_evidence.jsonl*",
         "micro_maker/evidence.jsonl*",
         "micro_maker/execution_model.json",
-        "micro_maker/book_features/*.json"
+        "micro_maker/book_features/*.json",
+        "micro_maker/reward_selection.events.jsonl*"
       ],
       "producer": "Maker observer / v7_maker_durable_learning.py",
       "consumers": [

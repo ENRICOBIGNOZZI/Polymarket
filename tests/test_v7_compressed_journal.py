@@ -12,6 +12,22 @@ from v7_compressed_journal import CompressedJournal,compress_closed,journal_rows
 
 
 class JournalTests(unittest.TestCase):
+    def test_legacy_read_is_read_only(self):
+        with tempfile.TemporaryDirectory() as d:
+            path=Path(d)/'legacy.jsonl';path.write_text('{"value":1}\n')
+            self.assertEqual(list(journal_rows(path)),[{'value':1}])
+            self.assertEqual([p.name for p in path.parent.iterdir()],['legacy.jsonl'])
+
+    def test_second_producer_is_rejected_until_first_owner_closes(self):
+        with tempfile.TemporaryDirectory() as d:
+            path=Path(d)/'journal.jsonl';first=CompressedJournal(path)
+            try:
+                with self.assertRaises(BlockingIOError):CompressedJournal(path)
+                first.append({'owner':1})
+            finally:first.close()
+            with CompressedJournal(path) as second:second.append({'owner':2})
+            self.assertEqual(list(journal_rows(path)),[{'owner':1},{'owner':2}])
+
     def test_rotation_compression_and_restart_preserve_ordered_exact_rows(self):
         with tempfile.TemporaryDirectory() as d:
             path=Path(d)/'observations.jsonl';rows=[{'sequence':i,'payload':'x'*100} for i in range(12)]

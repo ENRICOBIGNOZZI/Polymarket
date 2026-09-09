@@ -13,7 +13,7 @@ import os
 from pathlib import Path
 import subprocess
 import time
-from v7_profit_protocol import freeze, digest, bin_index
+from v7_profit_protocol import freeze, digest, bin_index, fixed_window_digest
 
 AUTH={'paper_only':True,'authenticated_execution':False,'real_order_submission':False,
       'execution_authority':'ZERO_AUTHORITY_RESEARCH_ONLY','excluded_from_portfolio_equity':True}
@@ -130,10 +130,30 @@ class ProfitExperiments:
             self.last_scan=time.monotonic()
             self.collect_anchors(now)
             self.finish_makers(status,now)
+            self.seal_confirmatory_window(now)
             atomic(self.status_path,{'schema':'polymarket_v7_profit_experiment_status_v1',
                 **AUTH,'code_sha':self.sha,'timestamp_ms':now//1000000,'manifest':self.manifest,
                 'counts':dict(self.counts),'pending_signals':len(self.pending),'pending_maker_anchors':len(self.maker_pending),
                 'last_error':self.last_error,'state':'COLLECTING' if now>=self.manifest['forward_start_ns'] else 'AWAITING_PREREGISTERED_BOUNDARY'})
+
+    def seal_confirmatory_window(self,now):
+        end=self.manifest.get('confirmatory_end_ns');path=self.output/'confirmatory_window_closure.json'
+        if end is None or now<end or path.exists():return
+        if any(r['origin_ns']<end for r in self.pending.values()):return
+        if any(r['origin_ms']*1_000_000<end for r in self.maker_pending.values()):return
+        source=self.output/'observations.jsonl'
+        if not source.exists():return
+        # All prior observations must be durable before the producer seal appears.
+        with source.open('rb') as stream:os.fsync(stream.fileno())
+        observations=list(rows(source))
+        value={'schema':'polymarket_v7_confirmatory_window_closure_v1',**AUTH,
+            'manifest_sha256':self.manifest['manifest_sha256'],'closed_at_ns':now,
+            'forward_end_ns':end,'window_observations_sha256':fixed_window_digest(observations,self.manifest),
+            'pending_window_signals':0,'pending_window_maker_anchors':0,
+            'scope':'OBSERVED_SELECTED_POPULATION; NOT_PROOF_OF_UNOBSERVED_OPPORTUNITY_COVERAGE'}
+        value['closure_sha256']=digest(value)
+        from v7_evidence_store import immutable,canonical
+        immutable(path,canonical(value))
 
     def select_signal(self,origin,fair,market,status):
         ms=origin['origin_observed_wall_ns']/1e6

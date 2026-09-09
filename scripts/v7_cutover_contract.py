@@ -91,6 +91,8 @@ def validate(root: Path, expected_head: str | None) -> dict[str, str]:
         "scripts/v7_rtds_external_fair_monitor.py", "scripts/v7_external_rich_model.py",
         "scripts/v7_fair_model_artifact.py", "scripts/v7_external_lead_lag_collector.py",
         "scripts/v7_compressed_journal.py",
+        "scripts/v7_binance_usdm_rest_collector.py", "scripts/v7_deribit_rest_collector.py",
+        "scripts/v7_coinbase_l2_rest_collector.py",
         "scripts/v7_causal_book.py",
         "scripts/v7_profit_attribution.py", "scripts/v7_profit_protocol.py",
         "scripts/v7_profit_experiments.py", "scripts/v7_profit_report.py",

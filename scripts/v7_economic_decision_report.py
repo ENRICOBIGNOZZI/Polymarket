@@ -22,6 +22,25 @@ def money_sum(values):
     return str(sum(values, ZERO)) if all(v is not None for v in values) else None
 
 
+def ranked_regions(signal,minimum_contracts=12):
+    """Descriptive ranking of fixed cells; tiny or missing cells cannot win."""
+    eligible=[];excluded=0
+    for name,metrics in signal.get('cells',{}).items():
+        if name=='ALL':continue
+        brier=metrics.get('brier_improvement_over_pm') or {}
+        if brier.get('mean') is None or brier.get('contracts',0)<minimum_contracts:
+            excluded+=1;continue
+        eligible.append({'region':name,'contracts':brier['contracts'],'brier_improvement_over_pm':brier['mean'],
+            'settlement_surplus_cost2_delay1000':metrics.get('settlement_surplus_delay1000_cost2'),
+            'definition_status':'ORIGINAL_PROTOCOL_FIXED_BIN' if name.split('|')[0] in
+                ('outcome','margin','tte','outcome_margin_tte') else signal.get('registration_status','UNKNOWN')})
+    eligible.sort(key=lambda r:(r['brier_improvement_over_pm'],r['region']))
+    return {'weakest':eligible[:3],'strongest':list(reversed(eligible[-3:])),
+        'eligible_cells':len(eligible),'excluded_small_or_missing_cells':excluded,
+        'minimum_contracts_for_descriptive_display':minimum_contracts,
+        'interpretation':'POST_HOC_RANK_ORDER_OF_FIXED_CELLS; OVERLAPPING_REGIONS; NO_WINNER_PROMOTION_OR_CONFIRMATORY_CLAIM'}
+
+
 def quality_metric(count, denominator=None, *, observations=None, scope, previous=None):
     observations = observations if observations is not None else None
     contracts = sorted({r['market_id'] for r in observations if r.get('market_id')}) if observations is not None else None
@@ -96,6 +115,10 @@ def diagnose(attribution, experiments, statuses, benchmark=None, previous=None):
     if any(attribution.get(k) != v for k,v in AUTH.items()): raise ValueError('unsafe attribution authority')
     cohorts = experiments.get('cohorts', [experiments] if experiments.get('manifest_sha256') else [])
     positions = attribution['positions']; components = defaultdict(list); markouts = defaultdict(list)
+    total=money_sum(p.get('ledger_final_pnl') for p in positions)
+    if (total is None or dec(total)!=dec(attribution.get('canonical_final_pnl'))
+            or len(positions)!=int(attribution.get('canonical_final_positions',-1))):
+        raise ValueError('attribution position population does not reconcile to supplied canonical cash total')
     for position in positions:
         components[position['component']].append(position)
         for fill in position['fill_details']:
@@ -122,6 +145,9 @@ def diagnose(attribution, experiments, statuses, benchmark=None, previous=None):
             'protocol_id':cohort['protocol_id'],'registration':signal.get('registration_status'),
             'brier_improvement_over_pm':brier,'log_loss_improvement_over_pm':cells.get('log_loss_improvement_over_pm'),
             'calibration':signal.get('calibration_fixed_deciles'),
+            'ranked_fixed_regions':ranked_regions(signal),
+            'confirmatory_status':{k:(cohort.get('confirmatory') or {}).get(k) for k in
+                ('state','final_analysis_state','final_sha256','subsequent_window_input_changed','automatic_promotion')},
             'settlement_surplus_cost2_delay1000':cells.get('settlement_surplus_delay1000_cost2')})
         delays.append({'manifest_sha256':cohort['manifest_sha256'],
             'statistics':signal.get('fixed_signal_delay',{}).get('ALL',{}),

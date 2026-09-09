@@ -5,11 +5,13 @@ segments; it never changes an open producer file or removes unverified bytes.
 """
 from __future__ import annotations
 from concurrent.futures import ThreadPoolExecutor
+from contextlib import nullcontext
 import gzip
 import fcntl
 import hashlib
 import json
 import os
+import re
 from pathlib import Path
 import time
 
@@ -65,6 +67,12 @@ def compress_closed(source):
             if any(prior.get(k)!=receipt[k] for k in ('source_name','source_bytes','source_sha256','gzip_name','decoded_sha256_verified')):
                 raise ValueError('journal compression proof collision')
         sync_directory(source.parent)
+        for stale in source.parent.glob(source.name+'.gz.tmp.*'):
+            match=re.fullmatch(re.escape(source.name)+r'\.gz\.tmp\.(\d+)\.\d+(?:\.manifest)?',stale.name)
+            if not match:continue
+            try:os.kill(int(match[1]),0)
+            except ProcessLookupError:stale.unlink(missing_ok=True)
+            except (OSError,OverflowError):pass
         source.unlink();sync_directory(source.parent)
         return receipt
     finally:temporary.unlink(missing_ok=True)
@@ -83,12 +91,25 @@ def journal_paths(path):
 def journal_rows(path,manifest=None):
     path=Path(path)
     if not path.parent.exists():return
-    active=None
-    with path.with_name(path.name+'.rotation.lock').open('a') as lock:
-        fcntl.flock(lock,fcntl.LOCK_SH)
-        sources=journal_paths(path)
-        if path in sources:
-            active=path.open('rb');active_limit=os.fstat(active.fileno()).st_size
+    lock_path=path.with_name(path.name+'.rotation.lock')
+    while True:
+        active=None
+        try:lock=lock_path.open('rb')
+        except FileNotFoundError:lock=None
+        with lock if lock is not None else nullcontext():
+            if lock is not None:fcntl.flock(lock,fcntl.LOCK_SH)
+            sources=journal_paths(path)
+            if path in sources:
+                try:active=path.open('rb')
+                except FileNotFoundError:
+                    if lock is None and lock_path.exists():continue
+                    raise
+                active_limit=os.fstat(active.fileno()).st_size
+        # A producer may have started its first rotation during legacy discovery.
+        if lock is None and lock_path.exists():
+            if active is not None:active.close()
+            continue
+        break
     try:
         yield from _snapshot_rows(sources,path,active,active_limit if active else None,manifest)
     finally:
@@ -126,6 +147,9 @@ class CompressedJournal:
         self.lock_path.touch(exist_ok=True)
         self.maximum_hot_bytes=int(maximum_hot_bytes)
         if self.maximum_hot_bytes<1:raise ValueError('invalid journal segment size')
+        self.writer_lock=self.path.with_name(self.path.name+'.writer.lock').open('a')
+        try:fcntl.flock(self.writer_lock,fcntl.LOCK_EX|fcntl.LOCK_NB)
+        except BaseException:self.writer_lock.close();raise
         self.worker=ThreadPoolExecutor(max_workers=1,thread_name_prefix='closed-evidence-compression')
         self.pending=None
         # Old closed tails survive a process crash. Compress before queuing more.
@@ -157,5 +181,10 @@ class CompressedJournal:
         self.maintain()
 
     def close(self):
-        self.worker.shutdown(wait=True)
-        if self.pending is not None:self.pending.result()
+        try:
+            self.worker.shutdown(wait=True)
+            if self.pending is not None:self.pending.result()
+        finally:self.writer_lock.close()
+
+    def __enter__(self):return self
+    def __exit__(self,*unused):self.close()

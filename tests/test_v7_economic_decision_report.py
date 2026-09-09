@@ -3,7 +3,7 @@ from pathlib import Path
 import sys
 import unittest
 sys.path.insert(0,str(Path(__file__).resolve().parents[1]/'scripts'))
-from v7_economic_decision_report import AUTH,diagnose,quality_metric,memo
+from v7_economic_decision_report import AUTH,diagnose,quality_metric,memo,ranked_regions
 
 
 def fixture():
@@ -24,6 +24,22 @@ def fixture():
 
 
 class DecisionReportTests(unittest.TestCase):
+    def test_inconsistent_canonical_population_is_not_published_as_a_diagnosis(self):
+        attribution,experiments=fixture();attribution['canonical_final_pnl']='999'
+        with self.assertRaisesRegex(ValueError,'reconcile'):diagnose(attribution,experiments,{})
+        attribution,experiments=fixture();attribution['positions'].append(copy.deepcopy(attribution['positions'][0]))
+        with self.assertRaisesRegex(ValueError,'reconcile'):diagnose(attribution,experiments,{})
+
+    def test_region_ranking_excludes_tiny_winners_and_preserves_registration_limits(self):
+        signal={'registration_status':'POST_HOC_EXPLORATORY_GRID_ON_PRESERVED_LEGACY_PROTOCOL',
+            'cells':{name:{'brier_improvement_over_pm':{'mean':mean,'contracts':n}} for name,mean,n in
+                     [('ALL',.4,30),('tte|0',.02,20),('volatility_ticks|0',-.03,18),('margin|9',.99,2)]}}
+        result=ranked_regions(signal)
+        self.assertEqual(result['strongest'][0]['region'],'tte|0')
+        self.assertEqual(result['weakest'][0]['region'],'volatility_ticks|0')
+        self.assertEqual(result['weakest'][0]['definition_status'],signal['registration_status'])
+        self.assertEqual(result['eligible_cells'],2)
+
     def test_priority_follows_observed_loss_component_and_cost_identity(self):
         attribution,experiments=fixture();r=diagnose(attribution,experiments,{})
         self.assertIn('MAKER_EXECUTION',r['intervention_ranking']['provisional_next_test'])

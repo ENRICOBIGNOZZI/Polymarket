@@ -294,18 +294,19 @@ def main() -> int:
     parser.add_argument("--interval", type=float, default=15.0)
     parser.add_argument("--loop", action="store_true")
     args = parser.parse_args()
+    from v7_compressed_journal import CompressedJournal
+    journal=CompressedJournal(args.tape)
     while True:
         try:
             row, status = collect_once()
-            args.tape.parent.mkdir(parents=True, exist_ok=True)
-            with args.tape.open("a", encoding="utf-8") as handle:
-                handle.write(json.dumps(row, sort_keys=True) + "\n")
+            journal.append(row)
         except (DeribitRestError, OSError, urllib.error.URLError) as exc:
             status = {"schema": "polymarket_v7_deribit_rest_status_v1", "state": "DEGRADED",
                       "transport": "PUBLIC_REST_POLLING", "polling_latency_not_event_latency": True,
                       "blocker": str(exc), "execution_authority": False}
         _write_json(args.status, status)
         if not args.loop:
+            journal.close()
             return 0 if status["state"] == "OPERATIONAL" else 2
         time.sleep(max(5.0, args.interval))
 

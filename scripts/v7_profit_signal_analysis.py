@@ -131,16 +131,18 @@ def summarize_signal(selections,delays,manifest,settlements,now_ns):
       'contract_origin_ns':times,'automatic_promotion':False}
 
 
-def confirmatory(primary,times,manifest,now_ns):
+def confirmatory(primary,times,manifest,now_ns,*,final_look=False,complete_primary_coverage=False):
     cfg=manifest['protocol']['inference'].get('confirmatory')
     if not cfg:return {'state':'NO_PROSPECTIVE_PRIMARY_ENDPOINT_REGISTRATION','automatic_promotion':False}
     end=manifest['confirmatory_end_ns'];ready=now_ns>=end;endpoints={}
     for key in cfg['primary_endpoints']:
         values=primary.get(key,{})
         ordered=[values[m] for m in sorted(values,key=lambda m:times.get(m,0))]
-        result=interval(ordered,manifest['protocol'],cfg['family_size']) if ready else describe(ordered)
-        result['interpretation']='FIXED_WINDOW_ANALYSIS_REQUIRES_SETTLEMENT_AND_CENSORING_COMPLETENESS_REVIEW' if ready else 'DESCRIPTIVE_PREVIEW_NOT_A_CONFIRMATORY_LOOK'
+        infer=ready and final_look and complete_primary_coverage
+        result=interval(ordered,manifest['protocol'],cfg['family_size']) if infer else describe(ordered)
+        result['interpretation']='SINGLE_FROZEN_FINAL_LOOK_REQUIRES_INDEPENDENT_REVIEW' if infer else 'FINAL_CAUSAL_CENSORING_PREVENTS_CONFIRMATORY_INFERENCE' if final_look else 'DESCRIPTIVE_PREVIEW_NOT_A_CONFIRMATORY_LOOK'
         endpoints[key]=result
-    return {'state':'WINDOW_ENDED_AWAITING_COMPLETENESS_AUDIT' if ready else 'FORWARD_WINDOW_OPEN',
+    return {'state':('FINAL_LOOK' if complete_primary_coverage else 'FINAL_CAUSAL_COVERAGE_INCOMPLETE') if ready and final_look else 'WINDOW_ENDED_AWAITING_COMPLETENESS_AUDIT' if ready else 'FORWARD_WINDOW_OPEN',
       'forward_start_ns':manifest['forward_start_ns'],'forward_end_ns':end,'endpoints':endpoints,
-      'family_size':cfg['family_size'],'look_policy':cfg['look_policy'],'automatic_promotion':False}
+      'family_size':cfg['family_size'],'look_policy':cfg['look_policy'],'automatic_promotion':False,
+      **({'frozen_contract_values':primary,'frozen_contract_origin_ns':times} if final_look else {})}

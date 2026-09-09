@@ -113,7 +113,8 @@
         "external_fair/lead_lag_collector.log",
         "profit_experiment_status.json",
         "${DURABLE_ROOT}/profit_experiments/${SHA}/manifest.json",
-        "${DURABLE_ROOT}/profit_experiments/${SHA}/observations.jsonl"
+        "${DURABLE_ROOT}/profit_experiments/${SHA}/observations.jsonl",
+        "${DURABLE_ROOT}/profit_experiments/${SHA}/cohorts/*/confirmatory_window_closure.json"
       ],
       "profile": "observer"
     },
@@ -132,7 +133,8 @@
       "launcher_log": "external_fair/binance_usdm_rest.log",
       "outputs": [
         "external_fair/binance_usdm_rest.jsonl",
-        "external_fair/binance_usdm_rest.log"
+        "external_fair/binance_usdm_rest.log",
+        "external_fair/binance_usdm_rest.jsonl.segment-*"
       ],
       "profile": "feed"
     },
@@ -151,7 +153,8 @@
       "launcher_log": "external_fair/deribit_rest.log",
       "outputs": [
         "external_fair/deribit_rest.jsonl",
-        "external_fair/deribit_rest.log"
+        "external_fair/deribit_rest.log",
+        "external_fair/deribit_rest.jsonl.segment-*"
       ],
       "profile": "feed"
     },
@@ -170,7 +173,8 @@
       "launcher_log": "external_fair/coinbase_l2_rest.log",
       "outputs": [
         "external_fair/coinbase_l2_rest.jsonl",
-        "external_fair/coinbase_l2_rest.log"
+        "external_fair/coinbase_l2_rest.log",
+        "external_fair/coinbase_l2_rest.jsonl.segment-*"
       ],
       "profile": "feed"
     },
@@ -293,7 +297,9 @@
     },
     {
       "arguments": [
-        "--loop"
+        "--loop",
+        "--event-log",
+        "${RUN_ROOT}/global_portfolio_coordinator.events.jsonl"
       ],
       "authority_overrides": {
         "capital_allocator": true,
@@ -315,7 +321,8 @@
       "launcher_log": "global_portfolio_coordinator.log",
       "outputs": [
         "opportunities/receipts",
-        "global_portfolio_coordinator.log"
+        "global_portfolio_coordinator.log",
+        "global_portfolio_coordinator.events.jsonl*"
       ],
       "profile": "core"
     },
@@ -340,7 +347,8 @@
       "launcher_log": "micro_maker/reward_selection.log",
       "outputs": [
         "micro_maker/reward_selection.json",
-        "micro_maker/reward_selection.log"
+        "micro_maker/reward_selection.log",
+        "micro_maker/reward_selection.events.jsonl*"
       ],
       "profile": "engine"
     },
@@ -519,6 +527,8 @@
         "profit_attribution.log",
         "profit_experiment_report.json",
         "profit_experiment_report.log",
+        "${DURABLE_ROOT}/profit_experiments/**/confirmatory_final.json",
+        "${DURABLE_ROOT}/profit_experiments/**/final_analysis_sources/*.py.gz",
         "permanent_evidence.log",
         "permanent_evidence_status.json",
         "${DURABLE_ROOT}/permanent_evidence",

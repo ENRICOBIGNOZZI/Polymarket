@@ -600,6 +600,7 @@ v7_register_child "$!"
 # cannot authorize new risk; the coordinator may select CANCEL/WITHDRAW or emit NOTHING.
 python3 scripts/v7_global_portfolio_coordinator.py \
   --run-root "$RUN_ROOT" --loop --interval 0.1 \
+  --event-log "$RUN_ROOT/global_portfolio_coordinator.events.jsonl" \
   >> "$RUN_ROOT/global_portfolio_coordinator.log" 2>&1 &
 v7_register_child "$!"
 
@@ -619,6 +620,7 @@ v7_register_child "$!"
       --execution-model "$MAKER_RESEARCH_MODEL" \
       --settlement-fair-status "$RUN_ROOT/external_fair/status.json" \
       --model-sha "$SHA" \
+      --event-log "$RUN_ROOT/micro_maker/reward_selection.events.jsonl" \
       >> "$RUN_ROOT/micro_maker/reward_selection.log" 2>&1 || true
     sleep "$MAKER_SELECTOR_REFRESH_SECONDS"
   done

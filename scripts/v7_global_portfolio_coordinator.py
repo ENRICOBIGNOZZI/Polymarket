@@ -409,7 +409,15 @@ def main() -> int:
     parser.add_argument("--run-root", type=Path, required=True)
     parser.add_argument("--interval", type=float, default=0.1)
     parser.add_argument("--loop", action="store_true")
+    parser.add_argument("--event-log",type=Path)
     args = parser.parse_args()
+    if args.event_log:
+        from v7_compressed_journal import CompressedJournal
+        with CompressedJournal(args.event_log) as journal:
+            while True:
+                journal.append(process_cut(args.run_root))
+                if not args.loop:return 0
+                time.sleep(max(0.05,args.interval))
     if not args.loop:
         print(json.dumps(process_cut(args.run_root), sort_keys=True))
         return 0

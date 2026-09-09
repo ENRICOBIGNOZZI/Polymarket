@@ -78,3 +78,16 @@ def bin_index(value,edges):
     for index,(low,high) in enumerate(zip(edges,edges[1:])):
         if low<=value<high:return index
     return None
+
+
+def fixed_window_digest(observations,manifest):
+    """Identity of every selected origin and its terminal window evidence."""
+    start,end=manifest['forward_start_ns'],manifest['confirmatory_end_ns']
+    selections={r['selection_key'] for r in observations if r['kind']=='SIGNAL_SELECTION' and start<=r['origin_ns']<end}
+    anchors={r['order']['record_id'] for r in observations if r['kind']=='MAKER_ANCHOR' and start<=r['origin_ms']*1_000_000<end}
+    def inside(row):
+        kind=row['kind']
+        if kind in ('SIGNAL_SELECTION','DELAY_LABEL'):return row['selection_key'] in selections
+        if kind=='MAKER_ANCHOR':return row['order']['record_id'] in anchors
+        return kind.startswith('MAKER_') and row.get('anchor_record_id') in anchors
+    return digest(sorted(digest(r) for r in observations if inside(r)))
