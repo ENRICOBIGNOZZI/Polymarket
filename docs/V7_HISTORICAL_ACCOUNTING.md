@@ -12,6 +12,6 @@ The historical funnel currently covers ledger-observed stages. Archived coordina
 
 ## Verified source audit
 
-On 2026-09-09 the archive command read 709 ledger/checkpoint sources in 21 cutover directories. All 547 final positions over 17 code generations reconcile, with zero unattributed PnL. A legacy final of −2.00000031 had a fill with no position ID; its explicit canonical fill-record reference recovered the exact accounting relationship. The aggregate historical result spans different code and research generations and is not a current-strategy profitability claim.
+On 2026-09-09 the archive command read 708 archived ledger/checkpoint sources in 21 cutover directories. All 547 final positions over 17 code generations reconcile, with zero unattributed PnL. A legacy final of −2.00000031 had a fill with no position ID; its explicit canonical fill-record reference recovered the exact accounting relationship. The aggregate historical result spans different code and research generations and is not a current-strategy profitability claim.
 
 Tests cover compressed-only generations, duplicate checkpoints, conflicting records, incomplete sealed sources, archive path safety, JSON serialization, explicit fill-reference identity and time checks, double-allocation rejection, and preservation of unknown legacy economics. All 143 CTest entries passed in Release, Debug and ASan/UBSan after these changes. Exact-commit CI and deployment of this follow-up remain required.
