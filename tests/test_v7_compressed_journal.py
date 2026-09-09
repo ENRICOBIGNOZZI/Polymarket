@@ -52,6 +52,10 @@ class JournalTests(unittest.TestCase):
                 self.assertEqual(list(dict(index.iter_records()).values()),history+tail[:1]+[other_row])
                 rebuilds=index.metrics['rebuilds']
                 journal.append(tail[1]);journal.pending.result();journal.append(tail[2])
+                # Reproduce Linux's immediate inode reuse even on filesystems
+                # that normally allocate a fresh inode for the replacement tail.
+                current=path.stat();prior=index.states[path]['file_identity']
+                index.states[path]['file_identity']=(current.st_dev,current.st_ino,*prior[2:])
                 self.assertEqual(list(dict(index.iter_records()).values()),history+tail+[other_row])
                 self.assertEqual(index.metrics['last_records_decoded'],2)
                 self.assertEqual(index.metrics['rebuilds'],rebuilds)

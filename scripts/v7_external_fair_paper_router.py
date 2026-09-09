@@ -169,8 +169,6 @@ class _CounterfactualIndex:
             old=self.states.get(path)
             if old is None:continue
             current=snapshots.get(path)
-            if current and (current.st_dev,current.st_ino)==old['file_identity'][:2]:
-                pending[path]=old;moves[old_rank]=new_ranks[path];continue
             candidates=[]
             if path not in self.paths:
                 candidate=path.with_name(path.name+'.gz')
@@ -189,6 +187,11 @@ class _CounterfactualIndex:
                         h.update(raw);remaining-=len(raw);validated+=len(raw)
                 if remaining==0 and h.hexdigest()==old['prefix_sha256']:
                     matched=candidate;break
+            # Linux may reuse the unlinked tail's inode for the new active
+            # file. A verified newly sealed prefix takes precedence over inode
+            # equality; otherwise the next guard forces a full-history rebuild.
+            if matched is None and current and (current.st_dev,current.st_ino)==old['file_identity'][:2]:
+                pending[path]=old;moves[old_rank]=new_ranks[path];continue
             if matched is None:return {},{},set(),True,validated
             if matched in pending:raise RuntimeError('ambiguous counterfactual source rotation')
             pending[matched]={**old,'file_identity':self._file_identity(snapshots[matched])}
