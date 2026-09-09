@@ -416,13 +416,14 @@ def opportunity_funnel(values, decisions=(), attempts=()):
 
 
 def analyze(values, sources=(), *, decisions=(), attempts=()):
-    orders={}; fills=defaultdict(list); finals={}; markouts=defaultdict(list); examples={}; by_sha=defaultdict(list)
+    orders={}; fills=defaultdict(list); fill_records={}; finals={}; markouts=defaultdict(list); examples={}; by_sha=defaultdict(list)
     for row in values:
         if metadata(row).get('counterfactual') is True or metadata(row).get('excluded_from_portfolio_equity') is True: continue
         sha=row['model_sha']; typ=row.get('event_type'); by_sha[sha].append(row)
         if typ=='ORDER_SUBMITTED': orders[(sha,str(row.get('order_id') or ''))]=row
         elif typ=='FILL' and dec(row.get('filled_size')) is not None and dec(row['filled_size'])>0:
             fills[(sha,str(row.get('position_id') or ''))].append(row)
+            fill_records[(sha,row['record_id'])]=row
         elif typ=='FINAL':
             key=(sha,str(row.get('position_id') or row.get('fill_id') or row.get('order_id') or row.get('record_id')))
             if key in finals: raise ValueError('multiple final records for one position')
@@ -433,7 +434,40 @@ def analyze(values, sources=(), *, decisions=(), attempts=()):
                       and metadata(row).get('component')=='professional_maker'}
         for row in order_examples([r for r in rows if str(r.get('order_id')) in maker_orders]):
             examples[(sha,row['order_id'])]=row
-    positions=[position_row(final,fills.get(key,[]),orders,markouts,examples) for key,final in sorted(finals.items())]
+    positions=[];claimed_fills=set()
+    for key,final in sorted(finals.items()):
+        linked=list(fills.get(key,[]));reference=metadata(final).get('canonical_maker_fill_record_id')
+        mode='POSITION_ID';missing_reference=False
+        if reference:
+            referenced=fill_records.get((key[0],reference))
+            if referenced is None:
+                missing_reference=True
+            else:
+                for field in ('model_sha','fill_id','order_id','market_id','token_id','side'):
+                    if not referenced.get(field) or referenced[field]!=final.get(field):
+                        raise ValueError('canonical final fill-reference identity conflict: '+field)
+                if (referenced.get('event_id') and final.get('event_id')
+                        and referenced['event_id']!=final['event_id']):
+                    raise ValueError('canonical final fill-reference identity conflict: event_id')
+                if referenced.get('position_id') not in (None,'',final.get('position_id')):
+                    raise ValueError('canonical final fill-reference position conflict')
+                start,end=dec(referenced.get('recorded_ts_ms')),dec(final.get('recorded_ts_ms'))
+                if start is None or end is None or not ZERO<start<=end:
+                    raise ValueError('canonical final fill-reference causal timestamp conflict')
+                if linked and not any(r['record_id']==reference for r in linked):
+                    raise ValueError('canonical final fill-reference disagrees with position fills')
+                if not linked:
+                    linked=[referenced];mode='EXPLICIT_CANONICAL_FINAL_FILL_REFERENCE'
+        for fill in linked:
+            identity=(fill['model_sha'],fill['record_id'])
+            if identity in claimed_fills:raise ValueError('canonical fill assigned to multiple final positions')
+            claimed_fills.add(identity)
+        result=position_row(final,linked,orders,markouts,examples)
+        result['fill_join']={'mode':mode,'final_fill_record_reference':reference,
+            'source_fill_record_ids':[r['record_id'] for r in linked],
+            'source_fill_position_ids':[r.get('position_id') for r in linked]}
+        if missing_reference:result['missing_or_inconsistent'].append('CANONICAL_FINAL_FILL_REFERENCE_UNAVAILABLE')
+        positions.append(result)
     pnl=sum((p['ledger_final_pnl'] for p in positions if p['ledger_final_pnl'] is not None),ZERO)
     strata={}
     for p in positions:

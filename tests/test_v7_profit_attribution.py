@@ -30,6 +30,25 @@ def fixture():
     return [order,one,two,final]
 
 class AttributionTests(unittest.TestCase):
+    def test_explicit_legacy_fill_reference_reconciles_without_rewriting_source(self):
+        rows=fixture();fill=rows[1];fill.update(position_id=None,filled_size=3,fill_price=.2,fee=.01,recorded_ts_ms=1000)
+        final=rows[-1];final.update(recorded_ts_ms=2000,fill_id='f1',final_pnl=2.39)
+        final['metadata'].update(entry_debit=.61,canonical_maker_fill_record_id=fill['record_id'])
+        values=[rows[0],fill,final];before=copy.deepcopy(values)
+        result=analyze(values);position=result['positions'][0]
+        self.assertEqual(result['reconciled_positions'],1);self.assertEqual(result['unattributed_ledger_pnl'],0)
+        self.assertEqual(position['fill_join']['mode'],'EXPLICIT_CANONICAL_FINAL_FILL_REFERENCE')
+        self.assertEqual(position['fill_join']['source_fill_position_ids'],[None]);self.assertEqual(values,before)
+        conflict=copy.deepcopy(values);conflict[1]['token_id']='wrong'
+        with self.assertRaisesRegex(ValueError,'fill-reference identity conflict'):analyze(conflict)
+        future=copy.deepcopy(values);future[1]['recorded_ts_ms']=3000
+        with self.assertRaisesRegex(ValueError,'causal timestamp conflict'):analyze(future)
+        duplicate=copy.deepcopy(final);duplicate.update(record_id='another-final',position_id='another-position')
+        with self.assertRaisesRegex(ValueError,'multiple final positions'):analyze(values+[duplicate])
+        missing=analyze([rows[0],final])
+        self.assertEqual(missing['reconciled_positions'],0)
+        self.assertIn('CANONICAL_FINAL_FILL_REFERENCE_UNAVAILABLE',missing['positions'][0]['missing_or_inconsistent'])
+
     def test_archived_model_generations_survive_compression_and_duplicate_checkpoints(self):
         with tempfile.TemporaryDirectory() as directory:
             root=Path(directory);archives=root/'archives';archives.mkdir()
