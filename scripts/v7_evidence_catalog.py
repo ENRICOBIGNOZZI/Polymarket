@@ -140,6 +140,9 @@ def definitions():
       family('unclassified',['*','**/*'], 'UNKNOWN',['UNKNOWN'],'UNKNOWN', ['UNCLASSIFIED_PRESERVED'],
         {'exchange':'UNKNOWN','receive':'UNKNOWN','decision':'UNKNOWN','publication':'filesystem mtime is not a causal timestamp'},'UNKNOWN_PRESERVE')]
     for d in items:
+        if d['source_family'] in {'external_raw','external_normalized'}:
+            d['retention']='CLOSED_OLDER_DETAIL_MAY_EXPIRE_AFTER_VERIFIED_MINUTE_AGGREGATION_UNDER_USER_AUTHORIZED_DATA_BUDGET'
+            d['compression']='LOSSLESS_FIRST; EXPLICIT_LOSSY_AGGREGATES_WITH_AVAILABILITY_RECEIPTS'
         fields=d['identity_fields'];name=d['source_family']
         if name in {'canonical_ledger','markouts','maker_learning'}:
             fields.update({k:k for k in ['market_id','event_id','token_id','order_id','fill_id','position_id','opportunity_id']})

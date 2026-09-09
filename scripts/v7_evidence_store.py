@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 """Permanent byte-exact evidence beneath replaceable V7 models and reports.
 
-Source revisions and compressed objects are immutable. SQLite is only a rebuildable
+Source revisions are immutable; explicitly retired older external detail is
+represented by verified lossy aggregates and availability receipts. SQLite is a rebuildable
 cursor/index. Capture never renames, truncates or deletes the producer's source.
 An append revision references its predecessor; overwrites/restarts start a new
 revision chain and leave all previous chains recoverable. No trading authority.
@@ -199,6 +200,7 @@ class EvidenceStore:
         rel = Path(relative)
         if rel.is_absolute() or '..' in rel.parts: raise ValueError('unsafe logical source path')
         source_id = digest(canonical({'partition':partition,'path':str(rel)}))
+        if self.retirement(source_id):return {'state':'RAW_DETAIL_EXPIRED_AFTER_AGGREGATION','source_id':source_id}
         previous_sha, previous = self.latest(source_id)
         before = path.stat(); identity = stat_identity(before)
         if (previous and previous['stat'] == identity and previous.get('capture_complete', True)
@@ -271,7 +273,17 @@ class EvidenceStore:
         return {'state':'CAPTURED','source_id':source_id,'revision':revision,'new_bytes':total-offset,
                 'source_bytes':total,'capture_complete':complete,'objects':len(chunks)}
 
+    def retirement(self, source_id):
+        path=self.root/'retired_sources'/(source_id+'.json')
+        if not path.exists():return None
+        if path.is_symlink():raise ValueError('unsafe retirement receipt')
+        value=json.loads(path.read_text())
+        if value.get('schema')!='polymarket_v7_raw_expiry_receipt_v1' or source_id not in value.get('source_ids',[]):raise ValueError('invalid retirement receipt')
+        return value
+
     def bytes(self, revision):
+        retired=self.retirement(self.revision(revision)['source_id'])
+        if retired:raise ValueError('RAW_DETAIL_EXPIRED_AFTER_AGGREGATION: '+retired['aggregate'])
         chain=[];seen=set();sha=revision
         while sha:
             if sha in seen: raise ValueError('revision cycle')
@@ -301,9 +313,10 @@ class EvidenceStore:
         values=[]
         for path in sorted((self.root/'revisions').glob('*/*.json')):
             sha=path.stem;value=self.revision(sha)
-            # Every referenced object must still be readable before indexing.
-            for ref in value['chunks']:
-                for _ in self.object_bytes(ref):pass
+            # Raw objects must be readable unless an explicit expiry receipt exists.
+            if not self.retirement(value['source_id']):
+                for ref in value['chunks']:
+                    for _ in self.object_bytes(ref):pass
             values.append((value['captured_ns'],sha,value))
         with self.db:
             self.db.execute('DELETE FROM sources');self.db.execute('DELETE FROM revisions')
