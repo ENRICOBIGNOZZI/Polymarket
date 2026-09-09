@@ -2,6 +2,7 @@
 """Prospective research results. Public settlement labels; no portfolio mutation."""
 from __future__ import annotations
 import argparse
+import copy
 from collections import Counter,defaultdict
 import json
 import math
@@ -36,6 +37,76 @@ def settlement(market,tokens,fetch):
 
 
 from v7_profit_inference import interval, describe
+
+
+def frozen_execution_summary(observations,protocol):
+    """Expose sealed execution even when a later comparison never completes.
+
+    This is a separate descriptive population, never an implicit substitute for
+    the paired final population or a source of confirmatory endpoint values.
+    """
+    windows={};marks={};completed=set();anchors={}
+    for row in observations:
+        kind=row['kind'];key=row.get('anchor_record_id')
+        if kind=='MAKER_ANCHOR':
+            key=row['order']['record_id']
+            if key in anchors and anchors[key]!=row:raise ValueError('conflicting Maker anchor')
+            anchors[key]=row
+        elif kind=='MAKER_EXECUTION_WINDOW':
+            for arm in row['arms']:
+                identity=(key,arm['arm'])
+                if identity in windows and windows[identity]!=(row,arm):
+                    raise ValueError('conflicting frozen Maker execution')
+                windows[identity]=(row,arm)
+        elif kind=='MAKER_MARKOUT_LABEL':
+            identity=(key,row['arm'],row['fill_index'],row['horizon_ms'])
+            if identity in marks and marks[identity]!=row:raise ValueError('conflicting Maker markout')
+            marks[identity]=row
+        elif kind=='MAKER_COMPARISON':completed.add(key)
+    counts=Counter();mark_counts=Counter();quantities=defaultdict(lambda:defaultdict(list));missing_anchors=set()
+    for (key,aid),(row,arm) in windows.items():
+        anchor=anchors.get(key)
+        if anchor is None:
+            missing_anchors.add(key);continue
+        if any(anchor[k]!=row[k] for k in ('market_id','token_id')):
+            raise ValueError('frozen Maker anchor identity mismatch')
+        counts[aid+'|'+arm['state']]+=1
+        if arm['state'] not in ('OBSERVED','FLOW_FILTER_ABSTAIN'):continue
+        quantities[aid][row['market_id']].append(arm['operational_filled_shares'])
+        for i,fill in enumerate(arm['fills']):
+            for horizon in protocol['maker']['markout_horizons_ms']:
+                mark=marks.get((key,aid,i,horizon))
+                if mark and any(mark[k]!=row[k] for k in ('market_id','token_id')):
+                    raise ValueError('frozen Maker markout identity mismatch')
+                # Absence is unknown, including after a cutover; it is neither
+                # a zero return nor proof of a permanent transport censor.
+                state=mark['state'] if mark else 'NOT_RECORDED'
+                if mark and ((state=='OBSERVED')!=(mark.get('markout') is not None)):
+                    raise ValueError('inconsistent frozen Maker markout state')
+                mark_counts[f'{aid}|{horizon}ms|{state}']+=1
+    for row in observations:
+        if row['kind']!='MAKER_COMPARISON':continue
+        for arm in row['arms']:
+            frozen=windows.get((row.get('anchor_record_id'),arm['arm']))
+            if frozen is None:continue
+            if any(row[k]!=frozen[0][k] for k in ('market_id','token_id')):
+                raise ValueError('completed Maker identity differs from frozen execution')
+            def execution_only(value):
+                value=copy.deepcopy(value)
+                for fill in value['fills']:
+                    fill.pop('markouts',None);fill.pop('markout_states',None)
+                return value
+            if execution_only(arm)!=execution_only(frozen[1]):
+                raise ValueError('completed Maker comparison changed frozen execution')
+    observed_anchors={key for key,_ in windows if key in anchors}
+    return {'scope':'DESCRIPTIVE_FROZEN_EXECUTION_INDEPENDENT_OF_FINAL_COMPARISON',
+        'anchors_with_frozen_execution':len(observed_anchors),
+        'anchors_without_final_comparison':len(observed_anchors-completed),
+        'unmatched_anchor_ids':sorted(missing_anchors),'execution_coverage':dict(counts),
+        'markout_coverage':dict(mark_counts),
+        'filled_quantity_by_contract':{aid:describe([sum(v)/len(v) for v in contracts.values()])
+                                       for aid,contracts in quantities.items()},
+        'confirmatory_endpoint_source':False}
 
 
 def summarize(observations,manifest,settlements,*,final_look=False,complete_primary_coverage=False):
@@ -136,6 +207,7 @@ def summarize(observations,manifest,settlements,*,final_look=False,complete_prim
         'selected_contracts':len({r['market_id'] for r in selections.values()}),'resolved_selected_contracts':len(resolved),
         'signal_cells':estimates,'fixed_signal_delay_margin_change':{k:interval([sum(v)/len(v) for v in c.values()],protocol,family) for k,c in decision_decay.items()},
         'maker_coverage':dict(maker_coverage),'maker_markout_coverage':dict(markout_coverage),
+        'maker_frozen_execution':frozen_execution_summary(observations,protocol),
         'maker_metrics':{k:interval([sum(v)/len(v) for v in c.values()],protocol,family) for k,c in maker_groups.items()},
         'maker_paired_net_delta_vs_join5s':{k:interval([sum(v)/len(v) for v in c.values()],protocol,family) for k,c in paired.items()},
         'signal_analysis':signal,'confirmatory':confirmatory(primary,times,manifest,time.time_ns(),

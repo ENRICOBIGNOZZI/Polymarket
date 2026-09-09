@@ -10,7 +10,7 @@ from types import SimpleNamespace
 ROOT=Path(__file__).resolve().parents[1];sys.path.insert(0,str(ROOT/'scripts'))
 from v7_profit_protocol import freeze
 from v7_profit_experiments import AUTH,ProfitExperiments
-from v7_profit_report import report_cohort,settlement,final_window_audit
+from v7_profit_report import report_cohort,settlement,final_window_audit,summarize
 
 
 class FinalLookTests(unittest.TestCase):
@@ -91,6 +91,61 @@ class FinalLookTests(unittest.TestCase):
         self.report();path=self.root/'confirmatory_final.json';value=json.loads(path.read_text());value['frozen_at_ns']=0
         path.write_text(json.dumps(value))
         with self.assertRaisesRegex(ValueError,'checksum'):self.report(offline=True)
+
+    def frozen_maker(self):
+        anchor={**self.common,'kind':'MAKER_ANCHOR','origin_ms':self.start//1_000_000,
+                'order':{'record_id':'order'}}
+        arm={'arm':'JOIN_5S','state':'OBSERVED','operational_filled_shares':2,
+             'common_quote_quantity':4,'fills':[{'quantity':2,'price':.4,'receive_monotonic_ns':1000,'markouts':{}}]}
+        window={**self.common,'kind':'MAKER_EXECUTION_WINDOW','anchor_record_id':'order',
+                'execution_horizon_ms':5100,'arms':[arm]}
+        return anchor,window
+
+    def test_frozen_execution_survives_missing_final_without_inventing_markouts(self):
+        anchor,window=self.frozen_maker();self.observations.extend([anchor,window]);self.write()
+        result=self.report(offline=True);frozen=result['maker_frozen_execution']
+        self.assertEqual(frozen['anchors_without_final_comparison'],1)
+        self.assertEqual(frozen['filled_quantity_by_contract']['JOIN_5S']['mean'],2)
+        self.assertEqual(frozen['markout_coverage']['JOIN_5S|30000ms|NOT_RECORDED'],1)
+        self.assertEqual(result['maker_metrics'],{})
+        self.assertFalse(frozen['confirmatory_endpoint_source'])
+        self.assertIn('order',result['confirmatory']['coverage_audit']['missing_maker_comparisons'])
+
+    def test_completed_comparison_does_not_duplicate_or_change_frozen_execution(self):
+        anchor,window=self.frozen_maker()
+        final={**self.common,'kind':'MAKER_COMPARISON','anchor_record_id':'order','arms':copy.deepcopy(window['arms'])}
+        final['arms'][0]['fills'][0]['markouts']={'1000':{'mid_minus_fill':.02}}
+        observations=self.observations+[anchor,window,copy.deepcopy(window),final]
+        result=summarize(observations,self.manifest,self.labels)
+        self.assertEqual(result['maker_frozen_execution']['anchors_without_final_comparison'],0)
+        self.assertEqual(result['maker_frozen_execution']['execution_coverage']['JOIN_5S|OBSERVED'],1)
+        self.assertEqual(result['maker_metrics']['JOIN_5S|filled_quantity']['mean'],2)
+        final['arms'][0]['fills'][0]['price']=.1
+        with self.assertRaisesRegex(ValueError,'changed frozen execution'):
+            summarize(observations,self.manifest,self.labels)
+
+    def test_frozen_execution_exposes_orphans_and_rejects_conflicting_identities(self):
+        anchor,window=self.frozen_maker()
+        result=summarize(self.observations+[window],self.manifest,self.labels)
+        self.assertEqual(result['maker_frozen_execution']['unmatched_anchor_ids'],['order'])
+        self.assertEqual(result['maker_frozen_execution']['filled_quantity_by_contract'],{})
+        changed=copy.deepcopy(window);changed['arms'][0]['operational_filled_shares']=3
+        with self.assertRaisesRegex(ValueError,'conflicting frozen'):
+            summarize(self.observations+[anchor,window,changed],self.manifest,self.labels)
+        changed=copy.deepcopy(window);changed['market_id']='wrong'
+        with self.assertRaisesRegex(ValueError,'anchor identity mismatch'):
+            summarize(self.observations+[anchor,changed],self.manifest,self.labels)
+
+    def test_later_markout_censor_does_not_erase_observed_execution(self):
+        anchor,window=self.frozen_maker()
+        mark={**self.common,'kind':'MAKER_MARKOUT_LABEL','anchor_record_id':'order','arm':'JOIN_5S',
+              'fill_index':0,'horizon_ms':30000,'markout_key':'JOIN_5S|0|30000',
+              'state':'TRANSPORT_GAP_OR_SESSION_CHANGE','markout':None}
+        result=summarize(self.observations+[anchor,window,mark],self.manifest,self.labels)
+        frozen=result['maker_frozen_execution']
+        self.assertEqual(frozen['execution_coverage']['JOIN_5S|OBSERVED'],1)
+        self.assertEqual(frozen['markout_coverage']['JOIN_5S|30000ms|TRANSPORT_GAP_OR_SESSION_CHANGE'],1)
+        self.assertEqual(frozen['filled_quantity_by_contract']['JOIN_5S']['mean'],2)
 
 
 if __name__=='__main__':unittest.main()

@@ -12,6 +12,7 @@ ROOT=Path(__file__).resolve().parents[1];sys.path.insert(0,str(ROOT/'scripts'))
 from v7_causal_book import BookTimeline,SCHEMA
 from v7_profit_experiments import replay_anchor
 from v7_maker_research_window import MakerWindow
+from v7_profit_report import frozen_execution_summary
 parser=argparse.ArgumentParser();parser.add_argument('--binary',type=Path,required=True);args=parser.parse_args();BINARY=args.binary.resolve()
 
 class NativeReplayTests(unittest.TestCase):
@@ -59,6 +60,9 @@ class NativeReplayTests(unittest.TestCase):
     self.assertIsNone(window.advance(owner,status(base+6000),(base+6000)*1000000))
    self.assertGreater(window.executions['JOIN_5S']['operational_filled_shares'],0)
    self.assertNotIn('JOIN_10S',window.executions)
+   summary=frozen_execution_summary([{'kind':'MAKER_ANCHOR',**anchor}]+records,owner.protocol)
+   self.assertEqual(summary['anchors_without_final_comparison'],1)
+   self.assertGreater(summary['filled_quantity_by_contract']['JOIN_5S']['mean'],0)
    frozen=json.dumps(window.executions['JOIN_5S'],sort_keys=True)
    ingest(10200)
    with patch('time.time_ns',return_value=(base+10200)*1000000):
@@ -71,6 +75,10 @@ class NativeReplayTests(unittest.TestCase):
    self.assertEqual(json.dumps(restarted.executions['JOIN_5S'],sort_keys=True),frozen)
    self.assertTrue(all(a['state']=='OBSERVED' for a in result['arms']))
    self.assertTrue(any(f['markouts']['30000'] is None for a in result['arms'] for f in a['fills']))
+   emit('MAKER_COMPARISON',market_id='m',token_id='yes',anchor_record_id='native-order',**result)
+   completed=frozen_execution_summary([{'kind':'MAKER_ANCHOR',**anchor}]+records,owner.protocol)
+   self.assertEqual(completed['anchors_without_final_comparison'],0)
+   self.assertEqual(completed['filled_quantity_by_contract']['JOIN_5S'],summary['filled_quantity_by_contract']['JOIN_5S'])
  def test_paired_research_book_gap_and_flow_filter(self):
   base=time.time_ns()//1000000-45000;sha='a'*40
   book=BookTimeline(Path('/unused'),sha,retention_ms=60000)
