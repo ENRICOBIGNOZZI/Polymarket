@@ -432,6 +432,7 @@ def main() -> None:
 
         # A policy revision may exclude old rows from active state restoration,
         # but compaction must preserve those rows as historical audit evidence.
+        historical_bytes_before = durable_tape.read_bytes()
         historical_before = router.PaperRouter.read_counterfactual_records(
             [durable_tape]
         )
@@ -448,6 +449,7 @@ def main() -> None:
         historical_after = router.PaperRouter.read_counterfactual_records(
             [durable_tape]
         )
+        assert durable_tape.read_bytes().startswith(historical_bytes_before)
         assert historical_after.keys() == historical_before.keys()
         assert revised.durable_records() == {}
 
@@ -797,7 +799,8 @@ def main() -> None:
         )
         observation = snapshot()
         observation["code_sha"] = "d" * 40
-        observation["fair"].update({"yes": 0.60, "pm_mid": 0.20})
+        observation["fair"].update({"yes": 0.60, "pm_mid": 0.20,
+                                    "probability_model_id":"external-A","probability_model_hash":"a"*64})
         observation["fair_models"] = {
             "hybrid_fair": {"yes": 0.70},
             "external_only_fair": observation["fair"],
@@ -816,6 +819,8 @@ def main() -> None:
         pending = next(iter(collector.state["pending_forecasts"].values()))
         assert abs(pending["market_yes"] - 0.80) < 1e-12
         assert 0.60 < pending["hybrid_yes"] < 0.80
+        assert pending['external_only_model_hash']=='a'*64
+        assert pending['hybrid_model_hash']==router.hybrid_identity('a'*64,collector.hybrid_market_weight)['probability_model_hash']
         assert pending["research_model_yes"] == 0.75
         assert pending["research_model_model_hash"] == "f" * 64
         assert pending["market_mid_source"] == "LIVE_COMPLEMENT_CONSISTENT_CLOB_BATCH"
@@ -829,6 +834,8 @@ def main() -> None:
         assert resumed.state["forecasts"] == 1
         assert len(resumed.state["pending_forecasts"]) == 1
         resumed_pending = next(iter(resumed.state["pending_forecasts"].values()))
+        assert resumed_pending['hybrid_model_hash']==pending['hybrid_model_hash']
+        assert resumed_pending['hybrid_model_recipe']==pending['hybrid_model_recipe']
         assert resumed_pending["yes_token"] == "yes"
         assert resumed_pending["no_token"] == "no"
         resumed_pending["resolution_due_ms"] = router.now_ms() - 10_000

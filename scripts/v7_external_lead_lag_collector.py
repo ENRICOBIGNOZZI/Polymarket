@@ -10,7 +10,7 @@ available for explicit comparisons and has separate target semantics.
 from __future__ import annotations
 
 import argparse
-from collections import deque
+from collections import deque, OrderedDict
 import hashlib
 import json
 import math
@@ -21,11 +21,48 @@ from typing import Any
 
 from v7_fair_model_artifact import canonical_hash
 from v7_causal_book import BookTimeline, TARGET as BOOK_TARGET
+from v7_compressed_journal import CompressedJournal
 
 SCHEMA = "polymarket_v7_external_pm_lead_lag_observation_v1"
+ORIGIN_SCHEMA = "polymarket_v7_external_pm_lead_lag_origin_v1"
+ORIGIN_FIELDS = ('rich_feature_cut','rich_model_features','rich_feature_sha256',
+                 'feature_schema_version','causal_observation_schema')
 STATUS_SCHEMA = "polymarket_v7_external_pm_lead_lag_collector_status_v1"
 HORIZONS_MS = (100, 250, 500, 1000)
 MAX_LABEL_DELAY_MS = 50
+
+
+def hydrate_label(row, origin):
+    """Join only the exact persisted origin; never use a current/future cut."""
+    if (origin.get('schema')!=ORIGIN_SCHEMA
+            or row.get('origin_id')!=origin.get('origin_id')
+            or row.get('origin_record_sha256')!=canonical_hash(origin)
+            or any(row.get(k)!=origin.get(k) for k in ('market_id','model_sha','origin_observed_wall_ns'))
+            or canonical_hash(origin.get('rich_feature_cut'))!=origin.get('rich_feature_sha256')):
+        raise ValueError('lead_lag:origin_reference_mismatch')
+    for key in ORIGIN_FIELDS:
+        if key in row and row[key]!=origin.get(key):
+            raise ValueError('lead_lag:conflicting_origin_field')
+    return {**row,**{k:origin.get(k) for k in ORIGIN_FIELDS}}
+
+
+def observation_rows(rows):
+    """Stream legacy full labels and linked origins without unbounded memory.
+
+    Origins are published before their <=3-second labels. A missing reference
+    fails closed, including a partial archive supplied without its origin file.
+    """
+    origins=OrderedDict()
+    for row in rows:
+        if row.get('schema')==ORIGIN_SCHEMA:
+            sha=canonical_hash(row);origins[sha]=row
+            if len(origins)>10000:origins.popitem(last=False)
+            continue
+        if row.get('origin_record_sha256'):
+            origin=origins.get(row['origin_record_sha256'])
+            if origin is None:raise ValueError('lead_lag:missing_persisted_origin')
+            yield hydrate_label(row,origin)
+        else:yield row
 
 
 def horizon_eligible(horizon: int, realized: float) -> bool:
@@ -96,23 +133,27 @@ def valid_router_live(router: dict[str, Any], model_sha: str) -> dict[str, Any] 
 def valid_origin(fair_status: dict[str, Any], live: dict[str, Any], model_sha: str) -> dict[str, Any] | None:
     fair = fair_status.get("fair") if isinstance(fair_status.get("fair"), dict) else {}
     market = fair_status.get("market") if isinstance(fair_status.get("market"), dict) else {}
-    cut = fair.get("rich_feature_cut") if isinstance(fair.get("rich_feature_cut"), dict) else None
-    features = fair.get("rich_model_features") if isinstance(fair.get("rich_model_features"), dict) else None
+    independent=fair_status.get('causal_observation') or {}
+    new_contract=independent.get('schema')=='polymarket_v7_model_independent_causal_observation_v1'
+    cut = independent.get('cut') if new_contract else fair.get("rich_feature_cut")
+    features = independent.get('features') if new_contract else fair.get("rich_model_features")
     if (
         fair_status.get("code_sha") != model_sha
         or fair_status.get("paper_only") is not True
         or fair_status.get("authenticated_execution") is not False
         or fair_status.get("real_order_submission") is not False
-        or fair.get("paper_exploration_learned") is not True
-        or fair.get("market_prior_causal_cut_valid") is not True
-        or fair.get("uses_polymarket_price_as_feature") is not True
-        or cut is None or features is None
+        or (new_contract and (independent.get('valid') is not True or independent.get('model_required') is not False))
+        or (not new_contract and (fair.get("paper_exploration_learned") is not True
+            or fair.get("market_prior_causal_cut_valid") is not True
+            or fair.get("uses_polymarket_price_as_feature") is not True))
+        or not isinstance(cut,dict) or not isinstance(features,dict)
         or str(market.get("market_id") or "") != live["market_id"]
     ):
         return None
-    sha = str(fair.get("rich_feature_sha256") or "")
+    sha = str((independent.get('cut_sha256') if new_contract else fair.get("rich_feature_sha256")) or "")
     if len(sha) != 64 or canonical_hash(cut) != sha:
         return None
+    if new_contract and cut.get('market_id')!=live['market_id']:return None
     observed_ns = int(cut.get("observed_wall_ns") or 0)
     p0 = finite(cut.get("market_probability"))
     prior = cut.get("market_prior_snapshot") if isinstance(cut.get("market_prior_snapshot"), dict) else {}
@@ -134,6 +175,8 @@ def valid_origin(fair_status: dict[str, Any], live: dict[str, Any], model_sha: s
         "origin_pm_receive_ts_ms": prior_receive_ms,
         "origin_pm_exchange_ts_ms": prior_exchange_ms,
         "rich_feature_sha256": sha, "rich_model_features": features,
+        "feature_schema_version":independent.get('feature_schema_version') if new_contract else fair.get("feature_schema_version", "btc-m5-rich-external-causal-v2"),
+        "causal_observation_schema":independent.get('schema') if new_contract else 'LEGACY_RICH_MODEL_BOUND_CUT',
         "rich_feature_cut": cut, "labels": set(),
     }
 
@@ -141,9 +184,11 @@ def valid_origin(fair_status: dict[str, Any], live: dict[str, Any], model_sha: s
 class Collector:
     def __init__(self, fair_path: Path, router_path: Path, output: Path, status: Path,
                  model_sha: str, interval_ms: int = 25,
-                 book_tape: Path | None = None, book_status: Path | None = None) -> None:
+                 book_tape: Path | None = None, book_status: Path | None = None,
+                 maximum_hot_bytes: int | None = None) -> None:
         self.fair_path, self.router_path = fair_path, router_path
         self.output, self.status, self.model_sha = output, status, model_sha
+        self.journal=CompressedJournal(output,maximum_hot_bytes) if maximum_hot_bytes else None
         self.interval_ms = max(10, min(250, interval_ms))
         self.pending: deque[dict[str, Any]] = deque(maxlen=10000)
         self.last_origin_id = ""
@@ -172,6 +217,13 @@ class Collector:
             if self.book: self.label_books()
             return
         if origin is not None and origin["origin_id"] != self.last_origin_id:
+            if origin.get('causal_observation_schema')=='polymarket_v7_model_independent_causal_observation_v1':
+                record={k:v for k,v in origin.items() if k!='labels'}
+                record.update(schema=ORIGIN_SCHEMA,model_sha=self.model_sha,paper_only=True,
+                    authenticated_execution=False,real_order_submission=False,
+                    execution_authority='ZERO_AUTHORITY_RESEARCH_ONLY')
+                self.append_record(record)
+                origin['origin_record_sha256']=canonical_hash(record)
             self.pending.append(origin)
             self.last_origin_id = origin["origin_id"]
             self.origins += 1
@@ -216,7 +268,7 @@ class Collector:
                     "rich_feature_sha256": row["rich_feature_sha256"],
                     "rich_model_features": row["rich_model_features"],
                 }
-                append_jsonl(self.output, payload)
+                self.append_label(row,payload)
                 row["labels"].add(horizon)
                 self.labels += 1
             if len(row["labels"]) < len(HORIZONS_MS):
@@ -256,11 +308,21 @@ class Collector:
                     payload["delta_logit"] = logit(evidence["label_pm_yes"]) - logit(evidence["origin_pm_yes"])
                 else:
                     self.book_censors += 1
-                append_jsonl(self.output, payload)
+                self.append_label(row,payload)
                 row["labels"].add(horizon)
                 self.labels += 1
             if len(row["labels"]) < len(HORIZONS_MS): keep.append(row)
         self.pending = keep
+
+    def append_label(self, origin, payload):
+        if origin.get('origin_record_sha256'):
+            payload={k:v for k,v in payload.items() if k not in ORIGIN_FIELDS}
+            payload['origin_record_sha256']=origin['origin_record_sha256']
+        self.append_record(payload)
+
+    def append_record(self,payload):
+        if self.journal:self.journal.append(payload)
+        else:append_jsonl(self.output,payload)
 
     def publish(self) -> None:
         atomic_json(self.status, {
@@ -276,7 +338,9 @@ class Collector:
             "target_semantics": BOOK_TARGET if self.book else "FIRST_OBSERVED_SNAPSHOT_AFTER_THRESHOLD",
             "nominal_horizon_eligible_labels": self.labels - self.late_labels - self.book_censors,
             "maximum_label_delay_ms": MAX_LABEL_DELAY_MS,
-            "state": "COLLECTING" if self.origins else "AWAITING_CAUSAL_RICH_FEATURE_CUT",
+            "state": "COLLECTING" if self.origins else "AWAITING_CAUSAL_PUBLIC_FEATURE_CUT",
+            "storage": {'mode':'VERIFIED_COMPRESSED_SEGMENTS' if self.journal else 'LEGACY_APPEND',
+                        'maximum_hot_bytes':self.journal.maximum_hot_bytes if self.journal else None},
         })
 
     def run(self) -> None:
@@ -297,6 +361,7 @@ def main() -> int:
     ap.add_argument("--status", type=Path, required=True)
     ap.add_argument("--model-sha", required=True)
     ap.add_argument("--interval-ms", type=int, default=25)
+    ap.add_argument("--maximum-hot-bytes",type=int,default=64*1024**2)
     ap.add_argument("--book-tape", type=Path)
     ap.add_argument("--book-status", type=Path)
     ap.add_argument("--profit-root", type=Path)
@@ -307,12 +372,12 @@ def main() -> int:
     if len(args.model_sha) != 40 or any(c not in "0123456789abcdef" for c in args.model_sha):
         raise SystemExit("invalid --model-sha")
     collector = Collector(args.fair_status, args.router_status, args.output, args.status,
-              args.model_sha, args.interval_ms, args.book_tape, args.book_status)
+              args.model_sha, args.interval_ms, args.book_tape, args.book_status,args.maximum_hot_bytes)
     if args.profit_root:
         if not collector.book or not args.run_root: raise SystemExit("profit experiments require book and run root")
-        from v7_profit_experiments import ProfitExperiments
+        from v7_profit_cohorts import ProfitCohorts
         collector.book.retention_ms = 60000
-        collector.profit = ProfitExperiments(args.run_root,args.profit_root,args.profit_protocol,
+        collector.profit = ProfitCohorts(args.run_root,args.profit_root,args.profit_protocol,
                                              collector.book,args.model_sha,args.replay_binary.resolve())
     collector.run()
     return 0

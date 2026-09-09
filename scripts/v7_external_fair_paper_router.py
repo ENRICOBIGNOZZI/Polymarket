@@ -27,6 +27,7 @@ from pathlib import Path
 from typing import Any
 
 from v7_market_common import finite, parse_array, request_json
+from v7_evidence_contract import hybrid_identity
 from v7_execution_ledger import (
     LedgerEvent, canonical_ledger_path, iter_records,
 )
@@ -1798,15 +1799,18 @@ class PaperRouter:
         """
         index = _counterfactual_index(self.evidence_source_paths())
         self.durable_directory.mkdir(parents=True, exist_ok=True)
-        temporary = self.durable_counterfactual_path.with_name(
-            self.durable_counterfactual_path.name + f".tmp.{os.getpid()}"
-        )
-        with temporary.open("w", encoding="utf-8") as handle:
-            for _, row in index.iter_records(chronological=True):
-                handle.write(json.dumps(row, separators=(",", ":"), sort_keys=True) + "\n")
-            handle.flush()
-            os.fsync(handle.fileno())
-        os.replace(temporary, self.durable_counterfactual_path)
+        # The first source has rank zero. Append only records absent from that
+        # source; never normalize/reorder/replace its historical raw prefix.
+        # Incompatible model/policy generations stay in the same durable memory.
+        index.refresh()
+        if self.durable_counterfactual_path.exists() and self.durable_counterfactual_path.stat().st_size:
+            with self.durable_counterfactual_path.open('rb') as check:
+                check.seek(-1,os.SEEK_END)
+                if check.read(1)!=b'\n':raise RuntimeError('durable_source_incomplete_tail_preserved')
+        with self.durable_counterfactual_path.open('ab') as handle:
+            for (payload,) in index.db.execute('SELECT payload FROM records WHERE rank>0 ORDER BY stamp,id'):
+                handle.write(payload.encode()+b'\n')
+            handle.flush();os.fsync(handle.fileno())
 
     def iter_durable_records(self, *, event_types=None):
         paths = [self.durable_counterfactual_path, self.counterfactual_path]
@@ -1873,6 +1877,7 @@ class PaperRouter:
                     "paper_exploration_learned", "independent_baseline_yes",
                     "external_only_yes", "hybrid_yes", "external_only_model_id",
                     "hybrid_model_id", "research_model_yes",
+                    "external_only_model_hash", "hybrid_model_hash", "hybrid_model_recipe",
                     "research_model_model_id",
                     "research_model_model_hash", "lower", "upper", "oracle_value",
                     "external_venue_count", "fair_calculated_monotonic_ns",
@@ -2564,6 +2569,7 @@ class PaperRouter:
             hybrid_probability(independent_yes, market_yes, self.hybrid_market_weight)
             if math.isfinite(independent_yes) and market_yes is not None else math.nan
         )
+        hybrid_model = hybrid_identity(independent.get('probability_model_hash'), self.hybrid_market_weight)
         bucket = min(FORECAST_TTE_BUCKETS, key=lambda value: (abs(value - tte), -value))
         if abs(bucket - tte) > FORECAST_BUCKET_TOLERANCE_SECONDS:
             return False
@@ -2593,8 +2599,11 @@ class PaperRouter:
             "market_yes": market_yes,
             "external_only_yes": independent_yes if math.isfinite(independent_yes) else None,
             "hybrid_yes": hybrid_yes if math.isfinite(hybrid_yes) else None,
-            "external_only_model_id": "external_only_fair",
+            "external_only_model_id": independent.get('probability_model_id'),
+            "external_only_model_hash": independent.get('probability_model_hash'),
             "hybrid_model_id": "hybrid_fair",
+            "hybrid_model_hash": hybrid_model['probability_model_hash'],
+            "hybrid_model_recipe": hybrid_model['probability_model_recipe'],
             "research_model_yes": research_model_yes_value if research_model_applied else None,
             "research_model_model_id": (
                 str(research_model.get("probability_model_id") or "")

@@ -72,12 +72,43 @@ def decision_evidence(order, fill):
     if probability is None:
         probability = dec((envelope.get('fair_value') or {}).get('point')); source = 'AUTHORIZED_ENVELOPE_TOKEN_PROBABILITY'
     if probability is not None and not ZERO <= probability <= 1: probability = None
+    execution=m.get('execution_alpha') or envelope.get('execution_alpha') or {}
+    features=execution.get('features') or {};context=envelope.get('crypto_context') or (m.get('coordinator_receipt') or {}).get('crypto_context') or {}
+    bounds=envelope.get('fair_value') or {}
+    outcome=m.get('outcome');pm_yes=dec(m.get('pm_mid'));arrival_pm_yes=dec(m.get('arrival_pm_mid'))
+    token_probability=lambda p: p if outcome=='YES' else 1-p if p is not None and outcome=='NO' else None
+    if envelope:lower,upper=dec(bounds.get('lower')),dec(bounds.get('upper'))
+    elif outcome=='YES':lower,upper=dec(m.get('fair_lower')),dec(m.get('fair_upper'))
+    elif outcome=='NO':lower,upper=token_probability(dec(m.get('fair_upper'))),token_probability(dec(m.get('fair_lower')))
+    else:lower,upper=None,None
+    stamp=(envelope.get('decision_receive_timestamp_ns') or 0)//1_000_000 if envelope else m.get('decision_observed_ts_ms')
+    feature_stamp=m.get('placement_features_timestamp_ms')
     return {'probability':probability,'probability_source':source if probability is not None else None,
+        'run_id':envelope.get('run_id'),'asset':context.get('asset'),'horizon':context.get('horizon'),
+        'contract_family':context.get('contract_family'),'settlement_semantic_hash':context.get('settlement_semantic_hash'),
+        'source_snapshot_identity':envelope.get('source_snapshot_identity') or order.get('book_snapshot_id'),
+        'order_record_id':order.get('record_id'),'order_id':order.get('order_id'),
+        'decision_pm_probability':token_probability(pm_yes),
+        'arrival_pm_probability':token_probability(arrival_pm_yes),
+        'source_decision_pm_yes':pm_yes,'source_arrival_pm_yes':arrival_pm_yes,
+        'probability_lower':lower,'probability_upper':upper,
+        'probability_bounds_semantics':'PURCHASED_TOKEN_PROBABILITY',
+        'outcome':m.get('outcome'),'tte_seconds':dec(m.get('tte_seconds',features.get('tte_seconds'))),
+        'arrival_tte_seconds':dec(m.get('arrival_tte_seconds')),
+        'execution_model_id':execution.get('model_id'),'execution_model_hash':execution.get('model_hash'),
+        'execution_policy_hash':m.get('policy_hash'),'execution_config_hash':m.get('config_hash'),
+        'portfolio_policy_hash':envelope.get('policy_hash'),'portfolio_config_hash':envelope.get('config_hash'),
+        'fill_probability_estimate':dec(order.get('predicted_fill_probability')),
+        'placement_feature_timestamp_ms':feature_stamp,
+        'placement_feature_age_at_decision_ms':stamp-feature_stamp if stamp and feature_stamp else None,
+        'placement_features':m.get('placement_features'),'selection_features':execution.get('features'),
+        'selection_feature_age_at_decision_ms':(stamp-execution['feature_receive_timestamp_ns']/1_000_000)
+            if stamp and execution.get('feature_receive_timestamp_ns') else None,
         'model_id':model.get('model_id') or m.get('decision_probability_model_id') or m.get('probability_model_id'),
         'model_hash':model.get('model_hash') or m.get('decision_probability_model_hash') or m.get('probability_model_hash'),
         'model_stage_explicit':bool(model or m.get('decision_probability_model_id')),
         'decision_price':dec(m.get('decision_limit_price')) if not envelope else dec(((envelope.get('execution_plan') or {}).get('legs') or [{}])[0].get('limit_price')),
-        'decision_timestamp_ms':m.get('decision_observed_ts_ms') if not envelope else (envelope.get('decision_receive_timestamp_ns') or 0)//1000000,
+        'decision_timestamp_ms':stamp or None,
         'arrival_probability':dec(m.get('arrival_point_probability')),
         'arrival_price':dec(m.get('arrival_best_ask')),
         'arrival_timestamp_ms':m.get('arrival_receive_ts_ms'),
@@ -144,6 +175,11 @@ def position_row(final, fills, orders, markouts, examples):
         else: predicted += q*p
         oid=str(fill.get('order_id') or ''); example=examples.get((fill['model_sha'],oid),{})
         fill_details.append({'fill_id':fill.get('fill_id'),'quantity':q,'price':price,**evidence,
+            'fill_timestamp_ms':fill.get('receive_ts_ms'),'fill_record_id':fill.get('record_id'),
+            'opposite_flow_prints_seen':metadata(fill).get('opposite_flow_prints_seen'),
+            'opposite_flow_shares_seen':dec(metadata(fill).get('opposite_flow_shares_seen')),
+            'price_reach_prints_seen':metadata(fill).get('price_reach_prints_seen'),
+            'filled_fraction':q/dec(order['intended_size']) if dec(order.get('intended_size')) and dec(order['intended_size'])>0 else None,
             'queue_ahead':dec(order.get('queue_ahead')),'quote_duration_ms':example.get('exposure_ms'),
             'placement_action':example.get('action'), 'placement_features_source':metadata(order).get('placement_features_source'),
             'markouts':markouts.get((fill['model_sha'],str(fill.get('fill_id') or '')),[])})
@@ -206,13 +242,33 @@ def learning_coverage(values):
             'missing_fields_overlapping':dict(missing),'excluded_orders':len(orders)-complete}
 
 
+def order_replay_identity(value):
+    """Use a submitted order's own authorization, never another nearby decision."""
+    m=metadata(value); envelope=m.get('opportunity_envelope') or {}
+    explicit=m.get('opportunity_replay_key') or envelope.get('deterministic_replay_key')
+    receipt=m.get('coordinator_receipt') or {}; selected=receipt.get('selected_replay_key')
+    matches=[item for item in receipt.get('opportunity_inputs',[]) if selected and item.get('replay_key')==selected
+        and item.get('model_sha')==value.get('model_sha') and item.get('market_id')==value.get('market_id')
+        and item.get('token_id')==value.get('token_id')]
+    if len(matches)==1:
+        if explicit and explicit!=selected:raise ValueError('order/receipt replay identity conflict')
+        return selected,'EXACT_ORDER_COORDINATOR_RECEIPT'
+    if explicit:return explicit,'EXPLICIT_REPLAY_IDENTITY'
+    # Legacy candidate IDs are preserved, but never guessed into a namespaced key.
+    return value.get('opportunity_id') or value.get('candidate_id'),'LEGACY_IDENTITY'
+
+
 def opportunity_funnel(values, decisions=(), attempts=()):
     """Stable upstream identities are not independent statistical trials."""
-    groups={}; unidentified=0
+    groups={}; unidentified=0;attempt_ids=set();generation_observed=False
     def group(sha,key):
         return groups.setdefault((sha,key), {'model_sha':sha,'replay_key':key,'coordinator_attempts':0,
-            'selected_attempts':0,'authorization_rejection_attempts':0,'rejection_reasons':Counter(),
-            'order_ids':set(),'fill_ids':set(),'operational_filled_shares':ZERO,'terminal_outcomes':set()})
+            'selected_attempts':0,'portfolio_not_selected_attempts':0,'execution_selection_filtered_attempts':0,
+            'authorization_rejection_attempts':0,'authorization_generated_attempts':0,'rejection_reasons':Counter(),
+            'order_ids':set(),'live_order_ids':set(),'fill_ids':set(),'markout_fill_ids':set(),
+            'settled_position_ids':set(),'profitable_position_ids':set(),'identity_sources':set(),
+            'opposite_flow_order_ids':set(),'price_reached_order_ids':set(),'queue_exhausted_order_ids':set(),
+            'operational_filled_shares':ZERO,'terminal_outcomes':set()})
     for decision in decisions:
         inputs=decision.get('opportunity_inputs') or []
         if not inputs: unidentified+=1
@@ -220,35 +276,82 @@ def opportunity_funnel(values, decisions=(), attempts=()):
             if not item.get('model_sha') or not item.get('replay_key'): unidentified+=1;continue
             row=group(item['model_sha'],item['replay_key']);row['coordinator_attempts']+=1
             row['selected_attempts']+=int(item['replay_key']==decision.get('selected_replay_key'))
+            row['portfolio_not_selected_attempts']+=int(item['replay_key']!=decision.get('selected_replay_key'))
+            row['execution_selection_filtered_attempts']+=int(item.get('retained_after_execution_selection') is False)
             row['market_id']=item.get('market_id');row['paper_probe']=item.get('paper_probe')
     for attempt in attempts:
+        attempt_id=attempt.get('attempt_id')
+        if attempt_id:
+            identity=(attempt.get('model_sha'),attempt_id)
+            if identity in attempt_ids:continue
+            attempt_ids.add(identity)
         if not attempt.get('model_sha') or not attempt.get('replay_key'): unidentified+=1;continue
-        row=group(attempt['model_sha'],attempt['replay_key']);row['authorization_rejection_attempts']+=1
-        row['rejection_reasons'][str(attempt.get('reason') or 'UNKNOWN')]+=1
-    order_keys={}
+        row=group(attempt['model_sha'],attempt['replay_key'])
+        if attempt.get('result','REJECTED')=='REJECTED':
+            row['authorization_rejection_attempts']+=1
+            row['rejection_reasons'][str(attempt.get('reason') or 'UNKNOWN')]+=1
+        elif attempt.get('result') in {'GENERATED','AUTHORIZED'}:
+            row['authorization_generated_attempts']+=1;generation_observed=True
+    order_keys={};position_keys=defaultdict(set);fill_keys={}
     for value in values:
         if value.get('event_type')!='ORDER_SUBMITTED':continue
-        key=metadata(value).get('opportunity_replay_key') or value.get('opportunity_id') or value.get('candidate_id')
+        key,identity_source=order_replay_identity(value)
         if not key:unidentified+=1;continue
         sha=value['model_sha'];oid=str(value.get('order_id') or '')
         order_keys[(sha,oid)]=key;row=group(sha,key);row['order_ids'].add(oid)
+        row['identity_sources'].add(identity_source);row['market_id']=value.get('market_id')
+        if value.get('order_state')=='LIVE':row['live_order_ids'].add(oid)
     for value in values:
-        key=order_keys.get((value['model_sha'],str(value.get('order_id') or '')))
+        sha=value['model_sha'];oid=str(value.get('order_id') or '')
+        key=order_keys.get((sha,oid))
         if not key:continue
-        row=group(value['model_sha'],key)
+        row=group(sha,key);m=metadata(value)
+        if value.get('order_state')=='LIVE':row['live_order_ids'].add(oid)
+        if (dec(m.get('opposite_flow_prints_seen')) or ZERO)>0:row['opposite_flow_order_ids'].add(oid)
+        if (dec(m.get('price_reach_prints_seen')) or ZERO)>0:row['price_reached_order_ids'].add(oid)
         if value.get('event_type')=='FILL' and dec(value.get('filled_size')) is not None and dec(value['filled_size'])>0:
             identity=str(value.get('fill_id') or value.get('record_id'))
             if identity not in row['fill_ids']:
                 row['fill_ids'].add(identity);row['operational_filled_shares']+=dec(value['filled_size'])
+            fill_keys[(sha,identity)]=key
+            if value.get('position_id'):position_keys[(sha,value['position_id'])].add(key)
+            if m.get('component')=='professional_maker':row['queue_exhausted_order_ids'].add(oid)
         if value.get('event_type')=='ORDER_STATE':
             outcome=metadata(value).get('execution_outcome')
             if outcome:row['terminal_outcomes'].add(str(outcome))
+    for value in values:
+        sha=value['model_sha']
+        if value.get('event_type')=='MARKOUT':
+            key=fill_keys.get((sha,str(value.get('fill_id') or '')))
+            if key and any(dec(x) is not None for x in (value.get('markouts') or {}).values()):
+                group(sha,key)['markout_fill_ids'].add(str(value['fill_id']))
+        if value.get('event_type')=='FINAL':
+            keys=position_keys.get((sha,value.get('position_id')),set())
+            for key in keys:
+                row=group(sha,key);row['settled_position_ids'].add(str(value['position_id']))
+                # A position may contain several opportunities. Only its full
+                # position outcome is identified; never allocate its PnL twice.
+                if len(keys)==1 and dec(value.get('final_pnl')) is not None and dec(value['final_pnl'])>0:
+                    row['profitable_position_ids'].add(str(value['position_id']))
     output=[]
     for row in groups.values():
         output.append({k:sorted(v) if isinstance(v,set) else dict(v) if isinstance(v,Counter) else v for k,v in row.items()})
     return {'opportunities':output,'distinct_opportunities':len(output),
         'with_submitted_orders':sum(bool(r['order_ids']) for r in output),'with_operational_fills':sum(bool(r['fill_ids']) for r in output),
         'with_authorization_rejections':sum(r['authorization_rejection_attempts']>0 for r in output),
+        'stages':{name:sum(bool(r[field]) for r in output) for name,field in {
+            'selected':'selected_attempts','portfolio_not_selected':'portfolio_not_selected_attempts',
+            'live_orders':'live_order_ids',
+            'opposite_flow':'opposite_flow_order_ids','price_reached':'price_reached_order_ids',
+            'queue_exhausted_positive_fill':'queue_exhausted_order_ids','markouts':'markout_fill_ids',
+            'settled':'settled_position_ids','profitable_unambiguously_attributed':'profitable_position_ids'}.items()},
+        'authorization_generation':{'distinct_opportunities_observed':sum(bool(r['authorization_generated_attempts']) for r in output) if generation_observed else None,
+            'attempts_observed':sum(r['authorization_generated_attempts'] for r in output) if generation_observed else None,
+            'submitted_order_lower_bound':sum(len(r['order_ids']) for r in output),
+            'coverage':'EXPLICIT_PUBLICATION_EVENTS_ONLY; LEGACY_ATTEMPT_TOTAL_UNKNOWN'},
+        'limitations':['Authorization generation is counted only where an explicit generation event exists; submitted orders are a separate lower bound.',
+            'Flow/reach/queue stages apply to Maker evidence; missing Taker stages are not zero-flow observations.',
+            'A profitable shared position is not allocated to an individual opportunity without leg accounting.'],
         'unidentified_or_legacy_observations':unidentified,'statistical_unit':'CONTRACT_NOT_ATTEMPT_OR_OPPORTUNITY'}
 
 
@@ -318,7 +421,8 @@ def main():
         data=data[:data.rfind(b'\n')+1]
         sources.append({'path':str(path),'prefix_bytes':len(data),'sha256':hashlib.sha256(data).hexdigest()})
         return [json.loads(line) for line in data.splitlines() if line.strip()]
-    report=analyze(values,sources,decisions=auxiliary('opportunities/decisions.jsonl'),attempts=auxiliary('micro_maker/authorization_attempts.jsonl'))
+    report=analyze(values,sources,decisions=auxiliary('opportunities/decisions.jsonl'),
+        attempts=auxiliary('micro_maker/authorization_attempts.jsonl')+auxiliary('opportunities/authorization_publications.jsonl'))
     args.output.parent.mkdir(parents=True,exist_ok=True);tmp=args.output.with_suffix('.tmp')
     tmp.write_text(json.dumps(report,default=str,sort_keys=True,indent=2)+'\n');os.replace(tmp,args.output)
     if args.csv:

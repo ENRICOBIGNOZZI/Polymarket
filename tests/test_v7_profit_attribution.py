@@ -27,6 +27,31 @@ def fixture():
     return [order,one,two,final]
 
 class AttributionTests(unittest.TestCase):
+    def test_exact_embedded_taker_receipt_joins_namespaced_replay_without_guessing(self):
+        values=fixture();order=values[0];order['candidate_id']='candidate'
+        item={'model_sha':SHA,'market_id':'market','token_id':'NO-token','replay_key':'crypto:BTC:candidate'}
+        receipt={'selected_replay_key':item['replay_key'],'opportunity_inputs':[item]}
+        order['metadata']['coordinator_receipt']=receipt
+        result=opportunity_funnel(values,[receipt])
+        self.assertEqual(result['distinct_opportunities'],1)
+        self.assertEqual(result['with_operational_fills'],1)
+        self.assertEqual(result['stages']['settled'],1)
+        self.assertEqual(result['stages']['profitable_unambiguously_attributed'],1)
+        item['token_id']='wrong-token'
+        self.assertEqual(opportunity_funnel(values,[receipt])['distinct_opportunities'],2)
+
+    def test_explicit_replay_conflict_fails_and_unobserved_arrival_stays_missing(self):
+        values=fixture();order=values[0]
+        item={'model_sha':SHA,'market_id':'market','token_id':'NO-token','replay_key':'key'}
+        order['metadata'].update(opportunity_replay_key='other',coordinator_receipt={
+            'selected_replay_key':'key','opportunity_inputs':[item]})
+        with self.assertRaisesRegex(ValueError,'identity conflict'):opportunity_funnel(values)
+        order['metadata'].pop('opportunity_replay_key')
+        detail=analyze(values)['positions'][0]['fill_details'][0]
+        self.assertIsNone(detail['arrival_probability'])
+        self.assertIsNone(detail['arrival_pm_probability'])
+        self.assertEqual(detail['order_record_id'],'o')
+
     def test_markout_coverage_counts_fill_ids_not_observer_attempts(self):
         values=fixture();values[0]['metadata']['component']='professional_maker'
         mark={**values[1],'event_type':'MARKOUT','markouts':{'1s':-.01},'filled_size':None}
@@ -35,10 +60,15 @@ class AttributionTests(unittest.TestCase):
         self.assertEqual(coverage['1s']['positive_quantity_fills'],2)
         self.assertEqual(coverage['5s']['missing_or_nonfinite_after_horizon'],2)
     def test_legacy_conservative_bound_is_not_mistaken_for_point_forecast(self):
-        values=fixture();values[0]['metadata'].update(fair_yes=.6,outcome='NO',point_probability=.1)
+        values=fixture();values[0]['metadata'].update(fair_yes=.6,outcome='NO',point_probability=.1,
+            pm_mid=.7,arrival_pm_mid=.65,fair_lower=.2,fair_upper=.9)
         result=analyze(values)['positions'][0]
         self.assertEqual(result['predicted_margin'],Decimal('.5'))
         self.assertEqual(result['fill_details'][0]['probability'],Decimal('.4'))
+        self.assertEqual(result['fill_details'][0]['decision_pm_probability'],Decimal('.3'))
+        self.assertEqual(result['fill_details'][0]['arrival_pm_probability'],Decimal('.35'))
+        self.assertEqual(result['fill_details'][0]['probability_lower'],Decimal('.1'))
+        self.assertEqual(result['fill_details'][0]['probability_upper'],Decimal('.8'))
     def test_partial_fills_reconcile_actual_no_token_and_fees_once(self):
         report=analyze(fixture());p=report['positions'][0]
         self.assertEqual(p['predicted_margin'],Decimal('.2'))

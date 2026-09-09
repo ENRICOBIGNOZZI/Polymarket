@@ -11,6 +11,7 @@ import urllib.request
 import urllib.parse
 from v7_profit_protocol import digest
 from v7_profit_experiments import AUTH,rows,atomic,finite
+from v7_profit_signal_analysis import summarize_signal,confirmatory
 
 
 def settlement(market,tokens,fetch):
@@ -27,31 +28,11 @@ def settlement(market,tokens,fetch):
             'settlement_closed':True,'source_endpoint':endpoint,'observed_ms':time.time_ns()//1000000,'source_sha256':digest(raw),'raw_response':raw}
 
 
-def interval(values,protocol,family):
-    # Each value is already a within-contract mean, never a quote/attempt sample.
-    import random
-    n=len(values);result={'contracts':n,'mean':sum(values)/n if n else None,'interval':None,'chronological_fold_means':[],
-         'state':'INSUFFICIENT_INDEPENDENT_CONTRACTS','method':'CONTRACT_BLOCK_PERCENTILE_BOOTSTRAP_BONFERRONI_APPROXIMATE'}
-    minimum=protocol['inference']['minimum_contracts_for_interval']
-    if n<minimum:return result
-    rng=random.Random(protocol['inference']['bootstrap_seed'])
-    repetitions=protocol['inference']['bootstrap_draws']
-    draws=sorted(sum(rng.choices(values,k=n))/n for _ in range(repetitions))
-    alpha=protocol['inference']['familywise_alpha']/family
-    def quantile(p):
-        x=p*(len(draws)-1);lo=int(x);hi=min(lo+1,len(draws)-1)
-        return draws[lo]+(draws[hi]-draws[lo])*(x-lo)
-    folds=protocol['inference']['chronological_folds']
-    parts=[values[i*n//folds:(i+1)*n//folds] for i in range(folds)]
-    result.update(interval=[quantile(alpha/2),quantile(1-alpha/2)],
-        state='ESTIMATED_EXPLORATORY_INTERVAL',bootstrap_draws=repetitions,comparison_family_size=family,
-        chronological_fold_means=[sum(x)/len(x) for x in parts],
-        inference_limit='Approximate finite-sample bootstrap; contracts can share market regimes. No automatic promotion.')
-    return result
+from v7_profit_inference import interval, describe
 
 
 def summarize(observations,manifest,settlements):
-    protocol=manifest['protocol'];config=protocol['signal'];selections={};delays={};makers=[];counts=Counter();censors=Counter()
+    protocol=manifest['protocol'];config=protocol['signal'];selections={};delays={};makers=[];counts=Counter();censors=Counter();maker_times={};maker_seen={}
     for row in observations:
         if row.get('manifest_sha256')!=manifest['manifest_sha256'] or row.get('code_sha')!=manifest['code_sha']:
             raise ValueError('mixed experiment identity')
@@ -67,7 +48,12 @@ def summarize(observations,manifest,settlements):
             if key in delays and row!=delays[key]:raise ValueError('conflicting delay label')
             delays[key]=row
             if row['state']!='OBSERVED':censors[row['state']]+=1
-        elif row['kind']=='MAKER_COMPARISON':makers.append(row)
+        elif row['kind']=='MAKER_ANCHOR':
+            maker_times[row['market_id']]=row.get('origin_ms',row.get('recorded_ns',0)/1e6)*1_000_000
+        elif row['kind']=='MAKER_COMPARISON':
+            key=row.get('anchor_record_id') or row['market_id']
+            if key in maker_seen and row!=maker_seen[key]:raise ValueError('conflicting Maker comparison')
+            if key not in maker_seen:makers.append(row);maker_seen[key]=row
     grouped=defaultdict(lambda:defaultdict(list));decision_decay=defaultdict(lambda:defaultdict(list))
     resolved=set()
     # Family includes all prespecified bins, outcomes, delays, cost stresses and Maker comparisons.
@@ -98,14 +84,19 @@ def summarize(observations,manifest,settlements):
                 for delay in config['delays_ms']:
                     for stress in config['cost_stress_multipliers']:grouped[prefix+f'|delay{delay}|cost{stress}']
     estimates={key:interval([sum(v)/len(v) for v in contracts.values()],protocol,family) for key,contracts in grouped.items()}
-    maker_groups=defaultdict(lambda:defaultdict(list));maker_coverage=Counter();markout_coverage=Counter();paired=defaultdict(list)
-    for row in makers:
-        outcome=settlements.get(row['market_id']);arm_pnl={}
+    maker_groups=defaultdict(lambda:defaultdict(list));maker_coverage=Counter();markout_coverage=Counter();paired=defaultdict(lambda:defaultdict(list));primary_maker=defaultdict(list)
+    for row in sorted(makers,key=lambda r:maker_times.get(r['market_id'],r.get('recorded_ns',0))):
+        outcome=settlements.get(row['market_id']);arm_pnl={};arm_net={}
         for arm in row['arms']:
             aid=arm['arm'];maker_coverage[aid+'|'+arm['state']]+=1
             if arm['state'] not in ('OBSERVED','FLOW_FILTER_ABSTAIN'):continue
             qty=arm['operational_filled_shares'];maker_groups[aid+'|filled_quantity'][row['market_id']].append(qty)
             maker_groups[aid+'|any_operational_fill'][row['market_id']].append(float(qty>0))
+            common=arm.get('common_quote_quantity') or (arm.get('research_request') or {}).get('quantity')
+            if common and common>0:maker_groups[aid+'|filled_fraction'][row['market_id']].append(qty/common)
+            start=(arm.get('research_request') or {}).get('start_ns')
+            if start and arm['fills']:
+                maker_groups[aid+'|first_fill_ms'][row['market_id']].append((min(f['receive_monotonic_ns'] for f in arm['fills'])-start)/1e6)
             for horizon in protocol['maker']['markout_horizons_ms']:
                 cuts=[(f['quantity'],(f.get('markouts') or {}).get(str(horizon))) for f in arm['fills']]
                 for _,cut in cuts:markout_coverage[aid+f'|{horizon}ms|'+('OBSERVED' if cut else 'BOOK_AT_MARKOUT_CENSORED')]+=1
@@ -114,20 +105,31 @@ def summarize(observations,manifest,settlements):
             if not outcome or row['token_id'] not in outcome['tokens']:continue
             y=float(outcome['winning_token_id']==row['token_id'])
             pnl=sum(f['quantity']*(y-f['price']) for f in arm['fills']);arm_pnl[aid]=pnl
+            arm_net[aid]=pnl-2*qty*config['execution_risk_per_share']
             # Maker entry fee zero. Stress includes declared risk allowance and
             # is a research sensitivity, not an extra realized ledger debit.
             for stress in config['cost_stress_multipliers']:
                 maker_groups[aid+f'|settlement_net_cost{stress}'][row['market_id']].append(pnl-stress*qty*config['execution_risk_per_share'])
         if 'JOIN_5S' in arm_pnl:
             for aid,pnl in arm_pnl.items():
-                if aid!='JOIN_5S':paired[aid].append(pnl-arm_pnl['JOIN_5S'])
-    return {'schema':'polymarket_v7_profit_experiment_report_v1',**AUTH,'code_sha':manifest['code_sha'],
+                if aid!='JOIN_5S':
+                    paired[aid+'|gross'][row['market_id']].append(pnl-arm_pnl['JOIN_5S'])
+                    paired[aid+'|net_cost2'][row['market_id']].append(arm_net[aid]-arm_net['JOIN_5S'])
+            origin=maker_times.get(row['market_id'])
+            if 'JOIN_10S' in arm_net and origin and manifest['forward_start_ns']<=origin<manifest.get('confirmatory_end_ns',0):
+                primary_maker[row['market_id']].append(arm_net['JOIN_10S']-arm_net['JOIN_5S'])
+    signal=summarize_signal(selections,delays,manifest,settlements,time.time_ns())
+    primary=signal.pop('primary_contract_values');times=signal.pop('contract_origin_ns');times.update(maker_times)
+    primary['maker_join10_minus_join5_settlement_net_cost2']={m:sum(v)/len(v) for m,v in primary_maker.items()}
+    return {'schema':'polymarket_v7_profit_experiment_report_v2',**AUTH,'code_sha':manifest['code_sha'],
+        'settlement_model_hash':manifest['frozen_model_hash'],'protocol_id':protocol['protocol_id'],
         'manifest_sha256':manifest['manifest_sha256'],'timestamp_ms':time.time_ns()//1000000,'counts':dict(counts),
         'selected_contracts':len({r['market_id'] for r in selections.values()}),'resolved_selected_contracts':len(resolved),
         'signal_cells':estimates,'fixed_signal_delay_margin_change':{k:interval([sum(v)/len(v) for v in c.values()],protocol,family) for k,c in decision_decay.items()},
         'maker_coverage':dict(maker_coverage),'maker_markout_coverage':dict(markout_coverage),
         'maker_metrics':{k:interval([sum(v)/len(v) for v in c.values()],protocol,family) for k,c in maker_groups.items()},
-        'maker_paired_net_delta_vs_join5s':{k:interval(v,protocol,family) for k,v in paired.items()},
+        'maker_paired_net_delta_vs_join5s':{k:interval([sum(v)/len(v) for v in c.values()],protocol,family) for k,c in paired.items()},
+        'signal_analysis':signal,'confirmatory':confirmatory(primary,times,manifest,time.time_ns()),
         'censored_labels':dict(censors),'economic_conclusion':'FORWARD_RESEARCH_NO_PROFITABILITY_CLAIM_OR_POLICY_PROMOTION',
         'limitations':['L1 prices and aggregate features, not full depth or queue position verification.',
             'Native PAPER fills in these comparisons are counterfactual and excluded from canonical equity.',
@@ -137,24 +139,60 @@ def summarize(observations,manifest,settlements):
             'No probability-bound narrowing, capital increase or model promotion.']}
 
 
-def main():
-    ap=argparse.ArgumentParser(description=__doc__);ap.add_argument('--experiment-root',type=Path,required=True);ap.add_argument('--output',type=Path,required=True)
-    args=ap.parse_args();root=args.experiment_root
-    if not (root/'manifest.json').exists():return
-    manifest=json.loads((root/'manifest.json').read_text());observations=list(rows(root/'observations.jsonl'))
-    token_sets=defaultdict(set)
+def report_cohort(root, *, fetch_labels=True, request_budget=None):
+    root=Path(root);manifest=json.loads((root/'manifest.json').read_text())
+    if digest({k:v for k,v in manifest.items() if k!='manifest_sha256'})!=manifest['manifest_sha256']:
+        raise ValueError('experiment manifest checksum mismatch')
+    observations=list(rows(root/'observations.jsonl'));token_sets=defaultdict(set)
     for row in observations:
         if row.get('token_id'):token_sets[row['market_id']].add(row['token_id'])
     cache=root/'settlements.json';labels=json.loads(cache.read_text()) if cache.exists() else {}
     def fetch(url):
         with urllib.request.urlopen(urllib.request.Request(url,headers={'User-Agent':'polymarket-v7-paper-research'}),timeout=2) as response:return json.load(response)
-    for market in [k for k in token_sets if k not in labels][:12]:
-        try:label=settlement(market,token_sets[market],fetch)
-        except (OSError,ValueError,TypeError):continue
-        if label:labels[market]=label
-    atomic(cache,labels)
+    budget=request_budget if request_budget is not None else [12]
+    if fetch_labels:
+        for market in [k for k in token_sets if k not in labels]:
+            if budget[0]<=0:break
+            budget[0]-=1
+            try:label=settlement(market,token_sets[market],fetch)
+            except (OSError,ValueError,TypeError):continue
+            if label:labels[market]=label
+        atomic(cache,labels)
     report=summarize(observations,manifest,labels)
     report['sources']={'observations_sha256':digest(observations),'settlements_sha256':digest(labels),'manifest':manifest}
+    return report
+
+
+def report_cohorts(root, *, fetch_labels=True):
+    """Every immutable model/protocol generation remains individually visible."""
+    root=Path(root);paths=sorted(root.rglob('manifest.json'));reports=[];excluded=[];seen=set();budget=[12]
+    for path in paths:
+        if not (path.parent/'observations.jsonl').exists():
+            excluded.append({'path':str(path),'reason':'REGISTERED_WITHOUT_OBSERVATIONS_PRESERVED'});continue
+        report=report_cohort(path.parent,fetch_labels=fetch_labels,request_budget=budget)
+        identity=report['manifest_sha256']
+        if identity in seen:
+            previous=next(r for r in reports if r['manifest_sha256']==identity)
+            if previous['sources']['observations_sha256']!=report['sources']['observations_sha256']:
+                raise ValueError('duplicate cohort has conflicting observation prefixes')
+            continue
+        seen.add(identity);reports.append(report)
+    return {'schema':'polymarket_v7_permanent_profit_cohort_report_v1',**AUTH,
+        'timestamp_ms':time.time_ns()//1_000_000,'cohort_count':len(reports),'cohorts':reports,'preserved_exclusions':excluded,
+        'model_strata':sorted({r['settlement_model_hash'] for r in reports}),
+        'protocol_strata':sorted({r['protocol_id'] for r in reports}),
+        'aggregation_semantics':'INDEPENDENT_MODEL_PROTOCOL_COHORTS_NO_SILENT_POOLING',
+        'economic_conclusion':'FORWARD_RESEARCH_NO_PROFITABILITY_CLAIM_OR_POLICY_PROMOTION'}
+
+
+def main():
+    ap=argparse.ArgumentParser(description=__doc__);ap.add_argument('--experiment-root',type=Path,required=True);ap.add_argument('--output',type=Path,required=True)
+    ap.add_argument('--offline',action='store_true',help='Read frozen settlement cache; never write any source or request labels')
+    ap.add_argument('--all-cohorts',action='store_true',help='Retain separate model/protocol strata recursively')
+    args=ap.parse_args();root=args.experiment_root
+    if args.all_cohorts or not (root/'manifest.json').exists():
+        report=report_cohorts(root,fetch_labels=not args.offline)
+    else:report=report_cohort(root,fetch_labels=not args.offline)
     atomic(args.output,report)
 
 if __name__=='__main__':main()

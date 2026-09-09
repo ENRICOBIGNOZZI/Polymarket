@@ -72,6 +72,8 @@
         "external_fair/paper_router_status.json",
         "--output",
         "${DURABLE_ROOT}/external_fair/pm_lead_lag.jsonl",
+        "${DURABLE_ROOT}/external_fair/pm_lead_lag.jsonl.segment-*.jsonl.gz",
+        "${DURABLE_ROOT}/external_fair/pm_lead_lag.jsonl.segment-*.jsonl.gz.manifest.json",
         "--status",
         "external_fair/lead_lag_collector_status.json",
         "--model-sha",
@@ -488,7 +490,10 @@
         "scripts/v7_learned_execution_model.py",
         "scripts/v7_canonical_economics.py",
         "scripts/v7_profit_attribution.py",
-        "scripts/v7_profit_report.py"
+        "scripts/v7_profit_report.py",
+        "scripts/v7_lossless_data_compaction.py",
+        "scripts/v7_permanent_evidence.py",
+        "scripts/v7_economic_decision_report.py"
       ],
       "config_identity_required": true,
       "dependencies": [
@@ -499,9 +504,11 @@
       "id": "economic_evidence_loop",
       "inputs": [
         "ledger/execution.jsonl",
-        "${DURABLE_ROOT}/profit_experiments/${SHA}/observations.jsonl"
+        "${DURABLE_ROOT}/profit_experiments",
+        "${DURABLE_ROOT}/permanent_evidence/store",
+        "${RUN_ROOT}/../paper_v7_archives"
       ],
-      "launcher_log": "profit_experiment_report.log",
+      "launcher_log": "permanent_evidence.log",
       "outputs": [
         "canonical_economics.json",
         "canonical_economics.log",
@@ -511,7 +518,13 @@
         "profit_attribution.csv",
         "profit_attribution.log",
         "profit_experiment_report.json",
-        "profit_experiment_report.log"
+        "profit_experiment_report.log",
+        "permanent_evidence.log",
+        "permanent_evidence_status.json",
+        "${DURABLE_ROOT}/permanent_evidence",
+        "economic_decision_report.json",
+        "economic_decision_report.log",
+        "NEXT_ECONOMIC_ACTION.md"
       ],
       "profile": "observer"
     },

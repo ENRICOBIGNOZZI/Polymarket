@@ -3,7 +3,7 @@
   "version": 7,
   "paper_only": true,
   "disk": {
-    "warning_free_ratio": 0.20,
+    "warning_free_ratio": 0.2,
     "critical_free_ratio": 0.04,
     "minimum_free_bytes": 5368709120
   },
@@ -19,14 +19,53 @@
     "directory_name": "paper_v7_archives",
     "keep_full_generations": 3,
     "canonical_ledgers": "verified_gzip_never_delete",
-    "remove_only": "derived_snapshots_superseded_cumulative_state_and_logs"
+    "remove_only": "NONE_WITHOUT_REPRODUCIBILITY_PROOF"
   },
   "streams": [
-    {"name": "ws_tape", "patterns": ["market_data/*.csv.*", "market_data/*.jsonl.*"], "retention_days": 7},
-    {"name": "trade_tape", "patterns": ["trade_tape.csv.*"], "retention_days": 30},
-    {"name": "latency_telemetry", "patterns": ["micro_maker/latency.csv.*"], "retention_days": 14},
-    {"name": "external_events", "patterns": ["external/*.csv.*", "external/*.jsonl.*", "external_fair/*.jsonl.*"], "retention_days": 30},
-    {"name": "runtime_logs", "patterns": ["**/*.log.*", "**/*.log.gz"], "retention_days": 14}
+    {
+      "name": "ws_tape",
+      "patterns": [
+        "market_data/*.csv.*",
+        "market_data/*.jsonl.*"
+      ],
+      "retention_days": 7,
+      "retention_semantics": "PERMANENT_VERIFIED_COMPRESSION_NO_EXPIRY"
+    },
+    {
+      "name": "trade_tape",
+      "patterns": [
+        "trade_tape.csv.*"
+      ],
+      "retention_days": 30,
+      "retention_semantics": "PERMANENT_VERIFIED_COMPRESSION_NO_EXPIRY"
+    },
+    {
+      "name": "latency_telemetry",
+      "patterns": [
+        "micro_maker/latency.csv.*"
+      ],
+      "retention_days": 14,
+      "retention_semantics": "PERMANENT_VERIFIED_COMPRESSION_NO_EXPIRY"
+    },
+    {
+      "name": "external_events",
+      "patterns": [
+        "external/*.csv.*",
+        "external/*.jsonl.*",
+        "external_fair/*.jsonl.*"
+      ],
+      "retention_days": 30,
+      "retention_semantics": "PERMANENT_VERIFIED_COMPRESSION_NO_EXPIRY"
+    },
+    {
+      "name": "runtime_logs",
+      "patterns": [
+        "**/*.log.*",
+        "**/*.log.gz"
+      ],
+      "retention_days": 14,
+      "retention_semantics": "PERMANENT_VERIFIED_COMPRESSION_NO_EXPIRY"
+    }
   ],
   "active_files": {
     "diagnostic_log_max_bytes": 104857600,
@@ -36,6 +75,25 @@
       "external_fair/rtds_events.jsonl",
       "external_fair/counterfactuals.jsonl"
     ],
-    "never_copytruncate": ["ledger/execution.jsonl", "trade_tape.csv", "micro_maker/latency.csv"]
+    "never_copytruncate": [
+      "ledger/execution.jsonl",
+      "trade_tape.csv",
+      "micro_maker/latency.csv"
+    ]
+  },
+  "permanent_evidence": {
+    "unique_source_deletion": false,
+    "model_independent_survival": true,
+    "compression_requires_decompressed_hash_verification": true,
+    "derived_discard_requires_exact_source_provenance": true,
+    "maximum_total_data_bytes": 30000000000,
+    "budget_unit": "DECIMAL_GB_ALL_MANAGED_DATA_INCLUDING_LIVE_ARCHIVES_AND_PERMANENT_STORE",
+    "target_compaction_bytes": 24000000000,
+    "warning_bytes": 25000000000,
+    "critical_bytes": 28000000000,
+    "external_storage_allowed": false,
+    "information_loss_allowed": false,
+    "compression_policy": "LOSSLESS_SHARED_PACKS_AND_VERIFIED_SLICES; TRANSPARENT_READS_ON_APFS",
+    "budget_exhaustion_policy": "COMPACT_DUPLICATES_FIRST; DO_NOT_SILENTLY_DROP_UNIQUE_EVIDENCE; SURFACE_CONFLICT_IF_CAP_CANNOT_BE_MET"
   }
 }

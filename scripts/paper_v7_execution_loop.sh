@@ -722,8 +722,20 @@ v7_register_child "$!"
     python3 scripts/v7_profit_attribution.py --ledger "$RUN_ROOT/ledger/execution.jsonl" --run-root "$RUN_ROOT" \
       --output "$RUN_ROOT/profit_attribution.json" --csv "$RUN_ROOT/profit_attribution.csv" \
       >> "$RUN_ROOT/profit_attribution.log" 2>&1 || true
-    python3 scripts/v7_profit_report.py --experiment-root "$DURABLE_ROOT/profit_experiments/$SHA" \
+    python3 scripts/v7_profit_report.py --experiment-root "$DURABLE_ROOT/profit_experiments" --all-cohorts \
       --output "$RUN_ROOT/profit_experiment_report.json" >> "$RUN_ROOT/profit_experiment_report.log" 2>&1 || true
+    python3 scripts/v7_economic_decision_report.py --run-root "$RUN_ROOT" --durable-root "$DURABLE_ROOT" \
+      --benchmark "$DURABLE_ROOT/permanent_evidence/benchmarks/latest.json" \
+      >> "$RUN_ROOT/economic_decision_report.log" 2>&1 || true
+    python3 scripts/v7_lossless_data_compaction.py --root "all=${RUN_ROOT%/*}" \
+      --store "$DURABLE_ROOT/permanent_evidence/store" \
+      --output "$DURABLE_ROOT/permanent_evidence/compaction.jsonl" \
+      --maximum-groups 10 --maximum-seconds 20 --nonblocking --apply \
+      >> "$RUN_ROOT/permanent_evidence.log" 2>&1 || true
+    python3 scripts/v7_permanent_evidence.py --run-root "$RUN_ROOT" --durable-root "$DURABLE_ROOT" \
+      --archive-root "${RUN_ROOT%/*}/paper_v7_archives" --repository-root "$ROOT" \
+      --maximum-seconds 20 --maximum-bytes 67108864 \
+      >> "$RUN_ROOT/permanent_evidence.log" 2>&1 || true
     sleep 60
   done
 ) & v7_register_child "$!"

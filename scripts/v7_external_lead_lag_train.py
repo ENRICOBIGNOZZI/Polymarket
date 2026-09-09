@@ -13,8 +13,9 @@ import statistics, time
 from typing import Any
 from v7_external_rich_model import FEATURE_NAMES, design, number
 from v7_external_lead_lag_model import SCHEMA, FAMILY, validate
-from v7_external_lead_lag_collector import horizon_eligible, MAX_LABEL_DELAY_MS
+from v7_external_lead_lag_collector import horizon_eligible, MAX_LABEL_DELAY_MS, observation_rows
 from v7_causal_book import TARGET as BOOK_TARGET
+from v7_compressed_journal import journal_rows
 
 OBS_SCHEMA = "polymarket_v7_external_pm_lead_lag_observation_v1"
 HORIZONS = (100, 250, 500, 1000)
@@ -35,29 +36,27 @@ def solve(matrix: list[list[float]], rhs: list[float]) -> list[float]:
 
 def load_rows(paths: list[Path], code_sha: str, target_semantics: str = LEGACY_TARGET) -> list[dict[str, Any]]:
     unique: dict[tuple[str,int], dict[str, Any]] = {}
-    for path in paths:
-        if not path.exists():
+    def records():
+        for path in paths:
+            yield from journal_rows(path)
+    for row in observation_rows(records()):
+        if (not isinstance(row,dict) or row.get("schema") != OBS_SCHEMA
+                or row.get("paper_only") is not True or row.get("authenticated_execution") is not False
+                or row.get("real_order_submission") is not False or row.get("model_sha") != code_sha
+                or row.get("execution_authority") != "ZERO_AUTHORITY_RESEARCH_ONLY"):
             continue
-        for line in path.read_text(encoding="utf-8").splitlines():
-            try: row=json.loads(line)
-            except json.JSONDecodeError: continue
-            if (not isinstance(row,dict) or row.get("schema") != OBS_SCHEMA
-                    or row.get("paper_only") is not True or row.get("authenticated_execution") is not False
-                    or row.get("real_order_submission") is not False or row.get("model_sha") != code_sha
-                    or row.get("execution_authority") != "ZERO_AUTHORITY_RESEARCH_ONLY"):
-                continue
-            if row.get("target_semantics", LEGACY_TARGET) != target_semantics:
-                continue
-            h=int(row.get("horizon_ms") or 0); origin=str(row.get("origin_id") or "")
-            target=number(row.get("delta_logit")); realized=number(row.get("realized_horizon_ms"))
-            features=row.get("rich_model_features") if isinstance(row.get("rich_model_features"),dict) else None
-            if (not origin or target is None or realized is None or not horizon_eligible(h, realized)
-                    or row.get("nominal_horizon_eligible") is False
-                    or features is None or not str(row.get("market_id") or "")):
-                continue
-            key=(origin,h)
-            if key in unique and unique[key] != row: raise ValueError("lead_lag:conflicting_observation")
-            unique[key]=row
+        if row.get("target_semantics", LEGACY_TARGET) != target_semantics:
+            continue
+        h=int(row.get("horizon_ms") or 0); origin=str(row.get("origin_id") or "")
+        target=number(row.get("delta_logit")); realized=number(row.get("realized_horizon_ms"))
+        features=row.get("rich_model_features") if isinstance(row.get("rich_model_features"),dict) else None
+        if (not origin or target is None or realized is None or not horizon_eligible(h, realized)
+                or row.get("nominal_horizon_eligible") is False
+                or features is None or not str(row.get("market_id") or "")):
+            continue
+        key=(origin,h)
+        if key in unique and unique[key] != row: raise ValueError("lead_lag:conflicting_observation")
+        unique[key]=row
     return sorted(unique.values(), key=lambda r:(int(r["origin_observed_wall_ns"]),r["market_id"],r["origin_id"],r["horizon_ms"]))
 
 

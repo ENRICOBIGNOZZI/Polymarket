@@ -34,14 +34,23 @@ def validate(protocol):
         raise ValueError('profit_protocol:inference_identity')
     if inference['automatic_promotion'] is not False or inference['automatic_sizing_change'] is not False:
         raise ValueError('profit_protocol:no_promotion')
+    if 'confirmatory' in inference:
+        confirm=inference['confirmatory']
+        if (confirm.get('primary_endpoints')!=['model_brier_improvement_over_pm','selected_settlement_surplus_cost2_delay1000','maker_join10_minus_join5_settlement_net_cost2']
+            or confirm.get('family_size')!=3 or confirm.get('calendar_days')!=7
+            or confirm.get('look_policy')!='ONE_FIXED_END_OF_WINDOW_ANALYSIS_NO_EARLY_PROMOTION'
+            or inference.get('temporal_block_contracts')!=[3,6,12]
+            or inference.get('minimum_temporal_blocks')!=8 or inference.get('minimum_tail_draws')!=50):
+            raise ValueError('profit_protocol:confirmatory_identity')
     digest(protocol)  # Reject nonfinite JSON.
 
-def freeze(path: Path, protocol: dict, code_sha: str, model_hash: str, now_ns: int):
+def freeze(path: Path, protocol: dict, code_sha: str, model_hash: str, now_ns: int, *, cohort: dict | None = None):
     validate(protocol)
     for value,length in ((code_sha,40),(model_hash,64)):
         if len(value)!=length or any(c not in '0123456789abcdef' for c in value):
             raise ValueError('profit_protocol:exact_identity')
     identity={'protocol_sha256':digest(protocol),'code_sha':code_sha,'frozen_model_hash':model_hash}
+    if cohort is not None:identity['cohort_identity']=cohort
     if path.exists():
         existing=json.loads(path.read_text())
         if existing.get('schema')!=SCHEMA or any(existing.get(k)!=v for k,v in identity.items()):
@@ -53,6 +62,9 @@ def freeze(path: Path, protocol: dict, code_sha: str, model_hash: str, now_ns: i
         'forward_start_ns':((now_ns//300_000_000_000)+1)*300_000_000_000,
         'paper_only':True,'authenticated_execution':False,'real_order_submission':False,
         'execution_authority':'ZERO_AUTHORITY_RESEARCH_ONLY'}
+    confirm=protocol['inference'].get('confirmatory')
+    if confirm:
+        value['confirmatory_end_ns']=value['forward_start_ns']+confirm['calendar_days']*86_400_000_000_000
     value['manifest_sha256']=digest(value)
     path.parent.mkdir(parents=True,exist_ok=True)
     temporary=path.with_name(path.name+f'.tmp.{os.getpid()}')

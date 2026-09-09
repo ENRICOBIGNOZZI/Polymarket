@@ -23,6 +23,29 @@ SHA = "c" * 40
 
 
 class V7RuntimeRetentionTest(unittest.TestCase):
+    def test_shared_pack_alias_is_retained_but_unknown_hardlink_fails_closed(self):
+        import hashlib
+        with tempfile.TemporaryDirectory() as tmp:
+            parent=Path(tmp);active=parent/'paper_v7_live';control=active/'control';control.mkdir(parents=True)
+            (control/'runtime_status.json').write_text(json.dumps({'model_sha':SHA,'paper_only':True,
+                'authenticated_execution':False,'real_order_submission':False}))
+            folder=active/'external_fair/raw';folder.mkdir(parents=True)
+            source=folder/'feed.segment-000001.bin';source.write_bytes(b'preserved source')
+            sha=hashlib.sha256(source.read_bytes()).hexdigest();store=parent/'store'
+            pack=store/'packs'/sha[:2]/(sha+'.pack');pack.parent.mkdir(parents=True);os.link(source,pack);os.chmod(pack,0o400)
+            manifest={'schema':'polymarket_v7_lossless_shared_pack_v1','pack_sha256':sha,
+                'pack_bytes':source.stat().st_size,'source_aliases':[str(source)],'source_bytes_sha256_verified':True}
+            raw=json.dumps(manifest).encode();manifests=store/'pack_manifests';manifests.mkdir()
+            (manifests/(hashlib.sha256(raw).hexdigest()+'.json')).write_bytes(raw)
+            unknown=folder/'feed.segment-000002.bin';unknown.write_bytes(b'unknown');os.link(unknown,parent/'outside')
+            result=retention_module.compress_closed_cutover_tapes(parent/'archives',now=10000,dry_run=False,
+                active_run_root=active,permanent_store_root=store)
+            self.assertEqual(result['archived'],[])
+            self.assertEqual(result['skipped'][0]['reason'],'VERIFIED_SHARED_IMMUTABLE_PACK')
+            self.assertEqual(len(result['failures']),1)
+            self.assertEqual(source.read_bytes(),b'preserved source')
+            self.assertEqual(unknown.read_bytes(),b'unknown')
+
     def test_operator_four_percent_threshold_preserves_absolute_floor(self) -> None:
         from unittest import mock
         from collections import namedtuple
@@ -70,7 +93,7 @@ class V7RuntimeRetentionTest(unittest.TestCase):
             self.assertTrue(book_current.exists());self.assertFalse(book_segment.exists())
             self.assertEqual(gzip.open(str(book_segment)+".gz","rb").read(),b'{"raw":true}\n'*1000)
 
-    def test_old_cutovers_keep_verified_ledger_and_drop_only_derived_files(self) -> None:
+    def test_old_cutovers_keep_verified_ledger_and_unproven_derived_sources(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             archive_root = Path(directory) / "paper_v7_archives"
             payloads: dict[str, bytes] = {}
@@ -112,8 +135,8 @@ class V7RuntimeRetentionTest(unittest.TestCase):
                 self.assertFalse((archive / "ledger/execution.jsonl").exists())
                 compressed = archive / entry["ledger"]["target"]
                 self.assertEqual(gzip.open(compressed, "rb").read(), payloads[archive.name])
-                self.assertFalse((archive / "universe/current.json").exists())
-                self.assertFalse((archive / "micro_maker/status.log").exists())
+                self.assertTrue((archive / "universe/current.json").exists())
+                self.assertTrue((archive / "micro_maker/status.log").exists())
                 self.assertTrue((archive / "archive/compaction_manifest.json").is_file())
             for name in result["protected_full_archives"]:
                 self.assertTrue((archive_root / name / "ledger/execution.jsonl").is_file())
@@ -156,7 +179,7 @@ class V7RuntimeRetentionTest(unittest.TestCase):
             self.assertEqual(manifest["checkpoints"][0]["model_sha"], SHA)
             self.assertTrue(manifest["paper_only"])
 
-    def test_only_old_rotated_segments_expire(self) -> None:
+    def test_old_rotated_economic_segments_never_expire(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             run_root = Path(directory)
             ledger = run_root / "ledger/execution.jsonl"
@@ -169,8 +192,8 @@ class V7RuntimeRetentionTest(unittest.TestCase):
             os.utime(old, (1, 1))
             config = json.loads((ROOT / "config/v7_data_retention.json").read_text())
             result = run_retention(run_root, config, SHA, dry_run=False, durable_archive_confirmed=False, now=40 * 86400)
-            self.assertIn("trade_tape.csv.1", result["expired_rotated_segments"])
-            self.assertFalse(old.exists())
+            self.assertEqual(result["expired_rotated_segments"], [])
+            self.assertTrue(old.exists())
             self.assertEqual(active.read_text(), "active")
 
     def test_unsafe_or_mixed_sha_ledger_is_never_archived(self) -> None:

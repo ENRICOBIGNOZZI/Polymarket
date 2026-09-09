@@ -87,23 +87,31 @@ class ProfitExperiments:
     def __init__(self,run_root,output,protocol_path,book,code_sha,binary):
         self.run_root,self.output,self.book,self.sha,self.binary=run_root,output,book,code_sha,binary
         self.protocol=json.loads(protocol_path.read_text());self.manifest=None
-        self.pending={};self.maker_pending={};self.selected=set();self.anchors=set();self.done=set()
+        self.pending={};self.maker_pending={};self.maker_windows={};self.selected=set();self.anchors=set();self.done=set()
+        restored_windows=[]
         self.counts=Counter();self.last_scan=0.;self.last_error=None
         self.ledger=LedgerTail(run_root/'ledger/execution.jsonl')
         self.manifest_path=output/'manifest.json'
+        self.status_path=run_root/'profit_experiment_status.json'
+        self.accept_new_anchors=True
         if self.manifest_path.exists():
             old=json.loads(self.manifest_path.read_text())
-            self.manifest=freeze(self.manifest_path,self.protocol,code_sha,old['frozen_model_hash'],time.time_ns())
+            self.manifest=freeze(self.manifest_path,self.protocol,code_sha,old['frozen_model_hash'],time.time_ns(),cohort=old.get('cohort_identity'))
         for row in rows(output/'observations.jsonl'):
             if row.get('code_sha')!=code_sha:raise ValueError('profit output identity conflict')
             if row['kind']=='SIGNAL_SELECTION':self.selected.add(row['selection_key']);self.pending[row['selection_key']]=row
             elif row['kind']=='DELAY_LABEL':self.done.add((row['selection_key'],row['delay_ms']))
             elif row['kind']=='MAKER_ANCHOR':self.anchors.add(row['market_id']);self.maker_pending[row['market_id']]=row
             elif row['kind']=='MAKER_COMPARISON':self.maker_pending.pop(row['market_id'],None)
+            elif row['kind'] in ('MAKER_EXECUTION_WINDOW','MAKER_MARKOUT_LABEL'):restored_windows.append(row)
             self.counts[row['kind']]+=1
+        if self.protocol['maker'].get('validity_semantics')=='SEPARATE_EXECUTION_AND_MARKOUT_WINDOWS':
+            from v7_maker_research_window import MakerWindow
+            self.maker_windows={market:MakerWindow(anchor,restored_windows) for market,anchor in self.maker_pending.items()}
 
     def emit(self,kind,**data):
         row={'schema':'polymarket_v7_profit_observation_v1',**AUTH,'code_sha':self.sha,
+             'experiment_protocol_id':self.protocol['protocol_id'],
              'manifest_sha256':self.manifest['manifest_sha256'],'recorded_ns':time.time_ns(),'kind':kind,**data}
         append(self.output/'observations.jsonl',row);self.counts[kind]+=1
         return row
@@ -122,7 +130,7 @@ class ProfitExperiments:
             self.last_scan=time.monotonic()
             self.collect_anchors(now)
             self.finish_makers(status,now)
-            atomic(self.run_root/'profit_experiment_status.json',{'schema':'polymarket_v7_profit_experiment_status_v1',
+            atomic(self.status_path,{'schema':'polymarket_v7_profit_experiment_status_v1',
                 **AUTH,'code_sha':self.sha,'timestamp_ms':now//1000000,'manifest':self.manifest,
                 'counts':dict(self.counts),'pending_signals':len(self.pending),'pending_maker_anchors':len(self.maker_pending),
                 'last_error':self.last_error,'state':'COLLECTING' if now>=self.manifest['forward_start_ns'] else 'AWAITING_PREREGISTERED_BOUNDARY'})
@@ -150,6 +158,9 @@ class ProfitExperiments:
                 model_probability=prob,pm_probability=evidence['origin_pm_yes'] if index==0 else 1-evidence['origin_pm_yes'],
                 probability_bounds=[fair.get('lower'),fair.get('upper')] if index==0 else [1-fair.get('upper',1),1-fair.get('lower',0)],probability_interval_validated=fair.get('probability_interval_validated'),
                 feature_sha256=origin['rich_feature_sha256'],model_hash=fair['probability_model_hash'],
+                model_id=fair.get('probability_model_id'),model_family=fair.get('family'),event_id=market.get('event_id'),
+                feature_schema_version=origin.get('feature_schema_version'),
+                raw_feature_cut=origin.get('rich_feature_cut'),raw_model_features=origin.get('rich_model_features'),
                 margin_bin=mi,tte_bin=ti,tte_seconds=tte,point_net_margin=margin,fee_schedule=schedule,
                 origin_book=cut,book_scope='L1_PLUS_AGGREGATE_FEATURES_NO_FULL_DEPTH_REPLAY')
             self.selected.add(key);self.pending[key]=row
@@ -179,17 +190,31 @@ class ProfitExperiments:
 
     def collect_anchors(self,now):
         for order in self.ledger.poll():
+            if not self.accept_new_anchors:continue
             m=order.get('metadata') or {};market=str(order.get('market_id') or '')
             if (order.get('event_type')!='ORDER_SUBMITTED' or m.get('component')!='professional_maker' or market in self.anchors
                 or order.get('model_sha')!=self.sha or order.get('paper_only') is not True or order.get('authenticated_execution') is not False
                 or m.get('counterfactual') is True or m.get('excluded_from_portfolio_equity') is True
                 or (order.get('receive_ts_ms') or 0)*1000000<self.manifest['forward_start_ns']):continue
+            if self.protocol['maker'].get('validity_semantics')=='SEPARATE_EXECUTION_AND_MARKOUT_WINDOWS':
+                actual_model=((m.get('opportunity_envelope') or {}).get('settlement_model') or {}).get('model_hash')
+                if actual_model!=self.manifest['frozen_model_hash']:continue
             self.anchors.add(market)
             row=self.emit('MAKER_ANCHOR',market_id=market,token_id=order['token_id'],origin_ms=order['receive_ts_ms'],
                 order=order,book_gap_counter=self.book.gaps,observer_session_id=self.book.session,connection_epoch=self.book.epoch)
             self.maker_pending[market]=row
 
     def finish_makers(self,status,now):
+        if self.protocol['maker'].get('validity_semantics')=='SEPARATE_EXECUTION_AND_MARKOUT_WINDOWS':
+            from v7_maker_research_window import MakerWindow
+            for market,anchor in list(self.maker_pending.items()):
+                window=self.maker_windows.setdefault(market,MakerWindow(anchor))
+                result=window.advance(self,status,now)
+                if result is not None:
+                    self.emit('MAKER_COMPARISON',market_id=market,token_id=anchor['token_id'],
+                        anchor_record_id=anchor['order']['record_id'],**result)
+                    self.maker_pending.pop(market);self.maker_windows.pop(market)
+            return
         for market,anchor in list(self.maker_pending.items()):
             # Wait through longer life + cancel latency + longest markout.
             if now/1e6<anchor['origin_ms']+42000:continue
@@ -199,27 +224,32 @@ class ProfitExperiments:
             self.maker_pending.pop(market)
 
 
-def replay_anchor(anchor,book,status,protocol,binary):
+def replay_anchor(anchor,book,status,protocol,binary, *, evaluation_ms=42000, include_markouts=True, require_all_features=True):
     order=anchor['order'];m=order['metadata'];start=anchor['origin_ms'];market=anchor['market_id'];token=anchor['token_id']
     history=list(book.history.get((market,token),[]));arrival=m.get('arrival_receive_monotonic_ns') or 0
     origin=next((r for r in reversed(history) if r.get('receive_monotonic_ns',0)<=arrival and r['receive_wall_ms']<=start),None)
     reason=None
     if (not origin or anchor['book_gap_counter']!=book.gaps or anchor['observer_session_id']!=book.session
         or anchor['connection_epoch']!=book.epoch or not history or history[0]['receive_wall_ms']>start
-        or book.watermark_ms<start+42000 or status.get('evidence_complete') is not True
+        or book.watermark_ms<start+evaluation_ms or status.get('evidence_complete') is not True
         or status.get('model_sha')!=book.model_sha or status.get('observer_session_id')!=book.session
         or status.get('connection_epoch')!=book.epoch or status.get('state')!='running'
         or status.get('paper_only') is not True or status.get('authenticated_execution') is not False or status.get('real_order_submission') is not False
-        or status.get('book_events_written',0)>book.sequence or status.get('book_watermark_receive_wall_ms',0)<start+42000
+        or status.get('book_events_written',0)>book.sequence or status.get('book_watermark_receive_wall_ms',0)<start+evaluation_ms
         or not 0<=time.time_ns()/1e6-status.get('timestamp_ms',0)<=2000):reason='BOOK_CONTINUITY_CENSORED'
-    if origin and (start-origin['receive_wall_ms']>protocol['maker']['maximum_feature_age_ms'] or origin.get('features_valid') is not True):reason='STALE_OR_INCOMPLETE_FEATURES'
+    if origin and (start-origin['receive_wall_ms']>protocol['maker']['maximum_feature_age_ms'] or (require_all_features and origin.get('features_valid') is not True)):reason='STALE_OR_INCOMPLETE_FEATURES'
     if not m.get('arrival_receive_monotonic_ns') or not m.get('arrival_exchange_event_ns'):reason='MISSING_NATIVE_ARRIVAL_CLOCK'
-    path=[r for r in history if arrival<=r.get('receive_monotonic_ns',0)<=arrival+42000*1000000]
+    path=[r for r in history if arrival<=r.get('receive_monotonic_ns',0)<=arrival+evaluation_ms*1000000]
+    if origin and (origin.get('valid') is not True or origin.get('lineage_continuous') is not True):reason='INVALID_ARRIVAL_BOOK'
     if origin and any(r.get('tick_size')!=origin['tick_size'] for r in path):reason='TICK_REGIME_CHANGED'
     invalid_books=sum(r.get('valid') is not True or r.get('lineage_continuous') is not True for r in path)
-    output=[];source={'anchor':anchor,'origin_book':origin,'path':path}
+    output=[];source={'anchor':anchor,'origin_book':origin,'path':path,
+        'evaluation_ms':evaluation_ms,'proof':{'status':status,'consumed_sequence':book.sequence,
+        'consumed_watermark_ms':book.watermark_ms,'gap_counter':book.gaps,'session':book.session,'epoch':book.epoch}}
     for arm in protocol['maker']['arms']:
         arm_reason=reason
+        if (not require_all_features and arm.get('minimum_opposite_prints_per_second') is not None
+                and origin and origin.get('features_valid') is not True):arm_reason='ORIGIN_FLOW_FEATURES_UNAVAILABLE'
         execution_path=[r for r in path if r.get('receive_monotonic_ns',0)<=arrival+(arm['lifetime_ms']+100)*1000000]
         if any('public_trade' not in r for r in execution_path):arm_reason='MISSING_TRADE_PAYLOAD_CENSORED'
         if any(r.get('public_trade') and (r.get('valid') is not True or r.get('lineage_continuous') is not True) for r in execution_path):
@@ -252,7 +282,7 @@ def replay_anchor(anchor,book,status,protocol,binary):
                     native=json.loads(completed.stdout);row.update(native);row.update(arm=arm['id'],state='OBSERVED',research_request=request)
                     for fill in row['fills']:
                         fill['markouts']={}
-                        for h in protocol['maker']['markout_horizons_ms']:
+                        for h in protocol['maker']['markout_horizons_ms'] if include_markouts else []:
                             cut=next((r for r in reversed(history) if r.get('receive_monotonic_ns',0)<=fill['receive_monotonic_ns']+h*1000000),None)
                             if cut and (cut.get('valid') is not True or cut.get('lineage_continuous') is not True
                                         or not 0<cut['best_bid']<cut['best_ask']<1):cut=None

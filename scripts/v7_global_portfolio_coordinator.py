@@ -180,6 +180,20 @@ def _publish_cancel_authorization(root: Path, decision: dict[str, Any], envelope
     })
 
 
+def _record_authorization_publication(root: Path, decision: dict[str, Any], kind: str) -> None:
+    """Observation of an already-published intent; grants no additional authority."""
+    key=decision.get('selected_replay_key')
+    item=next((x for x in decision.get('opportunity_inputs',[]) if x.get('replay_key')==key),{})
+    fingerprint=__import__('hashlib').sha256(json.dumps(decision,sort_keys=True,separators=(',',':')).encode()).hexdigest()
+    append_jsonl(root/'opportunities'/'authorization_publications.jsonl',{
+        'schema':'polymarket_v7_authorization_publication_v1','paper_only':True,
+        'authenticated_execution':False,'real_order_submission':False,
+        'execution_authority':'ZERO_AUTHORITY_RESEARCH_ONLY','result':'GENERATED',
+        'publication_kind':kind,'attempt_id':kind+':'+fingerprint,'decision_sha256':fingerprint,
+        'timestamp_ms':time.time_ns()//1_000_000,'model_sha':item.get('model_sha'),
+        'market_id':item.get('market_id'),'token_id':item.get('token_id'),'replay_key':key})
+
+
 def _publish_make_authorization(root: Path, decision: dict[str, Any], envelopes: list[dict[str, Any]]) -> None:
     """Publish coordinator-owned PAPER intent; this does not simulate a fill."""
     if (
@@ -207,6 +221,7 @@ def _publish_make_authorization(root: Path, decision: dict[str, Any], envelopes:
         "opportunity_envelope": envelope,
         "expires_at_ns": int(envelope.get("expires_at_ns") or 0),
     })
+    _record_authorization_publication(root,decision,'MAKER_INTENT')
 
 
 def process_cut(run_root: Path, *, now_ns: int | None = None) -> dict[str, Any]:
@@ -377,6 +392,7 @@ def process_cut(run_root: Path, *, now_ns: int | None = None) -> dict[str, Any]:
     ):
         receipt_name = decision["selected_replay_key"].replace("/", "_") + ".json"
         atomic_json(root / "opportunities" / "receipts" / receipt_name, decision)
+        if decision.get('action')=='TAKE':_record_authorization_publication(root,decision,'TAKER_RECEIPT')
     _publish_make_authorization(root, decision, selected_envelopes)
     _publish_cancel_authorization(root, decision, selected_envelopes)
     if files or maker_envelopes:

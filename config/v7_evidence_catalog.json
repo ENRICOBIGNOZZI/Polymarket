@@ -1,0 +1,1665 @@
+{
+  "schema": "polymarket_v7_permanent_data_catalog_definition_v1",
+  "definitions": [
+    {
+      "source_family": "canonical_ledger",
+      "patterns": [
+        "ledger/execution.jsonl",
+        "archive/canonical-ledger/execution-*.jsonl.gz"
+      ],
+      "producer": "polymarket_v7_fast_structural_runtime canonical ledger writer",
+      "consumers": [
+        "portfolio",
+        "OMS",
+        "attribution",
+        "permanent datasets"
+      ],
+      "schema": "canonical V7 execution record + economic journal",
+      "topics": [
+        "order lifecycle",
+        "fills",
+        "cancellations",
+        "final settlement",
+        "realized PnL",
+        "opportunity envelopes",
+        "fees",
+        "queue estimates"
+      ],
+      "timestamp_semantics": {
+        "exchange": "exchange_ts_ms if provided",
+        "receive": "receive_ts_ms",
+        "decision": "decision_ts_ms or same-decision metadata; UNKNOWN when absent",
+        "publication": "recorded_ts_ms is ledger publication, not decision time"
+      },
+      "source_kind": "CANONICAL_ECONOMIC_SOURCE",
+      "reproducible": false,
+      "append_only": true,
+      "retention": "PERMANENT_NO_UNIQUE_SOURCE_DELETION",
+      "compression": "VERIFIED_GZIP_AND_CONTENT_ADDRESSED_OBJECTS",
+      "restart_behavior": "NEW_SESSION_OR_APPEND; ALL_PREVIOUS_REVISIONS_REMAIN",
+      "cutover_behavior": "IMMUTABLE_REVISION_STORE_OUTSIDE_RUN_ROOT",
+      "model_dependence": "EXPLICIT_IDENTITY_STRATA",
+      "identity_fields": {
+        "code_sha": "model_sha",
+        "run_id": "metadata.opportunity_envelope.run_id",
+        "market_id": "market_id",
+        "event_id": "event_id",
+        "token_id": "token_id",
+        "contract_family": "metadata.opportunity_envelope.crypto_context.contract_family",
+        "asset": "metadata.opportunity_envelope.crypto_context.asset",
+        "horizon": "metadata.opportunity_envelope.crypto_context.horizon",
+        "decision_id": null,
+        "opportunity_id": "opportunity_id",
+        "replay_key": "metadata.opportunity_replay_key OR metadata.opportunity_envelope.deterministic_replay_key; Taker: exact embedded coordinator_receipt join",
+        "order_id": "order_id",
+        "fill_id": "fill_id",
+        "position_id": "position_id",
+        "model_id": "metadata.opportunity_envelope.settlement_model.model_id OR metadata.decision_probability_model_id",
+        "model_hash": "metadata.opportunity_envelope.settlement_model.model_hash OR metadata.decision_probability_model_hash",
+        "model_family": "metadata.model_family",
+        "feature_schema_version": "metadata.placement_features_schema",
+        "policy_hash": "metadata.opportunity_envelope.policy_hash (portfolio); metadata.policy_hash (execution)",
+        "config_hash": "metadata.opportunity_envelope.config_hash (portfolio); metadata.config_hash (execution)",
+        "experiment_protocol_id": null,
+        "experiment_manifest_hash": null,
+        "exchange_timestamp": "exchange_ts_ms",
+        "receive_timestamp": "receive_ts_ms",
+        "decision_timestamp": "decision_ts_ms",
+        "source_snapshot_id": "book_snapshot_id; metadata.placement_features_snapshot_id"
+      },
+      "identity_mapping_semantics": "Candidate source fields, not a claim of historical completeness. Null: unavailable, unparsed or not applicable; source bytes preserved.",
+      "identity_distinctions": {
+        "execution_model": "metadata/opportunity execution model; never replaced by fair model",
+        "settlement_probability_model": "settlement_model or probability_model_id/hash",
+        "portfolio_risk_policy": "policy_hash/config_hash on decision envelope",
+        "research_protocol": "immutable experiment manifest, not code SHA"
+      }
+    },
+    {
+      "source_family": "pm_causal_book",
+      "patterns": [
+        "micro_maker/book_observations/*.jsonl*"
+      ],
+      "producer": "polymarket_v7_maker_fillability_observer",
+      "consumers": [
+        "BookTimeline",
+        "profit experiments",
+        "raw datasets"
+      ],
+      "schema": "polymarket_v7_causal_book_observation_v1",
+      "topics": [
+        "Polymarket market books",
+        "PM L1",
+        "public trades",
+        "public aggressive flow",
+        "microprice",
+        "OFI",
+        "trade imbalance",
+        "realized volatility",
+        "short returns",
+        "feature freshness"
+      ],
+      "timestamp_semantics": {
+        "exchange": "source exchange timestamp when provided; UNKNOWN otherwise",
+        "receive": "local wall and monotonic clock recorded at ingestion",
+        "decision": "NOT_APPLICABLE_TO_RAW_SOURCE",
+        "publication": "never substituted for causal receive time"
+      },
+      "source_kind": "CAUSAL_SOURCE",
+      "reproducible": false,
+      "append_only": true,
+      "retention": "PERMANENT_NO_UNIQUE_SOURCE_DELETION",
+      "compression": "VERIFIED_GZIP_AND_CONTENT_ADDRESSED_OBJECTS",
+      "restart_behavior": "NEW_SESSION_OR_APPEND; ALL_PREVIOUS_REVISIONS_REMAIN",
+      "cutover_behavior": "IMMUTABLE_REVISION_STORE_OUTSIDE_RUN_ROOT",
+      "model_dependence": "MODEL_INDEPENDENT_RAW",
+      "identity_fields": {
+        "code_sha": "model_sha",
+        "run_id": null,
+        "market_id": "market_id",
+        "event_id": null,
+        "token_id": "token_id",
+        "contract_family": null,
+        "asset": null,
+        "horizon": null,
+        "decision_id": null,
+        "opportunity_id": null,
+        "replay_key": null,
+        "order_id": null,
+        "fill_id": null,
+        "position_id": null,
+        "model_id": null,
+        "model_hash": null,
+        "model_family": null,
+        "feature_schema_version": "feature_semantics",
+        "policy_hash": null,
+        "config_hash": null,
+        "experiment_protocol_id": null,
+        "experiment_manifest_hash": null,
+        "exchange_timestamp": "exchange_event_ns",
+        "receive_timestamp": "receive_monotonic_ns + receive_wall_ms",
+        "decision_timestamp": null,
+        "source_snapshot_id": "observer_session_id + connection_epoch + observer_sequence"
+      },
+      "identity_mapping_semantics": "Candidate source fields, not a claim of historical completeness. Null: unavailable, unparsed or not applicable; source bytes preserved.",
+      "identity_distinctions": {
+        "execution_model": "metadata/opportunity execution model; never replaced by fair model",
+        "settlement_probability_model": "settlement_model or probability_model_id/hash",
+        "portfolio_risk_policy": "policy_hash/config_hash on decision envelope",
+        "research_protocol": "immutable experiment manifest, not code SHA"
+      }
+    },
+    {
+      "source_family": "pm_l2_binary",
+      "patterns": [
+        "research/crypto_book/**/*.bin*",
+        "research/crypto_book/**/*.json",
+        "external_cancel/workspaces/*/normalized_events/*.bin*",
+        "external_cancel/books/*/normalized_events/*.bin*",
+        "external_cancel/books/*/normalized_events/*.json"
+      ],
+      "producer": "polymarket_v7_maker_fillability_observer",
+      "consumers": [
+        "native book replay",
+        "raw datasets"
+      ],
+      "schema": "TapeSessionHeader schema 3 + CryptoBookTapePayload schema 2; immutable token-handle manifest",
+      "topics": [
+        "PM L2 where recorded",
+        "Polymarket public trades",
+        "causal book lineage"
+      ],
+      "timestamp_semantics": {
+        "exchange": "source exchange timestamp when provided; UNKNOWN otherwise",
+        "receive": "local wall and monotonic clock recorded at ingestion",
+        "decision": "NOT_APPLICABLE_TO_RAW_SOURCE",
+        "publication": "never substituted for causal receive time"
+      },
+      "source_kind": "CAUSAL_SOURCE",
+      "reproducible": false,
+      "append_only": true,
+      "retention": "PERMANENT_NO_UNIQUE_SOURCE_DELETION",
+      "compression": "VERIFIED_GZIP_AND_CONTENT_ADDRESSED_OBJECTS",
+      "restart_behavior": "NEW_SESSION_OR_APPEND; ALL_PREVIOUS_REVISIONS_REMAIN",
+      "cutover_behavior": "IMMUTABLE_REVISION_STORE_OUTSIDE_RUN_ROOT",
+      "model_dependence": "MODEL_INDEPENDENT_RAW",
+      "identity_fields": {
+        "code_sha": "versioned session header / sidecar code identity",
+        "run_id": null,
+        "market_id": null,
+        "event_id": null,
+        "token_id": null,
+        "contract_family": null,
+        "asset": null,
+        "horizon": null,
+        "decision_id": null,
+        "opportunity_id": null,
+        "replay_key": null,
+        "order_id": null,
+        "fill_id": null,
+        "position_id": null,
+        "model_id": null,
+        "model_hash": null,
+        "model_family": null,
+        "feature_schema_version": null,
+        "policy_hash": null,
+        "config_hash": null,
+        "experiment_protocol_id": null,
+        "experiment_manifest_hash": null,
+        "exchange_timestamp": "versioned binary payload exchange-event field when available",
+        "receive_timestamp": "versioned binary receive monotonic/wall fields; decoder ABI must match schema",
+        "decision_timestamp": null,
+        "source_snapshot_id": "session manifest + segment + record byte offset; symbol/token handle requires matching immutable mapping"
+      },
+      "identity_mapping_semantics": "Candidate source fields, not a claim of historical completeness. Null: unavailable, unparsed or not applicable; source bytes preserved.",
+      "identity_distinctions": {
+        "execution_model": "metadata/opportunity execution model; never replaced by fair model",
+        "settlement_probability_model": "settlement_model or probability_model_id/hash",
+        "portfolio_risk_policy": "policy_hash/config_hash on decision envelope",
+        "research_protocol": "immutable experiment manifest, not code SHA"
+      }
+    },
+    {
+      "source_family": "pm_public_trades",
+      "patterns": [
+        "trade_tape.csv*",
+        "micro_maker/fillability_ws.jsonl*"
+      ],
+      "producer": "trade recorder / polymarket_v7_maker_fillability_observer",
+      "consumers": [
+        "MakerPaperMarketEngine",
+        "flow analysis"
+      ],
+      "schema": "CSV trade recorder / polymarket_v7_maker_fillability_trade_v1",
+      "topics": [
+        "Polymarket public trades",
+        "public aggressive flow",
+        "flow reach"
+      ],
+      "timestamp_semantics": {
+        "exchange": "source exchange timestamp when provided; UNKNOWN otherwise",
+        "receive": "local wall and monotonic clock recorded at ingestion",
+        "decision": "NOT_APPLICABLE_TO_RAW_SOURCE",
+        "publication": "never substituted for causal receive time"
+      },
+      "source_kind": "CAUSAL_SOURCE",
+      "reproducible": false,
+      "append_only": true,
+      "retention": "PERMANENT_NO_UNIQUE_SOURCE_DELETION",
+      "compression": "VERIFIED_GZIP_AND_CONTENT_ADDRESSED_OBJECTS",
+      "restart_behavior": "NEW_SESSION_OR_APPEND; ALL_PREVIOUS_REVISIONS_REMAIN",
+      "cutover_behavior": "IMMUTABLE_REVISION_STORE_OUTSIDE_RUN_ROOT",
+      "model_dependence": "MODEL_INDEPENDENT_RAW",
+      "identity_fields": {
+        "code_sha": null,
+        "run_id": null,
+        "market_id": null,
+        "event_id": null,
+        "token_id": null,
+        "contract_family": null,
+        "asset": null,
+        "horizon": null,
+        "decision_id": null,
+        "opportunity_id": null,
+        "replay_key": null,
+        "order_id": null,
+        "fill_id": null,
+        "position_id": null,
+        "model_id": null,
+        "model_hash": null,
+        "model_family": null,
+        "feature_schema_version": null,
+        "policy_hash": null,
+        "config_hash": null,
+        "experiment_protocol_id": null,
+        "experiment_manifest_hash": null,
+        "exchange_timestamp": null,
+        "receive_timestamp": null,
+        "decision_timestamp": null,
+        "source_snapshot_id": null
+      },
+      "identity_mapping_semantics": "Candidate source fields, not a claim of historical completeness. Null: unavailable, unparsed or not applicable; source bytes preserved.",
+      "identity_distinctions": {
+        "execution_model": "metadata/opportunity execution model; never replaced by fair model",
+        "settlement_probability_model": "settlement_model or probability_model_id/hash",
+        "portfolio_risk_policy": "policy_hash/config_hash on decision envelope",
+        "research_protocol": "immutable experiment manifest, not code SHA"
+      }
+    },
+    {
+      "source_family": "external_raw",
+      "patterns": [
+        "external_fair/raw/*.bin*"
+      ],
+      "producer": "polymarket_v7_external_venue_runtime raw frame sink",
+      "consumers": [
+        "external tape decoders",
+        "future ML"
+      ],
+      "schema": "TapeSessionHeader v3 + RawTapeDiskRecordHeader + original payload",
+      "topics": [
+        "Binance spot",
+        "Binance futures/perpetual",
+        "Coinbase",
+        "Bybit spot/perpetual",
+        "Deribit futures/perpetual",
+        "funding",
+        "basis",
+        "open interest",
+        "liquidations"
+      ],
+      "timestamp_semantics": {
+        "exchange": "source exchange timestamp when provided; UNKNOWN otherwise",
+        "receive": "local wall and monotonic clock recorded at ingestion",
+        "decision": "NOT_APPLICABLE_TO_RAW_SOURCE",
+        "publication": "never substituted for causal receive time"
+      },
+      "source_kind": "CAUSAL_SOURCE",
+      "reproducible": false,
+      "append_only": true,
+      "retention": "PERMANENT_NO_UNIQUE_SOURCE_DELETION",
+      "compression": "VERIFIED_GZIP_AND_CONTENT_ADDRESSED_OBJECTS",
+      "restart_behavior": "NEW_SESSION_OR_APPEND; ALL_PREVIOUS_REVISIONS_REMAIN",
+      "cutover_behavior": "IMMUTABLE_REVISION_STORE_OUTSIDE_RUN_ROOT",
+      "model_dependence": "MODEL_INDEPENDENT_RAW",
+      "identity_fields": {
+        "code_sha": "versioned session header / sidecar code identity",
+        "run_id": null,
+        "market_id": null,
+        "event_id": null,
+        "token_id": null,
+        "contract_family": null,
+        "asset": null,
+        "horizon": null,
+        "decision_id": null,
+        "opportunity_id": null,
+        "replay_key": null,
+        "order_id": null,
+        "fill_id": null,
+        "position_id": null,
+        "model_id": null,
+        "model_hash": null,
+        "model_family": null,
+        "feature_schema_version": null,
+        "policy_hash": null,
+        "config_hash": null,
+        "experiment_protocol_id": null,
+        "experiment_manifest_hash": null,
+        "exchange_timestamp": "versioned binary payload exchange-event field when available",
+        "receive_timestamp": "versioned binary receive monotonic/wall fields; decoder ABI must match schema",
+        "decision_timestamp": null,
+        "source_snapshot_id": "session manifest + segment + record byte offset; symbol/token handle requires matching immutable mapping"
+      },
+      "identity_mapping_semantics": "Candidate source fields, not a claim of historical completeness. Null: unavailable, unparsed or not applicable; source bytes preserved.",
+      "identity_distinctions": {
+        "execution_model": "metadata/opportunity execution model; never replaced by fair model",
+        "settlement_probability_model": "settlement_model or probability_model_id/hash",
+        "portfolio_risk_policy": "policy_hash/config_hash on decision envelope",
+        "research_protocol": "immutable experiment manifest, not code SHA"
+      }
+    },
+    {
+      "source_family": "external_normalized",
+      "patterns": [
+        "external_fair/normalized_events/*.bin*",
+        "external_fair/tapes/*.bin*"
+      ],
+      "producer": "polymarket_v7_external_venue_runtime",
+      "consumers": [
+        "external feature kernels",
+        "replay"
+      ],
+      "schema": "TapeSessionHeader v3 + TapeRecord; payload ABI version required",
+      "topics": [
+        "microprice",
+        "OFI",
+        "trade imbalance",
+        "realized volatility",
+        "short returns",
+        "cross-venue dispersion",
+        "external market events"
+      ],
+      "timestamp_semantics": {
+        "exchange": "source exchange timestamp when provided; UNKNOWN otherwise",
+        "receive": "local wall and monotonic clock recorded at ingestion",
+        "decision": "NOT_APPLICABLE_TO_RAW_SOURCE",
+        "publication": "never substituted for causal receive time"
+      },
+      "source_kind": "DERIVED_WITH_RAW_SOURCE",
+      "reproducible": false,
+      "append_only": true,
+      "retention": "PERMANENT_NO_UNIQUE_SOURCE_DELETION",
+      "compression": "VERIFIED_GZIP_AND_CONTENT_ADDRESSED_OBJECTS",
+      "restart_behavior": "NEW_SESSION_OR_APPEND; ALL_PREVIOUS_REVISIONS_REMAIN",
+      "cutover_behavior": "IMMUTABLE_REVISION_STORE_OUTSIDE_RUN_ROOT",
+      "model_dependence": "EXPLICIT_IDENTITY_STRATA",
+      "identity_fields": {
+        "code_sha": "versioned session header / sidecar code identity",
+        "run_id": null,
+        "market_id": null,
+        "event_id": null,
+        "token_id": null,
+        "contract_family": null,
+        "asset": null,
+        "horizon": null,
+        "decision_id": null,
+        "opportunity_id": null,
+        "replay_key": null,
+        "order_id": null,
+        "fill_id": null,
+        "position_id": null,
+        "model_id": null,
+        "model_hash": null,
+        "model_family": null,
+        "feature_schema_version": null,
+        "policy_hash": null,
+        "config_hash": null,
+        "experiment_protocol_id": null,
+        "experiment_manifest_hash": null,
+        "exchange_timestamp": "versioned binary payload exchange-event field when available",
+        "receive_timestamp": "versioned binary receive monotonic/wall fields; decoder ABI must match schema",
+        "decision_timestamp": null,
+        "source_snapshot_id": "session manifest + segment + record byte offset; symbol/token handle requires matching immutable mapping"
+      },
+      "identity_mapping_semantics": "Candidate source fields, not a claim of historical completeness. Null: unavailable, unparsed or not applicable; source bytes preserved.",
+      "identity_distinctions": {
+        "execution_model": "metadata/opportunity execution model; never replaced by fair model",
+        "settlement_probability_model": "settlement_model or probability_model_id/hash",
+        "portfolio_risk_policy": "policy_hash/config_hash on decision envelope",
+        "research_protocol": "immutable experiment manifest, not code SHA"
+      }
+    },
+    {
+      "source_family": "oracle_rtds",
+      "patterns": [
+        "external_fair/rtds_events.jsonl*",
+        "external_fair/rtds_rejected_frames.jsonl*"
+      ],
+      "producer": "v7_rtds_external_fair_monitor.py",
+      "consumers": [
+        "settlement fair",
+        "reference verification",
+        "latency diagnostics"
+      ],
+      "schema": "RTDS enriched observations / polymarket_v7_rtds_rejected_frame_v1",
+      "topics": [
+        "Chainlink/oracle observations",
+        "Binance reference observations",
+        "reference price",
+        "observed latency",
+        "rejected frames"
+      ],
+      "timestamp_semantics": {
+        "exchange": "source exchange timestamp when provided; UNKNOWN otherwise",
+        "receive": "local wall and monotonic clock recorded at ingestion",
+        "decision": "NOT_APPLICABLE_TO_RAW_SOURCE",
+        "publication": "never substituted for causal receive time"
+      },
+      "source_kind": "CAUSAL_SOURCE",
+      "reproducible": false,
+      "append_only": true,
+      "retention": "PERMANENT_NO_UNIQUE_SOURCE_DELETION",
+      "compression": "VERIFIED_GZIP_AND_CONTENT_ADDRESSED_OBJECTS",
+      "restart_behavior": "NEW_SESSION_OR_APPEND; ALL_PREVIOUS_REVISIONS_REMAIN",
+      "cutover_behavior": "IMMUTABLE_REVISION_STORE_OUTSIDE_RUN_ROOT",
+      "model_dependence": "MODEL_INDEPENDENT_RAW",
+      "identity_fields": {
+        "code_sha": null,
+        "run_id": null,
+        "market_id": null,
+        "event_id": null,
+        "token_id": null,
+        "contract_family": null,
+        "asset": null,
+        "horizon": null,
+        "decision_id": null,
+        "opportunity_id": null,
+        "replay_key": null,
+        "order_id": null,
+        "fill_id": null,
+        "position_id": null,
+        "model_id": null,
+        "model_hash": null,
+        "model_family": null,
+        "feature_schema_version": null,
+        "policy_hash": null,
+        "config_hash": null,
+        "experiment_protocol_id": null,
+        "experiment_manifest_hash": null,
+        "exchange_timestamp": null,
+        "receive_timestamp": null,
+        "decision_timestamp": null,
+        "source_snapshot_id": null
+      },
+      "identity_mapping_semantics": "Candidate source fields, not a claim of historical completeness. Null: unavailable, unparsed or not applicable; source bytes preserved.",
+      "identity_distinctions": {
+        "execution_model": "metadata/opportunity execution model; never replaced by fair model",
+        "settlement_probability_model": "settlement_model or probability_model_id/hash",
+        "portfolio_risk_policy": "policy_hash/config_hash on decision envelope",
+        "research_protocol": "immutable experiment manifest, not code SHA"
+      }
+    },
+    {
+      "source_family": "derivative_rest",
+      "patterns": [
+        "external_fair/binance_usdm_rest.jsonl*",
+        "external_fair/deribit_rest.jsonl*",
+        "external_fair/coinbase_l2_rest.jsonl*"
+      ],
+      "producer": "existing Binance/Deribit/Coinbase REST observers",
+      "consumers": [
+        "rich contextual_features",
+        "future feature reconstruction"
+      ],
+      "schema": "versioned REST observation envelopes with request/receive clocks and raw responses",
+      "topics": [
+        "Deribit options surface",
+        "funding",
+        "basis",
+        "open interest",
+        "OI velocity",
+        "Coinbase L2",
+        "implied volatility"
+      ],
+      "timestamp_semantics": {
+        "exchange": "source exchange timestamp when provided; UNKNOWN otherwise",
+        "receive": "local wall and monotonic clock recorded at ingestion",
+        "decision": "NOT_APPLICABLE_TO_RAW_SOURCE",
+        "publication": "never substituted for causal receive time"
+      },
+      "source_kind": "CAUSAL_SOURCE",
+      "reproducible": false,
+      "append_only": true,
+      "retention": "PERMANENT_NO_UNIQUE_SOURCE_DELETION",
+      "compression": "VERIFIED_GZIP_AND_CONTENT_ADDRESSED_OBJECTS",
+      "restart_behavior": "NEW_SESSION_OR_APPEND; ALL_PREVIOUS_REVISIONS_REMAIN",
+      "cutover_behavior": "IMMUTABLE_REVISION_STORE_OUTSIDE_RUN_ROOT",
+      "model_dependence": "MODEL_INDEPENDENT_RAW",
+      "identity_fields": {
+        "code_sha": null,
+        "run_id": null,
+        "market_id": null,
+        "event_id": null,
+        "token_id": null,
+        "contract_family": null,
+        "asset": null,
+        "horizon": null,
+        "decision_id": null,
+        "opportunity_id": null,
+        "replay_key": null,
+        "order_id": null,
+        "fill_id": null,
+        "position_id": null,
+        "model_id": null,
+        "model_hash": null,
+        "model_family": null,
+        "feature_schema_version": null,
+        "policy_hash": null,
+        "config_hash": null,
+        "experiment_protocol_id": null,
+        "experiment_manifest_hash": null,
+        "exchange_timestamp": null,
+        "receive_timestamp": null,
+        "decision_timestamp": null,
+        "source_snapshot_id": null
+      },
+      "identity_mapping_semantics": "Candidate source fields, not a claim of historical completeness. Null: unavailable, unparsed or not applicable; source bytes preserved.",
+      "identity_distinctions": {
+        "execution_model": "metadata/opportunity execution model; never replaced by fair model",
+        "settlement_probability_model": "settlement_model or probability_model_id/hash",
+        "portfolio_risk_policy": "policy_hash/config_hash on decision envelope",
+        "research_protocol": "immutable experiment manifest, not code SHA"
+      }
+    },
+    {
+      "source_family": "fair_predictions",
+      "patterns": [
+        "external_fair/counterfactuals.jsonl*"
+      ],
+      "producer": "v7_external_fair_paper_router.py",
+      "consumers": [
+        "maturity",
+        "offline benchmark",
+        "signal dataset"
+      ],
+      "schema": "versioned FORECAST, OPPORTUNITY_SET, VIRTUAL_FILL, VIRTUAL_FINAL records",
+      "topics": [
+        "PM probabilities",
+        "reference price",
+        "model predictions",
+        "uncertainty",
+        "TTE",
+        "settlement labels",
+        "counterfactual execution experiments",
+        "raw causal feature cuts"
+      ],
+      "timestamp_semantics": {
+        "exchange": "exchange_ts_ms if provided",
+        "receive": "receive_ts_ms",
+        "decision": "decision_ts_ms or same-decision metadata; UNKNOWN when absent",
+        "publication": "recorded_ts_ms is ledger publication, not decision time"
+      },
+      "source_kind": "RESEARCH_OBSERVATION",
+      "reproducible": false,
+      "append_only": true,
+      "retention": "PERMANENT_NO_UNIQUE_SOURCE_DELETION",
+      "compression": "VERIFIED_GZIP_AND_CONTENT_ADDRESSED_OBJECTS",
+      "restart_behavior": "NEW_SESSION_OR_APPEND; ALL_PREVIOUS_REVISIONS_REMAIN",
+      "cutover_behavior": "IMMUTABLE_REVISION_STORE_OUTSIDE_RUN_ROOT",
+      "model_dependence": "EXPLICIT_IDENTITY_STRATA",
+      "identity_fields": {
+        "code_sha": "model_sha OR code_sha",
+        "run_id": null,
+        "market_id": "market_id",
+        "event_id": "event_id when recorded",
+        "token_id": "token_id OR yes_token/no_token",
+        "contract_family": null,
+        "asset": null,
+        "horizon": null,
+        "decision_id": null,
+        "opportunity_id": null,
+        "replay_key": null,
+        "order_id": null,
+        "fill_id": null,
+        "position_id": null,
+        "model_id": "probability_model_id OR model_id",
+        "model_hash": "probability_model_hash OR model_hash; immutable manifest.frozen_model_hash",
+        "model_family": null,
+        "feature_schema_version": "feature_schema_version OR evidence_semantics_version; legacy absence remains unknown",
+        "policy_hash": "policy_sha256 when recorded",
+        "config_hash": null,
+        "experiment_protocol_id": "experiment_protocol_id OR manifest.protocol.protocol_id",
+        "experiment_manifest_hash": "manifest_sha256",
+        "exchange_timestamp": "origin_book.exchange_event_ns OR origin/label exchange timestamps when recorded",
+        "receive_timestamp": "origin_ns OR origin_observed_wall_ns OR observed_ms; target cut receive clocks separately",
+        "decision_timestamp": "decision_ts_ms when recorded",
+        "source_snapshot_id": "origin_id OR forecast_id OR selection_key; feature_sha256/rich_feature_sha256 and exact book cuts"
+      },
+      "identity_mapping_semantics": "Candidate source fields, not a claim of historical completeness. Null: unavailable, unparsed or not applicable; source bytes preserved.",
+      "identity_distinctions": {
+        "execution_model": "metadata/opportunity execution model; never replaced by fair model",
+        "settlement_probability_model": "settlement_model or probability_model_id/hash",
+        "portfolio_risk_policy": "policy_hash/config_hash on decision envelope",
+        "research_protocol": "immutable experiment manifest, not code SHA"
+      }
+    },
+    {
+      "source_family": "lead_lag",
+      "patterns": [
+        "external_fair/pm_lead_lag.jsonl*"
+      ],
+      "producer": "v7_external_lead_lag_collector.py",
+      "consumers": [
+        "lead-lag research",
+        "PM response dataset"
+      ],
+      "schema": "polymarket_v7_external_pm_lead_lag_origin_v1 + observation_v1; immutable origin hash references; legacy full rows retained",
+      "topics": [
+        "signal-delay experiments",
+        "PM response",
+        "model-independent raw causal cuts",
+        "fixed external features",
+        "market movement"
+      ],
+      "timestamp_semantics": {
+        "exchange": "source exchange timestamp when provided; UNKNOWN otherwise",
+        "receive": "local wall and monotonic clock recorded at ingestion",
+        "decision": "NOT_APPLICABLE_TO_RAW_SOURCE",
+        "publication": "never substituted for causal receive time"
+      },
+      "source_kind": "RESEARCH_OBSERVATION",
+      "reproducible": false,
+      "append_only": true,
+      "retention": "PERMANENT_NO_UNIQUE_SOURCE_DELETION",
+      "compression": "VERIFIED_GZIP_AND_CONTENT_ADDRESSED_OBJECTS",
+      "restart_behavior": "NEW_SESSION_OR_APPEND; ALL_PREVIOUS_REVISIONS_REMAIN",
+      "cutover_behavior": "IMMUTABLE_REVISION_STORE_OUTSIDE_RUN_ROOT",
+      "model_dependence": "EXPLICIT_IDENTITY_STRATA",
+      "identity_fields": {
+        "code_sha": "model_sha OR code_sha",
+        "run_id": null,
+        "market_id": "market_id",
+        "event_id": "event_id when recorded",
+        "token_id": "token_id OR yes_token/no_token",
+        "contract_family": null,
+        "asset": null,
+        "horizon": null,
+        "decision_id": null,
+        "opportunity_id": null,
+        "replay_key": null,
+        "order_id": null,
+        "fill_id": null,
+        "position_id": null,
+        "model_id": "probability_model_id OR model_id",
+        "model_hash": "probability_model_hash OR model_hash; immutable manifest.frozen_model_hash",
+        "model_family": null,
+        "feature_schema_version": "feature_schema_version OR evidence_semantics_version; legacy absence remains unknown",
+        "policy_hash": "policy_sha256 when recorded",
+        "config_hash": null,
+        "experiment_protocol_id": "experiment_protocol_id OR manifest.protocol.protocol_id",
+        "experiment_manifest_hash": "manifest_sha256",
+        "exchange_timestamp": "origin_book.exchange_event_ns OR origin/label exchange timestamps when recorded",
+        "receive_timestamp": "origin_ns OR origin_observed_wall_ns OR observed_ms; target cut receive clocks separately",
+        "decision_timestamp": "decision_ts_ms when recorded",
+        "source_snapshot_id": "origin_id OR forecast_id OR selection_key; feature_sha256/rich_feature_sha256 and exact book cuts"
+      },
+      "identity_mapping_semantics": "Candidate source fields, not a claim of historical completeness. Null: unavailable, unparsed or not applicable; source bytes preserved.",
+      "identity_distinctions": {
+        "execution_model": "metadata/opportunity execution model; never replaced by fair model",
+        "settlement_probability_model": "settlement_model or probability_model_id/hash",
+        "portfolio_risk_policy": "policy_hash/config_hash on decision envelope",
+        "research_protocol": "immutable experiment manifest, not code SHA"
+      }
+    },
+    {
+      "source_family": "profit_experiments",
+      "patterns": [
+        "profit_experiments/**/observations.jsonl*",
+        "profit_experiments/**/manifest.json",
+        "profit_experiments/**/sources/*.json.gz",
+        "profit_experiments/**/settlements.json"
+      ],
+      "producer": "existing profit collector / report loop",
+      "consumers": [
+        "profit report",
+        "cross-cohort permanent analysis"
+      ],
+      "schema": "profit observation/manifest/source/settlement schemas, explicitly protocol stratified",
+      "topics": [
+        "signal-delay experiments",
+        "counterfactual execution experiments",
+        "settlement labels",
+        "model predictions",
+        "uncertainty",
+        "Maker paired arms"
+      ],
+      "timestamp_semantics": {
+        "exchange": "source exchange timestamp when provided; UNKNOWN otherwise",
+        "receive": "local wall and monotonic clock recorded at ingestion",
+        "decision": "NOT_APPLICABLE_TO_RAW_SOURCE",
+        "publication": "never substituted for causal receive time"
+      },
+      "source_kind": "RESEARCH_OBSERVATION",
+      "reproducible": false,
+      "append_only": true,
+      "retention": "PERMANENT_NO_UNIQUE_SOURCE_DELETION",
+      "compression": "VERIFIED_GZIP_AND_CONTENT_ADDRESSED_OBJECTS",
+      "restart_behavior": "NEW_SESSION_OR_APPEND; ALL_PREVIOUS_REVISIONS_REMAIN",
+      "cutover_behavior": "IMMUTABLE_REVISION_STORE_OUTSIDE_RUN_ROOT",
+      "model_dependence": "EXPLICIT_IDENTITY_STRATA",
+      "identity_fields": {
+        "code_sha": "model_sha OR code_sha",
+        "run_id": null,
+        "market_id": "market_id",
+        "event_id": "event_id when recorded",
+        "token_id": "token_id OR yes_token/no_token",
+        "contract_family": null,
+        "asset": null,
+        "horizon": null,
+        "decision_id": null,
+        "opportunity_id": null,
+        "replay_key": null,
+        "order_id": null,
+        "fill_id": null,
+        "position_id": null,
+        "model_id": "probability_model_id OR model_id",
+        "model_hash": "probability_model_hash OR model_hash; immutable manifest.frozen_model_hash",
+        "model_family": null,
+        "feature_schema_version": "feature_schema_version OR evidence_semantics_version; legacy absence remains unknown",
+        "policy_hash": "policy_sha256 when recorded",
+        "config_hash": null,
+        "experiment_protocol_id": "experiment_protocol_id OR manifest.protocol.protocol_id",
+        "experiment_manifest_hash": "manifest_sha256",
+        "exchange_timestamp": "origin_book.exchange_event_ns OR origin/label exchange timestamps when recorded",
+        "receive_timestamp": "origin_ns OR origin_observed_wall_ns OR observed_ms; target cut receive clocks separately",
+        "decision_timestamp": "decision_ts_ms when recorded",
+        "source_snapshot_id": "origin_id OR forecast_id OR selection_key; feature_sha256/rich_feature_sha256 and exact book cuts"
+      },
+      "identity_mapping_semantics": "Candidate source fields, not a claim of historical completeness. Null: unavailable, unparsed or not applicable; source bytes preserved.",
+      "identity_distinctions": {
+        "execution_model": "metadata/opportunity execution model; never replaced by fair model",
+        "settlement_probability_model": "settlement_model or probability_model_id/hash",
+        "portfolio_risk_policy": "policy_hash/config_hash on decision envelope",
+        "research_protocol": "immutable experiment manifest, not code SHA"
+      }
+    },
+    {
+      "source_family": "coordinator_decisions",
+      "patterns": [
+        "coordinator/decisions.jsonl*",
+        "global_portfolio/decisions.jsonl*",
+        "control/decisions.jsonl*",
+        "opportunities/decisions.jsonl*"
+      ],
+      "producer": "v7_global_portfolio_coordinator.py",
+      "consumers": [
+        "opportunity funnel",
+        "authorization attribution"
+      ],
+      "schema": "polymarket_v7_global_opportunity_decision_v1",
+      "topics": [
+        "coordinator decisions",
+        "portfolio selection",
+        "opportunity envelopes",
+        "authorization attempts"
+      ],
+      "timestamp_semantics": {
+        "exchange": "exchange_ts_ms if provided",
+        "receive": "receive_ts_ms",
+        "decision": "decision_ts_ms or same-decision metadata; UNKNOWN when absent",
+        "publication": "recorded_ts_ms is ledger publication, not decision time"
+      },
+      "source_kind": "CANONICAL_DECISION_SOURCE",
+      "reproducible": false,
+      "append_only": true,
+      "retention": "PERMANENT_NO_UNIQUE_SOURCE_DELETION",
+      "compression": "VERIFIED_GZIP_AND_CONTENT_ADDRESSED_OBJECTS",
+      "restart_behavior": "NEW_SESSION_OR_APPEND; ALL_PREVIOUS_REVISIONS_REMAIN",
+      "cutover_behavior": "IMMUTABLE_REVISION_STORE_OUTSIDE_RUN_ROOT",
+      "model_dependence": "EXPLICIT_IDENTITY_STRATA",
+      "identity_fields": {
+        "code_sha": "model_sha OR opportunity_inputs[].model_sha",
+        "run_id": "run_id when present",
+        "market_id": "market_id OR opportunity_inputs[].market_id",
+        "event_id": null,
+        "token_id": "token_id OR opportunity_inputs[].token_id",
+        "contract_family": "crypto_context.contract_family",
+        "asset": "crypto_context.asset",
+        "horizon": "crypto_context.horizon",
+        "decision_id": null,
+        "opportunity_id": null,
+        "replay_key": "replay_key OR deterministic_replay_key OR opportunity_inputs[].replay_key",
+        "order_id": null,
+        "fill_id": null,
+        "position_id": null,
+        "model_id": "settlement_model.model_id",
+        "model_hash": "settlement_model.model_hash",
+        "model_family": null,
+        "feature_schema_version": null,
+        "policy_hash": "policy_hash",
+        "config_hash": "config_hash",
+        "experiment_protocol_id": null,
+        "experiment_manifest_hash": null,
+        "exchange_timestamp": null,
+        "receive_timestamp": null,
+        "decision_timestamp": "decision_timestamp_ns OR decision_receive_timestamp_ns",
+        "source_snapshot_id": "source_snapshot_identity OR opportunity_inputs[].source_snapshot_identity"
+      },
+      "identity_mapping_semantics": "Candidate source fields, not a claim of historical completeness. Null: unavailable, unparsed or not applicable; source bytes preserved.",
+      "identity_distinctions": {
+        "execution_model": "metadata/opportunity execution model; never replaced by fair model",
+        "settlement_probability_model": "settlement_model or probability_model_id/hash",
+        "portfolio_risk_policy": "policy_hash/config_hash on decision envelope",
+        "research_protocol": "immutable experiment manifest, not code SHA"
+      }
+    },
+    {
+      "source_family": "authorization",
+      "patterns": [
+        "opportunities/authorization_publications.jsonl*",
+        "micro_maker/authorization_attempts.jsonl*",
+        "micro_maker/authorized_make/*.json",
+        "micro_maker/authorized_cancel/*.json",
+        "opportunities/**/*.json",
+        "spool/**/*.json"
+      ],
+      "producer": "coordinator / authorization receipt consumers",
+      "consumers": [
+        "single ledger writer",
+        "opportunity funnel"
+      ],
+      "schema": "typed V7 opportunity/receipt/canonical spool envelopes",
+      "topics": [
+        "authorization attempts",
+        "rejected authorizations and rejection reasons",
+        "opportunity envelopes"
+      ],
+      "timestamp_semantics": {
+        "exchange": "exchange_ts_ms if provided",
+        "receive": "receive_ts_ms",
+        "decision": "decision_ts_ms or same-decision metadata; UNKNOWN when absent",
+        "publication": "recorded_ts_ms is ledger publication, not decision time"
+      },
+      "source_kind": "CANONICAL_DECISION_SOURCE",
+      "reproducible": false,
+      "append_only": true,
+      "retention": "PERMANENT_NO_UNIQUE_SOURCE_DELETION",
+      "compression": "VERIFIED_GZIP_AND_CONTENT_ADDRESSED_OBJECTS",
+      "restart_behavior": "NEW_SESSION_OR_APPEND; ALL_PREVIOUS_REVISIONS_REMAIN",
+      "cutover_behavior": "IMMUTABLE_REVISION_STORE_OUTSIDE_RUN_ROOT",
+      "model_dependence": "EXPLICIT_IDENTITY_STRATA",
+      "identity_fields": {
+        "code_sha": "model_sha OR opportunity_inputs[].model_sha",
+        "run_id": "run_id when present",
+        "market_id": "market_id OR opportunity_inputs[].market_id",
+        "event_id": null,
+        "token_id": "token_id OR opportunity_inputs[].token_id",
+        "contract_family": "crypto_context.contract_family",
+        "asset": "crypto_context.asset",
+        "horizon": "crypto_context.horizon",
+        "decision_id": null,
+        "opportunity_id": null,
+        "replay_key": "replay_key OR deterministic_replay_key OR opportunity_inputs[].replay_key",
+        "order_id": null,
+        "fill_id": null,
+        "position_id": null,
+        "model_id": "settlement_model.model_id",
+        "model_hash": "settlement_model.model_hash",
+        "model_family": null,
+        "feature_schema_version": null,
+        "policy_hash": "policy_hash",
+        "config_hash": "config_hash",
+        "experiment_protocol_id": null,
+        "experiment_manifest_hash": null,
+        "exchange_timestamp": null,
+        "receive_timestamp": null,
+        "decision_timestamp": "decision_timestamp_ns OR decision_receive_timestamp_ns",
+        "source_snapshot_id": "source_snapshot_identity OR opportunity_inputs[].source_snapshot_identity"
+      },
+      "identity_mapping_semantics": "Candidate source fields, not a claim of historical completeness. Null: unavailable, unparsed or not applicable; source bytes preserved.",
+      "identity_distinctions": {
+        "execution_model": "metadata/opportunity execution model; never replaced by fair model",
+        "settlement_probability_model": "settlement_model or probability_model_id/hash",
+        "portfolio_risk_policy": "policy_hash/config_hash on decision envelope",
+        "research_protocol": "immutable experiment manifest, not code SHA"
+      }
+    },
+    {
+      "source_family": "maker_learning",
+      "patterns": [
+        "micro_maker/research_evidence.jsonl*",
+        "micro_maker/evidence.jsonl*",
+        "micro_maker/execution_model.json",
+        "micro_maker/book_features/*.json"
+      ],
+      "producer": "Maker observer / v7_maker_durable_learning.py",
+      "consumers": [
+        "placement model",
+        "execution dataset"
+      ],
+      "schema": "versioned placement features and current-run model; underlying raw observations retained",
+      "topics": [
+        "fillability data",
+        "queue estimates",
+        "placement action",
+        "fill probability",
+        "feature freshness"
+      ],
+      "timestamp_semantics": {
+        "exchange": "source exchange timestamp when provided; UNKNOWN otherwise",
+        "receive": "local wall and monotonic clock recorded at ingestion",
+        "decision": "NOT_APPLICABLE_TO_RAW_SOURCE",
+        "publication": "never substituted for causal receive time"
+      },
+      "source_kind": "DERIVED_MODEL_OR_FEATURE",
+      "reproducible": false,
+      "append_only": false,
+      "retention": "PERMANENT_NO_UNIQUE_SOURCE_DELETION",
+      "compression": "VERIFIED_GZIP_AND_CONTENT_ADDRESSED_OBJECTS",
+      "restart_behavior": "NEW_SESSION_OR_APPEND; ALL_PREVIOUS_REVISIONS_REMAIN",
+      "cutover_behavior": "IMMUTABLE_REVISION_STORE_OUTSIDE_RUN_ROOT",
+      "model_dependence": "EXPLICIT_IDENTITY_STRATA",
+      "identity_fields": {
+        "code_sha": "model_sha",
+        "run_id": "metadata.opportunity_envelope.run_id",
+        "market_id": "market_id",
+        "event_id": "event_id",
+        "token_id": "token_id",
+        "contract_family": "metadata.opportunity_envelope.crypto_context.contract_family",
+        "asset": "metadata.opportunity_envelope.crypto_context.asset",
+        "horizon": "metadata.opportunity_envelope.crypto_context.horizon",
+        "decision_id": null,
+        "opportunity_id": "opportunity_id",
+        "replay_key": "metadata.opportunity_replay_key OR metadata.opportunity_envelope.deterministic_replay_key; Taker: exact embedded coordinator_receipt join",
+        "order_id": "order_id",
+        "fill_id": "fill_id",
+        "position_id": "position_id",
+        "model_id": "metadata.opportunity_envelope.settlement_model.model_id OR metadata.decision_probability_model_id",
+        "model_hash": "metadata.opportunity_envelope.settlement_model.model_hash OR metadata.decision_probability_model_hash",
+        "model_family": "metadata.model_family",
+        "feature_schema_version": "metadata.placement_features_schema",
+        "policy_hash": "metadata.opportunity_envelope.policy_hash (portfolio); metadata.policy_hash (execution)",
+        "config_hash": "metadata.opportunity_envelope.config_hash (portfolio); metadata.config_hash (execution)",
+        "experiment_protocol_id": null,
+        "experiment_manifest_hash": null,
+        "exchange_timestamp": "exchange_ts_ms",
+        "receive_timestamp": "receive_ts_ms",
+        "decision_timestamp": "decision_ts_ms",
+        "source_snapshot_id": "book_snapshot_id; metadata.placement_features_snapshot_id"
+      },
+      "identity_mapping_semantics": "Candidate source fields, not a claim of historical completeness. Null: unavailable, unparsed or not applicable; source bytes preserved.",
+      "identity_distinctions": {
+        "execution_model": "metadata/opportunity execution model; never replaced by fair model",
+        "settlement_probability_model": "settlement_model or probability_model_id/hash",
+        "portfolio_risk_policy": "policy_hash/config_hash on decision envelope",
+        "research_protocol": "immutable experiment manifest, not code SHA"
+      }
+    },
+    {
+      "source_family": "markouts",
+      "patterns": [
+        "research/evidence/maker_markout/*.json",
+        "micro_maker/markout*.jsonl*"
+      ],
+      "producer": "polymarket_v7_maker_markout_observer",
+      "consumers": [
+        "attribution",
+        "adverse selection analysis"
+      ],
+      "schema": "exact fill-id joined MARKOUT research evidence",
+      "topics": [
+        "markouts",
+        "fill-conditioned execution prices"
+      ],
+      "timestamp_semantics": {
+        "exchange": "source exchange timestamp when provided; UNKNOWN otherwise",
+        "receive": "local wall and monotonic clock recorded at ingestion",
+        "decision": "NOT_APPLICABLE_TO_RAW_SOURCE",
+        "publication": "never substituted for causal receive time"
+      },
+      "source_kind": "RESEARCH_OBSERVATION",
+      "reproducible": false,
+      "append_only": true,
+      "retention": "PERMANENT_NO_UNIQUE_SOURCE_DELETION",
+      "compression": "VERIFIED_GZIP_AND_CONTENT_ADDRESSED_OBJECTS",
+      "restart_behavior": "NEW_SESSION_OR_APPEND; ALL_PREVIOUS_REVISIONS_REMAIN",
+      "cutover_behavior": "IMMUTABLE_REVISION_STORE_OUTSIDE_RUN_ROOT",
+      "model_dependence": "EXPLICIT_IDENTITY_STRATA",
+      "identity_fields": {
+        "code_sha": "model_sha",
+        "run_id": "metadata.opportunity_envelope.run_id",
+        "market_id": "market_id",
+        "event_id": "event_id",
+        "token_id": "token_id",
+        "contract_family": "metadata.opportunity_envelope.crypto_context.contract_family",
+        "asset": "metadata.opportunity_envelope.crypto_context.asset",
+        "horizon": "metadata.opportunity_envelope.crypto_context.horizon",
+        "decision_id": null,
+        "opportunity_id": "opportunity_id",
+        "replay_key": "metadata.opportunity_replay_key OR metadata.opportunity_envelope.deterministic_replay_key; Taker: exact embedded coordinator_receipt join",
+        "order_id": "order_id",
+        "fill_id": "fill_id",
+        "position_id": "position_id",
+        "model_id": "metadata.opportunity_envelope.settlement_model.model_id OR metadata.decision_probability_model_id",
+        "model_hash": "metadata.opportunity_envelope.settlement_model.model_hash OR metadata.decision_probability_model_hash",
+        "model_family": "metadata.model_family",
+        "feature_schema_version": "metadata.placement_features_schema",
+        "policy_hash": "metadata.opportunity_envelope.policy_hash (portfolio); metadata.policy_hash (execution)",
+        "config_hash": "metadata.opportunity_envelope.config_hash (portfolio); metadata.config_hash (execution)",
+        "experiment_protocol_id": null,
+        "experiment_manifest_hash": null,
+        "exchange_timestamp": "exchange_ts_ms",
+        "receive_timestamp": "receive_ts_ms",
+        "decision_timestamp": "decision_ts_ms",
+        "source_snapshot_id": "book_snapshot_id; metadata.placement_features_snapshot_id"
+      },
+      "identity_mapping_semantics": "Candidate source fields, not a claim of historical completeness. Null: unavailable, unparsed or not applicable; source bytes preserved.",
+      "identity_distinctions": {
+        "execution_model": "metadata/opportunity execution model; never replaced by fair model",
+        "settlement_probability_model": "settlement_model or probability_model_id/hash",
+        "portfolio_risk_policy": "policy_hash/config_hash on decision envelope",
+        "research_protocol": "immutable experiment manifest, not code SHA"
+      }
+    },
+    {
+      "source_family": "latency",
+      "patterns": [
+        "micro_maker/latency.csv*",
+        "latency/*.json*",
+        "latency/*.csv*"
+      ],
+      "producer": "native observed latency producers",
+      "consumers": [
+        "latency gates",
+        "decision-chain diagnostics"
+      ],
+      "schema": "versioned latency evidence; configured constants separately ineligible",
+      "topics": [
+        "observed latency",
+        "decision-to-arrival chain"
+      ],
+      "timestamp_semantics": {
+        "exchange": "source exchange timestamp when provided; UNKNOWN otherwise",
+        "receive": "local wall and monotonic clock recorded at ingestion",
+        "decision": "NOT_APPLICABLE_TO_RAW_SOURCE",
+        "publication": "never substituted for causal receive time"
+      },
+      "source_kind": "CAUSAL_SOURCE",
+      "reproducible": false,
+      "append_only": true,
+      "retention": "PERMANENT_NO_UNIQUE_SOURCE_DELETION",
+      "compression": "VERIFIED_GZIP_AND_CONTENT_ADDRESSED_OBJECTS",
+      "restart_behavior": "NEW_SESSION_OR_APPEND; ALL_PREVIOUS_REVISIONS_REMAIN",
+      "cutover_behavior": "IMMUTABLE_REVISION_STORE_OUTSIDE_RUN_ROOT",
+      "model_dependence": "MODEL_INDEPENDENT_RAW",
+      "identity_fields": {
+        "code_sha": null,
+        "run_id": null,
+        "market_id": null,
+        "event_id": null,
+        "token_id": null,
+        "contract_family": null,
+        "asset": null,
+        "horizon": null,
+        "decision_id": null,
+        "opportunity_id": null,
+        "replay_key": null,
+        "order_id": null,
+        "fill_id": null,
+        "position_id": null,
+        "model_id": null,
+        "model_hash": null,
+        "model_family": null,
+        "feature_schema_version": null,
+        "policy_hash": null,
+        "config_hash": null,
+        "experiment_protocol_id": null,
+        "experiment_manifest_hash": null,
+        "exchange_timestamp": null,
+        "receive_timestamp": null,
+        "decision_timestamp": null,
+        "source_snapshot_id": null
+      },
+      "identity_mapping_semantics": "Candidate source fields, not a claim of historical completeness. Null: unavailable, unparsed or not applicable; source bytes preserved.",
+      "identity_distinctions": {
+        "execution_model": "metadata/opportunity execution model; never replaced by fair model",
+        "settlement_probability_model": "settlement_model or probability_model_id/hash",
+        "portfolio_risk_policy": "policy_hash/config_hash on decision envelope",
+        "research_protocol": "immutable experiment manifest, not code SHA"
+      }
+    },
+    {
+      "source_family": "point_in_time_universe",
+      "patterns": [
+        "universe_snapshots/*.json.gz",
+        "universe/*.json",
+        "universe/*.jsonl*",
+        "structural_relations/*.csv"
+      ],
+      "producer": "universe archiver / adaptive universe / structural scanner",
+      "consumers": [
+        "market selection",
+        "historical opportunity universe"
+      ],
+      "schema": "polymarket_v7_point_in_time_universe_v2 and versioned selection/relations schemas",
+      "topics": [
+        "market selection",
+        "market/event/token identity",
+        "liquidity",
+        "spread"
+      ],
+      "timestamp_semantics": {
+        "exchange": "source exchange timestamp when provided; UNKNOWN otherwise",
+        "receive": "local wall and monotonic clock recorded at ingestion",
+        "decision": "NOT_APPLICABLE_TO_RAW_SOURCE",
+        "publication": "never substituted for causal receive time"
+      },
+      "source_kind": "POINT_IN_TIME_SOURCE",
+      "reproducible": false,
+      "append_only": false,
+      "retention": "PERMANENT_NO_UNIQUE_SOURCE_DELETION",
+      "compression": "VERIFIED_GZIP_AND_CONTENT_ADDRESSED_OBJECTS",
+      "restart_behavior": "NEW_SESSION_OR_APPEND; ALL_PREVIOUS_REVISIONS_REMAIN",
+      "cutover_behavior": "IMMUTABLE_REVISION_STORE_OUTSIDE_RUN_ROOT",
+      "model_dependence": "EXPLICIT_IDENTITY_STRATA",
+      "identity_fields": {
+        "code_sha": null,
+        "run_id": null,
+        "market_id": null,
+        "event_id": null,
+        "token_id": null,
+        "contract_family": null,
+        "asset": null,
+        "horizon": null,
+        "decision_id": null,
+        "opportunity_id": null,
+        "replay_key": null,
+        "order_id": null,
+        "fill_id": null,
+        "position_id": null,
+        "model_id": null,
+        "model_hash": null,
+        "model_family": null,
+        "feature_schema_version": null,
+        "policy_hash": null,
+        "config_hash": null,
+        "experiment_protocol_id": null,
+        "experiment_manifest_hash": null,
+        "exchange_timestamp": null,
+        "receive_timestamp": null,
+        "decision_timestamp": null,
+        "source_snapshot_id": null
+      },
+      "identity_mapping_semantics": "Candidate source fields, not a claim of historical completeness. Null: unavailable, unparsed or not applicable; source bytes preserved.",
+      "identity_distinctions": {
+        "execution_model": "metadata/opportunity execution model; never replaced by fair model",
+        "settlement_probability_model": "settlement_model or probability_model_id/hash",
+        "portfolio_risk_policy": "policy_hash/config_hash on decision envelope",
+        "research_protocol": "immutable experiment manifest, not code SHA"
+      }
+    },
+    {
+      "source_family": "policies_models",
+      "patterns": [
+        "models/**/*",
+        "control/fee_reward_registry.json",
+        "control/external_source_registry.json",
+        "control/*snapshot*.json",
+        "control/allocations/*.json",
+        "control/crypto*json"
+      ],
+      "producer": "checked-in models and policy/registry projections",
+      "consumers": [
+        "fair/portfolio/risk",
+        "source provenance"
+      ],
+      "schema": "explicit model/feature/policy/config/registry schema and hashes",
+      "topics": [
+        "fee schedules",
+        "model identity",
+        "policy identity",
+        "config identity",
+        "risk state"
+      ],
+      "timestamp_semantics": {
+        "exchange": "exchange_ts_ms if provided",
+        "receive": "receive_ts_ms",
+        "decision": "decision_ts_ms or same-decision metadata; UNKNOWN when absent",
+        "publication": "recorded_ts_ms is ledger publication, not decision time"
+      },
+      "source_kind": "POINT_IN_TIME_SOURCE",
+      "reproducible": false,
+      "append_only": false,
+      "retention": "PERMANENT_NO_UNIQUE_SOURCE_DELETION",
+      "compression": "VERIFIED_GZIP_AND_CONTENT_ADDRESSED_OBJECTS",
+      "restart_behavior": "NEW_SESSION_OR_APPEND; ALL_PREVIOUS_REVISIONS_REMAIN",
+      "cutover_behavior": "IMMUTABLE_REVISION_STORE_OUTSIDE_RUN_ROOT",
+      "model_dependence": "EXPLICIT_IDENTITY_STRATA",
+      "identity_fields": {
+        "code_sha": null,
+        "run_id": null,
+        "market_id": null,
+        "event_id": null,
+        "token_id": null,
+        "contract_family": null,
+        "asset": null,
+        "horizon": null,
+        "decision_id": null,
+        "opportunity_id": null,
+        "replay_key": null,
+        "order_id": null,
+        "fill_id": null,
+        "position_id": null,
+        "model_id": null,
+        "model_hash": null,
+        "model_family": null,
+        "feature_schema_version": null,
+        "policy_hash": null,
+        "config_hash": null,
+        "experiment_protocol_id": null,
+        "experiment_manifest_hash": null,
+        "exchange_timestamp": null,
+        "receive_timestamp": null,
+        "decision_timestamp": null,
+        "source_snapshot_id": null
+      },
+      "identity_mapping_semantics": "Candidate source fields, not a claim of historical completeness. Null: unavailable, unparsed or not applicable; source bytes preserved.",
+      "identity_distinctions": {
+        "execution_model": "metadata/opportunity execution model; never replaced by fair model",
+        "settlement_probability_model": "settlement_model or probability_model_id/hash",
+        "portfolio_risk_policy": "policy_hash/config_hash on decision envelope",
+        "research_protocol": "immutable experiment manifest, not code SHA"
+      }
+    },
+    {
+      "source_family": "structural_candidates",
+      "patterns": [
+        "fast_structural/*.csv*"
+      ],
+      "producer": "polymarket_v7_fast_structural_runtime",
+      "consumers": [
+        "structural research",
+        "latency diagnostics"
+      ],
+      "schema": "versioned structural opportunity/latency/error CSV",
+      "topics": [
+        "structural opportunities",
+        "fees",
+        "latency",
+        "market selection"
+      ],
+      "timestamp_semantics": {
+        "exchange": "exchange_ts_ms if provided",
+        "receive": "receive_ts_ms",
+        "decision": "decision_ts_ms or same-decision metadata; UNKNOWN when absent",
+        "publication": "recorded_ts_ms is ledger publication, not decision time"
+      },
+      "source_kind": "CANONICAL_DECISION_SOURCE",
+      "reproducible": false,
+      "append_only": true,
+      "retention": "PERMANENT_NO_UNIQUE_SOURCE_DELETION",
+      "compression": "VERIFIED_GZIP_AND_CONTENT_ADDRESSED_OBJECTS",
+      "restart_behavior": "NEW_SESSION_OR_APPEND; ALL_PREVIOUS_REVISIONS_REMAIN",
+      "cutover_behavior": "IMMUTABLE_REVISION_STORE_OUTSIDE_RUN_ROOT",
+      "model_dependence": "EXPLICIT_IDENTITY_STRATA",
+      "identity_fields": {
+        "code_sha": null,
+        "run_id": null,
+        "market_id": null,
+        "event_id": null,
+        "token_id": null,
+        "contract_family": null,
+        "asset": null,
+        "horizon": null,
+        "decision_id": null,
+        "opportunity_id": null,
+        "replay_key": null,
+        "order_id": null,
+        "fill_id": null,
+        "position_id": null,
+        "model_id": null,
+        "model_hash": null,
+        "model_family": null,
+        "feature_schema_version": null,
+        "policy_hash": null,
+        "config_hash": null,
+        "experiment_protocol_id": null,
+        "experiment_manifest_hash": null,
+        "exchange_timestamp": null,
+        "receive_timestamp": null,
+        "decision_timestamp": null,
+        "source_snapshot_id": null
+      },
+      "identity_mapping_semantics": "Candidate source fields, not a claim of historical completeness. Null: unavailable, unparsed or not applicable; source bytes preserved.",
+      "identity_distinctions": {
+        "execution_model": "metadata/opportunity execution model; never replaced by fair model",
+        "settlement_probability_model": "settlement_model or probability_model_id/hash",
+        "portfolio_risk_policy": "policy_hash/config_hash on decision envelope",
+        "research_protocol": "immutable experiment manifest, not code SHA"
+      }
+    },
+    {
+      "source_family": "quarantined_legacy",
+      "patterns": [
+        "external_cancel/quarantine/**/*"
+      ],
+      "producer": "legacy research collectors",
+      "consumers": [
+        "compatibility audit only"
+      ],
+      "schema": "legacy explicitly quarantined schemas",
+      "topics": [
+        "incompatible historical research evidence"
+      ],
+      "timestamp_semantics": {
+        "exchange": "source exchange timestamp when provided; UNKNOWN otherwise",
+        "receive": "local wall and monotonic clock recorded at ingestion",
+        "decision": "NOT_APPLICABLE_TO_RAW_SOURCE",
+        "publication": "never substituted for causal receive time"
+      },
+      "source_kind": "QUARANTINED_PRESERVED",
+      "reproducible": false,
+      "append_only": true,
+      "retention": "PERMANENT_NO_UNIQUE_SOURCE_DELETION",
+      "compression": "VERIFIED_GZIP_AND_CONTENT_ADDRESSED_OBJECTS",
+      "restart_behavior": "NEW_SESSION_OR_APPEND; ALL_PREVIOUS_REVISIONS_REMAIN",
+      "cutover_behavior": "IMMUTABLE_REVISION_STORE_OUTSIDE_RUN_ROOT",
+      "model_dependence": "EXPLICIT_IDENTITY_STRATA",
+      "identity_fields": {
+        "code_sha": null,
+        "run_id": null,
+        "market_id": null,
+        "event_id": null,
+        "token_id": null,
+        "contract_family": null,
+        "asset": null,
+        "horizon": null,
+        "decision_id": null,
+        "opportunity_id": null,
+        "replay_key": null,
+        "order_id": null,
+        "fill_id": null,
+        "position_id": null,
+        "model_id": null,
+        "model_hash": null,
+        "model_family": null,
+        "feature_schema_version": null,
+        "policy_hash": null,
+        "config_hash": null,
+        "experiment_protocol_id": null,
+        "experiment_manifest_hash": null,
+        "exchange_timestamp": null,
+        "receive_timestamp": null,
+        "decision_timestamp": null,
+        "source_snapshot_id": null
+      },
+      "identity_mapping_semantics": "Candidate source fields, not a claim of historical completeness. Null: unavailable, unparsed or not applicable; source bytes preserved.",
+      "identity_distinctions": {
+        "execution_model": "metadata/opportunity execution model; never replaced by fair model",
+        "settlement_probability_model": "settlement_model or probability_model_id/hash",
+        "portfolio_risk_policy": "policy_hash/config_hash on decision envelope",
+        "research_protocol": "immutable experiment manifest, not code SHA"
+      }
+    },
+    {
+      "source_family": "source_manifests",
+      "patterns": [
+        "*manifest*.jsonl",
+        "**/*manifest*.jsonl"
+      ],
+      "producer": "verified compression/evidence archiver",
+      "consumers": [
+        "recovery/provenance"
+      ],
+      "schema": "versioned immutable source compression records",
+      "topics": [
+        "checksums",
+        "source provenance"
+      ],
+      "timestamp_semantics": {
+        "exchange": "exchange_ts_ms if provided",
+        "receive": "receive_ts_ms",
+        "decision": "decision_ts_ms or same-decision metadata; UNKNOWN when absent",
+        "publication": "recorded_ts_ms is ledger publication, not decision time"
+      },
+      "source_kind": "SOURCE_PROVENANCE",
+      "reproducible": false,
+      "append_only": true,
+      "retention": "PERMANENT_NO_UNIQUE_SOURCE_DELETION",
+      "compression": "VERIFIED_GZIP_AND_CONTENT_ADDRESSED_OBJECTS",
+      "restart_behavior": "NEW_SESSION_OR_APPEND; ALL_PREVIOUS_REVISIONS_REMAIN",
+      "cutover_behavior": "IMMUTABLE_REVISION_STORE_OUTSIDE_RUN_ROOT",
+      "model_dependence": "EXPLICIT_IDENTITY_STRATA",
+      "identity_fields": {
+        "code_sha": null,
+        "run_id": null,
+        "market_id": null,
+        "event_id": null,
+        "token_id": null,
+        "contract_family": null,
+        "asset": null,
+        "horizon": null,
+        "decision_id": null,
+        "opportunity_id": null,
+        "replay_key": null,
+        "order_id": null,
+        "fill_id": null,
+        "position_id": null,
+        "model_id": null,
+        "model_hash": null,
+        "model_family": null,
+        "feature_schema_version": null,
+        "policy_hash": null,
+        "config_hash": null,
+        "experiment_protocol_id": null,
+        "experiment_manifest_hash": null,
+        "exchange_timestamp": null,
+        "receive_timestamp": null,
+        "decision_timestamp": null,
+        "source_snapshot_id": null
+      },
+      "identity_mapping_semantics": "Candidate source fields, not a claim of historical completeness. Null: unavailable, unparsed or not applicable; source bytes preserved.",
+      "identity_distinctions": {
+        "execution_model": "metadata/opportunity execution model; never replaced by fair model",
+        "settlement_probability_model": "settlement_model or probability_model_id/hash",
+        "portfolio_risk_policy": "policy_hash/config_hash on decision envelope",
+        "research_protocol": "immutable experiment manifest, not code SHA"
+      }
+    },
+    {
+      "source_family": "snapshots",
+      "patterns": [
+        "*.json",
+        "**/*.json"
+      ],
+      "producer": "resolved from process manifest where available",
+      "consumers": [
+        "resolved from process manifest where available"
+      ],
+      "schema": "read actual schema in inventory; UNKNOWN if absent",
+      "topics": [
+        "runtime health",
+        "status publication",
+        "data quality"
+      ],
+      "timestamp_semantics": {
+        "exchange": "UNKNOWN_UNLESS_RECORDED",
+        "receive": "UNKNOWN_UNLESS_RECORDED",
+        "decision": "UNKNOWN_UNLESS_RECORDED",
+        "publication": "source snapshot time only"
+      },
+      "source_kind": "SNAPSHOT_UNPROVEN_REPRODUCIBILITY",
+      "reproducible": false,
+      "append_only": false,
+      "retention": "PERMANENT_NO_UNIQUE_SOURCE_DELETION",
+      "compression": "VERIFIED_GZIP_AND_CONTENT_ADDRESSED_OBJECTS",
+      "restart_behavior": "NEW_SESSION_OR_APPEND; ALL_PREVIOUS_REVISIONS_REMAIN",
+      "cutover_behavior": "IMMUTABLE_REVISION_STORE_OUTSIDE_RUN_ROOT",
+      "model_dependence": "EXPLICIT_IDENTITY_STRATA",
+      "identity_fields": {
+        "code_sha": null,
+        "run_id": null,
+        "market_id": null,
+        "event_id": null,
+        "token_id": null,
+        "contract_family": null,
+        "asset": null,
+        "horizon": null,
+        "decision_id": null,
+        "opportunity_id": null,
+        "replay_key": null,
+        "order_id": null,
+        "fill_id": null,
+        "position_id": null,
+        "model_id": null,
+        "model_hash": null,
+        "model_family": null,
+        "feature_schema_version": null,
+        "policy_hash": null,
+        "config_hash": null,
+        "experiment_protocol_id": null,
+        "experiment_manifest_hash": null,
+        "exchange_timestamp": null,
+        "receive_timestamp": null,
+        "decision_timestamp": null,
+        "source_snapshot_id": null
+      },
+      "identity_mapping_semantics": "Candidate source fields, not a claim of historical completeness. Null: unavailable, unparsed or not applicable; source bytes preserved.",
+      "identity_distinctions": {
+        "execution_model": "metadata/opportunity execution model; never replaced by fair model",
+        "settlement_probability_model": "settlement_model or probability_model_id/hash",
+        "portfolio_risk_policy": "policy_hash/config_hash on decision envelope",
+        "research_protocol": "immutable experiment manifest, not code SHA"
+      }
+    },
+    {
+      "source_family": "diagnostics",
+      "patterns": [
+        "*.log*",
+        "**/*.log*"
+      ],
+      "producer": "process named by launcher log",
+      "consumers": [
+        "incident review"
+      ],
+      "schema": "unstructured diagnostic log",
+      "topics": [
+        "health diagnostics"
+      ],
+      "timestamp_semantics": {
+        "exchange": "UNKNOWN",
+        "receive": "UNKNOWN",
+        "decision": "UNKNOWN",
+        "publication": "log time if recorded"
+      },
+      "source_kind": "DIAGNOSTIC_UNPROVEN_REPRODUCIBILITY",
+      "reproducible": false,
+      "append_only": true,
+      "retention": "PERMANENT_NO_UNIQUE_SOURCE_DELETION",
+      "compression": "VERIFIED_GZIP_AND_CONTENT_ADDRESSED_OBJECTS",
+      "restart_behavior": "NEW_SESSION_OR_APPEND; ALL_PREVIOUS_REVISIONS_REMAIN",
+      "cutover_behavior": "IMMUTABLE_REVISION_STORE_OUTSIDE_RUN_ROOT",
+      "model_dependence": "EXPLICIT_IDENTITY_STRATA",
+      "identity_fields": {
+        "code_sha": null,
+        "run_id": null,
+        "market_id": null,
+        "event_id": null,
+        "token_id": null,
+        "contract_family": null,
+        "asset": null,
+        "horizon": null,
+        "decision_id": null,
+        "opportunity_id": null,
+        "replay_key": null,
+        "order_id": null,
+        "fill_id": null,
+        "position_id": null,
+        "model_id": null,
+        "model_hash": null,
+        "model_family": null,
+        "feature_schema_version": null,
+        "policy_hash": null,
+        "config_hash": null,
+        "experiment_protocol_id": null,
+        "experiment_manifest_hash": null,
+        "exchange_timestamp": null,
+        "receive_timestamp": null,
+        "decision_timestamp": null,
+        "source_snapshot_id": null
+      },
+      "identity_mapping_semantics": "Candidate source fields, not a claim of historical completeness. Null: unavailable, unparsed or not applicable; source bytes preserved.",
+      "identity_distinctions": {
+        "execution_model": "metadata/opportunity execution model; never replaced by fair model",
+        "settlement_probability_model": "settlement_model or probability_model_id/hash",
+        "portfolio_risk_policy": "policy_hash/config_hash on decision envelope",
+        "research_protocol": "immutable experiment manifest, not code SHA"
+      }
+    },
+    {
+      "source_family": "unclassified",
+      "patterns": [
+        "*",
+        "**/*"
+      ],
+      "producer": "UNKNOWN",
+      "consumers": [
+        "UNKNOWN"
+      ],
+      "schema": "UNKNOWN",
+      "topics": [
+        "UNCLASSIFIED_PRESERVED"
+      ],
+      "timestamp_semantics": {
+        "exchange": "UNKNOWN",
+        "receive": "UNKNOWN",
+        "decision": "UNKNOWN",
+        "publication": "filesystem mtime is not a causal timestamp"
+      },
+      "source_kind": "UNKNOWN_PRESERVE",
+      "reproducible": false,
+      "append_only": true,
+      "retention": "PERMANENT_NO_UNIQUE_SOURCE_DELETION",
+      "compression": "VERIFIED_GZIP_AND_CONTENT_ADDRESSED_OBJECTS",
+      "restart_behavior": "NEW_SESSION_OR_APPEND; ALL_PREVIOUS_REVISIONS_REMAIN",
+      "cutover_behavior": "IMMUTABLE_REVISION_STORE_OUTSIDE_RUN_ROOT",
+      "model_dependence": "EXPLICIT_IDENTITY_STRATA",
+      "identity_fields": {
+        "code_sha": null,
+        "run_id": null,
+        "market_id": null,
+        "event_id": null,
+        "token_id": null,
+        "contract_family": null,
+        "asset": null,
+        "horizon": null,
+        "decision_id": null,
+        "opportunity_id": null,
+        "replay_key": null,
+        "order_id": null,
+        "fill_id": null,
+        "position_id": null,
+        "model_id": null,
+        "model_hash": null,
+        "model_family": null,
+        "feature_schema_version": null,
+        "policy_hash": null,
+        "config_hash": null,
+        "experiment_protocol_id": null,
+        "experiment_manifest_hash": null,
+        "exchange_timestamp": null,
+        "receive_timestamp": null,
+        "decision_timestamp": null,
+        "source_snapshot_id": null
+      },
+      "identity_mapping_semantics": "Candidate source fields, not a claim of historical completeness. Null: unavailable, unparsed or not applicable; source bytes preserved.",
+      "identity_distinctions": {
+        "execution_model": "metadata/opportunity execution model; never replaced by fair model",
+        "settlement_probability_model": "settlement_model or probability_model_id/hash",
+        "portfolio_risk_policy": "policy_hash/config_hash on decision envelope",
+        "research_protocol": "immutable experiment manifest, not code SHA"
+      }
+    }
+  ],
+  "definitions_sha256": "c8ebd57675e92ae8e22521fb80038c4a92b32bec1902ea63e96b0cbb0652023e"
+}
