@@ -74,16 +74,20 @@ def jsonl_rows(path: Path) -> Iterator[tuple[int, dict[str, Any]]]:
 
 
 def discover_counterfactual_tapes(inputs: Iterable[Path]) -> list[Path]:
+    if __package__:
+        from .v7_compressed_journal import journal_paths
+    else:
+        from v7_compressed_journal import journal_paths
     paths: set[Path] = set()
     for raw in inputs:
         source = Path(raw)
-        if source.is_file():
-            paths.add(source.resolve())
+        if source.is_file() or source.name=='counterfactuals.jsonl':
+            paths.update(path.resolve() for path in journal_paths(source))
         elif source.is_dir():
             paths.update(
                 path.resolve()
-                for path in source.glob("**/external_fair/counterfactuals.jsonl")
-                if path.is_file()
+                for directory in source.glob("**/external_fair")
+                for path in journal_paths(directory/'counterfactuals.jsonl')
             )
     return sorted(paths)
 

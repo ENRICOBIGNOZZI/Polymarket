@@ -22,6 +22,32 @@ def research_artifact() -> FairModelArtifact:
 
 
 class MonitorTests(unittest.TestCase):
+    def test_hybrid_probability_has_distinct_recipe_identity(self):
+        from v7_evidence_contract import hybrid_identity
+        from v7_external_fair_paper_router import hybrid_probability
+        source={'valid':True,'yes':.7,'pm_mid':.4,'lower':0.,'upper':1.,
+                'probability_model_id':'external','probability_model_hash':'a'*64}
+        result=module.Monitor.hybrid_fair_snapshot(None,source)
+        self.assertAlmostEqual(result['yes'],hybrid_probability(.7,.4,.35))
+        self.assertNotEqual(result['probability_model_hash'],source['probability_model_hash'])
+        self.assertEqual(result['probability_model_hash'],hybrid_identity('a'*64,.35)['probability_model_hash'])
+        self.assertNotEqual(result['probability_model_hash'],hybrid_identity('b'*64,.35)['probability_model_hash'])
+        self.assertNotEqual(result['probability_model_hash'],hybrid_identity('a'*64,.5)['probability_model_hash'])
+        self.assertIsNone(module.Monitor.hybrid_fair_snapshot(None,{**source,'probability_model_hash':None})['probability_model_hash'])
+
+    def test_public_origin_survives_absent_model_and_rejects_future_inputs(self):
+        snapshot={'market_id':'m','snapshot_id':'s','receive_ts_ms':1000,'yes':.5,
+                  'source':'LIVE_COMPLEMENT_CONSISTENT_CLOB_BATCH'}
+        external={'timestamp_ns':1_000_000_000,'composite_price':100.,'age_ns':100_000_000}
+        args=dict(now_ns=1_100_000_000,market_id='m',oracle_value=100.,reference_value=100.,tte_seconds=100.)
+        result=module.model_independent_observation(snapshot,external,{},**args)
+        self.assertTrue(result['valid'],result)
+        self.assertFalse(result['model_required'])
+        self.assertEqual(result['cut']['external_features']['composite_price'],100.)
+        self.assertFalse(module.model_independent_observation({**snapshot,'receive_ts_ms':1200},external,{},**args)['valid'])
+        self.assertFalse(module.model_independent_observation(snapshot,{**external,'timestamp_ns':1_200_000_000},{},**args)['valid'])
+        self.assertFalse(module.model_independent_observation({**snapshot,'market_id':'wrong'},external,{},**args)['valid'])
+
     def test_observations_decode_oracle_and_external(self):
         rows=list(module.observations([
             {"topic":"crypto_prices_twap_sixty","payload":[{"symbol":"btc/usd","timestamp":1000,"value":77000,"window_s":60}]},

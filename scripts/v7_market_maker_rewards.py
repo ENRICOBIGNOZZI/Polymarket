@@ -2586,6 +2586,7 @@ def main() -> int:
     parser.add_argument("--model-sha", default="")
     parser.add_argument("--deadline-seconds", type=float)
     parser.add_argument("--request-timeout-seconds", type=float)
+    parser.add_argument("--event-log",type=Path)
     args = parser.parse_args()
     snapshot = build_snapshot(
         args.config,
@@ -2620,7 +2621,10 @@ def main() -> int:
             candidate_snapshot=snapshot,
             runtime_selection_pinned=pinned,
         ))
-    print(json.dumps(runtime_snapshot, sort_keys=True))
+    if args.event_log:
+        from v7_compressed_journal import CompressedJournal
+        with CompressedJournal(args.event_log) as journal:journal.append(runtime_snapshot)
+    else:print(json.dumps(runtime_snapshot, sort_keys=True))
     return 0
 
 

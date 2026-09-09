@@ -27,6 +27,7 @@ from pathlib import Path
 from typing import Any, Iterator
 
 from v7_adaptive_universe import normalize_market
+from v7_evidence_contract import hybrid_identity
 from v7_public_https_proxy import DEFAULT_DNS, PublicResolver
 from v7_contract_registry import contract_from_market
 from v7_fair_model_artifact import FairModelArtifact, ArtifactError
@@ -35,6 +36,7 @@ from v7_external_settlement_model import runtime_features as settlement_runtime_
 from v7_external_rich_model import (
     FAMILY as RICH_FAMILY, features as rich_features, predict as rich_predict,
     validate_parameters as validate_rich_parameters, contextual_features, number as rich_number,
+    FEATURE_SCHEMA as CAUSAL_FEATURE_SCHEMA,
 )
 
 HOST = "ws-live-data.polymarket.com"
@@ -154,6 +156,39 @@ def router_live_market_snapshot(
         "receive_ts_ms": receive_ts_ms, "exchange_ts_ms": exchange_ts_ms,
         "age_ms": age_ms, "source": "LIVE_COMPLEMENT_CONSISTENT_CLOB_BATCH",
     }
+
+
+def model_independent_observation(snapshot, external, context, *, now_ns, market_id,
+                                  oracle_value, reference_value, tte_seconds):
+    """Preserve a public causal cut without requiring any fitted model to exist."""
+    invalid={'schema':'polymarket_v7_model_independent_causal_observation_v1','valid':False}
+    snapshot=snapshot or {};receive=rich_number(snapshot.get('receive_ts_ms'))
+    external_ns=rich_number(external.get('timestamp_ns'));pm=rich_number(snapshot.get('yes'))
+    if (snapshot.get('market_id')!=market_id or not snapshot.get('snapshot_id')
+            or snapshot.get('source')!='LIVE_COMPLEMENT_CONSISTENT_CLOB_BATCH'
+            or receive is None or receive<=0 or not 0<=now_ns/1e6-receive<=500
+            or external_ns is None or not 0<=now_ns-external_ns<=750_000_000
+            or pm is None or not 0<=pm<=1):
+        return {**invalid,'reason':'MISSING_STALE_OR_NONCAUSAL_PUBLIC_INPUT'}
+    prior={'valid':True,'snapshot_id':snapshot['snapshot_id'],'receive_ts_ms':int(receive),
+           'exchange_ts_ms':snapshot.get('exchange_ts_ms'),'external_publish_ns':int(external_ns),
+           'external_skew_ms':abs(external_ns-receive*1e6)/1e6}
+    cut={'market_id':market_id,'observed_ms':now_ns//1_000_000,'observed_wall_ns':now_ns,
+         'oracle_value':oracle_value,'reference_value':reference_value,'observed_tte_seconds':tte_seconds,
+         'market_probability':pm,'market_prior_snapshot':prior,
+         'external_features':{k:external.get(k) for k in (
+             'composite_price','composite_microprice','dispersion_bps','age_ns','aggregate_ofi',
+             'aggregate_trade_imbalance','realized_vol_fast','realized_vol_medium','realized_vol_slow',
+             'feature_semantics_version','return_history_available','return_50ms','return_100ms',
+             'return_250ms','return_1s','return_5s','jump_score')},'external_context':context}
+    try:
+        features=rich_features(cut)
+        raw=json.dumps(cut,sort_keys=True,separators=(',',':'),allow_nan=False).encode()
+    except (ValueError,TypeError,KeyError) as exc:
+        return {**invalid,'reason':'UNUSABLE_CAUSAL_INPUT:'+str(exc)}
+    return {**invalid,'valid':True,'cut':cut,'cut_sha256':hashlib.sha256(raw).hexdigest(),
+            'features':features,'feature_schema_version':CAUSAL_FEATURE_SCHEMA,
+            'model_required':False,'execution_authority':'ZERO_AUTHORITY_RESEARCH_ONLY'}
 
 
 def preferred_pm_prior_snapshot(
@@ -948,6 +983,7 @@ class Monitor:
         output.update({
             "model_id": "hybrid_fair", "authority": "SHADOW",
             "uses_polymarket_price_as_feature": True,
+            **hybrid_identity(external_only.get('probability_model_hash'), 0.35),
         })
         if external_only.get("valid") is not True:
             return output
@@ -1023,6 +1059,9 @@ class Monitor:
             liquidation_rates,
         )
         learned_fair = self.rich_paper_snapshot(independent_fair, venue_runtime, context, now)
+        causal_observation=model_independent_observation(live_market_snapshot,venue_runtime,context,
+            now_ns=now,market_id=market_id,oracle_value=self.latest.get(ORACLE_TOPIC,{}).get('price'),
+            reference_value=self.reference.get('value'),tte_seconds=independent_fair.get('tte_seconds'))
         if learned_fair.get("valid") is True and self.paper_ml_enabled:
             fair = learned_fair
         self.latency_samples["fair_compute"].append(
@@ -1124,6 +1163,7 @@ class Monitor:
                 "spread_bps": 0.0, "weight": 1.0, "basis_bps": 0.0,
                 "disabled": not (multi_venue_healthy or external_fresh)}]},
             "external_context": context,
+            "causal_observation": causal_observation,
             "fair": fair,
             "fair_models": {
                 "external_only_fair": independent_fair,

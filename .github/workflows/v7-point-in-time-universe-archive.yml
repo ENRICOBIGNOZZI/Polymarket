@@ -31,6 +31,7 @@ jobs:
           TS_OAUTH_SECRET: ${{ secrets.TS_OAUTH_SECRET }}
           TS_AUDIENCE: ${{ secrets.TS_AUDIENCE }}
           TS_TAGS: ${{ vars.TS_TAGS || 'tag:ci' }}
+          TS_AUTHKEY_EPHEMERAL_VERIFIED: ${{ vars.TS_AUTHKEY_EPHEMERAL_VERIFIED || 'false' }}
         run: |
           set -euo pipefail
           test -n "${TS_TAGS:-}"
@@ -39,6 +40,10 @@ jobs:
           elif [[ -n "${TS_OAUTH_CLIENT_ID:-}" && -n "${TS_OAUTH_SECRET:-}" ]]; then
             mode=oauth
           elif [[ -n "${TS_AUTHKEY:-}" ]]; then
+            if [[ "${TS_AUTHKEY_EPHEMERAL_VERIFIED:-false}" != true ]]; then
+              echo "::error title=Tailnet credential requires administrator verification::Auth-key fallback is disabled until TS_AUTHKEY_EPHEMERAL_VERIFIED=true confirms a reusable tagged ephemeral key. Use OIDC/OAuth preferably. Existing production nodes are never modified."
+              exit 1
+            fi
             mode=authkey
             echo "::warning title=Tailscale auth-key fallback::TS_AUTHKEY must be reusable, tagged, pre-approved when required, and ephemeral. The workflow uses in-memory daemon state for ephemeral nodes."
           else

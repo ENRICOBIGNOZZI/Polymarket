@@ -224,14 +224,9 @@ def write_snapshot(archive_dir: Path, value: dict[str, Any], *, retention_days: 
     tmp_latest = latest.with_name(latest.name + f".tmp.{os.getpid()}")
     tmp_latest.write_bytes(path.read_bytes())
     os.replace(tmp_latest, latest)
-    cutoff_ms = ts_ms - max(1, int(retention_days)) * 86_400_000
-    for old in archive_dir.glob("universe-*.json.gz"):
-        try:
-            old_ts = int(old.name.split("-", 2)[1])
-        except (IndexError, ValueError):
-            continue
-        if old_ts < cutoff_ms:
-            old.unlink(missing_ok=True)
+    # Universe membership is a unique point-in-time economic source. The legacy
+    # retention_days argument remains accepted for old launchers, but cannot
+    # authorize deletion. Immutable gzip snapshots are retained permanently.
     return path
 
 

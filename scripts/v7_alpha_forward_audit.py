@@ -12,8 +12,9 @@ import statistics
 import time
 
 from v7_external_rich_train import build_rows
-from v7_external_lead_lag_collector import horizon_eligible
+from v7_external_lead_lag_collector import horizon_eligible, observation_rows
 from v7_maker_durable_learning import order_examples, exact_execution_cell
+from v7_compressed_journal import journal_rows
 
 
 def stream(path, manifest):
@@ -35,7 +36,7 @@ def audit(run_root, durable_root):
     excluded=set(hp['development_market_ids'])
     boundary=int(hp['forward_oos_starts_after_ns'])//1_000_000
     origins={}; finals={}
-    for r in stream(durable_root/'external_fair/counterfactuals.jsonl',manifest):
+    for r in journal_rows(durable_root/'external_fair/counterfactuals.jsonl',manifest):
         if r.get('event_type')=='FORECAST' and r.get('research_model_model_hash')==model_hash \
                 and r.get('market_id') not in excluded and int(r.get('observed_ms') or 0)>boundary:
             origins[r['forecast_id']]=r
@@ -57,8 +58,9 @@ def audit(run_root, durable_root):
                       'log_loss':statistics.fmean(statistics.fmean(x[1] for x in v) for v in by_market.values()) if by_market else None}
     sha=json.loads((run_root/'control/runtime_identity.json').read_text())['runtime_sha']
     horizons=defaultdict(list)
-    for r in stream(durable_root/'external_fair/pm_lead_lag.jsonl',manifest):
-        if r.get('model_sha')==sha: horizons[int(r['horizon_ms'])].append(float(r['realized_horizon_ms']))
+    for r in observation_rows(journal_rows(durable_root/'external_fair/pm_lead_lag.jsonl',manifest)):
+        if r.get('model_sha')==sha and r.get('realized_horizon_ms') is not None:
+            horizons[int(r['horizon_ms'])].append(float(r['realized_horizon_ms']))
     ledger=list(stream(run_root/'ledger/execution.jsonl',manifest))
     maker=[r for r in ledger if (r.get('metadata') or {}).get('component')=='professional_maker']
     examples=order_examples(maker)

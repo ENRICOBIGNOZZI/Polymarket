@@ -19,11 +19,13 @@ class BookTimeline:
         self.epoch = 0
         self.sequence = 0
         self.watermark_ms = 0
+        self.watermark_monotonic_ns = 0
         self.gaps = 0
 
     def invalidate(self):
         self.history.clear()
         self.watermark_ms = 0
+        self.watermark_monotonic_ns = 0
         self.gaps += 1
 
     def close(self):
@@ -44,6 +46,7 @@ class BookTimeline:
             session = str(row["observer_session_id"])
             epoch, sequence = int(row["connection_epoch"]), int(row["observer_sequence"])
             received = int(row["receive_wall_ms"])
+            monotonic = int(row.get('receive_monotonic_ns') or 0)
             exchange_ns = int(row["exchange_event_ns"])
             token, market = str(row["token_id"]), str(row["market_id"])
             if not session or not token or not market or min(epoch, sequence, received) <= 0:
@@ -52,10 +55,12 @@ class BookTimeline:
             self.invalidate()
             return
         if ((session, epoch) != (self.session, self.epoch)
-                or sequence != self.sequence + 1 or received < self.watermark_ms):
+                or sequence != self.sequence + 1 or received < self.watermark_ms
+                or monotonic < self.watermark_monotonic_ns):
             self.invalidate()
         self.session, self.epoch, self.sequence = session, epoch, sequence
         self.watermark_ms = received
+        self.watermark_monotonic_ns = monotonic
         row = {**row, "receive_wall_ms": received, "exchange_event_ns": exchange_ns,
                "observer_sequence": sequence, "connection_epoch": epoch}
         history = self.history[(market, token)]

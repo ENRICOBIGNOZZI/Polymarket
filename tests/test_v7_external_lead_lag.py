@@ -7,10 +7,11 @@ import unittest
 
 ROOT=Path(__file__).resolve().parents[1]
 sys.path.insert(0,str(ROOT/'scripts'))
-from v7_external_lead_lag_collector import Collector, SCHEMA as OBS_SCHEMA
+from v7_external_lead_lag_collector import Collector, SCHEMA as OBS_SCHEMA, ORIGIN_SCHEMA, observation_rows
 from v7_external_lead_lag_model import validate, predict_probability
 from v7_external_lead_lag_train import train, load_rows
 from v7_fair_model_artifact import canonical_hash
+from v7_compressed_journal import journal_rows
 
 SHA='a'*40
 
@@ -44,6 +45,34 @@ def fair_origin()->dict:
 
 
 class LeadLagTests(unittest.TestCase):
+    def test_independent_origin_is_stored_once_and_labels_require_exact_source(self):
+        with tempfile.TemporaryDirectory() as d:
+            root=Path(d);f=fair_origin();cut=f['fair']['rich_feature_cut'];cut['market_id']='m1'
+            f['causal_observation']={'schema':'polymarket_v7_model_independent_causal_observation_v1',
+                'valid':True,'model_required':False,'cut':cut,'cut_sha256':canonical_hash(cut),
+                'features':f['fair']['rich_model_features'],'feature_schema_version':'raw-v1'}
+            f['fair']={'valid':False}
+            fair=root/'fair.json';route=root/'router.json';tape=root/'leadlag.jsonl'
+            write(fair,f);write(route,router(1000,.5,'s0'))
+            c=Collector(fair,route,tape,root/'status.json',SHA,maximum_hot_bytes=2048);c.tick()
+            for receive in (1100,1250,1500,2000):
+                write(route,router(receive,.55,str(receive)));c.tick()
+                if c.journal.pending:c.journal.pending.result()
+            c.journal.close()
+            rows=list(journal_rows(tape))
+            self.assertEqual(len(rows),5)
+            self.assertEqual(rows[0]['schema'],ORIGIN_SCHEMA)
+            self.assertTrue(all('rich_model_features' not in row for row in rows[1:]))
+            hydrated=list(observation_rows(rows))
+            self.assertEqual(len(hydrated),4)
+            self.assertTrue(all(row['rich_feature_cut']==cut for row in hydrated))
+            self.assertEqual(len(load_rows([tape],SHA)),4)
+            with self.assertRaisesRegex(ValueError,'missing_persisted_origin'):
+                list(observation_rows(rows[1:]))
+            rows[1]['market_id']='wrong-market'
+            with self.assertRaisesRegex(ValueError,'origin_reference_mismatch'):
+                list(observation_rows(rows))
+
     def test_late_snapshots_are_preserved_but_excluded_from_nominal_training(self):
         with tempfile.TemporaryDirectory() as d:
             root=Path(d); fair=root/'fair.json'; route=root/'router.json'; tape=root/'leadlag.jsonl'

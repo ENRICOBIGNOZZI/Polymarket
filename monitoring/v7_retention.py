@@ -1,11 +1,10 @@
 #!/usr/bin/env python3
 """Safe retention for V7 PAPER telemetry with immutable ledger checkpoints.
 
-The active canonical ledger and causal CSV streams are never truncated.  The
-tool checkpoints complete ledger bytes, verifies their PAPER/SHA contract,
-compresses inactive diagnostic logs, and expires only already-rotated stream
-segments.  Canonical checkpoints are pruned only after an operator supplies an
-explicit durable-archive acknowledgement.
+The active canonical ledger and causal CSV streams are never truncated. The
+tool checkpoints complete ledger bytes and verifies their PAPER/SHA contract.
+Closed tapes are compressed with byte verification; shared immutable packs are
+retained. Age never authorizes deletion of unique evidence or checkpoints.
 """
 from __future__ import annotations
 
@@ -120,26 +119,10 @@ def checkpoint_ledger(run_root: Path, policy: dict[str, Any], expected_sha: str)
 
 
 def expire_rotated_streams(run_root: Path, streams: list[Any], *, now: int, dry_run: bool) -> list[str]:
-    removed: list[str] = []
-    root = run_root.resolve()
-    for stream in streams:
-        if not isinstance(stream, dict):
-            continue
-        cutoff = now - int(stream.get("retention_days") or 0) * 86400
-        for pattern in stream.get("patterns") if isinstance(stream.get("patterns"), list) else []:
-            for candidate in root.glob(str(pattern)):
-                try:
-                    resolved = candidate.resolve(strict=True)
-                    resolved.relative_to(root)
-                    modified = resolved.stat().st_mtime
-                except (OSError, ValueError):
-                    continue
-                if not resolved.is_file() or modified >= cutoff:
-                    continue
-                removed.append(str(resolved.relative_to(root)))
-                if not dry_run:
-                    resolved.unlink()
-    return sorted(set(removed))
+    # Time-to-live cannot establish that economic evidence is reproducible.
+    # Retain both raw and already-compressed source segments indefinitely.
+    # Closed-source compression below verifies exact bytes before unlinking.
+    return []
 
 
 def rotate_append_reopen_streams(
@@ -172,17 +155,9 @@ def rotate_append_reopen_streams(
 
 
 def prune_checkpoints(run_root: Path, policy: dict[str, Any], *, durable_archive_confirmed: bool, dry_run: bool) -> list[str]:
-    if not durable_archive_confirmed:
-        return []
-    archive = run_root / str(policy["archive_directory"])
-    retain = max(1, int(policy.get("retain_local_checkpoints") or 1))
-    candidates = sorted(archive.glob("execution-*.jsonl.gz"), key=lambda path: path.stat().st_mtime, reverse=True)
-    removed: list[str] = []
-    for path in candidates[retain:]:
-        removed.append(str(path.relative_to(run_root)))
-        if not dry_run:
-            path.unlink()
-    return removed
+    # An operator acknowledgement is not a recoverability proof. Historical
+    # checkpoints remain until byte-identical evidence is verified elsewhere.
+    return []
 
 
 def _safe_cutover_archive(path: Path) -> bool:
@@ -289,9 +264,8 @@ def compact_cutover_archives(
 ) -> dict[str, Any]:
     """Compact only inactive, verified PAPER cutovers.
 
-    Canonical ledgers remain byte-verifiable gzip evidence. Only derived
-    snapshots, cumulative superseded Micro datasets and diagnostic logs are
-    removed; the newest generations remain fully expanded for incident review.
+    Canonical ledgers remain byte-verifiable gzip evidence. Historical model
+    generations and unique source artifacts remain preserved regardless of age.
     """
     keep_full = max(1, int(policy.get("keep_full_generations") or 3))
     if not archive_root.exists():
@@ -310,9 +284,10 @@ def compact_cutover_archives(
         archive_resolved = archive.resolve()
         ledger = _compact_cutover_ledger(archive, dry_run=dry_run)
         removed: list[dict[str, Any]] = []
-        removal_candidates = [archive / relative for relative in DERIVED_CUTOVER_FILES]
-        removal_candidates.extend(archive.glob("**/*.log"))
-        removal_candidates.extend(archive.glob("**/*.log.*"))
+        # A filename called "derived" does not prove reproducibility. In
+        # particular discovery snapshots and fee registries are point-in-time
+        # sources. Preserve them, and all logs, until provenance proves otherwise.
+        removal_candidates: list[Path] = []
         seen: set[Path] = set()
         for candidate in removal_candidates:
             try:
@@ -382,9 +357,34 @@ def _sync_directory(path: Path) -> None:
     finally: os.close(descriptor)
 
 
+def _shared_pack_aliases(store_root: Path | None) -> dict:
+    """Recognize already archived aliases; never unlink or recompress them."""
+    import stat
+    aliases = {}
+    if store_root is None or store_root.is_symlink(): return aliases
+    for manifest in (store_root / 'pack_manifests').glob('*.json'):
+        try:
+            if manifest.is_symlink(): continue
+            raw = manifest.read_bytes()
+            if hashlib.sha256(raw).hexdigest() != manifest.stem: continue
+            value = json.loads(raw); sha = value.get('pack_sha256', '')
+            if (value.get('schema') != 'polymarket_v7_lossless_shared_pack_v1'
+                    or not re.fullmatch('[a-f0-9]{64}', sha)
+                    or value.get('source_bytes_sha256_verified') is not True): continue
+            pack = store_root / 'packs' / sha[:2] / (sha + '.pack')
+            info = pack.lstat()
+            if not stat.S_ISREG(info.st_mode) or info.st_mode & 0o222: continue
+            if info.st_size != value.get('pack_bytes'): continue
+            for path in value.get('source_aliases', []):
+                aliases[str(Path(path).resolve())] = (info.st_dev, info.st_ino, info.st_size)
+        except (OSError, ValueError, TypeError): continue
+    return aliases
+
+
 def compress_closed_cutover_tapes(archive_root: Path, *, now: int, dry_run: bool,
                                   minimum_age_seconds: int = 3600,
-                                  active_run_root: Path | None = None) -> dict[str, Any]:
+                                  active_run_root: Path | None = None,
+                                  permanent_store_root: Path | None = None) -> dict[str, Any]:
     # Inactive cutover tapes and producer-sealed segments in the active run.
     # Current files and ledgers are excluded. Byte preservation does not attest
     # economic validity; book JSONL follows the same verified-gzip contract.
@@ -393,6 +393,7 @@ def compress_closed_cutover_tapes(archive_root: Path, *, now: int, dry_run: bool
     import subprocess
     result = {"archived": [], "skipped": [], "failures": [], "reclaimed_bytes": 0,
               "dry_run": dry_run, "active_tapes_rotated": False}
+    shared_aliases = _shared_pack_aliases(permanent_store_root)
     if archive_root.is_symlink(): return result
     if not archive_root.is_dir():
         if active_run_root is None or dry_run: return result
@@ -429,6 +430,10 @@ def compress_closed_cutover_tapes(archive_root: Path, *, now: int, dry_run: bool
                         continue
                     temporary = None
                     try:
+                        info = source.lstat()
+                        if shared_aliases.get(str(source.resolve())) == (info.st_dev, info.st_ino, info.st_size):
+                            result['skipped'].append({'path': str(source), 'reason': 'VERIFIED_SHARED_IMMUTABLE_PACK'})
+                            continue
                         before = _tape_identity(source)
                         if now - source.stat().st_mtime < (60 if active_scope else minimum_age_seconds):
                             result["skipped"].append({"path": str(source), "reason": "recent"}); continue
@@ -513,6 +518,7 @@ def run_retention(
     closed_tapes = compress_closed_cutover_tapes(
         run_root.parent / archive_name, now=now, dry_run=dry_run,
         active_run_root=run_root if (run_root / "control/runtime_status.json").is_file() else None,
+        permanent_store_root=run_root.parent / 'paper_v7_durable/permanent_evidence/store',
     )
     disk = disk_state(run_root, config["disk"])
     result = {

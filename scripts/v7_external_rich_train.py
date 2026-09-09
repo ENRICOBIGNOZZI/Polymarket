@@ -38,32 +38,24 @@ def records(paths: Iterable[Path], *, source_manifest: list | None = None,
             keep_types: set[str] | None = None) -> dict[str, dict[str, Any]]:
     keep_types = keep_types or {"FORECAST", "FORECAST_FINAL"}
     output: dict[str, dict[str, Any]] = {}; fingerprints: dict[str, str] = {}
+    from v7_compressed_journal import journal_rows,journal_paths
     for path in paths:
-        if not path.exists():
-            continue
-        if path.is_symlink() or not path.is_file():
+        if any(source.is_symlink() or not source.is_file() for source in journal_paths(path)):
             raise ValueError("rich_train:unsafe_evidence_source")
-        digest=hashlib.sha256(); complete_bytes=0; lines=0
-        with path.open("rb") as handle:
-            limit=os.fstat(handle.fileno()).st_size
-            while handle.tell() < limit:
-                raw=handle.readline(min(8*1024**2, limit-handle.tell()))
-                if not raw.endswith(b"\n"):
-                    if len(raw)==8*1024**2: raise ValueError("rich_train:evidence_line_too_large")
-                    break
-                digest.update(raw); complete_bytes+=len(raw); lines+=1
-                if not raw.strip(): continue
-                row=json.loads(raw)
-                if not isinstance(row,dict) or not row.get("record_id"):
-                    raise ValueError("rich_train:evidence_shape_invalid")
-                identity=str(row["record_id"]); fingerprint=hashlib.sha256(_canonical(row).encode()).hexdigest()
-                if identity in fingerprints and fingerprints[identity] != fingerprint:
-                    raise ValueError("rich_train:evidence_record_conflict:"+identity)
-                fingerprints[identity]=fingerprint
-                if row.get("event_type") in keep_types: output.setdefault(identity,row)
+        parts=[]
+        for row in journal_rows(path,parts,maximum_line_bytes=8*1024**2):
+            if not isinstance(row,dict) or not row.get("record_id"):
+                raise ValueError("rich_train:evidence_shape_invalid")
+            identity=str(row["record_id"]); fingerprint=hashlib.sha256(_canonical(row).encode()).hexdigest()
+            if identity in fingerprints and fingerprints[identity] != fingerprint:
+                raise ValueError("rich_train:evidence_record_conflict:"+identity)
+            fingerprints[identity]=fingerprint
+            if row.get("event_type") in keep_types: output.setdefault(identity,row)
         if source_manifest is not None:
-            source_manifest.append({"path":str(path),"prefix_bytes":complete_bytes,
-                "prefix_sha256":digest.hexdigest(),"complete_lines":lines})
+            for part in parts:
+                source_manifest.append({"path":part['path'],"prefix_bytes":part['decoded_prefix_bytes'],
+                    "prefix_sha256":part['decoded_sha256'],"prefix_encoding":"DECODED_JSONL",
+                    "complete_lines":part['complete_lines']})
     return output
 
 

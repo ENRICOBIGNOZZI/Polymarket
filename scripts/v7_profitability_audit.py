@@ -43,16 +43,13 @@ def ledger_paths(inputs: Iterable[Path]) -> list[Path]:
 
 
 def counterfactual_paths(inputs: Iterable[Path]) -> list[Path]:
-    paths: set[Path] = set()
-    for source in inputs:
-        if source.is_file() and source.name == "counterfactuals.jsonl":
-            paths.add(source.resolve())
-        elif source.is_dir():
-            paths.update(
-                path.resolve() for path in source.glob("**/external_fair/counterfactuals.jsonl")
-                if path.is_file()
-            )
-    return sorted(paths)
+    if __package__:
+        from .v7_external_economic_common import discover_counterfactual_tapes
+    else:
+        from v7_external_economic_common import discover_counterfactual_tapes
+    return discover_counterfactual_tapes(source for source in inputs
+        if source.is_dir() or source.name=='counterfactuals.jsonl'
+        or source.name.startswith('counterfactuals.jsonl.segment-'))
 
 
 def rows(path: Path) -> Iterator[tuple[int, dict[str, Any]]]:
