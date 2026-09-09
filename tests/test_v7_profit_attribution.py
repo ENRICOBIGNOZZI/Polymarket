@@ -10,7 +10,7 @@ import tempfile
 import unittest
 from unittest.mock import patch
 sys.path.insert(0,str(Path(__file__).resolve().parents[1]/'scripts'))
-from v7_profit_attribution import analyze, read_sources, opportunity_funnel, learning_coverage, archived_ledgers, historical_summary, main
+from v7_profit_attribution import analyze, read_sources, opportunity_funnel, learning_coverage, archived_ledgers, historical_summary, main, read_auxiliary
 
 SHA='a'*40
 
@@ -72,11 +72,89 @@ class AttributionTests(unittest.TestCase):
             rendered=json.loads(gzip.decompress(out.read_bytes()))
             self.assertEqual(rendered['canonical_final_positions'],2)
             self.assertEqual(rendered['historical_summary']['source_count'],3)
-            self.assertIn('NOT_INCLUDED',rendered['opportunity_funnel']['archive_coverage'])
+            self.assertIn('ALL_RETAINED_LEDGER',rendered['opportunity_funnel']['archive_coverage'])
+            self.assertEqual(rendered['opportunity_funnel']['auxiliary_source_inventory'][0]['streams']['decisions']['source_files'],0)
             conflict=copy.deepcopy(first);conflict[-1]['final_pnl']=999
             (a/'archive/canonical-ledger/conflict.jsonl.gz').write_bytes(gzip.compress(encoded(conflict)))
             with self.assertRaisesRegex(ValueError,'conflicting canonical record'):
                 read_sources(archived_ledgers(archives)[0],require_complete=True)
+
+    def auxiliary_fixture(self,sha=SHA):
+        return {'schema':'polymarket_v7_global_opportunity_decision_v1','paper_only':True,'authenticated_execution':False,
+                'real_order_submission':False,'owner':'coordinator','decision_timestamp_ns':1000000,
+                'selected_replay_key':'key','opportunity_inputs':[{'model_sha':sha,'replay_key':'key','market_id':'market'}]}
+
+    def test_coordinator_replicas_deduplicate_but_retries_and_generations_remain(self):
+        row=self.auxiliary_fixture();retry=copy.deepcopy(row);retry['decision_timestamp_ns']+=1
+        other=self.auxiliary_fixture('b'*40)
+        d=opportunity_funnel([],decisions=[row,copy.deepcopy(row),retry,other])
+        self.assertEqual(d['distinct_opportunities'],2)
+        self.assertEqual(d['attempt_totals']['coordinator_decisions'],3)
+        self.assertEqual(d['attempt_totals']['exact_duplicate_records_excluded']['coordinator_decisions'],1)
+        self.assertEqual(sum(r['coordinator_attempts'] for r in d['opportunities']),3)
+        conflict=copy.deepcopy(row);conflict['selected_replay_key']='different'
+        with self.assertRaisesRegex(ValueError,'conflicting coordinator'):opportunity_funnel([],decisions=[row,conflict])
+
+    def test_conflicting_authorization_identity_cannot_disappear_as_duplicate(self):
+        a={'model_sha':SHA,'replay_key':'key','attempt_id':'1','result':'REJECTED','reason':'A'}
+        b={**a,'reason':'B'}
+        with self.assertRaisesRegex(ValueError,'conflicting authorization'):opportunity_funnel([],attempts=[a,b])
+        d=opportunity_funnel([],attempts=[a,copy.deepcopy(a)])
+        self.assertEqual(d['attempt_totals']['authorization_records'],1)
+
+    def test_archive_funnel_includes_compressed_streams_without_changing_cash(self):
+        with tempfile.TemporaryDirectory() as directory:
+            archives=Path(directory)/'archives';archive=archives/('cutover-'+SHA+'-1-2')
+            (archive/'ledger').mkdir(parents=True);(archive/'opportunities').mkdir()
+            rows=fixture();rows[0]['opportunity_id']='key'
+            (archive/'ledger/execution.jsonl').write_text(''.join(json.dumps(r)+'\n' for r in rows))
+            marks=archive/'research/evidence/maker_markout';marks.mkdir(parents=True)
+            mark={**rows[1],'event_type':'MARKOUT','record_id':'markout-1','markouts':{'5s':-.01},'metadata':{'research_evidence_only':True}}
+            (marks/'label.json').write_text(json.dumps(mark)+'\n')
+            decision=self.auxiliary_fixture();payload=(json.dumps(decision)+'\n').encode()
+            (archive/'opportunities/decisions.jsonl.gz').write_bytes(gzip.compress(payload))
+            (archive/'opportunities/decisions.jsonl.segment-000001.jsonl.gz').write_bytes(gzip.compress(payload))
+            out=Path(directory)/'report.json.gz'
+            with patch.object(sys,'argv',['attribution','--archive-root',str(archives),'--output',str(out)]),contextlib.redirect_stdout(io.StringIO()):main()
+            d=json.loads(gzip.decompress(out.read_bytes()));f=d['opportunity_funnel']
+            self.assertEqual(d['canonical_final_pnl'],'2.27');self.assertEqual(f['distinct_opportunities'],1)
+            self.assertEqual(f['attempt_totals']['coordinator_decisions'],1)
+            self.assertEqual(f['stages']['selected'],1);self.assertEqual(f['stages']['settled'],1)
+            self.assertEqual(f['stages']['markouts'],1)
+            self.assertEqual(d['historical_summary']['opportunity_funnel']['stages']['markouts'],1)
+            self.assertEqual(f['auxiliary_source_inventory'][0]['streams']['decisions']['source_files'],2)
+
+    def test_legacy_selected_key_requires_observed_generation_metadata(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root=Path(directory)/('cutover-'+SHA+'-1-2');(root/'opportunities').mkdir(parents=True)
+            d=self.auxiliary_fixture();d.pop('opportunity_inputs')
+            p=root/'opportunities/decisions.jsonl';original=(json.dumps(d)+'\n').encode();p.write_bytes(original)
+            streams,_,_=read_auxiliary(root,sealed=True)
+            self.assertEqual(opportunity_funnel([],streams['decisions'])['distinct_opportunities'],0)
+            (root/'control').mkdir();(root/'control/runtime_status.json').write_text(json.dumps({'model_sha':SHA,'paper_only':True,'authenticated_execution':False,'run_id':'run-a'}))
+            streams,proofs,_=read_auxiliary(root,sealed=True);result=opportunity_funnel([],streams['decisions'])
+            self.assertEqual(result['distinct_opportunities'],1)
+            self.assertEqual(result['attempt_totals']['legacy_selected_only_decisions'],1)
+            self.assertEqual(result['opportunities'][0]['identity_sources'],['LEGACY_SELECTED_KEY_WITH_RUNTIME_GENERATION'])
+            self.assertTrue(any(p['source_role']=='auxiliary_generation_identity' for p in proofs))
+            self.assertEqual(p.read_bytes(),original)
+
+    def test_active_auxiliary_tail_waits_but_sealed_tail_is_rejected(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root=Path(directory);(root/'opportunities').mkdir();p=root/'opportunities/decisions.jsonl'
+            p.write_text(json.dumps(self.auxiliary_fixture())+'\n'+json.dumps(self.auxiliary_fixture()))
+            streams,proofs,_=read_auxiliary(root)
+            self.assertEqual(len(streams['decisions']),1);self.assertTrue(proofs[0]['partial_tail_waiting'])
+            with self.assertRaisesRegex(ValueError,'incomplete sealed auxiliary'):read_auxiliary(root,sealed=True)
+
+    def test_auxiliary_rejects_unsafe_authority_and_symlink_directory(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root=Path(directory)/'run';(root/'opportunities').mkdir(parents=True)
+            d=self.auxiliary_fixture();d['real_order_submission']=True
+            (root/'opportunities/decisions.jsonl').write_text(json.dumps(d)+'\n')
+            with self.assertRaisesRegex(ValueError,'non-PAPER'):read_auxiliary(root)
+            other=Path(directory)/'linked';other.mkdir();(other/'opportunities').symlink_to(root/'opportunities',target_is_directory=True)
+            with self.assertRaisesRegex(ValueError,'unsafe auxiliary'):read_auxiliary(other)
 
     def test_sealed_partial_tail_and_unsafe_archive_are_rejected(self):
         with tempfile.TemporaryDirectory() as directory:
