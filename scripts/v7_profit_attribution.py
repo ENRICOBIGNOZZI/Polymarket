@@ -9,6 +9,7 @@ import gzip
 import hashlib
 import json
 import os
+import re
 import time
 from pathlib import Path
 from typing import Any
@@ -29,7 +30,7 @@ def metadata(row):
     return row.get('metadata') if isinstance(row.get('metadata'), dict) else {}
 
 
-def read_sources(paths):
+def read_sources(paths, *, require_complete=False):
     """Freeze complete source prefixes, including decompressed archival checkpoints."""
     records, sources = {}, []
     for path in paths:
@@ -41,7 +42,11 @@ def read_sources(paths):
             limit = None if path.suffix == '.gz' else os.fstat(stream.fileno()).st_size
             while limit is None or stream.tell() < limit:
                 line = stream.readline() if limit is None else stream.readline(limit-stream.tell())
-                if not line or not line.endswith(b'\n'): break
+                if not line: break
+                if not line.endswith(b'\n'):
+                    if require_complete or path.suffix == '.gz':
+                        raise ValueError('incomplete sealed ledger source: '+str(path))
+                    break
                 digest.update(line); size += len(line); count += 1
                 if not line.strip(): continue
                 row = json.loads(line)
@@ -56,6 +61,61 @@ def read_sources(paths):
                 records[key] = row
         sources.append({'path':str(path),'decompressed_prefix_bytes':size,'complete_lines':count,'sha256':digest.hexdigest()})
     return list(records.values()), sources
+
+
+def archived_ledgers(root):
+    """Include every retained checkpoint; deduplication happens by exact record ID."""
+    root = Path(root)
+    if root.is_symlink() or not root.is_dir():
+        raise ValueError('missing or unsafe canonical archive root')
+    paths, inventory = [], []
+    for archive in sorted(root.glob('cutover-*')):
+        if archive.is_symlink() or not archive.is_dir():
+            raise ValueError('unsafe cutover directory')
+        if not re.fullmatch(r'cutover-[0-9a-f]{40}-[0-9]+-[0-9]+', archive.name):
+            raise ValueError('invalid cutover identity')
+        folders = [archive/'ledger', archive/'archive', archive/'archive/canonical-ledger']
+        if any(p.is_symlink() for p in folders):
+            raise ValueError('unsafe archived ledger directory')
+        selected = [p for p in (archive/'ledger/execution.jsonl', archive/'ledger/execution.jsonl.gz') if p.exists()]
+        selected += sorted((archive/'archive/canonical-ledger').glob('*.jsonl.gz'))
+        if any(p.is_symlink() for p in selected):
+            raise ValueError('unsafe archived ledger source')
+        paths.extend(selected)
+        inventory.append({'archive':str(archive), 'ledger_sources':len(selected),
+                          'coverage':'RETAINED_CANONICAL_SOURCES' if selected else 'NO_RETAINED_LEDGER_SOURCE'})
+    return paths, inventory
+
+
+def historical_summary(report):
+    """Accounting strata remain separate from the current deployed generation."""
+    if (report.get('paper_only') is not True or report.get('authenticated_execution') is not False
+            or report.get('real_order_submission') is not False
+            or report.get('execution_authority') != 'ZERO_AUTHORITY_RESEARCH_ONLY'):
+        raise ValueError('unsafe historical attribution')
+    positions = report['positions']
+    if (len(positions) != report['canonical_final_positions']
+            or sum((dec(p['ledger_final_pnl']) for p in positions), ZERO) != dec(report['canonical_final_pnl'])):
+        raise ValueError('historical position population does not reconcile')
+    generations = {}
+    for code in report['source_code_shas']:
+        rows = [p for p in positions if p['code_sha'] == code]
+        components = defaultdict(list)
+        for p in rows: components[p['component']].append(p)
+        generations[code] = {
+            'positions':len(rows), 'net_pnl_usd':str(sum((dec(p['ledger_final_pnl']) for p in rows), ZERO)),
+            'reconciled_positions':sum(p.get('reconciled_to_microdollar') is True for p in rows),
+            'unexplained_pnl_usd':str(sum((dec(p['ledger_final_pnl']) for p in rows if not p.get('reconciled_to_microdollar')), ZERO)),
+            'components':{name:{'positions':len(ps), 'net_pnl_usd':str(sum((dec(p['ledger_final_pnl']) for p in ps), ZERO))}
+                          for name, ps in sorted(components.items())},
+            'missing_or_inconsistent':dict(Counter(reason for p in rows for reason in p['missing_or_inconsistent']))}
+    return {'scope':'ARCHIVED_GENERATIONS_ACCOUNTING_ONLY; NOT_CURRENT_RUNTIME_PERFORMANCE_OR_MODEL_COMPARISON',
+            'recorded_at_ns':report['recorded_at_ns'], 'positions':len(positions),
+            'net_pnl_usd':str(report['canonical_final_pnl']), 'reconciled_positions':report['reconciled_positions'],
+            'unexplained_pnl_usd':str(report['unattributed_ledger_pnl']), 'generations':generations,
+            'archive_inventory':report.get('archive_inventory', []),
+            'source_count':len(report.get('sources', [])),
+            'missing_values_are_unknown':True, 'automatic_promotion':False}
 
 
 def decision_evidence(order, fill):
@@ -356,13 +416,14 @@ def opportunity_funnel(values, decisions=(), attempts=()):
 
 
 def analyze(values, sources=(), *, decisions=(), attempts=()):
-    orders={}; fills=defaultdict(list); finals={}; markouts=defaultdict(list); examples={}; by_sha=defaultdict(list)
+    orders={}; fills=defaultdict(list); fill_records={}; finals={}; markouts=defaultdict(list); examples={}; by_sha=defaultdict(list)
     for row in values:
         if metadata(row).get('counterfactual') is True or metadata(row).get('excluded_from_portfolio_equity') is True: continue
         sha=row['model_sha']; typ=row.get('event_type'); by_sha[sha].append(row)
         if typ=='ORDER_SUBMITTED': orders[(sha,str(row.get('order_id') or ''))]=row
         elif typ=='FILL' and dec(row.get('filled_size')) is not None and dec(row['filled_size'])>0:
             fills[(sha,str(row.get('position_id') or ''))].append(row)
+            fill_records[(sha,row['record_id'])]=row
         elif typ=='FINAL':
             key=(sha,str(row.get('position_id') or row.get('fill_id') or row.get('order_id') or row.get('record_id')))
             if key in finals: raise ValueError('multiple final records for one position')
@@ -373,7 +434,40 @@ def analyze(values, sources=(), *, decisions=(), attempts=()):
                       and metadata(row).get('component')=='professional_maker'}
         for row in order_examples([r for r in rows if str(r.get('order_id')) in maker_orders]):
             examples[(sha,row['order_id'])]=row
-    positions=[position_row(final,fills.get(key,[]),orders,markouts,examples) for key,final in sorted(finals.items())]
+    positions=[];claimed_fills=set()
+    for key,final in sorted(finals.items()):
+        linked=list(fills.get(key,[]));reference=metadata(final).get('canonical_maker_fill_record_id')
+        mode='POSITION_ID';missing_reference=False
+        if reference:
+            referenced=fill_records.get((key[0],reference))
+            if referenced is None:
+                missing_reference=True
+            else:
+                for field in ('model_sha','fill_id','order_id','market_id','token_id','side'):
+                    if not referenced.get(field) or referenced[field]!=final.get(field):
+                        raise ValueError('canonical final fill-reference identity conflict: '+field)
+                if (referenced.get('event_id') and final.get('event_id')
+                        and referenced['event_id']!=final['event_id']):
+                    raise ValueError('canonical final fill-reference identity conflict: event_id')
+                if referenced.get('position_id') not in (None,'',final.get('position_id')):
+                    raise ValueError('canonical final fill-reference position conflict')
+                start,end=dec(referenced.get('recorded_ts_ms')),dec(final.get('recorded_ts_ms'))
+                if start is None or end is None or not ZERO<start<=end:
+                    raise ValueError('canonical final fill-reference causal timestamp conflict')
+                if linked and not any(r['record_id']==reference for r in linked):
+                    raise ValueError('canonical final fill-reference disagrees with position fills')
+                if not linked:
+                    linked=[referenced];mode='EXPLICIT_CANONICAL_FINAL_FILL_REFERENCE'
+        for fill in linked:
+            identity=(fill['model_sha'],fill['record_id'])
+            if identity in claimed_fills:raise ValueError('canonical fill assigned to multiple final positions')
+            claimed_fills.add(identity)
+        result=position_row(final,linked,orders,markouts,examples)
+        result['fill_join']={'mode':mode,'final_fill_record_reference':reference,
+            'source_fill_record_ids':[r['record_id'] for r in linked],
+            'source_fill_position_ids':[r.get('position_id') for r in linked]}
+        if missing_reference:result['missing_or_inconsistent'].append('CANONICAL_FINAL_FILL_REFERENCE_UNAVAILABLE')
+        positions.append(result)
     pnl=sum((p['ledger_final_pnl'] for p in positions if p['ledger_final_pnl'] is not None),ZERO)
     strata={}
     for p in positions:
@@ -397,9 +491,16 @@ def analyze(values, sources=(), *, decisions=(), attempts=()):
 
 
 def main():
-    ap=argparse.ArgumentParser(description=__doc__);ap.add_argument('--ledger',type=Path,action='append',required=True);ap.add_argument('--output',type=Path,required=True)
+    ap=argparse.ArgumentParser(description=__doc__)
+    scope=ap.add_mutually_exclusive_group(required=True)
+    scope.add_argument('--ledger',type=Path,action='append')
+    scope.add_argument('--archive-root',type=Path,help='All archived canonical ledgers/checkpoints; output stays separate from current cash')
+    ap.add_argument('--output',type=Path,required=True)
     ap.add_argument('--run-root',type=Path);ap.add_argument('--csv',type=Path)
-    args=ap.parse_args();values,sources=read_sources(args.ledger)
+    args=ap.parse_args()
+    if args.archive_root and args.run_root:ap.error('--run-root auxiliary observations require current --ledger scope')
+    paths, inventory = archived_ledgers(args.archive_root) if args.archive_root else (args.ledger, [])
+    values,sources=read_sources(paths,require_complete=bool(args.archive_root))
     if args.run_root:
         markout_paths=sorted((args.run_root/'research/evidence/maker_markout').glob('*.json'))
         if markout_paths:
@@ -423,8 +524,13 @@ def main():
         return [json.loads(line) for line in data.splitlines() if line.strip()]
     report=analyze(values,sources,decisions=auxiliary('opportunities/decisions.jsonl'),
         attempts=auxiliary('micro_maker/authorization_attempts.jsonl')+auxiliary('opportunities/authorization_publications.jsonl'))
+    if args.archive_root:
+        report['archive_inventory']=inventory
+        report['historical_summary']=historical_summary(report)
+        report['opportunity_funnel']['archive_coverage']='LEDGER_OBSERVED_STAGES_ONLY; ARCHIVED_COORDINATOR_AND_REJECTION_STREAMS_NOT_INCLUDED'
     args.output.parent.mkdir(parents=True,exist_ok=True);tmp=args.output.with_suffix('.tmp')
-    tmp.write_text(json.dumps(report,default=str,sort_keys=True,indent=2)+'\n');os.replace(tmp,args.output)
+    encoded=(json.dumps(report,default=str,sort_keys=True,indent=2)+'\n').encode()
+    tmp.write_bytes(gzip.compress(encoded,mtime=0) if args.output.suffix=='.gz' else encoded);os.replace(tmp,args.output)
     if args.csv:
         fields=['code_sha','position_id','market_id','token_id','component','paper_probe','quantity','fill_vwap',
             'predicted_margin','outcome_surprise','costs','ledger_final_pnl','ledger_reconciliation_residual','missing_or_inconsistent']

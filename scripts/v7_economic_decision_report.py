@@ -10,7 +10,7 @@ import time
 
 from v7_evidence_store import AUTH, canonical, digest, immutable
 from v7_permanent_evidence import atomic
-from v7_profit_attribution import dec
+from v7_profit_attribution import dec, historical_summary
 
 CODE = Path(__file__).read_bytes()
 CODE_HASH = digest(CODE)
@@ -62,7 +62,7 @@ def quality_metric(count, denominator=None, *, observations=None, scope, previou
 def scorecard(attribution, cohorts, statuses, previous=None):
     previous = previous or {}; metrics = {}; fills = []
     for position in attribution['positions']:
-        for fill in position['fill_details']:
+        for fill in position.get('fill_details', []):
             fills.append({**fill, 'market_id': position['market_id'], 'timestamp_ms': fill.get('fill_timestamp_ms'),
                           'notional': str(dec(fill['price'])*dec(fill['quantity']))})
     generation = '|'.join(attribution['source_code_shas'])
@@ -79,8 +79,12 @@ def scorecard(attribution, cohorts, statuses, previous=None):
                     and isinstance(f.get('fill_timestamp_ms'),(int,float)) and f['fill_timestamp_ms']+horizon*1000<=cutoff_ms]
         affected = [f for f in relevant if not any(dec((m.get('markouts') or {}).get(str(horizon)+'s')) is not None for m in f.get('markouts', []))]
         add(f'missing_maker_markout_{horizon}s', len(affected), len(relevant), affected)
+    unreconciled = [p for p in attribution['positions'] if not p.get('reconciled_to_microdollar')]
+    exposure = [{'market_id':p.get('market_id'), 'timestamp_ms':p.get('final_timestamp_ms'),
+                 'notional':money_sum(dec(f['price'])*dec(f['quantity']) for f in p['fill_details'])
+                    if p.get('fill_details') else None} for p in unreconciled]
     add('unreconciled_positions', attribution['canonical_final_positions']-attribution['reconciled_positions'],
-        attribution['canonical_final_positions'])
+        attribution['canonical_final_positions'], exposure)
     for cohort in cohorts:
         prefix = cohort['manifest_sha256']; total = sum(cohort.get('censored_labels', {}).values())
         # Categories overlap different experimental units. No fabricated common denominator.
@@ -111,7 +115,7 @@ def scorecard(attribution, cohorts, statuses, previous=None):
                 'Counter reset or unknown session identity suppresses trend deltas. Censor categories are not pooled as independent contracts.']}
 
 
-def diagnose(attribution, experiments, statuses, benchmark=None, previous=None):
+def diagnose(attribution, experiments, statuses, benchmark=None, previous=None, historical=None):
     if any(attribution.get(k) != v for k,v in AUTH.items()): raise ValueError('unsafe attribution authority')
     cohorts = experiments.get('cohorts', [experiments] if experiments.get('manifest_sha256') else [])
     positions = attribution['positions']; components = defaultdict(list); markouts = defaultdict(list)
@@ -121,7 +125,7 @@ def diagnose(attribution, experiments, statuses, benchmark=None, previous=None):
         raise ValueError('attribution position population does not reconcile to supplied canonical cash total')
     for position in positions:
         components[position['component']].append(position)
-        for fill in position['fill_details']:
+        for fill in position.get('fill_details', []):
             for mark in fill.get('markouts', []):
                 for horizon, value in (mark.get('markouts') or {}).items():
                     if dec(value) is not None:
@@ -131,12 +135,12 @@ def diagnose(attribution, experiments, statuses, benchmark=None, previous=None):
         accounting.append({'component':component,'positions':len(values),
             'contracts':len({v['market_id'] for v in values}),
             'net_pnl_usd':money_sum(v['ledger_final_pnl'] for v in values),
-            'gross_pnl_usd':money_sum(v['gross_trading_pnl'] for v in values),
-            'costs_usd':money_sum(v['costs'] for v in values),
+            'gross_pnl_usd':money_sum(v.get('gross_trading_pnl') for v in values),
+            'costs_usd':money_sum(v.get('costs') for v in values),
             'predicted_margin_usd':money_sum(v.get('predicted_margin') for v in values),
             'outcome_surprise_usd':money_sum(v.get('outcome_surprise') for v in values)})
     accounting.sort(key=lambda row:dec(row['net_pnl_usd']))
-    gross = money_sum(p['gross_trading_pnl'] for p in positions); costs = money_sum(p['costs'] for p in positions)
+    gross = money_sum(p.get('gross_trading_pnl') for p in positions); costs = money_sum(p.get('costs') for p in positions)
     forecasts = []; delays = []; diagnostics = []
     for cohort in cohorts:
         signal = cohort.get('signal_analysis', {}); cells = signal.get('cells', {}).get('ALL', {})
@@ -181,7 +185,7 @@ def diagnose(attribution, experiments, statuses, benchmark=None, previous=None):
          'identification':'SHORT_MARKOUT_AND_FINAL_SETTLEMENT_ARE_DIFFERENT_TARGETS; DO_NOT_ADD_MARKOUT_TO_CASH'}]
     loss_component=accounting[0]['component'] if accounting and dec(accounting[0]['net_pnl_usd'])<0 else None
     censored_maker=sum(n for c in cohorts for key,n in c.get('maker_coverage',{}).items() if 'CENSORED' in key or 'STALE_OR_INCOMPLETE' in key)
-    if dec(attribution['canonical_final_pnl'])<0 and dec(gross)>=0:
+    if dec(attribution['canonical_final_pnl'])<0 and gross is not None and dec(gross)>=0:
         next_test='FORWARD_COST_STRESS_WITH_FIXED_SIGNAL_AND_OBSERVED_PRICES'
         rationale='The recorded cost debit changes gross-positive accounting into net-negative accounting; test net surplus prospectively.'
     elif loss_component=='professional_maker' and censored_maker:
@@ -201,6 +205,7 @@ def diagnose(attribution, experiments, statuses, benchmark=None, previous=None):
             'reconciled_positions':attribution['reconciled_positions'],'unexplained_pnl_usd':attribution['unattributed_ledger_pnl'],
             'gross_pnl_usd':gross,'costs_usd':costs,'components_ranked_by_realized_loss':accounting,
             'component_probe_model_strata':attribution['strata_by_component_probe_model']},
+        'historical_canonical':historical_summary(historical) if historical is not None else None,
         'forecast':forecasts,'fixed_signal_delay':delays,'opportunity_funnel':attribution['opportunity_funnel'],
         'maker_outcomes_by_sha':attribution['maker_outcomes_by_sha'],
         'maker_profit_causes':maker_causes,
@@ -218,8 +223,15 @@ def memo(report):
     c=report['canonical']; components=c['components_ranked_by_realized_loss']; largest=components[0] if components else None
     excluded=next(x['finding'] for x in report['diagnosis'] if x['question']=='FEES_AS_SOLE_CAUSE')
     ranking=report['intervention_ranking']
+    history=report.get('historical_canonical')
+    history_text=(f"Archived evidence remains visible: {history['positions']} closed positions across "
+        f"{len(history['generations'])} code generations, historical accounting PnL ${history['net_pnl_usd']}, "
+        f"unexplained historical PnL ${history['unexplained_pnl_usd']}. Each generation is reported separately; "
+        'these totals are not current-runtime performance or a comparison of model quality.' if history else
+        'Archived accounting is unavailable in this report; absence is not zero historical PnL.')
     return '\n'.join([
         '# NEXT_ECONOMIC_ACTION', '', 'Computed from the exact source hashes in the accompanying decision report. Source state: '+report['state']+'. This is not a profitability claim.', '',
+        history_text, '',
         f"1. **Current loss location:** canonical PnL ${c['net_pnl_usd']} across {c['positions']} closed positions. Component contributions: "+'; '.join(f"{x['component']} ${x['net_pnl_usd']}" for x in components)+'. Accounting location is not causal attribution.',
         f"2. **Ruled out:** unexplained accounting residual is ${c['unexplained_pnl_usd']}; fees as the sole explanation: {excluded}. This does not rule out fees affecting individual trades.",
         '3. **Unidentified:** causal forecast error versus fill selection, the return from changing placement/queue/flow/lifetime/timing, and infrastructure latency value. Missing arrival probabilities, feature vectors and markouts remain visible in the scorecard.',
@@ -238,20 +250,23 @@ def main():
     parser=argparse.ArgumentParser(description=__doc__);parser.add_argument('--run-root',type=Path,required=True)
     parser.add_argument('--durable-root',type=Path,required=True);parser.add_argument('--attribution',type=Path)
     parser.add_argument('--experiments',type=Path);parser.add_argument('--benchmark',type=Path);parser.add_argument('--output',type=Path)
+    parser.add_argument('--historical-attribution',type=Path)
     args=parser.parse_args();root=args.run_root;output=args.output or root/'economic_decision_report.json'
     sources={}
     def read(name,path,required=False):
         if not path.exists():
             if required:raise ValueError('missing required source '+name)
             return {}
-        raw=path.read_bytes();sources[name]={'path':str(path),'sha256':digest(raw)};return json.loads(raw)
+        raw=path.read_bytes();sources[name]={'path':str(path),'sha256':digest(raw)}
+        return json.loads(gzip.decompress(raw) if path.suffix=='.gz' else raw)
     previous=json.loads(output.read_text()) if output.exists() else {}
     attribution=read('attribution',args.attribution or root/'profit_attribution.json',True)
+    historical=read('historical_attribution',args.historical_attribution or root/'profit_attribution_history.json.gz') or None
     experiments=read('experiments',args.experiments or root/'profit_experiment_report.json',True)
     statuses={name:read(name,root/path) for name,path in [('book_feed','micro_maker/fillability_ws_status.json'),
         ('lead_lag','external_fair/lead_lag_collector_status.json'),('oracle','external_fair/oracle_status.json')]}
     benchmark=read('benchmark',args.benchmark) if args.benchmark else None
-    result=diagnose(attribution,experiments,statuses,benchmark,previous);result['sources']=sources;result['implementation_sha256']=CODE_HASH
+    result=diagnose(attribution,experiments,statuses,benchmark,previous,historical);result['sources']=sources;result['implementation_sha256']=CODE_HASH
     result['data_quality']['spool_backlog_files']=sum(1 for p in (root/'ledger/spool').glob('*.json') if p.is_file())
     atomic(output,result);memo_path=output.parent/'NEXT_ECONOMIC_ACTION.md'
     temporary=memo_path.with_suffix('.md.tmp');temporary.write_text(memo(result));temporary.replace(memo_path)

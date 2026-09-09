@@ -712,7 +712,15 @@ v7_register_child "$!"
 ) & v7_register_child "$!"
 
 (
+  last_historical_attribution_at=0
   while [[ ! -e "$KILL" ]]; do
+    if (( $(date +%s) - last_historical_attribution_at >= 600 )); then
+      if python3 scripts/v7_profit_attribution.py --archive-root "${RUN_ROOT%/*}/paper_v7_archives" \
+        --output "$RUN_ROOT/profit_attribution_history.json.gz" \
+        >> "$RUN_ROOT/profit_attribution.log" 2>&1; then
+        last_historical_attribution_at="$(date +%s)"
+      fi
+    fi
     python3 scripts/v7_joint_execution_policy.py --ledger "$RUN_ROOT/ledger/execution.jsonl" --model-sha "$SHA" \
       --output "$RUN_ROOT/learned_execution/joint_policy.json" --strategy STRUCTURAL_ARB_ENGINE --min-bundles 20 \
       >> "$RUN_ROOT/learned_execution/joint_policy.log" 2>&1 || true
