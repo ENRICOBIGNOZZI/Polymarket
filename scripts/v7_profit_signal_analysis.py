@@ -101,7 +101,7 @@ def summarize_signal(selections,delays,manifest,settlements,now_ns):
             for name in names+['realized_ask_movement|'+movement]:add(decay,name,f'EV_change_{a}_to_{b}',market,delta)
         if 0 in valid:
             for d,label in valid.items():
-                if d==100:continue  # already the first adjacent pair; count each origin once
+                if d in (0,100):continue  # identity/no-delay and the already-counted first adjacent pair
                 for name in names:add(decay,name,f'EV_change_0_to_{d}',market,label['point_net_margin']-valid[0]['point_net_margin'])
     # Publish all specified marginal cells including empty / unavailable strata.
     fixed={'outcome':['YES','NO'],'margin':list(map(str,range(len(cfg['margin_edges'])-1))),

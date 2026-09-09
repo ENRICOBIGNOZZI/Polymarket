@@ -17,7 +17,8 @@ class MakerWindowTests(unittest.TestCase):
         self.start=100_000;self.mono=100_000_000_000
         self.anchor={'market_id':'m','token_id':'t','origin_ms':self.start,'observer_session_id':'session',
           'connection_epoch':1,'book_gap_counter':0,'order':{'record_id':'order','metadata':{'arrival_receive_monotonic_ns':self.mono}}}
-        self.book=SimpleNamespace(session='session',epoch=1,gaps=0,sequence=100,watermark_ms=self.start+6000,model_sha='a'*40,
+        self.book=SimpleNamespace(session='session',epoch=1,gaps=0,sequence=100,watermark_ms=self.start+6000,
+          watermark_monotonic_ns=self.mono+6_000_000_000,model_sha='a'*40,
           history={('m','t'):[{'receive_monotonic_ns':self.mono+h*1_000_000,'valid':True,'lineage_continuous':True,
                              'best_bid':bid,'best_ask':bid+.02,'bid_depth_l1':20} for h,bid in [(0,.48),(4000,.40),(6000,.70)]]})
         self.protocol=json.loads((ROOT/'config/v7_profit_experiment.json').read_text());self.records=[]
@@ -28,7 +29,15 @@ class MakerWindowTests(unittest.TestCase):
     def status(self,now=106_000):
         return {'paper_only':True,'authenticated_execution':False,'real_order_submission':False,'model_sha':self.book.model_sha,
           'observer_session_id':self.book.session,'connection_epoch':self.book.epoch,'state':'running','timestamp_ms':now,
-          'book_events_written':self.book.sequence,'book_watermark_receive_wall_ms':now,'evidence_complete':True}
+          'book_events_written':self.book.sequence,'book_watermark_receive_wall_ms':now,
+          'book_watermark_receive_monotonic_ns':self.mono+(now-self.start)*1_000_000,'evidence_complete':True}
+
+    def test_wall_clock_progress_cannot_replace_consumed_monotonic_window(self):
+        status=self.status();self.book.watermark_monotonic_ns=self.mono+100_000_000
+        self.assertEqual(continuity(self.anchor,self.book,status,105100,106000),WAITING)
+        self.book.watermark_monotonic_ns=self.mono+6_000_000_000
+        status['book_watermark_receive_monotonic_ns']=self.mono+100_000_000
+        self.assertEqual(continuity(self.anchor,self.book,status,105100,106000),WAITING)
 
     def replay(self,anchor,book,status,protocol,binary,**kw):
         arms=[]

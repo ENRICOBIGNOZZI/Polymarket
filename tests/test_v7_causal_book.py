@@ -59,6 +59,14 @@ class CausalBookTests(unittest.TestCase):
         self.assertEqual(evidence["label_pm_receive_ts_ms"], self.base+100)
         self.assertEqual(evidence["label_available_after_receive_ms"], self.base+120)
 
+    def test_monotonic_regression_invalidates_the_observed_execution_path(self):
+        self.book.ingest(self.row('yes',0,receive_monotonic_ns=100))
+        gaps=self.book.gaps
+        self.book.ingest(self.row('yes',1,receive_monotonic_ns=90))
+        self.assertEqual(self.book.gaps,gaps+1)
+        self.assertEqual(len(self.book.history[('market','yes')]),1)
+        self.assertEqual(self.book.watermark_monotonic_ns,90)
+
     def test_status_cannot_invent_market_progress_or_hide_consumer_gap(self):
         self.seed()
         for overrides in ({"book_events_written": 1000}, {"evidence_complete": False},

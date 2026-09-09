@@ -232,6 +232,8 @@ def replay_anchor(anchor,book,status,protocol,binary, *, evaluation_ms=42000, in
     if (not origin or anchor['book_gap_counter']!=book.gaps or anchor['observer_session_id']!=book.session
         or anchor['connection_epoch']!=book.epoch or not history or history[0]['receive_wall_ms']>start
         or book.watermark_ms<start+evaluation_ms or status.get('evidence_complete') is not True
+        or getattr(book,'watermark_monotonic_ns',0)<arrival+evaluation_ms*1000000
+        or status.get('book_watermark_receive_monotonic_ns',0)<arrival+evaluation_ms*1000000
         or status.get('model_sha')!=book.model_sha or status.get('observer_session_id')!=book.session
         or status.get('connection_epoch')!=book.epoch or status.get('state')!='running'
         or status.get('paper_only') is not True or status.get('authenticated_execution') is not False or status.get('real_order_submission') is not False
@@ -240,12 +242,14 @@ def replay_anchor(anchor,book,status,protocol,binary, *, evaluation_ms=42000, in
     if origin and (start-origin['receive_wall_ms']>protocol['maker']['maximum_feature_age_ms'] or (require_all_features and origin.get('features_valid') is not True)):reason='STALE_OR_INCOMPLETE_FEATURES'
     if not m.get('arrival_receive_monotonic_ns') or not m.get('arrival_exchange_event_ns'):reason='MISSING_NATIVE_ARRIVAL_CLOCK'
     path=[r for r in history if arrival<=r.get('receive_monotonic_ns',0)<=arrival+evaluation_ms*1000000]
-    if origin and (origin.get('valid') is not True or origin.get('lineage_continuous') is not True):reason='INVALID_ARRIVAL_BOOK'
+    if origin and (origin.get('valid') is not True or origin.get('lineage_continuous') is not True
+                   or origin.get('receive_monotonic_ns',0)<=0):reason='INVALID_ARRIVAL_BOOK'
     if origin and any(r.get('tick_size')!=origin['tick_size'] for r in path):reason='TICK_REGIME_CHANGED'
     invalid_books=sum(r.get('valid') is not True or r.get('lineage_continuous') is not True for r in path)
     output=[];source={'anchor':anchor,'origin_book':origin,'path':path,
         'evaluation_ms':evaluation_ms,'proof':{'status':status,'consumed_sequence':book.sequence,
-        'consumed_watermark_ms':book.watermark_ms,'gap_counter':book.gaps,'session':book.session,'epoch':book.epoch}}
+        'consumed_watermark_ms':book.watermark_ms,'consumed_watermark_monotonic_ns':getattr(book,'watermark_monotonic_ns',0),
+        'gap_counter':book.gaps,'session':book.session,'epoch':book.epoch}}
     for arm in protocol['maker']['arms']:
         arm_reason=reason
         if (not require_all_features and arm.get('minimum_opposite_prints_per_second') is not None

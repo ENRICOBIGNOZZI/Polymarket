@@ -85,3 +85,9 @@ Debug and ASan/UBSan also completed with all 138 CTest entries passing. The 15 t
 - Zstandard sample: 67,120,804 decoded bytes, original gzip 5,071,856 bytes. Level 9 produced 3,437,519 bytes in 1.306 seconds with verified roundtrip; level 15 produced 3,385,751 in 2.972 seconds. This is one native book segment, not a steady-state or 90-day capacity proof. No historical representation was changed by this experiment.
 - After these changes, Release was rebuilt and all **141 CTest entries passed**. Earlier Debug/ASan runs covered 138 entries; final exact-SHA CI, canonical flat/spool proof, deployment and all live acceptance items remain pending.
 - Tailscale: the authorized 997-node scope is unchanged. No administrative token-file path has been supplied and no device has been deleted.
+
+## Reviewable checkpoint and native window proof
+
+Draft PR #896 contains checkpoint `5d99710aaf5a590ade9267b9f56e42b46e79e97b`. Its PR-triggered `ci`, `monitoring` and `Private runtime single-writer validation` workflows passed. This is branch-checkpoint validation, not final-main-SHA deployment acceptance.
+
+The subsequent Maker-window change requires both the consumed native monotonic watermark and the published monotonic watermark to cover the requested execution/markout target. BookTimeline invalidates a regressing monotonic clock. A native replay integration test now freezes operational results at 5.1 and 10.1 seconds, restores them from emitted records, introduces a later transport gap, and verifies that only later markouts are censored. The ten relevant local CTest entries pass, including the native replay test. Live forward effectiveness and complete event-level censor accounting remain unverified.

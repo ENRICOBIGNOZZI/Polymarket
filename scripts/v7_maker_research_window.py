@@ -11,16 +11,20 @@ from v7_profit_experiments import replay_anchor, preserve_source, finite
 WAITING='WAITING_FOR_EVIDENCE'
 
 
-def continuity(anchor,book,status,target_ms,now_ms):
+def continuity(anchor,book,status,target_ms,now_ms,target_monotonic_ns=None):
     if (anchor['observer_session_id']!=book.session or anchor['connection_epoch']!=book.epoch
             or anchor['book_gap_counter']!=book.gaps):return 'TRANSPORT_GAP_OR_SESSION_CHANGE'
     if (status.get('paper_only') is not True or status.get('authenticated_execution') is not False
             or status.get('real_order_submission') is not False or status.get('model_sha')!=book.model_sha):
         return 'INVALID_STATUS_IDENTITY'
+    arrival=anchor['order']['metadata'].get('arrival_receive_monotonic_ns')
+    if not arrival or arrival<=0:return 'MISSING_NATIVE_ARRIVAL_CLOCK'
+    target_monotonic_ns=target_monotonic_ns or arrival+int((target_ms-anchor['origin_ms'])*1e6)
     if (status.get('observer_session_id')!=book.session or status.get('connection_epoch')!=book.epoch
             or status.get('state')!='running' or not 0<=now_ms-status.get('timestamp_ms',0)<=2000
             or status.get('book_events_written',0)>book.sequence
-            or min(book.watermark_ms,status.get('book_watermark_receive_wall_ms',0))<target_ms):return WAITING
+            or min(book.watermark_ms,status.get('book_watermark_receive_wall_ms',0))<target_ms
+            or min(getattr(book,'watermark_monotonic_ns',0),status.get('book_watermark_receive_monotonic_ns',0))<target_monotonic_ns):return WAITING
     if status.get('evidence_complete') is not True:return 'TRANSPORT_EVIDENCE_INCOMPLETE'
     return 'OBSERVED'
 
@@ -47,7 +51,8 @@ class MakerWindow:
             if not arms:continue
             horizon=life+100;target=start+horizon
             if now<target:continue
-            state=continuity(anchor,book,status,target,now)
+            target_mono=anchor['order']['metadata'].get('arrival_receive_monotonic_ns',0)+horizon*1_000_000
+            state=continuity(anchor,book,status,target,now,target_mono)
             if state==WAITING and now<target+grace:
                 self.waits+=1;continue
             selected=copy.deepcopy(protocol);selected['maker']['arms']=arms
@@ -74,7 +79,7 @@ class MakerWindow:
                     target_mono=fill['receive_monotonic_ns']+horizon*1_000_000
                     target_ms=start+(target_mono-anchor['order']['metadata']['arrival_receive_monotonic_ns'])/1e6
                     if now<target_ms:continue
-                    state=continuity(anchor,book,status,target_ms,now)
+                    state=continuity(anchor,book,status,target_ms,now,target_mono)
                     if state==WAITING and now<target_ms+grace:continue
                     cut=None
                     if state=='OBSERVED':
