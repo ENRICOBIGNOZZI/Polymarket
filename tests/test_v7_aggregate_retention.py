@@ -47,6 +47,20 @@ class AggregateRetentionTests(unittest.TestCase):
         d=summarize(self.source(True),now_ns=NOW*10**9)
         self.assertEqual(d['scope'],'RAW_TRANSPORT_COUNTS_ONLY');self.assertEqual(d['bins'][0]['metrics'],{})
         self.assertEqual(d['record_count'],2)
+    def test_raw_queue_reordering_is_preserved_as_quality_counts(self):
+        p=self.source(True);raw=bytearray(tape(True))
+        second=HEADER.size+RAW.size+len(b'{"price":100}')
+        raw[second:second+8]=(1).to_bytes(8,'little')
+        p.write_bytes(gzip.compress(raw));d=summarize(p,now_ns=NOW*10**9)
+        self.assertEqual(d['record_count'],2);self.assertEqual(d['bins'][0]['sequence_regressions'],1)
+    def test_recompression_manifest_can_include_pack_itself(self):
+        from v7_lossless_data_compaction import file_hash
+        p=self.source();self.capture(p);sha=file_hash(p)
+        pack=self.store.root/'packs'/sha[:2]/(sha+'.pack');pack.parent.mkdir(parents=True);os.link(p,pack)
+        folder=self.store.root/'pack_manifests';folder.mkdir()
+        (folder/'test.json').write_text(json.dumps({'pack_sha256':sha,'source_aliases':[str(p),str(pack)]}))
+        retire(p,self.runs,self.store,now=NOW,check_closed=lambda _:True)
+        self.assertFalse(pack.exists());self.assertFalse(p.exists())
     def test_sealed_partial_record_prevents_deletion(self):
         p=self.source(tail=b'x')
         with self.assertRaisesRegex(ValueError,'partial'):retire(p,self.runs,self.store,now=NOW,check_closed=lambda _:True)

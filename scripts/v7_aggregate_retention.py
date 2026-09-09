@@ -91,12 +91,14 @@ def summarize(path, *, interval_seconds=60, now_ns=None, minimum_age_seconds=360
                     metrics['trade_price_times_native_size']=values[4]*values[5]
                 flags={'gap_events':int(bool(gap)),'stale_events':int(bool(stale)),'unhealthy_events':int(not healthy),'missing_exchange_clock':int(exchange<=0)}
             if wall<=0 or mono<=0 or not 1<=venue<=6:raise ValueError('invalid receive clock or venue')
-            if last_sequence is not None and seq<=last_sequence:raise ValueError('nonincreasing tape sequence')
+            regression=last_sequence is not None and seq<=last_sequence
+            if regression and magic!=b'PMV7RAW!':raise ValueError('nonincreasing normalized tape sequence')
             key=(wall//(interval_seconds*10**9),venue,asset,kind,epoch)
             if key not in bins:
                 if len(bins)>=100000:raise ValueError('aggregate cardinality exceeds bounded memory')
-                bins[key]={'interval_start_ns':key[0]*interval_seconds*10**9,'venue_id':venue,'asset_handle':asset,'event_type':kind,'connection_epoch':epoch,'records':0,'payload_bytes':0,'first_receive_wall_ns':wall,'last_receive_wall_ns':wall,'first_sequence':seq,'last_sequence':seq,'sequence_gaps':0,'flags':{},'metrics':{}}
+                bins[key]={'interval_start_ns':key[0]*interval_seconds*10**9,'venue_id':venue,'asset_handle':asset,'event_type':kind,'connection_epoch':epoch,'records':0,'payload_bytes':0,'first_receive_wall_ns':wall,'last_receive_wall_ns':wall,'first_sequence':seq,'last_sequence':seq,'sequence_gaps':0,'sequence_regressions':0,'flags':{},'metrics':{}}
             b=bins[key];b['records']+=1;b['payload_bytes']+=n;b['last_sequence']=seq
+            b['sequence_regressions']+=int(regression)
             b['sequence_gaps']+=max(0,seq-last_sequence-1) if last_sequence is not None else 0
             b['first_receive_wall_ns']=min(wall,b['first_receive_wall_ns']);b['last_receive_wall_ns']=max(wall,b['last_receive_wall_ns'])
             for name,v in flags.items():b['flags'][name]=b['flags'].get(name,0)+v
@@ -111,6 +113,7 @@ def summarize(path, *, interval_seconds=60, now_ns=None, minimum_age_seconds=360
       'metric_layout':['count','sum','minimum','maximum','first_value','first_receive_wall_ns_and_sequence','last_value','last_receive_wall_ns_and_sequence'],
       'scope':'RAW_TRANSPORT_COUNTS_ONLY' if magic==b'PMV7RAW!' else 'NORMALIZED_MARKET_STATISTICS_IN_VENUE_NATIVE_UNITS',
       'limitations':['Lossy: no tick replay, order-level queue reconstruction or exact latency replay.',
+       'Raw ordinary/large queues can reorder sequences; forward gaps are observed jumps, not confirmed message loss.',
        'Raw payload content is not represented by transport counters; normalized market aggregates are separate sources.',
        'Numeric sums are event-weighted; snapshot sizes and open interest sums are not traded volume.',
        'Intervals are receive-wall-clock bins, never exchange-time or decision-time observations.',
@@ -135,6 +138,7 @@ def retire(path, runs, store, *, now=None, minimum_age_seconds=3600, check_close
             manifests.append(value)
             for alias in value['source_aliases']:
                 p=Path(alias)
+                if p==pack:continue
                 if p.exists() and p not in aliases:
                     if not eligible(p,runs,now,minimum_age_seconds) or file_hash(p)!=original_sha:raise ValueError('protected or changed source alias')
                     aliases.append(p)
