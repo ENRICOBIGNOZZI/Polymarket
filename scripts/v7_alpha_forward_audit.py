@@ -36,7 +36,7 @@ def audit(run_root, durable_root):
     excluded=set(hp['development_market_ids'])
     boundary=int(hp['forward_oos_starts_after_ns'])//1_000_000
     origins={}; finals={}
-    for r in stream(durable_root/'external_fair/counterfactuals.jsonl',manifest):
+    for r in journal_rows(durable_root/'external_fair/counterfactuals.jsonl',manifest):
         if r.get('event_type')=='FORECAST' and r.get('research_model_model_hash')==model_hash \
                 and r.get('market_id') not in excluded and int(r.get('observed_ms') or 0)>boundary:
             origins[r['forecast_id']]=r

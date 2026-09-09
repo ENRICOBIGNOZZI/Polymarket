@@ -15,6 +15,7 @@ from v7_maker_accounting import project_maker, settlement_event as maker_settlem
 
 import argparse
 import hashlib
+import gzip
 import json
 import math
 import os
@@ -23,11 +24,13 @@ import threading
 import time
 import urllib.parse
 from dataclasses import dataclass
+from contextlib import ExitStack,nullcontext
 from pathlib import Path
 from typing import Any
 
 from v7_market_common import finite, parse_array, request_json
 from v7_evidence_contract import hybrid_identity
+from v7_compressed_journal import CompressedJournal,journal_paths
 from v7_execution_ledger import (
     LedgerEvent, canonical_ledger_path, iter_records,
 )
@@ -105,13 +108,15 @@ class _CounterfactualIndex:
     def __init__(self, paths):
         import sqlite3
         self.paths = tuple(Path(path).absolute() for path in paths)
+        self.physical_paths = ()
         self.db = sqlite3.connect("")
         self.db.execute("PRAGMA temp_store=FILE")
         self.db.execute("PRAGMA cache_size=-2048")
         self.db.execute("PRAGMA mmap_size=0")
         self.db.execute("""CREATE TABLE records (
             id TEXT PRIMARY KEY, payload TEXT NOT NULL, event_type TEXT,
-            model_sha TEXT, stamp INTEGER, rank INTEGER, source_offset INTEGER
+            model_sha TEXT, stamp INTEGER, rank INTEGER, source_offset INTEGER,
+            root_rank INTEGER
         )""")
         self.db.execute("CREATE INDEX event_sha ON records(event_type,model_sha)")
         self.db.execute("CREATE INDEX source_order ON records(rank,source_offset)")
@@ -139,10 +144,28 @@ class _CounterfactualIndex:
         return prefix, suffix
 
     def refresh(self):
+        # A compression publication can replace a sealed raw pathname between
+        # enumeration and open. Retry the authoritative partition inventory;
+        # never publish a cache that silently omitted the disappearing source.
+        for attempt in range(3):
+            try:return self._refresh_once()
+            except FileNotFoundError:
+                self.invalid=True
+                if attempt==2:raise
+
+    def _refresh_once(self):
         started = time.monotonic()
+        physical=[];root_ranks={}
+        for root_rank,path in enumerate(self.paths):
+            for source in journal_paths(path):
+                if source not in root_ranks:
+                    physical.append(source);root_ranks[source]=root_rank
+        # A changed partition topology rebuilds this disposable cache from
+        # preserved sources. Ordinary appends still decode only the new tail.
+        physical=tuple(physical)
         snapshots = {}
-        reset = self.invalid
-        for path in self.paths:
+        reset = self.invalid or physical!=self.physical_paths
+        for path in physical:
             try:
                 if path.is_symlink():
                     raise RuntimeError(f"paper_exploration_evidence_symlink:{path}")
@@ -163,7 +186,7 @@ class _CounterfactualIndex:
             elif sig[2] == previous[2] and sig[3:] != previous[3:]:
                 reset = True
             elif sig != previous:
-                with path.open("rb") as handle:
+                with (gzip.open(path,'rb') if path.suffix=='.gz' else path.open('rb')) as handle:
                     if self._guards(handle, old["offset"]) != old["guards"]:
                         reset = True
         decoded = read_bytes = 0
@@ -172,7 +195,7 @@ class _CounterfactualIndex:
             with self.db:
                 if reset:
                     self.db.execute("DELETE FROM records")
-                for rank, path in enumerate(self.paths):
+                for rank, path in enumerate(physical):
                     info = snapshots.get(path)
                     if info is None:
                         continue
@@ -182,20 +205,24 @@ class _CounterfactualIndex:
                         continue
                     offset = old["offset"] if old else 0
                     lines = old["lines"] if old else 0
-                    with path.open("rb") as handle:
+                    compressed=path.suffix=='.gz'
+                    with (gzip.open(path,'rb') if compressed else path.open('rb')) as handle:
                         if self._file_identity(os.fstat(handle.fileno()))[:2] != file_identity[:2]:
                             raise RuntimeError("paper_exploration_evidence_replaced_during_read")
                         handle.seek(offset)
-                        while offset < info.st_size:
+                        while compressed or offset < info.st_size:
                             start = offset
-                            raw = handle.readline(min(self.MAX_LINE_BYTES + 1,
-                                                      info.st_size - offset))
+                            raw = handle.readline(self.MAX_LINE_BYTES+1 if compressed else
+                                                  min(self.MAX_LINE_BYTES+1,info.st_size-offset))
                             read_bytes += len(raw)
                             if not raw:
+                                if compressed:break
                                 raise RuntimeError("paper_exploration_evidence_truncated_during_read")
                             if len(raw) > self.MAX_LINE_BYTES:
                                 raise RuntimeError("paper_exploration_evidence_record_too_large")
                             if not raw.endswith(b"\n"):
+                                if compressed or path not in self.paths:
+                                    raise RuntimeError('paper_exploration_closed_evidence_incomplete_tail')
                                 break
                             offset += len(raw)
                             lines += 1
@@ -221,15 +248,15 @@ class _CounterfactualIndex:
                                     raise RuntimeError(f"paper_exploration_counterfactual_conflict:{identity}")
                                 if (rank, start) < (prior[1], prior[2]):
                                     self.db.execute(
-                                        "UPDATE records SET rank=?,source_offset=? WHERE id=?",
-                                        (rank, start, identity),
+                                        "UPDATE records SET rank=?,source_offset=?,root_rank=? WHERE id=?",
+                                        (rank, start, root_ranks[path], identity),
                                     )
                             else:
                                 self.db.execute(
-                                    "INSERT INTO records VALUES (?,?,?,?,?,?,?)",
+                                    "INSERT INTO records VALUES (?,?,?,?,?,?,?,?)",
                                     (identity, rendered, str(row.get("event_type") or ""),
                                      str(row.get("model_sha") or ""),
-                                     int(row.get("timestamp_ms") or 0), rank, start),
+                                     int(row.get("timestamp_ms") or 0), rank, start,root_ranks[path]),
                                 )
                         after = os.fstat(handle.fileno())
                         current = path.stat()
@@ -238,11 +265,15 @@ class _CounterfactualIndex:
                                 or after.st_size < info.st_size):
                             raise RuntimeError("paper_exploration_evidence_changed_during_read")
                         if (after.st_size == info.st_size
-                                and self._file_identity(after)[3:] != file_identity[3:]):
+                                and (after.st_mtime_ns!=info.st_mtime_ns
+                                     or (not compressed and after.st_ctime_ns!=info.st_ctime_ns))):
                             raise RuntimeError("paper_exploration_evidence_rewritten_during_read")
                         pending[path] = {"file_identity": file_identity, "offset": offset,
                                          "lines": lines, "guards": self._guards(handle, offset)}
+                current_paths=tuple(dict.fromkeys(source for root in self.paths for source in journal_paths(root)))
+                if current_paths!=physical:raise FileNotFoundError('counterfactual journal rotated during snapshot')
             self.states = pending
+            self.physical_paths=physical
             self.invalid = False
             self.metrics["rebuilds"] += int(reset)
         except Exception:
@@ -1651,7 +1682,8 @@ def opportunity_set(
 
 
 class PaperRouter:
-    def __init__(self, run_root: Path, model_sha: str, config_path: Path, clob_url: str, gamma_url: str):
+    def __init__(self, run_root: Path, model_sha: str, config_path: Path, clob_url: str, gamma_url: str,
+                 *,counterfactual_journals=None):
         self.root = run_root
         self.directory = run_root / "external_fair"
         self.sha = model_sha
@@ -1710,6 +1742,7 @@ class PaperRouter:
         self.archive_root = family_root / "paper_v7_archives"
         self.durable_directory = family_root / "paper_v7_durable" / "external_fair"
         self.durable_counterfactual_path = self.durable_directory / "counterfactuals.jsonl"
+        self.counterfactual_journals = dict(counterfactual_journals or {})
         self.drain_path = run_root / "control" / "CUTOVER_DRAIN"
         allocation = load(run_root / "control" / "allocations" / "manifest.json")
         budgets = allocation.get("engine_budgets") if isinstance(
@@ -1786,7 +1819,8 @@ class PaperRouter:
         paths = [self.durable_counterfactual_path, self.counterfactual_path]
         if self.archive_root.exists():
             paths.extend(sorted(
-                self.archive_root.glob("cutover-*/external_fair/counterfactuals.jsonl")
+                directory/'counterfactuals.jsonl' for directory in
+                self.archive_root.glob("cutover-*/external_fair")
             ))
         return paths
 
@@ -1807,10 +1841,12 @@ class PaperRouter:
             with self.durable_counterfactual_path.open('rb') as check:
                 check.seek(-1,os.SEEK_END)
                 if check.read(1)!=b'\n':raise RuntimeError('durable_source_incomplete_tail_preserved')
-        with self.durable_counterfactual_path.open('ab') as handle:
-            for (payload,) in index.db.execute('SELECT payload FROM records WHERE rank>0 ORDER BY stamp,id'):
-                handle.write(payload.encode()+b'\n')
-            handle.flush();os.fsync(handle.fileno())
+        journal=self.counterfactual_journals.get(self.durable_counterfactual_path)
+        with nullcontext() if journal else self.durable_counterfactual_path.open('ab') as handle:
+            for (payload,) in index.db.execute('SELECT payload FROM records WHERE root_rank>0 ORDER BY stamp,id'):
+                if journal:journal.append(json.loads(payload))
+                else:handle.write(payload.encode()+b'\n')
+            if handle:handle.flush();os.fsync(handle.fileno())
 
     def iter_durable_records(self, *, event_types=None):
         paths = [self.durable_counterfactual_path, self.counterfactual_path]
@@ -2238,6 +2274,9 @@ class PaperRouter:
         }
         payload = (json.dumps(record, separators=(",", ":"), sort_keys=True) + "\n").encode()
         for path in (self.counterfactual_path, self.durable_counterfactual_path):
+            if path in self.counterfactual_journals:
+                self.counterfactual_journals[path].append(record)
+                continue
             path.parent.mkdir(parents=True, exist_ok=True)
             descriptor = os.open(path, os.O_APPEND | os.O_CREAT | os.O_WRONLY, 0o600)
             try:
@@ -2245,6 +2284,20 @@ class PaperRouter:
                 os.fsync(descriptor)
             finally:
                 os.close(descriptor)
+
+    def enable_compressed_counterfactuals(self,maximum_hot_bytes=64*1024**2):
+        if self.counterfactual_journals:raise RuntimeError('counterfactual journals already owned')
+        try:
+            for path in (self.counterfactual_path,self.durable_counterfactual_path):
+                self.counterfactual_journals[path]=CompressedJournal(path,maximum_hot_bytes)
+        except BaseException:
+            self.close_counterfactuals();raise
+
+    def close_counterfactuals(self):
+        try:
+            with ExitStack() as stack:
+                for journal in self.counterfactual_journals.values():stack.callback(journal.close)
+        finally:self.counterfactual_journals={}
 
     def emit_shadow_ingress(self, event: LedgerEvent) -> str | None:
         """Publish proposals to coordination and lifecycle labels to research."""
@@ -3653,7 +3706,14 @@ def main() -> int:
         )
         print(json.dumps(report, sort_keys=True))
         return 0 if report["complete"] else 2
-    PaperRouter(args.run_root.resolve(), args.model_sha, args.config.resolve(), args.clob_url, args.gamma_url).run(args.interval)
+    root=args.run_root.resolve()
+    # Own both append paths before startup reconciliation writes any evidence.
+    with ExitStack() as stack:
+        journals={path:stack.enter_context(CompressedJournal(path))
+                  for path in _paper_exploration_evidence_paths(root)}
+        router=PaperRouter(root,args.model_sha,args.config.resolve(),args.clob_url,args.gamma_url,
+                           counterfactual_journals=journals)
+        router.run(args.interval)
     return 0
 
 

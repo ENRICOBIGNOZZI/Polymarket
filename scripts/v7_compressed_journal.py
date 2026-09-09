@@ -88,7 +88,7 @@ def journal_paths(path):
     return [segments[k] for k in sorted(segments)]+([path] if path.exists() else [])
 
 
-def journal_rows(path,manifest=None):
+def journal_rows(path,manifest=None,*,maximum_line_bytes=16*1024**2):
     path=Path(path)
     if not path.parent.exists():return
     lock_path=path.with_name(path.name+'.rotation.lock')
@@ -111,12 +111,12 @@ def journal_rows(path,manifest=None):
             continue
         break
     try:
-        yield from _snapshot_rows(sources,path,active,active_limit if active else None,manifest)
+        yield from _snapshot_rows(sources,path,active,active_limit if active else None,manifest,maximum_line_bytes)
     finally:
         if active is not None:active.close()
 
 
-def _snapshot_rows(sources,path,active,active_limit,manifest):
+def _snapshot_rows(sources,path,active,active_limit,manifest,maximum_line_bytes):
     for source in sources:
         if source==path and active is not None:
             stream=active
@@ -125,19 +125,23 @@ def _snapshot_rows(sources,path,active,active_limit,manifest):
             except FileNotFoundError:
                 # Compression published its verified replacement after enumeration.
                 source=source.with_name(source.name+'.gz');stream=source.open('rb')
-        digest=hashlib.sha256();size=0
+        digest=hashlib.sha256();size=0;lines=0
         with stream:
             limit=active_limit if stream is active else os.fstat(stream.fileno()).st_size
             decoded=gzip.GzipFile(fileobj=stream) if source.suffix=='.gz' else stream
             try:
                 while source.suffix=='.gz' or stream.tell()<limit:
-                    raw=decoded.readline() if source.suffix=='.gz' else decoded.readline(limit-stream.tell())
-                    if not raw or not raw.endswith(b'\n'):break
-                    digest.update(raw);size+=len(raw)
+                    raw=decoded.readline(maximum_line_bytes+1 if source.suffix=='.gz' else min(maximum_line_bytes+1,limit-stream.tell()))
+                    if not raw:break
+                    if len(raw)>maximum_line_bytes:raise ValueError('journal record too large')
+                    if not raw.endswith(b'\n'):
+                        if source.suffix=='.gz' or stream is not active:raise ValueError('closed journal has incomplete record')
+                        break
+                    digest.update(raw);size+=len(raw);lines+=1
                     if raw.strip():yield json.loads(raw)
             finally:
                 if decoded is not stream:decoded.close()
-        if manifest is not None:manifest.append({'path':str(source),'decoded_prefix_bytes':size,'decoded_sha256':digest.hexdigest()})
+        if manifest is not None:manifest.append({'path':str(source),'decoded_prefix_bytes':size,'decoded_sha256':digest.hexdigest(),'complete_lines':lines})
 
 
 class CompressedJournal:
