@@ -1,4 +1,5 @@
 import copy
+import json
 from pathlib import Path
 import sys
 import unittest
@@ -24,6 +25,34 @@ def fixture():
 
 
 class DecisionReportTests(unittest.TestCase):
+    def test_archived_results_remain_visible_without_becoming_current_cash(self):
+        from v7_profit_attribution import analyze
+        from test_v7_profit_attribution import fixture as ledger_fixture
+        attribution,experiments=fixture();historical=analyze(ledger_fixture())
+        report=diagnose(attribution,experiments,{},historical=historical)
+        json.dumps(report,allow_nan=False)
+        self.assertEqual(report['canonical']['net_pnl_usd'],'-2')
+        self.assertEqual(str(report['historical_canonical']['net_pnl_usd']),'2.27')
+        self.assertIn('MAKER_EXECUTION',report['intervention_ranking']['provisional_next_test'])
+        self.assertIn('Archived evidence remains visible',memo(report))
+        corrupted=copy.deepcopy(historical);corrupted['canonical_final_pnl']='1000'
+        with self.assertRaisesRegex(ValueError,'historical position population'):
+            diagnose(attribution,experiments,{},historical=corrupted)
+
+    def test_legacy_final_without_fills_remains_unknown_and_reportable(self):
+        from v7_profit_attribution import analyze
+        from test_v7_profit_attribution import fixture as ledger_fixture
+        final=ledger_fixture()[-1];final['final_pnl']=-2
+        attribution=analyze([final]);report=diagnose(attribution,{'cohorts':[]},{})
+        self.assertEqual(str(report['canonical']['net_pnl_usd']),'-2')
+        self.assertIsNone(report['canonical']['gross_pnl_usd'])
+        self.assertIsNone(report['canonical']['costs_usd'])
+        metric=report['data_quality']['metrics']['unreconciled_positions']
+        self.assertEqual(metric['count'],1)
+        self.assertEqual(metric['affected_contracts'],1)
+        self.assertIsNone(metric['affected_economic_notional_usd'])
+        self.assertEqual(report['diagnosis'][-1]['finding'],'NOT_RULED_OUT')
+
     def test_inconsistent_canonical_population_is_not_published_as_a_diagnosis(self):
         attribution,experiments=fixture();attribution['canonical_final_pnl']='999'
         with self.assertRaisesRegex(ValueError,'reconcile'):diagnose(attribution,experiments,{})

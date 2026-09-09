@@ -1,13 +1,16 @@
 import copy
+import contextlib
 from decimal import Decimal
 import gzip
 import json
+import io
 from pathlib import Path
 import sys
 import tempfile
 import unittest
+from unittest.mock import patch
 sys.path.insert(0,str(Path(__file__).resolve().parents[1]/'scripts'))
-from v7_profit_attribution import analyze, read_sources, opportunity_funnel, learning_coverage
+from v7_profit_attribution import analyze, read_sources, opportunity_funnel, learning_coverage, archived_ledgers, historical_summary, main
 
 SHA='a'*40
 
@@ -27,6 +30,44 @@ def fixture():
     return [order,one,two,final]
 
 class AttributionTests(unittest.TestCase):
+    def test_archived_model_generations_survive_compression_and_duplicate_checkpoints(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root=Path(directory);archives=root/'archives';archives.mkdir()
+            a=archives/('cutover-'+SHA+'-1-10');b=archives/('cutover-'+'b'*40+'-2-20')
+            (a/'archive/canonical-ledger').mkdir(parents=True);(b/'ledger').mkdir(parents=True)
+            first=fixture();second=copy.deepcopy(first)
+            for row in second:row['model_sha']='b'*40
+            encoded=lambda rows:(''.join(json.dumps(row)+'\n' for row in rows)).encode()
+            (a/'archive/canonical-ledger/complete.jsonl.gz').write_bytes(gzip.compress(encoded(first)))
+            (a/'archive/canonical-ledger/earlier.jsonl.gz').write_bytes(gzip.compress(encoded(first[:2])))
+            (b/'ledger/execution.jsonl').write_bytes(encoded(second))
+            paths,inventory=archived_ledgers(archives)
+            values,sources=read_sources(paths,require_complete=True)
+            self.assertEqual(len(values),8);self.assertEqual(len(inventory),2)
+            report=analyze(values,sources);summary=historical_summary(report)
+            self.assertEqual(summary['positions'],2)
+            self.assertEqual(summary['generations'][SHA]['net_pnl_usd'],'2.27')
+            self.assertEqual(summary['generations']['b'*40]['net_pnl_usd'],'2.27')
+            out=root/'history.json.gz'
+            with patch.object(sys,'argv',['attribution','--archive-root',str(archives),'--output',str(out)]),contextlib.redirect_stdout(io.StringIO()):main()
+            rendered=json.loads(gzip.decompress(out.read_bytes()))
+            self.assertEqual(rendered['canonical_final_positions'],2)
+            self.assertEqual(rendered['historical_summary']['source_count'],3)
+            self.assertIn('NOT_INCLUDED',rendered['opportunity_funnel']['archive_coverage'])
+            conflict=copy.deepcopy(first);conflict[-1]['final_pnl']=999
+            (a/'archive/canonical-ledger/conflict.jsonl.gz').write_bytes(gzip.compress(encoded(conflict)))
+            with self.assertRaisesRegex(ValueError,'conflicting canonical record'):
+                read_sources(archived_ledgers(archives)[0],require_complete=True)
+
+    def test_sealed_partial_tail_and_unsafe_archive_are_rejected(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root=Path(directory);p=root/'execution.jsonl';p.write_text(json.dumps(fixture()[0]))
+            self.assertEqual(read_sources([p])[0],[])
+            with self.assertRaisesRegex(ValueError,'incomplete sealed'):read_sources([p],require_complete=True)
+            with self.assertRaisesRegex(ValueError,'missing or unsafe'):archived_ledgers(root/'missing')
+            unsafe=root/('cutover-'+SHA+'-1-2');unsafe.symlink_to(root,target_is_directory=True)
+            with self.assertRaisesRegex(ValueError,'unsafe cutover'):archived_ledgers(root)
+
     def test_exact_embedded_taker_receipt_joins_namespaced_replay_without_guessing(self):
         values=fixture();order=values[0];order['candidate_id']='candidate'
         item={'model_sha':SHA,'market_id':'market','token_id':'NO-token','replay_key':'crypto:BTC:candidate'}
