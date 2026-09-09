@@ -19,12 +19,14 @@ import gzip
 import json
 import math
 import os
+import sqlite3
 import statistics
 import threading
 import time
 import urllib.parse
 from dataclasses import dataclass
 from contextlib import ExitStack,nullcontext
+from collections import OrderedDict
 from pathlib import Path
 from typing import Any
 
@@ -96,7 +98,7 @@ def _paper_exploration_evidence_paths(run_root: Path) -> list[Path]:
 
 
 class _CounterfactualIndex:
-    """Disposable disk-backed cache; sources remain the only evidence.
+    """Bounded in-memory row locators; payloads stay in their source journals.
 
     Rebuild on every process start, replacement, truncation or same-size rewrite.
     Append-boundary guards do not detect arbitrary interior edits concurrent
@@ -105,18 +107,21 @@ class _CounterfactualIndex:
     MAX_LINE_BYTES = 16 * 1024 * 1024
     GUARD_BYTES = 4096
 
-    def __init__(self, paths):
-        import sqlite3
+    def __init__(self, paths, *, maximum_cache_bytes=256*1024**2):
         self.paths = tuple(Path(path).absolute() for path in paths)
         self.physical_paths = ()
-        self.db = sqlite3.connect("")
-        self.db.execute("PRAGMA temp_store=FILE")
+        if maximum_cache_bytes<65536:raise ValueError('counterfactual cache budget too small')
+        self.maximum_cache_bytes=int(maximum_cache_bytes)
+        self.db = sqlite3.connect(":memory:")
+        self.db.execute("PRAGMA temp_store=MEMORY")
         self.db.execute("PRAGMA cache_size=-2048")
         self.db.execute("PRAGMA mmap_size=0")
+        page_size=self.db.execute('PRAGMA page_size').fetchone()[0]
+        self.db.execute(f'PRAGMA max_page_count={self.maximum_cache_bytes//page_size}')
         self.db.execute("""CREATE TABLE records (
-            id TEXT PRIMARY KEY, payload TEXT NOT NULL, event_type TEXT,
+            id TEXT PRIMARY KEY, payload BLOB NOT NULL, event_type TEXT,
             model_sha TEXT, stamp INTEGER, rank INTEGER, source_offset INTEGER,
-            root_rank INTEGER
+            root_rank INTEGER, source_bytes INTEGER, source_sha256 BLOB
         )""")
         self.db.execute("CREATE INDEX event_sha ON records(event_type,model_sha)")
         self.db.execute("CREATE INDEX source_order ON records(rank,source_offset)")
@@ -125,7 +130,9 @@ class _CounterfactualIndex:
         self.invalid = False
         self.metrics = {"bytes_read": 0, "records_decoded": 0,
                         "rebuilds": 0, "last_bytes_read": 0,
-                        "last_records_decoded": 0, "last_refresh_seconds": 0.0}
+                        "last_records_decoded": 0, "last_refresh_seconds": 0.0,
+                        'state':'UNINITIALIZED','maximum_database_bytes':self.maximum_cache_bytes,
+                        'disk_cache_bytes':0}
 
     def close(self):
         self.db.close()
@@ -153,6 +160,41 @@ class _CounterfactualIndex:
                 self.invalid=True
                 if attempt==2:raise
 
+    def _rotation_states(self,physical,snapshots):
+        """Reuse indexed prefixes only after exact-byte verification of a move."""
+        pending={};moves={};force=set();validated=0
+        new_ranks={path:i for i,path in enumerate(physical)}
+        old_logical={p.with_name(p.name.removesuffix('.gz')) for p in self.physical_paths}
+        for old_rank,path in enumerate(self.physical_paths):
+            old=self.states.get(path)
+            if old is None:continue
+            current=snapshots.get(path)
+            if current and (current.st_dev,current.st_ino)==old['file_identity'][:2]:
+                pending[path]=old;moves[old_rank]=new_ranks[path];continue
+            candidates=[]
+            if path not in self.paths:
+                candidate=path.with_name(path.name+'.gz')
+                if candidate in snapshots:candidates=[candidate]
+            else:
+                candidates=[p for p in physical if p.parent==path.parent
+                    and p.name.startswith(path.name+'.segment-')
+                    and p.with_name(p.name.removesuffix('.gz')) not in old_logical]
+            matched=None
+            for candidate in candidates:
+                h=hashlib.sha256();remaining=old['offset']
+                with (gzip.open(candidate,'rb') if candidate.suffix=='.gz' else candidate.open('rb')) as stream:
+                    while remaining:
+                        raw=stream.read(min(1024**2,remaining))
+                        if not raw:break
+                        h.update(raw);remaining-=len(raw);validated+=len(raw)
+                if remaining==0 and h.hexdigest()==old['prefix_sha256']:
+                    matched=candidate;break
+            if matched is None:return {},{},set(),True,validated
+            if matched in pending:raise RuntimeError('ambiguous counterfactual source rotation')
+            pending[matched]={**old,'file_identity':self._file_identity(snapshots[matched])}
+            moves[old_rank]=new_ranks[matched];force.add(matched)
+        return pending,moves,force,False,validated
+
     def _refresh_once(self):
         started = time.monotonic()
         physical=[];root_ranks={}
@@ -160,11 +202,9 @@ class _CounterfactualIndex:
             for source in journal_paths(path):
                 if source not in root_ranks:
                     physical.append(source);root_ranks[source]=root_rank
-        # A changed partition topology rebuilds this disposable cache from
-        # preserved sources. Ordinary appends still decode only the new tail.
         physical=tuple(physical)
         snapshots = {}
-        reset = self.invalid or physical!=self.physical_paths
+        reset = self.invalid
         for path in physical:
             try:
                 if path.is_symlink():
@@ -173,16 +213,20 @@ class _CounterfactualIndex:
                 if not path.is_file():
                     raise RuntimeError(f"paper_exploration_evidence_not_file:{path}")
             except FileNotFoundError:
-                if path in self.states: reset = True
-                continue
+                raise
             snapshots[path] = info
-            old = self.states.get(path)
+        pending,moves,force,rotation_reset,validated=self._rotation_states(physical,snapshots)
+        reset=reset or rotation_reset
+        for path,info in snapshots.items():
+            old = pending.get(path)
             if old is None:
                 continue
             sig = self._file_identity(info)
             previous = old["file_identity"]
             if sig[:2] != previous[:2] or sig[2] < previous[2]:
                 reset = True
+            elif sig[:4]==previous[:4] and path.suffix=='.gz':
+                pending[path]={**old,'file_identity':sig}
             elif sig[2] == previous[2] and sig[3:] != previous[3:]:
                 reset = True
             elif sig != previous:
@@ -190,21 +234,28 @@ class _CounterfactualIndex:
                     if self._guards(handle, old["offset"]) != old["guards"]:
                         reset = True
         decoded = read_bytes = 0
-        pending = {} if reset else dict(self.states)
+        if reset:pending={};force=set()
         try:
             with self.db:
                 if reset:
                     self.db.execute("DELETE FROM records")
+                else:
+                    changes={old:new for old,new in moves.items() if old!=new}
+                    if changes:
+                        cases=' '.join(f'WHEN {old} THEN {new}' for old,new in changes.items())
+                        ranks=','.join(str(old) for old in changes)
+                        self.db.execute(f'UPDATE records SET rank=CASE rank {cases} ELSE rank END WHERE rank IN ({ranks})')
                 for rank, path in enumerate(physical):
                     info = snapshots.get(path)
                     if info is None:
                         continue
                     old = pending.get(path)
                     file_identity = self._file_identity(info)
-                    if old is not None and old["file_identity"] == file_identity:
+                    if old is not None and old["file_identity"] == file_identity and path not in force:
                         continue
                     offset = old["offset"] if old else 0
                     lines = old["lines"] if old else 0
+                    raw_hasher=old['raw_hasher'].copy() if old else hashlib.sha256()
                     compressed=path.suffix=='.gz'
                     with (gzip.open(path,'rb') if compressed else path.open('rb')) as handle:
                         if self._file_identity(os.fstat(handle.fileno()))[:2] != file_identity[:2]:
@@ -226,6 +277,7 @@ class _CounterfactualIndex:
                                 break
                             offset += len(raw)
                             lines += 1
+                            raw_hasher.update(raw)
                             if not raw.strip():
                                 continue
                             try:
@@ -239,24 +291,25 @@ class _CounterfactualIndex:
                             decoded += 1
                             identity = str(row["record_id"])
                             rendered = json.dumps(row, separators=(",", ":"), sort_keys=True)
+                            fingerprint=hashlib.sha256(rendered.encode()).digest()
                             prior = self.db.execute(
                                 "SELECT payload,rank,source_offset FROM records WHERE id=?",
                                 (identity,),
                             ).fetchone()
                             if prior is not None:
-                                if prior[0] != rendered:
+                                if prior[0]!=fingerprint:
                                     raise RuntimeError(f"paper_exploration_counterfactual_conflict:{identity}")
                                 if (rank, start) < (prior[1], prior[2]):
                                     self.db.execute(
-                                        "UPDATE records SET rank=?,source_offset=?,root_rank=? WHERE id=?",
-                                        (rank, start, root_ranks[path], identity),
+                                        "UPDATE records SET rank=?,source_offset=?,root_rank=?,source_bytes=?,source_sha256=? WHERE id=?",
+                                        (rank,start,root_ranks[path],len(raw),hashlib.sha256(raw).digest(),identity),
                                     )
                             else:
                                 self.db.execute(
-                                    "INSERT INTO records VALUES (?,?,?,?,?,?,?,?)",
-                                    (identity, rendered, str(row.get("event_type") or ""),
+                                    "INSERT INTO records VALUES (?,?,?,?,?,?,?,?,?,?)",
+                                    (identity, fingerprint, str(row.get("event_type") or ""),
                                      str(row.get("model_sha") or ""),
-                                     int(row.get("timestamp_ms") or 0), rank, start,root_ranks[path]),
+                                     int(row.get("timestamp_ms") or 0),rank,start,root_ranks[path],len(raw),hashlib.sha256(raw).digest()),
                                 )
                         after = os.fstat(handle.fileno())
                         current = path.stat()
@@ -269,15 +322,23 @@ class _CounterfactualIndex:
                                      or (not compressed and after.st_ctime_ns!=info.st_ctime_ns))):
                             raise RuntimeError("paper_exploration_evidence_rewritten_during_read")
                         pending[path] = {"file_identity": file_identity, "offset": offset,
-                                         "lines": lines, "guards": self._guards(handle, offset)}
+                                         "lines": lines, "guards": self._guards(handle, offset),
+                                         'raw_hasher':raw_hasher,'prefix_sha256':raw_hasher.hexdigest()}
                 current_paths=tuple(dict.fromkeys(source for root in self.paths for source in journal_paths(root)))
                 if current_paths!=physical:raise FileNotFoundError('counterfactual journal rotated during snapshot')
             self.states = pending
             self.physical_paths=physical
             self.invalid = False
+            self.metrics['state']='READY'
             self.metrics["rebuilds"] += int(reset)
-        except Exception:
+        except Exception as exc:
             self.invalid = True
+            self.metrics['state']='INVALID_SOURCE'
+            if isinstance(exc,sqlite3.OperationalError) and (
+                    getattr(exc,'sqlite_errorcode',None)==getattr(sqlite3,'SQLITE_FULL',13)
+                    or str(exc)=='database or disk is full'):
+                self.metrics['state']='CACHE_BUDGET_EXHAUSTED_SOURCES_PRESERVED'
+                raise RuntimeError('counterfactual metadata cache budget exhausted; source evidence preserved') from exc
             raise
         finally:
             self.metrics["bytes_read"] += read_bytes
@@ -285,8 +346,12 @@ class _CounterfactualIndex:
             self.metrics["last_bytes_read"] = read_bytes
             self.metrics["last_records_decoded"] = decoded
             self.metrics["last_refresh_seconds"] = time.monotonic() - started
+            self.metrics['database_bytes']=self.db.execute('PRAGMA page_count').fetchone()[0]*self.db.execute('PRAGMA page_size').fetchone()[0]
+            self.metrics['maximum_database_bytes']=self.maximum_cache_bytes
+            self.metrics['disk_cache_bytes']=0
+            self.metrics['rotation_validation_bytes']=validated
 
-    def iter_records(self, *, event_types=None, model_sha=None, chronological=False):
+    def iter_records(self, *, event_types=None, model_sha=None, chronological=False,root_rank_gt=None):
         self.refresh()
         clauses, parameters = [], []
         if event_types is not None:
@@ -298,12 +363,43 @@ class _CounterfactualIndex:
         if model_sha is not None:
             clauses.append("model_sha=?")
             parameters.append(model_sha)
-        query = "SELECT id,payload FROM records"
+        if root_rank_gt is not None:
+            clauses.append('root_rank>?');parameters.append(root_rank_gt)
+        query = "SELECT id,source_sha256,rank,source_offset,source_bytes FROM records"
         if clauses:
             query += " WHERE " + " AND ".join(clauses)
         query += " ORDER BY " + ("stamp,id" if chronological else "rank,source_offset")
-        for identity, payload in self.db.execute(query, parameters):
-            yield identity, json.loads(payload)
+        with ExitStack() as stack:
+            # Hold mutable source descriptors across concurrent rename. Sealed
+            # sources can be reopened as gzip after verified publication.
+            active={};sealed=OrderedDict();paths=self.physical_paths
+            for path in self.paths:
+                if path not in self.states:continue
+                handle=stack.enter_context(path.open('rb'))
+                if self._file_identity(os.fstat(handle.fileno()))[:2]!=self.states[path]['file_identity'][:2]:
+                    self.invalid=True;raise RuntimeError('counterfactual source rotated before query')
+                active[path]=handle
+            try:
+                for identity,fingerprint,rank,offset,length in self.db.execute(query,parameters):
+                    path=paths[rank]
+                    if path in active:handle=active[path]
+                    else:
+                        handle=sealed.pop(path,None)
+                        if handle is None:
+                            source=path
+                            try:handle=gzip.open(source,'rb') if source.suffix=='.gz' else source.open('rb')
+                            except FileNotFoundError:
+                                source=source.with_name(source.name+'.gz');handle=gzip.open(source,'rb')
+                        sealed[path]=handle
+                        if len(sealed)>8:sealed.popitem(last=False)[1].close()
+                    handle.seek(offset);raw=handle.read(length)
+                    if len(raw)!=length or not raw.endswith(b'\n'):
+                        raise RuntimeError('counterfactual source record is no longer recoverable')
+                    actual=hashlib.sha256(raw).digest()
+                    if actual!=fingerprint:raise RuntimeError('counterfactual source record differs from indexed evidence')
+                    yield identity,json.loads(raw)
+            finally:
+                for handle in sealed.values():handle.close()
 
 
 _COUNTERFACTUAL_INDEXES = {}
@@ -1843,9 +1939,9 @@ class PaperRouter:
                 if check.read(1)!=b'\n':raise RuntimeError('durable_source_incomplete_tail_preserved')
         journal=self.counterfactual_journals.get(self.durable_counterfactual_path)
         with nullcontext() if journal else self.durable_counterfactual_path.open('ab') as handle:
-            for (payload,) in index.db.execute('SELECT payload FROM records WHERE root_rank>0 ORDER BY stamp,id'):
-                if journal:journal.append(json.loads(payload))
-                else:handle.write(payload.encode()+b'\n')
+            for _,row in index.iter_records(root_rank_gt=0,chronological=True):
+                if journal:journal.append(row)
+                else:handle.write(json.dumps(row,separators=(',',':'),sort_keys=True).encode()+b'\n')
             if handle:handle.flush();os.fsync(handle.fileno())
 
     def iter_durable_records(self, *, event_types=None):

@@ -18,6 +18,65 @@ from v7_profitability_audit import counterfactual_paths
 
 
 class JournalTests(unittest.TestCase):
+    def test_locator_cache_has_no_payload_copies_or_disk_files_and_enforces_page_budget(self):
+        with tempfile.TemporaryDirectory() as d:
+            path=Path(d)/'counterfactuals.jsonl'
+            rows=[{'record_id':str(i),'event_type':'FORECAST','timestamp_ms':i,'payload':'x'*100000} for i in range(20)]
+            path.write_text(''.join(json.dumps(r)+'\n' for r in rows))
+            index=_CounterfactualIndex([path],maximum_cache_bytes=65536);self.addCleanup(index.close)
+            self.assertEqual(list(dict(index.iter_records()).values()),rows)
+            self.assertEqual(index.db.execute('PRAGMA database_list').fetchone()[2],'')
+            self.assertEqual(index.db.execute('PRAGMA temp_store').fetchone()[0],2)
+            self.assertTrue(all(n==32 for n, in index.db.execute('SELECT length(payload) FROM records')))
+            self.assertLessEqual(index.metrics['database_bytes'],65536)
+            self.assertEqual(index.metrics['disk_cache_bytes'],0)
+            with path.open('a') as out:
+                for i in range(20,1020):out.write(json.dumps({'record_id':str(i),'timestamp_ms':i})+'\n')
+            original=path.read_bytes()
+            with self.assertRaisesRegex(RuntimeError,'cache budget exhausted'):index.refresh()
+            self.assertEqual(index.metrics['state'],'CACHE_BUDGET_EXHAUSTED_SOURCES_PRESERVED')
+            self.assertEqual(path.read_bytes(),original)
+            self.assertEqual([p.name for p in path.parent.iterdir()],[path.name])
+
+    def test_rotation_reuses_old_history_and_preserves_other_root_order(self):
+        with tempfile.TemporaryDirectory() as d:
+            root=Path(d);path=root/'counterfactuals.jsonl';other=root/'other.jsonl'
+            history=[{'record_id':f'h{i}','timestamp_ms':i} for i in range(1000)]
+            sealed=path.with_name(path.name+'.segment-00000000000000000001.jsonl.gz')
+            sealed.write_bytes(gzip.compress(''.join(json.dumps(r)+'\n' for r in history).encode()))
+            tail=[{'record_id':f't{i}','timestamp_ms':1000+i,'payload':'x'*100} for i in range(3)]
+            other_row={'record_id':'other','timestamp_ms':2000};other.write_text(json.dumps(other_row)+'\n')
+            index=_CounterfactualIndex([path,other]);self.addCleanup(index.close)
+            with CompressedJournal(path,256) as journal:
+                journal.append(tail[0])
+                self.assertEqual(list(dict(index.iter_records()).values()),history+tail[:1]+[other_row])
+                rebuilds=index.metrics['rebuilds']
+                journal.append(tail[1]);journal.pending.result();journal.append(tail[2])
+                self.assertEqual(list(dict(index.iter_records()).values()),history+tail+[other_row])
+                self.assertEqual(index.metrics['last_records_decoded'],2)
+                self.assertEqual(index.metrics['rebuilds'],rebuilds)
+                self.assertGreater(index.metrics['rotation_validation_bytes'],0)
+                self.assertLess(index.metrics['rotation_validation_bytes'],256)
+
+    def test_locator_query_holds_active_snapshot_through_rotation(self):
+        with tempfile.TemporaryDirectory() as d:
+            path=Path(d)/'counterfactuals.jsonl';index=_CounterfactualIndex([path]);self.addCleanup(index.close)
+            rows=[{'record_id':str(i),'payload':'x'*100} for i in range(4)]
+            with CompressedJournal(path,400) as journal:
+                journal.append(rows[0]);journal.append(rows[1])
+                reader=index.iter_records();self.assertEqual(next(reader)[1],rows[0])
+                journal.append(rows[2]);journal.append(rows[3]);journal.pending.result()
+                self.assertEqual([r for _,r in reader],rows[1:2])
+                self.assertEqual(list(dict(index.iter_records()).values()),rows)
+
+    def test_locator_read_checks_exact_source_bytes(self):
+        with tempfile.TemporaryDirectory() as d:
+            path=Path(d)/'counterfactuals.jsonl';path.write_text('{"record_id":"r","value":1}\n')
+            index=_CounterfactualIndex([path]);self.addCleanup(index.close);index.refresh()
+            path.write_text('{"record_id":"r","value":2}\n')
+            with patch.object(index,'refresh'):
+                with self.assertRaisesRegex(RuntimeError,'differs from indexed'):list(index.iter_records())
+
     def test_gzip_publication_link_cleanup_is_not_a_content_rewrite(self):
         with tempfile.TemporaryDirectory() as d:
             path=Path(d)/'counterfactuals.jsonl'
