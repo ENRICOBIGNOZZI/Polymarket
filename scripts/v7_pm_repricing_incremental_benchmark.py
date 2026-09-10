@@ -21,6 +21,8 @@ SCHEMA = "polymarket_v7_pm_repricing_incremental_benchmark_v1"
 FAMILIES = ("PM_MICRO_ONLY", "EXTERNAL_ONLY", "PM_PLUS_EXTERNAL")
 RIDGES = (0.1, 1.0, 10.0, 100.0)
 WINDOW_HOURS = 8
+BOUNDARY_NS = 300_000_000_000
+PERSISTENCE_MARGIN_BOUNDARIES = 1
 PM_NAMES = (
     "pm_logit", "complement_gap_ticks",
     "yes_imbalance", "no_imbalance", "yes_ofi", "no_ofi",
@@ -214,6 +216,11 @@ def family_horizon(rows,family):
 def improvement(base,candidate):
     if base is None or candidate is None or base <= 0: return None
     return 1.0-candidate/base
+def forward_window(now_ns):
+    next_boundary=((now_ns//BOUNDARY_NS)+1)*BOUNDARY_NS
+    start=next_boundary+PERSISTENCE_MARGIN_BOUNDARIES*BOUNDARY_NS
+    return start,start+WINDOW_HOURS*3_600_000_000_000
+
 def build(rows,code_sha):
     common=[r for r in rows if isinstance(r.get("_pm"),dict) and isinstance(r.get("_ext"),dict)]
     source_shas=sorted({str(r.get("model_sha")) for r in common})
@@ -230,7 +237,7 @@ def build(rows,code_sha):
         for family in ("EXTERNAL_ONLY","PM_PLUS_EXTERNAL"):
             results[str(h)][family]["audit_improvement_vs_pm_micro"]=improvement(pm,results[str(h)][family]["audit"]["mse"])
     if not results: raise ValueError("incremental_benchmark:no_trainable_horizon")
-    now=time.time_ns(); start=((now//300_000_000_000)+1)*300_000_000_000; end=start+WINDOW_HOURS*3_600_000_000_000
+    now=time.time_ns(); start,end=forward_window(now)
     dataset_hash=hashlib.sha256(json.dumps(common,sort_keys=True,separators=(",",":")).encode()).hexdigest()
     artifact={"schema":SCHEMA,"code_sha":code_sha,"paper_only":True,"authenticated_execution":False,
               "real_order_submission":False,"execution_authority":"ZERO_AUTHORITY_RESEARCH_ONLY",
