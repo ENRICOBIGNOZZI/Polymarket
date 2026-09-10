@@ -12,6 +12,7 @@ than a silent in-process fallback.
 from __future__ import annotations
 
 import argparse
+import gzip
 import hashlib
 import json
 import math
@@ -90,10 +91,12 @@ def lifecycle_key(row: dict[str, Any]) -> tuple[str, str]:
 def evidence_files(roots: Iterable[pathlib.Path]) -> list[pathlib.Path]:
     output: set[pathlib.Path] = set()
     for root in roots:
-        if root.is_file() and root.suffix == ".jsonl":
+        if root.is_file() and (root.suffix == ".jsonl" or root.name.endswith(".jsonl.gz")):
             output.add(root.resolve())
         elif root.exists():
             output.update(item.resolve() for item in root.rglob("*.jsonl"))
+            output.update(item.resolve() for item in root.rglob("execution.jsonl.gz"))
+            output.update(item.resolve() for item in root.rglob("execution-*.jsonl.gz"))
             output.update(
                 item.resolve() for item in root.rglob("maker_markout/*.json")
                 if item.parent.name == "maker_markout"
@@ -103,10 +106,35 @@ def evidence_files(roots: Iterable[pathlib.Path]) -> list[pathlib.Path]:
     return sorted(output)
 
 
+def compatible_archive_file(path: pathlib.Path, policy_hash: str, config_hash: str, cache: dict[pathlib.Path, bool]) -> bool:
+    archive = next((parent for parent in (path, *path.parents) if parent.name.startswith("cutover-")), None)
+    if archive is None:
+        return True
+    archive = archive.resolve()
+    if archive in cache:
+        return cache[archive]
+    identity = archive / "micro_maker" / "execution_model.json"
+    try:
+        value = json.loads(identity.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        cache[archive] = False
+        return False
+    cache[archive] = (
+        value.get("paper_only") is True
+        and value.get("authenticated_execution") is False
+        and value.get("real_order_submission") is False
+        and str(value.get("policy_hash") or "") == policy_hash
+        and str(value.get("config_hash") or "") == config_hash
+        and str(value.get("execution_semantics_version") or "") == EXECUTION_SEMANTICS
+    )
+    return cache[archive]
+
+
 def rows(paths: Iterable[pathlib.Path]) -> Iterable[dict[str, Any]]:
     for path in paths:
         try:
-            with open(path, "rt", encoding="utf-8") as handle:
+            opener = gzip.open if path.name.endswith(".gz") else open
+            with opener(path, "rt", encoding="utf-8") as handle:
                 for line in handle:
                     try:
                         row = json.loads(line)
@@ -200,8 +228,11 @@ def compact_evidence(
     """
     exact_order_ids: set[tuple[str, str]] = set()
     scanned_rows = 0
-    cached_rows = list(rows(paths))
-    for row in cached_rows:
+    # First pass discovers generation-scoped compatible orders without
+    # materializing duplicate archival checkpoints in memory. The second pass
+    # below retains their lifecycle rows. Gzip checkpoints are intentionally
+    # re-read: bounded memory is more important than avoiding sequential I/O.
+    for row in rows(paths):
         scanned_rows += 1
         order_id = str(row.get("order_id") or "")
         if (row.get("event_type") == "ORDER_SUBMITTED" and order_id
@@ -1267,11 +1298,14 @@ def main() -> int:
     # Economic lifecycle state comes from the canonical ledger. Fill-conditioned
     # markouts are zero-authority research evidence joined back by fill_id.
     # Avoid unrelated RTDS, universe, and raw WebSocket tapes.
+    archive_identity_cache: dict[pathlib.Path, bool] = {}
+    candidate_source_files = evidence_files(sources)
     source_files = [
-        path for path in evidence_files(sources)
+        path for path in candidate_source_files
         if path.resolve() != args.store.resolve()
+        and compatible_archive_file(path, policy_hash, config_hash, archive_identity_cache)
         and (
-            path.name == "execution.jsonl"
+            path.name in {"execution.jsonl", "execution.jsonl.gz"}
             or (path.name.startswith("execution-") and path.name.endswith(".jsonl.gz"))
             or (
                 path.suffix == ".json"
@@ -1309,6 +1343,8 @@ def main() -> int:
         "policy_hash": policy_hash,
         "config_hash": config_hash,
         "source_files": [str(path) for path in source_files],
+        "candidate_source_files": len(candidate_source_files),
+        "excluded_incompatible_archive_files": len(candidate_source_files) - len(source_files),
         "new_records": compaction["new_records"],
         "stored_records": compaction["retained_records"],
         "scanned_strategy_rows": compaction["scanned_strategy_rows"],

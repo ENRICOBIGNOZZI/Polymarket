@@ -10,7 +10,7 @@ sys.path.insert(0, str(ROOT / "scripts"))
 
 from v7_maker_durable_learning import (  # noqa: E402
     adverse_markout_models, append_new, compact_evidence, fit_model, hazard_model, identity,
-    evidence_files, placement_features, rows, research_policy_value, materialize_research_model,
+    evidence_files, compatible_archive_file, placement_features, rows, research_policy_value, materialize_research_model,
     placement_action, exact_execution_cell, order_examples,
 )
 
@@ -105,6 +105,38 @@ class DurableLearningTests(unittest.TestCase):
             unrelated.write_text("{}\n", encoding="utf-8")
             self.assertEqual(evidence_files([root]), [evidence.resolve()])
             self.assertEqual(list(rows([evidence]))[0]["record_id"], "research-mark")
+
+    def test_archive_identity_filter_is_fail_closed_and_cached(self) -> None:
+        with tempfile.TemporaryDirectory() as folder:
+            root=pathlib.Path(folder)
+            matching=root/("cutover-"+"b"*40+"-1-2")
+            other=root/("cutover-"+"c"*40+"-1-3")
+            for archive,policy in ((matching,"policy"),(other,"other")):
+                (archive/"micro_maker").mkdir(parents=True)
+                (archive/"ledger").mkdir()
+                (archive/"micro_maker/execution_model.json").write_text(json.dumps({
+                    "paper_only":True,"authenticated_execution":False,"real_order_submission":False,
+                    "policy_hash":policy,"config_hash":"config",
+                    "execution_semantics_version":"maker-paper-v7.2-bilateral-inventory"}))
+            cache={}
+            self.assertTrue(compatible_archive_file(matching/"ledger/execution.jsonl.gz","policy","config",cache))
+            self.assertFalse(compatible_archive_file(other/"ledger/execution.jsonl.gz","policy","config",cache))
+            self.assertTrue(compatible_archive_file(root/"live/execution.jsonl","policy","config",cache))
+            missing=root/("cutover-"+"d"*40+"-1-4")/"ledger/execution.jsonl.gz"
+            self.assertFalse(compatible_archive_file(missing,"policy","config",cache))
+
+    def test_jsonl_gzip_evidence_is_discovered_and_read_losslessly(self) -> None:
+        with tempfile.TemporaryDirectory() as folder:
+            root = pathlib.Path(folder)
+            evidence = root / "archive/ledger/execution.jsonl.gz"
+            evidence.parent.mkdir(parents=True)
+            expected = record("ORDER_SUBMITTED", "gz-order", order_id="o-gz", intended_size=5.0)
+            payload = (json.dumps(expected) + "\n").encode()
+            evidence.write_bytes(gzip.compress(payload, mtime=0))
+            self.assertEqual(evidence_files([root]), [evidence.resolve()])
+            loaded = list(rows([evidence]))
+            self.assertEqual(len(loaded), 1)
+            self.assertEqual(loaded[0]["record_id"], "gz-order")
 
     def test_compaction_keeps_only_current_run_exact_policy_lifecycle(self) -> None:
         with tempfile.TemporaryDirectory() as folder:

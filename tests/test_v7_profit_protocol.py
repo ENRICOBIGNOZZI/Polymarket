@@ -23,6 +23,22 @@ class ProtocolTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError,'manifest_hash_mismatch'):
                 freeze(path,self.protocol,'a'*40,'b'*64,900_000_000_000)
 
+    def test_new_confirmatory_window_is_exactly_eight_hours(self):
+        with tempfile.TemporaryDirectory() as d:
+            manifest=freeze(Path(d)/"manifest.json",self.protocol,"a"*40,"b"*64,300_000_000_001)
+            self.assertEqual(manifest["confirmatory_end_ns"]-manifest["forward_start_ns"],8*3_600_000_000_000)
+
+    def test_legacy_seven_day_protocol_remains_readable(self):
+        legacy=copy.deepcopy(self.protocol)
+        legacy["protocol_id"]="permanent-profit-causes-20260909-v3"
+        confirm=legacy["inference"]["confirmatory"]
+        confirm.pop("duration_hours")
+        confirm["calendar_days"]=7
+        validate(legacy)
+        with tempfile.TemporaryDirectory() as d:
+            manifest=freeze(Path(d)/"manifest.json",legacy,"a"*40,"b"*64,300_000_000_001)
+            self.assertEqual(manifest["confirmatory_end_ns"]-manifest["forward_start_ns"],7*86_400_000_000_000)
+
     def test_protocol_cannot_enable_trading_or_change_owner(self):
         for change in ('authority','post_only','promotion'):
             value=copy.deepcopy(self.protocol)

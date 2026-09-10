@@ -42,7 +42,20 @@ int main() {
             {"paper_only", true}, {"authenticated_execution", false}, {"real_order_submission", false},
             {"open_positions", 0}, {"pending_maker_orders", 0}}}};
     write("external_fair/paper_router_status.json", account);
-    assert(enrich().placement_features.at("inventory_fraction").as_double() == 0.0);
+    auto global_flat = enrich();
+    assert(global_flat.placement_features.at("inventory_fraction").as_double() == 0.0);
+    assert(global_flat.inventory_fraction_source == "CANONICAL_ACCOUNT_GLOBAL_FLAT");
+    account["paper_exploration_account"].as_object()["open_positions"] = 1;
+    account["paper_exploration_account"].as_object()["positions"] = json::object{
+        {"other-position", json::object{{"market_id", "other-market"}}}};
+    write("external_fair/paper_router_status.json", account);
+    auto target_flat = enrich();
+    assert(target_flat.placement_features.at("inventory_fraction").as_double() == 0.0);
+    assert(target_flat.inventory_fraction_source == "CANONICAL_ACCOUNT_TARGET_MARKET_FLAT");
+    account["paper_exploration_account"].as_object()["positions"] = json::object{
+        {"same-position", json::object{{"market_id", "market"}}}};
+    write("external_fair/paper_router_status.json", account);
+    assert(enrich().placement_features.at("inventory_fraction").is_null());
     assert(enrich(false).placement_features.at("inventory_fraction").is_null());
     row["receive_wall_ms"] = now + 10000;
     assert(enrich().feature_snapshot_id.empty());

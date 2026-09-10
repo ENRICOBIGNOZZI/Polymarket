@@ -1,6 +1,6 @@
 {
   "schema": "polymarket_v7_profit_experiment_protocol_v1",
-  "protocol_id": "permanent-profit-causes-20260909-v3",
+  "protocol_id": "permanent-profit-causes-20260910-v4",
   "paper_only": true,
   "authenticated_execution": false,
   "real_order_submission": false,
@@ -156,7 +156,6 @@
     "minimum_temporal_blocks": 8,
     "minimum_tail_draws": 50,
     "confirmatory": {
-      "calendar_days": 7,
       "primary_endpoints": [
         "model_brier_improvement_over_pm",
         "selected_settlement_surplus_cost2_delay1000",
@@ -167,7 +166,8 @@
       "selection_unit": "CONTRACT_EQUAL_WEIGHT_OVER_PREDECLARED_SELECTED_ORIGINS",
       "eligibility": "ORIGIN_WITHIN_FROZEN_WINDOW_SETTLEMENT_RECEIVED_AFTER_RESOLUTION",
       "promotion_requires": "ALL_THREE_POSITIVE_LOWER_BOUNDS_ALL_TEMPORAL_SENSITIVITIES; COMPLETE_CAUSAL_COVERAGE_AUDIT; INDEPENDENT_REVIEW; NEW_FORWARD_AFTER_ANY_CHANGE",
-      "rolling_reports": "EXPLORATORY_ONLY"
+      "rolling_reports": "EXPLORATORY_ONLY",
+      "duration_hours": 8
     }
   }
 }

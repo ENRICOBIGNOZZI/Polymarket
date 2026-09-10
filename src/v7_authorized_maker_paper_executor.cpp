@@ -231,6 +231,7 @@ struct SelectionEvidence {
     std::string feature_source = "CAUSAL_SELECTION_SNAPSHOT";
     std::string feature_snapshot_id;
     std::int64_t feature_timestamp_ms = 0;
+    std::string inventory_fraction_source = "UNAVAILABLE_NO_INVENTORY_AUTHORITY";
 };
 
 [[nodiscard]] SelectionEvidence selection_evidence(
@@ -299,7 +300,7 @@ struct SelectionEvidence {
 // never becomes a synthetic zero-valued training example.
 void enrich_observed_features(SelectionEvidence& selection, const fs::path& root,
                              std::string_view sha, std::string_view market,
-                             std::string_view token, double limit_price, bool executor_flat) {
+                             std::string_view token, double limit_price, bool executor_market_flat) {
     auto optional_read = [](const fs::path& path) -> json::value {
         try { return read_json(path); } catch (const std::runtime_error&) { return {}; }
     };
@@ -346,11 +347,13 @@ void enrich_observed_features(SelectionEvidence& selection, const fs::path& root
                                                number(find_value(row, "bid_depth_l1")));
     }
     // Market-data observers have no inventory authority. Zero exposure is
-    // identified only by a fresh, complete canonical flat-account proof and
-    // no outstanding local reservations. Non-flat accounts stay missing.
+    // identified only by a fresh, complete canonical account proof showing
+    // either global flatness or target-market flatness, plus no unresolved
+    // maker reservation. Ambiguous inventory remains missing.
     selection.placement_features["inventory_fraction"] = nullptr;
+    selection.inventory_fraction_source = "UNAVAILABLE_NO_INVENTORY_AUTHORITY";
     const auto account_value = optional_read(root / "external_fair" / "paper_router_status.json");
-    if (executor_flat && account_value.is_object()) {
+    if (executor_market_flat && account_value.is_object()) {
         const auto& account_status = account_value.as_object();
         const auto* account = child_object(account_status, "paper_exploration_account");
         const auto account_ms = static_cast<std::int64_t>(number(find_value(account_status, "timestamp")) * 1000.0);
@@ -360,10 +363,29 @@ void enrich_observed_features(SelectionEvidence& selection, const fs::path& root
             && boolean(find_value(*account, "complete"))
             && boolean(find_value(*account, "paper_only"))
             && !boolean(find_value(*account, "authenticated_execution"), true)
-            && !boolean(find_value(*account, "real_order_submission"), true)
-            && integer(find_value(*account, "open_positions"), -1) == 0
-            && integer(find_value(*account, "pending_maker_orders"), -1) == 0) {
-            selection.placement_features["inventory_fraction"] = 0.0;
+            && !boolean(find_value(*account, "real_order_submission"), true)) {
+            const auto open_positions = integer(find_value(*account, "open_positions"), -1);
+            const auto pending_maker = integer(find_value(*account, "pending_maker_orders"), -1);
+            const auto* positions = child_object(*account, "positions");
+            bool target_market_open = false;
+            if (positions != nullptr) {
+                for (const auto& item : *positions) {
+                    if (!item.value().is_object()) { target_market_open = true; break; }
+                    if (text(find_value(item.value().as_object(), "market_id")) == market) {
+                        target_market_open = true; break;
+                    }
+                }
+            }
+            const bool globally_flat = open_positions == 0 && pending_maker == 0;
+            const bool target_market_flat = pending_maker == 0 && positions != nullptr
+                && open_positions == static_cast<std::int64_t>(positions->size())
+                && !target_market_open;
+            if (globally_flat || target_market_flat) {
+                selection.placement_features["inventory_fraction"] = 0.0;
+                selection.inventory_fraction_source = globally_flat
+                    ? "CANONICAL_ACCOUNT_GLOBAL_FLAT"
+                    : "CANONICAL_ACCOUNT_TARGET_MARKET_FLAT";
+            }
         }
     }
     selection.feature_timestamp_ms = received;
@@ -875,9 +897,13 @@ private:
         Authorization authorization = parse_authorization(path, options_.model_sha);
         SelectionEvidence selection = selection_evidence(
             selection_path_, options_.model_sha, authorization.market_id, authorization.token_id);
+        const bool executor_market_flat = std::none_of(
+            orders_.begin(), orders_.end(), [&](const auto& item) {
+                return item.second.authorization.market_id == authorization.market_id;
+            });
         enrich_observed_features(selection, options_.run_root, options_.model_sha,
                                  authorization.market_id, authorization.token_id,
-                                 authorization.limit_price, orders_.empty());
+                                 authorization.limit_price, executor_market_flat);
         const auto now = wall_ms();
         if (!selection.found || selection.generated_at_ms <= 0 || now < selection.generated_at_ms
             || now - selection.generated_at_ms > kSelectionMaxAgeMs) {
@@ -1097,6 +1123,7 @@ private:
         metadata["placement_features_source"] = context.selection.feature_source;
         metadata["placement_features_snapshot_id"] = context.selection.feature_snapshot_id;
         metadata["placement_features_schema"] = "maker-placement-observed-v1";
+        metadata["placement_inventory_fraction_source"] = context.selection.inventory_fraction_source;
         metadata["native_market_order_id"] = std::to_string(context.order_id);
         metadata["paper_bootstrap_probe"] = context.authorization.paper_probe;
         metadata["economic_authority"] = "PAPER_EXPLORATION";
