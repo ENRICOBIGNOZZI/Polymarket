@@ -12,6 +12,8 @@ from v7_external_lead_lag_model import validate, predict_probability
 from v7_external_lead_lag_train import train, load_rows
 from v7_fair_model_artifact import canonical_hash
 from v7_compressed_journal import journal_rows
+from v7_external_rich_model import FEATURE_SCHEMA
+from v7_causal_book import TARGET as BOOK_TARGET
 
 SHA='a'*40
 
@@ -107,6 +109,44 @@ class LeadLagTests(unittest.TestCase):
             self.assertEqual(values[-1]['label_pm_snapshot_id'],'s4')
             self.assertGreater(values[-1]['delta_logit'],0)
 
+    def test_causal_book_training_reuses_compatible_model_independent_history_across_shas(self):
+        with tempfile.TemporaryDirectory() as d:
+            tape=Path(d)/'leadlag.jsonl'
+            records=[]
+            for i,source_sha in enumerate(('b'*40,'c'*40)):
+                cut={'market_id':f'm{i}','observed_wall_ns':1_000_000_000+i,
+                     'market_probability':.5}
+                origin={'schema':ORIGIN_SCHEMA,'origin_id':f'o{i}','market_id':f'm{i}',
+                    'model_sha':source_sha,'origin_observed_wall_ns':cut['observed_wall_ns'],
+                    'rich_feature_cut':cut,'rich_feature_sha256':canonical_hash(cut),
+                    'rich_model_features':{'ofi':.1+i},'feature_schema_version':FEATURE_SCHEMA,
+                    'causal_observation_schema':'polymarket_v7_model_independent_causal_observation_v1'}
+                ref=canonical_hash(origin); records.append(origin)
+                records.append({'schema':OBS_SCHEMA,'paper_only':True,'authenticated_execution':False,
+                    'real_order_submission':False,'execution_authority':'ZERO_AUTHORITY_RESEARCH_ONLY',
+                    'model_sha':source_sha,'origin_id':origin['origin_id'],'market_id':origin['market_id'],
+                    'origin_observed_wall_ns':origin['origin_observed_wall_ns'],'horizon_ms':500,
+                    'realized_horizon_ms':510,'nominal_horizon_eligible':True,
+                    'target_semantics':BOOK_TARGET,'delta_logit':.01*(i+1),'origin_record_sha256':ref})
+            bad_cut={'market_id':'bad','observed_wall_ns':2_000_000_000,'market_probability':.5}
+            bad={'schema':ORIGIN_SCHEMA,'origin_id':'bad','market_id':'bad','model_sha':'e'*40,
+                'origin_observed_wall_ns':bad_cut['observed_wall_ns'],'rich_feature_cut':bad_cut,
+                'rich_feature_sha256':canonical_hash(bad_cut),'rich_model_features':{'ofi':9.},
+                'feature_schema_version':'incompatible-v0',
+                'causal_observation_schema':'polymarket_v7_model_independent_causal_observation_v1'}
+            records.append(bad)
+            records.append({'schema':OBS_SCHEMA,'paper_only':True,'authenticated_execution':False,
+                'real_order_submission':False,'execution_authority':'ZERO_AUTHORITY_RESEARCH_ONLY',
+                'model_sha':'e'*40,'origin_id':'bad','market_id':'bad',
+                'origin_observed_wall_ns':bad['origin_observed_wall_ns'],'horizon_ms':500,
+                'realized_horizon_ms':510,'nominal_horizon_eligible':True,
+                'target_semantics':BOOK_TARGET,'delta_logit':9.,'origin_record_sha256':canonical_hash(bad)})
+            tape.write_text(''.join(json.dumps(r)+'\n' for r in records))
+            rows=load_rows([tape],'d'*40,BOOK_TARGET)
+            self.assertEqual(len(rows),2)
+            self.assertEqual({r['model_sha'] for r in rows},{'b'*40,'c'*40})
+            self.assertEqual({r['market_id'] for r in rows},{'m0','m1'})
+
     def test_explicit_trainer_builds_frozen_models_on_whole_market_chronology(self):
         rows=[]
         for i in range(40):
@@ -124,6 +164,8 @@ class LeadLagTests(unittest.TestCase):
         self.assertEqual(model['training_lifecycle'],'EXPLICIT_FROZEN_ARTIFACT_ONLY')
         self.assertTrue(model['research_only']); self.assertFalse(model['real_order_submission'])
         self.assertEqual(set(model['models']),{'100','250','500','1000'})
+        self.assertEqual(model['training_source_model_shas'],[SHA])
+        self.assertEqual(report['training_source_model_shas'],[SHA])
         self.assertTrue(all(v['validation_improves_zero_change'] for v in model['models'].values()))
         pred=predict_probability(model,{'ofi':1.,'trade_imbalance':.5,'return_100ms_bp':.2},.5,500)
         self.assertGreater(pred['predicted_delta_logit'],0)
