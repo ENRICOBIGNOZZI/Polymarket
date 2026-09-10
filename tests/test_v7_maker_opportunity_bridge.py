@@ -270,7 +270,7 @@ def test_current_run_research_model_updates_fill_posterior_directly() -> None:
         assert len(rows)==1,status
         row=OpportunityEnvelope.parse(rows[0]).raw
         assert status["research_execution_model"] is True
-        assert status["research_evidence_scope"]=="CURRENT_RUN_ONLY"
+        assert status["research_evidence_scope"]=="CROSS_CUTOVER_EXACT_POLICY_CONFIG"
         assert abs(row["execution_alpha"]["fill_probability"]["point"]-.0044)<1e-12
         assert row["execution_alpha"]["evidence_status"]=="IMMATURE"
         assert row["exploration"]["research_only"] is True
