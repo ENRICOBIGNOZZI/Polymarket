@@ -206,6 +206,7 @@ def main() -> None:
             run_root, "a" * 40, ROOT / "config" / "v7_external_fair.json",
             "https://clob.invalid", "https://gamma.invalid",
         )
+        assert bootstrap.probe_policy["allow_frozen_rich_ml"] is False
         bootstrap.step()
         status = json.loads((run_root / "external_fair" / "paper_router_status.json").read_text())
         assert status["last_decision"]["outcome"] == "EXTERNAL_FAIR_STATUS_UNAVAILABLE"

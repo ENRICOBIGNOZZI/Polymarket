@@ -228,7 +228,7 @@
     "uses_polymarket_price_as_feature": false
   },
   "paper_exploration_probe": {
-    "allow_frozen_rich_ml": true,
+    "allow_frozen_rich_ml": false,
     "asset": "BTC",
     "authority": "PAPER_EXPLORATION",
     "enabled": true,
