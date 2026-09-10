@@ -1,7 +1,7 @@
 import pathlib, sys, unittest
 ROOT=pathlib.Path(__file__).resolve().parents[1]
 sys.path.insert(0,str(ROOT/'scripts'))
-from v7_pm_repricing_incremental_benchmark import pm_features, raw_features, chronological_split
+from v7_pm_repricing_incremental_benchmark import pm_features, raw_features, chronological_split, forward_window, BOUNDARY_NS
 
 class IncrementalBenchmarkTests(unittest.TestCase):
     def row(self):
@@ -23,6 +23,13 @@ class IncrementalBenchmarkTests(unittest.TestCase):
         self.assertTrue(all(not k.startswith('ext__') for k in only_pm))
         self.assertTrue(all(k.startswith('ext__') for k in external))
         self.assertIn('pm__yes_imbalance',combined); self.assertIn('ext__return_100ms_bp',combined)
+    def test_forward_window_leaves_full_boundary_for_persistence(self):
+        for now in (0, 1, BOUNDARY_NS-1, BOUNDARY_NS, BOUNDARY_NS+1):
+            start,end=forward_window(now)
+            self.assertGreater(start-now, BOUNDARY_NS)
+            self.assertLessEqual(start-now, 2*BOUNDARY_NS)
+            self.assertEqual(end-start, 8*3_600_000_000_000)
+
     def test_chronological_split_keeps_whole_markets(self):
         rows=[]
         for i in range(30):
