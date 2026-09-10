@@ -36,8 +36,10 @@ def validate(protocol):
         raise ValueError('profit_protocol:no_promotion')
     if 'confirmatory' in inference:
         confirm=inference['confirmatory']
+        duration_hours=confirm.get('duration_hours');legacy_days=confirm.get('calendar_days')
+        duration_valid=(duration_hours==8 and legacy_days is None) or (legacy_days==7 and duration_hours is None)
         if (confirm.get('primary_endpoints')!=['model_brier_improvement_over_pm','selected_settlement_surplus_cost2_delay1000','maker_join10_minus_join5_settlement_net_cost2']
-            or confirm.get('family_size')!=3 or confirm.get('calendar_days')!=7
+            or confirm.get('family_size')!=3 or not duration_valid
             or confirm.get('look_policy')!='ONE_FIXED_END_OF_WINDOW_ANALYSIS_NO_EARLY_PROMOTION'
             or inference.get('temporal_block_contracts')!=[3,6,12]
             or inference.get('minimum_temporal_blocks')!=8 or inference.get('minimum_tail_draws')!=50):
@@ -64,7 +66,11 @@ def freeze(path: Path, protocol: dict, code_sha: str, model_hash: str, now_ns: i
         'execution_authority':'ZERO_AUTHORITY_RESEARCH_ONLY'}
     confirm=protocol['inference'].get('confirmatory')
     if confirm:
-        value['confirmatory_end_ns']=value['forward_start_ns']+confirm['calendar_days']*86_400_000_000_000
+        if confirm.get('duration_hours') is not None:
+            duration_ns=int(confirm['duration_hours'])*3_600_000_000_000
+        else:
+            duration_ns=int(confirm['calendar_days'])*86_400_000_000_000
+        value['confirmatory_end_ns']=value['forward_start_ns']+duration_ns
     value['manifest_sha256']=digest(value)
     path.parent.mkdir(parents=True,exist_ok=True)
     temporary=path.with_name(path.name+f'.tmp.{os.getpid()}')
