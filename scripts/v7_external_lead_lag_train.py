@@ -11,7 +11,7 @@ import hashlib, json, math, os
 from pathlib import Path
 import statistics, time
 from typing import Any
-from v7_external_rich_model import FEATURE_NAMES, design, number
+from v7_external_rich_model import FEATURE_NAMES, FEATURE_SCHEMA, design, number
 from v7_external_lead_lag_model import SCHEMA, FAMILY, validate
 from v7_external_lead_lag_collector import horizon_eligible, MAX_LABEL_DELAY_MS, observation_rows
 from v7_causal_book import TARGET as BOOK_TARGET
@@ -20,6 +20,7 @@ from v7_compressed_journal import journal_rows
 OBS_SCHEMA = "polymarket_v7_external_pm_lead_lag_observation_v1"
 HORIZONS = (100, 250, 500, 1000)
 LEGACY_TARGET = "FIRST_OBSERVED_SNAPSHOT_AFTER_THRESHOLD"
+MODEL_INDEPENDENT_CAUSAL_SCHEMA = "polymarket_v7_model_independent_causal_observation_v1"
 
 
 def solve(matrix: list[list[float]], rhs: list[float]) -> list[float]:
@@ -42,10 +43,19 @@ def load_rows(paths: list[Path], code_sha: str, target_semantics: str = LEGACY_T
     for row in observation_rows(records()):
         if (not isinstance(row,dict) or row.get("schema") != OBS_SCHEMA
                 or row.get("paper_only") is not True or row.get("authenticated_execution") is not False
-                or row.get("real_order_submission") is not False or row.get("model_sha") != code_sha
+                or row.get("real_order_submission") is not False
                 or row.get("execution_authority") != "ZERO_AUTHORITY_RESEARCH_ONLY"):
             continue
         if row.get("target_semantics", LEGACY_TARGET) != target_semantics:
+            continue
+        source_sha=str(row.get("model_sha") or "")
+        if len(source_sha)!=40 or any(c not in "0123456789abcdef" for c in source_sha):
+            continue
+        if target_semantics == BOOK_TARGET and source_sha != code_sha:
+            if (row.get("feature_schema_version") != FEATURE_SCHEMA
+                    or row.get("causal_observation_schema") != MODEL_INDEPENDENT_CAUSAL_SCHEMA):
+                continue
+        elif target_semantics != BOOK_TARGET and source_sha != code_sha:
             continue
         h=int(row.get("horizon_ms") or 0); origin=str(row.get("origin_id") or "")
         target=number(row.get("delta_logit")); realized=number(row.get("realized_horizon_ms"))
@@ -137,17 +147,18 @@ def train(rows: list[dict[str,Any]], code_sha: str) -> tuple[dict[str,Any],dict[
     if not models: raise ValueError("lead_lag:no_trainable_horizon")
     now=time.time_ns(); boundary=((now//1_000_000_000//300)+1)*300*1_000_000_000
     digest=hashlib.sha256(json.dumps(rows,sort_keys=True,separators=(",",":")).encode()).hexdigest()
+    source_shas=sorted({str(r.get("model_sha") or "") for r in rows if r.get("model_sha")})
     model={"schema":SCHEMA,"family":FAMILY,"model_sha":code_sha,"paper_only":True,
            "authenticated_execution":False,"real_order_submission":False,"research_only":True,
            "execution_authority":"ZERO_AUTHORITY_SIGNAL_ONLY","training_lifecycle":"EXPLICIT_FROZEN_ARTIFACT_ONLY",
            "generated_timestamp_ns":now,"forward_oos_starts_after_ns":boundary,"dataset_sha256":digest,
-           "training_markets":len({r["market_id"] for r in rows}),"models":models,
-           "maximum_label_delay_ms":MAX_LABEL_DELAY_MS,
+           "training_markets":len({r["market_id"] for r in rows}),"training_source_model_shas":source_shas,
+           "models":models,"maximum_label_delay_ms":MAX_LABEL_DELAY_MS,
            "target_semantics":next(iter(semantics))}
     validate(model)
     return model,{"schema":"polymarket_v7_external_pm_lead_lag_training_report_v1","model_sha":code_sha,
                   "paper_only":True,"research_only":True,"dataset_sha256":digest,"horizons":report,
-                  "forward_oos_starts_after_ns":boundary}
+                  "training_source_model_shas":source_shas,"forward_oos_starts_after_ns":boundary}
 
 
 def atomic(path: Path, value: dict[str,Any]) -> None:
