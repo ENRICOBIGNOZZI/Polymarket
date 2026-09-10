@@ -166,6 +166,28 @@ int main() {
     assert(!external.on_venue_event(book(VenueId::BinanceSpot, 1, 217, 99.9, 100.1, 10, 8), policy));
     assert(external.on_venue_event(book(VenueId::BinanceSpot, 2, 217, 99.9, 100.1, 10, 8), policy));
 
+    // A reconnect Health event may advance the epoch before the first BookTop.
+    ExternalAssetState epoch_recovery(500);
+    auto old_epoch_book = book(VenueId::CoinbaseSpot, 100, 300, 100.0, 100.2, 2, 3);
+    assert(epoch_recovery.on_venue_event(old_epoch_book, policy));
+    auto reconnect_health = old_epoch_book;
+    reconnect_health.connection_epoch = 2;
+    reconnect_health.source_sequence = 1;
+    reconnect_health.event_type = ExternalEventType::Health;
+    reconnect_health.local_receive_monotonic_ns = 310;
+    reconnect_health.healthy = 0;
+    assert(epoch_recovery.on_venue_event(reconnect_health, policy));
+    auto recovered_book = book(VenueId::CoinbaseSpot, 2, 311, 100.1, 100.3, 4, 5);
+    recovered_book.connection_epoch = 2;
+    assert(epoch_recovery.on_venue_event(recovered_book, policy));
+    ExternalStatePolicy one_venue = policy;
+    one_venue.min_healthy_venues = 1;
+    const auto recovered_snapshot = epoch_recovery.snapshot(312, one_venue);
+    assert(recovered_snapshot.valid == 1);
+    assert(recovered_snapshot.venue_count_fresh == 1);
+    assert(recovered_snapshot.venue_health_mask == 0x2);
+    assert(!epoch_recovery.on_venue_event(recovered_book, one_venue));
+
     assert(external.on_venue_event(book(VenueId::Deribit, 1, 218, 100.05, 100.25, 4, 4), policy));
     auto four = external.snapshot(220, policy);
     assert(four.valid == 1);
