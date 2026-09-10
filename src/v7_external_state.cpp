@@ -129,15 +129,28 @@ bool ExternalAssetState::on_venue_event(const ExternalVenueEvent& event,
     }
     if (asset_handle_ == 0) asset_handle_ = event.asset_handle;
     auto& venue = venues_[index];
+    const bool epoch_changed = venue.connection_epoch != 0
+        && venue.connection_epoch != event.connection_epoch;
+    if (epoch_changed) {
+        // Source sequence domains restart with the WebSocket epoch. A Health
+        // event commonly announces the new epoch before its first BookTop;
+        // retaining the old book sequence would then reject recovered books.
+        venue.valid = 0;
+        venue.book_source_sequence = 0;
+        venue.last_book_receive_ns = 0;
+        venue.previous_bid_size = 0.0;
+        venue.previous_ask_size = 0.0;
+        venue.bid_size = 0.0;
+        venue.ask_size = 0.0;
+        venue.ofi = 0.0;
+        venue.signed_trade_flow = 0.0;
+    }
     if (event.event_type == ExternalEventType::BookTop
         && venue.connection_epoch == event.connection_epoch && event.source_sequence > 0
         && venue.book_source_sequence > 0 && event.source_sequence <= venue.book_source_sequence) {
         return false;
     }
-
-    const bool epoch_changed = venue.connection_epoch != 0
-        && venue.connection_epoch != event.connection_epoch;
-    if (epoch_changed || event.gap != 0) venue.valid = 0;
+    if (event.gap != 0) venue.valid = 0;
     venue.connection_epoch = event.connection_epoch;
     venue.healthy = event.healthy;
     venue.gap = event.gap;
