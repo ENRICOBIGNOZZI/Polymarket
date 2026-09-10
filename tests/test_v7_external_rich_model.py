@@ -122,11 +122,12 @@ class RichModelTests(unittest.TestCase):
         policy=json.loads((Path(__file__).resolve().parents[1]/'config/v7_external_fair.json').read_text())
         probes=m.router.validate_probe_policy(policy['paper_exploration_probe'])
         books={'yes':m.book('yes',.52,.50),'no':m.book('no',.50,.48)}
-        self.assertTrue(m.router.paper_probe_candidates(status,books,policy['taker'],probes))
-        disabled=dict(probes);disabled['allow_frozen_rich_ml']=False
-        self.assertEqual(m.router.paper_probe_candidates(status,books,policy['taker'],disabled),[])
-        status['real_order_submission']=True
+        self.assertFalse(probes['allow_frozen_rich_ml'])
         self.assertEqual(m.router.paper_probe_candidates(status,books,policy['taker'],probes),[])
+        enabled=dict(probes);enabled['allow_frozen_rich_ml']=True
+        self.assertTrue(m.router.paper_probe_candidates(status,books,policy['taker'],enabled))
+        status['real_order_submission']=True
+        self.assertEqual(m.router.paper_probe_candidates(status,books,policy['taker'],enabled),[])
     def test_rich_taker_revalidates_pm_prior_at_arrival(self):
         m=self.load_fixture('test_v7_external_fair_paper_router')
         status=m.snapshot();fair=self.learned_fair();fair.update(
@@ -135,6 +136,7 @@ class RichModelTests(unittest.TestCase):
         status['fair'].update(fair)
         policy=json.loads((Path(__file__).resolve().parents[1]/'config/v7_external_fair.json').read_text())
         probes=m.router.validate_probe_policy(policy['paper_exploration_probe'])
+        probes=dict(probes);probes['allow_frozen_rich_ml']=True
         books={'yes':m.book('yes',.52,.50),'no':m.book('no',.50,.48)}
         self.assertTrue(m.router.paper_probe_candidates(status,books,policy['taker'],probes))
         status['fair']['pm_mid']=.40

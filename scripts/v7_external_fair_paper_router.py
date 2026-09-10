@@ -1810,8 +1810,10 @@ class PaperRouter:
         ml = self.config.get("paper_ml_probe") if isinstance(
             self.config.get("paper_ml_probe"), dict) else {}
         if self.probe_policy is not None:
+            configured_rich_probe = self.probe_policy.get("allow_frozen_rich_ml") is True
             self.probe_policy["allow_frozen_rich_ml"] = bool(
-                ml.get("enabled") is True and ml.get("research_only") is True
+                configured_rich_probe and ml.get("enabled") is True
+                and ml.get("research_only") is True
                 and ml.get("real_order_submission") is False)
         refresh_ms = finite(ml.get("pm_prior_refresh_interval_ms"), 250.0)
         if not 100.0 <= refresh_ms <= 1000.0:
