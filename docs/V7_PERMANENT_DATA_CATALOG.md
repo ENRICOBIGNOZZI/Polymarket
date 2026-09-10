@@ -19,7 +19,7 @@ Every source below survives model and protocol replacement. Original observation
 | profit_experiments | existing profit collector / report loop | profit report, cross-cohort permanent analysis | profit observation/manifest/source/settlement schemas, explicitly protocol stratified | RESEARCH_OBSERVATION |
 | coordinator_decisions | v7_global_portfolio_coordinator.py | opportunity funnel, authorization attribution | polymarket_v7_global_opportunity_decision_v1 | CANONICAL_DECISION_SOURCE |
 | authorization | coordinator / authorization receipt consumers | single ledger writer, opportunity funnel | typed V7 opportunity/receipt/canonical spool envelopes | CANONICAL_DECISION_SOURCE |
-| maker_learning | Maker observer / v7_maker_durable_learning.py | placement model, execution dataset | versioned placement features and current-run model; underlying raw observations retained | DERIVED_MODEL_OR_FEATURE |
+| maker_learning | Maker observer / v7_maker_durable_learning.py | placement model, execution dataset | versioned placement features and durable exact-policy/config cross-cutover research model; underlying raw observations retained | DERIVED_MODEL_OR_FEATURE |
 | markouts | polymarket_v7_maker_markout_observer | attribution, adverse selection analysis | exact fill-id joined MARKOUT research evidence | RESEARCH_OBSERVATION |
 | latency | native observed latency producers | latency gates, decision-chain diagnostics | versioned latency evidence; configured constants separately ineligible | CAUSAL_SOURCE |
 | point_in_time_universe | universe archiver / adaptive universe / structural scanner | market selection, historical opportunity universe | polymarket_v7_point_in_time_universe_v2 and versioned selection/relations schemas | POINT_IN_TIME_SOURCE |

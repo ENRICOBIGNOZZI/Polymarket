@@ -14,8 +14,8 @@ class MakerResearchRuntimeContractTests(unittest.TestCase):
         self.assertIn('--model "$MAKER_RESEARCH_MODEL"',self.text)
         self.assertNotIn('MAKER_MODEL_REGISTRY',self.text)
     def test_research_evidence_resets_at_run_start(self):
-        self.assertIn('MAKER_RESEARCH_STORE="$RUN_ROOT/micro_maker/research_evidence.jsonl"',self.text)
-        self.assertIn(': > "$MAKER_RESEARCH_STORE"',self.text)
+        self.assertIn('MAKER_RESEARCH_STORE="$DURABLE_ROOT/micro_maker/research_evidence.jsonl"',self.text)
+        self.assertNotIn(': > "$MAKER_RESEARCH_STORE"',self.text)
         self.assertNotIn('--source-root runs/paper_v7_archives',self.text)
 
 if __name__=="__main__":unittest.main()

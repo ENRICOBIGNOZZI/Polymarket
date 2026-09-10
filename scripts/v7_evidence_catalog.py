@@ -102,7 +102,7 @@ def definitions():
         ['authorization attempts','rejected authorizations and rejection reasons','opportunity envelopes'],event,'CANONICAL_DECISION_SOURCE'),
       family('maker_learning',['micro_maker/research_evidence.jsonl*','micro_maker/evidence.jsonl*','micro_maker/execution_model.json','micro_maker/book_features/*.json','micro_maker/reward_selection.events.jsonl*'],
         'Maker observer / v7_maker_durable_learning.py',['placement model','execution dataset'],
-        'versioned placement features and current-run model; underlying raw observations retained',
+        'versioned placement features and durable exact-policy/config cross-cutover research model; underlying raw observations retained',
         ['fillability data','queue estimates','placement action','fill probability','feature freshness'],receive,'DERIVED_MODEL_OR_FEATURE',False),
       family('markouts',['research/evidence/maker_markout/*.json','micro_maker/markout*.jsonl*'],
         'polymarket_v7_maker_markout_observer',['attribution','adverse selection analysis'],

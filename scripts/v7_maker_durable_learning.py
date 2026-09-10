@@ -81,6 +81,12 @@ def identity(row: dict[str, Any]) -> tuple[str, str, str, str]:
     )
 
 
+def lifecycle_key(row: dict[str, Any]) -> tuple[str, str]:
+    """Generation-scoped order identity for cross-cutover lifecycle joins."""
+    return (str(row.get("model_sha") or "unknown"), str(row.get("order_id") or ""))
+
+
+
 def evidence_files(roots: Iterable[pathlib.Path]) -> list[pathlib.Path]:
     output: set[pathlib.Path] = set()
     for root in roots:
@@ -187,13 +193,12 @@ def compact_evidence(
     paths: list[pathlib.Path], *, store_path: pathlib.Path,
     policy_hash: str, config_hash: str,
 ) -> tuple[list[dict[str, Any]], dict[str, int]]:
-    """Compact only the current run's exact policy/config Maker lifecycle.
+    """Compact the exact policy/config Maker lifecycle across cutovers.
 
-    Research mode intentionally does not import cross-cutover or cross-policy
-    evidence.  Linked FILL/MARKOUT rows may omit duplicated policy/config
-    fields, so their order identity is inherited from an exact current order.
+    Cross-policy evidence remains excluded. Linked lifecycle rows inherit
+    compatibility from their generation-scoped submitted order.
     """
-    exact_order_ids: set[str] = set()
+    exact_order_ids: set[tuple[str, str]] = set()
     scanned_rows = 0
     cached_rows = list(rows(paths))
     for row in cached_rows:
@@ -201,7 +206,7 @@ def compact_evidence(
         order_id = str(row.get("order_id") or "")
         if (row.get("event_type") == "ORDER_SUBMITTED" and order_id
                 and _metadata_identity_matches(row, policy_hash, config_hash)):
-            exact_order_ids.add(order_id)
+            exact_order_ids.add(lifecycle_key(row))
 
     retained: dict[tuple[str, str, str, str], dict[str, Any]] = {}
     existing_keys: set[tuple[str, str, str, str]] = set()
@@ -212,7 +217,7 @@ def compact_evidence(
             event_type = str(row.get("event_type") or "")
             order_id = str(row.get("order_id") or "")
             keep = (
-                (bool(order_id) and order_id in exact_order_ids)
+                (bool(order_id) and lifecycle_key(row) in exact_order_ids)
                 or (event_type == PROBE_EVENT
                     and _metadata_identity_matches(row, policy_hash, config_hash))
                 or (event_type in STANDALONE_ECONOMIC_EVENTS
@@ -231,7 +236,7 @@ def compact_evidence(
         "retained_records": len(values),
         "new_records": sum(key not in existing_keys for key in retained),
         "exact_policy_orders": len(exact_order_ids),
-        "evidence_scope": "CURRENT_RUN_EXACT_POLICY_ONLY",
+        "evidence_scope": "CROSS_CUTOVER_EXACT_POLICY_CONFIG",
     }
 
 
@@ -325,16 +330,23 @@ def placement_features(order: dict[str, Any]) -> list[float] | None:
 
 def order_examples(values: list[dict[str, Any]]) -> list[dict[str, Any]]:
     orders = {
-        str(row["order_id"]): row for row in values
+        lifecycle_key(row): row for row in values
         if row.get("event_type") == "ORDER_SUBMITTED" and row.get("order_id")
     }
-    later: dict[str, list[dict[str, Any]]] = defaultdict(list)
+    later: dict[tuple[str, str], list[dict[str, Any]]] = defaultdict(list)
+    generation_end: dict[str, int] = defaultdict(int)
     for row in values:
-        order_id = str(row.get("order_id") or "")
-        if order_id and row.get("event_type") != "ORDER_SUBMITTED":
-            later[order_id].append(row)
+        generation_end[str(row.get("model_sha") or "unknown")] = max(
+            generation_end[str(row.get("model_sha") or "unknown")],
+            int(row.get("recorded_ts_ms") or 0),
+        )
+    for row in values:
+        key = lifecycle_key(row)
+        if key[1] and row.get("event_type") != "ORDER_SUBMITTED":
+            later[key].append(row)
     output: list[dict[str, Any]] = []
-    for order_id, order in orders.items():
+    for key, order in orders.items():
+        source_model_sha, order_id = key
         order_metadata = (
             order.get("metadata") if isinstance(order.get("metadata"), dict) else {})
         start = int(order.get("recorded_ts_ms") or 0)
@@ -350,7 +362,7 @@ def order_examples(values: list[dict[str, Any]]) -> list[dict[str, Any]]:
         price_reach_prints_seen = 0
         opposite_flow_shares_seen = 0.0
         price_reach_shares_seen = 0.0
-        for row in sorted(later.get(order_id, []), key=lambda item: int(item.get("recorded_ts_ms") or 0)):
+        for row in sorted(later.get(key, []), key=lambda item: int(item.get("recorded_ts_ms") or 0)):
             timestamp = int(row.get("recorded_ts_ms") or 0)
             if row.get("event_type") == "FILL":
                 filled += max(0.0, number(row.get("filled_size")))
@@ -379,12 +391,11 @@ def order_examples(values: list[dict[str, Any]]) -> list[dict[str, Any]]:
                 price_reach_shares_seen = max(
                     price_reach_shares_seen,
                     number(metadata.get("price_reach_shares_seen")))
-        observation_end = terminal_ts or max(
-            (int(row.get("recorded_ts_ms") or 0) for row in values), default=start
-        )
+        observation_end = terminal_ts or max(start, generation_end.get(source_model_sha, start))
         exposure_ms = max(0, observation_end - start)
         output.append({
             "order_id": order_id,
+            "source_model_sha": source_model_sha,
             "group": group_key(order),
             "event_cluster": str(order.get("event_id") or order.get("market_id") or "UNKNOWN"),
             "start_ts_ms": start,
@@ -554,38 +565,38 @@ def _fit_linear(rows: list[list[float]], labels: list[float],
 
 def adverse_placement_examples(values: list[dict[str, Any]]) -> list[dict[str, Any]]:
     orders = {
-        str(row.get("order_id")): row for row in values
+        lifecycle_key(row): row for row in values
         if row.get("event_type") == "ORDER_SUBMITTED" and row.get("order_id")
     }
     filled: defaultdict[str, float] = defaultdict(float)
     marks: defaultdict[str, defaultdict[str, list[float]]] = defaultdict(
         lambda: defaultdict(lambda: [0.0, 0.0]))
     for row in values:
-        order_id = str(row.get("order_id") or "")
-        if order_id in orders and row.get("event_type") == "FILL":
-            filled[order_id] += max(0.0, number(row.get("filled_size")))
+        key = lifecycle_key(row)
+        if key in orders and row.get("event_type") == "FILL":
+            filled[key] += max(0.0, number(row.get("filled_size")))
     for row in values:
-        order_id = str(row.get("order_id") or "")
-        if order_id not in orders or row.get("event_type") != "MARKOUT" \
+        key = lifecycle_key(row)
+        if key not in orders or row.get("event_type") != "MARKOUT" \
                 or not isinstance(row.get("markouts"), dict):
             continue
-        shares = filled[order_id]
+        shares = filled[key]
         if shares <= 1e-12:
             continue
         for horizon, pnl in row["markouts"].items():
             if str(horizon) in ADVERSE_HORIZON_PRIORITY:
-                marks[order_id][str(horizon)][0] += max(0.0, -number(pnl)) * shares
-                marks[order_id][str(horizon)][1] += shares
+                marks[key][str(horizon)][0] += max(0.0, -number(pnl)) * shares
+                marks[key][str(horizon)][1] += shares
     output = []
-    for order_id, horizons in marks.items():
+    for key, horizons in marks.items():
         horizon = next((item for item in ADVERSE_HORIZON_PRIORITY if item in horizons), None)
-        features = placement_features(orders[order_id])
+        features = placement_features(orders[key])
         if horizon is None or features is None or horizons[horizon][1] <= 1e-12:
             continue
         output.append({
-            "timestamp_ms": int(orders[order_id].get("recorded_ts_ms") or 0),
-            "event_cluster": str(orders[order_id].get("event_id")
-                                 or orders[order_id].get("market_id") or "UNKNOWN"),
+            "timestamp_ms": int(orders[key].get("recorded_ts_ms") or 0),
+            "event_cluster": str(orders[key].get("event_id")
+                                 or orders[key].get("market_id") or "UNKNOWN"),
             "features": features,
             "label": horizons[horizon][0] / horizons[horizon][1],
         })
@@ -755,58 +766,57 @@ def adverse_markout_models(
     maturity; it can never lower the declared cold adverse-cost floor.
     """
     orders = {
-        str(row.get("order_id")): row for row in values
+        lifecycle_key(row): row for row in values
         if row.get("event_type") == "ORDER_SUBMITTED" and row.get("order_id")
     }
-    filled: defaultdict[str, float] = defaultdict(float)
-    fill_sizes: dict[str, float] = {}
-    marks: defaultdict[str, defaultdict[str, list[float]]] = defaultdict(
+    filled: defaultdict[tuple[str, str], float] = defaultdict(float)
+    fill_sizes: dict[tuple[str, str], float] = {}
+    marks: defaultdict[tuple[str, str], defaultdict[str, list[float]]] = defaultdict(
         lambda: defaultdict(lambda: [0.0, 0.0]))
     for row in values:
-        order_id = str(row.get("order_id") or "")
-        if order_id not in orders:
+        key = lifecycle_key(row)
+        if key not in orders:
             continue
         if row.get("event_type") == "FILL":
             size = max(0.0, number(row.get("filled_size")))
-            filled[order_id] += size
+            filled[key] += size
             if row.get("fill_id"):
-                fill_sizes[str(row["fill_id"])] = size
+                fill_sizes[(key[0], str(row["fill_id"]))] = size
     for row in values:
-        order_id = str(row.get("order_id") or "")
-        if order_id not in orders:
+        key = lifecycle_key(row)
+        if key not in orders:
             continue
         if row.get("event_type") == "MARKOUT" and isinstance(row.get("markouts"), dict):
-            marked_shares = fill_sizes.get(str(row.get("fill_id") or ""), filled[order_id])
+            marked_shares = fill_sizes.get(
+                (key[0], str(row.get("fill_id") or "")), filled[key]
+            )
             if marked_shares <= 1e-12:
                 continue
             for horizon, pnl in row["markouts"].items():
                 if str(horizon) in ADVERSE_HORIZON_PRIORITY:
                     # Maker MARKOUT values are per-share changes. Convert them
                     # to size-weighted adverse dollars before pooling.
-                    marks[order_id][str(horizon)][0] += (
+                    marks[key][str(horizon)][0] += (
                         max(0.0, -number(pnl)) * marked_shares)
-                    marks[order_id][str(horizon)][1] += marked_shares
+                    marks[key][str(horizon)][1] += marked_shares
     grouped: defaultdict[str, list[tuple[float, float, str, str]]] = defaultdict(list)
-    for order_id, horizons in marks.items():
+    for lifecycle, horizons in marks.items():
         selected = next((h for h in ADVERSE_HORIZON_PRIORITY if h in horizons), None)
         if selected is None:
             continue
         adverse_dollars, shares = horizons[selected]
         if shares <= 1e-12:
             continue
-        cluster = str(
-            orders[order_id].get("event_id")
-            or orders[order_id].get("market_id")
-            or "UNKNOWN"
-        )
+        order = orders[lifecycle]
+        cluster = str(order.get("event_id") or order.get("market_id") or "UNKNOWN")
         observation = (adverse_dollars, shares, selected, cluster)
-        key = group_key(orders[order_id])
+        group = group_key(order)
         if pool_outcomes:
-            action, _outcome, side = (key.split("|") + ["", "", ""])[:3]
+            action, _outcome, side = (group.split("|") + ["", "", ""])[:3]
             if action == "UNKNOWN" or side not in {"BUY", "SELL"}:
                 continue
-            key = f"{action}|{side}"
-        grouped[key].append(observation)
+            group = f"{action}|{side}"
+        grouped[group].append(observation)
         grouped["GLOBAL"].append(observation)
     output: dict[str, dict[str, Any]] = {}
     prior = max(1e-9, float(prior_filled_shares))
@@ -823,7 +833,7 @@ def adverse_markout_models(
             "adverse_markout_dollars": observed_adverse,
             "adverse_markout_prior_filled_shares": prior,
             "adverse_markout_horizon_priority": list(ADVERSE_HORIZON_PRIORITY),
-            "adverse_markout_role": "CURRENT_RUN_RISK_FLOOR",
+            "adverse_markout_role": "CROSS_CUTOVER_EXACT_POLICY_RISK_FLOOR",
         }
     return output
 
@@ -896,7 +906,7 @@ def research_policy_value(values: list[dict[str, Any]]) -> dict[str, Any]:
     executable markout, and unresolved or malformed probes receive no credit.
     """
     probes = [row for row in values if row.get("event_type") == PROBE_EVENT]
-    by_candidate: defaultdict[str, list[dict[str, Any]]] = defaultdict(list)
+    by_candidate: defaultdict[tuple[str, str], list[dict[str, Any]]] = defaultdict(list)
     invalid = 0
     for row in probes:
         metadata = row.get("metadata") if isinstance(row.get("metadata"), dict) else {}
@@ -911,35 +921,36 @@ def research_policy_value(values: list[dict[str, Any]]) -> dict[str, Any]:
         ):
             invalid += 1
             continue
-        by_candidate[candidate_id].append(row)
+        by_candidate[(str(row.get("model_sha") or "unknown"), candidate_id)].append(row)
 
-    fills_by_order: defaultdict[str, list[dict[str, Any]]] = defaultdict(list)
-    fill_size: dict[str, float] = {}
-    marks_by_order: defaultdict[str, defaultdict[str, list[float]]] = defaultdict(
+    fills_by_order: defaultdict[tuple[str, str], list[dict[str, Any]]] = defaultdict(list)
+    fill_size: dict[tuple[str, str], float] = {}
+    marks_by_order: defaultdict[tuple[str, str], defaultdict[str, list[float]]] = defaultdict(
         lambda: defaultdict(lambda: [0.0, 0.0]))
     for row in values:
         if row.get("event_type") != "FILL" or not row.get("order_id"):
             continue
-        order_id = str(row["order_id"])
-        fills_by_order[order_id].append(row)
-        fill_size[str(row.get("fill_id") or "")] = max(
+        key = lifecycle_key(row)
+        fills_by_order[key].append(row)
+        fill_size[(key[0], str(row.get("fill_id") or ""))] = max(
             0.0, number(row.get("filled_size")))
     for row in values:
-        order_id = str(row.get("order_id") or "")
-        if row.get("event_type") != "MARKOUT" or order_id not in fills_by_order \
+        key = lifecycle_key(row)
+        if row.get("event_type") != "MARKOUT" or key not in fills_by_order \
                 or not isinstance(row.get("markouts"), dict):
             continue
-        shares = fill_size.get(str(row.get("fill_id") or ""), 0.0)
+        shares = fill_size.get((key[0], str(row.get("fill_id") or "")), 0.0)
         if shares <= 0.0:
             continue
         for horizon, pnl in row["markouts"].items():
             if str(horizon) in ADVERSE_HORIZON_PRIORITY:
-                marks_by_order[order_id][str(horizon)][0] += number(pnl) * shares
-                marks_by_order[order_id][str(horizon)][1] += shares
+                marks_by_order[key][str(horizon)][0] += number(pnl) * shares
+                marks_by_order[key][str(horizon)][1] += shares
 
     episodes: list[dict[str, Any]] = []
     unresolved = unlabeled_fills = 0
-    for candidate_id, lifecycle in by_candidate.items():
+    for candidate_key, lifecycle in by_candidate.items():
+        source_model_sha, candidate_id = candidate_key
         assignments = [row for row in lifecycle
                        if (row.get("metadata") or {}).get("probe_phase") == "ASSIGNED"]
         terminals = [row for row in lifecycle
@@ -956,12 +967,13 @@ def research_policy_value(values: list[dict[str, Any]]) -> dict[str, Any]:
         propensity = number(metadata.get("action_propensity"), math.nan)
         order_id = next((str(row.get("order_id")) for row in lifecycle
                          if row.get("order_id")), "")
-        fills = fills_by_order.get(order_id, [])
+        order_key = (source_model_sha, order_id)
+        fills = fills_by_order.get(order_key, [])
         filled_shares = sum(max(0.0, number(row.get("filled_size"))) for row in fills)
         value = 0.0
         selected_horizon = None
         if filled_shares > 0.0:
-            horizons = marks_by_order.get(order_id, {})
+            horizons = marks_by_order.get(order_key, {})
             selected_horizon = next(
                 (horizon for horizon in ADVERSE_HORIZON_PRIORITY if horizon in horizons),
                 None,
@@ -1039,7 +1051,7 @@ def fit_model(values: list[dict[str, Any]], *, model_sha: str, policy_hash: str,
               config_hash: str, cold_fill_prior: float,
               fill_prior_strength_orders: float = 20.0) -> dict[str, Any]:
     exact_order_ids = {
-        str(row.get("order_id")) for row in values
+        lifecycle_key(row) for row in values
         if row.get("event_type") == "ORDER_SUBMITTED" and row.get("order_id")
         and _metadata_identity_matches(row, policy_hash, config_hash)
     }
@@ -1050,10 +1062,10 @@ def fit_model(values: list[dict[str, Any]], *, model_sha: str, policy_hash: str,
         event_type = str(row.get("event_type") or "")
         exact_standalone = (event_type in {PROBE_EVENT, *STANDALONE_ECONOMIC_EVENTS}
                             and _metadata_identity_matches(row, policy_hash, config_hash))
-        if (order_id and order_id in exact_order_ids) or exact_standalone:
+        if (order_id and lifecycle_key(row) in exact_order_ids) or exact_standalone:
             compatible.append(row)
         else:
-            incompatible["outside_current_run_exact_policy"] += 1
+            incompatible["outside_exact_policy_config"] += 1
     adverse_models = adverse_markout_models(compatible)
     symmetric_outcome_adverse = adverse_markout_models(compatible, pool_outcomes=True)
     examples = order_examples(compatible)
@@ -1109,7 +1121,7 @@ def fit_model(values: list[dict[str, Any]], *, model_sha: str, policy_hash: str,
             "adverse_markout_filled_shares": number(
                 adverse.get("adverse_markout_filled_shares")),
             "adverse_markout_dollars": number(adverse.get("adverse_markout_dollars")),
-            "adverse_markout_role": "CURRENT_RUN_RISK_FLOOR",
+            "adverse_markout_role": "CROSS_CUTOVER_EXACT_POLICY_RISK_FLOOR",
             "mature": mature,
             "maturity_requirements": {
                 "minimum_orders": 50,
@@ -1179,6 +1191,9 @@ def fit_model(values: list[dict[str, Any]], *, model_sha: str, policy_hash: str,
         "artifact_role": "research",
         "model_state": "EVIDENCE_ACCUMULATING" if has_evidence else "COLD_START",
         "research_runtime_model": True,
+        "training_source_model_shas": sorted({
+            str(row.get("model_sha") or "") for row in compatible if row.get("model_sha")
+        }),
         "training_window": {
             "start_ts_ms": min(timestamps) if timestamps else None,
             "end_ts_ms": max(timestamps) if timestamps else None,
@@ -1207,7 +1222,7 @@ def fit_model(values: list[dict[str, Any]], *, model_sha: str, policy_hash: str,
             "semantics": "NO_OPPOSITE_FLOW->PRICE_NOT_REACHED->QUEUE_NOT_DEPLETED->FILL",
         },
         "exact_execution_cells": exact_execution_cell_evidence(examples),
-        "current_run_global_adverse": adverse_models.get("GLOBAL", {}),
+        "compatible_policy_global_adverse": adverse_models.get("GLOBAL", {}),
         "risk_only_symmetric_outcome_adverse": {
             key: value for key, value in symmetric_outcome_adverse.items()
             if key != "GLOBAL"
@@ -1298,7 +1313,7 @@ def main() -> int:
         "stored_records": compaction["retained_records"],
         "scanned_strategy_rows": compaction["scanned_strategy_rows"],
         "exact_policy_orders": compaction["exact_policy_orders"],
-        "store_projection": "CURRENT_RUN_EXACT_POLICY_LIFECYCLE_V1",
+        "store_projection": "CROSS_CUTOVER_EXACT_POLICY_CONFIG_LIFECYCLE_V1",
         "compatible_training_records": model["training_window"]["records"],
         "model_state": model["model_state"],
         "fill_prior_strength_orders": fill_prior_strength_orders,
@@ -1306,8 +1321,8 @@ def main() -> int:
         "research_model_generated_ts_ms": research_model["generated_ts_ms"],
         "research_model_state": research_model["model_state"],
         "research_model_sha256": hashlib.sha256(args.output_model.read_bytes()).hexdigest(),
-        "evidence_scope": "CURRENT_RUN_ONLY",
-        "research_runtime": "DIRECT_CURRENT_RUN_MODEL",
+        "evidence_scope": "CROSS_CUTOVER_EXACT_POLICY_CONFIG",
+        "research_runtime": "DURABLE_CROSS_CUTOVER_RESEARCH_MODEL",
     }
     atomic_json(args.store_status, status)
     print(json.dumps(status, sort_keys=True))

@@ -720,7 +720,7 @@ def build_maker_opportunities(
         "model_state": model.get("model_state"),
         "model_hash": model_hash,
         "research_execution_model": True,
-        "research_evidence_scope": "CURRENT_RUN_ONLY",
+        "research_evidence_scope": "CROSS_CUTOVER_EXACT_POLICY_CONFIG",
         "market_id": market_status.get("market_id"),
         "decision_timestamp_ns": decision_ns,
         "selection_timestamp_ms": selection_ts_ms,

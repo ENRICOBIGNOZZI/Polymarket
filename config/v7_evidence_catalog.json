@@ -942,7 +942,7 @@
         "placement model",
         "execution dataset"
       ],
-      "schema": "versioned placement features and current-run model; underlying raw observations retained",
+      "schema": "versioned placement features and durable exact-policy/config cross-cutover research model; underlying raw observations retained",
       "topics": [
         "fillability data",
         "queue estimates",

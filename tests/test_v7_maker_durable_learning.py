@@ -50,6 +50,32 @@ class DurableLearningTests(unittest.TestCase):
         terminal['metadata']['execution_outcome']=4
         self.assertEqual(order_examples([order,terminal])[0]['execution_outcome'],'PRICE_NOT_REACHED')
 
+    def test_same_order_id_across_generations_never_cross_joins(self) -> None:
+        old=record("ORDER_SUBMITTED","old-order",order_id="shared",intended_size=5.0,
+                   recorded_ts_ms=1_000)
+        old["model_sha"]="b"*40
+        old_terminal=record("ORDER_STATE","old-terminal",order_id="shared",
+                            order_state="CANCELLED",recorded_ts_ms=2_000)
+        old_terminal["model_sha"]="b"*40
+        old_terminal["metadata"]["execution_outcome"]="NO_OPPOSITE_FLOW"
+        new=record("ORDER_SUBMITTED","new-order",order_id="shared",intended_size=5.0,
+                   recorded_ts_ms=10_000)
+        new["model_sha"]="c"*40
+        new_fill=record("FILL","new-fill",order_id="shared",filled_size=5.0,
+                        recorded_ts_ms=10_500)
+        new_fill["model_sha"]="c"*40
+        new_terminal=record("ORDER_STATE","new-terminal",order_id="shared",
+                            order_state="FILLED",recorded_ts_ms=10_600)
+        new_terminal["model_sha"]="c"*40
+        new_terminal["metadata"]["execution_outcome"]="FILLED"
+        examples=order_examples([old,old_terminal,new,new_fill,new_terminal])
+        self.assertEqual(len(examples),2)
+        by_sha={row["source_model_sha"]:row for row in examples}
+        self.assertEqual(by_sha["b"*40]["filled_fraction"],0.0)
+        self.assertEqual(by_sha["b"*40]["execution_outcome"],"NO_OPPOSITE_FLOW")
+        self.assertEqual(by_sha["c"*40]["filled_fraction"],1.0)
+        self.assertEqual(by_sha["c"*40]["execution_outcome"],"FILLED")
+
     def test_research_model_is_atomically_refit_in_place(self) -> None:
         with tempfile.TemporaryDirectory() as folder:
             path=pathlib.Path(folder)/"execution_model.json"
@@ -96,7 +122,7 @@ class DurableLearningTests(unittest.TestCase):
             values,status=compact_evidence([source],store_path=store,policy_hash="policy",config_hash="config")
             self.assertEqual({row["record_id"] for row in values},{"current-order","current-state","current-fill"})
             self.assertEqual(status["exact_policy_orders"],1)
-            self.assertEqual(status["evidence_scope"],"CURRENT_RUN_EXACT_POLICY_ONLY")
+            self.assertEqual(status["evidence_scope"],"CROSS_CUTOVER_EXACT_POLICY_CONFIG")
             self.assertEqual(status["retained_records"],3)
 
     def test_append_store_deduplicates_within_current_run(self) -> None:
@@ -384,7 +410,7 @@ class DurableLearningTests(unittest.TestCase):
         )
         self.assertGreater(model["groups"]["GLOBAL"]["adverse_markout_per_share"], 0.002)
         self.assertEqual(model["groups"]["GLOBAL"]["adverse_markout_observations"], 1)
-        self.assertEqual(model["current_run_global_adverse"]["adverse_markout_observations"], 1)
+        self.assertEqual(model["compatible_policy_global_adverse"]["adverse_markout_observations"], 1)
 
 
     def test_symmetric_outcome_markout_pools_action_side_without_fill_credit(self) -> None:

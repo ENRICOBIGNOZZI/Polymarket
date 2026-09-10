@@ -28,8 +28,9 @@ SHA="$(git rev-parse HEAD)"
 MAKER_RESEARCH_MODEL="$RUN_ROOT/micro_maker/execution_model.json"
 DURABLE_ROOT="${PM_V7_DURABLE_ROOT:-runs/paper_v7_durable}"
 RICH_RESEARCH_MODEL="$DURABLE_ROOT/external_fair/rich_research_model.json"
-MAKER_RESEARCH_STORE="$RUN_ROOT/micro_maker/research_evidence.jsonl"
+MAKER_RESEARCH_STORE="$DURABLE_ROOT/micro_maker/research_evidence.jsonl"
 MAKER_RESEARCH_STATUS="$RUN_ROOT/micro_maker/research_learning_status.json"
+MAKER_ARCHIVE_ROOT="${PM_V7_ARCHIVE_ROOT:-runs/paper_v7_archives}"
 EXTERNAL_CANCEL_RULE_SHA="$(python3 - "$CRYPTO_EXECUTION_ALPHA_CONFIG" <<PY
 import hashlib,json,sys
 value=json.load(open(sys.argv[1],encoding="utf-8"))
@@ -52,8 +53,8 @@ WS_PUBLIC_HOST="ws-subscriptions-clob.polymarket.com"
 WS_JSON_ARENA_OBSERVER_MAX_BYTES="${PM_V7_WS_JSON_ARENA_OBSERVER_MAX_BYTES:-1073741824}"
 WS_JSON_ARENA_FILLABILITY_MAX_BYTES="${PM_V7_WS_JSON_ARENA_FILLABILITY_MAX_BYTES:-536870912}"
 WS_JSON_ARENA_TOTAL_BUDGET_BYTES="${PM_V7_WS_JSON_ARENA_TOTAL_BUDGET_BYTES:-4294967296}"
-# Research mode: one current-run execution model, continuously refit from the
-# current PAPER ledger. No model-version or deployment lifecycle exists.
+# Research mode: one PAPER execution model, continuously refit from durable
+# exact-policy/config evidence across cutovers plus the current PAPER ledger.
 export PM_V7_MODEL_SHA="$SHA"
 export PM_V7_MAKER_EXECUTION_MODEL="$MAKER_RESEARCH_MODEL"
 CONTROL="$RUN_ROOT/control"
@@ -61,7 +62,7 @@ ALLOC="$CONTROL/allocations"
 KILL="$CONTROL/KILL"
 MAKER_FREEZE="$CONTROL/MAKER_FREEZE"
 LOCK="$CONTROL/runtime.lock"
-mkdir -p "$CONTROL" "$RUN_ROOT/ledger" "$RUN_ROOT/opportunities/inbox" "$RUN_ROOT/research/evidence" "$RUN_ROOT/market_data" "$RUN_ROOT/universe" "$RUN_ROOT/fast_structural" "$RUN_ROOT/structural_relations" "$RUN_ROOT/hard_arb" "$RUN_ROOT/micro_maker" "$RUN_ROOT/external" "$RUN_ROOT/external_fair" "$RUN_ROOT/learned_execution"
+mkdir -p "$CONTROL" "$RUN_ROOT/ledger" "$RUN_ROOT/opportunities/inbox" "$RUN_ROOT/research/evidence" "$RUN_ROOT/market_data" "$RUN_ROOT/universe" "$RUN_ROOT/fast_structural" "$RUN_ROOT/structural_relations" "$RUN_ROOT/hard_arb" "$RUN_ROOT/micro_maker" "$RUN_ROOT/external" "$RUN_ROOT/external_fair" "$RUN_ROOT/learned_execution" "$DURABLE_ROOT/micro_maker"
 touch "$RUN_ROOT/ledger/execution.jsonl"
 
 # The runtime is not allowed to self-assert CI approval through an environment
@@ -185,11 +186,11 @@ echo $$ > "$LOCK/pid"
 rm -f "$KILL" "$MAKER_FREEZE"
 
 python3 scripts/v7_capital_allocator.py --config "$CONFIG" --output-dir "$ALLOC" >/dev/null
-# Research mode starts from zero legacy execution evidence.  Only the current
-# run may train the Maker execution model; archive/durable evidence is ignored.
-: > "$MAKER_RESEARCH_STORE"
+# Seed the durable exact-policy/config execution projection from archives and
+# the live run.  The store survives cutovers; incompatible policy/config rows
+# remain in canonical archives but are excluded from this training projection.
 python3 scripts/v7_maker_durable_learning.py \
-  --source-root "$RUN_ROOT" \
+  --source-root "$MAKER_ARCHIVE_ROOT" --source-root "$RUN_ROOT" \
   --store "$MAKER_RESEARCH_STORE" --store-status "$MAKER_RESEARCH_STATUS" \
   --output-model "$MAKER_RESEARCH_MODEL" --policy "$MAKER_POLICY" \
   --config "$ALLOC/micro_maker.json" --model-sha "$SHA" \
@@ -649,8 +650,8 @@ v7_register_child "$!"
   >> "$RUN_ROOT/fast_structural/runtime.log" 2>&1 &
 v7_register_child "$!"
 
-# Current-run research execution fit. It directly updates the PAPER research
-# model every 60 seconds. There is no model registry and no legacy evidence.
+# Durable exact-policy/config execution fit. The live run is appended every
+# 60 seconds; the durable projection already contains compatible prior cutovers.
 (
   while [[ ! -e "$KILL" ]]; do
     python3 scripts/v7_maker_durable_learning.py \
