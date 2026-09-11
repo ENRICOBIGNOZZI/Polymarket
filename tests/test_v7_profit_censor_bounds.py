@@ -9,11 +9,11 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "scripts"))
 
 import v7_profit_censor_bounds as bounds  # noqa: E402
-from v7_profit_protocol import digest, validate  # noqa: E402
+from v7_profit_protocol import validate  # noqa: E402
 
 
 def protocol_v5() -> dict:
-    value = json.loads((ROOT / "config/v7_profit_experiment_v5.json").read_text())
+    value = json.loads((ROOT / "config/v7_profit_experiment.json").read_text())
     validate(value)
     return value
 
@@ -108,17 +108,18 @@ def fixture(*, signal_censors: int = 1, maker_censors: int = 1):
     return selections, delays, comparisons, anchors, manifest, settlements
 
 
-def test_named_v5_and_operational_default_are_identical() -> None:
-    default = json.loads((ROOT / "config/v7_profit_experiment.json").read_text())
-    named = json.loads((ROOT / "config/v7_profit_experiment_v5.json").read_text())
-    assert digest(default) == digest(named)
-    assert default == named
+def test_default_protocol_is_exact_registered_v5() -> None:
+    value = protocol_v5()
+    assert value["protocol_id"] == bounds.PROTOCOL_ID
+    censor = value["inference"]["confirmatory"]["censoring"]
+    assert censor["mode"] == bounds.MODE
+    assert set(censor["endpoint_max_censor_fraction"].values()) == {0.05}
 
 
-def test_v4_is_legacy_and_v5_is_explicit_opt_in() -> None:
-    v4 = json.loads((ROOT / "config/v7_profit_experiment_v4.json").read_text())
-    validate(v4)
-    assert bounds.policy(v4) is None
+def test_prior_snapshot_is_legacy_and_v5_is_explicit_opt_in() -> None:
+    prior = json.loads((ROOT / "config/v7_profit_experiment_20260910.json").read_text())
+    validate(prior)
+    assert bounds.policy(prior) is None
     assert bounds.policy(protocol_v5())["mode"] == bounds.MODE
 
 
@@ -202,8 +203,8 @@ def test_policy_rejects_any_unregistered_cap_change() -> None:
 
 
 if __name__ == "__main__":
-    test_named_v5_and_operational_default_are_identical()
-    test_v4_is_legacy_and_v5_is_explicit_opt_in()
+    test_default_protocol_is_exact_registered_v5()
+    test_prior_snapshot_is_legacy_and_v5_is_explicit_opt_in()
     test_binary_fee_maximum_is_exact()
     test_terminal_censors_are_included_at_worst_case_support()
     test_malformed_observed_economics_fail_closed_not_as_censor()
