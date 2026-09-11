@@ -23,6 +23,15 @@ def write(path: Path, value: dict) -> None:
     path.write_text(json.dumps(value), encoding="utf-8")
 
 
+def test_rule_hash_matches_runtime_producer() -> None:
+    value = json.loads((ROOT / "config/v7_crypto_execution_alpha.json").read_text(encoding="utf-8"))
+    rule = value["execution_alpha"]["cancel"]["research_rule"]
+    producer_hash = hashlib.sha256(
+        json.dumps(rule, sort_keys=True, separators=(",", ":")).encode()
+    ).hexdigest()
+    assert RULE == producer_hash
+
+
 def runtime() -> dict:
     return {
         "schema": "polymarket_v7_runtime_status_v3", "paper_only": True,
@@ -198,6 +207,7 @@ def test_expired_signal_fails_closed() -> None:
 
 
 if __name__ == "__main__":
+    test_rule_hash_matches_runtime_producer()
     test_active_research_signal_builds_typed_cancel()
     test_unrelated_live_files_are_not_scanned()
     test_wrong_rule_hash_fails_closed()
