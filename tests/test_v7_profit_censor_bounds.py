@@ -9,7 +9,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "scripts"))
 
 import v7_profit_censor_bounds as bounds  # noqa: E402
-from v7_profit_protocol import validate  # noqa: E402
+from v7_profit_protocol import digest, validate  # noqa: E402
 
 
 def protocol_v5() -> dict:
@@ -108,16 +108,23 @@ def fixture(*, signal_censors: int = 1, maker_censors: int = 1):
     return selections, delays, comparisons, anchors, manifest, settlements
 
 
+def test_named_v5_and_operational_default_are_identical() -> None:
+    default = json.loads((ROOT / "config/v7_profit_experiment.json").read_text())
+    named = json.loads((ROOT / "config/v7_profit_experiment_v5.json").read_text())
+    assert digest(default) == digest(named)
+    assert default == named
+
+
 def test_v4_is_legacy_and_v5_is_explicit_opt_in() -> None:
-    v4 = json.loads((ROOT / "config/v7_profit_experiment.json").read_text())
-    if v4["protocol_id"] == bounds.PROTOCOL_ID:
-        v4 = json.loads((ROOT / "config/v7_profit_experiment_v4.json").read_text())
+    v4 = json.loads((ROOT / "config/v7_profit_experiment_v4.json").read_text())
+    validate(v4)
     assert bounds.policy(v4) is None
     assert bounds.policy(protocol_v5())["mode"] == bounds.MODE
 
 
 def test_binary_fee_maximum_is_exact() -> None:
     assert abs(bounds.max_binary_fee({"rate": 0.02, "exponent": 1.0}) - 0.005) < 1e-15
+    assert abs(bounds.fee_at(0.6, {"rate": 0.02, "exponent": 1.0}) - 0.0048) < 1e-15
 
 
 def test_terminal_censors_are_included_at_worst_case_support() -> None:
@@ -138,6 +145,17 @@ def test_terminal_censors_are_included_at_worst_case_support() -> None:
     expected_signal_lower = -1.0 - 2.0 * (0.005 + 0.001)
     assert any(abs(value - expected_signal_lower) < 1e-12 for value in primary[bounds.SETTLEMENT_ENDPOINT].values())
     assert any(abs(value - (-1.002)) < 1e-12 for value in primary[bounds.MAKER_ENDPOINT].values())
+
+
+def test_malformed_observed_economics_fail_closed_not_as_censor() -> None:
+    selections, delays, comparisons, anchors, manifest, settlements = fixture(signal_censors=0, maker_censors=0)
+    delays[("s0", 1000)] = {**delays[("s0", 1000)], "fee_per_share": 0.0}
+    _primary, audit = bounds.bounded_primary(selections, delays, comparisons, anchors, manifest, settlements)
+    signal = audit["endpoint_audit"][bounds.SETTLEMENT_ENDPOINT]
+    assert signal["censored_units"] == 0
+    assert signal["support_unavailable_units"] == 1
+    assert signal["support_complete"] is False
+    assert audit["all_endpoint_caps_and_support_pass"] is False
 
 
 def test_more_than_five_percent_censoring_fails_closed() -> None:
@@ -170,23 +188,26 @@ def test_out_of_window_maker_anchor_never_enters_denominator() -> None:
     assert audit["endpoint_audit"][bounds.MAKER_ENDPOINT]["eligible_units"] == 20
 
 
-def test_policy_rejects_unregistered_cap_change() -> None:
+def test_policy_rejects_any_unregistered_cap_change() -> None:
     value = protocol_v5()
-    changed = copy.deepcopy(value)
-    changed["inference"]["confirmatory"]["censoring"]["endpoint_max_censor_fraction"][bounds.MAKER_ENDPOINT] = 1.5
-    try:
-        bounds.policy(changed)
-    except ValueError as exc:
-        assert "cap_bounds" in str(exc)
-    else:
-        raise AssertionError("invalid censor cap accepted")
+    for changed_cap in (0.049, 0.051, 1.5):
+        changed = copy.deepcopy(value)
+        changed["inference"]["confirmatory"]["censoring"]["endpoint_max_censor_fraction"][bounds.MAKER_ENDPOINT] = changed_cap
+        try:
+            bounds.policy(changed)
+        except ValueError as exc:
+            assert "cap_bounds" in str(exc)
+        else:
+            raise AssertionError("unregistered censor cap accepted")
 
 
 if __name__ == "__main__":
+    test_named_v5_and_operational_default_are_identical()
     test_v4_is_legacy_and_v5_is_explicit_opt_in()
     test_binary_fee_maximum_is_exact()
     test_terminal_censors_are_included_at_worst_case_support()
+    test_malformed_observed_economics_fail_closed_not_as_censor()
     test_more_than_five_percent_censoring_fails_closed()
     test_missing_terminal_record_is_not_reclassified_as_censor()
     test_out_of_window_maker_anchor_never_enters_denominator()
-    test_policy_rejects_unregistered_cap_change()
+    test_policy_rejects_any_unregistered_cap_change()
