@@ -23,6 +23,7 @@ class FinalLookTests(unittest.TestCase):
         self.common={**AUTH,'code_sha':'a'*40,'manifest_sha256':self.manifest['manifest_sha256'],'market_id':'m','token_id':'Y','recorded_ns':self.start}
         selected={**self.common,'kind':'SIGNAL_SELECTION','selection_key':'s','origin_ns':self.start,
             'model_hash':'b'*64,'model_probability':.7,'pm_probability':.5,'outcome':'YES','margin_bin':1,'tte_bin':1,
+            'fee_schedule':{'rate':0.040016006402561026,'exponent':1.0},
             'origin_book':{'best_bid':.49,'best_ask':.51,'tick_size':.01,'ask_depth_l1':10,'features_valid':False}}
         self.observations=[selected]+[{**self.common,'kind':'DELAY_LABEL','selection_key':'s','delay_ms':d,
             'state':'OBSERVED','fixed_signal_probability':.7,'book_cut':{'best_ask':.51},
