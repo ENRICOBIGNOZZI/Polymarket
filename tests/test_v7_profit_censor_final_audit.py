@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import copy
 import json
 from pathlib import Path
 import sys
@@ -111,9 +110,9 @@ def test_v5_two_in_twenty_terminal_censors_fail_cap() -> None:
         temp.cleanup()
 
 
-def test_v4_keeps_original_zero_censor_tolerance() -> None:
+def test_prior_protocol_keeps_original_zero_censor_tolerance() -> None:
     temp, observations, manifest, labels, closure, now = make_window(
-        ROOT / "config/v7_profit_experiment_v4.json", 1, 1
+        ROOT / "config/v7_profit_experiment_20260910.json", 1, 1
     )
     try:
         audit = final_window_audit(observations, manifest, labels, now, closure)
@@ -153,5 +152,5 @@ def test_missing_terminal_record_stays_fail_closed_in_v5() -> None:
 if __name__ == "__main__":
     test_v5_one_in_twenty_terminal_censors_pass_with_worst_case_support()
     test_v5_two_in_twenty_terminal_censors_fail_cap()
-    test_v4_keeps_original_zero_censor_tolerance()
+    test_prior_protocol_keeps_original_zero_censor_tolerance()
     test_missing_terminal_record_stays_fail_closed_in_v5()
