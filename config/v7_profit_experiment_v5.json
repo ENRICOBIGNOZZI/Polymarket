@@ -1,0 +1,189 @@
+{
+  "schema": "polymarket_v7_profit_experiment_protocol_v1",
+  "protocol_id": "permanent-profit-causes-20260911-v5",
+  "paper_only": true,
+  "authenticated_execution": false,
+  "real_order_submission": false,
+  "execution_authority": "ZERO_AUTHORITY_RESEARCH_ONLY",
+  "signal": {
+    "margin_edges": [
+      0.0,
+      0.01,
+      0.03,
+      0.1,
+      1.0
+    ],
+    "tte_edges_seconds": [
+      0,
+      60,
+      180,
+      301
+    ],
+    "selection": "FIRST_CAUSAL_OBSERVATION_PER_CONTRACT_OUTCOME_MARGIN_TTE_CELL",
+    "minimum_point_margin_after_costs": 0.0,
+    "execution_risk_per_share": 0.001,
+    "standardized_quote_quantity": 1.0,
+    "quantity_semantics": "L1_PRICE_DIAGNOSTIC_NOT_A_SUBMITTED_VENUE_ORDER",
+    "delays_ms": [
+      0,
+      100,
+      250,
+      500,
+      1000
+    ],
+    "cost_stress_multipliers": [
+      1.0,
+      1.5,
+      2.0
+    ],
+    "label_grace_ms": 2000,
+    "descriptive_regime_edges": {
+      "volatility_ticks": [
+        0,
+        0.1,
+        1,
+        10,
+        1000000000000.0
+      ],
+      "ask_liquidity_usd": [
+        0,
+        10,
+        100,
+        1000,
+        1000000000000000.0
+      ],
+      "spread_ticks": [
+        0,
+        1.01,
+        2.01,
+        5.01,
+        1000000000000.0
+      ],
+      "utc_hour": [
+        0,
+        6,
+        12,
+        18,
+        24
+      ],
+      "external_disagreement_bp": [
+        0,
+        1,
+        5,
+        20,
+        1000000000000.0
+      ],
+      "absolute_oracle_distance_bp": [
+        0,
+        1,
+        5,
+        20,
+        1000000000000.0
+      ],
+      "external_shock_abs_100ms_bp": [
+        0,
+        0.1,
+        1,
+        5,
+        1000000000000.0
+      ]
+    }
+  },
+  "maker": {
+    "comparison": "PAIRED_NATIVE_ENGINE_RESEARCH_REPLAY_NO_ADDITIONAL_ROUTER",
+    "anchor": "FIRST_CANONICAL_MAKER_ORDER_PER_CONTRACT",
+    "quantity": "COMMON_QUANTITY_AT_MOST_ANCHOR_AND_WORST_ARM_LOSS_CAP",
+    "queue": "CANONICAL_PESSIMISTIC_OPERATIONAL",
+    "arms": [
+      {
+        "id": "JOIN_5S",
+        "placement": "JOIN",
+        "lifetime_ms": 5000
+      },
+      {
+        "id": "FLOW_JOIN_5S",
+        "placement": "JOIN",
+        "lifetime_ms": 5000,
+        "minimum_opposite_prints_per_second": 0.2
+      },
+      {
+        "id": "JOIN_10S",
+        "placement": "JOIN",
+        "lifetime_ms": 10000
+      },
+      {
+        "id": "IMPROVE1_5S",
+        "placement": "IMPROVE1",
+        "lifetime_ms": 5000
+      }
+    ],
+    "maximum_feature_age_ms": 500,
+    "markout_horizons_ms": [
+      1000,
+      5000,
+      10000,
+      30000
+    ],
+    "post_only_required": true,
+    "preserve_anchor_probe_loss_cap": true,
+    "required_replay_evidence": "CONTINUOUS_TRANSPORT_VALID_PRINTS_AND_VALID_ARRIVAL_BOOK",
+    "markout_evidence": "VALID_BOOK_AT_EACH_MARKOUT_OTHERWISE_CENSORED",
+    "validity_semantics": "SEPARATE_EXECUTION_AND_MARKOUT_WINDOWS",
+    "evidence_wait_ms": 10000,
+    "required_features_per_arm": {
+      "JOIN_5S": "FRESH_VALID_ARRIVAL_L1",
+      "JOIN_10S": "FRESH_VALID_ARRIVAL_L1",
+      "IMPROVE1_5S": "FRESH_VALID_ARRIVAL_L1_AND_POST_ONLY",
+      "FLOW_JOIN_5S": "FRESH_VALID_ARRIVAL_L1_AND_VALID_ORIGIN_FLOW_HISTORY"
+    }
+  },
+  "inference": {
+    "unit": "CONTRACT",
+    "minimum_contracts_for_interval": 12,
+    "chronological_folds": 3,
+    "interval_method": "MOVING_CONTRACT_BLOCK_PERCENTILE_BOOTSTRAP_BONFERRONI_SENSITIVITY_ENVELOPE",
+    "familywise_alpha": 0.05,
+    "automatic_promotion": false,
+    "automatic_sizing_change": false,
+    "economic_claim_requires_positive_lower_bound_and_cost_stress": true,
+    "bootstrap_draws": 20000,
+    "bootstrap_seed": 20260908,
+    "temporal_block_contracts": [
+      3,
+      6,
+      12
+    ],
+    "minimum_temporal_blocks": 8,
+    "minimum_tail_draws": 50,
+    "confirmatory": {
+      "primary_endpoints": [
+        "model_brier_improvement_over_pm",
+        "selected_settlement_surplus_cost2_delay1000",
+        "maker_join10_minus_join5_settlement_net_cost2"
+      ],
+      "family_size": 3,
+      "look_policy": "ONE_FIXED_END_OF_WINDOW_ANALYSIS_NO_EARLY_PROMOTION",
+      "selection_unit": "CONTRACT_EQUAL_WEIGHT_OVER_PREDECLARED_SELECTED_ORIGINS",
+      "eligibility": "ORIGIN_WITHIN_FROZEN_WINDOW_SETTLEMENT_RECEIVED_AFTER_RESOLUTION",
+      "promotion_requires": "ALL_THREE_POSITIVE_LOWER_BOUNDS_ALL_TEMPORAL_SENSITIVITIES; ENDPOINT_CENSOR_FRACTIONS_WITHIN_FROZEN_CAPS; WORST_CASE_LOWER_SUPPORT_FOR_TERMINAL_CENSORS; VERIFIED_SETTLEMENTS; COMPLETE_TERMINAL_RECORD_AUDIT; INDEPENDENT_REVIEW; NEW_FORWARD_AFTER_ANY_CHANGE",
+      "rolling_reports": "EXPLORATORY_ONLY",
+      "duration_hours": 8,
+      "censoring": {
+        "mode": "WORST_CASE_LOWER_SUPPORT_IMPUTATION",
+        "prospective_only": true,
+        "no_censor_dropping": true,
+        "terminal_records_required": true,
+        "verified_settlements_required": true,
+        "brier_delay_censoring": "NOT_APPLICABLE_VERIFIED_SETTLEMENT_REQUIRED",
+        "endpoint_max_censor_fraction": {
+          "selected_settlement_surplus_cost2_delay1000": 0.05,
+          "maker_join10_minus_join5_settlement_net_cost2": 0.05
+        },
+        "signal_support": "FOR_TERMINAL_1000MS_BOOK_CENSOR_USE_VERIFIED_Y_MINUS_ONE_MINUS_2_TIMES_MAX_BINARY_FEE_PLUS_FROZEN_RISK",
+        "maker_support": "FOR_TERMINAL_ARM_CENSOR_USE_FROZEN_QUOTE_CAP_WITH_FILL_PRICE_SUPPORT_ZERO_ONE_AND_JOIN10_LOWER_MINUS_JOIN5_UPPER",
+        "missing_terminal_record_policy": "FAIL_CLOSED_NOT_A_CENSOR",
+        "missing_settlement_policy": "FAIL_CLOSED_NOT_A_CENSOR"
+      }
+    }
+  }
+}
