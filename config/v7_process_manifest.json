@@ -120,6 +120,66 @@
     },
     {
       "arguments": [
+        "--model-sha",
+        "${SHA}",
+        "--interval-ms",
+        "10"
+      ],
+      "config_identity_required": true,
+      "dependencies": [
+        "external_venue_runtime"
+      ],
+      "exact_sha_required": true,
+      "executable": "scripts/v7_external_cancel_signal_journal.py",
+      "id": "external_cancel_signal_journal",
+      "inputs": [
+        "external_fair/external_cancel_signal.json"
+      ],
+      "launcher_log": "research/external_cancel_signal_journal.log",
+      "outputs": [
+        "research/external_cancel_signals.jsonl*",
+        "research/external_cancel_signal_journal_status.json",
+        "research/external_cancel_signal_journal.log"
+      ],
+      "profile": "observer"
+    },
+    {
+      "arguments": [
+        "--model-sha",
+        "${SHA}",
+        "--family",
+        "PM_PLUS_EXTERNAL",
+        "--horizon-ms",
+        "250",
+        "--threshold-ticks",
+        "1.0"
+      ],
+      "config_identity_required": true,
+      "dependencies": [
+        "rtds_monitor",
+        "external_fair_router",
+        "external_venue_runtime"
+      ],
+      "exact_sha_required": true,
+      "executable": "scripts/v7_pm_repricing_shadow.py",
+      "id": "pm_repricing_shadow",
+      "inputs": [
+        "config/v7_pm_repricing_250ms_shadow.json",
+        "external_fair/status.json",
+        "external_fair/paper_router_status.json",
+        "micro_maker/book_observations/current.jsonl",
+        "micro_maker/fillability_ws_status.json"
+      ],
+      "launcher_log": "research/pm_repricing_shadow.log",
+      "outputs": [
+        "research/pm_repricing_shadow.jsonl*",
+        "research/pm_repricing_shadow_status.json",
+        "research/pm_repricing_shadow.log"
+      ],
+      "profile": "observer"
+    },
+    {
+      "arguments": [
         "--loop"
       ],
       "config_identity_required": false,
@@ -501,7 +561,9 @@
         "scripts/v7_profit_report.py",
         "scripts/v7_lossless_data_compaction.py",
         "scripts/v7_permanent_evidence.py",
-        "scripts/v7_economic_decision_report.py"
+        "scripts/v7_economic_decision_report.py",
+        "scripts/v7_fast_cancel_latency_report.py",
+        "scripts/v7_maker_execution_horse_race.py"
       ],
       "config_identity_required": true,
       "dependencies": [
@@ -514,7 +576,9 @@
         "ledger/execution.jsonl",
         "${DURABLE_ROOT}/profit_experiments",
         "${DURABLE_ROOT}/permanent_evidence/store",
-        "${RUN_ROOT}/../paper_v7_archives"
+        "${RUN_ROOT}/../paper_v7_archives",
+        "research/external_cancel_signals.jsonl*",
+        "research/pm_repricing_shadow.jsonl*"
       ],
       "launcher_log": "permanent_evidence.log",
       "outputs": [
@@ -534,7 +598,11 @@
         "${DURABLE_ROOT}/permanent_evidence",
         "economic_decision_report.json",
         "economic_decision_report.log",
-        "NEXT_ECONOMIC_ACTION.md"
+        "NEXT_ECONOMIC_ACTION.md",
+        "reports/fast_cancel_latency.json",
+        "reports/fast_cancel_latency_report.log",
+        "reports/maker_execution_horse_race.json",
+        "reports/maker_execution_horse_race.log"
       ],
       "profile": "observer"
     },

@@ -90,6 +90,15 @@ def test_artifact_hash_and_safety_contract() -> None:
             raise AssertionError("wrong artifact hash accepted")
 
 
+def test_frozen_wrapper_artifact_loads_with_source_identity() -> None:
+    path = ROOT / "config" / "v7_pm_repricing_250ms_shadow.json"
+    sha = hashlib.sha256(path.read_bytes()).hexdigest()
+    value, model = shadow.load_model(path, sha, 250, "PM_PLUS_EXTERNAL")
+    assert value["schema"] == shadow.FROZEN_ARTIFACT_SCHEMA
+    assert value["source_code_sha"] == "acbbf12aa5523f7ff646ba1b51fa1d37cd8f0613"
+    assert model["family"] == "PM_PLUS_EXTERNAL"
+
+
 def test_score_is_zero_authority_and_marks_adverse_no_buy() -> None:
     row = shadow.score_origin(
         origin(), evidence(), spec(),
@@ -111,4 +120,5 @@ def test_score_is_zero_authority_and_marks_adverse_no_buy() -> None:
 
 if __name__ == "__main__":
     test_artifact_hash_and_safety_contract()
+    test_frozen_wrapper_artifact_loads_with_source_identity()
     test_score_is_zero_authority_and_marks_adverse_no_buy()

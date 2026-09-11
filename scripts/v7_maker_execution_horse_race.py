@@ -9,6 +9,7 @@ from typing import Any, Iterable
 SCHEMA = "polymarket_v7_maker_execution_horse_race_v1"
 SEMANTICS = "maker-paper-v7.2-bilateral-inventory"
 SHADOW_SCHEMA = "polymarket_v7_pm_repricing_shadow_v1"
+HARD_SIGNAL_SCHEMA = "polymarket_v7_btc_m5_external_cancel_live_signal_v2"
 
 
 def num(x: Any, default: float = math.nan) -> float:
@@ -29,7 +30,13 @@ def files(paths: Iterable[pathlib.Path]) -> list[pathlib.Path]:
     out: set[pathlib.Path] = set()
     for raw in paths:
         p = pathlib.Path(raw)
-        if p.is_file(): out.add(p.resolve()); continue
+        if p.is_file():
+            out.add(p.resolve())
+            if p.name.endswith(".jsonl"):
+                for q in p.parent.glob(p.name + ".segment-*.jsonl*"):
+                    if q.is_file() and (q.name.endswith(".jsonl") or q.name.endswith(".jsonl.gz")):
+                        out.add(q.resolve())
+            continue
         if p.exists():
             for pat in ("*.json", "*.jsonl", "*.jsonl.gz"):
                 out.update(q.resolve() for q in p.rglob(pat) if q.is_file())
@@ -128,7 +135,17 @@ def build_fills(rows: list[dict[str, Any]], *, markout_horizon: str, action: str
 def hard_events(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
     out=[]
     for r in rows:
-        oc=str(r.get("stale_buy_outcome") or r.get("outcome") or "").upper(); av=int(num(r.get("available_ns",r.get("publish_wall_ns",r.get("trigger_receive_wall_ns"))),0))
+        if r.get("schema") == HARD_SIGNAL_SCHEMA:
+            if (r.get("paper_only") is not True
+                    or r.get("authenticated_execution") is not False
+                    or r.get("real_order_submission") is not False
+                    or r.get("execution_authority") != "ZERO_AUTHORITY_SIGNAL_ONLY"):
+                continue
+            oc=str(r.get("stale_buy_outcome") or "").upper()
+            av=int(num(r.get("publish_wall_ns"),0))
+        else:
+            oc=str(r.get("stale_buy_outcome") or r.get("outcome") or "").upper()
+            av=int(num(r.get("available_ns",r.get("publish_wall_ns",r.get("trigger_receive_wall_ns"))),0))
         if oc not in {"YES","NO"} or av<=0 or r.get("valid") is False: continue
         out.append({"available_ns":av,"market_id":str(r.get("market_id") or ""),"asset":str(r.get("asset") or "").upper(),"horizon":str(r.get("horizon") or "").upper(),"outcome":oc,"signal_id":str(r.get("signal_id") or r.get("signal_version") or rid(r))})
     return sorted(out,key=lambda x:x["available_ns"])
