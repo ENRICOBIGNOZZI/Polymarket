@@ -16,10 +16,12 @@ import urllib.parse
 from v7_profit_protocol import digest,fixed_window_digest
 from v7_profit_experiments import AUTH,rows,atomic,finite
 from v7_profit_signal_analysis import summarize_signal,confirmatory
+from v7_profit_censor_bounds import policy as censor_policy,bounded_primary
 from v7_evidence_store import canonical,immutable
 
 ANALYSIS_BYTES={name:(Path(__file__).parent/name).read_bytes() for name in
-    ('v7_profit_report.py','v7_profit_signal_analysis.py','v7_profit_inference.py','v7_profit_protocol.py')}
+    ('v7_profit_report.py','v7_profit_signal_analysis.py','v7_profit_inference.py','v7_profit_protocol.py',
+     'v7_profit_censor_bounds.py')}
 
 
 def settlement(market,tokens,fetch):
@@ -110,7 +112,7 @@ def frozen_execution_summary(observations,protocol):
 
 
 def summarize(observations,manifest,settlements,*,final_look=False,complete_primary_coverage=False):
-    protocol=manifest['protocol'];config=protocol['signal'];selections={};delays={};makers=[];counts=Counter();censors=Counter();maker_times={};maker_seen={}
+    protocol=manifest['protocol'];config=protocol['signal'];selections={};delays={};makers=[];counts=Counter();censors=Counter();maker_times={};maker_anchor_ns={};maker_seen={}
     for row in observations:
         if row.get('manifest_sha256')!=manifest['manifest_sha256'] or row.get('code_sha')!=manifest['code_sha']:
             raise ValueError('mixed experiment identity')
@@ -128,7 +130,11 @@ def summarize(observations,manifest,settlements,*,final_look=False,complete_prim
             delays[key]=row
             if row['state']!='OBSERVED':censors[row['state']]+=1
         elif row['kind']=='MAKER_ANCHOR':
-            maker_times[row['market_id']]=row.get('origin_ms',row.get('recorded_ns',0)/1e6)*1_000_000
+            stamp=int(row.get('origin_ms',row.get('recorded_ns',0)/1e6)*1_000_000)
+            maker_times[row['market_id']]=stamp
+            anchor_id=str(row['order']['record_id'])
+            if anchor_id in maker_anchor_ns and maker_anchor_ns[anchor_id]!=stamp:raise ValueError('conflicting Maker anchor timestamp')
+            maker_anchor_ns[anchor_id]=stamp
         elif row['kind']=='MAKER_COMPARISON':
             key=row.get('anchor_record_id') or row['market_id']
             if key in maker_seen and row!=maker_seen[key]:raise ValueError('conflicting Maker comparison')
@@ -201,6 +207,9 @@ def summarize(observations,manifest,settlements,*,final_look=False,complete_prim
     primary=signal.pop('primary_contract_values');times=signal.pop('contract_origin_ns')
     for market,stamp in maker_times.items():times[market]=min(times.get(market,stamp),stamp)
     primary['maker_join10_minus_join5_settlement_net_cost2']={m:sum(v)/len(v) for m,v in primary_maker.items()}
+    censor_audit=None
+    if censor_policy(protocol) is not None:
+        primary,censor_audit=bounded_primary(selections,delays,makers,maker_anchor_ns,manifest,settlements)
     return {'schema':'polymarket_v7_profit_experiment_report_v2',**AUTH,'code_sha':manifest['code_sha'],
         'settlement_model_hash':manifest['frozen_model_hash'],'protocol_id':protocol['protocol_id'],
         'manifest_sha256':manifest['manifest_sha256'],'timestamp_ms':time.time_ns()//1000000,'counts':dict(counts),
@@ -212,6 +221,7 @@ def summarize(observations,manifest,settlements,*,final_look=False,complete_prim
         'maker_paired_net_delta_vs_join5s':{k:interval([sum(v)/len(v) for v in c.values()],protocol,family) for k,c in paired.items()},
         'signal_analysis':signal,'confirmatory':confirmatory(primary,times,manifest,time.time_ns(),
             final_look=final_look,complete_primary_coverage=complete_primary_coverage),
+        **({'confirmatory_censoring':censor_audit} if censor_audit is not None else {}),
         'censored_labels':dict(censors),'economic_conclusion':'FORWARD_RESEARCH_NO_PROFITABILITY_CLAIM_OR_POLICY_PROMOTION',
         'limitations':['L1 prices and aggregate features, not full depth or queue position verification.',
             'Native PAPER fills in these comparisons are counterfactual and excluded from canonical equity.',
@@ -270,6 +280,15 @@ def final_window_audit(observations,manifest,labels,now_ns,closure=None):
         and closure.get('closure_sha256')==digest({k:v for k,v in closure.items() if k!='closure_sha256'})
         and closure.get('window_observations_sha256')==fixed_window_digest(observations,manifest))
     ready=now_ns>=end and closure_valid and not (missing_delays or missing_maker or missing_labels or invalid_labels)
+    censor_audit=None
+    if censor_policy(manifest['protocol']) is not None:
+        anchor_ns={str(key):int(row['origin_ms']*1_000_000) for key,row in anchors.items()}
+        _bounded,censor_audit=bounded_primary(selected,delays,list(comparisons.values()),anchor_ns,manifest,labels)
+        complete_primary=ready and censor_audit['all_endpoint_caps_and_support_pass']
+        censoring_description='TERMINAL_CENSORS_ARE_PRESERVED_AND_IMPUTED_AT_PROSPECTIVELY_FROZEN_WORST_CASE_LOWER_SUPPORT; MISSING_TERMINAL_RECORDS_OR_SETTLEMENTS_FAIL_CLOSED'
+    else:
+        complete_primary=ready and signal_censors==0 and maker_censors==0
+        censoring_description='TERMINAL_CENSORS_ARE_PRESERVED; NO_CONFIRMATORY_INTERVAL_IF_ANY_PRIMARY_ORIGIN_IS_CENSORED'
     scope_labels={m:labels[m] for m in sorted(markets) if m in labels}
     scope={'window_observation_hashes':sorted(digest(r) for r in window),'settlements':scope_labels}
     return {'window_ended':now_ns>=end,'terminal_records_and_verified_settlements_complete':ready,
@@ -278,9 +297,10 @@ def final_window_audit(observations,manifest,labels,now_ns,closure=None):
         'missing_delay_labels':missing_delays,'missing_maker_comparisons':missing_maker,
         'missing_settlement_contracts':sorted(missing_labels),'invalid_settlement_contracts':sorted(invalid_labels),
         'signal_primary_censored_origins':signal_censors,'maker_primary_censored_anchors':maker_censors,
-        'complete_primary_causal_coverage':ready and signal_censors==0 and maker_censors==0,
+        'complete_primary_causal_coverage':complete_primary,
+        **({'confirmatory_censoring':censor_audit} if censor_audit is not None else {}),
         'scope_sha256':digest(scope),'scope':scope,
-        'censoring_policy':'TERMINAL_CENSORS_ARE_PRESERVED; NO_CONFIRMATORY_INTERVAL_IF_ANY_PRIMARY_ORIGIN_IS_CENSORED'}
+        'censoring_policy':censoring_description}
 
 
 def read_final(path,manifest):
