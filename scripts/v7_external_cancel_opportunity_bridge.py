@@ -33,7 +33,7 @@ def _stable(*parts: Any) -> str:
 
 
 def _canonical_hash(value: dict[str, Any]) -> str:
-    return hashlib.sha256(json.dumps(value, sort_keys=True, separators=(",", ")).encode()).hexdigest()
+    return hashlib.sha256(json.dumps(value, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
 
 
 @lru_cache(maxsize=4)
