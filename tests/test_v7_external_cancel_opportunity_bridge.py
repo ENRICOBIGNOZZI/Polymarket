@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import json
 import sys
 import tempfile
@@ -98,7 +99,8 @@ def setup_case(root: Path, *, outcome: str = "YES", live_signal: dict | None = N
     write(root / "control/runtime_status.json", runtime())
     write(root / "external_fair/external_cancel_signal.json", live_signal or signal(stale=outcome))
     envelope = make_envelope(outcome)
-    write(root / "micro_maker/authorized_make/live/order.json", {
+    identity = hashlib.sha256(envelope["deterministic_replay_key"].encode()).hexdigest()
+    write(root / f"micro_maker/authorized_make/live/{identity}.json", {
         "schema": "polymarket_v7_authorized_make_intent_v1", "paper_only": True,
         "authenticated_execution": False, "real_order_submission": False, "real_capital_at_risk": False,
         "owner": "V7_GLOBAL_PORTFOLIO_COORDINATOR", "execution_authority": "SIMULATED_PAPER_ONLY",
@@ -134,6 +136,18 @@ def test_active_research_signal_builds_typed_cancel() -> None:
         assert row["execution_plan"]["unwind_plan"] == "CANCEL_ONLY"
         assert row["source_event_timestamps_ns"] == [NOW - 10_000_000]
         assert status["exact_order_targeting"] is True
+        assert status["active_make_lookup"] == "DIRECT_REPLAY_KEY_HASH"
+        assert status["static_rule_cached"] is True
+
+
+def test_unrelated_live_files_are_not_scanned() -> None:
+    with tempfile.TemporaryDirectory() as directory:
+        root = Path(directory); setup_case(root)
+        write(root / "micro_maker/authorized_make/live/unrelated-noise.json", {"invalid": True})
+        rows, status = bridge.build_external_cancel_opportunities(root, now_ns=NOW)
+        assert len(rows) == 1
+        assert status["active_make_files"] == 1
+        assert status["rejected_active_make_files"] == 0
 
 
 def test_wrong_rule_hash_fails_closed() -> None:
@@ -185,6 +199,7 @@ def test_expired_signal_fails_closed() -> None:
 
 if __name__ == "__main__":
     test_active_research_signal_builds_typed_cancel()
+    test_unrelated_live_files_are_not_scanned()
     test_wrong_rule_hash_fails_closed()
     test_signal_only_targets_stale_buy_outcome()
     test_expired_signal_fails_closed()
