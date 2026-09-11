@@ -282,11 +282,22 @@ def process_fast_cancel(run_root: Path, *, now_ns: int | None = None) -> dict[st
         "source_snapshot_identity": row.get("source_snapshot_identity"),
         "paper_probe": False, "retained_after_execution_selection": True,
     } for row in envelopes]
-    _publish_cancel_authorization(root, decision, envelopes)
-
-    if decision.get("action") == "CANCEL":
-        _record_authorization_publication(root, decision, "FAST_CANCEL_INTENT")
-        append_jsonl(root / "opportunities" / "fast_cancel_decisions.jsonl", decision)
+    duplicate_suppressed = False
+    if decision.get("action") == "CANCEL" and decision.get("selected_replay_key"):
+        key = str(decision["selected_replay_key"])
+        identity = __import__("hashlib").sha256(key.encode()).hexdigest()
+        cancel_root = root / "micro_maker" / "authorized_cancel"
+        already_recorded = any(
+            (cancel_root / suffix / f"{identity}.json").exists()
+            for suffix in ("", "archive", "rejected")
+        )
+        if not already_recorded:
+            _publish_cancel_authorization(root, decision, envelopes)
+            _record_authorization_publication(root, decision, "FAST_CANCEL_INTENT")
+            append_jsonl(root / "opportunities" / "fast_cancel_decisions.jsonl", decision)
+        else:
+            duplicate_suppressed = True
+            decision["fast_cancel_duplicate_suppressed"] = True
     status = {
         "schema": "polymarket_v7_fast_cancel_coordinator_status_v1",
         "timestamp_ns": current_ns, "paper_only": True,
@@ -298,6 +309,7 @@ def process_fast_cancel(run_root: Path, *, now_ns: int | None = None) -> dict[st
         "bridge_compute_ns": int(bridge_compute_ns),
         "signal_age_ns": signal_age_ns,
         "selected_replay_key": decision.get("selected_replay_key"),
+        "duplicate_suppressed": duplicate_suppressed,
     }
     if decision.get("action") == "CANCEL":
         atomic_json(root / "control" / "fast_cancel_status.json", status)
