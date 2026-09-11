@@ -567,7 +567,10 @@ struct CancelAuthorization {
     std::string side;
     double target_quantity_shares = 0.0;
     double target_price = 0.0;
+    std::int64_t signal_trigger_wall_ns = 0;
+    std::int64_t coordinator_authorized_wall_ns = 0;
     std::int64_t expires_at_ns = 0;
+    bool fast_cancel_path = false;
 };
 
 [[nodiscard]] CancelAuthorization parse_cancel_authorization(
@@ -639,11 +642,17 @@ struct CancelAuthorization {
     out.side = text(find_value(leg, "side"));
     out.target_quantity_shares = number(find_value(leg, "target_quantity"));
     out.target_price = number(find_value(leg, "limit_price"));
+    out.signal_trigger_wall_ns = integer(find_value(root, "signal_trigger_wall_ns"));
+    out.coordinator_authorized_wall_ns = integer(find_value(root, "coordinator_authorized_wall_ns"));
+    out.fast_cancel_path = boolean(find_value(root, "fast_cancel_path"));
     out.expires_at_ns = integer(find_value(*envelope, "expires_at_ns"));
     if (out.target_replay_key.empty() || out.target_order_id.empty()
         || out.market_id.empty() || out.event_id.empty() || out.token_id.empty()
         || out.side != "BUY" || !(out.target_quantity_shares > 0.0)
         || !(out.target_price > 0.0 && out.target_price < 1.0)
+        || out.signal_trigger_wall_ns <= 0
+        || out.coordinator_authorized_wall_ns < out.signal_trigger_wall_ns
+        || out.coordinator_authorized_wall_ns > wall_ns()
         || out.expires_at_ns <= wall_ns()) {
         throw std::runtime_error("cancel authorization target/ttl invalid");
     }
@@ -716,7 +725,13 @@ public:
         process_cancel_authorizations();
         drain_trade_tape();
         advance_time();
-        write_status();
+        const auto now = monotonic_ns();
+        if (status_dirty_ || last_status_write_monotonic_ns_ == 0
+            || now - last_status_write_monotonic_ns_ >= 100'000'000LL) {
+            write_status();
+            status_dirty_ = false;
+            last_status_write_monotonic_ns_ = now;
+        }
     }
 
     [[nodiscard]] std::size_t active_orders() const noexcept { return orders_.size(); }
@@ -863,6 +878,12 @@ private:
         if (market_it == markets_.end()) {
             throw std::runtime_error("cancel target market runtime missing");
         }
+        const auto now_wall = wall_ns();
+        last_cancel_signal_to_executor_ns_ = std::max<std::int64_t>(0, now_wall - cancellation.signal_trigger_wall_ns);
+        last_cancel_authorization_to_executor_ns_ = std::max<std::int64_t>(0, now_wall - cancellation.coordinator_authorized_wall_ns);
+        max_cancel_signal_to_executor_ns_ = std::max(max_cancel_signal_to_executor_ns_, last_cancel_signal_to_executor_ns_);
+        max_cancel_authorization_to_executor_ns_ = std::max(max_cancel_authorization_to_executor_ns_, last_cancel_authorization_to_executor_ns_);
+        last_cancel_fast_path_ = cancellation.fast_cancel_path;
         const auto now = monotonic_ns();
         StrategyIntent intent;
         intent.intent_id = mix64(fnv1a(cancellation.replay_key));
@@ -983,6 +1004,7 @@ private:
         orders_.emplace(order_id, std::move(context));
         emit_order_submitted(*live, orders_.at(order_id));
         ++submitted_orders_;
+        status_dirty_ = true;
     }
 
     void drain_trade_tape() {
@@ -1068,6 +1090,7 @@ private:
         const json::object* trade_row) {
         for (std::size_t index = 0; index < result.event_count; ++index) {
             const auto& event = result.events[index];
+            status_dirty_ = true;
             if (event.order_id == 0) continue;
             const auto order_key = local_order_key(market_id, event.order_id);
             auto it = orders_.find(order_key);
@@ -1361,6 +1384,12 @@ private:
         status["invalid_trade_rows"] = invalid_trade_rows_;
         status["rejected_authorizations"] = rejected_authorizations_;
         status["coordinator_cancel_requests"] = coordinator_cancel_requests_;
+        status["last_cancel_signal_to_executor_ns"] = last_cancel_signal_to_executor_ns_;
+        status["last_cancel_authorization_to_executor_ns"] = last_cancel_authorization_to_executor_ns_;
+        status["max_cancel_signal_to_executor_ns"] = max_cancel_signal_to_executor_ns_;
+        status["max_cancel_authorization_to_executor_ns"] = max_cancel_authorization_to_executor_ns_;
+        status["last_cancel_fast_path"] = last_cancel_fast_path_;
+        status["executor_poll_interval_ms"] = 5;
         status["rejected_cancel_authorizations"] = rejected_cancel_authorizations_;
         status["cancel_noop_terminal"] = cancel_noop_terminal_;
         status["restart_orphans"] = restart_orphans_;
@@ -1401,11 +1430,18 @@ private:
     std::uint64_t invalid_trade_rows_ = 0;
     std::uint64_t rejected_authorizations_ = 0;
     std::uint64_t coordinator_cancel_requests_ = 0;
+    std::int64_t last_cancel_signal_to_executor_ns_ = 0;
+    std::int64_t last_cancel_authorization_to_executor_ns_ = 0;
+    std::int64_t max_cancel_signal_to_executor_ns_ = 0;
+    std::int64_t max_cancel_authorization_to_executor_ns_ = 0;
+    bool last_cancel_fast_path_ = false;
     std::uint64_t rejected_cancel_authorizations_ = 0;
     std::uint64_t cancel_noop_terminal_ = 0;
     std::uint64_t restart_orphans_ = 0;
     std::uint64_t spooled_events_ = 0;
     std::uint64_t event_sequence_ = 0;
+    std::int64_t last_status_write_monotonic_ns_ = 0;
+    bool status_dirty_ = true;
     std::string last_error_;
     std::string last_terminal_reason_;
 };
@@ -1419,7 +1455,7 @@ int main(int argc, char** argv) {
         do {
             executor.run_once();
             if (options.once) break;
-            std::this_thread::sleep_for(std::chrono::milliseconds(20));
+            std::this_thread::sleep_for(std::chrono::milliseconds(5));
         } while (true);
         return 0;
     } catch (const std::exception& error) {

@@ -1242,6 +1242,9 @@ int main(int argc, char** argv) {
             2 * kExternalIngressQueueCapacity);
         std::uint64_t last_cancel_signal_version = 0;
         std::uint8_t last_cancel_signal_valid = 0;
+        std::int64_t last_full_status_publish_ns = 0;
+        constexpr std::int64_t kFullStatusPublishIntervalNs = 25'000'000LL;
+        constexpr auto kFastLoopSleep = std::chrono::milliseconds(5);
         while (!stopping.load(std::memory_order_relaxed)) {
             std::size_t causal_count = 0;
             causal_count += binance_ingress.drain_events(std::span<ExternalVenueEvent>(
@@ -1301,6 +1304,13 @@ int main(int argc, char** argv) {
                 last_cancel_signal_version = cancel_signal.signal_version;
                 last_cancel_signal_valid = cancel_signal.valid;
             }
+            const bool publish_full_status = last_full_status_publish_ns == 0
+                || now_mono - last_full_status_publish_ns >= kFullStatusPublishIntervalNs;
+            if (!publish_full_status) {
+                std::this_thread::sleep_for(kFastLoopSleep);
+                continue;
+            }
+            last_full_status_publish_ns = now_mono;
             const auto snapshot = state.snapshot(now_mono, policy);
             TapeRecorderSnapshot tape_status;
             if (normalized_tape != nullptr) {
@@ -1375,6 +1385,8 @@ int main(int argc, char** argv) {
                     now_mono, wall_now_ns(), started_monotonic_ns)},
                 {"derivative_contexts", derivative_context_json(snapshot)},
                 {"drained_last_cycle", drained},
+                {"fast_signal_poll_interval_ms", 5},
+                {"full_status_publish_interval_ms", 25},
                 {"normalized_snapshot_tape", tape_json(tape_status, normalized_tape != nullptr)},
                 {"normalized_event_tapes", {
                     {"binance_spot", tape_json(binance_event_tape ? binance_event_tape->snapshot() : TapeRecorderSnapshot{}, binance_event_tape != nullptr)},
@@ -1403,7 +1415,7 @@ int main(int argc, char** argv) {
                 {"binance_usdm", usdm_json(binance_usdm_observer.metrics())},
                 {"venues", std::move(venues)},
             });
-            std::this_thread::sleep_for(std::chrono::milliseconds(25));
+            std::this_thread::sleep_for(kFastLoopSleep);
         }
 
 #if !defined(__APPLE__)
