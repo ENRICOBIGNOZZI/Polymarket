@@ -18,6 +18,7 @@ MAKER_ENDPOINT = "maker_join10_minus_join5_settlement_net_cost2"
 BRIER_ENDPOINT = "model_brier_improvement_over_pm"
 SETTLEMENT_RULE = "VERIFIED_Y_MINUS_ONE_MINUS_2_TIMES_MAX_BINARY_FEE_PLUS_FROZEN_RISK"
 MAKER_RULE = "VERIFIED_Y_ARM_INTERVAL_FROM_FROZEN_QUOTE_CAP_AND_PRICE_SUPPORT_ZERO_ONE"
+FROZEN_CENSOR_FRACTION = 0.05
 
 
 def finite(value: Any) -> bool:
@@ -25,7 +26,7 @@ def finite(value: Any) -> bool:
 
 
 def policy(protocol: dict[str, Any]) -> dict[str, Any] | None:
-    """Return a validated v5 censor policy, otherwise preserve legacy behavior."""
+    """Return the exact registered v5 censor policy, otherwise preserve legacy behavior."""
     if protocol.get("schema") != SCHEMA_V1 or protocol.get("protocol_id") != PROTOCOL_ID:
         return None
     confirm = (protocol.get("inference") or {}).get("confirmatory") or {}
@@ -40,9 +41,18 @@ def policy(protocol: dict[str, Any]) -> dict[str, Any] | None:
     if not isinstance(caps, dict) or set(caps) != {SETTLEMENT_ENDPOINT, MAKER_ENDPOINT}:
         raise ValueError("profit_censor_bounds:cap_identity")
     for endpoint, cap in caps.items():
-        if not finite(cap) or not 0 <= float(cap) <= 1:
+        if not finite(cap) or abs(float(cap) - FROZEN_CENSOR_FRACTION) > 1e-15:
             raise ValueError("profit_censor_bounds:cap_bounds:" + endpoint)
     return value
+
+
+def fee_at(price: float, schedule: dict[str, Any]) -> float | None:
+    if not finite(price) or not 0 <= float(price) <= 1 or not isinstance(schedule, dict):
+        return None
+    rate, exponent = schedule.get("rate"), schedule.get("exponent")
+    if not finite(rate) or not finite(exponent) or not 0 <= rate <= 1 or not 0 < exponent <= 10:
+        return None
+    return float(rate) * (float(price) * (1.0 - float(price))) ** float(exponent)
 
 
 def max_binary_fee(schedule: dict[str, Any]) -> float | None:
@@ -72,14 +82,23 @@ def settlement_lower_support(selection: dict[str, Any], protocol: dict[str, Any]
     return float(y) - 1.0 - 2.0 * (fee + float(risk))
 
 
-def exact_settlement_value(label: dict[str, Any], y: float) -> float | None:
+def exact_settlement_value(
+    label: dict[str, Any], selection: dict[str, Any], protocol: dict[str, Any], y: float
+) -> float | None:
+    """Validate an OBSERVED terminal value against the frozen fee/risk identity."""
     if not isinstance(label, dict) or label.get("state") != "OBSERVED":
         return None
     cut = label.get("book_cut") or {}
     ask, fee, risk = cut.get("best_ask"), label.get("fee_per_share"), label.get("risk_allowance_per_share")
     if not all(finite(v) for v in (ask, fee, risk)) or not 0 <= float(ask) <= 1 or y not in (0.0, 1.0):
         return None
-    return float(y) - float(ask) - 2.0 * (float(fee) + float(risk))
+    expected_fee = fee_at(float(ask), selection.get("fee_schedule") or {})
+    frozen_risk = (protocol.get("signal") or {}).get("execution_risk_per_share")
+    if expected_fee is None or not finite(frozen_risk) or float(frozen_risk) < 0:
+        return None
+    if abs(float(fee) - expected_fee) > 1e-10 or abs(float(risk) - float(frozen_risk)) > 1e-12:
+        return None
+    return float(y) - float(ask) - 2.0 * (expected_fee + float(frozen_risk))
 
 
 def arm_quote_cap(arm: dict[str, Any]) -> float | None:
@@ -192,9 +211,13 @@ def bounded_primary(
             # A missing terminal record is not a censor and cannot be imputed.
             endpoint[SETTLEMENT_ENDPOINT]["support_unavailable_units"] += 1
             continue
-        actual = exact_settlement_value(label, y)
+        actual = exact_settlement_value(label, row, protocol, y)
         if actual is not None:
             settlement_values[str(row["market_id"])].append(actual)
+            continue
+        if label.get("state") == "OBSERVED":
+            # Malformed observed economics is an identity failure, not censoring.
+            endpoint[SETTLEMENT_ENDPOINT]["support_unavailable_units"] += 1
             continue
         endpoint[SETTLEMENT_ENDPOINT]["censored_units"] += 1
         lower = settlement_lower_support(row, protocol, y)
