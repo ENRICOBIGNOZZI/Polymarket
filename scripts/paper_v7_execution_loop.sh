@@ -600,7 +600,7 @@ v7_register_child "$!"
 # The only consumer of proposals from both economic engines. Checked-in V7
 # cannot authorize new risk; the coordinator may select CANCEL/WITHDRAW or emit NOTHING.
 python3 scripts/v7_global_portfolio_coordinator.py \
-  --run-root "$RUN_ROOT" --loop --interval 0.1 \
+  --run-root "$RUN_ROOT" --loop --interval 0.1 --fast-cancel-interval 0.005 \
   --event-log "$RUN_ROOT/global_portfolio_coordinator.events.jsonl" \
   >> "$RUN_ROOT/global_portfolio_coordinator.log" 2>&1 &
 v7_register_child "$!"
