@@ -1,7 +1,8 @@
 """Prospective worst-case censor bounds for confirmatory profit endpoints.
 
 The module is deliberately endpoint-specific. It never drops a censored unit,
-never changes a v1 protocol, and never supplies an execution permission.
+never changes legacy v4 semantics, and never supplies execution permission.
+The v5 behavior is opt-in inside the existing protocol-v1 schema.
 """
 from __future__ import annotations
 
@@ -10,7 +11,8 @@ import math
 from typing import Any
 
 MODE = "WORST_CASE_LOWER_SUPPORT_IMPUTATION"
-SCHEMA_V2 = "polymarket_v7_profit_experiment_protocol_v2"
+SCHEMA_V1 = "polymarket_v7_profit_experiment_protocol_v1"
+PROTOCOL_ID = "permanent-profit-causes-20260911-v5"
 SETTLEMENT_ENDPOINT = "selected_settlement_surplus_cost2_delay1000"
 MAKER_ENDPOINT = "maker_join10_minus_join5_settlement_net_cost2"
 BRIER_ENDPOINT = "model_brier_improvement_over_pm"
@@ -23,12 +25,23 @@ def finite(value: Any) -> bool:
 
 
 def policy(protocol: dict[str, Any]) -> dict[str, Any] | None:
-    if protocol.get("schema") != SCHEMA_V2:
+    """Return a validated v5 censor policy, otherwise preserve legacy behavior."""
+    if protocol.get("schema") != SCHEMA_V1 or protocol.get("protocol_id") != PROTOCOL_ID:
         return None
     confirm = (protocol.get("inference") or {}).get("confirmatory") or {}
     value = confirm.get("censoring")
     if not isinstance(value, dict) or value.get("mode") != MODE:
         return None
+    if value.get("prospective_only") is not True or value.get("no_censor_dropping") is not True:
+        raise ValueError("profit_censor_bounds:policy_safety")
+    if value.get("terminal_records_required") is not True or value.get("verified_settlements_required") is not True:
+        raise ValueError("profit_censor_bounds:terminal_evidence_required")
+    caps = value.get("endpoint_max_censor_fraction")
+    if not isinstance(caps, dict) or set(caps) != {SETTLEMENT_ENDPOINT, MAKER_ENDPOINT}:
+        raise ValueError("profit_censor_bounds:cap_identity")
+    for endpoint, cap in caps.items():
+        if not finite(cap) or not 0 <= float(cap) <= 1:
+            raise ValueError("profit_censor_bounds:cap_bounds:" + endpoint)
     return value
 
 
@@ -64,7 +77,7 @@ def exact_settlement_value(label: dict[str, Any], y: float) -> float | None:
         return None
     cut = label.get("book_cut") or {}
     ask, fee, risk = cut.get("best_ask"), label.get("fee_per_share"), label.get("risk_allowance_per_share")
-    if not all(finite(v) for v in (ask, fee, risk)) or y not in (0.0, 1.0):
+    if not all(finite(v) for v in (ask, fee, risk)) or not 0 <= float(ask) <= 1 or y not in (0.0, 1.0):
         return None
     return float(y) - float(ask) - 2.0 * (float(fee) + float(risk))
 
@@ -101,6 +114,7 @@ def arm_net_interval(arm: dict[str, Any], y: float, risk: float) -> tuple[float,
     cap = arm_quote_cap(arm)
     if cap is None or y not in (0.0, 1.0) or not finite(risk) or risk < 0:
         return None
+    # q can range from zero to the frozen quote cap and price lies in [0,1].
     lower_per_share = min(0.0, float(y) - 1.0 - 2.0 * float(risk))
     upper_per_share = max(0.0, float(y) - 2.0 * float(risk))
     return cap * lower_per_share, cap * upper_per_share
@@ -124,7 +138,10 @@ def maker_delta_lower_support(comparison: dict[str, Any], protocol: dict[str, An
     interval10 = arm_net_interval(join10, y, float(risk))
     if interval5 is None or interval10 is None:
         return None, False
-    censored = join5.get("state") not in ("OBSERVED", "FLOW_FILTER_ABSTAIN") or join10.get("state") not in ("OBSERVED", "FLOW_FILTER_ABSTAIN")
+    censored = (
+        join5.get("state") not in ("OBSERVED", "FLOW_FILTER_ABSTAIN")
+        or join10.get("state") not in ("OBSERVED", "FLOW_FILTER_ABSTAIN")
+    )
     return interval10[0] - interval5[1], censored
 
 
@@ -136,14 +153,15 @@ def bounded_primary(
     selections: dict[str, dict[str, Any]],
     delays: dict[tuple[str, int], dict[str, Any]],
     comparisons: list[dict[str, Any]],
+    maker_anchor_ns: dict[str, int],
     manifest: dict[str, Any],
     settlements: dict[str, Any],
 ) -> tuple[dict[str, dict[str, float]], dict[str, Any]]:
-    """Rebuild all three primary endpoints with declared worst-case censor support."""
+    """Rebuild all three primaries without deleting terminally censored units."""
     protocol = manifest["protocol"]
     censor = policy(protocol)
     if censor is None:
-        raise ValueError("profit_censor_bounds:protocol_not_v2")
+        raise ValueError("profit_censor_bounds:protocol_not_v5")
     start, end = manifest["forward_start_ns"], manifest["confirmatory_end_ns"]
     brier: defaultdict[str, list[float]] = defaultdict(list)
     settlement_values: defaultdict[str, list[float]] = defaultdict(list)
@@ -168,8 +186,13 @@ def bounded_primary(
             endpoint[BRIER_ENDPOINT]["support_unavailable_units"] += 1
         else:
             brier[str(row["market_id"])].append((float(pm) - y) ** 2 - (float(p) - y) ** 2)
+
         label = delays.get((key, 1000))
-        actual = exact_settlement_value(label or {}, y)
+        if label is None:
+            # A missing terminal record is not a censor and cannot be imputed.
+            endpoint[SETTLEMENT_ENDPOINT]["support_unavailable_units"] += 1
+            continue
+        actual = exact_settlement_value(label, y)
         if actual is not None:
             settlement_values[str(row["market_id"])].append(actual)
             continue
@@ -181,14 +204,22 @@ def bounded_primary(
             settlement_values[str(row["market_id"])].append(lower)
             endpoint[SETTLEMENT_ENDPOINT]["support_imputed_units"] += 1
 
+    comparisons_by_anchor: dict[str, dict[str, Any]] = {}
     for row in comparisons:
-        origin_ns = int(row.get("origin_ms", 0) * 1_000_000) if row.get("origin_ms") else None
-        # Comparison rows do not always carry origin_ms. The report passes only
-        # comparisons selected by the fixed-window anchor population, so absence
-        # here is acceptable; an explicit outside-window timestamp is not.
-        if origin_ns is not None and not start <= origin_ns < end:
+        anchor_id = str(row.get("anchor_record_id") or "")
+        if not anchor_id:
+            continue
+        if anchor_id in comparisons_by_anchor and comparisons_by_anchor[anchor_id] != row:
+            raise ValueError("profit_censor_bounds:conflicting_maker_comparison")
+        comparisons_by_anchor[anchor_id] = row
+    for anchor_id, origin_ns in sorted(maker_anchor_ns.items(), key=lambda item: item[1]):
+        if not start <= int(origin_ns) < end:
             continue
         endpoint[MAKER_ENDPOINT]["eligible_units"] += 1
+        row = comparisons_by_anchor.get(anchor_id)
+        if row is None:
+            endpoint[MAKER_ENDPOINT]["support_unavailable_units"] += 1
+            continue
         lower, censored = maker_delta_lower_support(row, protocol, settlements)
         if censored:
             endpoint[MAKER_ENDPOINT]["censored_units"] += 1
