@@ -6,6 +6,9 @@ import os
 from pathlib import Path
 
 SCHEMA='polymarket_v7_profit_experiment_manifest_v1'
+V5_PROTOCOL_ID='permanent-profit-causes-20260911-v5'
+V5_CENSOR_MODE='WORST_CASE_LOWER_SUPPORT_IMPUTATION'
+V5_CENSOR_ENDPOINTS={'selected_settlement_surplus_cost2_delay1000','maker_join10_minus_join5_settlement_net_cost2'}
 
 def digest(value):
     return hashlib.sha256(json.dumps(value,sort_keys=True,separators=(',',':'),allow_nan=False).encode()).hexdigest()
@@ -44,6 +47,19 @@ def validate(protocol):
             or inference.get('temporal_block_contracts')!=[3,6,12]
             or inference.get('minimum_temporal_blocks')!=8 or inference.get('minimum_tail_draws')!=50):
             raise ValueError('profit_protocol:confirmatory_identity')
+        censor=confirm.get('censoring')
+        if protocol.get('protocol_id')==V5_PROTOCOL_ID:
+            caps=censor.get('endpoint_max_censor_fraction') if isinstance(censor,dict) else None
+            if (not isinstance(censor,dict) or censor.get('mode')!=V5_CENSOR_MODE
+                    or censor.get('prospective_only') is not True or censor.get('no_censor_dropping') is not True
+                    or censor.get('terminal_records_required') is not True or censor.get('verified_settlements_required') is not True
+                    or not isinstance(caps,dict) or set(caps)!=V5_CENSOR_ENDPOINTS
+                    or any(isinstance(v,bool) or not isinstance(v,(int,float)) or float(v)!=0.05 for v in caps.values())
+                    or censor.get('missing_terminal_record_policy')!='FAIL_CLOSED_NOT_A_CENSOR'
+                    or censor.get('missing_settlement_policy')!='FAIL_CLOSED_NOT_A_CENSOR'):
+                raise ValueError('profit_protocol:v5_censoring_identity')
+        elif censor is not None:
+            raise ValueError('profit_protocol:censoring_requires_v5')
     digest(protocol)  # Reject nonfinite JSON.
 
 def freeze(path: Path, protocol: dict, code_sha: str, model_hash: str, now_ns: int, *, cohort: dict | None = None):
