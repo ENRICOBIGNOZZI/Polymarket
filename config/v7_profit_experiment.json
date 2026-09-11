@@ -1,6 +1,6 @@
 {
   "schema": "polymarket_v7_profit_experiment_protocol_v1",
-  "protocol_id": "permanent-profit-causes-20260910-v4",
+  "protocol_id": "permanent-profit-causes-20260911-v5",
   "paper_only": true,
   "authenticated_execution": false,
   "real_order_submission": false,
@@ -48,7 +48,6 @@
       "ask_liquidity_usd": [
         0,
         10,
-        100,
         1000,
         1000000000000000.0
       ],
@@ -165,9 +164,25 @@
       "look_policy": "ONE_FIXED_END_OF_WINDOW_ANALYSIS_NO_EARLY_PROMOTION",
       "selection_unit": "CONTRACT_EQUAL_WEIGHT_OVER_PREDECLARED_SELECTED_ORIGINS",
       "eligibility": "ORIGIN_WITHIN_FROZEN_WINDOW_SETTLEMENT_RECEIVED_AFTER_RESOLUTION",
-      "promotion_requires": "ALL_THREE_POSITIVE_LOWER_BOUNDS_ALL_TEMPORAL_SENSITIVITIES; COMPLETE_CAUSAL_COVERAGE_AUDIT; INDEPENDENT_REVIEW; NEW_FORWARD_AFTER_ANY_CHANGE",
+      "promotion_requires": "ALL_THREE_POSITIVE_LOWER_BOUNDS_ALL_TEMPORAL_SENSITIVITIES; ENDPOINT_CENSOR_FRACTIONS_WITHIN_FROZEN_CAPS; WORST_CASE_LOWER_SUPPORT_FOR_TERMINAL_CENSORS; VERIFIED_SETTLEMENTS; COMPLETE_TERMINAL_RECORD_AUDIT; INDEPENDENT_REVIEW; NEW_FORWARD_AFTER_ANY_CHANGE",
       "rolling_reports": "EXPLORATORY_ONLY",
-      "duration_hours": 8
+      "duration_hours": 8,
+      "censoring": {
+        "mode": "WORST_CASE_LOWER_SUPPORT_IMPUTATION",
+        "prospective_only": true,
+        "no_censor_dropping": true,
+        "terminal_records_required": true,
+        "verified_settlements_required": true,
+        "brier_delay_censoring": "NOT_APPLICABLE_VERIFIED_SETTLEMENT_REQUIRED",
+        "endpoint_max_censor_fraction": {
+          "selected_settlement_surplus_cost2_delay1000": 0.05,
+          "maker_join10_minus_join5_settlement_net_cost2": 0.05
+        },
+        "signal_support": "FOR_TERMINAL_1000MS_BOOK_CENSOR_USE_VERIFIED_Y_MINUS_ONE_MINUS_2_TIMES_MAX_BINARY_FEE_PLUS_FROZEN_RISK",
+        "maker_support": "FOR_TERMINAL_ARM_CENSOR_USE_FROZEN_QUOTE_CAP_WITH_FILL_PRICE_SUPPORT_ZERO_ONE_AND_JOIN10_LOWER_MINUS_JOIN5_UPPER",
+        "missing_terminal_record_policy": "FAIL_CLOSED_NOT_A_CENSOR",
+        "missing_settlement_policy": "FAIL_CLOSED_NOT_A_CENSOR"
+      }
     }
   }
 }
