@@ -33,7 +33,9 @@ def _stable(*parts: Any) -> str:
 
 
 def _canonical_hash(value: dict[str, Any]) -> str:
-    return hashlib.sha256(json.dumps(value, sort_keys=True, separators=(",", "")).encode()).hexdigest()
+    # Must match paper_v7_execution_loop.sh and the external-venue producer
+    # byte-for-byte. This hash is an authority boundary for the research rule.
+    return hashlib.sha256(json.dumps(value, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
 
 
 @lru_cache(maxsize=4)
