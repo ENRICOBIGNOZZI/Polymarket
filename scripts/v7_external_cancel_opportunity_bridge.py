@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+from functools import lru_cache
 from pathlib import Path
 from typing import Any
 
@@ -35,7 +36,9 @@ def _canonical_hash(value: dict[str, Any]) -> str:
     return hashlib.sha256(json.dumps(value, sort_keys=True, separators=(",", "")).encode()).hexdigest()
 
 
+@lru_cache(maxsize=4)
 def _research_rule(path: Path = CONFIG_PATH) -> tuple[dict[str, Any], str]:
+    """Load immutable checked-in rule once per process, not every 5 ms fast poll."""
     value = _load(path)
     execution = value.get("execution_alpha") if isinstance(value.get("execution_alpha"), dict) else {}
     cancel = execution.get("cancel") if isinstance(execution.get("cancel"), dict) else {}
@@ -184,6 +187,24 @@ def _active_make(path: Path, *, model_sha: str) -> dict[str, Any] | None:
     return value
 
 
+def _active_make_paths(
+    root: Path, active_orders: dict[tuple[str, str, str], dict[str, Any]],
+) -> list[Path]:
+    """Resolve only currently active authorizations; never scan the live directory."""
+    live_dir = root / "micro_maker" / "authorized_make" / "live"
+    if not live_dir.exists():
+        return []
+    identities = {
+        hashlib.sha256(str(replay).encode()).hexdigest()
+        for replay, _market, _token in active_orders
+        if replay
+    }
+    return [
+        path for identity in sorted(identities)
+        if (path := live_dir / f"{identity}.json").is_file()
+    ]
+
+
 def build_external_cancel_opportunities(
     run_root: Path, *, now_ns: int,
 ) -> tuple[list[dict[str, Any]], dict[str, Any]]:
@@ -224,8 +245,7 @@ def build_external_cancel_opportunities(
             "active_make_files": 0, "cancel_opportunities": 0,
         }
 
-    live_dir = root / "micro_maker" / "authorized_make" / "live"
-    files = sorted(live_dir.glob("*.json")) if live_dir.exists() else []
+    files = _active_make_paths(root, active_orders)
     output: list[dict[str, Any]] = []
     rejected = 0
     trigger_wall = int(signal["trigger_receive_wall_ns"])
@@ -333,4 +353,6 @@ def build_external_cancel_opportunities(
         "active_make_files": len(files), "active_executor_orders": len(active_orders),
         "rejected_active_make_files": rejected, "cancel_opportunities": len(output),
         "exact_order_targeting": True,
+        "active_make_lookup": "DIRECT_REPLAY_KEY_HASH",
+        "static_rule_cached": True,
     }
