@@ -24,7 +24,9 @@ CRYPTO_SETTLEMENT_ENGINE_POLICY="${PM_V7_CRYPTO_SETTLEMENT_ENGINE_POLICY:-config
 CRYPTO_SETTLEMENT_MARKET_REGISTRY="${PM_V7_CRYPTO_SETTLEMENT_MARKET_REGISTRY:-config/v7_crypto_settlement_markets.json}"
 CRYPTO_SETTLEMENT_MODEL_REGISTRY="${PM_V7_CRYPTO_SETTLEMENT_MODEL_REGISTRY:-config/v7_crypto_settlement_model_registry.json}"
 ADAPTIVE_UNIVERSE_CONFIG="${PM_V7_ADAPTIVE_UNIVERSE_CONFIG:-config/v7_adaptive_universe.json}"
+REPRICING_SHADOW_ARTIFACT="${PM_V7_REPRICING_SHADOW_ARTIFACT:-config/v7_pm_repricing_250ms_shadow.json}"
 SHA="$(git rev-parse HEAD)"
+REPRICING_SHADOW_ARTIFACT_SHA="$(python3 -c 'import hashlib,sys; print(hashlib.sha256(open(sys.argv[1],"rb").read()).hexdigest())' "$REPRICING_SHADOW_ARTIFACT")"
 MAKER_RESEARCH_MODEL="$RUN_ROOT/micro_maker/execution_model.json"
 DURABLE_ROOT="${PM_V7_DURABLE_ROOT:-runs/paper_v7_durable}"
 RICH_RESEARCH_MODEL="$DURABLE_ROOT/external_fair/rich_research_model.json"
@@ -62,7 +64,7 @@ ALLOC="$CONTROL/allocations"
 KILL="$CONTROL/KILL"
 MAKER_FREEZE="$CONTROL/MAKER_FREEZE"
 LOCK="$CONTROL/runtime.lock"
-mkdir -p "$CONTROL" "$RUN_ROOT/ledger" "$RUN_ROOT/opportunities/inbox" "$RUN_ROOT/research/evidence" "$RUN_ROOT/market_data" "$RUN_ROOT/universe" "$RUN_ROOT/fast_structural" "$RUN_ROOT/structural_relations" "$RUN_ROOT/hard_arb" "$RUN_ROOT/micro_maker" "$RUN_ROOT/external" "$RUN_ROOT/external_fair" "$RUN_ROOT/learned_execution" "$DURABLE_ROOT/micro_maker"
+mkdir -p "$CONTROL" "$RUN_ROOT/ledger" "$RUN_ROOT/opportunities/inbox" "$RUN_ROOT/research/evidence" "$RUN_ROOT/reports" "$RUN_ROOT/market_data" "$RUN_ROOT/universe" "$RUN_ROOT/fast_structural" "$RUN_ROOT/structural_relations" "$RUN_ROOT/hard_arb" "$RUN_ROOT/micro_maker" "$RUN_ROOT/external" "$RUN_ROOT/external_fair" "$RUN_ROOT/learned_execution" "$DURABLE_ROOT/micro_maker"
 touch "$RUN_ROOT/ledger/execution.jsonl"
 
 # The runtime is not allowed to self-assert CI approval through an environment
@@ -320,6 +322,29 @@ python3 scripts/v7_external_lead_lag_collector.py \
   --profit-root "$DURABLE_ROOT/profit_experiments/$SHA" --run-root "$RUN_ROOT" \
   --model-sha "$SHA" --interval-ms 25 \
   >> "$RUN_ROOT/external_fair/lead_lag_collector.log" 2>&1 &
+v7_register_child "$!"
+
+# Zero-authority forward tape for the hard external-cancel rule.
+python3 scripts/v7_external_cancel_signal_journal.py \
+  --signal "$RUN_ROOT/external_fair/external_cancel_signal.json" \
+  --output "$RUN_ROOT/research/external_cancel_signals.jsonl" \
+  --status "$RUN_ROOT/research/external_cancel_signal_journal_status.json" \
+  --model-sha "$SHA" --interval-ms 10 \
+  >> "$RUN_ROOT/research/external_cancel_signal_journal.log" 2>&1 &
+v7_register_child "$!"
+
+# Zero-authority learned 250ms PM+external repricing observer.
+python3 scripts/v7_pm_repricing_shadow.py \
+  --fair-status "$RUN_ROOT/external_fair/status.json" \
+  --router-status "$RUN_ROOT/external_fair/paper_router_status.json" \
+  --book-tape "$RUN_ROOT/micro_maker/book_observations/current.jsonl" \
+  --book-status "$RUN_ROOT/micro_maker/fillability_ws_status.json" \
+  --artifact "$REPRICING_SHADOW_ARTIFACT" --artifact-sha256 "$REPRICING_SHADOW_ARTIFACT_SHA" \
+  --output "$RUN_ROOT/research/pm_repricing_shadow.jsonl" \
+  --status "$RUN_ROOT/research/pm_repricing_shadow_status.json" \
+  --model-sha "$SHA" --family PM_PLUS_EXTERNAL --horizon-ms 250 \
+  --threshold-ticks 1.0 --interval-ms 25 \
+  >> "$RUN_ROOT/research/pm_repricing_shadow.log" 2>&1 &
 v7_register_child "$!"
 
 CONFIG_HASH="$(git hash-object "$CONFIG")"
@@ -714,6 +739,7 @@ v7_register_child "$!"
 
 (
   last_historical_attribution_at=0
+  last_horse_race_at=0
   while [[ ! -e "$KILL" ]]; do
     if (( $(date +%s) - last_historical_attribution_at >= 600 )); then
       if python3 scripts/v7_profit_attribution.py --archive-root "${RUN_ROOT%/*}/paper_v7_archives" \
@@ -735,6 +761,21 @@ v7_register_child "$!"
       >> "$RUN_ROOT/profit_attribution.log" 2>&1 || true
     python3 scripts/v7_profit_report.py --experiment-root "$DURABLE_ROOT/profit_experiments" --all-cohorts \
       --output "$RUN_ROOT/profit_experiment_report.json" >> "$RUN_ROOT/profit_experiment_report.log" 2>&1 || true
+    python3 scripts/v7_fast_cancel_latency_report.py \
+      --maker-evidence "$RUN_ROOT/ledger/execution.jsonl" \
+      --output "$RUN_ROOT/reports/fast_cancel_latency.json" \
+      >> "$RUN_ROOT/reports/fast_cancel_latency_report.log" 2>&1 || true
+    if (( $(date +%s) - last_horse_race_at >= 300 )); then
+      python3 scripts/v7_maker_execution_horse_race.py \
+        --maker-evidence "$RUN_ROOT/ledger/execution.jsonl" \
+        --hard-cancel-events "$RUN_ROOT/research/external_cancel_signals.jsonl" \
+        --learned-shadow "$RUN_ROOT/research/pm_repricing_shadow.jsonl" \
+        --output "$RUN_ROOT/reports/maker_execution_horse_race.json" \
+        --allow-global-hard-scope \
+        --cancel-latency-ms 25 --stress-cancel-latency-ms 5,25,50,100,200 \
+        >> "$RUN_ROOT/reports/maker_execution_horse_race.log" 2>&1 || true
+      last_horse_race_at="$(date +%s)"
+    fi
     python3 scripts/v7_economic_decision_report.py --run-root "$RUN_ROOT" --durable-root "$DURABLE_ROOT" \
       --benchmark "$DURABLE_ROOT/permanent_evidence/benchmarks/latest.json" \
       >> "$RUN_ROOT/economic_decision_report.log" 2>&1 || true
@@ -751,7 +792,7 @@ v7_register_child "$!"
   done
 ) & v7_register_child "$!"
 
-v7_assert_registered_child_count 21
+v7_assert_registered_child_count 23
 write_runtime_status running false
 
 while [[ ! -e "$KILL" ]]; do

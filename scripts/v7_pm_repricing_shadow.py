@@ -27,6 +27,7 @@ from v7_pm_repricing_incremental_benchmark import predict
 SCHEMA = "polymarket_v7_pm_repricing_shadow_v1"
 STATUS_SCHEMA = "polymarket_v7_pm_repricing_shadow_status_v1"
 ARTIFACT_SCHEMA = "polymarket_v7_pm_repricing_incremental_benchmark_v1"
+FROZEN_ARTIFACT_SCHEMA = "polymarket_v7_pm_repricing_shadow_artifact_v1"
 CAUSAL_SCHEMA = "polymarket_v7_model_independent_causal_observation_v1"
 MAX_ORIGIN_WAIT_NS = 500_000_000
 
@@ -56,7 +57,7 @@ def load_model(path: Path, expected_sha256: str, horizon_ms: int, family: str) -
     value = json.loads(path.read_text(encoding="utf-8"))
     if (
         not isinstance(value, dict)
-        or value.get("schema") != ARTIFACT_SCHEMA
+        or value.get("schema") not in {ARTIFACT_SCHEMA, FROZEN_ARTIFACT_SCHEMA}
         or value.get("paper_only") is not True
         or value.get("authenticated_execution") is not False
         or value.get("real_order_submission") is not False
@@ -64,6 +65,13 @@ def load_model(path: Path, expected_sha256: str, horizon_ms: int, family: str) -
         or value.get("automatic_promotion") is not False
     ):
         raise ValueError("repricing_shadow:artifact_safety_contract")
+    code_sha = str(value.get("code_sha") or value.get("source_code_sha") or "")
+    if not exact_hex(code_sha, 40):
+        raise ValueError("repricing_shadow:artifact_code_sha_missing")
+    if value.get("schema") == FROZEN_ARTIFACT_SCHEMA:
+        source_sha = str(value.get("source_artifact_sha256") or "")
+        if not exact_hex(source_sha, 64):
+            raise ValueError("repricing_shadow:source_artifact_hash_missing")
     models = value.get("models") if isinstance(value.get("models"), dict) else {}
     by_horizon = models.get(str(horizon_ms)) if isinstance(models.get(str(horizon_ms)), dict) else {}
     spec = by_horizon.get(family) if isinstance(by_horizon.get(family), dict) else None
@@ -197,7 +205,7 @@ class Shadow:
                 record = score_origin(
                     row, evidence, self.spec,
                     artifact_sha256=self.args.artifact_sha256,
-                    artifact_code_sha=str(self.artifact.get("code_sha") or ""),
+                    artifact_code_sha=str(self.artifact.get("code_sha") or self.artifact.get("source_code_sha") or ""),
                     runtime_sha=self.args.model_sha,
                     horizon_ms=self.args.horizon_ms,
                     family=self.args.family,
@@ -223,7 +231,7 @@ class Shadow:
             "automatic_promotion": False,
             "runtime_model_sha": self.args.model_sha,
             "artifact_sha256": self.args.artifact_sha256,
-            "artifact_code_sha": self.artifact.get("code_sha"),
+            "artifact_code_sha": self.artifact.get("code_sha") or self.artifact.get("source_code_sha"),
             "family": self.args.family,
             "horizon_ms": self.args.horizon_ms,
             "threshold_ticks": self.args.threshold_ticks,
