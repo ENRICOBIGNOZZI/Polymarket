@@ -77,7 +77,13 @@ def test_fast_cancel_lane_publishes_without_full_portfolio_cut() -> None:
         assert value["fast_cancel_path"] is True
         assert value["signal_trigger_wall_ns"] == NOW - 10_000_000
         assert value["decision"]["fast_cancel_path"] is True
-        assert (root / "opportunities/fast_cancel_decisions.jsonl").exists()
+        journal = root / "opportunities/fast_cancel_decisions.jsonl"
+        assert journal.exists()
+        assert len(journal.read_text().splitlines()) == 1
+        second = coordinator.process_fast_cancel(root, now_ns=NOW + 1)
+        assert second["duplicate_suppressed"] is True
+        assert len(list((root / "micro_maker/authorized_cancel").glob("*.json"))) == 1
+        assert len(journal.read_text().splitlines()) == 1
 
 
 if __name__ == "__main__":
