@@ -33,11 +33,23 @@ class ProtocolTests(unittest.TestCase):
         legacy["protocol_id"]="permanent-profit-causes-20260909-v3"
         confirm=legacy["inference"]["confirmatory"]
         confirm.pop("duration_hours")
+        confirm.pop("censoring",None)
         confirm["calendar_days"]=7
         validate(legacy)
         with tempfile.TemporaryDirectory() as d:
             manifest=freeze(Path(d)/"manifest.json",legacy,"a"*40,"b"*64,300_000_000_001)
             self.assertEqual(manifest["confirmatory_end_ns"]-manifest["forward_start_ns"],7*86_400_000_000_000)
+
+    def test_v5_censoring_identity_is_fail_fast(self):
+        validate(self.protocol)
+        for mutation in ('cap','mode','missing'):
+            value=copy.deepcopy(self.protocol);c=value['inference']['confirmatory']['censoring']
+            if mutation=='cap':c['endpoint_max_censor_fraction']['selected_settlement_surplus_cost2_delay1000']=.051
+            elif mutation=='mode':c['mode']='OTHER'
+            else:c['terminal_records_required']=False
+            with self.assertRaisesRegex(ValueError,'v5_censoring_identity'):validate(value)
+        legacy=copy.deepcopy(self.protocol);legacy['protocol_id']='legacy-with-v5-fields'
+        with self.assertRaisesRegex(ValueError,'censoring_requires_v5'):validate(legacy)
 
     def test_protocol_cannot_enable_trading_or_change_owner(self):
         for change in ('authority','post_only','promotion'):
