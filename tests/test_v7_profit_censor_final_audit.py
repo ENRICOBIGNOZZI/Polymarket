@@ -12,6 +12,8 @@ from v7_profit_experiments import AUTH  # noqa: E402
 from v7_profit_protocol import digest, fixed_window_digest, freeze  # noqa: E402
 from v7_profit_report import final_window_audit  # noqa: E402
 
+V5_PROTOCOL_PATH = ROOT / "config/v7_profit_experiment_20260911.json"
+
 
 def arm(name: str, censored: bool = False) -> dict:
     return {
@@ -82,9 +84,7 @@ def make_window(protocol_path: Path, signal_censors: int, maker_censors: int):
 
 
 def test_v5_one_in_twenty_terminal_censors_pass_with_worst_case_support() -> None:
-    temp, observations, manifest, labels, closure, now = make_window(
-        ROOT / "config/v7_profit_experiment.json", 1, 1
-    )
+    temp, observations, manifest, labels, closure, now = make_window(V5_PROTOCOL_PATH, 1, 1)
     try:
         audit = final_window_audit(observations, manifest, labels, now, closure)
         assert audit["terminal_records_and_verified_settlements_complete"] is True
@@ -98,9 +98,7 @@ def test_v5_one_in_twenty_terminal_censors_pass_with_worst_case_support() -> Non
 
 
 def test_v5_two_in_twenty_terminal_censors_fail_cap() -> None:
-    temp, observations, manifest, labels, closure, now = make_window(
-        ROOT / "config/v7_profit_experiment.json", 2, 2
-    )
+    temp, observations, manifest, labels, closure, now = make_window(V5_PROTOCOL_PATH, 2, 2)
     try:
         audit = final_window_audit(observations, manifest, labels, now, closure)
         assert audit["terminal_records_and_verified_settlements_complete"] is True
@@ -126,9 +124,7 @@ def test_prior_protocol_keeps_original_zero_censor_tolerance() -> None:
 
 
 def test_missing_terminal_record_stays_fail_closed_in_v5() -> None:
-    temp, observations, manifest, labels, _closure, now = make_window(
-        ROOT / "config/v7_profit_experiment.json", 0, 0
-    )
+    temp, observations, manifest, labels, _closure, now = make_window(V5_PROTOCOL_PATH, 0, 0)
     try:
         observations = [r for r in observations if not (
             r["kind"] == "DELAY_LABEL" and r["selection_key"] == "s0" and r["delay_ms"] == 1000
