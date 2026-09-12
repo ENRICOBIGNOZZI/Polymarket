@@ -1,30 +1,26 @@
 #!/usr/bin/env python3
 """Low-latency zero-authority PM repricing inference.
 
-Unlike the legacy shadow, inference never waits for a +horizon label or a status
-watermark covering that label. It only consumes causal book cuts already at or
-before the frozen origin. Realized +250ms labels are produced by a separate
-observer. Late inference is recorded but cannot create a cancel-veto event.
+Inference never waits for a +horizon label or a status watermark covering that
+label. It only consumes causal book cuts already at or before the frozen origin.
+Late inference is recorded but cannot create a cancel-veto event.
 """
 from __future__ import annotations
 
 import argparse
 from collections import deque
-import json
 import math
-import os
 from pathlib import Path
-import statistics
 import time
 from typing import Any
 
 from v7_causal_book import BookTimeline
 from v7_compressed_journal import CompressedJournal
 from v7_external_lead_lag_collector import load, valid_origin, valid_router_live
-from v7_pm_repricing_shadow import load_model, score_origin, atomic_json
+from v7_pm_repricing_common import load_model, score_origin, atomic_json
 
 SCHEMA = "polymarket_v7_pm_repricing_shadow_v1"
-STATUS_SCHEMA = "polymarket_v7_pm_repricing_fast_shadow_status_v1"
+STATUS_SCHEMA = "polymarket_v7_pm_repricing_shadow_status_v1"
 
 
 def causal_origin_evidence(book: BookTimeline, origin: dict[str, Any], *, max_book_age_ms: int) -> dict[str, Any] | None:
@@ -154,6 +150,7 @@ class FastShadow:
             "automatic_promotion": False,
             "runtime_model_sha": self.args.model_sha,
             "artifact_sha256": self.args.artifact_sha256,
+            "artifact_code_sha": self.artifact.get("code_sha") or self.artifact.get("source_code_sha"),
             "family": self.args.family,
             "horizon_ms": self.args.horizon_ms,
             "threshold_ticks": self.args.threshold_ticks,
@@ -177,6 +174,7 @@ class FastShadow:
                 "max": max(values) if values else None,
             },
             "latency_target": {"p50_lt_ms": 25, "p99_lt_ms": 50, "coverage_gt": 0.90},
+            "inference_semantics": "ORIGIN_ONLY_LABELING_SEPARATE",
             "last_record": self.last_record,
             "state": "COLLECTING" if self.scored else "AWAITING_CAUSAL_ORIGIN",
         })
@@ -191,34 +189,3 @@ class FastShadow:
                 self.publish()
                 next_status = now + 1.0
             time.sleep(max(0.001, self.args.interval_ms / 1000.0))
-
-
-def main() -> int:
-    ap = argparse.ArgumentParser(description=__doc__)
-    ap.add_argument("--fair-status", type=Path, required=True)
-    ap.add_argument("--router-status", type=Path, required=True)
-    ap.add_argument("--book-tape", type=Path, required=True)
-    ap.add_argument("--artifact", type=Path, required=True)
-    ap.add_argument("--artifact-sha256", required=True)
-    ap.add_argument("--output", type=Path, required=True)
-    ap.add_argument("--status", type=Path, required=True)
-    ap.add_argument("--model-sha", required=True)
-    ap.add_argument("--family", default="PM_PLUS_EXTERNAL")
-    ap.add_argument("--horizon-ms", type=int, default=250)
-    ap.add_argument("--threshold-ticks", type=float, default=1.0)
-    ap.add_argument("--interval-ms", type=int, default=5)
-    ap.add_argument("--latency-gate-ms", type=int, default=50)
-    ap.add_argument("--max-book-age-ms", type=int, default=100)
-    ap.add_argument("--max-book-wait-ms", type=int, default=50)
-    ap.add_argument("--maximum-hot-bytes", type=int, default=64 * 1024**2)
-    args = ap.parse_args()
-    if len(args.model_sha) != 40 or args.horizon_ms != 250:
-        raise SystemExit("invalid fast shadow identity")
-    if not 1 <= args.interval_ms <= 25 or not 1 <= args.latency_gate_ms <= 100:
-        raise SystemExit("invalid fast shadow latency configuration")
-    FastShadow(args).run()
-    return 0
-
-
-if __name__ == "__main__":
-    raise SystemExit(main())
