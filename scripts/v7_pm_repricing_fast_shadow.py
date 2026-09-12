@@ -15,7 +15,7 @@ import time
 from typing import Any
 
 from v7_causal_book import BookTimeline
-from v7_compressed_journal import CompressedJournal
+from v7_compressed_journal import CompressedJournal, journal_rows
 from v7_external_lead_lag_collector import load, valid_origin, valid_router_live
 from v7_pm_repricing_common import load_model, score_origin, atomic_json
 
@@ -63,25 +63,79 @@ class FastShadow:
         self.args = args
         self.artifact, self.spec = load_model(args.artifact, args.artifact_sha256, args.horizon_ms, args.family)
         self.book = BookTimeline(args.book_tape, args.model_sha, retention_ms=10_000)
-        self.journal = CompressedJournal(args.output, args.maximum_hot_bytes)
         self.last_origin_id = ""
         self.pending: dict[str, tuple[dict[str, Any], int]] = {}
+        self.seen_origins: set[str] = set()
         self.origins = self.scored = self.late = self.no_book = self.invalid = 0
         self.raw_vetoes = self.timely_vetoes = 0
         self.latencies_ms: deque[float] = deque(maxlen=100_000)
         self.started_ns = time.time_ns()
         self.last_record: dict[str, Any] | None = None
+        self._restore(args.output, args.status)
+        self.journal = CompressedJournal(args.output, args.maximum_hot_bytes)
+
+    def _restore(self, output: Path, status_path: Path) -> None:
+        prior = load(status_path)
+        if (
+            prior.get("schema") == STATUS_SCHEMA
+            and prior.get("runtime_model_sha") == self.args.model_sha
+            and prior.get("artifact_sha256") == self.args.artifact_sha256
+            and prior.get("paper_only") is True
+            and prior.get("authenticated_execution") is False
+            and prior.get("real_order_submission") is False
+        ):
+            self.origins = max(0, int(prior.get("origins_seen") or 0))
+            self.scored = max(0, int(prior.get("scored_origins") or 0))
+            self.no_book = max(0, int(prior.get("book_unavailable_origins", prior.get("censored_origins", 0)) or 0))
+            self.invalid = max(0, int(prior.get("invalid_origins") or 0))
+            self.late = max(0, int(prior.get("late_inferences") or 0))
+            self.raw_vetoes = max(0, int(prior.get("raw_veto_origins") or 0))
+            self.timely_vetoes = max(0, int(prior.get("timely_veto_origins") or 0))
+            self.started_ns = int(prior.get("started_ns") or self.started_ns)
+        restored = 0
+        try:
+            stream = journal_rows(output)
+            for row in stream:
+                if (
+                    isinstance(row, dict)
+                    and row.get("schema") == SCHEMA
+                    and row.get("runtime_model_sha") == self.args.model_sha
+                    and row.get("artifact_sha256") == self.args.artifact_sha256
+                    and row.get("inference_phase") == "ORIGIN_ONLY_NO_FUTURE_LABEL"
+                    and row.get("paper_only") is True
+                    and row.get("authenticated_execution") is False
+                    and row.get("real_order_submission") is False
+                ):
+                    origin_id = str(row.get("origin_id") or "")
+                    if not origin_id or origin_id in self.seen_origins:
+                        continue
+                    self.seen_origins.add(origin_id)
+                    restored += 1
+                    age_ns = int(row.get("inference_age_ns") or 0)
+                    if age_ns >= 0:
+                        self.latencies_ms.append(age_ns / 1_000_000.0)
+                    self.last_record = row
+        except (OSError, ValueError, TypeError):
+            # Status/tape recovery is best-effort only; duplicated economic
+            # authority is still impossible because this observer has none.
+            pass
+        self.scored = max(self.scored, restored)
+        self.origins = max(self.origins, self.scored + self.no_book)
 
     def observe_origin(self) -> None:
         router = load(self.args.router_status)
         live = valid_router_live(router, self.args.model_sha)
         fair = load(self.args.fair_status)
         origin = valid_origin(fair, live, self.args.model_sha) if live else None
-        if origin is None or origin["origin_id"] == self.last_origin_id:
+        if origin is None:
             return
-        self.last_origin_id = origin["origin_id"]
+        origin_id = str(origin["origin_id"])
+        if origin_id == self.last_origin_id or origin_id in self.seen_origins or origin_id in self.pending:
+            self.last_origin_id = origin_id
+            return
+        self.last_origin_id = origin_id
         self.origins += 1
-        self.pending[origin["origin_id"]] = (origin, time.time_ns())
+        self.pending[origin_id] = (origin, time.time_ns())
 
     def score_pending(self) -> None:
         self.book.poll()
@@ -134,6 +188,7 @@ class FastShadow:
                 "book_cut_oldest_receive_ms": evidence["book_cut_oldest_receive_ms"],
             })
             self.journal.append(record)
+            self.seen_origins.add(origin_id)
             self.last_record = record
             self.scored += 1
             self.latencies_ms.append(age_ns / 1_000_000.0)
@@ -161,10 +216,13 @@ class FastShadow:
             "scored_origins": self.scored,
             "pending_origins": len(self.pending),
             "book_unavailable_origins": self.no_book,
+            "censored_origins": self.no_book,
             "invalid_origins": self.invalid,
+            "book_timeline_gaps": self.book.gaps,
             "late_inferences": self.late,
             "raw_veto_origins": self.raw_vetoes,
             "timely_veto_origins": self.timely_vetoes,
+            "restart_restored_origins": len(self.seen_origins),
             "score_coverage": self.scored / self.origins if self.origins else None,
             "timely_score_coverage": (self.scored - self.late) / self.origins if self.origins else None,
             "inference_age_ms": {
