@@ -9,7 +9,6 @@ from __future__ import annotations
 import argparse
 from collections import OrderedDict
 import json
-import math
 import os
 from pathlib import Path
 import time
@@ -19,7 +18,7 @@ from v7_causal_book import BookTimeline
 from v7_compressed_journal import CompressedJournal
 from v7_external_lead_lag_collector import load
 from v7_external_rich_model import logit
-from v7_pm_repricing_shadow import atomic_json
+from v7_pm_repricing_common import atomic_json
 
 INFERENCE_SCHEMA = "polymarket_v7_pm_repricing_shadow_v1"
 SCHEMA = "polymarket_v7_pm_repricing_label_v1"
@@ -146,8 +145,8 @@ class Labeler:
             else:
                 p0 = float(row["origin_pm_yes"])
                 p1 = float(evidence["label_pm_yes"])
-                realized_delta = p1 - p0
                 predicted_delta = float(row.get("predicted_delta_probability") or 0.0)
+                realized_delta = p1 - p0
                 yes_tick = float(row["yes_tick_size"])
                 no_tick = float(row["no_tick_size"])
                 sign_correct = (predicted_delta == 0.0 and realized_delta == 0.0) or predicted_delta * realized_delta > 0.0
@@ -223,26 +222,3 @@ class Labeler:
                 self.publish()
                 next_status = now + 1.0
             time.sleep(max(0.005, self.args.interval_ms / 1000.0))
-
-
-def main() -> int:
-    ap = argparse.ArgumentParser(description=__doc__)
-    ap.add_argument("--inference", type=Path, required=True)
-    ap.add_argument("--book-tape", type=Path, required=True)
-    ap.add_argument("--book-status", type=Path, required=True)
-    ap.add_argument("--output", type=Path, required=True)
-    ap.add_argument("--status", type=Path, required=True)
-    ap.add_argument("--model-sha", required=True)
-    ap.add_argument("--horizon-ms", type=int, default=250)
-    ap.add_argument("--label-grace-ms", type=int, default=75)
-    ap.add_argument("--interval-ms", type=int, default=10)
-    ap.add_argument("--maximum-hot-bytes", type=int, default=64 * 1024**2)
-    args = ap.parse_args()
-    if len(args.model_sha) != 40 or args.horizon_ms != 250:
-        raise SystemExit("invalid labeler identity")
-    Labeler(args).run()
-    return 0
-
-
-if __name__ == "__main__":
-    raise SystemExit(main())
