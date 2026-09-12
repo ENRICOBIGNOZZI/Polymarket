@@ -146,6 +146,14 @@ def test_horse_race_is_zero_authority_and_hashes_fixed_anchors() -> None:
     assert result["results"]["HARD_EXTERNAL_CANCEL"]["event_clusters"] == 1
 
 
+def test_runtime_launcher_includes_fill_conditioned_markout_evidence() -> None:
+    launcher = (ROOT / "scripts/paper_v7_execution_loop.sh").read_text()
+    start = launcher.index("python3 scripts/v7_maker_execution_horse_race.py")
+    block = launcher[start:]
+    block = block[:block.index("last_horse_race_at=", 1)]
+    assert '--maker-evidence "$RUN_ROOT/ledger/execution.jsonl"' in block
+    assert '--maker-evidence "$RUN_ROOT/research/evidence/maker_markout"' in block
+
 if __name__ == "__main__":
     test_toxic_fill_saved_by_hard_cancel()
     test_cancel_effective_at_fill_is_too_late()
@@ -154,3 +162,4 @@ if __name__ == "__main__":
     test_avoiding_favorable_fill_is_counted_as_opportunity_cost()
     test_global_hard_scope_requires_exact_crypto_scope_and_opt_in()
     test_horse_race_is_zero_authority_and_hashes_fixed_anchors()
+    test_runtime_launcher_includes_fill_conditioned_markout_evidence()
