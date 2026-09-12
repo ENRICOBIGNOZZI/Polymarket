@@ -14,7 +14,7 @@ from pathlib import Path
 from typing import Any
 
 from v7_external_economic_common import atomic_json
-from v7_external_rich_model import FAMILY, FEATURE_SCHEMA, validate_parameters
+from v7_external_rich_model import FAMILY, FEATURE_SCHEMA, MODEL_PREFIX, validate_parameters
 from v7_external_rich_train import build_rows, fit, records, score, split_rows
 from v7_fair_model_artifact import FairModelArtifact, canonical_hash
 
@@ -66,7 +66,7 @@ def train_residual(
     policy_hash = canonical_hash(policy)
     artifact = FairModelArtifact.build(
         family=FAMILY,
-        model_version="btc-m5-pm-residual-" + dataset_hash[:16],
+        model_version=MODEL_PREFIX + "residual-" + dataset_hash[:16],
         feature_schema_version=FEATURE_SCHEMA,
         code_sha=code_sha,
         policy_version=policy_hash,
@@ -115,6 +115,7 @@ def train_residual(
         "schema": SCHEMA,
         "state": "FROZEN_RESIDUAL_RESEARCH_MODEL",
         "model_hash": artifact.model_hash,
+        "model_version": artifact.model_version,
         "selected_offset": best["parameters"]["offset"],
         "selected_ridge": best["parameters"]["ridge"],
         "selected_correction_shrinkage": best["parameters"]["correction_shrinkage"],
@@ -159,8 +160,9 @@ def main() -> int:
                 raise ValueError("residual_train:existing_artifact_not_residual")
             atomic_json(args.status, {
                 "schema": SCHEMA, "state": "REUSED_FROZEN_RESIDUAL_MODEL",
-                "model_hash": artifact.model_hash, "paper_only": True,
-                "authenticated_execution": False, "real_order_submission": False,
+                "model_hash": artifact.model_hash, "model_version": artifact.model_version,
+                "paper_only": True, "authenticated_execution": False,
+                "real_order_submission": False,
                 "execution_authority": "ZERO_AUTHORITY_RESEARCH_ONLY",
             })
             return 0
