@@ -9,7 +9,8 @@ from collections import Counter
 import json
 from pathlib import Path
 import time
-from v7_profit_experiments import ProfitExperiments, LedgerTail, AUTH, atomic
+from v7_profit_experiments import LedgerTail, AUTH, atomic
+from v7_profit_experiments_v6 import ProspectiveProfitExperiments
 from v7_profit_protocol import freeze, digest
 from v7_evidence_store import immutable, canonical
 
@@ -24,7 +25,7 @@ class ProfitCohorts:
             manifest=json.loads(manifest_path.read_text())
             if manifest['code_sha']!=code_sha:raise ValueError('cohort code identity conflict')
             root=manifest_path.parent
-            c=ProfitExperiments(run_root,root,root/'protocol.json',book,code_sha,binary)
+            c=ProspectiveProfitExperiments(run_root,root,root/'protocol.json',book,code_sha,binary)
             c.status_path=root/'status.json'
             self.cohorts[root.name]=c
             ci=manifest.get('cohort_identity') or {}
@@ -39,7 +40,7 @@ class ProfitCohorts:
             root=self.output/'cohorts'/key;root.mkdir(parents=True,exist_ok=True)
             immutable(root/'protocol.json',canonical(self.protocol))
             freeze(root/'manifest.json',self.protocol,self.sha,model_hash,time.time_ns(),cohort=identity)
-            self.cohorts[key]=ProfitExperiments(self.run_root,root,root/'protocol.json',self.book,self.sha,self.binary)
+            self.cohorts[key]=ProspectiveProfitExperiments(self.run_root,root,root/'protocol.json',self.book,self.sha,self.binary)
             self.cohorts[key].status_path=root/'status.json'
             self.models[(model_hash,feature_schema)]=key
         return self.cohorts[key]
@@ -82,5 +83,6 @@ class ProfitCohorts:
               'cohorts':[{'path':str(c.output),'manifest_sha256':c.manifest['manifest_sha256'],
                 'model_hash':c.manifest['frozen_model_hash'],'forward_start_ns':c.manifest['forward_start_ns'],
                 'counts':dict(c.counts),'pending_signals':len(c.pending),'pending_maker_anchors':len(c.maker_pending),
+                'pending_maker_candidates':len(getattr(c,'maker_candidates',{})),
                 'last_error':c.last_error} for c in self.cohorts.values()],
               'historical_cohorts_preserved':True,'automatic_promotion':False})
