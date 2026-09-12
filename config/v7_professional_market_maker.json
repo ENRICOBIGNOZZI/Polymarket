@@ -165,6 +165,7 @@
       "control_maximum_last_side_age_seconds": 30,
       "control_minimum_prints_30s": 1,
       "enabled": true,
+      "zero_flow_execution_fallback_enabled": false,
       "initial_wait_seconds": 5,
       "lookback_seconds": 1800,
       "maximum_last_sell_age_seconds": 60,
@@ -223,6 +224,7 @@
     "settlement_anchor": {
       "clob_url": "https://clob.polymarket.com",
       "enabled": true,
+      "execution_authority_enabled": false,
       "evict_observation_only_market": true,
       "fill_probability_source": "EXECUTION_MODEL_GLOBAL_POSTERIOR",
       "maximum_clock_skew_ms": 250,
