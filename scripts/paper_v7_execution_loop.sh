@@ -768,6 +768,7 @@ v7_register_child "$!"
     if (( $(date +%s) - last_horse_race_at >= 300 )); then
       python3 scripts/v7_maker_execution_horse_race.py \
         --maker-evidence "$RUN_ROOT/ledger/execution.jsonl" \
+        --maker-evidence "$RUN_ROOT/research/evidence/maker_markout" \
         --hard-cancel-events "$RUN_ROOT/research/external_cancel_signals.jsonl" \
         --learned-shadow "$RUN_ROOT/research/pm_repricing_shadow.jsonl" \
         --output "$RUN_ROOT/reports/maker_execution_horse_race.json" \
