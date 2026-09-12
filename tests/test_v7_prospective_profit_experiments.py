@@ -46,8 +46,8 @@ def status(now_ms=1_000_000, watermark=2_000_000_000):
     }
 
 
-def order():
-    return {
+def order(*, include_top_level_real_order=False, receipt_real_order=False):
+    value = {
         "schema_version": 1,
         "record_id": "order-1",
         "event_type": "ORDER_SUBMITTED",
@@ -57,18 +57,24 @@ def order():
         "model_sha": "a" * 40,
         "paper_only": True,
         "authenticated_execution": False,
-        "real_order_submission": False,
         "metadata": {
             "component": "professional_maker",
             "counterfactual": False,
             "excluded_from_portfolio_equity": False,
             "arrival_receive_monotonic_ns": 1_500_000_000,
             "arrival_exchange_event_ns": 1_400_000_000,
+            "coordinator_receipt": {
+                "authenticated_execution": False,
+                "real_order_submission": receipt_real_order,
+            },
             "opportunity_envelope": {
                 "settlement_model": {"model_hash": "b" * 64},
             },
         },
     }
+    if include_top_level_real_order:
+        value["real_order_submission"] = False
+    return value
 
 
 def valid_cut(lineage=True):
@@ -126,7 +132,7 @@ class ProspectiveProfitExperimentTest(unittest.TestCase):
         path = exp.run_root / "micro_maker" / "fillability_ws_status.json"
         path.write_text(json.dumps(value) + "\n", encoding="utf-8")
 
-    def test_valid_arrival_becomes_anchor(self):
+    def test_valid_arrival_becomes_anchor_with_canonical_missing_top_level_real_order_flag(self):
         with tempfile.TemporaryDirectory() as directory:
             book = FakeBook()
             book.history[("market-1", "token-1")].append(valid_cut())
@@ -138,6 +144,16 @@ class ProspectiveProfitExperimentTest(unittest.TestCase):
             observed = list(rows(exp.output / "observations.jsonl"))
             self.assertEqual([row["kind"] for row in observed], ["MAKER_ANCHOR"])
             self.assertEqual(observed[0]["anchor_eligibility"]["state"], "ELIGIBLE")
+
+    def test_real_order_authority_in_receipt_is_rejected(self):
+        with tempfile.TemporaryDirectory() as directory:
+            book = FakeBook()
+            book.history[("market-1", "token-1")].append(valid_cut())
+            exp = self.experiment(directory, book, FakeLedger([order(receipt_real_order=True)]))
+            self.write_status(exp, status())
+            exp.collect_anchors(1_000_000 * 1_000_000)
+            self.assertNotIn("market-1", exp.anchors)
+            self.assertEqual(list(rows(exp.output / "observations.jsonl")), [])
 
     def test_invalid_lineage_is_skipped_before_anchor(self):
         with tempfile.TemporaryDirectory() as directory:
