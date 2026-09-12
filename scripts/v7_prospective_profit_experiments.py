@@ -35,12 +35,14 @@ class ProspectiveProfitExperiments(ProfitExperiments):
             order.get("event_type") != "ORDER_SUBMITTED"
             or metadata.get("component") != "professional_maker"
             or not market
+            or not order_record_id
             or market in self.anchors
             or market in self.maker_candidates
             or order_record_id in self.maker_skipped_order_ids
             or order.get("model_sha") != self.sha
             or order.get("paper_only") is not True
             or order.get("authenticated_execution") is not False
+            or order.get("real_order_submission") is not False
             or metadata.get("counterfactual") is True
             or metadata.get("excluded_from_portfolio_equity") is True
         ):
