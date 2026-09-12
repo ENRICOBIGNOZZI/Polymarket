@@ -9,6 +9,8 @@ from v7_profit_cohorts import ProfitCohorts
 from v7_evidence_store import EvidenceStore
 from test_v7_causal_book import CausalBookTests,SHA
 
+V5_PROTOCOL=ROOT/'config/v7_profit_experiment_20260911.json'
+
 
 class CohortTests(CausalBookTests):
     def seed_depth(self):
@@ -27,14 +29,14 @@ class CohortTests(CausalBookTests):
 
     def test_model_independent_origin_does_not_create_invalid_model_cohort(self):
         root=Path(self.directory.name);live=root/'live';live.mkdir()
-        manager=ProfitCohorts(live,root/'durable/profit',ROOT/'config/v7_profit_experiment.json',self.book,SHA,root/'binary')
+        manager=ProfitCohorts(live,root/'durable/profit',V5_PROTOCOL,self.book,SHA,root/'binary')
         self.seed_depth()
         manager.tick({'fair':{'valid':False}},self.origin(),self.status())
         self.assertEqual(manager.cohorts,{})
 
     def test_new_model_new_future_cohort_and_original_data_remain_after_restart(self):
         root=Path(self.directory.name);live=root/'live';output=root/'durable/profit';live.mkdir()
-        manager=ProfitCohorts(live,output,ROOT/'config/v7_profit_experiment.json',self.book,SHA,root/'binary')
+        manager=ProfitCohorts(live,output,V5_PROTOCOL,self.book,SHA,root/'binary')
         with patch('time.time_ns',return_value=(self.base-600_000)*1_000_000):
             a=manager.cohort('a'*64,'features-v1')
         self.seed_depth();manager.tick(self.fair('a'*64),self.origin(),self.status())
@@ -47,7 +49,7 @@ class CohortTests(CausalBookTests):
         # Simulated cutover: archive source run and restart the same collector
         # over durable cohorts, then deliver a genuinely later causal book.
         live.rename(root/'archive-A');live.mkdir()
-        manager=ProfitCohorts(live,output,ROOT/'config/v7_profit_experiment.json',self.book,SHA,root/'binary')
+        manager=ProfitCohorts(live,output,V5_PROTOCOL,self.book,SHA,root/'binary')
         self.base=b.manifest['forward_start_ns']//1_000_000+5000
         with patch('time.time_ns',return_value=(self.base+5000)*1_000_000):
             self.seed_depth();manager.tick(self.fair('b'*64),self.origin(),self.status())
