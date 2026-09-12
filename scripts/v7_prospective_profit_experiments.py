@@ -29,6 +29,7 @@ class ProspectiveProfitExperiments(ProfitExperiments):
         if not self.accept_new_anchors:
             return None
         metadata = order.get("metadata") or {}
+        receipt = metadata.get("coordinator_receipt") if isinstance(metadata.get("coordinator_receipt"), dict) else {}
         market = str(order.get("market_id") or "")
         order_record_id = str(order.get("record_id") or "")
         if (
@@ -42,7 +43,9 @@ class ProspectiveProfitExperiments(ProfitExperiments):
             or order.get("model_sha") != self.sha
             or order.get("paper_only") is not True
             or order.get("authenticated_execution") is not False
-            or order.get("real_order_submission") is not False
+            or order.get("real_order_submission") is True
+            or receipt.get("real_order_submission") is True
+            or receipt.get("authenticated_execution") is True
             or metadata.get("counterfactual") is True
             or metadata.get("excluded_from_portfolio_equity") is True
         ):
