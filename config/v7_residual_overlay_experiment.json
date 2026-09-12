@@ -1,0 +1,41 @@
+{
+  "schema": "polymarket_v7_residual_overlay_protocol_v1",
+  "protocol_id": "btc-m5-pm-residual-20260912-v1",
+  "paper_only": true,
+  "authenticated_execution": false,
+  "real_order_submission": false,
+  "execution_authority": "ZERO_AUTHORITY_RESEARCH_ONLY",
+  "automatic_promotion": false,
+  "model": {
+    "baseline": "POLYMARKET_MARKET_PROBABILITY",
+    "link": "LOGIT_PM_OFFSET_PLUS_EXTERNAL_RESIDUAL",
+    "allowed_offset": "market",
+    "ridge_grid": [1.0, 10.0, 100.0, 1000.0, 10000.0],
+    "correction_shrinkage_grid": [0.0, 0.25, 0.5, 1.0],
+    "selection": "VALIDATION_BRIER_THEN_LOGLOSS",
+    "shrinkage_zero_semantics": "EXACT_POLYMARKET_BASELINE"
+  },
+  "prospective": {
+    "replication_count": 3,
+    "duration_seconds_each": 28800,
+    "start_rule": "NEXT_5M_BOUNDARY_AFTER_ARTIFACT_FREEZE",
+    "same_artifact_required_across_replications": true,
+    "retraining_between_replications": false,
+    "early_stopping_or_early_promotion": false
+  },
+  "primary_endpoints": [
+    "MODEL_BRIER_IMPROVEMENT_OVER_PM",
+    "SELECTED_SETTLEMENT_SURPLUS_COST2_DELAY1000"
+  ],
+  "decision_rule": {
+    "require_positive_primary_mean_each_replication": true,
+    "require_same_sign_across_three_replications": true,
+    "require_cluster_robust_interval_lower_bound_positive": true,
+    "promotion": "MANUAL_INDEPENDENT_REVIEW_ONLY"
+  },
+  "exploratory_only": {
+    "v5_derived_subgroups": true,
+    "examples": ["absolute_oracle_distance_bp_lowest_bin"],
+    "may_replace_primary_endpoints": false
+  }
+}

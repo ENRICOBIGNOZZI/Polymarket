@@ -12,8 +12,11 @@ import v7_profit_censor_bounds as bounds  # noqa: E402
 from v7_profit_protocol import validate  # noqa: E402
 
 
+V5_PROTOCOL_PATH = ROOT / "config/v7_profit_experiment_20260911.json"
+
+
 def protocol_v5() -> dict:
-    value = json.loads((ROOT / "config/v7_profit_experiment.json").read_text())
+    value = json.loads(V5_PROTOCOL_PATH.read_text())
     validate(value)
     return value
 

@@ -28,16 +28,8 @@
     "report_inventory_duration": true,
     "report_queue_position": true,
     "report_queue_uncertainty": true,
-    "reward_stress_multipliers": [
-      1.0,
-      0.5,
-      0.0
-    ],
-    "same_trade_cost_stress": [
-      1.0,
-      1.5,
-      2.0
-    ]
+    "reward_stress_multipliers": [1.0, 0.5, 0.0],
+    "same_trade_cost_stress": [1.0, 1.5, 2.0]
   },
   "execution_model": {
     "chronological_oos_only": true,
@@ -54,11 +46,7 @@
   },
   "exploration": {
     "action_information_fraction": 0.2,
-    "actions": [
-      "JOIN",
-      "FADE1",
-      "IMPROVE1"
-    ],
+    "actions": ["JOIN", "FADE1", "IMPROVE1"],
     "confidence_z": 0.0,
     "enabled": true,
     "epsilon": 0.1,
@@ -85,13 +73,7 @@
     "related_market_weight": 0.05
   },
   "features": {
-    "flow_windows_seconds": [
-      1,
-      5,
-      15,
-      60,
-      300
-    ],
+    "flow_windows_seconds": [1, 5, 15, 60, 300],
     "include_depth_imbalance": true,
     "include_inventory": true,
     "include_microprice": true,
@@ -103,13 +85,7 @@
     "include_time_to_resolution": true,
     "include_trade_signs": true,
     "l2_levels": 5,
-    "markout_horizons_seconds": [
-      1,
-      10,
-      45,
-      60,
-      300
-    ]
+    "markout_horizons_seconds": [1, 10, 45, 60, 300]
   },
   "hot_path": {
     "book_copy_per_decision_allowed": false,
@@ -150,11 +126,7 @@
     "unwind_full_visible_depth_required": true
   },
   "latency": {
-    "acceptance_receive_to_intent_us": {
-      "p50": 250,
-      "p95": 750,
-      "p99": 1500
-    },
+    "acceptance_receive_to_intent_us": {"p50": 250, "p95": 750, "p99": 1500},
     "acceptance_toxicity_to_cancel_intent_p99_us": 1000,
     "event_driven": true,
     "max_cross_book_skew_ms": 1500,
@@ -162,33 +134,10 @@
     "max_rest_snapshot_age_ms": 5000,
     "release_benchmark_required": true,
     "representative_replay_required_for_claim": true,
-    "required_percentiles": [
-      "p50",
-      "p90",
-      "p95",
-      "p99",
-      "p99.9",
-      "max"
-    ],
-    "required_segments": [
-      "feed",
-      "parse",
-      "book",
-      "features",
-      "decision",
-      "risk",
-      "tx_queue",
-      "transport",
-      "ack",
-      "cancel"
-    ],
+    "required_percentiles": ["p50", "p90", "p95", "p99", "p99.9", "max"],
+    "required_segments": ["feed", "parse", "book", "features", "decision", "risk", "tx_queue", "transport", "ack", "cancel"],
     "rest_polling_not_allowed_on_quote_fast_path": true,
-    "stretch_receive_to_intent_us": {
-      "p50": 50,
-      "p95": 150,
-      "p99": 500,
-      "p99_9": 1000
-    },
+    "stretch_receive_to_intent_us": {"p50": 50, "p95": 150, "p99": 500, "p99_9": 1000},
     "stretch_toxicity_to_cancel_intent_p99_us": 250,
     "synthetic_empty_market_benchmark_not_sufficient": true,
     "ws_reconnect_invalidates_lineage": true
@@ -258,14 +207,10 @@
       "selection_flow_half_life_seconds": 30,
       "selection_quote_horizon_seconds": 5,
       "selection_quote_shares": 5,
-      "selector_refresh_seconds": 5
+      "selector_refresh_seconds": 1
     },
     "refresh_seconds": 60,
-    "resource_capacity": {
-      "derivation": "max_active_markets=shard_count_budget*markets_per_shard",
-      "markets_per_shard": 8,
-      "shard_count_budget": 5
-    },
+    "resource_capacity": {"derivation": "max_active_markets=shard_count_budget*markets_per_shard", "markets_per_shard": 8, "shard_count_budget": 5},
     "reward_markets_endpoint": "/rewards/markets/multi",
     "reward_max_quote_shares": 100,
     "reward_settings_endpoint": "/rewards/markets/current",
@@ -308,32 +253,16 @@
     "cold_start_queue_confidence": 0.5,
     "dual_clock_post_arrival_required": true,
     "exact_fifo_claimed": false,
-    "fields": [
-      "queue_ahead_lower",
-      "queue_ahead_expected",
-      "queue_ahead_upper",
-      "queue_confidence"
-    ],
+    "fields": ["queue_ahead_lower", "queue_ahead_expected", "queue_ahead_upper", "queue_confidence"],
     "operational_fill_scenario": "pessimistic",
     "partial_fills_enabled": true,
     "pre_arrival_flow_can_deplete_queue": false,
     "public_print_conservation_required": true,
-    "queue_ahead_multipliers": {
-      "expected": 1.25,
-      "lower": 1.0,
-      "upper": 1.5
-    },
+    "queue_ahead_multipliers": {"expected": 1.25, "lower": 1.0, "upper": 1.5},
     "queue_uncertainty_envelope": true
   },
   "quoting": {
-    "actions": [
-      "JOIN",
-      "IMPROVE1",
-      "FADE1",
-      "FADE2",
-      "ONE_SIDED",
-      "WITHDRAW"
-    ],
+    "actions": ["JOIN", "IMPROVE1", "FADE1", "FADE2", "ONE_SIDED", "WITHDRAW"],
     "cancel_latency_ms": 100,
     "cancel_replace_cooldown_ms": 50,
     "inventory_skew_strength": 1.0,
