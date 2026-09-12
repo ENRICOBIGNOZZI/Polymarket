@@ -7,11 +7,45 @@ from pathlib import Path
 
 SCHEMA='polymarket_v7_profit_experiment_manifest_v1'
 V5_PROTOCOL_ID='permanent-profit-causes-20260911-v5'
-V5_CENSOR_MODE='WORST_CASE_LOWER_SUPPORT_IMPUTATION'
-V5_CENSOR_ENDPOINTS={'selected_settlement_surplus_cost2_delay1000','maker_join10_minus_join5_settlement_net_cost2'}
+V6_PROTOCOL_ID='permanent-profit-causes-20260912-v6'
+WORST_CASE_CENSOR_MODE='WORST_CASE_LOWER_SUPPORT_IMPUTATION'
+CENSOR_ENDPOINTS={'selected_settlement_surplus_cost2_delay1000','maker_join10_minus_join5_settlement_net_cost2'}
+PROTOCOL_BOOTSTRAP_SEED={V5_PROTOCOL_ID:20260908,V6_PROTOCOL_ID:20260912}
+
 
 def digest(value):
     return hashlib.sha256(json.dumps(value,sort_keys=True,separators=(',',':'),allow_nan=False).encode()).hexdigest()
+
+
+def _validate_confirmatory_censoring(protocol_id,censor):
+    if protocol_id not in (V5_PROTOCOL_ID,V6_PROTOCOL_ID):
+        if censor is not None:raise ValueError('profit_protocol:censoring_requires_registered_protocol')
+        return
+    caps=censor.get('endpoint_max_censor_fraction') if isinstance(censor,dict) else None
+    if (not isinstance(censor,dict) or censor.get('mode')!=WORST_CASE_CENSOR_MODE
+            or censor.get('prospective_only') is not True or censor.get('no_censor_dropping') is not True
+            or censor.get('terminal_records_required') is not True or censor.get('verified_settlements_required') is not True
+            or not isinstance(caps,dict) or set(caps)!=CENSOR_ENDPOINTS
+            or any(isinstance(v,bool) or not isinstance(v,(int,float)) or float(v)!=0.05 for v in caps.values())
+            or censor.get('missing_terminal_record_policy')!='FAIL_CLOSED_NOT_A_CENSOR'
+            or censor.get('missing_settlement_policy')!='FAIL_CLOSED_NOT_A_CENSOR'):
+        raise ValueError('profit_protocol:confirmatory_censoring_identity')
+
+
+def _validate_v6_maker(maker):
+    if (maker.get('anchor')!='FIRST_PROSPECTIVELY_ELIGIBLE_CANONICAL_MAKER_ORDER_PER_CONTRACT'
+            or maker.get('anchor_eligibility_semantics')!='ARRIVAL_TIME_ONLY_NO_FUTURE_FILL_MARKOUT_OR_SETTLEMENT'
+            or maker.get('anchor_skip_audit_required') is not True
+            or maker.get('anchor_requires_valid_arrival_book') is not True
+            or maker.get('anchor_requires_continuous_lineage') is not True
+            or maker.get('anchor_requires_fresh_features') is not True):
+        raise ValueError('profit_protocol:v6_maker_anchor_identity')
+    wait=maker.get('anchor_eligibility_wait_ms')
+    age=maker.get('maximum_feature_age_ms')
+    if (isinstance(wait,bool) or not isinstance(wait,int) or not 100<=wait<=5000
+            or isinstance(age,bool) or not isinstance(age,int) or not 1<=age<=1000):
+        raise ValueError('profit_protocol:v6_maker_anchor_timing')
+
 
 def validate(protocol):
     if (protocol.get('schema')!='polymarket_v7_profit_experiment_protocol_v1'
@@ -19,6 +53,7 @@ def validate(protocol):
             or protocol.get('real_order_submission') is not False
             or protocol.get('execution_authority')!='ZERO_AUTHORITY_RESEARCH_ONLY'):
         raise ValueError('profit_protocol:authority')
+    protocol_id=protocol.get('protocol_id')
     signal=protocol['signal'];maker=protocol['maker'];inference=protocol['inference']
     for edges in (signal['margin_edges'],signal['tte_edges_seconds']):
         if len(edges)<2 or any(isinstance(v,bool) or not isinstance(v,(int,float)) for v in edges) or sorted(set(edges))!=edges:
@@ -33,10 +68,12 @@ def validate(protocol):
         raise ValueError('profit_protocol:execution_boundaries')
     if [(x.get('id'),x.get('placement'),x.get('lifetime_ms')) for x in maker['arms']] != [('JOIN_5S','JOIN',5000),('FLOW_JOIN_5S','JOIN',5000),('JOIN_10S','JOIN',10000),('IMPROVE1_5S','IMPROVE1',5000)]:
         raise ValueError('profit_protocol:maker_arms')
-    if inference.get('bootstrap_draws')!=20000 or inference.get('bootstrap_seed')!=20260908 or inference.get('minimum_contracts_for_interval')!=12:
+    expected_seed=PROTOCOL_BOOTSTRAP_SEED.get(protocol_id,20260908)
+    if inference.get('bootstrap_draws')!=20000 or inference.get('bootstrap_seed')!=expected_seed or inference.get('minimum_contracts_for_interval')!=12:
         raise ValueError('profit_protocol:inference_identity')
     if inference['automatic_promotion'] is not False or inference['automatic_sizing_change'] is not False:
         raise ValueError('profit_protocol:no_promotion')
+    if protocol_id==V6_PROTOCOL_ID:_validate_v6_maker(maker)
     if 'confirmatory' in inference:
         confirm=inference['confirmatory']
         duration_hours=confirm.get('duration_hours');legacy_days=confirm.get('calendar_days')
@@ -47,20 +84,9 @@ def validate(protocol):
             or inference.get('temporal_block_contracts')!=[3,6,12]
             or inference.get('minimum_temporal_blocks')!=8 or inference.get('minimum_tail_draws')!=50):
             raise ValueError('profit_protocol:confirmatory_identity')
-        censor=confirm.get('censoring')
-        if protocol.get('protocol_id')==V5_PROTOCOL_ID:
-            caps=censor.get('endpoint_max_censor_fraction') if isinstance(censor,dict) else None
-            if (not isinstance(censor,dict) or censor.get('mode')!=V5_CENSOR_MODE
-                    or censor.get('prospective_only') is not True or censor.get('no_censor_dropping') is not True
-                    or censor.get('terminal_records_required') is not True or censor.get('verified_settlements_required') is not True
-                    or not isinstance(caps,dict) or set(caps)!=V5_CENSOR_ENDPOINTS
-                    or any(isinstance(v,bool) or not isinstance(v,(int,float)) or float(v)!=0.05 for v in caps.values())
-                    or censor.get('missing_terminal_record_policy')!='FAIL_CLOSED_NOT_A_CENSOR'
-                    or censor.get('missing_settlement_policy')!='FAIL_CLOSED_NOT_A_CENSOR'):
-                raise ValueError('profit_protocol:v5_censoring_identity')
-        elif censor is not None:
-            raise ValueError('profit_protocol:censoring_requires_v5')
+        _validate_confirmatory_censoring(protocol_id,confirm.get('censoring'))
     digest(protocol)  # Reject nonfinite JSON.
+
 
 def freeze(path: Path, protocol: dict, code_sha: str, model_hash: str, now_ns: int, *, cohort: dict | None = None):
     validate(protocol)
@@ -95,6 +121,7 @@ def freeze(path: Path, protocol: dict, code_sha: str, model_hash: str, now_ns: i
     try:os.link(temporary,path)  # Publish atomically without replacing a prior identity.
     finally:temporary.unlink()
     return value
+
 
 def bin_index(value,edges):
     for index,(low,high) in enumerate(zip(edges,edges[1:])):
