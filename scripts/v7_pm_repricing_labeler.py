@@ -15,7 +15,7 @@ import time
 from typing import Any
 
 from v7_causal_book import BookTimeline
-from v7_compressed_journal import CompressedJournal
+from v7_compressed_journal import CompressedJournal, journal_rows
 from v7_external_lead_lag_collector import load
 from v7_external_rich_model import logit
 from v7_pm_repricing_common import atomic_json
@@ -87,13 +87,54 @@ class Labeler:
         self.args = args
         self.tail = JsonlTail(args.inference)
         self.book = BookTimeline(args.book_tape, args.model_sha, retention_ms=10_000)
-        self.journal = CompressedJournal(args.output, args.maximum_hot_bytes)
         self.pending: OrderedDict[str, dict[str, Any]] = OrderedDict()
         self.seen: set[str] = set()
+        self.resolved: set[str] = set()
         self.inferences = self.labels = self.censored = self.invalid = 0
         self.timely_labels = self.correct_sign = 0
         self.started_ns = time.time_ns()
         self.last_record: dict[str, Any] | None = None
+        self._restore()
+        self.journal = CompressedJournal(args.output, args.maximum_hot_bytes)
+
+    def _restore(self) -> None:
+        try:
+            for row in journal_rows(self.args.output):
+                if (
+                    not isinstance(row, dict)
+                    or row.get("schema") != SCHEMA
+                    or row.get("runtime_model_sha") != self.args.model_sha
+                    or int(row.get("horizon_ms") or 0) != self.args.horizon_ms
+                ):
+                    continue
+                origin_id = str(row.get("origin_id") or "")
+                if not origin_id or origin_id in self.resolved:
+                    continue
+                self.resolved.add(origin_id)
+                self.seen.add(origin_id)
+                if row.get("state") == "OBSERVED":
+                    self.labels += 1
+                    self.correct_sign += int(row.get("prediction_sign_correct") is True)
+                    self.timely_labels += int(row.get("latency_gate_pass") is True)
+                else:
+                    self.censored += 1
+                self.last_record = row
+        except (OSError, ValueError, TypeError):
+            pass
+        try:
+            for row in journal_rows(self.args.inference):
+                if not valid_inference(row, self.args.model_sha, self.args.horizon_ms):
+                    continue
+                origin_id = str(row["origin_id"])
+                if origin_id in self.resolved or origin_id in self.pending:
+                    continue
+                self.seen.add(origin_id)
+                self.pending[origin_id] = row
+                if len(self.pending) > 20_000:
+                    self.pending.popitem(last=False)
+        except (OSError, ValueError, TypeError):
+            pass
+        self.inferences = len(self.resolved) + len(self.pending)
 
     def ingest(self) -> None:
         for row in self.tail.poll():
@@ -101,7 +142,7 @@ class Labeler:
                 self.invalid += 1
                 continue
             origin_id = str(row["origin_id"])
-            if origin_id in self.seen:
+            if origin_id in self.seen or origin_id in self.pending:
                 continue
             self.seen.add(origin_id)
             self.inferences += 1
@@ -185,6 +226,7 @@ class Labeler:
                 self.correct_sign += int(sign_correct)
                 self.timely_labels += int(row.get("latency_gate_pass") is True)
             self.journal.append(record)
+            self.resolved.add(origin_id)
             self.last_record = record
             del self.pending[origin_id]
 
@@ -205,6 +247,7 @@ class Labeler:
             "censored_labels": self.censored,
             "pending": len(self.pending),
             "invalid_inference_rows": self.invalid,
+            "restart_restored_labels": len(self.resolved),
             "label_coverage": self.labels / resolved if resolved else None,
             "timely_inference_fraction_among_labels": self.timely_labels / self.labels if self.labels else None,
             "sign_accuracy": self.correct_sign / self.labels if self.labels else None,
