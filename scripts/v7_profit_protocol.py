@@ -8,9 +8,11 @@ from pathlib import Path
 SCHEMA='polymarket_v7_profit_experiment_manifest_v1'
 V5_PROTOCOL_ID='permanent-profit-causes-20260911-v5'
 V6_PROTOCOL_ID='permanent-profit-causes-20260912-v6'
+V6_RESIDUAL_PREFIX='btc-m5-rich-logit-residual-'
 WORST_CASE_CENSOR_MODE='WORST_CASE_LOWER_SUPPORT_IMPUTATION'
 CENSOR_ENDPOINTS={'selected_settlement_surplus_cost2_delay1000','maker_join10_minus_join5_settlement_net_cost2'}
 PROTOCOL_BOOTSTRAP_SEED={V5_PROTOCOL_ID:20260908,V6_PROTOCOL_ID:20260912}
+FIVE_MIN_NS=300_000_000_000
 
 
 def digest(value):
@@ -45,6 +47,18 @@ def _validate_v6_maker(maker):
     if (isinstance(wait,bool) or not isinstance(wait,int) or not 100<=wait<=5000
             or isinstance(age,bool) or not isinstance(age,int) or not 1<=age<=1000):
         raise ValueError('profit_protocol:v6_maker_anchor_timing')
+
+
+def _validate_v6_signal_and_replication(signal,confirm):
+    if (signal.get('required_probability_model_id_prefix')!=V6_RESIDUAL_PREFIX
+            or signal.get('required_model_semantics')!='POLYMARKET_LOGIT_OFFSET_PLUS_EXTERNAL_RESIDUAL'):
+        raise ValueError('profit_protocol:v6_residual_model_identity')
+    if (confirm.get('replication_count')!=3
+            or confirm.get('replication_schedule')!='THREE_CONTIGUOUS_NONOVERLAPPING_WINDOWS_SAME_FROZEN_MODEL'
+            or confirm.get('same_frozen_model_across_replications') is not True
+            or confirm.get('retraining_between_replications') is not False
+            or confirm.get('replication_results_pooled_for_primary_claim') is not False):
+        raise ValueError('profit_protocol:v6_replication_identity')
 
 
 def validate(protocol):
@@ -84,26 +98,34 @@ def validate(protocol):
             or inference.get('temporal_block_contracts')!=[3,6,12]
             or inference.get('minimum_temporal_blocks')!=8 or inference.get('minimum_tail_draws')!=50):
             raise ValueError('profit_protocol:confirmatory_identity')
+        if protocol_id==V6_PROTOCOL_ID:_validate_v6_signal_and_replication(signal,confirm)
         _validate_confirmatory_censoring(protocol_id,confirm.get('censoring'))
     digest(protocol)  # Reject nonfinite JSON.
 
 
-def freeze(path: Path, protocol: dict, code_sha: str, model_hash: str, now_ns: int, *, cohort: dict | None = None):
+def freeze(path: Path, protocol: dict, code_sha: str, model_hash: str, now_ns: int, *, cohort: dict | None = None, forward_start_ns: int | None = None):
     validate(protocol)
     for value,length in ((code_sha,40),(model_hash,64)):
         if len(value)!=length or any(c not in '0123456789abcdef' for c in value):
             raise ValueError('profit_protocol:exact_identity')
+    if forward_start_ns is not None:
+        if (isinstance(forward_start_ns,bool) or not isinstance(forward_start_ns,int)
+                or forward_start_ns<=0 or forward_start_ns%FIVE_MIN_NS!=0):
+            raise ValueError('profit_protocol:forward_start_boundary')
     identity={'protocol_sha256':digest(protocol),'code_sha':code_sha,'frozen_model_hash':model_hash}
     if cohort is not None:identity['cohort_identity']=cohort
     if path.exists():
         existing=json.loads(path.read_text())
         if existing.get('schema')!=SCHEMA or any(existing.get(k)!=v for k,v in identity.items()):
             raise ValueError('profit_protocol:immutable_identity_changed')
+        if forward_start_ns is not None and existing.get('forward_start_ns')!=forward_start_ns:
+            raise ValueError('profit_protocol:immutable_forward_start_changed')
         if digest({k:v for k,v in existing.items() if k!='manifest_sha256'})!=existing.get('manifest_sha256'):
             raise ValueError('profit_protocol:manifest_hash_mismatch')
         return existing
+    start=forward_start_ns if forward_start_ns is not None else ((now_ns//FIVE_MIN_NS)+1)*FIVE_MIN_NS
     value={'schema':SCHEMA,**identity,'protocol':protocol,'created_ns':now_ns,
-        'forward_start_ns':((now_ns//300_000_000_000)+1)*300_000_000_000,
+        'forward_start_ns':start,
         'paper_only':True,'authenticated_execution':False,'real_order_submission':False,
         'execution_authority':'ZERO_AUTHORITY_RESEARCH_ONLY'}
     confirm=protocol['inference'].get('confirmatory')
