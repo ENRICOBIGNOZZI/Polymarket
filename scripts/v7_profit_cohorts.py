@@ -10,7 +10,7 @@ import json
 from pathlib import Path
 import time
 from v7_profit_experiments import LedgerTail, AUTH, atomic
-from v7_profit_experiments_v6 import ProspectiveProfitExperiments
+from v7_prospective_profit_experiments import ProspectiveProfitExperiments
 from v7_profit_protocol import freeze, digest
 from v7_evidence_store import immutable, canonical
 
