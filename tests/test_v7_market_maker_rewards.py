@@ -229,6 +229,7 @@ class MakerRewardSelectorTests(unittest.TestCase):
             _, selection_cfg, _, _ = rewards._validated_config(
                 ROOT / "config" / "v7_professional_market_maker.json"
             )
+            selection_cfg["settlement_anchor"]["execution_authority_enabled"] = True
             def request(url: str, *, timeout: float = 4.0):
                 token = "btc-yes" if "btc-yes" in url else "btc-no"
                 return _anchor_book(
@@ -262,6 +263,40 @@ class MakerRewardSelectorTests(unittest.TestCase):
         self.assertEqual(yes["best_ask"], 0.51)
         self.assertEqual(result["control_exploration_market_count"], 1)
 
+    def test_default_policy_keeps_settlement_anchor_observation_only(self) -> None:
+        from tempfile import TemporaryDirectory
+        now_mono = 12_000_000
+        snapshot = _anchor_snapshot([_observation_row(i) for i in range(40)])
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            universe = _universe(
+                root / "current.json", timestamp_ms=1_000_000,
+                markets=[_anchor_universe_row()],
+            )
+            fair = root / "fair.json"
+            fair.write_text(json.dumps(_anchor_fair_status(now_mono=now_mono)), encoding="utf-8")
+            model = _anchor_execution_model(root / "model.json")
+            _, selection_cfg, _, _ = rewards._validated_config(
+                ROOT / "config" / "v7_professional_market_maker.json"
+            )
+            def request(url: str, *, timeout: float = 4.0):
+                token = "btc-yes" if "btc-yes" in url else "btc-no"
+                return _anchor_book(
+                    token, bid=0.50 if token == "btc-yes" else 0.49,
+                    ask=0.51 if token == "btc-yes" else 0.50,
+                )
+            result = rewards._inject_settlement_anchor(
+                snapshot, fair_status_path=fair, universe_path=universe,
+                execution_model_path=model, selection_cfg=selection_cfg,
+                model_sha=SHA, now_ms=1_000_000, now_monotonic_ns=now_mono,
+                request_fn=request,
+            )
+        anchor_row = next(row for row in result["markets"] if row.get("settlement_anchor") is True)
+        self.assertEqual(result["settlement_anchor_state"], "OBSERVATION_ONLY_EXECUTION_DISABLED")
+        self.assertFalse(result["settlement_anchor_authorized"])
+        self.assertEqual(anchor_row["authorized_execution_cells"], [])
+        self.assertFalse(anchor_row["control_exploration_authorized"])
+
     def test_settlement_anchor_uses_verified_binding_when_generic_universe_filters_market(self) -> None:
         from tempfile import TemporaryDirectory
         now_mono = 15_000_000
@@ -275,6 +310,7 @@ class MakerRewardSelectorTests(unittest.TestCase):
             _, selection_cfg, _, _ = rewards._validated_config(
                 ROOT / "config" / "v7_professional_market_maker.json"
             )
+            selection_cfg["settlement_anchor"]["execution_authority_enabled"] = True
             calls = 0
             def request(url: str, *, timeout: float = 4.0):
                 nonlocal calls
@@ -374,6 +410,7 @@ class MakerRewardSelectorTests(unittest.TestCase):
             fair = root / "fair.json"; fair.write_text(json.dumps(_anchor_fair_status(now_mono=now_mono)))
             model = _anchor_execution_model(root / "model.json")
             _, selection_cfg, _, _ = rewards._validated_config(ROOT / "config" / "v7_professional_market_maker.json")
+            selection_cfg["settlement_anchor"]["execution_authority_enabled"] = True
             def request(url: str, *, timeout: float = 4.0):
                 token = "btc-yes" if "btc-yes" in url else "btc-no"
                 return _anchor_book(token, bid=0.50 if token == "btc-yes" else 0.49,
@@ -481,6 +518,21 @@ class MakerRewardSelectorTests(unittest.TestCase):
             actual["durable_exact_cell_evidence"]["role"],
             "RANKING_ONLY_NO_EXECUTION_OR_RISK_AUTHORITY",
         )
+
+    def test_flow_first_policy_does_not_authorize_zero_flow_control(self) -> None:
+        rows = [{
+            "market_id": "quiet", "yes_token": "quiet-yes",
+            "selection_score": 1.0, "quote_opportunities": [],
+            "authorized_execution_cells": [],
+        }]
+        count = rewards._authorize_control_cells(
+            rows, maximum_markets=5, minimum_prints_30s=1,
+            maximum_last_side_age_ms=30_000,
+            allow_zero_flow_fallback=False,
+        )
+        self.assertEqual(count, 0)
+        self.assertEqual(rows[0]["authorized_execution_cells"], [])
+        self.assertFalse(rows[0].get("control_exploration_authorized", False))
 
     def test_cold_control_moves_to_untried_exact_cell_after_no_flow(self) -> None:
         rows = [
@@ -1212,16 +1264,9 @@ class MakerRewardSelectorTests(unittest.TestCase):
         self.assertEqual(snapshot["cold_start_maximum_markets"], 40)
         self.assertEqual(snapshot["markets"][0]["side_mode"], "STABLE_SPREAD_EXPLORATION")
         self.assertEqual(snapshot["markets"][0]["quote_opportunities"], [])
-        self.assertEqual(snapshot["authorized_execution_cell_count"], 1)
-        self.assertEqual(snapshot["control_exploration_cell_count"], 1)
-        cell = snapshot["markets"][0]["authorized_execution_cells"][0]
-        expected = rewards._control_exploration_cell(snapshot["markets"][0])
-        for key, value in expected.items():
-            self.assertEqual(cell[key], value)
-        self.assertEqual(
-            cell["control_selection_reason"],
-            "MINIMUM_EXACT_CELL_TERMINAL_ATTEMPTS",
-        )
+        self.assertEqual(snapshot["authorized_execution_cell_count"], 0)
+        self.assertEqual(snapshot["control_exploration_cell_count"], 0)
+        self.assertEqual(snapshot["markets"][0]["authorized_execution_cells"], [])
         status = rewards.selector_status(snapshot)
         self.assertTrue(status["ready"])
         self.assertEqual(status["state"], "OPERATIONAL_FALLBACK")
@@ -1248,6 +1293,7 @@ class MakerRewardSelectorTests(unittest.TestCase):
             _, selection_cfg, capacity_cfg, capacity = rewards._validated_config(
                 ROOT / "config" / "v7_professional_market_maker.json"
             )
+            selection_cfg["recent_flow"]["zero_flow_execution_fallback_enabled"] = True
             snapshot = rewards._fallback_snapshot(
                 universe, selection_cfg, capacity_cfg, capacity,
                 model_sha=SHA, primary_error="cold-start", now_ms=now_ms,
