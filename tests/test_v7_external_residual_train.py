@@ -1,4 +1,3 @@
-import importlib.util
 import sys
 import unittest
 from pathlib import Path
@@ -7,7 +6,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "scripts"))
 
 from v7_external_residual_train import train_residual
-from v7_external_rich_model import FEATURE_NAMES
+from v7_external_rich_model import FEATURE_NAMES, MODEL_PREFIX
 from v7_external_rich_train import fit, score
 
 
@@ -65,6 +64,8 @@ class ResidualOverlayTest(unittest.TestCase):
         )
         self.assertEqual(artifact.parameters["offset"], "market")
         self.assertTrue(artifact.parameters["residual_only"])
+        self.assertTrue(artifact.model_version.startswith(MODEL_PREFIX + "residual-"))
+        self.assertEqual(report["model_version"], artifact.model_version)
         self.assertEqual(report["selected_offset"], "market")
         self.assertEqual(artifact.economic_replay["execution_authority"], "ZERO_AUTHORITY_RESEARCH_ONLY")
         self.assertFalse(report["automatic_promotion"])
