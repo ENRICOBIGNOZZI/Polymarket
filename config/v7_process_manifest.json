@@ -402,7 +402,8 @@
       "inputs": [
         "universe/current.json",
         "market_data/live_trade_flow.json",
-        "external_fair/status.json"
+        "external_fair/status.json",
+        "micro_maker/fillability_flow_snapshot.json"
       ],
       "launcher_log": "micro_maker/reward_selection.log",
       "outputs": [

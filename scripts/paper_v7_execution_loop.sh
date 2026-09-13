@@ -645,6 +645,7 @@ v7_register_child "$!"
       --allocation "$ALLOC/micro_maker.json" \
       --execution-model "$MAKER_RESEARCH_MODEL" \
       --settlement-fair-status "$RUN_ROOT/external_fair/status.json" \
+      --anchor-flow "$RUN_ROOT/micro_maker/fillability_flow_snapshot.json" \
       --model-sha "$SHA" \
       --event-log "$RUN_ROOT/micro_maker/reward_selection.events.jsonl" \
       >> "$RUN_ROOT/micro_maker/reward_selection.log" 2>&1 || true

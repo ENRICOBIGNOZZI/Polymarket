@@ -540,6 +540,207 @@ def _decayed_opposite_print_rate(
     return max(prints_10m / 600.0, max(0, prints_30s) / 30.0) * freshness
 
 
+ANCHOR_FLOW_SCHEMA = "polymarket_v7_maker_fillability_flow_snapshot_v1"
+
+
+def _anchor_observed_flow_authority(
+    path: Path | None, *, market_id: str, yes_token: str, no_token: str,
+    books: dict[str, dict[str, Any]], selection_cfg: dict[str, Any],
+    model_sha: str, now_ms: int,
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]], dict[str, Any]]:
+    """Build exact BTC-M5 flow authority from the zero-authority WS observer."""
+    if path is None or not path.is_file():
+        return [], [], {}
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return [], [], {}
+    flow_cfg = selection_cfg.get("recent_flow") if isinstance(
+        selection_cfg.get("recent_flow"), dict) else {}
+    anchor_cfg = selection_cfg.get("settlement_anchor") if isinstance(
+        selection_cfg.get("settlement_anchor"), dict) else {}
+    max_age_ms = max(1_000, int(float(
+        flow_cfg.get("maximum_tape_age_seconds", 30.0)) * 1_000.0))
+    age_ms = now_ms - int(payload.get("timestamp_ms") or 0)
+    if (
+        payload.get("schema") != ANCHOR_FLOW_SCHEMA
+        or payload.get("model_sha") != model_sha
+        or payload.get("paper_only") is not True
+        or payload.get("authenticated_execution") is not False
+        or payload.get("real_order_submission") is not False
+        or payload.get("execution_authority") != "ZERO_AUTHORITY_RESEARCH_ONLY"
+        or payload.get("evidence_complete") is not True
+        or age_ms < -5_000 or age_ms > max_age_ms
+        or anchor_cfg.get("causal_flow_authority_enabled") is not True
+    ):
+        return [], [], {}
+    valid_tokens = {yes_token, no_token}
+    rows = {
+        str(row.get("token_id") or ""): row
+        for row in payload.get("rows", [])
+        if isinstance(row, dict)
+        and str(row.get("market_id") or "") == market_id
+        and str(row.get("token_id") or "") in valid_tokens
+    }
+    if set(rows) != valid_tokens:
+        return [], [], {}
+    minimum_2m = max(1, int(flow_cfg.get("minimum_side_prints_2m", 2)))
+    minimum_10m = max(1, int(flow_cfg.get("minimum_side_prints_10m", 1)))
+    maximum_side_age_ms = max(1_000, int(float(
+        flow_cfg.get("maximum_last_side_age_seconds", 60.0)) * 1_000.0))
+    quote_horizon = max(0.1, float(
+        flow_cfg.get("selection_quote_horizon_seconds", 5.0)))
+    quote_shares = max(1e-6, float(flow_cfg.get("selection_quote_shares", 5.0)))
+    half_life = max(0.1, float(
+        flow_cfg.get("selection_flow_half_life_seconds", 30.0)))
+    minimum_fill = min(1.0, max(0.0, float(
+        flow_cfg.get("rotation_min_projected_fill_probability", 0.004))))
+    quotes: list[dict[str, Any]] = []
+    cells: list[dict[str, Any]] = []
+    buy_counts = [0, 0, 0, 0]
+    sell_counts = [0, 0, 0, 0]
+    buy_shares_10m = 0.0
+    sell_shares_10m_total = 0.0
+    buy_ages: list[int] = []
+    sell_ages: list[int] = []
+    for outcome, token in (("YES", yes_token), ("NO", no_token)):
+        row = rows[token]
+        book = books.get(token)
+        if not isinstance(book, dict):
+            return [], [], {}
+        sell_5s = int(row.get("sell_prints_5s") or 0)
+        sell_30s = int(row.get("sell_prints_30s") or 0)
+        sell_2m = int(row.get("sell_prints_120s") or 0)
+        sell_10m = int(row.get("sell_prints_600s") or 0)
+        sell_shares_2m = max(0.0, finite(row.get("sell_shares_120s")))
+        sell_shares_10m = max(0.0, finite(row.get("sell_shares_600s")))
+        last_sell = int(row.get("last_sell_receive_ms") or 0)
+        sell_age = now_ms - last_sell if last_sell > 0 else -1
+        if sell_age >= 0:
+            sell_ages.append(sell_age)
+        flow_rate, freshness = _decayed_opposite_flow_rate(
+            shares_10m=sell_shares_10m,
+            prints_10m=sell_10m,
+            prints_30s=sell_30s,
+            age_ms=sell_age,
+            half_life_seconds=half_life,
+        )
+        print_rate = _decayed_opposite_print_rate(
+            prints_10m=sell_10m,
+            prints_30s=sell_30s,
+            age_ms=sell_age,
+            half_life_seconds=half_life,
+        )
+        expected_prints = print_rate * quote_horizon
+        expected_shares = flow_rate * quote_horizon
+        reach = 1.0 - math.exp(-expected_prints) if expected_prints > 0.0 else 0.0
+        conditional = expected_shares / reach if reach > 1e-12 else 0.0
+        queue_ahead = max(0.0, float(book["best_bid_size"]))
+        join_queue = min(
+            1.0, conditional / max(1e-9, queue_ahead + quote_shares))
+        join_fill = reach * join_queue
+        tick = float(book["tick_size"])
+        inside_ticks = max(0, int(round(
+            (float(book["best_ask"]) - float(book["best_bid"])) / tick)) - 1)
+        improve_available = inside_ticks >= 1
+        improve_fill = reach if improve_available else 0.0
+        fresh = (
+            sell_2m >= minimum_2m
+            and sell_10m >= minimum_10m
+            and 0 <= sell_age <= maximum_side_age_ms
+        )
+        actions: list[dict[str, Any]] = []
+        for action, queue_probability, fill_probability, available in (
+            ("JOIN", join_queue, join_fill, True),
+            ("IMPROVE1", 1.0, improve_fill, improve_available),
+        ):
+            if fresh and available and fill_probability + 1e-12 >= minimum_fill:
+                authority = {
+                    "action": action,
+                    "authority_basis": "FRESH_OPPOSITE_FLOW",
+                    "projected_flow_reach_probability": reach,
+                    "projected_queue_depletion_probability": queue_probability,
+                    "projected_fill_probability": fill_probability,
+                    "fill_probability_source": "ANCHOR_CAUSAL_WS_FLOW",
+                }
+                actions.append(authority)
+                cells.append({
+                    "outcome": outcome,
+                    "token_id": token,
+                    "quote_side": "BUY",
+                    **authority,
+                })
+        quotes.append({
+            "outcome": outcome,
+            "token_id": token,
+            "quote_side": "BUY",
+            "required_aggressor_side": "SELL",
+            "book_evidence_valid": True,
+            "opposite_flow_is_fresh": fresh,
+            "opposite_prints_30s": sell_30s,
+            "opposite_prints_2m": sell_2m,
+            "opposite_prints_10m": sell_10m,
+            "opposite_shares_2m": sell_shares_2m,
+            "opposite_shares_10m": sell_shares_10m,
+            "last_opposite_flow_age_ms": sell_age,
+            "opposite_flow_freshness": freshness,
+            "opposite_flow_shares_per_second": flow_rate,
+            "opposite_flow_prints_per_second": print_rate,
+            "expected_opposite_prints_at_horizon": expected_prints,
+            "expected_opposite_shares_at_horizon": expected_shares,
+            "conditional_opposite_shares_given_reach": conditional,
+            "tick_size": tick,
+            "best_bid": float(book["best_bid"]),
+            "best_ask": float(book["best_ask"]),
+            "queue_ahead_shares": queue_ahead,
+            "inside_ticks": inside_ticks,
+            "improve1_available": improve_available,
+            "projected_flow_reach_probability": reach,
+            "projected_join_queue_depletion_probability": join_queue,
+            "projected_join_fill_probability": join_fill,
+            "projected_improve1_fill_probability": improve_fill,
+            "projected_best_fill_probability": max(join_fill, improve_fill),
+            "authorized_actions": actions,
+            "flow_source": "ANCHOR_CAUSAL_WS_FLOW",
+        })
+        sell_counts[0] += sell_5s
+        sell_counts[1] += sell_30s
+        sell_counts[2] += sell_2m
+        sell_counts[3] += sell_10m
+        sell_shares_10m_total += sell_shares_10m
+        for idx, key in enumerate((
+            "buy_prints_5s", "buy_prints_30s", "buy_prints_120s", "buy_prints_600s")):
+            buy_counts[idx] += int(row.get(key) or 0)
+        buy_shares_10m += max(0.0, finite(row.get("buy_shares_600s")))
+        last_buy = int(row.get("last_buy_receive_ms") or 0)
+        if last_buy > 0:
+            buy_ages.append(now_ms - last_buy)
+    fields = {
+        "recent_prints": buy_counts[3] + sell_counts[3],
+        "recent_unique_transactions": 0,
+        "recent_share_volume": buy_shares_10m + sell_shares_10m_total,
+        "recent_notional_usd": 0.0,
+        "recent_flow_to_liquidity": 0.0,
+        "recent_last_trade_age_ms": min(
+            [age for age in buy_ages + sell_ages if age >= 0], default=-1),
+        "recent_buy_prints_5s": buy_counts[0],
+        "recent_buy_prints_30s": buy_counts[1],
+        "recent_buy_prints_2m": buy_counts[2],
+        "recent_buy_prints_10m": buy_counts[3],
+        "recent_buy_share_volume_10m": buy_shares_10m,
+        "recent_buy_notional_usd_10m": 0.0,
+        "recent_last_buy_age_ms": min(buy_ages) if buy_ages else -1,
+        "recent_sell_prints_5s": sell_counts[0],
+        "recent_sell_prints_30s": sell_counts[1],
+        "recent_sell_prints_2m": sell_counts[2],
+        "recent_sell_prints_10m": sell_counts[3],
+        "recent_sell_share_volume_10m": sell_shares_10m_total,
+        "recent_sell_notional_usd_10m": 0.0,
+        "recent_last_sell_age_ms": min(sell_ages) if sell_ages else -1,
+    }
+    return cells, quotes, fields
+
+
 def request_json(url: str, *, timeout: float = 20.0) -> Any:
     req = urllib.request.Request(url, headers={"User-Agent": "polymarket-v7-maker/1"})
     with urllib.request.urlopen(req, timeout=timeout) as response:
@@ -630,6 +831,7 @@ def _inject_settlement_anchor(
     fair_status_path: Path | None,
     universe_path: Path | None,
     execution_model_path: Path | None,
+    anchor_flow_path: Path | None = None,
     selection_cfg: dict[str, Any],
     model_sha: str,
     now_ms: int,
@@ -648,6 +850,7 @@ def _inject_settlement_anchor(
     result["settlement_anchor_state"] = "DISABLED"
     result["settlement_anchor_authorized"] = False
     result["settlement_anchor_preserved_flow_authority"] = False
+    result["settlement_anchor_observed_flow_authority"] = False
     result["settlement_anchor_market_id"] = ""
     result["settlement_anchor_evicted_market_id"] = ""
     result["settlement_anchor_fill_probability_source"] = ""
@@ -893,6 +1096,16 @@ def _inject_settlement_anchor(
     preserved_cells, preserved_quotes, preserved_flow_fields = _preserved_anchor_flow(
         existing_row, yes_token=yes_token, no_token=no_token,
     )
+    observed_cells, observed_quotes, observed_flow_fields = _anchor_observed_flow_authority(
+        anchor_flow_path,
+        market_id=market_id,
+        yes_token=yes_token,
+        no_token=no_token,
+        books=books,
+        selection_cfg=selection_cfg,
+        model_sha=model_sha,
+        now_ms=now_ms,
+    )
     existing_controls = sum(
         1 for row in result.get("markets", [])
         if isinstance(row, dict) and row.get("control_exploration_authorized") is True
@@ -904,6 +1117,7 @@ def _inject_settlement_anchor(
     )
     can_authorize = (
         not preserved_cells
+        and not observed_cells
         and anchor_cfg.get("execution_authority_enabled") is True
         and existing_controls < maximum_controls
     )
@@ -922,12 +1136,19 @@ def _inject_settlement_anchor(
     exact_evidence = _load_exact_cell_evidence(
         execution_model_path, model_sha=model_sha,
     )
-    if preserved_cells:
+    flow_cells: dict[tuple[str, str, str, str], dict[str, Any]] = {}
+    for flow_cell in preserved_cells + observed_cells:
+        identity = _exact_cell_identity(
+            market_id, flow_cell.get("token_id"),
+            flow_cell.get("action"), flow_cell.get("quote_side"),
+        )
+        flow_cells[identity] = flow_cell
+    if flow_cells:
         execution_cells = [
             _annotate_exact_cell_evidence(
-                {"market_id": market_id}, preserved, exact_evidence
+                {"market_id": market_id}, flow_cell, exact_evidence
             )
-            for preserved in preserved_cells
+            for _, flow_cell in sorted(flow_cells.items())
         ]
     elif can_authorize:
         execution_cells = [
@@ -937,11 +1158,37 @@ def _inject_settlement_anchor(
         ]
     else:
         execution_cells = []
-    merged_quote_opportunities = quote_opportunities + preserved_quotes
+    quote_by_identity: dict[tuple[str, str, str], dict[str, Any]] = {}
+    for quote in quote_opportunities:
+        identity = (
+            str(quote.get("token_id") or ""),
+            str(quote.get("outcome") or "").upper(),
+            str(quote.get("quote_side") or "").upper(),
+        )
+        quote_by_identity[identity] = dict(quote)
+    for quote in preserved_quotes + observed_quotes:
+        identity = (
+            str(quote.get("token_id") or ""),
+            str(quote.get("outcome") or "").upper(),
+            str(quote.get("quote_side") or "").upper(),
+        )
+        quote_by_identity[identity] = {
+            **quote_by_identity.get(identity, {}), **quote,
+        }
+    merged_quote_opportunities = [
+        quote_by_identity[key] for key in sorted(quote_by_identity)
+    ]
+    anchor_best_fill_probability = max(
+        (finite(quote.get("projected_best_fill_probability"), 0.0)
+         for quote in merged_quote_opportunities),
+        default=fill_probability,
+    )
     preserved_control = bool(preserved_cells) and bool(
         isinstance(existing_row, dict)
         and existing_row.get("control_exploration_authorized") is True
     )
+    anchor_flow_fields = dict(preserved_flow_fields)
+    anchor_flow_fields.update(observed_flow_fields)
     anchor_row = {
         "condition_id": str(identity_row.get("condition_id") or ""),
         "market_id": market_id,
@@ -962,7 +1209,7 @@ def _inject_settlement_anchor(
         "total_daily_rate": 0.0,
         "reward_intensity": 0.0,
         "selection_score": edge,
-        "best_projected_fill_probability": fill_probability,
+        "best_projected_fill_probability": anchor_best_fill_probability,
         "bid_opportunity_score": edge,
         "ask_opportunity_score": 0.0,
         "bilateral_market_making_score": 0.0,
@@ -971,7 +1218,8 @@ def _inject_settlement_anchor(
         "side_mode": "SETTLEMENT_ANCHOR",
         "quote_opportunities": merged_quote_opportunities,
         "execution_role": (
-            str(existing_row.get("execution_role") or "FLOW_AUTHORIZED")
+            "FLOW_AUTHORIZED" if observed_cells
+            else str(existing_row.get("execution_role") or "FLOW_AUTHORIZED")
             if preserved_cells and isinstance(existing_row, dict)
             else "SETTLEMENT_ANCHOR_CONTROL" if can_authorize
             else "SETTLEMENT_ANCHOR_OBSERVATION"
@@ -1002,7 +1250,9 @@ def _inject_settlement_anchor(
         "recent_last_sell_age_ms": -1,
         "settlement_anchor": True,
         "settlement_anchor_fair_probability": fair_yes,
-        "settlement_anchor_fill_probability_source": fill_source,
+        "settlement_anchor_fill_probability_source": (
+            "ANCHOR_CAUSAL_WS_FLOW" if observed_cells else fill_source
+        ),
         "settlement_anchor_research_only": True,
         "settlement_anchor_real_money_authority": False,
         "settlement_anchor_identity_source": identity_source,
@@ -1010,7 +1260,7 @@ def _inject_settlement_anchor(
         "fees_enabled": market.get("fees_enabled") is True,
         "fees_enabled_explicit": market.get("fees_enabled_explicit") is True,
     }
-    anchor_row.update(preserved_flow_fields)
+    anchor_row.update(anchor_flow_fields)
     evicted_market_id = ""
     if existing_index is not None:
         markets[existing_index] = anchor_row
@@ -1049,11 +1299,20 @@ def _inject_settlement_anchor(
         1 for row in markets if isinstance(row, dict)
         and row.get("control_exploration_authorized") is True
     )
+    result["flow_authorized_market_count"] = sum(
+        1 for row in markets if isinstance(row, dict)
+        and any(
+            isinstance(cell, dict)
+            and str(cell.get("authority_basis") or "") in FLOW_EXECUTION_AUTHORITY_BASES
+            for cell in row.get("authorized_execution_cells", [])
+        )
+    )
     result["unused_resource_capacity_markets"] = max(
         0, int(result.get("resource_capacity_markets") or 0) - len(markets)
     )
     result["settlement_anchor_state"] = (
-        "OBSERVATION_WITH_PRESERVED_FLOW_AUTHORITY" if preserved_cells
+        "OBSERVATION_WITH_CAUSAL_FLOW_AUTHORITY" if observed_cells
+        else "OBSERVATION_WITH_PRESERVED_FLOW_AUTHORITY" if preserved_cells
         else "AUTHORIZED" if can_authorize
         else "OBSERVATION_ONLY_EXECUTION_DISABLED"
         if anchor_cfg.get("execution_authority_enabled") is not True
@@ -1061,9 +1320,12 @@ def _inject_settlement_anchor(
     )
     result["settlement_anchor_authorized"] = can_authorize
     result["settlement_anchor_preserved_flow_authority"] = bool(preserved_cells)
+    result["settlement_anchor_observed_flow_authority"] = bool(observed_cells)
     result["settlement_anchor_market_id"] = market_id
     result["settlement_anchor_evicted_market_id"] = evicted_market_id
-    result["settlement_anchor_fill_probability_source"] = fill_source
+    result["settlement_anchor_fill_probability_source"] = (
+        "ANCHOR_CAUSAL_WS_FLOW" if observed_cells else fill_source
+    )
     result["settlement_anchor_identity_source"] = identity_source
     return result
 
@@ -2691,6 +2953,9 @@ def selector_status(
         "settlement_anchor_preserved_flow_authority": (
             candidate.get("settlement_anchor_preserved_flow_authority") is True
         ),
+        "settlement_anchor_observed_flow_authority": (
+            candidate.get("settlement_anchor_observed_flow_authority") is True
+        ),
         "settlement_anchor_market_id": str(candidate.get("settlement_anchor_market_id") or ""),
         "settlement_anchor_fill_probability_source": str(
             candidate.get("settlement_anchor_fill_probability_source") or ""
@@ -2713,6 +2978,7 @@ def main() -> int:
     parser.add_argument("--allocation", type=Path)
     parser.add_argument("--execution-model", type=Path)
     parser.add_argument("--settlement-fair-status", type=Path)
+    parser.add_argument("--anchor-flow", type=Path)
     parser.add_argument("--model-sha", default="")
     parser.add_argument("--deadline-seconds", type=float)
     parser.add_argument("--request-timeout-seconds", type=float)
@@ -2735,6 +3001,7 @@ def main() -> int:
             fair_status_path=args.settlement_fair_status,
             universe_path=args.fallback_universe,
             execution_model_path=args.execution_model,
+            anchor_flow_path=args.anchor_flow,
             selection_cfg=selection_cfg,
             model_sha=args.model_sha.lower(),
             now_ms=int(snapshot.get("timestamp_ms") or time.time_ns() // 1_000_000),

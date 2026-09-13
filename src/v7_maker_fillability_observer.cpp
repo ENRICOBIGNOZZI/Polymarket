@@ -14,6 +14,7 @@
 #include <cmath>
 #include <csignal>
 #include <cstdint>
+#include <deque>
 #include <filesystem>
 #include <fstream>
 #include <iomanip>
@@ -309,6 +310,13 @@ struct TradeEvidence {
 };
 static_assert(std::is_trivially_copyable_v<TradeEvidence>);
 
+struct FlowSample {
+    std::int64_t receive_wall_ms = 0;
+    double shares = 0.0;
+    Side side = Side::None;
+    std::uint64_t connection_epoch = 0;
+};
+
 class ExactWsObserver final {
 public:
     ExactWsObserver(std::vector<SelectedToken> tokens, std::string ws_url,
@@ -327,6 +335,7 @@ public:
         lanes_.resize(max_handle + 1);
         feature_start_ns_.resize(max_handle + 1, 0);
         latest_books_.resize(max_handle + 1);
+        flow_samples_.resize(max_handle + 1);
         for (const auto& token : tokens_) by_handle_[token.instrument_handle] = &token;
         for (const auto& token : tokens_) {
             lanes_[token.instrument_handle] = std::make_unique<pm::v7::maker::MakerInstrumentLane>(1);
@@ -335,6 +344,7 @@ public:
         fs::create_directories(output_dir_);
         evidence_path_ = output_dir_ / "fillability_ws.jsonl";
         status_path_ = output_dir_ / "fillability_ws_status.json";
+        flow_path_ = output_dir_ / "fillability_flow_snapshot.json";
         output_.open(evidence_path_, std::ios::app);
         if (!output_) throw std::runtime_error("cannot open exact-WS fillability evidence file");
         fs::create_directories(output_dir_ / "book_observations");
@@ -410,6 +420,7 @@ public:
         for (std::size_t i=1; i<lanes_.size(); ++i) {
             if (lanes_[i]) *lanes_[i] = pm::v7::maker::MakerInstrumentLane(1);
             feature_start_ns_[i] = 0;
+            flow_samples_[i].clear();
         }
     }
 
@@ -499,6 +510,69 @@ public:
         root["evidence_complete"] = dropped_.load(std::memory_order_relaxed) == 0
             && decoder_failures_.load(std::memory_order_relaxed) == 0;
         atomic_write(status_path_, json::serialize(root) + "\n");
+        write_flow_snapshot(root["timestamp_ms"].as_int64());
+    }
+
+    void write_flow_snapshot(std::int64_t now_ms) {
+        json::array rows;
+        const auto epoch = connection_epoch_.load(std::memory_order_relaxed);
+        for (std::size_t i = 1; i < flow_samples_.size(); ++i) {
+            const auto* token = by_handle_[i];
+            if (!token) continue;
+            auto& samples = flow_samples_[i];
+            while (!samples.empty() && (samples.front().connection_epoch != epoch
+                    || samples.front().receive_wall_ms < now_ms - 600'000)) {
+                samples.pop_front();
+            }
+            std::int64_t last_buy = 0, last_sell = 0, last_receive = 0;
+            std::array<std::uint64_t, 4> buys{}, sells{};
+            double buy_shares_120 = 0.0, buy_shares_600 = 0.0;
+            double sell_shares_120 = 0.0, sell_shares_600 = 0.0;
+            for (const auto& sample : samples) {
+                if (sample.connection_epoch != epoch || sample.receive_wall_ms > now_ms + 5'000) continue;
+                const auto age = now_ms - sample.receive_wall_ms;
+                if (age < 0 || age > 600'000) continue;
+                const std::array<std::int64_t, 4> windows{5'000, 30'000, 120'000, 600'000};
+                auto& counts = sample.side == Side::Buy ? buys : sells;
+                for (std::size_t w = 0; w < windows.size(); ++w) {
+                    if (age <= windows[w]) ++counts[w];
+                }
+                if (sample.side == Side::Buy) {
+                    last_buy = std::max(last_buy, sample.receive_wall_ms);
+                    if (age <= 120'000) buy_shares_120 += sample.shares;
+                    buy_shares_600 += sample.shares;
+                } else if (sample.side == Side::Sell) {
+                    last_sell = std::max(last_sell, sample.receive_wall_ms);
+                    if (age <= 120'000) sell_shares_120 += sample.shares;
+                    sell_shares_600 += sample.shares;
+                }
+                last_receive = std::max(last_receive, sample.receive_wall_ms);
+            }
+            rows.emplace_back(json::object{
+                {"market_id", token->market_id}, {"event_id", token->event_id},
+                {"token_id", token->token_id}, {"connection_epoch", epoch},
+                {"buy_prints_5s", buys[0]}, {"buy_prints_30s", buys[1]},
+                {"buy_prints_120s", buys[2]}, {"buy_prints_600s", buys[3]},
+                {"sell_prints_5s", sells[0]}, {"sell_prints_30s", sells[1]},
+                {"sell_prints_120s", sells[2]}, {"sell_prints_600s", sells[3]},
+                {"buy_shares_120s", buy_shares_120}, {"buy_shares_600s", buy_shares_600},
+                {"sell_shares_120s", sell_shares_120}, {"sell_shares_600s", sell_shares_600},
+                {"last_buy_receive_ms", last_buy}, {"last_sell_receive_ms", last_sell},
+                {"last_receive_ms", last_receive},
+            });
+        }
+        json::object root{
+            {"schema", "polymarket_v7_maker_fillability_flow_snapshot_v1"},
+            {"timestamp_ms", now_ms}, {"model_sha", model_sha_},
+            {"paper_only", true}, {"authenticated_execution", false},
+            {"real_order_submission", false},
+            {"execution_authority", "ZERO_AUTHORITY_RESEARCH_ONLY"},
+            {"observer_session_id", session_id_}, {"connection_epoch", epoch},
+            {"evidence_complete", dropped_.load(std::memory_order_relaxed) == 0
+                && decoder_failures_.load(std::memory_order_relaxed) == 0},
+            {"rows", std::move(rows)},
+        };
+        atomic_write(flow_path_, json::serialize(root) + "\n");
     }
 
 private:
@@ -581,6 +655,12 @@ private:
         event["size"] = micro_shares(row.quantity_microunits);
         event["lineage_continuous"] = row.lineage_continuous != 0;
         output_ << json::serialize(event) << '\n';
+        auto& flow = flow_samples_[row.instrument_handle];
+        flow.push_back(FlowSample{row.receive_wall_ms, micro_shares(row.quantity_microunits),
+                                  row.aggressor_side, row.connection_epoch});
+        while (!flow.empty() && flow.front().receive_wall_ms < row.receive_wall_ms - 600'000) {
+            flow.pop_front();
+        }
         ++events_written_;
         last_exchange_ns_ = std::max(last_exchange_ns_, row.exchange_event_ns);
         last_receive_wall_ms_ = std::max(last_receive_wall_ms_, row.receive_wall_ms);
@@ -595,6 +675,7 @@ private:
     std::vector<std::unique_ptr<pm::v7::maker::MakerInstrumentLane>> lanes_;
     std::vector<std::int64_t> feature_start_ns_;
     std::vector<std::string> latest_books_;
+    std::vector<std::deque<FlowSample>> flow_samples_;
     pm::v7::maker::MakerModelSnapshot feature_model_;
     std::string session_id_;
     std::ofstream book_output_;
@@ -611,6 +692,7 @@ private:
     std::ofstream output_;
     fs::path evidence_path_;
     fs::path status_path_;
+    fs::path flow_path_;
     std::atomic<std::uint64_t> connection_epoch_{1};
     std::atomic<std::uint64_t> dropped_{0};
     std::atomic<std::uint64_t> decoder_failures_{0};
