@@ -5,6 +5,11 @@
   "authenticated_execution": false,
   "real_order_submission": false,
   "execution_authority": "ZERO_AUTHORITY_RESEARCH_ONLY",
+  "lifecycle": {
+    "new_signal_cohorts_enabled": false,
+    "automatic_reopen_on_new_code_sha": false,
+    "status": "RETIRED_AFTER_FAILED_THREE_REPLICATION_PROMOTION_RULE"
+  },
   "signal": {
     "required_probability_model_id_prefix": "btc-m5-rich-logit-residual-",
     "required_model_semantics": "POLYMARKET_LOGIT_OFFSET_PLUS_EXTERNAL_RESIDUAL",
