@@ -229,6 +229,7 @@ class MakerRewardSelectorTests(unittest.TestCase):
             _, selection_cfg, _, _ = rewards._validated_config(
                 ROOT / "config" / "v7_professional_market_maker.json"
             )
+            selection_cfg["settlement_anchor"]["execution_authority_enabled"] = True
             def request(url: str, *, timeout: float = 4.0):
                 token = "btc-yes" if "btc-yes" in url else "btc-no"
                 return _anchor_book(
@@ -262,6 +263,155 @@ class MakerRewardSelectorTests(unittest.TestCase):
         self.assertEqual(yes["best_ask"], 0.51)
         self.assertEqual(result["control_exploration_market_count"], 1)
 
+    def test_default_policy_keeps_settlement_anchor_observation_only(self) -> None:
+        from tempfile import TemporaryDirectory
+        now_mono = 12_000_000
+        snapshot = _anchor_snapshot([_observation_row(i) for i in range(40)])
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            universe = _universe(
+                root / "current.json", timestamp_ms=1_000_000,
+                markets=[_anchor_universe_row()],
+            )
+            fair = root / "fair.json"
+            fair.write_text(json.dumps(_anchor_fair_status(now_mono=now_mono)), encoding="utf-8")
+            model = _anchor_execution_model(root / "model.json")
+            _, selection_cfg, _, _ = rewards._validated_config(
+                ROOT / "config" / "v7_professional_market_maker.json"
+            )
+            def request(url: str, *, timeout: float = 4.0):
+                token = "btc-yes" if "btc-yes" in url else "btc-no"
+                return _anchor_book(
+                    token, bid=0.50 if token == "btc-yes" else 0.49,
+                    ask=0.51 if token == "btc-yes" else 0.50,
+                )
+            result = rewards._inject_settlement_anchor(
+                snapshot, fair_status_path=fair, universe_path=universe,
+                execution_model_path=model, selection_cfg=selection_cfg,
+                model_sha=SHA, now_ms=1_000_000, now_monotonic_ns=now_mono,
+                request_fn=request,
+            )
+        anchor_row = next(row for row in result["markets"] if row.get("settlement_anchor") is True)
+        self.assertEqual(result["settlement_anchor_state"], "OBSERVATION_ONLY_EXECUTION_DISABLED")
+        self.assertFalse(result["settlement_anchor_authorized"])
+        self.assertEqual(anchor_row["authorized_execution_cells"], [])
+        self.assertFalse(anchor_row["control_exploration_authorized"])
+
+    def test_settlement_anchor_preserves_only_existing_fresh_flow_authority(self) -> None:
+        from tempfile import TemporaryDirectory
+        now_mono = 13_000_000
+        flow = _observation_row(0, authorized=True)
+        flow.update({
+            "market_id": "btc5", "condition_id": "c-btc5", "event_id": "e-btc5",
+            "yes_token": "btc-yes", "no_token": "btc-no",
+            "execution_role": "FLOW_AUTHORIZED",
+            "recent_prints": 3, "recent_unique_transactions": 2,
+            "recent_share_volume": 9.0, "recent_notional_usd": 4.5,
+            "recent_flow_to_liquidity": 0.01, "recent_last_trade_age_ms": 250,
+            "recent_buy_prints_5s": 1, "recent_buy_prints_30s": 2,
+            "recent_buy_prints_2m": 3, "recent_buy_prints_10m": 3,
+            "recent_buy_share_volume_10m": 9.0, "recent_buy_notional_usd_10m": 4.5,
+            "recent_last_buy_age_ms": 250, "recent_sell_prints_5s": 0,
+            "recent_sell_prints_30s": 0, "recent_sell_prints_2m": 0,
+            "recent_sell_prints_10m": 0, "recent_sell_share_volume_10m": 0.0,
+            "recent_sell_notional_usd_10m": 0.0, "recent_last_sell_age_ms": -1,
+            "quote_opportunities": [{
+                "outcome": "YES", "token_id": "btc-yes", "quote_side": "BUY",
+                "book_evidence_valid": True, "opposite_flow_is_fresh": True,
+                "opposite_flow_shares_per_second": 0.25, "opposite_prints_2m": 3,
+                "projected_flow_reach_probability": 0.4,
+                "projected_join_queue_depletion_probability": 0.2,
+                "projected_join_fill_probability": 0.08,
+                "projected_improve1_fill_probability": 0.0,
+            }],
+            "authorized_execution_cells": [{
+                "outcome": "YES", "token_id": "btc-yes", "action": "JOIN",
+                "quote_side": "BUY", "authority_basis": "FRESH_OPPOSITE_FLOW",
+                "projected_fill_probability": 0.08,
+            }],
+            "authorized_execution_cell_count": 1,
+        })
+        rows = [flow] + [_observation_row(i) for i in range(1, 40)]
+        snapshot = _anchor_snapshot(rows)
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            universe = _universe(root / "current.json", timestamp_ms=1_000_000,
+                                 markets=[_anchor_universe_row()])
+            fair = root / "fair.json"
+            fair.write_text(json.dumps(_anchor_fair_status(now_mono=now_mono)), encoding="utf-8")
+            model = _anchor_execution_model(root / "model.json")
+            _, selection_cfg, _, _ = rewards._validated_config(
+                ROOT / "config" / "v7_professional_market_maker.json"
+            )
+            def request(url: str, *, timeout: float = 4.0):
+                token = "btc-yes" if "btc-yes" in url else "btc-no"
+                return _anchor_book(token, bid=0.50 if token == "btc-yes" else 0.49,
+                                    ask=0.51 if token == "btc-yes" else 0.50)
+            result = rewards._inject_settlement_anchor(
+                snapshot, fair_status_path=fair, universe_path=universe,
+                execution_model_path=model, selection_cfg=selection_cfg, model_sha=SHA,
+                now_ms=1_000_000, now_monotonic_ns=now_mono, request_fn=request,
+            )
+        anchor_row = next(row for row in result["markets"] if row.get("settlement_anchor") is True)
+        self.assertEqual(result["settlement_anchor_state"], "OBSERVATION_WITH_PRESERVED_FLOW_AUTHORITY")
+        self.assertFalse(result["settlement_anchor_authorized"])
+        self.assertTrue(result["settlement_anchor_preserved_flow_authority"])
+        self.assertEqual(anchor_row["execution_role"], "FLOW_AUTHORIZED")
+        self.assertEqual(anchor_row["recent_prints"], 3)
+        self.assertEqual(anchor_row["authorized_execution_cell_count"], 1)
+        self.assertEqual(anchor_row["authorized_execution_cells"][0]["authority_basis"], "FRESH_OPPOSITE_FLOW")
+        self.assertFalse(any(
+            cell.get("authority_basis") == "SETTLEMENT_ANCHOR_COLD_START_CONTROL"
+            for cell in anchor_row["authorized_execution_cells"]
+        ))
+        flow_quote = next(
+            q for q in anchor_row["quote_opportunities"]
+            if q.get("token_id") == "btc-yes" and q.get("opposite_flow_is_fresh") is True
+        )
+        self.assertEqual(flow_quote["opposite_prints_2m"], 3)
+
+    def test_settlement_anchor_drops_nonfresh_inherited_flow_authority(self) -> None:
+        from tempfile import TemporaryDirectory
+        now_mono = 14_000_000
+        row = _observation_row(0, authorized=True)
+        row.update({
+            "market_id": "btc5", "condition_id": "c-btc5", "event_id": "e-btc5",
+            "yes_token": "btc-yes", "no_token": "btc-no",
+            "quote_opportunities": [{
+                "outcome": "YES", "token_id": "btc-yes", "quote_side": "BUY",
+                "opposite_flow_is_fresh": False,
+            }],
+            "authorized_execution_cells": [{
+                "outcome": "YES", "token_id": "btc-yes", "action": "JOIN",
+                "quote_side": "BUY", "authority_basis": "FRESH_OPPOSITE_FLOW",
+                "projected_fill_probability": 0.08,
+            }],
+        })
+        snapshot = _anchor_snapshot([row] + [_observation_row(i) for i in range(1, 40)])
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            universe = _universe(root / "current.json", timestamp_ms=1_000_000,
+                                 markets=[_anchor_universe_row()])
+            fair = root / "fair.json"
+            fair.write_text(json.dumps(_anchor_fair_status(now_mono=now_mono)), encoding="utf-8")
+            model = _anchor_execution_model(root / "model.json")
+            _, selection_cfg, _, _ = rewards._validated_config(
+                ROOT / "config" / "v7_professional_market_maker.json"
+            )
+            def request(url: str, *, timeout: float = 4.0):
+                token = "btc-yes" if "btc-yes" in url else "btc-no"
+                return _anchor_book(token, bid=0.50 if token == "btc-yes" else 0.49,
+                                    ask=0.51 if token == "btc-yes" else 0.50)
+            result = rewards._inject_settlement_anchor(
+                snapshot, fair_status_path=fair, universe_path=universe,
+                execution_model_path=model, selection_cfg=selection_cfg, model_sha=SHA,
+                now_ms=1_000_000, now_monotonic_ns=now_mono, request_fn=request,
+            )
+        anchor_row = next(row for row in result["markets"] if row.get("settlement_anchor") is True)
+        self.assertEqual(result["settlement_anchor_state"], "OBSERVATION_ONLY_EXECUTION_DISABLED")
+        self.assertFalse(result["settlement_anchor_preserved_flow_authority"])
+        self.assertEqual(anchor_row["authorized_execution_cells"], [])
+
     def test_settlement_anchor_uses_verified_binding_when_generic_universe_filters_market(self) -> None:
         from tempfile import TemporaryDirectory
         now_mono = 15_000_000
@@ -275,6 +425,7 @@ class MakerRewardSelectorTests(unittest.TestCase):
             _, selection_cfg, _, _ = rewards._validated_config(
                 ROOT / "config" / "v7_professional_market_maker.json"
             )
+            selection_cfg["settlement_anchor"]["execution_authority_enabled"] = True
             calls = 0
             def request(url: str, *, timeout: float = 4.0):
                 nonlocal calls
@@ -374,6 +525,7 @@ class MakerRewardSelectorTests(unittest.TestCase):
             fair = root / "fair.json"; fair.write_text(json.dumps(_anchor_fair_status(now_mono=now_mono)))
             model = _anchor_execution_model(root / "model.json")
             _, selection_cfg, _, _ = rewards._validated_config(ROOT / "config" / "v7_professional_market_maker.json")
+            selection_cfg["settlement_anchor"]["execution_authority_enabled"] = True
             def request(url: str, *, timeout: float = 4.0):
                 token = "btc-yes" if "btc-yes" in url else "btc-no"
                 return _anchor_book(token, bid=0.50 if token == "btc-yes" else 0.49,
@@ -481,6 +633,21 @@ class MakerRewardSelectorTests(unittest.TestCase):
             actual["durable_exact_cell_evidence"]["role"],
             "RANKING_ONLY_NO_EXECUTION_OR_RISK_AUTHORITY",
         )
+
+    def test_flow_first_policy_does_not_authorize_zero_flow_control(self) -> None:
+        rows = [{
+            "market_id": "quiet", "yes_token": "quiet-yes",
+            "selection_score": 1.0, "quote_opportunities": [],
+            "authorized_execution_cells": [],
+        }]
+        count = rewards._authorize_control_cells(
+            rows, maximum_markets=5, minimum_prints_30s=1,
+            maximum_last_side_age_ms=30_000,
+            allow_zero_flow_fallback=False,
+        )
+        self.assertEqual(count, 0)
+        self.assertEqual(rows[0]["authorized_execution_cells"], [])
+        self.assertFalse(rows[0].get("control_exploration_authorized", False))
 
     def test_cold_control_moves_to_untried_exact_cell_after_no_flow(self) -> None:
         rows = [
@@ -1212,16 +1379,9 @@ class MakerRewardSelectorTests(unittest.TestCase):
         self.assertEqual(snapshot["cold_start_maximum_markets"], 40)
         self.assertEqual(snapshot["markets"][0]["side_mode"], "STABLE_SPREAD_EXPLORATION")
         self.assertEqual(snapshot["markets"][0]["quote_opportunities"], [])
-        self.assertEqual(snapshot["authorized_execution_cell_count"], 1)
-        self.assertEqual(snapshot["control_exploration_cell_count"], 1)
-        cell = snapshot["markets"][0]["authorized_execution_cells"][0]
-        expected = rewards._control_exploration_cell(snapshot["markets"][0])
-        for key, value in expected.items():
-            self.assertEqual(cell[key], value)
-        self.assertEqual(
-            cell["control_selection_reason"],
-            "MINIMUM_EXACT_CELL_TERMINAL_ATTEMPTS",
-        )
+        self.assertEqual(snapshot["authorized_execution_cell_count"], 0)
+        self.assertEqual(snapshot["control_exploration_cell_count"], 0)
+        self.assertEqual(snapshot["markets"][0]["authorized_execution_cells"], [])
         status = rewards.selector_status(snapshot)
         self.assertTrue(status["ready"])
         self.assertEqual(status["state"], "OPERATIONAL_FALLBACK")
@@ -1248,6 +1408,7 @@ class MakerRewardSelectorTests(unittest.TestCase):
             _, selection_cfg, capacity_cfg, capacity = rewards._validated_config(
                 ROOT / "config" / "v7_professional_market_maker.json"
             )
+            selection_cfg["recent_flow"]["zero_flow_execution_fallback_enabled"] = True
             snapshot = rewards._fallback_snapshot(
                 universe, selection_cfg, capacity_cfg, capacity,
                 model_sha=SHA, primary_error="cold-start", now_ms=now_ms,

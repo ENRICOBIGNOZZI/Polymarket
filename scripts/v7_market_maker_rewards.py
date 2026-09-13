@@ -39,6 +39,54 @@ UNIVERSE_SCHEMA = "polymarket_v7_adaptive_universe_snapshot_v1"
 EXECUTION_AUTHORITY_SEMANTICS = "token_action_side_v2"
 EXECUTION_MODEL_SCHEMA = "polymarket_v7_maker_execution_model_v1"
 EXECUTION_SEMANTICS = "maker-paper-v7.2-bilateral-inventory"
+FLOW_EXECUTION_AUTHORITY_BASES = frozenset({
+    "FRESH_OPPOSITE_FLOW",
+    "POSITIVE_FLOW_CONTROL",
+    "LOW_SAMPLE_FRESH_FLOW_CONTROL",
+})
+ANCHOR_FLOW_FIELDS = (
+    "recent_prints", "recent_unique_transactions", "recent_share_volume",
+    "recent_notional_usd", "recent_flow_to_liquidity", "recent_last_trade_age_ms",
+    "recent_buy_prints_5s", "recent_buy_prints_30s", "recent_buy_prints_2m",
+    "recent_buy_prints_10m", "recent_buy_share_volume_10m",
+    "recent_buy_notional_usd_10m", "recent_last_buy_age_ms",
+    "recent_sell_prints_5s", "recent_sell_prints_30s", "recent_sell_prints_2m",
+    "recent_sell_prints_10m", "recent_sell_share_volume_10m",
+    "recent_sell_notional_usd_10m", "recent_last_sell_age_ms",
+)
+
+
+def _preserved_anchor_flow(
+    row: dict[str, Any] | None, *, yes_token: str, no_token: str,
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]], dict[str, Any]]:
+    """Preserve only receive-time-causal flow authority already earned upstream."""
+    if not isinstance(row, dict):
+        return [], [], {}
+    valid_tokens = {yes_token, no_token}
+    quotes = [
+        dict(q) for q in row.get("quote_opportunities", [])
+        if isinstance(q, dict)
+        and str(q.get("token_id") or "") in valid_tokens
+        and q.get("opposite_flow_is_fresh") is True
+    ]
+    quote_ids = {
+        (str(q.get("token_id") or ""), str(q.get("outcome") or "").upper(),
+         str(q.get("quote_side") or "").upper())
+        for q in quotes
+    }
+    cells = [
+        dict(cell) for cell in row.get("authorized_execution_cells", [])
+        if isinstance(cell, dict)
+        and str(cell.get("authority_basis") or "") in FLOW_EXECUTION_AUTHORITY_BASES
+        and str(cell.get("token_id") or "") in valid_tokens
+        and (str(cell.get("token_id") or ""),
+             str(cell.get("outcome") or "").upper(),
+             str(cell.get("quote_side") or "").upper()) in quote_ids
+    ]
+    if not cells:
+        return [], [], {}
+    fields = {key: row[key] for key in ANCHOR_FLOW_FIELDS if key in row}
+    return cells, quotes, fields
 
 
 def _exact_cell_identity(
@@ -290,6 +338,7 @@ def _authorize_control_cells(
     maximum_markets: int,
     minimum_prints_30s: int,
     maximum_last_side_age_ms: int,
+    allow_zero_flow_fallback: bool = True,
     exact_cell_evidence: dict[
         tuple[str, str, str, str], dict[str, Any]] | None = None,
 ) -> int:
@@ -363,9 +412,14 @@ def _authorize_control_cells(
         row["authorized_execution_cell_count"] = len(cells)
         authorized_cells += len(cells)
 
-    # With no causal print anywhere, retain one reproducible control rather
-    # than either freezing learning or spraying the warm observation universe.
-    if authorized_cells == 0 and already_authorized == 0:
+    # A deterministic zero-flow control is historical bootstrap behavior only.
+    # Flow-first policies keep the warm universe observable but grant no execution
+    # authority when causal opposite-side flow is absent.
+    if (
+        allow_zero_flow_fallback
+        and authorized_cells == 0
+        and already_authorized == 0
+    ):
         return _authorize_one_control_cell(
             rows, exact_cell_evidence=exact_cell_evidence)
     return authorized_cells
@@ -593,6 +647,7 @@ def _inject_settlement_anchor(
     result = snapshot
     result["settlement_anchor_state"] = "DISABLED"
     result["settlement_anchor_authorized"] = False
+    result["settlement_anchor_preserved_flow_authority"] = False
     result["settlement_anchor_market_id"] = ""
     result["settlement_anchor_evicted_market_id"] = ""
     result["settlement_anchor_fill_probability_source"] = ""
@@ -829,6 +884,15 @@ def _inject_settlement_anchor(
         return result
     choices.sort(key=lambda item: (-item[0], item[1]))
     edge, chosen_token, chosen_outcome, _ = choices[0]
+    markets = result.get("markets") if isinstance(result.get("markets"), list) else []
+    existing_index = next((
+        index for index, row in enumerate(markets)
+        if isinstance(row, dict) and str(row.get("market_id") or "") == market_id
+    ), None)
+    existing_row = markets[existing_index] if existing_index is not None else None
+    preserved_cells, preserved_quotes, preserved_flow_fields = _preserved_anchor_flow(
+        existing_row, yes_token=yes_token, no_token=no_token,
+    )
     existing_controls = sum(
         1 for row in result.get("markets", [])
         if isinstance(row, dict) and row.get("control_exploration_authorized") is True
@@ -838,7 +902,11 @@ def _inject_settlement_anchor(
         int((selection_cfg.get("recent_flow") or {}).get(
             "control_exploration_maximum_markets", 0) or 0),
     )
-    can_authorize = existing_controls < maximum_controls
+    can_authorize = (
+        not preserved_cells
+        and anchor_cfg.get("execution_authority_enabled") is True
+        and existing_controls < maximum_controls
+    )
     cell = {
         "outcome": chosen_outcome,
         "token_id": chosen_token,
@@ -853,6 +921,26 @@ def _inject_settlement_anchor(
     }
     exact_evidence = _load_exact_cell_evidence(
         execution_model_path, model_sha=model_sha,
+    )
+    if preserved_cells:
+        execution_cells = [
+            _annotate_exact_cell_evidence(
+                {"market_id": market_id}, preserved, exact_evidence
+            )
+            for preserved in preserved_cells
+        ]
+    elif can_authorize:
+        execution_cells = [
+            _annotate_exact_cell_evidence(
+                {"market_id": market_id}, cell, exact_evidence
+            )
+        ]
+    else:
+        execution_cells = []
+    merged_quote_opportunities = quote_opportunities + preserved_quotes
+    preserved_control = bool(preserved_cells) and bool(
+        isinstance(existing_row, dict)
+        and existing_row.get("control_exploration_authorized") is True
     )
     anchor_row = {
         "condition_id": str(identity_row.get("condition_id") or ""),
@@ -881,13 +969,16 @@ def _inject_settlement_anchor(
         "complete_set_cycle_score": 0.0,
         "reward_capture_score": 0.0,
         "side_mode": "SETTLEMENT_ANCHOR",
-        "quote_opportunities": quote_opportunities,
-        "execution_role": "SETTLEMENT_ANCHOR_CONTROL" if can_authorize else "SETTLEMENT_ANCHOR_OBSERVATION",
-        "control_exploration_authorized": can_authorize,
-        "authorized_execution_cells": [
-            _annotate_exact_cell_evidence({"market_id": market_id}, cell, exact_evidence)
-        ] if can_authorize else [],
-        "authorized_execution_cell_count": 1 if can_authorize else 0,
+        "quote_opportunities": merged_quote_opportunities,
+        "execution_role": (
+            str(existing_row.get("execution_role") or "FLOW_AUTHORIZED")
+            if preserved_cells and isinstance(existing_row, dict)
+            else "SETTLEMENT_ANCHOR_CONTROL" if can_authorize
+            else "SETTLEMENT_ANCHOR_OBSERVATION"
+        ),
+        "control_exploration_authorized": preserved_control or can_authorize,
+        "authorized_execution_cells": execution_cells,
+        "authorized_execution_cell_count": len(execution_cells),
         "inventory_seed_authorized": False,
         "recent_prints": 0,
         "recent_unique_transactions": 0,
@@ -919,11 +1010,7 @@ def _inject_settlement_anchor(
         "fees_enabled": market.get("fees_enabled") is True,
         "fees_enabled_explicit": market.get("fees_enabled_explicit") is True,
     }
-    markets = result.get("markets") if isinstance(result.get("markets"), list) else []
-    existing_index = next((
-        index for index, row in enumerate(markets)
-        if isinstance(row, dict) and str(row.get("market_id") or "") == market_id
-    ), None)
+    anchor_row.update(preserved_flow_fields)
     evicted_market_id = ""
     if existing_index is not None:
         markets[existing_index] = anchor_row
@@ -965,8 +1052,15 @@ def _inject_settlement_anchor(
     result["unused_resource_capacity_markets"] = max(
         0, int(result.get("resource_capacity_markets") or 0) - len(markets)
     )
-    result["settlement_anchor_state"] = "AUTHORIZED" if can_authorize else "OBSERVATION_ONLY_CONTROL_CAP"
+    result["settlement_anchor_state"] = (
+        "OBSERVATION_WITH_PRESERVED_FLOW_AUTHORITY" if preserved_cells
+        else "AUTHORIZED" if can_authorize
+        else "OBSERVATION_ONLY_EXECUTION_DISABLED"
+        if anchor_cfg.get("execution_authority_enabled") is not True
+        else "OBSERVATION_ONLY_CONTROL_CAP"
+    )
     result["settlement_anchor_authorized"] = can_authorize
+    result["settlement_anchor_preserved_flow_authority"] = bool(preserved_cells)
     result["settlement_anchor_market_id"] = market_id
     result["settlement_anchor_evicted_market_id"] = evicted_market_id
     result["settlement_anchor_fill_probability_source"] = fill_source
@@ -1938,6 +2032,9 @@ def _recent_flow_snapshot(
             "control_minimum_prints_30s", 1))),
         maximum_last_side_age_ms=max(1_000, int(float(flow_cfg.get(
             "control_maximum_last_side_age_seconds", 30.0)) * 1_000.0)),
+        allow_zero_flow_fallback=(
+            flow_cfg.get("zero_flow_execution_fallback_enabled") is True
+        ),
         exact_cell_evidence=exact_cell_evidence,
     )
     _annotate_inventory_seed_authority(selected)
@@ -1972,9 +2069,16 @@ def _recent_flow_snapshot(
         "minimum_operational_markets": operational_floor,
         "observation_universe_markets": observation_universe_markets,
         "maximum_zero_flow_reserve_markets": maximum_zero_flow_reserve,
+        "zero_flow_execution_fallback_enabled": (
+            flow_cfg.get("zero_flow_execution_fallback_enabled") is True
+        ),
         "stable_reserve_added": stable_reserve_added,
         "flow_authorized_market_count": flow_authorized_markets,
         "control_exploration_cell_count": control_cells_authorized,
+        "zero_flow_execution_fallback_enabled": (
+            (selection_cfg.get("recent_flow") or {}).get(
+                "zero_flow_execution_fallback_enabled") is True
+        ),
         "exact_cell_evidence_count": len(exact_cell_evidence or {}),
         "control_exploration_market_count": sum(
             1 for row in selected
@@ -1986,7 +2090,7 @@ def _recent_flow_snapshot(
         "minimum_side_prints_2m": minimum_side_prints_2m,
         "maximum_last_side_age_ms": maximum_last_side_age_ms,
         "markets": selected,
-        "note": "PAPER maker observes the configured universe but execution is fail-closed to selector-authorized token/action/side cells. Fresh opposite flow may authorize multiple economic placements. Sub-threshold controls are causal, per market-side, bounded by the exploration market cap, and expose both positive JOIN and IMPROVE1 arms when available. Only complete absence of causal flow falls back to one deterministic JOIN/YES/BUY control. The runtime still requires positive point EV. Rewards remain zero unless verified.",
+        "note": "PAPER maker observes the configured universe but execution is fail-closed to selector-authorized token/action/side cells. Fresh opposite flow may authorize multiple economic placements. Sub-threshold controls are causal, per market-side, bounded by the exploration market cap, and expose both positive JOIN and IMPROVE1 arms when available. Zero-flow execution fallback is controlled by an explicit frozen policy switch; when disabled, quiet markets remain observation-only. The runtime still requires positive point EV. Rewards remain zero unless verified.",
     }
 
 
@@ -2002,10 +2106,17 @@ def _validated_config(config_path: Path) -> tuple[dict[str, Any], dict[str, Any]
     configured_capacity = int(selection_cfg.get("max_active_markets", 0))
     if resource_capacity <= 0 or configured_capacity != resource_capacity:
         raise ValueError("maker market capacity must equal declared shard resource capacity")
+    flow_cfg = selection_cfg.get("recent_flow")
+    if (
+        not isinstance(flow_cfg, dict)
+        or flow_cfg.get("zero_flow_execution_fallback_enabled") not in {True, False}
+    ):
+        raise ValueError("maker zero-flow execution fallback policy invalid")
     anchor = selection_cfg.get("settlement_anchor")
     if (
         not isinstance(anchor, dict)
         or anchor.get("enabled") is not True
+        or anchor.get("execution_authority_enabled") not in {True, False}
         or int(anchor.get("maximum_slots") or 0) != 1
         or anchor.get("paper_exploration_only") is not True
         or int(anchor.get("maximum_control_markets") or 0) < 1
@@ -2098,8 +2209,14 @@ def _primary_snapshot(
             "authorized_execution_cells": [],
             "authorized_execution_cell_count": 0,
         })
-    control_cells_authorized = _authorize_one_control_cell(
-        selected_rows, exact_cell_evidence=exact_cell_evidence)
+    control_cells_authorized = (
+        _authorize_one_control_cell(
+            selected_rows, exact_cell_evidence=exact_cell_evidence
+        )
+        if ((selection_cfg.get("recent_flow") or {}).get(
+            "zero_flow_execution_fallback_enabled") is True)
+        else 0
+    )
     _annotate_inventory_seed_authority(selected_rows)
     return {
         "schema": "polymarket_v7_maker_reward_selection_v1",
@@ -2123,6 +2240,10 @@ def _primary_snapshot(
         "resource_capacity": capacity_cfg,
         "authorized_execution_cell_count": control_cells_authorized,
         "control_exploration_cell_count": control_cells_authorized,
+        "zero_flow_execution_fallback_enabled": (
+            (selection_cfg.get("recent_flow") or {}).get(
+                "zero_flow_execution_fallback_enabled") is True
+        ),
         "exact_cell_evidence_count": len(exact_cell_evidence or {}),
         "markets": selected_rows,
         "note": "Pool dollars are configuration facts; realized reward share remains competition-dependent and is not guaranteed.",
@@ -2289,8 +2410,14 @@ def _fallback_snapshot(
             break
     if not selected:
         raise ValueError("maker_fallback_universe_has_no_eligible_markets")
-    control_cells_authorized = _authorize_one_control_cell(
-        selected, exact_cell_evidence=exact_cell_evidence)
+    control_cells_authorized = (
+        _authorize_one_control_cell(
+            selected, exact_cell_evidence=exact_cell_evidence
+        )
+        if ((selection_cfg.get("recent_flow") or {}).get(
+            "zero_flow_execution_fallback_enabled") is True)
+        else 0
+    )
     _annotate_inventory_seed_authority(selected)
     return {
         "schema": "polymarket_v7_maker_reward_selection_v1",
@@ -2561,6 +2688,9 @@ def selector_status(
         ),
         "settlement_anchor_state": candidate.get("settlement_anchor_state", "DISABLED"),
         "settlement_anchor_authorized": candidate.get("settlement_anchor_authorized") is True,
+        "settlement_anchor_preserved_flow_authority": (
+            candidate.get("settlement_anchor_preserved_flow_authority") is True
+        ),
         "settlement_anchor_market_id": str(candidate.get("settlement_anchor_market_id") or ""),
         "settlement_anchor_fill_probability_source": str(
             candidate.get("settlement_anchor_fill_probability_source") or ""
