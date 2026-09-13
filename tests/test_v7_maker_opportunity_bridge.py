@@ -45,6 +45,8 @@ def selection() -> dict:
         "best_ask": 0.52,
         "tick_size": 0.01,
         "queue_ahead_shares": 5.0,
+        "book_imbalance": 0.375,
+        "book_imbalance_source": "CAUSAL_L1_TOUCH_DEPTH",
         "opposite_flow_shares_per_second": 12.0,
         "last_opposite_flow_age_ms": 15.0,
         "projected_join_fill_probability": 0.50,
@@ -232,6 +234,7 @@ def test_mature_positive_cell_becomes_typed_make_opportunity() -> None:
         assert row["conservative_expected_wealth_change"] > 0.0
         assert row["execution_alpha"]["fill_probability"]["lower"] > 0.0
         assert row["execution_alpha"]["evidence_status"] == "MATURE"
+        assert row["execution_alpha"]["features"]["book_imbalance"] is None
         assert row["crypto_context"]["authority"] == "PAPER_EXPLORATION"
         assert row["crypto_context"]["research_only"] is False
 

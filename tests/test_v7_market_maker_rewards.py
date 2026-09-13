@@ -954,7 +954,10 @@ class MakerRewardSelectorTests(unittest.TestCase):
             small["best_projected_fill_probability"],
             large["best_projected_fill_probability"],
         )
-        self.assertEqual(small["quote_opportunities"][0]["queue_ahead_shares"], 5.0)
+        quote = small["quote_opportunities"][0]
+        self.assertEqual(quote["queue_ahead_shares"], 5.0)
+        self.assertAlmostEqual(quote["book_imbalance"], (5.0 - 10000.0) / 10005.0)
+        self.assertEqual(quote["book_imbalance_source"], "CAUSAL_L1_TOUCH_DEPTH")
         self.assertTrue(snapshot["execution_cell_authority_required"])
         self.assertEqual(
             snapshot["execution_authority_semantics"],
