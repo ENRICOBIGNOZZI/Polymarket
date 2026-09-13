@@ -39,6 +39,54 @@ UNIVERSE_SCHEMA = "polymarket_v7_adaptive_universe_snapshot_v1"
 EXECUTION_AUTHORITY_SEMANTICS = "token_action_side_v2"
 EXECUTION_MODEL_SCHEMA = "polymarket_v7_maker_execution_model_v1"
 EXECUTION_SEMANTICS = "maker-paper-v7.2-bilateral-inventory"
+FLOW_EXECUTION_AUTHORITY_BASES = frozenset({
+    "FRESH_OPPOSITE_FLOW",
+    "POSITIVE_FLOW_CONTROL",
+    "LOW_SAMPLE_FRESH_FLOW_CONTROL",
+})
+ANCHOR_FLOW_FIELDS = (
+    "recent_prints", "recent_unique_transactions", "recent_share_volume",
+    "recent_notional_usd", "recent_flow_to_liquidity", "recent_last_trade_age_ms",
+    "recent_buy_prints_5s", "recent_buy_prints_30s", "recent_buy_prints_2m",
+    "recent_buy_prints_10m", "recent_buy_share_volume_10m",
+    "recent_buy_notional_usd_10m", "recent_last_buy_age_ms",
+    "recent_sell_prints_5s", "recent_sell_prints_30s", "recent_sell_prints_2m",
+    "recent_sell_prints_10m", "recent_sell_share_volume_10m",
+    "recent_sell_notional_usd_10m", "recent_last_sell_age_ms",
+)
+
+
+def _preserved_anchor_flow(
+    row: dict[str, Any] | None, *, yes_token: str, no_token: str,
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]], dict[str, Any]]:
+    """Preserve only receive-time-causal flow authority already earned upstream."""
+    if not isinstance(row, dict):
+        return [], [], {}
+    valid_tokens = {yes_token, no_token}
+    quotes = [
+        dict(q) for q in row.get("quote_opportunities", [])
+        if isinstance(q, dict)
+        and str(q.get("token_id") or "") in valid_tokens
+        and q.get("opposite_flow_is_fresh") is True
+    ]
+    quote_ids = {
+        (str(q.get("token_id") or ""), str(q.get("outcome") or "").upper(),
+         str(q.get("quote_side") or "").upper())
+        for q in quotes
+    }
+    cells = [
+        dict(cell) for cell in row.get("authorized_execution_cells", [])
+        if isinstance(cell, dict)
+        and str(cell.get("authority_basis") or "") in FLOW_EXECUTION_AUTHORITY_BASES
+        and str(cell.get("token_id") or "") in valid_tokens
+        and (str(cell.get("token_id") or ""),
+             str(cell.get("outcome") or "").upper(),
+             str(cell.get("quote_side") or "").upper()) in quote_ids
+    ]
+    if not cells:
+        return [], [], {}
+    fields = {key: row[key] for key in ANCHOR_FLOW_FIELDS if key in row}
+    return cells, quotes, fields
 
 
 def _exact_cell_identity(
@@ -599,6 +647,7 @@ def _inject_settlement_anchor(
     result = snapshot
     result["settlement_anchor_state"] = "DISABLED"
     result["settlement_anchor_authorized"] = False
+    result["settlement_anchor_preserved_flow_authority"] = False
     result["settlement_anchor_market_id"] = ""
     result["settlement_anchor_evicted_market_id"] = ""
     result["settlement_anchor_fill_probability_source"] = ""
@@ -835,6 +884,15 @@ def _inject_settlement_anchor(
         return result
     choices.sort(key=lambda item: (-item[0], item[1]))
     edge, chosen_token, chosen_outcome, _ = choices[0]
+    markets = result.get("markets") if isinstance(result.get("markets"), list) else []
+    existing_index = next((
+        index for index, row in enumerate(markets)
+        if isinstance(row, dict) and str(row.get("market_id") or "") == market_id
+    ), None)
+    existing_row = markets[existing_index] if existing_index is not None else None
+    preserved_cells, preserved_quotes, preserved_flow_fields = _preserved_anchor_flow(
+        existing_row, yes_token=yes_token, no_token=no_token,
+    )
     existing_controls = sum(
         1 for row in result.get("markets", [])
         if isinstance(row, dict) and row.get("control_exploration_authorized") is True
@@ -845,7 +903,8 @@ def _inject_settlement_anchor(
             "control_exploration_maximum_markets", 0) or 0),
     )
     can_authorize = (
-        anchor_cfg.get("execution_authority_enabled") is True
+        not preserved_cells
+        and anchor_cfg.get("execution_authority_enabled") is True
         and existing_controls < maximum_controls
     )
     cell = {
@@ -862,6 +921,26 @@ def _inject_settlement_anchor(
     }
     exact_evidence = _load_exact_cell_evidence(
         execution_model_path, model_sha=model_sha,
+    )
+    if preserved_cells:
+        execution_cells = [
+            _annotate_exact_cell_evidence(
+                {"market_id": market_id}, preserved, exact_evidence
+            )
+            for preserved in preserved_cells
+        ]
+    elif can_authorize:
+        execution_cells = [
+            _annotate_exact_cell_evidence(
+                {"market_id": market_id}, cell, exact_evidence
+            )
+        ]
+    else:
+        execution_cells = []
+    merged_quote_opportunities = quote_opportunities + preserved_quotes
+    preserved_control = bool(preserved_cells) and bool(
+        isinstance(existing_row, dict)
+        and existing_row.get("control_exploration_authorized") is True
     )
     anchor_row = {
         "condition_id": str(identity_row.get("condition_id") or ""),
@@ -890,13 +969,16 @@ def _inject_settlement_anchor(
         "complete_set_cycle_score": 0.0,
         "reward_capture_score": 0.0,
         "side_mode": "SETTLEMENT_ANCHOR",
-        "quote_opportunities": quote_opportunities,
-        "execution_role": "SETTLEMENT_ANCHOR_CONTROL" if can_authorize else "SETTLEMENT_ANCHOR_OBSERVATION",
-        "control_exploration_authorized": can_authorize,
-        "authorized_execution_cells": [
-            _annotate_exact_cell_evidence({"market_id": market_id}, cell, exact_evidence)
-        ] if can_authorize else [],
-        "authorized_execution_cell_count": 1 if can_authorize else 0,
+        "quote_opportunities": merged_quote_opportunities,
+        "execution_role": (
+            str(existing_row.get("execution_role") or "FLOW_AUTHORIZED")
+            if preserved_cells and isinstance(existing_row, dict)
+            else "SETTLEMENT_ANCHOR_CONTROL" if can_authorize
+            else "SETTLEMENT_ANCHOR_OBSERVATION"
+        ),
+        "control_exploration_authorized": preserved_control or can_authorize,
+        "authorized_execution_cells": execution_cells,
+        "authorized_execution_cell_count": len(execution_cells),
         "inventory_seed_authorized": False,
         "recent_prints": 0,
         "recent_unique_transactions": 0,
@@ -928,11 +1010,7 @@ def _inject_settlement_anchor(
         "fees_enabled": market.get("fees_enabled") is True,
         "fees_enabled_explicit": market.get("fees_enabled_explicit") is True,
     }
-    markets = result.get("markets") if isinstance(result.get("markets"), list) else []
-    existing_index = next((
-        index for index, row in enumerate(markets)
-        if isinstance(row, dict) and str(row.get("market_id") or "") == market_id
-    ), None)
+    anchor_row.update(preserved_flow_fields)
     evicted_market_id = ""
     if existing_index is not None:
         markets[existing_index] = anchor_row
@@ -975,12 +1053,14 @@ def _inject_settlement_anchor(
         0, int(result.get("resource_capacity_markets") or 0) - len(markets)
     )
     result["settlement_anchor_state"] = (
-        "AUTHORIZED" if can_authorize
+        "OBSERVATION_WITH_PRESERVED_FLOW_AUTHORITY" if preserved_cells
+        else "AUTHORIZED" if can_authorize
         else "OBSERVATION_ONLY_EXECUTION_DISABLED"
         if anchor_cfg.get("execution_authority_enabled") is not True
         else "OBSERVATION_ONLY_CONTROL_CAP"
     )
     result["settlement_anchor_authorized"] = can_authorize
+    result["settlement_anchor_preserved_flow_authority"] = bool(preserved_cells)
     result["settlement_anchor_market_id"] = market_id
     result["settlement_anchor_evicted_market_id"] = evicted_market_id
     result["settlement_anchor_fill_probability_source"] = fill_source
@@ -2608,6 +2688,9 @@ def selector_status(
         ),
         "settlement_anchor_state": candidate.get("settlement_anchor_state", "DISABLED"),
         "settlement_anchor_authorized": candidate.get("settlement_anchor_authorized") is True,
+        "settlement_anchor_preserved_flow_authority": (
+            candidate.get("settlement_anchor_preserved_flow_authority") is True
+        ),
         "settlement_anchor_market_id": str(candidate.get("settlement_anchor_market_id") or ""),
         "settlement_anchor_fill_probability_source": str(
             candidate.get("settlement_anchor_fill_probability_source") or ""
