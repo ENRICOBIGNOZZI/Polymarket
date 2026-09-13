@@ -11,6 +11,11 @@
 namespace pm::v7::maker {
 
 inline constexpr std::size_t kFeatureCount = 13;
+inline constexpr char kMicrostructureShadowModelHash[] =
+    "36bd9adf327631a1ca292166eb8f3f70567330651868a2e6a863f8dd779fac5a";
+inline constexpr double kMicrostructureShadowIntercept = 0.000043;
+inline constexpr double kMicrostructureShadowDepthL1Slope = 0.002683;
+inline constexpr double kMicrostructureShadowBookL5Slope = 0.002765;
 inline constexpr std::size_t kExecutionActionCount = 4;
 inline constexpr std::size_t kExecutionOutcomeCount = 2;
 inline constexpr std::size_t kExecutionSideCount = 2;
@@ -326,6 +331,10 @@ struct Features {
     double cancel_intensity = 0.0;
     double inventory_fraction = 0.0;
     double local_latency_ms = 0.0;
+    // Zero-authority 250ms PM-delta shadow score. The frozen research artifact
+    // is trained on the YES lane only; NO-lane values remain invalid.
+    double microstructure_shadow_delta_250ms = 0.0;
+    std::uint8_t microstructure_shadow_valid = 0;
     std::uint8_t flow_evidence_valid = 0;
     FlowEvidenceSource flow_evidence_source = FlowEvidenceSource::Unknown;
 };
