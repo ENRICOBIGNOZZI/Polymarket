@@ -1826,6 +1826,13 @@ def _recent_flow_snapshot(
                             "quote_side": quote_side,
                             **authority,
                         })
+                bid_depth_l1 = max(0.0, float(token_stats.get("best_bid_depth", 0.0)))
+                ask_depth_l1 = max(0.0, float(token_stats.get("best_ask_depth", 0.0)))
+                touch_depth = bid_depth_l1 + ask_depth_l1
+                book_imbalance = (
+                    (bid_depth_l1 - ask_depth_l1) / touch_depth
+                    if book_evidence_valid and touch_depth > 0.0 else None
+                )
                 quote_opportunities.append({
                     "outcome": outcome,
                     "token_id": token,
@@ -1854,6 +1861,11 @@ def _recent_flow_snapshot(
                     "best_bid": float(token_stats.get("best_bid", 0.0)),
                     "best_ask": float(token_stats.get("best_ask", 0.0)),
                     "queue_ahead_shares": queue_ahead,
+                    "book_imbalance": book_imbalance,
+                    "book_imbalance_source": (
+                        "CAUSAL_L1_TOUCH_DEPTH" if book_imbalance is not None
+                        else "UNAVAILABLE"
+                    ),
                     "inside_ticks": inside_ticks,
                     "improve1_available": improve1_available,
                     "projected_flow_reach_probability": flow_reach_probability,
