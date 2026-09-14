@@ -221,14 +221,27 @@ jobs:
             "$SERVER_USER@$SERVER_HOST:polymarket/runs/paper_v7_experiments/.deploy_freeze/${DEPLOY_RUN_ID}.manifest.json" \
             maker-forward-manifest.json
           python3 - "$DEPLOYED_SHA" <<'PY'
-          import json,sys
+          import hashlib,json,sys
           value=json.load(open('maker-forward-manifest.json',encoding='utf-8'))
+          recorded=str(value.get('manifest_sha256') or '')
+          payload=dict(value); payload.pop('manifest_sha256',None)
+          canonical=json.dumps(payload,sort_keys=True,separators=(',',':'),ensure_ascii=True)
+          assert recorded == hashlib.sha256(canonical.encode()).hexdigest()
           assert value.get('code_sha') == sys.argv[1]
           assert value.get('paper_only') is True
           assert value.get('authenticated_execution') is False
           assert value.get('real_order_submission') is False
           assert value.get('automatic_promotion') is False
           assert value.get('window_end_ms') - value.get('window_start_ms') == 8*60*60*1000
+          capture=(value.get('evidence_baselines') or {}).get('capture') or {}
+          protocol=value.get('freeze_protocol') or {}
+          completed=int(capture.get('completed_ms') or 0)
+          prepared=int(protocol.get('manifest_prepared_ms') or 0)
+          start=int(value.get('window_start_ms') or 0)
+          assert capture.get('hash_semantics') == 'SHA256_EXACT_PREFIX_AT_RECORDED_BYTE_COUNT'
+          assert 0 < completed <= prepared < start
+          assert int(protocol.get('window_start_lead_ms') or 0) == 5000
+          assert start-prepared == 5000
           print('local_manifest_validation=success')
           PY
 
