@@ -12,6 +12,11 @@ on:
         required: true
         default: false
         type: boolean
+      freeze_maker_forward_window:
+        description: After a successful PAPER deploy, freeze one preregistered 8h Maker window
+        required: true
+        default: false
+        type: boolean
 
 permissions:
   contents: read
@@ -31,6 +36,7 @@ jobs:
       SERVER_USER: ${{ vars.POLYMARKET_SERVER_USER || 'enrico' }}
       SERVER_PORT: ${{ vars.POLYMARKET_SERVER_PORT || '22' }}
       EXPECTED_DEPLOY_SHA: ${{ inputs.expected_sha }}
+      FREEZE_MAKER_FORWARD_WINDOW: ${{ inputs.freeze_maker_forward_window }}
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
@@ -47,6 +53,7 @@ jobs:
           test "$(git rev-parse HEAD)" = "$main_sha"
 
           [[ "$EXPECTED_DEPLOY_SHA" =~ ^[0-9a-f]{40}$ ]]
+          [[ "$FREEZE_MAKER_FORWARD_WINDOW" == "true" || "$FREEZE_MAKER_FORWARD_WINDOW" == "false" ]]
           if [[ "$main_sha" != "$EXPECTED_DEPLOY_SHA" ]]; then
             echo "V7 deploy blocked: canonical main does not match the explicitly approved SHA" >&2
             exit 1
@@ -77,8 +84,8 @@ jobs:
           } <= required
           PY
             echo "ready=true" >> "$GITHUB_OUTPUT"
-            printf 'reconciliation_result=ready\nmain_sha=%s\nexpected_deploy_sha=%s\n' \
-              "$main_sha" "${EXPECTED_DEPLOY_SHA:-none}" | tee deploy-evidence.txt
+            printf 'reconciliation_result=ready\nmain_sha=%s\nexpected_deploy_sha=%s\nfreeze_maker_forward_window=%s\n' \
+              "$main_sha" "${EXPECTED_DEPLOY_SHA:-none}" "$FREEZE_MAKER_FORWARD_WINDOW" | tee deploy-evidence.txt
           else
             echo "V7 deploy preflight failed" >&2
             exit 1
