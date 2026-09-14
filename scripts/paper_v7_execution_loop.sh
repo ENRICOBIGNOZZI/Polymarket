@@ -738,6 +738,17 @@ v7_register_child "$!"
   done
 ) & v7_register_child "$!"
 
+# Health-critical canonical economics has its own 60-second loop. Retrospective
+# analytics below may legitimately take minutes on a large archive and must never
+# make /healthz stale or delay the exact-SHA economic state used by monitoring.
+(
+  while [[ ! -e "$KILL" ]]; do
+    python3 scripts/v7_canonical_economics.py --ledger "$RUN_ROOT/ledger/execution.jsonl" --expected-model-sha "$SHA" \
+      --output "$RUN_ROOT/canonical_economics.json" >> "$RUN_ROOT/canonical_economics.log" 2>&1 || true
+    sleep 60
+  done
+) & v7_register_child "$!"
+
 (
   last_historical_attribution_at=0
   last_horse_race_at=0
@@ -755,8 +766,6 @@ v7_register_child "$!"
     python3 scripts/v7_learned_execution_model.py --ledger "$RUN_ROOT/ledger/execution.jsonl" --model-sha "$SHA" \
       --output "$RUN_ROOT/learned_execution/oos_report.json" \
       >> "$RUN_ROOT/learned_execution/model.log" 2>&1 || true
-    python3 scripts/v7_canonical_economics.py --ledger "$RUN_ROOT/ledger/execution.jsonl" --expected-model-sha "$SHA" \
-      --output "$RUN_ROOT/canonical_economics.json" >> "$RUN_ROOT/canonical_economics.log" 2>&1 || true
     python3 scripts/v7_profit_attribution.py --ledger "$RUN_ROOT/ledger/execution.jsonl" --run-root "$RUN_ROOT" \
       --output "$RUN_ROOT/profit_attribution.json" --csv "$RUN_ROOT/profit_attribution.csv" \
       >> "$RUN_ROOT/profit_attribution.log" 2>&1 || true
@@ -794,7 +803,7 @@ v7_register_child "$!"
   done
 ) & v7_register_child "$!"
 
-v7_assert_registered_child_count 23
+v7_assert_registered_child_count 24
 write_runtime_status running false
 
 while [[ ! -e "$KILL" ]]; do

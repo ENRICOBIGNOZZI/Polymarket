@@ -555,9 +555,29 @@
     },
     {
       "arguments": [
+        "scripts/v7_canonical_economics.py"
+      ],
+      "config_identity_required": true,
+      "dependencies": [
+        "ledger_router"
+      ],
+      "exact_sha_required": true,
+      "executable": "launcher_subshell",
+      "id": "canonical_economics",
+      "inputs": [
+        "ledger/execution.jsonl"
+      ],
+      "launcher_log": "canonical_economics.log",
+      "outputs": [
+        "canonical_economics.json",
+        "canonical_economics.log"
+      ],
+      "profile": "observer"
+    },
+    {
+      "arguments": [
         "scripts/v7_joint_execution_policy.py",
         "scripts/v7_learned_execution_model.py",
-        "scripts/v7_canonical_economics.py",
         "scripts/v7_profit_attribution.py",
         "scripts/v7_profit_report.py",
         "scripts/v7_lossless_data_compaction.py",
@@ -583,8 +603,6 @@
       ],
       "launcher_log": "permanent_evidence.log",
       "outputs": [
-        "canonical_economics.json",
-        "canonical_economics.log",
         "learned_execution/joint_policy.json",
         "learned_execution/oos_report.json",
         "profit_attribution.json",
