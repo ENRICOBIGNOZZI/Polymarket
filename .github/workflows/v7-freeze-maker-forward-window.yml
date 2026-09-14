@@ -1,0 +1,257 @@
+name: V7 freeze Maker forward window
+
+on:
+  workflow_run:
+    workflows: ["V7 deploy PAPER server"]
+    types: [completed]
+
+permissions:
+  actions: read
+  contents: read
+  id-token: write
+
+concurrency:
+  group: polymarket-v7-maker-forward-freeze
+  cancel-in-progress: false
+
+jobs:
+  freeze:
+    if: github.event.workflow_run.conclusion == 'success'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    env:
+      SERVER_HOST: ${{ vars.POLYMARKET_SERVER_HOST || '100.104.183.109' }}
+      SERVER_USER: ${{ vars.POLYMARKET_SERVER_USER || 'enrico' }}
+      SERVER_PORT: ${{ vars.POLYMARKET_SERVER_PORT || '22' }}
+      DEPLOY_RUN_ID: ${{ github.event.workflow_run.id }}
+    steps:
+      - name: Download exact deploy evidence
+        id: download
+        continue-on-error: true
+        uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0 # v5
+        with:
+          name: v7-paper-server-deploy-${{ github.event.workflow_run.id }}
+          path: deploy-artifact
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          repository: ${{ github.repository }}
+          run-id: ${{ github.event.workflow_run.id }}
+
+      - name: Prove an explicitly armed successful exact-SHA deploy
+        id: provenance
+        shell: bash
+        run: |
+          set -euo pipefail
+          evidence="deploy-artifact/deploy-evidence.txt"
+          if [[ ! -s "$evidence" ]]; then
+            echo "eligible=false" >> "$GITHUB_OUTPUT"
+            echo "No deployment evidence artifact; nothing to freeze."
+            exit 0
+          fi
+          freeze_requested="$(awk -F= '$1=="freeze_maker_forward_window"{v=$2} END{print v}' "$evidence")"
+          if [[ "$freeze_requested" != "true" ]]; then
+            echo "eligible=false" >> "$GITHUB_OUTPUT"
+            echo "Deploy completed without explicit forward-window arming; nothing to freeze."
+            exit 0
+          fi
+          deploy_result="$(awk -F= '$1=="deploy_result"{v=$2} END{print v}' "$evidence")"
+          deployed_sha="$(awk -F= '$1=="deployed_sha"{v=$2} END{print v}' "$evidence")"
+          [[ "$deploy_result" == "success" || "$deploy_result" == "recovered_after_transport_loss" ]]
+          [[ "$deployed_sha" =~ ^[0-9a-f]{40}$ ]]
+          echo "eligible=true" >> "$GITHUB_OUTPUT"
+          echo "deployed_sha=$deployed_sha" >> "$GITHUB_OUTPUT"
+          echo "deploy_result=$deploy_result" >> "$GITHUB_OUTPUT"
+          echo "freeze_requested=true" >> "$GITHUB_OUTPUT"
+
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        if: steps.provenance.outputs.eligible == 'true'
+        with:
+          ref: main
+          fetch-depth: 0
+
+      - name: Require deployed SHA is still canonical main
+        if: steps.provenance.outputs.eligible == 'true'
+        shell: bash
+        env:
+          DEPLOYED_SHA: ${{ steps.provenance.outputs.deployed_sha }}
+        run: |
+          set -euo pipefail
+          git fetch --no-tags origin main
+          test "$(git rev-parse HEAD)" = "$DEPLOYED_SHA"
+          test "$(git rev-parse origin/main)" = "$DEPLOYED_SHA"
+          python3 scripts/v7_cutover_contract.py \
+            --repository-root . --expected-head "$DEPLOYED_SHA" >/dev/null
+
+      - name: Select ephemeral Tailscale credential mode
+        if: steps.provenance.outputs.eligible == 'true'
+        id: tailscale_auth
+        shell: bash
+        env:
+          TS_AUTHKEY: ${{ secrets.TS_AUTHKEY }}
+          TS_OAUTH_CLIENT_ID: ${{ secrets.TS_OAUTH_CLIENT_ID }}
+          TS_OAUTH_SECRET: ${{ secrets.TS_OAUTH_SECRET }}
+          TS_AUDIENCE: ${{ secrets.TS_AUDIENCE }}
+          TS_TAGS: ${{ vars.TS_TAGS || 'tag:ci' }}
+          TS_AUTHKEY_EPHEMERAL_VERIFIED: ${{ vars.TS_AUTHKEY_EPHEMERAL_VERIFIED || 'false' }}
+        run: |
+          set -euo pipefail
+          test -n "${TS_TAGS:-}"
+          if [[ -n "${TS_OAUTH_CLIENT_ID:-}" && -n "${TS_AUDIENCE:-}" ]]; then
+            mode=oidc
+          elif [[ -n "${TS_OAUTH_CLIENT_ID:-}" && -n "${TS_OAUTH_SECRET:-}" ]]; then
+            mode=oauth
+          elif [[ -n "${TS_AUTHKEY:-}" ]]; then
+            if [[ "${TS_AUTHKEY_EPHEMERAL_VERIFIED:-false}" != true ]]; then
+              echo "::error::Auth-key fallback requires a verified ephemeral CI key."
+              exit 1
+            fi
+            mode=authkey
+          else
+            echo "No visible Tailscale OIDC, OAuth, or auth-key credential set" >&2
+            exit 1
+          fi
+          echo "mode=$mode" >> "$GITHUB_OUTPUT"
+
+      - name: Join private tailnet with workload identity
+        if: steps.provenance.outputs.eligible == 'true' && steps.tailscale_auth.outputs.mode == 'oidc'
+        uses: tailscale/github-action@780049a30b6ff5c378a9e7b389d15ece7a204888 # v4.1.3
+        with:
+          oauth-client-id: ${{ secrets.TS_OAUTH_CLIENT_ID }}
+          audience: ${{ secrets.TS_AUDIENCE }}
+          tags: ${{ vars.TS_TAGS || 'tag:ci' }}
+          version: 1.94.2
+          statedir: ''
+          hostname: gh-freeze-${{ github.run_id }}-${{ github.run_attempt }}
+          ping: ${{ env.SERVER_HOST }}
+
+      - name: Join private tailnet with OAuth
+        if: steps.provenance.outputs.eligible == 'true' && steps.tailscale_auth.outputs.mode == 'oauth'
+        uses: tailscale/github-action@780049a30b6ff5c378a9e7b389d15ece7a204888 # v4.1.3
+        with:
+          oauth-client-id: ${{ secrets.TS_OAUTH_CLIENT_ID }}
+          oauth-secret: ${{ secrets.TS_OAUTH_SECRET }}
+          tags: ${{ vars.TS_TAGS || 'tag:ci' }}
+          version: 1.94.2
+          statedir: ''
+          hostname: gh-freeze-${{ github.run_id }}-${{ github.run_attempt }}
+          ping: ${{ env.SERVER_HOST }}
+
+      - name: Join private tailnet with ephemeral auth key
+        if: steps.provenance.outputs.eligible == 'true' && steps.tailscale_auth.outputs.mode == 'authkey'
+        uses: tailscale/github-action@780049a30b6ff5c378a9e7b389d15ece7a204888 # v4.1.3
+        with:
+          authkey: ${{ secrets.TS_AUTHKEY }}
+          version: 1.94.2
+          statedir: ''
+          hostname: gh-freeze-${{ github.run_id }}-${{ github.run_attempt }}
+          ping: ${{ env.SERVER_HOST }}
+
+      - name: Configure SSH identity and await private server
+        if: steps.provenance.outputs.eligible == 'true'
+        shell: bash
+        env:
+          SSH_PRIVATE_KEY: ${{ secrets.POLYMARKET_SERVER_SSH_KEY }}
+        run: |
+          set -euo pipefail
+          test -n "${SSH_PRIVATE_KEY:-}"
+          install -d -m 700 ~/.ssh
+          printf '%s\n' "$SSH_PRIVATE_KEY" > ~/.ssh/polymarket_deploy
+          chmod 600 ~/.ssh/polymarket_deploy
+          : > ~/.ssh/known_hosts
+          ready=0
+          for _ in $(seq 1 30); do
+            tailscale ping --timeout=4s -c 1 "$SERVER_HOST" >/dev/null 2>&1 || true
+            if ssh-keyscan -T 3 -p "$SERVER_PORT" "$SERVER_HOST" >> ~/.ssh/known_hosts 2>/dev/null; then
+              ready=1
+              break
+            fi
+            sleep 3
+          done
+          test "$ready" = 1
+          test -s ~/.ssh/known_hosts
+
+      - name: Freeze exactly one preregistered eight-hour Maker window
+        if: steps.provenance.outputs.eligible == 'true'
+        id: freeze_window
+        shell: bash
+        env:
+          DEPLOYED_SHA: ${{ steps.provenance.outputs.deployed_sha }}
+        run: |
+          set -euo pipefail
+          ssh_common=(
+            -i ~/.ssh/polymarket_deploy
+            -o IdentitiesOnly=yes
+            -o BatchMode=yes
+            -o ConnectTimeout=10
+            -o ConnectionAttempts=3
+            -o ServerAliveInterval=15
+            -o ServerAliveCountMax=4
+            -p "$SERVER_PORT"
+          )
+          scp_common=(
+            -i ~/.ssh/polymarket_deploy
+            -o IdentitiesOnly=yes
+            -o BatchMode=yes
+            -o ConnectTimeout=10
+            -o ConnectionAttempts=3
+            -o ServerAliveInterval=15
+            -o ServerAliveCountMax=4
+            -P "$SERVER_PORT"
+          )
+
+          ssh "${ssh_common[@]}" "$SERVER_USER@$SERVER_HOST" \
+            "EXPECTED_SHA='$DEPLOYED_SHA' DEPLOY_RUN_ID='$DEPLOY_RUN_ID' bash -s" <<'REMOTE' \
+            > maker-forward-freeze-evidence.txt 2>&1
+          set -euo pipefail
+          cd "$HOME/polymarket"
+          git fetch --no-tags origin main
+          test "$(git rev-parse HEAD)" = "$EXPECTED_SHA"
+          test "$(git rev-parse origin/main)" = "$EXPECTED_SHA"
+          python3 scripts/v7_freeze_maker_forward_window_after_deploy.py \
+            --repository-root "$HOME/polymarket" \
+            --run-root "$HOME/polymarket/runs/paper_v7_live" \
+            --output-root "$HOME/polymarket/runs/paper_v7_experiments" \
+            --expected-sha "$EXPECTED_SHA" \
+            --deploy-run-id "$DEPLOY_RUN_ID" \
+            --wait-seconds 180 \
+            --poll-seconds 2
+          REMOTE
+
+          cat maker-forward-freeze-evidence.txt
+          scp "${scp_common[@]}" \
+            "$SERVER_USER@$SERVER_HOST:polymarket/runs/paper_v7_experiments/.deploy_freeze/${DEPLOY_RUN_ID}.manifest.json" \
+            maker-forward-manifest.json
+          python3 - "$DEPLOYED_SHA" <<'PY'
+          import hashlib,json,sys
+          value=json.load(open('maker-forward-manifest.json',encoding='utf-8'))
+          recorded=str(value.get('manifest_sha256') or '')
+          payload=dict(value); payload.pop('manifest_sha256',None)
+          canonical=json.dumps(payload,sort_keys=True,separators=(',',':'),ensure_ascii=True)
+          assert recorded == hashlib.sha256(canonical.encode()).hexdigest()
+          assert value.get('code_sha') == sys.argv[1]
+          assert value.get('paper_only') is True
+          assert value.get('authenticated_execution') is False
+          assert value.get('real_order_submission') is False
+          assert value.get('automatic_promotion') is False
+          assert value.get('window_end_ms') - value.get('window_start_ms') == 8*60*60*1000
+          capture=(value.get('evidence_baselines') or {}).get('capture') or {}
+          protocol=value.get('freeze_protocol') or {}
+          completed=int(capture.get('completed_ms') or 0)
+          prepared=int(protocol.get('manifest_prepared_ms') or 0)
+          start=int(value.get('window_start_ms') or 0)
+          assert capture.get('hash_semantics') == 'SHA256_EXACT_PREFIX_AT_RECORDED_BYTE_COUNT'
+          assert 0 < completed <= prepared < start
+          assert int(protocol.get('window_start_lead_ms') or 0) == 5000
+          assert start-prepared == 5000
+          print('local_manifest_validation=success')
+          PY
+
+      - name: Upload frozen-window evidence
+        if: always() && steps.provenance.outputs.eligible == 'true'
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: v7-maker-forward-window-${{ github.run_id }}
+          path: |
+            maker-forward-freeze-evidence.txt
+            maker-forward-manifest.json
+          if-no-files-found: warn
+          retention-days: 14
