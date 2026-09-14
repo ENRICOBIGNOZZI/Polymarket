@@ -4,6 +4,8 @@
 Decision timestamps are observed book-event times while an order is alive.
 Features use only information available at or before each timestamp. Future
 fills and markouts are labels only; realized fill time never chooses a row.
+Observations whose counterfactual KEEP outcome is hidden by an earlier terminal
+order event are censored rather than mislabeled as no-fill negatives.
 """
 from __future__ import annotations
 import argparse, bisect, json, math, pathlib, sys
@@ -198,11 +200,6 @@ def build_decision_rows(
     orders = {base.life(row): row for row in maker_rows if canonical_order(row, placement_actions)}
     fills, terminals = first_fill_map(maker_rows), terminal_map(maker_rows)
     markouts, (books, sells) = markout_map(maker_rows, markout_horizon), index_books(book_rows)
-    evidence_end = max(
-        [timestamp(row) for row in maker_rows if timestamp(row) > 0]
-        + [int(num(row.get("receive_wall_ms"), 0)) for row in book_rows if int(num(row.get("receive_wall_ms"), 0)) > 0]
-        + [0]
-    )
     out = []
     diag = {key: 0 for key in (
         "orders_missing_token", "orders_missing_book_path",
@@ -210,6 +207,7 @@ def build_decision_rows(
         "decision_rows_with_avoidable_adverse_fill",
         "decision_rows_with_unavoidable_fill",
         "decision_rows_missing_fill_markout", "decision_rows_right_censored",
+        "decision_rows_policy_censored",
     )}
     diag["candidate_orders"] = len(orders)
     for key, order in orders.items():
@@ -245,6 +243,7 @@ def build_decision_rows(
             unavoidable = fill_ms > 0 and fill_ms <= effective
             in_window = fill_ms > effective and fill_ms <= horizon_end
             adverse = favorable = missing = False
+            censor_reason = ""
             if unavoidable:
                 diag["decision_rows_with_unavoidable_fill"] += 1
             elif in_window:
@@ -254,9 +253,20 @@ def build_decision_rows(
                     diag["decision_rows_with_avoidable_adverse_fill"] += int(adverse)
                 else:
                     missing = True
+                    censor_reason = "MISSING_FILL_MARKOUT"
                     diag["decision_rows_missing_fill_markout"] += 1
-            elif fill_ms <= 0 and terminal <= 0 and evidence_end < horizon_end:
+            elif terminal > now and terminal < horizon_end:
+                # The historical policy removed the order before the KEEP
+                # counterfactual horizon ended. Treat it as censored, not as a
+                # no-fill negative; otherwise the model learns the old policy.
                 missing = True
+                censor_reason = "HISTORICAL_TERMINAL_BEFORE_KEEP_HORIZON"
+                diag["decision_rows_policy_censored"] += 1
+            elif fill_ms <= 0 and terminal <= 0:
+                # No terminal proof means log end/feed continuation cannot prove
+                # that the live order survived the complete KEEP horizon.
+                missing = True
+                censor_reason = "ORDER_LIFETIME_RIGHT_CENSORED"
                 diag["decision_rows_right_censored"] += 1
             session = str(row.get("observer_session_id") or "")
             epoch = int(num(row.get("connection_epoch"), 0))
@@ -275,8 +285,8 @@ def build_decision_rows(
                 "first_fill_in_horizon": int(in_window),
                 "avoidable_adverse_fill": int(adverse),
                 "avoidable_favorable_fill": int(favorable),
-                "label_complete": not missing, "first_fill_id": fill_id,
-                "first_fill_shares": fill_shares,
+                "label_complete": not missing, "censor_reason": censor_reason,
+                "first_fill_id": fill_id, "first_fill_shares": fill_shares,
                 "first_fill_markout_per_share": markout if math.isfinite(markout) else None,
                 "features": f,
             })
@@ -450,6 +460,7 @@ def main():
         "automatic_promotion":False,"decision_clock":"OBSERVED_BOOK_EVENT_TIMESTAMP_WHILE_ORDER_ALIVE",
         "feature_cut":"ONLY_DATA_AT_OR_BEFORE_DECISION_TIMESTAMP",
         "future_fill_time_role":"LABEL_ONLY_NEVER_USED_TO_CHOOSE_DECISION_TIMESTAMP",
+        "historical_terminal_role":"CENSOR_IF_KEEP_COUNTERFACTUAL_HORIZON_NOT_OBSERVED",
         "target":"P(AVOIDABLE_ADVERSE_FIRST_FILL_WITHIN_FORWARD_WINDOW|CURRENT_CAUSAL_STATE)",
         "markout_horizon":str(args.markout_horizon),
         "fill_hazard_window_ms":args.fill_hazard_window_ms,
