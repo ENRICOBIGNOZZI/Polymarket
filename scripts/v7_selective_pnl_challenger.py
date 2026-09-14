@@ -12,8 +12,8 @@ gates that can be frozen before the next forward window:
 5. Every decision is tagged with a predeclared economic regime.
 
 It cannot submit orders, own capital, write the canonical ledger, or promote a
-policy.  Live integration requires a later, separately reviewed exact-SHA
-change after the currently running forward experiment has finished.
+policy. Live integration requires a later, separately reviewed exact-SHA change
+after the currently running forward experiment has finished.
 """
 from __future__ import annotations
 
@@ -102,13 +102,12 @@ def validate_config(config: dict[str, Any]) -> None:
         or directional.get("mature_model_required_for_primary") is not True
     ):
         raise ChallengerError("config_directional_lane")
-    grid = directional.get("research_threshold_grid")
-    if grid != [0.005, 0.01, 0.03, 0.1]:
+    if directional.get("research_threshold_grid") != [0.005, 0.01, 0.03, 0.1]:
         raise ChallengerError("config_directional_grid")
     latency = config.get("latency") or {}
     if int(latency.get("candidate_scan_interval_ms") or 0) != 250:
         raise ChallengerError("config_scan_interval")
-    if int(latency.get("synthetic_revalidation_sleep_ms") or -1) != 0:
+    if int(latency.get("synthetic_revalidation_sleep_ms", -1)) != 0:
         raise ChallengerError("config_synthetic_sleep")
     slo = latency.get("decision_to_arrival_slo_ms") or {}
     if [finite(slo.get(key), f"latency_{key}") for key in ("p50", "p90", "p99")] != [150.0, 250.0, 500.0]:
