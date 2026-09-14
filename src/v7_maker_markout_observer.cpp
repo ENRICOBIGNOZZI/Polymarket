@@ -46,8 +46,15 @@ constexpr double kPriceScaleE4 = 10'000.0;
 constexpr double kMicrounitsPerShare = 1'000'000.0;
 constexpr std::string_view kStrategy = "CRYPTO_SETTLEMENT_ENGINE";
 constexpr std::string_view kComponent = "professional_maker";
-constexpr std::array<int, 5> kHorizonSeconds{{1, 10, 45, 60, 300}};
-constexpr std::array<std::string_view, 5> kHorizonLabels{{"1s", "10s", "45s", "60s", "300s"}};
+// Preserve the legacy slow horizons while adding the execution-relevant
+// sub-second and short-horizon cuts required for fill-conditioned toxicity.
+// These are observation-only measurements and never grant execution authority.
+constexpr std::array<std::int64_t, 10> kHorizonMilliseconds{{
+    100, 250, 500, 1'000, 5'000, 10'000, 30'000, 45'000, 60'000, 300'000}};
+constexpr std::array<std::string_view, 10> kHorizonLabels{{
+    "100ms", "250ms", "500ms", "1s", "5s", "10s", "30s", "45s", "60s", "300s"}};
+constexpr std::uint16_t kAllHorizonMask = static_cast<std::uint16_t>(
+    (1U << kHorizonMilliseconds.size()) - 1U);
 
 std::atomic<bool> g_stop{false};
 void signal_handler(int) noexcept { g_stop.store(true, std::memory_order_relaxed); }
@@ -378,7 +385,7 @@ struct PendingFill {
     std::int32_t fill_price_e4 = 0;
     std::int64_t quantity_microunits = 0;
     std::int64_t receive_ts_ms = 0;
-    std::uint8_t completed_mask = 0;
+    std::uint16_t completed_mask = 0;
 };
 
 class MarkoutEngine final {
@@ -407,23 +414,22 @@ public:
         const std::int64_t now = wall_ms();
         for (auto it = pending_.begin(); it != pending_.end();) {
             auto& fill = it->second;
-            for (std::size_t h = 0; h < kHorizonSeconds.size(); ++h) {
-                const std::uint8_t bit = static_cast<std::uint8_t>(1U << h);
+            for (std::size_t h = 0; h < kHorizonMilliseconds.size(); ++h) {
+                const std::uint16_t bit = static_cast<std::uint16_t>(1U << h);
                 if ((fill.completed_mask & bit) != 0) continue;
-                const std::int64_t due = fill.receive_ts_ms
-                    + static_cast<std::int64_t>(kHorizonSeconds[h]) * 1000LL;
+                const std::int64_t due = fill.receive_ts_ms + kHorizonMilliseconds[h];
                 if (now < due) continue;
                 const LatestBook latest = books.snapshot(fill.instrument_handle);
                 if (latest.book.valid == 0 || latest.wall_receive_ms < due) continue;
                 // The first valid canonical snapshot observed at/after the horizon
                 // closes that horizon. If L10 cannot liquidate the full fill, the
                 // measurement is honestly missing rather than retried later.
-                fill.completed_mask = static_cast<std::uint8_t>(fill.completed_mask | bit);
+                fill.completed_mask = static_cast<std::uint16_t>(fill.completed_mask | bit);
                 const auto markout = pm::v7::executable_markout(
                     latest.book, fill.side, fill.quantity_microunits, fill.fill_price_e4);
                 if (markout.observable) write_markout(fill, latest, h, markout);
             }
-            if (fill.completed_mask == 0x1fU) it = pending_.erase(it);
+            if (fill.completed_mask == kAllHorizonMask) it = pending_.erase(it);
             else ++it;
         }
     }
@@ -460,14 +466,16 @@ private:
         read_complete_tail(ledger, true);
         const std::int64_t now = wall_ms();
         for (auto& [_, fill] : pending_) {
-            for (std::size_t h = 0; h < kHorizonSeconds.size(); ++h) {
-                const std::int64_t due = fill.receive_ts_ms
-                    + static_cast<std::int64_t>(kHorizonSeconds[h]) * 1000LL;
-                if (due <= now) fill.completed_mask = static_cast<std::uint8_t>(fill.completed_mask | (1U << h));
+            for (std::size_t h = 0; h < kHorizonMilliseconds.size(); ++h) {
+                const std::int64_t due = fill.receive_ts_ms + kHorizonMilliseconds[h];
+                if (due <= now) {
+                    fill.completed_mask = static_cast<std::uint16_t>(
+                        fill.completed_mask | static_cast<std::uint16_t>(1U << h));
+                }
             }
         }
         for (auto it = pending_.begin(); it != pending_.end();) {
-            if (it->second.completed_mask == 0x1fU) it = pending_.erase(it);
+            if (it->second.completed_mask == kAllHorizonMask) it = pending_.erase(it);
             else ++it;
         }
     }
@@ -512,10 +520,11 @@ private:
             if (markouts == nullptr || !markouts->is_object()) return;
             for (std::size_t h = 0; h < kHorizonLabels.size(); ++h) {
                 if (markouts->as_object().contains(kHorizonLabels[h])) {
-                    it->second.completed_mask = static_cast<std::uint8_t>(it->second.completed_mask | (1U << h));
+                    it->second.completed_mask = static_cast<std::uint16_t>(
+                        it->second.completed_mask | static_cast<std::uint16_t>(1U << h));
                 }
             }
-            if (!bootstrap_mode && it->second.completed_mask == 0x1fU) pending_.erase(it);
+            if (!bootstrap_mode && it->second.completed_mask == kAllHorizonMask) pending_.erase(it);
         }
     }
 
@@ -523,8 +532,9 @@ private:
                        std::size_t horizon_index,
                        const pm::v7::ExecutableMarkout& markout) {
         const std::int64_t recorded = wall_ms();
-        const std::uint64_t identity = fnv1a(fill.fill_id)
-            ^ (static_cast<std::uint64_t>(kHorizonSeconds[horizon_index]) << 48U);
+        const std::string identity_material = fill.fill_id + ":" +
+            std::string(kHorizonLabels[horizon_index]);
+        const std::uint64_t identity = fnv1a(identity_material);
         const std::string record_id = "cpp-mm-markout-" + hex64(identity);
         json::object event;
         event["schema_version"] = 1;
@@ -559,10 +569,10 @@ private:
         metadata["full_l10_depth"] = true;
         metadata["future_vwap"] = markout.future_vwap;
         metadata["levels_used"] = static_cast<std::int64_t>(markout.levels_used);
-        metadata["horizon_seconds"] = kHorizonSeconds[horizon_index];
+        metadata["horizon_ms"] = kHorizonMilliseconds[horizon_index];
+        metadata["horizon_seconds"] = static_cast<double>(kHorizonMilliseconds[horizon_index]) / 1000.0;
         metadata["measurement_delay_ms"] = std::max<std::int64_t>(
-            0, latest.wall_receive_ms - fill.receive_ts_ms
-               - static_cast<std::int64_t>(kHorizonSeconds[horizon_index]) * 1000LL);
+            0, latest.wall_receive_ms - fill.receive_ts_ms - kHorizonMilliseconds[horizon_index]);
         event["metadata"] = std::move(metadata);
 
         const fs::path target = run_root_ / "research" / "evidence" / "maker_markout" /
