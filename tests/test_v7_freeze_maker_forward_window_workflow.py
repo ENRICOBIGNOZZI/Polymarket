@@ -7,12 +7,14 @@ import unittest
 
 ROOT = Path(__file__).resolve().parents[1]
 WORKFLOW = ROOT / ".github" / "workflows" / "v7-freeze-maker-forward-window.yml"
+DEPLOY_WORKFLOW = ROOT / ".github" / "workflows" / "v7-deploy-paper-server.yml"
 
 
 class FreezeMakerForwardWindowWorkflowTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls) -> None:
         cls.text = WORKFLOW.read_text(encoding="utf-8")
+        cls.deploy_text = DEPLOY_WORKFLOW.read_text(encoding="utf-8")
 
     def test_only_successful_paper_deploy_can_trigger_freeze(self) -> None:
         text = self.text
@@ -21,6 +23,21 @@ class FreezeMakerForwardWindowWorkflowTests(unittest.TestCase):
         self.assertIn("github.event.workflow_run.conclusion == 'success'", text)
         self.assertNotIn("workflow_dispatch:", text)
         self.assertNotIn("schedule:", text)
+
+    def test_deploy_must_explicitly_arm_window_and_default_is_off(self) -> None:
+        deploy = self.deploy_text
+        freeze = self.text
+        marker = "freeze_maker_forward_window:"
+        self.assertIn(marker, deploy)
+        section = deploy.split(marker, 1)[1].split("permissions:", 1)[0]
+        self.assertIn("required: true", section)
+        self.assertIn("default: false", section)
+        self.assertIn("FREEZE_MAKER_FORWARD_WINDOW", deploy)
+        self.assertIn("freeze_maker_forward_window=%s", deploy)
+        self.assertIn('freeze_requested="$(awk', freeze)
+        self.assertIn('$1=="freeze_maker_forward_window"', freeze)
+        self.assertIn('if [[ "$freeze_requested" != "true" ]]', freeze)
+        self.assertIn("Deploy completed without explicit forward-window arming", freeze)
 
     def test_github_permissions_do_not_grant_write_authority(self) -> None:
         text = self.text
