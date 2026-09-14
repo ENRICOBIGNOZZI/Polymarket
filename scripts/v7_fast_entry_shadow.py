@@ -79,7 +79,7 @@ def _books(
 
 def observe_once(
     status: dict[str, Any], policy: dict[str, Any], *, model_sha: str,
-    clob_url: str, timeout_seconds: float = 0.5,
+    clob_url: str, timeout_seconds: float = 0.5, latency_only: bool = False,
 ) -> dict[str, Any]:
     decision_wall_ns = time.time_ns()
     reason = ""
@@ -97,9 +97,28 @@ def observe_once(
         )
     market = status.get("market") if isinstance(status.get("market"), dict) else {}
     market_yes = live_market_yes(books, market) if len(books) == 2 else None
+    arrival_wall_ns = time.time_ns()
+    if latency_only:
+        return {
+            "schema": SCHEMA,
+            "record_id": stable_id(model_sha, "LATENCY_ONLY", decision_wall_ns, market.get("market_id"), latency_ms),
+            "code_sha": model_sha,
+            "paper_only": True,
+            "authenticated_execution": False,
+            "real_order_submission": False,
+            "real_capital_at_risk": False,
+            "execution_authority": "ZERO_AUTHORITY_RESEARCH_ONLY",
+            "measurement_mode": "LATENCY_ONLY_NO_ECONOMIC_ENDPOINTS",
+            "decision_wall_ns": decision_wall_ns,
+            "arrival_wall_ns": arrival_wall_ns,
+            "decision_to_fresh_book_ms": latency_ms,
+            "market_id": str(market.get("market_id") or ""),
+            "fresh_book_count": len(books),
+            "arrival_revalidated": len(books) == 2 and market_yes is not None,
+            "reason": reason or "FRESH_COMPLEMENT_CONSISTENT_BOOK_BATCH",
+        }
     candidates = robust_candidates(status, books, policy) if not reason else []
     best = max(candidates, key=lambda row: float(row.get("robust_ev") or -math.inf), default=None)
-    arrival_wall_ns = time.time_ns()
     return {
         "schema": SCHEMA,
         "record_id": stable_id(model_sha, decision_wall_ns, market.get("market_id"), market_yes, latency_ms),
@@ -140,6 +159,7 @@ def run(args: argparse.Namespace) -> int:
         row = observe_once(
             status, policy, model_sha=args.model_sha,
             clob_url=args.clob_url, timeout_seconds=args.timeout_seconds,
+            latency_only=args.latency_only,
         )
         append_jsonl(output, row)
         observations += 1
@@ -155,6 +175,7 @@ def run(args: argparse.Namespace) -> int:
             "execution_authority": "ZERO_AUTHORITY_RESEARCH_ONLY",
             "scan_interval_ms": int(interval * 1000),
             "synthetic_revalidation_sleep_ms": 0,
+            "measurement_mode": "LATENCY_ONLY_NO_ECONOMIC_ENDPOINTS" if args.latency_only else "FULL_ZERO_AUTHORITY_SHADOW",
             "observations": observations,
             "arrival_revalidation_failures": failures,
             "last": row,
@@ -175,6 +196,7 @@ def main() -> int:
     parser.add_argument("--timeout-seconds", type=float, default=0.5)
     parser.add_argument("--output", type=Path)
     parser.add_argument("--status-output", type=Path)
+    parser.add_argument("--latency-only", action="store_true", help="Measure fresh-book latency without computing or recording economic candidates.")
     parser.add_argument("--once", action="store_true")
     args = parser.parse_args()
     if len(args.model_sha) != 40 or any(ch not in "0123456789abcdef" for ch in args.model_sha):

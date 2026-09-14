@@ -64,6 +64,23 @@ class FastEntryShadowTest(unittest.TestCase):
         self.assertEqual(row["reason"], "ROBUST_CANDIDATE")
         self.assertEqual(row["execution_authority"], "ZERO_AUTHORITY_RESEARCH_ONLY")
 
+    def test_latency_only_never_computes_or_records_economic_candidates(self):
+        with patch.object(MOD, "_books", return_value=(self.books(), 19, "")):
+            with patch.object(MOD, "robust_candidates") as candidates:
+                row = MOD.observe_once(
+                    self.valid_status(), {}, model_sha=SHA,
+                    clob_url="https://example.invalid", latency_only=True,
+                )
+        candidates.assert_not_called()
+        self.assertEqual(row["measurement_mode"], "LATENCY_ONLY_NO_ECONOMIC_ENDPOINTS")
+        self.assertEqual(row["decision_to_fresh_book_ms"], 19)
+        self.assertTrue(row["arrival_revalidated"])
+        self.assertNotIn("candidate_count", row)
+        self.assertNotIn("best_outcome", row)
+        self.assertNotIn("best_robust_ev_per_share", row)
+        self.assertNotIn("market_yes", row)
+        self.assertNotIn("tte_seconds", row)
+
     def test_module_has_no_order_or_ledger_writer_dependency(self):
         source = (ROOT / "scripts" / "v7_fast_entry_shadow.py").read_text(encoding="utf-8")
         self.assertNotIn("spool_event", source)
