@@ -1,10 +1,11 @@
 #!/usr/bin/env python3
 """Forward-window evaluator with source-level selector authority proof.
 
-This wraps `v7_maker_forward_window_evaluator` and proves each canonical Maker
+This wraps `v7_maker_forward_window_evaluator` and proves every canonical Maker
 order against the exact reward-selection snapshot that generated its opportunity.
-No ledger mutation is performed: proven FRESH_OPPOSITE_FLOW provenance is injected
-only into an in-memory copy before the frozen economic evaluator runs.
+Copied ORDER_SUBMITTED provenance is never trusted as proof: a fresh proof is
+reconstructed from the selector event log and injected only into an in-memory
+copy before the frozen economic evaluator runs. The ledger is never mutated.
 """
 from __future__ import annotations
 
@@ -57,6 +58,7 @@ def iter_rows(path: pathlib.Path):
 
 def selection_index(paths: Iterable[pathlib.Path], code_sha: str) -> dict[int, dict[str, Any]]:
     index: dict[int, dict[str, Any]] = {}
+    ambiguous: set[int] = set()
     for path in evidence_files(paths):
         for row in iter_rows(path):
             timestamp = int(base.number(row.get("timestamp_ms"), 0))
@@ -70,10 +72,15 @@ def selection_index(paths: Iterable[pathlib.Path], code_sha: str) -> dict[int, d
                 or not isinstance(row.get("markets"), list)
             ):
                 continue
-            # Exact duplicate timestamps should be byte-equivalent in the canonical journal.
-            # If they are not, remove the timestamp entirely so the audit fails closed.
-            if timestamp in index and base.canonical_json(index[timestamp]) != base.canonical_json(row):
-                index.pop(timestamp, None)
+            # Once a timestamp has conflicting canonical payloads it remains
+            # unusable forever, even if a later row happens to match one side.
+            # Exact duplicates are harmless and retain the unique payload.
+            if timestamp in ambiguous:
+                continue
+            if timestamp in index:
+                if base.canonical_json(index[timestamp]) != base.canonical_json(row):
+                    index.pop(timestamp, None)
+                    ambiguous.add(timestamp)
                 continue
             index[timestamp] = row
     return index
@@ -201,7 +208,7 @@ def inject_source_proofs(
     code_sha = str(manifest["code_sha"])
     start, end = int(manifest["window_start_ms"]), int(manifest["window_end_ms"])
     output = copy.deepcopy(ledger)
-    proven = failed = already = 0
+    proven = failed = existing_seen = existing_replaced = 0
     failures: dict[str, str] = {}
     for row in output:
         if (
@@ -216,10 +223,12 @@ def inject_source_proofs(
             failures[str(row.get("order_id") or "")] = "MISSING_EXECUTION_ALPHA"
             failed += 1
             continue
-        existing = alpha.get("flow_provenance")
-        if isinstance(existing, dict):
-            already += 1
-            continue
+        if isinstance(alpha.get("flow_provenance"), dict):
+            existing_seen += 1
+        # Existing copied provenance is deliberately discarded. The v2 audit
+        # succeeds only if the canonical selector source can independently
+        # reconstruct the authority for this exact order.
+        alpha.pop("flow_provenance", None)
         proof, state = prove_order(row, snapshots, code_sha)
         if proof is None:
             failures[str(row.get("order_id") or "")] = state
@@ -227,10 +236,12 @@ def inject_source_proofs(
             continue
         alpha["flow_provenance"] = proof
         proven += 1
+        existing_replaced += int(existing_seen > existing_replaced)
     return output, {
         "proof_method": "EXACT_SELECTOR_EVENT_LOG_JOIN",
         "orders_proven_from_source": proven,
-        "orders_with_existing_provenance": already,
+        "orders_with_existing_copied_provenance": existing_seen,
+        "orders_existing_provenance_replaced_by_source_proof": existing_replaced,
         "orders_unproven": failed,
         "unproven_order_reasons": failures,
         "selector_snapshots_indexed": len(snapshots),
