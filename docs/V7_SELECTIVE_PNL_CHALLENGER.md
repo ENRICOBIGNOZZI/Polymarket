@@ -48,6 +48,14 @@ A boundary-condition defect found during local verification was fixed: threshold
 
 PR #939 must remain draft and unmerged until the active `aa5311a...` Maker forward verdict is complete. During that window, only operational integrity may be inspected. The challenger branch, its fast-entry shadow and the next-window protocol are development artifacts; none may change the active policy, code SHA, execution behavior or evidence boundary.
 
+## Technical latency-only benchmark during the active window
+
+A dedicated latency-only mode was added specifically so entry-path mechanics can be measured without computing or writing model edge, candidate count, selected side, market probability, TTE, PnL or markout. Outputs were written under /tmp, not into the active experiment evidence tree.
+
+Two short operational samples separated by a BTC M5 market handoff produced a useful systems result. On market 4535783, 40/40 requests returned both books but all 40 failed the complement-consistency check; the market identity then rolled to 4535990. On the new stable market, 20/20 fresh batches were complement-consistent. The stable-market fresh-book latency was p50 138 ms, p90 177.5 ms, p99 about 205.6 ms, max 209 ms. No economic fields were emitted in either sample.
+
+This supports a rollover guard rather than a post-hoc TTE cutoff: when a fresh two-book batch is complement-incoherent, the challenger withdraws and takes no new risk. It resumes only on a fresh complement-consistent batch and records market-identity changes as diagnostics. No fixed TTE threshold is inferred from this development observation.
+
 ## Safety and promotion
 
 The challenger always has `paper_only=true`, `authenticated_execution=false`, `real_order_submission=false`, `real_capital_at_risk=false`, `execution_authority=ZERO_AUTHORITY_RESEARCH_ONLY`, and `automatic_promotion=false`. Any runtime integration, threshold change, sizing change or deployment requires a later exact-SHA review and a new prospective forward boundary.
