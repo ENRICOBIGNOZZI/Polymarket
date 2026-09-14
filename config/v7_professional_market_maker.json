@@ -224,6 +224,7 @@
     "settlement_anchor": {
       "clob_url": "https://clob.polymarket.com",
       "enabled": true,
+      "causal_flow_authority_enabled": true,
       "execution_authority_enabled": false,
       "evict_observation_only_market": true,
       "fill_probability_source": "EXECUTION_MODEL_GLOBAL_POSTERIOR",

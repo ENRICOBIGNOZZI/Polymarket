@@ -26,13 +26,17 @@ int main() {
         send(snapshot(1'700'000'000'000), 0);
         send(snapshot(1'700'000'001'100), 1100);
         send(R"({"event_type":"last_trade_price","asset_id":"yes","timestamp":1700000001200,"side":"SELL","price":"0.48","size":"2"})", 1200);
-        observer.write_status();
+        observer.write_flow_snapshot(1'700'000'001'200);
         auto read_last = [&](const fs::path& path) {
             std::ifstream stream(path); std::string line, last;
             while (std::getline(stream, line)) last = line;
             return json::parse(last).as_object();
         };
         const auto row = read_last(directory / "book_observations" / "current.jsonl");
+        const auto u64 = [](const json::value& value) -> std::uint64_t {
+            return value.is_uint64() ? value.as_uint64()
+                                     : static_cast<std::uint64_t>(value.as_int64());
+        };
         assert(row.at("features_valid").as_bool());
         const auto& print = row.at("public_trade").as_object();
         assert(print.at("aggressor_side").as_string() == "SELL");
@@ -46,7 +50,17 @@ int main() {
         assert(features.at("inventory_fraction").is_null());
         assert(row.at("execution_authority").as_string() == "ZERO_AUTHORITY_RESEARCH_ONLY");
         assert(read_last(directory / "fillability_ws.jsonl").at("size").as_double() == 2.0);
+        const auto flow = json::parse(read_file(directory / "fillability_flow_snapshot.json")).as_object();
+        assert(flow.at("evidence_complete").as_bool());
+        const auto& flow_row = flow.at("rows").as_array().front().as_object();
+        assert(u64(flow_row.at("sell_prints_120s")) == 1);
+        assert(std::abs(flow_row.at("sell_shares_120s").as_double() - 2.0) < 1e-12);
         observer.on_reconnect();
+        observer.write_status();
+        observer.write_flow_snapshot(1'700'000'001'300);
+        const auto reset_flow = json::parse(read_file(directory / "fillability_flow_snapshot.json")).as_object();
+        assert(u64(reset_flow.at("connection_epoch")) == 2);
+        assert(u64(reset_flow.at("rows").as_array().front().as_object().at("sell_prints_120s")) == 0);
         send(snapshot(1'700'000'001'300), 1300);
         const auto reset = read_last(directory / "book_observations" / "current.jsonl");
         assert(!reset.at("features_valid").as_bool());

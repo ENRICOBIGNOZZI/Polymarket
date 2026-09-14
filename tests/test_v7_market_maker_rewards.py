@@ -178,6 +178,31 @@ def _anchor_book(token: str, *, bid: float, ask: float, bid_size: float = 12.0) 
     }
 
 
+def _anchor_flow_snapshot(path: Path, *, now_ms: int, model_sha: str = SHA,
+                          evidence_complete: bool = True) -> Path:
+    rows = []
+    for token in ("btc-yes", "btc-no"):
+        rows.append({
+            "market_id": "btc5", "event_id": "e-btc5", "token_id": token,
+            "connection_epoch": 1,
+            "buy_prints_5s": 0, "buy_prints_30s": 0, "buy_prints_120s": 0, "buy_prints_600s": 0,
+            "sell_prints_5s": 4, "sell_prints_30s": 20, "sell_prints_120s": 20, "sell_prints_600s": 20,
+            "buy_shares_120s": 0.0, "buy_shares_600s": 0.0,
+            "sell_shares_120s": 300.0, "sell_shares_600s": 300.0,
+            "last_buy_receive_ms": 0, "last_sell_receive_ms": now_ms - 100,
+            "last_receive_ms": now_ms - 100,
+        })
+    path.write_text(json.dumps({
+        "schema": rewards.ANCHOR_FLOW_SCHEMA, "timestamp_ms": now_ms,
+        "model_sha": model_sha, "paper_only": True,
+        "authenticated_execution": False, "real_order_submission": False,
+        "execution_authority": "ZERO_AUTHORITY_RESEARCH_ONLY",
+        "observer_session_id": "test", "connection_epoch": 1,
+        "evidence_complete": evidence_complete, "rows": rows,
+    }), encoding="utf-8")
+    return path
+
+
 def _observation_row(index: int, *, authorized: bool = False, control: bool = False) -> dict:
     cell = ({
         "outcome": "YES", "token_id": f"y{index}", "action": "JOIN", "quote_side": "BUY",
@@ -370,6 +395,37 @@ class MakerRewardSelectorTests(unittest.TestCase):
         )
         self.assertEqual(flow_quote["opposite_prints_2m"], 3)
 
+    def test_settlement_anchor_builds_authority_from_observed_causal_flow(self) -> None:
+        from tempfile import TemporaryDirectory
+        now_mono = 15_000_000
+        now_ms = 1_000_000
+        snapshot = _anchor_snapshot([_observation_row(i) for i in range(40)])
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            universe = _universe(root / "current.json", timestamp_ms=now_ms, markets=[_anchor_universe_row()])
+            fair = root / "fair.json"
+            fair.write_text(json.dumps(_anchor_fair_status(now_mono=now_mono)), encoding="utf-8")
+            model = _anchor_execution_model(root / "model.json")
+            flow = _anchor_flow_snapshot(root / "flow.json", now_ms=now_ms)
+            _, selection_cfg, _, _ = rewards._validated_config(ROOT / "config" / "v7_professional_market_maker.json")
+            selection_cfg["settlement_anchor"]["causal_flow_authority_enabled"] = True
+            def request(url: str, *, timeout: float = 4.0):
+                token = "btc-yes" if "btc-yes" in url else "btc-no"
+                return _anchor_book(token, bid=0.50 if token == "btc-yes" else 0.49,
+                                    ask=0.52 if token == "btc-yes" else 0.51)
+            result = rewards._inject_settlement_anchor(
+                snapshot, fair_status_path=fair, universe_path=universe, execution_model_path=model,
+                anchor_flow_path=flow, selection_cfg=selection_cfg, model_sha=SHA,
+                now_ms=now_ms, now_monotonic_ns=now_mono, request_fn=request)
+        anchor = next(row for row in result["markets"] if row.get("settlement_anchor") is True)
+        self.assertEqual(result["settlement_anchor_state"], "OBSERVATION_WITH_CAUSAL_FLOW_AUTHORITY")
+        self.assertTrue(result["settlement_anchor_observed_flow_authority"])
+        self.assertFalse(result["settlement_anchor_authorized"])
+        self.assertGreater(anchor["authorized_execution_cell_count"], 0)
+        self.assertTrue(all(c["authority_basis"] == "FRESH_OPPOSITE_FLOW" for c in anchor["authorized_execution_cells"]))
+        self.assertTrue(all(c["fill_probability_source"] == "ANCHOR_CAUSAL_WS_FLOW" for c in anchor["authorized_execution_cells"]))
+        self.assertGreater(anchor["recent_sell_prints_2m"], 0)
+
     def test_settlement_anchor_drops_nonfresh_inherited_flow_authority(self) -> None:
         from tempfile import TemporaryDirectory
         now_mono = 14_000_000
@@ -483,6 +539,28 @@ class MakerRewardSelectorTests(unittest.TestCase):
         self.assertEqual(calls, 0)
         self.assertEqual(result["settlement_anchor_state"], "UNIVERSE_IDENTITY_CONFLICT")
         self.assertFalse(result["settlement_anchor_authorized"])
+
+    def test_anchor_observed_flow_fails_closed_on_stale_sha_or_incomplete_evidence(self) -> None:
+        from tempfile import TemporaryDirectory
+        now_ms = 1_000_000
+        books = {
+            "btc-yes": {"best_bid": 0.50, "best_ask": 0.52, "best_bid_size": 12.0, "tick_size": 0.01},
+            "btc-no": {"best_bid": 0.49, "best_ask": 0.51, "best_bid_size": 12.0, "tick_size": 0.01},
+        }
+        _, cfg, _, _ = rewards._validated_config(ROOT / "config" / "v7_professional_market_maker.json")
+        cfg["settlement_anchor"]["causal_flow_authority_enabled"] = True
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            stale = _anchor_flow_snapshot(root / "stale.json", now_ms=now_ms - 31_000)
+            bad_sha = _anchor_flow_snapshot(root / "bad_sha.json", now_ms=now_ms, model_sha="b" * 40)
+            incomplete = _anchor_flow_snapshot(root / "incomplete.json", now_ms=now_ms, evidence_complete=False)
+            for path in (stale, bad_sha, incomplete):
+                cells, quotes, fields = rewards._anchor_observed_flow_authority(
+                    path, market_id="btc5", yes_token="btc-yes", no_token="btc-no",
+                    books=books, selection_cfg=cfg, model_sha=SHA, now_ms=now_ms)
+                self.assertEqual(cells, [])
+                self.assertEqual(quotes, [])
+                self.assertEqual(fields, {})
 
     def test_settlement_anchor_rejects_non_taker_only_fee_schedule(self) -> None:
         from tempfile import TemporaryDirectory
