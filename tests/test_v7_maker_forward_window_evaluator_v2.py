@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 import importlib.util
+import json
 from pathlib import Path
 import sys
+from tempfile import TemporaryDirectory
 import unittest
 
 
@@ -64,9 +66,7 @@ def envelope() -> dict:
         "contract_id": "t1",
         "side": "YES",
         "source_event_timestamps_ns": [SELECTOR_TS * 1_000_000],
-        "execution_plan": {
-            "legs": [{"token_id": "t1", "side": "BUY"}],
-        },
+        "execution_plan": {"legs": [{"token_id": "t1", "side": "BUY"}]},
         "reasons": ["VERIFIED_SETTLEMENT_RULE", "PLACEMENT_JOIN"],
     }
 
@@ -139,20 +139,14 @@ def snapshot(*, basis: str = "FRESH_OPPOSITE_FLOW", fresh: bool = True) -> dict:
         "markets": [{
             "market_id": "m1",
             "authorized_execution_cells": [{
-                "token_id": "t1",
-                "outcome": "YES",
-                "quote_side": "BUY",
-                "action": "JOIN",
-                "authority_basis": basis,
+                "token_id": "t1", "outcome": "YES", "quote_side": "BUY",
+                "action": "JOIN", "authority_basis": basis,
                 "projected_fill_probability": 0.1,
             }],
             "quote_opportunities": [{
-                "token_id": "t1",
-                "outcome": "YES",
-                "quote_side": "BUY",
+                "token_id": "t1", "outcome": "YES", "quote_side": "BUY",
                 "opposite_flow_is_fresh": fresh,
-                "opposite_prints_2m": 3,
-                "opposite_prints_10m": 8,
+                "opposite_prints_2m": 3, "opposite_prints_10m": 8,
                 "last_opposite_flow_age_ms": 200,
                 "projected_join_fill_probability": 0.1,
                 "flow_source": "ANCHOR_CAUSAL_WS_FLOW",
@@ -198,6 +192,31 @@ class ForwardAuthorityAuditTests(unittest.TestCase):
             manifest(), injected, {"f1": {"250ms": 0.01}}, bootstrap_draws=10, seed=2)
         self.assertEqual(report["state"], "HARD_CORRECTNESS_FAILURE")
         self.assertFalse(report["metrics"]["authority_provenance_complete"])
+
+    def test_existing_copied_provenance_is_never_trusted_without_source(self) -> None:
+        row = ledger("ORDER_SUBMITTED")
+        row["metadata"]["execution_alpha"]["flow_provenance"] = {
+            "authority_basis": "FRESH_OPPOSITE_FLOW",
+            "opposite_flow_is_fresh": True,
+            "flow_source": "COPIED_METADATA_ONLY",
+        }
+        injected, audit = v2.inject_source_proofs([row], manifest(), {})
+        self.assertEqual(audit["orders_with_existing_copied_provenance"], 1)
+        self.assertEqual(audit["orders_proven_from_source"], 0)
+        self.assertEqual(audit["orders_unproven"], 1)
+        self.assertNotIn("flow_provenance", injected[0]["metadata"]["execution_alpha"])
+
+    def test_ambiguous_selector_timestamp_remains_poisoned_after_third_duplicate(self) -> None:
+        first = snapshot()
+        conflict = snapshot(fresh=False)
+        with TemporaryDirectory() as directory:
+            path = Path(directory) / "selector.events.jsonl"
+            path.write_text(
+                "\n".join(json.dumps(row, sort_keys=True) for row in (first, conflict, first)) + "\n",
+                encoding="utf-8",
+            )
+            index = v2.selection_index([path], SHA)
+        self.assertNotIn(SELECTOR_TS, index)
 
 
 if __name__ == "__main__":
