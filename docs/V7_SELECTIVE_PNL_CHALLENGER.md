@@ -42,6 +42,10 @@ On the isolated server worktree, the challenger currently passes 16 focused test
 
 A boundary-condition defect found during this local verification was fixed: threshold comparisons now use a `1e-12` numerical tolerance so an intended 0.5c or 1c edge is not rejected solely because IEEE floating-point represents it microscopically below the decimal threshold.
 
+## Active-window isolation
+
+PR #939 must remain draft and unmerged until the active `aa5311a...` Maker forward verdict is complete. During that window, only operational integrity may be inspected. The challenger branch, its fast-entry shadow and the next-window protocol are development artifacts; none may change the active policy, code SHA, execution behavior or evidence boundary.
+
 ## Safety and promotion
 
 The challenger always has `paper_only=true`, `authenticated_execution=false`, `real_order_submission=false`, `real_capital_at_risk=false`, `execution_authority=ZERO_AUTHORITY_RESEARCH_ONLY`, and `automatic_promotion=false`. Any runtime integration, threshold change, sizing change or deployment requires a later exact-SHA review and a new prospective forward boundary.
