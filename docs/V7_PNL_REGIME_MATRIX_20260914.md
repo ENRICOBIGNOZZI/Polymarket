@@ -12,6 +12,28 @@ Short-horizon repricing also contains information. On the frozen 95-market repri
 
 Across seven completed confirmatory windows with 669 contract-window observations, however, the 1 s settlement surplus under 2x cost/risk stress averaged about -0.01398/share. Generic directional trading therefore remains rejected.
 
+## Cross-window stability — same frozen model only
+
+To avoid mixing model generations, a stricter check uses the five contiguous completed windows sharing frozen model hash `ac837540...`. Their contract-equal 1 s settlement surplus under 2x cost/risk stress was approximately:
+
+| Window | Mean surplus/share |
+| ---: | ---: |
+| 1 | -0.03949 |
+| 2 | -0.03894 |
+| 3 | +0.00221 |
+| 4 | -0.02114 |
+| 5 | +0.01555 |
+
+No predeclared regime cell with at least 10 independent contracts in a window was positive in four or more of these five windows. This is the strongest current warning against selecting a profitable-looking cell from one historical slice.
+
+The side diagnostic is asymmetric but remains descriptive. NO-side contract-equal mean surplus/share was negative in all five windows: about -0.0455, -0.0352, -0.0072, -0.0630 and -0.0672. YES was much less stable. A post-hoc first-per-contract YES subset above 1 cent development margin was positive in four of five windows, while the analogous NO subset remained negative in all five; neither observation is permitted to become a live side filter from this sample.
+
+## Maker fill-conditioned toxicity
+
+Across archived pre-window Maker markout evidence there were 109 distinct fills with a 1 s markout and 104 with a 10 s markout. Mean fill-conditioned markout was approximately -0.0422/share at 1 s and -0.0632/share at 10 s. Only about 11.9% of 1 s markouts and 23.1% of 10 s markouts were positive.
+
+This is direct evidence that generalized passive fills are adversely selected. It supports external cancel/veto and selective quoting more strongly than it supports simply increasing Maker fill rate.
+
 ## Latency decay — latest two comparable windows only
 
 Using contract-equal weighting across the latest two same-generation windows, settlement surplus under 2x cost/risk stress changed with observation delay approximately as follows:
@@ -58,3 +80,4 @@ The historical mean deteriorated when naively scaling to 100 shares, so the evid
 3. Directional execution is a separate selective lane, not a fallback that trades every forecast.
 4. Entry latency matters economically, especially beyond 100–250 ms, but latency work cannot rescue a negative selection policy by itself.
 5. The next forward report must publish TTE, side, spread, book imbalance, external disagreement, 100 ms external shock, volatility and oracle-distance cells without changing the primary threshold after the window starts.
+6. The NO-side asymmetry is a prospective hypothesis only. It requires a fresh boundary before it can affect selection or sizing.
