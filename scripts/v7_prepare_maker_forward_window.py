@@ -172,7 +172,9 @@ def validate_policy_config(repository_root: pathlib.Path) -> dict[str, Any]:
     }
 
 
-def prefix_baseline(path: pathlib.Path, *, required: bool) -> dict[str, Any]:
+def prefix_baseline(
+    path: pathlib.Path, *, required: bool, allow_empty: bool = False,
+) -> dict[str, Any]:
     if not path.exists():
         if required:
             raise ValueError(f"evidence_baseline:missing:{path}")
@@ -181,7 +183,7 @@ def prefix_baseline(path: pathlib.Path, *, required: bool) -> dict[str, Any]:
         raise ValueError(f"evidence_baseline:not_regular_file:{path}")
     before = path.stat()
     size = int(before.st_size)
-    if required and size <= 0:
+    if required and size <= 0 and not allow_empty:
         raise ValueError(f"evidence_baseline:empty:{path}")
     digest = sha256_prefix(path, size)
     after = path.stat()
@@ -196,8 +198,10 @@ def prefix_baseline(path: pathlib.Path, *, required: bool) -> dict[str, Any]:
     }
 
 
-def file_baseline(path: pathlib.Path, *, required: bool = False) -> dict[str, Any]:
-    return prefix_baseline(path, required=required)
+def file_baseline(
+    path: pathlib.Path, *, required: bool = False, allow_empty: bool = False,
+) -> dict[str, Any]:
+    return prefix_baseline(path, required=required, allow_empty=allow_empty)
 
 
 def evidence_tree_baseline(paths: Iterable[pathlib.Path]) -> dict[str, Any]:
@@ -317,7 +321,9 @@ def prepare(
             raise ValueError(f"frozen_artifact:not_regular:{path.name}")
     baseline_started_ms = int(clock())
     evidence_baselines = {
-        "ledger_execution_jsonl": file_baseline(run_root / "ledger" / "execution.jsonl", required=True),
+        "ledger_execution_jsonl": file_baseline(
+            run_root / "ledger" / "execution.jsonl", required=True, allow_empty=True
+        ),
         "selector_events_jsonl": file_baseline(run_root / "micro_maker" / "reward_selection.events.jsonl", required=True),
         "fillability_ws_jsonl": file_baseline(run_root / "micro_maker" / "fillability_ws.jsonl", required=True),
         "causal_book_evidence": evidence_tree_baseline(book_evidence),

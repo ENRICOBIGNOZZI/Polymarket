@@ -113,13 +113,16 @@ class FreezeAfterDeployTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "marker:identity"):
                 mod.existing_result(marker, stable, expected_sha=SHA, deploy_run_id=RUN_ID)
 
-    def test_wait_for_evidence_requires_all_four_nonempty_regular_files(self) -> None:
+    def test_wait_for_evidence_accepts_empty_ledger_but_requires_other_streams(self) -> None:
         with TemporaryDirectory() as directory:
             root = Path(directory)
-            for path in mod.required_evidence_paths(root):
+            paths = mod.required_evidence_paths(root)
+            for path in paths:
                 path.parent.mkdir(parents=True, exist_ok=True); path.write_text("x\n")
+            paths[0].write_bytes(b"")
+            self.assertTrue(mod.evidence_surfaces_ready(root))
             mod.wait_for_evidence(root, timeout_seconds=0, poll_seconds=.01)
-            mod.required_evidence_paths(root)[-1].write_text("")
+            paths[-1].write_text("")
             with self.assertRaisesRegex(ValueError, "evidence:not_ready"):
                 mod.wait_for_evidence(root, timeout_seconds=0, poll_seconds=.01)
 
