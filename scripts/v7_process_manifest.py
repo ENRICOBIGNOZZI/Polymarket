@@ -50,7 +50,11 @@ def resolve(root: Path, manifest: dict[str, Any]) -> dict[str, Any]:
         raise ProcessManifestError("manifest_identity_or_safety")
     profiles = manifest.get("profiles")
     rows = manifest.get("processes")
-    if not isinstance(profiles, dict) or not isinstance(rows, list) or len(rows) != 27:
+    expected_process_count = int(manifest.get("expected_process_count") or 0)
+    expected_launcher_child_count = int(manifest.get("expected_launcher_child_count") or 0)
+    if (not isinstance(profiles, dict) or not isinstance(rows, list)
+            or expected_process_count <= 0 or expected_launcher_child_count <= 0
+            or len(rows) != expected_process_count):
         raise ProcessManifestError("profile_or_process_count")
     resolved: list[dict[str, Any]] = []
     ids: set[str] = set()
@@ -158,13 +162,17 @@ def resolve(root: Path, manifest: dict[str, Any]) -> dict[str, Any]:
         raise ProcessManifestError(f"long_lived_authority_counts:{authority_counts}")
     launcher = (root / manifest["launcher"]).read_text(encoding="utf-8")
     actual_logs = launcher_logs(launcher)
-    if len(actual_logs) != 25 or len(set(actual_logs)) != 25 or set(actual_logs) != declared_logs:
+    if (len(actual_logs) != expected_launcher_child_count
+            or len(set(actual_logs)) != expected_launcher_child_count
+            or set(actual_logs) != declared_logs):
         raise ProcessManifestError("launcher_manifest_parity")
     return {
         "schema": "polymarket_v7_process_manifest_validation_v1",
         "paper_only": True,
         "process_count": len(resolved),
+        "expected_process_count": expected_process_count,
         "launcher_child_count": len(actual_logs),
+        "expected_launcher_child_count": expected_launcher_child_count,
         "launcher_manifest_parity": True,
         "feed_zero_authority": True,
         "dependency_graph_acyclic": True,
@@ -184,7 +192,8 @@ def main() -> int:
         manifest = json.loads((root / args.manifest).read_text(encoding="utf-8"))
         result = resolve(root, manifest)
         summary = {key: result[key] for key in (
-            "schema", "paper_only", "process_count", "launcher_child_count",
+            "schema", "paper_only", "process_count", "expected_process_count",
+            "launcher_child_count", "expected_launcher_child_count",
             "launcher_manifest_parity", "feed_zero_authority",
             "dependency_graph_acyclic", "authority_counts",
         )}

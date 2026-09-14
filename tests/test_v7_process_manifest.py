@@ -18,8 +18,8 @@ def manifest() -> dict:
 
 def test_manifest_matches_all_25_launcher_children_and_two_runtime_owners() -> None:
     report = resolve(ROOT, manifest())
-    assert report["process_count"] == 27
-    assert report["launcher_child_count"] == 25
+    assert report["process_count"] == report["expected_process_count"] == 27
+    assert report["launcher_child_count"] == report["expected_launcher_child_count"] == 25
     assert report["launcher_manifest_parity"] is True
     assert report["feed_zero_authority"] is True
 

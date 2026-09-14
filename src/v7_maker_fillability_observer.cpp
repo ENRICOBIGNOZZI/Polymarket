@@ -386,6 +386,18 @@ public:
             result.lineage_invalid_tick_size_change, std::memory_order_relaxed);
         price_change_without_lineage_.fetch_add(
             result.price_change_without_lineage, std::memory_order_relaxed);
+        const auto root_price_change_failures =
+            result.lineage_invalid_price_change > result.price_change_without_lineage
+                ? result.lineage_invalid_price_change - result.price_change_without_lineage : 0;
+        const bool root_lineage_failure =
+            result.invalid_frame || result.output_overflow || result.arena_exhausted
+            || result.lineage_invalid_book_snapshot > 0
+            || root_price_change_failures > 0
+            || result.lineage_invalid_tick_size_change > 0;
+        if (root_lineage_failure) {
+            lineage_recovery_requests_.fetch_add(1, std::memory_order_relaxed);
+            lineage_recovery_requested_.store(true, std::memory_order_release);
+        }
         unknown_asset_.fetch_add(
             result.ignored_unknown_assets, std::memory_order_relaxed);
         if (result.invalid_frame || result.output_overflow || result.arena_exhausted) {
@@ -430,6 +442,14 @@ public:
             row.lineage_continuous = event.book.lineage_continuous;
             if (!queue_->try_push(row)) dropped_.fetch_add(1, std::memory_order_relaxed);
         }
+    }
+
+    [[nodiscard]] bool lineage_recovery_requested() const noexcept {
+        return lineage_recovery_requested_.load(std::memory_order_acquire);
+    }
+
+    [[nodiscard]] std::uint64_t lineage_recovery_requests() const noexcept {
+        return lineage_recovery_requests_.load(std::memory_order_relaxed);
     }
 
     void on_reconnect() {
@@ -520,6 +540,8 @@ public:
         root["lineage_invalid_price_change"] = lineage_invalid_price_change_.load(std::memory_order_relaxed);
         root["lineage_invalid_tick_size_change"] = lineage_invalid_tick_size_change_.load(std::memory_order_relaxed);
         root["price_change_without_lineage"] = price_change_without_lineage_.load(std::memory_order_relaxed);
+        root["lineage_recovery_requested"] = lineage_recovery_requested();
+        root["lineage_recovery_requests"] = lineage_recovery_requests();
         root["unknown_asset"] = unknown_asset_.load(std::memory_order_relaxed);
         root["reconnects"] = reconnects_.load(std::memory_order_relaxed);
         root["connection_epoch"] = connection_epoch_.load(std::memory_order_relaxed);
@@ -736,6 +758,8 @@ private:
     std::atomic<std::uint64_t> lineage_invalid_price_change_{0};
     std::atomic<std::uint64_t> lineage_invalid_tick_size_change_{0};
     std::atomic<std::uint64_t> price_change_without_lineage_{0};
+    std::atomic<std::uint64_t> lineage_recovery_requests_{0};
+    std::atomic<bool> lineage_recovery_requested_{false};
     std::atomic<std::uint64_t> unknown_asset_{0};
     std::atomic<std::uint64_t> reconnects_{0};
     std::uint64_t sequence_ = 0;
@@ -772,6 +796,9 @@ int main(int argc, char** argv) {
                     // Price/feature refreshes do not change the subscription.
                     // Restarting on every mtime update erased queue evidence.
                     reload = fair_observation_pairs(options) != fair_pairs;
+                    if (options.fair_only && observer.lineage_recovery_requested()) {
+                        reload = true;
+                    }
                     if (!options.fair_only) {
                         reload = reload || load_selected_pairs(options.selection) != selected_pairs;
                     }

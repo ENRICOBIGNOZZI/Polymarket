@@ -38,17 +38,25 @@ def test_lineage_invalidation_is_instrumented_without_relaxing_fail_closed_rules
     assert '++result.price_change_without_lineage;' in decoder
 
 
-def test_retrospective_analytics_are_background_policy_only():
+def test_retrospective_analytics_are_serialized_and_backgrounded():
     loop = (ROOT / 'scripts/paper_v7_execution_loop.sh').read_text()
+    helper = (ROOT / 'scripts/v7_serialized_analytics.py').read_text()
     heavy = (
         'v7_generate_economic_artifacts.py', 'v7_profit_attribution.py',
         'v7_profit_report.py', 'v7_fast_cancel_latency_report.py',
         'v7_maker_execution_horse_race.py', 'v7_economic_decision_report.py',
         'v7_lossless_data_compaction.py', 'v7_permanent_evidence.py',
+        'v7_joint_execution_policy.py', 'v7_learned_execution_model.py',
     )
+    assert 'v7_background_analytics()' in loop
+    assert '/usr/sbin/taskpolicy -b nice -n 10 python3 scripts/v7_serialized_analytics.py' in loop
+    assert '--lock "$RUN_ROOT/control/analytics.lock"' in loop
     for script in heavy:
-        assert f'/usr/sbin/taskpolicy -b nice -n 10 python3 scripts/{script}' in loop
-    assert '/usr/sbin/taskpolicy -b nice -n 10 python3 scripts/v7_canonical_economics.py' not in loop
+        assert f'v7_background_analytics python3 scripts/{script}' in loop
+    assert 'fcntl.flock(handle.fileno(), fcntl.LOCK_EX)' in helper
+    assert 'DEFERRED_RESOURCE_PRESSURE' in helper
+    assert 'os.getloadavg()' in helper
+    assert 'v7_background_analytics python3 scripts/v7_canonical_economics.py' not in loop
 
 
 def test_router_maintenance_failure_is_fail_closed():

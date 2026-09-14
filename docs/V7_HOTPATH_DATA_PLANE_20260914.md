@@ -32,10 +32,20 @@ This note records technical/causal observations only. No active-window PnL, mark
 2. Run the external-fair router on a 250 ms deadline schedule, while moving reconciliation/positions/forecasts to a 1 Hz maintenance phase in the same owner thread.
 3. Fail closed if maintenance fails: no new entry decisions until a complete maintenance pass restores readiness.
 4. Instrument L2 lineage loss by source: invalid full snapshot, invalid price change, invalid tick-size change, and price changes received after lineage is already lost. No decoder acceptance rule is relaxed.
-5. Place retrospective analytics under macOS background scheduling plus lower CPU priority. Health-critical canonical economics is deliberately not backgrounded.
+5. Serialize all retrospective analytics behind one exclusive lock, run them under macOS background scheduling plus lower CPU priority, and defer them under host load pressure. Health-critical canonical economics is deliberately not backgrounded.
+6. Share one persistent HTTP/1.1 CLOB `/books` implementation between fast-entry research and the PAPER router, with separate thread-confined clients, 250 ms timeout, no same-tick retry, and zero synthetic revalidation sleep.
+7. Recover fair-only book lineage by controlled resubscription after a root invalidation while keeping all decoder acceptance checks fail-closed; poisoned follow-on deltas cannot trigger a restart storm.
+8. Accelerate BTC M5 rollover binding to a 1 Hz exact-slug recovery cadence only when the current verified contract no longer covers `now`; stable contracts keep the 15 s metadata refresh cadence.
 
-## Not changed yet
+## Integrated verification
 
-- The 100 ms synthetic PAPER arrival revalidation delay remains in the live/router code on this branch. Removing it should be integrated with the separately tested fresh-book keep-alive challenger rather than done independently.
-- No live deployment is permitted before the current forward-window verdict.
+- Dedicated fair-only live-following coverage reached 48/49 = 97.96% valid causal origin/+250 ms cuts with 0 drops and 0 decoder failures.
+- The shared persistent `/books` client produced 78/78 complement-consistent technical observations with p50 37 ms, p90 45 ms, p99 66 ms, max 94 ms; latency-only mode emitted no economic fields.
+- Analytics serialization was exercised with two concurrent 350 ms jobs: the second waited about 368 ms on the lock and the jobs did not overlap. Under a sampled host load of 14.78 on 10 CPUs, the resource gate returned code 75 and state `DEFERRED_RESOURCE_PRESSURE` instead of starting another heavy job.
+- After all integrated changes, including resource-pressure deferral and fast rollover recovery, the complete Release V7 suite passed 172/172 tests.
+
+## Deployment boundary
+
+- No live deployment is permitted before the current forward-window verdict and grace period.
 - Fast-cancel is not being rewritten: current evidence favors spending engineering effort on entry cadence and causal-book continuity first.
+- All changes remain PAPER-only and require a new exact-SHA forward boundary before economic interpretation.

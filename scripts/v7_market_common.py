@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import csv
+import http.client
 import json
 import math
 import time
@@ -10,6 +11,52 @@ import urllib.request
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
+
+
+class ClobBooksClient:
+    """Persistent HTTP/1.1 CLOB /books client; failures reset, never retry same call."""
+
+    def __init__(self, clob_url: str, timeout_seconds: float = 0.25) -> None:
+        parsed = urllib.parse.urlparse(clob_url)
+        if parsed.scheme != "https" or not parsed.hostname:
+            raise ValueError("CLOB books client requires an https origin")
+        self.host = parsed.hostname
+        self.port = parsed.port
+        self.base_path = parsed.path.rstrip("/")
+        self.timeout_seconds = float(timeout_seconds)
+        self._conn = None
+
+    def _connection(self):
+        if self._conn is None:
+            self._conn = http.client.HTTPSConnection(
+                self.host, self.port, timeout=self.timeout_seconds
+            )
+        return self._conn
+
+
+    def close(self) -> None:
+        if self._conn is not None:
+            try:
+                self._conn.close()
+            finally:
+                self._conn = None
+
+    def request_books(self, tokens: list[str]):
+        body = json.dumps([{"token_id": token} for token in tokens]).encode("utf-8")
+        headers = {"User-Agent": "polymarket-v7-paper/1", "Content-Type": "application/json",
+                   "Content-Length": str(len(body))}
+        path = f"{self.base_path}/books" if self.base_path else "/books"
+        conn = self._connection()
+        try:
+            conn.request("POST", path, body=body, headers=headers)
+            response = conn.getresponse()
+            payload = response.read()
+            if response.status != 200:
+                raise RuntimeError(f"CLOB_BOOKS_HTTP_{response.status}")
+            return json.loads(payload.decode("utf-8"))
+        except Exception:
+            self.close()
+            raise
 
 
 def finite(value: Any, default: float = math.nan) -> float:

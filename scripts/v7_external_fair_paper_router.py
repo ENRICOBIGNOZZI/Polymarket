@@ -30,7 +30,7 @@ from collections import OrderedDict
 from pathlib import Path
 from typing import Any
 
-from v7_market_common import finite, parse_array, request_json
+from v7_market_common import ClobBooksClient, finite, parse_array, request_json
 from v7_evidence_contract import hybrid_identity
 from v7_compressed_journal import CompressedJournal,journal_paths
 from v7_execution_ledger import (
@@ -1849,6 +1849,8 @@ class PaperRouter:
             0.0, finite(hybrid.get("market_prior_logit_weight"), 0.35)
         ))
         self.clob_url = clob_url.rstrip("/")
+        self.clob_books_client = ClobBooksClient(self.clob_url, 0.25)
+        self.pm_prior_books_client = ClobBooksClient(self.clob_url, 0.25)
         self.gamma_url = gamma_url.rstrip("/")
         self.source = self.directory / "status.json"
         self.status_path = self.directory / "paper_router_status.json"
@@ -2637,9 +2639,7 @@ class PaperRouter:
         self.state["book_requests"] = int(self.state.get("book_requests") or 0) + 1
         self.last_book_error = ""
         try:
-            rows = request_json(
-                f"{self.clob_url}/books", [{"token_id": token} for token in tokens], timeout=4
-            )
+            rows = self.clob_books_client.request_books(tokens)
         except Exception as exc:
             self.state["book_request_failures"] = int(self.state.get("book_request_failures") or 0) + 1
             self.last_book_error = f"CLOB_BOOK_REQUEST_{type(exc).__name__.upper()}"
@@ -2664,9 +2664,7 @@ class PaperRouter:
         if len(tokens) != 2 or tokens[0] == tokens[1]:
             return {}
         try:
-            rows = request_json(
-                f"{self.clob_url}/books", [{"token_id": token} for token in tokens], timeout=2
-            )
+            rows = self.pm_prior_books_client.request_books(tokens)
         except Exception:
             return {}
         received = now_ms()
@@ -3175,8 +3173,6 @@ class PaperRouter:
             event_type="CANDIDATE", **common,
         ))
         self.state["candidates"] = int(self.state.get("candidates") or 0) + 1
-        time.sleep(0.1)
-
         arrival_status = load(self.source)
         arrival_books = self.books_for(arrival_status)
         is_probe = row.get("paper_bootstrap_probe") is True
@@ -3641,6 +3637,9 @@ class PaperRouter:
             "book_requests": int(self.state.get("book_requests") or 0),
             "book_request_failures": int(self.state.get("book_request_failures") or 0),
             "book_parse_failures": int(self.state.get("book_parse_failures") or 0),
+            "book_transport": "HTTP11_KEEP_ALIVE_NO_SAME_TICK_RETRY",
+            "book_request_timeout_ms": 250,
+            "synthetic_revalidation_sleep_ms": 0,
             "rejection_reasons": self.state.get("rejection_reasons") or {},
             "wait_reasons": self.state.get("wait_reasons") or {},
             "last_decision": self.state.get("last_decision") or {},

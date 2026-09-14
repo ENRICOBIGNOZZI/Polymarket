@@ -62,6 +62,12 @@ int main() {
         assert(u64(reset_flow.at("connection_epoch")) == 2);
         assert(u64(reset_flow.at("rows").as_array().front().as_object().at("sell_prints_120s")) == 0);
         send(snapshot(1'700'000'001'300), 1300);
+        assert(!observer.lineage_recovery_requested());
+        send(R"({"event_type":"price_change","timestamp":1700000001400,"price_changes":[{"asset_id":"yes","side":"SELL","price":"0.47","size":"1"}]})", 1400);
+        assert(observer.lineage_recovery_requested());
+        assert(observer.lineage_recovery_requests() == 1);
+        send(R"({"event_type":"price_change","timestamp":1700000001500,"price_changes":[{"asset_id":"yes","side":"BUY","price":"0.48","size":"1"}]})", 1500);
+        assert(observer.lineage_recovery_requests() == 1);
         const auto reset = read_last(directory / "book_observations" / "current.jsonl");
         assert(!reset.at("features_valid").as_bool());
         assert(reset.at("public_trade").is_null());

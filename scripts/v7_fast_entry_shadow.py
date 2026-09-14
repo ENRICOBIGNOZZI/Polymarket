@@ -28,58 +28,11 @@ from v7_external_fair_paper_router import (
     robust_candidates,
     stable_id,
 )
-from v7_market_common import request_json
+from v7_market_common import ClobBooksClient, request_json
 
 SCHEMA = "polymarket_v7_fast_entry_shadow_v1"
 STATUS_SCHEMA = "polymarket_v7_fast_entry_shadow_status_v1"
 
-
-class ClobBooksClient:
-    # Persistent HTTP/1.1 /books client with fail-closed reconnect semantics.
-
-    def __init__(self, clob_url: str, timeout_seconds: float) -> None:
-        parsed = urllib.parse.urlparse(clob_url)
-        if parsed.scheme != "https" or not parsed.hostname:
-            raise ValueError("fast-entry shadow requires an https CLOB origin")
-        self.host = parsed.hostname
-        self.port = parsed.port
-        self.base_path = parsed.path.rstrip("/")
-        self.timeout_seconds = timeout_seconds
-        self._conn: http.client.HTTPSConnection | None = None
-
-    def _connection(self) -> http.client.HTTPSConnection:
-        if self._conn is None:
-            self._conn = http.client.HTTPSConnection(
-                self.host, self.port, timeout=self.timeout_seconds
-            )
-        return self._conn
-
-    def close(self) -> None:
-        if self._conn is not None:
-            try:
-                self._conn.close()
-            finally:
-                self._conn = None
-
-    def request_books(self, tokens: list[str]) -> Any:
-        body = json.dumps([{"token_id": token} for token in tokens]).encode("utf-8")
-        headers = {
-            "User-Agent": "polymarket-v7-paper/1",
-            "Content-Type": "application/json",
-            "Content-Length": str(len(body)),
-        }
-        path = f"{self.base_path}/books" if self.base_path else "/books"
-        conn = self._connection()
-        try:
-            conn.request("POST", path, body=body, headers=headers)
-            response = conn.getresponse()
-            payload = response.read()
-            if response.status != 200:
-                raise RuntimeError(f"CLOB_BOOKS_HTTP_{response.status}")
-            return json.loads(payload.decode("utf-8"))
-        except Exception:
-            self.close()
-            raise
 
 
 def atomic_json(path: Path, value: dict[str, Any]) -> None:

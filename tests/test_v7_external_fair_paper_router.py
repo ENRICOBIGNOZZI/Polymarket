@@ -99,7 +99,9 @@ def main() -> None:
         no_raw = {**yes_raw, "asset_id": "no",
                   "bids": [{"price": "0.45", "size": "10"}],
                   "asks": [{"price": "0.46", "size": "10"}], "hash": "n"}
-        with mock.patch.object(router, "request_json", return_value=[yes_raw, no_raw]),              mock.patch.object(router, "now_ms", return_value=receive_ms):
+        pr.pm_prior_books_client = mock.Mock()
+        pr.pm_prior_books_client.request_books.return_value = [yes_raw, no_raw]
+        with mock.patch.object(router, "now_ms", return_value=receive_ms):
             prior = pr.refresh_pm_prior()
         assert prior["schema"] == "polymarket_v7_pm_prior_snapshot_v1"
         assert prior["live_market"]["valid"] is True
@@ -304,12 +306,16 @@ def main() -> None:
             "real_capital_at_risk": False,
             "reasons": ["TEST_COORDINATOR_SELECTION"],
         }
-        with mock.patch.object(router, "request_json", side_effect=public_request):
-            with mock.patch.object(
-                paper, "wait_for_exploration_receipt",
-                return_value=exploration_receipt,
-            ):
-                paper.step()
+        paper.clob_books_client.request_books = mock.Mock(
+            side_effect=lambda tokens: public_request(
+                "", [{"token_id": token} for token in tokens], timeout=0.25
+            )
+        )
+        with mock.patch.object(
+            paper, "wait_for_exploration_receipt",
+            return_value=exploration_receipt,
+        ):
+            paper.step()
         stale_status = json.loads((external / "paper_router_status.json").read_text())
         assert stale_status["maintenance_accounting_fresh"] is False
         paper.maintenance_step()
@@ -409,8 +415,12 @@ def main() -> None:
                 "asks": [{"price": "0.02" if item["token_id"] == "yes" else "0.99", "size": "100"}],
             } for item in payload]
 
-        with mock.patch.object(router, "request_json", side_effect=public_request_extreme):
-            paper.step()
+        paper.clob_books_client.request_books = mock.Mock(
+            side_effect=lambda tokens: public_request_extreme(
+                "", [{"token_id": token} for token in tokens], timeout=0.25
+            )
+        )
+        paper.step()
         status = json.loads((external / "paper_router_status.json").read_text())
         assert status["fills"] == 1
         assert status["counterfactual_fills"] == 1
@@ -444,8 +454,10 @@ def main() -> None:
         failed_status["code_sha"] = "b" * 40
         failed_status["market"].update({"market_id": "m2", "event_id": "e2"})
         (external / "status.json").write_text(json.dumps(failed_status))
-        with mock.patch.object(router, "request_json", side_effect=TimeoutError("bounded")):
-            failing.step()
+        failing.clob_books_client.request_books = mock.Mock(
+            side_effect=TimeoutError("bounded")
+        )
+        failing.step()
         status = json.loads((external / "paper_router_status.json").read_text())
         assert status["book_requests"] == 1
         assert status["book_request_failures"] == 1

@@ -734,12 +734,27 @@ v7_register_child "$!"
   >> "$RUN_ROOT/micro_maker/authorized_make_executor.log" 2>&1 &
 v7_register_child "$!"
 
+# Retrospective analytics are serialized under one lock and run at background
+# scheduling priority. Canonical economics stays outside this helper because it
+# is health-critical.
+v7_background_analytics() {
+  if [[ -x /usr/sbin/taskpolicy ]]; then
+    /usr/sbin/taskpolicy -b nice -n 10 python3 scripts/v7_serialized_analytics.py \
+      --lock "$RUN_ROOT/control/analytics.lock" \
+      --status "$RUN_ROOT/control/analytics_scheduler_status.json" -- "$@"
+  else
+    nice -n 10 python3 scripts/v7_serialized_analytics.py \
+      --lock "$RUN_ROOT/control/analytics.lock" \
+      --status "$RUN_ROOT/control/analytics_scheduler_status.json" -- "$@"
+  fi
+}
+
 # Hourly exact-SHA evidence pack. Reports are observational only and remain
 # outside the repository checkout, so generating them cannot mutate deployed
 # code or create a second cutover SHA.
 (
   while [[ ! -e "$KILL" ]]; do
-    /usr/sbin/taskpolicy -b nice -n 10 python3 scripts/v7_generate_economic_artifacts.py \
+    v7_background_analytics python3 scripts/v7_generate_economic_artifacts.py \
       --repo "$ROOT" --run-root "$RUN_ROOT" --output "$RUN_ROOT/reports" \
       >> "$RUN_ROOT/economic_artifacts.log" 2>&1 || true
     sleep 3600
@@ -762,29 +777,29 @@ v7_register_child "$!"
   last_horse_race_at=0
   while [[ ! -e "$KILL" ]]; do
     if (( $(date +%s) - last_historical_attribution_at >= 600 )); then
-      if python3 scripts/v7_profit_attribution.py --archive-root "${RUN_ROOT%/*}/paper_v7_archives" \
+      if v7_background_analytics python3 scripts/v7_profit_attribution.py --archive-root "${RUN_ROOT%/*}/paper_v7_archives" \
         --output "$RUN_ROOT/profit_attribution_history.json.gz" \
         >> "$RUN_ROOT/profit_attribution.log" 2>&1; then
         last_historical_attribution_at="$(date +%s)"
       fi
     fi
-    python3 scripts/v7_joint_execution_policy.py --ledger "$RUN_ROOT/ledger/execution.jsonl" --model-sha "$SHA" \
+    v7_background_analytics python3 scripts/v7_joint_execution_policy.py --ledger "$RUN_ROOT/ledger/execution.jsonl" --model-sha "$SHA" \
       --output "$RUN_ROOT/learned_execution/joint_policy.json" --strategy STRUCTURAL_ARB_ENGINE --min-bundles 20 \
       >> "$RUN_ROOT/learned_execution/joint_policy.log" 2>&1 || true
-    python3 scripts/v7_learned_execution_model.py --ledger "$RUN_ROOT/ledger/execution.jsonl" --model-sha "$SHA" \
+    v7_background_analytics python3 scripts/v7_learned_execution_model.py --ledger "$RUN_ROOT/ledger/execution.jsonl" --model-sha "$SHA" \
       --output "$RUN_ROOT/learned_execution/oos_report.json" \
       >> "$RUN_ROOT/learned_execution/model.log" 2>&1 || true
-    /usr/sbin/taskpolicy -b nice -n 10 python3 scripts/v7_profit_attribution.py --ledger "$RUN_ROOT/ledger/execution.jsonl" --run-root "$RUN_ROOT" \
+    v7_background_analytics python3 scripts/v7_profit_attribution.py --ledger "$RUN_ROOT/ledger/execution.jsonl" --run-root "$RUN_ROOT" \
       --output "$RUN_ROOT/profit_attribution.json" --csv "$RUN_ROOT/profit_attribution.csv" \
       >> "$RUN_ROOT/profit_attribution.log" 2>&1 || true
-    /usr/sbin/taskpolicy -b nice -n 10 python3 scripts/v7_profit_report.py --experiment-root "$DURABLE_ROOT/profit_experiments" --all-cohorts \
+    v7_background_analytics python3 scripts/v7_profit_report.py --experiment-root "$DURABLE_ROOT/profit_experiments" --all-cohorts \
       --output "$RUN_ROOT/profit_experiment_report.json" >> "$RUN_ROOT/profit_experiment_report.log" 2>&1 || true
-    /usr/sbin/taskpolicy -b nice -n 10 python3 scripts/v7_fast_cancel_latency_report.py \
+    v7_background_analytics python3 scripts/v7_fast_cancel_latency_report.py \
       --maker-evidence "$RUN_ROOT/ledger/execution.jsonl" \
       --output "$RUN_ROOT/reports/fast_cancel_latency.json" \
       >> "$RUN_ROOT/reports/fast_cancel_latency_report.log" 2>&1 || true
     if (( $(date +%s) - last_horse_race_at >= 300 )); then
-      /usr/sbin/taskpolicy -b nice -n 10 python3 scripts/v7_maker_execution_horse_race.py \
+      v7_background_analytics python3 scripts/v7_maker_execution_horse_race.py \
         --maker-evidence "$RUN_ROOT/ledger/execution.jsonl" \
         --maker-evidence "$RUN_ROOT/research/evidence/maker_markout" \
         --hard-cancel-events "$RUN_ROOT/research/external_cancel_signals.jsonl" \
@@ -795,15 +810,15 @@ v7_register_child "$!"
         >> "$RUN_ROOT/reports/maker_execution_horse_race.log" 2>&1 || true
       last_horse_race_at="$(date +%s)"
     fi
-    /usr/sbin/taskpolicy -b nice -n 10 python3 scripts/v7_economic_decision_report.py --run-root "$RUN_ROOT" --durable-root "$DURABLE_ROOT" \
+    v7_background_analytics python3 scripts/v7_economic_decision_report.py --run-root "$RUN_ROOT" --durable-root "$DURABLE_ROOT" \
       --benchmark "$DURABLE_ROOT/permanent_evidence/benchmarks/latest.json" \
       >> "$RUN_ROOT/economic_decision_report.log" 2>&1 || true
-    /usr/sbin/taskpolicy -b nice -n 10 python3 scripts/v7_lossless_data_compaction.py --root "all=${RUN_ROOT%/*}" \
+    v7_background_analytics python3 scripts/v7_lossless_data_compaction.py --root "all=${RUN_ROOT%/*}" \
       --store "$DURABLE_ROOT/permanent_evidence/store" \
       --output "$DURABLE_ROOT/permanent_evidence/compaction.jsonl" \
       --maximum-groups 10 --maximum-seconds 20 --nonblocking --apply \
       >> "$RUN_ROOT/permanent_evidence.log" 2>&1 || true
-    /usr/sbin/taskpolicy -b nice -n 10 python3 scripts/v7_permanent_evidence.py --run-root "$RUN_ROOT" --durable-root "$DURABLE_ROOT" \
+    v7_background_analytics python3 scripts/v7_permanent_evidence.py --run-root "$RUN_ROOT" --durable-root "$DURABLE_ROOT" \
       --archive-root "${RUN_ROOT%/*}/paper_v7_archives" --repository-root "$ROOT" \
       --maximum-seconds 20 --maximum-bytes 67108864 \
       >> "$RUN_ROOT/permanent_evidence.log" 2>&1 || true

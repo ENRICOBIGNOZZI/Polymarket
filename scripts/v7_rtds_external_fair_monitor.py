@@ -722,15 +722,23 @@ class Monitor:
         self.empty_frames += 1
 
     def refresh_contract(self, now_ns: int) -> None:
-        if self.universe_path is None or now_ns - self.last_contract_refresh_ns < 15_000_000_000:
+        if self.universe_path is None:
+            return
+        now_seconds = now_ns // 1_000_000_000
+        active_start = int(self.active_market.get("contract_start_epoch") or 0)
+        current_binding = bool(
+            active_start <= now_seconds < active_start + 300
+            and self.active_contract.get("verified_template") is True
+            and self.active_contract.get("rules_hash_recognized") is True
+        )
+        refresh_interval_ns = 15_000_000_000 if current_binding else 1_000_000_000
+        if now_ns - self.last_contract_refresh_ns < refresh_interval_ns:
             return
         self.last_contract_refresh_ns = now_ns
         try:
             universe = json.loads(self.universe_path.read_text(encoding="utf-8"))
         except (OSError, json.JSONDecodeError):
-            self.active_market = self.active_contract = self.reference = {}
-            return
-        now_seconds = now_ns // 1_000_000_000
+            universe = {}
         candidates: list[tuple[int, dict[str, Any]]] = []
         for market in universe.get("markets") if isinstance(universe.get("markets"), list) else []:
             if not isinstance(market, dict):
@@ -746,7 +754,6 @@ class Monitor:
             # open 5m contract after its volume falls below the general floor.
             # Preserve a verified binding through its contractual window so a
             # metadata refresh cannot erase causal settlement state.
-            active_start = int(self.active_market.get("contract_start_epoch") or 0)
             if (active_start <= now_seconds < active_start + 300
                     and self.active_contract.get("verified_template") is True
                     and self.active_contract.get("rules_hash_recognized") is True):
