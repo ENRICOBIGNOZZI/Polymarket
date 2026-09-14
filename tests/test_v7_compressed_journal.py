@@ -180,6 +180,8 @@ class JournalTests(unittest.TestCase):
                 journals={path:stack.enter_context(CompressedJournal(path,512))
                           for path in _paper_exploration_evidence_paths(root)}
                 second=PaperRouter(root,'b'*40,config,'https://invalid','https://invalid',counterfactual_journals=journals)
+                # Cross-SHA compaction is explicit maintenance, never a live-startup blocker.
+                second.compact_durable_evidence()
                 second.emit_counterfactual('OPPORTUNITY_SET',counterfactual_id='new',opportunity_id='new')
                 for journal in second.counterfactual_journals.values():
                     if journal.pending:journal.pending.result()

@@ -98,6 +98,18 @@ def _paper_exploration_evidence_paths(run_root: Path) -> list[Path]:
     ]
 
 
+def _paper_exploration_recovery_paths(run_root: Path) -> list[Path]:
+    """Exact-SHA live recovery surface.
+
+    Every newly emitted counterfactual row is synchronously duplicated to the
+    live and durable journals.  Canonical PAPER recovery therefore needs only
+    the current live journal family (including its sealed segments).  Durable
+    cross-SHA history remains immutable research evidence and is deliberately
+    excluded from the latency/health-critical router startup path.
+    """
+    return [Path(run_root) / "external_fair" / "counterfactuals.jsonl"]
+
+
 class _CounterfactualIndex:
     """Bounded in-memory row locators; payloads stay in their source journals.
 
@@ -438,7 +450,7 @@ def reconcile_paper_exploration_finals(
     """
     root = Path(run_root)
     records = _read_complete_counterfactual_records(
-        _paper_exploration_evidence_paths(root),
+        _paper_exploration_recovery_paths(root),
         event_types=("VIRTUAL_FINAL",), model_sha=model_sha,
     )
     virtual_finals: dict[str, dict[str, Any]] = {}
@@ -954,7 +966,7 @@ def reconstruct_paper_exploration_account(
 
     cached = cached_positions if isinstance(cached_positions, dict) else {}
     evidence = _read_complete_counterfactual_records(
-        _paper_exploration_evidence_paths(Path(run_root)),
+        _paper_exploration_recovery_paths(Path(run_root)),
         event_types=("VIRTUAL_FILL", "VIRTUAL_MARKOUT"), model_sha=model_sha,
     )
     virtual_fills: dict[str, dict[str, Any]] = {}
@@ -1887,8 +1899,12 @@ class PaperRouter:
         # Risk/operator kill markers remain fail-closed because the supervisor
         # never admits that restart while the marker is active.
         self.state["killed"] = (self.root / "control" / "KILL").exists()
-        self.compact_durable_evidence()
-        self.restore_durable_state()
+        # Do not scan/compact cross-SHA durable history on the live startup
+        # path. Every current row is already mirrored to the live journal, so
+        # exact-SHA recovery is complete from that bounded family alone.
+        self.restore_durable_state(
+            paths=_paper_exploration_recovery_paths(self.root)
+        )
         self.state["canonical_order_reconciliation"] = (
             reconcile_paper_exploration_orphan_orders(self.root, self.sha)
         )
@@ -1955,18 +1971,25 @@ class PaperRouter:
                 else:handle.write(json.dumps(row,separators=(',',':'),sort_keys=True).encode()+b'\n')
             if handle:handle.flush();os.fsync(handle.fileno())
 
-    def iter_durable_records(self, *, event_types=None):
-        paths = [self.durable_counterfactual_path, self.counterfactual_path]
-        for identity, row in _counterfactual_index(paths).iter_records(event_types=event_types):
+    def iter_durable_records(self, *, event_types=None, paths=None):
+        sources = list(paths) if paths is not None else [
+            self.durable_counterfactual_path, self.counterfactual_path
+        ]
+        for identity, row in _counterfactual_index(sources).iter_records(event_types=event_types):
             if self.evidence_compatible(row):
                 yield identity, row
 
-    def durable_records(self, *, event_types=None) -> dict[str, dict[str, Any]]:
-        return dict(self.iter_durable_records(event_types=event_types))
+    def durable_records(self, *, event_types=None, paths=None) -> dict[str, dict[str, Any]]:
+        return dict(self.iter_durable_records(event_types=event_types, paths=paths))
 
-    def restore_durable_state(self) -> None:
-        """Restore unresolved forecasts and virtual positions across cutovers."""
-        records = self.iter_durable_records()
+    def restore_durable_state(self, *, paths=None) -> None:
+        """Restore research state from an explicit evidence surface.
+
+        Production startup passes only the current live journal family.  Full
+        durable cross-SHA restoration remains available to offline maintenance
+        by omitting ``paths``.
+        """
+        records = self.iter_durable_records(paths=paths)
         forecasts: dict[str, dict[str, Any]] = {}
         forecast_finals: set[str] = set()
         fills: dict[str, dict[str, Any]] = {}
@@ -2142,7 +2165,11 @@ class PaperRouter:
 
     def maturity_diagnostics(self) -> dict[str, Any]:
         """Fail-closed settlement-cluster gate; never grants authority automatically."""
-        records = self.durable_records(event_types=("FORECAST_FINAL", "VIRTUAL_FILL", "VIRTUAL_FINAL"))
+        records = _read_complete_counterfactual_records(
+            _paper_exploration_recovery_paths(self.root),
+            event_types=("FORECAST_FINAL", "VIRTUAL_FILL", "VIRTUAL_FINAL"),
+            model_sha=self.sha,
+        )
         # A process may crash after appending a final but before publishing its
         # state. Deduplicate by the causal forecast identity so retries cannot
         # overweight one settlement cluster.
@@ -3625,12 +3652,12 @@ class PaperRouter:
             "paper_exploration_account": paper_account,
             "account_reconcile_seconds": self.state.get("account_reconcile_seconds"),
             "counterfactual_index": dict(_counterfactual_index(
-                _paper_exploration_evidence_paths(self.root)).metrics),
+                _paper_exploration_recovery_paths(self.root)).metrics),
         })
 
     def step(self) -> None:
         # Validate new evidence before considering any new PAPER entry.
-        _counterfactual_index(_paper_exploration_evidence_paths(self.root)).refresh()
+        _counterfactual_index(_paper_exploration_recovery_paths(self.root)).refresh()
         status = load(self.source)
         blocker = ""
         books: dict[str, Book] = {}
@@ -3804,6 +3831,10 @@ def main() -> int:
     parser.add_argument("--gamma-url", default="https://gamma-api.polymarket.com")
     parser.add_argument("--interval", type=float, default=1.0)
     parser.add_argument("--reconcile-only", action="store_true")
+    parser.add_argument(
+        "--compact-durable-history-on-start", action="store_true",
+        help="Explicit maintenance mode: reconcile live/archive evidence into durable history before serving.",
+    )
     args = parser.parse_args()
     if len(args.model_sha) != 40 or any(ch not in "0123456789abcdef" for ch in args.model_sha):
         raise SystemExit("exact model SHA required")
@@ -3820,6 +3851,8 @@ def main() -> int:
                   for path in _paper_exploration_evidence_paths(root)}
         router=PaperRouter(root,args.model_sha,args.config.resolve(),args.clob_url,args.gamma_url,
                            counterfactual_journals=journals)
+        if args.compact_durable_history_on_start:
+            router.compact_durable_evidence()
         router.run(args.interval)
     return 0
 
