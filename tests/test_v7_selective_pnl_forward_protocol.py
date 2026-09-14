@@ -16,6 +16,14 @@ def test_forward_protocol_is_paper_only_and_zero_authority():
     assert PROTOCOL["automatic_promotion"] is False
 
 
+def test_activation_requires_current_verdict_and_fresh_boundary():
+    activation = PROTOCOL["activation"]
+    assert activation["allowed_before_current_maker_verdict"] is False
+    assert activation["requires_explicit_post_verdict_review"] is True
+    assert activation["requires_new_exact_sha_deploy"] is True
+    assert activation["requires_new_forward_boundary"] is True
+
+
 def test_forward_window_is_fixed_eight_hours_one_look():
     window = PROTOCOL["window"]
     assert window["duration_hours"] == 8
