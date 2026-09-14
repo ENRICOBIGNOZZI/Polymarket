@@ -8,6 +8,12 @@
   "real_capital_at_risk": false,
   "execution_authority": "ZERO_AUTHORITY_RESEARCH_ONLY",
   "automatic_promotion": false,
+  "activation": {
+    "allowed_before_current_maker_verdict": false,
+    "requires_explicit_post_verdict_review": true,
+    "requires_new_exact_sha_deploy": true,
+    "requires_new_forward_boundary": true
+  },
   "code_sha_bound_at_freeze": true,
   "policy_hash_bound_at_freeze": true,
   "evidence_prefixes_bound_at_freeze": true,
