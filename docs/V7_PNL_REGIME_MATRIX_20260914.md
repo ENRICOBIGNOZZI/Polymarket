@@ -1,6 +1,6 @@
 # V7 Historical PnL Regime Matrix — 2026-09-14
 
-This note records only evidence observed before the active `aa5311a...` forward window. It is development evidence, not a promotion decision. The current forward window must not be inspected or changed because of these results.
+This note records only evidence observed before the active `aa5311a...` forward window. It is development evidence, not a promotion decision. The current forward window must not be inspected or changed because of these results. Every regime statement below is therefore a hypothesis generator unless explicitly tied to an independently registered forward gate.
 
 ## System-level diagnosis
 
