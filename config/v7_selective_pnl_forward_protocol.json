@@ -1,109 +1,169 @@
 {
-  "schema": "polymarket_v7_selective_pnl_forward_protocol_v1",
-  "version": 1,
-  "development_parent_sha": "aa5311a610980e944a09ee7a236e972ee3b364da",
-  "paper_only": true,
-  "authenticated_execution": false,
-  "real_order_submission": false,
-  "real_capital_at_risk": false,
-  "execution_authority": "ZERO_AUTHORITY_RESEARCH_ONLY",
-  "automatic_promotion": false,
   "activation": {
     "allowed_before_current_maker_verdict": false,
     "requires_explicit_post_verdict_review": true,
     "requires_new_exact_sha_deploy": true,
     "requires_new_forward_boundary": true
   },
+  "authenticated_execution": false,
+  "automatic_promotion": false,
   "code_sha_bound_at_freeze": true,
-  "policy_hash_bound_at_freeze": true,
-  "evidence_prefixes_bound_at_freeze": true,
-  "window": {
-    "duration_hours": 8,
-    "post_window_grace_seconds": 60,
-    "look_policy": "ONE_FIXED_END_OF_WINDOW_ANALYSIS",
-    "no_early_economic_peeking": true,
-    "no_threshold_change_after_start": true,
-    "no_policy_change_after_start": true,
-    "no_sizing_change_after_start": true
-  },
-  "maker": {
-    "policy": "SELECTIVE_FAIL_CLOSED",
-    "quote_everywhere": false,
-    "external_cancel_preempts_make": true,
-    "unknown_external_cancel_state": "WITHDRAW",
-    "requires_mature_execution_alpha": true,
-    "requires_positive_fill_probability_lower_bound": true,
-    "requires_positive_conservative_make_ev": true,
-    "maximum_toxic_fill_probability_upper": 0.75,
-    "primary_endpoints": [
-      "SHARE_WEIGHTED_250MS_FILL_CONDITIONED_MARKOUT",
-      "CANONICAL_FINAL_PNL_PER_FILLED_SHARE"
-    ],
-    "minimum_independent_fill_clusters": 20,
-    "minimum_filled_shares": 50.0,
-    "success_gate": "BOTH_PRIMARY_ENDPOINTS_STRICTLY_POSITIVE_AND_250MS_CLUSTER_BOOTSTRAP_LOWER95_STRICTLY_POSITIVE"
-  },
+  "development_parent_sha": "aa5311a610980e944a09ee7a236e972ee3b364da",
   "directional": {
-    "mode": "SHADOW_ONLY",
-    "allowed_sides": ["YES", "NO"],
-    "primary_minimum_net_edge_after_2x_cost_per_share": 0.01,
-    "research_threshold_grid": [0.005, 0.01, 0.03, 0.1],
-    "cost_stress_multiplier": 2.0,
-    "minimum_visible_depth_shares": 5.0,
-    "maximum_decision_to_arrival_ms": 250.0,
+    "allowed_sides": [
+      "YES",
+      "NO"
+    ],
     "arrival_revalidation_required": true,
-    "verified_contract_binding_required": true,
+    "cost_stress_multiplier": 2.0,
     "fresh_external_features_required": true,
     "mature_model_required_for_primary": true,
-    "primary_endpoint": "SETTLEMENT_PNL_PER_SHARE_AFTER_2X_FEE_AND_RISK",
+    "maximum_decision_to_arrival_ms": 250.0,
     "minimum_independent_contracts": 30,
-    "success_gate": "CLUSTER_EQUAL_WEIGHTED_MEAN_STRICTLY_POSITIVE_AND_CLUSTER_BOOTSTRAP_LOWER95_STRICTLY_POSITIVE"
+    "minimum_visible_depth_shares": 5.0,
+    "mode": "SHADOW_ONLY",
+    "primary_endpoint": "SETTLEMENT_PNL_PER_SHARE_AFTER_2X_FEE_AND_RISK",
+    "primary_minimum_net_edge_after_2x_cost_per_share": 0.01,
+    "research_threshold_grid": [
+      0.005,
+      0.01,
+      0.03,
+      0.1
+    ],
+    "success_gate": "CLUSTER_EQUAL_WEIGHTED_MEAN_STRICTLY_POSITIVE_AND_CLUSTER_BOOTSTRAP_LOWER95_STRICTLY_POSITIVE",
+    "verified_contract_binding_required": true
+  },
+  "evidence_prefixes_bound_at_freeze": true,
+  "execution_authority": "ZERO_AUTHORITY_RESEARCH_ONLY",
+  "external_cancel": {
+    "directional_use": "FEATURE_AND_CAUSAL_CONFIRMATION_ONLY",
+    "maker_use": "HARD_VETO_AND_FAST_CANCEL",
+    "maximum_signal_age_ms": 100,
+    "rule_hash_must_be_bound_at_freeze": true,
+    "rule_id": "btc-m5-external-cancel-v1",
+    "unknown_state_fails_closed": true
+  },
+  "inference": {
+    "automatic_promotion": false,
+    "automatic_sizing_change": false,
+    "bootstrap_draws": 5000,
+    "bootstrap_seed": 20260914,
+    "cluster_unit": "CONTRACT_OR_FILL_CLUSTER_AS_ENDPOINT_REQUIRES",
+    "insufficient_evidence_state": "INCONCLUSIVE_NOT_FAIL",
+    "report_point_estimates_even_if_insufficient": true
   },
   "latency": {
-    "scan_interval_ms": 250,
-    "synthetic_revalidation_sleep_ms": 0,
     "decision_to_arrival_slo_ms": {
       "p50": 150.0,
       "p90": 250.0,
       "p99": 500.0
     },
-    "failure_policy": "NO_DIRECTIONAL_PRIMARY_CLAIM_IF_SLO_FAILS"
+    "failure_policy": "NO_DIRECTIONAL_PRIMARY_CLAIM_IF_SLO_FAILS",
+    "scan_interval_ms": 250,
+    "synthetic_revalidation_sleep_ms": 0
   },
-  "external_cancel": {
-    "rule_id": "btc-m5-external-cancel-v1",
-    "maximum_signal_age_ms": 100,
-    "maker_use": "HARD_VETO_AND_FAST_CANCEL",
-    "directional_use": "FEATURE_AND_CAUSAL_CONFIRMATION_ONLY",
-    "rule_hash_must_be_bound_at_freeze": true,
-    "unknown_state_fails_closed": true
+  "maker": {
+    "external_cancel_preempts_make": true,
+    "maximum_toxic_fill_probability_upper": 0.75,
+    "minimum_filled_shares": 50.0,
+    "minimum_independent_fill_clusters": 20,
+    "policy": "SELECTIVE_FAIL_CLOSED",
+    "primary_endpoints": [
+      "SHARE_WEIGHTED_250MS_FILL_CONDITIONED_MARKOUT",
+      "CANONICAL_FINAL_PNL_PER_FILLED_SHARE"
+    ],
+    "quote_everywhere": false,
+    "requires_mature_execution_alpha": true,
+    "requires_positive_conservative_make_ev": true,
+    "requires_positive_fill_probability_lower_bound": true,
+    "success_gate": "BOTH_PRIMARY_ENDPOINTS_STRICTLY_POSITIVE_AND_250MS_CLUSTER_BOOTSTRAP_LOWER95_STRICTLY_POSITIVE",
+    "unknown_external_cancel_state": "WITHDRAW"
   },
-  "regimes": {
-    "report_only": true,
-    "may_change_primary_selection_in_same_window": false,
-    "tte_seconds": [0.0, 60.0, 180.0, 301.0],
-    "external_disagreement_bp": [0.0, 1.0, 5.0, 20.0, 1000000000000.0],
-    "external_shock_abs_100ms_bp": [0.0, 0.1, 1.0, 5.0, 1000000000000.0],
-    "spread_ticks": [0.0, 1.01, 2.01, 5.01, 1000000000000.0],
-    "volatility_ticks": [0.0, 0.1, 1.0, 10.0, 1000000000000.0],
-    "oracle_distance_bp": [0.0, 1.0, 5.0, 20.0, 1000000000000.0],
-    "book_imbalance": [-1.000001, -0.5, 0.0, 0.5, 1.000001],
-    "side": ["YES", "NO"]
-  },
+  "paper_only": true,
+  "policy_hash_bound_at_freeze": true,
   "prospective_hypotheses": {
     "no_side_underperformance": {
-      "status": "REPORT_ONLY",
       "historical_origin": "FIVE_SAME_FROZEN_MODEL_WINDOWS",
       "may_affect_selection_or_sizing": false,
-      "promotion_requires_new_forward_boundary": true
+      "promotion_requires_new_forward_boundary": true,
+      "status": "REPORT_ONLY"
     }
   },
-  "inference": {
-    "bootstrap_draws": 5000,
-    "bootstrap_seed": 20260914,
-    "cluster_unit": "CONTRACT_OR_FILL_CLUSTER_AS_ENDPOINT_REQUIRES",
-    "report_point_estimates_even_if_insufficient": true,
-    "insufficient_evidence_state": "INCONCLUSIVE_NOT_FAIL",
-    "automatic_promotion": false,
-    "automatic_sizing_change": false
+  "real_capital_at_risk": false,
+  "real_order_submission": false,
+  "regimes": {
+    "book_imbalance": [
+      -1.000001,
+      -0.5,
+      0.0,
+      0.5,
+      1.000001
+    ],
+    "external_disagreement_bp": [
+      0.0,
+      1.0,
+      5.0,
+      20.0,
+      1000000000000.0
+    ],
+    "external_shock_abs_100ms_bp": [
+      0.0,
+      0.1,
+      1.0,
+      5.0,
+      1000000000000.0
+    ],
+    "may_change_primary_selection_in_same_window": false,
+    "oracle_distance_bp": [
+      0.0,
+      1.0,
+      5.0,
+      20.0,
+      1000000000000.0
+    ],
+    "report_only": true,
+    "side": [
+      "YES",
+      "NO"
+    ],
+    "spread_ticks": [
+      0.0,
+      1.01,
+      2.01,
+      5.01,
+      1000000000000.0
+    ],
+    "tte_seconds": [
+      0.0,
+      60.0,
+      180.0,
+      301.0
+    ],
+    "volatility_ticks": [
+      0.0,
+      0.1,
+      1.0,
+      10.0,
+      1000000000000.0
+    ]
+  },
+  "rollover_guard": {
+    "incoherent_batch_action": "WITHDRAW_NO_NEW_RISK",
+    "market_identity_change_recorded": true,
+    "no_fixed_tte_cutoff_from_development": true,
+    "primary_economic_endpoint_excludes_incoherent_batches": true,
+    "require_book_complement_consistency": true,
+    "resume_condition": "FRESH_COMPLEMENT_CONSISTENT_BATCH"
+  },
+  "schema": "polymarket_v7_selective_pnl_forward_protocol_v1",
+  "version": 1,
+  "window": {
+    "duration_hours": 8,
+    "look_policy": "ONE_FIXED_END_OF_WINDOW_ANALYSIS",
+    "no_early_economic_peeking": true,
+    "no_policy_change_after_start": true,
+    "no_sizing_change_after_start": true,
+    "no_threshold_change_after_start": true,
+    "post_window_grace_seconds": 60
   }
 }

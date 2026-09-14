@@ -54,6 +54,19 @@ def test_latency_and_cancel_identity_match_challenger():
     assert PROTOCOL["external_cancel"]["maximum_signal_age_ms"] == 100
 
 
+def test_rollover_guard_is_fail_closed_without_posthoc_tte_cutoff():
+    guard = PROTOCOL["rollover_guard"]
+    challenger = CHALLENGER["rollover_guard"]
+    assert guard["require_book_complement_consistency"] is True
+    assert guard["incoherent_batch_action"] == "WITHDRAW_NO_NEW_RISK"
+    assert guard["resume_condition"] == "FRESH_COMPLEMENT_CONSISTENT_BATCH"
+    assert guard["market_identity_change_recorded"] is True
+    assert guard["no_fixed_tte_cutoff_from_development"] is True
+    assert guard["primary_economic_endpoint_excludes_incoherent_batches"] is True
+    for key, value in challenger.items():
+        assert guard[key] == value
+
+
 def test_regime_grid_is_report_only_and_identical():
     forward = PROTOCOL["regimes"]
     assert forward["report_only"] is True

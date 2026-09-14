@@ -88,6 +88,15 @@ def validate_config(config: dict[str, Any]) -> None:
         or cancel.get("unknown_action") != "WITHDRAW"
     ):
         raise ChallengerError("config_external_cancel")
+    rollover = config.get("rollover_guard") or {}
+    if (
+        rollover.get("require_book_complement_consistency") is not True
+        or rollover.get("incoherent_batch_action") != "WITHDRAW_NO_NEW_RISK"
+        or rollover.get("resume_condition") != "FRESH_COMPLEMENT_CONSISTENT_BATCH"
+        or rollover.get("market_identity_change_recorded") is not True
+        or rollover.get("no_fixed_tte_cutoff_from_development") is not True
+    ):
+        raise ChallengerError("config_rollover_guard")
     directional = config.get("directional_lane") or {}
     if (
         directional.get("mode") != "SHADOW_ONLY"
@@ -172,6 +181,8 @@ def maker_shadow_decision(row: dict[str, Any], config: dict[str, Any]) -> dict[s
         }
     if cancel_state != "CLEAR":
         reasons.append("EXTERNAL_CANCEL_STATE_UNKNOWN")
+    if row.get("book_complement_consistent") is not True:
+        reasons.append("BOOK_COMPLEMENT_NOT_CONFIRMED")
     if row.get("market_retained") is not True:
         reasons.append("MARKET_NOT_RETAINED")
     packet = row.get("execution_alpha")
@@ -221,6 +232,8 @@ def directional_shadow_decision(row: dict[str, Any], config: dict[str, Any]) -> 
     side = str(row.get("side") or "").upper()
     if side not in policy["allowed_sides"]:
         reasons.append("SIDE_NOT_ALLOWED")
+    if row.get("book_complement_consistent") is not True:
+        reasons.append("BOOK_COMPLEMENT_NOT_CONFIRMED")
     if row.get("arrival_revalidated") is not True:
         reasons.append("ARRIVAL_NOT_REVALIDATED")
     if row.get("contract_verified") is not True:

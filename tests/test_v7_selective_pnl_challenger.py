@@ -41,6 +41,7 @@ def directional(**overrides):
         "contract_verified": True,
         "external_features_fresh": True,
         "model_mature": True,
+        "book_complement_consistent": True,
         "tte_seconds": 200.0,
         "external_disagreement_bp": 3.0,
         "external_shock_abs_100ms_bp": 0.5,
@@ -88,20 +89,37 @@ def test_unknown_cancel_state_fails_closed():
 def test_maker_requires_positive_fill_adjusted_conservative_edge_and_low_toxicity():
     good = MOD.maker_shadow_decision({
         "external_cancel_state": "CLEAR", "market_retained": True,
+        "book_complement_consistent": True,
         "execution_alpha": packet(make_ev=0.01, fill_lower=0.05, toxic_upper=0.20),
     }, CONFIG)
     toxic = MOD.maker_shadow_decision({
         "external_cancel_state": "CLEAR", "market_retained": True,
+        "book_complement_consistent": True,
         "execution_alpha": packet(make_ev=0.01, fill_lower=0.05, toxic_upper=0.90),
     }, CONFIG)
     zero_ev = MOD.maker_shadow_decision({
         "external_cancel_state": "CLEAR", "market_retained": True,
+        "book_complement_consistent": True,
         "execution_alpha": packet(make_ev=0.0, fill_lower=0.05, toxic_upper=0.20),
     }, CONFIG)
     assert good["action"] == "MAKE_SHADOW_ELIGIBLE"
     assert toxic["action"] == "WITHDRAW_SHADOW"
     assert "TOXICITY_TOO_HIGH" in toxic["reasons"]
     assert "MAKE_CONSERVATIVE_EV_NOT_POSITIVE" in zero_ev["reasons"]
+
+
+def test_rollover_incoherence_blocks_new_maker_and_directional_risk():
+    maker = MOD.maker_shadow_decision({
+        "external_cancel_state": "CLEAR", "market_retained": True,
+        "book_complement_consistent": False, "execution_alpha": packet(),
+    }, CONFIG)
+    directional_result = MOD.directional_shadow_decision(
+        directional(book_complement_consistent=False), CONFIG
+    )
+    assert maker["action"] == "WITHDRAW_SHADOW"
+    assert "BOOK_COMPLEMENT_NOT_CONFIRMED" in maker["reasons"]
+    assert directional_result["action"] == "NOTHING_SHADOW"
+    assert "BOOK_COMPLEMENT_NOT_CONFIRMED" in directional_result["reasons"]
 
 
 def test_directional_primary_requires_one_cent_after_two_x_costs():
@@ -144,6 +162,7 @@ def test_latency_slo_and_regime_grid_are_deterministic():
 def test_report_never_grants_execution_authority():
     rows = [
         {"kind": "MAKER", "external_cancel_state": "CLEAR", "market_retained": True,
+         "book_complement_consistent": True,
          "execution_alpha": packet(), "side": "YES"},
         directional(),
         {"kind": "LATENCY", "decision_to_arrival_ms": 100.0},
