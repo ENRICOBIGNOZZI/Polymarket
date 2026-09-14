@@ -196,6 +196,33 @@ void test_profitable_two_sided_post_only_quote() {
     assert(decision.latency.receive_to_intent_ns >= 0);
 }
 
+void test_zero_authority_microstructure_shadow_formula() {
+    pm::v7::maker::MakerHotPath hot;
+    auto update = normal_update();
+    update.bid_depth_l1 = 75.0;
+    update.ask_depth_l1 = 25.0;
+    update.bid_depth_l5 = 60.0;
+    update.ask_depth_l5 = 40.0;
+    const auto model = profitable_model();
+    pm::v7::maker::InventorySnapshot inventory;
+    inventory.yes_shares = 3.0;
+    inventory.no_shares = 3.0;
+    pm::v7::maker::QuoteSnapshot quotes;
+    pm::v7::maker::RiskSnapshot risk;
+    risk.max_quote_shares = 3.0;
+    risk.max_abs_residual_shares = 20.0;
+
+    const auto decision = hot.on_market_update(update, inventory, quotes, risk, model);
+    const double expected = 0.000043 + 0.002683 * 0.5 + 0.002765 * 0.2;
+    assert(decision.features.microstructure_shadow_valid == 1);
+    assert(std::abs(decision.features.microstructure_shadow_delta_250ms - expected) < 1e-12);
+
+    pm::v7::maker::MakerHotPath no_hot;
+    update.instrument_inventory_sign = -1;
+    const auto no_decision = no_hot.on_market_update(update, inventory, quotes, risk, model);
+    assert(no_decision.features.microstructure_shadow_valid == 0);
+}
+
 void test_authoritative_zero_flow_blocks_passive_quote() {
     pm::v7::maker::MakerHotPath hot;
     auto update = normal_update();
@@ -1067,6 +1094,7 @@ int main() {
     test_bounded_spsc_and_cancel_priority();
     test_atomic_model_snapshot();
     test_profitable_two_sided_post_only_quote();
+    test_zero_authority_microstructure_shadow_formula();
     test_authoritative_zero_flow_blocks_passive_quote();
     test_unknown_flow_keeps_joint_prior_without_inventing_causal_certainty();
     test_live_trade_flow_records_live_provenance();

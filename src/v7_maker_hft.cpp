@@ -719,6 +719,19 @@ MakerDecision MakerHotPath::on_market_update(
     decision.features.inventory_fraction = clamp(
         inventory.residual_shares() / std::max(kEps, risk.max_abs_residual_shares), -2.0, 2.0);
     decision.features.local_latency_ms = static_cast<double>(local_age_ns) / 1'000'000.0;
+    // Frozen zero-authority two-feature shadow from pm_delta_250ms_two_feature_v1.json.
+    // Telemetry only: never consumed by evaluate_side(), admissibility, or intents.
+    const double l1_total = std::max(0.0, update.bid_depth_l1)
+                          + std::max(0.0, update.ask_depth_l1);
+    if (update.instrument_inventory_sign == 1 && l1_total > kEps && l5_total > kEps) {
+        const double depth_imbalance_l1 =
+            (update.bid_depth_l1 - update.ask_depth_l1) / l1_total;
+        decision.features.microstructure_shadow_delta_250ms =
+            kMicrostructureShadowIntercept
+            + kMicrostructureShadowDepthL1Slope * clamp(depth_imbalance_l1, -1.0, 1.0)
+            + kMicrostructureShadowBookL5Slope * decision.features.imbalance;
+        decision.features.microstructure_shadow_valid = 1;
+    }
     decision.features.flow_evidence_valid = flow_evidence_valid_;
     decision.features.flow_evidence_source = flow_evidence_source_;
     decision.latency.feature_ns = feature_end_ns - start_ns;

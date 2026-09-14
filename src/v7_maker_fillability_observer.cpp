@@ -514,6 +514,12 @@ private:
             {"aggressive_buy_prints_per_second", f.aggressive_buy_prints_per_second},
             {"aggressive_sell_prints_per_second", f.aggressive_sell_prints_per_second},
             {"local_latency_ms", f.local_latency_ms}, {"inventory_fraction", nullptr},
+            {"microstructure_shadow_delta_250ms",
+             f.microstructure_shadow_valid ? json::value(f.microstructure_shadow_delta_250ms)
+                                            : json::value(nullptr)},
+            {"microstructure_shadow_valid", f.microstructure_shadow_valid != 0},
+            {"microstructure_shadow_model_hash", pm::v7::maker::kMicrostructureShadowModelHash},
+            {"microstructure_shadow_execution_authority", "ZERO_AUTHORITY_RESEARCH_ONLY"},
         };
         const bool valid = row.book.valid && row.book.lineage_continuous
             && dropped_.load(std::memory_order_relaxed) == 0
