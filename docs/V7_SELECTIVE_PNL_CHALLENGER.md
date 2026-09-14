@@ -8,6 +8,8 @@ The historical generalized Maker policy produced too many low-quality quotes: fi
 
 Short-horizon prediction contains information, but aggregate settlement PnL is not stable across historical confirmatory windows. The challenger therefore does not authorize broad directional trading and does not use post-hoc YES-only or 10-cent filters as live rules.
 
+A stricter same-model historical check found no regime cell that was positive in at least four of five contiguous frozen-model windows with adequate per-window support. NO-side economics were negative in all five, but that asymmetry remains report-only until a new prospective boundary tests it.
+
 ## 1. Selective Maker
 
 `quote_everywhere=false`. A Maker candidate is shadow-eligible only when all execution-alpha features are present, evidence is mature, the market survived selection, the fill-probability lower bound is strictly positive, toxic-fill probability stays below the existing 0.75 ceiling, conservative MAKE EV is strictly positive, and the external-cancel state is clear. Active external-cancel evidence preempts Maker risk; unknown state fails closed.
@@ -18,7 +20,9 @@ The primary prospective gate is +1 cent/share **after 2x fee plus risk allowance
 
 ## 3. Entry latency
 
-The next implementation target is p50 <=150 ms, p90 <=250 ms and p99 <=500 ms decision-to-arrival. Candidate scanning is targeted at 250 ms and synthetic revalidation sleep is targeted at zero. These targets are motivated by observed economic decay between 100 and 500 ms, not by a generic HFT benchmark. The current runtime is not changed during the active forward window.
+The target is p50 <=150 ms, p90 <=250 ms and p99 <=500 ms decision-to-arrival. Candidate scanning is fixed at 250 ms and synthetic revalidation sleep at zero for the challenger. These targets are motivated by observed economic decay between 100 and 500 ms, not by a generic HFT benchmark.
+
+`v7_fast_entry_shadow.py` implements a separate zero-authority measurement path: it reads the already-published External Fair status, immediately requests one fresh complement-consistent CLOB book batch, re-runs the existing robust-candidate logic, and records the fresh-book latency. It has no imports or paths for the canonical ledger, spool or opportunity inbox. It is not wired into the active runtime.
 
 ## 4. External information
 
@@ -27,6 +31,10 @@ External information is primarily a risk-control edge for Maker: hash-bound, rec
 ## 5. Regime map
 
 The prospective grid reuses the previously registered bins for TTE, external disagreement, 100 ms external shock, spread, volatility and oracle distance. Book imbalance and side are added as descriptive dimensions. Regime results are diagnostics for the next research generation; no regime may be promoted from the same window in which it is discovered.
+
+## Frozen next-window protocol
+
+`config/v7_selective_pnl_forward_protocol.json` preregisters the next eight-hour study before any deployment. It fixes one-look analysis, a 60-second grace period, Maker and directional primary endpoints, evidence minima, latency SLOs, the external-cancel identity, the regime grid, and the rule that the observed NO-side asymmetry cannot affect selection or sizing without a later fresh boundary.
 
 ## Safety and promotion
 
