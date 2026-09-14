@@ -116,18 +116,35 @@ def required_evidence_paths(run_root: pathlib.Path) -> tuple[pathlib.Path, ...]:
     )
 
 
-def evidence_ready(path: pathlib.Path) -> bool:
-    return path.is_file() and not path.is_symlink() and path.stat().st_size > 0
+def evidence_ready(path: pathlib.Path, *, allow_empty: bool = False) -> bool:
+    return (
+        path.is_file() and not path.is_symlink()
+        and (allow_empty or path.stat().st_size > 0)
+    )
+
+
+def evidence_surfaces_ready(run_root: pathlib.Path) -> bool:
+    ledger, selector, fillability, books = required_evidence_paths(run_root)
+    return (
+        evidence_ready(ledger, allow_empty=True)
+        and evidence_ready(selector)
+        and evidence_ready(fillability)
+        and evidence_ready(books)
+    )
 
 
 def wait_for_evidence(run_root: pathlib.Path, *, timeout_seconds: float, poll_seconds: float) -> None:
     deadline = time.monotonic() + max(0.0, timeout_seconds)
     paths = required_evidence_paths(run_root)
     while True:
-        if all(evidence_ready(path) for path in paths):
+        if evidence_surfaces_ready(run_root):
             return
         if time.monotonic() >= deadline:
-            missing = [str(path) for path in paths if not evidence_ready(path)]
+            ledger, selector, fillability, books = paths
+            missing = []
+            if not evidence_ready(ledger, allow_empty=True): missing.append(str(ledger))
+            for path in (selector, fillability, books):
+                if not evidence_ready(path): missing.append(str(path))
             raise ValueError("evidence:not_ready:" + ",".join(missing))
         time.sleep(max(0.01, poll_seconds))
 
@@ -137,8 +154,7 @@ def preflight(repository_root: pathlib.Path, run_root: pathlib.Path,
     repository = freezer.validate_repository_state(repository_root, expected_sha)
     runtime = freezer.validate_runtime(run_root, expected_sha, now_ms)
     policy = freezer.validate_policy_config(repository_root)
-    paths = required_evidence_paths(run_root)
-    if not all(evidence_ready(path) for path in paths):
+    if not evidence_surfaces_ready(run_root):
         raise ValueError("evidence:preflight_not_ready")
     book_root = run_root / "micro_maker" / "book_observations"
     if not book_root.is_dir() or book_root.is_symlink():

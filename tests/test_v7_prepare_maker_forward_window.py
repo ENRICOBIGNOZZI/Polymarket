@@ -87,7 +87,10 @@ def write_required_evidence(run: Path) -> Path:
         "micro_maker/fillability_ws.jsonl", "micro_maker/book_observations/current.jsonl",
     ):
         path = run / rel; path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text('{"evidence":true}\n', encoding="utf-8")
+        if rel == "ledger/execution.jsonl":
+            path.write_bytes(b"")
+        else:
+            path.write_text('{"evidence":true}\n', encoding="utf-8")
     return run / "micro_maker" / "book_observations"
 
 
@@ -160,6 +163,18 @@ class MakerForwardWindowFreezeTests(unittest.TestCase):
                 baseline = freeze.file_baseline(path, required=True)
             self.assertEqual(baseline["bytes"], 3); self.assertEqual(baseline["post_hash_bytes"], 6)
             self.assertEqual(baseline["sha256"], hashlib.sha256(b"abc").hexdigest())
+            self.assertEqual(baseline["hash_semantics"], freeze.PREFIX_HASH_SEMANTICS)
+
+    def test_empty_ledger_prefix_is_valid_only_when_explicitly_allowed(self) -> None:
+        with TemporaryDirectory() as directory:
+            path = Path(directory) / "execution.jsonl"
+            path.write_bytes(b"")
+            with self.assertRaisesRegex(ValueError, "evidence_baseline:empty"):
+                freeze.file_baseline(path, required=True)
+            baseline = freeze.file_baseline(path, required=True, allow_empty=True)
+            self.assertTrue(baseline["exists"])
+            self.assertEqual(baseline["bytes"], 0)
+            self.assertEqual(baseline["sha256"], hashlib.sha256(b"").hexdigest())
             self.assertEqual(baseline["hash_semantics"], freeze.PREFIX_HASH_SEMANTICS)
 
     def test_file_baseline_required_missing_and_symlink_fail_closed(self) -> None:
