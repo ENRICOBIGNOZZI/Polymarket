@@ -74,3 +74,12 @@ def test_regime_grid_is_report_only_and_identical():
     assert forward["may_change_primary_selection_in_same_window"] is False
     for key, value in CHALLENGER["regimes"].items():
         assert forward[key] == value
+
+
+if __name__ == "__main__":
+    tests = sorted((name, fn) for name, fn in list(globals().items())
+                   if name.startswith("test_") and callable(fn))
+    assert tests, "No tests collected"
+    for name, fn in tests:
+        fn()
+    print(f"{len(tests)} function tests passed")

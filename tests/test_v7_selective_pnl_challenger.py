@@ -172,3 +172,12 @@ def test_report_never_grants_execution_authority():
     assert report["real_order_submission"] is False
     assert report["automatic_promotion"] is False
     assert report["actions"] == {"MAKE_SHADOW_ELIGIBLE": 1, "TAKE_SHADOW_ELIGIBLE": 1}
+
+
+if __name__ == "__main__":
+    tests = sorted((name, fn) for name, fn in list(globals().items())
+                   if name.startswith("test_") and callable(fn))
+    assert tests, "No tests collected"
+    for name, fn in tests:
+        fn()
+    print(f"{len(tests)} function tests passed")

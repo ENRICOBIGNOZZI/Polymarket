@@ -3678,6 +3678,11 @@ class PaperRouter:
         elif not self.maintenance_ready:
             blocker = "ROUTER_MAINTENANCE_NOT_READY"
             rows = []
+        elif self.maintenance_accounting_fresh is not True:
+            # A fill dirties the cached account. Do not admit another entry
+            # on its pre-fill balance while waiting for owner reconciliation.
+            blocker = "ROUTER_ACCOUNTING_REFRESH_REQUIRED"
+            rows = []
         elif (
             not isinstance(self.state.get("canonical_order_reconciliation"), dict)
             or self.state["canonical_order_reconciliation"].get("complete") is not True

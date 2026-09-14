@@ -512,7 +512,7 @@ public:
         }
     }
 
-    void write_status(bool stopped = false) {
+    void write_status(bool stopped = false, bool publish_flow = true) {
         const auto feed = feed_ ? feed_->snapshot() : pm::fast::FeedSnapshot{};
         json::object root;
         root["schema"] = "polymarket_v7_maker_fillability_ws_status_v1";
@@ -555,7 +555,7 @@ public:
         root["evidence_complete"] = dropped_.load(std::memory_order_relaxed) == 0
             && decoder_failures_.load(std::memory_order_relaxed) == 0;
         atomic_write(status_path_, json::serialize(root) + "\n");
-        write_flow_snapshot(root["timestamp_ms"].as_int64());
+        if (publish_flow) write_flow_snapshot(root["timestamp_ms"].as_int64());
     }
 
     void write_flow_snapshot(std::int64_t now_ms) {
@@ -786,13 +786,23 @@ int main(int argc, char** argv) {
                 std::move(tokens), options.ws_url, options.output_dir, options.model_sha);
             observer.start();
             std::int64_t last_status_ms = 0;
+            std::int64_t last_membership_check_ms = 0;
+            std::int64_t last_flow_status_ms = 0;
+            // The causal labeler's grace is 75ms. A 1Hz watermark silently
+            // censors valid +250ms labels even on an uninterrupted book stream.
+            const std::int64_t status_period_ms = options.fair_only ? 25 : 1000;
             bool reload = false;
             while (!g_stop.load(std::memory_order_relaxed) && !reload) {
                 observer.drain();
                 const auto now = wall_ms();
-                if (now - last_status_ms >= 1000) {
-                    observer.write_status();
+                if (now - last_status_ms >= status_period_ms) {
+                    const bool publish_flow = now - last_flow_status_ms >= 1000;
+                    observer.write_status(false, publish_flow);
                     last_status_ms = now;
+                    if (publish_flow) last_flow_status_ms = now;
+                }
+                if (now - last_membership_check_ms >= 1000) {
+                    last_membership_check_ms = now;
                     // Price/feature refreshes do not change the subscription.
                     // Restarting on every mtime update erased queue evidence.
                     reload = fair_observation_pairs(options) != fair_pairs;

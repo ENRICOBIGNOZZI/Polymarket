@@ -66,3 +66,12 @@ def test_router_maintenance_failure_is_fail_closed():
     assert 'blocker = "ROUTER_MAINTENANCE_NOT_READY"' in source
     assert 'self.maintenance_ready = False' in source
     assert 'ROUTER_MAINTENANCE_ERROR' in source
+
+
+if __name__ == "__main__":
+    tests = sorted((name, fn) for name, fn in list(globals().items())
+                   if name.startswith("test_") and callable(fn))
+    assert tests, "No tests collected"
+    for name, fn in tests:
+        fn()
+    print(f"{len(tests)} function tests passed")

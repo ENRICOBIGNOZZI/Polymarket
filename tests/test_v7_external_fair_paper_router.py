@@ -925,6 +925,7 @@ def test_paper_account_admission_controls_actual_step() -> None:
         collector.last_book_error = ""
         collector.last_attempt_reason = ""
         collector.maintenance_ready = True
+        collector.maintenance_accounting_fresh = True
         collector.last_live_market = {}
         for name in ("record_forecast", "record_opportunity_set", "observe_positions",
                      "reconcile_canonical_account", "observe_forecasts", "publish",
@@ -957,6 +958,12 @@ def test_paper_account_admission_controls_actual_step() -> None:
             collector.step()
             collector.attempt.assert_not_called()
             collector.reject.assert_called_once_with(reason)
+        dirty = make_collector()
+        dirty.maintenance_accounting_fresh = False
+        dirty.step()
+        dirty.attempt.assert_not_called()
+        dirty.books_for.assert_not_called()
+        dirty.reject.assert_called_once_with("ROUTER_ACCOUNTING_REFRESH_REQUIRED")
         healthy = make_collector()
         healthy.step()
         healthy.attempt.assert_called_once()
@@ -1020,7 +1027,7 @@ def test_actual_step_distinguishes_missing_reference_from_no_edge() -> None:
         collector.policy = {"minimum_entry_tte_seconds": 5.0, "maximum_entry_tte_seconds": 300.0,
                             "tte_bucket_policy": [{"id":"test-5-300","minimum_seconds":5.0,"maximum_seconds":300.0,"action":"TAKER_SHADOW"}],
                             "maximum_model_market_disagreement": 0.2}; collector.probe_policy = None
-        collector.last_book_error = ""; collector.last_attempt_reason = ""; collector.maintenance_ready = True
+        collector.last_book_error = ""; collector.last_attempt_reason = ""; collector.maintenance_ready = True; collector.maintenance_accounting_fresh = True
         for name in ("record_forecast", "record_opportunity_set", "observe_positions", "reconcile_canonical_account", "observe_forecasts", "publish", "reject", "wait", "attempt"):
             setattr(collector, name, mock.Mock())
         books = {"yes": book("yes", 0.61, 0.59), "no": book("no", 0.41, 0.39)}
