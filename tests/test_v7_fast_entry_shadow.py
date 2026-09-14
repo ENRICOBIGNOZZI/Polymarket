@@ -74,12 +74,27 @@ class FastEntryShadowTest(unittest.TestCase):
         candidates.assert_not_called()
         self.assertEqual(row["measurement_mode"], "LATENCY_ONLY_NO_ECONOMIC_ENDPOINTS")
         self.assertEqual(row["decision_to_fresh_book_ms"], 19)
+        self.assertEqual(row["book_exchange_timestamp_span_ms"], 0)
+        self.assertEqual(row["oldest_book_age_at_receive_ms"], 0)
         self.assertTrue(row["arrival_revalidated"])
         self.assertNotIn("candidate_count", row)
         self.assertNotIn("best_outcome", row)
         self.assertNotIn("best_robust_ev_per_share", row)
         self.assertNotIn("market_yes", row)
         self.assertNotIn("tte_seconds", row)
+
+    def test_latency_only_labels_complement_incoherence_fail_closed(self):
+        with patch.object(MOD, "_books", return_value=(self.books(), 21, "")):
+            with patch.object(MOD, "live_market_yes", return_value=None):
+                with patch.object(MOD, "robust_candidates") as candidates:
+                    row = MOD.observe_once(
+                        self.valid_status(), {}, model_sha=SHA,
+                        clob_url="https://example.invalid", latency_only=True,
+                    )
+        candidates.assert_not_called()
+        self.assertFalse(row["arrival_revalidated"])
+        self.assertEqual(row["fresh_book_count"], 2)
+        self.assertEqual(row["reason"], "BOOK_BATCH_RECEIVED_BUT_COMPLEMENT_INCOHERENT")
 
     def test_module_has_no_order_or_ledger_writer_dependency(self):
         source = (ROOT / "scripts" / "v7_fast_entry_shadow.py").read_text(encoding="utf-8")

@@ -97,7 +97,16 @@ def observe_once(
         )
     market = status.get("market") if isinstance(status.get("market"), dict) else {}
     market_yes = live_market_yes(books, market) if len(books) == 2 else None
+    if not reason and len(books) == 2 and market_yes is None:
+        reason = "BOOK_BATCH_RECEIVED_BUT_COMPLEMENT_INCOHERENT"
     arrival_wall_ns = time.time_ns()
+    exchange_times = [book.exchange_ts_ms for book in books.values()]
+    receive_times = [book.receive_ts_ms for book in books.values()]
+    exchange_span_ms = max(exchange_times) - min(exchange_times) if exchange_times else None
+    oldest_book_age_ms = max(
+        (receive - exchange for receive, exchange in zip(receive_times, exchange_times)),
+        default=None,
+    )
     if latency_only:
         return {
             "schema": SCHEMA,
@@ -112,6 +121,8 @@ def observe_once(
             "decision_wall_ns": decision_wall_ns,
             "arrival_wall_ns": arrival_wall_ns,
             "decision_to_fresh_book_ms": latency_ms,
+            "book_exchange_timestamp_span_ms": exchange_span_ms,
+            "oldest_book_age_at_receive_ms": oldest_book_age_ms,
             "market_id": str(market.get("market_id") or ""),
             "fresh_book_count": len(books),
             "arrival_revalidated": len(books) == 2 and market_yes is not None,
