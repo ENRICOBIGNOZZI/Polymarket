@@ -305,20 +305,28 @@ python3 scripts/v7_coinbase_l2_rest_collector.py \
 v7_register_child "$!"
 
 python3 scripts/v7_external_fair_paper_router.py \
-  --run-root "$RUN_ROOT" --model-sha "$SHA" --config "$EXTERNAL_FAIR_POLICY" --interval 1 \
+  --run-root "$RUN_ROOT" --model-sha "$SHA" --config "$EXTERNAL_FAIR_POLICY" --interval 0.25 \
   >> "$RUN_ROOT/external_fair/paper_router.log" 2>&1 &
 v7_register_child "$!"
 
 # Zero-authority HFT research tape.  It labels frozen rich external feature cuts
 # with the continuous receive-time book state at 100/250/500/1000ms. Training is never
 # performed here; a lead/lag model is frozen explicitly only after enough markets.
+# Persistent zero-authority causal book observer for repricing/lead-lag labels.
+# It follows only the verified settlement pair and therefore survives Maker cohort rotations.
+"$FILLABILITY_OBSERVER" \
+  --config "$ALLOC/micro_maker.json" --run-root "$RUN_ROOT" --model-sha "$SHA" \
+  --output-dir "$RUN_ROOT/research/repricing_book" --fair-only \
+  >> "$RUN_ROOT/research/repricing_book_observer.log" 2>&1 &
+v7_register_child "$!"
+
 python3 scripts/v7_external_lead_lag_collector.py \
   --fair-status "$RUN_ROOT/external_fair/status.json" \
   --router-status "$RUN_ROOT/external_fair/paper_router_status.json" \
   --output "$DURABLE_ROOT/external_fair/pm_lead_lag.jsonl" \
   --status "$RUN_ROOT/external_fair/lead_lag_collector_status.json" \
-  --book-tape "$RUN_ROOT/micro_maker/book_observations/current.jsonl" \
-  --book-status "$RUN_ROOT/micro_maker/fillability_ws_status.json" \
+  --book-tape "$RUN_ROOT/research/repricing_book/book_observations/current.jsonl" \
+  --book-status "$RUN_ROOT/research/repricing_book/fillability_ws_status.json" \
   --profit-root "$DURABLE_ROOT/profit_experiments/$SHA" --run-root "$RUN_ROOT" \
   --model-sha "$SHA" --interval-ms 25 \
   >> "$RUN_ROOT/external_fair/lead_lag_collector.log" 2>&1 &
@@ -337,8 +345,8 @@ v7_register_child "$!"
 python3 scripts/v7_pm_repricing_shadow.py \
   --fair-status "$RUN_ROOT/external_fair/status.json" \
   --router-status "$RUN_ROOT/external_fair/paper_router_status.json" \
-  --book-tape "$RUN_ROOT/micro_maker/book_observations/current.jsonl" \
-  --book-status "$RUN_ROOT/micro_maker/fillability_ws_status.json" \
+  --book-tape "$RUN_ROOT/research/repricing_book/book_observations/current.jsonl" \
+  --book-status "$RUN_ROOT/research/repricing_book/fillability_ws_status.json" \
   --artifact "$REPRICING_SHADOW_ARTIFACT" --artifact-sha256 "$REPRICING_SHADOW_ARTIFACT_SHA" \
   --output "$RUN_ROOT/research/pm_repricing_shadow.jsonl" \
   --status "$RUN_ROOT/research/pm_repricing_shadow_status.json" \
@@ -731,7 +739,7 @@ v7_register_child "$!"
 # code or create a second cutover SHA.
 (
   while [[ ! -e "$KILL" ]]; do
-    python3 scripts/v7_generate_economic_artifacts.py \
+    /usr/sbin/taskpolicy -b nice -n 10 python3 scripts/v7_generate_economic_artifacts.py \
       --repo "$ROOT" --run-root "$RUN_ROOT" --output "$RUN_ROOT/reports" \
       >> "$RUN_ROOT/economic_artifacts.log" 2>&1 || true
     sleep 3600
@@ -766,17 +774,17 @@ v7_register_child "$!"
     python3 scripts/v7_learned_execution_model.py --ledger "$RUN_ROOT/ledger/execution.jsonl" --model-sha "$SHA" \
       --output "$RUN_ROOT/learned_execution/oos_report.json" \
       >> "$RUN_ROOT/learned_execution/model.log" 2>&1 || true
-    python3 scripts/v7_profit_attribution.py --ledger "$RUN_ROOT/ledger/execution.jsonl" --run-root "$RUN_ROOT" \
+    /usr/sbin/taskpolicy -b nice -n 10 python3 scripts/v7_profit_attribution.py --ledger "$RUN_ROOT/ledger/execution.jsonl" --run-root "$RUN_ROOT" \
       --output "$RUN_ROOT/profit_attribution.json" --csv "$RUN_ROOT/profit_attribution.csv" \
       >> "$RUN_ROOT/profit_attribution.log" 2>&1 || true
-    python3 scripts/v7_profit_report.py --experiment-root "$DURABLE_ROOT/profit_experiments" --all-cohorts \
+    /usr/sbin/taskpolicy -b nice -n 10 python3 scripts/v7_profit_report.py --experiment-root "$DURABLE_ROOT/profit_experiments" --all-cohorts \
       --output "$RUN_ROOT/profit_experiment_report.json" >> "$RUN_ROOT/profit_experiment_report.log" 2>&1 || true
-    python3 scripts/v7_fast_cancel_latency_report.py \
+    /usr/sbin/taskpolicy -b nice -n 10 python3 scripts/v7_fast_cancel_latency_report.py \
       --maker-evidence "$RUN_ROOT/ledger/execution.jsonl" \
       --output "$RUN_ROOT/reports/fast_cancel_latency.json" \
       >> "$RUN_ROOT/reports/fast_cancel_latency_report.log" 2>&1 || true
     if (( $(date +%s) - last_horse_race_at >= 300 )); then
-      python3 scripts/v7_maker_execution_horse_race.py \
+      /usr/sbin/taskpolicy -b nice -n 10 python3 scripts/v7_maker_execution_horse_race.py \
         --maker-evidence "$RUN_ROOT/ledger/execution.jsonl" \
         --maker-evidence "$RUN_ROOT/research/evidence/maker_markout" \
         --hard-cancel-events "$RUN_ROOT/research/external_cancel_signals.jsonl" \
@@ -787,15 +795,15 @@ v7_register_child "$!"
         >> "$RUN_ROOT/reports/maker_execution_horse_race.log" 2>&1 || true
       last_horse_race_at="$(date +%s)"
     fi
-    python3 scripts/v7_economic_decision_report.py --run-root "$RUN_ROOT" --durable-root "$DURABLE_ROOT" \
+    /usr/sbin/taskpolicy -b nice -n 10 python3 scripts/v7_economic_decision_report.py --run-root "$RUN_ROOT" --durable-root "$DURABLE_ROOT" \
       --benchmark "$DURABLE_ROOT/permanent_evidence/benchmarks/latest.json" \
       >> "$RUN_ROOT/economic_decision_report.log" 2>&1 || true
-    python3 scripts/v7_lossless_data_compaction.py --root "all=${RUN_ROOT%/*}" \
+    /usr/sbin/taskpolicy -b nice -n 10 python3 scripts/v7_lossless_data_compaction.py --root "all=${RUN_ROOT%/*}" \
       --store "$DURABLE_ROOT/permanent_evidence/store" \
       --output "$DURABLE_ROOT/permanent_evidence/compaction.jsonl" \
       --maximum-groups 10 --maximum-seconds 20 --nonblocking --apply \
       >> "$RUN_ROOT/permanent_evidence.log" 2>&1 || true
-    python3 scripts/v7_permanent_evidence.py --run-root "$RUN_ROOT" --durable-root "$DURABLE_ROOT" \
+    /usr/sbin/taskpolicy -b nice -n 10 python3 scripts/v7_permanent_evidence.py --run-root "$RUN_ROOT" --durable-root "$DURABLE_ROOT" \
       --archive-root "${RUN_ROOT%/*}/paper_v7_archives" --repository-root "$ROOT" \
       --maximum-seconds 20 --maximum-bytes 67108864 \
       >> "$RUN_ROOT/permanent_evidence.log" 2>&1 || true
@@ -803,7 +811,7 @@ v7_register_child "$!"
   done
 ) & v7_register_child "$!"
 
-v7_assert_registered_child_count 24
+v7_assert_registered_child_count 25
 write_runtime_status running false
 
 while [[ ! -e "$KILL" ]]; do

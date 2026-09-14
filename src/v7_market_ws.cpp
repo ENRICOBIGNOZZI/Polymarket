@@ -392,6 +392,7 @@ struct MarketWsShard::Impl {
                     std::span<const PriceLevelE4>(bid_scratch.data(), bid_count),
                     std::span<const PriceLevelE4>(ask_scratch.data(), ask_count),
                     exchange_ns, receive.monotonic_ns)) {
+                ++result.lineage_invalid_book_snapshot;
                 invalidate(*state, result, output);
                 return;
             }
@@ -424,12 +425,15 @@ struct MarketWsShard::Impl {
                     continue;
                 }
                 const Side side = parse_side(find_value(change, "side"));
+                const bool had_lineage = state->book.lineage_continuous();
                 std::int32_t price_e4 = 0;
                 std::int64_t quantity = 0;
                 if (side == Side::None || !parse_price_e4(find_value(change, "price"), price_e4)
                     || !parse_quantity(find_value(change, "size"), quantity)
                     || !state->book.mutate_level(side, price_e4, quantity,
                                                  exchange_ns, receive.monotonic_ns)) {
+                    ++result.lineage_invalid_price_change;
+                    if (!had_lineage) ++result.price_change_without_lineage;
                     invalidate(*state, result, output);
                     continue;
                 }
@@ -467,6 +471,7 @@ struct MarketWsShard::Impl {
                 || new_tick <= 0 || new_tick > kCanonicalPriceScale
                 || !state->book.change_tick_size(static_cast<std::int32_t>(new_tick),
                                                  exchange_ns, receive.monotonic_ns)) {
+                ++result.lineage_invalid_tick_size_change;
                 invalidate(*state, result, output);
                 return;
             }

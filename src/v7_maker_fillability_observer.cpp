@@ -140,6 +140,7 @@ struct Options {
     std::string output_dir;
     std::string model_sha;
     std::string ws_url = "wss://ws-subscriptions-clob.polymarket.com/ws/market";
+    bool fair_only = false;
 };
 
 Options parse_options(int argc, char** argv) {
@@ -156,6 +157,7 @@ Options parse_options(int argc, char** argv) {
         else if (arg == "--output-dir") options.output_dir = next();
         else if (arg == "--model-sha") options.model_sha = next();
         else if (arg == "--ws-url") options.ws_url = next();
+        else if (arg == "--fair-only") options.fair_only = true;
         else throw std::runtime_error("unknown argument: " + arg);
     }
     if (options.selection.empty()) {
@@ -232,18 +234,27 @@ fair_observation_pairs(const Options& options) {
 
 [[nodiscard]] std::vector<SelectedToken> build_tokens(const Options& options, const pm::Config& config) {
     std::vector<std::pair<std::string, std::pair<std::string, std::string>>> pairs;
-    while (!g_stop.load(std::memory_order_relaxed)) {
-        try {
-            if (fs::exists(options.selection) && fs::file_size(options.selection) > 0) {
-                pairs = load_selected_pairs(options.selection);
-                break;
-            }
-        } catch (const std::exception& error) {
-            std::cerr << "fillability selection not ready: " << error.what() << '\n';
+    if (options.fair_only) {
+        while (!g_stop.load(std::memory_order_relaxed)) {
+            pairs = fair_observation_pairs(options);
+            if (!pairs.empty()) break;
+            std::this_thread::sleep_for(std::chrono::milliseconds(100));
         }
-        std::this_thread::sleep_for(std::chrono::milliseconds(250));
+        if (pairs.empty()) throw std::runtime_error("fair-only observation pair unavailable");
+    } else {
+        while (!g_stop.load(std::memory_order_relaxed)) {
+            try {
+                if (fs::exists(options.selection) && fs::file_size(options.selection) > 0) {
+                    pairs = load_selected_pairs(options.selection);
+                    break;
+                }
+            } catch (const std::exception& error) {
+                std::cerr << "fillability selection not ready: " << error.what() << '\n';
+            }
+            std::this_thread::sleep_for(std::chrono::milliseconds(250));
+        }
+        if (pairs.empty()) throw std::runtime_error("fillability selection unavailable");
     }
-    if (pairs.empty()) throw std::runtime_error("fillability selection unavailable");
 
     for (const auto& fair : fair_observation_pairs(options)) {
         const bool included = std::any_of(pairs.begin(), pairs.end(), [&](const auto& pair) {
@@ -367,6 +378,14 @@ public:
         invalid_price_.fetch_add(result.trade_invalid_price, std::memory_order_relaxed);
         invalid_timestamp_.fetch_add(
             result.trade_invalid_timestamp, std::memory_order_relaxed);
+        lineage_invalid_book_snapshot_.fetch_add(
+            result.lineage_invalid_book_snapshot, std::memory_order_relaxed);
+        lineage_invalid_price_change_.fetch_add(
+            result.lineage_invalid_price_change, std::memory_order_relaxed);
+        lineage_invalid_tick_size_change_.fetch_add(
+            result.lineage_invalid_tick_size_change, std::memory_order_relaxed);
+        price_change_without_lineage_.fetch_add(
+            result.price_change_without_lineage, std::memory_order_relaxed);
         unknown_asset_.fetch_add(
             result.ignored_unknown_assets, std::memory_order_relaxed);
         if (result.invalid_frame || result.output_overflow || result.arena_exhausted) {
@@ -497,6 +516,10 @@ public:
         root["invalid_quantity"] = invalid_quantity_.load(std::memory_order_relaxed);
         root["invalid_price"] = invalid_price_.load(std::memory_order_relaxed);
         root["invalid_timestamp"] = invalid_timestamp_.load(std::memory_order_relaxed);
+        root["lineage_invalid_book_snapshot"] = lineage_invalid_book_snapshot_.load(std::memory_order_relaxed);
+        root["lineage_invalid_price_change"] = lineage_invalid_price_change_.load(std::memory_order_relaxed);
+        root["lineage_invalid_tick_size_change"] = lineage_invalid_tick_size_change_.load(std::memory_order_relaxed);
+        root["price_change_without_lineage"] = price_change_without_lineage_.load(std::memory_order_relaxed);
         root["unknown_asset"] = unknown_asset_.load(std::memory_order_relaxed);
         root["reconnects"] = reconnects_.load(std::memory_order_relaxed);
         root["connection_epoch"] = connection_epoch_.load(std::memory_order_relaxed);
@@ -709,6 +732,10 @@ private:
     std::atomic<std::uint64_t> invalid_quantity_{0};
     std::atomic<std::uint64_t> invalid_price_{0};
     std::atomic<std::uint64_t> invalid_timestamp_{0};
+    std::atomic<std::uint64_t> lineage_invalid_book_snapshot_{0};
+    std::atomic<std::uint64_t> lineage_invalid_price_change_{0};
+    std::atomic<std::uint64_t> lineage_invalid_tick_size_change_{0};
+    std::atomic<std::uint64_t> price_change_without_lineage_{0};
     std::atomic<std::uint64_t> unknown_asset_{0};
     std::atomic<std::uint64_t> reconnects_{0};
     std::uint64_t sequence_ = 0;
@@ -728,7 +755,9 @@ int main(int argc, char** argv) {
         while (!g_stop.load(std::memory_order_relaxed)) {
             const auto fair_pairs = fair_observation_pairs(options);
             auto tokens = build_tokens(options, config);
-            const auto selected_pairs = load_selected_pairs(options.selection);
+            const auto selected_pairs = options.fair_only
+                ? std::vector<std::pair<std::string, std::pair<std::string, std::string>>>{}
+                : load_selected_pairs(options.selection);
             ExactWsObserver observer(
                 std::move(tokens), options.ws_url, options.output_dir, options.model_sha);
             observer.start();
@@ -742,8 +771,10 @@ int main(int argc, char** argv) {
                     last_status_ms = now;
                     // Price/feature refreshes do not change the subscription.
                     // Restarting on every mtime update erased queue evidence.
-                    reload = load_selected_pairs(options.selection) != selected_pairs
-                        || fair_observation_pairs(options) != fair_pairs;
+                    reload = fair_observation_pairs(options) != fair_pairs;
+                    if (!options.fair_only) {
+                        reload = reload || load_selected_pairs(options.selection) != selected_pairs;
+                    }
                 }
                 std::this_thread::sleep_for(std::chrono::milliseconds(10));
             }

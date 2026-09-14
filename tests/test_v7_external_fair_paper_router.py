@@ -907,6 +907,7 @@ def test_paper_account_admission_controls_actual_step() -> None:
         collector.probe_policy = {}
         collector.last_book_error = ""
         collector.last_attempt_reason = ""
+        collector.maintenance_ready = True
         collector.last_live_market = {}
         for name in ("record_forecast", "record_opportunity_set", "observe_positions",
                      "reconcile_canonical_account", "observe_forecasts", "publish",
@@ -930,9 +931,9 @@ def test_paper_account_admission_controls_actual_step() -> None:
                 collector.attempt.assert_not_called()
                 collector.books_for.assert_not_called()
                 collector.reject.assert_called_once_with(reason)
-                collector.observe_positions.assert_called_once()
-                collector.reconcile_canonical_account.assert_called_once()
-                collector.observe_forecasts.assert_called_once()
+                collector.observe_positions.assert_not_called()
+                collector.reconcile_canonical_account.assert_not_called()
+                collector.observe_forecasts.assert_not_called()
                 collector.publish.assert_called_once_with(0, reason)
             collector = make_collector()
             del collector.state[key]
@@ -950,7 +951,7 @@ def test_paper_account_admission_controls_actual_step() -> None:
         drained.step()
         drained.attempt.assert_not_called()
         drained.reject.assert_called_once_with("CUTOVER_DRAIN")
-        drained.observe_positions.assert_called_once()
+        drained.observe_positions.assert_not_called()
         recovered = make_collector()
         recovered.state["paper_exploration_account"] = {"complete": False}
         def restore_account():
@@ -958,9 +959,12 @@ def test_paper_account_admission_controls_actual_step() -> None:
         recovered.reconcile_canonical_account.side_effect = restore_account
         recovered.step()
         recovered.attempt.assert_not_called()
+        recovered.maintenance_step()
         recovered.step()
         recovered.attempt.assert_called_once()
-        assert recovered.observe_positions.call_count == 2
+        assert recovered.observe_positions.call_count == 1
+        assert recovered.reconcile_canonical_account.call_count == 1
+        assert recovered.observe_forecasts.call_count == 1
 
 
 def test_empty_candidate_input_reason_is_not_false_no_edge() -> None:
@@ -999,7 +1003,7 @@ def test_actual_step_distinguishes_missing_reference_from_no_edge() -> None:
         collector.policy = {"minimum_entry_tte_seconds": 5.0, "maximum_entry_tte_seconds": 300.0,
                             "tte_bucket_policy": [{"id":"test-5-300","minimum_seconds":5.0,"maximum_seconds":300.0,"action":"TAKER_SHADOW"}],
                             "maximum_model_market_disagreement": 0.2}; collector.probe_policy = None
-        collector.last_book_error = ""; collector.last_attempt_reason = ""
+        collector.last_book_error = ""; collector.last_attempt_reason = ""; collector.maintenance_ready = True
         for name in ("record_forecast", "record_opportunity_set", "observe_positions", "reconcile_canonical_account", "observe_forecasts", "publish", "reject", "wait", "attempt"):
             setattr(collector, name, mock.Mock())
         books = {"yes": book("yes", 0.61, 0.59), "no": book("no", 0.41, 0.39)}

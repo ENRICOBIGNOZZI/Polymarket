@@ -1914,6 +1914,7 @@ class PaperRouter:
         self.reconcile_canonical_account()
         self.last_book_error = ""
         self.last_attempt_reason = ""
+        self.maintenance_ready = True
         self.last_live_market: dict[str, Any] = {}
         self.pm_prior_path = self.directory / "pm_prior.json"
 
@@ -3667,6 +3668,9 @@ class PaperRouter:
         if self.drain_path.exists():
             blocker = "CUTOVER_DRAIN"
             rows = []
+        elif not self.maintenance_ready:
+            blocker = "ROUTER_MAINTENANCE_NOT_READY"
+            rows = []
         elif (
             not isinstance(self.state.get("canonical_order_reconciliation"), dict)
             or self.state["canonical_order_reconciliation"].get("complete") is not True
@@ -3796,30 +3800,52 @@ class PaperRouter:
             "best_robust_ev_per_share": max((float(row["robust_ev"]) for row in rows), default=None),
             "best_point_ev_per_share": max((float(row.get("point_ev", row["robust_ev"])) for row in rows), default=None),
         }
+        self.publish(len(rows), blocker)
+
+    def maintenance_step(self) -> None:
         self.observe_positions()
         self.state["canonical_order_reconciliation"] = (
             reconcile_paper_exploration_orphan_orders(self.root, self.sha)
         )
         terminal_reconciliation = self.state.get("canonical_final_reconciliation")
-        if (
-            not isinstance(terminal_reconciliation, dict)
-            or terminal_reconciliation.get("complete") is not True
-        ):
+        if (not isinstance(terminal_reconciliation, dict)
+                or terminal_reconciliation.get("complete") is not True):
             self.state["canonical_final_reconciliation"] = (
                 reconcile_paper_exploration_finals(self.root, self.sha)
             )
         self.reconcile_canonical_account()
         self.observe_forecasts()
-        self.publish(len(rows), blocker)
 
     def run(self, interval: float) -> None:
         threading.Thread(target=self.pm_prior_loop, name="v7-pm-prior", daemon=True).start()
+        period = max(0.25, interval)
+        maintenance_period = 1.0
+        next_decision = time.monotonic()
+        next_maintenance = next_decision + maintenance_period
         while True:
-            try:
-                self.step()
-            except Exception as exc:
-                self.publish(0, f"ROUTER_ERROR:{type(exc).__name__}")
-            time.sleep(max(0.25, interval))
+            now = time.monotonic()
+            if now >= next_decision:
+                try:
+                    self.step()
+                except Exception as exc:
+                    self.publish(0, f"ROUTER_ERROR:{type(exc).__name__}")
+                next_decision += period
+                current = time.monotonic()
+                if next_decision <= current - period:
+                    next_decision = current
+            now = time.monotonic()
+            if now >= next_maintenance:
+                try:
+                    self.maintenance_step()
+                    self.maintenance_ready = True
+                except Exception as exc:
+                    self.maintenance_ready = False
+                    self.publish(0, f"ROUTER_MAINTENANCE_ERROR:{type(exc).__name__}")
+                next_maintenance += maintenance_period
+                current = time.monotonic()
+                if next_maintenance <= current - maintenance_period:
+                    next_maintenance = current
+            time.sleep(max(0.0, min(next_decision, next_maintenance) - time.monotonic()))
 
 
 def main() -> int:
