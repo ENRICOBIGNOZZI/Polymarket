@@ -229,7 +229,13 @@ def collect_snapshot(run_root: Path, repository_root: Path | None = None, *, now
         "crypto_model_registry": _json(repository_root / "config/v7_crypto_settlement_model_registry.json"),
         "crypto_runtime": _json(run_root / "control/crypto_settlement_engine_snapshot.json"),
         "global_coordinator": _json(run_root / "control/global_portfolio_coordinator.json"),
-        "process_manifest": {"schema": process.get("schema"), "process_count": len(process.get("processes") or []), "sha256": hashlib.sha256(process_path.read_bytes()).hexdigest() if process_path.exists() else ""},
+        "process_manifest": {
+            "schema": process.get("schema"),
+            "process_count": len(process.get("processes") or []),
+            "expected_process_count": int(process.get("expected_process_count") or 0),
+            "expected_launcher_child_count": int(process.get("expected_launcher_child_count") or 0),
+            "sha256": hashlib.sha256(process_path.read_bytes()).hexdigest() if process_path.exists() else "",
+        },
         "fast": fast, "hard": hard, "maker": maker,
         "maker_diagnostics": _json(run_root / "micro_maker/runtime_diagnostics.json"),
         "maker_selector": _json(run_root / "micro_maker/selector_status.json"),
@@ -282,7 +288,10 @@ def health_reasons(snapshot: dict[str, Any], *, max_runtime_age: int = 180, max_
     if runtime.get("economic_new_risk_ready") is not False: reasons.append("economic_new_risk_must_remain_disabled")
     if runtime.get("authorized_alpha_actions") not in (None, []): reasons.append("authorized_alpha_actions_not_empty")
     if not _scope_valid(snapshot): reasons.append("live_algorithm_scope_missing_or_invalid")
-    if (snapshot.get("process_manifest") or {}).get("process_count") != 26: reasons.append("process_manifest_not_26_exact")
+    process_manifest = snapshot.get("process_manifest") or {}
+    expected_process_count = _integer(process_manifest.get("expected_process_count"))
+    if expected_process_count <= 0 or _integer(process_manifest.get("process_count")) != expected_process_count:
+        reasons.append("process_manifest_count_mismatch")
     budgets = allocations.get("engine_budgets") if isinstance(allocations.get("engine_budgets"), dict) else {}
     if allocations.get("schema") != "polymarket_v7_capital_allocation_v3" or set(budgets) != set(LIVE_ALGORITHMS) or allocations.get("engine_count") != 2 or allocations.get("paper_only") is not True or allocations.get("authenticated_execution") is not False or allocations.get("real_order_submission") is not False or allocations.get("real_capital_at_risk") is not False or allocations.get("capital_authority_owner_count") != 1: reasons.append("two_engine_allocation_missing_or_unsafe")
     engines = portfolio.get("engines") if isinstance(portfolio.get("engines"), dict) else {}
