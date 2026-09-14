@@ -33,9 +33,41 @@ def receipt() -> dict:
     }
 
 
+def execution_metadata() -> dict:
+    return {
+        "component": "professional_maker",
+        "paper_exploration": True,
+        "economic_authority": "PAPER_EXPLORATION",
+        "counterfactual": False,
+        "excluded_from_portfolio_equity": False,
+        "coordinator_receipt": receipt(),
+    }
+
+
 def order(order_id: str, cluster: str, ts: int, *, score: float = 0.002, imbalance: float = 0.6) -> dict:
+    metadata = execution_metadata()
+    metadata.update({
+        "execution_semantics_version": base.SEMANTICS,
+        "placement_action": "JOIN",
+        "paper_bootstrap_probe": False,
+        "placement_features": {
+            "microstructure_shadow_delta_250ms": score,
+            "imbalance": imbalance,
+            "ofi": 0.2,
+            "cancel_intensity": 0.1,
+            "trade_intensity": 0.2,
+            "aggressive_sell_prints_per_second": 0.3,
+            "spread_ticks": 1.0,
+            "distance_from_touch_ticks": 0.0,
+        },
+        "execution_alpha": {
+            "features": {"queue_ahead": 20.0},
+            "fill_probability": {"point": 0.2},
+        },
+    })
     return {
         "event_type": "ORDER_SUBMITTED",
+        "strategy": dt.STRATEGY,
         "model_sha": SHA,
         "paper_only": True,
         "authenticated_execution": False,
@@ -45,37 +77,14 @@ def order(order_id: str, cluster: str, ts: int, *, score: float = 0.002, imbalan
         "token_id": "yes-" + cluster,
         "side": "BUY",
         "recorded_ts_ms": ts,
-        "metadata": {
-            "component": "professional_maker",
-            "execution_semantics_version": base.SEMANTICS,
-            "placement_action": "JOIN",
-            "paper_bootstrap_probe": False,
-            "paper_exploration": True,
-            "economic_authority": "PAPER_EXPLORATION",
-            "counterfactual": False,
-            "excluded_from_portfolio_equity": False,
-            "coordinator_receipt": receipt(),
-            "placement_features": {
-                "microstructure_shadow_delta_250ms": score,
-                "imbalance": imbalance,
-                "ofi": 0.2,
-                "cancel_intensity": 0.1,
-                "trade_intensity": 0.2,
-                "aggressive_sell_prints_per_second": 0.3,
-                "spread_ticks": 1.0,
-                "distance_from_touch_ticks": 0.0,
-            },
-            "execution_alpha": {
-                "features": {"queue_ahead": 20.0},
-                "fill_probability": {"point": 0.2},
-            },
-        },
+        "metadata": metadata,
     }
 
 
 def fill(order_id: str, cluster: str, fill_id: str, ts: int) -> dict:
     return {
         "event_type": "FILL",
+        "strategy": dt.STRATEGY,
         "model_sha": SHA,
         "paper_only": True,
         "authenticated_execution": False,
@@ -86,12 +95,14 @@ def fill(order_id: str, cluster: str, fill_id: str, ts: int) -> dict:
         "token_id": "yes-" + cluster,
         "recorded_ts_ms": ts,
         "filled_size": 2.0,
+        "metadata": execution_metadata(),
     }
 
 
 def mark(order_id: str, fill_id: str, ts: int, value: float) -> dict:
     return {
         "event_type": "MARKOUT",
+        "strategy": dt.STRATEGY,
         "model_sha": SHA,
         "paper_only": True,
         "authenticated_execution": False,
@@ -99,18 +110,26 @@ def mark(order_id: str, fill_id: str, ts: int, value: float) -> dict:
         "fill_id": fill_id,
         "recorded_ts_ms": ts,
         "markouts": {"250ms": value},
+        "metadata": {
+            "component": "professional_maker",
+            "fill_conditioned": True,
+            "research_evidence_only": True,
+            "ledger_writer_authority": False,
+        },
     }
 
 
 def terminal(order_id: str, ts: int, state: str = "CANCELLED") -> dict:
     return {
         "event_type": "ORDER_STATE",
+        "strategy": dt.STRATEGY,
         "model_sha": SHA,
         "paper_only": True,
         "authenticated_execution": False,
         "order_id": order_id,
         "recorded_ts_ms": ts,
         "order_state": state,
+        "metadata": execution_metadata(),
     }
 
 
@@ -159,10 +178,8 @@ class DecisionTimeToxicityTests(unittest.TestCase):
         ]
         rows, diag = dt.build_decision_rows(
             maker, books,
-            markout_horizon="250ms",
-            placement_actions={"JOIN"},
-            cancel_latency_ms=25.0,
-            fill_hazard_window_ms=500,
+            markout_horizon="250ms", placement_actions={"JOIN"},
+            cancel_latency_ms=25.0, fill_hazard_window_ms=500,
             minimum_decision_spacing_ms=0,
         )
         self.assertEqual([row["decision_ts_ms"] for row in rows], [1010, 1060, 1080])
@@ -178,10 +195,8 @@ class DecisionTimeToxicityTests(unittest.TestCase):
         rows, diag = dt.build_decision_rows(
             [bad, terminal("o1", 1700)],
             [book("e1", 1050, score=0.001, imbalance=0.2)],
-            markout_horizon="250ms",
-            placement_actions={"JOIN"},
-            cancel_latency_ms=25.0,
-            fill_hazard_window_ms=500,
+            markout_horizon="250ms", placement_actions={"JOIN"},
+            cancel_latency_ms=25.0, fill_hazard_window_ms=500,
             minimum_decision_spacing_ms=0,
         )
         self.assertEqual(rows, [])
@@ -195,10 +210,8 @@ class DecisionTimeToxicityTests(unittest.TestCase):
         ]
         rows, _ = dt.build_decision_rows(
             maker, books,
-            markout_horizon="250ms",
-            placement_actions={"JOIN"},
-            cancel_latency_ms=25.0,
-            fill_hazard_window_ms=500,
+            markout_horizon="250ms", placement_actions={"JOIN"},
+            cancel_latency_ms=25.0, fill_hazard_window_ms=500,
             minimum_decision_spacing_ms=0,
         )
         self.assertEqual(len(rows), 1)
@@ -219,28 +232,40 @@ class DecisionTimeToxicityTests(unittest.TestCase):
         self.assertTrue(rows[0]["label_complete"])
         self.assertEqual(rows[0]["first_fill_in_horizon"], 0)
 
+    def test_noncanonical_markout_is_missing_label_not_adverse(self) -> None:
+        bad_mark = mark("o1", "f1", 1400, -0.02)
+        bad_mark["metadata"]["component"] = "other_component"
+        rows, diag = dt.build_decision_rows(
+            [order("o1", "e1", 1000), fill("o1", "e1", "f1", 1100), bad_mark],
+            [book("e1", 1050, score=0.001, imbalance=0.2)],
+            markout_horizon="250ms", placement_actions={"JOIN"},
+            cancel_latency_ms=25.0, fill_hazard_window_ms=500,
+            minimum_decision_spacing_ms=0,
+        )
+        self.assertEqual(len(rows), 1)
+        self.assertFalse(rows[0]["label_complete"])
+        self.assertEqual(rows[0]["censor_reason"], "MISSING_FILL_MARKOUT")
+        self.assertEqual(diag["decision_rows_missing_fill_markout"], 1)
+
     def test_future_book_update_cannot_change_earlier_feature_cut(self) -> None:
         maker = [order("o1", "e1", 1000), terminal("o1", 1500)]
         first = book("e1", 1050, score=0.002, imbalance=0.4)
         later = book("e1", 1090, score=-0.010, imbalance=-0.9)
         rows_a, _ = dt.build_decision_rows(
-            maker, [first],
-            markout_horizon="250ms", placement_actions={"JOIN"},
+            maker, [first], markout_horizon="250ms", placement_actions={"JOIN"},
             cancel_latency_ms=25.0, fill_hazard_window_ms=500,
             minimum_decision_spacing_ms=0,
         )
         rows_b, _ = dt.build_decision_rows(
-            maker, [first, later],
-            markout_horizon="250ms", placement_actions={"JOIN"},
+            maker, [first, later], markout_horizon="250ms", placement_actions={"JOIN"},
             cancel_latency_ms=25.0, fill_hazard_window_ms=500,
             minimum_decision_spacing_ms=0,
         )
         self.assertEqual(rows_a[0]["features"], rows_b[0]["features"])
 
     def test_historical_cancel_before_keep_horizon_is_censored_not_negative(self) -> None:
-        maker = [order("o1", "e1", 1000), terminal("o1", 1200, "CANCELLED")]
         rows, diag = dt.build_decision_rows(
-            maker,
+            [order("o1", "e1", 1000), terminal("o1", 1200, "CANCELLED")],
             [book("e1", 1050, score=0.001, imbalance=0.2)],
             markout_horizon="250ms", placement_actions={"JOIN"},
             cancel_latency_ms=25.0, fill_hazard_window_ms=500,
@@ -253,9 +278,8 @@ class DecisionTimeToxicityTests(unittest.TestCase):
         self.assertEqual(dt.supervised_rows(rows), [])
 
     def test_terminal_after_keep_horizon_is_valid_no_fill_negative(self) -> None:
-        maker = [order("o1", "e1", 1000), terminal("o1", 1700, "CANCELLED")]
         rows, _ = dt.build_decision_rows(
-            maker,
+            [order("o1", "e1", 1000), terminal("o1", 1700, "CANCELLED")],
             [book("e1", 1050, score=0.001, imbalance=0.2)],
             markout_horizon="250ms", placement_actions={"JOIN"},
             cancel_latency_ms=25.0, fill_hazard_window_ms=500,
