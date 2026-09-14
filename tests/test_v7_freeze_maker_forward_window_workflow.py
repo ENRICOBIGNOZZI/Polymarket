@@ -16,7 +16,7 @@ class FreezeMakerForwardWindowWorkflowTests(unittest.TestCase):
 
     def test_only_successful_paper_deploy_can_trigger_freeze(self) -> None:
         text = self.text
-        self.assertIn('workflow_run:', text)
+        self.assertIn("workflow_run:", text)
         self.assertIn('workflows: ["V7 deploy PAPER server"]', text)
         self.assertIn("github.event.workflow_run.conclusion == 'success'", text)
         self.assertNotIn("workflow_dispatch:", text)
@@ -38,31 +38,19 @@ class FreezeMakerForwardWindowWorkflowTests(unittest.TestCase):
         self.assertIn("deploy-evidence.txt", text)
         self.assertIn("deployed_sha", text)
         self.assertIn("^[0-9a-f]{40}$", text)
-        self.assertIn('git rev-parse origin/main', text)
-        self.assertIn('scripts/v7_cutover_contract.py', text)
-        self.assertIn('control/deployed_sha', text)
+        self.assertIn("git rev-parse origin/main", text)
+        self.assertIn("scripts/v7_cutover_contract.py", text)
+        self.assertIn("recovered_after_transport_loss", text)
 
-    def test_freeze_is_idempotent_and_fail_closed(self) -> None:
+    def test_remote_freeze_routes_through_tested_helper(self) -> None:
         text = self.text
-        self.assertIn("os.O_EXCL", text)
-        self.assertIn("'state':'FREEZING'", text)
-        self.assertIn("'state':'FROZEN'", text)
-        self.assertIn("already_frozen_idempotent", text)
-        self.assertIn("refusing duplicate window", text)
-        self.assertIn("FAILED_MARKER_LEFT_FAIL_CLOSED", text)
-
-    def test_canonical_evidence_is_required_before_window_start(self) -> None:
-        text = self.text
-        for evidence in (
-            "ledger/execution.jsonl",
-            "reward_selection.events.jsonl",
-            "fillability_ws.jsonl",
-            "book_observations/current.jsonl",
-            "--book-evidence",
-            "micro_maker/book_observations",
-        ):
-            self.assertIn(evidence, text)
-        self.assertIn("v7_prepare_maker_forward_window.py", text)
+        self.assertIn("scripts/v7_freeze_maker_forward_window_after_deploy.py", text)
+        self.assertIn("--expected-sha", text)
+        self.assertIn("--deploy-run-id", text)
+        self.assertIn("--wait-seconds 180", text)
+        self.assertIn("--poll-seconds 2", text)
+        self.assertIn("runs/paper_v7_live", text)
+        self.assertIn("runs/paper_v7_experiments", text)
 
     def test_manifest_is_returned_and_revalidated_as_paper_only(self) -> None:
         text = self.text
@@ -72,18 +60,19 @@ class FreezeMakerForwardWindowWorkflowTests(unittest.TestCase):
         self.assertIn("real_order_submission", text)
         self.assertIn("automatic_promotion", text)
         self.assertIn("8*60*60*1000", text)
+        self.assertIn(".deploy_freeze/${DEPLOY_RUN_ID}.manifest.json", text)
 
     def test_ssh_and_scp_use_distinct_port_flags(self) -> None:
         text = self.text
-        self.assertIn('ssh_common=(', text)
-        self.assertIn('scp_common=(', text)
+        self.assertIn("ssh_common=(", text)
+        self.assertIn("scp_common=(", text)
         self.assertRegex(text, r'ssh_common=\([\s\S]*?-p "\$SERVER_PORT"')
         self.assertRegex(text, r'scp_common=\([\s\S]*?-P "\$SERVER_PORT"')
         self.assertIn(
-            '$SERVER_USER@$SERVER_HOST:polymarket/runs/paper_v7_experiments/', text
+            "$SERVER_USER@$SERVER_HOST:polymarket/runs/paper_v7_experiments/", text
         )
         self.assertNotIn(
-            '$SERVER_USER@$SERVER_HOST:$HOME/polymarket/runs/paper_v7_experiments/',
+            "$SERVER_USER@$SERVER_HOST:$HOME/polymarket/runs/paper_v7_experiments/",
             text,
         )
 
