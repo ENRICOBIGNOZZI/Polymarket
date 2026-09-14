@@ -251,10 +251,11 @@ def directional_shadow_decision(row: dict[str, Any], config: dict[str, Any]) -> 
     stress = float(policy["cost_stress_multiplier"])
     net_edge = probability - ask - stress * (fee + risk)
     threshold = float(policy["primary_minimum_net_edge_after_2x_cost_per_share"])
-    if net_edge < threshold:
+    threshold_epsilon = 1e-12
+    if net_edge + threshold_epsilon < threshold:
         reasons.append("PRIMARY_POST_COST_EDGE_BELOW_THRESHOLD")
     research_grid = {
-        f"edge_ge_{threshold_value:g}": net_edge >= float(threshold_value)
+        f"edge_ge_{threshold_value:g}": net_edge + threshold_epsilon >= float(threshold_value)
         for threshold_value in policy["research_threshold_grid"]
     }
     return {
