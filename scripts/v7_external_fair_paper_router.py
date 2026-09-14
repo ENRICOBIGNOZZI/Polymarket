@@ -1915,6 +1915,10 @@ class PaperRouter:
         self.last_book_error = ""
         self.last_attempt_reason = ""
         self.maintenance_ready = True
+        self.maintenance_last_success_ns = time.time_ns()
+        self.maintenance_accounting_fresh = True
+        self.last_status_active_candidates = 0
+        self.last_status_blocker = ""
         self.last_live_market: dict[str, Any] = {}
         self.pm_prior_path = self.directory / "pm_prior.json"
 
@@ -3369,6 +3373,7 @@ class PaperRouter:
             "market_yes": float(arrival["market_yes"]),
             "market_mid_source": "LIVE_COMPLEMENT_CONSISTENT_CLOB_BATCH",
         }
+        self.maintenance_accounting_fresh = False
         self.last_attempt_reason = "VIRTUAL_FILL"
         return True
 
@@ -3581,6 +3586,9 @@ class PaperRouter:
             "inventory_authority": False, "ledger_writer_authority": False,
             "simulated_paper_account_authority": "V7_CANONICAL_LEDGER_AND_SINGLE_WRITER_SPOOL",
             "paper_exploration_accounting_active": paper_account.get("complete") is True,
+            "maintenance_ready": self.maintenance_ready,
+            "maintenance_accounting_fresh": self.maintenance_accounting_fresh,
+            "maintenance_last_success_ns": self.maintenance_last_success_ns,
             "model_mature": self.model_mature,
             "economic_confidence": (
                 "PAPER_ECONOMIC_EVIDENCE_READY"
@@ -3800,6 +3808,8 @@ class PaperRouter:
             "best_robust_ev_per_share": max((float(row["robust_ev"]) for row in rows), default=None),
             "best_point_ev_per_share": max((float(row.get("point_ev", row["robust_ev"])) for row in rows), default=None),
         }
+        self.last_status_active_candidates = len(rows)
+        self.last_status_blocker = blocker
         self.publish(len(rows), blocker)
 
     def maintenance_step(self) -> None:
@@ -3815,6 +3825,8 @@ class PaperRouter:
             )
         self.reconcile_canonical_account()
         self.observe_forecasts()
+        self.maintenance_accounting_fresh = True
+        self.maintenance_last_success_ns = time.time_ns()
 
     def run(self, interval: float) -> None:
         threading.Thread(target=self.pm_prior_loop, name="v7-pm-prior", daemon=True).start()
@@ -3838,8 +3850,10 @@ class PaperRouter:
                 try:
                     self.maintenance_step()
                     self.maintenance_ready = True
+                    self.publish(self.last_status_active_candidates, self.last_status_blocker)
                 except Exception as exc:
                     self.maintenance_ready = False
+                    self.maintenance_accounting_fresh = False
                     self.publish(0, f"ROUTER_MAINTENANCE_ERROR:{type(exc).__name__}")
                 next_maintenance += maintenance_period
                 current = time.monotonic()

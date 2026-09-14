@@ -310,6 +310,11 @@ def main() -> None:
                 return_value=exploration_receipt,
             ):
                 paper.step()
+        stale_status = json.loads((external / "paper_router_status.json").read_text())
+        assert stale_status["maintenance_accounting_fresh"] is False
+        paper.maintenance_step()
+        paper.maintenance_ready = True
+        paper.publish(paper.last_status_active_candidates, paper.last_status_blocker)
         proposals = [
             json.loads(path.read_text())
             for path in (run_root / "opportunities" / "inbox").glob("*.json")
