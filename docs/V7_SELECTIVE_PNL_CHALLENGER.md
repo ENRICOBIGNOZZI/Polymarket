@@ -36,11 +36,13 @@ The prospective grid reuses the previously registered bins for TTE, external dis
 
 `config/v7_selective_pnl_forward_protocol.json` preregisters the next eight-hour study before any deployment. It fixes one-look analysis, a 60-second grace period, Maker and directional primary endpoints, evidence minima, latency SLOs, the external-cancel identity, the regime grid, and the rule that the observed NO-side asymmetry cannot affect selection or sizing without a later fresh boundary.
 
+The protocol also explicitly forbids activation before the current Maker verdict and requires a separate post-verdict review, a new exact-SHA deployment and a fresh forward boundary. This prevents the development work in PR #939 from silently replacing the running experiment.
+
 ## Verification
 
-On the isolated server worktree, the challenger currently passes 16 focused tests: three fast-entry shadow tests, eight selective-policy tests and five frozen-protocol tests. Both Python modules also pass bytecode compilation. The active runtime checkout was re-read after the tests and remained on exact SHA `aa5311a610980e944a09ee7a236e972ee3b364da`.
+On the isolated server worktree, the challenger passes focused policy, fast-entry and frozen-protocol tests plus Python bytecode compilation. The active runtime checkout is re-read after verification and must remain exact SHA `aa5311a610980e944a09ee7a236e972ee3b364da` until its current forward verdict is complete.
 
-A boundary-condition defect found during this local verification was fixed: threshold comparisons now use a `1e-12` numerical tolerance so an intended 0.5c or 1c edge is not rejected solely because IEEE floating-point represents it microscopically below the decimal threshold.
+A boundary-condition defect found during local verification was fixed: threshold comparisons now use a `1e-12` numerical tolerance so an intended 0.5c or 1c edge is not rejected solely because IEEE floating-point represents it microscopically below the decimal threshold.
 
 ## Active-window isolation
 
