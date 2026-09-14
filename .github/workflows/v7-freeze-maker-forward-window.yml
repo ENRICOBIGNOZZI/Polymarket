@@ -36,7 +36,7 @@ jobs:
           repository: ${{ github.repository }}
           run-id: ${{ github.event.workflow_run.id }}
 
-      - name: Prove a real successful exact-SHA deploy
+      - name: Prove an explicitly armed successful exact-SHA deploy
         id: provenance
         shell: bash
         run: |
@@ -47,6 +47,12 @@ jobs:
             echo "No deployment evidence artifact; nothing to freeze."
             exit 0
           fi
+          freeze_requested="$(awk -F= '$1=="freeze_maker_forward_window"{v=$2} END{print v}' "$evidence")"
+          if [[ "$freeze_requested" != "true" ]]; then
+            echo "eligible=false" >> "$GITHUB_OUTPUT"
+            echo "Deploy completed without explicit forward-window arming; nothing to freeze."
+            exit 0
+          fi
           deploy_result="$(awk -F= '$1=="deploy_result"{v=$2} END{print v}' "$evidence")"
           deployed_sha="$(awk -F= '$1=="deployed_sha"{v=$2} END{print v}' "$evidence")"
           [[ "$deploy_result" == "success" || "$deploy_result" == "recovered_after_transport_loss" ]]
@@ -54,6 +60,7 @@ jobs:
           echo "eligible=true" >> "$GITHUB_OUTPUT"
           echo "deployed_sha=$deployed_sha" >> "$GITHUB_OUTPUT"
           echo "deploy_result=$deploy_result" >> "$GITHUB_OUTPUT"
+          echo "freeze_requested=true" >> "$GITHUB_OUTPUT"
 
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         if: steps.provenance.outputs.eligible == 'true'
