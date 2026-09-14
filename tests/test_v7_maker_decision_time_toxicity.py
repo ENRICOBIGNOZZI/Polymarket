@@ -22,6 +22,17 @@ SHA = "a" * 40
 OTHER_SHA = "b" * 40
 
 
+def receipt() -> dict:
+    return {
+        "owner": "V7_GLOBAL_PORTFOLIO_COORDINATOR",
+        "action": "MAKE",
+        "paper_only": True,
+        "paper_exploration_authorized": True,
+        "authenticated_execution": False,
+        "real_order_submission": False,
+    }
+
+
 def order(order_id: str, cluster: str, ts: int, *, score: float = 0.002, imbalance: float = 0.6) -> dict:
     return {
         "event_type": "ORDER_SUBMITTED",
@@ -39,6 +50,11 @@ def order(order_id: str, cluster: str, ts: int, *, score: float = 0.002, imbalan
             "execution_semantics_version": base.SEMANTICS,
             "placement_action": "JOIN",
             "paper_bootstrap_probe": False,
+            "paper_exploration": True,
+            "economic_authority": "PAPER_EXPLORATION",
+            "counterfactual": False,
+            "excluded_from_portfolio_equity": False,
+            "coordinator_receipt": receipt(),
             "placement_features": {
                 "microstructure_shadow_delta_250ms": score,
                 "imbalance": imbalance,
@@ -61,6 +77,8 @@ def fill(order_id: str, cluster: str, fill_id: str, ts: int) -> dict:
     return {
         "event_type": "FILL",
         "model_sha": SHA,
+        "paper_only": True,
+        "authenticated_execution": False,
         "order_id": order_id,
         "fill_id": fill_id,
         "event_id": cluster,
@@ -75,6 +93,8 @@ def mark(order_id: str, fill_id: str, ts: int, value: float) -> dict:
     return {
         "event_type": "MARKOUT",
         "model_sha": SHA,
+        "paper_only": True,
+        "authenticated_execution": False,
         "order_id": order_id,
         "fill_id": fill_id,
         "recorded_ts_ms": ts,
@@ -86,6 +106,8 @@ def terminal(order_id: str, ts: int, state: str = "CANCELLED") -> dict:
     return {
         "event_type": "ORDER_STATE",
         "model_sha": SHA,
+        "paper_only": True,
+        "authenticated_execution": False,
         "order_id": order_id,
         "recorded_ts_ms": ts,
         "order_state": state,
@@ -150,6 +172,21 @@ class DecisionTimeToxicityTests(unittest.TestCase):
         self.assertEqual(rows[2]["unavoidable_fill_before_cancel_effective"], 1)
         self.assertEqual(diag["decision_rows_with_unavoidable_fill"], 1)
 
+    def test_noncanonical_coordinator_receipt_excludes_order_entirely(self) -> None:
+        bad = order("o1", "e1", 1000)
+        bad["metadata"]["coordinator_receipt"]["action"] = "CANCEL"
+        rows, diag = dt.build_decision_rows(
+            [bad, terminal("o1", 1700)],
+            [book("e1", 1050, score=0.001, imbalance=0.2)],
+            markout_horizon="250ms",
+            placement_actions={"JOIN"},
+            cancel_latency_ms=25.0,
+            fill_hazard_window_ms=500,
+            minimum_decision_spacing_ms=0,
+        )
+        self.assertEqual(rows, [])
+        self.assertEqual(diag["candidate_orders"], 0)
+
     def test_wrong_sha_book_rows_never_enter_decision_dataset(self) -> None:
         maker = [order("o1", "e1", 1000), terminal("o1", 1500)]
         books = [
@@ -167,6 +204,20 @@ class DecisionTimeToxicityTests(unittest.TestCase):
         self.assertEqual(len(rows), 1)
         self.assertEqual(rows[0]["decision_ts_ms"], 1020)
         self.assertAlmostEqual(rows[0]["features"]["micro_score"], 0.001)
+
+    def test_nonpaper_fill_cannot_label_canonical_order(self) -> None:
+        fake_fill = fill("o1", "e1", "f1", 1100)
+        fake_fill["paper_only"] = False
+        rows, _ = dt.build_decision_rows(
+            [order("o1", "e1", 1000), fake_fill, terminal("o1", 1700)],
+            [book("e1", 1050, score=0.001, imbalance=0.2)],
+            markout_horizon="250ms", placement_actions={"JOIN"},
+            cancel_latency_ms=25.0, fill_hazard_window_ms=500,
+            minimum_decision_spacing_ms=0,
+        )
+        self.assertEqual(len(rows), 1)
+        self.assertTrue(rows[0]["label_complete"])
+        self.assertEqual(rows[0]["first_fill_in_horizon"], 0)
 
     def test_future_book_update_cannot_change_earlier_feature_cut(self) -> None:
         maker = [order("o1", "e1", 1000), terminal("o1", 1500)]
