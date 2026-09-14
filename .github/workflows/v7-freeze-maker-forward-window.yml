@@ -180,6 +180,16 @@ jobs:
             -o ServerAliveCountMax=4
             -p "$SERVER_PORT"
           )
+          scp_common=(
+            -i ~/.ssh/polymarket_deploy
+            -o IdentitiesOnly=yes
+            -o BatchMode=yes
+            -o ConnectTimeout=10
+            -o ConnectionAttempts=3
+            -o ServerAliveInterval=15
+            -o ServerAliveCountMax=4
+            -P "$SERVER_PORT"
+          )
 
           ssh "${ssh_common[@]}" "$SERVER_USER@$SERVER_HOST" \
             "EXPECTED_SHA='$DEPLOYED_SHA' DEPLOY_RUN_ID='$DEPLOY_RUN_ID' bash -s" <<'REMOTE' \
@@ -284,8 +294,8 @@ jobs:
           REMOTE
 
           cat maker-forward-freeze-evidence.txt
-          scp "${ssh_common[@]}" \
-            "$SERVER_USER@$SERVER_HOST:$HOME/polymarket/runs/paper_v7_experiments/.deploy_freeze/${DEPLOY_RUN_ID}.manifest.json" \
+          scp "${scp_common[@]}" \
+            "$SERVER_USER@$SERVER_HOST:polymarket/runs/paper_v7_experiments/.deploy_freeze/${DEPLOY_RUN_ID}.manifest.json" \
             maker-forward-manifest.json
           python3 - "$DEPLOYED_SHA" <<'PY'
           import json,sys
