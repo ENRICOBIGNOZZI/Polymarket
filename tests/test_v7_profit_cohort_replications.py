@@ -18,16 +18,53 @@ class FakeBook:
 
 
 class ProfitCohortReplicationTests(unittest.TestCase):
-    def manager(self,root):
+    def manager(self,root,*,allow_new=True):
         run=Path(root)/'run';out=Path(root)/'durable'
         run.mkdir(exist_ok=True);out.mkdir(exist_ok=True)
-        return ProfitCohorts(run,out,ROOT/'config/v7_profit_experiment.json',FakeBook(),'a'*40,Path('/tmp/no-binary'))
+        protocol=ROOT/'config/v7_profit_experiment.json'
+        if allow_new:
+            value=json.loads(protocol.read_text())
+            value['lifecycle']['new_signal_cohorts_enabled']=True
+            protocol=Path(root)/'active_protocol.json'
+            protocol.write_text(json.dumps(value,sort_keys=True,indent=2)+'\n')
+        return ProfitCohorts(
+            run,out,protocol,FakeBook(),'a'*40,Path('/tmp/no-binary'))
 
     def origin(self,ns):
         return {'origin_observed_wall_ns':ns,'feature_schema_version':'btc-m5-rich-external-causal-v2'}
 
     def fair(self,model_id):
         return {'fair':{'valid':True,'probability_model_hash':'b'*64,'probability_model_id':model_id}}
+
+    def test_retired_checked_in_v6_cannot_open_new_signal_cohorts(self):
+        with tempfile.TemporaryDirectory() as d:
+            manager=self.manager(d,allow_new=False)
+            active=manager._signal_active(
+                self.fair('btc-m5-rich-logit-residual-retired'),
+                self.origin(10*FIVE_MIN_NS+1),
+            )
+            self.assertIsNone(active)
+            self.assertEqual(manager.cohorts,{})
+
+    def test_retired_v6_can_reload_existing_historical_replications(self):
+        with tempfile.TemporaryDirectory() as d:
+            active_manager=self.manager(d,allow_new=True)
+            observed=10*FIVE_MIN_NS+1
+            active_manager._signal_active(
+                self.fair('btc-m5-rich-logit-residual-existing'),
+                self.origin(observed),
+            )
+            self.assertEqual(len(active_manager.cohorts),3)
+            starts=sorted(
+                c.manifest['forward_start_ns'] for c in active_manager.cohorts.values())
+            retired=self.manager(d,allow_new=False)
+            self.assertEqual(len(retired.cohorts),3)
+            found=retired._signal_active(
+                self.fair('btc-m5-rich-logit-residual-existing'),
+                self.origin(starts[0]+1),
+            )
+            self.assertIsNotNone(found)
+            self.assertEqual(found.manifest['forward_start_ns'],starts[0])
 
     def test_old_non_residual_model_cannot_open_v6_signal_cohort(self):
         with tempfile.TemporaryDirectory() as d:

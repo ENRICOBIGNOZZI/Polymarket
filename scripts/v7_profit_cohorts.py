@@ -109,7 +109,18 @@ class ProfitCohorts:
         model_id=str(fair.get('probability_model_id') or '')
         if self.protocol.get('protocol_id')==V6_PROTOCOL_ID:
             if not required or not model_id.startswith(required):return None
-            candidates=self.ensure_residual_replications(model,schema,int(origin['origin_observed_wall_ns']))
+            existing=self._residual_cohorts(model,schema)
+            lifecycle=self.protocol.get('lifecycle')
+            if lifecycle is not None and not isinstance(lifecycle,dict):
+                raise ValueError('profit_cohorts:invalid_lifecycle')
+            allow_new=(lifecycle or {}).get('new_signal_cohorts_enabled',True) is not False
+            # Old frozen V6 protocols have no lifecycle field and retain their
+            # original behavior. A retired checked-in V6 can still read and
+            # complete cohorts already frozen under this code SHA, but cannot
+            # create a fresh three-window sequence after another cutover.
+            if not existing and not allow_new:return None
+            candidates=existing or self.ensure_residual_replications(
+                model,schema,int(origin['origin_observed_wall_ns']))
         else:
             candidates=[self.cohort(model,schema)]
         origin_ns=int(origin['origin_observed_wall_ns'])
