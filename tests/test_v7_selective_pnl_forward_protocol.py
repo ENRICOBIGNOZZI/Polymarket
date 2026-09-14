@@ -48,6 +48,7 @@ def test_directional_primary_matches_challenger_not_historical_posthoc_side_filt
 
 def test_latency_and_cancel_identity_match_challenger():
     assert PROTOCOL["latency"]["scan_interval_ms"] == CHALLENGER["latency"]["candidate_scan_interval_ms"] == 250
+    assert PROTOCOL["latency"]["book_request_timeout_ms"] == CHALLENGER["latency"]["book_request_timeout_ms"] == 250
     assert PROTOCOL["latency"]["synthetic_revalidation_sleep_ms"] == 0
     assert PROTOCOL["latency"]["decision_to_arrival_slo_ms"] == CHALLENGER["latency"]["decision_to_arrival_slo_ms"]
     assert PROTOCOL["external_cancel"]["rule_id"] == CHALLENGER["maker_gate"]["external_cancel"]["rule_id"]

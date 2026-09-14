@@ -60,6 +60,7 @@
     },
     "failure_policy": "NO_DIRECTIONAL_PRIMARY_CLAIM_IF_SLO_FAILS",
     "scan_interval_ms": 250,
+    "book_request_timeout_ms": 250,
     "synthetic_revalidation_sleep_ms": 0
   },
   "maker": {

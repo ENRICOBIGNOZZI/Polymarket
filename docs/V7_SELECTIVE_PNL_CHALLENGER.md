@@ -56,6 +56,10 @@ Two short operational samples separated by a BTC M5 market handoff produced a us
 
 This supports a rollover guard rather than a post-hoc TTE cutoff: when a fresh two-book batch is complement-incoherent, the challenger withdraws and takes no new risk. It resumes only on a fresh complement-consistent batch and records market-identity changes as diagnostics. No fixed TTE threshold is inferred from this development observation.
 
+A transport-only A/B then isolated TLS setup as a material latency cost. Thirty one-shot urllib requests had p50 87.9 ms and p90 128.2 ms, while thirty requests over one persistent HTTP/1.1 connection had p50 45.7 ms, p90 57.5 ms and p99 91.5 ms, with 30/30 two-book responses in both arms. The shadow therefore uses HTTP/1.1 keep-alive and never retries a failed request inside the same scan tick.
+
+A subsequent stable-market 80-tick keep-alive sample produced p50 44 ms, p90 57 ms and p99 81 ms. One 594 ms tail observation under the earlier 500 ms socket timeout motivated a purely mechanical contract: the book-request timeout now equals the 250 ms scan interval. A follow-up 80-tick transport sample under the 250 ms timeout had p50 41 ms, p90 48 ms, p99 83 ms and max 84 ms. That sample occurred in a complement-incoherent pre-rollover state, so it is latency evidence only and carries no economic claim.
+
 ## Safety and promotion
 
 The challenger always has `paper_only=true`, `authenticated_execution=false`, `real_order_submission=false`, `real_capital_at_risk=false`, `execution_authority=ZERO_AUTHORITY_RESEARCH_ONLY`, and `automatic_promotion=false`. Any runtime integration, threshold change, sizing change or deployment requires a later exact-SHA review and a new prospective forward boundary.

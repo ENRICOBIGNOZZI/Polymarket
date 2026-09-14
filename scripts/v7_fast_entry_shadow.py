@@ -11,10 +11,12 @@ orders, fills, positions, the canonical ledger, or portfolio state.
 from __future__ import annotations
 
 import argparse
+import http.client
 import json
 import math
 import os
 import time
+import urllib.parse
 from pathlib import Path
 from typing import Any
 
@@ -30,6 +32,54 @@ from v7_market_common import request_json
 
 SCHEMA = "polymarket_v7_fast_entry_shadow_v1"
 STATUS_SCHEMA = "polymarket_v7_fast_entry_shadow_status_v1"
+
+
+class ClobBooksClient:
+    # Persistent HTTP/1.1 /books client with fail-closed reconnect semantics.
+
+    def __init__(self, clob_url: str, timeout_seconds: float) -> None:
+        parsed = urllib.parse.urlparse(clob_url)
+        if parsed.scheme != "https" or not parsed.hostname:
+            raise ValueError("fast-entry shadow requires an https CLOB origin")
+        self.host = parsed.hostname
+        self.port = parsed.port
+        self.base_path = parsed.path.rstrip("/")
+        self.timeout_seconds = timeout_seconds
+        self._conn: http.client.HTTPSConnection | None = None
+
+    def _connection(self) -> http.client.HTTPSConnection:
+        if self._conn is None:
+            self._conn = http.client.HTTPSConnection(
+                self.host, self.port, timeout=self.timeout_seconds
+            )
+        return self._conn
+
+    def close(self) -> None:
+        if self._conn is not None:
+            try:
+                self._conn.close()
+            finally:
+                self._conn = None
+
+    def request_books(self, tokens: list[str]) -> Any:
+        body = json.dumps([{"token_id": token} for token in tokens]).encode("utf-8")
+        headers = {
+            "User-Agent": "polymarket-v7-paper/1",
+            "Content-Type": "application/json",
+            "Content-Length": str(len(body)),
+        }
+        path = f"{self.base_path}/books" if self.base_path else "/books"
+        conn = self._connection()
+        try:
+            conn.request("POST", path, body=body, headers=headers)
+            response = conn.getresponse()
+            payload = response.read()
+            if response.status != 200:
+                raise RuntimeError(f"CLOB_BOOKS_HTTP_{response.status}")
+            return json.loads(payload.decode("utf-8"))
+        except Exception:
+            self.close()
+            raise
 
 
 def atomic_json(path: Path, value: dict[str, Any]) -> None:
@@ -51,6 +101,7 @@ def append_jsonl(path: Path, value: dict[str, Any]) -> None:
 
 def _books(
     status: dict[str, Any], *, clob_url: str, timeout_seconds: float,
+    client: ClobBooksClient | None = None,
 ) -> tuple[dict[str, Book], int, str]:
     market = status.get("market") if isinstance(status.get("market"), dict) else {}
     tokens = [str(token) for token in (market.get("yes_token"), market.get("no_token")) if token]
@@ -58,10 +109,14 @@ def _books(
         return {}, 0, "TOKEN_BINDING_NOT_READY"
     started = time.time_ns()
     try:
-        rows = request_json(
-            f"{clob_url.rstrip('/')}/books",
-            [{"token_id": token} for token in tokens],
-            timeout=timeout_seconds,
+        rows = (
+            client.request_books(tokens)
+            if client is not None
+            else request_json(
+                f"{clob_url.rstrip('/')}/books",
+                [{"token_id": token} for token in tokens],
+                timeout=timeout_seconds,
+            )
         )
     except Exception as exc:
         return {}, max(0, (time.time_ns() - started) // 1_000_000), f"BOOK_REQUEST_{type(exc).__name__.upper()}"
@@ -79,7 +134,8 @@ def _books(
 
 def observe_once(
     status: dict[str, Any], policy: dict[str, Any], *, model_sha: str,
-    clob_url: str, timeout_seconds: float = 0.5, latency_only: bool = False,
+    clob_url: str, timeout_seconds: float = 0.25, latency_only: bool = False,
+    books_client: ClobBooksClient | None = None,
 ) -> dict[str, Any]:
     decision_wall_ns = time.time_ns()
     reason = ""
@@ -94,6 +150,7 @@ def observe_once(
     else:
         books, latency_ms, reason = _books(
             status, clob_url=clob_url, timeout_seconds=timeout_seconds,
+            client=books_client,
         )
     market = status.get("market") if isinstance(status.get("market"), dict) else {}
     market_yes = live_market_yes(books, market) if len(books) == 2 else None
@@ -118,6 +175,7 @@ def observe_once(
             "real_capital_at_risk": False,
             "execution_authority": "ZERO_AUTHORITY_RESEARCH_ONLY",
             "measurement_mode": "LATENCY_ONLY_NO_ECONOMIC_ENDPOINTS",
+            "book_transport": "HTTP11_KEEP_ALIVE_NO_SAME_TICK_RETRY" if books_client is not None else "URLLIB_ONE_SHOT",
             "decision_wall_ns": decision_wall_ns,
             "arrival_wall_ns": arrival_wall_ns,
             "decision_to_fresh_book_ms": latency_ms,
@@ -139,6 +197,7 @@ def observe_once(
         "real_order_submission": False,
         "real_capital_at_risk": False,
         "execution_authority": "ZERO_AUTHORITY_RESEARCH_ONLY",
+        "book_transport": "HTTP11_KEEP_ALIVE_NO_SAME_TICK_RETRY" if books_client is not None else "URLLIB_ONE_SHOT",
         "decision_wall_ns": decision_wall_ns,
         "arrival_wall_ns": arrival_wall_ns,
         "decision_to_fresh_book_ms": latency_ms,
@@ -163,6 +222,7 @@ def run(args: argparse.Namespace) -> int:
     policy_config = load(args.external_fair_config.resolve())
     policy = policy_config.get("taker") if isinstance(policy_config.get("taker"), dict) else {}
     interval = max(0.250, args.scan_interval_ms / 1000.0)
+    books_client = ClobBooksClient(args.clob_url, args.timeout_seconds)
     observations = failures = 0
     while True:
         started = time.monotonic()
@@ -170,7 +230,7 @@ def run(args: argparse.Namespace) -> int:
         row = observe_once(
             status, policy, model_sha=args.model_sha,
             clob_url=args.clob_url, timeout_seconds=args.timeout_seconds,
-            latency_only=args.latency_only,
+            latency_only=args.latency_only, books_client=books_client,
         )
         append_jsonl(output, row)
         observations += 1
@@ -185,6 +245,7 @@ def run(args: argparse.Namespace) -> int:
             "real_capital_at_risk": False,
             "execution_authority": "ZERO_AUTHORITY_RESEARCH_ONLY",
             "scan_interval_ms": int(interval * 1000),
+            "book_transport": "HTTP11_KEEP_ALIVE_NO_SAME_TICK_RETRY",
             "synthetic_revalidation_sleep_ms": 0,
             "measurement_mode": "LATENCY_ONLY_NO_ECONOMIC_ENDPOINTS" if args.latency_only else "FULL_ZERO_AUTHORITY_SHADOW",
             "observations": observations,
@@ -192,6 +253,7 @@ def run(args: argparse.Namespace) -> int:
             "last": row,
         })
         if args.once:
+            books_client.close()
             return 0
         elapsed = time.monotonic() - started
         time.sleep(max(0.0, interval - elapsed))
@@ -204,7 +266,7 @@ def main() -> int:
     parser.add_argument("--external-fair-config", type=Path, default=Path("config/v7_external_fair.json"))
     parser.add_argument("--clob-url", default="https://clob.polymarket.com")
     parser.add_argument("--scan-interval-ms", type=int, default=250)
-    parser.add_argument("--timeout-seconds", type=float, default=0.5)
+    parser.add_argument("--timeout-seconds", type=float, default=0.25)
     parser.add_argument("--output", type=Path)
     parser.add_argument("--status-output", type=Path)
     parser.add_argument("--latency-only", action="store_true", help="Measure fresh-book latency without computing or recording economic candidates.")
@@ -214,8 +276,8 @@ def main() -> int:
         raise SystemExit("exact 40-character model SHA required")
     if args.scan_interval_ms != 250:
         raise SystemExit("research contract requires exactly 250ms scan interval")
-    if not 0.05 <= args.timeout_seconds <= 1.0:
-        raise SystemExit("timeout must be in [0.05, 1.0] seconds")
+    if abs(args.timeout_seconds - 0.25) > 1e-12:
+        raise SystemExit("research contract requires exactly 250ms book timeout")
     return run(args)
 
 

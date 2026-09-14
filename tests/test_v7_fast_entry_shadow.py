@@ -73,6 +73,7 @@ class FastEntryShadowTest(unittest.TestCase):
                 )
         candidates.assert_not_called()
         self.assertEqual(row["measurement_mode"], "LATENCY_ONLY_NO_ECONOMIC_ENDPOINTS")
+        self.assertEqual(row["book_transport"], "URLLIB_ONE_SHOT")
         self.assertEqual(row["decision_to_fresh_book_ms"], 19)
         self.assertEqual(row["book_exchange_timestamp_span_ms"], 0)
         self.assertEqual(row["oldest_book_age_at_receive_ms"], 0)
@@ -96,12 +97,63 @@ class FastEntryShadowTest(unittest.TestCase):
         self.assertEqual(row["fresh_book_count"], 2)
         self.assertEqual(row["reason"], "BOOK_BATCH_RECEIVED_BUT_COMPLEMENT_INCOHERENT")
 
+    def test_keepalive_client_reuses_connection(self):
+        payload = b'[{"asset_id":"yes"},{"asset_id":"no"}]'
+
+        class Response:
+            status = 200
+            def read(self):
+                return payload
+
+        class Conn:
+            def __init__(self, *args, **kwargs):
+                self.requests = 0
+                self.closed = False
+            def request(self, *args, **kwargs):
+                self.requests += 1
+            def getresponse(self):
+                return Response()
+            def close(self):
+                self.closed = True
+
+        conn = Conn()
+        with patch.object(MOD.http.client, "HTTPSConnection", return_value=conn) as factory:
+            client = MOD.ClobBooksClient("https://clob.polymarket.com", 0.25)
+            first = client.request_books(["yes", "no"])
+            second = client.request_books(["yes", "no"])
+        self.assertEqual(first, second)
+        self.assertEqual(conn.requests, 2)
+        factory.assert_called_once()
+
+    def test_keepalive_failure_resets_without_same_tick_retry(self):
+        class Conn:
+            def __init__(self, *args, **kwargs):
+                self.requests = 0
+                self.closed = False
+            def request(self, *args, **kwargs):
+                self.requests += 1
+                raise TimeoutError("boom")
+            def close(self):
+                self.closed = True
+
+        conn = Conn()
+        with patch.object(MOD.http.client, "HTTPSConnection", return_value=conn):
+            client = MOD.ClobBooksClient("https://clob.polymarket.com", 0.25)
+            with self.assertRaises(TimeoutError):
+                client.request_books(["yes", "no"])
+        self.assertEqual(conn.requests, 1)
+        self.assertTrue(conn.closed)
+        self.assertIsNone(client._conn)
+
     def test_module_has_no_order_or_ledger_writer_dependency(self):
         source = (ROOT / "scripts" / "v7_fast_entry_shadow.py").read_text(encoding="utf-8")
         self.assertNotIn("spool_event", source)
         self.assertNotIn("opportunities/inbox", source)
         self.assertNotIn("canonical_ledger", source)
         self.assertIn("synthetic_revalidation_sleep_ms", source)
+        self.assertIn("HTTP11_KEEP_ALIVE_NO_SAME_TICK_RETRY", source)
+        self.assertIn("default=0.25", source)
+        self.assertIn("exactly 250ms book timeout", source)
         self.assertIn("default=250", source)
 
 

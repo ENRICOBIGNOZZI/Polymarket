@@ -42,6 +42,7 @@
   },
   "latency": {
     "candidate_scan_interval_ms": 250,
+    "book_request_timeout_ms": 250,
     "decision_to_arrival_slo_ms": {
       "p50": 150.0,
       "p90": 250.0,
