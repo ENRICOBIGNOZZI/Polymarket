@@ -196,101 +196,17 @@ jobs:
             > maker-forward-freeze-evidence.txt 2>&1
           set -euo pipefail
           cd "$HOME/polymarket"
-          root="$HOME/polymarket/runs/paper_v7_live"
-          out="$HOME/polymarket/runs/paper_v7_experiments"
-          marker_dir="$out/.deploy_freeze"
-          marker="$marker_dir/${DEPLOY_RUN_ID}.json"
-          stable_manifest="$marker_dir/${DEPLOY_RUN_ID}.manifest.json"
-          mkdir -p "$marker_dir"
-
           git fetch --no-tags origin main
           test "$(git rev-parse HEAD)" = "$EXPECTED_SHA"
           test "$(git rev-parse origin/main)" = "$EXPECTED_SHA"
-          test "$(cat "$root/control/deployed_sha")" = "$EXPECTED_SHA"
-
-          if [[ -f "$marker" ]]; then
-            python3 - "$marker" "$stable_manifest" "$EXPECTED_SHA" <<'PY'
-          import json,sys
-          from pathlib import Path
-          marker=Path(sys.argv[1]); stable=Path(sys.argv[2]); sha=sys.argv[3]
-          value=json.loads(marker.read_text(encoding='utf-8'))
-          if value.get('state') != 'FROZEN':
-              raise SystemExit('prior freeze attempt is incomplete; refusing duplicate window')
-          manifest=json.loads(stable.read_text(encoding='utf-8'))
-          assert manifest.get('code_sha') == sha
-          assert manifest.get('experiment_id') == value.get('experiment_id')
-          assert manifest.get('window_end_ms') - manifest.get('window_start_ms') == 8*60*60*1000
-          assert manifest.get('automatic_promotion') is False
-          print('freeze_result=already_frozen_idempotent')
-          print('experiment_id=' + str(manifest['experiment_id']))
-          print('manifest_sha256=' + str(manifest['manifest_sha256']))
-          PY
-            exit 0
-          fi
-
-          ready=0
-          for _ in $(seq 1 90); do
-            if [[ -s "$root/ledger/execution.jsonl" \
-                  && -s "$root/micro_maker/reward_selection.events.jsonl" \
-                  && -s "$root/micro_maker/fillability_ws.jsonl" \
-                  && -s "$root/micro_maker/book_observations/current.jsonl" ]]; then
-              ready=1
-              break
-            fi
-            sleep 2
-          done
-          test "$ready" = 1
-
-          python3 - "$marker" "$EXPECTED_SHA" "$DEPLOY_RUN_ID" <<'PY'
-          import json,os,sys,time
-          path=sys.argv[1]
-          payload={'state':'FREEZING','code_sha':sys.argv[2],
-                   'deploy_run_id':sys.argv[3],'created_at_ms':time.time_ns()//1_000_000}
-          fd=os.open(path, os.O_WRONLY|os.O_CREAT|os.O_EXCL, 0o600)
-          with os.fdopen(fd,'w',encoding='utf-8') as handle:
-              json.dump(payload,handle,sort_keys=True); handle.write('\n'); handle.flush(); os.fsync(handle.fileno())
-          PY
-
-          tmp="$(mktemp)"
-          if ! python3 scripts/v7_prepare_maker_forward_window.py \
-              --repository-root "$HOME/polymarket" \
-              --run-root "$root" \
-              --output-root "$out" \
-              --expected-sha "$EXPECTED_SHA" \
-              --book-evidence "$root/micro_maker/book_observations" > "$tmp"; then
-            echo "freeze_result=FAILED_MARKER_LEFT_FAIL_CLOSED"
-            exit 1
-          fi
-
-          experiment_id="$(python3 - "$tmp" <<'PY'
-          import json,sys
-          print(json.load(open(sys.argv[1],encoding='utf-8'))['experiment_id'])
-          PY
-          )"
-          manifest="$out/$experiment_id/manifest.json"
-          python3 - "$manifest" "$stable_manifest" "$marker" "$EXPECTED_SHA" "$DEPLOY_RUN_ID" <<'PY'
-          import json,os,shutil,sys,time
-          from pathlib import Path
-          source,stable,marker=map(Path,sys.argv[1:4]); sha=sys.argv[4]; run_id=sys.argv[5]
-          value=json.loads(source.read_text(encoding='utf-8'))
-          assert value.get('code_sha') == sha
-          assert value.get('window_end_ms') - value.get('window_start_ms') == 8*60*60*1000
-          assert value.get('automatic_promotion') is False
-          tmp=stable.with_suffix('.tmp')
-          shutil.copy2(source,tmp); os.replace(tmp,stable)
-          final={'state':'FROZEN','code_sha':sha,'deploy_run_id':run_id,
-                 'experiment_id':value['experiment_id'],'manifest_sha256':value['manifest_sha256'],
-                 'window_start_ms':value['window_start_ms'],'window_end_ms':value['window_end_ms'],
-                 'frozen_at_ms':time.time_ns()//1_000_000}
-          tmp_marker=marker.with_suffix('.tmp')
-          tmp_marker.write_text(json.dumps(final,sort_keys=True)+'\n',encoding='utf-8')
-          os.replace(tmp_marker,marker)
-          print('freeze_result=success')
-          print('experiment_id=' + str(value['experiment_id']))
-          print('manifest_sha256=' + str(value['manifest_sha256']))
-          print('window_start_ms=' + str(value['window_start_ms']))
-          print('window_end_ms=' + str(value['window_end_ms']))
-          PY
+          python3 scripts/v7_freeze_maker_forward_window_after_deploy.py \
+            --repository-root "$HOME/polymarket" \
+            --run-root "$HOME/polymarket/runs/paper_v7_live" \
+            --output-root "$HOME/polymarket/runs/paper_v7_experiments" \
+            --expected-sha "$EXPECTED_SHA" \
+            --deploy-run-id "$DEPLOY_RUN_ID" \
+            --wait-seconds 180 \
+            --poll-seconds 2
           REMOTE
 
           cat maker-forward-freeze-evidence.txt
