@@ -186,6 +186,47 @@ class DecisionTimeToxicityTests(unittest.TestCase):
         )
         self.assertEqual(rows_a[0]["features"], rows_b[0]["features"])
 
+    def test_historical_cancel_before_keep_horizon_is_censored_not_negative(self) -> None:
+        maker = [order("o1", "e1", 1000), terminal("o1", 1200, "CANCELLED")]
+        rows, diag = dt.build_decision_rows(
+            maker,
+            [book("e1", 1050, score=0.001, imbalance=0.2)],
+            markout_horizon="250ms", placement_actions={"JOIN"},
+            cancel_latency_ms=25.0, fill_hazard_window_ms=500,
+            minimum_decision_spacing_ms=0,
+        )
+        self.assertEqual(len(rows), 1)
+        self.assertFalse(rows[0]["label_complete"])
+        self.assertEqual(rows[0]["censor_reason"], "HISTORICAL_TERMINAL_BEFORE_KEEP_HORIZON")
+        self.assertEqual(diag["decision_rows_policy_censored"], 1)
+        self.assertEqual(dt.supervised_rows(rows), [])
+
+    def test_terminal_after_keep_horizon_is_valid_no_fill_negative(self) -> None:
+        maker = [order("o1", "e1", 1000), terminal("o1", 1700, "CANCELLED")]
+        rows, _ = dt.build_decision_rows(
+            maker,
+            [book("e1", 1050, score=0.001, imbalance=0.2)],
+            markout_horizon="250ms", placement_actions={"JOIN"},
+            cancel_latency_ms=25.0, fill_hazard_window_ms=500,
+            minimum_decision_spacing_ms=0,
+        )
+        self.assertEqual(len(rows), 1)
+        self.assertTrue(rows[0]["label_complete"])
+        self.assertEqual(rows[0]["first_fill_in_horizon"], 0)
+        self.assertEqual(rows[0]["avoidable_adverse_fill"], 0)
+
+    def test_open_order_without_terminal_proof_is_right_censored(self) -> None:
+        rows, diag = dt.build_decision_rows(
+            [order("o1", "e1", 1000)],
+            [book("e1", 1050, score=0.001, imbalance=0.2)],
+            markout_horizon="250ms", placement_actions={"JOIN"},
+            cancel_latency_ms=25.0, fill_hazard_window_ms=500,
+            minimum_decision_spacing_ms=0,
+        )
+        self.assertFalse(rows[0]["label_complete"])
+        self.assertEqual(rows[0]["censor_reason"], "ORDER_LIFETIME_RIGHT_CENSORED")
+        self.assertEqual(diag["decision_rows_right_censored"], 1)
+
     def test_synthetic_current_state_predicts_avoidable_adverse_fill_oos(self) -> None:
         rows = []
         for cluster in range(50):
@@ -218,9 +259,7 @@ class DecisionTimeToxicityTests(unittest.TestCase):
             train, prep, target="avoidable_adverse_fill", ridge=1.0, iterations=2000
         )
         self.assertGreater(dt.auc(test, prep, beta, "avoidable_adverse_fill"), 0.95)
-        result = dt.fit_one_latency(
-            rows, minimum_clusters=20, ridge=1.0, iterations=2000
-        )
+        result = dt.fit_one_latency(rows, minimum_clusters=20, ridge=1.0, iterations=2000)
         self.assertEqual(result["state"], "FIT_COMPLETE_ZERO_AUTHORITY")
         self.assertFalse(result["policy_gate"]["cancel_authority"])
         self.assertIsNone(result["model"]["threshold"])
