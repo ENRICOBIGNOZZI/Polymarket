@@ -72,6 +72,14 @@ int main() {
         assert(!reset.at("features_valid").as_bool());
         assert(reset.at("public_trade").is_null());
         assert(reset.at("connection_epoch").as_int64() == 2);
+        send(snapshot(1'700'000'001'600), 1600);
+        assert(!observer.lineage_recovery_requested());
+        assert(observer.lineage_recovery_requests() == 1);
+        // An ordinary snapshot may restore lineage, never lost-frame evidence.
+        send("{invalid-json", 1700);
+        assert(observer.lineage_recovery_requested());
+        send(snapshot(1'700'000'001'800), 1800);
+        assert(observer.lineage_recovery_requested());
         observer.stop();
     }
     const auto selection = directory / "selection.json";
