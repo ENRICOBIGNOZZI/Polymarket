@@ -11,7 +11,9 @@ class AuthoritativeTickBootstrapContractTest(unittest.TestCase):
         header = (ROOT / "include/pm/api.hpp").read_text()
         self.assertIn('"/tick-size?token_id=" + token_id', header)
         self.assertIn('"minimum_tick_size"', header)
-        self.assertIn('throw std::runtime_error("CLOB tick-size HTTP "', header)
+        self.assertIn("response.status < 200 || response.status >= 300", header)
+        self.assertIn('"CLOB tick-size HTTP "', header)
+        self.assertIn("throw std::runtime_error", header)
         self.assertNotIn("return 0.01", header)
 
     def test_fair_only_observer_refreshes_both_ticks_each_bootstrap(self) -> None:
