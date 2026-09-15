@@ -1,0 +1,85 @@
+name: V7 public book wire probe
+
+on:
+  workflow_dispatch:
+    inputs:
+      expected_sha:
+        description: Exact current main SHA to diagnose
+        required: false
+        type: string
+  workflow_run:
+    workflows: ["V7 live PAPER validation"]
+    types: [completed]
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: v7-public-book-wire-probe
+  cancel-in-progress: false
+
+jobs:
+  probe:
+    if: github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    env:
+      PROBE_SHA: ${{ github.event.inputs.expected_sha || github.event.workflow_run.head_sha || github.sha }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          ref: ${{ env.PROBE_SHA }}
+          fetch-depth: 0
+
+      - name: Require current immutable main SHA
+        shell: bash
+        run: |
+          set -euo pipefail
+          [[ "$PROBE_SHA" =~ ^[0-9a-f]{40}$ ]]
+          git fetch --no-tags origin main
+          test "$(git rev-parse HEAD)" = "$PROBE_SHA"
+          test "$(git rev-parse origin/main)" = "$PROBE_SHA"
+
+      - name: Capture bounded public CLOB book frames
+        id: wire
+        shell: bash
+        run: |
+          set -uo pipefail
+          mkdir -p public-book-wire-probe
+          rc=0
+          python3 scripts/v7_public_book_wire_probe.py \
+            --expected-sha "$PROBE_SHA" \
+            --output public-book-wire-probe/report.json \
+            --timeout-seconds 20 \
+            --max-book-events 4 || rc=$?
+          python3 - <<'PY'
+          import json
+          from pathlib import Path
+          path=Path('public-book-wire-probe/report.json')
+          if path.is_file():
+              value=json.loads(path.read_text())
+              print('probe_state='+str(value.get('state')))
+              print('captured_book_events='+str(value.get('captured_book_events')))
+              print('market_slug='+str((value.get('market') or {}).get('slug')))
+          PY
+          echo "probe_exit_code=$rc" >> "$GITHUB_OUTPUT"
+          exit 0
+
+      - name: Summarize diagnostic state
+        if: always()
+        shell: bash
+        run: |
+          echo "validated_main_sha=$PROBE_SHA" >> "$GITHUB_STEP_SUMMARY"
+          echo "execution_authority=ZERO_AUTHORITY_PUBLIC_DIAGNOSTIC" >> "$GITHUB_STEP_SUMMARY"
+          echo "probe_exit_code=${{ steps.wire.outputs.probe_exit_code }}" >> "$GITHUB_STEP_SUMMARY"
+          echo "This workflow observes public market data only and never gates PAPER deployment." >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload bounded public-book diagnostic
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: v7-public-book-wire-${{ env.PROBE_SHA }}-${{ github.run_id }}
+          path: public-book-wire-probe/
+          if-no-files-found: warn
+          retention-days: 14
