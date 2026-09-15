@@ -232,7 +232,7 @@ jobs:
           assert value.get('authenticated_execution') is False
           assert value.get('real_order_submission') is False
           assert value.get('automatic_promotion') is False
-          assert value.get('window_end_ms') - value.get('window_start_ms') == 8*60*60*1000
+          assert value.get('window_end_ms') - value.get('window_start_ms') == 2*60*60*1000
           capture=(value.get('evidence_baselines') or {}).get('capture') or {}
           protocol=value.get('freeze_protocol') or {}
           completed=int(capture.get('completed_ms') or 0)
