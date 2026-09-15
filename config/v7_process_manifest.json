@@ -1,6 +1,8 @@
 {
   "authenticated_execution": false,
   "authority_registry": "config/v7_authority_registry.json",
+  "expected_launcher_child_count": 25,
+  "expected_process_count": 27,
   "launcher": "scripts/paper_v7_execution_loop.sh",
   "paper_only": true,
   "processes": [
@@ -66,6 +68,30 @@
     },
     {
       "arguments": [
+        "--model-sha",
+        "${SHA}",
+        "--fair-only"
+      ],
+      "config_identity_required": true,
+      "dependencies": [
+        "rtds_monitor"
+      ],
+      "exact_sha_required": true,
+      "executable": "${FILLABILITY_OBSERVER}",
+      "id": "repricing_book_observer",
+      "inputs": [
+        "external_fair/status.json"
+      ],
+      "launcher_log": "research/repricing_book_observer.log",
+      "outputs": [
+        "research/repricing_book/fillability_ws_status.json",
+        "research/repricing_book/book_observations/current.jsonl",
+        "research/repricing_book_observer.log"
+      ],
+      "profile": "observer"
+    },
+    {
+      "arguments": [
         "--fair-status",
         "external_fair/status.json",
         "--router-status",
@@ -81,9 +107,9 @@
         "--interval-ms",
         "25",
         "--book-tape",
-        "micro_maker/book_observations/current.jsonl",
+        "research/repricing_book/book_observations/current.jsonl",
         "--book-status",
-        "micro_maker/fillability_ws_status.json",
+        "research/repricing_book/fillability_ws_status.json",
         "--profit-root",
         "${DURABLE_ROOT}/profit_experiments/${SHA}",
         "--run-root",
@@ -91,9 +117,10 @@
       ],
       "config_identity_required": true,
       "dependencies": [
-        "rtds_monitor",
         "external_fair_router",
-        "external_venue_runtime"
+        "external_venue_runtime",
+        "repricing_book_observer",
+        "rtds_monitor"
       ],
       "exact_sha_required": true,
       "executable": "scripts/v7_external_lead_lag_collector.py",
@@ -102,8 +129,8 @@
         "external_fair/status.json",
         "external_fair/paper_router_status.json",
         "config/v7_profit_experiment.json",
-        "micro_maker/book_observations/current.jsonl",
-        "micro_maker/fillability_ws_status.json",
+        "research/repricing_book/book_observations/current.jsonl",
+        "research/repricing_book/fillability_ws_status.json",
         "ledger/execution.jsonl"
       ],
       "launcher_log": "external_fair/lead_lag_collector.log",
@@ -156,9 +183,10 @@
       ],
       "config_identity_required": true,
       "dependencies": [
-        "rtds_monitor",
         "external_fair_router",
-        "external_venue_runtime"
+        "external_venue_runtime",
+        "repricing_book_observer",
+        "rtds_monitor"
       ],
       "exact_sha_required": true,
       "executable": "scripts/v7_pm_repricing_shadow.py",
@@ -167,8 +195,8 @@
         "config/v7_pm_repricing_250ms_shadow.json",
         "external_fair/status.json",
         "external_fair/paper_router_status.json",
-        "micro_maker/book_observations/current.jsonl",
-        "micro_maker/fillability_ws_status.json"
+        "research/repricing_book/book_observations/current.jsonl",
+        "research/repricing_book/fillability_ws_status.json"
       ],
       "launcher_log": "research/pm_repricing_shadow.log",
       "outputs": [

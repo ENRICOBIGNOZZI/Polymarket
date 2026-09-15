@@ -64,6 +64,10 @@ struct MarketWsFrameResult {
     std::uint8_t arena_exhausted = 0;
     std::uint8_t output_overflow = 0;
     std::uint8_t lineage_invalidated = 0;
+    std::size_t lineage_invalid_book_snapshot = 0;
+    std::size_t lineage_invalid_price_change = 0;
+    std::size_t lineage_invalid_tick_size_change = 0;
+    std::size_t price_change_without_lineage = 0;
 };
 
 // One instance is owned by one public-feed shard. All mappings and JSON memory

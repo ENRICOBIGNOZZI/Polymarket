@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 from __future__ import annotations
 import json, sys, tempfile, time, unittest
+from unittest import mock
 from pathlib import Path
 ROOT=Path(__file__).resolve().parents[1];sys.path.insert(0,str(ROOT/"scripts"))
 import v7_rtds_external_fair_monitor as module
@@ -78,6 +79,26 @@ class MonitorTests(unittest.TestCase):
         fast["live_market"]["receive_ts_ms"]=0
         snap=module.preferred_pm_prior_snapshot(fast,slow,code_sha="a"*40,market_id="m",now_ms=1100)
         self.assertEqual(snap["snapshot_id"],"slow")
+
+    def test_contract_refresh_accelerates_only_when_binding_no_longer_covers_now(self):
+        with tempfile.TemporaryDirectory() as d:
+            universe = Path(d) / "universe.json"
+            universe.write_text(json.dumps({"markets": []}))
+            m = module.Monitor(Path(d), "a" * 40, universe_path=universe)
+            start = 1_800_000_000
+            now = start + 100
+            m.active_market = {"contract_start_epoch": start}
+            m.active_contract = {"verified_template": True, "rules_hash_recognized": True}
+            m.last_contract_refresh_ns = now * 1_000_000_000 - 2_000_000_000
+            with mock.patch.object(module, "fetch_market_by_slug") as fetch:
+                m.refresh_contract(now * 1_000_000_000)
+            fetch.assert_not_called()
+            rollover = start + 300
+            m.last_contract_refresh_ns = rollover * 1_000_000_000 - 1_100_000_000
+            universe.write_text("{bad")
+            with mock.patch.object(module, "fetch_market_by_slug", return_value=None) as fetch:
+                m.refresh_contract(rollover * 1_000_000_000)
+            fetch.assert_called_once_with(m.gamma_url, f"btc-updown-5m-{rollover}")
 
     def test_external_snapshot_rejects_future_or_wrong_sha(self):
         with tempfile.TemporaryDirectory() as d:

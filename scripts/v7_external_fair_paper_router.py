@@ -30,7 +30,7 @@ from collections import OrderedDict
 from pathlib import Path
 from typing import Any
 
-from v7_market_common import finite, parse_array, request_json
+from v7_market_common import ClobBooksClient, finite, parse_array, request_json
 from v7_evidence_contract import hybrid_identity
 from v7_compressed_journal import CompressedJournal,journal_paths
 from v7_execution_ledger import (
@@ -1849,6 +1849,8 @@ class PaperRouter:
             0.0, finite(hybrid.get("market_prior_logit_weight"), 0.35)
         ))
         self.clob_url = clob_url.rstrip("/")
+        self.clob_books_client = ClobBooksClient(self.clob_url, 0.25)
+        self.pm_prior_books_client = ClobBooksClient(self.clob_url, 0.25)
         self.gamma_url = gamma_url.rstrip("/")
         self.source = self.directory / "status.json"
         self.status_path = self.directory / "paper_router_status.json"
@@ -1914,6 +1916,11 @@ class PaperRouter:
         self.reconcile_canonical_account()
         self.last_book_error = ""
         self.last_attempt_reason = ""
+        self.maintenance_ready = True
+        self.maintenance_last_success_ns = time.time_ns()
+        self.maintenance_accounting_fresh = True
+        self.last_status_active_candidates = 0
+        self.last_status_blocker = ""
         self.last_live_market: dict[str, Any] = {}
         self.pm_prior_path = self.directory / "pm_prior.json"
 
@@ -2632,9 +2639,7 @@ class PaperRouter:
         self.state["book_requests"] = int(self.state.get("book_requests") or 0) + 1
         self.last_book_error = ""
         try:
-            rows = request_json(
-                f"{self.clob_url}/books", [{"token_id": token} for token in tokens], timeout=4
-            )
+            rows = self.clob_books_client.request_books(tokens)
         except Exception as exc:
             self.state["book_request_failures"] = int(self.state.get("book_request_failures") or 0) + 1
             self.last_book_error = f"CLOB_BOOK_REQUEST_{type(exc).__name__.upper()}"
@@ -2659,9 +2664,7 @@ class PaperRouter:
         if len(tokens) != 2 or tokens[0] == tokens[1]:
             return {}
         try:
-            rows = request_json(
-                f"{self.clob_url}/books", [{"token_id": token} for token in tokens], timeout=2
-            )
+            rows = self.pm_prior_books_client.request_books(tokens)
         except Exception:
             return {}
         received = now_ms()
@@ -3170,8 +3173,6 @@ class PaperRouter:
             event_type="CANDIDATE", **common,
         ))
         self.state["candidates"] = int(self.state.get("candidates") or 0) + 1
-        time.sleep(0.1)
-
         arrival_status = load(self.source)
         arrival_books = self.books_for(arrival_status)
         is_probe = row.get("paper_bootstrap_probe") is True
@@ -3368,6 +3369,7 @@ class PaperRouter:
             "market_yes": float(arrival["market_yes"]),
             "market_mid_source": "LIVE_COMPLEMENT_CONSISTENT_CLOB_BATCH",
         }
+        self.maintenance_accounting_fresh = False
         self.last_attempt_reason = "VIRTUAL_FILL"
         return True
 
@@ -3580,6 +3582,9 @@ class PaperRouter:
             "inventory_authority": False, "ledger_writer_authority": False,
             "simulated_paper_account_authority": "V7_CANONICAL_LEDGER_AND_SINGLE_WRITER_SPOOL",
             "paper_exploration_accounting_active": paper_account.get("complete") is True,
+            "maintenance_ready": self.maintenance_ready,
+            "maintenance_accounting_fresh": self.maintenance_accounting_fresh,
+            "maintenance_last_success_ns": self.maintenance_last_success_ns,
             "model_mature": self.model_mature,
             "economic_confidence": (
                 "PAPER_ECONOMIC_EVIDENCE_READY"
@@ -3632,6 +3637,9 @@ class PaperRouter:
             "book_requests": int(self.state.get("book_requests") or 0),
             "book_request_failures": int(self.state.get("book_request_failures") or 0),
             "book_parse_failures": int(self.state.get("book_parse_failures") or 0),
+            "book_transport": "HTTP11_KEEP_ALIVE_NO_SAME_TICK_RETRY",
+            "book_request_timeout_ms": 250,
+            "synthetic_revalidation_sleep_ms": 0,
             "rejection_reasons": self.state.get("rejection_reasons") or {},
             "wait_reasons": self.state.get("wait_reasons") or {},
             "last_decision": self.state.get("last_decision") or {},
@@ -3666,6 +3674,14 @@ class PaperRouter:
         probe_rows: list[dict[str, Any]] = []
         if self.drain_path.exists():
             blocker = "CUTOVER_DRAIN"
+            rows = []
+        elif not self.maintenance_ready:
+            blocker = "ROUTER_MAINTENANCE_NOT_READY"
+            rows = []
+        elif self.maintenance_accounting_fresh is not True:
+            # A fill dirties the cached account. Do not admit another entry
+            # on its pre-fill balance while waiting for owner reconciliation.
+            blocker = "ROUTER_ACCOUNTING_REFRESH_REQUIRED"
             rows = []
         elif (
             not isinstance(self.state.get("canonical_order_reconciliation"), dict)
@@ -3796,30 +3812,58 @@ class PaperRouter:
             "best_robust_ev_per_share": max((float(row["robust_ev"]) for row in rows), default=None),
             "best_point_ev_per_share": max((float(row.get("point_ev", row["robust_ev"])) for row in rows), default=None),
         }
+        self.last_status_active_candidates = len(rows)
+        self.last_status_blocker = blocker
+        self.publish(len(rows), blocker)
+
+    def maintenance_step(self) -> None:
         self.observe_positions()
         self.state["canonical_order_reconciliation"] = (
             reconcile_paper_exploration_orphan_orders(self.root, self.sha)
         )
         terminal_reconciliation = self.state.get("canonical_final_reconciliation")
-        if (
-            not isinstance(terminal_reconciliation, dict)
-            or terminal_reconciliation.get("complete") is not True
-        ):
+        if (not isinstance(terminal_reconciliation, dict)
+                or terminal_reconciliation.get("complete") is not True):
             self.state["canonical_final_reconciliation"] = (
                 reconcile_paper_exploration_finals(self.root, self.sha)
             )
         self.reconcile_canonical_account()
         self.observe_forecasts()
-        self.publish(len(rows), blocker)
+        self.maintenance_accounting_fresh = True
+        self.maintenance_last_success_ns = time.time_ns()
 
     def run(self, interval: float) -> None:
         threading.Thread(target=self.pm_prior_loop, name="v7-pm-prior", daemon=True).start()
+        period = max(0.25, interval)
+        maintenance_period = 1.0
+        next_decision = time.monotonic()
+        next_maintenance = next_decision + maintenance_period
         while True:
-            try:
-                self.step()
-            except Exception as exc:
-                self.publish(0, f"ROUTER_ERROR:{type(exc).__name__}")
-            time.sleep(max(0.25, interval))
+            now = time.monotonic()
+            if now >= next_decision:
+                try:
+                    self.step()
+                except Exception as exc:
+                    self.publish(0, f"ROUTER_ERROR:{type(exc).__name__}")
+                next_decision += period
+                current = time.monotonic()
+                if next_decision <= current - period:
+                    next_decision = current
+            now = time.monotonic()
+            if now >= next_maintenance:
+                try:
+                    self.maintenance_step()
+                    self.maintenance_ready = True
+                    self.publish(self.last_status_active_candidates, self.last_status_blocker)
+                except Exception as exc:
+                    self.maintenance_ready = False
+                    self.maintenance_accounting_fresh = False
+                    self.publish(0, f"ROUTER_MAINTENANCE_ERROR:{type(exc).__name__}")
+                next_maintenance += maintenance_period
+                current = time.monotonic()
+                if next_maintenance <= current - maintenance_period:
+                    next_maintenance = current
+            time.sleep(max(0.0, min(next_decision, next_maintenance) - time.monotonic()))
 
 
 def main() -> int:

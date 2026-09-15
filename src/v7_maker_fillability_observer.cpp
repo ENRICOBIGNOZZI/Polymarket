@@ -140,6 +140,7 @@ struct Options {
     std::string output_dir;
     std::string model_sha;
     std::string ws_url = "wss://ws-subscriptions-clob.polymarket.com/ws/market";
+    bool fair_only = false;
 };
 
 Options parse_options(int argc, char** argv) {
@@ -156,6 +157,7 @@ Options parse_options(int argc, char** argv) {
         else if (arg == "--output-dir") options.output_dir = next();
         else if (arg == "--model-sha") options.model_sha = next();
         else if (arg == "--ws-url") options.ws_url = next();
+        else if (arg == "--fair-only") options.fair_only = true;
         else throw std::runtime_error("unknown argument: " + arg);
     }
     if (options.selection.empty()) {
@@ -232,18 +234,27 @@ fair_observation_pairs(const Options& options) {
 
 [[nodiscard]] std::vector<SelectedToken> build_tokens(const Options& options, const pm::Config& config) {
     std::vector<std::pair<std::string, std::pair<std::string, std::string>>> pairs;
-    while (!g_stop.load(std::memory_order_relaxed)) {
-        try {
-            if (fs::exists(options.selection) && fs::file_size(options.selection) > 0) {
-                pairs = load_selected_pairs(options.selection);
-                break;
-            }
-        } catch (const std::exception& error) {
-            std::cerr << "fillability selection not ready: " << error.what() << '\n';
+    if (options.fair_only) {
+        while (!g_stop.load(std::memory_order_relaxed)) {
+            pairs = fair_observation_pairs(options);
+            if (!pairs.empty()) break;
+            std::this_thread::sleep_for(std::chrono::milliseconds(100));
         }
-        std::this_thread::sleep_for(std::chrono::milliseconds(250));
+        if (pairs.empty()) throw std::runtime_error("fair-only observation pair unavailable");
+    } else {
+        while (!g_stop.load(std::memory_order_relaxed)) {
+            try {
+                if (fs::exists(options.selection) && fs::file_size(options.selection) > 0) {
+                    pairs = load_selected_pairs(options.selection);
+                    break;
+                }
+            } catch (const std::exception& error) {
+                std::cerr << "fillability selection not ready: " << error.what() << '\n';
+            }
+            std::this_thread::sleep_for(std::chrono::milliseconds(250));
+        }
+        if (pairs.empty()) throw std::runtime_error("fillability selection unavailable");
     }
-    if (pairs.empty()) throw std::runtime_error("fillability selection unavailable");
 
     for (const auto& fair : fair_observation_pairs(options)) {
         const bool included = std::any_of(pairs.begin(), pairs.end(), [&](const auto& pair) {
@@ -367,6 +378,26 @@ public:
         invalid_price_.fetch_add(result.trade_invalid_price, std::memory_order_relaxed);
         invalid_timestamp_.fetch_add(
             result.trade_invalid_timestamp, std::memory_order_relaxed);
+        lineage_invalid_book_snapshot_.fetch_add(
+            result.lineage_invalid_book_snapshot, std::memory_order_relaxed);
+        lineage_invalid_price_change_.fetch_add(
+            result.lineage_invalid_price_change, std::memory_order_relaxed);
+        lineage_invalid_tick_size_change_.fetch_add(
+            result.lineage_invalid_tick_size_change, std::memory_order_relaxed);
+        price_change_without_lineage_.fetch_add(
+            result.price_change_without_lineage, std::memory_order_relaxed);
+        const auto root_price_change_failures =
+            result.lineage_invalid_price_change > result.price_change_without_lineage
+                ? result.lineage_invalid_price_change - result.price_change_without_lineage : 0;
+        const bool root_lineage_failure =
+            result.invalid_frame || result.output_overflow || result.arena_exhausted
+            || result.lineage_invalid_book_snapshot > 0
+            || root_price_change_failures > 0
+            || result.lineage_invalid_tick_size_change > 0;
+        if (root_lineage_failure) {
+            lineage_recovery_requests_.fetch_add(1, std::memory_order_relaxed);
+            lineage_recovery_requested_.store(true, std::memory_order_release);
+        }
         unknown_asset_.fetch_add(
             result.ignored_unknown_assets, std::memory_order_relaxed);
         if (result.invalid_frame || result.output_overflow || result.arena_exhausted) {
@@ -411,6 +442,14 @@ public:
             row.lineage_continuous = event.book.lineage_continuous;
             if (!queue_->try_push(row)) dropped_.fetch_add(1, std::memory_order_relaxed);
         }
+    }
+
+    [[nodiscard]] bool lineage_recovery_requested() const noexcept {
+        return lineage_recovery_requested_.load(std::memory_order_acquire);
+    }
+
+    [[nodiscard]] std::uint64_t lineage_recovery_requests() const noexcept {
+        return lineage_recovery_requests_.load(std::memory_order_relaxed);
     }
 
     void on_reconnect() {
@@ -473,7 +512,7 @@ public:
         }
     }
 
-    void write_status(bool stopped = false) {
+    void write_status(bool stopped = false, bool publish_flow = true) {
         const auto feed = feed_ ? feed_->snapshot() : pm::fast::FeedSnapshot{};
         json::object root;
         root["schema"] = "polymarket_v7_maker_fillability_ws_status_v1";
@@ -497,6 +536,12 @@ public:
         root["invalid_quantity"] = invalid_quantity_.load(std::memory_order_relaxed);
         root["invalid_price"] = invalid_price_.load(std::memory_order_relaxed);
         root["invalid_timestamp"] = invalid_timestamp_.load(std::memory_order_relaxed);
+        root["lineage_invalid_book_snapshot"] = lineage_invalid_book_snapshot_.load(std::memory_order_relaxed);
+        root["lineage_invalid_price_change"] = lineage_invalid_price_change_.load(std::memory_order_relaxed);
+        root["lineage_invalid_tick_size_change"] = lineage_invalid_tick_size_change_.load(std::memory_order_relaxed);
+        root["price_change_without_lineage"] = price_change_without_lineage_.load(std::memory_order_relaxed);
+        root["lineage_recovery_requested"] = lineage_recovery_requested();
+        root["lineage_recovery_requests"] = lineage_recovery_requests();
         root["unknown_asset"] = unknown_asset_.load(std::memory_order_relaxed);
         root["reconnects"] = reconnects_.load(std::memory_order_relaxed);
         root["connection_epoch"] = connection_epoch_.load(std::memory_order_relaxed);
@@ -510,7 +555,7 @@ public:
         root["evidence_complete"] = dropped_.load(std::memory_order_relaxed) == 0
             && decoder_failures_.load(std::memory_order_relaxed) == 0;
         atomic_write(status_path_, json::serialize(root) + "\n");
-        write_flow_snapshot(root["timestamp_ms"].as_int64());
+        if (publish_flow) write_flow_snapshot(root["timestamp_ms"].as_int64());
     }
 
     void write_flow_snapshot(std::int64_t now_ms) {
@@ -709,6 +754,12 @@ private:
     std::atomic<std::uint64_t> invalid_quantity_{0};
     std::atomic<std::uint64_t> invalid_price_{0};
     std::atomic<std::uint64_t> invalid_timestamp_{0};
+    std::atomic<std::uint64_t> lineage_invalid_book_snapshot_{0};
+    std::atomic<std::uint64_t> lineage_invalid_price_change_{0};
+    std::atomic<std::uint64_t> lineage_invalid_tick_size_change_{0};
+    std::atomic<std::uint64_t> price_change_without_lineage_{0};
+    std::atomic<std::uint64_t> lineage_recovery_requests_{0};
+    std::atomic<bool> lineage_recovery_requested_{false};
     std::atomic<std::uint64_t> unknown_asset_{0};
     std::atomic<std::uint64_t> reconnects_{0};
     std::uint64_t sequence_ = 0;
@@ -728,22 +779,39 @@ int main(int argc, char** argv) {
         while (!g_stop.load(std::memory_order_relaxed)) {
             const auto fair_pairs = fair_observation_pairs(options);
             auto tokens = build_tokens(options, config);
-            const auto selected_pairs = load_selected_pairs(options.selection);
+            const auto selected_pairs = options.fair_only
+                ? std::vector<std::pair<std::string, std::pair<std::string, std::string>>>{}
+                : load_selected_pairs(options.selection);
             ExactWsObserver observer(
                 std::move(tokens), options.ws_url, options.output_dir, options.model_sha);
             observer.start();
             std::int64_t last_status_ms = 0;
+            std::int64_t last_membership_check_ms = 0;
+            std::int64_t last_flow_status_ms = 0;
+            // The causal labeler's grace is 75ms. A 1Hz watermark silently
+            // censors valid +250ms labels even on an uninterrupted book stream.
+            const std::int64_t status_period_ms = options.fair_only ? 25 : 1000;
             bool reload = false;
             while (!g_stop.load(std::memory_order_relaxed) && !reload) {
                 observer.drain();
                 const auto now = wall_ms();
-                if (now - last_status_ms >= 1000) {
-                    observer.write_status();
+                if (now - last_status_ms >= status_period_ms) {
+                    const bool publish_flow = now - last_flow_status_ms >= 1000;
+                    observer.write_status(false, publish_flow);
                     last_status_ms = now;
+                    if (publish_flow) last_flow_status_ms = now;
+                }
+                if (now - last_membership_check_ms >= 1000) {
+                    last_membership_check_ms = now;
                     // Price/feature refreshes do not change the subscription.
                     // Restarting on every mtime update erased queue evidence.
-                    reload = load_selected_pairs(options.selection) != selected_pairs
-                        || fair_observation_pairs(options) != fair_pairs;
+                    reload = fair_observation_pairs(options) != fair_pairs;
+                    if (options.fair_only && observer.lineage_recovery_requested()) {
+                        reload = true;
+                    }
+                    if (!options.fair_only) {
+                        reload = reload || load_selected_pairs(options.selection) != selected_pairs;
+                    }
                 }
                 std::this_thread::sleep_for(std::chrono::milliseconds(10));
             }

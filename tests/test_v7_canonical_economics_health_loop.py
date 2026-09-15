@@ -15,7 +15,7 @@ def main() -> None:
     assert 'sleep 60' in window
     assert ') & v7_register_child "$!"' in window
     assert 'Health-critical canonical economics has its own 60-second loop.' in launcher
-    assert 'v7_assert_registered_child_count 24' in launcher
+    assert 'v7_assert_registered_child_count 25' in launcher
 
 
 if __name__ == "__main__":

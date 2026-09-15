@@ -106,6 +106,8 @@ void test_snapshot_delta_trade_and_reconnect_lineage() {
 
     result = shard.process_frame(delta, stamp(2'300'000'000LL, 1'700'000'000'300LL), output);
     assert(result.lineage_invalidated);
+    assert(result.lineage_invalid_price_change == 1);
+    assert(result.price_change_without_lineage == 1);
     assert(result.output_count == 1);
     assert(output[0].kind == pm::v7::MarketWsEventKind::LineageInvalidated);
     assert(!shard.snapshot(301).valid);

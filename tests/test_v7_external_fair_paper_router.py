@@ -99,7 +99,9 @@ def main() -> None:
         no_raw = {**yes_raw, "asset_id": "no",
                   "bids": [{"price": "0.45", "size": "10"}],
                   "asks": [{"price": "0.46", "size": "10"}], "hash": "n"}
-        with mock.patch.object(router, "request_json", return_value=[yes_raw, no_raw]),              mock.patch.object(router, "now_ms", return_value=receive_ms):
+        pr.pm_prior_books_client = mock.Mock()
+        pr.pm_prior_books_client.request_books.return_value = [yes_raw, no_raw]
+        with mock.patch.object(router, "now_ms", return_value=receive_ms):
             prior = pr.refresh_pm_prior()
         assert prior["schema"] == "polymarket_v7_pm_prior_snapshot_v1"
         assert prior["live_market"]["valid"] is True
@@ -304,12 +306,21 @@ def main() -> None:
             "real_capital_at_risk": False,
             "reasons": ["TEST_COORDINATOR_SELECTION"],
         }
-        with mock.patch.object(router, "request_json", side_effect=public_request):
-            with mock.patch.object(
-                paper, "wait_for_exploration_receipt",
-                return_value=exploration_receipt,
-            ):
-                paper.step()
+        paper.clob_books_client.request_books = mock.Mock(
+            side_effect=lambda tokens: public_request(
+                "", [{"token_id": token} for token in tokens], timeout=0.25
+            )
+        )
+        with mock.patch.object(
+            paper, "wait_for_exploration_receipt",
+            return_value=exploration_receipt,
+        ):
+            paper.step()
+        stale_status = json.loads((external / "paper_router_status.json").read_text())
+        assert stale_status["maintenance_accounting_fresh"] is False
+        paper.maintenance_step()
+        paper.maintenance_ready = True
+        paper.publish(paper.last_status_active_candidates, paper.last_status_blocker)
         proposals = [
             json.loads(path.read_text())
             for path in (run_root / "opportunities" / "inbox").glob("*.json")
@@ -404,8 +415,12 @@ def main() -> None:
                 "asks": [{"price": "0.02" if item["token_id"] == "yes" else "0.99", "size": "100"}],
             } for item in payload]
 
-        with mock.patch.object(router, "request_json", side_effect=public_request_extreme):
-            paper.step()
+        paper.clob_books_client.request_books = mock.Mock(
+            side_effect=lambda tokens: public_request_extreme(
+                "", [{"token_id": token} for token in tokens], timeout=0.25
+            )
+        )
+        paper.step()
         status = json.loads((external / "paper_router_status.json").read_text())
         assert status["fills"] == 1
         assert status["counterfactual_fills"] == 1
@@ -439,8 +454,10 @@ def main() -> None:
         failed_status["code_sha"] = "b" * 40
         failed_status["market"].update({"market_id": "m2", "event_id": "e2"})
         (external / "status.json").write_text(json.dumps(failed_status))
-        with mock.patch.object(router, "request_json", side_effect=TimeoutError("bounded")):
-            failing.step()
+        failing.clob_books_client.request_books = mock.Mock(
+            side_effect=TimeoutError("bounded")
+        )
+        failing.step()
         status = json.loads((external / "paper_router_status.json").read_text())
         assert status["book_requests"] == 1
         assert status["book_request_failures"] == 1
@@ -907,6 +924,8 @@ def test_paper_account_admission_controls_actual_step() -> None:
         collector.probe_policy = {}
         collector.last_book_error = ""
         collector.last_attempt_reason = ""
+        collector.maintenance_ready = True
+        collector.maintenance_accounting_fresh = True
         collector.last_live_market = {}
         for name in ("record_forecast", "record_opportunity_set", "observe_positions",
                      "reconcile_canonical_account", "observe_forecasts", "publish",
@@ -930,15 +949,21 @@ def test_paper_account_admission_controls_actual_step() -> None:
                 collector.attempt.assert_not_called()
                 collector.books_for.assert_not_called()
                 collector.reject.assert_called_once_with(reason)
-                collector.observe_positions.assert_called_once()
-                collector.reconcile_canonical_account.assert_called_once()
-                collector.observe_forecasts.assert_called_once()
+                collector.observe_positions.assert_not_called()
+                collector.reconcile_canonical_account.assert_not_called()
+                collector.observe_forecasts.assert_not_called()
                 collector.publish.assert_called_once_with(0, reason)
             collector = make_collector()
             del collector.state[key]
             collector.step()
             collector.attempt.assert_not_called()
             collector.reject.assert_called_once_with(reason)
+        dirty = make_collector()
+        dirty.maintenance_accounting_fresh = False
+        dirty.step()
+        dirty.attempt.assert_not_called()
+        dirty.books_for.assert_not_called()
+        dirty.reject.assert_called_once_with("ROUTER_ACCOUNTING_REFRESH_REQUIRED")
         healthy = make_collector()
         healthy.step()
         healthy.attempt.assert_called_once()
@@ -950,7 +975,7 @@ def test_paper_account_admission_controls_actual_step() -> None:
         drained.step()
         drained.attempt.assert_not_called()
         drained.reject.assert_called_once_with("CUTOVER_DRAIN")
-        drained.observe_positions.assert_called_once()
+        drained.observe_positions.assert_not_called()
         recovered = make_collector()
         recovered.state["paper_exploration_account"] = {"complete": False}
         def restore_account():
@@ -958,9 +983,12 @@ def test_paper_account_admission_controls_actual_step() -> None:
         recovered.reconcile_canonical_account.side_effect = restore_account
         recovered.step()
         recovered.attempt.assert_not_called()
+        recovered.maintenance_step()
         recovered.step()
         recovered.attempt.assert_called_once()
-        assert recovered.observe_positions.call_count == 2
+        assert recovered.observe_positions.call_count == 1
+        assert recovered.reconcile_canonical_account.call_count == 1
+        assert recovered.observe_forecasts.call_count == 1
 
 
 def test_empty_candidate_input_reason_is_not_false_no_edge() -> None:
@@ -999,7 +1027,7 @@ def test_actual_step_distinguishes_missing_reference_from_no_edge() -> None:
         collector.policy = {"minimum_entry_tte_seconds": 5.0, "maximum_entry_tte_seconds": 300.0,
                             "tte_bucket_policy": [{"id":"test-5-300","minimum_seconds":5.0,"maximum_seconds":300.0,"action":"TAKER_SHADOW"}],
                             "maximum_model_market_disagreement": 0.2}; collector.probe_policy = None
-        collector.last_book_error = ""; collector.last_attempt_reason = ""
+        collector.last_book_error = ""; collector.last_attempt_reason = ""; collector.maintenance_ready = True; collector.maintenance_accounting_fresh = True
         for name in ("record_forecast", "record_opportunity_set", "observe_positions", "reconcile_canonical_account", "observe_forecasts", "publish", "reject", "wait", "attempt"):
             setattr(collector, name, mock.Mock())
         books = {"yes": book("yes", 0.61, 0.59), "no": book("no", 0.41, 0.39)}
