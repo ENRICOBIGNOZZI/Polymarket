@@ -1,6 +1,6 @@
 {
   "schema": "polymarket_v7_data_retention_v1",
-  "version": 9,
+  "version": 10,
   "paper_only": true,
   "disk": {
     "warning_free_ratio": 0.2,
@@ -58,6 +58,15 @@
       "retention_semantics": "PERMANENT_VERIFIED_COMPRESSION_NO_EXPIRY"
     },
     {
+      "name": "repricing_causal_book",
+      "patterns": [
+        "research/repricing_book/book_observations/*.jsonl*",
+        "research/repricing_book/fillability_ws.jsonl*"
+      ],
+      "retention_days": 30,
+      "retention_semantics": "PERMANENT_VERIFIED_COMPRESSION_NO_EXPIRY"
+    },
+    {
       "name": "runtime_logs",
       "patterns": [
         "**/*.log.*",
@@ -77,7 +86,9 @@
     "never_copytruncate": [
       "ledger/execution.jsonl",
       "trade_tape.csv",
-      "micro_maker/latency.csv"
+      "micro_maker/latency.csv",
+      "research/repricing_book/book_observations/current.jsonl",
+      "research/repricing_book/fillability_ws.jsonl"
     ]
   },
   "permanent_evidence": {

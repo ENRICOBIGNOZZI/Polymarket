@@ -442,6 +442,21 @@ public:
             row.lineage_continuous = event.book.lineage_continuous;
             if (!queue_->try_push(row)) dropped_.fetch_add(1, std::memory_order_relaxed);
         }
+        // A later full WS snapshot may already have healed the affected token.
+        // Do not restart a recovered stream merely because a past root failure
+        // latched the request. Missing/damaged evidence can never self-heal.
+        if (lineage_recovery_requested_.load(std::memory_order_acquire)
+            && decoder_failures_.load(std::memory_order_relaxed) == 0
+            && dropped_.load(std::memory_order_relaxed) == 0) {
+            const bool still_missing = std::any_of(tokens_.begin(), tokens_.end(),
+                [&](const SelectedToken& token) {
+                    return decoder_->snapshot(token.instrument_handle).lineage_continuous == 0;
+                });
+            if (!still_missing) {
+                lineage_recovery_requested_.store(false, std::memory_order_release);
+                lineage_recovered_without_restart_.fetch_add(1, std::memory_order_relaxed);
+            }
+        }
     }
 
     [[nodiscard]] bool lineage_recovery_requested() const noexcept {
@@ -542,6 +557,7 @@ public:
         root["price_change_without_lineage"] = price_change_without_lineage_.load(std::memory_order_relaxed);
         root["lineage_recovery_requested"] = lineage_recovery_requested();
         root["lineage_recovery_requests"] = lineage_recovery_requests();
+        root["lineage_recovered_without_restart"] = lineage_recovered_without_restart_.load(std::memory_order_relaxed);
         root["unknown_asset"] = unknown_asset_.load(std::memory_order_relaxed);
         root["reconnects"] = reconnects_.load(std::memory_order_relaxed);
         root["connection_epoch"] = connection_epoch_.load(std::memory_order_relaxed);
@@ -759,6 +775,7 @@ private:
     std::atomic<std::uint64_t> lineage_invalid_tick_size_change_{0};
     std::atomic<std::uint64_t> price_change_without_lineage_{0};
     std::atomic<std::uint64_t> lineage_recovery_requests_{0};
+    std::atomic<std::uint64_t> lineage_recovered_without_restart_{0};
     std::atomic<bool> lineage_recovery_requested_{false};
     std::atomic<std::uint64_t> unknown_asset_{0};
     std::atomic<std::uint64_t> reconnects_{0};
