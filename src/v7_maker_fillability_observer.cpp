@@ -284,8 +284,18 @@ fair_observation_pairs(const Options& options) {
                 const auto yes = books.find(pair.second.first);
                 const auto no = books.find(pair.second.second);
                 if (yes == books.end() || no == books.end()) continue;
-                const std::int32_t yes_tick = tick_e4(yes->second.tick_size);
-                const std::int32_t no_tick = tick_e4(no->second.tick_size);
+                // The fair-only observer is the causal repricing source. A
+                // subscriber can join after a venue tick-size transition and
+                // therefore miss the historical WS tick_size_change event.
+                // Resolve the current token tick from the dedicated CLOB
+                // endpoint at each cold start/recovery instead of trusting a
+                // stale bootstrap regime. Any lookup failure retries closed.
+                const double yes_tick_value = options.fair_only
+                    ? api.fetch_tick_size(pair.second.first) : yes->second.tick_size;
+                const double no_tick_value = options.fair_only
+                    ? api.fetch_tick_size(pair.second.second) : no->second.tick_size;
+                const std::int32_t yes_tick = tick_e4(yes_tick_value);
+                const std::int32_t no_tick = tick_e4(no_tick_value);
                 if (yes_tick <= 0 || no_tick <= 0) continue;
                 const auto market = ++market_handle;
                 output.push_back({market_id, event_id, pair.second.first, market, market,
