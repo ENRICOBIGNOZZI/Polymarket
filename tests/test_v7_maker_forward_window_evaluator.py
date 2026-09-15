@@ -17,7 +17,7 @@ sys.modules[SPEC.name] = fw
 SPEC.loader.exec_module(fw)
 SHA = "a" * 40
 START = 1_800_000_000_000
-END = START + 8 * 60 * 60 * 1000
+END = START + 2 * 60 * 60 * 1000
 
 
 def manifest(*, clusters: int = 20, shares: float = 50.0) -> dict:
@@ -136,13 +136,22 @@ def dataset(count: int = 20, *, missing_provenance_index: int | None = None, pnl
 
 
 class ForwardWindowEvaluatorTests(unittest.TestCase):
-    def test_manifest_requires_exact_eight_hour_window(self) -> None:
+    def test_manifest_requires_exact_two_hour_window(self) -> None:
         value = manifest()
         fw.validate_manifest(value)
         bad = dict(value)
         bad["window_end_ms"] = END - 1
         with self.assertRaisesRegex(ValueError, "forward_manifest_window"):
             fw.validate_manifest(bad)
+
+    def test_legacy_v1_eight_hour_manifest_remains_auditable(self) -> None:
+        value = manifest()
+        value["schema"] = fw.LEGACY_MANIFEST_SCHEMA
+        value["window_end_ms"] = START + fw.LEGACY_WINDOW_MS
+        fw.validate_manifest(value)
+        value["window_end_ms"] = END
+        with self.assertRaisesRegex(ValueError, "forward_manifest_window"):
+            fw.validate_manifest(value)
 
     def test_positive_window_requires_positive_cluster_lower_bound_and_final_pnl(self) -> None:
         rows, markouts = dataset(20)
@@ -171,6 +180,13 @@ class ForwardWindowEvaluatorTests(unittest.TestCase):
         report = fw.evaluate(manifest(), rows, markouts, bootstrap_draws=100, seed=3)
         self.assertEqual(report["state"], "INSUFFICIENT_EVIDENCE")
         self.assertFalse(report["metrics"]["evidence_sufficient"])
+
+    def test_empty_window_is_insufficient_instead_of_crashing(self) -> None:
+        report = fw.evaluate(manifest(), [], {}, bootstrap_draws=100, seed=31)
+        self.assertEqual(report["state"], "INSUFFICIENT_EVIDENCE")
+        self.assertEqual(report["metrics"]["submitted_orders"], 0)
+        self.assertEqual(report["metrics"]["fill_observations"], 0)
+        self.assertEqual(report["metrics"]["entry_feature_summary"], {})
 
     def test_missing_primary_markout_is_incomplete_after_evidence_gate(self) -> None:
         rows, markouts = dataset(20)

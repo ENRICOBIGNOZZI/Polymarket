@@ -461,6 +461,13 @@ def build_maker_opportunities(
                 "SETTLEMENT_ANCHOR_COLD_START_CONTROL"
             }
         )
+        settlement_anchor_fresh_flow_probe_cell = (
+            market.get("settlement_anchor") is True
+            and str(cell.get("authority_basis") or "") == "FRESH_OPPOSITE_FLOW"
+        )
+        paper_probe_eligible_cell = (
+            control_probe_cell or settlement_anchor_fresh_flow_probe_cell
+        )
         if side != "BUY":
             rejected["SELL_REQUIRES_CANONICAL_INVENTORY_BRIDGE"] = rejected.get(
                 "SELL_REQUIRES_CANONICAL_INVENTORY_BRIDGE", 0
@@ -499,7 +506,7 @@ def build_maker_opportunities(
         provisional_point_ev = fill_point * point_per_fill * size
         provisional_conservative_ev = fill_lower * conservative_per_fill * size
         needs_probe = (
-            control_probe_cell
+            paper_probe_eligible_cell
             and provisional_point_ev > 0.0
             and (
                 point_only_fair_requires_probe

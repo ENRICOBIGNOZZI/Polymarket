@@ -169,7 +169,7 @@ jobs:
           test "$ready" = 1
           test -s ~/.ssh/known_hosts
 
-      - name: Freeze exactly one preregistered eight-hour Maker window
+      - name: Freeze exactly one preregistered two-hour Maker window
         if: steps.provenance.outputs.eligible == 'true'
         id: freeze_window
         shell: bash
