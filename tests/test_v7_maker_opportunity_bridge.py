@@ -232,6 +232,7 @@ def test_mature_positive_cell_becomes_typed_make_opportunity() -> None:
         }
         assert row["execution_plan"]["legs"][0]["side"] == "BUY"
         assert row["conservative_expected_wealth_change"] > 0.0
+        assert row["execution_plan"]["timeout_ms"] == 5000
         assert row["execution_alpha"]["fill_probability"]["lower"] > 0.0
         assert row["execution_alpha"]["evidence_status"] == "MATURE"
         assert row["execution_alpha"]["features"]["book_imbalance"] is None
@@ -294,6 +295,7 @@ def test_immature_control_cell_becomes_bounded_research_paper_probe() -> None:
         assert row["exploration"]["robust_candidate"] is False
         assert row["exploration"]["model_id"] == "btc_m5_maker_execution_bootstrap_probe_v1"
         assert row["exploration"]["probe_loss_cap"] <= 2.0
+        assert row["execution_plan"]["timeout_ms"] == 15000
         leg = row["execution_plan"]["legs"][0]
         assert leg["target_quantity"] * leg["limit_price"] <= 2.0 + 1e-9
         assert row["execution_alpha"]["evidence_status"] == "IMMATURE"

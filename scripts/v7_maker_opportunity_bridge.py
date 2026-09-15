@@ -565,6 +565,20 @@ def build_maker_opportunities(
             f"{price:.8f}", selection_ts_ms, model_hash,
             "PAPER_BOOTSTRAP_PROBE" if needs_probe else "ROBUST_MAKE",
         )
+        ordinary_timeout_ms = int(
+            ((policy.get("quoting") or {}).get("max_quote_lifetime_ms") or 5000)
+        )
+        probe_minimum_rest_ms = int(
+            ((policy.get("exploration") or {}).get("minimum_rest_ms")
+             or ordinary_timeout_ms)
+        )
+        # Information probes need enough resting time to measure queue depletion.
+        # Keep ordinary/exploit quotes on the existing short horizon; only the
+        # bounded PAPER research lane inherits the preregistered exploration rest.
+        order_timeout_ms = (
+            max(ordinary_timeout_ms, probe_minimum_rest_ms)
+            if needs_probe else ordinary_timeout_ms
+        )
         raw = {
             "schema": "polymarket_v7_opportunity_envelope_v1",
             "version": 1,
@@ -650,7 +664,7 @@ def build_maker_opportunities(
                     "fee_authority": "AUTHORITATIVE",
                 }],
                 "partial_fill_plan": "CANCEL_REMAINDER",
-                "timeout_ms": int(((policy.get("quoting") or {}).get("max_quote_lifetime_ms") or 5000)),
+                "timeout_ms": order_timeout_ms,
                 "unwind_plan": "NONE",
             },
             "inventory_delta": size if side == "BUY" else -size,
