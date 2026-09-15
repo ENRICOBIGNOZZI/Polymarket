@@ -59,7 +59,7 @@ class FreezeMakerForwardWindowWorkflowTests(unittest.TestCase):
     def test_manifest_is_returned_and_revalidated_cryptographically(self) -> None:
         text = self.text
         for value in ("maker-forward-manifest.json", "paper_only", "authenticated_execution",
-                      "real_order_submission", "automatic_promotion", "8*60*60*1000",
+                      "real_order_submission", "automatic_promotion", "2*60*60*1000",
                       ".deploy_freeze/${DEPLOY_RUN_ID}.manifest.json", "manifest_sha256",
                       "hashlib.sha256", "SHA256_EXACT_PREFIX_AT_RECORDED_BYTE_COUNT",
                       "completed <= prepared < start", "start-prepared == 5000"):
