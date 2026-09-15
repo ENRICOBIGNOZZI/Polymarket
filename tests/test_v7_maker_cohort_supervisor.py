@@ -19,6 +19,7 @@ from v7_maker_cohort_supervisor import (  # noqa: E402
     membership_sha256,
     read_json,
     rotation_gate,
+    settlement_anchor_rollover_cell,
     validate_selection,
 )
 
@@ -305,6 +306,92 @@ class MakerCohortSupervisorTests(unittest.TestCase):
         self.assertEqual(
             metrics["rotation_target_cell"], "candidate|yes-2|JOIN|BUY")
 
+
+    def test_settlement_anchor_rollover_has_priority_over_ordinary_churn(self) -> None:
+        current = selection("old-anchor")
+        current["markets"][0].update({
+            "settlement_anchor": True,
+            "side_mode": "SETTLEMENT_ANCHOR",
+        })
+        current["markets"][0]["authorized_execution_cells"] = []
+
+        candidate = selection("ordinary-high-fill")
+        candidate["markets"][0]["authorized_execution_cells"][0][
+            "projected_fill_probability"
+        ] = 0.90
+        anchor = json.loads(json.dumps(candidate["markets"][0]))
+        anchor.update({
+            "market_id": "new-anchor",
+            "condition_id": "new-anchor-condition",
+            "yes_token": "new-anchor-yes",
+            "no_token": "new-anchor-no",
+            "settlement_anchor": True,
+            "side_mode": "SETTLEMENT_ANCHOR",
+        })
+        anchor["authorized_execution_cells"] = [{
+            "token_id": "new-anchor-yes",
+            "action": "JOIN",
+            "quote_side": "BUY",
+            "authority_basis": "FRESH_OPPOSITE_FLOW",
+            "projected_fill_probability": 0.02,
+        }]
+        anchor["authorized_execution_cell_count"] = 1
+        candidate["markets"].append(anchor)
+        candidate["selected_count"] = 2
+
+        rollover = settlement_anchor_rollover_cell(
+            current, candidate, minimum_projected_fill_probability=0.004,
+        )
+        self.assertEqual(
+            rollover, (0.02, "new-anchor|new-anchor-yes|JOIN|BUY")
+        )
+        allowed, metrics = rotation_gate(
+            current, candidate,
+            minimum_projected_fill_probability=0.004,
+            minimum_absolute_improvement=0.05,
+            minimum_relative_multiplier=1.5,
+        )
+        self.assertTrue(allowed)
+        self.assertEqual(metrics["rotation_gate_reason"], "SETTLEMENT_ANCHOR_ROLLOVER")
+        self.assertEqual(
+            metrics["rotation_target_cell"],
+            "new-anchor|new-anchor-yes|JOIN|BUY",
+        )
+        self.assertEqual(metrics["candidate_projected_fill_probability"], 0.02)
+
+    def test_settlement_anchor_rollover_requires_fresh_opposite_flow(self) -> None:
+        current = selection("old-anchor")
+        current["markets"][0]["authorized_execution_cells"] = []
+        candidate = selection("new-anchor")
+        candidate["markets"][0].update({
+            "settlement_anchor": True,
+            "side_mode": "SETTLEMENT_ANCHOR",
+        })
+        candidate["markets"][0]["authorized_execution_cells"][0].update({
+            "authority_basis": "LOW_SAMPLE_FRESH_FLOW_CONTROL",
+            "projected_fill_probability": 0.02,
+        })
+        self.assertIsNone(settlement_anchor_rollover_cell(
+            current, candidate, minimum_projected_fill_probability=0.004,
+        ))
+
+    def test_confirmed_settlement_anchor_rollover_bypasses_global_cooldown(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            supervisor = CohortSupervisor(self.supervisor_args(
+                root, root / "selection.json", root / "candidate.json"
+            ))
+            supervisor.last_rotation_ms = 10_000
+            self.assertGreater(supervisor.rotation_cooldown_remaining_seconds(70_000), 0.0)
+            supervisor.rotation_gate_metrics = {
+                "rotation_gate_reason": "SETTLEMENT_ANCHOR_ROLLOVER",
+            }
+            self.assertTrue(supervisor.rotation_bypasses_cooldown())
+            supervisor.rotation_gate_metrics = {
+                "rotation_gate_reason": "COLD_START_TO_FILLABLE_CELL",
+            }
+            self.assertFalse(supervisor.rotation_bypasses_cooldown())
+
     def test_subpercent_rotation_gate_does_not_apply_five_point_hurdle(self) -> None:
         current = selection("current")
         current["markets"][0]["authorized_execution_cells"][0][
@@ -492,6 +579,71 @@ class MakerCohortSupervisorTests(unittest.TestCase):
             self.assertFalse(degraded_fallback_control_refresh_eligible(
                 fresh_runtime, candidate
             ))
+
+
+    def test_warm_settlement_anchor_upgrades_authority_in_place(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            selection_path = root / "selection.json"
+            candidate_path = root / "candidate.json"
+            current = selection("btc-anchor")
+            current["markets"][0].update({
+                "settlement_anchor": True,
+                "side_mode": "SETTLEMENT_ANCHOR",
+                "execution_role": "WARM_RUNTIME_OBSERVATION",
+                "authorized_execution_cells": [],
+                "authorized_execution_cell_count": 0,
+                "control_exploration_authorized": False,
+            })
+            reserve = json.loads(json.dumps(current["markets"][0]))
+            reserve.update({
+                "market_id": "reserve",
+                "condition_id": "reserve-condition",
+                "yes_token": "reserve-yes",
+                "no_token": "reserve-no",
+                "settlement_anchor": False,
+            })
+            current["markets"].append(reserve)
+            current["selected_count"] = 2
+
+            candidate = json.loads(json.dumps(current))
+            candidate["timestamp_ms"] = 2_000
+            anchor = candidate["markets"][0]
+            anchor.update({
+                "execution_role": "FLOW_AUTHORIZED",
+                "authorized_execution_cells": [{
+                    "token_id": "yes-1",
+                    "action": "JOIN",
+                    "quote_side": "BUY",
+                    "authority_basis": "FRESH_OPPOSITE_FLOW",
+                    "projected_fill_probability": 0.08,
+                }],
+                "authorized_execution_cell_count": 1,
+            })
+            candidate["markets"][1].update({
+                "market_id": "new-reserve",
+                "condition_id": "new-reserve-condition",
+                "yes_token": "new-reserve-yes",
+                "no_token": "new-reserve-no",
+            })
+            atomic_json(selection_path, current)
+            atomic_json(candidate_path, candidate)
+            supervisor = CohortSupervisor(self.supervisor_args(
+                root, selection_path, candidate_path
+            ))
+
+            self.assertTrue(supervisor.refresh_same_membership_authority())
+            refreshed = read_json(selection_path)
+            by_market = {row["market_id"]: row for row in refreshed["markets"]}
+            self.assertTrue(by_market["btc-anchor"]["settlement_anchor"])
+            self.assertEqual(by_market["btc-anchor"]["execution_role"], "FLOW_AUTHORIZED")
+            self.assertEqual(
+                by_market["btc-anchor"]["authorized_execution_cells"][0][
+                    "authority_basis"
+                ],
+                "FRESH_OPPOSITE_FLOW",
+            )
+            self.assertEqual(supervisor.rotation_count, 0)
 
     def test_overlapping_warm_market_refreshes_without_membership_restart(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

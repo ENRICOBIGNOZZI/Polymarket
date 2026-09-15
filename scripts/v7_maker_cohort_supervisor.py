@@ -241,6 +241,65 @@ def projected_cells(
     return sorted(output, key=lambda item: (-item[0], item[1]))
 
 
+def settlement_anchor_rollover_cell(
+    runtime: dict[str, Any], candidate: dict[str, Any], *,
+    minimum_projected_fill_probability: float,
+) -> tuple[float, str] | None:
+    """Prefer a new causal-flow settlement anchor over ordinary cohort churn.
+
+    BTC M5 contracts roll every five minutes.  The general cohort cooldown is
+    intentionally conservative for ranked markets, but applying it to a new
+    settlement anchor can consume nearly the entire life of the next contract.
+    A rollover is therefore eligible only when the candidate contains a *new*
+    settlement-anchor identity with exact FRESH_OPPOSITE_FLOW authority and a
+    projected fill probability above the same minimum used by the ordinary
+    rotation gate.  This is still selector authority only; it grants neither
+    authenticated execution nor real-money authority.
+    """
+    runtime_ids = {
+        str(row.get("market_id") or "")
+        for row in runtime.get("markets", []) if isinstance(row, dict)
+    }
+    minimum_probability = max(0.0, minimum_projected_fill_probability)
+    output: list[tuple[float, str]] = []
+    markets = candidate.get("markets")
+    if not isinstance(markets, list):
+        return None
+    for market in markets:
+        if not isinstance(market, dict) or market.get("settlement_anchor") is not True:
+            continue
+        market_id = str(market.get("market_id") or "")
+        if not market_id or market_id in runtime_ids:
+            continue
+        cells = market.get("authorized_execution_cells")
+        if not isinstance(cells, list):
+            continue
+        for cell in cells:
+            if not isinstance(cell, dict):
+                continue
+            if str(cell.get("authority_basis") or "") != "FRESH_OPPOSITE_FLOW":
+                continue
+            try:
+                probability = float(cell.get("projected_fill_probability") or 0.0)
+            except (TypeError, ValueError):
+                continue
+            if not (minimum_probability <= probability <= 1.0):
+                continue
+            token_id = str(cell.get("token_id") or "")
+            action = str(cell.get("action") or "").upper()
+            quote_side = str(cell.get("quote_side") or "").upper()
+            if (
+                token_id
+                and action in {"JOIN", "IMPROVE1", "FADE1", "FADE2"}
+                and quote_side in {"BUY", "SELL"}
+            ):
+                output.append((
+                    probability,
+                    "|".join((market_id, token_id, action, quote_side)),
+                ))
+    return sorted(output, key=lambda item: (-item[0], item[1]))[0] if output else None
+
+
 def rotation_gate(
     runtime: dict[str, Any], candidate: dict[str, Any], *,
     minimum_projected_fill_probability: float,
@@ -255,9 +314,29 @@ def rotation_gate(
     current_cells = projected_cells(candidate, market_ids=runtime_ids)
     candidate_cells = projected_cells(candidate, exclude_market_ids=runtime_ids)
     current_probability = current_cells[0][0] if current_cells else 0.0
+    minimum_probability = max(0.0, minimum_projected_fill_probability)
+    anchor_rollover = settlement_anchor_rollover_cell(
+        runtime, candidate,
+        minimum_projected_fill_probability=minimum_probability,
+    )
+    if anchor_rollover is not None:
+        candidate_probability, candidate_cell = anchor_rollover
+        return True, {
+            "rotation_gate_reason": "SETTLEMENT_ANCHOR_ROLLOVER",
+            "rotation_target_cell": candidate_cell,
+            "current_projected_fill_probability": current_probability,
+            "candidate_projected_fill_probability": candidate_probability,
+            "required_candidate_projected_fill_probability": minimum_probability,
+            "configured_absolute_fill_improvement": max(
+                0.0, minimum_absolute_improvement),
+            "effective_absolute_fill_improvement": min(
+                max(0.0, minimum_absolute_improvement), minimum_probability),
+            "current_below_minimum_fill_probability": (
+                current_probability < minimum_probability),
+            "settlement_anchor_rollover": True,
+        }
     candidate_probability = candidate_cells[0][0] if candidate_cells else 0.0
     candidate_cell = candidate_cells[0][1] if candidate_cells else ""
-    minimum_probability = max(0.0, minimum_projected_fill_probability)
     # A recent-flow snapshot is an observation contract, not proof that the
     # current execution cell is fillable. Treat a zero/sub-threshold cell as
     # cold start even when the surrounding 40-market cohort is fresh.
@@ -361,6 +440,13 @@ class CohortSupervisor:
         current = time.time_ns() // 1_000_000 if now_ms is None else now_ms
         elapsed = max(0.0, (current - self.last_rotation_ms) / 1000.0)
         return max(0.0, self.args.min_rotation_interval_seconds - elapsed)
+
+    def rotation_bypasses_cooldown(self) -> bool:
+        """A confirmed causal BTC-M5 anchor rollover is not ordinary churn."""
+        return (
+            self.rotation_gate_metrics.get("rotation_gate_reason")
+            == "SETTLEMENT_ANCHOR_ROLLOVER"
+        )
 
     def write_status(self, state: str, **extra: Any) -> None:
         runtime = read_json(self.selection)
@@ -684,7 +770,10 @@ class CohortSupervisor:
                 if candidate is not None:
                     if not self.observe_candidate_generation(candidate):
                         self.write_status("PENDING_CONFIRMATION")
-                    elif self.rotation_cooldown_remaining_seconds() > 0.0:
+                    elif (
+                        self.rotation_cooldown_remaining_seconds() > 0.0
+                        and not self.rotation_bypasses_cooldown()
+                    ):
                         self.write_status("PENDING_COOLDOWN")
                     else:
                         self.rotate_if_safe(candidate)
