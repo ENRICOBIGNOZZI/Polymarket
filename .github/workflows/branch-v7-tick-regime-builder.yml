@@ -1,0 +1,133 @@
+name: V7 tick-regime branch builder
+
+on:
+  push:
+    branches: [fix/v7-tick-regime-recovery-20260915]
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          ref: fix/v7-tick-regime-recovery-20260915
+          fetch-depth: 0
+      - name: Apply exact source patch
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+
+          def replace(path, old, new):
+              p=Path(path); text=p.read_text()
+              if old not in text:
+                  raise SystemExit(f'missing exact patch anchor: {path}')
+              p.write_text(text.replace(old,new,1))
+
+          replace('include/pm/api.hpp',
+              '    std::unordered_map<std::string,Book> fetch_books(const std::vector<std::string>& token_ids) const;\n',
+              '    std::unordered_map<std::string,Book> fetch_books(const std::vector<std::string>& token_ids) const;\n'
+              '    double fetch_tick_size(const std::string& token_id) const;\n')
+
+          anchor='std::unordered_map<std::string,Book> PolymarketApi::fetch_books(\n'
+          method='''double PolymarketApi::fetch_tick_size(const std::string& token_id) const {\n    if (token_id.empty()) throw std::invalid_argument("CLOB tick-size token_id is empty");\n    const auto r = http_.get(cfg_.clob_url + "/tick-size/" + token_id);\n    if (r.status < 200 || r.status >= 300) {\n        throw std::runtime_error("CLOB tick-size HTTP " + std::to_string(r.status) + ": " + r.body.substr(0, 300));\n    }\n    const auto root = json::parse(r.body);\n    if (!root.is_object()) throw std::runtime_error("Unexpected CLOB tick-size response");\n    const auto it = root.as_object().find("minimum_tick_size");\n    if (it == root.as_object().end()) throw std::runtime_error("CLOB tick-size missing minimum_tick_size");\n    const double tick = as_double(it->value(), -1.0);\n    if (!std::isfinite(tick) || tick <= 0.0 || tick >= 1.0) {\n        throw std::runtime_error("CLOB tick-size is invalid");\n    }\n    return tick;\n}\n\n'''
+          replace('src/api.cpp', anchor, method+anchor)
+
+          replace('src/v7_maker_fillability_observer.cpp',
+              '                const std::int32_t yes_tick = tick_e4(yes->second.tick_size);\n                const std::int32_t no_tick = tick_e4(no->second.tick_size);\n',
+              '                const double yes_tick_value = options.fair_only\n                    ? api.fetch_tick_size(pair.second.first) : yes->second.tick_size;\n'
+              '                const double no_tick_value = options.fair_only\n                    ? api.fetch_tick_size(pair.second.second) : no->second.tick_size;\n'
+              '                const std::int32_t yes_tick = tick_e4(yes_tick_value);\n'
+              '                const std::int32_t no_tick = tick_e4(no_tick_value);\n')
+
+          replace('src/v7_maker_fillability_observer.cpp',
+              '            if (!queue_->try_push(row)) dropped_.fetch_add(1, std::memory_order_relaxed);\n        }\n    }\n\n    [[nodiscard]] bool lineage_recovery_requested() const noexcept {\n',
+              '            if (!queue_->try_push(row)) dropped_.fetch_add(1, std::memory_order_relaxed);\n        }\n'
+              '        if (lineage_recovery_requested_.load(std::memory_order_acquire)\n'
+              '            && decoder_failures_.load(std::memory_order_relaxed) == 0\n'
+              '            && dropped_.load(std::memory_order_relaxed) == 0) {\n'
+              '            const bool still_missing = std::any_of(tokens_.begin(), tokens_.end(),\n'
+              '                [&](const SelectedToken& token) {\n'
+              '                    return decoder_->snapshot(token.instrument_handle).lineage_continuous == 0;\n'
+              '                });\n'
+              '            if (!still_missing) {\n'
+              '                lineage_recovery_requested_.store(false, std::memory_order_release);\n'
+              '                lineage_recovered_without_restart_.fetch_add(1, std::memory_order_relaxed);\n'
+              '            }\n'
+              '        }\n'
+              '    }\n\n'
+              '    [[nodiscard]] bool lineage_recovery_requested() const noexcept {\n')
+
+          replace('src/v7_maker_fillability_observer.cpp',
+              '    [[nodiscard]] std::uint64_t lineage_recovery_requests() const noexcept {\n        return lineage_recovery_requests_.load(std::memory_order_relaxed);\n    }\n\n    void on_reconnect() {\n',
+              '    [[nodiscard]] std::uint64_t lineage_recovery_requests() const noexcept {\n'
+              '        return lineage_recovery_requests_.load(std::memory_order_relaxed);\n'
+              '    }\n\n'
+              '    [[nodiscard]] std::uint64_t lineage_recovered_without_restart() const noexcept {\n'
+              '        return lineage_recovered_without_restart_.load(std::memory_order_relaxed);\n'
+              '    }\n\n'
+              '    void on_reconnect() {\n')
+
+          replace('src/v7_maker_fillability_observer.cpp',
+              '        root["lineage_recovery_requests"] = lineage_recovery_requests();\n',
+              '        root["lineage_recovery_requests"] = lineage_recovery_requests();\n'
+              '        root["lineage_recovered_without_restart"] = lineage_recovered_without_restart();\n')
+
+          replace('src/v7_maker_fillability_observer.cpp',
+              '    std::atomic<std::uint64_t> lineage_recovery_requests_{0};\n    std::atomic<bool> lineage_recovery_requested_{false};\n',
+              '    std::atomic<std::uint64_t> lineage_recovery_requests_{0};\n'
+              '    std::atomic<std::uint64_t> lineage_recovered_without_restart_{0};\n'
+              '    std::atomic<bool> lineage_recovery_requested_{false};\n')
+
+          replace('tests/test_v7_causal_book_observer.cpp',
+              '        send(R"({"event_type":"price_change","timestamp":1700000001500,"price_changes":[{"asset_id":"yes","side":"BUY","price":"0.48","size":"1"}]})", 1500);\n        assert(observer.lineage_recovery_requests() == 1);\n        const auto reset = read_last(directory / "book_observations" / "current.jsonl");\n',
+              '        send(R"({"event_type":"price_change","timestamp":1700000001500,"price_changes":[{"asset_id":"yes","side":"BUY","price":"0.48","size":"1"}]})", 1500);\n'
+              '        assert(observer.lineage_recovery_requests() == 1);\n'
+              '        send(snapshot(1\'700\'000\'001\'600), 1600);\n'
+              '        assert(!observer.lineage_recovery_requested());\n'
+              '        assert(observer.lineage_recovered_without_restart() == 1);\n'
+              '        send("{", 1700);\n'
+              '        assert(observer.lineage_recovery_requested());\n'
+              '        send(snapshot(1\'700\'000\'001\'800), 1800);\n'
+              '        assert(observer.lineage_recovery_requested());\n'
+              '        const auto reset = read_last(directory / "book_observations" / "current.jsonl");\n')
+
+          replace('scripts/v7_evidence_catalog.py',
+              "family('pm_causal_book',['micro_maker/book_observations/*.jsonl*'],",
+              "family('pm_causal_book',['micro_maker/book_observations/*.jsonl*','research/repricing_book/book_observations/*.jsonl*'],")
+          replace('scripts/v7_evidence_catalog.py',
+              "family('pm_public_trades',['trade_tape.csv*','micro_maker/fillability_ws.jsonl*'],",
+              "family('pm_public_trades',['trade_tape.csv*','micro_maker/fillability_ws.jsonl*','research/repricing_book/fillability_ws.jsonl*'],")
+
+          Path('tests/test_v7_tick_regime_bootstrap_contract.py').write_text('''from pathlib import Path\n\nROOT=Path(__file__).resolve().parents[1]\n\ndef test_fair_only_bootstrap_uses_authoritative_clob_tick_size():\n    api_h=(ROOT/'include/pm/api.hpp').read_text()\n    api=(ROOT/'src/api.cpp').read_text()\n    observer=(ROOT/'src/v7_maker_fillability_observer.cpp').read_text()\n    state=(ROOT/'src/v7_market_state.cpp').read_text()\n    assert 'fetch_tick_size(const std::string& token_id) const' in api_h\n    assert '/tick-size/' in api and 'minimum_tick_size' in api\n    assert 'options.fair_only' in observer and 'api.fetch_tick_size(pair.second.first)' in observer\n    assert 'api.fetch_tick_size(pair.second.second)' in observer\n    assert 'price_e4 % tick_size_e4_ == 0' in state\n\ndef test_recovery_clears_only_after_real_lineage_recovery():\n    source=(ROOT/'src/v7_maker_fillability_observer.cpp').read_text()\n    assert 'lineage_recovered_without_restart_' in source\n    assert 'decoder_->snapshot(token.instrument_handle).lineage_continuous == 0' in source\n    assert 'decoder_failures_.load(std::memory_order_relaxed) == 0' in source\n    assert 'dropped_.load(std::memory_order_relaxed) == 0' in source\n\ndef test_dedicated_repricing_tape_is_catalogued_for_retention():\n    catalog=(ROOT/'scripts/v7_evidence_catalog.py').read_text()\n    assert 'research/repricing_book/book_observations/*.jsonl*' in catalog\n    assert 'research/repricing_book/fillability_ws.jsonl*' in catalog\n''')
+
+          Path('docs/V7_TICK_REGIME_RECOVERY_20260915.md').write_text('''# V7 tail tick-regime recovery\n\nThe exact-main bounded PAPER artifact for `0c720979e879d0b6291c129592c7a61917aded66` observed market `4551583` with outcome prices `0.005 / 0.995`, while the dedicated causal-book observer bootstrapped both tokens with tick size `0.01`. Its first two full-book snapshots were rejected and the next 136 price changes arrived without usable lineage.\n\nThe fix keeps `CanonicalL2Book` strict. In `--fair-only` mode the observer now resolves each token's current minimum tick from the public CLOB `/tick-size/{token_id}` endpoint at cold start and again on the bounded recovery restart. Non-fair Maker observers keep the existing batch-book tick bootstrap. A recovery latch is cleared without restart only after every subscribed lineage is genuinely continuous and only when there have been no dropped events or decoder failures.\n\nThe dedicated repricing book and trade tapes are also explicitly classified by the evidence catalog. No execution authority, threshold, model, pricing rule, or PAPER safety flag changes in this patch.\n''')
+          PY
+      - name: Validate patch
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq build-essential cmake pkg-config libcurl4-openssl-dev libboost-all-dev libssl-dev python3
+          cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
+          cmake --build build --parallel 2
+          ctest --test-dir build --output-on-failure
+          python3 -m py_compile scripts/v7_*.py tests/test_v7_tick_regime_bootstrap_contract.py
+          git diff --check
+      - name: Commit verified branch patch
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -f .github/workflows/branch-v7-tick-regime-builder.yml
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add -A
+          git diff --cached --check
+          git commit -m 'fix(v7): recover causal books across tail tick regimes'
+          git push origin HEAD:fix/v7-tick-regime-recovery-20260915
