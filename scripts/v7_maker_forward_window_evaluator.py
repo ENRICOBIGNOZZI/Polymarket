@@ -23,7 +23,10 @@ from collections import defaultdict
 from typing import Any, Iterable
 
 SCHEMA = "polymarket_v7_maker_forward_window_report_v1"
-MANIFEST_SCHEMA = "polymarket_v7_maker_forward_window_v1"
+WINDOW_MS = 2 * 60 * 60 * 1000
+MANIFEST_SCHEMA = "polymarket_v7_maker_forward_window_v2"
+LEGACY_MANIFEST_SCHEMA = "polymarket_v7_maker_forward_window_v1"
+LEGACY_WINDOW_MS = 8 * 60 * 60 * 1000
 STRATEGY = "CRYPTO_SETTLEMENT_ENGINE"
 COMPONENT = "professional_maker"
 REQUIRED_BASIS = "FRESH_OPPOSITE_FLOW"
@@ -57,7 +60,8 @@ def read_json(path: pathlib.Path) -> dict[str, Any]:
 
 
 def validate_manifest(manifest: dict[str, Any]) -> dict[str, Any]:
-    if manifest.get("schema") != MANIFEST_SCHEMA:
+    schema = manifest.get("schema")
+    if schema not in {MANIFEST_SCHEMA, LEGACY_MANIFEST_SCHEMA}:
         raise ValueError("forward_manifest_schema")
     sha = str(manifest.get("code_sha") or "")
     if len(sha) != 40 or any(ch not in "0123456789abcdef" for ch in sha):
@@ -72,7 +76,10 @@ def validate_manifest(manifest: dict[str, Any]) -> dict[str, Any]:
         raise ValueError("forward_manifest_authority")
     start = int(number(manifest.get("window_start_ms"), 0))
     end = int(number(manifest.get("window_end_ms"), 0))
-    if start <= 0 or end <= start or end - start != 8 * 60 * 60 * 1000:
+    expected_window_ms = (
+        WINDOW_MS if schema == MANIFEST_SCHEMA else LEGACY_WINDOW_MS
+    )
+    if start <= 0 or end <= start or end - start != expected_window_ms:
         raise ValueError("forward_manifest_window")
     evidence = manifest.get("evidence_sufficiency")
     if not isinstance(evidence, dict):
@@ -419,9 +426,9 @@ def evaluate(
             fills, key, draws=bootstrap_draws, seed=seed + index)
 
     entry = [entry_features(order) for order in orders.values()]
-    entry_summary = {
+    entry_summary = {} if not entry else {
         name: finite_summary([features[name] for features in entry])
-        for name in entry[0] if entry
+        for name in entry[0]
     }
     fill_delays = finite_summary([number(row.get("fill_delay_ms")) for row in fills])
     evidence = manifest["evidence_sufficiency"]

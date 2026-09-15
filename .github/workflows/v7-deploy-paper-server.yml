@@ -13,7 +13,7 @@ on:
         default: false
         type: boolean
       freeze_maker_forward_window:
-        description: After a successful PAPER deploy, freeze one preregistered 8h Maker window
+        description: After a successful PAPER deploy, freeze one preregistered 2h Maker window
         required: true
         default: false
         type: boolean

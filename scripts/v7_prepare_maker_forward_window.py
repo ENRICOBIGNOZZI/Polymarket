@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Freeze an exact-SHA eight-hour PAPER Maker forward experiment.
+"""Freeze an exact-SHA two-hour PAPER Maker forward experiment.
 
 This command owns no execution authority. It snapshots the research protocol and
 an exact byte prefix of all append-only evidence before the window begins. The
@@ -21,7 +21,7 @@ import v7_maker_forward_window_evaluator as evaluator
 
 SCHEMA = evaluator.MANIFEST_SCHEMA
 HORIZONS = ["100ms", "250ms", "500ms", "1s", "5s", "10s", "30s"]
-WINDOW_MS = 8 * 60 * 60 * 1000
+WINDOW_MS = 2 * 60 * 60 * 1000
 FREEZE_LEAD_MS = 5_000
 PREFIX_HASH_SEMANTICS = "SHA256_EXACT_PREFIX_AT_RECORDED_BYTE_COUNT"
 
@@ -361,7 +361,7 @@ def prepare(
         _write_fsync(temporary / "manifest.json", json.dumps(manifest, indent=2, sort_keys=True) + "\n")
         _write_fsync(
             temporary / "README.txt",
-            "PAPER-only frozen 8h Maker experiment. Do not inspect economic endpoints before window_end_ms.\n"
+            "PAPER-only frozen 2h Maker experiment. Do not inspect economic endpoints before window_end_ms.\n"
             f"code_sha={expected_sha}\nwindow_start_ms={manifest['window_start_ms']}\n"
             f"window_end_ms={manifest['window_end_ms']}\nmanifest_sha256={manifest['manifest_sha256']}\n",
         )

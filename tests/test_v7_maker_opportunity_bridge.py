@@ -360,6 +360,48 @@ def test_settlement_anchor_cold_prior_cell_becomes_only_paper_probe() -> None:
         assert status["typed_make_probe_opportunities"] == 1
 
 
+def test_settlement_anchor_fresh_flow_can_power_only_bounded_paper_probe() -> None:
+    with tempfile.TemporaryDirectory() as directory:
+        run_root = Path(directory)
+        setup_run(run_root, mature=True)
+        value = selection()
+        market = value["markets"][0]
+        market["control_exploration_authorized"] = False
+        market["settlement_anchor"] = True
+        market["authorized_execution_cells"][0]["authority_basis"] = "FRESH_OPPOSITE_FLOW"
+        write(run_root / "micro_maker/reward_selection.json", value)
+        write(run_root / "external_fair/status.json", bootstrap_fair_status())
+        with mock.patch.object(bridge, "_paper_crypto_context", return_value=context()):
+            rows, status = bridge.build_maker_opportunities(
+                run_root, now_ns=2_000_000_000, repository_root=ROOT,
+            )
+        assert len(rows) == 1, status
+        row = OpportunityEnvelope.parse(rows[0]).raw
+        assert row["exploration"]["mode"] == "PAPER_BOOTSTRAP_PROBE"
+        assert row["exploration"]["research_only"] is True
+        assert row["exploration"]["robust_candidate"] is False
+        assert row["execution_plan"]["legs"][0]["target_quantity"] * row["execution_plan"]["legs"][0]["limit_price"] <= 2.0 + 1e-9
+        assert status["typed_make_probe_opportunities"] == 1
+
+
+def test_non_anchor_fresh_flow_still_cannot_use_bootstrap_probe_lane() -> None:
+    with tempfile.TemporaryDirectory() as directory:
+        run_root = Path(directory)
+        setup_run(run_root, mature=True)
+        value = selection()
+        market = value["markets"][0]
+        market["control_exploration_authorized"] = False
+        market["authorized_execution_cells"][0]["authority_basis"] = "FRESH_OPPOSITE_FLOW"
+        write(run_root / "micro_maker/reward_selection.json", value)
+        write(run_root / "external_fair/status.json", bootstrap_fair_status())
+        with mock.patch.object(bridge, "_paper_crypto_context", return_value=context()):
+            rows, status = bridge.build_maker_opportunities(
+                run_root, now_ns=2_000_000_000, repository_root=ROOT,
+            )
+        assert rows == []
+        assert status["rejected"]["POINT_ONLY_FAIR_REQUIRES_PAPER_PROBE"] == 1
+
+
 def test_bootstrap_fair_cannot_power_noncontrol_or_robust_make() -> None:
     with tempfile.TemporaryDirectory() as directory:
         run_root = Path(directory)

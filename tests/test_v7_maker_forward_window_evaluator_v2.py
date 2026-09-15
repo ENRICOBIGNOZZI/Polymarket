@@ -23,7 +23,7 @@ import v7_maker_forward_window_evaluator as base
 
 SHA = "a" * 40
 START = 1_800_000_000_000
-END = START + 8 * 60 * 60 * 1000
+END = START + 2 * 60 * 60 * 1000
 SELECTOR_TS = START + 1_000
 
 
