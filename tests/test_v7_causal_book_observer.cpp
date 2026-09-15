@@ -82,6 +82,27 @@ int main() {
         assert(observer.lineage_recovery_requested());
         observer.stop();
     }
+    {
+        const auto fine_dir = directory / "fine-tick";
+        ExactWsObserver observer({SelectedToken{"tail-market", "event", "tail", 1, 1, 1, 10}},
+                                 "wss://unused.example", fine_dir, std::string(40, 'b'));
+        pm::fast::FeedReceiveStamp stamp;
+        stamp.wall_ms = 1'700'000'010'000;
+        stamp.monotonic_ns = 10'000'000'000LL;
+        observer.on_frame(
+            R"({"event_type":"book","asset_id":"tail","timestamp":1700000010000,"bids":[{"price":"0.005","size":"3"}],"asks":[{"price":"0.015","size":"4"}]})",
+            stamp);
+        observer.drain();
+        std::ifstream stream(fine_dir / "book_observations" / "current.jsonl");
+        std::string line, last;
+        while (std::getline(stream, line)) last = line;
+        const auto row = json::parse(last).as_object();
+        assert(row.at("valid").as_bool());
+        assert(std::abs(row.at("tick_size").as_double() - 0.001) < 1e-12);
+        assert(std::abs(row.at("best_bid").as_double() - 0.005) < 1e-12);
+        assert(std::abs(row.at("best_ask").as_double() - 0.015) < 1e-12);
+        observer.stop();
+    }
     const auto selection = directory / "selection.json";
     { std::ofstream out(selection); out << R"({"timestamp_ms":1,"markets":[{"market_id":"m","event_id":"e","yes_token":"y","no_token":"n","price":0.4}]})"; }
     const auto before = load_selected_pairs(selection);
