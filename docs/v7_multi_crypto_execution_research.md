@@ -152,3 +152,22 @@ or frozen BTC launcher. Full-account checkpoint construction remains the gate
 before a new PAPER lane may use it with entry authority. The current Python
 framing is an integration bridge, not a claim that the final C++ typed-wire
 latency target has been reached.
+
+## Shared risk guard correction
+
+The same component-aggregation defect affected the account risk guard: its
+`CRYPTO_SETTLEMENT_ENGINE` equity read only the external-fair router and ignored
+lead-lag positions/PnL. The isolated branch now reconciles the lead-lag status
+and durable state before adding it to the shared engine equity.
+
+Settled lead-lag PnL is added once. An OPEN lead-lag position is marked at zero
+recovery value for RISK only, so its entry cost plus entry fee is treated as the
+full amount at risk until official settlement. That conservative mark is not a
+FINAL and is never reused as settlement evidence. Status/state count, protocol,
+model identity and terminal-PnL sums must reconcile; otherwise the crypto engine
+is fatal-to-portfolio and new risk fails closed.
+
+A read-only copy of the then-current live state (one open lead-lag position)
+produced account equity 14019.872195, with lead-lag realized PnL 17.58026 and
+1.108065 of open cost-at-risk conservatively marked to zero. This validation ran
+on the isolated copy only; production risk state was not rewritten.

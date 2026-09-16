@@ -29,6 +29,82 @@ def read_json(path: Path) -> dict[str, Any]:
         return {}
 
 
+def _finite_signed(value: Any, name: str) -> float:
+    if isinstance(value, bool):
+        raise ValueError(name)
+    try:
+        number = float(value)
+    except (TypeError, ValueError, OverflowError) as exc:
+        raise ValueError(name) from exc
+    if not math.isfinite(number):
+        raise ValueError(name)
+    return number
+
+
+def lead_lag_equity_adjustment(run_root: Path) -> dict[str, Any]:
+    status = read_json(run_root / "research" / "lead_lag_taker_v1" / "status.json")
+    state = read_json(run_root / "research" / "lead_lag_taker_v1" / "state.json")
+    if not status and not state:
+        return {"present": False, "valid": True, "equity_adjustment": 0.0,
+                "realized_pnl": 0.0, "open_cost_at_risk": 0.0, "open_positions": 0}
+    if not status or not state:
+        return {"present": True, "valid": False, "fatal_reason": "lead_lag_status_state_pair_incomplete"}
+    try:
+        if (status.get("schema") != "polymarket_v7_lead_lag_taker_v1_status"
+                or status.get("paper_only") is not True
+                or status.get("authenticated_execution") is not False
+                or status.get("real_order_submission") is not False
+                or status.get("real_capital_at_risk") is not False
+                or status.get("model_sha") != state.get("model_sha")
+                or status.get("protocol_hash") != state.get("protocol_hash")):
+            raise ValueError("lead_lag_identity_or_safety_invalid")
+        positions = state.get("positions")
+        if not isinstance(positions, dict):
+            raise ValueError("lead_lag_positions_missing")
+        entries = int(status.get("entries"))
+        settled = int(status.get("settled"))
+        open_positions = int(status.get("open_positions"))
+        if min(entries, settled, open_positions) < 0 or entries != settled + open_positions:
+            raise ValueError("lead_lag_status_counts_invalid")
+        if entries != len(positions):
+            raise ValueError("lead_lag_position_count_mismatch")
+        realized = _finite_signed(status.get("realized_pnl"), "lead_lag_realized_pnl")
+        state_realized = _finite_signed(state.get("realized_pnl"), "lead_lag_state_realized_pnl")
+        if abs(realized - state_realized) > 1e-7 * max(1.0, abs(realized), abs(state_realized)):
+            raise ValueError("lead_lag_realized_pnl_mismatch")
+        final_sum = 0.0
+        open_cost = 0.0
+        observed_settled = 0
+        observed_open = 0
+        for position_id, row in positions.items():
+            if not isinstance(position_id, str) or not position_id or not isinstance(row, dict):
+                raise ValueError("lead_lag_position_shape_invalid")
+            if row.get("protocol_hash") != status.get("protocol_hash"):
+                raise ValueError("lead_lag_position_protocol_mismatch")
+            if row.get("settled") is True:
+                observed_settled += 1
+                final_sum += _finite_signed(row.get("final_pnl"), "lead_lag_final_pnl")
+            elif row.get("settled") is False:
+                observed_open += 1
+                open_cost += _finite_nonnegative(row.get("entry_cost"), "lead_lag_entry_cost")
+                open_cost += _finite_nonnegative(row.get("entry_fee"), "lead_lag_entry_fee")
+            else:
+                raise ValueError("lead_lag_position_settlement_state_invalid")
+        if observed_settled != settled or observed_open != open_positions:
+            raise ValueError("lead_lag_position_status_count_mismatch")
+        if abs(final_sum - realized) > 1e-7 * max(1.0, abs(final_sum), abs(realized)):
+            raise ValueError("lead_lag_terminal_pnl_sum_mismatch")
+        return {
+            "present": True, "valid": True, "model_sha": status.get("model_sha"),
+            "protocol_hash": status.get("protocol_hash"), "realized_pnl": realized,
+            "open_cost_at_risk": open_cost, "open_positions": open_positions,
+            "equity_adjustment": realized - open_cost,
+            "open_mark_policy": "ZERO_RECOVERY_VALUE_CONSERVATIVE_RISK_MARK_NOT_SETTLEMENT",
+        }
+    except (KeyError, TypeError, ValueError, OverflowError) as exc:
+        return {"present": True, "valid": False, "fatal_reason": f"{type(exc).__name__}:{exc}"}
+
+
 def _finite_nonnegative(value: Any, name: str) -> float:
     if isinstance(value, bool):
         raise ValueError(name)
@@ -95,6 +171,18 @@ def assess(run_root: Path, allocation_manifest: Path, *, max_drawdown: float) ->
     for engine_id in ENGINES:
         budget = _finite_nonnegative(budgets[engine_id], "engine_budget")
         value, killed, source, fatal = engine_equity(run_root, engine_id, budget)
+        components: dict[str, Any] = {"base_engine_equity": value}
+        if engine_id == "CRYPTO_SETTLEMENT_ENGINE":
+            lead_lag = lead_lag_equity_adjustment(run_root)
+            components["lead_lag_taker_v1"] = lead_lag
+            if lead_lag.get("valid") is not True:
+                value = 0.0
+                killed = True
+                fatal = True
+                source = "lead_lag_unreconciled_fail_closed"
+            elif lead_lag.get("present") is True:
+                value += float(lead_lag["equity_adjustment"])
+                source = source + "+lead_lag_conservative_open_mark"
         equity += value
         if killed:
             locally_killed.append(engine_id)
@@ -103,7 +191,7 @@ def assess(run_root: Path, allocation_manifest: Path, *, max_drawdown: float) ->
         fatal_state = fatal_state or fatal
         states[engine_id] = {
             "budget": budget, "equity": value, "source": source,
-            "killed": killed, "fatal_to_portfolio": fatal,
+            "killed": killed, "fatal_to_portfolio": fatal, "components": components,
         }
     previous = read_json(run_root / "control" / "portfolio_state.json")
     peak = max(account, float(previous.get("peak", account)), equity)
