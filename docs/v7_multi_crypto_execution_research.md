@@ -130,3 +130,25 @@ and exposes the components explicitly. If canonical economics says the
 `strategy_realized_pnl_unverifiable:CRYPTO_SETTLEMENT_ENGINE`; it is never
 silently interpreted as zero. No production process or frozen BTC file is
 changed by this monitoring correction.
+
+## Bounded direct IPC checkpoint
+
+A new opt-in Unix-stream bridge removes candidate inbox files and receipt-file
+polling from the new fast-forward path. The accept thread performs framing only;
+the existing coordinator thread drains the bounded queue and remains the sole
+economic decision owner. Queue-full, malformed frames and handler faults return
+explicit fail-closed replies. The socket is mode 0600 and an existing socket
+path is never stolen or silently unlinked.
+
+`process_fast_forward_ipc_reserved` binds the direct reply to the already-built
+durable reservation projection. A PAPER TAKE is returned only after the
+supplied canonical append callback has durably recorded the reservation. The
+path writes no receipt file. A call-graph test patches `open()` to fail and
+proves Unix IPC -> same coordinator -> durable reservation -> direct response
+without hot-path file access.
+
+This transport is implemented but NOT activated in the current process manifest
+or frozen BTC launcher. Full-account checkpoint construction remains the gate
+before a new PAPER lane may use it with entry authority. The current Python
+framing is an integration bridge, not a claim that the final C++ typed-wire
+latency target has been reached.
