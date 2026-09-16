@@ -1,0 +1,26 @@
+{
+  "ask_depth_l1_shares_max": 1827.47,
+  "ask_depth_l1_shares_p50": 62.87,
+  "bytes_per_record": 80.0,
+  "decoder_failures": 0,
+  "dropped_events": 0,
+  "duration_seconds": 30,
+  "exact_code_sha": "028de7499a83c3970de8992c5612c33c863a6cbe",
+  "execution_authority": false,
+  "feed_reconnects": 0,
+  "l1_depth_coverage": 1.0,
+  "limitations": [
+    "SHADOW public-book observation only",
+    "L1 depth only; not full depth beyond original best ask",
+    "not real matching-engine fill evidence"
+  ],
+  "paper_only": true,
+  "positive_two_sided_l1_depth_records": 133485,
+  "record_size": 80,
+  "records": 133575,
+  "schema": "polymarket_v7_compact_pm_label_tape_v2_smoke_v1",
+  "sessions": 1,
+  "total_bytes": 10686000,
+  "transport_reconnects": 0,
+  "valid_records": 133485
+}

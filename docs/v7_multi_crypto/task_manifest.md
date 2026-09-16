@@ -4,7 +4,7 @@
 |---|---|---|
 | M0 Audit and integrity | IN_PROGRESS | Runtime identity and frozen BTC verified; deeper ledger-history recovery audit still pending. |
 | M1 Core common | IN_PROGRESS | Six-asset venue factory, typed settlement contexts, dynamic rules discovery and capability registry implemented; full ContractState/OracleHub integration still pending. |
-| M2 Data plane | IN_PROGRESS | Multi-venue feeds, PM BookHub (24/24 BOOK_READY) and six-asset RTDS OracleHub are exact-SHA verified. Unified hot-path state/consumer integration remains. |
+| M2 Data plane | VERIFIED_SHADOW | Multi-venue feeds, six-asset OracleHub, state-only PM BookHub/label hub, unified FeatureEngine and single zero-authority shadow supervisor are exact-SHA verified. Not deployed to canonical runtime. |
 | M3 Execution/accounting | NOT_STARTED | Must retain one global coordinator/execution owner/ledger. |
 | M4 Speed | NOT_STARTED | Profile before replacing file IPC/REST in the new lane. |
 | M5 Research | IN_PROGRESS | Causal normalized-shock/derivatives/cross-crypto features, audited feature tape and exact compact PM repricing labels implemented. Current smoke has 1 independent time cluster, so calibration/OOS alpha remains INSUFFICIENT_EVIDENCE. |
