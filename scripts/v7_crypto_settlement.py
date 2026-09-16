@@ -28,6 +28,8 @@ class CryptoAsset(str, Enum):
     ETH = "ETH"
     SOL = "SOL"
     XRP = "XRP"
+    DOGE = "DOGE"
+    BNB = "BNB"
 
 
 class CryptoHorizon(str, Enum):
@@ -150,7 +152,7 @@ def validate_registry(value: dict[str, Any]) -> dict[tuple[CryptoAsset, CryptoHo
             or not isinstance(taker_window, list) or len(taker_window) != 2
             or not 0 <= int(maker_window[0]) <= int(maker_window[1]) <= HORIZON_SECONDS[horizon]
             or not 0 <= int(taker_window[0]) <= int(taker_window[1]) <= HORIZON_SECONDS[horizon]
-            or not all(external.get(name) for name in ("binance_spot", "coinbase_spot", "bybit_spot", "binance_perp", "bybit_perp"))
+            or not all(external.get(name) for name in ("binance_spot", "bybit_spot", "binance_perp", "bybit_perp"))
         ):
             raise CryptoSettlementError(f"context_mapping:{asset.value}:{horizon.value}")
         semantic_hash = canonical_hash(settlement_semantic_payload(row))

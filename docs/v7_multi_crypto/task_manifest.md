@@ -3,13 +3,13 @@
 | Milestone | State | Gate / current fact |
 |---|---|---|
 | M0 Audit and integrity | IN_PROGRESS | Runtime identity and frozen BTC verified; deeper ledger-history recovery audit still pending. |
-| M1 Core common | IN_PROGRESS | Generic venue-symbol factory and fail-closed asset registry implemented; contract/rules registry still BTC-specific. |
-| M2 Data plane | IN_PROGRESS | ETH/SOL public multi-venue C++ runtime smoke is operational; PM book in RAM for new lanes still pending. |
+| M1 Core common | IN_PROGRESS | Six-asset venue factory, typed settlement contexts, dynamic rules discovery and capability registry implemented; full ContractState/OracleHub integration still pending. |
+| M2 Data plane | IN_PROGRESS | ETH/SOL/DOGE/BNB public data-plane smokes are operational; optional venue failure is isolated. Shared PM book in RAM for new lanes still pending. |
 | M3 Execution/accounting | NOT_STARTED | Must retain one global coordinator/execution owner/ledger. |
 | M4 Speed | NOT_STARTED | Profile before replacing file IPC/REST in the new lane. |
 | M5 Research | NOT_STARTED | Normalized shocks, leadership, derivatives, cross-crypto, residual model. |
 | M6 Multi-crypto forward | BLOCKED | ETH/SOL remain SHADOW until protocol freeze and M0-M5 gates. |
-| M7 Breadth | BLOCKED | XRP/DOGE/BNB and M15 need discovery/rules/data gates. |
+| M7 Breadth | IN_PROGRESS | XRP/DOGE/BNB M5/M15 discovery/rules gates passed; activation remains SHADOW-only and still depends on shared PM-book/oracle/feature gates. |
 | M8 Capacity/readiness | NOT_STARTED | PAPER/shadow only; no real-money promotion. |
 | M9 London regional migration | BLOCKED_AWS_ACCESS | Build/benchmark eu-west-2a/b/c, then PAPER cutover with a fresh ledger generation. |
 
@@ -32,7 +32,7 @@
 - Tailscale is admin/SSH/monitoring only; it must never sit in the trading data path.
 - Benchmark each AZ with the same SHA/load: Polymarket WS receive path, Binance/Coinbase WS receive path, Polymarket HTTPS connect/TLS/TTFB, p50/p95/p99/p99.9, failures and jitter.
 - Choose the AZ from measured end-to-end evidence, not geography assumptions.
-- Restore/implement `scripts/v7_regional_shootout.py`; `docs/LATENCY.md` references it but the file is absent in the current checkout.
+- Implement and test `scripts/v7_regional_shootout.py`; it now evaluates same-SHA regional/AZ probes fail-closed and never authorizes cutover.
 - Copy only durable datasets, model artifacts, registries and required configurations. Do not clone the current live `runs/` state wholesale.
 - London starts a new run and a new ledger generation. The Mac ledger is sealed, not reused.
 - PAPER first: `paper_only=true`, `authenticated_execution=false`, `real_order_submission=false`.

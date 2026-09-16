@@ -54,9 +54,10 @@ def test_capability_matrix_is_shadow_only_and_fail_closed():
     assert rows[("SOL", "M5")].status == "READY_SHADOW"
     assert rows[("BTC", "M5")].status == "BLOCKED"
     assert "BTC_FROZEN_NO_NEW_AUTHORITY" in rows[("BTC", "M5")].blockers
-    assert rows[("DOGE", "M5")].status == "BLOCKED"
-    assert "SETTLEMENT_CONTEXT_UNVERIFIED_OR_MISSING" in rows[("DOGE", "M5")].blockers
-    assert rows[("BNB", "M15")].status == "BLOCKED"
+    assert rows[("XRP", "M5")].status == "READY_SHADOW"
+    assert rows[("DOGE", "M5")].status == "READY_SHADOW"
+    assert rows[("BNB", "M15")].status == "READY_SHADOW"
+    assert rows[("BNB", "M5")].required_venues_verified is True
     assert all(r.entry_authority is False for r in rows.values())
 
 

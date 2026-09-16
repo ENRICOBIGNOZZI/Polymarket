@@ -13,17 +13,17 @@ import v7_external_source_registry as registry
 class ExternalSourceRegistryTest(unittest.TestCase):
     def test_canonical_registry_is_v7_paper_only_and_fingerprinted(self) -> None:
         result = registry.validate(registry.load(ROOT / "config/v7_external_source_registry.json"))
-        self.assertEqual(result["source_count"], 30)
+        self.assertEqual(result["source_count"], 39)
         self.assertEqual(len(result["registry_sha256"]), 64)
         self.assertIn("deribit_btc", result["source_ids"])
         self.assertIn("coinbase_spot_btcusd_rest_snapshot", result["source_ids"])
         self.assertNotIn("kalshi_public_rest", result["source_ids"])
         value = registry.load(ROOT / "config/v7_external_source_registry.json")
-        crypto_assets = {row["asset"] for row in value["sources"] if row["asset"] in {"BTC", "ETH", "SOL", "XRP"}}
-        self.assertEqual(crypto_assets, {"BTC", "ETH", "SOL", "XRP"})
+        crypto_assets = {row["asset"] for row in value["sources"] if row["asset"] in {"BTC", "ETH", "SOL", "XRP", "DOGE", "BNB"}}
+        self.assertEqual(crypto_assets, {"BTC", "ETH", "SOL", "XRP", "DOGE", "BNB"})
         self.assertTrue(all(
             row["enabled"] is False and row["research_only"] is True
-            for row in value["sources"] if row["asset"] in {"ETH", "SOL", "XRP"}
+            for row in value["sources"] if row["asset"] in {"ETH", "SOL", "XRP", "DOGE", "BNB"}
         ))
 
     def test_rejects_private_authority_and_unknown_event(self) -> None:

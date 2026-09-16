@@ -102,9 +102,10 @@ void atomic_write(const fs::path& path, const json::object& value) {
     fs::rename(temporary, path);
 }
 
-json::object transport_json(const ExternalWsSnapshot& value, const char* venue) {
+json::object transport_json(const ExternalWsSnapshot& value, const char* venue, bool enabled = true) {
     return {
         {"venue", venue},
+        {"enabled", enabled},
         {"connection_epoch", value.connection_epoch},
         {"connection_attempts", value.connection_attempts},
         {"successful_connections", value.successful_connections},
@@ -1216,10 +1217,21 @@ int main(int argc, char** argv) {
             if (bybit_linear_symbol.empty()) bybit_linear_symbol = "BTCUSDT";
             if (deribit_symbol.empty()) deribit_symbol = "BTC-PERPETUAL";
         } else {
-            if (binance_spot_symbol.empty() || coinbase_spot_symbol.empty()
-                || bybit_spot_symbol.empty() || binance_usdm_symbol.empty()
-                || bybit_linear_symbol.empty() || deribit_symbol.empty()) {
-                throw std::invalid_argument("non-BTC assets require explicit venue symbols");
+            const auto normalize_optional = [](std::string& symbol) {
+                if (symbol == "-" || symbol == "NONE") symbol.clear();
+            };
+            normalize_optional(coinbase_spot_symbol);
+            normalize_optional(bybit_spot_symbol);
+            normalize_optional(binance_usdm_symbol);
+            normalize_optional(bybit_linear_symbol);
+            normalize_optional(deribit_symbol);
+            if (binance_spot_symbol.empty()) {
+                throw std::invalid_argument("non-BTC assets require Binance spot as primary feed");
+            }
+            const int enabled_spot = 1 + (coinbase_spot_symbol.empty() ? 0 : 1)
+                + (bybit_spot_symbol.empty() ? 0 : 1);
+            if (enabled_spot < 2) {
+                throw std::invalid_argument("non-BTC assets require at least two enabled spot venues");
             }
             if (!external_cancel_signal_path.empty()) {
                 throw std::invalid_argument("BTC frozen external-cancel signal cannot be reused for non-BTC assets");
@@ -1268,12 +1280,21 @@ int main(int argc, char** argv) {
         std::uint64_t tape_sequence = 0;
         ExternalStatePolicy policy;
         policy.external_cancel_enabled = external_cancel_signal_path.empty() ? 0 : 1;
+        // Preserve the frozen BTC policy exactly. New multi-asset lanes keep an
+        // unchanged book usable while its WebSocket transport remains fresh.
+        policy.use_transport_freshness_for_book = asset == "BTC" ? 0 : 1;
         ExternalAssetState state(asset_handle);
         if (!external_cancel_signal_path.empty()) {
             atomic_write(external_cancel_signal_path, external_cancel_signal_json(
                 ExternalCancelSignalSnapshot{}, model_sha, external_cancel_rule_sha256,
                 started_monotonic_ns, wall_now_ns(), started_monotonic_ns));
         }
+        const bool coinbase_enabled = !coinbase_spot_symbol.empty();
+        const bool bybit_spot_enabled = !bybit_spot_symbol.empty();
+        const bool binance_usdm_enabled = !binance_usdm_symbol.empty();
+        const bool bybit_linear_enabled = !bybit_linear_symbol.empty();
+        const bool deribit_enabled = !deribit_symbol.empty();
+
         ExternalVenueIngress binance_ingress(VenueId::BinanceSpot, asset_handle, binance_event_tape.get());
         ExternalVenueIngress coinbase_ingress(VenueId::CoinbaseSpot, asset_handle, coinbase_event_tape.get());
         ExternalVenueIngress bybit_ingress(VenueId::BybitSpot, asset_handle, bybit_event_tape.get());
@@ -1282,61 +1303,97 @@ int main(int argc, char** argv) {
         ExternalVenueIngress binance_usdm_market_ingress(VenueId::BinanceUsdM, asset_handle, binance_usdm_market_event_tape.get());
         BinanceSpotL2Observer binance_l2(binance_spot_symbol);
         CoinbaseL2Observer coinbase_l2(coinbase_ingress, asset_handle);
-        BybitL2Observer bybit_l2(bybit_ingress, asset_handle, bybit_spot_symbol);
+        BybitL2Observer bybit_l2(bybit_ingress, asset_handle,
+            bybit_spot_enabled ? bybit_spot_symbol : "DISABLED");
         BybitL2Observer bybit_linear_l2(
-            bybit_linear_ingress, asset_handle, bybit_linear_symbol, VenueId::BybitLinear);
+            bybit_linear_ingress, asset_handle,
+            bybit_linear_enabled ? bybit_linear_symbol : "DISABLED", VenueId::BybitLinear);
         BybitLinearMarketObserver bybit_linear_market(
-            bybit_linear_ingress, asset_handle, bybit_linear_symbol);
+            bybit_linear_ingress, asset_handle,
+            bybit_linear_enabled ? bybit_linear_symbol : "DISABLED");
         FanoutObserver bybit_linear_observer(bybit_linear_l2, bybit_linear_market);
         BinanceUsdMObserver binance_usdm_observer(binance_usdm_market_ingress, asset_handle);
-        DeribitObserver deribit_observer(deribit_symbol);
+        DeribitObserver deribit_observer(deribit_enabled ? deribit_symbol : "DISABLED");
+
         ExternalVenueWsClient binance(
             crypto_connection_spec(VenueId::BinanceSpot, asset_handle, binance_spot_symbol),
             &binance_ingress, &binance_l2, binance_raw_tape.get());
-        ExternalVenueWsClient coinbase(
-            crypto_connection_spec(VenueId::CoinbaseSpot, asset_handle, coinbase_spot_symbol),
-            nullptr, &coinbase_l2, coinbase_raw_tape.get());
-        ExternalVenueWsClient bybit(
-            crypto_connection_spec(VenueId::BybitSpot, asset_handle, bybit_spot_symbol),
-            &bybit_ingress, &bybit_l2, bybit_raw_tape.get());
-        ExternalVenueWsClient bybit_linear(
-            crypto_connection_spec(VenueId::BybitLinear, asset_handle, bybit_linear_symbol),
-            nullptr, &bybit_linear_observer, bybit_linear_raw_tape.get());
-        ExternalVenueWsClient deribit(
-            crypto_connection_spec(VenueId::Deribit, asset_handle, deribit_symbol),
-            &deribit_ingress, &deribit_observer, deribit_raw_tape.get());
-        const auto binance_usdm_lower = lowercase_ascii(binance_usdm_symbol);
-        auto binance_usdm_depth_spec =
-            crypto_connection_spec(VenueId::BinanceUsdM, asset_handle, binance_usdm_symbol);
-        binance_usdm_depth_spec.subscription_json =
-            "{\"method\":\"SUBSCRIBE\",\"params\":[\"" + binance_usdm_lower
-            + "@depth20@100ms\"],\"id\":1}";
-        auto binance_usdm_market_spec =
-            crypto_connection_spec(VenueId::BinanceUsdM, asset_handle, binance_usdm_symbol);
-        binance_usdm_market_spec.target = "/market/ws";
-        binance_usdm_market_spec.subscription_json =
-            "{\"method\":\"SUBSCRIBE\",\"params\":[\"" + binance_usdm_lower
-            + "@aggTrade\",\"" + binance_usdm_lower + "@markPrice@1s\",\""
-            + binance_usdm_lower + "@forceOrder\"],\"id\":2}";
-        ExternalVenueWsClient binance_usdm_depth(std::move(binance_usdm_depth_spec), nullptr, &binance_usdm_observer, binance_usdm_depth_raw_tape.get());
-        ExternalVenueWsClient binance_usdm_market(std::move(binance_usdm_market_spec), nullptr, &binance_usdm_observer, binance_usdm_market_raw_tape.get());
+        std::unique_ptr<ExternalVenueWsClient> coinbase;
+        if (coinbase_enabled) {
+            coinbase = std::make_unique<ExternalVenueWsClient>(
+                crypto_connection_spec(VenueId::CoinbaseSpot, asset_handle, coinbase_spot_symbol),
+                nullptr, &coinbase_l2, coinbase_raw_tape.get());
+        }
+        std::unique_ptr<ExternalVenueWsClient> bybit;
+        if (bybit_spot_enabled) {
+            bybit = std::make_unique<ExternalVenueWsClient>(
+                crypto_connection_spec(VenueId::BybitSpot, asset_handle, bybit_spot_symbol),
+                &bybit_ingress, &bybit_l2, bybit_raw_tape.get());
+        }
+        std::unique_ptr<ExternalVenueWsClient> bybit_linear;
+        if (bybit_linear_enabled) {
+            bybit_linear = std::make_unique<ExternalVenueWsClient>(
+                crypto_connection_spec(VenueId::BybitLinear, asset_handle, bybit_linear_symbol),
+                nullptr, &bybit_linear_observer, bybit_linear_raw_tape.get());
+        }
+        std::unique_ptr<ExternalVenueWsClient> deribit;
+        if (deribit_enabled) {
+            deribit = std::make_unique<ExternalVenueWsClient>(
+                crypto_connection_spec(VenueId::Deribit, asset_handle, deribit_symbol),
+                &deribit_ingress, &deribit_observer, deribit_raw_tape.get());
+        }
+        std::unique_ptr<ExternalVenueWsClient> binance_usdm_depth;
+        std::unique_ptr<ExternalVenueWsClient> binance_usdm_market;
+        if (binance_usdm_enabled) {
+            const auto binance_usdm_lower = lowercase_ascii(binance_usdm_symbol);
+            auto binance_usdm_depth_spec =
+                crypto_connection_spec(VenueId::BinanceUsdM, asset_handle, binance_usdm_symbol);
+            binance_usdm_depth_spec.subscription_json =
+                "{\"method\":\"SUBSCRIBE\",\"params\":[\"" + binance_usdm_lower
+                + "@depth20@100ms\"],\"id\":1}";
+            auto binance_usdm_market_spec =
+                crypto_connection_spec(VenueId::BinanceUsdM, asset_handle, binance_usdm_symbol);
+            binance_usdm_market_spec.target = "/market/ws";
+            binance_usdm_market_spec.subscription_json =
+                "{\"method\":\"SUBSCRIBE\",\"params\":[\"" + binance_usdm_lower
+                + "@aggTrade\",\"" + binance_usdm_lower + "@markPrice@1s\",\""
+                + binance_usdm_lower + "@forceOrder\"],\"id\":2}";
+            binance_usdm_depth = std::make_unique<ExternalVenueWsClient>(
+                std::move(binance_usdm_depth_spec), nullptr, &binance_usdm_observer,
+                binance_usdm_depth_raw_tape.get());
+            binance_usdm_market = std::make_unique<ExternalVenueWsClient>(
+                std::move(binance_usdm_market_spec), nullptr, &binance_usdm_observer,
+                binance_usdm_market_raw_tape.get());
+        }
 
 #if defined(__APPLE__)
         std::thread binance_thread([&] { binance.run(ExternalStopToken(stopping)); });
-        std::thread coinbase_thread([&] { coinbase.run(ExternalStopToken(stopping)); });
-        std::thread bybit_thread([&] { bybit.run(ExternalStopToken(stopping)); });
-        std::thread bybit_linear_thread([&] { bybit_linear.run(ExternalStopToken(stopping)); });
-        std::thread deribit_thread([&] { deribit.run(ExternalStopToken(stopping)); });
-        std::thread binance_usdm_depth_thread([&] { binance_usdm_depth.run(ExternalStopToken(stopping)); });
-        std::thread binance_usdm_market_thread([&] { binance_usdm_market.run(ExternalStopToken(stopping)); });
+        std::thread coinbase_thread;
+        std::thread bybit_thread;
+        std::thread bybit_linear_thread;
+        std::thread deribit_thread;
+        std::thread binance_usdm_depth_thread;
+        std::thread binance_usdm_market_thread;
+        if (coinbase) coinbase_thread = std::thread([&] { coinbase->run(ExternalStopToken(stopping)); });
+        if (bybit) bybit_thread = std::thread([&] { bybit->run(ExternalStopToken(stopping)); });
+        if (bybit_linear) bybit_linear_thread = std::thread([&] { bybit_linear->run(ExternalStopToken(stopping)); });
+        if (deribit) deribit_thread = std::thread([&] { deribit->run(ExternalStopToken(stopping)); });
+        if (binance_usdm_depth) binance_usdm_depth_thread = std::thread([&] { binance_usdm_depth->run(ExternalStopToken(stopping)); });
+        if (binance_usdm_market) binance_usdm_market_thread = std::thread([&] { binance_usdm_market->run(ExternalStopToken(stopping)); });
 #else
         std::jthread binance_thread([&](std::stop_token token) { binance.run(token); });
-        std::jthread coinbase_thread([&](std::stop_token token) { coinbase.run(token); });
-        std::jthread bybit_thread([&](std::stop_token token) { bybit.run(token); });
-        std::jthread bybit_linear_thread([&](std::stop_token token) { bybit_linear.run(token); });
-        std::jthread deribit_thread([&](std::stop_token token) { deribit.run(token); });
-        std::jthread binance_usdm_depth_thread([&](std::stop_token token) { binance_usdm_depth.run(token); });
-        std::jthread binance_usdm_market_thread([&](std::stop_token token) { binance_usdm_market.run(token); });
+        std::jthread coinbase_thread;
+        std::jthread bybit_thread;
+        std::jthread bybit_linear_thread;
+        std::jthread deribit_thread;
+        std::jthread binance_usdm_depth_thread;
+        std::jthread binance_usdm_market_thread;
+        if (coinbase) coinbase_thread = std::jthread([&](std::stop_token token) { coinbase->run(token); });
+        if (bybit) bybit_thread = std::jthread([&](std::stop_token token) { bybit->run(token); });
+        if (bybit_linear) bybit_linear_thread = std::jthread([&](std::stop_token token) { bybit_linear->run(token); });
+        if (deribit) deribit_thread = std::jthread([&](std::stop_token token) { deribit->run(token); });
+        if (binance_usdm_depth) binance_usdm_depth_thread = std::jthread([&](std::stop_token token) { binance_usdm_depth->run(token); });
+        if (binance_usdm_market) binance_usdm_market_thread = std::jthread([&](std::stop_token token) { binance_usdm_market->run(token); });
 #endif
 
         std::vector<ExternalVenueEvent> causal_spot_batch(
@@ -1412,6 +1469,31 @@ int main(int argc, char** argv) {
                 continue;
             }
             last_full_status_publish_ns = now_mono;
+            const auto binance_status = binance.snapshot();
+            const auto coinbase_status = coinbase ? coinbase->snapshot() : ExternalWsSnapshot{};
+            const auto bybit_status = bybit ? bybit->snapshot() : ExternalWsSnapshot{};
+            const auto bybit_linear_status = bybit_linear ? bybit_linear->snapshot() : ExternalWsSnapshot{};
+            const auto deribit_status = deribit ? deribit->snapshot() : ExternalWsSnapshot{};
+            const auto binance_usdm_depth_status = binance_usdm_depth ? binance_usdm_depth->snapshot() : ExternalWsSnapshot{};
+            const auto binance_usdm_market_status = binance_usdm_market ? binance_usdm_market->snapshot() : ExternalWsSnapshot{};
+            if (asset != "BTC") {
+                state.on_transport_heartbeat(
+                    VenueId::BinanceSpot, binance_status.connection_epoch,
+                    binance_status.last_receive_monotonic_ns,
+                    binance_status.healthy != 0);
+                if (coinbase_enabled) {
+                    state.on_transport_heartbeat(
+                        VenueId::CoinbaseSpot, coinbase_status.connection_epoch,
+                        coinbase_status.last_receive_monotonic_ns,
+                        coinbase_status.healthy != 0);
+                }
+                if (bybit_spot_enabled) {
+                    state.on_transport_heartbeat(
+                        VenueId::BybitSpot, bybit_status.connection_epoch,
+                        bybit_status.last_receive_monotonic_ns,
+                        bybit_status.healthy != 0);
+                }
+            }
             const auto snapshot = state.snapshot(now_mono, policy);
             TapeRecorderSnapshot tape_status;
             if (normalized_tape != nullptr) {
@@ -1420,21 +1502,14 @@ int main(int argc, char** argv) {
                     now_mono, asset_handle, snapshot));
                 tape_status = normalized_tape->snapshot();
             }
-            const auto binance_status = binance.snapshot();
-            const auto coinbase_status = coinbase.snapshot();
-            const auto bybit_status = bybit.snapshot();
-            const auto bybit_linear_status = bybit_linear.snapshot();
-            const auto deribit_status = deribit.snapshot();
-            const auto binance_usdm_depth_status = binance_usdm_depth.snapshot();
-            const auto binance_usdm_market_status = binance_usdm_market.snapshot();
             json::array venues;
             venues.emplace_back(transport_json(binance_status, "BINANCE_SPOT"));
-            venues.emplace_back(transport_json(coinbase_status, "COINBASE_SPOT"));
-            venues.emplace_back(transport_json(bybit_status, "BYBIT_SPOT"));
-            venues.emplace_back(transport_json(bybit_linear_status, "BYBIT_LINEAR"));
-            venues.emplace_back(transport_json(deribit_status, "DERIBIT"));
-            venues.emplace_back(transport_json(binance_usdm_depth_status, "BINANCE_USDM_DEPTH"));
-            venues.emplace_back(transport_json(binance_usdm_market_status, "BINANCE_USDM_MARKET"));
+            venues.emplace_back(transport_json(coinbase_status, "COINBASE_SPOT", coinbase_enabled));
+            venues.emplace_back(transport_json(bybit_status, "BYBIT_SPOT", bybit_spot_enabled));
+            venues.emplace_back(transport_json(bybit_linear_status, "BYBIT_LINEAR", bybit_linear_enabled));
+            venues.emplace_back(transport_json(deribit_status, "DERIBIT", deribit_enabled));
+            venues.emplace_back(transport_json(binance_usdm_depth_status, "BINANCE_USDM_DEPTH", binance_usdm_enabled));
+            venues.emplace_back(transport_json(binance_usdm_market_status, "BINANCE_USDM_MARKET", binance_usdm_enabled));
             atomic_write(output, {
                 {"schema", "polymarket_v7_external_venue_runtime_v1"},
                 {"timestamp_ns", wall_now_ns()},

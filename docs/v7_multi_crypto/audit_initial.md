@@ -48,3 +48,10 @@ No code from this worktree is deployed.
 3. Reuse the existing PM WebSocket/causal-book infrastructure for the new shadow path.
 4. Remove REST and receipt-file polling only in the new path; preserve frozen BTC behavior.
 5. Keep one coordinator, one execution owner and one canonical ledger writer.
+## Isolated implementation progress after the audit
+
+- The external venue runtime is now parameterized for six assets in the isolated worktree; the active BTC runtime remains untouched.
+- DOGE and BNB M5/M15 settlement contexts were added only after live Gamma rules verified Chainlink 60 s TWAP semantics and explicit token mappings.
+- The canonical model/source registries now index all six assets with new-risk authority still false.
+- DOGE and BNB public venue smokes were observed; unsupported optional venues can now be disabled explicitly instead of being replaced by BTC defaults.
+- A transport-freshness mode was added only for new lanes so an unchanged book is not declared stale solely because its price did not move. Frozen BTC retains the previous semantics.

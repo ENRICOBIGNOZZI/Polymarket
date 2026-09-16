@@ -20,7 +20,7 @@ DEFAULT_SETTLEMENT = ROOT / "config/v7_crypto_settlement_markets.json"
 
 EXPECTED_ASSETS = ("BTC", "ETH", "SOL", "XRP", "DOGE", "BNB")
 EXPECTED_HORIZONS = ("M5", "M15")
-REQUIRED_VENUES = ("binance_spot", "coinbase_spot")
+VERIFIED_VENUE_STATUSES = {"VERIFIED_EXISTING_REGISTRY", "VERIFIED_RUNTIME_SMOKE"}
 FROZEN_BTC_PROTOCOL_HASH = "8b463ef8f66cd07fa694cbb49e355b812eac8d4724c35f65bd3e6a3505719d96"
 
 
@@ -128,12 +128,13 @@ def capability_rows(
     rows: list[AssetCapability] = []
     for asset_row in assets_cfg["assets"]:
         asset = asset_row["asset"]
-        required_venues_verified = all(
-            isinstance(asset_row["venues"].get(venue), dict)
-            and asset_row["venues"][venue].get("status") == "VERIFIED_EXISTING_REGISTRY"
-            and bool(asset_row["venues"][venue].get("symbol"))
-            for venue in REQUIRED_VENUES
-        )
+        def venue_verified(name: str) -> bool:
+            row = asset_row["venues"].get(name)
+            return isinstance(row, dict) and bool(row.get("symbol"))                 and row.get("status") in VERIFIED_VENUE_STATUSES
+        # Binance is the primary lead source for the initial family. Coinbase is
+        # preferred confirmation, but Bybit is a valid explicit fallback for
+        # assets such as BNB where Coinbase is unavailable.
+        required_venues_verified = venue_verified("binance_spot")             and (venue_verified("coinbase_spot") or venue_verified("bybit_spot"))
         for horizon in EXPECTED_HORIZONS:
             hcfg = asset_row["horizons"][horizon]
             settlement = settlements.get((asset, horizon))
