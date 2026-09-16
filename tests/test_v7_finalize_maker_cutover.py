@@ -41,6 +41,23 @@ class FinalizerTests(unittest.TestCase):
             saved=json.loads((root/'control/maker_cutover_flat_proof.json').read_text())
             self.assertEqual(saved,out)
 
+    def test_killed_quarantined_runtime_is_valid_terminal_cutover_state(self):
+        with tempfile.TemporaryDirectory() as d:
+            root=Path(d);fixture(root)
+            p=root/'control/runtime_status.json';v=json.loads(p.read_text())
+            v['state']='killed';v['killed']=True;write(p,v)
+            out=cutover.finalize(root,SHA,NONCE,now_ms=123456)
+            self.assertEqual(out['state'],'MAKER_FLAT')
+            self.assertEqual(out['canonical_flat_proof']['runtime_state'],'killed')
+
+    def test_killed_label_without_kill_attestation_fails_closed(self):
+        with tempfile.TemporaryDirectory() as d:
+            root=Path(d);fixture(root)
+            p=root/'control/runtime_status.json';v=json.loads(p.read_text())
+            v['state']='killed';v['killed']=False;write(p,v)
+            with self.assertRaisesRegex(cutover.MakerCutoverError,'runtime_not_stopped_safe'):
+                cutover.finalize(root,SHA,NONCE)
+
     def test_active_maker_order_fails_closed(self):
         with tempfile.TemporaryDirectory() as d:
             root=Path(d);fixture(root)
