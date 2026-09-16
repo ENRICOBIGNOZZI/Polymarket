@@ -1,240 +1,1669 @@
 {
-  "annotations": {"list": []},
-  "editable": true,
+  "annotations": {
+    "list": []
+  },
+  "editable": false,
   "fiscalYearStartMonth": 0,
   "graphTooltip": 1,
   "id": null,
-  "links": [],
+  "links": [
+    {
+      "title": "Control Room",
+      "type": "link",
+      "url": "/d/polymarket-v7",
+      "includeVars": true,
+      "keepTime": true,
+      "targetBlank": false
+    },
+    {
+      "title": "Latency evidence",
+      "type": "link",
+      "url": "/d/polymarket-v7-latency",
+      "includeVars": true,
+      "keepTime": true,
+      "targetBlank": false
+    }
+  ],
   "liveNow": false,
   "panels": [
     {
-      "datasource": {"type": "prometheus", "uid": "prometheus-v7"},
-      "fieldConfig": {"defaults": {"mappings": [{"options": {"0": {"text": "UNHEALTHY"}, "1": {"text": "HEALTHY"}}, "type": "value"}], "thresholds": {"mode": "absolute", "steps": [{"color": "red", "value": null}, {"color": "green", "value": 1}]}}, "overrides": []},
-      "gridPos": {"h": 4, "w": 4, "x": 0, "y": 0},
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus-v7"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "mappings": [
+            {
+              "type": "special",
+              "options": {
+                "match": "null",
+                "result": {
+                  "text": "UNAVAILABLE",
+                  "color": "gray"
+                }
+              }
+            },
+            {
+              "type": "special",
+              "options": {
+                "match": "nan",
+                "result": {
+                  "text": "UNAVAILABLE",
+                  "color": "gray"
+                }
+              }
+            }
+          ],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "red",
+                "value": null
+              },
+              {
+                "color": "green",
+                "value": 1
+              }
+            ]
+          },
+          "noValue": "UNAVAILABLE"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 4,
+        "w": 4,
+        "x": 0,
+        "y": 0
+      },
       "id": 1,
-      "options": {"colorMode": "background", "graphMode": "none", "justifyMode": "auto", "orientation": "auto", "reduceOptions": {"calcs": ["lastNotNull"], "fields": "", "values": false}, "textMode": "auto", "wideLayout": true},
-      "targets": [{"expr": "polymarket_external_fair_present * polymarket_external_fair_oracle_healthy", "refId": "A"}],
+      "options": {
+        "colorMode": "background",
+        "graphMode": "none",
+        "justifyMode": "auto",
+        "orientation": "auto",
+        "reduceOptions": {
+          "calcs": [
+            "last"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "textMode": "auto",
+        "wideLayout": true
+      },
+      "targets": [
+        {
+          "expr": "(polymarket_external_fair_present{job=\"polymarket-v7\",instance=\"$instance\"} * polymarket_external_fair_oracle_healthy{job=\"polymarket-v7\",instance=\"$instance\"}) and on(job,instance) (polymarket_v7_exporter_snapshot_usable{job=\"polymarket-v7\",instance=\"$instance\"} == 1) and on(job,instance) (up{job=\"polymarket-v7\",instance=\"$instance\"} == 1)",
+          "refId": "A",
+          "instant": true,
+          "range": false,
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus-v7"
+          }
+        }
+      ],
       "title": "RTDS Oracle Data Plane",
       "type": "stat"
     },
     {
-      "datasource": {"type": "prometheus", "uid": "prometheus-v7"},
-      "fieldConfig": {"defaults": {"mappings": [{"options": {"0": {"text": "EXECUTION"}, "1": {"text": "SHADOW / ZERO AUTH"}}, "type": "value"}]}, "overrides": []},
-      "gridPos": {"h": 4, "w": 4, "x": 4, "y": 0},
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus-v7"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "mappings": [
+            {
+              "type": "special",
+              "options": {
+                "match": "null",
+                "result": {
+                  "text": "UNAVAILABLE",
+                  "color": "gray"
+                }
+              }
+            },
+            {
+              "type": "special",
+              "options": {
+                "match": "nan",
+                "result": {
+                  "text": "UNAVAILABLE",
+                  "color": "gray"
+                }
+              }
+            },
+            {
+              "type": "value",
+              "options": {
+                "1": {
+                  "text": "ZERO AUTHORITY",
+                  "color": "green"
+                },
+                "0": {
+                  "text": "INSPECT AUTHORITY",
+                  "color": "red"
+                }
+              }
+            }
+          ],
+          "noValue": "UNAVAILABLE"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 4,
+        "w": 4,
+        "x": 4,
+        "y": 0
+      },
       "id": 2,
-      "options": {"colorMode": "value", "graphMode": "none", "justifyMode": "auto", "orientation": "auto", "reduceOptions": {"calcs": ["lastNotNull"], "fields": "", "values": false}, "textMode": "auto", "wideLayout": true},
-      "targets": [{"expr": "polymarket_external_fair_shadow_zero_authority", "refId": "A"}],
-      "title": "Execution Authority (must be ZERO)",
+      "options": {
+        "colorMode": "value",
+        "graphMode": "none",
+        "justifyMode": "auto",
+        "orientation": "auto",
+        "reduceOptions": {
+          "calcs": [
+            "last"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "textMode": "auto",
+        "wideLayout": true
+      },
+      "targets": [
+        {
+          "expr": "(polymarket_external_fair_shadow_zero_authority{job=\"polymarket-v7\",instance=\"$instance\"}) and on(job,instance) (polymarket_v7_exporter_snapshot_usable{job=\"polymarket-v7\",instance=\"$instance\"} == 1) and on(job,instance) (up{job=\"polymarket-v7\",instance=\"$instance\"} == 1)",
+          "refId": "A",
+          "instant": true,
+          "range": false,
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus-v7"
+          }
+        }
+      ],
+      "title": "Zero execution authority flag",
       "type": "stat"
     },
     {
-      "datasource": {"type": "prometheus", "uid": "prometheus-v7"},
-      "fieldConfig": {"defaults": {"unit": "s"}, "overrides": []},
-      "gridPos": {"h": 4, "w": 4, "x": 8, "y": 0},
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus-v7"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s",
+          "noValue": "UNAVAILABLE",
+          "mappings": [
+            {
+              "type": "special",
+              "options": {
+                "match": "null",
+                "result": {
+                  "text": "UNAVAILABLE",
+                  "color": "gray"
+                }
+              }
+            },
+            {
+              "type": "special",
+              "options": {
+                "match": "nan",
+                "result": {
+                  "text": "UNAVAILABLE",
+                  "color": "gray"
+                }
+              }
+            }
+          ]
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 4,
+        "w": 4,
+        "x": 8,
+        "y": 0
+      },
       "id": 3,
-      "options": {"colorMode": "value", "graphMode": "area", "justifyMode": "auto", "orientation": "auto", "reduceOptions": {"calcs": ["lastNotNull"], "fields": "", "values": false}, "textMode": "auto", "wideLayout": true},
-      "targets": [{"expr": "polymarket_external_fair_tte_seconds", "refId": "A"}],
+      "options": {
+        "colorMode": "value",
+        "graphMode": "none",
+        "justifyMode": "auto",
+        "orientation": "auto",
+        "reduceOptions": {
+          "calcs": [
+            "last"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "textMode": "auto",
+        "wideLayout": true
+      },
+      "targets": [
+        {
+          "expr": "(polymarket_external_fair_tte_seconds{job=\"polymarket-v7\",instance=\"$instance\"}) and on(job,instance) (polymarket_v7_exporter_snapshot_usable{job=\"polymarket-v7\",instance=\"$instance\"} == 1) and on(job,instance) (up{job=\"polymarket-v7\",instance=\"$instance\"} == 1)",
+          "refId": "A",
+          "instant": true,
+          "range": false,
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus-v7"
+          }
+        }
+      ],
       "title": "Time to Expiry",
       "type": "stat"
     },
     {
-      "datasource": {"type": "prometheus", "uid": "prometheus-v7"},
-      "fieldConfig": {"defaults": {}, "overrides": []},
-      "gridPos": {"h": 4, "w": 4, "x": 12, "y": 0},
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus-v7"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "noValue": "UNAVAILABLE",
+          "mappings": [
+            {
+              "type": "special",
+              "options": {
+                "match": "null",
+                "result": {
+                  "text": "UNAVAILABLE",
+                  "color": "gray"
+                }
+              }
+            },
+            {
+              "type": "special",
+              "options": {
+                "match": "nan",
+                "result": {
+                  "text": "UNAVAILABLE",
+                  "color": "gray"
+                }
+              }
+            }
+          ]
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 4,
+        "w": 4,
+        "x": 12,
+        "y": 0
+      },
       "id": 4,
-      "options": {"colorMode": "value", "graphMode": "none", "justifyMode": "auto", "orientation": "auto", "reduceOptions": {"calcs": ["lastNotNull"], "fields": "", "values": false}, "textMode": "auto", "wideLayout": true},
-      "targets": [{"expr": "polymarket_external_fair_healthy_venue_count", "refId": "A"}],
+      "options": {
+        "colorMode": "value",
+        "graphMode": "none",
+        "justifyMode": "auto",
+        "orientation": "auto",
+        "reduceOptions": {
+          "calcs": [
+            "last"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "textMode": "auto",
+        "wideLayout": true
+      },
+      "targets": [
+        {
+          "expr": "(polymarket_external_fair_healthy_venue_count{job=\"polymarket-v7\",instance=\"$instance\"}) and on(job,instance) (polymarket_v7_exporter_snapshot_usable{job=\"polymarket-v7\",instance=\"$instance\"} == 1) and on(job,instance) (up{job=\"polymarket-v7\",instance=\"$instance\"} == 1)",
+          "refId": "A",
+          "instant": true,
+          "range": false,
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus-v7"
+          }
+        }
+      ],
       "title": "Healthy Venues",
       "type": "stat"
     },
     {
-      "datasource": {"type": "prometheus", "uid": "prometheus-v7"},
-      "fieldConfig": {"defaults": {"unit": "decbytes"}, "overrides": []},
-      "gridPos": {"h": 4, "w": 4, "x": 16, "y": 0},
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus-v7"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "decbytes",
+          "noValue": "UNAVAILABLE",
+          "mappings": [
+            {
+              "type": "special",
+              "options": {
+                "match": "null",
+                "result": {
+                  "text": "UNAVAILABLE",
+                  "color": "gray"
+                }
+              }
+            },
+            {
+              "type": "special",
+              "options": {
+                "match": "nan",
+                "result": {
+                  "text": "UNAVAILABLE",
+                  "color": "gray"
+                }
+              }
+            }
+          ]
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 4,
+        "w": 4,
+        "x": 16,
+        "y": 0
+      },
       "id": 5,
-      "options": {"colorMode": "value", "graphMode": "area", "justifyMode": "auto", "orientation": "auto", "reduceOptions": {"calcs": ["lastNotNull"], "fields": "", "values": false}, "textMode": "auto", "wideLayout": true},
-      "targets": [{"expr": "polymarket_external_fair_blockers", "refId": "A"}],
+      "options": {
+        "colorMode": "value",
+        "graphMode": "none",
+        "justifyMode": "auto",
+        "orientation": "auto",
+        "reduceOptions": {
+          "calcs": [
+            "last"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "textMode": "auto",
+        "wideLayout": true
+      },
+      "targets": [
+        {
+          "expr": "(polymarket_external_fair_blockers{job=\"polymarket-v7\",instance=\"$instance\"}) and on(job,instance) (polymarket_v7_exporter_snapshot_usable{job=\"polymarket-v7\",instance=\"$instance\"} == 1) and on(job,instance) (up{job=\"polymarket-v7\",instance=\"$instance\"} == 1)",
+          "refId": "A",
+          "instant": true,
+          "range": false,
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus-v7"
+          }
+        }
+      ],
       "title": "Remaining Blockers",
       "type": "stat"
     },
     {
-      "datasource": {"type": "prometheus", "uid": "prometheus-v7"},
-      "fieldConfig": {"defaults": {"mappings": [{"options": {"0": {"text": "STOPPED"}, "1": {"text": "COLLECTING"}}, "type": "value"}], "thresholds": {"mode": "absolute", "steps": [{"color": "red", "value": null}, {"color": "green", "value": 1}]}}, "overrides": []},
-      "gridPos": {"h": 4, "w": 4, "x": 20, "y": 0},
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus-v7"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "mappings": [
+            {
+              "type": "special",
+              "options": {
+                "match": "null",
+                "result": {
+                  "text": "UNAVAILABLE",
+                  "color": "gray"
+                }
+              }
+            },
+            {
+              "type": "special",
+              "options": {
+                "match": "nan",
+                "result": {
+                  "text": "UNAVAILABLE",
+                  "color": "gray"
+                }
+              }
+            }
+          ],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "red",
+                "value": null
+              },
+              {
+                "color": "green",
+                "value": 1
+              }
+            ]
+          },
+          "noValue": "UNAVAILABLE"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 4,
+        "w": 4,
+        "x": 20,
+        "y": 0
+      },
       "id": 6,
-      "options": {"colorMode": "value", "graphMode": "area", "justifyMode": "auto", "orientation": "auto", "reduceOptions": {"calcs": ["lastNotNull"], "fields": "", "values": false}, "textMode": "auto", "wideLayout": true},
-      "targets": [{"expr": "polymarket_external_fair_counterfactual_collection_enabled", "refId": "A"}],
+      "options": {
+        "colorMode": "value",
+        "graphMode": "none",
+        "justifyMode": "auto",
+        "orientation": "auto",
+        "reduceOptions": {
+          "calcs": [
+            "last"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "textMode": "auto",
+        "wideLayout": true
+      },
+      "targets": [
+        {
+          "expr": "(polymarket_external_fair_counterfactual_collection_enabled{job=\"polymarket-v7\",instance=\"$instance\"}) and on(job,instance) (polymarket_v7_exporter_snapshot_usable{job=\"polymarket-v7\",instance=\"$instance\"} == 1) and on(job,instance) (up{job=\"polymarket-v7\",instance=\"$instance\"} == 1)",
+          "refId": "A",
+          "instant": true,
+          "range": false,
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus-v7"
+          }
+        }
+      ],
       "title": "Evidence Collector (non-executing)",
       "type": "stat"
     },
     {
-      "datasource": {"type": "prometheus", "uid": "prometheus-v7"},
-      "fieldConfig": {"defaults": {"unit": "percentunit", "min": 0, "max": 1}, "overrides": []},
-      "gridPos": {"h": 8, "w": 12, "x": 0, "y": 4},
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus-v7"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percentunit",
+          "min": 0,
+          "max": 1,
+          "noValue": "UNAVAILABLE",
+          "mappings": [
+            {
+              "type": "special",
+              "options": {
+                "match": "null",
+                "result": {
+                  "text": "UNAVAILABLE",
+                  "color": "gray"
+                }
+              }
+            },
+            {
+              "type": "special",
+              "options": {
+                "match": "nan",
+                "result": {
+                  "text": "UNAVAILABLE",
+                  "color": "gray"
+                }
+              }
+            }
+          ],
+          "custom": {
+            "spanNulls": false
+          }
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 4
+      },
       "id": 7,
-      "options": {"legend": {"calcs": [], "displayMode": "list", "placement": "bottom", "showLegend": true}, "tooltip": {"mode": "multi", "sort": "none"}},
+      "options": {
+        "legend": {
+          "calcs": [],
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "none"
+        }
+      },
       "targets": [
-        {"expr": "polymarket_external_fair_yes", "legendFormat": "fair yes", "refId": "A"},
-        {"expr": "polymarket_external_fair_yes_lower", "legendFormat": "lower", "refId": "B"},
-        {"expr": "polymarket_external_fair_yes_upper", "legendFormat": "upper", "refId": "C"},
-        {"expr": "polymarket_external_fair_structural_probability", "legendFormat": "structural", "refId": "D"},
-        {"expr": "polymarket_external_fair_pm_mid", "legendFormat": "PM mid", "refId": "E"}
+        {
+          "expr": "(polymarket_external_fair_yes{job=\"polymarket-v7\",instance=\"$instance\"}) * on(job,instance) group_left(run_id) polymarket_v7_runtime_identity_info{job=\"polymarket-v7\",instance=\"$instance\"} and on(job,instance) (polymarket_v7_exporter_snapshot_usable{job=\"polymarket-v7\",instance=\"$instance\"} == 1) and on(job,instance) (up{job=\"polymarket-v7\",instance=\"$instance\"} == 1)",
+          "legendFormat": "fair yes",
+          "refId": "A",
+          "instant": false,
+          "range": true,
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus-v7"
+          }
+        },
+        {
+          "expr": "(polymarket_external_fair_yes_lower{job=\"polymarket-v7\",instance=\"$instance\"}) * on(job,instance) group_left(run_id) polymarket_v7_runtime_identity_info{job=\"polymarket-v7\",instance=\"$instance\"} and on(job,instance) (polymarket_v7_exporter_snapshot_usable{job=\"polymarket-v7\",instance=\"$instance\"} == 1) and on(job,instance) (up{job=\"polymarket-v7\",instance=\"$instance\"} == 1)",
+          "legendFormat": "lower",
+          "refId": "B",
+          "instant": false,
+          "range": true,
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus-v7"
+          }
+        },
+        {
+          "expr": "(polymarket_external_fair_yes_upper{job=\"polymarket-v7\",instance=\"$instance\"}) * on(job,instance) group_left(run_id) polymarket_v7_runtime_identity_info{job=\"polymarket-v7\",instance=\"$instance\"} and on(job,instance) (polymarket_v7_exporter_snapshot_usable{job=\"polymarket-v7\",instance=\"$instance\"} == 1) and on(job,instance) (up{job=\"polymarket-v7\",instance=\"$instance\"} == 1)",
+          "legendFormat": "upper",
+          "refId": "C",
+          "instant": false,
+          "range": true,
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus-v7"
+          }
+        },
+        {
+          "expr": "(polymarket_external_fair_structural_probability{job=\"polymarket-v7\",instance=\"$instance\"}) * on(job,instance) group_left(run_id) polymarket_v7_runtime_identity_info{job=\"polymarket-v7\",instance=\"$instance\"} and on(job,instance) (polymarket_v7_exporter_snapshot_usable{job=\"polymarket-v7\",instance=\"$instance\"} == 1) and on(job,instance) (up{job=\"polymarket-v7\",instance=\"$instance\"} == 1)",
+          "legendFormat": "structural",
+          "refId": "D",
+          "instant": false,
+          "range": true,
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus-v7"
+          }
+        },
+        {
+          "expr": "(polymarket_external_fair_pm_mid{job=\"polymarket-v7\",instance=\"$instance\"}) * on(job,instance) group_left(run_id) polymarket_v7_runtime_identity_info{job=\"polymarket-v7\",instance=\"$instance\"} and on(job,instance) (polymarket_v7_exporter_snapshot_usable{job=\"polymarket-v7\",instance=\"$instance\"} == 1) and on(job,instance) (up{job=\"polymarket-v7\",instance=\"$instance\"} == 1)",
+          "legendFormat": "PM mid",
+          "refId": "E",
+          "instant": false,
+          "range": true,
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus-v7"
+          }
+        }
       ],
       "title": "Settlement Fair vs Polymarket",
       "type": "timeseries"
     },
     {
-      "datasource": {"type": "prometheus", "uid": "prometheus-v7"},
-      "fieldConfig": {"defaults": {}, "overrides": []},
-      "gridPos": {"h": 8, "w": 12, "x": 12, "y": 4},
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus-v7"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "noValue": "UNAVAILABLE",
+          "mappings": [
+            {
+              "type": "special",
+              "options": {
+                "match": "null",
+                "result": {
+                  "text": "UNAVAILABLE",
+                  "color": "gray"
+                }
+              }
+            },
+            {
+              "type": "special",
+              "options": {
+                "match": "nan",
+                "result": {
+                  "text": "UNAVAILABLE",
+                  "color": "gray"
+                }
+              }
+            }
+          ],
+          "custom": {
+            "spanNulls": false
+          }
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 4
+      },
       "id": 8,
-      "options": {"legend": {"calcs": [], "displayMode": "list", "placement": "bottom", "showLegend": true}, "tooltip": {"mode": "multi", "sort": "none"}},
+      "options": {
+        "legend": {
+          "calcs": [],
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "none"
+        }
+      },
       "targets": [
-        {"expr": "polymarket_external_fair_reference_value", "legendFormat": "opening reference", "refId": "A"},
-        {"expr": "polymarket_external_fair_oracle_value", "legendFormat": "settlement oracle", "refId": "B"},
-        {"expr": "polymarket_external_fair_venue_price", "legendFormat": "{{venue}}", "refId": "C"}
+        {
+          "expr": "(polymarket_external_fair_reference_value{job=\"polymarket-v7\",instance=\"$instance\"}) * on(job,instance) group_left(run_id) polymarket_v7_runtime_identity_info{job=\"polymarket-v7\",instance=\"$instance\"} and on(job,instance) (polymarket_v7_exporter_snapshot_usable{job=\"polymarket-v7\",instance=\"$instance\"} == 1) and on(job,instance) (up{job=\"polymarket-v7\",instance=\"$instance\"} == 1)",
+          "legendFormat": "opening reference",
+          "refId": "A",
+          "instant": false,
+          "range": true,
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus-v7"
+          }
+        },
+        {
+          "expr": "(polymarket_external_fair_oracle_value{job=\"polymarket-v7\",instance=\"$instance\"}) * on(job,instance) group_left(run_id) polymarket_v7_runtime_identity_info{job=\"polymarket-v7\",instance=\"$instance\"} and on(job,instance) (polymarket_v7_exporter_snapshot_usable{job=\"polymarket-v7\",instance=\"$instance\"} == 1) and on(job,instance) (up{job=\"polymarket-v7\",instance=\"$instance\"} == 1)",
+          "legendFormat": "settlement oracle",
+          "refId": "B",
+          "instant": false,
+          "range": true,
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus-v7"
+          }
+        },
+        {
+          "expr": "(polymarket_external_fair_venue_price{job=\"polymarket-v7\",instance=\"$instance\"}) * on(job,instance) group_left(run_id) polymarket_v7_runtime_identity_info{job=\"polymarket-v7\",instance=\"$instance\"} and on(job,instance) (polymarket_v7_exporter_snapshot_usable{job=\"polymarket-v7\",instance=\"$instance\"} == 1) and on(job,instance) (up{job=\"polymarket-v7\",instance=\"$instance\"} == 1)",
+          "legendFormat": "{{venue}}",
+          "refId": "C",
+          "instant": false,
+          "range": true,
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus-v7"
+          }
+        }
       ],
       "title": "Reference / Oracle / External Spot",
       "type": "timeseries"
     },
     {
-      "datasource": {"type": "prometheus", "uid": "prometheus-v7"},
-      "fieldConfig": {"defaults": {"unit": "ms"}, "overrides": []},
-      "gridPos": {"h": 7, "w": 8, "x": 0, "y": 12},
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus-v7"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "ms",
+          "noValue": "UNAVAILABLE",
+          "mappings": [
+            {
+              "type": "special",
+              "options": {
+                "match": "null",
+                "result": {
+                  "text": "UNAVAILABLE",
+                  "color": "gray"
+                }
+              }
+            },
+            {
+              "type": "special",
+              "options": {
+                "match": "nan",
+                "result": {
+                  "text": "UNAVAILABLE",
+                  "color": "gray"
+                }
+              }
+            }
+          ],
+          "custom": {
+            "spanNulls": false
+          }
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 7,
+        "w": 8,
+        "x": 0,
+        "y": 12
+      },
       "id": 9,
-      "options": {"legend": {"calcs": [], "displayMode": "table", "placement": "bottom", "showLegend": true}, "tooltip": {"mode": "multi", "sort": "none"}},
-      "targets": [{"expr": "polymarket_external_fair_latency_ms", "legendFormat": "{{stage}} {{quantile}}", "refId": "A"}],
+      "options": {
+        "legend": {
+          "calcs": [],
+          "displayMode": "table",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "none"
+        }
+      },
+      "targets": [
+        {
+          "expr": "(polymarket_external_fair_latency_ms{job=\"polymarket-v7\",instance=\"$instance\"}) * on(job,instance) group_left(run_id) polymarket_v7_runtime_identity_info{job=\"polymarket-v7\",instance=\"$instance\"} and on(job,instance) (polymarket_v7_exporter_snapshot_usable{job=\"polymarket-v7\",instance=\"$instance\"} == 1) and on(job,instance) (up{job=\"polymarket-v7\",instance=\"$instance\"} == 1)",
+          "legendFormat": "{{stage}} {{quantile}}",
+          "refId": "A",
+          "instant": false,
+          "range": true,
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus-v7"
+          }
+        }
+      ],
       "title": "External-Fair Latency Chain",
       "type": "timeseries"
     },
     {
-      "datasource": {"type": "prometheus", "uid": "prometheus-v7"},
-      "fieldConfig": {"defaults": {}, "overrides": []},
-      "gridPos": {"h": 7, "w": 8, "x": 8, "y": 12},
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus-v7"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "noValue": "UNAVAILABLE",
+          "mappings": [
+            {
+              "type": "special",
+              "options": {
+                "match": "null",
+                "result": {
+                  "text": "UNAVAILABLE",
+                  "color": "gray"
+                }
+              }
+            },
+            {
+              "type": "special",
+              "options": {
+                "match": "nan",
+                "result": {
+                  "text": "UNAVAILABLE",
+                  "color": "gray"
+                }
+              }
+            }
+          ],
+          "custom": {
+            "spanNulls": false
+          }
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 7,
+        "w": 8,
+        "x": 8,
+        "y": 12
+      },
       "id": 10,
-      "options": {"legend": {"calcs": [], "displayMode": "table", "placement": "bottom", "showLegend": true}, "tooltip": {"mode": "multi", "sort": "none"}},
+      "options": {
+        "legend": {
+          "calcs": [],
+          "displayMode": "table",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "none"
+        }
+      },
       "targets": [
-        {"expr": "polymarket_external_fair_actions_total", "legendFormat": "execution {{action}}", "refId": "A"},
-        {"expr": "polymarket_external_fair_counterfactual_actions_total", "legendFormat": "shadow {{action}}", "refId": "B"}
+        {
+          "expr": "(polymarket_external_fair_actions_total{job=\"polymarket-v7\",instance=\"$instance\"}) * on(job,instance) group_left(run_id) polymarket_v7_runtime_identity_info{job=\"polymarket-v7\",instance=\"$instance\"} and on(job,instance) (polymarket_v7_exporter_snapshot_usable{job=\"polymarket-v7\",instance=\"$instance\"} == 1) and on(job,instance) (up{job=\"polymarket-v7\",instance=\"$instance\"} == 1)",
+          "legendFormat": "execution {{action}}",
+          "refId": "A",
+          "instant": false,
+          "range": true,
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus-v7"
+          }
+        },
+        {
+          "expr": "(polymarket_external_fair_counterfactual_actions_total{job=\"polymarket-v7\",instance=\"$instance\"}) * on(job,instance) group_left(run_id) polymarket_v7_runtime_identity_info{job=\"polymarket-v7\",instance=\"$instance\"} and on(job,instance) (polymarket_v7_exporter_snapshot_usable{job=\"polymarket-v7\",instance=\"$instance\"} == 1) and on(job,instance) (up{job=\"polymarket-v7\",instance=\"$instance\"} == 1)",
+          "legendFormat": "shadow {{action}}",
+          "refId": "B",
+          "instant": false,
+          "range": true,
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus-v7"
+          }
+        }
       ],
       "title": "Orders (must stay zero) / Counterfactual Decisions",
       "type": "timeseries"
     },
     {
-      "datasource": {"type": "prometheus", "uid": "prometheus-v7"},
-      "fieldConfig": {"defaults": {}, "overrides": []},
-      "gridPos": {"h": 7, "w": 8, "x": 16, "y": 12},
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus-v7"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "noValue": "UNAVAILABLE",
+          "mappings": [
+            {
+              "type": "special",
+              "options": {
+                "match": "null",
+                "result": {
+                  "text": "UNAVAILABLE",
+                  "color": "gray"
+                }
+              }
+            },
+            {
+              "type": "special",
+              "options": {
+                "match": "nan",
+                "result": {
+                  "text": "UNAVAILABLE",
+                  "color": "gray"
+                }
+              }
+            }
+          ],
+          "custom": {
+            "spanNulls": false
+          }
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 7,
+        "w": 8,
+        "x": 16,
+        "y": 12
+      },
       "id": 11,
-      "options": {"legend": {"calcs": [], "displayMode": "table", "placement": "bottom", "showLegend": true}, "tooltip": {"mode": "multi", "sort": "none"}},
-      "targets": [{"expr": "polymarket_external_fair_cancel_reason_total", "legendFormat": "{{reason}}", "refId": "A"}],
+      "options": {
+        "legend": {
+          "calcs": [],
+          "displayMode": "table",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "none"
+        }
+      },
+      "targets": [
+        {
+          "expr": "(polymarket_external_fair_cancel_reason_total{job=\"polymarket-v7\",instance=\"$instance\"}) * on(job,instance) group_left(run_id) polymarket_v7_runtime_identity_info{job=\"polymarket-v7\",instance=\"$instance\"} and on(job,instance) (polymarket_v7_exporter_snapshot_usable{job=\"polymarket-v7\",instance=\"$instance\"} == 1) and on(job,instance) (up{job=\"polymarket-v7\",instance=\"$instance\"} == 1)",
+          "legendFormat": "{{reason}}",
+          "refId": "A",
+          "instant": false,
+          "range": true,
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus-v7"
+          }
+        }
+      ],
       "title": "Critical Cancel Reasons",
       "type": "timeseries"
     },
     {
-      "datasource": {"type": "prometheus", "uid": "prometheus-v7"},
-      "fieldConfig": {"defaults": {}, "overrides": []},
-      "gridPos": {"h": 7, "w": 8, "x": 0, "y": 19},
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus-v7"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "noValue": "UNAVAILABLE",
+          "mappings": [
+            {
+              "type": "special",
+              "options": {
+                "match": "null",
+                "result": {
+                  "text": "UNAVAILABLE",
+                  "color": "gray"
+                }
+              }
+            },
+            {
+              "type": "special",
+              "options": {
+                "match": "nan",
+                "result": {
+                  "text": "UNAVAILABLE",
+                  "color": "gray"
+                }
+              }
+            }
+          ],
+          "custom": {
+            "spanNulls": false
+          }
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 7,
+        "w": 8,
+        "x": 0,
+        "y": 19
+      },
       "id": 12,
-      "options": {"legend": {"calcs": [], "displayMode": "list", "placement": "bottom", "showLegend": true}, "tooltip": {"mode": "multi", "sort": "none"}},
+      "options": {
+        "legend": {
+          "calcs": [],
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "none"
+        }
+      },
       "targets": [
-        {"expr": "polymarket_external_fair_maker_robust_ev", "legendFormat": "maker robust EV", "refId": "A"},
-        {"expr": "polymarket_external_fair_taker_robust_ev", "legendFormat": "taker robust EV", "refId": "B"},
-        {"expr": "polymarket_external_fair_realized_pnl", "legendFormat": "realized PnL", "refId": "C"},
-        {"expr": "polymarket_external_fair_terminal_pnl", "legendFormat": "terminal PnL", "refId": "D"},
-        {"expr": "polymarket_external_fair_counterfactual_realized_pnl", "legendFormat": "shadow realized PnL", "refId": "E"},
-        {"expr": "polymarket_external_fair_counterfactual_equity", "legendFormat": "shadow equity", "refId": "F"}
+        {
+          "expr": "(polymarket_external_fair_realized_pnl{job=\"polymarket-v7\",instance=\"$instance\"}) * on(job,instance) group_left(run_id) polymarket_v7_runtime_identity_info{job=\"polymarket-v7\",instance=\"$instance\"} and on(job,instance) (polymarket_v7_exporter_snapshot_usable{job=\"polymarket-v7\",instance=\"$instance\"} == 1) and on(job,instance) (up{job=\"polymarket-v7\",instance=\"$instance\"} == 1)",
+          "legendFormat": "realized PnL",
+          "refId": "C",
+          "instant": false,
+          "range": true,
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus-v7"
+          }
+        },
+        {
+          "expr": "(polymarket_external_fair_terminal_pnl{job=\"polymarket-v7\",instance=\"$instance\"}) * on(job,instance) group_left(run_id) polymarket_v7_runtime_identity_info{job=\"polymarket-v7\",instance=\"$instance\"} and on(job,instance) (polymarket_v7_exporter_snapshot_usable{job=\"polymarket-v7\",instance=\"$instance\"} == 1) and on(job,instance) (up{job=\"polymarket-v7\",instance=\"$instance\"} == 1)",
+          "legendFormat": "terminal PnL",
+          "refId": "D",
+          "instant": false,
+          "range": true,
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus-v7"
+          }
+        },
+        {
+          "expr": "(polymarket_external_fair_counterfactual_realized_pnl{job=\"polymarket-v7\",instance=\"$instance\"}) * on(job,instance) group_left(run_id) polymarket_v7_runtime_identity_info{job=\"polymarket-v7\",instance=\"$instance\"} and on(job,instance) (polymarket_v7_exporter_snapshot_usable{job=\"polymarket-v7\",instance=\"$instance\"} == 1) and on(job,instance) (up{job=\"polymarket-v7\",instance=\"$instance\"} == 1)",
+          "legendFormat": "shadow realized PnL",
+          "refId": "E",
+          "instant": false,
+          "range": true,
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus-v7"
+          }
+        }
       ],
-      "title": "Economics",
-      "type": "timeseries"
+      "title": "PAPER PnL by evidence source",
+      "type": "timeseries",
+      "description": "These PnL sources are not additive or verified account performance. Equity and per-share EV are excluded from this axis."
     },
     {
-      "datasource": {"type": "prometheus", "uid": "prometheus-v7"},
-      "fieldConfig": {"defaults": {}, "overrides": []},
-      "gridPos": {"h": 7, "w": 8, "x": 8, "y": 19},
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus-v7"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "noValue": "UNAVAILABLE",
+          "mappings": [
+            {
+              "type": "special",
+              "options": {
+                "match": "null",
+                "result": {
+                  "text": "UNAVAILABLE",
+                  "color": "gray"
+                }
+              }
+            },
+            {
+              "type": "special",
+              "options": {
+                "match": "nan",
+                "result": {
+                  "text": "UNAVAILABLE",
+                  "color": "gray"
+                }
+              }
+            }
+          ],
+          "custom": {
+            "spanNulls": false
+          }
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 7,
+        "w": 8,
+        "x": 8,
+        "y": 19
+      },
       "id": 13,
-      "options": {"legend": {"calcs": [], "displayMode": "list", "placement": "bottom", "showLegend": true}, "tooltip": {"mode": "multi", "sort": "none"}},
+      "options": {
+        "legend": {
+          "calcs": [],
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "none"
+        }
+      },
       "targets": [
-        {"expr": "polymarket_external_fair_model_log_loss", "legendFormat": "LogLoss", "refId": "A"},
-        {"expr": "polymarket_external_fair_model_brier", "legendFormat": "Brier", "refId": "B"},
-        {"expr": "polymarket_external_fair_model_ece", "legendFormat": "ECE", "refId": "C"},
-        {"expr": "polymarket_external_fair_model_drift_score", "legendFormat": "drift", "refId": "D"}
+        {
+          "expr": "(polymarket_external_fair_model_log_loss{job=\"polymarket-v7\",instance=\"$instance\"}) * on(job,instance) group_left(run_id) polymarket_v7_runtime_identity_info{job=\"polymarket-v7\",instance=\"$instance\"} and on(job,instance) (polymarket_v7_exporter_snapshot_usable{job=\"polymarket-v7\",instance=\"$instance\"} == 1) and on(job,instance) (up{job=\"polymarket-v7\",instance=\"$instance\"} == 1)",
+          "legendFormat": "LogLoss",
+          "refId": "A",
+          "instant": false,
+          "range": true,
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus-v7"
+          }
+        },
+        {
+          "expr": "(polymarket_external_fair_model_brier{job=\"polymarket-v7\",instance=\"$instance\"}) * on(job,instance) group_left(run_id) polymarket_v7_runtime_identity_info{job=\"polymarket-v7\",instance=\"$instance\"} and on(job,instance) (polymarket_v7_exporter_snapshot_usable{job=\"polymarket-v7\",instance=\"$instance\"} == 1) and on(job,instance) (up{job=\"polymarket-v7\",instance=\"$instance\"} == 1)",
+          "legendFormat": "Brier",
+          "refId": "B",
+          "instant": false,
+          "range": true,
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus-v7"
+          }
+        },
+        {
+          "expr": "(polymarket_external_fair_model_ece{job=\"polymarket-v7\",instance=\"$instance\"}) * on(job,instance) group_left(run_id) polymarket_v7_runtime_identity_info{job=\"polymarket-v7\",instance=\"$instance\"} and on(job,instance) (polymarket_v7_exporter_snapshot_usable{job=\"polymarket-v7\",instance=\"$instance\"} == 1) and on(job,instance) (up{job=\"polymarket-v7\",instance=\"$instance\"} == 1)",
+          "legendFormat": "ECE",
+          "refId": "C",
+          "instant": false,
+          "range": true,
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus-v7"
+          }
+        },
+        {
+          "expr": "(polymarket_external_fair_model_drift_score{job=\"polymarket-v7\",instance=\"$instance\"}) * on(job,instance) group_left(run_id) polymarket_v7_runtime_identity_info{job=\"polymarket-v7\",instance=\"$instance\"} and on(job,instance) (polymarket_v7_exporter_snapshot_usable{job=\"polymarket-v7\",instance=\"$instance\"} == 1) and on(job,instance) (up{job=\"polymarket-v7\",instance=\"$instance\"} == 1)",
+          "legendFormat": "drift",
+          "refId": "D",
+          "instant": false,
+          "range": true,
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus-v7"
+          }
+        }
       ],
       "title": "Model Quality / Drift",
       "type": "timeseries"
     },
     {
-      "datasource": {"type": "prometheus", "uid": "prometheus-v7"},
-      "fieldConfig": {"defaults": {"unit": "ms"}, "overrides": []},
-      "gridPos": {"h": 7, "w": 8, "x": 16, "y": 19},
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus-v7"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "ms",
+          "noValue": "UNAVAILABLE",
+          "mappings": [
+            {
+              "type": "special",
+              "options": {
+                "match": "null",
+                "result": {
+                  "text": "UNAVAILABLE",
+                  "color": "gray"
+                }
+              }
+            },
+            {
+              "type": "special",
+              "options": {
+                "match": "nan",
+                "result": {
+                  "text": "UNAVAILABLE",
+                  "color": "gray"
+                }
+              }
+            }
+          ],
+          "custom": {
+            "spanNulls": false
+          }
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 7,
+        "w": 8,
+        "x": 16,
+        "y": 19
+      },
       "id": 14,
-      "options": {"legend": {"calcs": [], "displayMode": "list", "placement": "bottom", "showLegend": true}, "tooltip": {"mode": "multi", "sort": "none"}},
+      "options": {
+        "legend": {
+          "calcs": [],
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "none"
+        }
+      },
       "targets": [
-        {"expr": "polymarket_external_fair_cancel_latency_ms", "legendFormat": "cancel {{quantile}}", "refId": "A"},
-        {"expr": "polymarket_external_fair_stale_quote_exposure_ms", "legendFormat": "stale quote exposure", "refId": "B"}
+        {
+          "expr": "(polymarket_external_fair_cancel_latency_ms{job=\"polymarket-v7\",instance=\"$instance\"}) * on(job,instance) group_left(run_id) polymarket_v7_runtime_identity_info{job=\"polymarket-v7\",instance=\"$instance\"} and on(job,instance) (polymarket_v7_exporter_snapshot_usable{job=\"polymarket-v7\",instance=\"$instance\"} == 1) and on(job,instance) (up{job=\"polymarket-v7\",instance=\"$instance\"} == 1)",
+          "legendFormat": "cancel {{quantile}}",
+          "refId": "A",
+          "instant": false,
+          "range": true,
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus-v7"
+          }
+        },
+        {
+          "expr": "(polymarket_external_fair_stale_quote_exposure_ms{job=\"polymarket-v7\",instance=\"$instance\"}) * on(job,instance) group_left(run_id) polymarket_v7_runtime_identity_info{job=\"polymarket-v7\",instance=\"$instance\"} and on(job,instance) (polymarket_v7_exporter_snapshot_usable{job=\"polymarket-v7\",instance=\"$instance\"} == 1) and on(job,instance) (up{job=\"polymarket-v7\",instance=\"$instance\"} == 1)",
+          "legendFormat": "stale quote exposure",
+          "refId": "B",
+          "instant": false,
+          "range": true,
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus-v7"
+          }
+        }
       ],
       "title": "Cancel Latency / Toxic Exposure",
       "type": "timeseries"
     },
     {
-      "datasource": {"type": "prometheus", "uid": "prometheus-v7"},
-      "fieldConfig": {"defaults": {"unit": "bps"}, "overrides": []},
-      "gridPos": {"h": 7, "w": 8, "x": 0, "y": 26},
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus-v7"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "bps",
+          "noValue": "UNAVAILABLE",
+          "mappings": [
+            {
+              "type": "special",
+              "options": {
+                "match": "null",
+                "result": {
+                  "text": "UNAVAILABLE",
+                  "color": "gray"
+                }
+              }
+            },
+            {
+              "type": "special",
+              "options": {
+                "match": "nan",
+                "result": {
+                  "text": "UNAVAILABLE",
+                  "color": "gray"
+                }
+              }
+            }
+          ],
+          "custom": {
+            "spanNulls": false
+          }
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 7,
+        "w": 8,
+        "x": 0,
+        "y": 26
+      },
       "id": 15,
-      "options": {"legend": {"calcs": [], "displayMode": "table", "placement": "bottom", "showLegend": true}, "tooltip": {"mode": "multi", "sort": "none"}},
+      "options": {
+        "legend": {
+          "calcs": [],
+          "displayMode": "table",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "none"
+        }
+      },
       "targets": [
-        {"expr": "polymarket_external_fair_venue_dispersion_bps", "legendFormat": "cross-venue dispersion", "refId": "A"},
-        {"expr": "polymarket_external_fair_venue_basis_bps", "legendFormat": "{{venue}} basis", "refId": "B"}
+        {
+          "expr": "(polymarket_external_fair_venue_dispersion_bps{job=\"polymarket-v7\",instance=\"$instance\"}) * on(job,instance) group_left(run_id) polymarket_v7_runtime_identity_info{job=\"polymarket-v7\",instance=\"$instance\"} and on(job,instance) (polymarket_v7_exporter_snapshot_usable{job=\"polymarket-v7\",instance=\"$instance\"} == 1) and on(job,instance) (up{job=\"polymarket-v7\",instance=\"$instance\"} == 1)",
+          "legendFormat": "cross-venue dispersion",
+          "refId": "A",
+          "instant": false,
+          "range": true,
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus-v7"
+          }
+        },
+        {
+          "expr": "(polymarket_external_fair_venue_basis_bps{job=\"polymarket-v7\",instance=\"$instance\"}) * on(job,instance) group_left(run_id) polymarket_v7_runtime_identity_info{job=\"polymarket-v7\",instance=\"$instance\"} and on(job,instance) (polymarket_v7_exporter_snapshot_usable{job=\"polymarket-v7\",instance=\"$instance\"} == 1) and on(job,instance) (up{job=\"polymarket-v7\",instance=\"$instance\"} == 1)",
+          "legendFormat": "{{venue}} basis",
+          "refId": "B",
+          "instant": false,
+          "range": true,
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus-v7"
+          }
+        }
       ],
       "title": "Venue Disagreement / Basis",
       "type": "timeseries"
     },
     {
-      "datasource": {"type": "prometheus", "uid": "prometheus-v7"},
-      "fieldConfig": {"defaults": {"unit": "ms"}, "overrides": []},
-      "gridPos": {"h": 7, "w": 8, "x": 8, "y": 26},
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus-v7"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "ms",
+          "noValue": "UNAVAILABLE",
+          "mappings": [
+            {
+              "type": "special",
+              "options": {
+                "match": "null",
+                "result": {
+                  "text": "UNAVAILABLE",
+                  "color": "gray"
+                }
+              }
+            },
+            {
+              "type": "special",
+              "options": {
+                "match": "nan",
+                "result": {
+                  "text": "UNAVAILABLE",
+                  "color": "gray"
+                }
+              }
+            }
+          ],
+          "custom": {
+            "spanNulls": false
+          }
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 7,
+        "w": 8,
+        "x": 8,
+        "y": 26
+      },
       "id": 16,
-      "options": {"legend": {"calcs": [], "displayMode": "table", "placement": "bottom", "showLegend": true}, "tooltip": {"mode": "multi", "sort": "none"}},
+      "options": {
+        "legend": {
+          "calcs": [],
+          "displayMode": "table",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "none"
+        }
+      },
       "targets": [
-        {"expr": "polymarket_external_fair_venue_actionable_lead_ms", "legendFormat": "{{venue}} actionable", "refId": "A"},
-        {"expr": "polymarket_external_fair_venue_economic_lead_ms", "legendFormat": "{{venue}} economic", "refId": "B"}
+        {
+          "expr": "(polymarket_external_fair_venue_actionable_lead_ms{job=\"polymarket-v7\",instance=\"$instance\"}) * on(job,instance) group_left(run_id) polymarket_v7_runtime_identity_info{job=\"polymarket-v7\",instance=\"$instance\"} and on(job,instance) (polymarket_v7_exporter_snapshot_usable{job=\"polymarket-v7\",instance=\"$instance\"} == 1) and on(job,instance) (up{job=\"polymarket-v7\",instance=\"$instance\"} == 1)",
+          "legendFormat": "{{venue}} actionable",
+          "refId": "A",
+          "instant": false,
+          "range": true,
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus-v7"
+          }
+        },
+        {
+          "expr": "(polymarket_external_fair_venue_economic_lead_ms{job=\"polymarket-v7\",instance=\"$instance\"}) * on(job,instance) group_left(run_id) polymarket_v7_runtime_identity_info{job=\"polymarket-v7\",instance=\"$instance\"} and on(job,instance) (polymarket_v7_exporter_snapshot_usable{job=\"polymarket-v7\",instance=\"$instance\"} == 1) and on(job,instance) (up{job=\"polymarket-v7\",instance=\"$instance\"} == 1)",
+          "legendFormat": "{{venue}} economic",
+          "refId": "B",
+          "instant": false,
+          "range": true,
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus-v7"
+          }
+        }
       ],
       "title": "Economic vs Receive-Time Actionable Lead",
       "type": "timeseries"
     },
     {
-      "datasource": {"type": "prometheus", "uid": "prometheus-v7"},
-      "fieldConfig": {"defaults": {}, "overrides": []},
-      "gridPos": {"h": 7, "w": 8, "x": 16, "y": 26},
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus-v7"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "noValue": "UNAVAILABLE",
+          "mappings": [
+            {
+              "type": "special",
+              "options": {
+                "match": "null",
+                "result": {
+                  "text": "UNAVAILABLE",
+                  "color": "gray"
+                }
+              }
+            },
+            {
+              "type": "special",
+              "options": {
+                "match": "nan",
+                "result": {
+                  "text": "UNAVAILABLE",
+                  "color": "gray"
+                }
+              }
+            }
+          ],
+          "custom": {
+            "spanNulls": false
+          }
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 7,
+        "w": 8,
+        "x": 16,
+        "y": 26
+      },
       "id": 17,
-      "options": {"legend": {"calcs": [], "displayMode": "list", "placement": "bottom", "showLegend": true}, "tooltip": {"mode": "multi", "sort": "none"}},
+      "options": {
+        "legend": {
+          "calcs": [],
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "none"
+        }
+      },
       "targets": [
-        {"expr": "polymarket_external_fair_tape_accepted", "legendFormat": "accepted", "refId": "A"},
-        {"expr": "polymarket_external_fair_tape_written", "legendFormat": "written", "refId": "B"},
-        {"expr": "polymarket_external_fair_tape_dropped", "legendFormat": "dropped", "refId": "C"}
-        ,{"expr": "polymarket_external_fair_counterfactual_forecasts_total", "legendFormat": "shadow forecasts", "refId": "D"}
-        ,{"expr": "polymarket_external_fair_counterfactual_resolved_forecasts_total", "legendFormat": "resolved forecasts", "refId": "E"}
-        ,{"expr": "polymarket_external_fair_counterfactual_pending_forecasts", "legendFormat": "pending forecasts", "refId": "F"}
+        {
+          "expr": "(polymarket_external_fair_tape_accepted{job=\"polymarket-v7\",instance=\"$instance\"}) * on(job,instance) group_left(run_id) polymarket_v7_runtime_identity_info{job=\"polymarket-v7\",instance=\"$instance\"} and on(job,instance) (polymarket_v7_exporter_snapshot_usable{job=\"polymarket-v7\",instance=\"$instance\"} == 1) and on(job,instance) (up{job=\"polymarket-v7\",instance=\"$instance\"} == 1)",
+          "legendFormat": "accepted",
+          "refId": "A",
+          "instant": false,
+          "range": true,
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus-v7"
+          }
+        },
+        {
+          "expr": "(polymarket_external_fair_tape_written{job=\"polymarket-v7\",instance=\"$instance\"}) * on(job,instance) group_left(run_id) polymarket_v7_runtime_identity_info{job=\"polymarket-v7\",instance=\"$instance\"} and on(job,instance) (polymarket_v7_exporter_snapshot_usable{job=\"polymarket-v7\",instance=\"$instance\"} == 1) and on(job,instance) (up{job=\"polymarket-v7\",instance=\"$instance\"} == 1)",
+          "legendFormat": "written",
+          "refId": "B",
+          "instant": false,
+          "range": true,
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus-v7"
+          }
+        },
+        {
+          "expr": "(polymarket_external_fair_tape_dropped{job=\"polymarket-v7\",instance=\"$instance\"}) * on(job,instance) group_left(run_id) polymarket_v7_runtime_identity_info{job=\"polymarket-v7\",instance=\"$instance\"} and on(job,instance) (polymarket_v7_exporter_snapshot_usable{job=\"polymarket-v7\",instance=\"$instance\"} == 1) and on(job,instance) (up{job=\"polymarket-v7\",instance=\"$instance\"} == 1)",
+          "legendFormat": "dropped",
+          "refId": "C",
+          "instant": false,
+          "range": true,
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus-v7"
+          }
+        },
+        {
+          "expr": "(polymarket_external_fair_counterfactual_forecasts_total{job=\"polymarket-v7\",instance=\"$instance\"}) * on(job,instance) group_left(run_id) polymarket_v7_runtime_identity_info{job=\"polymarket-v7\",instance=\"$instance\"} and on(job,instance) (polymarket_v7_exporter_snapshot_usable{job=\"polymarket-v7\",instance=\"$instance\"} == 1) and on(job,instance) (up{job=\"polymarket-v7\",instance=\"$instance\"} == 1)",
+          "legendFormat": "shadow forecasts",
+          "refId": "D",
+          "instant": false,
+          "range": true,
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus-v7"
+          }
+        },
+        {
+          "expr": "(polymarket_external_fair_counterfactual_resolved_forecasts_total{job=\"polymarket-v7\",instance=\"$instance\"}) * on(job,instance) group_left(run_id) polymarket_v7_runtime_identity_info{job=\"polymarket-v7\",instance=\"$instance\"} and on(job,instance) (polymarket_v7_exporter_snapshot_usable{job=\"polymarket-v7\",instance=\"$instance\"} == 1) and on(job,instance) (up{job=\"polymarket-v7\",instance=\"$instance\"} == 1)",
+          "legendFormat": "resolved forecasts",
+          "refId": "E",
+          "instant": false,
+          "range": true,
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus-v7"
+          }
+        },
+        {
+          "expr": "(polymarket_external_fair_counterfactual_pending_forecasts{job=\"polymarket-v7\",instance=\"$instance\"}) * on(job,instance) group_left(run_id) polymarket_v7_runtime_identity_info{job=\"polymarket-v7\",instance=\"$instance\"} and on(job,instance) (polymarket_v7_exporter_snapshot_usable{job=\"polymarket-v7\",instance=\"$instance\"} == 1) and on(job,instance) (up{job=\"polymarket-v7\",instance=\"$instance\"} == 1)",
+          "legendFormat": "pending forecasts",
+          "refId": "F",
+          "instant": false,
+          "range": true,
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus-v7"
+          }
+        }
       ],
       "title": "Causal Evidence Tape",
       "type": "timeseries"
     },
     {
-      "datasource": {"type": "prometheus", "uid": "prometheus-v7"},
-      "fieldConfig": {"defaults": {}, "overrides": []},
-      "gridPos": {"h": 7, "w": 24, "x": 0, "y": 33},
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus-v7"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "noValue": "UNAVAILABLE",
+          "mappings": [
+            {
+              "type": "special",
+              "options": {
+                "match": "null",
+                "result": {
+                  "text": "UNAVAILABLE",
+                  "color": "gray"
+                }
+              }
+            },
+            {
+              "type": "special",
+              "options": {
+                "match": "nan",
+                "result": {
+                  "text": "UNAVAILABLE",
+                  "color": "gray"
+                }
+              }
+            }
+          ],
+          "custom": {
+            "spanNulls": false
+          }
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 7,
+        "w": 24,
+        "x": 0,
+        "y": 33
+      },
       "id": 18,
-      "options": {"legend": {"calcs": ["lastNotNull"], "displayMode": "table", "placement": "bottom", "showLegend": true}, "tooltip": {"mode": "multi", "sort": "desc"}},
+      "options": {
+        "legend": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "displayMode": "table",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
       "targets": [
-        {"expr": "polymarket_external_fair_router_book_requests_total", "legendFormat": "book requests", "refId": "A"},
-        {"expr": "polymarket_external_fair_router_book_request_failures_total", "legendFormat": "book request failures", "refId": "B"},
-        {"expr": "polymarket_external_fair_router_book_parse_failures_total", "legendFormat": "book parse failures", "refId": "C"},
-        {"expr": "polymarket_external_fair_router_active_candidates", "legendFormat": "active robust candidates", "refId": "D"},
-        {"expr": "polymarket_external_fair_router_orders_submitted_total", "legendFormat": "orders", "refId": "E"},
-        {"expr": "polymarket_external_fair_router_fills_total", "legendFormat": "fills", "refId": "F"},
-        {"expr": "polymarket_external_fair_router_rejections_total", "legendFormat": "reject {{reason}}", "refId": "G"},
-        {"expr": "polymarket_external_fair_counterfactual_candidates_total", "legendFormat": "shadow candidates", "refId": "H"},
-        {"expr": "polymarket_external_fair_counterfactual_fills_total", "legendFormat": "shadow fills", "refId": "I"},
-        {"expr": "polymarket_external_fair_counterfactual_open_positions", "legendFormat": "shadow open positions", "refId": "J"}
+        {
+          "expr": "(polymarket_external_fair_router_book_requests_total{job=\"polymarket-v7\",instance=\"$instance\"}) * on(job,instance) group_left(run_id) polymarket_v7_runtime_identity_info{job=\"polymarket-v7\",instance=\"$instance\"} and on(job,instance) (polymarket_v7_exporter_snapshot_usable{job=\"polymarket-v7\",instance=\"$instance\"} == 1) and on(job,instance) (up{job=\"polymarket-v7\",instance=\"$instance\"} == 1)",
+          "legendFormat": "book requests",
+          "refId": "A",
+          "instant": false,
+          "range": true,
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus-v7"
+          }
+        },
+        {
+          "expr": "(polymarket_external_fair_router_book_request_failures_total{job=\"polymarket-v7\",instance=\"$instance\"}) * on(job,instance) group_left(run_id) polymarket_v7_runtime_identity_info{job=\"polymarket-v7\",instance=\"$instance\"} and on(job,instance) (polymarket_v7_exporter_snapshot_usable{job=\"polymarket-v7\",instance=\"$instance\"} == 1) and on(job,instance) (up{job=\"polymarket-v7\",instance=\"$instance\"} == 1)",
+          "legendFormat": "book request failures",
+          "refId": "B",
+          "instant": false,
+          "range": true,
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus-v7"
+          }
+        },
+        {
+          "expr": "(polymarket_external_fair_router_book_parse_failures_total{job=\"polymarket-v7\",instance=\"$instance\"}) * on(job,instance) group_left(run_id) polymarket_v7_runtime_identity_info{job=\"polymarket-v7\",instance=\"$instance\"} and on(job,instance) (polymarket_v7_exporter_snapshot_usable{job=\"polymarket-v7\",instance=\"$instance\"} == 1) and on(job,instance) (up{job=\"polymarket-v7\",instance=\"$instance\"} == 1)",
+          "legendFormat": "book parse failures",
+          "refId": "C",
+          "instant": false,
+          "range": true,
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus-v7"
+          }
+        },
+        {
+          "expr": "(polymarket_external_fair_router_active_candidates{job=\"polymarket-v7\",instance=\"$instance\"}) * on(job,instance) group_left(run_id) polymarket_v7_runtime_identity_info{job=\"polymarket-v7\",instance=\"$instance\"} and on(job,instance) (polymarket_v7_exporter_snapshot_usable{job=\"polymarket-v7\",instance=\"$instance\"} == 1) and on(job,instance) (up{job=\"polymarket-v7\",instance=\"$instance\"} == 1)",
+          "legendFormat": "active robust candidates",
+          "refId": "D",
+          "instant": false,
+          "range": true,
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus-v7"
+          }
+        },
+        {
+          "expr": "(polymarket_external_fair_router_orders_submitted_total{job=\"polymarket-v7\",instance=\"$instance\"}) * on(job,instance) group_left(run_id) polymarket_v7_runtime_identity_info{job=\"polymarket-v7\",instance=\"$instance\"} and on(job,instance) (polymarket_v7_exporter_snapshot_usable{job=\"polymarket-v7\",instance=\"$instance\"} == 1) and on(job,instance) (up{job=\"polymarket-v7\",instance=\"$instance\"} == 1)",
+          "legendFormat": "orders",
+          "refId": "E",
+          "instant": false,
+          "range": true,
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus-v7"
+          }
+        },
+        {
+          "expr": "(polymarket_external_fair_router_fills_total{job=\"polymarket-v7\",instance=\"$instance\"}) * on(job,instance) group_left(run_id) polymarket_v7_runtime_identity_info{job=\"polymarket-v7\",instance=\"$instance\"} and on(job,instance) (polymarket_v7_exporter_snapshot_usable{job=\"polymarket-v7\",instance=\"$instance\"} == 1) and on(job,instance) (up{job=\"polymarket-v7\",instance=\"$instance\"} == 1)",
+          "legendFormat": "fills",
+          "refId": "F",
+          "instant": false,
+          "range": true,
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus-v7"
+          }
+        },
+        {
+          "expr": "(polymarket_external_fair_router_rejections_total{job=\"polymarket-v7\",instance=\"$instance\"}) * on(job,instance) group_left(run_id) polymarket_v7_runtime_identity_info{job=\"polymarket-v7\",instance=\"$instance\"} and on(job,instance) (polymarket_v7_exporter_snapshot_usable{job=\"polymarket-v7\",instance=\"$instance\"} == 1) and on(job,instance) (up{job=\"polymarket-v7\",instance=\"$instance\"} == 1)",
+          "legendFormat": "reject {{reason}}",
+          "refId": "G",
+          "instant": false,
+          "range": true,
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus-v7"
+          }
+        },
+        {
+          "expr": "(polymarket_external_fair_counterfactual_candidates_total{job=\"polymarket-v7\",instance=\"$instance\"}) * on(job,instance) group_left(run_id) polymarket_v7_runtime_identity_info{job=\"polymarket-v7\",instance=\"$instance\"} and on(job,instance) (polymarket_v7_exporter_snapshot_usable{job=\"polymarket-v7\",instance=\"$instance\"} == 1) and on(job,instance) (up{job=\"polymarket-v7\",instance=\"$instance\"} == 1)",
+          "legendFormat": "shadow candidates",
+          "refId": "H",
+          "instant": false,
+          "range": true,
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus-v7"
+          }
+        },
+        {
+          "expr": "(polymarket_external_fair_counterfactual_fills_total{job=\"polymarket-v7\",instance=\"$instance\"}) * on(job,instance) group_left(run_id) polymarket_v7_runtime_identity_info{job=\"polymarket-v7\",instance=\"$instance\"} and on(job,instance) (polymarket_v7_exporter_snapshot_usable{job=\"polymarket-v7\",instance=\"$instance\"} == 1) and on(job,instance) (up{job=\"polymarket-v7\",instance=\"$instance\"} == 1)",
+          "legendFormat": "shadow fills",
+          "refId": "I",
+          "instant": false,
+          "range": true,
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus-v7"
+          }
+        },
+        {
+          "expr": "(polymarket_external_fair_counterfactual_open_positions{job=\"polymarket-v7\",instance=\"$instance\"}) * on(job,instance) group_left(run_id) polymarket_v7_runtime_identity_info{job=\"polymarket-v7\",instance=\"$instance\"} and on(job,instance) (polymarket_v7_exporter_snapshot_usable{job=\"polymarket-v7\",instance=\"$instance\"} == 1) and on(job,instance) (up{job=\"polymarket-v7\",instance=\"$instance\"} == 1)",
+          "legendFormat": "shadow open positions",
+          "refId": "J",
+          "instant": false,
+          "range": true,
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus-v7"
+          }
+        }
       ],
       "title": "CLOB Validation / Shadow Decisions / Rejections",
       "type": "timeseries"
@@ -242,11 +1671,46 @@
   ],
   "refresh": "10s",
   "schemaVersion": 39,
-  "tags": ["polymarket", "v7", "external-fair", "settlement"],
-  "templating": {"list": []},
-  "time": {"from": "now-6h", "to": "now"},
+  "tags": [
+    "polymarket",
+    "v7",
+    "external-fair",
+    "settlement"
+  ],
+  "templating": {
+    "list": [
+      {
+        "name": "instance",
+        "label": "Runtime target",
+        "type": "query",
+        "datasource": {
+          "type": "prometheus",
+          "uid": "prometheus-v7"
+        },
+        "definition": "label_values(up{job=\"polymarket-v7\"}, instance)",
+        "query": {
+          "query": "label_values(up{job=\"polymarket-v7\"}, instance)",
+          "refId": "instance"
+        },
+        "refresh": 1,
+        "sort": 1,
+        "multi": false,
+        "includeAll": false,
+        "current": {
+          "selected": false,
+          "text": "127.0.0.1:9108",
+          "value": "127.0.0.1:9108"
+        },
+        "options": []
+      }
+    ]
+  },
+  "time": {
+    "from": "now-1h",
+    "to": "now"
+  },
   "timepicker": {},
-  "timezone": "browser",
+  "timezone": "Europe/Zurich",
   "title": "Polymarket V7 — Crypto Settlement Evidence (ZERO AUTHORITY)",
   "uid": "polymarket-v7-external-fair",
   "version": 1,
