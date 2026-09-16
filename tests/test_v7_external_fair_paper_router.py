@@ -521,7 +521,7 @@ def main() -> None:
         canonical_order = router.LedgerEvent(
             event_type="ORDER_SUBMITTED", strategy=router.STRATEGY,
             model_sha="c" * 40, model_version=router.MODEL_VERSION,
-            candidate_id="shadow-up", order_id="order-up",
+            opportunity_id="settlement-test", candidate_id="shadow-up", order_id="order-up",
             position_id="position-up", market_id="market-up-down",
             event_id="event-up-down", token_id="up-token", side="BUY",
             exchange_ts_ms=opened_ms - 1, receive_ts_ms=opened_ms,
@@ -542,7 +542,7 @@ def main() -> None:
         )
         canonical_fill = router.LedgerEvent(
             event_type="FILL", strategy=router.STRATEGY, model_sha="c" * 40,
-            model_version=router.MODEL_VERSION, candidate_id="shadow-up",
+            model_version=router.MODEL_VERSION, opportunity_id="settlement-test", candidate_id="shadow-up",
             order_id="order-up", fill_id="fill-up", position_id="position-up",
             market_id="market-up-down", event_id="event-up-down",
             token_id="up-token", side="BUY",
@@ -657,7 +657,7 @@ def main() -> None:
         }
         fill = router.LedgerEvent(
             event_type="FILL", strategy=router.STRATEGY, model_sha=model_sha,
-            model_version=router.MODEL_VERSION, candidate_id="crash-candidate",
+            model_version=router.MODEL_VERSION, opportunity_id="crash-gap", candidate_id="crash-candidate",
             order_id="crash-order", fill_id="crash-fill",
             position_id="crash-position", market_id="crash-market",
             event_id="crash-event", token_id="crash-token", side="BUY",
@@ -741,7 +741,7 @@ def main() -> None:
             event_type="ORDER_SUBMITTED", strategy=router.STRATEGY,
             model_sha=model_sha, model_version=router.MODEL_VERSION,
             record_id="orphan-order-record", recorded_ts_ms=10_000,
-            candidate_id="orphan-candidate", order_id="orphan-order",
+            opportunity_id="orphan-order", candidate_id="orphan-candidate", order_id="orphan-order",
             position_id="orphan-position", market_id="orphan-market",
             event_id="orphan-event", token_id="orphan-token", side="BUY",
             exchange_ts_ms=9_998, receive_ts_ms=9_999,

@@ -301,3 +301,17 @@ Parameterized contract tests cover BTC/ETH/SOL/XRP/DOGE/BNB across M5/M15,
 invalid lineage hashes, settlement mismatch, invalid latency profile, disabled
 PAPER gate, experiment mismatch and ledger packet tampering. No runtime manifest
 or active lane is changed by this contract.
+
+## Canonical replay-key lineage hardening
+
+The full exact-SHA verifier exposed a real regression after the ledger firewall
+was tightened: historical PAPER router fixtures (and the corresponding router
+path) kept the coordinator receipt but did not propagate the selected replay key
+onto canonical ORDER/FILL/terminal events. A nonempty but unrelated candidate
+id therefore could no longer prove that the receipt authorized that event.
+
+The firewall was not relaxed. Instead the router now writes the selected
+`replay_key` into `opportunity_id` on canonical `ORDER_SUBMITTED` and `FILL`, and
+recovery `NONFILL` plus reconciled `FINAL` inherit that exact opportunity id.
+Tests were corrected to model the same lineage. This makes authorization
+identity continuous across candidate -> order -> fill -> recovery/final.
