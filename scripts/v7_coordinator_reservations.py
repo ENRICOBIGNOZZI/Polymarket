@@ -155,9 +155,20 @@ class ReservationProjection:
                 or receipt.get('real_capital_at_risk') is not False):
             raise ReplayError('COORDINATOR_RECEIPT_BINDING_INVALID')
 
+    def _validate_transition_time(self, request: ReservationRequest, operation: str,
+                                  now_ms: int, details: Mapping[str, Any]) -> None:
+        positive_int(now_ms, 'RESERVATION_WALL_CLOCK_INVALID')
+        predecessor = self._operations.get((request.key, 'RESERVE'))
+        if operation == 'COMPLETE_FAK':
+            predecessor = self._records.get(details.get('terminal_order_record_id'))
+        elif operation == 'SETTLE':
+            predecessor = self._records.get(details.get('final_record_id'))
+        if predecessor is not None and now_ms < predecessor.recorded_ts_ms:
+            raise ReplayError('RESERVATION_TRANSITION_PRECEDES_ITS_EVIDENCE')
+
     def _event(self, request: ReservationRequest, operation: str, now_ms: int,
                details: Mapping[str, Any]) -> LedgerEvent:
-        positive_int(now_ms, 'RESERVATION_WALL_CLOCK_INVALID')
+        self._validate_transition_time(request, operation, now_ms, details)
         event_type = 'CAPITAL_RESERVE' if operation == 'RESERVE' else 'ORDER_STATE' if operation == 'SUBMIT_FENCE' else 'CAPITAL_RELEASE'
         metadata = {'component': 'crypto_informed_taker', 'reservation_projection': {
             'schema': SCHEMA, 'owner': OWNER, 'checkpoint_hash': self._checkpoint_hash,
@@ -314,6 +325,10 @@ class ReservationProjection:
             return ZERO, ZERO
         if terminal.order_state not in ('FAK_FILLED', 'FAK_PARTIAL_CANCELLED'):
             raise ReplayError('POSITIVE_FILL_CANNOT_BE_NONFILL')
+        total_filled = sum((decimal(self._records[key].filled_size) for key in ids), ZERO)
+        if ((terminal.order_state == 'FAK_FILLED' and total_filled != request.quantity)
+                or (terminal.order_state == 'FAK_PARTIAL_CANCELLED' and not ZERO < total_filled < request.quantity)):
+            raise ReplayError('FAK_TERMINAL_QUANTITY_STATE_MISMATCH')
         return self._fill_totals(request, ids)
 
     def settle(self, reservation_id: str, *, final_record_id: str, now_ms: int, append: Append) -> LedgerEvent:
@@ -391,6 +406,7 @@ class ReservationProjection:
                 raise ReplayError('RESERVATION_CHECKPOINT_OR_OWNER_MISMATCH')
             request = ReservationRequest.parse(packet['request'])
             key, operation, details = packet['reservation_id'], packet['operation'], packet['details']
+            self._validate_transition_time(request, operation, event.recorded_ts_ms, details)
             expected_type = 'CAPITAL_RESERVE' if operation == 'RESERVE' else 'ORDER_STATE' if operation == 'SUBMIT_FENCE' else 'CAPITAL_RELEASE'
             if (key != request.key or event.order_id != key or event.event_type != expected_type
                     or event.market_id != request.market_id or event.token_id != request.token_id):

@@ -308,6 +308,37 @@ class ReservationTest(unittest.TestCase):
             self.p.complete_fak(self.r.key,fill_record_ids=(f.record_id,),terminal_order_record_id=t.record_id,
                                 now_ms=NOW+102,append=self.events.append)
 
+    def test_fak_terminal_state_must_match_exact_filled_quantity(self):
+        for quantity, state in (('2','FAK_FILLED'),('5','FAK_PARTIAL_CANCELLED')):
+            with self.subTest(quantity=quantity,state=state):
+                self.setUp(); self.submitted(); f=fill(self.r,quantity=quantity)
+                self.observe(f); t=terminal(self.r,(f.record_id,),state=state); self.observe(t)
+                with self.assertRaisesRegex(ReplayError,'QUANTITY_STATE_MISMATCH'):
+                    self.p.complete_fak(self.r.key,fill_record_ids=(f.record_id,),terminal_order_record_id=t.record_id,
+                                        now_ms=NOW+102,append=self.events.append)
+                self.assertEqual(self.p.snapshot()['reserved'],'3')
+
+    def test_backdated_fak_completion_cannot_release_reserve(self):
+        self.submitted(); f=fill(self.r); self.observe(f); t=terminal(self.r,(f.record_id,)); self.observe(t)
+        count=len(self.events)
+        with self.assertRaisesRegex(ReplayError,'TRANSITION_PRECEDES_ITS_EVIDENCE'):
+            self.p.complete_fak(self.r.key,fill_record_ids=(f.record_id,),terminal_order_record_id=t.record_id,
+                                now_ms=NOW+99,append=self.events.append)
+        self.assertEqual(len(self.events),count)
+
+    def test_backdated_settlement_cannot_release_cash(self):
+        self.opened(); f=final(self.r); self.observe(f); count=len(self.events)
+        with self.assertRaisesRegex(ReplayError,'TRANSITION_PRECEDES_ITS_EVIDENCE'):
+            self.p.settle(self.r.key,final_record_id=f.record_id,now_ms=NOW+1999,append=self.events.append)
+        self.assertEqual(len(self.events),count)
+        self.assertEqual(self.p.snapshot()['states'][self.r.key],'OPEN')
+
+    def test_release_cannot_precede_reservation_on_replay(self):
+        self.reserve(); e=self.p.release_unsubmitted(self.r.key,now_ms=NOW+1,reason='test',append=self.events.append)
+        fresh=projection(); fresh.observe(self.events[0])
+        with self.assertRaisesRegex(ReplayError,'TRANSITION_PRECEDES_ITS_EVIDENCE'):
+            fresh.observe(replace(e,recorded_ts_ms=NOW-1))
+
     def test_existing_coordinator_opt_in_actual_call_graph(self):
         raw=forward_envelope('coordinator-synthetic'); now_ns=NOW*1_000_000
         raw['decision_receive_timestamp_ns']=now_ns-10_000_000
