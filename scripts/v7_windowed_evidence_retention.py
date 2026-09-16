@@ -295,7 +295,7 @@ def run(runs_root: Path, *, raw_detail_seconds: int = 21600,
     result["manifest_windowed_pack_candidates"] = len(manifest_safe_packs)
     result["protected_pack_references"] = len(protected_packs)
 
-    for pack in sorted(removable_packs):
+    for pack in sorted(removable_packs, key=lambda sha: _allocated(store / "packs" / sha[:2] / (sha + ".pack")), reverse=True):
         if time.monotonic() - started >= maximum_seconds:
             result["deferred"] += 1
             break
