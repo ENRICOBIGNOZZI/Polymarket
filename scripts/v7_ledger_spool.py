@@ -10,11 +10,14 @@ therefore cannot be used as a component-to-ledger authority bypass.
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import os
 import time
 from pathlib import Path
-from typing import Iterable
+from typing import Any, Iterable
+
+from v7_fast_forward_ipc import BoundedUnixRequestBridge, request as unix_request
 
 from v7_execution_ledger import (
     CanonicalLedgerWriter,
@@ -27,9 +30,28 @@ from v7_execution_ledger import (
 
 
 ENGINE_IDS = {"CRYPTO_SETTLEMENT_ENGINE", "STRUCTURAL_ARB_ENGINE"}
+LEDGER_IPC_REQUEST_SCHEMA = "polymarket_v7_ledger_append_request_v1"
+LEDGER_IPC_ACK_SCHEMA = "polymarket_v7_ledger_append_ack_v1"
 
 CANDIDATE_EVENTS = {"CANDIDATE", "OPPORTUNITY"}
 RISK_CREATING_EVENTS = {"ORDER_SUBMITTED", "FILL", "INVENTORY_SPLIT"}
+
+
+def _event_hash(event: LedgerEvent) -> str:
+    payload = json.dumps(event.to_dict(), sort_keys=True, separators=(",", ":"),
+                         ensure_ascii=False, allow_nan=False).encode("utf-8")
+    return hashlib.sha256(payload).hexdigest()
+
+
+def ledger_ipc_request(event: LedgerEvent) -> dict[str, Any]:
+    event.validate()
+    return {
+        "schema": LEDGER_IPC_REQUEST_SCHEMA,
+        "paper_only": True,
+        "authenticated_execution": False,
+        "real_order_submission": False,
+        "record": event.to_dict(),
+    }
 
 LEDGER_EVENT_CAUSAL_PRIORITY = {
     "CAPITAL_RESERVE": 10,
@@ -68,9 +90,20 @@ def _atomic_payload(directory: Path, name: str, value: dict[str, object]) -> Pat
 
 
 def _coordinator_receipt_valid(event: LedgerEvent, engine_id: str) -> bool:
-    receipt = event.metadata.get("coordinator_receipt") if isinstance(event.metadata, dict) else None
+    metadata = event.metadata if isinstance(event.metadata, dict) else {}
+    receipt = metadata.get("coordinator_receipt")
     if not isinstance(receipt, dict):
         return False
+    selected = str(receipt.get("selected_replay_key") or "")
+    reservation = metadata.get("reservation_projection")
+    if isinstance(reservation, dict):
+        request = reservation.get("request")
+        if not isinstance(request, dict) or selected != str(request.get("coordinator_replay_key") or ""):
+            return False
+    else:
+        bound = {str(value) for value in (event.opportunity_id, event.candidate_id) if isinstance(value, str) and value}
+        if bound and selected not in bound:
+            return False
     action = str(event.intended_action or receipt.get("action") or "").upper()
     return (
         receipt.get("schema") == "polymarket_v7_global_opportunity_decision_v1"
@@ -189,6 +222,25 @@ def _existing_record_ids(path: Path) -> set[str]:
     return ids
 
 
+def _existing_event_hashes(path: Path) -> dict[str, str]:
+    hashes: dict[str, str] = {}
+    if not path.exists():
+        return hashes
+    for record in iter_records(path):
+        if isinstance(record, LedgerEvent):
+            hashes[record.record_id] = _event_hash(record)
+    return hashes
+
+
+def _ledger_record_hash(path: Path, record_id: str) -> str | None:
+    if not path.exists():
+        return None
+    for record in iter_records(path):
+        if isinstance(record, LedgerEvent) and record.record_id == record_id:
+            return _event_hash(record)
+    return None
+
+
 def _drain_with_existing(
     run_root: Path,
     *,
@@ -287,25 +339,108 @@ def drain_spool(
     )
 
 
+def append_ledger_ipc_request(
+    run_root: Path, raw: dict[str, Any], *, model_sha: str,
+    existing: set[str], existing_hashes: dict[str, str],
+    writer_id: str = "v7-canonical-ledger-router",
+) -> dict[str, Any]:
+    if (not isinstance(raw, dict) or set(raw) != {
+            "schema", "paper_only", "authenticated_execution", "real_order_submission", "record"}
+            or raw.get("schema") != LEDGER_IPC_REQUEST_SCHEMA
+            or raw.get("paper_only") is not True
+            or raw.get("authenticated_execution") is not False
+            or raw.get("real_order_submission") is not False):
+        raise LedgerContractError("ledger_ipc:request_contract_invalid")
+    event = LedgerEvent.from_dict(raw["record"])
+    if event.model_sha != model_sha:
+        raise LedgerContractError("ledger_ipc:mixed_model_sha")
+    record_hash = _event_hash(event)
+    if event.record_id in existing:
+        known = existing_hashes.get(event.record_id)
+        if known is None:
+            known = _ledger_record_hash(canonical_ledger_path(run_root), event.record_id)
+            if known is not None:
+                existing_hashes[event.record_id] = known
+        if known != record_hash:
+            raise LedgerContractError("ledger_ipc:record_id_conflict")
+        return {
+            "schema": LEDGER_IPC_ACK_SCHEMA, "paper_only": True,
+            "authenticated_execution": False, "real_order_submission": False,
+            "durable": True, "duplicate": True, "record_id": event.record_id,
+            "record_hash": record_hash,
+        }
+    route = _authority_route(Path(run_root), event)
+    if route != "APPEND":
+        raise LedgerContractError(f"ledger_ipc:authority_route:{route}")
+    with CanonicalLedgerWriter(canonical_ledger_path(run_root), writer_id=writer_id, model_sha=model_sha) as writer:
+        writer.append(event)
+    existing.add(event.record_id)
+    existing_hashes[event.record_id] = record_hash
+    return {
+        "schema": LEDGER_IPC_ACK_SCHEMA, "paper_only": True,
+        "authenticated_execution": False, "real_order_submission": False,
+        "durable": True, "duplicate": False, "record_id": event.record_id,
+        "record_hash": record_hash,
+    }
+
+
+def append_event_via_ledger_ipc(socket_path: Path, event: LedgerEvent, *, timeout_seconds: float = 1.0) -> dict[str, Any]:
+    expected_hash = _event_hash(event)
+    response = unix_request(socket_path, ledger_ipc_request(event), timeout_seconds=timeout_seconds)
+    if (response.get("schema") != LEDGER_IPC_ACK_SCHEMA
+            or response.get("durable") is not True
+            or response.get("record_id") != event.record_id
+            or response.get("record_hash") != expected_hash
+            or response.get("paper_only") is not True
+            or response.get("authenticated_execution") is not False
+            or response.get("real_order_submission") is not False):
+        raise LedgerContractError("ledger_ipc:durable_ack_invalid")
+    return response
+
+
 def drain_spool_loop(
     run_root: Path,
     *,
     model_sha: str,
     writer_id: str = "v7-canonical-ledger-router",
     interval: float = 1.0,
+    ipc_socket: Path | None = None,
+    ipc_interval: float = 0.001,
+    ipc_capacity: int = 128,
 ) -> None:
-    """Run the canonical router with O(new-events) steady-state work."""
+    """Run one writer process with slow file drain plus optional fast durable IPC."""
     root = Path(run_root)
-    existing = _existing_record_ids(canonical_ledger_path(root))
-    while True:
-        result = _drain_with_existing(
-            root,
-            model_sha=model_sha,
-            existing=existing,
-            writer_id=writer_id,
-        )
-        print(json.dumps(result, sort_keys=True), flush=True)
-        time.sleep(max(0.1, interval))
+    ledger_path = canonical_ledger_path(root)
+    existing = _existing_record_ids(ledger_path)
+    existing_hashes = _existing_event_hashes(ledger_path)
+    bridge = BoundedUnixRequestBridge(ipc_socket, capacity=ipc_capacity) if ipc_socket is not None else None
+    slow_interval = max(0.1, interval)
+    fast_interval = max(0.001, ipc_interval)
+    next_spool = time.monotonic()
+    next_ipc = next_spool
+    try:
+        while True:
+            now = time.monotonic()
+            if bridge is not None and now >= next_ipc:
+                bridge.drain(lambda raw: append_ledger_ipc_request(
+                    root, raw, model_sha=model_sha, existing=existing,
+                    existing_hashes=existing_hashes, writer_id=writer_id,
+                ), max_messages=64)
+                next_ipc = now + fast_interval
+            now = time.monotonic()
+            if now >= next_spool:
+                result = _drain_with_existing(
+                    root, model_sha=model_sha, existing=existing, writer_id=writer_id,
+                )
+                if bridge is not None:
+                    result["ipc"] = bridge.snapshot()
+                print(json.dumps(result, sort_keys=True), flush=True)
+                next_spool = now + slow_interval
+            deadline = min(next_spool, next_ipc) if bridge is not None else next_spool
+            time.sleep(max(0.0002, deadline - time.monotonic()))
+    finally:
+        if bridge is not None:
+            bridge.close()
 
 
 def main() -> int:
@@ -315,6 +450,9 @@ def main() -> int:
     parser.add_argument("--writer-id", default="v7-canonical-ledger-router")
     parser.add_argument("--loop", action="store_true")
     parser.add_argument("--interval", type=float, default=1.0)
+    parser.add_argument("--ipc-socket", type=Path)
+    parser.add_argument("--ipc-interval-ms", type=float, default=1.0)
+    parser.add_argument("--ipc-capacity", type=int, default=128)
     args = parser.parse_args()
     if args.loop:
         drain_spool_loop(
@@ -322,6 +460,9 @@ def main() -> int:
             model_sha=args.model_sha,
             writer_id=args.writer_id,
             interval=args.interval,
+            ipc_socket=args.ipc_socket,
+            ipc_interval=max(0.001, args.ipc_interval_ms / 1000.0),
+            ipc_capacity=max(1, args.ipc_capacity),
         )
         return 0
     result = drain_spool(args.run_root, model_sha=args.model_sha, writer_id=args.writer_id)

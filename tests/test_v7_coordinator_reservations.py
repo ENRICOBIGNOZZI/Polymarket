@@ -24,9 +24,12 @@ def request(market='m1', asset='ETH', signal='signal1', maximum='3'):
 
 
 def receipt(req):
-    return dict(owner=OWNER,action='TAKE',selected_replay_key=req.coordinator_replay_key,
-        new_risk_authorized=False,paper_exploration_authorized=True,paper_only=True,
-        authenticated_execution=False,real_order_submission=False,real_capital_at_risk=False)
+    return dict(schema='polymarket_v7_global_opportunity_decision_v1',owner=OWNER,action='TAKE',
+        engine_id=req.strategy,crypto_context={'asset':req.asset,'horizon':req.horizon,
+        'authority':'PAPER_EXPLORATION'},selected_replay_key=req.coordinator_replay_key,
+        new_risk_authorized=False,paper_exploration_authorized=True,
+        paper_exploration_probe_authorized=False,paper_forward_test_authorized=True,
+        paper_only=True,authenticated_execution=False,real_order_submission=False,real_capital_at_risk=False)
 
 
 def projection(cash='100',external=(),limits=None,sha=SHA):

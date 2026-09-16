@@ -202,6 +202,11 @@ class FastForwardIpcBridge:
         self.close()
 
 
+# Generic name used by other single-owner request/reply paths. The historical
+# alias remains for the fast-forward coordinator call graph.
+BoundedUnixRequestBridge = FastForwardIpcBridge
+
+
 def request(path: Path, value: dict[str, Any], *, timeout_seconds: float = 1.0,
             maximum_payload_bytes: int = MAX_PAYLOAD_BYTES) -> dict[str, Any]:
     if timeout_seconds <= 0:

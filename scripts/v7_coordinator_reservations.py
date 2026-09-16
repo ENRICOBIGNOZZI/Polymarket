@@ -9,6 +9,7 @@ barrier, not a RAM queue acknowledgement. Frozen BTC does not call this module.
 from __future__ import annotations
 from dataclasses import dataclass
 from decimal import Decimal
+import json
 import threading
 from typing import Any, Callable, Iterable, Mapping
 from v7_execution_ledger import LedgerEvent
@@ -117,6 +118,7 @@ class ReservationProjection:
         self._states: dict[str, str] = {}
         self._amounts: dict[str, Decimal] = {}
         self._shares: dict[str, Decimal] = {}
+        self._receipts: dict[str, dict[str, Any]] = {}
         self._records: dict[str, LedgerEvent] = {}
         self._record_hashes: dict[str, str] = {}
         self._operations: dict[tuple[str, str], LedgerEvent] = {}
@@ -182,14 +184,20 @@ class ReservationProjection:
                     if self._states[key] in ('RESERVED', 'SUBMITTED')), ZERO)
 
     def _receipt(self, request: ReservationRequest, receipt: Mapping[str, Any]) -> None:
-        if (receipt.get('owner') != OWNER or receipt.get('action') != 'TAKE'
+        context = receipt.get('crypto_context') if isinstance(receipt.get('crypto_context'), Mapping) else {}
+        if (receipt.get('schema') != 'polymarket_v7_global_opportunity_decision_v1'
+                or receipt.get('owner') != OWNER or receipt.get('action') != 'TAKE'
+                or receipt.get('engine_id') != request.strategy
                 or receipt.get('selected_replay_key') != request.coordinator_replay_key
                 or receipt.get('new_risk_authorized') is not False
                 or receipt.get('paper_exploration_authorized') is not True
                 or receipt.get('paper_only') is not True
                 or receipt.get('authenticated_execution') is not False
                 or receipt.get('real_order_submission') is not False
-                or receipt.get('real_capital_at_risk') is not False):
+                or receipt.get('real_capital_at_risk') is not False
+                or context.get('asset') != request.asset
+                or context.get('horizon') != request.horizon
+                or context.get('authority') != 'PAPER_EXPLORATION'):
             raise ReplayError('COORDINATOR_RECEIPT_BINDING_INVALID')
 
     def _validate_transition_time(self, request: ReservationRequest, operation: str,
@@ -207,10 +215,17 @@ class ReservationProjection:
                details: Mapping[str, Any]) -> LedgerEvent:
         self._validate_transition_time(request, operation, now_ms, details)
         event_type = 'CAPITAL_RESERVE' if operation == 'RESERVE' else 'ORDER_STATE' if operation == 'SUBMIT_FENCE' else 'CAPITAL_RELEASE'
-        metadata = {'component': 'crypto_informed_taker', 'reservation_projection': {
-            'schema': SCHEMA, 'owner': OWNER, 'checkpoint_hash': self._checkpoint_hash,
-            'reservation_id': request.key, 'operation': operation, 'request': primitive(request),
-            'details': primitive(details)}}
+        receipt = details.get('receipt') if operation == 'RESERVE' else self._receipts.get(request.key)
+        if not isinstance(receipt, Mapping):
+            raise ReplayError('RESERVATION_COORDINATOR_RECEIPT_MISSING')
+        receipt_payload = primitive(dict(receipt))
+        metadata = {'component': 'crypto_informed_taker',
+            'paper_exploration': True, 'economic_authority': 'PAPER_EXPLORATION',
+            'coordinator_receipt': receipt_payload,
+            'reservation_projection': {
+                'schema': SCHEMA, 'owner': OWNER, 'checkpoint_hash': self._checkpoint_hash,
+                'reservation_id': request.key, 'operation': operation, 'request': primitive(request),
+                'details': primitive(details)}}
         return LedgerEvent(event_type=event_type, strategy=request.strategy, model_sha=self.code_sha,
                            record_id='reservation-' + digest((request.key, operation)), recorded_ts_ms=now_ms,
                            order_id=request.key, market_id=request.market_id, token_id=request.token_id,
@@ -450,6 +465,8 @@ class ReservationProjection:
                 raise ReplayError('RESERVATION_EVENT_BINDING_INVALID')
             if operation == 'RESERVE':
                 self._receipt(request, details['receipt'])
+                if event.metadata.get('coordinator_receipt') != details['receipt']:
+                    raise ReplayError('RESERVATION_RECEIPT_METADATA_MISMATCH')
                 if key in self._requests or request.currency != self.limits.currency:
                     raise ReplayError('DUPLICATE_RESERVATION_EVENT')
                 if (request.maximum_debit > self.cash - self._reserved() or self._foreign_checkpoint_stale
@@ -465,8 +482,11 @@ class ReservationProjection:
                     if sum((r['cost'] for r in active if r[dimension] == getattr(request, dimension)), ZERO) + request.maximum_debit > bound:
                         raise ReplayError('REPLAY_DIMENSION_LIMIT:' + dimension)
                 self._requests[key], self._states[key], self._amounts[key] = request, 'RESERVED', request.maximum_debit
+                self._receipts[key] = json.loads(json.dumps(details['receipt'], sort_keys=True))
                 self._active_ids.add(key)
             else:
+                if (event.metadata.get('coordinator_receipt') != self._receipts.get(key)):
+                    raise ReplayError('RESERVATION_RECEIPT_METADATA_MISMATCH')
                 if self._requests.get(key) != request or (key, operation) in self._operations:
                     raise ReplayError('RESERVATION_TRANSITION_IDENTITY_INVALID')
                 state = self._states[key]

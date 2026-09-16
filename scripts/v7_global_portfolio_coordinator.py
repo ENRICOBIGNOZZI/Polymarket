@@ -640,6 +640,7 @@ def coordinate_reserved_paper(
         context = raw["crypto_context"]
         protocol = (raw.get("forward_test") or {}).get("protocol_hash") or raw["policy_hash"]
         if (len(legs) != 1 or legs[0]["side"] != "BUY"
+                or raw["model_sha"] != reservation_projection.code_sha
                 or request.market_id != raw["market_id"] or legs[0]["contract_id"] != raw["contract_id"]
                 or request.token_id != legs[0]["token_id"] or request.market_id != legs[0]["market_id"]
                 or request.coordinator_replay_key != key or request.protocol_hash != protocol
