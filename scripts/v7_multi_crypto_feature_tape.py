@@ -150,12 +150,15 @@ class Collector:
         self.model_sha = model_sha; self.minimum_interval_ns = minimum_interval_ms * 1_000_000
         self.last_emit_ns: dict[str, int] = {}; self.last_hash: dict[str, str] = {}
         self.emitted = 0; self.duplicate_skips = 0; self.interval_skips = 0; self.inactive_skips = 0
-        self.invalid_snapshots = 0; self.last_recorded_wall_ns = 0
+        self.invalid_snapshots = 0; self.invalid_reasons: dict[str, int] = {}; self.last_recorded_wall_ns = 0
 
     def collect(self, snapshot: dict[str, Any], *, now_ns: int) -> list[dict[str, Any]]:
         try: value = validate_snapshot(snapshot, self.model_sha)
-        except ValueError:
-            self.invalid_snapshots += 1; return []
+        except ValueError as exc:
+            self.invalid_snapshots += 1
+            reason = str(exc) or "UNKNOWN_VALIDATION_ERROR"
+            self.invalid_reasons[reason] = self.invalid_reasons.get(reason, 0) + 1
+            return []
         output = []
         for row in value["markets"]:
             if row.get("active_now") is not True:
@@ -181,7 +184,8 @@ class Collector:
             "minimum_interval_ms": self.minimum_interval_ns // 1_000_000,
             "emitted": self.emitted, "duplicate_skips": self.duplicate_skips,
             "interval_skips": self.interval_skips, "inactive_skips": self.inactive_skips,
-            "invalid_snapshots": self.invalid_snapshots, "last_recorded_wall_ns": self.last_recorded_wall_ns,
+            "invalid_snapshots": self.invalid_snapshots, "invalid_reasons": dict(sorted(self.invalid_reasons.items())),
+            "last_recorded_wall_ns": self.last_recorded_wall_ns,
             "current_segment_bytes": writer.bytes_written, "segments_sealed": writer.segment,
         }
 
