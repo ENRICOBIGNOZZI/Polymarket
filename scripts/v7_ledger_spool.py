@@ -32,9 +32,40 @@ from v7_execution_ledger import (
 ENGINE_IDS = {"CRYPTO_SETTLEMENT_ENGINE", "STRUCTURAL_ARB_ENGINE"}
 LEDGER_IPC_REQUEST_SCHEMA = "polymarket_v7_ledger_append_request_v1"
 LEDGER_IPC_ACK_SCHEMA = "polymarket_v7_ledger_append_ack_v1"
+MULTI_FORWARD_FIELDS = {
+    "mode", "experiment_id", "protocol_hash", "feature_schema_hash", "model_hash",
+    "fill_model_hash", "cost_model_hash", "settlement_semantic_hash",
+    "latency_profile_id", "asset", "horizon", "research_only", "automatic_promotion",
+    "one_entry_per_market", "hold_to_settlement", "entry_uses_absolute_fair",
+    "probability_source",
+}
 
 CANDIDATE_EVENTS = {"CANDIDATE", "OPPORTUNITY"}
 RISK_CREATING_EVENTS = {"ORDER_SUBMITTED", "FILL", "INVENTORY_SPLIT"}
+
+
+def _hash64(value: Any) -> bool:
+    text = str(value or "")
+    return len(text) == 64 and all(ch in "0123456789abcdef" for ch in text)
+
+
+def _valid_multi_forward_packet(value: Any) -> bool:
+    if not isinstance(value, dict) or set(value) != MULTI_FORWARD_FIELDS:
+        return False
+    return (
+        value.get("mode") == "PAPER_MULTI_CRYPTO_FORWARD"
+        and isinstance(value.get("experiment_id"), str) and bool(value["experiment_id"])
+        and all(_hash64(value.get(name)) for name in (
+            "protocol_hash", "feature_schema_hash", "model_hash", "fill_model_hash",
+            "cost_model_hash", "settlement_semantic_hash"))
+        and isinstance(value.get("latency_profile_id"), str) and bool(value["latency_profile_id"])
+        and value.get("asset") in {"BTC", "ETH", "SOL", "XRP", "DOGE", "BNB"}
+        and value.get("horizon") in {"M5", "M15"}
+        and value.get("research_only") is True and value.get("automatic_promotion") is False
+        and value.get("one_entry_per_market") is True and value.get("hold_to_settlement") is True
+        and value.get("entry_uses_absolute_fair") is False
+        and value.get("probability_source") == "POLYMARKET_PRIOR_ONLY"
+    )
 
 
 def _event_hash(event: LedgerEvent) -> str:
@@ -105,6 +136,42 @@ def _coordinator_receipt_valid(event: LedgerEvent, engine_id: str) -> bool:
         if bound and selected not in bound:
             return False
     action = str(event.intended_action or receipt.get("action") or "").upper()
+    context = receipt.get("crypto_context") if isinstance(receipt.get("crypto_context"), dict) else {}
+    paper_base = (
+        engine_id == "CRYPTO_SETTLEMENT_ENGINE"
+        and metadata.get("paper_exploration") is True
+        and metadata.get("economic_authority") == "PAPER_EXPLORATION"
+        and receipt.get("paper_exploration_authorized") is True
+        and receipt.get("new_risk_authorized") is False
+        and receipt.get("paper_only") is True
+        and receipt.get("authenticated_execution") is False
+        and receipt.get("real_order_submission") is False
+        and receipt.get("real_capital_at_risk") is False
+        and context.get("authority") == "PAPER_EXPLORATION"
+    )
+    legacy_paper = (
+        paper_base
+        and context.get("asset") == "BTC" and context.get("horizon") == "M5"
+        and (
+            (metadata.get("paper_bootstrap_probe") is True
+             and receipt.get("paper_exploration_probe_authorized") is True)
+            or
+            (metadata.get("paper_bootstrap_probe") is not True
+             and receipt.get("paper_exploration_probe_authorized") is not True)
+        )
+    )
+    packet = metadata.get("multi_crypto_forward")
+    receipt_packet = receipt.get("multi_crypto_forward")
+    multi_crypto_paper = (
+        paper_base
+        and metadata.get("paper_multi_crypto_forward") is True
+        and receipt.get("paper_multi_crypto_forward_authorized") is True
+        and selected in {value for value in (event.opportunity_id, event.candidate_id) if isinstance(value, str) and value}
+        and _valid_multi_forward_packet(packet) and packet == receipt_packet
+        and context.get("asset") == packet.get("asset")
+        and context.get("horizon") == packet.get("horizon")
+        and packet.get("mode") == "PAPER_MULTI_CRYPTO_FORWARD"
+    )
     return (
         receipt.get("schema") == "polymarket_v7_global_opportunity_decision_v1"
         and receipt.get("owner") == "V7_GLOBAL_PORTFOLIO_COORDINATOR"
@@ -115,29 +182,8 @@ def _coordinator_receipt_valid(event: LedgerEvent, engine_id: str) -> bool:
         and (
             event.event_type not in RISK_CREATING_EVENTS
             or receipt.get("new_risk_authorized") is True
-            or (
-                engine_id == "CRYPTO_SETTLEMENT_ENGINE"
-                and isinstance(event.metadata, dict)
-                and event.metadata.get("paper_exploration") is True
-                and event.metadata.get("economic_authority") == "PAPER_EXPLORATION"
-                and receipt.get("paper_exploration_authorized") is True
-                and receipt.get("new_risk_authorized") is False
-                and receipt.get("paper_only") is True
-                and receipt.get("authenticated_execution") is False
-                and receipt.get("real_order_submission") is False
-                and receipt.get("real_capital_at_risk") is False
-                and isinstance(receipt.get("crypto_context"), dict)
-                and receipt["crypto_context"].get("asset") == "BTC"
-                and receipt["crypto_context"].get("horizon") == "M5"
-                and receipt["crypto_context"].get("authority") == "PAPER_EXPLORATION"
-                and (
-                    (event.metadata.get("paper_bootstrap_probe") is True
-                     and receipt.get("paper_exploration_probe_authorized") is True)
-                    or
-                    (event.metadata.get("paper_bootstrap_probe") is not True
-                     and receipt.get("paper_exploration_probe_authorized") is not True)
-                )
-            )
+            or legacy_paper
+            or multi_crypto_paper
         )
     )
 

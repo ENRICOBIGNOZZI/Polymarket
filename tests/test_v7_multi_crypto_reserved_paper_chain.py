@@ -14,6 +14,7 @@ sys.path.insert(0, str(ROOT / "tests"))
 
 from test_v7_global_account_checkpoint import SHA as SOURCE_SHA, fixture
 from test_v7_global_portfolio_coordinator import forward_envelope
+from test_v7_opportunity import multi_forward_envelope
 from v7_coordinator_reservations import ReservationLimits, ReservationProjection, ReservationRequest
 from v7_execution_ledger import iter_records
 from v7_fast_forward_ipc import FastForwardIpcBridge, request as ipc_request
@@ -44,6 +45,30 @@ def setup_chain(root: Path):
         "new-multi-crypto-cohort", raw["forward_test"]["protocol_hash"],
         raw["market_id"], leg["token_id"], "signal-new", "parent-shock-new",
         "BTC", "M5", raw["engine_id"], "USDC", D("20"),
+        D(str(leg["target_quantity"])), D(str(leg["limit_price"])),
+        NOW_MS + 1000, raw["deterministic_replay_key"],
+    )
+    return checkpoint, projection, raw, reservation
+
+
+def setup_multi_chain(root: Path, *, asset: str = "ETH", horizon: str = "M5"):
+    allocation, ledger = fixture(root)
+    checkpoint = build_checkpoint(run_root=root, allocation_manifest=allocation,
+                                  ledger_snapshot=ledger, expected_sha=SOURCE_SHA)
+    limits = ReservationLimits("USDC", *[D("100")] * 6)
+    projection = ReservationProjection.from_checkpoint(
+        checkpoint, writer_code_sha=WRITER_SHA, limits=limits,
+    )
+    raw = multi_forward_envelope(asset=asset, horizon=horizon, key=f"{asset}-{horizon}-ipc")
+    raw["model_sha"] = WRITER_SHA
+    raw["decision_receive_timestamp_ns"] = NOW_NS - 10_000_000
+    raw["source_event_timestamps_ns"] = [NOW_NS - 20_000_000]
+    raw["expires_at_ns"] = NOW_NS + 1_000_000_000
+    leg = raw["execution_plan"]["legs"][0]
+    packet = raw["multi_crypto_forward"]
+    reservation = ReservationRequest(
+        packet["experiment_id"], packet["protocol_hash"], raw["market_id"], leg["token_id"],
+        "signal-multi", "parent-shock-multi", asset, horizon, raw["engine_id"], "USDC", D("20"),
         D(str(leg["target_quantity"])), D(str(leg["limit_price"])),
         NOW_MS + 1000, raw["deterministic_replay_key"],
     )
@@ -112,6 +137,44 @@ class ReservedPaperChainTest(unittest.TestCase):
             self.assertEqual(records[0].event_type, "CAPITAL_RESERVE")
             self.assertEqual(records[0].model_sha, WRITER_SHA)
             self.assertFalse((root / "opportunities/receipts").exists())
+
+    def test_eth_multi_forward_packet_binds_coordinator_reservation_and_lineage(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory); _, projection, raw, reservation = setup_multi_chain(root, asset="ETH", horizon="M5")
+            events = []
+            decision = process_fast_forward_ipc_reserved(
+                root, raw, now_ns=NOW_NS, risk_preempt=False, drain_active=False,
+                reservation_projection=projection,
+                requests_by_replay_key={reservation.coordinator_replay_key: reservation},
+                append_event=events.append, entry_gate_open=True,
+            )
+            self.assertEqual(decision["action"], "TAKE", decision)
+            self.assertTrue(decision["paper_multi_crypto_forward_authorized"])
+            self.assertFalse(decision["new_risk_authorized"])
+            self.assertTrue(decision["reservation_durable"])
+            self.assertEqual(len(events), 1)
+            self.assertTrue(events[0].metadata["paper_multi_crypto_forward"])
+            self.assertEqual(events[0].metadata["multi_crypto_forward"], raw["multi_crypto_forward"])
+            self.assertEqual(events[0].metadata["coordinator_receipt"]["selected_replay_key"], raw["deterministic_replay_key"])
+
+    def test_multi_forward_experiment_mismatch_fails_before_reservation(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory); _, projection, raw, reservation = setup_multi_chain(root, asset="SOL", horizon="M15")
+            wrong = ReservationRequest(
+                "wrong-experiment", reservation.protocol_hash, reservation.market_id, reservation.token_id,
+                reservation.signal_id, reservation.parent_shock_id, reservation.asset, reservation.horizon,
+                reservation.strategy, reservation.currency, reservation.maximum_debit, reservation.quantity,
+                reservation.limit_price, reservation.expires_wall_ms, reservation.coordinator_replay_key,
+            )
+            events = []
+            decision = process_fast_forward_ipc_reserved(
+                root, raw, now_ns=NOW_NS, risk_preempt=False, drain_active=False,
+                reservation_projection=projection,
+                requests_by_replay_key={wrong.coordinator_replay_key: wrong},
+                append_event=events.append, entry_gate_open=True,
+            )
+            self.assertEqual(decision["action"], "NOTHING")
+            self.assertEqual(events, [])
 
     def test_old_sha_candidate_cannot_be_relabelled_by_new_writer(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

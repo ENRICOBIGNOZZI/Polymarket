@@ -19,6 +19,36 @@ from v7_lead_lag_replay import (ASSETS, HORIZONS, ZERO, ReplayError, ResolutionP
 OWNER = 'V7_GLOBAL_PORTFOLIO_COORDINATOR'
 SCHEMA = 'polymarket_v7_coordinator_reservation_projection_v1'
 Append = Callable[[LedgerEvent], None]
+MULTI_FORWARD_FIELDS = {
+    'mode', 'experiment_id', 'protocol_hash', 'feature_schema_hash', 'model_hash',
+    'fill_model_hash', 'cost_model_hash', 'settlement_semantic_hash',
+    'latency_profile_id', 'asset', 'horizon', 'research_only', 'automatic_promotion',
+    'one_entry_per_market', 'hold_to_settlement', 'entry_uses_absolute_fair',
+    'probability_source',
+}
+
+
+def _hash64(value: Any) -> bool:
+    text = str(value or '')
+    return len(text) == 64 and all(ch in '0123456789abcdef' for ch in text)
+
+
+def _valid_multi_forward_packet(value: Any) -> bool:
+    if not isinstance(value, Mapping) or set(value) != MULTI_FORWARD_FIELDS:
+        return False
+    return (
+        value.get('mode') == 'PAPER_MULTI_CRYPTO_FORWARD'
+        and isinstance(value.get('experiment_id'), str) and bool(value['experiment_id'])
+        and all(_hash64(value.get(name)) for name in (
+            'protocol_hash', 'feature_schema_hash', 'model_hash', 'fill_model_hash',
+            'cost_model_hash', 'settlement_semantic_hash'))
+        and isinstance(value.get('latency_profile_id'), str) and bool(value['latency_profile_id'])
+        and value.get('asset') in ASSETS and value.get('horizon') in {'M5', 'M15'}
+        and value.get('research_only') is True and value.get('automatic_promotion') is False
+        and value.get('one_entry_per_market') is True and value.get('hold_to_settlement') is True
+        and value.get('entry_uses_absolute_fair') is False
+        and value.get('probability_source') == 'POLYMARKET_PRIOR_ONLY'
+    )
 
 
 @dataclass(frozen=True)
@@ -199,6 +229,21 @@ class ReservationProjection:
                 or context.get('horizon') != request.horizon
                 or context.get('authority') != 'PAPER_EXPLORATION'):
             raise ReplayError('COORDINATOR_RECEIPT_BINDING_INVALID')
+        multi = receipt.get('multi_crypto_forward')
+        if isinstance(multi, Mapping):
+            if (receipt.get('paper_multi_crypto_forward_authorized') is not True
+                    or not _valid_multi_forward_packet(multi)
+                    or multi.get('asset') != request.asset
+                    or multi.get('horizon') != request.horizon
+                    or multi.get('protocol_hash') != request.protocol_hash
+                    or multi.get('experiment_id') != request.experiment_id
+                    or context.get('settlement_semantic_hash') not in (None, multi.get('settlement_semantic_hash'))):
+                raise ReplayError('COORDINATOR_MULTI_CRYPTO_RECEIPT_BINDING_INVALID')
+        elif request.asset != 'BTC' or request.horizon != 'M5':
+            raise ReplayError('COORDINATOR_MULTI_CRYPTO_RECEIPT_REQUIRED')
+        legacy = receipt.get('forward_test')
+        if isinstance(legacy, Mapping) and legacy.get('protocol_hash') != request.protocol_hash:
+            raise ReplayError('COORDINATOR_RECEIPT_PROTOCOL_MISMATCH')
 
     def _validate_transition_time(self, request: ReservationRequest, operation: str,
                                   now_ms: int, details: Mapping[str, Any]) -> None:
@@ -219,8 +264,11 @@ class ReservationProjection:
         if not isinstance(receipt, Mapping):
             raise ReplayError('RESERVATION_COORDINATOR_RECEIPT_MISSING')
         receipt_payload = primitive(dict(receipt))
+        multi_packet = receipt_payload.get('multi_crypto_forward') if isinstance(receipt_payload.get('multi_crypto_forward'), dict) else None
         metadata = {'component': 'crypto_informed_taker',
             'paper_exploration': True, 'economic_authority': 'PAPER_EXPLORATION',
+            'paper_multi_crypto_forward': multi_packet is not None,
+            'multi_crypto_forward': multi_packet,
             'coordinator_receipt': receipt_payload,
             'reservation_projection': {
                 'schema': SCHEMA, 'owner': OWNER, 'checkpoint_hash': self._checkpoint_hash,

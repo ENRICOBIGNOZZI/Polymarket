@@ -77,3 +77,12 @@ receipt, unknown fee/rule/book, unresolved settlement or writer failure blocks
 new entry. Risk-reducing reconciliation and settlement remain allowed.
 
 No branch in this work has real-order authority or automatic promotion.
+
+## Multi-crypto forward authority boundary
+
+`PAPER_MULTI_CRYPTO_FORWARD` is a protocol identity, not an authority owner.
+The strategy may construct such an envelope only after its asset/horizon data
+and settlement context are verified. The global coordinator still decides
+whether a PAPER reservation may be created. The ledger writer independently
+requires the identical frozen packet and coordinator replay key on any
+risk-creating event. A supported ticker without this chain remains SHADOW.

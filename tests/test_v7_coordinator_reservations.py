@@ -18,18 +18,34 @@ NOW=1_800_000_000_000
 SHA='a'*40
 
 
-def request(market='m1', asset='ETH', signal='signal1', maximum='3'):
+def request(market='m1', asset='BTC', signal='signal1', maximum='3'):
     return ReservationRequest('synthetic-cohort','b'*64,market,'yes-'+market,signal,'common-shock',
         asset,'M5','CRYPTO_SETTLEMENT_ENGINE','USDC',D(maximum),D(5),D('.50'),NOW+1000,'candidate-'+market)
 
 
 def receipt(req):
-    return dict(schema='polymarket_v7_global_opportunity_decision_v1',owner=OWNER,action='TAKE',
+    value=dict(schema='polymarket_v7_global_opportunity_decision_v1',owner=OWNER,action='TAKE',
         engine_id=req.strategy,crypto_context={'asset':req.asset,'horizon':req.horizon,
         'authority':'PAPER_EXPLORATION'},selected_replay_key=req.coordinator_replay_key,
         new_risk_authorized=False,paper_exploration_authorized=True,
-        paper_exploration_probe_authorized=False,paper_forward_test_authorized=True,
+        paper_exploration_probe_authorized=False,paper_forward_test_authorized=False,
+        paper_multi_crypto_forward_authorized=False,
         paper_only=True,authenticated_execution=False,real_order_submission=False,real_capital_at_risk=False)
+    if req.asset=='BTC' and req.horizon=='M5':
+        value['paper_forward_test_authorized']=True
+        value['forward_test']={'protocol_hash':req.protocol_hash}
+    else:
+        value['paper_multi_crypto_forward_authorized']=True
+        value['multi_crypto_forward']={
+            'mode':'PAPER_MULTI_CRYPTO_FORWARD','experiment_id':req.experiment_id,
+            'protocol_hash':req.protocol_hash,'feature_schema_hash':'c'*64,
+            'model_hash':'d'*64,'fill_model_hash':'e'*64,'cost_model_hash':'f'*64,
+            'settlement_semantic_hash':'1'*64,'latency_profile_id':'synthetic-latency',
+            'asset':req.asset,'horizon':req.horizon,'research_only':True,
+            'automatic_promotion':False,'one_entry_per_market':True,
+            'hold_to_settlement':True,'entry_uses_absolute_fair':False,
+            'probability_source':'POLYMARKET_PRIOR_ONLY'}
+    return value
 
 
 def projection(cash='100',external=(),limits=None,sha=SHA):

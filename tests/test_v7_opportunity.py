@@ -83,6 +83,26 @@ def envelope(*, engine="CRYPTO_SETTLEMENT_ENGINE", action="TAKE", component="cry
     }
 
 
+def multi_forward_envelope(*, asset: str = "ETH", horizon: str = "M5", key: str = "multi-forward") -> dict:
+    value = envelope(action="TAKE", ev=0.0, key=key, asset=asset, horizon=horizon,
+                     authority="PAPER_EXPLORATION", research_only=False)
+    value["uncertainty"] = {"lower_bound": 0.0, "upper_bound": 1.0, "status": "IMMATURE"}
+    value["calibration_status"] = "NOT_APPLICABLE"
+    value["multi_crypto_forward"] = {
+        "mode": "PAPER_MULTI_CRYPTO_FORWARD", "experiment_id": f"{asset}-{horizon}-cohort",
+        "protocol_hash": "f" * 64, "feature_schema_hash": "e" * 64,
+        "model_hash": "1" * 64, "fill_model_hash": "2" * 64,
+        "cost_model_hash": "3" * 64,
+        "settlement_semantic_hash": value["crypto_context"]["settlement_semantic_hash"],
+        "latency_profile_id": value["latency"]["profile_id"],
+        "asset": asset, "horizon": horizon, "research_only": True,
+        "automatic_promotion": False, "one_entry_per_market": True,
+        "hold_to_settlement": True, "entry_uses_absolute_fair": False,
+        "probability_source": "POLYMARKET_PRIOR_ONLY",
+    }
+    return value
+
+
 def test_complete_envelope_parses() -> None:
     parsed = OpportunityEnvelope.parse(envelope())
     assert parsed.engine_id == "CRYPTO_SETTLEMENT_ENGINE"
@@ -225,6 +245,58 @@ def test_frozen_forward_take_is_paper_authorized_without_absolute_fair_ev() -> N
     assert decision["reasons"] == ["PAPER_FORWARD_TEST_FROZEN_PROTOCOL"]
 
 
+def test_multi_crypto_forward_contract_is_shared_across_six_assets_and_two_horizons() -> None:
+    for asset in ("BTC", "ETH", "SOL", "XRP", "DOGE", "BNB"):
+        for horizon in ("M5", "M15"):
+            value = multi_forward_envelope(asset=asset, horizon=horizon, key=f"{asset}-{horizon}")
+            parsed = OpportunityEnvelope.parse(value)
+            assert parsed.is_multi_crypto_forward is True
+            decision = coordinate([value], now_ns=150, new_risk_authorized=False,
+                                  paper_exploration_authorized=True)
+            assert decision["action"] == "TAKE"
+            assert decision["paper_multi_crypto_forward_authorized"] is True
+            assert decision["new_risk_authorized"] is False
+            assert decision["real_order_submission"] is False
+            assert decision["crypto_context"]["asset"] == asset
+            assert decision["crypto_context"]["horizon"] == horizon
+
+
+def test_multi_crypto_forward_requires_full_frozen_lineage_and_valid_latency() -> None:
+    for mutation in ("settlement", "latency", "protocol"):
+        value = multi_forward_envelope()
+        if mutation == "settlement":
+            value["multi_crypto_forward"]["settlement_semantic_hash"] = "9" * 64
+        elif mutation == "latency":
+            value["latency"]["profile_valid"] = False
+        else:
+            value["multi_crypto_forward"]["protocol_hash"] = "not-a-hash"
+        try:
+            OpportunityEnvelope.parse(value)
+            assert False, mutation
+        except OpportunityError:
+            pass
+
+
+def test_non_btc_paper_exploration_without_multi_forward_packet_is_rejected() -> None:
+    value = envelope(ev=0.0, asset="ETH", horizon="M5", authority="PAPER_EXPLORATION")
+    value["uncertainty"] = {"lower_bound": 0.0, "upper_bound": 1.0, "status": "IMMATURE"}
+    value["calibration_status"] = "NOT_APPLICABLE"
+    try:
+        OpportunityEnvelope.parse(value)
+        assert False
+    except OpportunityError as exc:
+        assert "paper_exploration_evidence_incomplete" in str(exc)
+
+
+def test_multi_crypto_forward_does_not_authorize_itself_without_paper_gate() -> None:
+    value = multi_forward_envelope(asset="SOL", horizon="M5")
+    decision = coordinate([value], now_ns=150, new_risk_authorized=False,
+                          paper_exploration_authorized=False)
+    assert decision["action"] == "NOTHING"
+    assert decision["paper_multi_crypto_forward_authorized"] is False
+    assert decision["new_risk_authorized"] is False
+
+
 if __name__ == "__main__":
     test_complete_envelope_parses()
     test_unauthoritative_rebate_fails_closed()
@@ -237,3 +309,7 @@ if __name__ == "__main__":
     test_crypto_context_is_mandatory_and_zero_authority_cannot_add_risk()
     test_all_crypto_contexts_compete_in_one_global_cut()
     test_frozen_forward_take_is_paper_authorized_without_absolute_fair_ev()
+    test_multi_crypto_forward_contract_is_shared_across_six_assets_and_two_horizons()
+    test_multi_crypto_forward_requires_full_frozen_lineage_and_valid_latency()
+    test_non_btc_paper_exploration_without_multi_forward_packet_is_rejected()
+    test_multi_crypto_forward_does_not_authorize_itself_without_paper_gate()

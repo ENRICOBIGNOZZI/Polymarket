@@ -278,3 +278,26 @@ reconciled checkpoint -> candidate IPC -> coordinator reservation -> ledger IPC
 -> sole CanonicalLedgerWriter -> fsync ACK -> coordinator response. The test
 produces exactly one canonical `CAPITAL_RESERVE` and no receipt file. The IPC
 socket is not enabled in the frozen production process manifest.
+
+## Frozen multi-crypto PAPER-forward contract
+
+A new typed `PAPER_MULTI_CRYPTO_FORWARD` envelope is now distinct from the
+legacy frozen BTC `PAPER_FORWARD_TEST`. It carries immutable experiment,
+protocol, feature-schema, model, fill-model, cost-model, settlement-semantic and
+latency-profile identities plus asset/horizon. It is valid only for the six
+registered crypto assets and M5/M15, remains `research_only=true`, has no
+automatic promotion and uses PM only as the entry prior rather than an invented
+absolute settlement fair.
+
+The same packet is checked independently by the opportunity parser, the global
+coordinator reservation layer and the canonical ledger authority firewall.
+Non-BTC/M15 PAPER exploration without this packet is rejected. A multi-crypto
+risk-creating ledger event must carry the exact packet and exact replay key from
+the coordinator receipt; changing the protocol packet sends the event to
+quarantine. The generic JSON schema now also represents all typed optional
+opportunity surfaces and includes DOGE/BNB in the shared crypto context.
+
+Parameterized contract tests cover BTC/ETH/SOL/XRP/DOGE/BNB across M5/M15,
+invalid lineage hashes, settlement mismatch, invalid latency profile, disabled
+PAPER gate, experiment mismatch and ledger packet tampering. No runtime manifest
+or active lane is changed by this contract.

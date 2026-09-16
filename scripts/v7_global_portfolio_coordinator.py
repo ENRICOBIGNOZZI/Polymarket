@@ -638,12 +638,16 @@ def coordinate_reserved_paper(
             raise ReplayError("RESERVATION_REQUEST_MISSING")
         legs = raw["execution_plan"]["legs"]
         context = raw["crypto_context"]
-        protocol = (raw.get("forward_test") or {}).get("protocol_hash") or raw["policy_hash"]
+        multi_forward = raw.get("multi_crypto_forward") if isinstance(raw.get("multi_crypto_forward"), dict) else None
+        protocol = ((raw.get("forward_test") or {}).get("protocol_hash")
+                    or (multi_forward or {}).get("protocol_hash") or raw["policy_hash"])
+        expected_experiment = (multi_forward or {}).get("experiment_id")
         if (len(legs) != 1 or legs[0]["side"] != "BUY"
                 or raw["model_sha"] != reservation_projection.code_sha
                 or request.market_id != raw["market_id"] or legs[0]["contract_id"] != raw["contract_id"]
                 or request.token_id != legs[0]["token_id"] or request.market_id != legs[0]["market_id"]
                 or request.coordinator_replay_key != key or request.protocol_hash != protocol
+                or (expected_experiment is not None and request.experiment_id != expected_experiment)
                 or request.asset != context["asset"] or request.horizon != context["horizon"]
                 or request.strategy != raw["engine_id"]
                 or request.quantity != decimal(legs[0]["target_quantity"])
@@ -674,7 +678,8 @@ def process_fast_forward_ipc_reserved(
     started = time.perf_counter_ns()
     try:
         parsed = OpportunityEnvelope.parse(raw)
-        if (not parsed.is_forward_test or parsed.action != "TAKE"
+        if ((not parsed.is_forward_test and not parsed.is_multi_crypto_forward)
+                or parsed.action != "TAKE"
                 or parsed.engine_id != "CRYPTO_SETTLEMENT_ENGINE"):
             raise OpportunityError("fast_forward_ipc_wrong_envelope")
         if drain_active:

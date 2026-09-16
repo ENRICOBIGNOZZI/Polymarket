@@ -93,6 +93,29 @@ class LedgerIpcTest(unittest.TestCase):
             self.assertTrue((root / "ledger/execution.jsonl").exists())
             self.assertEqual(len(list(iter_records(root / "ledger/execution.jsonl"))), 1)
 
+    def test_multi_crypto_risk_event_requires_same_frozen_packet_as_coordinator(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory); req = request(asset="SOL"); decision = receipt(req)
+            packet = decision["multi_crypto_forward"]
+            event = LedgerEvent(
+                event_type="FILL", strategy=req.strategy, model_sha=SHA,
+                record_id="multi-fill-record", recorded_ts_ms=1_800_000_000_100,
+                opportunity_id=req.coordinator_replay_key, candidate_id=req.coordinator_replay_key,
+                order_id=req.key, fill_id="multi-fill", position_id="multi-position",
+                market_id=req.market_id, token_id=req.token_id,
+                decision_ts_ms=1_800_000_000_090, exchange_ts_ms=1_800_000_000_080,
+                receive_ts_ms=1_800_000_000_085, book_snapshot_id="multi-book",
+                side="BUY", fill_price=.5, filled_size=2.0, complete=True,
+                fee=.01, fee_source="SYNTHETIC_TEST_FEE",
+                metadata={"paper_exploration": True, "economic_authority": "PAPER_EXPLORATION",
+                          "paper_multi_crypto_forward": True, "multi_crypto_forward": packet,
+                          "coordinator_receipt": decision},
+            )
+            self.assertEqual(_authority_route(root, event), "APPEND")
+            metadata = dict(event.metadata); metadata["multi_crypto_forward"] = dict(packet, protocol_hash="9" * 64)
+            tampered = replace(event, record_id="multi-fill-tampered", metadata=metadata)
+            self.assertEqual(_authority_route(root, tampered), "QUARANTINED")
+
     def test_invalid_receipt_is_quarantined_not_durable(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory); _, event = reservation_event()

@@ -47,7 +47,7 @@
           "type": "object", "additionalProperties": false,
           "required": ["asset", "horizon", "contract_family", "settlement_semantic_hash", "authority", "research_only"],
           "properties": {
-            "asset": {"enum": ["BTC", "ETH", "SOL", "XRP"]},
+            "asset": {"enum": ["BTC", "ETH", "SOL", "XRP", "DOGE", "BNB"]},
             "horizon": {"enum": ["M1", "M5", "M15", "H1", "H4"]},
             "contract_family": {"type": "string", "minLength": 1},
             "settlement_semantic_hash": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
@@ -240,6 +240,58 @@
         "partial_fill_plan": {"enum": ["CANCEL_REMAINDER", "COMPLETE_OR_UNWIND", "NO_NEW_RISK"]},
         "timeout_ms": {"type": "integer", "minimum": 0},
         "unwind_plan": {"enum": ["NONE", "FULL_DEPTH_BOUNDED_UNWIND", "CANCEL_ONLY"]}
+      }
+    },
+    "forward_test": {
+      "type": "object", "additionalProperties": false,
+      "required": ["mode", "strategy_id", "protocol_hash", "research_only", "automatic_promotion", "one_entry_per_market", "hold_to_settlement", "entry_uses_absolute_fair", "probability_source"],
+      "properties": {
+        "mode": {"const": "PAPER_FORWARD_TEST"},
+        "strategy_id": {"const": "LEAD_LAG_TAKER_V1"},
+        "protocol_hash": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+        "research_only": {"const": true}, "automatic_promotion": {"const": false},
+        "one_entry_per_market": {"const": true}, "hold_to_settlement": {"const": true},
+        "entry_uses_absolute_fair": {"const": false}, "probability_source": {"const": "POLYMARKET_PRIOR_ONLY"}
+      }
+    },
+    "multi_crypto_forward": {
+      "type": "object", "additionalProperties": false,
+      "required": ["mode", "experiment_id", "protocol_hash", "feature_schema_hash", "model_hash", "fill_model_hash", "cost_model_hash", "settlement_semantic_hash", "latency_profile_id", "asset", "horizon", "research_only", "automatic_promotion", "one_entry_per_market", "hold_to_settlement", "entry_uses_absolute_fair", "probability_source"],
+      "properties": {
+        "mode": {"const": "PAPER_MULTI_CRYPTO_FORWARD"},
+        "experiment_id": {"type": "string", "minLength": 1},
+        "protocol_hash": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+        "feature_schema_hash": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+        "model_hash": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+        "fill_model_hash": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+        "cost_model_hash": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+        "settlement_semantic_hash": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+        "latency_profile_id": {"type": "string", "minLength": 1},
+        "asset": {"enum": ["BTC", "ETH", "SOL", "XRP", "DOGE", "BNB"]},
+        "horizon": {"enum": ["M5", "M15"]},
+        "research_only": {"const": true}, "automatic_promotion": {"const": false},
+        "one_entry_per_market": {"const": true}, "hold_to_settlement": {"const": true},
+        "entry_uses_absolute_fair": {"const": false}, "probability_source": {"const": "POLYMARKET_PRIOR_ONLY"}
+      }
+    },
+    "exploration": {
+      "type": "object", "additionalProperties": false,
+      "required": ["mode", "point_expected_wealth_change", "maximum_probe_loss", "probe_loss_cap", "information_score", "research_only", "robust_candidate", "arrival_revalidated", "model_id", "model_hash"],
+      "properties": {
+        "mode": {"const": "PAPER_BOOTSTRAP_PROBE"},
+        "point_expected_wealth_change": {"type": "number"}, "maximum_probe_loss": {"type": "number", "exclusiveMinimum": 0},
+        "probe_loss_cap": {"type": "number", "exclusiveMinimum": 0}, "information_score": {"type": "number", "exclusiveMinimum": 0},
+        "research_only": {"const": true}, "robust_candidate": {"const": false}, "arrival_revalidated": {"const": true},
+        "model_id": {"type": "string", "minLength": 1}, "model_hash": {"type": "string", "pattern": "^[0-9a-f]{64}$"}
+      }
+    },
+    "maker_execution_identity": {
+      "type": "object", "additionalProperties": false,
+      "required": ["policy_hash", "config_hash", "execution_semantics_version"],
+      "properties": {
+        "policy_hash": {"type": "string", "pattern": "^[0-9a-f]{16}$"},
+        "config_hash": {"type": "string", "pattern": "^[0-9a-f]{16}$"},
+        "execution_semantics_version": {"const": "maker-paper-v7.2-bilateral-inventory"}
       }
     },
     "inventory_delta": {"type": "number"},
