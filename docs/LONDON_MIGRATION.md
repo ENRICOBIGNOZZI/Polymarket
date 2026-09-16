@@ -14,7 +14,7 @@ Benchmark three hosts in `eu-west-2` using the physical AZ IDs supplied by Polym
 - `eu-west-2b` / `euw2-az3`
 - `eu-west-2c` / `euw2-az1`
 
-Every host must verify its observed EC2 AZ name and AZ ID through IMDSv2 before a probe is accepted. Use identical instance type, image, storage, exact Git SHA and benchmark load across the three hosts.
+The names above belong to Polymarket's AWS account; they are not portable to another account. Each host verifies its own region and stable physical AZ ID through IMDSv2. Its account-local AZ name is recorded, not compared to Polymarket's letters. Use identical instance type, image, storage, exact Git SHA and benchmark load across the three hosts.
 
 ## Bootstrap
 
@@ -59,3 +59,14 @@ The deploy workflows already read `POLYMARKET_SERVER_HOST`, `POLYMARKET_SERVER_U
 ## Current blocker
 
 AWS provisioning is not currently possible from the existing Mac environment: no usable AWS CLI/account identity was found during the 2026-09-16 audit. Provisioning of the three EC2 hosts therefore remains blocked on explicit AWS access. The repository-side bootstrap, benchmark, exact-SHA checks and migration contracts can be completed independently.
+
+## Independent audit corrections
+
+Public `/time` HTTPS ranking is not an end-to-end deployment decision. The
+evaluator now explicitly reports `end_to_end_region_selection_ready=false`.
+Comparable host hardware/image, binary and load manifests, persistent venue
+WebSocket timing, clock uncertainty and signal-to-send measurements remain
+required before choosing the production location. No host was provisioned by
+this audit. IMDS requests are bounded and do not use a proxy.
+
+AWS primary reference: https://docs.aws.amazon.com/ram/latest/userguide/working-with-az-ids.html

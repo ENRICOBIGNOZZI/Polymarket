@@ -20,11 +20,25 @@ def load_json(path: Path) -> dict[str, Any]:
     return value
 
 
+def nonnegative_integer(value: Any) -> int:
+    # JSON booleans and fractional floats are not counters or nanoseconds.
+    if type(value) is not int or not 0 <= value < 2**63:
+        raise ValueError("nonnegative signed-64-bit integer required")
+    return value
+
+
+def safe_quantile(value: dict[str, Any], name: str) -> int | None:
+    try:
+        return nonnegative_integer(value[name])
+    except (KeyError, ValueError):
+        return None
+
+
 def monotone_distribution(value: Any) -> bool:
     if not isinstance(value, dict):
         return False
     try:
-        points = [int(value[name]) for name in PERCENTILES]
+        points = [nonnegative_integer(value[name]) for name in PERCENTILES]
     except (KeyError, TypeError, ValueError):
         return False
     return all(point >= 0 for point in points) and points == sorted(points)
@@ -49,12 +63,12 @@ def evaluate_probe(
         reasons.append("CLAIM_BOUNDARY_INVALID")
 
     try:
-        started = int(probe["started_wall_ms"])
-        finished = int(probe["finished_wall_ms"])
-        requested = int(probe["samples"])
-        successful = int(probe["successful_samples"])
-        failed = int(probe["failed_samples"])
-        reconnects = int(probe["reconnect_count"])
+        started = nonnegative_integer(probe["started_wall_ms"])
+        finished = nonnegative_integer(probe["finished_wall_ms"])
+        requested = nonnegative_integer(probe["samples"])
+        successful = nonnegative_integer(probe["successful_samples"])
+        failed = nonnegative_integer(probe["failed_samples"])
+        reconnects = nonnegative_integer(probe["reconnect_count"])
     except (KeyError, TypeError, ValueError):
         reasons.append("COUNTERS_MALFORMED")
         started = finished = requested = successful = failed = reconnects = 0
@@ -67,7 +81,7 @@ def evaluate_probe(
         reasons.append("DURATION_TOO_SHORT")
     if successful < min_samples:
         reasons.append("INSUFFICIENT_SUCCESSFUL_SAMPLES")
-    if requested < successful or failed < 0 or reconnects < 0:
+    if requested != successful + failed or requested <= 0 or finished < started:
         reasons.append("COUNTERS_INCONSISTENT")
     if failure_rate > max_failure_rate:
         reasons.append("FAILURE_RATE_TOO_HIGH")
@@ -92,9 +106,9 @@ def evaluate_probe(
         "failure_rate": failure_rate,
         "reconnect_count": reconnects,
         "reconnect_rate": reconnect_rate,
-        "total_p99_ns": int(total.get("p99") or 0),
-        "total_p99_9_ns": int(total.get("p99_9") or 0),
-        "total_p50_ns": int(total.get("p50") or 0),
+        "total_p99_ns": safe_quantile(total, "p99"),
+        "total_p99_9_ns": safe_quantile(total, "p99_9"),
+        "total_p50_ns": safe_quantile(total, "p50"),
         "healthy": not reasons,
         "reasons": sorted(set(reasons)),
     }
@@ -189,6 +203,10 @@ def main() -> int:
         "real_order_submission": False,
         "automatic_cutover": False,
         "network_probe_only": True,
+        "selection_scope": "PUBLIC_HTTPS_PROBE_ONLY",
+        "end_to_end_region_selection_ready": False,
+        "authenticated_order_latency_observed": False,
+        "host_hardware_and_load_parity_verified": False,
         "authorizes_live_execution": False,
     }
     print(json.dumps(output, indent=2, sort_keys=True))

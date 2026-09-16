@@ -13,22 +13,18 @@ PROBE="$APP_DIR/build/polymarket_v7_latency_probe"
 [[ -x "$PROBE" ]]
 [[ -f "$CONFIG" ]]
 
-TOKEN="$(curl -fsS -X PUT 'http://169.254.169.254/latest/api/token' \
+TOKEN="$(curl --noproxy 169.254.169.254 --connect-timeout 2 --max-time 5 -fsS -X PUT 'http://169.254.169.254/latest/api/token' \
   -H 'X-aws-ec2-metadata-token-ttl-seconds: 21600')"
-imds(){ curl -fsS -H "X-aws-ec2-metadata-token: $TOKEN" "http://169.254.169.254/latest/meta-data/$1"; }
+imds(){ curl --noproxy 169.254.169.254 --connect-timeout 2 --max-time 5 -fsS -H "X-aws-ec2-metadata-token: $TOKEN" "http://169.254.169.254/latest/meta-data/$1"; }
+REGION="$(imds placement/region)"
 AZ_NAME="$(imds placement/availability-zone)"
 AZ_ID="$(imds placement/availability-zone-id)"
 INSTANCE_ID="$(imds instance-id)"
 INSTANCE_TYPE="$(imds instance-type)"
 
-python3 - "$CONFIG" "$AZ_NAME" "$AZ_ID" <<'PY'
-import json,sys
-config=json.load(open(sys.argv[1],encoding='utf-8'))
-name,zone_id=sys.argv[2:]
-expected={row['zone_name']:row['zone_id'] for row in config['zones']}
-if name not in expected or expected[name] != zone_id:
-    raise SystemExit(f'AZ mapping mismatch: observed {name}/{zone_id}, expected={expected.get(name)}')
-PY
+# AZ letters belong to the caller's AWS account. Physical IDs are stable.
+python3 "$APP_DIR/scripts/v7_london_identity.py" --config "$CONFIG" \
+  --region "$REGION" --zone-name "$AZ_NAME" --zone-id "$AZ_ID"
 
 case "$MODE" in
   smoke)
@@ -61,6 +57,8 @@ value={
   'probe_path':probe, 'paper_only':True,
   'authenticated_execution':False, 'real_order_submission':False,
   'measures_authenticated_order_path':False,
+  'zone_name_scope':'THIS_AWS_ACCOUNT_ONLY',
+  'selection_scope':'PUBLIC_HTTPS_PROBE_ONLY',
 }
 Path(path).write_text(json.dumps(value,sort_keys=True,indent=2)+'\n',encoding='utf-8')
 PY

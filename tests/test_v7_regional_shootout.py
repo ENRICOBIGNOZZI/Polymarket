@@ -94,6 +94,42 @@ def test_malformed_percentiles_fail_closed() -> None:
     assert "MALFORMED_PERCENTILES:total" in output["results"][0]["reasons"]
 
 
+
+def test_inconsistent_total_count_fails_closed() -> None:
+    bad = probe("eu-west-2a", 7_000_000, 6_000_000)
+    bad["samples"] += 1
+    completed, output = run([bad], ["eu-west-2a"])
+    assert completed.returncode == 2
+    assert "COUNTERS_INCONSISTENT" in output["results"][0]["reasons"]
+
+
+def test_malformed_quantiles_produce_json_not_exception() -> None:
+    for value in ("bad", None, float("nan"), float("inf"), True, 7.5, -1):
+        bad = probe("eu-west-2a", 7_000_000, 6_000_000)
+        bad["timings_ns"]["total"]["p99_9"] = value
+        completed, output = run([bad], ["eu-west-2a"])
+        assert completed.returncode == 2, value
+        assert output["selected_region"] is None
+        assert output["results"][0]["total_p99_9_ns"] is None
+
+
+def test_fractional_boolean_and_negative_counters_are_invalid() -> None:
+    for key in ("samples", "successful_samples", "failed_samples", "started_wall_ms"):
+        for value in (True, 1005.2, -1, float("inf")):
+            bad = probe("eu-west-2a", 7_000_000, 6_000_000)
+            bad[key] = value
+            completed, output = run([bad], ["eu-west-2a"])
+            assert completed.returncode == 2, (key, value)
+            assert "COUNTERS_MALFORMED" in output["results"][0]["reasons"]
+
+
+def test_http_winner_never_claims_end_to_end_readiness() -> None:
+    completed, output = run([probe("eu-west-2a", 7_000_000, 6_000_000)], ["eu-west-2a"])
+    assert completed.returncode == 0
+    assert output["selection_scope"] == "PUBLIC_HTTPS_PROBE_ONLY"
+    assert output["end_to_end_region_selection_ready"] is False
+    assert output["host_hardware_and_load_parity_verified"] is False
+
 if __name__ == "__main__":
     tests = sorted((name, fn) for name, fn in globals().items()
                    if name.startswith("test_") and callable(fn))
