@@ -51,3 +51,40 @@ Official semantics consulted:
 https://docs.polymarket.com/trading/fees
 https://docs.polymarket.com/trading/place-orders
 https://docs.polymarket.com/concepts/resolution
+
+## Durable coordinator checkpoint
+
+The existing coordinator now exposes `coordinate_reserved_paper`. It is opt-in:
+no launcher, process manifest, frozen BTC route, or active authority is changed.
+Its existing `coordinate()` policy remains the gate. New ticker support in an
+offline module does NOT expand that gate.
+
+`ReservationProjection` appends only through a supplied synchronous canonical
+writer callback. It is not a writer or a service. A durable submit fence blocks
+resubmission after restart. Partial FAK completion requires the actual canonical
+fill records and terminal order record, including coverage of every partial.
+FINAL requires a bound authoritative-resolution proof and exact cash identity.
+Unknown submission never expires into a zero-cost recovery. Duplicate attempts
+and traded markets remain remembered across code SHAs.
+
+The owner must provide a complete account checkpoint, including other lanes'
+OPEN exposures and RESERVED cash. A subsequent foreign monetary event marks
+that checkpoint stale and blocks new reservations/submission until reconciled.
+This is deliberately fail-closed; automated whole-account checkpoint migration
+is NOT implemented or claimed. Risk-reducing settlement remains possible.
+
+New test command:
+
+```
+python3 tests/test_v7_coordinator_reservations.py  # 33 tests
+```
+
+All 134 new synthetic tests passed at this checkpoint. Existing coordinator,
+opportunity and repository-shape regression scripts also passed. Tests include
+the actual existing canonical writer and replay after a different code SHA.
+
+PR: #960 (DRAFT). Runtime deployment: NOT DEPLOYED.
+The historical-ledger audit is NOT implemented; the attempted audit-file write
+was rejected by the remote command filter. No permission configuration changed.
+No whole-portfolio reconciliation, observed market replay, economic edge,
+Linux/native CI success or full program completion is inferred from unit tests.
