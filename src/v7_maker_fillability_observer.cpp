@@ -141,6 +141,8 @@ struct Options {
     std::string model_sha;
     std::string ws_url = "wss://ws-subscriptions-clob.polymarket.com/ws/market";
     bool fair_only = false;
+    bool selection_only = false;
+    bool selection_explicit = false;
 };
 
 Options parse_options(int argc, char** argv) {
@@ -152,13 +154,20 @@ Options parse_options(int argc, char** argv) {
             return argv[i];
         };
         if (arg == "--config") options.config = next();
-        else if (arg == "--selection") options.selection = next();
+        else if (arg == "--selection") { options.selection = next(); options.selection_explicit = true; }
         else if (arg == "--run-root") options.run_root = next();
         else if (arg == "--output-dir") options.output_dir = next();
         else if (arg == "--model-sha") options.model_sha = next();
         else if (arg == "--ws-url") options.ws_url = next();
         else if (arg == "--fair-only") options.fair_only = true;
+        else if (arg == "--selection-only") options.selection_only = true;
         else throw std::runtime_error("unknown argument: " + arg);
+    }
+    if (options.fair_only && options.selection_only) {
+        throw std::runtime_error("--fair-only and --selection-only are mutually exclusive");
+    }
+    if (options.selection_only && !options.selection_explicit) {
+        throw std::runtime_error("--selection-only requires explicit --selection");
     }
     if (options.selection.empty()) {
         options.selection = options.run_root + "/micro_maker/reward_selection.json";
@@ -181,7 +190,7 @@ struct SelectedToken {
 };
 
 [[nodiscard]] std::vector<std::pair<std::string, std::pair<std::string, std::string>>>
-load_selected_pairs(const fs::path& path) {
+load_selected_pairs(const fs::path& path, bool require_selection_only = false) {
     const auto root = read_json(path);
     if (!root.is_object()) throw std::runtime_error("maker selection must be object");
     const auto& object = root.as_object();
@@ -190,6 +199,17 @@ load_selected_pairs(const fs::path& path) {
     }
     if (const auto* value = find_value(object, "authenticated_execution"); value != nullptr && boolean(value, true)) {
         throw std::runtime_error("fillability observer selection enables authentication");
+    }
+    if (const auto* value = find_value(object, "real_order_submission"); value != nullptr && boolean(value, true)) {
+        throw std::runtime_error("fillability observer selection enables real order submission");
+    }
+    if (require_selection_only) {
+        if (text(find_value(object, "schema")) != "polymarket_v7_multi_crypto_book_selection_v1"
+            || !boolean(find_value(object, "selection_only"), false)
+            || boolean(find_value(object, "execution_authority"), true)
+            || boolean(find_value(object, "real_capital_at_risk"), true)) {
+            throw std::runtime_error("selection-only contract invalid");
+        }
     }
     const auto* raw = find_value(object, "markets");
     if (raw == nullptr || !raw->is_array()) throw std::runtime_error("maker selection missing markets");
@@ -245,7 +265,7 @@ fair_observation_pairs(const Options& options) {
         while (!g_stop.load(std::memory_order_relaxed)) {
             try {
                 if (fs::exists(options.selection) && fs::file_size(options.selection) > 0) {
-                    pairs = load_selected_pairs(options.selection);
+                    pairs = load_selected_pairs(options.selection, options.selection_only);
                     break;
                 }
             } catch (const std::exception& error) {
@@ -256,11 +276,13 @@ fair_observation_pairs(const Options& options) {
         if (pairs.empty()) throw std::runtime_error("fillability selection unavailable");
     }
 
-    for (const auto& fair : fair_observation_pairs(options)) {
-        const bool included = std::any_of(pairs.begin(), pairs.end(), [&](const auto& pair) {
-            return pair.second == fair.second;
-        });
-        if (!included) pairs.push_back(fair);
+    if (!options.selection_only) {
+        for (const auto& fair : fair_observation_pairs(options)) {
+            const bool included = std::any_of(pairs.begin(), pairs.end(), [&](const auto& pair) {
+                return pair.second == fair.second;
+            });
+            if (!included) pairs.push_back(fair);
+        }
     }
 
     std::vector<std::string> ids;
@@ -804,11 +826,13 @@ int main(int argc, char** argv) {
         const Options options = parse_options(argc, argv);
         const pm::Config config = pm::load_config(options.config);
         while (!g_stop.load(std::memory_order_relaxed)) {
-            const auto fair_pairs = fair_observation_pairs(options);
+            const auto fair_pairs = options.selection_only
+                ? std::vector<std::pair<std::string, std::pair<std::string, std::string>>>{}
+                : fair_observation_pairs(options);
             auto tokens = build_tokens(options, config);
             const auto selected_pairs = options.fair_only
                 ? std::vector<std::pair<std::string, std::pair<std::string, std::string>>>{}
-                : load_selected_pairs(options.selection);
+                : load_selected_pairs(options.selection, options.selection_only);
             ExactWsObserver observer(
                 std::move(tokens), options.ws_url, options.output_dir, options.model_sha);
             observer.start();
@@ -832,12 +856,13 @@ int main(int argc, char** argv) {
                     last_membership_check_ms = now;
                     // Price/feature refreshes do not change the subscription.
                     // Restarting on every mtime update erased queue evidence.
-                    reload = fair_observation_pairs(options) != fair_pairs;
+                    reload = !options.selection_only
+                        && fair_observation_pairs(options) != fair_pairs;
                     if (options.fair_only && observer.lineage_recovery_requested()) {
                         reload = true;
                     }
                     if (!options.fair_only) {
-                        reload = reload || load_selected_pairs(options.selection) != selected_pairs;
+                        reload = reload || load_selected_pairs(options.selection, options.selection_only) != selected_pairs;
                     }
                 }
                 std::this_thread::sleep_for(std::chrono::milliseconds(10));
