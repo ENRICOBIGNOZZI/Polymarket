@@ -64,6 +64,24 @@ def signal(*, stale: str = "YES", valid_until: int = NOW + 50_000_000) -> dict:
     }
 
 
+def repricing_signal(*, stale: str = "YES", valid_until: int = NOW + 50_000_000) -> dict:
+    rule, _ = bridge._repricing_rule()
+    return {
+        "schema": bridge.REPRICING_SIGNAL_SCHEMA,
+        "runtime_model_sha": SHA, "paper_only": True, "authenticated_execution": False,
+        "real_order_submission": False, "real_money_authority": False,
+        "research_only": True, "execution_authority": "ZERO_AUTHORITY_SIGNAL_ONLY",
+        "rule_id": bridge.REPRICING_RULE_ID, "family": rule["family"],
+        "horizon_ms": rule["horizon_ms"], "threshold_ticks": rule["threshold_ticks"],
+        "maximum_signal_age_ms": rule["maximum_signal_age_ms"],
+        "supported_cancel_side": "BUY", "signal_id": "repricing-1",
+        "market_id": "market-1", "token_id": f"{stale.lower()}-token",
+        "stale_buy_outcome": stale, "predicted_delta_probability": -0.02,
+        "trigger_origin_wall_ns": NOW - 20_000_000, "trigger_wall_ns": NOW - 10_000_000,
+        "valid_until_wall_ns": valid_until, "valid": True,
+    }
+
+
 def make_envelope(outcome: str = "YES") -> dict:
     raw = {
         "schema": "polymarket_v7_opportunity_envelope_v1", "version": 1,
@@ -206,7 +224,33 @@ def test_expired_signal_fails_closed() -> None:
         assert rows == [] and "EXTERNAL_CANCEL_LIVE_SIGNAL_NOT_ACTIVE" in status["reasons"]
 
 
+def test_repricing_signal_builds_exact_fast_cancel() -> None:
+    with tempfile.TemporaryDirectory() as directory:
+        root = Path(directory); setup_case(root)
+        (root / "external_fair/external_cancel_signal.json").unlink()
+        write(root / "research/pm_repricing_cancel_signal.json", repricing_signal())
+        rows, status = bridge.build_external_cancel_opportunities(root, now_ns=NOW)
+        assert len(rows) == 1 and status["repricing_signal_active"] is True
+        row = OpportunityEnvelope.parse(rows[0]).raw
+        assert "REPRICING_CANCEL_RULE_MATCH" in row["reasons"]
+        assert "CANCEL_SOURCE_PM_REPRICING_250MS" in row["reasons"]
+        assert row["execution_plan"]["legs"][0]["leg_id"] == "17"
+        assert row["source_event_timestamps_ns"] == [NOW - 10_000_000]
+
+
+def test_repricing_signal_cannot_cancel_wrong_token() -> None:
+    with tempfile.TemporaryDirectory() as directory:
+        root = Path(directory); setup_case(root)
+        (root / "external_fair/external_cancel_signal.json").unlink()
+        value = repricing_signal(); value["token_id"] = "different-token"
+        write(root / "research/pm_repricing_cancel_signal.json", value)
+        rows, status = bridge.build_external_cancel_opportunities(root, now_ns=NOW)
+        assert rows == [] and status["state"] == "NO_MATCHING_ACTIVE_BUY_QUOTES"
+
+
 if __name__ == "__main__":
+    test_repricing_signal_builds_exact_fast_cancel()
+    test_repricing_signal_cannot_cancel_wrong_token()
     test_rule_hash_matches_runtime_producer()
     test_active_research_signal_builds_typed_cancel()
     test_unrelated_live_files_are_not_scanned()

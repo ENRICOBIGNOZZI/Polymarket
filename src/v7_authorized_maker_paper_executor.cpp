@@ -597,7 +597,11 @@ struct CancelAuthorization {
     bool research_rule_match = false;
     if (reasons != nullptr) {
         for (const auto& reason : *reasons) {
-            if (text(&reason) == "RESEARCH_CANCEL_RULE_MATCH") research_rule_match = true;
+            const std::string value = text(&reason);
+            if (value == "RESEARCH_CANCEL_RULE_MATCH"
+                || value == "REPRICING_CANCEL_RULE_MATCH") {
+                research_rule_match = true;
+            }
         }
     }
     if (text(find_value(*decision, "schema")) != "polymarket_v7_global_opportunity_decision_v1"
@@ -693,6 +697,7 @@ public:
           archive_dir_(authorization_dir_ / "archive"),
           orphaned_dir_(authorization_dir_ / "orphaned"),
           rejected_dir_(authorization_dir_ / "rejected"),
+          superseded_dir_(authorization_dir_ / "superseded"),
           cancel_authorization_dir_(options_.run_root / "micro_maker" / "authorized_cancel"),
           cancel_archive_dir_(cancel_authorization_dir_ / "archive"),
           cancel_rejected_dir_(cancel_authorization_dir_ / "rejected"),
@@ -706,6 +711,7 @@ public:
         fs::create_directories(archive_dir_);
         fs::create_directories(orphaned_dir_);
         fs::create_directories(rejected_dir_);
+        fs::create_directories(superseded_dir_);
         fs::create_directories(cancel_authorization_dir_);
         fs::create_directories(cancel_archive_dir_);
         fs::create_directories(cancel_rejected_dir_);
@@ -939,6 +945,61 @@ private:
         MarketRuntime& market = market_runtime(authorization.market_id);
         const std::uint64_t instrument = authorization.outcome == "YES" ? market.yes_handle : market.no_handle;
         const double tick = static_cast<double>(selection.tick_size_e4) / kPriceScaleE4;
+
+        // A fresh coordinator authorization is also the cancel/replace signal.
+        // Never leave an economically stale PAPER quote resting merely because
+        // the queue-aware engine refuses a second quote on the same token.
+        const auto active_token = token_to_order_.find(authorization.token_id);
+        if (active_token != token_to_order_.end()) {
+            auto existing_it = orders_.find(active_token->second);
+            if (existing_it != orders_.end() && !existing_it->second.terminal) {
+                OrderContext& existing = existing_it->second;
+                const auto* old_fair = child_object(existing.authorization.envelope, "fair_value");
+                const auto* new_fair = child_object(authorization.envelope, "fair_value");
+                const double old_point = old_fair == nullptr ? 0.0 : number(find_value(*old_fair, "point"));
+                const double new_point = new_fair == nullptr ? 0.0 : number(find_value(*new_fair, "point"));
+                const bool price_changed = std::abs(existing.authorization.limit_price - authorization.limit_price) >= 0.5 * tick;
+                const bool fair_changed = std::abs(old_point - new_point) >= 0.5 * tick;
+                const bool book_changed =
+                    std::abs(existing.selection.best_bid - selection.best_bid) >= 0.5 * tick
+                    || std::abs(existing.selection.best_ask - selection.best_ask) >= 0.5 * tick;
+                if (price_changed || fair_changed || book_changed) {
+                    if (!existing.cancel_requested) {
+                        StrategyIntent cancel;
+                        cancel.intent_id = mix64(fnv1a(authorization.replay_key + ":reprice"));
+                        cancel.market_handle = market.market_handle;
+                        cancel.event_handle = fnv1a(existing.authorization.event_id);
+                        cancel.instrument_handle = existing.instrument_handle;
+                        cancel.decision_monotonic_ns = monotonic_ns();
+                        cancel.exchange_event_ns = std::max<std::int64_t>(1, existing.arrival_exchange_event_ns);
+                        cancel.strategy_id = StrategyId::ProfessionalMaker;
+                        cancel.type = IntentType::CancelQuote;
+                        cancel.side = Side::Buy;
+                        cancel.urgency = Urgency::Critical;
+                        cancel.purpose = IntentPurpose::Risk;
+                        cancel.passive = 1;
+                        cancel.post_only = 1;
+                        PaperMakerResult cancel_result = market.engine->apply_intent(
+                            cancel, 0, existing.tick_size_e4);
+                        if (cancel_result.rejected || cancel_result.invariant_violation) {
+                            throw std::runtime_error("queue-aware PAPER engine rejected reprice CANCEL");
+                        }
+                        handle_result(cancel_result, authorization.market_id, nullptr);
+                        ++reprice_cancel_requests_;
+                    }
+                    move_file(path, superseded_dir_);
+                    ++superseded_reprice_authorizations_;
+                    status_dirty_ = true;
+                    return;
+                }
+                // Identical refreshed authorization is not a new order.
+                move_file(path, superseded_dir_);
+                ++duplicate_live_authorizations_;
+                status_dirty_ = true;
+                return;
+            }
+        }
+
         const auto price_tick = static_cast<std::int64_t>(std::llround(authorization.limit_price / tick));
         if (price_tick <= 0 || std::abs(price_tick * tick - authorization.limit_price) > 1e-8) {
             throw std::runtime_error("authorized price is off tick");
@@ -1383,6 +1444,9 @@ private:
         status["trade_rows_consumed"] = trade_rows_consumed_;
         status["invalid_trade_rows"] = invalid_trade_rows_;
         status["rejected_authorizations"] = rejected_authorizations_;
+        status["reprice_cancel_requests"] = reprice_cancel_requests_;
+        status["superseded_reprice_authorizations"] = superseded_reprice_authorizations_;
+        status["duplicate_live_authorizations"] = duplicate_live_authorizations_;
         status["coordinator_cancel_requests"] = coordinator_cancel_requests_;
         status["last_cancel_signal_to_executor_ns"] = last_cancel_signal_to_executor_ns_;
         status["last_cancel_authorization_to_executor_ns"] = last_cancel_authorization_to_executor_ns_;
@@ -1407,6 +1471,7 @@ private:
     fs::path archive_dir_;
     fs::path orphaned_dir_;
     fs::path rejected_dir_;
+    fs::path superseded_dir_;
     fs::path cancel_authorization_dir_;
     fs::path cancel_archive_dir_;
     fs::path cancel_rejected_dir_;
@@ -1429,6 +1494,9 @@ private:
     std::uint64_t trade_rows_consumed_ = 0;
     std::uint64_t invalid_trade_rows_ = 0;
     std::uint64_t rejected_authorizations_ = 0;
+    std::uint64_t reprice_cancel_requests_ = 0;
+    std::uint64_t superseded_reprice_authorizations_ = 0;
+    std::uint64_t duplicate_live_authorizations_ = 0;
     std::uint64_t coordinator_cancel_requests_ = 0;
     std::int64_t last_cancel_signal_to_executor_ns_ = 0;
     std::int64_t last_cancel_authorization_to_executor_ns_ = 0;

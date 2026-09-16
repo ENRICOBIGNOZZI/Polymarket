@@ -53,15 +53,16 @@
     "max_capital_fraction": 0.02,
     "max_market_fraction": 0.004,
     "max_quote_notional_fraction": 0.002,
-    "maximum_rest_ms": 15000,
-    "minimum_rest_ms": 15000,
-    "persistent_maximum_rest_ms": 60000,
-    "persistent_quote_fraction": 0.5,
+    "maximum_rest_ms": 1000,
+    "minimum_rest_ms": 250,
+    "persistent_maximum_rest_ms": 1000,
+    "persistent_quote_fraction": 0.0,
     "propensity_logging_required": true,
     "require_fresh_dual_clock_book": true,
     "require_post_only": true,
     "requires_positive_point_ev": true,
-    "research_only": true
+    "research_only": true,
+    "ttl_arms_ms": [250, 500, 1000]
   },
   "fair_value": {
     "directional_alpha_required": false,
@@ -270,8 +271,8 @@
     "cancel_replace_cooldown_ms": 50,
     "inventory_skew_strength": 1.0,
     "max_inside_ticks": 1,
-    "max_quote_lifetime_ms": 5000,
-    "min_quote_lifetime_ms": 1000,
+    "max_quote_lifetime_ms": 1000,
+    "min_quote_lifetime_ms": 250,
     "minimum_exploit_ev_per_dollar": 1e-05,
     "never_cross_spread": true,
     "one_sided_allowed": true,
@@ -279,7 +280,11 @@
     "requote_only_for_material_economic_change": true,
     "reward_qualified_quotes_preferred": true,
     "toxicity_withdraw_threshold": 0.75,
-    "two_sided_preferred": true
+    "two_sided_preferred": true,
+    "forward_max_queue_ahead_shares": 100.0,
+    "forward_min_recent_aggressive_flow": 5.0,
+    "repricing_cancel_threshold_ticks": 1.5,
+    "repricing_cancel_signal_max_age_ms": 100
   },
   "real_order_submission": false,
   "rewards": {

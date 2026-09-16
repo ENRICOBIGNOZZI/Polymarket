@@ -42,7 +42,7 @@ PNL_COMPONENTS = (
     "maker_rebates", "liquidity_rewards",
 )
 STRESS_MULTIPLIERS = (1.0, 1.5, 2.0)
-MARKOUT_HORIZONS_SECONDS = (1, 5, 10, 15, 30, 45, 60, 300)
+MARKOUT_HORIZONS = ("100ms", "250ms", "500ms", "1s", "5s", "10s", "15s", "30s", "45s", "60s", "300s")
 MIN_EVENT_CLUSTERS_FOR_EVIDENCE = 12
 CHRONOLOGICAL_EVENT_FOLDS = 4
 MIN_POSITIVE_EVENT_FOLD_FRACTION = 0.60
@@ -179,7 +179,7 @@ class UnitState:
     event_ids: set[str] = field(default_factory=set)
     final_event_ids: set[str] = field(default_factory=set)
     latest_recorded_ts_ms: int = 0
-    markouts_by_horizon: dict[int, list[float]] = field(default_factory=lambda: defaultdict(list))
+    markouts_by_horizon: dict[str, list[float]] = field(default_factory=lambda: defaultdict(list))
     cost_totals: dict[str, float] = field(default_factory=lambda: {name: 0.0 for name in COST_COMPONENTS})
     cost_component_observed: dict[str, bool] = field(default_factory=lambda: {name: False for name in COST_COMPONENTS})
     pnl_components: dict[str, float] = field(default_factory=lambda: {name: 0.0 for name in PNL_COMPONENTS})
@@ -381,15 +381,14 @@ class UnitState:
         if event.event_type != "MARKOUT" or not isinstance(event.markouts, dict):
             return
         for key, value in event.markouts.items():
-            if not isinstance(key, str) or not key.endswith("s") or not key[:-1].isdigit():
+            if not isinstance(key, str) or key not in MARKOUT_HORIZONS:
                 self.reasons.add("markout_horizon_invalid")
                 continue
-            horizon = int(key[:-1])
             amount = _finite(value)
             if amount is None:
                 self.reasons.add("markout_value_invalid")
                 continue
-            self.markouts_by_horizon[horizon].append(amount)
+            self.markouts_by_horizon[key].append(amount)
 
     def observe_final(self, event: Any) -> None:
         if event.event_type != "FINAL":
@@ -486,13 +485,43 @@ class UnitState:
         return sum(self.cost_totals.values())
 
 
-def _load_units(path: Path, expected_model_sha: str) -> tuple[dict[str, UnitState], list[str]]:
+def _load_units(
+    path: Path, expected_model_sha: str, supplemental_markout_paths: Iterable[Path] = (),
+) -> tuple[dict[str, UnitState], list[str]]:
     units: dict[str, UnitState] = {}
     global_reasons: list[str] = []
     try:
         events = list(ledger.iter_events(path, expected_model_sha=expected_model_sha))
     except (OSError, ledger.LedgerContractError) as exc:
         return {}, [f"canonical_ledger_unreadable:{type(exc).__name__}:{exc}"]
+
+    # The C++ markout observer is intentionally not a ledger writer. Ingest its
+    # immutable per-record evidence here, validate it with the canonical ledger
+    # schema, and deduplicate by record_id. This preserves the single-writer
+    # invariant while making fill-conditioned markouts visible to economics.
+    seen_record_ids = {_text(event.record_id) for event in events if _text(event.record_id)}
+    for source in supplemental_markout_paths:
+        source = Path(source)
+        files = sorted(source.glob("*.json")) if source.is_dir() else [source]
+        for evidence_path in files:
+            if not evidence_path.is_file():
+                continue
+            try:
+                raw = json.loads(evidence_path.read_text(encoding="utf-8"))
+                event = ledger.LedgerEvent.from_dict(raw)
+            except (OSError, json.JSONDecodeError, ledger.LedgerContractError) as exc:
+                global_reasons.append(
+                    f"markout_evidence_unreadable:{evidence_path.name}:{type(exc).__name__}"
+                )
+                continue
+            if event.model_sha != expected_model_sha or event.event_type != "MARKOUT":
+                continue
+            record_id = _text(event.record_id)
+            if record_id and record_id in seen_record_ids:
+                continue
+            if record_id:
+                seen_record_ids.add(record_id)
+            events.append(event)
     # A submitted order does not necessarily know its eventual position id,
     # while its FILL and FINAL do. Resolve that canonical relationship in a
     # first pass so one economic trade cannot be split into an order unit and
@@ -578,8 +607,13 @@ def _event_cluster_economics(mature: list[tuple[UnitState, float]]) -> tuple[dic
     return stress, ordered, fold_totals, positive_fraction
 
 
-def assess(ledger_path: Path, *, expected_model_sha: str, family: str | None = None, horizon_seconds: int | None = None) -> dict[str, Any]:
-    units, global_reasons = _load_units(ledger_path, expected_model_sha)
+def assess(
+    ledger_path: Path, *, expected_model_sha: str, family: str | None = None,
+    horizon_seconds: int | None = None, supplemental_markout_paths: Iterable[Path] = (),
+) -> dict[str, Any]:
+    units, global_reasons = _load_units(
+        ledger_path, expected_model_sha, supplemental_markout_paths=supplemental_markout_paths,
+    )
     eligible: list[UnitState] = []
     for unit in units.values():
         if family and unit.family != family:
@@ -826,9 +860,9 @@ def assess(ledger_path: Path, *, expected_model_sha: str, family: str | None = N
         for component in PNL_COMPONENTS
     }
     markouts: dict[str, dict[str, float | int | None]] = {}
-    for horizon in MARKOUT_HORIZONS_SECONDS:
+    for horizon in MARKOUT_HORIZONS:
         vals = [value for unit in selected for value in unit.markouts_by_horizon.get(horizon, [])]
-        markouts[f"{horizon}s"] = {"observations": len(vals), "mean": _mean_or_none(vals)}
+        markouts[horizon] = {"observations": len(vals), "mean": _mean_or_none(vals)}
 
     cluster_stress, ordered_clusters, chronological_folds_2x, positive_fold_fraction = _event_cluster_economics(event_mature)
     distinct_event_clusters = len(ordered_clusters)
@@ -977,13 +1011,17 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--expected-model-sha", required=True)
     parser.add_argument("--family")
     parser.add_argument("--horizon-seconds", type=int)
+    parser.add_argument("--markout-evidence", type=Path, action="append", default=[])
     parser.add_argument("--output", type=Path)
     return parser.parse_args(argv)
 
 
 def main(argv: list[str] | None = None) -> int:
     args = parse_args(argv)
-    report = assess(args.ledger, expected_model_sha=args.expected_model_sha, family=args.family, horizon_seconds=args.horizon_seconds)
+    report = assess(
+        args.ledger, expected_model_sha=args.expected_model_sha, family=args.family,
+        horizon_seconds=args.horizon_seconds, supplemental_markout_paths=args.markout_evidence,
+    )
     payload = json.dumps(report, indent=2, sort_keys=True) + "\n"
     if args.output:
         args.output.parent.mkdir(parents=True, exist_ok=True)

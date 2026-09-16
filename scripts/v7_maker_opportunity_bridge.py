@@ -478,6 +478,22 @@ def build_maker_opportunities(
         if action not in {"JOIN", "IMPROVE1"} or side != "BUY" or price is None or fair_triplet is None:
             rejected["INVALID_QUOTE_CELL"] = rejected.get("INVALID_QUOTE_CELL", 0) + 1
             continue
+
+        # Frozen 2H forward filter: only quote when queue position and opposite
+        # aggressive flow match the empirically fillable region identified
+        # before this window. Missing causal features fail closed.
+        quoting = policy.get("quoting") if isinstance(policy.get("quoting"), dict) else {}
+        max_queue_ahead = max(0.0, _finite(quoting.get("forward_max_queue_ahead_shares"), 100.0) or 100.0)
+        min_aggressive_flow = max(0.0, _finite(quoting.get("forward_min_recent_aggressive_flow"), 5.0) or 5.0)
+        queue_ahead = _finite(opportunity.get("queue_ahead_shares"))
+        aggressive_flow = _finite(opportunity.get("opposite_flow_shares_per_second"))
+        if queue_ahead is None or queue_ahead >= max_queue_ahead:
+            rejected["FORWARD_QUEUE_AHEAD_FILTER"] = rejected.get("FORWARD_QUEUE_AHEAD_FILTER", 0) + 1
+            continue
+        if aggressive_flow is None or aggressive_flow < min_aggressive_flow:
+            rejected["FORWARD_AGGRESSIVE_FLOW_FILTER"] = rejected.get("FORWARD_AGGRESSIVE_FLOW_FILTER", 0) + 1
+            continue
+
         prior_aligned, prior_drift, prior_age_ms = _rich_prior_alignment(
             fair, opportunity, outcome, decision_ms, policy
         )
@@ -554,31 +570,32 @@ def build_maker_opportunities(
         expected_adverse = fill_point * adverse * size
         expected_latency = fill_point * latency_buffer * size
         expected_unwind = fill_point * unwind_buffer * size
+        identity = _stable_id(
+            model_sha, market_status.get("market_id"), token, outcome, side, action,
+            f"{price:.8f}", selection_ts_ms, model_hash,
+            "PAPER_BOOTSTRAP_PROBE" if needs_probe else "ROBUST_MAKE",
+        )
+        quoting = policy.get("quoting") if isinstance(policy.get("quoting"), dict) else {}
+        exploration = policy.get("exploration") if isinstance(policy.get("exploration"), dict) else {}
+        ordinary_timeout_ms = max(1, int(quoting.get("max_quote_lifetime_ms") or 1000))
+        ttl_arms = [
+            int(value) for value in (exploration.get("ttl_arms_ms") or [])
+            if isinstance(value, (int, float)) and not isinstance(value, bool) and int(value) > 0
+        ]
+        ttl_arms = sorted(set(ttl_arms))
+        if needs_probe and ttl_arms:
+            # Assignment is deterministic and fixed before the outcome: the
+            # replay identity alone selects 250/500/1000ms in the frozen arm set.
+            order_timeout_ms = ttl_arms[int(identity[:16], 16) % len(ttl_arms)]
+        else:
+            order_timeout_ms = ordinary_timeout_ms
         packet = _feature_packet(
             opportunity=opportunity, fair_status=fair_status, fill_band=fill_band,
             group=group, action_ev_point=point_ev,
             action_ev_conservative=conservative_ev, decision_ns=decision_ns,
             feature_receive_ns=selection_ts_ms * 1_000_000, model_hash=model_hash,
         )
-        identity = _stable_id(
-            model_sha, market_status.get("market_id"), token, outcome, side, action,
-            f"{price:.8f}", selection_ts_ms, model_hash,
-            "PAPER_BOOTSTRAP_PROBE" if needs_probe else "ROBUST_MAKE",
-        )
-        ordinary_timeout_ms = int(
-            ((policy.get("quoting") or {}).get("max_quote_lifetime_ms") or 5000)
-        )
-        probe_minimum_rest_ms = int(
-            ((policy.get("exploration") or {}).get("minimum_rest_ms")
-             or ordinary_timeout_ms)
-        )
-        # Information probes need enough resting time to measure queue depletion.
-        # Keep ordinary/exploit quotes on the existing short horizon; only the
-        # bounded PAPER research lane inherits the preregistered exploration rest.
-        order_timeout_ms = (
-            max(ordinary_timeout_ms, probe_minimum_rest_ms)
-            if needs_probe else ordinary_timeout_ms
-        )
+        packet["features"]["quote_lifetime_ms"] = float(order_timeout_ms)
         raw = {
             "schema": "polymarket_v7_opportunity_envelope_v1",
             "version": 1,
@@ -690,10 +707,7 @@ def build_maker_opportunities(
                 f"PLACEMENT_{action}",
             ]),
             "deterministic_replay_key": f"maker:{identity}",
-            "expires_at_ns": decision_ns + min(
-                5_000_000_000,
-                int(((policy.get("quoting") or {}).get("max_quote_lifetime_ms") or 5000)) * 1_000_000,
-            ),
+            "expires_at_ns": decision_ns + int(order_timeout_ms) * 1_000_000,
             "execution_alpha": packet,
         }
         if needs_probe:

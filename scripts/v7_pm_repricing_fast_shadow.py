@@ -21,6 +21,7 @@ from v7_pm_repricing_common import load_model, score_origin, atomic_json
 
 SCHEMA = "polymarket_v7_pm_repricing_shadow_v1"
 STATUS_SCHEMA = "polymarket_v7_pm_repricing_shadow_status_v1"
+CANCEL_SIGNAL_SCHEMA = "polymarket_v7_pm_repricing_cancel_signal_v1"
 
 
 def causal_origin_evidence(book: BookTimeline, origin: dict[str, Any], *, max_book_age_ms: int) -> dict[str, Any] | None:
@@ -188,6 +189,36 @@ class FastShadow:
                 "book_cut_oldest_receive_ms": evidence["book_cut_oldest_receive_ms"],
             })
             self.journal.append(record)
+            cancel_signal_path = getattr(self.args, "cancel_signal", None)
+            if timely and cancel_signal_path is not None and raw_yes != raw_no:
+                stale_outcome = "YES" if raw_yes else "NO"
+                token_id = origin["yes_token"] if raw_yes else origin["no_token"]
+                ttl_ms = max(1, int(getattr(self.args, "cancel_signal_ttl_ms", 100)))
+                atomic_json(Path(cancel_signal_path), {
+                    "schema": CANCEL_SIGNAL_SCHEMA,
+                    "runtime_model_sha": self.args.model_sha,
+                    "paper_only": True,
+                    "authenticated_execution": False,
+                    "real_order_submission": False,
+                    "real_money_authority": False,
+                    "research_only": True,
+                    "execution_authority": "ZERO_AUTHORITY_SIGNAL_ONLY",
+                    "rule_id": "btc-m5-pm-repricing-cancel-v1",
+                    "family": self.args.family,
+                    "horizon_ms": self.args.horizon_ms,
+                    "threshold_ticks": self.args.threshold_ticks,
+                    "maximum_signal_age_ms": ttl_ms,
+                    "supported_cancel_side": "BUY",
+                    "signal_id": origin_id,
+                    "market_id": str(origin["market_id"]),
+                    "token_id": str(token_id),
+                    "stale_buy_outcome": stale_outcome,
+                    "predicted_delta_probability": record.get("predicted_delta_probability"),
+                    "trigger_origin_wall_ns": int(origin["origin_observed_wall_ns"]),
+                    "trigger_wall_ns": int(now_ns),
+                    "valid_until_wall_ns": int(now_ns + ttl_ms * 1_000_000),
+                    "valid": True,
+                })
             self.seen_origins.add(origin_id)
             self.last_record = record
             self.scored += 1

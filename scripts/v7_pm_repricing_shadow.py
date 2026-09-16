@@ -87,6 +87,8 @@ def main() -> int:
     ap.add_argument("--artifact-sha256", required=True)
     ap.add_argument("--output", type=Path, required=True)
     ap.add_argument("--status", type=Path, required=True)
+    ap.add_argument("--cancel-signal", type=Path)
+    ap.add_argument("--cancel-signal-ttl-ms", type=int, default=100)
     ap.add_argument("--model-sha", required=True)
     ap.add_argument("--family", default="PM_PLUS_EXTERNAL")
     ap.add_argument("--horizon-ms", type=int, default=250)
@@ -103,6 +105,8 @@ def main() -> int:
         raise SystemExit("invalid model selection")
     if not math.isfinite(args.threshold_ticks) or args.threshold_ticks <= 0:
         raise SystemExit("invalid --threshold-ticks")
+    if not 1 <= args.cancel_signal_ttl_ms <= 1000:
+        raise SystemExit("invalid --cancel-signal-ttl-ms")
     if not 1 <= args.latency_gate_ms <= 100 or not 1 <= args.max_book_wait_ms <= 100:
         raise SystemExit("invalid fast inference gate")
     # Legacy launcher passed 25ms because inference and labeling were coupled.
