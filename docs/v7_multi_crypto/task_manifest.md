@@ -7,7 +7,7 @@
 | M2 Data plane | IN_PROGRESS | Multi-venue feeds, PM BookHub (24/24 BOOK_READY) and six-asset RTDS OracleHub are exact-SHA verified. Unified hot-path state/consumer integration remains. |
 | M3 Execution/accounting | NOT_STARTED | Must retain one global coordinator/execution owner/ledger. |
 | M4 Speed | NOT_STARTED | Profile before replacing file IPC/REST in the new lane. |
-| M5 Research | NOT_STARTED | Normalized shocks, leadership, derivatives, cross-crypto, residual model. |
+| M5 Research | IN_PROGRESS | Causal normalized-shock/derivatives/cross-crypto features, audited feature tape and exact compact PM repricing labels implemented. Current smoke has 1 independent time cluster, so calibration/OOS alpha remains INSUFFICIENT_EVIDENCE. |
 | M6 Multi-crypto forward | BLOCKED | ETH/SOL remain SHADOW until protocol freeze and M0-M5 gates. |
 | M7 Breadth | IN_PROGRESS | XRP/DOGE/BNB M5/M15 discovery/rules gates passed; activation remains SHADOW-only and still depends on shared PM-book/oracle/feature gates. |
 | M8 Capacity/readiness | NOT_STARTED | PAPER/shadow only; no real-money promotion. |
