@@ -278,6 +278,11 @@ def main() -> None:
             run_root, "a" * 40, ROOT / "config" / "v7_external_fair.json",
             "https://clob.invalid", "https://gamma.invalid",
         )
+        # Production must never let the absolute-fair model create a PAPER entry.
+        # The remainder of this legacy integration block temporarily re-enables
+        # the old path only to keep its accounting/recovery mechanics tested.
+        assert paper.absolute_fair_entry_disabled is True
+        paper.absolute_fair_entry_disabled = False
         exploration_row = robust_candidates(
             live, live_books, paper.policy,
         )[0]
@@ -922,6 +927,9 @@ def test_paper_account_admission_controls_actual_step() -> None:
         collector.state = {key: {"complete": True} for key, _ in checks}
         collector.policy = {}
         collector.probe_policy = {}
+        # This unit test isolates admission mechanics; production constructor
+        # forces the absolute-fair entry lane off.
+        collector.absolute_fair_entry_disabled = False
         collector.last_book_error = ""
         collector.last_attempt_reason = ""
         collector.maintenance_ready = True
@@ -1027,6 +1035,7 @@ def test_actual_step_distinguishes_missing_reference_from_no_edge() -> None:
         collector.policy = {"minimum_entry_tte_seconds": 5.0, "maximum_entry_tte_seconds": 300.0,
                             "tte_bucket_policy": [{"id":"test-5-300","minimum_seconds":5.0,"maximum_seconds":300.0,"action":"TAKER_SHADOW"}],
                             "maximum_model_market_disagreement": 0.2}; collector.probe_policy = None
+        collector.absolute_fair_entry_disabled = False
         collector.last_book_error = ""; collector.last_attempt_reason = ""; collector.maintenance_ready = True; collector.maintenance_accounting_fresh = True
         for name in ("record_forecast", "record_opportunity_set", "observe_positions", "reconcile_canonical_account", "observe_forecasts", "publish", "reject", "wait", "attempt"):
             setattr(collector, name, mock.Mock())

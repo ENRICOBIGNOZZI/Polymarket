@@ -10,7 +10,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "scripts"))
 sys.path.insert(0, str(ROOT / "tests"))
 
-from v7_global_portfolio_coordinator import process_cut  # noqa: E402
+from v7_global_portfolio_coordinator import process_cut, process_fast_forward_take  # noqa: E402
 from test_v7_opportunity import envelope  # noqa: E402
 from test_v7_crypto_execution_alpha import packet as execution_packet  # noqa: E402
 
@@ -97,9 +97,48 @@ def test_take_never_publishes_maker_authorization() -> None:
         assert not (root / "micro_maker/authorized_make").exists()
 
 
+
+def forward_envelope(key: str = "lead-lag-forward") -> dict:
+    value = envelope(action="TAKE", ev=0.0, key=key, authority="PAPER_EXPLORATION")
+    value["uncertainty"] = {"lower_bound": 0.0, "upper_bound": 1.0, "status": "IMMATURE"}
+    value["calibration_status"] = "NOT_APPLICABLE"
+    value["latency"]["profile_valid"] = False
+    value["fair_value"] = {"lower": 0.0, "point": 0.55, "upper": 1.0}
+    value["forward_test"] = {
+        "mode": "PAPER_FORWARD_TEST", "strategy_id": "LEAD_LAG_TAKER_V1",
+        "protocol_hash": "f" * 64, "research_only": True, "automatic_promotion": False,
+        "one_entry_per_market": True, "hold_to_settlement": True,
+        "entry_uses_absolute_fair": False, "probability_source": "POLYMARKET_PRIOR_ONLY",
+    }
+    return value
+
+def test_fast_forward_lane_authorizes_only_frozen_paper_take() -> None:
+    with tempfile.TemporaryDirectory() as directory:
+        root=Path(directory); value=forward_envelope()
+        write(root/'opportunities/fast_forward_inbox/one.json',value)
+        status=process_fast_forward_take(root,now_ns=150,risk_preempt=False)
+        assert status['state']=='TAKE_AUTHORIZED' and status['paper_only'] is True
+        receipt=root/'opportunities/receipts/lead-lag-forward.json'
+        assert receipt.exists()
+        decision=json.loads(receipt.read_text())
+        assert decision['paper_forward_test_authorized'] is True
+        assert decision['new_risk_authorized'] is False
+        assert (root/'opportunities/fast_forward_archive/one.json').exists()
+
+def test_fast_forward_lane_is_preempted_by_same_tick_risk_action() -> None:
+    with tempfile.TemporaryDirectory() as directory:
+        root=Path(directory); write(root/'opportunities/fast_forward_inbox/one.json',forward_envelope())
+        status=process_fast_forward_take(root,now_ns=150,risk_preempt=True)
+        assert status['state']=='FAIL_CLOSED'
+        assert 'RISK_ACTION_PREEMPTS_FORWARD_ALPHA' in status['reasons']
+        assert not (root/'opportunities/receipts/lead-lag-forward.json').exists()
+        assert (root/'opportunities/fast_forward_rejected/one.json').exists()
+
 if __name__ == "__main__":
     test_one_consumer_compares_both_engines_but_cannot_authorize_new_risk()
     test_cancel_preempts_and_is_the_only_actionable_safe_output()
     test_noncanonical_candidate_fails_closed_and_is_archived()
     test_positive_mature_make_publishes_one_receipt_gated_paper_authorization()
     test_take_never_publishes_maker_authorization()
+    test_fast_forward_lane_authorizes_only_frozen_paper_take()
+    test_fast_forward_lane_is_preempted_by_same_tick_risk_action()

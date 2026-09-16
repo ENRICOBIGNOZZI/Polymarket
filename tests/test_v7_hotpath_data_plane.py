@@ -21,7 +21,7 @@ def test_repricing_book_observer_is_fair_only_and_persistent_across_maker_rotati
     assert '--output-dir "$RUN_ROOT/research/repricing_book" --fair-only' in loop
     assert '--book-tape "$RUN_ROOT/research/repricing_book/book_observations/current.jsonl"' in loop
     assert '--book-status "$RUN_ROOT/research/repricing_book/fillability_ws_status.json"' in loop
-    assert 'v7_assert_registered_child_count 26' in loop
+    assert 'v7_assert_registered_child_count 27' in loop
 
 
 def test_lineage_invalidation_is_instrumented_without_relaxing_fail_closed_rules():

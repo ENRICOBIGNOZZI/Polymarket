@@ -1,8 +1,8 @@
 {
   "authenticated_execution": false,
   "authority_registry": "config/v7_authority_registry.json",
-  "expected_launcher_child_count": 26,
-  "expected_process_count": 28,
+  "expected_launcher_child_count": 27,
+  "expected_process_count": 29,
   "launcher": "scripts/paper_v7_execution_loop.sh",
   "paper_only": true,
   "processes": [
@@ -428,15 +428,51 @@
       "executable": "scripts/v7_global_portfolio_coordinator.py",
       "id": "global_portfolio_coordinator",
       "inputs": [
-        "opportunities/inbox"
+        "opportunities/inbox",
+        "opportunities/fast_forward_inbox"
       ],
       "launcher_log": "global_portfolio_coordinator.log",
       "outputs": [
         "opportunities/receipts",
         "global_portfolio_coordinator.log",
-        "global_portfolio_coordinator.events.jsonl*"
+        "global_portfolio_coordinator.events.jsonl*",
+        "control/fast_forward_status.json",
+        "opportunities/fast_forward_decisions.jsonl*",
+        "opportunities/fast_forward_archive",
+        "opportunities/fast_forward_rejected"
       ],
       "profile": "core"
+    },
+    {
+      "arguments": [
+        "--model-sha",
+        "${SHA}"
+      ],
+      "config_identity_required": true,
+      "dependencies": [
+        "global_portfolio_coordinator",
+        "rtds_monitor",
+        "external_venue_runtime"
+      ],
+      "exact_sha_required": true,
+      "executable": "scripts/v7_lead_lag_taker_runtime.py",
+      "id": "lead_lag_taker_v1",
+      "inputs": [
+        "config/v7_lead_lag_taker_v1.json",
+        "external_fair/status.json",
+        "external_fair/external_cancel_signal.json"
+      ],
+      "launcher_log": "research/lead_lag_taker_v1.log",
+      "outputs": [
+        "research/lead_lag_taker_v1/status.json",
+        "research/lead_lag_taker_v1/state.json",
+        "research/lead_lag_taker_v1/events.jsonl",
+        "research/lead_lag_taker_v1/forward_manifest.json",
+        "ledger/spool",
+        "research/lead_lag_taker_v1.log",
+        "opportunities/fast_forward_inbox"
+      ],
+      "profile": "engine"
     },
     {
       "arguments": [
@@ -607,7 +643,8 @@
     },
     {
       "arguments": [
-        "scripts/v7_canonical_economics.py"
+        "scripts/v7_canonical_economics.py",
+        "scripts/v7_lead_lag_forward_report.py"
       ],
       "config_identity_required": true,
       "dependencies": [
@@ -617,12 +654,15 @@
       "executable": "launcher_subshell",
       "id": "canonical_economics",
       "inputs": [
-        "ledger/execution.jsonl"
+        "ledger/execution.jsonl",
+        "research/lead_lag_taker_v1/forward_manifest.json",
+        "research/lead_lag_taker_v1/status.json"
       ],
       "launcher_log": "canonical_economics.log",
       "outputs": [
         "canonical_economics.json",
-        "canonical_economics.log"
+        "canonical_economics.log",
+        "research/lead_lag_taker_v1/forward_report.json"
       ],
       "profile": "observer"
     },

@@ -202,6 +202,29 @@ def test_all_crypto_contexts_compete_in_one_global_cut() -> None:
     assert decision["crypto_context"]["asset"] == "SOL"
 
 
+def test_frozen_forward_take_is_paper_authorized_without_absolute_fair_ev() -> None:
+    value = envelope(ev=0.0, key="lead-lag-forward", authority="PAPER_EXPLORATION")
+    value["uncertainty"] = {"lower_bound": 0.0, "upper_bound": 1.0, "status": "IMMATURE"}
+    value["calibration_status"] = "NOT_APPLICABLE"
+    value["latency"]["profile_valid"] = False
+    value["fair_value"] = {"lower": 0.0, "point": 0.55, "upper": 1.0}
+    value["forward_test"] = {
+        "mode": "PAPER_FORWARD_TEST", "strategy_id": "LEAD_LAG_TAKER_V1",
+        "protocol_hash": "f" * 64, "research_only": True,
+        "automatic_promotion": False, "one_entry_per_market": True,
+        "hold_to_settlement": True, "entry_uses_absolute_fair": False,
+        "probability_source": "POLYMARKET_PRIOR_ONLY",
+    }
+    parsed = OpportunityEnvelope.parse(value)
+    assert parsed.is_forward_test is True
+    decision = coordinate([value], now_ns=150, new_risk_authorized=False,
+                          paper_exploration_authorized=True)
+    assert decision["action"] == "TAKE"
+    assert decision["paper_forward_test_authorized"] is True
+    assert decision["new_risk_authorized"] is False
+    assert decision["reasons"] == ["PAPER_FORWARD_TEST_FROZEN_PROTOCOL"]
+
+
 if __name__ == "__main__":
     test_complete_envelope_parses()
     test_unauthoritative_rebate_fails_closed()
@@ -213,3 +236,4 @@ if __name__ == "__main__":
     test_structural_arbitrage_is_one_atomic_multileg_intent()
     test_crypto_context_is_mandatory_and_zero_authority_cannot_add_risk()
     test_all_crypto_contexts_compete_in_one_global_cut()
+    test_frozen_forward_take_is_paper_authorized_without_absolute_fair_ev()

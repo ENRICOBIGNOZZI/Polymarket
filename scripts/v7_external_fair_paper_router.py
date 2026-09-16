@@ -1815,6 +1815,11 @@ class PaperRouter:
                 or self.policy.get("authority") != "SHADOW"
                 or self.policy.get("counterfactual_enabled") is not True):
             raise RuntimeError("external_fair_taker_not_shadow_authorized")
+        self.absolute_fair_entry_disabled = (
+            self.policy.get("forward_only_no_absolute_fair_entry") is True
+        )
+        if not self.absolute_fair_entry_disabled:
+            raise RuntimeError("external_fair_absolute_entry_must_remain_disabled_for_lead_lag_forward")
         self.probe_policy = validate_probe_policy(
             self.config.get("paper_exploration_probe")
             if isinstance(self.config.get("paper_exploration_probe"), dict) else None
@@ -3575,6 +3580,9 @@ class PaperRouter:
             "code_sha": self.sha, "state": "KILLED" if killed else "DRAINING" if drain_requested else "RUNNING", "paper_only": True,
             "authenticated_execution": False, "real_order_submission": False,
             "execution_mode": "SHADOW_COUNTERFACTUAL_WITH_CANONICAL_PAPER_EXPLORATION",
+            "absolute_fair_entry_authority": False,
+            "absolute_fair_entry_mode": "FORECAST_AND_COUNTERFACTUAL_ONLY",
+            "lead_lag_taker_v1_is_only_new_taker_entry_lane": True,
             "policy_sha256": self.policy_sha256,
             "engine_id": "CRYPTO_SETTLEMENT_ENGINE",
             "execution_authority": "OPPORTUNITY_PROPOSAL_ONLY",
@@ -3751,7 +3759,12 @@ class PaperRouter:
                 probe_rows = paper_probe_candidates(
                     status, books, self.policy, self.probe_policy
                 )
-            rows = robust_rows or probe_rows
+            research_rows = robust_rows or probe_rows
+            rows = [] if self.absolute_fair_entry_disabled else research_rows
+            if self.absolute_fair_entry_disabled and research_rows:
+                self.state["absolute_fair_candidates_observed_only"] = int(
+                    self.state.get("absolute_fair_candidates_observed_only") or 0
+                ) + len(research_rows)
             if probe_rows:
                 self.state["probe_candidates"] = int(self.state.get("probe_candidates") or 0) + len(probe_rows)
         filled = False
@@ -3769,6 +3782,8 @@ class PaperRouter:
                 reason = "CLOB_BOOKS_UNAVAILABLE"
             elif market_yes is None:
                 reason = "CLOB_COMPLEMENT_INCOHERENT"
+            elif self.absolute_fair_entry_disabled and (robust_rows or probe_rows):
+                reason = "ABSOLUTE_FAIR_ENTRY_DISABLED_FORWARD_ONLY"
             elif not rows and (input_reason := candidate_input_rejection_reason(status)):
                 reason = input_reason
             elif (status.get("fair") or {}).get("valid") and entry_tte_allowed(
