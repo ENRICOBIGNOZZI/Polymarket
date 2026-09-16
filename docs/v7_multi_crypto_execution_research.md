@@ -315,3 +315,20 @@ The firewall was not relaxed. Instead the router now writes the selected
 recovery `NONFILL` plus reconciled `FINAL` inherit that exact opportunity id.
 Tests were corrected to model the same lineage. This makes authorization
 identity continuous across candidate -> order -> fill -> recovery/final.
+
+## Prospective protocol-freeze builder
+
+`v7_multi_crypto_forward_freeze.py` now creates one immutable multi-crypto
+PAPER-forward protocol only from an explicit preselected draft. It does not tune
+or inspect forward outcomes. The draft must freeze exact source/model/fill/cost/
+settlement/latency hashes, common train/validation/data cutoffs and embargo,
+entry threshold/TTE/signal age/size/no-chase/FAK semantics, shared risk caps,
+primary endpoint, cluster/bootstrap policy, fixed duration and a PnL-independent
+stopping rule.
+
+Rules/token/oracle/feed/book/fee/fill/latency/accounting/single-writer/training
+artifact evidence must all already be verified; any false flag blocks freezing.
+Changing an economic/statistical parameter changes the protocol hash. The
+result embeds the same `PAPER_MULTI_CRYPTO_FORWARD` packet consumed by the typed
+opportunity contract and still sets `entry_authority=false` and
+`automatic_promotion=false`. No thresholds are invented by the builder.
