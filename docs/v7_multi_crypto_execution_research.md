@@ -348,3 +348,23 @@ coordinator receipt. It includes resolved-PnL contribution, per-authorized-marke
 PnL only when complete, shared-shock/time cluster bootstrap, best-one/best-three
 concentration checks and descriptive 25-market chronological blocks. Annualized
 Sharpe is deliberately not computed. No report output grants execution authority.
+
+## Native authorized multi-crypto taker PAPER executor
+
+The existing C++ external-execution library now includes a mechanical
+`execute_authorized_multi_crypto_taker_paper` step. It does not decide whether
+to trade. It requires an already-durable PAPER authorization/reservation bound
+to the exact `ExecutionPlan` intent/instrument/model/policy identity, an expiry,
+a minimum state version, a maximum PM-book age and a maximum debit.
+
+At simulated arrival it consumes the current causal `BookHotSnapshot` directly,
+requires valid continuous lineage and a sufficiently new state version, converts
+that in-RAM L10 ladder through the existing `aggressive_book_from_hot`, then
+calls the existing partial-FAK simulator. The resulting gross book cost plus
+authoritative fee must stay inside the durable reservation; otherwise the
+mechanical result is rejected. No live order or wallet path exists.
+
+Native tests cover valid fill plus intent mismatch, authorization expiry,
+reservation overrun, stale book, stale state generation and broken book lineage.
+The function remains pure and trivially-copyable at its typed boundaries; it is
+not yet activated by the production process manifest.

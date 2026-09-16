@@ -143,6 +143,7 @@ int main() {
     arrival.asks[2] = BookLevel{0.55, 3.0};
 
     BookHotSnapshot hot;
+    hot.instrument_handle = 7;
     hot.state_version = 40;
     hot.receive_monotonic_ns = 1'005;
     hot.lineage_continuous = 1;
@@ -164,6 +165,60 @@ int main() {
     assert(aggressive_book_from_hot(invalid_hot).valid == 0);
     invalid_hot = hot; invalid_hot.ask_levels[1].price_e4 = 4'900;
     assert(aggressive_book_from_hot(invalid_hot).valid == 0);
+
+    TakerPaperAuthorization authorization;
+    authorization.intent_id = plan.intent_id;
+    authorization.instrument_handle = plan.intent.instrument_handle;
+    authorization.model_version = plan.model_version;
+    authorization.policy_version = plan.policy_version;
+    authorization.minimum_state_version = plan.state_version;
+    authorization.authorized_monotonic_ns = 1'000;
+    authorization.expires_monotonic_ns = 1'100;
+    authorization.maximum_book_age_ns = 100;
+    authorization.maximum_debit = 3.0;
+    authorization.paper_only = 1;
+    authorization.real_order_submission = 0;
+    authorization.real_capital_at_risk = 0;
+    authorization.reservation_durable = 1;
+    authorization.multi_crypto_forward = 1;
+    const auto authorized = execute_authorized_multi_crypto_taker_paper(
+        plan, authorization, hot, fee, fair(1'000), true, 1'010);
+    assert(authorized.reason == AuthorizedTakerRejectReason::None);
+    assert(authorized.authorization_valid == 1);
+    assert(authorized.fill.rejected == 0);
+    assert(authorized.fill.filled_microunits == 4'000'000);
+
+    auto invalid_authorization = authorization;
+    invalid_authorization.intent_id += 1;
+    assert(execute_authorized_multi_crypto_taker_paper(
+        plan, invalid_authorization, hot, fee, fair(1'000), true, 1'010).reason
+        == AuthorizedTakerRejectReason::PlanIdentityMismatch);
+    invalid_authorization = authorization;
+    invalid_authorization.expires_monotonic_ns = 1'005;
+    assert(execute_authorized_multi_crypto_taker_paper(
+        plan, invalid_authorization, hot, fee, fair(1'000), true, 1'010).reason
+        == AuthorizedTakerRejectReason::AuthorizationExpired);
+    invalid_authorization = authorization;
+    invalid_authorization.maximum_debit = 2.0;
+    const auto over_budget = execute_authorized_multi_crypto_taker_paper(
+        plan, invalid_authorization, hot, fee, fair(1'000), true, 1'010);
+    assert(over_budget.reason == AuthorizedTakerRejectReason::ReservationExceeded);
+    assert(over_budget.fill.rejected == 1);
+    auto stale_hot = hot;
+    stale_hot.receive_monotonic_ns = 800;
+    assert(execute_authorized_multi_crypto_taker_paper(
+        plan, authorization, stale_hot, fee, fair(1'000), true, 1'010).reason
+        == AuthorizedTakerRejectReason::ArrivalBookTooOld);
+    auto old_state_hot = hot;
+    old_state_hot.state_version = 0;
+    assert(execute_authorized_multi_crypto_taker_paper(
+        plan, authorization, old_state_hot, fee, fair(1'000), true, 1'010).reason
+        == AuthorizedTakerRejectReason::ArrivalStateTooOld);
+    invalid_hot = hot;
+    invalid_hot.lineage_continuous = 0;
+    assert(execute_authorized_multi_crypto_taker_paper(
+        plan, authorization, invalid_hot, fee, fair(1'000), true, 1'010).reason
+        == AuthorizedTakerRejectReason::ArrivalBookInvalid);
 
     auto fak = simulate_taker_paper(plan, arrival, fee, fair(1'000), true,
                                     AggressiveTimeInForce::Fak, 1'010);
