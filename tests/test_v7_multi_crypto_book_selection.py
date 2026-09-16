@@ -44,12 +44,13 @@ def snapshot(rows: list[dict]) -> dict:
 def test_six_asset_selection_is_zero_authority_and_explicitly_mapped() -> None:
     rows = [record(asset, "M5", f"m-{asset.lower()}")
             for asset in ("BTC", "ETH", "SOL", "XRP", "DOGE", "BNB")]
-    value = build_selection(snapshot(rows), now_unix=1_789_595_000)
+    value = build_selection(snapshot(rows), model_sha="a" * 40, now_unix=1_789_595_000)
     assert value["market_count"] == 6
     assert value["token_count"] == 12
     assert value["execution_authority"] is False
     assert value["real_order_submission"] is False
     assert value["selection_only"] is True
+    assert value["model_sha"] == "a" * 40
     assert {row["asset"] for row in value["markets"]} == {"BTC", "ETH", "SOL", "XRP", "DOGE", "BNB"}
     assert all(row["yes_token"].endswith("-yes") and row["no_token"].endswith("-no") for row in value["markets"])
 
@@ -59,7 +60,7 @@ def test_closed_stale_and_invalid_mapping_are_rejected_not_repaired() -> None:
     closed = record("SOL", "M5", "closed"); closed["closed"] = True
     stale = record("DOGE", "M5", "stale", end="2026-09-16T20:00:00Z")
     bad = record("BNB", "M5", "bad"); bad["token_mapping"] = {"YES": "same", "NO": "same"}
-    value = build_selection(snapshot([good, closed, stale, bad]), now_unix=1_789_595_000)
+    value = build_selection(snapshot([good, closed, stale, bad]), model_sha="a" * 40, now_unix=1_789_595_000)
     assert [row["market_id"] for row in value["markets"]] == ["good"]
     assert value["rejected_records"] == 3
 
@@ -68,7 +69,7 @@ def test_source_with_execution_authority_fails_closed() -> None:
     source = snapshot([record("ETH", "M5", "m")])
     source["execution_authority"] = True
     try:
-        build_selection(source, now_unix=1_789_595_000)
+        build_selection(source, model_sha="a" * 40, now_unix=1_789_595_000)
     except ValueError as exc:
         assert "zero-authority" in str(exc)
     else:
@@ -78,7 +79,7 @@ def test_source_with_execution_authority_fails_closed() -> None:
 def test_capacity_is_bounded() -> None:
     rows = [record("ETH", "M5", f"m-{i}") for i in range(3)]
     try:
-        build_selection(snapshot(rows), now_unix=1_789_595_000, maximum_markets=2)
+        build_selection(snapshot(rows), model_sha="a" * 40, now_unix=1_789_595_000, maximum_markets=2)
     except ValueError as exc:
         assert "bounded observer capacity" in str(exc)
     else:
@@ -95,6 +96,7 @@ def test_observer_selection_only_preserves_default_behavior_and_blocks_fair_inje
     assert 'root["book_event_tape_enabled"] = !state_only_;' in source
     assert 'if (!state_only_) {' in source
     assert '"polymarket_v7_multi_crypto_book_selection_v1"' in source
+    assert 'text(find_value(object, "model_sha")) != expected_model_sha' in source
     assert 'if (!options.selection_only)' in source
     assert 'reload = !options.selection_only' in source
     assert 'options.fair_only ? 25 : 1000' in source

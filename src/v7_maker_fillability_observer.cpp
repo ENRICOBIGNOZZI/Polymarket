@@ -195,7 +195,8 @@ struct SelectedToken {
 };
 
 [[nodiscard]] std::vector<std::pair<std::string, std::pair<std::string, std::string>>>
-load_selected_pairs(const fs::path& path, bool require_selection_only = false) {
+load_selected_pairs(const fs::path& path, bool require_selection_only = false,
+                    std::string_view expected_model_sha = {}) {
     const auto root = read_json(path);
     if (!root.is_object()) throw std::runtime_error("maker selection must be object");
     const auto& object = root.as_object();
@@ -212,7 +213,9 @@ load_selected_pairs(const fs::path& path, bool require_selection_only = false) {
         if (text(find_value(object, "schema")) != "polymarket_v7_multi_crypto_book_selection_v1"
             || !boolean(find_value(object, "selection_only"), false)
             || boolean(find_value(object, "execution_authority"), true)
-            || boolean(find_value(object, "real_capital_at_risk"), true)) {
+            || boolean(find_value(object, "real_capital_at_risk"), true)
+            || expected_model_sha.empty()
+            || text(find_value(object, "model_sha")) != expected_model_sha) {
             throw std::runtime_error("selection-only contract invalid");
         }
     }
@@ -270,7 +273,7 @@ fair_observation_pairs(const Options& options) {
         while (!g_stop.load(std::memory_order_relaxed)) {
             try {
                 if (fs::exists(options.selection) && fs::file_size(options.selection) > 0) {
-                    pairs = load_selected_pairs(options.selection, options.selection_only);
+                    pairs = load_selected_pairs(options.selection, options.selection_only, options.model_sha);
                     break;
                 }
             } catch (const std::exception& error) {
@@ -854,7 +857,7 @@ int main(int argc, char** argv) {
             auto tokens = build_tokens(options, config);
             const auto selected_pairs = options.fair_only
                 ? std::vector<std::pair<std::string, std::pair<std::string, std::string>>>{}
-                : load_selected_pairs(options.selection, options.selection_only);
+                : load_selected_pairs(options.selection, options.selection_only, options.model_sha);
             ExactWsObserver observer(
                 std::move(tokens), options.ws_url, options.output_dir, options.model_sha,
                 options.state_only);
@@ -885,7 +888,7 @@ int main(int argc, char** argv) {
                         reload = true;
                     }
                     if (!options.fair_only) {
-                        reload = reload || load_selected_pairs(options.selection, options.selection_only) != selected_pairs;
+                        reload = reload || load_selected_pairs(options.selection, options.selection_only, options.model_sha) != selected_pairs;
                     }
                 }
                 std::this_thread::sleep_for(std::chrono::milliseconds(10));

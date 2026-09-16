@@ -50,12 +50,14 @@ def horizon_of(row: dict[str, Any]) -> str | None:
     return None
 
 
-def build_selection(snapshot: dict[str, Any], *, now_unix: float, maximum_markets: int = 40) -> dict[str, Any]:
+def build_selection(snapshot: dict[str, Any], *, model_sha: str, now_unix: float, maximum_markets: int = 40) -> dict[str, Any]:
     if snapshot.get("paper_only") is not True \
             or snapshot.get("authenticated_execution") is not False \
             or snapshot.get("real_order_submission") is not False \
             or snapshot.get("execution_authority") is not False:
         raise ValueError("discovery snapshot is not zero-authority PAPER")
+    if len(model_sha) != 40 or any(ch not in "0123456789abcdef" for ch in model_sha):
+        raise ValueError("exact model SHA required")
     records = snapshot.get("records")
     if not isinstance(records, list):
         raise ValueError("discovery records missing")
@@ -110,6 +112,7 @@ def build_selection(snapshot: dict[str, Any], *, now_unix: float, maximum_market
     return {
         "schema": SCHEMA,
         "version": 1,
+        "model_sha": model_sha,
         "paper_only": True,
         "authenticated_execution": False,
         "real_order_submission": False,
@@ -131,13 +134,15 @@ def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--discovery", type=Path, required=True)
     parser.add_argument("--output", type=Path, required=True)
+    parser.add_argument("--model-sha", required=True)
     parser.add_argument("--now-unix", type=float, default=0.0)
     parser.add_argument("--maximum-markets", type=int, default=40)
     args = parser.parse_args()
     if not 1 <= args.maximum_markets <= 40:
         raise ValueError("maximum-markets must be in [1, 40]")
     selection = build_selection(
-        load_json(args.discovery), now_unix=args.now_unix or time.time(),
+        load_json(args.discovery), model_sha=args.model_sha,
+        now_unix=args.now_unix or time.time(),
         maximum_markets=args.maximum_markets,
     )
     atomic_json(args.output, selection)
