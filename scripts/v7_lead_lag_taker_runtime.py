@@ -87,7 +87,7 @@ def validate_config(value: dict[str, Any]) -> dict[str, Any]:
     }
     if set(value) != required:
         raise RuntimeError("lead_lag_config_field_partition")
-    if (value["schema"] != "polymarket_v7_lead_lag_taker_v1_config" or value["version"] != 1
+    if (value["schema"] != "polymarket_v7_lead_lag_taker_config_v1" or value["version"] != 1
             or value["strategy_id"] != "LEAD_LAG_TAKER_V1"):
         raise RuntimeError("lead_lag_config_identity")
     if not (value["paper_only"] is True and value["authenticated_execution"] is False
