@@ -604,6 +604,61 @@ def process_fast_forward_take(
     atomic_json(root / "control" / "fast_forward_status.json", status)
     return status
 
+
+def coordinate_reserved_paper(
+    envelopes: list[dict[str, Any]], *, now_ns: int,
+    reservation_projection: Any, requests_by_replay_key: dict[str, Any],
+    append_event: Any, entry_gate_open: bool = False,
+) -> dict[str, Any]:
+    """Opt-in in-memory admission under this SAME coordinator, not a new loop.
+
+    The frozen BTC process never calls this helper. Existing typed coordinate()
+    remains the authority gate: this does not make new assets PAPER-eligible.
+    The caller must supply the canonical writer's synchronous durable append,
+    a completely reconciled account projection and a current KILL/drain gate.
+    """
+    from v7_coordinator_reservations import ReservationProjection, ReservationRequest
+    from v7_lead_lag_replay import ReplayError, decimal
+
+    if type(now_ns) is not int or now_ns <= 0:
+        raise OpportunityError("reserved_paper_clock_invalid")
+    decision = coordinate(envelopes, now_ns=now_ns, new_risk_authorized=False,
+                          paper_exploration_authorized=True)
+    if decision.get("action") in {"CANCEL", "WITHDRAW", "NOTHING"}:
+        return decision
+    try:
+        if entry_gate_open is not True:
+            raise ReplayError("KILL_DRAIN_OR_NEW_ENTRY_GATE_CLOSED")
+        if decision.get("action") != "TAKE" or not isinstance(reservation_projection, ReservationProjection):
+            raise ReplayError("RESERVATION_PATH_REQUIRES_PAPER_TAKE")
+        key = decision.get("selected_replay_key")
+        request = requests_by_replay_key.get(key)
+        raw = _selected_envelope(envelopes, key)
+        if not isinstance(request, ReservationRequest) or not isinstance(raw, dict):
+            raise ReplayError("RESERVATION_REQUEST_MISSING")
+        legs = raw["execution_plan"]["legs"]
+        context = raw["crypto_context"]
+        protocol = (raw.get("forward_test") or {}).get("protocol_hash") or raw["policy_hash"]
+        if (len(legs) != 1 or legs[0]["side"] != "BUY"
+                or request.market_id != raw["market_id"] or legs[0]["contract_id"] != raw["contract_id"]
+                or request.token_id != legs[0]["token_id"] or request.market_id != legs[0]["market_id"]
+                or request.coordinator_replay_key != key or request.protocol_hash != protocol
+                or request.asset != context["asset"] or request.horizon != context["horizon"]
+                or request.strategy != raw["engine_id"]
+                or request.quantity != decimal(legs[0]["target_quantity"])
+                or request.limit_price != decimal(legs[0]["limit_price"])
+                or request.expires_wall_ms * 1_000_000 > raw["expires_at_ns"]
+                or request.maximum_debit < request.quantity * request.limit_price + decimal(raw["cost_vector"]["fee"])):
+            raise ReplayError("RESERVATION_ENVELOPE_BINDING_MISMATCH")
+        event = reservation_projection.reserve(request, now_ms=now_ns // 1_000_000,
+            receipt=decision, append=append_event, entry_gate_open=True)
+        return dict(decision, reservation_id=request.key, reservation_record_id=event.record_id,
+                    reservation_durable=True, automatic_promotion=False)
+    except (ReplayError, ValueError, KeyError, TypeError, OSError) as exc:
+        return fail_closed_decision(now_ns=now_ns,
+            reasons=[f"RESERVATION_FAIL_CLOSED:{type(exc).__name__}:{exc}"])
+
+
 def _run_loop(args: argparse.Namespace, journal: Any | None = None) -> int:
     full_interval = max(0.05, float(args.interval))
     fast_interval = max(0.002, float(args.fast_cancel_interval))
