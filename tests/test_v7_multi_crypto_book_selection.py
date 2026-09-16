@@ -112,6 +112,16 @@ def test_observer_selection_only_preserves_default_behavior_and_blocks_fair_inje
     assert 'start_timestamp_ms' in (ROOT / 'scripts/v7_multi_crypto_book_selection.py').read_text()
 
 
+def test_active_only_selection_excludes_future_preload_markets() -> None:
+    active=record("ETH","M5","active",end="2026-09-16T23:00:00Z")
+    active["start_timestamp"]="2026-09-16T22:45:00Z"
+    future=record("SOL","M5","future",end="2026-09-16T23:05:00Z")
+    future["start_timestamp"]="2026-09-16T23:00:00Z"
+    value=build_selection(snapshot([active,future]),model_sha="a"*40,now_unix=1789599300,active_only=True)
+    assert [row["market_id"] for row in value["markets"]]==["active"]
+    assert value["active_only"] is True
+
+
 if __name__ == "__main__":
     tests = sorted((name, fn) for name, fn in globals().items()
                    if name.startswith("test_") and callable(fn))

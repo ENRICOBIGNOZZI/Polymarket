@@ -50,7 +50,8 @@ def horizon_of(row: dict[str, Any]) -> str | None:
     return None
 
 
-def build_selection(snapshot: dict[str, Any], *, model_sha: str, now_unix: float, maximum_markets: int = 40) -> dict[str, Any]:
+def build_selection(snapshot: dict[str, Any], *, model_sha: str, now_unix: float,
+                    maximum_markets: int = 40, active_only: bool = False) -> dict[str, Any]:
     if snapshot.get("paper_only") is not True \
             or snapshot.get("authenticated_execution") is not False \
             or snapshot.get("real_order_submission") is not False \
@@ -73,6 +74,7 @@ def build_selection(snapshot: dict[str, Any], *, model_sha: str, now_unix: float
         yes = str(mapping.get("YES") or "") if isinstance(mapping, dict) else ""
         no = str(mapping.get("NO") or "") if isinstance(mapping, dict) else ""
         end_unix = parse_utc(row.get("end_timestamp"))
+        start_unix = parse_utc(row.get("start_timestamp"))
         valid = (
             asset in ASSETS and horizon in HORIZONS
             and row.get("verified_template") is True
@@ -81,6 +83,7 @@ def build_selection(snapshot: dict[str, Any], *, model_sha: str, now_unix: float
             and bool(str(row.get("market_id") or ""))
             and bool(yes) and bool(no) and yes != no
             and end_unix > now_unix
+            and (not active_only or (start_unix > 0 and start_unix <= now_unix < end_unix))
         )
         if not valid:
             rejected += 1
@@ -123,6 +126,7 @@ def build_selection(snapshot: dict[str, Any], *, model_sha: str, now_unix: float
         "execution_authority": False,
         "automatic_promotion": False,
         "selection_only": True,
+        "active_only": active_only,
         "generated_at_ms": int(now_unix * 1000),
         "source_discovery_fetched_at_ms": int(snapshot.get("fetched_at_ms") or 0),
         "generation_sha256": generation,
@@ -140,13 +144,14 @@ def main() -> int:
     parser.add_argument("--model-sha", required=True)
     parser.add_argument("--now-unix", type=float, default=0.0)
     parser.add_argument("--maximum-markets", type=int, default=40)
+    parser.add_argument("--active-only", action="store_true")
     args = parser.parse_args()
     if not 1 <= args.maximum_markets <= 40:
         raise ValueError("maximum-markets must be in [1, 40]")
     selection = build_selection(
         load_json(args.discovery), model_sha=args.model_sha,
         now_unix=args.now_unix or time.time(),
-        maximum_markets=args.maximum_markets,
+        maximum_markets=args.maximum_markets, active_only=args.active_only,
     )
     atomic_json(args.output, selection)
     print(json.dumps(selection, indent=2, sort_keys=True))
