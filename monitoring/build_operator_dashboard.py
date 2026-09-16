@@ -157,6 +157,15 @@ def build():
     ])
     by_id[127]["fieldConfig"]["overrides"].append({"matcher": {"id": "byName", "options": "Mode"}, "properties": [{"id": "mappings", "value": [{"type": "value", "options": {"PAPER_FORWARD_TEST": {"text": "Paper forward test"}}}]}]})
     by_id[107]["fieldConfig"]["overrides"].append({"matcher": {"id": "byName", "options": "Reason"}, "properties": [{"id": "mappings", "value": [{"type": "value", "options": {"accounting_not_verified": {"text": "Accounting not verified"}, "disk_pressure": {"text": "Low free disk space"}, "strategy_realized_pnl_divergence:CRYPTO_SETTLEMENT_ENGINE": {"text": "Crypto PnL differs from the ledger"}}}]}]})
+    # Three columns remain readable with Grafana's desktop navigation open.
+    # Preserve the same logical ordering; use two compact rows instead of six
+    # narrow tiles with clipped titles.
+    for panel in p:
+        old_y = panel["gridPos"]["y"]
+        panel["gridPos"]["y"] += 2 * sum(old_y >= boundary for boundary in (6,17,30,49))
+    for ids, start_y in ((range(101,107),2),(range(111,117),15),(range(121,127),30),(range(141,147),51)):
+        for index, pid in enumerate(ids):
+            by_id[pid]["gridPos"].update({"x": (index % 3) * 8, "y": start_y + (index // 3) * 3, "w": 8, "h": 3})
     return p
 
 
@@ -196,7 +205,9 @@ def diagnostics():
         chart(202,"Crypto authority flags",[("polymarket_v7_crypto_context_zero_authority","zero authority {{asset}} {{horizon}}"),("polymarket_v7_crypto_context_new_risk_authorized","new-risk permission {{asset}} {{horizon}}")],0,76),
         chart(203,"Coordinator crypto exposure · USD",[("polymarket_v7_crypto_gross_exposure_usd","gross"),("polymarket_v7_crypto_net_directional_exposure_usd","net directional"),("polymarket_v7_crypto_cluster_exposure_usd","correlated cluster")],12,76,unit="currencyUSD",decimals=2),
     ]
-    return [row(160,"Details · runtime, ownership and accounting",66,runtime),row(180,"Details · discovery and research data quality",67,universe),row(190,"Details · latency and markout sample sizes",68,latency),row(200,"Details · crypto contexts and permissions",69,contexts)]
+    for panel in runtime + universe + latency + contexts:
+        panel["gridPos"]["y"] += 8
+    return [row(160,"Details · runtime, ownership and accounting",74,runtime),row(180,"Details · discovery and research data quality",75,universe),row(190,"Details · latency and markout sample sizes",76,latency),row(200,"Details · crypto contexts and permissions",77,contexts)]
 
 
 def common(dashboard):
