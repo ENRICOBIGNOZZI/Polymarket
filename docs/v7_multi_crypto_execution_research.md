@@ -171,3 +171,22 @@ A read-only copy of the then-current live state (one open lead-lag position)
 produced account equity 14019.872195, with lead-lag realized PnL 17.58026 and
 1.108065 of open cost-at-risk conservatively marked to zero. This validation ran
 on the isolated copy only; production risk state was not rewritten.
+
+## Multi-crypto residual benchmark integration
+
+The six-asset labeled-row contract from the parallel feature/label workstream is
+now consumed directly by `v7_multi_crypto_residual_benchmark.py`. Every row hash,
+model/policy/feature identity and feature-availability timestamp is validated
+before training. The target is `future PM yes mid - current PM yes mid`; it is
+not treated as settlement probability.
+
+Ablations are nested and share one frozen common time split across all assets:
+`PM_ONLY -> OWN_EXTERNAL -> ORACLE -> LEADERS -> DERIVATIVES`. Ridge is supplied
+as a fixed preregistered value; the benchmark never selects a winner from the
+test partition. Entirely missing features may be dropped using TRAINING data
+only, and the drop list is reported. Native open-interest is deliberately
+excluded from pooling until venue/asset unit normalization is explicit.
+
+The report records input file hashes, split/embargo, block-bootstrap policy and
+seed, each frozen model, validation/test diagnostics and `economic_evidence =
+NOT_PROVEN`. No model can promote itself or obtain execution authority.
