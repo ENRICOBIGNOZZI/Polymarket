@@ -143,6 +143,7 @@ struct Options {
     bool fair_only = false;
     bool selection_only = false;
     bool state_only = false;
+    std::int64_t state_publish_ms = 100;
     bool selection_explicit = false;
 };
 
@@ -163,6 +164,7 @@ Options parse_options(int argc, char** argv) {
         else if (arg == "--fair-only") options.fair_only = true;
         else if (arg == "--selection-only") options.selection_only = true;
         else if (arg == "--state-only") options.state_only = true;
+        else if (arg == "--state-publish-ms") options.state_publish_ms = std::stoll(next());
         else throw std::runtime_error("unknown argument: " + arg);
     }
     if (options.fair_only && options.selection_only) {
@@ -173,6 +175,9 @@ Options parse_options(int argc, char** argv) {
     }
     if (options.state_only && !options.selection_only) {
         throw std::runtime_error("--state-only requires --selection-only");
+    }
+    if (options.state_publish_ms < 10 || options.state_publish_ms > 1000) {
+        throw std::runtime_error("--state-publish-ms must be in [10,1000]");
     }
     if (options.selection.empty()) {
         options.selection = options.run_root + "/micro_maker/reward_selection.json";
@@ -371,10 +376,12 @@ struct FlowSample {
 class ExactWsObserver final {
 public:
     ExactWsObserver(std::vector<SelectedToken> tokens, std::string ws_url,
-                    fs::path output_dir, std::string model_sha, bool state_only = false)
+                    fs::path output_dir, std::string model_sha, bool state_only = false,
+                    std::int64_t state_publish_ms = 100, bool recover_missing_lineage = false)
         : tokens_(std::move(tokens)), ws_url_(std::move(ws_url)),
           output_dir_(std::move(output_dir)), model_sha_(std::move(model_sha)),
-          state_only_(state_only) {
+          state_only_(state_only), state_publish_ms_(state_publish_ms),
+          recover_missing_lineage_(recover_missing_lineage) {
         std::vector<pm::v7::TokenBinding> bindings;
         std::size_t max_handle = 0;
         for (const auto& token : tokens_) {
@@ -437,6 +444,7 @@ public:
             result.invalid_frame || result.output_overflow || result.arena_exhausted
             || result.lineage_invalid_book_snapshot > 0
             || root_price_change_failures > 0
+            || (recover_missing_lineage_ && result.price_change_without_lineage > 0)
             || result.lineage_invalid_tick_size_change > 0;
         if (root_lineage_failure) {
             lineage_recovery_requests_.fetch_add(1, std::memory_order_relaxed);
@@ -564,7 +572,7 @@ public:
             book_output_.open(book_path_, std::ios::app);
             if (!book_output_) throw std::runtime_error("cannot rotate causal book evidence");
         }
-        const std::int64_t publish_period_ms = state_only_ ? 100 : 50;
+        const std::int64_t publish_period_ms = state_only_ ? state_publish_ms_ : 50;
         if (wall_ms() - last_book_publish_ms_ >= publish_period_ms) {
             for (std::size_t i=1; i<latest_books_.size(); ++i) {
                 if (latest_books_[i].empty()) continue;
@@ -587,6 +595,7 @@ public:
         root["model_sha"] = model_sha_;
         root["observer_session_id"] = session_id_;
         root["state_only"] = state_only_;
+        root["state_publish_ms"] = state_publish_ms_;
         root["book_event_tape_enabled"] = !state_only_;
         root["book_events_observed"] = book_events_observed_;
         root["book_events_written"] = book_events_written_;
@@ -793,6 +802,8 @@ private:
     fs::path output_dir_;
     std::string model_sha_;
     bool state_only_ = false;
+    std::int64_t state_publish_ms_ = 100;
+    bool recover_missing_lineage_ = false;
     std::vector<std::string> ids_;
     std::vector<const SelectedToken*> by_handle_;
     std::vector<std::unique_ptr<pm::v7::maker::MakerInstrumentLane>> lanes_;
@@ -860,7 +871,7 @@ int main(int argc, char** argv) {
                 : load_selected_pairs(options.selection, options.selection_only, options.model_sha);
             ExactWsObserver observer(
                 std::move(tokens), options.ws_url, options.output_dir, options.model_sha,
-                options.state_only);
+                options.state_only, options.state_publish_ms, options.selection_only);
             observer.start();
             std::int64_t last_status_ms = 0;
             std::int64_t last_membership_check_ms = 0;
@@ -884,7 +895,8 @@ int main(int argc, char** argv) {
                     // Restarting on every mtime update erased queue evidence.
                     reload = !options.selection_only
                         && fair_observation_pairs(options) != fair_pairs;
-                    if (options.fair_only && observer.lineage_recovery_requested()) {
+                    if ((options.fair_only || options.selection_only)
+                            && observer.lineage_recovery_requested()) {
                         reload = true;
                     }
                     if (!options.fair_only) {
