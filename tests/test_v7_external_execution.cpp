@@ -142,6 +142,29 @@ int main() {
     arrival.asks[1] = BookLevel{0.52, 2.0};
     arrival.asks[2] = BookLevel{0.55, 3.0};
 
+    BookHotSnapshot hot;
+    hot.state_version = 40;
+    hot.receive_monotonic_ns = 1'005;
+    hot.lineage_continuous = 1;
+    hot.valid = 1;
+    hot.ask_level_count = 3;
+    hot.ask_levels[0] = PriceLevelE4{5'000, 1'000'000};
+    hot.ask_levels[1] = PriceLevelE4{5'200, 2'000'000};
+    hot.ask_levels[2] = PriceLevelE4{5'500, 3'000'000};
+    const auto hot_arrival = aggressive_book_from_hot(hot);
+    assert(hot_arrival.valid == 1);
+    assert(hot_arrival.pm_state_version == arrival.pm_state_version);
+    assert(hot_arrival.ask_count == arrival.ask_count);
+    assert(std::abs(hot_arrival.asks[1].price - 0.52) < 1e-12);
+    assert(std::abs(hot_arrival.asks[1].quantity - 2.0) < 1e-12);
+    auto hot_fak = simulate_taker_paper(plan, hot_arrival, fee, fair(1'000), true,
+                                        AggressiveTimeInForce::Fak, 1'010);
+    assert(hot_fak.filled_microunits == 4'000'000);
+    auto invalid_hot = hot; invalid_hot.lineage_continuous = 0;
+    assert(aggressive_book_from_hot(invalid_hot).valid == 0);
+    invalid_hot = hot; invalid_hot.ask_levels[1].price_e4 = 4'900;
+    assert(aggressive_book_from_hot(invalid_hot).valid == 0);
+
     auto fak = simulate_taker_paper(plan, arrival, fee, fair(1'000), true,
                                     AggressiveTimeInForce::Fak, 1'010);
     assert(fak.rejected == 0);

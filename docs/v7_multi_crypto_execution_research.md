@@ -215,3 +215,17 @@ coordinator stage. `signal -> candidate` is NOT pure processing latency because
 the frozen protocol may retain a valid signal while waiting for TTE eligibility.
 Host/boot identity is absent from these legacy wall-clock records, so the report
 explicitly refuses to call these numbers cross-host one-way latency.
+
+## Native in-memory PM-book bridge
+
+The V7 C++ stack already had both sides needed for the hot path: `MarketWsShard`
+maintains a causal L10 `BookHotSnapshot` in RAM, while `simulate_taker_paper`
+performs partial FAK against an `AggressiveBook`. The isolated branch now adds
+only the missing allocation-free bridge `aggressive_book_from_hot`.
+
+The bridge requires valid continuous lineage, positive receive monotonic time,
+ordered on-book asks and positive size. It copies the canonical L10 fixed-point
+ladder directly into the existing PAPER simulator. Invalid lineage or malformed
+levels fail closed. No REST request, filesystem access or heap allocation is
+introduced by this bridge. Existing external-execution tests now verify that
+the in-RAM book produces the same FAK result as the explicit arrival-book fixture.

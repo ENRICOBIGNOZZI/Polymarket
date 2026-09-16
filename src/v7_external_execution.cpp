@@ -121,6 +121,37 @@ SelfCrossGuardResult guard_self_cross(
     return out;
 }
 
+AggressiveBook aggressive_book_from_hot(const BookHotSnapshot& book) noexcept {
+    AggressiveBook out;
+    out.pm_state_version = book.state_version;
+    out.receive_monotonic_ns = book.receive_monotonic_ns;
+    if (book.valid == 0 || book.lineage_continuous == 0
+        || book.receive_monotonic_ns <= 0 || book.ask_level_count == 0
+        || book.ask_level_count > book.ask_levels.size()
+        || book.ask_level_count > out.asks.size()) {
+        return out;
+    }
+    double previous = 0.0;
+    for (std::size_t i = 0; i < book.ask_level_count; ++i) {
+        const auto& level = book.ask_levels[i];
+        if (level.price_e4 <= 0 || level.price_e4 >= kCanonicalPriceScale
+            || level.quantity_microunits <= 0) {
+            return AggressiveBook{};
+        }
+        const double price = static_cast<double>(level.price_e4)
+                           / static_cast<double>(kCanonicalPriceScale);
+        const double quantity = static_cast<double>(level.quantity_microunits) / 1'000'000.0;
+        if (!finite(price) || !finite(quantity) || price <= previous) {
+            return AggressiveBook{};
+        }
+        out.asks[i] = BookLevel{price, quantity};
+        previous = price;
+    }
+    out.ask_count = book.ask_level_count;
+    out.valid = 1;
+    return out;
+}
+
 TakerPaperFill simulate_taker_paper(
     const ExecutionPlan& plan,
     const AggressiveBook& arrival_book,

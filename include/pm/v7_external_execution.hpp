@@ -2,6 +2,7 @@
 
 #include "pm/v7_execution_plan.hpp"
 #include "pm/v7_external_fair.hpp"
+#include "pm/v7_market_state.hpp"
 
 #include <cstdint>
 #include <type_traits>
@@ -92,6 +93,12 @@ struct ExternalMakerPolicy {
 // PAPER aggressive execution is evaluated against the canonical L2 snapshot at
 // simulated arrival time. FAK may partially fill; FOK fills only if the entire
 // requested size is executable at or better than the plan's limit.
+// Convert the canonical in-RAM Polymarket L10 snapshot directly into the
+// aggressive PAPER simulator input. Invalid/stale-lineage snapshots fail
+// closed; no REST lookup or heap allocation is required on this bridge.
+[[nodiscard]] AggressiveBook aggressive_book_from_hot(
+    const BookHotSnapshot& book) noexcept;
+
 [[nodiscard]] TakerPaperFill simulate_taker_paper(
     const ExecutionPlan& plan,
     const AggressiveBook& arrival_book,
