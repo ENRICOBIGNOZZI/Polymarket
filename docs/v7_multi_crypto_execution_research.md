@@ -88,3 +88,29 @@ The historical-ledger audit is NOT implemented; the attempted audit-file write
 was rejected by the remote command filter. No permission configuration changed.
 No whole-portfolio reconciliation, observed market replay, economic edge,
 Linux/native CI success or full program completion is inferred from unit tests.
+
+## Read-only live accounting checkpoint
+
+A byte-for-byte snapshot of the active canonical ledger was copied read-only;
+the active ledger itself was not edited. Snapshot SHA-256:
+`f7aeeb52d7f5c94b1b361462bd2f069db5a207393244dfa48324c86265f1ac69`.
+
+Observed lead-lag state in that snapshot: 14 PAPER fills/positions, 13 FINALs
+and one still-open position. The runtime status independently reported the same
+14 entries, 13 settled, one open, 10 wins and reported realized PnL 17.346885.
+Every historical lead-lag fill uses `recorded_ts_ms = decision_ts_ms + 1`; this
+is synthetic event ordering and is explicitly excluded from latency evidence.
+
+A new read-only audit checked the 13 terminal markets against fresh official
+Gamma resolution records. All 13 reconcile to their recorded payout/PnL within
+the legacy float tolerance. Supported contribution over those 13 resolved
+positions is 17.346884999999999926; the remaining position is `UNRESOLVED`, not
+zero PnL. No zero-recovery/forced-flat/conservative-terminal marker was found
+in the lead-lag records examined. Current FINAL rows predate embedded raw
+resolution-proof hashes, so the audit keeps external response hashes rather
+than rewriting history.
+
+This is deliberately a lead-lag long/hold audit, NOT a complete account
+checkpoint. `whole_portfolio_reconciled=false`; therefore it cannot itself
+unlock the durable reservation projection. Corrections, when required by future
+audits, are only proposed append-only records and are never applied in place.
