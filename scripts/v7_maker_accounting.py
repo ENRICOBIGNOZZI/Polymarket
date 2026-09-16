@@ -170,7 +170,12 @@ def authorized_maker_flat_proof(root, model_sha: str) -> dict[str, Any]:
     runtime = read('control/runtime_status.json')
     executor_path = root / 'micro_maker/authorized_make_executor_status.json'
     executor = read('micro_maker/authorized_make_executor_status.json')
-    if (runtime.get('model_sha') != model_sha or runtime.get('state') not in {'stopping','stopped'}
+    runtime_state = runtime.get('state')
+    terminal_runtime_state = bool(
+        runtime_state in {'stopping','stopped'}
+        or (runtime_state == 'killed' and runtime.get('killed') is True)
+    )
+    if (runtime.get('model_sha') != model_sha or not terminal_runtime_state
             or runtime.get('economic_new_risk_ready') is not False
             or runtime.get('authorized_alpha_actions') != []):
         raise ValueError('authorized_maker_cutover:runtime_not_stopped_safe')
