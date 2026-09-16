@@ -476,7 +476,8 @@ def reconcile_paper_exploration_finals(
                 continue
             existing_record_ids.add(record.record_id)
             if (record.strategy.upper() != STRATEGY
-                    or (record.metadata or {}).get("component") != COMPONENT):
+                    or (record.metadata or {}).get("component") != COMPONENT
+                    or (record.metadata or {}).get("paper_forward_test") is True):
                 continue
             if record.event_type == "FILL" and record.fill_id:
                 fills.setdefault(record.fill_id, record)
@@ -505,7 +506,8 @@ def reconcile_paper_exploration_finals(
             continue
         existing_record_ids.add(record.record_id)
         if (record.strategy.upper() != STRATEGY
-                or (record.metadata or {}).get("component") != COMPONENT):
+                or (record.metadata or {}).get("component") != COMPONENT
+                or (record.metadata or {}).get("paper_forward_test") is True):
             continue
         if record.event_type == "FILL" and record.fill_id:
             fills.setdefault(record.fill_id, record)
@@ -658,6 +660,7 @@ def _canonical_paper_exploration_event(event: LedgerEvent) -> bool:
         event.strategy.upper() == STRATEGY
         and metadata.get("component") == COMPONENT
         and metadata.get("paper_exploration") is True
+        and metadata.get("paper_forward_test") is not True
         and metadata.get("economic_authority") == "PAPER_EXPLORATION"
         and metadata.get("counterfactual") is False
         and metadata.get("excluded_from_portfolio_equity") is False

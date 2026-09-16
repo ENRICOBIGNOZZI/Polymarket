@@ -58,6 +58,8 @@ def test_rule_requires_original_hard_signal_contract():
 import tempfile, time
 from unittest import mock
 from v7_lead_lag_taker_runtime import LeadLagRuntime
+from v7_ledger_spool import drain_spool
+from v7_execution_ledger import canonical_ledger_path, iter_events
 
 def _write(path: Path, value: dict) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -139,6 +141,13 @@ def test_forward_runtime_fill_and_settlement_are_canonical_paper_events():
         rows=[json.loads(p.read_text()) for p in sorted((root/'ledger/spool').glob('*.json'))]
         final=next(x for x in rows if x['event_type']=='FINAL')
         assert final['final_pnl']>0 and final['metadata']['won'] is True
+        assert final['metadata']['coordinator_receipt']['paper_forward_test_authorized'] is True
+        result=drain_spool(root,model_sha='a'*40)
+        assert result['appended']==3 and result['quarantined']==0
+        canonical=list(iter_events(canonical_ledger_path(root),expected_model_sha='a'*40))
+        assert [x.event_type for x in canonical]==['ORDER_SUBMITTED','FILL','FINAL']
+        assert canonical[-1].metadata['paper_forward_test'] is True
+        assert canonical[-1].metadata['coordinator_receipt']['selected_replay_key']
         assert r.state['settled']==1 and r.state['wins']==1
 
 def test_forward_runtime_never_chases_a_worse_arrival_ask():
