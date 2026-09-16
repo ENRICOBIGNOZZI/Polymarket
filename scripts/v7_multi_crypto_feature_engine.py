@@ -440,10 +440,28 @@ def main() -> int:
     engine = FeatureEngine(validate_policy(load(args.policy)))
     signal.signal(signal.SIGINT, stop_handler); signal.signal(signal.SIGTERM, stop_handler)
     while True:
-        value = engine.build(
-            external={asset: load(path) for asset, path in paths.items()},
-            oracle=load(args.oracle_status), selection=load(args.selection),
-            book_dir=args.book_features_dir, model_sha=args.model_sha, now_ns=time.time_ns())
+        now_ns = time.time_ns()
+        try:
+            value = engine.build(
+                external={asset: load(path) for asset, path in paths.items()},
+                oracle=load(args.oracle_status), selection=load(args.selection),
+                book_dir=args.book_features_dir, model_sha=args.model_sha, now_ns=now_ns)
+            value["state"] = "RUNNING_SHADOW"
+            value["runtime_blockers"] = []
+        except ValueError as error:
+            value = {
+                "schema": SCHEMA, "version": 1, "timestamp_ns": now_ns,
+                "model_sha": args.model_sha, "paper_only": True,
+                "authenticated_execution": False, "real_order_submission": False,
+                "real_capital_at_risk": False, "execution_authority": False,
+                "research_only": True, "state": "WARMING_OR_BLOCKED",
+                "policy_mode": engine.policy["mode"], "policy_hash": engine.policy_hash,
+                "feature_schema_version": FEATURE_SCHEMA_VERSION,
+                "feature_schema_hash": FEATURE_SCHEMA_HASH,
+                "market_count": 0, "fresh_external_assets": 0,
+                "ready_for_calibration_markets": 0, "markets": [],
+                "runtime_blockers": [str(error)],
+            }
         atomic_json(args.output, value)
         if not args.loop or STOP:
             break

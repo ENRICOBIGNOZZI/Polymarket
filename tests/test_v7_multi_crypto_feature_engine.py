@@ -171,6 +171,14 @@ def test_policy_cannot_sneak_in_calibration() -> None:
         raise AssertionError('calibrated floor accepted in shadow policy')
 
 
+def test_runtime_main_has_fail_closed_warmup_contract() -> None:
+    source=(ROOT/'scripts/v7_multi_crypto_feature_engine.py').read_text()
+    assert 'WARMING_OR_BLOCKED' in source
+    assert 'runtime_blockers' in source
+    assert 'except ValueError as error:' in source
+    assert 'execution_authority": False' in source
+
+
 if __name__ == '__main__':
     tests = sorted((n, f) for n, f in globals().items() if n.startswith('test_') and callable(f))
     for _, fn in tests: fn()
