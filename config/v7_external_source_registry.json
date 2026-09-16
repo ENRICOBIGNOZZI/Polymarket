@@ -350,7 +350,8 @@
       "role": "SETTLEMENT_OBSERVABILITY_SOURCE",
       "source_id": "polymarket_rtds_chainlink_eth",
       "transport": "PUBLIC_WEBSOCKET",
-      "venue": "POLYMARKET_RTDS"
+      "venue": "POLYMARKET_RTDS",
+      "verification_evidence": "PUBLIC_ORACLE_HUB_SMOKE_2026-09-16"
     },
     {
       "activation_state": "REGISTERED_NOT_LAUNCHED",
@@ -516,7 +517,8 @@
       "role": "SETTLEMENT_OBSERVABILITY_SOURCE",
       "source_id": "polymarket_rtds_chainlink_sol",
       "transport": "PUBLIC_WEBSOCKET",
-      "venue": "POLYMARKET_RTDS"
+      "venue": "POLYMARKET_RTDS",
+      "verification_evidence": "PUBLIC_ORACLE_HUB_SMOKE_2026-09-16"
     },
     {
       "activation_state": "REGISTERED_NOT_LAUNCHED",
@@ -682,7 +684,8 @@
       "role": "SETTLEMENT_OBSERVABILITY_SOURCE",
       "source_id": "polymarket_rtds_chainlink_xrp",
       "transport": "PUBLIC_WEBSOCKET",
-      "venue": "POLYMARKET_RTDS"
+      "venue": "POLYMARKET_RTDS",
+      "verification_evidence": "PUBLIC_ORACLE_HUB_SMOKE_2026-09-16"
     },
     {
       "activation_state": "REGISTERED_NOT_LAUNCHED",
@@ -941,6 +944,48 @@
       "transport": "PUBLIC_WEBSOCKET_AND_RATE_AWARE_REST",
       "venue": "BYBIT_LINEAR",
       "verification_evidence": "PUBLIC_RUNTIME_SMOKE_2026-09-16"
+    },
+    {
+      "activation_state": "REGISTERED_NOT_LAUNCHED",
+      "asset": "DOGE",
+      "channel": "crypto_prices_twap_sixty",
+      "credentials_required": false,
+      "enabled": false,
+      "event_kinds": [
+        "ORACLE_OBSERVATION",
+        "HEARTBEAT",
+        "SOURCE_STATUS"
+      ],
+      "instrument_id": "DOGEUSDT",
+      "instrument_type": "ORACLE",
+      "provider": "Polymarket RTDS",
+      "research_only": true,
+      "role": "SETTLEMENT_OBSERVABILITY_SOURCE",
+      "source_id": "polymarket_rtds_chainlink_doge",
+      "transport": "PUBLIC_WEBSOCKET",
+      "venue": "POLYMARKET_RTDS",
+      "verification_evidence": "PUBLIC_ORACLE_HUB_SMOKE_2026-09-16"
+    },
+    {
+      "activation_state": "REGISTERED_NOT_LAUNCHED",
+      "asset": "BNB",
+      "channel": "crypto_prices_twap_sixty",
+      "credentials_required": false,
+      "enabled": false,
+      "event_kinds": [
+        "ORACLE_OBSERVATION",
+        "HEARTBEAT",
+        "SOURCE_STATUS"
+      ],
+      "instrument_id": "BNBUSDT",
+      "instrument_type": "ORACLE",
+      "provider": "Polymarket RTDS",
+      "research_only": true,
+      "role": "SETTLEMENT_OBSERVABILITY_SOURCE",
+      "source_id": "polymarket_rtds_chainlink_bnb",
+      "transport": "PUBLIC_WEBSOCKET",
+      "venue": "POLYMARKET_RTDS",
+      "verification_evidence": "PUBLIC_ORACLE_HUB_SMOKE_2026-09-16"
     }
   ]
 }

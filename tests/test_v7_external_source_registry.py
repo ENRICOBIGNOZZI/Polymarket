@@ -13,7 +13,7 @@ import v7_external_source_registry as registry
 class ExternalSourceRegistryTest(unittest.TestCase):
     def test_canonical_registry_is_v7_paper_only_and_fingerprinted(self) -> None:
         result = registry.validate(registry.load(ROOT / "config/v7_external_source_registry.json"))
-        self.assertEqual(result["source_count"], 39)
+        self.assertEqual(result["source_count"], 41)
         self.assertEqual(len(result["registry_sha256"]), 64)
         self.assertIn("deribit_btc", result["source_ids"])
         self.assertIn("coinbase_spot_btcusd_rest_snapshot", result["source_ids"])
