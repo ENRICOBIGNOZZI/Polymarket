@@ -132,7 +132,9 @@ def pair_asof_indexed(indexed: dict[tuple[str, str], dict[str, Any]], market_id:
     tolerance=2.0*max(float(yes["tick_size"]),float(no["tick_size"]))+1e-12
     if abs(yes_mid+no_mid-1.0)>tolerance:
         return None
-    return {"pm_yes":(yes_mid+1.0-no_mid)/2.0,"yes_mid":yes_mid,"no_mid":no_mid,"connection_epoch":int(yes["connection_epoch"]),
+    return {"pm_yes":(yes_mid+1.0-no_mid)/2.0,"yes_mid":yes_mid,"no_mid":no_mid,
+            "yes_best_bid":float(yes["best_bid"]),"yes_best_ask":float(yes["best_ask"]),
+            "no_best_bid":float(no["best_bid"]),"no_best_ask":float(no["best_ask"]),"connection_epoch":int(yes["connection_epoch"]),
             "yes_sequence":int(yes["observer_sequence"]),"no_sequence":int(no["observer_sequence"]),
             "state_available_wall_ms":max(int(yes["receive_wall_ms"]),int(no["receive_wall_ms"])),
             "yes_tick_size":float(yes["tick_size"]),"no_tick_size":float(no["tick_size"]),
@@ -171,6 +173,8 @@ def pair_asof(timelines: dict[tuple[str, str], list[dict[str, Any]]], market_id:
     pm_yes = (yes_mid + 1.0 - no_mid) / 2.0
     return {
         "pm_yes": pm_yes, "yes_mid": yes_mid, "no_mid": no_mid,
+        "yes_best_bid": float(yes["best_bid"]), "yes_best_ask": float(yes["best_ask"]),
+        "no_best_bid": float(no["best_bid"]), "no_best_ask": float(no["best_ask"]),
         "connection_epoch": int(yes["connection_epoch"]),
         "yes_sequence": int(yes["observer_sequence"]),
         "no_sequence": int(no["observer_sequence"]),
