@@ -669,7 +669,7 @@ public:
         root["compact_label_records"] = compact_label_records_;
         root["compact_label_current_bytes"] = compact_label_current_bytes_;
         root["compact_label_segments"] = compact_label_segment_;
-        root["compact_label_record_size"] = 64;
+        root["compact_label_record_size"] = 80;
         root["book_watermark_receive_wall_ms"] = book_watermark_wall_ms_;
         root["book_watermark_receive_monotonic_ns"] = book_watermark_monotonic_ns_;
         root["state"] = stopped ? "stopped" : "running";
@@ -773,13 +773,13 @@ public:
     }
 
 private:
-    static void put_u64(std::array<char, 64>& out, std::size_t offset, std::uint64_t value) noexcept {
+    static void put_u64(std::array<char, 80>& out, std::size_t offset, std::uint64_t value) noexcept {
         for (std::size_t i = 0; i < 8; ++i) out[offset + i] = static_cast<char>((value >> (8U * i)) & 0xffU);
     }
-    static void put_i64(std::array<char, 64>& out, std::size_t offset, std::int64_t value) noexcept {
+    static void put_i64(std::array<char, 80>& out, std::size_t offset, std::int64_t value) noexcept {
         put_u64(out, offset, static_cast<std::uint64_t>(value));
     }
-    static void put_i32(std::array<char, 64>& out, std::size_t offset, std::int32_t value) noexcept {
+    static void put_i32(std::array<char, 80>& out, std::size_t offset, std::int32_t value) noexcept {
         const auto raw = static_cast<std::uint32_t>(value);
         for (std::size_t i = 0; i < 4; ++i) out[offset + i] = static_cast<char>((raw >> (8U * i)) & 0xffU);
     }
@@ -796,14 +796,15 @@ private:
                 {"outcome", token.is_yes != 0 ? "YES" : "NO"}, {"initial_tick_e4", token.tick_size_e4}});
         }
         json::object manifest{
-            {"schema", "polymarket_v7_compact_pm_label_tape_manifest_v1"}, {"version", 1},
-            {"record_schema", "polymarket_v7_compact_pm_label_record_v1"}, {"record_size", 64},
+            {"schema", "polymarket_v7_compact_pm_label_tape_manifest_v2"}, {"version", 2},
+            {"record_schema", "polymarket_v7_compact_pm_label_record_v2"}, {"record_size", 80},
             {"byte_order", "little_endian"}, {"model_sha", model_sha_}, {"observer_session_id", session_id_},
             {"paper_only", true}, {"authenticated_execution", false}, {"real_order_submission", false},
             {"execution_authority", "ZERO_AUTHORITY_RESEARCH_ONLY"}, {"selection_only", true},
             {"fields", json::array{"observer_sequence:u64", "instrument_handle:u64", "state_version:u64",
                 "connection_epoch:u64", "receive_wall_ms:i64", "receive_monotonic_ns:i64",
-                "best_bid_e4:i32", "best_ask_e4:i32", "tick_size_e4:i32", "valid:u8",
+                "best_bid_e4:i32", "best_ask_e4:i32", "tick_size_e4:i32",
+                "bid_depth_l1_microunits:i64", "ask_depth_l1_microunits:i64", "valid:u8",
                 "lineage_continuous:u8", "event_kind:u8", "reserved:u8"}},
             {"tokens", std::move(token_rows)}};
         atomic_write(compact_label_tape_dir_ / (session_id_ + ".manifest.json"), json::serialize(manifest) + "\n");
@@ -821,15 +822,16 @@ private:
     }
     void append_compact_label(const TradeEvidence& row, std::uint64_t observer_sequence, bool valid) {
         if (!compact_label_output_.is_open()) return;
-        if (compact_label_current_bytes_ + 64 > 256ULL * 1024ULL * 1024ULL) rotate_compact_label_tape();
-        std::array<char, 64> payload{};
+        if (compact_label_current_bytes_ + 80 > 256ULL * 1024ULL * 1024ULL) rotate_compact_label_tape();
+        std::array<char, 80> payload{};
         put_u64(payload, 0, observer_sequence); put_u64(payload, 8, row.instrument_handle);
         put_u64(payload, 16, row.state_version); put_u64(payload, 24, row.connection_epoch);
         put_i64(payload, 32, row.receive_wall_ms); put_i64(payload, 40, row.receive_monotonic_ns);
         put_i32(payload, 48, row.book.best_bid_e4); put_i32(payload, 52, row.book.best_ask_e4);
-        put_i32(payload, 56, row.book.tick_size_e4); payload[60] = valid ? 1 : 0;
-        payload[61] = row.book.lineage_continuous != 0 ? 1 : 0;
-        payload[62] = static_cast<char>(static_cast<std::uint8_t>(row.kind)); payload[63] = 0;
+        put_i32(payload, 56, row.book.tick_size_e4);
+        put_i64(payload, 60, row.book.bid_depth.l1_microunits); put_i64(payload, 68, row.book.ask_depth.l1_microunits);
+        payload[76] = valid ? 1 : 0; payload[77] = row.book.lineage_continuous != 0 ? 1 : 0;
+        payload[78] = static_cast<char>(static_cast<std::uint8_t>(row.kind)); payload[79] = 0;
         compact_label_output_.write(payload.data(), static_cast<std::streamsize>(payload.size()));
         if (!compact_label_output_) throw std::runtime_error("cannot write compact PM label tape");
         ++compact_label_records_; compact_label_current_bytes_ += payload.size();

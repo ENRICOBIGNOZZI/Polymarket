@@ -10,18 +10,21 @@ from collections import defaultdict
 from pathlib import Path
 from typing import Any, Iterable
 
-MANIFEST_SCHEMA = "polymarket_v7_compact_pm_label_tape_manifest_v1"
-RECORD_SCHEMA = "polymarket_v7_compact_pm_label_record_v1"
-RECORD = struct.Struct("<QQQQqqiiiBBBB")
+MANIFEST_SCHEMA_V1 = "polymarket_v7_compact_pm_label_tape_manifest_v1"
+MANIFEST_SCHEMA_V2 = "polymarket_v7_compact_pm_label_tape_manifest_v2"
+RECORD_SCHEMA_V1 = "polymarket_v7_compact_pm_label_record_v1"
+RECORD_SCHEMA_V2 = "polymarket_v7_compact_pm_label_record_v2"
+RECORD = struct.Struct("<QQQQqqiiiBBBB")  # backward-compatible v1 alias
+RECORD_V2 = struct.Struct("<QQQQqqiiiqqBBBB")
 
 
 def load_manifest(path: Path, expected_sha: str | None = None) -> dict[str, Any]:
     value = json.loads(path.read_text(encoding="utf-8"))
     if not isinstance(value, dict):
         raise ValueError("compact_pm:manifest_not_object")
-    if (value.get("schema") != MANIFEST_SCHEMA or value.get("version") != 1
-            or value.get("record_schema") != RECORD_SCHEMA
-            or int(value.get("record_size") or 0) != RECORD.size
+    identity=(value.get("schema"),int(value.get("version") or 0),value.get("record_schema"),int(value.get("record_size") or 0))
+    allowed={(MANIFEST_SCHEMA_V1,1,RECORD_SCHEMA_V1,RECORD.size),(MANIFEST_SCHEMA_V2,2,RECORD_SCHEMA_V2,RECORD_V2.size)}
+    if (identity not in allowed
             or value.get("byte_order") != "little_endian"
             or value.get("paper_only") is not True
             or value.get("authenticated_execution") is not False
@@ -35,6 +38,10 @@ def load_manifest(path: Path, expected_sha: str | None = None) -> dict[str, Any]
     if not isinstance(tokens, list) or not tokens:
         raise ValueError("compact_pm:tokens_missing")
     return value
+
+
+def record_struct(manifest: dict[str, Any]) -> struct.Struct:
+    return RECORD_V2 if manifest.get("record_schema")==RECORD_SCHEMA_V2 else RECORD
 
 
 def token_map(manifest: dict[str, Any]) -> dict[int, dict[str, Any]]:
@@ -53,16 +60,19 @@ def token_map(manifest: dict[str, Any]) -> dict[int, dict[str, Any]]:
 
 
 def read_records(paths: Iterable[Path], manifest: dict[str, Any]) -> list[dict[str, Any]]:
-    mapping = token_map(manifest)
+    mapping = token_map(manifest); record=record_struct(manifest)
     rows: list[dict[str, Any]] = []
     previous_sequence = 0
     for path in paths:
         payload = path.read_bytes()
-        if len(payload) % RECORD.size:
+        if len(payload) % record.size:
             raise ValueError(f"compact_pm:partial_record:{path}")
-        for offset in range(0, len(payload), RECORD.size):
-            values = RECORD.unpack_from(payload, offset)
-            seq, handle, state_version, epoch, wall_ms, mono_ns, bid_e4, ask_e4, tick_e4, valid, lineage, kind, _ = values
+        for offset in range(0, len(payload), record.size):
+            values = record.unpack_from(payload, offset)
+            if record is RECORD_V2:
+                seq,handle,state_version,epoch,wall_ms,mono_ns,bid_e4,ask_e4,tick_e4,bid_depth,ask_depth,valid,lineage,kind,_=values
+            else:
+                seq,handle,state_version,epoch,wall_ms,mono_ns,bid_e4,ask_e4,tick_e4,valid,lineage,kind,_=values; bid_depth=ask_depth=None
             meta = mapping.get(handle)
             if meta is None:
                 raise ValueError("compact_pm:unknown_instrument_handle")
@@ -74,8 +84,10 @@ def read_records(paths: Iterable[Path], manifest: dict[str, Any]) -> list[dict[s
                 "state_version": state_version, "connection_epoch": epoch,
                 "receive_wall_ms": wall_ms, "receive_monotonic_ns": mono_ns,
                 "best_bid": bid_e4 / 10_000.0, "best_ask": ask_e4 / 10_000.0,
-                "tick_size": tick_e4 / 10_000.0, "valid": bool(valid),
-                "lineage_continuous": bool(lineage), "event_kind": int(kind),
+                "tick_size": tick_e4 / 10_000.0,
+                "bid_depth_l1": None if bid_depth is None else bid_depth / 1_000_000.0,
+                "ask_depth_l1": None if ask_depth is None else ask_depth / 1_000_000.0,
+                "valid": bool(valid), "lineage_continuous": bool(lineage), "event_kind": int(kind),
                 "market_id": str(meta["market_id"]), "event_id": str(meta.get("event_id") or ""),
                 "token_id": str(meta["token_id"]), "outcome": str(meta["outcome"]),
             })
@@ -123,7 +135,9 @@ def pair_asof_indexed(indexed: dict[tuple[str, str], dict[str, Any]], market_id:
     return {"pm_yes":(yes_mid+1.0-no_mid)/2.0,"yes_mid":yes_mid,"no_mid":no_mid,"connection_epoch":int(yes["connection_epoch"]),
             "yes_sequence":int(yes["observer_sequence"]),"no_sequence":int(no["observer_sequence"]),
             "state_available_wall_ms":max(int(yes["receive_wall_ms"]),int(no["receive_wall_ms"])),
-            "yes_tick_size":float(yes["tick_size"]),"no_tick_size":float(no["tick_size"])}
+            "yes_tick_size":float(yes["tick_size"]),"no_tick_size":float(no["tick_size"]),
+            "yes_bid_depth_l1":yes.get("bid_depth_l1"),"yes_ask_depth_l1":yes.get("ask_depth_l1"),
+            "no_bid_depth_l1":no.get("bid_depth_l1"),"no_ask_depth_l1":no.get("ask_depth_l1")}
 
 
 def _asof(seq: list[dict[str, Any]], target_ms: float) -> dict[str, Any] | None:
@@ -162,6 +176,8 @@ def pair_asof(timelines: dict[tuple[str, str], list[dict[str, Any]]], market_id:
         "no_sequence": int(no["observer_sequence"]),
         "state_available_wall_ms": max(int(yes["receive_wall_ms"]), int(no["receive_wall_ms"])),
         "yes_tick_size": float(yes["tick_size"]), "no_tick_size": float(no["tick_size"]),
+        "yes_bid_depth_l1": yes.get("bid_depth_l1"), "yes_ask_depth_l1": yes.get("ask_depth_l1"),
+        "no_bid_depth_l1": no.get("bid_depth_l1"), "no_ask_depth_l1": no.get("ask_depth_l1"),
     }
 
 
@@ -173,7 +189,7 @@ def validate_status(status: dict[str, Any], manifest: dict[str, Any], *, require
             or status.get("observer_session_id") != manifest.get("observer_session_id")
             or status.get("evidence_complete") is not True
             or status.get("compact_label_tape_enabled") is not True
-            or int(status.get("compact_label_record_size") or 0) != RECORD.size):
+            or int(status.get("compact_label_record_size") or 0) != int(manifest.get("record_size") or 0)):
         raise ValueError("compact_pm:status_identity_or_evidence")
     if int(status.get("dropped_events") or 0) or int(status.get("decoder_failures") or 0):
         raise ValueError("compact_pm:status_dropped_or_decoder_failure")
@@ -251,7 +267,7 @@ def main() -> int:
         "model_sha": manifest["model_sha"], "records": len(rows),
         "markets": len({market for market, _ in timelines}),
         "bytes": sum(path.stat().st_size for path in args.tape),
-        "record_size": RECORD.size, "paper_only": True, "execution_authority": False,
+        "record_size": int(manifest["record_size"]), "paper_only": True, "execution_authority": False,
     }, sort_keys=True))
     return 0
 
