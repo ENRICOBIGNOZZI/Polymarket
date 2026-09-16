@@ -1,0 +1,80 @@
+{
+  "authenticated_execution": false,
+  "book_observation_tape_exists": false,
+  "book_ready": 24,
+  "by_lane": {
+    "BNB/M15": {
+      "BOOK_READY": 2,
+      "FEEDS_WARMING": 0
+    },
+    "BNB/M5": {
+      "BOOK_READY": 2,
+      "FEEDS_WARMING": 0
+    },
+    "BTC/M15": {
+      "BOOK_READY": 2,
+      "FEEDS_WARMING": 0
+    },
+    "BTC/M5": {
+      "BOOK_READY": 2,
+      "FEEDS_WARMING": 0
+    },
+    "DOGE/M15": {
+      "BOOK_READY": 2,
+      "FEEDS_WARMING": 0
+    },
+    "DOGE/M5": {
+      "BOOK_READY": 2,
+      "FEEDS_WARMING": 0
+    },
+    "ETH/M15": {
+      "BOOK_READY": 2,
+      "FEEDS_WARMING": 0
+    },
+    "ETH/M5": {
+      "BOOK_READY": 2,
+      "FEEDS_WARMING": 0
+    },
+    "SOL/M15": {
+      "BOOK_READY": 2,
+      "FEEDS_WARMING": 0
+    },
+    "SOL/M5": {
+      "BOOK_READY": 2,
+      "FEEDS_WARMING": 0
+    },
+    "XRP/M15": {
+      "BOOK_READY": 2,
+      "FEEDS_WARMING": 0
+    },
+    "XRP/M5": {
+      "BOOK_READY": 2,
+      "FEEDS_WARMING": 0
+    }
+  },
+  "claim_boundary": "Public PAPER book-data-plane smoke only; no execution/fill/PnL evidence.",
+  "code_sha": "bb8adc34e81d641f0c1e774fab1f76987d8124d3",
+  "deployed": false,
+  "execution_authority": false,
+  "feeds_warming": 0,
+  "market_count": 24,
+  "observed_on": "2026-09-16",
+  "paper_only": true,
+  "persistent_bytes_after_15s": 99286,
+  "real_order_submission": false,
+  "schema": "polymarket_v7_multi_crypto_book_hub_smoke_v1",
+  "selection_generation_sha256": "2c2aea63408a35554a2899cef09c3b58bb98c4cae2aff00bad33d8c26af78b61",
+  "token_count": 48,
+  "websocket": {
+    "book_event_tape_enabled": false,
+    "book_events_observed": 34276,
+    "book_events_written": 0,
+    "decoder_failures": 0,
+    "evidence_complete": true,
+    "feed_errors": 0,
+    "feed_messages": 18107,
+    "feed_reconnects": 0,
+    "reconnects": 0,
+    "state_only": true
+  }
+}

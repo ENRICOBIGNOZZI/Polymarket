@@ -4,7 +4,7 @@
 |---|---|---|
 | M0 Audit and integrity | IN_PROGRESS | Runtime identity and frozen BTC verified; deeper ledger-history recovery audit still pending. |
 | M1 Core common | IN_PROGRESS | Six-asset venue factory, typed settlement contexts, dynamic rules discovery and capability registry implemented; full ContractState/OracleHub integration still pending. |
-| M2 Data plane | IN_PROGRESS | ETH/SOL/DOGE/BNB public data-plane smokes are operational; optional venue failure is isolated. Shared PM book in RAM for new lanes still pending. |
+| M2 Data plane | IN_PROGRESS | Multi-venue feeds and zero-authority PM BookHub verified: 24/24 current+next markets BOOK_READY on exact SHA; OracleHub and hot-path consumer integration remain. |
 | M3 Execution/accounting | NOT_STARTED | Must retain one global coordinator/execution owner/ledger. |
 | M4 Speed | NOT_STARTED | Profile before replacing file IPC/REST in the new lane. |
 | M5 Research | NOT_STARTED | Normalized shocks, leadership, derivatives, cross-crypto, residual model. |
