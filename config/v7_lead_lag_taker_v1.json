@@ -1,5 +1,5 @@
 {
-  "schema": "polymarket_v7_lead_lag_taker_v1_config",
+  "schema": "polymarket_v7_lead_lag_taker_config_v1",
   "version": 1,
   "strategy_id": "LEAD_LAG_TAKER_V1",
   "paper_only": true,
