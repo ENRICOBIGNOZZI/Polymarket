@@ -1,0 +1,15 @@
+{
+  "schema": "polymarket_v7_multi_crypto_repricing_label_policy_v1",
+  "version": 1,
+  "paper_only": true,
+  "authenticated_execution": false,
+  "real_order_submission": false,
+  "execution_authority": false,
+  "research_only": true,
+  "label_definition": "PM_YES_MID_ASOF_TARGET_MINUS_PM_YES_MID_AT_ORIGIN",
+  "horizons_ms": [50, 100, 250, 500, 1000, 5000, 10000],
+  "maximum_asof_gap_ms": {"50": 25, "100": 75, "250": 75, "500": 75, "1000": 100, "5000": 125, "10000": 125},
+  "interpolation": "FORBIDDEN",
+  "future_after_target": "FORBIDDEN",
+  "require_valid_pm_book": true
+}
