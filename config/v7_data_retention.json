@@ -125,7 +125,7 @@
     "trigger_bytes": 34000000000,
     "minimum_age_seconds": 21600,
     "maximum_seconds_per_pass": 180,
-    "hard_filesystem_quota": true,
+    "hard_filesystem_quota": false,
     "scope": "CLOSED_EXTERNAL_RAW_AND_NORMALIZED_TAPES_ONLY",
     "protected": "LEDGERS_DECISIONS_OUTCOMES_PM_BOOKS_AND_ALL_NON_ALLOWLISTED_SOURCES"
   },
@@ -133,7 +133,6 @@
     "enabled": true,
     "authorization": "USER_AUTHORIZED_HFT_ROLLING_RAW_WINDOW_20260916",
     "raw_detail_seconds": 21600,
-    "experiment_detail_seconds": 604800,
     "target_managed_bytes": 30000000000,
     "trigger_managed_bytes": 34000000000,
     "maximum_managed_bytes": 40000000000,

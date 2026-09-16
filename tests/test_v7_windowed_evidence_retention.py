@@ -82,4 +82,17 @@ class WindowedRetentionTest(unittest.TestCase):
             self.assertTrue(pack.exists());self.assertTrue(man.exists());self.assertEqual(out['removed_packs'],0)
 
 
+    def test_checked_in_policy_matches_window_worker_contract(self):
+        cfg=json.loads((ROOT/'config/v7_data_retention.json').read_text())
+        policy=cfg['rolling_window']
+        from v7_windowed_evidence_retention import POLICY, WINDOWED
+        self.assertTrue(policy['enabled']);self.assertEqual(policy['authorization'],POLICY)
+        self.assertEqual(policy['raw_detail_seconds'],21600)
+        self.assertEqual(set(policy['windowed_source_families']),WINDOWED)
+        self.assertEqual(policy['target_managed_bytes'],30_000_000_000)
+        self.assertEqual(policy['trigger_managed_bytes'],34_000_000_000)
+        self.assertEqual(policy['maximum_managed_bytes'],40_000_000_000)
+        self.assertFalse(cfg['aggregate_retention']['hard_filesystem_quota'])
+
+
 if __name__=='__main__':unittest.main()
