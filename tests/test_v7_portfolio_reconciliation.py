@@ -51,6 +51,16 @@ class PortfolioReconciliationTests(unittest.TestCase):
         self.assertIn("portfolio_engine_equity_divergence", report["reason_codes"])
         self.assertIn("strategy_realized_pnl_divergence:STRUCTURAL_ARB_ENGINE", report["reason_codes"])
 
+    def test_missing_strategy_state_is_unverifiable_not_implicitly_zero(self) -> None:
+        values = self.inputs()
+        values["state_realized_pnl"]["CRYPTO_SETTLEMENT_ENGINE"] = None
+        report = reconcile(**values)
+        self.assertFalse(report["reconciled"])
+        self.assertIn(
+            "strategy_realized_pnl_unverifiable:CRYPTO_SETTLEMENT_ENGINE",
+            report["reason_codes"],
+        )
+
     def test_raw_terminal_and_canonical_economic_pnl_cannot_disagree_silently(self) -> None:
         values = self.inputs()
         values["ledger"]["total"]["final_pnl"] = -4.0

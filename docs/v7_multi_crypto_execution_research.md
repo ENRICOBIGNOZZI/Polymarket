@@ -114,3 +114,19 @@ This is deliberately a lead-lag long/hold audit, NOT a complete account
 checkpoint. `whole_portfolio_reconciled=false`; therefore it cannot itself
 unlock the durable reservation projection. Corrections, when required by future
 audits, are only proposed append-only records and are never applied in place.
+
+## Global monitoring reconciliation fix
+
+The active exporter was audited read-only after the lead-lag cohort settled.
+Canonical ledger/economics and portfolio totals agreed, but monitoring reported
+`strategy_realized_pnl_divergence:CRYPTO_SETTLEMENT_ENGINE`. Root cause: the
+state-side comparison used only the external-fair component (3.4) and omitted
+the lead-lag component (17.58026), while canonical economics correctly grouped
+both under `CRYPTO_SETTLEMENT_ENGINE` (20.98026).
+
+The isolated branch now aggregates state PnL by component under the same engine
+and exposes the components explicitly. If canonical economics says the
+`lead_lag_taker_v1` family is present, missing/unsafe lead-lag state yields
+`strategy_realized_pnl_unverifiable:CRYPTO_SETTLEMENT_ENGINE`; it is never
+silently interpreted as zero. No production process or frozen BTC file is
+changed by this monitoring correction.

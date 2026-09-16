@@ -77,7 +77,9 @@ def reconcile(
         canonical_value = canonical_strategy_values.get(strategy, 0.0)
         state_value = _finite(state_realized_pnl.get(strategy))
         matched = state_value is not None and _close(state_value, canonical_value)
-        if state_value is not None and not matched:
+        if state_value is None:
+            reasons.append(f"strategy_realized_pnl_unverifiable:{strategy}")
+        elif not matched:
             reasons.append(f"strategy_realized_pnl_divergence:{strategy}")
         strategy_rows[strategy] = {
             "canonical_realized_pnl": canonical_value,

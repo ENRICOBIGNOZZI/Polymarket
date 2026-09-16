@@ -71,6 +71,54 @@ class V7NativeMonitoringTest(unittest.TestCase):
             for expected in ("polymarket_v7_live_algorithm_count 2","polymarket_v7_live_algorithm_scope_wired 1",'polymarket_v7_economic_engine_configured{engine="CRYPTO_SETTLEMENT_ENGINE"} 1','polymarket_v7_economic_engine_configured{engine="STRUCTURAL_ARB_ENGINE"} 1'):
                 self.assertIn(expected,metrics)
 
+    def test_crypto_state_pnl_aggregates_lead_lag_component(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory) / "paper_v7_live"
+            self._fixture(root)
+            sha = self._sha()
+            self._write(root / "research/lead_lag_taker_v1/status.json", {
+                "schema": "polymarket_v7_lead_lag_taker_v1_status",
+                "model_sha": sha, "paper_only": True,
+                "authenticated_execution": False, "real_order_submission": False,
+                "entries": 2, "settled": 2, "open_positions": 0, "realized_pnl": 2.0,
+            })
+            canonical_path = root / "canonical_economics.json"
+            canonical = json.loads(canonical_path.read_text())
+            canonical.update({
+                "net_pnl": 2.0,
+                "strategy_net_pnl": {"CRYPTO_SETTLEMENT_ENGINE": 2.0, "STRUCTURAL_ARB_ENGINE": 0.0},
+                "model_families_observed": ["lead_lag_taker_v1"],
+            })
+            self._write(canonical_path, canonical)
+            snapshot = exporter.collect_snapshot(root, ROOT, now=1000)
+            components = snapshot["state_realized_pnl_components"]["CRYPTO_SETTLEMENT_ENGINE"]
+            self.assertEqual(components["external_fair"], 0.0)
+            self.assertEqual(components["lead_lag_taker_v1"], 2.0)
+            self.assertEqual(components["total"], 2.0)
+            self.assertNotIn(
+                "strategy_realized_pnl_divergence:CRYPTO_SETTLEMENT_ENGINE",
+                snapshot["reconciliation"]["reason_codes"],
+            )
+
+    def test_required_lead_lag_state_missing_fails_reconciliation_closed(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory) / "paper_v7_live"
+            self._fixture(root)
+            canonical_path = root / "canonical_economics.json"
+            canonical = json.loads(canonical_path.read_text())
+            canonical.update({
+                "net_pnl": 2.0,
+                "strategy_net_pnl": {"CRYPTO_SETTLEMENT_ENGINE": 2.0, "STRUCTURAL_ARB_ENGINE": 0.0},
+                "model_families_observed": ["lead_lag_taker_v1"],
+            })
+            self._write(canonical_path, canonical)
+            snapshot = exporter.collect_snapshot(root, ROOT, now=1000)
+            self.assertFalse(snapshot["state_realized_pnl_components"]["CRYPTO_SETTLEMENT_ENGINE"]["complete"])
+            self.assertIn(
+                "strategy_realized_pnl_unverifiable:CRYPTO_SETTLEMENT_ENGINE",
+                snapshot["reconciliation"]["reason_codes"],
+            )
+
     def test_runtime_cannot_add_third_algorithm(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root=Path(directory)/"paper_v7_live"; self._fixture(root); path=root/"control/runtime_status.json"; value=json.loads(path.read_text()); value["economic_engines"].append("OLD_ENGINE"); self._write(path,value)

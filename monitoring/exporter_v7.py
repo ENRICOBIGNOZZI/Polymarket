@@ -34,6 +34,39 @@ def _number(value: Any, default: float = 0.0) -> float:
     return out if math.isfinite(out) else default
 
 
+def _optional_number(value: Any) -> float | None:
+    if isinstance(value, bool):
+        return None
+    try:
+        out = float(value)
+    except (TypeError, ValueError, OverflowError):
+        return None
+    return out if math.isfinite(out) else None
+
+
+def _lead_lag_state(run_root: Path, runtime_sha: str) -> dict[str, Any]:
+    path = run_root / "research/lead_lag_taker_v1/status.json"
+    status = _json(path)
+    pnl = _optional_number(status.get("realized_pnl"))
+    valid = bool(
+        status
+        and status.get("schema") == "polymarket_v7_lead_lag_taker_v1_status"
+        and status.get("model_sha") == runtime_sha
+        and status.get("paper_only") is True
+        and status.get("authenticated_execution") is False
+        and status.get("real_order_submission") is False
+        and pnl is not None
+    )
+    return {
+        "present": bool(status), "valid": valid,
+        "realized_pnl": pnl if valid else None,
+        "entries": max(0, _integer(status.get("entries"), 0)),
+        "settled": max(0, _integer(status.get("settled"), 0)),
+        "open_positions": max(0, _integer(status.get("open_positions"), 0)),
+        "status_path": str(path),
+    }
+
+
 def _integer(value: Any, default: int = 0) -> int:
     return int(_number(value, default))
 
@@ -208,9 +241,31 @@ def collect_snapshot(run_root: Path, repository_root: Path | None = None, *, now
     process_path = repository_root / "config/v7_process_manifest.json"
     process = _json(process_path)
     external_fair = summarize_external_fair(run_root, repository_root, runtime_sha=runtime_sha, now_s=now)
+    lead_lag = _lead_lag_state(run_root, runtime_sha)
+    model_families = canonical.get("model_families_observed")
+    model_families = model_families if isinstance(model_families, list) else []
+    lead_lag_required = "lead_lag_taker_v1" in model_families
+    external_pnl = _optional_number((external_fair.get("economics") or {}).get("realized_pnl"))
+    crypto_state_pnl: float | None = external_pnl
+    if lead_lag_required or lead_lag["present"]:
+        if external_pnl is None or not lead_lag["valid"]:
+            crypto_state_pnl = None
+        else:
+            crypto_state_pnl = external_pnl + float(lead_lag["realized_pnl"])
+    structural_state_pnl = _optional_number(hard.get("realized_pnl_total"))
     state_pnl = {
-        "CRYPTO_SETTLEMENT_ENGINE": _number((external_fair.get("economics") or {}).get("realized_pnl")),
-        "STRUCTURAL_ARB_ENGINE": _number(hard.get("realized_pnl_total")),
+        "CRYPTO_SETTLEMENT_ENGINE": crypto_state_pnl,
+        "STRUCTURAL_ARB_ENGINE": structural_state_pnl,
+    }
+    state_pnl_components = {
+        "CRYPTO_SETTLEMENT_ENGINE": {
+            "external_fair": external_pnl,
+            "lead_lag_taker_v1": lead_lag["realized_pnl"] if lead_lag["valid"] else None,
+            "lead_lag_required_by_canonical": lead_lag_required,
+            "complete": crypto_state_pnl is not None,
+            "total": crypto_state_pnl,
+        },
+        "STRUCTURAL_ARB_ENGINE": {"hard_arb": structural_state_pnl, "complete": structural_state_pnl is not None, "total": structural_state_pnl},
     }
     reconciliation = reconcile_portfolio(canonical=canonical, ledger=ledger, portfolio=portfolio, allocations=allocations, state_realized_pnl=state_pnl)
     engine_rows = portfolio.get("engines") if isinstance(portfolio.get("engines"), dict) else {}
@@ -250,7 +305,8 @@ def collect_snapshot(run_root: Path, repository_root: Path | None = None, *, now
             "report": _json(run_root / "profit_experiment_report.json")},
         "maker_lab": summarize_maker_microstructure(ledger_path, run_root / "micro_maker/reward_selection.json", run_root / "research/evidence/maker_markout"),
         "maker_fillability": _fillability(run_root, repository_root, runtime_sha, now),
-        "external_fair": external_fair, "reconciliation": reconciliation,
+        "external_fair": external_fair, "lead_lag": lead_lag,
+        "state_realized_pnl_components": state_pnl_components, "reconciliation": reconciliation,
         "maker_latency": _maker_latency(run_root / "micro_maker/latency.csv"),
         "trade_tape": tape, "trade_recorder": _trade_recorder(run_root / "trade_recorder_status.json", now),
         "authority": {"valid": authority_valid, "max_drawdown": max_drawdown},
