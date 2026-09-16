@@ -69,7 +69,8 @@
     "durable_archive_required_before_local_prune": true,
     "policy": "config/v7_data_retention.json",
     "runner": "monitoring/v7_retention.py",
-    "status": "control/retention_status.json"
+    "status": "control/retention_status.json",
+    "windowed_runner": "scripts/v7_windowed_evidence_retention.py"
   },
   "run_root": "runs/paper_v7_live",
   "schema": "polymarket_v7_monitoring_manifest_v3",

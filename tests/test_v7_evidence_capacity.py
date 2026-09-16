@@ -26,11 +26,11 @@ class CapacityTests(unittest.TestCase):
         self.assertEqual(r['minimum_reduction_bytes_to_current_cap'],1_000_000_000)
         self.assertIsNone(r['rate_estimate'])
 
-    def test_40gb_budget_and_38gb_retention_trigger(self):
-        below=capacity([],100_000_000_000,200_000_000_000,data_bytes=37_999_999_999)
+    def test_40gb_budget_and_34gb_retention_trigger(self):
+        below=capacity([],100_000_000_000,200_000_000_000,data_bytes=33_999_999_999)
         self.assertEqual(below['budget_state'],'WITHIN_CAP')
         self.assertNotEqual(below['state'],'DATA_BUDGET_COMPACTION_REQUIRED')
-        at=capacity([],100_000_000_000,200_000_000_000,data_bytes=38_000_000_000)
+        at=capacity([],100_000_000_000,200_000_000_000,data_bytes=34_000_000_000)
         self.assertEqual(at['state'],'DATA_BUDGET_COMPACTION_REQUIRED')
         self.assertEqual(at['maximum_total_data_bytes'],40_000_000_000)
         cfg=json.loads((Path(__file__).resolve().parents[1]/'config/v7_data_retention.json').read_text())

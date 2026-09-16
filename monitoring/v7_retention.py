@@ -120,9 +120,9 @@ def checkpoint_ledger(run_root: Path, policy: dict[str, Any], expected_sha: str)
 
 
 def expire_rotated_streams(run_root: Path, streams: list[Any], *, now: int, dry_run: bool) -> list[str]:
-    # Time-to-live cannot establish that economic evidence is reproducible.
-    # Retain both raw and already-compressed source segments indefinitely.
-    # Closed-source compression below verifies exact bytes before unlinking.
+    # Deletion is owned exclusively by v7_windowed_evidence_retention.py.
+    # That worker requires a durable retirement receipt before any replayable
+    # raw byte is unlinked. A standalone TTL must never bypass provenance.
     return []
 
 
@@ -358,11 +358,13 @@ def _sync_directory(path: Path) -> None:
     finally: os.close(descriptor)
 
 
-def _shared_pack_aliases(store_root: Path | None) -> dict:
-    """Recognize already archived aliases; never unlink or recompress them."""
+def _shared_pack_aliases(store_root: Path | None, relevant_paths: set[str] | None = None) -> dict:
+    """Recognize verified aliases without statting every historical pack."""
     import stat
     aliases = {}
     if store_root is None or store_root.is_symlink(): return aliases
+    relevant = None if relevant_paths is None else {str(path) for path in relevant_paths}
+    if relevant == set(): return aliases
     for manifest in (store_root / 'pack_manifests').glob('*.json'):
         try:
             if manifest.is_symlink(): continue
@@ -372,11 +374,14 @@ def _shared_pack_aliases(store_root: Path | None) -> dict:
             if (value.get('schema') != 'polymarket_v7_lossless_shared_pack_v1'
                     or not re.fullmatch('[a-f0-9]{64}', sha)
                     or value.get('source_bytes_sha256_verified') is not True): continue
+            declared = [str(Path(path).resolve()) for path in value.get('source_aliases', []) if isinstance(path,str)]
+            matched = declared if relevant is None else [path for path in declared if path in relevant]
+            if not matched: continue
             pack = store_root / 'packs' / sha[:2] / (sha + '.pack')
             info = pack.lstat()
             if not stat.S_ISREG(info.st_mode) or info.st_mode & 0o222: continue
             if info.st_size != value.get('pack_bytes'): continue
-            for path in value.get('source_aliases', []):
+            for path in matched:
                 aliases[str(Path(path).resolve())] = (info.st_dev, info.st_ino, info.st_size)
         except (OSError, ValueError, TypeError): continue
     return aliases
@@ -394,7 +399,6 @@ def compress_closed_cutover_tapes(archive_root: Path, *, now: int, dry_run: bool
     import subprocess
     result = {"archived": [], "skipped": [], "failures": [], "reclaimed_bytes": 0,
               "dry_run": dry_run, "active_tapes_rotated": False}
-    shared_aliases = _shared_pack_aliases(permanent_store_root)
     if archive_root.is_symlink(): return result
     if not archive_root.is_dir():
         if active_run_root is None or dry_run: return result
@@ -418,6 +422,22 @@ def compress_closed_cutover_tapes(archive_root: Path, *, now: int, dry_run: bool
                     or SHA40.fullmatch(str(runtime.get("model_sha") or "")) is None):
                 raise ValueError("unsafe active segment scope")
             scopes.append((active.resolve(), True))
+        relevant_aliases: set[str] = set()
+        for archive, active_scope in scopes:
+            for relative, suffix in (("external_fair/raw", "bin"),
+                                     ("external_fair/normalized_events", "bin"),
+                                     ("micro_maker/book_observations", "jsonl"),
+                                     ("research/repricing_book/book_observations", "jsonl")):
+                folder = archive / relative
+                if folder.is_symlink() or folder.parent.is_symlink(): continue
+                pattern = f"*.segment-*.{suffix}" if active_scope else f"*.{suffix}"
+                for source in folder.glob(pattern):
+                    if active_scope and not re.fullmatch(r".+\.segment-[0-9]{6,}\." + suffix, source.name):
+                        continue
+                    relevant_aliases.add(str(source.resolve()))
+        shared_aliases = _shared_pack_aliases(permanent_store_root, relevant_aliases)
+        result["shared_alias_candidates"] = len(relevant_aliases)
+        result["verified_shared_aliases"] = len(shared_aliases)
         for archive, active_scope in scopes:
             relative_root = archive if active_scope else root
             for relative, suffix in (("external_fair/raw", "bin"),
@@ -499,6 +519,24 @@ def run_retention(
     run_root.mkdir(parents=True, exist_ok=True)
     if config.get("schema") != "polymarket_v7_data_retention_v1" or config.get("paper_only") is not True:
         raise ValueError("invalid V7 PAPER retention policy")
+    if not dry_run:
+        _atomic_json(run_root / "control" / "retention_status.json", {
+            "schema":"polymarket_v7_retention_status_v1","timestamp":now,
+            "paper_only":True,"authenticated_execution":False,
+            "expected_sha":expected_sha,"state":"RUNNING_RETENTION_PASS",
+        })
+    window_policy = config.get("rolling_window", {})
+    windowed = {"state":"DISABLED"}
+    if window_policy.get("enabled") and run_root.name == "paper_v7_live" and run_root.parent.name == "runs":
+        import sys
+        sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
+        from v7_windowed_evidence_retention import run as window_run, POLICY as WINDOW_POLICY
+        if window_policy.get("authorization") != WINDOW_POLICY:
+            raise ValueError("invalid rolling window authorization")
+        windowed = window_run(run_root.parent,
+            raw_detail_seconds=int(window_policy["raw_detail_seconds"]),
+            maximum_seconds=float(window_policy["maximum_seconds_per_pass"]),
+            dry_run=dry_run)
     checkpoint = checkpoint_ledger(run_root, config["canonical_ledger"], expected_sha) if not dry_run else {"created": False, "reason": "dry_run"}
     rotated = rotate_append_reopen_streams(
         run_root, config.get("active_files", {}), now=now, dry_run=dry_run
@@ -541,6 +579,7 @@ def run_retention(
         "authenticated_execution": False,
         "expected_sha": expected_sha,
         "disk": disk,
+        "windowed_retention": windowed,
         "aggregate_retention": aggregates,
         "ledger_checkpoint": checkpoint,
         "rotated_append_reopen_streams": rotated,
