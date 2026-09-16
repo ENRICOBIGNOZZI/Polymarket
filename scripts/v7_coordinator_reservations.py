@@ -128,6 +128,43 @@ class ReservationProjection:
         self._lock = threading.RLock()  # Correctness guard; not described as lock-free.
         self._checkpoint_hash = digest({'checkpoint': checkpoint_id, 'cash': starting_cash,
                                         'external': self._external, 'limits': limits})
+        self._source_checkpoint_code_sha: str | None = None
+
+    @classmethod
+    def from_checkpoint(cls, checkpoint: Mapping[str, Any], *, writer_code_sha: str,
+                        limits: ReservationLimits) -> 'ReservationProjection':
+        if not isinstance(checkpoint, Mapping):
+            raise ReplayError('GLOBAL_ACCOUNT_CHECKPOINT_REQUIRED')
+        value = dict(checkpoint)
+        checkpoint_id = str(value.pop('checkpoint_id', '') or '')
+        source_sha = str(value.get('code_sha') or '')
+        if (checkpoint.get('schema') != 'polymarket_v7_global_account_checkpoint_v1'
+                or checkpoint.get('paper_only') is not True
+                or checkpoint.get('authenticated_execution') is not False
+                or checkpoint.get('real_order_submission') is not False
+                or checkpoint.get('real_capital_at_risk') is not False
+                or checkpoint.get('automatic_promotion') is not False
+                or checkpoint.get('entry_authority') is not False
+                or checkpoint.get('whole_portfolio_reconciled') is not True
+                or checkpoint.get('all_preexisting_lanes_flat') is not True
+                or checkpoint.get('currency') != limits.currency):
+            raise ReplayError('GLOBAL_ACCOUNT_CHECKPOINT_SAFETY_OR_SCOPE_INVALID')
+        if (len(source_sha) != 40 or any(ch not in '0123456789abcdef' for ch in source_sha)
+                or len(writer_code_sha) != 40 or any(ch not in '0123456789abcdef' for ch in writer_code_sha)):
+            raise ReplayError('GLOBAL_ACCOUNT_CHECKPOINT_SHA_INVALID')
+        if not checkpoint_id or checkpoint_id != digest(value):
+            raise ReplayError('GLOBAL_ACCOUNT_CHECKPOINT_HASH_MISMATCH')
+        exposures = checkpoint.get('external_exposures')
+        if not isinstance(exposures, list):
+            raise ReplayError('GLOBAL_ACCOUNT_CHECKPOINT_EXPOSURES_INVALID')
+        projection = cls(
+            code_sha=writer_code_sha, checkpoint_id=checkpoint_id,
+            starting_cash=decimal(checkpoint.get('available_cash')),
+            external_exposures=exposures, limits=limits,
+            whole_portfolio_reconciled=True,
+        )
+        projection._source_checkpoint_code_sha = source_sha
+        return projection
 
     def _healthy(self) -> None:
         if self._poisoned:
@@ -466,5 +503,6 @@ class ReservationProjection:
                     'committed_and_reserved': str(sum((r['cost'] for r in self._active()), ZERO)),
                     'states': dict(sorted(self._states.items())), 'burned_markets': sorted(self._burned_markets),
                     'poisoned': self._poisoned, 'external_checkpoint_stale': self._foreign_checkpoint_stale,
+                    'source_checkpoint_code_sha': self._source_checkpoint_code_sha,
                     'paper_only': True, 'real_order_submission': False,
                     'entry_authority': False}
