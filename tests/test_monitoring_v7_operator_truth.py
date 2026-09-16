@@ -131,7 +131,7 @@ class DashboardTruthTests(unittest.TestCase):
                 for t in p.get("targets", []):
                     self.assertIn('job="polymarket-v7"', t["expr"])
                     self.assertIn('instance="$instance"', t["expr"])
-                    if p.get("title") != "Snapshot age":
+                    if p.get("title") not in {"Snapshot age", "Exporter connection"} and not t["expr"].startswith("ALERTS"):
                         self.assertIn("polymarket_v7_exporter_snapshot_usable", t["expr"])
                 if p["type"] == "timeseries":
                     self.assertIs(p["fieldConfig"]["defaults"]["custom"]["spanNulls"], False)

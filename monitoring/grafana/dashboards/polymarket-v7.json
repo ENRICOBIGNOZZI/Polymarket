@@ -485,8 +485,8 @@
     {
       "id": 106,
       "type": "stat",
-      "title": "Reasons to inspect",
-      "description": "",
+      "title": "Exporter connection",
+      "description": "Prometheus scrape reachability only. Inspect snapshot age and source freshness separately.",
       "datasource": {
         "type": "prometheus",
         "uid": "prometheus-v7"
@@ -503,7 +503,7 @@
           "decimals": 0,
           "noValue": "UNAVAILABLE",
           "color": {
-            "mode": "palette-classic"
+            "mode": "thresholds"
           },
           "mappings": [
             {
@@ -525,6 +525,19 @@
                   "color": "gray"
                 }
               }
+            },
+            {
+              "type": "value",
+              "options": {
+                "0": {
+                  "text": "OFFLINE",
+                  "color": "red"
+                },
+                "1": {
+                  "text": "REACHABLE",
+                  "color": "green"
+                }
+              }
             }
           ]
         },
@@ -537,8 +550,8 @@
             "type": "prometheus",
             "uid": "prometheus-v7"
           },
-          "expr": "(polymarket_v7_operator_reason_count{job=\"polymarket-v7\",instance=\"$instance\"}) and on(job,instance) (polymarket_v7_exporter_snapshot_usable{job=\"polymarket-v7\",instance=\"$instance\"} == 1) and on(job,instance) (up{job=\"polymarket-v7\",instance=\"$instance\"} == 1)",
-          "legendFormat": "Reasons to inspect",
+          "expr": "up{job=\"polymarket-v7\",instance=\"$instance\"}",
+          "legendFormat": "Exporter connection",
           "instant": true,
           "range": false,
           "editorMode": "code"
@@ -554,7 +567,7 @@
         },
         "orientation": "auto",
         "textMode": "auto",
-        "colorMode": "none",
+        "colorMode": "value",
         "graphMode": "none",
         "justifyMode": "auto"
       }
@@ -3221,7 +3234,7 @@
             "type": "prometheus",
             "uid": "prometheus-v7"
           },
-          "expr": "(ALERTS{alertstate=~\"firing|pending\",job=\"polymarket-v7\",instance=\"$instance\"}) and on(job,instance) (polymarket_v7_exporter_snapshot_usable{job=\"polymarket-v7\",instance=\"$instance\"} == 1) and on(job,instance) (up{job=\"polymarket-v7\",instance=\"$instance\"} == 1)",
+          "expr": "ALERTS{alertstate=~\"firing|pending\",job=\"polymarket-v7\",instance=\"$instance\"}",
           "legendFormat": "",
           "instant": true,
           "range": false,

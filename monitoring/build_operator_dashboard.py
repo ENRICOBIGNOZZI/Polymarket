@@ -20,6 +20,8 @@ def scoped(expr: str) -> str:
 
 
 def query(expr: str, source: str | None = None, *, history: bool = False) -> str:
+    if expr.startswith("ALERTS"):
+        return scoped(expr)
     value = "(" + scoped(expr) + ")"
     if history:
         value += " * on(job,instance) group_left(run_id) " + scoped("polymarket_v7_runtime_identity_info")
@@ -103,7 +105,7 @@ def build():
         stat(103,"Accounting verification","polymarket_v7_accounting_verified",8,2,mapping={0:("NOT VERIFIED","red"),1:("RECONCILED","green")}),
         stat(104,"No real orders","polymarket_v7_paper_only_contract_ok * polymarket_v7_authenticated_execution_disabled",12,2,source="runtime",mapping={0:("UNSAFE","red"),1:("PAPER ONLY","green")}),
         stat(105,"Snapshot age","time() - polymarket_v7_exporter_snapshot_generated_unixtime",16,2,unit="s",decimals=1,raw=True,description="Age of the exporter cache. Values disappear after 45 seconds, even when Prometheus can still scrape the exporter."),
-        stat(106,"Reasons to inspect","polymarket_v7_operator_reason_count",20,2),
+        stat(106,"Exporter connection","up",20,2,raw=True,mapping={0:("OFFLINE","red"),1:("REACHABLE","green")},description="Prometheus scrape reachability only. Inspect snapshot age and source freshness separately."),
     ]
     p[-2]["fieldConfig"]["defaults"].update({"color":{"mode":"thresholds"},"thresholds":{"mode":"absolute","steps":[{"color":"green","value":None},{"color":"yellow","value":20},{"color":"red","value":45}]}})
     p[-2]["options"]["colorMode"]="value"
