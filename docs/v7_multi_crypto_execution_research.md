@@ -190,3 +190,28 @@ excluded from pooling until venue/asset unit normalization is explicit.
 The report records input file hashes, split/embargo, block-bootstrap policy and
 seed, each frozen model, validation/test diagnostics and `economic_evidence =
 NOT_PROVEN`. No model can promote itself or obtain execution authority.
+
+## Signal-to-PAPER-arrival latency evidence
+
+A read-only stage report now separates strategy wait, coordinator latency,
+final book revalidation and the synthetic ledger timestamp convention. It never
+creates `exchange_ack` or real fill timestamps. Percentiles require minimum
+sample sizes (p99 >=100, p99.9 >=1000); otherwise they are null.
+
+On the frozen BTC ledger snapshot with 14 PAPER fills and 24 recorded candidate
+events, descriptive same-recorder wall-clock evidence showed:
+
+- candidate -> coordinator decision: median 3.7515 ms; p90 6.8629 ms;
+- coordinator -> PAPER arrival decision: median 45.321 ms; p90 56.6011 ms;
+- legacy `signal_age_ms_at_fill` capture -> PAPER arrival decision: median
+  40.820 ms; p90 52.3646 ms;
+- book receive -> PAPER decision: median 0 ms; p90 1 ms;
+- ledger recording offset: exactly +1 ms in all 14 rows and excluded from all
+  latency claims.
+
+The 40-50 ms post-signal-age interval is consistent with the legacy final book
+revalidation path and is the material internal target, not the ~3-7 ms
+coordinator stage. `signal -> candidate` is NOT pure processing latency because
+the frozen protocol may retain a valid signal while waiting for TTE eligibility.
+Host/boot identity is absent from these legacy wall-clock records, so the report
+explicitly refuses to call these numbers cross-host one-way latency.
