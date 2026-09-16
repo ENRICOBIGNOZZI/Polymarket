@@ -1,0 +1,172 @@
+#!/usr/bin/env python3
+"""Read exact receive-time compact PM label tapes produced by the V7 book observer."""
+from __future__ import annotations
+
+import bisect
+import json
+import math
+import struct
+from collections import defaultdict
+from pathlib import Path
+from typing import Any, Iterable
+
+MANIFEST_SCHEMA = "polymarket_v7_compact_pm_label_tape_manifest_v1"
+RECORD_SCHEMA = "polymarket_v7_compact_pm_label_record_v1"
+RECORD = struct.Struct("<QQQQqqiiiBBBB")
+
+
+def load_manifest(path: Path, expected_sha: str | None = None) -> dict[str, Any]:
+    value = json.loads(path.read_text(encoding="utf-8"))
+    if not isinstance(value, dict):
+        raise ValueError("compact_pm:manifest_not_object")
+    if (value.get("schema") != MANIFEST_SCHEMA or value.get("version") != 1
+            or value.get("record_schema") != RECORD_SCHEMA
+            or int(value.get("record_size") or 0) != RECORD.size
+            or value.get("byte_order") != "little_endian"
+            or value.get("paper_only") is not True
+            or value.get("authenticated_execution") is not False
+            or value.get("real_order_submission") is not False
+            or value.get("execution_authority") != "ZERO_AUTHORITY_RESEARCH_ONLY"
+            or value.get("selection_only") is not True):
+        raise ValueError("compact_pm:manifest_identity_or_authority")
+    if expected_sha is not None and value.get("model_sha") != expected_sha:
+        raise ValueError("compact_pm:model_sha_mismatch")
+    tokens = value.get("tokens")
+    if not isinstance(tokens, list) or not tokens:
+        raise ValueError("compact_pm:tokens_missing")
+    return value
+
+
+def token_map(manifest: dict[str, Any]) -> dict[int, dict[str, Any]]:
+    output: dict[int, dict[str, Any]] = {}
+    for row in manifest["tokens"]:
+        if not isinstance(row, dict):
+            raise ValueError("compact_pm:token_row")
+        handle = int(row.get("instrument_handle") or 0)
+        market = str(row.get("market_id") or "")
+        token = str(row.get("token_id") or "")
+        outcome = str(row.get("outcome") or "")
+        if handle <= 0 or not market or not token or outcome not in {"YES", "NO"} or handle in output:
+            raise ValueError("compact_pm:token_identity")
+        output[handle] = row
+    return output
+
+
+def read_records(paths: Iterable[Path], manifest: dict[str, Any]) -> list[dict[str, Any]]:
+    mapping = token_map(manifest)
+    rows: list[dict[str, Any]] = []
+    previous_sequence = 0
+    for path in paths:
+        payload = path.read_bytes()
+        if len(payload) % RECORD.size:
+            raise ValueError(f"compact_pm:partial_record:{path}")
+        for offset in range(0, len(payload), RECORD.size):
+            values = RECORD.unpack_from(payload, offset)
+            seq, handle, state_version, epoch, wall_ms, mono_ns, bid_e4, ask_e4, tick_e4, valid, lineage, kind, _ = values
+            meta = mapping.get(handle)
+            if meta is None:
+                raise ValueError("compact_pm:unknown_instrument_handle")
+            if seq <= previous_sequence:
+                raise ValueError("compact_pm:nonmonotone_sequence")
+            previous_sequence = seq
+            rows.append({
+                "observer_sequence": seq, "instrument_handle": handle,
+                "state_version": state_version, "connection_epoch": epoch,
+                "receive_wall_ms": wall_ms, "receive_monotonic_ns": mono_ns,
+                "best_bid": bid_e4 / 10_000.0, "best_ask": ask_e4 / 10_000.0,
+                "tick_size": tick_e4 / 10_000.0, "valid": bool(valid),
+                "lineage_continuous": bool(lineage), "event_kind": int(kind),
+                "market_id": str(meta["market_id"]), "event_id": str(meta.get("event_id") or ""),
+                "token_id": str(meta["token_id"]), "outcome": str(meta["outcome"]),
+            })
+    return rows
+
+
+def build_timelines(rows: Iterable[dict[str, Any]]) -> dict[tuple[str, str], list[dict[str, Any]]]:
+    output: dict[tuple[str, str], list[dict[str, Any]]] = defaultdict(list)
+    for row in rows:
+        output[(str(row["market_id"]), str(row["outcome"]))].append(row)
+    for seq in output.values():
+        seq.sort(key=lambda r: (int(r["receive_wall_ms"]), int(r["observer_sequence"])))
+    return dict(output)
+
+
+def _asof(seq: list[dict[str, Any]], target_ms: float) -> dict[str, Any] | None:
+    if not seq:
+        return None
+    stamps = [int(row["receive_wall_ms"]) for row in seq]
+    index = bisect.bisect_right(stamps, target_ms) - 1
+    if index < 0:
+        return None
+    row = seq[index]
+    if row.get("valid") is not True or row.get("lineage_continuous") is not True:
+        return None
+    bid, ask, tick = float(row["best_bid"]), float(row["best_ask"]), float(row["tick_size"])
+    if not (math.isfinite(bid) and math.isfinite(ask) and math.isfinite(tick)
+            and 0 < bid < ask < 1 and 0 < tick < 1):
+        return None
+    return row
+
+
+def pair_asof(timelines: dict[tuple[str, str], list[dict[str, Any]]], market_id: str,
+              target_ms: float) -> dict[str, Any] | None:
+    yes = _asof(timelines.get((market_id, "YES"), []), target_ms)
+    no = _asof(timelines.get((market_id, "NO"), []), target_ms)
+    if yes is None or no is None or yes["connection_epoch"] != no["connection_epoch"]:
+        return None
+    yes_mid = (float(yes["best_bid"]) + float(yes["best_ask"])) / 2.0
+    no_mid = (float(no["best_bid"]) + float(no["best_ask"])) / 2.0
+    tolerance = 2.0 * max(float(yes["tick_size"]), float(no["tick_size"])) + 1e-12
+    if abs(yes_mid + no_mid - 1.0) > tolerance:
+        return None
+    pm_yes = (yes_mid + 1.0 - no_mid) / 2.0
+    return {
+        "pm_yes": pm_yes, "yes_mid": yes_mid, "no_mid": no_mid,
+        "connection_epoch": int(yes["connection_epoch"]),
+        "yes_sequence": int(yes["observer_sequence"]),
+        "no_sequence": int(no["observer_sequence"]),
+        "state_available_wall_ms": max(int(yes["receive_wall_ms"]), int(no["receive_wall_ms"])),
+        "yes_tick_size": float(yes["tick_size"]), "no_tick_size": float(no["tick_size"]),
+    }
+
+
+def validate_status(status: dict[str, Any], manifest: dict[str, Any], *, require_no_reconnect: bool = True) -> None:
+    if (status.get("paper_only") is not True
+            or status.get("authenticated_execution") is not False
+            or status.get("real_order_submission") is not False
+            or status.get("model_sha") != manifest.get("model_sha")
+            or status.get("observer_session_id") != manifest.get("observer_session_id")
+            or status.get("evidence_complete") is not True
+            or status.get("compact_label_tape_enabled") is not True
+            or int(status.get("compact_label_record_size") or 0) != RECORD.size):
+        raise ValueError("compact_pm:status_identity_or_evidence")
+    if int(status.get("dropped_events") or 0) or int(status.get("decoder_failures") or 0):
+        raise ValueError("compact_pm:status_dropped_or_decoder_failure")
+    if require_no_reconnect and (int(status.get("reconnects") or 0) or int(status.get("feed_reconnects") or 0)):
+        raise ValueError("compact_pm:reconnect_present")
+
+
+def main() -> int:
+    import argparse
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--manifest", type=Path, required=True)
+    parser.add_argument("--tape", type=Path, action="append", required=True)
+    parser.add_argument("--status", type=Path)
+    args = parser.parse_args()
+    manifest = load_manifest(args.manifest)
+    rows = read_records(args.tape, manifest)
+    if args.status:
+        validate_status(json.loads(args.status.read_text()), manifest)
+    timelines = build_timelines(rows)
+    print(json.dumps({
+        "schema": "polymarket_v7_compact_pm_label_tape_report_v1",
+        "model_sha": manifest["model_sha"], "records": len(rows),
+        "markets": len({market for market, _ in timelines}),
+        "bytes": sum(path.stat().st_size for path in args.tape),
+        "record_size": RECORD.size, "paper_only": True, "execution_authority": False,
+    }, sort_keys=True))
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
