@@ -6,7 +6,7 @@
 | M1 Core common | IN_PROGRESS | Six-asset venue factory, typed settlement contexts, dynamic rules discovery and capability registry implemented; full ContractState/OracleHub integration still pending. |
 | M2 Data plane | VERIFIED_SHADOW | Multi-venue feeds, six-asset OracleHub, state-only PM BookHub/label hub, unified FeatureEngine and single zero-authority shadow supervisor are exact-SHA verified. Not deployed to canonical runtime. |
 | M3 Execution/accounting | NOT_STARTED | Must retain one global coordinator/execution owner/ledger. |
-| M4 Speed | NOT_STARTED | Profile before replacing file IPC/REST in the new lane. |
+| M4 Speed | IN_PROGRESS | Exact compact PM v2 replay measures L1 FAK/no-chase latency and size mechanics over 0–1000 ms and 5–500 shares. Economic value remains blocked until a calibrated signal/cost model exists. |
 | M5 Research | IN_PROGRESS | Causal normalized-shock/derivatives/cross-crypto features, audited feature tape and exact compact PM repricing labels implemented. Current smoke has 1 independent time cluster, so calibration/OOS alpha remains INSUFFICIENT_EVIDENCE. |
 | M6 Multi-crypto forward | BLOCKED | ETH/SOL remain SHADOW until protocol freeze and M0-M5 gates. |
 | M7 Breadth | IN_PROGRESS | XRP/DOGE/BNB M5/M15 discovery/rules gates passed; activation remains SHADOW-only and still depends on shared PM-book/oracle/feature gates. |
