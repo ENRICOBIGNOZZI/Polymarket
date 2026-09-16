@@ -449,7 +449,7 @@ class LeadLagRuntime:
             "event_id": arrival["event_id"], "token_id": arrival["token_id"], "outcome": arrival["outcome"],
             "shares": size, "entry_price": ask, "entry_fee": fee, "entry_cost": entry_cost,
             "opened_ms": book.receive_ts_ms, "resolution_due_ms": resolution_due_ms, "settled": False,
-            "protocol_hash": self.protocol_hash,
+            "protocol_hash": self.protocol_hash, "coordinator_receipt": receipt,
         }
         self.event("FILLED", market_id=market_id, outcome=arrival["outcome"], shares=size, price=ask,
                    fee=fee, tte_seconds=arrival["tte_seconds"], signal_age_ms=arrival["signal_age_ms"])
@@ -486,6 +486,7 @@ class LeadLagRuntime:
                 "outcome": position["outcome"], "won": won, "settlement_outcome": resolved,
                 "winning_token_id": tokens[win_idx], "hold_to_settlement": True,
                 "protocol_hash": self.protocol_hash,
+                "coordinator_receipt": position.get("coordinator_receipt"),
                 "terminal_id": f"lead-lag:{position['position_id']}:final",
                 "pnl_decomposition": {"trading_pnl": pnl, "spread_capture": 0.0, "adverse_markout": 0.0,
                     "inventory_pnl": 0.0, "maker_rebates": 0.0, "liquidity_rewards": 0.0,

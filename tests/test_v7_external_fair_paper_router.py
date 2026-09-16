@@ -1151,6 +1151,23 @@ def test_recoverable_restart_does_not_keep_stale_router_kill_latched():
         assert blocked.state["killed"] is True
 
 
+def test_forward_test_events_are_excluded_from_legacy_fair_accounting() -> None:
+    base = {
+        "component": router.COMPONENT, "paper_exploration": True,
+        "economic_authority": "PAPER_EXPLORATION", "counterfactual": False,
+        "excluded_from_portfolio_equity": False, "research_evidence_only": False,
+    }
+    legacy = router.LedgerEvent(
+        event_type="FILL", strategy=router.STRATEGY, model_sha="a" * 40, metadata=base,
+    )
+    forward = router.LedgerEvent(
+        event_type="FILL", strategy=router.STRATEGY, model_sha="a" * 40,
+        metadata={**base, "paper_forward_test": True},
+    )
+    assert router._canonical_paper_exploration_event(legacy) is True
+    assert router._canonical_paper_exploration_event(forward) is False
+
+
 if __name__ == "__main__":
     main()
     test_paper_account_admission_controls_actual_step()
@@ -1158,6 +1175,7 @@ if __name__ == "__main__":
     test_empty_candidate_input_reason_is_not_false_no_edge()
     test_actual_step_distinguishes_missing_reference_from_no_edge()
     test_recoverable_restart_does_not_keep_stale_router_kill_latched()
+    test_forward_test_events_are_excluded_from_legacy_fair_accounting()
 
 
 def test_arrival_candidate_waits_for_single_coordinator_receipt() -> None:
