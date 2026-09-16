@@ -51,3 +51,11 @@ A read-only current/next discovery found 24/24 expected markets across BTC/ETH/S
 - `state-only=true`: 0 book events written to append-only tape; no `book_observations/current.jsonl`.
 - Persistent snapshot/status footprint after the smoke: 99,286 bytes.
 - This validates the public PM book data plane only. It does not validate entry execution or PnL.
+
+## Multi-crypto OracleHub — exact-SHA smoke
+
+- Code SHA: `656b8690ce8e54f98f096649aade3ed34a70cac9`.
+- Public RTDS Chainlink 60s TWAP: BTC/ETH/SOL/XRP/DOGE/BNB all valid and fresh.
+- 15 s: 14–15 observations per asset; aggregate reconnects=0; gaps=0.
+- One socket per asset is required: RTDS symbol filters did not multiplex reliably on one socket.
+- The hub is zero-authority and does not claim one-way network latency.
