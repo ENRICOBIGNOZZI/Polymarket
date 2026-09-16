@@ -332,3 +332,19 @@ Changing an economic/statistical parameter changes the protocol hash. The
 result embeds the same `PAPER_MULTI_CRYPTO_FORWARD` packet consumed by the typed
 opportunity contract and still sets `entry_authority=false` and
 `automatic_promotion=false`. No thresholds are invented by the builder.
+
+## Prospective multi-crypto forward report
+
+`v7_multi_crypto_forward_report.py` reads one frozen protocol plus canonical
+ledger events for that exact code SHA. The first denominator is durable
+`CAPITAL_RESERVE`, then submitted/fill/resolved counts are reported separately.
+A market with a fill but no FINAL is `FILLED_PENDING_SETTLEMENT`; its PnL remains
+missing and therefore the cohort `total_pnl` is null until all authorized
+markets are terminal.
+
+The reporter rejects multiple entries in one market, duplicate FINALs and any
+event whose `multi_crypto_forward` packet differs from the frozen manifest or
+coordinator receipt. It includes resolved-PnL contribution, per-authorized-market
+PnL only when complete, shared-shock/time cluster bootstrap, best-one/best-three
+concentration checks and descriptive 25-market chronological blocks. Annualized
+Sharpe is deliberately not computed. No report output grants execution authority.
