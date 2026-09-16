@@ -36,7 +36,7 @@ COST_FIELDS = (
     "adverse_markout", "rebate",
 )
 AUTHORITY_STATES = {"AUTHORITATIVE", "CONSERVATIVE_BOUND", "CONSERVATIVE_ZERO"}
-CRYPTO_ASSETS = {"BTC", "ETH", "SOL", "XRP"}
+CRYPTO_ASSETS = {"BTC", "ETH", "SOL", "XRP", "DOGE", "BNB"}
 CRYPTO_HORIZONS = {"M1", "M5", "M15", "H1", "H4"}
 CRYPTO_CONTEXT_FIELDS = {
     "asset", "horizon", "contract_family", "settlement_semantic_hash",

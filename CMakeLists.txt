@@ -235,6 +235,10 @@ if(BUILD_TESTING)
   target_link_libraries(pm_v7_external_ingress_tests PRIVATE pm_v7_external)
   add_test(NAME pm_v7_external_ingress_tests COMMAND pm_v7_external_ingress_tests)
 
+  add_executable(pm_v7_external_ws_spec_tests tests/test_v7_external_ws_spec.cpp)
+  target_link_libraries(pm_v7_external_ws_spec_tests PRIVATE pm_v7_external)
+  add_test(NAME pm_v7_external_ws_spec_tests COMMAND pm_v7_external_ws_spec_tests)
+
   add_executable(pm_v7_external_tape_tests tests/test_v7_external_tape.cpp)
   target_link_libraries(pm_v7_external_tape_tests PRIVATE pm_v7_external)
   add_test(NAME pm_v7_external_tape_tests COMMAND pm_v7_external_tape_tests)

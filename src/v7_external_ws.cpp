@@ -13,6 +13,7 @@
 
 #include <algorithm>
 #include <chrono>
+#include <cctype>
 #include <iostream>
 #include <memory>
 #include <stdexcept>
@@ -56,75 +57,103 @@ void bounded_backoff(ExternalStopToken stop, std::uint64_t failures) noexcept {
 
 } // namespace
 
-ExternalVenueConnectionSpec btc_spot_connection_spec(
+ExternalVenueConnectionSpec crypto_connection_spec(
     VenueId venue,
-    std::uint64_t asset_handle) {
+    std::uint64_t asset_handle,
+    std::string symbol) {
     if (asset_handle == 0) throw std::invalid_argument("asset_handle must be non-zero");
+    if (symbol.empty() || symbol.find('\n') != std::string::npos
+        || symbol.find('\r') != std::string::npos) {
+        throw std::invalid_argument("external venue symbol must be non-empty and single-line");
+    }
+
+    std::string lower_symbol = symbol;
+    std::transform(lower_symbol.begin(), lower_symbol.end(), lower_symbol.begin(),
+        [](unsigned char ch) { return static_cast<char>(std::tolower(ch)); });
 
     ExternalVenueConnectionSpec spec;
     spec.venue = venue;
     spec.asset_handle = asset_handle;
     spec.max_message_bytes = kMaxWsMessageBytes;
+    spec.symbol = std::move(symbol);
     switch (venue) {
         case VenueId::BinanceSpot:
             spec.host = "stream.binance.com";
             spec.port = "9443";
             spec.target = "/ws";
-            spec.symbol = "BTCUSDT";
             spec.subscription_json =
-                R"({"method":"SUBSCRIBE","params":["btcusdt@depth@100ms","btcusdt@bookTicker","btcusdt@aggTrade"],"id":1})";
+                "{\"method\":\"SUBSCRIBE\",\"params\":[\"" + lower_symbol
+                + "@depth@100ms\",\"" + lower_symbol + "@bookTicker\",\""
+                + lower_symbol + "@aggTrade\"],\"id\":1}";
             break;
         case VenueId::CoinbaseSpot:
             spec.host = "ws-feed.exchange.coinbase.com";
             spec.port = "443";
             spec.target = "/";
-            spec.symbol = "BTC-USD";
             spec.subscription_json =
-                // Coinbase Exchange documents level2_batch as the public,
-                // unauthenticated L2 channel; it has the same snapshot and
-                // absolute-size update semantics as level2.
-                R"({"type":"subscribe","product_ids":["BTC-USD"],"channels":["level2_batch"]})";
+                "{\"type\":\"subscribe\",\"product_ids\":[\"" + spec.symbol
+                + "\"],\"channels\":[\"level2_batch\"]}";
             break;
         case VenueId::BybitSpot:
             spec.host = "stream.bybit.com";
             spec.port = "443";
             spec.target = "/v5/public/spot";
-            spec.symbol = "BTCUSDT";
             spec.subscription_json =
-                R"({"op":"subscribe","args":["orderbook.50.BTCUSDT","publicTrade.BTCUSDT"]})";
+                "{\"op\":\"subscribe\",\"args\":[\"orderbook.50." + spec.symbol
+                + "\",\"publicTrade." + spec.symbol + "\"]}";
             break;
         case VenueId::BinanceUsdM:
             spec.host = "fstream.binance.com";
             spec.port = "443";
-            // Binance Futures separates high-frequency books (/public) from
-            // aggregate trades, marks, and liquidations (/market). The
-            // runtime splits those stream classes onto separate clients.
             spec.target = "/public/ws";
-            spec.symbol = "BTCUSDT";
             spec.subscription_json =
-                R"({"method":"SUBSCRIBE","params":["btcusdt@depth20@100ms","btcusdt@aggTrade","btcusdt@markPrice@1s","btcusdt@forceOrder"],"id":1})";
+                "{\"method\":\"SUBSCRIBE\",\"params\":[\"" + lower_symbol
+                + "@depth20@100ms\",\"" + lower_symbol + "@aggTrade\",\""
+                + lower_symbol + "@markPrice@1s\",\"" + lower_symbol
+                + "@forceOrder\"],\"id\":1}";
             break;
         case VenueId::Deribit:
             spec.host = "www.deribit.com";
             spec.port = "443";
             spec.target = "/ws/api/v2";
-            spec.symbol = "BTC-PERPETUAL";
             spec.subscription_json =
-                R"({"jsonrpc":"2.0","method":"public/subscribe","id":1,"params":{"channels":["ticker.BTC-PERPETUAL.100ms","trades.BTC-PERPETUAL.100ms"]}})";
+                "{\"jsonrpc\":\"2.0\",\"method\":\"public/subscribe\",\"id\":1,"
+                "\"params\":{\"channels\":[\"ticker." + spec.symbol
+                + ".100ms\",\"trades." + spec.symbol + ".100ms\"]}}";
             break;
         case VenueId::BybitLinear:
             spec.host = "stream.bybit.com";
             spec.port = "443";
             spec.target = "/v5/public/linear";
-            spec.symbol = "BTCUSDT";
             spec.subscription_json =
-                R"({"op":"subscribe","args":["orderbook.50.BTCUSDT","publicTrade.BTCUSDT","tickers.BTCUSDT","allLiquidation.BTCUSDT"]})";
+                "{\"op\":\"subscribe\",\"args\":[\"orderbook.50." + spec.symbol
+                + "\",\"publicTrade." + spec.symbol + "\",\"tickers." + spec.symbol
+                + "\",\"allLiquidation." + spec.symbol + "\"]}";
             break;
         case VenueId::Unknown:
         default:
             throw std::invalid_argument("unsupported external venue");
     }
     return spec;
+}
+
+ExternalVenueConnectionSpec btc_spot_connection_spec(
+    VenueId venue,
+    std::uint64_t asset_handle) {
+    switch (venue) {
+        case VenueId::BinanceSpot:
+        case VenueId::BinanceUsdM:
+        case VenueId::BybitSpot:
+        case VenueId::BybitLinear:
+            return crypto_connection_spec(venue, asset_handle, "BTCUSDT");
+        case VenueId::CoinbaseSpot:
+            return crypto_connection_spec(venue, asset_handle, "BTC-USD");
+        case VenueId::Deribit:
+            return crypto_connection_spec(venue, asset_handle, "BTC-PERPETUAL");
+        case VenueId::Unknown:
+        default:
+            throw std::invalid_argument("unsupported external venue");
+    }
 }
 
 ExternalVenueWsClient::ExternalVenueWsClient(

@@ -1,0 +1,42 @@
+{
+  "schema": "polymarket_v7_london_az_shootout_v1",
+  "version": 1,
+  "region": "eu-west-2",
+  "paper_only": true,
+  "authenticated_execution": false,
+  "real_order_submission": false,
+  "automatic_cutover": false,
+  "host_os": "ubuntu-24.04",
+  "zone_mapping_source": "Polymarket support whitelist message 2026-09-16",
+  "zones": [
+    {"zone_name": "eu-west-2a", "zone_id": "euw2-az2"},
+    {"zone_name": "eu-west-2b", "zone_id": "euw2-az3"},
+    {"zone_name": "eu-west-2c", "zone_id": "euw2-az1"}
+  ],
+  "instance_type_preferences": ["c7i.large", "c7a.large", "c6i.large"],
+  "verify_instance_offering_per_zone_before_launch": true,
+  "storage_blueprint": {
+    "root": {"type": "gp3", "size_gib": 40, "encrypted": true},
+    "data": {"type": "gp3", "size_gib": 250, "encrypted": true}
+  },
+  "benchmark": {
+    "smoke_samples": 120,
+    "smoke_interval_ms": 500,
+    "formal_samples": 21601,
+    "formal_interval_ms": 4000,
+    "formal_minimum_duration_seconds": 86400,
+    "https_endpoint": "https://clob.polymarket.com/time",
+    "winner_metric_order": ["total_p99_9_ns", "total_p99_ns", "failure_rate", "reconnect_rate"]
+  },
+  "data_migration": {
+    "copy_live_run_root": false,
+    "copy_canonical_ledger": false,
+    "new_run_generation_required": true,
+    "allow": ["models", "durable_datasets", "registries", "research_artifacts", "configuration"]
+  },
+  "tailscale": {
+    "admin_only": true,
+    "trading_data_path": false,
+    "automatic_authentication": false
+  }
+}

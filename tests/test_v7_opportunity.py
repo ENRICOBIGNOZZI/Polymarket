@@ -194,6 +194,17 @@ def test_crypto_context_is_mandatory_and_zero_authority_cannot_add_risk() -> Non
     assert OpportunityEnvelope.parse(zero).raw["crypto_context"]["asset"] == "ETH"
 
 
+def test_doge_and_bnb_are_typed_crypto_contexts_but_zero_authority_still_blocks_risk() -> None:
+    for asset in ("DOGE", "BNB"):
+        value = envelope(asset=asset, authority="SHADOW_ZERO_AUTHORITY", research_only=True)
+        try:
+            OpportunityEnvelope.parse(value)
+        except OpportunityError as exc:
+            assert str(exc) == "crypto_context_zero_authority"
+        else:
+            raise AssertionError(f"{asset} zero-authority context added risk")
+
+
 def test_all_crypto_contexts_compete_in_one_global_cut() -> None:
     eth = envelope(asset="ETH", authority="PAPER", ev=2.0, key="eth")
     sol = envelope(asset="SOL", authority="PAPER", ev=3.0, key="sol")
@@ -235,5 +246,6 @@ if __name__ == "__main__":
     test_invalid_or_duplicate_envelope_fails_the_whole_cut_closed()
     test_structural_arbitrage_is_one_atomic_multileg_intent()
     test_crypto_context_is_mandatory_and_zero_authority_cannot_add_risk()
+    test_doge_and_bnb_are_typed_crypto_contexts_but_zero_authority_still_blocks_risk()
     test_all_crypto_contexts_compete_in_one_global_cut()
     test_frozen_forward_take_is_paper_authorized_without_absolute_fair_ev()
