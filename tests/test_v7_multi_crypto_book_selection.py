@@ -90,6 +90,10 @@ def test_observer_selection_only_preserves_default_behavior_and_blocks_fair_inje
     assert 'arg == "--selection-only"' in source
     assert '"--fair-only and --selection-only are mutually exclusive"' in source
     assert '"--selection-only requires explicit --selection"' in source
+    assert 'arg == "--state-only"' in source
+    assert '"--state-only requires --selection-only"' in source
+    assert 'root["book_event_tape_enabled"] = !state_only_;' in source
+    assert 'if (!state_only_) {' in source
     assert '"polymarket_v7_multi_crypto_book_selection_v1"' in source
     assert 'if (!options.selection_only)' in source
     assert 'reload = !options.selection_only' in source

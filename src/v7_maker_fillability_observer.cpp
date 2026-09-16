@@ -142,6 +142,7 @@ struct Options {
     std::string ws_url = "wss://ws-subscriptions-clob.polymarket.com/ws/market";
     bool fair_only = false;
     bool selection_only = false;
+    bool state_only = false;
     bool selection_explicit = false;
 };
 
@@ -161,6 +162,7 @@ Options parse_options(int argc, char** argv) {
         else if (arg == "--ws-url") options.ws_url = next();
         else if (arg == "--fair-only") options.fair_only = true;
         else if (arg == "--selection-only") options.selection_only = true;
+        else if (arg == "--state-only") options.state_only = true;
         else throw std::runtime_error("unknown argument: " + arg);
     }
     if (options.fair_only && options.selection_only) {
@@ -168,6 +170,9 @@ Options parse_options(int argc, char** argv) {
     }
     if (options.selection_only && !options.selection_explicit) {
         throw std::runtime_error("--selection-only requires explicit --selection");
+    }
+    if (options.state_only && !options.selection_only) {
+        throw std::runtime_error("--state-only requires --selection-only");
     }
     if (options.selection.empty()) {
         options.selection = options.run_root + "/micro_maker/reward_selection.json";
@@ -363,9 +368,10 @@ struct FlowSample {
 class ExactWsObserver final {
 public:
     ExactWsObserver(std::vector<SelectedToken> tokens, std::string ws_url,
-                    fs::path output_dir, std::string model_sha)
+                    fs::path output_dir, std::string model_sha, bool state_only = false)
         : tokens_(std::move(tokens)), ws_url_(std::move(ws_url)),
-          output_dir_(std::move(output_dir)), model_sha_(std::move(model_sha)) {
+          output_dir_(std::move(output_dir)), model_sha_(std::move(model_sha)),
+          state_only_(state_only) {
         std::vector<pm::v7::TokenBinding> bindings;
         std::size_t max_handle = 0;
         for (const auto& token : tokens_) {
@@ -388,12 +394,15 @@ public:
         evidence_path_ = output_dir_ / "fillability_ws.jsonl";
         status_path_ = output_dir_ / "fillability_ws_status.json";
         flow_path_ = output_dir_ / "fillability_flow_snapshot.json";
-        output_.open(evidence_path_, std::ios::app);
-        if (!output_) throw std::runtime_error("cannot open exact-WS fillability evidence file");
-        fs::create_directories(output_dir_ / "book_observations");
-        book_path_ = output_dir_ / "book_observations" / "current.jsonl";
-        book_output_.open(book_path_, std::ios::app);
-        if (!book_output_) throw std::runtime_error("cannot open canonical book evidence file");
+        fs::create_directories(output_dir_ / "book_features");
+        if (!state_only_) {
+            output_.open(evidence_path_, std::ios::app);
+            if (!output_) throw std::runtime_error("cannot open exact-WS fillability evidence file");
+            fs::create_directories(output_dir_ / "book_observations");
+            book_path_ = output_dir_ / "book_observations" / "current.jsonl";
+            book_output_.open(book_path_, std::ios::app);
+            if (!book_output_) throw std::runtime_error("cannot open canonical book evidence file");
+        }
         session_id_ = std::to_string(wall_ms()) + "-" + std::to_string(::getpid());
     }
 
@@ -525,9 +534,13 @@ public:
     void stop() {
         if (feed_) feed_->stop();
         drain();
-        output_.flush();
-        book_output_.flush();
-        if (!output_ || !book_output_) throw std::runtime_error("cannot flush canonical observer evidence");
+        if (!state_only_) {
+            output_.flush();
+            book_output_.flush();
+            if (!output_ || !book_output_) {
+                throw std::runtime_error("cannot flush canonical observer evidence");
+            }
+        }
         write_status(true);
     }
 
@@ -535,12 +548,12 @@ public:
         TradeEvidence row;
         bool wrote = false;
         while (queue_->try_pop(row)) {
-            if (row.kind == MarketWsEventKind::Trade) write(row);
+            if (!state_only_ && row.kind == MarketWsEventKind::Trade) write(row);
             write_book(row);
             wrote = true;
         }
-        if (wrote) { output_.flush(); book_output_.flush(); }
-        if (book_output_.tellp() >= 64 * 1024 * 1024) {
+        if (wrote && !state_only_) { output_.flush(); book_output_.flush(); }
+        if (!state_only_ && book_output_.tellp() >= 64 * 1024 * 1024) {
             book_output_.close();
             const auto sealed = book_path_.parent_path() / (session_id_ + ".segment-"
                 + std::to_string(1'000'000 + book_segment_++) + ".jsonl");
@@ -548,7 +561,8 @@ public:
             book_output_.open(book_path_, std::ios::app);
             if (!book_output_) throw std::runtime_error("cannot rotate causal book evidence");
         }
-        if (wall_ms() - last_book_publish_ms_ >= 50) {
+        const std::int64_t publish_period_ms = state_only_ ? 100 : 50;
+        if (wall_ms() - last_book_publish_ms_ >= publish_period_ms) {
             for (std::size_t i=1; i<latest_books_.size(); ++i) {
                 if (latest_books_[i].empty()) continue;
                 atomic_write(output_dir_ / "book_features" / (by_handle_[i]->token_id + ".json"),
@@ -569,6 +583,9 @@ public:
         root["real_order_submission"] = false;
         root["model_sha"] = model_sha_;
         root["observer_session_id"] = session_id_;
+        root["state_only"] = state_only_;
+        root["book_event_tape_enabled"] = !state_only_;
+        root["book_events_observed"] = book_events_observed_;
         root["book_events_written"] = book_events_written_;
         root["book_watermark_receive_wall_ms"] = book_watermark_wall_ms_;
         root["book_watermark_receive_monotonic_ns"] = book_watermark_monotonic_ns_;
@@ -697,7 +714,7 @@ private:
             {"authenticated_execution", false}, {"real_order_submission", false},
             {"execution_authority", "ZERO_AUTHORITY_RESEARCH_ONLY"},
             {"observer_session_id", session_id_}, {"connection_epoch", row.connection_epoch},
-            {"observer_sequence", ++book_events_written_}, {"market_id", token->market_id},
+            {"observer_sequence", ++book_events_observed_}, {"market_id", token->market_id},
             {"token_id", token->token_id}, {"state_version", row.state_version},
             {"receive_wall_ms", row.receive_wall_ms}, {"receive_monotonic_ns", row.receive_monotonic_ns},
             {"exchange_event_ns", row.book.exchange_event_ns},
@@ -722,7 +739,10 @@ private:
                 {"exchange_event_ns", row.exchange_event_ns}};
         }
         const auto serialized = json::serialize(value) + "\n";
-        book_output_ << serialized;
+        if (!state_only_) {
+            book_output_ << serialized;
+            ++book_events_written_;
+        }
         latest_books_[row.instrument_handle] = serialized;
         book_watermark_wall_ms_ = std::max(book_watermark_wall_ms_, row.receive_wall_ms);
         book_watermark_monotonic_ns_ = std::max(book_watermark_monotonic_ns_, row.receive_monotonic_ns);
@@ -769,6 +789,7 @@ private:
     std::string ws_url_;
     fs::path output_dir_;
     std::string model_sha_;
+    bool state_only_ = false;
     std::vector<std::string> ids_;
     std::vector<const SelectedToken*> by_handle_;
     std::vector<std::unique_ptr<pm::v7::maker::MakerInstrumentLane>> lanes_;
@@ -780,6 +801,7 @@ private:
     std::ofstream book_output_;
     fs::path book_path_;
     std::uint64_t book_segment_ = 0;
+    std::uint64_t book_events_observed_ = 0;
     std::uint64_t book_events_written_ = 0;
     std::int64_t last_book_publish_ms_ = 0;
     std::int64_t book_watermark_wall_ms_ = 0;
@@ -834,7 +856,8 @@ int main(int argc, char** argv) {
                 ? std::vector<std::pair<std::string, std::pair<std::string, std::string>>>{}
                 : load_selected_pairs(options.selection, options.selection_only);
             ExactWsObserver observer(
-                std::move(tokens), options.ws_url, options.output_dir, options.model_sha);
+                std::move(tokens), options.ws_url, options.output_dir, options.model_sha,
+                options.state_only);
             observer.start();
             std::int64_t last_status_ms = 0;
             std::int64_t last_membership_check_ms = 0;
