@@ -556,6 +556,7 @@ for rel in (
     'monitoring/v7_retention.py',
     'scripts/v7_storage_budget.py',
     'scripts/v7_aggregate_retention.py',
+    'scripts/v7_windowed_evidence_retention.py',
     'monitoring/v7_portfolio_reconciliation.py',
     'monitoring/grafana/dashboards/polymarket-v7.json',
     'monitoring/grafana/dashboards/polymarket-v7-external-fair.json',
@@ -609,6 +610,7 @@ prevalidate_candidate(){
       monitoring/v7_retention.py \
       scripts/v7_storage_budget.py \
       scripts/v7_aggregate_retention.py \
+      scripts/v7_windowed_evidence_retention.py \
       monitoring/v7_portfolio_reconciliation.py \
       ops/v7_runtime_supervisor.py
     bash -n scripts/paper_v7_execution_loop.sh ops/update_server_v7.sh ops/v7_service_entrypoint.sh

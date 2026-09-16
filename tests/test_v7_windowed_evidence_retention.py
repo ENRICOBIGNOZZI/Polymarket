@@ -1,0 +1,85 @@
+from __future__ import annotations
+import json, os, sys, tempfile, time, unittest
+from pathlib import Path
+ROOT=Path(__file__).resolve().parents[1]
+sys.path.insert(0,str(ROOT/'scripts'))
+from v7_evidence_store import canonical, digest, immutable
+from v7_windowed_evidence_retention import run
+
+def revision(store, source_id, family, path, captured_ns, objsha):
+    value={'schema':'polymarket_v7_permanent_source_revision_v1','paper_only':True,
+      'authenticated_execution':False,'real_order_submission':False,
+      'execution_authority':'ZERO_AUTHORITY_RESEARCH_ONLY','source_id':source_id,
+      'partition':'run:x','relative_path':path.name,'original_path_at_capture':str(path),
+      'captured_ns':captured_ns,'capture_implementation_sha256':'b'*64,
+      'source_bytes':10,'source_physical_bytes':10,'capture_complete':True,
+      'source_compression':'none','stat':[1,2,10,captured_ns],
+      'previous_revision':None,'supersedes_without_destroying':None,
+      'chunks':[{'sha256':objsha,'bytes':10,'compressed_bytes':10,
+                 'object':f'objects/{objsha[:2]}/{objsha}.gz','offset':0}],
+      'contract':{'source_family':family},'tail_bytes':0,'tail_sha256':digest(b'')}
+    payload=canonical(value);sha=digest(payload)
+    immutable(store/'revisions'/sha[:2]/(sha+'.json'),payload)
+    return sha
+
+class WindowedRetentionTest(unittest.TestCase):
+    def test_old_windowed_raw_is_retired_but_ledger_is_preserved(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            runs=Path(tmp)/'runs';store=runs/'paper_v7_durable/permanent_evidence/store'
+            old=time.time_ns()-8*3600*10**9
+            raw=runs/'paper_v7_archives'/('cutover-'+'a'*40+'-1-1')/'research/repricing_book/book_observations/x.segment-1000000.jsonl'
+            raw.parent.mkdir(parents=True);raw.write_text('{}\n');os.utime(raw,ns=(old,old))
+            obj='c'*64;op=store/'objects'/obj[:2]/(obj+'.gz');op.parent.mkdir(parents=True);op.write_bytes(b'x')
+            revision(store,'raw-source','pm_causal_book',raw,old,obj)
+            ledger=runs/'paper_v7_live/ledger/execution.jsonl';ledger.parent.mkdir(parents=True);ledger.write_text('ledger')
+            lobj='d'*64;lop=store/'objects'/lobj[:2]/(lobj+'.gz');lop.parent.mkdir(parents=True);lop.write_bytes(b'x')
+            revision(store,'ledger-source','canonical_ledger',ledger,old,lobj)
+            out=run(runs,raw_detail_seconds=6*3600,maximum_seconds=30)
+            self.assertFalse(raw.exists());self.assertFalse(op.exists());self.assertTrue(lop.exists())
+            receipt=json.loads((store/'retired_sources/raw-source.json').read_text())
+            self.assertFalse(receipt['raw_detail_available']);self.assertTrue(ledger.exists())
+            self.assertEqual(out['retired_sources'],1)
+
+    def test_recent_windowed_raw_survives(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            runs=Path(tmp)/'runs';store=runs/'paper_v7_durable/permanent_evidence/store'
+            recent=time.time_ns()-3600*10**9
+            raw=runs/'paper_v7_live/research/repricing_book/book_observations/x.segment-1000000.jsonl'
+            raw.parent.mkdir(parents=True);raw.write_text('{}\n');os.utime(raw,ns=(recent,recent))
+            obj='e'*64;op=store/'objects'/obj[:2]/(obj+'.gz');op.parent.mkdir(parents=True);op.write_bytes(b'x')
+            revision(store,'raw-source','pm_causal_book',raw,recent,obj)
+            out=run(runs,raw_detail_seconds=6*3600,maximum_seconds=30)
+            self.assertTrue(raw.exists());self.assertTrue(op.exists());self.assertEqual(out['retired_sources'],0)
+
+    def test_old_manifest_only_windowed_pack_is_retired(self):
+        import hashlib
+        with tempfile.TemporaryDirectory() as tmp:
+            runs=Path(tmp)/'runs';store=runs/'paper_v7_durable/permanent_evidence/store'
+            alias=runs/'paper_v7_archives'/('cutover-'+'a'*40+'-1-1')/'research/repricing_book/book_observations/x.jsonl'
+            pack_payload=b'old-pack';sha=hashlib.sha256(pack_payload).hexdigest()
+            pack=store/'packs'/sha[:2]/(sha+'.pack');pack.parent.mkdir(parents=True);pack.write_bytes(pack_payload);os.chmod(pack,0o400)
+            value={'schema':'polymarket_v7_lossless_shared_pack_v1','pack_sha256':sha,'pack_bytes':len(pack_payload),
+                'source_aliases':[str(alias)],'source_bytes_sha256_verified':True,'created_ns':time.time_ns()-8*3600*10**9,
+                'source_original_stat':[1,2,len(pack_payload),time.time_ns()-8*3600*10**9]}
+            raw=json.dumps(value).encode();man=store/'pack_manifests'/(hashlib.sha256(raw).hexdigest()+'.json');man.parent.mkdir(parents=True);man.write_bytes(raw)
+            out=run(runs,raw_detail_seconds=6*3600,maximum_seconds=30)
+            self.assertFalse(pack.exists());self.assertFalse(man.exists())
+            self.assertTrue((store/'windowed_pack_tombstones'/(sha+'.json')).exists())
+            self.assertEqual(out['removed_packs'],1)
+
+    def test_manifest_pack_with_protected_alias_survives(self):
+        import hashlib
+        with tempfile.TemporaryDirectory() as tmp:
+            runs=Path(tmp)/'runs';store=runs/'paper_v7_durable/permanent_evidence/store'
+            raw_alias=runs/'paper_v7_archives'/('cutover-'+'a'*40+'-1-1')/'research/repricing_book/book_observations/x.jsonl'
+            protected_alias=runs/'paper_v7_archives'/('cutover-'+'a'*40+'-1-1')/'ledger/execution.jsonl'
+            payload=b'mixed-pack';sha=hashlib.sha256(payload).hexdigest();pack=store/'packs'/sha[:2]/(sha+'.pack');pack.parent.mkdir(parents=True);pack.write_bytes(payload);os.chmod(pack,0o400)
+            old=time.time_ns()-8*3600*10**9
+            value={'schema':'polymarket_v7_lossless_shared_pack_v1','pack_sha256':sha,'pack_bytes':len(payload),
+                'source_aliases':[str(raw_alias),str(protected_alias)],'source_bytes_sha256_verified':True,'created_ns':old,'source_original_stat':[1,2,len(payload),old]}
+            raw=json.dumps(value).encode();man=store/'pack_manifests'/(hashlib.sha256(raw).hexdigest()+'.json');man.parent.mkdir(parents=True);man.write_bytes(raw)
+            out=run(runs,raw_detail_seconds=6*3600,maximum_seconds=30)
+            self.assertTrue(pack.exists());self.assertTrue(man.exists());self.assertEqual(out['removed_packs'],0)
+
+
+if __name__=='__main__':unittest.main()

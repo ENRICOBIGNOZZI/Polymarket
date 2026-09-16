@@ -1,6 +1,6 @@
 {
   "schema": "polymarket_v7_data_retention_v1",
-  "version": 10,
+  "version": 11,
   "paper_only": true,
   "disk": {
     "warning_free_ratio": 0.2,
@@ -28,24 +28,24 @@
         "market_data/*.csv.*",
         "market_data/*.jsonl.*"
       ],
-      "retention_days": 7,
-      "retention_semantics": "PERMANENT_VERIFIED_COMPRESSION_NO_EXPIRY"
+      "retention_days": 0.25,
+      "retention_semantics": "ROLLING_WINDOW_DELETE_AFTER_VERIFIED_CLOSURE"
     },
     {
       "name": "trade_tape",
       "patterns": [
         "trade_tape.csv.*"
       ],
-      "retention_days": 30,
-      "retention_semantics": "PERMANENT_VERIFIED_COMPRESSION_NO_EXPIRY"
+      "retention_days": 1,
+      "retention_semantics": "ROLLING_WINDOW_DELETE_AFTER_VERIFIED_CLOSURE"
     },
     {
       "name": "latency_telemetry",
       "patterns": [
         "micro_maker/latency.csv.*"
       ],
-      "retention_days": 14,
-      "retention_semantics": "PERMANENT_VERIFIED_COMPRESSION_NO_EXPIRY"
+      "retention_days": 0.25,
+      "retention_semantics": "ROLLING_WINDOW_DELETE_AFTER_VERIFIED_CLOSURE"
     },
     {
       "name": "external_events",
@@ -54,17 +54,19 @@
         "external/*.jsonl.*",
         "external_fair/*.jsonl.*"
       ],
-      "retention_days": 30,
-      "retention_semantics": "PERMANENT_VERIFIED_COMPRESSION_NO_EXPIRY"
+      "retention_days": 0.25,
+      "retention_semantics": "ROLLING_WINDOW_DELETE_AFTER_VERIFIED_CLOSURE"
     },
     {
       "name": "repricing_causal_book",
       "patterns": [
         "research/repricing_book/book_observations/*.jsonl*",
-        "research/repricing_book/fillability_ws.jsonl*"
+        "research/repricing_book/fillability_ws.jsonl*",
+        "micro_maker/book_observations/*.jsonl*",
+        "micro_maker/fillability_ws.jsonl*"
       ],
-      "retention_days": 30,
-      "retention_semantics": "PERMANENT_VERIFIED_COMPRESSION_NO_EXPIRY"
+      "retention_days": 0.25,
+      "retention_semantics": "ROLLING_WINDOW_DELETE_AFTER_VERIFIED_CLOSURE"
     },
     {
       "name": "runtime_logs",
@@ -72,8 +74,17 @@
         "**/*.log.*",
         "**/*.log.gz"
       ],
-      "retention_days": 14,
-      "retention_semantics": "PERMANENT_VERIFIED_COMPRESSION_NO_EXPIRY"
+      "retention_days": 1,
+      "retention_semantics": "ROLLING_WINDOW_DELETE_AFTER_VERIFIED_CLOSURE"
+    },
+    {
+      "name": "external_binary_tapes",
+      "patterns": [
+        "external_fair/raw/*.bin*",
+        "external_fair/normalized_events/*.bin*"
+      ],
+      "retention_days": 0.25,
+      "retention_semantics": "ROLLING_WINDOW_DELETE_AFTER_VERIFIED_CLOSURE"
     }
   ],
   "active_files": {
@@ -98,8 +109,8 @@
     "derived_discard_requires_exact_source_provenance": true,
     "maximum_total_data_bytes": 40000000000,
     "budget_unit": "DECIMAL_GB_ALL_MANAGED_DATA_INCLUDING_LIVE_ARCHIVES_AND_PERMANENT_STORE",
-    "target_compaction_bytes": 36000000000,
-    "warning_bytes": 34000000000,
+    "target_compaction_bytes": 30000000000,
+    "warning_bytes": 28000000000,
     "critical_bytes": 39000000000,
     "external_storage_allowed": false,
     "information_loss_allowed": true,
@@ -110,12 +121,43 @@
   "aggregate_retention": {
     "enabled": true,
     "authorization": "USER_AUTHORIZED_CONTINUOUS_COLLECTION_WITH_OLDER_DETAIL_AGGREGATED_20260909",
-    "target_bytes": 36000000000,
-    "trigger_bytes": 38000000000,
-    "minimum_age_seconds": 3600,
-    "maximum_seconds_per_pass": 240,
-    "hard_filesystem_quota": false,
+    "target_bytes": 30000000000,
+    "trigger_bytes": 34000000000,
+    "minimum_age_seconds": 21600,
+    "maximum_seconds_per_pass": 180,
+    "hard_filesystem_quota": true,
     "scope": "CLOSED_EXTERNAL_RAW_AND_NORMALIZED_TAPES_ONLY",
     "protected": "LEDGERS_DECISIONS_OUTCOMES_PM_BOOKS_AND_ALL_NON_ALLOWLISTED_SOURCES"
+  },
+  "rolling_window": {
+    "enabled": true,
+    "authorization": "USER_AUTHORIZED_HFT_ROLLING_RAW_WINDOW_20260916",
+    "raw_detail_seconds": 21600,
+    "experiment_detail_seconds": 604800,
+    "target_managed_bytes": 30000000000,
+    "trigger_managed_bytes": 34000000000,
+    "maximum_managed_bytes": 40000000000,
+    "maximum_seconds_per_pass": 180,
+    "windowed_source_families": [
+      "pm_causal_book",
+      "pm_public_trades",
+      "pm_l2_binary",
+      "external_raw",
+      "external_normalized",
+      "oracle_rtds",
+      "derivative_rest",
+      "diagnostics",
+      "structural_candidates"
+    ],
+    "permanent_small_evidence": [
+      "canonical_ledger",
+      "coordinator_decisions",
+      "authorization",
+      "markouts",
+      "profit_experiments",
+      "fair_predictions",
+      "policies_models",
+      "source_manifests"
+    ]
   }
 }

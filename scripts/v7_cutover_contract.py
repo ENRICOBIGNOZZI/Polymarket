@@ -102,7 +102,7 @@ def validate(root: Path, expected_head: str | None) -> dict[str, str]:
         "scripts/v7_profit_signal_analysis.py", "scripts/v7_maker_research_window.py",
         "scripts/v7_evidence_store.py", "scripts/v7_evidence_catalog.py",
         "scripts/v7_evidence_contract.py", "scripts/v7_evidence_capacity.py",
-        "scripts/v7_storage_budget.py", "scripts/v7_aggregate_retention.py",
+        "scripts/v7_storage_budget.py", "scripts/v7_aggregate_retention.py", "scripts/v7_windowed_evidence_retention.py",
         "scripts/v7_permanent_evidence.py", "scripts/v7_lossless_data_compaction.py",
         "scripts/v7_permanent_datasets.py", "scripts/v7_permanent_benchmark.py",
         "scripts/v7_economic_decision_report.py",
