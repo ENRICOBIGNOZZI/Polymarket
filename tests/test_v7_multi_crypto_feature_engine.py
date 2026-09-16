@@ -44,17 +44,19 @@ def selection() -> dict:
     return {
         'schema': 'polymarket_v7_multi_crypto_book_selection_v1', 'model_sha': SHA,
         'paper_only': True, 'authenticated_execution': False, 'real_order_submission': False,
-        'execution_authority': False,
+        'execution_authority': False, 'generated_at_ms': NOW // 1_000_000 - 20,
         'markets': [{
             'asset': 'ETH', 'horizon': 'M5', 'market_id': 'm1', 'event_id': 'e1',
             'yes_token': 'yes1', 'no_token': 'no1', 'normalized_rules_hash': 'r' * 64,
-            'end_timestamp': '2033-05-18T03:33:20Z',
+            'start_timestamp': '2033-05-18T03:30:00Z', 'end_timestamp': '2033-05-18T03:35:00Z',
         }],
     }
 
 
 def oracle() -> dict:
-    assets = {asset: {'fresh': True, 'receive_age_ms': 10.0, 'price': 100.0 + ASSETS.index(asset)}
+    assets = {asset: {'fresh': True, 'receive_age_ms': 10.0, 'price': 100.0 + ASSETS.index(asset),
+                      'version': 7, 'source_timestamp_ms': NOW // 1_000_000 - 20,
+                      'receive_wall_ns': NOW - 10_000_000}
               for asset in ASSETS}
     return {
         'model_sha': SHA, 'paper_only': True, 'authenticated_execution': False,
@@ -62,6 +64,7 @@ def oracle() -> dict:
         'settlement_references': {'m1': {
             'asset': 'ETH', 'horizon': 'M5', 'market_id': 'm1', 'valid': True,
             'price': 100.5, 'normalized_rules_hash': 'r' * 64,
+            'source_timestamp_ms': NOW // 1_000_000 - 30, 'captured_at_ms': NOW // 1_000_000 - 15,
         }},
     }
 
@@ -76,7 +79,7 @@ def write_books(directory: Path, *, yes_wall_ms: int | None = None, no_wall_ms: 
             'model_sha': SHA, 'market_id': 'm1', 'token_id': token,
             'paper_only': True, 'authenticated_execution': False, 'real_order_submission': False,
             'execution_authority': 'ZERO_AUTHORITY_RESEARCH_ONLY', 'valid': True,
-            'lineage_continuous': True, 'receive_wall_ms': wall,
+            'lineage_continuous': True, 'receive_wall_ms': wall, 'state_version': 9, 'connection_epoch': 2,
             'best_bid': bid, 'best_ask': ask, 'placement_features': {'imbalance': 0.1},
         }))
 
@@ -97,7 +100,12 @@ def test_missing_feature_is_not_zero_and_shadow_never_signals() -> None:
     assert row['external']['return_100ms_bp'] == 10.0
     assert row['signal_eligible'] is False
     assert row['blockers'] == ['UNCALIBRATED_SHADOW']
+    assert row['active_now'] is True
+    assert len(row['feature_schema_hash']) == 64
+    assert len(row['source_identity_hash']) == 64
+    assert row['available_at_ns'] <= NOW
     assert out['ready_for_calibration_markets'] == 1
+    assert len(out['policy_hash']) == 64 and len(out['feature_schema_hash']) == 64
 
 
 def test_future_or_stale_external_never_updates_shock() -> None:

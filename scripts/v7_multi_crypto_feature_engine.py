@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import math
 import os
@@ -14,6 +15,14 @@ from typing import Any
 
 ASSETS = ("BTC", "ETH", "SOL", "XRP", "DOGE", "BNB")
 SCHEMA = "polymarket_v7_multi_crypto_feature_snapshot_v1"
+FEATURE_SCHEMA_VERSION = "multi-crypto-causal-features-v1"
+FEATURE_SCHEMA = {
+    "version": FEATURE_SCHEMA_VERSION,
+    "units": {"returns": "bp", "time": "ms_or_seconds_as_named", "probability": "unit_interval"},
+    "groups": ["pm_book", "oracle", "settlement_reference", "external_spot", "derivatives", "cross_crypto"],
+    "missing_value_policy": "NULL_NEVER_ZERO_IMPUTATION",
+    "availability_semantics": "SOURCE_AVAILABLE_AT_OR_BEFORE_DECISION_ONLY",
+}
 STOP = False
 
 
@@ -43,6 +52,15 @@ def finite(value: Any) -> float | None:
     except (TypeError, ValueError, OverflowError):
         return None
     return result if math.isfinite(result) else None
+
+
+def canonical_hash(value: Any) -> str:
+    return hashlib.sha256(json.dumps(
+        value, sort_keys=True, separators=(",", ":"), allow_nan=False,
+    ).encode()).hexdigest()
+
+
+FEATURE_SCHEMA_HASH = canonical_hash(FEATURE_SCHEMA)
 
 
 def parse_utc_ns(value: Any) -> int:
@@ -155,6 +173,7 @@ class ShockTracker:
 class FeatureEngine:
     def __init__(self, policy: dict[str, Any]):
         self.policy = validate_policy(policy)
+        self.policy_hash = canonical_hash(self.policy)
         self.shocks = {asset: ShockTracker(
             half_life_seconds=float(policy["ewma_half_life_seconds"]),
             minimum_observations=int(policy["minimum_shock_observations"]),
@@ -243,17 +262,22 @@ class FeatureEngine:
             oracle_price = finite(oracle_row.get("price")) if oracle_fresh else None
             market_id = str(market.get("market_id") or "")
             reference = references.get(market_id) if isinstance(references.get(market_id), dict) else {}
+            reference_capture_ms = int(reference.get("captured_at_ms") or 0)
+            reference_capture_age_ms = source_age_ms(reference_capture_ms * 1_000_000, now_ns)
             reference_valid = bool(reference.get("valid") is True
                                    and reference.get("market_id") == market_id
                                    and reference.get("asset") == asset
                                    and reference.get("horizon") == str(market.get("horizon") or "")
-                                   and reference.get("normalized_rules_hash") == str(market.get("normalized_rules_hash") or ""))
+                                   and reference.get("normalized_rules_hash") == str(market.get("normalized_rules_hash") or "")
+                                   and reference_capture_age_ms is not None)
             reference_price = finite(reference.get("price")) if reference_valid else None
             spot = external_features[asset]["composite_price"]
             spot_minus_oracle = 10_000.0 * (spot / oracle_price - 1.0) if spot and oracle_price else None
             distance_reference = 10_000.0 * (oracle_price / reference_price - 1.0) if oracle_price and reference_price else None
+            start_ns = parse_utc_ns(market.get("start_timestamp"))
             end_ns = parse_utc_ns(market.get("end_timestamp"))
             tte = max(0.0, (end_ns - now_ns) / 1e9) if end_ns > 0 else None
+            active_now = bool(start_ns > 0 and end_ns > start_ns and start_ns <= now_ns < end_ns)
             leader_features: dict[str, Any] = {}
             for leader, follower in self.policy.get("cross_crypto_graph") or []:
                 if follower == asset and leader in external_features:
@@ -292,6 +316,35 @@ class FeatureEngine:
                 blockers.append("PM_BOOK_INVALID_OR_STALE")
             if not reference_valid:
                 blockers.append("MISSING_OR_MISMATCHED_REFERENCE")
+            source_versions = {
+                "external_state_version": int(external_features[asset]["state_version"]),
+                "external_timestamp_ns": int(external[asset].get("timestamp_ns") or 0),
+                "oracle_version": int(oracle_row.get("version") or 0),
+                "oracle_source_timestamp_ms": int(oracle_row.get("source_timestamp_ms") or 0),
+                "oracle_receive_wall_ns": int(oracle_row.get("receive_wall_ns") or 0),
+                "pm_yes_state_version": int(yes.get("state_version") or 0),
+                "pm_no_state_version": int(no.get("state_version") or 0),
+                "pm_yes_connection_epoch": int(yes.get("connection_epoch") or 0),
+                "pm_no_connection_epoch": int(no.get("connection_epoch") or 0),
+                "reference_source_timestamp_ms": int(reference.get("source_timestamp_ms") or 0),
+                "reference_captured_at_ms": reference_capture_ms,
+                "selection_generated_at_ms": int(selection.get("generated_at_ms") or 0),
+            }
+            availability_candidates = [
+                source_versions["external_timestamp_ns"], source_versions["oracle_receive_wall_ns"],
+                int(yes.get("receive_wall_ms") or 0) * 1_000_000,
+                int(no.get("receive_wall_ms") or 0) * 1_000_000,
+                source_versions["reference_captured_at_ms"] * 1_000_000,
+                source_versions["selection_generated_at_ms"] * 1_000_000,
+            ]
+            available_at_ns = max(availability_candidates) if availability_candidates else 0
+            if available_at_ns <= 0 or available_at_ns > now_ns:
+                blockers.append("FUTURE_OR_UNKNOWN_INPUT_AVAILABILITY")
+            source_identity_hash = canonical_hash({
+                "model_sha": model_sha, "market_id": market_id,
+                "rules_hash": str(market.get("normalized_rules_hash") or ""),
+                "source_versions": source_versions,
+            })
             rows.append({
                 "asset": asset,
                 "horizon": str(market.get("horizon") or ""),
@@ -299,7 +352,15 @@ class FeatureEngine:
                 "event_id": str(market.get("event_id") or ""),
                 "yes_token": yes_token,
                 "no_token": no_token,
+                "start_timestamp": str(market.get("start_timestamp") or ""),
+                "end_timestamp": str(market.get("end_timestamp") or ""),
+                "active_now": active_now,
                 "tte_seconds": tte,
+                "feature_schema_version": FEATURE_SCHEMA_VERSION,
+                "feature_schema_hash": FEATURE_SCHEMA_HASH,
+                "source_versions": source_versions,
+                "source_identity_hash": source_identity_hash,
+                "available_at_ns": available_at_ns,
                 "pm_book_valid": book_valid,
                 "pm_yes_age_ms": yes_age_ms,
                 "pm_no_age_ms": no_age_ms,
@@ -312,6 +373,7 @@ class FeatureEngine:
                 "oracle_age_ms": oracle_age_ms,
                 "oracle_price": oracle_price,
                 "reference_valid": reference_valid,
+                "reference_capture_age_ms": reference_capture_age_ms,
                 "reference_price": reference_price,
                 "distance_to_reference_bp": distance_reference,
                 "spot_minus_oracle_bp": spot_minus_oracle,
@@ -334,6 +396,9 @@ class FeatureEngine:
             "execution_authority": False,
             "research_only": True,
             "policy_mode": self.policy["mode"],
+            "policy_hash": self.policy_hash,
+            "feature_schema_version": FEATURE_SCHEMA_VERSION,
+            "feature_schema_hash": FEATURE_SCHEMA_HASH,
             "market_count": len(rows),
             "fresh_external_assets": sum(int(external_features[a]["fresh"]) for a in ASSETS),
             "ready_for_calibration_markets": sum(
