@@ -146,6 +146,56 @@ def validate_status(status: dict[str, Any], manifest: dict[str, Any], *, require
         raise ValueError("compact_pm:reconnect_present")
 
 
+
+def discover_sessions(directory: Path, *, expected_sha: str | None = None,
+                      require_no_reconnect: bool = True) -> list[dict[str, Any]]:
+    sessions: list[dict[str, Any]] = []
+    for manifest_path in sorted(directory.glob("*.manifest.json")):
+        manifest = load_manifest(manifest_path, expected_sha)
+        session_id = str(manifest.get("observer_session_id") or "")
+        if not session_id or manifest_path.name != f"{session_id}.manifest.json":
+            raise ValueError("compact_pm:manifest_filename_identity")
+        status_path = directory / f"{session_id}.status.json"
+        if not status_path.is_file():
+            raise ValueError(f"compact_pm:session_status_missing:{session_id}")
+        status = json.loads(status_path.read_text(encoding="utf-8"))
+        validate_status(status, manifest, require_no_reconnect=require_no_reconnect)
+        tape_paths = sorted(directory.glob(f"{session_id}.segment-*.bin"))
+        current = directory / f"{session_id}.current.bin"
+        if current.is_file():
+            tape_paths.append(current)
+        if not tape_paths:
+            raise ValueError(f"compact_pm:session_tape_missing:{session_id}")
+        rows = read_records(tape_paths, manifest)
+        expected_records = int(status.get("compact_label_records") or 0)
+        if expected_records != len(rows):
+            raise ValueError(f"compact_pm:record_count_mismatch:{session_id}")
+        sessions.append({
+            "session_id": session_id, "manifest": manifest, "status": status,
+            "tape_paths": tape_paths, "rows": rows, "timelines": build_timelines(rows),
+            "records": len(rows),
+            "first_receive_wall_ms": min((int(r["receive_wall_ms"]) for r in rows), default=None),
+            "last_receive_wall_ms": max((int(r["receive_wall_ms"]) for r in rows), default=None),
+        })
+    if not sessions:
+        raise ValueError("compact_pm:no_sessions")
+    return sessions
+
+
+def session_for_origin(sessions: list[dict[str, Any]], market_id: str, origin_ms: float) -> dict[str, Any] | None:
+    # Never bridge a restart/reconnect boundary. The origin and every future
+    # target must be resolved inside the same returned session.
+    candidates=[]
+    for session in sessions:
+        first=session.get("first_receive_wall_ms"); last=session.get("last_receive_wall_ms")
+        if first is None or last is None or not (first <= origin_ms <= last):
+            continue
+        if pair_asof(session["timelines"], market_id, origin_ms) is not None:
+            candidates.append(session)
+    if len(candidates) > 1:
+        raise ValueError("compact_pm:overlapping_sessions")
+    return candidates[0] if candidates else None
+
 def main() -> int:
     import argparse
     parser = argparse.ArgumentParser()

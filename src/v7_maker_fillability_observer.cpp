@@ -110,6 +110,15 @@ void atomic_write(const fs::path& path, std::string_view content) {
     return value != nullptr && value->is_bool() ? value->as_bool() : fallback;
 }
 
+[[nodiscard]] std::int64_t integer64(const json::value* value, std::int64_t fallback = 0) noexcept {
+    if (value == nullptr) return fallback;
+    if (value->is_int64()) return value->as_int64();
+    if (value->is_uint64() && value->as_uint64() <= static_cast<std::uint64_t>(std::numeric_limits<std::int64_t>::max())) {
+        return static_cast<std::int64_t>(value->as_uint64());
+    }
+    return fallback;
+}
+
 [[nodiscard]] std::int32_t price_e4(double price) noexcept {
     if (!std::isfinite(price) || price <= 0.0 || price >= 1.0) return 0;
     return static_cast<std::int32_t>(std::llround(price * kPriceScaleE4));
@@ -203,6 +212,8 @@ struct SelectedToken {
     std::uint64_t instrument_handle = 0;
     std::int32_t tick_size_e4 = 0;
     std::uint8_t is_yes = 0;
+    std::int64_t start_wall_ms = 0;
+    std::int64_t end_wall_ms = 0;
 };
 
 [[nodiscard]] std::vector<std::pair<std::string, std::pair<std::string, std::string>>>
@@ -340,9 +351,9 @@ fair_observation_pairs(const Options& options) {
                 if (yes_tick <= 0 || no_tick <= 0) continue;
                 const auto market = ++market_handle;
                 output.push_back({market_id, event_id, pair.second.first, market, market,
-                                  ++instrument_handle, yes_tick, 1});
+                                  ++instrument_handle, yes_tick, 1, 0, 0});
                 output.push_back({market_id, event_id, pair.second.second, market, market,
-                                  ++instrument_handle, no_tick, 0});
+                                  ++instrument_handle, no_tick, 0, 0, 0});
             }
             if (!output.empty()) return output;
         } catch (const std::exception& error) {
@@ -351,6 +362,32 @@ fair_observation_pairs(const Options& options) {
         std::this_thread::sleep_for(std::chrono::milliseconds(500));
     }
     throw std::runtime_error("fillability observer stopped before cold-start books became available");
+}
+
+void apply_selection_windows(std::vector<SelectedToken>& tokens, const fs::path& path) {
+    const auto root = read_json(path);
+    if (!root.is_object()) throw std::runtime_error("selection window source must be object");
+    const auto* raw = find_value(root.as_object(), "markets");
+    if (raw == nullptr || !raw->is_array()) throw std::runtime_error("selection windows missing markets");
+    std::size_t assigned = 0;
+    for (const auto& item : raw->as_array()) {
+        if (!item.is_object()) continue;
+        const auto& row = item.as_object();
+        const auto market_id = text(find_value(row, "market_id"));
+        const auto start_ms = integer64(find_value(row, "start_timestamp_ms"));
+        const auto end_ms = integer64(find_value(row, "end_timestamp_ms"));
+        if (market_id.empty() || start_ms <= 0 || end_ms <= start_ms) {
+            throw std::runtime_error("selection market window invalid");
+        }
+        for (auto& token : tokens) {
+            if (token.market_id == market_id) {
+                token.start_wall_ms = start_ms;
+                token.end_wall_ms = end_ms;
+                ++assigned;
+            }
+        }
+    }
+    if (assigned != tokens.size()) throw std::runtime_error("selection window coverage incomplete");
 }
 
 struct TradeEvidence {
@@ -446,15 +483,11 @@ public:
             result.lineage_invalid_tick_size_change, std::memory_order_relaxed);
         price_change_without_lineage_.fetch_add(
             result.price_change_without_lineage, std::memory_order_relaxed);
-        const auto root_price_change_failures =
-            result.lineage_invalid_price_change > result.price_change_without_lineage
-                ? result.lineage_invalid_price_change - result.price_change_without_lineage : 0;
+        // Frame/arena/output corruption is global. Token-local lineage failures
+        // are handled below and trigger recovery only when that contract is active;
+        // future preloaded contracts are allowed to remain FEEDS_WARMING.
         const bool root_lineage_failure =
-            result.invalid_frame || result.output_overflow || result.arena_exhausted
-            || result.lineage_invalid_book_snapshot > 0
-            || root_price_change_failures > 0
-            || (recover_missing_lineage_ && result.price_change_without_lineage > 0)
-            || result.lineage_invalid_tick_size_change > 0;
+            result.invalid_frame || result.output_overflow || result.arena_exhausted;
         if (root_lineage_failure) {
             lineage_recovery_requests_.fetch_add(1, std::memory_order_relaxed);
             lineage_recovery_requested_.store(true, std::memory_order_release);
@@ -467,6 +500,11 @@ public:
         for (std::size_t i = 0; i < result.output_count; ++i) {
             const auto& event = events[i];
             if (event.instrument_handle == 0 || event.instrument_handle >= lanes_.size()) continue;
+            if (recover_missing_lineage_ && event.kind == MarketWsEventKind::LineageInvalidated
+                && token_active(event.instrument_handle, receive.wall_ms)) {
+                lineage_recovery_requests_.fetch_add(1, std::memory_order_relaxed);
+                lineage_recovery_requested_.store(true, std::memory_order_release);
+            }
             if (event.kind == MarketWsEventKind::Trade && (
                 event.price_e4 <= 0 || event.quantity_microunits <= 0
                 || event.exchange_event_ns <= 0 || event.side == Side::None)) {
@@ -509,9 +547,11 @@ public:
         if (lineage_recovery_requested_.load(std::memory_order_acquire)
             && decoder_failures_.load(std::memory_order_relaxed) == 0
             && dropped_.load(std::memory_order_relaxed) == 0) {
+            const auto now_wall = wall_ms();
             const bool still_missing = std::any_of(tokens_.begin(), tokens_.end(),
                 [&](const SelectedToken& token) {
-                    return decoder_->snapshot(token.instrument_handle).lineage_continuous == 0;
+                    return token.start_wall_ms <= now_wall && now_wall < token.end_wall_ms
+                        && decoder_->snapshot(token.instrument_handle).lineage_continuous == 0;
                 });
             if (!still_missing) {
                 lineage_recovery_requested_.store(false, std::memory_order_release);
@@ -526,6 +566,13 @@ public:
 
     [[nodiscard]] std::uint64_t lineage_recovery_requests() const noexcept {
         return lineage_recovery_requests_.load(std::memory_order_relaxed);
+    }
+
+    [[nodiscard]] bool token_active(std::uint64_t instrument_handle, std::int64_t receive_wall_ms) const noexcept {
+        if (instrument_handle == 0 || instrument_handle >= by_handle_.size()) return false;
+        const auto* token = by_handle_[instrument_handle];
+        return token != nullptr && token->start_wall_ms > 0 && token->end_wall_ms > token->start_wall_ms
+            && token->start_wall_ms <= receive_wall_ms && receive_wall_ms < token->end_wall_ms;
     }
 
     void on_reconnect() {
@@ -655,7 +702,11 @@ public:
         root["last_receive_wall_ms"] = last_receive_wall_ms_;
         root["evidence_complete"] = dropped_.load(std::memory_order_relaxed) == 0
             && decoder_failures_.load(std::memory_order_relaxed) == 0;
-        atomic_write(status_path_, json::serialize(root) + "\n");
+        const auto serialized_status = json::serialize(root) + "\n";
+        atomic_write(status_path_, serialized_status);
+        if (!compact_label_tape_dir_.empty()) {
+            atomic_write(compact_label_tape_dir_ / (session_id_ + ".status.json"), serialized_status);
+        }
         if (publish_flow) write_flow_snapshot(root["timestamp_ms"].as_int64());
     }
 
@@ -961,6 +1012,7 @@ int main(int argc, char** argv) {
                 ? std::vector<std::pair<std::string, std::pair<std::string, std::string>>>{}
                 : fair_observation_pairs(options);
             auto tokens = build_tokens(options, config);
+            if (options.selection_only) apply_selection_windows(tokens, options.selection);
             const auto selected_pairs = options.fair_only
                 ? std::vector<std::pair<std::string, std::pair<std::string, std::string>>>{}
                 : load_selected_pairs(options.selection, options.selection_only, options.model_sha);

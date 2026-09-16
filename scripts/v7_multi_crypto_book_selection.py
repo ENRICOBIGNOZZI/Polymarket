@@ -94,6 +94,8 @@ def build_selection(snapshot: dict[str, Any], *, model_sha: str, now_unix: float
             "no_token": no,
             "start_timestamp": str(row.get("start_timestamp") or ""),
             "end_timestamp": str(row.get("end_timestamp") or ""),
+            "start_timestamp_ms": int(parse_utc(row.get("start_timestamp")) * 1000),
+            "end_timestamp_ms": int(parse_utc(row.get("end_timestamp")) * 1000),
             "normalized_rules_hash": str(row.get("normalized_rules_hash") or ""),
             "rule_snapshot_sha256": str(row.get("rule_snapshot_sha256") or ""),
         })
@@ -104,7 +106,8 @@ def build_selection(snapshot: dict[str, Any], *, model_sha: str, now_unix: float
         raise ValueError("verified market set exceeds bounded observer capacity")
     identity_rows = [{k: row[k] for k in (
         "asset", "horizon", "market_id", "event_id", "yes_token", "no_token",
-        "start_timestamp", "end_timestamp", "normalized_rules_hash",
+        "start_timestamp", "end_timestamp", "start_timestamp_ms", "end_timestamp_ms",
+        "normalized_rules_hash",
     )} for row in markets]
     generation = hashlib.sha256(json.dumps(
         identity_rows, sort_keys=True, separators=(",", ":")

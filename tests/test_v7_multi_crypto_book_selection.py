@@ -53,6 +53,7 @@ def test_six_asset_selection_is_zero_authority_and_explicitly_mapped() -> None:
     assert value["model_sha"] == "a" * 40
     assert {row["asset"] for row in value["markets"]} == {"BTC", "ETH", "SOL", "XRP", "DOGE", "BNB"}
     assert all(row["yes_token"].endswith("-yes") and row["no_token"].endswith("-no") for row in value["markets"])
+    assert all(row["start_timestamp_ms"] > 0 and row["end_timestamp_ms"] > row["start_timestamp_ms"] for row in value["markets"])
 
 
 def test_closed_stale_and_invalid_mapping_are_rejected_not_repaired() -> None:
@@ -105,7 +106,10 @@ def test_observer_selection_only_preserves_default_behavior_and_blocks_fair_inje
     assert 'options.fair_only ? 25 : 1000' in source
     assert 'recover_missing_lineage_' in source
     assert '(options.fair_only || options.selection_only)' in source
-    assert 'result.price_change_without_lineage > 0' in source
+    assert 'token_active(event.instrument_handle, receive.wall_ms)' in source
+    assert 'result.price_change_without_lineage > 0' not in source
+    assert 'token.start_wall_ms <= now_wall && now_wall < token.end_wall_ms' in source
+    assert 'start_timestamp_ms' in (ROOT / 'scripts/v7_multi_crypto_book_selection.py').read_text()
 
 
 if __name__ == "__main__":
