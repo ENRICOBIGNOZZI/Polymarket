@@ -11,7 +11,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
-from v7_multi_crypto_compact_pm_tape import discover_sessions, pair_asof, session_for_origin
+from v7_multi_crypto_compact_pm_tape import discover_sessions, pair_asof, pair_asof_indexed, session_for_origin
 from v7_multi_crypto_repricing_labeler import read_tapes, validate_policy, load_json, quantile
 
 OUTPUT_SCHEMA="polymarket_v7_multi_crypto_compact_repricing_labeled_row_v1"
@@ -45,7 +45,8 @@ def label_rows(origins:list[dict[str,Any]],sessions:list[dict[str,Any]],policy:d
         market_id=str(origin.get("market_id") or ""); decision_ns=int(origin.get("decision_wall_ns") or 0); decision_ms=decision_ns/1e6
         p0=finite((origin.get("features") or {}).get("pm_yes_mid")); book0=(origin.get("features") or {}).get("pm_book_valid") is True
         session=session_for_origin(sessions,market_id,decision_ms)
-        compact0=pair_asof(session["timelines"],market_id,decision_ms) if session else None
+        compact0=(pair_asof_indexed(session["indexed_timelines"],market_id,decision_ms) if session and "indexed_timelines" in session
+                  else pair_asof(session["timelines"],market_id,decision_ms) if session else None)
         origin_reason="OK"
         if p0 is None or not book0: origin_reason="ORIGIN_BOOK_INVALID"
         elif session is None or compact0 is None: origin_reason="NO_CONTIGUOUS_COMPACT_SESSION"
@@ -61,7 +62,8 @@ def label_rows(origins:list[dict[str,Any]],sessions:list[dict[str,Any]],policy:d
             elif end_ns>0 and target_ns>=end_ns: status="CONTRACT_EXPIRES_BEFORE_HORIZON"
             elif session is None or session.get("last_receive_wall_ms") is None or target_ms>float(session["last_receive_wall_ms"]): status="SESSION_END_BEFORE_TARGET"
             else:
-                target=pair_asof(session["timelines"],market_id,target_ms)
+                target=(pair_asof_indexed(session["indexed_timelines"],market_id,target_ms) if "indexed_timelines" in session
+                        else pair_asof(session["timelines"],market_id,target_ms))
                 if target is None: status="TARGET_BOOK_INVALID_OR_MISSING"
                 else:
                     asof_gap=target_ms-float(target["state_available_wall_ms"])
@@ -82,7 +84,8 @@ def label_rows(origins:list[dict[str,Any]],sessions:list[dict[str,Any]],policy:d
         row["row_hash"]=canonical_hash(row); output.append(row)
     report={"schema":REPORT_SCHEMA,"paper_only":True,"execution_authority":False,"input_rows":len(origins),"output_rows":len(output),
             "sessions":len(sessions),"nonempty_sessions":sum(int(s["records"]>0) for s in sessions),"origin_status_counts":origin_status,
-            "horizons_ms":policy["horizons_ms"],"labeled_counts":counts,"status_counts":statuses,
+            "horizons_ms":policy["horizons_ms"],"labeled_counts":counts,
+            "coverage":{h:(counts[h]/len(origins) if origins else 0.0) for h in counts},"status_counts":statuses,
             "asof_gap_ms":{h:{"p50":quantile(v,.5),"p95":quantile(v,.95),"max":max(v) if v else None} for h,v in gaps.items()}}
     return output,report
 
@@ -90,10 +93,13 @@ def label_rows(origins:list[dict[str,Any]],sessions:list[dict[str,Any]],policy:d
 def main()->int:
     ap=argparse.ArgumentParser(); ap.add_argument("--feature-tape",type=Path,action="append",required=True); ap.add_argument("--compact-dir",type=Path,required=True)
     ap.add_argument("--policy",type=Path,default=Path("config/v7_multi_crypto_repricing_label_policy.json")); ap.add_argument("--output",type=Path,required=True); ap.add_argument("--report",type=Path,required=True)
+    ap.add_argument("--labeler-code-sha",required=True)
     args=ap.parse_args(); policy=validate_policy(load_json(args.policy)); origins=read_tapes(args.feature_tape)
+    if len(args.labeler_code_sha)!=40 or any(ch not in "0123456789abcdef" for ch in args.labeler_code_sha): raise ValueError("exact labeler code SHA required")
     if not origins: raise ValueError("compact_label:no_feature_origins")
     sha=str(origins[0].get("model_sha") or ""); sessions=discover_sessions(args.compact_dir,expected_sha=sha)
-    labeled,report=label_rows(origins,sessions,policy); args.output.parent.mkdir(parents=True,exist_ok=True)
+    labeled,report=label_rows(origins,sessions,policy); report["input_model_sha"]=sha; report["labeler_code_sha"]=args.labeler_code_sha
+    report["compact_session_ids"]=[s["session_id"] for s in sessions]; args.output.parent.mkdir(parents=True,exist_ok=True)
     with args.output.open("w",encoding="utf-8") as handle:
         for row in labeled: handle.write(json.dumps(row,sort_keys=True,separators=(",",":"),allow_nan=False)+"\n")
     atomic_json(args.report,report); print(json.dumps(report,sort_keys=True)); return 0

@@ -37,6 +37,7 @@ def test_exact_compact_targets_label_50_100_250_without_interpolation():
     assert labels['100']['status']=='LABELED' and abs(labels['100']['delta_pm_yes']-.02)<1e-12
     assert labels['250']['status']=='LABELED' and abs(labels['250']['delta_pm_yes']-.03)<1e-12
     assert labels['250']['asof_gap_ms']==50.0 and report['labeled_counts']['50']==1
+    assert report['coverage']['50']==1.0
 
 def test_restart_boundary_is_never_bridged():
     first=session('s1',[(0,.50),(50,.51),(100,.52)]); second=session('s2',[(200,.70),(250,.80),(500,.90)])

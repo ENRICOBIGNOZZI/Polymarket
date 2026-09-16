@@ -91,6 +91,41 @@ def build_timelines(rows: Iterable[dict[str, Any]]) -> dict[tuple[str, str], lis
     return dict(output)
 
 
+def build_indexed_timelines(rows: Iterable[dict[str, Any]]) -> dict[tuple[str, str], dict[str, Any]]:
+    plain = build_timelines(rows)
+    return {key: {"rows": seq, "stamps": [int(row["receive_wall_ms"]) for row in seq]}
+            for key, seq in plain.items()}
+
+
+def _asof_indexed(index: dict[str, Any] | None, target_ms: float) -> dict[str, Any] | None:
+    if not index:
+        return None
+    seq=index["rows"]; stamps=index["stamps"]; position=bisect.bisect_right(stamps,target_ms)-1
+    if position < 0:
+        return None
+    row=seq[position]
+    if row.get("valid") is not True or row.get("lineage_continuous") is not True:
+        return None
+    bid,ask,tick=float(row["best_bid"]),float(row["best_ask"]),float(row["tick_size"])
+    if not (math.isfinite(bid) and math.isfinite(ask) and math.isfinite(tick) and 0 < bid < ask < 1 and 0 < tick < 1):
+        return None
+    return row
+
+
+def pair_asof_indexed(indexed: dict[tuple[str, str], dict[str, Any]], market_id: str, target_ms: float) -> dict[str, Any] | None:
+    yes=_asof_indexed(indexed.get((market_id,"YES")),target_ms); no=_asof_indexed(indexed.get((market_id,"NO")),target_ms)
+    if yes is None or no is None or yes["connection_epoch"] != no["connection_epoch"]:
+        return None
+    yes_mid=(float(yes["best_bid"])+float(yes["best_ask"]))/2.0; no_mid=(float(no["best_bid"])+float(no["best_ask"]))/2.0
+    tolerance=2.0*max(float(yes["tick_size"]),float(no["tick_size"]))+1e-12
+    if abs(yes_mid+no_mid-1.0)>tolerance:
+        return None
+    return {"pm_yes":(yes_mid+1.0-no_mid)/2.0,"yes_mid":yes_mid,"no_mid":no_mid,"connection_epoch":int(yes["connection_epoch"]),
+            "yes_sequence":int(yes["observer_sequence"]),"no_sequence":int(no["observer_sequence"]),
+            "state_available_wall_ms":max(int(yes["receive_wall_ms"]),int(no["receive_wall_ms"])),
+            "yes_tick_size":float(yes["tick_size"]),"no_tick_size":float(no["tick_size"])}
+
+
 def _asof(seq: list[dict[str, Any]], target_ms: float) -> dict[str, Any] | None:
     if not seq:
         return None
@@ -173,6 +208,7 @@ def discover_sessions(directory: Path, *, expected_sha: str | None = None,
         sessions.append({
             "session_id": session_id, "manifest": manifest, "status": status,
             "tape_paths": tape_paths, "rows": rows, "timelines": build_timelines(rows),
+            "indexed_timelines": build_indexed_timelines(rows),
             "records": len(rows),
             "first_receive_wall_ms": min((int(r["receive_wall_ms"]) for r in rows), default=None),
             "last_receive_wall_ms": max((int(r["receive_wall_ms"]) for r in rows), default=None),
@@ -190,7 +226,9 @@ def session_for_origin(sessions: list[dict[str, Any]], market_id: str, origin_ms
         first=session.get("first_receive_wall_ms"); last=session.get("last_receive_wall_ms")
         if first is None or last is None or not (first <= origin_ms <= last):
             continue
-        if pair_asof(session["timelines"], market_id, origin_ms) is not None:
+        indexed=session.get("indexed_timelines")
+        state=pair_asof_indexed(indexed,market_id,origin_ms) if indexed is not None else pair_asof(session["timelines"],market_id,origin_ms)
+        if state is not None:
             candidates.append(session)
     if len(candidates) > 1:
         raise ValueError("compact_pm:overlapping_sessions")

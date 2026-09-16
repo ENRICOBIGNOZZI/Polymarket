@@ -3,7 +3,7 @@ from __future__ import annotations
 import json, struct, sys, tempfile
 from pathlib import Path
 ROOT=Path('/Users/enrico/polymarket-multi-crypto-v7'); sys.path.insert(0,str(ROOT/'scripts'))
-from v7_multi_crypto_compact_pm_tape import RECORD, build_timelines, discover_sessions, load_manifest, pair_asof, read_records, session_for_origin, validate_status
+from v7_multi_crypto_compact_pm_tape import RECORD, build_indexed_timelines, build_timelines, discover_sessions, load_manifest, pair_asof, pair_asof_indexed, read_records, session_for_origin, validate_status
 SHA='a'*40
 
 def manifest(tmp: Path) -> Path:
@@ -106,6 +106,14 @@ def test_session_discovery_rejects_missing_status_and_reconnect():
         try: discover_sessions(tmp,expected_sha=SHA)
         except ValueError as exc: assert 'reconnect_present' in str(exc)
         else: raise AssertionError('reconnect session accepted')
+
+
+def test_indexed_pair_matches_plain_pair():
+    with tempfile.TemporaryDirectory() as td:
+        tmp=Path(td); mp=manifest(tmp); tape=tmp/'t.bin'
+        tape.write_bytes(rec(1,1,1000,4900,5100)+rec(2,2,1000,4900,5100)+rec(3,1,1050,5000,5200)+rec(4,2,1050,4800,5000))
+        rows=read_records([tape],load_manifest(mp,SHA)); plain=pair_asof(build_timelines(rows),'m',1050); fast=pair_asof_indexed(build_indexed_timelines(rows),'m',1050)
+        assert fast==plain
 
 if __name__=='__main__':
     tests=sorted((n,f) for n,f in globals().items() if n.startswith('test_') and callable(f))
