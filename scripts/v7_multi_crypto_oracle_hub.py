@@ -174,6 +174,7 @@ def update_references(
             "price": None,
             "price_decimal": None,
             "source_timestamp_ms": 0,
+            "captured_at_ms": 0,
             "gap_ms": None,
             "status": "AWAITING_BOUNDARY" if now_ms < boundary else "MISSING_REFERENCE",
         }
@@ -205,6 +206,7 @@ def update_references(
             "price": observation["price"],
             "price_decimal": observation["price_decimal"],
             "source_timestamp_ms": timestamp,
+            "captured_at_ms": now_ms,
             "gap_ms": gap,
             "status": "REFERENCE_CAPTURED" if gap == 0 else "PROXY_NOT_EXACT_BOUNDARY",
         })

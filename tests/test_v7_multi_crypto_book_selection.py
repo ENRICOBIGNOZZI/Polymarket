@@ -92,6 +92,9 @@ def test_observer_selection_only_preserves_default_behavior_and_blocks_fair_inje
     assert '"--fair-only and --selection-only are mutually exclusive"' in source
     assert '"--selection-only requires explicit --selection"' in source
     assert 'arg == "--state-only"' in source
+    assert 'arg == "--state-publish-ms"' in source
+    assert '"--state-publish-ms must be in [10,1000]"' in source
+    assert 'root["state_publish_ms"] = state_publish_ms_;' in source
     assert '"--state-only requires --selection-only"' in source
     assert 'root["book_event_tape_enabled"] = !state_only_;' in source
     assert 'if (!state_only_) {' in source
@@ -100,6 +103,9 @@ def test_observer_selection_only_preserves_default_behavior_and_blocks_fair_inje
     assert 'if (!options.selection_only)' in source
     assert 'reload = !options.selection_only' in source
     assert 'options.fair_only ? 25 : 1000' in source
+    assert 'recover_missing_lineage_' in source
+    assert '(options.fair_only || options.selection_only)' in source
+    assert 'result.price_change_without_lineage > 0' in source
 
 
 if __name__ == "__main__":

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import math
 import os
@@ -10,10 +11,18 @@ import signal
 import time
 from datetime import datetime
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 ASSETS = ("BTC", "ETH", "SOL", "XRP", "DOGE", "BNB")
 SCHEMA = "polymarket_v7_multi_crypto_feature_snapshot_v2"
+FEATURE_SCHEMA_VERSION = "multi-crypto-causal-features-v2"
+FEATURE_SCHEMA = {
+    "version": FEATURE_SCHEMA_VERSION,
+    "units": {"returns": "bp", "time": "ms_or_seconds_as_named", "probability": "unit_interval"},
+    "groups": ["pm_book", "oracle", "settlement_reference", "external_spot", "derivatives", "cross_crypto"],
+    "missing_value_policy": "NULL_NEVER_ZERO_IMPUTATION",
+    "availability_semantics": "SOURCE_AVAILABLE_AT_OR_BEFORE_DECISION_ONLY",
+}
 STOP = False
 
 
@@ -45,6 +54,15 @@ def finite(value: Any) -> float | None:
     except (TypeError, ValueError, OverflowError):
         return None
     return result if math.isfinite(result) else None
+
+
+def canonical_hash(value: Any) -> str:
+    return hashlib.sha256(json.dumps(
+        value, sort_keys=True, separators=(",", ":"), allow_nan=False,
+    ).encode()).hexdigest()
+
+
+FEATURE_SCHEMA_HASH = canonical_hash(FEATURE_SCHEMA)
 
 
 def parse_utc_ns(value: Any) -> int:
@@ -166,6 +184,7 @@ class ShockTracker:
 class FeatureEngine:
     def __init__(self, policy: dict[str, Any]):
         self.policy = validate_policy(policy)
+        self.policy_hash = canonical_hash(self.policy)
         self.shocks = {asset: ShockTracker(
             half_life_seconds=float(policy["ewma_half_life_seconds"]),
             minimum_observations=int(policy["minimum_shock_observations"]),
@@ -174,6 +193,7 @@ class FeatureEngine:
     def build(
         self, *, external: dict[str, dict[str, Any]], oracle: dict[str, Any],
         selection: dict[str, Any], book_dir: Path, model_sha: str, now_ns: int,
+        capture_clock: Callable[[], int] | None = None,
     ) -> dict[str, Any]:
         if set(external) != set(ASSETS):
             raise ValueError("all six external asset states are required")
@@ -184,6 +204,23 @@ class FeatureEngine:
                 or not safe_source(selection) or selection.get("execution_authority") is not False
                 or selection.get("model_sha") != model_sha):
             raise ValueError("book selection authority/identity invalid")
+        markets = selection.get("markets") if isinstance(selection.get("markets"), list) else []
+        # Freeze one coherent PM-book cut before assigning the decision timestamp.
+        # A book file may advance while the feature loop is reading it; stamping
+        # the decision first would falsely classify that causal input as future.
+        book_cache: dict[str, dict[str, Any]] = {}
+        for market in markets:
+            if not isinstance(market, dict):
+                continue
+            for field in ("yes_token", "no_token"):
+                token = str(market.get(field) or "")
+                if token and token not in book_cache:
+                    book_cache[token] = load(book_dir / f"{token}.json")
+        # Replay has an explicit clock. Live collection supplies a clock sampled
+        # after the inputs are captured; never consult wall time during replay.
+        decision_ns = capture_clock() if capture_clock is not None else now_ns
+        if type(decision_ns) is not int or decision_ns <= 0 or decision_ns < now_ns:
+            raise ValueError("DECISION_CLOCK_INVALID_OR_REGRESSIVE")
         maximum_external_age_ms = int(self.policy["maximum_external_age_ms"])
         maximum_oracle_age_ms = int(self.policy["maximum_oracle_age_ms"])
         maximum_book_age_ms = int(self.policy["maximum_book_age_ms"])
@@ -192,7 +229,7 @@ class FeatureEngine:
             value = external[asset]
             if not safe_source(value):
                 raise ValueError(f"{asset}: external authority invalid")
-            age_ms = source_age_ms(value.get("timestamp_ns"), now_ns)
+            age_ms = source_age_ms(value.get("timestamp_ns"), decision_ns)
             source_identity_ok = value.get("code_sha") == model_sha and value.get("asset") == asset
             fresh = bool(source_identity_ok and value.get("valid") is True and age_ms is not None
                          and age_ms <= maximum_external_age_ms)
@@ -218,7 +255,6 @@ class FeatureEngine:
             }
         oracle_assets = oracle.get("assets") if isinstance(oracle.get("assets"), dict) else {}
         references = oracle.get("settlement_references") if isinstance(oracle.get("settlement_references"), dict) else {}
-        markets = selection.get("markets") if isinstance(selection.get("markets"), list) else []
         rows: list[dict[str, Any]] = []
         for market in markets:
             if not isinstance(market, dict):
@@ -228,10 +264,10 @@ class FeatureEngine:
                 continue
             yes_token = str(market.get("yes_token") or "")
             no_token = str(market.get("no_token") or "")
-            yes = load(book_dir / f"{yes_token}.json")
-            no = load(book_dir / f"{no_token}.json")
-            yes_age_ms = source_age_ms(int(yes.get("receive_wall_ms") or 0) * 1_000_000, now_ns)
-            no_age_ms = source_age_ms(int(no.get("receive_wall_ms") or 0) * 1_000_000, now_ns)
+            yes = book_cache.get(yes_token, {})
+            no = book_cache.get(no_token, {})
+            yes_age_ms = source_age_ms(int(yes.get("receive_wall_ms") or 0) * 1_000_000, decision_ns)
+            no_age_ms = source_age_ms(int(no.get("receive_wall_ms") or 0) * 1_000_000, decision_ns)
 
             def book_identity_valid(book: dict[str, Any], token: str, age_ms: float | None) -> bool:
                 bid, ask = finite(book.get("best_bid")), finite(book.get("best_ask"))
@@ -250,8 +286,8 @@ class FeatureEngine:
             yes_mid = (yes_bid + yes_ask) / 2.0 if book_valid and yes_bid is not None and yes_ask is not None else None
             no_mid = (no_bid + no_ask) / 2.0 if book_valid and no_bid is not None and no_ask is not None else None
             oracle_row = oracle_assets.get(asset) if isinstance(oracle_assets.get(asset), dict) else {}
-            oracle_age_ms = source_age_ms(oracle_row.get("receive_wall_ns"), now_ns)
-            oracle_snapshot_age_ms = source_age_ms(oracle.get("timestamp_ns"), now_ns)
+            oracle_age_ms = source_age_ms(oracle_row.get("receive_wall_ns"), decision_ns)
+            oracle_snapshot_age_ms = source_age_ms(oracle.get("timestamp_ns"), decision_ns)
             oracle_fresh = bool(oracle_row.get("fresh") is True and oracle.get("state") == "RUNNING"
                                 and oracle_age_ms is not None and oracle_snapshot_age_ms is not None
                                 and oracle_age_ms <= maximum_oracle_age_ms
@@ -259,18 +295,23 @@ class FeatureEngine:
             oracle_price = finite(oracle_row.get("price")) if oracle_fresh else None
             market_id = str(market.get("market_id") or "")
             reference = references.get(market_id) if isinstance(references.get(market_id), dict) else {}
-            reference_available = source_age_ms(reference.get("available_wall_ns"), now_ns)
+            reference_capture_ms = int(reference.get("captured_at_ms") or 0)
+            reference_capture_age_ms = source_age_ms(reference_capture_ms * 1_000_000, decision_ns)
+            reference_available = source_age_ms(reference.get("available_wall_ns"), decision_ns)
             reference_valid = bool(reference.get("valid") is True and reference_available is not None
                                    and reference.get("market_id") == market_id
                                    and reference.get("asset") == asset
                                    and reference.get("horizon") == str(market.get("horizon") or "")
-                                   and reference.get("normalized_rules_hash") == str(market.get("normalized_rules_hash") or ""))
+                                   and reference.get("normalized_rules_hash") == str(market.get("normalized_rules_hash") or "")
+                                   and reference_capture_age_ms is not None)
             reference_price = finite(reference.get("price")) if reference_valid else None
             spot = external_features[asset]["composite_price"]
             spot_minus_oracle = 10_000.0 * (spot / oracle_price - 1.0) if spot and oracle_price else None
             distance_reference = 10_000.0 * (oracle_price / reference_price - 1.0) if oracle_price and reference_price else None
+            start_ns = parse_utc_ns(market.get("start_timestamp"))
             end_ns = parse_utc_ns(market.get("end_timestamp"))
-            tte = max(0.0, (end_ns - now_ns) / 1e9) if end_ns > 0 else None
+            tte = max(0.0, (end_ns - decision_ns) / 1e9) if end_ns > 0 else None
+            active_now = bool(start_ns > 0 and end_ns > start_ns and start_ns <= decision_ns < end_ns)
             leader_features: dict[str, Any] = {}
             for leader, follower in self.policy.get("cross_crypto_graph") or []:
                 if follower == asset and leader in external_features:
@@ -314,6 +355,37 @@ class FeatureEngine:
                 blockers.append("PM_BOOK_INVALID_OR_STALE")
             if not reference_valid:
                 blockers.append("MISSING_OR_MISMATCHED_REFERENCE")
+            source_versions = {
+                "external_state_version": int(external_features[asset]["state_version"]),
+                "external_timestamp_ns": int(external[asset].get("timestamp_ns") or 0),
+                "oracle_version": int(oracle_row.get("version") or 0),
+                "oracle_source_timestamp_ms": int(oracle_row.get("source_timestamp_ms") or 0),
+                "oracle_receive_wall_ns": int(oracle_row.get("receive_wall_ns") or 0),
+                "pm_yes_state_version": int(yes.get("state_version") or 0),
+                "pm_no_state_version": int(no.get("state_version") or 0),
+                "pm_yes_connection_epoch": int(yes.get("connection_epoch") or 0),
+                "pm_no_connection_epoch": int(no.get("connection_epoch") or 0),
+                "reference_source_timestamp_ms": int(reference.get("source_timestamp_ms") or 0),
+                "reference_captured_at_ms": reference_capture_ms,
+                "reference_available_wall_ns": int(reference.get("available_wall_ns") or 0),
+                "selection_generated_at_ms": int(selection.get("generated_at_ms") or 0),
+            }
+            availability_candidates = [
+                source_versions["external_timestamp_ns"], source_versions["oracle_receive_wall_ns"],
+                int(yes.get("receive_wall_ms") or 0) * 1_000_000,
+                int(no.get("receive_wall_ms") or 0) * 1_000_000,
+                source_versions["reference_captured_at_ms"] * 1_000_000,
+                source_versions["reference_available_wall_ns"],
+                source_versions["selection_generated_at_ms"] * 1_000_000,
+            ]
+            available_at_ns = max(availability_candidates) if availability_candidates else 0
+            if available_at_ns <= 0 or available_at_ns > decision_ns:
+                blockers.append("FUTURE_OR_UNKNOWN_INPUT_AVAILABILITY")
+            source_identity_hash = canonical_hash({
+                "model_sha": model_sha, "market_id": market_id,
+                "rules_hash": str(market.get("normalized_rules_hash") or ""),
+                "source_versions": source_versions,
+            })
             rows.append({
                 "asset": asset,
                 "horizon": str(market.get("horizon") or ""),
@@ -321,7 +393,15 @@ class FeatureEngine:
                 "event_id": str(market.get("event_id") or ""),
                 "yes_token": yes_token,
                 "no_token": no_token,
+                "start_timestamp": str(market.get("start_timestamp") or ""),
+                "end_timestamp": str(market.get("end_timestamp") or ""),
+                "active_now": active_now,
                 "tte_seconds": tte,
+                "feature_schema_version": FEATURE_SCHEMA_VERSION,
+                "feature_schema_hash": FEATURE_SCHEMA_HASH,
+                "source_versions": source_versions,
+                "source_identity_hash": source_identity_hash,
+                "available_at_ns": available_at_ns,
                 "pm_book_valid": book_valid,
                 "pm_yes_age_ms": yes_age_ms,
                 "pm_no_age_ms": no_age_ms,
@@ -334,6 +414,7 @@ class FeatureEngine:
                 "oracle_age_ms": oracle_age_ms,
                 "oracle_price": oracle_price,
                 "reference_valid": reference_valid,
+                "reference_capture_age_ms": reference_capture_age_ms,
                 "reference_price": reference_price,
                 "distance_to_reference_bp": distance_reference,
                 "spot_minus_oracle_bp": spot_minus_oracle,
@@ -347,7 +428,7 @@ class FeatureEngine:
         return {
             "schema": SCHEMA,
             "version": 1,
-            "timestamp_ns": now_ns,
+            "timestamp_ns": decision_ns,
             "model_sha": model_sha,
             "paper_only": True,
             "authenticated_execution": False,
@@ -356,6 +437,9 @@ class FeatureEngine:
             "execution_authority": False,
             "research_only": True,
             "policy_mode": self.policy["mode"],
+            "policy_hash": self.policy_hash,
+            "feature_schema_version": FEATURE_SCHEMA_VERSION,
+            "feature_schema_hash": FEATURE_SCHEMA_HASH,
             "market_count": len(rows),
             "fresh_external_assets": sum(int(external_features[a]["fresh"]) for a in ASSETS),
             "ready_for_calibration_markets": sum(
@@ -397,10 +481,29 @@ def main() -> int:
     engine = FeatureEngine(validate_policy(load(args.policy)))
     signal.signal(signal.SIGINT, stop_handler); signal.signal(signal.SIGTERM, stop_handler)
     while True:
-        value = engine.build(
-            external={asset: load(path) for asset, path in paths.items()},
-            oracle=load(args.oracle_status), selection=load(args.selection),
-            book_dir=args.book_features_dir, model_sha=args.model_sha, now_ns=time.time_ns())
+        now_ns = time.time_ns()
+        try:
+            value = engine.build(
+                external={asset: load(path) for asset, path in paths.items()},
+                oracle=load(args.oracle_status), selection=load(args.selection),
+                book_dir=args.book_features_dir, model_sha=args.model_sha, now_ns=now_ns,
+                capture_clock=time.time_ns)
+            value["state"] = "RUNNING_SHADOW"
+            value["runtime_blockers"] = []
+        except ValueError as error:
+            value = {
+                "schema": SCHEMA, "version": 1, "timestamp_ns": now_ns,
+                "model_sha": args.model_sha, "paper_only": True,
+                "authenticated_execution": False, "real_order_submission": False,
+                "real_capital_at_risk": False, "execution_authority": False,
+                "research_only": True, "state": "WARMING_OR_BLOCKED",
+                "policy_mode": engine.policy["mode"], "policy_hash": engine.policy_hash,
+                "feature_schema_version": FEATURE_SCHEMA_VERSION,
+                "feature_schema_hash": FEATURE_SCHEMA_HASH,
+                "market_count": 0, "fresh_external_assets": 0,
+                "ready_for_calibration_markets": 0, "markets": [],
+                "runtime_blockers": [str(error)],
+            }
         atomic_json(args.output, value)
         if not args.loop or STOP:
             break

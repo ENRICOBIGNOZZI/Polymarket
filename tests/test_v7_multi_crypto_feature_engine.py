@@ -9,6 +9,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / 'scripts'))
+import v7_multi_crypto_feature_engine as feature_engine_module
 from v7_multi_crypto_feature_engine import ASSETS, FeatureEngine, ShockTracker, validate_policy
 
 SHA = 'a' * 40
@@ -44,24 +45,28 @@ def selection() -> dict:
     return {
         'schema': 'polymarket_v7_multi_crypto_book_selection_v1', 'model_sha': SHA,
         'paper_only': True, 'authenticated_execution': False, 'real_order_submission': False,
-        'execution_authority': False,
+        'execution_authority': False, 'generated_at_ms': NOW // 1_000_000 - 20,
         'markets': [{
             'asset': 'ETH', 'horizon': 'M5', 'market_id': 'm1', 'event_id': 'e1',
             'yes_token': 'yes1', 'no_token': 'no1', 'normalized_rules_hash': 'r' * 64,
-            'end_timestamp': '2033-05-18T03:33:20Z',
+            'start_timestamp': '2033-05-18T03:30:00Z', 'end_timestamp': '2033-05-18T03:35:00Z',
         }],
     }
 
 
 def oracle() -> dict:
-    assets = {asset: {'fresh': True, 'receive_age_ms': 10.0, 'receive_wall_ns': NOW - 10_000_000, 'price': 100.0 + ASSETS.index(asset)}
+    assets = {asset: {'fresh': True, 'receive_age_ms': 10.0, 'price': 100.0 + ASSETS.index(asset),
+                      'version': 7, 'source_timestamp_ms': NOW // 1_000_000 - 20,
+                      'receive_wall_ns': NOW - 10_000_000}
               for asset in ASSETS}
     return {
         'model_sha': SHA, 'timestamp_ns': NOW - 1_000_000, 'state': 'RUNNING', 'paper_only': True, 'authenticated_execution': False,
         'real_order_submission': False, 'execution_authority': False, 'assets': assets,
         'settlement_references': {'m1': {
             'asset': 'ETH', 'horizon': 'M5', 'market_id': 'm1', 'valid': True,
-            'price': 100.5, 'normalized_rules_hash': 'r' * 64, 'available_wall_ns': NOW - 1_000_000,
+            'price': 100.5, 'normalized_rules_hash': 'r' * 64,
+            'source_timestamp_ms': NOW // 1_000_000 - 30, 'captured_at_ms': NOW // 1_000_000 - 15,
+            'available_wall_ns': NOW - 15_000_000,
         }},
     }
 
@@ -76,17 +81,17 @@ def write_books(directory: Path, *, yes_wall_ms: int | None = None, no_wall_ms: 
             'model_sha': SHA, 'market_id': 'm1', 'token_id': token,
             'paper_only': True, 'authenticated_execution': False, 'real_order_submission': False,
             'execution_authority': 'ZERO_AUTHORITY_RESEARCH_ONLY', 'valid': True,
-            'lineage_continuous': True, 'receive_wall_ms': wall,
+            'lineage_continuous': True, 'receive_wall_ms': wall, 'state_version': 9, 'connection_epoch': 2,
             'best_bid': bid, 'best_ask': ask, 'placement_features': {'imbalance': 0.1},
         }))
 
 
-def build(ext=None, ora=None, sel=None, *, yes_wall_ms=None):
+def build(ext=None, ora=None, sel=None, *, yes_wall_ms=None, capture_clock=None):
     with tempfile.TemporaryDirectory() as tmp:
         d = Path(tmp); write_books(d, yes_wall_ms=yes_wall_ms)
         engine = FeatureEngine(policy())
         out = engine.build(external=ext or all_external(), oracle=ora or oracle(),
-                           selection=sel or selection(), book_dir=d, model_sha=SHA, now_ns=NOW)
+                           selection=sel or selection(), book_dir=d, model_sha=SHA, now_ns=NOW, capture_clock=capture_clock)
         return engine, out
 
 
@@ -97,7 +102,12 @@ def test_missing_feature_is_not_zero_and_shadow_never_signals() -> None:
     assert row['external']['return_100ms_bp'] == 10.0
     assert row['signal_eligible'] is False
     assert row['blockers'] == ['UNCALIBRATED_SHADOW']
+    assert row['active_now'] is True
+    assert len(row['feature_schema_hash']) == 64
+    assert len(row['source_identity_hash']) == 64
+    assert row['available_at_ns'] <= NOW
     assert out['ready_for_calibration_markets'] == 1
+    assert len(out['policy_hash']) == 64 and len(out['feature_schema_hash']) == 64
 
 
 def test_future_or_stale_external_never_updates_shock() -> None:
@@ -110,6 +120,21 @@ def test_future_or_stale_external_never_updates_shock() -> None:
     assert engine.shocks['ETH'].observations == 0
     assert 'EXTERNAL_FEED_STALE_OR_IDENTITY_INVALID' in row['blockers']
 
+
+
+def test_decision_cut_is_assigned_after_book_snapshot_reads() -> None:
+    original = feature_engine_module.time.time_ns
+    feature_engine_module.time.time_ns = lambda: NOW + 10_000_000
+    try:
+        _, out = build(yes_wall_ms=(NOW + 5_000_000) // 1_000_000,
+                       capture_clock=feature_engine_module.time.time_ns)
+    finally:
+        feature_engine_module.time.time_ns = original
+    row = out['markets'][0]
+    assert out['timestamp_ns'] == NOW + 10_000_000
+    assert row['pm_book_valid'] is True
+    assert row['pm_yes_age_ms'] == 5.0
+    assert 'FUTURE_OR_UNKNOWN_INPUT_AVAILABILITY' not in row['blockers']
 
 def test_future_book_timestamp_is_not_causal() -> None:
     _, out = build(yes_wall_ms=NOW // 1_000_000 + 1)
@@ -230,6 +255,35 @@ def test_crossed_book_cannot_emit_price_or_imbalance_features() -> None:
         assert row['pm_book_valid'] is False
         assert row['pm_yes_mid'] is None and row['pm_yes_spread'] is None
         assert row['pm_yes_imbalance'] is None
+
+def test_runtime_main_has_fail_closed_warmup_contract() -> None:
+    source=(ROOT/'scripts/v7_multi_crypto_feature_engine.py').read_text()
+    assert 'WARMING_OR_BLOCKED' in source
+    assert 'runtime_blockers' in source
+    assert 'except ValueError as error:' in source
+    assert 'execution_authority": False' in source
+
+
+
+def test_replay_clock_does_not_depend_on_host_wall_clock() -> None:
+    original = feature_engine_module.time.time_ns
+    def forbidden():
+        raise AssertionError('wall clock used during deterministic replay')
+    feature_engine_module.time.time_ns = forbidden
+    try:
+        _, out = build()
+        assert out['timestamp_ns'] == NOW
+    finally:
+        feature_engine_module.time.time_ns = original
+
+
+def test_live_clock_regression_is_explicitly_rejected() -> None:
+    try:
+        build(capture_clock=lambda: NOW - 1)
+    except ValueError as exc:
+        assert 'DECISION_CLOCK_INVALID_OR_REGRESSIVE' in str(exc)
+    else:
+        raise AssertionError('clock regression accepted')
 
 if __name__ == '__main__':
     tests = sorted((n, f) for n, f in globals().items() if n.startswith('test_') and callable(f))

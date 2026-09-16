@@ -143,6 +143,8 @@ struct Options {
     bool fair_only = false;
     bool selection_only = false;
     bool state_only = false;
+    std::int64_t state_publish_ms = 100;
+    fs::path compact_label_tape_dir;
     bool selection_explicit = false;
 };
 
@@ -163,6 +165,8 @@ Options parse_options(int argc, char** argv) {
         else if (arg == "--fair-only") options.fair_only = true;
         else if (arg == "--selection-only") options.selection_only = true;
         else if (arg == "--state-only") options.state_only = true;
+        else if (arg == "--state-publish-ms") options.state_publish_ms = std::stoll(next());
+        else if (arg == "--compact-label-tape-dir") options.compact_label_tape_dir = next();
         else throw std::runtime_error("unknown argument: " + arg);
     }
     if (options.fair_only && options.selection_only) {
@@ -173,6 +177,12 @@ Options parse_options(int argc, char** argv) {
     }
     if (options.state_only && !options.selection_only) {
         throw std::runtime_error("--state-only requires --selection-only");
+    }
+    if (options.state_publish_ms < 10 || options.state_publish_ms > 1000) {
+        throw std::runtime_error("--state-publish-ms must be in [10,1000]");
+    }
+    if (!options.compact_label_tape_dir.empty() && (!options.state_only || !options.selection_only)) {
+        throw std::runtime_error("--compact-label-tape-dir requires --selection-only --state-only");
     }
     if (options.selection.empty()) {
         options.selection = options.run_root + "/micro_maker/reward_selection.json";
@@ -192,6 +202,7 @@ struct SelectedToken {
     std::uint64_t event_handle = 0;
     std::uint64_t instrument_handle = 0;
     std::int32_t tick_size_e4 = 0;
+    std::uint8_t is_yes = 0;
 };
 
 [[nodiscard]] std::vector<std::pair<std::string, std::pair<std::string, std::string>>>
@@ -329,9 +340,9 @@ fair_observation_pairs(const Options& options) {
                 if (yes_tick <= 0 || no_tick <= 0) continue;
                 const auto market = ++market_handle;
                 output.push_back({market_id, event_id, pair.second.first, market, market,
-                                  ++instrument_handle, yes_tick});
+                                  ++instrument_handle, yes_tick, 1});
                 output.push_back({market_id, event_id, pair.second.second, market, market,
-                                  ++instrument_handle, no_tick});
+                                  ++instrument_handle, no_tick, 0});
             }
             if (!output.empty()) return output;
         } catch (const std::exception& error) {
@@ -371,10 +382,14 @@ struct FlowSample {
 class ExactWsObserver final {
 public:
     ExactWsObserver(std::vector<SelectedToken> tokens, std::string ws_url,
-                    fs::path output_dir, std::string model_sha, bool state_only = false)
+                    fs::path output_dir, std::string model_sha, bool state_only = false,
+                    std::int64_t state_publish_ms = 100, bool recover_missing_lineage = false,
+                    fs::path compact_label_tape_dir = {})
         : tokens_(std::move(tokens)), ws_url_(std::move(ws_url)),
           output_dir_(std::move(output_dir)), model_sha_(std::move(model_sha)),
-          state_only_(state_only) {
+          state_only_(state_only), state_publish_ms_(state_publish_ms),
+          recover_missing_lineage_(recover_missing_lineage),
+          compact_label_tape_dir_(std::move(compact_label_tape_dir)) {
         std::vector<pm::v7::TokenBinding> bindings;
         std::size_t max_handle = 0;
         for (const auto& token : tokens_) {
@@ -407,6 +422,7 @@ public:
             if (!book_output_) throw std::runtime_error("cannot open canonical book evidence file");
         }
         session_id_ = std::to_string(wall_ms()) + "-" + std::to_string(::getpid());
+        if (!compact_label_tape_dir_.empty()) initialize_compact_label_tape();
     }
 
     void on_frame(std::string_view payload, const pm::fast::FeedReceiveStamp& receive) {
@@ -437,6 +453,7 @@ public:
             result.invalid_frame || result.output_overflow || result.arena_exhausted
             || result.lineage_invalid_book_snapshot > 0
             || root_price_change_failures > 0
+            || (recover_missing_lineage_ && result.price_change_without_lineage > 0)
             || result.lineage_invalid_tick_size_change > 0;
         if (root_lineage_failure) {
             lineage_recovery_requests_.fetch_add(1, std::memory_order_relaxed);
@@ -544,6 +561,10 @@ public:
                 throw std::runtime_error("cannot flush canonical observer evidence");
             }
         }
+        if (compact_label_output_.is_open()) {
+            compact_label_output_.flush();
+            if (!compact_label_output_) throw std::runtime_error("cannot flush compact PM label tape");
+        }
         write_status(true);
     }
 
@@ -564,8 +585,14 @@ public:
             book_output_.open(book_path_, std::ios::app);
             if (!book_output_) throw std::runtime_error("cannot rotate causal book evidence");
         }
-        const std::int64_t publish_period_ms = state_only_ ? 100 : 50;
-        if (wall_ms() - last_book_publish_ms_ >= publish_period_ms) {
+        const auto now_wall_ms = wall_ms();
+        if (compact_label_output_.is_open() && now_wall_ms - last_compact_flush_ms_ >= 1000) {
+            compact_label_output_.flush();
+            if (!compact_label_output_) throw std::runtime_error("compact PM label tape flush failed");
+            last_compact_flush_ms_ = now_wall_ms;
+        }
+        const std::int64_t publish_period_ms = state_only_ ? state_publish_ms_ : 50;
+        if (now_wall_ms - last_book_publish_ms_ >= publish_period_ms) {
             for (std::size_t i=1; i<latest_books_.size(); ++i) {
                 if (latest_books_[i].empty()) continue;
                 atomic_write(output_dir_ / "book_features" / (by_handle_[i]->token_id + ".json"),
@@ -587,9 +614,15 @@ public:
         root["model_sha"] = model_sha_;
         root["observer_session_id"] = session_id_;
         root["state_only"] = state_only_;
+        root["state_publish_ms"] = state_publish_ms_;
         root["book_event_tape_enabled"] = !state_only_;
         root["book_events_observed"] = book_events_observed_;
         root["book_events_written"] = book_events_written_;
+        root["compact_label_tape_enabled"] = compact_label_output_.is_open();
+        root["compact_label_records"] = compact_label_records_;
+        root["compact_label_current_bytes"] = compact_label_current_bytes_;
+        root["compact_label_segments"] = compact_label_segment_;
+        root["compact_label_record_size"] = 64;
         root["book_watermark_receive_wall_ms"] = book_watermark_wall_ms_;
         root["book_watermark_receive_monotonic_ns"] = book_watermark_monotonic_ns_;
         root["state"] = stopped ? "stopped" : "running";
@@ -689,6 +722,68 @@ public:
     }
 
 private:
+    static void put_u64(std::array<char, 64>& out, std::size_t offset, std::uint64_t value) noexcept {
+        for (std::size_t i = 0; i < 8; ++i) out[offset + i] = static_cast<char>((value >> (8U * i)) & 0xffU);
+    }
+    static void put_i64(std::array<char, 64>& out, std::size_t offset, std::int64_t value) noexcept {
+        put_u64(out, offset, static_cast<std::uint64_t>(value));
+    }
+    static void put_i32(std::array<char, 64>& out, std::size_t offset, std::int32_t value) noexcept {
+        const auto raw = static_cast<std::uint32_t>(value);
+        for (std::size_t i = 0; i < 4; ++i) out[offset + i] = static_cast<char>((raw >> (8U * i)) & 0xffU);
+    }
+    void initialize_compact_label_tape() {
+        fs::create_directories(compact_label_tape_dir_);
+        compact_label_path_ = compact_label_tape_dir_ / (session_id_ + ".current.bin");
+        compact_label_output_.open(compact_label_path_, std::ios::binary | std::ios::trunc);
+        if (!compact_label_output_) throw std::runtime_error("cannot open compact PM label tape");
+        json::array token_rows;
+        for (const auto& token : tokens_) {
+            token_rows.emplace_back(json::object{
+                {"instrument_handle", token.instrument_handle}, {"market_handle", token.market_handle},
+                {"market_id", token.market_id}, {"event_id", token.event_id}, {"token_id", token.token_id},
+                {"outcome", token.is_yes != 0 ? "YES" : "NO"}, {"initial_tick_e4", token.tick_size_e4}});
+        }
+        json::object manifest{
+            {"schema", "polymarket_v7_compact_pm_label_tape_manifest_v1"}, {"version", 1},
+            {"record_schema", "polymarket_v7_compact_pm_label_record_v1"}, {"record_size", 64},
+            {"byte_order", "little_endian"}, {"model_sha", model_sha_}, {"observer_session_id", session_id_},
+            {"paper_only", true}, {"authenticated_execution", false}, {"real_order_submission", false},
+            {"execution_authority", "ZERO_AUTHORITY_RESEARCH_ONLY"}, {"selection_only", true},
+            {"fields", json::array{"observer_sequence:u64", "instrument_handle:u64", "state_version:u64",
+                "connection_epoch:u64", "receive_wall_ms:i64", "receive_monotonic_ns:i64",
+                "best_bid_e4:i32", "best_ask_e4:i32", "tick_size_e4:i32", "valid:u8",
+                "lineage_continuous:u8", "event_kind:u8", "reserved:u8"}},
+            {"tokens", std::move(token_rows)}};
+        atomic_write(compact_label_tape_dir_ / (session_id_ + ".manifest.json"), json::serialize(manifest) + "\n");
+    }
+    void rotate_compact_label_tape() {
+        if (!compact_label_output_.is_open()) return;
+        compact_label_output_.flush(); compact_label_output_.close();
+        const auto sealed = compact_label_tape_dir_ / (session_id_ + ".segment-"
+            + std::to_string(1'000'000 + compact_label_segment_) + ".bin");
+        ++compact_label_segment_;
+        fs::rename(compact_label_path_, sealed);
+        compact_label_output_.open(compact_label_path_, std::ios::binary | std::ios::trunc);
+        if (!compact_label_output_) throw std::runtime_error("cannot rotate compact PM label tape");
+        compact_label_current_bytes_ = 0;
+    }
+    void append_compact_label(const TradeEvidence& row, std::uint64_t observer_sequence, bool valid) {
+        if (!compact_label_output_.is_open()) return;
+        if (compact_label_current_bytes_ + 64 > 256ULL * 1024ULL * 1024ULL) rotate_compact_label_tape();
+        std::array<char, 64> payload{};
+        put_u64(payload, 0, observer_sequence); put_u64(payload, 8, row.instrument_handle);
+        put_u64(payload, 16, row.state_version); put_u64(payload, 24, row.connection_epoch);
+        put_i64(payload, 32, row.receive_wall_ms); put_i64(payload, 40, row.receive_monotonic_ns);
+        put_i32(payload, 48, row.book.best_bid_e4); put_i32(payload, 52, row.book.best_ask_e4);
+        put_i32(payload, 56, row.book.tick_size_e4); payload[60] = valid ? 1 : 0;
+        payload[61] = row.book.lineage_continuous != 0 ? 1 : 0;
+        payload[62] = static_cast<char>(static_cast<std::uint8_t>(row.kind)); payload[63] = 0;
+        compact_label_output_.write(payload.data(), static_cast<std::streamsize>(payload.size()));
+        if (!compact_label_output_) throw std::runtime_error("cannot write compact PM label tape");
+        ++compact_label_records_; compact_label_current_bytes_ += payload.size();
+    }
+
     void write_book(const TradeEvidence& row) {
         if (row.instrument_handle >= by_handle_.size()) return;
         const auto* token = by_handle_[row.instrument_handle];
@@ -711,13 +806,15 @@ private:
         const bool valid = row.book.valid && row.book.lineage_continuous
             && dropped_.load(std::memory_order_relaxed) == 0
             && decoder_failures_.load(std::memory_order_relaxed) == 0;
+        const auto observer_sequence = ++book_events_observed_;
+        append_compact_label(row, observer_sequence, valid);
         json::object value{
             {"schema", "polymarket_v7_causal_book_observation_v1"},
             {"model_sha", model_sha_}, {"paper_only", true},
             {"authenticated_execution", false}, {"real_order_submission", false},
             {"execution_authority", "ZERO_AUTHORITY_RESEARCH_ONLY"},
             {"observer_session_id", session_id_}, {"connection_epoch", row.connection_epoch},
-            {"observer_sequence", ++book_events_observed_}, {"market_id", token->market_id},
+            {"observer_sequence", observer_sequence}, {"market_id", token->market_id},
             {"token_id", token->token_id}, {"state_version", row.state_version},
             {"receive_wall_ms", row.receive_wall_ms}, {"receive_monotonic_ns", row.receive_monotonic_ns},
             {"exchange_event_ns", row.book.exchange_event_ns},
@@ -793,6 +890,15 @@ private:
     fs::path output_dir_;
     std::string model_sha_;
     bool state_only_ = false;
+    std::int64_t state_publish_ms_ = 100;
+    bool recover_missing_lineage_ = false;
+    fs::path compact_label_tape_dir_;
+    fs::path compact_label_path_;
+    std::ofstream compact_label_output_;
+    std::uint64_t compact_label_records_ = 0;
+    std::uint64_t compact_label_current_bytes_ = 0;
+    std::uint64_t compact_label_segment_ = 0;
+    std::int64_t last_compact_flush_ms_ = 0;
     std::vector<std::string> ids_;
     std::vector<const SelectedToken*> by_handle_;
     std::vector<std::unique_ptr<pm::v7::maker::MakerInstrumentLane>> lanes_;
@@ -860,7 +966,8 @@ int main(int argc, char** argv) {
                 : load_selected_pairs(options.selection, options.selection_only, options.model_sha);
             ExactWsObserver observer(
                 std::move(tokens), options.ws_url, options.output_dir, options.model_sha,
-                options.state_only);
+                options.state_only, options.state_publish_ms, options.selection_only,
+                options.compact_label_tape_dir);
             observer.start();
             std::int64_t last_status_ms = 0;
             std::int64_t last_membership_check_ms = 0;
@@ -884,7 +991,8 @@ int main(int argc, char** argv) {
                     // Restarting on every mtime update erased queue evidence.
                     reload = !options.selection_only
                         && fair_observation_pairs(options) != fair_pairs;
-                    if (options.fair_only && observer.lineage_recovery_requested()) {
+                    if ((options.fair_only || options.selection_only)
+                            && observer.lineage_recovery_requested()) {
                         reload = true;
                     }
                     if (!options.fair_only) {
