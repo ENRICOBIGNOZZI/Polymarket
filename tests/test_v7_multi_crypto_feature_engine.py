@@ -7,7 +7,7 @@ import sys
 import tempfile
 from pathlib import Path
 
-ROOT = Path('/Users/enrico/polymarket-multi-crypto-v7')
+ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / 'scripts'))
 from v7_multi_crypto_feature_engine import ASSETS, FeatureEngine, ShockTracker, validate_policy
 
@@ -157,7 +157,14 @@ def test_shock_uses_prior_sigma_and_duplicate_version_does_not_relearn() -> None
     assert math.isclose(third['sigma_100ms_bp_prior'], 10.0, rel_tol=1e-9)
     assert math.isclose(third['shock_z_unfloored'], 10.0, rel_tol=1e-9)
     before = tracker.observations
-    tracker.update(row(3, .50))
+    duplicate = tracker.update(row(3, .01))
+    assert duplicate == third
+    assert tracker.observations == before
+    conflict = tracker.update(row(3, .50))
+    assert conflict['shock_z_unfloored'] is None
+    assert tracker.observations == before
+    stale = tracker.update(row(2, .001))
+    assert stale['shock_z_unfloored'] is None
     assert tracker.observations == before
 
 

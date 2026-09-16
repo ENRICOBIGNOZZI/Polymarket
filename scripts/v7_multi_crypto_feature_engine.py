@@ -121,6 +121,8 @@ class ShockTracker:
         self.minimum_observations = minimum_observations
         self.last_state_version = 0
         self.last_receive_ns = 0
+        self.last_return_bp: float | None = None
+        self.last_output: dict[str, Any] | None = None
         self.variance_bp2 = 0.0
         self.observations = 0
 
@@ -132,9 +134,11 @@ class ShockTracker:
             return self.snapshot(None)
         return_bp = 10_000.0 * return_fraction
         if version == self.last_state_version:
-            return self.snapshot(return_bp)
+            if receive_ns != self.last_receive_ns or self.last_return_bp != return_bp:
+                return self.snapshot(None)
+            return dict(self.last_output) if self.last_output is not None else self.snapshot(None)
         if self.last_state_version > 0 and (version < self.last_state_version or receive_ns <= self.last_receive_ns):
-            return self.snapshot(return_bp)
+            return self.snapshot(None)
         prior_sigma = math.sqrt(self.variance_bp2) if self.observations >= self.minimum_observations \
             and self.variance_bp2 > 0 else None
         if self.observations == 0:
@@ -147,8 +151,9 @@ class ShockTracker:
         self.observations += 1
         self.last_state_version = version
         self.last_receive_ns = receive_ns
+        self.last_return_bp = return_bp
         shock = return_bp / prior_sigma if prior_sigma and prior_sigma > 0 else None
-        return {
+        output = {
             "return_100ms_bp": return_bp,
             "sigma_100ms_bp_prior": prior_sigma,
             "shock_z_unfloored": shock,
@@ -156,6 +161,8 @@ class ShockTracker:
             "calibrated": False,
             "signal_eligible": False,
         }
+        self.last_output = dict(output)
+        return output
 
     def snapshot(self, return_bp: float | None) -> dict[str, Any]:
         sigma = math.sqrt(self.variance_bp2) if self.observations >= self.minimum_observations \
