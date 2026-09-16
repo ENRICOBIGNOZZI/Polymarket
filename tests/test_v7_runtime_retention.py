@@ -80,18 +80,23 @@ class V7RuntimeRetentionTest(unittest.TestCase):
             books=active/"micro_maker/book_observations";books.mkdir(parents=True)
             book_segment=books/"session.segment-1000000.jsonl";book_segment.write_bytes(b'{"raw":true}\n'*1000)
             book_current=books/"current.jsonl";book_current.write_bytes(b"active-book")
-            os.utime(book_segment,(1,1))
+            repricing=active/"research/repricing_book/book_observations";repricing.mkdir(parents=True)
+            repricing_segment=repricing/"fair.segment-1000000.jsonl";repricing_segment.write_bytes(b'{"fair":true}\n'*1000)
+            repricing_current=repricing/"current.jsonl";repricing_current.write_bytes(b"active-fair-book")
+            os.utime(book_segment,(1,1));os.utime(repricing_segment,(1,1))
             os.utime(closed,(1,1))
             with mock.patch.object(module,"_tape_file_closed",return_value=True):
                 report=module.compress_closed_cutover_tapes(parent/"paper_v7_archives",now=1000,
                     dry_run=False,active_run_root=active)
             self.assertEqual(report["failures"],[])
-            self.assertEqual(len(report["archived"]),2)
-            self.assertEqual(report["archived"][0]["scope"],"ACTIVE_RUN_CLOSED_SEGMENT")
+            self.assertEqual(len(report["archived"]),3)
+            self.assertTrue(all(row["scope"]=="ACTIVE_RUN_CLOSED_SEGMENT" for row in report["archived"]))
             self.assertFalse(closed.exists());self.assertTrue(opened.exists());self.assertTrue(legacy.exists())
             self.assertEqual(gzip.open(str(closed)+".gz","rb").read(),b"closed-payload"*1000)
             self.assertTrue(book_current.exists());self.assertFalse(book_segment.exists())
             self.assertEqual(gzip.open(str(book_segment)+".gz","rb").read(),b'{"raw":true}\n'*1000)
+            self.assertTrue(repricing_current.exists());self.assertFalse(repricing_segment.exists())
+            self.assertEqual(gzip.open(str(repricing_segment)+".gz","rb").read(),b'{"fair":true}\n'*1000)
 
     def test_old_cutovers_keep_verified_ledger_and_unproven_derived_sources(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

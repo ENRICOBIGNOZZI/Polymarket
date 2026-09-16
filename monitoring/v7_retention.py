@@ -422,7 +422,8 @@ def compress_closed_cutover_tapes(archive_root: Path, *, now: int, dry_run: bool
             relative_root = archive if active_scope else root
             for relative, suffix in (("external_fair/raw", "bin"),
                                      ("external_fair/normalized_events", "bin"),
-                                     ("micro_maker/book_observations", "jsonl")):
+                                     ("micro_maker/book_observations", "jsonl"),
+                                     ("research/repricing_book/book_observations", "jsonl")):
                 folder = archive / relative
                 if folder.is_symlink() or folder.parent.is_symlink(): continue
                 pattern = f"*.segment-*.{suffix}" if active_scope else f"*.{suffix}"
