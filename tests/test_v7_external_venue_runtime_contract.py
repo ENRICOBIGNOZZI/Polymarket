@@ -32,6 +32,14 @@ def main() -> None:
     assert "flat_static_buffer<kMaxWsMessageBytes> buffer;" not in websocket
     assert "constexpr std::size_t kMaxWsMessageBytes = 2U << 20;" in websocket
     assert 'spec.target = "/public/ws"' in websocket
+    assert 'argument == "--asset"' in source
+    assert "crypto_connection_spec(" in source
+    assert "non-BTC assets require explicit venue symbols" in source
+    assert "BTC frozen external-cancel signal cannot be reused for non-BTC assets" in source
+    assert 'ticker.BTC-PERPETUAL.' not in source
+    assert 'orderbook.50.BTCUSDT' not in source
+    assert 'tickers.BTCUSDT' not in source
+    assert '/api/v3/depth?symbol=BTCUSDT' not in source
 
 
 if __name__ == "__main__":
