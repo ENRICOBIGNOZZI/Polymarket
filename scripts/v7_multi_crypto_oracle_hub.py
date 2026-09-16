@@ -21,7 +21,7 @@ from v7_rtds_external_fair_monitor import (
 )
 
 ASSETS = ("BTC", "ETH", "SOL", "XRP", "DOGE", "BNB")
-SCHEMA = "polymarket_v7_multi_crypto_oracle_hub_v1"
+SCHEMA = "polymarket_v7_multi_crypto_oracle_hub_v2"
 STOP = False
 
 
@@ -191,13 +191,22 @@ def update_references(
             references[market_id] = base
             continue
         observation = history[contract["asset"]][timestamp]
+        available = observation.get("available_wall_ns")
+        if type(available) is not int or not 0 < available <= now_ms * 1_000_000:
+            base["status"] = "MISSING_OR_FUTURE_RECEIVE_PROVENANCE"
+            references[market_id] = base
+            continue
         base.update({
-            "valid": True,
+            "valid": gap == 0,
+            "is_proxy": gap != 0,
+            "available_wall_ns": max(available, now_ms * 1_000_000),
+            "observation_received_wall_ns": available,
+            "source": "POLYMARKET_PUBLIC_RTDS_CHAINLINK",
             "price": observation["price"],
             "price_decimal": observation["price_decimal"],
             "source_timestamp_ms": timestamp,
             "gap_ms": gap,
-            "status": "REFERENCE_CAPTURED",
+            "status": "REFERENCE_CAPTURED" if gap == 0 else "PROXY_NOT_EXACT_BOUNDARY",
         })
         references[market_id] = base
 
@@ -360,10 +369,14 @@ def oracle_worker(
                             accepted = row_accepted or accepted
                             if row_accepted:
                                 timestamp_ms = int(row["timestamp_ms"])
-                                history[asset][timestamp_ms] = {
-                                    "price": float(row["price"]),
-                                    "price_decimal": str(row["price_decimal"]),
-                                }
+                                previous_observation = history[asset].get(timestamp_ms)
+                                if (previous_observation is None or
+                                        previous_observation["price_decimal"] != str(row["price_decimal"])):
+                                    history[asset][timestamp_ms] = {
+                                        "price": float(row["price"]),
+                                        "price_decimal": str(row["price_decimal"]),
+                                        "available_wall_ns": receive_wall_ns,
+                                    }
                                 cutoff = timestamp_ms - 30 * 60 * 1000
                                 for old_timestamp in [t for t in history[asset] if t < cutoff]:
                                     history[asset].pop(old_timestamp, None)

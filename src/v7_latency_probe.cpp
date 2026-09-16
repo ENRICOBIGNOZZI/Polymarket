@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <chrono>
+#include <cerrno>
 #include <cctype>
 #include <cstdint>
 #include <cstdlib>
@@ -21,25 +22,20 @@ struct Options {
     std::size_t samples = 120;
     std::size_t warmup = 3;
     std::int64_t interval_ms = 500;
+    bool validate_only = false;
 };
 
 [[nodiscard]] bool approved_endpoint(std::string_view url) noexcept {
-    if (url.find_first_of("\"\\\r\n") != std::string_view::npos) return false;
-    constexpr std::string_view scheme = "https://";
-    if (!url.starts_with(scheme)) return false;
-    url.remove_prefix(scheme.size());
-    const auto end = url.find_first_of("/:?#");
-    const auto host = url.substr(0, end);
-    constexpr std::string_view suffix = ".polymarket.com";
-    return host == "polymarket.com"
-        || (host.size() > suffix.size() && host.ends_with(suffix));
+    // A public clock GET is a connectivity probe, never an order-path probe.
+    return url == "https://clob.polymarket.com/time";
 }
 
 [[nodiscard]] std::int64_t integer(const char* raw, const char* name) {
     if (raw == nullptr || *raw == '\0') throw std::runtime_error(std::string("missing ") + name);
     char* end = nullptr;
+    errno = 0;
     const long long value = std::strtoll(raw, &end, 10);
-    if (end == raw || *end != '\0' || value < 0) {
+    if (errno == ERANGE || end == raw || *end != '\0' || value < 0) {
         throw std::runtime_error(std::string("invalid ") + name);
     }
     return static_cast<std::int64_t>(value);
@@ -59,7 +55,8 @@ Options options(int argc, char** argv) {
             if (++i >= argc) throw std::runtime_error("missing option value");
             return argv[i];
         };
-        if (argument == "--endpoint") out.endpoint = next();
+        if (argument == "--validate-only") out.validate_only = true;
+        else if (argument == "--endpoint") out.endpoint = next();
         else if (argument == "--region") out.region = next();
         else if (argument == "--exact-code-sha") out.exact_code_sha = next();
         else if (argument == "--samples") out.samples = static_cast<std::size_t>(integer(next(), "samples"));
@@ -68,13 +65,14 @@ Options options(int argc, char** argv) {
         else throw std::runtime_error("unknown argument: " + std::string(argument));
     }
     if (!approved_endpoint(out.endpoint)) {
-        throw std::runtime_error("latency probe endpoint must be HTTPS on polymarket.com");
+        throw std::runtime_error("latency probe permits only the public HTTPS /time endpoint");
     }
     if (out.region.empty() || out.region.find_first_of("\"\\\r\n") != std::string::npos) {
         throw std::runtime_error("region is required");
     }
     if (!exact_sha(out.exact_code_sha)) throw std::runtime_error("exact-code-sha must be lowercase SHA-1");
     if (out.samples == 0 || out.samples > 1'000'000) throw std::runtime_error("samples out of range");
+    if (out.warmup > 10000 || out.interval_ms > 60000) throw std::runtime_error("probe load out of range");
     return out;
 }
 
@@ -101,18 +99,28 @@ void emit_distribution(const char* name, const std::vector<std::int64_t>& values
 int main(int argc, char** argv) {
     try {
         const Options cfg = options(argc, argv);
-        const auto started = std::chrono::system_clock::now();
+        if (cfg.validate_only) {
+            std::cout << "{\"validated\":true,\"network_calls\":0}\n";
+            return 0;
+        }
         pm::HttpClient client;
+        bool connection_seen = false;
+        const auto warmup_started = std::chrono::steady_clock::now();
         std::size_t warmup_failed = 0;
         for (std::size_t i = 0; i < cfg.warmup; ++i) {
             try {
                 const auto response = client.get(cfg.endpoint);
+                connection_seen = connection_seen || response.timings.new_connections > 0;
                 if (response.status < 200 || response.status >= 400) ++warmup_failed;
             } catch (const std::exception&) {
                 ++warmup_failed;
             }
         }
 
+        const auto started = std::chrono::system_clock::now();
+        const auto measured_started = std::chrono::steady_clock::now();
+        const auto warmup_elapsed_ns = std::chrono::duration_cast<std::chrono::nanoseconds>(
+            measured_started - warmup_started).count();
         std::vector<std::int64_t> dns;
         std::vector<std::int64_t> tcp;
         std::vector<std::int64_t> tls;
@@ -122,10 +130,17 @@ int main(int argc, char** argv) {
         std::size_t reused = 0;
         std::size_t new_connections = 0;
         std::size_t failed = 0;
+        std::size_t measured_reconnects = 0;
+        std::size_t transport_exceptions = 0;
         std::string primary_ip;
         for (std::size_t i = 0; i < cfg.samples; ++i) {
             try {
                 const auto response = client.get(cfg.endpoint);
+                const auto opened = static_cast<std::size_t>(std::max<long>(0, response.timings.new_connections));
+                if (opened > 0) {
+                    measured_reconnects += opened - (connection_seen ? 0U : 1U);
+                    connection_seen = true;
+                }
                 if (response.status < 200 || response.status >= 400) {
                     ++failed;
                 } else {
@@ -141,6 +156,7 @@ int main(int argc, char** argv) {
                 }
             } catch (const std::exception&) {
                 ++failed;
+                ++transport_exceptions;
             }
             if (cfg.interval_ms > 0 && i + 1 < cfg.samples) {
                 std::this_thread::sleep_for(std::chrono::milliseconds(cfg.interval_ms));
@@ -148,6 +164,8 @@ int main(int argc, char** argv) {
         }
         if (total.empty()) throw std::runtime_error("probe had no successful samples");
         const auto finished = std::chrono::system_clock::now();
+        const auto measured_elapsed_ns = std::chrono::duration_cast<std::chrono::nanoseconds>(
+            std::chrono::steady_clock::now() - measured_started).count();
         const auto started_ms = std::chrono::duration_cast<std::chrono::milliseconds>(started.time_since_epoch()).count();
         const auto finished_ms = std::chrono::duration_cast<std::chrono::milliseconds>(finished.time_since_epoch()).count();
 
@@ -165,7 +183,13 @@ int main(int argc, char** argv) {
                   << ",\"primary_ip\":\"" << primary_ip << "\""
                   << ",\"connection_reused_samples\":" << reused
                   << ",\"new_connections\":" << new_connections
-                  << ",\"reconnect_count\":" << (new_connections > 0 ? new_connections - 1 : 0)
+                  << ",\"reconnect_count\":" << measured_reconnects
+                  << ",\"transport_exceptions\":" << transport_exceptions
+                  << ",\"reconnect_observability\":\"RESPONSES_ONLY_EXCEPTIONS_UNOBSERVABLE\""
+                  << ",\"measured_elapsed_monotonic_ns\":" << measured_elapsed_ns
+                  << ",\"warmup_elapsed_monotonic_ns\":" << warmup_elapsed_ns
+                  << ",\"sampling_mode\":\"CLOSED_LOOP\""
+                  << ",\"coordinated_omission_corrected\":false"
                   << ",\"timings_ns\":{";
         emit_distribution("dns", dns);
         std::cout << ',';

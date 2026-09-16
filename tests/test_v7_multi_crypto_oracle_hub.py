@@ -72,7 +72,7 @@ def test_missing_asset_context_fails_closed() -> None:
 
 
 
-def test_reference_capture_uses_only_observation_at_or_before_boundary() -> None:
+def test_reference_before_boundary_is_proxy_not_exact_reference() -> None:
     selection = {
         "schema": "polymarket_v7_multi_crypto_book_selection_v1",
         "paper_only": True, "authenticated_execution": False,
@@ -87,14 +87,15 @@ def test_reference_capture_uses_only_observation_at_or_before_boundary() -> None
     contracts = load_contract_selection(selection)
     boundary = contracts[0]["start_timestamp_ms"]
     history = {asset: {} for asset in ASSETS}
-    history["ETH"][boundary - 1000] = {"price": 2400.0, "price_decimal": "2400"}
+    history["ETH"][boundary - 1000] = {"price": 2400.0, "price_decimal": "2400", "available_wall_ns": (boundary - 900) * 1_000_000}
     history["ETH"][boundary + 100] = {"price": 9999.0, "price_decimal": "9999"}
     references: dict[str, dict] = {}
     update_references(contracts, history, references, now_ms=boundary + 500,
                       maximum_gap_ms=2000)
     ref = references["m-eth"]
-    assert ref["valid"] is True
-    assert ref["status"] == "REFERENCE_CAPTURED"
+    assert ref["valid"] is False
+    assert ref["is_proxy"] is True
+    assert ref["status"] == "PROXY_NOT_EXACT_BOUNDARY"
     assert ref["price_decimal"] == "2400"
     assert ref["source_timestamp_ms"] == boundary - 1000
     assert ref["gap_ms"] == 1000
@@ -160,6 +161,27 @@ def test_status_has_no_execution_authority() -> None:
     assert value["execution_authority"] is False
     assert value["one_way_latency_identified"] is False
 
+
+
+def test_exact_boundary_reference_requires_causal_receive_provenance() -> None:
+    contract = {"asset": "ETH", "horizon": "M5", "market_id": "market",
+                "start_timestamp_ms": 10_000, "end_timestamp_ms": 310_000,
+                "normalized_rules_hash": "a" * 64}
+    history = {asset: {} for asset in ASSETS}
+    observation = {"price": 100.0, "price_decimal": "100", "available_wall_ns": 10_001_000_000}
+    history["ETH"][10_000] = observation
+    refs = {}
+    update_references([contract], history, refs, now_ms=10_002, maximum_gap_ms=2000)
+    ref = refs["market"]
+    assert ref["valid"] is True and ref["is_proxy"] is False
+    assert ref["available_wall_ns"] == 10_002_000_000
+    assert ref["observation_received_wall_ns"] == 10_001_000_000
+    for unavailable in (None, 20_000_000_000):
+        observation["available_wall_ns"] = unavailable
+        refs = {}
+        update_references([contract], history, refs, now_ms=10_002, maximum_gap_ms=2000)
+        assert refs["market"]["valid"] is False
+        assert refs["market"]["status"] == "MISSING_OR_FUTURE_RECEIVE_PROVENANCE"
 
 if __name__ == "__main__":
     tests = sorted((name, fn) for name, fn in globals().items()

@@ -74,6 +74,16 @@ def evaluate_probe(
         started = finished = requested = successful = failed = reconnects = 0
 
     duration_s = max(0.0, (finished - started) / 1000.0)
+    duration_clock = "LEGACY_WALL_CLOCK_UNVERIFIED"
+    if "measured_elapsed_monotonic_ns" in probe:
+        try:
+            measured_ns = nonnegative_integer(probe["measured_elapsed_monotonic_ns"])
+            duration_s = measured_ns / 1_000_000_000.0
+            duration_clock = "SAME_PROCESS_MONOTONIC"
+            if abs(duration_s - (finished - started) / 1000.0) > 1.0:
+                reasons.append("WALL_CLOCK_STEP_OR_DURATION_MISMATCH")
+        except ValueError:
+            reasons.append("MONOTONIC_DURATION_MALFORMED")
     denominator = successful + failed
     failure_rate = failed / denominator if denominator > 0 else 1.0
     reconnect_rate = reconnects / successful if successful > 0 else 1.0
@@ -101,6 +111,7 @@ def evaluate_probe(
         "region": str(probe.get("region") or ""),
         "exact_code_sha": str(probe.get("exact_code_sha") or ""),
         "duration_seconds": duration_s,
+        "duration_clock": duration_clock,
         "successful_samples": successful,
         "failed_samples": failed,
         "failure_rate": failure_rate,

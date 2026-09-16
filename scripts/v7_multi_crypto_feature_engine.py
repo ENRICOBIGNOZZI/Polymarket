@@ -13,7 +13,7 @@ from pathlib import Path
 from typing import Any
 
 ASSETS = ("BTC", "ETH", "SOL", "XRP", "DOGE", "BNB")
-SCHEMA = "polymarket_v7_multi_crypto_feature_snapshot_v1"
+SCHEMA = "polymarket_v7_multi_crypto_feature_snapshot_v2"
 STOP = False
 
 
@@ -38,6 +38,8 @@ def atomic_json(path: Path, value: dict[str, Any]) -> None:
 
 
 def finite(value: Any) -> float | None:
+    if isinstance(value, bool):
+        return None
     try:
         result = float(value)
     except (TypeError, ValueError, OverflowError):
@@ -50,7 +52,8 @@ def parse_utc_ns(value: Any) -> int:
     if not text:
         return 0
     try:
-        return int(datetime.fromisoformat(text.replace("Z", "+00:00")).timestamp() * 1e9)
+        parsed = datetime.fromisoformat(text.replace("Z", "+00:00"))
+        return int(parsed.timestamp() * 1e9) if parsed.tzinfo is not None else 0
     except ValueError:
         return 0
 
@@ -105,6 +108,8 @@ class ShockTracker:
         self.last_receive_ns = 0
         self.variance_bp2 = 0.0
         self.observations = 0
+        self.last_input: tuple[int, int, float] | None = None
+        self.last_output: dict[str, Any] | None = None
 
     def update(self, external: dict[str, Any]) -> dict[str, Any]:
         version = int(external.get("state_version") or 0)
@@ -113,10 +118,13 @@ class ShockTracker:
         if version <= 0 or receive_ns <= 0 or return_fraction is None:
             return self.snapshot(None)
         return_bp = 10_000.0 * return_fraction
+        identity = (version, receive_ns, return_fraction)
         if version == self.last_state_version:
-            return self.snapshot(return_bp)
+            if identity == self.last_input and self.last_output is not None:
+                return dict(self.last_output)  # Preserve the original pre-update sigma.
+            return self.snapshot(None)  # Same version cannot carry another payload.
         if self.last_state_version > 0 and (version < self.last_state_version or receive_ns <= self.last_receive_ns):
-            return self.snapshot(return_bp)
+            return self.snapshot(None)
         prior_sigma = math.sqrt(self.variance_bp2) if self.observations >= self.minimum_observations \
             and self.variance_bp2 > 0 else None
         if self.observations == 0:
@@ -130,7 +138,8 @@ class ShockTracker:
         self.last_state_version = version
         self.last_receive_ns = receive_ns
         shock = return_bp / prior_sigma if prior_sigma and prior_sigma > 0 else None
-        return {
+        self.last_input = identity
+        self.last_output = {
             "return_100ms_bp": return_bp,
             "sigma_100ms_bp_prior": prior_sigma,
             "shock_z_unfloored": shock,
@@ -138,6 +147,8 @@ class ShockTracker:
             "calibrated": False,
             "signal_eligible": False,
         }
+
+        return dict(self.last_output)
 
     def snapshot(self, return_bp: float | None) -> dict[str, Any]:
         sigma = math.sqrt(self.variance_bp2) if self.observations >= self.minimum_observations \
@@ -223,7 +234,9 @@ class FeatureEngine:
             no_age_ms = source_age_ms(int(no.get("receive_wall_ms") or 0) * 1_000_000, now_ns)
 
             def book_identity_valid(book: dict[str, Any], token: str, age_ms: float | None) -> bool:
-                return (safe_source(book) and book.get("model_sha") == model_sha
+                bid, ask = finite(book.get("best_bid")), finite(book.get("best_ask"))
+                return (bid is not None and ask is not None and 0 <= bid <= ask <= 1
+                        and safe_source(book) and book.get("model_sha") == model_sha
                         and book.get("market_id") == str(market.get("market_id") or "")
                         and book.get("token_id") == token and book.get("valid") is True
                         and book.get("lineage_continuous") is True
@@ -237,13 +250,17 @@ class FeatureEngine:
             yes_mid = (yes_bid + yes_ask) / 2.0 if book_valid and yes_bid is not None and yes_ask is not None else None
             no_mid = (no_bid + no_ask) / 2.0 if book_valid and no_bid is not None and no_ask is not None else None
             oracle_row = oracle_assets.get(asset) if isinstance(oracle_assets.get(asset), dict) else {}
-            oracle_age_ms = finite(oracle_row.get("receive_age_ms"))
-            oracle_fresh = bool(oracle_row.get("fresh") is True and oracle_age_ms is not None
-                                and 0 <= oracle_age_ms <= maximum_oracle_age_ms)
+            oracle_age_ms = source_age_ms(oracle_row.get("receive_wall_ns"), now_ns)
+            oracle_snapshot_age_ms = source_age_ms(oracle.get("timestamp_ns"), now_ns)
+            oracle_fresh = bool(oracle_row.get("fresh") is True and oracle.get("state") == "RUNNING"
+                                and oracle_age_ms is not None and oracle_snapshot_age_ms is not None
+                                and oracle_age_ms <= maximum_oracle_age_ms
+                                and oracle_snapshot_age_ms <= maximum_oracle_age_ms)
             oracle_price = finite(oracle_row.get("price")) if oracle_fresh else None
             market_id = str(market.get("market_id") or "")
             reference = references.get(market_id) if isinstance(references.get(market_id), dict) else {}
-            reference_valid = bool(reference.get("valid") is True
+            reference_available = source_age_ms(reference.get("available_wall_ns"), now_ns)
+            reference_valid = bool(reference.get("valid") is True and reference_available is not None
                                    and reference.get("market_id") == market_id
                                    and reference.get("asset") == asset
                                    and reference.get("horizon") == str(market.get("horizon") or "")
@@ -266,11 +283,16 @@ class FeatureEngine:
             for derivative in external_features[asset]["derivatives"]:
                 if not isinstance(derivative, dict):
                     continue
-                age_ns = int(derivative.get("age_ns") or 0)
-                usable = bool(derivative.get("healthy") is True and 0 <= age_ns
-                              <= maximum_external_age_ms * 1_000_000
-                              and int(derivative.get("valid_mask") or 0) > 0)
-                mark = finite(derivative.get("mark_price")) if usable else None
+                native_age = derivative.get("age_ns")
+                state_age_ms = external_features[asset]["source_age_ms"]
+                age_ns = (native_age + int(state_age_ms * 1_000_000)
+                          if type(native_age) is int and native_age >= 0 and state_age_ms is not None else None)
+                mask = derivative.get("valid_mask")
+                usable = bool(derivative.get("healthy") is True and age_ns is not None
+                              and age_ns <= maximum_external_age_ms * 1_000_000
+                              and type(mask) is int and 0 < mask <= 15)
+                # Bits are defined in pm/v7_external_fair.hpp, not interchangeable.
+                mark = finite(derivative.get("mark_price")) if usable and mask & 1 else None
                 derivative_features.append({
                     "venue": str(derivative.get("venue") or ""),
                     "healthy": derivative.get("healthy") is True,
@@ -278,9 +300,9 @@ class FeatureEngine:
                     "valid_mask": int(derivative.get("valid_mask") or 0),
                     "age_ns": age_ns,
                     "mark_price": mark,
-                    "index_price": finite(derivative.get("index_price")) if usable else None,
-                    "funding_rate": finite(derivative.get("funding_rate")) if usable else None,
-                    "open_interest_native": finite(derivative.get("open_interest_native")) if usable else None,
+                    "index_price": finite(derivative.get("index_price")) if usable and mask & 2 else None,
+                    "funding_rate": finite(derivative.get("funding_rate")) if usable and mask & 4 else None,
+                    "open_interest_native": finite(derivative.get("open_interest_native")) if usable and mask & 8 else None,
                     "basis_to_spot_bp": 10_000.0 * (mark / spot - 1.0) if mark and spot else None,
                 })
             blockers: list[str] = ["UNCALIBRATED_SHADOW"]
@@ -306,8 +328,8 @@ class FeatureEngine:
                 "pm_yes_mid": yes_mid,
                 "pm_no_mid": no_mid,
                 "pm_complete_set_gap": yes_mid + no_mid - 1.0 if yes_mid is not None and no_mid is not None else None,
-                "pm_yes_spread": yes_ask - yes_bid if yes_bid is not None and yes_ask is not None else None,
-                "pm_yes_imbalance": finite((yes.get("placement_features") or {}).get("imbalance")) if isinstance(yes.get("placement_features"), dict) else None,
+                "pm_yes_spread": yes_ask - yes_bid if book_valid else None,
+                "pm_yes_imbalance": finite((yes.get("placement_features") or {}).get("imbalance")) if book_valid and isinstance(yes.get("placement_features"), dict) else None,
                 "oracle_fresh": oracle_fresh,
                 "oracle_age_ms": oracle_age_ms,
                 "oracle_price": oracle_price,

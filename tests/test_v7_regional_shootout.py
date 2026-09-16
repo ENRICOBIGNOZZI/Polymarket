@@ -130,6 +130,24 @@ def test_http_winner_never_claims_end_to_end_readiness() -> None:
     assert output["end_to_end_region_selection_ready"] is False
     assert output["host_hardware_and_load_parity_verified"] is False
 
+
+def test_wall_clock_jump_cannot_pass_as_measured_duration() -> None:
+    bad = probe("eu-west-2a", 7_000_000, 6_000_000)
+    bad["measured_elapsed_monotonic_ns"] = 5_000_000_000
+    completed, output = run([bad], ["eu-west-2a"])
+    assert completed.returncode == 2
+    reasons = output["results"][0]["reasons"]
+    assert "WALL_CLOCK_STEP_OR_DURATION_MISMATCH" in reasons
+    assert "DURATION_TOO_SHORT" in reasons
+
+
+def test_same_process_monotonic_duration_is_reported() -> None:
+    good = probe("eu-west-2a", 7_000_000, 6_000_000)
+    good["measured_elapsed_monotonic_ns"] = (good["finished_wall_ms"] - good["started_wall_ms"]) * 1_000_000
+    completed, output = run([good], ["eu-west-2a"])
+    assert completed.returncode == 0
+    assert output["results"][0]["duration_clock"] == "SAME_PROCESS_MONOTONIC"
+
 if __name__ == "__main__":
     tests = sorted((name, fn) for name, fn in globals().items()
                    if name.startswith("test_") and callable(fn))
