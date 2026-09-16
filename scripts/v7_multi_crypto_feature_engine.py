@@ -192,6 +192,19 @@ class FeatureEngine:
                 or not safe_source(selection) or selection.get("execution_authority") is not False
                 or selection.get("model_sha") != model_sha):
             raise ValueError("book selection authority/identity invalid")
+        markets = selection.get("markets") if isinstance(selection.get("markets"), list) else []
+        # Freeze one coherent PM-book cut before assigning the decision timestamp.
+        # A book file may advance while the feature loop is reading it; stamping
+        # the decision first would falsely classify that causal input as future.
+        book_cache: dict[str, dict[str, Any]] = {}
+        for market in markets:
+            if not isinstance(market, dict):
+                continue
+            for field in ("yes_token", "no_token"):
+                token = str(market.get(field) or "")
+                if token and token not in book_cache:
+                    book_cache[token] = load(book_dir / f"{token}.json")
+        decision_ns = max(int(now_ns), time.time_ns())
         maximum_external_age_ms = int(self.policy["maximum_external_age_ms"])
         maximum_oracle_age_ms = int(self.policy["maximum_oracle_age_ms"])
         maximum_book_age_ms = int(self.policy["maximum_book_age_ms"])
@@ -200,7 +213,7 @@ class FeatureEngine:
             value = external[asset]
             if not safe_source(value):
                 raise ValueError(f"{asset}: external authority invalid")
-            age_ms = source_age_ms(value.get("timestamp_ns"), now_ns)
+            age_ms = source_age_ms(value.get("timestamp_ns"), decision_ns)
             source_identity_ok = value.get("code_sha") == model_sha and value.get("asset") == asset
             fresh = bool(source_identity_ok and value.get("valid") is True and age_ms is not None
                          and age_ms <= maximum_external_age_ms)
@@ -226,7 +239,6 @@ class FeatureEngine:
             }
         oracle_assets = oracle.get("assets") if isinstance(oracle.get("assets"), dict) else {}
         references = oracle.get("settlement_references") if isinstance(oracle.get("settlement_references"), dict) else {}
-        markets = selection.get("markets") if isinstance(selection.get("markets"), list) else []
         rows: list[dict[str, Any]] = []
         for market in markets:
             if not isinstance(market, dict):
@@ -236,10 +248,10 @@ class FeatureEngine:
                 continue
             yes_token = str(market.get("yes_token") or "")
             no_token = str(market.get("no_token") or "")
-            yes = load(book_dir / f"{yes_token}.json")
-            no = load(book_dir / f"{no_token}.json")
-            yes_age_ms = source_age_ms(int(yes.get("receive_wall_ms") or 0) * 1_000_000, now_ns)
-            no_age_ms = source_age_ms(int(no.get("receive_wall_ms") or 0) * 1_000_000, now_ns)
+            yes = book_cache.get(yes_token, {})
+            no = book_cache.get(no_token, {})
+            yes_age_ms = source_age_ms(int(yes.get("receive_wall_ms") or 0) * 1_000_000, decision_ns)
+            no_age_ms = source_age_ms(int(no.get("receive_wall_ms") or 0) * 1_000_000, decision_ns)
 
             def book_identity_valid(book: dict[str, Any], token: str, age_ms: float | None) -> bool:
                 return (safe_source(book) and book.get("model_sha") == model_sha
@@ -263,7 +275,7 @@ class FeatureEngine:
             market_id = str(market.get("market_id") or "")
             reference = references.get(market_id) if isinstance(references.get(market_id), dict) else {}
             reference_capture_ms = int(reference.get("captured_at_ms") or 0)
-            reference_capture_age_ms = source_age_ms(reference_capture_ms * 1_000_000, now_ns)
+            reference_capture_age_ms = source_age_ms(reference_capture_ms * 1_000_000, decision_ns)
             reference_valid = bool(reference.get("valid") is True
                                    and reference.get("market_id") == market_id
                                    and reference.get("asset") == asset
@@ -276,8 +288,8 @@ class FeatureEngine:
             distance_reference = 10_000.0 * (oracle_price / reference_price - 1.0) if oracle_price and reference_price else None
             start_ns = parse_utc_ns(market.get("start_timestamp"))
             end_ns = parse_utc_ns(market.get("end_timestamp"))
-            tte = max(0.0, (end_ns - now_ns) / 1e9) if end_ns > 0 else None
-            active_now = bool(start_ns > 0 and end_ns > start_ns and start_ns <= now_ns < end_ns)
+            tte = max(0.0, (end_ns - decision_ns) / 1e9) if end_ns > 0 else None
+            active_now = bool(start_ns > 0 and end_ns > start_ns and start_ns <= decision_ns < end_ns)
             leader_features: dict[str, Any] = {}
             for leader, follower in self.policy.get("cross_crypto_graph") or []:
                 if follower == asset and leader in external_features:
@@ -338,7 +350,7 @@ class FeatureEngine:
                 source_versions["selection_generated_at_ms"] * 1_000_000,
             ]
             available_at_ns = max(availability_candidates) if availability_candidates else 0
-            if available_at_ns <= 0 or available_at_ns > now_ns:
+            if available_at_ns <= 0 or available_at_ns > decision_ns:
                 blockers.append("FUTURE_OR_UNKNOWN_INPUT_AVAILABILITY")
             source_identity_hash = canonical_hash({
                 "model_sha": model_sha, "market_id": market_id,
@@ -387,7 +399,7 @@ class FeatureEngine:
         return {
             "schema": SCHEMA,
             "version": 1,
-            "timestamp_ns": now_ns,
+            "timestamp_ns": decision_ns,
             "model_sha": model_sha,
             "paper_only": True,
             "authenticated_execution": False,

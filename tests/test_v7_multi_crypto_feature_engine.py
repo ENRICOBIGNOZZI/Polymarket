@@ -9,6 +9,7 @@ from pathlib import Path
 
 ROOT = Path('/Users/enrico/polymarket-multi-crypto-v7')
 sys.path.insert(0, str(ROOT / 'scripts'))
+import v7_multi_crypto_feature_engine as feature_engine_module
 from v7_multi_crypto_feature_engine import ASSETS, FeatureEngine, ShockTracker, validate_policy
 
 SHA = 'a' * 40
@@ -118,6 +119,20 @@ def test_future_or_stale_external_never_updates_shock() -> None:
     assert engine.shocks['ETH'].observations == 0
     assert 'EXTERNAL_FEED_STALE_OR_IDENTITY_INVALID' in row['blockers']
 
+
+
+def test_decision_cut_is_assigned_after_book_snapshot_reads() -> None:
+    original = feature_engine_module.time.time_ns
+    feature_engine_module.time.time_ns = lambda: NOW + 10_000_000
+    try:
+        _, out = build(yes_wall_ms=(NOW + 5_000_000) // 1_000_000)
+    finally:
+        feature_engine_module.time.time_ns = original
+    row = out['markets'][0]
+    assert out['timestamp_ns'] == NOW + 10_000_000
+    assert row['pm_book_valid'] is True
+    assert row['pm_yes_age_ms'] == 5.0
+    assert 'FUTURE_OR_UNKNOWN_INPUT_AVAILABILITY' not in row['blockers']
 
 def test_future_book_timestamp_is_not_causal() -> None:
     _, out = build(yes_wall_ms=NOW // 1_000_000 + 1)
