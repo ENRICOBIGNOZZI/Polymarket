@@ -232,7 +232,7 @@ def test_mature_positive_cell_becomes_typed_make_opportunity() -> None:
         }
         assert row["execution_plan"]["legs"][0]["side"] == "BUY"
         assert row["conservative_expected_wealth_change"] > 0.0
-        assert row["execution_plan"]["timeout_ms"] == 5000
+        assert row["execution_plan"]["timeout_ms"] == 1000
         assert row["execution_alpha"]["fill_probability"]["lower"] > 0.0
         assert row["execution_alpha"]["evidence_status"] == "MATURE"
         assert row["execution_alpha"]["features"]["book_imbalance"] is None
@@ -295,7 +295,8 @@ def test_immature_control_cell_becomes_bounded_research_paper_probe() -> None:
         assert row["exploration"]["robust_candidate"] is False
         assert row["exploration"]["model_id"] == "btc_m5_maker_execution_bootstrap_probe_v1"
         assert row["exploration"]["probe_loss_cap"] <= 2.0
-        assert row["execution_plan"]["timeout_ms"] == 15000
+        assert row["execution_plan"]["timeout_ms"] in {250, 500, 1000}
+        assert row["execution_alpha"]["features"]["quote_lifetime_ms"] == row["execution_plan"]["timeout_ms"]
         leg = row["execution_plan"]["legs"][0]
         assert leg["target_quantity"] * leg["limit_price"] <= 2.0 + 1e-9
         assert row["execution_alpha"]["evidence_status"] == "IMMATURE"
@@ -350,16 +351,9 @@ def test_settlement_anchor_cold_prior_cell_becomes_only_paper_probe() -> None:
             rows, status = bridge.build_maker_opportunities(
                 run_root, now_ns=2_000_000_000, repository_root=ROOT,
             )
-        assert len(rows) == 1, status
-        row = OpportunityEnvelope.parse(rows[0]).raw
-        assert row["exploration"]["mode"] == "PAPER_BOOTSTRAP_PROBE"
-        assert row["exploration"]["research_only"] is True
-        assert row["exploration"]["robust_candidate"] is False
-        assert "STRUCTURAL_RESEARCH_FALLBACK" in row["reasons"]
-        assert row["execution_alpha"]["fill_probability"]["point"] > 0.0
-        assert row["execution_plan"]["legs"][0]["target_quantity"] \
-            * row["execution_plan"]["legs"][0]["limit_price"] <= 2.0 + 1e-9
-        assert status["typed_make_probe_opportunities"] == 1
+        assert rows == [], status
+        assert status["rejected"]["FORWARD_AGGRESSIVE_FLOW_FILTER"] == 1
+        assert status["typed_make_probe_opportunities"] == 0
 
 
 def test_settlement_anchor_fresh_flow_can_power_only_bounded_paper_probe() -> None:
@@ -532,7 +526,24 @@ def test_canonical_selector_timestamp_is_receive_time_causal_and_stale_fails_clo
         assert "MAKER_SELECTION_STALE_OR_NONCAUSAL" in status["reasons"]
 
 
+def test_forward_queue_and_flow_filters_fail_closed() -> None:
+    with tempfile.TemporaryDirectory() as directory:
+        run_root = Path(directory); setup_run(run_root, mature=False)
+        value = selection(); value["markets"][0]["quote_opportunities"][0]["queue_ahead_shares"] = 100.0
+        write(run_root / "micro_maker/reward_selection.json", value)
+        with mock.patch.object(bridge, "_paper_crypto_context", return_value=context()):
+            rows, status = bridge.build_maker_opportunities(run_root, now_ns=2_000_000_000, repository_root=ROOT)
+        assert rows == [] and status["rejected"]["FORWARD_QUEUE_AHEAD_FILTER"] == 1
+
+        value = selection(); value["markets"][0]["quote_opportunities"][0]["opposite_flow_shares_per_second"] = 4.999
+        write(run_root / "micro_maker/reward_selection.json", value)
+        with mock.patch.object(bridge, "_paper_crypto_context", return_value=context()):
+            rows, status = bridge.build_maker_opportunities(run_root, now_ns=2_000_000_000, repository_root=ROOT)
+        assert rows == [] and status["rejected"]["FORWARD_AGGRESSIVE_FLOW_FILTER"] == 1
+
+
 if __name__ == "__main__":
+    test_forward_queue_and_flow_filters_fail_closed()
     test_mature_positive_cell_becomes_typed_make_opportunity()
     test_immature_control_cell_becomes_bounded_research_paper_probe()
     test_bootstrap_fair_can_only_power_loss_capped_paper_probe()

@@ -351,8 +351,21 @@ python3 scripts/v7_pm_repricing_shadow.py \
   --output "$RUN_ROOT/research/pm_repricing_shadow.jsonl" \
   --status "$RUN_ROOT/research/pm_repricing_shadow_status.json" \
   --model-sha "$SHA" --family PM_PLUS_EXTERNAL --horizon-ms 250 \
-  --threshold-ticks 1.0 --interval-ms 25 \
+  --threshold-ticks 1.5 --cancel-signal "$RUN_ROOT/research/pm_repricing_cancel_signal.json" \
+  --cancel-signal-ttl-ms 100 --interval-ms 25 \
   >> "$RUN_ROOT/research/pm_repricing_shadow.log" 2>&1 &
+v7_register_child "$!"
+
+# Zero-authority paired YES/NO complete-set PAPER shadow. It directly records
+# joint fill states and legging loss; it has no OMS, risk, inventory or ledger authority.
+python3 scripts/v7_two_sided_complete_set_shadow.py \
+  --book-tape "$RUN_ROOT/research/repricing_book/book_observations/current.jsonl" \
+  --trade-tape "$RUN_ROOT/research/repricing_book/fillability_ws.jsonl" \
+  --fair-status "$RUN_ROOT/external_fair/status.json" --model-sha "$SHA" \
+  --output "$RUN_ROOT/research/two_sided_complete_set_shadow.jsonl" \
+  --status "$RUN_ROOT/research/two_sided_complete_set_shadow_status.json" \
+  --quote-shares 5 --ttl-arms-ms 250,500,1000 --interval-ms 10 \
+  >> "$RUN_ROOT/research/two_sided_complete_set_shadow.log" 2>&1 &
 v7_register_child "$!"
 
 CONFIG_HASH="$(git hash-object "$CONFIG")"
@@ -767,6 +780,7 @@ v7_background_analytics() {
 (
   while [[ ! -e "$KILL" ]]; do
     python3 scripts/v7_canonical_economics.py --ledger "$RUN_ROOT/ledger/execution.jsonl" --expected-model-sha "$SHA" \
+      --markout-evidence "$RUN_ROOT/research/evidence/maker_markout" \
       --output "$RUN_ROOT/canonical_economics.json" >> "$RUN_ROOT/canonical_economics.log" 2>&1 || true
     sleep 60
   done
@@ -826,7 +840,7 @@ v7_background_analytics() {
   done
 ) & v7_register_child "$!"
 
-v7_assert_registered_child_count 25
+v7_assert_registered_child_count 26
 write_runtime_status running false
 
 while [[ ! -e "$KILL" ]]; do

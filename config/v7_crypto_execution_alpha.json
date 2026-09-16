@@ -26,6 +26,16 @@
         "supported_cancel_side": "BUY",
         "trigger_cooldown_ms": 250,
         "trigger_grid_ms": 25
+      },
+      "repricing_rule": {
+        "rule_id": "btc-m5-pm-repricing-cancel-v1",
+        "family": "PM_PLUS_EXTERNAL",
+        "horizon_ms": 250,
+        "threshold_ticks": 1.5,
+        "maximum_signal_age_ms": 100,
+        "supported_cancel_side": "BUY",
+        "research_only": true,
+        "paper_only": true
       }
     },
     "maker": {

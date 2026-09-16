@@ -37,7 +37,7 @@ EVENT_TYPES = frozenset(
         "CAPITAL_RELEASE",
     }
 )
-MARKOUT_HORIZONS = frozenset({"1s", "5s", "10s", "15s", "30s", "45s", "60s", "300s"})
+MARKOUT_HORIZONS = frozenset({"100ms", "250ms", "500ms", "1s", "5s", "10s", "15s", "30s", "45s", "60s", "300s"})
 SIDES = frozenset({"BUY", "SELL"})
 JOURNAL_SCHEMA_VERSION = 1
 JOURNAL_ENTRY_TYPES = frozenset({

@@ -1,8 +1,8 @@
 {
   "authenticated_execution": false,
   "authority_registry": "config/v7_authority_registry.json",
-  "expected_launcher_child_count": 25,
-  "expected_process_count": 27,
+  "expected_launcher_child_count": 26,
+  "expected_process_count": 28,
   "launcher": "scripts/paper_v7_execution_loop.sh",
   "paper_only": true,
   "processes": [
@@ -202,7 +202,31 @@
       "outputs": [
         "research/pm_repricing_shadow.jsonl*",
         "research/pm_repricing_shadow_status.json",
-        "research/pm_repricing_shadow.log"
+        "research/pm_repricing_shadow.log",
+        "research/pm_repricing_cancel_signal.json"
+      ],
+      "profile": "observer"
+    },
+    {
+      "arguments": [],
+      "config_identity_required": true,
+      "dependencies": [
+        "external_fair_router",
+        "repricing_book_observer"
+      ],
+      "exact_sha_required": true,
+      "executable": "scripts/v7_two_sided_complete_set_shadow.py",
+      "id": "two_sided_complete_set_shadow",
+      "inputs": [
+        "external_fair/status.json",
+        "research/repricing_book/book_observations/current.jsonl",
+        "research/repricing_book/fillability_ws.jsonl"
+      ],
+      "launcher_log": "research/two_sided_complete_set_shadow.log",
+      "outputs": [
+        "research/two_sided_complete_set_shadow.jsonl",
+        "research/two_sided_complete_set_shadow_status.json",
+        "research/two_sided_complete_set_shadow.log"
       ],
       "profile": "observer"
     },
