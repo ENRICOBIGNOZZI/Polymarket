@@ -1,0 +1,63 @@
+{
+  "dataset_manifest_sha256": "ceeed2730d35231de5dbd9748fc696c80b2444eb0363c427faaaf6ffdc8e4b48",
+  "dataset_total_bytes": 42890841,
+  "economic_evidence": false,
+  "exact_code_sha": "5adab31c84916a835ffdb983986b5751684562d3",
+  "execution_authority": false,
+  "limitations": [
+    "finite SHADOW smoke only",
+    "no executable PnL claim",
+    "one independent time cluster only",
+    "no model or threshold promotion authorized"
+  ],
+  "paper_only": true,
+  "repricing_labels": {
+    "coverage": {
+      "100": 0.8227941176470588,
+      "1000": 0.828186274509804,
+      "10000": 0.5075980392156862,
+      "250": 0.817156862745098,
+      "50": 0.6446078431372549,
+      "500": 0.8227941176470588,
+      "5000": 0.6808823529411765
+    },
+    "input_rows": 4080,
+    "labeled_counts": {
+      "100": 3357,
+      "1000": 3379,
+      "10000": 2071,
+      "250": 3334,
+      "50": 2630,
+      "500": 3357,
+      "5000": 2778
+    },
+    "origin_status_counts": {
+      "NO_CONTIGUOUS_COMPACT_SESSION": 34,
+      "OK": 3892,
+      "ORIGIN_BOOK_INVALID": 67,
+      "ORIGIN_TAPE_MISMATCH": 87
+    },
+    "sessions": 2
+  },
+  "research": {
+    "blockers": [
+      "INSUFFICIENT_INDEPENDENT_TIME_CLUSTERS"
+    ],
+    "primary_labeled_rows": 3334,
+    "status": "INSUFFICIENT_EVIDENCE",
+    "time_clusters": 1
+  },
+  "runtime": {
+    "book_evidence_complete": true,
+    "discovery_error": "",
+    "discovery_updates": 2,
+    "external_ready_assets": 6,
+    "feature_state": "RUNNING_SHADOW",
+    "feature_tape_emitted": 4044,
+    "label_evidence_complete": true,
+    "last_runtime_state": "RUNNING_SHADOW",
+    "oracle_healthy_assets": 6,
+    "state": "STOPPED"
+  },
+  "schema": "polymarket_v7_multi_crypto_shadow_runtime_smoke_v1"
+}
