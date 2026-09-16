@@ -114,9 +114,88 @@ def source_timestamp_ms(env: dict[str, Any]) -> int:
     stamps = env.get("source_event_timestamps_ns")
     if not isinstance(stamps, list) or len(stamps) != 1:
         return 0
-    stamp = int(base.number(stamps[0], 0))
+    raw = stamps[0]
+    if isinstance(raw, bool):
+        return 0
+    if isinstance(raw, int):
+        stamp = raw
+    elif isinstance(raw, str):
+        try:
+            stamp = int(raw)
+        except ValueError:
+            return 0
+    else:
+        # Nanosecond timestamps are ~1e18. Routing them through float loses
+        # integer precision and can falsely break exact millisecond alignment.
+        return 0
     return stamp // 1_000_000 if stamp > 0 and stamp % 1_000_000 == 0 else 0
 
+
+def manifest_allows_bounded_probe(manifest: dict[str, Any]) -> bool:
+    policy = manifest.get("policy_preflight")
+    return bool(
+        manifest.get("schema") == "polymarket_v7_maker_forward_window_v2"
+        and manifest.get("paper_only") is True
+        and manifest.get("authenticated_execution") is False
+        and manifest.get("real_order_submission") is False
+        and manifest.get("real_capital_at_risk") is False
+        and manifest.get("required_authority_basis") == base.REQUIRED_BASIS
+        and isinstance(policy, dict)
+        and policy.get("anchor_causal_flow_authority_enabled") is True
+        and policy.get("anchor_execution_authority_enabled") is False
+    )
+
+
+def bounded_probe_valid(order: dict[str, Any], manifest: dict[str, Any]) -> bool:
+    if not manifest_allows_bounded_probe(manifest):
+        return False
+    meta = base.metadata(order)
+    if meta.get("paper_bootstrap_probe") is not True:
+        return True
+    receipt = meta.get("coordinator_receipt")
+    env = meta.get("opportunity_envelope")
+    if not isinstance(receipt, dict) or not isinstance(env, dict):
+        return False
+    probe = receipt.get("probe")
+    reasons = receipt.get("reasons")
+    env_reasons = env.get("reasons")
+    if not isinstance(probe, dict) or not isinstance(reasons, list) or not isinstance(env_reasons, list):
+        return False
+    maximum_loss = base.number(probe.get("maximum_probe_loss"))
+    loss_cap = base.number(probe.get("probe_loss_cap"))
+    point_gain = base.number(probe.get("point_expected_wealth_change"))
+    required_env_reasons = {
+        "VERIFIED_SETTLEMENT_RULE",
+        "CONTROL_EXPLORATION_CELL",
+        "POSITIVE_POINT_MAKER_EV",
+        "RESEARCH_INFORMATION_PROBE",
+    }
+    plan = env.get("execution_plan")
+    legs = plan.get("legs") if isinstance(plan, dict) else None
+    return bool(
+        meta.get("execution_authority") == "SIMULATED_PAPER_ONLY"
+        and receipt.get("paper_exploration_probe_authorized") is True
+        and receipt.get("paper_exploration_policy") == "BTC_M5_BOUNDED_NO_REAL_MONEY"
+        and receipt.get("real_capital_at_risk") is False
+        and "PAPER_EXPLORATION_INFORMATION_GAIN_PROBE" in {str(x) for x in reasons}
+        and probe.get("mode") == "PAPER_BOOTSTRAP_PROBE"
+        and probe.get("research_only") is True
+        and probe.get("robust_candidate") is False
+        and probe.get("arrival_revalidated") is True
+        and base.math.isfinite(maximum_loss)
+        and base.math.isfinite(loss_cap)
+        and 0.0 < maximum_loss <= loss_cap <= 2.0
+        and base.math.isfinite(point_gain)
+        and point_gain > 0.0
+        and required_env_reasons.issubset({str(x) for x in env_reasons})
+        and isinstance(legs, list)
+        and len(legs) == 1
+        and isinstance(legs[0], dict)
+        and str(legs[0].get("side") or "").upper() == "BUY"
+        and base.number(legs[0].get("target_quantity"), 0.0) > 0.0
+        and base.number(legs[0].get("limit_price"), 0.0) > 0.0
+        and int(base.number(plan.get("timeout_ms"), 0.0)) > 0
+    )
 
 def prove_order(
     order: dict[str, Any], snapshots: dict[int, dict[str, Any]], code_sha: str,
@@ -209,6 +288,7 @@ def inject_source_proofs(
     start, end = int(manifest["window_start_ms"]), int(manifest["window_end_ms"])
     output = copy.deepcopy(ledger)
     proven = failed = existing_seen = existing_replaced = 0
+    bounded_probe_seen = bounded_probe_validated = bounded_probe_invalid = 0
     failures: dict[str, str] = {}
     for row in output:
         if (
@@ -218,6 +298,14 @@ def inject_source_proofs(
         ):
             continue
         meta = base.metadata(row)
+        is_probe = meta.get("paper_bootstrap_probe") is True
+        if is_probe:
+            bounded_probe_seen += 1
+            if not bounded_probe_valid(row, manifest):
+                failures[str(row.get("order_id") or "")] = "BOUNDED_PROBE_CONTRACT_INVALID"
+                bounded_probe_invalid += 1
+                failed += 1
+                continue
         alpha = meta.get("execution_alpha") if isinstance(meta.get("execution_alpha"), dict) else None
         if alpha is None:
             failures[str(row.get("order_id") or "")] = "MISSING_EXECUTION_ALPHA"
@@ -235,6 +323,13 @@ def inject_source_proofs(
             failed += 1
             continue
         alpha["flow_provenance"] = proof
+        if is_probe:
+            # The base evaluator remains fail-closed on raw bootstrap probes.
+            # Only the v2 wrapper may clear this marker, and only after both
+            # source-selector authority and the bounded research contract are
+            # independently reconstructed on this in-memory copy.
+            meta["paper_bootstrap_probe"] = False
+            bounded_probe_validated += 1
         proven += 1
         existing_replaced += int(existing_seen > existing_replaced)
     return output, {
@@ -245,6 +340,9 @@ def inject_source_proofs(
         "orders_unproven": failed,
         "unproven_order_reasons": failures,
         "selector_snapshots_indexed": len(snapshots),
+        "bounded_probe_orders_seen": bounded_probe_seen,
+        "bounded_probe_orders_validated": bounded_probe_validated,
+        "bounded_probe_orders_invalid": bounded_probe_invalid,
     }
 
 

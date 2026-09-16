@@ -219,5 +219,92 @@ class ForwardAuthorityAuditTests(unittest.TestCase):
         self.assertNotIn(SELECTOR_TS, index)
 
 
+    def test_source_timestamp_preserves_large_integer_nanoseconds(self) -> None:
+        raw = 1_789_503_992_318_000_000
+        env = {"source_event_timestamps_ns": [raw]}
+        self.assertEqual(v2.source_timestamp_ms(env), 1_789_503_992_318)
+        self.assertNotEqual(int(float(raw)), raw)
+
+    def test_source_timestamp_rejects_float_nanoseconds(self) -> None:
+        env = {"source_event_timestamps_ns": [1.789503992318e18]}
+        self.assertEqual(v2.source_timestamp_ms(env), 0)
+
+
+    def test_bounded_probe_contract_is_validated_before_base_evaluator(self) -> None:
+        row = ledger("ORDER_SUBMITTED")
+        row["metadata"]["paper_bootstrap_probe"] = True
+        row["metadata"]["execution_authority"] = "SIMULATED_PAPER_ONLY"
+        row["metadata"]["coordinator_receipt"].update({
+            "paper_exploration_probe_authorized": True,
+            "paper_exploration_policy": "BTC_M5_BOUNDED_NO_REAL_MONEY",
+            "real_capital_at_risk": False,
+            "reasons": ["PAPER_EXPLORATION_INFORMATION_GAIN_PROBE"],
+            "probe": {
+                "mode": "PAPER_BOOTSTRAP_PROBE", "research_only": True,
+                "robust_candidate": False, "arrival_revalidated": True,
+                "maximum_probe_loss": 2.0, "probe_loss_cap": 2.0,
+                "point_expected_wealth_change": 0.01,
+            },
+        })
+        env = row["metadata"]["opportunity_envelope"]
+        env["reasons"] = [
+            "VERIFIED_SETTLEMENT_RULE", "CONTROL_EXPLORATION_CELL",
+            "POSITIVE_POINT_MAKER_EV", "RESEARCH_INFORMATION_PROBE", "PLACEMENT_JOIN",
+        ]
+        env["execution_plan"]["legs"][0].update(
+            {"target_quantity": 2.0, "limit_price": 0.5}
+        )
+        env["execution_plan"]["timeout_ms"] = 15_000
+        m = manifest()
+        m["schema"] = "polymarket_v7_maker_forward_window_v2"
+        m["policy_preflight"] = {
+            "anchor_causal_flow_authority_enabled": True,
+            "anchor_execution_authority_enabled": False,
+        }
+        proven, audit = v2.inject_source_proofs([row], m, {SELECTOR_TS: snapshot()})
+        self.assertEqual(audit["bounded_probe_orders_seen"], 1)
+        self.assertEqual(audit["bounded_probe_orders_validated"], 1)
+        self.assertEqual(audit["bounded_probe_orders_invalid"], 0)
+        self.assertFalse(proven[0]["metadata"]["paper_bootstrap_probe"])
+
+    def test_bounded_probe_contract_rejects_oversize_loss(self) -> None:
+        row = ledger("ORDER_SUBMITTED")
+        row["metadata"]["paper_bootstrap_probe"] = True
+        row["metadata"]["execution_authority"] = "SIMULATED_PAPER_ONLY"
+        row["metadata"]["coordinator_receipt"].update({
+            "paper_exploration_probe_authorized": True,
+            "paper_exploration_policy": "BTC_M5_BOUNDED_NO_REAL_MONEY",
+            "real_capital_at_risk": False,
+            "reasons": ["PAPER_EXPLORATION_INFORMATION_GAIN_PROBE"],
+            "probe": {
+                "mode": "PAPER_BOOTSTRAP_PROBE", "research_only": True,
+                "robust_candidate": False, "arrival_revalidated": True,
+                "maximum_probe_loss": 2.01, "probe_loss_cap": 2.01,
+                "point_expected_wealth_change": 0.01,
+            },
+        })
+        env = row["metadata"]["opportunity_envelope"]
+        env["reasons"] = [
+            "VERIFIED_SETTLEMENT_RULE", "CONTROL_EXPLORATION_CELL",
+            "POSITIVE_POINT_MAKER_EV", "RESEARCH_INFORMATION_PROBE", "PLACEMENT_JOIN",
+        ]
+        env["execution_plan"]["legs"][0].update(
+            {"target_quantity": 2.0, "limit_price": 0.5}
+        )
+        env["execution_plan"]["timeout_ms"] = 15_000
+        m = manifest()
+        m["schema"] = "polymarket_v7_maker_forward_window_v2"
+        m["policy_preflight"] = {
+            "anchor_causal_flow_authority_enabled": True,
+            "anchor_execution_authority_enabled": False,
+        }
+        proven, audit = v2.inject_source_proofs([row], m, {SELECTOR_TS: snapshot()})
+        self.assertTrue(proven[0]["metadata"]["paper_bootstrap_probe"])
+        self.assertEqual(audit["bounded_probe_orders_invalid"], 1)
+        self.assertEqual(
+            audit["unproven_order_reasons"]["o1"], "BOUNDED_PROBE_CONTRACT_INVALID"
+        )
+
+
 if __name__ == "__main__":
     unittest.main()
