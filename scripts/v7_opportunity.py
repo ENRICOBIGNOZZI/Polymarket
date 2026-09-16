@@ -100,6 +100,11 @@ class OpportunityEnvelope:
         return isinstance(exploration, dict) and exploration.get("mode") == "PAPER_BOOTSTRAP_PROBE"
 
     @property
+    def is_forward_test(self) -> bool:
+        forward = self.raw.get("forward_test")
+        return isinstance(forward, dict) and forward.get("mode") == "PAPER_FORWARD_TEST"
+
+    @property
     def probe_point_wealth_change(self) -> float:
         exploration = self.raw.get("exploration")
         return float(exploration["point_expected_wealth_change"]) if isinstance(exploration, dict) else float("-inf")
@@ -122,7 +127,7 @@ class OpportunityEnvelope:
             "inventory_delta", "portfolio_exposure_delta", "settlement", "eligible",
             "reasons", "deterministic_replay_key", "expires_at_ns",
         }
-        optional = {"exploration", "execution_alpha", "maker_execution_identity", "settlement_model"}
+        optional = {"exploration", "forward_test", "execution_alpha", "maker_execution_identity", "settlement_model"}
         if not isinstance(value, dict):
             raise OpportunityError("field_partition")
         fields = set(value)
@@ -350,6 +355,32 @@ class OpportunityEnvelope:
             raise OpportunityError("reasons")
         if not isinstance(value.get("eligible"), bool):
             raise OpportunityError("eligible")
+        forward_test = value.get("forward_test")
+        if forward_test is not None:
+            forward_test = _mapping(forward_test, "forward_test")
+            if set(forward_test) != {
+                "mode", "strategy_id", "protocol_hash", "research_only", "automatic_promotion",
+                "one_entry_per_market", "hold_to_settlement", "entry_uses_absolute_fair",
+                "probability_source",
+            }:
+                raise OpportunityError("forward_test_fields")
+            if (
+                forward_test.get("mode") != "PAPER_FORWARD_TEST"
+                or forward_test.get("strategy_id") != "LEAD_LAG_TAKER_V1"
+                or not HASH64.fullmatch(str(forward_test.get("protocol_hash") or ""))
+                or forward_test.get("research_only") is not True
+                or forward_test.get("automatic_promotion") is not False
+                or forward_test.get("one_entry_per_market") is not True
+                or forward_test.get("hold_to_settlement") is not True
+                or forward_test.get("entry_uses_absolute_fair") is not False
+                or forward_test.get("probability_source") != "POLYMARKET_PRIOR_ONLY"
+                or engine_id != "CRYPTO_SETTLEMENT_ENGINE" or action != "TAKE"
+                or not isinstance(crypto_context, dict)
+                or crypto_context.get("authority") != "PAPER_EXPLORATION"
+                or expected_wealth_change != 0.0
+            ):
+                raise OpportunityError("paper_forward_test_invalid")
+
         probe = value.get("exploration")
         if probe is not None:
             probe = _mapping(probe, "exploration")
@@ -437,6 +468,7 @@ def fail_closed_decision(*, now_ns: int, reasons: list[str]) -> dict[str, Any]:
         "new_risk_authorized": False,
         "paper_exploration_authorized": False,
         "paper_exploration_probe_authorized": False,
+        "paper_forward_test_authorized": False,
         "reasons": reasons or ["FAIL_CLOSED"],
     }
 
@@ -487,6 +519,28 @@ def coordinate(
     if not new_risk_authorized:
         if not paper_exploration_authorized:
             return fail_closed_decision(now_ns=now_ns, reasons=["NEW_RISK_NOT_AUTHORIZED"])
+        forward_tests = [row for row in exploration_candidates if row.is_forward_test]
+        if forward_tests:
+            selected = min(forward_tests, key=lambda row: row.replay_key)
+            return {
+                "schema": "polymarket_v7_global_opportunity_decision_v1",
+                "owner": "V7_GLOBAL_PORTFOLIO_COORDINATOR",
+                "decision_timestamp_ns": int(now_ns),
+                "action": selected.action,
+                "engine_id": selected.engine_id,
+                "crypto_context": selected.raw["crypto_context"],
+                "selected_replay_key": selected.replay_key,
+                "new_risk_authorized": False,
+                "paper_exploration_authorized": True,
+                "paper_exploration_probe_authorized": False,
+                "paper_forward_test_authorized": True,
+                "paper_only": True,
+                "authenticated_execution": False,
+                "real_order_submission": False,
+                "real_capital_at_risk": False,
+                "forward_test": selected.raw["forward_test"],
+                "reasons": ["PAPER_FORWARD_TEST_FROZEN_PROTOCOL"],
+            }
         positive = [
             row for row in exploration_candidates
             if not row.is_probe and row.expected_wealth_change > 0.0
@@ -504,6 +558,7 @@ def coordinate(
                 "new_risk_authorized": False,
                 "paper_exploration_authorized": True,
                 "paper_exploration_probe_authorized": False,
+                "paper_forward_test_authorized": False,
                 "paper_only": True,
                 "authenticated_execution": False,
                 "real_order_submission": False,
@@ -532,6 +587,7 @@ def coordinate(
             "new_risk_authorized": False,
             "paper_exploration_authorized": True,
             "paper_exploration_probe_authorized": True,
+            "paper_forward_test_authorized": False,
             "paper_only": True,
             "authenticated_execution": False,
             "real_order_submission": False,

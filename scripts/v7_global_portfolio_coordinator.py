@@ -71,6 +71,11 @@ def _is_paper_probe(envelope: dict[str, Any]) -> bool:
     return isinstance(exploration, dict) and exploration.get("mode") == "PAPER_BOOTSTRAP_PROBE"
 
 
+def _is_forward_test(envelope: dict[str, Any]) -> bool:
+    forward = envelope.get("forward_test")
+    return isinstance(forward, dict) and forward.get("mode") == "PAPER_FORWARD_TEST"
+
+
 def _execution_alpha_cut(
     envelopes: list[dict[str, Any]], config: dict[str, Any],
 ) -> tuple[list[dict[str, Any]], dict[str, Any]]:
@@ -87,6 +92,7 @@ def _execution_alpha_cut(
         if row.get("engine_id") == "CRYPTO_SETTLEMENT_ENGINE"
         and row.get("action") in {"MAKE", "TAKE"}
         and not _is_paper_probe(row)
+        and not _is_forward_test(row)
     ]
     selection = select_crypto_markets(ordinary_crypto, config)
     retained = selection.retained_replay_keys
@@ -100,6 +106,12 @@ def _execution_alpha_cut(
     if probes:
         best_probe = max(probes, key=lambda row: information_rank(row, config))
         best_probe_key = str(best_probe.get("deterministic_replay_key") or "")
+    forward_tests = [
+        row for row in envelopes
+        if row.get("engine_id") == "CRYPTO_SETTLEMENT_ENGINE"
+        and row.get("action") == "TAKE" and _is_forward_test(row)
+    ]
+    forward_keys = {str(row.get("deterministic_replay_key") or "") for row in forward_tests}
 
     filtered: list[dict[str, Any]] = []
     filtered_economic = 0
@@ -110,6 +122,10 @@ def _execution_alpha_cut(
         replay_key = str(row.get("deterministic_replay_key") or "")
         if engine != "CRYPTO_SETTLEMENT_ENGINE" or action not in {"MAKE", "TAKE"}:
             filtered.append(row)
+            continue
+        if _is_forward_test(row):
+            if replay_key in forward_keys:
+                filtered.append(row)
             continue
         if _is_paper_probe(row):
             if replay_key == best_probe_key:
@@ -127,6 +143,8 @@ def _execution_alpha_cut(
         "action_competition": action_competition(envelopes),
         "ordinary_crypto_candidate_count": len(ordinary_crypto),
         "paper_probe_candidate_count": len(probes),
+        "paper_forward_test_candidate_count": len(forward_tests),
+        "paper_forward_test_never_economic_filtered": True,
         "selected_probe_replay_key": best_probe_key,
         "filtered_ordinary_crypto_candidates": filtered_economic,
         "filtered_paper_probe_candidates": filtered_probes,
@@ -496,6 +514,96 @@ def process_cut(run_root: Path, *, now_ns: int | None = None) -> dict[str, Any]:
     return status
 
 
+
+def process_fast_forward_take(
+    run_root: Path, *, now_ns: int | None = None, risk_preempt: bool = False,
+) -> dict[str, Any]:
+    """5ms PAPER forward lane owned by the same global coordinator."""
+    root = Path(run_root)
+    current_ns = int(now_ns if now_ns is not None else time.time_ns())
+    inbox = root / "opportunities" / "fast_forward_inbox"
+    archive = root / "opportunities" / "fast_forward_archive"
+    rejected = root / "opportunities" / "fast_forward_rejected"
+    files = sorted(inbox.glob("*.json")) if inbox.exists() else []
+    if not files:
+        return {
+            "schema": "polymarket_v7_fast_forward_coordinator_status_v1",
+            "timestamp_ns": current_ns, "paper_only": True,
+            "authenticated_execution": False, "real_order_submission": False,
+            "real_capital_at_risk": False, "owner": "V7_GLOBAL_PORTFOLIO_COORDINATOR",
+            "state": "IDLE", "pending": 0, "risk_preempt": bool(risk_preempt),
+        }
+    path = files[0]
+    started = time.perf_counter_ns()
+    raw: dict[str, Any] | None = None
+    error = ""
+    try:
+        value = json.loads(path.read_text(encoding="utf-8"))
+        if not isinstance(value, dict):
+            raise OpportunityError("fast_forward_not_object")
+        parsed = OpportunityEnvelope.parse(value)
+        if (not parsed.is_forward_test or parsed.action != "TAKE"
+                or parsed.engine_id != "CRYPTO_SETTLEMENT_ENGINE"):
+            raise OpportunityError("fast_forward_wrong_envelope")
+        raw = value
+    except (OSError, json.JSONDecodeError, OpportunityError, TypeError, ValueError) as exc:
+        error = f"FAST_FORWARD_REJECTED:{type(exc).__name__}:{exc}"
+    drain_active = any((root / "control" / name).exists()
+                       for name in ("CUTOVER_DRAIN", "KILL", "MAKER_FREEZE"))
+    if error:
+        decision = fail_closed_decision(now_ns=current_ns, reasons=[error])
+    elif drain_active:
+        decision = fail_closed_decision(now_ns=current_ns, reasons=["CANONICAL_DRAIN_NEW_RISK_BLOCKED"])
+    elif risk_preempt:
+        decision = fail_closed_decision(now_ns=current_ns, reasons=["RISK_ACTION_PREEMPTS_FORWARD_ALPHA"])
+    else:
+        decision = coordinate([raw], now_ns=current_ns, new_risk_authorized=False,
+                              paper_exploration_authorized=True)
+    decision.update({
+        "paper_only": True, "authenticated_execution": False,
+        "real_order_submission": False, "real_capital_at_risk": False,
+        "fast_forward_path": True,
+        "fast_forward_compute_ns": int(time.perf_counter_ns() - started),
+    })
+    if isinstance(raw, dict):
+        decision["opportunity_inputs"] = [{
+            "replay_key": raw.get("deterministic_replay_key"),
+            "model_sha": raw.get("model_sha"), "market_id": raw.get("market_id"),
+            "token_id": raw.get("contract_id"), "action": raw.get("action"),
+            "component_provenance": raw.get("component_provenance"),
+            "source_snapshot_identity": raw.get("source_snapshot_identity"),
+            "paper_forward_test": True, "retained_after_execution_selection": True,
+        }]
+    authorized = (
+        decision.get("action") == "TAKE"
+        and decision.get("paper_exploration_authorized") is True
+        and decision.get("paper_forward_test_authorized") is True
+        and decision.get("new_risk_authorized") is False
+        and isinstance(decision.get("selected_replay_key"), str)
+        and bool(decision.get("selected_replay_key"))
+    )
+    if authorized:
+        receipt_name = decision["selected_replay_key"].replace("/", "_") + ".json"
+        atomic_json(root / "opportunities" / "receipts" / receipt_name, decision)
+        _record_authorization_publication(root, decision, "FAST_FORWARD_TAKER_RECEIPT")
+        append_jsonl(root / "opportunities" / "fast_forward_decisions.jsonl", decision)
+    destination = archive if authorized else rejected
+    destination.mkdir(parents=True, exist_ok=True)
+    os.replace(path, destination / path.name)
+    status = {
+        "schema": "polymarket_v7_fast_forward_coordinator_status_v1",
+        "timestamp_ns": current_ns, "paper_only": True,
+        "authenticated_execution": False, "real_order_submission": False,
+        "real_capital_at_risk": False, "owner": "V7_GLOBAL_PORTFOLIO_COORDINATOR",
+        "state": "TAKE_AUTHORIZED" if authorized else "FAIL_CLOSED",
+        "risk_preempt": bool(risk_preempt), "pending": max(0, len(files) - 1),
+        "selected_replay_key": decision.get("selected_replay_key"),
+        "reasons": decision.get("reasons") or [],
+        "compute_ns": decision["fast_forward_compute_ns"],
+    }
+    atomic_json(root / "control" / "fast_forward_status.json", status)
+    return status
+
 def _run_loop(args: argparse.Namespace, journal: Any | None = None) -> int:
     full_interval = max(0.05, float(args.interval))
     fast_interval = max(0.002, float(args.fast_cancel_interval))
@@ -504,7 +612,11 @@ def _run_loop(args: argparse.Namespace, journal: Any | None = None) -> int:
     while True:
         now = time.monotonic()
         if now >= next_fast:
-            process_fast_cancel(args.run_root)
+            cancel_status = process_fast_cancel(args.run_root)
+            process_fast_forward_take(
+                args.run_root,
+                risk_preempt=cancel_status.get("state") == "CANCEL_AUTHORIZED",
+            )
             next_fast = now + fast_interval
         now = time.monotonic()
         if now >= next_full:

@@ -16,6 +16,7 @@ MAKER_POLICY="${PM_V7_MAKER_POLICY:-config/v7_professional_market_maker.json}"
 FAST_STRUCTURAL_POLICY="${PM_V7_FAST_STRUCTURAL_POLICY:-config/v7_fast_structural.json}"
 FAST_STRUCTURAL_RELATIONS="${PM_V7_FAST_STRUCTURAL_RELATIONS:-config/v7_fast_structural_relations.csv}"
 EXTERNAL_FAIR_POLICY="${PM_V7_EXTERNAL_FAIR_POLICY:-config/v7_external_fair.json}"
+LEAD_LAG_TAKER_CONFIG="${PM_V7_LEAD_LAG_TAKER_CONFIG:-config/v7_lead_lag_taker_v1.json}"
 CRYPTO_EXECUTION_ALPHA_CONFIG="${PM_V7_CRYPTO_EXECUTION_ALPHA_CONFIG:-config/v7_crypto_execution_alpha.json}"
 EXTERNAL_SOURCE_REGISTRY="${PM_V7_EXTERNAL_SOURCE_REGISTRY:-config/v7_external_source_registry.json}"
 CI_REPOSITORY="${PM_V7_CI_REPOSITORY:-ENRICOBIGNOZZI/Polymarket}"
@@ -75,6 +76,14 @@ python3 scripts/v7_exact_sha_ci_gate.py \
   --repository "$CI_REPOSITORY" --sha "$SHA" \
   --output "$CONTROL/exact_sha_ci_receipt.json"
 EXACT_SHA_CI_GREEN=true
+
+# Frozen lead/lag forward protocol is validated before any worker starts.
+PYTHONPATH="$ROOT/scripts" python3 - "$LEAD_LAG_TAKER_CONFIG" <<'PY'
+import json,sys
+from v7_lead_lag_taker_runtime import validate_config
+value=json.load(open(sys.argv[1],encoding="utf-8"))
+validate_config(value)
+PY
 
 # Source registration is an authority boundary, not a best-effort manifest.
 # Collectors may only publish information; this registry cannot grant OMS,
@@ -651,6 +660,14 @@ python3 scripts/v7_global_portfolio_coordinator.py \
   >> "$RUN_ROOT/global_portfolio_coordinator.log" 2>&1 &
 v7_register_child "$!"
 
+# Frozen prospective PAPER strategy. It consumes the already-validated external
+# shock signal, asks the global coordinator for PAPER authority, revalidates
+# the current CLOB ask without chasing, and holds one position per market to settlement.
+python3 scripts/v7_lead_lag_taker_runtime.py \
+  --run-root "$RUN_ROOT" --model-sha "$SHA" --config "$LEAD_LAG_TAKER_CONFIG" \
+  >> "$RUN_ROOT/research/lead_lag_taker_v1.log" 2>&1 &
+v7_register_child "$!"
+
 # Slow-plane reward selection only. It may perform REST discovery, but it never
 # decides/cancels quotes and is not a second maker runtime.
 (
@@ -782,6 +799,11 @@ v7_background_analytics() {
     python3 scripts/v7_canonical_economics.py --ledger "$RUN_ROOT/ledger/execution.jsonl" --expected-model-sha "$SHA" \
       --markout-evidence "$RUN_ROOT/research/evidence/maker_markout" \
       --output "$RUN_ROOT/canonical_economics.json" >> "$RUN_ROOT/canonical_economics.log" 2>&1 || true
+    if [[ -f "$RUN_ROOT/research/lead_lag_taker_v1/forward_manifest.json" ]]; then
+      python3 scripts/v7_lead_lag_forward_report.py --run-root "$RUN_ROOT" --model-sha "$SHA" \
+        --output "$RUN_ROOT/research/lead_lag_taker_v1/forward_report.json" \
+        >> "$RUN_ROOT/canonical_economics.log" 2>&1 || true
+    fi
     sleep 60
   done
 ) & v7_register_child "$!"
@@ -840,7 +862,7 @@ v7_background_analytics() {
   done
 ) & v7_register_child "$!"
 
-v7_assert_registered_child_count 26
+v7_assert_registered_child_count 27
 write_runtime_status running false
 
 while [[ ! -e "$KILL" ]]; do

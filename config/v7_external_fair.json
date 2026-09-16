@@ -314,6 +314,7 @@
     "depth_survival_fraction": 0.75,
     "economic_model": "HOLD_TO_SETTLEMENT",
     "enabled_for_execution": false,
+    "forward_only_no_absolute_fair_entry": true,
     "fractional_kelly": 0.1,
     "immature_exploration_capital_fraction": 0.0025,
     "latency_risk_per_second": 0.001,
