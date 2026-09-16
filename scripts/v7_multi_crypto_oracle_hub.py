@@ -10,6 +10,7 @@ import signal
 import socket
 import threading
 import time
+from datetime import datetime
 from pathlib import Path
 from typing import Any
 
@@ -107,6 +108,100 @@ def empty_state(bindings: dict[str, dict[str, Any]]) -> dict[str, dict[str, Any]
     } for asset, binding in bindings.items()}
 
 
+def parse_utc_ms(value: Any) -> int:
+    text = str(value or "").strip()
+    if not text:
+        return 0
+    try:
+        return int(datetime.fromisoformat(text.replace("Z", "+00:00")).timestamp() * 1000)
+    except ValueError:
+        return 0
+
+
+def load_contract_selection(value: dict[str, Any]) -> list[dict[str, Any]]:
+    if value.get("schema") != "polymarket_v7_multi_crypto_book_selection_v1" \
+            or value.get("paper_only") is not True \
+            or value.get("authenticated_execution") is not False \
+            or value.get("real_order_submission") is not False \
+            or value.get("execution_authority") is not False:
+        raise ValueError("oracle selection is not zero-authority multi-crypto selection")
+    markets = value.get("markets")
+    if not isinstance(markets, list):
+        raise ValueError("oracle selection markets missing")
+    rows: list[dict[str, Any]] = []
+    for row in markets:
+        if not isinstance(row, dict):
+            continue
+        asset = str(row.get("asset") or "")
+        market_id = str(row.get("market_id") or "")
+        start_ms = parse_utc_ms(row.get("start_timestamp"))
+        end_ms = parse_utc_ms(row.get("end_timestamp"))
+        if asset not in ASSETS or not market_id or start_ms <= 0 or end_ms <= start_ms:
+            raise ValueError("invalid market in oracle selection")
+        rows.append({
+            "asset": asset,
+            "horizon": str(row.get("horizon") or ""),
+            "market_id": market_id,
+            "start_timestamp_ms": start_ms,
+            "end_timestamp_ms": end_ms,
+            "normalized_rules_hash": str(row.get("normalized_rules_hash") or ""),
+        })
+    if not rows:
+        raise ValueError("oracle selection has no markets")
+    return rows
+
+
+def update_references(
+    contracts: list[dict[str, Any]], history: dict[str, dict[int, dict[str, Any]]],
+    references: dict[str, dict[str, Any]], *, now_ms: int, maximum_gap_ms: int,
+) -> None:
+    live_ids = {row["market_id"] for row in contracts}
+    for market_id in list(references):
+        if market_id not in live_ids:
+            references.pop(market_id, None)
+    for contract in contracts:
+        market_id = contract["market_id"]
+        if references.get(market_id, {}).get("valid") is True:
+            continue
+        boundary = int(contract["start_timestamp_ms"])
+        base = {
+            "asset": contract["asset"],
+            "horizon": contract["horizon"],
+            "market_id": market_id,
+            "boundary_timestamp_ms": boundary,
+            "normalized_rules_hash": contract["normalized_rules_hash"],
+            "valid": False,
+            "price": None,
+            "price_decimal": None,
+            "source_timestamp_ms": 0,
+            "gap_ms": None,
+            "status": "AWAITING_BOUNDARY" if now_ms < boundary else "MISSING_REFERENCE",
+        }
+        if now_ms < boundary:
+            references[market_id] = base
+            continue
+        candidates = [timestamp for timestamp in history.get(contract["asset"], {}) if timestamp <= boundary]
+        if not candidates:
+            references[market_id] = base
+            continue
+        timestamp = max(candidates)
+        gap = boundary - timestamp
+        if gap < 0 or gap > maximum_gap_ms:
+            base["gap_ms"] = gap
+            references[market_id] = base
+            continue
+        observation = history[contract["asset"]][timestamp]
+        base.update({
+            "valid": True,
+            "price": observation["price"],
+            "price_decimal": observation["price_decimal"],
+            "source_timestamp_ms": timestamp,
+            "gap_ms": gap,
+            "status": "REFERENCE_CAPTURED",
+        })
+        references[market_id] = base
+
+
 def apply_observation(
     state: dict[str, dict[str, Any]], row: dict[str, Any], *,
     receive_wall_ns: int, receive_monotonic_ns: int,
@@ -151,7 +246,7 @@ def apply_observation(
 def snapshot(
     state: dict[str, dict[str, Any]], *, model_sha: str,
     transport_by_asset: dict[str, dict[str, Any]], maximum_receive_age_ms: int,
-    running: bool,
+    running: bool, references: dict[str, dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     now_ns = time.time_ns()
     assets: dict[str, Any] = {}
@@ -190,13 +285,14 @@ def snapshot(
         "all_assets_fresh": healthy == len(ASSETS),
         "one_way_latency_identified": False,
         "assets": assets,
+        "settlement_references": dict(sorted((references or {}).items())),
     }
 
 
 def oracle_worker(
     asset: str, binding: dict[str, Any], state: dict[str, dict[str, Any]],
-    transport: dict[str, dict[str, Any]], lock: threading.Lock,
-    dns: list[str], silence_reconnect_seconds: float,
+    transport: dict[str, dict[str, Any]], history: dict[str, dict[int, dict[str, Any]]],
+    lock: threading.Lock, dns: list[str], silence_reconnect_seconds: float,
 ) -> None:
     resolver = PublicResolver(dns)
     while not STOP:
@@ -258,12 +354,22 @@ def oracle_worker(
                         if str(row.get("symbol") or "").lower() != binding["symbol"]:
                             continue
                         with lock:
-                            accepted = apply_observation(
+                            row_accepted = apply_observation(
                                 state, row, receive_wall_ns=receive_wall_ns,
-                                receive_monotonic_ns=receive_monotonic_ns) or accepted
-                            transport[asset]["observations_accepted"] = int(
-                                transport[asset]["observations_accepted"]
-                            ) + int(accepted)
+                                receive_monotonic_ns=receive_monotonic_ns)
+                            accepted = row_accepted or accepted
+                            if row_accepted:
+                                timestamp_ms = int(row["timestamp_ms"])
+                                history[asset][timestamp_ms] = {
+                                    "price": float(row["price"]),
+                                    "price_decimal": str(row["price_decimal"]),
+                                }
+                                cutoff = timestamp_ms - 30 * 60 * 1000
+                                for old_timestamp in [t for t in history[asset] if t < cutoff]:
+                                    history[asset].pop(old_timestamp, None)
+                                transport[asset]["observations_accepted"] = int(
+                                    transport[asset]["observations_accepted"]
+                                ) + 1
                     if accepted:
                         last_observation = time.monotonic()
                 fragments, fragment_opcode = bytearray(), 0
@@ -289,6 +395,10 @@ def oracle_worker(
 def run(args: argparse.Namespace) -> None:
     bindings = bindings_from_registry(load_json(args.settlement_registry))
     state = empty_state(bindings)
+    history: dict[str, dict[int, dict[str, Any]]] = {asset: {} for asset in ASSETS}
+    references: dict[str, dict[str, Any]] = {}
+    contracts = load_contract_selection(load_json(args.selection)) if args.selection else []
+    selection_mtime_ns = args.selection.stat().st_mtime_ns if args.selection else 0
     transport = {asset: {
         "connection_epoch": 0,
         "reconnects": 0,
@@ -301,17 +411,36 @@ def run(args: argparse.Namespace) -> None:
     dns = args.dns or list(DEFAULT_DNS)
     threads = [threading.Thread(
         target=oracle_worker,
-        args=(asset, bindings[asset], state, transport, lock, dns, args.silence_reconnect_seconds),
+        args=(asset, bindings[asset], state, transport, history, lock, dns, args.silence_reconnect_seconds),
         name=f"oracle-{asset.lower()}", daemon=True,
     ) for asset in ASSETS]
     for thread in threads:
         thread.start()
     try:
+        last_selection_check = 0.0
+        selection_error = ""
         while not STOP:
+            if args.selection and time.monotonic() - last_selection_check >= 1.0:
+                last_selection_check = time.monotonic()
+                try:
+                    mtime_ns = args.selection.stat().st_mtime_ns
+                    if mtime_ns != selection_mtime_ns:
+                        contracts = load_contract_selection(load_json(args.selection))
+                        selection_mtime_ns = mtime_ns
+                    selection_error = ""
+                except (OSError, ValueError, json.JSONDecodeError) as exc:
+                    selection_error = type(exc).__name__ + ":" + str(exc)
             with lock:
+                if contracts:
+                    update_references(
+                        contracts, history, references, now_ms=time.time_ns() // 1_000_000,
+                        maximum_gap_ms=args.reference_max_gap_ms)
                 value = snapshot(
                     state, model_sha=args.model_sha, transport_by_asset=transport,
-                    maximum_receive_age_ms=args.maximum_receive_age_ms, running=True)
+                    maximum_receive_age_ms=args.maximum_receive_age_ms, running=True,
+                    references=references)
+                value["selection_error"] = selection_error
+                value["selection_market_count"] = len(contracts)
             atomic_json(args.output, value)
             time.sleep(0.25)
     finally:
@@ -320,7 +449,8 @@ def run(args: argparse.Namespace) -> None:
         with lock:
             value = snapshot(
                 state, model_sha=args.model_sha, transport_by_asset=transport,
-                maximum_receive_age_ms=args.maximum_receive_age_ms, running=False)
+                maximum_receive_age_ms=args.maximum_receive_age_ms, running=False,
+                references=references)
         atomic_json(args.output, value)
 
 def main() -> int:
@@ -328,6 +458,8 @@ def main() -> int:
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--model-sha", required=True)
     parser.add_argument("--settlement-registry", type=Path, default=Path("config/v7_crypto_settlement_markets.json"))
+    parser.add_argument("--selection", type=Path)
+    parser.add_argument("--reference-max-gap-ms", type=int, default=2000)
     parser.add_argument("--maximum-receive-age-ms", type=int, default=3000)
     parser.add_argument("--silence-reconnect-seconds", type=float, default=10.0)
     parser.add_argument("--dns", action="append", default=[])
@@ -336,6 +468,8 @@ def main() -> int:
         raise ValueError("exact 40-hex model SHA required")
     if not 250 <= args.maximum_receive_age_ms <= 60_000 or args.silence_reconnect_seconds < 3:
         raise ValueError("invalid oracle freshness/reconnect bounds")
+    if not 100 <= args.reference_max_gap_ms <= 10_000:
+        raise ValueError("invalid reference maximum gap")
     signal.signal(signal.SIGINT, stop_handler); signal.signal(signal.SIGTERM, stop_handler)
     run(args)
     return 0
