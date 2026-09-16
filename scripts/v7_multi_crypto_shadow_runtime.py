@@ -181,7 +181,11 @@ def run(supervisor:Supervisor,asset_config:dict[str,Any],duration_seconds:int)->
             if duration_seconds>0 and now-start>=duration_seconds:break
             time.sleep(.1)
     finally:
-        supervisor.stop_all(); atomic_json(supervisor.run_root/"control/runtime_status.json",runtime_status(supervisor))
+        final_before_stop=runtime_status(supervisor)
+        supervisor.stop_all()
+        stopped=dict(final_before_stop); stopped["last_runtime_state"]=final_before_stop.get("state")
+        stopped["state"]="STOPPED"; stopped["stopped_at_ns"]=time.time_ns(); stopped["children"]=supervisor.child_status()
+        atomic_json(supervisor.run_root/"control/runtime_status.json",stopped)
 
 
 def preflight(root:Path,build_dir:Path,sha:str,policy:dict[str,Any],asset_config:dict[str,Any])->dict[str,Any]:

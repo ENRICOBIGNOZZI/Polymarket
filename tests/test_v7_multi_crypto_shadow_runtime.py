@@ -42,6 +42,12 @@ def test_config_requires_compact_label_tape_and_loopback_proxy():
     except ValueError:pass
     else:raise AssertionError('non-loopback proxy accepted')
 
+
+def test_final_status_preserves_last_state_and_marks_stopped():
+    source=(ROOT/'scripts/v7_multi_crypto_shadow_runtime.py').read_text()
+    assert 'stopped["last_runtime_state"]' in source
+    assert 'stopped["state"]="STOPPED"' in source
+
 if __name__=='__main__':
     tests=sorted((n,f) for n,f in globals().items() if n.startswith('test_') and callable(f))
     for _,f in tests:f()
