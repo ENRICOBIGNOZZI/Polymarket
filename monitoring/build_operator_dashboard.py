@@ -59,7 +59,12 @@ def target(expr, legend, ref, source=None, history=False):
 
 
 def stat(pid, title, expr, x, y, w=4, unit="short", decimals=0, source=None, mapping=None, description="", raw=False):
-    d = defaults(unit, decimals)
+    short_titles = {101:"Attention",102:"Runtime",103:"Accounting",104:"Order mode",105:"Data age",106:"Exporter",111:"Verified PnL",112:"Ledger PnL",113:"Equity change",114:"Forward PnL",115:"PAPER equity",116:"Drawdown",121:"Candidates",122:"Receipts",123:"Entries",124:"Open positions",125:"Settled",126:"Rejected",129:"Last event",141:"Submitted",142:"Completed",143:"Completion",145:"Terminal events",146:"Capital hours",162:"Single writer",163:"Exact SHA",164:"Kill switch",165:"Restarts",166:"Free disk",169:"Runtime uptime",170:"Risk authority",171:"Engine count",183:"Scan complete",184:"Pages",191:"Latency data"}
+    full_title = title
+    title = short_titles.get(pid, title)
+    if title != full_title:
+        description = full_title + ". " + description
+    d = defaults("prefix:$" if unit == "currencyUSD" else unit, decimals)
     if mapping:
         d["color"] = {"mode": "thresholds"}
         d["mappings"].append({"type": "value", "options": {str(k): {"text": text, "color": color} for k, (text,color) in mapping.items()}})
@@ -86,7 +91,7 @@ def table(pid, title, expr, x, y, w=12, source=None, description="", columns=Non
     return {"id": pid, "type": "table", "title": title, "description": description, "datasource": DS,
             "gridPos": {"x": x, "y": y, "w": w, "h": 6},
             "targets": [{**target(expr, "", "A", source), "format": "table"}],
-            "fieldConfig": {"defaults": {**defaults(), "custom": {"align": "auto", "cellOptions": {"type": "auto"}, "filterable": True}}, "overrides": []},
+            "fieldConfig": {"defaults": {**defaults("none"), "custom": {"align": "auto", "cellOptions": {"type": "auto"}, "filterable": True}}, "overrides": [{"matcher": {"id": "byRegexp", "options": "^(?!Value$).*"}, "properties": [{"id": "unit", "value": "string"}]}]},
             "transformations": [{"id": "organize", "options": {"excludeByName": {"Time": True, "__name__": True, "job": True, "instance": True, **({"Value": True} if columns else {})}, "renameByName": columns or {}}}],
             "options": {"showHeader": True, "cellHeight": "sm", "footer": {"show": False}}}
 
@@ -98,7 +103,7 @@ def row(pid, title, y, children=None):
 
 def build():
     p = []
-    p.append({"id":100,"type":"text","title":"Reading this dashboard","gridPos":{"x":0,"y":0,"w":24,"h":2},"options":{"mode":"markdown","content":"**PAPER ONLY · NO REAL ORDERS.** Tiles show the end of the selected interval. Gray = unavailable; zero = observed zero. Equity, ledger PnL and forward-test evidence are separate. Missing data is never filled forward."}})
+    p.append({"id":100,"type":"text","title":"Data rules","gridPos":{"x":0,"y":0,"w":24,"h":2},"options":{"mode":"markdown","content":"**PAPER ONLY.** Missing data ≠ zero."}})
     p += [
         stat(101,"Operator attention","polymarket_v7_operator_attention_required",0,2,mapping={0:("CLEAR","green"),1:("ATTENTION","red")}),
         stat(102,"PAPER runtime","polymarket_v7_execution_alive",4,2,source="runtime",mapping={0:("STOPPED","red"),1:("RUNNING","green")}),
@@ -110,7 +115,7 @@ def build():
     p[-2]["fieldConfig"]["defaults"].update({"color":{"mode":"thresholds"},"thresholds":{"mode":"absolute","steps":[{"color":"green","value":None},{"color":"yellow","value":20},{"color":"red","value":45}]}})
     p[-2]["options"]["colorMode"]="value"
     p += [table(107,"What needs attention now","polymarket_v7_operator_reason",0,6,description="Includes source validity, accounting discrepancies and disk pressure. A running process is not proof of correct accounting.",columns={"reason":"Reason"}),
-          table(108,"Deployment identity — actual host, not assumed London","polymarket_v7_runtime_location_info",12,6,source="runtime",columns={"server":"Host","sha":"Runtime SHA","run_id":"Run"})]
+          table(108,"Active deployment","polymarket_v7_runtime_location_info",12,6,source="runtime",columns={"server":"Host","sha":"Runtime SHA","run_id":"Run"})]
     p.append(row(110,"PAPER economics — evidence is not verified account performance",12))
     p += [
         stat(111,"Verified net PnL","polymarket_v7_verified_net_pnl_usd",0,13,unit="currencyUSD",decimals=2,description="Unavailable until current ledger, economics and portfolio reconcile. No artificial zero."),
@@ -144,6 +149,14 @@ def build():
     p += [chart(151,"Source ages · seconds",[("polymarket_v7_source_age_seconds","{{source}}")],0,58,unit="s",decimals=1),
           table(152,"Active alerts · firing and pending",'ALERTS{alertstate=~"firing|pending"}',12,58,description="No rows means no matching alerts at the selected time. Inspect exporter freshness above before treating an empty table as healthy.",columns={"alertname":"Alert","severity":"Severity","alertstate":"State"})]
     p[-1]["gridPos"]["h"]=8
+    by_id = {panel["id"]: panel for panel in p}
+    by_id[129]["gridPos"]["h"] = 6
+    by_id[128]["fieldConfig"]["overrides"].extend([
+        {"matcher": {"id": "byName", "options": name}, "properties": [{"id": "custom.width", "value": width}]}
+        for name, width in (("Event", 80), ("Market", 120), ("Outcome", 90))
+    ])
+    by_id[127]["fieldConfig"]["overrides"].append({"matcher": {"id": "byName", "options": "Mode"}, "properties": [{"id": "mappings", "value": [{"type": "value", "options": {"PAPER_FORWARD_TEST": {"text": "Paper forward test"}}}]}]})
+    by_id[107]["fieldConfig"]["overrides"].append({"matcher": {"id": "byName", "options": "Reason"}, "properties": [{"id": "mappings", "value": [{"type": "value", "options": {"accounting_not_verified": {"text": "Accounting not verified"}, "disk_pressure": {"text": "Low free disk space"}, "strategy_realized_pnl_divergence:CRYPTO_SETTLEMENT_ENGINE": {"text": "Crypto PnL differs from the ledger"}}}]}]})
     return p
 
 

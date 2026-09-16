@@ -131,14 +131,14 @@ class DashboardTruthTests(unittest.TestCase):
                 for t in p.get("targets", []):
                     self.assertIn('job="polymarket-v7"', t["expr"])
                     self.assertIn('instance="$instance"', t["expr"])
-                    if p.get("title") not in {"Snapshot age", "Exporter connection"} and not t["expr"].startswith("ALERTS"):
+                    if p.get("title") not in {"Data age", "Exporter"} and not t["expr"].startswith("ALERTS"):
                         self.assertIn("polymarket_v7_exporter_snapshot_usable", t["expr"])
                 if p["type"] == "timeseries":
                     self.assertIs(p["fieldConfig"]["defaults"]["custom"]["spanNulls"], False)
 
     def test_completion_is_undefined_without_submissions(self):
         d = json.loads((ROOT / "monitoring/grafana/dashboards/polymarket-v7.json").read_text())
-        p = next(p for p in panels(d["panels"]) if p["title"] == "Economic Completion Rate")
+        p = next(p for p in panels(d["panels"]) if p["title"] == "Completion")
         self.assertIn('> 0)', p["targets"][0]["expr"])
         self.assertNotIn('lastNotNull', json.dumps(d))
 
@@ -163,3 +163,17 @@ class DashboardTruthTests(unittest.TestCase):
                     self.assertFalse(ax < bx+bw and bx < ax+aw and ay < by+bh and by < ay+ah, (a['id'],b['id']))
                 check(a.get('panels',[]))
         check(builder.build()+builder.diagnostics())
+
+
+class DisplayPrecisionTests(unittest.TestCase):
+    def test_money_tiles_do_not_abbreviate_thousands(self):
+        for panel in builder.build():
+            if panel["id"] in (111,112,113,114,115):
+                self.assertEqual(panel["fieldConfig"]["defaults"]["unit"], "prefix:$")
+                self.assertEqual(panel["fieldConfig"]["defaults"]["decimals"], 2)
+
+    def test_table_identifiers_are_strings_not_scaled_numbers(self):
+        for panel in panels(builder.build()+builder.diagnostics()):
+            if panel["type"] == "table":
+                self.assertEqual(panel["fieldConfig"]["defaults"]["unit"], "none")
+                self.assertTrue(any(p["id"]=="unit" and p["value"]=="string" for o in panel["fieldConfig"]["overrides"] for p in o["properties"]))
