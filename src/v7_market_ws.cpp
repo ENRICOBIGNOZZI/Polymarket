@@ -245,11 +245,13 @@ struct MarketWsShard::Impl {
     std::unique_ptr<json::static_resource> json_resource;
     std::array<PriceLevelE4, kMaxSnapshotLevelsPerSide> bid_scratch{};
     std::array<PriceLevelE4, kMaxSnapshotLevelsPerSide> ask_scratch{};
+    bool measure_stage_latency = true;
 
-    explicit Impl(std::vector<TokenBinding> bindings)
+    explicit Impl(std::vector<TokenBinding> bindings, bool measure_latency)
         : json_arena(kJsonArenaInitialBytes),
           json_arena_max_bytes(json_arena_max_bytes_from_env()),
-          json_resource(std::make_unique<json::static_resource>(json_arena.data(), json_arena.size())) {
+          json_resource(std::make_unique<json::static_resource>(json_arena.data(), json_arena.size())),
+          measure_stage_latency(measure_latency) {
         std::sort(bindings.begin(), bindings.end(), [](const TokenBinding& lhs, const TokenBinding& rhs) {
             return lhs.asset_id < rhs.asset_id;
         });
@@ -532,8 +534,9 @@ struct MarketWsShard::Impl {
     }
 };
 
-MarketWsShard::MarketWsShard(std::vector<TokenBinding> bindings)
-    : impl_(std::make_unique<Impl>(std::move(bindings))) {}
+MarketWsShard::MarketWsShard(std::vector<TokenBinding> bindings,
+                                 bool measure_stage_latency)
+    : impl_(std::make_unique<Impl>(std::move(bindings), measure_stage_latency)) {}
 
 MarketWsShard::~MarketWsShard() = default;
 
@@ -543,7 +546,7 @@ MarketWsFrameResult MarketWsShard::process_frame(
     std::span<MarketWsEvent> output) noexcept {
 
     MarketWsFrameResult result;
-    const std::int64_t frame_start_ns = monotonic_ns();
+    const std::int64_t frame_start_ns = impl_->measure_stage_latency ? monotonic_ns() : 0;
     if (payload.empty() || receive.monotonic_ns <= 0) {
         result.invalid_frame = 1;
         impl_->invalidate_all();
@@ -562,8 +565,10 @@ MarketWsFrameResult MarketWsShard::process_frame(
         impl_->json_resource->release();
         boost::system::error_code error;
         const json::value root = json::parse(payload, error, impl_->json_resource.get());
-        const std::int64_t parse_end_ns = monotonic_ns();
-        result.parse_ns = std::max<std::int64_t>(0, parse_end_ns - frame_start_ns);
+        if (impl_->measure_stage_latency) {
+            const std::int64_t parse_end_ns = monotonic_ns();
+            result.parse_ns = std::max<std::int64_t>(0, parse_end_ns - frame_start_ns);
+        }
         if (error) {
             result.invalid_frame = 1;
             impl_->invalidate_all();
@@ -590,15 +595,17 @@ MarketWsFrameResult MarketWsShard::process_frame(
         result.invalid_frame = 1;
     }
 
-    const std::int64_t book_end_ns = monotonic_ns();
-    result.book_apply_ns = std::max<std::int64_t>(
-        0, book_end_ns - frame_start_ns - result.parse_ns);
-    result.receive_to_book_ns = receive.monotonic_ns > 0
-        ? std::max<std::int64_t>(0, book_end_ns - receive.monotonic_ns) : 0;
-    for (std::size_t index = 0; index < result.output_count; ++index) {
-        output[index].frame_parse_ns = result.parse_ns;
-        output[index].book_apply_ns = result.book_apply_ns;
-        output[index].receive_to_book_ns = result.receive_to_book_ns;
+    if (impl_->measure_stage_latency) {
+        const std::int64_t book_end_ns = monotonic_ns();
+        result.book_apply_ns = std::max<std::int64_t>(
+            0, book_end_ns - frame_start_ns - result.parse_ns);
+        result.receive_to_book_ns = receive.monotonic_ns > 0
+            ? std::max<std::int64_t>(0, book_end_ns - receive.monotonic_ns) : 0;
+        for (std::size_t index = 0; index < result.output_count; ++index) {
+            output[index].frame_parse_ns = result.parse_ns;
+            output[index].book_apply_ns = result.book_apply_ns;
+            output[index].receive_to_book_ns = result.receive_to_book_ns;
+        }
     }
 
     if (result.invalid_frame || result.output_overflow) {

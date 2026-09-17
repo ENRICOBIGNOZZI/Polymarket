@@ -132,7 +132,7 @@ int main(int argc, char** argv) {
             {options.yes_token, kMarket, kEvent, kYes, options.tick_size_e4},
             {options.no_token, kMarket, kEvent, kNo, options.tick_size_e4},
         };
-        MarketWsShard pm_decoder(std::move(bindings));
+        MarketWsShard pm_decoder(std::move(bindings), false);
         SpscRing<PmQueuedEvent, kPmQueueCapacity> pm_queue;
         std::atomic<std::uint64_t> pm_drops{0}, pm_faults{0};
         std::atomic<std::uint64_t> pm_epoch{1};
