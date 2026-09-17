@@ -87,6 +87,7 @@ private:
     std::atomic<std::uint64_t> reconnects_{0};
     std::atomic<std::uint64_t> propagated_gaps_{0};
     std::atomic<std::uint64_t> connection_epoch_{0};
+    std::uint64_t writer_connection_epoch_ = 0;
     std::atomic<bool> healthy_{false};
     std::atomic<bool> gap_pending_{false};
 

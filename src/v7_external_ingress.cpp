@@ -31,8 +31,11 @@ ExternalDecodeResult ExternalVenueIngress::on_frame(
     }
     decoded_events_.fetch_add(result.output_count, std::memory_order_relaxed);
 
-    const auto previous_epoch = connection_epoch_.exchange(
-        connection_epoch, std::memory_order_acq_rel);
+    const auto previous_epoch = writer_connection_epoch_;
+    if (previous_epoch != connection_epoch) {
+        writer_connection_epoch_ = connection_epoch;
+        connection_epoch_.store(connection_epoch, std::memory_order_release);
+    }
     const bool reconnect = previous_epoch != 0 && previous_epoch != connection_epoch;
     if (reconnect) {
         reconnects_.fetch_add(1, std::memory_order_relaxed);
@@ -54,8 +57,11 @@ bool ExternalVenueIngress::on_event(ExternalVenueEvent event) noexcept {
         return false;
     }
     decoded_events_.fetch_add(1, std::memory_order_relaxed);
-    const auto previous_epoch = connection_epoch_.exchange(
-        event.connection_epoch, std::memory_order_acq_rel);
+    const auto previous_epoch = writer_connection_epoch_;
+    if (previous_epoch != event.connection_epoch) {
+        writer_connection_epoch_ = event.connection_epoch;
+        connection_epoch_.store(event.connection_epoch, std::memory_order_release);
+    }
     if (previous_epoch != 0 && previous_epoch != event.connection_epoch) {
         reconnects_.fetch_add(1, std::memory_order_relaxed);
         gap_pending_.store(true, std::memory_order_release);
@@ -108,8 +114,11 @@ std::size_t ExternalVenueIngress::drain_events(
 
 void ExternalVenueIngress::mark_disconnected(
     std::uint64_t connection_epoch) noexcept {
-    const auto previous = connection_epoch_.exchange(
-        connection_epoch, std::memory_order_acq_rel);
+    const auto previous = writer_connection_epoch_;
+    if (previous != connection_epoch) {
+        writer_connection_epoch_ = connection_epoch;
+        connection_epoch_.store(connection_epoch, std::memory_order_release);
+    }
     if (previous != 0 && previous != connection_epoch) {
         reconnects_.fetch_add(1, std::memory_order_relaxed);
     }
