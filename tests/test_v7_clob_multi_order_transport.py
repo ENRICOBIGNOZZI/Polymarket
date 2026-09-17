@@ -35,7 +35,10 @@ int main(int argc,char**argv){
   assert(p.cancel_lane().write_all({r.data(),r.size()}).ok); std::array<char,256>b{}; assert(p.cancel_lane().read_some(b).ok); cancel_done.store(now(),std::memory_order_release); };
  std::array<std::thread,4> workers{std::thread(order,0),std::thread(order,1),std::thread(order,2),std::thread(order,3)}; std::thread canceller(cancel);
  go.store(true,std::memory_order_release); for(auto& t:workers)t.join(); canceller.join();
- const auto slow=done[0].load(); assert(cancel_done.load()<slow); for(int i=1;i<4;++i) assert(done[(std::size_t)i].load()<slow); p.close(); return 0;
+ const auto slow=done[0].load(); assert(cancel_done.load()<slow); for(int i=1;i<4;++i) assert(done[(std::size_t)i].load()<slow);
+ auto* preferred=&p.order_lane(1); assert(p.try_connected_order_lane_for(1)==preferred); preferred->close();
+ auto* failover=p.try_connected_order_lane_for(1); assert(failover!=nullptr && failover!=preferred && failover->connected());
+ p.close(); assert(p.try_connected_order_lane_for(1)==nullptr); return 0;
 }
 '''
 

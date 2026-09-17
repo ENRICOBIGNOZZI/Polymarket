@@ -90,6 +90,28 @@ public:
         return order_lane(static_cast<std::size_t>(routing_key));
     }
 
+    // Hot failover only across sessions that were already prewarmed. Never
+    // reconnect here: network recovery stays off the causal submit path.
+    [[nodiscard]] PersistentTlsSession* try_connected_order_lane_for(
+        std::uint64_t routing_key) noexcept {
+        const std::size_t preferred = static_cast<std::size_t>(routing_key) & (OrderLanes - 1U);
+        for (std::size_t step = 0; step < OrderLanes; ++step) {
+            auto& candidate = *orders_[(preferred + step) & (OrderLanes - 1U)];
+            if (candidate.connected()) return &candidate;
+        }
+        return nullptr;
+    }
+
+    [[nodiscard]] const PersistentTlsSession* try_connected_order_lane_for(
+        std::uint64_t routing_key) const noexcept {
+        const std::size_t preferred = static_cast<std::size_t>(routing_key) & (OrderLanes - 1U);
+        for (std::size_t step = 0; step < OrderLanes; ++step) {
+            const auto& candidate = *orders_[(preferred + step) & (OrderLanes - 1U)];
+            if (candidate.connected()) return &candidate;
+        }
+        return nullptr;
+    }
+
     [[nodiscard]] PersistentTlsSession& cancel_lane() noexcept { return *cancel_; }
     [[nodiscard]] const PersistentTlsSession& cancel_lane() const noexcept { return *cancel_; }
 
