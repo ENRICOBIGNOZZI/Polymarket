@@ -20,6 +20,7 @@ EXPECTED = (
     "6d657461646174612c62797465733332206275696c6465722900ba"
 )
 INNER = EXPECTED[2:132]
+EXPECTED_INNER_DIGEST = "c31d535831b64decf4687570628e5765c218fc3c4a7b582c7bd3105525f76a8c"
 
 PROGRAM = rf'''
 #include "pm/v7_clob_eip712.hpp"
@@ -41,6 +42,16 @@ int main() {{
     Hash32 app{{}}, contents{{}};
     if (!exchange_v2_domain_separator(domain, app)) return 2;
     if (!exchange_v2_order_struct_hash(order, contents)) return 3;
+    PreparedInnerDigest prepared(domain, order.signer);
+    if (!prepared.valid()) return 7;
+    Hash32 inner_digest{{}};
+    if (!prepared.digest(contents, inner_digest)) return 8;
+    std::array<char, 64> digest_hex{{}};
+    if (!hash32_hex(inner_digest, digest_hex)) return 9;
+    std::cout.write(digest_hex.data(), static_cast<std::streamsize>(digest_hex.size()));
+    std::cout << '\n';
+    PreparedInnerDigest bad(domain, "0x1234");
+    if (bad.valid()) return 10;
     std::array<char, 1024> output{{}};
     const auto size = wrap_signature("{INNER}", app, contents, output);
     if (size == 0) return 4;
@@ -70,5 +81,5 @@ def test_poly1271_wrapper_matches_official_fixture() -> None:
         result = subprocess.run(
             [str(binary)], check=True, capture_output=True, text=True,
         )
-    assert result.stdout.strip() == EXPECTED
+    assert result.stdout.splitlines() == [EXPECTED_INNER_DIGEST, EXPECTED]
     assert len(EXPECTED) == 2 + 130 + 64 + 64 + 2 * 186 + 4
