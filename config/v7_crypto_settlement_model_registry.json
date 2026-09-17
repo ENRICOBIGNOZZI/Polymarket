@@ -70,6 +70,38 @@
       "new_risk_authorized": false,
       "settlement_semantic_hash": "3f5886b065ac99a0481bc99355bc56388f24b0f9009e4dbbbb0e83d2977ae7f4",
       "status": "UNREGISTERED_SHADOW"
+    },
+    {
+      "artifact": null,
+      "asset": "DOGE",
+      "horizon": "M5",
+      "new_risk_authorized": false,
+      "settlement_semantic_hash": "ad279225eec0dfb695fc229d1422cb38c1a97c9821203a7c401fbeb64ceba0fe",
+      "status": "UNREGISTERED_SHADOW"
+    },
+    {
+      "artifact": null,
+      "asset": "DOGE",
+      "horizon": "M15",
+      "new_risk_authorized": false,
+      "settlement_semantic_hash": "ad279225eec0dfb695fc229d1422cb38c1a97c9821203a7c401fbeb64ceba0fe",
+      "status": "UNREGISTERED_SHADOW"
+    },
+    {
+      "artifact": null,
+      "asset": "BNB",
+      "horizon": "M5",
+      "new_risk_authorized": false,
+      "settlement_semantic_hash": "1061f60c542ffb51715905d3a9b366f7f607b5e07dc1f8cddaa00594094a1458",
+      "status": "UNREGISTERED_SHADOW"
+    },
+    {
+      "artifact": null,
+      "asset": "BNB",
+      "horizon": "M15",
+      "new_risk_authorized": false,
+      "settlement_semantic_hash": "1061f60c542ffb51715905d3a9b366f7f607b5e07dc1f8cddaa00594094a1458",
+      "status": "UNREGISTERED_SHADOW"
     }
   ],
   "paper_only": true,

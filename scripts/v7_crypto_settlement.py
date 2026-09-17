@@ -28,6 +28,8 @@ class CryptoAsset(str, Enum):
     ETH = "ETH"
     SOL = "SOL"
     XRP = "XRP"
+    DOGE = "DOGE"
+    BNB = "BNB"
 
 
 class CryptoHorizon(str, Enum):
@@ -129,6 +131,9 @@ def validate_registry(value: dict[str, Any]) -> dict[tuple[CryptoAsset, CryptoHo
         observed_slug = str(mapping.get("observed_live_slug") or "")
         maker_window = row.get("maker_tte_window_seconds")
         taker_window = row.get("taker_tte_window_seconds")
+        required_external = ("binance_spot", "bybit_spot", "binance_perp", "bybit_perp")
+        if asset is not CryptoAsset.BNB:
+            required_external += ("coinbase_spot",)
         if (
             row.get("market_mapping_verified") is not True
             or row.get("settlement_mapping_verified") is not True
@@ -150,7 +155,7 @@ def validate_registry(value: dict[str, Any]) -> dict[tuple[CryptoAsset, CryptoHo
             or not isinstance(taker_window, list) or len(taker_window) != 2
             or not 0 <= int(maker_window[0]) <= int(maker_window[1]) <= HORIZON_SECONDS[horizon]
             or not 0 <= int(taker_window[0]) <= int(taker_window[1]) <= HORIZON_SECONDS[horizon]
-            or not all(external.get(name) for name in ("binance_spot", "coinbase_spot", "bybit_spot", "binance_perp", "bybit_perp"))
+            or not all(external.get(name) for name in required_external)
         ):
             raise CryptoSettlementError(f"context_mapping:{asset.value}:{horizon.value}")
         semantic_hash = canonical_hash(settlement_semantic_payload(row))

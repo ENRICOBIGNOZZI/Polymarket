@@ -16,6 +16,7 @@ import re
 import time
 import unicodedata
 from dataclasses import asdict, dataclass
+from datetime import datetime
 from decimal import Decimal, InvalidOperation
 from pathlib import Path
 from typing import Any, Iterable
@@ -23,6 +24,9 @@ from urllib.parse import urlparse
 
 SCHEMA_VERSION = 1
 PARSER_VERSION = "btc-updown-chainlink-twap-v1"
+PARSER_VERSION_V2 = "crypto-updown-chainlink-twap-v2"
+SUPPORTED_CRYPTO_ASSETS_V2 = {"BTC", "ETH", "SOL", "XRP", "DOGE", "BNB"}
+SUPPORTED_HORIZONS_V2 = {300: "M5", 900: "M15"}
 _CHAINLINK_TWAP_RE = re.compile(
     r"^/streams/(?P<asset>[a-z0-9]+)-(?P<quote>[a-z0-9]+)-twap-(?P<window>[1-9][0-9]*)s-streams/?$",
     re.IGNORECASE,
@@ -40,11 +44,13 @@ def normalize_rules(text: str) -> str:
     return _WS_RE.sub(" ", normalized).strip().lower()
 
 
-def rules_hash(text: str, resolution_source: str = "") -> str:
+def rules_hash(
+    text: str, resolution_source: str = "", *, parser_version: str = PARSER_VERSION
+) -> str:
     payload = {
         "normalized_rules": normalize_rules(text),
         "resolution_source": str(resolution_source).strip(),
-        "parser_version": PARSER_VERSION,
+        "parser_version": str(parser_version),
     }
     return hashlib.sha256(
         json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("utf-8")
@@ -147,6 +153,63 @@ def _btc_5m_semantics_verified(title: str, normalized: str, source: str) -> tupl
     if "data.chain.link" not in source.lower():
         reasons.append("rules:resolution_source_missing")
     return not reasons, reasons
+
+
+_ASSET_TITLE_ALIASES_V2 = {
+    "BTC": ("btc", "bitcoin"),
+    "ETH": ("eth", "ethereum"),
+    "SOL": ("sol", "solana"),
+    "XRP": ("xrp",),
+    "DOGE": ("doge", "dogecoin"),
+    "BNB": ("bnb", "binance coin"),
+}
+
+
+def _crypto_updown_semantics_verified(
+    title: str, normalized: str, source: str, asset: str
+) -> tuple[bool, list[str]]:
+    reasons: list[str] = []
+    title_n = normalize_rules(title)
+    aliases = _ASSET_TITLE_ALIASES_V2.get(asset, ())
+    if not aliases or not any(alias in title_n for alias in aliases):
+        reasons.append("title:asset_mismatch")
+    if "up or down" not in title_n:
+        reasons.append("title:not_updown")
+    if "twap" not in normalized:
+        reasons.append("rules:twap_missing")
+    if "chainlink" not in normalized:
+        reasons.append("rules:chainlink_missing")
+    if "beginning of that range" not in normalized and "beginning of the range" not in normalized:
+        reasons.append("rules:opening_reference_missing")
+    if "otherwise" not in normalized or "down" not in normalized:
+        reasons.append("rules:down_complement_missing")
+    if "spot market" not in normalized and "spot markets" not in normalized:
+        reasons.append("rules:external_spot_distinction_missing")
+    if "data.chain.link" not in source.lower():
+        reasons.append("rules:resolution_source_missing")
+    return not reasons, reasons
+
+
+def _parse_iso8601(value: str) -> datetime | None:
+    text = str(value or "").strip()
+    if not text:
+        return None
+    try:
+        parsed = datetime.fromisoformat(text.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    return parsed if parsed.tzinfo is not None else None
+
+
+def _contract_horizon_seconds(raw: dict[str, Any]) -> int | None:
+    start = _parse_iso8601(_first(
+        raw, "eventStartTime", "event_start_time", "startTime", "start_time"
+    ))
+    end = _parse_iso8601(_first(raw, "endDate", "end_date", "endTime", "end_time"))
+    if start is None or end is None:
+        return None
+    seconds = int(round((end - start).total_seconds()))
+    return seconds if seconds > 0 else None
 
 
 @dataclass(frozen=True)
@@ -398,6 +461,142 @@ def contract_from_market(raw: dict[str, Any], *, approved_rule_hashes: Iterable[
         quote_currency=quote,
         contract_family="BTC_USD_UPDOWN_5M" if verified_template else "UNVERIFIED",
         start_timestamp=_first(raw, "eventStartTime", "event_start_time", "startTime", "start_time", "startDate", "start_date"),
+        end_timestamp=_first(raw, "endDate", "end_date", "endTime", "end_time"),
+        settlement_provider="Chainlink" if settlement_source_verified else "unknown",
+        settlement_oracle="Chainlink Data Streams TWAP" if settlement_source_verified else "unknown",
+        oracle_symbol=f"{asset}/{quote}" if asset and quote else "",
+        oracle_feed_id=canonical_source if settlement_source_verified else "",
+        oracle_window_seconds=window,
+        comparator=comparator,
+        threshold_semantics="compare contract-window Chainlink TWAP against opening reference",
+        resolution_source=canonical_source,
+        normalized_rules=normalized,
+        normalized_rules_hash=digest,
+        rules_hash_handle=hash_handle(digest),
+        contract_version=contract_version,
+        verified_template=verified_template,
+        rules_hash_recognized=approved,
+        reference_semantics_verified=verified_template,
+        settlement_source_verified=settlement_source_verified,
+        verification_reasons=tuple(sorted(set(reasons))),
+        fee_schedule_version=fee_version,
+        authoritative_fee_parameters=fee_schedule,
+    )
+
+
+def contract_from_market_v2(
+    raw: dict[str, Any], *, approved_rule_hashes: Iterable[str] = ()
+) -> ContractSpec:
+    """Versioned multi-crypto parser for new lanes; V1 BTC semantics remain untouched."""
+    if not isinstance(raw, dict):
+        raise ContractVerificationError("market:not_object")
+    title = _first(raw, "question", "title", "name")
+    rules = _rules_text(raw)
+    source = _resolution_source(raw)
+    normalized = normalize_rules(rules)
+    reasons: list[str] = []
+
+    try:
+        asset, quote, window, canonical_source = parse_chainlink_twap_source(source)
+        settlement_source_verified = True
+    except ContractVerificationError as exc:
+        asset, quote, window, canonical_source = "", "", 0, source
+        settlement_source_verified = False
+        reasons.append(str(exc))
+
+    digest = rules_hash(rules, canonical_source, parser_version=PARSER_VERSION_V2)
+    try:
+        comparator = parse_comparator(normalized)
+    except ContractVerificationError as exc:
+        comparator = "GREATER_EQUAL"
+        reasons.append(str(exc))
+
+    semantic_ok, semantic_reasons = _crypto_updown_semantics_verified(
+        title, normalized, source, asset
+    )
+    reasons.extend(semantic_reasons)
+    horizon_seconds = _contract_horizon_seconds(raw)
+    horizon_code = SUPPORTED_HORIZONS_V2.get(horizon_seconds or 0, "")
+    if horizon_seconds is None:
+        reasons.append("horizon:verified_timestamps_missing")
+    elif not horizon_code:
+        reasons.append("horizon:unsupported")
+    if asset not in SUPPORTED_CRYPTO_ASSETS_V2:
+        reasons.append("asset:unsupported")
+    if quote != "USD":
+        reasons.append("quote:not_usd")
+
+    verified_template = bool(
+        semantic_ok
+        and settlement_source_verified
+        and asset in SUPPORTED_CRYPTO_ASSETS_V2
+        and quote == "USD"
+        and window > 0
+        and bool(horizon_code)
+        and comparator in {"GREATER_EQUAL", "GREATER", "LESS_EQUAL", "LESS"}
+    )
+
+    market_id = _first(raw, "id", "market_id", "conditionId", "condition_id")
+    event_id = _first(raw, "eventId", "event_id")
+    if not event_id:
+        event_ids = _array(raw.get("event_ids"))
+        event_id = str(event_ids[0]) if event_ids else ""
+    event = raw.get("event")
+    if not event_id and isinstance(event, dict):
+        event_id = _first(event, "id", "event_id")
+    condition_id = _first(raw, "conditionId", "condition_id")
+    slug = _first(raw, "slug")
+    market_handle = hash_handle(market_id or condition_id or slug or title)
+    event_handle = hash_handle(event_id or slug or title)
+
+    tokens = _array(raw.get("tokens") or raw.get("clobTokenIds") or raw.get("clob_token_ids"))
+    yes_token = ""
+    no_token = ""
+    if tokens and isinstance(tokens[0], dict):
+        for token in tokens:
+            if not isinstance(token, dict):
+                continue
+            outcome = normalize_rules(token.get("outcome"))
+            token_id = _first(token, "token_id", "tokenId", "id")
+            if outcome in {"yes", "up"}:
+                yes_token = token_id
+            elif outcome in {"no", "down"}:
+                no_token = token_id
+    elif len(tokens) >= 2:
+        outcomes = [normalize_rules(value) for value in _array(raw.get("outcomes"))]
+        if outcomes[:2] in (["yes", "no"], ["up", "down"]):
+            yes_token, no_token = str(tokens[0]), str(tokens[1])
+    if not yes_token or not no_token:
+        yes_token = yes_token or f"unknown-yes:{market_id}"
+        no_token = no_token or f"unknown-no:{market_id}"
+        reasons.append("tokens:explicit_yes_no_mapping_missing")
+        verified_template = False
+
+    fee_schedule = raw.get("feeSchedule", raw.get("fee_schedule"))
+    fee_schedule = fee_schedule if isinstance(fee_schedule, dict) else {}
+    fee_version = (
+        hashlib.sha256(json.dumps(fee_schedule, sort_keys=True).encode()).hexdigest()
+        if fee_schedule else "unknown"
+    )
+    approved = digest in set(approved_rule_hashes)
+    contract_version = hash_handle(f"{digest}:{PARSER_VERSION_V2}")
+    return ContractSpec(
+        schema_version=SCHEMA_VERSION,
+        parser_version=PARSER_VERSION_V2,
+        market_handle=market_handle,
+        event_handle=event_handle,
+        yes_instrument_handle=hash_handle(yes_token),
+        no_instrument_handle=hash_handle(no_token),
+        condition_id=condition_id,
+        market_id=market_id,
+        event_id=event_id,
+        slug=slug,
+        asset=asset,
+        quote_currency=quote,
+        contract_family=(f"{asset}_{quote}_UPDOWN_{horizon_code}" if verified_template else "UNVERIFIED"),
+        start_timestamp=_first(
+            raw, "eventStartTime", "event_start_time", "startTime", "start_time", "startDate", "start_date"
+        ),
         end_timestamp=_first(raw, "endDate", "end_date", "endTime", "end_time"),
         settlement_provider="Chainlink" if settlement_source_verified else "unknown",
         settlement_oracle="Chainlink Data Streams TWAP" if settlement_source_verified else "unknown",
