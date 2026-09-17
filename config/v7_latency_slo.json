@@ -72,7 +72,7 @@
     "candidate_regions": ["Frankfurt", "London", "Amsterdam", "New York", "Northern Virginia"],
     "public_probe_endpoint": "https://clob.polymarket.com/time",
     "same_binary_config_and_sha_required": true,
-    "winner_selected_by": "lowest stable p99 and p99.9 request/ack path subject to loss and reconnect health",
+    "winner_selected_by": "lowest stable p99 and p99.9 public HTTPS request/response path subject to loss and reconnect health",
     "authenticated_order_cancel_probe": "BLOCKED_UNTIL_EXPLICIT_OPERATOR_AUTHORITY"
   },
   "venue_constraints_verified_2026_08_28": {
