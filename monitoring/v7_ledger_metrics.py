@@ -13,7 +13,7 @@ SCRIPTS = Path(__file__).resolve().parents[1] / "scripts"
 if str(SCRIPTS) not in sys.path:
     sys.path.insert(0, str(SCRIPTS))
 
-from v7_execution_ledger import EVENT_TYPES
+from v7_execution_ledger import EconomicJournalEntry, EVENT_TYPES, LedgerContractError
 
 
 SHA40 = re.compile(r"^[0-9a-f]{40}$")
@@ -68,6 +68,7 @@ def summarize_ledger(path: Path) -> dict[str, Any]:
     result["present"] = True
     shas: set[str] = set()
     strategies: dict[str, dict[str, Any]] = {}
+    journal_tips: dict[str, str] = {}
     try:
         handle = path.open("r", encoding="utf-8")
     except OSError:
@@ -88,6 +89,20 @@ def summarize_ledger(path: Path) -> dict[str, Any]:
             if not isinstance(row, dict):
                 result["invalid_rows"] += 1
                 result["invalid_reason_counts"]["NON_OBJECT"] = result["invalid_reason_counts"].get("NON_OBJECT", 0) + 1
+                continue
+            if row.get("record_kind") == "ECONOMIC_JOURNAL":
+                try:
+                    entry = EconomicJournalEntry.from_dict(row)
+                    expected = journal_tips.get(entry.model_sha, "0" * 64)
+                    if entry.previous_entry_hash != expected:
+                        raise LedgerContractError("journal:chain_break")
+                except (LedgerContractError, TypeError, ValueError):
+                    result["invalid_rows"] += 1
+                    reason = "INVALID_ECONOMIC_JOURNAL"
+                    result["invalid_reason_counts"][reason] = result["invalid_reason_counts"].get(reason, 0) + 1
+                    continue
+                journal_tips[entry.model_sha] = str(entry.entry_hash)
+                shas.add(entry.model_sha)
                 continue
             event_type = str(row.get("event_type") or "")
             strategy = str(row.get("strategy") or "").strip()
