@@ -38,3 +38,14 @@ def test_larger_host_keeps_four_high_cpus_hot():
     assert plan["control_cpus"] == [1]
     assert plan["collector_cpus"] == [2, 3]
     assert plan["spare_cpus"] == [4, 5, 6, 7]
+
+
+def test_cpu_list_parser_handles_ranges_and_sparse_sets():
+    assert MODULE._parse_cpu_list("0-3,5,7-8\n") == [0, 1, 2, 3, 5, 7, 8]
+    assert MODULE._parse_cpu_list("") == []
+
+
+def test_explicit_outer_cpuset_still_fails_closed_even_with_isolation_logic():
+    plan = MODULE.resolve(config(), [0, 1, 2, 3])
+    assert plan["outer_cpuset_contract_satisfied"] is False
+    assert plan["hot_path_cpus"] == []

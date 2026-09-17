@@ -5,7 +5,61 @@ import argparse,json,os
 from pathlib import Path
 
 
+def _parse_cpu_list(value:str)->list[int]:
+    out:set[int]=set()
+    for token in value.strip().split(','):
+        token=token.strip()
+        if not token:
+            continue
+        if '-' in token:
+            lo,hi=(int(x) for x in token.split('-',1))
+            if lo < 0 or hi < lo:
+                raise ValueError("invalid CPU range")
+            out.update(range(lo,hi+1))
+        else:
+            cpu=int(token)
+            if cpu < 0:
+                raise ValueError("invalid CPU id")
+            out.add(cpu)
+    return sorted(out)
+
+
+def _read_cpu_list(path:Path)->list[int]:
+    try:
+        return _parse_cpu_list(path.read_text())
+    except (OSError,ValueError):
+        return []
+
+
+def _effective_cgroup_cpus()->list[int]:
+    # cgroup v2 is authoritative for whether a process may expand its affinity
+    # onto isolated CPUs. Inherited sched affinity may intentionally contain
+    # housekeeping CPUs only after isolcpus/nohz_full.
+    try:
+        lines=Path('/proc/self/cgroup').read_text().splitlines()
+    except OSError:
+        lines=[]
+    for line in lines:
+        if line.startswith('0::'):
+            rel=line.split('::',1)[1].lstrip('/')
+            base=Path('/sys/fs/cgroup') / rel
+            values=_read_cpu_list(base/'cpuset.cpus.effective')
+            if values:
+                return values
+    # Common fallback for a process in the cgroup-v2 root.
+    values=_read_cpu_list(Path('/sys/fs/cgroup/cpuset.cpus.effective'))
+    if values:
+        return values
+    return []
+
+
 def _cpus() -> list[int]:
+    online=_read_cpu_list(Path('/sys/devices/system/cpu/online'))
+    effective=_effective_cgroup_cpus()
+    if effective:
+        allowed=sorted(set(effective) & set(online or effective))
+        if allowed:
+            return allowed
     try:
         return sorted(os.sched_getaffinity(0))
     except (AttributeError,OSError):
@@ -80,7 +134,14 @@ def main()->int:
     if cfg.get("schema")!="polymarket_v7_runtime_resources_v1" or cfg.get("paper_only") is not True:
         raise SystemExit("invalid runtime resource config")
     try:
-        out=resolve(cfg)
+        discovered=_cpus()
+        out=resolve(cfg, discovered)
+        try:
+            out["inherited_affinity_cpus"]=sorted(os.sched_getaffinity(0))
+        except (AttributeError,OSError):
+            out["inherited_affinity_cpus"]=[]
+        out["effective_cgroup_cpus"]=_effective_cgroup_cpus()
+        out["online_cpus"]=_read_cpu_list(Path('/sys/devices/system/cpu/online'))
     except (TypeError,ValueError) as exc:
         raise SystemExit(f"invalid runtime CPU contract: {exc}") from exc
     a.output.parent.mkdir(parents=True,exist_ok=True)
