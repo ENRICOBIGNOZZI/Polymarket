@@ -17,9 +17,12 @@ class V7LivePaperValidationContractTest(unittest.TestCase):
             "ci.yml:ci",
             "monitoring.yml:monitoring",
             "private-runtime-single-writer-validation.yml:Private runtime single-writer validation",
+            "cancel-in-progress: true",
             "all_exact_green=true",
             "validation_state=BLOCKED_STALE_NON_MAIN_SHA",
+            "validation_state=BLOCKED_FAILED_EXACT_SHA_TECHNICAL_GATE",
             "validation_state=BLOCKED_AWAITING_ALL_EXACT_SHA_TECHNICAL_GATES",
+            "Waiting for exact-SHA technical gates",
             "validation_state=READY_FOR_SUBSTANTIVE_PAPER_VALIDATION",
             "No substantive PAPER validation ran.",
             "scripts/v7_cutover_contract.py",
@@ -59,8 +62,14 @@ class V7LivePaperValidationContractTest(unittest.TestCase):
         gate = text.split("- name: Require exact-main V7 technical gates", 1)[1].split(
             "- name: Enforce V7 PAPER safety contract", 1
         )[0]
-        self.assertEqual(gate.count("exit 1"), 2)
+        self.assertEqual(gate.count("exit 1"), 3)
         self.assertNotIn("exit 0", gate)
+        self.assertIn("deadline=$((SECONDS + 600))", gate)
+        self.assertIn("raise SystemExit(2)", gate)
+        self.assertIn("if active:", gate)
+        self.assertIn('if [[ "$any_failed" == "true" ]]', gate)
+        self.assertIn('if (( SECONDS >= deadline ))', gate)
+        self.assertLess(gate.index('if [[ "$all_exact_green" == "true" ]]'), gate.index('echo "ready=true"'))
 
     def test_deploy_is_manual_exact_sha_cutover_only(self) -> None:
         text = (ROOT / ".github/workflows/v7-deploy-paper-server.yml").read_text(encoding="utf-8")
