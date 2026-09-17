@@ -215,6 +215,34 @@ def _fillability(run_root: Path, repository_root: Path, sha: str, now: int) -> d
     return value
 
 
+def _slow_diagnostics_cache(path: Path | None, runtime_sha: str, now: int) -> dict[str, Any]:
+    if path is None:
+        return {}
+    value = _json(Path(path))
+    timestamp = _integer(value.get("timestamp"))
+    age = _age(now, timestamp)
+    valid = (
+        value.get("schema") == "polymarket_v7_slow_monitoring_diagnostics_v1"
+        and value.get("paper_only") is True
+        and value.get("authenticated_execution") is False
+        and value.get("real_order_submission") is False
+        and value.get("real_capital_at_risk") is False
+        and value.get("execution_authority") is False
+        and value.get("model_sha") == runtime_sha
+        and timestamp > 0
+        and age <= 180
+    )
+    if not valid:
+        return {"valid": False, "age": age}
+    return {
+        "valid": True,
+        "age": age,
+        "refresh_duration_seconds": _number(value.get("refresh_duration_seconds")),
+        "maker_fillability": value.get("maker_fillability") if isinstance(value.get("maker_fillability"), dict) else {},
+        "maker_latency": value.get("maker_latency") if isinstance(value.get("maker_latency"), dict) else {},
+    }
+
+
 def _operations(run_root: Path, runtime: dict[str, Any], now: int) -> dict[str, Any]:
     supervisor = _json(run_root / "control/supervisor_status.json")
     retention = _json(run_root / "control/retention_status.json")
@@ -239,7 +267,7 @@ def _operations(run_root: Path, runtime: dict[str, Any], now: int) -> dict[str, 
     }
 
 
-def collect_snapshot(run_root: Path, repository_root: Path | None = None, *, now: int | None = None, include_profit_experiment_report: bool = True, include_slow_diagnostics: bool = True) -> dict[str, Any]:
+def collect_snapshot(run_root: Path, repository_root: Path | None = None, *, now: int | None = None, include_profit_experiment_report: bool = True, include_slow_diagnostics: bool = True, slow_diagnostics_cache: Path | None = None) -> dict[str, Any]:
     now = int(time.time()) if now is None else int(now)
     run_root = run_root.resolve(); repository_root = (repository_root or Path(".")).resolve()
     runtime = _json(run_root / "control/runtime_status.json")
@@ -268,6 +296,13 @@ def collect_snapshot(run_root: Path, repository_root: Path | None = None, *, now
     engine_rows = portfolio.get("engines") if isinstance(portfolio.get("engines"), dict) else {}
     algorithms = {engine: {"equity": _number((engine_rows.get(engine) or {}).get("equity")), "budget": _number((engine_rows.get(engine) or {}).get("budget")), "killed": bool((engine_rows.get(engine) or {}).get("killed"))} for engine in LIVE_ALGORITHMS}
     tape = _trade_tape(run_root / "trade_tape.csv", now)
+    slow_cached = _slow_diagnostics_cache(slow_diagnostics_cache, runtime_sha, now)
+    if slow_diagnostics_cache is not None:
+        maker_fillability = slow_cached.get("maker_fillability") if slow_cached.get("valid") else {"present": False, "omitted": True, "reason": "slow_diagnostics_cache_missing_or_invalid"}
+        maker_latency = slow_cached.get("maker_latency") if slow_cached.get("valid") else {"present": False, "omitted": True, "reason": "slow_diagnostics_cache_missing_or_invalid", "stages": {}, "sources": {}}
+    else:
+        maker_fillability = _fillability(run_root, repository_root, runtime_sha, now) if include_slow_diagnostics else {"present": False, "omitted": True, "reason": "slow_diagnostics_decoupled"}
+        maker_latency = _runtime_latency(run_root) if include_slow_diagnostics else {"present": False, "omitted": True, "reason": "slow_diagnostics_decoupled", "stages": {}, "sources": {}}
     starting = _number(portfolio.get("account_starting_capital"), _number(allocations.get("account_starting_capital")))
     equity = _number(portfolio.get("equity"), starting)
     return {
@@ -303,9 +338,10 @@ def collect_snapshot(run_root: Path, repository_root: Path | None = None, *, now
         "profit_experiments": {"collector": _json(run_root / "profit_experiment_status.json"),
             "report": (_json(run_root / "profit_experiment_report.json") if include_profit_experiment_report else {"omitted": True, "reason": "disabled_for_lightweight_exporter"})},
         "maker_lab": summarize_maker_microstructure(ledger_path, run_root / "micro_maker/reward_selection.json", run_root / "research/evidence/maker_markout"),
-        "maker_fillability": (_fillability(run_root, repository_root, runtime_sha, now) if include_slow_diagnostics else {"present": False, "omitted": True, "reason": "slow_diagnostics_decoupled"}),
+        "maker_fillability": maker_fillability,
         "external_fair": external_fair, "reconciliation": reconciliation,
-        "maker_latency": (_runtime_latency(run_root) if include_slow_diagnostics else {"present": False, "omitted": True, "reason": "slow_diagnostics_decoupled", "stages": {}, "sources": {}}),
+        "maker_latency": maker_latency,
+        "slow_diagnostics": slow_cached,
         "trade_tape": tape, "trade_recorder": _trade_recorder(run_root / "trade_recorder_status.json", now),
         "authority": {"valid": authority_valid, "max_drawdown": max_drawdown},
         "algorithms": algorithms, "strategies": algorithms,
@@ -411,6 +447,7 @@ def render_prometheus(snapshot: dict[str, Any]) -> str:
         _metric("polymarket_runtime_equity_usd", economics.get("equity")), _metric("polymarket_runtime_pnl_usd", economics.get("pnl")), _metric("polymarket_runtime_realized_pnl_usd", economics.get("realized_pnl")), _metric("polymarket_runtime_drawdown_ratio", economics.get("drawdown")), _metric("polymarket_runtime_killed", economics.get("killed")),
         _metric("polymarket_v7_canonical_submitted_units", canonical.get("submitted_units")), _metric("polymarket_v7_canonical_complete_units", canonical.get("complete_units")), _metric("polymarket_v7_ledger_valid", ledger.get("valid")), _metric("polymarket_v7_portfolio_reconciled", (snapshot.get("reconciliation") or {}).get("reconciled")), _metric("polymarket_v7_reconciliation_divergences", len((snapshot.get("reconciliation") or {}).get("reason_codes") or [])),
         _metric("polymarket_v7_trade_tape_rows", (snapshot.get("trade_tape") or {}).get("rows")), _metric("polymarket_v7_trade_tape_assets", (snapshot.get("trade_tape") or {}).get("assets")), _metric("polymarket_v7_trade_tape_no_standard_clob_flow", _verified_no_flow(snapshot.get("trade_recorder") or {}, 180)), _metric("polymarket_v7_latency_samples_present", (snapshot.get("maker_latency") or {}).get("present")),
+        _metric("polymarket_v7_slow_diagnostics_valid", (snapshot.get("slow_diagnostics") or {}).get("valid")), _metric("polymarket_v7_slow_diagnostics_age_seconds", (snapshot.get("slow_diagnostics") or {}).get("age")), _metric("polymarket_v7_slow_diagnostics_refresh_duration_seconds", (snapshot.get("slow_diagnostics") or {}).get("refresh_duration_seconds")),
         _metric("polymarket_v7_component_ready", "professional_maker_missing_stale_or_unsafe" not in reasons, {"component": "professional_maker"}), _metric("polymarket_v7_component_ready", "structural_arb_engine_missing_stale_or_unsafe" not in reasons, {"component": "fast_structural"}),
         _metric("polymarket_v7_maker_selector_ready", selector.get("ready") and selector.get("state") in _MAKER_SELECTOR_OPERATIONAL_STATES), _metric("polymarket_v7_maker_selector_fallback_active", selector.get("degraded")), _metric("polymarket_v7_maker_runtime_selection_pinned", selector.get("runtime_selection_pinned")), _metric("polymarket_v7_maker_candidate_rotation_pending", selector.get("candidate_rotation_pending")), _metric("polymarket_v7_maker_candidate_selected_markets", selector.get("candidate_selected_count")),
         _metric("polymarket_v7_maker_candidate_fresh_flow_eligible", selector.get("candidate_fresh_flow_eligible")), _metric("polymarket_v7_maker_candidate_sell_flow_30s_markets", selector.get("candidate_selected_with_sell_flow_30s")), _metric("polymarket_v7_maker_candidate_sell_flow_2m_markets", selector.get("candidate_selected_with_sell_flow_2m")), _metric("polymarket_v7_maker_candidate_max_last_sell_age_seconds", selector.get("candidate_max_last_sell_age_seconds")),
@@ -475,8 +512,8 @@ def render_cached_prometheus(cached: dict[str, Any], *, max_snapshot_age: float 
 
 
 class SnapshotCache:
-    def __init__(self, run_root: Path, repository_root: Path, *, refresh_seconds: float = 10.0, include_profit_experiment_report: bool = True, include_slow_diagnostics: bool = True) -> None:
-        self.run_root, self.repository_root, self.refresh_seconds, self.include_profit_experiment_report, self.include_slow_diagnostics = Path(run_root), Path(repository_root), max(1.0, float(refresh_seconds)), bool(include_profit_experiment_report), bool(include_slow_diagnostics); self._lock = threading.Lock(); self._ready = threading.Event(); self._stop = threading.Event(); self._thread = None; self._snapshot = None; self._metrics = b""; self._maker_fillability = b"{}\n"; self._external_fair = b"{}\n"; self._completed_monotonic = 0.0; self._completed_wall = 0.0; self._refresh_duration = 0.0; self._refresh_errors = 0; self._last_error = ""
+    def __init__(self, run_root: Path, repository_root: Path, *, refresh_seconds: float = 10.0, include_profit_experiment_report: bool = True, include_slow_diagnostics: bool = True, slow_diagnostics_cache: Path | None = None) -> None:
+        self.run_root, self.repository_root, self.refresh_seconds, self.include_profit_experiment_report, self.include_slow_diagnostics, self.slow_diagnostics_cache = Path(run_root), Path(repository_root), max(1.0, float(refresh_seconds)), bool(include_profit_experiment_report), bool(include_slow_diagnostics), (Path(slow_diagnostics_cache) if slow_diagnostics_cache is not None else None); self._lock = threading.Lock(); self._ready = threading.Event(); self._stop = threading.Event(); self._thread = None; self._snapshot = None; self._metrics = b""; self._maker_fillability = b"{}\n"; self._external_fair = b"{}\n"; self._completed_monotonic = 0.0; self._completed_wall = 0.0; self._refresh_duration = 0.0; self._refresh_errors = 0; self._last_error = ""
     def start(self) -> None:
         if self._thread is None: self._thread = threading.Thread(target=self._refresh_loop, daemon=True); self._thread.start()
     def stop(self) -> None:
@@ -487,7 +524,7 @@ class SnapshotCache:
         while not self._stop.is_set():
             started = time.monotonic()
             try:
-                snapshot = (collect_snapshot(self.run_root, self.repository_root) if self.include_profit_experiment_report and self.include_slow_diagnostics else collect_snapshot(self.run_root, self.repository_root, include_profit_experiment_report=self.include_profit_experiment_report, include_slow_diagnostics=self.include_slow_diagnostics)); duration = time.monotonic()-started; wall = time.time(); metrics = render_prometheus(snapshot).rstrip()+f"\npolymarket_v7_exporter_snapshot_generated_unixtime {wall}\npolymarket_v7_exporter_snapshot_refresh_duration_seconds {duration}\npolymarket_v7_exporter_snapshot_refresh_errors_total {self._refresh_errors}\n"
+                snapshot = (collect_snapshot(self.run_root, self.repository_root) if self.include_profit_experiment_report and self.include_slow_diagnostics and self.slow_diagnostics_cache is None else collect_snapshot(self.run_root, self.repository_root, include_profit_experiment_report=self.include_profit_experiment_report, include_slow_diagnostics=self.include_slow_diagnostics, slow_diagnostics_cache=self.slow_diagnostics_cache)); duration = time.monotonic()-started; wall = time.time(); metrics = render_prometheus(snapshot).rstrip()+f"\npolymarket_v7_exporter_snapshot_generated_unixtime {wall}\npolymarket_v7_exporter_snapshot_refresh_duration_seconds {duration}\npolymarket_v7_exporter_snapshot_refresh_errors_total {self._refresh_errors}\n"
                 with self._lock: self._snapshot=snapshot; self._metrics=metrics.encode(); self._maker_fillability=(json.dumps(snapshot.get("maker_fillability") or {},sort_keys=True)+"\n").encode(); self._external_fair=(json.dumps(snapshot.get("external_fair") or {},sort_keys=True)+"\n").encode(); self._completed_monotonic=time.monotonic(); self._completed_wall=wall; self._refresh_duration=duration; self._last_error=""
                 self._ready.set()
             except Exception as exc:
@@ -526,9 +563,9 @@ class ExporterHandler(BaseHTTPRequestHandler):
 
 
 def main()->int:
-    parser=argparse.ArgumentParser(description=__doc__); parser.add_argument("--run-root",type=Path,default=Path("runs/paper_v7_live")); parser.add_argument("--repository-root",type=Path,default=Path(".")); parser.add_argument("--host",default="127.0.0.1"); parser.add_argument("--port",type=int,default=9108); parser.add_argument("--max-runtime-age",type=int,default=180); parser.add_argument("--max-supervisor-age",type=int,default=30); parser.add_argument("--snapshot-refresh-seconds",type=float,default=10); parser.add_argument("--max-snapshot-age",type=float,default=45); parser.add_argument("--skip-profit-experiment-report",action="store_true"); parser.add_argument("--skip-slow-diagnostics",action="store_true"); args=parser.parse_args()
+    parser=argparse.ArgumentParser(description=__doc__); parser.add_argument("--run-root",type=Path,default=Path("runs/paper_v7_live")); parser.add_argument("--repository-root",type=Path,default=Path(".")); parser.add_argument("--host",default="127.0.0.1"); parser.add_argument("--port",type=int,default=9108); parser.add_argument("--max-runtime-age",type=int,default=180); parser.add_argument("--max-supervisor-age",type=int,default=30); parser.add_argument("--snapshot-refresh-seconds",type=float,default=10); parser.add_argument("--max-snapshot-age",type=float,default=45); parser.add_argument("--skip-profit-experiment-report",action="store_true"); parser.add_argument("--skip-slow-diagnostics",action="store_true"); parser.add_argument("--slow-diagnostics-cache",type=Path); args=parser.parse_args()
     ExporterHandler.run_root=args.run_root; ExporterHandler.repository_root=args.repository_root; ExporterHandler.include_profit_experiment_report=not args.skip_profit_experiment_report; ExporterHandler.max_runtime_age=args.max_runtime_age; ExporterHandler.max_supervisor_age=args.max_supervisor_age; ExporterHandler.max_snapshot_age=args.max_snapshot_age
-    cache=SnapshotCache(args.run_root,args.repository_root,refresh_seconds=args.snapshot_refresh_seconds,include_profit_experiment_report=not args.skip_profit_experiment_report,include_slow_diagnostics=not args.skip_slow_diagnostics); cache.start(); ExporterHandler.snapshot_cache=cache; server=ThreadingHTTPServer((args.host,args.port),ExporterHandler)
+    cache=SnapshotCache(args.run_root,args.repository_root,refresh_seconds=args.snapshot_refresh_seconds,include_profit_experiment_report=not args.skip_profit_experiment_report,include_slow_diagnostics=not args.skip_slow_diagnostics,slow_diagnostics_cache=args.slow_diagnostics_cache); cache.start(); ExporterHandler.snapshot_cache=cache; server=ThreadingHTTPServer((args.host,args.port),ExporterHandler)
     try: server.serve_forever()
     except KeyboardInterrupt: pass
     finally: server.server_close(); cache.stop()
