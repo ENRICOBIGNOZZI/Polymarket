@@ -66,6 +66,7 @@ struct ExternalVenueConnectionSpec {
     std::uint64_t asset_handle = 0;
     std::size_t max_message_bytes = 1U << 20;
     int socket_busy_poll_us = 0;
+    std::vector<int> dynamic_rx_cpu_allowlist;
 };
 
 struct ExternalWsSnapshot {
@@ -77,6 +78,11 @@ struct ExternalWsSnapshot {
     std::uint64_t decode_failures = 0;
     std::int64_t last_receive_monotonic_ns = 0;
     std::int64_t last_receive_wall_ns = 0;
+    std::uint64_t rx_realignments = 0;
+    std::uint64_t rx_rejections = 0;
+    std::uint64_t rx_alignment_errors = 0;
+    std::int32_t incoming_cpu = -1;
+    std::int32_t incoming_napi_id = -1;
     std::uint8_t connected = 0;
     std::uint8_t healthy = 0;
     std::array<std::uint8_t, 6> reserved{};
@@ -124,6 +130,11 @@ private:
     std::atomic<std::uint64_t> decode_failures_{0};
     std::atomic<std::int64_t> last_receive_monotonic_ns_{0};
     std::atomic<std::int64_t> last_receive_wall_ns_{0};
+    std::atomic<std::uint64_t> rx_realignments_{0};
+    std::atomic<std::uint64_t> rx_rejections_{0};
+    std::atomic<std::uint64_t> rx_alignment_errors_{0};
+    std::atomic<std::int32_t> incoming_cpu_{-1};
+    std::atomic<std::int32_t> incoming_napi_id_{-1};
     std::atomic<bool> connected_{false};
     std::atomic<bool> healthy_{false};
 };

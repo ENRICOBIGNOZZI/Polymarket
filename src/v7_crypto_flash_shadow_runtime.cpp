@@ -64,6 +64,7 @@ struct Options {
     int idle_spin_us = 50;
     int socket_busy_poll_us = 0;
     int cpu_pin = 1;
+    int dynamic_rx_align = 1;
     bool validate_only = false;
 };
 
@@ -85,6 +86,7 @@ Options parse_options(int argc, char** argv) {
         else if (arg == "--idle-spin-us") out.idle_spin_us = bounded_integer<int>(next(), 0, 2000);
         else if (arg == "--socket-busy-poll-us") out.socket_busy_poll_us = bounded_integer<int>(next(), 0, 2000);
         else if (arg == "--cpu-pin") out.cpu_pin = bounded_integer<int>(next(), 0, 1);
+        else if (arg == "--dynamic-rx-align") out.dynamic_rx_align = bounded_integer<int>(next(), 0, 1);
         else if (arg == "--validate-only") out.validate_only = true;
         else throw std::invalid_argument("unknown option");
     }
@@ -138,6 +140,10 @@ int main(int argc, char** argv) {
             std::copy(selected_cpus.begin(), selected_cpus.end(), role_cpus.begin());
         }
         const bool cpu_pin_active = selected_cpus.size() == role_cpus.size();
+        std::vector<int> feed_rx_cpus;
+        if (cpu_pin_active && options.dynamic_rx_align != 0)
+            feed_rx_cpus.assign(role_cpus.begin() + 1, role_cpus.end());
+        const bool dynamic_rx_requested = !feed_rx_cpus.empty();
         std::atomic<std::uint64_t> affinity_failures{0};
 
         constexpr std::uint64_t kAsset = 1, kMarket = 1, kEvent = 1, kYes = 1, kNo = 2;
@@ -148,6 +154,8 @@ int main(int argc, char** argv) {
         auto coinbase_spec = btc_spot_connection_spec(VenueId::CoinbaseSpot, kAsset);
         binance_spec.socket_busy_poll_us = options.socket_busy_poll_us;
         coinbase_spec.socket_busy_poll_us = options.socket_busy_poll_us;
+        binance_spec.dynamic_rx_cpu_allowlist = feed_rx_cpus;
+        coinbase_spec.dynamic_rx_cpu_allowlist = feed_rx_cpus;
         CoinbaseL2FrameObserver coinbase_l2(coinbase_ingress, kAsset);
         ExternalVenueWsClient binance(binance_spec, &binance_ingress);
         ExternalVenueWsClient coinbase(coinbase_spec, nullptr, &coinbase_l2);
@@ -188,7 +196,7 @@ int main(int argc, char** argv) {
                 wakeup.notify();
             },
             role_cpus[3] >= 0 ? std::vector<int>{role_cpus[3]} : std::vector<int>{},
-            options.socket_busy_poll_us);
+            options.socket_busy_poll_us, feed_rx_cpus);
 
         ExternalStatePolicy external_policy;
         external_policy.external_cancel_enabled = 1;
@@ -373,10 +381,20 @@ int main(int argc, char** argv) {
         const auto coinbase_ingress_status = coinbase_ingress.snapshot();
         const auto total_affinity_failures = affinity_failures.load(std::memory_order_relaxed)
             + pm_status.affinity_errors;
+        const auto rx_alignment_errors = binance_status.rx_alignment_errors
+            + coinbase_status.rx_alignment_errors + pm_status.rx_alignment_errors;
+        const auto rx_rejections = binance_status.rx_rejections
+            + coinbase_status.rx_rejections + pm_status.rx_rejections;
+        const bool rx_alignment_observed = !dynamic_rx_requested
+            || (binance_status.incoming_cpu >= 0 && coinbase_status.incoming_cpu >= 0
+                && pm_status.incoming_cpu >= 0);
+        const bool rx_alignment_clean = !dynamic_rx_requested
+            || (rx_alignment_observed && rx_alignment_errors == 0 && rx_rejections == 0);
         const bool clean = pm_drops.load() == 0
             && binance_ingress_status.dropped_events == 0
             && coinbase_ingress_status.dropped_events == 0
-            && (!cpu_pin_active || total_affinity_failures == 0);
+            && (!cpu_pin_active || total_affinity_failures == 0)
+            && rx_alignment_clean;
 
         std::cout << json::serialize(json::object{
             {"schema", "polymarket_v7_crypto_flash_shadow_v1"},
@@ -388,6 +406,10 @@ int main(int argc, char** argv) {
             {"idle_spin_us", options.idle_spin_us}, {"socket_busy_poll_us", options.socket_busy_poll_us},
             {"kernel_wakeups", wakeup.kernel_wakeups()},
             {"cpu_pin_requested", options.cpu_pin != 0}, {"cpu_pin_active", cpu_pin_active},
+            {"dynamic_rx_align_requested", dynamic_rx_requested},
+            {"rx_alignment_observed", rx_alignment_observed},
+            {"rx_alignment_clean", rx_alignment_clean},
+            {"rx_alignment_errors", rx_alignment_errors}, {"rx_rejections", rx_rejections},
             {"allowed_cpu_count", allowed_cpus.size()}, {"affinity_failures", total_affinity_failures},
             {"cpu_roles", {{"decision", role_cpus[0]}, {"binance", role_cpus[1]},
                            {"coinbase", role_cpus[2]}, {"polymarket", role_cpus[3]}}},
@@ -397,11 +419,13 @@ int main(int argc, char** argv) {
             {"first_signal_to_decision", latency_distribution(std::move(first_signal_to_decision))},
             {"decision_compute", latency_distribution(std::move(decision_compute))},
             {"reason_counts", reason_json(reasons)},
-            {"binance", {{"frames", binance_status.frames_received}, {"transport_failures", binance_status.transport_failures}, {"drops", binance_ingress_status.dropped_events}}},
-            {"coinbase", {{"frames", coinbase_status.frames_received}, {"transport_failures", coinbase_status.transport_failures}, {"drops", coinbase_ingress_status.dropped_events}}},
+            {"binance", {{"frames", binance_status.frames_received}, {"transport_failures", binance_status.transport_failures}, {"drops", binance_ingress_status.dropped_events},
+                         {"incoming_cpu", binance_status.incoming_cpu}, {"incoming_napi_id", binance_status.incoming_napi_id}, {"rx_realignments", binance_status.rx_realignments}}},
+            {"coinbase", {{"frames", coinbase_status.frames_received}, {"transport_failures", coinbase_status.transport_failures}, {"drops", coinbase_ingress_status.dropped_events},
+                          {"incoming_cpu", coinbase_status.incoming_cpu}, {"incoming_napi_id", coinbase_status.incoming_napi_id}, {"rx_realignments", coinbase_status.rx_realignments}}},
             {"polymarket", {{"messages", pm_status.messages}, {"reconnects", pm_status.reconnects},
-                            {"errors", pm_status.errors}, {"affinity_errors", pm_status.affinity_errors},
-                            {"drops", pm_drops.load()}}},
+                            {"errors", pm_status.errors}, {"affinity_errors", pm_status.affinity_errors}, {"drops", pm_drops.load()},
+                            {"incoming_cpu", pm_status.incoming_cpu}, {"incoming_napi_id", pm_status.incoming_napi_id}, {"rx_realignments", pm_status.rx_realignments}}},
             {"note", "No order adapter is instantiated. Accepted candidates are shadow admissions only."}
         }) << '\n';
         return clean ? 0 : 2;

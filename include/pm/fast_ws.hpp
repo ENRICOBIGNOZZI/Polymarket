@@ -24,6 +24,11 @@ struct FeedSnapshot {
     std::uint64_t reconnects = 0;
     std::uint64_t errors = 0;
     std::uint64_t affinity_errors = 0;
+    std::uint64_t rx_realignments = 0;
+    std::uint64_t rx_rejections = 0;
+    std::uint64_t rx_alignment_errors = 0;
+    int incoming_cpu = -1;
+    int incoming_napi_id = -1;
 };
 
 class MarketWebSocketFeed {
@@ -37,7 +42,8 @@ public:
                         MessageHandler on_message,
                         ErrorHandler on_error = {},
                         std::vector<int> worker_cpu_affinity = {},
-                        int socket_busy_poll_us = 0);
+                        int socket_busy_poll_us = 0,
+                        std::vector<int> dynamic_rx_cpu_allowlist = {});
     ~MarketWebSocketFeed();
 
     MarketWebSocketFeed(const MarketWebSocketFeed&) = delete;

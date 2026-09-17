@@ -1,4 +1,5 @@
 #include "pm/fast_ws.hpp"
+#include "pm/rx_thread_alignment.hpp"
 #include "pm/socket_tuning.hpp"
 #include "pm/thread_tuning.hpp"
 
@@ -176,6 +177,7 @@ struct MarketWebSocketFeed::Impl {
     ErrorHandler on_error;
     std::vector<int> worker_cpu_affinity;
     int socket_busy_poll_us = 0;
+    std::vector<int> dynamic_rx_cpu_allowlist;
 #if PM_USE_STD_JTHREAD
     std::vector<std::jthread> threads;
 #else
@@ -188,13 +190,18 @@ struct MarketWebSocketFeed::Impl {
     std::atomic<std::uint64_t> reconnects{0};
     std::atomic<std::uint64_t> errors{0};
     std::atomic<std::uint64_t> affinity_errors{0};
+    std::atomic<std::uint64_t> rx_realignments{0};
+    std::atomic<std::uint64_t> rx_rejections{0};
+    std::atomic<std::uint64_t> rx_alignment_errors{0};
+    std::atomic<int> incoming_cpu{-1};
+    std::atomic<int> incoming_napi_id{-1};
 
     Impl(std::string url, std::vector<std::string> ids, std::size_t shard_size,
          MessageHandler message_handler, ErrorHandler error_handler,
-         std::vector<int> cpu_affinity, int busy_poll_us)
+         std::vector<int> cpu_affinity, int busy_poll_us, std::vector<int> rx_cpu_allowlist)
         : endpoint(parse_wss_url(std::move(url))), on_message(std::move(message_handler)),
           on_error(std::move(error_handler)), worker_cpu_affinity(std::move(cpu_affinity)),
-          socket_busy_poll_us(busy_poll_us) {
+          socket_busy_poll_us(busy_poll_us), dynamic_rx_cpu_allowlist(std::move(rx_cpu_allowlist)) {
         if (socket_busy_poll_us < 0 || socket_busy_poll_us > pm::network::kMaxBusyPollUs)
             throw std::invalid_argument("socket_busy_poll_us out of range");
         ids.erase(std::remove_if(ids.begin(), ids.end(), [](const std::string& id) {
@@ -314,6 +321,7 @@ struct MarketWebSocketFeed::Impl {
 #endif
                 bool terminal = false;
                 bool remote_closed = false;
+                int previous_rx_cpu = -1;
                 std::string transport_error;
                 const auto finish = [&](beast::error_code error) {
                     if (terminal) return;
@@ -363,6 +371,18 @@ struct MarketWebSocketFeed::Impl {
                             finish(error);
                             return;
                         }
+                        const auto rx = pm::network::align_thread_to_socket_rx(
+                            beast::get_lowest_layer(ws).socket().native_handle(),
+                            dynamic_rx_cpu_allowlist, previous_rx_cpu);
+                        if (rx.incoming_cpu >= 0) {
+                            incoming_cpu.store(rx.incoming_cpu, std::memory_order_relaxed);
+                            previous_rx_cpu = rx.incoming_cpu;
+                        }
+                        if (rx.incoming_napi_id >= 0)
+                            incoming_napi_id.store(rx.incoming_napi_id, std::memory_order_relaxed);
+                        if (rx.applied) rx_realignments.fetch_add(1, std::memory_order_relaxed);
+                        if (rx.rejected) rx_rejections.fetch_add(1, std::memory_order_relaxed);
+                        if (rx.pin_error != 0) rx_alignment_errors.fetch_add(1, std::memory_order_relaxed);
                         const auto front = beast::buffers_front(buffer.data());
                         const std::string_view message{
                             static_cast<const char*>(front.data()), front.size()};
@@ -457,10 +477,12 @@ MarketWebSocketFeed::MarketWebSocketFeed(std::string url,
                                          MessageHandler on_message,
                                          ErrorHandler on_error,
                                          std::vector<int> worker_cpu_affinity,
-                                         int socket_busy_poll_us)
+                                         int socket_busy_poll_us,
+                                         std::vector<int> dynamic_rx_cpu_allowlist)
     : impl_(std::make_unique<Impl>(std::move(url), std::move(asset_ids), shard_size,
                                    std::move(on_message), std::move(on_error),
-                                   std::move(worker_cpu_affinity), socket_busy_poll_us)) {}
+                                   std::move(worker_cpu_affinity), socket_busy_poll_us,
+                                   std::move(dynamic_rx_cpu_allowlist))) {}
 
 MarketWebSocketFeed::~MarketWebSocketFeed() { stop(); }
 
@@ -475,6 +497,11 @@ FeedSnapshot MarketWebSocketFeed::snapshot() const {
         impl_->reconnects.load(std::memory_order_relaxed),
         impl_->errors.load(std::memory_order_relaxed),
         impl_->affinity_errors.load(std::memory_order_relaxed),
+        impl_->rx_realignments.load(std::memory_order_relaxed),
+        impl_->rx_rejections.load(std::memory_order_relaxed),
+        impl_->rx_alignment_errors.load(std::memory_order_relaxed),
+        impl_->incoming_cpu.load(std::memory_order_relaxed),
+        impl_->incoming_napi_id.load(std::memory_order_relaxed),
     };
 }
 
