@@ -1,16 +1,21 @@
 #include "pm/v7_clob_wire.hpp"
 
-#include <openssl/core_names.h>
-#include <openssl/evp.h>
-#include <openssl/params.h>
+#include <openssl/crypto.h>
+#include <openssl/sha.h>
 
 #include <algorithm>
 #include <array>
-#include <charconv>
 #include <cstdint>
 #include <cstring>
+#include <new>
 
 namespace pm::v7::clob_wire {
+
+struct L2HmacState {
+    SHA256_CTX inner_seed{};
+    SHA256_CTX outer_seed{};
+};
+
 namespace {
 
 class BufferWriter final {
@@ -29,21 +34,17 @@ public:
         return true;
     }
 
-    bool quoted(std::string_view value) noexcept {
-        if (!json_atom(value)) {
-            ok_ = false;
-            return false;
-        }
+    // serialize_post_market_order() validates every dynamic atom once before
+    // writing. Re-scanning long signatures/token IDs here only duplicates work.
+    bool quoted_validated(std::string_view value) noexcept {
         return append("\"") && append(value) && append("\"");
     }
 
-    bool integer(unsigned value) noexcept {
-        std::array<char, 16> buffer{};
-        const auto [end, ec] = std::to_chars(buffer.data(), buffer.data() + buffer.size(), value);
-        return ec == std::errc{} && append(std::string_view(buffer.data(), static_cast<std::size_t>(end - buffer.data())));
+    bool signature_type_validated(std::uint8_t value) noexcept {
+        const char digit = static_cast<char>('0' + value);
+        return append(std::string_view(&digit, 1));
     }
 
-    [[nodiscard]] bool ok() const noexcept { return ok_; }
     [[nodiscard]] std::size_t size() const noexcept { return ok_ ? size_ : 0; }
 
     static bool json_atom(std::string_view value) noexcept {
@@ -67,7 +68,7 @@ bool decimal(std::string_view value) noexcept {
 
 bool valid_order(const PostMarketOrderView& request) noexcept {
     const auto& order = request.order;
-    if (request.owner.empty() || !BufferWriter::json_atom(request.owner)) return false;
+    if (!BufferWriter::json_atom(request.owner)) return false;
     if (request.order_type != MarketOrderType::FAK && request.order_type != MarketOrderType::FOK) return false;
     // Current CLOB direct-market-order contract requires expiration="0".
     if (order.expiration != "0") return false;
@@ -75,9 +76,9 @@ bool valid_order(const PostMarketOrderView& request) noexcept {
     if (order.signature_type > 3) return false;
     if (!decimal(order.maker_amount) || !decimal(order.taker_amount)
         || !decimal(order.salt_decimal) || !decimal(order.timestamp_ms)) return false;
-    const std::array<std::string_view, 7> atoms{
+    const std::array<std::string_view, 6> atoms{
         order.builder, order.maker, order.metadata, order.signature,
-        order.signer, order.token_id, order.side};
+        order.signer, order.token_id};
     return std::all_of(atoms.begin(), atoms.end(), BufferWriter::json_atom);
 }
 
@@ -175,6 +176,10 @@ std::size_t encode_base64url(std::span<const unsigned char> input,
     return out;
 }
 
+bool update_sha256(SHA256_CTX& ctx, std::string_view value) noexcept {
+    return SHA256_Update(&ctx, value.data(), value.size()) == 1;
+}
+
 } // namespace
 
 std::size_t serialize_post_market_order(const PostMarketOrderView& request,
@@ -182,63 +187,118 @@ std::size_t serialize_post_market_order(const PostMarketOrderView& request,
     if (!valid_order(request)) return 0;
     const auto& order = request.order;
     BufferWriter w(output);
-    w.append("{\"deferExec\":false,\"order\":{\"builder\":"); w.quoted(order.builder);
-    w.append(",\"expiration\":"); w.quoted(order.expiration);
-    w.append(",\"maker\":"); w.quoted(order.maker);
-    w.append(",\"makerAmount\":"); w.quoted(order.maker_amount);
-    w.append(",\"metadata\":"); w.quoted(order.metadata);
+    w.append("{\"deferExec\":false,\"order\":{\"builder\":"); w.quoted_validated(order.builder);
+    w.append(",\"expiration\":"); w.quoted_validated(order.expiration);
+    w.append(",\"maker\":"); w.quoted_validated(order.maker);
+    w.append(",\"makerAmount\":"); w.quoted_validated(order.maker_amount);
+    w.append(",\"metadata\":"); w.quoted_validated(order.metadata);
     w.append(",\"salt\":"); w.append(order.salt_decimal);
-    w.append(",\"side\":"); w.quoted(order.side);
-    w.append(",\"signature\":"); w.quoted(order.signature);
-    w.append(",\"signatureType\":"); w.integer(order.signature_type);
-    w.append(",\"signer\":"); w.quoted(order.signer);
-    w.append(",\"takerAmount\":"); w.quoted(order.taker_amount);
-    w.append(",\"timestamp\":"); w.quoted(order.timestamp_ms);
-    w.append(",\"tokenId\":"); w.quoted(order.token_id);
+    w.append(",\"side\":"); w.quoted_validated(order.side);
+    w.append(",\"signature\":"); w.quoted_validated(order.signature);
+    w.append(",\"signatureType\":"); w.signature_type_validated(order.signature_type);
+    w.append(",\"signer\":"); w.quoted_validated(order.signer);
+    w.append(",\"takerAmount\":"); w.quoted_validated(order.taker_amount);
+    w.append(",\"timestamp\":"); w.quoted_validated(order.timestamp_ms);
+    w.append(",\"tokenId\":"); w.quoted_validated(order.token_id);
     w.append("},\"orderType\":\"");
     w.append(request.order_type == MarketOrderType::FAK ? "FAK" : "FOK");
-    w.append("\",\"owner\":"); w.quoted(request.owner); w.append("}");
+    w.append("\",\"owner\":"); w.quoted_validated(request.owner); w.append("}");
     return w.size();
 }
 
 L2HmacSigner::L2HmacSigner(std::string_view base64_secret) noexcept {
-    if (!decode_base64(base64_secret, key_, key_size_)) return;
-    mac_ = EVP_MAC_fetch(nullptr, "HMAC", nullptr);
-    if (mac_ == nullptr) return;
-    ctx_ = EVP_MAC_CTX_new(mac_);
-    if (ctx_ == nullptr) return;
-    valid_ = true;
+    std::array<unsigned char, 128> decoded{};
+    std::size_t decoded_size = 0;
+    if (!decode_base64(base64_secret, decoded, decoded_size)) return;
+
+    std::array<unsigned char, 64> key_block{};
+    if (decoded_size > key_block.size()) {
+        std::array<unsigned char, SHA256_DIGEST_LENGTH> reduced{};
+        if (SHA256(decoded.data(), decoded_size, reduced.data()) == nullptr) {
+            OPENSSL_cleanse(decoded.data(), decoded.size());
+            return;
+        }
+        std::memcpy(key_block.data(), reduced.data(), reduced.size());
+        OPENSSL_cleanse(reduced.data(), reduced.size());
+    } else {
+        std::memcpy(key_block.data(), decoded.data(), decoded_size);
+    }
+    OPENSSL_cleanse(decoded.data(), decoded.size());
+
+    std::array<unsigned char, 64> inner_pad{};
+    std::array<unsigned char, 64> outer_pad{};
+    for (std::size_t i = 0; i < key_block.size(); ++i) {
+        inner_pad[i] = static_cast<unsigned char>(key_block[i] ^ 0x36U);
+        outer_pad[i] = static_cast<unsigned char>(key_block[i] ^ 0x5cU);
+    }
+    OPENSSL_cleanse(key_block.data(), key_block.size());
+
+    auto* candidate = new (std::nothrow) L2HmacState;
+    if (candidate == nullptr) {
+        OPENSSL_cleanse(inner_pad.data(), inner_pad.size());
+        OPENSSL_cleanse(outer_pad.data(), outer_pad.size());
+        return;
+    }
+    const bool initialized = SHA256_Init(&candidate->inner_seed) == 1
+        && SHA256_Update(&candidate->inner_seed, inner_pad.data(), inner_pad.size()) == 1
+        && SHA256_Init(&candidate->outer_seed) == 1
+        && SHA256_Update(&candidate->outer_seed, outer_pad.data(), outer_pad.size()) == 1;
+    OPENSSL_cleanse(inner_pad.data(), inner_pad.size());
+    OPENSSL_cleanse(outer_pad.data(), outer_pad.size());
+    if (!initialized) {
+        OPENSSL_cleanse(candidate, sizeof(*candidate));
+        delete candidate;
+        return;
+    }
+    state_ = candidate;
 }
 
 L2HmacSigner::~L2HmacSigner() {
-    if (ctx_ != nullptr) EVP_MAC_CTX_free(ctx_);
-    if (mac_ != nullptr) EVP_MAC_free(mac_);
-    std::fill(key_.begin(), key_.end(), 0U);
-    key_size_ = 0;
-    ctx_ = nullptr;
-    mac_ = nullptr;
-    valid_ = false;
+    if (state_ != nullptr) {
+        OPENSSL_cleanse(state_, sizeof(*state_));
+        delete state_;
+        state_ = nullptr;
+    }
 }
 
 std::size_t L2HmacSigner::sign(std::string_view request_timestamp,
                                std::string_view exact_body,
                                std::span<char> output) noexcept {
-    if (!valid_ || request_timestamp.empty() || exact_body.empty()) return 0;
-    std::array<unsigned char, 32> digest{};
-    std::size_t digest_size = 0;
-    char digest_name[] = "SHA256";
-    OSSL_PARAM params[] = {
-        OSSL_PARAM_construct_utf8_string(OSSL_MAC_PARAM_DIGEST, digest_name, 0),
-        OSSL_PARAM_construct_end(),
-    };
-    if (EVP_MAC_init(ctx_, key_.data(), key_size_, params) != 1) return 0;
-    const auto update = [&](std::string_view value) noexcept {
-        return EVP_MAC_update(ctx_, reinterpret_cast<const unsigned char*>(value.data()), value.size()) == 1;
-    };
-    if (!update(request_timestamp) || !update("POST") || !update("/order") || !update(exact_body)) return 0;
-    if (EVP_MAC_final(ctx_, digest.data(), &digest_size, digest.size()) != 1
-        || digest_size != digest.size()) return 0;
-    return encode_base64url(std::span<const unsigned char>(digest.data(), digest_size), output);
+    if (state_ == nullptr || request_timestamp.empty() || exact_body.empty()) return 0;
+
+    SHA256_CTX inner{};
+    std::memcpy(&inner, &state_->inner_seed, sizeof(inner));
+    if (!update_sha256(inner, request_timestamp)
+        || !update_sha256(inner, "POST")
+        || !update_sha256(inner, "/order")
+        || !update_sha256(inner, exact_body)) {
+        OPENSSL_cleanse(&inner, sizeof(inner));
+        return 0;
+    }
+
+    std::array<unsigned char, SHA256_DIGEST_LENGTH> inner_digest{};
+    if (SHA256_Final(inner_digest.data(), &inner) != 1) {
+        OPENSSL_cleanse(&inner, sizeof(inner));
+        return 0;
+    }
+    OPENSSL_cleanse(&inner, sizeof(inner));
+
+    SHA256_CTX outer{};
+    std::memcpy(&outer, &state_->outer_seed, sizeof(outer));
+    if (SHA256_Update(&outer, inner_digest.data(), inner_digest.size()) != 1) {
+        OPENSSL_cleanse(inner_digest.data(), inner_digest.size());
+        OPENSSL_cleanse(&outer, sizeof(outer));
+        return 0;
+    }
+    std::array<unsigned char, SHA256_DIGEST_LENGTH> digest{};
+    const bool ok = SHA256_Final(digest.data(), &outer) == 1;
+    OPENSSL_cleanse(inner_digest.data(), inner_digest.size());
+    OPENSSL_cleanse(&outer, sizeof(outer));
+    if (!ok) return 0;
+
+    const auto written = encode_base64url(digest, output);
+    OPENSSL_cleanse(digest.data(), digest.size());
+    return written;
 }
 
 } // namespace pm::v7::clob_wire
