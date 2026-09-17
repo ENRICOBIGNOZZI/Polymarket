@@ -75,6 +75,7 @@ add_library(pm_v7_external
   src/v7_ingress_wakeup.cpp
   src/v7_external_ws.cpp
   src/v7_latest_json_publisher.cpp
+  src/v7_external_cancel_publisher.cpp
   src/v7_external_tape.cpp
   src/v7_external_replay.cpp)
 target_include_directories(pm_v7_external PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/include ${Boost_INCLUDE_DIRS})
@@ -283,6 +284,11 @@ if(BUILD_TESTING)
   add_executable(pm_v7_latest_json_publisher_tests tests/test_v7_latest_json_publisher.cpp)
   target_link_libraries(pm_v7_latest_json_publisher_tests PRIVATE pm_v7_external)
   add_test(NAME pm_v7_latest_json_publisher_tests COMMAND pm_v7_latest_json_publisher_tests)
+
+  add_executable(pm_v7_external_cancel_publisher_tests tests/test_v7_external_cancel_publisher.cpp)
+  target_link_libraries(pm_v7_external_cancel_publisher_tests PRIVATE pm_v7_external)
+  target_compile_options(pm_v7_external_cancel_publisher_tests PRIVATE -UNDEBUG)
+  add_test(NAME pm_v7_external_cancel_publisher_tests COMMAND pm_v7_external_cancel_publisher_tests)
 
   add_executable(pm_v7_external_tape_tests tests/test_v7_external_tape.cpp)
   target_link_libraries(pm_v7_external_tape_tests PRIVATE pm_v7_external)
