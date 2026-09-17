@@ -289,11 +289,6 @@ class LeadLagRuntime:
         self.signal_generation = 0
         self.latest_signal: dict[str, Any] = {}
         self.signal_pump_thread: threading.Thread | None = None
-        self.book_metadata_pool = concurrent.futures.ThreadPoolExecutor(
-            max_workers=1, thread_name_prefix="v7-lead-lag-book-metadata")
-        self.book_metadata_future: concurrent.futures.Future[Any] | None = None
-        self.book_metadata_key: tuple[str, str] | None = None
-        self.book_metadata: dict[str, tuple[float, float]] = {}
         self.audit_writer = AsyncJsonlWriter(root / "research" / "lead_lag_taker_v1" / "events.jsonl") if coordinator_ipc else None
         self.settlement_pool = concurrent.futures.ThreadPoolExecutor(
             max_workers=1, thread_name_prefix="v7-lead-lag-settlement")
@@ -478,59 +473,19 @@ class LeadLagRuntime:
         yes, no = str(market.get("yes_token") or ""), str(market.get("no_token") or "")
         return (yes, no) if yes and no and yes != no else None
 
-    def _fetch_book_metadata(self, tokens: tuple[str, str]) -> dict[str, tuple[float, float]]:
-        rows = self.clob.request_books(list(tokens))
-        received = now_ms(); output: dict[str, tuple[float, float]] = {}
-        for raw in rows if isinstance(rows, list) else []:
-            book = parse_book(raw, received)
-            if book is not None and book.token_id in tokens:
-                output[book.token_id] = (book.tick_size, book.min_order_size)
-        if set(output) != set(tokens):
-            raise RuntimeError("book_metadata_incomplete")
-        return output
-
-    def maintain_book_metadata(self, status: dict[str, Any]) -> None:
-        if self.hot_book_cache is None:
-            return
-        tokens = self._book_tokens(status)
-        if tokens is None:
-            return
-        if self.book_metadata_future is not None and self.book_metadata_future.done():
-            try:
-                result = self.book_metadata_future.result()
-            except Exception:
-                result = None
-            if isinstance(result, dict) and self.book_metadata_key == tokens:
-                self.book_metadata = result
-            self.book_metadata_future = None
-        if self.book_metadata_key != tokens:
-            self.book_metadata_key = tokens
-            self.book_metadata = {}
-            self.book_metadata_future = None
-        if not self.book_metadata and self.book_metadata_future is None:
-            self.book_metadata_future = self.book_metadata_pool.submit(
-                self._fetch_book_metadata, tokens)
-
     def books(self, status: dict[str, Any]) -> dict[str, Book]:
         tokens = self._book_tokens(status)
         if tokens is None:
             return {}
         if self.hot_book_cache is not None:
-            self.maintain_book_metadata(status)
-            if set(self.book_metadata) != set(tokens):
-                return {}
             current_ms = now_ms(); output: dict[str, Book] = {}
             market_id = str((status.get("market") or {}).get("market_id") or "")
             for token in tokens:
                 hot = self.hot_book_cache.read(token, maximum_age_ms=100, now_ms=current_ms)
                 if hot is None or hot.market_id != market_id:
                     return {}
-                tick, minimum = self.book_metadata[token]
-                # Tick changes are supplied by the live WS book. Static metadata
-                # exists only to preserve min_order_size without a hot REST call.
-                tick = hot.tick_size if hot.tick_size > 0 else tick
                 output[token] = Book(
-                    token, hot.bids, hot.asks, tick, minimum,
+                    token, hot.bids, hot.asks, hot.tick_size, hot.min_order_size,
                     min(current_ms, hot.exchange_event_ns // 1_000_000),
                     hot.receive_wall_ms, hot.snapshot_id,
                 )
@@ -659,7 +614,6 @@ class LeadLagRuntime:
         if int(self.state.get("entries") or 0) >= target:
             self.skip("TARGET_ENTRIES_REACHED"); return
         current_ns = time.time_ns(); signal = signal_override if isinstance(signal_override, dict) else load(self.signal_path); status = self.current_status()
-        self.maintain_book_metadata(status)
         candidate, reason = signal_candidate(self.config, signal, status, model_sha=self.sha, current_ns=current_ns)
         if candidate is None:
             self.skip(reason); return
@@ -882,7 +836,7 @@ class LeadLagRuntime:
             "audit_queue_sync_fallbacks": self.audit_writer.fallbacks if self.audit_writer else 0,
             "settlement_requests_inflight": len(self.settlement_futures),
             "hot_book_cache_enabled": self.hot_book_cache is not None,
-            "hot_book_metadata_ready": bool(self.book_metadata),
+            "hot_book_metadata_source": "CANONICAL_WS_BOOTSTRAP_MMAP" if self.hot_book_cache else "LEGACY_REST",
             "signal_wait_mode": ("UNIX_DGRAM_DIRECT_WITH_FILE_FALLBACK" if self.signal_socket_path else
                                  ("FILE_EVENT_PUMP" if self.event_driven_signal else "POLL_INTERVAL")),
             "signal_datagrams_received": self.signal_receiver.received if self.signal_receiver else 0,
@@ -913,20 +867,15 @@ class LeadLagRuntime:
         self.start_status_cache()
         self.start_signal_pump()
         next_settle = time.monotonic()
-        next_metadata = next_settle
         last_generation = 0
         try:
             while True:
                 now = time.monotonic()
-                if now >= next_metadata:
-                    try: self.maintain_book_metadata(self.cached_status)
-                    except Exception as exc: self.event("BOOK_METADATA_ERROR", error=f"{type(exc).__name__}:{exc}")
-                    next_metadata = now + .100
                 if now >= next_settle:
                     try: self.settle_positions()
                     except Exception as exc: self.event("SETTLEMENT_ERROR", error=f"{type(exc).__name__}:{exc}")
                     self.persist(); self.publish(); next_settle = now + settle
-                timeout = max(0.0, min(next_metadata, next_settle) - time.monotonic())
+                timeout = max(0.0, next_settle - time.monotonic())
                 generation, signal = self.wait_signal_after(last_generation, timeout)
                 if signal is not None and generation > last_generation:
                     last_generation = generation
@@ -961,7 +910,6 @@ def main() -> int:
         runtime.run()
     finally:
         runtime.settlement_pool.shutdown(wait=False, cancel_futures=True)
-        runtime.book_metadata_pool.shutdown(wait=False, cancel_futures=True)
         if runtime.hot_book_cache is not None:
             runtime.hot_book_cache.close()
         if runtime.audit_writer is not None:

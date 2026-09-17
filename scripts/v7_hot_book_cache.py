@@ -32,6 +32,7 @@ class HotBook:
     receive_monotonic_ns: int
     receive_wall_ms: int
     tick_size: float
+    min_order_size: float
     bids: tuple[tuple[float, float], ...]
     asks: tuple[tuple[float, float], ...]
     snapshot_id: str
@@ -138,9 +139,10 @@ class HotBookCacheReader:
         instrument, state_version = struct.unpack_from("<QQ", payload, 8)
         exchange_ns, receive_mono_ns, receive_wall_ms = struct.unpack_from("<qqq", payload, 24)
         tick_e4, = struct.unpack_from("<i", payload, 48)
+        min_order_microunits, = struct.unpack_from("<q", payload, 496)
         bid_count, ask_count, lineage, valid = payload[52], payload[53], payload[54], payload[55]
         if (instrument != slot or state_version <= 0 or exchange_ns <= 0 or receive_mono_ns <= 0
-                or receive_wall_ms <= 0 or tick_e4 <= 0 or bid_count > MAX_LEVELS
+                or receive_wall_ms <= 0 or tick_e4 <= 0 or min_order_microunits <= 0 or bid_count > MAX_LEVELS
                 or ask_count > MAX_LEVELS or not lineage or not valid):
             return None
         current = time.time_ns() // 1_000_000 if now_ms is None else int(now_ms)
@@ -160,7 +162,7 @@ class HotBookCacheReader:
             return None
         return HotBook(
             token, market, state_version, exchange_ns, receive_mono_ns, receive_wall_ms,
-            tick_e4 / 10_000.0, bids, asks,
+            tick_e4 / 10_000.0, min_order_microunits / 1_000_000.0, bids, asks,
             f"hot-book:{token}:{state_version}:{receive_mono_ns}",
         )
 

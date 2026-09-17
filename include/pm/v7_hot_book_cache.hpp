@@ -29,7 +29,8 @@ public:
                                std::string_view market_id,
                                std::string_view token_id,
                                const BookHotSnapshot& book,
-                               std::int64_t receive_wall_ms) noexcept;
+                               std::int64_t receive_wall_ms,
+                               std::int64_t min_order_size_microunits) noexcept;
     [[nodiscard]] std::uint64_t publications() const noexcept { return publications_.load(std::memory_order_relaxed); }
     [[nodiscard]] std::uint64_t failures() const noexcept { return failures_.load(std::memory_order_relaxed); }
 

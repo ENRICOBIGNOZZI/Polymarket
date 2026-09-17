@@ -184,6 +184,7 @@ struct SelectedToken {
     std::uint64_t event_handle = 0;
     std::uint64_t instrument_handle = 0;
     std::int32_t tick_size_e4 = 0;
+    std::int64_t min_order_size_microunits = 1'000'000;
 };
 
 [[nodiscard]] std::vector<std::pair<std::string, std::pair<std::string, std::string>>>
@@ -305,9 +306,11 @@ fair_observation_pairs(const Options& options) {
                 if (yes_tick <= 0 || no_tick <= 0) continue;
                 const auto market = ++market_handle;
                 output.push_back({market_id, event_id, pair.second.first, market, market,
-                                  ++instrument_handle, yes_tick});
+                                  ++instrument_handle, yes_tick,
+                                  static_cast<std::int64_t>(std::llround(std::max(1.0, yes->second.min_order_size) * kMicrounitsPerShare))});
                 output.push_back({market_id, event_id, pair.second.second, market, market,
-                                  ++instrument_handle, no_tick});
+                                  ++instrument_handle, no_tick,
+                                  static_cast<std::int64_t>(std::llround(std::max(1.0, no->second.min_order_size) * kMicrounitsPerShare))});
             }
             if (!output.empty()) return output;
         } catch (const std::exception& error) {
@@ -347,7 +350,7 @@ struct FlowSample {
 class ExactWsObserver final {
 public:
     ExactWsObserver(std::vector<SelectedToken> tokens, std::string ws_url,
-                    fs::path output_dir, std::string model_sha, fs::path hot_book_cache)
+                    fs::path output_dir, std::string model_sha, fs::path hot_book_cache = {})
         : tokens_(std::move(tokens)), ws_url_(std::move(ws_url)),
           output_dir_(std::move(output_dir)), model_sha_(std::move(model_sha)) {
         std::vector<pm::v7::TokenBinding> bindings;
@@ -465,7 +468,7 @@ public:
                 if (hot_token != nullptr) {
                     (void)hot_book_cache_->publish(
                         event.instrument_handle, hot_token->market_id, hot_token->token_id,
-                        event.book, receive.wall_ms);
+                        event.book, receive.wall_ms, hot_token->min_order_size_microunits);
                 }
             }
             if (!queue_->try_push(row)) dropped_.fetch_add(1, std::memory_order_relaxed);

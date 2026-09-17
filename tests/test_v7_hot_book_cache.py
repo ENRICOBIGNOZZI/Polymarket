@@ -33,6 +33,7 @@ def fixture(path: Path, *, sequence: int = 2, valid: int = 1, lineage: int = 1,
     payload[base + 160:base + 160 + len(token)] = token.encode()
     struct.pack_into("<iqiq", payload, base + 256, 4990, 3_000_000, 4980, 5_000_000)
     struct.pack_into("<iqiq", payload, base + 376, 5010, 4_000_000, 5020, 6_000_000)
+    struct.pack_into("<q", payload, base + 496, 5_000_000)
     path.write_bytes(payload)
     return token
 
@@ -47,6 +48,7 @@ def test_valid_snapshot_and_exact_l10() -> None:
             assert book.bids == ((.499, 3.0), (.498, 5.0))
             assert book.asks == ((.501, 4.0), (.502, 6.0))
             assert book.tick_size == .001
+            assert book.min_order_size == 5.0
 
 
 def test_odd_sequence_lineage_invalid_and_stale_fail_closed() -> None:

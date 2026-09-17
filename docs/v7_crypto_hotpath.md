@@ -14,7 +14,7 @@ The frozen BTC M5 signal still uses its existing 25ms evaluation grid, 100ms sho
 
 Polymarket executable books are maintained by the existing canonical WebSocket decoder. A fixed-size local mmap exports the current L10 snapshot. The taker rejects stale, invalid, non-continuous, wrong-SHA or torn snapshots.
 
-`min_order_size` and other static book metadata are refreshed outside the trigger path. If that metadata is not ready, the taker fails closed rather than falling back to REST on the signal thread.
+`min_order_size` is captured by the canonical C++ cold-start/recovery book bootstrap and exported in the same mmap slot. After bootstrap, the taker performs no `/books` REST call on either the trigger path or a metadata side path. If the mmap snapshot is stale or invalid, it fails closed.
 
 The coordinator can receive a candidate through a bounded Unix stream and reply directly. The accept thread performs framing only; economic logic remains on the single coordinator owner thread.
 ## Slow path

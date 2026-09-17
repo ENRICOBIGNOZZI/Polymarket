@@ -35,9 +35,9 @@ int main() {
         book.bid_level_count = 2; book.ask_level_count = 2;
         book.lineage_continuous = 1; book.valid = 1;
         assert(writer.publish(1, "4618098", "82557822733541051116003757150499858511", book,
-                              1'789'650'000'124LL));
+                              1'789'650'000'124LL, 5'000'000));
         assert(writer.publications() == 1 && writer.failures() == 0);
-        assert(!writer.publish(0, "m", "t", book, 1));
+        assert(!writer.publish(0, "m", "t", book, 1, 1'000'000));
         assert(writer.failures() == 1);
     }
     std::ifstream input(path, std::ios::binary);
@@ -58,6 +58,7 @@ int main() {
     assert(read_at<std::int64_t>(bytes, base + 260) == 3'000'000);
     assert(read_at<std::int32_t>(bytes, base + 376) == 5010);
     assert(read_at<std::int64_t>(bytes, base + 380) == 4'000'000);
+    assert(read_at<std::int64_t>(bytes, base + 496) == 5'000'000);
     std::filesystem::remove(path);
     std::cout << "hot book cache writer PASS\n";
 }

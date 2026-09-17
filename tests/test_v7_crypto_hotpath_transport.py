@@ -103,16 +103,12 @@ def test_hot_book_path_never_calls_clob_rest_when_metadata_ready() -> None:
     class Cache:
         def read(self, token: str, **kwargs):
             return HotBook(token, "m1", 9, 1_789_650_000_000_000, 123, time.time_ns() // 1_000_000,
-                           .001, ((.49, 10.0),), ((.51, 10.0),), f"hot:{token}:9")
+                           .001, 1.0, ((.49, 10.0),), ((.51, 10.0),), f"hot:{token}:9")
     class NoRest:
         def request_books(self, _):
             raise AssertionError("REST /books entered hot path")
     runtime = object.__new__(LeadLagRuntime)
     runtime.hot_book_cache = Cache()
-    runtime.book_metadata_key = ("yes", "no")
-    runtime.book_metadata = {"yes": (.001, 1.0), "no": (.001, 1.0)}
-    runtime.book_metadata_future = None
-    runtime.book_metadata_pool = None
     runtime.clob = NoRest()
     status = {"market": {"market_id": "m1", "yes_token": "yes", "no_token": "no"}}
     books = runtime.books(status)
@@ -120,17 +116,11 @@ def test_hot_book_path_never_calls_clob_rest_when_metadata_ready() -> None:
     assert books["yes"].asks[0] == (.51, 10.0)
 
 
-def test_hot_book_path_fails_closed_if_metadata_not_ready() -> None:
+def test_hot_book_path_fails_closed_if_cache_has_no_fresh_snapshot() -> None:
     class Cache:
-        def read(self, *_args, **_kwargs):
-            raise AssertionError("book must not be used before metadata is ready")
-    class Pending:
-        def done(self): return False
+        def read(self, *_args, **_kwargs): return None
     runtime = object.__new__(LeadLagRuntime)
     runtime.hot_book_cache = Cache()
-    runtime.book_metadata_key = ("yes", "no")
-    runtime.book_metadata = {}
-    runtime.book_metadata_future = Pending()
     status = {"market": {"market_id": "m1", "yes_token": "yes", "no_token": "no"}}
     assert runtime.books(status) == {}
 
@@ -146,12 +136,9 @@ def test_hot_candidate_uses_mmap_books_and_direct_receipt_without_rest_or_files(
             def read(self, token, **_kwargs):
                 ask = .40 if token == 'yes' else .61
                 return HotBook(token, 'm-live', 11, now_ns, 123, time.time_ns()//1_000_000,
-                               .01, ((ask-.01,100.0),), ((ask,100.0),), f'hot:{token}:11')
+                               .01, 5.0, ((ask-.01,100.0),), ((ask,100.0),), f'hot:{token}:11')
         runtime.event_driven_signal = True
         runtime.hot_book_cache = Cache()
-        runtime.book_metadata_key = ('yes','no')
-        runtime.book_metadata = {'yes':(.01,5.0),'no':(.01,5.0)}
-        runtime.book_metadata_future = None
         runtime.cached_status = stat
         runtime.latest_signal = sig
         runtime.clob.request_books = mock.Mock(side_effect=AssertionError('REST /books entered hot path'))
@@ -175,11 +162,10 @@ def test_hot_candidate_revalidates_newer_signal_while_waiting_for_coordinator() 
         class Cache:
             def read(self, token, **_kwargs):
                 ask=.40 if token=='yes' else .61
-                return HotBook(token,'m-live',12,now_ns,124,time.time_ns()//1_000_000,.01,
+                return HotBook(token,'m-live',12,now_ns,124,time.time_ns()//1_000_000,.01,5.0,
                                ((ask-.01,100.0),),((ask,100.0),),f'hot:{token}:12')
         runtime.event_driven_signal=True; runtime.hot_book_cache=Cache()
-        runtime.book_metadata_key=('yes','no'); runtime.book_metadata={'yes':(.01,5.0),'no':(.01,5.0)}
-        runtime.book_metadata_future=None; runtime.cached_status=stat; runtime.latest_signal=sig
+        runtime.cached_status=stat; runtime.latest_signal=sig
         runtime.clob.request_books=mock.Mock(side_effect=AssertionError('REST /books entered hot path'))
         runtime.coordinator_ipc=Path('/unused-direct-ipc')
         def authorize_then_invalidate(env):

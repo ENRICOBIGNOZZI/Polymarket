@@ -75,12 +75,13 @@ bool HotBookCacheWriter::publish(std::uint64_t instrument_handle,
                                  std::string_view market_id,
                                  std::string_view token_id,
                                  const BookHotSnapshot& book,
-                                 std::int64_t receive_wall_ms) noexcept {
+                                 std::int64_t receive_wall_ms,
+                                 std::int64_t min_order_size_microunits) noexcept {
     if (mapping_ == nullptr || instrument_handle == 0 || instrument_handle > max_handle_
         || market_id.empty() || market_id.size() > kMarketBytes
         || token_id.empty() || token_id.size() > kTokenBytes
         || receive_wall_ms <= 0 || book.bid_level_count > kHotDepthLevels
-        || book.ask_level_count > kHotDepthLevels) {
+        || book.ask_level_count > kHotDepthLevels || min_order_size_microunits <= 0) {
         failures_.fetch_add(1, std::memory_order_relaxed); return false;
     }
     auto* slot = mapping_ + kHotBookCacheHeaderBytes
@@ -111,6 +112,7 @@ bool HotBookCacheWriter::publish(std::uint64_t instrument_handle,
         write_i32(slot, kAskOffset + i * kLevelBytes, book.ask_levels[i].price_e4);
         write_i64(slot, kAskOffset + i * kLevelBytes + 4, book.ask_levels[i].quantity_microunits);
     }
+    write_i64(slot, 496, min_order_size_microunits);
     sequence = odd + 1;
     __atomic_store_n(reinterpret_cast<std::uint64_t*>(slot), sequence, __ATOMIC_RELEASE);
     publications_.fetch_add(1, std::memory_order_relaxed);
