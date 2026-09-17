@@ -146,31 +146,22 @@ def _manifest_windowed_old(value: dict[str, Any], cutoff_ns: int, runs: Path) ->
 
 
 
-def _existing_tombstone_allows_cleanup(path: Path, current: dict[str, Any]) -> bool:
-    """Resume a previously authorized retirement without rewriting immutable evidence.
-
-    A pass can crash after the tombstone is durable but before every pack/locator/
-    manifest is unlinked. Dynamic timestamps therefore must never force a second,
-    colliding tombstone write. Current references may only be a subset of the
-    already-recorded retirement identity; new references fail closed.
-    """
-    if not path.exists():
-        return False
-    previous = _load(path)
-    required = {
-        "schema": "polymarket_v7_windowed_pack_tombstone_v1",
-        **AUTH,
-        "policy": POLICY,
-        "raw_detail_available": False,
-        "pack_sha256": current["pack_sha256"],
-    }
-    if any(previous.get(key) != value for key, value in required.items()):
-        raise ValueError(f"unsafe existing windowed tombstone:{current['pack_sha256']}")
-    for key in ("source_aliases", "source_families", "object_sha256s", "manifest_sha256s"):
-        old = previous.get(key)
-        now = current.get(key)
-        if not isinstance(old, list) or not isinstance(now, list) or not set(now) <= set(old):
-            raise ValueError(f"windowed tombstone identity expanded:{current['pack_sha256']}:{key}")
+def _existing_tombstone_allows_cleanup(path: Path, current: dict[str, Any], store: Path) -> bool:
+    if not path.exists(): return False
+    previous=_load(path)
+    required={"schema":"polymarket_v7_windowed_pack_tombstone_v1",**AUTH,"policy":POLICY,"raw_detail_available":False,"pack_sha256":current["pack_sha256"]}
+    if any(previous.get(k)!=v for k,v in required.items()): raise ValueError(f"unsafe existing windowed tombstone:{current['pack_sha256']}")
+    for key in ("source_aliases","source_families"):
+        old=previous.get(key); now=current.get(key)
+        if not isinstance(old,list) or not isinstance(now,list) or not set(now)<=set(old): raise ValueError(f"windowed tombstone identity expanded:{current['pack_sha256']}:{key}")
+    additions={}
+    for key in ("object_sha256s","manifest_sha256s"):
+        old=previous.get(key); now=current.get(key)
+        if not isinstance(old,list) or not isinstance(now,list): raise ValueError(f"windowed tombstone identity malformed:{current['pack_sha256']}:{key}")
+        additions[key]=sorted(set(now)-set(old))
+    if any(additions.values()):
+        receipt={"schema":"polymarket_v7_windowed_pack_resume_receipt_v1",**AUTH,"policy":POLICY,"raw_detail_available":False,"pack_sha256":current["pack_sha256"],"parent_tombstone_sha256":digest(canonical(previous)),"source_aliases":current["source_aliases"],"source_families":current["source_families"],"added_object_sha256s":additions["object_sha256s"],"added_manifest_sha256s":additions["manifest_sha256s"]}
+        payload=canonical(receipt); sha=digest(payload); immutable(store/"windowed_pack_resume_receipts"/sha[:2]/(sha+".json"),payload)
     return True
 
 def _safe_unlink(path: Path) -> int:
@@ -347,7 +338,7 @@ def run(runs_root: Path, *, raw_detail_seconds: int = 21600,
         }
         tombstone_path = store / "windowed_pack_tombstones" / (pack + ".json")
         if not dry_run:
-            if not _existing_tombstone_allows_cleanup(tombstone_path, tombstone):
+            if not _existing_tombstone_allows_cleanup(tombstone_path, tombstone, store):
                 immutable(tombstone_path, canonical(tombstone))
         path = store / "packs" / pack[:2] / (pack + ".pack")
         if path.exists():
