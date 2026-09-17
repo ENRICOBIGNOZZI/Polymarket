@@ -1,0 +1,228 @@
+name: V7 dynamic RX self-build
+
+on:
+  push:
+    branches:
+      - perf/hft-dynamic-rx-affinity-20260917
+
+permissions:
+  contents: write
+
+concurrency:
+  group: polymarket-v7-dynamic-rx-selfbuild
+  cancel-in-progress: false
+
+jobs:
+  build:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          ref: perf/hft-dynamic-rx-affinity-20260917
+          fetch-depth: 0
+
+      - name: Apply dynamic RX/NAPI alignment patch
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+
+          def rep(path, old, new):
+              p=Path(path); s=p.read_text()
+              if s.count(old) != 1:
+                  raise SystemExit(f'anchor count {path}: {s.count(old)}')
+              p.write_text(s.replace(old,new,1))
+
+          rep('include/pm/fast_ws.hpp',
+              '    std::uint64_t affinity_errors = 0;\n};',
+              '    std::uint64_t affinity_errors = 0;\n    std::uint64_t rx_realignments = 0;\n    std::uint64_t rx_rejections = 0;\n    std::uint64_t rx_alignment_errors = 0;\n    int incoming_cpu = -1;\n    int incoming_napi_id = -1;\n};')
+          rep('include/pm/fast_ws.hpp',
+              '                        std::vector<int> worker_cpu_affinity = {},\n                        int socket_busy_poll_us = 0);',
+              '                        std::vector<int> worker_cpu_affinity = {},\n                        int socket_busy_poll_us = 0,\n                        std::vector<int> dynamic_rx_cpu_allowlist = {});')
+
+          rep('include/pm/v7_external_ws.hpp',
+              '    int socket_busy_poll_us = 0;\n};',
+              '    int socket_busy_poll_us = 0;\n    std::vector<int> dynamic_rx_cpu_allowlist;\n};')
+          rep('include/pm/v7_external_ws.hpp',
+              '    std::int64_t last_receive_wall_ns = 0;\n    std::uint8_t connected = 0;',
+              '    std::int64_t last_receive_wall_ns = 0;\n    std::uint64_t rx_realignments = 0;\n    std::uint64_t rx_rejections = 0;\n    std::uint64_t rx_alignment_errors = 0;\n    std::int32_t incoming_cpu = -1;\n    std::int32_t incoming_napi_id = -1;\n    std::uint8_t connected = 0;')
+          rep('include/pm/v7_external_ws.hpp',
+              '    std::atomic<std::int64_t> last_receive_wall_ns_{0};\n    std::atomic<bool> connected_{false};',
+              '    std::atomic<std::int64_t> last_receive_wall_ns_{0};\n    std::atomic<std::uint64_t> rx_realignments_{0};\n    std::atomic<std::uint64_t> rx_rejections_{0};\n    std::atomic<std::uint64_t> rx_alignment_errors_{0};\n    std::atomic<std::int32_t> incoming_cpu_{-1};\n    std::atomic<std::int32_t> incoming_napi_id_{-1};\n    std::atomic<bool> connected_{false};')
+
+          p=Path('include/pm/rx_thread_alignment.hpp')
+          p.write_text('''#pragma once
+
+#include "pm/socket_tuning.hpp"
+#include "pm/thread_tuning.hpp"
+
+#include <algorithm>
+#include <cstdint>
+#include <span>
+
+namespace pm::network {
+
+struct RxThreadAlignmentObservation {
+    int incoming_cpu = -1;
+    int incoming_napi_id = -1;
+    int pin_error = 0;
+    std::uint8_t cpu_changed = 0;
+    std::uint8_t applied = 0;
+    std::uint8_t rejected = 0;
+};
+
+inline bool rx_cpu_allowed(int cpu, std::span<const int> allowlist) noexcept {
+    return cpu >= 0 && std::find(allowlist.begin(), allowlist.end(), cpu) != allowlist.end();
+}
+
+inline RxThreadAlignmentObservation align_thread_to_socket_rx(
+    int fd, std::span<const int> allowlist, int previous_incoming_cpu) noexcept {
+    RxThreadAlignmentObservation out;
+    out.incoming_cpu = incoming_cpu(fd);
+    out.incoming_napi_id = incoming_napi_id(fd);
+    if (out.incoming_cpu < 0 || out.incoming_cpu == previous_incoming_cpu) return out;
+    out.cpu_changed = 1;
+    if (!rx_cpu_allowed(out.incoming_cpu, allowlist)) {
+        out.rejected = 1;
+        return out;
+    }
+    out.pin_error = pm::threading::pin_current_thread_to_cpu(out.incoming_cpu);
+    if (out.pin_error == 0) out.applied = 1;
+    return out;
+}
+
+} // namespace pm::network
+''')
+
+          rep('src/fast_ws.cpp',
+              '#include "pm/socket_tuning.hpp"\n#include "pm/thread_tuning.hpp"',
+              '#include "pm/rx_thread_alignment.hpp"\n#include "pm/socket_tuning.hpp"\n#include "pm/thread_tuning.hpp"')
+          rep('src/fast_ws.cpp',
+              '    std::vector<int> worker_cpu_affinity;\n    int socket_busy_poll_us = 0;',
+              '    std::vector<int> worker_cpu_affinity;\n    int socket_busy_poll_us = 0;\n    std::vector<int> dynamic_rx_cpu_allowlist;')
+          rep('src/fast_ws.cpp',
+              '    std::atomic<std::uint64_t> affinity_errors{0};',
+              '    std::atomic<std::uint64_t> affinity_errors{0};\n    std::atomic<std::uint64_t> rx_realignments{0};\n    std::atomic<std::uint64_t> rx_rejections{0};\n    std::atomic<std::uint64_t> rx_alignment_errors{0};\n    std::atomic<int> incoming_cpu{-1};\n    std::atomic<int> incoming_napi_id{-1};')
+          rep('src/fast_ws.cpp',
+              '         std::vector<int> cpu_affinity, int busy_poll_us)\n        : endpoint(parse_wss_url(std::move(url))), on_message(std::move(message_handler)),\n          on_error(std::move(error_handler)), worker_cpu_affinity(std::move(cpu_affinity)),\n          socket_busy_poll_us(busy_poll_us) {',
+              '         std::vector<int> cpu_affinity, int busy_poll_us, std::vector<int> rx_cpu_allowlist)\n        : endpoint(parse_wss_url(std::move(url))), on_message(std::move(message_handler)),\n          on_error(std::move(error_handler)), worker_cpu_affinity(std::move(cpu_affinity)),\n          socket_busy_poll_us(busy_poll_us), dynamic_rx_cpu_allowlist(std::move(rx_cpu_allowlist)) {')
+          rep('src/fast_ws.cpp',
+              '                bool terminal = false;\n                bool remote_closed = false;',
+              '                bool terminal = false;\n                bool remote_closed = false;\n                int previous_rx_cpu = -1;')
+          rep('src/fast_ws.cpp',
+              '                        if (error) {\n                            finish(error);\n                            return;\n                        }\n                        const auto front = beast::buffers_front(buffer.data());',
+              '                        if (error) {\n                            finish(error);\n                            return;\n                        }\n                        const auto rx = pm::network::align_thread_to_socket_rx(\n                            beast::get_lowest_layer(ws).socket().native_handle(),\n                            dynamic_rx_cpu_allowlist, previous_rx_cpu);\n                        if (rx.incoming_cpu >= 0) {\n                            incoming_cpu.store(rx.incoming_cpu, std::memory_order_relaxed);\n                            previous_rx_cpu = rx.incoming_cpu;\n                        }\n                        if (rx.incoming_napi_id >= 0)\n                            incoming_napi_id.store(rx.incoming_napi_id, std::memory_order_relaxed);\n                        if (rx.applied) rx_realignments.fetch_add(1, std::memory_order_relaxed);\n                        if (rx.rejected) rx_rejections.fetch_add(1, std::memory_order_relaxed);\n                        if (rx.pin_error != 0) rx_alignment_errors.fetch_add(1, std::memory_order_relaxed);\n                        const auto front = beast::buffers_front(buffer.data());')
+          rep('src/fast_ws.cpp',
+              '                                         std::vector<int> worker_cpu_affinity,\n                                         int socket_busy_poll_us)\n    : impl_(std::make_unique<Impl>(std::move(url), std::move(asset_ids), shard_size,\n                                   std::move(on_message), std::move(on_error),\n                                   std::move(worker_cpu_affinity), socket_busy_poll_us)) {}',
+              '                                         std::vector<int> worker_cpu_affinity,\n                                         int socket_busy_poll_us,\n                                         std::vector<int> dynamic_rx_cpu_allowlist)\n    : impl_(std::make_unique<Impl>(std::move(url), std::move(asset_ids), shard_size,\n                                   std::move(on_message), std::move(on_error),\n                                   std::move(worker_cpu_affinity), socket_busy_poll_us,\n                                   std::move(dynamic_rx_cpu_allowlist))) {}')
+          rep('src/fast_ws.cpp',
+              '        impl_->errors.load(std::memory_order_relaxed),\n        impl_->affinity_errors.load(std::memory_order_relaxed),\n    };',
+              '        impl_->errors.load(std::memory_order_relaxed),\n        impl_->affinity_errors.load(std::memory_order_relaxed),\n        impl_->rx_realignments.load(std::memory_order_relaxed),\n        impl_->rx_rejections.load(std::memory_order_relaxed),\n        impl_->rx_alignment_errors.load(std::memory_order_relaxed),\n        impl_->incoming_cpu.load(std::memory_order_relaxed),\n        impl_->incoming_napi_id.load(std::memory_order_relaxed),\n    };')
+
+          rep('src/v7_external_ws.cpp',
+              '#include "pm/socket_tuning.hpp"\n#include "pm/v7_external_tape.hpp"',
+              '#include "pm/rx_thread_alignment.hpp"\n#include "pm/socket_tuning.hpp"\n#include "pm/v7_external_tape.hpp"')
+          rep('src/v7_external_ws.cpp',
+              '        || spec_.socket_busy_poll_us < 0\n        || spec_.socket_busy_poll_us > pm::network::kMaxBusyPollUs) {',
+              '        || spec_.socket_busy_poll_us < 0\n        || spec_.socket_busy_poll_us > pm::network::kMaxBusyPollUs\n        || std::any_of(spec_.dynamic_rx_cpu_allowlist.begin(), spec_.dynamic_rx_cpu_allowlist.end(),\n                       [](int cpu) { return cpu < 0; })) {')
+          rep('src/v7_external_ws.cpp',
+              '            auto buffer = std::make_unique<beast::flat_buffer>();\n            buffer->reserve(spec_.max_message_bytes);\n\n            while (!stop.stop_requested()) {',
+              '            auto buffer = std::make_unique<beast::flat_buffer>();\n            buffer->reserve(spec_.max_message_bytes);\n            int previous_rx_cpu = -1;\n\n            while (!stop.stop_requested()) {')
+          rep('src/v7_external_ws.cpp',
+              '                ws.read(*buffer);\n                beast::get_lowest_layer(ws).expires_never();\n                const auto receive_ns = monotonic_now_ns();',
+              '                ws.read(*buffer);\n                beast::get_lowest_layer(ws).expires_never();\n                const auto rx = pm::network::align_thread_to_socket_rx(\n                    beast::get_lowest_layer(ws).socket().native_handle(),\n                    spec_.dynamic_rx_cpu_allowlist, previous_rx_cpu);\n                if (rx.incoming_cpu >= 0) {\n                    incoming_cpu_.store(rx.incoming_cpu, std::memory_order_relaxed);\n                    previous_rx_cpu = rx.incoming_cpu;\n                }\n                if (rx.incoming_napi_id >= 0)\n                    incoming_napi_id_.store(rx.incoming_napi_id, std::memory_order_relaxed);\n                if (rx.applied) rx_realignments_.fetch_add(1, std::memory_order_relaxed);\n                if (rx.rejected) rx_rejections_.fetch_add(1, std::memory_order_relaxed);\n                if (rx.pin_error != 0) rx_alignment_errors_.fetch_add(1, std::memory_order_relaxed);\n                const auto receive_ns = monotonic_now_ns();')
+          rep('src/v7_external_ws.cpp',
+              '    out.last_receive_monotonic_ns = last_receive_monotonic_ns_.load(std::memory_order_acquire);\n    out.last_receive_wall_ns = last_receive_wall_ns_.load(std::memory_order_acquire);\n    out.connected = connected_.load(std::memory_order_acquire) ? 1 : 0;',
+              '    out.last_receive_monotonic_ns = last_receive_monotonic_ns_.load(std::memory_order_acquire);\n    out.last_receive_wall_ns = last_receive_wall_ns_.load(std::memory_order_acquire);\n    out.rx_realignments = rx_realignments_.load(std::memory_order_acquire);\n    out.rx_rejections = rx_rejections_.load(std::memory_order_acquire);\n    out.rx_alignment_errors = rx_alignment_errors_.load(std::memory_order_acquire);\n    out.incoming_cpu = incoming_cpu_.load(std::memory_order_acquire);\n    out.incoming_napi_id = incoming_napi_id_.load(std::memory_order_acquire);\n    out.connected = connected_.load(std::memory_order_acquire) ? 1 : 0;')
+
+          rep('src/v7_crypto_flash_shadow_runtime.cpp',
+              '    int socket_busy_poll_us = 0;\n    int cpu_pin = 1;',
+              '    int socket_busy_poll_us = 0;\n    int cpu_pin = 1;\n    int dynamic_rx_align = 1;')
+          rep('src/v7_crypto_flash_shadow_runtime.cpp',
+              '        else if (arg == "--cpu-pin") out.cpu_pin = bounded_integer<int>(next(), 0, 1);',
+              '        else if (arg == "--cpu-pin") out.cpu_pin = bounded_integer<int>(next(), 0, 1);\n        else if (arg == "--dynamic-rx-align") out.dynamic_rx_align = bounded_integer<int>(next(), 0, 1);')
+          rep('src/v7_crypto_flash_shadow_runtime.cpp',
+              '        const bool cpu_pin_active = selected_cpus.size() == role_cpus.size();\n        std::atomic<std::uint64_t> affinity_failures{0};',
+              '        const bool cpu_pin_active = selected_cpus.size() == role_cpus.size();\n        std::vector<int> feed_rx_cpus;\n        if (cpu_pin_active && options.dynamic_rx_align != 0)\n            feed_rx_cpus.assign(role_cpus.begin() + 1, role_cpus.end());\n        const bool dynamic_rx_requested = !feed_rx_cpus.empty();\n        std::atomic<std::uint64_t> affinity_failures{0};')
+          rep('src/v7_crypto_flash_shadow_runtime.cpp',
+              '        binance_spec.socket_busy_poll_us = options.socket_busy_poll_us;\n        coinbase_spec.socket_busy_poll_us = options.socket_busy_poll_us;',
+              '        binance_spec.socket_busy_poll_us = options.socket_busy_poll_us;\n        coinbase_spec.socket_busy_poll_us = options.socket_busy_poll_us;\n        binance_spec.dynamic_rx_cpu_allowlist = feed_rx_cpus;\n        coinbase_spec.dynamic_rx_cpu_allowlist = feed_rx_cpus;')
+          rep('src/v7_crypto_flash_shadow_runtime.cpp',
+              '            role_cpus[3] >= 0 ? std::vector<int>{role_cpus[3]} : std::vector<int>{},\n            options.socket_busy_poll_us);',
+              '            role_cpus[3] >= 0 ? std::vector<int>{role_cpus[3]} : std::vector<int>{},\n            options.socket_busy_poll_us, feed_rx_cpus);')
+          rep('src/v7_crypto_flash_shadow_runtime.cpp',
+              '        const bool clean = pm_drops.load() == 0\n            && binance_ingress_status.dropped_events == 0\n            && coinbase_ingress_status.dropped_events == 0\n            && (!cpu_pin_active || total_affinity_failures == 0);',
+              '        const auto rx_alignment_errors = binance_status.rx_alignment_errors\n            + coinbase_status.rx_alignment_errors + pm_status.rx_alignment_errors;\n        const auto rx_rejections = binance_status.rx_rejections\n            + coinbase_status.rx_rejections + pm_status.rx_rejections;\n        const bool rx_alignment_observed = !dynamic_rx_requested\n            || (binance_status.incoming_cpu >= 0 && coinbase_status.incoming_cpu >= 0\n                && pm_status.incoming_cpu >= 0);\n        const bool rx_alignment_clean = !dynamic_rx_requested\n            || (rx_alignment_observed && rx_alignment_errors == 0 && rx_rejections == 0);\n        const bool clean = pm_drops.load() == 0\n            && binance_ingress_status.dropped_events == 0\n            && coinbase_ingress_status.dropped_events == 0\n            && (!cpu_pin_active || total_affinity_failures == 0)\n            && rx_alignment_clean;')
+          rep('src/v7_crypto_flash_shadow_runtime.cpp',
+              '            {"cpu_pin_requested", options.cpu_pin != 0}, {"cpu_pin_active", cpu_pin_active},\n            {"allowed_cpu_count", allowed_cpus.size()}, {"affinity_failures", total_affinity_failures},',
+              '            {"cpu_pin_requested", options.cpu_pin != 0}, {"cpu_pin_active", cpu_pin_active},\n            {"dynamic_rx_align_requested", dynamic_rx_requested},\n            {"rx_alignment_observed", rx_alignment_observed},\n            {"rx_alignment_clean", rx_alignment_clean},\n            {"rx_alignment_errors", rx_alignment_errors}, {"rx_rejections", rx_rejections},\n            {"allowed_cpu_count", allowed_cpus.size()}, {"affinity_failures", total_affinity_failures},')
+          rep('src/v7_crypto_flash_shadow_runtime.cpp',
+              '            {"binance", {{"frames", binance_status.frames_received}, {"transport_failures", binance_status.transport_failures}, {"drops", binance_ingress_status.dropped_events}}},\n            {"coinbase", {{"frames", coinbase_status.frames_received}, {"transport_failures", coinbase_status.transport_failures}, {"drops", coinbase_ingress_status.dropped_events}}},\n            {"polymarket", {{"messages", pm_status.messages}, {"reconnects", pm_status.reconnects},\n                            {"errors", pm_status.errors}, {"affinity_errors", pm_status.affinity_errors},\n                            {"drops", pm_drops.load()}}},',
+              '            {"binance", {{"frames", binance_status.frames_received}, {"transport_failures", binance_status.transport_failures}, {"drops", binance_ingress_status.dropped_events},\n                         {"incoming_cpu", binance_status.incoming_cpu}, {"incoming_napi_id", binance_status.incoming_napi_id}, {"rx_realignments", binance_status.rx_realignments}}},\n            {"coinbase", {{"frames", coinbase_status.frames_received}, {"transport_failures", coinbase_status.transport_failures}, {"drops", coinbase_ingress_status.dropped_events},\n                          {"incoming_cpu", coinbase_status.incoming_cpu}, {"incoming_napi_id", coinbase_status.incoming_napi_id}, {"rx_realignments", coinbase_status.rx_realignments}}},\n            {"polymarket", {{"messages", pm_status.messages}, {"reconnects", pm_status.reconnects},\n                            {"errors", pm_status.errors}, {"affinity_errors", pm_status.affinity_errors}, {"drops", pm_drops.load()},\n                            {"incoming_cpu", pm_status.incoming_cpu}, {"incoming_napi_id", pm_status.incoming_napi_id}, {"rx_realignments", pm_status.rx_realignments}}},')
+
+          Path('tests/test_v7_dynamic_rx_alignment.py').write_text('''from pathlib import Path
+ROOT = Path(__file__).resolve().parents[1]
+def text(path): return (ROOT / path).read_text(encoding="utf-8")
+def test_alignment_uses_kernel_receive_cpu_and_napi_lineage():
+    s=text("include/pm/rx_thread_alignment.hpp")
+    assert "incoming_cpu(fd)" in s and "incoming_napi_id(fd)" in s
+    assert "pin_current_thread_to_cpu(out.incoming_cpu)" in s and "out.rejected = 1" in s
+def test_runtime_never_allows_dynamic_rx_on_decision_core():
+    s=text("src/v7_crypto_flash_shadow_runtime.cpp")
+    assert "feed_rx_cpus.assign(role_cpus.begin() + 1, role_cpus.end())" in s
+    assert "dynamic_rx_cpu_allowlist = feed_rx_cpus" in s
+def test_alignment_is_fail_closed_for_latency_evidence():
+    s=text("src/v7_crypto_flash_shadow_runtime.cpp")
+    assert "rx_alignment_observed" in s and "rx_alignment_clean" in s
+    assert "rx_alignment_errors == 0" in s and "rx_rejections == 0" in s
+def test_both_websocket_planes_use_the_same_alignment_primitive():
+    assert "align_thread_to_socket_rx" in text("src/fast_ws.cpp")
+    assert "align_thread_to_socket_rx" in text("src/v7_external_ws.cpp")
+if __name__ == "__main__":
+    tests=[f for n,f in globals().items() if n.startswith("test_") and callable(f)]
+    [f() for f in tests]
+    print(f"{len(tests)} function tests passed")
+''')
+          Path('docs/V7_DYNAMIC_RX_AFFINITY.md').write_text('''# V7 dynamic RX/NAPI affinity
+
+The native crypto shadow path can align each feed thread to the CPU that
+actually processed its latest TCP packet instead of trusting static placement.
+Linux exposes receive lineage through `SO_INCOMING_CPU`; the associated
+`SO_INCOMING_NAPI_ID` is recorded as evidence.
+
+The decision CPU is never eligible. Only the three feed CPUs selected by the
+HFT role allocator are passed as the dynamic RX allowlist. If the kernel reports
+another CPU, the move is rejected and the run cannot qualify as clean latency
+evidence.
+
+Alignment happens after the first packet of each connection and again only if
+the observed receive CPU changes. Reconnects therefore follow a new RSS/RX
+placement without adding an affinity syscall to every frame.
+''')
+          PY
+          git diff --check
+          python3 tests/test_v7_dynamic_rx_alignment.py
+
+      - name: Build and validate
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq cmake g++ libboost-all-dev libssl-dev libcurl4-openssl-dev pkg-config >/dev/null
+          cmake -S . -B build-rx -DCMAKE_BUILD_TYPE=Release
+          cmake --build build-rx --target polymarket_v7_crypto_flash_shadow_runtime pm_v7_external_ingress_tests -j2
+          ./build-rx/polymarket_v7_crypto_flash_shadow_runtime --dynamic-rx-align 1 --validate-only
+
+      - name: Commit tested patch and remove bootstrap workflow
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm .github/workflows/v7-dynamic-rx-selfbuild.yml
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add -A
+          git commit -m 'perf(v7): align feed threads to observed RX CPU'
+          git push origin HEAD:perf/hft-dynamic-rx-affinity-20260917
