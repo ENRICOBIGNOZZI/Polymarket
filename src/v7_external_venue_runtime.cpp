@@ -1,3 +1,4 @@
+#include "pm/v7_ingress_wakeup.hpp"
 #include "pm/v7_binance_l2.hpp"
 #include "pm/v7_binance_l2_protocol.hpp"
 #include "pm/v7_coinbase_l2.hpp"
@@ -1124,6 +1125,7 @@ int main(int argc, char** argv) {
         std::uintmax_t disk_pressure_min_free_bytes = 0;
         std::string external_cancel_rule_sha256;
         std::string model_sha;
+        bool event_driven_ingress = false;
         for (int index = 1; index < argc; ++index) {
             const std::string argument = argv[index];
             if (argument == "--output" && index + 1 < argc) output = argv[++index];
@@ -1134,6 +1136,7 @@ int main(int argc, char** argv) {
             else if (argument == "--disk-pressure-marker" && index + 1 < argc) disk_pressure_marker = argv[++index];
             else if (argument == "--disk-pressure-min-free-bytes" && index + 1 < argc) disk_pressure_min_free_bytes = std::stoull(argv[++index]);
             else if (argument == "--external-cancel-rule-sha256" && index + 1 < argc) external_cancel_rule_sha256 = argv[++index];
+            else if (argument == "--event-driven-ingress") event_driven_ingress = true;
             else if (argument == "--model-sha" && index + 1 < argc) model_sha = argv[++index];
             else throw std::invalid_argument("unknown or incomplete argument: " + argument);
         }
@@ -1223,12 +1226,14 @@ int main(int argc, char** argv) {
                 ExternalCancelSignalSnapshot{}, model_sha, external_cancel_rule_sha256,
                 started_monotonic_ns, wall_now_ns(), started_monotonic_ns));
         }
-        ExternalVenueIngress binance_ingress(VenueId::BinanceSpot, asset_handle, binance_event_tape.get());
-        ExternalVenueIngress coinbase_ingress(VenueId::CoinbaseSpot, asset_handle, coinbase_event_tape.get());
-        ExternalVenueIngress bybit_ingress(VenueId::BybitSpot, asset_handle, bybit_event_tape.get());
-        ExternalVenueIngress bybit_linear_ingress(VenueId::BybitLinear, asset_handle, bybit_linear_event_tape.get());
-        ExternalVenueIngress deribit_ingress(VenueId::Deribit, asset_handle, deribit_event_tape.get());
-        ExternalVenueIngress binance_usdm_market_ingress(VenueId::BinanceUsdM, asset_handle, binance_usdm_market_event_tape.get());
+        std::unique_ptr<IngressWakeup> ingress_wakeup;
+        if (event_driven_ingress) ingress_wakeup = std::make_unique<IngressWakeup>();
+        ExternalVenueIngress binance_ingress(VenueId::BinanceSpot, asset_handle, binance_event_tape.get(), ingress_wakeup.get());
+        ExternalVenueIngress coinbase_ingress(VenueId::CoinbaseSpot, asset_handle, coinbase_event_tape.get(), ingress_wakeup.get());
+        ExternalVenueIngress bybit_ingress(VenueId::BybitSpot, asset_handle, bybit_event_tape.get(), ingress_wakeup.get());
+        ExternalVenueIngress bybit_linear_ingress(VenueId::BybitLinear, asset_handle, bybit_linear_event_tape.get(), ingress_wakeup.get());
+        ExternalVenueIngress deribit_ingress(VenueId::Deribit, asset_handle, deribit_event_tape.get(), ingress_wakeup.get());
+        ExternalVenueIngress binance_usdm_market_ingress(VenueId::BinanceUsdM, asset_handle, binance_usdm_market_event_tape.get(), ingress_wakeup.get());
         BinanceSpotL2Observer binance_l2;
         CoinbaseL2Observer coinbase_l2(coinbase_ingress, asset_handle);
         BybitL2Observer bybit_l2(bybit_ingress, asset_handle);
@@ -1279,6 +1284,10 @@ int main(int argc, char** argv) {
         constexpr std::int64_t kDiskPressurePollIntervalNs = 1'000'000'000LL;
         constexpr std::int64_t kFullStatusPublishIntervalNs = 25'000'000LL;
         constexpr auto kFastLoopSleep = std::chrono::milliseconds(5);
+        const auto wait_for_ingress = [&] {
+            if (ingress_wakeup) (void)ingress_wakeup->wait_for(kFastLoopSleep);
+            else std::this_thread::sleep_for(kFastLoopSleep);
+        };
         while (!stopping.load(std::memory_order_relaxed)) {
             std::size_t causal_count = 0;
             causal_count += binance_ingress.drain_events(std::span<ExternalVenueEvent>(
@@ -1348,7 +1357,7 @@ int main(int argc, char** argv) {
             const bool publish_full_status = last_full_status_publish_ns == 0
                 || now_mono - last_full_status_publish_ns >= kFullStatusPublishIntervalNs;
             if (!publish_full_status) {
-                std::this_thread::sleep_for(kFastLoopSleep);
+                wait_for_ingress();
                 continue;
             }
             last_full_status_publish_ns = now_mono;
@@ -1426,7 +1435,10 @@ int main(int argc, char** argv) {
                     now_mono, wall_now_ns(), started_monotonic_ns)},
                 {"derivative_contexts", derivative_context_json(snapshot)},
                 {"drained_last_cycle", drained},
-                {"fast_signal_poll_interval_ms", 5},
+                {"fast_signal_poll_interval_ms", event_driven_ingress ? json::value(nullptr) : json::value(5)},
+                {"ingress_wait_mode", event_driven_ingress ? "EVENT_DRIVEN" : "POLL_5MS"},
+                {"ingress_idle_deadline_ms", 5},
+                {"ingress_wakeup_errors", ingress_wakeup ? ingress_wakeup->errors() : 0},
                 {"full_status_publish_interval_ms", 25},
                 {"disk_pressure", disk_pressure_active},
                 {"disk_pressure_min_free_bytes", disk_pressure_min_free_bytes},
@@ -1458,7 +1470,7 @@ int main(int argc, char** argv) {
                 {"binance_usdm", usdm_json(binance_usdm_observer.metrics())},
                 {"venues", std::move(venues)},
             });
-            std::this_thread::sleep_for(kFastLoopSleep);
+            wait_for_ingress();
         }
 
 #if !defined(__APPLE__)
