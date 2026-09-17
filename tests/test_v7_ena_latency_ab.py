@@ -19,6 +19,15 @@ def test_parse_ena_coalescing() -> None:
         "adaptive_rx": "off", "adaptive_tx": "off",
         "rx_usecs": 20, "tx_usecs": 64,
     }
+    observed = module.parse_coalesce("""Coalesce parameters for enp39s0:
+Adaptive RX: on  TX: n/a
+rx-usecs: 20
+tx-usecs: 64
+""")
+    assert observed == {
+        "adaptive_rx": "on", "adaptive_tx": "n/a",
+        "rx_usecs": 20, "tx_usecs": 64,
+    }
 
 
 def test_role_selection_reserves_decision_from_feed_irqs() -> None:
