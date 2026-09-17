@@ -14,7 +14,9 @@ An older, noncanonical Fast forward run reported 545.7 ms end-to-end p99, 524.0 
 
 ## Current instrumentation
 
-The C++ pipeline records monotonic nanosecond durations for JSON parse, book application, features, decision, inline risk, order-TX queue, PAPER execution and receive-to-intent. Telemetry crosses a bounded SPSC queue before filesystem output, so the decision owner does not write logs.
+The C++ pipeline records monotonic nanosecond durations for JSON parse, book application, features, decision, inline risk, order-TX queue, PAPER execution and receive-to-intent where those stages exist. The active Fast Structural runtime additionally records `feed_latency_ms` and `decision_latency_us` in `fast_structural/fast_arb_latency.csv`. Telemetry crosses a bounded SPSC queue before filesystem output, so the decision owner does not write logs.
+
+The Prometheus exporter reads a bounded suffix of the active Fast Structural CSV and exposes the values as `fast_structural_feed_ns` and `fast_structural_decision_ns`. If a legacy Maker latency file exists, its named stages remain visible separately; missing legacy files are not reported as current latency evidence. This keeps Grafana tied to the runtime that is actually producing data.
 
 The release benchmark covers synthetic WS bytes through canonical L2 and maker intent. `scripts/v7_latency_gate.py` enforces the internal thresholds in `config/v7_latency_slo.json`. Its output explicitly states that it contains no network/CLOB or representative venue proof.
 

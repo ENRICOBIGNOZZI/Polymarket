@@ -2,7 +2,7 @@
 """Prometheus exporter for the canonical two-engine V7 PAPER runtime."""
 from __future__ import annotations
 
-import argparse, csv, hashlib, json, math, os, shutil, socket, subprocess, sys, threading, time
+import argparse, csv, hashlib, io, json, math, os, shutil, socket, subprocess, sys, threading, time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any
@@ -150,6 +150,57 @@ def _maker_latency(path: Path) -> dict[str, Any]:
     return {"present": rows > 0, "rows": rows, "stages": stages}
 
 
+def _tail_csv(path: Path, maximum_bytes: int = 4 * 1024 * 1024) -> list[dict[str, str]]:
+    """Read a bounded suffix while retaining the original CSV header."""
+    try:
+        with path.open("rb") as handle:
+            header = handle.readline()
+            header_end = handle.tell()
+            handle.seek(0, os.SEEK_END)
+            size = handle.tell()
+            start = max(header_end, size - maximum_bytes)
+            handle.seek(start)
+            if start > header_end:
+                handle.readline()  # discard the partial first row
+            body = handle.read()
+        text = (header + body).decode("utf-8", errors="replace")
+        return [dict(row) for row in csv.DictReader(io.StringIO(text))]
+    except (OSError, csv.Error):
+        return []
+
+
+def _fast_structural_latency(path: Path) -> dict[str, Any]:
+    fields = {
+        "fast_structural_feed_ns": ("feed_latency_ms", 1_000_000),
+        "fast_structural_decision_ns": ("decision_latency_us", 1_000),
+    }
+    values: dict[str, list[int]] = {name: [] for name in fields}
+    rows = _tail_csv(path)
+    for row in rows:
+        for stage, (field, scale) in fields.items():
+            value = _number(row.get(field), -1.0)
+            if value >= 0:
+                values[stage].append(int(round(value * scale)))
+    stages: dict[str, Any] = {}
+    for stage, samples in values.items():
+        if not samples:
+            continue
+        samples.sort()
+        pick = lambda p: samples[int(p * (len(samples) - 1))]
+        stages[stage] = {"samples": len(samples), "p50": pick(.5), "p90": pick(.9),
+                         "p95": pick(.95), "p99": pick(.99), "p99_9": pick(.999), "max": samples[-1]}
+    return {"present": bool(stages), "rows": len(rows), "stages": stages}
+
+
+def _runtime_latency(run_root: Path) -> dict[str, Any]:
+    legacy = _maker_latency(run_root / "micro_maker/latency.csv")
+    structural = _fast_structural_latency(run_root / "fast_structural/fast_arb_latency.csv")
+    stages = {**(legacy.get("stages") or {}), **(structural.get("stages") or {})}
+    return {"present": bool(stages), "rows": int(legacy.get("rows") or 0) + int(structural.get("rows") or 0),
+            "stages": stages, "sources": {"legacy_maker": bool(legacy.get("present")),
+                                           "fast_structural": bool(structural.get("present"))}}
+
+
 def _fillability(run_root: Path, repository_root: Path, sha: str, now: int) -> dict[str, Any]:
     global _FILLABILITY_CACHE_KEY, _FILLABILITY_CACHE_VALUE
     key = (str(run_root), sha, now // 30)
@@ -254,7 +305,7 @@ def collect_snapshot(run_root: Path, repository_root: Path | None = None, *, now
         "maker_lab": summarize_maker_microstructure(ledger_path, run_root / "micro_maker/reward_selection.json", run_root / "research/evidence/maker_markout"),
         "maker_fillability": _fillability(run_root, repository_root, runtime_sha, now),
         "external_fair": external_fair, "reconciliation": reconciliation,
-        "maker_latency": _maker_latency(run_root / "micro_maker/latency.csv"),
+        "maker_latency": _runtime_latency(run_root),
         "trade_tape": tape, "trade_recorder": _trade_recorder(run_root / "trade_recorder_status.json", now),
         "authority": {"valid": authority_valid, "max_drawdown": max_drawdown},
         "algorithms": algorithms, "strategies": algorithms,
@@ -394,6 +445,8 @@ def render_prometheus(snapshot: dict[str, Any]) -> str:
         count = _number((total.get("markout_count") or {}).get(horizon)); lines.append(_metric("polymarket_execution_mean_markout", _number(value)/count if count else None, {"horizon": horizon}))
     for stage, row in sorted(((snapshot.get("maker_latency") or {}).get("stages") or {}).items()):
         for percentile in ("p50", "p90", "p95", "p99", "p99_9", "max"): lines.append(_metric("polymarket_v7_latency_stage_nanoseconds", row.get(percentile), {"stage": stage, "percentile": percentile}))
+    for source, present in sorted(((snapshot.get("maker_latency") or {}).get("sources") or {}).items()):
+        lines.append(_metric("polymarket_v7_latency_source_present", present, {"source": source}))
     append_operator_metrics(lines, snapshot, reasons, _metric)
     _append_maker_metrics(lines, snapshot)
     from exporter_v7_fillability import _append_fillability_metrics

@@ -71,6 +71,33 @@ class V7NativeMonitoringTest(unittest.TestCase):
             for expected in ("polymarket_v7_live_algorithm_count 2","polymarket_v7_live_algorithm_scope_wired 1",'polymarket_v7_economic_engine_configured{engine="CRYPTO_SETTLEMENT_ENGINE"} 1','polymarket_v7_economic_engine_configured{engine="STRUCTURAL_ARB_ENGINE"} 1'):
                 self.assertIn(expected,metrics)
 
+    def test_current_fast_structural_latency_is_exported_without_legacy_file(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root=Path(directory)/"paper_v7_live"; self._fixture(root)
+            (root/"micro_maker/latency.csv").unlink()
+            (root/"fast_structural/fast_arb_latency.csv").write_text(
+                "received_ts_ms,shard,exchange_ts_ms,feed_latency_ms,decision_latency_us,affected_markets\n"
+                "999000,1,998988,12,345,1\n"
+                "999100,2,999092,8,125,2\n", encoding="utf-8")
+            snapshot=exporter.collect_snapshot(root,ROOT,now=1000)
+            latency=snapshot["maker_latency"]
+            self.assertTrue(latency["present"])
+            self.assertFalse(latency["sources"]["legacy_maker"])
+            self.assertTrue(latency["sources"]["fast_structural"])
+            self.assertIn("fast_structural_feed_ns",latency["stages"])
+            self.assertIn("fast_structural_decision_ns",latency["stages"])
+            metrics=exporter.render_prometheus(snapshot)
+            self.assertIn("polymarket_v7_latency_samples_present 1",metrics)
+            self.assertIn('stage="fast_structural_feed_ns"',metrics)
+            self.assertIn('stage="fast_structural_decision_ns"',metrics)
+            self.assertIn('polymarket_v7_latency_source_present{source="fast_structural"} 1',metrics)
+
+        dashboard=(ROOT/"monitoring/grafana/dashboards/polymarket-v7-latency.json").read_text()
+        self.assertIn('fast_structural_feed_ns',dashboard)
+        self.assertIn('fast_structural_decision_ns',dashboard)
+        self.assertNotIn('stage=\\"receive_to_intent_ns\\"',dashboard)
+        self.assertNotIn('stage=\\"tx_queue_ns\\"',dashboard)
+
     def test_runtime_cannot_add_third_algorithm(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root=Path(directory)/"paper_v7_live"; self._fixture(root); path=root/"control/runtime_status.json"; value=json.loads(path.read_text()); value["economic_engines"].append("OLD_ENGINE"); self._write(path,value)
