@@ -45,6 +45,9 @@ execution.
 
 The public probe is used only to characterize data-path latency and regional stability for the PAPER research system.
 
+The live latency dashboard also exposes `publish_snapshot_lock_us` and `publish_total_us` from Fast Structural. The first measures the state-snapshot critical section that can block the WebSocket decision path; the second measures complete local publication work. They are local contention diagnostics, not network or authenticated-order latency.
+
+
 ## Venue-aware policy
 
 Applicable crypto takers can enter a 250 ms delay while resting orders remain cancelable. Maker toxic-quote cancellation is therefore the critical latency objective. Blind cancel/repost loops destroy queue priority; V7 preserves a resting quote while it remains economic and lets critical toxicity cancels override dwell.

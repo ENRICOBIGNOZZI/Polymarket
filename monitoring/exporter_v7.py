@@ -397,6 +397,7 @@ def render_prometheus(snapshot: dict[str, Any]) -> str:
     canonical, ledger = snapshot.get("canonical_economics") or {}, snapshot.get("ledger") or {}
     total, operations = ledger.get("total") or {}, snapshot.get("operations") or {}
     selector, rotation, diagnostics = snapshot.get("maker_selector") or {}, snapshot.get("maker_rotation") or {}, snapshot.get("maker_diagnostics") or {}
+    fast = snapshot.get("fast") or {}
     universe, reasons = snapshot.get("universe") or {}, health_reasons(snapshot)
     scope_ok = _scope_valid(snapshot)
     lines = [
@@ -408,6 +409,8 @@ def render_prometheus(snapshot: dict[str, Any]) -> str:
         _metric("polymarket_v7_exact_sha_ok", runtime.get("model_sha") == snapshot.get("sha")), _metric("polymarket_v7_execution_alive", snapshot.get("runtime_alive")), _metric("polymarket_v7_supervisor_alive", operations.get("supervisor_alive")), _metric("polymarket_v7_single_writer_ok", operations.get("single_writer")), _metric("polymarket_v7_ledger_writable", operations.get("ledger_writable")),
         _metric("polymarket_v7_runtime_uptime_seconds", operations.get("runtime_uptime")), _metric("polymarket_v7_restart_count_window", operations.get("restart_count")), _metric("polymarket_v7_disk_free_ratio", operations.get("disk_free_ratio")),
         _metric("polymarket_v7_live_algorithm_count", 2), _metric("polymarket_v7_live_algorithm_scope_wired", scope_ok), _metric("polymarket_v7_live_model_scope_wired", scope_ok), _metric("polymarket_v7_economic_new_risk_ready", runtime.get("economic_new_risk_ready")),
+        _metric("polymarket_v7_fast_structural_publish_lock_microseconds", fast.get("publish_snapshot_lock_us")),
+        _metric("polymarket_v7_fast_structural_publish_total_microseconds", fast.get("publish_total_us")),
         _metric("polymarket_runtime_equity_usd", economics.get("equity")), _metric("polymarket_runtime_pnl_usd", economics.get("pnl")), _metric("polymarket_runtime_realized_pnl_usd", economics.get("realized_pnl")), _metric("polymarket_runtime_drawdown_ratio", economics.get("drawdown")), _metric("polymarket_runtime_killed", economics.get("killed")),
         _metric("polymarket_v7_canonical_submitted_units", canonical.get("submitted_units")), _metric("polymarket_v7_canonical_complete_units", canonical.get("complete_units")), _metric("polymarket_v7_ledger_valid", ledger.get("valid")), _metric("polymarket_v7_portfolio_reconciled", (snapshot.get("reconciliation") or {}).get("reconciled")), _metric("polymarket_v7_reconciliation_divergences", len((snapshot.get("reconciliation") or {}).get("reason_codes") or [])),
         _metric("polymarket_v7_trade_tape_rows", (snapshot.get("trade_tape") or {}).get("rows")), _metric("polymarket_v7_trade_tape_assets", (snapshot.get("trade_tape") or {}).get("assets")), _metric("polymarket_v7_trade_tape_no_standard_clob_flow", _verified_no_flow(snapshot.get("trade_recorder") or {}, 180)), _metric("polymarket_v7_latency_samples_present", (snapshot.get("maker_latency") or {}).get("present")),

@@ -67,7 +67,11 @@ class V7NativeMonitoringTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             root=Path(directory)/"paper_v7_live"; self._fixture(root); snapshot=exporter.collect_snapshot(root,ROOT,now=1000)
             self.assertEqual(exporter.health_reasons(snapshot),[])
+            snapshot["fast"]["publish_snapshot_lock_us"] = 1234.0
+            snapshot["fast"]["publish_total_us"] = 5678.0
             metrics=exporter.render_prometheus(snapshot)
+            self.assertIn("polymarket_v7_fast_structural_publish_lock_microseconds 1234", metrics)
+            self.assertIn("polymarket_v7_fast_structural_publish_total_microseconds 5678", metrics)
             for expected in ("polymarket_v7_live_algorithm_count 2","polymarket_v7_live_algorithm_scope_wired 1",'polymarket_v7_economic_engine_configured{engine="CRYPTO_SETTLEMENT_ENGINE"} 1','polymarket_v7_economic_engine_configured{engine="STRUCTURAL_ARB_ENGINE"} 1'):
                 self.assertIn(expected,metrics)
 
