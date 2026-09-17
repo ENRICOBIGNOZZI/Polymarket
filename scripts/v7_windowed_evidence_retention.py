@@ -7,6 +7,7 @@ hash metadata before physical bytes are removed. No execution authority.
 """
 from __future__ import annotations
 import argparse
+import hashlib
 import json
 import os
 import time
@@ -144,12 +145,110 @@ def _manifest_windowed_old(value: dict[str, Any], cutoff_ns: int, runs: Path) ->
     return eligible, families
 
 
+
+
+def _existing_tombstone_allows_cleanup(path: Path, current: dict[str, Any], store: Path) -> bool:
+    if not path.exists(): return False
+    previous=_load(path)
+    required={"schema":"polymarket_v7_windowed_pack_tombstone_v1",**AUTH,"policy":POLICY,"raw_detail_available":False,"pack_sha256":current["pack_sha256"]}
+    if any(previous.get(k)!=v for k,v in required.items()): raise ValueError(f"unsafe existing windowed tombstone:{current['pack_sha256']}")
+    additions={}
+    for key in ("source_aliases","source_families","object_sha256s","manifest_sha256s"):
+        old=previous.get(key); now=current.get(key)
+        if not isinstance(old,list) or not isinstance(now,list): raise ValueError(f"windowed tombstone identity malformed:{current['pack_sha256']}:{key}")
+        additions[key]=sorted(set(now)-set(old))
+    if any(additions.values()):
+        receipt={"schema":"polymarket_v7_windowed_pack_resume_receipt_v1",**AUTH,"policy":POLICY,"raw_detail_available":False,"pack_sha256":current["pack_sha256"],"parent_tombstone_sha256":digest(canonical(previous)),"source_aliases":current["source_aliases"],"source_families":current["source_families"],"added_source_aliases":additions["source_aliases"],"added_source_families":additions["source_families"],"added_object_sha256s":additions["object_sha256s"],"added_manifest_sha256s":additions["manifest_sha256s"]}
+        payload=canonical(receipt); sha=digest(payload); immutable(store/"windowed_pack_resume_receipts"/sha[:2]/(sha+".json"),payload)
+    return True
+
+def _sha256_file(path: Path) -> str:
+    h=hashlib.sha256()
+    with path.open("rb") as handle:
+        while True:
+            block=handle.read(4*1024*1024)
+            if not block: break
+            h.update(block)
+    return h.hexdigest()
+
+
+def _verified_windowed_alias(alias: str, *, runs: Path, cutoff_ns: int, pack_sha: str, pack_path: Path | None) -> tuple[Path | None, dict[str, Any] | None, str]:
+    path=Path(alias)
+    if not path.exists(): return None,None,"MISSING"
+    if path.is_symlink() or not path.is_file(): return None,None,"UNSAFE_PATH"
+    try: relative=path.resolve().relative_to(runs.resolve())
+    except (OSError,ValueError): return None,None,"OUTSIDE_RUNS"
+    if relative.parts and relative.parts[0]=="paper_v7_live" and not _closed_path(path,runs):
+        return None,None,"ACTIVE_LIVE_ALIAS"
+    family=_alias_family(str(path),runs)
+    if family not in WINDOWED: return None,None,"NON_WINDOWED_FAMILY"
+    info=path.stat()
+    if info.st_mtime_ns>=cutoff_ns: return None,None,"RECENT_ALIAS"
+    same_inode=False
+    if pack_path is not None and pack_path.exists():
+        pinfo=pack_path.stat(); same_inode=(info.st_dev,info.st_ino,info.st_size)==(pinfo.st_dev,pinfo.st_ino,pinfo.st_size)
+    verified_sha=pack_sha if same_inode else _sha256_file(path)
+    if verified_sha!=pack_sha: return None,None,"SHA256_MISMATCH"
+    evidence={"path":str(path),"source_family":family,"sha256":verified_sha,"stat":[info.st_dev,info.st_ino,info.st_size,info.st_mtime_ns],"verified_by":"SAME_INODE_AS_PACK" if same_inode else "FULL_SHA256"}
+    return path,evidence,"VERIFIED"
+
+
+def _record_alias_retirement(store: Path, tombstone: dict[str, Any], evidence: dict[str, Any]) -> None:
+    receipt={"schema":"polymarket_v7_windowed_alias_retirement_receipt_v1",**AUTH,"policy":POLICY,"raw_detail_available":False,"pack_sha256":tombstone["pack_sha256"],"parent_tombstone_sha256":digest(canonical(tombstone)),"alias":evidence}
+    payload=canonical(receipt); sha=digest(payload)
+    immutable(store/"windowed_alias_retirement_receipts"/sha[:2]/(sha+".json"),payload)
+
+
+def _stable_file_evidence(path: Path, *, family: str) -> tuple[dict[str, Any] | None, str]:
+    if path.is_symlink() or not path.is_file(): return None,"UNSAFE_PATH"
+    before=path.stat(); before_id=(before.st_dev,before.st_ino,before.st_size,before.st_mtime_ns)
+    sha=_sha256_file(path)
+    try: after=path.stat()
+    except OSError: return None,"SOURCE_DISAPPEARED_DURING_HASH"
+    after_id=(after.st_dev,after.st_ino,after.st_size,after.st_mtime_ns)
+    if before_id!=after_id: return None,"SOURCE_CHANGED_DURING_HASH"
+    return {"path":str(path),"source_family":family,"sha256":sha,"stat":list(before_id),"logical_bytes":before.st_size,"allocated_bytes":_allocated(path)},"VERIFIED"
+
+
+def _unindexed_windowed_receipt(evidence: dict[str, Any], *, raw_detail_seconds: int) -> dict[str, Any]:
+    return {"schema":"polymarket_v7_unindexed_windowed_source_tombstone_v1",**AUTH,"policy":POLICY,"raw_detail_available":False,"retirement_reason":"UNINDEXED_CLOSED_WINDOWED_SOURCE","source_was_catalogued":False,"raw_detail_seconds":raw_detail_seconds,"source":evidence,"limitations":["The source was not represented in permanent revisions or pack manifests before retirement.","The full source SHA-256 and stable filesystem identity were recorded before unlink."]}
+
+
+def _retire_unindexed_windowed_path(path: Path, *, store: Path, family: str, raw_detail_seconds: int, dry_run: bool) -> tuple[int, str]:
+    if dry_run: return 0,"DRY_RUN_ELIGIBLE"
+    evidence,status=_stable_file_evidence(path,family=family)
+    if status!="VERIFIED" or evidence is None: return 0,status
+    receipt=_unindexed_windowed_receipt(evidence,raw_detail_seconds=raw_detail_seconds); payload=canonical(receipt); receipt_sha=digest(payload)
+    immutable(store/"unindexed_windowed_source_tombstones"/receipt_sha[:2]/(receipt_sha+".json"),payload)
+    try: current=path.stat()
+    except OSError: return 0,"SOURCE_DISAPPEARED_AFTER_RECEIPT"
+    expected=tuple(evidence["stat"]); observed=(current.st_dev,current.st_ino,current.st_size,current.st_mtime_ns)
+    if observed!=expected: return 0,"SOURCE_CHANGED_AFTER_RECEIPT"
+    return _safe_unlink(path),"RETIRED"
+
+
+def _unindexed_pm_book_segments(runs: Path, *, indexed_paths: set[str], cutoff_ns: int) -> list[Path]:
+    candidates=[]
+    roots=(runs/"paper_v7_live/micro_maker/book_observations",runs/"paper_v7_live/research/repricing_book/book_observations")
+    for root in roots:
+        if not root.is_dir() or root.is_symlink(): continue
+        for path in root.glob("*.jsonl*"):
+            try:
+                if str(path) in indexed_paths or not _closed_path(path,runs): continue
+                if _alias_family(str(path),runs)!="pm_causal_book": continue
+                if path.stat().st_mtime_ns>=cutoff_ns: continue
+            except OSError: continue
+            candidates.append(path)
+    return sorted(candidates,key=_allocated,reverse=True)
+
+
 def _safe_unlink(path: Path) -> int:
     if not path.exists():
         return 0
     if path.is_symlink():
         raise ValueError(f"refuse symlink unlink:{path}")
-    before = _allocated(path)
+    info = path.lstat()
+    before = _allocated(path) if int(getattr(info, "st_nlink", 1)) <= 1 else 0
     path.unlink()
     fsync_dir(path.parent)
     return before
@@ -176,6 +275,11 @@ def run(runs_root: Path, *, raw_detail_seconds: int = 21600,
         "started_ns": now_ns,
         "retired_sources": 0,
         "removed_source_files": 0,
+        "removed_source_aliases": 0,
+        "removed_unindexed_source_files": 0,
+        "unindexed_source_integrity_skips": 0,
+        "unindexed_source_candidates": 0,
+        "alias_integrity_skips": 0,
         "removed_objects": 0,
         "removed_packs": 0,
         "removed_manifests": 0,
@@ -288,6 +392,9 @@ def run(runs_root: Path, *, raw_detail_seconds: int = 21600,
         if safe:
             manifest_safe_packs.add(pack)
 
+    indexed_paths={str(value.get("original_path_at_capture") or "") for rows in by_source.values() for _,value in rows}
+    indexed_paths.update(str(alias) for rows in all_manifest_by_pack.values() for _,value in rows for alias in (value.get("source_aliases") or []) if isinstance(alias,str))
+
     raw_candidates = candidate_packs | manifest_safe_packs
     removable_packs = {pack for pack in raw_candidates
                        if pack not in protected_packs
@@ -316,9 +423,27 @@ def run(runs_root: Path, *, raw_detail_seconds: int = 21600,
             "retired_at_ns": now_ns,
             "cutoff_ns": cutoff_ns,
         }
-        if not dry_run:
-            immutable(store / "windowed_pack_tombstones" / (pack + ".json"), canonical(tombstone))
         path = store / "packs" / pack[:2] / (pack + ".pack")
+        verified_aliases=[]; alias_failure=None
+        for alias in aliases:
+            alias_path,evidence,reason=_verified_windowed_alias(alias,runs=runs,cutoff_ns=cutoff_ns,pack_sha=pack,pack_path=path)
+            if reason=="MISSING": continue
+            if reason!="VERIFIED": alias_failure=(alias,reason); break
+            verified_aliases.append((alias_path,evidence))
+        if alias_failure is not None:
+            result["alias_integrity_skips"] += 1
+            continue
+        tombstone_path = store / "windowed_pack_tombstones" / (pack + ".json")
+        if not dry_run:
+            if not _existing_tombstone_allows_cleanup(tombstone_path, tombstone, store):
+                immutable(tombstone_path, canonical(tombstone))
+            persisted_tombstone=_load(tombstone_path)
+            for alias_path,evidence in verified_aliases:
+                _record_alias_retirement(store,persisted_tombstone,evidence)
+                result["reclaimed_allocated_bytes"] += _safe_unlink(alias_path)
+                result["removed_source_aliases"] += 1
+        else:
+            result["removed_source_aliases"] += len(verified_aliases)
         if path.exists():
             if not dry_run:
                 result["reclaimed_allocated_bytes"] += _safe_unlink(path)
@@ -332,6 +457,45 @@ def run(runs_root: Path, *, raw_detail_seconds: int = 21600,
                 if not dry_run:
                     _safe_unlink(manifest)
                 result["removed_manifests"] += 1
+
+    unindexed=_unindexed_pm_book_segments(runs,indexed_paths=indexed_paths,cutoff_ns=cutoff_ns)
+    result["unindexed_source_candidates"]=len(unindexed)
+    for path in unindexed:
+        if time.monotonic()-started>=maximum_seconds:
+            result["deferred"] += 1
+            break
+        reclaimed,status=_retire_unindexed_windowed_path(path,store=store,family="pm_causal_book",raw_detail_seconds=raw_detail_seconds,dry_run=dry_run)
+        if status in {"RETIRED","DRY_RUN_ELIGIBLE"}:
+            result["removed_unindexed_source_files"] += 1
+            result["reclaimed_allocated_bytes"] += reclaimed
+        else:
+            result["unindexed_source_integrity_skips"] += 1
+
+    # Resume aliases left behind by an interrupted older pass even when the pack/manifest link is already gone.
+    alias_candidates=[]
+    for tombstone_path in (store / "windowed_pack_tombstones").glob("*.json"):
+        tombstone=_load(tombstone_path)
+        if (tombstone.get("schema")!="polymarket_v7_windowed_pack_tombstone_v1" or tombstone.get("policy")!=POLICY
+                or tombstone.get("paper_only") is not True or tombstone.get("authenticated_execution") is not False
+                or tombstone.get("real_order_submission") is not False or tombstone.get("raw_detail_available") is not False):
+            continue
+        pack=str(tombstone.get("pack_sha256") or "")
+        if len(pack)!=64: continue
+        pack_path=store/"packs"/pack[:2]/(pack+".pack")
+        for alias in tombstone.get("source_aliases") or []:
+            if isinstance(alias,str) and Path(alias).exists():
+                alias_candidates.append((_allocated(Path(alias)),alias,pack,pack_path,tombstone))
+    for _,alias,pack,pack_path,tombstone in sorted(alias_candidates,reverse=True):
+        if time.monotonic()-started>=maximum_seconds:
+            result["deferred"] += 1; break
+        alias_path,evidence,reason=_verified_windowed_alias(alias,runs=runs,cutoff_ns=cutoff_ns,pack_sha=pack,pack_path=pack_path)
+        if reason=="MISSING": continue
+        if reason!="VERIFIED":
+            result["alias_integrity_skips"] += 1; continue
+        if not dry_run:
+            _record_alias_retirement(store,tombstone,evidence)
+            result["reclaimed_allocated_bytes"] += _safe_unlink(alias_path)
+        result["removed_source_aliases"] += 1
 
     result["after_bytes"] = allocated_data_bytes([runs])
     result["completed_ns"] = time.time_ns()
