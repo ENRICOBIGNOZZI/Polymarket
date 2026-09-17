@@ -116,3 +116,7 @@ int main() {{
             check=True, capture_output=True, text=True,
         )
         subprocess.run([str(binary)], check=True, timeout=10)
+
+
+if __name__ == "__main__":
+    test_native_amounts_match_official_v2_limit_builder()
