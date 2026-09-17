@@ -62,6 +62,7 @@ struct Options {
     std::int64_t min_order_microunits = 5'000'000;
     int duration_seconds = 30;
     int idle_spin_us = 50;
+    int socket_busy_poll_us = 0;
     int cpu_pin = 1;
     bool validate_only = false;
 };
@@ -82,6 +83,7 @@ Options parse_options(int argc, char** argv) {
         else if (arg == "--min-order-microunits") out.min_order_microunits = bounded_integer<std::int64_t>(next(), 1, 1'000'000'000);
         else if (arg == "--duration-seconds") out.duration_seconds = bounded_integer<int>(next(), 1, 3600);
         else if (arg == "--idle-spin-us") out.idle_spin_us = bounded_integer<int>(next(), 0, 2000);
+        else if (arg == "--socket-busy-poll-us") out.socket_busy_poll_us = bounded_integer<int>(next(), 0, 2000);
         else if (arg == "--cpu-pin") out.cpu_pin = bounded_integer<int>(next(), 0, 1);
         else if (arg == "--validate-only") out.validate_only = true;
         else throw std::invalid_argument("unknown option");
@@ -144,6 +146,8 @@ int main(int argc, char** argv) {
         ExternalVenueIngress coinbase_ingress(VenueId::CoinbaseSpot, kAsset, nullptr, &wakeup);
         auto binance_spec = btc_spot_connection_spec(VenueId::BinanceSpot, kAsset);
         auto coinbase_spec = btc_spot_connection_spec(VenueId::CoinbaseSpot, kAsset);
+        binance_spec.socket_busy_poll_us = options.socket_busy_poll_us;
+        coinbase_spec.socket_busy_poll_us = options.socket_busy_poll_us;
         CoinbaseL2FrameObserver coinbase_l2(coinbase_ingress, kAsset);
         ExternalVenueWsClient binance(binance_spec, &binance_ingress);
         ExternalVenueWsClient coinbase(coinbase_spec, nullptr, &coinbase_l2);
@@ -183,7 +187,8 @@ int main(int argc, char** argv) {
                 pm_faults.fetch_add(1, std::memory_order_relaxed);
                 wakeup.notify();
             },
-            role_cpus[3] >= 0 ? std::vector<int>{role_cpus[3]} : std::vector<int>{});
+            role_cpus[3] >= 0 ? std::vector<int>{role_cpus[3]} : std::vector<int>{},
+            options.socket_busy_poll_us);
 
         ExternalStatePolicy external_policy;
         external_policy.external_cancel_enabled = 1;
@@ -380,7 +385,8 @@ int main(int argc, char** argv) {
             {"authority", "SHADOW_ZERO_AUTHORITY"},
             {"critical_path", "CPP_SAME_PROCESS_CAUSAL_EVENT_TO_RISK_ADMISSION"},
             {"clean_capture", clean}, {"duration_seconds", options.duration_seconds},
-            {"idle_spin_us", options.idle_spin_us}, {"kernel_wakeups", wakeup.kernel_wakeups()},
+            {"idle_spin_us", options.idle_spin_us}, {"socket_busy_poll_us", options.socket_busy_poll_us},
+            {"kernel_wakeups", wakeup.kernel_wakeups()},
             {"cpu_pin_requested", options.cpu_pin != 0}, {"cpu_pin_active", cpu_pin_active},
             {"allowed_cpu_count", allowed_cpus.size()}, {"affinity_failures", total_affinity_failures},
             {"cpu_roles", {{"decision", role_cpus[0]}, {"binance", role_cpus[1]},

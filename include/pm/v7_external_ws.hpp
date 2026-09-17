@@ -65,6 +65,7 @@ struct ExternalVenueConnectionSpec {
     bool start_without_subscription = false;
     std::uint64_t asset_handle = 0;
     std::size_t max_message_bytes = 1U << 20;
+    int socket_busy_poll_us = 0;
 };
 
 struct ExternalWsSnapshot {

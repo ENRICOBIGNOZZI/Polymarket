@@ -1,4 +1,5 @@
 #include "pm/http.hpp"
+#include "pm/socket_tuning.hpp"
 #include <curl/curl.h>
 
 #include <algorithm>
@@ -9,6 +10,12 @@
 
 namespace pm {
 namespace {
+int socket_option_cb(void* clientp, curl_socket_t fd, curlsocktype) {
+    const auto requested_us = *static_cast<const int*>(clientp);
+    return pm::network::apply_busy_poll(static_cast<int>(fd), requested_us) == 0
+        ? CURL_SOCKOPT_OK : CURL_SOCKOPT_ERROR;
+}
+
 size_t write_cb(char* ptr, size_t size, size_t nmemb, void* userdata) {
     auto* out = static_cast<std::string*>(userdata);
     out->append(ptr, size * nmemb);
@@ -42,8 +49,9 @@ size_t write_cb(char* ptr, size_t size, size_t nmemb, void* userdata) {
 struct HttpClient::Impl {
     CURL* easy = nullptr;
     mutable std::mutex mutex;
+    int socket_busy_poll_us = 0;
 
-    Impl() : easy(curl_easy_init()) {
+    explicit Impl(int busy_poll_us) : easy(curl_easy_init()), socket_busy_poll_us(busy_poll_us) {
         if (easy == nullptr) throw std::runtime_error("curl_easy_init failed");
     }
 
@@ -52,10 +60,12 @@ struct HttpClient::Impl {
     }
 };
 
-HttpClient::HttpClient() {
+HttpClient::HttpClient(int socket_busy_poll_us) {
     static const int init = [](){ curl_global_init(CURL_GLOBAL_DEFAULT); return 1; }();
     (void)init;
-    impl_ = std::make_unique<Impl>();
+    if (socket_busy_poll_us < 0 || socket_busy_poll_us > network::kMaxBusyPollUs)
+        throw std::invalid_argument("socket_busy_poll_us out of range");
+    impl_ = std::make_unique<Impl>(socket_busy_poll_us);
 }
 HttpClient::~HttpClient() = default;
 
@@ -94,6 +104,10 @@ HttpResponse HttpClient::request(const std::string& method, const std::string& u
     curl_easy_setopt(curl, CURLOPT_TCP_KEEPINTVL, 10L);
     curl_easy_setopt(curl, CURLOPT_DNS_CACHE_TIMEOUT, 300L);
     curl_easy_setopt(curl, CURLOPT_HTTP_VERSION, CURL_HTTP_VERSION_2TLS);
+    if (impl_->socket_busy_poll_us > 0) {
+        curl_easy_setopt(curl, CURLOPT_SOCKOPTFUNCTION, socket_option_cb);
+        curl_easy_setopt(curl, CURLOPT_SOCKOPTDATA, &impl_->socket_busy_poll_us);
+    }
 
     // libcurl's environment-proxy behaviour differs across builds/platforms.
     // V7 therefore supplies its PAPER public-data tunnel explicitly. The
@@ -136,6 +150,13 @@ HttpResponse HttpClient::request(const std::string& method, const std::string& u
     if (curl_easy_getinfo(curl, CURLINFO_PRIMARY_IP, &primary_ip) == CURLE_OK
         && primary_ip != nullptr) {
         resp.timings.primary_ip = primary_ip;
+    }
+    curl_socket_t active_socket = CURL_SOCKET_BAD;
+    if (curl_easy_getinfo(curl, CURLINFO_ACTIVESOCKET, &active_socket) == CURLE_OK
+        && active_socket != CURL_SOCKET_BAD) {
+        const int fd = static_cast<int>(active_socket);
+        resp.timings.incoming_cpu = network::incoming_cpu(fd);
+        resp.timings.incoming_napi_id = network::incoming_napi_id(fd);
     }
     if (list) curl_slist_free_all(list);
     return resp;

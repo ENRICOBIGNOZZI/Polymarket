@@ -22,6 +22,7 @@ struct Options {
     std::size_t samples = 120;
     std::size_t warmup = 3;
     std::int64_t interval_ms = 500;
+    int socket_busy_poll_us = 0;
     bool validate_only = false;
 };
 
@@ -62,6 +63,7 @@ Options options(int argc, char** argv) {
         else if (argument == "--samples") out.samples = static_cast<std::size_t>(integer(next(), "samples"));
         else if (argument == "--warmup") out.warmup = static_cast<std::size_t>(integer(next(), "warmup"));
         else if (argument == "--interval-ms") out.interval_ms = integer(next(), "interval-ms");
+        else if (argument == "--socket-busy-poll-us") out.socket_busy_poll_us = static_cast<int>(integer(next(), "socket-busy-poll-us"));
         else throw std::runtime_error("unknown argument: " + std::string(argument));
     }
     if (!approved_endpoint(out.endpoint)) {
@@ -73,6 +75,7 @@ Options options(int argc, char** argv) {
     if (!exact_sha(out.exact_code_sha)) throw std::runtime_error("exact-code-sha must be lowercase SHA-1");
     if (out.samples == 0 || out.samples > 1'000'000) throw std::runtime_error("samples out of range");
     if (out.warmup > 10000 || out.interval_ms > 60000) throw std::runtime_error("probe load out of range");
+    if (out.socket_busy_poll_us > 2000) throw std::runtime_error("socket-busy-poll-us out of range");
     return out;
 }
 
@@ -103,7 +106,7 @@ int main(int argc, char** argv) {
             std::cout << "{\"validated\":true,\"network_calls\":0}\n";
             return 0;
         }
-        pm::HttpClient client;
+        pm::HttpClient client(cfg.socket_busy_poll_us);
         bool connection_seen = false;
         const auto warmup_started = std::chrono::steady_clock::now();
         std::size_t warmup_failed = 0;
@@ -133,6 +136,10 @@ int main(int argc, char** argv) {
         std::size_t measured_reconnects = 0;
         std::size_t transport_exceptions = 0;
         std::string primary_ip;
+        int incoming_cpu = -1;
+        int incoming_napi_id = -1;
+        std::size_t incoming_cpu_changes = 0;
+        std::size_t incoming_napi_changes = 0;
         for (std::size_t i = 0; i < cfg.samples; ++i) {
             try {
                 const auto response = client.get(cfg.endpoint);
@@ -153,6 +160,14 @@ int main(int argc, char** argv) {
                     new_connections += static_cast<std::size_t>(
                         std::max<long>(0, response.timings.new_connections));
                     if (!response.timings.primary_ip.empty()) primary_ip = response.timings.primary_ip;
+                    if (response.timings.incoming_cpu >= 0) {
+                        if (incoming_cpu >= 0 && incoming_cpu != response.timings.incoming_cpu) ++incoming_cpu_changes;
+                        incoming_cpu = response.timings.incoming_cpu;
+                    }
+                    if (response.timings.incoming_napi_id >= 0) {
+                        if (incoming_napi_id >= 0 && incoming_napi_id != response.timings.incoming_napi_id) ++incoming_napi_changes;
+                        incoming_napi_id = response.timings.incoming_napi_id;
+                    }
                 }
             } catch (const std::exception&) {
                 ++failed;
@@ -176,11 +191,16 @@ int main(int argc, char** argv) {
                   << ",\"started_wall_ms\":" << started_ms
                   << ",\"finished_wall_ms\":" << finished_ms
                   << ",\"samples\":" << cfg.samples
+                  << ",\"socket_busy_poll_us\":" << cfg.socket_busy_poll_us
                   << ",\"warmup\":" << cfg.warmup
                   << ",\"successful_samples\":" << total.size()
                   << ",\"failed_samples\":" << failed
                   << ",\"warmup_failed_samples\":" << warmup_failed
                   << ",\"primary_ip\":\"" << primary_ip << "\""
+                  << ",\"incoming_cpu\":" << incoming_cpu
+                  << ",\"incoming_napi_id\":" << incoming_napi_id
+                  << ",\"incoming_cpu_changes\":" << incoming_cpu_changes
+                  << ",\"incoming_napi_changes\":" << incoming_napi_changes
                   << ",\"connection_reused_samples\":" << reused
                   << ",\"new_connections\":" << new_connections
                   << ",\"reconnect_count\":" << measured_reconnects

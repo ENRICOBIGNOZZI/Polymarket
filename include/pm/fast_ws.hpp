@@ -36,7 +36,8 @@ public:
                         std::size_t shard_size,
                         MessageHandler on_message,
                         ErrorHandler on_error = {},
-                        std::vector<int> worker_cpu_affinity = {});
+                        std::vector<int> worker_cpu_affinity = {},
+                        int socket_busy_poll_us = 0);
     ~MarketWebSocketFeed();
 
     MarketWebSocketFeed(const MarketWebSocketFeed&) = delete;

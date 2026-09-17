@@ -16,6 +16,8 @@ struct HttpTimings {
     long new_connections = 0;
     bool connection_reused = false;
     std::string primary_ip;
+    int incoming_cpu = -1;
+    int incoming_napi_id = -1;
 };
 
 struct HttpResponse {
@@ -26,7 +28,7 @@ struct HttpResponse {
 
 class HttpClient {
 public:
-    HttpClient();
+    explicit HttpClient(int socket_busy_poll_us = 0);
     ~HttpClient();
 
     HttpClient(const HttpClient&) = delete;
