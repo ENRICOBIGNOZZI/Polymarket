@@ -19,6 +19,9 @@ class IngressWakeup;
 inline constexpr std::size_t kExternalIngressQueueCapacity = 4096;
 inline constexpr std::size_t kExternalIngressDecodeBatch = 32;
 
+[[nodiscard]] bool causal_event_precedes(
+    const ExternalVenueEvent& left, const ExternalVenueEvent& right) noexcept;
+
 struct CausalEventMergeResult {
     std::size_t output_count = 0;
     std::uint8_t sort_fallback = 0;
@@ -84,6 +87,11 @@ public:
     [[nodiscard]] std::size_t drain_events(
         std::span<ExternalVenueEvent> output,
         std::size_t max_events = kExternalIngressQueueCapacity) noexcept;
+
+    // Single-owner zero-copy causal merge primitive. The returned pointer is
+    // stable until commit_event(); only the consumer thread may call these.
+    [[nodiscard]] const ExternalVenueEvent* peek_event() const noexcept;
+    [[nodiscard]] bool commit_event() noexcept;
 
     void mark_disconnected(std::uint64_t connection_epoch) noexcept;
 

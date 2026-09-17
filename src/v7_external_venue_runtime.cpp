@@ -1333,11 +1333,9 @@ int main(int argc, char** argv) {
         std::jthread binance_usdm_market_thread([&](std::stop_token token) { binance_usdm_market.run(token); });
 #endif
 
-        std::vector<ExternalVenueEvent> binance_causal_batch(kExternalIngressQueueCapacity);
-        std::vector<ExternalVenueEvent> coinbase_causal_batch(kExternalIngressQueueCapacity);
-        std::vector<ExternalVenueEvent> causal_spot_batch(
-            2 * kExternalIngressQueueCapacity);
         std::uint64_t causal_sort_fallbacks = 0;
+        std::int64_t last_binance_causal_receive_ns = 0;
+        std::int64_t last_coinbase_causal_receive_ns = 0;
         std::uint64_t last_cancel_signal_version = 0;
         std::uint8_t last_cancel_signal_valid = 0;
         std::int64_t last_full_status_publish_ns = 0;
@@ -1350,39 +1348,60 @@ int main(int argc, char** argv) {
             else std::this_thread::sleep_for(kFastLoopSleep);
         };
         while (!stopping.load(std::memory_order_relaxed)) {
-            const auto binance_causal_count = binance_ingress.drain_events(
-                std::span<ExternalVenueEvent>(binance_causal_batch));
-            const auto coinbase_causal_count = coinbase_ingress.drain_events(
-                std::span<ExternalVenueEvent>(coinbase_causal_batch));
-            const auto merged = merge_causal_events(
-                std::span<const ExternalVenueEvent>(
-                    binance_causal_batch.data(), binance_causal_count),
-                std::span<const ExternalVenueEvent>(
-                    coinbase_causal_batch.data(), coinbase_causal_count),
-                std::span<ExternalVenueEvent>(causal_spot_batch));
-            if (merged.output_overflow != 0) {
-                throw std::runtime_error("causal ingress merge output overflow");
-            }
-            const std::size_t causal_count = merged.output_count;
-            causal_sort_fallbacks += merged.sort_fallback;
-            std::size_t causal_index = 0;
-            while (causal_index < causal_count) {
-                const auto receive_ns = causal_spot_batch[causal_index]
-                    .local_receive_monotonic_ns;
+            std::size_t causal_count = 0;
+            constexpr std::size_t kMaxCausalPerLoop = 2 * kExternalIngressQueueCapacity;
+            while (causal_count < kMaxCausalPerLoop) {
+                const auto* binance_head = binance_ingress.peek_event();
+                const auto* coinbase_head = coinbase_ingress.peek_event();
+                if (binance_head == nullptr && coinbase_head == nullptr) break;
+
+                const std::int64_t receive_ns = binance_head == nullptr
+                    ? coinbase_head->local_receive_monotonic_ns
+                    : (coinbase_head == nullptr
+                        ? binance_head->local_receive_monotonic_ns
+                        : std::min(binance_head->local_receive_monotonic_ns,
+                                   coinbase_head->local_receive_monotonic_ns));
+                if (receive_ns <= 0) {
+                    throw std::runtime_error("causal ingress invalid receive timestamp");
+                }
                 if (policy.external_cancel_enabled != 0 && receive_ns > 1) {
                     (void)state.advance_external_cancel_signal(receive_ns - 1, policy);
                 }
-                std::size_t group_end = causal_index;
-                while (group_end < causal_count
-                       && causal_spot_batch[group_end].local_receive_monotonic_ns
-                           == receive_ns) {
-                    (void)state.on_venue_event(causal_spot_batch[group_end], policy);
-                    ++group_end;
+
+                while (true) {
+                    binance_head = binance_ingress.peek_event();
+                    coinbase_head = coinbase_ingress.peek_event();
+                    const ExternalVenueEvent* next = nullptr;
+                    bool use_binance = false;
+                    if (binance_head != nullptr && coinbase_head != nullptr) {
+                        use_binance = !causal_event_precedes(*coinbase_head, *binance_head);
+                        next = use_binance ? binance_head : coinbase_head;
+                    } else if (binance_head != nullptr) {
+                        use_binance = true;
+                        next = binance_head;
+                    } else {
+                        next = coinbase_head;
+                    }
+                    if (next == nullptr || next->local_receive_monotonic_ns != receive_ns) break;
+
+                    auto& last_receive_ns = use_binance
+                        ? last_binance_causal_receive_ns : last_coinbase_causal_receive_ns;
+                    if (last_receive_ns > next->local_receive_monotonic_ns) {
+                        ++causal_sort_fallbacks;
+                        throw std::runtime_error("causal ingress source timestamp regression");
+                    }
+                    last_receive_ns = next->local_receive_monotonic_ns;
+                    (void)state.on_venue_event(*next, policy);
+                    const bool committed = use_binance
+                        ? binance_ingress.commit_event() : coinbase_ingress.commit_event();
+                    if (!committed) {
+                        throw std::runtime_error("causal ingress commit failed");
+                    }
+                    ++causal_count;
                 }
                 if (policy.external_cancel_enabled != 0) {
                     (void)state.advance_external_cancel_signal(receive_ns, policy);
                 }
-                causal_index = group_end;
             }
             const auto drained = causal_count
                 + bybit_ingress.drain_into(state, policy)
