@@ -7,6 +7,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 CONFIG = ROOT / "config/v7_london_az_shootout.json"
+PROVISIONER = ROOT / "scripts/v7_london_provision.py"
 BOOTSTRAP = ROOT / "ops/v7_london_bootstrap.sh"
 BENCHMARK = ROOT / "ops/v7_london_benchmark.sh"
 DOC = ROOT / "docs/LONDON_MIGRATION.md"
@@ -38,6 +39,15 @@ def test_migration_never_reuses_live_ledger_or_run_root() -> None:
     assert value["copy_live_run_root"] is False
     assert value["copy_canonical_ledger"] is False
     assert value["new_run_generation_required"] is True
+
+
+def test_provisioner_is_plan_only_by_default_and_cannot_cut_over() -> None:
+    source = PROVISIONER.read_text(encoding="utf-8")
+    assert 'parser.add_argument("--apply", action="store_true")' in source
+    assert 'if not args.apply:' in source
+    assert '"automatic_cutover": False' in source
+    assert '"runtime_started": False' in source
+    assert 'HttpTokens": "required"' in source
 
 
 def test_bootstrap_installs_but_does_not_start_runtime() -> None:

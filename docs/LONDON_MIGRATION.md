@@ -58,7 +58,9 @@ The deploy workflows already read `POLYMARKET_SERVER_HOST`, `POLYMARKET_SERVER_U
 
 ## Current blocker
 
-AWS provisioning is not currently possible from the existing Mac environment: no usable AWS CLI/account identity was found during the 2026-09-16 audit. Provisioning of the three EC2 hosts therefore remains blocked on explicit AWS access. The repository-side bootstrap, benchmark, exact-SHA checks and migration contracts can be completed independently.
+Repository-side London work is complete through provisioning automation. `scripts/v7_london_provision.py` builds a no-side-effect three-AZ plan by default and launches hosts only with explicit `--apply`, authenticated AWS identity, exact physical-zone subnet mappings, one VPC security group and an explicit admin access path. It never starts V7 and never cuts over automatically.
+
+This Mac currently has `boto3` but no discoverable AWS credentials and no `~/.aws` configuration, so the three EC2 hosts cannot be launched from this environment. Network/admin launch parameters are also intentionally not invented. Once those external inputs exist, the required sequence is provision -> bootstrap -> smoke -> 24-hour formal shootout -> measured AZ selection -> PAPER validation -> controlled single-writer cutover.
 
 ## Independent audit corrections
 
