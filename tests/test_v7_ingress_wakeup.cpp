@@ -1,4 +1,5 @@
 #include "pm/v7_ingress_wakeup.hpp"
+#include "pm/thread_tuning.hpp"
 #include "pm/v7_external_ingress.hpp"
 
 #include <array>
@@ -14,6 +15,11 @@ using namespace pm::v7::external_fair;
 using namespace std::chrono_literals;
 
 int main() {
+    const std::vector<int> synthetic_cpus{0, 1, 2, 3, 4, 5, 6, 7};
+    const auto dedicated = pm::threading::select_dedicated_cpus(synthetic_cpus, 4);
+    assert((dedicated == std::vector<int>{4, 5, 6, 7}));
+    assert(pm::threading::select_dedicated_cpus(synthetic_cpus, 9).empty());
+
     IngressWakeup wakeup;
     assert(!wakeup.wait_for(0ms));
     // A signal published while the consumer is active is syscall-free and
