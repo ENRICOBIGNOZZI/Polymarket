@@ -131,3 +131,6 @@ def test_prepared_zero_copy_post_matches_composed_reference() -> None:
             str(main), "-o", str(binary), *_openssl_flags(),
         ], check=True, capture_output=True, text=True)
         subprocess.run([str(binary)], check=True, timeout=10)
+
+if __name__ == "__main__":
+    test_prepared_zero_copy_post_matches_composed_reference()
