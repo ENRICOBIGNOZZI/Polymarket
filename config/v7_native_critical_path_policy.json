@@ -33,7 +33,9 @@
     "CROSS_PROCESS_JSON_IPC",
     "SYNCHRONOUS_TELEMETRY",
     "UNBOUNDED_ALLOCATION",
-    "FIXED_SLEEP_POLLING"
+    "FIXED_SLEEP_POLLING",
+    "GAMMA_API",
+    "REMOTE_METADATA_DISCOVERY"
   ],
   "allowed_cold_path_dependencies": [
     "STARTUP_CONFIG_LOAD",
@@ -42,7 +44,10 @@
     "ASYNC_EVIDENCE_PERSISTENCE",
     "PYTHON_RESEARCH",
     "PYTHON_MONITORING",
-    "PYTHON_REPORTING"
+    "PYTHON_REPORTING",
+    "CLOB_MARKET_INDEX_DISCOVERY",
+    "GAMMA_METADATA_ENRICHMENT",
+    "LAST_GOOD_METADATA_CACHE"
   ],
   "bounded_exchange_json_parse_in_cpp_allowed": true,
   "event_driven_required": true,

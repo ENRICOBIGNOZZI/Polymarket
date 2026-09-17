@@ -14,8 +14,12 @@
     "window_offsets": [
       -1,
       0,
-      1
-    ]
+      1,
+      2
+    ],
+    "clob_url": "https://clob.polymarket.com",
+    "clob_max_pages": 64,
+    "metadata_cache_max_age_seconds": 3600
   },
   "eligibility": {
     "active_required": true,

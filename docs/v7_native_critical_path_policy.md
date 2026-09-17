@@ -32,3 +32,5 @@ No component introduced for latency may create another allocator, risk owner,
 OMS, inventory owner, execution owner or ledger authority. Promotion order is:
 unit/parity -> deterministic replay -> live zero-authority shadow -> prospective
 London PAPER -> single-owner cutover -> separate real-money decision.
+
+Gamma API and all remote metadata discovery are cold-path only. The HFT engine may consume pre-resolved metadata but may not wait on Gamma.
