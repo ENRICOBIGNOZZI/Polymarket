@@ -274,6 +274,34 @@ struct ExplorationChoice {
     };
 }
 
+struct CausalFlowInputs {
+    double opposite_flow_rate = 0.0;
+    double opposite_print_rate = 0.0;
+    double modeled_flow_reach_probability = 0.0;
+    double conditional_opposite_shares = 0.0;
+};
+
+[[nodiscard]] CausalFlowInputs causal_flow_inputs(
+    const Features& features, Side side, const MakerModelSnapshot& model) noexcept {
+    CausalFlowInputs out;
+    out.opposite_flow_rate = side == Side::Buy
+        ? features.aggressive_sell_shares_per_second
+        : features.aggressive_buy_shares_per_second;
+    out.opposite_print_rate = side == Side::Buy
+        ? features.aggressive_sell_prints_per_second
+        : features.aggressive_buy_prints_per_second;
+    const double horizon_seconds = std::max(0.001, model.fill_prediction_horizon_seconds);
+    const double expected_opposite_shares =
+        std::max(0.0, out.opposite_flow_rate) * horizon_seconds;
+    const double expected_opposite_prints =
+        std::max(0.0, out.opposite_print_rate) * horizon_seconds;
+    out.modeled_flow_reach_probability = clamp(
+        1.0 - std::exp(-expected_opposite_prints), 0.0, 1.0);
+    out.conditional_opposite_shares = out.modeled_flow_reach_probability > kEps
+        ? expected_opposite_shares / out.modeled_flow_reach_probability : 0.0;
+    return out;
+}
+
 [[nodiscard]] SideEconomics evaluate_side(
     Action action,
     Side side,
@@ -283,6 +311,7 @@ struct ExplorationChoice {
     const RiskSnapshot& risk,
     const MakerModelSnapshot& model,
     const Features& features,
+    const CausalFlowInputs& causal_flow,
     double fair_value,
     double quote_shares) noexcept {
 
@@ -355,23 +384,15 @@ struct ExplorationChoice {
     // stages so thousands of no-fills remain informative before markout data
     // is mature.  IMPROVE1 has no visible queue ahead; JOIN uses L1; faded
     // placements conservatively use the visible L10 side as a lower bound.
-    const double opposite_flow_rate = side == Side::Buy
-        ? features.aggressive_sell_shares_per_second
-        : features.aggressive_buy_shares_per_second;
-    const double opposite_print_rate = side == Side::Buy
-        ? features.aggressive_sell_prints_per_second
-        : features.aggressive_buy_prints_per_second;
-    const double horizon_seconds = std::max(0.001, model.fill_prediction_horizon_seconds);
-    const double expected_opposite_shares = std::max(0.0, opposite_flow_rate) * horizon_seconds;
-    const double expected_opposite_prints =
-        std::max(0.0, opposite_print_rate) * horizon_seconds;
-    // Arrival and size are separate causal stages. A single historical whale
-    // print may imply large conditional depletion if another print arrives,
-    // but it must not imply that a second print is almost certain.
-    const double modeled_flow_reach_probability = clamp(
-        1.0 - std::exp(-expected_opposite_prints), 0.0, 1.0);
-    const double conditional_opposite_shares = modeled_flow_reach_probability > kEps
-        ? expected_opposite_shares / modeled_flow_reach_probability : 0.0;
+    const double opposite_flow_rate = causal_flow.opposite_flow_rate;
+    const double opposite_print_rate = causal_flow.opposite_print_rate;
+    // Arrival and size are separate causal stages. They are action-invariant
+    // for a given side and update, so the expensive exponential is evaluated
+    // once per side before candidate enumeration and reused exactly here.
+    const double modeled_flow_reach_probability =
+        causal_flow.modeled_flow_reach_probability;
+    const double conditional_opposite_shares =
+        causal_flow.conditional_opposite_shares;
     const double modeled_queue_depletion_probability = queue_ahead <= kEps
         ? 1.0
         : clamp(conditional_opposite_shares /
@@ -445,6 +466,8 @@ struct ExplorationChoice {
     const RiskSnapshot& risk,
     const MakerModelSnapshot& model,
     const Features& features,
+    const CausalFlowInputs& bid_causal_flow,
+    const CausalFlowInputs& ask_causal_flow,
     double bid_fair_value,
     double ask_fair_value,
     double bid_quote_shares,
@@ -453,9 +476,9 @@ struct ExplorationChoice {
     Candidate candidate;
     candidate.action = action;
     candidate.bid = evaluate_side(action, Side::Buy, bid_tick, update, inventory, risk, model,
-                                  features, bid_fair_value, bid_quote_shares);
+                                  features, bid_causal_flow, bid_fair_value, bid_quote_shares);
     candidate.ask = evaluate_side(action, Side::Sell, ask_tick, update, inventory, risk, model,
-                                  features, ask_fair_value, ask_quote_shares);
+                                  features, ask_causal_flow, ask_fair_value, ask_quote_shares);
     candidate.score = 0.0;
     if (candidate.bid.admissible) candidate.score += candidate.bid.robust_ev;
     if (candidate.ask.admissible) candidate.score += candidate.ask.robust_ev;
@@ -649,7 +672,11 @@ MakerDecision MakerHotPath::on_market_update(
     // estimator.  The old event-count EMA applied another 0.9 multiplier on
     // every unrelated book message, so a busy feed erased real flow in
     // milliseconds.  feature_decay now has stable per-second semantics.
-    const double tau_seconds = -1.0 / std::log(std::max(1e-6, decay_per_second));
+    if (decay_per_second != cached_feature_decay_) {
+        cached_feature_decay_ = decay_per_second;
+        cached_tau_seconds_ = -1.0 / std::log(std::max(1e-6, decay_per_second));
+    }
+    const double tau_seconds = cached_tau_seconds_;
     if (update.flow_prior_valid != 0
         && (!flow_evidence_valid_
             || (update.selector_generation != 0
@@ -863,25 +890,32 @@ MakerDecision MakerHotPath::on_market_update(
         : (inventory_one_sided ? 0.0
                                : std::min(quote_shares, token_inventory_shares));
 
+    const auto bid_causal_flow = causal_flow_inputs(decision.features, Side::Buy, model);
+    const auto ask_causal_flow = causal_flow_inputs(decision.features, Side::Sell, model);
+
     std::array<Candidate, 4> candidates{};
     std::size_t candidate_count = 0;
     candidates[candidate_count++] = evaluate_candidate(
         Action::Join, update.best_bid_tick, update.best_ask_tick,
-        update, inventory, risk, model, decision.features, robust_bid_fair, robust_ask_fair,
+        update, inventory, risk, model, decision.features, bid_causal_flow, ask_causal_flow,
+        robust_bid_fair, robust_ask_fair,
         bid_quote_shares, ask_quote_shares);
     if (update.best_ask_tick - update.best_bid_tick >= 3) {
         candidates[candidate_count++] = evaluate_candidate(
             Action::Improve1, update.best_bid_tick + 1, update.best_ask_tick - 1,
-            update, inventory, risk, model, decision.features, robust_bid_fair, robust_ask_fair,
+            update, inventory, risk, model, decision.features, bid_causal_flow, ask_causal_flow,
+        robust_bid_fair, robust_ask_fair,
             bid_quote_shares, ask_quote_shares);
     }
     candidates[candidate_count++] = evaluate_candidate(
         Action::Fade1, update.best_bid_tick - 1, update.best_ask_tick + 1,
-        update, inventory, risk, model, decision.features, robust_bid_fair, robust_ask_fair,
+        update, inventory, risk, model, decision.features, bid_causal_flow, ask_causal_flow,
+        robust_bid_fair, robust_ask_fair,
         bid_quote_shares, ask_quote_shares);
     candidates[candidate_count++] = evaluate_candidate(
         Action::Fade2, update.best_bid_tick - 2, update.best_ask_tick + 2,
-        update, inventory, risk, model, decision.features, robust_bid_fair, robust_ask_fair,
+        update, inventory, risk, model, decision.features, bid_causal_flow, ask_causal_flow,
+        robust_bid_fair, robust_ask_fair,
         bid_quote_shares, ask_quote_shares);
 
     Candidate* best = nullptr;
@@ -1038,12 +1072,14 @@ MakerDecision MakerHotPath::on_market_update(
         std::size_t exploration_candidate_count = 0;
         exploration_candidates[exploration_candidate_count++] = evaluate_candidate(
             Action::Join, update.best_bid_tick, update.best_ask_tick,
-            update, inventory, risk, model, decision.features, robust_bid_fair, robust_ask_fair,
+            update, inventory, risk, model, decision.features, bid_causal_flow, ask_causal_flow,
+        robust_bid_fair, robust_ask_fair,
             exploration_shares, std::min(exploration_shares, token_inventory_shares));
         if (update.best_ask_tick - update.best_bid_tick >= 3) {
             exploration_candidates[exploration_candidate_count++] = evaluate_candidate(
                 Action::Improve1, update.best_bid_tick + 1, update.best_ask_tick - 1,
-                update, inventory, risk, model, decision.features, robust_bid_fair, robust_ask_fair,
+                update, inventory, risk, model, decision.features, bid_causal_flow, ask_causal_flow,
+        robust_bid_fair, robust_ask_fair,
                 exploration_shares, std::min(exploration_shares, token_inventory_shares));
         }
         const bool exploration_configured = model.exploration_enabled != 0
