@@ -124,10 +124,6 @@ def _authority_route(run_root: Path, event: LedgerEvent) -> str:
         _atomic_payload(run_root / "opportunities" / "quarantine", filename, payload)
         return "QUARANTINED"
     metadata = event.metadata if isinstance(event.metadata, dict) else {}
-    if metadata.get("cutover") is True and event.event_type in {
-        "ORDER_SUBMITTED", "FILL", "FINAL", "EXIT", "INVENTORY_LIQUIDATION",
-    }:
-        return "APPEND"
     if _coordinator_receipt_valid(event, engine_id):
         return "APPEND"
     evidence_only = (

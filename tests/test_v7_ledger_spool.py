@@ -22,6 +22,17 @@ from v7_ledger_spool import (
 SHA = "1" * 40
 
 
+def coordinator_receipt(action: str = "TAKE") -> dict[str, object]:
+    return {
+        "schema": "polymarket_v7_global_opportunity_decision_v1",
+        "owner": "V7_GLOBAL_PORTFOLIO_COORDINATOR",
+        "engine_id": "CRYPTO_SETTLEMENT_ENGINE",
+        "action": action,
+        "selected_replay_key": f"test-crypto-{action.lower()}",
+        "new_risk_authorized": True,
+    }
+
+
 class LedgerSpoolTests(unittest.TestCase):
     def test_only_router_writes_canonical_ledger_and_deduplicates(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -30,7 +41,8 @@ class LedgerSpoolTests(unittest.TestCase):
                 event_type="FINAL",
                 strategy="CRYPTO_SETTLEMENT_ENGINE",
                 model_sha=SHA,
-                position_id="pos-1", final_pnl=0.0, metadata={"cutover": True, "component": "crypto_informed_taker"},
+                position_id="pos-1", final_pnl=0.0,
+                metadata={"coordinator_receipt": coordinator_receipt()},
             )
             path = spool_event(root, event)
             self.assertTrue(path.exists())
@@ -49,17 +61,18 @@ class LedgerSpoolTests(unittest.TestCase):
     def test_cached_loop_state_appends_new_events_without_ledger_rescan(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
+            metadata = {"coordinator_receipt": coordinator_receipt()}
             first = LedgerEvent(
                 event_type="FINAL",
                 strategy="CRYPTO_SETTLEMENT_ENGINE",
                 model_sha=SHA, position_id="pos-cache-1", final_pnl=0.0,
-                metadata={"cutover": True, "component": "crypto_informed_taker"},
+                metadata=metadata,
             )
             second = LedgerEvent(
                 event_type="FINAL",
                 strategy="CRYPTO_SETTLEMENT_ENGINE",
                 model_sha=SHA, position_id="pos-cache-2", final_pnl=0.0,
-                metadata={"cutover": True, "component": "crypto_informed_taker"},
+                metadata=metadata,
             )
             existing = _existing_record_ids(canonical_ledger_path(root))
             self.assertEqual(existing, set())
@@ -153,6 +166,23 @@ class LedgerSpoolTests(unittest.TestCase):
             self.assertEqual(result["rejected"], 1)
             self.assertFalse(canonical_ledger_path(root).exists())
 
+    def test_cutover_boolean_cannot_bypass_coordinator_receipt(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            event = LedgerEvent(
+                event_type="FILL", strategy="CRYPTO_SETTLEMENT_ENGINE", model_sha=SHA,
+                order_id="cutover-order", fill_id="cutover-fill", side="BUY",
+                token_id="token-1", exchange_ts_ms=1000, receive_ts_ms=1100,
+                fill_price=0.5, filled_size=1.0, fee=0.0,
+                fee_source="test:authoritative", metadata={"cutover": True},
+            )
+            spool_event(root, event)
+            result = drain_spool(root, model_sha=SHA)
+            self.assertEqual(result["appended"], 0)
+            self.assertEqual(result["quarantined"], 1)
+            self.assertEqual(result["rejected"], 1)
+            self.assertFalse(canonical_ledger_path(root).exists())
+
     def test_component_fill_with_matching_coordinator_receipt_can_reach_ledger(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -207,6 +237,7 @@ class LedgerSpoolTests(unittest.TestCase):
     def test_same_millisecond_fill_cannot_precede_its_order(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
+            metadata = {"coordinator_receipt": coordinator_receipt("TAKE")}
             order = LedgerEvent(
                 event_type="ORDER_SUBMITTED", strategy="CRYPTO_SETTLEMENT_ENGINE",
                 model_sha=SHA, record_id="z-order", recorded_ts_ms=2_000,
@@ -214,7 +245,7 @@ class LedgerSpoolTests(unittest.TestCase):
                 exchange_ts_ms=1_900, receive_ts_ms=1_950,
                 decision_ts_ms=1_990, book_snapshot_id="book-1",
                 intended_action="TAKE", intended_size=1.0,
-                order_state="SUBMITTED_SHADOW", metadata={"cutover": True, "component": "crypto_informed_taker"},
+                order_state="SUBMITTED_SHADOW", metadata=metadata,
             )
             fill = LedgerEvent(
                 event_type="FILL", strategy="CRYPTO_SETTLEMENT_ENGINE",
@@ -222,7 +253,7 @@ class LedgerSpoolTests(unittest.TestCase):
                 order_id="order-1", fill_id="fill-1", token_id="token-1",
                 side="BUY", exchange_ts_ms=1_900, receive_ts_ms=1_950,
                 fill_price=0.5, filled_size=1.0, complete=True,
-                fee=0.0, fee_source="test:authoritative", metadata={"cutover": True, "component": "crypto_informed_taker"},
+                fee=0.0, fee_source="test:authoritative", metadata=metadata,
             )
             spool_event(root, order)
             spool_event(root, fill)
