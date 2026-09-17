@@ -22,6 +22,9 @@ def main() -> None:
     assert 'v7_register_child "$!"' in launcher
     assert "v7_assert_registered_child_count 20" in launcher
     assert "external_venues.json" in launcher
+    assert "LatestJsonPublisher status_publisher(output)" in source
+    assert "status_publisher.publish(std::move(status_payload))" in source
+    assert "atomic_write(output" not in source
     assert '"--external-cancel-signal"' in source
     assert "advance_external_cancel_signal" in source
     assert '"shock_window_ms", 100' in source

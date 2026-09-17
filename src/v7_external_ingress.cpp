@@ -6,6 +6,52 @@
 #include <array>
 
 namespace pm::v7::external_fair {
+namespace {
+
+[[nodiscard]] bool causal_event_less(const ExternalVenueEvent& left,
+                                     const ExternalVenueEvent& right) noexcept {
+    if (left.local_receive_monotonic_ns != right.local_receive_monotonic_ns) {
+        return left.local_receive_monotonic_ns < right.local_receive_monotonic_ns;
+    }
+    if (left.local_receive_wall_ns != right.local_receive_wall_ns) {
+        return left.local_receive_wall_ns < right.local_receive_wall_ns;
+    }
+    if (left.venue != right.venue) {
+        return static_cast<std::uint8_t>(left.venue)
+            < static_cast<std::uint8_t>(right.venue);
+    }
+    return left.source_sequence < right.source_sequence;
+}
+
+} // namespace
+
+CausalEventMergeResult merge_causal_events(
+    std::span<const ExternalVenueEvent> first,
+    std::span<const ExternalVenueEvent> second,
+    std::span<ExternalVenueEvent> output) noexcept {
+    CausalEventMergeResult result;
+    const std::size_t count = first.size() + second.size();
+    if (count > output.size()) {
+        result.output_overflow = 1;
+        return result;
+    }
+    const bool sorted = std::is_sorted(first.begin(), first.end(), causal_event_less)
+        && std::is_sorted(second.begin(), second.end(), causal_event_less);
+    if (sorted) {
+        std::merge(first.begin(), first.end(), second.begin(), second.end(),
+                   output.begin(), causal_event_less);
+    } else {
+        result.sort_fallback = 1;
+        std::copy(first.begin(), first.end(), output.begin());
+        std::copy(second.begin(), second.end(),
+                  output.begin() + static_cast<std::ptrdiff_t>(first.size()));
+        std::sort(output.begin(),
+                  output.begin() + static_cast<std::ptrdiff_t>(count),
+                  causal_event_less);
+    }
+    result.output_count = count;
+    return result;
+}
 
 ExternalVenueIngress::ExternalVenueIngress(VenueId venue,
                                            std::uint64_t asset_handle,
@@ -44,6 +90,18 @@ ExternalDecodeResult ExternalVenueIngress::on_frame(
 
     for (std::size_t i = 0; i < result.output_count; ++i) (void)enqueue_event(decoded[i]);
     return result;
+}
+
+void ExternalVenueIngress::on_observer_frame(
+    std::uint64_t connection_epoch, bool invalid_frame) noexcept {
+    frames_.fetch_add(1, std::memory_order_relaxed);
+    if (invalid_frame) invalid_frames_.fetch_add(1, std::memory_order_relaxed);
+    const auto previous_epoch = connection_epoch_.exchange(
+        connection_epoch, std::memory_order_acq_rel);
+    if (previous_epoch != 0 && previous_epoch != connection_epoch) {
+        reconnects_.fetch_add(1, std::memory_order_relaxed);
+        gap_pending_.store(true, std::memory_order_release);
+    }
 }
 
 bool ExternalVenueIngress::on_event(ExternalVenueEvent event) noexcept {

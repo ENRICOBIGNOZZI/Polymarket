@@ -120,6 +120,14 @@ bool CoinbaseL2Book::apply_update(const CoinbaseDepthUpdate& update) {
     return true;
 }
 
+bool CoinbaseL2Book::top_of_book(CoinbaseDepthLevel& bid,
+                                  CoinbaseDepthLevel& ask) const noexcept {
+    if (state_ != CoinbaseL2State::Live || !uncrossed()) return false;
+    bid = CoinbaseDepthLevel{bids_.begin()->first, bids_.begin()->second};
+    ask = CoinbaseDepthLevel{asks_.begin()->first, asks_.begin()->second};
+    return true;
+}
+
 CoinbaseL2Metrics CoinbaseL2Book::metrics() const noexcept {
     CoinbaseL2Metrics out;
     out.update_count = update_count_;

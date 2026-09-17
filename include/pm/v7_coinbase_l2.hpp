@@ -71,6 +71,8 @@ public:
     void begin_recovery() noexcept;
 
     [[nodiscard]] CoinbaseL2State state() const noexcept { return state_; }
+    [[nodiscard]] bool top_of_book(CoinbaseDepthLevel& bid,
+                                   CoinbaseDepthLevel& ask) const noexcept;
     [[nodiscard]] CoinbaseL2Metrics metrics() const noexcept;
 
 private:

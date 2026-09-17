@@ -244,13 +244,25 @@ void ExternalVenueWsClient::run(ExternalStopToken stop) noexcept {
                 const std::string_view payload(bytes, front.size());
                 if (raw_sink_ != nullptr) (void)raw_sink_->try_record_raw(
                     spec_.venue, epoch, receive_ns, wall_ns, payload);
-                if (observer_ != nullptr) observer_->on_frame(epoch, receive_ns, wall_ns, payload);
-                if (ingress_ != nullptr) {
+                auto disposition = ExternalFrameDisposition::PassToIngress;
+                if (observer_ != nullptr) {
+                    disposition = observer_->route_frame(epoch, receive_ns, wall_ns, payload);
+                }
+                if (ingress_ != nullptr
+                    && disposition != ExternalFrameDisposition::PassToIngress) {
+                    const bool invalid = disposition == ExternalFrameDisposition::Invalid;
+                    ingress_->on_observer_frame(epoch, invalid);
+                    if (invalid) {
+                        decode_failures_.fetch_add(1, std::memory_order_relaxed);
+                    }
+                } else if (ingress_ != nullptr) {
                     const auto decoded = ingress_->on_frame(epoch, receive_ns, wall_ns, payload);
                     if (decoded.invalid_frame != 0 || decoded.output_overflow != 0
                         || decoded.arena_exhausted != 0) {
                         decode_failures_.fetch_add(1, std::memory_order_relaxed);
                     }
+                } else if (disposition == ExternalFrameDisposition::Invalid) {
+                    decode_failures_.fetch_add(1, std::memory_order_relaxed);
                 }
             }
 
