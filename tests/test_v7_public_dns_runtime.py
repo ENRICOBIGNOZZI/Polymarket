@@ -1,9 +1,14 @@
 from __future__ import annotations
 
+import sys
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT / "scripts"))
+
+import v7_public_https_proxy as public_proxy  # noqa: E402
 
 
 class V7PublicDnsRuntimeContractTests(unittest.TestCase):
@@ -16,6 +21,29 @@ class V7PublicDnsRuntimeContractTests(unittest.TestCase):
         self.assertIn('{"127.0.0.1", "::1", "localhost"}', source)
         self.assertNotIn("ssl.wrap_socket", source)
         self.assertNotIn("Authorization", source)
+
+    def test_public_resolver_retries_transient_public_dns_failure(self) -> None:
+        resolver = public_proxy.PublicResolver(("1.1.1.1", "8.8.8.8"), attempts=3, retry_delay_seconds=0)
+        with patch.object(public_proxy, "_dns_a", side_effect=[OSError("one"), OSError("two"), ["203.0.113.7"]]) as query:
+            self.assertEqual(resolver.resolve("example.com"), ["203.0.113.7"])
+        self.assertEqual(query.call_count, 3)
+
+    def test_public_resolver_configuration_is_bounded(self) -> None:
+        for attempts in (0, 6, True):
+            with self.assertRaises(ValueError):
+                public_proxy.PublicResolver(("1.1.1.1",), attempts=attempts)
+        with self.assertRaises(ValueError):
+            public_proxy.PublicResolver(())
+
+    def test_paper_loop_installs_cleanup_before_first_child(self) -> None:
+        source = (ROOT / "scripts" / "paper_v7_execution_loop.sh").read_text(encoding="utf-8")
+        early_trap = source.index("trap bootstrap_cleanup EXIT")
+        proxy_start = source.index("python3 scripts/v7_public_https_proxy.py --host")
+        full_trap = source.index("trap cleanup EXIT")
+        self.assertLess(early_trap, proxy_start)
+        self.assertLess(proxy_start, full_trap)
+        self.assertIn('for pid in "${pids[@]:-}"; do kill -TERM "$pid"', source)
+        self.assertIn('rm -rf "$LOCK"', source[source.index("bootstrap_cleanup()") : proxy_start])
 
     def test_paper_loop_routes_public_rest_and_resolves_ws_without_os_dns(self) -> None:
         source = (ROOT / "scripts" / "paper_v7_execution_loop.sh").read_text(encoding="utf-8")

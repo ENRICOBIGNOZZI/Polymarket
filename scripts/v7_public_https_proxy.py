@@ -96,8 +96,14 @@ def _dns_a(host: str, server: str, timeout: float = 3.0) -> list[str]:
 
 
 class PublicResolver:
-    def __init__(self, servers: Iterable[str]) -> None:
+    def __init__(self, servers: Iterable[str], *, attempts: int = 3, retry_delay_seconds: float = 0.1) -> None:
         self.servers = tuple(str(ipaddress.ip_address(server)) for server in servers)
+        if not self.servers or not isinstance(attempts, int) or isinstance(attempts, bool) or attempts < 1 or attempts > 5:
+            raise ValueError("public DNS resolver configuration invalid")
+        if not 0.0 <= retry_delay_seconds <= 1.0:
+            raise ValueError("public DNS retry delay invalid")
+        self.attempts = attempts
+        self.retry_delay_seconds = retry_delay_seconds
         self._cache: dict[str, tuple[float, list[str]]] = {}
         self._lock = threading.Lock()
 
@@ -113,16 +119,20 @@ class PublicResolver:
             if cached and cached[0] > now:
                 return list(cached[1])
         errors: list[str] = []
-        for server in self.servers:
-            try:
-                answers = _dns_a(host, server)
-                if answers:
-                    with self._lock:
-                        self._cache[host] = (now + CACHE_TTL_SECONDS, answers)
-                    return answers
-            except Exception as exc:  # noqa: BLE001 - diagnostic aggregation
-                errors.append(f"{server}:{exc}")
-        raise OSError(f"public DNS failed for {host}: {'; '.join(errors)}")
+        for attempt in range(1, self.attempts + 1):
+            for server in self.servers:
+                try:
+                    answers = _dns_a(host, server)
+                    if answers:
+                        with self._lock:
+                            self._cache[host] = (time.monotonic() + CACHE_TTL_SECONDS, answers)
+                        return answers
+                    errors.append(f"attempt={attempt} {server}:empty")
+                except Exception as exc:  # noqa: BLE001 - diagnostic aggregation
+                    errors.append(f"attempt={attempt} {server}:{exc}")
+            if attempt < self.attempts and self.retry_delay_seconds:
+                time.sleep(self.retry_delay_seconds)
+        raise OSError(f"public DNS failed for {host} after {self.attempts} attempts: {'; '.join(errors)}")
 
 
 def _relay(client: socket.socket, upstream: socket.socket) -> None:
