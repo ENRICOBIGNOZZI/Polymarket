@@ -368,3 +368,34 @@ Native tests cover valid fill plus intent mismatch, authorization expiry,
 reservation overrun, stale book, stale state generation and broken book lineage.
 The function remains pure and trivially-copyable at its typed boundaries; it is
 not yet activated by the production process manifest.
+
+## Correlated PAPER-risk report
+
+`v7_multi_crypto_risk_report.py` aggregates each asset/horizon to common UTC
+blocks before computing pairwise PAPER-PnL correlation. It also groups all
+cohorts sharing a `parent_shock_id` and reports observed portfolio PnL under the
+same shock rather than counting tickers as independent bets. Correlation is
+published only above an explicit minimum number of common blocks.
+
+Shrinkage toward zero is an exogenous preregistered input to the report. The
+script does not estimate/tune shrinkage from the same test outcomes. Any pending
+settlement forces `INSUFFICIENT_EVIDENCE`; missing PnL is never zero. The report
+has no authority and cannot alter risk limits or promote a lane.
+
+## Native / Decimal taker parity gate
+
+The native PAPER taker and the independent Decimal replay now consume the same
+frozen fixture for full fill, partial FAK and no-chase cases. Both surfaces must
+agree on filled quantity, average execution price, gross cash debit and the
+per-price-level authoritative fee calculation. The C++ parity binary is a CTest
+target; the Python reference remains a separate test over the same JSON input.
+
+The parity fixture is evidence for execution-semantic equivalence only. It is
+not evidence of exchange fill probability, profitable alpha or real matching
+engine latency. Minimum-size admission remains outside this fixture because all
+frozen cases are already above the stated minimum size.
+
+After implementing the previously missing native authorized-taker function,
+the complete Debug CTest run passed 198/198 tests, including native executor,
+Python Decimal parity, global reservation/ledger IPC, prospective forward,
+risk-report and repository integrity tests.

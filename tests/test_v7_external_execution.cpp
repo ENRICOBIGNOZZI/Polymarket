@@ -143,7 +143,6 @@ int main() {
     arrival.asks[2] = BookLevel{0.55, 3.0};
 
     BookHotSnapshot hot;
-    hot.instrument_handle = 7;
     hot.state_version = 40;
     hot.receive_monotonic_ns = 1'005;
     hot.lineage_continuous = 1;
@@ -167,11 +166,11 @@ int main() {
     assert(aggressive_book_from_hot(invalid_hot).valid == 0);
 
     TakerPaperAuthorization authorization;
-    authorization.intent_id = plan.intent_id;
+    authorization.intent_id = plan.intent.intent_id;
     authorization.instrument_handle = plan.intent.instrument_handle;
-    authorization.model_version = plan.model_version;
-    authorization.policy_version = plan.policy_version;
-    authorization.minimum_state_version = plan.state_version;
+    authorization.model_version = plan.intent.model_version;
+    authorization.policy_version = plan.intent.policy_version;
+    authorization.minimum_state_version = plan.market_state_version;
     authorization.authorized_monotonic_ns = 1'000;
     authorization.expires_monotonic_ns = 1'100;
     authorization.maximum_book_age_ns = 100;
