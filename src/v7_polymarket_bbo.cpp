@@ -109,7 +109,86 @@ Scratch& scratch() noexcept {
 [[nodiscard]] bool valid_bbo(std::int32_t bid, std::int32_t ask) noexcept {
     return bid > 0 && ask > bid && ask <= 10'000;
 }
+
+[[nodiscard]] std::uint64_t mix64(std::uint64_t value) noexcept {
+    value ^= value >> 30U;
+    value *= 0xbf58476d1ce4e5b9ULL;
+    value ^= value >> 27U;
+    value *= 0x94d049bb133111ebULL;
+    value ^= value >> 31U;
+    return value;
+}
+
+[[nodiscard]] std::uint64_t update_identity(
+    std::uint64_t instrument_handle, std::int64_t exchange_ns,
+    std::int32_t bid, std::int32_t ask, SourceKind source) noexcept {
+    if (instrument_handle == 0 || exchange_ns <= 0 || !valid_bbo(bid, ask)) return 0;
+    std::uint64_t value = mix64(instrument_handle + 0x9e3779b97f4a7c15ULL);
+    value ^= mix64(static_cast<std::uint64_t>(exchange_ns));
+    value ^= mix64((static_cast<std::uint64_t>(static_cast<std::uint32_t>(bid)) << 32U)
+                   | static_cast<std::uint32_t>(ask));
+    value ^= mix64(static_cast<std::uint8_t>(source) + 0xd6e8feb86659fd93ULL);
+    value = mix64(value);
+    return value == 0 ? 1 : value;
+}
 } // namespace
+
+FirstArrivalGate::FirstArrivalGate(std::int64_t duplicate_window_ns) noexcept
+    : duplicate_window_ns_(duplicate_window_ns > 0 ? duplicate_window_ns : 500'000'000LL) {}
+
+void FirstArrivalGate::reset() noexcept {
+    entries_ = {};
+}
+
+FirstArrivalResult FirstArrivalGate::observe(
+    const Update& update, std::uint8_t connection_slot) noexcept {
+    FirstArrivalResult result;
+    if (update.valid == 0 || update.receive_monotonic_ns <= 0 || connection_slot >= 8) {
+        result.decision = FirstArrivalDecision::Invalid;
+        return result;
+    }
+    const std::uint8_t source_bit = static_cast<std::uint8_t>(1U << connection_slot);
+    if (update.event_identity == 0) {
+        result.decision = FirstArrivalDecision::Accept;
+        result.first_receive_monotonic_ns = update.receive_monotonic_ns;
+        result.connection_mask = source_bit;
+        return result;
+    }
+
+    const std::size_t start = static_cast<std::size_t>(mix64(update.event_identity)) & kMask;
+    for (std::size_t step = 0; step < kCapacity; ++step) {
+        auto& entry = entries_[(start + step) & kMask];
+        const bool empty = entry.identity == 0;
+        const bool expired = !empty
+            && update.receive_monotonic_ns > entry.last_receive_monotonic_ns
+            && update.receive_monotonic_ns - entry.last_receive_monotonic_ns > duplicate_window_ns_;
+        if (entry.identity == update.event_identity && !expired) {
+            entry.last_receive_monotonic_ns = std::max(
+                entry.last_receive_monotonic_ns, update.receive_monotonic_ns);
+            entry.connection_mask = static_cast<std::uint8_t>(entry.connection_mask | source_bit);
+            result.decision = FirstArrivalDecision::Duplicate;
+            result.first_receive_monotonic_ns = entry.first_receive_monotonic_ns;
+            result.duplicate_delay_ns = std::max<std::int64_t>(
+                0, update.receive_monotonic_ns - entry.first_receive_monotonic_ns);
+            result.connection_mask = entry.connection_mask;
+            return result;
+        }
+        if (empty || expired) {
+            entry.identity = update.event_identity;
+            entry.first_receive_monotonic_ns = update.receive_monotonic_ns;
+            entry.last_receive_monotonic_ns = update.receive_monotonic_ns;
+            entry.connection_mask = source_bit;
+            result.decision = FirstArrivalDecision::Accept;
+            result.first_receive_monotonic_ns = update.receive_monotonic_ns;
+            result.connection_mask = source_bit;
+            return result;
+        }
+    }
+    result.decision = FirstArrivalDecision::SaturatedAccept;
+    result.first_receive_monotonic_ns = update.receive_monotonic_ns;
+    result.connection_mask = source_bit;
+    return result;
+}
 
 Decoder::Decoder(std::vector<Binding> bindings) : bindings_(std::move(bindings)) {
     if (bindings_.empty()) throw std::invalid_argument("BBO decoder requires bindings");
@@ -192,6 +271,8 @@ FrameResult Decoder::decode(
             update.instrument_handle = mapped->instrument_handle;
             update.exchange_event_ns = exchange_ns;
             update.receive_monotonic_ns = receive_monotonic_ns;
+            update.event_identity = update_identity(
+                mapped->instrument_handle, exchange_ns, bid, ask, source);
             update.best_bid_e4 = bid;
             update.best_ask_e4 = ask;
             update.source = source;

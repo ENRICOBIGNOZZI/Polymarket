@@ -1,5 +1,6 @@
 #pragma once
 
+#include <array>
 #include <cstddef>
 #include <cstdint>
 #include <span>
@@ -31,10 +32,50 @@ struct Update {
     std::uint64_t instrument_handle = 0;
     std::int64_t exchange_event_ns = 0;
     std::int64_t receive_monotonic_ns = 0;
+    // Stable numeric identity for redundant-feed dedupe. Zero means that the
+    // venue event lacked enough exchange identity to deduplicate safely.
+    std::uint64_t event_identity = 0;
     std::int32_t best_bid_e4 = 0;
     std::int32_t best_ask_e4 = 0;
     SourceKind source = SourceKind::PriceChange;
     std::uint8_t valid = 0;
+};
+
+enum class FirstArrivalDecision : std::uint8_t {
+    Accept = 1,
+    Duplicate = 2,
+    Invalid = 3,
+    SaturatedAccept = 4,
+};
+
+struct FirstArrivalResult {
+    FirstArrivalDecision decision = FirstArrivalDecision::Invalid;
+    std::int64_t first_receive_monotonic_ns = 0;
+    std::int64_t duplicate_delay_ns = 0;
+    std::uint8_t connection_mask = 0;
+};
+
+// Single-owner gate for N redundant public PM feeds. Callers must causally merge
+// source queue heads by receive_monotonic_ns before observe(). It never rejects
+// a distinct BBO identity; table pressure accepts untracked rather than dropping.
+class FirstArrivalGate final {
+public:
+    explicit FirstArrivalGate(std::int64_t duplicate_window_ns = 500'000'000LL) noexcept;
+    [[nodiscard]] FirstArrivalResult observe(
+        const Update& update, std::uint8_t connection_slot) noexcept;
+    void reset() noexcept;
+
+private:
+    struct Entry {
+        std::uint64_t identity = 0;
+        std::int64_t first_receive_monotonic_ns = 0;
+        std::int64_t last_receive_monotonic_ns = 0;
+        std::uint8_t connection_mask = 0;
+    };
+    static constexpr std::size_t kCapacity = 4096;
+    static constexpr std::size_t kMask = kCapacity - 1;
+    std::array<Entry, kCapacity> entries_{};
+    std::int64_t duplicate_window_ns_ = 500'000'000LL;
 };
 
 struct FrameResult {
