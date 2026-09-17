@@ -13,7 +13,11 @@ if str(MONITORING) not in sys.path:
     sys.path.insert(0, str(MONITORING))
 
 import v7_ledger_metrics
-from v7_execution_ledger import EVENT_TYPES as CANONICAL_EVENT_TYPES
+from v7_execution_ledger import (
+    EVENT_TYPES as CANONICAL_EVENT_TYPES,
+    EconomicJournalEntry,
+    JournalPosting,
+)
 
 SPEC = importlib.util.spec_from_file_location("exporter_v7_ledger_test", MONITORING / "exporter_v7.py")
 assert SPEC and SPEC.loader
@@ -97,6 +101,51 @@ class V7LedgerMonitoringTest(unittest.TestCase):
             summary = v7_ledger_metrics.summarize_ledger(path)
             self.assertTrue(summary["valid"])
             self.assertEqual(summary["invalid_rows"], 0)
+
+    def test_monitoring_accepts_and_validates_canonical_economic_journal_rows(self) -> None:
+        journal = EconomicJournalEntry(
+            entry_type="DEPOSIT",
+            model_sha="a" * 40,
+            observed_ts_ms=1_000,
+            source="WALLET_RPC",
+            source_record_id="deposit-1",
+            postings=(
+                JournalPosting(account="assets:pUSD", asset="pUSD", units=1_000_000),
+                JournalPosting(account="equity:contributions", asset="pUSD", units=-1_000_000),
+            ),
+        ).seal("0" * 64)
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "execution.jsonl"
+            path.write_text(
+                json.dumps(self._event("OPPORTUNITY")) + "\n"
+                + json.dumps(journal.to_dict()) + "\n",
+                encoding="utf-8",
+            )
+            summary = v7_ledger_metrics.summarize_ledger(path)
+            self.assertTrue(summary["valid"])
+            self.assertEqual(summary["invalid_rows"], 0)
+            self.assertEqual(summary["model_shas"], ["a" * 40])
+            self.assertEqual(summary["total"]["opportunities"], 1)
+
+            wrong_chain = EconomicJournalEntry(
+                entry_type="DEPOSIT",
+                model_sha="a" * 40,
+                observed_ts_ms=2_000,
+                source="WALLET_RPC",
+                source_record_id="deposit-2",
+                postings=(
+                    JournalPosting(account="assets:pUSD", asset="pUSD", units=2_000_000),
+                    JournalPosting(account="equity:contributions", asset="pUSD", units=-2_000_000),
+                ),
+            ).seal("f" * 64)
+            path.write_text(json.dumps(wrong_chain.to_dict()) + "\n", encoding="utf-8")
+            broken = v7_ledger_metrics.summarize_ledger(path)
+            self.assertFalse(broken["valid"])
+            self.assertEqual(broken["invalid_rows"], 1)
+            self.assertEqual(
+                broken["invalid_reason_counts"],
+                {"INVALID_ECONOMIC_JOURNAL": 1},
+            )
 
     def test_exporter_surface_contains_canonical_ledger_economics(self) -> None:
         snapshot = {
