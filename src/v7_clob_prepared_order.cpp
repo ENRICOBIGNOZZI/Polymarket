@@ -123,6 +123,17 @@ PreparedMarketOrderJson::PreparedMarketOrderJson(
     valid_ = true;
 }
 
+std::size_t PreparedMarketOrderJson::serialized_size(
+    const MarketOrderDynamicView& dynamic) const noexcept {
+    if (!valid_) return 0;
+    std::size_t required = static_size_;
+    return add_size(required, dynamic.maker_amount.size())
+        && add_size(required, dynamic.salt_decimal.size())
+        && add_size(required, dynamic.signature.size())
+        && add_size(required, dynamic.taker_amount.size())
+        && add_size(required, dynamic.timestamp_ms.size()) ? required : 0;
+}
+
 std::size_t PreparedMarketOrderJson::serialize(
     const MarketOrderDynamicView& dynamic,
     std::span<char> output) const noexcept {
@@ -135,15 +146,8 @@ std::size_t PreparedMarketOrderJson::serialize(
         return 0;
     }
 
-    std::size_t required = static_size_;
-    if (!add_size(required, dynamic.maker_amount.size())
-        || !add_size(required, dynamic.salt_decimal.size())
-        || !add_size(required, dynamic.signature.size())
-        || !add_size(required, dynamic.taker_amount.size())
-        || !add_size(required, dynamic.timestamp_ms.size())
-        || output.size() < required) {
-        return 0;
-    }
+    const std::size_t required = serialized_size(dynamic);
+    if (required == 0 || output.size() < required) return 0;
 
     std::size_t position = 0;
     const auto copy = [&](std::string_view value) noexcept {
