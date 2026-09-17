@@ -1,11 +1,19 @@
 #include "pm/v7_external_protocol.hpp"
 
 #include <array>
+#include <atomic>
 #include <cassert>
+#include <cstdlib>
+#include <new>
 #include <cmath>
 #include <iostream>
 
 using namespace pm::v7::external_fair;
+
+namespace { std::atomic<std::uint64_t> protocol_allocations{0}; }
+void* operator new(std::size_t size) { protocol_allocations.fetch_add(1, std::memory_order_relaxed); if (void* p=std::malloc(size)) return p; throw std::bad_alloc(); }
+void operator delete(void* p) noexcept { std::free(p); }
+void operator delete(void* p, std::size_t) noexcept { std::free(p); }
 
 int main() {
     std::array<ExternalVenueEvent, 8> output{};
@@ -114,6 +122,21 @@ int main() {
         none);
     assert(overflow.output_count == 0);
     assert(overflow.output_overflow == 1);
+
+
+    // The production decoder is a per-IO-thread persistent parser: after the
+    // thread-local scratch has been initialized, ordinary Binance frames must
+    // not allocate from the process heap.
+    (void)decode_external_venue_frame(
+        VenueId::BinanceSpot, 1, 10, 1'065, 2'065,
+        R"({"u":400900217,"s":"BTCUSDT","b":"65000.10","B":"1.20","a":"65000.20","A":"2.30"})", output);
+    const auto allocation_before = protocol_allocations.load(std::memory_order_relaxed);
+    const auto allocation_probe = decode_external_venue_frame(
+        VenueId::BinanceSpot, 1, 10, 1'066, 2'066,
+        R"({"e":"aggTrade","E":1672515782136,"s":"BTCUSDT","a":12345,"p":"65000.50","q":"0.25","T":1672515782136,"m":false})", output);
+    const auto allocation_after = protocol_allocations.load(std::memory_order_relaxed);
+    assert(allocation_probe.output_count == 1);
+    assert(allocation_after == allocation_before);
 
     const auto invalid = decode_external_venue_frame(
         VenueId::BinanceSpot, 1, 10, 1'070, 2'070, "not-json", output);

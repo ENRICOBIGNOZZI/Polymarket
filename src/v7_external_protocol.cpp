@@ -1,6 +1,9 @@
 #include "pm/v7_external_protocol.hpp"
 
 #include <boost/json.hpp>
+#include <boost/json/parser.hpp>
+#include <boost/json/static_resource.hpp>
+#include <boost/json/null_resource.hpp>
 
 #include <array>
 #include <charconv>
@@ -15,6 +18,21 @@ namespace pm::v7::external_fair {
 namespace {
 namespace json = boost::json;
 constexpr std::size_t kJsonArenaBytes = 512 * 1024;
+constexpr std::size_t kParserScratchBytes = 16 * 1024;
+
+struct DecoderScratch {
+    std::array<unsigned char, kJsonArenaBytes> value_arena{};
+    json::static_resource value_resource{value_arena.data(), value_arena.size()};
+    std::array<unsigned char, kParserScratchBytes> parser_scratch{};
+    json::parser parser{
+        json::storage_ptr(json::get_null_resource()), json::parse_options{},
+        parser_scratch.data(), parser_scratch.size()};
+};
+
+DecoderScratch& decoder_scratch() noexcept {
+    thread_local DecoderScratch scratch{};
+    return scratch;
+}
 
 [[nodiscard]] const json::value* find_value(const json::object& object,
                                             std::string_view key) noexcept {
@@ -532,11 +550,17 @@ ExternalDecodeResult decode_external_venue_frame(
         return result;
     }
     try {
-        thread_local std::array<unsigned char, kJsonArenaBytes> arena{};
-        json::static_resource resource(arena.data(), arena.size());
+        auto& scratch = decoder_scratch();
+        scratch.value_resource.release();
+        scratch.parser.reset(json::storage_ptr(&scratch.value_resource));
         boost::system::error_code error;
-        const json::value root = json::parse(payload, error, &resource);
-        if (error || !root.is_object()) {
+        const auto consumed = scratch.parser.write(payload.data(), payload.size(), error);
+        if (error || consumed != payload.size()) {
+            result.invalid_frame = 1;
+            return result;
+        }
+        const json::value root = scratch.parser.release();
+        if (!root.is_object()) {
             result.invalid_frame = 1;
             return result;
         }
