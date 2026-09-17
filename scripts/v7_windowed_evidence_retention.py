@@ -151,16 +151,13 @@ def _existing_tombstone_allows_cleanup(path: Path, current: dict[str, Any], stor
     previous=_load(path)
     required={"schema":"polymarket_v7_windowed_pack_tombstone_v1",**AUTH,"policy":POLICY,"raw_detail_available":False,"pack_sha256":current["pack_sha256"]}
     if any(previous.get(k)!=v for k,v in required.items()): raise ValueError(f"unsafe existing windowed tombstone:{current['pack_sha256']}")
-    for key in ("source_aliases","source_families"):
-        old=previous.get(key); now=current.get(key)
-        if not isinstance(old,list) or not isinstance(now,list) or not set(now)<=set(old): raise ValueError(f"windowed tombstone identity expanded:{current['pack_sha256']}:{key}")
     additions={}
-    for key in ("object_sha256s","manifest_sha256s"):
+    for key in ("source_aliases","source_families","object_sha256s","manifest_sha256s"):
         old=previous.get(key); now=current.get(key)
         if not isinstance(old,list) or not isinstance(now,list): raise ValueError(f"windowed tombstone identity malformed:{current['pack_sha256']}:{key}")
         additions[key]=sorted(set(now)-set(old))
     if any(additions.values()):
-        receipt={"schema":"polymarket_v7_windowed_pack_resume_receipt_v1",**AUTH,"policy":POLICY,"raw_detail_available":False,"pack_sha256":current["pack_sha256"],"parent_tombstone_sha256":digest(canonical(previous)),"source_aliases":current["source_aliases"],"source_families":current["source_families"],"added_object_sha256s":additions["object_sha256s"],"added_manifest_sha256s":additions["manifest_sha256s"]}
+        receipt={"schema":"polymarket_v7_windowed_pack_resume_receipt_v1",**AUTH,"policy":POLICY,"raw_detail_available":False,"pack_sha256":current["pack_sha256"],"parent_tombstone_sha256":digest(canonical(previous)),"source_aliases":current["source_aliases"],"source_families":current["source_families"],"added_source_aliases":additions["source_aliases"],"added_source_families":additions["source_families"],"added_object_sha256s":additions["object_sha256s"],"added_manifest_sha256s":additions["manifest_sha256s"]}
         payload=canonical(receipt); sha=digest(payload); immutable(store/"windowed_pack_resume_receipts"/sha[:2]/(sha+".json"),payload)
     return True
 
