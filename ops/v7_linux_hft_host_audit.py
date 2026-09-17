@@ -179,7 +179,17 @@ def nic_inventory(sys_root: Path, proc_root: Path, inspect_tools: bool) -> list[
 
 def audit(policy: dict[str, Any], root: Path = Path("/"), resource_plan: dict[str, Any] | None = None) -> dict[str, Any]:
     sys_root, proc_root = root / "sys", root / "proc"
-    cpus = allowed_cpus() if root == Path("/") else parse_cpu_list(read_text(sys_root / "devices/system/cpu/online"))
+    inherited_affinity = allowed_cpus() if root == Path("/") else []
+    planned_cpus = [int(x) for x in (resource_plan or {}).get("all_cpus") or []]
+    plan_authorized = (resource_plan or {}).get("outer_cpuset_contract_satisfied") is True
+    if root == Path("/") and plan_authorized and planned_cpus:
+        # A correct isolcpus/nohz_full baseline intentionally leaves ordinary
+        # housekeeping processes on low CPUs. The validated resource plan is
+        # derived from the effective cgroup cpuset and is the outer contract.
+        cpus = sorted(set(planned_cpus))
+    else:
+        cpus = inherited_affinity if root == Path("/") else parse_cpu_list(
+            read_text(sys_root / "devices/system/cpu/online"))
     topology = cpu_topology(sys_root, cpus)
     requirements = policy["hard_requirements"]
     hard_failures: list[str] = []
@@ -240,6 +250,7 @@ def audit(policy: dict[str, Any], root: Path = Path("/"), resource_plan: dict[st
         "audit_only": True,
         "platform": {"system": platform.system(), "kernel": platform.release()},
         "cpu": topology,
+        "inherited_affinity_cpus": inherited_affinity,
         "hot_path_cpus": hot,
         "decision_cpu": decision_cpu,
         "scheduler_isolation": {
