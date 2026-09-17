@@ -170,19 +170,23 @@ struct ExternalTapeRecorder::Impl {
     }
 
     void writer_loop() noexcept {
-        TapeRecord record;
         while (!stop_requested.load(std::memory_order_acquire)
                || queue.approximate_size() != 0) {
             bool progressed = false;
-            while (queue.try_pop(record)) {
+            while (const auto* record = queue.try_peek()) {
                 progressed = true;
-                if (!output.prepare(sizeof(record))) {
+                if (!output.prepare(sizeof(*record))) {
                     writer_healthy.store(false, std::memory_order_release);
                     evidence_valid.store(false, std::memory_order_release);
                     return;
                 }
-                output.write(reinterpret_cast<const char*>(&record), sizeof(record));
+                output.write(reinterpret_cast<const char*>(record), sizeof(*record));
                 if (!output) {
+                    writer_healthy.store(false, std::memory_order_release);
+                    evidence_valid.store(false, std::memory_order_release);
+                    return;
+                }
+                if (!queue.pop_commit()) {
                     writer_healthy.store(false, std::memory_order_release);
                     evidence_valid.store(false, std::memory_order_release);
                     return;
@@ -247,10 +251,34 @@ bool ExternalTapeRecorder::try_record_external_venue_event(const ExternalVenueEv
         if (impl_) impl_->evidence_valid.store(false, std::memory_order_release);
         return false;
     }
+    if (!impl_->writer_healthy.load(std::memory_order_acquire)) {
+        impl_->evidence_valid.store(false, std::memory_order_release);
+        return false;
+    }
+    if (impl_->suppression_active.load(std::memory_order_acquire)) {
+        impl_->suppressed_by_policy.fetch_add(1, std::memory_order_relaxed);
+        impl_->evidence_valid.store(false, std::memory_order_release);
+        return true;
+    }
     const auto sequence = impl_->next_event_sequence.fetch_add(1, std::memory_order_relaxed) + 1;
-    return try_record(make_tape_record(TapeRecordKind::ExternalVenueEvent, sequence,
-                                       event.local_receive_monotonic_ns,
-                                       event.asset_handle, event));
+    const bool queued = impl_->queue.try_write([&](TapeRecord& record) noexcept {
+        record.tape_sequence = sequence;
+        record.receive_monotonic_ns = event.local_receive_monotonic_ns;
+        record.source_handle = event.asset_handle;
+        record.kind = TapeRecordKind::ExternalVenueEvent;
+        record.reserved = 0;
+        record.payload_size = static_cast<std::uint32_t>(sizeof(event));
+        std::memcpy(record.payload.data(), &event, sizeof(event));
+        std::memset(record.payload.data() + sizeof(event), 0,
+                    record.payload.size() - sizeof(event));
+    });
+    if (!queued) {
+        impl_->dropped.fetch_add(1, std::memory_order_relaxed);
+        impl_->evidence_valid.store(false, std::memory_order_release);
+        return false;
+    }
+    impl_->accepted.fetch_add(1, std::memory_order_relaxed);
+    return true;
 }
 
 TapeRecorderSnapshot ExternalTapeRecorder::snapshot() const noexcept {

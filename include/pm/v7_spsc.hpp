@@ -7,6 +7,7 @@
 #include <bit>
 #include <cstddef>
 #include <type_traits>
+#include <utility>
 
 namespace pm::v7 {
 
@@ -32,6 +33,18 @@ public:
         if (tail == head) return false;
         value = storage_[tail & mask_];
         tail_.store(tail + 1, std::memory_order_release);
+        return true;
+    }
+
+    template <class Writer>
+    [[nodiscard]] bool try_write(Writer&& writer) noexcept {
+        static_assert(std::is_nothrow_invocable_v<Writer, T&>,
+                      "SPSC direct writer must be noexcept");
+        const std::size_t head = head_.load(std::memory_order_relaxed);
+        const std::size_t tail = tail_.load(std::memory_order_acquire);
+        if (head - tail >= Capacity) return false;
+        std::forward<Writer>(writer)(storage_[head & mask_]);
+        head_.store(head + 1, std::memory_order_release);
         return true;
     }
 

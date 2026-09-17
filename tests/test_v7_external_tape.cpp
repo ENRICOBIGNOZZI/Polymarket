@@ -97,6 +97,50 @@ int main() {
     assert(fair_roundtrip.fair_yes == fair.fair_yes);
 
     std::filesystem::remove(path);
+
+    const auto event_path = std::filesystem::temp_directory_path() / "pm_v7_external_event_tape_test.bin";
+    std::filesystem::remove(event_path);
+    ExternalVenueEvent venue_event{};
+    venue_event.asset_handle = 77;
+    venue_event.source_sequence = 88;
+    venue_event.connection_epoch = 9;
+    venue_event.venue = VenueId::BinanceSpot;
+    venue_event.event_type = ExternalEventType::BookTop;
+    venue_event.local_receive_monotonic_ns = 500;
+    venue_event.local_receive_wall_ns = 1'500;
+    venue_event.bid = 65'000.25;
+    venue_event.ask = 65'001.25;
+    venue_event.bid_size = 2.5;
+    venue_event.ask_size = 3.5;
+    venue_event.healthy = 1;
+    {
+        ExternalTapeRecorder recorder(event_path, sha, "run-event", "session-event", "binance-spot", 1'000'001);
+        assert(recorder.try_record_external_venue_event(venue_event));
+        assert(recorder.snapshot().accepted == 1);
+    }
+    {
+        std::ifstream stream(event_path, std::ios::binary);
+        TapeSessionHeader h{}; TapeRecord r{};
+        stream.read(reinterpret_cast<char*>(&h), sizeof(h));
+        stream.read(reinterpret_cast<char*>(&r), sizeof(r));
+        assert(stream.good());
+        assert(r.kind == TapeRecordKind::ExternalVenueEvent);
+        assert(r.tape_sequence == 1);
+        assert(r.receive_monotonic_ns == venue_event.local_receive_monotonic_ns);
+        assert(r.source_handle == venue_event.asset_handle);
+        assert(r.payload_size == sizeof(ExternalVenueEvent));
+        ExternalVenueEvent roundtrip{};
+        assert(decode_tape_payload(r, roundtrip));
+        assert(roundtrip.asset_handle == venue_event.asset_handle);
+        assert(roundtrip.source_sequence == venue_event.source_sequence);
+        assert(roundtrip.bid == venue_event.bid);
+        assert(roundtrip.ask == venue_event.ask);
+        for (std::size_t i = sizeof(ExternalVenueEvent); i < r.payload.size(); ++i) {
+            assert(r.payload[i] == std::byte{0});
+        }
+    }
+    std::filesystem::remove(event_path);
+
     const auto raw_path = std::filesystem::temp_directory_path() / "pm_v7_external_raw_tape_test.bin";
     std::filesystem::remove(raw_path);
     {
