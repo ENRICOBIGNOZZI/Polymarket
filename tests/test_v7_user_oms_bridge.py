@@ -144,6 +144,7 @@ def test_user_ws_to_oms_exact_identity_bridge() -> None:
                 "-Wextra",
                 "-Wpedantic",
                 f"-I{ROOT / 'include'}",
+                "-I/opt/homebrew/include",
                 str(ROOT / "src/boost_json.cpp"),
                 str(ROOT / "src/v7_user_ws.cpp"),
                 str(ROOT / "src/v7_clob_order_identity.cpp"),
