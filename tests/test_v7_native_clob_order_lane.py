@@ -107,11 +107,11 @@ def test_native_clob_order_lane_tls_ack_to_oms() -> None:
         text_header = header.decode("ascii")
         assert text_header.startswith("POST /order HTTP/1.1\r\n")
         assert "POLY_ADDRESS: 0x7E5F4552091A69125d5DfCb7b8C2659029395Bdf" in text_header
-        assert "POLY_API_KEY: 00000000-0000-0000-0000-000000000000" in text_header
+        assert "POLY_API_KEY: placeholder" in text_header
         assert "POLY_SIGNATURE:" in text_header
         body = json.loads(raw_body.decode())
         assert body["orderType"] == "FAK"
-        assert body["owner"] == "00000000-0000-0000-0000-000000000000"
+        assert body["owner"] == "placeholder"
         assert body["order"]["signatureType"] == 3
         assert body["order"]["maker"] == "0x1111111111111111111111111111111111111111"
         assert body["order"]["signer"] == "0x1111111111111111111111111111111111111111"
