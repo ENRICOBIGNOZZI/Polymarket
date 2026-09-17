@@ -33,6 +33,12 @@ def main() -> None:
     assert "constexpr std::size_t kMaxWsMessageBytes = 2U << 20;" in websocket
     assert 'spec.target = "/public/ws"' in websocket
     assert 'argument == "--asset"' in source
+    assert 'argument == "--disk-pressure-marker"' in source
+    assert 'argument == "--disk-pressure-min-free-bytes"' in source
+    assert "fs::space" in source
+    assert '"suppressed_by_policy"' in source
+    assert '--disk-pressure-marker "$RUN_ROOT/control/DISK_PRESSURE"' in launcher
+    assert '--disk-pressure-min-free-bytes "$DISK_PRESSURE_MIN_FREE_BYTES"' in launcher
     assert "crypto_connection_spec(" in source
     assert "non-BTC assets require Binance spot as primary feed" in source
     assert "non-BTC assets require at least two enabled spot venues" in source

@@ -73,10 +73,12 @@ struct TapeRecorderSnapshot {
     std::uint64_t dropped = 0;
     std::uint64_t dropped_payload_too_large = 0;
     std::uint64_t dropped_queue_full = 0;
+    std::uint64_t suppressed_by_policy = 0;
     std::size_t queued = 0;
     std::uint8_t evidence_valid = 1;
     std::uint8_t writer_healthy = 1;
-    std::array<std::uint8_t, 6> reserved{};
+    std::uint8_t suppression_active = 0;
+    std::array<std::uint8_t, 5> reserved{};
 };
 
 // Raw frames are persisted per connection before parsing. The bounded maximum
@@ -182,6 +184,7 @@ public:
     // local monotone tape sequence to each accepted normalized venue event.
     [[nodiscard]] bool try_record_external_venue_event(const ExternalVenueEvent& event) noexcept;
     [[nodiscard]] TapeRecorderSnapshot snapshot() const noexcept;
+    void set_suppressed(bool suppressed) noexcept;
 
 private:
     struct Impl;
@@ -208,6 +211,7 @@ public:
                                        std::int64_t receive_wall_ns,
                                        std::string_view payload) noexcept override;
     [[nodiscard]] TapeRecorderSnapshot snapshot() const noexcept;
+    void set_suppressed(bool suppressed) noexcept;
 
 private:
     struct Impl;

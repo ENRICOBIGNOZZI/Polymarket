@@ -9,7 +9,8 @@
     "emergency_cleanup_free_bytes": 32212254720,
     "reserve_release_free_bytes": 34359738368,
     "reserve_create_min_free_bytes": 51539607552,
-    "emergency_reserve_bytes": 536870912
+    "emergency_reserve_bytes": 536870912,
+    "disk_pressure_clear_free_bytes": 51539607552
   },
   "canonical_ledger": {
     "path": "ledger/execution.jsonl",

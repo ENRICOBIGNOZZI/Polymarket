@@ -533,6 +533,7 @@ class CohortSupervisor:
                 "--run-root", str(self.run_root),
                 "--selection", str(self.selection),
                 "--model-sha", self.args.model_sha,
+                "--disk-pressure-min-free-bytes", str(self.args.disk_pressure_min_free_bytes),
             ], self.run_root / "micro_maker" / "fillability_observer.log", fillability_env),
         }
         return specifications
@@ -804,6 +805,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--fillability-observer", type=Path, required=True)
     parser.add_argument("--observer-arena-bytes", type=int, required=True)
     parser.add_argument("--fillability-arena-bytes", type=int, required=True)
+    parser.add_argument("--disk-pressure-min-free-bytes", type=int, required=True)
     parser.add_argument("--poll-seconds", type=float, default=1.0)
     parser.add_argument("--candidate-confirmations", type=int, default=2)
     parser.add_argument("--min-rotation-interval-seconds", type=float, default=300.0)
@@ -811,6 +813,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--rotation-min-absolute-fill-improvement", type=float, default=0.05)
     parser.add_argument("--rotation-min-relative-fill-multiplier", type=float, default=1.5)
     args = parser.parse_args()
+    if args.disk_pressure_min_free_bytes <= 0:
+        parser.error("--disk-pressure-min-free-bytes must be positive")
     if args.candidate_confirmations < 2:
         parser.error("--candidate-confirmations must be at least 2")
     if args.min_rotation_interval_seconds < 0.0:

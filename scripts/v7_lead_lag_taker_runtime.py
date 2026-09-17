@@ -25,6 +25,7 @@ from v7_external_fair_paper_router import Book, fee_per_share, live_market_yes, 
 from v7_ledger_spool import spool_event
 from v7_market_common import ClobBooksClient, finite, parse_array, request_json
 from v7_opportunity import OpportunityEnvelope
+from v7_disk_pressure import disk_pressure_status
 
 SCHEMA = "polymarket_v7_lead_lag_taker_v1_status"
 MANIFEST_SCHEMA = "polymarket_v7_lead_lag_taker_v1_forward_manifest"
@@ -357,6 +358,9 @@ class LeadLagRuntime:
         return OpportunityEnvelope.parse(envelope).raw
 
     def candidate_step(self) -> None:
+        disk = disk_pressure_status(self.root)
+        if disk["active"]:
+            self.skip("DISK_PRESSURE"); return
         if any((self.root / "control" / name).exists() for name in ("CUTOVER_DRAIN", "KILL")):
             self.skip("RISK_FROZEN"); return
         target = int(self.config["forward_test"]["target_independent_markets"])

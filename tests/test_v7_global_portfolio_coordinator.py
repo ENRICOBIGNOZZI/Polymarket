@@ -125,6 +125,39 @@ def test_fast_forward_lane_authorizes_only_frozen_paper_take() -> None:
         assert decision['new_risk_authorized'] is False
         assert (root/'opportunities/fast_forward_archive/one.json').exists()
 
+def test_disk_pressure_blocks_new_paper_risk_but_preserves_cancel() -> None:
+    with tempfile.TemporaryDirectory() as directory:
+        root=Path(directory); (root/'control').mkdir(parents=True)
+        write(root/'control/DISK_PRESSURE', {'active': True})
+        value=envelope(action="MAKE",ev=1.25,key="disk-block",authority="PAPER_EXPLORATION")
+        alpha=execution_packet("MAKE"); alpha["evidence_status"]="MATURE"
+        alpha["action_ev"]["MAKE"]={"conservative":1.25,"point":1.5}; value["execution_alpha"]=alpha
+        write(root/'opportunities/inbox/make.json',value)
+        decision=process_cut(root,now_ns=150)['last_decision']
+        assert decision['action']=='NOTHING'
+        assert 'DISK_PRESSURE_NEW_RISK_BLOCKED' in decision['reasons']
+        assert not (root/'micro_maker/authorized_make').exists()
+    with tempfile.TemporaryDirectory() as directory:
+        root=Path(directory); (root/'control').mkdir(parents=True)
+        write(root/'control/DISK_PRESSURE', {'active': True})
+        cancel=envelope(action="CANCEL",component="professional_maker",key="cancel-disk"); cancel['side']='NONE'
+        write(root/'opportunities/inbox/cancel.json',cancel)
+        decision=process_cut(root,now_ns=150)['last_decision']
+        assert decision['action']=='CANCEL'
+        assert decision['new_risk_authorized'] is False
+
+
+def test_disk_pressure_blocks_fast_forward_take() -> None:
+    with tempfile.TemporaryDirectory() as directory:
+        root=Path(directory); (root/'control').mkdir(parents=True)
+        write(root/'control/DISK_PRESSURE', {'active': True})
+        write(root/'opportunities/fast_forward_inbox/one.json',forward_envelope())
+        status=process_fast_forward_take(root,now_ns=150,risk_preempt=False)
+        assert status['state']=='FAIL_CLOSED'
+        assert 'DISK_PRESSURE_NEW_RISK_BLOCKED' in status['reasons']
+        assert not (root/'opportunities/receipts/lead-lag-forward.json').exists()
+
+
 def test_fast_forward_lane_is_preempted_by_same_tick_risk_action() -> None:
     with tempfile.TemporaryDirectory() as directory:
         root=Path(directory); write(root/'opportunities/fast_forward_inbox/one.json',forward_envelope())
@@ -141,4 +174,6 @@ if __name__ == "__main__":
     test_positive_mature_make_publishes_one_receipt_gated_paper_authorization()
     test_take_never_publishes_maker_authorization()
     test_fast_forward_lane_authorizes_only_frozen_paper_take()
+    test_disk_pressure_blocks_new_paper_risk_but_preserves_cancel()
+    test_disk_pressure_blocks_fast_forward_take()
     test_fast_forward_lane_is_preempted_by_same_tick_risk_action()
