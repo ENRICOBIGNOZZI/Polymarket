@@ -68,3 +68,13 @@ def test_wrong_sha_and_truncated_file_fail_closed() -> None:
         assert HotBookCacheReader(path, "b" * 40).read(token) is None
         path.write_bytes(path.read_bytes()[:-1])
         assert HotBookCacheReader(path, "a" * 40).read(token) is None
+def _run_direct() -> None:
+    tests = [(name, value) for name, value in globals().items()
+             if name.startswith("test_") and callable(value)]
+    for test_name, test in sorted(tests):
+        test()
+    print(f"{len(tests)} direct tests passed")
+
+
+if __name__ == "__main__":
+    _run_direct()

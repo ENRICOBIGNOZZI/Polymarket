@@ -178,3 +178,13 @@ def test_hot_candidate_revalidates_newer_signal_while_waiting_for_coordinator() 
         assert runtime.state['entries']==0
         assert runtime.state['arrival_rejections']==1
         assert not (root/'ledger/spool').exists()
+def _run_direct() -> None:
+    tests = [(name, value) for name, value in globals().items()
+             if name.startswith("test_") and callable(value)]
+    for test_name, test in sorted(tests):
+        test()
+    print(f"{len(tests)} direct tests passed")
+
+
+if __name__ == "__main__":
+    _run_direct()
