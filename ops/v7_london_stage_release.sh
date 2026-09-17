@@ -7,7 +7,7 @@ RUNTIME_ROOT="${POLYMARKET_RUNTIME_ROOT:-/home/$SERVICE_USER/polymarket-runtime}
 TARGET="$RUNTIME_ROOT/by-sha/$EXPECTED_SHA"
 [[ "$EXPECTED_SHA" =~ ^[0-9a-f]{40}$ ]] || { echo "exact SHA required" >&2; exit 78; }
 [[ "$(uname -s)" == Linux ]] || { echo "London stage requires Linux" >&2; exit 78; }
-[[ -d "$SOURCE_DIR/.git" ]] || { echo "source checkout missing" >&2; exit 66; }
+[[ -e "$SOURCE_DIR/.git" && "$(git -C "$SOURCE_DIR" rev-parse --is-inside-work-tree 2>/dev/null)" == true ]] || { echo "source checkout missing" >&2; exit 66; }
 [[ "$(git -C "$SOURCE_DIR" rev-parse HEAD)" == "$EXPECTED_SHA" ]] || { echo "source SHA mismatch" >&2; exit 66; }
 [[ -z "$(git -C "$SOURCE_DIR" status --porcelain)" ]] || { echo "dirty source checkout" >&2; exit 66; }
 mkdir -p "$RUNTIME_ROOT/by-sha"
