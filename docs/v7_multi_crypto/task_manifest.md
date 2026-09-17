@@ -10,7 +10,7 @@
 | M5 Research | IN_PROGRESS | Causal normalized-shock/derivatives/cross-crypto features, audited feature tape and exact compact PM repricing labels implemented. Current smoke has 1 independent time cluster, so calibration/OOS alpha remains INSUFFICIENT_EVIDENCE. |
 | M6 Multi-crypto forward | BLOCKED | ETH/SOL remain SHADOW until protocol freeze and M0-M5 gates. |
 | M7 Breadth | VERIFIED_SHADOW | BTC/ETH/SOL/XRP/DOGE/BNB M5/M15 discovery, rules, external feeds, OracleHub and PM BookHub gates are verified in SHADOW. No new-risk authority. |
-| M8 Capacity/readiness | BLOCKED_EVIDENCE | Fail-closed readiness gate implemented. Current blockers: 1 independent research cluster, shock threshold not frozen, no executable economic PnL evidence, latency/capacity not cost-calibrated, London AZ not selected, multi-crypto forward protocol not frozen. |
+| M8 Capacity/readiness | BLOCKED_EVIDENCE | Fail-closed readiness gate implemented. Current blockers: disk free below 20 GiB runtime floor, 1 independent research cluster, shock threshold not frozen, no executable economic PnL evidence, latency/capacity not cost-calibrated, London AZ not selected, multi-crypto forward protocol not frozen. |
 | M9 London regional migration | BLOCKED_AWS_ACCESS | Build/benchmark eu-west-2a/b/c, then PAPER cutover with a fresh ledger generation. |
 
 ## Non-negotiable invariants

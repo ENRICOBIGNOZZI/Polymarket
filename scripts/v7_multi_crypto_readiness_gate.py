@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import shutil
 import time
 from pathlib import Path
 from typing import Any
@@ -43,7 +44,12 @@ def evaluate(root: Path, *, shock_report: Path | None, research_report: Path | N
     shock = load(shock_report); research = load(research_report); latency = load(latency_report)
     london = load(root / "config/v7_london_az_shootout.json")
     shock_policy = load(root / "config/v7_multi_crypto_shock_calibration.json")
+    shadow_policy = load(root / "config/v7_multi_crypto_shadow_runtime.json")
+    disk_free_bytes = shutil.disk_usage(root).free
+    disk_required_bytes = int(shadow_policy.get("minimum_free_gib") or 0) * 1024**3
     blockers: list[str] = []
+    if disk_required_bytes <= 0 or disk_free_bytes < disk_required_bytes:
+        blockers.append("DISK_FREE_BELOW_RUNTIME_POLICY")
 
     if execution.get("state") != "VERIFIED_SHADOW_CONTRACT" or execution.get("new_risk_authorized") is not False:
         blockers.append("EXECUTION_ACCOUNTING_CONTRACT_NOT_VERIFIED")
@@ -95,6 +101,7 @@ def evaluate(root: Path, *, shock_report: Path | None, research_report: Path | N
         "shock_status": shock.get("status"), "shock_time_clusters": int(shock.get("time_clusters") or 0),
         "repricing_status": research.get("status"), "repricing_time_clusters": int(research.get("time_clusters") or 0),
         "latency_candidate_count": int(latency.get("common_observable_candidate_count") or 0),
+        "disk_free_bytes": disk_free_bytes, "disk_required_bytes": disk_required_bytes,
         "claim_boundary": "Readiness gate only. It cannot authorize live or PAPER new-risk execution.",
     }
 

@@ -24,6 +24,7 @@ def test_current_repository_is_blocked_for_evidence_not_authority() -> None:
     assert 'INDEPENDENT_OOS_REPRICING_EVIDENCE_INSUFFICIENT' in value['blockers']
     assert 'NO_EXECUTABLE_ECONOMIC_PNL_EVIDENCE' in value['blockers']
     assert 'LONDON_AZ_NOT_SELECTED' in value['blockers']
+    assert 'DISK_FREE_BELOW_RUNTIME_POLICY' in value['blockers']
 
 
 def test_missing_reports_fail_closed() -> None:

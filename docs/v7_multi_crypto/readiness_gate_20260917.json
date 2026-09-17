@@ -1,6 +1,7 @@
 {
   "authenticated_execution": false,
   "blockers": [
+    "DISK_FREE_BELOW_RUNTIME_POLICY",
     "INDEPENDENT_OOS_REPRICING_EVIDENCE_INSUFFICIENT",
     "LATENCY_CAPACITY_NOT_COSTED_ECONOMIC_EVIDENCE",
     "LONDON_AZ_NOT_SELECTED",
@@ -10,6 +11,8 @@
     "SHOCK_TRIGGER_THRESHOLD_NOT_FROZEN"
   ],
   "claim_boundary": "Readiness gate only. It cannot authorize live or PAPER new-risk execution.",
+  "disk_free_bytes": 6119944192,
+  "disk_required_bytes": 21474836480,
   "execution_authority": false,
   "execution_contract_state": "VERIFIED_SHADOW_CONTRACT",
   "latency_candidate_count": 4342,
@@ -24,6 +27,6 @@
   "shock_status": "INSUFFICIENT_EVIDENCE",
   "shock_time_clusters": 1,
   "state": "BLOCKED_EVIDENCE",
-  "timestamp_ns": 1789628292624967000,
+  "timestamp_ns": 1789628422888073000,
   "version": 1
 }
