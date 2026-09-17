@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import math
+import time
 from pathlib import Path
 from typing import Any
 
@@ -331,4 +332,75 @@ def render_prometheus(summary: dict[str, Any]) -> list[str]:
             lines.append(_metric("polymarket_mc_strategy_turnover_usd", strategy.get("turnover"), strategy_labels))
             if strategy.get("realized_pnl_known") is True:
                 lines.append(_metric("polymarket_mc_strategy_realized_pnl_usd", strategy.get("realized_pnl"), strategy_labels))
+    return lines
+
+
+def summarize_shadow_runtime(run_root: Path | None, *, now_ns: int | None = None) -> dict[str, Any]:
+    """Read the zero-authority six-crypto SHADOW supervisor status without mutating it."""
+    base = {
+        "schema": "polymarket_v7_multi_crypto_shadow_monitor_v1",
+        "present": False, "valid": False, "safe": False, "ready": False,
+    }
+    if run_root is None:
+        return base
+    path = Path(run_root) / "control/runtime_status.json"
+    try:
+        value = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return {**base, "run_root": str(run_root)}
+    if not isinstance(value, dict):
+        return {**base, "run_root": str(run_root), "present": True}
+    valid = value.get("schema") == "polymarket_v7_multi_crypto_shadow_runtime_status_v1"
+    safe = bool(valid and value.get("paper_only") is True
+                and value.get("authenticated_execution") is False
+                and value.get("real_order_submission") is False
+                and value.get("real_capital_at_risk") is False
+                and value.get("execution_authority") is False
+                and value.get("automatic_promotion") is False)
+    timestamp_ns = int(value.get("timestamp_ns") or 0)
+    current_ns = time.time_ns() if now_ns is None else int(now_ns)
+    age_seconds = max(0.0, (current_ns - timestamp_ns) / 1e9) if timestamp_ns > 0 else None
+    children = value.get("children") if isinstance(value.get("children"), dict) else {}
+    child_total = len(children)
+    child_alive = sum(1 for row in children.values() if isinstance(row, dict) and row.get("alive") is True)
+    state = str(value.get("state") or "UNKNOWN")
+    return {
+        **base, "present": True, "valid": valid, "safe": safe,
+        "ready": safe and state == "RUNNING_SHADOW" and value.get("contract_all_active_ready") is True,
+        "run_root": str(run_root), "code_sha": str(value.get("code_sha") or ""),
+        "state": state, "age_seconds": age_seconds,
+        "external_ready_assets": int(value.get("external_ready_assets") or 0),
+        "oracle_healthy_assets": int(value.get("oracle_healthy_assets") or 0),
+        "contract_active_markets": int(value.get("contract_active_markets") or 0),
+        "contract_active_ready_markets": int(value.get("contract_active_ready_markets") or 0),
+        "contract_all_active_ready": value.get("contract_all_active_ready") is True,
+        "book_evidence_complete": value.get("book_evidence_complete") is True,
+        "label_evidence_complete": value.get("label_evidence_complete") is True,
+        "feature_tape_emitted": int(value.get("feature_tape_emitted") or 0),
+        "child_total": child_total, "child_alive": child_alive,
+    }
+
+
+def render_shadow_prometheus(summary: dict[str, Any]) -> list[str]:
+    lines = [_metric("polymarket_mc_shadow_present", summary.get("present") is True)]
+    if summary.get("present") is not True:
+        return lines
+    lines.extend([
+        _metric("polymarket_mc_shadow_valid", summary.get("valid") is True),
+        _metric("polymarket_mc_shadow_safe", summary.get("safe") is True),
+        _metric("polymarket_mc_shadow_ready", summary.get("ready") is True),
+        _metric("polymarket_mc_shadow_state_info", 1, {"state": summary.get("state", "UNKNOWN"), "code_sha": summary.get("code_sha", "")}),
+        _metric("polymarket_mc_shadow_external_ready_assets", summary.get("external_ready_assets") or 0),
+        _metric("polymarket_mc_shadow_oracle_healthy_assets", summary.get("oracle_healthy_assets") or 0),
+        _metric("polymarket_mc_shadow_contract_active_markets", summary.get("contract_active_markets") or 0),
+        _metric("polymarket_mc_shadow_contract_ready_markets", summary.get("contract_active_ready_markets") or 0),
+        _metric("polymarket_mc_shadow_contract_all_ready", summary.get("contract_all_active_ready") is True),
+        _metric("polymarket_mc_shadow_book_evidence_complete", summary.get("book_evidence_complete") is True),
+        _metric("polymarket_mc_shadow_label_evidence_complete", summary.get("label_evidence_complete") is True),
+        _metric("polymarket_mc_shadow_feature_tape_emitted", summary.get("feature_tape_emitted") or 0),
+        _metric("polymarket_mc_shadow_children_total", summary.get("child_total") or 0),
+        _metric("polymarket_mc_shadow_children_alive", summary.get("child_alive") or 0),
+    ])
+    if _finite(summary.get("age_seconds")) is not None:
+        lines.append(_metric("polymarket_mc_shadow_status_age_seconds", summary["age_seconds"]))
     return lines

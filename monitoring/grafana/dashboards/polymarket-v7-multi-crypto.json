@@ -1231,6 +1231,391 @@
       }
     },
     {
+      "id": 47,
+      "type": "row",
+      "title": "SHADOW 6-CRYPTO DATA PLANE",
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 63
+      },
+      "collapsed": false,
+      "panels": []
+    },
+    {
+      "id": 471,
+      "type": "stat",
+      "title": "SHADOW Ready",
+      "gridPos": {
+        "h": 4,
+        "w": 6,
+        "x": 0,
+        "y": 64
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus-v7"
+      },
+      "description": "READY requires zero-authority safety plus all active contracts ready.",
+      "targets": [
+        {
+          "expr": "polymarket_mc_shadow_ready",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "mappings": [
+            {
+              "type": "value",
+              "options": {
+                "0": {
+                  "text": "WARMING / DEGRADED"
+                },
+                "1": {
+                  "text": "READY"
+                }
+              }
+            }
+          ]
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "colorMode": "value",
+        "graphMode": "area",
+        "justifyMode": "auto",
+        "orientation": "auto",
+        "textMode": "auto",
+        "wideLayout": true
+      }
+    },
+    {
+      "id": 472,
+      "type": "stat",
+      "title": "External Feeds Ready",
+      "gridPos": {
+        "h": 4,
+        "w": 6,
+        "x": 6,
+        "y": 64
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus-v7"
+      },
+      "description": "Healthy external venue data assets; target universe is 6.",
+      "targets": [
+        {
+          "expr": "polymarket_mc_shadow_external_ready_assets",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {},
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "colorMode": "value",
+        "graphMode": "area",
+        "justifyMode": "auto",
+        "orientation": "auto",
+        "textMode": "auto",
+        "wideLayout": true
+      }
+    },
+    {
+      "id": 473,
+      "type": "stat",
+      "title": "Oracle Assets Healthy",
+      "gridPos": {
+        "h": 4,
+        "w": 6,
+        "x": 12,
+        "y": 64
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus-v7"
+      },
+      "description": "Settlement/oracle health across the six-asset SHADOW universe.",
+      "targets": [
+        {
+          "expr": "polymarket_mc_shadow_oracle_healthy_assets",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {},
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "colorMode": "value",
+        "graphMode": "area",
+        "justifyMode": "auto",
+        "orientation": "auto",
+        "textMode": "auto",
+        "wideLayout": true
+      }
+    },
+    {
+      "id": 474,
+      "type": "stat",
+      "title": "Contracts Ready",
+      "gridPos": {
+        "h": 4,
+        "w": 6,
+        "x": 18,
+        "y": 64
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus-v7"
+      },
+      "description": "Ready active markets; target is 12 = 6 assets \u00d7 M5/M15.",
+      "targets": [
+        {
+          "expr": "polymarket_mc_shadow_contract_ready_markets",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {},
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "colorMode": "value",
+        "graphMode": "area",
+        "justifyMode": "auto",
+        "orientation": "auto",
+        "textMode": "auto",
+        "wideLayout": true
+      }
+    },
+    {
+      "id": 475,
+      "type": "stat",
+      "title": "Book Evidence",
+      "gridPos": {
+        "h": 4,
+        "w": 6,
+        "x": 0,
+        "y": 68
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus-v7"
+      },
+      "description": "Book evidence completeness from the SHADOW supervisor.",
+      "targets": [
+        {
+          "expr": "polymarket_mc_shadow_book_evidence_complete",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "mappings": [
+            {
+              "type": "value",
+              "options": {
+                "0": {
+                  "text": "INCOMPLETE"
+                },
+                "1": {
+                  "text": "COMPLETE"
+                }
+              }
+            }
+          ]
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "colorMode": "value",
+        "graphMode": "area",
+        "justifyMode": "auto",
+        "orientation": "auto",
+        "textMode": "auto",
+        "wideLayout": true
+      }
+    },
+    {
+      "id": 476,
+      "type": "stat",
+      "title": "Label Evidence",
+      "gridPos": {
+        "h": 4,
+        "w": 6,
+        "x": 6,
+        "y": 68
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus-v7"
+      },
+      "description": "Label evidence completeness from the SHADOW supervisor.",
+      "targets": [
+        {
+          "expr": "polymarket_mc_shadow_label_evidence_complete",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "mappings": [
+            {
+              "type": "value",
+              "options": {
+                "0": {
+                  "text": "INCOMPLETE"
+                },
+                "1": {
+                  "text": "COMPLETE"
+                }
+              }
+            }
+          ]
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "colorMode": "value",
+        "graphMode": "area",
+        "justifyMode": "auto",
+        "orientation": "auto",
+        "textMode": "auto",
+        "wideLayout": true
+      }
+    },
+    {
+      "id": 477,
+      "type": "stat",
+      "title": "Feature Tape Rows",
+      "gridPos": {
+        "h": 4,
+        "w": 6,
+        "x": 12,
+        "y": 68
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus-v7"
+      },
+      "description": "Causal feature rows emitted by the SHADOW six-crypto tape.",
+      "targets": [
+        {
+          "expr": "polymarket_mc_shadow_feature_tape_emitted",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {},
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "colorMode": "value",
+        "graphMode": "area",
+        "justifyMode": "auto",
+        "orientation": "auto",
+        "textMode": "auto",
+        "wideLayout": true
+      }
+    },
+    {
+      "id": 478,
+      "type": "stat",
+      "title": "SHADOW Status Age",
+      "gridPos": {
+        "h": 4,
+        "w": 6,
+        "x": 18,
+        "y": 68
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus-v7"
+      },
+      "description": "Age of the last SHADOW supervisor status. Missing means no configured SHADOW source.",
+      "targets": [
+        {
+          "expr": "polymarket_mc_shadow_status_age_seconds",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s"
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "colorMode": "value",
+        "graphMode": "area",
+        "justifyMode": "auto",
+        "orientation": "auto",
+        "textMode": "auto",
+        "wideLayout": true
+      }
+    },
+    {
       "id": 50,
       "type": "row",
       "title": "DATA QUALITY / SAFETY",
@@ -1238,7 +1623,7 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 63
+        "y": 72
       },
       "collapsed": false,
       "panels": []
@@ -1251,7 +1636,7 @@
         "h": 4,
         "w": 4,
         "x": 0,
-        "y": 64
+        "y": 73
       },
       "datasource": {
         "type": "prometheus",
@@ -1292,7 +1677,7 @@
         "h": 4,
         "w": 4,
         "x": 4,
-        "y": 64
+        "y": 73
       },
       "datasource": {
         "type": "prometheus",
@@ -1333,7 +1718,7 @@
         "h": 4,
         "w": 4,
         "x": 8,
-        "y": 64
+        "y": 73
       },
       "datasource": {
         "type": "prometheus",
@@ -1374,7 +1759,7 @@
         "h": 4,
         "w": 4,
         "x": 12,
-        "y": 64
+        "y": 73
       },
       "datasource": {
         "type": "prometheus",
@@ -1417,7 +1802,7 @@
         "h": 4,
         "w": 4,
         "x": 16,
-        "y": 64
+        "y": 73
       },
       "datasource": {
         "type": "prometheus",
@@ -1458,7 +1843,7 @@
         "h": 4,
         "w": 4,
         "x": 20,
-        "y": 64
+        "y": 73
       },
       "datasource": {
         "type": "prometheus",
@@ -1513,7 +1898,7 @@
         "h": 8,
         "w": 8,
         "x": 0,
-        "y": 68
+        "y": 77
       },
       "datasource": {
         "type": "prometheus",
@@ -1552,7 +1937,7 @@
         "h": 8,
         "w": 8,
         "x": 8,
-        "y": 68
+        "y": 77
       },
       "datasource": {
         "type": "prometheus",
@@ -1591,7 +1976,7 @@
         "h": 8,
         "w": 8,
         "x": 16,
-        "y": 68
+        "y": 77
       },
       "datasource": {
         "type": "prometheus",
@@ -1630,7 +2015,7 @@
         "h": 6,
         "w": 24,
         "x": 0,
-        "y": 76
+        "y": 85
       },
       "options": {
         "mode": "markdown",

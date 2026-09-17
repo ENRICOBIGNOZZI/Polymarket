@@ -6,9 +6,10 @@
     "host": "127.0.0.1",
     "maker_fillability_path": "/maker-fillability.json",
     "metrics_path": "/metrics",
+    "multi_crypto_performance_path": "/multi-crypto-performance.json",
+    "multi_crypto_shadow_path": "/multi-crypto-shadow.json",
     "path": "monitoring/exporter_v7.py",
-    "port": 9108,
-    "multi_crypto_performance_path": "/multi-crypto-performance.json"
+    "port": 9108
   },
   "freshness_seconds": {
     "economics": 180,

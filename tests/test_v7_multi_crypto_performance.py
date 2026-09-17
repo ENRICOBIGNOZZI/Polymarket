@@ -120,6 +120,31 @@ class MultiCryptoPerformanceTest(unittest.TestCase):
             self.assertEqual(lane["realized_pnl"], -0.5)
             self.assertTrue(summary["attribution"]["reconciled"])
 
+
+    def test_shadow_runtime_is_separate_zero_authority_source(self) -> None:
+        from v7_multi_crypto_performance import render_shadow_prometheus, summarize_shadow_runtime
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory); (root / "control").mkdir()
+            status = {
+                "schema": "polymarket_v7_multi_crypto_shadow_runtime_status_v1",
+                "timestamp_ns": 1_000_000_000, "code_sha": "b" * 40, "state": "RUNNING_SHADOW",
+                "paper_only": True, "authenticated_execution": False, "real_order_submission": False,
+                "real_capital_at_risk": False, "execution_authority": False, "automatic_promotion": False,
+                "external_ready_assets": 6, "oracle_healthy_assets": 6,
+                "contract_active_markets": 12, "contract_active_ready_markets": 12,
+                "contract_all_active_ready": True, "book_evidence_complete": True,
+                "label_evidence_complete": True, "feature_tape_emitted": 123,
+                "children": {"a": {"alive": True}, "b": {"alive": True}},
+            }
+            (root / "control/runtime_status.json").write_text(json.dumps(status))
+            summary = summarize_shadow_runtime(root, now_ns=2_000_000_000)
+            self.assertTrue(summary["safe"]); self.assertTrue(summary["ready"])
+            self.assertEqual(summary["age_seconds"], 1.0)
+            text = "\n".join(render_shadow_prometheus(summary))
+            self.assertIn("polymarket_mc_shadow_external_ready_assets 6", text)
+            self.assertIn("polymarket_mc_shadow_contract_ready_markets 12", text)
+            self.assertIn("polymarket_mc_shadow_children_alive 2", text)
+
     def test_unattributed_final_fails_reconciliation_closed(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory); (root / "ledger").mkdir()

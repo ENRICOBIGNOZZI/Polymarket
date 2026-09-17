@@ -18,7 +18,9 @@ from v7_maker_microstructure import summarize_maker_microstructure
 from v7_portfolio_reconciliation import reconcile as reconcile_portfolio
 from v7_multi_crypto_performance import (
     render_prometheus as render_multi_crypto_prometheus,
+    render_shadow_prometheus,
     summarize_multi_crypto,
+    summarize_shadow_runtime,
 )
 from v7_runtime_contract import (
     MAKER_ROTATION_OPERATIONAL_STATES as _MAKER_ROTATION_OPERATIONAL_STATES,
@@ -224,7 +226,7 @@ def _operations(run_root: Path, runtime: dict[str, Any], now: int) -> dict[str, 
     }
 
 
-def collect_snapshot(run_root: Path, repository_root: Path | None = None, *, now: int | None = None) -> dict[str, Any]:
+def collect_snapshot(run_root: Path, repository_root: Path | None = None, *, now: int | None = None, multi_crypto_shadow_run_root: Path | None = None) -> dict[str, Any]:
     now = int(time.time()) if now is None else int(now)
     run_root = run_root.resolve(); repository_root = (repository_root or Path(".")).resolve()
     runtime = _json(run_root / "control/runtime_status.json")
@@ -325,6 +327,9 @@ def collect_snapshot(run_root: Path, repository_root: Path | None = None, *, now
         crypto_registry=snapshot["crypto_registry"],
         crypto_model_registry=snapshot["crypto_model_registry"],
         ledger_valid=ledger.get("valid") is True,
+    )
+    snapshot["multi_crypto_shadow"] = summarize_shadow_runtime(
+        multi_crypto_shadow_run_root, now_ns=now * 1_000_000_000,
     )
     return snapshot
 
@@ -471,12 +476,13 @@ def render_prometheus(snapshot: dict[str, Any]) -> str:
     _append_fillability_metrics(lines, snapshot.get("maker_fillability") or {})
     _append_external_fair_metrics(lines, snapshot.get("external_fair") or {})
     lines.extend(render_multi_crypto_prometheus(snapshot.get("multi_crypto_performance") or {}))
+    lines.extend(render_shadow_prometheus(snapshot.get("multi_crypto_shadow") or {}))
     return "\n".join(lines) + "\n"
 
 
 class SnapshotCache:
-    def __init__(self, run_root: Path, repository_root: Path, *, refresh_seconds: float = 10.0) -> None:
-        self.run_root, self.repository_root, self.refresh_seconds = Path(run_root), Path(repository_root), max(1.0, float(refresh_seconds)); self._lock = threading.Lock(); self._ready = threading.Event(); self._stop = threading.Event(); self._thread = None; self._snapshot = None; self._metrics = b""; self._maker_fillability = b"{}\n"; self._external_fair = b"{}\n"; self._multi_crypto_performance = b"{}\n"; self._completed_monotonic = 0.0; self._completed_wall = 0.0; self._refresh_duration = 0.0; self._refresh_errors = 0; self._last_error = ""
+    def __init__(self, run_root: Path, repository_root: Path, *, refresh_seconds: float = 10.0, multi_crypto_shadow_run_root: Path | None = None) -> None:
+        self.run_root, self.repository_root, self.multi_crypto_shadow_run_root, self.refresh_seconds = Path(run_root), Path(repository_root), (Path(multi_crypto_shadow_run_root) if multi_crypto_shadow_run_root else None), max(1.0, float(refresh_seconds)); self._lock = threading.Lock(); self._ready = threading.Event(); self._stop = threading.Event(); self._thread = None; self._snapshot = None; self._metrics = b""; self._maker_fillability = b"{}\n"; self._external_fair = b"{}\n"; self._multi_crypto_performance = b"{}\n"; self._multi_crypto_shadow = b"{}\n"; self._completed_monotonic = 0.0; self._completed_wall = 0.0; self._refresh_duration = 0.0; self._refresh_errors = 0; self._last_error = ""
     def start(self) -> None:
         if self._thread is None: self._thread = threading.Thread(target=self._refresh_loop, daemon=True); self._thread.start()
     def stop(self) -> None:
@@ -487,23 +493,27 @@ class SnapshotCache:
         while not self._stop.is_set():
             started = time.monotonic()
             try:
-                snapshot = collect_snapshot(self.run_root, self.repository_root); duration = time.monotonic()-started; wall = time.time(); metrics = render_prometheus(snapshot).rstrip()+f"\npolymarket_v7_exporter_snapshot_generated_unixtime {wall}\npolymarket_v7_exporter_snapshot_refresh_duration_seconds {duration}\npolymarket_v7_exporter_snapshot_refresh_errors_total {self._refresh_errors}\n"
-                with self._lock: self._snapshot=snapshot; self._metrics=metrics.encode(); self._maker_fillability=(json.dumps(snapshot.get("maker_fillability") or {},sort_keys=True)+"\n").encode(); self._external_fair=(json.dumps(snapshot.get("external_fair") or {},sort_keys=True)+"\n").encode(); self._multi_crypto_performance=(json.dumps(snapshot.get("multi_crypto_performance") or {},sort_keys=True)+"\n").encode(); self._completed_monotonic=time.monotonic(); self._completed_wall=wall; self._refresh_duration=duration; self._last_error=""
+                if self.multi_crypto_shadow_run_root is None:
+                    snapshot = collect_snapshot(self.run_root, self.repository_root)
+                else:
+                    snapshot = collect_snapshot(self.run_root, self.repository_root, multi_crypto_shadow_run_root=self.multi_crypto_shadow_run_root)
+                duration = time.monotonic()-started; wall = time.time(); metrics = render_prometheus(snapshot).rstrip()+f"\npolymarket_v7_exporter_snapshot_generated_unixtime {wall}\npolymarket_v7_exporter_snapshot_refresh_duration_seconds {duration}\npolymarket_v7_exporter_snapshot_refresh_errors_total {self._refresh_errors}\n"
+                with self._lock: self._snapshot=snapshot; self._metrics=metrics.encode(); self._maker_fillability=(json.dumps(snapshot.get("maker_fillability") or {},sort_keys=True)+"\n").encode(); self._external_fair=(json.dumps(snapshot.get("external_fair") or {},sort_keys=True)+"\n").encode(); self._multi_crypto_performance=(json.dumps(snapshot.get("multi_crypto_performance") or {},sort_keys=True)+"\n").encode(); self._multi_crypto_shadow=(json.dumps(snapshot.get("multi_crypto_shadow") or {},sort_keys=True)+"\n").encode(); self._completed_monotonic=time.monotonic(); self._completed_wall=wall; self._refresh_duration=duration; self._last_error=""
                 self._ready.set()
             except Exception as exc:
                 with self._lock: self._refresh_errors += 1; self._last_error=f"{type(exc).__name__}:{exc}"
             self._stop.wait(max(.1, self.refresh_seconds-(time.monotonic()-started)))
     def read(self) -> dict[str, Any]:
-        with self._lock: return {"ready":self._snapshot is not None,"snapshot":self._snapshot,"metrics":self._metrics,"maker_fillability":self._maker_fillability,"external_fair":self._external_fair,"multi_crypto_performance":self._multi_crypto_performance,"age_seconds":max(0,time.monotonic()-self._completed_monotonic) if self._completed_monotonic else math.inf,"completed_wall":self._completed_wall,"refresh_duration_seconds":self._refresh_duration,"refresh_errors":self._refresh_errors,"last_error":self._last_error}
+        with self._lock: return {"ready":self._snapshot is not None,"snapshot":self._snapshot,"metrics":self._metrics,"maker_fillability":self._maker_fillability,"external_fair":self._external_fair,"multi_crypto_performance":self._multi_crypto_performance,"multi_crypto_shadow":self._multi_crypto_shadow,"age_seconds":max(0,time.monotonic()-self._completed_monotonic) if self._completed_monotonic else math.inf,"completed_wall":self._completed_wall,"refresh_duration_seconds":self._refresh_duration,"refresh_errors":self._refresh_errors,"last_error":self._last_error}
 
 
 class ExporterHandler(BaseHTTPRequestHandler):
-    run_root=Path("runs/paper_v7_live"); repository_root=Path("."); max_runtime_age=180; max_supervisor_age=30; max_snapshot_age=45.0; snapshot_cache: SnapshotCache | None=None
+    run_root=Path("runs/paper_v7_live"); repository_root=Path("."); multi_crypto_shadow_run_root: Path | None=None; max_runtime_age=180; max_supervisor_age=30; max_snapshot_age=45.0; snapshot_cache: SnapshotCache | None=None
     def log_message(self,_format:str,*_args:object)->None: return
     def do_GET(self)->None:
         cached=self.snapshot_cache.read() if self.snapshot_cache else None
         if cached is None:
-            snapshot=collect_snapshot(self.run_root,self.repository_root); cached={"ready":True,"snapshot":snapshot,"metrics":render_prometheus(snapshot).encode(),"maker_fillability":(json.dumps(snapshot.get("maker_fillability") or {})+"\n").encode(),"external_fair":(json.dumps(snapshot.get("external_fair") or {})+"\n").encode(),"multi_crypto_performance":(json.dumps(snapshot.get("multi_crypto_performance") or {})+"\n").encode(),"age_seconds":0}
+            snapshot=(collect_snapshot(self.run_root,self.repository_root) if self.multi_crypto_shadow_run_root is None else collect_snapshot(self.run_root,self.repository_root,multi_crypto_shadow_run_root=self.multi_crypto_shadow_run_root)); cached={"ready":True,"snapshot":snapshot,"metrics":render_prometheus(snapshot).encode(),"maker_fillability":(json.dumps(snapshot.get("maker_fillability") or {})+"\n").encode(),"external_fair":(json.dumps(snapshot.get("external_fair") or {})+"\n").encode(),"multi_crypto_performance":(json.dumps(snapshot.get("multi_crypto_performance") or {})+"\n").encode(),"multi_crypto_shadow":(json.dumps(snapshot.get("multi_crypto_shadow") or {})+"\n").encode(),"age_seconds":0}
         if not cached.get("ready"): payload=b'{"ok":false,"reasons":["exporter_snapshot_not_ready"]}\n'; self.send_response(503); content="application/json"
         elif self.path=="/metrics": payload=cached["metrics"]; self.send_response(200); content="text/plain; version=0.0.4"
         elif self.path=="/healthz":
@@ -513,6 +523,7 @@ class ExporterHandler(BaseHTTPRequestHandler):
         elif self.path=="/maker-fillability.json": payload=cached["maker_fillability"]; self.send_response(200); content="application/json"
         elif self.path=="/external-fair.json": payload=cached["external_fair"]; self.send_response(200); content="application/json"
         elif self.path=="/multi-crypto-performance.json": payload=cached["multi_crypto_performance"]; self.send_response(200); content="application/json"
+        elif self.path=="/multi-crypto-shadow.json": payload=cached["multi_crypto_shadow"]; self.send_response(200); content="application/json"
         elif self.path in {"/profit-attribution.json", "/profit-experiments.json", "/permanent-evidence.json", "/economic-decision.json"}:
             key={"/profit-attribution.json":"profit_attribution", "/profit-experiments.json":"profit_experiments",
                  "/permanent-evidence.json":"permanent_evidence", "/economic-decision.json":"economic_decision_report"}[self.path]
@@ -523,9 +534,9 @@ class ExporterHandler(BaseHTTPRequestHandler):
 
 
 def main()->int:
-    parser=argparse.ArgumentParser(description=__doc__); parser.add_argument("--run-root",type=Path,default=Path("runs/paper_v7_live")); parser.add_argument("--repository-root",type=Path,default=Path(".")); parser.add_argument("--host",default="127.0.0.1"); parser.add_argument("--port",type=int,default=9108); parser.add_argument("--max-runtime-age",type=int,default=180); parser.add_argument("--max-supervisor-age",type=int,default=30); parser.add_argument("--snapshot-refresh-seconds",type=float,default=10); parser.add_argument("--max-snapshot-age",type=float,default=45); args=parser.parse_args()
-    ExporterHandler.run_root=args.run_root; ExporterHandler.repository_root=args.repository_root; ExporterHandler.max_runtime_age=args.max_runtime_age; ExporterHandler.max_supervisor_age=args.max_supervisor_age; ExporterHandler.max_snapshot_age=args.max_snapshot_age
-    cache=SnapshotCache(args.run_root,args.repository_root,refresh_seconds=args.snapshot_refresh_seconds); cache.start(); ExporterHandler.snapshot_cache=cache; server=ThreadingHTTPServer((args.host,args.port),ExporterHandler)
+    parser=argparse.ArgumentParser(description=__doc__); parser.add_argument("--run-root",type=Path,default=Path("runs/paper_v7_live")); parser.add_argument("--repository-root",type=Path,default=Path(".")); parser.add_argument("--host",default="127.0.0.1"); parser.add_argument("--port",type=int,default=9108); parser.add_argument("--max-runtime-age",type=int,default=180); parser.add_argument("--max-supervisor-age",type=int,default=30); parser.add_argument("--snapshot-refresh-seconds",type=float,default=10); parser.add_argument("--max-snapshot-age",type=float,default=45); parser.add_argument("--multi-crypto-shadow-run-root",type=Path,default=None); args=parser.parse_args()
+    ExporterHandler.run_root=args.run_root; ExporterHandler.repository_root=args.repository_root; ExporterHandler.multi_crypto_shadow_run_root=args.multi_crypto_shadow_run_root; ExporterHandler.max_runtime_age=args.max_runtime_age; ExporterHandler.max_supervisor_age=args.max_supervisor_age; ExporterHandler.max_snapshot_age=args.max_snapshot_age
+    cache=SnapshotCache(args.run_root,args.repository_root,refresh_seconds=args.snapshot_refresh_seconds,multi_crypto_shadow_run_root=args.multi_crypto_shadow_run_root); cache.start(); ExporterHandler.snapshot_cache=cache; server=ThreadingHTTPServer((args.host,args.port),ExporterHandler)
     try: server.serve_forever()
     except KeyboardInterrupt: pass
     finally: server.server_close(); cache.stop()
