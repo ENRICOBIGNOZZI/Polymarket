@@ -5215,7 +5215,7 @@
     {
       "id": 200,
       "type": "row",
-      "title": "Details · crypto contexts and permissions",
+      "title": "Details · crypto metadata and permissions",
       "collapsed": true,
       "gridPos": {
         "x": 0,
@@ -5228,7 +5228,7 @@
           "id": 201,
           "type": "table",
           "title": "Crypto Settlement Contexts · registrations · NOT active trading",
-          "description": "Registered BTC/ETH/SOL/XRP contexts do not prove execution. Authority is listed per context.",
+          "description": "Registered crypto contexts do not prove execution. Authority is listed per context.",
           "datasource": {
             "type": "prometheus",
             "uid": "prometheus-v7"
@@ -5543,6 +5543,435 @@
               "placement": "bottom",
               "calcs": []
             }
+          }
+        },
+        {
+          "id": 204,
+          "type": "table",
+          "title": "Metadata source · cold plane only",
+          "description": "Discovery/enrichment is outside the HFT critical path. CLOB_PRIMARY is preferred; Gamma is fallback only; cache is bounded.",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus-v7"
+          },
+          "gridPos": {
+            "x": 0,
+            "y": 92,
+            "w": 8,
+            "h": 6
+          },
+          "targets": [
+            {
+              "refId": "A",
+              "datasource": {
+                "type": "prometheus",
+                "uid": "prometheus-v7"
+              },
+              "expr": "(polymarket_v7_universe_source_mode_info{job=\"polymarket-v7\",instance=\"$instance\"}) and on(job,instance) (polymarket_v7_exporter_snapshot_usable{job=\"polymarket-v7\",instance=\"$instance\"} == 1) and on(job,instance) (up{job=\"polymarket-v7\",instance=\"$instance\"} == 1)",
+              "legendFormat": "",
+              "instant": true,
+              "range": false,
+              "editorMode": "code",
+              "format": "table"
+            }
+          ],
+          "fieldConfig": {
+            "defaults": {
+              "unit": "none",
+              "decimals": 0,
+              "noValue": "UNAVAILABLE",
+              "color": {
+                "mode": "palette-classic"
+              },
+              "mappings": [
+                {
+                  "type": "special",
+                  "options": {
+                    "match": "null",
+                    "result": {
+                      "text": "UNAVAILABLE",
+                      "color": "gray"
+                    }
+                  }
+                },
+                {
+                  "type": "special",
+                  "options": {
+                    "match": "nan",
+                    "result": {
+                      "text": "UNAVAILABLE",
+                      "color": "gray"
+                    }
+                  }
+                }
+              ],
+              "custom": {
+                "align": "auto",
+                "cellOptions": {
+                  "type": "auto"
+                },
+                "filterable": true
+              }
+            },
+            "overrides": [
+              {
+                "matcher": {
+                  "id": "byRegexp",
+                  "options": "^(?!Value$).*"
+                },
+                "properties": [
+                  {
+                    "id": "unit",
+                    "value": "string"
+                  }
+                ]
+              }
+            ]
+          },
+          "transformations": [
+            {
+              "id": "organize",
+              "options": {
+                "excludeByName": {
+                  "Time": true,
+                  "__name__": true,
+                  "job": true,
+                  "instance": true,
+                  "Value": true
+                },
+                "renameByName": {
+                  "mode": "Source"
+                }
+              }
+            }
+          ],
+          "options": {
+            "showHeader": true,
+            "cellHeight": "sm",
+            "footer": {
+              "show": false
+            }
+          }
+        },
+        {
+          "id": 205,
+          "type": "stat",
+          "title": "CLOB metadata complete",
+          "description": "",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus-v7"
+          },
+          "gridPos": {
+            "x": 8,
+            "y": 92,
+            "w": 4,
+            "h": 4
+          },
+          "fieldConfig": {
+            "defaults": {
+              "unit": "short",
+              "decimals": 0,
+              "noValue": "UNAVAILABLE",
+              "color": {
+                "mode": "thresholds"
+              },
+              "mappings": [
+                {
+                  "type": "special",
+                  "options": {
+                    "match": "null",
+                    "result": {
+                      "text": "UNAVAILABLE",
+                      "color": "gray"
+                    }
+                  }
+                },
+                {
+                  "type": "special",
+                  "options": {
+                    "match": "nan",
+                    "result": {
+                      "text": "UNAVAILABLE",
+                      "color": "gray"
+                    }
+                  }
+                },
+                {
+                  "type": "value",
+                  "options": {
+                    "0": {
+                      "text": "INCOMPLETE",
+                      "color": "yellow"
+                    },
+                    "1": {
+                      "text": "COMPLETE",
+                      "color": "green"
+                    }
+                  }
+                }
+              ]
+            },
+            "overrides": []
+          },
+          "targets": [
+            {
+              "refId": "A",
+              "datasource": {
+                "type": "prometheus",
+                "uid": "prometheus-v7"
+              },
+              "expr": "(polymarket_v7_universe_clob_complete{job=\"polymarket-v7\",instance=\"$instance\"}) and on(job,instance) (polymarket_v7_exporter_snapshot_usable{job=\"polymarket-v7\",instance=\"$instance\"} == 1) and on(job,instance) (up{job=\"polymarket-v7\",instance=\"$instance\"} == 1)",
+              "legendFormat": "CLOB metadata complete",
+              "instant": true,
+              "range": false,
+              "editorMode": "code"
+            }
+          ],
+          "options": {
+            "reduceOptions": {
+              "calcs": [
+                "last"
+              ],
+              "fields": "",
+              "values": false
+            },
+            "orientation": "auto",
+            "textMode": "auto",
+            "colorMode": "value",
+            "graphMode": "none",
+            "justifyMode": "auto"
+          }
+        },
+        {
+          "id": 206,
+          "type": "stat",
+          "title": "Gamma fallback errors",
+          "description": "",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus-v7"
+          },
+          "gridPos": {
+            "x": 12,
+            "y": 92,
+            "w": 4,
+            "h": 4
+          },
+          "fieldConfig": {
+            "defaults": {
+              "unit": "short",
+              "decimals": 0,
+              "noValue": "UNAVAILABLE",
+              "color": {
+                "mode": "palette-classic"
+              },
+              "mappings": [
+                {
+                  "type": "special",
+                  "options": {
+                    "match": "null",
+                    "result": {
+                      "text": "UNAVAILABLE",
+                      "color": "gray"
+                    }
+                  }
+                },
+                {
+                  "type": "special",
+                  "options": {
+                    "match": "nan",
+                    "result": {
+                      "text": "UNAVAILABLE",
+                      "color": "gray"
+                    }
+                  }
+                }
+              ]
+            },
+            "overrides": []
+          },
+          "targets": [
+            {
+              "refId": "A",
+              "datasource": {
+                "type": "prometheus",
+                "uid": "prometheus-v7"
+              },
+              "expr": "(polymarket_v7_universe_gamma_fallback_errors{job=\"polymarket-v7\",instance=\"$instance\"}) and on(job,instance) (polymarket_v7_exporter_snapshot_usable{job=\"polymarket-v7\",instance=\"$instance\"} == 1) and on(job,instance) (up{job=\"polymarket-v7\",instance=\"$instance\"} == 1)",
+              "legendFormat": "Gamma fallback errors",
+              "instant": true,
+              "range": false,
+              "editorMode": "code"
+            }
+          ],
+          "options": {
+            "reduceOptions": {
+              "calcs": [
+                "last"
+              ],
+              "fields": "",
+              "values": false
+            },
+            "orientation": "auto",
+            "textMode": "auto",
+            "colorMode": "none",
+            "graphMode": "none",
+            "justifyMode": "auto"
+          }
+        },
+        {
+          "id": 207,
+          "type": "stat",
+          "title": "Cache fallback markets",
+          "description": "",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus-v7"
+          },
+          "gridPos": {
+            "x": 16,
+            "y": 92,
+            "w": 4,
+            "h": 4
+          },
+          "fieldConfig": {
+            "defaults": {
+              "unit": "short",
+              "decimals": 0,
+              "noValue": "UNAVAILABLE",
+              "color": {
+                "mode": "palette-classic"
+              },
+              "mappings": [
+                {
+                  "type": "special",
+                  "options": {
+                    "match": "null",
+                    "result": {
+                      "text": "UNAVAILABLE",
+                      "color": "gray"
+                    }
+                  }
+                },
+                {
+                  "type": "special",
+                  "options": {
+                    "match": "nan",
+                    "result": {
+                      "text": "UNAVAILABLE",
+                      "color": "gray"
+                    }
+                  }
+                }
+              ]
+            },
+            "overrides": []
+          },
+          "targets": [
+            {
+              "refId": "A",
+              "datasource": {
+                "type": "prometheus",
+                "uid": "prometheus-v7"
+              },
+              "expr": "(polymarket_v7_universe_cache_fallback_markets{job=\"polymarket-v7\",instance=\"$instance\"}) and on(job,instance) (polymarket_v7_exporter_snapshot_usable{job=\"polymarket-v7\",instance=\"$instance\"} == 1) and on(job,instance) (up{job=\"polymarket-v7\",instance=\"$instance\"} == 1)",
+              "legendFormat": "Cache fallback markets",
+              "instant": true,
+              "range": false,
+              "editorMode": "code"
+            }
+          ],
+          "options": {
+            "reduceOptions": {
+              "calcs": [
+                "last"
+              ],
+              "fields": "",
+              "values": false
+            },
+            "orientation": "auto",
+            "textMode": "auto",
+            "colorMode": "none",
+            "graphMode": "none",
+            "justifyMode": "auto"
+          }
+        },
+        {
+          "id": 208,
+          "type": "stat",
+          "title": "Missing configured markets",
+          "description": "",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus-v7"
+          },
+          "gridPos": {
+            "x": 20,
+            "y": 92,
+            "w": 4,
+            "h": 4
+          },
+          "fieldConfig": {
+            "defaults": {
+              "unit": "short",
+              "decimals": 0,
+              "noValue": "UNAVAILABLE",
+              "color": {
+                "mode": "palette-classic"
+              },
+              "mappings": [
+                {
+                  "type": "special",
+                  "options": {
+                    "match": "null",
+                    "result": {
+                      "text": "UNAVAILABLE",
+                      "color": "gray"
+                    }
+                  }
+                },
+                {
+                  "type": "special",
+                  "options": {
+                    "match": "nan",
+                    "result": {
+                      "text": "UNAVAILABLE",
+                      "color": "gray"
+                    }
+                  }
+                }
+              ]
+            },
+            "overrides": []
+          },
+          "targets": [
+            {
+              "refId": "A",
+              "datasource": {
+                "type": "prometheus",
+                "uid": "prometheus-v7"
+              },
+              "expr": "(polymarket_v7_universe_missing_markets{job=\"polymarket-v7\",instance=\"$instance\"}) and on(job,instance) (polymarket_v7_exporter_snapshot_usable{job=\"polymarket-v7\",instance=\"$instance\"} == 1) and on(job,instance) (up{job=\"polymarket-v7\",instance=\"$instance\"} == 1)",
+              "legendFormat": "Missing configured markets",
+              "instant": true,
+              "range": false,
+              "editorMode": "code"
+            }
+          ],
+          "options": {
+            "reduceOptions": {
+              "calcs": [
+                "last"
+              ],
+              "fields": "",
+              "values": false
+            },
+            "orientation": "auto",
+            "textMode": "auto",
+            "colorMode": "none",
+            "graphMode": "none",
+            "justifyMode": "auto"
           }
         }
       ]

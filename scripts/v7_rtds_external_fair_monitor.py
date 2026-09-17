@@ -21,8 +21,6 @@ import socket
 import ssl
 import struct
 import time
-import urllib.parse
-import urllib.request
 from pathlib import Path
 from typing import Any, Iterator
 
@@ -226,24 +224,6 @@ def router_live_market_yes(
         return None
     return value
 
-
-def fetch_market_by_slug(gamma_url: str, slug: str, timeout: int = 4) -> dict[str, Any] | None:
-    """Fetch one exact Gamma market without general-universe eligibility filters."""
-    query = urllib.parse.urlencode({"slug": slug})
-    request = urllib.request.Request(
-        gamma_url.rstrip("/") + "/markets?" + query,
-        headers={"User-Agent": "polymarket-v7-external-fair/1"},
-    )
-    with urllib.request.urlopen(request, timeout=timeout) as response:
-        value = json.loads(response.read().decode("utf-8"))
-    rows = value if isinstance(value, list) else value.get("markets", []) if isinstance(value, dict) else []
-    for raw in rows:
-        if not isinstance(raw, dict) or str(raw.get("slug") or "") != slug:
-            continue
-        market = normalize_market(raw)
-        if market is not None:
-            return market
-    return None
 
 
 def _recv_exact(stream: ssl.SSLSocket, size: int) -> bytes:
@@ -566,12 +546,10 @@ class Monitor:
     def __init__(self, root: Path, code_sha: str, *, universe_path: Path | None = None,
                  approvals_path: Path | None = None, external_venues_path: Path | None = None,
                  research_model_path: Path | None = None,
-                 paper_bootstrap: dict[str, Any] | None = None,
-                 gamma_url: str = "https://gamma-api.polymarket.com") -> None:
+                 paper_bootstrap: dict[str, Any] | None = None) -> None:
         self.root, self.code_sha = root, code_sha
         self.universe_path = universe_path
         self.external_venues_path = external_venues_path
-        self.gamma_url = gamma_url.rstrip("/")
         self.latest: dict[str, dict[str, Any]] = {}
         self.latency_samples: dict[str, deque[float]] = {
             "chainlink_source_to_receive": deque(maxlen=LATENCY_SAMPLE_LIMIT),
@@ -740,7 +718,10 @@ class Monitor:
         except (OSError, json.JSONDecodeError):
             universe = {}
         candidates: list[tuple[int, dict[str, Any]]] = []
-        for market in universe.get("markets") if isinstance(universe.get("markets"), list) else []:
+        metadata_rows = universe.get("metadata_markets")
+        if not isinstance(metadata_rows, list):
+            metadata_rows = universe.get("markets") if isinstance(universe.get("markets"), list) else []
+        for market in metadata_rows:
             if not isinstance(market, dict):
                 continue
             match = re.fullmatch(r"btc-updown-5m-([0-9]+)", str(market.get("slug") or ""))
@@ -758,20 +739,10 @@ class Monitor:
                     and self.active_contract.get("verified_template") is True
                     and self.active_contract.get("rules_hash_recognized") is True):
                 return
-            # At rollover the specialized contract may not yet be in the
-            # general universe. Discover its deterministic slug directly;
-            # transport/schema/contract failures remain fail-closed.
-            current_start = now_seconds - now_seconds % 300
-            try:
-                targeted = fetch_market_by_slug(
-                    self.gamma_url, f"btc-updown-5m-{current_start}"
-                )
-            except (OSError, TimeoutError, ValueError, json.JSONDecodeError):
-                targeted = None
-            if (targeted is not None and targeted.get("active") is True
-                    and targeted.get("closed") is not True
-                    and targeted.get("accepting_orders") is True):
-                candidates.append((current_start, targeted))
+            # Contract discovery is centralized in v7_crypto_universe. The
+            # monitor never performs remote metadata I/O: if the cold metadata
+            # plane cannot provide the current deterministic window, fail
+            # closed here while feed collection continues independently.
         if not candidates:
             self.active_market = self.active_contract = self.reference = {}
             return
@@ -1323,7 +1294,6 @@ def main() -> int:
     parser.add_argument("--external-venues", type=Path)
     parser.add_argument("--research-model", type=Path)
     parser.add_argument("--external-fair-config", type=Path)
-    parser.add_argument("--gamma-url", default="https://gamma-api.polymarket.com")
     parser.add_argument("--dns", action="append", default=[])
     args = parser.parse_args()
     if len(args.code_sha) != 40 or any(char not in "0123456789abcdef" for char in args.code_sha):
@@ -1333,8 +1303,7 @@ def main() -> int:
             approvals_path=args.approvals, external_venues_path=args.external_venues,
             research_model_path=args.research_model,
             paper_bootstrap=external_config.get("paper_exploration_bootstrap")
-            if isinstance(external_config.get("paper_exploration_bootstrap"), dict) else None,
-            gamma_url=args.gamma_url)
+            if isinstance(external_config.get("paper_exploration_bootstrap"), dict) else None)
     ml = external_config.get("paper_ml_probe") or {}
     if ml.get("enabled") is True:
         if (ml.get("research_only") is not True or ml.get("real_order_submission") is not False

@@ -91,6 +91,7 @@ def test_skip_reasons_and_safety_fail_closed():
     norm=[universe.normalize_market(x) for x in rows]
     snap=universe.build_snapshot(norm,{'discovery_exhaustive':True},cfg,model_sha=SHA,timestamp_ms=1)
     assert snap['eligible_markets']==1
+    assert len(snap['metadata_markets'])==len(norm)
     assert snap['paper_only'] is True and snap['authenticated_execution'] is False and snap['real_order_submission'] is False
 
 
@@ -131,6 +132,8 @@ def test_resilient_discovery_does_not_require_gamma_when_clob_has_markets():
     assert stats['source_mode']=='CLOB_PRIMARY' and stats['clob_complete'] is True
     assert stats['gamma_fallback_errors']==0 and stats['cache_fallback_markets']==0
     assert all(row['condition_id'] and len(row['clob_token_ids'])==2 for row in rows)
+    assert all(row['resolution_source'].startswith('https://data.chain.link/') for row in rows)
+    assert all(row['metadata_source']=='CLOB_MARKETS_PLUS_VERIFIED_REGISTRY' for row in rows)
     assert all(row['liquidity_known'] is False and row['volume_24h_known'] is False for row in rows)
     assert all(universe._eligibility(row,cfg) is None for row in rows)
 
@@ -140,7 +143,7 @@ def test_resilient_discovery_uses_bounded_last_good_cache_when_both_hosts_fail()
     slug=next(iter(expected))
     raw=market(99,slug=slug); raw['_crypto_context']=expected[slug]
     cached=universe.normalize_market(raw)
-    previous={'timestamp_ms':__import__('time').time_ns()//1_000_000,'markets':[cached]}
+    previous={'timestamp_ms':__import__('time').time_ns()//1_000_000,'metadata_markets':[cached],'markets':[]}
     def down(_url,_timeout): raise OSError('network unavailable')
     rows,stats=universe.discover_crypto_resilient(cfg,reg,now_s=NOW,fetcher=down,previous=previous)
     assert len(rows)==1 and rows[0]['slug']==slug
@@ -152,7 +155,7 @@ def test_resilient_discovery_uses_bounded_last_good_cache_when_both_hosts_fail()
 def test_resilient_discovery_fails_closed_after_cache_expiry():
     cfg=config(); reg=registry(); expected=universe._expected_crypto_slugs(cfg,reg,now_s=NOW)
     slug=next(iter(expected)); raw=market(100,slug=slug); raw['_crypto_context']=expected[slug]
-    previous={'timestamp_ms':1,'markets':[universe.normalize_market(raw)]}
+    previous={'timestamp_ms':1,'metadata_markets':[universe.normalize_market(raw)],'markets':[]}
     def down(_url,_timeout): raise OSError('network unavailable')
     rows,stats=universe.discover_crypto_resilient(cfg,reg,now_s=NOW,fetcher=down,previous=previous)
     assert rows==[] and stats['source_mode']=='UNAVAILABLE'

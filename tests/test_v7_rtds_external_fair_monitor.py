@@ -80,25 +80,46 @@ class MonitorTests(unittest.TestCase):
         snap=module.preferred_pm_prior_snapshot(fast,slow,code_sha="a"*40,market_id="m",now_ms=1100)
         self.assertEqual(snap["snapshot_id"],"slow")
 
-    def test_contract_refresh_accelerates_only_when_binding_no_longer_covers_now(self):
+    def test_contract_refresh_uses_central_metadata_and_never_remote_gamma(self):
         with tempfile.TemporaryDirectory() as d:
             universe = Path(d) / "universe.json"
-            universe.write_text(json.dumps({"markets": []}))
+            universe.write_text(json.dumps({"metadata_markets": [], "markets": []}))
             m = module.Monitor(Path(d), "a" * 40, universe_path=universe)
             start = 1_800_000_000
             now = start + 100
             m.active_market = {"contract_start_epoch": start}
             m.active_contract = {"verified_template": True, "rules_hash_recognized": True}
             m.last_contract_refresh_ns = now * 1_000_000_000 - 2_000_000_000
-            with mock.patch.object(module, "fetch_market_by_slug") as fetch:
-                m.refresh_contract(now * 1_000_000_000)
-            fetch.assert_not_called()
+            m.refresh_contract(now * 1_000_000_000)
+            self.assertEqual(m.active_market["contract_start_epoch"], start)
+
             rollover = start + 300
+            row = {
+                "market_id": "next", "condition_id": "condition-next",
+                "event_ids": ["event-next"], "slug": f"btc-updown-5m-{rollover}",
+                "question": "Bitcoin Up or Down - 5 Minutes",
+                "description": "This market resolves Up if the Bitcoin 60 second TWAP at the end is greater than or equal to the price at the start.",
+                "resolution_source": "https://data.chain.link/streams/btc-usd-twap-60s-streams",
+                "clob_token_ids": ["yes-next", "no-next"], "outcomes": ["Up", "Down"],
+                "accepting_orders": True, "active": True, "closed": False,
+            }
+            universe.write_text(json.dumps({"metadata_markets": [row], "markets": []}))
             m.last_contract_refresh_ns = rollover * 1_000_000_000 - 1_100_000_000
+            m.refresh_contract(rollover * 1_000_000_000)
+            self.assertEqual(m.active_market["market_id"], "next")
+            self.assertEqual(m.active_market["contract_start_epoch"], rollover)
+
+            m.last_contract_refresh_ns = (rollover + 300) * 1_000_000_000 - 1_100_000_000
             universe.write_text("{bad")
-            with mock.patch.object(module, "fetch_market_by_slug", return_value=None) as fetch:
-                m.refresh_contract(rollover * 1_000_000_000)
-            fetch.assert_called_once_with(m.gamma_url, f"btc-updown-5m-{rollover}")
+            m.refresh_contract((rollover + 300) * 1_000_000_000)
+            self.assertEqual(m.active_market, {})
+            self.assertEqual(m.active_contract, {})
+
+    def test_monitor_has_no_remote_gamma_metadata_surface(self):
+        source = (ROOT / "scripts/v7_rtds_external_fair_monitor.py").read_text(encoding="utf-8")
+        self.assertNotIn("fetch_market_by_slug", source)
+        self.assertNotIn("gamma-api.polymarket.com", source)
+        self.assertNotIn("urllib.request", source)
 
     def test_external_snapshot_rejects_future_or_wrong_sha(self):
         with tempfile.TemporaryDirectory() as d:

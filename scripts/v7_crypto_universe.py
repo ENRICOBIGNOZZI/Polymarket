@@ -172,6 +172,7 @@ def normalize_market(raw: dict[str, Any]) -> dict[str, Any] | None:
         "research_only": bool((raw.get("_crypto_context") or {}).get("research_only", False)),
         "authority": str((raw.get("_crypto_context") or {}).get("authority") or ""),
         "window_start_unix": int(_finite((raw.get("_crypto_context") or {}).get("window_start_unix"))),
+        "metadata_source": str(raw.get("_metadata_source") or "UNKNOWN"),
     }
 
 
@@ -277,12 +278,15 @@ def _expected_crypto_slugs(
         for offset in offsets:
             window_start=boundary + offset*horizon
             slug=template.format(horizon_slug=horizon_slug,window_start_unix=window_start)
+            settlement = context.get("settlement") if isinstance(context.get("settlement"), dict) else {}
             output[slug]={
                 "asset":context.get("asset"), "horizon":context.get("horizon"),
                 "horizon_seconds":horizon, "contract_family":context.get("contract_family"),
                 "settlement_semantic_hash":context.get("settlement_semantic_hash"),
                 "research_only":context.get("research_only") is True, "authority":context.get("authority"),
                 "window_start_unix":window_start,
+                "resolution_source": str(settlement.get("stream_url") or "")
+                    if context.get("settlement_mapping_verified") is True else "",
             }
     return output
 
@@ -306,8 +310,10 @@ def _clob_raw_market(raw: dict[str, Any], context: dict[str, Any]) -> dict[str, 
     value["acceptingOrders"] = raw.get("accepting_orders", raw.get("acceptingOrders", False))
     value["minOrderSize"] = raw.get("minimum_order_size")
     value["tickSize"] = raw.get("minimum_tick_size")
+    if context.get("resolution_source"):
+        value["resolutionSource"] = context["resolution_source"]
     value["_crypto_context"] = dict(context)
-    value["_metadata_source"] = "CLOB_MARKETS"
+    value["_metadata_source"] = "CLOB_MARKETS_PLUS_VERIFIED_REGISTRY"
     return value
 
 
@@ -384,7 +390,10 @@ def discover_crypto_resilient(
     previous = previous or {}
     previous_age_s=max(0.0,(time.time_ns()//1_000_000-int(previous.get("timestamp_ms") or 0))/1000.0)
     if previous_age_s <= max_cache_age:
-        for row in previous.get("markets",[]):
+        previous_rows = previous.get("metadata_markets")
+        if not isinstance(previous_rows, list):
+            previous_rows = previous.get("markets", [])
+        for row in previous_rows:
             if not isinstance(row,dict): continue
             slug=str(row.get("slug") or "")
             if slug in expected and slug not in rows_by_slug:
@@ -497,6 +506,10 @@ def build_snapshot(
         str(row.get("market_id")): str(row.get("tier"))
         for row in previous.get("markets", []) if isinstance(row, dict)
     }
+    metadata_markets = sorted(
+        [dict(row) for row in markets if isinstance(row, dict)],
+        key=lambda row: (str(row.get("slug") or ""), str(row.get("market_id") or "")),
+    )
     skip_counts: dict[str, int] = {}
     skipped: list[dict[str, str]] = []
     eligible: list[dict[str, Any]] = []
@@ -534,6 +547,13 @@ def build_snapshot(
         "raw_rows": int(discovery.get("raw_rows", 0)),
         "duplicate_rows": int(discovery.get("duplicate_rows", 0)),
         "request_retries": int(discovery.get("request_retries", 0)),
+        "missing_markets": int(discovery.get("missing_markets", 0)),
+        "clob_pages": int(discovery.get("clob_pages", 0)),
+        "clob_complete": bool(discovery.get("clob_complete", False)),
+        "clob_error_present": bool(discovery.get("clob_error")),
+        "gamma_fallback_requests": int(discovery.get("gamma_fallback_requests", 0)),
+        "gamma_fallback_errors": int(discovery.get("gamma_fallback_errors", 0)),
+        "cache_fallback_markets": int(discovery.get("cache_fallback_markets", 0)),
         "discovered_markets": len(markets),
         "eligible_markets": len(eligible),
         "skipped_markets": len(skipped),
@@ -542,6 +562,7 @@ def build_snapshot(
         "tier_counts": {name: len(values) for name, values in tiers.items()},
         "tiers": tiers,
         "membership_sha256": hashlib.sha256(membership.encode("utf-8")).hexdigest(),
+        "metadata_markets": metadata_markets,
         "markets": eligible,
         "skipped": sorted(skipped, key=lambda row: (row["reason"], row["market_id"])),
     }
@@ -569,6 +590,13 @@ def status_from_snapshot(snapshot: dict[str, Any], *, state: str = "OPERATIONAL"
         "resource_capacities": snapshot.get("resource_capacities", {}),
         "pages": snapshot.get("pages", 0),
         "request_retries": snapshot.get("request_retries", 0),
+        "missing_markets": snapshot.get("missing_markets", 0),
+        "clob_pages": snapshot.get("clob_pages", 0),
+        "clob_complete": snapshot.get("clob_complete", False),
+        "clob_error_present": snapshot.get("clob_error_present", False),
+        "gamma_fallback_requests": snapshot.get("gamma_fallback_requests", 0),
+        "gamma_fallback_errors": snapshot.get("gamma_fallback_errors", 0),
+        "cache_fallback_markets": snapshot.get("cache_fallback_markets", 0),
         "scan_duration_ms": snapshot.get("scan_duration_ms", 0.0),
         "membership_sha256": snapshot.get("membership_sha256", ""),
         "source": snapshot.get("source", "UNKNOWN"),
