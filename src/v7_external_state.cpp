@@ -129,6 +129,8 @@ bool ExternalAssetState::on_venue_event(const ExternalVenueEvent& event,
     }
     if (asset_handle_ == 0) asset_handle_ = event.asset_handle;
     auto& venue = venues_[index];
+    const std::uint8_t previous_healthy = venue.healthy;
+    const std::uint8_t previous_gap = venue.gap;
     const bool epoch_changed = venue.connection_epoch != 0
         && venue.connection_epoch != event.connection_epoch;
     if (epoch_changed) {
@@ -152,6 +154,12 @@ bool ExternalAssetState::on_venue_event(const ExternalVenueEvent& event,
         && venue.book_source_sequence > 0 && event.source_sequence <= venue.book_source_sequence) {
         return false;
     }
+    const bool composite_inputs_changed = epoch_changed
+        || event.event_type == ExternalEventType::BookTop
+        || event.event_type == ExternalEventType::Health
+        || previous_healthy != event.healthy
+        || previous_gap != event.gap;
+    if (composite_inputs_changed) composite_cache_valid_ = 0;
     if (event.gap != 0) venue.valid = 0;
     venue.connection_epoch = event.connection_epoch;
     venue.healthy = event.healthy;
@@ -243,9 +251,67 @@ bool ExternalAssetState::on_venue_event(const ExternalVenueEvent& event,
 
     std::uint32_t health_mask = 0;
     std::uint32_t fresh_count = 0;
-    const double composite = compute_composite(event.local_receive_monotonic_ns, policy,
-                                               nullptr, nullptr, nullptr, nullptr,
-                                               &health_mask, &fresh_count, nullptr);
+    double composite = 0.0;
+    bool policy_matches_cache = composite_cache_valid_ != 0
+        && cached_max_venue_age_ns_ == policy.max_venue_age_ns
+        && cached_max_composite_deviation_bps_ == policy.max_composite_deviation_bps;
+    if (policy_matches_cache) {
+        for (std::size_t i = 0; i < cached_venue_weights_.size(); ++i) {
+            if (cached_venue_weights_[i] != policy.venue_weights[i]) {
+                policy_matches_cache = false;
+                break;
+            }
+        }
+    }
+    const bool reusable_trade_composite = event.event_type == ExternalEventType::Trade
+        && !composite_inputs_changed && policy_matches_cache
+        && event.local_receive_monotonic_ns >= composite_cache_computed_at_ns_
+        && event.local_receive_monotonic_ns <= composite_cache_valid_until_ns_;
+    if (reusable_trade_composite) {
+        composite = cached_composite_;
+        health_mask = cached_health_mask_;
+        fresh_count = cached_fresh_count_;
+    } else {
+        composite = compute_composite(event.local_receive_monotonic_ns, policy,
+                                      nullptr, nullptr, nullptr, nullptr,
+                                      &health_mask, &fresh_count, nullptr);
+
+        composite_cache_valid_ = 0;
+        if (policy.max_venue_age_ns >= 0) {
+            std::int64_t valid_until = std::numeric_limits<std::int64_t>::max();
+            bool has_fresh_candidate = false;
+            for (std::size_t i = 0; i < venues_.size(); ++i) {
+                const auto& row = venues_[i];
+                const double weight = finite(policy.venue_weights[i])
+                    ? std::max(0.0, policy.venue_weights[i]) : 0.0;
+                const bool fresh = row.valid != 0 && row.healthy != 0 && row.gap == 0
+                    && row.last_book_receive_ns > 0
+                    && row.last_book_receive_ns <= event.local_receive_monotonic_ns
+                    && event.local_receive_monotonic_ns - row.last_book_receive_ns
+                        <= policy.max_venue_age_ns
+                    && finite(row.mid) && row.mid > 0.0 && finite(row.log_mid)
+                    && weight > 0.0;
+                if (!fresh) continue;
+                has_fresh_candidate = true;
+                const auto deadline = row.last_book_receive_ns
+                    > std::numeric_limits<std::int64_t>::max() - policy.max_venue_age_ns
+                    ? std::numeric_limits<std::int64_t>::max()
+                    : row.last_book_receive_ns + policy.max_venue_age_ns;
+                valid_until = std::min(valid_until, deadline);
+            }
+            if (has_fresh_candidate) {
+                cached_composite_ = composite;
+                cached_health_mask_ = health_mask;
+                cached_fresh_count_ = fresh_count;
+                composite_cache_computed_at_ns_ = event.local_receive_monotonic_ns;
+                composite_cache_valid_until_ns_ = valid_until;
+                cached_max_venue_age_ns_ = policy.max_venue_age_ns;
+                cached_max_composite_deviation_bps_ = policy.max_composite_deviation_bps;
+                cached_venue_weights_ = policy.venue_weights;
+                composite_cache_valid_ = 1;
+            }
+        }
+    }
     if (composite > 0.0 && fresh_count >= policy.min_healthy_venues) {
         if (last_composite_ > 0.0) {
             const double r = composite == last_composite_

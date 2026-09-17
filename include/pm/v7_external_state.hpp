@@ -196,6 +196,21 @@ private:
     double aggregate_ofi_ = 0.0;
     double aggregate_trade_imbalance_ = 0.0;
     double last_composite_ = 0.0;
+
+    // Trade events do not change venue mids. Cache the exact robust composite
+    // only until the earliest currently-fresh venue can age out. Any book,
+    // health/gap/epoch change invalidates it before reuse. Policy fields that
+    // affect composite membership are matched exactly.
+    double cached_composite_ = 0.0;
+    std::uint32_t cached_health_mask_ = 0;
+    std::uint32_t cached_fresh_count_ = 0;
+    std::int64_t composite_cache_computed_at_ns_ = 0;
+    std::int64_t composite_cache_valid_until_ns_ = 0;
+    std::int64_t cached_max_venue_age_ns_ = 0;
+    double cached_max_composite_deviation_bps_ = 0.0;
+    std::array<double, kVenueCount> cached_venue_weights_{};
+    std::uint8_t composite_cache_valid_ = 0;
+
     std::int64_t latest_receive_ns_ = 0;
 
     PriceSample external_cancel_binance_trade_{};
