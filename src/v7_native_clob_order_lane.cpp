@@ -1,7 +1,7 @@
 #include "pm/v7_native_clob_order_lane.hpp"
 
 #include "pm/v7_clob_http_frame.hpp"
-#include "pm/v7_clob_http_response.hpp"
+#include "pm/v7_clob_http1_response.hpp"
 #include "pm/v7_clob_order_amounts.hpp"
 #include "pm/v7_clob_order_salt.hpp"
 #include "pm/v7_clob_prepared_post.hpp"
@@ -105,7 +105,7 @@ struct NativeClobOrderLane::Impl final {
     clob_post::PreparedPostOrderBuilder buy_fok;
     clob_post::PreparedPostOrderBuilder sell_fok;
     clob::DualPersistentTlsTransport transport;
-    clob_http_response::ResponseParser response_parser{};
+    clob_transport::FixedHttp1Response response_parser{};
     bool valid = false;
 
     Impl(const NativeClobLaneConfig& config,
@@ -297,23 +297,41 @@ NativeClobSubmitResult NativeClobOrderLane::submit(
     }
 
     impl_->response_parser.reset();
-    std::array<char, 4096> read_buffer{};
-    while (!impl_->response_parser.snapshot().complete) {
-        const auto read = tls.read_some(read_buffer);
-        if (!read.ok || read.bytes == 0
-            || !impl_->response_parser.consume(
-                {read_buffer.data(), read.bytes}, read.completed_monotonic_ns)) {
+    std::int64_t response_complete_ns = 0;
+    while (!impl_->response_parser.complete()) {
+        auto writable = impl_->response_parser.writable();
+        if (writable.empty()) {
+            return fail_after_wire(oms_owner, command.client_order_id,
+                                   NativeClobSubmitReason::ResponseFailure,
+                                   write.completed_monotonic_ns);
+        }
+        const auto read = tls.read_some(writable);
+        if (!read.ok || read.bytes == 0) {
+            return fail_after_wire(oms_owner, command.client_order_id,
+                                   NativeClobSubmitReason::ResponseFailure,
+                                   write.completed_monotonic_ns);
+        }
+        const auto state = impl_->response_parser.commit(read.bytes);
+        if (state == clob_transport::Http1ResponseState::Complete) {
+            response_complete_ns = read.completed_monotonic_ns;
+            break;
+        }
+        if (state != clob_transport::Http1ResponseState::Receiving) {
             return fail_after_wire(oms_owner, command.client_order_id,
                                    NativeClobSubmitReason::ResponseFailure,
                                    write.completed_monotonic_ns);
         }
     }
-    const auto response = impl_->response_parser.snapshot();
-    out.http_status = response.status_code;
-    out.response_complete_monotonic_ns = response.complete_monotonic_ns;
+    if (response_complete_ns <= 0) {
+        return fail_after_wire(oms_owner, command.client_order_id,
+                               NativeClobSubmitReason::ResponseFailure,
+                               write.completed_monotonic_ns);
+    }
+    out.http_status = impl_->response_parser.status_code();
+    out.response_complete_monotonic_ns = response_complete_ns;
     const auto bridge_result = account_bridge.on_post_order_ack(
         command.client_order_id, impl_->response_parser.body(),
-        response.complete_monotonic_ns, routed_scratch);
+        response_complete_ns, routed_scratch);
     if (bridge_result.invalid_ack || bridge_result.identity_conflict
         || bridge_result.output_overflow || bridge_result.pending_overflow
         || bridge_result.output_count == 0) {
