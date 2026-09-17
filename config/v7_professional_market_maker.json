@@ -7,7 +7,7 @@
     "single_canonical_ledger_writer": true,
     "single_common_oms": true,
     "single_runtime_owner": true,
-    "slow_path": "python_crypto_selection_and_model_fit",
+    "slow_path": "python_crypto_selection_frozen_model_inference",
     "strategy_output": "v7_strategy_intent"
   },
   "authenticated_execution": false,

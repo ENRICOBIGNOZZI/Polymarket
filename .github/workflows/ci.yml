@@ -124,3 +124,43 @@ jobs:
           bash -n ops/update_server_v7.sh
           python3 scripts/v7_authority_contract.py
           python3 tests/test_v7_repository_shape.py
+
+  london-runtime-boundary:
+    name: london-runtime-boundary-v7
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    env:
+      VALIDATION_SHA: ${{ github.event.inputs.expected_sha || github.event.pull_request.head.sha || github.sha }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          ref: ${{ github.event.inputs.expected_sha || github.event.pull_request.head.sha || github.sha }}
+          fetch-depth: 0
+      - name: Install runtime build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential cmake pkg-config libcurl4-openssl-dev libboost-all-dev libssl-dev python3
+      - name: Build minimal London binaries
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$VALIDATION_SHA"
+          cmake -S . -B build-london -DCMAKE_BUILD_TYPE=Release -DPM_LONDON_RUNTIME_ONLY=ON -DBUILD_TESTING=OFF
+          cmake --build build-london --parallel 2
+      - name: Materialize research-free runtime bundle
+        run: |
+          set -euo pipefail
+          python3 ops/build_london_runtime_bundle.py \
+            --repository-root . --build-dir build-london \
+            --expected-sha "$VALIDATION_SHA" --output build/london-runtime
+          test "$(cat build/london-runtime/deploy/london/runtime_sha)" = "$VALIDATION_SHA"
+          test ! -e build/london-runtime/research
+          test ! -e build/london-runtime/tests
+          ! find build/london-runtime -type f | grep -Eq 'v7_(external_rich_train|external_residual_train|maker_durable_learning|pm_repricing_shadow|two_sided_complete_set_shadow|generate_economic_artifacts|profit_attribution|profit_report|economic_decision_report|lossless_data_compaction|permanent_evidence)\.py'
+          python3 - <<'PY'
+          from pathlib import Path
+          import py_compile
+          root=Path('build/london-runtime')
+          for path in root.rglob('*.py'):
+              py_compile.compile(str(path),doraise=True)
+          print('london_runtime_python_files',sum(1 for _ in root.rglob('*.py')))
+          PY

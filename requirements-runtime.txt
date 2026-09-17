@@ -1,0 +1,2 @@
+# London runtime Python entrypoints are intentionally Python-stdlib-only.
+# Native dependencies are pinned by Dockerfile.london and the Ubuntu bootstrap.

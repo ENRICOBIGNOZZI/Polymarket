@@ -1,0 +1,51 @@
+{
+  "bundle": {
+    "bytes": 10924032,
+    "files": 97,
+    "research_tree_present": false,
+    "training_files": 0
+  },
+  "candidate_parent_sha": "9aa339f0ea85cb088bc3971fe480aff3da1d9096",
+  "candidate_scope": "working_tree_based_on_candidate_parent_sha; subsequent changes after benchmark were Python/config/deploy contracts, not the C++ ingress benchmark implementation",
+  "ingress_event_driven_us": {
+    "new": {
+      "cpu_seconds": 0.059904,
+      "max": 260.25,
+      "p50": 16.25,
+      "p95": 34.375,
+      "p99": 51.75
+    },
+    "old": {
+      "cpu_seconds": 0.066463,
+      "max": 1478.0,
+      "p50": 18.333,
+      "p95": 45.5,
+      "p99": 135.917
+    },
+    "p99_reduction_percent": 61.93
+  },
+  "limitations": [
+    "Synthetic queue handoff only; does not measure venue network latency or order ACK.",
+    "Process-count reduction predicts lower contention but requires London host validation for causal production latency claims."
+  ],
+  "old_base_sha": "9cbbf72fba660a514a7e7a21338c793edd1f8aa7",
+  "paper_only": true,
+  "runtime_shape": {
+    "launcher_child_reduction_percent": 20.0,
+    "new_launcher_children": 20,
+    "new_processes": 22,
+    "old_launcher_children": 25,
+    "old_processes": 27,
+    "process_reduction_percent": 18.52,
+    "removed_from_london": [
+      "economic_artifacts",
+      "economic_evidence_loop",
+      "maker_model_learning",
+      "pm_repricing_shadow",
+      "two_sided_complete_set_shadow"
+    ]
+  },
+  "schema": "polymarket_v7_runtime_split_benchmark_v1",
+  "scope": "LOCAL_SYNTHETIC_QUEUE_HANDOFF_PLUS_STATIC_RUNTIME_SHAPE_NOT_NETWORK_OR_ORDER_ACK",
+  "timestamp_ns": 1789666101355304000
+}

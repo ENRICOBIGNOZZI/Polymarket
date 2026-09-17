@@ -1,0 +1,95 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+EXPECTED_SHA="${POLYMARKET_EXPECTED_SHA:?POLYMARKET_EXPECTED_SHA required}"
+SERVICE_USER="${POLYMARKET_SERVICE_USER:-enrico}"
+SOURCE_DIR="${POLYMARKET_APP_DIR:-/home/$SERVICE_USER/polymarket}"
+RUNTIME_ROOT="${POLYMARKET_RUNTIME_ROOT:-/home/$SERVICE_USER/polymarket-runtime}"
+RUNTIME_CURRENT="$RUNTIME_ROOT/current"
+TARGET_RUNTIME="$RUNTIME_ROOT/by-sha/$EXPECTED_SHA"
+ARTIFACT_ROOT="${POLYMARKET_ARTIFACT_ROOT:-/home/$SERVICE_USER/polymarket-artifacts}"
+RUN_ROOT="${PM_V7_RUN_ROOT:-/home/$SERVICE_USER/polymarket-runs/paper_v7_london}"
+ARCHIVE_ROOT="${PM_V7_ARCHIVE_ROOT:-/home/$SERVICE_USER/polymarket-runs/paper_v7_london_archives}"
+
+[[ "$EXPECTED_SHA" =~ ^[0-9a-f]{40}$ ]] || { echo "exact SHA required" >&2; exit 78; }
+[[ "$(uname -s)" == Linux ]] || { echo "London cutover requires Linux" >&2; exit 78; }
+[[ -f "$TARGET_RUNTIME/deploy/london/runtime_sha" ]] || { echo "staged runtime bundle missing" >&2; exit 66; }
+[[ "$(cat "$TARGET_RUNTIME/deploy/london/runtime_sha")" == "$EXPECTED_SHA" ]] || { echo "staged runtime bundle SHA mismatch" >&2; exit 66; }
+[[ ! -e "$TARGET_RUNTIME/research" && ! -e "$TARGET_RUNTIME/tests" ]] || { echo "forbidden tree present in staged runtime" >&2; exit 66; }
+
+python3 - "$ARTIFACT_ROOT/current/manifest.json" "$EXPECTED_SHA" <<'PY'
+import json,sys
+from pathlib import Path
+p=Path(sys.argv[1]); sha=sys.argv[2]
+if not p.is_file(): raise SystemExit('runtime artifact bundle missing')
+v=json.loads(p.read_text())
+assert v.get('schema')=='polymarket_v7_runtime_artifact_bundle_v1'
+assert v.get('paper_only') is True and v.get('authenticated_execution') is False and v.get('real_order_submission') is False
+assert v.get('target_model_sha')==sha
+assert v.get('runtime_training') is False
+print('artifact_gate=ready')
+PY
+
+# Stop old generation before archive; never copy its ledger into the new run.
+sudo systemctl stop polymarket-v7-exporter.service polymarket-v7-paper.service >/dev/null 2>&1 || true
+python3 "$SOURCE_DIR/scripts/v7_prepare_cutover_run_root.py" \
+  --run-root "$RUN_ROOT" --archive-root "$ARCHIVE_ROOT" \
+  --repository-root "$SOURCE_DIR" --target-sha "$EXPECTED_SHA"
+install -d -o "$SERVICE_USER" -g "$(id -gn "$SERVICE_USER")" "$RUN_ROOT/control"
+
+# Atomic release pointer switch happens only after the model-artifact gate and old-generation archive.
+ln -sfn "by-sha/$EXPECTED_SHA" "$RUNTIME_CURRENT"
+[[ "$(cat "$RUNTIME_CURRENT/deploy/london/runtime_sha")" == "$EXPECTED_SHA" ]]
+SERVICE_GROUP="$(id -gn "$SERVICE_USER")"
+render_unit(){
+  local source="$1" destination="$2"
+  python3 - "$source" "$destination" "$SERVICE_USER" "$SERVICE_GROUP" "$RUNTIME_CURRENT" "$RUN_ROOT" "$EXPECTED_SHA" <<'PYUNIT'
+import os,sys
+from pathlib import Path
+source,destination,user,group,app,run,sha=sys.argv[1:]
+payload=Path(source).read_text()
+for k,v in {'@SERVICE_USER@':user,'@SERVICE_GROUP@':group,'@APP_DIR@':app,'@RUN_ROOT@':run,'@EXPECTED_SHA@':sha}.items(): payload=payload.replace(k,v)
+if '@' in payload: raise SystemExit('unrendered systemd marker')
+t=Path(destination+'.tmp');t.write_text(payload);os.chmod(t,0o644);os.replace(t,destination)
+PYUNIT
+}
+for name in polymarket-v7-paper.service polymarket-v7-exporter.service polymarket-v7-retention.service polymarket-v7-retention.timer; do
+  tmp="$(mktemp)"; render_unit "$TARGET_RUNTIME/ops/systemd/$name.in" "$tmp"; sudo install -m 0644 "$tmp" "/etc/systemd/system/$name"; rm -f "$tmp"
+done
+
+sudo systemctl daemon-reload
+sudo systemctl enable --now polymarket-v7-paper.service polymarket-v7-exporter.service polymarket-v7-retention.timer
+
+ready=0
+for _ in $(seq 1 "${POLYMARKET_RUNTIME_HEALTH_ATTEMPTS:-240}"); do
+  if python3 - "$RUN_ROOT" "$EXPECTED_SHA" <<'PY' >/dev/null 2>&1
+import json,os,sys,time
+from pathlib import Path
+root=Path(sys.argv[1]); sha=sys.argv[2]
+r=json.loads((root/'control/runtime_status.json').read_text())
+a=json.loads((root/'control/runtime_artifact_receipt.json').read_text())
+p=json.loads((root/'control/runtime_resource_plan.json').read_text())
+assert r.get('state')=='running' and r.get('model_sha')==sha
+assert r.get('paper_only') is True and r.get('authenticated_execution') is False and r.get('real_order_submission') is False
+assert set(r.get('economic_engines') or [])=={'CRYPTO_SETTLEMENT_ENGINE'}
+assert a.get('target_model_sha')==sha and a.get('runtime_training') is False
+assert p.get('runtime_training') is False and p.get('retrospective_analytics') is False
+pid=int(r.get('pid') or 0); assert pid>0; os.kill(pid,0)
+assert int(time.time())-int(r.get('timestamp') or 0)<=30
+PY
+  then
+    if curl -fsS http://127.0.0.1:9108/healthz >/dev/null 2>&1; then ready=1; break; fi
+  fi
+  sleep 1
+done
+[[ "$ready" == 1 ]] || { echo "London PAPER runtime health gate failed" >&2; exit 70; }
+
+# Explicitly prove no research/training process is resident on London.
+if pgrep -af 'v7_(external_rich_train|external_residual_train|maker_durable_learning|pm_repricing_shadow|two_sided_complete_set_shadow|generate_economic_artifacts|profit_attribution|profit_report|economic_decision_report|lossless_data_compaction|permanent_evidence)\.py' >/tmp/polymarket-v7-forbidden-processes 2>/dev/null; then
+  cat /tmp/polymarket-v7-forbidden-processes >&2
+  rm -f /tmp/polymarket-v7-forbidden-processes
+  echo "forbidden research process active on London" >&2
+  exit 71
+fi
+rm -f /tmp/polymarket-v7-forbidden-processes
+printf 'cutover_result=success\nsha=%s\nruntime=%s\nrun_root=%s\n' "$EXPECTED_SHA" "$RUNTIME_CURRENT" "$RUN_ROOT"

@@ -144,14 +144,17 @@ class RichModelTests(unittest.TestCase):
         status['fair']['pm_mid']=.50;status['fair']['pm_mid_receive_ts_ms']=1
         self.assertEqual(m.router.paper_probe_candidates(status,books,policy['taker'],probes),[])
 
-    def test_runtime_is_inference_only_unless_explicit_freeze_is_requested(self):
-        config=json.loads((Path(__file__).resolve().parents[1]/'config/v7_external_fair.json').read_text())
+    def test_runtime_is_strictly_inference_only_and_research_build_owns_training(self):
+        root=Path(__file__).resolve().parents[1]
+        config=json.loads((root/'config/v7_external_fair.json').read_text())
         ml=config['paper_ml_probe']
         self.assertFalse(ml['runtime_training']);self.assertTrue(ml['inference_only_runtime'])
         self.assertEqual(ml['training_lifecycle'],'EXPLICIT_FROZEN_ARTIFACT_ONLY')
-        launcher=(Path(__file__).resolve().parents[1]/'scripts/paper_v7_execution_loop.sh').read_text()
-        guard='if [[ "${PM_V7_FREEZE_RICH_MODEL:-0}" == "1" ]]; then'
-        self.assertIn(guard,launcher)
+        launcher=(root/'scripts/paper_v7_execution_loop.sh').read_text()
+        research=(root/'research/build_runtime_artifacts.sh').read_text()
+        self.assertNotIn('PM_V7_FREEZE_RICH_MODEL',launcher)
+        self.assertNotIn('v7_external_rich_train.py',launcher)
+        self.assertIn('v7_external_rich_train.py',research)
         self.assertIn('{"state":"INFERENCE_ONLY","runtime_training":false}',launcher)
 
     def test_liquidation_rates_are_receive_time_causal_and_reset_safe(self):

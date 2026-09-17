@@ -1,0 +1,24 @@
+{
+  "schema": "polymarket_v7_runtime_profile_v1",
+  "version": 1,
+  "name": "london-paper",
+  "paper_only": true,
+  "execution_mode": "PAPER_SIMULATED",
+  "authenticated_execution": false,
+  "real_order_submission": false,
+  "paths": {
+    "CONFIG": "config/paper_v7.json",
+    "MAKER_POLICY": "config/v7_professional_market_maker.json",
+    "EXTERNAL_FAIR_POLICY": "config/v7_external_fair.json",
+    "LEAD_LAG_TAKER_CONFIG": "config/v7_lead_lag_taker_v1.json",
+    "CRYPTO_EXECUTION_ALPHA_CONFIG": "config/v7_crypto_execution_alpha.json",
+    "EXTERNAL_SOURCE_REGISTRY": "config/v7_external_source_registry.json",
+    "LIVE_MODEL_SCOPE": "config/v7_live_model_scope.json",
+    "CRYPTO_SETTLEMENT_ENGINE_POLICY": "config/v7_crypto_settlement_engine.json",
+    "CRYPTO_SETTLEMENT_MARKET_REGISTRY": "config/v7_crypto_settlement_markets.json",
+    "CRYPTO_SETTLEMENT_MODEL_REGISTRY": "config/v7_crypto_settlement_model_registry.json",
+    "LONDON_BUFFER_RETENTION_CONFIG": "config/v7_london_buffer_retention.json",
+    "CRYPTO_UNIVERSE_CONFIG": "config/v7_crypto_universe.json",
+    "RUNTIME_RESOURCE_CONFIG": "config/v7_runtime_resources.json"
+  }
+}

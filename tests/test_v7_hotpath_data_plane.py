@@ -21,7 +21,7 @@ def test_repricing_book_observer_is_fair_only_and_persistent_across_maker_rotati
     assert '--output-dir "$RUN_ROOT/research/repricing_book" --fair-only' in loop
     assert '--book-tape "$RUN_ROOT/research/repricing_book/book_observations/current.jsonl"' in loop
     assert '--book-status "$RUN_ROOT/research/repricing_book/fillability_ws_status.json"' in loop
-    assert 'v7_assert_registered_child_count 25' in loop
+    assert 'v7_assert_registered_child_count 20' in loop
 
 
 def test_lineage_invalidation_is_instrumented_without_relaxing_fail_closed_rules():
@@ -38,9 +38,9 @@ def test_lineage_invalidation_is_instrumented_without_relaxing_fail_closed_rules
     assert '++result.price_change_without_lineage;' in decoder
 
 
-def test_retrospective_analytics_are_serialized_and_backgrounded():
+def test_retrospective_analytics_are_off_london_and_complete_on_research_plane():
     loop = (ROOT / 'scripts/paper_v7_execution_loop.sh').read_text()
-    helper = (ROOT / 'scripts/v7_serialized_analytics.py').read_text()
+    research = (ROOT / 'research/run_offline_analytics.sh').read_text()
     heavy = (
         'v7_generate_economic_artifacts.py', 'v7_profit_attribution.py',
         'v7_profit_report.py', 'v7_fast_cancel_latency_report.py',
@@ -48,15 +48,10 @@ def test_retrospective_analytics_are_serialized_and_backgrounded():
         'v7_lossless_data_compaction.py', 'v7_permanent_evidence.py',
         'v7_joint_execution_policy.py', 'v7_learned_execution_model.py',
     )
-    assert 'v7_background_analytics()' in loop
-    assert '/usr/sbin/taskpolicy -b nice -n 10 python3 scripts/v7_serialized_analytics.py' in loop
-    assert '--lock "$RUN_ROOT/control/analytics.lock"' in loop
     for script in heavy:
-        assert f'v7_background_analytics python3 scripts/{script}' in loop
-    assert 'fcntl.flock(handle.fileno(), fcntl.LOCK_EX)' in helper
-    assert 'DEFERRED_RESOURCE_PRESSURE' in helper
-    assert 'os.getloadavg()' in helper
-    assert 'v7_background_analytics python3 scripts/v7_canonical_economics.py' not in loop
+        assert script not in loop
+        assert f'scripts/{script}' in research
+    assert 'v7_canonical_economics.py' in loop  # lightweight health/PnL reconciliation only
 
 
 def test_router_maintenance_failure_is_fail_closed():
