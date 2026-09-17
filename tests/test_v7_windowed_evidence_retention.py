@@ -141,7 +141,7 @@ class WindowedRetentionTest(unittest.TestCase):
             self.assertEqual(receipt['parent_tombstone_sha256'],hashlib.sha256(canonical(tomb)).hexdigest())
             self.assertEqual(out['removed_packs'],1)
 
-    def test_existing_tombstone_cannot_expand_to_new_alias(self):
+    def test_existing_tombstone_appends_new_alias_provenance(self):
         import hashlib
         with tempfile.TemporaryDirectory() as tmp:
             runs=Path(tmp)/'runs';store=runs/'paper_v7_durable/permanent_evidence/store';old=time.time_ns()-8*3600*10**9
@@ -157,9 +157,13 @@ class WindowedRetentionTest(unittest.TestCase):
                   'pack_sha256':sha,'source_aliases':[str(a1)],'source_families':['pm_causal_book'],
                   'object_sha256s':[],'manifest_sha256s':[man.stem],'retired_at_ns':old,'cutoff_ns':old-1}
             immutable(store/'windowed_pack_tombstones'/(sha+'.json'),canonical(tomb))
-            with self.assertRaisesRegex(ValueError,'identity expanded'):
-                run(runs,raw_detail_seconds=6*3600,maximum_seconds=30)
-            self.assertTrue(pack.exists());self.assertTrue(man.exists())
+            out=run(runs,raw_detail_seconds=6*3600,maximum_seconds=30)
+            self.assertFalse(pack.exists());self.assertFalse(man.exists())
+            receipts=list((store/'windowed_pack_resume_receipts').glob('*/*.json'))
+            self.assertEqual(len(receipts),1)
+            receipt=json.loads(receipts[0].read_text())
+            self.assertEqual(receipt['added_source_aliases'],[str(a2)])
+            self.assertEqual(out['removed_packs'],1)
 
 
 if __name__=='__main__':unittest.main()
