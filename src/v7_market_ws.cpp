@@ -313,7 +313,7 @@ struct MarketWsShard::Impl {
     }
 
     void emit(MarketWsFrameResult& result, std::span<MarketWsEvent> output,
-              MarketWsEvent event) noexcept {
+              const MarketWsEvent& event) noexcept {
         if (result.output_count >= output.size()) {
             result.output_overflow = 1;
             return;
