@@ -133,7 +133,7 @@ def safe_status(path:Path,sha:str)->dict[str,Any]:
 
 def launch(supervisor:Supervisor,asset_config:dict[str,Any])->None:
     root=supervisor.repository_root; run_root=supervisor.run_root; sha=supervisor.expected_sha; p=supervisor.policy
-    for directory in ("external","book","labelbook","compact_labels","research","control"): (run_root/directory).mkdir(parents=True,exist_ok=True)
+    for directory in ("external","book","labelbook","compact_labels","research","control","contract_state"): (run_root/directory).mkdir(parents=True,exist_ok=True)
     selections=refresh_discovery(root,run_root,sha,int(p["discovery_windows"])); supervisor.discovery_updates+=1; supervisor.last_discovery=time.monotonic()
     proxy_port=int(p["public_proxy_port"]); proxy_host=str(p["public_proxy_host"]); ensure_port_free(proxy_host,proxy_port)
     supervisor.start("public_https_proxy",[sys.executable,str(root/"scripts/v7_public_https_proxy.py"),"--host",proxy_host,"--port",str(proxy_port)])
@@ -147,7 +147,9 @@ def launch(supervisor:Supervisor,asset_config:dict[str,Any])->None:
     common=[str(book_binary),"--config",str(root/"config/paper_v7.json"),"--selection-only","--state-only","--state-publish-ms",str(int(p["state_publish_ms"])),"--model-sha",sha]
     supervisor.start("pm_book_hub",common+["--selection",str(run_root/"selection.json"),"--output-dir",str(run_root/"book")],env=book_env)
     supervisor.start("pm_label_hub",common+["--selection",str(run_root/"active_selection.json"),"--compact-label-tape-dir",str(run_root/"compact_labels"),"--output-dir",str(run_root/"labelbook")],env=book_env)
-    features=run_root/"features.json"; feature_command=[sys.executable,str(root/"scripts/v7_multi_crypto_feature_engine.py"),"--oracle-status",str(run_root/"oracle.json"),"--selection",str(run_root/"selection.json"),"--book-features-dir",str(run_root/"book/book_features"),"--output",str(features),"--model-sha",sha,"--loop","--interval-ms",str(int(p["feature_interval_ms"]))]
+    contract_state=run_root/"contract_state/current.json"
+    supervisor.start("contract_state",[sys.executable,str(root/"scripts/v7_multi_crypto_contract_state.py"),"--selection",str(run_root/"selection.json"),"--oracle-status",str(run_root/"oracle.json"),"--book-features-dir",str(run_root/"book/book_features"),"--output",str(contract_state),"--model-sha",sha,"--loop","--interval-ms",str(int(p["feature_interval_ms"]))])
+    features=run_root/"features.json"; feature_command=[sys.executable,str(root/"scripts/v7_multi_crypto_feature_engine.py"),"--oracle-status",str(run_root/"oracle.json"),"--selection",str(run_root/"selection.json"),"--book-features-dir",str(run_root/"book/book_features"),"--contract-state",str(contract_state),"--output",str(features),"--model-sha",sha,"--loop","--interval-ms",str(int(p["feature_interval_ms"]))]
     for asset in ASSETS:feature_command += ["--external",f"{asset}={run_root/'external'/f'{asset}.json'}"]
     supervisor.start("feature_engine",feature_command)
     supervisor.start("feature_tape",[sys.executable,str(root/"scripts/v7_multi_crypto_feature_tape.py"),"--snapshot",str(features),"--output",str(run_root/"research/features.jsonl"),"--status",str(run_root/"research/feature_tape_status.json"),"--model-sha",sha,"--poll-ms",str(int(p["feature_interval_ms"])),"--minimum-interval-ms",str(int(p["feature_tape_minimum_interval_ms"])),"--segment-mb",str(int(p["feature_tape_segment_mb"]))])
@@ -159,10 +161,11 @@ def runtime_status(supervisor:Supervisor)->dict[str,Any]:
     root=supervisor.run_root; sha=supervisor.expected_sha
     external={asset:safe_status(root/"external"/f"{asset}.json",sha) for asset in ASSETS}
     oracle=safe_status(root/"oracle.json",sha); book=safe_status(root/"book/fillability_ws_status.json",sha); label=safe_status(root/"labelbook/fillability_ws_status.json",sha)
-    features=safe_status(root/"features.json",sha); tape=safe_status(root/"research/feature_tape_status.json",sha)
+    contract=safe_status(root/"contract_state/current.json",sha); features=safe_status(root/"features.json",sha); tape=safe_status(root/"research/feature_tape_status.json",sha)
     external_ready=sum(int(v.get("valid") is True) for v in external.values()); all_children=all(c.process.poll() is None for c in supervisor.children.values())
-    state="RUNNING_SHADOW" if all_children and external_ready==6 and oracle.get("all_assets_fresh") is True and book.get("evidence_complete") is True and label.get("evidence_complete") is True else "WARMING_OR_DEGRADED"
-    return {"schema":"polymarket_v7_multi_crypto_shadow_runtime_status_v1","timestamp_ns":time.time_ns(),"started_at_ns":supervisor.started_ns,"code_sha":sha,"paper_only":True,"authenticated_execution":False,"real_order_submission":False,"real_capital_at_risk":False,"execution_authority":False,"automatic_promotion":False,"state":state,"children":supervisor.child_status(),"external_ready_assets":external_ready,"oracle_healthy_assets":int(oracle.get("healthy_assets") or 0),"book_evidence_complete":book.get("evidence_complete") is True,"label_evidence_complete":label.get("evidence_complete") is True,"feature_state":features.get("state"),"feature_tape_emitted":int(tape.get("emitted") or 0),"discovery_updates":supervisor.discovery_updates,"discovery_error":supervisor.discovery_error}
+    contract_ready=contract.get("all_active_ready") is True and int(contract.get("active_markets") or 0)>0
+    state="RUNNING_SHADOW" if all_children and external_ready==6 and oracle.get("all_assets_fresh") is True and book.get("evidence_complete") is True and label.get("evidence_complete") is True and contract_ready else "WARMING_OR_DEGRADED"
+    return {"schema":"polymarket_v7_multi_crypto_shadow_runtime_status_v1","timestamp_ns":time.time_ns(),"started_at_ns":supervisor.started_ns,"code_sha":sha,"paper_only":True,"authenticated_execution":False,"real_order_submission":False,"real_capital_at_risk":False,"execution_authority":False,"automatic_promotion":False,"state":state,"children":supervisor.child_status(),"external_ready_assets":external_ready,"oracle_healthy_assets":int(oracle.get("healthy_assets") or 0),"book_evidence_complete":book.get("evidence_complete") is True,"label_evidence_complete":label.get("evidence_complete") is True,"contract_active_markets":int(contract.get("active_markets") or 0),"contract_active_ready_markets":int(contract.get("active_ready_markets") or 0),"contract_all_active_ready":contract_ready,"feature_state":features.get("state"),"feature_tape_emitted":int(tape.get("emitted") or 0),"discovery_updates":supervisor.discovery_updates,"discovery_error":supervisor.discovery_error}
 
 def run(supervisor:Supervisor,asset_config:dict[str,Any],duration_seconds:int)->None:
     launch(supervisor,asset_config); start=time.monotonic(); last_status=0.0
@@ -191,11 +194,11 @@ def run(supervisor:Supervisor,asset_config:dict[str,Any],duration_seconds:int)->
 def preflight(root:Path,build_dir:Path,sha:str,policy:dict[str,Any],asset_config:dict[str,Any])->dict[str,Any]:
     if git_head(root)!=sha:raise ValueError("shadow runtime checkout SHA mismatch")
     ext=build_dir/"polymarket_v7_external_venue_runtime"; book=build_dir/"polymarket_v7_maker_fillability_observer"
-    required=[ext,book,root/"scripts/v7_multi_crypto_discovery.py",root/"scripts/v7_multi_crypto_book_selection.py",root/"scripts/v7_multi_crypto_oracle_hub.py",root/"scripts/v7_multi_crypto_feature_engine.py",root/"scripts/v7_multi_crypto_feature_tape.py"]
+    required=[ext,book,root/"scripts/v7_multi_crypto_discovery.py",root/"scripts/v7_multi_crypto_book_selection.py",root/"scripts/v7_multi_crypto_oracle_hub.py",root/"scripts/v7_multi_crypto_contract_state.py",root/"scripts/v7_multi_crypto_feature_engine.py",root/"scripts/v7_multi_crypto_feature_tape.py"]
     missing=[str(p) for p in required if not p.exists()]
     if missing:raise ValueError("shadow runtime missing artifacts: "+",".join(missing))
     commands=external_commands(asset_config,ext,Path("<RUN_ROOT>"),sha)
-    return {"schema":"polymarket_v7_multi_crypto_shadow_preflight_v1","code_sha":sha,"paper_only":True,"authenticated_execution":False,"real_order_submission":False,"execution_authority":False,"automatic_promotion":False,"components":["public_https_proxy"]+[f"external_{a.lower()}" for a in ASSETS]+["oracle_hub","pm_book_hub","pm_label_hub","feature_engine","feature_tape"],"external_commands":commands,"policy":policy}
+    return {"schema":"polymarket_v7_multi_crypto_shadow_preflight_v1","code_sha":sha,"paper_only":True,"authenticated_execution":False,"real_order_submission":False,"execution_authority":False,"automatic_promotion":False,"components":["public_https_proxy"]+[f"external_{a.lower()}" for a in ASSETS]+["oracle_hub","pm_book_hub","pm_label_hub","contract_state","feature_engine","feature_tape"],"external_commands":commands,"policy":policy}
 
 
 def main()->int:

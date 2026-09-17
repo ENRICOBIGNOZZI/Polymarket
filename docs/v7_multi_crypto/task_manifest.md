@@ -2,8 +2,8 @@
 
 | Milestone | State | Gate / current fact |
 |---|---|---|
-| M0 Audit and integrity | IN_PROGRESS | Runtime identity and frozen BTC verified; deeper ledger-history recovery audit still pending. |
-| M1 Core common | IN_PROGRESS | Six-asset venue factory, typed settlement contexts, dynamic rules discovery and capability registry implemented; full ContractState/OracleHub integration still pending. |
+| M0 Audit and integrity | VERIFIED | Frozen BTC identity verified. Canonical ledger audit: 1,203 records, 401/401 terminal orders, zero open orders, exact FILL↔FINAL matching, empty spool; recovery/reconciliation tests pass. |
+| M1 Core common | VERIFIED_SHADOW | Six-asset venue factory, typed settlement contexts, dynamic rules discovery and capability registry are integrated through a causal ContractState binding rules/token identity, OracleHub reference and PM BookHub; FeatureEngine consumes the gate. Zero authority. |
 | M2 Data plane | VERIFIED_SHADOW | Multi-venue feeds, six-asset OracleHub, state-only PM BookHub/label hub, unified FeatureEngine and single zero-authority shadow supervisor are exact-SHA verified. Not deployed to canonical runtime. |
 | M3 Execution/accounting | NOT_STARTED | Must retain one global coordinator/execution owner/ledger. |
 | M4 Speed | IN_PROGRESS | Exact compact PM v2 replay measures L1 FAK/no-chase latency and size mechanics over 0–1000 ms and 5–500 shares. Economic value remains blocked until a calibrated signal/cost model exists. |

@@ -182,6 +182,7 @@ class FeatureEngine:
     def build(
         self, *, external: dict[str, dict[str, Any]], oracle: dict[str, Any],
         selection: dict[str, Any], book_dir: Path, model_sha: str, now_ns: int,
+        contract_state: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         if set(external) != set(ASSETS):
             raise ValueError("all six external asset states are required")
@@ -192,6 +193,18 @@ class FeatureEngine:
                 or not safe_source(selection) or selection.get("execution_authority") is not False
                 or selection.get("model_sha") != model_sha):
             raise ValueError("book selection authority/identity invalid")
+        contract_by_market: dict[str, dict[str, Any]] = {}
+        contract_state_bound = contract_state is not None
+        if contract_state_bound:
+            assert contract_state is not None
+            if (contract_state.get("schema") != "polymarket_v7_multi_crypto_contract_state_v1"
+                    or not safe_source(contract_state) or contract_state.get("execution_authority") is not False
+                    or contract_state.get("model_sha") != model_sha):
+                raise ValueError("contract state authority/identity invalid")
+            raw_contracts = contract_state.get("markets")
+            if not isinstance(raw_contracts, list):
+                raise ValueError("contract state markets missing")
+            contract_by_market = {str(row.get("market_id") or ""): row for row in raw_contracts if isinstance(row, dict)}
         markets = selection.get("markets") if isinstance(selection.get("markets"), list) else []
         # Freeze one coherent PM-book cut before assigning the decision timestamp.
         # A book file may advance while the feature loop is reading it; stamping
@@ -290,6 +303,15 @@ class FeatureEngine:
             end_ns = parse_utc_ns(market.get("end_timestamp"))
             tte = max(0.0, (end_ns - decision_ns) / 1e9) if end_ns > 0 else None
             active_now = bool(start_ns > 0 and end_ns > start_ns and start_ns <= decision_ns < end_ns)
+            contract_row = contract_by_market.get(market_id, {}) if contract_state_bound else {}
+            contract_state_state = str(contract_row.get("state") or "") if contract_state_bound else "UNBOUND"
+            contract_state_hash = str(contract_row.get("contract_state_hash") or "") if contract_state_bound else None
+            contract_state_ready = (not contract_state_bound) or (not active_now) or bool(
+                contract_state_state == "ACTIVE_READY_SHADOW"
+                and len(str(contract_state_hash or "")) == 64
+                and contract_row.get("entry_authority") is False
+                and int(contract_row.get("available_at_ns") or 0) <= decision_ns
+            )
             leader_features: dict[str, Any] = {}
             for leader, follower in self.policy.get("cross_crypto_graph") or []:
                 if follower == asset and leader in external_features:
@@ -328,6 +350,8 @@ class FeatureEngine:
                 blockers.append("PM_BOOK_INVALID_OR_STALE")
             if not reference_valid:
                 blockers.append("MISSING_OR_MISMATCHED_REFERENCE")
+            if not contract_state_ready:
+                blockers.append("CONTRACT_STATE_NOT_READY")
             source_versions = {
                 "external_state_version": int(external_features[asset]["state_version"]),
                 "external_timestamp_ns": int(external[asset].get("timestamp_ns") or 0),
@@ -341,6 +365,7 @@ class FeatureEngine:
                 "reference_source_timestamp_ms": int(reference.get("source_timestamp_ms") or 0),
                 "reference_captured_at_ms": reference_capture_ms,
                 "selection_generated_at_ms": int(selection.get("generated_at_ms") or 0),
+                "contract_state_available_at_ns": int(contract_row.get("available_at_ns") or 0) if contract_state_bound else 0,
             }
             availability_candidates = [
                 source_versions["external_timestamp_ns"], source_versions["oracle_receive_wall_ns"],
@@ -348,6 +373,7 @@ class FeatureEngine:
                 int(no.get("receive_wall_ms") or 0) * 1_000_000,
                 source_versions["reference_captured_at_ms"] * 1_000_000,
                 source_versions["selection_generated_at_ms"] * 1_000_000,
+                source_versions["contract_state_available_at_ns"],
             ]
             available_at_ns = max(availability_candidates) if availability_candidates else 0
             if available_at_ns <= 0 or available_at_ns > decision_ns:
@@ -373,6 +399,9 @@ class FeatureEngine:
                 "source_versions": source_versions,
                 "source_identity_hash": source_identity_hash,
                 "available_at_ns": available_at_ns,
+                "contract_state_bound": contract_state_bound,
+                "contract_state_state": contract_state_state,
+                "contract_state_hash": contract_state_hash,
                 "pm_book_valid": book_valid,
                 "pm_yes_age_ms": yes_age_ms,
                 "pm_no_age_ms": no_age_ms,
@@ -411,6 +440,7 @@ class FeatureEngine:
             "policy_hash": self.policy_hash,
             "feature_schema_version": FEATURE_SCHEMA_VERSION,
             "feature_schema_hash": FEATURE_SCHEMA_HASH,
+            "contract_state_bound": contract_state_bound,
             "market_count": len(rows),
             "fresh_external_assets": sum(int(external_features[a]["fresh"]) for a in ASSETS),
             "ready_for_calibration_markets": sum(
@@ -439,6 +469,7 @@ def main() -> int:
     parser.add_argument("--oracle-status", type=Path, required=True)
     parser.add_argument("--selection", type=Path, required=True)
     parser.add_argument("--book-features-dir", type=Path, required=True)
+    parser.add_argument("--contract-state", type=Path)
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--model-sha", required=True)
     parser.add_argument("--loop", action="store_true")
@@ -457,7 +488,8 @@ def main() -> int:
             value = engine.build(
                 external={asset: load(path) for asset, path in paths.items()},
                 oracle=load(args.oracle_status), selection=load(args.selection),
-                book_dir=args.book_features_dir, model_sha=args.model_sha, now_ns=now_ns)
+                book_dir=args.book_features_dir, model_sha=args.model_sha, now_ns=now_ns,
+                contract_state=load(args.contract_state) if args.contract_state else None)
             value["state"] = "RUNNING_SHADOW"
             value["runtime_blockers"] = []
         except ValueError as error:
@@ -470,6 +502,7 @@ def main() -> int:
                 "policy_mode": engine.policy["mode"], "policy_hash": engine.policy_hash,
                 "feature_schema_version": FEATURE_SCHEMA_VERSION,
                 "feature_schema_hash": FEATURE_SCHEMA_HASH,
+                "contract_state_bound": args.contract_state is not None,
                 "market_count": 0, "fresh_external_assets": 0,
                 "ready_for_calibration_markets": 0, "markets": [],
                 "runtime_blockers": [str(error)],

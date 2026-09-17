@@ -194,6 +194,26 @@ def test_runtime_main_has_fail_closed_warmup_contract() -> None:
     assert 'execution_authority": False' in source
 
 
+
+
+def test_contract_state_gate_blocks_active_market_when_bound_not_ready() -> None:
+    with tempfile.TemporaryDirectory() as tmp:
+        d=Path(tmp); write_books(d)
+        contract={
+            'schema':'polymarket_v7_multi_crypto_contract_state_v1','model_sha':SHA,
+            'paper_only':True,'authenticated_execution':False,'real_order_submission':False,
+            'execution_authority':False,'markets':[{'market_id':'m1','state':'ACTIVE_BLOCKED',
+                'entry_authority':False,'available_at_ns':NOW-1,'contract_state_hash':'e'*64}]
+        }
+        engine=FeatureEngine(policy())
+        out=engine.build(external=all_external(),oracle=oracle(),selection=selection(),book_dir=d,
+                         model_sha=SHA,now_ns=NOW,contract_state=contract)
+        row=out['markets'][0]
+        assert row['contract_state_bound'] is True
+        assert row['contract_state_state']=='ACTIVE_BLOCKED'
+        assert 'CONTRACT_STATE_NOT_READY' in row['blockers']
+        assert out['ready_for_calibration_markets']==0
+
 if __name__ == '__main__':
     tests = sorted((n, f) for n, f in globals().items() if n.startswith('test_') and callable(f))
     for _, fn in tests: fn()

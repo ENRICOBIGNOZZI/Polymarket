@@ -33,7 +33,7 @@ def test_runtime_source_has_no_execution_or_ledger_owner():
     source=(ROOT/'scripts/v7_multi_crypto_shadow_runtime.py').read_text()
     forbidden=('v7_global_portfolio_coordinator','v7_execution_ledger','v7_lead_lag_taker_runtime','authorized_maker_paper_executor','real_order_submission=true')
     assert all(term not in source for term in forbidden)
-    for role in ('oracle_hub','pm_book_hub','pm_label_hub','feature_engine','feature_tape'):assert role in source
+    for role in ('oracle_hub','pm_book_hub','pm_label_hub','contract_state','feature_engine','feature_tape'):assert role in source
 
 def test_config_requires_compact_label_tape_and_loopback_proxy():
     p=policy(); assert p['compact_label_tape'] is True and p['public_proxy_host']=='127.0.0.1'
