@@ -19,6 +19,8 @@ def test_parse_ena_coalescing() -> None:
         "adaptive_rx": "off", "adaptive_tx": "off",
         "rx_usecs": 20, "tx_usecs": 64,
     }
+    ena = module.parse_coalesce("Coalesce parameters for enp39s0:\nAdaptive RX: on  TX: n/a\nrx-usecs:\t20\ntx-usecs:\t64\n")
+    assert ena["adaptive_rx"] == "on" and ena["adaptive_tx"] == "n/a"
 
 
 def test_parse_real_ena_coalescing_with_tx_na() -> None:
