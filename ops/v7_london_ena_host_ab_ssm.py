@@ -8,7 +8,9 @@ import shlex
 import time
 from pathlib import Path
 from typing import Any
+import sys
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
 from v7_london_ssm_benchmark import aws_json, send, stack_instances, wait_one
 
 
