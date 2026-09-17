@@ -46,6 +46,22 @@ HISTORICAL_FALSE_POSITIVE_EXEMPTIONS = frozenset({
         "docs/MONITORING.md",
         "b99287842e904a30",
     ),
+    # Historical loopback-only native-order test fixtures. The same synthetic
+    # API identifier was used only with localhost TLS test drivers; no runtime
+    # config or main-branch source contains it. Keep the exemption pinned to
+    # immutable blob identity + exact path + detector kind + redacted fingerprint.
+    (
+        "assigned_secret",
+        "b1a31e3f37f7fa62b5fd32ef3f71ff0ad19d5690",
+        "tests/v7_native_clob_order_lane_driver.cpp",
+        "12b9377cbe7e5c94",
+    ),
+    (
+        "assigned_secret",
+        "ed2bd016feda3a1631c2c364ec979aedc5b2dca9",
+        "tests/v7_native_clob_order_lane_driver.cpp",
+        "12b9377cbe7e5c94",
+    ),
 })
 
 
