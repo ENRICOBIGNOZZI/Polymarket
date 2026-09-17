@@ -3,6 +3,7 @@
 #include "pm/v7_binance_l2.hpp"
 #include "pm/v7_binance_l2_protocol.hpp"
 #include "pm/v7_coinbase_l2.hpp"
+#include "pm/v7_coinbase_l2_observer.hpp"
 #include "pm/v7_external_state.hpp"
 #include "pm/v7_external_tape.hpp"
 #include "pm/v7_external_ws.hpp"
@@ -673,168 +674,6 @@ private:
     std::uint64_t snapshot_epoch_ = 0;
 };
 
-class CoinbaseL2Observer final : public ExternalFrameObserver {
-public:
-    CoinbaseL2Observer(ExternalVenueIngress& ingress, std::uint64_t asset_handle) noexcept
-        : ingress_(ingress), asset_handle_(asset_handle) {}
-
-    void on_connection_epoch(std::uint64_t epoch) noexcept override {
-        std::lock_guard lock(mutex_);
-        book_.begin_recovery();
-        connection_epoch_ = epoch;
-        sequence_ = 0;
-        ExternalVenueEvent event;
-        event.asset_handle = asset_handle_;
-        event.connection_epoch = epoch;
-        event.source_sequence = ++sequence_;
-        event.venue = VenueId::CoinbaseSpot;
-        event.event_type = ExternalEventType::Health;
-        event.local_receive_monotonic_ns = monotonic_now_ns();
-        event.local_receive_wall_ns = wall_now_ns();
-        event.healthy = 0;
-        (void)ingress_.on_event(event);
-    }
-
-    void on_frame(std::uint64_t epoch, std::int64_t receive_ns, std::int64_t wall_ns,
-                  std::string_view payload) noexcept override {
-        try {
-            boost::system::error_code error;
-            const auto raw = json::parse(payload, error);
-            if (error || !raw.is_object()) { fail("invalid_json"); return; }
-            const auto& root = raw.as_object();
-            const auto* type = json_field(root, "type");
-            if (type != nullptr && type->is_string()) {
-                std::lock_guard lock(mutex_);
-                const auto& text = type->as_string();
-                last_message_type_.assign(text.data(), std::min<std::size_t>(text.size(), 64));
-            }
-            if (json_text_equals(type, "snapshot")) {
-                CoinbaseDepthSnapshot snapshot;
-                snapshot.local_receive_monotonic_ns = receive_ns;
-                if (!parse_levels(json_field(root, "bids"), snapshot.bids)
-                    || !parse_levels(json_field(root, "asks"), snapshot.asks)) { fail("snapshot_shape"); return; }
-                std::lock_guard lock(mutex_);
-                if (epoch != connection_epoch_) reset_epoch(epoch);
-                if (!book_.install_snapshot(snapshot)) { ++parse_failures_; last_protocol_error_ = "snapshot_invalid"; return; }
-                publish(receive_ns, wall_ns);
-                return;
-            }
-            if (json_text_equals(type, "l2update")) {
-                CoinbaseDepthUpdate update;
-                update.local_receive_monotonic_ns = receive_ns;
-                if (!parse_changes(json_field(root, "changes"), update.changes)) { fail("l2update_shape"); return; }
-                std::lock_guard lock(mutex_);
-                if (epoch != connection_epoch_) reset_epoch(epoch);
-                if (!book_.apply_update(update)) { ++parse_failures_; last_protocol_error_ = "l2update_invalid"; return; }
-                publish(receive_ns, wall_ns);
-                return;
-            }
-            if (json_text_equals(type, "error")) {
-                const auto* message = json_field(root, "message");
-                std::string detail = "exchange_error";
-                if (message != nullptr && message->is_string()) {
-                    const auto& text = message->as_string();
-                    detail.append(":").append(text.data(), std::min<std::size_t>(text.size(), 160));
-                }
-                fail(std::move(detail));
-                return;
-            }
-            // Subscription confirmations, heartbeat, and matches carry no
-            // complete book transition and therefore cannot alter L2 state.
-        } catch (...) { fail("exception"); }
-    }
-
-    [[nodiscard]] CoinbaseL2Metrics metrics() const noexcept {
-        std::lock_guard lock(mutex_);
-        auto out = book_.metrics();
-        out.parse_failures = parse_failures_;
-        return out;
-    }
-
-    [[nodiscard]] std::string diagnostic() const {
-        std::lock_guard lock(mutex_);
-        return "last_type=" + last_message_type_ + ";" + last_protocol_error_;
-    }
-
-private:
-    static bool parse_levels(const json::value* raw, std::vector<CoinbaseDepthLevel>& output) noexcept {
-        if (raw == nullptr || !raw->is_array() || raw->as_array().empty()) return false;
-        try {
-            output.reserve(raw->as_array().size());
-            for (const auto& level_raw : raw->as_array()) {
-                if (!level_raw.is_array() || level_raw.as_array().size() != 2) return false;
-                const auto& level = level_raw.as_array();
-                CoinbaseDepthLevel parsed;
-                if (!json_number(&level[0], parsed.price) || !json_number(&level[1], parsed.quantity)
-                    || parsed.price <= 0.0 || parsed.quantity <= 0.0) return false;
-                output.push_back(parsed);
-            }
-        } catch (...) { return false; }
-        return true;
-    }
-
-    static bool parse_changes(const json::value* raw, std::vector<CoinbaseDepthChange>& output) noexcept {
-        if (raw == nullptr || !raw->is_array() || raw->as_array().empty()) return false;
-        try {
-            output.reserve(raw->as_array().size());
-            for (const auto& change_raw : raw->as_array()) {
-                if (!change_raw.is_array() || change_raw.as_array().size() != 3) return false;
-                const auto& change = change_raw.as_array();
-                CoinbaseDepthChange parsed;
-                if (json_text_equals(&change[0], "buy")) parsed.bid = true;
-                else if (json_text_equals(&change[0], "sell")) parsed.bid = false;
-                else return false;
-                if (!json_number(&change[1], parsed.price) || !json_number(&change[2], parsed.quantity)
-                    || parsed.price <= 0.0 || parsed.quantity < 0.0) return false;
-                output.push_back(parsed);
-            }
-        } catch (...) { return false; }
-        return true;
-    }
-
-    void reset_epoch(std::uint64_t epoch) noexcept {
-        book_.begin_recovery();
-        connection_epoch_ = epoch;
-        sequence_ = 0;
-    }
-
-    void publish(std::int64_t receive_ns, std::int64_t wall_ns) noexcept {
-        const auto current = book_.metrics();
-        if (current.valid == 0) return;
-        ExternalVenueEvent event;
-        event.asset_handle = asset_handle_;
-        event.connection_epoch = connection_epoch_;
-        event.source_sequence = ++sequence_;
-        event.venue = VenueId::CoinbaseSpot;
-        event.event_type = ExternalEventType::BookTop;
-        event.local_receive_monotonic_ns = receive_ns;
-        event.local_receive_wall_ns = wall_ns;
-        event.bid = current.best_bid;
-        event.ask = current.best_ask;
-        event.bid_size = current.bid_depth_l1;
-        event.ask_size = current.ask_depth_l1;
-        event.healthy = 1;
-        (void)ingress_.on_event(event);
-    }
-
-    void fail(std::string diagnostic) noexcept {
-        std::lock_guard lock(mutex_);
-        ++parse_failures_;
-        last_protocol_error_ = std::move(diagnostic);
-        book_.begin_recovery();
-    }
-
-    ExternalVenueIngress& ingress_;
-    std::uint64_t asset_handle_ = 0;
-    mutable std::mutex mutex_{};
-    CoinbaseL2Book book_{};
-    std::uint64_t connection_epoch_ = 0;
-    std::uint64_t sequence_ = 0;
-    std::uint64_t parse_failures_ = 0;
-    std::string last_protocol_error_{};
-    std::string last_message_type_{};
-};
-
 class BybitL2Observer final : public ExternalFrameObserver {
 public:
     BybitL2Observer(ExternalVenueIngress& ingress, std::uint64_t asset_handle,
@@ -1297,7 +1136,7 @@ int main(int argc, char** argv) {
         ExternalVenueIngress deribit_ingress(VenueId::Deribit, asset_handle, deribit_event_tape.get(), ingress_wakeup.get());
         ExternalVenueIngress binance_usdm_market_ingress(VenueId::BinanceUsdM, asset_handle, binance_usdm_market_event_tape.get(), ingress_wakeup.get());
         BinanceSpotL2Observer binance_l2;
-        CoinbaseL2Observer coinbase_l2(coinbase_ingress, asset_handle);
+        CoinbaseL2FrameObserver coinbase_l2(coinbase_ingress, asset_handle);
         BybitL2Observer bybit_l2(bybit_ingress, asset_handle);
         BybitL2Observer bybit_linear_l2(bybit_linear_ingress, asset_handle, VenueId::BybitLinear);
         BybitLinearMarketObserver bybit_linear_market(bybit_linear_ingress, asset_handle);

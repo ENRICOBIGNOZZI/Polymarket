@@ -1,4 +1,5 @@
 #include "pm/fast_ws.hpp"
+#include "pm/v7_coinbase_l2_observer.hpp"
 #include "pm/v7_crypto_decision_lane.hpp"
 #include "pm/v7_external_ingress.hpp"
 #include "pm/v7_external_ws.hpp"
@@ -32,8 +33,6 @@ using namespace std::chrono_literals;
 namespace {
 constexpr std::size_t kPmQueueCapacity = 8192;
 constexpr std::size_t kPmFrameEvents = 1024;
-constexpr std::size_t kExternalBatchCapacity = 8192;
-constexpr std::size_t kMergedCapacity = 12288;
 
 std::int64_t monotonic_now_ns() noexcept {
     return std::chrono::duration_cast<std::chrono::nanoseconds>(
@@ -85,12 +84,11 @@ Options parse_options(int argc, char** argv) {
     return out;
 }
 
-struct MergedEvent {
-    std::int64_t receive_ns = 0;
-    std::uint8_t kind = 0; // 1 external, 2 Polymarket
-    ExternalVenueEvent external{};
-    MarketWsEvent polymarket{};
+struct PmQueuedEvent {
+    MarketWsEvent event{};
+    std::uint64_t connection_epoch = 0;
 };
+
 
 json::object latency_distribution(std::vector<std::int64_t> values) {
     if (values.empty()) return {{"count", 0}, {"p50_ns", nullptr}, {"p95_ns", nullptr}, {"p99_ns", nullptr}, {"p999_ns", nullptr}, {"max_ns", nullptr}};
@@ -100,19 +98,6 @@ json::object latency_distribution(std::vector<std::int64_t> values) {
         return values[std::min(index, values.size() - 1)];
     };
     return {{"count", values.size()}, {"p50_ns", q(.50)}, {"p95_ns", q(.95)}, {"p99_ns", q(.99)}, {"p999_ns", q(.999)}, {"max_ns", values.back()}};
-}
-
-ExternalVenueConnectionSpec coinbase_ticker_spec(std::uint64_t asset_handle) {
-    ExternalVenueConnectionSpec spec;
-    spec.venue = VenueId::CoinbaseSpot;
-    spec.host = "advanced-trade-ws.coinbase.com";
-    spec.port = "443";
-    spec.target = "/";
-    spec.subscription_json = R"({"type":"subscribe","product_ids":["BTC-USD"],"channel":"ticker"})";
-    spec.symbol = "BTC-USD";
-    spec.asset_handle = asset_handle;
-    spec.max_message_bytes = 1U << 20;
-    return spec;
 }
 
 json::object reason_json(const std::array<std::uint64_t, 32>& counts) {
@@ -137,17 +122,19 @@ int main(int argc, char** argv) {
         ExternalVenueIngress binance_ingress(VenueId::BinanceSpot, kAsset, nullptr, &wakeup);
         ExternalVenueIngress coinbase_ingress(VenueId::CoinbaseSpot, kAsset, nullptr, &wakeup);
         auto binance_spec = btc_spot_connection_spec(VenueId::BinanceSpot, kAsset);
-        auto coinbase_spec = coinbase_ticker_spec(kAsset);
+        auto coinbase_spec = btc_spot_connection_spec(VenueId::CoinbaseSpot, kAsset);
+        CoinbaseL2FrameObserver coinbase_l2(coinbase_ingress, kAsset);
         ExternalVenueWsClient binance(binance_spec, &binance_ingress);
-        ExternalVenueWsClient coinbase(coinbase_spec, &coinbase_ingress);
+        ExternalVenueWsClient coinbase(coinbase_spec, nullptr, &coinbase_l2);
 
         std::vector<TokenBinding> bindings{
             {options.yes_token, kMarket, kEvent, kYes, options.tick_size_e4},
             {options.no_token, kMarket, kEvent, kNo, options.tick_size_e4},
         };
         MarketWsShard pm_decoder(std::move(bindings));
-        SpscRing<MarketWsEvent, kPmQueueCapacity> pm_queue;
+        SpscRing<PmQueuedEvent, kPmQueueCapacity> pm_queue;
         std::atomic<std::uint64_t> pm_drops{0}, pm_faults{0};
+        std::atomic<std::uint64_t> pm_epoch{1};
 
         pm::fast::MarketWebSocketFeed pm_feed(
             options.pm_ws_url, {options.yes_token, options.no_token}, 2,
@@ -159,7 +146,10 @@ int main(int argc, char** argv) {
                     pm_faults.fetch_add(1, std::memory_order_relaxed);
                 }
                 for (std::size_t i = 0; i < result.output_count; ++i) {
-                    if (!pm_queue.try_push(decoded[i])) {
+                    PmQueuedEvent queued;
+                    queued.event = decoded[i];
+                    queued.connection_epoch = pm_epoch.load(std::memory_order_acquire);
+                    if (!pm_queue.try_push(queued)) {
                         pm_drops.fetch_add(1, std::memory_order_relaxed);
                         pm_faults.fetch_add(1, std::memory_order_relaxed);
                     } else notified = true;
@@ -168,6 +158,7 @@ int main(int argc, char** argv) {
             },
             [&](std::size_t, std::string_view) {
                 pm_decoder.invalidate_all_lineage();
+                pm_epoch.fetch_add(1, std::memory_order_acq_rel);
                 pm_faults.fetch_add(1, std::memory_order_relaxed);
                 wakeup.notify();
             });
@@ -208,14 +199,18 @@ int main(int argc, char** argv) {
 
         BookHotSnapshot yes_book{}, no_book{};
         ExternalCancelSignalSnapshot current_signal{};
-        std::vector<ExternalVenueEvent> external_batch(kExternalBatchCapacity);
-        std::vector<MergedEvent> merged(kMergedCapacity);
-        std::vector<std::int64_t> signal_to_admission;
+        ExternalVenueEvent pending_binance{}, pending_coinbase{};
+        PmQueuedEvent pending_pm{};
+        bool binance_ready = false, coinbase_ready = false, pm_ready = false;
+        std::vector<std::int64_t> accepted_signal_to_admission;
+        std::vector<std::int64_t> first_signal_to_decision;
         std::vector<std::int64_t> decision_compute;
-        signal_to_admission.reserve(4096);
+        accepted_signal_to_admission.reserve(4096);
+        first_signal_to_decision.reserve(4096);
         decision_compute.reserve(4096);
         std::array<std::uint64_t, 32> reasons{};
         std::uint64_t evaluations = 0, accepted = 0, latency_overflow = 0;
+        std::uint64_t last_measured_signal_version = 0;
 
 #if defined(__APPLE__)
         std::atomic<bool> stopping{false};
@@ -229,86 +224,101 @@ int main(int argc, char** argv) {
         pm_feed.start();
 
         const auto deadline = start_mono + static_cast<std::int64_t>(options.duration_seconds) * 1'000'000'000LL;
+        const auto refill_binance = [&] {
+            if (!binance_ready) {
+                binance_ready = binance_ingress.drain_events(
+                    std::span<ExternalVenueEvent>(&pending_binance, 1), 1) == 1;
+            }
+        };
+        const auto refill_coinbase = [&] {
+            if (!coinbase_ready) {
+                coinbase_ready = coinbase_ingress.drain_events(
+                    std::span<ExternalVenueEvent>(&pending_coinbase, 1), 1) == 1;
+            }
+        };
+        const auto refill_pm = [&] {
+            while (!pm_ready && pm_queue.try_pop(pending_pm)) {
+                const auto epoch = pm_epoch.load(std::memory_order_acquire);
+                if (pending_pm.connection_epoch == epoch) pm_ready = true;
+            }
+        };
         while (monotonic_now_ns() < deadline) {
             if (pm_faults.exchange(0, std::memory_order_acq_rel) != 0) {
                 yes_book.valid = 0; yes_book.lineage_continuous = 0;
                 no_book.valid = 0; no_book.lineage_continuous = 0;
+                if (pm_ready && pending_pm.connection_epoch != pm_epoch.load(std::memory_order_acquire)) {
+                    pm_ready = false;
+                }
             }
-            std::size_t external_count = binance_ingress.drain_events(external_batch);
-            if (external_count < external_batch.size()) {
-                external_count += coinbase_ingress.drain_events(
-                    std::span<ExternalVenueEvent>(external_batch.data() + external_count,
-                                                  external_batch.size() - external_count));
-            }
-            std::size_t merged_count = 0;
-            for (std::size_t i = 0; i < external_count && merged_count < merged.size(); ++i) {
-                merged[merged_count].receive_ns = external_batch[i].local_receive_monotonic_ns;
-                merged[merged_count].kind = 1;
-                merged[merged_count].external = external_batch[i];
-                ++merged_count;
-            }
-            MarketWsEvent pm_event;
-            while (merged_count < merged.size() && pm_queue.try_pop(pm_event)) {
-                merged[merged_count].receive_ns = pm_event.receive_monotonic_ns;
-                merged[merged_count].kind = 2;
-                merged[merged_count].polymarket = pm_event;
-                ++merged_count;
-            }
-            if (merged_count == 0) {
+            refill_binance();
+            refill_coinbase();
+            refill_pm();
+            if (!binance_ready && !coinbase_ready && !pm_ready) {
                 (void)wakeup.wait_for(2ms);
                 continue;
             }
-            std::sort(merged.begin(), merged.begin() + static_cast<std::ptrdiff_t>(merged_count),
-                      [](const MergedEvent& lhs, const MergedEvent& rhs) {
-                          if (lhs.receive_ns != rhs.receive_ns) return lhs.receive_ns < rhs.receive_ns;
-                          return lhs.kind < rhs.kind;
-                      });
+            std::int64_t receive_ns = std::numeric_limits<std::int64_t>::max();
+            if (binance_ready) receive_ns = std::min(receive_ns, pending_binance.local_receive_monotonic_ns);
+            if (coinbase_ready) receive_ns = std::min(receive_ns, pending_coinbase.local_receive_monotonic_ns);
+            if (pm_ready) receive_ns = std::min(receive_ns, pending_pm.event.receive_monotonic_ns);
+            if (receive_ns <= 0 || receive_ns == std::numeric_limits<std::int64_t>::max()) {
+                ++latency_overflow;
+                binance_ready = coinbase_ready = pm_ready = false;
+                continue;
+            }
+            bool has_external = (binance_ready && pending_binance.local_receive_monotonic_ns == receive_ns)
+                || (coinbase_ready && pending_coinbase.local_receive_monotonic_ns == receive_ns);
+            if (has_external && receive_ns > 1) {
+                current_signal = external_state.advance_external_cancel_signal(receive_ns - 1, external_policy);
+            }
+            bool progressed = false;
+            do {
+                progressed = false;
+                if (binance_ready && pending_binance.local_receive_monotonic_ns == receive_ns) {
+                    (void)external_state.on_venue_event(pending_binance, external_policy);
+                    binance_ready = false; refill_binance(); progressed = true;
+                }
+                if (coinbase_ready && pending_coinbase.local_receive_monotonic_ns == receive_ns) {
+                    (void)external_state.on_venue_event(pending_coinbase, external_policy);
+                    coinbase_ready = false; refill_coinbase(); progressed = true;
+                }
+                if (pm_ready && pending_pm.event.receive_monotonic_ns == receive_ns) {
+                    const auto& event = pending_pm.event;
+                    if (event.instrument_handle == kYes) yes_book = event.book;
+                    else if (event.instrument_handle == kNo) no_book = event.book;
+                    pm_ready = false; refill_pm(); progressed = true;
+                }
+            } while (progressed);
+            if (has_external) current_signal = external_state.advance_external_cancel_signal(receive_ns, external_policy);
 
-            std::size_t begin = 0;
-            while (begin < merged_count) {
-                const auto receive_ns = merged[begin].receive_ns;
-                std::size_t end = begin;
-                bool has_external = false;
-                while (end < merged_count && merged[end].receive_ns == receive_ns) {
-                    has_external = has_external || merged[end].kind == 1;
-                    ++end;
+            if (current_signal.signal_version != 0) {
+                NativeCryptoDecisionInput input;
+                input.signal = current_signal;
+                input.market = market;
+                input.yes_book = yes_book;
+                input.no_book = no_book;
+                input.now_monotonic_ns = receive_ns;
+                const auto result = lane.evaluate(input, capital);
+                const auto finished = monotonic_now_ns();
+                ++evaluations;
+                const auto reason_index = static_cast<std::size_t>(result.reason);
+                if (reason_index < reasons.size()) ++reasons[reason_index];
+                if (current_signal.signal_version != last_measured_signal_version) {
+                    last_measured_signal_version = current_signal.signal_version;
+                    if (first_signal_to_decision.size() < first_signal_to_decision.capacity()) {
+                        first_signal_to_decision.push_back(std::max<std::int64_t>(
+                            0, finished - current_signal.trigger_receive_monotonic_ns));
+                        decision_compute.push_back(result.decision_compute_ns);
+                    } else ++latency_overflow;
                 }
-                if (has_external && receive_ns > 1) {
-                    current_signal = external_state.advance_external_cancel_signal(receive_ns - 1, external_policy);
+                if (result.accepted != 0) {
+                    ++accepted;
+                    lane.mark_market_traded(kMarket);
+                    if (accepted_signal_to_admission.size() < accepted_signal_to_admission.capacity()) {
+                        accepted_signal_to_admission.push_back(std::max<std::int64_t>(
+                            0, finished - current_signal.trigger_receive_monotonic_ns));
+                    } else ++latency_overflow;
                 }
-                for (std::size_t i = begin; i < end; ++i) {
-                    if (merged[i].kind == 1) {
-                        (void)external_state.on_venue_event(merged[i].external, external_policy);
-                    } else {
-                        const auto& event = merged[i].polymarket;
-                        if (event.instrument_handle == kYes) yes_book = event.book;
-                        else if (event.instrument_handle == kNo) no_book = event.book;
-                    }
-                }
-                if (has_external) current_signal = external_state.advance_external_cancel_signal(receive_ns, external_policy);
-
-                if (current_signal.signal_version != 0) {
-                    NativeCryptoDecisionInput input;
-                    input.signal = current_signal;
-                    input.market = market;
-                    input.yes_book = yes_book;
-                    input.no_book = no_book;
-                    input.now_monotonic_ns = receive_ns;
-                    const auto result = lane.evaluate(input, capital);
-                    ++evaluations;
-                    const auto reason_index = static_cast<std::size_t>(result.reason);
-                    if (reason_index < reasons.size()) ++reasons[reason_index];
-                    if (result.accepted != 0) {
-                        ++accepted;
-                        lane.mark_market_traded(kMarket);
-                        const auto finished = monotonic_now_ns();
-                        if (signal_to_admission.size() < signal_to_admission.capacity()) {
-                            signal_to_admission.push_back(std::max<std::int64_t>(0, finished - current_signal.trigger_receive_monotonic_ns));
-                            decision_compute.push_back(result.decision_compute_ns);
-                        } else ++latency_overflow;
-                    }
-                }
-                begin = end;
             }
         }
 
@@ -339,7 +349,8 @@ int main(int argc, char** argv) {
             {"clean_capture", clean}, {"duration_seconds", options.duration_seconds},
             {"evaluations", evaluations}, {"accepted_candidates", accepted},
             {"latency_sample_overflow", latency_overflow},
-            {"signal_to_admission", latency_distribution(std::move(signal_to_admission))},
+            {"accepted_signal_to_admission", latency_distribution(std::move(accepted_signal_to_admission))},
+            {"first_signal_to_decision", latency_distribution(std::move(first_signal_to_decision))},
             {"decision_compute", latency_distribution(std::move(decision_compute))},
             {"reason_counts", reason_json(reasons)},
             {"binance", {{"frames", binance_status.frames_received}, {"transport_failures", binance_status.transport_failures}, {"drops", binance_ingress_status.dropped_events}}},

@@ -65,10 +65,12 @@ class NativeCriticalPathPolicyTest(unittest.TestCase):
             self.assertNotIn(token, source.lower())
         for token in (
             "NativeCryptoDecisionLane", "SleeveCapitalAccount",
-            "MarketWsShard", "ExternalVenueIngress", "SpscRing<MarketWsEvent",
+            "MarketWsShard", "ExternalVenueIngress", "SpscRing<",
             "IngressWakeup", "SHADOW_ZERO_AUTHORITY",
         ):
             self.assertIn(token, source)
+        self.assertNotIn("std::sort(merged", source)
+        self.assertNotIn("external_batch", source)
         lane = (ROOT / "src" / "v7_crypto_decision_lane.cpp").read_text(encoding="utf-8")
         self.assertIn("ExecutionAdmission::admit", lane)
 
