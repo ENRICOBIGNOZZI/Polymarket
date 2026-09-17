@@ -14,7 +14,7 @@ class V7OperatorHomeTest(unittest.TestCase):
         dashboard = json.loads((ROOT / manifest["grafana"]["dashboard_file"]).read_text())
         self.assertTrue(manifest["grafana"]["canonical_operator_home"])
         self.assertEqual(dashboard["uid"], "polymarket-v7")
-        self.assertIn("24/7 PAPER Control Room", dashboard["title"])
+        self.assertIn("Crypto PAPER Control Room", dashboard["title"])
         serialized = json.dumps(dashboard)
         unscoped = re.sub(r"(polymarket_[a-zA-Z0-9_]+)\{[^}]*\}", r"\1", serialized)
         for metric in (
@@ -28,7 +28,6 @@ class V7OperatorHomeTest(unittest.TestCase):
             "polymarket_execution_candidates",
             "polymarket_execution_makes",
             "polymarket_execution_takes",
-            "polymarket_execution_arbs",
             "polymarket_execution_cancels",
             "polymarket_execution_withdraws",
             "polymarket_execution_effective_orders",
@@ -48,8 +47,8 @@ class V7OperatorHomeTest(unittest.TestCase):
         dashboard = json.loads((ROOT / manifest["grafana"]["dashboard_file"]).read_text())
         serialized = json.dumps(dashboard)
         unscoped = re.sub(r"(polymarket_[a-zA-Z0-9_]+)\{[^}]*\}", r"\1", serialized)
-        self.assertIn("24/7 PAPER Control Room", dashboard["title"])
-        self.assertIn("Economic New-Risk Authority", serialized)
+        self.assertIn("Crypto PAPER Control Room", dashboard["title"])
+        self.assertIn("Crypto New-Risk Authority", serialized)
         self.assertIn("polymarket_v7_economic_engine_configured", serialized)
         self.assertIn("Crypto Settlement", serialized)
         for ambiguous in (

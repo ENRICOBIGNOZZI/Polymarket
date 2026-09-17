@@ -8,7 +8,7 @@
   "id": null,
   "links": [
     {
-      "title": "Control Room",
+      "title": "Crypto Control Room",
       "type": "link",
       "url": "/d/polymarket-v7",
       "includeVars": true,
@@ -16,7 +16,7 @@
       "targetBlank": false
     },
     {
-      "title": "Latency evidence",
+      "title": "Crypto Latency",
       "type": "link",
       "url": "/d/polymarket-v7-latency",
       "includeVars": true,
@@ -581,7 +581,7 @@
         },
         {
           "expr": "(polymarket_external_fair_structural_probability{job=\"polymarket-v7\",instance=\"$instance\"}) * on(job,instance) group_left(run_id) polymarket_v7_runtime_identity_info{job=\"polymarket-v7\",instance=\"$instance\"} and on(job,instance) (polymarket_v7_exporter_snapshot_usable{job=\"polymarket-v7\",instance=\"$instance\"} == 1) and on(job,instance) (up{job=\"polymarket-v7\",instance=\"$instance\"} == 1)",
-          "legendFormat": "structural",
+          "legendFormat": "baseline fair",
           "refId": "D",
           "instant": false,
           "range": true,
@@ -767,7 +767,7 @@
           }
         }
       ],
-      "title": "External-Fair Latency Chain",
+      "title": "Crypto Settlement Latency Chain",
       "type": "timeseries"
     },
     {
@@ -1674,14 +1674,15 @@
   "tags": [
     "polymarket",
     "v7",
-    "external-fair",
-    "settlement"
+    "settlement",
+    "crypto",
+    "crypto-settlement"
   ],
   "templating": {
     "list": [
       {
         "name": "instance",
-        "label": "Runtime target",
+        "label": "Crypto runtime target",
         "type": "query",
         "datasource": {
           "type": "prometheus",

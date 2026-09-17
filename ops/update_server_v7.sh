@@ -552,6 +552,7 @@ for rel in (
     'monitoring/exporter_v7.py',
     'monitoring/v7_ledger_metrics.py',
     'monitoring/v7_alerts.yml',
+    'monitoring/validate_crypto_grafana.py',
     'monitoring/v7_runtime_contract.py',
     'monitoring/v7_retention.py',
     'scripts/v7_storage_budget.py',
@@ -560,6 +561,7 @@ for rel in (
     'monitoring/v7_portfolio_reconciliation.py',
     'monitoring/grafana/dashboards/polymarket-v7.json',
     'monitoring/grafana/dashboards/polymarket-v7-external-fair.json',
+    'monitoring/grafana/dashboards/polymarket-v7-latency.json',
     'ops/v7_runtime_supervisor.py',
     'ops/v7_service_entrypoint.sh',
     'scripts/v7_rtds_external_fair_monitor.py',
@@ -575,6 +577,7 @@ for rel in (
     assert (root/rel).is_file(), rel
 print(m['grafana']['dashboard_uid'])
 PY
+  python3 "$root/monitoring/validate_crypto_grafana.py" --repository-root "$root" >/dev/null
 }
 
 prevalidate_candidate(){
@@ -605,6 +608,7 @@ prevalidate_candidate(){
       scripts/v7_fee_reward_registry.py \
       scripts/v7_generate_economic_artifacts.py \
       monitoring/exporter_v7.py \
+      monitoring/validate_crypto_grafana.py \
       monitoring/v7_ledger_metrics.py \
       monitoring/v7_runtime_contract.py \
       monitoring/v7_retention.py \

@@ -32,6 +32,7 @@ jobs:
       - name: Validate V7 monitoring only
         run: |
           set -euo pipefail
+          python3 tests/test_monitoring_v7_crypto_only_grafana.py
           python3 -m unittest \
             tests/test_v7_repository_shape.py \
             tests/test_monitoring_v7_native.py \
@@ -42,6 +43,7 @@ jobs:
             tests/test_v7_maker_fillability_monitoring.py -v
           python3 -m py_compile \
             monitoring/exporter_v7.py \
+            monitoring/validate_crypto_grafana.py \
             monitoring/exporter_v7_fillability.py \
             monitoring/v7_ledger_metrics.py \
             monitoring/v7_maker_fillability.py \
@@ -50,6 +52,8 @@ jobs:
           python3 -m json.tool monitoring/v7_monitoring_manifest.json >/dev/null
           python3 -m json.tool monitoring/grafana/dashboards/polymarket-v7.json >/dev/null
           python3 -m json.tool monitoring/grafana/dashboards/polymarket-v7-latency.json >/dev/null
+          python3 -m json.tool monitoring/grafana/dashboards/polymarket-v7-external-fair.json >/dev/null
+          python3 monitoring/validate_crypto_grafana.py --repository-root .
           bash -n ops/apply_v7_monitoring_config_macos.sh
           test -s monitoring/prometheus_v7.yml
           test -s monitoring/v7_alerts.yml

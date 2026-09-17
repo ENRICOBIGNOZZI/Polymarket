@@ -1,10 +1,11 @@
 {
   "uid": "polymarket-v7",
-  "title": "Polymarket V7 — 24/7 PAPER Control Room",
+  "title": "Polymarket V7 — Crypto PAPER Control Room",
   "version": 1,
   "tags": [
     "polymarket",
     "v7",
+    "crypto",
     "paper",
     "canonical-ledger",
     "truth-v1"
@@ -4000,7 +4001,7 @@
         {
           "id": 167,
           "type": "timeseries",
-          "title": "Runtime / component checks · not accounting verification",
+          "title": "Crypto runtime / component checks · not accounting verification",
           "description": "",
           "datasource": {
             "type": "prometheus",
@@ -4114,7 +4115,7 @@
         {
           "id": 168,
           "type": "table",
-          "title": "Engine reporting source · configured is not running",
+          "title": "Crypto engine telemetry source",
           "description": "",
           "datasource": {
             "type": "prometheus",
@@ -4206,8 +4207,8 @@
                   "Value": true
                 },
                 "renameByName": {
-                  "engine": "Engine",
-                  "source": "Reported source"
+                  "engine": "Crypto engine",
+                  "source": "Telemetry source"
                 }
               }
             }
@@ -4300,8 +4301,8 @@
         {
           "id": 170,
           "type": "stat",
-          "title": "Risk authority",
-          "description": "Economic New-Risk Authority. Economic alpha authorization is separate from the frozen PAPER forward test. Blocked does not mean the forward test is stopped.",
+          "title": "Crypto risk",
+          "description": "Crypto New-Risk Authority. Economic alpha authorization is separate from the frozen PAPER forward test. Blocked does not mean the forward test is stopped.",
           "datasource": {
             "type": "prometheus",
             "uid": "prometheus-v7"
@@ -4366,7 +4367,7 @@
                 "uid": "prometheus-v7"
               },
               "expr": "(polymarket_v7_economic_new_risk_ready{job=\"polymarket-v7\",instance=\"$instance\"}) and on(job,instance) (polymarket_v7_exporter_snapshot_usable{job=\"polymarket-v7\",instance=\"$instance\"} == 1) and on(job,instance) (up{job=\"polymarket-v7\",instance=\"$instance\"} == 1)",
-              "legendFormat": "Risk authority",
+              "legendFormat": "Crypto risk",
               "instant": true,
               "range": false,
               "editorMode": "code"
@@ -4390,8 +4391,8 @@
         {
           "id": 171,
           "type": "stat",
-          "title": "Engine count",
-          "description": "Configured algorithm count. ",
+          "title": "Crypto algos",
+          "description": "Crypto live algorithm count. ",
           "datasource": {
             "type": "prometheus",
             "uid": "prometheus-v7"
@@ -4443,7 +4444,7 @@
                 "uid": "prometheus-v7"
               },
               "expr": "(polymarket_v7_live_algorithm_count{job=\"polymarket-v7\",instance=\"$instance\"}) and on(job,instance) (polymarket_v7_exporter_snapshot_usable{job=\"polymarket-v7\",instance=\"$instance\"} == 1) and on(job,instance) (up{job=\"polymarket-v7\",instance=\"$instance\"} == 1)",
-              "legendFormat": "Engine count",
+              "legendFormat": "Crypto algos",
               "instant": true,
               "range": false,
               "editorMode": "code"
@@ -4467,7 +4468,7 @@
         {
           "id": 172,
           "type": "table",
-          "title": "Configured engines · not execution proof",
+          "title": "Crypto engine configured · not execution proof",
           "description": "",
           "datasource": {
             "type": "prometheus",
@@ -4572,7 +4573,7 @@
         {
           "id": 173,
           "type": "timeseries",
-          "title": "Ledger diagnostics · event counts, not unique opportunities",
+          "title": "Crypto execution diagnostics · event counts, not unique opportunities",
           "description": "",
           "datasource": {
             "type": "prometheus",
@@ -4675,18 +4676,6 @@
                 "type": "prometheus",
                 "uid": "prometheus-v7"
               },
-              "expr": "(polymarket_execution_arbs{job=\"polymarket-v7\",instance=\"$instance\"}) * on(job,instance) group_left(run_id) polymarket_v7_runtime_identity_info{job=\"polymarket-v7\",instance=\"$instance\"} and on(job,instance) (polymarket_v7_exporter_snapshot_usable{job=\"polymarket-v7\",instance=\"$instance\"} == 1) and on(job,instance) (up{job=\"polymarket-v7\",instance=\"$instance\"} == 1) and on(job,instance) (polymarket_v7_ledger_current_runtime{job=\"polymarket-v7\",instance=\"$instance\"} == 1)",
-              "legendFormat": "arb events",
-              "instant": false,
-              "range": true,
-              "editorMode": "code"
-            },
-            {
-              "refId": "E",
-              "datasource": {
-                "type": "prometheus",
-                "uid": "prometheus-v7"
-              },
               "expr": "(polymarket_execution_cancels{job=\"polymarket-v7\",instance=\"$instance\"}) * on(job,instance) group_left(run_id) polymarket_v7_runtime_identity_info{job=\"polymarket-v7\",instance=\"$instance\"} and on(job,instance) (polymarket_v7_exporter_snapshot_usable{job=\"polymarket-v7\",instance=\"$instance\"} == 1) and on(job,instance) (up{job=\"polymarket-v7\",instance=\"$instance\"} == 1) and on(job,instance) (polymarket_v7_ledger_current_runtime{job=\"polymarket-v7\",instance=\"$instance\"} == 1)",
               "legendFormat": "cancel events",
               "instant": false,
@@ -4694,7 +4683,7 @@
               "editorMode": "code"
             },
             {
-              "refId": "F",
+              "refId": "E",
               "datasource": {
                 "type": "prometheus",
                 "uid": "prometheus-v7"
@@ -4706,7 +4695,7 @@
               "editorMode": "code"
             },
             {
-              "refId": "G",
+              "refId": "F",
               "datasource": {
                 "type": "prometheus",
                 "uid": "prometheus-v7"
@@ -4824,7 +4813,7 @@
         {
           "id": 174,
           "type": "timeseries",
-          "title": "Accounting residuals · component state minus ledger",
+          "title": "Crypto accounting residuals · component state minus ledger",
           "description": "",
           "datasource": {
             "type": "prometheus",
@@ -4928,7 +4917,7 @@
         {
           "id": 181,
           "type": "timeseries",
-          "title": "Universe coverage · markets",
+          "title": "Crypto universe coverage · markets",
           "description": "",
           "datasource": {
             "type": "prometheus",
@@ -5042,7 +5031,7 @@
         {
           "id": 182,
           "type": "timeseries",
-          "title": "Discovery duration · milliseconds",
+          "title": "Crypto universe discovery · milliseconds",
           "description": "",
           "datasource": {
             "type": "prometheus",
@@ -5299,7 +5288,7 @@
         {
           "id": 185,
           "type": "table",
-          "title": "Resource limits · dimension shown explicitly",
+          "title": "Crypto universe resource limits · dimension shown explicitly",
           "description": "",
           "datasource": {
             "type": "prometheus",
@@ -6165,7 +6154,7 @@
     "list": [
       {
         "name": "instance",
-        "label": "Runtime target",
+        "label": "Crypto runtime target",
         "type": "query",
         "datasource": {
           "type": "prometheus",
@@ -6191,7 +6180,7 @@
   },
   "links": [
     {
-      "title": "Latency evidence",
+      "title": "Crypto Latency",
       "type": "link",
       "url": "/d/polymarket-v7-latency",
       "includeVars": true,
@@ -6199,7 +6188,7 @@
       "targetBlank": false
     },
     {
-      "title": "Crypto evidence",
+      "title": "Crypto Settlement",
       "type": "link",
       "url": "/d/polymarket-v7-external-fair",
       "includeVars": true,

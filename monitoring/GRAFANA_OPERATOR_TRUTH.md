@@ -1,6 +1,8 @@
 # Operator dashboard: telemetry boundaries
 
-The existing `polymarket-v7` UID and Prometheus datasource remain canonical.
+The existing `polymarket-v7` UID remains the canonical operator home. The visible
+Grafana folder, datasource, dashboard titles, navigation and panel language are
+crypto-only. Exactly three repository-provisioned dashboards are permitted.
 The exporter and dashboards are read-only. They never authorize execution,
 change capital, write ledger events, or promote a research strategy.
 
@@ -23,10 +25,12 @@ the new freshness metrics are first scraped; no historical data is modified.
 Forward-test skip counters count repeated checks, not independent signals.
 
 Rebuild the main dashboard with `python3 monitoring/build_operator_dashboard.py`.
-Run `python3 -m pytest -q tests/test_monitoring_v7_*.py
- tests/test_v7_maker_lab_dashboard.py tests/test_v7_deploy_monitoring_manifest_contract.py`
-as one shell command. Additional checks should parse every PromQL expression
-against Prometheus and render the dashboard in a real browser.
+Then run `python3 monitoring/validate_crypto_grafana.py --repository-root .` and
+`python3 -m pytest -q tests/test_monitoring_v7_*.py tests/test_v7_macos_monitoring_owner.py`.
+The validator is also executed by monitoring CI and the monitoring installer, so
+an extra legacy dashboard or stale visible UI blocks deployment. Additional checks
+should parse every PromQL expression against Prometheus and render the dashboard
+in a real browser.
 
 A monitoring-only emergency release may run this exporter from a separate
 immutable source directory, with `--repository-root` still pointing at the

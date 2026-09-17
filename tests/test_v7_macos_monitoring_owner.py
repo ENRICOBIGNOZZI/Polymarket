@@ -65,7 +65,7 @@ class V7MacosMonitoringOwnerTest(unittest.TestCase):
         self.assertIn("serve --bg --https=443 localhost:3000", text)
         self.assertIn("serve --bg --http=80 localhost:3000", text)
         self.assertIn("serve status", text)
-        self.assertIn("polymarket-v7-canonical-paper-economics", text)
+        self.assertIn("polymarket-v7-crypto-paper-control-room", text)
         self.assertNotIn("funnel", text.lower())
 
     def test_tailnet_control_plane_failure_defers_to_public_health_gate(self) -> None:
