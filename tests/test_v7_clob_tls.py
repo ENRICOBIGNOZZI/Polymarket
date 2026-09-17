@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import shutil
+import shlex
 import socket
 import ssl
 import subprocess
@@ -59,8 +60,15 @@ int main(int argc, char** argv) {
 
 
 def _openssl_flags() -> tuple[list[str], list[str]]:
-    prefix = subprocess.check_output(["brew", "--prefix", "openssl@3"], text=True).strip()
-    return [f"-I{prefix}/include"], [f"-L{prefix}/lib", "-lssl", "-lcrypto"]
+    if shutil.which("pkg-config"):
+        include = subprocess.run(["pkg-config", "--cflags", "openssl"], capture_output=True, text=True)
+        libraries = subprocess.run(["pkg-config", "--libs", "openssl"], capture_output=True, text=True)
+        if include.returncode == libraries.returncode == 0:
+            return shlex.split(include.stdout), shlex.split(libraries.stdout)
+    if shutil.which("brew"):
+        prefix = subprocess.check_output(["brew", "--prefix", "openssl@3"], text=True).strip()
+        return [f"-I{prefix}/include"], [f"-L{prefix}/lib", "-lssl", "-lcrypto"]
+    return [], ["-lssl", "-lcrypto"]
 
 
 def _make_cert(tmp: Path) -> tuple[Path, Path]:
@@ -82,6 +90,7 @@ def test_persistent_tls_session_reuses_one_connection() -> None:
         cert, key = _make_cert(tmp)
         listener = socket.socket()
         listener.bind(("127.0.0.1", 0))
+        listener.settimeout(10.0)
         listener.listen(1)
         port = listener.getsockname()[1]
         accepted = []
@@ -93,13 +102,16 @@ def test_persistent_tls_session_reuses_one_connection() -> None:
                 context.load_cert_chain(cert, key)
                 context.set_alpn_protocols(["http/1.1"])
                 raw, _ = listener.accept()
+                raw.settimeout(5.0)
                 accepted.append(1)
                 with context.wrap_socket(raw, server_side=True) as conn:
                     assert conn.selected_alpn_protocol() == "http/1.1"
                     for body in (b"one", b"two"):
                         request = b""
                         while b"\r\n\r\n" not in request:
-                            request += conn.recv(4096)
+                            chunk = conn.recv(4096)
+                            assert chunk, "peer closed before complete request"
+                            request += chunk
                         assert request.startswith(b"GET /time HTTP/1.1\r\n")
                         response = (
                             b"HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\n"
@@ -113,7 +125,6 @@ def test_persistent_tls_session_reuses_one_connection() -> None:
                 listener.close()
 
         thread = threading.Thread(target=serve)
-        thread.start()
         main = tmp / "main.cpp"
         binary = tmp / "tls-test"
         main.write_text(PROGRAM)
@@ -123,6 +134,7 @@ def test_persistent_tls_session_reuses_one_connection() -> None:
             f"-I{ROOT / 'include'}", *inc, str(ROOT / "src/v7_clob_tls.cpp"),
             str(main), "-o", str(binary), *libs,
         ], check=True, capture_output=True, text=True)
+        thread.start()
         result = subprocess.run([str(binary), str(port), str(cert)], check=True,
                                 capture_output=True, text=True, timeout=10)
         thread.join(timeout=5)

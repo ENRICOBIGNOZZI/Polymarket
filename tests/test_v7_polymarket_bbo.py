@@ -3,6 +3,7 @@ from __future__ import annotations
 import shutil
 import subprocess
 import tempfile
+import sys
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -51,6 +52,10 @@ int main(){
 def test_compact_bbo_decoder() -> None:
     cxx = shutil.which("c++")
     assert cxx
+    includes = []
+    if sys.platform == "darwin" and shutil.which("brew"):
+        prefix = subprocess.check_output(["brew", "--prefix", "boost"], text=True).strip()
+        includes.append(f"-I{prefix}/include")
     with tempfile.TemporaryDirectory() as td:
         p = Path(td)
         src = p / "main.cpp"
@@ -65,6 +70,7 @@ def test_compact_bbo_decoder() -> None:
                 "-Wextra",
                 "-Wpedantic",
                 f"-I{ROOT / 'include'}",
+                *includes,
                 str(ROOT / "src/v7_polymarket_bbo.cpp"),
                 str(ROOT / "src/boost_json.cpp"),
                 str(src),

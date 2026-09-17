@@ -30,6 +30,12 @@ class TestV7Runner(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         self.assertIn("1 passed", result.stdout)
 
+    def test_unittest_class_without_main_is_not_skipped(self):
+        result = self.run_source("import unittest\nclass Case(unittest.TestCase):\n"
+                                "    def test_broken(self):\n        self.assertTrue(False)\n")
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("1 failed", result.stdout)
+
     def test_no_test_cannot_pass(self):
         self.assertEqual(self.run_source("VALUE = 1\n").returncode, 5)
 

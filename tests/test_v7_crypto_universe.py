@@ -43,8 +43,8 @@ def test_discovery_queries_only_registered_crypto_slugs():
     expected=contexts*len(cfg['source']['window_offsets'])
     assert len(seen)==expected and len(rows)==expected
     assert stats['discovery_exhaustive'] is True and stats['pagination_loop_guard_hit'] is False
-    assert all(any(slug.startswith(asset.lower()+'-updown-') for asset in ('BTC','ETH','SOL','XRP')) for slug in seen)
-    assert {row['asset'] for row in rows} == {'BTC','ETH','SOL','XRP'}
+    assert all(any(slug.startswith(asset.lower()+'-updown-') for asset in ('BTC','ETH','SOL','XRP','DOGE','BNB')) for slug in seen)
+    assert {row['asset'] for row in rows} == {'BTC','ETH','SOL','XRP','DOGE','BNB'}
 
 
 def test_missing_unpublished_adjacent_window_is_not_a_global_scan_failure():

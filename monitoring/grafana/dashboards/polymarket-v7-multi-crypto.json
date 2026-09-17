@@ -43,26 +43,29 @@
       "description": "CRYPTO_SETTLEMENT_ENGINE PAPER equity only.",
       "targets": [
         {
-          "expr": "polymarket_mc_portfolio_equity_usd",
-          "refId": "A"
+          "expr": "(polymarket_mc_portfolio_equity_usd{job=\"polymarket-v7\",instance=\"$instance\"}) and on(job,instance) (polymarket_v7_exporter_snapshot_usable{job=\"polymarket-v7\",instance=\"$instance\"} == 1)",
+          "refId": "A",
+          "instant": true,
+          "range": false
         }
       ],
       "fieldConfig": {
         "defaults": {
-          "unit": "currencyUSD"
+          "unit": "prefix:$",
+          "decimals": 2
         },
         "overrides": []
       },
       "options": {
         "reduceOptions": {
           "calcs": [
-            "lastNotNull"
+            "last"
           ],
           "fields": "",
           "values": false
         },
         "colorMode": "value",
-        "graphMode": "area",
+        "graphMode": "none",
         "justifyMode": "auto",
         "orientation": "auto",
         "textMode": "auto",
@@ -86,26 +89,29 @@
       "description": "Crypto engine equity minus crypto engine budget.",
       "targets": [
         {
-          "expr": "polymarket_mc_total_pnl_usd",
-          "refId": "A"
+          "expr": "(polymarket_mc_total_pnl_usd{job=\"polymarket-v7\",instance=\"$instance\"}) and on(job,instance) (polymarket_v7_exporter_snapshot_usable{job=\"polymarket-v7\",instance=\"$instance\"} == 1)",
+          "refId": "A",
+          "instant": true,
+          "range": false
         }
       ],
       "fieldConfig": {
         "defaults": {
-          "unit": "currencyUSD"
+          "unit": "prefix:$",
+          "decimals": 2
         },
         "overrides": []
       },
       "options": {
         "reduceOptions": {
           "calcs": [
-            "lastNotNull"
+            "last"
           ],
           "fields": "",
           "values": false
         },
         "colorMode": "value",
-        "graphMode": "area",
+        "graphMode": "none",
         "justifyMode": "auto",
         "orientation": "auto",
         "textMode": "auto",
@@ -129,26 +135,29 @@
       "description": "Freshest verified realized PnL for CRYPTO_SETTLEMENT_ENGINE. Uses canonical economics when current; uses complete canonical-ledger FINALs provisionally only while canonical economics is demonstrably stale.",
       "targets": [
         {
-          "expr": "polymarket_mc_realized_pnl_usd",
-          "refId": "A"
+          "expr": "(polymarket_mc_realized_pnl_usd{job=\"polymarket-v7\",instance=\"$instance\"}) and on(job,instance) (polymarket_v7_exporter_snapshot_usable{job=\"polymarket-v7\",instance=\"$instance\"} == 1)",
+          "refId": "A",
+          "instant": true,
+          "range": false
         }
       ],
       "fieldConfig": {
         "defaults": {
-          "unit": "currencyUSD"
+          "unit": "prefix:$",
+          "decimals": 2
         },
         "overrides": []
       },
       "options": {
         "reduceOptions": {
           "calcs": [
-            "lastNotNull"
+            "last"
           ],
           "fields": "",
           "values": false
         },
         "colorMode": "value",
-        "graphMode": "area",
+        "graphMode": "none",
         "justifyMode": "auto",
         "orientation": "auto",
         "textMode": "auto",
@@ -172,26 +181,29 @@
       "description": "Engine total PnL minus the freshest verified realized PnL. No synthetic zero fill.",
       "targets": [
         {
-          "expr": "polymarket_mc_unrealized_pnl_usd",
-          "refId": "A"
+          "expr": "(polymarket_mc_unrealized_pnl_usd{job=\"polymarket-v7\",instance=\"$instance\"}) and on(job,instance) (polymarket_v7_exporter_snapshot_usable{job=\"polymarket-v7\",instance=\"$instance\"} == 1)",
+          "refId": "A",
+          "instant": true,
+          "range": false
         }
       ],
       "fieldConfig": {
         "defaults": {
-          "unit": "currencyUSD"
+          "unit": "prefix:$",
+          "decimals": 2
         },
         "overrides": []
       },
       "options": {
         "reduceOptions": {
           "calcs": [
-            "lastNotNull"
+            "last"
           ],
           "fields": "",
           "values": false
         },
         "colorMode": "value",
-        "graphMode": "area",
+        "graphMode": "none",
         "justifyMode": "auto",
         "orientation": "auto",
         "textMode": "auto",
@@ -215,8 +227,10 @@
       "description": "Global PAPER account drawdown; deliberately labelled account-level.",
       "targets": [
         {
-          "expr": "polymarket_mc_account_drawdown_ratio",
-          "refId": "A"
+          "expr": "(polymarket_mc_account_drawdown_ratio{job=\"polymarket-v7\",instance=\"$instance\"}) and on(job,instance) (polymarket_v7_exporter_snapshot_usable{job=\"polymarket-v7\",instance=\"$instance\"} == 1)",
+          "refId": "A",
+          "instant": true,
+          "range": false
         }
       ],
       "fieldConfig": {
@@ -228,13 +242,13 @@
       "options": {
         "reduceOptions": {
           "calcs": [
-            "lastNotNull"
+            "last"
           ],
           "fields": "",
           "values": false
         },
         "colorMode": "value",
-        "graphMode": "area",
+        "graphMode": "none",
         "justifyMode": "auto",
         "orientation": "auto",
         "textMode": "auto",
@@ -258,8 +272,10 @@
       "description": "2=fully reconciled; 1=ledger is newer and canonical economics is still refreshing; 0=unverifiable or true divergence.",
       "targets": [
         {
-          "expr": "polymarket_mc_attribution_status_code",
-          "refId": "A"
+          "expr": "(polymarket_mc_attribution_status_code{job=\"polymarket-v7\",instance=\"$instance\"}) and on(job,instance) (polymarket_v7_exporter_snapshot_usable{job=\"polymarket-v7\",instance=\"$instance\"} == 1)",
+          "refId": "A",
+          "instant": true,
+          "range": false
         }
       ],
       "fieldConfig": {
@@ -286,13 +302,13 @@
       "options": {
         "reduceOptions": {
           "calcs": [
-            "lastNotNull"
+            "last"
           ],
           "fields": "",
           "values": false
         },
         "colorMode": "value",
-        "graphMode": "area",
+        "graphMode": "none",
         "justifyMode": "auto",
         "orientation": "auto",
         "textMode": "auto",
@@ -329,24 +345,34 @@
       "description": "PnL-only chart: equity is intentionally not mixed onto this scale.",
       "targets": [
         {
-          "expr": "polymarket_mc_total_pnl_usd",
+          "expr": "(polymarket_mc_total_pnl_usd{job=\"polymarket-v7\",instance=\"$instance\"}) and on(job,instance) (polymarket_v7_exporter_snapshot_usable{job=\"polymarket-v7\",instance=\"$instance\"} == 1)",
           "refId": "A",
-          "legendFormat": "total"
+          "legendFormat": "total",
+          "instant": false,
+          "range": true
         },
         {
-          "expr": "polymarket_mc_realized_pnl_usd",
+          "expr": "(polymarket_mc_realized_pnl_usd{job=\"polymarket-v7\",instance=\"$instance\"}) and on(job,instance) (polymarket_v7_exporter_snapshot_usable{job=\"polymarket-v7\",instance=\"$instance\"} == 1)",
           "refId": "B",
-          "legendFormat": "realized"
+          "legendFormat": "realized",
+          "instant": false,
+          "range": true
         },
         {
-          "expr": "polymarket_mc_unrealized_pnl_usd",
+          "expr": "(polymarket_mc_unrealized_pnl_usd{job=\"polymarket-v7\",instance=\"$instance\"}) and on(job,instance) (polymarket_v7_exporter_snapshot_usable{job=\"polymarket-v7\",instance=\"$instance\"} == 1)",
           "refId": "C",
-          "legendFormat": "open / unrealized"
+          "legendFormat": "open / unrealized",
+          "instant": false,
+          "range": true
         }
       ],
       "fieldConfig": {
         "defaults": {
-          "unit": "currencyUSD"
+          "unit": "prefix:$",
+          "custom": {
+            "spanNulls": false
+          },
+          "decimals": 2
         },
         "overrides": []
       },
@@ -381,14 +407,17 @@
       "description": "Only lanes with valid realized economic evidence appear.",
       "targets": [
         {
-          "expr": "sum by (asset) (polymarket_mc_lane_realized_pnl_usd)",
+          "expr": "(sum by (job, instance, asset) (polymarket_mc_lane_realized_pnl_usd{job=\"polymarket-v7\",instance=\"$instance\"})) and on(job,instance) (polymarket_v7_exporter_snapshot_usable{job=\"polymarket-v7\",instance=\"$instance\"} == 1)",
           "refId": "A",
-          "legendFormat": "{{asset}}"
+          "legendFormat": "{{asset}}",
+          "instant": true,
+          "range": false
         }
       ],
       "fieldConfig": {
         "defaults": {
-          "unit": "currencyUSD"
+          "unit": "prefix:$",
+          "decimals": 2
         },
         "overrides": []
       },
@@ -398,7 +427,7 @@
         "reduceOptions": {
           "values": false,
           "calcs": [
-            "lastNotNull"
+            "last"
           ],
           "fields": ""
         },
@@ -422,14 +451,17 @@
       "description": "",
       "targets": [
         {
-          "expr": "sum by (horizon) (polymarket_mc_lane_realized_pnl_usd)",
+          "expr": "(sum by (job, instance, horizon) (polymarket_mc_lane_realized_pnl_usd{job=\"polymarket-v7\",instance=\"$instance\"})) and on(job,instance) (polymarket_v7_exporter_snapshot_usable{job=\"polymarket-v7\",instance=\"$instance\"} == 1)",
           "refId": "A",
-          "legendFormat": "{{horizon}}"
+          "legendFormat": "{{horizon}}",
+          "instant": true,
+          "range": false
         }
       ],
       "fieldConfig": {
         "defaults": {
-          "unit": "currencyUSD"
+          "unit": "prefix:$",
+          "decimals": 2
         },
         "overrides": []
       },
@@ -439,7 +471,7 @@
         "reduceOptions": {
           "values": false,
           "calcs": [
-            "lastNotNull"
+            "last"
           ],
           "fields": ""
         },
@@ -476,14 +508,17 @@
       "description": "Missing lanes are N/A, never coerced to zero.",
       "targets": [
         {
-          "expr": "polymarket_mc_lane_realized_pnl_usd{asset=~\"$asset\",horizon=~\"$horizon\"}",
+          "expr": "(polymarket_mc_lane_realized_pnl_usd{job=\"polymarket-v7\",instance=\"$instance\",asset=~\"$asset\",horizon=~\"$horizon\"}) and on(job,instance) (polymarket_v7_exporter_snapshot_usable{job=\"polymarket-v7\",instance=\"$instance\"} == 1)",
           "refId": "A",
-          "legendFormat": "{{asset}} {{horizon}}"
+          "legendFormat": "{{asset}} {{horizon}}",
+          "instant": true,
+          "range": false
         }
       ],
       "fieldConfig": {
         "defaults": {
-          "unit": "currencyUSD"
+          "unit": "prefix:$",
+          "decimals": 2
         },
         "overrides": []
       },
@@ -493,7 +528,7 @@
         "reduceOptions": {
           "values": false,
           "calcs": [
-            "lastNotNull"
+            "last"
           ],
           "fields": ""
         },
@@ -517,9 +552,11 @@
       "description": "Emitted only when every FINAL has an observed win/loss label.",
       "targets": [
         {
-          "expr": "polymarket_mc_lane_win_rate{asset=~\"$asset\",horizon=~\"$horizon\"}",
+          "expr": "(polymarket_mc_lane_win_rate{job=\"polymarket-v7\",instance=\"$instance\",asset=~\"$asset\",horizon=~\"$horizon\"}) and on(job,instance) (polymarket_v7_exporter_snapshot_usable{job=\"polymarket-v7\",instance=\"$instance\"} == 1)",
           "refId": "A",
-          "legendFormat": "{{asset}} {{horizon}}"
+          "legendFormat": "{{asset}} {{horizon}}",
+          "instant": true,
+          "range": false
         }
       ],
       "fieldConfig": {
@@ -534,7 +571,7 @@
         "reduceOptions": {
           "values": false,
           "calcs": [
-            "lastNotNull"
+            "last"
           ],
           "fields": ""
         },
@@ -558,14 +595,17 @@
       "description": "",
       "targets": [
         {
-          "expr": "polymarket_mc_lane_avg_pnl_per_final_usd{asset=~\"$asset\",horizon=~\"$horizon\"}",
+          "expr": "(polymarket_mc_lane_avg_pnl_per_final_usd{job=\"polymarket-v7\",instance=\"$instance\",asset=~\"$asset\",horizon=~\"$horizon\"}) and on(job,instance) (polymarket_v7_exporter_snapshot_usable{job=\"polymarket-v7\",instance=\"$instance\"} == 1)",
           "refId": "A",
-          "legendFormat": "{{asset}} {{horizon}}"
+          "legendFormat": "{{asset}} {{horizon}}",
+          "instant": true,
+          "range": false
         }
       ],
       "fieldConfig": {
         "defaults": {
-          "unit": "currencyUSD"
+          "unit": "prefix:$",
+          "decimals": 2
         },
         "overrides": []
       },
@@ -575,7 +615,7 @@
         "reduceOptions": {
           "values": false,
           "calcs": [
-            "lastNotNull"
+            "last"
           ],
           "fields": ""
         },
@@ -599,9 +639,11 @@
       "description": "",
       "targets": [
         {
-          "expr": "polymarket_mc_lane_fills_total{asset=~\"$asset\",horizon=~\"$horizon\"}",
+          "expr": "(polymarket_mc_lane_fills_total{job=\"polymarket-v7\",instance=\"$instance\",asset=~\"$asset\",horizon=~\"$horizon\"}) and on(job,instance) (polymarket_v7_exporter_snapshot_usable{job=\"polymarket-v7\",instance=\"$instance\"} == 1)",
           "refId": "A",
-          "legendFormat": "{{asset}} {{horizon}}"
+          "legendFormat": "{{asset}} {{horizon}}",
+          "instant": true,
+          "range": false
         }
       ],
       "fieldConfig": {
@@ -614,7 +656,7 @@
         "reduceOptions": {
           "values": false,
           "calcs": [
-            "lastNotNull"
+            "last"
           ],
           "fields": ""
         },
@@ -638,9 +680,11 @@
       "description": "",
       "targets": [
         {
-          "expr": "polymarket_mc_lane_finals_total{asset=~\"$asset\",horizon=~\"$horizon\"}",
+          "expr": "(polymarket_mc_lane_finals_total{job=\"polymarket-v7\",instance=\"$instance\",asset=~\"$asset\",horizon=~\"$horizon\"}) and on(job,instance) (polymarket_v7_exporter_snapshot_usable{job=\"polymarket-v7\",instance=\"$instance\"} == 1)",
           "refId": "A",
-          "legendFormat": "{{asset}} {{horizon}}"
+          "legendFormat": "{{asset}} {{horizon}}",
+          "instant": true,
+          "range": false
         }
       ],
       "fieldConfig": {
@@ -653,7 +697,7 @@
         "reduceOptions": {
           "values": false,
           "calcs": [
-            "lastNotNull"
+            "last"
           ],
           "fields": ""
         },
@@ -677,9 +721,11 @@
       "description": "Only emitted when position identity is complete.",
       "targets": [
         {
-          "expr": "polymarket_mc_lane_open_positions{asset=~\"$asset\",horizon=~\"$horizon\"}",
+          "expr": "(polymarket_mc_lane_open_positions{job=\"polymarket-v7\",instance=\"$instance\",asset=~\"$asset\",horizon=~\"$horizon\"}) and on(job,instance) (polymarket_v7_exporter_snapshot_usable{job=\"polymarket-v7\",instance=\"$instance\"} == 1)",
           "refId": "A",
-          "legendFormat": "{{asset}} {{horizon}}"
+          "legendFormat": "{{asset}} {{horizon}}",
+          "instant": true,
+          "range": false
         }
       ],
       "fieldConfig": {
@@ -692,7 +738,7 @@
         "reduceOptions": {
           "values": false,
           "calcs": [
-            "lastNotNull"
+            "last"
           ],
           "fields": ""
         },
@@ -716,14 +762,17 @@
       "description": "",
       "targets": [
         {
-          "expr": "polymarket_mc_lane_fees_usd{asset=~\"$asset\",horizon=~\"$horizon\"}",
+          "expr": "(polymarket_mc_lane_fees_usd{job=\"polymarket-v7\",instance=\"$instance\",asset=~\"$asset\",horizon=~\"$horizon\"}) and on(job,instance) (polymarket_v7_exporter_snapshot_usable{job=\"polymarket-v7\",instance=\"$instance\"} == 1)",
           "refId": "A",
-          "legendFormat": "{{asset}} {{horizon}}"
+          "legendFormat": "{{asset}} {{horizon}}",
+          "instant": true,
+          "range": false
         }
       ],
       "fieldConfig": {
         "defaults": {
-          "unit": "currencyUSD"
+          "unit": "prefix:$",
+          "decimals": 2
         },
         "overrides": []
       },
@@ -733,7 +782,7 @@
         "reduceOptions": {
           "values": false,
           "calcs": [
-            "lastNotNull"
+            "last"
           ],
           "fields": ""
         },
@@ -757,9 +806,11 @@
       "description": "Only emitted once realized PnL and attributable turnover are both known.",
       "targets": [
         {
-          "expr": "polymarket_mc_lane_realized_return_on_turnover{asset=~\"$asset\",horizon=~\"$horizon\"}",
+          "expr": "(polymarket_mc_lane_realized_return_on_turnover{job=\"polymarket-v7\",instance=\"$instance\",asset=~\"$asset\",horizon=~\"$horizon\"}) and on(job,instance) (polymarket_v7_exporter_snapshot_usable{job=\"polymarket-v7\",instance=\"$instance\"} == 1)",
           "refId": "A",
-          "legendFormat": "{{asset}} {{horizon}}"
+          "legendFormat": "{{asset}} {{horizon}}",
+          "instant": true,
+          "range": false
         }
       ],
       "fieldConfig": {
@@ -774,7 +825,7 @@
         "reduceOptions": {
           "values": false,
           "calcs": [
-            "lastNotNull"
+            "last"
           ],
           "fields": ""
         },
@@ -798,9 +849,11 @@
       "description": "Execution fee burden in basis points of attributable filled turnover.",
       "targets": [
         {
-          "expr": "polymarket_mc_lane_fees_bps{asset=~\"$asset\",horizon=~\"$horizon\"}",
+          "expr": "(polymarket_mc_lane_fees_bps{job=\"polymarket-v7\",instance=\"$instance\",asset=~\"$asset\",horizon=~\"$horizon\"}) and on(job,instance) (polymarket_v7_exporter_snapshot_usable{job=\"polymarket-v7\",instance=\"$instance\"} == 1)",
           "refId": "A",
-          "legendFormat": "{{asset}} {{horizon}}"
+          "legendFormat": "{{asset}} {{horizon}}",
+          "instant": true,
+          "range": false
         }
       ],
       "fieldConfig": {
@@ -813,7 +866,7 @@
         "reduceOptions": {
           "values": false,
           "calcs": [
-            "lastNotNull"
+            "last"
           ],
           "fields": ""
         },
@@ -837,14 +890,17 @@
       "description": "Derived only from attributable BUY fills whose position has no canonical FINAL yet; missing identity stays N/A.",
       "targets": [
         {
-          "expr": "polymarket_mc_lane_open_cost_at_risk_usd{asset=~\"$asset\",horizon=~\"$horizon\"}",
+          "expr": "(polymarket_mc_lane_open_cost_at_risk_usd{job=\"polymarket-v7\",instance=\"$instance\",asset=~\"$asset\",horizon=~\"$horizon\"}) and on(job,instance) (polymarket_v7_exporter_snapshot_usable{job=\"polymarket-v7\",instance=\"$instance\"} == 1)",
           "refId": "A",
-          "legendFormat": "{{asset}} {{horizon}}"
+          "legendFormat": "{{asset}} {{horizon}}",
+          "instant": true,
+          "range": false
         }
       ],
       "fieldConfig": {
         "defaults": {
-          "unit": "currencyUSD"
+          "unit": "prefix:$",
+          "decimals": 2
         },
         "overrides": []
       },
@@ -854,7 +910,7 @@
         "reduceOptions": {
           "values": false,
           "calcs": [
-            "lastNotNull"
+            "last"
           ],
           "fields": ""
         },
@@ -891,14 +947,20 @@
       "description": "Canonical ledger attribution by model family / strategy.",
       "targets": [
         {
-          "expr": "polymarket_mc_strategy_realized_pnl_usd{asset=~\"$asset\",horizon=~\"$horizon\",strategy=~\"$strategy\"}",
+          "expr": "(polymarket_mc_strategy_realized_pnl_usd{job=\"polymarket-v7\",instance=\"$instance\",asset=~\"$asset\",horizon=~\"$horizon\",strategy=~\"$strategy\"}) and on(job,instance) (polymarket_v7_exporter_snapshot_usable{job=\"polymarket-v7\",instance=\"$instance\"} == 1)",
           "refId": "A",
-          "legendFormat": "{{strategy}} · {{asset}} {{horizon}}"
+          "legendFormat": "{{strategy}} · {{asset}} {{horizon}}",
+          "instant": false,
+          "range": true
         }
       ],
       "fieldConfig": {
         "defaults": {
-          "unit": "currencyUSD"
+          "unit": "prefix:$",
+          "custom": {
+            "spanNulls": false
+          },
+          "decimals": 2
         },
         "overrides": []
       },
@@ -933,14 +995,17 @@
       "description": "",
       "targets": [
         {
-          "expr": "polymarket_mc_lane_turnover_usd{asset=~\"$asset\",horizon=~\"$horizon\"}",
+          "expr": "(polymarket_mc_lane_turnover_usd{job=\"polymarket-v7\",instance=\"$instance\",asset=~\"$asset\",horizon=~\"$horizon\"}) and on(job,instance) (polymarket_v7_exporter_snapshot_usable{job=\"polymarket-v7\",instance=\"$instance\"} == 1)",
           "refId": "A",
-          "legendFormat": "{{asset}} {{horizon}}"
+          "legendFormat": "{{asset}} {{horizon}}",
+          "instant": true,
+          "range": false
         }
       ],
       "fieldConfig": {
         "defaults": {
-          "unit": "currencyUSD"
+          "unit": "prefix:$",
+          "decimals": 2
         },
         "overrides": []
       },
@@ -950,7 +1015,7 @@
         "reduceOptions": {
           "values": false,
           "calcs": [
-            "lastNotNull"
+            "last"
           ],
           "fields": ""
         },
@@ -987,24 +1052,34 @@
       "description": "Opportunity/candidate exposure seen by the coordinator; this is not the same as capital actually open in the canonical ledger.",
       "targets": [
         {
-          "expr": "polymarket_mc_coordinator_candidate_gross_exposure_usd",
+          "expr": "(polymarket_mc_coordinator_candidate_gross_exposure_usd{job=\"polymarket-v7\",instance=\"$instance\"}) and on(job,instance) (polymarket_v7_exporter_snapshot_usable{job=\"polymarket-v7\",instance=\"$instance\"} == 1)",
           "refId": "A",
-          "legendFormat": "gross"
+          "legendFormat": "gross",
+          "instant": false,
+          "range": true
         },
         {
-          "expr": "polymarket_mc_coordinator_candidate_net_exposure_usd",
+          "expr": "(polymarket_mc_coordinator_candidate_net_exposure_usd{job=\"polymarket-v7\",instance=\"$instance\"}) and on(job,instance) (polymarket_v7_exporter_snapshot_usable{job=\"polymarket-v7\",instance=\"$instance\"} == 1)",
           "refId": "B",
-          "legendFormat": "net directional"
+          "legendFormat": "net directional",
+          "instant": false,
+          "range": true
         },
         {
-          "expr": "polymarket_mc_coordinator_candidate_cluster_exposure_usd",
+          "expr": "(polymarket_mc_coordinator_candidate_cluster_exposure_usd{job=\"polymarket-v7\",instance=\"$instance\"}) and on(job,instance) (polymarket_v7_exporter_snapshot_usable{job=\"polymarket-v7\",instance=\"$instance\"} == 1)",
           "refId": "C",
-          "legendFormat": "cluster"
+          "legendFormat": "cluster",
+          "instant": false,
+          "range": true
         }
       ],
       "fieldConfig": {
         "defaults": {
-          "unit": "currencyUSD"
+          "unit": "prefix:$",
+          "custom": {
+            "spanNulls": false
+          },
+          "decimals": 2
         },
         "overrides": []
       },
@@ -1039,18 +1114,26 @@
       "description": "Counts are derived from canonical PAPER ledger events.",
       "targets": [
         {
-          "expr": "sum(polymarket_mc_lane_fills_total)",
+          "expr": "(sum by (job, instance) (polymarket_mc_lane_fills_total{job=\"polymarket-v7\",instance=\"$instance\"})) and on(job,instance) (polymarket_v7_exporter_snapshot_usable{job=\"polymarket-v7\",instance=\"$instance\"} == 1)",
           "refId": "A",
-          "legendFormat": "fills"
+          "legendFormat": "fills",
+          "instant": false,
+          "range": true
         },
         {
-          "expr": "sum(polymarket_mc_lane_finals_total)",
+          "expr": "(sum by (job, instance) (polymarket_mc_lane_finals_total{job=\"polymarket-v7\",instance=\"$instance\"})) and on(job,instance) (polymarket_v7_exporter_snapshot_usable{job=\"polymarket-v7\",instance=\"$instance\"} == 1)",
           "refId": "B",
-          "legendFormat": "settled"
+          "legendFormat": "settled",
+          "instant": false,
+          "range": true
         }
       ],
       "fieldConfig": {
-        "defaults": {},
+        "defaults": {
+          "custom": {
+            "spanNulls": false
+          }
+        },
         "overrides": []
       },
       "options": {
@@ -1084,14 +1167,17 @@
       "description": "Coordinator opportunity/candidate exposure, not an executed-position balance.",
       "targets": [
         {
-          "expr": "polymarket_mc_coordinator_candidate_asset_exposure_usd",
+          "expr": "(polymarket_mc_coordinator_candidate_asset_exposure_usd{job=\"polymarket-v7\",instance=\"$instance\"}) and on(job,instance) (polymarket_v7_exporter_snapshot_usable{job=\"polymarket-v7\",instance=\"$instance\"} == 1)",
           "refId": "A",
-          "legendFormat": "{{asset}}"
+          "legendFormat": "{{asset}}",
+          "instant": true,
+          "range": false
         }
       ],
       "fieldConfig": {
         "defaults": {
-          "unit": "currencyUSD"
+          "unit": "prefix:$",
+          "decimals": 2
         },
         "overrides": []
       },
@@ -1101,7 +1187,7 @@
         "reduceOptions": {
           "values": false,
           "calcs": [
-            "lastNotNull"
+            "last"
           ],
           "fields": ""
         },
@@ -1125,14 +1211,17 @@
       "description": "Coordinator opportunity/candidate exposure aggregated by M5/M15.",
       "targets": [
         {
-          "expr": "polymarket_mc_coordinator_candidate_horizon_exposure_usd",
+          "expr": "(polymarket_mc_coordinator_candidate_horizon_exposure_usd{job=\"polymarket-v7\",instance=\"$instance\"}) and on(job,instance) (polymarket_v7_exporter_snapshot_usable{job=\"polymarket-v7\",instance=\"$instance\"} == 1)",
           "refId": "A",
-          "legendFormat": "{{horizon}}"
+          "legendFormat": "{{horizon}}",
+          "instant": true,
+          "range": false
         }
       ],
       "fieldConfig": {
         "defaults": {
-          "unit": "currencyUSD"
+          "unit": "prefix:$",
+          "decimals": 2
         },
         "overrides": []
       },
@@ -1142,7 +1231,7 @@
         "reduceOptions": {
           "values": false,
           "calcs": [
-            "lastNotNull"
+            "last"
           ],
           "fields": ""
         },
@@ -1166,8 +1255,10 @@
       "description": "Share of gross crypto exposure concentrated in the largest oracle source.",
       "targets": [
         {
-          "expr": "polymarket_mc_coordinator_candidate_oracle_concentration_ratio",
-          "refId": "A"
+          "expr": "(polymarket_mc_coordinator_candidate_oracle_concentration_ratio{job=\"polymarket-v7\",instance=\"$instance\"}) and on(job,instance) (polymarket_v7_exporter_snapshot_usable{job=\"polymarket-v7\",instance=\"$instance\"} == 1)",
+          "refId": "A",
+          "instant": true,
+          "range": false
         }
       ],
       "fieldConfig": {
@@ -1179,13 +1270,13 @@
       "options": {
         "reduceOptions": {
           "calcs": [
-            "lastNotNull"
+            "last"
           ],
           "fields": "",
           "values": false
         },
         "colorMode": "value",
-        "graphMode": "area",
+        "graphMode": "none",
         "justifyMode": "auto",
         "orientation": "auto",
         "textMode": "auto",
@@ -1209,8 +1300,10 @@
       "description": "Share of gross crypto exposure concentrated in the largest exchange/depth source.",
       "targets": [
         {
-          "expr": "polymarket_mc_coordinator_candidate_exchange_concentration_ratio",
-          "refId": "A"
+          "expr": "(polymarket_mc_coordinator_candidate_exchange_concentration_ratio{job=\"polymarket-v7\",instance=\"$instance\"}) and on(job,instance) (polymarket_v7_exporter_snapshot_usable{job=\"polymarket-v7\",instance=\"$instance\"} == 1)",
+          "refId": "A",
+          "instant": true,
+          "range": false
         }
       ],
       "fieldConfig": {
@@ -1222,13 +1315,13 @@
       "options": {
         "reduceOptions": {
           "calcs": [
-            "lastNotNull"
+            "last"
           ],
           "fields": "",
           "values": false
         },
         "colorMode": "value",
-        "graphMode": "area",
+        "graphMode": "none",
         "justifyMode": "auto",
         "orientation": "auto",
         "textMode": "auto",
@@ -1265,8 +1358,10 @@
       "description": "READY requires zero-authority safety plus all active contracts ready.",
       "targets": [
         {
-          "expr": "polymarket_mc_shadow_ready",
-          "refId": "A"
+          "expr": "(polymarket_mc_shadow_ready{job=\"polymarket-v7\",instance=\"$instance\"}) and on(job,instance) (polymarket_v7_exporter_snapshot_usable{job=\"polymarket-v7\",instance=\"$instance\"} == 1)",
+          "refId": "A",
+          "instant": true,
+          "range": false
         }
       ],
       "fieldConfig": {
@@ -1290,13 +1385,13 @@
       "options": {
         "reduceOptions": {
           "calcs": [
-            "lastNotNull"
+            "last"
           ],
           "fields": "",
           "values": false
         },
         "colorMode": "value",
-        "graphMode": "area",
+        "graphMode": "none",
         "justifyMode": "auto",
         "orientation": "auto",
         "textMode": "auto",
@@ -1320,8 +1415,10 @@
       "description": "Healthy external venue data assets; target universe is 6.",
       "targets": [
         {
-          "expr": "polymarket_mc_shadow_external_ready_assets",
-          "refId": "A"
+          "expr": "(polymarket_mc_shadow_external_ready_assets{job=\"polymarket-v7\",instance=\"$instance\"}) and on(job,instance) (polymarket_v7_exporter_snapshot_usable{job=\"polymarket-v7\",instance=\"$instance\"} == 1)",
+          "refId": "A",
+          "instant": true,
+          "range": false
         }
       ],
       "fieldConfig": {
@@ -1331,13 +1428,13 @@
       "options": {
         "reduceOptions": {
           "calcs": [
-            "lastNotNull"
+            "last"
           ],
           "fields": "",
           "values": false
         },
         "colorMode": "value",
-        "graphMode": "area",
+        "graphMode": "none",
         "justifyMode": "auto",
         "orientation": "auto",
         "textMode": "auto",
@@ -1361,8 +1458,10 @@
       "description": "Settlement/oracle health across the six-asset SHADOW universe.",
       "targets": [
         {
-          "expr": "polymarket_mc_shadow_oracle_healthy_assets",
-          "refId": "A"
+          "expr": "(polymarket_mc_shadow_oracle_healthy_assets{job=\"polymarket-v7\",instance=\"$instance\"}) and on(job,instance) (polymarket_v7_exporter_snapshot_usable{job=\"polymarket-v7\",instance=\"$instance\"} == 1)",
+          "refId": "A",
+          "instant": true,
+          "range": false
         }
       ],
       "fieldConfig": {
@@ -1372,13 +1471,13 @@
       "options": {
         "reduceOptions": {
           "calcs": [
-            "lastNotNull"
+            "last"
           ],
           "fields": "",
           "values": false
         },
         "colorMode": "value",
-        "graphMode": "area",
+        "graphMode": "none",
         "justifyMode": "auto",
         "orientation": "auto",
         "textMode": "auto",
@@ -1402,8 +1501,10 @@
       "description": "Ready active markets; target is 12 = 6 assets × M5/M15.",
       "targets": [
         {
-          "expr": "polymarket_mc_shadow_contract_ready_markets",
-          "refId": "A"
+          "expr": "(polymarket_mc_shadow_contract_ready_markets{job=\"polymarket-v7\",instance=\"$instance\"}) and on(job,instance) (polymarket_v7_exporter_snapshot_usable{job=\"polymarket-v7\",instance=\"$instance\"} == 1)",
+          "refId": "A",
+          "instant": true,
+          "range": false
         }
       ],
       "fieldConfig": {
@@ -1413,13 +1514,13 @@
       "options": {
         "reduceOptions": {
           "calcs": [
-            "lastNotNull"
+            "last"
           ],
           "fields": "",
           "values": false
         },
         "colorMode": "value",
-        "graphMode": "area",
+        "graphMode": "none",
         "justifyMode": "auto",
         "orientation": "auto",
         "textMode": "auto",
@@ -1443,8 +1544,10 @@
       "description": "Book evidence completeness from the SHADOW supervisor.",
       "targets": [
         {
-          "expr": "polymarket_mc_shadow_book_evidence_complete",
-          "refId": "A"
+          "expr": "(polymarket_mc_shadow_book_evidence_complete{job=\"polymarket-v7\",instance=\"$instance\"}) and on(job,instance) (polymarket_v7_exporter_snapshot_usable{job=\"polymarket-v7\",instance=\"$instance\"} == 1)",
+          "refId": "A",
+          "instant": true,
+          "range": false
         }
       ],
       "fieldConfig": {
@@ -1468,13 +1571,13 @@
       "options": {
         "reduceOptions": {
           "calcs": [
-            "lastNotNull"
+            "last"
           ],
           "fields": "",
           "values": false
         },
         "colorMode": "value",
-        "graphMode": "area",
+        "graphMode": "none",
         "justifyMode": "auto",
         "orientation": "auto",
         "textMode": "auto",
@@ -1498,8 +1601,10 @@
       "description": "Label evidence completeness from the SHADOW supervisor.",
       "targets": [
         {
-          "expr": "polymarket_mc_shadow_label_evidence_complete",
-          "refId": "A"
+          "expr": "(polymarket_mc_shadow_label_evidence_complete{job=\"polymarket-v7\",instance=\"$instance\"}) and on(job,instance) (polymarket_v7_exporter_snapshot_usable{job=\"polymarket-v7\",instance=\"$instance\"} == 1)",
+          "refId": "A",
+          "instant": true,
+          "range": false
         }
       ],
       "fieldConfig": {
@@ -1523,13 +1628,13 @@
       "options": {
         "reduceOptions": {
           "calcs": [
-            "lastNotNull"
+            "last"
           ],
           "fields": "",
           "values": false
         },
         "colorMode": "value",
-        "graphMode": "area",
+        "graphMode": "none",
         "justifyMode": "auto",
         "orientation": "auto",
         "textMode": "auto",
@@ -1553,8 +1658,10 @@
       "description": "Causal feature rows emitted by the SHADOW six-crypto tape.",
       "targets": [
         {
-          "expr": "polymarket_mc_shadow_feature_tape_emitted",
-          "refId": "A"
+          "expr": "(polymarket_mc_shadow_feature_tape_emitted{job=\"polymarket-v7\",instance=\"$instance\"}) and on(job,instance) (polymarket_v7_exporter_snapshot_usable{job=\"polymarket-v7\",instance=\"$instance\"} == 1)",
+          "refId": "A",
+          "instant": true,
+          "range": false
         }
       ],
       "fieldConfig": {
@@ -1564,13 +1671,13 @@
       "options": {
         "reduceOptions": {
           "calcs": [
-            "lastNotNull"
+            "last"
           ],
           "fields": "",
           "values": false
         },
         "colorMode": "value",
-        "graphMode": "area",
+        "graphMode": "none",
         "justifyMode": "auto",
         "orientation": "auto",
         "textMode": "auto",
@@ -1594,8 +1701,10 @@
       "description": "Age of the last SHADOW supervisor status. Missing means no configured SHADOW source.",
       "targets": [
         {
-          "expr": "polymarket_mc_shadow_status_age_seconds",
-          "refId": "A"
+          "expr": "(polymarket_mc_shadow_status_age_seconds{job=\"polymarket-v7\",instance=\"$instance\"}) and on(job,instance) (polymarket_v7_exporter_snapshot_usable{job=\"polymarket-v7\",instance=\"$instance\"} == 1)",
+          "refId": "A",
+          "instant": true,
+          "range": false
         }
       ],
       "fieldConfig": {
@@ -1607,13 +1716,13 @@
       "options": {
         "reduceOptions": {
           "calcs": [
-            "lastNotNull"
+            "last"
           ],
           "fields": "",
           "values": false
         },
         "colorMode": "value",
-        "graphMode": "area",
+        "graphMode": "none",
         "justifyMode": "auto",
         "orientation": "auto",
         "textMode": "auto",
@@ -1650,8 +1759,10 @@
       "description": "Expected full universe is 12 = 6 assets × 2 horizons.",
       "targets": [
         {
-          "expr": "polymarket_mc_registered_lanes",
-          "refId": "A"
+          "expr": "(polymarket_mc_registered_lanes{job=\"polymarket-v7\",instance=\"$instance\"}) and on(job,instance) (polymarket_v7_exporter_snapshot_usable{job=\"polymarket-v7\",instance=\"$instance\"} == 1)",
+          "refId": "A",
+          "instant": true,
+          "range": false
         }
       ],
       "fieldConfig": {
@@ -1661,13 +1772,13 @@
       "options": {
         "reduceOptions": {
           "calcs": [
-            "lastNotNull"
+            "last"
           ],
           "fields": "",
           "values": false
         },
         "colorMode": "value",
-        "graphMode": "area",
+        "graphMode": "none",
         "justifyMode": "auto",
         "orientation": "auto",
         "textMode": "auto",
@@ -1691,8 +1802,10 @@
       "description": "A SHADOW-only lane is not counted as economic performance.",
       "targets": [
         {
-          "expr": "polymarket_mc_known_economic_lanes",
-          "refId": "A"
+          "expr": "(polymarket_mc_known_economic_lanes{job=\"polymarket-v7\",instance=\"$instance\"}) and on(job,instance) (polymarket_v7_exporter_snapshot_usable{job=\"polymarket-v7\",instance=\"$instance\"} == 1)",
+          "refId": "A",
+          "instant": true,
+          "range": false
         }
       ],
       "fieldConfig": {
@@ -1702,13 +1815,13 @@
       "options": {
         "reduceOptions": {
           "calcs": [
-            "lastNotNull"
+            "last"
           ],
           "fields": "",
           "values": false
         },
         "colorMode": "value",
-        "graphMode": "area",
+        "graphMode": "none",
         "justifyMode": "auto",
         "orientation": "auto",
         "textMode": "auto",
@@ -1732,8 +1845,10 @@
       "description": "Safety visibility only; dashboard itself has no execution authority.",
       "targets": [
         {
-          "expr": "polymarket_mc_new_risk_authorized_lanes",
-          "refId": "A"
+          "expr": "(polymarket_mc_new_risk_authorized_lanes{job=\"polymarket-v7\",instance=\"$instance\"}) and on(job,instance) (polymarket_v7_exporter_snapshot_usable{job=\"polymarket-v7\",instance=\"$instance\"} == 1)",
+          "refId": "A",
+          "instant": true,
+          "range": false
         }
       ],
       "fieldConfig": {
@@ -1743,13 +1858,13 @@
       "options": {
         "reduceOptions": {
           "calcs": [
-            "lastNotNull"
+            "last"
           ],
           "fields": "",
           "values": false
         },
         "colorMode": "value",
-        "graphMode": "area",
+        "graphMode": "none",
         "justifyMode": "auto",
         "orientation": "auto",
         "textMode": "auto",
@@ -1773,26 +1888,29 @@
       "description": "Canonical realized PnL minus attributed ledger PnL. A temporary non-zero value is expected only when Attribution says CANONICAL REFRESH.",
       "targets": [
         {
-          "expr": "polymarket_mc_attribution_gap_usd",
-          "refId": "A"
+          "expr": "(polymarket_mc_attribution_gap_usd{job=\"polymarket-v7\",instance=\"$instance\"}) and on(job,instance) (polymarket_v7_exporter_snapshot_usable{job=\"polymarket-v7\",instance=\"$instance\"} == 1)",
+          "refId": "A",
+          "instant": true,
+          "range": false
         }
       ],
       "fieldConfig": {
         "defaults": {
-          "unit": "currencyUSD"
+          "unit": "prefix:$",
+          "decimals": 2
         },
         "overrides": []
       },
       "options": {
         "reduceOptions": {
           "calcs": [
-            "lastNotNull"
+            "last"
           ],
           "fields": "",
           "values": false
         },
         "colorMode": "value",
-        "graphMode": "area",
+        "graphMode": "none",
         "justifyMode": "auto",
         "orientation": "auto",
         "textMode": "auto",
@@ -1816,8 +1934,10 @@
       "description": "Must be zero for clean asset×horizon attribution.",
       "targets": [
         {
-          "expr": "polymarket_mc_unattributed_final_rows",
-          "refId": "A"
+          "expr": "(polymarket_mc_unattributed_final_rows{job=\"polymarket-v7\",instance=\"$instance\"}) and on(job,instance) (polymarket_v7_exporter_snapshot_usable{job=\"polymarket-v7\",instance=\"$instance\"} == 1)",
+          "refId": "A",
+          "instant": true,
+          "range": false
         }
       ],
       "fieldConfig": {
@@ -1827,13 +1947,13 @@
       "options": {
         "reduceOptions": {
           "calcs": [
-            "lastNotNull"
+            "last"
           ],
           "fields": "",
           "values": false
         },
         "colorMode": "value",
-        "graphMode": "area",
+        "graphMode": "none",
         "justifyMode": "auto",
         "orientation": "auto",
         "textMode": "auto",
@@ -1857,8 +1977,10 @@
       "description": "Read-only accounting source validity.",
       "targets": [
         {
-          "expr": "polymarket_mc_ledger_valid",
-          "refId": "A"
+          "expr": "(polymarket_mc_ledger_valid{job=\"polymarket-v7\",instance=\"$instance\"}) and on(job,instance) (polymarket_v7_exporter_snapshot_usable{job=\"polymarket-v7\",instance=\"$instance\"} == 1)",
+          "refId": "A",
+          "instant": true,
+          "range": false
         }
       ],
       "fieldConfig": {
@@ -1882,13 +2004,13 @@
       "options": {
         "reduceOptions": {
           "calcs": [
-            "lastNotNull"
+            "last"
           ],
           "fields": "",
           "values": false
         },
         "colorMode": "value",
-        "graphMode": "area",
+        "graphMode": "none",
         "justifyMode": "auto",
         "orientation": "auto",
         "textMode": "auto",
@@ -1912,9 +2034,11 @@
       "description": "",
       "targets": [
         {
-          "expr": "polymarket_mc_lane_registered{asset=~\"$asset\",horizon=~\"$horizon\"}",
+          "expr": "(polymarket_mc_lane_registered{job=\"polymarket-v7\",instance=\"$instance\",asset=~\"$asset\",horizon=~\"$horizon\"}) and on(job,instance) (polymarket_v7_exporter_snapshot_usable{job=\"polymarket-v7\",instance=\"$instance\"} == 1)",
           "refId": "A",
-          "legendFormat": "{{asset}} {{horizon}}"
+          "legendFormat": "{{asset}} {{horizon}}",
+          "instant": true,
+          "range": false
         }
       ],
       "fieldConfig": {
@@ -1927,7 +2051,7 @@
         "reduceOptions": {
           "values": false,
           "calcs": [
-            "lastNotNull"
+            "last"
           ],
           "fields": ""
         },
@@ -1951,9 +2075,11 @@
       "description": "0 means N/A for performance, not zero PnL.",
       "targets": [
         {
-          "expr": "polymarket_mc_lane_economic_evidence_present{asset=~\"$asset\",horizon=~\"$horizon\"}",
+          "expr": "(polymarket_mc_lane_economic_evidence_present{job=\"polymarket-v7\",instance=\"$instance\",asset=~\"$asset\",horizon=~\"$horizon\"}) and on(job,instance) (polymarket_v7_exporter_snapshot_usable{job=\"polymarket-v7\",instance=\"$instance\"} == 1)",
           "refId": "A",
-          "legendFormat": "{{asset}} {{horizon}}"
+          "legendFormat": "{{asset}} {{horizon}}",
+          "instant": true,
+          "range": false
         }
       ],
       "fieldConfig": {
@@ -1966,7 +2092,7 @@
         "reduceOptions": {
           "values": false,
           "calcs": [
-            "lastNotNull"
+            "last"
           ],
           "fields": ""
         },
@@ -1990,9 +2116,11 @@
       "description": "This is observed authority state; the monitoring system cannot grant authority.",
       "targets": [
         {
-          "expr": "polymarket_mc_lane_new_risk_authorized{asset=~\"$asset\",horizon=~\"$horizon\"}",
+          "expr": "(polymarket_mc_lane_new_risk_authorized{job=\"polymarket-v7\",instance=\"$instance\",asset=~\"$asset\",horizon=~\"$horizon\"}) and on(job,instance) (polymarket_v7_exporter_snapshot_usable{job=\"polymarket-v7\",instance=\"$instance\"} == 1)",
           "refId": "A",
-          "legendFormat": "{{asset}} {{horizon}}"
+          "legendFormat": "{{asset}} {{horizon}}",
+          "instant": true,
+          "range": false
         }
       ],
       "fieldConfig": {
@@ -2005,7 +2133,7 @@
         "reduceOptions": {
           "values": false,
           "calcs": [
-            "lastNotNull"
+            "last"
           ],
           "fields": ""
         },
@@ -2040,6 +2168,30 @@
   ],
   "templating": {
     "list": [
+      {
+        "name": "instance",
+        "label": "Crypto runtime target",
+        "type": "query",
+        "datasource": {
+          "type": "prometheus",
+          "uid": "prometheus-v7"
+        },
+        "definition": "label_values(up{job=\"polymarket-v7\"}, instance)",
+        "query": {
+          "query": "label_values(up{job=\"polymarket-v7\"}, instance)",
+          "refId": "instance"
+        },
+        "refresh": 1,
+        "sort": 1,
+        "multi": false,
+        "includeAll": false,
+        "current": {
+          "selected": false,
+          "text": "127.0.0.1:9108",
+          "value": "127.0.0.1:9108"
+        },
+        "options": []
+      },
       {
         "name": "asset",
         "label": "Asset",
@@ -2076,9 +2228,9 @@
           "type": "prometheus",
           "uid": "prometheus-v7"
         },
-        "definition": "label_values(polymarket_mc_strategy_realized_pnl_usd, strategy)",
+        "definition": "label_values(polymarket_mc_strategy_realized_pnl_usd{job=\"polymarket-v7\",instance=\"$instance\"}, strategy)",
         "query": {
-          "query": "label_values(polymarket_mc_strategy_realized_pnl_usd, strategy)",
+          "query": "label_values(polymarket_mc_strategy_realized_pnl_usd{job=\"polymarket-v7\",instance=\"$instance\"}, strategy)",
           "refId": "StandardVariableQuery"
         },
         "refresh": 1,

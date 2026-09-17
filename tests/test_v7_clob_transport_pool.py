@@ -7,6 +7,7 @@ import tempfile
 import threading
 import time
 from pathlib import Path
+from test_v7_clob_tls import _openssl_flags
 
 ROOT = Path(__file__).resolve().parents[1]
 PROGRAM = r'''
@@ -44,7 +45,7 @@ def test_order_stall_does_not_block_cancel_lane() -> None:
         p = Path(td)
         cert, key = p / "cert.pem", p / "key.pem"
         subprocess.run(["openssl","req","-x509","-newkey","rsa:2048","-nodes","-keyout",str(key),"-out",str(cert),"-days","1","-subj","/CN=localhost","-addext","subjectAltName=DNS:localhost"],check=True,stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL)
-        listener=socket.socket(); listener.bind(("127.0.0.1",0)); listener.listen(2); port=listener.getsockname()[1]
+        listener=socket.socket(); listener.bind(("127.0.0.1",0)); listener.settimeout(10.0); listener.listen(2); port=listener.getsockname()[1]
         errors=[]; accepted=[]
         def server():
             try:
@@ -57,13 +58,14 @@ def test_order_stall_does_not_block_cancel_lane() -> None:
                         if data.startswith(b"GET /order "): time.sleep(.35)
                         conn.sendall(b"HTTP/1.1 200 OK\r\nContent-Length: 1\r\nConnection: keep-alive\r\n\r\nx")
                 for _ in range(2):
-                    raw,_=listener.accept(); accepted.append(1); t=threading.Thread(target=handle,args=(raw,)); t.start(); threads.append(t)
+                    raw,_=listener.accept(); raw.settimeout(5.0); accepted.append(1); t=threading.Thread(target=handle,args=(raw,)); t.start(); threads.append(t)
                 for t in threads: t.join()
             except BaseException as e: errors.append(e)
             finally: listener.close()
-        st=threading.Thread(target=server); st.start()
+        st=threading.Thread(target=server)
         src=p/"main.cpp"; exe=p/"pool"; src.write_text(PROGRAM)
-        prefix=subprocess.check_output(["brew","--prefix","openssl@3"],text=True).strip()
-        subprocess.run([cxx,"-std=c++20","-O2",f"-I{ROOT/'include'}",f"-I{prefix}/include",str(ROOT/"src/v7_clob_tls.cpp"),str(src),"-o",str(exe),f"-L{prefix}/lib","-lssl","-lcrypto"],check=True)
+        inc, libs = _openssl_flags()
+        subprocess.run([cxx,"-std=c++20","-O2",f"-I{ROOT/'include'}",*inc,str(ROOT/"src/v7_clob_tls.cpp"),str(src),"-o",str(exe),*libs],check=True)
+        st.start()
         subprocess.run([str(exe),str(port),str(cert)],check=True,timeout=10); st.join(timeout=5)
         assert not st.is_alive() and not errors and len(accepted)==2
