@@ -1,6 +1,6 @@
 {
   "schema": "polymarket_v7_london_az_shootout_v1",
-  "version": 1,
+  "version": 2,
   "region": "eu-west-2",
   "paper_only": true,
   "authenticated_execution": false,
@@ -13,7 +13,12 @@
     {"zone_name": "eu-west-2b", "zone_id": "euw2-az3"},
     {"zone_name": "eu-west-2c", "zone_id": "euw2-az1"}
   ],
-  "instance_type_preferences": ["c7i.large", "c7a.large", "c6i.large"],
+  "instance_type_preferences": ["c8a.2xlarge", "c7a.2xlarge"],
+  "instance_constraints": {
+    "minimum_physical_cores": 8,
+    "maximum_threads_per_core": 1,
+    "minimum_vcpus": 8
+  },
   "verify_instance_offering_per_zone_before_launch": true,
   "storage_blueprint": {
     "root": {"type": "gp3", "size_gib": 40, "encrypted": true},
