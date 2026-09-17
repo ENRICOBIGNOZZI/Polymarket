@@ -126,6 +126,9 @@
   "aggregate_retention": {
     "enabled": true,
     "authorization": "USER_AUTHORIZED_CONTINUOUS_COLLECTION_WITH_OLDER_DETAIL_AGGREGATED_20260909",
+    "global_budget_roots": [
+      "/Users/enrico/polymarket-multi-crypto-v7/runs"
+    ],
     "target_bytes": 50000000000,
     "trigger_bytes": 54000000000,
     "minimum_age_seconds": 21600,

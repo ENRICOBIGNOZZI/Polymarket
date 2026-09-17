@@ -632,7 +632,8 @@ def run_retention(
         if aggregate_policy.get("authorization")!=POLICY: raise ValueError("invalid lossy retention authorization")
         aggregates=aggregate_run(run_root.parent,target_bytes=int(aggregate_policy["target_bytes"]),
             trigger_bytes=int(aggregate_policy["trigger_bytes"]),minimum_age_seconds=int(aggregate_policy["minimum_age_seconds"]),
-            maximum_seconds=float(aggregate_policy["maximum_seconds_per_pass"]),dry_run=dry_run)
+            maximum_seconds=float(aggregate_policy["maximum_seconds_per_pass"]),dry_run=dry_run,
+            external_budget_roots=aggregate_policy.get("global_budget_roots", []))
     reserve_final={"state":"DRY_RUN"} if dry_run else (manage_emergency_reserve(run_root,disk_policy,allow_create=True) if live_scope else {"state":"NOT_LIVE_SCOPE"})
     disk=disk_state(run_root,disk_policy)
     disk_pressure=update_disk_pressure_marker(run_root,disk_policy,disk,now=now,dry_run=dry_run) if live_scope else {"active":False,"reason":"NOT_LIVE_SCOPE"}

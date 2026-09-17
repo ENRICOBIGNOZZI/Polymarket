@@ -249,31 +249,59 @@ def resume_expiries(store,runs,check_closed=closed):
     return completed
 
 
-def run(runs, *, target_bytes=RETENTION_TARGET_BYTES, trigger_bytes=RETENTION_TRIGGER_BYTES, maximum_seconds=300, minimum_age_seconds=3600, dry_run=False):
-    if not 0<target_bytes<trigger_bytes<MAX_MANAGED_DATA_BYTES or minimum_age_seconds<3600 or not 0<maximum_seconds<=600:raise ValueError('unsafe aggregate retention bounds')
+def run(runs, *, target_bytes=RETENTION_TARGET_BYTES, trigger_bytes=RETENTION_TRIGGER_BYTES,
+        maximum_seconds=300, minimum_age_seconds=3600, dry_run=False,
+        external_budget_roots=()):
+    if not 0 < target_bytes < trigger_bytes < MAX_MANAGED_DATA_BYTES or minimum_age_seconds < 3600 or not 0 < maximum_seconds <= 600:
+        raise ValueError('unsafe aggregate retention bounds')
     runs=Path(runs).resolve();root=runs/'paper_v7_durable/permanent_evidence/store'
     if runs.name!='runs':raise ValueError('explicit managed runs directory required')
-    started=time.monotonic();usage=allocated_data_bytes([runs]);result={'policy':POLICY,**AUTH,'before_bytes':usage,'maximum_total_data_bytes':MAX_MANAGED_DATA_BYTES,'hard_quota_enforced':False,'retired':[],'deferred':[]}
-    if usage>=trigger_bytes:
+    external_roots=[Path(value) for value in external_budget_roots]
+    if any(not value.is_absolute() for value in external_roots):
+        raise ValueError('external budget roots must be absolute')
+    budget_roots=[runs,*external_roots]
+    started=time.monotonic()
+    managed_usage=allocated_data_bytes([runs])
+    global_usage=allocated_data_bytes(budget_roots)
+    result={
+        'policy':POLICY,**AUTH,
+        'before_bytes':managed_usage,
+        'managed_before_bytes':managed_usage,
+        'global_before_bytes':global_usage,
+        'external_budget_bytes':max(0,global_usage-managed_usage),
+        'budget_scope':'MAIN_PLUS_EXTERNAL_BUDGET_ROOTS',
+        'external_budget_roots':[str(value) for value in external_roots],
+        'maximum_total_data_bytes':MAX_MANAGED_DATA_BYTES,
+        'hard_quota_enforced':False,'retired':[],'deferred':[],
+    }
+    if global_usage>=trigger_bytes:
         paths=[]
         for parent in [runs/'paper_v7_live',runs/'paper_v7_archives']:
             for folder,dirs,files in os.walk(parent,followlinks=False):
                 dirs[:]=[d for d in dirs if not (Path(folder)/d).is_symlink()]
                 for name in files:
-                    p=Path(folder)/name
-                    if eligible(p,runs,time.time(),minimum_age_seconds):paths.append(p)
-        paths.sort(key=lambda p:(p.stat().st_mtime,str(p)))
+                    candidate=Path(folder)/name
+                    if eligible(candidate,runs,time.time(),minimum_age_seconds):paths.append(candidate)
+        paths.sort(key=lambda candidate:(candidate.stat().st_mtime,str(candidate)))
         with EvidenceStore(root) as store, (root/'.writer.lock').open('a') as lock:
             fcntl.flock(lock,fcntl.LOCK_EX)
             if not dry_run:result['resumed']=resume_expiries(store,runs)
             for path in paths:
                 if not path.exists():continue
-                if time.monotonic()-started>=maximum_seconds or allocated_data_bytes([runs])<=target_bytes:break
+                if time.monotonic()-started>=maximum_seconds or allocated_data_bytes(budget_roots)<=target_bytes:break
                 if dry_run:result['deferred'].append({'path':str(path),'reason':'DRY_RUN_NO_MUTATION'});continue
                 try:result['retired'].append(retire(path,runs,store,minimum_age_seconds=minimum_age_seconds))
                 except (OSError,ValueError,EOFError) as exc:result['deferred'].append({'path':str(path),'reason':str(exc)})
-    result.update(timestamp_ms=time.time_ns()//1_000_000,after_bytes=allocated_data_bytes([runs]))
-    result['state']='CAP_EXCEEDED' if result['after_bytes']>MAX_MANAGED_DATA_BYTES else 'ABOVE_TARGET_MORE_RETENTION_NEEDED' if result['after_bytes']>target_bytes else 'WITHIN_TARGET'
+    managed_after=allocated_data_bytes([runs])
+    global_after=allocated_data_bytes(budget_roots)
+    result.update(
+        timestamp_ms=time.time_ns()//1_000_000,
+        after_bytes=managed_after,
+        managed_after_bytes=managed_after,
+        global_after_bytes=global_after,
+        external_budget_bytes=max(0,global_after-managed_after),
+    )
+    result['state']='CAP_EXCEEDED' if global_after>MAX_MANAGED_DATA_BYTES else 'ABOVE_TARGET_MORE_RETENTION_NEEDED' if global_after>target_bytes else 'WITHIN_TARGET'
     if not dry_run:atomic(runs/'paper_v7_durable/permanent_evidence/aggregate_retention_status.json',result)
     return result
 

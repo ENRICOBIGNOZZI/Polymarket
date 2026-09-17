@@ -7,7 +7,7 @@ import tempfile
 import unittest
 from unittest.mock import patch
 sys.path.insert(0,str(Path(__file__).resolve().parents[1]/'scripts'))
-from v7_aggregate_retention import HEADER,RAW,RECORD,EVENT,summarize,retire,eligible,resume_expiries
+from v7_aggregate_retention import HEADER,RAW,RECORD,EVENT,summarize,retire,eligible,resume_expiries,run
 from v7_evidence_store import EvidenceStore
 
 NOW=1_800_000_000
@@ -119,5 +119,12 @@ class AggregateRetentionTests(unittest.TestCase):
     def test_symlink_parent_not_eligible(self):
         p=self.source();alias=self.runs/'paper_v7_archives'/('cutover-'+'b'*40+'-123-456');alias.symlink_to(self.folder.parent,target_is_directory=True)
         self.assertFalse(eligible(alias/'external_fair/normalized_events'/p.name,self.runs,NOW,3600))
+    def test_global_budget_includes_external_shadow_root(self):
+        external=Path(self.tmp.name)/'shadow';external.mkdir();(external/'tape.bin').write_bytes(b'x'*16384)
+        result=run(self.runs,target_bytes=8000,trigger_bytes=10000,maximum_seconds=1,minimum_age_seconds=3600,dry_run=True,external_budget_roots=[external])
+        self.assertGreaterEqual(result['global_before_bytes'],result['managed_before_bytes']+16384)
+        self.assertGreater(result['external_budget_bytes'],0)
+        self.assertEqual(result['state'],'ABOVE_TARGET_MORE_RETENTION_NEEDED')
+
 
 if __name__=='__main__':unittest.main()
