@@ -4,6 +4,7 @@
 #include "pm/v7_clob_http_response.hpp"
 #include "pm/v7_clob_order_amounts.hpp"
 #include "pm/v7_clob_order_salt.hpp"
+#include "pm/v7_clob_prepared_post.hpp"
 #include "pm/v7_clob_transport_pool.hpp"
 #include "pm/v7_clob_wire.hpp"
 #include "pm/v7_poly1271.hpp"
@@ -99,8 +100,10 @@ struct NativeClobOrderLane::Impl final {
     poly1271::Poly1271OrderHasher order_hasher;
     poly1271::Secp256k1Signer signer;
     clob_order::OrderSaltSequence salt;
-    clob_wire::L2HmacSigner l2_signer;
-    clob_http_frame::PreparedPostOrderHttp1 http_builder;
+    clob_post::PreparedPostOrderBuilder buy_fak;
+    clob_post::PreparedPostOrderBuilder sell_fak;
+    clob_post::PreparedPostOrderBuilder buy_fok;
+    clob_post::PreparedPostOrderBuilder sell_fok;
     clob::DualPersistentTlsTransport transport;
     clob_http_response::ResponseParser response_parser{};
     bool valid = false;
@@ -110,8 +113,22 @@ struct NativeClobOrderLane::Impl final {
         : order_hasher({config.chain_id, config.exchange_contract}, config.deposit_wallet),
           signer(private_key),
           salt(clob_order::OrderSaltSequence::from_os_entropy()),
-          l2_signer(config.l2_secret_base64),
-          http_builder(config.signer_eoa_address, config.api_key, config.passphrase),
+          buy_fak({config.builder_hex, "0", config.deposit_wallet, config.metadata_hex,
+                   "BUY", 3, config.deposit_wallet, config.token_id_decimal, config.api_key,
+                   clob_wire::MarketOrderType::FAK},
+                  config.signer_eoa_address, config.api_key, config.passphrase, config.l2_secret_base64),
+          sell_fak({config.builder_hex, "0", config.deposit_wallet, config.metadata_hex,
+                    "SELL", 3, config.deposit_wallet, config.token_id_decimal, config.api_key,
+                    clob_wire::MarketOrderType::FAK},
+                   config.signer_eoa_address, config.api_key, config.passphrase, config.l2_secret_base64),
+          buy_fok({config.builder_hex, "0", config.deposit_wallet, config.metadata_hex,
+                   "BUY", 3, config.deposit_wallet, config.token_id_decimal, config.api_key,
+                   clob_wire::MarketOrderType::FOK},
+                  config.signer_eoa_address, config.api_key, config.passphrase, config.l2_secret_base64),
+          sell_fok({config.builder_hex, "0", config.deposit_wallet, config.metadata_hex,
+                    "SELL", 3, config.deposit_wallet, config.token_id_decimal, config.api_key,
+                    clob_wire::MarketOrderType::FOK},
+                   config.signer_eoa_address, config.api_key, config.passphrase, config.l2_secret_base64),
           transport(config.host, config.port, config.timeout_ms) {
         std::array<char, 42> derived{};
         if (!deposit_wallet.assign(config.deposit_wallet)
@@ -123,7 +140,7 @@ struct NativeClobOrderLane::Impl final {
             || !passphrase.assign(config.passphrase)
             || !poly_address.assign(config.signer_eoa_address)
             || !order_hasher.valid() || !signer.valid() || !salt.valid()
-            || !l2_signer.valid() || !http_builder.valid()
+            || !buy_fak.valid() || !sell_fak.valid() || !buy_fok.valid() || !sell_fok.valid()
             || !signer.address_hex(derived)
             || !same_hex_address({derived.data(), derived.size()}, signer_eoa.view())) {
             return;
@@ -231,46 +248,29 @@ NativeClobSubmitResult NativeClobOrderLane::submit(
                                 NativeClobSubmitReason::PreWireFailure);
     }
 
-    clob_wire::SignedMarketOrderView signed_order{};
-    signed_order.builder = impl_->builder.view();
-    signed_order.expiration = "0";
-    signed_order.maker = impl_->deposit_wallet.view();
-    signed_order.maker_amount = maker_sv;
-    signed_order.metadata = impl_->metadata.view();
-    signed_order.salt_decimal = salt_sv;
-    signed_order.side = command.side == Side::Buy ? "BUY" : "SELL";
-    signed_order.signature = {order_signature.data(), order_signature.size()};
-    signed_order.signature_type = 3;
-    signed_order.signer = impl_->deposit_wallet.view();
-    signed_order.taker_amount = taker_sv;
-    signed_order.timestamp_ms = timestamp_sv;
-    signed_order.token_id = impl_->token_id.view();
+    clob_wire::MarketOrderDynamicView dynamic{};
+    dynamic.maker_amount = maker_sv;
+    dynamic.salt_decimal = salt_sv;
+    dynamic.signature = {order_signature.data(), order_signature.size()};
+    dynamic.taker_amount = taker_sv;
+    dynamic.timestamp_ms = timestamp_sv;
 
-    clob_wire::PostMarketOrderView request{};
-    request.order = signed_order;
-    request.owner = impl_->api_key.view();
-    request.order_type = command.time_in_force == AdapterTimeInForce::Fok
-        ? clob_wire::MarketOrderType::FOK : clob_wire::MarketOrderType::FAK;
-
-    std::array<char, 4096> body{};
-    const auto body_size = clob_wire::serialize_post_market_order(request, body);
-    if (body_size == 0) {
-        return fail_before_wire(oms_owner, command.client_order_id,
-                                NativeClobSubmitReason::PreWireFailure);
-    }
-    const std::string_view body_sv(body.data(), body_size);
-
-    std::array<char, 64> l2_signature{};
-    const auto l2_size = impl_->l2_signer.sign(
-        request_ts_sv, body_sv, l2_signature);
-    if (l2_size == 0) {
+    clob_post::PreparedPostOrderBuilder* post = nullptr;
+    if (command.side == Side::Buy && command.time_in_force == AdapterTimeInForce::Fak)
+        post = &impl_->buy_fak;
+    else if (command.side == Side::Sell && command.time_in_force == AdapterTimeInForce::Fak)
+        post = &impl_->sell_fak;
+    else if (command.side == Side::Buy && command.time_in_force == AdapterTimeInForce::Fok)
+        post = &impl_->buy_fok;
+    else if (command.side == Side::Sell && command.time_in_force == AdapterTimeInForce::Fok)
+        post = &impl_->sell_fok;
+    if (post == nullptr) {
         return fail_before_wire(oms_owner, command.client_order_id,
                                 NativeClobSubmitReason::PreWireFailure);
     }
 
     std::array<char, 8192> frame{};
-    const auto frame_size = impl_->http_builder.serialize(
-        {l2_signature.data(), l2_size}, request_ts_sv, body_sv, frame);
+    const auto frame_size = post->build(dynamic, request_ts_sv, frame);
     if (frame_size == 0) {
         return fail_before_wire(oms_owner, command.client_order_id,
                                 NativeClobSubmitReason::PreWireFailure);
