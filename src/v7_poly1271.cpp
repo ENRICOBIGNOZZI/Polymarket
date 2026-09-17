@@ -268,7 +268,7 @@ bool Secp256k1Signer::address_hex(std::span<char> output) const noexcept {
 
 bool Secp256k1Signer::sign_digest(
     const Hash32& digest,
-    std::span<std::uint8_t, kEvmSignatureBytes> output) noexcept {
+    std::span<std::uint8_t, kEvmSignatureBytes> output) const noexcept {
     if (!valid()) return false;
     secp256k1_ecdsa_recoverable_signature signature{};
     if (secp256k1_ecdsa_sign_recoverable(
@@ -283,7 +283,7 @@ bool Secp256k1Signer::sign_digest(
 }
 
 bool sign_poly1271_hex(Poly1271OrderHasher& hasher,
-                       Secp256k1Signer& signer,
+                       const Secp256k1Signer& signer,
                        const ExchangeV2OrderView& order,
                        std::span<char> output) noexcept {
     if (!hasher.valid() || !signer.valid()

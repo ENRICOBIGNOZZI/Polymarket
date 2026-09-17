@@ -25,6 +25,7 @@ PROGRAM = r'''
 #include <array>
 #include <cstdio>
 #include <cstring>
+#include <thread>
 
 using namespace pm::v7;
 
@@ -36,6 +37,7 @@ int main() {
         0xae,0x78,0x4d,0x7b,0xf4,0xf2,0xff,0x80};
     poly1271::Secp256k1Signer signer(key);
     if (!signer.valid()) return 2;
+    const auto& shared_signer = signer;
     std::array<char, 42> address{};
     if (!signer.address_hex(address)) return 3;
     constexpr char expected_address[] = "0xf39fd6e51aad88f6f4ce6ab8827279cfffb92266";
@@ -51,7 +53,30 @@ int main() {
         "0x0000000000000000000000000000000000000000000000000000000000000000",
         "0x0000000000000000000000000000000000000000000000000000000000000000"};
     std::array<char, poly1271::kWrappedSignatureHexChars> output{};
-    if (!poly1271::sign_poly1271_hex(hasher, signer, order, output)) return 6;
+    if (!poly1271::sign_poly1271_hex(hasher, shared_signer, order, output)) return 6;
+
+    constexpr std::size_t kDigests = 1024;
+    std::array<poly1271::Hash32, kDigests> digests{};
+    std::array<std::array<std::uint8_t, 65>, kDigests> serial{};
+    std::array<std::array<std::uint8_t, 65>, kDigests> parallel{};
+    for (std::size_t i = 0; i < kDigests; ++i) {
+        for (std::size_t j = 0; j < 32; ++j)
+            digests[i][j] = static_cast<std::uint8_t>((i * 131U + j * 17U + 1U) & 0xffU);
+        if (!shared_signer.sign_digest(digests[i], serial[i])) return 7;
+    }
+    std::array<std::thread, 4> workers;
+    for (std::size_t lane = 0; lane < workers.size(); ++lane) {
+        workers[lane] = std::thread([&, lane] {
+            for (std::size_t i = lane; i < kDigests; i += workers.size()) {
+                if (!shared_signer.sign_digest(digests[i], parallel[i]))
+                    parallel[i].fill(0xffU);
+            }
+        });
+    }
+    for (auto& worker : workers) worker.join();
+    for (std::size_t i = 0; i < kDigests; ++i)
+        if (parallel[i] != serial[i]) return 8;
+
     std::fwrite(output.data(), 1, output.size(), stdout);
     std::fputc('\n', stdout);
     return 0;
@@ -79,7 +104,7 @@ def test_poly1271_matches_official_rust_sdk_vector() -> None:
         main.write_text(PROGRAM)
         inc, libs = _crypto_flags()
         command = [
-            compiler, "-std=c++20", "-O2", "-Wall", "-Wextra", "-Wpedantic",
+            compiler, "-std=c++20", "-O2", "-pthread", "-Wall", "-Wextra", "-Wpedantic",
             f"-I{ROOT / 'include'}", *inc,
             str(ROOT / "src/v7_keccak_fast.cpp"),
             str(ROOT / "src/v7_clob_eip712.cpp"),

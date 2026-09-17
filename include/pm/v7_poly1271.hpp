@@ -80,9 +80,12 @@ public:
     Secp256k1Signer& operator=(Secp256k1Signer&&) = delete;
 
     [[nodiscard]] bool valid() const noexcept;
+    // After cold-path construction/randomization the signer is immutable.
+    // libsecp256k1 permits concurrent use of a constructed context for const
+    // operations, so independent order lanes may share this signer.
     [[nodiscard]] bool sign_digest(
         const Hash32& digest,
-        std::span<std::uint8_t, kEvmSignatureBytes> output) noexcept;
+        std::span<std::uint8_t, kEvmSignatureBytes> output) const noexcept;
     [[nodiscard]] bool address_hex(std::span<char> output) const noexcept;
 
 private:
@@ -92,7 +95,7 @@ private:
 
 [[nodiscard]] bool sign_poly1271_hex(
     Poly1271OrderHasher& hasher,
-    Secp256k1Signer& signer,
+    const Secp256k1Signer& signer,
     const ExchangeV2OrderView& order,
     std::span<char> output) noexcept;
 
