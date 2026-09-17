@@ -57,9 +57,15 @@ public:
                    const Hash32& app_domain_separator) noexcept;
     [[nodiscard]] bool valid() const noexcept { return valid_; }
     [[nodiscard]] bool digest(const Hash32& contents_hash, Hash32& output) noexcept;
+    [[nodiscard]] bool wrap_signature_hex(
+        std::span<const std::uint8_t, kEvmSignatureBytes> inner_signature,
+        const Hash32& contents_hash,
+        std::span<char> output) const noexcept;
 private:
     std::array<std::uint8_t, 7 * 32> encoded_{};
     std::array<std::uint8_t, 66> envelope_{};
+    std::array<char, 64> domain_hex_{};
+    std::array<char, 2 * (kOrderTypeBytes + 2)> suffix_hex_{};
     bool valid_ = false;
 };
 

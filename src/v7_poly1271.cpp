@@ -179,6 +179,15 @@ PreparedHasher::PreparedHasher(
     envelope_[0] = 0x19U;
     envelope_[1] = 0x01U;
     std::memcpy(envelope_.data() + 2, app_domain_separator.data(), app_domain_separator.size());
+    if (!bytes_hex(app_domain_separator, domain_hex_, false)) return;
+    const auto order_bytes = std::span<const std::uint8_t>(
+        reinterpret_cast<const std::uint8_t*>(kOrderType.data()), kOrderType.size());
+    auto suffix = std::span<char>(suffix_hex_);
+    if (!bytes_hex(order_bytes, suffix.first(2 * kOrderType.size()), false)) return;
+    const std::array<std::uint8_t, 2> order_length{
+        static_cast<std::uint8_t>((kOrderType.size() >> 8U) & 0xffU),
+        static_cast<std::uint8_t>(kOrderType.size() & 0xffU)};
+    if (!bytes_hex(order_length, suffix.subspan(2 * kOrderType.size()), false)) return;
     valid_ = true;
 }
 
@@ -188,6 +197,25 @@ bool PreparedHasher::digest(const Hash32& contents_hash, Hash32& output) noexcep
     const Hash32 typed_hash = clob_eip712::keccak256(encoded_);
     std::memcpy(envelope_.data() + 34, typed_hash.data(), typed_hash.size());
     output = clob_eip712::keccak256(envelope_);
+    return true;
+}
+
+bool PreparedHasher::wrap_signature_hex(
+    std::span<const std::uint8_t, kEvmSignatureBytes> inner_signature,
+    const Hash32& contents_hash,
+    std::span<char> output) const noexcept {
+    if (!valid_ || output.size() < kWrappedSignatureHexChars) return false;
+    output[0] = '0';
+    output[1] = 'x';
+    if (!bytes_hex(inner_signature, output.subspan(2, 2 * kEvmSignatureBytes), false))
+        return false;
+    std::memcpy(output.data() + 2 + 2 * kEvmSignatureBytes,
+                domain_hex_.data(), domain_hex_.size());
+    constexpr std::size_t kContentsOffset = 2 + 2 * kEvmSignatureBytes + 64;
+    if (!bytes_hex(contents_hash, output.subspan(kContentsOffset, 64), false))
+        return false;
+    std::memcpy(output.data() + kContentsOffset + 64,
+                suffix_hex_.data(), suffix_hex_.size());
     return true;
 }
 
