@@ -173,6 +173,10 @@ bool ExternalVenueIngress::commit_event() noexcept {
     return true;
 }
 
+std::size_t ExternalVenueIngress::queued_events() const noexcept {
+    return queue_.approximate_size();
+}
+
 void ExternalVenueIngress::mark_disconnected(
     std::uint64_t connection_epoch) noexcept {
     const auto previous = connection_epoch_.exchange(

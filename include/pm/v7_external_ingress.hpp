@@ -92,6 +92,7 @@ public:
     // stable until commit_event(); only the consumer thread may call these.
     [[nodiscard]] const ExternalVenueEvent* peek_event() const noexcept;
     [[nodiscard]] bool commit_event() noexcept;
+    [[nodiscard]] std::size_t queued_events() const noexcept;
 
     void mark_disconnected(std::uint64_t connection_epoch) noexcept;
 

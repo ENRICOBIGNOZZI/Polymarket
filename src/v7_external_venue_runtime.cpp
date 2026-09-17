@@ -1349,10 +1349,13 @@ int main(int argc, char** argv) {
         };
         while (!stopping.load(std::memory_order_relaxed)) {
             std::size_t causal_count = 0;
-            constexpr std::size_t kMaxCausalPerLoop = 2 * kExternalIngressQueueCapacity;
-            while (causal_count < kMaxCausalPerLoop) {
-                const auto* binance_head = binance_ingress.peek_event();
-                const auto* coinbase_head = coinbase_ingress.peek_event();
+            std::size_t binance_budget = binance_ingress.queued_events();
+            std::size_t coinbase_budget = coinbase_ingress.queued_events();
+            while (binance_budget != 0 || coinbase_budget != 0) {
+                const auto* binance_head = binance_budget != 0
+                    ? binance_ingress.peek_event() : nullptr;
+                const auto* coinbase_head = coinbase_budget != 0
+                    ? coinbase_ingress.peek_event() : nullptr;
                 if (binance_head == nullptr && coinbase_head == nullptr) break;
 
                 const std::int64_t receive_ns = binance_head == nullptr
@@ -1369,8 +1372,10 @@ int main(int argc, char** argv) {
                 }
 
                 while (true) {
-                    binance_head = binance_ingress.peek_event();
-                    coinbase_head = coinbase_ingress.peek_event();
+                    binance_head = binance_budget != 0
+                        ? binance_ingress.peek_event() : nullptr;
+                    coinbase_head = coinbase_budget != 0
+                        ? coinbase_ingress.peek_event() : nullptr;
                     const ExternalVenueEvent* next = nullptr;
                     bool use_binance = false;
                     if (binance_head != nullptr && coinbase_head != nullptr) {
@@ -1397,6 +1402,8 @@ int main(int argc, char** argv) {
                     if (!committed) {
                         throw std::runtime_error("causal ingress commit failed");
                     }
+                    if (use_binance) --binance_budget;
+                    else --coinbase_budget;
                     ++causal_count;
                 }
                 if (policy.external_cancel_enabled != 0) {
