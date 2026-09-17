@@ -119,6 +119,25 @@ class V7NativeMonitoringTest(unittest.TestCase):
                 snapshot["reconciliation"]["reason_codes"],
             )
 
+    def test_crypto_exposure_metrics_use_nested_coordinator_risk_without_zero_fallback(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory) / "paper_v7_live"
+            self._fixture(root)
+            self._write(root / "control/global_portfolio_coordinator.json", {
+                "crypto_correlation_risk": {
+                    "gross_crypto_exposure_usd": 12.0,
+                    "net_directional_crypto_exposure_usd": -3.0,
+                    "correlated_crypto_cluster_exposure_usd": 3.0,
+                    "per_asset_exposure_usd": {"BTC": -3.0},
+                    "per_horizon_exposure_usd": {"M5": -3.0},
+                }
+            })
+            metrics = exporter.render_prometheus(exporter.collect_snapshot(root, ROOT, now=1000))
+            self.assertIn("polymarket_v7_crypto_gross_exposure_usd 12", metrics)
+            self.assertIn("polymarket_v7_crypto_net_directional_exposure_usd -3", metrics)
+            self.assertIn("polymarket_v7_crypto_cluster_exposure_usd 3", metrics)
+            self.assertIn('polymarket_mc_coordinator_candidate_asset_exposure_usd{asset="BTC"} -3', metrics)
+
     def test_runtime_cannot_add_third_algorithm(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root=Path(directory)/"paper_v7_live"; self._fixture(root); path=root/"control/runtime_status.json"; value=json.loads(path.read_text()); value["economic_engines"].append("OLD_ENGINE"); self._write(path,value)

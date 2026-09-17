@@ -16,6 +16,10 @@ from v7_ledger_metrics import summarize_ledger
 from v7_maker_fillability_exact import summarize_best_available_fillability
 from v7_maker_microstructure import summarize_maker_microstructure
 from v7_portfolio_reconciliation import reconcile as reconcile_portfolio
+from v7_multi_crypto_performance import (
+    render_prometheus as render_multi_crypto_prometheus,
+    summarize_multi_crypto,
+)
 from v7_runtime_contract import (
     MAKER_ROTATION_OPERATIONAL_STATES as _MAKER_ROTATION_OPERATIONAL_STATES,
     MAKER_SELECTOR_OPERATIONAL_STATES as _MAKER_SELECTOR_OPERATIONAL_STATES,
@@ -273,7 +277,7 @@ def collect_snapshot(run_root: Path, repository_root: Path | None = None, *, now
     tape = _trade_tape(run_root / "trade_tape.csv", now)
     starting = _number(portfolio.get("account_starting_capital"), _number(allocations.get("account_starting_capital")))
     equity = _number(portfolio.get("equity"), starting)
-    return {
+    snapshot = {
         "timestamp": now, "sha": sha, "run_root": run_root.name, "runtime": runtime,
         "runtime_alive": _pid_alive(runtime.get("pid")) and not (run_root / "control/KILL").exists(),
         "portfolio": portfolio, "allocations": allocations,
@@ -315,6 +319,14 @@ def collect_snapshot(run_root: Path, repository_root: Path | None = None, *, now
         "operations": _operations(run_root, runtime, now),
         "economics": {"starting_capital": starting, "cash": _number(allocations.get("reserve_budget")), "equity": equity, "pnl": equity-starting, "realized_pnl": _number(canonical.get("net_pnl")), "unrealized_executable_pnl": equity-starting-_number(canonical.get("net_pnl")), "drawdown": _number(portfolio.get("drawdown")), "gross_exposure": 0.0, "capital_utilization": 0.0, "live_units": 0, "killed": bool(portfolio.get("killed"))},
     }
+    snapshot["multi_crypto_performance"] = summarize_multi_crypto(
+        run_root, expected_sha=runtime_sha, portfolio=portfolio, canonical=canonical,
+        global_coordinator=snapshot["global_coordinator"],
+        crypto_registry=snapshot["crypto_registry"],
+        crypto_model_registry=snapshot["crypto_model_registry"],
+        ledger_valid=ledger.get("valid") is True,
+    )
+    return snapshot
 
 
 def _fresh_ms(status: dict[str, Any], snapshot: dict[str, Any], max_age: int) -> bool:
@@ -425,7 +437,13 @@ def render_prometheus(snapshot: dict[str, Any]) -> str:
     for name, row in sorted((snapshot.get("algorithms") or {}).items()):
         for field, metric in (("equity", "equity_usd"), ("budget", "budget_usd"), ("killed", "killed")): lines.append(_metric(f"polymarket_v7_live_algorithm_{metric}", row.get(field), {"algorithm": name}))
     coordinator = snapshot.get("global_coordinator") or {}
-    for field in ("crypto_gross_exposure_usd", "crypto_net_directional_exposure_usd", "crypto_cluster_exposure_usd"): lines.append(_metric("polymarket_v7_" + field, coordinator.get(field)))
+    crypto_risk = coordinator.get("crypto_correlation_risk") if isinstance(coordinator.get("crypto_correlation_risk"), dict) else {}
+    for source, metric in (("gross_crypto_exposure_usd", "polymarket_v7_crypto_gross_exposure_usd"),
+                           ("net_directional_crypto_exposure_usd", "polymarket_v7_crypto_net_directional_exposure_usd"),
+                           ("correlated_crypto_cluster_exposure_usd", "polymarket_v7_crypto_cluster_exposure_usd")):
+        value = _optional_number(crypto_risk.get(source))
+        if value is not None:
+            lines.append(_metric(metric, value))
     models = {(r.get("asset"), r.get("horizon")): r for r in (snapshot.get("crypto_model_registry") or {}).get("models", []) if isinstance(r, dict)}
     for row in (snapshot.get("crypto_registry") or {}).get("contexts", []):
         labels = {"asset": row.get("asset"), "horizon": row.get("horizon"), "contract_family": row.get("contract_family"), "authority": row.get("authority")}; model = models.get((row.get("asset"), row.get("horizon")), {})
@@ -452,12 +470,13 @@ def render_prometheus(snapshot: dict[str, Any]) -> str:
     from exporter_v7_external import _append_external_fair_metrics
     _append_fillability_metrics(lines, snapshot.get("maker_fillability") or {})
     _append_external_fair_metrics(lines, snapshot.get("external_fair") or {})
+    lines.extend(render_multi_crypto_prometheus(snapshot.get("multi_crypto_performance") or {}))
     return "\n".join(lines) + "\n"
 
 
 class SnapshotCache:
     def __init__(self, run_root: Path, repository_root: Path, *, refresh_seconds: float = 10.0) -> None:
-        self.run_root, self.repository_root, self.refresh_seconds = Path(run_root), Path(repository_root), max(1.0, float(refresh_seconds)); self._lock = threading.Lock(); self._ready = threading.Event(); self._stop = threading.Event(); self._thread = None; self._snapshot = None; self._metrics = b""; self._maker_fillability = b"{}\n"; self._external_fair = b"{}\n"; self._completed_monotonic = 0.0; self._completed_wall = 0.0; self._refresh_duration = 0.0; self._refresh_errors = 0; self._last_error = ""
+        self.run_root, self.repository_root, self.refresh_seconds = Path(run_root), Path(repository_root), max(1.0, float(refresh_seconds)); self._lock = threading.Lock(); self._ready = threading.Event(); self._stop = threading.Event(); self._thread = None; self._snapshot = None; self._metrics = b""; self._maker_fillability = b"{}\n"; self._external_fair = b"{}\n"; self._multi_crypto_performance = b"{}\n"; self._completed_monotonic = 0.0; self._completed_wall = 0.0; self._refresh_duration = 0.0; self._refresh_errors = 0; self._last_error = ""
     def start(self) -> None:
         if self._thread is None: self._thread = threading.Thread(target=self._refresh_loop, daemon=True); self._thread.start()
     def stop(self) -> None:
@@ -469,13 +488,13 @@ class SnapshotCache:
             started = time.monotonic()
             try:
                 snapshot = collect_snapshot(self.run_root, self.repository_root); duration = time.monotonic()-started; wall = time.time(); metrics = render_prometheus(snapshot).rstrip()+f"\npolymarket_v7_exporter_snapshot_generated_unixtime {wall}\npolymarket_v7_exporter_snapshot_refresh_duration_seconds {duration}\npolymarket_v7_exporter_snapshot_refresh_errors_total {self._refresh_errors}\n"
-                with self._lock: self._snapshot=snapshot; self._metrics=metrics.encode(); self._maker_fillability=(json.dumps(snapshot.get("maker_fillability") or {},sort_keys=True)+"\n").encode(); self._external_fair=(json.dumps(snapshot.get("external_fair") or {},sort_keys=True)+"\n").encode(); self._completed_monotonic=time.monotonic(); self._completed_wall=wall; self._refresh_duration=duration; self._last_error=""
+                with self._lock: self._snapshot=snapshot; self._metrics=metrics.encode(); self._maker_fillability=(json.dumps(snapshot.get("maker_fillability") or {},sort_keys=True)+"\n").encode(); self._external_fair=(json.dumps(snapshot.get("external_fair") or {},sort_keys=True)+"\n").encode(); self._multi_crypto_performance=(json.dumps(snapshot.get("multi_crypto_performance") or {},sort_keys=True)+"\n").encode(); self._completed_monotonic=time.monotonic(); self._completed_wall=wall; self._refresh_duration=duration; self._last_error=""
                 self._ready.set()
             except Exception as exc:
                 with self._lock: self._refresh_errors += 1; self._last_error=f"{type(exc).__name__}:{exc}"
             self._stop.wait(max(.1, self.refresh_seconds-(time.monotonic()-started)))
     def read(self) -> dict[str, Any]:
-        with self._lock: return {"ready":self._snapshot is not None,"snapshot":self._snapshot,"metrics":self._metrics,"maker_fillability":self._maker_fillability,"external_fair":self._external_fair,"age_seconds":max(0,time.monotonic()-self._completed_monotonic) if self._completed_monotonic else math.inf,"completed_wall":self._completed_wall,"refresh_duration_seconds":self._refresh_duration,"refresh_errors":self._refresh_errors,"last_error":self._last_error}
+        with self._lock: return {"ready":self._snapshot is not None,"snapshot":self._snapshot,"metrics":self._metrics,"maker_fillability":self._maker_fillability,"external_fair":self._external_fair,"multi_crypto_performance":self._multi_crypto_performance,"age_seconds":max(0,time.monotonic()-self._completed_monotonic) if self._completed_monotonic else math.inf,"completed_wall":self._completed_wall,"refresh_duration_seconds":self._refresh_duration,"refresh_errors":self._refresh_errors,"last_error":self._last_error}
 
 
 class ExporterHandler(BaseHTTPRequestHandler):
@@ -484,7 +503,7 @@ class ExporterHandler(BaseHTTPRequestHandler):
     def do_GET(self)->None:
         cached=self.snapshot_cache.read() if self.snapshot_cache else None
         if cached is None:
-            snapshot=collect_snapshot(self.run_root,self.repository_root); cached={"ready":True,"snapshot":snapshot,"metrics":render_prometheus(snapshot).encode(),"maker_fillability":(json.dumps(snapshot.get("maker_fillability") or {})+"\n").encode(),"external_fair":(json.dumps(snapshot.get("external_fair") or {})+"\n").encode(),"age_seconds":0}
+            snapshot=collect_snapshot(self.run_root,self.repository_root); cached={"ready":True,"snapshot":snapshot,"metrics":render_prometheus(snapshot).encode(),"maker_fillability":(json.dumps(snapshot.get("maker_fillability") or {})+"\n").encode(),"external_fair":(json.dumps(snapshot.get("external_fair") or {})+"\n").encode(),"multi_crypto_performance":(json.dumps(snapshot.get("multi_crypto_performance") or {})+"\n").encode(),"age_seconds":0}
         if not cached.get("ready"): payload=b'{"ok":false,"reasons":["exporter_snapshot_not_ready"]}\n'; self.send_response(503); content="application/json"
         elif self.path=="/metrics": payload=cached["metrics"]; self.send_response(200); content="text/plain; version=0.0.4"
         elif self.path=="/healthz":
@@ -493,6 +512,7 @@ class ExporterHandler(BaseHTTPRequestHandler):
             reasons=sorted(set(reasons)); payload=(json.dumps({"ok":not reasons,"reasons":reasons},sort_keys=True)+"\n").encode(); self.send_response(200 if not reasons else 503); content="application/json"
         elif self.path=="/maker-fillability.json": payload=cached["maker_fillability"]; self.send_response(200); content="application/json"
         elif self.path=="/external-fair.json": payload=cached["external_fair"]; self.send_response(200); content="application/json"
+        elif self.path=="/multi-crypto-performance.json": payload=cached["multi_crypto_performance"]; self.send_response(200); content="application/json"
         elif self.path in {"/profit-attribution.json", "/profit-experiments.json", "/permanent-evidence.json", "/economic-decision.json"}:
             key={"/profit-attribution.json":"profit_attribution", "/profit-experiments.json":"profit_experiments",
                  "/permanent-evidence.json":"permanent_evidence", "/economic-decision.json":"economic_decision_report"}[self.path]

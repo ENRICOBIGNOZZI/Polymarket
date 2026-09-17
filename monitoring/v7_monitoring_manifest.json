@@ -7,7 +7,8 @@
     "maker_fillability_path": "/maker-fillability.json",
     "metrics_path": "/metrics",
     "path": "monitoring/exporter_v7.py",
-    "port": 9108
+    "port": 9108,
+    "multi_crypto_performance_path": "/multi-crypto-performance.json"
   },
   "freshness_seconds": {
     "economics": 180,
@@ -26,6 +27,7 @@
     "external_fair_dashboard": "monitoring/grafana/dashboards/polymarket-v7-external-fair.json",
     "host": "127.0.0.1",
     "latency_dashboard": "monitoring/grafana/dashboards/polymarket-v7-latency.json",
+    "multi_crypto_dashboard": "monitoring/grafana/dashboards/polymarket-v7-multi-crypto.json",
     "port": 3000,
     "provider_file": "monitoring/grafana/provisioning/dashboards/v7.yml"
   },

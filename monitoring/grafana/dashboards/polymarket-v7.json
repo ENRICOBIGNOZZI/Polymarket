@@ -6,7 +6,15 @@
   "fiscalYearStartMonth": 0,
   "graphTooltip": 1,
   "id": null,
-  "links": [],
+  "links": [
+    {
+      "type": "link",
+      "title": "Multi-Crypto Performance",
+      "url": "/d/polymarket-v7-multi-crypto/polymarket-v7-multi-crypto-performance",
+      "targetBlank": false,
+      "icon": "external link"
+    }
+  ],
   "liveNow": false,
   "panels": [
     {

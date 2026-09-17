@@ -30,6 +30,7 @@ class SnapshotCacheTests(unittest.TestCase):
                 "sequence": calls,
                 "maker_fillability": {"sequence": calls},
                 "external_fair": {"sequence": calls},
+                "multi_crypto_performance": {"sequence": calls},
             }
 
         def render(snapshot: dict) -> str:
@@ -42,6 +43,7 @@ class SnapshotCacheTests(unittest.TestCase):
             cache.start()
             self.assertTrue(cache.wait_ready(2.0))
             self.assertEqual(cache.read()["snapshot"]["sequence"], 1)
+            self.assertIn(b'"sequence": 1', cache.read()["multi_crypto_performance"])
             self.assertTrue(second_refresh_started.wait(2.0))
 
             started = time.monotonic()
