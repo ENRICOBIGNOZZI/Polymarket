@@ -42,10 +42,13 @@ int main() {
 def _openssl_flags() -> tuple[list[str], list[str]]:
     pkg = shutil.which("pkg-config")
     if pkg:
-        return (
-            subprocess.check_output([pkg, "--cflags", "openssl"], text=True).split(),
-            subprocess.check_output([pkg, "--libs", "openssl"], text=True).split(),
-        )
+        cflags = subprocess.check_output([pkg, "--cflags", "openssl"], text=True).split()
+        libs = subprocess.check_output([pkg, "--libs", "openssl"], text=True).split()
+        brew = shutil.which("brew")
+        if brew:
+            boost_prefix = subprocess.check_output([brew, "--prefix", "boost"], text=True).strip()
+            cflags.append(f"-I{boost_prefix}/include")
+        return cflags, libs
     brew = shutil.which("brew")
     assert brew, "OpenSSL development flags unavailable"
     prefix = subprocess.check_output([brew, "--prefix", "openssl@3"], text=True).strip()

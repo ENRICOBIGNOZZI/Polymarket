@@ -14,6 +14,7 @@ find_package(Boost REQUIRED)
 find_package(Threads REQUIRED)
 find_package(OpenSSL REQUIRED)
 pkg_check_modules(LIBCURL REQUIRED IMPORTED_TARGET libcurl)
+pkg_check_modules(SECP256K1 REQUIRED IMPORTED_TARGET libsecp256k1)
 
 # Boost.JSON is compiled exactly once and shared by all V7 C++ components.
 # This keeps the bounded market-data decoder independent from HTTP/REST code.
@@ -46,6 +47,30 @@ add_library(pm_v7_common
 target_include_directories(pm_v7_common PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/include ${Boost_INCLUDE_DIRS})
 target_link_libraries(pm_v7_common PUBLIC pm_json)
 target_compile_options(pm_v7_common PRIVATE -Wall -Wextra -Wpedantic)
+
+
+add_library(pm_v7_clob_native
+  src/v7_keccak_fast.cpp
+  src/v7_clob_eip712.cpp
+  src/v7_poly1271.cpp
+  src/v7_clob_order_amounts.cpp
+  src/v7_clob_order_salt.cpp
+  src/v7_clob_wire.cpp
+  src/v7_clob_http_frame.cpp
+  src/v7_clob_http_response.cpp
+  src/v7_clob_order_identity.cpp
+  src/v7_clob_tls.cpp)
+target_include_directories(pm_v7_clob_native PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/include ${Boost_INCLUDE_DIRS})
+target_link_libraries(pm_v7_clob_native PUBLIC pm_json Threads::Threads OpenSSL::SSL OpenSSL::Crypto PkgConfig::SECP256K1)
+target_compile_options(pm_v7_clob_native PRIVATE -Wall -Wextra -Wpedantic)
+
+add_library(pm_v7_account_native
+  src/v7_user_ws.cpp
+  src/v7_user_ws_feed.cpp
+  src/v7_user_oms_bridge.cpp)
+target_include_directories(pm_v7_account_native PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/include ${Boost_INCLUDE_DIRS})
+target_link_libraries(pm_v7_account_native PUBLIC pm_v7_common pm_v7_clob_native pm_json Threads::Threads OpenSSL::SSL OpenSSL::Crypto)
+target_compile_options(pm_v7_account_native PRIVATE -Wall -Wextra -Wpedantic)
 
 add_library(pm_v7_hft
   src/v7_maker_hft.cpp
