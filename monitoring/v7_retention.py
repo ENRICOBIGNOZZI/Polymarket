@@ -60,6 +60,51 @@ def disk_state(path: Path, policy: dict[str, Any]) -> dict[str, Any]:
     return {"state": state, "total_bytes": usage.total, "used_bytes": usage.used, "free_bytes": usage.free, "free_ratio": free_ratio}
 
 
+
+
+def _allocated_bytes(path: Path) -> int:
+    try:
+        info=path.stat(); return int(getattr(info,"st_blocks",0))*512 or info.st_size
+    except OSError:
+        return 0
+
+
+def manage_emergency_reserve(run_root: Path, policy: dict[str, Any], *, allow_create: bool) -> dict[str, Any]:
+    reserve_bytes=int(policy.get("emergency_reserve_bytes") or 0)
+    release_free=int(policy.get("reserve_release_free_bytes") or 0)
+    create_free=int(policy.get("reserve_create_min_free_bytes") or 0)
+    if min(reserve_bytes,release_free,create_free)<0: raise ValueError("invalid emergency disk reserve policy")
+    target=run_root/"control"/".disk-emergency-reserve"
+    target.parent.mkdir(parents=True,exist_ok=True)
+    usage=shutil.disk_usage(run_root)
+    result={"path":str(target),"configured_bytes":reserve_bytes,"released_bytes":0,"created_bytes":0,"free_bytes_before":usage.free}
+    current=_allocated_bytes(target) if target.exists() else 0
+    if reserve_bytes and current and usage.free<=release_free:
+        with target.open("r+b") as handle:
+            handle.truncate(0); handle.flush(); os.fsync(handle.fileno())
+        result["released_bytes"]=current; result["state"]="RELEASED_FOR_RETENTION"
+    elif current:
+        result["state"]="ARMED"
+    else:
+        result["state"]="ABSENT" if reserve_bytes else "DISABLED"
+    usage=shutil.disk_usage(run_root)
+    if allow_create and reserve_bytes and _allocated_bytes(target)<int(reserve_bytes*.95) and usage.free>=create_free+reserve_bytes:
+        with target.open("wb") as handle:
+            if hasattr(os,"posix_fallocate"):
+                os.posix_fallocate(handle.fileno(),0,reserve_bytes)
+            else:
+                block=bytes(min(4*1024**2,max(1,reserve_bytes))); remaining=reserve_bytes
+                while remaining:
+                    chunk=block if remaining>=len(block) else block[:remaining]; handle.write(chunk); remaining-=len(chunk)
+            handle.flush(); os.fsync(handle.fileno())
+        allocated=_allocated_bytes(target)
+        if allocated<int(reserve_bytes*.95):
+            with target.open("r+b") as handle: handle.truncate(0)
+            raise OSError("emergency reserve underallocated")
+        result["created_bytes"]=allocated; result["state"]="ARMED"
+    result["free_bytes_after"]=shutil.disk_usage(run_root).free
+    return result
+
 def _complete_ledger_bytes(path: Path, expected_sha: str) -> tuple[bytes, int]:
     if not path.is_file():
         return b"", 0
@@ -507,91 +552,64 @@ def compress_closed_cutover_tapes(archive_root: Path, *, now: int, dry_run: bool
 
 
 def run_retention(
-    run_root: Path,
-    config: dict[str, Any],
-    expected_sha: str,
-    *,
-    dry_run: bool,
-    durable_archive_confirmed: bool,
-    now: int | None = None,
+    run_root: Path, config: dict[str, Any], expected_sha: str, *,
+    dry_run: bool, durable_archive_confirmed: bool, now: int | None = None,
 ) -> dict[str, Any]:
-    now = int(time.time()) if now is None else int(now)
-    run_root.mkdir(parents=True, exist_ok=True)
-    if config.get("schema") != "polymarket_v7_data_retention_v1" or config.get("paper_only") is not True:
+    now=int(time.time()) if now is None else int(now)
+    run_root.mkdir(parents=True,exist_ok=True)
+    if config.get("schema")!="polymarket_v7_data_retention_v1" or config.get("paper_only") is not True:
         raise ValueError("invalid V7 PAPER retention policy")
-    if not dry_run:
-        _atomic_json(run_root / "control" / "retention_status.json", {
-            "schema":"polymarket_v7_retention_status_v1","timestamp":now,
-            "paper_only":True,"authenticated_execution":False,
-            "expected_sha":expected_sha,"state":"RUNNING_RETENTION_PASS",
-        })
-    window_policy = config.get("rolling_window", {})
-    windowed = {"state":"DISABLED"}
-    if window_policy.get("enabled") and run_root.name == "paper_v7_live" and run_root.parent.name == "runs":
+    disk_policy=config["disk"]; preflight=disk_state(run_root,disk_policy)
+    live_scope=run_root.name=="paper_v7_live" and run_root.parent.name=="runs"
+    emergency_trigger=int(disk_policy.get("emergency_cleanup_free_bytes") or 0)
+    emergency=live_scope and (preflight["free_bytes"]<=emergency_trigger if emergency_trigger else preflight["state"]=="critical")
+    reserve={"state":"DRY_RUN"} if dry_run else (manage_emergency_reserve(run_root,disk_policy,allow_create=False) if live_scope else {"state":"NOT_LIVE_SCOPE"})
+
+    window_policy=config.get("rolling_window",{}); windowed={"state":"DISABLED"}
+    if window_policy.get("enabled") and live_scope:
         import sys
-        sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
+        sys.path.insert(0,str(Path(__file__).resolve().parents[1]/"scripts"))
         from v7_windowed_evidence_retention import run as window_run, POLICY as WINDOW_POLICY
-        if window_policy.get("authorization") != WINDOW_POLICY:
-            raise ValueError("invalid rolling window authorization")
-        windowed = window_run(run_root.parent,
-            raw_detail_seconds=int(window_policy["raw_detail_seconds"]),
-            maximum_seconds=float(window_policy["maximum_seconds_per_pass"]),
-            dry_run=dry_run)
-    checkpoint = checkpoint_ledger(run_root, config["canonical_ledger"], expected_sha) if not dry_run else {"created": False, "reason": "dry_run"}
-    rotated = rotate_append_reopen_streams(
-        run_root, config.get("active_files", {}), now=now, dry_run=dry_run
-    )
-    expired = expire_rotated_streams(run_root, config.get("streams", []), now=now, dry_run=dry_run)
-    pruned = prune_checkpoints(
-        run_root,
-        config["canonical_ledger"],
-        durable_archive_confirmed=durable_archive_confirmed,
-        dry_run=dry_run,
-    )
-    cutover_policy = config.get("cutover_archives", {})
-    archive_name = str(cutover_policy.get("directory_name") or "paper_v7_archives")
-    if Path(archive_name).name != archive_name:
-        raise ValueError("unsafe cutover archive directory name")
-    cutover_compaction = compact_cutover_archives(
-        run_root.parent / archive_name, cutover_policy, now=now, dry_run=dry_run,
-    )
-    closed_tapes = compress_closed_cutover_tapes(
-        run_root.parent / archive_name, now=now, dry_run=dry_run,
-        active_run_root=run_root if (run_root / "control/runtime_status.json").is_file() else None,
-        permanent_store_root=run_root.parent / 'paper_v7_durable/permanent_evidence/store',
-    )
-    aggregate_policy=config.get('aggregate_retention',{})
-    aggregates={'state':'DISABLED'}
-    if aggregate_policy.get('enabled') and run_root.name=='paper_v7_live' and run_root.parent.name=='runs':
+        if window_policy.get("authorization")!=WINDOW_POLICY: raise ValueError("invalid rolling window authorization")
+        windowed=window_run(run_root.parent,raw_detail_seconds=int(window_policy["raw_detail_seconds"]),
+                            maximum_seconds=float(window_policy["maximum_seconds_per_pass"]),dry_run=dry_run)
+
+    after_window=disk_state(run_root,disk_policy)
+    emergency=emergency or bool(live_scope and emergency_trigger and after_window["free_bytes"]<=emergency_trigger)
+    if emergency:
+        checkpoint={"created":False,"reason":"emergency_disk_cleanup_mode"}; rotated=[]; pruned=[]
+        cutover_compaction={"state":"SKIPPED_EMERGENCY_DISK_CLEANUP"}
+        closed_tapes={"state":"SKIPPED_EMERGENCY_DISK_CLEANUP","archived":[],"skipped":[],"failures":[],"reclaimed_bytes":0}
+    else:
+        checkpoint=checkpoint_ledger(run_root,config["canonical_ledger"],expected_sha) if not dry_run else {"created":False,"reason":"dry_run"}
+        rotated=rotate_append_reopen_streams(run_root,config.get("active_files",{}),now=now,dry_run=dry_run)
+        pruned=prune_checkpoints(run_root,config["canonical_ledger"],durable_archive_confirmed=durable_archive_confirmed,dry_run=dry_run)
+        cutover_policy=config.get("cutover_archives",{}); archive_name=str(cutover_policy.get("directory_name") or "paper_v7_archives")
+        if Path(archive_name).name!=archive_name: raise ValueError("unsafe cutover archive directory name")
+        cutover_compaction=compact_cutover_archives(run_root.parent/archive_name,cutover_policy,now=now,dry_run=dry_run)
+        closed_tapes=compress_closed_cutover_tapes(run_root.parent/archive_name,now=now,dry_run=dry_run,
+            active_run_root=run_root if (run_root/"control/runtime_status.json").is_file() else None,
+            permanent_store_root=run_root.parent/"paper_v7_durable/permanent_evidence/store")
+
+    expired=expire_rotated_streams(run_root,config.get("streams",[]),now=now,dry_run=dry_run)
+    aggregate_policy=config.get("aggregate_retention",{}); aggregates={"state":"SKIPPED_EMERGENCY_DISK_CLEANUP" if emergency else "DISABLED"}
+    if not emergency and aggregate_policy.get("enabled") and run_root.name=="paper_v7_live" and run_root.parent.name=="runs":
         import sys
-        sys.path.insert(0,str(Path(__file__).resolve().parents[1]/'scripts'))
+        sys.path.insert(0,str(Path(__file__).resolve().parents[1]/"scripts"))
         from v7_aggregate_retention import run as aggregate_run, POLICY
-        if aggregate_policy.get('authorization')!=POLICY:raise ValueError('invalid lossy retention authorization')
-        aggregates=aggregate_run(run_root.parent,
-            target_bytes=int(aggregate_policy['target_bytes']),trigger_bytes=int(aggregate_policy['trigger_bytes']),
-            minimum_age_seconds=int(aggregate_policy['minimum_age_seconds']),
-            maximum_seconds=float(aggregate_policy['maximum_seconds_per_pass']),dry_run=dry_run)
-    disk = disk_state(run_root, config["disk"])
-    result = {
-        "schema": "polymarket_v7_retention_status_v1",
-        "timestamp": now,
-        "paper_only": True,
-        "authenticated_execution": False,
-        "expected_sha": expected_sha,
-        "disk": disk,
-        "windowed_retention": windowed,
-        "aggregate_retention": aggregates,
-        "ledger_checkpoint": checkpoint,
-        "rotated_append_reopen_streams": rotated,
-        "expired_rotated_segments": expired,
-        "pruned_ledger_checkpoints": pruned,
-        "cutover_archive_compaction": cutover_compaction,
-        "closed_cutover_tape_compression": closed_tapes,
-        "durable_archive_confirmed": durable_archive_confirmed,
-        "dry_run": dry_run,
-    }
-    if not dry_run:
-        _atomic_json(run_root / "control" / "retention_status.json", result)
+        if aggregate_policy.get("authorization")!=POLICY: raise ValueError("invalid lossy retention authorization")
+        aggregates=aggregate_run(run_root.parent,target_bytes=int(aggregate_policy["target_bytes"]),
+            trigger_bytes=int(aggregate_policy["trigger_bytes"]),minimum_age_seconds=int(aggregate_policy["minimum_age_seconds"]),
+            maximum_seconds=float(aggregate_policy["maximum_seconds_per_pass"]),dry_run=dry_run)
+    reserve_final={"state":"DRY_RUN"} if dry_run else (manage_emergency_reserve(run_root,disk_policy,allow_create=True) if live_scope else {"state":"NOT_LIVE_SCOPE"})
+    disk=disk_state(run_root,disk_policy)
+    result={"schema":"polymarket_v7_retention_status_v2","timestamp":now,"paper_only":True,"authenticated_execution":False,
+      "expected_sha":expected_sha,"preflight_disk":preflight,"disk":disk,"emergency_cleanup_mode":emergency,
+      "emergency_reserve_preflight":reserve,"emergency_reserve_final":reserve_final,"windowed_retention":windowed,
+      "aggregate_retention":aggregates,"ledger_checkpoint":checkpoint,"rotated_append_reopen_streams":rotated,
+      "expired_rotated_segments":expired,"pruned_ledger_checkpoints":pruned,"cutover_archive_compaction":cutover_compaction,
+      "closed_cutover_tape_compression":closed_tapes,"durable_archive_confirmed":durable_archive_confirmed,"dry_run":dry_run}
+    if not dry_run: _atomic_json(run_root/"control/retention_status.json",result)
     return result
 
 

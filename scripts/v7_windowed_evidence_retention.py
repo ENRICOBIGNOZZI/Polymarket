@@ -144,6 +144,35 @@ def _manifest_windowed_old(value: dict[str, Any], cutoff_ns: int, runs: Path) ->
     return eligible, families
 
 
+
+
+def _existing_tombstone_allows_cleanup(path: Path, current: dict[str, Any]) -> bool:
+    """Resume a previously authorized retirement without rewriting immutable evidence.
+
+    A pass can crash after the tombstone is durable but before every pack/locator/
+    manifest is unlinked. Dynamic timestamps therefore must never force a second,
+    colliding tombstone write. Current references may only be a subset of the
+    already-recorded retirement identity; new references fail closed.
+    """
+    if not path.exists():
+        return False
+    previous = _load(path)
+    required = {
+        "schema": "polymarket_v7_windowed_pack_tombstone_v1",
+        **AUTH,
+        "policy": POLICY,
+        "raw_detail_available": False,
+        "pack_sha256": current["pack_sha256"],
+    }
+    if any(previous.get(key) != value for key, value in required.items()):
+        raise ValueError(f"unsafe existing windowed tombstone:{current['pack_sha256']}")
+    for key in ("source_aliases", "source_families", "object_sha256s", "manifest_sha256s"):
+        old = previous.get(key)
+        now = current.get(key)
+        if not isinstance(old, list) or not isinstance(now, list) or not set(now) <= set(old):
+            raise ValueError(f"windowed tombstone identity expanded:{current['pack_sha256']}:{key}")
+    return True
+
 def _safe_unlink(path: Path) -> int:
     if not path.exists():
         return 0
@@ -316,8 +345,10 @@ def run(runs_root: Path, *, raw_detail_seconds: int = 21600,
             "retired_at_ns": now_ns,
             "cutoff_ns": cutoff_ns,
         }
+        tombstone_path = store / "windowed_pack_tombstones" / (pack + ".json")
         if not dry_run:
-            immutable(store / "windowed_pack_tombstones" / (pack + ".json"), canonical(tombstone))
+            if not _existing_tombstone_allows_cleanup(tombstone_path, tombstone):
+                immutable(tombstone_path, canonical(tombstone))
         path = store / "packs" / pack[:2] / (pack + ".pack")
         if path.exists():
             if not dry_run:
