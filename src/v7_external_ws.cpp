@@ -135,7 +135,10 @@ ExternalVenueWsClient::ExternalVenueWsClient(
     if (spec_.venue == VenueId::Unknown || spec_.asset_handle == 0
         || spec_.host.empty() || spec_.port.empty() || spec_.target.empty()
         || spec_.subscription_json.empty() || spec_.max_message_bytes == 0
-        || spec_.max_message_bytes > kMaxWsMessageBytes) {
+        || spec_.max_message_bytes > kMaxWsMessageBytes
+        || spec_.capture_wall_time > 1
+        || !external_ws_clock_policy_valid(
+            spec_.capture_wall_time != 0, ingress_ != nullptr, raw_sink_ != nullptr)) {
         throw std::invalid_argument("invalid external venue connection spec");
     }
 }
@@ -226,7 +229,7 @@ void ExternalVenueWsClient::run(ExternalStopToken stop) noexcept {
                 ws.read(*buffer);
                 beast::get_lowest_layer(ws).expires_never();
                 const auto receive_ns = monotonic_now_ns();
-                const auto wall_ns = wall_now_ns();
+                const auto wall_ns = spec_.capture_wall_time != 0 ? wall_now_ns() : 0;
                 frames_received_.fetch_add(1, std::memory_order_relaxed);
                 last_receive_monotonic_ns_.store(receive_ns, std::memory_order_release);
                 last_receive_wall_ns_.store(wall_ns, std::memory_order_release);
