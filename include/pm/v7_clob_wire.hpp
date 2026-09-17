@@ -46,6 +46,8 @@ struct PostMarketOrderView {
 // and hashes only timestamp + "POST" + "/order" + exact_body.
 class L2HmacSigner final {
 public:
+    static constexpr std::size_t kEncodedSignatureSize = 44;
+
     explicit L2HmacSigner(std::string_view base64_secret) noexcept;
     ~L2HmacSigner();
 
