@@ -1,4 +1,5 @@
 #include "pm/fast_ws.hpp"
+#include "pm/thread_tuning.hpp"
 #include "pm/v7_coinbase_l2_observer.hpp"
 #include "pm/v7_crypto_decision_lane.hpp"
 #include "pm/v7_external_ingress.hpp"
@@ -61,6 +62,7 @@ struct Options {
     std::int64_t min_order_microunits = 5'000'000;
     int duration_seconds = 30;
     int idle_spin_us = 50;
+    int cpu_pin = 1;
     bool validate_only = false;
 };
 
@@ -80,6 +82,7 @@ Options parse_options(int argc, char** argv) {
         else if (arg == "--min-order-microunits") out.min_order_microunits = bounded_integer<std::int64_t>(next(), 1, 1'000'000'000);
         else if (arg == "--duration-seconds") out.duration_seconds = bounded_integer<int>(next(), 1, 3600);
         else if (arg == "--idle-spin-us") out.idle_spin_us = bounded_integer<int>(next(), 0, 2000);
+        else if (arg == "--cpu-pin") out.cpu_pin = bounded_integer<int>(next(), 0, 1);
         else if (arg == "--validate-only") out.validate_only = true;
         else throw std::invalid_argument("unknown option");
     }
@@ -118,6 +121,22 @@ int main(int argc, char** argv) {
         }
         if (options.yes_token.empty() || options.no_token.empty() || options.yes_token == options.no_token
             || options.close_wall_ns <= wall_now_ns()) throw std::invalid_argument("live market identity required");
+
+        // Role order: decision owner, Binance ingress, Coinbase ingress,
+        // Polymarket market-data worker. On Linux select the highest allowed
+        // CPUs, leaving the lower CPUs for OS/housekeeping work. The London HFT
+        // host policy supplies no-SMT physical cores; on other hosts this stays
+        // observable and can be disabled with --cpu-pin 0.
+        std::array<int, 4> role_cpus{-1, -1, -1, -1};
+        const auto allowed_cpus = pm::threading::allowed_cpu_ids();
+        const auto selected_cpus = options.cpu_pin
+            ? pm::threading::select_dedicated_cpus(allowed_cpus, role_cpus.size())
+            : std::vector<int>{};
+        if (selected_cpus.size() == role_cpus.size()) {
+            std::copy(selected_cpus.begin(), selected_cpus.end(), role_cpus.begin());
+        }
+        const bool cpu_pin_active = selected_cpus.size() == role_cpus.size();
+        std::atomic<std::uint64_t> affinity_failures{0};
 
         constexpr std::uint64_t kAsset = 1, kMarket = 1, kEvent = 1, kYes = 1, kNo = 2;
         IngressWakeup wakeup;
@@ -163,7 +182,8 @@ int main(int argc, char** argv) {
                 pm_epoch.fetch_add(1, std::memory_order_acq_rel);
                 pm_faults.fetch_add(1, std::memory_order_relaxed);
                 wakeup.notify();
-            });
+            },
+            role_cpus[3] >= 0 ? std::vector<int>{role_cpus[3]} : std::vector<int>{});
 
         ExternalStatePolicy external_policy;
         external_policy.external_cancel_enabled = 1;
@@ -221,9 +241,17 @@ int main(int argc, char** argv) {
         std::stop_source stopping;
         auto stop_token = stopping.get_token();
 #endif
-        std::thread binance_thread([&] { binance.run(stop_token); });
-        std::thread coinbase_thread([&] { coinbase.run(stop_token); });
+        const auto pin_role = [&](int cpu) noexcept {
+            if (cpu >= 0 && pm::threading::pin_current_thread_to_cpu(cpu) != 0) {
+                affinity_failures.fetch_add(1, std::memory_order_relaxed);
+            }
+        };
+        std::thread binance_thread([&] { pin_role(role_cpus[1]); binance.run(stop_token); });
+        std::thread coinbase_thread([&] { pin_role(role_cpus[2]); coinbase.run(stop_token); });
         pm_feed.start();
+        // Pin the owner only after child creation so a failed child pin cannot
+        // accidentally inherit the decision owner's one-CPU mask.
+        pin_role(role_cpus[0]);
 
         const auto deadline = start_mono + static_cast<std::int64_t>(options.duration_seconds) * 1'000'000'000LL;
         const auto refill_binance = [&] {
@@ -338,9 +366,12 @@ int main(int argc, char** argv) {
         const auto pm_status = pm_feed.snapshot();
         const auto binance_ingress_status = binance_ingress.snapshot();
         const auto coinbase_ingress_status = coinbase_ingress.snapshot();
+        const auto total_affinity_failures = affinity_failures.load(std::memory_order_relaxed)
+            + pm_status.affinity_errors;
         const bool clean = pm_drops.load() == 0
             && binance_ingress_status.dropped_events == 0
-            && coinbase_ingress_status.dropped_events == 0;
+            && coinbase_ingress_status.dropped_events == 0
+            && (!cpu_pin_active || total_affinity_failures == 0);
 
         std::cout << json::serialize(json::object{
             {"schema", "polymarket_v7_crypto_flash_shadow_v1"},
@@ -350,6 +381,10 @@ int main(int argc, char** argv) {
             {"critical_path", "CPP_SAME_PROCESS_CAUSAL_EVENT_TO_RISK_ADMISSION"},
             {"clean_capture", clean}, {"duration_seconds", options.duration_seconds},
             {"idle_spin_us", options.idle_spin_us}, {"kernel_wakeups", wakeup.kernel_wakeups()},
+            {"cpu_pin_requested", options.cpu_pin != 0}, {"cpu_pin_active", cpu_pin_active},
+            {"allowed_cpu_count", allowed_cpus.size()}, {"affinity_failures", total_affinity_failures},
+            {"cpu_roles", {{"decision", role_cpus[0]}, {"binance", role_cpus[1]},
+                           {"coinbase", role_cpus[2]}, {"polymarket", role_cpus[3]}}},
             {"evaluations", evaluations}, {"accepted_candidates", accepted},
             {"latency_sample_overflow", latency_overflow},
             {"accepted_signal_to_admission", latency_distribution(std::move(accepted_signal_to_admission))},
@@ -358,7 +393,9 @@ int main(int argc, char** argv) {
             {"reason_counts", reason_json(reasons)},
             {"binance", {{"frames", binance_status.frames_received}, {"transport_failures", binance_status.transport_failures}, {"drops", binance_ingress_status.dropped_events}}},
             {"coinbase", {{"frames", coinbase_status.frames_received}, {"transport_failures", coinbase_status.transport_failures}, {"drops", coinbase_ingress_status.dropped_events}}},
-            {"polymarket", {{"messages", pm_status.messages}, {"reconnects", pm_status.reconnects}, {"errors", pm_status.errors}, {"drops", pm_drops.load()}}},
+            {"polymarket", {{"messages", pm_status.messages}, {"reconnects", pm_status.reconnects},
+                            {"errors", pm_status.errors}, {"affinity_errors", pm_status.affinity_errors},
+                            {"drops", pm_drops.load()}}},
             {"note", "No order adapter is instantiated. Accepted candidates are shadow admissions only."}
         }) << '\n';
         return clean ? 0 : 2;

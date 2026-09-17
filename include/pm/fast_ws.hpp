@@ -23,6 +23,7 @@ struct FeedSnapshot {
     std::uint64_t messages = 0;
     std::uint64_t reconnects = 0;
     std::uint64_t errors = 0;
+    std::uint64_t affinity_errors = 0;
 };
 
 class MarketWebSocketFeed {
@@ -34,7 +35,8 @@ public:
                         std::vector<std::string> asset_ids,
                         std::size_t shard_size,
                         MessageHandler on_message,
-                        ErrorHandler on_error = {});
+                        ErrorHandler on_error = {},
+                        std::vector<int> worker_cpu_affinity = {});
     ~MarketWebSocketFeed();
 
     MarketWebSocketFeed(const MarketWebSocketFeed&) = delete;
