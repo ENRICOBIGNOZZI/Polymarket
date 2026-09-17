@@ -39,7 +39,8 @@ std::size_t PreparedPostOrderBuilder::build(
     if (order_.serialize(dynamic, body) != body_size) return 0;
 
     std::array<char, clob_wire::L2HmacSigner::kEncodedSignatureSize> signature{};
-    const std::size_t signature_size = hmac_.sign(request_timestamp, body, signature);
+    const std::size_t signature_size = hmac_.sign(
+        request_timestamp, std::string_view(body.data(), body.size()), signature);
     if (signature_size != signature.size()) return 0;
 
     const std::size_t written_header = http_.serialize_headers(
