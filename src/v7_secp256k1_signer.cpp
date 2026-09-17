@@ -63,7 +63,8 @@ bool RecoverableSecp256k1Signer::sign_digest(
  output.bytes[64]=static_cast<std::uint8_t>(27+recid); return true;
 }
 bool signature_hex_0x(const RecoverableSignature65& signature,std::span<char> output) noexcept {
- if(output.size()<132) return false; static constexpr char hex[]="0123456789abcdef";
+ if(output.size()<132) return false;
+ static constexpr char hex[]="0123456789abcdef";
  output[0]='0'; output[1]='x';
  for(std::size_t i=0;i<signature.bytes.size();++i){ output[2+i*2]=hex[signature.bytes[i]>>4U]; output[3+i*2]=hex[signature.bytes[i]&0x0fU]; }
  return true;
