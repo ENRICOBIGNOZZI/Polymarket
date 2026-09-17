@@ -36,7 +36,7 @@ export POLYMARKET_EXPECTED_SHA=$(git rev-parse HEAD)
 ./ops/v7_london_provision.sh
 ```
 
-The wrapper verifies the AWS caller identity, maps the physical AZ IDs in the caller account, chooses the first configured compute instance type offered in all three zones, resolves the latest available Canonical Ubuntu 24.04 amd64 gp3 image, and writes a local provisioning receipt. It never authenticates Tailscale or enables the PAPER runtime.
+The wrapper verifies the AWS caller identity, maps the physical AZ IDs in the caller account, and chooses the first configured compute instance type offered in all three zones only after validating its actual EC2 CPU topology. The HFT host policy requires at least four physical cores and at most one hardware thread per core; the preference order starts with eight-core AMD C8a/C7a candidates so feed, decision, and operating-system work do not have to fight over one physical core. It then resolves the latest available Canonical Ubuntu 24.04 amd64 gp3 image and writes the selected topology into the local provisioning receipt. It never authenticates Tailscale or enables the PAPER runtime.
 
 SSM is the bootstrap administration path, so SSH port 22 does not need to be exposed. Tailscale remains an optional, separately authenticated admin path.
 

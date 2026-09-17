@@ -43,18 +43,47 @@ PY
 )
 [[ "${#preferences[@]}" -gt 0 ]] || fail "instance type preference list empty"
 instance_type=""
+instance_physical_cores=""
+instance_threads_per_core=""
+instance_vcpus=""
 for candidate in "${preferences[@]}"; do
   offerings="$(aws ec2 describe-instance-type-offerings --region "$REGION" --location-type availability-zone \
     --filters "Name=instance-type,Values=$candidate" --output json)"
-  if OFFERINGS_JSON="$offerings" python3 - "${zone_names[@]}" <<'PY'
+  if ! OFFERINGS_JSON="$offerings" python3 - "${zone_names[@]}" <<'PY'
 import json,os,sys
 wanted=set(sys.argv[1:]); v=json.loads(os.environ['OFFERINGS_JSON'])
 have={x.get('Location') for x in v.get('InstanceTypeOfferings',[]) if x.get('InstanceType')}
 raise SystemExit(0 if wanted <= have else 1)
 PY
-  then instance_type="$candidate"; break; fi
+  then continue; fi
+
+  description="$(aws ec2 describe-instance-types --region "$REGION" \
+    --instance-types "$candidate" --output json)"
+  topology="$(POLICY_PATH="$POLICY" INSTANCE_JSON="$description" python3 - "$candidate" <<'PY'
+import json,os,sys
+candidate=sys.argv[1]
+policy=json.load(open(os.environ['POLICY_PATH'],encoding='utf-8'))
+constraints=policy.get('instance_constraints',{})
+minimum_cores=int(constraints.get('minimum_physical_cores',1))
+maximum_threads=int(constraints.get('maximum_threads_per_core',1))
+minimum_vcpus=int(constraints.get('minimum_vcpus',1))
+rows=json.loads(os.environ['INSTANCE_JSON']).get('InstanceTypes',[])
+if len(rows)!=1 or rows[0].get('InstanceType')!=candidate:
+    raise SystemExit(3)
+vcpu=rows[0].get('VCpuInfo',{})
+cores=int(vcpu.get('DefaultCores') or 0)
+threads=int(vcpu.get('DefaultThreadsPerCore') or 0)
+vcpus=int(vcpu.get('DefaultVCpus') or 0)
+if cores < minimum_cores or threads < 1 or threads > maximum_threads or vcpus < minimum_vcpus:
+    raise SystemExit(2)
+print(f'{cores}\t{threads}\t{vcpus}')
+PY
+  )" || continue
+  IFS=$'\t' read -r instance_physical_cores instance_threads_per_core instance_vcpus <<<"$topology"
+  instance_type="$candidate"
+  break
 done
-[[ -n "$instance_type" ]] || fail "no preferred instance type is offered in all three physical AZs"
+[[ -n "$instance_type" ]] || fail "no preferred instance type satisfies all-AZ offering and HFT physical-core constraints"
 
 images="$(aws ec2 describe-images --region "$REGION" --owners 099720109477 \
   --filters 'Name=name,Values=ubuntu/images/hvm-ssd-gp3/ubuntu-noble-24.04-amd64-server-*' \
@@ -74,15 +103,17 @@ stack_json="$(aws cloudformation describe-stacks --region "$REGION" --stack-name
 mkdir -p "$OUTPUT_DIR"
 receipt="$OUTPUT_DIR/provision.$EXPECTED_SHA.json"
 STACK_JSON="$stack_json" python3 - "$receipt" "$EXPECTED_SHA" "$REGION" "$STACK" \
-  "$account" "$arn" "$instance_type" "$image_id" "${zone_rows[@]}" <<'PY'
+  "$account" "$arn" "$instance_type" "$image_id" "$instance_physical_cores" \
+  "$instance_threads_per_core" "$instance_vcpus" "${zone_rows[@]}" <<'PY'
 import json,os,sys,time
 from pathlib import Path
-path,sha,region,stack,account,arn,itype,image,*zones=sys.argv[1:]
+path,sha,region,stack,account,arn,itype,image,cores,threads,vcpus,*zones=sys.argv[1:]
 v=json.loads(os.environ['STACK_JSON']); s=v['Stacks'][0]
 out={x['OutputKey']:x['OutputValue'] for x in s.get('Outputs',[])}
 value={'schema':'polymarket_v7_london_provision_receipt_v1','timestamp':int(time.time()),
        'expected_sha':sha,'region':region,'stack':stack,'aws_account':account,'caller_arn':arn,
        'instance_type':itype,'image_id':image,
+       'instance_topology':{'physical_cores':int(cores),'threads_per_core':int(threads),'vcpus':int(vcpus)},
        'physical_zone_mapping':[dict(zip(('zone_id','account_zone_name'),z.split('\t',1))) for z in zones],
        'stack_outputs':out,'paper_only':True,'authenticated_execution':False,
        'real_order_submission':False,'automatic_cutover':False,

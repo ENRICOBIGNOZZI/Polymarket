@@ -13,7 +13,8 @@
     {"zone_name": "eu-west-2b", "zone_id": "euw2-az3"},
     {"zone_name": "eu-west-2c", "zone_id": "euw2-az1"}
   ],
-  "instance_type_preferences": ["c7i.large", "c7a.large", "c6i.large"],
+  "instance_type_preferences": ["c8a.2xlarge", "c7a.2xlarge", "c8a.xlarge", "c7a.xlarge"],
+  "instance_constraints": {"minimum_physical_cores": 4, "maximum_threads_per_core": 1, "minimum_vcpus": 4},
   "verify_instance_offering_per_zone_before_launch": true,
   "storage_blueprint": {
     "root": {"type": "gp3", "size_gib": 40, "encrypted": true},
