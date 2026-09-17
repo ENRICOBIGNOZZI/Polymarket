@@ -110,3 +110,18 @@ required before choosing the production location. No host was provisioned by
 this audit. IMDS requests are bounded and do not use a proxy.
 
 AWS primary reference: https://docs.aws.amazon.com/ram/latest/userguide/working-with-az-ids.html
+
+## AWS/SSM automation boundary
+
+The first London build does not require Tailscale. The manual GitHub workflow
+`V7 London AWS provision and benchmark` uses AWS/SSM only and remains PAPER-only.
+It requires three repository secrets (`AWS_ACCESS_KEY_ID`,
+`AWS_SECRET_ACCESS_KEY`, `AWS_SESSION_TOKEN`) containing one valid temporary AWS
+session. The workflow never prints them and fails closed on `sts get-caller-identity`.
+
+`provision-bootstrap-smoke` creates the identical three-AZ shootout, bootstraps
+the exact `main` SHA with trading services disabled, then records smoke and
+multi-path evidence. `launch-formal` starts the detached 24-hour benchmark on all
+three hosts. A later `collect-formal` run consumes the launch receipt and produces
+the regional shootout result. None of these phases performs an automatic trading
+cutover or enables real-order authority.
