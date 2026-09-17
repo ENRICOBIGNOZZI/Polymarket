@@ -63,6 +63,21 @@ void test_buy_rounds_reservation_up() {
     assert(out == 1);
 }
 
+void test_buy_notional_helpers_stay_fail_closed() {
+    std::int64_t out = 123;
+    assert(!pm::v7::ExecutionAdmission::quote_buy_notional_microdollars(
+        quote(pm::v7::Side::Sell, 30), 100, out));
+    assert(out == 0);
+    out = 123;
+    assert(!pm::v7::ExecutionAdmission::aggressive_buy_notional_microdollars(
+        aggressive(pm::v7::Side::Sell, 31), 100, out));
+    assert(out == 0);
+    out = 123;
+    assert(!pm::v7::ExecutionAdmission::aggressive_buy_notional_microdollars(
+        aggressive(pm::v7::Side::Buy, 32), 0, out));
+    assert(out == 0);
+}
+
 void test_duplicate_buy_is_idempotent() {
     pm::v7::SleeveCapitalAccount capital(limits());
     const auto intent = quote(pm::v7::Side::Buy, 3);
@@ -161,6 +176,7 @@ void test_invalid_price_domain_rejected() {
 int main() {
     test_buy_reserves_limit_notional();
     test_buy_rounds_reservation_up();
+    test_buy_notional_helpers_stay_fail_closed();
     test_duplicate_buy_is_idempotent();
     test_buy_fails_closed_on_capital_limit();
     test_sell_does_not_reserve_new_cash();
