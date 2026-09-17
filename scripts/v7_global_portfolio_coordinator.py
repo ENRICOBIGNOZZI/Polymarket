@@ -522,41 +522,27 @@ def process_cut(run_root: Path, *, now_ns: int | None = None) -> dict[str, Any]:
 
 
 
-def process_fast_forward_take(
-    run_root: Path, *, now_ns: int | None = None, risk_preempt: bool = False,
+def process_fast_forward_payload(
+    run_root: Path, raw: dict[str, Any], *, now_ns: int | None = None,
+    risk_preempt: bool = False,
 ) -> dict[str, Any]:
-    """5ms PAPER forward lane owned by the same global coordinator."""
+    """Evaluate one PAPER forward candidate without filesystem transport.
+
+    The caller remains the single coordinator owner. This function performs no
+    inbox scan, receipt file write, archive move, or decision-journal fsync.
+    """
     root = Path(run_root)
     current_ns = int(now_ns if now_ns is not None else time.time_ns())
-    inbox = root / "opportunities" / "fast_forward_inbox"
-    archive = root / "opportunities" / "fast_forward_archive"
-    rejected = root / "opportunities" / "fast_forward_rejected"
-    files = sorted(inbox.glob("*.json")) if inbox.exists() else []
-    if not files:
-        return {
-            "schema": "polymarket_v7_fast_forward_coordinator_status_v1",
-            "timestamp_ns": current_ns, "paper_only": True,
-            "authenticated_execution": False, "real_order_submission": False,
-            "real_capital_at_risk": False, "owner": "V7_GLOBAL_PORTFOLIO_COORDINATOR",
-            "state": "IDLE", "pending": 0, "risk_preempt": bool(risk_preempt),
-        }
-    path = files[0]
     started = time.perf_counter_ns()
-    raw: dict[str, Any] | None = None
     error = ""
     try:
-        value = json.loads(path.read_text(encoding="utf-8"))
-        if not isinstance(value, dict):
-            raise OpportunityError("fast_forward_not_object")
-        parsed = OpportunityEnvelope.parse(value)
+        parsed = OpportunityEnvelope.parse(raw)
         if (not parsed.is_forward_test or parsed.action != "TAKE"
                 or parsed.engine_id != "CRYPTO_SETTLEMENT_ENGINE"):
             raise OpportunityError("fast_forward_wrong_envelope")
-        raw = value
-    except (OSError, json.JSONDecodeError, OpportunityError, TypeError, ValueError) as exc:
+    except (OpportunityError, TypeError, ValueError) as exc:
         error = f"FAST_FORWARD_REJECTED:{type(exc).__name__}:{exc}"
-    disk_pressure = disk_pressure_status(root)
-    disk_pressure_active = disk_pressure["active"]
+    disk_pressure_active = disk_pressure_status(root)["active"]
     drain_active = any((root / "control" / name).exists()
                        for name in ("CUTOVER_DRAIN", "KILL", "MAKER_FREEZE")) or disk_pressure_active
     if error:
@@ -575,16 +561,53 @@ def process_fast_forward_take(
         "real_order_submission": False, "real_capital_at_risk": False,
         "fast_forward_path": True,
         "fast_forward_compute_ns": int(time.perf_counter_ns() - started),
+        "receipt_transport": "DIRECT_COORDINATOR_REPLY",
+        "receipt_file_written": False,
     })
-    if isinstance(raw, dict):
-        decision["opportunity_inputs"] = [{
-            "replay_key": raw.get("deterministic_replay_key"),
-            "model_sha": raw.get("model_sha"), "market_id": raw.get("market_id"),
-            "token_id": raw.get("contract_id"), "action": raw.get("action"),
-            "component_provenance": raw.get("component_provenance"),
-            "source_snapshot_identity": raw.get("source_snapshot_identity"),
-            "paper_forward_test": True, "retained_after_execution_selection": True,
-        }]
+    decision["opportunity_inputs"] = [{
+        "replay_key": raw.get("deterministic_replay_key"),
+        "model_sha": raw.get("model_sha"), "market_id": raw.get("market_id"),
+        "token_id": raw.get("contract_id"), "action": raw.get("action"),
+        "component_provenance": raw.get("component_provenance"),
+        "source_snapshot_identity": raw.get("source_snapshot_identity"),
+        "paper_forward_test": True, "retained_after_execution_selection": True,
+    }]
+    return decision
+
+
+def process_fast_forward_take(
+    run_root: Path, *, now_ns: int | None = None, risk_preempt: bool = False,
+) -> dict[str, Any]:
+    """Legacy file-transport PAPER lane retained for the frozen cohort."""
+    root = Path(run_root)
+    current_ns = int(now_ns if now_ns is not None else time.time_ns())
+    inbox = root / "opportunities" / "fast_forward_inbox"
+    archive = root / "opportunities" / "fast_forward_archive"
+    rejected = root / "opportunities" / "fast_forward_rejected"
+    files = sorted(inbox.glob("*.json")) if inbox.exists() else []
+    if not files:
+        return {
+            "schema": "polymarket_v7_fast_forward_coordinator_status_v1",
+            "timestamp_ns": current_ns, "paper_only": True,
+            "authenticated_execution": False, "real_order_submission": False,
+            "real_capital_at_risk": False, "owner": "V7_GLOBAL_PORTFOLIO_COORDINATOR",
+            "state": "IDLE", "pending": 0, "risk_preempt": bool(risk_preempt),
+        }
+    path = files[0]
+    try:
+        raw = json.loads(path.read_text(encoding="utf-8"))
+        if not isinstance(raw, dict):
+            raise OpportunityError("fast_forward_not_object")
+    except (OSError, json.JSONDecodeError, OpportunityError, TypeError, ValueError) as exc:
+        raw = {}
+        decision = fail_closed_decision(
+            now_ns=current_ns,
+            reasons=[f"FAST_FORWARD_REJECTED:{type(exc).__name__}:{exc}"],
+        )
+    else:
+        decision = process_fast_forward_payload(
+            root, raw, now_ns=current_ns, risk_preempt=risk_preempt,
+        )
     authorized = (
         decision.get("action") == "TAKE"
         and decision.get("paper_exploration_authorized") is True
@@ -595,9 +618,13 @@ def process_fast_forward_take(
     )
     if authorized:
         receipt_name = decision["selected_replay_key"].replace("/", "_") + ".json"
-        atomic_json(root / "opportunities" / "receipts" / receipt_name, decision)
-        _record_authorization_publication(root, decision, "FAST_FORWARD_TAKER_RECEIPT")
-        append_jsonl(root / "opportunities" / "fast_forward_decisions.jsonl", decision)
+        legacy = dict(decision)
+        legacy["receipt_transport"] = "FILESYSTEM_LEGACY"
+        legacy["receipt_file_written"] = True
+        atomic_json(root / "opportunities" / "receipts" / receipt_name, legacy)
+        _record_authorization_publication(root, legacy, "FAST_FORWARD_TAKER_RECEIPT")
+        append_jsonl(root / "opportunities" / "fast_forward_decisions.jsonl", legacy)
+        decision = legacy
     destination = archive if authorized else rejected
     destination.mkdir(parents=True, exist_ok=True)
     os.replace(path, destination / path.name)
@@ -610,37 +637,60 @@ def process_fast_forward_take(
         "risk_preempt": bool(risk_preempt), "pending": max(0, len(files) - 1),
         "selected_replay_key": decision.get("selected_replay_key"),
         "reasons": decision.get("reasons") or [],
-        "compute_ns": decision["fast_forward_compute_ns"],
+        "compute_ns": decision.get("fast_forward_compute_ns"),
+        "receipt_transport": decision.get("receipt_transport"),
     }
     atomic_json(root / "control" / "fast_forward_status.json", status)
     return status
 
+
 def _run_loop(args: argparse.Namespace, journal: Any | None = None) -> int:
     full_interval = max(0.05, float(args.interval))
     fast_interval = max(0.002, float(args.fast_cancel_interval))
+    bridge = None
+    if args.fast_forward_ipc is not None:
+        from v7_fast_forward_ipc import FastForwardIpcBridge
+        bridge = FastForwardIpcBridge(args.fast_forward_ipc, capacity=args.fast_forward_ipc_capacity)
     next_full = time.monotonic()
     next_fast = next_full
-    while True:
-        now = time.monotonic()
-        if now >= next_fast:
-            cancel_status = process_fast_cancel(args.run_root)
-            process_fast_forward_take(
-                args.run_root,
-                risk_preempt=cancel_status.get("state") == "CANCEL_AUTHORIZED",
-            )
-            next_fast = now + fast_interval
-        now = time.monotonic()
-        if now >= next_full:
-            status = process_cut(args.run_root)
-            if journal is not None:
-                journal.append(status)
+    try:
+        while True:
+            now = time.monotonic()
+            cancel_status = None
+            if now >= next_fast:
+                cancel_status = process_fast_cancel(args.run_root)
+                process_fast_forward_take(
+                    args.run_root,
+                    risk_preempt=cancel_status.get("state") == "CANCEL_AUTHORIZED",
+                )
+                next_fast = now + fast_interval
+            if bridge is not None and bridge.snapshot()["queued"]:
+                if cancel_status is None:
+                    cancel_status = process_fast_cancel(args.run_root)
+                risk_preempt = cancel_status.get("state") == "CANCEL_AUTHORIZED"
+                bridge.drain(lambda raw: process_fast_forward_payload(
+                    args.run_root, raw, risk_preempt=risk_preempt,
+                ), max_messages=args.fast_forward_ipc_batch)
+            now = time.monotonic()
+            if now >= next_full:
+                status = process_cut(args.run_root)
+                if bridge is not None:
+                    status["fast_forward_ipc"] = bridge.snapshot()
+                if journal is not None:
+                    journal.append(status)
+                else:
+                    print(json.dumps(status, sort_keys=True), flush=True)
+                next_full = now + full_interval
+            if not args.loop:
+                return 0
+            sleep_for = max(0.0, min(next_fast, next_full) - time.monotonic())
+            if bridge is not None:
+                bridge.wait(sleep_for)
             else:
-                print(json.dumps(status, sort_keys=True), flush=True)
-            next_full = now + full_interval
-        if not args.loop:
-            return 0
-        sleep_for = min(next_fast, next_full) - time.monotonic()
-        time.sleep(max(0.0005, sleep_for))
+                time.sleep(max(0.0005, sleep_for))
+    finally:
+        if bridge is not None:
+            bridge.close()
 
 
 def main() -> int:
@@ -648,9 +698,14 @@ def main() -> int:
     parser.add_argument("--run-root", type=Path, required=True)
     parser.add_argument("--interval", type=float, default=0.1)
     parser.add_argument("--fast-cancel-interval", type=float, default=0.005)
+    parser.add_argument("--fast-forward-ipc", type=Path)
+    parser.add_argument("--fast-forward-ipc-capacity", type=int, default=128)
+    parser.add_argument("--fast-forward-ipc-batch", type=int, default=64)
     parser.add_argument("--loop", action="store_true")
     parser.add_argument("--event-log", type=Path)
     args = parser.parse_args()
+    if args.fast_forward_ipc_capacity < 1 or args.fast_forward_ipc_batch < 1:
+        raise SystemExit("positive IPC capacity and batch required")
     if args.event_log:
         from v7_compressed_journal import CompressedJournal
         with CompressedJournal(args.event_log) as journal:

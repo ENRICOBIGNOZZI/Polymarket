@@ -1,4 +1,5 @@
 #include "pm/v7_ingress_wakeup.hpp"
+#include "pm/v7_hot_signal.hpp"
 #include "pm/v7_binance_l2.hpp"
 #include "pm/v7_binance_l2_protocol.hpp"
 #include "pm/v7_coinbase_l2.hpp"
@@ -20,9 +21,11 @@
 #include <atomic>
 #include <charconv>
 #include <chrono>
+#include <condition_variable>
 #include <cmath>
 #include <csignal>
 #include <cstdlib>
+#include <deque>
 #include <filesystem>
 #include <fstream>
 #include <future>
@@ -79,6 +82,52 @@ void atomic_write(const fs::path& path, const json::object& value) {
     }
     fs::rename(temporary, path);
 }
+
+
+class AsyncAtomicJsonWriter final {
+public:
+    explicit AsyncAtomicJsonWriter(fs::path path, std::size_t capacity = 256, bool latest_only = false)
+        : path_(std::move(path)), capacity_(capacity), latest_only_(latest_only) {
+        if (path_.empty() || capacity_ == 0) throw std::invalid_argument("invalid async JSON writer");
+        worker_ = std::thread([this] { run(); });
+    }
+    ~AsyncAtomicJsonWriter() {
+        { std::lock_guard lock(mutex_); stopping_ = true; }
+        ready_.notify_all();
+        if (worker_.joinable()) worker_.join();
+    }
+    [[nodiscard]] bool submit(json::object value) noexcept {
+        try {
+            { std::lock_guard lock(mutex_);
+              if (latest_only_ && !queue_.empty()) {
+                  superseded_.fetch_add(queue_.size(), std::memory_order_relaxed);
+                  queue_.clear();
+              }
+              if (queue_.size() >= capacity_) { rejected_.fetch_add(1, std::memory_order_relaxed); return false; }
+              queue_.push_back(std::move(value)); }
+            ready_.notify_one(); return true;
+        } catch (...) { rejected_.fetch_add(1, std::memory_order_relaxed); return false; }
+    }
+    [[nodiscard]] std::uint64_t written() const noexcept { return written_.load(std::memory_order_relaxed); }
+    [[nodiscard]] std::uint64_t failures() const noexcept { return failures_.load(std::memory_order_relaxed); }
+    [[nodiscard]] std::uint64_t rejected() const noexcept { return rejected_.load(std::memory_order_relaxed); }
+    [[nodiscard]] std::uint64_t superseded() const noexcept { return superseded_.load(std::memory_order_relaxed); }
+    [[nodiscard]] std::size_t queued() const noexcept { std::lock_guard lock(mutex_); return queue_.size(); }
+private:
+    void run() noexcept {
+        for (;;) {
+            json::object value;
+            { std::unique_lock lock(mutex_); ready_.wait(lock,[&]{return stopping_||!queue_.empty();});
+              if (queue_.empty() && stopping_) return;
+              value=std::move(queue_.front()); queue_.pop_front(); }
+            try { atomic_write(path_, value); written_.fetch_add(1,std::memory_order_relaxed); }
+            catch (...) { failures_.fetch_add(1,std::memory_order_relaxed); }
+        }
+    }
+    fs::path path_; std::size_t capacity_=0; bool latest_only_=false; mutable std::mutex mutex_{}; std::condition_variable ready_{};
+    std::deque<json::object> queue_{}; bool stopping_=false; std::thread worker_;
+    std::atomic<std::uint64_t> written_{0}, failures_{0}, rejected_{0}, superseded_{0};
+};
 
 json::object transport_json(const ExternalWsSnapshot& value, const char* venue) {
     return {
@@ -1121,6 +1170,7 @@ int main(int argc, char** argv) {
         fs::path raw_tape_dir;
         fs::path normalized_event_tape_dir;
         fs::path external_cancel_signal_path;
+        fs::path external_cancel_notify_socket;
         fs::path disk_pressure_marker;
         std::uintmax_t disk_pressure_min_free_bytes = 0;
         std::string external_cancel_rule_sha256;
@@ -1133,6 +1183,7 @@ int main(int argc, char** argv) {
             else if (argument == "--raw-tape-dir" && index + 1 < argc) raw_tape_dir = argv[++index];
             else if (argument == "--normalized-event-tape-dir" && index + 1 < argc) normalized_event_tape_dir = argv[++index];
             else if (argument == "--external-cancel-signal" && index + 1 < argc) external_cancel_signal_path = argv[++index];
+            else if (argument == "--external-cancel-notify-socket" && index + 1 < argc) external_cancel_notify_socket = argv[++index];
             else if (argument == "--disk-pressure-marker" && index + 1 < argc) disk_pressure_marker = argv[++index];
             else if (argument == "--disk-pressure-min-free-bytes" && index + 1 < argc) disk_pressure_min_free_bytes = std::stoull(argv[++index]);
             else if (argument == "--external-cancel-rule-sha256" && index + 1 < argc) external_cancel_rule_sha256 = argv[++index];
@@ -1150,6 +1201,9 @@ int main(int argc, char** argv) {
         if (!external_cancel_rule_sha256.empty()
             && !exact_lower_hex(external_cancel_rule_sha256, 64)) {
             throw std::invalid_argument("--external-cancel-rule-sha256 must be exact 64-hex");
+        }
+        if (!external_cancel_notify_socket.empty() && external_cancel_signal_path.empty()) {
+            throw std::invalid_argument("hot signal notifier requires external cancel signal persistence");
         }
         std::signal(SIGINT, signal_handler);
         std::signal(SIGTERM, signal_handler);
@@ -1221,6 +1275,14 @@ int main(int argc, char** argv) {
         ExternalStatePolicy policy;
         policy.external_cancel_enabled = external_cancel_signal_path.empty() ? 0 : 1;
         ExternalAssetState state(asset_handle);
+        std::unique_ptr<pm::v7::HotSignalDatagramSender> hot_signal_sender;
+        std::unique_ptr<AsyncAtomicJsonWriter> async_signal_writer;
+        std::unique_ptr<AsyncAtomicJsonWriter> async_status_writer;
+        if (!external_cancel_notify_socket.empty()) {
+            hot_signal_sender = std::make_unique<pm::v7::HotSignalDatagramSender>(external_cancel_notify_socket);
+            async_signal_writer = std::make_unique<AsyncAtomicJsonWriter>(external_cancel_signal_path);
+            async_status_writer = std::make_unique<AsyncAtomicJsonWriter>(output, 2, true);
+        }
         if (!external_cancel_signal_path.empty()) {
             atomic_write(external_cancel_signal_path, external_cancel_signal_json(
                 ExternalCancelSignalSnapshot{}, model_sha, external_cancel_rule_sha256,
@@ -1348,9 +1410,18 @@ int main(int argc, char** argv) {
             if (!external_cancel_signal_path.empty()
                 && (cancel_signal.signal_version != last_cancel_signal_version
                     || cancel_signal.valid != last_cancel_signal_valid)) {
-                atomic_write(external_cancel_signal_path, external_cancel_signal_json(
+                auto signal_value = external_cancel_signal_json(
                     cancel_signal, model_sha, external_cancel_rule_sha256,
-                    now_mono, wall_now_ns(), started_monotonic_ns));
+                    now_mono, wall_now_ns(), started_monotonic_ns);
+                if (hot_signal_sender != nullptr) {
+                    const auto serialized = json::serialize(signal_value);
+                    (void)hot_signal_sender->send(serialized);
+                    if (async_signal_writer == nullptr || !async_signal_writer->submit(signal_value)) {
+                        atomic_write(external_cancel_signal_path, signal_value);
+                    }
+                } else {
+                    atomic_write(external_cancel_signal_path, signal_value);
+                }
                 last_cancel_signal_version = cancel_signal.signal_version;
                 last_cancel_signal_valid = cancel_signal.valid;
             }
@@ -1384,7 +1455,7 @@ int main(int argc, char** argv) {
             venues.emplace_back(transport_json(deribit_status, "DERIBIT"));
             venues.emplace_back(transport_json(binance_usdm_depth_status, "BINANCE_USDM_DEPTH"));
             venues.emplace_back(transport_json(binance_usdm_market_status, "BINANCE_USDM_MARKET"));
-            atomic_write(output, {
+            json::object full_status{
                 {"schema", "polymarket_v7_external_venue_runtime_v1"},
                 {"timestamp_ns", wall_now_ns()},
                 {"started_monotonic_ns", started_monotonic_ns},
@@ -1439,6 +1510,21 @@ int main(int argc, char** argv) {
                 {"ingress_wait_mode", event_driven_ingress ? "EVENT_DRIVEN" : "POLL_5MS"},
                 {"ingress_idle_deadline_ms", 5},
                 {"ingress_wakeup_errors", ingress_wakeup ? ingress_wakeup->errors() : 0},
+                {"hot_signal_notify_enabled", hot_signal_sender != nullptr},
+                {"hot_signal_datagrams_sent", hot_signal_sender ? hot_signal_sender->sent() : 0},
+                {"hot_signal_datagrams_unavailable", hot_signal_sender ? hot_signal_sender->unavailable() : 0},
+                {"hot_signal_datagram_errors", hot_signal_sender ? hot_signal_sender->errors() : 0},
+                {"signal_persistence_async", async_signal_writer != nullptr},
+                {"signal_persistence_queue", async_signal_writer ? async_signal_writer->queued() : 0},
+                {"signal_persistence_written", async_signal_writer ? async_signal_writer->written() : 0},
+                {"signal_persistence_failures", async_signal_writer ? async_signal_writer->failures() : 0},
+                {"signal_persistence_rejected", async_signal_writer ? async_signal_writer->rejected() : 0},
+                {"status_persistence_async", async_status_writer != nullptr},
+                {"status_persistence_queue", async_status_writer ? async_status_writer->queued() : 0},
+                {"status_persistence_written", async_status_writer ? async_status_writer->written() : 0},
+                {"status_persistence_failures", async_status_writer ? async_status_writer->failures() : 0},
+                {"status_persistence_rejected", async_status_writer ? async_status_writer->rejected() : 0},
+                {"status_persistence_superseded", async_status_writer ? async_status_writer->superseded() : 0},
                 {"full_status_publish_interval_ms", 25},
                 {"disk_pressure", disk_pressure_active},
                 {"disk_pressure_min_free_bytes", disk_pressure_min_free_bytes},
@@ -1469,7 +1555,12 @@ int main(int argc, char** argv) {
                 {"deribit", deribit_json(deribit_observer.metrics())},
                 {"binance_usdm", usdm_json(binance_usdm_observer.metrics())},
                 {"venues", std::move(venues)},
-            });
+            };
+            if (async_status_writer != nullptr) {
+                (void)async_status_writer->submit(std::move(full_status));
+            } else {
+                atomic_write(output, full_status);
+            }
             wait_for_ingress();
         }
 

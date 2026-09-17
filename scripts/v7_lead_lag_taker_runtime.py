@@ -10,6 +10,9 @@ settlement. All economic events enter the canonical ledger through the spool.
 from __future__ import annotations
 
 import argparse
+import concurrent.futures
+import queue
+import threading
 import hashlib
 import json
 import math
@@ -26,6 +29,9 @@ from v7_ledger_spool import spool_event
 from v7_market_common import ClobBooksClient, finite, parse_array, request_json
 from v7_opportunity import OpportunityEnvelope
 from v7_disk_pressure import disk_pressure_status
+from v7_fast_forward_ipc import request as fast_forward_request
+from v7_hot_book_cache import HotBookCacheReader
+from v7_file_event import AtomicReplaceWatcher, UnixDatagramJsonReceiver
 
 SCHEMA = "polymarket_v7_lead_lag_taker_v1_status"
 MANIFEST_SCHEMA = "polymarket_v7_lead_lag_taker_v1_forward_manifest"
@@ -79,6 +85,58 @@ def append_jsonl(path: Path, value: dict[str, Any]) -> None:
         os.write(fd, payload); os.fsync(fd)
     finally:
         os.close(fd)
+
+
+class AsyncJsonlWriter:
+    """Bounded single-writer audit queue used only by the opt-in hot path."""
+    def __init__(self, path: Path, capacity: int = 4096) -> None:
+        self.path = path
+        self.path.parent.mkdir(parents=True, exist_ok=True)
+        self.queue: queue.Queue[dict[str, Any] | None] = queue.Queue(maxsize=capacity)
+        self.fallbacks = 0
+        self._thread = threading.Thread(target=self._run, name="v7-lead-lag-audit", daemon=True)
+        self._thread.start()
+
+    def submit(self, value: dict[str, Any]) -> None:
+        try:
+            self.queue.put_nowait(dict(value))
+        except queue.Full:
+            self.fallbacks += 1
+            append_jsonl(self.path, value)
+
+    def _run(self) -> None:
+        fd = os.open(self.path, os.O_APPEND | os.O_CREAT | os.O_WRONLY, 0o600)
+        try:
+            while True:
+                value = self.queue.get()
+                if value is None:
+                    self.queue.task_done()
+                    return
+                batch = [value]
+                for _ in range(63):
+                    try:
+                        extra = self.queue.get_nowait()
+                    except queue.Empty:
+                        break
+                    if extra is None:
+                        self.queue.task_done()
+                        self.queue.put_nowait(None)
+                        break
+                    batch.append(extra)
+                payload = b"".join(
+                    (json.dumps(row, sort_keys=True, separators=(",", ":")) + "\n").encode()
+                    for row in batch
+                )
+                os.write(fd, payload)
+                os.fsync(fd)
+                for _ in batch:
+                    self.queue.task_done()
+        finally:
+            os.close(fd)
+
+    def close(self) -> None:
+        self.queue.put(None)
+        self._thread.join(timeout=5.0)
 
 
 def now_ms() -> int:
@@ -210,15 +268,41 @@ def signal_candidate(config: dict[str, Any], signal: dict[str, Any], status: dic
 
 
 class LeadLagRuntime:
-    def __init__(self, root: Path, sha: str, config_path: Path, clob_url: str, gamma_url: str):
+    def __init__(self, root: Path, sha: str, config_path: Path, clob_url: str, gamma_url: str,
+                 coordinator_ipc: Path | None = None, hot_book_cache: Path | None = None,
+                 event_driven_signal: bool = False, signal_socket: Path | None = None):
         self.root, self.sha = root, sha
         self.config_path = config_path
         self.config = validate_config(load(config_path))
         self.protocol_hash = hashlib.sha256(config_path.read_bytes()).hexdigest()
         self.clob = ClobBooksClient(clob_url.rstrip("/"), 0.25)
         self.gamma_url = gamma_url.rstrip("/")
+        self.coordinator_ipc = coordinator_ipc
+        self.hot_book_cache = HotBookCacheReader(hot_book_cache, sha) if hot_book_cache else None
+        self.event_driven_signal = bool(event_driven_signal)
+        self.signal_socket_path = signal_socket
+        self.signal_watcher: AtomicReplaceWatcher | None = None
+        self.signal_receiver: UnixDatagramJsonReceiver | None = None
+        self.signal_pump_stop = threading.Event()
+        self.signal_pump_ready = threading.Event()
+        self.signal_condition = threading.Condition()
+        self.signal_generation = 0
+        self.latest_signal: dict[str, Any] = {}
+        self.signal_pump_thread: threading.Thread | None = None
+        self.book_metadata_pool = concurrent.futures.ThreadPoolExecutor(
+            max_workers=1, thread_name_prefix="v7-lead-lag-book-metadata")
+        self.book_metadata_future: concurrent.futures.Future[Any] | None = None
+        self.book_metadata_key: tuple[str, str] | None = None
+        self.book_metadata: dict[str, tuple[float, float]] = {}
+        self.audit_writer = AsyncJsonlWriter(root / "research" / "lead_lag_taker_v1" / "events.jsonl") if coordinator_ipc else None
+        self.settlement_pool = concurrent.futures.ThreadPoolExecutor(
+            max_workers=1, thread_name_prefix="v7-lead-lag-settlement")
+        self.settlement_futures: dict[str, concurrent.futures.Future[Any]] = {}
         self.signal_path = root / "external_fair" / "external_cancel_signal.json"
         self.status_source = root / "external_fair" / "status.json"
+        self.cached_status: dict[str, Any] = load(self.status_source)
+        self.status_cache_stop = threading.Event()
+        self.status_cache_thread: threading.Thread | None = None
         self.dir = root / "research" / "lead_lag_taker_v1"
         self.status_path = self.dir / "status.json"
         self.state_path = self.dir / "state.json"
@@ -236,8 +320,122 @@ class LeadLagRuntime:
         prior = load(self.state_path)
         if prior.get("model_sha") == sha and prior.get("protocol_hash") == self.protocol_hash:
             self.state.update(prior)
+        self.traded_markets_set = set(self.state.get("traded_markets") or [])
+        self.attempted_keys_set = set(self.state.get("attempted_keys") or [])
+        self.runtime_identity = self._load_runtime_identity()
         self._write_manifest_once()
         self.publish("COLLECTING")
+
+    def _publish_signal_snapshot(self, value: dict[str, Any]) -> None:
+        if not isinstance(value, dict) or not value:
+            return
+        with self.signal_condition:
+            self.latest_signal = value
+            self.signal_generation += 1
+            self.signal_condition.notify_all()
+
+    def _signal_pump_loop(self) -> None:
+        watcher = AtomicReplaceWatcher(self.signal_path)
+        receiver = UnixDatagramJsonReceiver(self.signal_socket_path) if self.signal_socket_path else None
+        self.signal_watcher = watcher
+        self.signal_receiver = receiver
+        try:
+            initial = load(self.signal_path)
+            if initial:
+                self._publish_signal_snapshot(initial)
+            self.signal_pump_ready.set()
+            while not self.signal_pump_stop.is_set():
+                value = None
+                if receiver is not None:
+                    value = receiver.wait_json(.100)
+                    if value is None and watcher.wait(0.0):
+                        value = load(self.signal_path)
+                elif watcher.wait(.100):
+                    value = load(self.signal_path)
+                if isinstance(value, dict) and value:
+                    self._publish_signal_snapshot(value)
+        finally:
+            if receiver is not None:
+                receiver.close()
+            watcher.close()
+            self.signal_receiver = None
+            self.signal_watcher = None
+            self.signal_pump_ready.set()
+
+    def start_signal_pump(self) -> None:
+        if self.signal_pump_thread is not None:
+            return
+        self.signal_pump_stop.clear(); self.signal_pump_ready.clear()
+        self.signal_pump_thread = threading.Thread(
+            target=self._signal_pump_loop, name="v7-lead-lag-signal-pump", daemon=True)
+        self.signal_pump_thread.start()
+        if not self.signal_pump_ready.wait(1.0):
+            raise RuntimeError("signal_pump_start_timeout")
+
+    def stop_signal_pump(self) -> None:
+        self.signal_pump_stop.set()
+        with self.signal_condition:
+            self.signal_condition.notify_all()
+        thread = self.signal_pump_thread
+        if thread is not None:
+            thread.join(timeout=.5)
+        self.signal_pump_thread = None
+
+    def wait_signal_after(self, generation: int, timeout: float) -> tuple[int, dict[str, Any] | None]:
+        with self.signal_condition:
+            if self.signal_generation <= generation:
+                self.signal_condition.wait_for(
+                    lambda: self.signal_generation > generation or self.signal_pump_stop.is_set(),
+                    timeout=max(0.0, timeout))
+            if self.signal_generation <= generation:
+                return generation, None
+            return self.signal_generation, self.latest_signal
+
+    def current_signal_snapshot(self) -> dict[str, Any]:
+        with self.signal_condition:
+            return self.latest_signal
+
+    def _status_cache_loop(self) -> None:
+        with AtomicReplaceWatcher(self.status_source) as watcher:
+            while not self.status_cache_stop.is_set():
+                if not watcher.wait(.100):
+                    continue
+                value = load(self.status_source)
+                if (value.get("code_sha") == self.sha and value.get("paper_only") is True
+                        and value.get("authenticated_execution") is False
+                        and value.get("real_order_submission") is False):
+                    self.cached_status = value
+
+    def start_status_cache(self) -> None:
+        if self.status_cache_thread is not None:
+            return
+        self.status_cache_stop.clear()
+        self.status_cache_thread = threading.Thread(
+            target=self._status_cache_loop, name="v7-lead-lag-status-cache", daemon=True)
+        self.status_cache_thread.start()
+
+    def stop_status_cache(self) -> None:
+        self.status_cache_stop.set()
+        thread = self.status_cache_thread
+        if thread is not None:
+            thread.join(timeout=.5)
+        self.status_cache_thread = None
+
+    def current_status(self) -> dict[str, Any]:
+        if self.event_driven_signal:
+            return self.cached_status
+        return load(self.status_source)
+
+    def _load_runtime_identity(self) -> dict[str, Any]:
+        runtime = load(self.root / "control" / "runtime_status.json")
+        if (runtime.get("model_sha") != self.sha or runtime.get("paper_only") is not True
+                or runtime.get("authenticated_execution") is not False
+                or runtime.get("real_order_submission") is not False):
+            raise RuntimeError("lead_lag_runtime_identity_not_ready")
+        return {key: runtime.get(key) for key in (
+            "model_sha", "config_hash", "policy_hash", "run_id", "paper_only",
+            "authenticated_execution", "real_order_submission",
+        )}
 
     def _write_manifest_once(self) -> None:
         if self.manifest_path.exists():
@@ -245,10 +443,7 @@ class LeadLagRuntime:
             if existing.get("code_sha") != self.sha or existing.get("protocol_hash") != self.protocol_hash:
                 raise RuntimeError("lead_lag_forward_manifest_identity_mismatch")
             return
-        runtime = load(self.root / "control" / "runtime_status.json")
-        if (runtime.get("model_sha") != self.sha or runtime.get("paper_only") is not True
-                or runtime.get("authenticated_execution") is not False or runtime.get("real_order_submission") is not False):
-            raise RuntimeError("lead_lag_runtime_identity_not_ready")
+        runtime = self.runtime_identity
         atomic_json(self.manifest_path, {
             "schema": MANIFEST_SCHEMA, "version": 1, "strategy_id": "LEAD_LAG_TAKER_V1",
             "code_sha": self.sha, "protocol_hash": self.protocol_hash,
@@ -268,19 +463,80 @@ class LeadLagRuntime:
                "model_sha": self.sha, "protocol_hash": self.protocol_hash,
                "paper_only": True, "authenticated_execution": False,
                "real_order_submission": False, **extra}
-        append_jsonl(self.events_path, row); self.state["last_event"] = row
+        if self.audit_writer is not None:
+            self.audit_writer.submit(row)
+        else:
+            append_jsonl(self.events_path, row)
+        self.state["last_event"] = row
 
     def skip(self, reason: str) -> None:
         reasons = self.state.setdefault("skip_reasons", {})
         reasons[reason] = int(reasons.get(reason) or 0) + 1
 
-    def books(self, status: dict[str, Any]) -> dict[str, Book]:
+    def _book_tokens(self, status: dict[str, Any]) -> tuple[str, str] | None:
         market = status.get("market") if isinstance(status.get("market"), dict) else {}
-        tokens = [str(market.get("yes_token") or ""), str(market.get("no_token") or "")]
-        if any(not token for token in tokens) or tokens[0] == tokens[1]:
+        yes, no = str(market.get("yes_token") or ""), str(market.get("no_token") or "")
+        return (yes, no) if yes and no and yes != no else None
+
+    def _fetch_book_metadata(self, tokens: tuple[str, str]) -> dict[str, tuple[float, float]]:
+        rows = self.clob.request_books(list(tokens))
+        received = now_ms(); output: dict[str, tuple[float, float]] = {}
+        for raw in rows if isinstance(rows, list) else []:
+            book = parse_book(raw, received)
+            if book is not None and book.token_id in tokens:
+                output[book.token_id] = (book.tick_size, book.min_order_size)
+        if set(output) != set(tokens):
+            raise RuntimeError("book_metadata_incomplete")
+        return output
+
+    def maintain_book_metadata(self, status: dict[str, Any]) -> None:
+        if self.hot_book_cache is None:
+            return
+        tokens = self._book_tokens(status)
+        if tokens is None:
+            return
+        if self.book_metadata_future is not None and self.book_metadata_future.done():
+            try:
+                result = self.book_metadata_future.result()
+            except Exception:
+                result = None
+            if isinstance(result, dict) and self.book_metadata_key == tokens:
+                self.book_metadata = result
+            self.book_metadata_future = None
+        if self.book_metadata_key != tokens:
+            self.book_metadata_key = tokens
+            self.book_metadata = {}
+            self.book_metadata_future = None
+        if not self.book_metadata and self.book_metadata_future is None:
+            self.book_metadata_future = self.book_metadata_pool.submit(
+                self._fetch_book_metadata, tokens)
+
+    def books(self, status: dict[str, Any]) -> dict[str, Book]:
+        tokens = self._book_tokens(status)
+        if tokens is None:
             return {}
+        if self.hot_book_cache is not None:
+            self.maintain_book_metadata(status)
+            if set(self.book_metadata) != set(tokens):
+                return {}
+            current_ms = now_ms(); output: dict[str, Book] = {}
+            market_id = str((status.get("market") or {}).get("market_id") or "")
+            for token in tokens:
+                hot = self.hot_book_cache.read(token, maximum_age_ms=100, now_ms=current_ms)
+                if hot is None or hot.market_id != market_id:
+                    return {}
+                tick, minimum = self.book_metadata[token]
+                # Tick changes are supplied by the live WS book. Static metadata
+                # exists only to preserve min_order_size without a hot REST call.
+                tick = hot.tick_size if hot.tick_size > 0 else tick
+                output[token] = Book(
+                    token, hot.bids, hot.asks, tick, minimum,
+                    min(current_ms, hot.exchange_event_ns // 1_000_000),
+                    hot.receive_wall_ms, hot.snapshot_id,
+                )
+            return output
         try:
-            rows = self.clob.request_books(tokens)
+            rows = self.clob.request_books(list(tokens))
         except Exception:
             return {}
         received = now_ms(); output: dict[str, Book] = {}
@@ -290,18 +546,35 @@ class LeadLagRuntime:
                 output[book.token_id] = book
         return output
 
+    @staticmethod
+    def valid_receipt(receipt: dict[str, Any], replay_key: str) -> bool:
+        return (receipt.get("selected_replay_key") == replay_key
+                and receipt.get("action") == "TAKE"
+                and receipt.get("paper_exploration_authorized") is True
+                and receipt.get("paper_forward_test_authorized") is True
+                and receipt.get("new_risk_authorized") is False
+                and receipt.get("paper_only") is True
+                and receipt.get("real_order_submission") is False)
+
+    def direct_receipt(self, envelope: dict[str, Any]) -> dict[str, Any] | None:
+        if self.coordinator_ipc is None:
+            return None
+        try:
+            receipt = fast_forward_request(
+                self.coordinator_ipc, envelope,
+                timeout_seconds=max(0.001, int(self.config["coordinator_receipt_timeout_ms"]) / 1000.0),
+            )
+        except Exception:
+            return None
+        replay_key = str(envelope.get("deterministic_replay_key") or "")
+        return receipt if self.valid_receipt(receipt, replay_key) else None
+
     def wait_receipt(self, replay_key: str) -> dict[str, Any] | None:
         path = self.root / "opportunities" / "receipts" / (replay_key.replace("/", "_") + ".json")
         deadline = time.monotonic() + int(self.config["coordinator_receipt_timeout_ms"]) / 1000.0
         while time.monotonic() < deadline:
             receipt = load(path)
-            if (receipt.get("selected_replay_key") == replay_key
-                    and receipt.get("action") == "TAKE"
-                    and receipt.get("paper_exploration_authorized") is True
-                    and receipt.get("paper_forward_test_authorized") is True
-                    and receipt.get("new_risk_authorized") is False
-                    and receipt.get("paper_only") is True
-                    and receipt.get("real_order_submission") is False):
+            if self.valid_receipt(receipt, replay_key):
                 path.unlink(missing_ok=True)
                 return receipt
             time.sleep(0.005)
@@ -319,9 +592,7 @@ class LeadLagRuntime:
             return None
         schedule = market.get("fee_schedule") if isinstance(market.get("fee_schedule"), dict) else {}
         fee_share = fee_per_share(ask, schedule)
-        runtime = load(self.root / "control" / "runtime_status.json")
-        if runtime.get("model_sha") != self.sha:
-            return None
+        runtime = self.runtime_identity
         outcome_mid = market_yes if candidate["outcome"] == "YES" else 1.0 - market_yes
         replay = "lead-lag-taker-v1:" + stable_id(
             self.sha, self.protocol_hash, candidate["market_id"], candidate["signal_version"]
@@ -378,7 +649,7 @@ class LeadLagRuntime:
         }
         return OpportunityEnvelope.parse(envelope).raw
 
-    def candidate_step(self) -> None:
+    def candidate_step(self, signal_override: dict[str, Any] | None = None) -> None:
         disk = disk_pressure_status(self.root)
         if disk["active"]:
             self.skip("DISK_PRESSURE"); return
@@ -387,15 +658,16 @@ class LeadLagRuntime:
         target = int(self.config["forward_test"]["target_independent_markets"])
         if int(self.state.get("entries") or 0) >= target:
             self.skip("TARGET_ENTRIES_REACHED"); return
-        current_ns = time.time_ns(); signal = load(self.signal_path); status = load(self.status_source)
+        current_ns = time.time_ns(); signal = signal_override if isinstance(signal_override, dict) else load(self.signal_path); status = self.current_status()
+        self.maintain_book_metadata(status)
         candidate, reason = signal_candidate(self.config, signal, status, model_sha=self.sha, current_ns=current_ns)
         if candidate is None:
             self.skip(reason); return
         market_id = candidate["market_id"]
-        if market_id in set(self.state.get("traded_markets") or []):
+        if market_id in self.traded_markets_set:
             self.skip("MARKET_ALREADY_TRADED"); return
         attempt_key = f"{market_id}:{candidate['signal_version']}"
-        if attempt_key in set(self.state.get("attempted_keys") or []):
+        if attempt_key in self.attempted_keys_set:
             self.skip("SIGNAL_ALREADY_ATTEMPTED"); return
         books = self.books(status)
         decision_ns = max(time.time_ns(), max((book.receive_ts_ms for book in books.values()), default=0) * 1_000_000)
@@ -403,20 +675,28 @@ class LeadLagRuntime:
         if envelope is None:
             self.skip("CANDIDATE_BOOK_OR_DEPTH_INVALID"); return
         self.state.setdefault("attempted_keys", []).append(attempt_key)
-        self.state["attempted_keys"] = self.state["attempted_keys"][-5000:]
+        self.attempted_keys_set.add(attempt_key)
+        if len(self.state["attempted_keys"]) > 5000:
+            self.state["attempted_keys"] = self.state["attempted_keys"][-5000:]
+            self.attempted_keys_set = set(self.state["attempted_keys"])
         self.state["candidate_count"] = int(self.state.get("candidate_count") or 0) + 1
         self.event("CANDIDATE", market_id=market_id, signal_version=candidate["signal_version"],
                    tte_seconds=candidate["tte_seconds"], replay_key=envelope["deterministic_replay_key"],
                    candidate_limit_price=envelope["execution_plan"]["legs"][0]["limit_price"])
-        inbox = self.root / "opportunities" / "fast_forward_inbox" / (
-            f"{current_ns}.lead-lag-taker-v1.{market_id}.{candidate['signal_version']}.json"
-        )
-        atomic_json(inbox, envelope)
-        receipt = self.wait_receipt(envelope["deterministic_replay_key"])
+        if self.coordinator_ipc is not None:
+            receipt = self.direct_receipt(envelope)
+        else:
+            inbox = self.root / "opportunities" / "fast_forward_inbox" / (
+                f"{current_ns}.lead-lag-taker-v1.{market_id}.{candidate['signal_version']}.json"
+            )
+            atomic_json(inbox, envelope)
+            receipt = self.wait_receipt(envelope["deterministic_replay_key"])
         if receipt is None:
             self.skip("COORDINATOR_RECEIPT_TIMEOUT"); self.event("REJECTED", market_id=market_id, reason="COORDINATOR_RECEIPT_TIMEOUT"); return
         self.state["receipt_count"] = int(self.state.get("receipt_count") or 0) + 1
-        arrival_ns = time.time_ns(); arrival_signal = load(self.signal_path); arrival_status = load(self.status_source)
+        arrival_ns = time.time_ns()
+        arrival_signal = self.current_signal_snapshot() if self.event_driven_signal else load(self.signal_path)
+        arrival_status = self.current_status()
         arrival, arrival_reason = signal_candidate(self.config, arrival_signal, arrival_status, model_sha=self.sha, current_ns=arrival_ns)
         if (arrival is None or arrival["market_id"] != market_id
                 or arrival["signal_version"] != candidate["signal_version"]
@@ -474,6 +754,7 @@ class LeadLagRuntime:
             fee=fee, fee_rate=float(schedule.get("rate") or 0.0), fee_source="GAMMA_AUTHORITATIVE_FEE_SCHEDULE",
             slippage=max(0.0, ask - candidate_limit) * size, metadata=metadata))
         self.state.setdefault("traded_markets", []).append(market_id)
+        self.traded_markets_set.add(market_id)
         self.state["entries"] = int(self.state.get("entries") or 0) + 1
         self.state.setdefault("positions", {})[position_id] = {
             "position_id": position_id, "fill_id": fill_id, "order_id": order_id, "market_id": market_id,
@@ -486,54 +767,97 @@ class LeadLagRuntime:
                    fee=fee, tte_seconds=arrival["tte_seconds"], signal_age_ms=arrival["signal_age_ms"])
         self.persist()
 
+    def _settlement_request(self, market_id: str) -> Any:
+        return request_json(
+            f"{self.gamma_url}/markets/{urllib.parse.quote(market_id)}", timeout=4)
+
+    def _apply_settlement(self, position: dict[str, Any], raw: Any, current: int) -> bool:
+        if not isinstance(raw, dict) or raw.get("closed") is not True:
+            return False
+        outcomes = [str(x) for x in parse_array(raw.get("outcomes"))]
+        tokens = [str(x) for x in parse_array(raw.get("clobTokenIds"))]
+        prices = [finite(x, math.nan) for x in parse_array(raw.get("outcomePrices"))]
+        win_idx = next((i for i, price in enumerate(prices)
+                        if math.isfinite(price) and price >= 1.0 - 1e-9), -1)
+        if win_idx < 0 or win_idx >= len(tokens):
+            return False
+        won = tokens[win_idx] == str(position["token_id"])
+        payout = float(position["shares"]) if won else 0.0
+        pnl = payout - float(position["entry_cost"]) - float(position["entry_fee"])
+        resolved = outcomes[win_idx] if win_idx < len(outcomes) else ""
+        metadata = {"component": COMPONENT, "model_family": "lead_lag_taker_v1",
+            "paper_exploration": True, "paper_forward_test": True, "paper_bootstrap_probe": False,
+            "economic_authority": "PAPER_EXPLORATION", "counterfactual": False,
+            "excluded_from_portfolio_equity": False, "research_evidence_only": False,
+            "realized": True, "unwind_accounted": True, "cost_vector_complete": True,
+            "outcome": position["outcome"], "won": won, "settlement_outcome": resolved,
+            "winning_token_id": tokens[win_idx], "hold_to_settlement": True,
+            "protocol_hash": self.protocol_hash,
+            "coordinator_receipt": position.get("coordinator_receipt"),
+            "terminal_id": f"lead-lag:{position['position_id']}:final",
+            "pnl_decomposition": {"trading_pnl": pnl, "spread_capture": 0.0, "adverse_markout": 0.0,
+                "inventory_pnl": 0.0, "maker_rebates": 0.0, "liquidity_rewards": 0.0,
+                "own_reward_share_verified": False}}
+        spool_event(self.root, LedgerEvent(event_type="FINAL", strategy=STRATEGY, model_sha=self.sha,
+            model_version=MODEL_VERSION, order_id=position["order_id"], fill_id=position["fill_id"],
+            position_id=position["position_id"], market_id=position["market_id"], event_id=position["event_id"],
+            token_id=position["token_id"], side="BUY", final_pnl=pnl, realized_cashflow=payout,
+            fee=0.0, slippage=0.0, unwind_loss=0.0, capital_cost=0.0, latency_cost=0.0,
+            capital_duration_ms=max(0, current - int(position["opened_ms"])), metadata=metadata))
+        position["settled"] = True; position["won"] = won; position["final_pnl"] = pnl
+        self.state["settled"] = int(self.state.get("settled") or 0) + 1
+        self.state["wins"] = int(self.state.get("wins") or 0) + int(won)
+        self.state["realized_pnl"] = float(self.state.get("realized_pnl") or 0.0) + pnl
+        self.event("FINAL", market_id=position["market_id"], won=won, pnl=pnl,
+                   settlement_outcome=resolved)
+        self.persist()
+        return True
+
     def settle_positions(self) -> None:
+        """Settle without blocking the hot cohort; preserve the frozen legacy path."""
         current = now_ms()
-        for position in list((self.state.get("positions") or {}).values()):
-            if position.get("settled") or current < int(position.get("resolution_due_ms") or 0) + 5_000:
+        if not self.event_driven_signal and self.coordinator_ipc is None and self.hot_book_cache is None:
+            for position in list((self.state.get("positions") or {}).values()):
+                if position.get("settled") or current < int(position.get("resolution_due_ms") or 0) + 5_000:
+                    continue
+                if current - int(position.get("settlement_attempt_ms") or 0) < 5_000:
+                    continue
+                position["settlement_attempt_ms"] = current
+                try:
+                    raw = self._settlement_request(str(position["market_id"]))
+                except Exception:
+                    continue
+                self._apply_settlement(position, raw, current)
+            return
+        # Hot cohort: Gamma network I/O is scheduled off the owner thread.
+        positions = self.state.get("positions") or {}
+        # Apply completed responses without waiting for network I/O.
+        for position_id, future in list(self.settlement_futures.items()):
+            if not future.done():
+                continue
+            self.settlement_futures.pop(position_id, None)
+            position = positions.get(position_id)
+            if not isinstance(position, dict) or position.get("settled"):
+                continue
+            try:
+                raw = future.result()
+            except Exception:
+                continue
+            self._apply_settlement(position, raw, current)
+        # Submit due requests only after draining completions. One worker bounds
+        # concurrency and a slow Gamma request can no longer stall candidate_step.
+        for position_id, position in list(positions.items()):
+            if not isinstance(position, dict) or position.get("settled"):
+                continue
+            if position_id in self.settlement_futures:
+                continue
+            if current < int(position.get("resolution_due_ms") or 0) + 5_000:
                 continue
             if current - int(position.get("settlement_attempt_ms") or 0) < 5_000:
                 continue
             position["settlement_attempt_ms"] = current
-            try:
-                raw = request_json(f"{self.gamma_url}/markets/{urllib.parse.quote(str(position['market_id']))}", timeout=4)
-            except Exception:
-                continue
-            if not isinstance(raw, dict) or raw.get("closed") is not True:
-                continue
-            outcomes = [str(x) for x in parse_array(raw.get("outcomes"))]
-            tokens = [str(x) for x in parse_array(raw.get("clobTokenIds"))]
-            prices = [finite(x, math.nan) for x in parse_array(raw.get("outcomePrices"))]
-            win_idx = next((i for i, p in enumerate(prices) if math.isfinite(p) and p >= 1.0 - 1e-9), -1)
-            if win_idx < 0 or win_idx >= len(tokens):
-                continue
-            won = tokens[win_idx] == str(position["token_id"]); payout = float(position["shares"]) if won else 0.0
-            pnl = payout - float(position["entry_cost"]) - float(position["entry_fee"])
-            resolved = outcomes[win_idx] if win_idx < len(outcomes) else ""
-            metadata = {"component": COMPONENT, "model_family": "lead_lag_taker_v1",
-                "paper_exploration": True, "paper_forward_test": True, "paper_bootstrap_probe": False,
-                "economic_authority": "PAPER_EXPLORATION", "counterfactual": False,
-                "excluded_from_portfolio_equity": False, "research_evidence_only": False,
-                "realized": True, "unwind_accounted": True, "cost_vector_complete": True,
-                "outcome": position["outcome"], "won": won, "settlement_outcome": resolved,
-                "winning_token_id": tokens[win_idx], "hold_to_settlement": True,
-                "protocol_hash": self.protocol_hash,
-                "coordinator_receipt": position.get("coordinator_receipt"),
-                "terminal_id": f"lead-lag:{position['position_id']}:final",
-                "pnl_decomposition": {"trading_pnl": pnl, "spread_capture": 0.0, "adverse_markout": 0.0,
-                    "inventory_pnl": 0.0, "maker_rebates": 0.0, "liquidity_rewards": 0.0,
-                    "own_reward_share_verified": False}}
-            spool_event(self.root, LedgerEvent(event_type="FINAL", strategy=STRATEGY, model_sha=self.sha,
-                model_version=MODEL_VERSION, order_id=position["order_id"], fill_id=position["fill_id"],
-                position_id=position["position_id"], market_id=position["market_id"], event_id=position["event_id"],
-                token_id=position["token_id"], side="BUY", final_pnl=pnl, realized_cashflow=payout,
-                fee=0.0, slippage=0.0, unwind_loss=0.0, capital_cost=0.0, latency_cost=0.0,
-                capital_duration_ms=max(0, current - int(position["opened_ms"])), metadata=metadata))
-            position["settled"] = True; position["won"] = won; position["final_pnl"] = pnl
-            self.state["settled"] = int(self.state.get("settled") or 0) + 1
-            self.state["wins"] = int(self.state.get("wins") or 0) + int(won)
-            self.state["realized_pnl"] = float(self.state.get("realized_pnl") or 0.0) + pnl
-            self.event("FINAL", market_id=position["market_id"], won=won, pnl=pnl, settlement_outcome=resolved)
-            self.persist()
+            self.settlement_futures[position_id] = self.settlement_pool.submit(
+                self._settlement_request, str(position["market_id"]))
 
     def publish(self, state: str = "COLLECTING") -> None:
         target = int(self.config["forward_test"]["target_independent_markets"])
@@ -553,26 +877,65 @@ class LeadLagRuntime:
             "candidate_count": int(self.state.get("candidate_count") or 0),
             "receipt_count": int(self.state.get("receipt_count") or 0),
             "arrival_rejections": int(self.state.get("arrival_rejections") or 0),
+            "coordinator_transport": "UNIX_STREAM_EVENT_DRIVEN" if self.coordinator_ipc else "FILESYSTEM_LEGACY",
+            "audit_queue_depth": self.audit_writer.queue.qsize() if self.audit_writer else 0,
+            "audit_queue_sync_fallbacks": self.audit_writer.fallbacks if self.audit_writer else 0,
+            "settlement_requests_inflight": len(self.settlement_futures),
+            "hot_book_cache_enabled": self.hot_book_cache is not None,
+            "hot_book_metadata_ready": bool(self.book_metadata),
+            "signal_wait_mode": ("UNIX_DGRAM_DIRECT_WITH_FILE_FALLBACK" if self.signal_socket_path else
+                                 ("FILE_EVENT_PUMP" if self.event_driven_signal else "POLL_INTERVAL")),
+            "signal_datagrams_received": self.signal_receiver.received if self.signal_receiver else 0,
+            "signal_datagrams_invalid": self.signal_receiver.invalid if self.signal_receiver else 0,
+            "status_cache_enabled": self.event_driven_signal,
+            "status_cache_market_id": str((self.cached_status.get("market") or {}).get("market_id") or "") if self.event_driven_signal else "",
             "skip_reasons": self.state.get("skip_reasons") or {}, "last_event": self.state.get("last_event") or {},
         })
 
     def run(self) -> None:
         fast = max(0.001, int(self.config["fast_poll_ms"]) / 1000.0)
         settle = max(0.1, int(self.config["settlement_poll_ms"]) / 1000.0)
-        next_fast = time.monotonic(); next_settle = next_fast
-        while True:
-            now = time.monotonic()
-            if now >= next_fast:
-                try: self.candidate_step()
-                except Exception as exc:
-                    self.skip(f"FAST_ERROR:{type(exc).__name__}"); self.event("ERROR", error=f"{type(exc).__name__}:{exc}")
-                next_fast = now + fast
-            now = time.monotonic()
-            if now >= next_settle:
-                try: self.settle_positions()
-                except Exception as exc: self.event("SETTLEMENT_ERROR", error=f"{type(exc).__name__}:{exc}")
-                self.persist(); self.publish(); next_settle = now + settle
-            time.sleep(max(0.0005, min(next_fast, next_settle) - time.monotonic()))
+        if not self.event_driven_signal:
+            next_fast = time.monotonic(); next_settle = next_fast
+            while True:
+                now = time.monotonic()
+                if now >= next_fast:
+                    try: self.candidate_step()
+                    except Exception as exc:
+                        self.skip(f"FAST_ERROR:{type(exc).__name__}"); self.event("ERROR", error=f"{type(exc).__name__}:{exc}")
+                    next_fast = now + fast
+                now = time.monotonic()
+                if now >= next_settle:
+                    try: self.settle_positions()
+                    except Exception as exc: self.event("SETTLEMENT_ERROR", error=f"{type(exc).__name__}:{exc}")
+                    self.persist(); self.publish(); next_settle = now + settle
+                time.sleep(max(0.0005, min(next_fast, next_settle) - time.monotonic()))
+        self.start_status_cache()
+        self.start_signal_pump()
+        next_settle = time.monotonic()
+        next_metadata = next_settle
+        last_generation = 0
+        try:
+            while True:
+                now = time.monotonic()
+                if now >= next_metadata:
+                    try: self.maintain_book_metadata(self.cached_status)
+                    except Exception as exc: self.event("BOOK_METADATA_ERROR", error=f"{type(exc).__name__}:{exc}")
+                    next_metadata = now + .100
+                if now >= next_settle:
+                    try: self.settle_positions()
+                    except Exception as exc: self.event("SETTLEMENT_ERROR", error=f"{type(exc).__name__}:{exc}")
+                    self.persist(); self.publish(); next_settle = now + settle
+                timeout = max(0.0, min(next_metadata, next_settle) - time.monotonic())
+                generation, signal = self.wait_signal_after(last_generation, timeout)
+                if signal is not None and generation > last_generation:
+                    last_generation = generation
+                    try: self.candidate_step(signal)
+                    except Exception as exc:
+                        self.skip(f"FAST_ERROR:{type(exc).__name__}"); self.event("ERROR", error=f"{type(exc).__name__}:{exc}")
+        finally:
+            self.stop_signal_pump()
+            self.stop_status_cache()
 
 
 def main() -> int:
@@ -581,10 +944,29 @@ def main() -> int:
     ap.add_argument("--config", type=Path, default=Path("config/v7_lead_lag_taker_v1.json"))
     ap.add_argument("--clob-url", default="https://clob.polymarket.com")
     ap.add_argument("--gamma-url", default="https://gamma-api.polymarket.com")
+    ap.add_argument("--coordinator-ipc", type=Path)
+    ap.add_argument("--hot-book-cache", type=Path)
+    ap.add_argument("--event-driven-signal", action="store_true")
+    ap.add_argument("--signal-socket", type=Path)
     args = ap.parse_args()
     if not exact_sha(args.model_sha): raise SystemExit("exact model SHA required")
-    runtime = LeadLagRuntime(args.run_root.resolve(), args.model_sha, args.config.resolve(), args.clob_url, args.gamma_url)
-    runtime.run(); return 0
+    runtime = LeadLagRuntime(
+        args.run_root.resolve(), args.model_sha, args.config.resolve(), args.clob_url, args.gamma_url,
+        args.coordinator_ipc.resolve() if args.coordinator_ipc else None,
+        args.hot_book_cache.resolve() if args.hot_book_cache else None,
+        args.event_driven_signal,
+        args.signal_socket.resolve() if args.signal_socket else None,
+    )
+    try:
+        runtime.run()
+    finally:
+        runtime.settlement_pool.shutdown(wait=False, cancel_futures=True)
+        runtime.book_metadata_pool.shutdown(wait=False, cancel_futures=True)
+        if runtime.hot_book_cache is not None:
+            runtime.hot_book_cache.close()
+        if runtime.audit_writer is not None:
+            runtime.audit_writer.close()
+    return 0
 
 
 if __name__ == "__main__":

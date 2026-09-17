@@ -9,14 +9,20 @@
 #include <boost/beast/core/flat_static_buffer.hpp>
 #include <boost/beast/ssl.hpp>
 #include <boost/beast/websocket.hpp>
+#include <boost/json.hpp>
 #include <openssl/ssl.h>
+#include <openssl/evp.h>
+#include <openssl/hmac.h>
 
 #include <algorithm>
 #include <chrono>
 #include <iostream>
+#include <iomanip>
 #include <memory>
 #include <stdexcept>
+#include <sstream>
 #include <thread>
+#include <vector>
 
 namespace pm::v7::external_fair {
 namespace {
@@ -24,6 +30,7 @@ namespace net = boost::asio;
 namespace ssl = net::ssl;
 namespace beast = boost::beast;
 namespace websocket = beast::websocket;
+namespace json = boost::json;
 using tcp = net::ip::tcp;
 
 // Coinbase's documented public L2 feed begins with a complete BTC-USD book
@@ -43,6 +50,71 @@ constexpr std::size_t kMaxWsMessageBytes = 2U << 20;
 
 [[nodiscard]] std::string normalize_host_for_handshake(const std::string& host) {
     return host;
+}
+
+std::vector<unsigned char> base64_decode(std::string_view encoded) {
+    if (encoded.empty() || encoded.size() % 4 != 0) throw std::invalid_argument("invalid base64 secret");
+    std::vector<unsigned char> out((encoded.size() / 4) * 3 + 3);
+    const int decoded = EVP_DecodeBlock(out.data(),
+        reinterpret_cast<const unsigned char*>(encoded.data()), static_cast<int>(encoded.size()));
+    if (decoded < 0) throw std::invalid_argument("invalid base64 secret");
+    std::size_t size = static_cast<std::size_t>(decoded);
+    if (!encoded.empty() && encoded.back() == '=') --size;
+    if (encoded.size() > 1 && encoded[encoded.size() - 2] == '=') --size;
+    out.resize(size);
+    return out;
+}
+
+std::string base64_encode(const unsigned char* data, std::size_t size) {
+    std::string out(4 * ((size + 2) / 3), '\0');
+    const int encoded = EVP_EncodeBlock(reinterpret_cast<unsigned char*>(out.data()),
+                                        data, static_cast<int>(size));
+    if (encoded < 0) throw std::runtime_error("base64 encode failed");
+    out.resize(static_cast<std::size_t>(encoded));
+    return out;
+}
+
+std::string coinbase_timestamp() {
+    const auto microseconds = std::chrono::duration_cast<std::chrono::microseconds>(
+        std::chrono::system_clock::now().time_since_epoch()).count();
+    std::ostringstream out;
+    out << (microseconds / 1'000'000LL) << '.' << std::setw(6) << std::setfill('0')
+        << (microseconds % 1'000'000LL);
+    return out.str();
+}
+
+std::string coinbase_level2_subscription(std::string_view product, std::string_view api_key,
+                                         std::string_view secret_b64, std::string_view passphrase,
+                                         std::string_view timestamp) {
+    if (product.empty() || api_key.empty() || secret_b64.empty() || passphrase.empty() || timestamp.empty())
+        throw std::invalid_argument("Coinbase Exchange Level2 credentials/identity required");
+    const auto key = base64_decode(secret_b64);
+    const std::string message = std::string(timestamp) + "GET/users/self/verify";
+    unsigned char digest[EVP_MAX_MD_SIZE]{}; unsigned int digest_size = 0;
+    if (HMAC(EVP_sha256(), key.data(), static_cast<int>(key.size()),
+             reinterpret_cast<const unsigned char*>(message.data()), message.size(),
+             digest, &digest_size) == nullptr) {
+        throw std::runtime_error("Coinbase Exchange signature failed");
+    }
+    json::object channel{{"name", "level2"}, {"product_ids", json::array{std::string(product)}}};
+    json::object request{
+        {"type", "subscribe"}, {"channels", json::array{std::move(channel)}},
+        {"signature", base64_encode(digest, digest_size)}, {"key", api_key},
+        {"passphrase", passphrase}, {"timestamp", timestamp},
+    };
+    return json::serialize(request);
+}
+
+std::string connection_subscription(const ExternalVenueConnectionSpec& spec) {
+    if (spec.subscription_auth == ExternalWsSubscriptionAuth::None) return spec.subscription_json;
+    if (spec.subscription_auth != ExternalWsSubscriptionAuth::CoinbaseExchangeLevel2)
+        throw std::invalid_argument("unsupported external subscription auth");
+    const char* api_key = std::getenv("COINBASE_EXCHANGE_API_KEY");
+    const char* secret = std::getenv("COINBASE_EXCHANGE_API_SECRET");
+    const char* passphrase = std::getenv("COINBASE_EXCHANGE_PASSPHRASE");
+    if (!api_key || !*api_key || !secret || !*secret || !passphrase || !*passphrase)
+        throw std::runtime_error("Coinbase Exchange Level2 credential environment incomplete");
+    return coinbase_level2_subscription(spec.symbol, api_key, secret, passphrase, coinbase_timestamp());
 }
 
 void bounded_backoff(ExternalStopToken stop, std::uint64_t failures) noexcept {
@@ -127,6 +199,19 @@ ExternalVenueConnectionSpec btc_spot_connection_spec(
     return spec;
 }
 
+ExternalVenueConnectionSpec coinbase_level2_connection_spec(std::uint64_t asset_handle) {
+    auto spec = btc_spot_connection_spec(VenueId::CoinbaseSpot, asset_handle);
+    spec.subscription_json.clear();
+    spec.subscription_auth = ExternalWsSubscriptionAuth::CoinbaseExchangeLevel2;
+    return spec;
+}
+
+std::string coinbase_level2_subscription_for_test(
+    std::string_view product, std::string_view api_key, std::string_view secret_b64,
+    std::string_view passphrase, std::string_view timestamp) {
+    return coinbase_level2_subscription(product, api_key, secret_b64, passphrase, timestamp);
+}
+
 ExternalVenueWsClient::ExternalVenueWsClient(
     ExternalVenueConnectionSpec spec,
     ExternalVenueIngress* ingress, ExternalFrameObserver* observer,
@@ -134,7 +219,9 @@ ExternalVenueWsClient::ExternalVenueWsClient(
     : spec_(std::move(spec)), ingress_(ingress), observer_(observer), raw_sink_(raw_sink) {
     if (spec_.venue == VenueId::Unknown || spec_.asset_handle == 0
         || spec_.host.empty() || spec_.port.empty() || spec_.target.empty()
-        || spec_.subscription_json.empty() || spec_.max_message_bytes == 0
+        || (spec_.subscription_json.empty() && spec_.subscription_auth == ExternalWsSubscriptionAuth::None
+            && !spec_.start_without_subscription)
+        || spec_.max_message_bytes == 0
         || spec_.max_message_bytes > kMaxWsMessageBytes) {
         throw std::invalid_argument("invalid external venue connection spec");
     }
@@ -170,6 +257,13 @@ void ExternalVenueWsClient::run(ExternalStopToken stop) noexcept {
             timeout.idle_timeout = std::chrono::seconds(1);
             timeout.keep_alive_pings = true;
             ws.set_option(timeout);
+            if (!spec_.handshake_headers.empty()) {
+                const auto headers = spec_.handshake_headers;
+                ws.set_option(websocket::stream_base::decorator(
+                    [headers](websocket::request_type& request) {
+                        for (const auto& [name, value] : headers) request.set(name, value);
+                    }));
+            }
             ws.read_message_max(spec_.max_message_bytes);
             ws.handshake(normalize_host_for_handshake(spec_.host), spec_.target);
 
@@ -194,14 +288,16 @@ void ExternalVenueWsClient::run(ExternalStopToken stop) noexcept {
             try {
 
             // Protocol messages remain on the IO thread and are never used as a
-            // trading trigger. Coinbase needs two channel subscriptions.
+            // trading trigger. Authenticated subscriptions are generated fresh
+            // per connection so Coinbase timestamps/signatures are never reused.
+            const auto subscription = connection_subscription(spec_);
             std::size_t start = 0;
-            while (start < spec_.subscription_json.size()) {
-                const auto end = spec_.subscription_json.find('\n', start);
+            while (start < subscription.size()) {
+                const auto end = subscription.find('\n', start);
                 const auto length = end == std::string::npos
-                    ? spec_.subscription_json.size() - start : end - start;
+                    ? subscription.size() - start : end - start;
                 if (length > 0) {
-                    ws.write(net::buffer(spec_.subscription_json.data() + start, length));
+                    ws.write(net::buffer(subscription.data() + start, length));
                 }
                 if (end == std::string::npos) break;
                 start = end + 1;
@@ -244,8 +340,17 @@ void ExternalVenueWsClient::run(ExternalStopToken stop) noexcept {
                 const std::string_view payload(bytes, front.size());
                 if (raw_sink_ != nullptr) (void)raw_sink_->try_record_raw(
                     spec_.venue, epoch, receive_ns, wall_ns, payload);
-                if (observer_ != nullptr) observer_->on_frame(epoch, receive_ns, wall_ns, payload);
+                const bool binary_frame = ws.got_binary();
+                if (observer_ != nullptr) {
+                    if (binary_frame) observer_->on_binary_frame(epoch, receive_ns, wall_ns, payload);
+                    else observer_->on_frame(epoch, receive_ns, wall_ns, payload);
+                }
                 if (ingress_ != nullptr) {
+                    if (binary_frame) {
+                        decode_failures_.fetch_add(1, std::memory_order_relaxed);
+                        ingress_->mark_disconnected(epoch + 1);
+                        throw std::runtime_error("unexpected binary frame on JSON ingress");
+                    }
                     const auto decoded = ingress_->on_frame(epoch, receive_ns, wall_ns, payload);
                     if (decoded.invalid_frame != 0 || decoded.output_overflow != 0
                         || decoded.arena_exhausted != 0) {

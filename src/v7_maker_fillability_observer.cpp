@@ -4,6 +4,8 @@
 #include "pm/v7_market_ws.hpp"
 #include "pm/v7_maker_lane.hpp"
 #include "pm/v7_spsc.hpp"
+#include "pm/v7_ingress_wakeup.hpp"
+#include "pm/v7_hot_book_cache.hpp"
 
 #include <boost/json.hpp>
 
@@ -142,6 +144,7 @@ struct Options {
     std::string ws_url = "wss://ws-subscriptions-clob.polymarket.com/ws/market";
     bool fair_only = false;
     std::uintmax_t disk_pressure_min_free_bytes = 0;
+    std::string hot_book_cache;
 };
 
 Options parse_options(int argc, char** argv) {
@@ -160,6 +163,7 @@ Options parse_options(int argc, char** argv) {
         else if (arg == "--ws-url") options.ws_url = next();
         else if (arg == "--fair-only") options.fair_only = true;
         else if (arg == "--disk-pressure-min-free-bytes") options.disk_pressure_min_free_bytes = std::stoull(next());
+        else if (arg == "--hot-book-cache") options.hot_book_cache = next();
         else throw std::runtime_error("unknown argument: " + arg);
     }
     if (options.selection.empty()) {
@@ -343,7 +347,7 @@ struct FlowSample {
 class ExactWsObserver final {
 public:
     ExactWsObserver(std::vector<SelectedToken> tokens, std::string ws_url,
-                    fs::path output_dir, std::string model_sha)
+                    fs::path output_dir, std::string model_sha, fs::path hot_book_cache)
         : tokens_(std::move(tokens)), ws_url_(std::move(ws_url)),
           output_dir_(std::move(output_dir)), model_sha_(std::move(model_sha)) {
         std::vector<pm::v7::TokenBinding> bindings;
@@ -359,6 +363,10 @@ public:
         feature_start_ns_.resize(max_handle + 1, 0);
         latest_books_.resize(max_handle + 1);
         flow_samples_.resize(max_handle + 1);
+        if (!hot_book_cache.empty()) {
+            hot_book_cache_ = std::make_unique<pm::v7::HotBookCacheWriter>(
+                hot_book_cache, model_sha_, max_handle);
+        }
         for (const auto& token : tokens_) by_handle_[token.instrument_handle] = &token;
         for (const auto& token : tokens_) {
             lanes_[token.instrument_handle] = std::make_unique<pm::v7::maker::MakerInstrumentLane>(1);
@@ -452,7 +460,16 @@ public:
             row.quantity_microunits = event.quantity_microunits;
             row.aggressor_side = event.side;
             row.lineage_continuous = event.book.lineage_continuous;
+            if (hot_book_cache_ != nullptr && event.instrument_handle < by_handle_.size()) {
+                const auto* hot_token = by_handle_[event.instrument_handle];
+                if (hot_token != nullptr) {
+                    (void)hot_book_cache_->publish(
+                        event.instrument_handle, hot_token->market_id, hot_token->token_id,
+                        event.book, receive.wall_ms);
+                }
+            }
             if (!queue_->try_push(row)) dropped_.fetch_add(1, std::memory_order_relaxed);
+            else wakeup_.notify();
         }
         // A later full WS snapshot may already have healed the affected token.
         // Do not restart a recovered stream merely because a past root failure
@@ -485,6 +502,10 @@ public:
 
     [[nodiscard]] std::uint64_t lineage_recovery_requests() const noexcept {
         return lineage_recovery_requests_.load(std::memory_order_relaxed);
+    }
+
+    void wait_for_events(std::chrono::milliseconds timeout) noexcept {
+        (void)wakeup_.wait_for(timeout);
     }
 
     void on_reconnect() {
@@ -568,6 +589,9 @@ public:
         root["trade_events_suppressed_disk_pressure"] = trade_events_suppressed_disk_pressure_;
         root["book_watermark_receive_wall_ms"] = book_watermark_wall_ms_;
         root["book_watermark_receive_monotonic_ns"] = book_watermark_monotonic_ns_;
+        root["hot_book_cache_enabled"] = hot_book_cache_ != nullptr;
+        root["hot_book_cache_publications"] = hot_book_cache_ ? hot_book_cache_->publications() : 0;
+        root["hot_book_cache_failures"] = hot_book_cache_ ? hot_book_cache_->failures() : 0;
         root["state"] = stopped ? "stopped" : "running";
         root["events_written"] = events_written_;
         root["dropped_events"] = dropped_.load(std::memory_order_relaxed);
@@ -790,6 +814,8 @@ private:
     std::int64_t book_watermark_monotonic_ns_ = 0;
     std::unique_ptr<pm::v7::MarketWsShard> decoder_;
     std::unique_ptr<pm::fast::MarketWebSocketFeed> feed_;
+    pm::v7::external_fair::IngressWakeup wakeup_{};
+    std::unique_ptr<pm::v7::HotBookCacheWriter> hot_book_cache_;
     std::unique_ptr<pm::v7::SpscRing<TradeEvidence, kEvidenceCapacity>> queue_ =
         std::make_unique<pm::v7::SpscRing<TradeEvidence, kEvidenceCapacity>>();
     std::ofstream output_;
@@ -839,7 +865,8 @@ int main(int argc, char** argv) {
                 ? std::vector<std::pair<std::string, std::pair<std::string, std::string>>>{}
                 : load_selected_pairs(options.selection);
             ExactWsObserver observer(
-                std::move(tokens), options.ws_url, options.output_dir, options.model_sha);
+                std::move(tokens), options.ws_url, options.output_dir, options.model_sha,
+                options.hot_book_cache);
             const fs::path disk_pressure_marker = fs::path(options.run_root) / "control" / "DISK_PRESSURE";
             const auto local_disk_pressure = [&]() {
                 if (fs::exists(disk_pressure_marker)) return true;
@@ -879,7 +906,7 @@ int main(int argc, char** argv) {
                         reload = reload || load_selected_pairs(options.selection) != selected_pairs;
                     }
                 }
-                std::this_thread::sleep_for(std::chrono::milliseconds(10));
+                observer.wait_for_events(std::chrono::milliseconds(10));
             }
             observer.stop();
         }
