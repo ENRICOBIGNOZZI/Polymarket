@@ -211,6 +211,32 @@ python3 scripts/v7_maker_durable_learning.py \
   >> "$RUN_ROOT/micro_maker/durable_learning.log" 2>&1
 pids=()
 
+# Startup can fail before the full runtime cleanup function is defined. Every
+# child started before that point must still be owned and terminated; otherwise
+# launchd retries can inherit an orphan loopback proxy and collide on port 19109.
+bootstrap_cleanup_started=0
+bootstrap_cleanup() {
+  if [[ "$bootstrap_cleanup_started" == 1 ]]; then return 0; fi
+  bootstrap_cleanup_started=1
+  set +e
+  touch "$KILL"
+  for pid in "${pids[@]:-}"; do kill -TERM "$pid" 2>/dev/null || true; done
+  for _ in $(seq 1 50); do
+    alive=0
+    for pid in "${pids[@]:-}"; do kill -0 "$pid" 2>/dev/null && { alive=1; break; }; done
+    [[ "$alive" == 0 ]] && break
+    sleep 0.1
+  done
+  for pid in "${pids[@]:-}"; do
+    kill -0 "$pid" 2>/dev/null && kill -KILL "$pid" 2>/dev/null || true
+    wait "$pid" 2>/dev/null || true
+  done
+  rm -rf "$LOCK"
+}
+bootstrap_shutdown() { bootstrap_cleanup; exit 0; }
+trap bootstrap_cleanup EXIT
+trap bootstrap_shutdown INT TERM
+
 if [[ ! -f scripts/v7_public_https_proxy.py ]]; then
   echo "missing V7 public HTTPS proxy" >&2
   exit 77
@@ -503,6 +529,7 @@ shutdown() {
 }
 trap cleanup EXIT
 trap shutdown INT TERM
+bootstrap_cleanup_started=1
 
 if [[ ! -x "$RECORDER" ]]; then
   echo "missing canonical V7 trade recorder executable: $RECORDER" >&2
