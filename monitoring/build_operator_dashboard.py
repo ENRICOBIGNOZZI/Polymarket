@@ -201,7 +201,7 @@ def diagnostics():
         table(193,"Markout sample counts","polymarket_execution_markout_observations",0,81,w=24),
     ]
     contexts = [
-        table(201,"Crypto Settlement registrations · NOT active trading","polymarket_v7_crypto_context_registered",0,70,w=24,description="Registered BTC/ETH/SOL/XRP contexts do not prove execution. Authority is listed per context."),
+        table(201,"Crypto Settlement Contexts · registrations · NOT active trading","polymarket_v7_crypto_context_registered",0,70,w=24,description="Registered BTC/ETH/SOL/XRP contexts do not prove execution. Authority is listed per context."),
         chart(202,"Crypto authority flags",[("polymarket_v7_crypto_context_zero_authority","zero authority {{asset}} {{horizon}}"),("polymarket_v7_crypto_context_new_risk_authorized","new-risk permission {{asset}} {{horizon}}")],0,76),
         chart(203,"Coordinator crypto exposure · USD",[("polymarket_v7_crypto_gross_exposure_usd","gross"),("polymarket_v7_crypto_net_directional_exposure_usd","net directional"),("polymarket_v7_crypto_cluster_exposure_usd","correlated cluster")],12,76,unit="currencyUSD",decimals=2),
     ]

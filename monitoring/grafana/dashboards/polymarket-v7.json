@@ -5831,7 +5831,7 @@
         {
           "id": 201,
           "type": "table",
-          "title": "Crypto Settlement registrations · NOT active trading",
+          "title": "Crypto Settlement Contexts · registrations · NOT active trading",
           "description": "Registered BTC/ETH/SOL/XRP contexts do not prove execution. Authority is listed per context.",
           "datasource": {
             "type": "prometheus",
