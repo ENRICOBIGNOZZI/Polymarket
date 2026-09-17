@@ -7,6 +7,11 @@ import json
 import shlex
 import time
 from pathlib import Path
+import sys
+
+_OPS_DIR = Path(__file__).resolve().parent
+if str(_OPS_DIR) not in sys.path:
+    sys.path.insert(0, str(_OPS_DIR))
 from typing import Any
 
 from v7_london_ssm_benchmark import aws_json, send, stack_instances, wait_one
