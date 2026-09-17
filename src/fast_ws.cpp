@@ -177,9 +177,13 @@ struct MarketWebSocketFeed::Impl {
     std::vector<std::thread> threads;
     std::atomic<bool> fallback_stop_requested{false};
 #endif
+    struct alignas(64) WorkerCounters {
+        std::atomic<std::uint64_t> messages{0};
+    };
+
     std::atomic<bool> started{false};
     std::atomic<std::size_t> connected{0};
-    std::atomic<std::uint64_t> messages{0};
+    std::unique_ptr<WorkerCounters[]> worker_counters;
     std::atomic<std::uint64_t> reconnects{0};
     std::atomic<std::uint64_t> errors{0};
 
@@ -200,6 +204,7 @@ struct MarketWebSocketFeed::Impl {
         }
         subscriptions.reserve(shards.size());
         for (const auto& shard : shards) subscriptions.push_back(subscription(shard));
+        if (!shards.empty()) worker_counters = std::make_unique<WorkerCounters[]>(shards.size());
     }
 
     void report(std::size_t shard, std::string_view message) {
@@ -212,6 +217,8 @@ struct MarketWebSocketFeed::Impl {
         (void)ids;
         int backoff_seconds = 1;
         bool first_attempt = true;
+        std::uint64_t message_count = worker_counters[shard_index].messages.load(
+            std::memory_order_relaxed);
         beast::flat_buffer buffer;
         buffer.reserve(256 * 1024);
         while (!stop.stop_requested()) {
@@ -269,14 +276,6 @@ struct MarketWebSocketFeed::Impl {
                 marked_connected = true;
                 backoff_seconds = 1;
 
-#if PM_USE_STD_JTHREAD
-                std::stop_callback cancel_on_stop(stop, [&ws] {
-                    beast::error_code ignored;
-                    beast::get_lowest_layer(ws).socket().cancel(ignored);
-                    beast::get_lowest_layer(ws).socket().shutdown(tcp::socket::shutdown_both, ignored);
-                    beast::get_lowest_layer(ws).socket().close(ignored);
-                });
-#endif
                 // A synchronous read can block for the entire quiet timeout,
                 // which made the old post-read PING unreachable on quiet
                 // markets. Keep one async read and one async text heartbeat
@@ -294,6 +293,11 @@ struct MarketWebSocketFeed::Impl {
                 bool terminal = false;
                 bool remote_closed = false;
                 std::string transport_error;
+#if PM_USE_STD_JTHREAD
+                std::stop_callback cancel_on_stop(stop, [&io] {
+                    asio::post(io, [&io] { io.stop(); });
+                });
+#endif
                 const auto finish = [&](beast::error_code error) {
                     if (terminal) return;
                     terminal = true;
@@ -346,7 +350,9 @@ struct MarketWebSocketFeed::Impl {
                         const std::string_view message{
                             static_cast<const char*>(front.data()), front.size()};
                         if (message != "PONG" && !message.empty()) {
-                            messages.fetch_add(1, std::memory_order_relaxed);
+                            ++message_count;
+                            worker_counters[shard_index].messages.store(
+                                message_count, std::memory_order_relaxed);
                             on_message(message, stamp, shard_index);
                         }
                         begin_read();
@@ -444,10 +450,14 @@ void MarketWebSocketFeed::start() { impl_->start(); }
 void MarketWebSocketFeed::stop() { impl_->stop(); }
 
 FeedSnapshot MarketWebSocketFeed::snapshot() const {
+    std::uint64_t messages = 0;
+    for (std::size_t i = 0; i < impl_->shards.size(); ++i) {
+        messages += impl_->worker_counters[i].messages.load(std::memory_order_relaxed);
+    }
     return FeedSnapshot{
         impl_->shards.size(),
         impl_->connected.load(std::memory_order_relaxed),
-        impl_->messages.load(std::memory_order_relaxed),
+        messages,
         impl_->reconnects.load(std::memory_order_relaxed),
         impl_->errors.load(std::memory_order_relaxed),
     };

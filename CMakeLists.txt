@@ -14,6 +14,7 @@ find_package(Boost REQUIRED)
 find_package(Threads REQUIRED)
 find_package(OpenSSL REQUIRED)
 pkg_check_modules(LIBCURL REQUIRED IMPORTED_TARGET libcurl)
+pkg_check_modules(SECP256K1 REQUIRED IMPORTED_TARGET libsecp256k1)
 
 # Boost.JSON is compiled exactly once and shared by all V7 C++ components.
 # This keeps the bounded market-data decoder independent from HTTP/REST code.
@@ -35,6 +36,19 @@ target_include_directories(pm_fast_arb PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/includ
 target_link_libraries(pm_fast_arb PUBLIC pm_core Threads::Threads OpenSSL::SSL OpenSSL::Crypto)
 target_compile_options(pm_fast_arb PRIVATE -Wall -Wextra -Wpedantic)
 
+add_library(pm_v7_redundant_bbo
+  src/v7_polymarket_bbo.cpp
+  src/v7_redundant_bbo.cpp
+  src/v7_redundant_bbo_feed.cpp)
+target_include_directories(pm_v7_redundant_bbo PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/include ${Boost_INCLUDE_DIRS})
+target_link_libraries(pm_v7_redundant_bbo PUBLIC pm_fast_arb pm_json Threads::Threads)
+target_compile_options(pm_v7_redundant_bbo PRIVATE -Wall -Wextra -Wpedantic)
+
+add_library(pm_v7_clob_signer src/v7_secp256k1_signer.cpp)
+target_include_directories(pm_v7_clob_signer PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/include)
+target_link_libraries(pm_v7_clob_signer PUBLIC PkgConfig::SECP256K1)
+target_compile_options(pm_v7_clob_signer PRIVATE -Wall -Wextra -Wpedantic)
+
 add_library(pm_v7_common
   src/v7_oms.cpp
   src/v7_paper_queue.cpp
@@ -42,7 +56,9 @@ add_library(pm_v7_common
   src/v7_markout.cpp
   src/v7_market_ws.cpp
   src/v7_capital.cpp
-  src/v7_execution_admission.cpp)
+  src/v7_execution_admission.cpp
+  src/v7_crypto_decision_lane.cpp
+  src/v7_native_order_tx.cpp)
 target_include_directories(pm_v7_common PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/include ${Boost_INCLUDE_DIRS})
 target_link_libraries(pm_v7_common PUBLIC pm_json)
 target_compile_options(pm_v7_common PRIVATE -Wall -Wextra -Wpedantic)
@@ -121,6 +137,14 @@ endif()
 
 if(NOT PM_LONDON_RUNTIME_ONLY)
 # Offline queue-handoff comparison; no market or execution authority.
+add_executable(polymarket_v7_crypto_decision_bench src/v7_crypto_decision_bench.cpp)
+target_link_libraries(polymarket_v7_crypto_decision_bench PRIVATE pm_v7_external)
+target_compile_options(polymarket_v7_crypto_decision_bench PRIVATE -Wall -Wextra -Wpedantic)
+
+add_executable(polymarket_v7_crypto_to_oms_bench src/v7_crypto_to_oms_bench.cpp)
+target_link_libraries(polymarket_v7_crypto_to_oms_bench PRIVATE pm_v7_external pm_v7_common)
+target_compile_options(polymarket_v7_crypto_to_oms_bench PRIVATE -Wall -Wextra -Wpedantic)
+
 add_executable(polymarket_v7_feed_race_probe src/v7_feed_race_probe.cpp)
 target_link_libraries(polymarket_v7_feed_race_probe PRIVATE pm_v7_external)
 target_compile_options(polymarket_v7_feed_race_probe PRIVATE -Wall -Wextra -Wpedantic)
@@ -172,6 +196,21 @@ if(BUILD_TESTING)
   target_link_libraries(pm_fast_arb_tests PRIVATE pm_fast_arb)
   add_test(NAME pm_fast_arb_tests COMMAND pm_fast_arb_tests)
 
+  add_executable(pm_v7_redundant_bbo_tests tests/test_v7_redundant_bbo.cpp)
+  target_link_libraries(pm_v7_redundant_bbo_tests PRIVATE pm_v7_redundant_bbo)
+  target_compile_options(pm_v7_redundant_bbo_tests PRIVATE -UNDEBUG)
+  add_test(NAME pm_v7_redundant_bbo_tests COMMAND pm_v7_redundant_bbo_tests)
+
+  add_executable(pm_v7_polymarket_bbo_tests tests/test_v7_polymarket_bbo.cpp)
+  target_link_libraries(pm_v7_polymarket_bbo_tests PRIVATE pm_v7_redundant_bbo)
+  target_compile_options(pm_v7_polymarket_bbo_tests PRIVATE -UNDEBUG)
+  add_test(NAME pm_v7_polymarket_bbo_tests COMMAND pm_v7_polymarket_bbo_tests)
+
+  add_executable(pm_v7_redundant_bbo_feed_tests tests/test_v7_redundant_bbo_feed.cpp)
+  target_link_libraries(pm_v7_redundant_bbo_feed_tests PRIVATE pm_v7_redundant_bbo)
+  target_compile_options(pm_v7_redundant_bbo_feed_tests PRIVATE -UNDEBUG)
+  add_test(NAME pm_v7_redundant_bbo_feed_tests COMMAND pm_v7_redundant_bbo_feed_tests)
+
   add_executable(pm_v7_oms_tests tests/test_v7_oms.cpp)
   target_link_libraries(pm_v7_oms_tests PRIVATE pm_v7_common)
   add_test(NAME pm_v7_oms_tests COMMAND pm_v7_oms_tests)
@@ -199,6 +238,16 @@ if(BUILD_TESTING)
   add_executable(pm_v7_execution_admission_tests tests/test_v7_execution_admission.cpp)
   target_link_libraries(pm_v7_execution_admission_tests PRIVATE pm_v7_common)
   add_test(NAME pm_v7_execution_admission_tests COMMAND pm_v7_execution_admission_tests)
+
+  add_executable(pm_v7_crypto_decision_lane_tests tests/test_v7_crypto_decision_lane.cpp)
+  target_link_libraries(pm_v7_crypto_decision_lane_tests PRIVATE pm_v7_common)
+  target_compile_options(pm_v7_crypto_decision_lane_tests PRIVATE -UNDEBUG)
+  add_test(NAME pm_v7_crypto_decision_lane_tests COMMAND pm_v7_crypto_decision_lane_tests)
+
+  add_executable(pm_v7_native_order_tx_tests tests/test_v7_native_order_tx.cpp)
+  target_link_libraries(pm_v7_native_order_tx_tests PRIVATE pm_v7_common)
+  target_compile_options(pm_v7_native_order_tx_tests PRIVATE -UNDEBUG)
+  add_test(NAME pm_v7_native_order_tx_tests COMMAND pm_v7_native_order_tx_tests)
 
 
 

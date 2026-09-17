@@ -610,9 +610,10 @@ MakerDecision MakerHotPath::on_market_update(
     decision.selector_projected_fill_probability =
         update.selector_projected_fill_probability;
     const std::int64_t start_ns = monotonic_ns();
+    const bool model_valid = model.valid();
 
-    const double decay_per_second = model.valid() ? model.feature_decay : 0.90;
-    const double tick_size = model.valid() ? model.tick_size : 0.01;
+    const double decay_per_second = model_valid ? model.feature_decay : 0.90;
+    const double tick_size = model_valid ? model.tick_size : 0.01;
     const double bid_tick = static_cast<double>(update.best_bid_tick);
     const double ask_tick = static_cast<double>(update.best_ask_tick);
     const double mid_tick = 0.5 * (bid_tick + ask_tick);
@@ -760,7 +761,7 @@ MakerDecision MakerHotPath::on_market_update(
     if (risk.max_local_state_age_ns > 0 && local_age_ns > risk.max_local_state_age_ns) {
         return control_exit(DecisionReason::StaleState, IntentType::Withdraw);
     }
-    if (!model.valid()) return control_exit(DecisionReason::InvalidModel, IntentType::Withdraw);
+    if (!model_valid) return control_exit(DecisionReason::InvalidModel, IntentType::Withdraw);
     if (update.best_bid_tick <= 0 || update.best_ask_tick <= update.best_bid_tick ||
         static_cast<double>(update.best_ask_tick) * model.tick_size >= 1.0 + model.tick_size * 0.5) {
         return control_exit(DecisionReason::InvalidBook, IntentType::Withdraw);

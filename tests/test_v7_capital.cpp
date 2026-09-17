@@ -125,6 +125,40 @@ void test_release_reuses_fixed_capacity_slots() {
     assert(capital.order_reserved_for_market(9) == 100'000);
 }
 
+void test_backward_shift_preserves_colliding_probe_chain() {
+    pm::v7::SleeveCapitalAccount capital(limits());
+
+    // These intent IDs collide in the current 1024-slot SplitMix bucket. The
+    // exact values make deletion exercise a real linear-probe chain.
+    assert(capital.reserve_order(100, 10, 100'000));
+    assert(capital.reserve_order(172, 11, 100'000));
+    assert(capital.reserve_order(273, 12, 100'000));
+    assert(capital.reserve_order(342, 13, 100'000));
+
+    assert(capital.release_order(100));
+    assert(capital.reserve_order(172, 11, 100'000));
+    assert(capital.release_order(172));
+    assert(capital.reserve_order(273, 12, 100'000));
+    assert(capital.release_order(273));
+    assert(capital.reserve_order(342, 13, 100'000));
+    assert(capital.release_order(342));
+    assert(capital.snapshot().order_reserved_microdollars == 0);
+}
+
+void test_long_running_churn_keeps_reservations_reusable() {
+    pm::v7::SleeveCapitalAccount capital(limits());
+    constexpr std::uint64_t rounds = pm::v7::kMaxOpenCapitalReservations * 8ULL;
+    for (std::uint64_t i = 1; i <= rounds; ++i) {
+        const auto market = 1ULL + (i % (pm::v7::kMaxCapitalMarkets - 1ULL));
+        const auto intent = 1'000'000ULL + i;
+        assert(capital.reserve_order(intent, market, 1));
+        assert(capital.release_order(intent));
+    }
+    const auto snap = capital.snapshot();
+    assert(snap.order_reserved_microdollars == 0);
+    assert(snap.total_exposure_microdollars == 0);
+}
+
 } // namespace
 
 int main() {
@@ -136,5 +170,7 @@ int main() {
     test_partial_fill_rejects_overcommit_without_mutation();
     test_inventory_commit_release_and_reconfiguration_safety();
     test_release_reuses_fixed_capacity_slots();
+    test_backward_shift_preserves_colliding_probe_chain();
+    test_long_running_churn_keeps_reservations_reusable();
     return 0;
 }

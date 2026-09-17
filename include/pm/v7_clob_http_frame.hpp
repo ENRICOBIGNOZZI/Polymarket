@@ -1,5 +1,6 @@
 #pragma once
 
+#include <array>
 #include <cstddef>
 #include <span>
 #include <string_view>
@@ -21,5 +22,30 @@ struct L2AuthHeadersView {
     const L2AuthHeadersView& auth,
     std::string_view exact_body,
     std::span<char> output) noexcept;
+
+// Hot-path form for one authenticated execution lane. Address, API key and
+// passphrase are validated and serialized once during construction; each order
+// supplies only the dynamic signature, timestamp and exact body.
+class PreparedPostOrderHttp1 final {
+public:
+    PreparedPostOrderHttp1(std::string_view address,
+                           std::string_view api_key,
+                           std::string_view passphrase) noexcept;
+
+    [[nodiscard]] bool valid() const noexcept { return valid_; }
+
+    [[nodiscard]] std::size_t serialize(
+        std::string_view signature,
+        std::string_view timestamp,
+        std::string_view exact_body,
+        std::span<char> output) const noexcept;
+
+private:
+    std::array<char, 512> prefix_{};
+    std::array<char, 512> after_timestamp_{};
+    std::size_t prefix_size_ = 0;
+    std::size_t after_timestamp_size_ = 0;
+    bool valid_ = false;
+};
 
 } // namespace pm::v7::clob_http_frame

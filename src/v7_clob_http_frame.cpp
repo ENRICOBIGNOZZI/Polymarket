@@ -70,4 +70,45 @@ std::size_t serialize_post_order_http1(const L2AuthHeadersView& auth,
     return w.size();
 }
 
+PreparedPostOrderHttp1::PreparedPostOrderHttp1(std::string_view address,
+                                               std::string_view api_key,
+                                               std::string_view passphrase) noexcept {
+    if (!header_value(address) || !header_value(api_key) || !header_value(passphrase)) return;
+
+    Writer prefix(prefix_);
+    prefix.append("POST /order HTTP/1.1\r\n");
+    prefix.append("Host: clob.polymarket.com\r\n");
+    prefix.append("Content-Type: application/json\r\n");
+    prefix.append("Accept: application/json\r\n");
+    prefix.append("POLY_ADDRESS: "); prefix.append(address); prefix.append("\r\n");
+    prefix.append("POLY_SIGNATURE: ");
+    prefix_size_ = prefix.size();
+    if (prefix_size_ == 0) return;
+
+    Writer tail(after_timestamp_);
+    tail.append("\r\nPOLY_API_KEY: "); tail.append(api_key); tail.append("\r\n");
+    tail.append("POLY_PASSPHRASE: "); tail.append(passphrase); tail.append("\r\n");
+    tail.append("Content-Length: ");
+    after_timestamp_size_ = tail.size();
+    valid_ = after_timestamp_size_ != 0;
+}
+
+std::size_t PreparedPostOrderHttp1::serialize(std::string_view signature,
+                                              std::string_view timestamp,
+                                              std::string_view exact_body,
+                                              std::span<char> output) const noexcept {
+    if (!valid_ || exact_body.empty() || !header_value(signature) || !decimal_value(timestamp)) return 0;
+
+    Writer w(output);
+    w.append(std::string_view(prefix_.data(), prefix_size_));
+    w.append(signature);
+    w.append("\r\nPOLY_TIMESTAMP: ");
+    w.append(timestamp);
+    w.append(std::string_view(after_timestamp_.data(), after_timestamp_size_));
+    w.decimal(exact_body.size());
+    w.append("\r\nConnection: keep-alive\r\n\r\n");
+    w.append(exact_body);
+    return w.size();
+}
+
 } // namespace pm::v7::clob_http_frame
