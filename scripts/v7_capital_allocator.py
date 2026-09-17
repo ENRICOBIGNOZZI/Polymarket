@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Canonical PAPER capital envelopes for the two V7 economic engines.
+"""Canonical PAPER capital envelope for the crypto V7 economic engine.
 
 Only ``V7_CANONICAL_ALLOCATOR`` owns account capital. Engine envelopes are
 capacity limits, not independent accounts. Component observation budgets are
@@ -20,10 +20,9 @@ from typing import Any
 
 
 ALLOCATOR_OWNER = "V7_CANONICAL_ALLOCATOR"
-ENGINES = ("CRYPTO_SETTLEMENT_ENGINE", "STRUCTURAL_ARB_ENGINE")
+ENGINES = ("CRYPTO_SETTLEMENT_ENGINE",)
 COMPONENT_OBSERVERS = {
     "micro_maker": "professional_maker",
-    "fast_structural": "fast_structural",
 }
 
 
@@ -78,7 +77,7 @@ def allocate(config: dict[str, Any]) -> dict[str, float]:
 def component_observation_budgets(config: dict[str, Any]) -> dict[str, float]:
     v7 = config.get("v7") if isinstance(config.get("v7"), dict) else {}
     raw = v7.get("component_observation_budget_fractions")
-    expected = {"professional_maker", "crypto_informed_taker", "fast_structural"}
+    expected = {"professional_maker", "crypto_informed_taker"}
     if not isinstance(raw, dict) or set(raw) != expected:
         raise ValueError("component_observation_partition")
     total = _finite_nonnegative(config.get("starting_capital"), "starting_capital")
@@ -131,10 +130,7 @@ def materialize(base_config: Path, output_dir: Path) -> dict[str, Any]:
             canonical_replacement=f"{engine_id.lower()}.json",
         ))
     for view_id, component in COMPONENT_OBSERVERS.items():
-        engine_id = (
-            "CRYPTO_SETTLEMENT_ENGINE" if component == "professional_maker"
-            else "STRUCTURAL_ARB_ENGINE"
-        )
+        engine_id = "CRYPTO_SETTLEMENT_ENGINE"
         atomic_json(output_dir / f"{view_id}.json", _child(
             cfg, view_id=view_id, scope_class="COMPONENT_OBSERVATION",
             engine_id=engine_id, component=component,

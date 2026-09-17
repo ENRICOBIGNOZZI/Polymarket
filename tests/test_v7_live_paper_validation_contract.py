@@ -102,7 +102,7 @@ class V7LivePaperValidationContractTest(unittest.TestCase):
 
     def test_live_scope_is_one_safe_v7_runtime(self) -> None:
         scope = json.loads((ROOT / "config/v7_live_model_scope.json").read_text(encoding="utf-8"))
-        self.assertEqual(scope["version"], 7)
+        self.assertEqual(scope["version"], 8)
         self.assertTrue(scope["paper_only"])
         self.assertFalse(scope["authenticated_execution"])
         self.assertFalse(scope["real_order_submission"])

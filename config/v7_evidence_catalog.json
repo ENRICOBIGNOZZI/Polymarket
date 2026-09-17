@@ -7,7 +7,7 @@
         "ledger/execution.jsonl",
         "archive/canonical-ledger/execution-*.jsonl.gz"
       ],
-      "producer": "polymarket_v7_fast_structural_runtime canonical ledger writer",
+      "producer": "v7_ledger_spool.py / V7_CANONICAL_LEDGER",
       "consumers": [
         "portfolio",
         "OMS",
@@ -1134,19 +1134,18 @@
       }
     },
     {
-      "source_family": "point_in_time_universe",
+      "source_family": "point_in_time_crypto_universe",
       "patterns": [
         "universe_snapshots/*.json.gz",
         "universe/*.json",
-        "universe/*.jsonl*",
-        "structural_relations/*.csv"
+        "universe/*.jsonl*"
       ],
-      "producer": "universe archiver / adaptive universe / structural scanner",
+      "producer": "crypto universe archiver / crypto universe",
       "consumers": [
         "market selection",
-        "historical opportunity universe"
+        "historical crypto opportunity universe"
       ],
-      "schema": "polymarket_v7_point_in_time_universe_v2 and versioned selection/relations schemas",
+      "schema": "polymarket_v7_point_in_time_crypto_universe_v1 and versioned crypto selection schemas",
       "topics": [
         "market selection",
         "market/event/token identity",
@@ -1235,73 +1234,6 @@
       "source_kind": "POINT_IN_TIME_SOURCE",
       "reproducible": false,
       "append_only": false,
-      "retention": "PERMANENT_NO_UNIQUE_SOURCE_DELETION",
-      "compression": "VERIFIED_GZIP_AND_CONTENT_ADDRESSED_OBJECTS",
-      "restart_behavior": "NEW_SESSION_OR_APPEND; ALL_PREVIOUS_REVISIONS_REMAIN",
-      "cutover_behavior": "IMMUTABLE_REVISION_STORE_OUTSIDE_RUN_ROOT",
-      "model_dependence": "EXPLICIT_IDENTITY_STRATA",
-      "identity_fields": {
-        "code_sha": null,
-        "run_id": null,
-        "market_id": null,
-        "event_id": null,
-        "token_id": null,
-        "contract_family": null,
-        "asset": null,
-        "horizon": null,
-        "decision_id": null,
-        "opportunity_id": null,
-        "replay_key": null,
-        "order_id": null,
-        "fill_id": null,
-        "position_id": null,
-        "model_id": null,
-        "model_hash": null,
-        "model_family": null,
-        "feature_schema_version": null,
-        "policy_hash": null,
-        "config_hash": null,
-        "experiment_protocol_id": null,
-        "experiment_manifest_hash": null,
-        "exchange_timestamp": null,
-        "receive_timestamp": null,
-        "decision_timestamp": null,
-        "source_snapshot_id": null
-      },
-      "identity_mapping_semantics": "Candidate source fields, not a claim of historical completeness. Null: unavailable, unparsed or not applicable; source bytes preserved.",
-      "identity_distinctions": {
-        "execution_model": "metadata/opportunity execution model; never replaced by fair model",
-        "settlement_probability_model": "settlement_model or probability_model_id/hash",
-        "portfolio_risk_policy": "policy_hash/config_hash on decision envelope",
-        "research_protocol": "immutable experiment manifest, not code SHA"
-      }
-    },
-    {
-      "source_family": "structural_candidates",
-      "patterns": [
-        "fast_structural/*.csv*"
-      ],
-      "producer": "polymarket_v7_fast_structural_runtime",
-      "consumers": [
-        "structural research",
-        "latency diagnostics"
-      ],
-      "schema": "versioned structural opportunity/latency/error CSV",
-      "topics": [
-        "structural opportunities",
-        "fees",
-        "latency",
-        "market selection"
-      ],
-      "timestamp_semantics": {
-        "exchange": "exchange_ts_ms if provided",
-        "receive": "receive_ts_ms",
-        "decision": "decision_ts_ms or same-decision metadata; UNKNOWN when absent",
-        "publication": "recorded_ts_ms is ledger publication, not decision time"
-      },
-      "source_kind": "CANONICAL_DECISION_SOURCE",
-      "reproducible": false,
-      "append_only": true,
       "retention": "PERMANENT_NO_UNIQUE_SOURCE_DELETION",
       "compression": "VERIFIED_GZIP_AND_CONTENT_ADDRESSED_OBJECTS",
       "restart_behavior": "NEW_SESSION_OR_APPEND; ALL_PREVIOUS_REVISIONS_REMAIN",

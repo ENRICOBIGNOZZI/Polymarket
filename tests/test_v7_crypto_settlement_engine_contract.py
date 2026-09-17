@@ -10,8 +10,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "scripts"))
 
 from v7_crypto_settlement_engine_contract import (  # noqa: E402
-    freeze, validate_config, validate_live_scope, validate_registry_authority,
-    validate_structural_config,
+    freeze, validate_config, validate_live_scope, validate_registry_authority
 )
 from v7_crypto_settlement import require_context, validate_registry as validate_market_registry  # noqa: E402
 
@@ -26,9 +25,6 @@ def config() -> dict:
 def registry() -> dict:
     return json.loads((ROOT / "config/v7_strategy_registry.json").read_text())
 
-
-def structural() -> dict:
-    return json.loads((ROOT / "config/v7_structural_arb_engine.json").read_text())
 
 
 def live_scope() -> dict:
@@ -113,14 +109,13 @@ def maker() -> dict:
 def test_config_and_horizon_separation() -> None:
     value = config()
     validate_config(value)
-    validate_structural_config(structural())
-    validate_registry_authority(value, structural(), registry())
-    validate_live_scope(value, structural(), live_scope())
+    validate_registry_authority(value, registry())
+    validate_live_scope(value, live_scope())
     scopes = {row["model_scope"] for row in value["horizons"]}
     assert len(scopes) == 2
     five = freeze(
         value, code_sha=SHA, asset="BTC", horizon_name="M5",
-        structural_config=structural(), registry=registry(), live_scope=live_scope(),
+        registry=registry(), live_scope=live_scope(),
         market_registry=market_registry(), model_registry=model_registry("BTC", "M5"), latency_profile=latency(),
         maker_evidence=maker(), model_artifact=model("BTC", "M5"),
     )
@@ -132,7 +127,7 @@ def test_config_and_horizon_separation() -> None:
 
     research = freeze(
         value, code_sha=SHA, asset="ETH", horizon_name="M5",
-        structural_config=structural(), registry=registry(), live_scope=live_scope(),
+        registry=registry(), live_scope=live_scope(),
         market_registry=market_registry(), model_registry=model_registry("ETH", "M5"), latency_profile=latency(),
         maker_evidence=maker(), model_artifact=model("ETH", "M5"),
     )
@@ -145,7 +140,7 @@ def test_config_and_horizon_separation() -> None:
 def test_missing_execution_truth_fails_closed_but_preserves_cancel_path() -> None:
     snapshot = freeze(
         config(), code_sha=SHA, asset="BTC", horizon_name="M5",
-        structural_config=structural(), registry=registry(), live_scope=live_scope(),
+        registry=registry(), live_scope=live_scope(),
         market_registry=market_registry(), model_registry=model_registry(),
     )
     assert snapshot["new_risk_authorized"] is False
@@ -158,7 +153,7 @@ def test_missing_execution_truth_fails_closed_but_preserves_cancel_path() -> Non
 def test_maker_and_taker_evidence_gates_are_independent() -> None:
     snapshot = freeze(
         config(), code_sha=SHA, asset="BTC", horizon_name="M15",
-        structural_config=structural(), registry=registry(), live_scope=live_scope(),
+        registry=registry(), live_scope=live_scope(),
         market_registry=market_registry(), model_registry=model_registry("BTC", "M15"), latency_profile=latency(), maker_evidence={},
         model_artifact=model("BTC", "M15"),
     )
@@ -170,7 +165,7 @@ def test_maker_and_taker_evidence_gates_are_independent() -> None:
 def test_unregistered_or_noncanonical_model_cannot_be_injected() -> None:
     snapshot = freeze(
         config(), code_sha=SHA, asset="BTC", horizon_name="M5",
-        structural_config=structural(), registry=registry(), live_scope=live_scope(),
+        registry=registry(), live_scope=live_scope(),
         market_registry=market_registry(), model_registry=model_registry(),
         latency_profile=latency(), maker_evidence=maker(),
         model_artifact=model("BTC", "M5"),
@@ -236,19 +231,6 @@ def test_external_updates_retain_cancel_and_reprice_preemption() -> None:
         raise AssertionError("external-update cancel preemption removed")
 
 
-def test_structural_engine_has_one_atomic_bundle_and_shared_owners() -> None:
-    value = structural()
-    validate_structural_config(value)
-    broken = copy.deepcopy(value)
-    broken["one_capital_reservation_per_bundle"] = False
-    try:
-        validate_structural_config(broken)
-    except ValueError as exc:
-        assert str(exc) == "structural_engine_contract"
-    else:
-        raise AssertionError("duplicate structural reservation surface accepted")
-
-
 if __name__ == "__main__":
     test_config_and_horizon_separation()
     test_missing_execution_truth_fails_closed_but_preserves_cancel_path()
@@ -258,4 +240,3 @@ if __name__ == "__main__":
     test_execution_alpha_contract_is_fail_closed_and_nonretroactive()
     test_execution_alpha_market_selection_must_remain_shadow_and_bounded()
     test_external_updates_retain_cancel_and_reprice_preemption()
-    test_structural_engine_has_one_atomic_bundle_and_shared_owners()

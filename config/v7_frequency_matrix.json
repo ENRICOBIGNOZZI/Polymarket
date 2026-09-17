@@ -1,14 +1,19 @@
 {
-  "schema": "polymarket_v7_live_algorithm_frequency_matrix_v3",
-  "version": 3,
+  "schema": "polymarket_v7_live_algorithm_frequency_matrix_v4",
+  "version": 4,
   "paper_only": true,
   "algorithms": {
     "CRYPTO_SETTLEMENT_ENGINE": {
-      "decision_horizons_seconds": [1, 2, 5, 10],
-      "settlement_horizons_seconds": [300, 900]
-    },
-    "STRUCTURAL_ARB_ENGINE": {
-      "decision_horizons_seconds": [1, 2, 5, 10]
+      "decision_horizons_seconds": [
+        1,
+        2,
+        5,
+        10
+      ],
+      "settlement_horizons_seconds": [
+        300,
+        900
+      ]
     }
   },
   "rules": {

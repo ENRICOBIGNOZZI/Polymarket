@@ -131,7 +131,7 @@ jobs:
           allocation=json.loads((root/'control/allocations/manifest.json').read_text())
           scope=json.loads(Path('config/v7_live_model_scope.json').read_text())
           registry=json.loads(Path('config/v7_strategy_registry.json').read_text())
-          expected={'CRYPTO_SETTLEMENT_ENGINE','STRUCTURAL_ARB_ENGINE'}
+          expected={'CRYPTO_SETTLEMENT_ENGINE'}
           assert runtime.get('version')==7 and runtime.get('model_sha')==sha
           assert runtime.get('paper_only') is True and runtime.get('authenticated_execution') is False and runtime.get('real_order_submission') is False
           assert set(runtime.get('economic_engines') or [])==expected and runtime.get('economic_new_risk_ready') is False

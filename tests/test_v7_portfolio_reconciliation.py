@@ -16,25 +16,25 @@ class PortfolioReconciliationTests(unittest.TestCase):
         return {
             "canonical": {
                 "net_pnl": 3.0,
-                "strategy_net_pnl": {"STRUCTURAL_ARB_ENGINE": 1.0, "CRYPTO_SETTLEMENT_ENGINE": 2.0},
+                "strategy_net_pnl": {"CRYPTO_RESEARCH_TEST_ENGINE": 1.0, "CRYPTO_SETTLEMENT_ENGINE": 2.0},
             },
             "ledger": {"total": {"final_pnl": 3.0}},
             "portfolio": {
                 "equity": 103.0,
                 "engines": {
                     "CRYPTO_SETTLEMENT_ENGINE": {"equity": 51.0},
-                    "STRUCTURAL_ARB_ENGINE": {"equity": 22.0},
+                    "CRYPTO_RESEARCH_TEST_ENGINE": {"equity": 22.0},
                 },
             },
             "allocations": {
                 "account_starting_capital": 100.0,
                 "engine_budgets": {
                     "CRYPTO_SETTLEMENT_ENGINE": 50.0,
-                    "STRUCTURAL_ARB_ENGINE": 20.0,
+                    "CRYPTO_RESEARCH_TEST_ENGINE": 20.0,
                 },
                 "reserve_budget": 30.0,
             },
-            "state_realized_pnl": {"STRUCTURAL_ARB_ENGINE": 1.0, "CRYPTO_SETTLEMENT_ENGINE": 2.0},
+            "state_realized_pnl": {"CRYPTO_RESEARCH_TEST_ENGINE": 1.0, "CRYPTO_SETTLEMENT_ENGINE": 2.0},
         }
 
     def test_all_accounting_surfaces_reconcile(self) -> None:
@@ -44,12 +44,12 @@ class PortfolioReconciliationTests(unittest.TestCase):
 
     def test_strategy_and_portfolio_divergence_fail_closed(self) -> None:
         values = self.inputs()
-        values["state_realized_pnl"]["STRUCTURAL_ARB_ENGINE"] = 9.0
+        values["state_realized_pnl"]["CRYPTO_RESEARCH_TEST_ENGINE"] = 9.0
         values["portfolio"]["equity"] = 999.0
         report = reconcile(**values)
         self.assertFalse(report["reconciled"])
         self.assertIn("portfolio_engine_equity_divergence", report["reason_codes"])
-        self.assertIn("strategy_realized_pnl_divergence:STRUCTURAL_ARB_ENGINE", report["reason_codes"])
+        self.assertIn("strategy_realized_pnl_divergence:CRYPTO_RESEARCH_TEST_ENGINE", report["reason_codes"])
 
     def test_raw_terminal_and_canonical_economic_pnl_cannot_disagree_silently(self) -> None:
         values = self.inputs()

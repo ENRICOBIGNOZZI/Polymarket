@@ -1,7 +1,6 @@
 {
   "architecture": {
     "cleanup_sequence": "audit_then_port_then_test_then_validate_then_retire_obsolete_generations",
-    "hard_arb_and_fast_structural_share_one_engine": true,
     "no_live_expert_averaging": true,
     "professional_market_maker_is_crypto_engine_component": true,
     "retired_generation_rule": "Obsolete operational generations must remain absent after their unique useful capabilities are ported to V7 and the exact replacement is green and healthy in live-PAPER. Git history is the archive.",
@@ -10,19 +9,22 @@
     "single_execution_ledger": true,
     "single_global_portfolio_coordinator": true,
     "single_runtime_owner": true,
-    "target": "one slim canonical V7 PAPER codebase"
+    "target": "one slim canonical V7 PAPER codebase",
+    "crypto_only_runtime": true,
+    "live_crypto_data_and_execution_evidence_preserved": true,
+    "research_off_hot_path": true
   },
   "authority": "latest_explicit_user_instruction",
   "current_priority_order": [
-    "Keep one V7 runtime, two economic engines, one global portfolio coordinator, one broker authority, one canonical execution ledger, one allocator, one risk guard and one monitoring plane.",
+    "Keep one V7 runtime, one CRYPTO_SETTLEMENT_ENGINE, one global portfolio coordinator, one broker authority, one canonical execution ledger, one allocator, one risk guard and one monitoring plane.",
+    "Preserve live crypto market data, external feeds, execution lifecycle, fillability, markouts, queue, latency, settlement, replay and research evidence needed to improve crypto.",
     "CRYPTO_SETTLEMENT_ENGINE compares professional maker, informed taker, cancellation and no-action components on one conservative account-wealth objective.",
-    "STRUCTURAL_ARB_ENGINE owns hard-arb and fast-structural components as one capital reservation and lifecycle.",
-    "All engine proposals pass through one global portfolio coordinator, allocator, risk engine, OMS, inventory and ledger chain.",
-    "All non-live algorithm families are deleted; the live registry must remain exactly two and monitoring must report zero legacy algorithms.",
+    "Delete non-crypto strategies, configs, adapters, runtime workers, monitoring surfaces and tests after crypto-useful shared capabilities are retained.",
+    "Keep training, backtests and retrospective research outside the London hot path; London owns collection, inference, risk, execution, reconciliation and minimal telemetry.",
+    "All proposals pass through one global portfolio coordinator, allocator, risk engine, OMS, inventory and ledger chain.",
     "Keep technical readiness separate from economic readiness; exploitation capital requires mature causal forward evidence and positive conservative post-cost bounds.",
     "Keep exact stage timestamps, persistent transport, exact-head p99/p99.9 guardrails and regional latency evidence without claiming venue latency from synthetic tests.",
-    "Keep every obsolete operational generation and duplicate authority path retired; Git history and the immutable rollback bundle are the archive.",
-    "Continuously run the repository-shape audit and V7-only CI/monitoring/runtime smoke tests."
+    "Continuously run repository-shape, crypto-only CI, monitoring and PAPER runtime smoke tests."
   ],
   "directive_epoch": "2026-09-01T00:00:00Z",
   "economic_objective": {
@@ -47,14 +49,11 @@
     "top_percentile_claim_authorized": false
   },
   "latency_priority_instruction_id": "user-v7-latency-domination-20260828",
-  "operator_instruction_id": "user-v7-unified-economic-system-20260901",
+  "operator_instruction_id": "user-crypto-only-runtime-20260917",
   "paper_v7_authorization": {
     "authenticated_execution": false,
     "fixed_dollar_trade_cap_enabled": false,
     "fractional_kelly_ceiling": 0.25,
-    "hard_arb_fixed_dollar_trade_cap_enabled": false,
-    "hard_arb_max_trade_fraction": 1.0,
-    "hard_arb_max_trade_usd_disabled_cap_value": 300,
     "interpretation": "100% is a hard percentage ceiling, not a target. Finite $300 defense-in-depth guards remain configured even while the fixed-dollar switch is disabled. Kelly, executable depth, authoritative fees, spread/slippage, inventory and unwind risk, adverse markout, capital/latency costs, state integrity and the 15% drawdown kill switch still bind.",
     "market_limit": 1000,
     "max_drawdown": 0.15,
@@ -70,9 +69,9 @@
     "real_order_submission": false,
     "uncertainty_penalty": 0.0
   },
-  "priority_instruction_id": "user-v7-unified-economic-system-20260901",
+  "priority_instruction_id": "user-crypto-only-runtime-20260917",
   "repository": "ENRICOBIGNOZZI/Polymarket",
-  "rule": "V7 supports exactly CRYPTO_SETTLEMENT_ENGINE and STRUCTURAL_ARB_ENGINE. Every algorithm that does not run in the canonical live PAPER runtime is legacy and must remain deleted with its configs, adapters, workflows, monitoring and documentation. Components are not independent algorithms. PAPER-only safety remains mandatory; authenticated_execution=false and real_order_submission=false.",
-  "schema_version": 1,
-  "scope": "two_live_algorithms_and_paper_runtime"
+  "rule": "V7 supports exactly CRYPTO_SETTLEMENT_ENGINE. Crypto-useful execution, data, evidence, replay, settlement, maker and monitoring capabilities remain; non-crypto algorithm families and their runtime baggage are removed. PAPER-only safety remains mandatory; authenticated_execution=false and real_order_submission=false.",
+  "schema_version": 2,
+  "scope": "crypto_only_live_algorithm_and_paper_runtime"
 }

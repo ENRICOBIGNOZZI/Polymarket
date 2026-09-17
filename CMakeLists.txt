@@ -91,10 +91,6 @@ add_executable(polymarket_v7_latency_probe src/v7_latency_probe.cpp)
 target_link_libraries(polymarket_v7_latency_probe PRIVATE pm_core)
 target_compile_options(polymarket_v7_latency_probe PRIVATE -Wall -Wextra -Wpedantic)
 
-add_executable(polymarket_v7_fast_structural_runtime src/v7_fast_structural_runtime.cpp)
-target_link_libraries(polymarket_v7_fast_structural_runtime PRIVATE pm_fast_arb pm_core)
-target_compile_options(polymarket_v7_fast_structural_runtime PRIVATE -Wall -Wextra -Wpedantic)
-
 add_executable(polymarket_v7_maker_markout_observer src/v7_maker_markout_observer.cpp)
 target_link_libraries(polymarket_v7_maker_markout_observer PRIVATE pm_v7_common pm_fast_arb pm_core)
 target_compile_options(polymarket_v7_maker_markout_observer PRIVATE -Wall -Wextra -Wpedantic)

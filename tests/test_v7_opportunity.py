@@ -11,19 +11,12 @@ sys.path.insert(0, str(ROOT / "scripts"))
 from v7_opportunity import OpportunityEnvelope, OpportunityError, coordinate  # noqa: E402
 
 
-def envelope(*, engine="CRYPTO_SETTLEMENT_ENGINE", action="TAKE", component="crypto_informed_taker", ev=1.0, key="a", asset="BTC", horizon="M5", authority="SHADOW", research_only=False) -> dict:
-    structural = engine == "STRUCTURAL_ARB_ENGINE"
+def envelope(*, action="TAKE", component="crypto_informed_taker", ev=1.0, key="a", asset="BTC", horizon="M5", authority="SHADOW", research_only=False) -> dict:
     legs = [{
         "leg_id": "leg-1", "market_id": "market-1", "contract_id": "contract-1",
         "token_id": "token-1", "side": "BUY", "target_quantity": 10.0,
         "limit_price": 0.50, "fee_authority": "AUTHORITATIVE",
     }]
-    if structural:
-        legs.append({
-            "leg_id": "leg-2", "market_id": "market-2", "contract_id": "contract-2",
-            "token_id": "token-2", "side": "BUY", "target_quantity": 10.0,
-            "limit_price": 0.45, "fee_authority": "AUTHORITATIVE",
-        })
     return {
         "schema": "polymarket_v7_opportunity_envelope_v1",
         "version": 1,
@@ -32,20 +25,20 @@ def envelope(*, engine="CRYPTO_SETTLEMENT_ENGINE", action="TAKE", component="cry
         "policy_hash": "c" * 64,
         "run_id": "run-1",
         "source_snapshot_identity": "cut-7",
-        "engine_id": engine,
+        "engine_id": "CRYPTO_SETTLEMENT_ENGINE",
         "component_provenance": [component],
         "market_id": "market-1",
         "event_id": "event-1",
         "contract_id": "contract-1",
         "mapping_identity": "mapping-1",
-        "crypto_context": ({
+        "crypto_context": {
             "asset": asset, "horizon": horizon,
             "contract_family": f"{asset}_USD_UPDOWN_{horizon}",
             "settlement_semantic_hash": "d" * 64,
             "authority": authority, "research_only": research_only,
-        } if not structural else None),
+        },
         "action": action,
-        "side": "BUY" if action not in {"ARB", "CANCEL", "WITHDRAW", "NOTHING"} else ("MULTI" if action == "ARB" else "NONE"),
+        "side": "BUY" if action not in {"CANCEL", "WITHDRAW", "NOTHING"} else "NONE",
         "decision_receive_timestamp_ns": 100,
         "source_event_timestamps_ns": [80, 90],
         "fair_value": {"lower": 0.50, "point": 0.55, "upper": 0.60},
@@ -67,11 +60,11 @@ def envelope(*, engine="CRYPTO_SETTLEMENT_ENGINE", action="TAKE", component="cry
         "capacity": {"executable_size": 10.0, "depth_provenance": "full-l2-cut-7"},
         "execution_plan": {
             "atomic_unit_id": f"atomic-{key}",
-            "execution_style": "SEQUENTIAL_ATOMIC_INTENT" if structural else "SINGLE_LEG",
+            "execution_style": "SINGLE_LEG",
             "legs": legs,
-            "partial_fill_plan": "COMPLETE_OR_UNWIND" if structural else "CANCEL_REMAINDER",
+            "partial_fill_plan": "CANCEL_REMAINDER",
             "timeout_ms": 100,
-            "unwind_plan": "FULL_DEPTH_BOUNDED_UNWIND" if structural else "NONE",
+            "unwind_plan": "NONE",
         },
         "inventory_delta": 10.0,
         "portfolio_exposure_delta": 5.0,
@@ -130,14 +123,13 @@ def test_risk_cancel_preempts_positive_alpha() -> None:
     assert decision["new_risk_authorized"] is False
 
 
-def test_coordinator_compares_engines_on_one_objective() -> None:
-    structural = envelope(
-        engine="STRUCTURAL_ARB_ENGINE", action="ARB", component="hard_arb", ev=2.0, key="structural",
-    )
-    decision = coordinate([envelope(ev=1.0, key="btc"), structural], now_ns=150, new_risk_authorized=True)
-    assert decision["action"] == "ARB"
-    assert decision["engine_id"] == "STRUCTURAL_ARB_ENGINE"
-    assert decision["selected_replay_key"] == "structural"
+def test_coordinator_compares_crypto_actions_on_one_objective() -> None:
+    take = envelope(action="TAKE", component="crypto_informed_taker", ev=1.0, key="take")
+    make = envelope(action="MAKE", component="professional_maker", ev=2.0, key="make")
+    decision = coordinate([take, make], now_ns=150, new_risk_authorized=True)
+    assert decision["action"] == "MAKE"
+    assert decision["engine_id"] == "CRYPTO_SETTLEMENT_ENGINE"
+    assert decision["selected_replay_key"] == "make"
 
 
 def test_coordinator_defaults_to_nothing_without_new_risk_authority() -> None:
@@ -154,23 +146,6 @@ def test_invalid_or_duplicate_envelope_fails_the_whole_cut_closed() -> None:
     assert decision["new_risk_authorized"] is False
     decision = coordinate([envelope(), envelope()], now_ns=150, new_risk_authorized=True)
     assert decision["action"] == "NOTHING"
-
-
-def test_structural_arbitrage_is_one_atomic_multileg_intent() -> None:
-    value = envelope(
-        engine="STRUCTURAL_ARB_ENGINE", action="ARB", component="fast_structural",
-        key="atomic-structural",
-    )
-    parsed = OpportunityEnvelope.parse(value)
-    assert len(parsed.raw["execution_plan"]["legs"]) == 2
-    broken = copy.deepcopy(value)
-    broken["execution_plan"]["legs"] = broken["execution_plan"]["legs"][:1]
-    try:
-        OpportunityEnvelope.parse(broken)
-    except OpportunityError as exc:
-        assert str(exc) == "structural_atomic_execution_plan"
-    else:
-        raise AssertionError("single-leg structural arbitrage accepted")
 
 
 def test_crypto_context_is_mandatory_and_zero_authority_cannot_add_risk() -> None:
@@ -230,10 +205,9 @@ if __name__ == "__main__":
     test_unauthoritative_rebate_fails_closed()
     test_missing_latency_allows_cancel_but_not_new_risk()
     test_risk_cancel_preempts_positive_alpha()
-    test_coordinator_compares_engines_on_one_objective()
+    test_coordinator_compares_crypto_actions_on_one_objective()
     test_coordinator_defaults_to_nothing_without_new_risk_authority()
     test_invalid_or_duplicate_envelope_fails_the_whole_cut_closed()
-    test_structural_arbitrage_is_one_atomic_multileg_intent()
     test_crypto_context_is_mandatory_and_zero_authority_cannot_add_risk()
     test_all_crypto_contexts_compete_in_one_global_cut()
     test_frozen_forward_take_is_paper_authorized_without_absolute_fair_ev()

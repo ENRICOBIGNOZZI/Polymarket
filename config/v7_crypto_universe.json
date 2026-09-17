@@ -1,18 +1,21 @@
 {
-  "schema": "polymarket_v7_adaptive_universe_config_v1",
-  "version": 7,
+  "schema": "polymarket_v7_crypto_universe_config_v1",
+  "version": 1,
   "paper_only": true,
   "authenticated_execution": false,
   "real_order_submission": false,
   "source": {
     "gamma_url": "https://gamma-api.polymarket.com",
-    "page_size": 100,
-    "pagination_loop_guard_pages": 1000,
-    "request_timeout_seconds": 20,
-    "request_attempts_per_page": 4,
-    "refresh_seconds": 120,
+    "request_timeout_seconds": 4,
+    "request_attempts_per_market": 3,
+    "refresh_seconds": 30,
     "retry_initial_seconds": 1,
-    "retry_max_seconds": 30
+    "retry_max_seconds": 15,
+    "window_offsets": [
+      -1,
+      0,
+      1
+    ]
   },
   "eligibility": {
     "active_required": true,
@@ -37,15 +40,11 @@
       "estimated_scan_millis_per_market": 4.0,
       "memory_budget_bytes": 536870912,
       "estimated_bytes_per_market": 262144
-    },
-    "structural": {
-      "scan_time_budget_millis": 5000,
-      "estimated_event_scan_millis": 60
     }
   },
   "tiering": {
     "hot_score_weights": {
-      "log_liquidity": 0.50,
+      "log_liquidity": 0.5,
       "log_volume_24h": 0.35,
       "recency": 0.15
     },
@@ -56,6 +55,8 @@
     }
   },
   "retention": {
-    "append_only_change_tape": true
-  }
+    "append_only_change_tape": true,
+    "scope": "CONFIGURED_CRYPTO_CONTEXTS_ONLY"
+  },
+  "market_registry": "config/v7_crypto_settlement_markets.json"
 }

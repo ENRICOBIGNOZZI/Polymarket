@@ -16,10 +16,10 @@ def manifest() -> dict:
     return json.loads((ROOT / "config/v7_process_manifest.json").read_text(encoding="utf-8"))
 
 
-def test_manifest_matches_all_25_launcher_children_and_two_runtime_owners() -> None:
+def test_manifest_matches_crypto_only_runtime_inventory() -> None:
     report = resolve(ROOT, manifest())
-    assert report["process_count"] == report["expected_process_count"] == 29
-    assert report["launcher_child_count"] == report["expected_launcher_child_count"] == 27
+    assert report["process_count"] == report["expected_process_count"] == 27
+    assert report["launcher_child_count"] == report["expected_launcher_child_count"] == 25
     assert report["launcher_manifest_parity"] is True
     assert report["feed_zero_authority"] is True
 
@@ -49,6 +49,6 @@ def test_launcher_child_cannot_escape_manifest_inventory() -> None:
 
 
 if __name__ == "__main__":
-    test_manifest_matches_all_25_launcher_children_and_two_runtime_owners()
+    test_manifest_matches_crypto_only_runtime_inventory()
     test_feed_process_cannot_gain_authority()
     test_launcher_child_cannot_escape_manifest_inventory()
