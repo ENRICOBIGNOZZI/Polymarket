@@ -3,17 +3,18 @@
 #include "pm/v7_binance_l2.hpp"
 
 #include <cstdint>
-#include <map>
+#include <memory>
+#include <span>
 #include <vector>
 
 namespace pm::v7::external_fair {
 
-// Coinbase Exchange level2 sends a complete WebSocket snapshot followed by
-// absolute-size updates. Unlike Binance diff-depth, its level2 feed guarantees
-// delivery and does not expose a per-update sequence in this protocol. This
-// book therefore becomes valid only after a full snapshot and fails closed on
-// malformed, crossed, or out-of-session updates.
+// Coinbase Exchange level2 sends a full snapshot followed by absolute-size
+// updates. The hot book owns fixed-capacity storage allocated once at cold
+// start; snapshot/update application itself performs no heap allocation.
 using CoinbaseDepthLevel = BinanceDepthLevel;
+
+inline constexpr std::size_t kCoinbaseL2MaxLevelsPerSide = 65'536;
 
 struct CoinbaseDepthSnapshot {
     std::int64_t local_receive_monotonic_ns = 0;
@@ -66,28 +67,29 @@ struct CoinbaseL2Metrics {
 
 class CoinbaseL2Book final {
 public:
+    CoinbaseL2Book();
+    ~CoinbaseL2Book();
+    CoinbaseL2Book(const CoinbaseL2Book&) = delete;
+    CoinbaseL2Book& operator=(const CoinbaseL2Book&) = delete;
+
     [[nodiscard]] bool install_snapshot(const CoinbaseDepthSnapshot& snapshot);
+    [[nodiscard]] bool install_snapshot(std::int64_t receive_ns,
+                                        std::span<const CoinbaseDepthLevel> bids,
+                                        std::span<const CoinbaseDepthLevel> asks) noexcept;
     [[nodiscard]] bool apply_update(const CoinbaseDepthUpdate& update);
+    [[nodiscard]] bool apply_update(std::int64_t receive_ns,
+                                    std::span<const CoinbaseDepthChange> changes) noexcept;
     void begin_recovery() noexcept;
 
     [[nodiscard]] CoinbaseL2State state() const noexcept { return state_; }
     [[nodiscard]] CoinbaseL2Metrics metrics() const noexcept;
 
 private:
-    using Bids = std::map<double, double, std::greater<double>>;
-    using Asks = std::map<double, double, std::less<double>>;
-
-    [[nodiscard]] static bool valid_levels(const std::vector<CoinbaseDepthLevel>& levels) noexcept;
-    [[nodiscard]] static bool valid_changes(const std::vector<CoinbaseDepthChange>& changes) noexcept;
-    static void replace_levels(Bids& target, const std::vector<CoinbaseDepthLevel>& levels);
-    static void replace_levels(Asks& target, const std::vector<CoinbaseDepthLevel>& levels);
-    static void apply_changes(Bids& target, const std::vector<CoinbaseDepthChange>& changes);
-    static void apply_changes(Asks& target, const std::vector<CoinbaseDepthChange>& changes);
+    struct Storage;
     [[nodiscard]] bool uncrossed() const noexcept;
     void gap() noexcept;
 
-    Bids bids_{};
-    Asks asks_{};
+    std::unique_ptr<Storage> storage_;
     std::uint64_t update_count_ = 0;
     std::int64_t latest_receive_monotonic_ns_ = 0;
     CoinbaseL2State state_ = CoinbaseL2State::AwaitingSnapshot;

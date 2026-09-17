@@ -134,6 +134,10 @@ add_executable(polymarket_v7_coinbase_level2_race_probe src/v7_coinbase_level2_r
 target_link_libraries(polymarket_v7_coinbase_level2_race_probe PRIVATE pm_v7_external)
 target_compile_options(polymarket_v7_coinbase_level2_race_probe PRIVATE -Wall -Wextra -Wpedantic)
 
+add_executable(polymarket_v7_coinbase_hotpath_bench src/v7_coinbase_hotpath_bench.cpp)
+target_link_libraries(polymarket_v7_coinbase_hotpath_bench PRIVATE pm_v7_external)
+target_compile_options(polymarket_v7_coinbase_hotpath_bench PRIVATE -Wall -Wextra -Wpedantic)
+
 add_executable(polymarket_v7_binance_sbe_race_probe src/v7_binance_sbe_race_probe.cpp)
 target_link_libraries(polymarket_v7_binance_sbe_race_probe PRIVATE pm_v7_external)
 target_compile_options(polymarket_v7_binance_sbe_race_probe PRIVATE -Wall -Wextra -Wpedantic)
