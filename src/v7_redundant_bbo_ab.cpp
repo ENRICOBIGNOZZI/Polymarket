@@ -81,6 +81,7 @@ int main(int argc, char** argv) {
     Feed candidate(std::string(endpoint), bindings, Mode::Quorum2Of3, candidate_busy_poll_us);
     baseline.start();
     candidate.start();
+    std::cerr << "V7_BBO_AB_PHASE=warmup_start\n";
 
     const auto drain_until = [&](std::chrono::steady_clock::time_point deadline) {
         Decision ignored{};
@@ -91,6 +92,7 @@ int main(int argc, char** argv) {
         }
     };
     drain_until(std::chrono::steady_clock::now() + std::chrono::seconds(warmup_seconds));
+    std::cerr << "V7_BBO_AB_PHASE=capture_start\n";
 
     std::map<Key, std::int64_t> base_pending;
     std::map<Key, std::int64_t> candidate_pending;
@@ -134,8 +136,10 @@ int main(int argc, char** argv) {
         if (candidate.try_next_actionable(d)) { capture(true, d); worked = true; }
         if (!worked) std::this_thread::yield();
     }
+    std::cerr << "V7_BBO_AB_PHASE=capture_end\n";
     baseline.stop();
     candidate.stop();
+    std::cerr << "V7_BBO_AB_PHASE=stopped\n";
 
     const auto b = baseline.snapshot();
     const auto c = candidate.snapshot();

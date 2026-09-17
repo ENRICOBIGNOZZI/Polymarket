@@ -14,6 +14,7 @@
 namespace pm::v7::redundant_bbo {
 namespace {
 inline constexpr std::size_t kMaxUpdatesPerFrame = 256;
+inline constexpr std::size_t kMaxDrainPerTry = 64;
 inline constexpr std::string_view kDefaultEndpoint =
     "wss://ws-subscriptions-clob.polymarket.com/ws/market";
 }
@@ -142,13 +143,17 @@ void Feed::stop() noexcept {
 
 bool Feed::try_next_actionable(Decision& decision) noexcept {
     Envelope envelope;
-    while (impl_->next_envelope(envelope)) {
+    for (std::size_t drained = 0; drained < kMaxDrainPerTry; ++drained) {
+        if (!impl_->next_envelope(envelope)) return false;
         auto candidate = impl_->gate.observe(envelope);
         if (candidate.outcome == Outcome::Actionable) {
             decision = candidate;
             return true;
         }
     }
+    // Never let a continuously replenished public feed monopolize the single
+    // decision owner. The caller can immediately call again; queued lineage is
+    // preserved because no extra envelope is consumed here.
     return false;
 }
 
