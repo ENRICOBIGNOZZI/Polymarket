@@ -3,9 +3,13 @@
 #include <array>
 #include <charconv>
 #include <cstring>
+#include <limits>
 
 namespace pm::v7::clob_http_frame {
 namespace {
+constexpr std::string_view kTimestampPrefix = "\r\nPOLY_TIMESTAMP: ";
+constexpr std::string_view kConnectionTail = "\r\nConnection: keep-alive\r\n\r\n";
+
 class Writer final {
 public:
     explicit Writer(std::span<char> out) noexcept : out_(out) {}
@@ -30,8 +34,6 @@ private:
 bool header_value(std::string_view value) noexcept {
     if (value.empty()) return false;
     for (const unsigned char c : value) {
-        // Reject all controls including CR/LF. Visible ASCII and spaces are
-        // sufficient for current CLOB addresses/keys/passphrases/signatures.
         if (c < 0x20U || c > 0x7eU) return false;
     }
     return true;
@@ -40,6 +42,21 @@ bool header_value(std::string_view value) noexcept {
 bool decimal_value(std::string_view value) noexcept {
     if (value.empty()) return false;
     for (const unsigned char c : value) if (c < '0' || c > '9') return false;
+    return true;
+}
+
+std::size_t decimal_digits(std::size_t value) noexcept {
+    std::size_t digits = 1;
+    while (value >= 10) {
+        value /= 10;
+        ++digits;
+    }
+    return digits;
+}
+
+bool add_size(std::size_t& total, std::size_t value) noexcept {
+    if (value > std::numeric_limits<std::size_t>::max() - total) return false;
+    total += value;
     return true;
 }
 }
@@ -93,22 +110,50 @@ PreparedPostOrderHttp1::PreparedPostOrderHttp1(std::string_view address,
     valid_ = after_timestamp_size_ != 0;
 }
 
-std::size_t PreparedPostOrderHttp1::serialize(std::string_view signature,
-                                              std::string_view timestamp,
-                                              std::string_view exact_body,
-                                              std::span<char> output) const noexcept {
-    if (!valid_ || exact_body.empty() || !header_value(signature) || !decimal_value(timestamp)) return 0;
+std::size_t PreparedPostOrderHttp1::required_header_size(
+    std::size_t signature_size,
+    std::size_t timestamp_size,
+    std::size_t body_size) const noexcept {
+    if (!valid_ || signature_size == 0 || timestamp_size == 0 || body_size == 0) return 0;
+    std::size_t total = prefix_size_;
+    return add_size(total, signature_size)
+        && add_size(total, kTimestampPrefix.size())
+        && add_size(total, timestamp_size)
+        && add_size(total, after_timestamp_size_)
+        && add_size(total, decimal_digits(body_size))
+        && add_size(total, kConnectionTail.size()) ? total : 0;
+}
 
-    Writer w(output);
+std::size_t PreparedPostOrderHttp1::serialize_headers(
+    std::string_view signature,
+    std::string_view timestamp,
+    std::size_t body_size,
+    std::span<char> output) const noexcept {
+    if (!valid_ || body_size == 0 || !header_value(signature) || !decimal_value(timestamp)) return 0;
+    const auto required = required_header_size(signature.size(), timestamp.size(), body_size);
+    if (required == 0 || output.size() < required) return 0;
+
+    Writer w(output.first(required));
     w.append(std::string_view(prefix_.data(), prefix_size_));
     w.append(signature);
-    w.append("\r\nPOLY_TIMESTAMP: ");
+    w.append(kTimestampPrefix);
     w.append(timestamp);
     w.append(std::string_view(after_timestamp_.data(), after_timestamp_size_));
-    w.decimal(exact_body.size());
-    w.append("\r\nConnection: keep-alive\r\n\r\n");
-    w.append(exact_body);
-    return w.size();
+    w.decimal(body_size);
+    w.append(kConnectionTail);
+    return w.size() == required ? required : 0;
+}
+
+std::size_t PreparedPostOrderHttp1::serialize(
+    std::string_view signature,
+    std::string_view timestamp,
+    std::string_view exact_body,
+    std::span<char> output) const noexcept {
+    if (exact_body.empty()) return 0;
+    const auto header_size = serialize_headers(signature, timestamp, exact_body.size(), output);
+    if (header_size == 0 || exact_body.size() > output.size() - header_size) return 0;
+    std::memcpy(output.data() + header_size, exact_body.data(), exact_body.size());
+    return header_size + exact_body.size();
 }
 
 } // namespace pm::v7::clob_http_frame
