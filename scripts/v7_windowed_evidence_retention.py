@@ -229,7 +229,18 @@ def _retire_unindexed_windowed_path(path: Path, *, store: Path, family: str, raw
 
 def _unindexed_pm_book_segments(runs: Path, *, indexed_paths: set[str], cutoff_ns: int) -> list[Path]:
     candidates=[]
-    roots=(runs/"paper_v7_live/micro_maker/book_observations",runs/"paper_v7_live/research/repricing_book/book_observations")
+    roots=[
+        runs/"paper_v7_live/micro_maker/book_observations",
+        runs/"paper_v7_live/research/repricing_book/book_observations",
+    ]
+    archive_root=runs/"paper_v7_archives"
+    if archive_root.is_dir() and not archive_root.is_symlink():
+        for archive in archive_root.glob("cutover-*"):
+            if not archive.is_dir() or archive.is_symlink(): continue
+            roots.extend((
+                archive/"micro_maker/book_observations",
+                archive/"research/repricing_book/book_observations",
+            ))
     for root in roots:
         if not root.is_dir() or root.is_symlink(): continue
         for path in root.glob("*.jsonl*"):
