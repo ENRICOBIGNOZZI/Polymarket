@@ -277,6 +277,41 @@ class V7RuntimeRetentionTest(unittest.TestCase):
         source=(ROOT/'ops/launchd/com.polymarket.v7.retention.plist.in').read_text()
         self.assertIn('<key>StartInterval</key><integer>300</integer>',source)
 
+    def test_disk_pressure_marker_uses_hysteresis(self) -> None:
+        from collections import namedtuple
+        module=retention_module
+        Usage=namedtuple("Usage","total used free")
+        config=json.loads((ROOT/'config/v7_data_retention.json').read_text())
+        policy=config['disk']
+        with tempfile.TemporaryDirectory() as directory:
+            run=Path(directory)/'runs/paper_v7_live'; (run/'control').mkdir(parents=True)
+            low=20*1024**3; middle=40*1024**3; high=60*1024**3; total=500*1024**3
+            with mock.patch.object(module.shutil,'disk_usage',return_value=Usage(total,total-low,low)):
+                value=module.update_disk_pressure_marker(run,policy,module.disk_state(run,policy),now=1,dry_run=False)
+                self.assertTrue(value['active']); self.assertTrue((run/'control/DISK_PRESSURE').exists())
+            with mock.patch.object(module.shutil,'disk_usage',return_value=Usage(total,total-middle,middle)):
+                value=module.update_disk_pressure_marker(run,policy,module.disk_state(run,policy),now=2,dry_run=False)
+                self.assertTrue(value['active']); self.assertTrue((run/'control/DISK_PRESSURE').exists())
+            with mock.patch.object(module.shutil,'disk_usage',return_value=Usage(total,total-high,high)):
+                value=module.update_disk_pressure_marker(run,policy,module.disk_state(run,policy),now=3,dry_run=False)
+                self.assertFalse(value['active']); self.assertFalse((run/'control/DISK_PRESSURE').exists())
+
+    def test_preflight_disk_marker_survives_cleanup_failure(self) -> None:
+        from collections import namedtuple
+        import v7_windowed_evidence_retention
+        module=retention_module
+        Usage=namedtuple("Usage","total used free")
+        config=json.loads((ROOT/'config/v7_data_retention.json').read_text())
+        with tempfile.TemporaryDirectory() as directory:
+            run=Path(directory)/'runs/paper_v7_live'; (run/'control').mkdir(parents=True)
+            free=20*1024**3; total=500*1024**3
+            with mock.patch.object(module.shutil,'disk_usage',return_value=Usage(total,total-free,free)),                  mock.patch.object(v7_windowed_evidence_retention,'run',side_effect=RuntimeError('forced cleanup failure')):
+                with self.assertRaisesRegex(RuntimeError,'forced cleanup failure'):
+                    module.run_retention(run,config,SHA,dry_run=False,durable_archive_confirmed=False,now=1000)
+            marker=json.loads((run/'control/DISK_PRESSURE').read_text())
+            self.assertTrue(marker['active'])
+            self.assertEqual(marker['reason'],'DISK_HEADROOM_BELOW_SAFE_THRESHOLD')
+
 
 if __name__ == "__main__":
     unittest.main()

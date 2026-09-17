@@ -551,6 +551,30 @@ def compress_closed_cutover_tapes(archive_root: Path, *, now: int, dry_run: bool
     return result
 
 
+def update_disk_pressure_marker(run_root: Path, policy: dict[str, Any], disk: dict[str, Any], *, now: int, dry_run: bool) -> dict[str, Any]:
+    enter=int(policy.get("emergency_cleanup_free_bytes") or 0)
+    clear=int(policy.get("disk_pressure_clear_free_bytes") or policy.get("reserve_create_min_free_bytes") or enter)
+    if enter <= 0 or clear < enter:
+        raise ValueError("invalid disk pressure hysteresis")
+    marker=run_root/"control"/"DISK_PRESSURE"
+    active=marker.exists()
+    free=int(disk.get("free_bytes") or 0)
+    if active:
+        desired=free < clear
+    else:
+        desired=free <= enter
+    value={"schema":"polymarket_v7_disk_pressure_v1","timestamp":now,"paper_only":True,
+           "authenticated_execution":False,"real_order_submission":False,"new_risk_authorized":False,
+           "free_bytes":free,"enter_free_bytes":enter,"clear_free_bytes":clear,"active":desired,
+           "reason":"DISK_HEADROOM_BELOW_SAFE_THRESHOLD" if desired else "HEADROOM_RESTORED"}
+    if not dry_run:
+        if desired:
+            _atomic_json(marker,value)
+        elif marker.exists():
+            marker.unlink()
+    return value
+
+
 def run_retention(
     run_root: Path, config: dict[str, Any], expected_sha: str, *,
     dry_run: bool, durable_archive_confirmed: bool, now: int | None = None,
@@ -564,6 +588,14 @@ def run_retention(
     emergency_trigger=int(disk_policy.get("emergency_cleanup_free_bytes") or 0)
     emergency=live_scope and (preflight["free_bytes"]<=emergency_trigger if emergency_trigger else preflight["state"]=="critical")
     reserve={"state":"DRY_RUN"} if dry_run else (manage_emergency_reserve(run_root,disk_policy,allow_create=False) if live_scope else {"state":"NOT_LIVE_SCOPE"})
+    # Publish the new-risk circuit breaker before any potentially long cleanup.
+    # Releasing the preallocated reserve first guarantees this small control write
+    # can still succeed during an actual ENOSPC event.
+    pre_cleanup_disk=disk_state(run_root,disk_policy)
+    disk_pressure_preflight=(
+        update_disk_pressure_marker(run_root,disk_policy,pre_cleanup_disk,now=now,dry_run=dry_run)
+        if live_scope else {"active":False,"reason":"NOT_LIVE_SCOPE"}
+    )
 
     window_policy=config.get("rolling_window",{}); windowed={"state":"DISABLED"}
     if window_policy.get("enabled") and live_scope:
@@ -603,8 +635,10 @@ def run_retention(
             maximum_seconds=float(aggregate_policy["maximum_seconds_per_pass"]),dry_run=dry_run)
     reserve_final={"state":"DRY_RUN"} if dry_run else (manage_emergency_reserve(run_root,disk_policy,allow_create=True) if live_scope else {"state":"NOT_LIVE_SCOPE"})
     disk=disk_state(run_root,disk_policy)
-    result={"schema":"polymarket_v7_retention_status_v2","timestamp":now,"paper_only":True,"authenticated_execution":False,
-      "expected_sha":expected_sha,"preflight_disk":preflight,"disk":disk,"emergency_cleanup_mode":emergency,
+    disk_pressure=update_disk_pressure_marker(run_root,disk_policy,disk,now=now,dry_run=dry_run) if live_scope else {"active":False,"reason":"NOT_LIVE_SCOPE"}
+    result={"schema":"polymarket_v7_retention_status_v1","version":2,"timestamp":now,"paper_only":True,"authenticated_execution":False,
+      "expected_sha":expected_sha,"preflight_disk":preflight,"pre_cleanup_disk":pre_cleanup_disk,"disk":disk,
+      "disk_pressure_preflight":disk_pressure_preflight,"disk_pressure":disk_pressure,"emergency_cleanup_mode":emergency,
       "emergency_reserve_preflight":reserve,"emergency_reserve_final":reserve_final,"windowed_retention":windowed,
       "aggregate_retention":aggregates,"ledger_checkpoint":checkpoint,"rotated_append_reopen_streams":rotated,
       "expired_rotated_segments":expired,"pruned_ledger_checkpoints":pruned,"cutover_archive_compaction":cutover_compaction,

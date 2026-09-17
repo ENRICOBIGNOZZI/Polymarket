@@ -25,6 +25,7 @@ from pathlib import Path
 from typing import Any
 
 from v7_crypto_settlement import load_registry as load_crypto_registry, require_context
+from v7_disk_pressure import disk_pressure_status
 from v7_opportunity import OpportunityEnvelope, OpportunityError
 
 
@@ -306,6 +307,9 @@ def build_maker_opportunities(
     registry = load_crypto_registry(repo / "config" / "v7_crypto_settlement_markets.json")
 
     reasons: list[str] = []
+    disk = disk_pressure_status(root)
+    if disk["active"]:
+        reasons.append("DISK_PRESSURE")
     if any((root / "control" / name).exists() for name in ("CUTOVER_DRAIN", "KILL", "MAKER_FREEZE")):
         reasons.append("CANONICAL_DRAIN_OR_KILL")
     account_status = _load(root / "external_fair" / "paper_router_status.json")

@@ -17,6 +17,7 @@ from pathlib import Path
 from typing import Any
 
 from v7_opportunity import OpportunityEnvelope, OpportunityError, coordinate, fail_closed_decision
+from v7_disk_pressure import disk_pressure_status
 from v7_crypto_settlement import aggregate_correlated_crypto_risk
 from v7_crypto_execution_alpha import (
     ExecutionAlphaError,
@@ -416,10 +417,14 @@ def process_cut(run_root: Path, *, now_ns: int | None = None) -> dict[str, Any]:
                 "error": f"{type(exc).__name__}:{exc}",
             }
 
-    drain_active = any((root / "control" / name).exists() for name in ("CUTOVER_DRAIN", "KILL", "MAKER_FREEZE"))
+    disk_pressure = disk_pressure_status(root)
+    disk_pressure_active = disk_pressure["active"]
+    drain_active = any((root / "control" / name).exists() for name in ("CUTOVER_DRAIN", "KILL", "MAKER_FREEZE")) or disk_pressure_active
+    risk_candidates_before_drain = [row for row in selected_envelopes if row.get("action") not in {"CANCEL", "WITHDRAW", "NOTHING"}]
     if drain_active:
         selected_envelopes = [row for row in selected_envelopes if row.get("action") in {"CANCEL", "WITHDRAW", "NOTHING"}]
         execution_alpha_diagnostics["canonical_drain_new_risk_blocked"] = True
+        execution_alpha_diagnostics["disk_pressure"] = disk_pressure
 
     if adapter_errors:
         decision = fail_closed_decision(now_ns=current_ns, reasons=adapter_errors)
@@ -430,6 +435,8 @@ def process_cut(run_root: Path, *, now_ns: int | None = None) -> dict[str, Any]:
             new_risk_authorized=False,
             paper_exploration_authorized=True,
         )
+    elif disk_pressure_active and risk_candidates_before_drain:
+        decision = fail_closed_decision(now_ns=current_ns, reasons=["DISK_PRESSURE_NEW_RISK_BLOCKED"])
     else:
         decision = fail_closed_decision(now_ns=current_ns, reasons=["NO_LIVE_OPPORTUNITIES"])
 
@@ -548,10 +555,14 @@ def process_fast_forward_take(
         raw = value
     except (OSError, json.JSONDecodeError, OpportunityError, TypeError, ValueError) as exc:
         error = f"FAST_FORWARD_REJECTED:{type(exc).__name__}:{exc}"
+    disk_pressure = disk_pressure_status(root)
+    disk_pressure_active = disk_pressure["active"]
     drain_active = any((root / "control" / name).exists()
-                       for name in ("CUTOVER_DRAIN", "KILL", "MAKER_FREEZE"))
+                       for name in ("CUTOVER_DRAIN", "KILL", "MAKER_FREEZE")) or disk_pressure_active
     if error:
         decision = fail_closed_decision(now_ns=current_ns, reasons=[error])
+    elif disk_pressure_active:
+        decision = fail_closed_decision(now_ns=current_ns, reasons=["DISK_PRESSURE_NEW_RISK_BLOCKED"])
     elif drain_active:
         decision = fail_closed_decision(now_ns=current_ns, reasons=["CANONICAL_DRAIN_NEW_RISK_BLOCKED"])
     elif risk_preempt:

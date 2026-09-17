@@ -150,6 +150,18 @@ def test_forward_runtime_fill_and_settlement_are_canonical_paper_events():
         assert canonical[-1].metadata['coordinator_receipt']['selected_replay_key']
         assert r.state['settled']==1 and r.state['wins']==1
 
+def test_forward_runtime_disk_pressure_blocks_before_book_or_receipt() -> None:
+    with tempfile.TemporaryDirectory() as d:
+        root=Path(d); r=_runtime_case(root)
+        (root/'control/DISK_PRESSURE').write_text('{}')
+        r.clob.request_books.reset_mock(); r.wait_receipt.reset_mock()
+        r.candidate_step()
+        assert r.clob.request_books.call_count==0 and r.wait_receipt.call_count==0
+        assert r.state['entries']==0
+        assert r.state['skip_reasons']['DISK_PRESSURE']==1
+        assert not (root/'ledger/spool').exists()
+
+
 def test_forward_runtime_never_chases_a_worse_arrival_ask():
     with tempfile.TemporaryDirectory() as d:
         root=Path(d); r=_runtime_case(root,arrival_yes_ask=.41)
@@ -165,5 +177,6 @@ if __name__=='__main__':
     test_rule_fails_closed_outside_frozen_time_and_signal_age()
     test_rule_requires_original_hard_signal_contract()
     test_forward_runtime_fill_and_settlement_are_canonical_paper_events()
+    test_forward_runtime_disk_pressure_blocks_before_book_or_receipt()
     test_forward_runtime_never_chases_a_worse_arrival_ask()
-    print('5 lead-lag taker tests passed')
+    print('6 lead-lag taker tests passed')
