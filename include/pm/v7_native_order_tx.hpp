@@ -66,6 +66,10 @@ public:
     [[nodiscard]] OmsTransitionResult apply(
         std::uint64_t client_order_id,
         const OmsEvent& event) noexcept;
+    // Canonical local-event path: the OMS owner assigns the event id.
+    [[nodiscard]] OmsTransitionResult apply_owned(
+        std::uint64_t client_order_id,
+        OmsEvent event) noexcept;
     [[nodiscard]] bool retire_terminal(std::uint64_t client_order_id) noexcept;
     [[nodiscard]] const OmsOrderRecord* find(std::uint64_t client_order_id) const noexcept;
     [[nodiscard]] std::size_t active_orders() const noexcept { return active_orders_; }

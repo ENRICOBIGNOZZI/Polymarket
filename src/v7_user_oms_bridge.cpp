@@ -114,18 +114,11 @@ struct UserOmsBridge::Impl {
     std::array<DedupeEntry, kDedupeBucketCount * kDedupeWays> dedupe{};
     std::size_t pending_fill_count = 0;
     std::size_t pending_lifecycle_count = 0;
-    std::uint64_t next_event_id = 1;
     std::uint64_t routed_fills = 0;
     std::uint64_t duplicate_fills = 0;
     std::uint64_t foreign_correlations = 0;
     std::uint64_t pending_overflow = 0;
     std::uint64_t dedupe_bucket_overflow = 0;
-
-    [[nodiscard]] std::uint64_t event_id() noexcept {
-        const auto current = next_event_id++;
-        if (next_event_id == 0) next_event_id = 1;
-        return current == 0 ? event_id() : current;
-    }
 
     [[nodiscard]] bool emit(std::uint64_t client_order_id,
                             OmsEventType type,
@@ -140,7 +133,7 @@ struct UserOmsBridge::Impl {
         auto& routed = output[result.output_count++];
         routed.client_order_id = client_order_id;
         routed.event = {};
-        routed.event.event_id = event_id();
+        routed.event.event_id = 0; // Canonical OMS owner assigns the local event id.
         routed.event.type = type;
         routed.event.timestamp_ns = timestamp_ns;
         routed.event.fill_delta_microunits = fill_delta;

@@ -115,10 +115,25 @@ void test_invalid_and_unknown_fail_closed() {
     assert(!owner.retire_terminal(999999));
 }
 
+void test_owned_event_ids_are_monotone() {
+    NativeOrderTxOwner owner;
+    const auto prepared = owner.prepare_submit(plan(), 1'100);
+    assert(prepared.accepted);
+    OmsEvent wire{}; wire.type=OmsEventType::WireSend; wire.timestamp_ns=1'200;
+    assert(owner.apply_owned(prepared.command.client_order_id, wire).applied);
+    const auto* after_wire=owner.find(prepared.command.client_order_id);
+    assert(after_wire && after_wire->last_event_id==2); // QueueSend is event 1.
+    OmsEvent ack{}; ack.type=OmsEventType::AckLive; ack.timestamp_ns=1'300;
+    assert(owner.apply_owned(prepared.command.client_order_id, ack).applied);
+    const auto* after_ack=owner.find(prepared.command.client_order_id);
+    assert(after_ack && after_ack->last_event_id==3);
+}
+
 int main() {
     test_prepare_wire_reject_retire();
     test_capacity_is_bounded_and_reusable();
     test_prepare_submit_is_allocation_free();
     test_invalid_and_unknown_fail_closed();
+    test_owned_event_ids_are_monotone();
     return 0;
 }

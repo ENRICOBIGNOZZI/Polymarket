@@ -127,6 +127,12 @@ OmsTransitionResult NativeOrderTxOwner::apply(
     return slot->order.apply(event);
 }
 
+OmsTransitionResult NativeOrderTxOwner::apply_owned(
+    std::uint64_t client_order_id, OmsEvent event) noexcept {
+    event.event_id = next_nonzero(next_event_id_);
+    return apply(client_order_id, event);
+}
+
 void NativeOrderTxOwner::release_slot(std::size_t index) noexcept {
     auto& slot = slots_[index];
     if (slot.occupied == 0) return;
