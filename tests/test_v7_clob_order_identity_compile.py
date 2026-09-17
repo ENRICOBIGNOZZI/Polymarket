@@ -22,6 +22,7 @@ def test_clob_order_identity_compiles_and_runs() -> None:
                 "-Wextra",
                 "-Wpedantic",
                 f"-I{ROOT / 'include'}",
+                "-I/opt/homebrew/include",
                 str(ROOT / "src/boost_json.cpp"),
                 str(ROOT / "src/v7_clob_order_identity.cpp"),
                 str(ROOT / "tests/test_v7_clob_order_identity.cpp"),

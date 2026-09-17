@@ -67,6 +67,7 @@ def test_user_ws_codec_and_subscription() -> None:
                 "-Wextra",
                 "-Wpedantic",
                 f"-I{ROOT / 'include'}",
+                "-I/opt/homebrew/include",
                 str(ROOT / "src/v7_user_ws.cpp"),
                 str(ROOT / "src/boost_json.cpp"),
                 str(source),
