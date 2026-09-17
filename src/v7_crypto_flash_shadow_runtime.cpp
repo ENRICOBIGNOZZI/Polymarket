@@ -18,6 +18,7 @@
 #include <cstdint>
 #include <iostream>
 #include <limits>
+#include <memory>
 #include <span>
 #include <stop_token>
 #include <string>
@@ -135,11 +136,15 @@ int main(int argc, char** argv) {
         SpscRing<PmQueuedEvent, kPmQueueCapacity> pm_queue;
         std::atomic<std::uint64_t> pm_drops{0}, pm_faults{0};
         std::atomic<std::uint64_t> pm_epoch{1};
+        // One PM feed shard owns this callback (two tokens, shard size two).
+        // Allocate the bounded 528 KiB decode page once instead of zeroing a
+        // 1024-event array on every WebSocket frame.
+        auto pm_decoded = std::make_unique<std::array<MarketWsEvent, kPmFrameEvents>>();
 
         pm::fast::MarketWebSocketFeed pm_feed(
             options.pm_ws_url, {options.yes_token, options.no_token}, 2,
             [&](std::string_view payload, const pm::fast::FeedReceiveStamp& stamp, std::size_t) {
-                std::array<MarketWsEvent, kPmFrameEvents> decoded{};
+                auto& decoded = *pm_decoded;
                 const auto result = pm_decoder.process_frame(payload, stamp, decoded);
                 bool notified = false;
                 if (result.invalid_frame || result.output_overflow || result.arena_exhausted || result.lineage_invalidated) {
