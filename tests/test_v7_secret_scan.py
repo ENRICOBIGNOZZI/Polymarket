@@ -62,6 +62,23 @@ class SecretScanTests(unittest.TestCase):
             object_id=blob, relative="docs/MONITORING.md",
         ))
 
+    def test_native_lane_zero_uuid_history_exemption_is_exact(self) -> None:
+        finding = scanner.Finding(
+            "assigned_secret",
+            "history:ed2bd016feda:tests/v7_native_clob_order_lane_driver.cpp:45",
+            "12b9377cbe7e5c94",
+        )
+        for blob in (
+            "ed2bd016feda3a1631c2c364ec979aedc5b2dca9",
+            "b1a31e3f37f7fa62b5fd32ef3f71ff0ad19d5690",
+        ):
+            self.assertTrue(scanner.is_historical_false_positive(
+                finding, object_id=blob, relative="tests/v7_native_clob_order_lane_driver.cpp"))
+        self.assertFalse(scanner.is_historical_false_positive(
+            finding, object_id="0" * 40, relative="tests/v7_native_clob_order_lane_driver.cpp"))
+        self.assertFalse(scanner.is_historical_false_positive(
+            finding, object_id="ed2bd016feda3a1631c2c364ec979aedc5b2dca9", relative="tests/other.cpp"))
+
     def test_other_password_assignments_remain_blocking(self) -> None:
         fragments = ("rotate", "this", "credential", "immediately", "12345")
         candidate = "-".join(fragments)
