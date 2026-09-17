@@ -1,11 +1,19 @@
 #include "pm/v7_external_protocol.hpp"
 
 #include <array>
+#include <atomic>
 #include <cassert>
+#include <cstdlib>
+#include <new>
 #include <cmath>
 #include <iostream>
 
 using namespace pm::v7::external_fair;
+
+namespace { std::atomic<std::uint64_t> protocol_allocations{0}; }
+void* operator new(std::size_t size) { protocol_allocations.fetch_add(1, std::memory_order_relaxed); if (void* p=std::malloc(size)) return p; throw std::bad_alloc(); }
+void operator delete(void* p) noexcept { std::free(p); }
+void operator delete(void* p, std::size_t) noexcept { std::free(p); }
 
 int main() {
     std::array<ExternalVenueEvent, 8> output{};
@@ -38,6 +46,47 @@ int main() {
     assert(output[0].event_type == ExternalEventType::Trade);
     assert(output[0].trade_side == 1);
     assert(output[0].exchange_event_ns == 1672515782136000000LL);
+
+
+    const auto reordered_binance_book = decode_external_venue_frame(
+        VenueId::BinanceSpot, 1, 10, 1'011, 2'011,
+        R"({"A":"2.30","s":"BTCUSDT","a":"65000.20","B":"1.20","b":"65000.10","u":400900220})",
+        output);
+    assert(reordered_binance_book.invalid_frame == 0 && reordered_binance_book.output_count == 1);
+    assert(output[0].source_sequence == 400900220 && std::abs(output[0].ask - 65000.20) < 1e-9);
+
+    const auto wrapped_binance_trade = decode_external_venue_frame(
+        VenueId::BinanceSpot, 1, 10, 1'012, 2'012,
+        R"({"stream":"btcusdt@aggTrade","data":{"m":true,"q":"0.5","p":"65000.6","T":1672515782137,"a":12346,"e":"aggTrade","E":1672515782137,"s":"BTCUSDT"}})",
+        output);
+    assert(wrapped_binance_trade.invalid_frame == 0 && wrapped_binance_trade.output_count == 1);
+    assert(output[0].source_sequence == 12346 && output[0].trade_side == -1);
+
+    const auto invalid_fast_binance = decode_external_venue_frame(
+        VenueId::BinanceSpot, 1, 10, 1'013, 2'013,
+        R"({"e":"aggTrade","a":12347,"p":"bad","q":"0.5","T":1672515782138,"m":false})",
+        output);
+    assert(invalid_fast_binance.invalid_frame == 1 && invalid_fast_binance.output_count == 0);
+
+
+    const auto spaced_book = decode_external_venue_frame(
+        VenueId::BinanceSpot, 1, 10, 1'014, 2'014,
+        R"({ "B" : "1.20", "u" : 400900221, "a" : "65000.20", "x":"ignored,{}[]", "b" : "65000.10", "A" : "2.30" })",
+        output);
+    assert(spaced_book.invalid_frame == 0 && spaced_book.output_count == 1);
+    assert(output[0].source_sequence == 400900221);
+
+    const auto subscription_ack = decode_external_venue_frame(
+        VenueId::BinanceSpot, 1, 10, 1'015, 2'015,
+        R"({"result":null,"id":1})", output);
+    assert(subscription_ack.invalid_frame == 0 && subscription_ack.output_count == 0);
+    assert(subscription_ack.ignored_events == 1);
+
+    const auto invalid_crossed_book = decode_external_venue_frame(
+        VenueId::BinanceSpot, 1, 10, 1'016, 2'016,
+        R"({"u":400900222,"b":"65000.30","B":"1.20","a":"65000.20","A":"2.30"})",
+        output);
+    assert(invalid_crossed_book.invalid_frame == 1 && invalid_crossed_book.output_count == 0);
 
     const auto coinbase_ticker = decode_external_venue_frame(
         VenueId::CoinbaseSpot, 1, 20, 1'020, 2'020,
@@ -114,6 +163,21 @@ int main() {
         none);
     assert(overflow.output_count == 0);
     assert(overflow.output_overflow == 1);
+
+
+    // The production decoder is a per-IO-thread persistent parser: after the
+    // thread-local scratch has been initialized, ordinary Binance frames must
+    // not allocate from the process heap.
+    (void)decode_external_venue_frame(
+        VenueId::BinanceSpot, 1, 10, 1'065, 2'065,
+        R"({"u":400900217,"s":"BTCUSDT","b":"65000.10","B":"1.20","a":"65000.20","A":"2.30"})", output);
+    const auto allocation_before = protocol_allocations.load(std::memory_order_relaxed);
+    const auto allocation_probe = decode_external_venue_frame(
+        VenueId::BinanceSpot, 1, 10, 1'066, 2'066,
+        R"({"e":"aggTrade","E":1672515782136,"s":"BTCUSDT","a":12345,"p":"65000.50","q":"0.25","T":1672515782136,"m":false})", output);
+    const auto allocation_after = protocol_allocations.load(std::memory_order_relaxed);
+    assert(allocation_probe.output_count == 1);
+    assert(allocation_after == allocation_before);
 
     const auto invalid = decode_external_venue_frame(
         VenueId::BinanceSpot, 1, 10, 1'070, 2'070, "not-json", output);
