@@ -148,6 +148,47 @@ jobs:
           python3 -m json.tool config/paper_v7.json >/dev/null
           python3 -m json.tool config/v7_frequency_matrix.json >/dev/null
 
+      - name: Build same-SHA validation artifact
+        if: steps.gate.outputs.ready == 'true'
+        run: |
+          set -euo pipefail
+          validation_research_root="$RUNNER_TEMP/v7-validation-research"
+          artifact_root="$RUNNER_TEMP/v7-validation-artifacts"
+          rm -rf "$validation_research_root" "$artifact_root"
+          mkdir -p \
+            "$validation_research_root/source" \
+            "$validation_research_root/archive" \
+            "$validation_research_root/durable" \
+            "$artifact_root"
+          PM_V7_RESEARCH_SOURCE_ROOT="$validation_research_root/source" \
+          PM_V7_RESEARCH_ARCHIVE_ROOT="$validation_research_root/archive" \
+          PM_V7_RESEARCH_DURABLE_ROOT="$validation_research_root/durable" \
+          PM_V7_RESEARCH_ARTIFACT_ROOT="$artifact_root" \
+            research/build_runtime_artifacts.sh "$VALIDATION_SHA"
+          python3 - "$artifact_root/current" "$VALIDATION_SHA" <<'PY'
+          import json,sys
+          from pathlib import Path
+          root=Path(sys.argv[1]); sha=sys.argv[2]
+          manifest=json.loads((root/'manifest.json').read_text())
+          candidate=json.loads((root/'candidate_validation.json').read_text())
+          maker=json.loads((root/'maker_execution_model.json').read_text())
+          assert manifest.get('schema') == 'polymarket_v7_runtime_artifact_bundle_v1'
+          assert manifest.get('target_model_sha') == sha
+          assert manifest.get('paper_only') is True
+          assert manifest.get('authenticated_execution') is False
+          assert manifest.get('real_order_submission') is False
+          assert manifest.get('runtime_training') is False
+          assert manifest.get('automatic_deployment') is False
+          assert candidate.get('target_sha') == sha
+          assert candidate.get('state') == 'PROMOTABLE' and candidate.get('promotable') is True
+          assert candidate.get('automatic_deployment') is False
+          assert (candidate.get('maker') or {}).get('state') == 'BASELINE_COLD_START'
+          assert maker.get('model_sha') == sha and maker.get('model_state') == 'COLD_START'
+          assert maker.get('paper_only') is True and maker.get('authenticated_execution') is False
+          assert maker.get('real_order_submission') is False
+          PY
+          echo "PM_V7_RUNTIME_ARTIFACT_ROOT=$artifact_root/current" >> "$GITHUB_ENV"
+
       - name: Bounded same-SHA public-data PAPER runtime
         if: steps.gate.outputs.ready == 'true'
         id: economics
