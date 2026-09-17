@@ -30,7 +30,7 @@
     "single_canonical_ledger_writer": true
   },
   "paper_only": true,
-  "schema_version": 3,
+  "schema_version": 4,
   "slippage_bps": 5,
   "starting_capital": 14000,
   "uncertainty_penalty": 0,
@@ -42,7 +42,6 @@
     "capital_cost_rate_annual": 0.05,
     "component_observation_budget_fractions": {
       "crypto_informed_taker": 0,
-      "fast_structural": 0.14285714285714285,
       "professional_maker": 0.14285714285714285
     },
     "cost_vector_required": [
@@ -55,25 +54,17 @@
     "crypto_settlement_market_registry": "config/v7_crypto_settlement_markets.json",
     "crypto_settlement_model_registry": "config/v7_crypto_settlement_model_registry.json",
     "engine_capital_envelope_owners": [
-      "CRYPTO_SETTLEMENT_ENGINE",
-      "STRUCTURAL_ARB_ENGINE"
+      "CRYPTO_SETTLEMENT_ENGINE"
     ],
     "engine_capital_fractions": {
-      "CRYPTO_SETTLEMENT_ENGINE": 0.2857142857142857,
-      "STRUCTURAL_ARB_ENGINE": 0.14285714285714285
+      "CRYPTO_SETTLEMENT_ENGINE": 0.2857142857142857
     },
     "execution_mode": "PAPER_SIMULATED",
     "execution_modes_policy": "config/v7_execution_modes.json",
     "execution_root": "runs/paper_v7_live/execution",
     "external_fair_policy": "config/v7_external_fair.json",
     "external_refresh_seconds": 60,
-    "frequency_matrix": "config/v7_frequency_matrix.json",
-    "hard_arb_fixed_dollar_trade_cap_enabled": false,
-    "hard_arb_max_trade_fraction": 1,
-    "hard_arb_max_trade_usd": 300,
-    "hard_arb_min_net_edge": 5e-05,
     "intent_min_edge": 5e-05,
-    "joint_fill_state_required_for_multileg": true,
     "live_capability": {
       "live_enabled": false,
       "max_daily_loss": 0,
@@ -91,7 +82,6 @@
     "micro_maker_bootstrap_interval_ms": 500,
     "micro_maker_policy": "config/v7_professional_market_maker.json",
     "paper_only": true,
-    "partial_unwind_required": true,
     "queue_never_grants_size": true,
     "real_order_submission": false,
     "report_seconds": 60,
