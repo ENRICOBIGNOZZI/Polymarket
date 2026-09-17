@@ -95,25 +95,42 @@ SleeveCapitalAccount::ReservationSlot* SleeveCapitalAccount::insert_slot(
     std::uint64_t intent_id) noexcept {
     if (intent_id == 0) return nullptr;
     const std::size_t start = hash(intent_id);
-    ReservationSlot* first_tombstone = nullptr;
     for (std::size_t step = 0; step < kMaxOpenCapitalReservations; ++step) {
         auto& slot = reservations_[(start + step) & (kMaxOpenCapitalReservations - 1U)];
         if (slot.state == CapitalReservationState::Active && slot.intent_id == intent_id) return &slot;
-        if (slot.state == CapitalReservationState::Tombstone && first_tombstone == nullptr) {
-            first_tombstone = &slot;
-        }
-        if (slot.state == CapitalReservationState::Empty) {
-            return first_tombstone != nullptr ? first_tombstone : &slot;
-        }
+        if (slot.state != CapitalReservationState::Active) return &slot;
     }
-    return first_tombstone;
+    return nullptr;
 }
 
 void SleeveCapitalAccount::erase(ReservationSlot& slot) noexcept {
-    slot.intent_id = 0;
-    slot.market_handle = 0;
-    slot.microdollars = 0;
-    slot.state = CapitalReservationState::Tombstone;
+    constexpr std::size_t mask = kMaxOpenCapitalReservations - 1U;
+    const std::size_t erased = static_cast<std::size_t>(&slot - reservations_.data());
+    reservations_[erased] = {};
+
+    // Backward-shift deletion keeps every remaining linear-probe chain intact
+    // while restoring a real Empty slot. The previous tombstone-only deletion
+    // let long-running order churn accumulate tombstones until misses and new
+    // reservations could scan the entire fixed table. That latency growth is
+    // unacceptable on the single-writer HFT capital path.
+    std::size_t hole = erased;
+    std::size_t scan = (hole + 1U) & mask;
+    for (std::size_t step = 0; step < kMaxOpenCapitalReservations - 1U; ++step) {
+        auto& candidate = reservations_[scan];
+        if (candidate.state == CapitalReservationState::Empty) return;
+
+        if (candidate.state == CapitalReservationState::Active) {
+            const std::size_t home = hash(candidate.intent_id);
+            const std::size_t distance_to_scan = (scan - home) & mask;
+            const std::size_t distance_to_hole = (hole - home) & mask;
+            if (distance_to_hole < distance_to_scan) {
+                reservations_[hole] = candidate;
+                candidate = {};
+                hole = scan;
+            }
+        }
+        scan = (scan + 1U) & mask;
+    }
 }
 
 void SleeveCapitalAccount::bump_version() noexcept {
@@ -178,7 +195,7 @@ bool SleeveCapitalAccount::settle_partial_fill(
     }
 
     // This transition is exposure-neutral: the same dollars move from the open
-    // order bucket to committed inventory.  Keeping the residual in the slot is
+    // order bucket to committed inventory. Keeping the residual in the slot is
     // what prevents a PARTIAL fill from accidentally freeing capital that can
     // still be consumed while the remainder remains live/cancel-pending.
     order_reserved_microdollars_ -= committed_microdollars;
