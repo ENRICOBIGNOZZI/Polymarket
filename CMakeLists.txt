@@ -69,7 +69,8 @@ target_compile_options(pm_v7_clob_native PRIVATE -Wall -Wextra -Wpedantic)
 add_library(pm_v7_account_native
   src/v7_user_ws.cpp
   src/v7_user_ws_feed.cpp
-  src/v7_user_oms_bridge.cpp)
+  src/v7_user_oms_bridge.cpp
+  src/v7_native_clob_order_lane.cpp)
 target_include_directories(pm_v7_account_native PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/include ${Boost_INCLUDE_DIRS})
 target_link_libraries(pm_v7_account_native PUBLIC pm_v7_common pm_v7_clob_native pm_json Threads::Threads OpenSSL::SSL OpenSSL::Crypto)
 target_compile_options(pm_v7_account_native PRIVATE -Wall -Wextra -Wpedantic)
@@ -244,6 +245,10 @@ if(BUILD_TESTING)
   target_link_libraries(pm_v7_native_order_tx_tests PRIVATE pm_v7_common)
   target_compile_options(pm_v7_native_order_tx_tests PRIVATE -UNDEBUG)
   add_test(NAME pm_v7_native_order_tx_tests COMMAND pm_v7_native_order_tx_tests)
+
+  add_executable(pm_v7_native_clob_order_lane_driver tests/v7_native_clob_order_lane_driver.cpp)
+  target_link_libraries(pm_v7_native_clob_order_lane_driver PRIVATE pm_v7_account_native)
+  target_compile_options(pm_v7_native_clob_order_lane_driver PRIVATE -UNDEBUG)
 
 
 
