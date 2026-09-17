@@ -47,6 +47,47 @@ int main() {
     assert(output[0].trade_side == 1);
     assert(output[0].exchange_event_ns == 1672515782136000000LL);
 
+
+    const auto reordered_binance_book = decode_external_venue_frame(
+        VenueId::BinanceSpot, 1, 10, 1'011, 2'011,
+        R"({"A":"2.30","s":"BTCUSDT","a":"65000.20","B":"1.20","b":"65000.10","u":400900220})",
+        output);
+    assert(reordered_binance_book.invalid_frame == 0 && reordered_binance_book.output_count == 1);
+    assert(output[0].source_sequence == 400900220 && std::abs(output[0].ask - 65000.20) < 1e-9);
+
+    const auto wrapped_binance_trade = decode_external_venue_frame(
+        VenueId::BinanceSpot, 1, 10, 1'012, 2'012,
+        R"({"stream":"btcusdt@aggTrade","data":{"m":true,"q":"0.5","p":"65000.6","T":1672515782137,"a":12346,"e":"aggTrade","E":1672515782137,"s":"BTCUSDT"}})",
+        output);
+    assert(wrapped_binance_trade.invalid_frame == 0 && wrapped_binance_trade.output_count == 1);
+    assert(output[0].source_sequence == 12346 && output[0].trade_side == -1);
+
+    const auto invalid_fast_binance = decode_external_venue_frame(
+        VenueId::BinanceSpot, 1, 10, 1'013, 2'013,
+        R"({"e":"aggTrade","a":12347,"p":"bad","q":"0.5","T":1672515782138,"m":false})",
+        output);
+    assert(invalid_fast_binance.invalid_frame == 1 && invalid_fast_binance.output_count == 0);
+
+
+    const auto spaced_book = decode_external_venue_frame(
+        VenueId::BinanceSpot, 1, 10, 1'014, 2'014,
+        R"({ "B" : "1.20", "u" : 400900221, "a" : "65000.20", "x":"ignored,{}[]", "b" : "65000.10", "A" : "2.30" })",
+        output);
+    assert(spaced_book.invalid_frame == 0 && spaced_book.output_count == 1);
+    assert(output[0].source_sequence == 400900221);
+
+    const auto subscription_ack = decode_external_venue_frame(
+        VenueId::BinanceSpot, 1, 10, 1'015, 2'015,
+        R"({"result":null,"id":1})", output);
+    assert(subscription_ack.invalid_frame == 0 && subscription_ack.output_count == 0);
+    assert(subscription_ack.ignored_events == 1);
+
+    const auto invalid_crossed_book = decode_external_venue_frame(
+        VenueId::BinanceSpot, 1, 10, 1'016, 2'016,
+        R"({"u":400900222,"b":"65000.30","B":"1.20","a":"65000.20","A":"2.30"})",
+        output);
+    assert(invalid_crossed_book.invalid_frame == 1 && invalid_crossed_book.output_count == 0);
+
     const auto coinbase_ticker = decode_external_venue_frame(
         VenueId::CoinbaseSpot, 1, 20, 1'020, 2'020,
         R"({"channel":"ticker","timestamp":"2026-08-28T16:00:00.123456789Z","sequence_num":42,"events":[{"type":"update","tickers":[{"type":"ticker","product_id":"BTC-USD","price":"65001.0","best_bid":"65000.9","best_bid_quantity":"1.5","best_ask":"65001.1","best_ask_quantity":"1.7"}]}]})",

@@ -182,6 +182,231 @@ DecoderScratch& decoder_scratch() noexcept {
     return seconds * 1'000'000'000LL + fraction_ns;
 }
 
+
+void emit(ExternalDecodeResult& result, std::span<ExternalVenueEvent> output,
+          const ExternalVenueEvent& event) noexcept;
+
+struct BinanceScalarFields {
+    std::string_view event_type{};
+    std::string_view update_id{};
+    std::string_view aggregate_trade_id{};
+    std::string_view event_time{};
+    std::string_view trade_time{};
+    std::string_view bid{};
+    std::string_view bid_size{};
+    std::string_view ask{};
+    std::string_view ask_size{};
+    std::string_view trade_price{};
+    std::string_view trade_size{};
+    std::string_view buyer_maker{};
+};
+
+enum class FastBinanceState : std::uint8_t { NotApplicable=0, Handled=1, Invalid=2 };
+
+[[nodiscard]] bool json_space(char ch) noexcept {
+    return ch == ' ' || ch == '\t' || ch == '\r' || ch == '\n';
+}
+
+[[nodiscard]] bool skip_json_string(std::string_view text, std::size_t& pos) noexcept {
+    if (pos >= text.size() || text[pos] != '"') return false;
+    ++pos;
+    while (pos < text.size()) {
+        const char ch = text[pos++];
+        if (ch == '"') return true;
+        if (ch == '\\') {
+            if (pos >= text.size()) return false;
+            ++pos;
+        }
+    }
+    return false;
+}
+
+[[nodiscard]] bool json_value_span(std::string_view text, std::size_t& pos,
+                                   std::string_view& value) noexcept {
+    while (pos < text.size() && json_space(text[pos])) ++pos;
+    if (pos >= text.size()) return false;
+    const std::size_t begin = pos;
+    if (text[pos] == '"') {
+        if (!skip_json_string(text, pos)) return false;
+        value = text.substr(begin, pos - begin);
+        return true;
+    }
+    if (text[pos] == '{' || text[pos] == '[') {
+        const char open = text[pos], close = open == '{' ? '}' : ']';
+        int depth = 0;
+        bool in_string = false, escaped = false;
+        for (; pos < text.size(); ++pos) {
+            const char ch = text[pos];
+            if (in_string) {
+                if (escaped) escaped = false;
+                else if (ch == '\\') escaped = true;
+                else if (ch == '"') in_string = false;
+                continue;
+            }
+            if (ch == '"') { in_string = true; continue; }
+            if (ch == open) ++depth;
+            else if (ch == close && --depth == 0) {
+                ++pos;
+                value = text.substr(begin, pos - begin);
+                return true;
+            }
+        }
+        return false;
+    }
+    while (pos < text.size() && text[pos] != ',' && text[pos] != '}'
+           && text[pos] != ']' && !json_space(text[pos])) ++pos;
+    if (pos == begin) return false;
+    value = text.substr(begin, pos - begin);
+    return true;
+}
+
+[[nodiscard]] std::string_view unquote(std::string_view raw) noexcept {
+    return raw.size() >= 2 && raw.front() == '"' && raw.back() == '"'
+        ? raw.substr(1, raw.size() - 2) : raw;
+}
+
+void capture_binance_scalar(BinanceScalarFields& fields, std::string_view key,
+                            std::string_view raw) noexcept {
+    const auto value = unquote(raw);
+    if (key == "e") fields.event_type = value;
+    else if (key == "u") fields.update_id = value;
+    else if (key == "a") fields.aggregate_trade_id = value;
+    else if (key == "E") fields.event_time = value;
+    else if (key == "T") fields.trade_time = value;
+    else if (key == "b") fields.bid = value;
+    else if (key == "B") fields.bid_size = value;
+    else if (key == "A") fields.ask_size = value;
+    else if (key == "p") fields.trade_price = value;
+    else if (key == "q") fields.trade_size = value;
+    else if (key == "m") fields.buyer_maker = value;
+    // `a` is overloaded: aggregate-trade id in aggTrade and ask price in
+    // bookTicker. Preserve the raw scalar in both slots; event type decides.
+    if (key == "a") fields.ask = value;
+}
+
+[[nodiscard]] bool scan_binance_object(std::string_view text,
+                                       BinanceScalarFields& fields,
+                                       unsigned recursion = 0) noexcept {
+    if (recursion > 1) return false;
+    std::size_t pos = 0;
+    while (pos < text.size() && json_space(text[pos])) ++pos;
+    if (pos >= text.size() || text[pos++] != '{') return false;
+    while (true) {
+        while (pos < text.size() && json_space(text[pos])) ++pos;
+        if (pos >= text.size()) return false;
+        if (text[pos] == '}') return true;
+        if (text[pos] != '"') return false;
+        const std::size_t key_begin = ++pos;
+        bool escaped = false;
+        while (pos < text.size()) {
+            const char ch = text[pos];
+            if (!escaped && ch == '"') break;
+            if (!escaped && ch == '\\') escaped = true;
+            else escaped = false;
+            ++pos;
+        }
+        if (pos >= text.size() || escaped) return false;
+        const auto key = text.substr(key_begin, pos - key_begin);
+        ++pos;
+        while (pos < text.size() && json_space(text[pos])) ++pos;
+        if (pos >= text.size() || text[pos++] != ':') return false;
+        std::string_view raw;
+        if (!json_value_span(text, pos, raw)) return false;
+        if (key == "data" && raw.size() >= 2 && raw.front() == '{') {
+            if (!scan_binance_object(raw, fields, recursion + 1)) return false;
+        } else if (key.size() == 1 || key == "E" || key == "T") {
+            capture_binance_scalar(fields, key, raw);
+        }
+        while (pos < text.size() && json_space(text[pos])) ++pos;
+        if (pos >= text.size()) return false;
+        if (text[pos] == ',') { ++pos; continue; }
+        if (text[pos] == '}') return true;
+        return false;
+    }
+}
+
+[[nodiscard]] bool parse_u64_text(std::string_view text, std::uint64_t& out) noexcept {
+    if (text.empty()) return false;
+    const auto parsed = std::from_chars(text.data(), text.data() + text.size(), out);
+    return parsed.ec == std::errc{} && parsed.ptr == text.data() + text.size();
+}
+[[nodiscard]] bool parse_i64_text(std::string_view text, std::int64_t& out) noexcept {
+    if (text.empty()) return false;
+    const auto parsed = std::from_chars(text.data(), text.data() + text.size(), out);
+    return parsed.ec == std::errc{} && parsed.ptr == text.data() + text.size();
+}
+[[nodiscard]] bool parse_double_text(std::string_view text, double& out) noexcept {
+    if (text.empty()) return false;
+    const auto parsed = std::from_chars(text.data(), text.data() + text.size(), out);
+    return parsed.ec == std::errc{} && parsed.ptr == text.data() + text.size()
+        && std::isfinite(out);
+}
+
+[[nodiscard]] FastBinanceState decode_binance_fast(
+    std::uint64_t asset_handle, std::uint64_t epoch,
+    std::int64_t receive_ns, std::int64_t wall_ns,
+    std::string_view payload, ExternalDecodeResult& result,
+    std::span<ExternalVenueEvent> output) noexcept {
+    BinanceScalarFields fields;
+    if (!scan_binance_object(payload, fields)) return FastBinanceState::NotApplicable;
+    if (fields.event_type == "depthUpdate") {
+        ++result.ignored_events;
+        return FastBinanceState::Handled;
+    }
+    if (fields.event_type == "aggTrade") {
+        ExternalVenueEvent event;
+        event.asset_handle = asset_handle;
+        event.connection_epoch = epoch;
+        event.venue = VenueId::BinanceSpot;
+        event.event_type = ExternalEventType::Trade;
+        event.local_receive_monotonic_ns = receive_ns;
+        event.local_receive_wall_ns = wall_ns;
+        std::int64_t exchange_ms = 0;
+        if (!parse_u64_text(fields.aggregate_trade_id, event.source_sequence)
+            || !(parse_i64_text(fields.trade_time, exchange_ms)
+                 || parse_i64_text(fields.event_time, exchange_ms))
+            || !parse_double_text(fields.trade_price, event.trade_price)
+            || !parse_double_text(fields.trade_size, event.trade_size)
+            || event.trade_price <= 0.0 || event.trade_size <= 0.0
+            || (fields.buyer_maker != "true" && fields.buyer_maker != "false")) {
+            result.invalid_frame = 1;
+            return FastBinanceState::Invalid;
+        }
+        event.exchange_event_ns = milliseconds_to_ns(exchange_ms);
+        event.trade_side = fields.buyer_maker == "true" ? -1 : 1;
+        event.healthy = 1;
+        ++result.recognized_events;
+        emit(result, output, event);
+        return FastBinanceState::Handled;
+    }
+    // bookTicker has no event type but does have scalar u/b/B/a/A.
+    if (!fields.update_id.empty() && !fields.bid.empty() && !fields.bid_size.empty()
+        && !fields.ask.empty() && !fields.ask_size.empty()) {
+        ExternalVenueEvent event;
+        event.asset_handle = asset_handle;
+        event.connection_epoch = epoch;
+        event.venue = VenueId::BinanceSpot;
+        event.event_type = ExternalEventType::BookTop;
+        event.local_receive_monotonic_ns = receive_ns;
+        event.local_receive_wall_ns = wall_ns;
+        if (!parse_u64_text(fields.update_id, event.source_sequence)
+            || !parse_double_text(fields.bid, event.bid)
+            || !parse_double_text(fields.bid_size, event.bid_size)
+            || !parse_double_text(fields.ask, event.ask)
+            || !parse_double_text(fields.ask_size, event.ask_size)
+            || event.bid <= 0.0 || event.ask <= event.bid
+            || event.bid_size < 0.0 || event.ask_size < 0.0) {
+            result.invalid_frame = 1;
+            return FastBinanceState::Invalid;
+        }
+        event.healthy = 1;
+        ++result.recognized_events;
+        emit(result, output, event);
+        return FastBinanceState::Handled;
+    }
+    return FastBinanceState::NotApplicable;
+}
+
 void emit(ExternalDecodeResult& result, std::span<ExternalVenueEvent> output,
           const ExternalVenueEvent& event) noexcept {
     if (result.output_count >= output.size()) {
@@ -548,6 +773,12 @@ ExternalDecodeResult decode_external_venue_frame(
         || payload.empty()) {
         result.invalid_frame = 1;
         return result;
+    }
+    if (venue == VenueId::BinanceSpot) {
+        const auto fast = decode_binance_fast(
+            asset_handle, connection_epoch, local_receive_monotonic_ns,
+            local_receive_wall_ns, payload, result, output);
+        if (fast != FastBinanceState::NotApplicable) return result;
     }
     try {
         auto& scratch = decoder_scratch();
