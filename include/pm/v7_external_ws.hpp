@@ -54,11 +54,6 @@ private:
 };
 #endif
 
-enum class ExternalWsSubscriptionAuth : std::uint8_t {
-    None = 0,
-    CoinbaseExchangeLevel2 = 1,
-};
-
 struct ExternalVenueConnectionSpec {
     VenueId venue = VenueId::Unknown;
     std::string host;
@@ -67,7 +62,6 @@ struct ExternalVenueConnectionSpec {
     std::string subscription_json;
     std::vector<std::pair<std::string, std::string>> handshake_headers;
     std::string symbol;
-    ExternalWsSubscriptionAuth subscription_auth = ExternalWsSubscriptionAuth::None;
     bool start_without_subscription = false;
     std::uint64_t asset_handle = 0;
     std::size_t max_message_bytes = 1U << 20;
@@ -92,9 +86,8 @@ struct ExternalWsSnapshot {
     std::uint64_t asset_handle);
 [[nodiscard]] ExternalVenueConnectionSpec coinbase_level2_connection_spec(
     std::uint64_t asset_handle);
-[[nodiscard]] std::string coinbase_level2_subscription_for_test(
-    std::string_view product, std::string_view api_key, std::string_view secret_b64,
-    std::string_view passphrase, std::string_view timestamp);
+[[nodiscard]] ExternalVenueConnectionSpec coinbase_advanced_level2_connection_spec(
+    std::uint64_t asset_handle);
 
 // IO-plane only. Persistent TLS WebSocket session with bounded message memory.
 // It owns no strategy, OMS, inventory, capital or execution authority. Received

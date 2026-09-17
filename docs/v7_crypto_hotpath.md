@@ -33,7 +33,7 @@ SBE `bestBidAsk` uses auto-culling under load. A lower arrival time therefore do
 
 ## Coinbase
 
-The existing public source remains `level2_batch`. Authenticated Exchange `level2` support is implemented but not enabled until read-only credentials are supplied and the channel is compared prospectively.
+The production source remains Exchange `level2_batch` until a faster path wins a same-host causal race. Coinbase documents Exchange `level2` as unbatched, but the current unauthenticated Exchange endpoint returned `Failed to subscribe` in the live probe. Advanced Trade public `level2` connects without credentials after allowing its >4 MiB BTC-USD bootstrap snapshot, but in the first clean Mac race its matched unique updates arrived materially later than Exchange `level2_batch`. These are empirical observations, not permanent venue guarantees; repeat in London before any feed change.
 
 The test must compare receive-time freshness, update count, reconstructed BBO parity, gaps/reconnects and downstream frozen-signal differences. A faster feed is not promoted merely from message-count or ping measurements.
 ## Evidence boundaries
