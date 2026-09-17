@@ -62,6 +62,30 @@ class SecretScanTests(unittest.TestCase):
             object_id=blob, relative="docs/MONITORING.md",
         ))
 
+    def test_loopback_native_order_fixture_exemptions_are_exact(self) -> None:
+        fingerprint = "12b9377cbe7e5c94"
+        path = "tests/v7_native_clob_order_lane_driver.cpp"
+        for blob in (
+            "b1a31e3f37f7fa62b5fd32ef3f71ff0ad19d5690",
+            "ed2bd016feda3a1631c2c364ec979aedc5b2dca9",
+        ):
+            finding = scanner.Finding(
+                "assigned_secret", f"history:{blob[:12]}:{path}:45", fingerprint,
+            )
+            self.assertTrue(scanner.is_historical_false_positive(
+                finding, object_id=blob, relative=path,
+            ))
+            self.assertFalse(scanner.is_historical_false_positive(
+                finding, object_id="f" * 40, relative=path,
+            ))
+            self.assertFalse(scanner.is_historical_false_positive(
+                finding, object_id=blob, relative="tests/other.cpp",
+            ))
+            self.assertFalse(scanner.is_historical_false_positive(
+                scanner.Finding(finding.kind, finding.location, "0" * 16),
+                object_id=blob, relative=path,
+            ))
+
     def test_other_password_assignments_remain_blocking(self) -> None:
         fragments = ("rotate", "this", "credential", "immediately", "12345")
         candidate = "-".join(fragments)
