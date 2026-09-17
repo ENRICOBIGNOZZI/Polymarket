@@ -246,19 +246,39 @@ jobs:
           git worktree remove --force "$tmp_checkout" >/dev/null
           trap - EXIT
 
-          updater="$(mktemp)"
-          archiver="$(mktemp)"
-          trap 'rm -f "$updater" "$archiver"' EXIT
-          git show "$main_sha:ops/update_server_v7.sh" > "$updater"
-          git show "$main_sha:scripts/v7_prepare_cutover_run_root.py" > "$archiver"
-          chmod 700 "$updater"
-          chmod 600 "$archiver"
-          POLYMARKET_APP_DIR="$HOME/polymarket" \
-            POLYMARKET_CUTOVER_ARCHIVER="$archiver" \
-            EXPECTED_DEPLOY_SHA="$main_sha" \
-            POLYMARKET_DEPLOY_REF=main \
-            POLYMARKET_RUNTIME_HEALTH_ATTEMPTS=390 \
-            bash "$updater"
+          if [[ "$(uname -s)" == "Linux" ]]; then
+            # London: build and verify the exact candidate while the old writer
+            # keeps running. The cutover script refuses to stop it unless the
+            # immutable research-built artifact for the same SHA is present.
+            POLYMARKET_EXPECTED_SHA="$main_sha" \
+              POLYMARKET_SERVICE_USER="$USER" \
+              POLYMARKET_APP_DIR="$tmp_checkout" \
+              POLYMARKET_RUNTIME_ROOT="$HOME/polymarket-runtime" \
+              bash "$tmp_checkout/ops/v7_london_stage_release.sh"
+            POLYMARKET_EXPECTED_SHA="$main_sha" \
+              POLYMARKET_SERVICE_USER="$USER" \
+              POLYMARKET_APP_DIR="$tmp_checkout" \
+              POLYMARKET_RUNTIME_ROOT="$HOME/polymarket-runtime" \
+              POLYMARKET_ARTIFACT_ROOT="$HOME/polymarket-artifacts" \
+              PM_V7_RUN_ROOT="$HOME/polymarket-runs/paper_v7_london" \
+              PM_V7_ARCHIVE_ROOT="$HOME/polymarket-runs/paper_v7_london_archives" \
+              POLYMARKET_RUNTIME_HEALTH_ATTEMPTS=390 \
+              bash "$tmp_checkout/ops/v7_london_cutover.sh"
+          else
+            updater="$(mktemp)"
+            archiver="$(mktemp)"
+            trap 'rm -f "$updater" "$archiver"' EXIT
+            git show "$main_sha:ops/update_server_v7.sh" > "$updater"
+            git show "$main_sha:scripts/v7_prepare_cutover_run_root.py" > "$archiver"
+            chmod 700 "$updater"
+            chmod 600 "$archiver"
+            POLYMARKET_APP_DIR="$HOME/polymarket" \
+              POLYMARKET_CUTOVER_ARCHIVER="$archiver" \
+              EXPECTED_DEPLOY_SHA="$main_sha" \
+              POLYMARKET_DEPLOY_REF=main \
+              POLYMARKET_RUNTIME_HEALTH_ATTEMPTS=390 \
+              bash "$updater"
+          fi
           printf 'deploy_result=success\ndeployed_sha=%s\norigin_main=%s\n' \
             "$main_sha" "$main_sha"
           REMOTE
@@ -278,9 +298,15 @@ jobs:
                 "EXPECTED_DEPLOY_SHA='$deploy_sha' bash -s" <<'VERIFY' >> deploy-evidence.txt 2>&1
           set -euo pipefail
           cd ~/polymarket
-          root="$HOME/polymarket/runs/paper_v7_live"
-          test "$(git rev-parse HEAD)" = "$EXPECTED_DEPLOY_SHA"
-          test "$(cat "$root/control/deployed_sha")" = "$EXPECTED_DEPLOY_SHA"
+          if [[ "$(uname -s)" == "Linux" ]]; then
+            root="$HOME/polymarket-runs/paper_v7_london"
+            test "$(cat "$HOME/polymarket-runtime/current/deploy/london/runtime_sha")" = "$EXPECTED_DEPLOY_SHA"
+            test ! -e "$HOME/polymarket-runtime/current/research"
+          else
+            root="$HOME/polymarket/runs/paper_v7_live"
+            test "$(git rev-parse HEAD)" = "$EXPECTED_DEPLOY_SHA"
+            test "$(cat "$root/control/deployed_sha")" = "$EXPECTED_DEPLOY_SHA"
+          fi
           python3 - "$root" "$EXPECTED_DEPLOY_SHA" <<'PY'
           import csv,json,os,sys,time
           from pathlib import Path

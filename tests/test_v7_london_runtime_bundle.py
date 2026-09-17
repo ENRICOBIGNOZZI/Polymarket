@@ -15,4 +15,4 @@ def test_bundle_builder_has_final_tree_forbidden_gate():
     source=(ROOT/'ops/build_london_runtime_bundle.py').read_text()
     ast.parse(source)
     assert 'forbidden London files' in source
-    assert 'local_imports' in source and 'closure' in source
+    assert 'module_imports' in source and 'local_closure' in source

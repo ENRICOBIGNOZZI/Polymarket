@@ -6,6 +6,8 @@ This runbook prepares a London migration without changing the frozen BTC forward
 
 The London generation remains `PAPER`/`SHADOW`: `paper_only=true`, `authenticated_execution=false`, `real_order_submission=false`, and no automatic cutover. Tailscale is for SSH, monitoring and administration only. The trading data path must use direct venue/Polymarket connectivity from the selected London host.
 
+Grafana and Prometheus do not run on the trading host. London runs only the lightweight local V7 exporter plus the PAPER runtime/retention units; dashboards and historical monitoring aggregation belong on the research/admin plane.
+
 ## Target topology
 
 Benchmark three hosts in `eu-west-2` using the physical AZ IDs supplied by Polymarket support on 2026-09-16:

@@ -7,7 +7,7 @@ mkdir -p "$LOCAL_ROOT/current" "$LOCAL_ROOT/receipts"
 # partial and are never zero-filled; rsync's temp-file semantics avoid torn replacements.
 rsync -a --partial --append-verify \
   --include='/external_fair/***' --include='/universe/***' --include='/micro_maker/***' \
-  --include='/research/repricing_book/***' --include='/research/external_cancel_signals.jsonl*' \
+  --include='/research/***' \
   --include='/ledger/***' --include='/trade_tape.csv*' --include='/control/runtime_identity.json' \
   --include='/control/runtime_artifact_receipt.json' --exclude='*' \
   "$USER@$REMOTE:$REMOTE_ROOT/" "$LOCAL_ROOT/current/"

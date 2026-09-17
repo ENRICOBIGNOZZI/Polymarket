@@ -75,7 +75,7 @@ class V7OperatorHomeTest(unittest.TestCase):
             "PolymarketV7RetentionStale",
         ):
             if alert == "PolymarketV7RetentionStale":
-                self.assertIn("retention_service_missing_or_stale", (ROOT / "monitoring/exporter_v7.py").read_text())
+                self.assertIn("london_buffer_retention_missing_or_stale", (ROOT / "monitoring/exporter_v7.py").read_text())
             else:
                 self.assertIn(alert, alerts)
         self.assertIn("PolymarketV7AlgorithmScopeInvalid", alerts)

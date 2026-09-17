@@ -4,35 +4,31 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT"
 source scripts/v7_process_runtime.sh
-CONFIG="${PM_V7_CONFIG:-config/paper_v7.json}"
+RUNTIME_PROFILE="${PM_V7_RUNTIME_PROFILE:-config/runtime/paper.json}"
+while IFS=$'\t' read -r key value; do
+  case "$key" in
+    CONFIG|MAKER_POLICY|EXTERNAL_FAIR_POLICY|LEAD_LAG_TAKER_CONFIG|CRYPTO_EXECUTION_ALPHA_CONFIG|EXTERNAL_SOURCE_REGISTRY|LIVE_MODEL_SCOPE|CRYPTO_SETTLEMENT_ENGINE_POLICY|CRYPTO_SETTLEMENT_MARKET_REGISTRY|CRYPTO_SETTLEMENT_MODEL_REGISTRY|LONDON_BUFFER_RETENTION_CONFIG|CRYPTO_UNIVERSE_CONFIG|RUNTIME_RESOURCE_CONFIG|PM_V7_EXECUTION_MODE)
+      printf -v "$key" '%s' "$value" ;;
+    *) echo "unexpected runtime-profile key: $key" >&2; exit 78 ;;
+  esac
+done < <(python3 scripts/v7_runtime_profile.py --repository-root "$ROOT" --profile "$RUNTIME_PROFILE" --shell)
+export PM_V7_EXECUTION_MODE
 RUN_ROOT="${PM_V7_RUN_ROOT:-runs/paper_v7_live}"
 RECORDER="${PM_TRADE_RECORDER:-build/polymarket_v7_trade_recorder}"
 MARKOUT_OBSERVER="${PM_V7_MAKER_MARKOUT_OBSERVER:-build/polymarket_v7_maker_markout_observer}"
 FILLABILITY_OBSERVER="${PM_V7_MAKER_FILLABILITY_OBSERVER:-build/polymarket_v7_maker_fillability_observer}"
 AUTHORIZED_MAKER_EXECUTOR="${PM_V7_AUTHORIZED_MAKER_EXECUTOR:-build/polymarket_v7_authorized_maker_paper_executor}"
 EXTERNAL_VENUE_RUNTIME="${PM_V7_EXTERNAL_VENUE_RUNTIME:-build/polymarket_v7_external_venue_runtime}"
-MAKER_POLICY="${PM_V7_MAKER_POLICY:-config/v7_professional_market_maker.json}"
-EXTERNAL_FAIR_POLICY="${PM_V7_EXTERNAL_FAIR_POLICY:-config/v7_external_fair.json}"
-LEAD_LAG_TAKER_CONFIG="${PM_V7_LEAD_LAG_TAKER_CONFIG:-config/v7_lead_lag_taker_v1.json}"
-CRYPTO_EXECUTION_ALPHA_CONFIG="${PM_V7_CRYPTO_EXECUTION_ALPHA_CONFIG:-config/v7_crypto_execution_alpha.json}"
-EXTERNAL_SOURCE_REGISTRY="${PM_V7_EXTERNAL_SOURCE_REGISTRY:-config/v7_external_source_registry.json}"
 CI_REPOSITORY="${PM_V7_CI_REPOSITORY:-ENRICOBIGNOZZI/Polymarket}"
-LIVE_MODEL_SCOPE="${PM_V7_LIVE_MODEL_SCOPE:-config/v7_live_model_scope.json}"
-CRYPTO_SETTLEMENT_ENGINE_POLICY="${PM_V7_CRYPTO_SETTLEMENT_ENGINE_POLICY:-config/v7_crypto_settlement_engine.json}"
-CRYPTO_SETTLEMENT_MARKET_REGISTRY="${PM_V7_CRYPTO_SETTLEMENT_MARKET_REGISTRY:-config/v7_crypto_settlement_markets.json}"
-CRYPTO_SETTLEMENT_MODEL_REGISTRY="${PM_V7_CRYPTO_SETTLEMENT_MODEL_REGISTRY:-config/v7_crypto_settlement_model_registry.json}"
-LONDON_BUFFER_RETENTION_CONFIG="${PM_V7_LONDON_BUFFER_RETENTION_CONFIG:-config/v7_london_buffer_retention.json}"
-CRYPTO_UNIVERSE_CONFIG="${PM_V7_CRYPTO_UNIVERSE_CONFIG:-config/v7_crypto_universe.json}"
 SHA="${PM_V7_MODEL_SHA:-$(cat deploy/london/runtime_sha 2>/dev/null || git rev-parse HEAD)}"
 [[ "$SHA" =~ ^[0-9a-f]{40}$ ]] || { echo "exact 40-character runtime SHA required" >&2; exit 78; }
 DISK_PRESSURE_MIN_FREE_BYTES="$(python3 -c 'import json,sys; v=json.load(open(sys.argv[1],encoding="utf-8")); x=v["disk_pressure_min_free_bytes"]; assert type(x) is int and x>0; print(x)' "$LONDON_BUFFER_RETENTION_CONFIG")"
 [[ "$DISK_PRESSURE_MIN_FREE_BYTES" =~ ^[1-9][0-9]*$ ]] || { echo "invalid disk pressure threshold" >&2; exit 74; }
-DURABLE_ROOT="${PM_V7_DURABLE_ROOT:-runs/paper_v7_durable}"
+DURABLE_ROOT="${PM_V7_DURABLE_ROOT:-$RUN_ROOT/research/collector_buffer}"
 RUNTIME_ARTIFACT_ROOT="${PM_V7_RUNTIME_ARTIFACT_ROOT:-$HOME/polymarket-artifacts/current}"
 MAKER_FROZEN_MODEL_SOURCE="$RUNTIME_ARTIFACT_ROOT/maker_execution_model.json"
 MAKER_RESEARCH_MODEL="$RUN_ROOT/micro_maker/execution_model.json"
 RICH_RESEARCH_MODEL="$RUNTIME_ARTIFACT_ROOT/rich_research_model.json"
-RUNTIME_RESOURCE_CONFIG="${PM_V7_RUNTIME_RESOURCE_CONFIG:-config/v7_runtime_resources.json}"
 EXTERNAL_CANCEL_RULE_SHA="$(python3 - "$CRYPTO_EXECUTION_ALPHA_CONFIG" <<PY
 import hashlib,json,sys
 value=json.load(open(sys.argv[1],encoding="utf-8"))
@@ -63,7 +59,7 @@ ALLOC="$CONTROL/allocations"
 KILL="$CONTROL/KILL"
 MAKER_FREEZE="$CONTROL/MAKER_FREEZE"
 LOCK="$CONTROL/runtime.lock"
-mkdir -p "$CONTROL" "$RUN_ROOT/ledger" "$RUN_ROOT/opportunities/inbox" "$RUN_ROOT/research/evidence" "$RUN_ROOT/reports" "$RUN_ROOT/market_data" "$RUN_ROOT/universe" "$RUN_ROOT/micro_maker" "$RUN_ROOT/external" "$RUN_ROOT/external_fair" "$RUN_ROOT/learned_execution" "$DURABLE_ROOT/micro_maker"
+mkdir -p "$CONTROL" "$RUN_ROOT/ledger" "$RUN_ROOT/opportunities/inbox" "$RUN_ROOT/research/evidence" "$RUN_ROOT/reports" "$RUN_ROOT/market_data" "$RUN_ROOT/universe" "$RUN_ROOT/micro_maker" "$RUN_ROOT/external" "$RUN_ROOT/external_fair" "$RUN_ROOT/learned_execution" "$DURABLE_ROOT/micro_maker" "$DURABLE_ROOT/external_fair" "$DURABLE_ROOT/profit_experiments"
 touch "$RUN_ROOT/ledger/execution.jsonl"
 
 # The runtime is not allowed to self-assert CI approval through an environment

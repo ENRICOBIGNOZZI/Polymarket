@@ -28,7 +28,10 @@ if (( ${#rich_args[@]} )); then
 else
   printf '%s\n' '{"state":"NO_COUNTERFACTUAL_TAPE","paper_only":true}' > "$tmp/rich_training_status.json"
 fi
-manifest_args=(--target-sha "$TARGET_SHA" --maker-model "$tmp/maker_execution_model.json" --output "$tmp/manifest.json")
+candidate_args=(--target-sha "$TARGET_SHA" --maker-model "$tmp/maker_execution_model.json" --output "$tmp/candidate_validation.json")
+[[ -f "$tmp/rich_research_model.json" ]] && candidate_args+=(--rich-model "$tmp/rich_research_model.json")
+python3 research/validate_candidate.py "${candidate_args[@]}"
+manifest_args=(--target-sha "$TARGET_SHA" --maker-model "$tmp/maker_execution_model.json" --candidate-validation "$tmp/candidate_validation.json" --output "$tmp/manifest.json")
 [[ -f "$tmp/rich_research_model.json" ]] && manifest_args+=(--rich-model "$tmp/rich_research_model.json")
 python3 research/runtime_artifact_manifest.py "${manifest_args[@]}"
 mkdir -p "$(dirname "$BUNDLE")"; rm -rf "$BUNDLE"; mv "$tmp" "$BUNDLE"; trap 'rm -rf "$work"' EXIT

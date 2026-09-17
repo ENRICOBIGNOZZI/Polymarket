@@ -45,9 +45,17 @@ def test_bootstrap_installs_but_does_not_start_runtime() -> None:
     assert 'VERSION_ID:-}" == "24.04"' in source
     assert 'POLYMARKET_EXPECTED_SHA' in source
     assert 'checkout --detach "$EXPECTED_SHA"' in source
-    assert 'ctest --test-dir "$APP_DIR/build" --output-on-failure' in source
+    assert 'v7_london_stage_release.sh' in source
+    stage=(ROOT/'ops/v7_london_stage_release.sh').read_text(encoding='utf-8')
+    assert 'ctest --test-dir "$SOURCE_DIR/build-verify" --output-on-failure' in stage
+    assert '-DPM_LONDON_RUNTIME_ONLY=ON -DBUILD_TESTING=OFF' in stage
+    assert 'build_london_runtime_bundle.py' in stage
+    assert 'RUNTIME_CURRENT' in source
+    assert '[[ ! -e "$RUNTIME_CURRENT/research" ]]' in source
     assert 'systemctl disable --now polymarket-v7-paper.service' in source
     assert 'tailscale up' not in source
+    assert 'grafana' not in source.lower()
+    assert 'pkg-config prometheus' not in source
     assert 'systemctl enable --now polymarket-v7-paper.service' not in source
 
 

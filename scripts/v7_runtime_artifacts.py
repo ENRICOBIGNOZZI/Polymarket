@@ -29,6 +29,10 @@ def main()->int:
     if len(a.model_sha)!=40 or any(c not in "0123456789abcdef" for c in a.model_sha): raise SystemExit("artifact target SHA invalid")
     m=json.loads(manifest_path.read_text())
     if m.get("schema")!=SCHEMA or m.get("paper_only") is not True or m.get("authenticated_execution") is not False or m.get("real_order_submission") is not False or m.get("target_model_sha")!=a.model_sha: raise SystemExit("runtime artifact manifest contract invalid")
+    cv_meta=m.get('candidate_validation') or {}; cv=root/str(cv_meta.get('path') or '')
+    if not cv.is_file() or sha256(cv)!=cv_meta.get('sha256'): raise SystemExit('candidate validation hash mismatch')
+    cv_value=json.loads(cv.read_text())
+    if cv_value.get('schema')!='polymarket_v7_candidate_validation_v1' or cv_value.get('target_sha')!=a.model_sha or cv_value.get('state')!='PROMOTABLE' or cv_value.get('promotable') is not True or cv_value.get('automatic_deployment') is not False: raise SystemExit('candidate validation rejected')
     maker_meta=m.get("maker_execution_model") or {}; maker=root/str(maker_meta.get("path") or "")
     if not maker.is_file() or sha256(maker)!=maker_meta.get("sha256"): raise SystemExit("maker artifact hash mismatch")
     model=json.loads(maker.read_text())
@@ -44,7 +48,7 @@ def main()->int:
         if raw.get("artifact_role")!="RESEARCH" or raw.get("code_sha")!=a.model_sha: raise SystemExit("rich artifact identity invalid")
     receipt={
         "schema":"polymarket_v7_runtime_artifact_receipt_v1","paper_only":True,"authenticated_execution":False,"real_order_submission":False,
-        "target_model_sha":a.model_sha,"bundle_manifest_sha256":sha256(manifest_path),"maker_execution_model_sha256":sha256(staged),
+        "target_model_sha":a.model_sha,"bundle_manifest_sha256":sha256(manifest_path),"maker_execution_model_sha256":sha256(staged),"candidate_validation_sha256":sha256(cv),
         "maker_staged_path":str(staged),"rich_model_state":rich_state,"rich_model_path":str(rich_path) if rich_path else None,"runtime_training":False,
     }
     a.receipt.parent.mkdir(parents=True,exist_ok=True); a.receipt.write_text(json.dumps(receipt,sort_keys=True,indent=2)+"\n")

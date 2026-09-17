@@ -146,11 +146,12 @@ def test_horse_race_is_zero_authority_and_hashes_fixed_anchors() -> None:
     assert result["results"]["HARD_EXTERNAL_CANCEL"]["event_clusters"] == 1
 
 
-def test_runtime_launcher_includes_fill_conditioned_markout_evidence() -> None:
+def test_research_horse_race_includes_fill_conditioned_markout_evidence() -> None:
     launcher = (ROOT / "scripts/paper_v7_execution_loop.sh").read_text()
-    start = launcher.index("python3 scripts/v7_maker_execution_horse_race.py")
-    block = launcher[start:]
-    block = block[:block.index("last_horse_race_at=", 1)]
+    research = (ROOT / "research/run_offline_analytics.sh").read_text()
+    assert "v7_maker_execution_horse_race.py" not in launcher
+    start = research.index("python3 scripts/v7_maker_execution_horse_race.py")
+    block = research[start:]
     assert '--maker-evidence "$RUN_ROOT/ledger/execution.jsonl"' in block
     assert '--maker-evidence "$RUN_ROOT/research/evidence/maker_markout"' in block
 
@@ -162,4 +163,4 @@ if __name__ == "__main__":
     test_avoiding_favorable_fill_is_counted_as_opportunity_cost()
     test_global_hard_scope_requires_exact_crypto_scope_and_opt_in()
     test_horse_race_is_zero_authority_and_hashes_fixed_anchors()
-    test_runtime_launcher_includes_fill_conditioned_markout_evidence()
+    test_research_horse_race_includes_fill_conditioned_markout_evidence()

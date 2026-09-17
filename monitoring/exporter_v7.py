@@ -66,6 +66,13 @@ def _git_head(root: Path) -> str:
     try:
         value = (root / "deploy/london/runtime_sha").read_text(encoding="utf-8").strip()
     except OSError:
+        value = ""
+    if len(value) == 40 and all(ch in "0123456789abcdef" for ch in value):
+        return value
+    # Development/test checkouts retain .git; the London bundle intentionally does not.
+    try:
+        value = subprocess.check_output(["git", "-C", str(root), "rev-parse", "HEAD"], text=True, stderr=subprocess.DEVNULL).strip()
+    except (OSError, subprocess.SubprocessError):
         return "unknown"
     return value if len(value) == 40 and all(ch in "0123456789abcdef" for ch in value) else "unknown"
 

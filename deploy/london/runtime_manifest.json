@@ -1,9 +1,29 @@
 {
-  "schema": "polymarket_v7_london_runtime_bundle_v1",
-  "version": 1,
-  "paper_only": true,
   "authenticated_execution": false,
-  "real_order_submission": false,
+  "binaries": [
+    "polymarket_v7_trade_recorder",
+    "polymarket_v7_maker_markout_observer",
+    "polymarket_v7_maker_fillability_observer",
+    "polymarket_v7_authorized_maker_paper_executor",
+    "polymarket_v7_external_venue_runtime"
+  ],
+  "forbidden_path_fragments": [
+    "/research/",
+    "v7_external_rich_train.py",
+    "v7_external_residual_train.py",
+    "v7_maker_durable_learning.py",
+    "v7_pm_repricing_shadow.py",
+    "v7_two_sided_complete_set_shadow.py",
+    "v7_generate_economic_artifacts.py",
+    "v7_profit_attribution.py",
+    "v7_profit_report.py",
+    "v7_economic_decision_report.py",
+    "v7_permanent_evidence.py",
+    "v7_lossless_data_compaction.py",
+    "notebooks",
+    "tests/"
+  ],
+  "paper_only": true,
   "python_entrypoints": [
     "scripts/paper_v7_execution_loop.sh",
     "scripts/v7_exact_sha_ci_gate.py",
@@ -29,8 +49,11 @@
     "scripts/v7_fee_reward_registry.py",
     "scripts/v7_maker_cohort_supervisor.py",
     "scripts/v7_canonical_economics.py",
-    "scripts/v7_portfolio_guard.py"
+    "scripts/v7_portfolio_guard.py",
+    "scripts/v7_runtime_profile.py"
   ],
+  "real_order_submission": false,
+  "schema": "polymarket_v7_london_runtime_bundle_v1",
   "support_files": [
     "scripts/v7_process_runtime.sh",
     "requirements-runtime.txt",
@@ -59,29 +82,20 @@
     "ops/systemd/polymarket-v7-paper.service.in",
     "ops/systemd/polymarket-v7-exporter.service.in",
     "ops/systemd/polymarket-v7-retention.service.in",
-    "ops/systemd/polymarket-v7-retention.timer.in"
+    "ops/systemd/polymarket-v7-retention.timer.in",
+    "ops/v7_service_entrypoint.sh",
+    "ops/v7_runtime_supervisor.py",
+    "config/v7_runtime_supervision.json",
+    "monitoring/v7_runtime_contract.py",
+    "monitoring/v7_ledger_metrics.py",
+    "monitoring/v7_portfolio_reconciliation.py",
+    "monitoring/exporter_v7_external.py",
+    "monitoring/exporter_v7_fillability.py",
+    "monitoring/v7_external_fair.py",
+    "monitoring/v7_maker_fillability_exact.py",
+    "monitoring/v7_maker_microstructure.py",
+    "monitoring/v7_operator_truth.py",
+    "config/runtime/paper.json"
   ],
-  "binaries": [
-    "polymarket_v7_trade_recorder",
-    "polymarket_v7_maker_markout_observer",
-    "polymarket_v7_maker_fillability_observer",
-    "polymarket_v7_authorized_maker_paper_executor",
-    "polymarket_v7_external_venue_runtime"
-  ],
-  "forbidden_path_fragments": [
-    "/research/",
-    "v7_external_rich_train.py",
-    "v7_external_residual_train.py",
-    "v7_maker_durable_learning.py",
-    "v7_pm_repricing_shadow.py",
-    "v7_two_sided_complete_set_shadow.py",
-    "v7_generate_economic_artifacts.py",
-    "v7_profit_attribution.py",
-    "v7_profit_report.py",
-    "v7_economic_decision_report.py",
-    "v7_permanent_evidence.py",
-    "v7_lossless_data_compaction.py",
-    "notebooks",
-    "tests/"
-  ]
+  "version": 1
 }
