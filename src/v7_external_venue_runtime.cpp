@@ -100,7 +100,9 @@ json::object tape_json(const TapeRecorderSnapshot& value, bool enabled) {
         {"enabled", enabled}, {"accepted", value.accepted}, {"written", value.written},
         {"dropped", value.dropped},
         {"dropped_payload_too_large", value.dropped_payload_too_large},
-        {"dropped_queue_full", value.dropped_queue_full}, {"queued", value.queued},
+        {"dropped_queue_full", value.dropped_queue_full},
+        {"suppressed_by_policy", value.suppressed_by_policy},
+        {"suppression_active", value.suppression_active != 0}, {"queued", value.queued},
         {"evidence_valid", value.evidence_valid != 0}, {"writer_healthy", value.writer_healthy != 0},
     };
 }
@@ -1118,6 +1120,8 @@ int main(int argc, char** argv) {
         fs::path raw_tape_dir;
         fs::path normalized_event_tape_dir;
         fs::path external_cancel_signal_path;
+        fs::path disk_pressure_marker;
+        std::uintmax_t disk_pressure_min_free_bytes = 0;
         std::string external_cancel_rule_sha256;
         std::string model_sha;
         for (int index = 1; index < argc; ++index) {
@@ -1127,6 +1131,8 @@ int main(int argc, char** argv) {
             else if (argument == "--raw-tape-dir" && index + 1 < argc) raw_tape_dir = argv[++index];
             else if (argument == "--normalized-event-tape-dir" && index + 1 < argc) normalized_event_tape_dir = argv[++index];
             else if (argument == "--external-cancel-signal" && index + 1 < argc) external_cancel_signal_path = argv[++index];
+            else if (argument == "--disk-pressure-marker" && index + 1 < argc) disk_pressure_marker = argv[++index];
+            else if (argument == "--disk-pressure-min-free-bytes" && index + 1 < argc) disk_pressure_min_free_bytes = std::stoull(argv[++index]);
             else if (argument == "--external-cancel-rule-sha256" && index + 1 < argc) external_cancel_rule_sha256 = argv[++index];
             else if (argument == "--model-sha" && index + 1 < argc) model_sha = argv[++index];
             else throw std::invalid_argument("unknown or incomplete argument: " + argument);
@@ -1183,6 +1189,32 @@ int main(int argc, char** argv) {
         auto binance_usdm_depth_raw_tape = raw_tape("binance-usdm-depth");
         auto binance_usdm_market_raw_tape = raw_tape("binance-usdm-market");
         std::uint64_t tape_sequence = 0;
+        const auto set_tape_suppression = [&](bool active) {
+            if (normalized_tape) normalized_tape->set_suppressed(active);
+            if (binance_event_tape) binance_event_tape->set_suppressed(active);
+            if (coinbase_event_tape) coinbase_event_tape->set_suppressed(active);
+            if (bybit_event_tape) bybit_event_tape->set_suppressed(active);
+            if (bybit_linear_event_tape) bybit_linear_event_tape->set_suppressed(active);
+            if (deribit_event_tape) deribit_event_tape->set_suppressed(active);
+            if (binance_usdm_market_event_tape) binance_usdm_market_event_tape->set_suppressed(active);
+            if (binance_raw_tape) binance_raw_tape->set_suppressed(active);
+            if (coinbase_raw_tape) coinbase_raw_tape->set_suppressed(active);
+            if (bybit_raw_tape) bybit_raw_tape->set_suppressed(active);
+            if (bybit_linear_raw_tape) bybit_linear_raw_tape->set_suppressed(active);
+            if (deribit_raw_tape) deribit_raw_tape->set_suppressed(active);
+            if (binance_usdm_depth_raw_tape) binance_usdm_depth_raw_tape->set_suppressed(active);
+            if (binance_usdm_market_raw_tape) binance_usdm_market_raw_tape->set_suppressed(active);
+        };
+        const auto local_disk_pressure = [&]() {
+            if (!disk_pressure_marker.empty() && fs::exists(disk_pressure_marker)) return true;
+            if (disk_pressure_min_free_bytes == 0) return false;
+            std::error_code disk_error;
+            fs::path probe = !raw_tape_dir.empty() ? raw_tape_dir : output.parent_path();
+            const auto space = fs::space(probe, disk_error);
+            return disk_error || space.available <= disk_pressure_min_free_bytes;
+        };
+        bool disk_pressure_active = local_disk_pressure();
+        set_tape_suppression(disk_pressure_active);
         ExternalStatePolicy policy;
         policy.external_cancel_enabled = external_cancel_signal_path.empty() ? 0 : 1;
         ExternalAssetState state(asset_handle);
@@ -1243,6 +1275,8 @@ int main(int argc, char** argv) {
         std::uint64_t last_cancel_signal_version = 0;
         std::uint8_t last_cancel_signal_valid = 0;
         std::int64_t last_full_status_publish_ns = 0;
+        std::int64_t last_disk_pressure_poll_ns = 0;
+        constexpr std::int64_t kDiskPressurePollIntervalNs = 1'000'000'000LL;
         constexpr std::int64_t kFullStatusPublishIntervalNs = 25'000'000LL;
         constexpr auto kFastLoopSleep = std::chrono::milliseconds(5);
         while (!stopping.load(std::memory_order_relaxed)) {
@@ -1294,6 +1328,13 @@ int main(int argc, char** argv) {
                 + deribit_ingress.drain_into(state, policy)
                 + binance_usdm_market_ingress.drain_into(state, policy);
             const auto now_mono = monotonic_now_ns();
+            if ((!disk_pressure_marker.empty() || disk_pressure_min_free_bytes > 0)
+                && (last_disk_pressure_poll_ns == 0
+                    || now_mono - last_disk_pressure_poll_ns >= kDiskPressurePollIntervalNs)) {
+                disk_pressure_active = local_disk_pressure();
+                set_tape_suppression(disk_pressure_active);
+                last_disk_pressure_poll_ns = now_mono;
+            }
             const auto cancel_signal = state.advance_external_cancel_signal(now_mono, policy);
             if (!external_cancel_signal_path.empty()
                 && (cancel_signal.signal_version != last_cancel_signal_version
@@ -1387,6 +1428,8 @@ int main(int argc, char** argv) {
                 {"drained_last_cycle", drained},
                 {"fast_signal_poll_interval_ms", 5},
                 {"full_status_publish_interval_ms", 25},
+                {"disk_pressure", disk_pressure_active},
+                {"disk_pressure_min_free_bytes", disk_pressure_min_free_bytes},
                 {"normalized_snapshot_tape", tape_json(tape_status, normalized_tape != nullptr)},
                 {"normalized_event_tapes", {
                     {"binance_spot", tape_json(binance_event_tape ? binance_event_tape->snapshot() : TapeRecorderSnapshot{}, binance_event_tape != nullptr)},

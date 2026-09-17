@@ -141,6 +141,7 @@ struct Options {
     std::string model_sha;
     std::string ws_url = "wss://ws-subscriptions-clob.polymarket.com/ws/market";
     bool fair_only = false;
+    std::uintmax_t disk_pressure_min_free_bytes = 0;
 };
 
 Options parse_options(int argc, char** argv) {
@@ -158,6 +159,7 @@ Options parse_options(int argc, char** argv) {
         else if (arg == "--model-sha") options.model_sha = next();
         else if (arg == "--ws-url") options.ws_url = next();
         else if (arg == "--fair-only") options.fair_only = true;
+        else if (arg == "--disk-pressure-min-free-bytes") options.disk_pressure_min_free_bytes = std::stoull(next());
         else throw std::runtime_error("unknown argument: " + arg);
     }
     if (options.selection.empty()) {
@@ -469,6 +471,14 @@ public:
         }
     }
 
+    void set_disk_pressure(bool active) noexcept {
+        disk_pressure_.store(active, std::memory_order_release);
+    }
+
+    [[nodiscard]] bool disk_pressure() const noexcept {
+        return disk_pressure_.load(std::memory_order_acquire);
+    }
+
     [[nodiscard]] bool lineage_recovery_requested() const noexcept {
         return lineage_recovery_requested_.load(std::memory_order_acquire);
     }
@@ -513,7 +523,10 @@ public:
         TradeEvidence row;
         bool wrote = false;
         while (queue_->try_pop(row)) {
-            if (row.kind == MarketWsEventKind::Trade) write(row);
+            if (row.kind == MarketWsEventKind::Trade) {
+                if (!disk_pressure()) write(row);
+                else ++trade_events_suppressed_disk_pressure_;
+            }
             write_book(row);
             wrote = true;
         }
@@ -547,7 +560,12 @@ public:
         root["real_order_submission"] = false;
         root["model_sha"] = model_sha_;
         root["observer_session_id"] = session_id_;
+        root["book_events_observed"] = book_events_observed_;
         root["book_events_written"] = book_events_written_;
+        root["disk_pressure"] = disk_pressure();
+        root["book_event_tape_suppressed_by_disk_pressure"] = disk_pressure();
+        root["book_events_suppressed_disk_pressure"] = book_events_suppressed_disk_pressure_;
+        root["trade_events_suppressed_disk_pressure"] = trade_events_suppressed_disk_pressure_;
         root["book_watermark_receive_wall_ms"] = book_watermark_wall_ms_;
         root["book_watermark_receive_monotonic_ns"] = book_watermark_monotonic_ns_;
         root["state"] = stopped ? "stopped" : "running";
@@ -579,7 +597,8 @@ public:
         root["last_exchange_event_ns"] = last_exchange_ns_;
         root["last_receive_wall_ms"] = last_receive_wall_ms_;
         root["evidence_complete"] = dropped_.load(std::memory_order_relaxed) == 0
-            && decoder_failures_.load(std::memory_order_relaxed) == 0;
+            && decoder_failures_.load(std::memory_order_relaxed) == 0
+            && !disk_pressure();
         atomic_write(status_path_, json::serialize(root) + "\n");
         if (publish_flow) write_flow_snapshot(root["timestamp_ms"].as_int64());
     }
@@ -640,7 +659,8 @@ public:
             {"execution_authority", "ZERO_AUTHORITY_RESEARCH_ONLY"},
             {"observer_session_id", session_id_}, {"connection_epoch", epoch},
             {"evidence_complete", dropped_.load(std::memory_order_relaxed) == 0
-                && decoder_failures_.load(std::memory_order_relaxed) == 0},
+                && decoder_failures_.load(std::memory_order_relaxed) == 0
+                && !disk_pressure()},
             {"rows", std::move(rows)},
         };
         atomic_write(flow_path_, json::serialize(root) + "\n");
@@ -675,7 +695,7 @@ private:
             {"authenticated_execution", false}, {"real_order_submission", false},
             {"execution_authority", "ZERO_AUTHORITY_RESEARCH_ONLY"},
             {"observer_session_id", session_id_}, {"connection_epoch", row.connection_epoch},
-            {"observer_sequence", ++book_events_written_}, {"market_id", token->market_id},
+            {"observer_sequence", ++book_events_observed_}, {"market_id", token->market_id},
             {"token_id", token->token_id}, {"state_version", row.state_version},
             {"receive_wall_ms", row.receive_wall_ms}, {"receive_monotonic_ns", row.receive_monotonic_ns},
             {"exchange_event_ns", row.book.exchange_event_ns},
@@ -700,7 +720,12 @@ private:
                 {"exchange_event_ns", row.exchange_event_ns}};
         }
         const auto serialized = json::serialize(value) + "\n";
-        book_output_ << serialized;
+        if (!disk_pressure()) {
+            book_output_ << serialized;
+            ++book_events_written_;
+        } else {
+            ++book_events_suppressed_disk_pressure_;
+        }
         latest_books_[row.instrument_handle] = serialized;
         book_watermark_wall_ms_ = std::max(book_watermark_wall_ms_, row.receive_wall_ms);
         book_watermark_monotonic_ns_ = std::max(book_watermark_monotonic_ns_, row.receive_monotonic_ns);
@@ -758,6 +783,7 @@ private:
     std::ofstream book_output_;
     fs::path book_path_;
     std::uint64_t book_segment_ = 0;
+    std::uint64_t book_events_observed_ = 0;
     std::uint64_t book_events_written_ = 0;
     std::int64_t last_book_publish_ms_ = 0;
     std::int64_t book_watermark_wall_ms_ = 0;
@@ -789,6 +815,9 @@ private:
     std::atomic<bool> lineage_recovery_requested_{false};
     std::atomic<std::uint64_t> unknown_asset_{0};
     std::atomic<std::uint64_t> reconnects_{0};
+    std::atomic<bool> disk_pressure_{false};
+    std::uint64_t book_events_suppressed_disk_pressure_ = 0;
+    std::uint64_t trade_events_suppressed_disk_pressure_ = 0;
     std::uint64_t sequence_ = 0;
     std::uint64_t events_written_ = 0;
     std::int64_t last_exchange_ns_ = 0;
@@ -811,6 +840,15 @@ int main(int argc, char** argv) {
                 : load_selected_pairs(options.selection);
             ExactWsObserver observer(
                 std::move(tokens), options.ws_url, options.output_dir, options.model_sha);
+            const fs::path disk_pressure_marker = fs::path(options.run_root) / "control" / "DISK_PRESSURE";
+            const auto local_disk_pressure = [&]() {
+                if (fs::exists(disk_pressure_marker)) return true;
+                if (options.disk_pressure_min_free_bytes == 0) return false;
+                std::error_code error;
+                const auto space = fs::space(fs::path(options.output_dir), error);
+                return error || space.available <= options.disk_pressure_min_free_bytes;
+            };
+            observer.set_disk_pressure(local_disk_pressure());
             observer.start();
             std::int64_t last_status_ms = 0;
             std::int64_t last_membership_check_ms = 0;
@@ -830,6 +868,7 @@ int main(int argc, char** argv) {
                 }
                 if (now - last_membership_check_ms >= 1000) {
                     last_membership_check_ms = now;
+                    observer.set_disk_pressure(local_disk_pressure());
                     // Price/feature refreshes do not change the subscription.
                     // Restarting on every mtime update erased queue evidence.
                     reload = fair_observation_pairs(options) != fair_pairs;

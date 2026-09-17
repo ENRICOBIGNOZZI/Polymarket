@@ -24,9 +24,12 @@ LIVE_MODEL_SCOPE="${PM_V7_LIVE_MODEL_SCOPE:-config/v7_live_model_scope.json}"
 CRYPTO_SETTLEMENT_ENGINE_POLICY="${PM_V7_CRYPTO_SETTLEMENT_ENGINE_POLICY:-config/v7_crypto_settlement_engine.json}"
 CRYPTO_SETTLEMENT_MARKET_REGISTRY="${PM_V7_CRYPTO_SETTLEMENT_MARKET_REGISTRY:-config/v7_crypto_settlement_markets.json}"
 CRYPTO_SETTLEMENT_MODEL_REGISTRY="${PM_V7_CRYPTO_SETTLEMENT_MODEL_REGISTRY:-config/v7_crypto_settlement_model_registry.json}"
+DATA_RETENTION_CONFIG="${PM_V7_DATA_RETENTION_CONFIG:-config/v7_data_retention.json}"
 ADAPTIVE_UNIVERSE_CONFIG="${PM_V7_ADAPTIVE_UNIVERSE_CONFIG:-config/v7_adaptive_universe.json}"
 REPRICING_SHADOW_ARTIFACT="${PM_V7_REPRICING_SHADOW_ARTIFACT:-config/v7_pm_repricing_250ms_shadow.json}"
 SHA="$(git rev-parse HEAD)"
+DISK_PRESSURE_MIN_FREE_BYTES="$(python3 -c 'import json,sys; v=json.load(open(sys.argv[1],encoding="utf-8")); x=v["disk"]["emergency_cleanup_free_bytes"]; assert type(x) is int and x>0; print(x)' "$DATA_RETENTION_CONFIG")"
+[[ "$DISK_PRESSURE_MIN_FREE_BYTES" =~ ^[1-9][0-9]*$ ]] || { echo "invalid disk pressure threshold" >&2; exit 74; }
 REPRICING_SHADOW_ARTIFACT_SHA="$(python3 -c 'import hashlib,sys; print(hashlib.sha256(open(sys.argv[1],"rb").read()).hexdigest())' "$REPRICING_SHADOW_ARTIFACT")"
 MAKER_RESEARCH_MODEL="$RUN_ROOT/micro_maker/execution_model.json"
 DURABLE_ROOT="${PM_V7_DURABLE_ROOT:-runs/paper_v7_durable}"
@@ -289,6 +292,8 @@ v7_register_child "$!"
   --tape "$RUN_ROOT/external_fair/tapes/external_venues.${SHA}.$$.bin" --model-sha "$SHA" \
   --normalized-event-tape-dir "$RUN_ROOT/external_fair/normalized_events" \
   --raw-tape-dir "$RUN_ROOT/external_fair/raw" \
+  --disk-pressure-marker "$RUN_ROOT/control/DISK_PRESSURE" \
+  --disk-pressure-min-free-bytes "$DISK_PRESSURE_MIN_FREE_BYTES" \
   --external-cancel-signal "$RUN_ROOT/external_fair/external_cancel_signal.json" \
   --external-cancel-rule-sha256 "$EXTERNAL_CANCEL_RULE_SHA" \
   >> "$RUN_ROOT/external_fair/external_venues.log" 2>&1 &
@@ -326,6 +331,7 @@ v7_register_child "$!"
 "$FILLABILITY_OBSERVER" \
   --config "$ALLOC/micro_maker.json" --run-root "$RUN_ROOT" --model-sha "$SHA" \
   --output-dir "$RUN_ROOT/research/repricing_book" --fair-only \
+  --disk-pressure-min-free-bytes "$DISK_PRESSURE_MIN_FREE_BYTES" \
   >> "$RUN_ROOT/research/repricing_book_observer.log" 2>&1 &
 v7_register_child "$!"
 
@@ -747,6 +753,7 @@ v7_register_child "$!"
     --fillability-observer "$FILLABILITY_OBSERVER" \
     --observer-arena-bytes "$WS_JSON_ARENA_OBSERVER_MAX_BYTES" \
     --fillability-arena-bytes "$WS_JSON_ARENA_FILLABILITY_MAX_BYTES" \
+    --disk-pressure-min-free-bytes "$DISK_PRESSURE_MIN_FREE_BYTES" \
     --candidate-confirmations "$MAKER_CANDIDATE_CONFIRMATIONS" \
     --min-rotation-interval-seconds "$MAKER_ROTATION_INTERVAL_SECONDS" \
     --rotation-min-projected-fill-probability "$MAKER_ROTATION_MIN_FILL" \

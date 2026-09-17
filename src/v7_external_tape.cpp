@@ -126,6 +126,8 @@ struct ExternalTapeRecorder::Impl {
     std::atomic<std::uint64_t> accepted{0};
     std::atomic<std::uint64_t> written{0};
     std::atomic<std::uint64_t> dropped{0};
+    std::atomic<std::uint64_t> suppressed_by_policy{0};
+    std::atomic<bool> suppression_active{false};
     std::atomic<bool> evidence_valid{true};
     std::atomic<bool> writer_healthy{true};
 
@@ -225,6 +227,11 @@ bool ExternalTapeRecorder::try_record(const TapeRecord& record) noexcept {
         impl_->evidence_valid.store(false, std::memory_order_release);
         return false;
     }
+    if (impl_->suppression_active.load(std::memory_order_acquire)) {
+        impl_->suppressed_by_policy.fetch_add(1, std::memory_order_relaxed);
+        impl_->evidence_valid.store(false, std::memory_order_release);
+        return true;
+    }
     if (!impl_->queue.try_push(record)) {
         impl_->dropped.fetch_add(1, std::memory_order_relaxed);
         impl_->evidence_valid.store(false, std::memory_order_release);
@@ -256,10 +263,16 @@ TapeRecorderSnapshot ExternalTapeRecorder::snapshot() const noexcept {
     out.accepted = impl_->accepted.load(std::memory_order_acquire);
     out.written = impl_->written.load(std::memory_order_acquire);
     out.dropped = impl_->dropped.load(std::memory_order_acquire);
+    out.suppressed_by_policy = impl_->suppressed_by_policy.load(std::memory_order_acquire);
     out.queued = impl_->queue.approximate_size();
     out.evidence_valid = impl_->evidence_valid.load(std::memory_order_acquire) ? 1 : 0;
     out.writer_healthy = impl_->writer_healthy.load(std::memory_order_acquire) ? 1 : 0;
+    out.suppression_active = impl_->suppression_active.load(std::memory_order_acquire) ? 1 : 0;
     return out;
+}
+
+void ExternalTapeRecorder::set_suppressed(bool suppressed) noexcept {
+    if (impl_) impl_->suppression_active.store(suppressed, std::memory_order_release);
 }
 
 struct ExternalRawTapeRecorder::Impl {
@@ -287,6 +300,8 @@ struct ExternalRawTapeRecorder::Impl {
     std::atomic<std::uint64_t> dropped{0};
     std::atomic<std::uint64_t> dropped_payload_too_large{0};
     std::atomic<std::uint64_t> dropped_queue_full{0};
+    std::atomic<std::uint64_t> suppressed_by_policy{0};
+    std::atomic<bool> suppression_active{false};
     std::atomic<bool> evidence_valid{true};
     std::atomic<bool> writer_healthy{true};
 
@@ -406,6 +421,11 @@ bool ExternalRawTapeRecorder::try_record_raw(
         if (impl_) impl_->evidence_valid.store(false, std::memory_order_release);
         return false;
     }
+    if (impl_->suppression_active.load(std::memory_order_acquire)) {
+        impl_->suppressed_by_policy.fetch_add(1, std::memory_order_relaxed);
+        impl_->evidence_valid.store(false, std::memory_order_release);
+        return true;
+    }
     const auto sequence = impl_->next_sequence.fetch_add(1, std::memory_order_relaxed) + 1;
     const auto enqueue = [&](auto& record, auto& queue) noexcept {
         record.tape_sequence = sequence;
@@ -456,10 +476,16 @@ TapeRecorderSnapshot ExternalRawTapeRecorder::snapshot() const noexcept {
     out.dropped = impl_->dropped.load(std::memory_order_acquire);
     out.dropped_payload_too_large = impl_->dropped_payload_too_large.load(std::memory_order_acquire);
     out.dropped_queue_full = impl_->dropped_queue_full.load(std::memory_order_acquire);
+    out.suppressed_by_policy = impl_->suppressed_by_policy.load(std::memory_order_acquire);
     out.queued = impl_->queued();
     out.evidence_valid = impl_->evidence_valid.load(std::memory_order_acquire) ? 1 : 0;
     out.writer_healthy = impl_->writer_healthy.load(std::memory_order_acquire) ? 1 : 0;
+    out.suppression_active = impl_->suppression_active.load(std::memory_order_acquire) ? 1 : 0;
     return out;
+}
+
+void ExternalRawTapeRecorder::set_suppressed(bool suppressed) noexcept {
+    if (impl_) impl_->suppression_active.store(suppressed, std::memory_order_release);
 }
 
 } // namespace pm::v7::external_fair

@@ -31,6 +31,7 @@ from pathlib import Path
 from typing import Any
 
 from v7_market_common import ClobBooksClient, finite, parse_array, request_json
+from v7_disk_pressure import disk_pressure_status
 from v7_evidence_contract import hybrid_identity
 from v7_compressed_journal import CompressedJournal,journal_paths
 from v7_execution_ledger import (
@@ -3156,6 +3157,9 @@ class PaperRouter:
         if self.state.get("killed") or (self.root / "control" / "KILL").exists():
             self.last_attempt_reason = "GLOBAL_OR_SLEEVE_KILLED"
             return False
+        if disk_pressure_status(self.root)["active"]:
+            self.last_attempt_reason = "DISK_PRESSURE"
+            return False
         market = status.get("market") if isinstance(status.get("market"), dict) else {}
         market_id = str(market.get("market_id") or "")
         if not market_id:
@@ -3540,6 +3544,7 @@ class PaperRouter:
         )
         killed = bool(self.state.get("killed")) or (self.root / "control" / "KILL").exists()
         drain_requested = self.drain_path.exists()
+        disk_pressure = disk_pressure_status(self.root)["active"]
         order_reconciliation = self.state.get("canonical_order_reconciliation")
         order_reconciliation = (
             order_reconciliation
@@ -3552,6 +3557,8 @@ class PaperRouter:
         )
         if drain_requested:
             blocker = "CUTOVER_DRAIN"
+        elif disk_pressure:
+            blocker = "DISK_PRESSURE"
         if (
             order_reconciliation
             and order_reconciliation.get("complete") is not True

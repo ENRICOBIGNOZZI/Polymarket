@@ -32,6 +32,12 @@ def main() -> None:
     assert "flat_static_buffer<kMaxWsMessageBytes> buffer;" not in websocket
     assert "constexpr std::size_t kMaxWsMessageBytes = 2U << 20;" in websocket
     assert 'spec.target = "/public/ws"' in websocket
+    assert 'argument == "--disk-pressure-marker"' in source
+    assert 'argument == "--disk-pressure-min-free-bytes"' in source
+    assert "fs::space" in source
+    assert '"suppressed_by_policy"' in source
+    assert '--disk-pressure-marker "$RUN_ROOT/control/DISK_PRESSURE"' in launcher
+    assert '--disk-pressure-min-free-bytes "$DISK_PRESSURE_MIN_FREE_BYTES"' in launcher
 
 
 if __name__ == "__main__":

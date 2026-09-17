@@ -68,6 +68,7 @@ class MakerCohortSupervisorTests(unittest.TestCase):
             candidate=candidate_path,
             model_sha=SHA,
             drain_timeout_seconds=1.0,
+            disk_pressure_min_free_bytes=32 * 1024**3,
             candidate_confirmations=2,
             min_rotation_interval_seconds=300.0,
             rotation_min_projected_fill_probability=0.05,
