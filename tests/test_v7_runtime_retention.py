@@ -52,13 +52,13 @@ class V7RuntimeRetentionTest(unittest.TestCase):
         import v7_retention as module
         config = json.loads((ROOT / "config/v7_data_retention.json").read_text())
         policy = config["disk"]
-        self.assertEqual(policy["critical_free_ratio"], 0.04)
-        self.assertEqual(policy["minimum_free_bytes"], 5 * 1024**3)
+        self.assertEqual(policy["critical_free_ratio"], 0.06)
+        self.assertEqual(policy["minimum_free_bytes"], 8 * 1024**3)
         self.assertEqual(policy["warning_free_ratio"], 0.20)
         Usage = namedtuple("Usage", "total used free")
         total = 500 * 1024**3
-        for fraction, expected in ((0.039, "critical"), (0.04, "critical"),
-                                   (0.041, "warning"), (0.10, "warning")):
+        for fraction, expected in ((0.059, "critical"), (0.06, "critical"),
+                                   (0.061, "warning"), (0.10, "warning")):
             free = int(total * fraction)
             with mock.patch.object(module.shutil, "disk_usage", return_value=Usage(total,total-free,free)):
                 self.assertEqual(module.disk_state(ROOT, policy)["state"], expected)
@@ -239,6 +239,43 @@ class V7RuntimeRetentionTest(unittest.TestCase):
                 source.unlink(); source.symlink_to(ledger/"execution.jsonl")
                 report = retention_module.compress_closed_cutover_tapes(root,now=10000,dry_run=False)
                 self.assertTrue(source.is_symlink()); self.assertEqual(len(report["failures"]),1)
+
+
+    def test_emergency_reserve_releases_real_allocated_space_before_cleanup(self) -> None:
+        from collections import namedtuple
+        with tempfile.TemporaryDirectory() as directory:
+            root=Path(directory); (root/'control').mkdir()
+            reserve=root/'control/.disk-emergency-reserve'; reserve.write_bytes(b'x'*1024*1024)
+            policy={'emergency_reserve_bytes':1024*1024,'reserve_release_free_bytes':10*1024*1024,
+                    'reserve_create_min_free_bytes':30*1024*1024}
+            Usage=namedtuple('Usage','total used free')
+            before=Usage(100*1024*1024,95*1024*1024,5*1024*1024)
+            after=Usage(100*1024*1024,94*1024*1024,6*1024*1024)
+            with mock.patch.object(retention_module.shutil,'disk_usage',side_effect=[before,after,after]):
+                result=retention_module.manage_emergency_reserve(root,policy,allow_create=False)
+            self.assertEqual(result['state'],'RELEASED_FOR_RETENTION')
+            self.assertEqual(reserve.stat().st_size,0)
+            self.assertGreater(result['released_bytes'],0)
+
+    def test_emergency_mode_skips_positive_disk_demand_before_status_write(self) -> None:
+        from collections import namedtuple
+        with tempfile.TemporaryDirectory() as directory:
+            parent=Path(directory)/'runs'; run_root=parent/'paper_v7_live'; (run_root/'ledger').mkdir(parents=True)
+            (run_root/'ledger/execution.jsonl').write_text('')
+            config=json.loads((ROOT/'config/v7_data_retention.json').read_text())
+            Usage=namedtuple('Usage','total used free'); usage=Usage(100*1024**3,75*1024**3,25*1024**3)
+            with mock.patch.object(retention_module.shutil,'disk_usage',return_value=usage), \
+                 mock.patch.object(retention_module,'manage_emergency_reserve',return_value={'state':'ABSENT'}), \
+                 mock.patch.object(retention_module,'checkpoint_ledger') as checkpoint, \
+                 mock.patch.object(retention_module,'compress_closed_cutover_tapes') as compress:
+                result=run_retention(run_root,config,SHA,dry_run=False,durable_archive_confirmed=False,now=1000)
+            self.assertTrue(result['emergency_cleanup_mode'])
+            checkpoint.assert_not_called(); compress.assert_not_called()
+            self.assertEqual(result['ledger_checkpoint']['reason'],'emergency_disk_cleanup_mode')
+
+    def test_mac_retention_cadence_is_five_minutes(self) -> None:
+        source=(ROOT/'ops/launchd/com.polymarket.v7.retention.plist.in').read_text()
+        self.assertIn('<key>StartInterval</key><integer>300</integer>',source)
 
 
 if __name__ == "__main__":

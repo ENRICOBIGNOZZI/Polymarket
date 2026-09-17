@@ -95,4 +95,46 @@ class WindowedRetentionTest(unittest.TestCase):
         self.assertFalse(cfg['aggregate_retention']['hard_filesystem_quota'])
 
 
+    def test_existing_tombstone_resumes_cleanup_without_collision(self):
+        import hashlib
+        with tempfile.TemporaryDirectory() as tmp:
+            runs=Path(tmp)/'runs';store=runs/'paper_v7_durable/permanent_evidence/store'
+            alias=runs/'paper_v7_archives'/('cutover-'+'a'*40+'-1-1')/'research/repricing_book/book_observations/x.jsonl'
+            payload=b'large-old-pack';sha=hashlib.sha256(payload).hexdigest()
+            pack=store/'packs'/sha[:2]/(sha+'.pack');pack.parent.mkdir(parents=True);pack.write_bytes(payload);os.chmod(pack,0o400)
+            old=time.time_ns()-8*3600*10**9
+            value={'schema':'polymarket_v7_lossless_shared_pack_v1','pack_sha256':sha,'pack_bytes':len(payload),
+                'source_aliases':[str(alias)],'source_bytes_sha256_verified':True,'created_ns':old,'source_original_stat':[1,2,len(payload),old]}
+            raw=json.dumps(value).encode();man=store/'pack_manifests'/(hashlib.sha256(raw).hexdigest()+'.json');man.parent.mkdir(parents=True);man.write_bytes(raw)
+            tomb={'schema':'polymarket_v7_windowed_pack_tombstone_v1','paper_only':True,'authenticated_execution':False,
+                  'real_order_submission':False,'execution_authority':'ZERO_AUTHORITY_RESEARCH_ONLY',
+                  'policy':'USER_AUTHORIZED_HFT_ROLLING_RAW_WINDOW_20260916','raw_detail_available':False,
+                  'pack_sha256':sha,'source_aliases':[str(alias)],'source_families':['pm_causal_book'],
+                  'object_sha256s':[],'manifest_sha256s':[man.stem],'retired_at_ns':old,'cutoff_ns':old-1}
+            target=store/'windowed_pack_tombstones'/(sha+'.json');immutable(target,canonical(tomb))
+            out=run(runs,raw_detail_seconds=6*3600,maximum_seconds=30)
+            self.assertFalse(pack.exists());self.assertFalse(man.exists());self.assertTrue(target.exists())
+            self.assertEqual(out['removed_packs'],1)
+
+    def test_existing_tombstone_cannot_expand_to_new_alias(self):
+        import hashlib
+        with tempfile.TemporaryDirectory() as tmp:
+            runs=Path(tmp)/'runs';store=runs/'paper_v7_durable/permanent_evidence/store';old=time.time_ns()-8*3600*10**9
+            a1=runs/'paper_v7_archives'/('cutover-'+'a'*40+'-1-1')/'research/repricing_book/book_observations/a.jsonl'
+            a2=runs/'paper_v7_archives'/('cutover-'+'a'*40+'-1-1')/'research/repricing_book/book_observations/b.jsonl'
+            payload=b'pack';sha=hashlib.sha256(payload).hexdigest();pack=store/'packs'/sha[:2]/(sha+'.pack');pack.parent.mkdir(parents=True);pack.write_bytes(payload);os.chmod(pack,0o400)
+            value={'schema':'polymarket_v7_lossless_shared_pack_v1','pack_sha256':sha,'pack_bytes':len(payload),
+                   'source_aliases':[str(a1),str(a2)],'source_bytes_sha256_verified':True,'created_ns':old,'source_original_stat':[1,2,len(payload),old]}
+            raw=json.dumps(value).encode();man=store/'pack_manifests'/(hashlib.sha256(raw).hexdigest()+'.json');man.parent.mkdir(parents=True);man.write_bytes(raw)
+            tomb={'schema':'polymarket_v7_windowed_pack_tombstone_v1','paper_only':True,'authenticated_execution':False,
+                  'real_order_submission':False,'execution_authority':'ZERO_AUTHORITY_RESEARCH_ONLY',
+                  'policy':'USER_AUTHORIZED_HFT_ROLLING_RAW_WINDOW_20260916','raw_detail_available':False,
+                  'pack_sha256':sha,'source_aliases':[str(a1)],'source_families':['pm_causal_book'],
+                  'object_sha256s':[],'manifest_sha256s':[man.stem],'retired_at_ns':old,'cutoff_ns':old-1}
+            immutable(store/'windowed_pack_tombstones'/(sha+'.json'),canonical(tomb))
+            with self.assertRaisesRegex(ValueError,'identity expanded'):
+                run(runs,raw_detail_seconds=6*3600,maximum_seconds=30)
+            self.assertTrue(pack.exists());self.assertTrue(man.exists())
+
+
 if __name__=='__main__':unittest.main()
