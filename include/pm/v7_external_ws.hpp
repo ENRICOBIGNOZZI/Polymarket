@@ -30,6 +30,9 @@ class ExternalFrameObserver {
 public:
     virtual ~ExternalFrameObserver() = default;
     virtual void on_connection_epoch(std::uint64_t) noexcept {}
+    // `local_receive_wall_ns` is positive for canonical ingress/tape clients.
+    // Explicit observer-only SHADOW clients may disable wall-clock capture and
+    // then receive zero here; monotonic receive time remains authoritative.
     virtual void on_frame(std::uint64_t connection_epoch,
                           std::int64_t local_receive_monotonic_ns,
                           std::int64_t local_receive_wall_ns,
@@ -69,6 +72,11 @@ private:
 };
 #endif
 
+[[nodiscard]] constexpr bool external_ws_clock_policy_valid(
+    bool capture_wall_time, bool has_ingress, bool has_raw_sink) noexcept {
+    return capture_wall_time || (!has_ingress && !has_raw_sink);
+}
+
 struct ExternalVenueConnectionSpec {
     VenueId venue = VenueId::Unknown;
     std::string host;
@@ -78,6 +86,9 @@ struct ExternalVenueConnectionSpec {
     std::string symbol;
     std::uint64_t asset_handle = 0;
     std::size_t max_message_bytes = 1U << 20;
+    // Keep provenance by default. Zero is legal only for observer-only SHADOW
+    // clients with neither canonical ingress nor raw-tape persistence.
+    std::uint8_t capture_wall_time = 1;
 };
 
 struct ExternalWsSnapshot {
