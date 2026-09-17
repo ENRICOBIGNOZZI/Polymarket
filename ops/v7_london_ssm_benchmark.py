@@ -116,7 +116,7 @@ python3 - "$UNIT" "$JOB" "$SHA" > "$JOB/launch.json" <<'PY'
 import json,sys,time
 print(json.dumps({{'schema':'polymarket_v7_detached_formal_launch_v1','unit':sys.argv[1],'job_dir':sys.argv[2],'code_sha':sys.argv[3],'paper_only':True,'authenticated_execution':False,'real_order_submission':False,'created_at_ns':time.time_ns()}},sort_keys=True))
 PY
-systemd-run --quiet --unit="$UNIT" --property=User={service_user} --property=Group={service_user} --property=WorkingDirectory="$APP" --property=Type=oneshot "$JOB/run.sh"
+systemd-run --quiet --unit="$UNIT" --property=User={service_user} --property=Group={service_user} --property=WorkingDirectory="$APP" --property=Type=simple "$JOB/run.sh"
 sleep 1
 systemctl is-active --quiet "$UNIT" || {{ systemctl status --no-pager "$UNIT" >&2; exit 74; }}
 python3 - "$UNIT" "$JOB" "$SHA" <<'PY'

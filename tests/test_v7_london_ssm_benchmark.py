@@ -50,6 +50,8 @@ class LondonSsmBenchmarkTests(unittest.TestCase):
         sha = "b" * 40
         command = detached_formal_command(sha, "ubuntu", "run-123-euw2-az1")
         self.assertIn("systemd-run", command)
+        self.assertIn("--property=Type=simple", command)
+        self.assertNotIn("--property=Type=oneshot", command)
         self.assertIn("formal.lock", command)
         self.assertIn("flock -n", command)
         self.assertIn("v7_london_benchmark.sh\" formal", command)
