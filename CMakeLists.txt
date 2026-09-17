@@ -35,6 +35,14 @@ target_include_directories(pm_fast_arb PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/includ
 target_link_libraries(pm_fast_arb PUBLIC pm_core Threads::Threads OpenSSL::SSL OpenSSL::Crypto)
 target_compile_options(pm_fast_arb PRIVATE -Wall -Wextra -Wpedantic)
 
+add_library(pm_v7_redundant_bbo
+  src/v7_polymarket_bbo.cpp
+  src/v7_redundant_bbo.cpp
+  src/v7_redundant_bbo_feed.cpp)
+target_include_directories(pm_v7_redundant_bbo PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/include ${Boost_INCLUDE_DIRS})
+target_link_libraries(pm_v7_redundant_bbo PUBLIC pm_fast_arb pm_json Threads::Threads)
+target_compile_options(pm_v7_redundant_bbo PRIVATE -Wall -Wextra -Wpedantic)
+
 add_library(pm_v7_common
   src/v7_oms.cpp
   src/v7_paper_queue.cpp
@@ -170,6 +178,21 @@ if(BUILD_TESTING)
   add_executable(pm_fast_arb_tests tests/test_fast_arb.cpp)
   target_link_libraries(pm_fast_arb_tests PRIVATE pm_fast_arb)
   add_test(NAME pm_fast_arb_tests COMMAND pm_fast_arb_tests)
+
+  add_executable(pm_v7_redundant_bbo_tests tests/test_v7_redundant_bbo.cpp)
+  target_link_libraries(pm_v7_redundant_bbo_tests PRIVATE pm_v7_redundant_bbo)
+  target_compile_options(pm_v7_redundant_bbo_tests PRIVATE -UNDEBUG)
+  add_test(NAME pm_v7_redundant_bbo_tests COMMAND pm_v7_redundant_bbo_tests)
+
+  add_executable(pm_v7_polymarket_bbo_tests tests/test_v7_polymarket_bbo.cpp)
+  target_link_libraries(pm_v7_polymarket_bbo_tests PRIVATE pm_v7_redundant_bbo)
+  target_compile_options(pm_v7_polymarket_bbo_tests PRIVATE -UNDEBUG)
+  add_test(NAME pm_v7_polymarket_bbo_tests COMMAND pm_v7_polymarket_bbo_tests)
+
+  add_executable(pm_v7_redundant_bbo_feed_tests tests/test_v7_redundant_bbo_feed.cpp)
+  target_link_libraries(pm_v7_redundant_bbo_feed_tests PRIVATE pm_v7_redundant_bbo)
+  target_compile_options(pm_v7_redundant_bbo_feed_tests PRIVATE -UNDEBUG)
+  add_test(NAME pm_v7_redundant_bbo_feed_tests COMMAND pm_v7_redundant_bbo_feed_tests)
 
   add_executable(pm_v7_oms_tests tests/test_v7_oms.cpp)
   target_link_libraries(pm_v7_oms_tests PRIVATE pm_v7_common)
