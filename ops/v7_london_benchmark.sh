@@ -52,10 +52,10 @@ manifest_path="$OUTPUT_DIR/${MODE}.${AZ_ID}.${stamp}.host.json"
 
 "$PROBE" --region "$AZ_ID" --exact-code-sha "$EXPECTED_SHA" \
   --samples "$SAMPLES" --interval-ms "$INTERVAL_MS" > "$probe_path"
-python3 - "$manifest_path" "$EXPECTED_SHA" "$AZ_NAME" "$AZ_ID" "$INSTANCE_ID" "$INSTANCE_TYPE" "$probe_path" <<'PY'
+python3 - "$manifest_path" "$EXPECTED_SHA" "$AZ_NAME" "$AZ_ID" "$INSTANCE_ID" "$INSTANCE_TYPE" "$probe_path" "$LOCK_FILE" <<'PY'
 import json,socket,sys,time
 from pathlib import Path
-path,sha,az_name,az_id,instance_id,instance_type,probe=sys.argv[1:]
+path,sha,az_name,az_id,instance_id,instance_type,probe,lock_file=sys.argv[1:]
 value={
   'schema':'polymarket_v7_london_host_benchmark_manifest_v1',
   'timestamp':int(time.time()), 'hostname':socket.gethostname(),
@@ -67,7 +67,7 @@ value={
   'zone_name_scope':'THIS_AWS_ACCOUNT_ONLY',
   'selection_scope':'PUBLIC_HTTPS_PROBE_ONLY',
   'single_owner_lock':True,
-  'benchmark_lock_file':'/tmp/polymarket-v7-london-benchmark.lock',
+  'benchmark_lock_file':lock_file,
 }
 Path(path).write_text(json.dumps(value,sort_keys=True,indent=2)+'\n',encoding='utf-8')
 PY
