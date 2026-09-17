@@ -9,6 +9,9 @@ import os
 import time
 from pathlib import Path
 from typing import Any
+from collections import Counter, defaultdict
+
+from v7_execution_ledger import LedgerContractError, iter_events
 
 
 ENGINES = ("CRYPTO_SETTLEMENT_ENGINE", "STRUCTURAL_ARB_ENGINE")
@@ -41,32 +44,115 @@ def _finite_nonnegative(value: Any, name: str) -> float:
     return number
 
 
+def _canonical_crypto_equity(run_root: Path, budget: float) -> tuple[float, bool, str, bool, dict[str, Any]] | None:
+    runtime = read_json(run_root / "control" / "runtime_status.json")
+    ledger = run_root / "ledger" / "execution.jsonl"
+    if not runtime or not ledger.is_file():
+        return None
+    if (
+        runtime.get("schema") != "polymarket_v7_runtime_status_v3"
+        or runtime.get("paper_only") is not True
+        or runtime.get("authenticated_execution") is not False
+        or runtime.get("real_order_submission") is not False
+    ):
+        return 0.0, True, "unsafe_runtime_identity", True, {"reason": "UNSAFE_RUNTIME_IDENTITY"}
+    model_sha = str(runtime.get("model_sha") or "")
+    try:
+        events = [event for event in iter_events(ledger, expected_model_sha=model_sha)
+                  if event.strategy == "CRYPTO_SETTLEMENT_ENGINE"]
+    except (OSError, LedgerContractError, ValueError, TypeError) as exc:
+        return 0.0, True, "canonical_ledger_invalid", True, {"reason": f"{type(exc).__name__}:{exc}"}
+    records: set[str] = set(); fills: set[str] = set()
+    histories: dict[str, list[Any]] = defaultdict(list)
+    components: dict[str, list[float]] = defaultdict(list)
+    for event in events:
+        if event.record_id in records:
+            return 0.0, True, "canonical_ledger_duplicate", True, {"reason": "DUPLICATE_RECORD_ID"}
+        records.add(event.record_id)
+        if event.event_type in {"FILL", "FINAL"}:
+            receipt = event.metadata.get("coordinator_receipt")
+            if not isinstance(receipt, dict) or not receipt:
+                return 0.0, True, "canonical_ledger_unbound", True, {"reason": "COORDINATOR_RECEIPT_MISSING"}
+            if not event.order_id:
+                return 0.0, True, "canonical_ledger_unbound", True, {"reason": "ORDER_ID_MISSING"}
+            histories[event.order_id].append(event)
+        if event.event_type == "FILL":
+            if not event.fill_id or event.fill_id in fills:
+                return 0.0, True, "canonical_ledger_duplicate", True, {"reason": "DUPLICATE_OR_MISSING_FILL_ID"}
+            fills.add(event.fill_id)
+    realized: list[float] = []
+    open_costs: list[float] = []
+    open_orders = 0
+    finals = 0
+    for order_id, history in histories.items():
+        order_fills = [event for event in history if event.event_type == "FILL"]
+        order_finals = [event for event in history if event.event_type == "FINAL"]
+        if len(order_finals) > 1:
+            return 0.0, True, "canonical_ledger_duplicate", True, {"reason": "MULTIPLE_FINALS", "order_id": order_id}
+        if order_finals:
+            if not order_fills:
+                return 0.0, True, "canonical_ledger_unbound", True, {"reason": "FINAL_WITHOUT_FILL", "order_id": order_id}
+            final = order_finals[0]
+            if final.final_pnl is None or not math.isfinite(float(final.final_pnl)):
+                return 0.0, True, "canonical_ledger_unmarkable", True, {"reason": "FINAL_PNL_INVALID", "order_id": order_id}
+            pnl = float(final.final_pnl); realized.append(pnl); finals += 1
+            component = str(final.metadata.get("component") or final.metadata.get("model_family") or "UNKNOWN")
+            components[component].append(pnl)
+            continue
+        if not order_fills:
+            continue
+        open_orders += 1
+        for fill in order_fills:
+            values = (fill.filled_size, fill.fill_price, fill.fee)
+            if any(value is None or not math.isfinite(float(value)) or float(value) < 0 for value in values):
+                return 0.0, True, "canonical_ledger_unmarkable", True, {"reason": "OPEN_FILL_COST_INVALID", "order_id": order_id}
+            if str(fill.side or "").upper() != "BUY":
+                return 0.0, True, "canonical_ledger_unsupported", True, {"reason": "OPEN_NONBUY_POSITION", "order_id": order_id}
+            open_costs.append(float(fill.filled_size) * float(fill.fill_price) + float(fill.fee))
+    realized_pnl = math.fsum(realized)
+    open_cost = math.fsum(open_costs)
+    equity = budget + realized_pnl - open_cost
+    if not math.isfinite(equity) or equity < -1e-9:
+        return 0.0, True, "canonical_ledger_negative_equity", True, {"reason": "NEGATIVE_ENGINE_EQUITY", "equity": equity}
+    details = {
+        "model_sha": model_sha, "ledger_records": len(events), "final_count": finals,
+        "open_order_count": open_orders, "realized_pnl": realized_pnl,
+        "conservative_open_cost": open_cost,
+        "component_realized_pnl": {key: math.fsum(values) for key, values in sorted(components.items())},
+        "open_position_valuation": "ZERO_RECOVERY_CONSERVATIVE_UNTIL_FINAL",
+    }
+    return max(0.0, equity), False, "canonical_ledger_conservative", False, details
+
+
 def engine_equity(
     run_root: Path, engine_id: str, budget: float,
-) -> tuple[float, bool, str, bool]:
+) -> tuple[float, bool, str, bool, dict[str, Any]]:
     if engine_id == "CRYPTO_SETTLEMENT_ENGINE":
+        canonical = _canonical_crypto_equity(run_root, budget)
+        if canonical is not None:
+            return canonical
         state = read_json(run_root / "external_fair" / "paper_router_status.json")
         key = "equity"
     elif engine_id == "STRUCTURAL_ARB_ENGINE":
         state = read_json(run_root / "hard_arb" / "status.json")
         key = "equity_cost_basis"
     else:
-        return 0.0, True, "unknown_engine", True
+        return 0.0, True, "unknown_engine", True, {"reason": "UNKNOWN_ENGINE"}
     if not state:
-        return budget, False, "not_started", False
+        return budget, False, "not_started", False, {}
     if (
         state.get("paper_only") is not True
         or state.get("authenticated_execution") is not False
         or state.get("real_order_submission") not in (None, False)
     ):
-        return 0.0, True, "unsafe_state_contract", True
+        return 0.0, True, "unsafe_state_contract", True, {"reason": "UNSAFE_STATE_CONTRACT"}
     try:
         value = _finite_nonnegative(state[key], "unmarkable_equity")
     except (KeyError, ValueError):
-        return 0.0, True, "unmarkable_equity", True
+        return 0.0, True, "unmarkable_equity", True, {"reason": "UNMARKABLE_EQUITY"}
     source = str(state.get("source") or "reported")
     fatal = source in {"fail_closed_unmarkable", "unsafe_state_contract"}
-    return value, bool(state.get("killed")), source, fatal
+    return value, bool(state.get("killed")), source, fatal, {}
 
 
 def assess(run_root: Path, allocation_manifest: Path, *, max_drawdown: float) -> dict[str, Any]:
@@ -94,7 +180,7 @@ def assess(run_root: Path, allocation_manifest: Path, *, max_drawdown: float) ->
     fatal_engines: list[str] = []
     for engine_id in ENGINES:
         budget = _finite_nonnegative(budgets[engine_id], "engine_budget")
-        value, killed, source, fatal = engine_equity(run_root, engine_id, budget)
+        value, killed, source, fatal, details = engine_equity(run_root, engine_id, budget)
         equity += value
         if killed:
             locally_killed.append(engine_id)
@@ -104,6 +190,7 @@ def assess(run_root: Path, allocation_manifest: Path, *, max_drawdown: float) ->
         states[engine_id] = {
             "budget": budget, "equity": value, "source": source,
             "killed": killed, "fatal_to_portfolio": fatal,
+            "details": details,
         }
     previous = read_json(run_root / "control" / "portfolio_state.json")
     peak = max(account, float(previous.get("peak", account)), equity)
