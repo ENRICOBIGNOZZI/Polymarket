@@ -35,6 +35,10 @@ target_include_directories(pm_fast_arb PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/includ
 target_link_libraries(pm_fast_arb PUBLIC pm_core Threads::Threads OpenSSL::SSL OpenSSL::Crypto)
 target_compile_options(pm_fast_arb PRIVATE -Wall -Wextra -Wpedantic)
 
+add_library(pm_v7_prepared_order src/v7_prepared_order_frame.cpp)
+target_include_directories(pm_v7_prepared_order PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/include)
+target_compile_options(pm_v7_prepared_order PRIVATE -Wall -Wextra -Wpedantic)
+
 add_library(pm_v7_common
   src/v7_oms.cpp
   src/v7_paper_queue.cpp
@@ -85,6 +89,10 @@ target_link_libraries(polymarket_v7_trade_recorder PRIVATE pm_core)
 target_compile_options(polymarket_v7_trade_recorder PRIVATE -Wall -Wextra -Wpedantic)
 
 if(NOT PM_LONDON_RUNTIME_ONLY)
+add_executable(polymarket_v7_prepared_order_frame_bench src/v7_prepared_order_frame_bench.cpp)
+target_link_libraries(polymarket_v7_prepared_order_frame_bench PRIVATE pm_v7_prepared_order)
+target_compile_options(polymarket_v7_prepared_order_frame_bench PRIVATE -Wall -Wextra -Wpedantic)
+
 add_executable(polymarket_v7_maker_replay_bench src/v7_maker_replay_bench.cpp)
 target_link_libraries(polymarket_v7_maker_replay_bench PRIVATE pm_v7_hft)
 target_compile_options(polymarket_v7_maker_replay_bench PRIVATE -Wall -Wextra -Wpedantic)
@@ -198,6 +206,11 @@ if(BUILD_TESTING)
   add_executable(pm_v7_execution_admission_tests tests/test_v7_execution_admission.cpp)
   target_link_libraries(pm_v7_execution_admission_tests PRIVATE pm_v7_common)
   add_test(NAME pm_v7_execution_admission_tests COMMAND pm_v7_execution_admission_tests)
+
+  add_executable(pm_v7_prepared_order_frame_tests tests/test_v7_prepared_order_frame.cpp)
+  target_link_libraries(pm_v7_prepared_order_frame_tests PRIVATE pm_v7_prepared_order Threads::Threads)
+  target_compile_options(pm_v7_prepared_order_frame_tests PRIVATE -UNDEBUG)
+  add_test(NAME pm_v7_prepared_order_frame_tests COMMAND pm_v7_prepared_order_frame_tests)
 
 
 
