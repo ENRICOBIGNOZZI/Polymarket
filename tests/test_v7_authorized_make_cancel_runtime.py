@@ -117,26 +117,30 @@ def run(executor: Path) -> None:
             new_risk_authorized=False, paper_exploration_authorized=True,
         )
         assert make_decision["action"] == "MAKE"
-        coordinator._publish_make_authorization(root, make_decision, maker_rows)
 
-        # Model/registry initialization can take longer than the live feature
-        # freshness budget on a cold CI worker. Publish a fresh observation at
-        # native admission, as the running observer does, without refreshing
-        # the original selection/authorization timestamp.
-        publish_ms = time.time_ns() // 1_000_000
-        for relative in ('micro_maker/book_features/yes-token.json', 'micro_maker/fillability_ws_status.json',
-                         'external_fair/paper_router_status.json'):
-            value = json.loads((root/relative).read_text())
-            if 'receive_wall_ms' in value: value['receive_wall_ms'] = publish_ms
-            if 'timestamp_ms' in value: value['timestamp_ms'] = publish_ms
-            if 'timestamp' in value: value['timestamp'] = publish_ms/1000
-            write(root/relative,value)
-
+        # Start the consumer before publishing the authorization. On a cold
+        # Debug/CI worker process startup itself may exceed the 500 ms observed-
+        # feature freshness window. The real observer refreshes continuously;
+        # this fixture must therefore refresh at actual native admission, not
+        # before process startup.
         process = subprocess.Popen(
             [str(executor), "--run-root", str(root), "--model-sha", SHA],
             stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
         )
         try:
+            wait_for(root, lambda row: row.get("model_sha") == SHA
+                     and int(row.get("submitted_orders") or 0) == 0)
+            publish_ms = time.time_ns() // 1_000_000
+            for relative in ('micro_maker/book_features/yes-token.json',
+                             'micro_maker/fillability_ws_status.json',
+                             'external_fair/paper_router_status.json'):
+                value = json.loads((root / relative).read_text())
+                if 'receive_wall_ms' in value: value['receive_wall_ms'] = publish_ms
+                if 'timestamp_ms' in value: value['timestamp_ms'] = publish_ms
+                if 'timestamp' in value: value['timestamp'] = publish_ms / 1000
+                write(root / relative, value)
+            coordinator._publish_make_authorization(root, make_decision, maker_rows)
+
             submitted = wait_for(
                 root,
                 lambda row: int(row.get("submitted_orders") or 0) == 1

@@ -97,3 +97,15 @@ identity comes from `plan.intent`, state generation from
 `plan.market_state_version`, and the causal book is checked only for fields it
 owns. Authorization, expiry, book age, state generation, lineage and maximum
 durable debit all fail closed before a PAPER fill is accepted.
+
+## 2026-09-17 — Debug exact-SHA exposed a cold-start freshness race in maker test
+
+**Observed.** Exact-SHA Release passed 198/198, while Debug failed
+`test_v7_authorized_make_cancel_runtime`: the fixture refreshed observed maker
+features before spawning the native executor, so cold Debug startup could age the
+500 ms feature cut before the authorization was consumed.
+
+**Correction.** The test now starts the zero-authority consumer first, waits for
+its initial status, refreshes the observer/account evidence, and only then
+publishes the coordinator authorization. Production freshness limits were not
+relaxed. The corrected Debug path passed 20/20 repeated native lifecycle runs.
