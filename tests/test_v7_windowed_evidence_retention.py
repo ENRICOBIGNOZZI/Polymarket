@@ -1,9 +1,11 @@
 from __future__ import annotations
 import json, os, sys, tempfile, time, unittest
+from unittest import mock
 from pathlib import Path
 ROOT=Path(__file__).resolve().parents[1]
 sys.path.insert(0,str(ROOT/'scripts'))
 from v7_evidence_store import canonical, digest, immutable
+import v7_windowed_evidence_retention as retention
 from v7_windowed_evidence_retention import run
 
 def revision(store, source_id, family, path, captured_ns, objsha):
@@ -212,6 +214,54 @@ class WindowedRetentionTest(unittest.TestCase):
             immutable(store/'windowed_pack_tombstones'/(sha+'.json'),canonical(tomb))
             out=run(runs,raw_detail_seconds=6*3600,maximum_seconds=30)
             self.assertTrue(alias.exists());self.assertEqual(out['removed_source_aliases'],0);self.assertEqual(out['alias_integrity_skips'],1)
+
+
+    def test_unindexed_old_pm_book_gets_hash_receipt_before_retirement(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            runs=Path(tmp)/'runs'; store=runs/'paper_v7_durable/permanent_evidence/store'; store.mkdir(parents=True)
+            old=time.time_ns()-8*3600*10**9
+            source=runs/'paper_v7_live/micro_maker/book_observations/session.segment-1000000.jsonl'
+            source.parent.mkdir(parents=True); payload=b'{"book":1}\n'*100; source.write_bytes(payload); os.utime(source,ns=(old,old))
+            out=run(runs,raw_detail_seconds=6*3600,maximum_seconds=30)
+            self.assertFalse(source.exists())
+            self.assertEqual(out['removed_unindexed_source_files'],1)
+            receipts=list((store/'unindexed_windowed_source_tombstones').glob('*/*.json'))
+            self.assertEqual(len(receipts),1)
+            receipt=json.loads(receipts[0].read_text())
+            self.assertEqual(Path(receipt['source']['path']).resolve(),source.resolve())
+            self.assertEqual(receipt['source']['source_family'],'pm_causal_book')
+            import hashlib
+            self.assertEqual(receipt['source']['sha256'],hashlib.sha256(payload).hexdigest())
+            self.assertFalse(receipt['raw_detail_available'])
+
+    def test_recent_unindexed_pm_book_is_preserved(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            runs=Path(tmp)/'runs'; (runs/'paper_v7_durable/permanent_evidence/store').mkdir(parents=True)
+            source=runs/'paper_v7_live/research/repricing_book/book_observations/session.segment-1000000.jsonl'
+            source.parent.mkdir(parents=True); source.write_text('{}\n'); recent=time.time_ns()-3600*10**9; os.utime(source,ns=(recent,recent))
+            out=run(runs,raw_detail_seconds=6*3600,maximum_seconds=30)
+            self.assertTrue(source.exists()); self.assertEqual(out['unindexed_source_candidates'],0)
+
+    def test_indexed_path_is_not_considered_unindexed(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            runs=Path(tmp)/'runs'; old=time.time_ns()-8*3600*10**9
+            source=runs/'paper_v7_live/micro_maker/book_observations/session.segment-1000000.jsonl'
+            source.parent.mkdir(parents=True); source.write_text('{}\n'); os.utime(source,ns=(old,old))
+            rows=retention._unindexed_pm_book_segments(runs,indexed_paths={str(source)},cutoff_ns=time.time_ns()-6*3600*10**9)
+            self.assertEqual(rows,[]); self.assertTrue(source.exists())
+
+    def test_unindexed_hash_race_preserves_source_and_writes_no_receipt(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            runs=Path(tmp)/'runs'; store=runs/'paper_v7_durable/permanent_evidence/store'; store.mkdir(parents=True)
+            source=runs/'paper_v7_live/micro_maker/book_observations/session.segment-1000000.jsonl'
+            source.parent.mkdir(parents=True); source.write_bytes(b'first')
+            original=retention._sha256_file
+            def mutate(path):
+                digest=original(path); path.write_bytes(b'second-value'); return digest
+            with mock.patch.object(retention,'_sha256_file',side_effect=mutate):
+                reclaimed,status=retention._retire_unindexed_windowed_path(source,store=store,family='pm_causal_book',raw_detail_seconds=21600,dry_run=False)
+            self.assertEqual(reclaimed,0); self.assertEqual(status,'SOURCE_CHANGED_DURING_HASH'); self.assertTrue(source.exists())
+            self.assertFalse((store/'unindexed_windowed_source_tombstones').exists())
 
 
 if __name__=='__main__':unittest.main()
