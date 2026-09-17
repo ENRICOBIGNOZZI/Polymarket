@@ -56,6 +56,31 @@ def require_close(actual: object, expected: object, field: str, tol: float = 1e-
         fail(f"V7 cutover blocked: {field}={a} does not match operator authorization {e}")
 
 
+def validate_crypto_universe_resource_budget(config: dict[str, Any]) -> None:
+    resources = config.get("resource_budget") if isinstance(config.get("resource_budget"), dict) else {}
+    if "structural" in resources:
+        fail("V7 cutover blocked: retired structural universe budget is forbidden")
+    required = {
+        "hot": (
+            "websocket_asset_capacity", "assets_per_market",
+            "memory_budget_bytes", "estimated_bytes_per_market",
+            "cpu_budget_micros_per_second", "estimated_update_rate_hz_per_market",
+            "estimated_cpu_micros_per_update",
+        ),
+        "warm": (
+            "scan_time_budget_millis", "estimated_scan_millis_per_market",
+            "memory_budget_bytes", "estimated_bytes_per_market",
+        ),
+    }
+    for tier, fields in required.items():
+        values = resources.get(tier)
+        if not isinstance(values, dict):
+            fail(f"V7 cutover blocked: crypto universe {tier} resource budget missing")
+        for field in fields:
+            if number(values.get(field), f"crypto_universe.resource_budget.{tier}.{field}") <= 0:
+                fail(f"V7 cutover blocked: crypto universe {tier}.{field} must be positive")
+
+
 def validate(root: Path, expected_head: str | None) -> dict[str, str]:
     root = root.resolve()
     directives = load_json(root / "config/operator_directives.json")
@@ -162,9 +187,7 @@ def validate(root: Path, expected_head: str | None) -> dict[str, str]:
             or crypto_universe.get("authenticated_execution") is not False
             or crypto_universe.get("real_order_submission") is not False):
         fail("V7 cutover blocked: adaptive universe safety contract invalid")
-    resources = crypto_universe.get("resource_budget") if isinstance(crypto_universe.get("resource_budget"), dict) else {}
-    if any(not isinstance(resources.get(name), dict) for name in ("hot", "warm", "structural")):
-        fail("V7 cutover blocked: adaptive universe resource budgets missing")
+    validate_crypto_universe_resource_budget(crypto_universe)
 
     cfg = load_json(root / config_rel)
     if (cfg.get("engine_version") != 7 or cfg.get("paper_only") is not True
