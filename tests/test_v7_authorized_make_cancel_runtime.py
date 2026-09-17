@@ -120,12 +120,10 @@ def run(executor: Path) -> None:
             new_risk_authorized=False, paper_exploration_authorized=True,
         )
         assert make_decision["action"] == "MAKE"
-        coordinator._publish_make_authorization(root, make_decision, maker_rows)
 
-        # Model/registry initialization can take longer than the live feature
-        # freshness budget on a cold CI worker. Publish a fresh observation at
-        # native admission, as the running observer does, without refreshing
-        # the original selection/authorization timestamp.
+        # Model/registry/process initialization can exceed the real quote TTL on
+        # a heavily loaded CI worker. Keep production TTL enforcement unchanged:
+        # start the executor first, then publish a freshly-built authorization.
         publish_ms = time.time_ns() // 1_000_000
         for relative in ('micro_maker/book_features/yes-token.json', 'micro_maker/fillability_ws_status.json',
                          'external_fair/paper_router_status.json'):
@@ -159,6 +157,32 @@ def run(executor: Path) -> None:
             stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
         )
         try:
+            # Wait until the executor has completed cold construction and is
+            # polling. This mirrors the live ordering and prevents test startup
+            # latency from consuming a 250/500/1000ms quote lifetime.
+            wait_for(root, lambda row: row.get("schema")
+                     == "polymarket_v7_authorized_maker_paper_executor_status_v1")
+            fresh_ms = time.time_ns() // 1_000_000
+            selection_value = json.loads((root / "micro_maker/reward_selection.json").read_text())
+            selection_value["timestamp_ms"] = fresh_ms
+            write(root / "micro_maker/reward_selection.json", selection_value)
+            fresh_now_ns = time.time_ns()
+            original_paper_context = maker_bridge._paper_crypto_context
+            maker_bridge._paper_crypto_context = lambda _registry: fixture.context()
+            try:
+                maker_rows, maker_diag = maker_bridge.build_maker_opportunities(
+                    root, now_ns=fresh_now_ns, repository_root=ROOT,
+                )
+            finally:
+                maker_bridge._paper_crypto_context = original_paper_context
+            assert maker_rows, maker_diag
+            make_decision = coordinator.coordinate(
+                maker_rows, now_ns=fresh_now_ns,
+                new_risk_authorized=False, paper_exploration_authorized=True,
+            )
+            assert make_decision["action"] == "MAKE"
+            coordinator._publish_make_authorization(root, make_decision, maker_rows)
+
             submitted = wait_for(
                 root,
                 lambda row: int(row.get("submitted_orders") or 0) == 1
