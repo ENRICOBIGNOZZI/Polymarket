@@ -6,6 +6,7 @@
 #include <cctype>
 #include <cstdint>
 #include <cstdlib>
+#include <fstream>
 #include <iostream>
 #include <stdexcept>
 #include <string>
@@ -19,6 +20,7 @@ struct Options {
     std::string endpoint = "https://clob.polymarket.com/time";
     std::string region;
     std::string exact_code_sha;
+    std::string sample_audit_jsonl;
     std::size_t samples = 120;
     std::size_t warmup = 3;
     std::int64_t interval_ms = 500;
@@ -47,6 +49,11 @@ struct Options {
     });
 }
 
+[[nodiscard]] std::int64_t wall_millis() noexcept {
+    return std::chrono::duration_cast<std::chrono::milliseconds>(
+        std::chrono::system_clock::now().time_since_epoch()).count();
+}
+
 Options options(int argc, char** argv) {
     Options out;
     for (int i = 1; i < argc; ++i) {
@@ -59,6 +66,7 @@ Options options(int argc, char** argv) {
         else if (argument == "--endpoint") out.endpoint = next();
         else if (argument == "--region") out.region = next();
         else if (argument == "--exact-code-sha") out.exact_code_sha = next();
+        else if (argument == "--sample-audit-jsonl") out.sample_audit_jsonl = next();
         else if (argument == "--samples") out.samples = static_cast<std::size_t>(integer(next(), "samples"));
         else if (argument == "--warmup") out.warmup = static_cast<std::size_t>(integer(next(), "warmup"));
         else if (argument == "--interval-ms") out.interval_ms = integer(next(), "interval-ms");
@@ -69,6 +77,9 @@ Options options(int argc, char** argv) {
     }
     if (out.region.empty() || out.region.find_first_of("\"\\\r\n") != std::string::npos) {
         throw std::runtime_error("region is required");
+    }
+    if (out.sample_audit_jsonl.find_first_of("\r\n") != std::string::npos) {
+        throw std::runtime_error("sample-audit-jsonl contains a line break");
     }
     if (!exact_sha(out.exact_code_sha)) throw std::runtime_error("exact-code-sha must be lowercase SHA-1");
     if (out.samples == 0 || out.samples > 1'000'000) throw std::runtime_error("samples out of range");
@@ -103,6 +114,12 @@ int main(int argc, char** argv) {
             std::cout << "{\"validated\":true,\"network_calls\":0}\n";
             return 0;
         }
+        std::ofstream sample_audit;
+        if (!cfg.sample_audit_jsonl.empty()) {
+            sample_audit.open(cfg.sample_audit_jsonl, std::ios::out | std::ios::trunc);
+            if (!sample_audit) throw std::runtime_error("cannot open sample-audit-jsonl");
+        }
+
         pm::HttpClient client;
         bool connection_seen = false;
         const auto warmup_started = std::chrono::steady_clock::now();
@@ -134,29 +151,69 @@ int main(int argc, char** argv) {
         std::size_t transport_exceptions = 0;
         std::string primary_ip;
         for (std::size_t i = 0; i < cfg.samples; ++i) {
+            const auto sample_started_wall_ms = wall_millis();
+            long sample_status = 0;
+            std::int64_t sample_dns_ns = 0;
+            std::int64_t sample_tcp_ns = 0;
+            std::int64_t sample_tls_ns = 0;
+            std::int64_t sample_first_byte_ns = 0;
+            std::int64_t sample_total_ns = 0;
+            long sample_new_connections = 0;
+            bool sample_connection_reused = false;
+            bool sample_success = false;
+            bool sample_transport_exception = false;
             try {
                 const auto response = client.get(cfg.endpoint);
-                const auto opened = static_cast<std::size_t>(std::max<long>(0, response.timings.new_connections));
+                sample_status = response.status;
+                sample_dns_ns = response.timings.dns_ns;
+                sample_tcp_ns = response.timings.tcp_connect_ns;
+                sample_tls_ns = response.timings.tls_connect_ns;
+                sample_first_byte_ns = response.timings.first_byte_ns;
+                sample_total_ns = response.timings.total_ns;
+                sample_new_connections = std::max<long>(0, response.timings.new_connections);
+                sample_connection_reused = response.timings.connection_reused;
+                sample_success = response.status >= 200 && response.status < 400;
+                const auto opened = static_cast<std::size_t>(sample_new_connections);
                 if (opened > 0) {
                     measured_reconnects += opened - (connection_seen ? 0U : 1U);
                     connection_seen = true;
                 }
-                if (response.status < 200 || response.status >= 400) {
+                if (!sample_success) {
                     ++failed;
                 } else {
-                    dns.push_back(response.timings.dns_ns);
-                    tcp.push_back(response.timings.tcp_connect_ns);
-                    tls.push_back(response.timings.tls_connect_ns);
-                    first_byte.push_back(response.timings.first_byte_ns);
-                    total.push_back(response.timings.total_ns);
-                    reused += response.timings.connection_reused ? 1U : 0U;
-                    new_connections += static_cast<std::size_t>(
-                        std::max<long>(0, response.timings.new_connections));
+                    dns.push_back(sample_dns_ns);
+                    tcp.push_back(sample_tcp_ns);
+                    tls.push_back(sample_tls_ns);
+                    first_byte.push_back(sample_first_byte_ns);
+                    total.push_back(sample_total_ns);
+                    reused += sample_connection_reused ? 1U : 0U;
+                    new_connections += opened;
                     if (!response.timings.primary_ip.empty()) primary_ip = response.timings.primary_ip;
                 }
             } catch (const std::exception&) {
                 ++failed;
                 ++transport_exceptions;
+                sample_transport_exception = true;
+            }
+            const auto sample_finished_wall_ms = wall_millis();
+            if (sample_audit) {
+                sample_audit << "{\"schema\":\"polymarket_v7_latency_sample_v1\""
+                             << ",\"index\":" << i
+                             << ",\"started_wall_ms\":" << sample_started_wall_ms
+                             << ",\"finished_wall_ms\":" << sample_finished_wall_ms
+                             << ",\"success\":" << (sample_success ? "true" : "false")
+                             << ",\"http_status\":" << sample_status
+                             << ",\"dns_ns\":" << sample_dns_ns
+                             << ",\"tcp_connect_ns\":" << sample_tcp_ns
+                             << ",\"tls_connect_ns\":" << sample_tls_ns
+                             << ",\"first_byte_ns\":" << sample_first_byte_ns
+                             << ",\"total_ns\":" << sample_total_ns
+                             << ",\"connection_reused\":" << (sample_connection_reused ? "true" : "false")
+                             << ",\"new_connections\":" << sample_new_connections
+                             << ",\"transport_exception\":" << (sample_transport_exception ? "true" : "false")
+                             << "}\n";
+                sample_audit.flush();
+                if (!sample_audit) throw std::runtime_error("cannot write sample-audit-jsonl");
             }
             if (cfg.interval_ms > 0 && i + 1 < cfg.samples) {
                 std::this_thread::sleep_for(std::chrono::milliseconds(cfg.interval_ms));
@@ -190,6 +247,8 @@ int main(int argc, char** argv) {
                   << ",\"warmup_elapsed_monotonic_ns\":" << warmup_elapsed_ns
                   << ",\"sampling_mode\":\"CLOSED_LOOP\""
                   << ",\"coordinated_omission_corrected\":false"
+                  << ",\"sample_audit_enabled\":" << (cfg.sample_audit_jsonl.empty() ? "false" : "true")
+                  << ",\"sample_audit_rows\":" << (cfg.sample_audit_jsonl.empty() ? 0U : cfg.samples)
                   << ",\"timings_ns\":{";
         emit_distribution("dns", dns);
         std::cout << ',';
