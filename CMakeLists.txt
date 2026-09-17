@@ -125,6 +125,10 @@ add_executable(polymarket_v7_feed_race_probe src/v7_feed_race_probe.cpp)
 target_link_libraries(polymarket_v7_feed_race_probe PRIVATE pm_v7_external)
 target_compile_options(polymarket_v7_feed_race_probe PRIVATE -Wall -Wextra -Wpedantic)
 
+add_executable(polymarket_v7_pm_feed_race_probe src/v7_pm_feed_race_probe.cpp)
+target_link_libraries(polymarket_v7_pm_feed_race_probe PRIVATE pm_fast_arb)
+target_compile_options(polymarket_v7_pm_feed_race_probe PRIVATE -Wall -Wextra -Wpedantic)
+
 add_executable(polymarket_v7_ingress_latency_bench src/v7_ingress_latency_bench.cpp)
 target_link_libraries(polymarket_v7_ingress_latency_bench PRIVATE pm_v7_external)
 target_compile_options(polymarket_v7_ingress_latency_bench PRIVATE -Wall -Wextra -Wpedantic)
@@ -264,6 +268,8 @@ if(BUILD_TESTING)
 
   add_test(NAME pm_v7_feed_race_probe_validate COMMAND polymarket_v7_feed_race_probe --validate-only)
   add_test(NAME pm_v7_feed_race_probe_reduce COMMAND polymarket_v7_feed_race_probe --self-test)
+  add_test(NAME pm_v7_pm_feed_race_probe_validate COMMAND polymarket_v7_pm_feed_race_probe --validate-only)
+  add_test(NAME pm_v7_pm_feed_race_probe_reduce COMMAND polymarket_v7_pm_feed_race_probe --self-test)
   add_test(NAME pm_v7_feed_race_probe_reject_endpoint COMMAND polymarket_v7_feed_race_probe --endpoint https://clob.polymarket.com/order)
   set_tests_properties(pm_v7_feed_race_probe_reject_endpoint PROPERTIES WILL_FAIL TRUE)
 
