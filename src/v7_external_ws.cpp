@@ -155,6 +155,8 @@ void ExternalVenueWsClient::run(ExternalStopToken stop) noexcept {
             websocket::stream<beast::ssl_stream<beast::tcp_stream>> ws(io, context);
             const auto endpoints = resolver.resolve(spec_.host, spec_.port);
             beast::get_lowest_layer(ws).connect(endpoints);
+            // Do not hold small subscription/control frames for Nagle batching.
+            beast::get_lowest_layer(ws).socket().set_option(tcp::no_delay(true));
 
             if (!SSL_set_tlsext_host_name(ws.next_layer().native_handle(), spec_.host.c_str())) {
                 throw beast::system_error(

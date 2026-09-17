@@ -1,5 +1,6 @@
 #include "pm/v7_external_ingress.hpp"
 #include "pm/v7_external_tape.hpp"
+#include "pm/v7_ingress_wakeup.hpp"
 
 #include <algorithm>
 #include <array>
@@ -8,8 +9,10 @@ namespace pm::v7::external_fair {
 
 ExternalVenueIngress::ExternalVenueIngress(VenueId venue,
                                            std::uint64_t asset_handle,
-                                           ExternalTapeRecorder* normalized_tape) noexcept
-    : venue_(venue), asset_handle_(asset_handle), normalized_tape_(normalized_tape) {}
+                                           ExternalTapeRecorder* normalized_tape,
+                                           IngressWakeup* wakeup) noexcept
+    : venue_(venue), asset_handle_(asset_handle), normalized_tape_(normalized_tape),
+      wakeup_(wakeup) {}
 
 ExternalDecodeResult ExternalVenueIngress::on_frame(
     std::uint64_t connection_epoch,
@@ -75,6 +78,7 @@ bool ExternalVenueIngress::enqueue_event(ExternalVenueEvent event) noexcept {
     healthy_.store(event.healthy != 0 && event.stale == 0,
                    std::memory_order_release);
     if (normalized_tape_ != nullptr) (void)normalized_tape_->try_record_external_venue_event(event);
+    if (wakeup_ != nullptr) wakeup_->notify();
     return true;
 }
 

@@ -71,6 +71,7 @@ add_library(pm_v7_external
   src/v7_external_kernel.cpp
   src/v7_external_protocol.cpp
   src/v7_external_ingress.cpp
+  src/v7_ingress_wakeup.cpp
   src/v7_external_ws.cpp
   src/v7_external_tape.cpp
   src/v7_external_replay.cpp)
@@ -113,6 +114,15 @@ target_compile_options(polymarket_v7_authorized_maker_paper_executor PRIVATE -Wa
 add_executable(polymarket_v7_maker_research_replay src/v7_maker_research_replay.cpp)
 target_link_libraries(polymarket_v7_maker_research_replay PRIVATE pm_v7_hft)
 target_compile_options(polymarket_v7_maker_research_replay PRIVATE -Wall -Wextra -Wpedantic)
+
+# Offline queue-handoff comparison; no market or execution authority.
+add_executable(polymarket_v7_feed_race_probe src/v7_feed_race_probe.cpp)
+target_link_libraries(polymarket_v7_feed_race_probe PRIVATE pm_v7_external)
+target_compile_options(polymarket_v7_feed_race_probe PRIVATE -Wall -Wextra -Wpedantic)
+
+add_executable(polymarket_v7_ingress_latency_bench src/v7_ingress_latency_bench.cpp)
+target_link_libraries(polymarket_v7_ingress_latency_bench PRIVATE pm_v7_external)
+target_compile_options(polymarket_v7_ingress_latency_bench PRIVATE -Wall -Wextra -Wpedantic)
 
 add_executable(polymarket_v7_external_venue_runtime src/v7_external_venue_runtime.cpp)
 target_link_libraries(polymarket_v7_external_venue_runtime PRIVATE pm_v7_external)
@@ -240,6 +250,20 @@ if(BUILD_TESTING)
   add_executable(pm_v7_external_protocol_tests tests/test_v7_external_protocol.cpp)
   target_link_libraries(pm_v7_external_protocol_tests PRIVATE pm_v7_external)
   add_test(NAME pm_v7_external_protocol_tests COMMAND pm_v7_external_protocol_tests)
+
+  add_test(NAME pm_v7_feed_race_probe_validate COMMAND polymarket_v7_feed_race_probe --validate-only)
+  add_test(NAME pm_v7_feed_race_probe_reduce COMMAND polymarket_v7_feed_race_probe --self-test)
+  add_test(NAME pm_v7_feed_race_probe_reject_endpoint COMMAND polymarket_v7_feed_race_probe --endpoint https://clob.polymarket.com/order)
+  set_tests_properties(pm_v7_feed_race_probe_reject_endpoint PROPERTIES WILL_FAIL TRUE)
+
+  add_test(NAME pm_v7_ingress_latency_bench_smoke
+    COMMAND polymarket_v7_ingress_latency_bench --samples 16 --rounds 1)
+
+  add_executable(pm_v7_ingress_wakeup_tests tests/test_v7_ingress_wakeup.cpp)
+  target_link_libraries(pm_v7_ingress_wakeup_tests PRIVATE pm_v7_external)
+  target_compile_options(pm_v7_ingress_wakeup_tests PRIVATE -UNDEBUG)
+  add_test(NAME pm_v7_ingress_wakeup_tests COMMAND pm_v7_ingress_wakeup_tests)
+  set_tests_properties(pm_v7_ingress_wakeup_tests PROPERTIES TIMEOUT 30)
 
   add_executable(pm_v7_external_ingress_tests tests/test_v7_external_ingress.cpp)
   target_link_libraries(pm_v7_external_ingress_tests PRIVATE pm_v7_external)
