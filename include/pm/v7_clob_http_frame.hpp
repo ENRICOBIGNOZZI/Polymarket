@@ -24,8 +24,9 @@ struct L2AuthHeadersView {
     std::span<char> output) noexcept;
 
 // Hot-path form for one authenticated execution lane. Address, API key and
-// passphrase are validated and serialized once during construction; each order
-// supplies only the dynamic signature, timestamp and exact body.
+// passphrase are validated and serialized once during construction. Exposing
+// the exact dynamic header size lets a fused request builder place the JSON body
+// directly at its final offset before HMAC signing it in place.
 class PreparedPostOrderHttp1 final {
 public:
     PreparedPostOrderHttp1(std::string_view address,
@@ -33,6 +34,17 @@ public:
                            std::string_view passphrase) noexcept;
 
     [[nodiscard]] bool valid() const noexcept { return valid_; }
+
+    [[nodiscard]] std::size_t required_header_size(
+        std::size_t signature_size,
+        std::size_t timestamp_size,
+        std::size_t body_size) const noexcept;
+
+    [[nodiscard]] std::size_t serialize_headers(
+        std::string_view signature,
+        std::string_view timestamp,
+        std::size_t body_size,
+        std::span<char> output) const noexcept;
 
     [[nodiscard]] std::size_t serialize(
         std::string_view signature,
