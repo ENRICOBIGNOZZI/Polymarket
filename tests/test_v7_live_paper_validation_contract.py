@@ -71,6 +71,34 @@ class V7LivePaperValidationContractTest(unittest.TestCase):
         self.assertIn('if (( SECONDS >= deadline ))', gate)
         self.assertLess(gate.index('if [[ "$all_exact_green" == "true" ]]'), gate.index('echo "ready=true"'))
 
+    def test_validation_builds_research_plane_artifact_before_runtime(self) -> None:
+        workflow = (ROOT / ".github/workflows/v7-live-paper-validation.yml").read_text(encoding="utf-8")
+        runtime = (ROOT / "scripts/paper_v7_execution_loop.sh").read_text(encoding="utf-8")
+        build_marker = "- name: Build same-SHA validation artifact"
+        runtime_marker = "- name: Bounded same-SHA public-data PAPER runtime"
+        self.assertIn(build_marker, workflow)
+        self.assertIn(runtime_marker, workflow)
+        self.assertLess(workflow.index(build_marker), workflow.index(runtime_marker))
+        for required in (
+            'validation_research_root="$RUNNER_TEMP/v7-validation-research"',
+            'artifact_root="$RUNNER_TEMP/v7-validation-artifacts"',
+            'PM_V7_RESEARCH_SOURCE_ROOT="$validation_research_root/source"',
+            'PM_V7_RESEARCH_ARCHIVE_ROOT="$validation_research_root/archive"',
+            'PM_V7_RESEARCH_DURABLE_ROOT="$validation_research_root/durable"',
+            'PM_V7_RESEARCH_ARTIFACT_ROOT="$artifact_root"',
+            'research/build_runtime_artifacts.sh "$VALIDATION_SHA"',
+            "manifest.get('runtime_training') is False",
+            "candidate.get('state') == 'PROMOTABLE'",
+            "(candidate.get('maker') or {}).get('state') == 'BASELINE_COLD_START'",
+            'echo "PM_V7_RUNTIME_ARTIFACT_ROOT=$artifact_root/current" >> "$GITHUB_ENV"',
+        ):
+            self.assertIn(required, workflow)
+        self.assertNotIn("build_runtime_artifacts.sh", runtime)
+        self.assertIn(
+            'RUNTIME_ARTIFACT_ROOT="${PM_V7_RUNTIME_ARTIFACT_ROOT:-$HOME/polymarket-artifacts/current}"',
+            runtime,
+        )
+
     def test_deploy_is_manual_exact_sha_cutover_only(self) -> None:
         text = (ROOT / ".github/workflows/v7-deploy-paper-server.yml").read_text(encoding="utf-8")
         for required in (
