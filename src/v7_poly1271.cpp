@@ -299,4 +299,28 @@ bool sign_poly1271_hex(Poly1271OrderHasher& hasher,
     return written == kWrappedSignatureHexChars;
 }
 
+bool sign_prepared_poly1271_hex(
+    clob_eip712::ExchangeV2PreparedOrderHasher& order_hasher,
+    PreparedHasher& poly_hasher,
+    Secp256k1Signer& signer,
+    std::uint64_t salt,
+    std::uint64_t maker_amount,
+    std::uint64_t taker_amount,
+    std::uint64_t timestamp_ms,
+    std::span<char> output) noexcept {
+    if (!order_hasher.valid() || !poly_hasher.valid() || !signer.valid()
+        || output.size() < kWrappedSignatureHexChars) return false;
+    Hash32 contents{}, digest{};
+    std::array<std::uint8_t, kEvmSignatureBytes> signature{};
+    const bool ok = order_hasher.struct_hash_u64(
+            salt, maker_amount, taker_amount, timestamp_ms, contents)
+        && poly_hasher.digest(contents, digest)
+        && signer.sign_digest(digest, signature)
+        && wrap_signature_hex(signature, order_hasher.domain_separator(), contents, output);
+    secure_zero(signature.data(), signature.size());
+    secure_zero(digest.data(), digest.size());
+    secure_zero(contents.data(), contents.size());
+    return ok;
+}
+
 } // namespace pm::v7::poly1271

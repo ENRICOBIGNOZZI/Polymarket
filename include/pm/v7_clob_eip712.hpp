@@ -89,6 +89,11 @@ public:
                                   const ExchangeV2PreparedStaticView& fixed) noexcept;
     [[nodiscard]] bool valid() const noexcept { return valid_; }
     [[nodiscard]] const Hash32& domain_separator() const noexcept { return domain_separator_; }
+    [[nodiscard]] bool struct_hash_u64(std::uint64_t salt,
+                                       std::uint64_t maker_amount,
+                                       std::uint64_t taker_amount,
+                                       std::uint64_t timestamp_ms,
+                                       Hash32& output) noexcept;
     [[nodiscard]] bool digest_u64(std::uint64_t salt,
                                   std::uint64_t maker_amount,
                                   std::uint64_t taker_amount,

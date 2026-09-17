@@ -77,6 +77,20 @@ int main() {
     for (std::size_t i = 0; i < kDigests; ++i)
         if (parallel[i] != serial[i]) return 8;
 
+    clob_eip712::ExchangeV2PreparedStaticView fixed{
+        order.maker, order.signer, order.token_id_decimal,
+        order.side, order.signature_type, order.metadata_hex, order.builder_hex};
+    clob_eip712::ExchangeV2PreparedOrderHasher prepared_order(domain, fixed);
+    poly1271::PreparedHasher prepared_poly(
+        domain.chain_id, wallet, prepared_order.domain_separator());
+    if (!prepared_order.valid() || !prepared_poly.valid()) return 7;
+    std::array<char, poly1271::kWrappedSignatureHexChars> prepared_output{};
+    if (!poly1271::sign_prepared_poly1271_hex(
+            prepared_order, prepared_poly, shared_signer,
+            479249096354ULL, 100000000ULL, 50000000ULL,
+            1710000000000ULL, prepared_output)) return 8;
+    if (prepared_output != output) return 9;
+
     std::fwrite(output.data(), 1, output.size(), stdout);
     std::fputc('\n', stdout);
     return 0;

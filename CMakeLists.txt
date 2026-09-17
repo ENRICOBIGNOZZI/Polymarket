@@ -61,6 +61,7 @@ add_library(pm_v7_clob_native
   src/v7_clob_prepared_order.cpp
   src/v7_clob_http_frame.cpp
   src/v7_clob_prepared_post.cpp
+  src/v7_clob_http1_response.cpp
   src/v7_clob_http_response.cpp
   src/v7_clob_order_identity.cpp
   src/v7_clob_tls.cpp)

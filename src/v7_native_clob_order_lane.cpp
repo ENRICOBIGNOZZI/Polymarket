@@ -1,7 +1,7 @@
 #include "pm/v7_native_clob_order_lane.hpp"
 
 #include "pm/v7_clob_http_frame.hpp"
-#include "pm/v7_clob_http_response.hpp"
+#include "pm/v7_clob_http1_response.hpp"
 #include "pm/v7_clob_order_amounts.hpp"
 #include "pm/v7_clob_order_salt.hpp"
 #include "pm/v7_clob_prepared_post.hpp"
@@ -56,6 +56,13 @@ template <typename T, std::size_t N>
     }
     return true;
 }
+
+[[nodiscard]] clob_eip712::ExchangeV2PreparedStaticView prepared_hash_view(
+    const NativeClobLaneConfig& config, std::uint8_t side) noexcept {
+    return {config.deposit_wallet, config.deposit_wallet,
+            config.token_id_decimal, side, 3,
+            config.metadata_hex, config.builder_hex};
+}
 [[nodiscard]] NativeClobSubmitResult fail_before_wire(
     NativeOrderTxOwner& owner, std::uint64_t client_order_id,
     NativeClobSubmitReason reason) noexcept {
@@ -97,7 +104,9 @@ struct NativeClobOrderLane::Impl final {
     FixedText<128> passphrase{};
     FixedText<128> poly_address{};
 
-    poly1271::Poly1271OrderHasher order_hasher;
+    clob_eip712::ExchangeV2PreparedOrderHasher buy_order_hasher;
+    clob_eip712::ExchangeV2PreparedOrderHasher sell_order_hasher;
+    poly1271::PreparedHasher poly_hasher;
     poly1271::Secp256k1Signer signer;
     clob_order::OrderSaltSequence salt;
     clob_post::PreparedPostOrderBuilder buy_fak;
@@ -105,12 +114,17 @@ struct NativeClobOrderLane::Impl final {
     clob_post::PreparedPostOrderBuilder buy_fok;
     clob_post::PreparedPostOrderBuilder sell_fok;
     clob::DualPersistentTlsTransport transport;
-    clob_http_response::ResponseParser response_parser{};
+    clob_transport::FixedHttp1Response response_parser{};
     bool valid = false;
 
     Impl(const NativeClobLaneConfig& config,
          std::span<const std::uint8_t, 32> private_key) noexcept
-        : order_hasher({config.chain_id, config.exchange_contract}, config.deposit_wallet),
+        : buy_order_hasher({config.chain_id, config.exchange_contract},
+                           prepared_hash_view(config, 0)),
+          sell_order_hasher({config.chain_id, config.exchange_contract},
+                            prepared_hash_view(config, 1)),
+          poly_hasher(config.chain_id, config.deposit_wallet,
+                      buy_order_hasher.domain_separator()),
           signer(private_key),
           salt(clob_order::OrderSaltSequence::from_os_entropy()),
           buy_fak({config.builder_hex, "0", config.deposit_wallet, config.metadata_hex,
@@ -139,7 +153,8 @@ struct NativeClobOrderLane::Impl final {
             || !api_key.assign(config.api_key)
             || !passphrase.assign(config.passphrase)
             || !poly_address.assign(config.signer_eoa_address)
-            || !order_hasher.valid() || !signer.valid() || !salt.valid()
+            || !buy_order_hasher.valid() || !sell_order_hasher.valid()
+            || !poly_hasher.valid() || !signer.valid() || !salt.valid()
             || !buy_fak.valid() || !sell_fak.valid() || !buy_fok.valid() || !sell_fok.valid()
             || !signer.address_hex(derived)
             || !same_hex_address({derived.data(), derived.size()}, signer_eoa.view())) {
@@ -216,8 +231,8 @@ NativeClobSubmitResult NativeClobOrderLane::submit(
                                 NativeClobSubmitReason::PreWireFailure);
     }
 
-    std::array<char, 32> salt_text{}, maker_text{}, taker_text{}, timestamp_text{};
-    std::array<char, 24> request_timestamp_text{};
+    std::array<char, 32> salt_text, maker_text, taker_text, timestamp_text;
+    std::array<char, 24> request_timestamp_text;
     const auto salt_sv = decimal(salt, salt_text);
     const auto maker_sv = decimal(amounts.maker_amount, maker_text);
     const auto taker_sv = decimal(amounts.taker_amount, taker_text);
@@ -228,22 +243,13 @@ NativeClobSubmitResult NativeClobOrderLane::submit(
         return fail_before_wire(oms_owner, command.client_order_id,
                                 NativeClobSubmitReason::PreWireFailure);
     }
-    clob_eip712::ExchangeV2OrderView order{};
-    order.salt_decimal = salt_sv;
-    order.maker = impl_->deposit_wallet.view();
-    order.signer = impl_->deposit_wallet.view();
-    order.token_id_decimal = impl_->token_id.view();
-    order.maker_amount_decimal = maker_sv;
-    order.taker_amount_decimal = taker_sv;
-    order.side = command.side == Side::Buy ? 0 : 1;
-    order.signature_type = 3;
-    order.timestamp_decimal = timestamp_sv;
-    order.metadata_hex = impl_->metadata.view();
-    order.builder_hex = impl_->builder.view();
-
-    std::array<char, poly1271::kWrappedSignatureHexChars> order_signature{};
-    if (!poly1271::sign_poly1271_hex(
-            impl_->order_hasher, impl_->signer, order, order_signature)) {
+    auto& order_hasher = command.side == Side::Buy
+        ? impl_->buy_order_hasher : impl_->sell_order_hasher;
+    std::array<char, poly1271::kWrappedSignatureHexChars> order_signature;
+    if (!poly1271::sign_prepared_poly1271_hex(
+            order_hasher, impl_->poly_hasher, impl_->signer,
+            salt, amounts.maker_amount, amounts.taker_amount,
+            wall_timestamp_ms, order_signature)) {
         return fail_before_wire(oms_owner, command.client_order_id,
                                 NativeClobSubmitReason::PreWireFailure);
     }
@@ -269,7 +275,7 @@ NativeClobSubmitResult NativeClobOrderLane::submit(
                                 NativeClobSubmitReason::PreWireFailure);
     }
 
-    std::array<char, 8192> frame{};
+    std::array<char, 8192> frame;
     const auto frame_size = post->build(dynamic, request_ts_sv, frame);
     if (frame_size == 0) {
         return fail_before_wire(oms_owner, command.client_order_id,
@@ -297,23 +303,41 @@ NativeClobSubmitResult NativeClobOrderLane::submit(
     }
 
     impl_->response_parser.reset();
-    std::array<char, 4096> read_buffer{};
-    while (!impl_->response_parser.snapshot().complete) {
-        const auto read = tls.read_some(read_buffer);
-        if (!read.ok || read.bytes == 0
-            || !impl_->response_parser.consume(
-                {read_buffer.data(), read.bytes}, read.completed_monotonic_ns)) {
+    std::int64_t response_complete_ns = 0;
+    while (!impl_->response_parser.complete()) {
+        auto writable = impl_->response_parser.writable();
+        if (writable.empty()) {
+            return fail_after_wire(oms_owner, command.client_order_id,
+                                   NativeClobSubmitReason::ResponseFailure,
+                                   write.completed_monotonic_ns);
+        }
+        const auto read = tls.read_some(writable);
+        if (!read.ok || read.bytes == 0) {
+            return fail_after_wire(oms_owner, command.client_order_id,
+                                   NativeClobSubmitReason::ResponseFailure,
+                                   write.completed_monotonic_ns);
+        }
+        const auto state = impl_->response_parser.commit(read.bytes);
+        if (state == clob_transport::Http1ResponseState::Complete) {
+            response_complete_ns = read.completed_monotonic_ns;
+            break;
+        }
+        if (state != clob_transport::Http1ResponseState::Receiving) {
             return fail_after_wire(oms_owner, command.client_order_id,
                                    NativeClobSubmitReason::ResponseFailure,
                                    write.completed_monotonic_ns);
         }
     }
-    const auto response = impl_->response_parser.snapshot();
-    out.http_status = response.status_code;
-    out.response_complete_monotonic_ns = response.complete_monotonic_ns;
+    if (response_complete_ns <= 0) {
+        return fail_after_wire(oms_owner, command.client_order_id,
+                               NativeClobSubmitReason::ResponseFailure,
+                               write.completed_monotonic_ns);
+    }
+    out.http_status = impl_->response_parser.status_code();
+    out.response_complete_monotonic_ns = response_complete_ns;
     const auto bridge_result = account_bridge.on_post_order_ack(
         command.client_order_id, impl_->response_parser.body(),
-        response.complete_monotonic_ns, routed_scratch);
+        response_complete_ns, routed_scratch);
     if (bridge_result.invalid_ack || bridge_result.identity_conflict
         || bridge_result.output_overflow || bridge_result.pending_overflow
         || bridge_result.output_count == 0) {
