@@ -66,3 +66,51 @@ Runtime output is written under
 `runs/paper_v7_live/research/lead_lag_capacity_v1/`: `report.json`,
 `scenarios.csv`, and `trades.csv`. The analyzer is
 `scripts/v7_lead_lag_capacity_replay.py`.
+
+## Repeatable longitudinal workflow
+
+Use the permanent wrapper whenever new PAPER evidence has accumulated:
+
+```bash
+ops/run_v7_lead_lag_capacity.sh
+```
+
+The wrapper resolves `runs/paper_v7_live` by default. Override with
+`POLYMARKET_RUN_ROOT=/path/to/run` or pass normal CLI arguments after the
+wrapper. The underlying command is `scripts/v7_lead_lag_capacity_history.py`.
+
+Every distinct ledger/event-journal state creates an immutable directory under
+`research/lead_lag_capacity_v1/history/<UTC>-<fingerprint>/`. Re-running on
+identical evidence is idempotent: no duplicate snapshot is created.
+Stable current outputs remain at the root of that directory:
+
+- `report.json`: latest complete capacity analysis;
+- `scenarios.csv`: latest same-price share/dollar scenario grid;
+- `ladder_scenarios.csv`: latest multi-level VWAP/price-impact grid when ladder evidence exists;
+- `trades.csv`: latest per-market capacity evidence;
+- `comparison.json`: deltas from the preceding snapshot;
+- `history.csv`: one compact row per immutable snapshot;
+- `latest.json` / `latest_manifest.json`: exact snapshot identity and source hashes.
+
+A file lock serializes simultaneous invocations, so cron/manual runs cannot race each other.
+The manifest records SHA256 hashes of the canonical ledger and lead-lag event
+journal, runtime SHA/run id, parameters, UTC creation time and previous snapshot.
+This makes capacity estimates reproducible rather than dashboard-only state.
+
+Use `--force` only when a second snapshot of identical evidence is deliberately
+required. `--label` can attach a human-readable regime/deployment annotation.
+## Automatic full-ladder upgrade
+
+New PAPER entries retain the complete arrival ask ladder in
+`metadata.capacity_book`. Once those entries settle, every repeated capacity
+snapshot automatically adds exact multi-level execution tests at 0c, 1c, 2c,
+5c and 10c deterioration from the observed best ask.
+
+For each cap the code measures available shares/notional, exact VWAP, fees,
+maximum paid price, strict full-fill rate, entry cash, peak concurrent capital
+and settlement PnL over the configured share and dollar grids. Historical rows
+without a retained ladder remain excluded from this calculation; the program
+never reconstructs or guesses missing book levels.
+
+This is capacity research only. It does not change strategy sizing, execution
+authority, capital allocation, PAPER/real mode, or promotion state.
