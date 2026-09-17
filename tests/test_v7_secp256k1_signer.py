@@ -1,6 +1,5 @@
 from __future__ import annotations
 import shlex, shutil, subprocess, tempfile
-import pytest
 from pathlib import Path
 ROOT=Path(__file__).resolve().parents[1]
 EXPECTED=[97,132,166,58,69,199,219,31,26,132,82,86,31,26,47,182,
@@ -31,8 +30,7 @@ int main(){
 '''
 def test_recoverable_signer_matches_eth_account_vector():
     compiler=shutil.which('c++'); assert compiler
-    if subprocess.run(['pkg-config','--exists','libsecp256k1']).returncode != 0:
-        pytest.skip('optional native signer dependency libsecp256k1 is not installed')
+    assert subprocess.run(['pkg-config','--exists','libsecp256k1']).returncode == 0
     flags=subprocess.check_output(['pkg-config','--cflags','--libs','libsecp256k1'],text=True).strip()
     with tempfile.TemporaryDirectory() as tmp:
         p=Path(tmp); src=p/'main.cpp'; binary=p/'signer-test'; src.write_text(PROGRAM)
