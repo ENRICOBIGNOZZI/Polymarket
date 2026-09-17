@@ -1,12 +1,12 @@
 #!/usr/bin/env python3
-"""Opt-in transport changes must not silently alter the frozen PAPER launcher."""
+"""Event-driven ingress is explicitly selected for the unified London release."""
 from pathlib import Path
 import unittest
 
 ROOT = Path(__file__).resolve().parents[1]
 
 class IngressEventModeTest(unittest.TestCase):
-    def test_opt_in_and_bounded_idle_deadline(self):
+    def test_explicit_release_selection_and_bounded_idle_deadline(self):
         source = (ROOT / "src/v7_external_venue_runtime.cpp").read_text()
         self.assertIn("bool event_driven_ingress = false", source)
         self.assertIn('argument == "--event-driven-ingress"', source)
@@ -15,7 +15,7 @@ class IngressEventModeTest(unittest.TestCase):
         self.assertEqual(source.count("ingress_wakeup.get());"), 6)
         self.assertIn("wait_for_ingress();", source)
         launcher = (ROOT / "scripts/paper_v7_execution_loop.sh").read_text()
-        self.assertNotIn("--event-driven-ingress", launcher)
+        self.assertEqual(launcher.count("--event-driven-ingress"), 1)
 
     def test_transport_keeps_existing_single_queue_authority(self):
         source = (ROOT / "src/v7_external_ingress.cpp").read_text()

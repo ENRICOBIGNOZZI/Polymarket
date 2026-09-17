@@ -7,12 +7,12 @@ STACK="${POLYMARKET_LONDON_STACK:-polymarket-v7-london-shootout}"
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 POLICY="$ROOT/config/v7_london_az_shootout.json"
 TEMPLATE="$ROOT/infra/aws/v7_london_shootout.json"
-OUTPUT_DIR="${POLYMARKET_LONDON_OUTPUT_DIR:-$HOME/polymarket-london}"
 SERVICE_USER="${POLYMARKET_LONDON_SERVICE_USER:-ubuntu}"
 
 fail(){ echo "v7_london_provision: $*" >&2; exit 2; }
 [[ "$EXPECTED_SHA" =~ ^[0-9a-f]{40}$ ]] || fail "exact lowercase 40-char SHA required"
 [[ "$REGION" == eu-west-2 ]] || fail "London shootout requires eu-west-2"
+OUTPUT_DIR="${POLYMARKET_LONDON_OUTPUT_DIR:-$HOME/polymarket-london}"
 command -v aws >/dev/null 2>&1 || fail "AWS CLI required"
 [[ -f "$POLICY" && -f "$TEMPLATE" ]] || fail "London policy/template missing"
 

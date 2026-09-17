@@ -102,7 +102,7 @@ private:
 [[nodiscard]] bool sign_prepared_poly1271_hex(
     clob_eip712::ExchangeV2PreparedOrderHasher& order_hasher,
     PreparedHasher& poly_hasher,
-    Secp256k1Signer& signer,
+    const Secp256k1Signer& signer,
     std::uint64_t salt,
     std::uint64_t maker_amount,
     std::uint64_t taker_amount,

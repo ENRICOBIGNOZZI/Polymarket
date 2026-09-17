@@ -194,6 +194,12 @@ if(PM_LONDON_RUNTIME_ONLY AND BUILD_TESTING)
 endif()
 if(BUILD_TESTING)
   find_package(Python3 REQUIRED COMPONENTS Interpreter)
+  execute_process(COMMAND ${Python3_EXECUTABLE} -c "import pytest"
+                  RESULT_VARIABLE V7_PYTEST_RESULT OUTPUT_QUIET ERROR_QUIET)
+  if(NOT V7_PYTEST_RESULT EQUAL 0)
+    message(FATAL_ERROR "BUILD_TESTING requires pytest for ${Python3_EXECUTABLE}; function tests must not silently pass")
+  endif()
+
   add_test(NAME pm_v7_latency_probe_validate_public
     COMMAND polymarket_v7_latency_probe --region validation --exact-code-sha 1111111111111111111111111111111111111111 --validate-only)
   add_test(NAME pm_v7_latency_probe_reject_order_endpoint
@@ -401,7 +407,16 @@ if(BUILD_TESTING)
   foreach(test_file IN LISTS V7_PY_TESTS)
     get_filename_component(test_name "${test_file}" NAME_WE)
     if(NOT test_name STREQUAL "test_v7_authorized_make_cancel_runtime")
-      add_test(NAME "${test_name}" COMMAND ${Python3_EXECUTABLE} "${test_file}")
+      add_test(NAME "${test_name}" COMMAND ${Python3_EXECUTABLE}
+        "${CMAKE_CURRENT_SOURCE_DIR}/tests/run_v7_test_file.py" "${test_file}")
+    endif()
+  endforeach()
+  # Production Release remains optimized; test assertions must remain active.
+  get_property(V7_TARGETS DIRECTORY PROPERTY BUILDSYSTEM_TARGETS)
+  foreach(test_target IN LISTS V7_TARGETS)
+    if(test_target MATCHES "_tests$|_driver$")
+      target_compile_options(${test_target} PRIVATE
+        $<$<CXX_COMPILER_ID:GNU,Clang,AppleClang>:-UNDEBUG>)
     endif()
   endforeach()
 endif()

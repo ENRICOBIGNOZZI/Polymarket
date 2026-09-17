@@ -52,12 +52,14 @@ def _read_http_request(conn: ssl.SSLSocket) -> bytes:
 
 
 def test_native_clob_order_lane_tls_ack_to_oms() -> None:
+    driver = _driver()  # Fail before starting a listening thread.
     with tempfile.TemporaryDirectory() as td:
         tmp = Path(td)
         cert, key = _make_cert(tmp)
         listener = socket.socket()
         listener.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
         listener.bind(("127.0.0.1", 0))
+        listener.settimeout(10.0)
         listener.listen(2)
         port = listener.getsockname()[1]
         captured: list[bytes] = []
@@ -69,9 +71,11 @@ def test_native_clob_order_lane_tls_ack_to_oms() -> None:
                 context.load_cert_chain(cert, key)
                 context.set_alpn_protocols(["http/1.1"])
                 raw_order, _ = listener.accept()
+                raw_order.settimeout(10.0)
                 order_conn = context.wrap_socket(raw_order, server_side=True)
                 assert order_conn.selected_alpn_protocol() == "http/1.1"
                 raw_cancel, _ = listener.accept()
+                raw_cancel.settimeout(10.0)
                 cancel_conn = context.wrap_socket(raw_cancel, server_side=True)
                 assert cancel_conn.selected_alpn_protocol() == "http/1.1"
 
@@ -95,7 +99,7 @@ def test_native_clob_order_lane_tls_ack_to_oms() -> None:
         thread = threading.Thread(target=serve)
         thread.start()
         result = subprocess.run(
-            [str(_driver()), str(port), str(cert)],
+            [str(driver), str(port), str(cert)],
             check=True, capture_output=True, text=True, timeout=15)
         thread.join(timeout=5)
         assert not thread.is_alive()
