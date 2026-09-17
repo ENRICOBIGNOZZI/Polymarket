@@ -6,6 +6,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import threading
 import time
 from pathlib import Path
 
@@ -24,7 +25,9 @@ _RULE, RULE_SHA = cancel_bridge._research_rule()
 
 def write(path: Path, value: dict) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(value), encoding="utf-8")
+    temporary = path.with_name(path.name + ".tmp")
+    temporary.write_text(json.dumps(value), encoding="utf-8")
+    temporary.replace(path)
 
 
 def read_status(root: Path) -> dict:
@@ -132,6 +135,25 @@ def run(executor: Path) -> None:
             if 'timestamp' in value: value['timestamp'] = publish_ms/1000
             write(root/relative,value)
 
+        refresh_stop = threading.Event()
+        def refresh_observer_fixture() -> None:
+            targets = (
+                root / "micro_maker/book_features/yes-token.json",
+                root / "micro_maker/fillability_ws_status.json",
+                root / "external_fair/paper_router_status.json",
+            )
+            while not refresh_stop.is_set():
+                refresh_ms = time.time_ns() // 1_000_000 - 1
+                for path in targets:
+                    value = json.loads(path.read_text())
+                    if "receive_wall_ms" in value: value["receive_wall_ms"] = refresh_ms
+                    if "timestamp_ms" in value: value["timestamp_ms"] = refresh_ms
+                    if "timestamp" in value: value["timestamp"] = refresh_ms / 1000
+                    write(path, value)
+                refresh_stop.wait(0.025)
+
+        refresher = threading.Thread(target=refresh_observer_fixture, daemon=True)
+        refresher.start()
         process = subprocess.Popen(
             [str(executor), "--run-root", str(root), "--model-sha", SHA],
             stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
@@ -142,6 +164,8 @@ def run(executor: Path) -> None:
                 lambda row: int(row.get("submitted_orders") or 0) == 1
                 and len(row.get("active_order_details") or []) == 1,
             )
+            refresh_stop.set()
+            refresher.join(timeout=1)
             active_before_cancel = submitted["active_order_details"][0]
             assert active_before_cancel["order_id"]
             assert active_before_cancel["replay_key"] == maker_rows[0]["deterministic_replay_key"]
@@ -319,6 +343,8 @@ def run(executor: Path) -> None:
             assert refused["active_orders"] == 0
             assert refused["last_error"] == "CANONICAL_DRAIN_OR_KILL_NO_NEW_MAKE"
         finally:
+            refresh_stop.set()
+            refresher.join(timeout=1)
             process.terminate()
             try:
                 process.wait(timeout=2)
