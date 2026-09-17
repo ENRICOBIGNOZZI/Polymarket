@@ -35,6 +35,8 @@ class LondonSsmBenchmarkTests(unittest.TestCase):
         self.assertNotIn("tailscale up", command)
         with self.assertRaises(ValueError):
             remote_command("bad", "smoke", "ubuntu")
+        self.assertTrue(command.startswith("bash -lc "))
+        self.assertIn("set -euo pipefail", command)
 
     def test_parse_result_requires_one_marked_envelope(self) -> None:
         probe = {"region": "euw2-az1", "exact_code_sha": "a" * 40}

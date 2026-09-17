@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import shlex
 import subprocess
 import time
 from pathlib import Path
@@ -52,7 +53,7 @@ def remote_command(sha: str, mode: str, service_user: str) -> str:
         raise ValueError("mode must be smoke or formal")
     if len(sha) != 40 or any(c not in "0123456789abcdef" for c in sha):
         raise ValueError("invalid exact SHA")
-    return f'''set -euo pipefail
+    script = f'''set -euo pipefail
 APP=/home/{service_user}/polymarket
 RUN=/mnt/polymarket-data/paper_v7_london
 BENCH=/mnt/polymarket-data/benchmarks
@@ -68,6 +69,9 @@ import json,sys
 p=json.load(open(sys.argv[1])); m=json.load(open(sys.argv[2]))
 print('V7_RESULT='+json.dumps({{'probe':p,'manifest':m}},sort_keys=True,separators=(',',':')))
 PY'''
+    # AWS-RunShellScript invokes /bin/sh by default. Force Bash because the
+    # benchmark intentionally uses pipefail and [[ ... ]] guards.
+    return "bash -lc " + shlex.quote(script)
 
 def parse_result(stdout: str) -> tuple[dict[str, Any], dict[str, Any]]:
     rows = [line[len("V7_RESULT="):] for line in stdout.splitlines() if line.startswith("V7_RESULT=")]
