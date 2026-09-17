@@ -72,6 +72,14 @@ def test_matrix_writer_emits_twelve_rows():
         assert lines[0].startswith("asset,horizon,")
 
 
+def test_external_ws_factory_is_generic_without_asset_copies():
+    header = (ROOT / "include/pm/v7_external_ws.hpp").read_text()
+    source = (ROOT / "src/v7_external_ws.cpp").read_text()
+    assert "crypto_connection_spec(" in header
+    assert "crypto_connection_spec(" in source
+    for prefix in ("eth_", "sol_", "xrp_", "doge_", "bnb_"):
+        assert f"{prefix}spot_connection_spec" not in source
+
 
 if __name__ == "__main__":
     tests = sorted(

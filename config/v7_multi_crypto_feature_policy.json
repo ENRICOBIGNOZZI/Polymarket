@@ -1,0 +1,27 @@
+{
+  "schema": "polymarket_v7_multi_crypto_feature_policy_v1",
+  "version": 1,
+  "paper_only": true,
+  "authenticated_execution": false,
+  "real_order_submission": false,
+  "real_capital_at_risk": false,
+  "execution_authority": false,
+  "research_only": true,
+  "mode": "SHADOW_COLLECTION_ONLY_UNCALIBRATED",
+  "preserve_btc_frozen": true,
+  "return_source": "MULTI_VENUE_COMPOSITE_LOG_RETURN",
+  "shock_window_ms": 100,
+  "ewma_half_life_seconds": 60.0,
+  "minimum_shock_observations": 200,
+  "sigma_floor_bp": null,
+  "trigger_threshold_z": null,
+  "diagnostic_return_windows_ms": [50, 100, 250, 1000],
+  "cross_crypto_graph": [
+    ["BTC", "ETH"],
+    ["BTC", "SOL"],
+    ["ETH", "SOL"]
+  ],
+  "maximum_external_age_ms": 1000,
+  "maximum_oracle_age_ms": 3000,
+  "maximum_book_age_ms": 1000
+}

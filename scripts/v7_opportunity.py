@@ -34,7 +34,7 @@ COST_FIELDS = (
     "adverse_markout", "rebate",
 )
 AUTHORITY_STATES = {"AUTHORITATIVE", "CONSERVATIVE_BOUND", "CONSERVATIVE_ZERO"}
-CRYPTO_ASSETS = {"BTC", "ETH", "SOL", "XRP"}
+CRYPTO_ASSETS = {"BTC", "ETH", "SOL", "XRP", "DOGE", "BNB"}
 CRYPTO_HORIZONS = {"M1", "M5", "M15", "H1", "H4"}
 CRYPTO_CONTEXT_FIELDS = {
     "asset", "horizon", "contract_family", "settlement_semantic_hash",
@@ -103,6 +103,11 @@ class OpportunityEnvelope:
         return isinstance(forward, dict) and forward.get("mode") == "PAPER_FORWARD_TEST"
 
     @property
+    def is_multi_crypto_forward(self) -> bool:
+        forward = self.raw.get("multi_crypto_forward")
+        return isinstance(forward, dict) and forward.get("mode") == "PAPER_MULTI_CRYPTO_FORWARD"
+
+    @property
     def probe_point_wealth_change(self) -> float:
         exploration = self.raw.get("exploration")
         return float(exploration["point_expected_wealth_change"]) if isinstance(exploration, dict) else float("-inf")
@@ -125,7 +130,7 @@ class OpportunityEnvelope:
             "inventory_delta", "portfolio_exposure_delta", "settlement", "eligible",
             "reasons", "deterministic_replay_key", "expires_at_ns",
         }
-        optional = {"exploration", "forward_test", "execution_alpha", "maker_execution_identity", "settlement_model"}
+        optional = {"exploration", "forward_test", "multi_crypto_forward", "execution_alpha", "maker_execution_identity", "settlement_model"}
         if not isinstance(value, dict):
             raise OpportunityError("field_partition")
         fields = set(value)
@@ -370,6 +375,50 @@ class OpportunityEnvelope:
             ):
                 raise OpportunityError("paper_forward_test_invalid")
 
+        multi_forward = value.get("multi_crypto_forward")
+        if multi_forward is not None:
+            multi_forward = _mapping(multi_forward, "multi_crypto_forward")
+            if set(multi_forward) != {
+                "mode", "experiment_id", "protocol_hash", "feature_schema_hash",
+                "model_hash", "fill_model_hash", "cost_model_hash",
+                "settlement_semantic_hash", "latency_profile_id", "asset", "horizon",
+                "research_only", "automatic_promotion", "one_entry_per_market",
+                "hold_to_settlement", "entry_uses_absolute_fair", "probability_source",
+            }:
+                raise OpportunityError("multi_crypto_forward_fields")
+            lineage_hashes = (
+                "protocol_hash", "feature_schema_hash", "model_hash", "fill_model_hash",
+                "cost_model_hash", "settlement_semantic_hash",
+            )
+            if (
+                multi_forward.get("mode") != "PAPER_MULTI_CRYPTO_FORWARD"
+                or not isinstance(multi_forward.get("experiment_id"), str)
+                or not multi_forward["experiment_id"]
+                or any(not HASH64.fullmatch(str(multi_forward.get(name) or "")) for name in lineage_hashes)
+                or not isinstance(multi_forward.get("latency_profile_id"), str)
+                or not multi_forward["latency_profile_id"]
+                or multi_forward.get("asset") not in CRYPTO_ASSETS
+                or multi_forward.get("horizon") not in {"M5", "M15"}
+                or multi_forward.get("research_only") is not True
+                or multi_forward.get("automatic_promotion") is not False
+                or multi_forward.get("one_entry_per_market") is not True
+                or multi_forward.get("hold_to_settlement") is not True
+                or multi_forward.get("entry_uses_absolute_fair") is not False
+                or multi_forward.get("probability_source") != "POLYMARKET_PRIOR_ONLY"
+                or forward_test is not None or value.get("exploration") is not None
+                or engine_id != "CRYPTO_SETTLEMENT_ENGINE" or action != "TAKE"
+                or not isinstance(crypto_context, dict)
+                or crypto_context.get("authority") != "PAPER_EXPLORATION"
+                or crypto_context.get("research_only") is not False
+                or crypto_context.get("asset") != multi_forward.get("asset")
+                or crypto_context.get("horizon") != multi_forward.get("horizon")
+                or crypto_context.get("settlement_semantic_hash") != multi_forward.get("settlement_semantic_hash")
+                or latency.get("profile_id") != multi_forward.get("latency_profile_id")
+                or latency.get("profile_valid") is not True
+                or expected_wealth_change != 0.0
+            ):
+                raise OpportunityError("multi_crypto_forward_invalid")
+
         probe = value.get("exploration")
         if probe is not None:
             probe = _mapping(probe, "exploration")
@@ -424,15 +473,20 @@ class OpportunityEnvelope:
         )
         if exploration:
             if (
-                crypto_context.get("asset") != "BTC"
-                or crypto_context.get("horizon") != "M5"
-                or crypto_context.get("research_only") is not False
+                crypto_context.get("research_only") is not False
                 or uncertainty.get("status") not in {"IMMATURE", "MATURE"}
                 or value.get("calibration_status") not in {"IMMATURE", "MATURE", "NOT_APPLICABLE"}
                 or settlement.get("verified") is not True
                 or float(capacity["executable_size"]) <= 0.0
                 or _finite(latency.get("arrival_ns"), "latency_arrival") < 0.0
             ):
+                raise OpportunityError("paper_exploration_evidence_incomplete")
+            if multi_forward is None and (
+                crypto_context.get("asset") != "BTC"
+                or crypto_context.get("horizon") != "M5"
+            ):
+                raise OpportunityError("paper_exploration_evidence_incomplete")
+            if multi_forward is not None and latency.get("profile_valid") is not True:
                 raise OpportunityError("paper_exploration_evidence_incomplete")
         elif action in NEW_RISK_ACTIONS and (
             latency.get("profile_valid") is not True
@@ -458,6 +512,7 @@ def fail_closed_decision(*, now_ns: int, reasons: list[str]) -> dict[str, Any]:
         "paper_exploration_authorized": False,
         "paper_exploration_probe_authorized": False,
         "paper_forward_test_authorized": False,
+        "paper_multi_crypto_forward_authorized": False,
         "reasons": reasons or ["FAIL_CLOSED"],
     }
 
@@ -529,6 +584,29 @@ def coordinate(
                 "real_capital_at_risk": False,
                 "forward_test": selected.raw["forward_test"],
                 "reasons": ["PAPER_FORWARD_TEST_FROZEN_PROTOCOL"],
+            }
+        multi_forwards = [row for row in exploration_candidates if row.is_multi_crypto_forward]
+        if multi_forwards:
+            selected = min(multi_forwards, key=lambda row: row.replay_key)
+            return {
+                "schema": "polymarket_v7_global_opportunity_decision_v1",
+                "owner": "V7_GLOBAL_PORTFOLIO_COORDINATOR",
+                "decision_timestamp_ns": int(now_ns),
+                "action": selected.action,
+                "engine_id": selected.engine_id,
+                "crypto_context": selected.raw["crypto_context"],
+                "selected_replay_key": selected.replay_key,
+                "new_risk_authorized": False,
+                "paper_exploration_authorized": True,
+                "paper_exploration_probe_authorized": False,
+                "paper_forward_test_authorized": False,
+                "paper_multi_crypto_forward_authorized": True,
+                "paper_only": True,
+                "authenticated_execution": False,
+                "real_order_submission": False,
+                "real_capital_at_risk": False,
+                "multi_crypto_forward": selected.raw["multi_crypto_forward"],
+                "reasons": ["PAPER_MULTI_CRYPTO_FORWARD_FROZEN_PROTOCOL"],
             }
         positive = [
             row for row in exploration_candidates

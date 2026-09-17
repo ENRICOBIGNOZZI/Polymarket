@@ -615,6 +615,113 @@ def process_fast_forward_take(
     atomic_json(root / "control" / "fast_forward_status.json", status)
     return status
 
+
+def coordinate_reserved_paper(
+    envelopes: list[dict[str, Any]], *, now_ns: int,
+    reservation_projection: Any, requests_by_replay_key: dict[str, Any],
+    append_event: Any, entry_gate_open: bool = False,
+) -> dict[str, Any]:
+    """Opt-in in-memory admission under this SAME coordinator, not a new loop.
+
+    The frozen BTC process never calls this helper. Existing typed coordinate()
+    remains the authority gate: this does not make new assets PAPER-eligible.
+    The caller must supply the canonical writer's synchronous durable append,
+    a completely reconciled account projection and a current KILL/drain gate.
+    """
+    from v7_coordinator_reservations import ReservationProjection, ReservationRequest
+    from v7_lead_lag_replay import ReplayError, decimal
+
+    if type(now_ns) is not int or now_ns <= 0:
+        raise OpportunityError("reserved_paper_clock_invalid")
+    decision = coordinate(envelopes, now_ns=now_ns, new_risk_authorized=False,
+                          paper_exploration_authorized=True)
+    if decision.get("action") in {"CANCEL", "WITHDRAW", "NOTHING"}:
+        return decision
+    try:
+        if entry_gate_open is not True:
+            raise ReplayError("KILL_DRAIN_OR_NEW_ENTRY_GATE_CLOSED")
+        if decision.get("action") != "TAKE" or not isinstance(reservation_projection, ReservationProjection):
+            raise ReplayError("RESERVATION_PATH_REQUIRES_PAPER_TAKE")
+        key = decision.get("selected_replay_key")
+        request = requests_by_replay_key.get(key)
+        raw = _selected_envelope(envelopes, key)
+        if not isinstance(request, ReservationRequest) or not isinstance(raw, dict):
+            raise ReplayError("RESERVATION_REQUEST_MISSING")
+        legs = raw["execution_plan"]["legs"]
+        context = raw["crypto_context"]
+        multi_forward = raw.get("multi_crypto_forward") if isinstance(raw.get("multi_crypto_forward"), dict) else None
+        protocol = ((raw.get("forward_test") or {}).get("protocol_hash")
+                    or (multi_forward or {}).get("protocol_hash") or raw["policy_hash"])
+        expected_experiment = (multi_forward or {}).get("experiment_id")
+        if (len(legs) != 1 or legs[0]["side"] != "BUY"
+                or raw["model_sha"] != reservation_projection.code_sha
+                or request.market_id != raw["market_id"] or legs[0]["contract_id"] != raw["contract_id"]
+                or request.token_id != legs[0]["token_id"] or request.market_id != legs[0]["market_id"]
+                or request.coordinator_replay_key != key or request.protocol_hash != protocol
+                or (expected_experiment is not None and request.experiment_id != expected_experiment)
+                or request.asset != context["asset"] or request.horizon != context["horizon"]
+                or request.strategy != raw["engine_id"]
+                or request.quantity != decimal(legs[0]["target_quantity"])
+                or request.limit_price != decimal(legs[0]["limit_price"])
+                or request.expires_wall_ms * 1_000_000 > raw["expires_at_ns"]
+                or request.maximum_debit < request.quantity * request.limit_price + decimal(raw["cost_vector"]["fee"])):
+            raise ReplayError("RESERVATION_ENVELOPE_BINDING_MISMATCH")
+        event = reservation_projection.reserve(request, now_ms=now_ns // 1_000_000,
+            receipt=decision, append=append_event, entry_gate_open=True)
+        return dict(decision, reservation_id=request.key, reservation_record_id=event.record_id,
+                    reservation_durable=True, automatic_promotion=False)
+    except (ReplayError, ValueError, KeyError, TypeError, OSError) as exc:
+        return fail_closed_decision(now_ns=now_ns,
+            reasons=[f"RESERVATION_FAIL_CLOSED:{type(exc).__name__}:{exc}"])
+
+
+def process_fast_forward_ipc_reserved(
+    run_root: Path, raw: dict[str, Any], *, now_ns: int, risk_preempt: bool,
+    drain_active: bool, reservation_projection: Any,
+    requests_by_replay_key: dict[str, Any], append_event: Any,
+    entry_gate_open: bool = False,
+) -> dict[str, Any]:
+    """Direct IPC candidate path; no inbox file and no receipt file.
+
+    Durability comes from the supplied canonical reservation append before the
+    response is returned. The IPC transport itself owns no economic authority.
+    """
+    started = time.perf_counter_ns()
+    try:
+        parsed = OpportunityEnvelope.parse(raw)
+        if ((not parsed.is_forward_test and not parsed.is_multi_crypto_forward)
+                or parsed.action != "TAKE"
+                or parsed.engine_id != "CRYPTO_SETTLEMENT_ENGINE"):
+            raise OpportunityError("fast_forward_ipc_wrong_envelope")
+        if drain_active:
+            decision = fail_closed_decision(now_ns=now_ns, reasons=["CANONICAL_DRAIN_NEW_RISK_BLOCKED"])
+        elif risk_preempt:
+            decision = fail_closed_decision(now_ns=now_ns, reasons=["RISK_ACTION_PREEMPTS_FORWARD_ALPHA"])
+        elif entry_gate_open is not True:
+            decision = fail_closed_decision(now_ns=now_ns, reasons=["IPC_RESERVED_PAPER_ENTRY_GATE_CLOSED"])
+        else:
+            decision = coordinate_reserved_paper(
+                [raw], now_ns=now_ns, reservation_projection=reservation_projection,
+                requests_by_replay_key=requests_by_replay_key, append_event=append_event,
+                entry_gate_open=True,
+            )
+    except (OpportunityError, TypeError, ValueError) as exc:
+        decision = fail_closed_decision(
+            now_ns=now_ns, reasons=[f"FAST_FORWARD_IPC_REJECTED:{type(exc).__name__}:{exc}"],
+        )
+    decision.update({
+        "paper_only": True, "authenticated_execution": False,
+        "real_order_submission": False, "real_capital_at_risk": False,
+        "fast_forward_ipc_path": True,
+        "fast_forward_compute_ns": int(time.perf_counter_ns() - started),
+        "receipt_transport": "UNIX_STREAM_DIRECT_REPLY",
+        "receipt_file_written": False,
+    })
+    if decision.get("reservation_durable") is not True:
+        decision["new_risk_authorized"] = False
+    return decision
+
+
 def _run_loop(args: argparse.Namespace, journal: Any | None = None) -> int:
     full_interval = max(0.05, float(args.interval))
     fast_interval = max(0.002, float(args.fast_cancel_interval))

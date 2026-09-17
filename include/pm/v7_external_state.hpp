@@ -16,6 +16,11 @@ struct ExternalStatePolicy {
     // single V7 policy owner.
     std::array<double, kVenueCount> venue_weights{0.34, 0.33, 0.33, 0.0, 0.0, 0.0};
     std::int64_t max_venue_age_ns = 1'000'000'000LL;
+    // New multi-asset lanes may use transport freshness instead of treating an
+    // unchanged book as stale. Default false preserves the frozen BTC semantics.
+    std::int64_t max_transport_age_ns = 1'000'000'000LL;
+    std::uint8_t use_transport_freshness_for_book = 0;
+    std::array<std::uint8_t, 3> transport_freshness_reserved{};
     std::uint32_t min_healthy_venues = 2;
     // A fresh venue that is this far from the weighted-median log-price is
     // excluded from the composite for that causal cut. It remains observable
@@ -100,6 +105,10 @@ public:
     [[nodiscard]] bool on_venue_event(const ExternalVenueEvent& event,
                                       const ExternalStatePolicy& policy) noexcept;
     void on_oracle_snapshot(const OracleSnapshot& oracle) noexcept;
+    // Runtime transport heartbeat. It never changes prices. A new epoch
+    // invalidates the old book until a reconstructed BookTop for that epoch arrives.
+    void on_transport_heartbeat(VenueId venue, std::uint64_t connection_epoch,
+                                std::int64_t receive_monotonic_ns, bool healthy) noexcept;
     [[nodiscard]] ExternalAssetSnapshot snapshot(std::int64_t now_ns,
                                                  const ExternalStatePolicy& policy) const noexcept;
     // Advances only the frozen receive-time trigger grid. The caller must feed
@@ -123,6 +132,7 @@ private:
         // and derivative metrics have independent clocks and must not make an
         // old book appear executable.
         std::int64_t last_book_receive_ns = 0;
+        std::int64_t last_transport_receive_ns = 0;
         std::int64_t context_receive_ns = 0;
         double bid = 0.0;
         double ask = 0.0;

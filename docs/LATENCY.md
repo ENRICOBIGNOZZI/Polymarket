@@ -49,3 +49,13 @@ The public probe is used only to characterize data-path latency and regional sta
 ## Venue-aware policy
 
 Applicable crypto takers can enter a 250 ms delay while resting orders remain cancelable. Maker toxic-quote cancellation is therefore the critical latency objective. Blind cancel/repost loops destroy queue priority; V7 preserves a resting quote while it remains economic and lets critical toxicity cancels override dwell.
+
+## London AZ shootout
+
+The London migration uses the same public probe but keys candidates by physical AZ ID. `config/v7_london_az_shootout.json` records the Polymarket-provided mapping for `eu-west-2a/b/c`; each EC2 host must verify both its AZ name and AZ ID with IMDSv2 before evidence is accepted.
+
+Run `ops/v7_london_benchmark.sh smoke` only as a wiring check. Run `ops/v7_london_benchmark.sh formal` on all three candidate hosts for formal evidence, then evaluate the three probe JSON files with `scripts/v7_regional_shootout.py --candidate-region euw2-az1 --candidate-region euw2-az2 --candidate-region euw2-az3`.
+
+The regional evaluator is read-only and fail-closed. It requires the same exact SHA, full duration/sample gates, bounded failures/reconnects and monotone percentile distributions. It does not measure authenticated order/cancel ACK and cannot authorize a cutover.
+
+WebSocket evidence must keep connection health/freshness/jitter separate from one-way latency. Cross-host or exchange-to-host one-way latency remains unknown unless the clocks and source timestamp semantics make the subtraction valid.

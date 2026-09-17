@@ -614,7 +614,8 @@ def reconcile_paper_exploration_finals(
         spool_event(root, LedgerEvent(
             event_type="FINAL", strategy=fill.strategy, model_sha=model_sha,
             model_version=fill.model_version, record_id=final_id,
-            recorded_ts_ms=recorded_ms, candidate_id=fill.candidate_id,
+            recorded_ts_ms=recorded_ms, opportunity_id=fill.opportunity_id,
+            candidate_id=fill.candidate_id,
             order_id=fill.order_id, fill_id=fill_id, position_id=position_id,
             market_id=fill.market_id, event_id=fill.event_id,
             token_id=fill.token_id, side=fill.side, intended_action="TAKE",
@@ -790,7 +791,7 @@ def reconcile_paper_exploration_orphan_orders(
             event_type="ORDER_STATE", strategy=order.strategy,
             model_sha=model_sha, model_version=order.model_version,
             record_id=record_id, recorded_ts_ms=max(now, order.recorded_ts_ms + 1),
-            candidate_id=order.candidate_id, order_id=order_id,
+            opportunity_id=order.opportunity_id, candidate_id=order.candidate_id, order_id=order_id,
             position_id=order.position_id, market_id=order.market_id,
             event_id=order.event_id, token_id=order.token_id, side=order.side,
             intended_action=order.intended_action, intended_size=order.intended_size,
@@ -3303,7 +3304,7 @@ class PaperRouter:
         canonical_order_recorded_ms = max(now_ms(), arrival_decision_ms)
         spool_event(self.root, LedgerEvent(
             event_type="ORDER_SUBMITTED", strategy=STRATEGY, model_sha=self.sha,
-            model_version=MODEL_VERSION, candidate_id=counterfactual_id,
+            model_version=MODEL_VERSION, opportunity_id=str(replay_key), candidate_id=counterfactual_id,
             recorded_ts_ms=canonical_order_recorded_ms,
             order_id=order_id, position_id=position_id, market_id=market_id,
             event_id=str(market.get("event_id") or ""), token_id=row["token_id"], side="BUY",
@@ -3326,8 +3327,8 @@ class PaperRouter:
         ))
         spool_event(self.root, LedgerEvent(
             event_type="FILL", strategy=STRATEGY, model_sha=self.sha,
-            model_version=MODEL_VERSION, candidate_id=counterfactual_id, order_id=order_id,
-            recorded_ts_ms=canonical_order_recorded_ms + 1,
+            model_version=MODEL_VERSION, opportunity_id=str(replay_key), candidate_id=counterfactual_id,
+            order_id=order_id, recorded_ts_ms=canonical_order_recorded_ms + 1,
             position_id=position_id, fill_id=fill_id, market_id=market_id,
             event_id=str(market.get("event_id") or ""), token_id=row["token_id"], side="BUY",
             exchange_ts_ms=arrival_book.exchange_ts_ms, receive_ts_ms=arrival_book.receive_ts_ms,

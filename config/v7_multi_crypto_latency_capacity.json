@@ -1,0 +1,21 @@
+{
+  "schema": "polymarket_v7_multi_crypto_latency_capacity_policy_v1",
+  "version": 1,
+  "paper_only": true,
+  "authenticated_execution": false,
+  "real_order_submission": false,
+  "execution_authority": false,
+  "research_only": true,
+  "economic_evidence": false,
+  "mode": "EXECUTION_MECHANICS_ONLY",
+  "additional_latency_ms": [0, 5, 10, 25, 50, 100, 250, 500, 1000],
+  "size_shares": [5, 10, 25, 50, 100, 250, 500],
+  "venue_matching_delay_ms": null,
+  "matching_delay_policy": "UNCONFIGURED_NOT_APPLIED",
+  "limit_policy": "ORIGINAL_BEST_ASK_NO_CHASE",
+  "fill_policy": "FAK_L1_ONLY_CANCEL_REMAINDER",
+  "depth_policy": "L1_AT_MODELED_ARRIVAL",
+  "mechanics_origin_min_interval_ms": 100,
+  "simultaneous_liquidity_policy": "CONSUME_ONCE_PER_COMPETITION_GROUP_TOKEN_STATE",
+  "profit_claim": "FORBIDDEN_WITHOUT_CALIBRATED_SIGNAL_AND_COST_MODEL"
+}

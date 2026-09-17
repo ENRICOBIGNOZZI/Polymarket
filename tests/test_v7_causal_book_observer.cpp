@@ -9,8 +9,11 @@ int main() {
     const auto directory = fs::temp_directory_path() / ("v7-book-test-" + std::to_string(::getpid()));
     fs::create_directories(directory);
     {
-        ExactWsObserver observer({SelectedToken{"market", "event", "yes", 1, 1, 1, 100}},
-                                 "wss://unused.example", directory, std::string(40, 'a'));
+        ExactWsObserver observer({SelectedToken{
+                                     "market", "event", "yes", 1, 1, 1, 100, 1,
+                                     1'699'999'999'000, 1'700'000'010'000}},
+                                 "wss://unused.example", directory, std::string(40, 'a'),
+                                 false, 100, true);
         const auto snapshot = [](std::int64_t timestamp) {
             return "{\"event_type\":\"book\",\"asset_id\":\"yes\",\"timestamp\":" + std::to_string(timestamp)
                 + ",\"bids\":[{\"price\":\"0.48\",\"size\":\"10\"}],"

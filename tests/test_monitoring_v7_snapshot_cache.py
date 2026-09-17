@@ -30,6 +30,7 @@ class SnapshotCacheTests(unittest.TestCase):
                 "sequence": calls,
                 "maker_fillability": {"sequence": calls},
                 "external_fair": {"sequence": calls},
+                "multi_crypto_performance": {"sequence": calls},
             }
 
         def render(snapshot: dict) -> str:
@@ -42,6 +43,7 @@ class SnapshotCacheTests(unittest.TestCase):
             cache.start()
             self.assertTrue(cache.wait_ready(2.0))
             self.assertEqual(cache.read()["snapshot"]["sequence"], 1)
+            self.assertIn(b'"sequence": 1', cache.read()["multi_crypto_performance"])
             self.assertTrue(second_refresh_started.wait(2.0))
 
             started = time.monotonic()
@@ -55,6 +57,30 @@ class SnapshotCacheTests(unittest.TestCase):
             while cache.read()["snapshot"]["sequence"] < 2 and time.monotonic() < deadline:
                 time.sleep(0.01)
             self.assertEqual(cache.read()["snapshot"]["sequence"], 2)
+            cache.stop()
+
+    def test_lightweight_cache_skips_profit_experiment_report(self) -> None:
+        seen: dict[str, object] = {}
+
+        def collect(_run_root: Path, _repository_root: Path, **kwargs: object) -> dict:
+            seen.update(kwargs)
+            return {
+                "sequence": 1,
+                "maker_fillability": {},
+                "external_fair": {},
+                "multi_crypto_performance": {},
+                "multi_crypto_shadow": {},
+            }
+
+        cache = exporter.SnapshotCache(
+            Path("run"), ROOT, refresh_seconds=60.0, include_profit_experiment_report=False
+        )
+        with mock.patch.object(exporter, "collect_snapshot", side_effect=collect), mock.patch.object(
+            exporter, "render_prometheus", return_value="test_snapshot_sequence 1\n"
+        ):
+            cache.start()
+            self.assertTrue(cache.wait_ready(2.0))
+            self.assertIs(seen.get("include_profit_experiment_report"), False)
             cache.stop()
 
 

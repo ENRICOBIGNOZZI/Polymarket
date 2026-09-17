@@ -1,0 +1,21 @@
+{
+  "schema": "polymarket_v7_multi_crypto_repricing_research_policy_v1",
+  "version": 1,
+  "paper_only": true,
+  "authenticated_execution": false,
+  "real_order_submission": false,
+  "execution_authority": false,
+  "research_only": true,
+  "primary_horizon_ms": 250,
+  "cluster_seconds": 300,
+  "maximum_label_horizon_ms": 10000,
+  "minimum_time_clusters": 20,
+  "minimum_test_clusters": 4,
+  "split_fractions": {"train": 0.6, "validation": 0.2, "test": 0.2},
+  "ridge_lambda": 1.0,
+  "ridge_tuning": "FORBIDDEN_IN_FORWARD",
+  "missing_policy": "TRAINING_MEDIAN_PLUS_MISSING_INDICATOR",
+  "scaling_policy": "TRAINING_ONLY_STANDARDIZATION",
+  "model_scope": "POOLED_WITH_ASSET_AND_HORIZON_FIXED_EFFECTS",
+  "economic_claim": "NONE_MID_REPRICING_RESEARCH_ONLY"
+}

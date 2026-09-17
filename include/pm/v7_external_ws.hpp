@@ -105,6 +105,13 @@ struct ExternalWsSnapshot {
     std::array<std::uint8_t, 6> reserved{};
 };
 
+[[nodiscard]] ExternalVenueConnectionSpec crypto_connection_spec(
+    VenueId venue,
+    std::uint64_t asset_handle,
+    std::string symbol);
+
+// Frozen BTC compatibility wrapper. New multi-asset callers must pass the
+// venue-specific symbol explicitly through crypto_connection_spec().
 [[nodiscard]] ExternalVenueConnectionSpec btc_spot_connection_spec(
     VenueId venue,
     std::uint64_t asset_handle);

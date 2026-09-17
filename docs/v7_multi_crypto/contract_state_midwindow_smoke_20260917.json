@@ -1,0 +1,21 @@
+{
+  "active_markets": 12,
+  "active_ready_markets": 0,
+  "blocker_counts": {
+    "PM_BOOK_NOT_READY": 12,
+    "REFERENCE_NOT_CAUSAL_OR_MISMATCHED": 12
+  },
+  "book_evidence_complete": true,
+  "canonical_disk_floor_gib": 20,
+  "claim_boundary": "Integration smoke only; no execution or economic evidence.",
+  "exact_code_sha": "7f44dead9a814f0ba8f97421970ecc41df1d6923",
+  "execution_authority": false,
+  "expected_behavior": "MID_WINDOW_START_FAILS_CLOSED_WITHOUT_CAUSAL_REFERENCE_OR_READY_PER_TOKEN_BOOK",
+  "external_ready_assets": 6,
+  "label_evidence_complete": true,
+  "oracle_healthy_assets": 6,
+  "paper_only": true,
+  "schema": "polymarket_v7_multi_crypto_contract_state_midwindow_smoke_v1",
+  "temporary_disk_floor_gib": 1,
+  "timestamp_ns": 1789628451777862000
+}

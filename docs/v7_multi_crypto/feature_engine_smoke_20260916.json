@@ -1,0 +1,91 @@
+{
+  "authenticated_execution": false,
+  "claim_boundary": "Observed public-feed SHADOW evidence only; no real order/fill/PNL evidence.",
+  "exact_code_sha": "d19d13b81799d817dd77b70e046382a7ed546e3a",
+  "execution_authority": false,
+  "external": {
+    "assets": {
+      "BNB": {
+        "fresh_venue_count": 2,
+        "state": "OPERATIONAL",
+        "state_version": 2573,
+        "valid": true
+      },
+      "BTC": {
+        "fresh_venue_count": 3,
+        "state": "OPERATIONAL",
+        "state_version": 16565,
+        "valid": true
+      },
+      "DOGE": {
+        "fresh_venue_count": 3,
+        "state": "OPERATIONAL",
+        "state_version": 6078,
+        "valid": true
+      },
+      "ETH": {
+        "fresh_venue_count": 3,
+        "state": "OPERATIONAL",
+        "state_version": 10141,
+        "valid": true
+      },
+      "SOL": {
+        "fresh_venue_count": 3,
+        "state": "OPERATIONAL",
+        "state_version": 7322,
+        "valid": true
+      },
+      "XRP": {
+        "fresh_venue_count": 3,
+        "state": "OPERATIONAL",
+        "state_version": 8192,
+        "valid": true
+      }
+    },
+    "fresh_assets": 6
+  },
+  "feature_engine": {
+    "blocker_counts": {
+      "MISSING_OR_MISMATCHED_REFERENCE": 24,
+      "PM_BOOK_INVALID_OR_STALE": 19,
+      "UNCALIBRATED_SHADOW": 36
+    },
+    "markets": 36,
+    "ready_for_calibration_markets": 12,
+    "shock_observation_max": 1808,
+    "shock_observation_min": 819,
+    "signal_eligible_count": 0
+  },
+  "oracle": {
+    "all_assets_fresh": true,
+    "gaps": 0,
+    "healthy_assets": 6,
+    "reconnects": 0,
+    "reference_by_horizon": {
+      "M15": 6,
+      "M5": 6
+    },
+    "reference_gap_ms": [
+      2000
+    ],
+    "valid_references": 12
+  },
+  "paper_only": true,
+  "pm_book": {
+    "book_event_tape_enabled": false,
+    "decoder_failures": 0,
+    "evidence_complete": true,
+    "feed_errors": 0,
+    "feed_messages": 116046,
+    "feed_reconnects": 0,
+    "state_only": true
+  },
+  "real_capital_at_risk": false,
+  "real_order_submission": false,
+  "schema": "polymarket_v7_multi_crypto_e2e_shadow_smoke_v1",
+  "selection": {
+    "generation_sha256": "1dc42ce165eb619b141c8da557de45140bf8610e594483a4643988d0c12d6804",
+    "markets": 36,
+    "tokens": 72
+  }
+}

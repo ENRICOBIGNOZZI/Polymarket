@@ -315,6 +315,11 @@ if(BUILD_TESTING)
   target_link_libraries(pm_v7_external_execution_tests PRIVATE pm_v7_external)
   add_test(NAME pm_v7_external_execution_tests COMMAND pm_v7_external_execution_tests)
 
+  add_executable(pm_v7_taker_parity_tests tests/test_v7_taker_parity.cpp)
+  target_link_libraries(pm_v7_taker_parity_tests PRIVATE pm_v7_external)
+  add_test(NAME pm_v7_taker_parity_tests COMMAND pm_v7_taker_parity_tests
+    "${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures/v7_taker_parity.json")
+
   add_executable(pm_v7_external_kernel_tests tests/test_v7_external_kernel.cpp)
   target_link_libraries(pm_v7_external_kernel_tests PRIVATE pm_v7_external)
   add_test(NAME pm_v7_external_kernel_tests COMMAND pm_v7_external_kernel_tests)
@@ -349,6 +354,9 @@ if(BUILD_TESTING)
   target_link_libraries(pm_v7_external_cancel_publisher_tests PRIVATE pm_v7_external)
   target_compile_options(pm_v7_external_cancel_publisher_tests PRIVATE -UNDEBUG)
   add_test(NAME pm_v7_external_cancel_publisher_tests COMMAND pm_v7_external_cancel_publisher_tests)
+  add_executable(pm_v7_external_ws_spec_tests tests/test_v7_external_ws_spec.cpp)
+  target_link_libraries(pm_v7_external_ws_spec_tests PRIVATE pm_v7_external)
+  add_test(NAME pm_v7_external_ws_spec_tests COMMAND pm_v7_external_ws_spec_tests)
 
   add_executable(pm_v7_external_tape_tests tests/test_v7_external_tape.cpp)
   target_link_libraries(pm_v7_external_tape_tests PRIVATE pm_v7_external)

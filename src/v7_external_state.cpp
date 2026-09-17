@@ -140,6 +140,7 @@ bool ExternalAssetState::on_venue_event(const ExternalVenueEvent& event,
         venue.valid = 0;
         venue.book_source_sequence = 0;
         venue.last_book_receive_ns = 0;
+        venue.last_transport_receive_ns = 0;
         venue.previous_bid_size = 0.0;
         venue.previous_ask_size = 0.0;
         venue.bid_size = 0.0;
@@ -162,6 +163,7 @@ bool ExternalAssetState::on_venue_event(const ExternalVenueEvent& event,
     if (composite_inputs_changed) composite_cache_valid_ = 0;
     if (event.gap != 0) venue.valid = 0;
     venue.connection_epoch = event.connection_epoch;
+    venue.last_transport_receive_ns = std::max(venue.last_transport_receive_ns, event.local_receive_monotonic_ns);
     venue.healthy = event.healthy;
     venue.gap = event.gap;
 
@@ -253,6 +255,7 @@ bool ExternalAssetState::on_venue_event(const ExternalVenueEvent& event,
     std::uint32_t fresh_count = 0;
     double composite = 0.0;
     bool policy_matches_cache = composite_cache_valid_ != 0
+        && policy.use_transport_freshness_for_book == 0
         && cached_max_venue_age_ns_ == policy.max_venue_age_ns
         && cached_max_composite_deviation_bps_ == policy.max_composite_deviation_bps;
     if (policy_matches_cache) {
@@ -277,7 +280,9 @@ bool ExternalAssetState::on_venue_event(const ExternalVenueEvent& event,
                                       &health_mask, &fresh_count, nullptr);
 
         composite_cache_valid_ = 0;
-        if (policy.max_venue_age_ns >= 0) {
+        // Transport heartbeats can revive unchanged books. The book-age cache
+        // is valid only for the original frozen book-freshness policy.
+        if (policy.max_venue_age_ns >= 0 && policy.use_transport_freshness_for_book == 0) {
             std::int64_t valid_until = std::numeric_limits<std::int64_t>::max();
             bool has_fresh_candidate = false;
             for (std::size_t i = 0; i < venues_.size(); ++i) {
@@ -352,6 +357,34 @@ void ExternalAssetState::on_oracle_snapshot(const OracleSnapshot& oracle) noexce
     ++state_version_;
 }
 
+void ExternalAssetState::on_transport_heartbeat(
+    VenueId venue_id, std::uint64_t connection_epoch,
+    std::int64_t receive_monotonic_ns, bool healthy) noexcept {
+    const std::size_t index = venue_index(venue_id);
+    if (index >= venues_.size() || connection_epoch == 0 || receive_monotonic_ns <= 0) return;
+    auto& venue = venues_[index];
+    if (venue.connection_epoch != 0 && venue.connection_epoch != connection_epoch) {
+        venue.valid = 0;
+        venue.book_source_sequence = 0;
+        venue.last_book_receive_ns = 0;
+        venue.last_transport_receive_ns = 0;
+        venue.previous_bid_size = 0.0;
+        venue.previous_ask_size = 0.0;
+        venue.bid_size = 0.0;
+        venue.ask_size = 0.0;
+        venue.ofi = 0.0;
+        venue.signed_trade_flow = 0.0;
+        venue.gap = 1;
+    }
+    venue.connection_epoch = connection_epoch;
+    if (receive_monotonic_ns > venue.last_transport_receive_ns) {
+        venue.last_transport_receive_ns = receive_monotonic_ns;
+        latest_receive_ns_ = std::max(latest_receive_ns_, receive_monotonic_ns);
+    }
+    venue.healthy = healthy ? 1 : 0;
+    if (!healthy) venue.valid = 0;
+}
+
 double ExternalAssetState::compute_composite(
     std::int64_t now_ns,
                                            const ExternalStatePolicy& policy,
@@ -373,11 +406,17 @@ double ExternalAssetState::compute_composite(
     double candidate_weight_sum = 0.0;
     for (std::size_t i = 0; i < venues_.size(); ++i) {
         const auto& venue = venues_[i];
+        const bool transport_fresh = policy.use_transport_freshness_for_book != 0
+            && venue.last_transport_receive_ns > 0
+            && venue.last_transport_receive_ns <= now_ns
+            && now_ns - venue.last_transport_receive_ns <= policy.max_transport_age_ns;
+        const bool book_fresh = policy.use_transport_freshness_for_book != 0
+            ? transport_fresh
+            : (venue.last_book_receive_ns > 0 && venue.last_book_receive_ns <= now_ns
+               && now_ns - venue.last_book_receive_ns <= policy.max_venue_age_ns);
         const bool fresh = venue.valid != 0 && venue.healthy != 0 && venue.gap == 0
-            && venue.last_book_receive_ns > 0 && venue.last_book_receive_ns <= now_ns
-            && now_ns - venue.last_book_receive_ns <= policy.max_venue_age_ns
-            && finite(venue.mid) && venue.mid > 0.0
-            && finite(venue.log_mid);
+            && venue.last_book_receive_ns > 0 && book_fresh
+            && finite(venue.mid) && venue.mid > 0.0 && finite(venue.log_mid);
         if (!fresh) continue;
         const double weight = finite(policy.venue_weights[i])
             ? std::max(0.0, policy.venue_weights[i]) : 0.0;

@@ -1,0 +1,25 @@
+{
+  "active_feature_markets": 12,
+  "approx_decimal_gb_per_day_at_observed_rate": 27.211628160000004,
+  "claim_boundary": "SHADOW public-feed data collection only; no execution or profitability evidence.",
+  "collector": {
+    "duplicate_skips": 912,
+    "inactive_skips": 5532,
+    "interval_skips": 3060,
+    "invalid_snapshots": 0,
+    "minimum_interval_ms": 100
+  },
+  "duration_seconds": 15,
+  "exact_code_sha": "36f91bc5837175e0503cdac5eb913ba787c72607",
+  "execution_authority": false,
+  "feature_markets": 24,
+  "paper_only": true,
+  "pm_book": {
+    "decoder_failures": 0,
+    "feed_messages": 9356,
+    "feed_reconnects": 0
+  },
+  "schema": "polymarket_v7_multi_crypto_feature_tape_smoke_v1",
+  "tape_bytes": 4724241,
+  "tape_rows": 1560
+}

@@ -42,6 +42,16 @@ class PortfolioGuardTests(unittest.TestCase):
     def test_canonical_open_fill_is_conservatively_debited(self):
         with tempfile.TemporaryDirectory() as tmp:
             root=Path(tmp); canonical_runtime(root); write_ledger(root,[fill('open','f1')]); report=assess(root,allocation(root/'manifest.json'),max_drawdown=.15); self.assertAlmostEqual(report['engines']['CRYPTO_SETTLEMENT_ENGINE']['equity'],57.9); self.assertAlmostEqual(report['equity'],97.9)
+    def test_component_status_cannot_double_count_canonical_lead_lag_pnl(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root=Path(tmp); canonical_runtime(root)
+            write_ledger(root,[fill('lead','f1'),final('lead',4.6)])
+            directory=root/'research/lead_lag_taker_v1'; directory.mkdir(parents=True)
+            (directory/'status.json').write_text(json.dumps({'realized_pnl':4.6,'equity':9999.0}))
+            (directory/'state.json').write_text(json.dumps({'realized_pnl':4.6}))
+            report=assess(root,allocation(root/'manifest.json'),max_drawdown=.15)
+            self.assertAlmostEqual(report['equity'],104.6)
+            self.assertEqual(report['engines']['CRYPTO_SETTLEMENT_ENGINE']['source'],'canonical_ledger_conservative')
     def test_duplicate_canonical_final_kills_account(self):
         with tempfile.TemporaryDirectory() as tmp:
             root=Path(tmp); canonical_runtime(root); write_ledger(root,[fill('one','f1'),final('one',1.0,record_id='a'),final('one',1.0,record_id='b')]); report=assess(root,allocation(root/'manifest.json'),max_drawdown=.15); self.assertTrue(report['killed'])

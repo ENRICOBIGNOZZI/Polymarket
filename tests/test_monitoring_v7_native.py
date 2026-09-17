@@ -73,6 +73,73 @@ class V7NativeMonitoringTest(unittest.TestCase):
             self.assertIn('polymarket_v7_latency_source_present{source="professional_maker"} 1',metrics)
         dashboard=(ROOT/"monitoring/grafana/dashboards/polymarket-v7-latency.json").read_text().lower()
 
+    def test_crypto_state_pnl_aggregates_lead_lag_component(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory) / "paper_v7_live"
+            self._fixture(root)
+            sha = self._sha()
+            self._write(root / "research/lead_lag_taker_v1/status.json", {
+                "schema": "polymarket_v7_lead_lag_taker_v1_status",
+                "model_sha": sha, "paper_only": True,
+                "authenticated_execution": False, "real_order_submission": False,
+                "entries": 2, "settled": 2, "open_positions": 0, "realized_pnl": 2.0,
+            })
+            canonical_path = root / "canonical_economics.json"
+            canonical = json.loads(canonical_path.read_text())
+            canonical.update({
+                "net_pnl": 2.0,
+                "strategy_net_pnl": {"CRYPTO_SETTLEMENT_ENGINE": 2.0},
+                "model_families_observed": ["lead_lag_taker_v1"],
+            })
+            self._write(canonical_path, canonical)
+            snapshot = exporter.collect_snapshot(root, ROOT, now=1000)
+            components = snapshot["state_realized_pnl_components"]["CRYPTO_SETTLEMENT_ENGINE"]
+            self.assertEqual(components["external_fair"], 0.0)
+            self.assertEqual(components["lead_lag_taker_v1"], 2.0)
+            self.assertEqual(components["total"], 2.0)
+            self.assertNotIn(
+                "strategy_realized_pnl_divergence:CRYPTO_SETTLEMENT_ENGINE",
+                snapshot["reconciliation"]["reason_codes"],
+            )
+
+    def test_required_lead_lag_state_missing_fails_reconciliation_closed(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory) / "paper_v7_live"
+            self._fixture(root)
+            canonical_path = root / "canonical_economics.json"
+            canonical = json.loads(canonical_path.read_text())
+            canonical.update({
+                "net_pnl": 2.0,
+                "strategy_net_pnl": {"CRYPTO_SETTLEMENT_ENGINE": 2.0},
+                "model_families_observed": ["lead_lag_taker_v1"],
+            })
+            self._write(canonical_path, canonical)
+            snapshot = exporter.collect_snapshot(root, ROOT, now=1000)
+            self.assertFalse(snapshot["state_realized_pnl_components"]["CRYPTO_SETTLEMENT_ENGINE"]["complete"])
+            self.assertIn(
+                "strategy_realized_pnl_unverifiable:CRYPTO_SETTLEMENT_ENGINE",
+                snapshot["reconciliation"]["reason_codes"],
+            )
+
+    def test_crypto_exposure_metrics_use_nested_coordinator_risk_without_zero_fallback(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory) / "paper_v7_live"
+            self._fixture(root)
+            self._write(root / "control/global_portfolio_coordinator.json", {
+                "crypto_correlation_risk": {
+                    "gross_crypto_exposure_usd": 12.0,
+                    "net_directional_crypto_exposure_usd": -3.0,
+                    "correlated_crypto_cluster_exposure_usd": 3.0,
+                    "per_asset_exposure_usd": {"BTC": -3.0},
+                    "per_horizon_exposure_usd": {"M5": -3.0},
+                }
+            })
+            metrics = exporter.render_prometheus(exporter.collect_snapshot(root, ROOT, now=1000))
+            self.assertIn("polymarket_v7_crypto_gross_exposure_usd 12", metrics)
+            self.assertIn("polymarket_v7_crypto_net_directional_exposure_usd -3", metrics)
+            self.assertIn("polymarket_v7_crypto_cluster_exposure_usd 3", metrics)
+            self.assertIn('polymarket_mc_coordinator_candidate_asset_exposure_usd{asset="BTC"} -3', metrics)
+
     def test_runtime_cannot_add_second_algorithm(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root=Path(directory)/"paper_v7_live"; self._fixture(root); path=root/"control/runtime_status.json"; value=json.loads(path.read_text()); value["economic_engines"].append("OLD_ENGINE"); self._write(path,value)

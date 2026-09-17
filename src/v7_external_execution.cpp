@@ -121,6 +121,37 @@ SelfCrossGuardResult guard_self_cross(
     return out;
 }
 
+AggressiveBook aggressive_book_from_hot(const BookHotSnapshot& book) noexcept {
+    AggressiveBook out;
+    out.pm_state_version = book.state_version;
+    out.receive_monotonic_ns = book.receive_monotonic_ns;
+    if (book.valid == 0 || book.lineage_continuous == 0
+        || book.receive_monotonic_ns <= 0 || book.ask_level_count == 0
+        || book.ask_level_count > book.ask_levels.size()
+        || book.ask_level_count > out.asks.size()) {
+        return out;
+    }
+    double previous = 0.0;
+    for (std::size_t i = 0; i < book.ask_level_count; ++i) {
+        const auto& level = book.ask_levels[i];
+        if (level.price_e4 <= 0 || level.price_e4 >= kCanonicalPriceScale
+            || level.quantity_microunits <= 0) {
+            return AggressiveBook{};
+        }
+        const double price = static_cast<double>(level.price_e4)
+                           / static_cast<double>(kCanonicalPriceScale);
+        const double quantity = static_cast<double>(level.quantity_microunits) / 1'000'000.0;
+        if (!finite(price) || !finite(quantity) || price <= previous) {
+            return AggressiveBook{};
+        }
+        out.asks[i] = BookLevel{price, quantity};
+        previous = price;
+    }
+    out.ask_count = book.ask_level_count;
+    out.valid = 1;
+    return out;
+}
+
 TakerPaperFill simulate_taker_paper(
     const ExecutionPlan& plan,
     const AggressiveBook& arrival_book,
@@ -195,6 +226,92 @@ TakerPaperFill simulate_taker_paper(
     // negative value is price improvement; it is not double-counted in EV.
     out.slippage_vs_plan = filled * (out.average_fill_price - limit_price);
     out.complete = remaining <= 1e-9 ? 1 : 0;
+    return out;
+}
+
+AuthorizedTakerPaperResult execute_authorized_multi_crypto_taker_paper(
+    const ExecutionPlan& plan,
+    const TakerPaperAuthorization& authorization,
+    const BookHotSnapshot& arrival_book,
+    const FeeScheduleSnapshot& fee,
+    const FairValueSnapshot& fair,
+    bool instrument_is_yes,
+    std::int64_t arrival_monotonic_ns) noexcept {
+
+    AuthorizedTakerPaperResult out;
+    out.arrival_book_state_version = arrival_book.state_version;
+
+    if (authorization.paper_only == 0
+        || authorization.real_order_submission != 0
+        || authorization.real_capital_at_risk != 0
+        || authorization.reservation_durable == 0
+        || authorization.multi_crypto_forward == 0
+        || authorization.authorized_monotonic_ns <= 0
+        || authorization.expires_monotonic_ns < authorization.authorized_monotonic_ns
+        || authorization.maximum_book_age_ns <= 0
+        || !finite(authorization.maximum_debit)
+        || authorization.maximum_debit < 0.0) {
+        out.reason = AuthorizedTakerRejectReason::AuthorizationInvalid;
+        return out;
+    }
+    if (arrival_monotonic_ns < authorization.authorized_monotonic_ns
+        || arrival_monotonic_ns > authorization.expires_monotonic_ns) {
+        out.reason = AuthorizedTakerRejectReason::AuthorizationExpired;
+        return out;
+    }
+    if (plan.policy != ExecutionPolicyId::AggressiveTaker
+        || plan.intent.type != IntentType::TargetPosition
+        || plan.intent.side != Side::Buy
+        || plan.intent.intent_id != authorization.intent_id
+        || plan.intent.instrument_handle != authorization.instrument_handle
+        || plan.intent.model_version != authorization.model_version
+        || plan.intent.policy_version != authorization.policy_version
+        || plan.market_state_version != authorization.minimum_state_version) {
+        out.reason = AuthorizedTakerRejectReason::PlanIdentityMismatch;
+        return out;
+    }
+    if (arrival_book.valid == 0 || arrival_book.lineage_continuous == 0
+        || arrival_book.receive_monotonic_ns <= 0) {
+        out.reason = AuthorizedTakerRejectReason::ArrivalBookInvalid;
+        return out;
+    }
+    if (arrival_book.state_version < authorization.minimum_state_version) {
+        out.reason = AuthorizedTakerRejectReason::ArrivalStateTooOld;
+        return out;
+    }
+    if (arrival_book.receive_monotonic_ns > arrival_monotonic_ns
+        || arrival_monotonic_ns - arrival_book.receive_monotonic_ns
+               > authorization.maximum_book_age_ns) {
+        out.reason = AuthorizedTakerRejectReason::ArrivalBookTooOld;
+        return out;
+    }
+
+    out.authorization_valid = 1;
+    const AggressiveBook aggressive = aggressive_book_from_hot(arrival_book);
+    if (aggressive.valid == 0) {
+        out.authorization_valid = 0;
+        out.reason = AuthorizedTakerRejectReason::ArrivalBookInvalid;
+        return out;
+    }
+    const auto simulated = simulate_taker_paper(
+        plan, aggressive, fee, fair, instrument_is_yes,
+        AggressiveTimeInForce::Fak, arrival_monotonic_ns);
+    if (simulated.rejected != 0) {
+        out.fill = simulated;
+        out.reason = AuthorizedTakerRejectReason::SimulationRejected;
+        return out;
+    }
+    const double debit = simulated.gross_book_cost + simulated.authoritative_fee;
+    if (!finite(debit) || debit > authorization.maximum_debit + 1e-12) {
+        out.fill.requested_microunits = plan.intent.quantity_microunits;
+        out.fill.arrival_monotonic_ns = arrival_monotonic_ns;
+        out.fill.fee_authoritative = simulated.fee_authoritative;
+        out.fill.rejected = 1;
+        out.reason = AuthorizedTakerRejectReason::ReservationExceeded;
+        return out;
+    }
+    out.fill = simulated;
+    out.reason = AuthorizedTakerRejectReason::None;
     return out;
 }
 

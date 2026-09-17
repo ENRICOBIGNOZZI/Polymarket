@@ -2,6 +2,7 @@
 
 #include "pm/v7_execution_plan.hpp"
 #include "pm/v7_external_fair.hpp"
+#include "pm/v7_market_state.hpp"
 
 #include <cstdint>
 #include <type_traits>
@@ -49,6 +50,44 @@ struct TakerPaperFill {
     std::uint8_t reserved = 0;
 };
 
+enum class AuthorizedTakerRejectReason : std::uint8_t {
+    None = 0,
+    AuthorizationInvalid = 1,
+    AuthorizationExpired = 2,
+    PlanIdentityMismatch = 3,
+    ArrivalBookInvalid = 4,
+    ArrivalBookTooOld = 5,
+    ArrivalStateTooOld = 6,
+    ReservationExceeded = 7,
+    SimulationRejected = 8,
+};
+
+struct TakerPaperAuthorization {
+    std::uint64_t intent_id = 0;
+    std::uint64_t instrument_handle = 0;
+    std::uint64_t model_version = 0;
+    std::uint64_t policy_version = 0;
+    std::uint64_t minimum_state_version = 0;
+    std::int64_t authorized_monotonic_ns = 0;
+    std::int64_t expires_monotonic_ns = 0;
+    std::int64_t maximum_book_age_ns = 0;
+    double maximum_debit = 0.0;
+    std::uint8_t paper_only = 1;
+    std::uint8_t real_order_submission = 0;
+    std::uint8_t real_capital_at_risk = 0;
+    std::uint8_t reservation_durable = 0;
+    std::uint8_t multi_crypto_forward = 0;
+    std::array<std::uint8_t, 3> reserved{};
+};
+
+struct AuthorizedTakerPaperResult {
+    TakerPaperFill fill{};
+    std::uint64_t arrival_book_state_version = 0;
+    AuthorizedTakerRejectReason reason = AuthorizedTakerRejectReason::AuthorizationInvalid;
+    std::uint8_t authorization_valid = 0;
+    std::array<std::uint8_t, 6> reserved{};
+};
+
 struct ExternalMakerPolicy {
     double inventory_skew_ticks = 1.0;
     double minimum_robust_capture_per_share = 0.0;
@@ -92,6 +131,12 @@ struct ExternalMakerPolicy {
 // PAPER aggressive execution is evaluated against the canonical L2 snapshot at
 // simulated arrival time. FAK may partially fill; FOK fills only if the entire
 // requested size is executable at or better than the plan's limit.
+// Convert the canonical in-RAM Polymarket L10 snapshot directly into the
+// aggressive PAPER simulator input. Invalid/stale-lineage snapshots fail
+// closed; no REST lookup or heap allocation is required on this bridge.
+[[nodiscard]] AggressiveBook aggressive_book_from_hot(
+    const BookHotSnapshot& book) noexcept;
+
 [[nodiscard]] TakerPaperFill simulate_taker_paper(
     const ExecutionPlan& plan,
     const AggressiveBook& arrival_book,
@@ -99,6 +144,19 @@ struct ExternalMakerPolicy {
     const FairValueSnapshot& fair,
     bool instrument_is_yes,
     AggressiveTimeInForce tif,
+    std::int64_t arrival_monotonic_ns) noexcept;
+
+// Mechanical multi-crypto PAPER execution after the global coordinator has
+// durably reserved capital. This function grants no authority. It verifies that
+// the authorization is bound to the exact plan/current causal book and that the
+// simulated debit stays within the durable reservation before returning a fill.
+[[nodiscard]] AuthorizedTakerPaperResult execute_authorized_multi_crypto_taker_paper(
+    const ExecutionPlan& plan,
+    const TakerPaperAuthorization& authorization,
+    const BookHotSnapshot& arrival_book,
+    const FeeScheduleSnapshot& fee,
+    const FairValueSnapshot& fair,
+    bool instrument_is_yes,
     std::int64_t arrival_monotonic_ns) noexcept;
 
 // Shadow/PAPER external-fair maker research path. PM book state is used only for
@@ -121,6 +179,8 @@ struct ExternalMakerPolicy {
 static_assert(std::is_trivially_copyable_v<OwnOrderView>);
 static_assert(std::is_trivially_copyable_v<SelfCrossGuardResult>);
 static_assert(std::is_trivially_copyable_v<TakerPaperFill>);
+static_assert(std::is_trivially_copyable_v<TakerPaperAuthorization>);
+static_assert(std::is_trivially_copyable_v<AuthorizedTakerPaperResult>);
 static_assert(std::is_trivially_copyable_v<ExternalMakerPolicy>);
 
 } // namespace pm::v7::external_fair

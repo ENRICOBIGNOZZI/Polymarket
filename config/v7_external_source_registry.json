@@ -350,7 +350,8 @@
       "role": "SETTLEMENT_OBSERVABILITY_SOURCE",
       "source_id": "polymarket_rtds_chainlink_eth",
       "transport": "PUBLIC_WEBSOCKET",
-      "venue": "POLYMARKET_RTDS"
+      "venue": "POLYMARKET_RTDS",
+      "verification_evidence": "PUBLIC_ORACLE_HUB_SMOKE_2026-09-16"
     },
     {
       "activation_state": "REGISTERED_NOT_LAUNCHED",
@@ -516,7 +517,8 @@
       "role": "SETTLEMENT_OBSERVABILITY_SOURCE",
       "source_id": "polymarket_rtds_chainlink_sol",
       "transport": "PUBLIC_WEBSOCKET",
-      "venue": "POLYMARKET_RTDS"
+      "venue": "POLYMARKET_RTDS",
+      "verification_evidence": "PUBLIC_ORACLE_HUB_SMOKE_2026-09-16"
     },
     {
       "activation_state": "REGISTERED_NOT_LAUNCHED",
@@ -682,7 +684,8 @@
       "role": "SETTLEMENT_OBSERVABILITY_SOURCE",
       "source_id": "polymarket_rtds_chainlink_xrp",
       "transport": "PUBLIC_WEBSOCKET",
-      "venue": "POLYMARKET_RTDS"
+      "venue": "POLYMARKET_RTDS",
+      "verification_evidence": "PUBLIC_ORACLE_HUB_SMOKE_2026-09-16"
     },
     {
       "activation_state": "REGISTERED_NOT_LAUNCHED",

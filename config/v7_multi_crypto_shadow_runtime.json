@@ -1,0 +1,23 @@
+{
+  "schema": "polymarket_v7_multi_crypto_shadow_runtime_policy_v1",
+  "version": 1,
+  "paper_only": true,
+  "authenticated_execution": false,
+  "real_order_submission": false,
+  "real_capital_at_risk": false,
+  "execution_authority": false,
+  "automatic_promotion": false,
+  "research_only": true,
+  "discovery_interval_seconds": 30,
+  "discovery_windows": 2,
+  "state_publish_ms": 25,
+  "feature_interval_ms": 25,
+  "feature_tape_minimum_interval_ms": 100,
+  "feature_tape_segment_mb": 256,
+  "public_proxy_host": "127.0.0.1",
+  "public_proxy_port": 19249,
+  "minimum_free_gib": 48,
+  "shared_host_production_disk_pressure_gib": 32,
+  "child_shutdown_seconds": 10,
+  "compact_label_tape": true
+}
