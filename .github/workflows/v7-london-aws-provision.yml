@@ -1,0 +1,168 @@
+name: V7 London AWS provision and benchmark
+
+on:
+  workflow_dispatch:
+    inputs:
+      expected_sha:
+        description: Exact main SHA for London infrastructure and benchmark
+        required: true
+        type: string
+      phase:
+        description: AWS/SSM phase to execute
+        required: true
+        default: provision-bootstrap-smoke
+        type: choice
+        options:
+          - provision-bootstrap-smoke
+          - launch-formal
+          - collect-formal
+      formal_run_id:
+        description: Workflow run ID that launched the detached formal benchmark (collect-formal only)
+        required: false
+        default: ""
+        type: string
+      infrastructure_approved:
+        description: Confirm PAPER-only AWS infrastructure action
+        required: true
+        default: false
+        type: boolean
+
+permissions:
+  contents: read
+  actions: read
+
+concurrency:
+  group: polymarket-v7-london-aws
+  cancel-in-progress: false
+
+jobs:
+  london:
+    if: github.event_name == 'workflow_dispatch' && inputs.infrastructure_approved == true
+    runs-on: ubuntu-24.04
+    timeout-minutes: 55
+    env:
+      EXPECTED_SHA: ${{ inputs.expected_sha }}
+      PHASE: ${{ inputs.phase }}
+      FORMAL_RUN_ID: ${{ inputs.formal_run_id }}
+      AWS_REGION: eu-west-2
+      AWS_DEFAULT_REGION: eu-west-2
+      AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+      AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+      AWS_SESSION_TOKEN: ${{ secrets.AWS_SESSION_TOKEN }}
+      POLYMARKET_LONDON_STACK: polymarket-v7-london-shootout
+      POLYMARKET_LONDON_SERVICE_USER: ubuntu
+
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          ref: main
+          fetch-depth: 0
+
+      - name: Fail-closed exact-SHA and AWS identity preflight
+        shell: bash
+        run: |
+          set -euo pipefail
+          [[ "$EXPECTED_SHA" =~ ^[0-9a-f]{40}$ ]]
+          git fetch --no-tags origin main
+          test "$(git rev-parse HEAD)" = "$(git rev-parse origin/main)"
+          test "$(git rev-parse HEAD)" = "$EXPECTED_SHA"
+          test -n "${AWS_ACCESS_KEY_ID:-}"
+          test -n "${AWS_SECRET_ACCESS_KEY:-}"
+          test -n "${AWS_SESSION_TOKEN:-}"
+          command -v aws >/dev/null 2>&1
+          aws sts get-caller-identity --region eu-west-2 --output json >/dev/null
+          python3 scripts/v7_cutover_contract.py --repository-root . --expected-head "$EXPECTED_SHA" >/dev/null
+          python3 - <<'PY'
+          import json
+          from pathlib import Path
+          p=json.loads(Path('config/v7_london_az_shootout.json').read_text())
+          assert p['region']=='eu-west-2'
+          assert p['paper_only'] is True
+          assert p['authenticated_execution'] is False
+          assert p['real_order_submission'] is False
+          assert p['automatic_cutover'] is False
+          assert {z['zone_id'] for z in p['zones']} == {'euw2-az1','euw2-az2','euw2-az3'}
+          PY
+
+      - name: Provision, bootstrap and smoke all three physical AZs
+        if: inputs.phase == 'provision-bootstrap-smoke'
+        shell: bash
+        run: |
+          set -euo pipefail
+          out="$RUNNER_TEMP/london"
+          mkdir -p "$out"
+          POLYMARKET_EXPECTED_SHA="$EXPECTED_SHA" \
+            POLYMARKET_LONDON_OUTPUT_DIR="$out" \
+            ops/v7_london_provision.sh
+          python3 ops/v7_london_ssm_bootstrap.py \
+            --expected-sha "$EXPECTED_SHA" --region eu-west-2 \
+            --output "$out/bootstrap.$EXPECTED_SHA.json"
+          python3 ops/v7_london_ssm_benchmark.py smoke \
+            --expected-sha "$EXPECTED_SHA" --region eu-west-2 --output-dir "$out"
+          python3 ops/v7_london_multipath_ssm.py \
+            --expected-sha "$EXPECTED_SHA" --region eu-west-2 \
+            --output "$out/multipath.$EXPECTED_SHA.json"
+          tar -C "$out" -czf "$RUNNER_TEMP/london-provision-smoke.tgz" .
+
+      - name: Launch detached 24h formal AZ benchmark
+        if: inputs.phase == 'launch-formal'
+        shell: bash
+        run: |
+          set -euo pipefail
+          out="$RUNNER_TEMP/london"
+          mkdir -p "$out"
+          python3 ops/v7_london_ssm_benchmark.py formal \
+            --expected-sha "$EXPECTED_SHA" --region eu-west-2 --output-dir "$out" | tee "$out/formal-launch.txt"
+          receipt="$(sed -n 's/^receipt=//p' "$out/formal-launch.txt" | tail -1)"
+          test -s "$receipt"
+          cp "$receipt" "$RUNNER_TEMP/formal-detached-receipt.json"
+
+      - name: Retrieve detached formal receipt
+        if: inputs.phase == 'collect-formal'
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          [[ "$FORMAL_RUN_ID" =~ ^[1-9][0-9]*$ ]]
+          mkdir -p "$RUNNER_TEMP/formal-source"
+          gh run download "$FORMAL_RUN_ID" -R "$GITHUB_REPOSITORY" \
+            -n v7-london-formal-receipt -D "$RUNNER_TEMP/formal-source"
+          test -s "$RUNNER_TEMP/formal-source/formal-detached-receipt.json"
+
+      - name: Collect and evaluate formal AZ benchmark
+        if: inputs.phase == 'collect-formal'
+        shell: bash
+        run: |
+          set -euo pipefail
+          out="$RUNNER_TEMP/london"
+          mkdir -p "$out"
+          python3 ops/v7_london_ssm_benchmark.py collect \
+            --expected-sha "$EXPECTED_SHA" --region eu-west-2 --output-dir "$out" \
+            --receipt "$RUNNER_TEMP/formal-source/formal-detached-receipt.json"
+          test -s "$out/formal.$EXPECTED_SHA.shootout.json"
+          tar -C "$out" -czf "$RUNNER_TEMP/london-formal-results.tgz" .
+
+      - name: Upload provision and smoke evidence
+        if: inputs.phase == 'provision-bootstrap-smoke'
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: v7-london-provision-smoke
+          path: ${{ runner.temp }}/london-provision-smoke.tgz
+          retention-days: 14
+
+      - name: Upload formal launch receipt
+        if: inputs.phase == 'launch-formal'
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: v7-london-formal-receipt
+          path: ${{ runner.temp }}/formal-detached-receipt.json
+          retention-days: 7
+
+      - name: Upload formal benchmark results
+        if: inputs.phase == 'collect-formal'
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: v7-london-formal-results
+          path: ${{ runner.temp }}/london-formal-results.tgz
+          retention-days: 30
