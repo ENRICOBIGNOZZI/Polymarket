@@ -18,6 +18,7 @@
 #include <cstdint>
 #include <iostream>
 #include <limits>
+#include <memory>
 #include <span>
 #include <stop_token>
 #include <string>
@@ -131,25 +132,30 @@ int main(int argc, char** argv) {
             {options.yes_token, kMarket, kEvent, kYes, options.tick_size_e4},
             {options.no_token, kMarket, kEvent, kNo, options.tick_size_e4},
         };
-        MarketWsShard pm_decoder(std::move(bindings));
+        MarketWsShard pm_decoder(std::move(bindings), false);
         SpscRing<PmQueuedEvent, kPmQueueCapacity> pm_queue;
         std::atomic<std::uint64_t> pm_drops{0}, pm_faults{0};
         std::atomic<std::uint64_t> pm_epoch{1};
+        // One PM feed shard owns this callback (two tokens, shard size two).
+        // Allocate the bounded 528 KiB decode page once instead of zeroing a
+        // 1024-event array on every WebSocket frame.
+        auto pm_decoded = std::make_unique<std::array<MarketWsEvent, kPmFrameEvents>>();
 
         pm::fast::MarketWebSocketFeed pm_feed(
             options.pm_ws_url, {options.yes_token, options.no_token}, 2,
             [&](std::string_view payload, const pm::fast::FeedReceiveStamp& stamp, std::size_t) {
-                std::array<MarketWsEvent, kPmFrameEvents> decoded{};
+                auto& decoded = *pm_decoded;
                 const auto result = pm_decoder.process_frame(payload, stamp, decoded);
                 bool notified = false;
                 if (result.invalid_frame || result.output_overflow || result.arena_exhausted || result.lineage_invalidated) {
                     pm_faults.fetch_add(1, std::memory_order_relaxed);
                 }
                 for (std::size_t i = 0; i < result.output_count; ++i) {
-                    PmQueuedEvent queued;
-                    queued.event = decoded[i];
-                    queued.connection_epoch = pm_epoch.load(std::memory_order_acquire);
-                    if (!pm_queue.try_push(queued)) {
+                    const auto epoch = pm_epoch.load(std::memory_order_acquire);
+                    if (!pm_queue.try_write([&](PmQueuedEvent& queued) noexcept {
+                            queued.event = decoded[i];
+                            queued.connection_epoch = epoch;
+                        })) {
                         pm_drops.fetch_add(1, std::memory_order_relaxed);
                         pm_faults.fetch_add(1, std::memory_order_relaxed);
                     } else notified = true;
@@ -161,7 +167,8 @@ int main(int argc, char** argv) {
                 pm_epoch.fetch_add(1, std::memory_order_acq_rel);
                 pm_faults.fetch_add(1, std::memory_order_relaxed);
                 wakeup.notify();
-            });
+            },
+            false); // flash reaction path consumes monotonic receive time only
 
         ExternalStatePolicy external_policy;
         external_policy.external_cancel_enabled = 1;
@@ -200,7 +207,7 @@ int main(int argc, char** argv) {
         BookHotSnapshot yes_book{}, no_book{};
         ExternalCancelSignalSnapshot current_signal{};
         ExternalVenueEvent pending_binance{}, pending_coinbase{};
-        PmQueuedEvent pending_pm{};
+        const PmQueuedEvent* pending_pm = nullptr;
         bool binance_ready = false, coinbase_ready = false, pm_ready = false;
         std::vector<std::int64_t> accepted_signal_to_admission;
         std::vector<std::int64_t> first_signal_to_decision;
@@ -211,6 +218,7 @@ int main(int argc, char** argv) {
         std::array<std::uint64_t, 32> reasons{};
         std::uint64_t evaluations = 0, accepted = 0, latency_overflow = 0;
         std::uint64_t last_measured_signal_version = 0;
+        std::uint64_t last_pm_fault_generation = 0;
 
 #if defined(__APPLE__)
         std::atomic<bool> stopping{false};
@@ -237,16 +245,28 @@ int main(int argc, char** argv) {
             }
         };
         const auto refill_pm = [&] {
-            while (!pm_ready && pm_queue.try_pop(pending_pm)) {
+            while (!pm_ready) {
+                pending_pm = pm_queue.try_peek();
+                if (pending_pm == nullptr) return;
                 const auto epoch = pm_epoch.load(std::memory_order_acquire);
-                if (pending_pm.connection_epoch == epoch) pm_ready = true;
+                if (pending_pm->connection_epoch == epoch) {
+                    pm_ready = true;
+                    return;
+                }
+                (void)pm_queue.pop_commit();
+                pending_pm = nullptr;
             }
         };
         while (monotonic_now_ns() < deadline) {
-            if (pm_faults.exchange(0, std::memory_order_acq_rel) != 0) {
+            const auto pm_fault_generation = pm_faults.load(std::memory_order_acquire);
+            if (pm_fault_generation != last_pm_fault_generation) {
+                last_pm_fault_generation = pm_fault_generation;
                 yes_book.valid = 0; yes_book.lineage_continuous = 0;
                 no_book.valid = 0; no_book.lineage_continuous = 0;
-                if (pm_ready && pending_pm.connection_epoch != pm_epoch.load(std::memory_order_acquire)) {
+                if (pm_ready && pending_pm != nullptr
+                    && pending_pm->connection_epoch != pm_epoch.load(std::memory_order_acquire)) {
+                    (void)pm_queue.pop_commit();
+                    pending_pm = nullptr;
                     pm_ready = false;
                 }
             }
@@ -260,10 +280,13 @@ int main(int argc, char** argv) {
             std::int64_t receive_ns = std::numeric_limits<std::int64_t>::max();
             if (binance_ready) receive_ns = std::min(receive_ns, pending_binance.local_receive_monotonic_ns);
             if (coinbase_ready) receive_ns = std::min(receive_ns, pending_coinbase.local_receive_monotonic_ns);
-            if (pm_ready) receive_ns = std::min(receive_ns, pending_pm.event.receive_monotonic_ns);
+            if (pm_ready) receive_ns = std::min(receive_ns, pending_pm->event.receive_monotonic_ns);
             if (receive_ns <= 0 || receive_ns == std::numeric_limits<std::int64_t>::max()) {
                 ++latency_overflow;
-                binance_ready = coinbase_ready = pm_ready = false;
+                binance_ready = coinbase_ready = false;
+                if (pm_ready) (void)pm_queue.pop_commit();
+                pending_pm = nullptr;
+                pm_ready = false;
                 continue;
             }
             bool has_external = (binance_ready && pending_binance.local_receive_monotonic_ns == receive_ns)
@@ -282,10 +305,12 @@ int main(int argc, char** argv) {
                     (void)external_state.on_venue_event(pending_coinbase, external_policy);
                     coinbase_ready = false; refill_coinbase(); progressed = true;
                 }
-                if (pm_ready && pending_pm.event.receive_monotonic_ns == receive_ns) {
-                    const auto& event = pending_pm.event;
+                if (pm_ready && pending_pm->event.receive_monotonic_ns == receive_ns) {
+                    const auto& event = pending_pm->event;
                     if (event.instrument_handle == kYes) yes_book = event.book;
                     else if (event.instrument_handle == kNo) no_book = event.book;
+                    (void)pm_queue.pop_commit();
+                    pending_pm = nullptr;
                     pm_ready = false; refill_pm(); progressed = true;
                 }
             } while (progressed);

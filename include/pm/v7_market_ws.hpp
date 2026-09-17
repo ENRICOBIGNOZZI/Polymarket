@@ -75,7 +75,8 @@ struct MarketWsFrameResult {
 // caller-provided output storage; it never falls back to heap allocation.
 class MarketWsShard final {
 public:
-    explicit MarketWsShard(std::vector<TokenBinding> bindings);
+    explicit MarketWsShard(std::vector<TokenBinding> bindings,
+                           bool measure_stage_latency = true);
     ~MarketWsShard();
 
     MarketWsShard(const MarketWsShard&) = delete;

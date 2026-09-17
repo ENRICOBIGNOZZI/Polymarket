@@ -46,14 +46,16 @@ namespace ssl = asio::ssl;
 namespace json = boost::json;
 using tcp = asio::ip::tcp;
 
-[[nodiscard]] FeedReceiveStamp receive_stamp() noexcept {
+[[nodiscard]] FeedReceiveStamp receive_stamp(bool capture_wall_time) noexcept {
     FeedReceiveStamp stamp;
     stamp.monotonic_ns = std::chrono::duration_cast<std::chrono::nanoseconds>(
                              std::chrono::steady_clock::now().time_since_epoch())
                              .count();
-    stamp.wall_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
-                        std::chrono::system_clock::now().time_since_epoch())
-                        .count();
+    if (capture_wall_time) {
+        stamp.wall_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+                            std::chrono::system_clock::now().time_since_epoch())
+                            .count();
+    }
     return stamp;
 }
 
@@ -182,11 +184,13 @@ struct MarketWebSocketFeed::Impl {
     std::atomic<std::uint64_t> messages{0};
     std::atomic<std::uint64_t> reconnects{0};
     std::atomic<std::uint64_t> errors{0};
+    bool capture_wall_time = true;
 
     Impl(std::string url, std::vector<std::string> ids, std::size_t shard_size,
-         MessageHandler message_handler, ErrorHandler error_handler)
+         MessageHandler message_handler, ErrorHandler error_handler,
+         bool capture_wall)
         : endpoint(parse_wss_url(std::move(url))), on_message(std::move(message_handler)),
-          on_error(std::move(error_handler)) {
+          on_error(std::move(error_handler)), capture_wall_time(capture_wall) {
         ids.erase(std::remove_if(ids.begin(), ids.end(), [](const std::string& id) {
             return id.empty();
         }), ids.end());
@@ -338,7 +342,7 @@ struct MarketWebSocketFeed::Impl {
                     if (terminal || stop.stop_requested()) return;
                     buffer.consume(buffer.size());
                     ws.async_read(buffer, [&](beast::error_code error, std::size_t) {
-                        const FeedReceiveStamp stamp = receive_stamp();
+                        const FeedReceiveStamp stamp = receive_stamp(capture_wall_time);
                         if (error) {
                             finish(error);
                             return;
@@ -435,9 +439,11 @@ MarketWebSocketFeed::MarketWebSocketFeed(std::string url,
                                          std::vector<std::string> asset_ids,
                                          std::size_t shard_size,
                                          MessageHandler on_message,
-                                         ErrorHandler on_error)
+                                         ErrorHandler on_error,
+                                         bool capture_wall_time)
     : impl_(std::make_unique<Impl>(std::move(url), std::move(asset_ids), shard_size,
-                                   std::move(on_message), std::move(on_error))) {}
+                                   std::move(on_message), std::move(on_error),
+                                   capture_wall_time)) {}
 
 MarketWebSocketFeed::~MarketWebSocketFeed() { stop(); }
 
