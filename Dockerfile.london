@@ -5,7 +5,7 @@ RUN apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-ins
     && rm -rf /var/lib/apt/lists/*
 WORKDIR /src
 COPY . .
-RUN cmake -S . -B build -GNinja -DCMAKE_BUILD_TYPE=Release -DPM_LONDON_RUNTIME_ONLY=ON -DBUILD_TESTING=OFF \
+RUN cmake -S . -B build -GNinja -DCMAKE_BUILD_TYPE=Release -DPM_LONDON_RUNTIME_ONLY=ON -DPM_LONDON_IPO=ON -DBUILD_TESTING=OFF \
  && cmake --build build --parallel 2 \
  && python3 ops/build_london_runtime_bundle.py --repository-root . --build-dir build --output /runtime
 

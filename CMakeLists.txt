@@ -4,6 +4,19 @@ set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 option(PM_LONDON_RUNTIME_ONLY "Build only binaries required by the London execution runtime" OFF)
+option(PM_LONDON_IPO "Enable compiler/linker IPO for the London Release runtime" ON)
+
+# Release is the deployed London build. Give the compiler visibility across the
+# small static-library boundaries on the native decision/order path, but keep
+# ordinary developer/test builds unchanged.
+if(PM_LONDON_RUNTIME_ONLY AND PM_LONDON_IPO)
+  include(CheckIPOSupported)
+  check_ipo_supported(RESULT PM_LONDON_IPO_SUPPORTED OUTPUT PM_LONDON_IPO_ERROR LANGUAGES CXX)
+  if(NOT PM_LONDON_IPO_SUPPORTED)
+    message(FATAL_ERROR "PM_LONDON_IPO requested but unsupported: ${PM_LONDON_IPO_ERROR}")
+  endif()
+  set(CMAKE_INTERPROCEDURAL_OPTIMIZATION_RELEASE TRUE)
+endif()
 
 if(POLICY CMP0167)
   cmake_policy(SET CMP0167 NEW)
