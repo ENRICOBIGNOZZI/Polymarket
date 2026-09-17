@@ -73,6 +73,22 @@ class V7NativeMonitoringTest(unittest.TestCase):
             self.assertIn('polymarket_v7_latency_source_present{source="professional_maker"} 1',metrics)
         dashboard=(ROOT/"monitoring/grafana/dashboards/polymarket-v7-latency.json").read_text().lower()
 
+    def test_metadata_plane_is_observable_but_not_part_of_execution_authority(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root=Path(directory)/"paper_v7_live"; self._fixture(root)
+            universe=json.loads((root/"universe/status.json").read_text())
+            universe.update({"source":"DEGRADED_CACHE","clob_complete":False,"clob_error_present":True,
+                             "gamma_fallback_requests":4,"gamma_fallback_errors":4,
+                             "cache_fallback_markets":2,"missing_markets":1})
+            self._write(root/"universe/status.json",universe)
+            metrics=exporter.render_prometheus(exporter.collect_snapshot(root,ROOT,now=1000))
+            self.assertIn('polymarket_v7_universe_source_mode_info{mode="DEGRADED_CACHE"} 1',metrics)
+            self.assertIn("polymarket_v7_universe_gamma_fallback_errors 4",metrics)
+            self.assertIn("polymarket_v7_universe_cache_fallback_markets 2",metrics)
+        launcher=(ROOT/"scripts/paper_v7_execution_loop.sh").read_text(encoding="utf-8").lower()
+        self.assertNotIn("grafana server",launcher)
+        self.assertNotIn("prometheus --",launcher)
+
     def test_runtime_cannot_add_second_algorithm(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root=Path(directory)/"paper_v7_live"; self._fixture(root); path=root/"control/runtime_status.json"; value=json.loads(path.read_text()); value["economic_engines"].append("OLD_ENGINE"); self._write(path,value)

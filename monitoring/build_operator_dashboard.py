@@ -201,13 +201,18 @@ def diagnostics():
         table(193,"Markout sample counts","polymarket_execution_markout_observations",0,81,w=24),
     ]
     contexts = [
-        table(201,"Crypto Settlement Contexts · registrations · NOT active trading","polymarket_v7_crypto_context_registered",0,70,w=24,description="Registered BTC/ETH/SOL/XRP contexts do not prove execution. Authority is listed per context."),
+        table(201,"Crypto Settlement Contexts · registrations · NOT active trading","polymarket_v7_crypto_context_registered",0,70,w=24,description="Registered crypto contexts do not prove execution. Authority is listed per context."),
         chart(202,"Crypto authority flags",[("polymarket_v7_crypto_context_zero_authority","zero authority {{asset}} {{horizon}}"),("polymarket_v7_crypto_context_new_risk_authorized","new-risk permission {{asset}} {{horizon}}")],0,76),
         chart(203,"Coordinator crypto exposure · USD",[("polymarket_v7_crypto_gross_exposure_usd","gross"),("polymarket_v7_crypto_net_directional_exposure_usd","net directional"),("polymarket_v7_crypto_cluster_exposure_usd","correlated cluster")],12,76,unit="currencyUSD",decimals=2),
+        table(204,"Metadata source · cold plane only","polymarket_v7_universe_source_mode_info",0,84,w=8,description="Discovery/enrichment is outside the HFT critical path. CLOB_PRIMARY is preferred; Gamma is fallback only; cache is bounded.",columns={"mode":"Source"}),
+        stat(205,"CLOB metadata complete","polymarket_v7_universe_clob_complete",8,84,w=4,mapping={0:("INCOMPLETE","yellow"),1:("COMPLETE","green")}),
+        stat(206,"Gamma fallback errors","polymarket_v7_universe_gamma_fallback_errors",12,84,w=4),
+        stat(207,"Cache fallback markets","polymarket_v7_universe_cache_fallback_markets",16,84,w=4),
+        stat(208,"Missing configured markets","polymarket_v7_universe_missing_markets",20,84,w=4),
     ]
     for panel in runtime + universe + latency + contexts:
         panel["gridPos"]["y"] += 8
-    return [row(160,"Details · runtime, ownership and accounting",74,runtime),row(190,"Details · native latency and evidence",75,latency),row(200,"Details · crypto contexts and permissions",76,contexts)]
+    return [row(160,"Details · runtime, ownership and accounting",74,runtime),row(190,"Details · native latency and evidence",75,latency),row(200,"Details · crypto metadata and permissions",76,contexts)]
 
 
 def common(dashboard):
