@@ -70,6 +70,7 @@ def test_user_ws_transport_compiles_and_is_cold_until_start() -> None:
                 "-Wextra",
                 "-Wpedantic",
                 f"-I{ROOT / 'include'}",
+                "-I/opt/homebrew/include",
                 *cflags,
                 str(ROOT / "src/v7_user_ws.cpp"),
                 str(ROOT / "src/v7_user_ws_feed.cpp"),
