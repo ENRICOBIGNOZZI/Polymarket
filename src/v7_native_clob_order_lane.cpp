@@ -14,6 +14,7 @@
 #include <chrono>
 #include <cstring>
 #include <limits>
+#include <openssl/crypto.h>
 #include <string_view>
 
 namespace pm::v7 {
@@ -97,7 +98,9 @@ struct NativeClobOrderLane::Impl final {
     FixedText<128> passphrase{};
     FixedText<128> poly_address{};
 
-    poly1271::Poly1271OrderHasher order_hasher;
+    clob_eip712::ExchangeV2PreparedOrderHasher buy_order_hasher;
+    clob_eip712::ExchangeV2PreparedOrderHasher sell_order_hasher;
+    poly1271::PreparedHasher poly_hasher;
     poly1271::Secp256k1Signer signer;
     clob_order::OrderSaltSequence salt;
     clob_post::PreparedPostOrderBuilder buy_fak;
@@ -110,7 +113,16 @@ struct NativeClobOrderLane::Impl final {
 
     Impl(const NativeClobLaneConfig& config,
          std::span<const std::uint8_t, 32> private_key) noexcept
-        : order_hasher({config.chain_id, config.exchange_contract}, config.deposit_wallet),
+        : buy_order_hasher(
+              {config.chain_id, config.exchange_contract},
+              {config.deposit_wallet, config.deposit_wallet, config.token_id_decimal,
+               0, 3, config.metadata_hex, config.builder_hex}),
+          sell_order_hasher(
+              {config.chain_id, config.exchange_contract},
+              {config.deposit_wallet, config.deposit_wallet, config.token_id_decimal,
+               1, 3, config.metadata_hex, config.builder_hex}),
+          poly_hasher(config.chain_id, config.deposit_wallet,
+                      buy_order_hasher.domain_separator()),
           signer(private_key),
           salt(clob_order::OrderSaltSequence::from_os_entropy()),
           buy_fak({config.builder_hex, "0", config.deposit_wallet, config.metadata_hex,
@@ -139,7 +151,8 @@ struct NativeClobOrderLane::Impl final {
             || !api_key.assign(config.api_key)
             || !passphrase.assign(config.passphrase)
             || !poly_address.assign(config.signer_eoa_address)
-            || !order_hasher.valid() || !signer.valid() || !salt.valid()
+            || !buy_order_hasher.valid() || !sell_order_hasher.valid()
+            || !poly_hasher.valid() || !signer.valid() || !salt.valid()
             || !buy_fak.valid() || !sell_fak.valid() || !buy_fok.valid() || !sell_fok.valid()
             || !signer.address_hex(derived)
             || !same_hex_address({derived.data(), derived.size()}, signer_eoa.view())) {
@@ -228,22 +241,26 @@ NativeClobSubmitResult NativeClobOrderLane::submit(
         return fail_before_wire(oms_owner, command.client_order_id,
                                 NativeClobSubmitReason::PreWireFailure);
     }
-    clob_eip712::ExchangeV2OrderView order{};
-    order.salt_decimal = salt_sv;
-    order.maker = impl_->deposit_wallet.view();
-    order.signer = impl_->deposit_wallet.view();
-    order.token_id_decimal = impl_->token_id.view();
-    order.maker_amount_decimal = maker_sv;
-    order.taker_amount_decimal = taker_sv;
-    order.side = command.side == Side::Buy ? 0 : 1;
-    order.signature_type = 3;
-    order.timestamp_decimal = timestamp_sv;
-    order.metadata_hex = impl_->metadata.view();
-    order.builder_hex = impl_->builder.view();
-
+    auto& order_hasher = command.side == Side::Buy
+        ? impl_->buy_order_hasher : impl_->sell_order_hasher;
+    clob_eip712::Hash32 contents_hash{}, signing_digest{};
+    if (!order_hasher.struct_hash_u64(
+            salt, amounts.maker_amount, amounts.taker_amount,
+            wall_timestamp_ms, contents_hash)
+        || !impl_->poly_hasher.digest(contents_hash, signing_digest)) {
+        return fail_before_wire(oms_owner, command.client_order_id,
+                                NativeClobSubmitReason::PreWireFailure);
+    }
+    std::array<std::uint8_t, poly1271::kEvmSignatureBytes> evm_signature;
     std::array<char, poly1271::kWrappedSignatureHexChars> order_signature;
-    if (!poly1271::sign_poly1271_hex(
-            impl_->order_hasher, impl_->signer, order, order_signature)) {
+    const bool signature_ok = impl_->signer.sign_digest(signing_digest, evm_signature)
+        && poly1271::wrap_signature_hex(
+            evm_signature, order_hasher.domain_separator(), contents_hash,
+            order_signature);
+    OPENSSL_cleanse(evm_signature.data(), evm_signature.size());
+    OPENSSL_cleanse(signing_digest.data(), signing_digest.size());
+    OPENSSL_cleanse(contents_hash.data(), contents_hash.size());
+    if (!signature_ok) {
         return fail_before_wire(oms_owner, command.client_order_id,
                                 NativeClobSubmitReason::PreWireFailure);
     }
