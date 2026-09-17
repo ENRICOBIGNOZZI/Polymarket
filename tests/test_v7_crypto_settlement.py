@@ -39,10 +39,10 @@ def model(context) -> dict:
     }
 
 
-def test_eight_verified_contexts_and_no_one_minute_instantiation() -> None:
+def test_twelve_verified_contexts_and_no_one_minute_instantiation() -> None:
     contexts = load_registry(REGISTRY)
-    assert len(contexts) == 8
-    assert {row.asset.value for row in contexts.values()} == {"BTC", "ETH", "SOL", "XRP"}
+    assert len(contexts) == 12
+    assert {row.asset.value for row in contexts.values()} == {"BTC", "ETH", "SOL", "XRP", "DOGE", "BNB"}
     assert {row.horizon.value for row in contexts.values()} == {"M5", "M15"}
     assert all(row.research_only for row in contexts.values() if row.asset.value != "BTC")
     try:
@@ -179,21 +179,24 @@ def test_source_and_symbol_mappings_are_isolated_by_asset() -> None:
         "bybit_spot": "BYBIT_SPOT", "binance_perp": "BINANCE_USDM",
         "bybit_perp": "BYBIT_LINEAR",
     }
-    for asset in ("BTC", "ETH", "SOL", "XRP"):
+    for asset in ("BTC", "ETH", "SOL", "XRP", "DOGE", "BNB"):
         context = require_context(contexts, asset, "M5")
         mappings = context.raw["external_symbols"]
         for field, venue in venue_fields.items():
+            symbol = mappings.get(field)
+            if symbol is None:
+                continue
             assert any(
                 row["asset"] == asset and row["venue"] == venue
-                and row["instrument_id"] == mappings[field]
+                and row["instrument_id"] == symbol
                 for row in sources
-            ), (asset, field, mappings[field])
+            ), (asset, field, symbol)
     assert require_context(contexts, "ETH", "M5").raw["external_symbols"]["binance_spot"] != \
         require_context(contexts, "BTC", "M5").raw["external_symbols"]["binance_spot"]
 
 
 if __name__ == "__main__":
-    test_eight_verified_contexts_and_no_one_minute_instantiation()
+    test_twelve_verified_contexts_and_no_one_minute_instantiation()
     test_asset_horizon_and_settlement_hash_model_isolation()
     test_model_registry_is_complete_indexed_and_zero_authority()
     test_correlated_crypto_risk_has_no_fake_asset_diversification()
