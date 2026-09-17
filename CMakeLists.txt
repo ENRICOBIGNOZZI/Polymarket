@@ -14,6 +14,7 @@ find_package(Boost REQUIRED)
 find_package(Threads REQUIRED)
 find_package(OpenSSL REQUIRED)
 pkg_check_modules(LIBCURL REQUIRED IMPORTED_TARGET libcurl)
+pkg_check_modules(SECP256K1 REQUIRED IMPORTED_TARGET libsecp256k1)
 
 # Boost.JSON is compiled exactly once and shared by all V7 C++ components.
 # This keeps the bounded market-data decoder independent from HTTP/REST code.
@@ -34,6 +35,11 @@ add_library(pm_fast_arb src/fast_arb.cpp src/fast_ws.cpp)
 target_include_directories(pm_fast_arb PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/include)
 target_link_libraries(pm_fast_arb PUBLIC pm_core Threads::Threads OpenSSL::SSL OpenSSL::Crypto)
 target_compile_options(pm_fast_arb PRIVATE -Wall -Wextra -Wpedantic)
+
+add_library(pm_v7_clob_signer src/v7_secp256k1_signer.cpp)
+target_include_directories(pm_v7_clob_signer PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/include)
+target_link_libraries(pm_v7_clob_signer PUBLIC PkgConfig::SECP256K1)
+target_compile_options(pm_v7_clob_signer PRIVATE -Wall -Wextra -Wpedantic)
 
 add_library(pm_v7_common
   src/v7_oms.cpp
