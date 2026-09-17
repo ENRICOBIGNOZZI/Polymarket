@@ -89,6 +89,15 @@ public:
                                   const ExchangeV2PreparedStaticView& fixed) noexcept;
     [[nodiscard]] bool valid() const noexcept { return valid_; }
     [[nodiscard]] const Hash32& domain_separator() const noexcept { return domain_separator_; }
+    // Prepared Order struct hash for protocols (for example POLY_1271) that
+    // wrap the Exchange V2 Order hash inside another typed-data envelope.
+    // Patches only the four per-order uint64 fields; every static ABI word was
+    // parsed and encoded once at construction.
+    [[nodiscard]] bool struct_hash_u64(std::uint64_t salt,
+                                       std::uint64_t maker_amount,
+                                       std::uint64_t taker_amount,
+                                       std::uint64_t timestamp_ms,
+                                       Hash32& output) noexcept;
     [[nodiscard]] bool digest_u64(std::uint64_t salt,
                                   std::uint64_t maker_amount,
                                   std::uint64_t taker_amount,
