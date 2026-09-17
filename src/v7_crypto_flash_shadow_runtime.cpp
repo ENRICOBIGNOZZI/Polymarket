@@ -218,6 +218,7 @@ int main(int argc, char** argv) {
         std::array<std::uint64_t, 32> reasons{};
         std::uint64_t evaluations = 0, accepted = 0, latency_overflow = 0;
         std::uint64_t last_measured_signal_version = 0;
+        std::uint64_t last_pm_fault_generation = 0;
 
 #if defined(__APPLE__)
         std::atomic<bool> stopping{false};
@@ -257,7 +258,9 @@ int main(int argc, char** argv) {
             }
         };
         while (monotonic_now_ns() < deadline) {
-            if (pm_faults.exchange(0, std::memory_order_acq_rel) != 0) {
+            const auto pm_fault_generation = pm_faults.load(std::memory_order_acquire);
+            if (pm_fault_generation != last_pm_fault_generation) {
+                last_pm_fault_generation = pm_fault_generation;
                 yes_book.valid = 0; yes_book.lineage_continuous = 0;
                 no_book.valid = 0; no_book.lineage_continuous = 0;
                 if (pm_ready && pending_pm != nullptr
