@@ -48,14 +48,30 @@ esac
 mkdir -p "$OUTPUT_DIR"
 stamp="$(date -u +%Y%m%dT%H%M%SZ)"
 probe_path="$OUTPUT_DIR/${MODE}.${AZ_ID}.${stamp}.json"
+audit_path="$OUTPUT_DIR/${MODE}.${AZ_ID}.${stamp}.samples.jsonl"
 manifest_path="$OUTPUT_DIR/${MODE}.${AZ_ID}.${stamp}.host.json"
 
 "$PROBE" --region "$AZ_ID" --exact-code-sha "$EXPECTED_SHA" \
-  --samples "$SAMPLES" --interval-ms "$INTERVAL_MS" > "$probe_path"
-python3 - "$manifest_path" "$EXPECTED_SHA" "$AZ_NAME" "$AZ_ID" "$INSTANCE_ID" "$INSTANCE_TYPE" "$probe_path" "$LOCK_FILE" <<'PY'
+  --samples "$SAMPLES" --interval-ms "$INTERVAL_MS" \
+  --sample-audit-jsonl "$audit_path" > "$probe_path"
+[[ -s "$audit_path" ]]
+audit_rows="$(wc -l < "$audit_path" | tr -d '[:space:]')"
+[[ "$audit_rows" == "$SAMPLES" ]]
+audit_sha256="$(python3 - "$audit_path" <<'PY'
+import hashlib,sys
+h=hashlib.sha256()
+with open(sys.argv[1],'rb') as f:
+    for chunk in iter(lambda:f.read(1024*1024),b''):
+        h.update(chunk)
+print(h.hexdigest())
+PY
+)"
+[[ "$audit_sha256" =~ ^[0-9a-f]{64}$ ]]
+
+python3 - "$manifest_path" "$EXPECTED_SHA" "$AZ_NAME" "$AZ_ID" "$INSTANCE_ID" "$INSTANCE_TYPE" "$probe_path" "$LOCK_FILE" "$audit_path" "$audit_rows" "$audit_sha256" <<'PY'
 import json,socket,sys,time
 from pathlib import Path
-path,sha,az_name,az_id,instance_id,instance_type,probe,lock_file=sys.argv[1:]
+path,sha,az_name,az_id,instance_id,instance_type,probe,lock_file,audit_path,audit_rows,audit_sha256=sys.argv[1:]
 value={
   'schema':'polymarket_v7_london_host_benchmark_manifest_v1',
   'timestamp':int(time.time()), 'hostname':socket.gethostname(),
@@ -68,7 +84,11 @@ value={
   'selection_scope':'PUBLIC_HTTPS_PROBE_ONLY',
   'single_owner_lock':True,
   'benchmark_lock_file':lock_file,
+  'sample_audit_schema':'polymarket_v7_latency_sample_v1',
+  'sample_audit_path':audit_path,
+  'sample_audit_rows':int(audit_rows),
+  'sample_audit_sha256':audit_sha256,
 }
 Path(path).write_text(json.dumps(value,sort_keys=True,indent=2)+'\n',encoding='utf-8')
 PY
-printf 'probe=%s\nmanifest=%s\n' "$probe_path" "$manifest_path"
+printf 'probe=%s\nmanifest=%s\naudit=%s\n' "$probe_path" "$manifest_path" "$audit_path"
