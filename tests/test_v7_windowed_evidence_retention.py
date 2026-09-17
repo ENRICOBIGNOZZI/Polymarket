@@ -166,4 +166,52 @@ class WindowedRetentionTest(unittest.TestCase):
             self.assertEqual(out['removed_packs'],1)
 
 
+    def test_pack_cleanup_retires_verified_hardlink_aliases(self):
+        import hashlib
+        with tempfile.TemporaryDirectory() as tmp:
+            runs=Path(tmp)/'runs';store=runs/'paper_v7_durable/permanent_evidence/store';old=time.time_ns()-8*3600*10**9
+            alias=runs/'paper_v7_durable/external_cancel/workspaces/1/normalized_events/x.segment-000000.bin'
+            alias.parent.mkdir(parents=True);payload=b'hardlinked-windowed-payload';alias.write_bytes(payload);os.utime(alias,ns=(old,old))
+            sha=hashlib.sha256(payload).hexdigest();pack=store/'packs'/sha[:2]/(sha+'.pack');pack.parent.mkdir(parents=True);os.link(alias,pack);os.chmod(pack,0o400)
+            value={'schema':'polymarket_v7_lossless_shared_pack_v1','pack_sha256':sha,'pack_bytes':len(payload),
+                   'source_aliases':[str(alias)],'source_bytes_sha256_verified':True,'created_ns':old,'source_original_stat':[alias.stat().st_dev,alias.stat().st_ino,len(payload),old]}
+            raw=json.dumps(value).encode();man=store/'pack_manifests'/(hashlib.sha256(raw).hexdigest()+'.json');man.parent.mkdir(parents=True);man.write_bytes(raw)
+            out=run(runs,raw_detail_seconds=6*3600,maximum_seconds=30)
+            self.assertFalse(alias.exists());self.assertFalse(pack.exists());self.assertFalse(man.exists())
+            self.assertEqual(out['removed_source_aliases'],1)
+            self.assertTrue(list((store/'windowed_alias_retirement_receipts').glob('*/*.json')))
+
+    def test_tombstone_only_alias_recovery_hashes_before_retirement(self):
+        import hashlib
+        with tempfile.TemporaryDirectory() as tmp:
+            runs=Path(tmp)/'runs';store=runs/'paper_v7_durable/permanent_evidence/store';old=time.time_ns()-8*3600*10**9
+            alias=runs/'paper_v7_archives'/('cutover-'+'a'*40+'-1-1')/'fast_structural/fast_arb_opportunities.csv'
+            alias.parent.mkdir(parents=True);payload=b'closed-old-alias';alias.write_bytes(payload);os.utime(alias,ns=(old,old))
+            sha=hashlib.sha256(payload).hexdigest()
+            tomb={'schema':'polymarket_v7_windowed_pack_tombstone_v1','paper_only':True,'authenticated_execution':False,'real_order_submission':False,
+                  'execution_authority':'ZERO_AUTHORITY_RESEARCH_ONLY','policy':'USER_AUTHORIZED_HFT_ROLLING_RAW_WINDOW_20260916','raw_detail_available':False,
+                  'pack_sha256':sha,'source_aliases':[str(alias)],'source_families':['structural_candidates'],'object_sha256s':[],'manifest_sha256s':[],
+                  'retired_at_ns':old,'cutoff_ns':old-1}
+            immutable(store/'windowed_pack_tombstones'/(sha+'.json'),canonical(tomb))
+            out=run(runs,raw_detail_seconds=6*3600,maximum_seconds=30)
+            self.assertFalse(alias.exists());self.assertEqual(out['removed_source_aliases'],1)
+            receipt=json.loads(next((store/'windowed_alias_retirement_receipts').glob('*/*.json')).read_text())
+            self.assertEqual(receipt['alias']['verified_by'],'FULL_SHA256')
+
+    def test_tombstone_only_alias_hash_mismatch_is_preserved(self):
+        import hashlib
+        with tempfile.TemporaryDirectory() as tmp:
+            runs=Path(tmp)/'runs';store=runs/'paper_v7_durable/permanent_evidence/store';old=time.time_ns()-8*3600*10**9
+            alias=runs/'paper_v7_archives'/('cutover-'+'a'*40+'-1-1')/'fast_structural/fast_arb_opportunities.csv'
+            alias.parent.mkdir(parents=True);alias.write_bytes(b'changed');os.utime(alias,ns=(old,old))
+            sha=hashlib.sha256(b'original').hexdigest()
+            tomb={'schema':'polymarket_v7_windowed_pack_tombstone_v1','paper_only':True,'authenticated_execution':False,'real_order_submission':False,
+                  'execution_authority':'ZERO_AUTHORITY_RESEARCH_ONLY','policy':'USER_AUTHORIZED_HFT_ROLLING_RAW_WINDOW_20260916','raw_detail_available':False,
+                  'pack_sha256':sha,'source_aliases':[str(alias)],'source_families':['structural_candidates'],'object_sha256s':[],'manifest_sha256s':[],
+                  'retired_at_ns':old,'cutoff_ns':old-1}
+            immutable(store/'windowed_pack_tombstones'/(sha+'.json'),canonical(tomb))
+            out=run(runs,raw_detail_seconds=6*3600,maximum_seconds=30)
+            self.assertTrue(alias.exists());self.assertEqual(out['removed_source_aliases'],0);self.assertEqual(out['alias_integrity_skips'],1)
+
+
 if __name__=='__main__':unittest.main()
