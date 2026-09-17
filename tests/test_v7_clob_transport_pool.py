@@ -9,6 +9,19 @@ import time
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
+
+def _openssl_flags() -> tuple[list[str], list[str]]:
+    brew = shutil.which("brew")
+    if brew:
+        prefix = subprocess.check_output([brew, "--prefix", "openssl@3"], text=True).strip()
+        return [f"-I{prefix}/include"], [f"-L{prefix}/lib", "-lssl", "-lcrypto"]
+    pkg_config = shutil.which("pkg-config")
+    if pkg_config:
+        cflags = subprocess.check_output([pkg_config, "--cflags", "openssl"], text=True).split()
+        libs = subprocess.check_output([pkg_config, "--libs", "openssl"], text=True).split()
+        return cflags, libs
+    return [], ["-lssl", "-lcrypto"]
+
 PROGRAM = r'''
 #include "pm/v7_clob_transport_pool.hpp"
 #include <array>
@@ -63,7 +76,7 @@ def test_order_stall_does_not_block_cancel_lane() -> None:
             finally: listener.close()
         st=threading.Thread(target=server); st.start()
         src=p/"main.cpp"; exe=p/"pool"; src.write_text(PROGRAM)
-        prefix=subprocess.check_output(["brew","--prefix","openssl@3"],text=True).strip()
-        subprocess.run([cxx,"-std=c++20","-O2",f"-I{ROOT/'include'}",f"-I{prefix}/include",str(ROOT/"src/v7_clob_tls.cpp"),str(src),"-o",str(exe),f"-L{prefix}/lib","-lssl","-lcrypto"],check=True)
+        inc, libs = _openssl_flags()
+        subprocess.run([cxx,"-std=c++20","-O2",f"-I{ROOT/'include'}",*inc,str(ROOT/"src/v7_clob_tls.cpp"),str(src),"-o",str(exe),*libs],check=True)
         subprocess.run([str(exe),str(port),str(cert)],check=True,timeout=10); st.join(timeout=5)
         assert not st.is_alive() and not errors and len(accepted)==2

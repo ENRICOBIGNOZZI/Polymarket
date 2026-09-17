@@ -59,8 +59,16 @@ int main(int argc, char** argv) {
 
 
 def _openssl_flags() -> tuple[list[str], list[str]]:
-    prefix = subprocess.check_output(["brew", "--prefix", "openssl@3"], text=True).strip()
-    return [f"-I{prefix}/include"], [f"-L{prefix}/lib", "-lssl", "-lcrypto"]
+    brew = shutil.which("brew")
+    if brew:
+        prefix = subprocess.check_output([brew, "--prefix", "openssl@3"], text=True).strip()
+        return [f"-I{prefix}/include"], [f"-L{prefix}/lib", "-lssl", "-lcrypto"]
+    pkg_config = shutil.which("pkg-config")
+    if pkg_config:
+        cflags = subprocess.check_output([pkg_config, "--cflags", "openssl"], text=True).split()
+        libs = subprocess.check_output([pkg_config, "--libs", "openssl"], text=True).split()
+        return cflags, libs
+    return [], ["-lssl", "-lcrypto"]
 
 
 def _make_cert(tmp: Path) -> tuple[Path, Path]:
