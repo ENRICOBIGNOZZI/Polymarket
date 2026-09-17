@@ -60,6 +60,7 @@ struct Options {
     std::int32_t tick_size_e4 = 100;
     std::int64_t min_order_microunits = 5'000'000;
     int duration_seconds = 30;
+    int idle_spin_us = 50;
     bool validate_only = false;
 };
 
@@ -78,6 +79,7 @@ Options parse_options(int argc, char** argv) {
         else if (arg == "--tick-size-e4") out.tick_size_e4 = bounded_integer<std::int32_t>(next(), 1, 5000);
         else if (arg == "--min-order-microunits") out.min_order_microunits = bounded_integer<std::int64_t>(next(), 1, 1'000'000'000);
         else if (arg == "--duration-seconds") out.duration_seconds = bounded_integer<int>(next(), 1, 3600);
+        else if (arg == "--idle-spin-us") out.idle_spin_us = bounded_integer<int>(next(), 0, 2000);
         else if (arg == "--validate-only") out.validate_only = true;
         else throw std::invalid_argument("unknown option");
     }
@@ -254,7 +256,7 @@ int main(int argc, char** argv) {
             refill_coinbase();
             refill_pm();
             if (!binance_ready && !coinbase_ready && !pm_ready) {
-                (void)wakeup.wait_for(2ms);
+                (void)wakeup.wait_for(2ms, std::chrono::microseconds(options.idle_spin_us));
                 continue;
             }
             std::int64_t receive_ns = std::numeric_limits<std::int64_t>::max();
@@ -347,6 +349,7 @@ int main(int argc, char** argv) {
             {"authority", "SHADOW_ZERO_AUTHORITY"},
             {"critical_path", "CPP_SAME_PROCESS_CAUSAL_EVENT_TO_RISK_ADMISSION"},
             {"clean_capture", clean}, {"duration_seconds", options.duration_seconds},
+            {"idle_spin_us", options.idle_spin_us}, {"kernel_wakeups", wakeup.kernel_wakeups()},
             {"evaluations", evaluations}, {"accepted_candidates", accepted},
             {"latency_sample_overflow", latency_overflow},
             {"accepted_signal_to_admission", latency_distribution(std::move(accepted_signal_to_admission))},

@@ -146,6 +146,10 @@ add_executable(polymarket_v7_ingress_latency_bench src/v7_ingress_latency_bench.
 target_link_libraries(polymarket_v7_ingress_latency_bench PRIVATE pm_v7_external)
 target_compile_options(polymarket_v7_ingress_latency_bench PRIVATE -Wall -Wextra -Wpedantic)
 
+add_executable(polymarket_v7_ingress_wakeup_bench src/v7_ingress_wakeup_bench.cpp)
+target_link_libraries(polymarket_v7_ingress_wakeup_bench PRIVATE pm_v7_common Threads::Threads)
+target_compile_options(polymarket_v7_ingress_wakeup_bench PRIVATE -Wall -Wextra -Wpedantic)
+
 add_executable(polymarket_v7_external_venue_runtime src/v7_external_venue_runtime.cpp)
 target_link_libraries(polymarket_v7_external_venue_runtime PRIVATE pm_v7_external)
 target_compile_options(polymarket_v7_external_venue_runtime PRIVATE -Wall -Wextra -Wpedantic)
