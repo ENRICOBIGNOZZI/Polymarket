@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import shlex
 import subprocess
 import time
 from pathlib import Path
@@ -56,7 +57,7 @@ def remote_command(sha: str, mode: str, service_user: str) -> str:
 APP=/home/{service_user}/polymarket
 RUN=/mnt/polymarket-data/paper_v7_london
 BENCH=/mnt/polymarket-data/benchmarks
-[[ "$(git -C "$APP" rev-parse HEAD)" == "{sha}" ]]
+[[ "$(sudo -u {service_user} git -C "$APP" rev-parse HEAD)" == "{sha}" ]]
 python3 -c 'import json; v=json.load(open("'$RUN'/bootstrap_receipt.json")); assert v["code_sha"]=="{sha}" and v["systemd_installed_but_disabled"] is True'
 ! systemctl is-active --quiet polymarket-v7-paper.service
 out=$(sudo -u {service_user} env POLYMARKET_EXPECTED_SHA="{sha}" POLYMARKET_APP_DIR="$APP" POLYMARKET_BENCHMARK_DIR="$BENCH" "$APP/ops/v7_london_benchmark.sh" {mode})
@@ -81,7 +82,7 @@ def parse_result(stdout: str) -> tuple[dict[str, Any], dict[str, Any]]:
 
 
 def send(region: str, instance_id: str, command: str, timeout_s: int) -> str:
-    parameters = json.dumps({"commands": [command], "executionTimeout": [str(timeout_s)]})
+    parameters = json.dumps({"commands": [f"bash -lc {shlex.quote(command)}"], "executionTimeout": [str(timeout_s)]})
     value = aws_json(region, [
         "ssm", "send-command", "--instance-ids", instance_id,
         "--document-name", "AWS-RunShellScript", "--parameters", parameters,

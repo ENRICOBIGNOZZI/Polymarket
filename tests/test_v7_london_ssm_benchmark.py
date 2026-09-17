@@ -3,12 +3,13 @@ from __future__ import annotations
 import json
 import sys
 import unittest
+from unittest import mock
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "ops"))
 
-from v7_london_ssm_benchmark import parse_result, remote_command, stack_instances
+from v7_london_ssm_benchmark import parse_result, remote_command, send, stack_instances
 
 
 class LondonSsmBenchmarkTests(unittest.TestCase):
@@ -31,10 +32,22 @@ class LondonSsmBenchmarkTests(unittest.TestCase):
         self.assertIn(sha, command)
         self.assertIn("! systemctl is-active --quiet polymarket-v7-paper.service", command)
         self.assertIn("v7_london_benchmark.sh", command)
+        self.assertIn("sudo -u ubuntu git -C", command)
         self.assertNotIn("real-order", command.lower())
         self.assertNotIn("tailscale up", command)
         with self.assertRaises(ValueError):
             remote_command("bad", "smoke", "ubuntu")
+
+    def test_send_forces_bash_for_pipefail_remote_command(self) -> None:
+        with mock.patch("v7_london_ssm_benchmark.aws_json", return_value={
+            "Command": {"CommandId": "cmd-123"}
+        }) as aws:
+            self.assertEqual(send("eu-west-2", "i-1234567890abcdef0", "set -euo pipefail\ntrue", 60), "cmd-123")
+        args = aws.call_args.args[1]
+        raw = args[args.index("--parameters") + 1]
+        params = json.loads(raw)
+        self.assertEqual(params["executionTimeout"], ["60"])
+        self.assertTrue(params["commands"][0].startswith("bash -lc "))
 
     def test_parse_result_requires_one_marked_envelope(self) -> None:
         probe = {"region": "euw2-az1", "exact_code_sha": "a" * 40}
