@@ -66,6 +66,7 @@ target_compile_options(pm_v7_hft PRIVATE -Wall -Wextra -Wpedantic)
 # deterministic offline replay primitives.
 add_library(pm_v7_external
   src/v7_external_fair.cpp
+  src/v7_crypto_decision_lane.cpp
   src/v7_binance_l2.cpp
   src/v7_binance_l2_protocol.cpp
   src/v7_binance_sbe.cpp
@@ -81,6 +82,11 @@ add_library(pm_v7_external
 target_include_directories(pm_v7_external PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/include ${Boost_INCLUDE_DIRS})
 target_link_libraries(pm_v7_external PUBLIC pm_v7_common Threads::Threads pm_json OpenSSL::SSL OpenSSL::Crypto)
 target_compile_options(pm_v7_external PRIVATE -Wall -Wextra -Wpedantic)
+
+# Zero-authority microbenchmark for the native crypto decision kernel.
+add_executable(polymarket_v7_crypto_decision_bench src/v7_crypto_decision_bench.cpp)
+target_link_libraries(polymarket_v7_crypto_decision_bench PRIVATE pm_v7_external)
+target_compile_options(polymarket_v7_crypto_decision_bench PRIVATE -Wall -Wextra -Wpedantic)
 
 add_executable(polymarket_v7_trade_recorder src/v7_trade_recorder.cpp)
 target_link_libraries(polymarket_v7_trade_recorder PRIVATE pm_core)
@@ -241,6 +247,11 @@ if(BUILD_TESTING)
   add_executable(pm_v7_maker_execution_policy_tests tests/test_v7_maker_execution_policy.cpp)
   target_link_libraries(pm_v7_maker_execution_policy_tests PRIVATE pm_v7_hft)
   add_test(NAME pm_v7_maker_execution_policy_tests COMMAND pm_v7_maker_execution_policy_tests)
+
+  add_executable(pm_v7_crypto_decision_lane_tests tests/test_v7_crypto_decision_lane.cpp)
+  target_link_libraries(pm_v7_crypto_decision_lane_tests PRIVATE pm_v7_external)
+  target_compile_options(pm_v7_crypto_decision_lane_tests PRIVATE -UNDEBUG)
+  add_test(NAME pm_v7_crypto_decision_lane_tests COMMAND pm_v7_crypto_decision_lane_tests)
 
   add_executable(pm_v7_external_fair_tests tests/test_v7_external_fair.cpp)
   target_link_libraries(pm_v7_external_fair_tests PRIVATE pm_v7_external)
