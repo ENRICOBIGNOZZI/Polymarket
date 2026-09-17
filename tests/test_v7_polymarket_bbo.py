@@ -65,6 +65,7 @@ def test_compact_bbo_decoder() -> None:
                 "-Wextra",
                 "-Wpedantic",
                 f"-I{ROOT / 'include'}",
+                "-I/opt/homebrew/include",
                 str(ROOT / "src/v7_polymarket_bbo.cpp"),
                 str(ROOT / "src/boost_json.cpp"),
                 str(src),
