@@ -6,7 +6,6 @@
 #include <boost/asio/ssl/context.hpp>
 #include <boost/asio/ssl/stream.hpp>
 #include <boost/beast/core.hpp>
-#include <boost/beast/core/flat_static_buffer.hpp>
 #include <boost/beast/ssl.hpp>
 #include <boost/beast/websocket.hpp>
 #include <openssl/ssl.h>
@@ -17,6 +16,7 @@
 #include <memory>
 #include <stdexcept>
 #include <thread>
+#include <vector>
 
 namespace pm::v7::external_fair {
 namespace {
@@ -29,7 +29,8 @@ using tcp = net::ip::tcp;
 // Coinbase's documented public L2 feed begins with a complete BTC-USD book
 // snapshot. A live snapshot can exceed 1 MiB, so retain a bounded cap while
 // admitting the full recovery frame instead of reconnecting indefinitely.
-constexpr std::size_t kMaxWsMessageBytes = 2U << 20;
+constexpr std::size_t kDefaultWsMessageBytes = 2U << 20;
+constexpr std::size_t kAbsoluteMaxWsMessageBytes = 8U << 20;
 
 [[nodiscard]] std::int64_t monotonic_now_ns() noexcept {
     return std::chrono::duration_cast<std::chrono::nanoseconds>(
@@ -64,7 +65,7 @@ ExternalVenueConnectionSpec btc_spot_connection_spec(
     ExternalVenueConnectionSpec spec;
     spec.venue = venue;
     spec.asset_handle = asset_handle;
-    spec.max_message_bytes = kMaxWsMessageBytes;
+    spec.max_message_bytes = kDefaultWsMessageBytes;
     switch (venue) {
         case VenueId::BinanceSpot:
             spec.host = "stream.binance.com";
@@ -127,6 +128,28 @@ ExternalVenueConnectionSpec btc_spot_connection_spec(
     return spec;
 }
 
+ExternalVenueConnectionSpec coinbase_level2_connection_spec(std::uint64_t asset_handle) {
+    auto spec = btc_spot_connection_spec(VenueId::CoinbaseSpot, asset_handle);
+    spec.subscription_json =
+        R"({"type":"subscribe","product_ids":["BTC-USD"],"channels":["level2"]})";
+    return spec;
+}
+
+ExternalVenueConnectionSpec coinbase_advanced_level2_connection_spec(std::uint64_t asset_handle) {
+    if (asset_handle == 0) throw std::invalid_argument("asset_handle must be non-zero");
+    ExternalVenueConnectionSpec spec;
+    spec.venue = VenueId::CoinbaseSpot;
+    spec.host = "advanced-trade-ws.coinbase.com";
+    spec.port = "443";
+    spec.target = "/";
+    spec.symbol = "BTC-USD";
+    spec.asset_handle = asset_handle;
+    spec.max_message_bytes = kAbsoluteMaxWsMessageBytes;
+    spec.subscription_json =
+        R"({"type":"subscribe","product_ids":["BTC-USD"],"channel":"level2"})";
+    return spec;
+}
+
 ExternalVenueWsClient::ExternalVenueWsClient(
     ExternalVenueConnectionSpec spec,
     ExternalVenueIngress* ingress, ExternalFrameObserver* observer,
@@ -134,8 +157,9 @@ ExternalVenueWsClient::ExternalVenueWsClient(
     : spec_(std::move(spec)), ingress_(ingress), observer_(observer), raw_sink_(raw_sink) {
     if (spec_.venue == VenueId::Unknown || spec_.asset_handle == 0
         || spec_.host.empty() || spec_.port.empty() || spec_.target.empty()
-        || spec_.subscription_json.empty() || spec_.max_message_bytes == 0
-        || spec_.max_message_bytes > kMaxWsMessageBytes) {
+        || (spec_.subscription_json.empty() && !spec_.start_without_subscription)
+        || spec_.max_message_bytes == 0
+        || spec_.max_message_bytes > kAbsoluteMaxWsMessageBytes) {
         throw std::invalid_argument("invalid external venue connection spec");
     }
 }
@@ -170,6 +194,13 @@ void ExternalVenueWsClient::run(ExternalStopToken stop) noexcept {
             timeout.idle_timeout = std::chrono::seconds(1);
             timeout.keep_alive_pings = true;
             ws.set_option(timeout);
+            if (!spec_.handshake_headers.empty()) {
+                const auto headers = spec_.handshake_headers;
+                ws.set_option(websocket::stream_base::decorator(
+                    [headers](websocket::request_type& request) {
+                        for (const auto& [name, value] : headers) request.set(name, value);
+                    }));
+            }
             ws.read_message_max(spec_.max_message_bytes);
             ws.handshake(normalize_host_for_handshake(spec_.host), spec_.target);
 
@@ -194,14 +225,15 @@ void ExternalVenueWsClient::run(ExternalStopToken stop) noexcept {
             try {
 
             // Protocol messages remain on the IO thread and are never used as a
-            // trading trigger. Coinbase needs two channel subscriptions.
+            // trading trigger.
+            const auto& subscription = spec_.subscription_json;
             std::size_t start = 0;
-            while (start < spec_.subscription_json.size()) {
-                const auto end = spec_.subscription_json.find('\n', start);
+            while (start < subscription.size()) {
+                const auto end = subscription.find('\n', start);
                 const auto length = end == std::string::npos
-                    ? spec_.subscription_json.size() - start : end - start;
+                    ? subscription.size() - start : end - start;
                 if (length > 0) {
-                    ws.write(net::buffer(spec_.subscription_json.data() + start, length));
+                    ws.write(net::buffer(subscription.data() + start, length));
                 }
                 if (end == std::string::npos) break;
                 start = end + 1;
@@ -212,10 +244,12 @@ void ExternalVenueWsClient::run(ExternalStopToken stop) noexcept {
             successful_connections_.fetch_add(1, std::memory_order_relaxed);
             if (observer_ != nullptr) observer_->on_connection_epoch(epoch);
             consecutive_failures = 0;
-            // macOS worker threads default to a 512 KiB stack. The bounded
-            // 1 MiB Beast buffer must therefore live on the heap once per
-            // connection, not on every read-loop stack frame.
-            auto buffer = std::make_unique<beast::flat_static_buffer<kMaxWsMessageBytes>>();
+            // Allocate once per connection at that venue's explicit cap and
+            // reuse the capacity for every frame. Coinbase Advanced BTC-USD can
+            // deliver an initial L2 snapshot above 4 MiB; other venues retain
+            // the smaller default rather than paying that memory cost.
+            auto buffer = std::make_unique<beast::flat_buffer>();
+            buffer->reserve(spec_.max_message_bytes);
 
             while (!stop.stop_requested()) {
                 buffer->consume(buffer->size());
@@ -244,8 +278,17 @@ void ExternalVenueWsClient::run(ExternalStopToken stop) noexcept {
                 const std::string_view payload(bytes, front.size());
                 if (raw_sink_ != nullptr) (void)raw_sink_->try_record_raw(
                     spec_.venue, epoch, receive_ns, wall_ns, payload);
-                if (observer_ != nullptr) observer_->on_frame(epoch, receive_ns, wall_ns, payload);
+                const bool binary_frame = ws.got_binary();
+                if (observer_ != nullptr) {
+                    if (binary_frame) observer_->on_binary_frame(epoch, receive_ns, wall_ns, payload);
+                    else observer_->on_frame(epoch, receive_ns, wall_ns, payload);
+                }
                 if (ingress_ != nullptr) {
+                    if (binary_frame) {
+                        decode_failures_.fetch_add(1, std::memory_order_relaxed);
+                        ingress_->mark_disconnected(epoch + 1);
+                        throw std::runtime_error("unexpected binary frame on JSON ingress");
+                    }
                     const auto decoded = ingress_->on_frame(epoch, receive_ns, wall_ns, payload);
                     if (decoded.invalid_frame != 0 || decoded.output_overflow != 0
                         || decoded.arena_exhausted != 0) {

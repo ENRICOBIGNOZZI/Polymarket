@@ -14,6 +14,20 @@ EXTERNAL_VENUE_RUNTIME="${PM_V7_EXTERNAL_VENUE_RUNTIME:-build/polymarket_v7_exte
 MAKER_POLICY="${PM_V7_MAKER_POLICY:-config/v7_professional_market_maker.json}"
 EXTERNAL_FAIR_POLICY="${PM_V7_EXTERNAL_FAIR_POLICY:-config/v7_external_fair.json}"
 LEAD_LAG_TAKER_CONFIG="${PM_V7_LEAD_LAG_TAKER_CONFIG:-config/v7_lead_lag_taker_v1.json}"
+CRYPTO_HOTPATH_IPC_ENABLED="${PM_V7_CRYPTO_HOTPATH_IPC:-0}"
+FAST_FORWARD_IPC_SOCKET="$RUN_ROOT/control/fast_forward.sock"
+HOT_BOOK_CACHE_PATH="$RUN_ROOT/research/repricing_book/hot_book_cache.bin"
+HOT_SIGNAL_SOCKET="$RUN_ROOT/control/external_cancel_signal.sock"
+COORDINATOR_IPC_ARGS=()
+LEAD_LAG_IPC_ARGS=()
+FILLABILITY_HOT_BOOK_ARGS=()
+EXTERNAL_HOT_SIGNAL_ARGS=()
+if [[ "$CRYPTO_HOTPATH_IPC_ENABLED" == "1" ]]; then
+  COORDINATOR_IPC_ARGS=(--fast-forward-ipc "$FAST_FORWARD_IPC_SOCKET")
+  LEAD_LAG_IPC_ARGS=(--coordinator-ipc "$FAST_FORWARD_IPC_SOCKET" --hot-book-cache "$HOT_BOOK_CACHE_PATH" --event-driven-signal --signal-socket "$HOT_SIGNAL_SOCKET")
+  FILLABILITY_HOT_BOOK_ARGS=(--hot-book-cache "$HOT_BOOK_CACHE_PATH")
+  EXTERNAL_HOT_SIGNAL_ARGS=(--external-cancel-notify-socket "$HOT_SIGNAL_SOCKET")
+fi
 CRYPTO_EXECUTION_ALPHA_CONFIG="${PM_V7_CRYPTO_EXECUTION_ALPHA_CONFIG:-config/v7_crypto_execution_alpha.json}"
 EXTERNAL_SOURCE_REGISTRY="${PM_V7_EXTERNAL_SOURCE_REGISTRY:-config/v7_external_source_registry.json}"
 CI_REPOSITORY="${PM_V7_CI_REPOSITORY:-ENRICOBIGNOZZI/Polymarket}"
@@ -319,6 +333,7 @@ v7_register_child "$!"
   --disk-pressure-min-free-bytes "$DISK_PRESSURE_MIN_FREE_BYTES" \
   --external-cancel-signal "$RUN_ROOT/external_fair/external_cancel_signal.json" \
   --external-cancel-rule-sha256 "$EXTERNAL_CANCEL_RULE_SHA" \
+  "${EXTERNAL_HOT_SIGNAL_ARGS[@]}" \
   >> "$RUN_ROOT/external_fair/external_venues.log" 2>&1 &
 v7_register_child "$!"
 
@@ -354,6 +369,7 @@ v7_register_child "$!"
 "$FILLABILITY_OBSERVER" \
   --config "$ALLOC/micro_maker.json" --run-root "$RUN_ROOT" --model-sha "$SHA" \
   --output-dir "$RUN_ROOT/research/repricing_book" --fair-only \
+  "${FILLABILITY_HOT_BOOK_ARGS[@]}" \
   --disk-pressure-min-free-bytes "$DISK_PRESSURE_MIN_FREE_BYTES" \
   >> "$RUN_ROOT/research/repricing_book_observer.log" 2>&1 &
 v7_register_child "$!"
@@ -661,6 +677,7 @@ v7_register_child "$!"
 # cannot authorize new risk; the coordinator may select CANCEL/WITHDRAW or emit NOTHING.
 python3 scripts/v7_global_portfolio_coordinator.py \
   --run-root "$RUN_ROOT" --loop --interval 0.1 --fast-cancel-interval 0.005 \
+  "${COORDINATOR_IPC_ARGS[@]}" \
   --event-log "$RUN_ROOT/global_portfolio_coordinator.events.jsonl" \
   >> "$RUN_ROOT/global_portfolio_coordinator.log" 2>&1 &
 v7_register_child "$!"
@@ -668,8 +685,16 @@ v7_register_child "$!"
 # Frozen prospective PAPER strategy. It consumes the already-validated external
 # shock signal, asks the global coordinator for PAPER authority, revalidates
 # the current CLOB ask without chasing, and holds one position per market to settlement.
+if [[ "$CRYPTO_HOTPATH_IPC_ENABLED" == "1" ]]; then
+  for _ in {1..200}; do
+    [[ -S "$FAST_FORWARD_IPC_SOCKET" ]] && break
+    sleep 0.005
+  done
+  [[ -S "$FAST_FORWARD_IPC_SOCKET" ]] || { echo "fast-forward IPC socket did not become ready" >&2; exit 77; }
+fi
 python3 scripts/v7_lead_lag_taker_runtime.py \
   --run-root "$RUN_ROOT" --model-sha "$SHA" --config "$LEAD_LAG_TAKER_CONFIG" \
+  "${LEAD_LAG_IPC_ARGS[@]}" \
   >> "$RUN_ROOT/research/lead_lag_taker_v1.log" 2>&1 &
 v7_register_child "$!"
 

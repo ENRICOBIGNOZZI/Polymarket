@@ -28,9 +28,12 @@ def main() -> None:
     assert '"minimum_absolute_log_return_bp", 0.30' in source
     assert '"trigger_cooldown_ms", 250' in source
     assert '"trigger_grid_ms", 25' in source
-    assert "std::make_unique<beast::flat_static_buffer" in websocket
-    assert "flat_static_buffer<kMaxWsMessageBytes> buffer;" not in websocket
-    assert "constexpr std::size_t kMaxWsMessageBytes = 2U << 20;" in websocket
+    assert "std::make_unique<beast::flat_buffer>()" in websocket
+    assert "buffer->reserve(spec_.max_message_bytes)" in websocket
+    assert "ws.read_message_max(spec_.max_message_bytes)" in websocket
+    assert "constexpr std::size_t kDefaultWsMessageBytes = 2U << 20;" in websocket
+    assert "constexpr std::size_t kAbsoluteMaxWsMessageBytes = 8U << 20;" in websocket
+    assert "spec_.max_message_bytes > kAbsoluteMaxWsMessageBytes" in websocket
     assert 'spec.target = "/public/ws"' in websocket
     assert 'argument == "--disk-pressure-marker"' in source
     assert 'argument == "--disk-pressure-min-free-bytes"' in source

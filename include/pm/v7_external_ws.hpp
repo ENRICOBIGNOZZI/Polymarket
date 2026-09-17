@@ -7,6 +7,8 @@
 #include <string>
 #include <string_view>
 #include <type_traits>
+#include <utility>
+#include <vector>
 #include <version>
 
 #if !defined(__APPLE__) && defined(__cpp_lib_jthread) && __cpp_lib_jthread >= 201911L
@@ -28,6 +30,8 @@ public:
                           std::int64_t local_receive_monotonic_ns,
                           std::int64_t local_receive_wall_ns,
                           std::string_view payload) noexcept = 0;
+    virtual void on_binary_frame(std::uint64_t, std::int64_t, std::int64_t,
+                                 std::string_view) noexcept {}
 };
 
 #if PM_V7_EXTERNAL_USE_STD_STOP_TOKEN
@@ -56,7 +60,9 @@ struct ExternalVenueConnectionSpec {
     std::string port = "443";
     std::string target;
     std::string subscription_json;
+    std::vector<std::pair<std::string, std::string>> handshake_headers;
     std::string symbol;
+    bool start_without_subscription = false;
     std::uint64_t asset_handle = 0;
     std::size_t max_message_bytes = 1U << 20;
 };
@@ -77,6 +83,10 @@ struct ExternalWsSnapshot {
 
 [[nodiscard]] ExternalVenueConnectionSpec btc_spot_connection_spec(
     VenueId venue,
+    std::uint64_t asset_handle);
+[[nodiscard]] ExternalVenueConnectionSpec coinbase_level2_connection_spec(
+    std::uint64_t asset_handle);
+[[nodiscard]] ExternalVenueConnectionSpec coinbase_advanced_level2_connection_spec(
     std::uint64_t asset_handle);
 
 // IO-plane only. Persistent TLS WebSocket session with bounded message memory.

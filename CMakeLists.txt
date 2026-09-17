@@ -41,7 +41,10 @@ add_library(pm_v7_common
   src/v7_markout.cpp
   src/v7_market_ws.cpp
   src/v7_capital.cpp
-  src/v7_execution_admission.cpp)
+  src/v7_execution_admission.cpp
+  src/v7_ingress_wakeup.cpp
+  src/v7_hot_book_cache.cpp
+  src/v7_hot_signal.cpp)
 target_include_directories(pm_v7_common PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/include ${Boost_INCLUDE_DIRS})
 target_link_libraries(pm_v7_common PUBLIC pm_json)
 target_compile_options(pm_v7_common PRIVATE -Wall -Wextra -Wpedantic)
@@ -65,13 +68,13 @@ add_library(pm_v7_external
   src/v7_external_fair.cpp
   src/v7_binance_l2.cpp
   src/v7_binance_l2_protocol.cpp
+  src/v7_binance_sbe.cpp
   src/v7_coinbase_l2.cpp
   src/v7_external_state.cpp
   src/v7_external_execution.cpp
   src/v7_external_kernel.cpp
   src/v7_external_protocol.cpp
   src/v7_external_ingress.cpp
-  src/v7_ingress_wakeup.cpp
   src/v7_external_ws.cpp
   src/v7_external_tape.cpp
   src/v7_external_replay.cpp)
@@ -112,6 +115,18 @@ target_link_libraries(polymarket_v7_maker_research_replay PRIVATE pm_v7_hft)
 target_compile_options(polymarket_v7_maker_research_replay PRIVATE -Wall -Wextra -Wpedantic)
 
 # Offline queue-handoff comparison; no market or execution authority.
+add_executable(polymarket_v7_coinbase_advanced_race_probe src/v7_coinbase_advanced_race_probe.cpp)
+target_link_libraries(polymarket_v7_coinbase_advanced_race_probe PRIVATE pm_v7_external)
+target_compile_options(polymarket_v7_coinbase_advanced_race_probe PRIVATE -Wall -Wextra -Wpedantic)
+
+add_executable(polymarket_v7_coinbase_level2_race_probe src/v7_coinbase_level2_race_probe.cpp)
+target_link_libraries(polymarket_v7_coinbase_level2_race_probe PRIVATE pm_v7_external)
+target_compile_options(polymarket_v7_coinbase_level2_race_probe PRIVATE -Wall -Wextra -Wpedantic)
+
+add_executable(polymarket_v7_binance_sbe_race_probe src/v7_binance_sbe_race_probe.cpp)
+target_link_libraries(polymarket_v7_binance_sbe_race_probe PRIVATE pm_v7_external)
+target_compile_options(polymarket_v7_binance_sbe_race_probe PRIVATE -Wall -Wextra -Wpedantic)
+
 add_executable(polymarket_v7_feed_race_probe src/v7_feed_race_probe.cpp)
 target_link_libraries(polymarket_v7_feed_race_probe PRIVATE pm_v7_external)
 target_compile_options(polymarket_v7_feed_race_probe PRIVATE -Wall -Wextra -Wpedantic)
@@ -239,6 +254,16 @@ if(BUILD_TESTING)
   target_link_libraries(pm_v7_external_execution_tests PRIVATE pm_v7_external)
   add_test(NAME pm_v7_external_execution_tests COMMAND pm_v7_external_execution_tests)
 
+  add_executable(pm_v7_hot_signal_tests tests/test_v7_hot_signal.cpp)
+  target_link_libraries(pm_v7_hot_signal_tests PRIVATE pm_v7_common)
+  target_compile_options(pm_v7_hot_signal_tests PRIVATE -UNDEBUG)
+  add_test(NAME pm_v7_hot_signal_tests COMMAND pm_v7_hot_signal_tests)
+
+  add_executable(pm_v7_hot_book_cache_tests tests/test_v7_hot_book_cache.cpp)
+  target_link_libraries(pm_v7_hot_book_cache_tests PRIVATE pm_v7_common)
+  target_compile_options(pm_v7_hot_book_cache_tests PRIVATE -UNDEBUG)
+  add_test(NAME pm_v7_hot_book_cache_tests COMMAND pm_v7_hot_book_cache_tests)
+
   add_executable(pm_v7_external_kernel_tests tests/test_v7_external_kernel.cpp)
   target_link_libraries(pm_v7_external_kernel_tests PRIVATE pm_v7_external)
   add_test(NAME pm_v7_external_kernel_tests COMMAND pm_v7_external_kernel_tests)
@@ -276,6 +301,20 @@ if(BUILD_TESTING)
   add_executable(pm_v7_external_replay_tests tests/test_v7_external_replay.cpp)
   target_link_libraries(pm_v7_external_replay_tests PRIVATE pm_v7_external)
   add_test(NAME pm_v7_external_replay_tests COMMAND pm_v7_external_replay_tests)
+
+  add_test(NAME pm_v7_coinbase_advanced_race_validate COMMAND polymarket_v7_coinbase_advanced_race_probe --validate-only)
+  add_test(NAME pm_v7_coinbase_level2_race_validate COMMAND polymarket_v7_coinbase_level2_race_probe --validate-only)
+  add_test(NAME pm_v7_binance_sbe_race_validate COMMAND polymarket_v7_binance_sbe_race_probe --validate-only)
+
+  add_executable(pm_v7_coinbase_level2_public_tests tests/test_v7_coinbase_level2_public.cpp)
+  target_link_libraries(pm_v7_coinbase_level2_public_tests PRIVATE pm_v7_external)
+  target_compile_options(pm_v7_coinbase_level2_public_tests PRIVATE -UNDEBUG)
+  add_test(NAME pm_v7_coinbase_level2_public_tests COMMAND pm_v7_coinbase_level2_public_tests)
+
+  add_executable(pm_v7_binance_sbe_tests tests/test_v7_binance_sbe.cpp)
+  target_link_libraries(pm_v7_binance_sbe_tests PRIVATE pm_v7_external)
+  target_compile_options(pm_v7_binance_sbe_tests PRIVATE -UNDEBUG)
+  add_test(NAME pm_v7_binance_sbe_tests COMMAND pm_v7_binance_sbe_tests)
 
   add_executable(pm_v7_binance_l2_tests tests/test_v7_binance_l2.cpp)
   target_link_libraries(pm_v7_binance_l2_tests PRIVATE pm_v7_external)
