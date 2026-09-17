@@ -161,6 +161,56 @@ std::size_t Poly1271OrderHasher::wrap_signature_hex(
     return kWrappedSignatureHexChars;
 }
 
+PreparedHasher::PreparedHasher(
+    std::uint64_t chain_id, std::string_view order_signer,
+    const Hash32& app_domain_separator) noexcept {
+    if (chain_id == 0) return;
+    const Hash32 type_hash = clob_eip712::keccak256(kTypedDataSignType);
+    const Hash32 name_hash = clob_eip712::keccak256(kDepositWalletName);
+    const Hash32 version_hash = clob_eip712::keccak256(kDepositWalletVersion);
+    std::array<std::uint8_t, 32> word{};
+    put_word(encoded_, 0, type_hash);
+    put_word(encoded_, 2, name_hash);
+    put_word(encoded_, 3, version_hash);
+    encode_uint64(chain_id, word);
+    put_word(encoded_, 4, word);
+    if (!parse_address(order_signer, word)) return;
+    put_word(encoded_, 5, word);
+    envelope_[0] = 0x19U;
+    envelope_[1] = 0x01U;
+    std::memcpy(envelope_.data() + 2, app_domain_separator.data(), app_domain_separator.size());
+    valid_ = true;
+}
+
+bool PreparedHasher::digest(const Hash32& contents_hash, Hash32& output) noexcept {
+    if (!valid_) return false;
+    put_word(encoded_, 1, contents_hash);
+    const Hash32 typed_hash = clob_eip712::keccak256(encoded_);
+    std::memcpy(envelope_.data() + 34, typed_hash.data(), typed_hash.size());
+    output = clob_eip712::keccak256(envelope_);
+    return true;
+}
+
+bool wrap_signature_hex(
+    std::span<const std::uint8_t, kEvmSignatureBytes> inner_signature,
+    const Hash32& app_domain_separator, const Hash32& contents_hash,
+    std::span<char> output) noexcept {
+    if (output.size() < kWrappedSignatureHexChars) return false;
+    std::array<std::uint8_t, kWrappedSignatureBytes> wrapped{};
+    std::size_t pos = 0;
+    std::memcpy(wrapped.data() + pos, inner_signature.data(), inner_signature.size());
+    pos += inner_signature.size();
+    std::memcpy(wrapped.data() + pos, app_domain_separator.data(), app_domain_separator.size());
+    pos += app_domain_separator.size();
+    std::memcpy(wrapped.data() + pos, contents_hash.data(), contents_hash.size());
+    pos += contents_hash.size();
+    std::memcpy(wrapped.data() + pos, kOrderType.data(), kOrderType.size());
+    pos += kOrderType.size();
+    wrapped[pos++] = static_cast<std::uint8_t>((kOrderType.size() >> 8U) & 0xffU);
+    wrapped[pos++] = static_cast<std::uint8_t>(kOrderType.size() & 0xffU);
+    return pos == wrapped.size() && bytes_hex(wrapped, output, true);
+}
+
 struct Secp256k1Signer::Impl final {
     secp256k1_context* context = nullptr;
     std::array<std::uint8_t, 32> private_key{};
