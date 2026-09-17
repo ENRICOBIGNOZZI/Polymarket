@@ -21,18 +21,18 @@ class CapacityTests(unittest.TestCase):
             with self.assertRaises(ValueError):allocated_data_bytes([root/'missing'])
 
     def test_cap_alert_does_not_require_a_throughput_estimate(self):
-        r=capacity([],100_000_000_000,200_000_000_000,data_bytes=41_000_000_000)
+        r=capacity([],100_000_000_000,200_000_000_000,data_bytes=61_000_000_000)
         self.assertEqual(r['state'],'DATA_BUDGET_COMPACTION_REQUIRED')
         self.assertEqual(r['minimum_reduction_bytes_to_current_cap'],1_000_000_000)
         self.assertIsNone(r['rate_estimate'])
 
-    def test_40gb_budget_and_34gb_retention_trigger(self):
-        below=capacity([],100_000_000_000,200_000_000_000,data_bytes=33_999_999_999)
+    def test_60gb_budget_and_54gb_retention_trigger(self):
+        below=capacity([],100_000_000_000,200_000_000_000,data_bytes=53_999_999_999)
         self.assertEqual(below['budget_state'],'WITHIN_CAP')
         self.assertNotEqual(below['state'],'DATA_BUDGET_COMPACTION_REQUIRED')
-        at=capacity([],100_000_000_000,200_000_000_000,data_bytes=34_000_000_000)
+        at=capacity([],100_000_000_000,200_000_000_000,data_bytes=54_000_000_000)
         self.assertEqual(at['state'],'DATA_BUDGET_COMPACTION_REQUIRED')
-        self.assertEqual(at['maximum_total_data_bytes'],40_000_000_000)
+        self.assertEqual(at['maximum_total_data_bytes'],60_000_000_000)
         cfg=json.loads((Path(__file__).resolve().parents[1]/'config/v7_data_retention.json').read_text())
         self.assertEqual(cfg['permanent_evidence']['maximum_total_data_bytes'],MAX_MANAGED_DATA_BYTES)
         self.assertEqual(cfg['aggregate_retention']['trigger_bytes'],RETENTION_TRIGGER_BYTES)
