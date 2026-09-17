@@ -129,6 +129,9 @@ private:
         double bid_size = 0.0;
         double ask_size = 0.0;
         double mid = 0.0;
+        // BookTop-owned cache. Trades/health events do not change mid, so the
+        // robust composite must not re-run log(mid) on every unrelated tick.
+        double log_mid = 0.0;
         double microprice = 0.0;
         double previous_bid_size = 0.0;
         double previous_ask_size = 0.0;
