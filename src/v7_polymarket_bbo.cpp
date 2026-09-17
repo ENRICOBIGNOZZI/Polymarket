@@ -155,90 +155,101 @@ FrameResult Decoder::decode(
             return result;
         }
         const auto root = state.parser.release();
-        if (!root.is_object()) {
-            result.invalid_frame = 1;
-            return result;
-        }
-        const auto& object = root.as_object();
-        const auto event_type = text(field(object, "event_type"));
-        std::int64_t exchange_ns = 0;
-        if (!timestamp_ns(field(object, "timestamp"), exchange_ns)) {
-            result.invalid_frame = 1;
-            return result;
-        }
-
-        const auto emit = [&](std::string_view asset_id, std::string_view bid_text,
-                              std::string_view ask_text, SourceKind source) noexcept -> bool {
-            const auto* mapped = binding(asset_id);
-            if (mapped == nullptr) {
-                ++result.unknown_assets;
-                return true;
-            }
-            std::int32_t bid = 0;
-            std::int32_t ask = 0;
-            if (!decimal_e4(bid_text, bid) || !decimal_e4(ask_text, ask) || !valid_bbo(bid, ask)) {
-                ++result.incomplete_bbo;
-                return true;
-            }
-            ++result.recognized_updates;
-            if (result.output_count >= output.size()) {
-                result.output_overflow = 1;
+        const auto process_object = [&](const json::object& object) noexcept -> bool {
+            const auto event_type = text(field(object, "event_type"));
+            if (event_type != "best_bid_ask" && event_type != "price_change") return true;
+            std::int64_t exchange_ns = 0;
+            if (!timestamp_ns(field(object, "timestamp"), exchange_ns)) {
+                result.invalid_frame = 1;
                 return false;
             }
-            auto& update = output[result.output_count++];
-            update = {};
-            update.market_handle = mapped->market_handle;
-            update.event_handle = mapped->event_handle;
-            update.instrument_handle = mapped->instrument_handle;
-            update.exchange_event_ns = exchange_ns;
-            update.receive_monotonic_ns = receive_monotonic_ns;
-            update.best_bid_e4 = bid;
-            update.best_ask_e4 = ask;
-            update.source = source;
-            update.valid = 1;
+
+            const auto emit = [&](std::string_view asset_id, std::string_view bid_text,
+                                  std::string_view ask_text, SourceKind source) noexcept -> bool {
+                const auto* mapped = binding(asset_id);
+                if (mapped == nullptr) {
+                    ++result.unknown_assets;
+                    return true;
+                }
+                std::int32_t bid = 0;
+                std::int32_t ask = 0;
+                if (!decimal_e4(bid_text, bid) || !decimal_e4(ask_text, ask) || !valid_bbo(bid, ask)) {
+                    ++result.incomplete_bbo;
+                    return true;
+                }
+                ++result.recognized_updates;
+                if (result.output_count >= output.size()) {
+                    result.output_overflow = 1;
+                    return false;
+                }
+                auto& update = output[result.output_count++];
+                update = {};
+                update.market_handle = mapped->market_handle;
+                update.event_handle = mapped->event_handle;
+                update.instrument_handle = mapped->instrument_handle;
+                update.exchange_event_ns = exchange_ns;
+                update.receive_monotonic_ns = receive_monotonic_ns;
+                update.best_bid_e4 = bid;
+                update.best_ask_e4 = ask;
+                update.source = source;
+                update.valid = 1;
+                return true;
+            };
+
+            if (event_type == "best_bid_ask") {
+                const auto asset_id = text(field(object, "asset_id"));
+                const auto bid = text(field(object, "best_bid"));
+                const auto ask = text(field(object, "best_ask"));
+                if (asset_id.empty() || bid.empty() || ask.empty()) {
+                    result.invalid_frame = 1;
+                    return false;
+                }
+                return emit(asset_id, bid, ask, SourceKind::BestBidAsk);
+            }
+
+            if (event_type == "price_change") {
+                const auto* changes = field(object, "price_changes");
+                if (changes == nullptr || !changes->is_array()) {
+                    result.invalid_frame = 1;
+                    return false;
+                }
+                for (const auto& value : changes->as_array()) {
+                    if (!value.is_object()) {
+                        result.invalid_frame = 1;
+                        return false;
+                    }
+                    const auto& change = value.as_object();
+                    const auto asset_id = text(field(change, "asset_id"));
+                    const auto bid = text(field(change, "best_bid"));
+                    const auto ask = text(field(change, "best_ask"));
+                    if (asset_id.empty()) {
+                        result.invalid_frame = 1;
+                        return false;
+                    }
+                    if (bid.empty() || ask.empty()) {
+                        ++result.incomplete_bbo;
+                        continue;
+                    }
+                    if (!emit(asset_id, bid, ask, SourceKind::PriceChange)) return false;
+                }
+            }
             return true;
         };
 
-        if (event_type == "best_bid_ask") {
-            const auto asset_id = text(field(object, "asset_id"));
-            const auto bid = text(field(object, "best_bid"));
-            const auto ask = text(field(object, "best_ask"));
-            if (asset_id.empty() || bid.empty() || ask.empty()) {
-                result.invalid_frame = 1;
-                return result;
-            }
-            (void)emit(asset_id, bid, ask, SourceKind::BestBidAsk);
-            return result;
-        }
-
-        if (event_type == "price_change") {
-            const auto* changes = field(object, "price_changes");
-            if (changes == nullptr || !changes->is_array()) {
-                result.invalid_frame = 1;
-                return result;
-            }
-            for (const auto& value : changes->as_array()) {
+        if (root.is_array()) {
+            for (const auto& value : root.as_array()) {
                 if (!value.is_object()) {
                     result.invalid_frame = 1;
-                    return result;
+                    break;
                 }
-                const auto& change = value.as_object();
-                const auto asset_id = text(field(change, "asset_id"));
-                const auto bid = text(field(change, "best_bid"));
-                const auto ask = text(field(change, "best_ask"));
-                if (asset_id.empty()) {
-                    result.invalid_frame = 1;
-                    return result;
-                }
-                if (bid.empty() || ask.empty()) {
-                    ++result.incomplete_bbo;
-                    continue;
-                }
-                if (!emit(asset_id, bid, ask, SourceKind::PriceChange)) break;
+                if (!process_object(value.as_object())) break;
             }
-            return result;
+        } else if (root.is_object()) {
+            (void)process_object(root.as_object());
+        } else {
+            result.invalid_frame = 1;
         }
-
+        return result;
         return result;
     } catch (...) {
         result.invalid_frame = 1;
