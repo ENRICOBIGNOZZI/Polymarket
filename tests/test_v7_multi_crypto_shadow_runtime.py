@@ -43,6 +43,17 @@ def test_config_requires_compact_label_tape_and_loopback_proxy():
     else:raise AssertionError('non-loopback proxy accepted')
 
 
+def test_shadow_disk_guard_stops_before_production_pressure():
+    p=policy()
+    assert p['minimum_free_gib']==48
+    assert p['shared_host_production_disk_pressure_gib']==32
+    assert p['minimum_free_gib']>=p['shared_host_production_disk_pressure_gib']+16
+    for minimum in (20,32,47):
+        bad=dict(p); bad['minimum_free_gib']=minimum
+        try:validate_policy(bad)
+        except ValueError as exc: assert 'shared_host_disk_headroom' in str(exc)
+        else:raise AssertionError('unsafe shared-host disk headroom accepted')
+
 def test_final_status_preserves_last_state_and_marks_stopped():
     source=(ROOT/'scripts/v7_multi_crypto_shadow_runtime.py').read_text()
     assert 'stopped["last_runtime_state"]' in source

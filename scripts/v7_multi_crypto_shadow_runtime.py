@@ -44,6 +44,10 @@ def validate_policy(value:dict[str,Any])->dict[str,Any]:
         if not low<=raw<=high:raise ValueError(f"shadow_runtime_policy:{name}")
     if value.get("public_proxy_host") not in {"127.0.0.1","::1"} or value.get("compact_label_tape") is not True:
         raise ValueError("shadow_runtime_network_or_tape_policy")
+    production_guard=int(value.get("shared_host_production_disk_pressure_gib") or 0)
+    minimum_free=int(value.get("minimum_free_gib") or 0)
+    if production_guard < 1 or minimum_free < production_guard + 16:
+        raise ValueError("shadow_runtime_shared_host_disk_headroom")
     return value
 
 
@@ -159,13 +163,14 @@ def launch(supervisor:Supervisor,asset_config:dict[str,Any])->None:
 
 def runtime_status(supervisor:Supervisor)->dict[str,Any]:
     root=supervisor.run_root; sha=supervisor.expected_sha
+    free_gib=shutil.disk_usage(root).free/(1024**3)
     external={asset:safe_status(root/"external"/f"{asset}.json",sha) for asset in ASSETS}
     oracle=safe_status(root/"oracle.json",sha); book=safe_status(root/"book/fillability_ws_status.json",sha); label=safe_status(root/"labelbook/fillability_ws_status.json",sha)
     contract=safe_status(root/"contract_state/current.json",sha); features=safe_status(root/"features.json",sha); tape=safe_status(root/"research/feature_tape_status.json",sha)
     external_ready=sum(int(v.get("valid") is True) for v in external.values()); all_children=all(c.process.poll() is None for c in supervisor.children.values())
     contract_ready=contract.get("all_active_ready") is True and int(contract.get("active_markets") or 0)>0
     state="RUNNING_SHADOW" if all_children and external_ready==6 and oracle.get("all_assets_fresh") is True and book.get("evidence_complete") is True and label.get("evidence_complete") is True and contract_ready else "WARMING_OR_DEGRADED"
-    return {"schema":"polymarket_v7_multi_crypto_shadow_runtime_status_v1","timestamp_ns":time.time_ns(),"started_at_ns":supervisor.started_ns,"code_sha":sha,"paper_only":True,"authenticated_execution":False,"real_order_submission":False,"real_capital_at_risk":False,"execution_authority":False,"automatic_promotion":False,"state":state,"children":supervisor.child_status(),"external_ready_assets":external_ready,"oracle_healthy_assets":int(oracle.get("healthy_assets") or 0),"book_evidence_complete":book.get("evidence_complete") is True,"label_evidence_complete":label.get("evidence_complete") is True,"contract_active_markets":int(contract.get("active_markets") or 0),"contract_active_ready_markets":int(contract.get("active_ready_markets") or 0),"contract_all_active_ready":contract_ready,"feature_state":features.get("state"),"feature_tape_emitted":int(tape.get("emitted") or 0),"discovery_updates":supervisor.discovery_updates,"discovery_error":supervisor.discovery_error}
+    return {"schema":"polymarket_v7_multi_crypto_shadow_runtime_status_v1","timestamp_ns":time.time_ns(),"started_at_ns":supervisor.started_ns,"code_sha":sha,"paper_only":True,"authenticated_execution":False,"real_order_submission":False,"real_capital_at_risk":False,"execution_authority":False,"automatic_promotion":False,"state":state,"children":supervisor.child_status(),"external_ready_assets":external_ready,"oracle_healthy_assets":int(oracle.get("healthy_assets") or 0),"book_evidence_complete":book.get("evidence_complete") is True,"label_evidence_complete":label.get("evidence_complete") is True,"contract_active_markets":int(contract.get("active_markets") or 0),"contract_active_ready_markets":int(contract.get("active_ready_markets") or 0),"contract_all_active_ready":contract_ready,"feature_state":features.get("state"),"feature_tape_emitted":int(tape.get("emitted") or 0),"discovery_updates":supervisor.discovery_updates,"discovery_error":supervisor.discovery_error,"disk_free_gib":free_gib,"minimum_free_gib":int(supervisor.policy["minimum_free_gib"]),"shared_host_production_disk_pressure_gib":int(supervisor.policy["shared_host_production_disk_pressure_gib"]),"disk_headroom_above_production_guard_gib":free_gib-int(supervisor.policy["shared_host_production_disk_pressure_gib"])}
 
 def run(supervisor:Supervisor,asset_config:dict[str,Any],duration_seconds:int)->None:
     launch(supervisor,asset_config); start=time.monotonic(); last_status=0.0

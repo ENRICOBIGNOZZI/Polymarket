@@ -16,7 +16,8 @@
   "feature_tape_segment_mb": 256,
   "public_proxy_host": "127.0.0.1",
   "public_proxy_port": 19249,
-  "minimum_free_gib": 20,
+  "minimum_free_gib": 48,
+  "shared_host_production_disk_pressure_gib": 32,
   "child_shutdown_seconds": 10,
   "compact_label_tape": true
 }
