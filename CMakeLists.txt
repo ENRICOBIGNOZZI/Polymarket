@@ -129,6 +129,16 @@ target_compile_options(polymarket_v7_external_tape_replay PRIVATE -Wall -Wextra 
 include(CTest)
 if(BUILD_TESTING)
   find_package(Python3 REQUIRED COMPONENTS Interpreter)
+  add_test(NAME pm_v7_latency_probe_validate_public
+    COMMAND polymarket_v7_latency_probe --region validation --exact-code-sha 1111111111111111111111111111111111111111 --validate-only)
+  add_test(NAME pm_v7_latency_probe_reject_order_endpoint
+    COMMAND polymarket_v7_latency_probe --region validation --exact-code-sha 1111111111111111111111111111111111111111 --endpoint https://clob.polymarket.com/order --validate-only)
+  add_test(NAME pm_v7_latency_probe_reject_credentials
+    COMMAND polymarket_v7_latency_probe --region validation --exact-code-sha 1111111111111111111111111111111111111111 --endpoint https://user@clob.polymarket.com/time --validate-only)
+  add_test(NAME pm_v7_latency_probe_reject_integer_overflow
+    COMMAND polymarket_v7_latency_probe --region validation --exact-code-sha 1111111111111111111111111111111111111111 --interval-ms 99999999999999999999999999 --validate-only)
+  set_tests_properties(pm_v7_latency_probe_reject_order_endpoint pm_v7_latency_probe_reject_credentials
+    pm_v7_latency_probe_reject_integer_overflow PROPERTIES WILL_FAIL TRUE)
   add_executable(pm_v7_causal_book_observer_tests tests/test_v7_causal_book_observer.cpp)
   target_link_libraries(pm_v7_causal_book_observer_tests PRIVATE pm_v7_hft pm_fast_arb pm_core)
   target_compile_options(pm_v7_causal_book_observer_tests PRIVATE -UNDEBUG)
@@ -234,6 +244,10 @@ if(BUILD_TESTING)
   add_executable(pm_v7_external_ingress_tests tests/test_v7_external_ingress.cpp)
   target_link_libraries(pm_v7_external_ingress_tests PRIVATE pm_v7_external)
   add_test(NAME pm_v7_external_ingress_tests COMMAND pm_v7_external_ingress_tests)
+
+  add_executable(pm_v7_external_ws_spec_tests tests/test_v7_external_ws_spec.cpp)
+  target_link_libraries(pm_v7_external_ws_spec_tests PRIVATE pm_v7_external)
+  add_test(NAME pm_v7_external_ws_spec_tests COMMAND pm_v7_external_ws_spec_tests)
 
   add_executable(pm_v7_external_tape_tests tests/test_v7_external_tape.cpp)
   target_link_libraries(pm_v7_external_tape_tests PRIVATE pm_v7_external)

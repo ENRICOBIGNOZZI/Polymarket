@@ -125,6 +125,55 @@ int main() {
     assert(raw_payload == R"({"e":"depthUpdate"})");
     std::filesystem::remove(raw_path);
 
+    const auto suppressed_path = std::filesystem::temp_directory_path() / "pm_v7_external_suppressed_tape_test.bin";
+    std::filesystem::remove(suppressed_path);
+    {
+        ExternalTapeRecorder recorder(suppressed_path, sha, "run-suppressed", "session-suppressed", "normalized", 1'000'003);
+        recorder.set_suppressed(true);
+        assert(recorder.try_record(make_tape_record(TapeRecordKind::OracleEvent, 1, 200, 1, oracle)));
+        auto snapshot = recorder.snapshot();
+        assert(snapshot.accepted == 0);
+        assert(snapshot.suppressed_by_policy == 1);
+        assert(snapshot.suppression_active == 1);
+        assert(snapshot.evidence_valid == 0);
+        recorder.set_suppressed(false);
+        assert(recorder.try_record(make_tape_record(TapeRecordKind::OracleEvent, 2, 201, 1, oracle)));
+        snapshot = recorder.snapshot();
+        assert(snapshot.accepted == 1);
+        assert(snapshot.suppressed_by_policy == 1);
+        assert(snapshot.suppression_active == 0);
+    }
+    {
+        std::ifstream stream(suppressed_path, std::ios::binary);
+        TapeSessionHeader h{}; TapeRecord r{};
+        stream.read(reinterpret_cast<char*>(&h), sizeof(h));
+        stream.read(reinterpret_cast<char*>(&r), sizeof(r));
+        assert(stream.good()); assert(r.tape_sequence == 2);
+        TapeRecord extra{}; stream.read(reinterpret_cast<char*>(&extra), sizeof(extra));
+        assert(stream.eof());
+    }
+    std::filesystem::remove(suppressed_path);
+
+    const auto raw_suppressed_path = std::filesystem::temp_directory_path() / "pm_v7_external_raw_suppressed_test.bin";
+    std::filesystem::remove(raw_suppressed_path);
+    {
+        ExternalRawTapeRecorder recorder(raw_suppressed_path, sha, "run-raw-suppressed", "session-raw-suppressed", "binance-spot", 1'000'004);
+        recorder.set_suppressed(true);
+        assert(recorder.try_record_raw(VenueId::BinanceSpot, 1, 300, 1'300, "suppressed"));
+        auto snapshot = recorder.snapshot();
+        assert(snapshot.accepted == 0);
+        assert(snapshot.suppressed_by_policy == 1);
+        assert(snapshot.suppression_active == 1);
+        assert(snapshot.evidence_valid == 0);
+        recorder.set_suppressed(false);
+        assert(recorder.try_record_raw(VenueId::BinanceSpot, 1, 301, 1'301, "kept"));
+        snapshot = recorder.snapshot();
+        assert(snapshot.accepted == 1);
+        assert(snapshot.suppressed_by_policy == 1);
+        assert(snapshot.suppression_active == 0);
+    }
+    std::filesystem::remove(raw_suppressed_path);
+
     const auto large_raw_path = std::filesystem::temp_directory_path() / "pm_v7_external_large_raw_tape_test.bin";
     std::filesystem::remove(large_raw_path);
     {

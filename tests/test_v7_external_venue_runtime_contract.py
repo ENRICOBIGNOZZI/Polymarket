@@ -10,8 +10,8 @@ def main() -> None:
     launcher = (ROOT / "scripts" / "paper_v7_execution_loop.sh").read_text()
     websocket = (ROOT / "src" / "v7_external_ws.cpp").read_text()
     assert "ExternalVenueWsClient binance" in source
-    assert "ExternalVenueWsClient coinbase" in source
-    assert "ExternalVenueWsClient bybit" in source
+    assert "std::unique_ptr<ExternalVenueWsClient> coinbase;" in source
+    assert "std::unique_ptr<ExternalVenueWsClient> bybit;" in source
     assert 'binance_usdm_market_spec.target = "/market/ws"' in source
     assert "binance_usdm_market_ingress" in source
     assert '"binance_usdm_market"' in source
@@ -32,6 +32,24 @@ def main() -> None:
     assert "flat_static_buffer<kMaxWsMessageBytes> buffer;" not in websocket
     assert "constexpr std::size_t kMaxWsMessageBytes = 2U << 20;" in websocket
     assert 'spec.target = "/public/ws"' in websocket
+    assert 'argument == "--asset"' in source
+    assert 'argument == "--disk-pressure-marker"' in source
+    assert 'argument == "--disk-pressure-min-free-bytes"' in source
+    assert "fs::space" in source
+    assert '"suppressed_by_policy"' in source
+    assert '--disk-pressure-marker "$RUN_ROOT/control/DISK_PRESSURE"' in launcher
+    assert '--disk-pressure-min-free-bytes "$DISK_PRESSURE_MIN_FREE_BYTES"' in launcher
+    assert "crypto_connection_spec(" in source
+    assert "non-BTC assets require Binance spot as primary feed" in source
+    assert "non-BTC assets require at least two enabled spot venues" in source
+    assert 'symbol == "-" || symbol == "NONE"' in source
+    assert 'policy.use_transport_freshness_for_book = asset == "BTC" ? 0 : 1;' in source
+    assert source.count("+ deribit_ingress.drain_into(state, policy)") == 1
+    assert "BTC frozen external-cancel signal cannot be reused for non-BTC assets" in source
+    assert 'ticker.BTC-PERPETUAL.' not in source
+    assert 'orderbook.50.BTCUSDT' not in source
+    assert 'tickers.BTCUSDT' not in source
+    assert '/api/v3/depth?symbol=BTCUSDT' not in source
 
 
 if __name__ == "__main__":

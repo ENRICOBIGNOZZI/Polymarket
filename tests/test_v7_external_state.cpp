@@ -235,6 +235,31 @@ int main() {
     assert(book_freshness.on_venue_event(late_trade, short_age));
     assert(book_freshness.snapshot(320, short_age).valid == 0);
 
+    // New multi-asset semantics: unchanged price is not stale while the
+    // transport is demonstrably alive. Default policy above remains unchanged.
+    ExternalStatePolicy transport_age = short_age;
+    transport_age.use_transport_freshness_for_book = 1;
+    transport_age.max_transport_age_ns = 10;
+    ExternalAssetState transport_freshness(500);
+    assert(transport_freshness.on_venue_event(
+        book(VenueId::BinanceSpot, 1, 300, 99.9, 100.1, 1, 1), transport_age));
+    assert(transport_freshness.on_venue_event(
+        book(VenueId::CoinbaseSpot, 1, 301, 100.0, 100.2, 1, 1), transport_age));
+    transport_freshness.on_transport_heartbeat(VenueId::BinanceSpot, 1, 320, true);
+    transport_freshness.on_transport_heartbeat(VenueId::CoinbaseSpot, 1, 320, true);
+    assert(transport_freshness.snapshot(320, transport_age).valid == 1);
+
+    // A transport epoch change invalidates the old book even if the socket is
+    // healthy; a reconstructed BookTop from the new epoch is required.
+    transport_freshness.on_transport_heartbeat(VenueId::CoinbaseSpot, 2, 325, true);
+    transport_freshness.on_transport_heartbeat(VenueId::BinanceSpot, 1, 325, true);
+    assert(transport_freshness.snapshot(325, transport_age).valid == 0);
+    auto transport_recovered_book = book(VenueId::CoinbaseSpot, 2, 326, 100.0, 100.2, 1, 1);
+    transport_recovered_book.connection_epoch = 2;
+    assert(transport_freshness.on_venue_event(transport_recovered_book, transport_age));
+    transport_freshness.on_transport_heartbeat(VenueId::CoinbaseSpot, 2, 326, true);
+    assert(transport_freshness.snapshot(326, transport_age).valid == 1);
+
     external.on_oracle_snapshot(recovered);
     auto with_oracle = external.snapshot(221, policy);
     assert(with_oracle.chainlink_feed_handle == recovered.feed_handle);

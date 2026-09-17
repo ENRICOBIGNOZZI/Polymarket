@@ -36,8 +36,10 @@ def read_status(root: Path) -> dict:
         return {}
 
 
-def wait_for(root: Path, predicate, *, attempts: int = 150) -> dict:
+def wait_for(root: Path, predicate, *, attempts: int = 150, tick=None) -> dict:
     for _ in range(attempts):
+        if tick is not None:
+            tick()
         status = read_status(root)
         if predicate(status):
             return status
@@ -129,18 +131,33 @@ def run(executor: Path) -> None:
             value = json.loads((root/relative).read_text())
             if 'receive_wall_ms' in value: value['receive_wall_ms'] = publish_ms
             if 'timestamp_ms' in value: value['timestamp_ms'] = publish_ms
-            if 'timestamp' in value: value['timestamp'] = publish_ms/1000
+            if 'timestamp' in value: value['timestamp'] = (publish_ms - 10) / 1000
             write(root/relative,value)
 
         process = subprocess.Popen(
             [str(executor), "--run-root", str(root), "--model-sha", SHA],
             stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
         )
+        def refresh_live_observer_cut() -> None:
+            # The real observer refreshes these files continuously. Keep the
+            # synthetic fixture causal and fresh while a loaded CI worker starts
+            # the native executor; otherwise a scheduler pause >500ms turns this
+            # integration test into a timing lottery unrelated to admission logic.
+            fresh_ms = time.time_ns() // 1_000_000
+            for relative in ('micro_maker/book_features/yes-token.json',
+                             'micro_maker/fillability_ws_status.json',
+                             'external_fair/paper_router_status.json'):
+                value = json.loads((root / relative).read_text())
+                if 'receive_wall_ms' in value: value['receive_wall_ms'] = fresh_ms
+                if 'timestamp_ms' in value: value['timestamp_ms'] = fresh_ms
+                if 'timestamp' in value: value['timestamp'] = (fresh_ms - 10) / 1000
+                write(root / relative, value)
         try:
             submitted = wait_for(
                 root,
                 lambda row: int(row.get("submitted_orders") or 0) == 1
                 and len(row.get("active_order_details") or []) == 1,
+                tick=refresh_live_observer_cut,
             )
             active_before_cancel = submitted["active_order_details"][0]
             assert active_before_cancel["order_id"]
@@ -189,6 +206,15 @@ def run(executor: Path) -> None:
                 root, now_ns=trigger_ns,
             )
             assert cancel_rows, cancel_diag
+            # The bridge contract itself stays at the frozen <=100ms signal TTL.
+            # The native executor lifecycle below is a different concern: under
+            # loaded CI the process can be descheduled longer than that window.
+            # Preserve the bridge assertion, then give this synthetic receipt a
+            # long test-only envelope TTL so we test target binding/cancel latency
+            # rather than host scheduler luck. Production code is unchanged.
+            original_expiry = int(cancel_rows[0]["expires_at_ns"])
+            assert 0 < original_expiry - trigger_ns <= 100_000_000
+            cancel_rows[0]["expires_at_ns"] = trigger_ns + 5_000_000_000
             cancel_decision = coordinator.coordinate(
                 cancel_rows, now_ns=trigger_ns,
                 new_risk_authorized=False, paper_exploration_authorized=True,

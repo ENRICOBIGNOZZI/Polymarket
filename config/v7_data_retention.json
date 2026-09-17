@@ -1,11 +1,16 @@
 {
   "schema": "polymarket_v7_data_retention_v1",
-  "version": 11,
+  "version": 12,
   "paper_only": true,
   "disk": {
     "warning_free_ratio": 0.2,
-    "critical_free_ratio": 0.04,
-    "minimum_free_bytes": 5368709120
+    "critical_free_ratio": 0.06,
+    "minimum_free_bytes": 8589934592,
+    "emergency_cleanup_free_bytes": 32212254720,
+    "reserve_release_free_bytes": 34359738368,
+    "reserve_create_min_free_bytes": 51539607552,
+    "emergency_reserve_bytes": 536870912,
+    "disk_pressure_clear_free_bytes": 51539607552
   },
   "canonical_ledger": {
     "path": "ledger/execution.jsonl",
