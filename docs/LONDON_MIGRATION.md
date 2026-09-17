@@ -52,6 +52,24 @@ The evaluator requires the same exact SHA, sufficient duration and samples, boun
 
 For WebSocket comparison, report connection health, reconnects, frame freshness and local jitter separately from one-way network latency. Exchange-to-host one-way latency is `UNKNOWN` unless comparable clock semantics support it; do not substitute RTT/2.
 
+## Multi-path public-network evidence
+
+`ops/v7_london_multipath_ssm.py` runs three versioned, read-only probes on each
+London candidate host at one exact Git SHA:
+
+- `v7_public_ws_latency_probe.py`: Polymarket public market WebSocket handshake,
+  reconnect health and time to first book;
+- `v7_external_tls_probe.py`: DNS/TCP/TLS connectivity to Polymarket and external
+  crypto venues;
+- `v7_external_ws_age_probe.py`: persistent public WebSocket feed timing for the
+  external venues used by the research pipeline.
+
+The combined receipt deliberately sets `selection_ready=false`,
+`authenticated_order_latency_observed=false` and `one_way_latency_proven=false`.
+Venue timestamp age is not interpreted as one-way latency without bounded clock
+offset. These probes supplement the 24-hour HTTPS shootout; they cannot enable
+PAPER runtime services, submit orders or select a production AZ automatically.
+
 ## Data migration
 
 Do not copy the current `runs/paper_v7_live` tree wholesale. Do not reuse the Mac canonical ledger.
