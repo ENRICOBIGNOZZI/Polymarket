@@ -1,0 +1,29 @@
+{
+  "authenticated_execution": false,
+  "blockers": [
+    "INDEPENDENT_OOS_REPRICING_EVIDENCE_INSUFFICIENT",
+    "LATENCY_CAPACITY_NOT_COSTED_ECONOMIC_EVIDENCE",
+    "LONDON_AZ_NOT_SELECTED",
+    "MULTI_CRYPTO_FORWARD_PROTOCOL_NOT_FROZEN",
+    "NO_EXECUTABLE_ECONOMIC_PNL_EVIDENCE",
+    "SHOCK_CALIBRATION_INSUFFICIENT",
+    "SHOCK_TRIGGER_THRESHOLD_NOT_FROZEN"
+  ],
+  "claim_boundary": "Readiness gate only. It cannot authorize live or PAPER new-risk execution.",
+  "execution_authority": false,
+  "execution_contract_state": "VERIFIED_SHADOW_CONTRACT",
+  "latency_candidate_count": 4342,
+  "paper_forward_authorized": false,
+  "paper_only": true,
+  "promotion_authorized": false,
+  "real_capital_at_risk": false,
+  "real_order_submission": false,
+  "repricing_status": "INSUFFICIENT_EVIDENCE",
+  "repricing_time_clusters": 1,
+  "schema": "polymarket_v7_multi_crypto_readiness_gate_v1",
+  "shock_status": "INSUFFICIENT_EVIDENCE",
+  "shock_time_clusters": 1,
+  "state": "BLOCKED_EVIDENCE",
+  "timestamp_ns": 1789628292624967000,
+  "version": 1
+}

@@ -5,12 +5,12 @@
 | M0 Audit and integrity | VERIFIED | Frozen BTC identity verified. Canonical ledger audit: 1,203 records, 401/401 terminal orders, zero open orders, exact FILL↔FINAL matching, empty spool; recovery/reconciliation tests pass. |
 | M1 Core common | VERIFIED_SHADOW | Six-asset venue factory, typed settlement contexts, dynamic rules discovery and capability registry are integrated through a causal ContractState binding rules/token identity, OracleHub reference and PM BookHub; FeatureEngine consumes the gate. Zero authority. |
 | M2 Data plane | VERIFIED_SHADOW | Multi-venue feeds, six-asset OracleHub, state-only PM BookHub/label hub, unified FeatureEngine and single zero-authority shadow supervisor are exact-SHA verified. Not deployed to canonical runtime. |
-| M3 Execution/accounting | NOT_STARTED | Must retain one global coordinator/execution owner/ledger. |
+| M3 Execution/accounting | VERIFIED_SHADOW_CONTRACT | Single V7 global coordinator, allocator, risk, OMS, inventory and canonical ledger chain verified. Six-asset SHADOW lanes cannot add risk; no separate execution or ledger owner exists. |
 | M4 Speed | IN_PROGRESS | Exact compact PM v2 replay measures L1 FAK/no-chase latency and size mechanics over 0–1000 ms and 5–500 shares. Economic value remains blocked until a calibrated signal/cost model exists. |
 | M5 Research | IN_PROGRESS | Causal normalized-shock/derivatives/cross-crypto features, audited feature tape and exact compact PM repricing labels implemented. Current smoke has 1 independent time cluster, so calibration/OOS alpha remains INSUFFICIENT_EVIDENCE. |
 | M6 Multi-crypto forward | BLOCKED | ETH/SOL remain SHADOW until protocol freeze and M0-M5 gates. |
-| M7 Breadth | IN_PROGRESS | XRP/DOGE/BNB M5/M15 discovery/rules gates passed; activation remains SHADOW-only and still depends on shared PM-book/oracle/feature gates. |
-| M8 Capacity/readiness | NOT_STARTED | PAPER/shadow only; no real-money promotion. |
+| M7 Breadth | VERIFIED_SHADOW | BTC/ETH/SOL/XRP/DOGE/BNB M5/M15 discovery, rules, external feeds, OracleHub and PM BookHub gates are verified in SHADOW. No new-risk authority. |
+| M8 Capacity/readiness | BLOCKED_EVIDENCE | Fail-closed readiness gate implemented. Current blockers: 1 independent research cluster, shock threshold not frozen, no executable economic PnL evidence, latency/capacity not cost-calibrated, London AZ not selected, multi-crypto forward protocol not frozen. |
 | M9 London regional migration | BLOCKED_AWS_ACCESS | Build/benchmark eu-west-2a/b/c, then PAPER cutover with a fresh ledger generation. |
 
 ## Non-negotiable invariants
