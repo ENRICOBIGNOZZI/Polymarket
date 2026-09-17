@@ -442,6 +442,7 @@ def main() -> int:
     parser.add_argument("--output-json", type=Path, required=True)
     parser.add_argument("--output-scenarios-csv", type=Path)
     parser.add_argument("--output-trades-csv", type=Path)
+    parser.add_argument("--output-ladder-csv", type=Path)
     args = parser.parse_args()
     if args.bootstrap_draws < 0:
         parser.error("--bootstrap-draws must be non-negative")
@@ -455,12 +456,24 @@ def main() -> int:
         seed=args.seed,
         candidate_evidence=candidate_evidence,
     )
+    from v7_lead_lag_capacity_ladder import build_ladder_report
+    ladder = build_ladder_report(
+        args.ledger,
+        share_grid=tuple(args.shares_grid),
+        notional_grid=tuple(args.notional_grid),
+    )
+    report["full_ladder_capacity"] = ladder
+    report["evidence_boundary"]["full_book_sweep_replay_available"] = bool(ladder.get("available"))
+    report["evidence_boundary"]["full_book_sweep_evidence_markets"] = int(ladder.get("evidence_markets") or 0)
     args.output_json.parent.mkdir(parents=True, exist_ok=True)
     args.output_json.write_text(json.dumps(report, indent=2, sort_keys=True) + "\n", encoding="utf-8")
     if args.output_scenarios_csv:
         write_scenario_csv(args.output_scenarios_csv, report)
     if args.output_trades_csv:
         write_trade_csv(args.output_trades_csv, report)
+    if args.output_ladder_csv:
+        from v7_lead_lag_capacity_ladder import write_ladder_scenario_csv
+        write_ladder_scenario_csv(args.output_ladder_csv, ladder)
     print(json.dumps(report, indent=2, sort_keys=True))
     return 0
 
