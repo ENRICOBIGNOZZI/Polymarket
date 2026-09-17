@@ -127,7 +127,11 @@ def test_forward_runtime_fill_and_settlement_are_canonical_paper_events():
         r.candidate_step()
         rows=[json.loads(p.read_text()) for p in sorted((root/'ledger/spool').glob('*.json'))]
         assert [x['event_type'] for x in rows]==['ORDER_SUBMITTED','FILL']
-        fill=rows[1]
+        order,fill=rows
+        capacity_book=order['metadata']['capacity_book']
+        assert capacity_book['schema']=='polymarket_v7_lead_lag_capacity_book_v1'
+        assert capacity_book['ask_levels']==[{'price':0.4,'size':100.0}]
+        assert capacity_book['fee_schedule']['rate']==0.07
         assert fill['filled_size']==5.0 and fill['fill_price']==0.40
         assert fill['metadata']['paper_forward_test'] is True
         assert fill['metadata']['hold_to_settlement'] is True
