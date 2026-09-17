@@ -99,6 +99,7 @@ def summarize_multi_crypto(
     run_root: Path, *, expected_sha: str, portfolio: dict[str, Any], canonical: dict[str, Any],
     global_coordinator: dict[str, Any], crypto_registry: dict[str, Any],
     crypto_model_registry: dict[str, Any], ledger_valid: bool,
+    canonical_mtime_ms: float | None = None,
 ) -> dict[str, Any]:
     lanes = {(asset, horizon): _blank_lane(asset, horizon) for asset in ASSETS for horizon in HORIZONS}
     for row in crypto_registry.get("contexts", []) if isinstance(crypto_registry.get("contexts"), list) else []:
@@ -120,7 +121,7 @@ def summarize_multi_crypto(
 
     diagnostics = {"rows": 0, "crypto_rows": 0, "unsafe_rows": 0, "sha_mismatch_rows": 0,
                    "unattributed_fill_rows": 0, "unattributed_final_rows": 0,
-                   "final_rows_missing_pnl": 0}
+                   "final_rows_missing_pnl": 0, "latest_final_recorded_ts_ms": None}
     ledger_path = Path(run_root) / "ledger/execution.jsonl"
     try:
         handle = ledger_path.open("r", encoding="utf-8")
@@ -148,6 +149,11 @@ def summarize_multi_crypto(
                 event_type = str(row.get("event_type") or "")
                 if event_type not in {"FILL", "FINAL"}:
                     continue
+                if event_type == "FINAL":
+                    recorded = _finite(row.get("recorded_ts_ms"))
+                    if recorded is not None:
+                        previous = _finite(diagnostics.get("latest_final_recorded_ts_ms"))
+                        diagnostics["latest_final_recorded_ts_ms"] = recorded if previous is None else max(previous, recorded)
                 lane_key = _lane_from_row(row)
                 if lane_key is None:
                     diagnostics["unattributed_fill_rows" if event_type == "FILL" else "unattributed_final_rows"] += 1
@@ -210,14 +216,38 @@ def summarize_multi_crypto(
     total_pnl = equity - budget if equity is not None and budget is not None else None
     strategy_pnl = canonical.get("strategy_net_pnl") if isinstance(canonical.get("strategy_net_pnl"), dict) else {}
     canonical_realized = _finite(strategy_pnl.get(CRYPTO_ENGINE))
-    unrealized = total_pnl - canonical_realized if total_pnl is not None and canonical_realized is not None else None
     gap = canonical_realized - attributed_realized if canonical_realized is not None else None
     tolerance = 1e-8 * max(1.0, abs(canonical_realized or 0.0), abs(attributed_realized))
-    attribution_reconciled = bool(
-        ledger_valid and canonical_realized is not None and diagnostics["unsafe_rows"] == 0
-        and diagnostics["sha_mismatch_rows"] == 0 and diagnostics["unattributed_final_rows"] == 0
-        and diagnostics["final_rows_missing_pnl"] == 0 and gap is not None and abs(gap) <= tolerance
+    ledger_complete = bool(
+        ledger_valid and diagnostics["unsafe_rows"] == 0 and diagnostics["sha_mismatch_rows"] == 0
+        and diagnostics["unattributed_final_rows"] == 0 and diagnostics["final_rows_missing_pnl"] == 0
     )
+    latest_final_ms = _finite(diagnostics.get("latest_final_recorded_ts_ms"))
+    canonical_mtime = _finite(canonical_mtime_ms)
+    canonical_stale_vs_ledger = bool(
+        canonical_realized is not None and latest_final_ms is not None and canonical_mtime is not None
+        and latest_final_ms > canonical_mtime + 1.0
+    )
+    attribution_reconciled = bool(
+        ledger_complete and canonical_realized is not None and gap is not None and abs(gap) <= tolerance
+    )
+    if attribution_reconciled:
+        attribution_state = "RECONCILED"
+        display_realized = canonical_realized
+        display_realized_source = "CANONICAL_ECONOMICS"
+    elif ledger_complete and canonical_stale_vs_ledger and lane_final_count > 0:
+        attribution_state = "PENDING_CANONICAL_REFRESH"
+        display_realized = attributed_realized
+        display_realized_source = "CANONICAL_LEDGER_PROVISIONAL"
+    elif not ledger_complete or canonical_realized is None:
+        attribution_state = "UNVERIFIABLE"
+        display_realized = canonical_realized
+        display_realized_source = "CANONICAL_ECONOMICS" if canonical_realized is not None else "UNKNOWN"
+    else:
+        attribution_state = "DIVERGED"
+        display_realized = canonical_realized
+        display_realized_source = "CANONICAL_ECONOMICS"
+    unrealized = total_pnl - display_realized if total_pnl is not None and display_realized is not None else None
     account_drawdown = _finite(portfolio.get("drawdown"))
     crypto_risk = _crypto_risk(global_coordinator)
     per_asset_exposure = crypto_risk.get("per_asset_exposure_usd")
@@ -234,7 +264,7 @@ def summarize_multi_crypto(
         "registered_lanes": registered_lanes, "known_economic_lanes": known_lanes,
         "new_risk_authorized_lanes": authorized_lanes, "ledger_valid": bool(ledger_valid),
         "portfolio": {"budget": budget, "equity": equity, "total_pnl": total_pnl,
-                      "realized_pnl": canonical_realized, "unrealized_pnl": unrealized,
+                      "realized_pnl": display_realized, "unrealized_pnl": unrealized,
                       "account_drawdown": account_drawdown,
                       "candidate_gross_exposure": _finite(crypto_risk.get("gross_crypto_exposure_usd")),
                       "candidate_net_exposure": _finite(crypto_risk.get("net_directional_crypto_exposure_usd")),
@@ -246,6 +276,14 @@ def summarize_multi_crypto(
             "per_horizon": {str(k): v for k, v in per_horizon_exposure.items() if _finite(v) is not None},
         },
         "attribution": {"attributed_realized_pnl": attributed_realized if lane_final_count else None,
+                        "canonical_realized_pnl": canonical_realized,
+                        "ledger_realized_pnl": attributed_realized if lane_final_count else None,
+                        "display_realized_source": display_realized_source,
+                        "state": attribution_state,
+                        "status_code": 2 if attribution_state == "RECONCILED" else (1 if attribution_state == "PENDING_CANONICAL_REFRESH" else 0),
+                        "canonical_stale_vs_ledger": canonical_stale_vs_ledger,
+                        "canonical_mtime_ms": canonical_mtime,
+                        "latest_final_recorded_ts_ms": latest_final_ms,
                         "gap": gap, "reconciled": attribution_reconciled,
                         "unattributed_final_rows": diagnostics["unattributed_final_rows"],
                         "unattributed_fill_rows": diagnostics["unattributed_fill_rows"]},
@@ -288,10 +326,17 @@ def render_prometheus(summary: dict[str, Any]) -> list[str]:
             lines.append(_metric("polymarket_mc_coordinator_candidate_horizon_exposure_usd", value, {"horizon": horizon}))
     attribution = summary.get("attribution") if isinstance(summary.get("attribution"), dict) else {}
     lines.append(_metric("polymarket_mc_attribution_reconciled", attribution.get("reconciled") is True))
+    lines.append(_metric("polymarket_mc_attribution_status_code", attribution.get("status_code") or 0))
+    lines.append(_metric("polymarket_mc_attribution_state_info", 1, {"state": attribution.get("state", "UNVERIFIABLE"), "realized_source": attribution.get("display_realized_source", "UNKNOWN")}))
+    lines.append(_metric("polymarket_mc_canonical_stale_vs_ledger", attribution.get("canonical_stale_vs_ledger") is True))
     lines.append(_metric("polymarket_mc_unattributed_final_rows", attribution.get("unattributed_final_rows") or 0))
     lines.append(_metric("polymarket_mc_unattributed_fill_rows", attribution.get("unattributed_fill_rows") or 0))
     if _finite(attribution.get("gap")) is not None:
         lines.append(_metric("polymarket_mc_attribution_gap_usd", attribution["gap"]))
+    if _finite(attribution.get("canonical_realized_pnl")) is not None:
+        lines.append(_metric("polymarket_mc_canonical_realized_pnl_usd", attribution["canonical_realized_pnl"]))
+    if _finite(attribution.get("ledger_realized_pnl")) is not None:
+        lines.append(_metric("polymarket_mc_ledger_realized_pnl_usd", attribution["ledger_realized_pnl"]))
     if _finite(attribution.get("attributed_realized_pnl")) is not None:
         lines.append(_metric("polymarket_mc_attributed_realized_pnl_usd", attribution["attributed_realized_pnl"]))
     for lane in summary.get("lanes", []) if isinstance(summary.get("lanes"), list) else []:

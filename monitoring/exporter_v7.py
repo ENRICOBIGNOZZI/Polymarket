@@ -327,6 +327,7 @@ def collect_snapshot(run_root: Path, repository_root: Path | None = None, *, now
         crypto_registry=snapshot["crypto_registry"],
         crypto_model_registry=snapshot["crypto_model_registry"],
         ledger_valid=ledger.get("valid") is True,
+        canonical_mtime_ms=(canonical_path.stat().st_mtime * 1000.0 if canonical_path.is_file() else None),
     )
     snapshot["multi_crypto_shadow"] = summarize_shadow_runtime(
         multi_crypto_shadow_run_root, now_ns=now * 1_000_000_000,

@@ -124,7 +124,7 @@
         "type": "prometheus",
         "uid": "prometheus-v7"
       },
-      "description": "Canonical realized PnL for CRYPTO_SETTLEMENT_ENGINE.",
+      "description": "Freshest verified realized PnL for CRYPTO_SETTLEMENT_ENGINE. Uses canonical economics when current; uses complete canonical-ledger FINALs provisionally only while canonical economics is demonstrably stale.",
       "targets": [
         {
           "expr": "polymarket_mc_realized_pnl_usd",
@@ -167,7 +167,7 @@
         "type": "prometheus",
         "uid": "prometheus-v7"
       },
-      "description": "Only emitted when both total and canonical realized PnL are known.",
+      "description": "Engine total PnL minus the freshest verified realized PnL. No synthetic zero fill.",
       "targets": [
         {
           "expr": "polymarket_mc_unrealized_pnl_usd",
@@ -253,10 +253,10 @@
         "type": "prometheus",
         "uid": "prometheus-v7"
       },
-      "description": "Lane attribution must reconcile to canonical crypto realized PnL.",
+      "description": "2=fully reconciled; 1=ledger is newer and canonical economics is still refreshing; 0=unverifiable or true divergence.",
       "targets": [
         {
-          "expr": "polymarket_mc_attribution_reconciled",
+          "expr": "polymarket_mc_attribution_status_code",
           "refId": "A"
         }
       ],
@@ -270,6 +270,9 @@
                   "text": "CHECK GAP"
                 },
                 "1": {
+                  "text": "CANONICAL REFRESH"
+                },
+                "2": {
                   "text": "RECONCILED"
                 }
               }
@@ -1765,7 +1768,7 @@
         "type": "prometheus",
         "uid": "prometheus-v7"
       },
-      "description": "Canonical crypto realized PnL minus sum of attributed lane PnL.",
+      "description": "Canonical realized PnL minus attributed ledger PnL. A temporary non-zero value is expected only when Attribution says CANONICAL REFRESH.",
       "targets": [
         {
           "expr": "polymarket_mc_attribution_gap_usd",
@@ -2019,7 +2022,7 @@
       },
       "options": {
         "mode": "markdown",
-        "content": "**PAPER / SHADOW monitoring only.** Multi-crypto performance is derived from the canonical ledger. A lane without attributable economic events is **N/A**, not `$0`. Realized PnL is only emitted after a valid `FINAL`. Equity is intentionally separated from PnL charts. Any non-zero attribution gap or unattributed FINAL row invalidates clean lane-level performance attribution."
+        "content": "**PAPER / SHADOW monitoring only.** Multi-crypto performance is derived from canonical PAPER sources. A lane without attributable economic events is **N/A**, not `$0`. Realized PnL uses canonical economics when current; if a newer complete ledger FINAL exists, the dashboard may temporarily show the ledger value while Attribution reads **CANONICAL REFRESH**. A true fresh mismatch remains **CHECK GAP**. Equity is intentionally separated from PnL charts."
       }
     }
   ],
@@ -2094,5 +2097,5 @@
   "timezone": "browser",
   "title": "Polymarket V7 Multi-Crypto Performance",
   "uid": "polymarket-v7-multi-crypto",
-  "version": 3
+  "version": 4
 }

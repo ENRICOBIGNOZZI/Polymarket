@@ -39,7 +39,7 @@ def portfolio() -> dict:
 
 
 class MultiCryptoPerformanceTest(unittest.TestCase):
-    def _summarize(self, root: Path, canonical_realized: float = 0.0):
+    def _summarize(self, root: Path, canonical_realized: float = 0.0, canonical_mtime_ms: float | None = None):
         return summarize_multi_crypto(
             root, expected_sha=SHA, portfolio=portfolio(),
             canonical={"strategy_net_pnl": {"CRYPTO_SETTLEMENT_ENGINE": canonical_realized}},
@@ -53,6 +53,7 @@ class MultiCryptoPerformanceTest(unittest.TestCase):
                 "exchange_source_concentration_fraction": 0.6,
             }},
             crypto_registry=registry(), crypto_model_registry=models(), ledger_valid=True,
+            canonical_mtime_ms=canonical_mtime_ms,
         )
 
     def test_no_economic_evidence_is_na_not_zero(self) -> None:
@@ -144,6 +145,38 @@ class MultiCryptoPerformanceTest(unittest.TestCase):
             self.assertIn("polymarket_mc_shadow_external_ready_assets 6", text)
             self.assertIn("polymarket_mc_shadow_contract_ready_markets 12", text)
             self.assertIn("polymarket_mc_shadow_children_alive 2", text)
+
+
+    def test_stale_canonical_uses_complete_ledger_provisionally_without_false_divergence(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory); (root / "ledger").mkdir()
+            rows = [
+                {"event_type": "FILL", "strategy": "CRYPTO_SETTLEMENT_ENGINE", "model_sha": SHA,
+                 "paper_only": True, "authenticated_execution": False, "position_id": "p3",
+                 "recorded_ts_ms": 1_900, "fill_price": 0.4, "filled_size": 10, "fee": 0.1,
+                 "metadata": {"model_family": "lead_lag_taker_v1"}},
+                {"event_type": "FINAL", "strategy": "CRYPTO_SETTLEMENT_ENGINE", "model_sha": SHA,
+                 "paper_only": True, "authenticated_execution": False, "position_id": "p3",
+                 "recorded_ts_ms": 2_000, "final_pnl": 1.5,
+                 "metadata": {"model_family": "lead_lag_taker_v1", "won": True}},
+            ]
+            (root / "ledger/execution.jsonl").write_text("".join(json.dumps(row)+"\n" for row in rows))
+            pending = self._summarize(root, 0.0, canonical_mtime_ms=1_500)
+            self.assertEqual(pending["attribution"]["state"], "PENDING_CANONICAL_REFRESH")
+            self.assertEqual(pending["attribution"]["status_code"], 1)
+            self.assertTrue(pending["attribution"]["canonical_stale_vs_ledger"])
+            self.assertEqual(pending["portfolio"]["realized_pnl"], 1.5)
+            self.assertEqual(pending["attribution"]["display_realized_source"], "CANONICAL_LEDGER_PROVISIONAL")
+            text = "\n".join(render_prometheus(pending))
+            self.assertIn("polymarket_mc_attribution_status_code 1", text)
+            self.assertIn("polymarket_mc_canonical_stale_vs_ledger 1", text)
+            self.assertIn("polymarket_mc_realized_pnl_usd 1.5", text)
+
+            diverged = self._summarize(root, 0.0, canonical_mtime_ms=2_500)
+            self.assertEqual(diverged["attribution"]["state"], "DIVERGED")
+            self.assertEqual(diverged["attribution"]["status_code"], 0)
+            self.assertFalse(diverged["attribution"]["canonical_stale_vs_ledger"])
+            self.assertEqual(diverged["portfolio"]["realized_pnl"], 0.0)
 
     def test_unattributed_final_fails_reconciliation_closed(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

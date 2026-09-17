@@ -18,7 +18,7 @@ class MultiCryptoDashboardTest(unittest.TestCase):
             "polymarket_mc_portfolio_equity_usd", "polymarket_mc_total_pnl_usd",
             "polymarket_mc_realized_pnl_usd", "polymarket_mc_unrealized_pnl_usd",
             "polymarket_mc_lane_realized_pnl_usd", "polymarket_mc_strategy_realized_pnl_usd",
-            "polymarket_mc_attribution_reconciled", "polymarket_mc_attribution_gap_usd",
+            "polymarket_mc_attribution_status_code", "polymarket_mc_attribution_gap_usd",
             "polymarket_mc_lane_economic_evidence_present",
             "polymarket_mc_shadow_ready", "polymarket_mc_shadow_external_ready_assets",
             "polymarket_mc_shadow_contract_ready_markets", "polymarket_mc_shadow_status_age_seconds",
