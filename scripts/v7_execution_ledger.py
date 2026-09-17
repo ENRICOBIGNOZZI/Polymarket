@@ -449,10 +449,12 @@ class EconomicJournalEntry:
         _positive_clock("journal:observed_ts_ms", self.observed_ts_ms)
         if self.source not in JOURNAL_SOURCES:
             raise LedgerContractError("journal:source_unsupported")
-        if not isinstance(self.source_record_id, str) or not self.source_record_id.strip():
+        if self.source_record_id is None:
             raise LedgerContractError("journal:source_record_id:missing")
-        if not isinstance(self.entry_id, str) or not self.entry_id.strip():
+        _nonempty_optional("journal:source_record_id", self.source_record_id)
+        if self.entry_id is None:
             raise LedgerContractError("journal:entry_id:missing")
+        _nonempty_optional("journal:entry_id", self.entry_id)
         if self.execution_mode not in JOURNAL_MODES:
             raise LedgerContractError("journal:execution_mode_unsupported")
         if not isinstance(self.authenticated_execution, bool):
