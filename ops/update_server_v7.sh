@@ -977,7 +977,7 @@ PY
   grep -q '^polymarket_v7_paper_only_contract_ok 1$' <<<"$metrics" || return 1
   grep -q '^polymarket_v7_authenticated_execution_disabled 1$' <<<"$metrics" || return 1
   grep -q '^polymarket_v7_ledger_valid 1$' <<<"$metrics" || return 1
-  grep -q '^polymarket_v7_live_algorithm_count 2$' <<<"$metrics" || return 1
+  grep -q '^polymarket_v7_live_algorithm_count 1$' <<<"$metrics" || return 1
   grep -q '^polymarket_external_fair_present 1$' <<<"$metrics" || return 1
   awk '$1=="polymarket_external_fair_router_book_requests_total"{found=1; if ($2+0>0) ok=1} END{exit !(found&&ok)}' <<<"$metrics" || return 1
   curl -fsS http://127.0.0.1:9108/external-fair.json >/dev/null || return 1

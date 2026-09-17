@@ -112,7 +112,7 @@ jobs:
           printf '%s\n' "$SSH_PRIVATE_KEY" > ~/.ssh/polymarket_v7_health
           chmod 600 ~/.ssh/polymarket_v7_health
           ssh-keyscan -T 5 -p "$SERVER_PORT" "$SERVER_HOST" > ~/.ssh/known_hosts
-      - name: Verify two-engine PAPER runtime
+      - name: Verify crypto-only PAPER runtime
         run: |
           set -euo pipefail
           mkdir -p health-evidence
@@ -137,8 +137,8 @@ jobs:
           assert set(runtime.get('economic_engines') or [])==expected and runtime.get('economic_new_risk_ready') is False
           pid=int(runtime.get('pid') or 0); os.kill(pid,0); assert now-int(runtime.get('timestamp') or 0)<=180
           assert portfolio.get('schema')=='polymarket_v7_portfolio_guard_v2' and set(portfolio.get('engines') or {})==expected and portfolio.get('killed') is False
-          assert allocation.get('schema')=='polymarket_v7_capital_allocation_v3' and set(allocation.get('engine_budgets') or {})==expected and allocation.get('engine_count')==2
-          assert scope.get('schema')=='polymarket_v7_live_engine_scope_v2' and set(scope.get('live_algorithms') or [])==expected and scope.get('live_algorithm_count')==2
+          assert allocation.get('schema')=='polymarket_v7_capital_allocation_v3' and set(allocation.get('engine_budgets') or {})==expected and allocation.get('engine_count')==1
+          assert scope.get('schema')=='polymarket_v7_live_engine_scope_v2' and scope.get('version')==8 and set(scope.get('live_algorithms') or [])==expected and scope.get('live_algorithm_count')==1
           assert registry.get('schema')=='polymarket_v7_live_algorithm_registry_v2' and {r.get('id') for r in registry.get('live_algorithms',[])}==expected
           for removed in ('graph_rv','micro_taker','ranking','pca','local_factor','wallet_intelligence','market_open','osint','sports_latency','cross_platform'):
               assert not (root/removed).exists(), removed
@@ -146,7 +146,7 @@ jobs:
           curl -fsS http://127.0.0.1:9108/healthz
           metrics="$(curl -fsS http://127.0.0.1:9108/metrics)"
           grep -q '^polymarket_v7_health 1$' <<<"$metrics"
-          grep -q '^polymarket_v7_live_algorithm_count 2$' <<<"$metrics"
+          grep -q '^polymarket_v7_live_algorithm_count 1$' <<<"$metrics"
           grep -q '^polymarket_v7_live_algorithm_scope_wired 1$' <<<"$metrics"
           grep -q '^polymarket_v7_execution_alive 1$' <<<"$metrics"
           grep -q '^polymarket_v7_single_writer_ok 1$' <<<"$metrics"
