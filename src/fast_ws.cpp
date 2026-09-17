@@ -287,14 +287,6 @@ struct MarketWebSocketFeed::Impl {
                 marked_connected = true;
                 backoff_seconds = 1;
 
-#if PM_USE_STD_JTHREAD
-                std::stop_callback cancel_on_stop(stop, [&ws] {
-                    beast::error_code ignored;
-                    beast::get_lowest_layer(ws).socket().cancel(ignored);
-                    beast::get_lowest_layer(ws).socket().shutdown(tcp::socket::shutdown_both, ignored);
-                    beast::get_lowest_layer(ws).socket().close(ignored);
-                });
-#endif
                 // A synchronous read can block for the entire quiet timeout,
                 // which made the old post-read PING unreachable on quiet
                 // markets. Keep one async read and one async text heartbeat
@@ -312,6 +304,11 @@ struct MarketWebSocketFeed::Impl {
                 bool terminal = false;
                 bool remote_closed = false;
                 std::string transport_error;
+#if PM_USE_STD_JTHREAD
+                std::stop_callback cancel_on_stop(stop, [&io] {
+                    asio::post(io, [&io] { io.stop(); });
+                });
+#endif
                 const auto finish = [&](beast::error_code error) {
                     if (terminal) return;
                     terminal = true;
