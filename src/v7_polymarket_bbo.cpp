@@ -155,36 +155,33 @@ FirstArrivalResult FirstArrivalGate::observe(
         return result;
     }
 
-    const std::size_t start = static_cast<std::size_t>(mix64(update.event_identity)) & kMask;
-    for (std::size_t step = 0; step < kCapacity; ++step) {
-        auto& entry = entries_[(start + step) & kMask];
-        const bool empty = entry.identity == 0;
-        const bool expired = !empty
-            && update.receive_monotonic_ns > entry.last_receive_monotonic_ns
-            && update.receive_monotonic_ns - entry.last_receive_monotonic_ns > duplicate_window_ns_;
-        if (entry.identity == update.event_identity && !expired) {
-            entry.last_receive_monotonic_ns = std::max(
-                entry.last_receive_monotonic_ns, update.receive_monotonic_ns);
-            entry.connection_mask = static_cast<std::uint8_t>(entry.connection_mask | source_bit);
-            result.decision = FirstArrivalDecision::Duplicate;
-            result.first_receive_monotonic_ns = entry.first_receive_monotonic_ns;
-            result.duplicate_delay_ns = std::max<std::int64_t>(
-                0, update.receive_monotonic_ns - entry.first_receive_monotonic_ns);
-            result.connection_mask = entry.connection_mask;
-            return result;
-        }
-        if (empty || expired) {
-            entry.identity = update.event_identity;
-            entry.first_receive_monotonic_ns = update.receive_monotonic_ns;
-            entry.last_receive_monotonic_ns = update.receive_monotonic_ns;
-            entry.connection_mask = source_bit;
-            result.decision = FirstArrivalDecision::Accept;
-            result.first_receive_monotonic_ns = update.receive_monotonic_ns;
-            result.connection_mask = source_bit;
-            return result;
-        }
+    // Direct-mapped, deliberately fail-open. A hash-bucket collision can only
+    // reduce dedupe efficiency: a distinct identity overwrites the slot and is
+    // accepted. It can never cause a distinct market update to be dropped.
+    auto& entry = entries_[static_cast<std::size_t>(mix64(update.event_identity)) & kMask];
+    const bool same_identity = entry.identity == update.event_identity;
+    const bool expired = same_identity
+        && update.receive_monotonic_ns > entry.last_receive_monotonic_ns
+        && update.receive_monotonic_ns - entry.last_receive_monotonic_ns > duplicate_window_ns_;
+    if (same_identity && !expired) {
+        entry.last_receive_monotonic_ns = std::max(
+            entry.last_receive_monotonic_ns, update.receive_monotonic_ns);
+        entry.connection_mask = static_cast<std::uint8_t>(entry.connection_mask | source_bit);
+        result.decision = FirstArrivalDecision::Duplicate;
+        result.first_receive_monotonic_ns = entry.first_receive_monotonic_ns;
+        result.duplicate_delay_ns = std::max<std::int64_t>(
+            0, update.receive_monotonic_ns - entry.first_receive_monotonic_ns);
+        result.connection_mask = entry.connection_mask;
+        return result;
     }
-    result.decision = FirstArrivalDecision::SaturatedAccept;
+
+    const bool collision = entry.identity != 0 && !same_identity;
+    entry.identity = update.event_identity;
+    entry.first_receive_monotonic_ns = update.receive_monotonic_ns;
+    entry.last_receive_monotonic_ns = update.receive_monotonic_ns;
+    entry.connection_mask = source_bit;
+    result.decision = collision ? FirstArrivalDecision::CollisionAccept
+                                : FirstArrivalDecision::Accept;
     result.first_receive_monotonic_ns = update.receive_monotonic_ns;
     result.connection_mask = source_bit;
     return result;

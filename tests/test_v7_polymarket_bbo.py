@@ -34,6 +34,18 @@ int main(){
  std::array<Update,4> duplicate{}; auto rr=d.decode(price_change,1100,duplicate); assert(rr.output_count==2);
  assert(duplicate[0].event_identity==first_identity);
  auto dupe=gate.observe(duplicate[0],1); assert(dupe.decision==FirstArrivalDecision::Duplicate && dupe.duplicate_delay_ns==100 && dupe.connection_mask==3);
+ RedundantIngress<3,8> ingress;
+ auto c0=out[0], c1=out[0], c2=out[0];
+ c0.receive_monotonic_ns=2000; c1.receive_monotonic_ns=2300; c2.receive_monotonic_ns=2100;
+ assert(ingress.try_push(0,c0) && ingress.try_push(1,c1) && ingress.try_push(2,c2));
+ Update merged{}; std::uint8_t merged_source=9;
+ assert(ingress.try_pop_first(merged,merged_source));
+ assert(merged_source==0 && merged.receive_monotonic_ns==2000);
+ assert(!ingress.try_pop_first(merged,merged_source));
+ assert(ingress.duplicate_drops()==2);
+ auto distinct=c2; distinct.event_identity ^= 0x12345678ULL; distinct.receive_monotonic_ns=2400;
+ assert(ingress.try_push(2,distinct));
+ assert(ingress.try_pop_first(merged,merged_source) && merged_source==2);
  assert(out[1].instrument_handle==32 && out[1].best_bid_e4==3999 && out[1].best_ask_e4==4001);
  constexpr auto direct=R"({"event_type":"best_bid_ask","asset_id":"asset-a","market":"0xC","timestamp":123456789001,"best_bid":"0.49","best_ask":"0.51","spread":"0.02"})";
  r=d.decode(direct,1200,out);
