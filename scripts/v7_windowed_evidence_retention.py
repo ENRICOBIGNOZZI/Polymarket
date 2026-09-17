@@ -199,6 +199,49 @@ def _record_alias_retirement(store: Path, tombstone: dict[str, Any], evidence: d
     immutable(store/"windowed_alias_retirement_receipts"/sha[:2]/(sha+".json"),payload)
 
 
+def _stable_file_evidence(path: Path, *, family: str) -> tuple[dict[str, Any] | None, str]:
+    if path.is_symlink() or not path.is_file(): return None,"UNSAFE_PATH"
+    before=path.stat(); before_id=(before.st_dev,before.st_ino,before.st_size,before.st_mtime_ns)
+    sha=_sha256_file(path)
+    try: after=path.stat()
+    except OSError: return None,"SOURCE_DISAPPEARED_DURING_HASH"
+    after_id=(after.st_dev,after.st_ino,after.st_size,after.st_mtime_ns)
+    if before_id!=after_id: return None,"SOURCE_CHANGED_DURING_HASH"
+    return {"path":str(path),"source_family":family,"sha256":sha,"stat":list(before_id),"logical_bytes":before.st_size,"allocated_bytes":_allocated(path)},"VERIFIED"
+
+
+def _unindexed_windowed_receipt(evidence: dict[str, Any], *, raw_detail_seconds: int) -> dict[str, Any]:
+    return {"schema":"polymarket_v7_unindexed_windowed_source_tombstone_v1",**AUTH,"policy":POLICY,"raw_detail_available":False,"retirement_reason":"UNINDEXED_CLOSED_WINDOWED_SOURCE","source_was_catalogued":False,"raw_detail_seconds":raw_detail_seconds,"source":evidence,"limitations":["The source was not represented in permanent revisions or pack manifests before retirement.","The full source SHA-256 and stable filesystem identity were recorded before unlink."]}
+
+
+def _retire_unindexed_windowed_path(path: Path, *, store: Path, family: str, raw_detail_seconds: int, dry_run: bool) -> tuple[int, str]:
+    if dry_run: return 0,"DRY_RUN_ELIGIBLE"
+    evidence,status=_stable_file_evidence(path,family=family)
+    if status!="VERIFIED" or evidence is None: return 0,status
+    receipt=_unindexed_windowed_receipt(evidence,raw_detail_seconds=raw_detail_seconds); payload=canonical(receipt); receipt_sha=digest(payload)
+    immutable(store/"unindexed_windowed_source_tombstones"/receipt_sha[:2]/(receipt_sha+".json"),payload)
+    try: current=path.stat()
+    except OSError: return 0,"SOURCE_DISAPPEARED_AFTER_RECEIPT"
+    expected=tuple(evidence["stat"]); observed=(current.st_dev,current.st_ino,current.st_size,current.st_mtime_ns)
+    if observed!=expected: return 0,"SOURCE_CHANGED_AFTER_RECEIPT"
+    return _safe_unlink(path),"RETIRED"
+
+
+def _unindexed_pm_book_segments(runs: Path, *, indexed_paths: set[str], cutoff_ns: int) -> list[Path]:
+    candidates=[]
+    roots=(runs/"paper_v7_live/micro_maker/book_observations",runs/"paper_v7_live/research/repricing_book/book_observations")
+    for root in roots:
+        if not root.is_dir() or root.is_symlink(): continue
+        for path in root.glob("*.jsonl*"):
+            try:
+                if str(path) in indexed_paths or not _closed_path(path,runs): continue
+                if _alias_family(str(path),runs)!="pm_causal_book": continue
+                if path.stat().st_mtime_ns>=cutoff_ns: continue
+            except OSError: continue
+            candidates.append(path)
+    return sorted(candidates,key=_allocated,reverse=True)
+
+
 def _safe_unlink(path: Path) -> int:
     if not path.exists():
         return 0
@@ -233,6 +276,9 @@ def run(runs_root: Path, *, raw_detail_seconds: int = 21600,
         "retired_sources": 0,
         "removed_source_files": 0,
         "removed_source_aliases": 0,
+        "removed_unindexed_source_files": 0,
+        "unindexed_source_integrity_skips": 0,
+        "unindexed_source_candidates": 0,
         "alias_integrity_skips": 0,
         "removed_objects": 0,
         "removed_packs": 0,
@@ -346,6 +392,9 @@ def run(runs_root: Path, *, raw_detail_seconds: int = 21600,
         if safe:
             manifest_safe_packs.add(pack)
 
+    indexed_paths={str(value.get("original_path_at_capture") or "") for rows in by_source.values() for _,value in rows}
+    indexed_paths.update(str(alias) for rows in all_manifest_by_pack.values() for _,value in rows for alias in (value.get("source_aliases") or []) if isinstance(alias,str))
+
     raw_candidates = candidate_packs | manifest_safe_packs
     removable_packs = {pack for pack in raw_candidates
                        if pack not in protected_packs
@@ -408,6 +457,19 @@ def run(runs_root: Path, *, raw_detail_seconds: int = 21600,
                 if not dry_run:
                     _safe_unlink(manifest)
                 result["removed_manifests"] += 1
+
+    unindexed=_unindexed_pm_book_segments(runs,indexed_paths=indexed_paths,cutoff_ns=cutoff_ns)
+    result["unindexed_source_candidates"]=len(unindexed)
+    for path in unindexed:
+        if time.monotonic()-started>=maximum_seconds:
+            result["deferred"] += 1
+            break
+        reclaimed,status=_retire_unindexed_windowed_path(path,store=store,family="pm_causal_book",raw_detail_seconds=raw_detail_seconds,dry_run=dry_run)
+        if status in {"RETIRED","DRY_RUN_ELIGIBLE"}:
+            result["removed_unindexed_source_files"] += 1
+            result["reclaimed_allocated_bytes"] += reclaimed
+        else:
+            result["unindexed_source_integrity_skips"] += 1
 
     # Resume aliases left behind by an interrupted older pass even when the pack/manifest link is already gone.
     alias_candidates=[]
