@@ -1,4 +1,5 @@
 #include "pm/v7_ingress_wakeup.hpp"
+#include "pm/v7_external_cancel_publisher.hpp"
 #include "pm/v7_latest_json_publisher.hpp"
 #include "pm/v7_binance_l2.hpp"
 #include "pm/v7_binance_l2_protocol.hpp"
@@ -1279,10 +1280,22 @@ int main(int argc, char** argv) {
         policy.external_cancel_enabled = external_cancel_signal_path.empty() ? 0 : 1;
         ExternalAssetState state(asset_handle);
         LatestJsonPublisher status_publisher(output);
+        std::unique_ptr<ExternalCancelSignalPublisher> external_cancel_publisher;
         if (!external_cancel_signal_path.empty()) {
+            // Cold-start publication stays synchronous so downstream readers
+            // never observe a missing contract. Every later transition is
+            // ordered through the dedicated lossless writer queue.
             atomic_write(external_cancel_signal_path, external_cancel_signal_json(
                 ExternalCancelSignalSnapshot{}, model_sha, external_cancel_rule_sha256,
                 started_monotonic_ns, wall_now_ns(), started_monotonic_ns));
+            external_cancel_publisher = std::make_unique<ExternalCancelSignalPublisher>(
+                external_cancel_signal_path,
+                [&](const ExternalCancelPublishRecord& record) {
+                    return external_cancel_signal_json(
+                        record.signal, model_sha, external_cancel_rule_sha256,
+                        record.publish_monotonic_ns, record.publish_wall_ns,
+                        started_monotonic_ns);
+                });
         }
         std::unique_ptr<IngressWakeup> ingress_wakeup;
         if (event_driven_ingress) ingress_wakeup = std::make_unique<IngressWakeup>();
@@ -1423,13 +1436,18 @@ int main(int argc, char** argv) {
                 set_tape_suppression(disk_pressure_active);
                 last_disk_pressure_poll_ns = now_mono;
             }
+            if (external_cancel_publisher != nullptr && !external_cancel_publisher->healthy()) {
+                throw std::runtime_error("external cancel signal publisher failed");
+            }
             const auto cancel_signal = state.advance_external_cancel_signal(now_mono, policy);
-            if (!external_cancel_signal_path.empty()
+            if (external_cancel_publisher != nullptr
                 && (cancel_signal.signal_version != last_cancel_signal_version
                     || cancel_signal.valid != last_cancel_signal_valid)) {
-                atomic_write(external_cancel_signal_path, external_cancel_signal_json(
-                    cancel_signal, model_sha, external_cancel_rule_sha256,
-                    now_mono, wall_now_ns(), started_monotonic_ns));
+                const ExternalCancelPublishRecord record{
+                    cancel_signal, now_mono, wall_now_ns()};
+                if (!external_cancel_publisher->publish(record)) {
+                    throw std::runtime_error("external cancel signal publisher queue failed");
+                }
                 last_cancel_signal_version = cancel_signal.signal_version;
                 last_cancel_signal_valid = cancel_signal.valid;
             }
@@ -1455,6 +1473,8 @@ int main(int argc, char** argv) {
             const auto deribit_status = deribit.snapshot();
             const auto binance_usdm_depth_status = binance_usdm_depth.snapshot();
             const auto binance_usdm_market_status = binance_usdm_market.snapshot();
+            const auto external_cancel_publish_status = external_cancel_publisher != nullptr
+                ? external_cancel_publisher->snapshot() : ExternalCancelPublisherSnapshot{};
             json::array venues;
             venues.emplace_back(transport_json(binance_status, "BINANCE_SPOT"));
             venues.emplace_back(transport_json(coinbase_status, "COINBASE_SPOT"));
@@ -1512,6 +1532,16 @@ int main(int argc, char** argv) {
                 {"external_cancel_signal", external_cancel_signal_json(
                     cancel_signal, model_sha, external_cancel_rule_sha256,
                     now_mono, wall_now_ns(), started_monotonic_ns)},
+                {"external_cancel_publisher", {
+                    {"enabled", external_cancel_publisher != nullptr},
+                    {"submitted", external_cancel_publish_status.submitted},
+                    {"written", external_cancel_publish_status.written},
+                    {"queued", external_cancel_publish_status.queued},
+                    {"dropped", external_cancel_publish_status.dropped},
+                    {"failures", external_cancel_publish_status.failures},
+                    {"healthy", external_cancel_publish_status.healthy != 0},
+                    {"in_flight", external_cancel_publish_status.in_flight != 0},
+                }},
                 {"derivative_contexts", derivative_context_json(snapshot)},
                 {"drained_last_cycle", drained},
                 {"causal_merge_sort_fallbacks", causal_sort_fallbacks},
