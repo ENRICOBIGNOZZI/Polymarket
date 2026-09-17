@@ -9,6 +9,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 TEMPLATE = ROOT / "infra/aws/v7_london_shootout.json"
 PROVISION = ROOT / "ops/v7_london_provision.sh"
+POLICY = ROOT / "config/v7_london_az_shootout.json"
 BOOTSTRAP = ROOT / "ops/v7_london_bootstrap.sh"
 
 
@@ -73,6 +74,30 @@ class LondonProvisioningContractTests(unittest.TestCase):
         self.assertNotIn("readarray", source)
         self.assertNotIn("mapfile", source)
         self.assertNotIn("TS_AUTHKEY", source)
+
+    def test_hft_instance_policy_requires_real_cores_without_smt(self) -> None:
+        policy = json.loads(POLICY.read_text(encoding="utf-8"))
+        constraints = policy["instance_constraints"]
+        self.assertGreaterEqual(constraints["minimum_physical_cores"], 4)
+        self.assertEqual(constraints["maximum_threads_per_core"], 1)
+        self.assertGreaterEqual(constraints["minimum_vcpus"], 4)
+        preferences = policy["instance_type_preferences"]
+        self.assertGreaterEqual(len(preferences), 2)
+        self.assertTrue(all(x.startswith(("c8a.", "c7a.")) for x in preferences))
+        self.assertTrue(preferences[0].endswith("2xlarge"))
+
+    def test_provisioner_checks_actual_instance_cpu_topology(self) -> None:
+        source = PROVISION.read_text(encoding="utf-8")
+        for required in (
+            "describe-instance-types",
+            "DefaultCores",
+            "DefaultThreadsPerCore",
+            "DefaultVCpus",
+            "minimum_physical_cores",
+            "maximum_threads_per_core",
+            "instance_topology",
+        ):
+            self.assertIn(required, source)
 
     def test_wrong_region_fails_before_aws_access(self) -> None:
         env = os.environ.copy()
