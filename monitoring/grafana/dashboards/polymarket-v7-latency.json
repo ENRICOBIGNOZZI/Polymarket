@@ -96,7 +96,7 @@
     {
       "id": 2,
       "type": "stat",
-      "title": "Receive → intent p99",
+      "title": "Structural feed p99",
       "gridPos": {
         "h": 4,
         "w": 6,
@@ -109,7 +109,7 @@
       },
       "targets": [
         {
-          "expr": "(polymarket_v7_latency_stage_nanoseconds{stage=\"receive_to_intent_ns\",percentile=\"p99\",job=\"polymarket-v7\",instance=\"$instance\"} / 1e6) and on(job,instance) (polymarket_v7_exporter_snapshot_usable{job=\"polymarket-v7\",instance=\"$instance\"} == 1) and on(job,instance) (up{job=\"polymarket-v7\",instance=\"$instance\"} == 1)",
+          "expr": "(polymarket_v7_latency_stage_nanoseconds{stage=\"fast_structural_feed_ns\",percentile=\"p99\",job=\"polymarket-v7\",instance=\"$instance\"} / 1e6) and on(job,instance) (polymarket_v7_exporter_snapshot_usable{job=\"polymarket-v7\",instance=\"$instance\"} == 1) and on(job,instance) (up{job=\"polymarket-v7\",instance=\"$instance\"} == 1)",
           "refId": "A",
           "instant": true,
           "range": false,
@@ -166,7 +166,7 @@
     {
       "id": 3,
       "type": "stat",
-      "title": "Cancel/OMS queue p99",
+      "title": "Structural decision p99",
       "gridPos": {
         "h": 4,
         "w": 6,
@@ -179,7 +179,7 @@
       },
       "targets": [
         {
-          "expr": "(polymarket_v7_latency_stage_nanoseconds{stage=\"tx_queue_ns\",percentile=\"p99\",job=\"polymarket-v7\",instance=\"$instance\"} / 1e6) and on(job,instance) (polymarket_v7_exporter_snapshot_usable{job=\"polymarket-v7\",instance=\"$instance\"} == 1) and on(job,instance) (up{job=\"polymarket-v7\",instance=\"$instance\"} == 1)",
+          "expr": "(polymarket_v7_latency_stage_nanoseconds{stage=\"fast_structural_decision_ns\",percentile=\"p99\",job=\"polymarket-v7\",instance=\"$instance\"} / 1e6) and on(job,instance) (polymarket_v7_exporter_snapshot_usable{job=\"polymarket-v7\",instance=\"$instance\"} == 1) and on(job,instance) (up{job=\"polymarket-v7\",instance=\"$instance\"} == 1)",
           "refId": "A",
           "instant": true,
           "range": false,
@@ -245,7 +245,7 @@
       },
       "options": {
         "mode": "markdown",
-        "content": "Internal and PAPER measurements are not network/CLOB proof. Authenticated order/cancel probes remain disabled."
+        "content": "Current live panels use the active Fast Structural feed/decision CSV. Legacy maker stages appear only when that legacy source exists. PAPER measurements are not authenticated order/cancel or real-money path proof."
       }
     },
     {
@@ -277,7 +277,7 @@
       ],
       "fieldConfig": {
         "defaults": {
-          "unit": "µs",
+          "unit": "\u00b5s",
           "noValue": "UNAVAILABLE",
           "mappings": [
             {
@@ -350,7 +350,7 @@
       ],
       "fieldConfig": {
         "defaults": {
-          "unit": "µs",
+          "unit": "\u00b5s",
           "noValue": "UNAVAILABLE",
           "mappings": [
             {
