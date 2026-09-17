@@ -28,7 +28,7 @@ def run(argv: list[str], *, check: bool = True) -> subprocess.CompletedProcess[s
 
 
 def parse_coalesce(text: str) -> dict[str, Any]:
-    adaptive = re.search(r"Adaptive RX:\s*(on|off)\s+TX:\s*(on|off)", text, re.I)
+    adaptive = re.search(r"Adaptive RX:\s*(on|off)\s+TX:\s*(on|off|n/a)", text, re.I)
     rx = re.search(r"^rx-usecs:\s*(\d+)", text, re.M)
     tx = re.search(r"^tx-usecs:\s*(\d+)", text, re.M)
     if not adaptive or not rx or not tx:
@@ -168,7 +168,7 @@ def preflight(args: argparse.Namespace) -> None:
         raise RuntimeError("latency probe executable required")
     if service_active("polymarket-v7-paper.service"):
         raise RuntimeError("PAPER runtime must remain stopped during ENA A/B")
-    observed = run(["git", "-C", str(args.app), "rev-parse", "HEAD"]).stdout.strip()
+    observed = run(["git", "-c", f"safe.directory={args.app}", "-C", str(args.app), "rev-parse", "HEAD"]).stdout.strip()
     if observed != args.expected_sha:
         raise RuntimeError("repository SHA mismatch")
 

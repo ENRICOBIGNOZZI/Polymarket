@@ -21,6 +21,14 @@ def test_parse_ena_coalescing() -> None:
     }
 
 
+def test_parse_real_ena_coalescing_with_tx_na() -> None:
+    value = module.parse_coalesce("""Coalesce parameters for enp39s0:\nAdaptive RX: on  TX: n/a\nrx-usecs:\t20\ntx-usecs:\t64\n""")
+    assert value == {
+        "adaptive_rx": "on", "adaptive_tx": "n/a",
+        "rx_usecs": 20, "tx_usecs": 64,
+    }
+
+
 def test_role_selection_reserves_decision_from_feed_irqs() -> None:
     roles = module.select_roles(list(range(8)))
     assert roles["decision"] == 4
@@ -63,6 +71,7 @@ def test_profiles_are_interleaved_and_rollback_verified() -> None:
     assert 'role_cpus()["decision"]' not in source
     assert 'receive_path_on_feed_cpu' in source
     assert 'incoming_napi_id' in source
+    assert 'safe.directory={args.app}' in source
 
 
 def test_ssm_wrapper_is_three_zone_paper_only() -> None:
