@@ -3,6 +3,7 @@ import json, sys
 from pathlib import Path
 ROOT=Path(__file__).resolve().parents[1]
 sys.path.insert(0,str(ROOT/'scripts'))
+import v7_lead_lag_taker_runtime as mod
 from v7_lead_lag_taker_runtime import signal_candidate, validate_config
 
 SHA='a'*40
@@ -132,6 +133,7 @@ def test_forward_runtime_fill_and_settlement_are_canonical_paper_events():
         assert capacity_book['schema']=='polymarket_v7_lead_lag_capacity_book_v1'
         assert capacity_book['ask_levels']==[{'price':0.4,'size':100.0}]
         assert capacity_book['fee_schedule']['rate']==0.07
+        assert capacity_book['observed_ladder_complete_as_received'] is True
         assert fill['filled_size']==5.0 and fill['fill_price']==0.40
         assert fill['metadata']['paper_forward_test'] is True
         assert fill['metadata']['hold_to_settlement'] is True
@@ -176,6 +178,23 @@ def test_forward_runtime_never_chases_a_worse_arrival_ask():
         assert r.state['skip_reasons']['ARRIVAL_NO_CHASE_OR_DEPTH']==1
 
 
+
+def test_capacity_book_metadata_is_omitted_not_truncated_when_too_many_levels():
+    asks=tuple((0.001 + i * 0.0001, 1.0) for i in range(mod.CAPACITY_BOOK_MAX_LEVELS + 1))
+    book=mod.Book('yes', ((0.001,1.0),), asks, 0.0001, 1.0, 1000, 1001, 'oversized')
+    value, reason=mod.capacity_book_evidence(book, {'rate':0.0,'exponent':1.0,'takerOnly':True}, 0.5)
+    assert value is None
+    assert reason == 'TOO_MANY_ASK_LEVELS'
+
+
+def test_capacity_book_metadata_has_explicit_serialized_bound():
+    book=mod.Book('yes', ((0.39,10.0),), ((0.4,10.0),(0.41,20.0)), 0.01, 1.0, 1000, 1001, 'bounded')
+    value, reason=mod.capacity_book_evidence(book, {'rate':0.07,'exponent':1.0,'takerOnly':True}, 0.4)
+    assert reason is None and value is not None
+    payload=json.dumps(value,sort_keys=True,separators=(',',':'),allow_nan=False).encode()
+    assert len(payload) <= mod.CAPACITY_BOOK_MAX_BYTES
+    assert value['ask_levels'] == [{'price':0.4,'size':10.0},{'price':0.41,'size':20.0}]
+
 if __name__=='__main__':
     test_frozen_rule_maps_up_to_yes_and_down_to_no()
     test_rule_fails_closed_outside_frozen_time_and_signal_age()
@@ -183,4 +202,6 @@ if __name__=='__main__':
     test_forward_runtime_fill_and_settlement_are_canonical_paper_events()
     test_forward_runtime_disk_pressure_blocks_before_book_or_receipt()
     test_forward_runtime_never_chases_a_worse_arrival_ask()
-    print('6 lead-lag taker tests passed')
+    test_capacity_book_metadata_is_omitted_not_truncated_when_too_many_levels()
+    test_capacity_book_metadata_has_explicit_serialized_bound()
+    print('8 lead-lag taker tests passed')

@@ -42,6 +42,7 @@ def ledger_rows(*, with_ladder: bool = True) -> list[dict]:
             ],
             "fee_schedule": {"rate": 0.07, "exponent": 1.0, "takerOnly": True},
             "candidate_limit_price": 0.20,
+            "observed_ladder_complete_as_received": True,
         }
     fill = base_event("FILL")
     fill.update({"filled_size": 5.0, "fee": 0.056, "recorded_ts_ms": 1001})

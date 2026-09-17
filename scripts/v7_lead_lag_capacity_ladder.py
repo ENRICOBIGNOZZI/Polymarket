@@ -93,6 +93,8 @@ def collect_ladder_trades(path: Path) -> list[LadderTrade]:
             continue
         if capacity.get("schema") != "polymarket_v7_lead_lag_capacity_book_v1":
             raise ValueError("unknown lead-lag capacity-book schema")
+        if capacity.get("observed_ladder_complete_as_received") is not True:
+            raise ValueError("capacity-book is not explicitly complete as received")
         if row.get("paper_only") is not True or row.get("authenticated_execution") is not False:
             raise ValueError("full-ladder replay refuses non-PAPER evidence")
         if row.get("real_order_submission") not in (None, False):
