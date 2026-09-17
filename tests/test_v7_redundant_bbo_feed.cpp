@@ -1,5 +1,6 @@
 #include "pm/v7_redundant_bbo_feed.hpp"
 #include <cassert>
+#include <stdexcept>
 #include <vector>
 using namespace pm::v7::redundant_bbo;
 int main(){
@@ -8,6 +9,12 @@ int main(){
  const auto before=feed.snapshot(); assert(!before.started && before.disabled_mask==0);
  const auto generations=feed.generations(); assert(generations[0]==0 && generations[1]==0 && generations[2]==0);
  Decision d; assert(!feed.try_next_actionable(d));
+ Feed tuned("wss://ws-subscriptions-clob.polymarket.com/ws/market",bindings,Mode::Quorum2Of3,50);
+ assert(!tuned.snapshot().started);
+ bool rejected=false;
+ try { Feed invalid("wss://ws-subscriptions-clob.polymarket.com/ws/market",bindings,Mode::Quorum2Of3,2001); }
+ catch(const std::invalid_argument&) { rejected=true; }
+ assert(rejected);
  // Constructor/destructor are deliberately network-cold. start() is not called.
  return 0;
 }

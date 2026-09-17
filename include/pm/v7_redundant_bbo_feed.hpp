@@ -34,7 +34,7 @@ struct FeedSnapshot {
 class Feed final {
 public:
     Feed(std::string url, std::vector<polymarket_bbo::Binding> bindings,
-         Mode mode = Mode::Quorum2Of3);
+         Mode mode = Mode::Quorum2Of3, int socket_busy_poll_us = 0);
     ~Feed();
     Feed(const Feed&) = delete;
     Feed& operator=(const Feed&) = delete;

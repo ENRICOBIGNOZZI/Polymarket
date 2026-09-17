@@ -34,7 +34,8 @@ public:
                         std::vector<std::string> asset_ids,
                         std::size_t shard_size,
                         MessageHandler on_message,
-                        ErrorHandler on_error = {});
+                        ErrorHandler on_error = {},
+                        int socket_busy_poll_us = 0);
     ~MarketWebSocketFeed();
 
     MarketWebSocketFeed(const MarketWebSocketFeed&) = delete;

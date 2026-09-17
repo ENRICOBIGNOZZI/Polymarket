@@ -1,4 +1,5 @@
 #include "pm/fast_ws.hpp"
+#include "pm/socket_tuning.hpp"
 
 #include <boost/asio/connect.hpp>
 #include <boost/asio/ip/tcp.hpp>
@@ -27,6 +28,7 @@
 #include <functional>
 #include <sstream>
 #include <stdexcept>
+#include <system_error>
 #include <thread>
 #include <utility>
 #include <version>
@@ -171,6 +173,7 @@ struct MarketWebSocketFeed::Impl {
     std::vector<std::string> subscriptions;
     MessageHandler on_message;
     ErrorHandler on_error;
+    int socket_busy_poll_us = 0;
 #if PM_USE_STD_JTHREAD
     std::vector<std::jthread> threads;
 #else
@@ -188,9 +191,11 @@ struct MarketWebSocketFeed::Impl {
     std::atomic<std::uint64_t> errors{0};
 
     Impl(std::string url, std::vector<std::string> ids, std::size_t shard_size,
-         MessageHandler message_handler, ErrorHandler error_handler)
+         MessageHandler message_handler, ErrorHandler error_handler, int busy_poll_us)
         : endpoint(parse_wss_url(std::move(url))), on_message(std::move(message_handler)),
-          on_error(std::move(error_handler)) {
+          on_error(std::move(error_handler)), socket_busy_poll_us(busy_poll_us) {
+        if (socket_busy_poll_us < 0 || socket_busy_poll_us > pm::network::kMaxBusyPollUs)
+            throw std::invalid_argument("socket_busy_poll_us out of range");
         ids.erase(std::remove_if(ids.begin(), ids.end(), [](const std::string& id) {
             return id.empty();
         }), ids.end());
@@ -251,6 +256,12 @@ struct MarketWebSocketFeed::Impl {
                     const auto resolved = resolver.resolve(endpoint.host, endpoint.port);
                     beast::get_lowest_layer(ws).connect(resolved);
                 }
+                if (const int error = pm::network::apply_busy_poll(
+                        beast::get_lowest_layer(ws).socket().native_handle(), socket_busy_poll_us);
+                    error != 0) {
+                    throw std::system_error(error, std::generic_category(), "SO_BUSY_POLL");
+                }
+                beast::get_lowest_layer(ws).socket().set_option(tcp::no_delay(true));
                 ws.next_layer().handshake(ssl::stream_base::client);
 
                 beast::get_lowest_layer(ws).expires_never();
@@ -443,9 +454,11 @@ MarketWebSocketFeed::MarketWebSocketFeed(std::string url,
                                          std::vector<std::string> asset_ids,
                                          std::size_t shard_size,
                                          MessageHandler on_message,
-                                         ErrorHandler on_error)
+                                         ErrorHandler on_error,
+                                         int socket_busy_poll_us)
     : impl_(std::make_unique<Impl>(std::move(url), std::move(asset_ids), shard_size,
-                                   std::move(on_message), std::move(on_error))) {}
+                                   std::move(on_message), std::move(on_error),
+                                   socket_busy_poll_us)) {}
 
 MarketWebSocketFeed::~MarketWebSocketFeed() { stop(); }
 

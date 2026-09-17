@@ -148,6 +148,10 @@ add_executable(polymarket_v7_feed_race_probe src/v7_feed_race_probe.cpp)
 target_link_libraries(polymarket_v7_feed_race_probe PRIVATE pm_v7_external)
 target_compile_options(polymarket_v7_feed_race_probe PRIVATE -Wall -Wextra -Wpedantic)
 
+add_executable(polymarket_v7_redundant_bbo_ab src/v7_redundant_bbo_ab.cpp)
+target_link_libraries(polymarket_v7_redundant_bbo_ab PRIVATE pm_v7_redundant_bbo)
+target_compile_options(polymarket_v7_redundant_bbo_ab PRIVATE -Wall -Wextra -Wpedantic)
+
 add_executable(polymarket_v7_ingress_latency_bench src/v7_ingress_latency_bench.cpp)
 target_link_libraries(polymarket_v7_ingress_latency_bench PRIVATE pm_v7_external)
 target_compile_options(polymarket_v7_ingress_latency_bench PRIVATE -Wall -Wextra -Wpedantic)

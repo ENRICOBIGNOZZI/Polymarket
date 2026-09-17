@@ -37,7 +37,8 @@ struct Feed::Impl {
     std::atomic<std::uint8_t> disabled_mask{0};
     std::atomic<bool> started{false};
 
-    Impl(std::string url, const std::vector<polymarket_bbo::Binding>& bindings, Mode mode)
+    Impl(std::string url, const std::vector<polymarket_bbo::Binding>& bindings, Mode mode,
+         int socket_busy_poll_us)
         : decoder(bindings), gate(mode) {
         if (url.empty()) url = std::string(kDefaultEndpoint);
         std::vector<std::string> assets;
@@ -53,7 +54,8 @@ struct Feed::Impl {
                 [this, lane](std::string_view payload,
                              const pm::fast::FeedReceiveStamp& stamp,
                              std::size_t) { on_frame(lane, payload, stamp.monotonic_ns); },
-                [this, lane](std::size_t, std::string_view) { disable_lane(lane); });
+                [this, lane](std::size_t, std::string_view) { disable_lane(lane); },
+                socket_busy_poll_us);
         }
     }
 
@@ -122,8 +124,9 @@ struct Feed::Impl {
     }
 };
 
-Feed::Feed(std::string url, std::vector<polymarket_bbo::Binding> bindings, Mode mode)
-    : impl_(std::make_unique<Impl>(std::move(url), bindings, mode)) {}
+Feed::Feed(std::string url, std::vector<polymarket_bbo::Binding> bindings, Mode mode,
+           int socket_busy_poll_us)
+    : impl_(std::make_unique<Impl>(std::move(url), bindings, mode, socket_busy_poll_us)) {}
 Feed::~Feed() { stop(); }
 
 void Feed::start() {
