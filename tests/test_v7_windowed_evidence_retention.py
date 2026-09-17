@@ -234,6 +234,23 @@ class WindowedRetentionTest(unittest.TestCase):
             self.assertEqual(receipt['source']['sha256'],hashlib.sha256(payload).hexdigest())
             self.assertFalse(receipt['raw_detail_available'])
 
+    def test_unindexed_old_archived_pm_book_gets_hash_receipt_before_retirement(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            runs=Path(tmp)/'runs'; store=runs/'paper_v7_durable/permanent_evidence/store'; store.mkdir(parents=True)
+            old=time.time_ns()-8*3600*10**9
+            cutover=runs/'paper_v7_archives'/('cutover-'+'a'*40+'-1-1')
+            source=cutover/'research/repricing_book/book_observations/session.segment-1000000.jsonl.gz'
+            source.parent.mkdir(parents=True); payload=b'archived-pm-book-detail'; source.write_bytes(payload); os.utime(source,ns=(old,old))
+            out=run(runs,raw_detail_seconds=6*3600,maximum_seconds=30)
+            self.assertFalse(source.exists())
+            self.assertEqual(out['removed_unindexed_source_files'],1)
+            receipts=list((store/'unindexed_windowed_source_tombstones').glob('*/*.json'))
+            self.assertEqual(len(receipts),1)
+            receipt=json.loads(receipts[0].read_text())
+            self.assertEqual(Path(receipt['source']['path']).resolve(),source.resolve())
+            self.assertEqual(receipt['source']['source_family'],'pm_causal_book')
+            self.assertFalse(receipt['raw_detail_available'])
+
     def test_recent_unindexed_pm_book_is_preserved(self):
         with tempfile.TemporaryDirectory() as tmp:
             runs=Path(tmp)/'runs'; (runs/'paper_v7_durable/permanent_evidence/store').mkdir(parents=True)
