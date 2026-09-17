@@ -1,11 +1,17 @@
 #include "pm/v7_external_tape.hpp"
 
 #include <algorithm>
+#include <array>
+#include <atomic>
+#include <bit>
 #include <chrono>
+#include <cstddef>
 #include <fstream>
 #include <stdexcept>
 #include <string_view>
 #include <thread>
+#include <type_traits>
+#include <utility>
 #include <iomanip>
 #include <sstream>
 #include <fcntl.h>
@@ -13,6 +19,49 @@
 
 namespace pm::v7::external_fair {
 namespace {
+
+template <class T, std::size_t Capacity>
+class InPlaceSpscRing final {
+    static_assert(Capacity >= 2);
+    static_assert(std::has_single_bit(Capacity));
+    static_assert(std::is_trivially_copyable_v<T>);
+
+public:
+    template <class Fill>
+    [[nodiscard]] bool try_emplace(Fill&& fill)
+        noexcept(noexcept(std::forward<Fill>(fill)(std::declval<T&>()))) {
+        const std::size_t head = head_.load(std::memory_order_relaxed);
+        const std::size_t tail = tail_.load(std::memory_order_acquire);
+        if (head - tail >= Capacity) return false;
+        std::forward<Fill>(fill)(storage_[head & mask_]);
+        head_.store(head + 1, std::memory_order_release);
+        return true;
+    }
+
+    [[nodiscard]] const T* try_front() noexcept {
+        const std::size_t tail = tail_.load(std::memory_order_relaxed);
+        const std::size_t head = head_.load(std::memory_order_acquire);
+        if (tail == head) return nullptr;
+        return &storage_[tail & mask_];
+    }
+
+    void pop_front() noexcept {
+        const std::size_t tail = tail_.load(std::memory_order_relaxed);
+        tail_.store(tail + 1, std::memory_order_release);
+    }
+
+    [[nodiscard]] std::size_t approximate_size() const noexcept {
+        const std::size_t head = head_.load(std::memory_order_acquire);
+        const std::size_t tail = tail_.load(std::memory_order_acquire);
+        return head - tail;
+    }
+
+private:
+    static constexpr std::size_t mask_ = Capacity - 1;
+    std::array<T, Capacity> storage_{};
+    alignas(64) std::atomic<std::size_t> head_{0};
+    alignas(64) std::atomic<std::size_t> tail_{0};
+};
 
 template <std::size_t N>
 void copy_fixed(std::array<char, N>& target,
@@ -276,13 +325,9 @@ void ExternalTapeRecorder::set_suppressed(bool suppressed) noexcept {
 }
 
 struct ExternalRawTapeRecorder::Impl {
-    SpscRing<RawTapeRecord, kExternalRawTapeQueueCapacity> queue{};
-    RawTapeRecord producer_record{};
-    RawTapeRecord writer_record{};
-    using LargeQueue = SpscRing<LargeRawTapeRecord, kExternalLargeRawTapeQueueCapacity>;
+    InPlaceSpscRing<RawTapeRecord, kExternalRawTapeQueueCapacity> queue{};
+    using LargeQueue = InPlaceSpscRing<LargeRawTapeRecord, kExternalLargeRawTapeQueueCapacity>;
     std::unique_ptr<LargeQueue> large_queue{};
-    std::unique_ptr<LargeRawTapeRecord> large_producer_record{};
-    std::unique_ptr<LargeRawTapeRecord> large_writer_record{};
     // Payload storage remains split by size, but publication has one FIFO.
     // Draining either payload queue first can reorder frames (large #1,
     // small #2). Peeking both heads also races with concurrent publication.
@@ -317,8 +362,6 @@ struct ExternalRawTapeRecorder::Impl {
         // ordinary traffic on the compact FIFO, and reserve this bounded
         // queue for the exceptional frame only.
         large_queue = std::make_unique<LargeQueue>();
-        large_producer_record = std::make_unique<LargeRawTapeRecord>();
-        large_writer_record = std::make_unique<LargeRawTapeRecord>();
 
         TapeSessionHeader header;
         header.magic = {'P','M','V','7','R','A','W','!'};
@@ -381,17 +424,21 @@ struct ExternalRawTapeRecorder::Impl {
             while (publication_queue.try_pop(large)) {
                 progressed = true;
                 if (large != 0) {
-                    if (!large_queue->try_pop(*large_writer_record)) {
+                    const auto* record = large_queue->try_front();
+                    if (record == nullptr) {
                         fail_writer();
                         return;
                     }
-                    if (!write_record(*large_writer_record)) return;
+                    if (!write_record(*record)) return;
+                    large_queue->pop_front();
                 } else {
-                    if (!queue.try_pop(writer_record)) {
+                    const auto* record = queue.try_front();
+                    if (record == nullptr) {
                         fail_writer();
                         return;
                     }
-                    if (!write_record(writer_record)) return;
+                    if (!write_record(*record)) return;
+                    queue.pop_front();
                 }
             }
             if (!progressed) {
@@ -427,15 +474,16 @@ bool ExternalRawTapeRecorder::try_record_raw(
         return true;
     }
     const auto sequence = impl_->next_sequence.fetch_add(1, std::memory_order_relaxed) + 1;
-    const auto enqueue = [&](auto& record, auto& queue) noexcept {
-        record.tape_sequence = sequence;
-        record.connection_epoch = connection_epoch;
-        record.receive_monotonic_ns = receive_monotonic_ns;
-        record.receive_wall_ns = receive_wall_ns;
-        record.venue = venue;
-        record.payload_size = static_cast<std::uint32_t>(payload.size());
-        std::memcpy(record.payload.data(), payload.data(), payload.size());
-        return queue.try_push(record);
+    const auto enqueue = [&](auto& queue) noexcept {
+        return queue.try_emplace([&](auto& record) noexcept {
+            record.tape_sequence = sequence;
+            record.connection_epoch = connection_epoch;
+            record.receive_monotonic_ns = receive_monotonic_ns;
+            record.receive_wall_ns = receive_wall_ns;
+            record.venue = venue;
+            record.payload_size = static_cast<std::uint32_t>(payload.size());
+            std::memcpy(record.payload.data(), payload.data(), payload.size());
+        });
     };
     const std::size_t maximum = kExternalLargeRawTapePayloadBytes;
     if (payload.size() > maximum) {
@@ -446,8 +494,8 @@ bool ExternalRawTapeRecorder::try_record_raw(
     }
     const bool large = payload.size() > kExternalRawTapePayloadBytes;
     const bool queued = large
-        ? enqueue(*impl_->large_producer_record, *impl_->large_queue)
-        : enqueue(impl_->producer_record, impl_->queue);
+        ? enqueue(*impl_->large_queue)
+        : enqueue(impl_->queue);
     if (!queued) {
         impl_->dropped.fetch_add(1, std::memory_order_relaxed);
         impl_->dropped_queue_full.fetch_add(1, std::memory_order_relaxed);
