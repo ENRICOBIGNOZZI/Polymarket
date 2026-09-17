@@ -1,4 +1,5 @@
 #include "pm/v7_external_ws.hpp"
+#include "pm/rx_thread_alignment.hpp"
 #include "pm/socket_tuning.hpp"
 #include "pm/v7_external_tape.hpp"
 
@@ -163,7 +164,9 @@ ExternalVenueWsClient::ExternalVenueWsClient(
         || spec_.max_message_bytes == 0
         || spec_.max_message_bytes > kAbsoluteMaxWsMessageBytes
         || spec_.socket_busy_poll_us < 0
-        || spec_.socket_busy_poll_us > pm::network::kMaxBusyPollUs) {
+        || spec_.socket_busy_poll_us > pm::network::kMaxBusyPollUs
+        || std::any_of(spec_.dynamic_rx_cpu_allowlist.begin(), spec_.dynamic_rx_cpu_allowlist.end(),
+                       [](int cpu) { return cpu < 0; })) {
         throw std::invalid_argument("invalid external venue connection spec");
     }
 }
@@ -263,6 +266,7 @@ void ExternalVenueWsClient::run(ExternalStopToken stop) noexcept {
             // the smaller default rather than paying that memory cost.
             auto buffer = std::make_unique<beast::flat_buffer>();
             buffer->reserve(spec_.max_message_bytes);
+            int previous_rx_cpu = -1;
 
             while (!stop.stop_requested()) {
                 buffer->consume(buffer->size());
@@ -272,6 +276,18 @@ void ExternalVenueWsClient::run(ExternalStopToken stop) noexcept {
                 beast::get_lowest_layer(ws).expires_after(std::chrono::seconds(1));
                 ws.read(*buffer);
                 beast::get_lowest_layer(ws).expires_never();
+                const auto rx = pm::network::align_thread_to_socket_rx(
+                    beast::get_lowest_layer(ws).socket().native_handle(),
+                    spec_.dynamic_rx_cpu_allowlist, previous_rx_cpu);
+                if (rx.incoming_cpu >= 0) {
+                    incoming_cpu_.store(rx.incoming_cpu, std::memory_order_relaxed);
+                    previous_rx_cpu = rx.incoming_cpu;
+                }
+                if (rx.incoming_napi_id >= 0)
+                    incoming_napi_id_.store(rx.incoming_napi_id, std::memory_order_relaxed);
+                if (rx.applied) rx_realignments_.fetch_add(1, std::memory_order_relaxed);
+                if (rx.rejected) rx_rejections_.fetch_add(1, std::memory_order_relaxed);
+                if (rx.pin_error != 0) rx_alignment_errors_.fetch_add(1, std::memory_order_relaxed);
                 const auto receive_ns = monotonic_now_ns();
                 const auto wall_ns = wall_now_ns();
                 frames_received_.fetch_add(1, std::memory_order_relaxed);
@@ -358,6 +374,11 @@ ExternalWsSnapshot ExternalVenueWsClient::snapshot() const noexcept {
     out.decode_failures = decode_failures_.load(std::memory_order_acquire);
     out.last_receive_monotonic_ns = last_receive_monotonic_ns_.load(std::memory_order_acquire);
     out.last_receive_wall_ns = last_receive_wall_ns_.load(std::memory_order_acquire);
+    out.rx_realignments = rx_realignments_.load(std::memory_order_acquire);
+    out.rx_rejections = rx_rejections_.load(std::memory_order_acquire);
+    out.rx_alignment_errors = rx_alignment_errors_.load(std::memory_order_acquire);
+    out.incoming_cpu = incoming_cpu_.load(std::memory_order_acquire);
+    out.incoming_napi_id = incoming_napi_id_.load(std::memory_order_acquire);
     out.connected = connected_.load(std::memory_order_acquire) ? 1 : 0;
     out.healthy = healthy_.load(std::memory_order_acquire) ? 1 : 0;
     return out;
