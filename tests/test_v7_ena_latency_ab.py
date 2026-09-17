@@ -80,6 +80,7 @@ def test_ssm_wrapper_is_three_zone_paper_only() -> None:
     source = SSM.read_text(encoding="utf-8")
     assert "for zone, instance_id in instances.items()" in source
     assert "polymarket-v7-paper.service" in source
+    assert "flock -n 9" in source
     assert 'v["authenticated_execution"] is False' in source
     assert 'v["real_order_submission"] is False' in source
     assert "v['persistent_tuning'] is False" in source
