@@ -1,7 +1,7 @@
 apiVersion: 1
 
 datasources:
-  - name: Polymarket V7 Prometheus
+  - name: Polymarket V7 Crypto Prometheus
     uid: prometheus-v7
     type: prometheus
     access: proxy

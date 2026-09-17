@@ -59,7 +59,7 @@ def target(expr, legend, ref, source=None, history=False):
 
 
 def stat(pid, title, expr, x, y, w=4, unit="short", decimals=0, source=None, mapping=None, description="", raw=False):
-    short_titles = {101:"Attention",102:"Runtime",103:"Accounting",104:"Order mode",105:"Data age",106:"Exporter",111:"Verified PnL",112:"Ledger PnL",113:"Equity change",114:"Forward PnL",115:"PAPER equity",116:"Drawdown",121:"Candidates",122:"Receipts",123:"Entries",124:"Open positions",125:"Settled",126:"Rejected",129:"Last event",141:"Submitted",142:"Completed",143:"Completion",145:"Terminal events",146:"Capital hours",162:"Single writer",163:"Exact SHA",164:"Kill switch",165:"Restarts",166:"Free disk",169:"Runtime uptime",170:"Risk authority",171:"Engine count",183:"Scan complete",184:"Pages",191:"Latency data"}
+    short_titles = {101:"Attention",102:"Runtime",103:"Accounting",104:"Order mode",105:"Data age",106:"Exporter",111:"Verified PnL",112:"Ledger PnL",113:"Equity change",114:"Forward PnL",115:"PAPER equity",116:"Drawdown",121:"Candidates",122:"Receipts",123:"Entries",124:"Open positions",125:"Settled",126:"Rejected",129:"Last event",141:"Submitted",142:"Completed",143:"Completion",145:"Terminal events",146:"Capital hours",162:"Single writer",163:"Exact SHA",164:"Kill switch",165:"Restarts",166:"Free disk",169:"Runtime uptime",170:"Crypto risk",171:"Crypto algos",183:"Scan complete",184:"Pages",191:"Latency data"}
     full_title = title
     title = short_titles.get(pid, title)
     if title != full_title:
@@ -177,22 +177,22 @@ def diagnostics():
         stat(164,"Kill Switch","polymarket_runtime_killed",12,67,source="portfolio",mapping={0:("DISENGAGED","green"),1:("ENGAGED","red")}),
         stat(165,"Restarts / Window","polymarket_v7_restart_count_window",16,67),
         stat(166,"Disk Free","polymarket_v7_disk_free_ratio",20,67,unit="percentunit",decimals=1),
-        chart(167,"Runtime / component checks · not accounting verification",[("polymarket_v7_health","runtime contract"),("polymarket_v7_component_ready","{{component}}"),("polymarket_external_fair_present * polymarket_external_fair_healthy","crypto evidence feed")],0,71),
-        table(168,"Engine reporting source · configured is not running","polymarket_v7_engine_reported_source_info",12,71,source="portfolio",columns={"engine":"Engine","source":"Reported source"}),
+        chart(167,"Crypto runtime / component checks · not accounting verification",[("polymarket_v7_health","runtime contract"),("polymarket_v7_component_ready","{{component}}"),("polymarket_external_fair_present * polymarket_external_fair_healthy","crypto evidence feed")],0,71),
+        table(168,"Crypto engine telemetry source","polymarket_v7_engine_reported_source_info",12,71,source="portfolio",columns={"engine":"Crypto engine","source":"Telemetry source"}),
         stat(169,"Runtime uptime","polymarket_v7_runtime_uptime_seconds",0,79,w=6,unit="s"),
-        stat(170,"Economic New-Risk Authority","polymarket_v7_economic_new_risk_ready",6,79,w=6,mapping={0:("BLOCKED · EXPECTED","yellow"),1:("AUTHORIZED","red")},description="Economic alpha authorization is separate from the frozen PAPER forward test. Blocked does not mean the forward test is stopped."),
-        stat(171,"Configured algorithm count","polymarket_v7_live_algorithm_count",12,79,w=6),
-        table(172,"Configured engines · not execution proof","polymarket_v7_economic_engine_configured",18,79,w=6),
-        chart(173,"Ledger diagnostics · event counts, not unique opportunities",[("polymarket_execution_candidates","candidate events"),("polymarket_execution_makes","make events"),("polymarket_execution_takes","take events"),("polymarket_execution_arbs","arb events"),("polymarket_execution_cancels","cancel events"),("polymarket_execution_withdraws","withdraw events"),("polymarket_execution_effective_orders","effective-order events")],0,85),
+        stat(170,"Crypto New-Risk Authority","polymarket_v7_economic_new_risk_ready",6,79,w=6,mapping={0:("BLOCKED · EXPECTED","yellow"),1:("AUTHORIZED","red")},description="Economic alpha authorization is separate from the frozen PAPER forward test. Blocked does not mean the forward test is stopped."),
+        stat(171,"Crypto live algorithm count","polymarket_v7_live_algorithm_count",12,79,w=6),
+        table(172,"Crypto engine configured · not execution proof","polymarket_v7_economic_engine_configured",18,79,w=6),
+        chart(173,"Crypto execution diagnostics · event counts, not unique opportunities",[("polymarket_execution_candidates","candidate events"),("polymarket_execution_makes","make events"),("polymarket_execution_takes","take events"),("polymarket_execution_cancels","cancel events"),("polymarket_execution_withdraws","withdraw events"),("polymarket_execution_effective_orders","effective-order events")],0,85),
         stat(175,"Raw portfolio reconciliation","polymarket_v7_portfolio_reconciled",0,93,w=12,mapping={0:("DIVERGED","red"),1:("MATCH","green")}),
-        chart(174,"Accounting residuals · component state minus ledger",[("polymarket_v7_reconciliation_pnl_difference_usd","{{strategy}}")],12,85,unit="currencyUSD",decimals=3),
+        chart(174,"Crypto accounting residuals · component state minus ledger",[("polymarket_v7_reconciliation_pnl_difference_usd","{{strategy}}")],12,85,unit="currencyUSD",decimals=3),
     ]
     universe = [
-        chart(181,"Universe coverage · markets",[("polymarket_v7_universe_discovered_markets","discovered"),("polymarket_v7_universe_eligible_markets","eligible"),("polymarket_v7_universe_tier_markets","{{tier}}")],0,68),
-        chart(182,"Discovery duration · milliseconds",[("polymarket_v7_universe_scan_duration_milliseconds","scan")],12,68,unit="ms",decimals=1),
+        chart(181,"Crypto universe coverage · markets",[("polymarket_v7_universe_discovered_markets","discovered"),("polymarket_v7_universe_eligible_markets","eligible"),("polymarket_v7_universe_tier_markets","{{tier}}")],0,68),
+        chart(182,"Crypto universe discovery · milliseconds",[("polymarket_v7_universe_scan_duration_milliseconds","scan")],12,68,unit="ms",decimals=1),
         stat(183,"Exhaustive discovery","polymarket_v7_universe_discovery_exhaustive",0,76,w=6,mapping={0:("INCOMPLETE","red"),1:("EXHAUSTIVE","green")}),
         stat(184,"Pagination pages","polymarket_v7_universe_pages",6,76,w=6),
-        table(185,"Resource limits · dimension shown explicitly","polymarket_v7_universe_resource_limit",12,76),
+        table(185,"Crypto universe resource limits · dimension shown explicitly","polymarket_v7_universe_resource_limit",12,76),
         chart(186,"Lead-lag label collection · observations",[("polymarket_v7_lead_lag_collector_origins","origins"),("polymarket_v7_lead_lag_collector_labels","labels"),("polymarket_v7_lead_lag_collector_nominal_horizon_eligible_labels","nominal eligible")],0,82,source="lead_lag_collector"),
     ]
     latency = [
@@ -212,14 +212,14 @@ def diagnostics():
 
 def common(dashboard):
     dashboard.update({"schemaVersion":39,"refresh":"10s","timezone":"Europe/Zurich","time":{"from":"now-1h","to":"now"},"editable":False,"graphTooltip":1})
-    dashboard["templating"]={"list":[{"name":"instance","label":"Runtime target","type":"query","datasource":DS,"definition":'label_values(up{job="polymarket-v7"}, instance)',"query":{"query":'label_values(up{job="polymarket-v7"}, instance)',"refId":"instance"},"refresh":1,"sort":1,"multi":False,"includeAll":False,"current":{"selected":False,"text":"127.0.0.1:9108","value":"127.0.0.1:9108"},"options":[]}]}
-    dashboard["links"]=[{"title":title,"type":"link","url":"/d/"+uid,"includeVars":True,"keepTime":True,"targetBlank":False} for title,uid in (("Control Room","polymarket-v7"),("Latency evidence","polymarket-v7-latency"),("Crypto evidence","polymarket-v7-external-fair")) if uid!=dashboard["uid"]]
+    dashboard["templating"]={"list":[{"name":"instance","label":"Crypto runtime target","type":"query","datasource":DS,"definition":'label_values(up{job="polymarket-v7"}, instance)',"query":{"query":'label_values(up{job="polymarket-v7"}, instance)',"refId":"instance"},"refresh":1,"sort":1,"multi":False,"includeAll":False,"current":{"selected":False,"text":"127.0.0.1:9108","value":"127.0.0.1:9108"},"options":[]}]}
+    dashboard["links"]=[{"title":title,"type":"link","url":"/d/"+uid,"includeVars":True,"keepTime":True,"targetBlank":False} for title,uid in (("Crypto Control Room","polymarket-v7"),("Crypto Latency","polymarket-v7-latency"),("Crypto Settlement","polymarket-v7-external-fair")) if uid!=dashboard["uid"]]
     return dashboard
 
 
 def main():
     destination=HERE/"grafana/dashboards/polymarket-v7.json"
-    dashboard=common({"uid":"polymarket-v7","title":"Polymarket V7 — 24/7 PAPER Control Room","version":1,"tags":["polymarket","v7","paper","canonical-ledger","truth-v1"],"annotations":{"list":[]},"panels":build()+diagnostics()})
+    dashboard=common({"uid":"polymarket-v7","title":"Polymarket V7 — Crypto PAPER Control Room","version":1,"tags":["polymarket","v7","crypto","paper","canonical-ledger","truth-v1"],"annotations":{"list":[]},"panels":build()+diagnostics()})
     destination.write_text(json.dumps(dashboard,indent=2,ensure_ascii=False)+"\n")
 
 

@@ -19,6 +19,7 @@
   },
   "grafana": {
     "canonical_operator_home": true,
+    "crypto_only": true,
     "dashboard_file": "monitoring/grafana/dashboards/polymarket-v7.json",
     "dashboard_uid": "polymarket-v7",
     "datasource_file": "monitoring/grafana/provisioning/datasources/prometheus-v7.yml",
@@ -71,9 +72,9 @@
   "run_root": "runs/paper_v7_live",
   "schema": "polymarket_v7_monitoring_manifest_v3",
   "supervision": {
+    "bounded_restart_metric": "polymarket_v7_restart_count_window",
     "crypto_universe_config": "config/v7_crypto_universe.json",
     "crypto_universe_status": "universe/status.json",
-    "bounded_restart_metric": "polymarket_v7_restart_count_window",
     "entrypoint": "ops/v7_service_entrypoint.sh",
     "exact_sha_metric": "polymarket_v7_exact_sha_ok",
     "fee_reward_registry": "control/fee_reward_registry.json",

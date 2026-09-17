@@ -190,6 +190,8 @@ for rel in "$DASHBOARD_FILE" "$DATASOURCE_FILE" "$PROVIDER_FILE" "$PROMETHEUS_FI
   [[ -f "$APP_DIR/$rel" ]] || { echo "fatal: missing V7 monitoring asset: $rel" >&2; exit 78; }
 done
 
+python3 "$APP_DIR/monitoring/validate_crypto_grafana.py" --repository-root "$APP_DIR" >/dev/null
+
 python3 - "$APP_DIR/$DASHBOARD_FILE" "$DASHBOARD_UID" <<'PY'
 import json,sys
 from pathlib import Path
@@ -283,4 +285,4 @@ printf 'dashboard_file=%s\n' "$APP_DIR/$DASHBOARD_FILE"
 printf 'grafana_config=%s\n' "$STATE_DIR/grafana.ini"
 printf 'prometheus_config=%s\n' "$STATE_DIR/prometheus-v7.yml"
 printf 'prometheus_alert_rules=%s\n' "$STATE_DIR/prometheus-v7-alerts.yml"
-printf 'grafana_operator_url=%s/d/%s/polymarket-v7-canonical-paper-economics\n' "$GRAFANA_URL" "$DASHBOARD_UID"
+printf 'grafana_operator_url=%s/d/%s/polymarket-v7-crypto-paper-control-room\n' "$GRAFANA_URL" "$DASHBOARD_UID"

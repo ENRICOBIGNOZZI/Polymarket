@@ -1,5 +1,5 @@
 groups:
-  - name: polymarket-v7-two-engine-hard-safety
+  - name: polymarket-v7-crypto-hard-safety
     rules:
       - alert: PolymarketV7ExporterDown
         expr: up{job="polymarket-v7"} == 0
@@ -10,7 +10,7 @@ groups:
         expr: polymarket_v7_health < 1
         for: 15s
         labels: {severity: critical}
-        annotations: {summary: "The two-engine V7 health contract failed"}
+        annotations: {summary: "The crypto-only V7 health contract failed"}
       - alert: PolymarketV7PaperContractInvalid
         expr: polymarket_v7_paper_only_contract_ok < 1
         for: 0s
@@ -22,10 +22,10 @@ groups:
         labels: {severity: critical}
         annotations: {summary: "Authenticated execution is not disabled"}
       - alert: PolymarketV7AlgorithmScopeInvalid
-        expr: (polymarket_v7_live_algorithm_count != 2) or (polymarket_v7_live_algorithm_scope_wired < 1)
+        expr: (polymarket_v7_live_algorithm_count != 1) or (polymarket_v7_live_algorithm_scope_wired < 1)
         for: 0s
         labels: {severity: critical}
-        annotations: {summary: "Live scope is not exactly the two canonical algorithms"}
+        annotations: {summary: "Live scope is not exactly the canonical crypto algorithm"}
       - alert: PolymarketV7NewRiskUnexpectedlyEnabled
         expr: polymarket_v7_economic_new_risk_ready > 0
         for: 0s
@@ -75,7 +75,7 @@ groups:
         expr: polymarket_v7_portfolio_reconciled < 1
         for: 15s
         labels: {severity: critical}
-        annotations: {summary: "Ledger, engine state and portfolio accounting diverged"}
+        annotations: {summary: "Ledger, crypto engine state and portfolio accounting diverged"}
       - alert: PolymarketV7TradeTapeEmpty
         expr: (polymarket_v7_trade_tape_rows <= 0) and (polymarket_v7_trade_tape_no_standard_clob_flow < 1)
         for: 30s
