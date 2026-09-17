@@ -46,15 +46,15 @@ namespace {
         && (intent.urgency == Urgency::Aggressive || intent.urgency == Urgency::Critical);
 }
 
-[[nodiscard]] bool buy_notional_microdollars(
+[[nodiscard]] bool buy_notional_microdollars_prevalidated(
     const StrategyIntent& intent,
     std::int32_t tick_size_e4,
     std::int64_t& out_microdollars) noexcept {
 
+    // Caller has already validated the order-producing intent identity, BUY
+    // side and positive tick. Keep this arithmetic helper free of duplicate
+    // hot-path intent scans; public entry points remain fail-closed below.
     out_microdollars = 0;
-    if (intent.side != Side::Buy || tick_size_e4 <= 0 || !valid_common_identity(intent)) {
-        return false;
-    }
 
     constexpr std::int64_t kPriceScale = 10'000;
     const auto tick = static_cast<std::int64_t>(tick_size_e4);
@@ -73,22 +73,26 @@ bool ExecutionAdmission::quote_buy_notional_microdollars(
     const StrategyIntent& intent,
     std::int32_t tick_size_e4,
     std::int64_t& out_microdollars) noexcept {
-    if (!valid_quote_identity(intent)) {
+    if (!valid_quote_identity(intent) || intent.side != Side::Buy
+        || tick_size_e4 <= 0) {
         out_microdollars = 0;
         return false;
     }
-    return buy_notional_microdollars(intent, tick_size_e4, out_microdollars);
+    return buy_notional_microdollars_prevalidated(
+        intent, tick_size_e4, out_microdollars);
 }
 
 bool ExecutionAdmission::aggressive_buy_notional_microdollars(
     const StrategyIntent& intent,
     std::int32_t tick_size_e4,
     std::int64_t& out_microdollars) noexcept {
-    if (!valid_aggressive_identity(intent)) {
+    if (!valid_aggressive_identity(intent) || intent.side != Side::Buy
+        || tick_size_e4 <= 0) {
         out_microdollars = 0;
         return false;
     }
-    return buy_notional_microdollars(intent, tick_size_e4, out_microdollars);
+    return buy_notional_microdollars_prevalidated(
+        intent, tick_size_e4, out_microdollars);
 }
 
 ExecutionAdmissionResult ExecutionAdmission::admit(
@@ -130,9 +134,8 @@ ExecutionAdmissionResult ExecutionAdmission::admit(
     }
 
     std::int64_t notional = 0;
-    const bool notional_ok = passive_quote
-        ? quote_buy_notional_microdollars(intent, tick_size_e4, notional)
-        : aggressive_buy_notional_microdollars(intent, tick_size_e4, notional);
+    const bool notional_ok = buy_notional_microdollars_prevalidated(
+        intent, tick_size_e4, notional);
     if (!notional_ok) {
         result.reason = ExecutionAdmissionReason::InvalidTick;
         return result;
