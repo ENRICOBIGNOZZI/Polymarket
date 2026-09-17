@@ -57,7 +57,7 @@ ExternalDecodeResult ExternalVenueIngress::on_frame(
     return result;
 }
 
-bool ExternalVenueIngress::on_event(ExternalVenueEvent event) noexcept {
+bool ExternalVenueIngress::on_event(const ExternalVenueEvent& event) noexcept {
     if (event.venue != venue_ || event.asset_handle != asset_handle_
         || event.connection_epoch == 0 || event.local_receive_monotonic_ns <= 0
         || event.local_receive_wall_ns <= 0) {
@@ -77,23 +77,29 @@ bool ExternalVenueIngress::on_event(ExternalVenueEvent event) noexcept {
     return enqueue_event(event);
 }
 
-bool ExternalVenueIngress::enqueue_event(ExternalVenueEvent event) noexcept {
+bool ExternalVenueIngress::enqueue_event(const ExternalVenueEvent& event) noexcept {
+    const ExternalVenueEvent* accepted = &event;
+    ExternalVenueEvent gap_event;
     if (writer_gap_pending_) {
         writer_gap_pending_ = false;
         gap_pending_.store(false, std::memory_order_release);
-        event.gap = 1;
+        gap_event = event;
+        gap_event.gap = 1;
+        accepted = &gap_event;
         single_writer_add(propagated_gaps_);
     }
-    if (!queue_.try_push(event)) {
+    if (!queue_.try_push(*accepted)) {
         single_writer_add(dropped_events_);
         set_gap_pending();
         healthy_.store(false, std::memory_order_release);
         return false;
     }
     single_writer_add(enqueued_events_);
-    healthy_.store(event.healthy != 0 && event.stale == 0,
+    healthy_.store(accepted->healthy != 0 && accepted->stale == 0,
                    std::memory_order_release);
-    if (normalized_tape_ != nullptr) (void)normalized_tape_->try_record_external_venue_event(event);
+    if (normalized_tape_ != nullptr) {
+        (void)normalized_tape_->try_record_external_venue_event(*accepted);
+    }
     if (wakeup_ != nullptr) wakeup_->notify();
     return true;
 }

@@ -54,7 +54,7 @@ public:
     // Stateful venue observers may publish a normalized event only after they
     // have reconstructed a complete source book. This uses the same bounded
     // queue, reconnect, and gap propagation as raw-protocol decoding.
-    [[nodiscard]] bool on_event(ExternalVenueEvent event) noexcept;
+    [[nodiscard]] bool on_event(const ExternalVenueEvent& event) noexcept;
 
     [[nodiscard]] std::size_t drain_into(
         ExternalAssetState& state,
@@ -97,7 +97,7 @@ private:
     // mutable counter off the producer metrics cache line.
     alignas(64) std::atomic<std::uint64_t> drained_events_{0};
 
-    [[nodiscard]] bool enqueue_event(ExternalVenueEvent event) noexcept;
+    [[nodiscard]] bool enqueue_event(const ExternalVenueEvent& event) noexcept;
     void set_gap_pending() noexcept;
 };
 
