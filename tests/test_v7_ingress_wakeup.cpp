@@ -16,17 +16,30 @@ using namespace std::chrono_literals;
 int main() {
     IngressWakeup wakeup;
     assert(!wakeup.wait_for(0ms));
-    // A signal that arrives before poll must remain visible: no lost wakeup.
+    // A signal published while the consumer is active is syscall-free and
+    // must remain visible: no lost wakeup.
+    const auto kernel_before = wakeup.kernel_wakeups();
     wakeup.notify();
+    assert(wakeup.kernel_wakeups() == kernel_before);
     assert(wakeup.wait_for(0ms));
     assert(!wakeup.wait_for(0ms));
     assert(!wakeup.wait_for(-1ms));
 
     // Signal saturation is coalescing, never a blocking producer or an error.
+    const auto burst_kernel_before = wakeup.kernel_wakeups();
     for (int i = 0; i < 100000; ++i) wakeup.notify();
+    assert(wakeup.kernel_wakeups() == burst_kernel_before);
     assert(wakeup.wait_for(0ms));
     while (wakeup.wait_for(0ms)) {}
     assert(wakeup.errors() == 0);
+
+    // Userspace spin catches a producer without requiring an fd wake.
+    std::thread spin_producer([&] {
+        std::this_thread::sleep_for(100us);
+        wakeup.notify();
+    });
+    assert(wakeup.wait_for(5ms, 1000us));
+    spin_producer.join();
 
     // Multiple independent venue producers may signal the same consumer.
     std::atomic<int> finished{0};
@@ -79,5 +92,5 @@ int main() {
     assert(received == 1000);
     assert(ingress->snapshot().dropped_events == 0);
     assert(wakeup.errors() == 0);
-    std::cout << "ingress wakeup: pre-wait, saturation, concurrent producers and exact queue delivery PASS\n";
+    std::cout << "ingress wakeup: syscall-free hot notify, hybrid spin, concurrent producers and exact queue delivery PASS\n";
 }
