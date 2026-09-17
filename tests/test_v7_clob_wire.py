@@ -151,3 +151,6 @@ def test_native_clob_exact_body_and_l2_hmac() -> None:
         hmac.new(long_secret, message, hashlib.sha256).digest()
     ).decode()
     assert long_signature == expected_long_signature
+
+if __name__ == "__main__":
+    test_native_clob_exact_body_and_l2_hmac()
