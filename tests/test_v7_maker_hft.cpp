@@ -129,6 +129,14 @@ void test_bounded_spsc_and_cancel_priority() {
     assert(!ring.try_push(x));
     pm::v7::StrategyIntent out;
     assert(ring.try_pop(out) && out.intent_id == 1);
+    assert(ring.try_write([](pm::v7::StrategyIntent& slot) noexcept {
+        slot = {};
+        slot.intent_id = 6;
+    }));
+    const auto* peeked = ring.try_peek();
+    assert(peeked != nullptr && peeked->intent_id == 2);
+    assert(ring.pop_commit());
+    assert(ring.try_pop(out) && out.intent_id == 3);
 
     pm::v7::PriorityIntentQueue<4, 4> queue;
     pm::v7::StrategyIntent quote;

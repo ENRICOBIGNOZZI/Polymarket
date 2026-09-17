@@ -151,10 +151,11 @@ int main(int argc, char** argv) {
                     pm_faults.fetch_add(1, std::memory_order_relaxed);
                 }
                 for (std::size_t i = 0; i < result.output_count; ++i) {
-                    PmQueuedEvent queued;
-                    queued.event = decoded[i];
-                    queued.connection_epoch = pm_epoch.load(std::memory_order_acquire);
-                    if (!pm_queue.try_push(queued)) {
+                    const auto epoch = pm_epoch.load(std::memory_order_acquire);
+                    if (!pm_queue.try_write([&](PmQueuedEvent& queued) noexcept {
+                            queued.event = decoded[i];
+                            queued.connection_epoch = epoch;
+                        })) {
                         pm_drops.fetch_add(1, std::memory_order_relaxed);
                         pm_faults.fetch_add(1, std::memory_order_relaxed);
                     } else notified = true;
@@ -205,7 +206,7 @@ int main(int argc, char** argv) {
         BookHotSnapshot yes_book{}, no_book{};
         ExternalCancelSignalSnapshot current_signal{};
         ExternalVenueEvent pending_binance{}, pending_coinbase{};
-        PmQueuedEvent pending_pm{};
+        const PmQueuedEvent* pending_pm = nullptr;
         bool binance_ready = false, coinbase_ready = false, pm_ready = false;
         std::vector<std::int64_t> accepted_signal_to_admission;
         std::vector<std::int64_t> first_signal_to_decision;
@@ -242,16 +243,26 @@ int main(int argc, char** argv) {
             }
         };
         const auto refill_pm = [&] {
-            while (!pm_ready && pm_queue.try_pop(pending_pm)) {
+            while (!pm_ready) {
+                pending_pm = pm_queue.try_peek();
+                if (pending_pm == nullptr) return;
                 const auto epoch = pm_epoch.load(std::memory_order_acquire);
-                if (pending_pm.connection_epoch == epoch) pm_ready = true;
+                if (pending_pm->connection_epoch == epoch) {
+                    pm_ready = true;
+                    return;
+                }
+                (void)pm_queue.pop_commit();
+                pending_pm = nullptr;
             }
         };
         while (monotonic_now_ns() < deadline) {
             if (pm_faults.exchange(0, std::memory_order_acq_rel) != 0) {
                 yes_book.valid = 0; yes_book.lineage_continuous = 0;
                 no_book.valid = 0; no_book.lineage_continuous = 0;
-                if (pm_ready && pending_pm.connection_epoch != pm_epoch.load(std::memory_order_acquire)) {
+                if (pm_ready && pending_pm != nullptr
+                    && pending_pm->connection_epoch != pm_epoch.load(std::memory_order_acquire)) {
+                    (void)pm_queue.pop_commit();
+                    pending_pm = nullptr;
                     pm_ready = false;
                 }
             }
@@ -265,10 +276,13 @@ int main(int argc, char** argv) {
             std::int64_t receive_ns = std::numeric_limits<std::int64_t>::max();
             if (binance_ready) receive_ns = std::min(receive_ns, pending_binance.local_receive_monotonic_ns);
             if (coinbase_ready) receive_ns = std::min(receive_ns, pending_coinbase.local_receive_monotonic_ns);
-            if (pm_ready) receive_ns = std::min(receive_ns, pending_pm.event.receive_monotonic_ns);
+            if (pm_ready) receive_ns = std::min(receive_ns, pending_pm->event.receive_monotonic_ns);
             if (receive_ns <= 0 || receive_ns == std::numeric_limits<std::int64_t>::max()) {
                 ++latency_overflow;
-                binance_ready = coinbase_ready = pm_ready = false;
+                binance_ready = coinbase_ready = false;
+                if (pm_ready) (void)pm_queue.pop_commit();
+                pending_pm = nullptr;
+                pm_ready = false;
                 continue;
             }
             bool has_external = (binance_ready && pending_binance.local_receive_monotonic_ns == receive_ns)
@@ -287,10 +301,12 @@ int main(int argc, char** argv) {
                     (void)external_state.on_venue_event(pending_coinbase, external_policy);
                     coinbase_ready = false; refill_coinbase(); progressed = true;
                 }
-                if (pm_ready && pending_pm.event.receive_monotonic_ns == receive_ns) {
-                    const auto& event = pending_pm.event;
+                if (pm_ready && pending_pm->event.receive_monotonic_ns == receive_ns) {
+                    const auto& event = pending_pm->event;
                     if (event.instrument_handle == kYes) yes_book = event.book;
                     else if (event.instrument_handle == kNo) no_book = event.book;
+                    (void)pm_queue.pop_commit();
+                    pending_pm = nullptr;
                     pm_ready = false; refill_pm(); progressed = true;
                 }
             } while (progressed);
