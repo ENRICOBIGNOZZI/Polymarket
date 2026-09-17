@@ -56,6 +56,22 @@ class NativeCriticalPathPolicyTest(unittest.TestCase):
         self.assertTrue(gate["promotion_requires_zero_silent_drop"])
         self.assertGreater(float(gate["promotion_requires_p99_improvement_fraction"]), 0.0)
 
+    def test_flash_shadow_runtime_is_same_process_native_only(self) -> None:
+        source = (ROOT / "src" / "v7_crypto_flash_shadow_runtime.cpp").read_text(encoding="utf-8")
+        for token in (
+            "python", "subprocess", "std::filesystem", "ifstream", "ofstream",
+            "/books", "sleep_for", "system(", "popen(", "fast_forward_ipc",
+        ):
+            self.assertNotIn(token, source.lower())
+        for token in (
+            "NativeCryptoDecisionLane", "SleeveCapitalAccount",
+            "MarketWsShard", "ExternalVenueIngress", "SpscRing<MarketWsEvent",
+            "IngressWakeup", "SHADOW_ZERO_AUTHORITY",
+        ):
+            self.assertIn(token, source)
+        lane = (ROOT / "src" / "v7_crypto_decision_lane.cpp").read_text(encoding="utf-8")
+        self.assertIn("ExecutionAdmission::admit", lane)
+
     def test_latency_targets_and_doc_match_policy(self) -> None:
         target = self.policy["latency_targets_us"]
         self.assertLessEqual(int(target["trigger_to_admission_p99"]), 300)

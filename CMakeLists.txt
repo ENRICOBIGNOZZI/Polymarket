@@ -88,6 +88,10 @@ add_executable(polymarket_v7_crypto_decision_bench src/v7_crypto_decision_bench.
 target_link_libraries(polymarket_v7_crypto_decision_bench PRIVATE pm_v7_external)
 target_compile_options(polymarket_v7_crypto_decision_bench PRIVATE -Wall -Wextra -Wpedantic)
 
+add_executable(polymarket_v7_crypto_flash_shadow_runtime src/v7_crypto_flash_shadow_runtime.cpp)
+target_link_libraries(polymarket_v7_crypto_flash_shadow_runtime PRIVATE pm_v7_external pm_fast_arb)
+target_compile_options(polymarket_v7_crypto_flash_shadow_runtime PRIVATE -Wall -Wextra -Wpedantic)
+
 add_executable(polymarket_v7_trade_recorder src/v7_trade_recorder.cpp)
 target_link_libraries(polymarket_v7_trade_recorder PRIVATE pm_core)
 target_compile_options(polymarket_v7_trade_recorder PRIVATE -Wall -Wextra -Wpedantic)
@@ -252,6 +256,9 @@ if(BUILD_TESTING)
   target_link_libraries(pm_v7_crypto_decision_lane_tests PRIVATE pm_v7_external)
   target_compile_options(pm_v7_crypto_decision_lane_tests PRIVATE -UNDEBUG)
   add_test(NAME pm_v7_crypto_decision_lane_tests COMMAND pm_v7_crypto_decision_lane_tests)
+
+  add_test(NAME pm_v7_crypto_flash_shadow_validate
+    COMMAND polymarket_v7_crypto_flash_shadow_runtime --validate-only)
 
   add_executable(pm_v7_external_fair_tests tests/test_v7_external_fair.cpp)
   target_link_libraries(pm_v7_external_fair_tests PRIVATE pm_v7_external)
