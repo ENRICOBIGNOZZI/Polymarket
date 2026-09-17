@@ -24,8 +24,11 @@ int main() {
 
     assert(parse_binance_spot_depth_delta(R"({"result":null,"id":1})", 102, delta)
            == BinanceDepthParseState::Ignored);
+    const auto prior_final_update_id = delta.final_update_id;
     assert(parse_binance_spot_depth_delta(R"({"e":"depthUpdate","U":5,"u":4,"b":[],"a":[]})", 102, delta)
            == BinanceDepthParseState::Invalid);
+    assert(delta.final_update_id == prior_final_update_id);
+
     assert(parse_binance_depth_snapshot(R"({"lastUpdateId":10,"bids":[["1","1"],["2","1"]],"asks":[]})", 102, snapshot, 1)
            == BinanceDepthParseState::TooLarge);
     std::cout << "v7 Binance L2 protocol tests passed\n";

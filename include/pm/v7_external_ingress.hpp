@@ -19,6 +19,18 @@ class IngressWakeup;
 inline constexpr std::size_t kExternalIngressQueueCapacity = 4096;
 inline constexpr std::size_t kExternalIngressDecodeBatch = 32;
 
+struct CausalEventMergeResult {
+    std::size_t output_count = 0;
+    std::uint8_t sort_fallback = 0;
+    std::uint8_t output_overflow = 0;
+    std::array<std::uint8_t, 6> reserved{};
+};
+
+[[nodiscard]] CausalEventMergeResult merge_causal_events(
+    std::span<const ExternalVenueEvent> first,
+    std::span<const ExternalVenueEvent> second,
+    std::span<ExternalVenueEvent> output) noexcept;
+
 struct ExternalIngressSnapshot {
     std::uint64_t frames = 0;
     std::uint64_t decoded_events = 0;
@@ -55,6 +67,11 @@ public:
     // have reconstructed a complete source book. This uses the same bounded
     // queue, reconnect, and gap propagation as raw-protocol decoding.
     [[nodiscard]] bool on_event(ExternalVenueEvent event) noexcept;
+
+    // Preserve frame/reconnect accounting when a stateful observer fully owns
+    // a frame, avoiding a second JSON parse in the generic ingress path.
+    void on_observer_frame(std::uint64_t connection_epoch,
+                           bool invalid_frame = false) noexcept;
 
     [[nodiscard]] std::size_t drain_into(
         ExternalAssetState& state,
@@ -98,6 +115,7 @@ private:
     void set_gap_pending() noexcept;
 };
 
+static_assert(std::is_trivially_copyable_v<CausalEventMergeResult>);
 static_assert(std::is_trivially_copyable_v<ExternalIngressSnapshot>);
 
 } // namespace pm::v7::external_fair

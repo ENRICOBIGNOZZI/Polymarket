@@ -49,6 +49,22 @@ subtracted from a local timestamp. No claim about Binance's physical location
 or cross-host one-way latency can follow from this test. Capture memory and
 duration are bounded; truncation or transport failures invalidate clean capture.
 
+The reducer also reports two virtual policies over the same matched event: the
+physical lower bound (`first-of-three`) and the second arrival
+(`quorum-two-of-three`). The latter is not assumed faster: its saving versus
+9443 may be negative when the primary socket arrived first. `first_to_quorum`
+therefore measures the latency paid for independent confirmation.
+
+Development same-host capture on 2026-09-17, 60 seconds, with the Mac under
+heavy concurrent build load: all six BTC/ETH/SOL bookTicker/aggTrade streams
+had 100% all-endpoint matched coverage and zero conflicting identities. For
+BTCUSDT aggTrade (155 matched events), virtual first-of-three versus 9443 saved
+5.470 ms p95 and 19.435 ms p99; virtual two-of-three quorum saved 0.720 ms p95
+and 5.341 ms p99, while first-to-quorum confirmation cost 1.413 ms p50 and
+23.708 ms p95. These values are mechanism evidence only, not London or exchange
+one-way latency. Exact-SHA London repetition remains mandatory before any
+redundant-feed SHADOW promotion.
+
 Official endpoint and stream specifications were checked on 2026-09-17 in
 Binance Developer Documentation, Spot WebSocket Market Streams, and Binance's
 How to Use Binance Websocket Stream documentation. No undocumented gateway,

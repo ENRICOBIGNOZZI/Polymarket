@@ -7,7 +7,6 @@
 #include <cmath>
 #include <cstdint>
 #include <cstdlib>
-#include <cstring>
 #include <limits>
 #include <new>
 
@@ -46,13 +45,11 @@ constexpr std::size_t kJsonArenaBytes = 512 * 1024;
     else if (value->is_int64()) out = static_cast<double>(value->as_int64());
     else if (value->is_uint64()) out = static_cast<double>(value->as_uint64());
     else if (value->is_string()) {
-        const auto text = text_of(value);
+        const auto& text = value->as_string();
         if (text.empty() || text.size() >= 96) return false;
-        std::array<char, 96> buffer{};
-        std::memcpy(buffer.data(), text.data(), text.size());
         char* end = nullptr;
-        out = std::strtod(buffer.data(), &end);
-        if (end != buffer.data() + static_cast<std::ptrdiff_t>(text.size())) return false;
+        out = std::strtod(text.c_str(), &end);
+        if (end != text.c_str() + static_cast<std::ptrdiff_t>(text.size())) return false;
     } else {
         return false;
     }

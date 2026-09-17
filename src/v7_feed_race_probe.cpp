@@ -107,6 +107,10 @@ struct Aggregate {
     std::uint64_t unique = 0, matched = 0, conflicting = 0;
     std::array<std::uint64_t, 3> present{}, first{}, duplicate{};
     std::array<std::vector<double>, 3> penalty, saving;
+    std::vector<double> first_of_three_saving_vs_primary;
+    std::vector<double> quorum_two_of_three_saving_vs_primary;
+    std::vector<double> first_to_quorum_delay;
+    std::vector<double> first_to_last_spread;
 };
 json::array reduce(const std::array<const std::vector<Record>*, 3>& sources) {
     std::map<Key, Group> groups;
@@ -135,11 +139,25 @@ json::array reduce(const std::array<const std::vector<Record>*, 3>& sources) {
             continue;
         }
         ++stat.matched;
-        const auto earliest = std::min({group.record[0]->receive_ns, group.record[1]->receive_ns, group.record[2]->receive_ns});
+        std::array<std::int64_t, 3> arrivals{
+            group.record[0]->receive_ns, group.record[1]->receive_ns, group.record[2]->receive_ns};
+        auto ordered = arrivals;
+        std::sort(ordered.begin(), ordered.end());
+        const auto earliest = ordered[0];
+        const auto quorum = ordered[1];
+        const auto latest = ordered[2];
+        stat.first_of_three_saving_vs_primary.push_back(
+            static_cast<double>(arrivals[0] - earliest) / 1000.0);
+        stat.quorum_two_of_three_saving_vs_primary.push_back(
+            static_cast<double>(arrivals[0] - quorum) / 1000.0);
+        stat.first_to_quorum_delay.push_back(
+            static_cast<double>(quorum - earliest) / 1000.0);
+        stat.first_to_last_spread.push_back(
+            static_cast<double>(latest - earliest) / 1000.0);
         for (std::size_t i = 0; i < 3; ++i) {
-            if (group.record[i]->receive_ns == earliest) ++stat.first[i];
-            stat.penalty[i].push_back(static_cast<double>(group.record[i]->receive_ns - earliest) / 1000.0);
-            stat.saving[i].push_back(static_cast<double>(group.record[0]->receive_ns - group.record[i]->receive_ns) / 1000.0);
+            if (arrivals[i] == earliest) ++stat.first[i];
+            stat.penalty[i].push_back(static_cast<double>(arrivals[i] - earliest) / 1000.0);
+            stat.saving[i].push_back(static_cast<double>(arrivals[0] - arrivals[i]) / 1000.0);
         }
     }
     json::array output;
@@ -159,6 +177,10 @@ json::array reduce(const std::array<const std::vector<Record>*, 3>& sources) {
             {"unique_union", stat.unique}, {"identical_matched_all_endpoints", stat.matched},
             {"conflicting_matched_identities", stat.conflicting},
             {"matched_coverage", stat.unique ? json::value(static_cast<double>(stat.matched) / stat.unique) : json::value(nullptr)},
+            {"virtual_first_of_three_saving_vs_9443_us", distribution(std::move(stat.first_of_three_saving_vs_primary))},
+            {"virtual_quorum_two_of_three_saving_vs_9443_us", distribution(std::move(stat.quorum_two_of_three_saving_vs_primary))},
+            {"first_to_quorum_delay_us", distribution(std::move(stat.first_to_quorum_delay))},
+            {"first_to_last_spread_us", distribution(std::move(stat.first_to_last_spread))},
             {"endpoints", std::move(endpoints)}});
     }
     return output;
@@ -176,6 +198,10 @@ void self_test() {
         || endpoints[0].as_object().at("duplicate_copies").as_uint64() != 1
         || endpoints[1].as_object().at("first_arrivals_on_matched").as_uint64() != 1
         || endpoints[1].as_object().at("paired_saving_vs_9443_us").as_object().at("p50").as_double() != 2.0
+        || value.at("virtual_first_of_three_saving_vs_9443_us").as_object().at("p50").as_double() != 2.0
+        || value.at("virtual_quorum_two_of_three_saving_vs_9443_us").as_object().at("p50").as_double() != 1.0
+        || value.at("first_to_quorum_delay_us").as_object().at("p50").as_double() != 1.0
+        || value.at("first_to_last_spread_us").as_object().at("p50").as_double() != 2.0
         || !result[1].as_object().at("matched_coverage").is_null())
         throw std::runtime_error("feed-race reduction self-test failed");
     std::cout << "feed race: exact matching, duplicate suppression, conflicts and missing data PASS\n";
