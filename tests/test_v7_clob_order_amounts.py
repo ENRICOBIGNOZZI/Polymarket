@@ -80,6 +80,7 @@ def test_native_amounts_match_official_v2_limit_builder() -> None:
     )
     program = f'''\
 #include "pm/v7_clob_order_amounts.hpp"
+#include <limits>
 using namespace pm::v7;
 using namespace pm::v7::clob_order;
 struct C {{ int side, price, tick; long long qty, maker, taker; }};
@@ -92,6 +93,12 @@ int main() {{
   if (marketable_limit_amounts(Side::Buy, 5001, 100, 5000000).valid) return 3;
   if (marketable_limit_amounts(Side::Buy, 5000, 3, 5000000).valid) return 4;
   if (marketable_limit_amounts(Side::Buy, 5000, 100, 9999).valid) return 5;
+  if (marketable_limit_amounts(Side::Buy, 9900, 100,
+      std::numeric_limits<long long>::max()).valid) return 6;
+  for (int tick : {{1000,100,50,25,10,1}}) {{
+    if (!supported_exchange_v2_tick_e4(tick)) return 7;
+  }}
+  if (supported_exchange_v2_tick_e4(3)) return 8;
   return 0;
 }}
 '''
