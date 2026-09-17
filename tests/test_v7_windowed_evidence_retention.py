@@ -91,9 +91,9 @@ class WindowedRetentionTest(unittest.TestCase):
         self.assertTrue(policy['enabled']);self.assertEqual(policy['authorization'],POLICY)
         self.assertEqual(policy['raw_detail_seconds'],21600)
         self.assertEqual(set(policy['windowed_source_families']),WINDOWED)
-        self.assertEqual(policy['target_managed_bytes'],30_000_000_000)
-        self.assertEqual(policy['trigger_managed_bytes'],34_000_000_000)
-        self.assertEqual(policy['maximum_managed_bytes'],40_000_000_000)
+        self.assertEqual(policy['target_managed_bytes'],50_000_000_000)
+        self.assertEqual(policy['trigger_managed_bytes'],54_000_000_000)
+        self.assertEqual(policy['maximum_managed_bytes'],60_000_000_000)
         self.assertFalse(cfg['aggregate_retention']['hard_filesystem_quota'])
 
 
