@@ -51,3 +51,23 @@ def test_tailnet_workflows_prefer_ephemeral_trust_credentials():
         assert workflow.count("statedir: ''") == workflow.count("uses: tailscale/github-action@") == 3
         assert "version: 1.94.2" in workflow
         assert "ping: ${{ env.SERVER_HOST }}" in workflow
+
+
+def test_deploy_workflow_dispatch_and_linux_cutover_contract():
+    workflow = (ROOT / ".github/workflows/v7-deploy-paper-server.yml").read_text()
+    assert "name: V7 deploy PAPER server" in workflow
+    assert "workflow_dispatch:" in workflow
+    assert "remote_platform=\"$(ssh" in workflow
+    assert "research/build_runtime_artifacts.sh \"$deploy_sha\"" in workflow
+    assert "COLD_START PAPER artifact" in workflow
+    linux = workflow.index('if [[ "$(uname -s)" == "Linux" ]]; then')
+    stage = workflow.index('v7_london_stage_release.sh', linux)
+    cutover = workflow.index('v7_london_cutover.sh', stage)
+    assert stage < cutover
+    # The detached exact-SHA worktree must still exist for both stage and cutover.
+    between = workflow[linux:cutover]
+    assert 'git worktree remove --force "$tmp_checkout"' not in between
+    recovery = workflow.index('platform="$(uname -s)"')
+    darwin_monitoring = workflow.index('if [[ "$platform" == "Darwin" ]]; then', recovery)
+    assert workflow.index('http://127.0.0.1:9090/-/ready', darwin_monitoring) > darwin_monitoring
+    assert workflow.index('http://127.0.0.1:3000/api/health', darwin_monitoring) > darwin_monitoring

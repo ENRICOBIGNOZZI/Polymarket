@@ -197,6 +197,27 @@ jobs:
             -p "$SERVER_PORT"
           )
 
+          # A London cutover requires an immutable model artifact for the exact
+          # code SHA. Preserve any research-produced artifact already present;
+          # otherwise seed an explicit COLD_START PAPER artifact on the CI
+          # research plane. No fitting occurs on the London host.
+          remote_platform="$(ssh "${ssh_common[@]}" "$SERVER_USER@$SERVER_HOST" 'uname -s')"
+          if [[ "$remote_platform" == "Linux" ]]; then
+            if ! ssh "${ssh_common[@]}" "$SERVER_USER@$SERVER_HOST"               "test -s \$HOME/polymarket-artifacts/by-sha/$deploy_sha/manifest.json"; then
+              artifact_root="$RUNNER_TEMP/runtime-artifacts"
+              source_root="$RUNNER_TEMP/research-source-empty"
+              archive_root="$RUNNER_TEMP/research-archive-empty"
+              durable_root="$RUNNER_TEMP/research-durable"
+              mkdir -p "$source_root" "$archive_root" "$durable_root" "$artifact_root"
+              PM_V7_RESEARCH_SOURCE_ROOT="$source_root"               PM_V7_RESEARCH_ARCHIVE_ROOT="$archive_root"               PM_V7_RESEARCH_DURABLE_ROOT="$durable_root"               PM_V7_RESEARCH_ARTIFACT_ROOT="$artifact_root"                 research/build_runtime_artifacts.sh "$deploy_sha"
+              remote_tmp="polymarket-artifacts/by-sha/$deploy_sha.tmp.${GITHUB_RUN_ID}.${GITHUB_RUN_ATTEMPT}"
+              ssh "${ssh_common[@]}" "$SERVER_USER@$SERVER_HOST"                 "rm -rf \$HOME/$remote_tmp; mkdir -p \$HOME/$remote_tmp \$HOME/polymarket-artifacts/by-sha"
+              rsync -a --delete                 -e "ssh -i $HOME/.ssh/polymarket_deploy -o IdentitiesOnly=yes -o BatchMode=yes -p $SERVER_PORT"                 "$artifact_root/by-sha/$deploy_sha/" "$SERVER_USER@$SERVER_HOST:~/$remote_tmp/"
+              ssh "${ssh_common[@]}" "$SERVER_USER@$SERVER_HOST"                 "set -e; rm -rf \$HOME/polymarket-artifacts/by-sha/$deploy_sha; mv \$HOME/$remote_tmp \$HOME/polymarket-artifacts/by-sha/$deploy_sha"
+            fi
+            ssh "${ssh_common[@]}" "$SERVER_USER@$SERVER_HOST"               "mkdir -p \$HOME/polymarket-artifacts; ln -sfn 'by-sha/$deploy_sha' \$HOME/polymarket-artifacts/current"
+          fi
+
           set +e
           ssh "${ssh_common[@]}" "$SERVER_USER@$SERVER_HOST" \
             "EXPECTED_DEPLOY_SHA='$deploy_sha' bash -s" <<'REMOTE' | tee -a deploy-evidence.txt
@@ -243,8 +264,6 @@ jobs:
             --repository-root "$tmp_checkout" --expected-head "$main_sha" >/dev/null
           test -f "$tmp_checkout/ops/update_server_v7.sh"
           test -f "$tmp_checkout/monitoring/v7_monitoring_manifest.json"
-          git worktree remove --force "$tmp_checkout" >/dev/null
-          trap - EXIT
 
           if [[ "$(uname -s)" == "Linux" ]]; then
             # London: build and verify the exact candidate while the old writer
@@ -298,10 +317,12 @@ jobs:
                 "EXPECTED_DEPLOY_SHA='$deploy_sha' bash -s" <<'VERIFY' >> deploy-evidence.txt 2>&1
           set -euo pipefail
           cd ~/polymarket
-          if [[ "$(uname -s)" == "Linux" ]]; then
+          platform="$(uname -s)"
+          if [[ "$platform" == "Linux" ]]; then
             root="$HOME/polymarket-runs/paper_v7_london"
             test "$(cat "$HOME/polymarket-runtime/current/deploy/london/runtime_sha")" = "$EXPECTED_DEPLOY_SHA"
             test ! -e "$HOME/polymarket-runtime/current/research"
+            test ! -e "$HOME/polymarket-runtime/current/tests"
           else
             root="$HOME/polymarket/runs/paper_v7_live"
             test "$(git rev-parse HEAD)" = "$EXPECTED_DEPLOY_SHA"
@@ -315,7 +336,7 @@ jobs:
           identity=json.loads((root/'control/runtime_identity.json').read_text(encoding='utf-8'))
           portfolio=json.loads((root/'control/portfolio_state.json').read_text(encoding='utf-8'))
           economics=json.loads((root/'canonical_economics.json').read_text(encoding='utf-8'))
-universe=json.loads((root/'universe/status.json').read_text(encoding='utf-8'))
+          universe=json.loads((root/'universe/status.json').read_text(encoding='utf-8'))
           assert runtime.get('version') == 7 and runtime.get('model_sha') == sha
           assert runtime.get('paper_only') is True and runtime.get('authenticated_execution') is False
           assert runtime.get('real_order_submission') is False and runtime.get('state') == 'running'
@@ -335,10 +356,10 @@ universe=json.loads((root/'universe/status.json').read_text(encoding='utf-8'))
           assert now-int(portfolio.get('timestamp') or 0) <= 30
           assert economics.get('paper_only') is True and economics.get('authenticated_execution') is False
           assert economics.get('expected_model_sha') == sha
-assert universe.get('schema') == 'polymarket_v7_crypto_universe_status_v1'
-assert universe.get('model_sha') == sha and universe.get('state') == 'OPERATIONAL'
-assert universe.get('paper_only') is True and universe.get('authenticated_execution') is False
-assert int(universe.get('eligible_markets') or 0) > 0
+          assert universe.get('schema') == 'polymarket_v7_crypto_universe_status_v1'
+          assert universe.get('model_sha') == sha and universe.get('state') == 'OPERATIONAL'
+          assert universe.get('paper_only') is True and universe.get('authenticated_execution') is False
+          assert int(universe.get('eligible_markets') or 0) > 0
           with (root/'trade_tape.csv').open(newline='',encoding='utf-8') as handle:
               rows=list(csv.DictReader(handle))
           assert rows and max(int(float(r.get('received_ms') or 0)) for r in rows) > 0
@@ -353,14 +374,16 @@ assert int(universe.get('eligible_markets') or 0) > 0
           grep -q '^polymarket_v7_ledger_valid 1$' <<<"$metrics"
           grep -q '^polymarket_v7_live_algorithm_count 1$' <<<"$metrics"
           grep -q '^polymarket_v7_live_algorithm_scope_wired 1$' <<<"$metrics"
-          curl -fsS http://127.0.0.1:9090/-/ready >/dev/null
-          curl -fsS http://127.0.0.1:3000/api/health >/dev/null
-          uid="$(python3 - <<'PY'
+          if [[ "$platform" == "Darwin" ]]; then
+            curl -fsS http://127.0.0.1:9090/-/ready >/dev/null
+            curl -fsS http://127.0.0.1:3000/api/health >/dev/null
+            uid="$(python3 - <<'PY'
           import json
           print(json.load(open('monitoring/v7_monitoring_manifest.json'))['grafana']['dashboard_uid'])
           PY
           )"
-          curl -fsS "http://127.0.0.1:3000/api/dashboards/uid/$uid" >/dev/null
+            curl -fsS "http://127.0.0.1:3000/api/dashboards/uid/$uid" >/dev/null
+          fi
           VERIFY
               then
                 recovered=1
