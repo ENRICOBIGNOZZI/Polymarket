@@ -42,6 +42,7 @@ add_library(pm_v7_common
   src/v7_market_ws.cpp
   src/v7_capital.cpp
   src/v7_execution_admission.cpp
+  src/v7_native_order_tx.cpp
   src/v7_ingress_wakeup.cpp
   src/v7_hot_book_cache.cpp
   src/v7_hot_signal.cpp)
@@ -88,6 +89,12 @@ target_compile_options(pm_v7_external PRIVATE -Wall -Wextra -Wpedantic)
 add_executable(polymarket_v7_crypto_decision_bench src/v7_crypto_decision_bench.cpp)
 target_link_libraries(polymarket_v7_crypto_decision_bench PRIVATE pm_v7_external)
 target_compile_options(polymarket_v7_crypto_decision_bench PRIVATE -Wall -Wextra -Wpedantic)
+
+# Zero-authority benchmark through capital admission, canonical OMS SendPending,
+# and the allocation-free adapter command boundary.
+add_executable(polymarket_v7_crypto_to_oms_bench src/v7_crypto_to_oms_bench.cpp)
+target_link_libraries(polymarket_v7_crypto_to_oms_bench PRIVATE pm_v7_external pm_v7_common)
+target_compile_options(polymarket_v7_crypto_to_oms_bench PRIVATE -Wall -Wextra -Wpedantic)
 
 add_executable(polymarket_v7_crypto_flash_shadow_runtime src/v7_crypto_flash_shadow_runtime.cpp)
 target_link_libraries(polymarket_v7_crypto_flash_shadow_runtime PRIVATE pm_v7_external pm_fast_arb)
@@ -210,6 +217,11 @@ if(BUILD_TESTING)
   add_executable(pm_v7_execution_admission_tests tests/test_v7_execution_admission.cpp)
   target_link_libraries(pm_v7_execution_admission_tests PRIVATE pm_v7_common)
   add_test(NAME pm_v7_execution_admission_tests COMMAND pm_v7_execution_admission_tests)
+
+  add_executable(pm_v7_native_order_tx_tests tests/test_v7_native_order_tx.cpp)
+  target_link_libraries(pm_v7_native_order_tx_tests PRIVATE pm_v7_common)
+  target_compile_options(pm_v7_native_order_tx_tests PRIVATE -UNDEBUG)
+  add_test(NAME pm_v7_native_order_tx_tests COMMAND pm_v7_native_order_tx_tests)
 
 
 
