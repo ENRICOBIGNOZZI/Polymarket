@@ -129,6 +129,8 @@ bool ExternalAssetState::on_venue_event(const ExternalVenueEvent& event,
     }
     if (asset_handle_ == 0) asset_handle_ = event.asset_handle;
     auto& venue = venues_[index];
+    const std::uint8_t previous_healthy = venue.healthy;
+    const std::uint8_t previous_gap = venue.gap;
     const bool epoch_changed = venue.connection_epoch != 0
         && venue.connection_epoch != event.connection_epoch;
     if (epoch_changed) {
@@ -142,6 +144,8 @@ bool ExternalAssetState::on_venue_event(const ExternalVenueEvent& event,
         venue.previous_ask_size = 0.0;
         venue.bid_size = 0.0;
         venue.ask_size = 0.0;
+        venue.mid = 0.0;
+        venue.log_mid = 0.0;
         venue.ofi = 0.0;
         venue.signed_trade_flow = 0.0;
     }
@@ -150,6 +154,12 @@ bool ExternalAssetState::on_venue_event(const ExternalVenueEvent& event,
         && venue.book_source_sequence > 0 && event.source_sequence <= venue.book_source_sequence) {
         return false;
     }
+    const bool composite_inputs_changed = epoch_changed
+        || event.event_type == ExternalEventType::BookTop
+        || event.event_type == ExternalEventType::Health
+        || previous_healthy != event.healthy
+        || previous_gap != event.gap;
+    if (composite_inputs_changed) composite_cache_valid_ = 0;
     if (event.gap != 0) venue.valid = 0;
     venue.connection_epoch = event.connection_epoch;
     venue.healthy = event.healthy;
@@ -174,6 +184,7 @@ bool ExternalAssetState::on_venue_event(const ExternalVenueEvent& event,
         venue.book_source_sequence = event.source_sequence;
         venue.last_book_receive_ns = event.local_receive_monotonic_ns;
         venue.mid = 0.5 * (event.bid + event.ask);
+        venue.log_mid = std::log(venue.mid);
         const double total_depth = event.bid_size + event.ask_size;
         venue.microprice = total_depth > kEps
             ? (event.ask * event.bid_size + event.bid * event.ask_size) / total_depth
@@ -238,19 +249,73 @@ bool ExternalAssetState::on_venue_event(const ExternalVenueEvent& event,
     latest_receive_ns_ = std::max(latest_receive_ns_, event.local_receive_monotonic_ns);
     ++state_version_;
 
-    double micro = 0.0;
-    double dispersion = 0.0;
-    double median = 0.0;
-    double max_residual = 0.0;
     std::uint32_t health_mask = 0;
     std::uint32_t fresh_count = 0;
-    std::uint32_t outlier_mask = 0;
-    const double composite = compute_composite(event.local_receive_monotonic_ns, policy,
-                                               &micro, &dispersion, &median, &max_residual,
-                                               &health_mask, &fresh_count, &outlier_mask);
+    double composite = 0.0;
+    bool policy_matches_cache = composite_cache_valid_ != 0
+        && cached_max_venue_age_ns_ == policy.max_venue_age_ns
+        && cached_max_composite_deviation_bps_ == policy.max_composite_deviation_bps;
+    if (policy_matches_cache) {
+        for (std::size_t i = 0; i < cached_venue_weights_.size(); ++i) {
+            if (cached_venue_weights_[i] != policy.venue_weights[i]) {
+                policy_matches_cache = false;
+                break;
+            }
+        }
+    }
+    const bool reusable_trade_composite = event.event_type == ExternalEventType::Trade
+        && !composite_inputs_changed && policy_matches_cache
+        && event.local_receive_monotonic_ns >= composite_cache_computed_at_ns_
+        && event.local_receive_monotonic_ns <= composite_cache_valid_until_ns_;
+    if (reusable_trade_composite) {
+        composite = cached_composite_;
+        health_mask = cached_health_mask_;
+        fresh_count = cached_fresh_count_;
+    } else {
+        composite = compute_composite(event.local_receive_monotonic_ns, policy,
+                                      nullptr, nullptr, nullptr, nullptr,
+                                      &health_mask, &fresh_count, nullptr);
+
+        composite_cache_valid_ = 0;
+        if (policy.max_venue_age_ns >= 0) {
+            std::int64_t valid_until = std::numeric_limits<std::int64_t>::max();
+            bool has_fresh_candidate = false;
+            for (std::size_t i = 0; i < venues_.size(); ++i) {
+                const auto& row = venues_[i];
+                const double weight = finite(policy.venue_weights[i])
+                    ? std::max(0.0, policy.venue_weights[i]) : 0.0;
+                const bool fresh = row.valid != 0 && row.healthy != 0 && row.gap == 0
+                    && row.last_book_receive_ns > 0
+                    && row.last_book_receive_ns <= event.local_receive_monotonic_ns
+                    && event.local_receive_monotonic_ns - row.last_book_receive_ns
+                        <= policy.max_venue_age_ns
+                    && finite(row.mid) && row.mid > 0.0 && finite(row.log_mid)
+                    && weight > 0.0;
+                if (!fresh) continue;
+                has_fresh_candidate = true;
+                const auto deadline = row.last_book_receive_ns
+                    > std::numeric_limits<std::int64_t>::max() - policy.max_venue_age_ns
+                    ? std::numeric_limits<std::int64_t>::max()
+                    : row.last_book_receive_ns + policy.max_venue_age_ns;
+                valid_until = std::min(valid_until, deadline);
+            }
+            if (has_fresh_candidate) {
+                cached_composite_ = composite;
+                cached_health_mask_ = health_mask;
+                cached_fresh_count_ = fresh_count;
+                composite_cache_computed_at_ns_ = event.local_receive_monotonic_ns;
+                composite_cache_valid_until_ns_ = valid_until;
+                cached_max_venue_age_ns_ = policy.max_venue_age_ns;
+                cached_max_composite_deviation_bps_ = policy.max_composite_deviation_bps;
+                cached_venue_weights_ = policy.venue_weights;
+                composite_cache_valid_ = 1;
+            }
+        }
+    }
     if (composite > 0.0 && fresh_count >= policy.min_healthy_venues) {
         if (last_composite_ > 0.0) {
-            const double r = std::log(composite / last_composite_);
+            const double r = composite == last_composite_
+                ? 0.0 : std::log(composite / last_composite_);
             const double r2 = r * r;
             ew_var_fast_ = ew_update(ew_var_fast_, r2, policy.vol_fast_alpha);
             ew_var_medium_ = ew_update(ew_var_medium_, r2, policy.vol_medium_alpha);
@@ -311,13 +376,14 @@ double ExternalAssetState::compute_composite(
         const bool fresh = venue.valid != 0 && venue.healthy != 0 && venue.gap == 0
             && venue.last_book_receive_ns > 0 && venue.last_book_receive_ns <= now_ns
             && now_ns - venue.last_book_receive_ns <= policy.max_venue_age_ns
-            && finite(venue.mid) && venue.mid > 0.0;
+            && finite(venue.mid) && venue.mid > 0.0
+            && finite(venue.log_mid);
         if (!fresh) continue;
         const double weight = finite(policy.venue_weights[i])
             ? std::max(0.0, policy.venue_weights[i]) : 0.0;
         if (weight <= 0.0) continue;
         if (candidate_count >= candidates.size()) break;
-        candidates[candidate_count++] = Candidate{i, std::log(venue.mid), weight};
+        candidates[candidate_count++] = Candidate{i, venue.log_mid, weight};
         candidate_weight_sum += weight;
     }
 
@@ -364,7 +430,9 @@ double ExternalAssetState::compute_composite(
         }
         const auto& venue = venues_[row.index];
         log_sum += row.weight * row.log_mid;
-        micro_sum += row.weight * (venue.microprice > 0.0 ? venue.microprice : venue.mid);
+        if (microprice != nullptr) {
+            micro_sum += row.weight * (venue.microprice > 0.0 ? venue.microprice : venue.mid);
+        }
         weight_sum += row.weight;
         mask |= (1U << static_cast<unsigned>(row.index));
         ++count;
@@ -374,30 +442,35 @@ double ExternalAssetState::compute_composite(
     if (health_mask != nullptr) *health_mask = mask;
     if (fresh_count != nullptr) *fresh_count = count;
 
-    double max_dispersion = 0.0;
-    if (composite > 0.0) {
-        for (std::size_t i = 0; i < venues_.size(); ++i) {
-            if ((mask & (1U << static_cast<unsigned>(i))) == 0U) continue;
-            max_dispersion = std::max(max_dispersion,
-                std::abs(std::log(venues_[i].mid / composite)) * 10'000.0);
+    if (dispersion_bps != nullptr) {
+        double max_dispersion = 0.0;
+        if (composite > 0.0) {
+            for (std::size_t i = 0; i < venues_.size(); ++i) {
+                if ((mask & (1U << static_cast<unsigned>(i))) == 0U) continue;
+                max_dispersion = std::max(max_dispersion,
+                    std::abs(std::log(venues_[i].mid / composite)) * 10'000.0);
+            }
         }
+        *dispersion_bps = max_dispersion;
     }
-    double max_residual = 0.0;
-    if (median_log != 0.0) {
-        for (std::size_t i = 0; i < venues_.size(); ++i) {
-            const auto& venue = venues_[i];
-            const bool fresh = venue.valid != 0 && venue.healthy != 0 && venue.gap == 0
-                && venue.last_book_receive_ns > 0 && venue.last_book_receive_ns <= now_ns
-                && now_ns - venue.last_book_receive_ns <= policy.max_venue_age_ns
-                && finite(venue.mid) && venue.mid > 0.0;
-            if (!fresh) continue;
-            max_residual = std::max(max_residual,
-                std::abs(std::log(venue.mid) - median_log) * 10'000.0);
+    if (max_residual_bps != nullptr) {
+        double max_residual = 0.0;
+        if (median_log != 0.0) {
+            for (std::size_t i = 0; i < venues_.size(); ++i) {
+                const auto& venue = venues_[i];
+                const bool fresh = venue.valid != 0 && venue.healthy != 0 && venue.gap == 0
+                    && venue.last_book_receive_ns > 0 && venue.last_book_receive_ns <= now_ns
+                    && now_ns - venue.last_book_receive_ns <= policy.max_venue_age_ns
+                    && finite(venue.mid) && venue.mid > 0.0
+                    && finite(venue.log_mid);
+                if (!fresh) continue;
+                max_residual = std::max(max_residual,
+                    std::abs(venue.log_mid - median_log) * 10'000.0);
+            }
         }
+        *max_residual_bps = max_residual;
     }
-    if (dispersion_bps != nullptr) *dispersion_bps = max_dispersion;
     if (weighted_median_price != nullptr) *weighted_median_price = median_log != 0.0 ? std::exp(median_log) : 0.0;
-    if (max_residual_bps != nullptr) *max_residual_bps = max_residual;
     if (outlier_mask != nullptr) *outlier_mask = outliers;
     return composite;
 }
