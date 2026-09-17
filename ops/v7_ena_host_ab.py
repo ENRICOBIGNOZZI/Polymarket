@@ -44,7 +44,7 @@ def default_interface() -> str:
 
 
 def parse_coalesce(text: str) -> dict[str, Any]:
-    adaptive = re.search(r"Adaptive RX:\s*(on|off)\s+TX:\s*(on|off)", text, re.I)
+    adaptive = re.search(r"Adaptive RX:\s*(on|off)\s+TX:\s*(on|off|n/a)", text, re.I)
     rx = re.search(r"^rx-usecs:\s*(\d+)", text, re.M)
     tx = re.search(r"^tx-usecs:\s*(\d+)", text, re.M)
     if not adaptive or not rx or not tx:

@@ -47,3 +47,12 @@ def test_delta_prefers_lower_tail_and_no_failure_growth():
     assert value["total_p99_ns"] == -20
     assert value["total_p99_9_ns"] == -50
     assert value["failed_samples_delta"] == 0
+
+
+def test_parse_real_ena_adaptive_tx_na():
+    raw = "Adaptive RX: on  TX: n/a\nrx-usecs: 20\ntx-usecs: 64\n"
+    value = MODULE.parse_coalesce(raw)
+    assert value == {
+        "adaptive_rx": "on", "adaptive_tx": "n/a",
+        "rx_usecs": 20, "tx_usecs": 64,
+    }
