@@ -228,10 +228,10 @@ json::object l2_json(const CoinbaseL2Metrics& value) {
     else if (value->is_uint64()) output = static_cast<double>(value->as_uint64());
     else if (value->is_string()) {
         const auto& text = value->as_string();
-        std::string copy(text.data(), text.size());
+        if (text.empty() || text.size() >= 96) return false;
         char* end = nullptr;
-        output = std::strtod(copy.c_str(), &end);
-        if (end != copy.c_str() + copy.size()) return false;
+        output = std::strtod(text.c_str(), &end);
+        if (end != text.c_str() + static_cast<std::ptrdiff_t>(text.size())) return false;
     } else return false;
     return std::isfinite(output);
 }
@@ -541,21 +541,41 @@ public:
         connection_epoch_ = epoch;
     }
 
-    void on_frame(std::uint64_t epoch, std::int64_t receive_ns, std::int64_t,
+    void on_frame(std::uint64_t epoch, std::int64_t receive_ns, std::int64_t wall_ns,
                   std::string_view payload) noexcept override {
+        (void)route_frame(epoch, receive_ns, wall_ns, payload);
+    }
+
+    [[nodiscard]] ExternalFrameDisposition route_frame(
+        std::uint64_t epoch, std::int64_t receive_ns, std::int64_t,
+        std::string_view payload) noexcept override {
+        // Most Binance spot frames are bookTicker/trade and belong to the
+        // generic ingress. Reject them with a bounded byte scan instead of
+        // parsing JSON here and then parsing the same payload again there.
+        if (payload.find("depthUpdate") == std::string_view::npos) {
+            return ExternalFrameDisposition::PassToIngress;
+        }
         BinanceDepthDelta delta;
         const auto parsed = parse_binance_spot_depth_delta(payload, receive_ns, delta);
-        if (parsed == BinanceDepthParseState::Ignored) return;
+        if (parsed == BinanceDepthParseState::Ignored) {
+            return ExternalFrameDisposition::PassToIngress;
+        }
         std::lock_guard lock(mutex_);
         if (epoch != connection_epoch_) {
             book_.begin_recovery();
             connection_epoch_ = epoch;
         }
         poll_snapshot();
-        if (parsed != BinanceDepthParseState::Parsed || !book_.buffer_delta(std::move(delta))) {
+        if (parsed != BinanceDepthParseState::Parsed) {
+            book_.begin_recovery();
+            start_snapshot_if_needed();
+            return ExternalFrameDisposition::PassToIngress;
+        }
+        if (!book_.buffer_delta(std::move(delta))) {
             book_.begin_recovery();
         }
         start_snapshot_if_needed();
+        return ExternalFrameDisposition::Consumed;
     }
 
     [[nodiscard]] BinanceL2Metrics metrics() const noexcept {
@@ -671,12 +691,12 @@ public:
                 return;
             }
             if (json_text_equals(type, "l2update")) {
-                CoinbaseDepthUpdate update;
-                update.local_receive_monotonic_ns = receive_ns;
-                if (!parse_changes(json_field(root, "changes"), update.changes)) { fail("l2update_shape"); return; }
+                update_scratch_.local_receive_monotonic_ns = receive_ns;
+                update_scratch_.changes.clear();
+                if (!parse_changes(json_field(root, "changes"), update_scratch_.changes)) { fail("l2update_shape"); return; }
                 std::lock_guard lock(mutex_);
                 if (epoch != connection_epoch_) reset_epoch(epoch);
-                if (!book_.apply_update(update)) { ++parse_failures_; last_protocol_error_ = "l2update_invalid"; return; }
+                if (!book_.apply_update(update_scratch_)) { ++parse_failures_; last_protocol_error_ = "l2update_invalid"; return; }
                 publish(receive_ns, wall_ns);
                 return;
             }
@@ -750,8 +770,8 @@ private:
     }
 
     void publish(std::int64_t receive_ns, std::int64_t wall_ns) noexcept {
-        const auto current = book_.metrics();
-        if (current.valid == 0) return;
+        CoinbaseDepthLevel bid, ask;
+        if (!book_.top_of_book(bid, ask)) return;
         ExternalVenueEvent event;
         event.asset_handle = asset_handle_;
         event.connection_epoch = connection_epoch_;
@@ -760,10 +780,10 @@ private:
         event.event_type = ExternalEventType::BookTop;
         event.local_receive_monotonic_ns = receive_ns;
         event.local_receive_wall_ns = wall_ns;
-        event.bid = current.best_bid;
-        event.ask = current.best_ask;
-        event.bid_size = current.bid_depth_l1;
-        event.ask_size = current.ask_depth_l1;
+        event.bid = bid.price;
+        event.ask = ask.price;
+        event.bid_size = bid.quantity;
+        event.ask_size = ask.quantity;
         event.healthy = 1;
         (void)ingress_.on_event(event);
     }
@@ -779,6 +799,7 @@ private:
     std::uint64_t asset_handle_ = 0;
     mutable std::mutex mutex_{};
     CoinbaseL2Book book_{};
+    CoinbaseDepthUpdate update_scratch_{};
     std::uint64_t connection_epoch_ = 0;
     std::uint64_t sequence_ = 0;
     std::uint64_t parse_failures_ = 0;
@@ -799,47 +820,81 @@ public:
 
     void on_frame(std::uint64_t epoch, std::int64_t receive_ns, std::int64_t wall_ns,
                   std::string_view payload) noexcept override {
+        (void)route_frame(epoch, receive_ns, wall_ns, payload);
+    }
+
+    [[nodiscard]] ExternalFrameDisposition route_frame(
+        std::uint64_t epoch, std::int64_t receive_ns, std::int64_t wall_ns,
+        std::string_view payload) noexcept override {
+        // Trade/control frames belong to generic ingress. A byte prefilter
+        // avoids a full JSON parse solely to discover that fact.
+        if (payload.find("orderbook.50.BTCUSDT") == std::string_view::npos) {
+            return ExternalFrameDisposition::PassToIngress;
+        }
         try {
             boost::system::error_code error;
             const auto raw = json::parse(payload, error);
-            if (error || !raw.is_object()) { fail(); return; }
+            if (error || !raw.is_object()) { fail(); return ExternalFrameDisposition::Invalid; }
             const auto& root = raw.as_object();
             const auto* topic = json_field(root, "topic");
             if (topic == nullptr || !topic->is_string()
-                || !std::string_view(topic->as_string().data(), topic->as_string().size()).starts_with("orderbook.50.BTCUSDT")) return;
+                || !std::string_view(topic->as_string().data(), topic->as_string().size()).starts_with("orderbook.50.BTCUSDT")) {
+                return ExternalFrameDisposition::PassToIngress;
+            }
             const auto* type = json_field(root, "type");
             const auto* data = json_field(root, "data");
-            if (type == nullptr || data == nullptr || !data->is_object()) { fail(); return; }
+            if (type == nullptr || data == nullptr || !data->is_object()) {
+                fail();
+                return ExternalFrameDisposition::Consumed;
+            }
             const auto& book_data = data->as_object();
             std::uint64_t update_id = 0;
-            if (!json_u64(json_field(book_data, "u"), update_id) || update_id == 0) { fail(); return; }
+            if (!json_u64(json_field(book_data, "u"), update_id) || update_id == 0) {
+                fail();
+                return ExternalFrameDisposition::Consumed;
+            }
             if (json_text_equals(type, "snapshot")) {
                 CoinbaseDepthSnapshot snapshot;
                 snapshot.local_receive_monotonic_ns = receive_ns;
                 if (!parse_levels(json_field(book_data, "b"), false, snapshot.bids)
-                    || !parse_levels(json_field(book_data, "a"), false, snapshot.asks)) { fail(); return; }
+                    || !parse_levels(json_field(book_data, "a"), false, snapshot.asks)) {
+                    fail();
+                    return ExternalFrameDisposition::Consumed;
+                }
                 std::lock_guard lock(mutex_);
                 if (epoch != connection_epoch_) reset_epoch(epoch);
-                if (!book_.install_snapshot(snapshot)) { ++parse_failures_; return; }
+                if (!book_.install_snapshot(snapshot)) {
+                    ++parse_failures_;
+                    return ExternalFrameDisposition::Consumed;
+                }
                 last_update_id_ = update_id;
                 publish(receive_ns, wall_ns, update_id);
-                return;
+                return ExternalFrameDisposition::Consumed;
             }
-            if (!json_text_equals(type, "delta")) return;
-            CoinbaseDepthUpdate update;
-            update.local_receive_monotonic_ns = receive_ns;
-            if (!parse_levels(json_field(book_data, "b"), true, update.changes, true)
-                || !parse_levels(json_field(book_data, "a"), true, update.changes, false)
-                || update.changes.empty()) { fail(); return; }
+            if (!json_text_equals(type, "delta")) {
+                return ExternalFrameDisposition::Consumed;
+            }
+            update_scratch_.local_receive_monotonic_ns = receive_ns;
+            update_scratch_.changes.clear();
+            if (!parse_levels(json_field(book_data, "b"), true, update_scratch_.changes, true)
+                || !parse_levels(json_field(book_data, "a"), true, update_scratch_.changes, false)
+                || update_scratch_.changes.empty()) {
+                fail();
+                return ExternalFrameDisposition::Consumed;
+            }
             std::lock_guard lock(mutex_);
-            if (epoch != connection_epoch_ || update_id <= last_update_id_ || !book_.apply_update(update)) {
+            if (epoch != connection_epoch_ || update_id <= last_update_id_ || !book_.apply_update(update_scratch_)) {
                 ++parse_failures_;
                 book_.begin_recovery();
-                return;
+                return ExternalFrameDisposition::Consumed;
             }
             last_update_id_ = update_id;
             publish(receive_ns, wall_ns, update_id);
-        } catch (...) { fail(); }
+            return ExternalFrameDisposition::Consumed;
+        } catch (...) {
+            fail();
+            return ExternalFrameDisposition::Invalid;
+        }
     }
 
     [[nodiscard]] CoinbaseL2Metrics metrics() const noexcept {
@@ -892,8 +947,8 @@ private:
     }
 
     void publish(std::int64_t receive_ns, std::int64_t wall_ns, std::uint64_t update_id) noexcept {
-        const auto current = book_.metrics();
-        if (current.valid == 0) return;
+        CoinbaseDepthLevel bid, ask;
+        if (!book_.top_of_book(bid, ask)) return;
         ExternalVenueEvent event;
         event.asset_handle = asset_handle_;
         event.connection_epoch = connection_epoch_;
@@ -902,10 +957,10 @@ private:
         event.event_type = ExternalEventType::BookTop;
         event.local_receive_monotonic_ns = receive_ns;
         event.local_receive_wall_ns = wall_ns;
-        event.bid = current.best_bid;
-        event.ask = current.best_ask;
-        event.bid_size = current.bid_depth_l1;
-        event.ask_size = current.ask_depth_l1;
+        event.bid = bid.price;
+        event.ask = ask.price;
+        event.bid_size = bid.quantity;
+        event.ask_size = ask.quantity;
         event.healthy = 1;
         (void)ingress_.on_event(event);
     }
@@ -922,6 +977,7 @@ private:
     VenueId venue_ = VenueId::BybitSpot;
     mutable std::mutex mutex_{};
     CoinbaseL2Book book_{};
+    CoinbaseDepthUpdate update_scratch_{};
     std::uint64_t connection_epoch_ = 0;
     std::uint64_t last_update_id_ = 0;
     std::uint64_t parse_failures_ = 0;
@@ -1275,8 +1331,11 @@ int main(int argc, char** argv) {
         std::jthread binance_usdm_market_thread([&](std::stop_token token) { binance_usdm_market.run(token); });
 #endif
 
+        std::vector<ExternalVenueEvent> binance_causal_batch(kExternalIngressQueueCapacity);
+        std::vector<ExternalVenueEvent> coinbase_causal_batch(kExternalIngressQueueCapacity);
         std::vector<ExternalVenueEvent> causal_spot_batch(
             2 * kExternalIngressQueueCapacity);
+        std::uint64_t causal_sort_fallbacks = 0;
         std::uint64_t last_cancel_signal_version = 0;
         std::uint8_t last_cancel_signal_valid = 0;
         std::int64_t last_full_status_publish_ns = 0;
@@ -1289,29 +1348,21 @@ int main(int argc, char** argv) {
             else std::this_thread::sleep_for(kFastLoopSleep);
         };
         while (!stopping.load(std::memory_order_relaxed)) {
-            std::size_t causal_count = 0;
-            causal_count += binance_ingress.drain_events(std::span<ExternalVenueEvent>(
-                causal_spot_batch.data() + causal_count,
-                causal_spot_batch.size() - causal_count));
-            causal_count += coinbase_ingress.drain_events(std::span<ExternalVenueEvent>(
-                causal_spot_batch.data() + causal_count,
-                causal_spot_batch.size() - causal_count));
-            std::sort(
-                causal_spot_batch.begin(),
-                causal_spot_batch.begin() + static_cast<std::ptrdiff_t>(causal_count),
-                [](const ExternalVenueEvent& left, const ExternalVenueEvent& right) {
-                    if (left.local_receive_monotonic_ns != right.local_receive_monotonic_ns) {
-                        return left.local_receive_monotonic_ns < right.local_receive_monotonic_ns;
-                    }
-                    if (left.local_receive_wall_ns != right.local_receive_wall_ns) {
-                        return left.local_receive_wall_ns < right.local_receive_wall_ns;
-                    }
-                    if (left.venue != right.venue) {
-                        return static_cast<std::uint8_t>(left.venue)
-                            < static_cast<std::uint8_t>(right.venue);
-                    }
-                    return left.source_sequence < right.source_sequence;
-                });
+            const auto binance_causal_count = binance_ingress.drain_events(
+                std::span<ExternalVenueEvent>(binance_causal_batch));
+            const auto coinbase_causal_count = coinbase_ingress.drain_events(
+                std::span<ExternalVenueEvent>(coinbase_causal_batch));
+            const auto merged = merge_causal_events(
+                std::span<const ExternalVenueEvent>(
+                    binance_causal_batch.data(), binance_causal_count),
+                std::span<const ExternalVenueEvent>(
+                    coinbase_causal_batch.data(), coinbase_causal_count),
+                std::span<ExternalVenueEvent>(causal_spot_batch));
+            if (merged.output_overflow != 0) {
+                throw std::runtime_error("causal ingress merge output overflow");
+            }
+            const std::size_t causal_count = merged.output_count;
+            causal_sort_fallbacks += merged.sort_fallback;
             std::size_t causal_index = 0;
             while (causal_index < causal_count) {
                 const auto receive_ns = causal_spot_batch[causal_index]
@@ -1435,6 +1486,7 @@ int main(int argc, char** argv) {
                     now_mono, wall_now_ns(), started_monotonic_ns)},
                 {"derivative_contexts", derivative_context_json(snapshot)},
                 {"drained_last_cycle", drained},
+                {"causal_merge_sort_fallbacks", causal_sort_fallbacks},
                 {"fast_signal_poll_interval_ms", event_driven_ingress ? json::value(nullptr) : json::value(5)},
                 {"ingress_wait_mode", event_driven_ingress ? "EVENT_DRIVEN" : "POLL_5MS"},
                 {"ingress_idle_deadline_ms", 5},

@@ -13,6 +13,12 @@ int main() {
     book.begin_recovery();
     assert(book.install_snapshot({10, {{100.0, 1.0}, {99.0, 2.0}}, {{101.0, 3.0}, {102.0, 4.0}}}));
     assert(book.apply_update({11, {{true, 100.0, 0.0}, {true, 100.5, 5.0}, {false, 101.0, 2.0}}}));
+    CoinbaseDepthLevel top_bid, top_ask;
+    assert(book.top_of_book(top_bid, top_ask));
+    assert(std::abs(top_bid.price - 100.5) < 1e-12);
+    assert(std::abs(top_bid.quantity - 5.0) < 1e-12);
+    assert(std::abs(top_ask.price - 101.0) < 1e-12);
+    assert(std::abs(top_ask.quantity - 2.0) < 1e-12);
     const auto updated = book.metrics();
     assert(updated.valid == 1 && updated.update_count == 1);
     assert(std::abs(updated.best_bid - 100.5) < 1e-12);
@@ -22,6 +28,7 @@ int main() {
 
     assert(!book.apply_update({12, {{false, 100.0, 1.0}}}));
     assert(book.state() == CoinbaseL2State::Gapped && book.metrics().valid == 0);
+    assert(!book.top_of_book(top_bid, top_ask));
     book.begin_recovery();
     assert(!book.install_snapshot({20, {{200.0, 1.0}}, {{200.0, 1.0}}}));
     assert(book.state() == CoinbaseL2State::Gapped);

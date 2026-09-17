@@ -6,7 +6,6 @@
 #include <charconv>
 #include <cmath>
 #include <cstdlib>
-#include <cstring>
 #include <limits>
 #include <new>
 
@@ -33,13 +32,11 @@ constexpr std::size_t kJsonArenaBytes = 512 * 1024;
     else if (value->is_int64()) output = static_cast<double>(value->as_int64());
     else if (value->is_uint64()) output = static_cast<double>(value->as_uint64());
     else if (value->is_string()) {
-        const auto text = text_of(value);
+        const auto& text = value->as_string();
         if (text.empty() || text.size() >= 96) return false;
-        std::array<char, 96> buffer{};
-        std::memcpy(buffer.data(), text.data(), text.size());
         char* end = nullptr;
-        output = std::strtod(buffer.data(), &end);
-        if (end != buffer.data() + static_cast<std::ptrdiff_t>(text.size())) return false;
+        output = std::strtod(text.c_str(), &end);
+        if (end != text.c_str() + static_cast<std::ptrdiff_t>(text.size())) return false;
     } else return false;
     return std::isfinite(output);
 }
@@ -93,15 +90,16 @@ constexpr std::size_t kJsonArenaBytes = 512 * 1024;
     return true;
 }
 
-[[nodiscard]] BinanceDepthParseState parse_object(std::string_view payload, json::object& output) noexcept {
+template <class Handler>
+[[nodiscard]] BinanceDepthParseState with_parsed_object(
+    std::string_view payload, Handler&& handler) noexcept {
     try {
         thread_local std::array<unsigned char, kJsonArenaBytes> arena{};
         json::static_resource resource(arena.data(), arena.size());
         boost::system::error_code error;
         const json::value value = json::parse(payload, error, &resource);
         if (error || !value.is_object()) return BinanceDepthParseState::Invalid;
-        output = value.as_object();
-        return BinanceDepthParseState::Parsed;
+        return handler(value.as_object());
     } catch (const std::bad_alloc&) {
         return BinanceDepthParseState::TooLarge;
     } catch (...) {
@@ -114,47 +112,72 @@ constexpr std::size_t kJsonArenaBytes = 512 * 1024;
 BinanceDepthParseState parse_binance_spot_depth_delta(
     std::string_view payload, std::int64_t receive_ns, BinanceDepthDelta& output,
     std::size_t max_levels_per_side) noexcept {
-    if (payload.empty() || receive_ns <= 0 || max_levels_per_side == 0) return BinanceDepthParseState::Invalid;
-    json::object root;
-    const auto parsed = parse_object(payload, root);
-    if (parsed != BinanceDepthParseState::Parsed) return parsed;
-    const json::object* object = &root;
-    if (const auto* data = find_value(root, "data"); data != nullptr && data->is_object()) object = &data->as_object();
-    if (text_of(find_value(*object, "e")) != "depthUpdate") return BinanceDepthParseState::Ignored;
-    BinanceDepthDelta next;
-    next.local_receive_monotonic_ns = receive_ns;
-    std::int64_t event_ms = 0;
-    (void)parse_i64(find_value(*object, "E"), event_ms);
-    next.source_event_ns = milliseconds_to_ns(event_ms);
-    if (!parse_u64(find_value(*object, "U"), next.first_update_id)
-        || !parse_u64(find_value(*object, "u"), next.final_update_id)
-        || next.first_update_id == 0 || next.final_update_id < next.first_update_id) return BinanceDepthParseState::Invalid;
-    const auto* bids = find_value(*object, "b");
-    const auto* asks = find_value(*object, "a");
-    if ((bids != nullptr && bids->is_array() && bids->as_array().size() > max_levels_per_side)
-        || (asks != nullptr && asks->is_array() && asks->as_array().size() > max_levels_per_side)) return BinanceDepthParseState::TooLarge;
-    if (!parse_levels(bids, next.bids, max_levels_per_side) || !parse_levels(asks, next.asks, max_levels_per_side)) return BinanceDepthParseState::Invalid;
-    output = std::move(next);
-    return BinanceDepthParseState::Parsed;
+    if (payload.empty() || receive_ns <= 0 || max_levels_per_side == 0) {
+        return BinanceDepthParseState::Invalid;
+    }
+    return with_parsed_object(payload, [&](const json::object& root) {
+        const json::object* object = &root;
+        if (const auto* data = find_value(root, "data");
+            data != nullptr && data->is_object()) {
+            object = &data->as_object();
+        }
+        if (text_of(find_value(*object, "e")) != "depthUpdate") {
+            return BinanceDepthParseState::Ignored;
+        }
+        BinanceDepthDelta next;
+        next.local_receive_monotonic_ns = receive_ns;
+        std::int64_t event_ms = 0;
+        (void)parse_i64(find_value(*object, "E"), event_ms);
+        next.source_event_ns = milliseconds_to_ns(event_ms);
+        if (!parse_u64(find_value(*object, "U"), next.first_update_id)
+            || !parse_u64(find_value(*object, "u"), next.final_update_id)
+            || next.first_update_id == 0
+            || next.final_update_id < next.first_update_id) {
+            return BinanceDepthParseState::Invalid;
+        }
+        const auto* bids = find_value(*object, "b");
+        const auto* asks = find_value(*object, "a");
+        if ((bids != nullptr && bids->is_array()
+                && bids->as_array().size() > max_levels_per_side)
+            || (asks != nullptr && asks->is_array()
+                && asks->as_array().size() > max_levels_per_side)) {
+            return BinanceDepthParseState::TooLarge;
+        }
+        if (!parse_levels(bids, next.bids, max_levels_per_side)
+            || !parse_levels(asks, next.asks, max_levels_per_side)) {
+            return BinanceDepthParseState::Invalid;
+        }
+        output = std::move(next);
+        return BinanceDepthParseState::Parsed;
+    });
 }
 
 BinanceDepthParseState parse_binance_depth_snapshot(
     std::string_view payload, std::int64_t receive_ns, BinanceDepthSnapshot& output,
     std::size_t max_levels_per_side) noexcept {
     if (payload.empty() || receive_ns <= 0 || max_levels_per_side == 0) return BinanceDepthParseState::Invalid;
-    json::object root;
-    const auto parsed = parse_object(payload, root);
-    if (parsed != BinanceDepthParseState::Parsed) return parsed;
-    BinanceDepthSnapshot next;
-    next.local_receive_monotonic_ns = receive_ns;
-    if (!parse_u64(find_value(root, "lastUpdateId"), next.last_update_id) || next.last_update_id == 0) return BinanceDepthParseState::Invalid;
-    const auto* bids = find_value(root, "bids");
-    const auto* asks = find_value(root, "asks");
-    if ((bids != nullptr && bids->is_array() && bids->as_array().size() > max_levels_per_side)
-        || (asks != nullptr && asks->is_array() && asks->as_array().size() > max_levels_per_side)) return BinanceDepthParseState::TooLarge;
-    if (!parse_levels(bids, next.bids, max_levels_per_side) || !parse_levels(asks, next.asks, max_levels_per_side)) return BinanceDepthParseState::Invalid;
-    output = std::move(next);
-    return BinanceDepthParseState::Parsed;
+    return with_parsed_object(payload, [&](const json::object& root) {
+        BinanceDepthSnapshot next;
+        next.local_receive_monotonic_ns = receive_ns;
+        if (!parse_u64(find_value(root, "lastUpdateId"), next.last_update_id)
+            || next.last_update_id == 0) {
+            return BinanceDepthParseState::Invalid;
+        }
+        const auto* bids = find_value(root, "bids");
+        const auto* asks = find_value(root, "asks");
+        if ((bids != nullptr && bids->is_array()
+                && bids->as_array().size() > max_levels_per_side)
+            || (asks != nullptr && asks->is_array()
+                && asks->as_array().size() > max_levels_per_side)) {
+            return BinanceDepthParseState::TooLarge;
+        }
+        if (!parse_levels(bids, next.bids, max_levels_per_side)
+            || !parse_levels(asks, next.asks, max_levels_per_side)) {
+            return BinanceDepthParseState::Invalid;
+        }
+        output = std::move(next);
+        return BinanceDepthParseState::Parsed;
+    });
 }
 
 } // namespace pm::v7::external_fair

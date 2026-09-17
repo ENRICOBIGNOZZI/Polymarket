@@ -20,6 +20,12 @@ namespace pm::v7::external_fair {
 
 class ExternalRawFrameSink;
 
+enum class ExternalFrameDisposition : std::uint8_t {
+    PassToIngress = 0,
+    Consumed = 1,
+    Invalid = 2,
+};
+
 class ExternalFrameObserver {
 public:
     virtual ~ExternalFrameObserver() = default;
@@ -28,6 +34,19 @@ public:
                           std::int64_t local_receive_monotonic_ns,
                           std::int64_t local_receive_wall_ns,
                           std::string_view payload) noexcept = 0;
+
+    // Default preserves the original observer + generic-ingress fanout.
+    // Stateful observers may override this when they fully normalize an owned
+    // frame and can safely suppress a duplicate generic JSON decode.
+    [[nodiscard]] virtual ExternalFrameDisposition route_frame(
+        std::uint64_t connection_epoch,
+        std::int64_t local_receive_monotonic_ns,
+        std::int64_t local_receive_wall_ns,
+        std::string_view payload) noexcept {
+        on_frame(connection_epoch, local_receive_monotonic_ns,
+                 local_receive_wall_ns, payload);
+        return ExternalFrameDisposition::PassToIngress;
+    }
 };
 
 #if PM_V7_EXTERNAL_USE_STD_STOP_TOKEN

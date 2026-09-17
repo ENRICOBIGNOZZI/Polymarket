@@ -90,6 +90,55 @@ int main() {
     assert(!reconstructed.on_event(reconstructed_bbo));
     assert(reconstructed.snapshot().invalid_frames == 1);
 
+    // Observer-owned frames skip generic JSON decoding but must preserve the
+    // same transport accounting and reconnect/gap semantics.
+    ExternalVenueIngress routed(VenueId::BybitSpot, 502);
+    routed.on_observer_frame(7);
+    auto routed_snapshot = routed.snapshot();
+    assert(routed_snapshot.frames == 1);
+    assert(routed_snapshot.invalid_frames == 0);
+    assert(routed_snapshot.connection_epoch == 7);
+    routed.on_observer_frame(8, true);
+    routed_snapshot = routed.snapshot();
+    assert(routed_snapshot.frames == 2);
+    assert(routed_snapshot.invalid_frames == 1);
+    assert(routed_snapshot.reconnects == 1);
+    assert(routed_snapshot.gap_pending == 1);
+
+    // Two already ordered per-venue streams use the linear merge fast-path.
+    std::array<ExternalVenueEvent, 2> merge_a{};
+    std::array<ExternalVenueEvent, 2> merge_b{};
+    std::array<ExternalVenueEvent, 4> merge_out{};
+    merge_a[0].local_receive_monotonic_ns = 10;
+    merge_a[1].local_receive_monotonic_ns = 30;
+    merge_b[0].local_receive_monotonic_ns = 20;
+    merge_b[1].local_receive_monotonic_ns = 40;
+    merge_a[0].venue = merge_a[1].venue = VenueId::BinanceSpot;
+    merge_b[0].venue = merge_b[1].venue = VenueId::CoinbaseSpot;
+    const auto merged_fast = merge_causal_events(merge_a, merge_b, merge_out);
+    assert(merged_fast.output_count == 4);
+    assert(merged_fast.sort_fallback == 0);
+    assert(merged_fast.output_overflow == 0);
+    assert(merge_out[0].local_receive_monotonic_ns == 10);
+    assert(merge_out[1].local_receive_monotonic_ns == 20);
+    assert(merge_out[2].local_receive_monotonic_ns == 30);
+    assert(merge_out[3].local_receive_monotonic_ns == 40);
+
+    // Any unexpected producer ordering preserves the old global-sort semantics.
+    std::swap(merge_a[0], merge_a[1]);
+    const auto merged_fallback = merge_causal_events(merge_a, merge_b, merge_out);
+    assert(merged_fallback.output_count == 4);
+    assert(merged_fallback.sort_fallback == 1);
+    assert(merge_out[0].local_receive_monotonic_ns == 10);
+    assert(merge_out[1].local_receive_monotonic_ns == 20);
+    assert(merge_out[2].local_receive_monotonic_ns == 30);
+    assert(merge_out[3].local_receive_monotonic_ns == 40);
+
+    std::array<ExternalVenueEvent, 3> merge_too_small{};
+    const auto merged_overflow = merge_causal_events(merge_a, merge_b, merge_too_small);
+    assert(merged_overflow.output_count == 0);
+    assert(merged_overflow.output_overflow == 1);
+
     // Backpressure is bounded and non-blocking. Saturate the queue without a
     // consumer: some events must be dropped and the next accepted event must
     // carry a propagated gap rather than hiding the loss.
