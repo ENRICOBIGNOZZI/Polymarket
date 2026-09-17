@@ -1,14 +1,20 @@
 #include "pm/v7_binance_first_arrival.hpp"
 
 #include <cmath>
+#include <stdexcept>
 
 namespace pm::v7::external_fair {
 
+BinanceAggTradeFirstArrivalGate::BinanceAggTradeFirstArrivalGate(
+    std::uint64_t asset_handle) : asset_handle_(asset_handle) {
+    if (asset_handle_ == 0) throw std::invalid_argument("asset_handle must be non-zero");
+}
+
 bool BinanceAggTradeFirstArrivalGate::valid_event(
-    const ExternalVenueEvent& event) noexcept {
+    const ExternalVenueEvent& event) const noexcept {
     return event.venue == VenueId::BinanceSpot
         && event.event_type == ExternalEventType::Trade
-        && event.asset_handle != 0
+        && event.asset_handle == asset_handle_
         && event.source_sequence != 0
         && event.exchange_event_ns > 0
         && event.local_receive_monotonic_ns > 0
@@ -24,8 +30,7 @@ bool BinanceAggTradeFirstArrivalGate::valid_event(
 
 bool BinanceAggTradeFirstArrivalGate::same_payload(
     const Slot& slot, const ExternalVenueEvent& event) noexcept {
-    return slot.asset_handle == event.asset_handle
-        && slot.source_sequence == event.source_sequence
+    return slot.source_sequence == event.source_sequence
         && slot.exchange_event_ns == event.exchange_event_ns
         && slot.trade_price == event.trade_price
         && slot.trade_size == event.trade_size
@@ -53,7 +58,6 @@ BinanceFirstArrivalResult BinanceAggTradeFirstArrivalGate::observe(
         }
         high_watermark_sequence_ = event.source_sequence;
         slot = Slot{};
-        slot.asset_handle = event.asset_handle;
         slot.source_sequence = event.source_sequence;
         slot.exchange_event_ns = event.exchange_event_ns;
         slot.first_receive_monotonic_ns = event.local_receive_monotonic_ns;
@@ -64,7 +68,6 @@ BinanceFirstArrivalResult BinanceAggTradeFirstArrivalGate::observe(
         slot.occupied = 1;
         ++first_arrivals_;
 
-        out.event = event;
         out.disposition = BinanceFirstArrivalDisposition::First;
         out.source_sequence = event.source_sequence;
         out.first_receive_monotonic_ns = event.local_receive_monotonic_ns;
@@ -72,7 +75,7 @@ BinanceFirstArrivalResult BinanceAggTradeFirstArrivalGate::observe(
         out.emit_first = 1;
         return out;
     }
-    out.event = event;
+
     out.source_sequence = event.source_sequence;
     out.first_receive_monotonic_ns = slot.first_receive_monotonic_ns;
     out.lane_mask = slot.lane_mask;

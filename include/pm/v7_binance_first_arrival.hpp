@@ -22,7 +22,6 @@ enum class BinanceFirstArrivalDisposition : std::uint8_t {
 };
 
 struct BinanceFirstArrivalResult {
-    ExternalVenueEvent event{};
     BinanceFirstArrivalDisposition disposition = BinanceFirstArrivalDisposition::Invalid;
     std::uint64_t source_sequence = 0;
     std::int64_t first_receive_monotonic_ns = 0;
@@ -36,10 +35,13 @@ struct BinanceFirstArrivalResult {
 
 class BinanceAggTradeFirstArrivalGate final {
 public:
+    explicit BinanceAggTradeFirstArrivalGate(std::uint64_t asset_handle);
+
     [[nodiscard]] BinanceFirstArrivalResult observe(
         std::uint8_t lane,
         const ExternalVenueEvent& event) noexcept;
 
+    [[nodiscard]] std::uint64_t asset_handle() const noexcept { return asset_handle_; }
     [[nodiscard]] std::uint64_t first_arrivals() const noexcept { return first_arrivals_; }
     [[nodiscard]] std::uint64_t independent_confirms() const noexcept { return confirms_; }
     [[nodiscard]] std::uint64_t same_lane_duplicates() const noexcept { return duplicates_; }
@@ -48,7 +50,6 @@ public:
 
 private:
     struct Slot {
-        std::uint64_t asset_handle = 0;
         std::uint64_t source_sequence = 0;
         std::int64_t exchange_event_ns = 0;
         std::int64_t first_receive_monotonic_ns = 0;
@@ -61,11 +62,13 @@ private:
         std::uint8_t occupied = 0;
         std::array<std::uint8_t, 3> reserved{};
     };
-    [[nodiscard]] static bool valid_event(const ExternalVenueEvent& event) noexcept;
+
+    [[nodiscard]] bool valid_event(const ExternalVenueEvent& event) const noexcept;
     [[nodiscard]] static bool same_payload(
         const Slot& slot, const ExternalVenueEvent& event) noexcept;
 
     std::array<Slot, kBinanceFirstArrivalSlots> slots_{};
+    std::uint64_t asset_handle_ = 0;
     std::uint64_t first_arrivals_ = 0;
     std::uint64_t confirms_ = 0;
     std::uint64_t duplicates_ = 0;
