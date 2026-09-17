@@ -12,6 +12,7 @@ Group=@SERVICE_GROUP@
 WorkingDirectory=@APP_DIR@
 Environment=POLYMARKET_APP_DIR=@APP_DIR@
 Environment=PM_V7_RUN_ROOT=@RUN_ROOT@
+Environment=PM_V7_RUNTIME_ARTIFACT_ROOT=/home/@SERVICE_USER@/polymarket-artifacts/current
 Environment=POLYMARKET_EXPECTED_SHA=@EXPECTED_SHA@
 Environment=PM_V7_AUTHENTICATED_EXECUTION=0
 Environment=PM_V7_REAL_ORDER_SUBMISSION=0

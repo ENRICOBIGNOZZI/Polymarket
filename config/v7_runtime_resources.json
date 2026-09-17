@@ -1,0 +1,22 @@
+{
+  "schema": "polymarket_v7_runtime_resources_v1",
+  "version": 1,
+  "paper_only": true,
+  "hot_path": {
+    "reserved_cores": 2,
+    "nice": 0
+  },
+  "collector": {
+    "nice": 5
+  },
+  "control": {
+    "nice": 3
+  },
+  "forbidden_on_london": [
+    "training",
+    "backtest",
+    "retrospective_analytics",
+    "report_generation",
+    "hyperparameter_search"
+  ]
+}

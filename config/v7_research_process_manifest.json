@@ -1,0 +1,173 @@
+{
+  "execution_authority": false,
+  "paper_only": true,
+  "process_count": 5,
+  "processes": [
+    {
+      "arguments": [
+        "--model-sha",
+        "${SHA}",
+        "--family",
+        "PM_PLUS_EXTERNAL",
+        "--horizon-ms",
+        "250",
+        "--threshold-ticks",
+        "1.0"
+      ],
+      "config_identity_required": true,
+      "dependencies": [
+        "external_fair_router",
+        "external_venue_runtime",
+        "repricing_book_observer",
+        "rtds_monitor"
+      ],
+      "exact_sha_required": true,
+      "executable": "scripts/v7_pm_repricing_shadow.py",
+      "id": "pm_repricing_shadow",
+      "inputs": [
+        "config/v7_pm_repricing_250ms_shadow.json",
+        "external_fair/status.json",
+        "external_fair/paper_router_status.json",
+        "research/repricing_book/book_observations/current.jsonl",
+        "research/repricing_book/fillability_ws_status.json"
+      ],
+      "launcher_log": "research/pm_repricing_shadow.log",
+      "london_deployed": false,
+      "outputs": [
+        "research/pm_repricing_shadow.jsonl*",
+        "research/pm_repricing_shadow_status.json",
+        "research/pm_repricing_shadow.log",
+        "research/pm_repricing_cancel_signal.json"
+      ],
+      "profile": "observer",
+      "runtime_class": "RESEARCH_ONLY"
+    },
+    {
+      "arguments": [],
+      "config_identity_required": true,
+      "dependencies": [
+        "external_fair_router",
+        "repricing_book_observer"
+      ],
+      "exact_sha_required": true,
+      "executable": "scripts/v7_two_sided_complete_set_shadow.py",
+      "id": "two_sided_complete_set_shadow",
+      "inputs": [
+        "external_fair/status.json",
+        "research/repricing_book/book_observations/current.jsonl",
+        "research/repricing_book/fillability_ws.jsonl"
+      ],
+      "launcher_log": "research/two_sided_complete_set_shadow.log",
+      "london_deployed": false,
+      "outputs": [
+        "research/two_sided_complete_set_shadow.jsonl",
+        "research/two_sided_complete_set_shadow_status.json",
+        "research/two_sided_complete_set_shadow.log"
+      ],
+      "profile": "observer",
+      "runtime_class": "RESEARCH_ONLY"
+    },
+    {
+      "arguments": [
+        "scripts/v7_maker_durable_learning.py"
+      ],
+      "config_identity_required": true,
+      "dependencies": [
+        "ledger_router"
+      ],
+      "exact_sha_required": true,
+      "executable": "launcher_subshell",
+      "id": "maker_model_learning",
+      "inputs": [
+        "ledger/execution.jsonl"
+      ],
+      "launcher_log": "micro_maker/durable_learning.log",
+      "london_deployed": false,
+      "outputs": [
+        "micro_maker/execution_model.json",
+        "micro_maker/research_learning_status.json",
+        "micro_maker/durable_learning.log"
+      ],
+      "profile": "observer",
+      "runtime_class": "RESEARCH_ONLY"
+    },
+    {
+      "arguments": [
+        "periodic"
+      ],
+      "config_identity_required": true,
+      "dependencies": [
+        "ledger_router"
+      ],
+      "exact_sha_required": true,
+      "executable": "scripts/v7_generate_economic_artifacts.py",
+      "id": "economic_artifacts",
+      "inputs": [
+        "ledger/execution.jsonl"
+      ],
+      "launcher_log": "economic_artifacts.log",
+      "london_deployed": false,
+      "outputs": [
+        "reports",
+        "economic_artifacts.log"
+      ],
+      "profile": "observer",
+      "runtime_class": "RESEARCH_ONLY"
+    },
+    {
+      "arguments": [
+        "scripts/v7_joint_execution_policy.py",
+        "scripts/v7_learned_execution_model.py",
+        "scripts/v7_profit_attribution.py",
+        "scripts/v7_profit_report.py",
+        "scripts/v7_lossless_data_compaction.py",
+        "scripts/v7_permanent_evidence.py",
+        "scripts/v7_economic_decision_report.py",
+        "scripts/v7_fast_cancel_latency_report.py",
+        "scripts/v7_maker_execution_horse_race.py"
+      ],
+      "config_identity_required": true,
+      "dependencies": [
+        "ledger_router"
+      ],
+      "exact_sha_required": true,
+      "executable": "launcher_subshell",
+      "id": "economic_evidence_loop",
+      "inputs": [
+        "ledger/execution.jsonl",
+        "${DURABLE_ROOT}/profit_experiments",
+        "${DURABLE_ROOT}/permanent_evidence/store",
+        "${RUN_ROOT}/../paper_v7_archives",
+        "research/external_cancel_signals.jsonl*",
+        "research/pm_repricing_shadow.jsonl*"
+      ],
+      "launcher_log": "permanent_evidence.log",
+      "london_deployed": false,
+      "outputs": [
+        "learned_execution/joint_policy.json",
+        "learned_execution/oos_report.json",
+        "profit_attribution.json",
+        "profit_attribution.csv",
+        "profit_attribution.log",
+        "profit_experiment_report.json",
+        "profit_experiment_report.log",
+        "${DURABLE_ROOT}/profit_experiments/**/confirmatory_final.json",
+        "${DURABLE_ROOT}/profit_experiments/**/final_analysis_sources/*.py.gz",
+        "permanent_evidence.log",
+        "permanent_evidence_status.json",
+        "${DURABLE_ROOT}/permanent_evidence",
+        "economic_decision_report.json",
+        "economic_decision_report.log",
+        "NEXT_ECONOMIC_ACTION.md",
+        "reports/fast_cancel_latency.json",
+        "reports/fast_cancel_latency_report.log",
+        "reports/maker_execution_horse_race.json",
+        "reports/maker_execution_horse_race.log"
+      ],
+      "profile": "observer",
+      "runtime_class": "RESEARCH_ONLY"
+    }
+  ],
+  "schema": "polymarket_v7_research_process_manifest_v1",
+  "version": 1
+}

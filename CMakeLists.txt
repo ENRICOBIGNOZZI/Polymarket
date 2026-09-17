@@ -3,6 +3,7 @@ project(polymarket_v7 VERSION 7.0.0 LANGUAGES CXX)
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
+option(PM_LONDON_RUNTIME_ONLY "Build only binaries required by the London execution runtime" OFF)
 
 if(POLICY CMP0167)
   cmake_policy(SET CMP0167 NEW)
@@ -83,13 +84,17 @@ add_executable(polymarket_v7_trade_recorder src/v7_trade_recorder.cpp)
 target_link_libraries(polymarket_v7_trade_recorder PRIVATE pm_core)
 target_compile_options(polymarket_v7_trade_recorder PRIVATE -Wall -Wextra -Wpedantic)
 
+if(NOT PM_LONDON_RUNTIME_ONLY)
 add_executable(polymarket_v7_maker_replay_bench src/v7_maker_replay_bench.cpp)
 target_link_libraries(polymarket_v7_maker_replay_bench PRIVATE pm_v7_hft)
 target_compile_options(polymarket_v7_maker_replay_bench PRIVATE -Wall -Wextra -Wpedantic)
+endif()
 
+if(NOT PM_LONDON_RUNTIME_ONLY)
 add_executable(polymarket_v7_latency_probe src/v7_latency_probe.cpp)
 target_link_libraries(polymarket_v7_latency_probe PRIVATE pm_core)
 target_compile_options(polymarket_v7_latency_probe PRIVATE -Wall -Wextra -Wpedantic)
+endif()
 
 add_executable(polymarket_v7_maker_markout_observer src/v7_maker_markout_observer.cpp)
 target_link_libraries(polymarket_v7_maker_markout_observer PRIVATE pm_v7_common pm_fast_arb pm_core)
@@ -107,10 +112,13 @@ add_executable(polymarket_v7_authorized_maker_paper_executor
   src/v7_authorized_maker_paper_executor.cpp)
 target_link_libraries(polymarket_v7_authorized_maker_paper_executor PRIVATE pm_v7_hft Threads::Threads)
 target_compile_options(polymarket_v7_authorized_maker_paper_executor PRIVATE -Wall -Wextra -Wpedantic)
+if(NOT PM_LONDON_RUNTIME_ONLY)
 add_executable(polymarket_v7_maker_research_replay src/v7_maker_research_replay.cpp)
 target_link_libraries(polymarket_v7_maker_research_replay PRIVATE pm_v7_hft)
 target_compile_options(polymarket_v7_maker_research_replay PRIVATE -Wall -Wextra -Wpedantic)
+endif()
 
+if(NOT PM_LONDON_RUNTIME_ONLY)
 # Offline queue-handoff comparison; no market or execution authority.
 add_executable(polymarket_v7_feed_race_probe src/v7_feed_race_probe.cpp)
 target_link_libraries(polymarket_v7_feed_race_probe PRIVATE pm_v7_external)
@@ -119,20 +127,26 @@ target_compile_options(polymarket_v7_feed_race_probe PRIVATE -Wall -Wextra -Wped
 add_executable(polymarket_v7_ingress_latency_bench src/v7_ingress_latency_bench.cpp)
 target_link_libraries(polymarket_v7_ingress_latency_bench PRIVATE pm_v7_external)
 target_compile_options(polymarket_v7_ingress_latency_bench PRIVATE -Wall -Wextra -Wpedantic)
+endif()
 
 add_executable(polymarket_v7_external_venue_runtime src/v7_external_venue_runtime.cpp)
 target_link_libraries(polymarket_v7_external_venue_runtime PRIVATE pm_v7_external)
 target_compile_options(polymarket_v7_external_venue_runtime PRIVATE -Wall -Wextra -Wpedantic)
 
+if(NOT PM_LONDON_RUNTIME_ONLY)
 add_executable(polymarket_v7_external_tape_replay src/v7_external_tape_replay.cpp)
 target_link_libraries(polymarket_v7_external_tape_replay PRIVATE pm_v7_external)
 target_compile_options(polymarket_v7_external_tape_replay PRIVATE -Wall -Wextra -Wpedantic)
+endif()
 
 # Research-only deterministic decoder for the frozen BTC M5 external-cancel forward study.
 # Research-only high-frequency BTC M5 CLOB books. It reuses the canonical
 # public WebSocket decoder and segmented evidence tape, but is not launched by
 # the production process manifest and owns no execution authority.
 include(CTest)
+if(PM_LONDON_RUNTIME_ONLY AND BUILD_TESTING)
+  message(FATAL_ERROR "PM_LONDON_RUNTIME_ONLY requires BUILD_TESTING=OFF")
+endif()
 if(BUILD_TESTING)
   find_package(Python3 REQUIRED COMPONENTS Interpreter)
   add_test(NAME pm_v7_latency_probe_validate_public

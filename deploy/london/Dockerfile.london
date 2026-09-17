@@ -1,0 +1,21 @@
+FROM ubuntu:24.04 AS build
+ENV DEBIAN_FRONTEND=noninteractive
+RUN apt-get update && apt-get install -y --no-install-recommends build-essential cmake ninja-build pkg-config libcurl4-openssl-dev libboost-all-dev libssl-dev python3 ca-certificates && rm -rf /var/lib/apt/lists/*
+WORKDIR /src
+COPY . .
+RUN cmake -S . -B build -GNinja -DCMAKE_BUILD_TYPE=Release -DPM_LONDON_RUNTIME_ONLY=ON -DBUILD_TESTING=OFF \
+ && cmake --build build --parallel 2 \
+ && python3 deploy/london/stage_runtime.py --source . --dest /stage
+
+FROM ubuntu:24.04
+ENV DEBIAN_FRONTEND=noninteractive
+RUN apt-get update && apt-get install -y --no-install-recommends python3 ca-certificates libcurl4 libssl3 util-linux && rm -rf /var/lib/apt/lists/*
+WORKDIR /opt/polymarket
+COPY --from=build /stage/ /opt/polymarket/
+COPY --from=build /src/build/polymarket_v7_trade_recorder /opt/polymarket/build/
+COPY --from=build /src/build/polymarket_v7_maker_markout_observer /opt/polymarket/build/
+COPY --from=build /src/build/polymarket_v7_maker_fillability_observer /opt/polymarket/build/
+COPY --from=build /src/build/polymarket_v7_authorized_maker_paper_executor /opt/polymarket/build/
+COPY --from=build /src/build/polymarket_v7_external_venue_runtime /opt/polymarket/build/
+ENV PM_V7_AUTHENTICATED_EXECUTION=0 PM_V7_REAL_ORDER_SUBMISSION=0
+CMD ["bash","scripts/paper_v7_execution_loop.sh"]

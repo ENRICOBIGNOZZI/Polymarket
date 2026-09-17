@@ -19,7 +19,7 @@ PY
 
 
 [[ "$EXPECTED_SHA" =~ ^[0-9a-f]{40}$ ]] || { echo "exact 40-character SHA required" >&2; exit 78; }
-[[ "$(git -C "$APP_DIR" rev-parse HEAD)" == "$EXPECTED_SHA" ]] || { echo "checkout SHA drift" >&2; exit 78; }
+[[ "$(cat "$APP_DIR/deploy/london/runtime_sha" 2>/dev/null || true)" == "$EXPECTED_SHA" ]] || { echo "staged runtime SHA drift" >&2; exit 78; }
 
 # Native service managers must not turn an explicitly quarantined state into an
 # unbounded restart loop.  Exit successfully until an operator reconciles and

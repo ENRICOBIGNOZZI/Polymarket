@@ -1,8 +1,8 @@
 {
   "authenticated_execution": false,
   "authority_registry": "config/v7_authority_registry.json",
-  "expected_launcher_child_count": 25,
-  "expected_process_count": 27,
+  "expected_launcher_child_count": 20,
+  "expected_process_count": 22,
   "launcher": "scripts/paper_v7_execution_loop.sh",
   "paper_only": true,
   "processes": [
@@ -20,10 +20,12 @@
       "id": "public_https_proxy",
       "inputs": [],
       "launcher_log": "public_https_proxy.log",
+      "london_deployed": true,
       "outputs": [
         "public_https_proxy.log"
       ],
-      "profile": "infrastructure"
+      "profile": "infrastructure",
+      "runtime_class": "COLLECTOR"
     },
     {
       "arguments": [],
@@ -41,10 +43,12 @@
         "external_fair/external_venues.json"
       ],
       "launcher_log": "external_fair/rtds_monitor.log",
+      "london_deployed": true,
       "outputs": [
         "external_fair/rtds_monitor.log"
       ],
-      "profile": "engine"
+      "profile": "engine",
+      "runtime_class": "COLLECTOR"
     },
     {
       "arguments": [
@@ -60,11 +64,13 @@
       "id": "external_venue_runtime",
       "inputs": [],
       "launcher_log": "external_fair/external_venues.log",
+      "london_deployed": true,
       "outputs": [
         "external_fair/external_venues.json",
         "external_fair/external_venues.log"
       ],
-      "profile": "engine"
+      "profile": "engine",
+      "runtime_class": "HOT_PATH"
     },
     {
       "arguments": [
@@ -83,12 +89,14 @@
         "external_fair/status.json"
       ],
       "launcher_log": "research/repricing_book_observer.log",
+      "london_deployed": true,
       "outputs": [
         "research/repricing_book/fillability_ws_status.json",
         "research/repricing_book/book_observations/current.jsonl",
         "research/repricing_book_observer.log"
       ],
-      "profile": "observer"
+      "profile": "observer",
+      "runtime_class": "COLLECTOR"
     },
     {
       "arguments": [
@@ -134,6 +142,7 @@
         "ledger/execution.jsonl"
       ],
       "launcher_log": "external_fair/lead_lag_collector.log",
+      "london_deployed": true,
       "outputs": [
         "external_fair/lead_lag_collector_status.json",
         "${DURABLE_ROOT}/external_fair/pm_lead_lag.jsonl",
@@ -143,7 +152,8 @@
         "${DURABLE_ROOT}/profit_experiments/${SHA}/observations.jsonl",
         "${DURABLE_ROOT}/profit_experiments/${SHA}/cohorts/*/confirmatory_window_closure.json"
       ],
-      "profile": "observer"
+      "profile": "observer",
+      "runtime_class": "COLLECTOR"
     },
     {
       "arguments": [
@@ -163,72 +173,14 @@
         "external_fair/external_cancel_signal.json"
       ],
       "launcher_log": "research/external_cancel_signal_journal.log",
+      "london_deployed": true,
       "outputs": [
         "research/external_cancel_signals.jsonl*",
         "research/external_cancel_signal_journal_status.json",
         "research/external_cancel_signal_journal.log"
       ],
-      "profile": "observer"
-    },
-    {
-      "arguments": [
-        "--model-sha",
-        "${SHA}",
-        "--family",
-        "PM_PLUS_EXTERNAL",
-        "--horizon-ms",
-        "250",
-        "--threshold-ticks",
-        "1.0"
-      ],
-      "config_identity_required": true,
-      "dependencies": [
-        "external_fair_router",
-        "external_venue_runtime",
-        "repricing_book_observer",
-        "rtds_monitor"
-      ],
-      "exact_sha_required": true,
-      "executable": "scripts/v7_pm_repricing_shadow.py",
-      "id": "pm_repricing_shadow",
-      "inputs": [
-        "config/v7_pm_repricing_250ms_shadow.json",
-        "external_fair/status.json",
-        "external_fair/paper_router_status.json",
-        "research/repricing_book/book_observations/current.jsonl",
-        "research/repricing_book/fillability_ws_status.json"
-      ],
-      "launcher_log": "research/pm_repricing_shadow.log",
-      "outputs": [
-        "research/pm_repricing_shadow.jsonl*",
-        "research/pm_repricing_shadow_status.json",
-        "research/pm_repricing_shadow.log",
-        "research/pm_repricing_cancel_signal.json"
-      ],
-      "profile": "observer"
-    },
-    {
-      "arguments": [],
-      "config_identity_required": true,
-      "dependencies": [
-        "external_fair_router",
-        "repricing_book_observer"
-      ],
-      "exact_sha_required": true,
-      "executable": "scripts/v7_two_sided_complete_set_shadow.py",
-      "id": "two_sided_complete_set_shadow",
-      "inputs": [
-        "external_fair/status.json",
-        "research/repricing_book/book_observations/current.jsonl",
-        "research/repricing_book/fillability_ws.jsonl"
-      ],
-      "launcher_log": "research/two_sided_complete_set_shadow.log",
-      "outputs": [
-        "research/two_sided_complete_set_shadow.jsonl",
-        "research/two_sided_complete_set_shadow_status.json",
-        "research/two_sided_complete_set_shadow.log"
-      ],
-      "profile": "observer"
+      "profile": "observer",
+      "runtime_class": "COLLECTOR"
     },
     {
       "arguments": [
@@ -243,12 +195,14 @@
       "id": "binance_usdm_rest",
       "inputs": [],
       "launcher_log": "external_fair/binance_usdm_rest.log",
+      "london_deployed": true,
       "outputs": [
         "external_fair/binance_usdm_rest.jsonl",
         "external_fair/binance_usdm_rest.log",
         "external_fair/binance_usdm_rest.jsonl.segment-*"
       ],
-      "profile": "feed"
+      "profile": "feed",
+      "runtime_class": "COLLECTOR"
     },
     {
       "arguments": [
@@ -263,12 +217,14 @@
       "id": "deribit_rest",
       "inputs": [],
       "launcher_log": "external_fair/deribit_rest.log",
+      "london_deployed": true,
       "outputs": [
         "external_fair/deribit_rest.jsonl",
         "external_fair/deribit_rest.log",
         "external_fair/deribit_rest.jsonl.segment-*"
       ],
-      "profile": "feed"
+      "profile": "feed",
+      "runtime_class": "COLLECTOR"
     },
     {
       "arguments": [
@@ -283,12 +239,14 @@
       "id": "coinbase_l2_rest",
       "inputs": [],
       "launcher_log": "external_fair/coinbase_l2_rest.log",
+      "london_deployed": true,
       "outputs": [
         "external_fair/coinbase_l2_rest.jsonl",
         "external_fair/coinbase_l2_rest.log",
         "external_fair/coinbase_l2_rest.jsonl.segment-*"
       ],
-      "profile": "feed"
+      "profile": "feed",
+      "runtime_class": "COLLECTOR"
     },
     {
       "arguments": [
@@ -308,12 +266,14 @@
         "config/v7_external_fair.json"
       ],
       "launcher_log": "external_fair/paper_router.log",
+      "london_deployed": true,
       "outputs": [
         "external_fair/paper_router_status.json",
         "external_fair/pm_prior.json",
         "external_fair/paper_router.log"
       ],
-      "profile": "engine"
+      "profile": "engine",
+      "runtime_class": "HOT_PATH"
     },
     {
       "arguments": [
@@ -332,12 +292,14 @@
         "config/v7_crypto_universe.json"
       ],
       "launcher_log": "universe/collector.log",
+      "london_deployed": true,
       "outputs": [
         "universe/current.json",
         "universe/status.json",
         "universe/collector.log"
       ],
-      "profile": "infrastructure"
+      "profile": "infrastructure",
+      "runtime_class": "COLLECTOR"
     },
     {
       "arguments": [
@@ -359,12 +321,14 @@
         "universe/current.json"
       ],
       "launcher_log": "trade_recorder.log",
+      "london_deployed": true,
       "outputs": [
         "trade_tape.csv",
         "trade_recorder_status.json",
         "trade_recorder.log"
       ],
-      "profile": "engine"
+      "profile": "engine",
+      "runtime_class": "COLLECTOR"
     },
     {
       "arguments": [
@@ -384,11 +348,13 @@
         "ledger/spool"
       ],
       "launcher_log": "ledger_router.log",
+      "london_deployed": true,
       "outputs": [
         "ledger/execution.jsonl",
         "ledger_router.log"
       ],
-      "profile": "core"
+      "profile": "core",
+      "runtime_class": "HOT_PATH"
     },
     {
       "arguments": [
@@ -415,6 +381,7 @@
         "opportunities/fast_forward_inbox"
       ],
       "launcher_log": "global_portfolio_coordinator.log",
+      "london_deployed": true,
       "outputs": [
         "opportunities/receipts",
         "global_portfolio_coordinator.log",
@@ -424,7 +391,8 @@
         "opportunities/fast_forward_archive",
         "opportunities/fast_forward_rejected"
       ],
-      "profile": "core"
+      "profile": "core",
+      "runtime_class": "HOT_PATH"
     },
     {
       "arguments": [
@@ -446,6 +414,7 @@
         "external_fair/external_cancel_signal.json"
       ],
       "launcher_log": "research/lead_lag_taker_v1.log",
+      "london_deployed": true,
       "outputs": [
         "research/lead_lag_taker_v1/status.json",
         "research/lead_lag_taker_v1/state.json",
@@ -455,7 +424,8 @@
         "research/lead_lag_taker_v1.log",
         "opportunities/fast_forward_inbox"
       ],
-      "profile": "engine"
+      "profile": "engine",
+      "runtime_class": "HOT_PATH"
     },
     {
       "arguments": [
@@ -478,12 +448,14 @@
         "micro_maker/fillability_flow_snapshot.json"
       ],
       "launcher_log": "micro_maker/reward_selection.log",
+      "london_deployed": true,
       "outputs": [
         "micro_maker/reward_selection.json",
         "micro_maker/reward_selection.log",
         "micro_maker/reward_selection.events.jsonl*"
       ],
-      "profile": "engine"
+      "profile": "engine",
+      "runtime_class": "CONTROL"
     },
     {
       "arguments": [
@@ -503,33 +475,13 @@
         "micro_maker/reward_selection.json"
       ],
       "launcher_log": "fee_reward_registry.log",
+      "london_deployed": true,
       "outputs": [
         "control/fee_reward_registry.json",
         "fee_reward_registry.log"
       ],
-      "profile": "observer"
-    },
-    {
-      "arguments": [
-        "scripts/v7_maker_durable_learning.py"
-      ],
-      "config_identity_required": true,
-      "dependencies": [
-        "ledger_router"
-      ],
-      "exact_sha_required": true,
-      "executable": "launcher_subshell",
-      "id": "maker_model_learning",
-      "inputs": [
-        "ledger/execution.jsonl"
-      ],
-      "launcher_log": "micro_maker/durable_learning.log",
-      "outputs": [
-        "micro_maker/execution_model.json",
-        "micro_maker/research_learning_status.json",
-        "micro_maker/durable_learning.log"
-      ],
-      "profile": "observer"
+      "profile": "observer",
+      "runtime_class": "CONTROL"
     },
     {
       "arguments": [
@@ -549,10 +501,12 @@
         "control/fee_reward_registry.json"
       ],
       "launcher_log": "micro_maker/cohort_supervisor.log",
+      "london_deployed": true,
       "outputs": [
         "micro_maker/cohort_supervisor.log"
       ],
-      "profile": "observer"
+      "profile": "observer",
+      "runtime_class": "COLLECTOR"
     },
     {
       "arguments": [
@@ -573,33 +527,14 @@
         "micro_maker/fillability_ws.jsonl"
       ],
       "launcher_log": "micro_maker/authorized_make_executor.log",
+      "london_deployed": true,
       "outputs": [
         "micro_maker/authorized_make_executor_status.json",
         "ledger/spool",
         "micro_maker/authorized_make_executor.log"
       ],
-      "profile": "engine"
-    },
-    {
-      "arguments": [
-        "periodic"
-      ],
-      "config_identity_required": true,
-      "dependencies": [
-        "ledger_router"
-      ],
-      "exact_sha_required": true,
-      "executable": "scripts/v7_generate_economic_artifacts.py",
-      "id": "economic_artifacts",
-      "inputs": [
-        "ledger/execution.jsonl"
-      ],
-      "launcher_log": "economic_artifacts.log",
-      "outputs": [
-        "reports",
-        "economic_artifacts.log"
-      ],
-      "profile": "observer"
+      "profile": "engine",
+      "runtime_class": "HOT_PATH"
     },
     {
       "arguments": [
@@ -619,63 +554,14 @@
         "research/lead_lag_taker_v1/status.json"
       ],
       "launcher_log": "canonical_economics.log",
+      "london_deployed": true,
       "outputs": [
         "canonical_economics.json",
         "canonical_economics.log",
         "research/lead_lag_taker_v1/forward_report.json"
       ],
-      "profile": "observer"
-    },
-    {
-      "arguments": [
-        "scripts/v7_joint_execution_policy.py",
-        "scripts/v7_learned_execution_model.py",
-        "scripts/v7_profit_attribution.py",
-        "scripts/v7_profit_report.py",
-        "scripts/v7_lossless_data_compaction.py",
-        "scripts/v7_permanent_evidence.py",
-        "scripts/v7_economic_decision_report.py",
-        "scripts/v7_fast_cancel_latency_report.py",
-        "scripts/v7_maker_execution_horse_race.py"
-      ],
-      "config_identity_required": true,
-      "dependencies": [
-        "ledger_router"
-      ],
-      "exact_sha_required": true,
-      "executable": "launcher_subshell",
-      "id": "economic_evidence_loop",
-      "inputs": [
-        "ledger/execution.jsonl",
-        "${DURABLE_ROOT}/profit_experiments",
-        "${DURABLE_ROOT}/permanent_evidence/store",
-        "${RUN_ROOT}/../paper_v7_archives",
-        "research/external_cancel_signals.jsonl*",
-        "research/pm_repricing_shadow.jsonl*"
-      ],
-      "launcher_log": "permanent_evidence.log",
-      "outputs": [
-        "learned_execution/joint_policy.json",
-        "learned_execution/oos_report.json",
-        "profit_attribution.json",
-        "profit_attribution.csv",
-        "profit_attribution.log",
-        "profit_experiment_report.json",
-        "profit_experiment_report.log",
-        "${DURABLE_ROOT}/profit_experiments/**/confirmatory_final.json",
-        "${DURABLE_ROOT}/profit_experiments/**/final_analysis_sources/*.py.gz",
-        "permanent_evidence.log",
-        "permanent_evidence_status.json",
-        "${DURABLE_ROOT}/permanent_evidence",
-        "economic_decision_report.json",
-        "economic_decision_report.log",
-        "NEXT_ECONOMIC_ACTION.md",
-        "reports/fast_cancel_latency.json",
-        "reports/fast_cancel_latency_report.log",
-        "reports/maker_execution_horse_race.json",
-        "reports/maker_execution_horse_race.log"
-      ],
-      "profile": "observer"
+      "profile": "observer",
+      "runtime_class": "CONTROL"
     },
     {
       "arguments": [],
@@ -691,10 +577,12 @@
         "config/paper_v7.json",
         "config/v7_process_manifest.json"
       ],
+      "london_deployed": true,
       "outputs": [
         "runtime_status.json"
       ],
-      "profile": "core"
+      "profile": "core",
+      "runtime_class": "CONTROL"
     },
     {
       "arguments": [],
@@ -709,10 +597,12 @@
       "inputs": [
         "config/v7_process_manifest.json"
       ],
+      "london_deployed": true,
       "outputs": [
         "supervisor_status.json"
       ],
-      "profile": "core"
+      "profile": "core",
+      "runtime_class": "CONTROL"
     }
   ],
   "profiles": {

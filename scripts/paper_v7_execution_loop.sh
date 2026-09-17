@@ -21,19 +21,18 @@ LIVE_MODEL_SCOPE="${PM_V7_LIVE_MODEL_SCOPE:-config/v7_live_model_scope.json}"
 CRYPTO_SETTLEMENT_ENGINE_POLICY="${PM_V7_CRYPTO_SETTLEMENT_ENGINE_POLICY:-config/v7_crypto_settlement_engine.json}"
 CRYPTO_SETTLEMENT_MARKET_REGISTRY="${PM_V7_CRYPTO_SETTLEMENT_MARKET_REGISTRY:-config/v7_crypto_settlement_markets.json}"
 CRYPTO_SETTLEMENT_MODEL_REGISTRY="${PM_V7_CRYPTO_SETTLEMENT_MODEL_REGISTRY:-config/v7_crypto_settlement_model_registry.json}"
-DATA_RETENTION_CONFIG="${PM_V7_DATA_RETENTION_CONFIG:-config/v7_data_retention.json}"
+LONDON_BUFFER_RETENTION_CONFIG="${PM_V7_LONDON_BUFFER_RETENTION_CONFIG:-config/v7_london_buffer_retention.json}"
 CRYPTO_UNIVERSE_CONFIG="${PM_V7_CRYPTO_UNIVERSE_CONFIG:-config/v7_crypto_universe.json}"
-REPRICING_SHADOW_ARTIFACT="${PM_V7_REPRICING_SHADOW_ARTIFACT:-config/v7_pm_repricing_250ms_shadow.json}"
-SHA="$(git rev-parse HEAD)"
-DISK_PRESSURE_MIN_FREE_BYTES="$(python3 -c 'import json,sys; v=json.load(open(sys.argv[1],encoding="utf-8")); x=v["disk"]["emergency_cleanup_free_bytes"]; assert type(x) is int and x>0; print(x)' "$DATA_RETENTION_CONFIG")"
+SHA="${PM_V7_MODEL_SHA:-$(cat deploy/london/runtime_sha 2>/dev/null || git rev-parse HEAD)}"
+[[ "$SHA" =~ ^[0-9a-f]{40}$ ]] || { echo "exact 40-character runtime SHA required" >&2; exit 78; }
+DISK_PRESSURE_MIN_FREE_BYTES="$(python3 -c 'import json,sys; v=json.load(open(sys.argv[1],encoding="utf-8")); x=v["disk_pressure_min_free_bytes"]; assert type(x) is int and x>0; print(x)' "$LONDON_BUFFER_RETENTION_CONFIG")"
 [[ "$DISK_PRESSURE_MIN_FREE_BYTES" =~ ^[1-9][0-9]*$ ]] || { echo "invalid disk pressure threshold" >&2; exit 74; }
-REPRICING_SHADOW_ARTIFACT_SHA="$(python3 -c 'import hashlib,sys; print(hashlib.sha256(open(sys.argv[1],"rb").read()).hexdigest())' "$REPRICING_SHADOW_ARTIFACT")"
-MAKER_RESEARCH_MODEL="$RUN_ROOT/micro_maker/execution_model.json"
 DURABLE_ROOT="${PM_V7_DURABLE_ROOT:-runs/paper_v7_durable}"
-RICH_RESEARCH_MODEL="$DURABLE_ROOT/external_fair/rich_research_model.json"
-MAKER_RESEARCH_STORE="$DURABLE_ROOT/micro_maker/research_evidence.jsonl"
-MAKER_RESEARCH_STATUS="$RUN_ROOT/micro_maker/research_learning_status.json"
-MAKER_ARCHIVE_ROOT="${PM_V7_ARCHIVE_ROOT:-runs/paper_v7_archives}"
+RUNTIME_ARTIFACT_ROOT="${PM_V7_RUNTIME_ARTIFACT_ROOT:-$HOME/polymarket-artifacts/current}"
+MAKER_FROZEN_MODEL_SOURCE="$RUNTIME_ARTIFACT_ROOT/maker_execution_model.json"
+MAKER_RESEARCH_MODEL="$RUN_ROOT/micro_maker/execution_model.json"
+RICH_RESEARCH_MODEL="$RUNTIME_ARTIFACT_ROOT/rich_research_model.json"
+RUNTIME_RESOURCE_CONFIG="${PM_V7_RUNTIME_RESOURCE_CONFIG:-config/v7_runtime_resources.json}"
 EXTERNAL_CANCEL_RULE_SHA="$(python3 - "$CRYPTO_EXECUTION_ALPHA_CONFIG" <<PY
 import hashlib,json,sys
 value=json.load(open(sys.argv[1],encoding="utf-8"))
@@ -56,8 +55,7 @@ WS_PUBLIC_HOST="ws-subscriptions-clob.polymarket.com"
 WS_JSON_ARENA_OBSERVER_MAX_BYTES="${PM_V7_WS_JSON_ARENA_OBSERVER_MAX_BYTES:-1073741824}"
 WS_JSON_ARENA_FILLABILITY_MAX_BYTES="${PM_V7_WS_JSON_ARENA_FILLABILITY_MAX_BYTES:-536870912}"
 WS_JSON_ARENA_TOTAL_BUDGET_BYTES="${PM_V7_WS_JSON_ARENA_TOTAL_BUDGET_BYTES:-4294967296}"
-# Research mode: one PAPER execution model, continuously refit from durable
-# exact-policy/config evidence across cutovers plus the current PAPER ledger.
+# London runtime consumes a frozen research-built maker artifact. No runtime fit.
 export PM_V7_MODEL_SHA="$SHA"
 export PM_V7_MAKER_EXECUTION_MODEL="$MAKER_RESEARCH_MODEL"
 CONTROL="$RUN_ROOT/control"
@@ -142,7 +140,7 @@ assert maker.get("architecture",{}).get("single_runtime_owner") is True
 assert maker.get("architecture",{}).get("single_account_allocator") is True
 assert maker.get("architecture",{}).get("single_canonical_ledger_writer") is True
 assert maker.get("architecture",{}).get("fast_path") == "cpp_websocket_event_driven"
-assert maker.get("architecture",{}).get("slow_path") == "python_crypto_selection_and_model_fit"
+assert maker.get("architecture",{}).get("slow_path") == "python_crypto_selection_frozen_model_inference"
 capacity=maker.get("market_selection",{}).get("resource_capacity",{})
 max_shards=int(capacity.get("shard_count_budget",0))
 markets_per_shard=int(capacity.get("markets_per_shard",0))
@@ -197,15 +195,21 @@ echo $$ > "$LOCK/pid"
 rm -f "$KILL" "$MAKER_FREEZE"
 
 python3 scripts/v7_capital_allocator.py --config "$CONFIG" --output-dir "$ALLOC" >/dev/null
-# Seed the durable exact-policy/config execution projection from archives and
-# the live run.  The store survives cutovers; incompatible policy/config rows
-# remain in canonical archives but are excluded from this training projection.
-python3 scripts/v7_maker_durable_learning.py \
-  --source-root "$MAKER_ARCHIVE_ROOT" --source-root "$RUN_ROOT" \
-  --store "$MAKER_RESEARCH_STORE" --store-status "$MAKER_RESEARCH_STATUS" \
-  --output-model "$MAKER_RESEARCH_MODEL" --policy "$MAKER_POLICY" \
-  --config "$ALLOC/micro_maker.json" --model-sha "$SHA" \
-  >> "$RUN_ROOT/micro_maker/durable_learning.log" 2>&1
+# Resolve CPU classes before any child starts. London keeps the decision and
+# execution cores separate from collectors/control work whenever the host has
+# enough logical CPUs. The plan is preserved as evidence.
+while IFS='=' read -r key value; do
+  case "$key" in
+    PM_V7_HOT_CPUSET|PM_V7_COLLECTOR_CPUSET|PM_V7_CONTROL_CPUSET|PM_V7_HOT_NICE|PM_V7_COLLECTOR_NICE|PM_V7_CONTROL_NICE)
+      export "$key=$value" ;;
+    *) echo "unexpected resource-plan key: $key" >&2; exit 74 ;;
+  esac
+done < <(python3 scripts/v7_runtime_resource_plan.py --config "$RUNTIME_RESOURCE_CONFIG"   --output "$CONTROL/runtime_resource_plan.json" --shell)
+
+# Stage immutable research artifacts into the run root. This validates exact
+# target SHA, policy/config identity and content hashes; it never trains.
+python3 scripts/v7_runtime_artifacts.py   --artifact-root "$RUNTIME_ARTIFACT_ROOT" --run-root "$RUN_ROOT"   --model-sha "$SHA" --policy "$MAKER_POLICY" --allocation "$ALLOC/micro_maker.json"   --receipt "$CONTROL/runtime_artifact_receipt.json"   >> "$RUN_ROOT/runtime_artifacts.log" 2>&1
+
 pids=()
 
 # Startup can fail before the full runtime cleanup function is defined. Every
@@ -244,7 +248,7 @@ fi
 # children; starting the External Fair PAPER router before this block leaves
 # its CLOB `/books` calls on the filtered operating-system resolver and turns
 # every economically actionable fair into a silent `NOTHING` decision.
-python3 scripts/v7_public_https_proxy.py --host 127.0.0.1 --port "$PUBLIC_PROXY_PORT" \
+v7_exec_class COLLECTOR python3 scripts/v7_public_https_proxy.py --host 127.0.0.1 --port "$PUBLIC_PROXY_PORT" \
   >> "$RUN_ROOT/public_https_proxy.log" 2>&1 &
 v7_register_child "$!"
 
@@ -279,28 +283,15 @@ fi
 [[ -n "$PM_V7_WS_RESOLVE_IPS" ]] || { echo "public WS DNS resolution returned no addresses" >&2; exit 77; }
 export PM_V7_WS_RESOLVE_IPS
 
-# Fair-value ML is an offline frozen artifact. Runtime startup never silently
-# retrains it: doing so would make restart timing part of the model definition.
-# An operator/research workflow may set PM_V7_FREEZE_RICH_MODEL=1 exactly once
-# after enough settled receive-time-causal evidence has accumulated. The normal
-# runtime is inference-only and consumes the immutable research artifact.
-if [[ "${PM_V7_FREEZE_RICH_MODEL:-0}" == "1" ]]; then
-  python3 scripts/v7_external_rich_train.py \
-    --tape "$DURABLE_ROOT/external_fair/counterfactuals.jsonl" \
-    --tape "$RUN_ROOT/external_fair/counterfactuals.jsonl" \
-    --output-model "$RICH_RESEARCH_MODEL" --replace-research-model \
-    --config "$EXTERNAL_FAIR_POLICY" --model-sha "$SHA" \
-    --status "$RUN_ROOT/external_fair/research_model_status.json" \
-    >> "$RUN_ROOT/external_fair/research_model.log" 2>&1
-else
-  printf '%s\n' '{"state":"INFERENCE_ONLY","runtime_training":false}' \
-    >> "$RUN_ROOT/external_fair/research_model.log"
-fi
+# Fair-value ML is a research-plane artifact. London is inference-only; the
+# optional rich artifact is validated by the artifact bundle and otherwise the
+# existing deterministic baseline remains the only fair-value fallback.
+printf '%s\n' '{"state":"INFERENCE_ONLY","runtime_training":false}'   >> "$RUN_ROOT/external_fair/research_model.log"
 
 # Paid Chainlink Data Streams are intentionally out of scope. Public RTDS
 # provides the Chainlink 60-second TWAP observability tape. It never replaces
 # the contract resolution oracle or bypasses contract-local verification.
-python3 scripts/v7_rtds_external_fair_monitor.py \
+v7_exec_class COLLECTOR python3 scripts/v7_rtds_external_fair_monitor.py \
   --output-dir "$RUN_ROOT/external_fair" --code-sha "$SHA" \
   --universe "$RUN_ROOT/universe/current.json" \
   --approvals "config/v7_external_fair_rule_approvals.json" \
@@ -310,7 +301,7 @@ python3 scripts/v7_rtds_external_fair_monitor.py \
   >> "$RUN_ROOT/external_fair/rtds_monitor.log" 2>&1 &
 v7_register_child "$!"
 
-"$EXTERNAL_VENUE_RUNTIME" \
+v7_exec_class HOT_PATH "$EXTERNAL_VENUE_RUNTIME" \
   --output "$RUN_ROOT/external_fair/external_venues.json" \
   --tape "$RUN_ROOT/external_fair/tapes/external_venues.${SHA}.$$.bin" --model-sha "$SHA" \
   --normalized-event-tape-dir "$RUN_ROOT/external_fair/normalized_events" \
@@ -322,43 +313,40 @@ v7_register_child "$!"
   >> "$RUN_ROOT/external_fair/external_venues.log" 2>&1 &
 v7_register_child "$!"
 
-# Slow public USD-M market state complements the event-driven depth channel.
-# It is explicitly polling data and cannot become an execution trigger by
-# pretending to have exchange-event latency.
-python3 scripts/v7_binance_usdm_rest_collector.py \
+# Causal crypto context collectors remain on London because their receive-time
+# evidence cannot be reconstructed perfectly after the fact. They run outside
+# the hot CPU set and have no execution/capital/ledger authority.
+v7_exec_class COLLECTOR python3 scripts/v7_binance_usdm_rest_collector.py \
   --status "$RUN_ROOT/external_fair/binance_usdm_rest_status.json" \
   --tape "$RUN_ROOT/external_fair/binance_usdm_rest.jsonl" --interval 5 --loop \
   >> "$RUN_ROOT/external_fair/binance_usdm_rest.log" 2>&1 &
 v7_register_child "$!"
-python3 scripts/v7_deribit_rest_collector.py \
+v7_exec_class COLLECTOR python3 scripts/v7_deribit_rest_collector.py \
   --status "$RUN_ROOT/external_fair/deribit_rest_status.json" \
   --tape "$RUN_ROOT/external_fair/deribit_rest.jsonl" --interval 15 --loop \
   >> "$RUN_ROOT/external_fair/deribit_rest.log" 2>&1 &
 v7_register_child "$!"
-python3 scripts/v7_coinbase_l2_rest_collector.py \
+v7_exec_class COLLECTOR python3 scripts/v7_coinbase_l2_rest_collector.py \
   --status "$RUN_ROOT/external_fair/coinbase_l2_rest_status.json" \
   --tape "$RUN_ROOT/external_fair/coinbase_l2_rest.jsonl" --interval 5 --loop \
   >> "$RUN_ROOT/external_fair/coinbase_l2_rest.log" 2>&1 &
 v7_register_child "$!"
 
-python3 scripts/v7_external_fair_paper_router.py \
+v7_exec_class HOT_PATH python3 scripts/v7_external_fair_paper_router.py \
   --run-root "$RUN_ROOT" --model-sha "$SHA" --config "$EXTERNAL_FAIR_POLICY" --interval 0.25 \
   >> "$RUN_ROOT/external_fair/paper_router.log" 2>&1 &
 v7_register_child "$!"
 
-# Zero-authority HFT research tape.  It labels frozen rich external feature cuts
-# with the continuous receive-time book state at 100/250/500/1000ms. Training is never
-# performed here; a lead/lag model is frozen explicitly only after enough markets.
-# Persistent zero-authority causal book observer for repricing/lead-lag labels.
-# It follows only the verified settlement pair and therefore survives Maker cohort rotations.
-"$FILLABILITY_OBSERVER" \
+# Continuous receive-time PM book evidence for future crypto research. This is
+# a collector only; model fitting and retrospective shadows stay off London.
+v7_exec_class COLLECTOR "$FILLABILITY_OBSERVER" \
   --config "$ALLOC/micro_maker.json" --run-root "$RUN_ROOT" --model-sha "$SHA" \
   --output-dir "$RUN_ROOT/research/repricing_book" --fair-only \
   --disk-pressure-min-free-bytes "$DISK_PRESSURE_MIN_FREE_BYTES" \
   >> "$RUN_ROOT/research/repricing_book_observer.log" 2>&1 &
 v7_register_child "$!"
 
-python3 scripts/v7_external_lead_lag_collector.py \
+v7_exec_class COLLECTOR python3 scripts/v7_external_lead_lag_collector.py \
   --fair-status "$RUN_ROOT/external_fair/status.json" \
   --router-status "$RUN_ROOT/external_fair/paper_router_status.json" \
   --output "$DURABLE_ROOT/external_fair/pm_lead_lag.jsonl" \
@@ -370,8 +358,7 @@ python3 scripts/v7_external_lead_lag_collector.py \
   >> "$RUN_ROOT/external_fair/lead_lag_collector.log" 2>&1 &
 v7_register_child "$!"
 
-# Zero-authority forward tape for the hard external-cancel rule.
-python3 scripts/v7_external_cancel_signal_journal.py \
+v7_exec_class COLLECTOR python3 scripts/v7_external_cancel_signal_journal.py \
   --signal "$RUN_ROOT/external_fair/external_cancel_signal.json" \
   --output "$RUN_ROOT/research/external_cancel_signals.jsonl" \
   --status "$RUN_ROOT/research/external_cancel_signal_journal_status.json" \
@@ -379,35 +366,11 @@ python3 scripts/v7_external_cancel_signal_journal.py \
   >> "$RUN_ROOT/research/external_cancel_signal_journal.log" 2>&1 &
 v7_register_child "$!"
 
-# Zero-authority learned 250ms PM+external repricing observer.
-python3 scripts/v7_pm_repricing_shadow.py \
-  --fair-status "$RUN_ROOT/external_fair/status.json" \
-  --router-status "$RUN_ROOT/external_fair/paper_router_status.json" \
-  --book-tape "$RUN_ROOT/research/repricing_book/book_observations/current.jsonl" \
-  --book-status "$RUN_ROOT/research/repricing_book/fillability_ws_status.json" \
-  --artifact "$REPRICING_SHADOW_ARTIFACT" --artifact-sha256 "$REPRICING_SHADOW_ARTIFACT_SHA" \
-  --output "$RUN_ROOT/research/pm_repricing_shadow.jsonl" \
-  --status "$RUN_ROOT/research/pm_repricing_shadow_status.json" \
-  --model-sha "$SHA" --family PM_PLUS_EXTERNAL --horizon-ms 250 \
-  --threshold-ticks 1.5 --cancel-signal "$RUN_ROOT/research/pm_repricing_cancel_signal.json" \
-  --cancel-signal-ttl-ms 100 --interval-ms 25 \
-  >> "$RUN_ROOT/research/pm_repricing_shadow.log" 2>&1 &
-v7_register_child "$!"
+# PM repricing and two-sided complete-set shadows are reconstructible from the
+# causal tapes above, so those computations run only on the research worker.
 
-# Zero-authority paired YES/NO complete-set PAPER shadow. It directly records
-# joint fill states and legging loss; it has no OMS, risk, inventory or ledger authority.
-python3 scripts/v7_two_sided_complete_set_shadow.py \
-  --book-tape "$RUN_ROOT/research/repricing_book/book_observations/current.jsonl" \
-  --trade-tape "$RUN_ROOT/research/repricing_book/fillability_ws.jsonl" \
-  --fair-status "$RUN_ROOT/external_fair/status.json" --model-sha "$SHA" \
-  --output "$RUN_ROOT/research/two_sided_complete_set_shadow.jsonl" \
-  --status "$RUN_ROOT/research/two_sided_complete_set_shadow_status.json" \
-  --quote-shares 5 --ttl-arms-ms 250,500,1000 --interval-ms 10 \
-  >> "$RUN_ROOT/research/two_sided_complete_set_shadow.log" 2>&1 &
-v7_register_child "$!"
-
-CONFIG_HASH="$(git hash-object "$CONFIG")"
-POLICY_HASH="$(git hash-object "$MAKER_POLICY")"
+CONFIG_HASH="$(v7_blob_hash "$CONFIG")"
+POLICY_HASH="$(v7_blob_hash "$MAKER_POLICY")"
 RUN_ID="${PM_V7_RUN_ID:-${SHA:0:12}-$(date +%s)-$$}"
 LEDGER_ID="${PM_V7_LEDGER_ID:-$RUN_ID:execution}"
 SERVER_ID="${PM_V7_SERVER_ID:-$(hostname -s 2>/dev/null || hostname)}"
@@ -474,7 +437,7 @@ write_runtime_status() {
   fi
   local model_hash model_source
   if [[ -s "$MAKER_RESEARCH_MODEL" ]]; then
-    model_hash="$(git hash-object "$MAKER_RESEARCH_MODEL")"
+    model_hash="$(v7_blob_hash "$MAKER_RESEARCH_MODEL")"
     model_source="maker_execution_model"
   else
     model_hash="$POLICY_HASH"
@@ -547,7 +510,7 @@ fi
 # One canonical exhaustive metadata plane. The venue terminates pagination;
 # HOT/WARM capacities are calculated from declared CPU/memory/WS budgets and
 # COLD preserves the remainder. No strategy owns a parallel universe cache.
-python3 scripts/v7_crypto_universe.py \
+v7_exec_class COLLECTOR python3 scripts/v7_crypto_universe.py \
   --config "$CRYPTO_UNIVERSE_CONFIG" --output-dir "$RUN_ROOT/universe" \
   --model-sha "$SHA" --loop \
   >> "$RUN_ROOT/universe/collector.log" 2>&1 &
@@ -641,7 +604,7 @@ raise SystemExit(0 if ok else 1)
 PY
 }
 
-"$RECORDER" \
+v7_exec_class COLLECTOR "$RECORDER" \
   --run-dir "$RUN_ROOT" \
   --universe "$RUN_ROOT/universe/current.json" --model-sha "$SHA" \
   --data-url "https://data-api.polymarket.com" --batch 40 \
@@ -652,14 +615,14 @@ v7_register_child "$!"
 # One persistent canonical ledger router. 100ms transport cadence keeps FILL
 # evidence available before the 1s markout horizon without creating a second
 # ledger writer or repeatedly spawning Python processes.
-python3 scripts/v7_ledger_spool.py \
+v7_exec_class HOT_PATH python3 scripts/v7_ledger_spool.py \
   --run-root "$RUN_ROOT" --model-sha "$SHA" --loop --interval 0.1 \
   >> "$RUN_ROOT/ledger_router.log" 2>&1 &
 v7_register_child "$!"
 
 # The single consumer of proposals from all crypto components. Checked-in V7
 # cannot authorize new risk; the coordinator may select CANCEL/WITHDRAW or emit NOTHING.
-python3 scripts/v7_global_portfolio_coordinator.py \
+v7_exec_class HOT_PATH python3 scripts/v7_global_portfolio_coordinator.py \
   --run-root "$RUN_ROOT" --loop --interval 0.1 --fast-cancel-interval 0.005 \
   --event-log "$RUN_ROOT/global_portfolio_coordinator.events.jsonl" \
   >> "$RUN_ROOT/global_portfolio_coordinator.log" 2>&1 &
@@ -668,7 +631,7 @@ v7_register_child "$!"
 # Frozen prospective PAPER strategy. It consumes the already-validated external
 # shock signal, asks the global coordinator for PAPER authority, revalidates
 # the current CLOB ask without chasing, and holds one position per market to settlement.
-python3 scripts/v7_lead_lag_taker_runtime.py \
+v7_exec_class HOT_PATH python3 scripts/v7_lead_lag_taker_runtime.py \
   --run-root "$RUN_ROOT" --model-sha "$SHA" --config "$LEAD_LAG_TAKER_CONFIG" \
   >> "$RUN_ROOT/research/lead_lag_taker_v1.log" 2>&1 &
 v7_register_child "$!"
@@ -677,7 +640,7 @@ v7_register_child "$!"
 # from canonical public-trade evidence; it never broadens discovery or owns execution.
 (
   while [[ ! -e "$KILL" ]]; do
-    python3 scripts/v7_market_maker_rewards.py \
+    v7_run_class CONTROL python3 scripts/v7_market_maker_rewards.py \
       --config "$MAKER_POLICY" \
       --output "$RUN_ROOT/micro_maker/reward_selection.json" \
       --candidate-output "$RUN_ROOT/micro_maker/reward_selection_candidate.json" \
@@ -700,7 +663,7 @@ v7_register_child "$!"
 # Exact-SHA fee/reward evidence registry. Unknown fees are explicitly
 # non-executable and unknown rewards are forced to zero; this process has no
 # OMS, ledger or accounting authority.
-python3 scripts/v7_fee_reward_registry.py \
+v7_exec_class CONTROL python3 scripts/v7_fee_reward_registry.py \
   --universe "$RUN_ROOT/universe/current.json" \
   --rewards "$RUN_ROOT/micro_maker/reward_selection.json" \
   --output "$CONTROL/fee_reward_registry.json" \
@@ -709,19 +672,8 @@ python3 scripts/v7_fee_reward_registry.py \
 v7_register_child "$!"
 
 
-# Durable exact-policy/config execution fit. The live run is appended every
-# 60 seconds; the durable projection already contains compatible prior cutovers.
-(
-  while [[ ! -e "$KILL" ]]; do
-    python3 scripts/v7_maker_durable_learning.py \
-      --source-root "$RUN_ROOT" \
-      --store "$MAKER_RESEARCH_STORE" --store-status "$MAKER_RESEARCH_STATUS" \
-      --output-model "$MAKER_RESEARCH_MODEL" --policy "$MAKER_POLICY" \
-      --config "$ALLOC/micro_maker.json" --model-sha "$SHA" \
-      >> "$RUN_ROOT/micro_maker/durable_learning.log" 2>&1 || true
-    sleep 60
-  done
-) & v7_register_child "$!"
+# Maker model learning moved to the research plane. The staged immutable model
+# above remains fixed for this entire runtime generation.
 
 # The professional Maker is now an execution-model component of the single crypto
 # settlement owner. Keep its exact-WS fillability and fill-conditioned markout
@@ -729,7 +681,7 @@ v7_register_child "$!"
 (
   while [[ ! -e "$KILL" ]] && { ! maker_selection_ready || ! fee_registry_ready; }; do sleep 1; done
   [[ ! -e "$KILL" ]] || exit 0
-  exec python3 scripts/v7_maker_cohort_supervisor.py \
+  v7_exec_class COLLECTOR python3 scripts/v7_maker_cohort_supervisor.py \
     --repository-root "$ROOT" \
     --run-root "$RUN_ROOT" \
     --config "$ALLOC/micro_maker.json" \
@@ -755,110 +707,26 @@ v7_register_child "$!"
 # decision, capital, signer, broker or ledger authority: it revalidates the
 # receipt and feeds the existing pessimistic PAPER queue engine, then writes
 # lifecycle events only into the canonical ledger spool.
-"$AUTHORIZED_MAKER_EXECUTOR" \
+v7_exec_class HOT_PATH "$AUTHORIZED_MAKER_EXECUTOR" \
   --run-root "$RUN_ROOT" --model-sha "$SHA" \
   >> "$RUN_ROOT/micro_maker/authorized_make_executor.log" 2>&1 &
 v7_register_child "$!"
 
-# Retrospective analytics are serialized under one lock and run at background
-# scheduling priority. Canonical economics stays outside this helper because it
-# is health-critical.
-v7_background_analytics() {
-  if [[ -x /usr/sbin/taskpolicy ]]; then
-    /usr/sbin/taskpolicy -b nice -n 10 python3 scripts/v7_serialized_analytics.py \
-      --lock "$RUN_ROOT/control/analytics.lock" \
-      --status "$RUN_ROOT/control/analytics_scheduler_status.json" -- "$@"
-  else
-    nice -n 10 python3 scripts/v7_serialized_analytics.py \
-      --lock "$RUN_ROOT/control/analytics.lock" \
-      --status "$RUN_ROOT/control/analytics_scheduler_status.json" -- "$@"
-  fi
-}
-
-# Hourly exact-SHA evidence pack. Reports are observational only and remain
-# outside the repository checkout, so generating them cannot mutate deployed
-# code or create a second cutover SHA.
+# Canonical economics is retained as a lightweight operational reconciliation
+# surface for health/PnL truth. Forward reports, attribution, fitting, compaction
+# and experiment analysis run only on the research plane.
 (
   while [[ ! -e "$KILL" ]]; do
-    v7_background_analytics python3 scripts/v7_generate_economic_artifacts.py \
-      --repo "$ROOT" --run-root "$RUN_ROOT" --output "$RUN_ROOT/reports" \
-      >> "$RUN_ROOT/economic_artifacts.log" 2>&1 || true
-    sleep 3600
-  done
-) & v7_register_child "$!"
-
-# Health-critical canonical economics has its own 60-second loop. Retrospective
-# analytics below may legitimately take minutes on a large archive and must never
-# make /healthz stale or delay the exact-SHA economic state used by monitoring.
-(
-  while [[ ! -e "$KILL" ]]; do
-    python3 scripts/v7_canonical_economics.py --ledger "$RUN_ROOT/ledger/execution.jsonl" --expected-model-sha "$SHA" \
+    v7_run_class CONTROL python3 scripts/v7_canonical_economics.py \
+      --ledger "$RUN_ROOT/ledger/execution.jsonl" --expected-model-sha "$SHA" \
       --markout-evidence "$RUN_ROOT/research/evidence/maker_markout" \
-      --output "$RUN_ROOT/canonical_economics.json" >> "$RUN_ROOT/canonical_economics.log" 2>&1 || true
-    if [[ -f "$RUN_ROOT/research/lead_lag_taker_v1/forward_manifest.json" ]]; then
-      python3 scripts/v7_lead_lag_forward_report.py --run-root "$RUN_ROOT" --model-sha "$SHA" \
-        --output "$RUN_ROOT/research/lead_lag_taker_v1/forward_report.json" \
-        >> "$RUN_ROOT/canonical_economics.log" 2>&1 || true
-    fi
+      --output "$RUN_ROOT/canonical_economics.json" \
+      >> "$RUN_ROOT/canonical_economics.log" 2>&1 || true
     sleep 60
   done
 ) & v7_register_child "$!"
 
-(
-  last_historical_attribution_at=0
-  last_horse_race_at=0
-  while [[ ! -e "$KILL" ]]; do
-    if (( $(date +%s) - last_historical_attribution_at >= 600 )); then
-      if v7_background_analytics python3 scripts/v7_profit_attribution.py --archive-root "${RUN_ROOT%/*}/paper_v7_archives" \
-        --output "$RUN_ROOT/profit_attribution_history.json.gz" \
-        >> "$RUN_ROOT/profit_attribution.log" 2>&1; then
-        last_historical_attribution_at="$(date +%s)"
-      fi
-    fi
-    v7_background_analytics python3 scripts/v7_joint_execution_policy.py --ledger "$RUN_ROOT/ledger/execution.jsonl" --model-sha "$SHA" \
-      --output "$RUN_ROOT/learned_execution/joint_policy.json" --strategy CRYPTO_SETTLEMENT_ENGINE --min-bundles 20 \
-      >> "$RUN_ROOT/learned_execution/joint_policy.log" 2>&1 || true
-    v7_background_analytics python3 scripts/v7_learned_execution_model.py --ledger "$RUN_ROOT/ledger/execution.jsonl" --model-sha "$SHA" \
-      --output "$RUN_ROOT/learned_execution/oos_report.json" \
-      >> "$RUN_ROOT/learned_execution/model.log" 2>&1 || true
-    v7_background_analytics python3 scripts/v7_profit_attribution.py --ledger "$RUN_ROOT/ledger/execution.jsonl" --run-root "$RUN_ROOT" \
-      --output "$RUN_ROOT/profit_attribution.json" --csv "$RUN_ROOT/profit_attribution.csv" \
-      >> "$RUN_ROOT/profit_attribution.log" 2>&1 || true
-    v7_background_analytics python3 scripts/v7_profit_report.py --experiment-root "$DURABLE_ROOT/profit_experiments" --all-cohorts \
-      --output "$RUN_ROOT/profit_experiment_report.json" >> "$RUN_ROOT/profit_experiment_report.log" 2>&1 || true
-    v7_background_analytics python3 scripts/v7_fast_cancel_latency_report.py \
-      --maker-evidence "$RUN_ROOT/ledger/execution.jsonl" \
-      --output "$RUN_ROOT/reports/fast_cancel_latency.json" \
-      >> "$RUN_ROOT/reports/fast_cancel_latency_report.log" 2>&1 || true
-    if (( $(date +%s) - last_horse_race_at >= 300 )); then
-      v7_background_analytics python3 scripts/v7_maker_execution_horse_race.py \
-        --maker-evidence "$RUN_ROOT/ledger/execution.jsonl" \
-        --maker-evidence "$RUN_ROOT/research/evidence/maker_markout" \
-        --hard-cancel-events "$RUN_ROOT/research/external_cancel_signals.jsonl" \
-        --learned-shadow "$RUN_ROOT/research/pm_repricing_shadow.jsonl" \
-        --output "$RUN_ROOT/reports/maker_execution_horse_race.json" \
-        --allow-global-hard-scope \
-        --cancel-latency-ms 25 --stress-cancel-latency-ms 5,25,50,100,200 \
-        >> "$RUN_ROOT/reports/maker_execution_horse_race.log" 2>&1 || true
-      last_horse_race_at="$(date +%s)"
-    fi
-    v7_background_analytics python3 scripts/v7_economic_decision_report.py --run-root "$RUN_ROOT" --durable-root "$DURABLE_ROOT" \
-      --benchmark "$DURABLE_ROOT/permanent_evidence/benchmarks/latest.json" \
-      >> "$RUN_ROOT/economic_decision_report.log" 2>&1 || true
-    v7_background_analytics python3 scripts/v7_lossless_data_compaction.py --root "all=${RUN_ROOT%/*}" \
-      --store "$DURABLE_ROOT/permanent_evidence/store" \
-      --output "$DURABLE_ROOT/permanent_evidence/compaction.jsonl" \
-      --maximum-groups 10 --maximum-seconds 20 --nonblocking --apply \
-      >> "$RUN_ROOT/permanent_evidence.log" 2>&1 || true
-    v7_background_analytics python3 scripts/v7_permanent_evidence.py --run-root "$RUN_ROOT" --durable-root "$DURABLE_ROOT" \
-      --archive-root "${RUN_ROOT%/*}/paper_v7_archives" --repository-root "$ROOT" \
-      --maximum-seconds 20 --maximum-bytes 67108864 \
-      >> "$RUN_ROOT/permanent_evidence.log" 2>&1 || true
-    sleep 60
-  done
-) & v7_register_child "$!"
-
-v7_assert_registered_child_count 25
+v7_assert_registered_child_count 20
 write_runtime_status running false
 
 while [[ ! -e "$KILL" ]]; do

@@ -1,0 +1,2 @@
+# Current V7 research/training scripts are intentionally Python-stdlib-only.
+# Keep research-only dependencies here if future experiments require them; never copy this file into London runtime images.

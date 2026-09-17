@@ -152,12 +152,14 @@ def _atomic_json(path: Path, value: dict[str, Any]) -> None:
 
 
 def _git_head(root: Path) -> str:
-    return subprocess.check_output(
-        ["git", "-C", str(root), "rev-parse", "HEAD"],
-        text=True,
-        stderr=subprocess.DEVNULL,
-        timeout=5,
-    ).strip()
+    env = os.environ.get("PM_V7_MODEL_SHA", "").strip()
+    if SHA40.fullmatch(env):
+        return env
+    try:
+        value = (root / "deploy/london/runtime_sha").read_text(encoding="utf-8").strip()
+    except OSError:
+        return "unknown"
+    return value if SHA40.fullmatch(value) else "unknown"
 
 
 class Supervisor:

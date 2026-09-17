@@ -1,0 +1,20 @@
+# syntax=docker/dockerfile:1.7
+FROM ubuntu:24.04 AS builder
+RUN apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+    build-essential cmake ninja-build pkg-config python3 libboost-all-dev libcurl4-openssl-dev libssl-dev ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
+WORKDIR /src
+COPY . .
+RUN cmake -S . -B build -GNinja -DCMAKE_BUILD_TYPE=Release -DBUILD_TESTING=OFF \
+ && cmake --build build --parallel 2 \
+ && python3 ops/build_london_runtime_bundle.py --repository-root . --build-dir build --output /runtime
+
+FROM ubuntu:24.04
+RUN apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+    python3 ca-certificates libboost-json1.83.0 libcurl4t64 libssl3 util-linux \
+    && rm -rf /var/lib/apt/lists/*
+WORKDIR /app
+COPY --from=builder /runtime/ /app/
+ENV PM_V7_CONFIG=config/paper_v7.json PM_V7_RUN_ROOT=/data/paper_v7_london
+VOLUME ["/data"]
+ENTRYPOINT ["/bin/bash","scripts/paper_v7_execution_loop.sh"]

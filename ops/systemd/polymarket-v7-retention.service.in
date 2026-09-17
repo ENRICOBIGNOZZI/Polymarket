@@ -1,12 +1,14 @@
 [Unit]
-Description=Polymarket V7 PAPER retention and immutable-ledger checkpoint
+Description=Polymarket V7 London verified-offload buffer retention
 
 [Service]
 Type=oneshot
 User=@SERVICE_USER@
 Group=@SERVICE_GROUP@
 WorkingDirectory=@APP_DIR@
-ExecStart=/usr/bin/python3 @APP_DIR@/monitoring/v7_retention.py --run-root @RUN_ROOT@ --config @APP_DIR@/config/v7_data_retention.json --expected-sha @EXPECTED_SHA@
+ExecStart=/usr/bin/python3 @APP_DIR@/monitoring/v7_london_buffer_retention.py --run-root @RUN_ROOT@ --config @APP_DIR@/config/v7_london_buffer_retention.json
+Nice=10
+IOSchedulingClass=idle
 UMask=0077
 NoNewPrivileges=true
 PrivateTmp=true

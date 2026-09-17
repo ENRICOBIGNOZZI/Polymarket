@@ -60,13 +60,14 @@ def _file_age(path: Path, now: int) -> float:
 
 
 def _git_head(root: Path) -> str:
+    env = os.environ.get("PM_V7_MODEL_SHA", "").strip()
+    if len(env) == 40 and all(ch in "0123456789abcdef" for ch in env):
+        return env
     try:
-        return subprocess.check_output(
-            ["git", "-C", str(root), "rev-parse", "HEAD"], text=True,
-            stderr=subprocess.DEVNULL, timeout=2,
-        ).strip()
-    except (OSError, subprocess.SubprocessError):
+        value = (root / "deploy/london/runtime_sha").read_text(encoding="utf-8").strip()
+    except OSError:
         return "unknown"
+    return value if len(value) == 40 and all(ch in "0123456789abcdef" for ch in value) else "unknown"
 
 
 def _pid_alive(value: Any) -> bool:
@@ -194,7 +195,7 @@ def _fillability(run_root: Path, repository_root: Path, sha: str, now: int) -> d
 
 def _operations(run_root: Path, runtime: dict[str, Any], now: int) -> dict[str, Any]:
     supervisor = _json(run_root / "control/supervisor_status.json")
-    retention = _json(run_root / "control/retention_status.json")
+    retention = _json(run_root / "control/london_buffer_retention_status.json")
     try:
         lock_pid = int((run_root / "control/runtime.lock/pid").read_text().strip())
     except (OSError, ValueError):
@@ -222,10 +223,25 @@ def collect_snapshot(run_root: Path, repository_root: Path | None = None, *, now
     runtime = _json(run_root / "control/runtime_status.json")
     portfolio = _json(run_root / "control/portfolio_state.json")
     allocations = _json(run_root / "control/allocations/manifest.json")
-    canonical_path = run_root / "canonical_economics.json"
-    canonical = _json(canonical_path)
     ledger_path = run_root / "ledger/execution.jsonl"
     ledger = summarize_ledger(ledger_path)
+    strategy_net_pnl = {
+        str(name): _number(row.get("final_pnl"))
+        for name, row in (ledger.get("strategies") or {}).items()
+        if isinstance(row, dict)
+    }
+    canonical = {
+        "schema": "polymarket_v7_runtime_ledger_economics_v1",
+        "paper_only": True,
+        "authenticated_execution": False,
+        "real_order_submission": False,
+        "expected_model_sha": str(runtime.get("model_sha") or ""),
+        "net_pnl": _number((ledger.get("total") or {}).get("final_pnl")),
+        "strategy_net_pnl": strategy_net_pnl,
+        "submitted_units": _integer((ledger.get("total") or {}).get("orders_submitted")),
+        "complete_units": _integer((ledger.get("total") or {}).get("complete_fills")),
+        "source": "CANONICAL_LEDGER_READ_ONLY",
+    }
     maker = _json(run_root / "micro_maker/status.json")
     sha, runtime_sha = _git_head(repository_root), str(runtime.get("model_sha") or "")
     directives = _json(repository_root / "config/operator_directives.json")
@@ -271,11 +287,8 @@ def collect_snapshot(run_root: Path, repository_root: Path | None = None, *, now
         "external": _json(run_root / "external/status.json"),
         "universe": _json(run_root / "universe/status.json"),
         "canonical_economics": canonical, "ledger": ledger,
-        "profit_attribution": _json(run_root / "profit_attribution.json"),
-        "permanent_evidence": _json(run_root / "permanent_evidence_status.json"),
-        "economic_decision_report": _json(run_root / "economic_decision_report.json"),
-        "profit_experiments": {"collector": _json(run_root / "profit_experiment_status.json"),
-            "report": _json(run_root / "profit_experiment_report.json")},
+        "research_plane": {"state": "OFF_LONDON", "runtime_training": False,
+            "retrospective_analytics": False},
         "maker_lab": summarize_maker_microstructure(ledger_path, run_root / "micro_maker/reward_selection.json", run_root / "research/evidence/maker_markout"),
         "maker_fillability": _fillability(run_root, repository_root, runtime_sha, now),
         "external_fair": external_fair, "reconciliation": reconciliation,
@@ -283,9 +296,9 @@ def collect_snapshot(run_root: Path, repository_root: Path | None = None, *, now
         "trade_tape": tape, "trade_recorder": _trade_recorder(run_root / "trade_recorder_status.json", now),
         "authority": {"valid": authority_valid, "max_drawdown": max_drawdown},
         "algorithms": algorithms, "strategies": algorithms,
-        "ages": {"runtime": _age(now, runtime.get("timestamp")), "portfolio": _age(now, portfolio.get("timestamp")), "economics": _file_age(canonical_path, now), "trade_tape": tape["age"]},
+        "ages": {"runtime": _age(now, runtime.get("timestamp")), "portfolio": _age(now, portfolio.get("timestamp")), "trade_tape": tape["age"]},
         "operations": _operations(run_root, runtime, now),
-        "economics": {"starting_capital": starting, "cash": _number(allocations.get("reserve_budget")), "equity": equity, "pnl": equity-starting, "realized_pnl": canonical.get("net_pnl"), "unrealized_executable_pnl": equity-starting-_number(canonical.get("net_pnl")), "drawdown": _number(portfolio.get("drawdown")), "gross_exposure": 0.0, "capital_utilization": 0.0, "live_units": 0, "killed": bool(portfolio.get("killed"))},
+        "economics": {"starting_capital": starting, "cash": _number(allocations.get("reserve_budget")), "equity": equity, "pnl": equity-starting, "realized_pnl": canonical.get("net_pnl"), "unrealized_executable_pnl": equity-starting-_number(canonical.get("net_pnl")), "drawdown": _number(portfolio.get("drawdown")), "gross_exposure": 0.0, "capital_utilization": 0.0, "live_units": 0, "killed": bool(portfolio.get("killed")), "source": "LEDGER_PLUS_PORTFOLIO_GUARD"},
     }
 
 
@@ -331,19 +344,19 @@ def health_reasons(snapshot: dict[str, Any], *, max_runtime_age: int = 180, max_
     if rotation.get("schema") != "polymarket_v7_maker_cohort_rotation_status_v1" or rotation.get("model_sha") != snapshot.get("sha") or rotation.get("state") not in _MAKER_ROTATION_OPERATIONAL_STATES or rotation.get("paper_only") is not True or rotation.get("authenticated_execution") is not False or rotation.get("real_order_submission") is not False or not _fresh_ms(rotation, snapshot, max_runtime_age): reasons.append("maker_cohort_supervisor_missing_stale_or_unsafe")
     if universe.get("schema") != "polymarket_v7_crypto_universe_status_v1" or universe.get("model_sha") != snapshot.get("sha") or universe.get("state") != "OPERATIONAL" or universe.get("discovery_exhaustive") is not True or universe.get("pagination_loop_guard_hit") is not False or universe.get("paper_only") is not True or universe.get("authenticated_execution") is not False or universe.get("real_order_submission") is not False or _integer(universe.get("eligible_markets")) <= 0 or not _fresh_ms(universe, snapshot, max_runtime_age): reasons.append("crypto_universe_missing_stale_or_unsafe")
     if snapshot.get("runtime_alive") is not True: reasons.append("execution_not_alive")
-    if canonical.get("paper_only") is not True or canonical.get("authenticated_execution") is not False: reasons.append("canonical_economics_missing_or_unsafe")
-    if canonical.get("expected_model_sha") != snapshot.get("sha"): reasons.append("canonical_economics_sha_mismatch")
+    if canonical.get("schema") != "polymarket_v7_runtime_ledger_economics_v1" or canonical.get("paper_only") is not True or canonical.get("authenticated_execution") is not False: reasons.append("runtime_ledger_economics_missing_or_unsafe")
+    if canonical.get("expected_model_sha") != snapshot.get("sha"): reasons.append("runtime_ledger_economics_sha_mismatch")
     if not ledger.get("present"): reasons.append("canonical_ledger_missing")
     elif not ledger.get("valid"): reasons.append("canonical_ledger_invalid_or_mixed_sha")
     rows = _integer((snapshot.get("trade_tape") or {}).get("rows"))
     if rows <= 0 and not _verified_no_flow(snapshot.get("trade_recorder") or {}, max_runtime_age): reasons.append("trade_tape_empty_or_unverified_no_standard_clob_flow")
     if _number(ages.get("runtime"), math.inf) > max_runtime_age: reasons.append("runtime_stale")
-    if _number(ages.get("economics"), math.inf) > max_runtime_age: reasons.append("economics_stale")
     if rows > 0 and _number(ages.get("trade_tape"), math.inf) > max_runtime_age: reasons.append("trade_tape_stale")
     if _number(ages.get("portfolio"), math.inf) > max_supervisor_age: reasons.append("portfolio_guard_stale")
     if (snapshot.get("economics") or {}).get("killed"): reasons.append("runtime_killed")
     retention, operations = (snapshot.get("operations") or {}).get("retention") or {}, snapshot.get("operations") or {}
-    if retention.get("schema") != "polymarket_v7_retention_status_v1" or retention.get("paper_only") is not True or retention.get("authenticated_execution") is not False or retention.get("expected_sha") != snapshot.get("sha") or _number(operations.get("retention_age"), math.inf) > 7200: reasons.append("retention_service_missing_or_stale")
+    if retention.get("schema") != "polymarket_v7_london_buffer_retention_status_v1" or retention.get("paper_only") is not True or _number(operations.get("retention_age"), math.inf) > 7200: reasons.append("london_buffer_retention_missing_or_stale")
+    if retention.get("state") == "BUFFER_LIMIT_EXCEEDED_UNSYNCED_DATA_PRESERVED": reasons.append("london_buffer_limit_exceeded_unsynced_data_preserved")
     limit = _number((snapshot.get("authority") or {}).get("max_drawdown"))
     if limit > 0 and _number((snapshot.get("economics") or {}).get("drawdown")) >= limit - 1e-12: reasons.append("drawdown_limit_breached")
     external = snapshot.get("external_fair") or {}
@@ -484,10 +497,8 @@ class ExporterHandler(BaseHTTPRequestHandler):
             reasons=sorted(set(reasons)); payload=(json.dumps({"ok":not reasons,"reasons":reasons},sort_keys=True)+"\n").encode(); self.send_response(200 if not reasons else 503); content="application/json"
         elif self.path=="/maker-fillability.json": payload=cached["maker_fillability"]; self.send_response(200); content="application/json"
         elif self.path=="/external-fair.json": payload=cached["external_fair"]; self.send_response(200); content="application/json"
-        elif self.path in {"/profit-attribution.json", "/profit-experiments.json", "/permanent-evidence.json", "/economic-decision.json"}:
-            key={"/profit-attribution.json":"profit_attribution", "/profit-experiments.json":"profit_experiments",
-                 "/permanent-evidence.json":"permanent_evidence", "/economic-decision.json":"economic_decision_report"}[self.path]
-            value=cached["snapshot"].get(key) or {}
+        elif self.path=="/runtime-artifacts.json":
+            value=_json(self.run_root / "control/runtime_artifact_receipt.json")
             payload=(json.dumps(value,sort_keys=True)+"\n").encode(); self.send_response(200); content="application/json"
         else: payload=b"not found\n"; self.send_response(404); content="text/plain"
         self.send_header("Content-Type",content+"; charset=utf-8"); self.send_header("Content-Length",str(len(payload))); self.end_headers(); self.wfile.write(payload)
