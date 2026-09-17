@@ -216,6 +216,35 @@ class CanonicalExecutionLedgerTest(unittest.TestCase):
             with self.assertRaisesRegex(ledger.LedgerContractError, "safety:not_paper_only"):
                 ledger.load_events(path, expected_model_sha=SHA_A)
 
+    def test_economic_journal_requires_identity_fields(self) -> None:
+        base = dict(
+            entry_type="DEPOSIT",
+            model_sha=SHA_A,
+            observed_ts_ms=1_000,
+            source="CLOB_API",
+            source_record_id="source-1",
+            entry_id="entry-1",
+            postings=(
+                ledger.JournalPosting("assets:pUSD", "pUSD", 1),
+                ledger.JournalPosting("equity:test", "pUSD", -1),
+            ),
+        )
+        ledger.EconomicJournalEntry(**base).validate(sealed=False)
+        for field in ("source_record_id", "entry_id"):
+            with self.subTest(field=field):
+                with self.assertRaisesRegex(
+                    ledger.LedgerContractError, f"journal:{field}:missing"
+                ):
+                    ledger.EconomicJournalEntry(
+                        **{**base, field: None}
+                    ).validate(sealed=False)
+                with self.assertRaisesRegex(
+                    ledger.LedgerContractError, f"journal:{field}:invalid"
+                ):
+                    ledger.EconomicJournalEntry(
+                        **{**base, field: "   "}
+                    ).validate(sealed=False)
+
     def test_price_ranges_fail_closed(self) -> None:
         with self.assertRaisesRegex(ledger.LedgerContractError, "fill_price:out_of_range"):
             fill(fill_price=1.01).validate()

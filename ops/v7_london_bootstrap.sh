@@ -20,7 +20,7 @@ sudo apt-get update
 sudo DEBIAN_FRONTEND=noninteractive apt-get install -y \
   build-essential ca-certificates cmake curl git gnupg jq libboost-all-dev \
   libcurl4-openssl-dev libssl-dev ninja-build pkg-config prometheus \
-  python3 python3-pip python3-venv rsync
+  python3 python3-pip python3-venv rsync util-linux
 
 if [[ "$INSTALL_GRAFANA" == 1 ]]; then
   sudo install -d -m 0755 /etc/apt/keyrings
