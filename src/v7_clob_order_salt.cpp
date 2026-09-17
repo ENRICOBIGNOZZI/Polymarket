@@ -1,6 +1,5 @@
 #include "pm/v7_clob_order_salt.hpp"
 
-#include <limits>
 #include <cstdlib>
 #if defined(__linux__)
 #include <cerrno>
@@ -8,10 +7,6 @@
 #endif
 
 namespace pm::v7::clob_order {
-
-OrderSaltSequence::OrderSaltSequence(std::uint64_t seed) noexcept
-    : seed_(seed), current_(seed), valid_(seed != 0) {}
-
 namespace {
 [[nodiscard]] bool fill_os_entropy(std::uint64_t& seed) noexcept {
 #if defined(__APPLE__)
@@ -41,15 +36,6 @@ OrderSaltSequence OrderSaltSequence::from_os_entropy() noexcept {
         if (seed != 0) return OrderSaltSequence(seed);
     }
     return {};
-}
-
-std::uint64_t OrderSaltSequence::next() noexcept {
-    if (!valid_ || exhausted_) return 0;
-    const std::uint64_t out = current_;
-    if (current_ == std::numeric_limits<std::uint64_t>::max()) current_ = 1;
-    else ++current_;
-    if (current_ == seed_) exhausted_ = true;
-    return out;
 }
 
 } // namespace pm::v7::clob_order
