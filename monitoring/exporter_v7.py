@@ -188,7 +188,7 @@ def _operations(run_root: Path, runtime: dict[str, Any], now: int) -> dict[str, 
     }
 
 
-def collect_snapshot(run_root: Path, repository_root: Path | None = None, *, now: int | None = None) -> dict[str, Any]:
+def collect_snapshot(run_root: Path, repository_root: Path | None = None, *, now: int | None = None, include_profit_experiment_report: bool = True) -> dict[str, Any]:
     now = int(time.time()) if now is None else int(now)
     run_root = run_root.resolve(); repository_root = (repository_root or Path(".")).resolve()
     runtime = _json(run_root / "control/runtime_status.json")
@@ -250,7 +250,7 @@ def collect_snapshot(run_root: Path, repository_root: Path | None = None, *, now
         "permanent_evidence": _json(run_root / "permanent_evidence_status.json"),
         "economic_decision_report": _json(run_root / "economic_decision_report.json"),
         "profit_experiments": {"collector": _json(run_root / "profit_experiment_status.json"),
-            "report": _json(run_root / "profit_experiment_report.json")},
+            "report": (_json(run_root / "profit_experiment_report.json") if include_profit_experiment_report else {"omitted": True, "reason": "disabled_for_lightweight_exporter"})},
         "maker_lab": summarize_maker_microstructure(ledger_path, run_root / "micro_maker/reward_selection.json", run_root / "research/evidence/maker_markout"),
         "maker_fillability": _fillability(run_root, repository_root, runtime_sha, now),
         "external_fair": external_fair, "reconciliation": reconciliation,
@@ -422,8 +422,8 @@ def render_cached_prometheus(cached: dict[str, Any], *, max_snapshot_age: float 
 
 
 class SnapshotCache:
-    def __init__(self, run_root: Path, repository_root: Path, *, refresh_seconds: float = 10.0) -> None:
-        self.run_root, self.repository_root, self.refresh_seconds = Path(run_root), Path(repository_root), max(1.0, float(refresh_seconds)); self._lock = threading.Lock(); self._ready = threading.Event(); self._stop = threading.Event(); self._thread = None; self._snapshot = None; self._metrics = b""; self._maker_fillability = b"{}\n"; self._external_fair = b"{}\n"; self._completed_monotonic = 0.0; self._completed_wall = 0.0; self._refresh_duration = 0.0; self._refresh_errors = 0; self._last_error = ""
+    def __init__(self, run_root: Path, repository_root: Path, *, refresh_seconds: float = 10.0, include_profit_experiment_report: bool = True) -> None:
+        self.run_root, self.repository_root, self.refresh_seconds, self.include_profit_experiment_report = Path(run_root), Path(repository_root), max(1.0, float(refresh_seconds)), bool(include_profit_experiment_report); self._lock = threading.Lock(); self._ready = threading.Event(); self._stop = threading.Event(); self._thread = None; self._snapshot = None; self._metrics = b""; self._maker_fillability = b"{}\n"; self._external_fair = b"{}\n"; self._completed_monotonic = 0.0; self._completed_wall = 0.0; self._refresh_duration = 0.0; self._refresh_errors = 0; self._last_error = ""
     def start(self) -> None:
         if self._thread is None: self._thread = threading.Thread(target=self._refresh_loop, daemon=True); self._thread.start()
     def stop(self) -> None:
@@ -434,7 +434,7 @@ class SnapshotCache:
         while not self._stop.is_set():
             started = time.monotonic()
             try:
-                snapshot = collect_snapshot(self.run_root, self.repository_root); duration = time.monotonic()-started; wall = time.time(); metrics = render_prometheus(snapshot).rstrip()+f"\npolymarket_v7_exporter_snapshot_generated_unixtime {wall}\npolymarket_v7_exporter_snapshot_refresh_duration_seconds {duration}\npolymarket_v7_exporter_snapshot_refresh_errors_total {self._refresh_errors}\n"
+                snapshot = (collect_snapshot(self.run_root, self.repository_root) if self.include_profit_experiment_report else collect_snapshot(self.run_root, self.repository_root, include_profit_experiment_report=False)); duration = time.monotonic()-started; wall = time.time(); metrics = render_prometheus(snapshot).rstrip()+f"\npolymarket_v7_exporter_snapshot_generated_unixtime {wall}\npolymarket_v7_exporter_snapshot_refresh_duration_seconds {duration}\npolymarket_v7_exporter_snapshot_refresh_errors_total {self._refresh_errors}\n"
                 with self._lock: self._snapshot=snapshot; self._metrics=metrics.encode(); self._maker_fillability=(json.dumps(snapshot.get("maker_fillability") or {},sort_keys=True)+"\n").encode(); self._external_fair=(json.dumps(snapshot.get("external_fair") or {},sort_keys=True)+"\n").encode(); self._completed_monotonic=time.monotonic(); self._completed_wall=wall; self._refresh_duration=duration; self._last_error=""
                 self._ready.set()
             except Exception as exc:
@@ -445,12 +445,12 @@ class SnapshotCache:
 
 
 class ExporterHandler(BaseHTTPRequestHandler):
-    run_root=Path("runs/paper_v7_live"); repository_root=Path("."); max_runtime_age=180; max_supervisor_age=30; max_snapshot_age=45.0; snapshot_cache: SnapshotCache | None=None
+    run_root=Path("runs/paper_v7_live"); repository_root=Path("."); include_profit_experiment_report=True; max_runtime_age=180; max_supervisor_age=30; max_snapshot_age=45.0; snapshot_cache: SnapshotCache | None=None
     def log_message(self,_format:str,*_args:object)->None: return
     def do_GET(self)->None:
         cached=self.snapshot_cache.read() if self.snapshot_cache else None
         if cached is None:
-            snapshot=collect_snapshot(self.run_root,self.repository_root); cached={"ready":True,"snapshot":snapshot,"metrics":render_prometheus(snapshot).encode(),"maker_fillability":(json.dumps(snapshot.get("maker_fillability") or {})+"\n").encode(),"external_fair":(json.dumps(snapshot.get("external_fair") or {})+"\n").encode(),"age_seconds":0}
+            snapshot=collect_snapshot(self.run_root,self.repository_root,include_profit_experiment_report=self.include_profit_experiment_report); cached={"ready":True,"snapshot":snapshot,"metrics":render_prometheus(snapshot).encode(),"maker_fillability":(json.dumps(snapshot.get("maker_fillability") or {})+"\n").encode(),"external_fair":(json.dumps(snapshot.get("external_fair") or {})+"\n").encode(),"age_seconds":0}
         if not cached.get("ready"): payload=b'{"ok":false,"reasons":["exporter_snapshot_not_ready"]}\n'; self.send_response(503); content="application/json"
         elif self.path=="/metrics": payload=render_cached_prometheus(cached,max_snapshot_age=self.max_snapshot_age); self.send_response(200); content="text/plain; version=0.0.4"
         elif self.path=="/healthz":
@@ -465,13 +465,17 @@ class ExporterHandler(BaseHTTPRequestHandler):
             value=cached["snapshot"].get(key) or {}
             payload=(json.dumps(value,sort_keys=True)+"\n").encode(); self.send_response(200); content="application/json"
         else: payload=b"not found\n"; self.send_response(404); content="text/plain"
-        self.send_header("Content-Type",content+"; charset=utf-8"); self.send_header("Content-Length",str(len(payload))); self.end_headers(); self.wfile.write(payload)
+        self.send_header("Content-Type",content+"; charset=utf-8"); self.send_header("Content-Length",str(len(payload))); self.end_headers()
+        try:
+            self.wfile.write(payload)
+        except (BrokenPipeError, ConnectionResetError):
+            return
 
 
 def main()->int:
-    parser=argparse.ArgumentParser(description=__doc__); parser.add_argument("--run-root",type=Path,default=Path("runs/paper_v7_live")); parser.add_argument("--repository-root",type=Path,default=Path(".")); parser.add_argument("--host",default="127.0.0.1"); parser.add_argument("--port",type=int,default=9108); parser.add_argument("--max-runtime-age",type=int,default=180); parser.add_argument("--max-supervisor-age",type=int,default=30); parser.add_argument("--snapshot-refresh-seconds",type=float,default=10); parser.add_argument("--max-snapshot-age",type=float,default=45); args=parser.parse_args()
-    ExporterHandler.run_root=args.run_root; ExporterHandler.repository_root=args.repository_root; ExporterHandler.max_runtime_age=args.max_runtime_age; ExporterHandler.max_supervisor_age=args.max_supervisor_age; ExporterHandler.max_snapshot_age=args.max_snapshot_age
-    cache=SnapshotCache(args.run_root,args.repository_root,refresh_seconds=args.snapshot_refresh_seconds); cache.start(); ExporterHandler.snapshot_cache=cache; server=ThreadingHTTPServer((args.host,args.port),ExporterHandler)
+    parser=argparse.ArgumentParser(description=__doc__); parser.add_argument("--run-root",type=Path,default=Path("runs/paper_v7_live")); parser.add_argument("--repository-root",type=Path,default=Path(".")); parser.add_argument("--host",default="127.0.0.1"); parser.add_argument("--port",type=int,default=9108); parser.add_argument("--max-runtime-age",type=int,default=180); parser.add_argument("--max-supervisor-age",type=int,default=30); parser.add_argument("--snapshot-refresh-seconds",type=float,default=10); parser.add_argument("--max-snapshot-age",type=float,default=45); parser.add_argument("--skip-profit-experiment-report",action="store_true"); args=parser.parse_args()
+    ExporterHandler.run_root=args.run_root; ExporterHandler.repository_root=args.repository_root; ExporterHandler.include_profit_experiment_report=not args.skip_profit_experiment_report; ExporterHandler.max_runtime_age=args.max_runtime_age; ExporterHandler.max_supervisor_age=args.max_supervisor_age; ExporterHandler.max_snapshot_age=args.max_snapshot_age
+    cache=SnapshotCache(args.run_root,args.repository_root,refresh_seconds=args.snapshot_refresh_seconds,include_profit_experiment_report=not args.skip_profit_experiment_report); cache.start(); ExporterHandler.snapshot_cache=cache; server=ThreadingHTTPServer((args.host,args.port),ExporterHandler)
     try: server.serve_forever()
     except KeyboardInterrupt: pass
     finally: server.server_close(); cache.stop()
