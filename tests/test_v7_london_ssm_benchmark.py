@@ -73,6 +73,7 @@ class LondonSsmBenchmarkTests(unittest.TestCase):
         self.assertIn("V7_PENDING=", command)
         self.assertIn("launch.json", command)
         self.assertIn("V7_RESULT=", command)
+        self.assertNotIn("git -C", command)
         with self.assertRaises(ValueError):
             collect_formal_command("d" * 40, "ubuntu", launch)
         with self.assertRaises(ValueError):

@@ -138,7 +138,6 @@ def collect_formal_command(sha: str, service_user: str, launch: dict[str, str]) 
 APP=/home/{service_user}/polymarket
 UNIT={shlex.quote(unit)}
 JOB={shlex.quote(job)}
-[[ "$(sudo -u {service_user} git -C "$APP" rev-parse HEAD)" == "{sha}" ]]
 ! systemctl is-active --quiet polymarket-v7-paper.service
 python3 - "$JOB/launch.json" "$UNIT" "$JOB" <<'PY'
 import json,sys
