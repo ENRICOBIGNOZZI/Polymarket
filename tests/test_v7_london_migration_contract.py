@@ -72,6 +72,15 @@ def test_runbook_preserves_single_writer_and_admin_only_tailscale() -> None:
     assert "Tailscale" in text and "admin" in text
     assert "PAPER" in text
 
+    def test_benchmark_is_single_owner_per_host(self) -> None:
+        benchmark=(ROOT / "ops/v7_london_benchmark.sh").read_text(encoding="utf-8")
+        bootstrap=(ROOT / "ops/v7_london_bootstrap.sh").read_text(encoding="utf-8")
+        self.assertIn("POLYMARKET_BENCHMARK_LOCK_FILE", benchmark)
+        self.assertIn("flock -n 9", benchmark)
+        self.assertIn("another London benchmark already owns this host", benchmark)
+        self.assertIn("single_owner_lock", benchmark)
+        self.assertIn("util-linux", bootstrap)
+
 if __name__ == "__main__":
     tests = sorted((name, fn) for name, fn in globals().items()
                    if name.startswith("test_") and callable(fn))
