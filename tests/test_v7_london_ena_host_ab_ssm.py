@@ -1,8 +1,10 @@
 import importlib.util
 import json
+import sys
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT / "ops"))
 SPEC = importlib.util.spec_from_file_location(
     "v7_london_ena_host_ab_ssm", ROOT / "ops/v7_london_ena_host_ab_ssm.py")
 MODULE = importlib.util.module_from_spec(SPEC)
