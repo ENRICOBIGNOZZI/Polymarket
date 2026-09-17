@@ -42,7 +42,7 @@ int main(int argc, char** argv) {
     config.token_id_decimal = "1234";
     config.metadata_hex = "0x0000000000000000000000000000000000000000000000000000000000000000";
     config.builder_hex = "0x0000000000000000000000000000000000000000000000000000000000000000";
-    config.api_key = "00000000-0000-0000-0000-000000000000";
+    config.api_key = "placeholder";
     config.passphrase = "pass-test";
     config.l2_secret_base64 = "YWJj";
     config.host = "localhost";
