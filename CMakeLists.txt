@@ -97,6 +97,7 @@ add_library(pm_v7_external
   src/v7_binance_l2.cpp
   src/v7_binance_l2_protocol.cpp
   src/v7_coinbase_l2.cpp
+  src/v7_coinbase_l2_observer.cpp
   src/v7_external_state.cpp
   src/v7_external_execution.cpp
   src/v7_external_kernel.cpp
@@ -366,6 +367,10 @@ if(BUILD_TESTING)
   add_executable(pm_v7_coinbase_l2_tests tests/test_v7_coinbase_l2.cpp)
   target_link_libraries(pm_v7_coinbase_l2_tests PRIVATE pm_v7_external)
   add_test(NAME pm_v7_coinbase_l2_tests COMMAND pm_v7_coinbase_l2_tests)
+
+  add_executable(pm_v7_coinbase_l2_observer_tests tests/test_v7_coinbase_l2_observer.cpp)
+  target_link_libraries(pm_v7_coinbase_l2_observer_tests PRIVATE pm_v7_external)
+  add_test(NAME pm_v7_coinbase_l2_observer_tests COMMAND pm_v7_coinbase_l2_observer_tests)
 
   add_test(NAME test_v7_authorized_make_cancel_runtime
     COMMAND ${Python3_EXECUTABLE}
