@@ -12,9 +12,9 @@ using Occupancy = std::array<std::uint64_t, kOccupancyWords>;
 void clear_occupied_levels(std::array<std::int64_t, kCanonicalPriceSlots>& quantities,
                            Occupancy& occupancy) noexcept {
     // A venue snapshot is bounded to a few hundred levels, while the canonical
-    // direct-indexed price domain has 10,001 slots per side.  Walk the compact
+    // direct-indexed price domain has 10,001 slots per side. Walk the compact
     // occupancy index so replacing a sparse snapshot does not write the whole
-    // 160 KiB quantity domain on every book event.
+    // quantity domain on every book event.
     for (std::size_t word_index = 0; word_index < occupancy.size(); ++word_index) {
         std::uint64_t word = occupancy[word_index];
         while (word != 0) {
@@ -81,7 +81,10 @@ void set_occupied(Occupancy& bits, std::int32_t index, bool occupied) noexcept {
 } // namespace
 
 CanonicalL2Book::CanonicalL2Book(std::int32_t tick_size_e4) noexcept {
-    if (!set_tick_size(tick_size_e4)) tick_size_e4_ = 100;
+    if (!set_tick_size(tick_size_e4)) {
+        tick_size_e4_ = 100;
+        refresh_hot_metadata();
+    }
 }
 
 bool CanonicalL2Book::set_tick_size(std::int32_t tick_size_e4) noexcept {
@@ -89,13 +92,20 @@ bool CanonicalL2Book::set_tick_size(std::int32_t tick_size_e4) noexcept {
         || kCanonicalPriceScale % tick_size_e4 != 0) {
         return false;
     }
-    for (std::size_t i = 1; i + 1 < kCanonicalPriceSlots; ++i) {
-        if ((bid_qty_[i] > 0 || ask_qty_[i] > 0)
-            && static_cast<std::int32_t>(i) % tick_size_e4 != 0) {
-            return false;
+
+    // Tick changes are rare, but the book is sparse. Validate only occupied
+    // price slots rather than touching all 10,001 quantity entries per side.
+    for (std::size_t word_index = 0; word_index < kOccupancyWords; ++word_index) {
+        std::uint64_t word = bid_occupied_[word_index] | ask_occupied_[word_index];
+        while (word != 0) {
+            const auto bit = static_cast<unsigned>(std::countr_zero(word));
+            const auto index = static_cast<std::int32_t>((word_index << 6U) + bit);
+            if (index % tick_size_e4 != 0) return false;
+            word &= word - 1;
         }
     }
     tick_size_e4_ = tick_size_e4;
+    refresh_hot_metadata();
     return true;
 }
 
@@ -110,6 +120,7 @@ bool CanonicalL2Book::change_tick_size(std::int32_t tick_size_e4,
     exchange_event_ns_ = exchange_event_ns;
     receive_monotonic_ns_ = receive_monotonic_ns;
     ++state_version_;
+    refresh_hot_metadata();
     return true;
 }
 
@@ -159,12 +170,14 @@ bool CanonicalL2Book::replace_snapshot(std::span<const PriceLevelE4> bids,
         lineage_continuous_ = false;
         exchange_event_ns_ = 0;
         receive_monotonic_ns_ = 0;
+        refresh_hot_full();
         return false;
     }
     exchange_event_ns_ = exchange_event_ns;
     receive_monotonic_ns_ = receive_monotonic_ns;
     lineage_continuous_ = true;
     ++state_version_;
+    refresh_hot_full();
     return true;
 }
 
@@ -183,6 +196,9 @@ bool CanonicalL2Book::mutate_level(Side side, std::int32_t price_e4,
         if (side == Side::Sell && best_bid_e4_ > 0 && price_e4 <= best_bid_e4_) return false;
     }
 
+    // Decide from the pre-mutation cache whether this price can alter the hot
+    // L10 ladder. Deep changes below/above a complete L10 never need a scan.
+    const bool refresh_side = hot_side_affected(side, price_e4);
     set_raw(side, price_e4, quantity_microunits);
     if (side == Side::Buy) {
         if (quantity_microunits > 0 && price_e4 > best_bid_e4_) best_bid_e4_ = price_e4;
@@ -194,6 +210,8 @@ bool CanonicalL2Book::mutate_level(Side side, std::int32_t price_e4,
     exchange_event_ns_ = exchange_event_ns;
     receive_monotonic_ns_ = receive_monotonic_ns;
     ++state_version_;
+    if (refresh_side) refresh_hot_side(side);
+    refresh_hot_metadata();
     return true;
 }
 
@@ -202,6 +220,7 @@ void CanonicalL2Book::invalidate_lineage() noexcept {
     exchange_event_ns_ = 0;
     receive_monotonic_ns_ = 0;
     ++state_version_;
+    refresh_hot_metadata();
 }
 
 std::int32_t CanonicalL2Book::best_bid() const noexcept {
@@ -227,12 +246,13 @@ std::uint8_t CanonicalL2Book::fill_side_snapshot(
     output.fill({});
     if (side == Side::None) return 0;
 
+    const auto& quantities = side == Side::Buy ? bid_qty_ : ask_qty_;
     std::int64_t cumulative = 0;
     std::int32_t price = side == Side::Buy ? best_bid_e4_ : best_ask_e4_;
     std::uint8_t count = 0;
     while (price > 0 && count < kHotDepthLevels) {
-        const auto quantity = quantity_at(side, price);
-        cumulative += std::max<std::int64_t>(0, quantity);
+        const auto quantity = quantities[static_cast<std::size_t>(price)];
+        cumulative += quantity;
         output[count++] = PriceLevelE4{price, quantity};
         if (count == 1) depth.l1_microunits = cumulative;
         if (count == 5) depth.l5_microunits = cumulative;
@@ -244,26 +264,59 @@ std::uint8_t CanonicalL2Book::fill_side_snapshot(
     return count;
 }
 
-BookHotSnapshot CanonicalL2Book::hot_snapshot() const noexcept {
-    BookHotSnapshot out;
-    out.state_version = state_version_;
-    out.exchange_event_ns = exchange_event_ns_;
-    out.receive_monotonic_ns = receive_monotonic_ns_;
-    out.tick_size_e4 = tick_size_e4_;
-    out.best_bid_e4 = best_bid_e4_;
-    out.best_ask_e4 = best_ask_e4_;
-    out.best_bid_microunits = quantity_at(Side::Buy, best_bid_e4_);
-    out.best_ask_microunits = quantity_at(Side::Sell, best_ask_e4_);
-    out.bid_level_count = fill_side_snapshot(Side::Buy, out.bid_depth, out.bid_levels);
-    out.ask_level_count = fill_side_snapshot(Side::Sell, out.ask_depth, out.ask_levels);
-    out.lineage_continuous = static_cast<std::uint8_t>(lineage_continuous_);
-    out.valid = static_cast<std::uint8_t>(
+bool CanonicalL2Book::hot_side_affected(Side side, std::int32_t price_e4) const noexcept {
+    if (side == Side::Buy) {
+        const auto count = hot_cache_.bid_level_count;
+        if (count < kHotDepthLevels) return true;
+        return price_e4 >= hot_cache_.bid_levels[count - 1].price_e4;
+    }
+    if (side == Side::Sell) {
+        const auto count = hot_cache_.ask_level_count;
+        if (count < kHotDepthLevels) return true;
+        return price_e4 <= hot_cache_.ask_levels[count - 1].price_e4;
+    }
+    return false;
+}
+
+void CanonicalL2Book::refresh_hot_side(Side side) noexcept {
+    if (side == Side::Buy) {
+        hot_cache_.best_bid_e4 = best_bid_e4_;
+        hot_cache_.best_bid_microunits = best_bid_e4_ > 0
+            ? bid_qty_[static_cast<std::size_t>(best_bid_e4_)] : 0;
+        hot_cache_.bid_level_count = fill_side_snapshot(
+            Side::Buy, hot_cache_.bid_depth, hot_cache_.bid_levels);
+        return;
+    }
+    if (side == Side::Sell) {
+        hot_cache_.best_ask_e4 = best_ask_e4_;
+        hot_cache_.best_ask_microunits = best_ask_e4_ > 0
+            ? ask_qty_[static_cast<std::size_t>(best_ask_e4_)] : 0;
+        hot_cache_.ask_level_count = fill_side_snapshot(
+            Side::Sell, hot_cache_.ask_depth, hot_cache_.ask_levels);
+    }
+}
+
+void CanonicalL2Book::refresh_hot_metadata() noexcept {
+    hot_cache_.state_version = state_version_;
+    hot_cache_.exchange_event_ns = exchange_event_ns_;
+    hot_cache_.receive_monotonic_ns = receive_monotonic_ns_;
+    hot_cache_.tick_size_e4 = tick_size_e4_;
+    hot_cache_.lineage_continuous = static_cast<std::uint8_t>(lineage_continuous_);
+    hot_cache_.valid = static_cast<std::uint8_t>(
         lineage_continuous_ && state_version_ > 0 && exchange_event_ns_ > 0
-        && receive_monotonic_ns_ > 0 && best_bid_e4_ > 0
-        && best_ask_e4_ > best_bid_e4_
-        && venue_tick_index(best_bid_e4_) > 0 && venue_tick_index(best_ask_e4_) > 0
-        && out.bid_level_count > 0 && out.ask_level_count > 0);
-    return out;
+        && receive_monotonic_ns_ > 0 && hot_cache_.best_bid_e4 > 0
+        && hot_cache_.best_ask_e4 > hot_cache_.best_bid_e4
+        && hot_cache_.bid_level_count > 0 && hot_cache_.ask_level_count > 0);
+}
+
+void CanonicalL2Book::refresh_hot_full() noexcept {
+    refresh_hot_side(Side::Buy);
+    refresh_hot_side(Side::Sell);
+    refresh_hot_metadata();
+}
+
+BookHotSnapshot CanonicalL2Book::hot_snapshot() const noexcept {
+    return hot_cache_;
 }
 
 std::int64_t CanonicalL2Book::quantity_at(Side side, std::int32_t price_e4) const noexcept {
