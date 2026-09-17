@@ -34,7 +34,8 @@ public:
                         std::vector<std::string> asset_ids,
                         std::size_t shard_size,
                         MessageHandler on_message,
-                        ErrorHandler on_error = {});
+                        ErrorHandler on_error = {},
+                        bool capture_wall_time = true);
     ~MarketWebSocketFeed();
 
     MarketWebSocketFeed(const MarketWebSocketFeed&) = delete;

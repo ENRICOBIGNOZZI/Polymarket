@@ -167,7 +167,8 @@ int main(int argc, char** argv) {
                 pm_epoch.fetch_add(1, std::memory_order_acq_rel);
                 pm_faults.fetch_add(1, std::memory_order_relaxed);
                 wakeup.notify();
-            });
+            },
+            false); // flash reaction path consumes monotonic receive time only
 
         ExternalStatePolicy external_policy;
         external_policy.external_cancel_enabled = 1;
