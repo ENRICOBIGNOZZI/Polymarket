@@ -37,7 +37,6 @@ int main(){
 def test_user_ws_codec_and_subscription() -> None:
     cxx = shutil.which("c++")
     assert cxx
-    boost = subprocess.check_output(["brew", "--prefix", "boost"], text=True).strip()
     with tempfile.TemporaryDirectory() as td:
         path = Path(td)
         source = path / "main.cpp"
@@ -52,7 +51,6 @@ def test_user_ws_codec_and_subscription() -> None:
                 "-Wextra",
                 "-Wpedantic",
                 f"-I{ROOT / 'include'}",
-                f"-I{boost}/include",
                 str(ROOT / "src/v7_user_ws.cpp"),
                 str(ROOT / "src/boost_json.cpp"),
                 str(source),
