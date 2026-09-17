@@ -254,7 +254,18 @@ public:
         std::uint64_t trade_invalid_timestamp = 0;
         std::uint64_t duplicate_trade_events = 0;
         std::int64_t last_message = 0;
+        std::unordered_map<std::string, pm::Book> books_snapshot;
+        std::unordered_map<std::string, std::int64_t> book_exchange_snapshot;
+        std::unordered_map<std::string, std::int64_t> book_received_snapshot;
+        std::unordered_map<std::string, std::uint64_t> version_snapshot;
+        std::unordered_map<std::string, std::uint64_t> lineage_snapshot;
+        std::unordered_map<std::string, std::int64_t> last_book_change_snapshot;
+        std::unordered_map<std::string, std::deque<TradePrint>> live_trades_snapshot;
+        std::unordered_map<std::string, std::deque<BookActivity>> book_activity_snapshot;
+        std::unordered_set<std::string> ws_ready_snapshot;
         const auto snapshot_ms = now_ms();
+        const auto publish_started = std::chrono::steady_clock::now();
+        double publish_lock_us = 0.0;
         {
             std::scoped_lock lock(mutex_);
             latest.reserve(latest_.size());
@@ -296,15 +307,43 @@ public:
             trade_invalid_price = trade_invalid_price_;
             trade_invalid_timestamp = trade_invalid_timestamp_;
             duplicate_trade_events = duplicate_trade_events_;
-            shared_books.reserve(books_.size());
-            for (const auto& [token, book] : books_) {
+            const auto cutoff = snapshot_ms - 600'000;
+            for (auto& [token, prints] : live_trades_) {
+                (void)token;
+                while (!prints.empty() && prints.front().receive_ms < cutoff) prints.pop_front();
+            }
+            for (auto& [token, activity] : book_activity_) {
+                (void)token;
+                while (!activity.empty() && activity.front().receive_ms < cutoff) activity.pop_front();
+            }
+            books_snapshot = books_;
+            book_exchange_snapshot = book_exchange_ts_ms_;
+            book_received_snapshot = book_received_ts_ms_;
+            version_snapshot = token_state_versions_;
+            lineage_snapshot = lineage_epochs_;
+            last_book_change_snapshot = last_book_change_receive_ms_;
+            live_trades_snapshot = live_trades_;
+            book_activity_snapshot = book_activity_;
+            ws_ready_snapshot = ws_snapshot_ready_;
+            // Streams are written by the feed thread while it owns this same state lock.
+            // Flush here so the stream itself never becomes a second cross-thread lock.
+            opportunity_log_.flush();
+            latency_log_.flush();
+            error_log_.flush();
+        }
+        publish_lock_us = static_cast<double>(
+            std::chrono::duration_cast<std::chrono::microseconds>(
+                std::chrono::steady_clock::now() - publish_started).count());
+
+            shared_books.reserve(books_snapshot.size());
+            for (const auto& [token, book] : books_snapshot) {
                 const auto market_id = token_to_market_.find(token);
                 if (market_id == token_to_market_.end()) continue;
                 const auto market = markets_.find(market_id->second);
-                const auto exchange = book_exchange_ts_ms_.find(token);
-                const auto received = book_received_ts_ms_.find(token);
-                if (market == markets_.end() || exchange == book_exchange_ts_ms_.end()
-                    || received == book_received_ts_ms_.end() || book.bids.empty()
+                const auto exchange = book_exchange_snapshot.find(token);
+                const auto received = book_received_snapshot.find(token);
+                if (market == markets_.end() || exchange == book_exchange_snapshot.end()
+                    || received == book_received_snapshot.end() || book.bids.empty()
                     || book.asks.empty()) continue;
                 auto levels = [](const std::vector<pm::Level>& raw, bool bids) {
                     auto sorted = raw;
@@ -323,11 +362,11 @@ public:
                 };
                 const auto fee = fees_.find(market->second.condition_id);
                 const auto economic_state = std::make_pair(
-                    lineage_epochs_[token], token_state_versions_[token]);
+                    lineage_snapshot[token], version_snapshot[token]);
                 const bool economic_novelty =
                     last_published_economic_state_[token] != economic_state;
                 last_published_economic_state_[token] = economic_state;
-                const auto trades = live_trades_.find(token);
+                const auto trades = live_trades_snapshot.find(token);
                 json::object row{
                     {"token_id", token},
                     {"market_id", market->second.id},
@@ -338,16 +377,16 @@ public:
                     {"receive_ts_ms", received->second},
                     {"source_receive_ts_ms", received->second},
                     {"snapshot_published_ms", snapshot_ms},
-                    {"state_version", static_cast<std::int64_t>(token_state_versions_[token])},
-                    {"lineage_epoch", static_cast<std::int64_t>(lineage_epochs_[token])},
-                    {"lineage_continuous", ws_snapshot_ready_.count(token) > 0},
+                    {"state_version", static_cast<std::int64_t>(version_snapshot[token])},
+                    {"lineage_epoch", static_cast<std::int64_t>(lineage_snapshot[token])},
+                    {"lineage_continuous", ws_ready_snapshot.count(token) > 0},
                     {"economic_novelty", economic_novelty},
-                    {"last_book_change_receive_ms", last_book_change_receive_ms_[token]},
-                    {"last_trade_receive_ms", trades != live_trades_.end() && !trades->second.empty()
+                    {"last_book_change_receive_ms", last_book_change_snapshot[token]},
+                    {"last_trade_receive_ms", trades != live_trades_snapshot.end() && !trades->second.empty()
                         ? trades->second.back().receive_ms : 0},
-                    {"last_trade_exchange_ms", trades != live_trades_.end() && !trades->second.empty()
+                    {"last_trade_exchange_ms", trades != live_trades_snapshot.end() && !trades->second.empty()
                         ? trades->second.back().exchange_ms : 0},
-                    {"provenance", ws_snapshot_ready_.count(token) > 0 ? "WEBSOCKET" : "REST_BOOTSTRAP"},
+                    {"provenance", ws_ready_snapshot.count(token) > 0 ? "WEBSOCKET" : "REST_BOOTSTRAP"},
                     {"tick_size", book.tick_size},
                     {"min_order_size", book.min_order_size},
                     {"bids", levels(book.bids, true)},
@@ -359,23 +398,23 @@ public:
                 };
                 shared_books.emplace_back(std::move(row));
             }
-            live_flow_rows.reserve(live_trades_.size());
+            live_flow_rows.reserve(live_trades_snapshot.size());
             const auto cutoff = snapshot_ms - 600'000;
-            for (auto& [token, prints] : live_trades_) {
+            for (auto& [token, prints] : live_trades_snapshot) {
                 while (!prints.empty() && prints.front().receive_ms < cutoff) prints.pop_front();
                 if (prints.empty()) continue;
                 const auto market_id = token_to_market_.find(token);
                 if (market_id == token_to_market_.end()) continue;
                 const auto market = markets_.find(market_id->second);
                 if (market == markets_.end()) continue;
-                auto activity_it = book_activity_.find(token);
-                if (activity_it != book_activity_.end()) {
+                auto activity_it = book_activity_snapshot.find(token);
+                if (activity_it != book_activity_snapshot.end()) {
                     while (!activity_it->second.empty()
                            && activity_it->second.front().receive_ms < cutoff) {
                         activity_it->second.pop_front();
                     }
                 }
-                const auto book_it = books_.find(token);
+                const auto book_it = books_snapshot.find(token);
                 const auto best_price = [](const std::vector<pm::Level>& levels, bool bid) {
                     double best = bid ? 0.0 : 1.0;
                     for (const auto& level : levels) {
@@ -399,9 +438,9 @@ public:
                     }
                     return depth;
                 };
-                const double best_bid = book_it != books_.end()
+                const double best_bid = book_it != books_snapshot.end()
                     ? best_price(book_it->second.bids, true) : 0.0;
-                const double best_ask = book_it != books_.end()
+                const double best_ask = book_it != books_snapshot.end()
                     ? best_price(book_it->second.asks, false) : 1.0;
                 json::object row{
                     {"token_id", token},
@@ -411,19 +450,19 @@ public:
                     {"outcome", token == market->second.yes_token ? "YES" : "NO"},
                     {"last_exchange_ts_ms", prints.back().exchange_ms},
                     {"last_receive_ts_ms", prints.back().receive_ms},
-                    {"state_version", static_cast<std::int64_t>(token_state_versions_[token])},
-                    {"lineage_epoch", static_cast<std::int64_t>(lineage_epochs_[token])},
-                    {"tick_size", book_it != books_.end() ? book_it->second.tick_size : 0.0},
+                    {"state_version", static_cast<std::int64_t>(version_snapshot[token])},
+                    {"lineage_epoch", static_cast<std::int64_t>(lineage_snapshot[token])},
+                    {"tick_size", book_it != books_snapshot.end() ? book_it->second.tick_size : 0.0},
                     {"best_bid", best_bid},
                     {"best_ask", best_ask},
                     {"spread", best_ask > best_bid ? best_ask - best_bid : 0.0},
-                    {"best_bid_depth", book_it != books_.end()
+                    {"best_bid_depth", book_it != books_snapshot.end()
                         ? best_level_depth(book_it->second.bids, best_bid) : 0.0},
-                    {"best_ask_depth", book_it != books_.end()
+                    {"best_ask_depth", book_it != books_snapshot.end()
                         ? best_level_depth(book_it->second.asks, best_ask) : 0.0},
-                    {"visible_bid_depth", book_it != books_.end()
+                    {"visible_bid_depth", book_it != books_snapshot.end()
                         ? visible_depth(book_it->second.bids) : 0.0},
-                    {"visible_ask_depth", book_it != books_.end()
+                    {"visible_ask_depth", book_it != books_snapshot.end()
                         ? visible_depth(book_it->second.asks) : 0.0},
                 };
                 json::array trade_prints;
@@ -488,7 +527,7 @@ public:
                     std::int64_t book_updates = 0;
                     std::int64_t l2_reductions = 0;
                     double l2_removed_size = 0.0;
-                    if (activity_it != book_activity_.end()) {
+                    if (activity_it != book_activity_snapshot.end()) {
                         for (const auto& activity : activity_it->second) {
                             if (snapshot_ms - activity.receive_ms > window_ms) continue;
                             ++book_updates;
@@ -504,10 +543,6 @@ public:
                 }
                 live_flow_rows.emplace_back(std::move(row));
             }
-            opportunity_log_.flush();
-            latency_log_.flush();
-            error_log_.flush();
-        }
         std::sort(latest.begin(), latest.end(), [](const auto& left, const auto& right) {
             if (left.executable != right.executable) return left.executable > right.executable;
             if (left.net_edge_per_share != right.net_edge_per_share) {
@@ -580,6 +615,10 @@ public:
             best_profit = std::max(best_profit, opportunity.expected_profit);
         }
 
+        const double publish_total_us = static_cast<double>(
+            std::chrono::duration_cast<std::chrono::microseconds>(
+                std::chrono::steady_clock::now() - publish_started).count());
+
         json::object status{
             {"schema", "polymarket_v7_structural_arb_engine_status_v1"},
             {"schema_version", 1},
@@ -643,6 +682,8 @@ public:
             {"best_expected_profit", best_profit},
             {"last_message_ms", last_message},
             {"feed_stale_ms", last_message > 0 ? snapshot_ms - last_message : -1},
+            {"publish_snapshot_lock_us", publish_lock_us},
+            {"publish_total_us", publish_total_us},
             {"feed_latency_p50_ms", quantile(feed_latency, 0.50)},
             {"feed_latency_p95_ms", quantile(feed_latency, 0.95)},
             {"feed_latency_p99_ms", quantile(feed_latency, 0.99)},
