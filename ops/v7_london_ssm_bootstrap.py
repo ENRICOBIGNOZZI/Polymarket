@@ -29,7 +29,9 @@ APP=/home/{service_user}/polymarket
 RUN=/mnt/polymarket-data/paper_v7_london
 BENCH=/mnt/polymarket-data/benchmarks
 SHA={sha}
-LOG="$BENCH/bootstrap.$SHA.log"
+RUN_ID="$(cat /proc/sys/kernel/random/uuid)"
+[[ "$RUN_ID" =~ ^[0-9a-f-]{{36}}$ ]]
+LOG="$BENCH/bootstrap.$SHA.$RUN_ID.log"
 mkdir -p "$BENCH"
 [[ -d "$APP/.git" ]]
 ! systemctl is-active --quiet polymarket-v7-paper.service
@@ -47,7 +49,7 @@ fi
 [[ "$(sudo -u {service_user} git -C "$APP" rev-parse HEAD)" == "$SHA" ]]
 [[ -z "$(sudo -u {service_user} git -C "$APP" status --porcelain)" ]]
 ! systemctl is-active --quiet polymarket-v7-paper.service
-python3 - "$RUN/bootstrap_receipt.json" "$SHA" <<'PY'
+python3 - "$RUN/bootstrap_receipt.json" "$SHA" "$LOG" <<'PY'
 import json,sys
 v=json.load(open(sys.argv[1]))
 assert v['code_sha']==sys.argv[2]
@@ -55,7 +57,7 @@ assert v['paper_only'] is True
 assert v['authenticated_execution'] is False
 assert v['real_order_submission'] is False
 assert v['systemd_installed_but_disabled'] is True
-v['ssm_bootstrap_log']='/mnt/polymarket-data/benchmarks/bootstrap.'+sys.argv[2]+'.log'
+v['ssm_bootstrap_log']=sys.argv[3]
 print('V7_BOOTSTRAP='+json.dumps(v,sort_keys=True,separators=(',',':')))
 PY'''
 
