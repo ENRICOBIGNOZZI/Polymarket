@@ -90,6 +90,27 @@ int main() {
     assert(!reconstructed.on_event(reconstructed_bbo));
     assert(reconstructed.snapshot().invalid_frames == 1);
 
+    // Zero-copy consumer access preserves the same FIFO publication contract.
+    ExternalVenueIngress peeked(VenueId::BinanceSpot, 503);
+    ExternalVenueEvent peeked_event;
+    peeked_event.asset_handle = 503;
+    peeked_event.connection_epoch = 1;
+    peeked_event.source_sequence = 77;
+    peeked_event.venue = VenueId::BinanceSpot;
+    peeked_event.event_type = ExternalEventType::BookTop;
+    peeked_event.local_receive_monotonic_ns = 400;
+    peeked_event.local_receive_wall_ns = 1'300;
+    peeked_event.bid = 65'100.0;
+    peeked_event.ask = 65'101.0;
+    peeked_event.healthy = 1;
+    assert(peeked.on_event(peeked_event));
+    const auto* peeked_head = peeked.peek_event();
+    assert(peeked_head != nullptr && peeked_head->source_sequence == 77);
+    assert(peeked.commit_event());
+    assert(peeked.peek_event() == nullptr);
+    assert(!peeked.commit_event());
+    assert(peeked.snapshot().drained_events == 1);
+
     // Observer-owned frames skip generic JSON decoding but must preserve the
     // same transport accounting and reconnect/gap semantics.
     ExternalVenueIngress routed(VenueId::BybitSpot, 502);

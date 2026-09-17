@@ -35,6 +35,21 @@ public:
         return true;
     }
 
+    [[nodiscard]] const T* try_peek() const noexcept {
+        const std::size_t tail = tail_.load(std::memory_order_relaxed);
+        const std::size_t head = head_.load(std::memory_order_acquire);
+        if (tail == head) return nullptr;
+        return &storage_[tail & mask_];
+    }
+
+    [[nodiscard]] bool pop_commit() noexcept {
+        const std::size_t tail = tail_.load(std::memory_order_relaxed);
+        const std::size_t head = head_.load(std::memory_order_acquire);
+        if (tail == head) return false;
+        tail_.store(tail + 1, std::memory_order_release);
+        return true;
+    }
+
     [[nodiscard]] std::size_t approximate_size() const noexcept {
         const std::size_t head = head_.load(std::memory_order_acquire);
         const std::size_t tail = tail_.load(std::memory_order_acquire);

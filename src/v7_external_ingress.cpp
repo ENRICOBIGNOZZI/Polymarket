@@ -6,10 +6,9 @@
 #include <array>
 
 namespace pm::v7::external_fair {
-namespace {
 
-[[nodiscard]] bool causal_event_less(const ExternalVenueEvent& left,
-                                     const ExternalVenueEvent& right) noexcept {
+bool causal_event_precedes(const ExternalVenueEvent& left,
+                           const ExternalVenueEvent& right) noexcept {
     if (left.local_receive_monotonic_ns != right.local_receive_monotonic_ns) {
         return left.local_receive_monotonic_ns < right.local_receive_monotonic_ns;
     }
@@ -23,8 +22,6 @@ namespace {
     return left.source_sequence < right.source_sequence;
 }
 
-} // namespace
-
 CausalEventMergeResult merge_causal_events(
     std::span<const ExternalVenueEvent> first,
     std::span<const ExternalVenueEvent> second,
@@ -35,11 +32,11 @@ CausalEventMergeResult merge_causal_events(
         result.output_overflow = 1;
         return result;
     }
-    const bool sorted = std::is_sorted(first.begin(), first.end(), causal_event_less)
-        && std::is_sorted(second.begin(), second.end(), causal_event_less);
+    const bool sorted = std::is_sorted(first.begin(), first.end(), causal_event_precedes)
+        && std::is_sorted(second.begin(), second.end(), causal_event_precedes);
     if (sorted) {
         std::merge(first.begin(), first.end(), second.begin(), second.end(),
-                   output.begin(), causal_event_less);
+                   output.begin(), causal_event_precedes);
     } else {
         result.sort_fallback = 1;
         std::copy(first.begin(), first.end(), output.begin());
@@ -47,7 +44,7 @@ CausalEventMergeResult merge_causal_events(
                   output.begin() + static_cast<std::ptrdiff_t>(first.size()));
         std::sort(output.begin(),
                   output.begin() + static_cast<std::ptrdiff_t>(count),
-                  causal_event_less);
+                  causal_event_precedes);
     }
     result.output_count = count;
     return result;
@@ -145,9 +142,11 @@ std::size_t ExternalVenueIngress::drain_into(
     const ExternalStatePolicy& policy,
     std::size_t max_events) noexcept {
     std::size_t count = 0;
-    ExternalVenueEvent event;
-    while (count < max_events && queue_.try_pop(event)) {
-        (void)state.on_venue_event(event, policy);
+    while (count < max_events) {
+        const auto* event = queue_.try_peek();
+        if (event == nullptr) break;
+        (void)state.on_venue_event(*event, policy);
+        if (!queue_.pop_commit()) break;
         ++count;
     }
     drained_events_.fetch_add(count, std::memory_order_relaxed);
@@ -162,6 +161,20 @@ std::size_t ExternalVenueIngress::drain_events(
     while (count < limit && queue_.try_pop(output[count])) ++count;
     drained_events_.fetch_add(count, std::memory_order_relaxed);
     return count;
+}
+
+const ExternalVenueEvent* ExternalVenueIngress::peek_event() const noexcept {
+    return queue_.try_peek();
+}
+
+bool ExternalVenueIngress::commit_event() noexcept {
+    if (!queue_.pop_commit()) return false;
+    drained_events_.fetch_add(1, std::memory_order_relaxed);
+    return true;
+}
+
+std::size_t ExternalVenueIngress::queued_events() const noexcept {
+    return queue_.approximate_size();
 }
 
 void ExternalVenueIngress::mark_disconnected(
