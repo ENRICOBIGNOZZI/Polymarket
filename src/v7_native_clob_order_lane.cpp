@@ -56,6 +56,13 @@ template <typename T, std::size_t N>
     }
     return true;
 }
+
+[[nodiscard]] clob_eip712::ExchangeV2PreparedStaticView prepared_hash_view(
+    const NativeClobLaneConfig& config, std::uint8_t side) noexcept {
+    return {config.deposit_wallet, config.deposit_wallet,
+            config.token_id_decimal, side, 3,
+            config.metadata_hex, config.builder_hex};
+}
 [[nodiscard]] NativeClobSubmitResult fail_before_wire(
     NativeOrderTxOwner& owner, std::uint64_t client_order_id,
     NativeClobSubmitReason reason) noexcept {
@@ -97,7 +104,9 @@ struct NativeClobOrderLane::Impl final {
     FixedText<128> passphrase{};
     FixedText<128> poly_address{};
 
-    poly1271::Poly1271OrderHasher order_hasher;
+    clob_eip712::ExchangeV2PreparedOrderHasher buy_order_hasher;
+    clob_eip712::ExchangeV2PreparedOrderHasher sell_order_hasher;
+    poly1271::PreparedHasher poly_hasher;
     poly1271::Secp256k1Signer signer;
     clob_order::OrderSaltSequence salt;
     clob_post::PreparedPostOrderBuilder buy_fak;
@@ -110,7 +119,12 @@ struct NativeClobOrderLane::Impl final {
 
     Impl(const NativeClobLaneConfig& config,
          std::span<const std::uint8_t, 32> private_key) noexcept
-        : order_hasher({config.chain_id, config.exchange_contract}, config.deposit_wallet),
+        : buy_order_hasher({config.chain_id, config.exchange_contract},
+                           prepared_hash_view(config, 0)),
+          sell_order_hasher({config.chain_id, config.exchange_contract},
+                            prepared_hash_view(config, 1)),
+          poly_hasher(config.chain_id, config.deposit_wallet,
+                      buy_order_hasher.domain_separator()),
           signer(private_key),
           salt(clob_order::OrderSaltSequence::from_os_entropy()),
           buy_fak({config.builder_hex, "0", config.deposit_wallet, config.metadata_hex,
@@ -139,7 +153,8 @@ struct NativeClobOrderLane::Impl final {
             || !api_key.assign(config.api_key)
             || !passphrase.assign(config.passphrase)
             || !poly_address.assign(config.signer_eoa_address)
-            || !order_hasher.valid() || !signer.valid() || !salt.valid()
+            || !buy_order_hasher.valid() || !sell_order_hasher.valid()
+            || !poly_hasher.valid() || !signer.valid() || !salt.valid()
             || !buy_fak.valid() || !sell_fak.valid() || !buy_fok.valid() || !sell_fok.valid()
             || !signer.address_hex(derived)
             || !same_hex_address({derived.data(), derived.size()}, signer_eoa.view())) {
@@ -228,22 +243,13 @@ NativeClobSubmitResult NativeClobOrderLane::submit(
         return fail_before_wire(oms_owner, command.client_order_id,
                                 NativeClobSubmitReason::PreWireFailure);
     }
-    clob_eip712::ExchangeV2OrderView order{};
-    order.salt_decimal = salt_sv;
-    order.maker = impl_->deposit_wallet.view();
-    order.signer = impl_->deposit_wallet.view();
-    order.token_id_decimal = impl_->token_id.view();
-    order.maker_amount_decimal = maker_sv;
-    order.taker_amount_decimal = taker_sv;
-    order.side = command.side == Side::Buy ? 0 : 1;
-    order.signature_type = 3;
-    order.timestamp_decimal = timestamp_sv;
-    order.metadata_hex = impl_->metadata.view();
-    order.builder_hex = impl_->builder.view();
-
+    auto& order_hasher = command.side == Side::Buy
+        ? impl_->buy_order_hasher : impl_->sell_order_hasher;
     std::array<char, poly1271::kWrappedSignatureHexChars> order_signature;
-    if (!poly1271::sign_poly1271_hex(
-            impl_->order_hasher, impl_->signer, order, order_signature)) {
+    if (!poly1271::sign_prepared_poly1271_hex(
+            order_hasher, impl_->poly_hasher, impl_->signer,
+            salt, amounts.maker_amount, amounts.taker_amount,
+            wall_timestamp_ms, order_signature)) {
         return fail_before_wire(oms_owner, command.client_order_id,
                                 NativeClobSubmitReason::PreWireFailure);
     }
