@@ -14,6 +14,7 @@ find_package(Boost REQUIRED)
 find_package(Threads REQUIRED)
 find_package(OpenSSL REQUIRED)
 pkg_check_modules(LIBCURL REQUIRED IMPORTED_TARGET libcurl)
+pkg_check_modules(SECP256K1 REQUIRED IMPORTED_TARGET libsecp256k1)
 
 # Boost.JSON is compiled exactly once and shared by all V7 C++ components.
 # This keeps the bounded market-data decoder independent from HTTP/REST code.
@@ -42,10 +43,39 @@ add_library(pm_v7_common
   src/v7_markout.cpp
   src/v7_market_ws.cpp
   src/v7_capital.cpp
-  src/v7_execution_admission.cpp)
+  src/v7_execution_admission.cpp
+  src/v7_crypto_decision_lane.cpp
+  src/v7_native_order_tx.cpp)
 target_include_directories(pm_v7_common PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/include ${Boost_INCLUDE_DIRS})
 target_link_libraries(pm_v7_common PUBLIC pm_json)
 target_compile_options(pm_v7_common PRIVATE -Wall -Wextra -Wpedantic)
+
+
+add_library(pm_v7_clob_native
+  src/v7_keccak_fast.cpp
+  src/v7_clob_eip712.cpp
+  src/v7_poly1271.cpp
+  src/v7_clob_order_amounts.cpp
+  src/v7_clob_order_salt.cpp
+  src/v7_clob_wire.cpp
+  src/v7_clob_prepared_order.cpp
+  src/v7_clob_http_frame.cpp
+  src/v7_clob_prepared_post.cpp
+  src/v7_clob_http_response.cpp
+  src/v7_clob_order_identity.cpp
+  src/v7_clob_tls.cpp)
+target_include_directories(pm_v7_clob_native PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/include ${Boost_INCLUDE_DIRS})
+target_link_libraries(pm_v7_clob_native PUBLIC pm_json Threads::Threads OpenSSL::SSL OpenSSL::Crypto PkgConfig::SECP256K1)
+target_compile_options(pm_v7_clob_native PRIVATE -Wall -Wextra -Wpedantic)
+
+add_library(pm_v7_account_native
+  src/v7_user_ws.cpp
+  src/v7_user_ws_feed.cpp
+  src/v7_user_oms_bridge.cpp
+  src/v7_native_clob_order_lane.cpp)
+target_include_directories(pm_v7_account_native PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/include ${Boost_INCLUDE_DIRS})
+target_link_libraries(pm_v7_account_native PUBLIC pm_v7_common pm_v7_clob_native pm_json Threads::Threads OpenSSL::SSL OpenSSL::Crypto)
+target_compile_options(pm_v7_account_native PRIVATE -Wall -Wextra -Wpedantic)
 
 add_library(pm_v7_hft
   src/v7_maker_hft.cpp
@@ -67,6 +97,7 @@ add_library(pm_v7_external
   src/v7_binance_l2.cpp
   src/v7_binance_l2_protocol.cpp
   src/v7_coinbase_l2.cpp
+  src/v7_coinbase_l2_observer.cpp
   src/v7_external_state.cpp
   src/v7_external_execution.cpp
   src/v7_external_kernel.cpp
@@ -121,6 +152,18 @@ endif()
 
 if(NOT PM_LONDON_RUNTIME_ONLY)
 # Offline queue-handoff comparison; no market or execution authority.
+add_executable(polymarket_v7_crypto_decision_bench src/v7_crypto_decision_bench.cpp)
+target_link_libraries(polymarket_v7_crypto_decision_bench PRIVATE pm_v7_external)
+target_compile_options(polymarket_v7_crypto_decision_bench PRIVATE -Wall -Wextra -Wpedantic)
+
+add_executable(polymarket_v7_crypto_to_oms_bench src/v7_crypto_to_oms_bench.cpp)
+target_link_libraries(polymarket_v7_crypto_to_oms_bench PRIVATE pm_v7_external pm_v7_common)
+target_compile_options(polymarket_v7_crypto_to_oms_bench PRIVATE -Wall -Wextra -Wpedantic)
+
+add_executable(polymarket_v7_native_clob_full_prewire_bench src/v7_native_clob_full_prewire_bench.cpp)
+target_link_libraries(polymarket_v7_native_clob_full_prewire_bench PRIVATE pm_v7_clob_native)
+target_compile_options(polymarket_v7_native_clob_full_prewire_bench PRIVATE -Wall -Wextra -Wpedantic)
+
 add_executable(polymarket_v7_feed_race_probe src/v7_feed_race_probe.cpp)
 target_link_libraries(polymarket_v7_feed_race_probe PRIVATE pm_v7_external)
 target_compile_options(polymarket_v7_feed_race_probe PRIVATE -Wall -Wextra -Wpedantic)
@@ -199,6 +242,23 @@ if(BUILD_TESTING)
   add_executable(pm_v7_execution_admission_tests tests/test_v7_execution_admission.cpp)
   target_link_libraries(pm_v7_execution_admission_tests PRIVATE pm_v7_common)
   add_test(NAME pm_v7_execution_admission_tests COMMAND pm_v7_execution_admission_tests)
+
+  add_executable(pm_v7_crypto_decision_lane_tests tests/test_v7_crypto_decision_lane.cpp)
+  target_link_libraries(pm_v7_crypto_decision_lane_tests PRIVATE pm_v7_common)
+  target_compile_options(pm_v7_crypto_decision_lane_tests PRIVATE -UNDEBUG)
+  add_test(NAME pm_v7_crypto_decision_lane_tests COMMAND pm_v7_crypto_decision_lane_tests)
+
+  add_executable(pm_v7_native_order_tx_tests tests/test_v7_native_order_tx.cpp)
+  target_link_libraries(pm_v7_native_order_tx_tests PRIVATE pm_v7_common)
+  target_compile_options(pm_v7_native_order_tx_tests PRIVATE -UNDEBUG)
+  add_test(NAME pm_v7_native_order_tx_tests COMMAND pm_v7_native_order_tx_tests)
+
+  add_executable(pm_v7_native_clob_order_lane_driver tests/v7_native_clob_order_lane_driver.cpp)
+  target_link_libraries(pm_v7_native_clob_order_lane_driver PRIVATE pm_v7_account_native)
+  target_compile_options(pm_v7_native_clob_order_lane_driver PRIVATE -UNDEBUG)
+
+  add_test(NAME pm_v7_native_clob_full_prewire_bench_smoke
+    COMMAND polymarket_v7_native_clob_full_prewire_bench 64)
 
 
 
@@ -307,6 +367,10 @@ if(BUILD_TESTING)
   add_executable(pm_v7_coinbase_l2_tests tests/test_v7_coinbase_l2.cpp)
   target_link_libraries(pm_v7_coinbase_l2_tests PRIVATE pm_v7_external)
   add_test(NAME pm_v7_coinbase_l2_tests COMMAND pm_v7_coinbase_l2_tests)
+
+  add_executable(pm_v7_coinbase_l2_observer_tests tests/test_v7_coinbase_l2_observer.cpp)
+  target_link_libraries(pm_v7_coinbase_l2_observer_tests PRIVATE pm_v7_external)
+  add_test(NAME pm_v7_coinbase_l2_observer_tests COMMAND pm_v7_coinbase_l2_observer_tests)
 
   add_test(NAME test_v7_authorized_make_cancel_runtime
     COMMAND ${Python3_EXECUTABLE}

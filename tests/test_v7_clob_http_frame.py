@@ -10,16 +10,25 @@ ROOT = Path(__file__).resolve().parents[1]
 PROGRAM = r'''#include "pm/v7_clob_http_frame.hpp"
 #include <array>
 #include <iostream>
+#include <string_view>
 using namespace pm::v7::clob_http_frame;
 int main(){
  L2AuthHeadersView a{"0x1111111111111111111111111111111111111111","YWJjZA==","1789670000","api-key-test","pass-test"};
  constexpr std::string_view body="{\"orderType\":\"FAK\"}";
  std::array<char,1024> out{};
  auto n=serialize_post_order_http1(a,body,out); if(!n)return 2;
+ PreparedPostOrderHttp1 prepared(a.address,a.api_key,a.passphrase); if(!prepared.valid())return 6;
+ std::array<char,1024> fast{};
+ auto fast_n=prepared.serialize(a.signature,a.timestamp,body,fast); if(fast_n!=n)return 7;
+ if(std::string_view(fast.data(),fast_n)!=std::string_view(out.data(),n))return 8;
  std::cout.write(out.data(),static_cast<std::streamsize>(n));
  std::array<char,8> small{}; if(serialize_post_order_http1(a,body,small)!=0)return 3;
+ if(prepared.serialize(a.signature,a.timestamp,body,small)!=0)return 12;
  a.api_key="bad\r\nInjected: 1"; if(serialize_post_order_http1(a,body,out)!=0)return 4;
  a.api_key="api-key-test"; a.timestamp="1x"; if(serialize_post_order_http1(a,body,out)!=0)return 5;
+ if(prepared.serialize("bad\r\nInjected: 1","1789670000",body,fast)!=0)return 9;
+ if(prepared.serialize("YWJjZA==","1x",body,fast)!=0)return 10;
+ PreparedPostOrderHttp1 invalid(a.address,"bad\r\nInjected: 1",a.passphrase); if(invalid.valid())return 11;
  return 0;
 }
 '''
