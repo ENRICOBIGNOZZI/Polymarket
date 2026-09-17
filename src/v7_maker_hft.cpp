@@ -649,7 +649,11 @@ MakerDecision MakerHotPath::on_market_update(
     // estimator.  The old event-count EMA applied another 0.9 multiplier on
     // every unrelated book message, so a busy feed erased real flow in
     // milliseconds.  feature_decay now has stable per-second semantics.
-    const double tau_seconds = -1.0 / std::log(std::max(1e-6, decay_per_second));
+    if (decay_per_second != cached_feature_decay_) {
+        cached_feature_decay_ = decay_per_second;
+        cached_tau_seconds_ = -1.0 / std::log(std::max(1e-6, decay_per_second));
+    }
+    const double tau_seconds = cached_tau_seconds_;
     if (update.flow_prior_valid != 0
         && (!flow_evidence_valid_
             || (update.selector_generation != 0
