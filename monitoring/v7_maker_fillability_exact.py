@@ -164,6 +164,12 @@ def replay_exact_ws(
     source_orders = [dict(row) for row in coarse_report.get("orders") or [] if isinstance(row, dict)]
     orders = [row for row in source_orders if _covered(row, first_wall, last_wall)]
     orders.sort(key=lambda row: (int(row.get("effective_wall_ms") or 0), str(row.get("order_id") or "")))
+    orders_by_token: dict[str, list[dict[str, Any]]] = defaultdict(list)
+    for order in orders:
+        orders_by_token[str(order.get("token_id") or "")].append(order)
+    trades_by_token: dict[str, list[dict[str, Any]]] = defaultdict(list)
+    for trade in exact_rows:
+        trades_by_token[str(trade.get("token_id") or "")].append(trade)
 
     scenarios = {
         "lower": "queue_ahead_lower",
@@ -189,9 +195,7 @@ def replay_exact_ws(
 
     for trade in exact_rows:
         eligible: list[dict[str, Any]] = []
-        for order in orders:
-            if str(order.get("token_id") or "") != trade["token_id"]:
-                continue
+        for order in orders_by_token.get(str(trade["token_id"]), []):
             start_wall = int(order.get("effective_wall_ms") or 0)
             end_wall = int(order.get("end_wall_ms") or 0)
             effective_exchange_ms = int(order.get("effective_exchange_ms") or 0)
@@ -249,7 +253,7 @@ def replay_exact_ws(
         observed_future = False
         if cancelled > 0 and not order["trade_reachable"]:
             horizon = cancelled + max(0, future_flow_lookahead_ms)
-            for trade in exact_rows:
+            for trade in trades_by_token.get(str(order.get("token_id") or ""), []):
                 if trade["receive_wall_ms"] <= cancelled or trade["receive_wall_ms"] > horizon:
                     continue
                 if str(order.get("token_id") or "") != trade["token_id"] or not _compatible(order, trade):
