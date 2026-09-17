@@ -77,6 +77,9 @@ private:
     std::uint64_t asset_handle_ = 0;
     ExternalTapeRecorder* normalized_tape_ = nullptr;
     IngressWakeup* wakeup_ = nullptr;
+    // Producer-owned bounded decode page. Reuse it across frames instead of
+    // value-initializing 32 x ExternalVenueEvent on every WebSocket message.
+    std::array<ExternalVenueEvent, kExternalIngressDecodeBatch> decoded_scratch_{};
     SpscRing<ExternalVenueEvent, kExternalIngressQueueCapacity> queue_{};
     std::atomic<std::uint64_t> frames_{0};
     std::atomic<std::uint64_t> decoded_events_{0};

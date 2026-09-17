@@ -30,11 +30,10 @@ ExternalDecodeResult ExternalVenueIngress::on_frame(
     std::string_view payload) noexcept {
 
     single_writer_add(frames_);
-    std::array<ExternalVenueEvent, kExternalIngressDecodeBatch> decoded{};
     auto result = decode_external_venue_frame(
         venue_, asset_handle_, connection_epoch,
         local_receive_monotonic_ns, local_receive_wall_ns,
-        payload, decoded);
+        payload, decoded_scratch_);
     if (result.invalid_frame != 0) {
         single_writer_add(invalid_frames_);
     }
@@ -54,7 +53,7 @@ ExternalDecodeResult ExternalVenueIngress::on_frame(
         set_gap_pending();
     }
 
-    for (std::size_t i = 0; i < result.output_count; ++i) (void)enqueue_event(decoded[i]);
+    for (std::size_t i = 0; i < result.output_count; ++i) (void)enqueue_event(decoded_scratch_[i]);
     return result;
 }
 
