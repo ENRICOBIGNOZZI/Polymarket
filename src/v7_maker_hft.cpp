@@ -610,9 +610,10 @@ MakerDecision MakerHotPath::on_market_update(
     decision.selector_projected_fill_probability =
         update.selector_projected_fill_probability;
     const std::int64_t start_ns = monotonic_ns();
+    const bool model_valid = model.valid();
 
-    const double decay_per_second = model.valid() ? model.feature_decay : 0.90;
-    const double tick_size = model.valid() ? model.tick_size : 0.01;
+    const double decay_per_second = model_valid ? model.feature_decay : 0.90;
+    const double tick_size = model_valid ? model.tick_size : 0.01;
     const double bid_tick = static_cast<double>(update.best_bid_tick);
     const double ask_tick = static_cast<double>(update.best_ask_tick);
     const double mid_tick = 0.5 * (bid_tick + ask_tick);
@@ -648,7 +649,11 @@ MakerDecision MakerHotPath::on_market_update(
     // estimator.  The old event-count EMA applied another 0.9 multiplier on
     // every unrelated book message, so a busy feed erased real flow in
     // milliseconds.  feature_decay now has stable per-second semantics.
-    const double tau_seconds = -1.0 / std::log(std::max(1e-6, decay_per_second));
+    if (cached_tau_decay_ != decay_per_second) {
+        cached_tau_decay_ = decay_per_second;
+        cached_tau_seconds_ = -1.0 / std::log(std::max(1e-6, decay_per_second));
+    }
+    const double tau_seconds = cached_tau_seconds_;
     if (update.flow_prior_valid != 0
         && (!flow_evidence_valid_
             || (update.selector_generation != 0
@@ -760,7 +765,7 @@ MakerDecision MakerHotPath::on_market_update(
     if (risk.max_local_state_age_ns > 0 && local_age_ns > risk.max_local_state_age_ns) {
         return control_exit(DecisionReason::StaleState, IntentType::Withdraw);
     }
-    if (!model.valid()) return control_exit(DecisionReason::InvalidModel, IntentType::Withdraw);
+    if (!model_valid) return control_exit(DecisionReason::InvalidModel, IntentType::Withdraw);
     if (update.best_bid_tick <= 0 || update.best_ask_tick <= update.best_bid_tick ||
         static_cast<double>(update.best_ask_tick) * model.tick_size >= 1.0 + model.tick_size * 0.5) {
         return control_exit(DecisionReason::InvalidBook, IntentType::Withdraw);

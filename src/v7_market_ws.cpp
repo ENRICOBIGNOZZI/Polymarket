@@ -1,6 +1,8 @@
 #include "pm/v7_market_ws.hpp"
 
 #include <boost/json.hpp>
+#include <boost/json/null_resource.hpp>
+#include <boost/json/parser.hpp>
 #include <boost/json/static_resource.hpp>
 #include <boost/system/error_code.hpp>
 
@@ -27,6 +29,7 @@ constexpr std::size_t kJsonArenaDefaultMaxBytes = 512ULL * kMiB;
 constexpr std::size_t kJsonArenaHardMaxBytes = 2ULL * 1024ULL * kMiB;
 constexpr std::size_t kJsonArenaPayloadMultiplier = 8;
 constexpr std::size_t kJsonArenaHeadroomBytes = 4ULL * kMiB;
+constexpr std::size_t kJsonParserScratchBytes = 16ULL * 1024ULL;
 constexpr std::size_t kMaxSnapshotLevelsPerSide = 256;
 
 [[nodiscard]] std::int64_t monotonic_ns() noexcept {
@@ -243,6 +246,10 @@ struct MarketWsShard::Impl {
     std::vector<unsigned char> json_arena;
     std::size_t json_arena_max_bytes = kJsonArenaDefaultMaxBytes;
     std::unique_ptr<json::static_resource> json_resource;
+    std::array<unsigned char, kJsonParserScratchBytes> parser_scratch{};
+    json::parser parser{
+        json::storage_ptr(json::get_null_resource()), json::parse_options{},
+        parser_scratch.data(), parser_scratch.size()};
     std::array<PriceLevelE4, kMaxSnapshotLevelsPerSide> bid_scratch{};
     std::array<PriceLevelE4, kMaxSnapshotLevelsPerSide> ask_scratch{};
 
@@ -306,7 +313,7 @@ struct MarketWsShard::Impl {
     }
 
     void emit(MarketWsFrameResult& result, std::span<MarketWsEvent> output,
-              MarketWsEvent event) noexcept {
+              const MarketWsEvent& event) noexcept {
         if (result.output_count >= output.size()) {
             result.output_overflow = 1;
             return;
@@ -560,16 +567,18 @@ MarketWsFrameResult MarketWsShard::process_frame(
             return result;
         }
         impl_->json_resource->release();
+        impl_->parser.reset(json::storage_ptr(impl_->json_resource.get()));
         boost::system::error_code error;
-        const json::value root = json::parse(payload, error, impl_->json_resource.get());
+        const auto consumed = impl_->parser.write(payload.data(), payload.size(), error);
         const std::int64_t parse_end_ns = monotonic_ns();
         result.parse_ns = std::max<std::int64_t>(0, parse_end_ns - frame_start_ns);
-        if (error) {
+        if (error || consumed != payload.size()) {
             result.invalid_frame = 1;
             impl_->invalidate_all();
             result.lineage_invalidated = 1;
             return result;
         }
+        const json::value root = impl_->parser.release();
         if (root.is_array()) {
             for (const auto& raw : root.as_array()) {
                 if (!raw.is_object()) {

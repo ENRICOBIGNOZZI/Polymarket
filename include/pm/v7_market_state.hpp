@@ -91,6 +91,8 @@ private:
     [[nodiscard]] std::uint8_t fill_side_snapshot(
         Side side, DepthSummary& depth,
         std::array<PriceLevelE4, kHotDepthLevels>& output) const noexcept;
+    void refresh_hot_side(Side side) noexcept;
+    void refresh_hot_metadata() noexcept;
 
     std::array<std::int64_t, kCanonicalPriceSlots> bid_qty_{};
     std::array<std::int64_t, kCanonicalPriceSlots> ask_qty_{};
@@ -103,6 +105,7 @@ private:
     std::int32_t best_bid_e4_ = 0;
     std::int32_t best_ask_e4_ = 0;
     bool lineage_continuous_ = false;
+    BookHotSnapshot hot_cache_{};
 };
 
 static_assert(std::is_trivially_copyable_v<PriceLevelE4>);
