@@ -63,6 +63,7 @@ def test_prepared_eip712_matches_general_and_official_vector() -> None:
         subprocess.run([
             compiler, "-std=c++20", "-O2", "-Wall", "-Wextra", "-Wpedantic",
             f"-I{ROOT / 'include'}", str(ROOT / "src/v7_clob_eip712.cpp"),
+            str(ROOT / "src/v7_keccak_fast.cpp"),
             str(main), "-o", str(binary),
         ], check=True, capture_output=True, text=True)
         result = subprocess.run([str(binary)], check=True, capture_output=True, text=True)

@@ -1,78 +1,14 @@
 #include "pm/v7_clob_eip712.hpp"
+#include "pm/v7_keccak_fast.hpp"
 
 #include <algorithm>
 #include <array>
-#include <bit>
 #include <cstddef>
 #include <cstdint>
 #include <cstring>
 
 namespace pm::v7::clob_eip712 {
 namespace {
-
-constexpr std::size_t kKeccakRate = 136;
-
-constexpr std::array<std::uint64_t, 24> kRoundConstants{
-    0x0000000000000001ULL, 0x0000000000008082ULL,
-    0x800000000000808aULL, 0x8000000080008000ULL,
-    0x000000000000808bULL, 0x0000000080000001ULL,
-    0x8000000080008081ULL, 0x8000000000008009ULL,
-    0x000000000000008aULL, 0x0000000000000088ULL,
-    0x0000000080008009ULL, 0x000000008000000aULL,
-    0x000000008000808bULL, 0x800000000000008bULL,
-    0x8000000000008089ULL, 0x8000000000008003ULL,
-    0x8000000000008002ULL, 0x8000000000000080ULL,
-    0x000000000000800aULL, 0x800000008000000aULL,
-    0x8000000080008081ULL, 0x8000000000008080ULL,
-    0x0000000080000001ULL, 0x8000000080008008ULL,
-};
-constexpr std::array<unsigned, 24> kRotation{
-    1, 3, 6, 10, 15, 21, 28, 36, 45, 55, 2, 14,
-    27, 41, 56, 8, 25, 43, 62, 18, 39, 61, 20, 44,
-};
-constexpr std::array<unsigned, 24> kPiLane{
-    10, 7, 11, 17, 18, 3, 5, 16, 8, 21, 24, 4,
-    15, 23, 19, 13, 12, 2, 20, 14, 22, 9, 6, 1,
-};
-
-std::uint64_t load64_le(const std::uint8_t* p) noexcept {
-    std::uint64_t value = 0;
-    for (unsigned i = 0; i < 8; ++i) value |= static_cast<std::uint64_t>(p[i]) << (8U * i);
-    return value;
-}
-
-void store64_le(std::uint64_t value, std::uint8_t* p) noexcept {
-    for (unsigned i = 0; i < 8; ++i) p[i] = static_cast<std::uint8_t>(value >> (8U * i));
-}
-
-void keccak_f1600(std::array<std::uint64_t, 25>& state) noexcept {
-    std::array<std::uint64_t, 5> column{};
-    for (std::size_t round = 0; round < kRoundConstants.size(); ++round) {
-        for (std::size_t i = 0; i < 5; ++i) {
-            column[i] = state[i] ^ state[i + 5] ^ state[i + 10] ^ state[i + 15] ^ state[i + 20];
-        }
-        for (std::size_t i = 0; i < 5; ++i) {
-            const std::uint64_t t = column[(i + 4) % 5] ^ std::rotl(column[(i + 1) % 5], 1);
-            for (std::size_t j = 0; j < 25; j += 5) state[j + i] ^= t;
-        }
-
-        std::uint64_t t = state[1];
-        for (std::size_t i = 0; i < 24; ++i) {
-            const std::size_t lane = kPiLane[i];
-            const std::uint64_t saved = state[lane];
-            state[lane] = std::rotl(t, static_cast<int>(kRotation[i]));
-            t = saved;
-        }
-
-        for (std::size_t row = 0; row < 25; row += 5) {
-            for (std::size_t i = 0; i < 5; ++i) column[i] = state[row + i];
-            for (std::size_t i = 0; i < 5; ++i) {
-                state[row + i] = column[i] ^ ((~column[(i + 1) % 5]) & column[(i + 2) % 5]);
-            }
-        }
-        state[0] ^= kRoundConstants[round];
-    }
-}
 
 int hex_value(unsigned char c) noexcept {
     if (c >= '0' && c <= '9') return static_cast<int>(c - '0');
@@ -167,29 +103,7 @@ constexpr Hash32 kDomainVersionHash = Hash32{0xadU, 0x7cU, 0x5bU, 0xefU, 0x02U, 
 } // namespace
 
 Hash32 keccak256(std::span<const std::uint8_t> input) noexcept {
-    std::array<std::uint64_t, 25> state{};
-    while (input.size() >= kKeccakRate) {
-        for (std::size_t lane = 0; lane < kKeccakRate / 8; ++lane) {
-            state[lane] ^= load64_le(input.data() + lane * 8);
-        }
-        keccak_f1600(state);
-        input = input.subspan(kKeccakRate);
-    }
-
-    std::array<std::uint8_t, kKeccakRate> final_block{};
-    if (!input.empty()) std::memcpy(final_block.data(), input.data(), input.size());
-    final_block[input.size()] ^= 0x01U; // Ethereum Keccak domain suffix.
-    final_block[kKeccakRate - 1] ^= 0x80U;
-    for (std::size_t lane = 0; lane < kKeccakRate / 8; ++lane) {
-        state[lane] ^= load64_le(final_block.data() + lane * 8);
-    }
-    keccak_f1600(state);
-
-    Hash32 output{};
-    for (std::size_t lane = 0; lane < output.size() / 8; ++lane) {
-        store64_le(state[lane], output.data() + lane * 8);
-    }
-    return output;
+    return keccak256_unrolled(input);
 }
 
 Hash32 keccak256(std::string_view input) noexcept {

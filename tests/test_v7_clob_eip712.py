@@ -55,7 +55,8 @@ def test_native_exchange_v2_eip712_matches_official_sdk_fixture() -> None:
         main.write_text(PROGRAM)
         subprocess.run(
             [compiler, "-std=c++20", "-O2", "-Wall", "-Wextra", "-Wpedantic",
-             f"-I{ROOT / 'include'}", str(ROOT / "src/v7_clob_eip712.cpp"), str(main),
+             f"-I{ROOT / 'include'}", str(ROOT / "src/v7_clob_eip712.cpp"),
+             str(ROOT / "src/v7_keccak_fast.cpp"), str(main),
              "-o", str(binary)],
             check=True, capture_output=True, text=True,
         )
