@@ -59,6 +59,30 @@ class SnapshotCacheTests(unittest.TestCase):
             self.assertEqual(cache.read()["snapshot"]["sequence"], 2)
             cache.stop()
 
+    def test_lightweight_cache_skips_profit_experiment_report(self) -> None:
+        seen: dict[str, object] = {}
+
+        def collect(_run_root: Path, _repository_root: Path, **kwargs: object) -> dict:
+            seen.update(kwargs)
+            return {
+                "sequence": 1,
+                "maker_fillability": {},
+                "external_fair": {},
+                "multi_crypto_performance": {},
+                "multi_crypto_shadow": {},
+            }
+
+        cache = exporter.SnapshotCache(
+            Path("run"), ROOT, refresh_seconds=60.0, include_profit_experiment_report=False
+        )
+        with mock.patch.object(exporter, "collect_snapshot", side_effect=collect), mock.patch.object(
+            exporter, "render_prometheus", return_value="test_snapshot_sequence 1\n"
+        ):
+            cache.start()
+            self.assertTrue(cache.wait_ready(2.0))
+            self.assertIs(seen.get("include_profit_experiment_report"), False)
+            cache.stop()
+
 
 if __name__ == "__main__":
     unittest.main()
