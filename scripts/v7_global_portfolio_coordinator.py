@@ -1,11 +1,12 @@
 #!/usr/bin/env python3
-"""Single runtime consumer for both V7 economic-engine opportunity cuts.
+"""Single portfolio coordinator for the canonical crypto engine opportunity cut.
 
 Checked-in operation is PAPER observation only: this coordinator has no flag
-that can authorize real new risk. It validates fully typed envelopes, compares
-both engines on conservative expected account-wealth change, gives CANCEL
-priority, concentrates ordinary crypto risk on the best market windows, and
-keeps minimum-size PAPER exploration on a separate information-gain lane.
+that can authorize real new risk. It validates fully typed crypto envelopes,
+compares maker/taker/cancel/no-action choices on conservative expected
+account-wealth change, gives CANCEL priority, concentrates ordinary crypto risk
+on the best market windows, and keeps minimum-size PAPER exploration on a
+separate information-gain lane.
 """
 from __future__ import annotations
 
@@ -82,10 +83,9 @@ def _execution_alpha_cut(
 ) -> tuple[list[dict[str, Any]], dict[str, Any]]:
     """Concentrate ordinary crypto risk while preserving safe/probe actions.
 
-    CANCEL/WITHDRAW are never filtered. Structural opportunities keep their own
-    engine selection. Minimum-size PAPER probes are deliberately exempt from the
-    top-market economic filter so the experiment can learn underrepresented
-    strata; at most one probe is left in the cut, selected before outcome using
+    CANCEL/WITHDRAW are never filtered. Minimum-size PAPER probes are deliberately
+    exempt from the top-market economic filter so the experiment can learn
+    underrepresented strata; at most one probe is left in the cut, selected before outcome using
     declared information value.
     """
     ordinary_crypto = [
@@ -474,7 +474,7 @@ def process_cut(run_root: Path, *, now_ns: int | None = None) -> dict[str, Any]:
         "authenticated_execution": False,
         "real_order_submission": False,
         "real_capital_at_risk": False,
-        "economic_engine_count": 2,
+        "economic_engine_count": 1,
         "input_count": len(files),
         "generated_maker_opportunity_count": len(maker_envelopes),
         "generated_cancel_opportunity_count": len(cancel_envelopes),

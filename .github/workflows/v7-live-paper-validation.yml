@@ -57,7 +57,7 @@ jobs:
           python3 - <<'PY'
           import json
           m=json.load(open('config/v7_live_model_scope.json'))
-          assert m.get('version') == 7 and m.get('live_algorithm_count') == 2
+          assert m.get('schema') == 'polymarket_v7_live_engine_scope_v2' and m.get('version') == 8 and m.get('live_algorithm_count') == 1 and set(m.get('live_algorithms') or []) == {'CRYPTO_SETTLEMENT_ENGINE'}
           assert m.get('paper_only') is True
           assert m.get('authenticated_execution') is False
           assert m.get('real_order_submission') is False
