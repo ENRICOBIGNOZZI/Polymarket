@@ -55,7 +55,7 @@ struct Opportunity {
     OpportunityKind kind = OpportunityKind::BinaryCompleteSet;
     std::string id;
     std::string event_id;
-    bool hard_arbitrage = false;
+    bool complete_set_opportunity = false;
     bool executable = false;
     std::string risk_class;
     std::string reject_reason;

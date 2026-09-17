@@ -57,7 +57,7 @@ def selection() -> dict:
         "authenticated_execution": False,
         "real_order_submission": False,
         "model_sha": SHA,
-        "source": "adaptive_universe_recent_flow",
+        "source": "crypto_universe_recent_flow",
         "timestamp_ms": 1_000,
         "markets": [{
             "market_id": "market-1",

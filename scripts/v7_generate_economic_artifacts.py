@@ -12,17 +12,9 @@ from typing import Any
 
 try:
     from v7_exact_sha_economic_bundle import generate as generate_exact_economic_bundle
-    from v7_fast_structural_feasibility import (
-        build_report as build_fast_structural_feasibility,
-        load_records as load_fast_structural_records,
-    )
     from v7_profitability_audit import audit as profitability_audit
 except ModuleNotFoundError:  # imported as scripts.v7_generate_economic_artifacts
     from scripts.v7_exact_sha_economic_bundle import generate as generate_exact_economic_bundle
-    from scripts.v7_fast_structural_feasibility import (
-        build_report as build_fast_structural_feasibility,
-        load_records as load_fast_structural_records,
-    )
     from scripts.v7_profitability_audit import audit as profitability_audit
 
 
@@ -94,16 +86,6 @@ def generate(repo: Path, run_root: Path, output: Path,
         terminal_inventory_cost_lineage_required=True,
         profitability_proven=False,
     )
-    strategies = profit.get("strategy_economics", {})
-    arb = envelope(
-        "polymarket_v7_arb_coverage_report_v1", sha, runtime_available,
-        strategies={name: strategies.get(name, {}) for name in (
-            "FAST_STRUCTURAL", "HARD_ARB"
-        )},
-        verified_relation_registry=load(run_root / "structural_relations" / "relation_registry.json"),
-        no_text_similarity_relations=True, partial_bundle_unwind_required=True,
-        profitability_proven=False,
-    )
     lineage = envelope(
         "polymarket_v7_lineage_report_v1", sha, runtime_available,
         data_quality=profit.get("data_quality", {}),
@@ -120,16 +102,6 @@ def generate(repo: Path, run_root: Path, output: Path,
             run_root.parent / "paper_v7_durable" / "external_fair" / "rich_research_model.json",
         ) if path.is_file()],
     )
-    fast_records, fast_quality = load_fast_structural_records(economic_inputs)
-    latency_components = exact_bundle.get("execution_latency_distribution", {}).get(
-        "components", {})
-    decision_latency = latency_components.get("decision_to_arrival", {}) \
-        if isinstance(latency_components, dict) else {}
-    fast_feasibility = build_fast_structural_feasibility(
-        fast_records, fast_quality,
-        p99_latency_ms=decision_latency.get("p99_ms")
-        if isinstance(decision_latency, dict) else None,
-    )
     profit_enveloped = {
         **profit, "repository_head": sha, "paper_only": True,
         "authenticated_execution": False, "real_order_submission": False,
@@ -141,13 +113,11 @@ def generate(repo: Path, run_root: Path, output: Path,
         "v7_reconciliation_report.json": reconciliation,
         "v7_external_fair_forecast_to_pnl.json": external,
         "v7_maker_bilateral_fillability_report.json": maker,
-        "v7_arb_coverage_report.json": arb,
         "v7_lineage_report.json": lineage,
         "v7_external_loss_attribution.json": exact_bundle["loss_attribution"],
         "v7_execution_latency_distribution.json": exact_bundle["execution_latency_distribution"],
         "v7_external_policy_replay.json": exact_bundle["policy_replay"],
         "v7_exact_sha_economic_bundle.json": exact_bundle,
-        "v7_fast_structural_feasibility.json": fast_feasibility,
     }
     for name, value in files.items():
         write(output / name, value)

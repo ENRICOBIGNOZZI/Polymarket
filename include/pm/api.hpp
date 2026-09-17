@@ -11,7 +11,6 @@ namespace pm {
 class PolymarketApi {
 public:
     explicit PolymarketApi(Config cfg);
-    std::vector<Market> discover_markets(std::size_t limit, double min_liquidity) const;
     std::vector<Market> fetch_event_markets(const std::string& event_id) const;
     std::unordered_map<std::string,Book> fetch_books(const std::vector<std::string>& token_ids) const;
     double fetch_tick_size(const std::string& token_id) const {

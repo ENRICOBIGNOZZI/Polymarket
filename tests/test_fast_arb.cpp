@@ -14,7 +14,7 @@ int main(){
     Market m; m.id="m"; m.event_id="e"; m.condition_id="c"; m.yes_token="y"; m.no_token="n";
     auto y=book("y",.47,.48); auto n=book("n",.49,.50);
     auto b=evaluate_binary(m,y,n,FeeDetails{},p);
-    assert(b.executable); assert(std::abs(b.net_edge_per_share-.02)<1e-9); assert(b.hard_arbitrage);
+    assert(b.executable); assert(std::abs(b.net_edge_per_share-.02)<1e-9); assert(b.complete_set_opportunity);
 
     apply_level(y,false,.48,0); assert(std::abs(y.best_ask()-.48)>1e-6 || !std::isfinite(y.best_ask()));
     apply_level(y,false,.49,25); assert(std::abs(y.best_ask()-.49)<1e-9);

@@ -26,7 +26,7 @@ import urllib.request
 from pathlib import Path
 from typing import Any, Iterator
 
-from v7_adaptive_universe import normalize_market
+from v7_crypto_universe import normalize_market
 from v7_evidence_contract import hybrid_identity
 from v7_public_https_proxy import DEFAULT_DNS, PublicResolver
 from v7_contract_registry import contract_from_market

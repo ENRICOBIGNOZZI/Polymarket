@@ -49,7 +49,7 @@ def candidate(**overrides):
 def fill(**overrides):
     values = dict(
         event_type="FILL",
-        strategy="STRUCTURAL_ARB_ENGINE",
+        strategy="CRYPTO_SETTLEMENT_ENGINE",
         model_sha=SHA_A,
         recorded_ts_ms=2_030,
         exchange_ts_ms=2_000,
@@ -76,7 +76,7 @@ def fill(**overrides):
 def markout(**overrides):
     values = dict(
         event_type="MARKOUT",
-        strategy="STRUCTURAL_ARB_ENGINE",
+        strategy="CRYPTO_SETTLEMENT_ENGINE",
         model_sha=SHA_A,
         recorded_ts_ms=3_030,
         exchange_ts_ms=3_000,
@@ -252,7 +252,7 @@ class CanonicalExecutionLedgerTest(unittest.TestCase):
     def test_final_requires_realized_pnl(self) -> None:
         ledger.LedgerEvent(
             event_type="FINAL",
-            strategy="STRUCTURAL_ARB_ENGINE",
+            strategy="CRYPTO_SETTLEMENT_ENGINE",
             model_sha=SHA_A,
             recorded_ts_ms=5_000,
             final_pnl=-0.25,
@@ -261,7 +261,7 @@ class CanonicalExecutionLedgerTest(unittest.TestCase):
         with self.assertRaisesRegex(ledger.LedgerContractError, "final:missing_pnl"):
             ledger.LedgerEvent(
                 event_type="FINAL",
-                strategy="STRUCTURAL_ARB_ENGINE",
+                strategy="CRYPTO_SETTLEMENT_ENGINE",
                 model_sha=SHA_A,
                 recorded_ts_ms=5_000,
             ).validate()

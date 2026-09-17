@@ -17,7 +17,7 @@ class ProfessionalMakerRuntimeContractTests(unittest.TestCase):
         self.assertFalse(v7["real_order_submission"])
         self.assertEqual(v7["capital_authority_owner"], "V7_CANONICAL_ALLOCATOR")
         self.assertEqual(v7["engine_capital_envelope_owners"], [
-            "CRYPTO_SETTLEMENT_ENGINE", "STRUCTURAL_ARB_ENGINE",
+            "CRYPTO_SETTLEMENT_ENGINE",
         ])
         self.assertAlmostEqual(float(cfg["starting_capital"]) * float(
             v7["component_observation_budget_fractions"]["professional_maker"]
@@ -38,7 +38,7 @@ class ProfessionalMakerRuntimeContractTests(unittest.TestCase):
         self.assertTrue(architecture["single_account_allocator"])
         self.assertTrue(architecture["single_canonical_ledger_writer"])
         self.assertEqual(architecture["fast_path"], "cpp_websocket_event_driven")
-        self.assertEqual(architecture["slow_path"], "python_reward_selection_and_model_fit")
+        self.assertEqual(architecture["slow_path"], "python_crypto_selection_and_model_fit")
         self.assertTrue(policy["exploration"]["enabled"])
         self.assertTrue(policy["exploration"]["research_only"])
         self.assertLessEqual(float(policy["exploration"]["max_capital_fraction"]), 0.02)
@@ -76,10 +76,6 @@ class ProfessionalMakerRuntimeContractTests(unittest.TestCase):
         self.assertNotIn("polymarket_rewards_scan", source)
         self.assertNotIn("Generic maker is intentionally not started", source)
 
-    def test_fast_structural_does_not_self_terminate_on_a_timer(self) -> None:
-        options = (ROOT / "src" / "fast_runtime" / "part1.inc").read_text(encoding="utf-8")
-        self.assertIn("int recycle_seconds = 0;", options)
-        self.assertNotIn("int recycle_seconds = 900;", options)
 
     def test_execution_cells_are_exact_sha_slow_path_and_hot_path_bounded(self) -> None:
         loader = (ROOT / "src" / "v7_maker_execution_cells.cpp").read_text(encoding="utf-8")
@@ -147,11 +143,11 @@ class ProfessionalMakerRuntimeContractTests(unittest.TestCase):
         directives = json.loads((ROOT / "config" / "operator_directives.json").read_text(encoding="utf-8"))
         self.assertEqual(
             directives["operator_instruction_id"],
-            "user-v7-unified-economic-system-20260901",
+            "user-crypto-only-runtime-20260917",
         )
         self.assertEqual(
             directives["priority_instruction_id"],
-            "user-v7-unified-economic-system-20260901",
+            "user-crypto-only-runtime-20260917",
         )
         self.assertTrue(directives["paper_v7_authorization"]["paper_only"])
         self.assertFalse(directives["paper_v7_authorization"]["authenticated_execution"])
@@ -160,7 +156,9 @@ class ProfessionalMakerRuntimeContractTests(unittest.TestCase):
         self.assertTrue(architecture["single_runtime_owner"])
         self.assertTrue(architecture["single_execution_ledger"])
         self.assertTrue(architecture["professional_market_maker_is_crypto_engine_component"])
-        self.assertTrue(architecture["hard_arb_and_fast_structural_share_one_engine"])
+        self.assertTrue(architecture["crypto_only_runtime"])
+        self.assertTrue(architecture["live_crypto_data_and_execution_evidence_preserved"])
+        self.assertTrue(architecture["research_off_hot_path"])
         self.assertTrue(architecture["single_global_portfolio_coordinator"])
         self.assertEqual(architecture["cleanup_sequence"], "audit_then_port_then_test_then_validate_then_retire_obsolete_generations")
         self.assertIn("Git history is the archive", architecture["retired_generation_rule"])

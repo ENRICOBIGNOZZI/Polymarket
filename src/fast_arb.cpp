@@ -223,7 +223,7 @@ Opportunity evaluate_guaranteed_basket(
     best.kind = kind;
     best.id = std::move(id);
     best.event_id = std::move(event_id);
-    best.hard_arbitrage = true;
+    best.complete_set_opportunity = true;
     best.risk_class = "NON_ATOMIC_FOK_BASKET";
     best.payoff_floor = payoff_floor;
     best.exchange_ts_ms = exchange_ts_ms;
@@ -419,7 +419,7 @@ Opportunity evaluate_negrisk_conversion(
     out.kind = OpportunityKind::NegRiskConversion;
     out.id = "negrisk-conversion:" + event_id + ':' + source.id;
     out.event_id = event_id;
-    out.hard_arbitrage = true;
+    out.complete_set_opportunity = true;
     out.risk_class = "ONCHAIN_CONVERSION_NON_ATOMIC";
     out.exchange_ts_ms = exchange_ts_ms;
     out.received_ts_ms = received_ts_ms;
@@ -539,7 +539,7 @@ Opportunity evaluate_external_latency(
     out.kind = OpportunityKind::ExternalLatency;
     out.id = "external:" + market.id + ':' + signal.source;
     out.event_id = market.event_id;
-    out.hard_arbitrage = false;
+    out.complete_set_opportunity = false;
     out.risk_class = "MODEL_RISK_EXTERNAL_SIGNAL";
     out.exchange_ts_ms = exchange_ts_ms;
     out.received_ts_ms = received_ts_ms;
@@ -623,7 +623,7 @@ Opportunity evaluate_maker_complete_set(
     out.kind = OpportunityKind::MakerCompleteSet;
     out.id = "maker-binary:" + market.id;
     out.event_id = market.event_id;
-    out.hard_arbitrage = false;
+    out.complete_set_opportunity = false;
     out.risk_class = "NON_ATOMIC_PASSIVE_TWO_SIDED";
     out.payoff_floor = 1.0;
     out.exchange_ts_ms = exchange_ts_ms;

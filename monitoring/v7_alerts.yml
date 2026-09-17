@@ -66,11 +66,6 @@ groups:
         for: 30s
         labels: {severity: critical}
         annotations: {summary: "Crypto Settlement Engine maker component is unavailable"}
-      - alert: PolymarketV7StructuralEngineDown
-        expr: polymarket_v7_component_ready{component="fast_structural"} < 1
-        for: 30s
-        labels: {severity: critical}
-        annotations: {summary: "Structural Arbitrage Engine component is unavailable"}
       - alert: PolymarketV7CanonicalLedgerInvalid
         expr: polymarket_v7_ledger_valid < 1
         for: 0s

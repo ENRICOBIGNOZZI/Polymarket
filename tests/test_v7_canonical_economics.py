@@ -301,34 +301,34 @@ class CanonicalEconomicsTest(unittest.TestCase):
         self.assertAlmostEqual(report["net_pnl"], 0.58)
         self.assertAlmostEqual(report["costs"]["baseline_total"], 0.03)
 
-    def test_hard_arb_explicit_multileg_target_is_mature_after_terminal(self) -> None:
+    def test_crypto_complete_set_research_explicit_multileg_target_is_mature_after_terminal(self) -> None:
         required = {"YES": 10.0, "NO": 10.0}
         now = clock()
         events = [ledger.LedgerEvent(
-            event_type="OPPORTUNITY", strategy="STRUCTURAL_ARB_ENGINE", model_sha=SHA,
-            bundle_id="hard-bundle", event_id="event-hard", expected_ev=0.02,
+            event_type="OPPORTUNITY", strategy="CRYPTO_SETTLEMENT_ENGINE", model_sha=SHA,
+            bundle_id="crypto-bundle", event_id="event-hard", expected_ev=0.02,
             intended_action="SEQUENTIAL_FOK_COMPLETE_SET",
             metadata={"target_quantities": required},
         )]
         for leg, price in (("YES", 0.48), ("NO", 0.49)):
             events.extend([
-                order(strategy="STRUCTURAL_ARB_ENGINE", order_id=f"hard-{leg}", leg_id=leg,
-                      bundle_id="hard-bundle", family="STRUCTURAL_ARB_ENGINE", required=required,
+                order(strategy="CRYPTO_SETTLEMENT_ENGINE", order_id=f"hard-{leg}", leg_id=leg,
+                      bundle_id="crypto-bundle", family="CRYPTO_SETTLEMENT_ENGINE", required=required,
                       size=10.0, event_id="event-hard"),
-                fill(strategy="STRUCTURAL_ARB_ENGINE", order_id=f"hard-{leg}",
-                     fill_id=f"hard-fill-{leg}", leg_id=leg,
-                     bundle_id="hard-bundle", family="STRUCTURAL_ARB_ENGINE", size=10.0,
+                fill(strategy="CRYPTO_SETTLEMENT_ENGINE", order_id=f"hard-{leg}",
+                     fill_id=f"crypto-fill-{leg}", leg_id=leg,
+                     bundle_id="crypto-bundle", family="CRYPTO_SETTLEMENT_ENGINE", size=10.0,
                      fee=0.01, price=price, event_id="event-hard"),
             ])
         events.append(ledger.LedgerEvent(
-            event_type="FINAL", strategy="STRUCTURAL_ARB_ENGINE", model_sha=SHA,
-            bundle_id="hard-bundle", position_id="hard-bundle",
+            event_type="FINAL", strategy="CRYPTO_SETTLEMENT_ENGINE", model_sha=SHA,
+            bundle_id="crypto-bundle", position_id="crypto-bundle",
             event_id="event-hard", final_pnl=0.28, realized_cashflow=0.28,
             fee=0.0, slippage=0.0, unwind_loss=0.0, capital_cost=0.0,
             latency_cost=0.0, capital_duration_ms=300_000,
             metadata={"realized": True, "unwind_accounted": True,
                       "cost_vector_complete": True,
-                      "terminal_id": "hard:hard-bundle:final"},
+                      "terminal_id": "crypto-complete-set:crypto-bundle:final"},
         ))
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / "execution.jsonl"
@@ -448,10 +448,10 @@ class CanonicalEconomicsTest(unittest.TestCase):
     def test_one_leg_filled_in_two_leg_bundle_is_not_a_completion(self) -> None:
         required = [{"leg_id": "YES", "target_quantity": 1.0}, {"leg_id": "NO", "target_quantity": 1.0}]
         events = [
-            order(strategy="STRUCTURAL_ARB_ENGINE", order_id="o-y", leg_id="YES", bundle_id="b1", family="relative_value", horizon=7200, required=required),
-            order(strategy="STRUCTURAL_ARB_ENGINE", order_id="o-n", leg_id="NO", bundle_id="b1", family="relative_value", horizon=7200, required=required),
-            fill(strategy="STRUCTURAL_ARB_ENGINE", order_id="o-y", fill_id="f-y", leg_id="YES", bundle_id="b1", family="relative_value", horizon=7200, fee=0.01),
-            final(strategy="STRUCTURAL_ARB_ENGINE", bundle_id="b1", family="relative_value", horizon=7200, pnl=0.2, slippage=0.01, unwind=0.05, capital=0.01, latency=0.01, unwind_accounted=True),
+            order(strategy="CRYPTO_SETTLEMENT_ENGINE", order_id="o-y", leg_id="YES", bundle_id="b1", family="relative_value", horizon=7200, required=required),
+            order(strategy="CRYPTO_SETTLEMENT_ENGINE", order_id="o-n", leg_id="NO", bundle_id="b1", family="relative_value", horizon=7200, required=required),
+            fill(strategy="CRYPTO_SETTLEMENT_ENGINE", order_id="o-y", fill_id="f-y", leg_id="YES", bundle_id="b1", family="relative_value", horizon=7200, fee=0.01),
+            final(strategy="CRYPTO_SETTLEMENT_ENGINE", bundle_id="b1", family="relative_value", horizon=7200, pnl=0.2, slippage=0.01, unwind=0.05, capital=0.01, latency=0.01, unwind_accounted=True),
         ]
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / "execution.jsonl"
@@ -499,9 +499,9 @@ class CanonicalEconomicsTest(unittest.TestCase):
 
     def test_no_fill_final_does_not_become_mature_economic_evidence(self) -> None:
         events = [
-            order(strategy="STRUCTURAL_ARB_ENGINE", order_id="never-filled", leg_id="YES",
-                  family="hard_arb", horizon=45),
-            final(strategy="STRUCTURAL_ARB_ENGINE", order_id="never-filled", family="hard_arb",
+            order(strategy="CRYPTO_SETTLEMENT_ENGINE", order_id="never-filled", leg_id="YES",
+                  family="crypto_complete_set_research", horizon=45),
+            final(strategy="CRYPTO_SETTLEMENT_ENGINE", order_id="never-filled", family="crypto_complete_set_research",
                   horizon=45, pnl=0.0),
         ]
         with tempfile.TemporaryDirectory() as tmp:

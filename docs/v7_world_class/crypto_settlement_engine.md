@@ -2,10 +2,9 @@
 
 V7 treats settlement alpha as one economic decision, not competing strategies.
 `crypto_settlement_fair`, `professional_maker`, and `crypto_informed_taker` are
-components of `CRYPTO_SETTLEMENT_ENGINE(asset, horizon)`. None is an authority owner. Structural
-arbitrage is the second engine; `hard_arb` and `fast_structural` are its
-components. Both engines publish typed opportunities to the same global
-coordinator and share the canonical allocator, risk, OMS, inventory, and ledger.
+components of `CRYPTO_SETTLEMENT_ENGINE(asset, horizon)`. None is an authority owner.
+This is the only live economic engine. All typed opportunities pass through the
+same global coordinator and canonical allocator, risk, OMS, inventory, and ledger.
 
 ## Decision contract
 

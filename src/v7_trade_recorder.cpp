@@ -1,5 +1,3 @@
-#include "pm/api.hpp"
-#include "pm/config.hpp"
 #include "pm/http.hpp"
 #include "pm/trade_identity.hpp"
 
@@ -16,6 +14,8 @@
 #include <stdexcept>
 #include <string>
 #include <thread>
+#include <tuple>
+#include <utility>
 #include <unordered_map>
 #include <unordered_set>
 #include <vector>
@@ -74,6 +74,10 @@ double get_number(const json::object& object, const char* key, double fallback =
 std::int64_t get_integer(const json::object& object, const char* key, std::int64_t fallback = 0) {
     const auto it = object.find(key);
     return it == object.end() ? fallback : integer(it->value(), fallback);
+}
+bool get_bool(const json::object& object, const char* key, bool fallback = false) {
+    const auto it = object.find(key);
+    return it != object.end() && it->value().is_bool() ? it->value().as_bool() : fallback;
 }
 
 std::string csv_escape(const std::string& value) {
@@ -137,11 +141,14 @@ std::string trade_key(const Trade& trade) {
 
 class V7TradeRecorder {
 public:
-    V7TradeRecorder(pm::Config config, std::string run_dir, std::string data_url,
-                    std::size_t batch_size, std::int64_t lookback_seconds)
-        : config_(std::move(config)), api_(config_), run_dir_(std::move(run_dir)),
-          data_url_(std::move(data_url)), batch_size_(std::max<std::size_t>(1, batch_size)),
-          lookback_seconds_(std::max<std::int64_t>(10, lookback_seconds)) {
+    V7TradeRecorder(std::string run_dir, std::string data_url, std::string universe_path,
+                    std::string model_sha, std::size_t batch_size,
+                    std::int64_t lookback_seconds, std::int64_t universe_max_age_seconds)
+        : run_dir_(std::move(run_dir)), data_url_(std::move(data_url)),
+          universe_path_(std::move(universe_path)), model_sha_(std::move(model_sha)),
+          batch_size_(std::max<std::size_t>(1, batch_size)),
+          lookback_seconds_(std::max<std::int64_t>(10, lookback_seconds)),
+          universe_max_age_ms_(std::max<std::int64_t>(1, universe_max_age_seconds) * 1000) {
         fs::create_directories(run_dir_);
         tape_path_ = fs::path(run_dir_) / "trade_tape.csv";
         state_path_ = fs::path(run_dir_) / "trade_recorder_state.csv";
@@ -153,27 +160,22 @@ public:
         }
     }
 
-    bool tick(std::size_t market_limit, double min_liquidity) {
+    bool tick() {
         const auto started_ms = now_ms();
-        std::vector<pm::Market> markets;
+        std::vector<std::string> conditions;
+        std::size_t market_count = 0;
         try {
-            markets = api_.discover_markets(market_limit, min_liquidity);
-        } catch (const std::runtime_error& error) {
-            // A failed public discovery is an incomplete observation, not a
-            // reason to terminate the whole PAPER stack. Never reuse a stale
-            // universe or report a healthy scan; the next loop retries.
-            persist_status(started_ms, 0, 0, 1, 0, 0, 1, 0);
-            std::cerr << "trade_recorder discovery failed: " << error.what() << '\n';
+            std::tie(market_count, conditions) = load_crypto_universe();
+        } catch (const std::exception& error) {
+            // A missing/stale crypto universe is incomplete evidence. Never
+            // widen discovery to unrelated Polymarket markets and never reuse
+            // stale membership; the next loop retries.
+            persist_status(started_ms, 0, 0, 0, 0, 0, 1, 0);
+            std::cerr << "trade_recorder crypto universe unavailable: " << error.what() << '\n';
             return false;
         }
-        std::unordered_map<std::string, const pm::Market*> by_condition;
-        std::vector<std::string> conditions;
-        conditions.reserve(markets.size());
-        for (const auto& market : markets) {
-            if (market.condition_id.empty() || by_condition.count(market.condition_id)) continue;
-            by_condition[market.condition_id] = &market;
-            conditions.push_back(market.condition_id);
-        }
+        std::unordered_set<std::string> allowed_conditions(
+            conditions.begin(), conditions.end());
 
         const auto end = now_s();
         const auto start = std::max<std::int64_t>(0, end - lookback_seconds_);
@@ -224,7 +226,7 @@ public:
                         trade.event_slug = get_text(object, "eventSlug");
                         if (trade.ts <= 0 || trade.asset_id.empty() || trade.price <= 0.0 ||
                             trade.price >= 1.0 || trade.size <= 0.0 ||
-                            !by_condition.count(trade.condition_id)) {
+                            !allowed_conditions.count(trade.condition_id)) {
                             continue;
                         }
                         if (seen_.insert(trade_key(trade)).second) {
@@ -261,11 +263,11 @@ public:
         }
         output.flush();
         persist_state();
-        persist_status(started_ms, markets.size(), conditions.size(), requests, fetched,
+        persist_status(started_ms, market_count, conditions.size(), requests, fetched,
                        new_rows.size(), errors, truncated_batches);
         trim_seen();
 
-        std::cout << "trade_recorder markets=" << markets.size()
+        std::cout << "trade_recorder crypto_markets=" << market_count
                   << " conditions=" << conditions.size()
                   << " requests=" << requests
                   << " fetched=" << fetched
@@ -280,18 +282,60 @@ public:
     }
 
 private:
-    pm::Config config_;
-    pm::PolymarketApi api_;
     pm::HttpClient http_;
     std::string run_dir_;
     std::string data_url_;
+    fs::path universe_path_;
+    std::string model_sha_;
     std::size_t batch_size_;
     std::int64_t lookback_seconds_;
+    std::int64_t universe_max_age_ms_;
+    std::int64_t session_start_ms_ = now_ms();
     fs::path tape_path_;
     fs::path state_path_;
     fs::path status_path_;
     std::unordered_set<std::string> seen_;
     std::int64_t last_trade_ts_ = 0;
+
+
+    std::pair<std::size_t, std::vector<std::string>> load_crypto_universe() const {
+        std::ifstream input(universe_path_);
+        if (!input) throw std::runtime_error("crypto_universe_missing");
+        std::ostringstream buffer; buffer << input.rdbuf();
+        const auto root = json::parse(buffer.str());
+        if (!root.is_object()) throw std::runtime_error("crypto_universe_not_object");
+        const auto& object = root.as_object();
+        if (get_text(object, "schema") != "polymarket_v7_crypto_universe_snapshot_v1"
+                || get_bool(object, "paper_only") != true
+                || get_bool(object, "authenticated_execution", true) != false
+                || get_bool(object, "real_order_submission", true) != false
+                || get_bool(object, "execution_authority", true) != false
+                || get_text(object, "model_sha") != model_sha_) {
+            throw std::runtime_error("crypto_universe_contract_invalid");
+        }
+        const auto published_ms = get_integer(object, "timestamp_ms");
+        const auto age_ms = now_ms() - published_ms;
+        if (published_ms <= 0 || age_ms < -5000 || age_ms > universe_max_age_ms_) {
+            throw std::runtime_error("crypto_universe_stale");
+        }
+        const auto it = object.find("markets");
+        if (it == object.end() || !it->value().is_array()) {
+            throw std::runtime_error("crypto_universe_markets_missing");
+        }
+        std::vector<std::string> conditions;
+        std::unordered_set<std::string> seen;
+        std::size_t market_count = 0;
+        for (const auto& value : it->value().as_array()) {
+            if (!value.is_object()) continue;
+            ++market_count;
+            const auto condition = get_text(value.as_object(), "condition_id");
+            if (!condition.empty() && seen.insert(condition).second) conditions.push_back(condition);
+        }
+        if (market_count == 0 || conditions.empty()) {
+            throw std::runtime_error("crypto_universe_empty");
+        }
+        return {market_count, conditions};
+    }
 
     void load_recent_seen() {
         std::ifstream input(tape_path_);
@@ -342,8 +386,8 @@ private:
     void persist_status(std::int64_t started_ms, std::size_t markets, std::size_t conditions,
                         std::size_t requests, std::size_t fetched, std::size_t new_trades,
                         std::size_t errors, std::size_t truncated_batches) const {
-        // A header-only tape can be a complete, successful scan of the standard
-        // CLOB universe during a no-print regime.  Monitoring must distinguish
+        // A header-only tape can be a complete, successful scan of the configured
+        // crypto universe during a no-print regime. Monitoring must distinguish
         // that truthful state from a dead or partially failing recorder.
         const bool complete_scan = conditions > 0 && requests > 0 && errors == 0 &&
                                    truncated_batches == 0;
@@ -354,11 +398,14 @@ private:
             {"started_ms", started_ms},
             {"data_plane_healthy", complete_scan},
             {"flow_regime", no_matching_standard_clob_flow
-                ? "STANDARD_CLOB_NO_MATCHING_TRADES"
-                : (complete_scan ? "STANDARD_CLOB_TRADES_OBSERVED" : "SCAN_INCOMPLETE_OR_FAILED")},
+                ? "CRYPTO_CLOB_NO_MATCHING_TRADES"
+                : (complete_scan ? "CRYPTO_CLOB_TRADES_OBSERVED" : "SCAN_INCOMPLETE_OR_FAILED")},
             {"markets", markets}, {"conditions", conditions}, {"requests", requests},
             {"fetched", fetched}, {"new_trades", new_trades}, {"errors", errors},
             {"truncated_batches", truncated_batches}, {"last_trade_ts", last_trade_ts_},
+            {"model_sha", model_sha_}, {"session_start_ms", session_start_ms_},
+            {"universe_path", universe_path_.string()},
+            {"scope", "CONFIGURED_CRYPTO_CONTEXTS_ONLY"},
             {"paper_only", true}, {"authenticated_execution", false},
             {"real_order_submission", false},
         };
@@ -384,13 +431,13 @@ private:
 
 int main(int argc, char** argv) {
     try {
-        std::string config_path = "config/paper_v7.json";
         std::string run_dir = "runs/paper_v7_live";
         std::string data_url = "https://data-api.polymarket.com";
-        std::size_t markets = 1000;
+        std::string universe_path;
+        std::string model_sha;
         std::size_t batch = 40;
-        double min_liquidity = 2.0;
         std::int64_t lookback_seconds = 180;
+        std::int64_t universe_max_age_seconds = 180;
         int interval_seconds = 5;
         bool loop = false;
 
@@ -400,33 +447,35 @@ int main(int argc, char** argv) {
                 if (i + 1 >= argc) throw std::runtime_error("missing value after " + argument);
                 return std::string(argv[++i]);
             };
-            if (argument == "--config") config_path = next();
-            else if (argument == "--run-dir") run_dir = next();
+            if (argument == "--run-dir") run_dir = next();
             else if (argument == "--data-url") data_url = next();
-            else if (argument == "--markets") markets = static_cast<std::size_t>(std::stoull(next()));
+            else if (argument == "--universe") universe_path = next();
+            else if (argument == "--model-sha") model_sha = next();
             else if (argument == "--batch") batch = static_cast<std::size_t>(std::stoull(next()));
-            else if (argument == "--min-liquidity") min_liquidity = std::stod(next());
             else if (argument == "--lookback-seconds") lookback_seconds = std::stoll(next());
+            else if (argument == "--universe-max-age-seconds") universe_max_age_seconds = std::stoll(next());
             else if (argument == "--interval") interval_seconds = std::stoi(next());
             else if (argument == "--loop") loop = true;
             else if (argument == "--once") loop = false;
             else if (argument == "--help" || argument == "-h") {
-                std::cout << "polymarket_v7_trade_recorder [--config FILE] [--run-dir DIR] "
-                             "[--data-url URL] [--markets N] [--batch N] [--min-liquidity X] "
-                             "[--lookback-seconds N] [--interval N] [--once|--loop]\n";
+                std::cout << "polymarket_v7_trade_recorder [--run-dir DIR] [--universe FILE] "
+                             "--model-sha SHA [--data-url URL] [--batch N] "
+                             "[--lookback-seconds N] [--universe-max-age-seconds N] "
+                             "[--interval N] [--once|--loop]\n";
                 return 0;
             } else {
                 throw std::runtime_error("unknown argument: " + argument);
             }
         }
 
-        auto config = pm::load_config(config_path);
-        if (config_path.find("v7") == std::string::npos) {
-            throw std::runtime_error("V7 recorder refuses non-V7 config path");
+        if (universe_path.empty()) universe_path = (fs::path(run_dir) / "universe/current.json").string();
+        if (model_sha.size() != 40 || model_sha.find_first_not_of("0123456789abcdef") != std::string::npos) {
+            throw std::runtime_error("--model-sha must be a 40-character lowercase hexadecimal SHA");
         }
-        V7TradeRecorder recorder(std::move(config), run_dir, data_url, batch, lookback_seconds);
+        V7TradeRecorder recorder(run_dir, data_url, universe_path, model_sha, batch,
+                                 lookback_seconds, universe_max_age_seconds);
         do {
-            if (!recorder.tick(markets, min_liquidity) && !loop) return 1;
+            if (!recorder.tick() && !loop) return 1;
             if (loop) std::this_thread::sleep_for(std::chrono::seconds(std::max(1, interval_seconds)));
         } while (loop);
         return 0;

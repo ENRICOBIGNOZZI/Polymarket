@@ -14,9 +14,9 @@ An older, noncanonical Fast forward run reported 545.7 ms end-to-end p99, 524.0 
 
 ## Current instrumentation
 
-The C++ pipeline records monotonic nanosecond durations for JSON parse, book application, features, decision, inline risk, order-TX queue, PAPER execution and receive-to-intent where those stages exist. The active Fast Structural runtime additionally records `feed_latency_ms` and `decision_latency_us` in `fast_structural/fast_arb_latency.csv`. Telemetry crosses a bounded SPSC queue before filesystem output, so the decision owner does not write logs.
+The crypto/maker pipeline records monotonic nanosecond durations for JSON parse, book application, features, decision, inline risk, order-TX queue, PAPER execution and receive-to-intent where those stages exist. Telemetry is kept off the decision critical section where possible.
 
-The Prometheus exporter reads a bounded suffix of the active Fast Structural CSV and exposes the values as `fast_structural_feed_ns` and `fast_structural_decision_ns`. If a legacy Maker latency file exists, its named stages remain visible separately; missing legacy files are not reported as current latency evidence. This keeps Grafana tied to the runtime that is actually producing data.
+The Prometheus exporter reads the active professional-maker latency stream and exposes only stages produced by the current crypto runtime. Missing files are reported as missing evidence; deleted strategy streams are never substituted for current measurements.
 
 The release benchmark covers synthetic WS bytes through canonical L2 and maker intent. `scripts/v7_latency_gate.py` enforces the internal thresholds in `config/v7_latency_slo.json`. Its output explicitly states that it contains no network/CLOB or representative venue proof.
 
@@ -44,8 +44,6 @@ latency, but its output is still read-only evidence and never authorizes live
 execution.
 
 The public probe is used only to characterize data-path latency and regional stability for the PAPER research system.
-
-The live latency dashboard also exposes `publish_snapshot_lock_us` and `publish_total_us` from Fast Structural. The first measures the state-snapshot critical section that can block the WebSocket decision path; the second measures complete local publication work. They are local contention diagnostics, not network or authenticated-order latency.
 
 
 ## Venue-aware policy

@@ -20,17 +20,12 @@ def write(path: Path, value: dict) -> None:
     path.write_text(json.dumps(value))
 
 
-def test_one_consumer_compares_both_engines_but_cannot_authorize_new_risk() -> None:
+def test_one_consumer_compares_crypto_candidates_but_cannot_authorize_new_risk() -> None:
     with tempfile.TemporaryDirectory() as directory:
-        root = Path(directory)
-        now = 150
-        write(root / "opportunities/inbox/btc.json", envelope(ev=1.0, key="btc"))
-        write(root / "opportunities/inbox/structural.json", envelope(
-            engine="STRUCTURAL_ARB_ENGINE", action="ARB", component="hard_arb",
-            ev=2.0, key="structural",
-        ))
-        status = process_cut(root, now_ns=now)
-        decision = status["last_decision"]
+        root = Path(directory); now = 150
+        write(root / "opportunities/inbox/take.json", envelope(action="TAKE", component="crypto_informed_taker", ev=1.0, key="take"))
+        write(root / "opportunities/inbox/make.json", envelope(action="MAKE", component="professional_maker", ev=2.0, key="make"))
+        decision = process_cut(root, now_ns=now)["last_decision"]
         assert decision["action"] == "NOTHING"
         assert decision["new_risk_authorized"] is False
         assert decision["valid_envelope_count"] == 2
@@ -53,7 +48,7 @@ def test_noncanonical_candidate_fails_closed_and_is_archived() -> None:
         root = Path(directory)
         write(root / "opportunities/inbox/legacy.json", {
             "schema_version": 1, "event_type": "CANDIDATE",
-            "strategy": "FAST_STRUCTURAL", "model_sha": "a" * 40,
+            "strategy": "DELETED_NONCRYPTO_ENGINE", "model_sha": "a" * 40,
             "metadata": {},
         })
         status = process_cut(root, now_ns=150)
@@ -168,7 +163,7 @@ def test_fast_forward_lane_is_preempted_by_same_tick_risk_action() -> None:
         assert (root/'opportunities/fast_forward_rejected/one.json').exists()
 
 if __name__ == "__main__":
-    test_one_consumer_compares_both_engines_but_cannot_authorize_new_risk()
+    test_one_consumer_compares_crypto_candidates_but_cannot_authorize_new_risk()
     test_cancel_preempts_and_is_the_only_actionable_safe_output()
     test_noncanonical_candidate_fails_closed_and_is_archived()
     test_positive_mature_make_publishes_one_receipt_gated_paper_authorization()

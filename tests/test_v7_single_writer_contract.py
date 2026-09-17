@@ -29,7 +29,7 @@ class V7SingleWriterContractTest(unittest.TestCase):
 
     def test_live_scope_has_one_v7_execution_owner(self) -> None:
         scope = json.loads((ROOT / "config/v7_live_model_scope.json").read_text(encoding="utf-8"))
-        self.assertEqual(scope["version"], 7)
+        self.assertEqual(scope["version"], 8)
         self.assertTrue(scope["paper_only"])
         self.assertFalse(scope["real_order_submission"])
         self.assertTrue(scope["runtime_invariants"]["single_execution_owner"])

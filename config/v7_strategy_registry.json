@@ -19,22 +19,6 @@
       "id": "CRYPTO_SETTLEMENT_ENGINE",
       "mode": "PAPER",
       "new_risk_authorized": false
-    },
-    {
-      "actions": [
-        "ARB",
-        "CANCEL",
-        "NOTHING"
-      ],
-      "components": [
-        "hard_arb",
-        "fast_structural"
-      ],
-      "display_name": "Structural Arbitrage Engine",
-      "enabled": true,
-      "id": "STRUCTURAL_ARB_ENGINE",
-      "mode": "PAPER",
-      "new_risk_authorized": false
     }
   ],
   "ownership": {
@@ -54,5 +38,5 @@
     "real_order_submission": false
   },
   "schema": "polymarket_v7_live_algorithm_registry_v2",
-  "version": 2
+  "version": 3
 }

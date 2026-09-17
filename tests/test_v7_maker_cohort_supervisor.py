@@ -35,7 +35,7 @@ def selection(market_id: str = "market-1") -> dict:
         "real_order_submission": False,
         "model_sha": SHA,
         "timestamp_ms": 1_000,
-        "source": "adaptive_universe_recent_flow",
+        "source": "crypto_universe_recent_flow",
         "degraded": False,
         "execution_cell_authority_required": True,
         "execution_authority_semantics": "token_action_side_v2",
@@ -492,7 +492,7 @@ class MakerCohortSupervisorTests(unittest.TestCase):
             candidate_path = root / "candidate.json"
             current = selection("first")
             current.update({
-                "source": "adaptive_universe_fallback",
+                "source": "crypto_universe_fallback",
                 "degraded": True,
                 "selection_mode": "FLOW_FILLABILITY_FALLBACK",
             })
@@ -575,7 +575,7 @@ class MakerCohortSupervisorTests(unittest.TestCase):
 
             fresh_runtime = json.loads(json.dumps(current))
             fresh_runtime.update({
-                "source": "adaptive_universe_recent_flow", "degraded": False,
+                "source": "crypto_universe_recent_flow", "degraded": False,
             })
             self.assertFalse(degraded_fallback_control_refresh_eligible(
                 fresh_runtime, candidate
@@ -701,7 +701,7 @@ class MakerCohortSupervisorTests(unittest.TestCase):
             candidate_path = root / "micro_maker/reward_selection_candidate.json"
             current = selection("market-1")
             fallback = selection("market-2")
-            fallback.update({"source": "adaptive_universe_fallback", "degraded": True})
+            fallback.update({"source": "crypto_universe_fallback", "degraded": True})
             fallback["markets"][0].update({
                 "condition_id": "condition-2", "yes_token": "yes-2", "no_token": "no-2",
             })

@@ -1,4 +1,4 @@
-name: V7 point-in-time universe archive
+name: V7 crypto universe archive
 
 on:
   workflow_dispatch:
@@ -10,7 +10,7 @@ permissions:
   id-token: write
 
 concurrency:
-  group: polymarket-v7-point-in-time-universe-archive
+  group: polymarket-v7-crypto-universe-archive
   cancel-in-progress: false
 
 jobs:
@@ -61,7 +61,7 @@ jobs:
           tags: ${{ vars.TS_TAGS || 'tag:ci' }}
           version: 1.94.2
           statedir: ''
-          hostname: gh-universe-${{ github.run_id }}-${{ github.run_attempt }}
+          hostname: gh-crypto-universe-${{ github.run_id }}-${{ github.run_attempt }}
           ping: ${{ env.SERVER_HOST }}
 
       - name: Join private tailnet with OAuth
@@ -73,7 +73,7 @@ jobs:
           tags: ${{ vars.TS_TAGS || 'tag:ci' }}
           version: 1.94.2
           statedir: ''
-          hostname: gh-universe-${{ github.run_id }}-${{ github.run_attempt }}
+          hostname: gh-crypto-universe-${{ github.run_id }}-${{ github.run_attempt }}
           ping: ${{ env.SERVER_HOST }}
 
       - name: Join private tailnet with ephemeral auth key
@@ -83,7 +83,7 @@ jobs:
           authkey: ${{ secrets.TS_AUTHKEY }}
           version: 1.94.2
           statedir: ''
-          hostname: gh-universe-${{ github.run_id }}-${{ github.run_attempt }}
+          hostname: gh-crypto-universe-${{ github.run_id }}-${{ github.run_attempt }}
           ping: ${{ env.SERVER_HOST }}
 
       - name: Configure SSH identity
@@ -98,7 +98,7 @@ jobs:
           chmod 600 ~/.ssh/polymarket_archive
           ssh-keyscan -T 5 -p "$SERVER_PORT" "$SERVER_HOST" > ~/.ssh/known_hosts
 
-      - name: Archive exact canonical-main V7 universe
+      - name: Archive exact live crypto universe
         shell: bash
         run: |
           set -euo pipefail
@@ -113,43 +113,45 @@ jobs:
           [[ "$archive_sha" =~ ^[0-9a-f]{40}$ ]]
           printf 'archive_sha=%s\n' "$archive_sha"
 
-          helper_path="scripts/v7_archive_market_universe.py"
+          helper_path="scripts/v7_archive_crypto_universe.py"
           if ! git cat-file -e "${archive_sha}:${helper_path}" 2>/dev/null; then
             printf 'archive_skipped=v7_native_helper_not_on_main\n'
             exit 0
           fi
 
-          archive_dir="$HOME/polymarket/runs/v7-universe/universe_snapshots"
+          archive_dir="$HOME/polymarket/runs/paper_v7_live/universe_snapshots"
+          universe_path="$HOME/polymarket/runs/paper_v7_live/universe/current.json"
           mkdir -p "$archive_dir"
-          tmp_helper="$HOME/polymarket/runs/v7-universe/.v7_archive_market_universe.${GITHUB_RUN_ID}.py"
+          tmp_helper="$HOME/polymarket/runs/paper_v7_live/.v7_archive_crypto_universe.${GITHUB_RUN_ID}.py"
           git show "${archive_sha}:${helper_path}" > "$tmp_helper"
           trap 'rm -f "$tmp_helper"' EXIT
 
+          test -s "$universe_path"
           python3 "$tmp_helper" \
+            --universe "$universe_path" \
             --archive-dir "$archive_dir" \
             --model-sha "$archive_sha" \
-            --market-limit 0 \
-            --min-liquidity 2 \
-            --cadence-seconds 1800 \
-            --retention-days 45
+            --maximum-age-seconds 180
 
           python3 - "$archive_dir" "$archive_sha" <<'PY'
           import gzip,json,sys
           from pathlib import Path
           root=Path(sys.argv[1]); expected=sys.argv[2]
-          files=sorted(root.glob('universe-*.json.gz'))
-          assert files, 'point-in-time archive is empty'
+          files=sorted(root.glob('crypto-universe-*.json.gz'))
+          assert files, 'crypto universe archive is empty'
           value=json.loads(gzip.decompress(files[-1].read_bytes()).decode('utf-8'))
-          assert value.get('schema') == 'polymarket_v7_point_in_time_universe_v2'
+          assert value.get('schema') == 'polymarket_v7_point_in_time_crypto_universe_v1'
           assert value.get('model_sha') == expected
           assert value.get('paper_only') is True
           assert value.get('authenticated_execution') is False
-          assert int(value.get('cadence_seconds') or 0) == 1800
-          assert int(value.get('market_count') or 0) >= 100
-          assert value.get('discovery_exhaustive') is True
+          assert value.get('real_order_submission') is False
+          assert value.get('execution_authority') is False
+          assert int(value.get('market_count') or 0) > 0
+          assert set(value.get('assets') or []).issubset({'BTC','ETH','SOL','XRP'})
           rows=value.get('markets') or []
           assert len(rows) == int(value['market_count'])
-          assert all(str(row.get('market_id') or '') and str(row.get('condition_id') or '') for row in rows)
+          assert all(str(row.get('asset') or '') in {'BTC','ETH','SOL','XRP'} for row in rows)
+          assert all(str(row.get('condition_id') or '') and str(row.get('market_id') or '') for row in rows)
           print('archive_snapshot_count='+str(len(files)))
           print('archive_latest='+files[-1].name)
           print('archive_latest_markets='+str(value.get('market_count')))
@@ -161,7 +163,7 @@ jobs:
         if: always()
         shell: bash
         run: |
-          echo '## V7 point-in-time universe archive' >> "$GITHUB_STEP_SUMMARY"
+          echo '## V7 crypto universe archive' >> "$GITHUB_STEP_SUMMARY"
           if test -s archive-evidence/archive-status.txt; then
             echo '```text' >> "$GITHUB_STEP_SUMMARY"
             cat archive-evidence/archive-status.txt >> "$GITHUB_STEP_SUMMARY"
@@ -172,7 +174,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
-          name: v7-point-in-time-universe-${{ github.run_id }}
+          name: v7-crypto-universe-${{ github.run_id }}
           path: archive-evidence/
           if-no-files-found: warn
           retention-days: 30

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Single account-level PAPER risk guard for the two V7 economic engines."""
+"""Single account-level PAPER risk guard for the crypto V7 engine."""
 from __future__ import annotations
 
 import argparse
@@ -14,7 +14,7 @@ from collections import Counter, defaultdict
 from v7_execution_ledger import LedgerContractError, iter_events
 
 
-ENGINES = ("CRYPTO_SETTLEMENT_ENGINE", "STRUCTURAL_ARB_ENGINE")
+ENGINES = ("CRYPTO_SETTLEMENT_ENGINE",)
 
 
 def atomic_json(path: Path, value: Any) -> None:
@@ -133,9 +133,6 @@ def engine_equity(
             return canonical
         state = read_json(run_root / "external_fair" / "paper_router_status.json")
         key = "equity"
-    elif engine_id == "STRUCTURAL_ARB_ENGINE":
-        state = read_json(run_root / "hard_arb" / "status.json")
-        key = "equity_cost_basis"
     else:
         return 0.0, True, "unknown_engine", True, {"reason": "UNKNOWN_ENGINE"}
     if not state:

@@ -912,7 +912,7 @@ runtime_health(){
 import csv,json,os,sys,time
 from pathlib import Path
 root=Path(sys.argv[1]); sha=sys.argv[2]; now=int(time.time())
-required=[root/'control/runtime_status.json',root/'control/portfolio_state.json',root/'control/allocations/manifest.json',root/'control/fee_reward_registry.json',root/'control/retention_status.json',root/'structural_relations/verified_relations.csv',root/'external_fair/paper_router_status.json',root/'canonical_economics.json',root/'ledger/execution.jsonl',root/'trade_tape.csv',root/'trade_recorder_status.json']
+required=[root/'control/runtime_status.json',root/'control/portfolio_state.json',root/'control/allocations/manifest.json',root/'control/fee_reward_registry.json',root/'control/retention_status.json',root/'universe/status.json',root/'external_fair/paper_router_status.json',root/'canonical_economics.json',root/'ledger/execution.jsonl',root/'trade_tape.csv',root/'trade_recorder_status.json']
 assert all(p.exists() for p in required), [str(p) for p in required if not p.exists()]
 runtime=json.loads((root/'control/runtime_status.json').read_text())
 portfolio=json.loads((root/'control/portfolio_state.json').read_text())
@@ -920,15 +920,16 @@ router=json.loads((root/'external_fair/paper_router_status.json').read_text())
 economics=json.loads((root/'canonical_economics.json').read_text())
 fee_reward=json.loads((root/'control/fee_reward_registry.json').read_text())
 retention=json.loads((root/'control/retention_status.json').read_text())
+universe=json.loads((root/'universe/status.json').read_text())
 assert runtime.get('version')==7 and runtime.get('model_sha')==sha
 assert runtime.get('paper_only') is True and runtime.get('authenticated_execution') is False and runtime.get('real_order_submission') is False
-assert set(runtime.get('economic_engines') or [])=={'CRYPTO_SETTLEMENT_ENGINE','STRUCTURAL_ARB_ENGINE'}
+assert set(runtime.get('economic_engines') or [])=={'CRYPTO_SETTLEMENT_ENGINE'}
 assert runtime.get('economic_new_risk_ready') is False
 assert all(str(runtime.get(k) or '') for k in ('config_hash','policy_hash','model_hash','run_id','ledger_id','server_id'))
 pid=int(runtime.get('pid') or 0); assert pid>0; os.kill(pid,0)
 assert now-int(runtime.get('timestamp') or 0)<=180
 assert portfolio.get('schema')=='polymarket_v7_portfolio_guard_v2'
-assert set(portfolio.get('engines') or {})=={'CRYPTO_SETTLEMENT_ENGINE','STRUCTURAL_ARB_ENGINE'}
+assert set(portfolio.get('engines') or {})=={'CRYPTO_SETTLEMENT_ENGINE'}
 assert portfolio.get('paper_only') is True and portfolio.get('authenticated_execution') is False
 assert portfolio.get('killed') is False and float(portfolio.get('drawdown',1))<.15
 assert now-int(portfolio.get('timestamp') or 0)<=30
@@ -939,6 +940,9 @@ assert int((router.get('last_decision') or {}).get('books') or 0)==2
 assert now-int(router.get('timestamp') or 0)<=30
 assert economics.get('paper_only') is True and economics.get('authenticated_execution') is False
 assert economics.get('expected_model_sha')==sha
+assert universe.get('schema')=='polymarket_v7_crypto_universe_status_v1' and universe.get('model_sha')==sha
+assert universe.get('state')=='OPERATIONAL' and universe.get('paper_only') is True and universe.get('authenticated_execution') is False
+assert int(universe.get('eligible_markets') or 0)>0
 assert fee_reward.get('schema')=='polymarket_v7_fee_reward_registry_v1' and fee_reward.get('model_sha')==sha
 assert fee_reward.get('paper_only') is True and fee_reward.get('authenticated_execution') is False and fee_reward.get('real_order_submission') is False
 assert fee_reward.get('unknown_fee_policy')=='NON_EXECUTABLE' and fee_reward.get('unknown_reward_policy')=='ZERO_EXPECTED_VALUE'

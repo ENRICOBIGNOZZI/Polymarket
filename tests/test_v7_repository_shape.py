@@ -10,7 +10,7 @@ ROOT = Path(__file__).resolve().parents[1]
 
 TEXT_SCAN_ALLOWLIST = {
     "config/operator_directives.json",    # explicit prohibition/history
-    "scripts/v7_archive_market_universe.py",  # archive boundary documentation
+    "scripts/v7_archive_crypto_universe.py",  # archive boundary documentation
 }
 RETIRED_TEXT = re.compile(
     r"(?i)(?:paper[_-]?v[1-6]|v[1-6][_-](?:runtime|broker|ledger|scheduler|config|paper)|"
@@ -75,11 +75,11 @@ class V7RepositoryShapeTest(unittest.TestCase):
 
     def test_live_scope_is_v7_only(self) -> None:
         scope = json.loads((ROOT / "config/v7_live_model_scope.json").read_text(encoding="utf-8"))
-        self.assertEqual(scope["version"], 7)
+        self.assertEqual(scope["version"], 8)
         self.assertTrue(scope["paper_only"])
         self.assertFalse(scope["authenticated_execution"])
         self.assertFalse(scope["real_order_submission"])
-        self.assertEqual(scope["live_algorithm_count"], 2)
+        self.assertEqual(scope["live_algorithm_count"], 1)
         self.assertTrue(scope["runtime_invariants"]["single_execution_owner"])
     def test_canonical_v7_surfaces_exist(self) -> None:
         required = (
@@ -123,15 +123,14 @@ class V7RepositoryShapeTest(unittest.TestCase):
             {"ci-v7-Release", "ci-v7-Debug", "security-audit-v7", "sanitizer-v7", "monitoring-v7", "single-writer-v7"},
         )
 
-    def test_final_docs_describe_two_engines_and_no_independent_component_authority(self) -> None:
+    def test_final_docs_describe_crypto_only_runtime_and_no_independent_component_authority(self) -> None:
         readme = (ROOT / "README.md").read_text(encoding="utf-8")
         btc = (ROOT / "docs/v7_world_class/crypto_settlement_engine.md").read_text(encoding="utf-8")
         dashboard = (ROOT / "monitoring/grafana/dashboards/polymarket-v7.json").read_text(encoding="utf-8")
         for token in (
-            "CRYPTO_SETTLEMENT_ENGINE", "STRUCTURAL_ARB_ENGINE",
-            "V7_GLOBAL_PORTFOLIO_COORDINATOR", "one allocator", "one risk owner",
-            "one OMS", "one inventory owner", "one append-only ledger writer",
-            "exactly two live PAPER algorithms",
+            "CRYPTO_SETTLEMENT_ENGINE", "V7_GLOBAL_PORTFOLIO_COORDINATOR",
+            "one allocator", "one risk owner", "one OMS", "one inventory owner",
+            "one append-only canonical ledger writer", "one economic engine",
         ):
             self.assertIn(token, readme)
         self.assertIn("None is an authority owner", btc)

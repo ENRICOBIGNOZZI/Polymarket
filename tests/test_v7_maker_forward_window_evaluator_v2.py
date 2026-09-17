@@ -134,7 +134,7 @@ def snapshot(*, basis: str = "FRESH_OPPOSITE_FLOW", fresh: bool = True) -> dict:
         "paper_only": True,
         "authenticated_execution": False,
         "real_order_submission": False,
-        "source": "adaptive_universe_recent_flow",
+        "source": "crypto_universe_recent_flow",
         "recent_flow_source": "ANCHOR_CAUSAL_WS_FLOW",
         "markets": [{
             "market_id": "m1",

@@ -1,8 +1,8 @@
 {
   "authenticated_execution": false,
   "authority_registry": "config/v7_authority_registry.json",
-  "expected_launcher_child_count": 27,
-  "expected_process_count": 29,
+  "expected_launcher_child_count": 25,
+  "expected_process_count": 27,
   "launcher": "scripts/paper_v7_execution_loop.sh",
   "paper_only": true,
   "processes": [
@@ -30,7 +30,7 @@
       "config_identity_required": true,
       "dependencies": [
         "public_https_proxy",
-        "adaptive_universe",
+        "crypto_universe",
         "external_venue_runtime"
       ],
       "exact_sha_required": true,
@@ -326,10 +326,10 @@
         "public_https_proxy"
       ],
       "exact_sha_required": true,
-      "executable": "scripts/v7_adaptive_universe.py",
-      "id": "adaptive_universe",
+      "executable": "scripts/v7_crypto_universe.py",
+      "id": "crypto_universe",
       "inputs": [
-        "config/v7_adaptive_universe.json"
+        "config/v7_crypto_universe.json"
       ],
       "launcher_log": "universe/collector.log",
       "outputs": [
@@ -341,44 +341,27 @@
     },
     {
       "arguments": [
-        "periodic"
-      ],
-      "config_identity_required": true,
-      "dependencies": [
-        "adaptive_universe"
-      ],
-      "exact_sha_required": true,
-      "executable": "scripts/v7_relation_builder.py",
-      "id": "relation_builder",
-      "inputs": [
-        "universe/current.json"
-      ],
-      "launcher_log": "structural_relations/relation_builder.log",
-      "outputs": [
-        "structural_relations/verified_relations.csv",
-        "structural_relations/relation_builder.log"
-      ],
-      "profile": "engine"
-    },
-    {
-      "arguments": [
+        "--universe",
+        "${RUN_ROOT}/universe/current.json",
+        "--model-sha",
+        "${SHA}",
         "--loop"
       ],
       "config_identity_required": true,
       "dependencies": [
-        "adaptive_universe",
+        "crypto_universe",
         "public_https_proxy"
       ],
       "exact_sha_required": true,
       "executable": "${RECORDER}",
       "id": "trade_recorder",
       "inputs": [
-        "config/paper_v7.json"
+        "universe/current.json"
       ],
       "launcher_log": "trade_recorder.log",
       "outputs": [
         "trade_tape.csv",
-        "market_data/live_trade_flow.json",
+        "trade_recorder_status.json",
         "trade_recorder.log"
       ],
       "profile": "engine"
@@ -480,7 +463,7 @@
       ],
       "config_identity_required": true,
       "dependencies": [
-        "adaptive_universe",
+        "crypto_universe",
         "trade_recorder",
         "rtds_monitor"
       ],
@@ -489,7 +472,8 @@
       "id": "maker_reward_selection",
       "inputs": [
         "universe/current.json",
-        "market_data/live_trade_flow.json",
+        "trade_tape.csv",
+        "micro_maker/book_observations/current.jsonl",
         "external_fair/status.json",
         "micro_maker/fillability_flow_snapshot.json"
       ],
@@ -508,7 +492,7 @@
       ],
       "config_identity_required": true,
       "dependencies": [
-        "adaptive_universe",
+        "crypto_universe",
         "maker_reward_selection"
       ],
       "exact_sha_required": true,
@@ -524,30 +508,6 @@
         "fee_reward_registry.log"
       ],
       "profile": "observer"
-    },
-    {
-      "arguments": [
-        "--model-sha",
-        "${SHA}"
-      ],
-      "config_identity_required": true,
-      "dependencies": [
-        "relation_builder",
-        "global_portfolio_coordinator"
-      ],
-      "exact_sha_required": true,
-      "executable": "${FAST_STRUCTURAL_RUNTIME}",
-      "id": "fast_structural_detector",
-      "inputs": [
-        "structural_relations/verified_relations.csv",
-        "config/v7_fast_structural.json"
-      ],
-      "launcher_log": "fast_structural/runtime.log",
-      "outputs": [
-        "fast_structural/runtime.log",
-        "opportunities/inbox"
-      ],
-      "profile": "engine"
     },
     {
       "arguments": [

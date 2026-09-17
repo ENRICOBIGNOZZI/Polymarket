@@ -51,18 +51,15 @@ def test_execution_alpha_feature_cut_cannot_look_into_the_future() -> None:
         raise AssertionError("future execution-alpha feature cut accepted")
 
 
-def test_structural_engine_cannot_smuggle_crypto_execution_alpha() -> None:
-    value = envelope(
-        engine="STRUCTURAL_ARB_ENGINE", action="ARB", component="hard_arb",
-        ev=0.5, key="arb",
-    )
+def test_non_alpha_action_cannot_smuggle_execution_alpha() -> None:
+    value = envelope(action="WITHDRAW", component="professional_maker", ev=0.0, key="withdraw")
     value["execution_alpha"] = packet("MAKE")
     try:
         OpportunityEnvelope.parse(value)
     except OpportunityError as exc:
         assert str(exc) == "execution_alpha_action_or_engine"
     else:
-        raise AssertionError("crypto execution alpha accepted on structural engine")
+        raise AssertionError("execution alpha accepted on WITHDRAW")
 
 
 def test_immature_packet_cannot_authorize_nonexploration_new_risk() -> None:
@@ -80,5 +77,5 @@ if __name__ == "__main__":
     test_execution_alpha_packet_is_part_of_canonical_opportunity()
     test_execution_alpha_ev_must_match_canonical_conservative_wealth_change()
     test_execution_alpha_feature_cut_cannot_look_into_the_future()
-    test_structural_engine_cannot_smuggle_crypto_execution_alpha()
+    test_non_alpha_action_cannot_smuggle_execution_alpha()
     test_immature_packet_cannot_authorize_nonexploration_new_risk()
