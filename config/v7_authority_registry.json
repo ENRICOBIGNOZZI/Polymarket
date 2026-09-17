@@ -24,17 +24,6 @@
         "crypto_informed_taker",
         "professional_maker"
       ]
-    },
-    "STRUCTURAL_ARB_ENGINE": {
-      "actions": [
-        "ARB",
-        "CANCEL",
-        "NOTHING"
-      ],
-      "components": [
-        "hard_arb",
-        "fast_structural"
-      ]
     }
   },
   "owners": {
@@ -50,5 +39,5 @@
   "real_capital_at_risk": false,
   "real_order_submission": false,
   "schema": "polymarket_v7_authority_registry_v2",
-  "version": 2
+  "version": 3
 }

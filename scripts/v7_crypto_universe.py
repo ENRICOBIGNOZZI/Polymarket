@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
-"""Exhaustive, resource-tiered active-market discovery for canonical V7 PAPER.
+"""Crypto-only active-market discovery for canonical V7 PAPER.
 
-Gamma keyset pagination exhausts the declared liquid, recently traded domain.
-HOT and WARM capacities are derived from declared resource budgets; COLD keeps
-every remaining eligible market in that domain. This component owns metadata
-discovery only and has no execution, capital, OMS, risk or ledger authority.
+Only asset/horizon contexts registered in v7_crypto_settlement_markets.json are
+queried. Exact rolling slugs replace the former whole-Polymarket keyset scan.
+This component owns metadata discovery only and has no execution, capital, OMS,
+risk or ledger authority.
 """
 from __future__ import annotations
 
@@ -20,10 +20,10 @@ import urllib.request
 from pathlib import Path
 from typing import Any, Callable
 
-CONFIG_SCHEMA = "polymarket_v7_adaptive_universe_config_v1"
-SNAPSHOT_SCHEMA = "polymarket_v7_adaptive_universe_snapshot_v1"
-STATUS_SCHEMA = "polymarket_v7_adaptive_universe_status_v1"
-CHANGE_SCHEMA = "polymarket_v7_adaptive_universe_change_v1"
+CONFIG_SCHEMA = "polymarket_v7_crypto_universe_config_v1"
+SNAPSHOT_SCHEMA = "polymarket_v7_crypto_universe_snapshot_v1"
+STATUS_SCHEMA = "polymarket_v7_crypto_universe_status_v1"
+CHANGE_SCHEMA = "polymarket_v7_crypto_universe_change_v1"
 
 
 def _finite(value: Any, default: float = 0.0) -> float:
@@ -62,35 +62,35 @@ def _load_json(path: Path) -> dict[str, Any]:
 
 
 def validate_config(config: dict[str, Any]) -> None:
-    if config.get("schema") != CONFIG_SCHEMA or config.get("version") != 7:
-        raise ValueError("invalid adaptive-universe schema/version")
+    if config.get("schema") != CONFIG_SCHEMA or config.get("version") != 1:
+        raise ValueError("invalid crypto-universe schema/version")
     if config.get("paper_only") is not True:
-        raise ValueError("adaptive universe must remain PAPER-only")
+        raise ValueError("crypto universe must remain PAPER-only")
     if config.get("authenticated_execution") is not False or config.get("real_order_submission") is not False:
-        raise ValueError("adaptive universe cannot have execution authority")
+        raise ValueError("crypto universe cannot have execution authority")
+    if config.get("market_registry") != "config/v7_crypto_settlement_markets.json":
+        raise ValueError("crypto universe must bind the canonical crypto market registry")
     source = config.get("source") if isinstance(config.get("source"), dict) else {}
-    page_size = int(source.get("page_size", 0))
-    guard = int(source.get("pagination_loop_guard_pages", 0))
-    request_attempts = int(source.get("request_attempts_per_page", 0))
+    attempts = int(source.get("request_attempts_per_market", 0))
+    offsets = source.get("window_offsets")
     if not str(source.get("gamma_url") or "").startswith("https://"):
         raise ValueError("source.gamma_url must use HTTPS")
-    if not 1 <= page_size <= 100 or guard < 1 or request_attempts < 1:
-        raise ValueError("invalid pagination controls")
+    if attempts < 1 or not isinstance(offsets, list) or not offsets or any(type(x) is not int for x in offsets):
+        raise ValueError("invalid exact-market discovery controls")
+    if 0 not in offsets or min(offsets) < -2 or max(offsets) > 2:
+        raise ValueError("window_offsets must include current and remain tightly bounded")
     hot = ((config.get("resource_budget") or {}).get("hot") or {})
     warm = ((config.get("resource_budget") or {}).get("warm") or {})
-    structural = ((config.get("resource_budget") or {}).get("structural") or {})
     positive = (
         hot.get("websocket_asset_capacity"), hot.get("assets_per_market"),
         hot.get("memory_budget_bytes"), hot.get("estimated_bytes_per_market"),
         hot.get("cpu_budget_micros_per_second"), hot.get("estimated_update_rate_hz_per_market"),
         hot.get("estimated_cpu_micros_per_update"), warm.get("scan_time_budget_millis"),
         warm.get("estimated_scan_millis_per_market"), warm.get("memory_budget_bytes"),
-        warm.get("estimated_bytes_per_market"), structural.get("scan_time_budget_millis"),
-        structural.get("estimated_event_scan_millis"),
+        warm.get("estimated_bytes_per_market"),
     )
     if any(_finite(value) <= 0 for value in positive):
         raise ValueError("resource budgets and cost estimates must be positive")
-
 
 def fetch_json(url: str, timeout: int = 20) -> Any:
     request = urllib.request.Request(url, headers={"User-Agent": "polymarket-v7-adaptive-universe/1"})
@@ -106,20 +106,9 @@ def normalize_market(raw: dict[str, Any]) -> dict[str, Any] | None:
         return None
     events = raw.get("events") if isinstance(raw.get("events"), list) else []
     first_event = next((row for row in events if isinstance(row, dict)), {})
-    sports_market_type = str(
-        raw.get("sportsMarketType") or first_event.get("sportsMarketType") or ""
-    ).strip()
-    game_start_time = str(
-        raw.get("gameStartTime") or first_event.get("gameStartTime") or ""
-    ).strip()
     seconds_delay = max(
         0, int(_finite(raw.get("secondsDelay"), _finite(first_event.get("secondsDelay"))))
     )
-    # Gamma explicitly identifies timed sports through sportsMarketType and/or
-    # gameStartTime. Preserve that venue fact in the canonical universe so a
-    # generic CLOB-flow selector cannot accidentally make markets whose fair
-    # value is driven by an unauthorised live score feed.
-    timed_sports = bool(sports_market_type or game_start_time)
     event_ids = sorted({str(row.get("id")).strip() for row in events if isinstance(row, dict) and str(row.get("id") or "").strip()})
     outcome_prices = [min(1.0, max(0.0, _finite(value))) for value in _array(raw.get("outcomePrices"))]
     best_bid = min(1.0, max(0.0, _finite(raw.get("bestBid"))))
@@ -146,10 +135,7 @@ def normalize_market(raw: dict[str, Any]) -> dict[str, Any] | None:
         "last_trade_price": min(1.0, max(0.0, _finite(raw.get("lastTradePrice")))),
         "resolution_source": str(raw.get("resolutionSource") or ""),
         "event_start_time": str(raw.get("eventStartTime") or ""),
-        "game_start_time": game_start_time,
-        "sports_market_type": sports_market_type,
         "seconds_delay": seconds_delay,
-        "timed_sports": timed_sports,
         "fee_schedule": raw.get("feeSchedule") if isinstance(raw.get("feeSchedule"), dict) else {},
         "fees_enabled": bool(raw.get("feesEnabled", False)),
         "fees_enabled_explicit": "feesEnabled" in raw,
@@ -161,91 +147,104 @@ def normalize_market(raw: dict[str, Any]) -> dict[str, Any] | None:
         "closed": bool(raw.get("closed", False)),
         "accepting_orders": bool(raw.get("acceptingOrders", True)),
         "neg_risk": bool(raw.get("negRisk", False)),
+        "asset": str((raw.get("_crypto_context") or {}).get("asset") or ""),
+        "horizon": str((raw.get("_crypto_context") or {}).get("horizon") or ""),
+        "horizon_seconds": int(_finite((raw.get("_crypto_context") or {}).get("horizon_seconds"))),
+        "contract_family": str((raw.get("_crypto_context") or {}).get("contract_family") or ""),
+        "settlement_semantic_hash": str((raw.get("_crypto_context") or {}).get("settlement_semantic_hash") or ""),
+        "research_only": bool((raw.get("_crypto_context") or {}).get("research_only", False)),
+        "authority": str((raw.get("_crypto_context") or {}).get("authority") or ""),
+        "window_start_unix": int(_finite((raw.get("_crypto_context") or {}).get("window_start_unix"))),
     }
 
 
-def discover_exhaustive(
-    config: dict[str, Any], *, fetcher: Callable[[str, int], Any] = fetch_json
+def _registered_contexts(registry: dict[str, Any]) -> list[dict[str, Any]]:
+    if (registry.get("schema") != "polymarket_v7_crypto_settlement_market_registry_v1"
+            or registry.get("paper_only") is not True
+            or registry.get("authenticated_execution") is not False
+            or registry.get("real_order_submission") is not False):
+        raise ValueError("invalid crypto market registry")
+    rows = registry.get("contexts")
+    if not isinstance(rows, list):
+        raise ValueError("crypto market registry contexts missing")
+    output=[]
+    for row in rows:
+        if not isinstance(row, dict) or row.get("enabled") is not True:
+            continue
+        mapping=row.get("polymarket") if isinstance(row.get("polymarket"),dict) else {}
+        template=str(mapping.get("slug_template") or "")
+        horizon_slug=str(mapping.get("horizon_slug") or "")
+        horizon_seconds=int(row.get("horizon_seconds") or 0)
+        semantic=str(row.get("settlement_semantic_hash") or "")
+        if (not template or "{window_start_unix}" not in template or not horizon_slug
+                or horizon_seconds <= 0 or len(semantic) != 64):
+            raise ValueError("invalid registered crypto context")
+        output.append(row)
+    if not output:
+        raise ValueError("no enabled crypto contexts")
+    return output
+
+
+def discover_crypto(
+    config: dict[str, Any], registry: dict[str, Any], *, now_s: int | None = None,
+    fetcher: Callable[[str, int], Any] = fetch_json,
 ) -> tuple[list[dict[str, Any]], dict[str, Any]]:
-    source = config["source"]
-    page_size = int(source["page_size"])
-    guard_pages = int(source["pagination_loop_guard_pages"])
-    timeout = int(source.get("request_timeout_seconds", 20))
-    request_attempts = max(1, int(source.get("request_attempts_per_page", 3)))
-    gamma_url = str(source["gamma_url"]).rstrip("/")
-    minimum_volume_24h = max(0.0, _finite(config["eligibility"].get("minimum_volume_24h_usd")))
-    rows_by_id: dict[str, dict[str, Any]] = {}
-    raw_rows = 0
-    duplicate_rows = 0
-    cursor = ""
-    seen_cursors: set[str] = set()
-    pages = 0
-    request_retries = 0
-    exhaustive = False
-    started_ns = time.monotonic_ns()
-    for _ in range(guard_pages):
-        query_values = {
-            "active": "true", "closed": "false", "limit": page_size,
-            "order": "volume24hr", "ascending": "false",
-            # The filter is identical to the local eligibility floor and only
-            # removes rows that would be discarded after download. This keeps
-            # the exact keyset walk bounded as the venue accumulates markets.
-            "liquidity_num_min": _finite(config["eligibility"].get("minimum_liquidity_usd")),
-        }
-        if cursor:
-            query_values["after_cursor"] = cursor
-        query = urllib.parse.urlencode(query_values)
-        for attempt in range(request_attempts):
-            try:
-                value = fetcher(gamma_url + "/markets/keyset?" + query, timeout)
-                break
-            except (OSError, TimeoutError):
-                if attempt + 1 >= request_attempts:
-                    raise
-                request_retries += 1
-                time.sleep(min(2.0, 0.25 * (2 ** attempt)))
-        page_rows = value if isinstance(value, list) else value.get("markets", []) if isinstance(value, dict) else []
-        pages += 1
-        if not page_rows:
-            exhaustive = True
-            break
-        raw_rows += len(page_rows)
-        for raw in page_rows:
-            if not isinstance(raw, dict):
+    source=config["source"]; gamma_url=str(source["gamma_url"]).rstrip("/")
+    timeout=int(source.get("request_timeout_seconds",4))
+    attempts=max(1,int(source.get("request_attempts_per_market",3)))
+    offsets=[int(x) for x in source.get("window_offsets",[-1,0,1])]
+    now=int(time.time() if now_s is None else now_s)
+    rows_by_id: dict[str,dict[str,Any]]={}
+    request_retries=0; requests=0; missing=0; raw_rows=0
+    started_ns=time.monotonic_ns()
+    for context in _registered_contexts(registry):
+        horizon=int(context["horizon_seconds"])
+        boundary=(now // horizon) * horizon
+        mapping=context["polymarket"]; template=str(mapping["slug_template"]); horizon_slug=str(mapping["horizon_slug"])
+        for offset in offsets:
+            window_start=boundary + offset*horizon
+            slug=template.format(horizon_slug=horizon_slug,window_start_unix=window_start)
+            query=urllib.parse.urlencode({"slug":slug})
+            value=None
+            for attempt in range(attempts):
+                try:
+                    requests += 1
+                    value=fetcher(gamma_url+"/markets?"+query,timeout)
+                    break
+                except (OSError,TimeoutError):
+                    if attempt+1>=attempts:
+                        raise
+                    request_retries += 1
+                    time.sleep(min(1.0,0.1*(2**attempt)))
+            page=value if isinstance(value,list) else value.get("markets",[]) if isinstance(value,dict) else []
+            if not page:
+                missing += 1
                 continue
-            normalized = normalize_market(raw)
-            if normalized is None:
+            raw_rows += len(page)
+            raw=next((x for x in page if isinstance(x,dict) and str(x.get("slug") or "")==slug),None)
+            if raw is None:
+                raw=next((x for x in page if isinstance(x,dict)),None)
+            if raw is None:
+                missing += 1
                 continue
-            if normalized["market_id"] in rows_by_id:
-                duplicate_rows += 1
-            rows_by_id[normalized["market_id"]] = normalized
-        # Keyset ordering is part of the cursor identity. Once an entire page
-        # is below the declared 24h-flow eligibility floor, every subsequent
-        # row is ineligible and the economically tradable domain is exhausted.
-        if minimum_volume_24h > 0.0 and all(
-            _finite(raw.get("volume24hr"), _finite(raw.get("volume24h"))) < minimum_volume_24h
-            for raw in page_rows if isinstance(raw, dict)
-        ):
-            exhaustive = True
-            break
-        next_cursor = str(value.get("next_cursor") or "") if isinstance(value, dict) else ""
-        if not next_cursor:
-            exhaustive = True
-            break
-        if next_cursor == cursor or next_cursor in seen_cursors:
-            break
-        seen_cursors.add(next_cursor)
-        cursor = next_cursor
+            raw=dict(raw)
+            raw["_crypto_context"]={
+                "asset":context.get("asset"), "horizon":context.get("horizon"),
+                "horizon_seconds":horizon, "contract_family":context.get("contract_family"),
+                "settlement_semantic_hash":context.get("settlement_semantic_hash"),
+                "research_only":context.get("research_only") is True, "authority":context.get("authority"),
+                "window_start_unix":window_start,
+            }
+            normalized=normalize_market(raw)
+            if normalized is not None:
+                rows_by_id[normalized["market_id"]]=normalized
     return list(rows_by_id.values()), {
-        "discovery_exhaustive": exhaustive,
-        "pages": pages,
-        "raw_rows": raw_rows,
-        "duplicate_rows": duplicate_rows,
+        "discovery_exhaustive": True, "pagination_loop_guard_hit": False,
+        "pages": requests, "candidate_requests": requests, "missing_markets": missing,
+        "raw_rows": raw_rows, "duplicate_rows": max(0,raw_rows-len(rows_by_id)),
         "request_retries": request_retries,
-        "pagination_loop_guard_hit": not exhaustive,
-        "scan_duration_ms": (time.monotonic_ns() - started_ns) / 1_000_000.0,
+        "scan_duration_ms": (time.monotonic_ns()-started_ns)/1_000_000.0,
     }
-
 
 def _eligibility(market: dict[str, Any], config: dict[str, Any]) -> str | None:
     rules = config["eligibility"]
@@ -270,7 +269,6 @@ def resource_capacities(config: dict[str, Any], eligible_count: int) -> dict[str
     resources = config["resource_budget"]
     hot = resources["hot"]
     warm = resources["warm"]
-    structural = resources["structural"]
     hot_limits = {
         "websocket_assets": int(_finite(hot["websocket_asset_capacity"]) // _finite(hot["assets_per_market"])),
         "memory": int(_finite(hot["memory_budget_bytes"]) // _finite(hot["estimated_bytes_per_market"])),
@@ -292,9 +290,6 @@ def resource_capacities(config: dict[str, Any], eligible_count: int) -> dict[str
         "warm_limits": warm_limits,
         "hot_limiting_dimensions": sorted(key for key, value in hot_limits.items() if value == hot_capacity),
         "warm_limiting_dimensions": sorted(key for key, value in warm_limits.items() if value == warm_capacity),
-        "structural_scan_budget_events": max(1, int(
-            _finite(structural["scan_time_budget_millis"]) // _finite(structural["estimated_event_scan_millis"])
-        )),
     }
 
 
@@ -355,7 +350,7 @@ def build_snapshot(
         "execution_authority": False,
         "model_sha": model_sha.lower(),
         "timestamp_ms": int(timestamp_ms),
-        "source": "gamma_keyset_active_flow_eligible_exhaustive",
+        "source": "gamma_exact_slug_configured_crypto_contexts",
         "discovery_exhaustive": bool(discovery.get("discovery_exhaustive")),
         "pagination_loop_guard_hit": bool(discovery.get("pagination_loop_guard_hit")),
         "pages": int(discovery.get("pages", 0)),
@@ -423,17 +418,16 @@ def persist(output_dir: Path, snapshot: dict[str, Any], previous: dict[str, Any]
 
 def collect_once(config: dict[str, Any], output_dir: Path, model_sha: str) -> dict[str, Any]:
     previous = _load_json(output_dir / "current.json")
-    markets, discovery = discover_exhaustive(config)
+    registry = _load_json(Path(config["market_registry"]))
+    markets, discovery = discover_crypto(config, registry)
     snapshot = build_snapshot(markets, discovery, config, model_sha=model_sha, timestamp_ms=time.time_ns() // 1_000_000, previous=previous)
-    if not snapshot["discovery_exhaustive"]:
-        raise RuntimeError("Gamma pagination loop guard reached before exhaustion")
     persist(output_dir, snapshot, previous)
     return snapshot
 
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--config", type=Path, default=Path("config/v7_adaptive_universe.json"))
+    parser.add_argument("--config", type=Path, default=Path("config/v7_crypto_universe.json"))
     parser.add_argument("--output-dir", type=Path, required=True)
     parser.add_argument("--model-sha", required=True)
     parser.add_argument("--loop", action="store_true")

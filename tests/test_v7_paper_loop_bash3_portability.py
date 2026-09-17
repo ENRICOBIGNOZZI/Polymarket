@@ -8,13 +8,12 @@ LOOP = ROOT / "scripts/paper_v7_execution_loop.sh"
 
 
 class V7PaperLoopBash3PortabilityTest(unittest.TestCase):
-    def test_only_two_live_algorithms_are_registered(self) -> None:
+    def test_only_crypto_live_algorithm_is_registered(self) -> None:
         text = LOOP.read_text(encoding="utf-8")
         self.assertIn("set -euo pipefail", text)
         self.assertNotIn("joint_args=()", text)
         self.assertNotIn('${joint_args[@]}', text)
         self.assertIn("CRYPTO_SETTLEMENT_ENGINE", text)
-        self.assertIn("STRUCTURAL_ARB_ENGINE", text)
 
     def test_cleanup_empty_pid_array_is_guarded_and_bounded(self) -> None:
         text = LOOP.read_text(encoding="utf-8")

@@ -9,6 +9,7 @@ def test_current_workflow_inventory_is_final_paper_only():
         "ci.yml", "monitoring.yml", "private-runtime-single-writer-validation.yml",
         "v7-deploy-paper-server.yml", "v7-live-paper-validation.yml",
         "v7-paper-server-health.yml", "v7-point-in-time-universe-archive.yml",
+        "v7-freeze-maker-forward-window.yml", "v7-public-book-wire-probe.yml",
     }
 
 
@@ -20,7 +21,7 @@ def test_ci_runs_exact_v7_review_branches_without_enabling_branch_deployment():
     assert "canonical main does not match the explicitly approved SHA" in deploy
 
 
-def test_paper_deploy_health_window_covers_exhaustive_universe_startup():
+def test_paper_deploy_health_window_covers_crypto_universe_startup():
     workflow = (ROOT / ".github/workflows/v7-deploy-paper-server.yml").read_text()
     assert "POLYMARKET_RUNTIME_HEALTH_ATTEMPTS=390" in workflow
     assert "POLYMARKET_RUNTIME_HEALTH_ATTEMPTS=60" not in workflow

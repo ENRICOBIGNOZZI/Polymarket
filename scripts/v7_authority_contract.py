@@ -35,11 +35,9 @@ ENGINE_COMPONENTS = {
     "CRYPTO_SETTLEMENT_ENGINE": {
         "crypto_settlement_fair", "crypto_informed_taker", "professional_maker",
     },
-    "STRUCTURAL_ARB_ENGINE": {"hard_arb", "fast_structural"},
 }
 ENGINE_ACTIONS = {
     "CRYPTO_SETTLEMENT_ENGINE": {"MAKE", "TAKE", "CANCEL", "WITHDRAW", "NOTHING"},
-    "STRUCTURAL_ARB_ENGINE": {"ARB", "CANCEL", "NOTHING"},
 }
 
 
@@ -50,7 +48,7 @@ class AuthorityContractError(ValueError):
 def validate(value: dict[str, Any]) -> dict[str, Any]:
     if (
         value.get("schema") != SCHEMA
-        or value.get("version") != 2
+        or value.get("version") != 3
         or value.get("paper_only") is not True
         or value.get("authenticated_execution") is not False
         or value.get("real_order_submission") is not False

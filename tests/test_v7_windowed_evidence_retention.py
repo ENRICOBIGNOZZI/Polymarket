@@ -187,12 +187,12 @@ class WindowedRetentionTest(unittest.TestCase):
         import hashlib
         with tempfile.TemporaryDirectory() as tmp:
             runs=Path(tmp)/'runs';store=runs/'paper_v7_durable/permanent_evidence/store';old=time.time_ns()-8*3600*10**9
-            alias=runs/'paper_v7_archives'/('cutover-'+'a'*40+'-1-1')/'fast_structural/fast_arb_opportunities.csv'
+            alias=runs/'paper_v7_archives'/('cutover-'+'a'*40+'-1-1')/'research/repricing_book/book_observations/recovered.jsonl'
             alias.parent.mkdir(parents=True);payload=b'closed-old-alias';alias.write_bytes(payload);os.utime(alias,ns=(old,old))
             sha=hashlib.sha256(payload).hexdigest()
             tomb={'schema':'polymarket_v7_windowed_pack_tombstone_v1','paper_only':True,'authenticated_execution':False,'real_order_submission':False,
                   'execution_authority':'ZERO_AUTHORITY_RESEARCH_ONLY','policy':'USER_AUTHORIZED_HFT_ROLLING_RAW_WINDOW_20260916','raw_detail_available':False,
-                  'pack_sha256':sha,'source_aliases':[str(alias)],'source_families':['structural_candidates'],'object_sha256s':[],'manifest_sha256s':[],
+                  'pack_sha256':sha,'source_aliases':[str(alias)],'source_families':['pm_causal_book'],'object_sha256s':[],'manifest_sha256s':[],
                   'retired_at_ns':old,'cutoff_ns':old-1}
             immutable(store/'windowed_pack_tombstones'/(sha+'.json'),canonical(tomb))
             out=run(runs,raw_detail_seconds=6*3600,maximum_seconds=30)
@@ -204,12 +204,12 @@ class WindowedRetentionTest(unittest.TestCase):
         import hashlib
         with tempfile.TemporaryDirectory() as tmp:
             runs=Path(tmp)/'runs';store=runs/'paper_v7_durable/permanent_evidence/store';old=time.time_ns()-8*3600*10**9
-            alias=runs/'paper_v7_archives'/('cutover-'+'a'*40+'-1-1')/'fast_structural/fast_arb_opportunities.csv'
+            alias=runs/'paper_v7_archives'/('cutover-'+'a'*40+'-1-1')/'research/repricing_book/book_observations/recovered.jsonl'
             alias.parent.mkdir(parents=True);alias.write_bytes(b'changed');os.utime(alias,ns=(old,old))
             sha=hashlib.sha256(b'original').hexdigest()
             tomb={'schema':'polymarket_v7_windowed_pack_tombstone_v1','paper_only':True,'authenticated_execution':False,'real_order_submission':False,
                   'execution_authority':'ZERO_AUTHORITY_RESEARCH_ONLY','policy':'USER_AUTHORIZED_HFT_ROLLING_RAW_WINDOW_20260916','raw_detail_available':False,
-                  'pack_sha256':sha,'source_aliases':[str(alias)],'source_families':['structural_candidates'],'object_sha256s':[],'manifest_sha256s':[],
+                  'pack_sha256':sha,'source_aliases':[str(alias)],'source_families':['pm_causal_book'],'object_sha256s':[],'manifest_sha256s':[],
                   'retired_at_ns':old,'cutoff_ns':old-1}
             immutable(store/'windowed_pack_tombstones'/(sha+'.json'),canonical(tomb))
             out=run(runs,raw_detail_seconds=6*3600,maximum_seconds=30)

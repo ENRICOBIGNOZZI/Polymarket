@@ -35,7 +35,7 @@
   "starting_capital": 14000,
   "uncertainty_penalty": 0,
   "v7": {
-    "adaptive_universe_policy": "config/v7_adaptive_universe.json",
+    "crypto_universe_policy": "config/v7_crypto_universe.json",
     "authenticated_execution": false,
     "authoritative_fee_required": true,
     "capital_authority_owner": "V7_CANONICAL_ALLOCATOR",

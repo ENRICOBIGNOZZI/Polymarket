@@ -1,145 +1,143 @@
-# Polymarket V7
+# Polymarket V7 — Crypto Only
 
-Canonical V7 PAPER trading and research system for Polymarket.
+Canonical PAPER trading and research system for Polymarket crypto markets.
 
-There is one architecture and one supported runtime generation: **V7**. Older numerical generations are retired; Git history is the archive.
+`main` has one economic engine: `CRYPTO_SETTLEMENT_ENGINE`. Historical non-crypto
+strategies are not part of the runtime or repository surface; Git history and the
+pre-cleanup archive branch are the rollback path.
 
 ## Safety
 
-V7 is PAPER-only in this repository:
+The checked-in runtime is PAPER-only:
 
 - `paper_only = true`
 - `authenticated_execution = false`
 - `real_order_submission = false`
-- global maximum drawdown kill threshold: 15%
+- one global 15% maximum-drawdown kill threshold
+- one execution owner and one append-only canonical ledger writer
 
-No wallet, key or authenticated order-submission path belongs in the canonical runtime.
+Removing old strategies does **not** reallocate their risk budget to crypto.
+Unused account capacity remains reserve until explicitly changed.
 
-## Canonical runtime
-
-```text
-Read-only market, oracle and mapped external data
-        |
-        v
-Canonical causal state + zero-authority research/feature plane
-        |
-        +----------------------+----------------------+
-        |                                             |
-        v                                             v
-CRYPTO_SETTLEMENT_ENGINE                     STRUCTURAL_ARB_ENGINE
-(fair + informed taker + maker)           (hard arb + fast structural)
-        +----------------------+----------------------+
-                               |
-                               v
-V7_GLOBAL_PORTFOLIO_COORDINATOR
-        -> one allocator -> one risk owner -> one OMS
-        -> one inventory owner -> one append-only ledger writer
-```
-
-Canonical surfaces:
+## Architecture
 
 ```text
-config/paper_v7.json
-config/v7_live_model_scope.json
-runs/paper_v7_live/
-runs/paper_v7_live/ledger/execution.jsonl
-monitoring/exporter_v7.py
-monitoring/prometheus_v7.yml
-monitoring/grafana/dashboards/polymarket-v7.json
-ops/update_server_v7.sh
+Binance / Coinbase / Deribit        Polymarket public market data
+              \                         /
+               \                       /
+                -> causal crypto state <-
+                         |
+                 incremental features
+                         |
+              CRYPTO_SETTLEMENT_ENGINE
+          /              |               \
+ settlement fair   informed taker   professional maker
+          \              |               /
+           -> V7_GLOBAL_PORTFOLIO_COORDINATOR
+                         |
+             one allocator -> one risk owner
+                         |
+                 one OMS / inventory owner
+                         |
+                 PAPER execution / replay
+                         |
+             one append-only execution ledger
 ```
 
-## Economic engines
+The engine can compare `MAKE`, `TAKE`, `CANCEL`, `WITHDRAW`, and `NOTHING` on a
+single conservative account-wealth objective. Components never own capital,
+risk, orders, inventory, or the ledger independently.
 
-Exactly two engines may propose economic actions. Neither owns capital, risk,
-orders, inventory, or the ledger; both use the same global authority chain.
+## Crypto universe
 
-### Crypto settlement engine
+The runtime discovers only registered crypto contexts. It does **not** scan the
+whole Polymarket universe.
 
-`CRYPTO_SETTLEMENT_ENGINE(asset, horizon)` compares settlement fair value,
-informed taking, professional making, cancellation, withdrawal, and no-action
-on one conservative account-wealth objective. BTC, ETH, SOL, and XRP 5m/15m
-contexts are registry-backed; ETH/SOL/XRP start as zero-authority shadow
-contexts. No 1m context is registered. Missing model, latency, calibration,
-settlement, capacity, or cost evidence forces `CANCEL`/`WITHDRAW`/`NOTHING`.
-
-#### Professional market-maker component
-
-The maker component evaluates `JOIN` / `IMPROVE` / `FADE` / one-sided /
-withdraw decisions with causal public-flow replay, queue-aware fillability,
-full-depth executable marks, and fill-conditioned research evidence. It has no
-standalone runtime or execution authority. Trading PnL, rebates, and liquidity
-rewards remain separate quantities; bounded exploration remains research-only
-credit.
+Canonical mapping:
 
 ```text
-config/v7_professional_market_maker.json
-scripts/v7_market_maker_core.py
-scripts/v7_market_maker_rewards.py
-build/polymarket_v7_maker_fillability_observer
-build/polymarket_v7_maker_markout_observer
-scripts/v7_market_maker_status.py
+config/v7_crypto_settlement_markets.json
+        -> scripts/v7_crypto_universe.py
+        -> runs/paper_v7_live/universe/
 ```
 
-#### Settlement-fair and informed-taker components
+Registered contexts are BTC, ETH, SOL, and XRP at the configured horizons.
+Exact rolling slugs are queried around the active settlement window. Discovery
+has zero execution authority.
 
-Contract correctness is fail-closed: exact rules, outcome mapping, fees, and
-same-oracle binding are mandatory. Counterfactual lifecycle labels stay in the
-research evidence plane; native proposals enter the global coordinator.
+## London hot path
+
+The London runtime is deliberately narrow:
+
+```text
+external/public feed
+      -> in-memory state
+      -> incremental features
+      -> frozen-model inference
+      -> global coordinator / risk
+      -> PAPER execution
+      -> reconciliation + minimal telemetry
+```
+
+London keeps what is needed for live crypto collection and execution research:
+books, public trades, external feeds, exact stage timestamps, order lifecycle,
+fills, queue/fillability evidence, markouts, settlement outcomes, ledger and
+replay identities.
+
+Training, hyperparameter search, historical backtests, notebooks, plots and
+retrospective research are not part of the trading hot path.
+
+## Live crypto components
+
+### Settlement fair / informed taker
+
+Contract mapping, settlement rule, fee authority, causal external features and
+model identity are fail-closed. A missing or immature model never gains new-risk
+authority merely because a market is discovered.
+
+Core surfaces:
 
 ```text
 config/v7_crypto_settlement_engine.json
 config/v7_crypto_settlement_markets.json
 config/v7_crypto_settlement_model_registry.json
-config/v7_external_source_registry.json
-scripts/v7_crypto_settlement.py
-scripts/v7_crypto_market_discovery.py
-scripts/v7_crypto_economic_validation.py
 config/v7_external_fair.json
+scripts/v7_crypto_settlement.py
 scripts/v7_external_fair_paper_router.py
-scripts/v7_same_oracle_adapter.py
-src/v7_external_*.cpp
 ```
 
-### Structural arbitrage engine
+### Professional maker
 
-Hard-arbitrage and fast-structural detection share one engine, one atomic intent,
-and one capital reservation. The C++ WebSocket/L2 substrate preserves dual
-exchange/receive clocks, lineage invalidation, full executable depth, and strict
-freshness. Typed proposals enter the global coordinator; the engine cannot write
-orders, inventory, or the ledger.
+Maker research remains because execution quality can improve the crypto engine.
+It retains causal public-flow replay, queue-aware fillability, markouts, latency,
+rest/cancel behaviour and model evidence. It has no independent authority.
 
 ```text
-config/v7_structural_arb_engine.json
-src/fast_arb.cpp
-src/fast_ws.cpp
-src/fast_runtime/
-src/v7_fast_structural_runtime.cpp
-include/pm/fast_arb.hpp
-scripts/v7_joint_execution_policy.py
+config/v7_professional_market_maker.json
+scripts/v7_market_maker_rewards.py
+build/polymarket_v7_maker_fillability_observer
+build/polymarket_v7_maker_markout_observer
 ```
 
-## Live algorithm scope
-
-V7 has exactly two live PAPER algorithms:
-
-- `CRYPTO_SETTLEMENT_ENGINE`: settlement fair value, professional maker and
-  informed-taker components for registered crypto contexts.
-- `STRUCTURAL_ARB_ENGINE`: hard-arbitrage and fast-structural components over
-  deterministically verified relations.
-
-Components have no independent capital, risk, OMS, inventory or ledger
-authority. All previously registered non-live algorithm families and their
-collectors, supervisors, configs, dashboards and scheduled workflows have been
-removed. `config/v7_strategy_registry.json` and
-`config/v7_live_model_scope.json` fail closed unless the set is exactly these
-two algorithms.
+Shared L2 / WebSocket primitives under `src/fast_arb.cpp`, `src/fast_ws.cpp` and
+`include/pm/fast_arb.hpp` are retained only as reusable execution/data-plane
+infrastructure. There is no separate arbitrage engine or runtime owner.
 
 ## Execution evidence
 
-Quoted edge is not PnL. Canonical observations are bound to model SHA and execution identities. The economic rule accounts for completion probability, fill-conditioned alpha/spread capture, fees, slippage, adverse markout, partial/unwind loss, capital cost and latency cost.
+Quoted edge is not PnL. Crypto research preserves the evidence needed to improve
+future execution:
 
-For multi-leg execution, direct empirical joint completion/state evidence is canonical. Products or minima of marginal fill probabilities are not substitutes. Economic assessment stresses the same frozen observations rather than reselecting trades.
+- external lead/lag events and exact receive clocks;
+- Polymarket L1/L2 state and public trades;
+- signal -> feature -> decision -> submit -> ACK/fill timestamps;
+- queue and fillability observations;
+- fill-conditioned markouts and adverse selection;
+- cancellations, partial fills and unwind evidence;
+- fees, slippage, settlement and realized PnL;
+- deterministic replay keys and exact code/model/config identities.
+
+Canonical execution surfaces:
 
 ```text
 scripts/v7_execution_ledger.py
@@ -147,63 +145,77 @@ scripts/v7_ledger_spool.py
 scripts/v7_canonical_economics.py
 scripts/v7_joint_execution_policy.py
 scripts/v7_learned_execution_hardened.py
+runs/paper_v7_live/ledger/execution.jsonl
 ```
 
-## Capital and risk
+## Data retention
+
+Live crypto data is a research asset, not disposable telemetry. Unique causal
+sources and the canonical ledger are preserved according to the checked-in
+catalog and retention policy. High-volume raw detail can use the authorized
+rolling window only after content-addressed evidence/tombstone rules are met.
+
+```text
+config/v7_evidence_catalog.json
+config/v7_data_retention.json
+scripts/v7_evidence_catalog.py
+scripts/v7_windowed_evidence_retention.py
+monitoring/v7_retention.py
+```
+
+## Capital, risk and ownership
 
 ```text
 scripts/v7_capital_allocator.py
 scripts/v7_portfolio_guard.py
+scripts/v7_global_portfolio_coordinator.py
+config/v7_authority_registry.json
+config/v7_strategy_registry.json
+config/v7_live_model_scope.json
 ```
 
-Engine envelopes and component observation budgets are capacity limits, not
-independent accounts. Cash, exposure, inventory, drawdown, and kill state
-reconcile once at account level.
+There is one allocator, one risk owner, one OMS, one inventory owner and one
+append-only ledger writer. Component observation budgets are research capacity,
+not separate trading accounts.
 
-## Public trade recorder
+## Monitoring
+
+Monitoring follows the crypto runtime only:
 
 ```text
-build/polymarket_v7_trade_recorder
-src/v7_trade_recorder.cpp
+monitoring/exporter_v7.py
+monitoring/prometheus_v7.yml
+monitoring/v7_alerts.yml
+monitoring/grafana/dashboards/polymarket-v7.json
+monitoring/grafana/dashboards/polymarket-v7-latency.json
 ```
 
-The recorder writes the causal public tape used by the V7 PAPER execution models.
+The latency dashboard reports current maker/runtime stages. Deleted strategy
+latency streams are not treated as live evidence.
 
-## Build and test
-
-```bash
-sudo apt-get update
-sudo apt-get install -y build-essential cmake pkg-config libcurl4-openssl-dev libboost-all-dev libssl-dev python3
-bash scripts/verify_v7.sh
-```
-
-The active PAPER runtime is:
-
-```bash
-bash scripts/paper_v7_execution_loop.sh
-```
-
-For unattended operation use the exact-SHA supervisor and the supplied
-systemd/launchd service templates under `ops/`.
-
-## Validation and deployment
-
-The retained automation is deliberately small:
+## Deployment
 
 ```text
-.github/workflows/ci.yml
-.github/workflows/monitoring.yml
-.github/workflows/private-runtime-single-writer-validation.yml
-.github/workflows/v7-live-paper-validation.yml
+scripts/paper_v7_execution_loop.sh
+config/v7_process_manifest.json
+ops/update_server_v7.sh
 .github/workflows/v7-deploy-paper-server.yml
 .github/workflows/v7-paper-server-health.yml
-.github/workflows/v7-point-in-time-universe-archive.yml
 ```
 
-CI, monitoring and single-writer checks validate the two-engine V7 runtime directly. Point-in-time universe archival uses Gamma keyset pagination for exhaustive snapshots, while Grafana is exposed tailnet-only through the canonical Tailscale FQDN.
+Deployment is exact-SHA and fail-closed. The server must expose the crypto
+universe, canonical ledger, portfolio guard, execution state and monitoring
+surfaces before health is declared.
 
-## Repository invariant
+## Development rule
 
-Do not add alternate numerical runtimes, compatibility PAPER loops, duplicate maker engines, duplicate ledgers, duplicate state writers, generic deployment entrypoints or authenticated execution. `tests/test_v7_repository_shape.py` enforces the slim V7-only repository shape.
+A file belongs in the canonical repository only if it supports at least one of:
 
-Canonical documentation: [architecture](docs/ARCHITECTURE.md), [runtime](docs/RUNTIME.md), [execution](docs/EXECUTION.md), [latency](docs/LATENCY.md), [models](docs/MODELS.md), [data](docs/DATA.md), [replay](docs/REPLAY.md), [deployment](docs/DEPLOYMENT.md), [monitoring](docs/MONITORING.md), and [research](docs/RESEARCH.md).
+1. crypto market/data collection;
+2. crypto signal/model inference;
+3. crypto execution or risk;
+4. crypto settlement/reconciliation;
+5. crypto monitoring/recovery;
+6. replay/backtest/training/evidence that can improve the crypto system.
+
+Everything else belongs in Git history, not the live repository.

@@ -25,7 +25,7 @@ class V7DeployMonitoringManifestContractTest(unittest.TestCase):
             "control/runtime_identity.json",
             "control/portfolio_state.json",
             "control/allocations/manifest.json",
-            "structural_relations/verified_relations.csv",
+            "universe/status.json",
             "canonical_economics.json",
             "ledger/execution.jsonl",
             "trade_tape.csv",
@@ -55,7 +55,7 @@ class V7DeployMonitoringManifestContractTest(unittest.TestCase):
         for required in (
             "control/runtime_status.json",
             "control/portfolio_state.json",
-            "structural_relations/verified_relations.csv",
+            "universe/status.json",
             "canonical_economics.json",
             "trade_tape.csv",
             "polymarket_v7_execution_alive 1",

@@ -25,7 +25,6 @@ from v7_crypto_settlement import (
 
 
 CONFIG_SCHEMA = "polymarket_v7_crypto_settlement_engine_v1"
-STRUCTURAL_CONFIG_SCHEMA = "polymarket_v7_structural_arb_engine_v1"
 SNAPSHOT_SCHEMA = "polymarket_v7_crypto_settlement_runtime_snapshot_v1"
 LATENCY_SCHEMA = "polymarket_v7_empirical_latency_profile_v1"
 MAKER_SCHEMA = "polymarket_v7_maker_execution_evidence_v1"
@@ -205,54 +204,18 @@ def validate_config(config: dict[str, Any]) -> None:
         raise ContractError("horizon_partition")
 
 
-def validate_structural_config(config: dict[str, Any]) -> None:
-    components = set(config.get("component_families") or [])
-    true_fields = {
-        "full_depth_required", "direct_joint_completion_required",
-        "one_atomic_economic_intent_per_bundle", "one_capital_reservation_per_bundle",
-        "partial_fill_plan_required", "timeout_plan_required",
-        "full_depth_bounded_unwind_required",
-    }
-    if (
-        config.get("schema") != STRUCTURAL_CONFIG_SCHEMA
-        or config.get("version") != 1
-        or config.get("paper_only") is not True
-        or config.get("authenticated_execution") is not False
-        or config.get("real_order_submission") is not False
-        or config.get("real_capital_at_risk") is not False
-        or config.get("decision_owner") != "STRUCTURAL_ARB_ENGINE"
-        or config.get("authority_registry") != "config/v7_authority_registry.json"
-        or config.get("opportunity_contract") != "schemas/v7/opportunity_envelope.schema.json"
-        or config.get("global_portfolio_coordinator") != "V7_GLOBAL_PORTFOLIO_COORDINATOR"
-        or components != {"hard_arb", "fast_structural"}
-        or config.get("component_independent_authority") is not False
-        or set(config.get("action_space") or []) != {"ARB", "CANCEL", "NOTHING"}
-        or any(config.get(name) is not True for name in true_fields)
-        or config.get("near_miss_evidence_has_execution_authority") is not False
-        or config.get("new_risk_default") != "CANCEL_AND_NOTHING_ONLY"
-    ):
-        raise ContractError("structural_engine_contract")
-    owners = {
-        "capital_envelope_owner": "V7_CANONICAL_ALLOCATOR",
-        "risk_owner": "V7_CANONICAL_RISK", "oms_owner": "V7_CANONICAL_OMS",
-        "inventory_owner": "V7_CANONICAL_INVENTORY", "ledger_owner": "V7_CANONICAL_LEDGER",
-    }
-    if any(config.get(key) != owner for key, owner in owners.items()):
-        raise ContractError("structural_shared_owner_contract")
-
-
 def validate_registry_authority(
-    config: dict[str, Any], structural: dict[str, Any], registry: dict[str, Any],
+    config: dict[str, Any], registry: dict[str, Any],
 ) -> None:
     if registry.get("schema") != "polymarket_v7_live_algorithm_registry_v2":
         raise ContractError("strategy_registry_schema")
     rows = registry.get("live_algorithms")
-    if not isinstance(rows, list) or len(rows) != 2:
+    if not isinstance(rows, list) or len(rows) != 1:
         raise ContractError("strategy_registry_rows")
     algorithms = {
         str(row.get("id") or ""): row for row in rows if isinstance(row, dict)
     }
-    if set(algorithms) != {"CRYPTO_SETTLEMENT_ENGINE", "STRUCTURAL_ARB_ENGINE"}:
+    if set(algorithms) != {"CRYPTO_SETTLEMENT_ENGINE"}:
         raise ContractError("live_algorithm_registry_partition")
     if registry.get("component_independent_authority") is not False:
         raise ContractError("component_has_independent_authority")
@@ -266,33 +229,25 @@ def validate_registry_authority(
         "crypto_settlement_fair", "professional_maker", "crypto_informed_taker",
     }:
         raise ContractError("crypto_engine_registry_components")
-    if set(algorithms["STRUCTURAL_ARB_ENGINE"].get("components") or []) != {
-        "hard_arb", "fast_structural",
-    }:
-        raise ContractError("structural_engine_registry_components")
 
 
 def validate_live_scope(
-    config: dict[str, Any], structural: dict[str, Any], scope: dict[str, Any],
+    config: dict[str, Any], scope: dict[str, Any],
 ) -> None:
     if (
         scope.get("schema") != "polymarket_v7_live_engine_scope_v2"
         or scope.get("paper_only") is not True
         or scope.get("authenticated_execution") is not False
         or scope.get("real_order_submission") is not False
-        or scope.get("live_algorithm_count") != 2
+        or scope.get("live_algorithm_count") != 1
         or scope.get("component_independent_authority") is not False
     ):
         raise ContractError("live_scope_identity_or_safety")
-    if set(scope.get("live_algorithms") or []) != {
-        "CRYPTO_SETTLEMENT_ENGINE", "STRUCTURAL_ARB_ENGINE",
-    }:
-        raise ContractError("live_scope_must_have_two_economic_owners")
+    if set(scope.get("live_algorithms") or []) != {"CRYPTO_SETTLEMENT_ENGINE"}:
+        raise ContractError("live_scope_must_be_crypto_only")
     internal = scope.get("internal_engine_components")
     if not isinstance(internal, dict) or set(internal.get("CRYPTO_SETTLEMENT_ENGINE") or []) != set(config["component_families"]):
         raise ContractError("live_scope_crypto_components")
-    if set(internal.get("STRUCTURAL_ARB_ENGINE") or []) != set(structural["component_families"]):
-        raise ContractError("live_scope_structural_components")
     if scope.get("crypto_settlement_engine_contract") != \
             "config/v7_crypto_settlement_engine.json":
         raise ContractError("live_scope_engine_contract_path")
@@ -303,9 +258,6 @@ def validate_live_scope(
         "config/v7_crypto_settlement_model_registry.json"
     ):
         raise ContractError("live_scope_crypto_registry_paths")
-    if scope.get("structural_arb_engine_contract") != \
-            "config/v7_structural_arb_engine.json":
-        raise ContractError("live_scope_structural_contract_path")
 
 
 def _horizon(config: dict[str, Any], horizon_seconds: int) -> dict[str, Any]:
@@ -412,17 +364,16 @@ def maker_snapshot(
 
 def freeze(
     config: dict[str, Any], *, code_sha: str, asset: str, horizon_name: str,
-    structural_config: dict[str, Any], registry: dict[str, Any],
-    live_scope: dict[str, Any], market_registry: dict[str, Any],
+    registry: dict[str, Any], live_scope: dict[str, Any],
+    market_registry: dict[str, Any],
     model_registry: dict[str, Any],
     latency_profile: dict[str, Any] | None = None,
     maker_evidence: dict[str, Any] | None = None,
     model_artifact: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     validate_config(config)
-    validate_structural_config(structural_config)
-    validate_registry_authority(config, structural_config, registry)
-    validate_live_scope(config, structural_config, live_scope)
+    validate_registry_authority(config, registry)
+    validate_live_scope(config, live_scope)
     if SHA40.fullmatch(code_sha) is None:
         raise ContractError("exact_code_sha")
     try:
@@ -508,7 +459,6 @@ def freeze(
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--config", type=Path, default=Path("config/v7_crypto_settlement_engine.json"))
-    parser.add_argument("--structural-config", type=Path, default=Path("config/v7_structural_arb_engine.json"))
     parser.add_argument("--registry", type=Path, default=Path("config/v7_strategy_registry.json"))
     parser.add_argument("--live-scope", type=Path, default=Path("config/v7_live_model_scope.json"))
     parser.add_argument("--market-registry", type=Path, default=Path("config/v7_crypto_settlement_markets.json"))
@@ -523,8 +473,7 @@ def main() -> int:
     args = parser.parse_args()
     snapshot = freeze(
         _json(args.config), code_sha=args.code_sha,
-        structural_config=_json(args.structural_config), asset=args.asset,
-        horizon_name=args.horizon,
+        asset=args.asset, horizon_name=args.horizon,
         registry=_json(args.registry),
         live_scope=_json(args.live_scope),
         market_registry=_json(args.market_registry),

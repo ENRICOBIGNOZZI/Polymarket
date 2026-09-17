@@ -120,8 +120,7 @@ def validate(root: Path, expected_head: str | None) -> dict[str, str]:
         "config/v7_crypto_settlement_engine.json", "config/v7_crypto_settlement_markets.json",
         "config/v7_crypto_settlement_model_registry.json", "config/v7_professional_market_maker.json",
         "config/v7_process_manifest.json", "config/v7_authority_registry.json",
-        "config/v7_structural_arb_engine.json",
-        "config/v7_adaptive_universe.json", "schemas/v7/opportunity_envelope.schema.json",
+        "config/v7_crypto_universe.json", "schemas/v7/opportunity_envelope.schema.json",
     )
     for rel in required_files:
         if not (root / rel).is_file():
@@ -133,37 +132,37 @@ def validate(root: Path, expected_head: str | None) -> dict[str, str]:
         for row in registry.get("live_algorithms", [])
         if isinstance(row, dict) and row.get("enabled") is True
     }
-    expected_algorithms = {"CRYPTO_SETTLEMENT_ENGINE", "STRUCTURAL_ARB_ENGINE"}
+    expected_algorithms = {"CRYPTO_SETTLEMENT_ENGINE"}
     if (registry.get("schema") != "polymarket_v7_live_algorithm_registry_v2"
             or enabled_algorithms != expected_algorithms
             or registry.get("component_independent_authority") is not False):
-        fail("V7 cutover blocked: registry must contain exactly the two live algorithms")
+        fail("V7 cutover blocked: registry must contain exactly the crypto live algorithm")
     scope = load_json(root / "config/v7_live_model_scope.json")
     paper_engines = set(scope.get("live_algorithms") or [])
     if (scope.get("schema") != "polymarket_v7_live_engine_scope_v2"
-            or scope.get("version") != 7
-            or scope.get("live_algorithm_count") != 2
+            or scope.get("version") != 8
+            or scope.get("live_algorithm_count") != 1
             or scope.get("paper_only") is not True
             or scope.get("authenticated_execution") is not False
             or scope.get("real_order_submission") is not False
             or scope.get("real_capital_at_risk") is not False
             or scope.get("component_independent_authority") is not False):
-        fail("V7 cutover blocked: two-algorithm scope identity/safety contract invalid")
+        fail("V7 cutover blocked: crypto-only scope identity/safety contract invalid")
     if paper_engines != expected_algorithms:
-        fail("V7 cutover blocked: exactly two economic engines must own PAPER decisions")
+        fail("V7 cutover blocked: exactly one crypto engine must own PAPER decisions")
     invariants = scope.get("runtime_invariants") if isinstance(scope.get("runtime_invariants"), dict) else {}
     if (invariants.get("single_execution_owner") is not True
             or invariants.get("global_portfolio_coordinator") != "V7_GLOBAL_PORTFOLIO_COORDINATOR"):
         fail("V7 cutover blocked: runtime invariant contract invalid")
 
-    adaptive_universe = load_json(root / "config/v7_adaptive_universe.json")
-    if (adaptive_universe.get("schema") != "polymarket_v7_adaptive_universe_config_v1"
-            or adaptive_universe.get("version") != 7
-            or adaptive_universe.get("paper_only") is not True
-            or adaptive_universe.get("authenticated_execution") is not False
-            or adaptive_universe.get("real_order_submission") is not False):
+    crypto_universe = load_json(root / "config/v7_crypto_universe.json")
+    if (crypto_universe.get("schema") != "polymarket_v7_crypto_universe_config_v1"
+            or crypto_universe.get("version") != 1
+            or crypto_universe.get("paper_only") is not True
+            or crypto_universe.get("authenticated_execution") is not False
+            or crypto_universe.get("real_order_submission") is not False):
         fail("V7 cutover blocked: adaptive universe safety contract invalid")
-    resources = adaptive_universe.get("resource_budget") if isinstance(adaptive_universe.get("resource_budget"), dict) else {}
+    resources = crypto_universe.get("resource_budget") if isinstance(crypto_universe.get("resource_budget"), dict) else {}
     if any(not isinstance(resources.get(name), dict) for name in ("hot", "warm", "structural")):
         fail("V7 cutover blocked: adaptive universe resource budgets missing")
 
@@ -196,9 +195,9 @@ def validate(root: Path, expected_head: str | None) -> dict[str, str]:
     v7 = cfg.get("v7")
     if not isinstance(v7, dict):
         fail("V7 cutover blocked: config.v7 must be an object")
-    if v7.get("adaptive_universe_policy") != "config/v7_adaptive_universe.json":
+    if v7.get("crypto_universe_policy") != "config/v7_crypto_universe.json":
         fail("V7 cutover blocked: canonical adaptive universe policy is not configured")
-    for key in ("paper_only","authoritative_fee_required","shared_execution_ledger_required","single_canonical_ledger_writer","joint_fill_state_required_for_multileg","queue_never_grants_size","partial_unwind_required"):
+    for key in ("paper_only","authoritative_fee_required","shared_execution_ledger_required","single_canonical_ledger_writer","queue_never_grants_size"):
         if v7.get(key) is not True:
             fail(f"V7 cutover blocked: v7.{key} must be true")
     if v7.get("authenticated_execution") is not False or v7.get("real_order_submission") is not False:
@@ -220,10 +219,6 @@ def validate(root: Path, expected_head: str | None) -> dict[str, str]:
         fail("V7 cutover blocked: complete fee/slippage/unwind/capital/latency cost vector required")
     if sorted(int(x) for x in v7.get("markout_horizons_seconds") or []) != [1,10,45,60,300]:
         fail("V7 cutover blocked: canonical markout horizons must be 1/10/45/60/300s")
-    if v7.get("hard_arb_fixed_dollar_trade_cap_enabled") is not authorization.get("hard_arb_fixed_dollar_trade_cap_enabled"):
-        fail("V7 cutover blocked: Hard Arb fixed-dollar cap setting does not match operator authority")
-    if number(v7.get("hard_arb_max_trade_fraction"), "v7.hard_arb_max_trade_fraction") > number(authorization.get("hard_arb_max_trade_fraction"), "operator.hard_arb_max_trade_fraction") + 1e-12:
-        fail("V7 cutover blocked: Hard Arb trade fraction exceeds operator ceiling")
 
     head = git(root, "rev-parse", "HEAD")
     if expected_head is not None:

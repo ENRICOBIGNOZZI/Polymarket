@@ -14,9 +14,8 @@ from typing import Any
 
 
 ALLOWED_SOURCES = {
-    "public_clob_rewards",
-    "adaptive_universe_fallback",
-    "adaptive_universe_recent_flow",
+    "crypto_universe_fallback",
+    "crypto_universe_recent_flow",
 }
 # The owning shell grants its children a five-second bounded shutdown window.
 # Finish the nested cohort before that deadline so it can never orphan a WS
@@ -114,7 +113,7 @@ def safe_membership_sha256(value: dict[str, Any]) -> str:
 
 def fresh_flow_eligible(value: dict[str, Any]) -> bool:
     return (
-        value.get("source") == "adaptive_universe_recent_flow"
+        value.get("source") == "crypto_universe_recent_flow"
         and value.get("degraded") is not True
     )
 
@@ -132,8 +131,8 @@ def degraded_fallback_control_refresh_eligible(
     nor acquire normal quote or inventory-seed authority.
     """
     if (
-        runtime.get("source") != "adaptive_universe_fallback"
-        or candidate.get("source") != "adaptive_universe_fallback"
+        runtime.get("source") != "crypto_universe_fallback"
+        or candidate.get("source") != "crypto_universe_fallback"
         or runtime.get("degraded") is not True
         or candidate.get("degraded") is not True
         or candidate.get("selection_mode") != "FLOW_FILLABILITY_FALLBACK"

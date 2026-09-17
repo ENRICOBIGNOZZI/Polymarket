@@ -72,30 +72,15 @@ def _fee(market: dict[str, Any], now_ms: int, ttl_ms: int) -> dict[str, Any]:
 
 def _reward(row: dict[str, Any] | None, snapshot: dict[str, Any], now_ms: int,
             ttl_ms: int) -> dict[str, Any]:
-    public = snapshot.get("source") == "public_clob_rewards" and snapshot.get("reward_data_available") is True
-    max_spread = finite((row or {}).get("rewards_max_spread_cents"))
-    minimum = finite((row or {}).get("rewards_min_size"))
-    daily = finite((row or {}).get("total_daily_rate"))
-    verified = bool(public and row and max_spread > 0.0 and minimum > 0.0 and daily > 0.0)
-    if not verified:
-        return {
-            "verified": False, "eligible": False, "expected_value_usd": 0.0,
-            "maximum_spread_cents": None, "minimum_quote_shares": None,
-            "pool_daily_rate_usd": 0.0, "source": "unknown_reward_forced_zero",
-            "observed_at_ms": now_ms, "expires_at_ms": now_ms,
-            "confidence": 0.0, "scoring_formula": None,
-            "payout_status": "NOT_ATTRIBUTED",
-        }
+    # The canonical selector is crypto-only and performs no global reward-market
+    # discovery. Until a crypto-scoped reward source exists, reward EV is zero.
     return {
-        "verified": True,
-        "eligible": (row or {}).get("reward_touch_qualifies_at_selection") is True,
-        "expected_value_usd": 0.0,
-        "maximum_spread_cents": max_spread, "minimum_quote_shares": minimum,
-        "pool_daily_rate_usd": daily, "source": "public_clob_rewards",
-        "observed_at_ms": int(snapshot.get("timestamp_ms") or now_ms),
-        "expires_at_ms": now_ms + ttl_ms, "confidence": 1.0,
-        "scoring_formula": "relative liquidity score; pool dollars are not guaranteed maker payout",
-        "payout_status": "UNREALIZED_COMPETITION_DEPENDENT",
+        "verified": False, "eligible": False, "expected_value_usd": 0.0,
+        "maximum_spread_cents": None, "minimum_quote_shares": None,
+        "pool_daily_rate_usd": 0.0, "source": "unknown_reward_forced_zero",
+        "observed_at_ms": now_ms, "expires_at_ms": now_ms,
+        "confidence": 0.0, "scoring_formula": None,
+        "payout_status": "NOT_ATTRIBUTED",
     }
 
 
@@ -104,7 +89,7 @@ def build(universe: dict[str, Any], rewards: dict[str, Any], *, model_sha: str,
           reward_ttl_seconds: int = 120) -> dict[str, Any]:
     if not SHA40.fullmatch(model_sha):
         raise ValueError("model_sha:not_exact")
-    if universe.get("schema") != "polymarket_v7_adaptive_universe_snapshot_v1":
+    if universe.get("schema") != "polymarket_v7_crypto_universe_snapshot_v1":
         raise ValueError("universe:schema")
     if universe.get("model_sha") != model_sha or universe.get("paper_only") is not True:
         raise ValueError("universe:identity_or_safety")

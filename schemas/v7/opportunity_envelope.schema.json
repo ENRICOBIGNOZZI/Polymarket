@@ -34,7 +34,7 @@
     "policy_hash": {"type": "string", "pattern": "^[0-9a-f]{40,64}$"},
     "run_id": {"type": "string", "minLength": 1},
     "source_snapshot_identity": {"type": "string", "minLength": 1},
-    "engine_id": {"enum": ["CRYPTO_SETTLEMENT_ENGINE", "STRUCTURAL_ARB_ENGINE"]},
+    "engine_id": {"enum": ["CRYPTO_SETTLEMENT_ENGINE"]},
     "component_provenance": {"type": "array", "minItems": 1, "items": {"type": "string", "minLength": 1}, "uniqueItems": true},
     "market_id": {"type": "string", "minLength": 1},
     "event_id": {"type": "string", "minLength": 1},

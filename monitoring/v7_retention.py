@@ -24,8 +24,8 @@ from typing import Any
 SHA40 = re.compile(r"^[0-9a-f]{40}$")
 DERIVED_CUTOVER_FILES = (
     "universe/current.json",
-    "structural_relations/verified_relations.csv",
-    "reports/v7_arb_coverage_report.json",
+    "universe/status.json",
+    "control/crypto_settlement_engine_snapshot.json",
     "control/fee_reward_registry.json",
 )
 

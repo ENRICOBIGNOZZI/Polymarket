@@ -31,7 +31,7 @@ class V7LedgerMonitoringTest(unittest.TestCase):
         return {
             "schema_version": 1,
             "event_type": event_type,
-            "strategy": "STRUCTURAL_ARB_ENGINE",
+            "strategy": "CRYPTO_SETTLEMENT_ENGINE",
             "model_sha": "a" * 40,
             "paper_only": True,
             "authenticated_execution": False,

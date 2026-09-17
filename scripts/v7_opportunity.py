@@ -23,13 +23,11 @@ ENGINE_COMPONENTS = {
     "CRYPTO_SETTLEMENT_ENGINE": {
         "crypto_settlement_fair", "crypto_informed_taker", "professional_maker",
     },
-    "STRUCTURAL_ARB_ENGINE": {"hard_arb", "fast_structural"},
 }
 ENGINE_ACTIONS = {
     "CRYPTO_SETTLEMENT_ENGINE": {"MAKE", "TAKE", "CANCEL", "WITHDRAW", "NOTHING"},
-    "STRUCTURAL_ARB_ENGINE": {"ARB", "CANCEL", "NOTHING"},
 }
-NEW_RISK_ACTIONS = {"MAKE", "TAKE", "ARB"}
+NEW_RISK_ACTIONS = {"MAKE", "TAKE"}
 SAFE_ACTIONS = {"CANCEL", "WITHDRAW", "NOTHING"}
 COST_FIELDS = (
     "fee", "slippage", "unwind_loss", "capital_cost", "latency_cost",
@@ -171,8 +169,6 @@ class OpportunityEnvelope:
                 or context["authority"] == "SHADOW_ZERO_AUTHORITY"
             ):
                 raise OpportunityError("crypto_context_zero_authority")
-        elif crypto_context is not None:
-            raise OpportunityError("structural_crypto_context_forbidden")
         components = value.get("component_provenance")
         if (
             not isinstance(components, list) or not components
@@ -340,13 +336,6 @@ class OpportunityEnvelope:
                 raise OpportunityError("execution_leg:price")
             if leg.get("fee_authority") not in AUTHORITY_STATES:
                 raise OpportunityError("execution_leg:fee_authority")
-        if action == "ARB" and (
-            len(legs) < 2
-            or execution.get("execution_style") != "SEQUENTIAL_ATOMIC_INTENT"
-            or execution.get("partial_fill_plan") != "COMPLETE_OR_UNWIND"
-            or execution.get("unwind_plan") != "FULL_DEPTH_BOUNDED_UNWIND"
-        ):
-            raise OpportunityError("structural_atomic_execution_plan")
         settlement = _mapping(value.get("settlement"), "settlement")
         if set(settlement) != {"definition", "source", "verified"}:
             raise OpportunityError("settlement_fields")

@@ -126,7 +126,7 @@ class LedgerSpoolTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             event = LedgerEvent(
-                event_type="CANDIDATE", strategy="STRUCTURAL_ARB_ENGINE",
+                event_type="CANDIDATE", strategy="CRYPTO_SETTLEMENT_ENGINE",
                 model_sha=SHA, candidate_id="candidate-1",
                 exchange_ts_ms=1000, receive_ts_ms=1100,
                 decision_ts_ms=1200, book_snapshot_id="book-1",
@@ -141,7 +141,7 @@ class LedgerSpoolTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             event = LedgerEvent(
-                event_type="FILL", strategy="STRUCTURAL_ARB_ENGINE", model_sha=SHA,
+                event_type="FILL", strategy="CRYPTO_SETTLEMENT_ENGINE", model_sha=SHA,
                 order_id="order-1", fill_id="fill-1", side="BUY",
                 token_id="token-1", exchange_ts_ms=1000, receive_ts_ms=1100,
                 fill_price=0.5, filled_size=1.0, fee=0.0,
@@ -159,13 +159,13 @@ class LedgerSpoolTests(unittest.TestCase):
             receipt = {
                 "schema": "polymarket_v7_global_opportunity_decision_v1",
                 "owner": "V7_GLOBAL_PORTFOLIO_COORDINATOR",
-                "engine_id": "STRUCTURAL_ARB_ENGINE",
-                "action": "ARB",
-                "selected_replay_key": "structural-cut-1",
+                "engine_id": "CRYPTO_SETTLEMENT_ENGINE",
+                "action": "TAKE",
+                "selected_replay_key": "crypto-cut-1",
                 "new_risk_authorized": True,
             }
             event = LedgerEvent(
-                event_type="FILL", strategy="STRUCTURAL_ARB_ENGINE", model_sha=SHA,
+                event_type="FILL", strategy="CRYPTO_SETTLEMENT_ENGINE", model_sha=SHA,
                 order_id="order-1", fill_id="fill-1", side="BUY",
                 token_id="token-1", exchange_ts_ms=1000, receive_ts_ms=1100,
                 fill_price=0.5, filled_size=1.0, fee=0.0,

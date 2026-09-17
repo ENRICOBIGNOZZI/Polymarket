@@ -20,7 +20,7 @@ class AuthorityContractTests(unittest.TestCase):
     def test_exactly_one_owner_for_every_authority(self) -> None:
         report = validate(registry())
         self.assertTrue(report["passed"])
-        self.assertEqual(report["economic_engine_count"], 2)
+        self.assertEqual(report["economic_engine_count"], 1)
         self.assertEqual(report["owner_counts"], {key: 1 for key in OWNER_KEYS})
         self.assertEqual(report["legacy_algorithm_count"], 0)
 
@@ -32,11 +32,9 @@ class AuthorityContractTests(unittest.TestCase):
         with self.assertRaisesRegex(AuthorityContractError, "capital_allocator"):
             validate(value)
 
-    def test_component_cannot_belong_to_both_engines(self) -> None:
+    def test_component_cannot_gain_independent_authority(self) -> None:
         value = copy.deepcopy(registry())
-        value["live_algorithms"]["STRUCTURAL_ARB_ENGINE"]["components"].append(
-            "professional_maker"
-        )
+        value["component_independent_authority"] = True
         with self.assertRaises(AuthorityContractError):
             validate(value)
 
