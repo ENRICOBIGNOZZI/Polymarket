@@ -9,7 +9,15 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "ops"))
 
-from v7_london_ssm_benchmark import parse_result, remote_command, send, stack_instances
+from v7_london_ssm_benchmark import (
+    collect_formal_command,
+    detached_formal_command,
+    parse_launch,
+    parse_result,
+    remote_command,
+    send,
+    stack_instances,
+)
 
 
 class LondonSsmBenchmarkTests(unittest.TestCase):
@@ -37,6 +45,47 @@ class LondonSsmBenchmarkTests(unittest.TestCase):
         self.assertNotIn("tailscale up", command)
         with self.assertRaises(ValueError):
             remote_command("bad", "smoke", "ubuntu")
+
+    def test_detached_formal_is_exact_sha_locked_and_non_trading(self) -> None:
+        sha = "b" * 40
+        command = detached_formal_command(sha, "ubuntu", "run-123-euw2-az1")
+        self.assertIn("systemd-run", command)
+        self.assertIn("formal.lock", command)
+        self.assertIn("flock -n", command)
+        self.assertIn("v7_london_benchmark.sh\" formal", command)
+        self.assertIn("! systemctl is-active --quiet polymarket-v7-paper.service", command)
+        self.assertIn(sha, command)
+        self.assertNotIn("systemctl enable --now polymarket-v7-paper", command)
+        self.assertNotIn("real-order", command.lower())
+        with self.assertRaises(ValueError):
+            detached_formal_command(sha, "ubuntu", "bad/run")
+
+    def test_collect_requires_matching_launch_receipt(self) -> None:
+        sha = "c" * 40
+        launch = {
+            "unit": "polymarket-v7-formal-run-123-euw2-az1",
+            "job_dir": "/mnt/polymarket-data/benchmarks/formal-jobs/run-123-euw2-az1",
+            "code_sha": sha,
+        }
+        command = collect_formal_command(sha, "ubuntu", launch)
+        self.assertIn("V7_PENDING=", command)
+        self.assertIn("launch.json", command)
+        self.assertIn("V7_RESULT=", command)
+        with self.assertRaises(ValueError):
+            collect_formal_command("d" * 40, "ubuntu", launch)
+        with self.assertRaises(ValueError):
+            collect_formal_command(sha, "ubuntu", {**launch, "job_dir": "/tmp/no"})
+
+    def test_parse_launch_requires_one_marked_envelope(self) -> None:
+        launch = {
+            "unit": "polymarket-v7-formal-run-123-euw2-az1",
+            "job_dir": "/mnt/polymarket-data/benchmarks/formal-jobs/run-123-euw2-az1",
+            "code_sha": "a" * 40,
+        }
+        payload = json.dumps(launch, separators=(",", ":"))
+        self.assertEqual(parse_launch("V7_LAUNCH=" + payload + "\n"), launch)
+        with self.assertRaisesRegex(ValueError, "exactly one"):
+            parse_launch("no envelope")
 
     def test_send_forces_bash_for_pipefail_remote_command(self) -> None:
         with mock.patch("v7_london_ssm_benchmark.aws_json", return_value={
