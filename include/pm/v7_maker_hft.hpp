@@ -432,6 +432,8 @@ private:
     double ew_aggressive_buy_prints_per_second_ = 0.0;
     double ew_aggressive_sell_prints_per_second_ = 0.0;
     double ew_cancel_intensity_ = 0.0;
+    double cached_tau_decay_ = -1.0;
+    double cached_tau_seconds_ = 0.0;
     std::int64_t previous_feature_monotonic_ns_ = 0;
     std::uint64_t intent_sequence_ = 0;
     std::int64_t last_exploration_quote_ns_ = 0;
