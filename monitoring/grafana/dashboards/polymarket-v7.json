@@ -6194,6 +6194,14 @@
       "includeVars": true,
       "keepTime": true,
       "targetBlank": false
+    },
+    {
+      "title": "Multi-Crypto Performance",
+      "type": "link",
+      "url": "/d/polymarket-v7-multi-crypto",
+      "includeVars": true,
+      "keepTime": true,
+      "targetBlank": false
     }
   ]
 }

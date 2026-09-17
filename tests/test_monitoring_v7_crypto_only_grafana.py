@@ -23,7 +23,10 @@ def panels(value: dict):
 
 def test_every_operator_dashboard_is_explicitly_crypto() -> None:
     values = loaded()
-    assert len(values) == 3
+    assert {dashboard["uid"] for dashboard in values} == {
+        "polymarket-v7", "polymarket-v7-external-fair",
+        "polymarket-v7-latency", "polymarket-v7-multi-crypto",
+    }
     for dashboard in values:
         assert "Crypto" in dashboard.get("title", "")
         assert "crypto" in (dashboard.get("tags") or [])

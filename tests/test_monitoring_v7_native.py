@@ -10,6 +10,8 @@ SPEC = importlib.util.spec_from_file_location("exporter_v7", MONITORING / "expor
 assert SPEC and SPEC.loader
 exporter = importlib.util.module_from_spec(SPEC); sys.modules[SPEC.name] = exporter; SPEC.loader.exec_module(exporter)
 
+from v7_execution_ledger import LedgerEvent
+
 
 class V7NativeMonitoringTest(unittest.TestCase):
     @staticmethod
@@ -73,6 +75,19 @@ class V7NativeMonitoringTest(unittest.TestCase):
             self.assertIn('polymarket_v7_latency_source_present{source="professional_maker"} 1',metrics)
         dashboard=(ROOT/"monitoring/grafana/dashboards/polymarket-v7-latency.json").read_text().lower()
 
+    def _canonical_lead_lag_final(self, root: Path, pnl: float = 2.0) -> None:
+        common = dict(strategy="CRYPTO_SETTLEMENT_ENGINE", model_sha=self._sha(),
+                      order_id="lead-lag-fixture", recorded_ts_ms=999000,
+                      metadata={"model_family": "lead_lag_taker_v1",
+                                "coordinator_receipt": {"owner": "V7_GLOBAL_PORTFOLIO_COORDINATOR"}})
+        fill = LedgerEvent(event_type="FILL", fill_id="fixture-fill", token_id="yes",
+                           side="BUY", filled_size=5.0, fill_price=.4, fee=0.0,
+                           exchange_ts_ms=998998, receive_ts_ms=998999,
+                           fee_source="TEST_AUTHORITATIVE", **common)
+        final = LedgerEvent(event_type="FINAL", final_pnl=pnl, **common)
+        (root / "ledger/execution.jsonl").write_text(
+            "".join(json.dumps(event.to_dict()) + "\n" for event in (fill, final)))
+
     def test_crypto_state_pnl_aggregates_lead_lag_component(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory) / "paper_v7_live"
@@ -92,6 +107,7 @@ class V7NativeMonitoringTest(unittest.TestCase):
                 "model_families_observed": ["lead_lag_taker_v1"],
             })
             self._write(canonical_path, canonical)
+            self._canonical_lead_lag_final(root)
             snapshot = exporter.collect_snapshot(root, ROOT, now=1000)
             components = snapshot["state_realized_pnl_components"]["CRYPTO_SETTLEMENT_ENGINE"]
             self.assertEqual(components["external_fair"], 0.0)
@@ -114,6 +130,7 @@ class V7NativeMonitoringTest(unittest.TestCase):
                 "model_families_observed": ["lead_lag_taker_v1"],
             })
             self._write(canonical_path, canonical)
+            self._canonical_lead_lag_final(root)
             snapshot = exporter.collect_snapshot(root, ROOT, now=1000)
             self.assertFalse(snapshot["state_realized_pnl_components"]["CRYPTO_SETTLEMENT_ENGINE"]["complete"])
             self.assertIn(

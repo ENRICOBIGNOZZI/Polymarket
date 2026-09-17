@@ -872,7 +872,7 @@ public:
         std::string_view payload) noexcept override {
         // Trade/control frames belong to generic ingress. A byte prefilter
         // avoids a full JSON parse solely to discover that fact.
-        if (payload.find("orderbook.50.BTCUSDT") == std::string_view::npos) {
+        if (payload.find(topic_prefix_) == std::string_view::npos) {
             return ExternalFrameDisposition::PassToIngress;
         }
         try {

@@ -34,7 +34,7 @@ class FakeEc2:
     def describe_instance_type_offerings(self, **kwargs):
         assert kwargs["LocationType"] == "availability-zone"
         return {"InstanceTypeOfferings": [
-            {"InstanceType": "c7i.large"}, {"InstanceType": "c6i.large"}
+            {"InstanceType": "c7a.2xlarge"}, {"InstanceType": "c8a.2xlarge"}
         ]}
 
     def describe_subnets(self, **kwargs):
@@ -104,15 +104,15 @@ class LondonProvisionTests(unittest.TestCase):
                  security_group_id=SG, key_name="key", iam_instance_profile=None)
 
     def test_common_instance_type_must_exist_in_every_zone(self):
-        offerings = {zone: {"c7i.large", "c6i.large"} for zone in ZONE_IDS}
+        offerings = {zone: {"c7a.2xlarge", "c8a.2xlarge"} for zone in ZONE_IDS}
         self.assertEqual(choose_common_instance_type(
-            ["c7a.large", "c7i.large", "c6i.large"], offerings), "c7i.large")
-        offerings["euw2-az3"] = {"c6i.large"}
+            ["c8i.2xlarge", "c7a.2xlarge", "c8a.2xlarge"], offerings), "c7a.2xlarge")
+        offerings["euw2-az3"] = {"c8a.2xlarge"}
         self.assertEqual(choose_common_instance_type(
-            ["c7i.large", "c6i.large"], offerings), "c6i.large")
-        offerings["euw2-az2"] = {"c7i.large"}
+            ["c7a.2xlarge", "c8a.2xlarge"], offerings), "c8a.2xlarge")
+        offerings["euw2-az2"] = {"c7a.2xlarge"}
         with self.assertRaisesRegex(ProvisionError, "NO_COMMON_INSTANCE_TYPE"):
-            choose_common_instance_type(["c7i.large", "c6i.large"], offerings)
+            choose_common_instance_type(["c7a.2xlarge", "c8a.2xlarge"], offerings)
 
     def test_apply_launches_exactly_one_host_per_physical_zone_and_starts_nothing(self):
         provision_plan = plan(
@@ -131,7 +131,7 @@ class LondonProvisionTests(unittest.TestCase):
         self.assertEqual({row["physical_zone_id"] for row in receipt["instances"]},
                          set(ZONE_IDS))
         for call in FakeSession.ec2.run_calls:
-            self.assertEqual(call["InstanceType"], "c7i.large")
+            self.assertEqual(call["InstanceType"], "c8a.2xlarge")
             self.assertEqual(call["MetadataOptions"]["HttpTokens"], "required")
             self.assertEqual(call["SecurityGroupIds"], [SG])
 

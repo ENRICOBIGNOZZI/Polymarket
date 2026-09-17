@@ -8,18 +8,20 @@
   "id": null,
   "links": [
     {
+      "title": "Crypto Control Room",
       "type": "link",
-      "title": "V7 Control Room",
-      "url": "/d/polymarket-v7/polymarket-v7-canonical-paper-economics",
-      "targetBlank": false,
-      "icon": "external link"
+      "url": "/d/polymarket-v7",
+      "includeVars": true,
+      "keepTime": true,
+      "targetBlank": false
     },
     {
+      "title": "Crypto Latency",
       "type": "link",
-      "title": "V7 Latency",
-      "url": "/d/polymarket-v7-latency/polymarket-v7-latency",
-      "targetBlank": false,
-      "icon": "external link"
+      "url": "/d/polymarket-v7-latency",
+      "includeVars": true,
+      "keepTime": true,
+      "targetBlank": false
     }
   ],
   "liveNow": false,
@@ -300,7 +302,7 @@
     {
       "id": 10,
       "type": "row",
-      "title": "PERFORMANCE \u2014 portfolio first",
+      "title": "PERFORMANCE — portfolio first",
       "gridPos": {
         "h": 1,
         "w": 24,
@@ -447,7 +449,7 @@
     {
       "id": 20,
       "type": "row",
-      "title": "ASSET \u00d7 HORIZON",
+      "title": "ASSET × HORIZON",
       "gridPos": {
         "h": 1,
         "w": 24,
@@ -891,7 +893,7 @@
         {
           "expr": "polymarket_mc_strategy_realized_pnl_usd{asset=~\"$asset\",horizon=~\"$horizon\",strategy=~\"$strategy\"}",
           "refId": "A",
-          "legendFormat": "{{strategy}} \u00b7 {{asset}} {{horizon}}"
+          "legendFormat": "{{strategy}} · {{asset}} {{horizon}}"
         }
       ],
       "fieldConfig": {
@@ -1397,7 +1399,7 @@
         "type": "prometheus",
         "uid": "prometheus-v7"
       },
-      "description": "Ready active markets; target is 12 = 6 assets \u00d7 M5/M15.",
+      "description": "Ready active markets; target is 12 = 6 assets × M5/M15.",
       "targets": [
         {
           "expr": "polymarket_mc_shadow_contract_ready_markets",
@@ -1645,7 +1647,7 @@
         "type": "prometheus",
         "uid": "prometheus-v7"
       },
-      "description": "Expected full universe is 12 = 6 assets \u00d7 2 horizons.",
+      "description": "Expected full universe is 12 = 6 assets × 2 horizons.",
       "targets": [
         {
           "expr": "polymarket_mc_registered_lanes",
@@ -1811,7 +1813,7 @@
         "type": "prometheus",
         "uid": "prometheus-v7"
       },
-      "description": "Must be zero for clean asset\u00d7horizon attribution.",
+      "description": "Must be zero for clean asset×horizon attribution.",
       "targets": [
         {
           "expr": "polymarket_mc_unattributed_final_rows",
@@ -2029,11 +2031,12 @@
   "refresh": "5s",
   "schemaVersion": 39,
   "tags": [
-    "polymarket",
-    "v7",
+    "crypto",
     "multi-crypto",
     "paper",
-    "performance"
+    "performance",
+    "polymarket",
+    "v7"
   ],
   "templating": {
     "list": [

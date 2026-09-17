@@ -95,7 +95,17 @@
     "monitoring/v7_maker_fillability_exact.py",
     "monitoring/v7_maker_microstructure.py",
     "monitoring/v7_operator_truth.py",
-    "config/runtime/paper.json"
+    "config/runtime/paper.json",
+    "config/operator_directives.json",
+    "config/v7_execution_modes.json",
+    "config/v7_profit_experiment.json",
+    "monitoring/prometheus_v7.yml",
+    "monitoring/grafana/provisioning/datasources/prometheus-v7.yml",
+    "monitoring/grafana/provisioning/dashboards/v7.yml",
+    "monitoring/grafana/dashboards/polymarket-v7-external-fair.json",
+    "monitoring/grafana/dashboards/polymarket-v7-latency.json",
+    "monitoring/grafana/dashboards/polymarket-v7-multi-crypto.json",
+    "monitoring/grafana/dashboards/polymarket-v7.json"
   ],
-  "version": 1
+  "version": 2
 }

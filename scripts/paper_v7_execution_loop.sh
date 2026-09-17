@@ -306,6 +306,7 @@ v7_exec_class HOT_PATH "$EXTERNAL_VENUE_RUNTIME" \
   --disk-pressure-min-free-bytes "$DISK_PRESSURE_MIN_FREE_BYTES" \
   --external-cancel-signal "$RUN_ROOT/external_fair/external_cancel_signal.json" \
   --external-cancel-rule-sha256 "$EXTERNAL_CANCEL_RULE_SHA" \
+  --event-driven-ingress \
   >> "$RUN_ROOT/external_fair/external_venues.log" 2>&1 &
 v7_register_child "$!"
 

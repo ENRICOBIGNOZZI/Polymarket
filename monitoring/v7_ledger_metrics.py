@@ -59,6 +59,7 @@ def summarize_ledger(path: Path) -> dict[str, Any]:
         "invalid_rows": 0,
         "invalid_reason_counts": {},
         "model_shas": [],
+        "model_families_observed": [],
         "strategies": {},
         "total": _blank(),
     }
@@ -67,6 +68,7 @@ def summarize_ledger(path: Path) -> dict[str, Any]:
         return result
     result["present"] = True
     shas: set[str] = set()
+    model_families: set[str] = set()
     strategies: dict[str, dict[str, Any]] = {}
     journal_tips: dict[str, str] = {}
     try:
@@ -124,6 +126,10 @@ def summarize_ledger(path: Path) -> dict[str, Any]:
                     result["invalid_reason_counts"][reason] = result["invalid_reason_counts"].get(reason, 0) + 1
                 continue
             shas.add(model_sha)
+            metadata = row.get("metadata") if isinstance(row.get("metadata"), dict) else {}
+            family = metadata.get("model_family") or metadata.get("component")
+            if isinstance(family, str) and family.strip():
+                model_families.add(family.strip())
             target = strategies.setdefault(strategy, _blank())
             for aggregate in (target, result["total"]):
                 if event_type == "OPPORTUNITY":
@@ -176,6 +182,7 @@ def summarize_ledger(path: Path) -> dict[str, Any]:
                     aggregate["markout_count"][horizon] += 1
 
     result["model_shas"] = sorted(shas)
+    result["model_families_observed"] = sorted(model_families)
     result["strategies"] = strategies
     result["valid"] = result["invalid_rows"] == 0 and len(shas) <= 1
     return result
