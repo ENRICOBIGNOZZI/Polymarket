@@ -46,6 +46,28 @@ int main() {
     std::cout.write(sig.data(), static_cast<std::streamsize>(sig_size));
     std::cout << "\n";
 
+    // The production signer is intentionally reusable and single-owner.
+    for (int i = 0; i < 4; ++i) {
+        std::array<char, 64> repeated{};
+        const auto repeated_size = signer.sign(
+            "1789670000", std::string_view(body.data(), body_size), repeated);
+        if (repeated_size != sig_size
+            || std::string_view(repeated.data(), repeated_size)
+                != std::string_view(sig.data(), sig_size)) return 8;
+    }
+
+    // HMAC keys longer than one SHA-256 block must first be hashed per RFC 2104.
+    L2HmacSigner long_key(
+        "AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8gISIjJCUmJygpKissLS4v"
+        "MDEyMzQ1Njc4OTo7PD0+P0BBQkNERUZHSElKS0xNTk8=");
+    if (!long_key.valid()) return 9;
+    std::array<char, 64> long_sig{};
+    const auto long_sig_size = long_key.sign(
+        "1789670000", std::string_view(body.data(), body_size), long_sig);
+    if (long_sig_size == 0) return 10;
+    std::cout.write(long_sig.data(), static_cast<std::streamsize>(long_sig_size));
+    std::cout << "\n";
+
     std::array<char, 16> too_small{};
     if (serialize_post_market_order(request, too_small) != 0) return 5;
     request.order.expiration = "1";
@@ -98,8 +120,8 @@ def test_native_clob_exact_body_and_l2_hmac() -> None:
         result = subprocess.run([str(binary)], check=True, capture_output=True, text=True)
 
     lines = result.stdout.splitlines()
-    assert len(lines) == 2
-    body, signature = lines
+    assert len(lines) == 3
+    body, signature, long_signature = lines
     expected_body = (
         '{"deferExec":false,"order":{'
         '"builder":"0x0000000000000000000000000000000000000000000000000000000000000000",'
@@ -123,3 +145,12 @@ def test_native_clob_exact_body_and_l2_hmac() -> None:
         hmac.new(b"abc", message, hashlib.sha256).digest()
     ).decode()
     assert signature == expected_signature
+
+    long_secret = bytes(range(80))
+    expected_long_signature = base64.urlsafe_b64encode(
+        hmac.new(long_secret, message, hashlib.sha256).digest()
+    ).decode()
+    assert long_signature == expected_long_signature
+
+if __name__ == "__main__":
+    test_native_clob_exact_body_and_l2_hmac()

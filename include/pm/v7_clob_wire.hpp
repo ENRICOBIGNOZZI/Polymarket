@@ -1,15 +1,13 @@
 #pragma once
 
-#include <array>
 #include <cstddef>
 #include <cstdint>
 #include <span>
 #include <string_view>
 
-struct evp_mac_st;
-struct evp_mac_ctx_st;
-
 namespace pm::v7::clob_wire {
+
+struct L2HmacState;
 
 // Narrow hot-path contract for already EIP-712-signed CLOB market orders.
 // The wallet/order signature is intentionally outside this component.
@@ -43,11 +41,13 @@ struct PostMarketOrderView {
 [[nodiscard]] std::size_t serialize_post_market_order(
     const PostMarketOrderView& request, std::span<char> output) noexcept;
 
-// Single-owner, reusable CLOB L2 signer. Construction is cold-path; sign() is
-// reuses a cold-path OpenSSL MAC context and hashes timestamp + "POST" +
-// "/order" + exact_body without application-side message concatenation.
+// Single-owner, reusable CLOB L2 signer. Construction is cold-path and builds
+// the HMAC-SHA256 inner/outer seed states once. sign() copies those fixed states
+// and hashes only timestamp + "POST" + "/order" + exact_body.
 class L2HmacSigner final {
 public:
+    static constexpr std::size_t kEncodedSignatureSize = 44;
+
     explicit L2HmacSigner(std::string_view base64_secret) noexcept;
     ~L2HmacSigner();
 
@@ -56,7 +56,7 @@ public:
     L2HmacSigner(L2HmacSigner&&) = delete;
     L2HmacSigner& operator=(L2HmacSigner&&) = delete;
 
-    [[nodiscard]] bool valid() const noexcept { return valid_; }
+    [[nodiscard]] bool valid() const noexcept { return state_ != nullptr; }
 
     // URL-safe base64 with padding, matching POLY_SIGNATURE. Returns bytes
     // written (normally 44 for HMAC-SHA256) or zero on failure.
@@ -66,11 +66,7 @@ public:
         std::span<char> output) noexcept;
 
 private:
-    std::array<unsigned char, 128> key_{};
-    std::size_t key_size_ = 0;
-    evp_mac_st* mac_ = nullptr;
-    evp_mac_ctx_st* ctx_ = nullptr;
-    bool valid_ = false;
+    L2HmacState* state_ = nullptr;
 };
 
 } // namespace pm::v7::clob_wire

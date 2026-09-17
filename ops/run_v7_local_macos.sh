@@ -32,7 +32,7 @@ done
 if [[ -n "$missing" ]]; then
   if [[ "$INSTALL_DEPS" == "1" ]]; then
     log "Installing missing local dependencies with Homebrew:$missing"
-    brew install cmake pkg-config prometheus grafana
+    brew install cmake pkg-config prometheus grafana secp256k1
   else
     fail "missing local dependencies:$missing (set POLYMARKET_LOCAL_INSTALL_DEPS=1 to install with Homebrew)"
   fi

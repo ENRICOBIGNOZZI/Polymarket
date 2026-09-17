@@ -40,6 +40,21 @@ HISTORICAL_SELF_TEST_FIXTURES = frozenset({"tests/test_v7_secret_scan.py"})
 # of redacted identity so a changed path, blob, detector kind, or fingerprint
 # remains a blocking finding.
 HISTORICAL_FALSE_POSITIVE_EXEMPTIONS = frozenset({
+    # Two immutable test blobs used an all-zero UUID as a synthetic CLOB API
+    # key. The value is a public null fixture, not a credential. Keep this
+    # exemption bound to exact blob identity, path, detector kind and fingerprint.
+    (
+        "assigned_secret",
+        "ed2bd016feda3a1631c2c364ec979aedc5b2dca9",
+        "tests/v7_native_clob_order_lane_driver.cpp",
+        "12b9377cbe7e5c94",
+    ),
+    (
+        "assigned_secret",
+        "b1a31e3f37f7fa62b5fd32ef3f71ff0ad19d5690",
+        "tests/v7_native_clob_order_lane_driver.cpp",
+        "12b9377cbe7e5c94",
+    ),
     (
         "assigned_secret",
         "7e699ba157704d9243b9aefd42d38b79ab5ac264",

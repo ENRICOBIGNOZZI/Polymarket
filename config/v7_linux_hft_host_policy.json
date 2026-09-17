@@ -1,0 +1,38 @@
+{
+  "schema": "polymarket_v7_linux_hft_host_policy_v1",
+  "version": 2,
+  "paper_only": true,
+  "hard_requirements": {
+    "linux": true,
+    "minimum_visible_cpus": 8,
+    "minimum_physical_cores": 8,
+    "maximum_threads_per_core": 1
+  },
+  "hot_path": {
+    "cpu_count": 4,
+    "require_isolcpus": true,
+    "require_nohz_full": true,
+    "require_rcu_nocbs": true
+  },
+  "baseline_jitter_requirements": {
+    "transparent_hugepages_never": true,
+    "swappiness_maximum": 1,
+    "numa_balancing_disabled": true,
+    "nmi_watchdog_disabled": true,
+    "performance_governor_when_available": true
+  },
+  "network_measurement": {
+    "manual_irq_policy_requires_irqbalance_off": true,
+    "decision_cpu_must_not_receive_ena_queue_irqs": true,
+    "rps_xps_must_be_observed": true,
+    "coalescing_must_be_observed": true
+  },
+  "benchmark_only_not_defaults": [
+    "SO_BUSY_POLL",
+    "ENA_INTERRUPT_MODERATION_ZERO",
+    "MANUAL_ENA_IRQ_PINNING",
+    "DEEP_CSTATE_DISABLE",
+    "AF_XDP",
+    "DPDK"
+  ]
+}
