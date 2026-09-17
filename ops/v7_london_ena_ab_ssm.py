@@ -28,10 +28,6 @@ def remote_command(sha: str, zone: str, service_user: str,
 APP={shlex.quote(app)}
 RUN=/mnt/polymarket-data/paper_v7_london
 OUT={shlex.quote(output)}
-LOCK=/mnt/polymarket-data/benchmarks/ena-ab.lock
-mkdir -p /mnt/polymarket-data/benchmarks
-exec 9>""
-flock -n 9 || { echo "ENA A/B lock busy" >&2; exit 73; }
 [[ "$(sudo -u {service_user} git -C "$APP" rev-parse HEAD)" == "{sha}" ]]
 python3 -c 'import json; v=json.load(open("'$RUN'/bootstrap_receipt.json")); assert v["code_sha"]=="{sha}" and v["systemd_installed_but_disabled"] is True and v["paper_only"] is True and v["authenticated_execution"] is False and v["real_order_submission"] is False'
 ! systemctl is-active --quiet polymarket-v7-paper.service

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import fcntl
 import json
 import os
 import re
@@ -157,6 +158,17 @@ def valid_sha(value: str) -> bool:
     return len(value) == 40 and all(ch in "0123456789abcdef" for ch in value)
 
 
+def acquire_host_lock():
+    path = Path("/run/lock/polymarket-v7-ena-ab.lock")
+    handle = path.open("a+", encoding="utf-8")
+    try:
+        fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except BlockingIOError as error:
+        handle.close()
+        raise RuntimeError("ENA A/B host lock busy") from error
+    return handle
+
+
 def preflight(args: argparse.Namespace) -> None:
     if os.name != "posix" or not Path("/proc").is_dir():
         raise RuntimeError("Linux /proc host required")
@@ -190,6 +202,8 @@ def main() -> int:
         raise SystemExit("interval-ms out of range")
     if args.settle_seconds < 0 or args.settle_seconds > 30:
         raise SystemExit("settle-seconds out of range")
+    host_lock = acquire_host_lock()
+    _ = host_lock
     preflight(args)
     interface = default_interface()
     baseline_state = capture(interface)

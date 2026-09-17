@@ -76,11 +76,17 @@ def test_profiles_are_interleaved_and_rollback_verified() -> None:
     assert 'safe.directory={args.app}' in source
 
 
+def test_core_ena_ab_serializes_all_callers() -> None:
+    source = SCRIPT.read_text(encoding="utf-8")
+    assert "fcntl.LOCK_EX | fcntl.LOCK_NB" in source
+    assert "/run/lock/polymarket-v7-ena-ab.lock" in source
+    assert "ENA A/B host lock busy" in source
+
+
 def test_ssm_wrapper_is_three_zone_paper_only() -> None:
     source = SSM.read_text(encoding="utf-8")
     assert "for zone, instance_id in instances.items()" in source
     assert "polymarket-v7-paper.service" in source
-    assert "flock -n 9" in source
     assert 'v["authenticated_execution"] is False' in source
     assert 'v["real_order_submission"] is False' in source
     assert "v['persistent_tuning'] is False" in source
