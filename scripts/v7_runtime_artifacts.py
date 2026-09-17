@@ -14,7 +14,10 @@ def sha256(path:Path)->str:
     return h.hexdigest()
 
 def fnv1a64(path:Path)->str:
-    value=14695981039346656037
+    # Preserve the canonical V7 identity used by maker evidence, C++ replay,
+    # markout observation and authorized PAPER execution. This offset is part
+    # of the persisted artifact/evidence contract and must remain in parity.
+    value=1469598103934665603
     for b in path.read_bytes():
         value ^= b; value=(value*1099511628211)&0xFFFFFFFFFFFFFFFF
     return f"{value:016x}"
