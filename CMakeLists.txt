@@ -50,7 +50,9 @@ add_library(pm_v7_common
   src/v7_markout.cpp
   src/v7_market_ws.cpp
   src/v7_capital.cpp
-  src/v7_execution_admission.cpp)
+  src/v7_execution_admission.cpp
+  src/v7_crypto_decision_lane.cpp
+  src/v7_native_order_tx.cpp)
 target_include_directories(pm_v7_common PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/include ${Boost_INCLUDE_DIRS})
 target_link_libraries(pm_v7_common PUBLIC pm_json)
 target_compile_options(pm_v7_common PRIVATE -Wall -Wextra -Wpedantic)
@@ -128,6 +130,14 @@ endif()
 
 if(NOT PM_LONDON_RUNTIME_ONLY)
 # Offline queue-handoff comparison; no market or execution authority.
+add_executable(polymarket_v7_crypto_decision_bench src/v7_crypto_decision_bench.cpp)
+target_link_libraries(polymarket_v7_crypto_decision_bench PRIVATE pm_v7_external)
+target_compile_options(polymarket_v7_crypto_decision_bench PRIVATE -Wall -Wextra -Wpedantic)
+
+add_executable(polymarket_v7_crypto_to_oms_bench src/v7_crypto_to_oms_bench.cpp)
+target_link_libraries(polymarket_v7_crypto_to_oms_bench PRIVATE pm_v7_external pm_v7_common)
+target_compile_options(polymarket_v7_crypto_to_oms_bench PRIVATE -Wall -Wextra -Wpedantic)
+
 add_executable(polymarket_v7_feed_race_probe src/v7_feed_race_probe.cpp)
 target_link_libraries(polymarket_v7_feed_race_probe PRIVATE pm_v7_external)
 target_compile_options(polymarket_v7_feed_race_probe PRIVATE -Wall -Wextra -Wpedantic)
@@ -221,6 +231,16 @@ if(BUILD_TESTING)
   add_executable(pm_v7_execution_admission_tests tests/test_v7_execution_admission.cpp)
   target_link_libraries(pm_v7_execution_admission_tests PRIVATE pm_v7_common)
   add_test(NAME pm_v7_execution_admission_tests COMMAND pm_v7_execution_admission_tests)
+
+  add_executable(pm_v7_crypto_decision_lane_tests tests/test_v7_crypto_decision_lane.cpp)
+  target_link_libraries(pm_v7_crypto_decision_lane_tests PRIVATE pm_v7_common)
+  target_compile_options(pm_v7_crypto_decision_lane_tests PRIVATE -UNDEBUG)
+  add_test(NAME pm_v7_crypto_decision_lane_tests COMMAND pm_v7_crypto_decision_lane_tests)
+
+  add_executable(pm_v7_native_order_tx_tests tests/test_v7_native_order_tx.cpp)
+  target_link_libraries(pm_v7_native_order_tx_tests PRIVATE pm_v7_common)
+  target_compile_options(pm_v7_native_order_tx_tests PRIVATE -UNDEBUG)
+  add_test(NAME pm_v7_native_order_tx_tests COMMAND pm_v7_native_order_tx_tests)
 
 
 
