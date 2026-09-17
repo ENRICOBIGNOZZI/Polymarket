@@ -1,0 +1,19 @@
+{
+  "schema": "polymarket_v7_multi_crypto_shock_calibration_policy_v1",
+  "version": 1,
+  "paper_only": true,
+  "authenticated_execution": false,
+  "real_order_submission": false,
+  "execution_authority": false,
+  "research_only": true,
+  "shock_window_ms": 100,
+  "minimum_shock_observations": 200,
+  "cluster_seconds": 300,
+  "minimum_time_clusters": 20,
+  "training_cluster_fraction": 0.6,
+  "sigma_floor_quantile": 0.05,
+  "absolute_z_quantiles": [0.9, 0.95, 0.975, 0.99, 0.995],
+  "selected_threshold": null,
+  "selection_policy": "NO_THRESHOLD_SELECTION_FROM_CURRENT_FORWARD",
+  "calibration_scope": "COMMON_AND_PER_ASSET_CANDIDATES_ONLY"
+}

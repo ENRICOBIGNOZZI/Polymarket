@@ -1,0 +1,33 @@
+{
+  "attribution_uses_single_canonical_ledger": true,
+  "authenticated_execution": false,
+  "canonical_repository_sha": "940be03872027e3219a2bf1db5e59263d66110a9",
+  "canonical_runtime_active": false,
+  "claim_boundary": "Read-only audit of historical PAPER accounting; no claim of real-money execution or profitability.",
+  "duplicate_fill_ids_within_fill_events": 0,
+  "duplicate_final_fill_ids": 0,
+  "duplicate_record_ids": 0,
+  "duplicate_terminal_ids": 0,
+  "fill_events": 32,
+  "fill_final_one_to_one": true,
+  "final_events": 32,
+  "ledger_path": "runs/paper_v7_live/ledger/execution.jsonl",
+  "ledger_rows": 1203,
+  "observed_at_ns": 1789627961901373000,
+  "open_orders": 0,
+  "orders": 401,
+  "paper_only": true,
+  "real_order_submission": false,
+  "reconciliation_state": "AVAILABLE",
+  "schema": "polymarket_v7_multi_crypto_ledger_recovery_audit_v1",
+  "spool_files": 0,
+  "terminal_orders": 401,
+  "tests": [
+    "test_v7_execution_ledger.py",
+    "test_v7_ledger_spool.py",
+    "test_v7_portfolio_reconciliation.py",
+    "integration_v7_trade_recorder_recovery.py",
+    "test_monitoring_v7_ledger.py"
+  ],
+  "timestamp_inversions": 0
+}

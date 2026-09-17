@@ -3,7 +3,7 @@ from __future__ import annotations
 import json, struct, sys, tempfile
 from pathlib import Path
 ROOT=Path(__file__).resolve().parents[1]; sys.path.insert(0,str(ROOT/'scripts'))
-from v7_multi_crypto_compact_pm_tape import RECORD, build_timelines, load_manifest, pair_asof, read_records, validate_status
+from v7_multi_crypto_compact_pm_tape import RECORD, RECORD_V2, build_indexed_timelines, build_timelines, discover_sessions, load_manifest, pair_asof, pair_asof_indexed, read_records, session_for_origin, validate_status
 SHA='a'*40
 
 def manifest(tmp: Path) -> Path:
@@ -71,6 +71,64 @@ def test_status_requires_complete_no_reconnect_evidence():
         try: validate_status(status,m)
         except ValueError as exc: assert 'reconnect' in str(exc)
         else: raise AssertionError('reconnect accepted')
+
+
+def write_session(tmp: Path, session: str, start_seq: int, wall: int, *, reconnects: int = 0):
+    mp=manifest(tmp); value=json.loads(mp.read_text()); value["observer_session_id"]=session
+    target=tmp/f"{session}.manifest.json"; target.write_text(json.dumps(value)); mp.unlink()
+    payload=rec(start_seq,1,wall,4900,5100)+rec(start_seq+1,2,wall,4900,5100)
+    (tmp/f"{session}.current.bin").write_bytes(payload)
+    status={"paper_only":True,"authenticated_execution":False,"real_order_submission":False,
+            "model_sha":SHA,"observer_session_id":session,"evidence_complete":True,
+            "compact_label_tape_enabled":True,"compact_label_record_size":64,"compact_label_records":2,
+            "dropped_events":0,"decoder_failures":0,"reconnects":reconnects,"feed_reconnects":0}
+    (tmp/f"{session}.status.json").write_text(json.dumps(status))
+
+
+def test_session_discovery_keeps_restart_boundaries_separate():
+    with tempfile.TemporaryDirectory() as td:
+        tmp=Path(td); write_session(tmp,'s1',1,1000); write_session(tmp,'s2',1,2000)
+        sessions=discover_sessions(tmp,expected_sha=SHA)
+        assert [s['session_id'] for s in sessions]==['s1','s2']
+        assert session_for_origin(sessions,'m',1000)['session_id']=='s1'
+        assert session_for_origin(sessions,'m',1500) is None
+        assert session_for_origin(sessions,'m',2000)['session_id']=='s2'
+
+
+def test_session_discovery_rejects_missing_status_and_reconnect():
+    with tempfile.TemporaryDirectory() as td:
+        tmp=Path(td); write_session(tmp,'s1',1,1000); (tmp/'s1.status.json').unlink()
+        try: discover_sessions(tmp,expected_sha=SHA)
+        except ValueError as exc: assert 'session_status_missing' in str(exc)
+        else: raise AssertionError('missing status accepted')
+    with tempfile.TemporaryDirectory() as td:
+        tmp=Path(td); write_session(tmp,'s1',1,1000,reconnects=1)
+        try: discover_sessions(tmp,expected_sha=SHA)
+        except ValueError as exc: assert 'reconnect_present' in str(exc)
+        else: raise AssertionError('reconnect session accepted')
+
+
+def test_indexed_pair_matches_plain_pair():
+    with tempfile.TemporaryDirectory() as td:
+        tmp=Path(td); mp=manifest(tmp); tape=tmp/'t.bin'
+        tape.write_bytes(rec(1,1,1000,4900,5100)+rec(2,2,1000,4900,5100)+rec(3,1,1050,5000,5200)+rec(4,2,1050,4800,5000))
+        rows=read_records([tape],load_manifest(mp,SHA)); plain=pair_asof(build_timelines(rows),'m',1050); fast=pair_asof_indexed(build_indexed_timelines(rows),'m',1050)
+        assert fast==plain
+
+
+def manifest_v2(tmp: Path) -> Path:
+    value={"schema":"polymarket_v7_compact_pm_label_tape_manifest_v2","version":2,"record_schema":"polymarket_v7_compact_pm_label_record_v2","record_size":80,"byte_order":"little_endian","model_sha":SHA,"observer_session_id":"s2","paper_only":True,"authenticated_execution":False,"real_order_submission":False,"execution_authority":"ZERO_AUTHORITY_RESEARCH_ONLY","selection_only":True,"tokens":[{"instrument_handle":1,"market_handle":1,"market_id":"m","event_id":"e","token_id":"y","outcome":"YES","initial_tick_e4":100},{"instrument_handle":2,"market_handle":1,"market_id":"m","event_id":"e","token_id":"n","outcome":"NO","initial_tick_e4":100}]}
+    path=tmp/'v2.json';path.write_text(json.dumps(value));return path
+
+def rec_v2(seq,handle,wall,bid,ask,bid_depth,ask_depth,epoch=1,valid=1,lineage=1,tick=100):
+    return RECORD_V2.pack(seq,handle,seq,epoch,wall,wall*1_000_000,bid,ask,tick,bid_depth,ask_depth,valid,lineage,1,0)
+
+def test_v2_depth_roundtrip_and_pair_exposes_l1_capacity():
+    with tempfile.TemporaryDirectory() as td:
+        tmp=Path(td);mp=manifest_v2(tmp);tape=tmp/'v2.bin'
+        tape.write_bytes(rec_v2(1,1,1000,4900,5100,5_000_000,7_000_000)+rec_v2(2,2,1000,4900,5100,6_000_000,8_000_000))
+        m=load_manifest(mp,SHA);rows=read_records([tape],m);assert rows[0]['bid_depth_l1']==5.0 and rows[0]['ask_depth_l1']==7.0
+        pair=pair_asof_indexed(build_indexed_timelines(rows),'m',1000);assert pair and pair['yes_ask_depth_l1']==7.0 and pair['no_ask_depth_l1']==8.0
 
 if __name__=='__main__':
     tests=sorted((n,f) for n,f in globals().items() if n.startswith('test_') and callable(f))

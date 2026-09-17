@@ -86,13 +86,28 @@ def write_books(directory: Path, *, yes_wall_ms: int | None = None, no_wall_ms: 
         }))
 
 
-def build(ext=None, ora=None, sel=None, *, yes_wall_ms=None, capture_clock=None):
+def build(ext=None, ora=None, sel=None, *, yes_wall_ms=None, capture_clock=None,
+          contract_state=None):
     with tempfile.TemporaryDirectory() as tmp:
         d = Path(tmp); write_books(d, yes_wall_ms=yes_wall_ms)
         engine = FeatureEngine(policy())
         out = engine.build(external=ext or all_external(), oracle=ora or oracle(),
-                           selection=sel or selection(), book_dir=d, model_sha=SHA, now_ns=NOW, capture_clock=capture_clock)
+                           selection=sel or selection(), book_dir=d, model_sha=SHA,
+                           now_ns=NOW, capture_clock=capture_clock,
+                           contract_state=contract_state)
         return engine, out
+
+
+def contract_state(state='ACTIVE_READY_SHADOW', *, available_at_ns=NOW - 1):
+    return {
+        'schema': 'polymarket_v7_multi_crypto_contract_state_v1',
+        'model_sha': SHA, 'paper_only': True, 'authenticated_execution': False,
+        'real_order_submission': False, 'execution_authority': False,
+        'markets': [{
+            'market_id': 'm1', 'state': state, 'entry_authority': False,
+            'available_at_ns': available_at_ns, 'contract_state_hash': 'e' * 64,
+        }],
+    }
 
 
 def test_missing_feature_is_not_zero_and_shadow_never_signals() -> None:
@@ -284,6 +299,33 @@ def test_live_clock_regression_is_explicitly_rejected() -> None:
         assert 'DECISION_CLOCK_INVALID_OR_REGRESSIVE' in str(exc)
     else:
         raise AssertionError('clock regression accepted')
+
+
+def test_contract_state_blocks_active_market_until_ready() -> None:
+    _, out = build(contract_state=contract_state('ACTIVE_BLOCKED'))
+    row = out['markets'][0]
+    assert row['contract_state_bound'] is True
+    assert row['contract_state_state'] == 'ACTIVE_BLOCKED'
+    assert 'CONTRACT_STATE_NOT_READY' in row['blockers']
+    assert out['ready_for_calibration_markets'] == 0
+
+
+def test_contract_state_ready_preserves_causal_shadow_readiness() -> None:
+    _, out = build(contract_state=contract_state())
+    row = out['markets'][0]
+    assert row['contract_state_bound'] is True
+    assert row['contract_state_state'] == 'ACTIVE_READY_SHADOW'
+    assert row['contract_state_hash'] == 'e' * 64
+    assert row['blockers'] == ['UNCALIBRATED_SHADOW']
+    assert out['ready_for_calibration_markets'] == 1
+
+
+def test_future_contract_state_is_not_available_at_decision() -> None:
+    _, out = build(contract_state=contract_state(available_at_ns=NOW + 1))
+    row = out['markets'][0]
+    assert 'CONTRACT_STATE_NOT_READY' in row['blockers']
+    assert 'FUTURE_OR_UNKNOWN_INPUT_AVAILABILITY' in row['blockers']
+
 
 if __name__ == '__main__':
     tests = sorted((n, f) for n, f in globals().items() if n.startswith('test_') and callable(f))

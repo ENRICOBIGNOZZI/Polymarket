@@ -1,0 +1,78 @@
+{
+  "asof_gap_ms": {
+    "100": {
+      "max": 74.927001953125,
+      "p50": 10.15380859375,
+      "p95": 61.47614746093747
+    },
+    "1000": {
+      "max": 99.725830078125,
+      "p50": 11.93505859375,
+      "p95": 76.5240478515625
+    },
+    "10000": {
+      "max": 124.871826171875,
+      "p50": 11.697021484375,
+      "p95": 94.36860351562498
+    },
+    "250": {
+      "max": 74.8671875,
+      "p50": 9.94384765625,
+      "p95": 60.051513671875
+    },
+    "50": {
+      "max": 24.962890625,
+      "p50": 6.220947265625,
+      "p95": 21.818115234375
+    },
+    "500": {
+      "max": 74.97900390625,
+      "p50": 10.0516357421875,
+      "p95": 60.580078125
+    },
+    "5000": {
+      "max": 124.81787109375,
+      "p50": 12.838134765625,
+      "p95": 96.04633789062498
+    }
+  },
+  "coverage": {
+    "100": 0.793006993006993,
+    "1000": 0.8142657342657342,
+    "10000": 0.6251748251748251,
+    "250": 0.7765034965034965,
+    "50": 0.5918881118881119,
+    "500": 0.7725874125874126,
+    "5000": 0.7516083916083917
+  },
+  "dataset_manifest_sha256": "def03dd9cd8eacb5ca60879ea823898650eba01a03b572753dbfbf5193666b44",
+  "dataset_total_bytes": 66447496,
+  "economic_evidence": false,
+  "execution_authority": false,
+  "input_rows": 3575,
+  "labeled_counts": {
+    "100": 2835,
+    "1000": 2911,
+    "10000": 2235,
+    "250": 2776,
+    "50": 2116,
+    "500": 2762,
+    "5000": 2687
+  },
+  "labeler_code_sha": "516662985e1757754fed5f01ab30d17d9c9bbc19",
+  "limitations": [
+    "short SHADOW smoke only",
+    "not enough independent time/market clusters for OOS economic inference",
+    "mid-price repricing labels are not executable PnL",
+    "no threshold/model promotion authorized"
+  ],
+  "origin_status_counts": {
+    "NO_CONTIGUOUS_COMPACT_SESSION": 2,
+    "OK": 3514,
+    "ORIGIN_BOOK_INVALID": 36,
+    "ORIGIN_TAPE_MISMATCH": 23
+  },
+  "paper_only": true,
+  "producer_model_sha": "bab2c07e0a3604e001380e0784be6db050b8a7af",
+  "schema": "polymarket_v7_multi_crypto_repricing_label_smoke_v1"
+}
