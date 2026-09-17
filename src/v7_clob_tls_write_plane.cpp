@@ -11,6 +11,15 @@ bool configure_order_socket_low_latency(int fd) noexcept {
     return ::setsockopt(fd, IPPROTO_TCP, TCP_NODELAY,
                         &enabled, sizeof(enabled)) == 0;
 }
+
+bool configure_order_tls_low_latency(SSL* ssl) noexcept {
+    if (ssl == nullptr) return false;
+    constexpr const char* kTls13Order =
+        "TLS_AES_128_GCM_SHA256:"
+        "TLS_AES_256_GCM_SHA384:"
+        "TLS_CHACHA20_POLY1305_SHA256";
+    return ::SSL_set_ciphersuites(ssl, kTls13Order) == 1;
+}
 TlsWriteResult TlsOrderWritePlane::send_frame(std::span<const char> frame) noexcept {
     TlsWriteResult result{};
     if (!ready() || frame.empty() || frame.size() > static_cast<std::size_t>(INT_MAX)) return result;

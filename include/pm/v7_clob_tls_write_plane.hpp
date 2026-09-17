@@ -14,6 +14,11 @@ struct TlsWriteResult {
     int ssl_error = 0;
 };
 [[nodiscard]] bool configure_order_socket_low_latency(int fd) noexcept;
+
+// Cold-path, pre-handshake preference order for TLS 1.3. Keeps all three
+// standard suites as fallbacks while preferring AES-128-GCM on AES-accelerated
+// London hosts. TLS <=1.2 configuration is left untouched.
+[[nodiscard]] bool configure_order_tls_low_latency(SSL* ssl) noexcept;
 class TlsOrderWritePlane final {
 public:
     explicit TlsOrderWritePlane(SSL* ssl) noexcept : ssl_(ssl) {}

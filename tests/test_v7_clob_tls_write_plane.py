@@ -22,7 +22,7 @@ PROGRAM = r'''#include "pm/v7_clob_tls_write_plane.hpp"
 
 int main(int argc, char** argv) {
     using namespace pm::v7::clob_transport;
-    if (argc != 2 || configure_order_socket_low_latency(-1)) return 10;
+    if (argc != 2 || configure_order_socket_low_latency(-1) || configure_order_tls_low_latency(nullptr)) return 10;
     const int port = std::atoi(argv[1]);
     const int fd = ::socket(AF_INET, SOCK_STREAM, 0);
     if (fd < 0 || !configure_order_socket_low_latency(fd)) return 11;
@@ -36,8 +36,9 @@ int main(int argc, char** argv) {
     ::SSL_CTX_set_verify(context, SSL_VERIFY_NONE, nullptr);
     SSL* ssl = ::SSL_new(context);
     if (!ssl) return 16;
+    if (!configure_order_tls_low_latency(ssl)) return 17;
     ::SSL_set_fd(ssl, fd);
-    if (::SSL_connect(ssl) != 1) return 17;
+    if (::SSL_connect(ssl) != 1) return 22;
 
     TlsOrderWritePlane plane(ssl);
     const std::array<char, 5> first{'h','e','l','l','o'};
