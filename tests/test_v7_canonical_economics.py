@@ -481,6 +481,41 @@ class CanonicalEconomicsTest(unittest.TestCase):
         self.assertFalse(report["economic_evidence_ready"])
         self.assertIn("positive_pnl_stress_gate", report["reason_codes"])
 
+    def test_unknown_liquidity_reward_stays_missing_and_verified_zero_is_observed(self) -> None:
+        def report_for(reward: float, verified: bool):
+            events = [
+                order(strategy="CRYPTO_SETTLEMENT_ENGINE", order_id="reward-order", leg_id="YES",
+                      family="crypto_informed_taker", horizon=30, event_id="reward-event"),
+                fill(strategy="CRYPTO_SETTLEMENT_ENGINE", order_id="reward-order", fill_id="reward-fill",
+                     leg_id="YES", family="crypto_informed_taker", horizon=30, fee=0.0,
+                     event_id="reward-event"),
+                final(
+                    strategy="CRYPTO_SETTLEMENT_ENGINE", order_id="reward-order",
+                    family="crypto_informed_taker", horizon=30, pnl=1.0, slippage=0.0,
+                    unwind=0.0, capital=0.0, latency=0.0, event_id="reward-event",
+                    extra_metadata={
+                        "pnl_decomposition": {
+                            "liquidity_rewards": reward,
+                            "own_reward_share_verified": verified,
+                        }
+                    },
+                ),
+            ]
+            with tempfile.TemporaryDirectory() as tmp:
+                path = Path(tmp) / "execution.jsonl"
+                write_events(path, events)
+                return econ.assess(path, expected_model_sha=SHA)
+
+        unknown = report_for(5.0, False)
+        self.assertIsNone(unknown["pnl_decomposition"]["liquidity_rewards"])
+        self.assertEqual(
+            unknown["pnl_decomposition"]["liquidity_reward_unknown_share_policy"],
+            "MISSING_UNTIL_VERIFIED",
+        )
+
+        verified_zero = report_for(0.0, True)
+        self.assertEqual(verified_zero["pnl_decomposition"]["liquidity_rewards"], 0.0)
+
     def test_missing_component_or_complete_vector_flag_fails_closed(self) -> None:
         events = [
             order(strategy="CRYPTO_SETTLEMENT_ENGINE", order_id="o1", leg_id="YES", family="crypto_informed_taker", horizon=30),

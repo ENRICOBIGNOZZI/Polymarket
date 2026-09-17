@@ -405,9 +405,10 @@ class UnitState:
                 if value is None:
                     continue
                 # A configured reward pool is not own reward. Unknown own share
-                # is represented as zero, never as projected PnL.
+                # must remain missing; only verified own-share evidence may be
+                # recorded, including an explicitly verified zero.
                 if component == "liquidity_rewards" and decomposition.get("own_reward_share_verified") is not True:
-                    value = 0.0
+                    continue
                 self.pnl_components[component] += value
                 self.pnl_component_observed[component] = True
         event_id = _text(getattr(event, "event_id", None))
@@ -854,7 +855,7 @@ def assess(
         component: (
             sum(unit.pnl_components[component] for unit, _ in event_mature)
             if any(unit.pnl_component_observed[component] for unit, _ in event_mature)
-            else (0.0 if component == "liquidity_rewards" else None)
+            else None
         )
         for component in PNL_COMPONENTS
     }
@@ -990,7 +991,7 @@ def assess(
             "unwind_cost": costs_by_component["unwind_loss"],
             "capital_cost": costs_by_component["capital_cost"],
             "latency_cost": costs_by_component["latency_cost"],
-            "liquidity_reward_unknown_share_policy": "ZERO",
+            "liquidity_reward_unknown_share_policy": "MISSING_UNTIL_VERIFIED",
         },
         "stressed_net_pnl": stress_totals,
         "costs": {"components": costs_by_component, "baseline_total": sum(costs_by_component.values()), "stress_observations_frozen": True, "multipliers": list(STRESS_MULTIPLIERS)},
