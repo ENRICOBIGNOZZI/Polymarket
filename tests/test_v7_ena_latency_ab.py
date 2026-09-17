@@ -19,6 +19,8 @@ def test_parse_ena_coalescing() -> None:
         "adaptive_rx": "off", "adaptive_tx": "off",
         "rx_usecs": 20, "tx_usecs": 64,
     }
+    ena = module.parse_coalesce("Coalesce parameters for enp39s0:\nAdaptive RX: on  TX: n/a\nrx-usecs:\t20\ntx-usecs:\t64\n")
+    assert ena["adaptive_rx"] == "on" and ena["adaptive_tx"] == "n/a"
 
 
 def test_parse_real_ena_coalescing_with_tx_na() -> None:
@@ -72,6 +74,13 @@ def test_profiles_are_interleaved_and_rollback_verified() -> None:
     assert 'receive_path_on_feed_cpu' in source
     assert 'incoming_napi_id' in source
     assert 'safe.directory={args.app}' in source
+
+
+def test_core_ena_ab_serializes_all_callers() -> None:
+    source = SCRIPT.read_text(encoding="utf-8")
+    assert "fcntl.LOCK_EX | fcntl.LOCK_NB" in source
+    assert "/run/lock/polymarket-v7-ena-ab.lock" in source
+    assert "ENA A/B host lock busy" in source
 
 
 def test_ssm_wrapper_is_three_zone_paper_only() -> None:
