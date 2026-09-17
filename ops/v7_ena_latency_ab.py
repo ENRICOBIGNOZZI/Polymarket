@@ -168,7 +168,7 @@ def preflight(args: argparse.Namespace) -> None:
         raise RuntimeError("latency probe executable required")
     if service_active("polymarket-v7-paper.service"):
         raise RuntimeError("PAPER runtime must remain stopped during ENA A/B")
-    observed = run(["git", "-C", str(args.app), "rev-parse", "HEAD"]).stdout.strip()
+    observed = run(["git", "-c", f"safe.directory={args.app}", "-C", str(args.app), "rev-parse", "HEAD"]).stdout.strip()
     if observed != args.expected_sha:
         raise RuntimeError("repository SHA mismatch")
 
