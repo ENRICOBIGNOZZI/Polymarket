@@ -41,6 +41,12 @@ public:
 
     [[nodiscard]] bool valid() const noexcept { return valid_; }
 
+    // Length arithmetic only. Dynamic content validation remains centralized in
+    // serialize(), so fused request builders can reserve the exact final body
+    // offset without scanning the five dynamic strings twice.
+    [[nodiscard]] std::size_t serialized_size(
+        const MarketOrderDynamicView& dynamic) const noexcept;
+
     // Exact byte-compatible replacement for serialize_post_market_order() for
     // the frozen static lane. Caller-owned output; no allocation.
     [[nodiscard]] std::size_t serialize(
