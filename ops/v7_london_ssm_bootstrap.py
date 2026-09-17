@@ -27,17 +27,23 @@ def remote_command(sha: str, service_user: str) -> str:
     return f'''set -euo pipefail
 APP=/home/{service_user}/polymarket
 RUN=/mnt/polymarket-data/paper_v7_london
+BENCH=/mnt/polymarket-data/benchmarks
 SHA={sha}
+LOG="$BENCH/bootstrap.$SHA.log"
+mkdir -p "$BENCH"
 [[ -d "$APP/.git" ]]
 ! systemctl is-active --quiet polymarket-v7-paper.service
 sudo -u {service_user} git -C "$APP" fetch --no-tags origin main
 sudo -u {service_user} git -C "$APP" cat-file -e "$SHA^{{commit}}"
 sudo -u {service_user} git -C "$APP" show "$SHA:ops/v7_london_bootstrap.sh" > /tmp/v7_london_bootstrap.$SHA.sh
 chmod 755 /tmp/v7_london_bootstrap.$SHA.sh
-env POLYMARKET_EXPECTED_SHA="$SHA" POLYMARKET_SERVICE_USER={service_user} \
+if ! env POLYMARKET_EXPECTED_SHA="$SHA" POLYMARKET_SERVICE_USER={service_user} \
   POLYMARKET_APP_DIR="$APP" PM_V7_RUN_ROOT="$RUN" \
   POLYMARKET_INSTALL_TAILSCALE=1 POLYMARKET_INSTALL_GRAFANA=1 \
-  bash /tmp/v7_london_bootstrap.$SHA.sh
+  bash /tmp/v7_london_bootstrap.$SHA.sh >"$LOG" 2>&1; then
+  tail -200 "$LOG" >&2 || true
+  exit 1
+fi
 [[ "$(sudo -u {service_user} git -C "$APP" rev-parse HEAD)" == "$SHA" ]]
 [[ -z "$(sudo -u {service_user} git -C "$APP" status --porcelain)" ]]
 ! systemctl is-active --quiet polymarket-v7-paper.service
@@ -49,6 +55,7 @@ assert v['paper_only'] is True
 assert v['authenticated_execution'] is False
 assert v['real_order_submission'] is False
 assert v['systemd_installed_but_disabled'] is True
+v['ssm_bootstrap_log']='/mnt/polymarket-data/benchmarks/bootstrap.'+sys.argv[2]+'.log'
 print('V7_BOOTSTRAP='+json.dumps(v,sort_keys=True,separators=(',',':')))
 PY'''
 
