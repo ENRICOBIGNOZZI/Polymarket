@@ -42,9 +42,57 @@ OmsOrder::OmsOrder(const StrategyIntent& intent, std::uint64_t client_order_id) 
     record_.strategy_id = intent.strategy_id;
     record_.side = intent.side;
     record_.price_tick = intent.price_tick;
+    record_.causal_trigger_receive_monotonic_ns = intent.causal_trigger_receive_monotonic_ns;
+    record_.signal_ready_monotonic_ns = intent.signal_ready_monotonic_ns;
+    record_.decision_monotonic_ns = intent.decision_monotonic_ns;
     record_.original_microunits = std::max<std::int64_t>(0, intent.quantity_microunits);
     record_.remaining_microunits = record_.original_microunits;
     record_.state = OrderState::Intent;
+}
+
+OmsLatencySnapshot oms_latency_snapshot(const OmsOrderRecord& record) noexcept {
+    OmsLatencySnapshot out;
+    const auto leg = [&](std::int64_t start, std::int64_t end,
+                         OmsLatencyLeg flag, std::int64_t& destination) noexcept {
+        if (start > 0 && end >= start) {
+            destination = end - start;
+            out.valid_mask |= static_cast<std::uint32_t>(flag);
+        }
+    };
+    leg(record.causal_trigger_receive_monotonic_ns, record.signal_ready_monotonic_ns,
+        OmsLatencyLeg::TriggerToSignal, out.trigger_to_signal_ns);
+    leg(record.signal_ready_monotonic_ns, record.decision_monotonic_ns,
+        OmsLatencyLeg::SignalToDecision, out.signal_to_decision_ns);
+    leg(record.causal_trigger_receive_monotonic_ns, record.decision_monotonic_ns,
+        OmsLatencyLeg::TriggerToDecision, out.trigger_to_decision_ns);
+    leg(record.decision_monotonic_ns, record.submission_ns,
+        OmsLatencyLeg::DecisionToQueue, out.decision_to_queue_ns);
+    leg(record.submission_ns, record.wire_ns,
+        OmsLatencyLeg::QueueToWire, out.queue_to_wire_ns);
+    leg(record.wire_ns, record.ack_ns,
+        OmsLatencyLeg::WireToAck, out.wire_to_ack_ns);
+
+    // End-to-end causal metrics are stricter than pairwise legs. Do not report
+    // trigger->wire/ACK if an intermediate timestamp is missing or reversed;
+    // that would make a malformed trace look fast. signal_ready is optional,
+    // but when present it must lie between trigger receive and decision.
+    const bool signal_chain_valid = record.signal_ready_monotonic_ns == 0
+        || (record.signal_ready_monotonic_ns >= record.causal_trigger_receive_monotonic_ns
+            && record.signal_ready_monotonic_ns <= record.decision_monotonic_ns);
+    const bool causal_to_wire_valid = record.causal_trigger_receive_monotonic_ns > 0
+        && record.decision_monotonic_ns >= record.causal_trigger_receive_monotonic_ns
+        && signal_chain_valid
+        && record.submission_ns >= record.decision_monotonic_ns
+        && record.wire_ns >= record.submission_ns;
+    if (causal_to_wire_valid) {
+        out.trigger_to_wire_ns = record.wire_ns - record.causal_trigger_receive_monotonic_ns;
+        out.valid_mask |= static_cast<std::uint32_t>(OmsLatencyLeg::TriggerToWire);
+        if (record.ack_ns >= record.wire_ns) {
+            out.trigger_to_ack_ns = record.ack_ns - record.causal_trigger_receive_monotonic_ns;
+            out.valid_mask |= static_cast<std::uint32_t>(OmsLatencyLeg::TriggerToAck);
+        }
+    }
+    return out;
 }
 
 OmsTransitionResult OmsOrder::result(bool applied, bool duplicate,

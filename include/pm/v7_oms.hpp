@@ -70,6 +70,9 @@ struct OmsOrderRecord {
     std::int64_t original_microunits = 0;
     std::int64_t filled_microunits = 0;
     std::int64_t remaining_microunits = 0;
+    std::int64_t causal_trigger_receive_monotonic_ns = 0;
+    std::int64_t signal_ready_monotonic_ns = 0;
+    std::int64_t decision_monotonic_ns = 0;
     std::int64_t submission_ns = 0;
     std::int64_t wire_ns = 0;
     std::int64_t ack_ns = 0;
@@ -87,6 +90,34 @@ struct OmsTransitionResult {
     std::uint8_t reconciliation_required = 0;
     std::uint8_t invariant_violation = 0;
 };
+
+// Validity is per leg: partial instrumentation remains useful without inventing
+// zero-latency stages. All durations use one local monotonic clock domain.
+enum OmsLatencyLeg : std::uint32_t {
+    TriggerToSignal = 1U << 0,
+    SignalToDecision = 1U << 1,
+    TriggerToDecision = 1U << 2,
+    DecisionToQueue = 1U << 3,
+    QueueToWire = 1U << 4,
+    WireToAck = 1U << 5,
+    TriggerToWire = 1U << 6,
+    TriggerToAck = 1U << 7,
+};
+
+struct OmsLatencySnapshot {
+    std::uint32_t valid_mask = 0;
+    std::int64_t trigger_to_signal_ns = 0;
+    std::int64_t signal_to_decision_ns = 0;
+    std::int64_t trigger_to_decision_ns = 0;
+    std::int64_t decision_to_queue_ns = 0;
+    std::int64_t queue_to_wire_ns = 0;
+    std::int64_t wire_to_ack_ns = 0;
+    std::int64_t trigger_to_wire_ns = 0;
+    std::int64_t trigger_to_ack_ns = 0;
+};
+
+[[nodiscard]] OmsLatencySnapshot oms_latency_snapshot(
+    const OmsOrderRecord& record) noexcept;
 
 class OmsOrder final {
 public:
@@ -111,5 +142,7 @@ private:
 static_assert(std::is_trivially_copyable_v<OmsEvent>);
 static_assert(std::is_trivially_copyable_v<OmsOrderRecord>);
 static_assert(std::is_standard_layout_v<OmsOrderRecord>);
+static_assert(std::is_trivially_copyable_v<OmsLatencySnapshot>);
+static_assert(std::is_standard_layout_v<OmsLatencySnapshot>);
 
 } // namespace pm::v7

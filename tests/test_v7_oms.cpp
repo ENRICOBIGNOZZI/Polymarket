@@ -16,6 +16,9 @@ pm::v7::StrategyIntent quote_intent() {
     intent.side = pm::v7::Side::Buy;
     intent.price_tick = 48;
     intent.quantity_microunits = 10'000'000;
+    intent.causal_trigger_receive_monotonic_ns = 40;
+    intent.signal_ready_monotonic_ns = 70;
+    intent.decision_monotonic_ns = 90;
     return intent;
 }
 
@@ -120,6 +123,58 @@ void test_overfill_fails_closed_to_unknown() {
     assert(result.invariant_violation);
 }
 
+void test_causal_wire_latency_preserves_grid_delay_and_wire_ack() {
+    pm::v7::OmsOrder order(quote_intent(), 9010);
+    assert(order.apply(event(1, pm::v7::OmsEventType::QueueSend, 100, 1)).applied);
+    assert(order.apply(event(2, pm::v7::OmsEventType::WireSend, 130, 2)).applied);
+    auto ack = event(3, pm::v7::OmsEventType::AckLive, 210, 3);
+    ack.exchange_order_handle = 7010;
+    assert(order.apply(ack).applied);
+
+    const auto latency = pm::v7::oms_latency_snapshot(order.record());
+    const auto has = [&](pm::v7::OmsLatencyLeg leg) {
+        return (latency.valid_mask & static_cast<std::uint32_t>(leg)) != 0;
+    };
+    assert(has(pm::v7::OmsLatencyLeg::TriggerToSignal));
+    assert(has(pm::v7::OmsLatencyLeg::SignalToDecision));
+    assert(has(pm::v7::OmsLatencyLeg::TriggerToDecision));
+    assert(has(pm::v7::OmsLatencyLeg::DecisionToQueue));
+    assert(has(pm::v7::OmsLatencyLeg::QueueToWire));
+    assert(has(pm::v7::OmsLatencyLeg::WireToAck));
+    assert(has(pm::v7::OmsLatencyLeg::TriggerToWire));
+    assert(has(pm::v7::OmsLatencyLeg::TriggerToAck));
+    assert(latency.trigger_to_signal_ns == 30);
+    assert(latency.signal_to_decision_ns == 20);
+    assert(latency.trigger_to_decision_ns == 50);
+    assert(latency.decision_to_queue_ns == 10);
+    assert(latency.queue_to_wire_ns == 30);
+    assert(latency.wire_to_ack_ns == 80);
+    assert(latency.trigger_to_wire_ns == 90);
+    assert(latency.trigger_to_ack_ns == 170);
+}
+
+void test_causal_latency_never_fabricates_missing_or_reversed_stages() {
+    auto intent = quote_intent();
+    intent.signal_ready_monotonic_ns = 0;
+    intent.decision_monotonic_ns = 30; // earlier than causal receive: invalid causal leg
+    pm::v7::OmsOrder order(intent, 9011);
+    assert(order.apply(event(1, pm::v7::OmsEventType::QueueSend, 100, 1)).applied);
+    assert(order.apply(event(2, pm::v7::OmsEventType::WireSend, 120, 2)).applied);
+
+    const auto latency = pm::v7::oms_latency_snapshot(order.record());
+    const auto has = [&](pm::v7::OmsLatencyLeg leg) {
+        return (latency.valid_mask & static_cast<std::uint32_t>(leg)) != 0;
+    };
+    assert(!has(pm::v7::OmsLatencyLeg::TriggerToSignal));
+    assert(!has(pm::v7::OmsLatencyLeg::SignalToDecision));
+    assert(!has(pm::v7::OmsLatencyLeg::TriggerToDecision));
+    assert(has(pm::v7::OmsLatencyLeg::DecisionToQueue));
+    assert(has(pm::v7::OmsLatencyLeg::QueueToWire));
+    assert(!has(pm::v7::OmsLatencyLeg::TriggerToWire));
+    assert(!has(pm::v7::OmsLatencyLeg::WireToAck));
+    assert(!has(pm::v7::OmsLatencyLeg::TriggerToAck));
+}
+
 void test_reconcile_filled_requires_exact_authoritative_sizes() {
     pm::v7::OmsOrder order(quote_intent(), 9005);
     assert(order.apply(event(1, pm::v7::OmsEventType::QueueSend, 100, 1)).applied);
@@ -143,6 +198,8 @@ int main() {
     test_duplicate_fill_is_idempotent();
     test_unknown_requires_reconciliation_and_can_restore_partial_live();
     test_overfill_fails_closed_to_unknown();
+    test_causal_wire_latency_preserves_grid_delay_and_wire_ack();
+    test_causal_latency_never_fabricates_missing_or_reversed_stages();
     test_reconcile_filled_requires_exact_authoritative_sizes();
     return 0;
 }

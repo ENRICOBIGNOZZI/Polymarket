@@ -58,6 +58,16 @@ struct StrategyIntent {
     std::uint64_t state_version = 0;
     std::uint64_t model_version = 0;
     std::uint64_t policy_version = 0;
+    // Local monotonic receive time of the market event that causally triggered
+    // this decision. This is deliberately distinct from exchange_event_ns: it
+    // is comparable to local decision/OMS timestamps and exposes any polling
+    // or signal-grid delay before the decision. Zero means unavailable.
+    std::int64_t causal_trigger_receive_monotonic_ns = 0;
+    // Local monotonic time when the strategy signal became actionable. For an
+    // event-driven policy this may equal the trigger receive time; for a
+    // quantized/grid policy it records the grid boundary explicitly. Zero
+    // means the intermediate signal stage is not instrumented.
+    std::int64_t signal_ready_monotonic_ns = 0;
     std::int64_t decision_monotonic_ns = 0;
     std::int64_t exchange_event_ns = 0;
     std::int64_t price_tick = 0;
