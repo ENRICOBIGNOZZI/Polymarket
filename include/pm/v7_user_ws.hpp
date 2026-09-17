@@ -15,6 +15,7 @@ inline constexpr std::string_view kEndpoint =
 inline constexpr std::string_view kHeartbeatRequest = "PING";
 inline constexpr std::string_view kHeartbeatResponse = "PONG";
 inline constexpr std::int64_t kHeartbeatIntervalMs = 10'000;
+inline constexpr std::size_t kMaxMakerOrdersPerTrade = 16;
 
 template <std::size_t N>
 struct FixedText {
@@ -48,25 +49,39 @@ enum class TradeStatus : std::uint8_t {
     Failed = 5,
 };
 
+struct MakerOrderMatch {
+    FixedText<96> order_id{};
+    FixedText<40> matched_amount{};
+    FixedText<40> price{};
+    FixedText<96> asset_id{};
+    std::uint8_t buy_side = 0;
+};
+
 struct Event {
     EventKind kind = EventKind::Unknown;
     OrderEventType order_type = OrderEventType::Unknown;
     TradeStatus trade_status = TradeStatus::Unknown;
     std::uint8_t buy_side = 0;
+    std::uint8_t trader_is_taker = 0;
+    std::uint8_t trader_is_maker = 0;
+    std::uint8_t maker_order_count = 0;
     std::int64_t receive_monotonic_ns = 0;
     FixedText<96> id{};
     FixedText<96> market{};
     FixedText<96> asset_id{};
+    FixedText<96> taker_order_id{};
     FixedText<40> price{};
     FixedText<40> original_size{};
     FixedText<40> size_matched{};
     FixedText<40> trade_size{};
+    std::array<MakerOrderMatch, kMaxMakerOrdersPerTrade> maker_orders{};
 };
 
 struct DecodeResult {
     Event event{};
     std::uint8_t recognized = 0;
     std::uint8_t invalid = 0;
+    std::uint8_t maker_order_overflow = 0;
 };
 
 struct CredentialsView {
@@ -85,6 +100,7 @@ struct CredentialsView {
     CredentialsView credentials,
     std::span<const std::string_view> condition_ids = {});
 
+static_assert(std::is_trivially_copyable_v<MakerOrderMatch>);
 static_assert(std::is_trivially_copyable_v<Event>);
 static_assert(std::is_standard_layout_v<Event>);
 
