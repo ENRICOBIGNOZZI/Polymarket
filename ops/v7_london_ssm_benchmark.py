@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import shlex
 import subprocess
 import time
 from pathlib import Path
@@ -56,7 +57,7 @@ def remote_command(sha: str, mode: str, service_user: str) -> str:
 APP=/home/{service_user}/polymarket
 RUN=/mnt/polymarket-data/paper_v7_london
 BENCH=/mnt/polymarket-data/benchmarks
-[[ "$(git -C "$APP" rev-parse HEAD)" == "{sha}" ]]
+[[ "$(runuser -u {service_user} -- git -C "$APP" rev-parse HEAD)" == "{sha}" ]]
 python3 -c 'import json; v=json.load(open("'$RUN'/bootstrap_receipt.json")); assert v["code_sha"]=="{sha}" and v["systemd_installed_but_disabled"] is True'
 ! systemctl is-active --quiet polymarket-v7-paper.service
 out=$(sudo -u {service_user} env POLYMARKET_EXPECTED_SHA="{sha}" POLYMARKET_APP_DIR="$APP" POLYMARKET_BENCHMARK_DIR="$BENCH" "$APP/ops/v7_london_benchmark.sh" {mode})
@@ -81,7 +82,12 @@ def parse_result(stdout: str) -> tuple[dict[str, Any], dict[str, Any]]:
 
 
 def send(region: str, instance_id: str, command: str, timeout_s: int) -> str:
-    parameters = json.dumps({"commands": [command], "executionTimeout": [str(timeout_s)]})
+    # AWS-RunShellScript invokes commands through /bin/sh by default. Ubuntu's
+    # /bin/sh is dash and does not implement `set -o pipefail`, while the
+    # benchmark contract intentionally uses Bash strict mode. Enter Bash
+    # explicitly rather than silently weakening the remote command.
+    wrapped = "bash -lc " + shlex.quote(command)
+    parameters = json.dumps({"commands": [wrapped], "executionTimeout": [str(timeout_s)]})
     value = aws_json(region, [
         "ssm", "send-command", "--instance-ids", instance_id,
         "--document-name", "AWS-RunShellScript", "--parameters", parameters,
@@ -149,7 +155,12 @@ def main() -> int:
         instance_id, command_id = commands[zone_id]
         value = wait_one(args.region, command_id, instance_id, deadline, poll_s)
         if value.get("Status") != "Success":
-            raise RuntimeError(f"{zone_id} SSM benchmark failed: {value.get('StatusDetails') or value.get('Status')}")
+            error = str(value.get("StandardErrorContent") or "").strip()
+            tail = error[-2000:] if error else "no remote stderr"
+            raise RuntimeError(
+                f"{zone_id} SSM benchmark failed instance={instance_id} command={command_id} "
+                f"status={value.get('StatusDetails') or value.get('Status')}: {tail}"
+            )
         probe, manifest = parse_result(str(value.get("StandardOutputContent") or ""))
         if probe.get("region") != zone_id or manifest.get("zone_id") != zone_id:
             raise RuntimeError(f"{zone_id} returned mismatched physical zone identity")

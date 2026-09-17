@@ -8,6 +8,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "ops"))
 
+import v7_london_ssm_benchmark as module
 from v7_london_ssm_benchmark import parse_result, remote_command, stack_instances
 
 
@@ -31,6 +32,7 @@ class LondonSsmBenchmarkTests(unittest.TestCase):
         self.assertIn(sha, command)
         self.assertIn("! systemctl is-active --quiet polymarket-v7-paper.service", command)
         self.assertIn("v7_london_benchmark.sh", command)
+        self.assertIn("runuser -u ubuntu -- git -C", command)
         self.assertNotIn("real-order", command.lower())
         self.assertNotIn("tailscale up", command)
         with self.assertRaises(ValueError):
@@ -51,7 +53,28 @@ class LondonSsmBenchmarkTests(unittest.TestCase):
         self.assertIn('"automatic_cutover": False', source)
         self.assertIn('"real_order_submission": False', source)
         self.assertNotIn("cloudformation delete-stack", source)
+        self.assertIn("StandardErrorContent", source)
+        self.assertIn("command={command_id}", source)
         self.assertNotIn("systemctl enable --now polymarket-v7-paper", source)
+
+    def test_send_wraps_remote_payload_in_bash(self):
+        captured = {}
+        original = module.aws_json
+        def fake(region, args):
+            captured["region"] = region
+            captured["args"] = args
+            return {"Command": {"CommandId": "cmd-1"}}
+        module.aws_json = fake
+        try:
+            self.assertEqual(module.send("eu-west-2", "i-123", "set -euo pipefail\necho ok", 30), "cmd-1")
+        finally:
+            module.aws_json = original
+        raw = captured["args"][captured["args"].index("--parameters") + 1]
+        value = json.loads(raw)
+        command = value["commands"][0]
+        self.assertTrue(command.startswith("bash -lc "), command)
+        self.assertIn("set -euo pipefail", command)
+        self.assertEqual(value["executionTimeout"], ["30"])
 
 
 if __name__ == "__main__":
