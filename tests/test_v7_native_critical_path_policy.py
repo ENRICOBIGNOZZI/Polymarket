@@ -66,7 +66,8 @@ class NativeCriticalPathPolicyTest(unittest.TestCase):
         for token in (
             "NativeCryptoDecisionLane", "SleeveCapitalAccount",
             "MarketWsShard", "ExternalVenueIngress", "SpscRing<",
-            "IngressWakeup", "SHADOW_ZERO_AUTHORITY",
+            "IngressWakeup", "NativeOrderTxOwner", "prepare_submit",
+            "OMS_ADAPTER_COMMAND", "SHADOW_ZERO_AUTHORITY",
         ):
             self.assertIn(token, source)
         self.assertNotIn("std::sort(merged", source)

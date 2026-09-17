@@ -5,6 +5,7 @@
 #include "pm/v7_external_ws.hpp"
 #include "pm/v7_ingress_wakeup.hpp"
 #include "pm/v7_market_ws.hpp"
+#include "pm/v7_native_order_tx.hpp"
 #include "pm/v7_spsc.hpp"
 
 #include <boost/json.hpp>
@@ -184,6 +185,7 @@ int main(int argc, char** argv) {
         limits.max_market_exposure_microdollars = 100'000'000LL;
         limits.max_single_order_microdollars = 10'000'000LL;
         SleeveCapitalAccount capital(limits);
+        NativeOrderTxOwner order_tx;
 
         const auto start_mono = monotonic_now_ns();
         const auto start_wall = wall_now_ns();
@@ -203,13 +205,16 @@ int main(int argc, char** argv) {
         PmQueuedEvent pending_pm{};
         bool binance_ready = false, coinbase_ready = false, pm_ready = false;
         std::vector<std::int64_t> accepted_signal_to_admission;
+        std::vector<std::int64_t> accepted_signal_to_adapter;
         std::vector<std::int64_t> first_signal_to_decision;
         std::vector<std::int64_t> decision_compute;
         accepted_signal_to_admission.reserve(4096);
+        accepted_signal_to_adapter.reserve(4096);
         first_signal_to_decision.reserve(4096);
         decision_compute.reserve(4096);
         std::array<std::uint64_t, 32> reasons{};
         std::uint64_t evaluations = 0, accepted = 0, latency_overflow = 0;
+        std::uint64_t adapter_handoff_failures = 0;
         std::uint64_t last_measured_signal_version = 0;
 
 #if defined(__APPLE__)
@@ -312,12 +317,26 @@ int main(int argc, char** argv) {
                     } else ++latency_overflow;
                 }
                 if (result.accepted != 0) {
-                    ++accepted;
-                    lane.mark_market_traded(kMarket);
-                    if (accepted_signal_to_admission.size() < accepted_signal_to_admission.capacity()) {
-                        accepted_signal_to_admission.push_back(std::max<std::int64_t>(
-                            0, finished - current_signal.trigger_receive_monotonic_ns));
-                    } else ++latency_overflow;
+                    ExecutionPlan plan;
+                    plan.intent = result.intent;
+                    plan.tick_size_e4 = (result.selected_yes != 0 ? yes_book : no_book).tick_size_e4;
+                    plan.market_state_version = result.intent.state_version;
+                    plan.policy = ExecutionPolicyId::AggressiveTaker;
+                    const auto tx = order_tx.prepare_submit(plan, monotonic_now_ns());
+                    const auto adapter_ready_ns = monotonic_now_ns();
+                    if (tx.accepted == 0 || tx.oms.state != OrderState::SendPending) {
+                        ++adapter_handoff_failures;
+                        (void)capital.release_order(result.intent.intent_id);
+                    } else {
+                        ++accepted;
+                        lane.mark_market_traded(kMarket);
+                        if (accepted_signal_to_admission.size() < accepted_signal_to_admission.capacity()) {
+                            accepted_signal_to_admission.push_back(std::max<std::int64_t>(
+                                0, finished - current_signal.trigger_receive_monotonic_ns));
+                            accepted_signal_to_adapter.push_back(std::max<std::int64_t>(
+                                0, adapter_ready_ns - current_signal.trigger_receive_monotonic_ns));
+                        } else ++latency_overflow;
+                    }
                 }
             }
         }
@@ -338,25 +357,29 @@ int main(int argc, char** argv) {
         const auto coinbase_ingress_status = coinbase_ingress.snapshot();
         const bool clean = pm_drops.load() == 0
             && binance_ingress_status.dropped_events == 0
-            && coinbase_ingress_status.dropped_events == 0;
+            && coinbase_ingress_status.dropped_events == 0
+            && adapter_handoff_failures == 0;
 
         std::cout << json::serialize(json::object{
             {"schema", "polymarket_v7_crypto_flash_shadow_v1"},
             {"paper_only", true}, {"authenticated_execution", false},
             {"real_order_submission", false}, {"real_capital_at_risk", false},
             {"authority", "SHADOW_ZERO_AUTHORITY"},
-            {"critical_path", "CPP_SAME_PROCESS_CAUSAL_EVENT_TO_RISK_ADMISSION"},
+            {"critical_path", "CPP_SAME_PROCESS_CAUSAL_EVENT_TO_OMS_ADAPTER_COMMAND"},
             {"clean_capture", clean}, {"duration_seconds", options.duration_seconds},
             {"evaluations", evaluations}, {"accepted_candidates", accepted},
+            {"adapter_handoff_failures", adapter_handoff_failures},
+            {"native_oms_active_orders", order_tx.active_orders()},
             {"latency_sample_overflow", latency_overflow},
             {"accepted_signal_to_admission", latency_distribution(std::move(accepted_signal_to_admission))},
+            {"accepted_signal_to_adapter", latency_distribution(std::move(accepted_signal_to_adapter))},
             {"first_signal_to_decision", latency_distribution(std::move(first_signal_to_decision))},
             {"decision_compute", latency_distribution(std::move(decision_compute))},
             {"reason_counts", reason_json(reasons)},
             {"binance", {{"frames", binance_status.frames_received}, {"transport_failures", binance_status.transport_failures}, {"drops", binance_ingress_status.dropped_events}}},
             {"coinbase", {{"frames", coinbase_status.frames_received}, {"transport_failures", coinbase_status.transport_failures}, {"drops", coinbase_ingress_status.dropped_events}}},
             {"polymarket", {{"messages", pm_status.messages}, {"reconnects", pm_status.reconnects}, {"errors", pm_status.errors}, {"drops", pm_drops.load()}}},
-            {"note", "No order adapter is instantiated. Accepted candidates are shadow admissions only."}
+            {"note", "No network order adapter is instantiated. Accepted candidates reach canonical OMS SendPending and an in-process adapter command only."}
         }) << '\n';
         return clean ? 0 : 2;
     } catch (const std::exception& error) {
