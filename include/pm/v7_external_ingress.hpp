@@ -81,17 +81,21 @@ private:
     std::atomic<std::uint64_t> frames_{0};
     std::atomic<std::uint64_t> decoded_events_{0};
     std::atomic<std::uint64_t> enqueued_events_{0};
-    std::atomic<std::uint64_t> drained_events_{0};
     std::atomic<std::uint64_t> dropped_events_{0};
     std::atomic<std::uint64_t> invalid_frames_{0};
     std::atomic<std::uint64_t> reconnects_{0};
     std::atomic<std::uint64_t> propagated_gaps_{0};
     std::atomic<std::uint64_t> connection_epoch_{0};
     std::uint64_t writer_connection_epoch_ = 0;
+    bool writer_gap_pending_ = false;
     std::atomic<bool> healthy_{false};
     std::atomic<bool> gap_pending_{false};
+    // Drain ownership lives on another core in production. Keep its sole
+    // mutable counter off the producer metrics cache line.
+    alignas(64) std::atomic<std::uint64_t> drained_events_{0};
 
     [[nodiscard]] bool enqueue_event(ExternalVenueEvent event) noexcept;
+    void set_gap_pending() noexcept;
 };
 
 static_assert(std::is_trivially_copyable_v<ExternalIngressSnapshot>);
