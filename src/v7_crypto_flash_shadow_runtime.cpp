@@ -183,6 +183,9 @@ int main(int argc, char** argv) {
         ExternalAssetState external_state(kAsset);
 
         NativeCryptoDecisionPolicy decision_policy;
+        // Frozen LEAD_LAG_TAKER_V1 uses maximum_signal_age_ms=5000; the source
+        // signal's shorter technical valid flag is not an economic expiry.
+        decision_policy.require_signal_valid = 0;
         NativeCryptoDecisionLane lane(decision_policy);
         CapitalLimits limits;
         limits.sleeve_budget_microdollars = 1'000'000'000LL;

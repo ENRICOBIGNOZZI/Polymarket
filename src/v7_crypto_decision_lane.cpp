@@ -84,7 +84,9 @@ NativeCryptoDecisionResult NativeCryptoDecisionLane::evaluate(
     }
     out.signal_age_ns = now_ns - input.signal.trigger_receive_monotonic_ns;
     if (out.signal_age_ns > policy_.maximum_signal_age_ns
-        || now_ns > input.signal.valid_until_monotonic_ns) {
+        || (policy_.require_signal_valid != 0
+            && input.signal.valid_until_monotonic_ns > 0
+            && now_ns > input.signal.valid_until_monotonic_ns)) {
         return finish(NativeCryptoDecisionReason::ExpiredSignal);
     }
     if (!std::isfinite(input.signal.binance_return_100ms_bp)

@@ -137,10 +137,24 @@ void test_evaluate_is_allocation_free() {
     assert(capital.release_order(result.intent.intent_id));
 }
 
+void test_frozen_forward_can_ignore_source_valid_flag_with_age_gate() {
+    NativeCryptoDecisionPolicy policy;
+    policy.require_signal_valid = 0;
+    NativeCryptoDecisionLane lane(policy);
+    SleeveCapitalAccount capital(limits());
+    auto value = input(1, 6);
+    value.signal.valid = 0;
+    value.signal.valid_until_monotonic_ns = value.now_monotonic_ns - 1;
+    value.signal.trigger_receive_monotonic_ns = value.now_monotonic_ns - 4'000'000'000LL;
+    const auto result = lane.evaluate(value, capital);
+    assert(result.accepted == 1);
+}
+
 int main() {
     test_up_down_and_admission();
     test_duplicate_depth_tte_and_market_gates();
     test_market_traded_and_capital_denied();
     test_evaluate_is_allocation_free();
+    test_frozen_forward_can_ignore_source_valid_flag_with_age_gate();
     return 0;
 }
