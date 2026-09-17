@@ -22,9 +22,29 @@ Run `ops/v7_london_bootstrap.sh` only on a fresh Ubuntu 24.04 EC2 host with `POL
 
 Tailscale may then be authenticated separately for administration. Do not place Tailscale between venue feeds, the strategy and Polymarket.
 
+## AWS provisioning
+
+The repository now contains `infra/aws/v7_london_shootout.json` and `ops/v7_london_provision.sh`. The template creates one identical host in each physical AZ ID `euw2-az1`, `euw2-az2`, and `euw2-az3`, with encrypted gp3 storage, IMDSv2 required, zero inbound security-group rules, and an SSM instance role. Runtime services remain disabled after bootstrap.
+
+From an AWS-authenticated operator shell:
+
+```bash
+export AWS_REGION=eu-west-2
+export POLYMARKET_EXPECTED_SHA=$(git rev-parse HEAD)
+./ops/v7_london_provision.sh
+```
+
+The wrapper verifies the AWS caller identity, maps the physical AZ IDs in the caller account, chooses the first configured compute instance type offered in all three zones, resolves the latest available Canonical Ubuntu 24.04 amd64 gp3 image, and writes a local provisioning receipt. It never authenticates Tailscale or enables the PAPER runtime.
+
+SSM is the bootstrap administration path, so SSH port 22 does not need to be exposed. Tailscale remains an optional, separately authenticated admin path.
+
 ## Shootout
 
-Use `ops/v7_london_benchmark.sh smoke` first. Smoke output is operational only and cannot select an AZ.
+Use `ops/v7_london_benchmark.sh smoke` first. Smoke output is operational only and cannot select an AZ. After provisioning, the same three-host operation can be dispatched without inbound SSH:
+
+```bash
+python3 ops/v7_london_ssm_benchmark.py smoke --expected-sha "$POLYMARKET_EXPECTED_SHA"
+```
 
 Use `ops/v7_london_benchmark.sh formal` on all three hosts for the formal 24-hour HTTPS/TLS/TTFB probe. Gather the three probe JSON files and evaluate them with `scripts/v7_regional_shootout.py`, passing the three physical AZ IDs as candidate regions.
 
@@ -58,7 +78,7 @@ The deploy workflows already read `POLYMARKET_SERVER_HOST`, `POLYMARKET_SERVER_U
 
 ## Current blocker
 
-AWS provisioning is not currently possible from the existing Mac environment: no usable AWS CLI/account identity was found during the 2026-09-16 audit. Provisioning of the three EC2 hosts therefore remains blocked on explicit AWS access. The repository-side bootstrap, benchmark, exact-SHA checks and migration contracts can be completed independently.
+AWS resource creation is still blocked until an AWS-authenticated operator identity is available. The infrastructure definition, physical-AZ checks, common-instance-type selection, SSM administration path, bootstrap, benchmark orchestration, exact-SHA checks and migration contracts are now repository-complete; the blocker is account authorization, not missing provisioning code.
 
 ## Independent audit corrections
 

@@ -1,0 +1,489 @@
+{
+  "AWSTemplateFormatVersion": "2010-09-09",
+  "Description": "Polymarket V7 London PAPER/SHADOW three-AZ benchmark; no inbound access and no real-order authority.",
+  "Outputs": {
+    "InstanceAz1": {
+      "Value": {
+        "Ref": "HostAz1"
+      }
+    },
+    "InstanceAz2": {
+      "Value": {
+        "Ref": "HostAz2"
+      }
+    },
+    "InstanceAz3": {
+      "Value": {
+        "Ref": "HostAz3"
+      }
+    },
+    "PublicIpAz1": {
+      "Value": {
+        "Fn::GetAtt": [
+          "HostAz1",
+          "PublicIp"
+        ]
+      }
+    },
+    "PublicIpAz2": {
+      "Value": {
+        "Fn::GetAtt": [
+          "HostAz2",
+          "PublicIp"
+        ]
+      }
+    },
+    "PublicIpAz3": {
+      "Value": {
+        "Fn::GetAtt": [
+          "HostAz3",
+          "PublicIp"
+        ]
+      }
+    },
+    "ZoneIdAz1": {
+      "Value": "euw2-az1"
+    },
+    "ZoneIdAz2": {
+      "Value": "euw2-az2"
+    },
+    "ZoneIdAz3": {
+      "Value": "euw2-az3"
+    }
+  },
+  "Parameters": {
+    "ExpectedSha": {
+      "AllowedPattern": "^[0-9a-f]{40}$",
+      "Description": "Immutable exact Git SHA to bootstrap.",
+      "Type": "String"
+    },
+    "ImageId": {
+      "Description": "Canonical Ubuntu 24.04 amd64 AMI selected by the provisioning wrapper.",
+      "Type": "AWS::EC2::Image::Id"
+    },
+    "InstanceType": {
+      "Default": "c7i.large",
+      "Type": "String"
+    },
+    "ServiceUser": {
+      "AllowedPattern": "^[a-z_][a-z0-9_-]{0,30}$",
+      "Default": "ubuntu",
+      "Type": "String"
+    }
+  },
+  "Resources": {
+    "AssocAz1": {
+      "Properties": {
+        "RouteTableId": {
+          "Ref": "PublicRouteTable"
+        },
+        "SubnetId": {
+          "Ref": "SubnetAz1"
+        }
+      },
+      "Type": "AWS::EC2::SubnetRouteTableAssociation"
+    },
+    "AssocAz2": {
+      "Properties": {
+        "RouteTableId": {
+          "Ref": "PublicRouteTable"
+        },
+        "SubnetId": {
+          "Ref": "SubnetAz2"
+        }
+      },
+      "Type": "AWS::EC2::SubnetRouteTableAssociation"
+    },
+    "AssocAz3": {
+      "Properties": {
+        "RouteTableId": {
+          "Ref": "PublicRouteTable"
+        },
+        "SubnetId": {
+          "Ref": "SubnetAz3"
+        }
+      },
+      "Type": "AWS::EC2::SubnetRouteTableAssociation"
+    },
+    "DefaultRoute": {
+      "DependsOn": "GatewayAttachment",
+      "Properties": {
+        "DestinationCidrBlock": "0.0.0.0/0",
+        "GatewayId": {
+          "Ref": "InternetGateway"
+        },
+        "RouteTableId": {
+          "Ref": "PublicRouteTable"
+        }
+      },
+      "Type": "AWS::EC2::Route"
+    },
+    "EgressOnlySecurityGroup": {
+      "Properties": {
+        "GroupDescription": "No inbound; outbound-only London PAPER benchmark hosts",
+        "SecurityGroupEgress": [
+          {
+            "CidrIp": "0.0.0.0/0",
+            "IpProtocol": "-1"
+          }
+        ],
+        "SecurityGroupIngress": [],
+        "VpcId": {
+          "Ref": "VPC"
+        }
+      },
+      "Type": "AWS::EC2::SecurityGroup"
+    },
+    "GatewayAttachment": {
+      "Properties": {
+        "InternetGatewayId": {
+          "Ref": "InternetGateway"
+        },
+        "VpcId": {
+          "Ref": "VPC"
+        }
+      },
+      "Type": "AWS::EC2::VPCGatewayAttachment"
+    },
+    "HostAz1": {
+      "Properties": {
+        "BlockDeviceMappings": [
+          {
+            "DeviceName": "/dev/sda1",
+            "Ebs": {
+              "DeleteOnTermination": true,
+              "Encrypted": true,
+              "VolumeSize": 40,
+              "VolumeType": "gp3"
+            }
+          },
+          {
+            "DeviceName": "/dev/sdf",
+            "Ebs": {
+              "DeleteOnTermination": true,
+              "Encrypted": true,
+              "VolumeSize": 250,
+              "VolumeType": "gp3"
+            }
+          }
+        ],
+        "EbsOptimized": true,
+        "IamInstanceProfile": {
+          "Ref": "InstanceProfile"
+        },
+        "ImageId": {
+          "Ref": "ImageId"
+        },
+        "InstanceType": {
+          "Ref": "InstanceType"
+        },
+        "MetadataOptions": {
+          "HttpEndpoint": "enabled",
+          "HttpPutResponseHopLimit": 2,
+          "HttpTokens": "required"
+        },
+        "Monitoring": true,
+        "SecurityGroupIds": [
+          {
+            "Ref": "EgressOnlySecurityGroup"
+          }
+        ],
+        "SubnetId": {
+          "Ref": "SubnetAz1"
+        },
+        "Tags": [
+          {
+            "Key": "Name",
+            "Value": {
+              "Fn::Sub": "${AWS::StackName}-euw2-az1"
+            }
+          },
+          {
+            "Key": "PolymarketMode",
+            "Value": "PAPER_SHADOW_ONLY"
+          },
+          {
+            "Key": "ExactSha",
+            "Value": {
+              "Ref": "ExpectedSha"
+            }
+          }
+        ],
+        "UserData": {
+          "Fn::Base64": {
+            "Fn::Sub": "#!/bin/bash\nset -euxo pipefail\nexec > >(tee -a /var/log/polymarket-v7-london-bootstrap.log | logger -t polymarket-v7-london -s 2>/dev/console) 2>&1\nexport DEBIAN_FRONTEND=noninteractive\napt-get update\napt-get install -y ca-certificates curl git snapd\nif ! command -v amazon-ssm-agent >/dev/null 2>&1; then\n  snap install amazon-ssm-agent --classic || true\nfi\nsystemctl enable --now snap.amazon-ssm-agent.amazon-ssm-agent.service 2>/dev/null ||   systemctl enable --now amazon-ssm-agent.service 2>/dev/null || true\nmkdir -p /mnt/polymarket-data\nDATA_DEV=\"$(lsblk -bndo NAME,TYPE,SIZE,MOUNTPOINT | awk '$2==\"disk\" && $3>=200000000000 && $4==\"\" {print \"/dev/\"$1; exit}')\"\nif [ -n \"$DATA_DEV\" ]; then\n  if ! blkid \"$DATA_DEV\" >/dev/null 2>&1; then mkfs.ext4 -F \"$DATA_DEV\"; fi\n  UUID=\"$(blkid -s UUID -o value \"$DATA_DEV\")\"\n  grep -q \"UUID=$UUID \" /etc/fstab || echo \"UUID=$UUID /mnt/polymarket-data ext4 defaults,nofail,noatime 0 2\" >> /etc/fstab\n  mount /mnt/polymarket-data || true\nfi\nchown -R ${ServiceUser}:${ServiceUser} /mnt/polymarket-data\ncurl -fsSL \"https://raw.githubusercontent.com/ENRICOBIGNOZZI/Polymarket/${ExpectedSha}/ops/v7_london_bootstrap.sh\" -o /tmp/v7_london_bootstrap.sh\nchmod 0755 /tmp/v7_london_bootstrap.sh\nPOLYMARKET_EXPECTED_SHA=\"${ExpectedSha}\" POLYMARKET_SERVICE_USER=\"${ServiceUser}\" POLYMARKET_APP_DIR=\"/home/${ServiceUser}/polymarket\" PM_V7_RUN_ROOT=\"/mnt/polymarket-data/paper_v7_london\" POLYMARKET_INSTALL_TAILSCALE=1 /tmp/v7_london_bootstrap.sh\n"
+          }
+        }
+      },
+      "Type": "AWS::EC2::Instance"
+    },
+    "HostAz2": {
+      "Properties": {
+        "BlockDeviceMappings": [
+          {
+            "DeviceName": "/dev/sda1",
+            "Ebs": {
+              "DeleteOnTermination": true,
+              "Encrypted": true,
+              "VolumeSize": 40,
+              "VolumeType": "gp3"
+            }
+          },
+          {
+            "DeviceName": "/dev/sdf",
+            "Ebs": {
+              "DeleteOnTermination": true,
+              "Encrypted": true,
+              "VolumeSize": 250,
+              "VolumeType": "gp3"
+            }
+          }
+        ],
+        "EbsOptimized": true,
+        "IamInstanceProfile": {
+          "Ref": "InstanceProfile"
+        },
+        "ImageId": {
+          "Ref": "ImageId"
+        },
+        "InstanceType": {
+          "Ref": "InstanceType"
+        },
+        "MetadataOptions": {
+          "HttpEndpoint": "enabled",
+          "HttpPutResponseHopLimit": 2,
+          "HttpTokens": "required"
+        },
+        "Monitoring": true,
+        "SecurityGroupIds": [
+          {
+            "Ref": "EgressOnlySecurityGroup"
+          }
+        ],
+        "SubnetId": {
+          "Ref": "SubnetAz2"
+        },
+        "Tags": [
+          {
+            "Key": "Name",
+            "Value": {
+              "Fn::Sub": "${AWS::StackName}-euw2-az2"
+            }
+          },
+          {
+            "Key": "PolymarketMode",
+            "Value": "PAPER_SHADOW_ONLY"
+          },
+          {
+            "Key": "ExactSha",
+            "Value": {
+              "Ref": "ExpectedSha"
+            }
+          }
+        ],
+        "UserData": {
+          "Fn::Base64": {
+            "Fn::Sub": "#!/bin/bash\nset -euxo pipefail\nexec > >(tee -a /var/log/polymarket-v7-london-bootstrap.log | logger -t polymarket-v7-london -s 2>/dev/console) 2>&1\nexport DEBIAN_FRONTEND=noninteractive\napt-get update\napt-get install -y ca-certificates curl git snapd\nif ! command -v amazon-ssm-agent >/dev/null 2>&1; then\n  snap install amazon-ssm-agent --classic || true\nfi\nsystemctl enable --now snap.amazon-ssm-agent.amazon-ssm-agent.service 2>/dev/null ||   systemctl enable --now amazon-ssm-agent.service 2>/dev/null || true\nmkdir -p /mnt/polymarket-data\nDATA_DEV=\"$(lsblk -bndo NAME,TYPE,SIZE,MOUNTPOINT | awk '$2==\"disk\" && $3>=200000000000 && $4==\"\" {print \"/dev/\"$1; exit}')\"\nif [ -n \"$DATA_DEV\" ]; then\n  if ! blkid \"$DATA_DEV\" >/dev/null 2>&1; then mkfs.ext4 -F \"$DATA_DEV\"; fi\n  UUID=\"$(blkid -s UUID -o value \"$DATA_DEV\")\"\n  grep -q \"UUID=$UUID \" /etc/fstab || echo \"UUID=$UUID /mnt/polymarket-data ext4 defaults,nofail,noatime 0 2\" >> /etc/fstab\n  mount /mnt/polymarket-data || true\nfi\nchown -R ${ServiceUser}:${ServiceUser} /mnt/polymarket-data\ncurl -fsSL \"https://raw.githubusercontent.com/ENRICOBIGNOZZI/Polymarket/${ExpectedSha}/ops/v7_london_bootstrap.sh\" -o /tmp/v7_london_bootstrap.sh\nchmod 0755 /tmp/v7_london_bootstrap.sh\nPOLYMARKET_EXPECTED_SHA=\"${ExpectedSha}\" POLYMARKET_SERVICE_USER=\"${ServiceUser}\" POLYMARKET_APP_DIR=\"/home/${ServiceUser}/polymarket\" PM_V7_RUN_ROOT=\"/mnt/polymarket-data/paper_v7_london\" POLYMARKET_INSTALL_TAILSCALE=1 /tmp/v7_london_bootstrap.sh\n"
+          }
+        }
+      },
+      "Type": "AWS::EC2::Instance"
+    },
+    "HostAz3": {
+      "Properties": {
+        "BlockDeviceMappings": [
+          {
+            "DeviceName": "/dev/sda1",
+            "Ebs": {
+              "DeleteOnTermination": true,
+              "Encrypted": true,
+              "VolumeSize": 40,
+              "VolumeType": "gp3"
+            }
+          },
+          {
+            "DeviceName": "/dev/sdf",
+            "Ebs": {
+              "DeleteOnTermination": true,
+              "Encrypted": true,
+              "VolumeSize": 250,
+              "VolumeType": "gp3"
+            }
+          }
+        ],
+        "EbsOptimized": true,
+        "IamInstanceProfile": {
+          "Ref": "InstanceProfile"
+        },
+        "ImageId": {
+          "Ref": "ImageId"
+        },
+        "InstanceType": {
+          "Ref": "InstanceType"
+        },
+        "MetadataOptions": {
+          "HttpEndpoint": "enabled",
+          "HttpPutResponseHopLimit": 2,
+          "HttpTokens": "required"
+        },
+        "Monitoring": true,
+        "SecurityGroupIds": [
+          {
+            "Ref": "EgressOnlySecurityGroup"
+          }
+        ],
+        "SubnetId": {
+          "Ref": "SubnetAz3"
+        },
+        "Tags": [
+          {
+            "Key": "Name",
+            "Value": {
+              "Fn::Sub": "${AWS::StackName}-euw2-az3"
+            }
+          },
+          {
+            "Key": "PolymarketMode",
+            "Value": "PAPER_SHADOW_ONLY"
+          },
+          {
+            "Key": "ExactSha",
+            "Value": {
+              "Ref": "ExpectedSha"
+            }
+          }
+        ],
+        "UserData": {
+          "Fn::Base64": {
+            "Fn::Sub": "#!/bin/bash\nset -euxo pipefail\nexec > >(tee -a /var/log/polymarket-v7-london-bootstrap.log | logger -t polymarket-v7-london -s 2>/dev/console) 2>&1\nexport DEBIAN_FRONTEND=noninteractive\napt-get update\napt-get install -y ca-certificates curl git snapd\nif ! command -v amazon-ssm-agent >/dev/null 2>&1; then\n  snap install amazon-ssm-agent --classic || true\nfi\nsystemctl enable --now snap.amazon-ssm-agent.amazon-ssm-agent.service 2>/dev/null ||   systemctl enable --now amazon-ssm-agent.service 2>/dev/null || true\nmkdir -p /mnt/polymarket-data\nDATA_DEV=\"$(lsblk -bndo NAME,TYPE,SIZE,MOUNTPOINT | awk '$2==\"disk\" && $3>=200000000000 && $4==\"\" {print \"/dev/\"$1; exit}')\"\nif [ -n \"$DATA_DEV\" ]; then\n  if ! blkid \"$DATA_DEV\" >/dev/null 2>&1; then mkfs.ext4 -F \"$DATA_DEV\"; fi\n  UUID=\"$(blkid -s UUID -o value \"$DATA_DEV\")\"\n  grep -q \"UUID=$UUID \" /etc/fstab || echo \"UUID=$UUID /mnt/polymarket-data ext4 defaults,nofail,noatime 0 2\" >> /etc/fstab\n  mount /mnt/polymarket-data || true\nfi\nchown -R ${ServiceUser}:${ServiceUser} /mnt/polymarket-data\ncurl -fsSL \"https://raw.githubusercontent.com/ENRICOBIGNOZZI/Polymarket/${ExpectedSha}/ops/v7_london_bootstrap.sh\" -o /tmp/v7_london_bootstrap.sh\nchmod 0755 /tmp/v7_london_bootstrap.sh\nPOLYMARKET_EXPECTED_SHA=\"${ExpectedSha}\" POLYMARKET_SERVICE_USER=\"${ServiceUser}\" POLYMARKET_APP_DIR=\"/home/${ServiceUser}/polymarket\" PM_V7_RUN_ROOT=\"/mnt/polymarket-data/paper_v7_london\" POLYMARKET_INSTALL_TAILSCALE=1 /tmp/v7_london_bootstrap.sh\n"
+          }
+        }
+      },
+      "Type": "AWS::EC2::Instance"
+    },
+    "InstanceProfile": {
+      "Properties": {
+        "Roles": [
+          {
+            "Ref": "InstanceRole"
+          }
+        ]
+      },
+      "Type": "AWS::IAM::InstanceProfile"
+    },
+    "InstanceRole": {
+      "Properties": {
+        "AssumeRolePolicyDocument": {
+          "Statement": [
+            {
+              "Action": [
+                "sts:AssumeRole"
+              ],
+              "Effect": "Allow",
+              "Principal": {
+                "Service": [
+                  "ec2.amazonaws.com"
+                ]
+              }
+            }
+          ],
+          "Version": "2012-10-17"
+        },
+        "ManagedPolicyArns": [
+          "arn:aws:iam::aws:policy/AmazonSSMManagedInstanceCore"
+        ],
+        "Tags": [
+          {
+            "Key": "PolymarketMode",
+            "Value": "PAPER_SHADOW_ONLY"
+          }
+        ]
+      },
+      "Type": "AWS::IAM::Role"
+    },
+    "InternetGateway": {
+      "Type": "AWS::EC2::InternetGateway"
+    },
+    "PublicRouteTable": {
+      "Properties": {
+        "VpcId": {
+          "Ref": "VPC"
+        }
+      },
+      "Type": "AWS::EC2::RouteTable"
+    },
+    "SubnetAz1": {
+      "Properties": {
+        "AvailabilityZoneId": "euw2-az1",
+        "CidrBlock": "10.77.1.0/24",
+        "MapPublicIpOnLaunch": true,
+        "Tags": [
+          {
+            "Key": "Name",
+            "Value": {
+              "Fn::Sub": "${AWS::StackName}-euw2-az1"
+            }
+          }
+        ],
+        "VpcId": {
+          "Ref": "VPC"
+        }
+      },
+      "Type": "AWS::EC2::Subnet"
+    },
+    "SubnetAz2": {
+      "Properties": {
+        "AvailabilityZoneId": "euw2-az2",
+        "CidrBlock": "10.77.2.0/24",
+        "MapPublicIpOnLaunch": true,
+        "Tags": [
+          {
+            "Key": "Name",
+            "Value": {
+              "Fn::Sub": "${AWS::StackName}-euw2-az2"
+            }
+          }
+        ],
+        "VpcId": {
+          "Ref": "VPC"
+        }
+      },
+      "Type": "AWS::EC2::Subnet"
+    },
+    "SubnetAz3": {
+      "Properties": {
+        "AvailabilityZoneId": "euw2-az3",
+        "CidrBlock": "10.77.3.0/24",
+        "MapPublicIpOnLaunch": true,
+        "Tags": [
+          {
+            "Key": "Name",
+            "Value": {
+              "Fn::Sub": "${AWS::StackName}-euw2-az3"
+            }
+          }
+        ],
+        "VpcId": {
+          "Ref": "VPC"
+        }
+      },
+      "Type": "AWS::EC2::Subnet"
+    },
+    "VPC": {
+      "Properties": {
+        "CidrBlock": "10.77.0.0/16",
+        "EnableDnsHostnames": true,
+        "EnableDnsSupport": true,
+        "Tags": [
+          {
+            "Key": "Name",
+            "Value": {
+              "Fn::Sub": "${AWS::StackName}-vpc"
+            }
+          }
+        ]
+      },
+      "Type": "AWS::EC2::VPC"
+    }
+  }
+}
