@@ -11,6 +11,7 @@ HERE = Path(__file__).resolve().parent
 if str(HERE) not in sys.path:
     sys.path.insert(0, str(HERE))
 
+from v7_operator_truth import append_operator_metrics, prometheus_number
 from v7_external_fair import summarize_external_fair
 from v7_ledger_metrics import summarize_ledger
 from v7_maker_fillability_exact import summarize_best_available_fillability
@@ -87,7 +88,7 @@ def _metric(name: str, value: Any, labels: dict[str, Any] | None = None) -> str:
     suffix = ""
     if labels:
         suffix = "{" + ",".join(f'{k}="{_safe_label(v)}"' for k, v in labels.items()) + "}"
-    return f"{name}{suffix} {_number(value):.12g}"
+    return f"{name}{suffix} {prometheus_number(value)}"
 
 
 def _trade_tape(path: Path, now: int) -> dict[str, Any]:
@@ -237,6 +238,8 @@ def collect_snapshot(run_root: Path, repository_root: Path | None = None, *, now
             "sha256": hashlib.sha256(process_path.read_bytes()).hexdigest() if process_path.exists() else "",
         },
         "fast": fast, "hard": hard, "maker": maker,
+        "lead_lag": _json(run_root / "research/lead_lag_taker_v1/status.json"),
+        "lead_lag_collector": _json(run_root / "external_fair/lead_lag_collector_status.json"),
         "maker_diagnostics": _json(run_root / "micro_maker/runtime_diagnostics.json"),
         "maker_selector": _json(run_root / "micro_maker/selector_status.json"),
         "maker_rotation": _json(run_root / "micro_maker/rotation_status.json"),
@@ -257,7 +260,7 @@ def collect_snapshot(run_root: Path, repository_root: Path | None = None, *, now
         "algorithms": algorithms, "strategies": algorithms,
         "ages": {"runtime": _age(now, runtime.get("timestamp")), "portfolio": _age(now, portfolio.get("timestamp")), "economics": _file_age(canonical_path, now), "trade_tape": tape["age"]},
         "operations": _operations(run_root, runtime, now),
-        "economics": {"starting_capital": starting, "cash": _number(allocations.get("reserve_budget")), "equity": equity, "pnl": equity-starting, "realized_pnl": _number(canonical.get("net_pnl")), "unrealized_executable_pnl": equity-starting-_number(canonical.get("net_pnl")), "drawdown": _number(portfolio.get("drawdown")), "gross_exposure": 0.0, "capital_utilization": 0.0, "live_units": 0, "killed": bool(portfolio.get("killed"))},
+        "economics": {"starting_capital": starting, "cash": _number(allocations.get("reserve_budget")), "equity": equity, "pnl": equity-starting, "realized_pnl": canonical.get("net_pnl"), "unrealized_executable_pnl": equity-starting-_number(canonical.get("net_pnl")), "drawdown": _number(portfolio.get("drawdown")), "gross_exposure": 0.0, "capital_utilization": 0.0, "live_units": 0, "killed": bool(portfolio.get("killed"))},
     }
 
 
@@ -388,15 +391,34 @@ def render_prometheus(snapshot: dict[str, Any]) -> str:
         lines.append(_metric("polymarket_strategy_ledger_fills", row.get("fills"), {"strategy": strategy}))
     lines.extend([_metric("polymarket_execution_final_pnl_usd", total.get("final_pnl")), _metric("polymarket_execution_capital_hours", _number(total.get("capital_duration_ms"))/3_600_000)])
     for horizon, value in sorted((total.get("markout_sum") or {}).items()):
-        count = _number((total.get("markout_count") or {}).get(horizon)); lines.append(_metric("polymarket_execution_mean_markout", _number(value)/count if count else 0, {"horizon": horizon}))
+        count = _number((total.get("markout_count") or {}).get(horizon)); lines.append(_metric("polymarket_execution_mean_markout", _number(value)/count if count else None, {"horizon": horizon}))
     for stage, row in sorted(((snapshot.get("maker_latency") or {}).get("stages") or {}).items()):
         for percentile in ("p50", "p90", "p95", "p99", "p99_9", "max"): lines.append(_metric("polymarket_v7_latency_stage_nanoseconds", row.get(percentile), {"stage": stage, "percentile": percentile}))
+    append_operator_metrics(lines, snapshot, reasons, _metric)
     _append_maker_metrics(lines, snapshot)
     from exporter_v7_fillability import _append_fillability_metrics
     from exporter_v7_external import _append_external_fair_metrics
     _append_fillability_metrics(lines, snapshot.get("maker_fillability") or {})
     _append_external_fair_metrics(lines, snapshot.get("external_fair") or {})
     return "\n".join(lines) + "\n"
+
+
+def render_cached_prometheus(cached: dict[str, Any], *, max_snapshot_age: float = 45.0) -> bytes:
+    """Expose cache liveness at request time, not frozen at the last success."""
+    age = _number(cached.get("age_seconds"), math.inf)
+    usable = bool(cached.get("ready")) and age <= max_snapshot_age
+    base = cached.get("metrics", b"").decode("utf-8")
+    lines = [line for line in base.splitlines()
+             if not line.startswith("polymarket_v7_exporter_snapshot_refresh_errors_total ")]
+    if not usable:
+        lines = ["polymarket_v7_health 0" if line.startswith("polymarket_v7_health ") else line for line in lines]
+    lines.extend([
+        _metric("polymarket_v7_exporter_snapshot_usable", usable),
+        _metric("polymarket_v7_exporter_snapshot_age_seconds", age),
+        _metric("polymarket_v7_exporter_snapshot_refresh_errors_total", cached.get("refresh_errors", 0)),
+        _metric("polymarket_v7_exporter_last_refresh_failed", bool(cached.get("last_error"))),
+    ])
+    return ("\n".join(lines) + "\n").encode("utf-8")
 
 
 class SnapshotCache:
@@ -430,7 +452,7 @@ class ExporterHandler(BaseHTTPRequestHandler):
         if cached is None:
             snapshot=collect_snapshot(self.run_root,self.repository_root); cached={"ready":True,"snapshot":snapshot,"metrics":render_prometheus(snapshot).encode(),"maker_fillability":(json.dumps(snapshot.get("maker_fillability") or {})+"\n").encode(),"external_fair":(json.dumps(snapshot.get("external_fair") or {})+"\n").encode(),"age_seconds":0}
         if not cached.get("ready"): payload=b'{"ok":false,"reasons":["exporter_snapshot_not_ready"]}\n'; self.send_response(503); content="application/json"
-        elif self.path=="/metrics": payload=cached["metrics"]; self.send_response(200); content="text/plain; version=0.0.4"
+        elif self.path=="/metrics": payload=render_cached_prometheus(cached,max_snapshot_age=self.max_snapshot_age); self.send_response(200); content="text/plain; version=0.0.4"
         elif self.path=="/healthz":
             reasons=health_reasons(cached["snapshot"],max_runtime_age=self.max_runtime_age,max_supervisor_age=self.max_supervisor_age)
             if _number(cached.get("age_seconds"),math.inf)>self.max_snapshot_age: reasons.append("exporter_snapshot_stale")

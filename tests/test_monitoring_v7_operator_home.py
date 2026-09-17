@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import re
 import unittest
 from pathlib import Path
 
@@ -15,6 +16,7 @@ class V7OperatorHomeTest(unittest.TestCase):
         self.assertEqual(dashboard["uid"], "polymarket-v7")
         self.assertIn("24/7 PAPER Control Room", dashboard["title"])
         serialized = json.dumps(dashboard)
+        unscoped = re.sub(r"(polymarket_[a-zA-Z0-9_]+)\{[^}]*\}", r"\1", serialized)
         for metric in (
             "polymarket_v7_supervisor_alive",
             "polymarket_v7_single_writer_ok",
@@ -39,12 +41,13 @@ class V7OperatorHomeTest(unittest.TestCase):
         ):
             self.assertIn(metric, serialized)
         self.assertIn("Evidence-collection accounting only", serialized)
-        self.assertIn("polymarket_external_fair_present * polymarket_external_fair_healthy", serialized)
+        self.assertIn("polymarket_external_fair_present * polymarket_external_fair_healthy", unscoped)
 
     def test_live_interface_excludes_research_algorithms_and_uses_explicit_authority_names(self) -> None:
         manifest = json.loads((ROOT / "monitoring/v7_monitoring_manifest.json").read_text())
         dashboard = json.loads((ROOT / manifest["grafana"]["dashboard_file"]).read_text())
         serialized = json.dumps(dashboard)
+        unscoped = re.sub(r"(polymarket_[a-zA-Z0-9_]+)\{[^}]*\}", r"\1", serialized)
         self.assertIn("24/7 PAPER Control Room", dashboard["title"])
         self.assertIn("Economic New-Risk Authority", serialized)
         self.assertIn("polymarket_v7_economic_engine_configured", serialized)
