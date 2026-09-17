@@ -216,8 +216,8 @@ NativeClobSubmitResult NativeClobOrderLane::submit(
                                 NativeClobSubmitReason::PreWireFailure);
     }
 
-    std::array<char, 32> salt_text{}, maker_text{}, taker_text{}, timestamp_text{};
-    std::array<char, 24> request_timestamp_text{};
+    std::array<char, 32> salt_text, maker_text, taker_text, timestamp_text;
+    std::array<char, 24> request_timestamp_text;
     const auto salt_sv = decimal(salt, salt_text);
     const auto maker_sv = decimal(amounts.maker_amount, maker_text);
     const auto taker_sv = decimal(amounts.taker_amount, taker_text);
@@ -241,7 +241,7 @@ NativeClobSubmitResult NativeClobOrderLane::submit(
     order.metadata_hex = impl_->metadata.view();
     order.builder_hex = impl_->builder.view();
 
-    std::array<char, poly1271::kWrappedSignatureHexChars> order_signature{};
+    std::array<char, poly1271::kWrappedSignatureHexChars> order_signature;
     if (!poly1271::sign_poly1271_hex(
             impl_->order_hasher, impl_->signer, order, order_signature)) {
         return fail_before_wire(oms_owner, command.client_order_id,
@@ -269,7 +269,7 @@ NativeClobSubmitResult NativeClobOrderLane::submit(
                                 NativeClobSubmitReason::PreWireFailure);
     }
 
-    std::array<char, 8192> frame{};
+    std::array<char, 8192> frame;
     const auto frame_size = post->build(dynamic, request_ts_sv, frame);
     if (frame_size == 0) {
         return fail_before_wire(oms_owner, command.client_order_id,
