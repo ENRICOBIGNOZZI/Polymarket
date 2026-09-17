@@ -433,11 +433,18 @@ class LeadLagRuntime:
             order_id=order_id, position_id=position_id, market_id=market_id, event_id=arrival["event_id"],
             token_id=arrival["token_id"], decision_ts_ms=decision_ms, exchange_ts_ms=book.exchange_ts_ms,
             receive_ts_ms=book.receive_ts_ms, book_snapshot_id=book.snapshot_id, side="BUY")
+        order_metadata = dict(metadata)
+        order_metadata["capacity_book"] = {
+            "schema": "polymarket_v7_lead_lag_capacity_book_v1",
+            "book_snapshot_id": book.snapshot_id, "receive_ts_ms": book.receive_ts_ms,
+            "ask_levels": [{"price": price, "size": quantity} for price, quantity in book.asks],
+            "fee_schedule": schedule, "candidate_limit_price": candidate_limit,
+        }
         spool_event(self.root, LedgerEvent(event_type="ORDER_SUBMITTED", **common,
             recorded_ts_ms=decision_ms, bid=book.bids[0][0] if book.bids else None, ask=ask,
             bid_depth=sum(q for _, q in book.bids), ask_depth=sum(q for _, q in book.asks),
             limit_price=ask, intended_action="TAKE", intended_size=size, order_state="SUBMITTED_PAPER_FORWARD",
-            predicted_fill_probability=1.0, expected_ev=0.0, metadata=metadata))
+            predicted_fill_probability=1.0, expected_ev=0.0, metadata=order_metadata))
         spool_event(self.root, LedgerEvent(event_type="FILL", **common,
             recorded_ts_ms=decision_ms + 1, fill_id=fill_id, fill_price=ask, filled_size=size, complete=True,
             fee=fee, fee_rate=float(schedule.get("rate") or 0.0), fee_source="GAMMA_AUTHORITATIVE_FEE_SCHEDULE",
