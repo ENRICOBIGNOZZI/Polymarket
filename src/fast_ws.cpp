@@ -245,6 +245,7 @@ struct MarketWebSocketFeed::Impl {
                     beast::get_lowest_layer(ws).connect(resolved);
                 }
                 ws.next_layer().handshake(ssl::stream_base::client);
+                beast::get_lowest_layer(ws).socket().set_option(tcp::no_delay(true));
 
                 beast::get_lowest_layer(ws).expires_never();
                 // Quiet market subscriptions remain connected without public

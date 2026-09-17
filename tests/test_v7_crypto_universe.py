@@ -98,3 +98,62 @@ def test_configuration_contract_is_crypto_only():
     cfg=config(); universe.validate_config(cfg)
     assert cfg['market_registry']=='config/v7_crypto_settlement_markets.json'
     assert 'structural' not in cfg['resource_budget']
+
+
+def _clob_market(slug: str, index: int = 1):
+    return {
+        'condition_id': f'0x{index:064x}', 'question_id': f'0x{index+1:064x}',
+        'question': f'Crypto window {slug}', 'description': 'configured crypto market',
+        'market_slug': slug, 'end_date_iso': '2026-09-17T23:59:59Z',
+        'minimum_order_size': '5', 'minimum_tick_size': '0.01',
+        'active': True, 'closed': False, 'accepting_orders': True,
+        'tokens': [
+            {'token_id': f'{index}01', 'outcome': 'Up', 'price': 0.45},
+            {'token_id': f'{index}02', 'outcome': 'Down', 'price': 0.55},
+        ],
+    }
+
+
+def test_resilient_discovery_does_not_require_gamma_when_clob_has_markets():
+    cfg=config(); reg=registry()
+    expected=universe._expected_crypto_slugs(cfg,reg,now_s=NOW)
+    page=[_clob_market(slug,i+1) for i,slug in enumerate(expected)]
+    calls={'clob':0,'gamma':0}
+    def fake(url,_timeout):
+        if 'clob.polymarket.com' in url:
+            calls['clob'] += 1
+            return {'data':page,'next_cursor':'LTE=','count':len(page)}
+        calls['gamma'] += 1
+        raise OSError('gamma unavailable')
+    rows,stats=universe.discover_crypto_resilient(cfg,reg,now_s=NOW,fetcher=fake)
+    assert len(rows)==len(expected)
+    assert calls['clob']==1 and calls['gamma']==0
+    assert stats['source_mode']=='CLOB_PRIMARY' and stats['clob_complete'] is True
+    assert stats['gamma_fallback_errors']==0 and stats['cache_fallback_markets']==0
+    assert all(row['condition_id'] and len(row['clob_token_ids'])==2 for row in rows)
+    assert all(row['liquidity_known'] is False and row['volume_24h_known'] is False for row in rows)
+    assert all(universe._eligibility(row,cfg) is None for row in rows)
+
+
+def test_resilient_discovery_uses_bounded_last_good_cache_when_both_hosts_fail():
+    cfg=config(); reg=registry(); expected=universe._expected_crypto_slugs(cfg,reg,now_s=NOW)
+    slug=next(iter(expected))
+    raw=market(99,slug=slug); raw['_crypto_context']=expected[slug]
+    cached=universe.normalize_market(raw)
+    previous={'timestamp_ms':__import__('time').time_ns()//1_000_000,'markets':[cached]}
+    def down(_url,_timeout): raise OSError('network unavailable')
+    rows,stats=universe.discover_crypto_resilient(cfg,reg,now_s=NOW,fetcher=down,previous=previous)
+    assert len(rows)==1 and rows[0]['slug']==slug
+    assert rows[0]['metadata_source']=='LAST_GOOD_CACHE'
+    assert stats['source_mode']=='DEGRADED_CACHE'
+    assert stats['cache_fallback_markets']==1 and stats['gamma_fallback_errors']>0
+
+
+def test_resilient_discovery_fails_closed_after_cache_expiry():
+    cfg=config(); reg=registry(); expected=universe._expected_crypto_slugs(cfg,reg,now_s=NOW)
+    slug=next(iter(expected)); raw=market(100,slug=slug); raw['_crypto_context']=expected[slug]
+    previous={'timestamp_ms':1,'markets':[universe.normalize_market(raw)]}
+    def down(_url,_timeout): raise OSError('network unavailable')
+    rows,stats=universe.discover_crypto_resilient(cfg,reg,now_s=NOW,fetcher=down,previous=previous)
+    assert rows==[] and stats['source_mode']=='UNAVAILABLE'
+    assert stats['cache_fallback_markets']==0 and stats['discovery_exhaustive'] is False

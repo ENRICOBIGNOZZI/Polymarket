@@ -75,6 +75,12 @@ def validate_config(config: dict[str, Any]) -> None:
     offsets = source.get("window_offsets")
     if not str(source.get("gamma_url") or "").startswith("https://"):
         raise ValueError("source.gamma_url must use HTTPS")
+    if not str(source.get("clob_url") or "").startswith("https://"):
+        raise ValueError("source.clob_url must use HTTPS")
+    if int(source.get("clob_max_pages", 0)) < 1:
+        raise ValueError("source.clob_max_pages must be positive")
+    if int(source.get("metadata_cache_max_age_seconds", 0)) < 1:
+        raise ValueError("source.metadata_cache_max_age_seconds must be positive")
     if attempts < 1 or not isinstance(offsets, list) or not offsets or any(type(x) is not int for x in offsets):
         raise ValueError("invalid exact-market discovery controls")
     if 0 not in offsets or min(offsets) < -2 or max(offsets) > 2:
@@ -99,9 +105,11 @@ def fetch_json(url: str, timeout: int = 20) -> Any:
 
 
 def normalize_market(raw: dict[str, Any]) -> dict[str, Any] | None:
-    market_id = str(raw.get("id") or "").strip()
     condition_id = str(raw.get("conditionId") or raw.get("condition_id") or "").strip()
+    market_id = str(raw.get("id") or raw.get("market_id") or condition_id).strip()
     token_ids = [str(value).strip() for value in _array(raw.get("clobTokenIds")) if str(value).strip()]
+    if not token_ids and isinstance(raw.get("tokens"), list):
+        token_ids = [str(row.get("token_id") or "").strip() for row in raw["tokens"] if isinstance(row, dict) and str(row.get("token_id") or "").strip()]
     if not market_id:
         return None
     events = raw.get("events") if isinstance(raw.get("events"), list) else []
@@ -110,7 +118,12 @@ def normalize_market(raw: dict[str, Any]) -> dict[str, Any] | None:
         0, int(_finite(raw.get("secondsDelay"), _finite(first_event.get("secondsDelay"))))
     )
     event_ids = sorted({str(row.get("id")).strip() for row in events if isinstance(row, dict) and str(row.get("id") or "").strip()})
+    outcomes = [str(value) for value in _array(raw.get("outcomes"))]
     outcome_prices = [min(1.0, max(0.0, _finite(value))) for value in _array(raw.get("outcomePrices"))]
+    if isinstance(raw.get("tokens"), list):
+        token_rows = [row for row in raw["tokens"] if isinstance(row, dict)]
+        if not outcomes: outcomes = [str(row.get("outcome") or "") for row in token_rows]
+        if not outcome_prices: outcome_prices = [min(1.0, max(0.0, _finite(row.get("price")))) for row in token_rows]
     best_bid = min(1.0, max(0.0, _finite(raw.get("bestBid"))))
     best_ask = min(1.0, max(0.0, _finite(raw.get("bestAsk"))))
     midpoint = (
@@ -124,9 +137,9 @@ def normalize_market(raw: dict[str, Any]) -> dict[str, Any] | None:
         "event_ids": event_ids,
         "question": str(raw.get("question") or ""),
         "description": str(raw.get("description") or ""),
-        "slug": str(raw.get("slug") or ""),
+        "slug": str(raw.get("slug") or raw.get("market_slug") or ""),
         "clob_token_ids": token_ids,
-        "outcomes": [str(value) for value in _array(raw.get("outcomes"))],
+        "outcomes": outcomes,
         "outcome_prices": outcome_prices,
         "best_bid": best_bid,
         "best_ask": best_ask,
@@ -141,11 +154,15 @@ def normalize_market(raw: dict[str, Any]) -> dict[str, Any] | None:
         "fees_enabled_explicit": "feesEnabled" in raw,
         "liquidity": max(0.0, _finite(raw.get("liquidityNum"), _finite(raw.get("liquidity")))),
         "volume_24h": max(0.0, _finite(raw.get("volume24hr"), _finite(raw.get("volume24h")))),
+        "liquidity_known": any(key in raw for key in ("liquidityNum", "liquidity")),
+        "volume_24h_known": any(key in raw for key in ("volume24hr", "volume24h")),
         "created_at": str(raw.get("createdAt") or ""),
         "end_date": str(raw.get("endDate") or raw.get("end_date_iso") or ""),
+        "minimum_order_size": max(0.0, _finite(raw.get("minimum_order_size"), _finite(raw.get("minOrderSize")))),
+        "minimum_tick_size": max(0.0, _finite(raw.get("minimum_tick_size"), _finite(raw.get("tickSize")))),
         "active": bool(raw.get("active", True)),
         "closed": bool(raw.get("closed", False)),
-        "accepting_orders": bool(raw.get("acceptingOrders", True)),
+        "accepting_orders": bool(raw.get("acceptingOrders", raw.get("accepting_orders", True))),
         "neg_risk": bool(raw.get("negRisk", False)),
         "asset": str((raw.get("_crypto_context") or {}).get("asset") or ""),
         "horizon": str((raw.get("_crypto_context") or {}).get("horizon") or ""),
@@ -246,6 +263,165 @@ def discover_crypto(
         "scan_duration_ms": (time.monotonic_ns()-started_ns)/1_000_000.0,
     }
 
+
+def _expected_crypto_slugs(
+    config: dict[str, Any], registry: dict[str, Any], *, now_s: int,
+) -> dict[str, dict[str, Any]]:
+    output: dict[str, dict[str, Any]] = {}
+    offsets=[int(x) for x in config["source"].get("window_offsets",[-1,0,1])]
+    for context in _registered_contexts(registry):
+        horizon=int(context["horizon_seconds"])
+        boundary=(now_s // horizon) * horizon
+        mapping=context["polymarket"]
+        template=str(mapping["slug_template"]); horizon_slug=str(mapping["horizon_slug"])
+        for offset in offsets:
+            window_start=boundary + offset*horizon
+            slug=template.format(horizon_slug=horizon_slug,window_start_unix=window_start)
+            output[slug]={
+                "asset":context.get("asset"), "horizon":context.get("horizon"),
+                "horizon_seconds":horizon, "contract_family":context.get("contract_family"),
+                "settlement_semantic_hash":context.get("settlement_semantic_hash"),
+                "research_only":context.get("research_only") is True, "authority":context.get("authority"),
+                "window_start_unix":window_start,
+            }
+    return output
+
+
+def _clob_raw_market(raw: dict[str, Any], context: dict[str, Any]) -> dict[str, Any]:
+    value=dict(raw)
+    value["id"] = str(raw.get("id") or raw.get("condition_id") or "")
+    value["slug"] = str(raw.get("market_slug") or raw.get("slug") or "")
+    value["conditionId"] = str(raw.get("condition_id") or raw.get("conditionId") or "")
+    value["clobTokenIds"] = [
+        str(row.get("token_id") or "") for row in raw.get("tokens", [])
+        if isinstance(row,dict) and str(row.get("token_id") or "")
+    ]
+    value["outcomes"] = [
+        str(row.get("outcome") or "") for row in raw.get("tokens", []) if isinstance(row,dict)
+    ]
+    value["outcomePrices"] = [
+        row.get("price") for row in raw.get("tokens", []) if isinstance(row,dict)
+    ]
+    value["endDate"] = raw.get("end_date_iso") or raw.get("endDate") or ""
+    value["acceptingOrders"] = raw.get("accepting_orders", raw.get("acceptingOrders", False))
+    value["minOrderSize"] = raw.get("minimum_order_size")
+    value["tickSize"] = raw.get("minimum_tick_size")
+    value["_crypto_context"] = dict(context)
+    value["_metadata_source"] = "CLOB_MARKETS"
+    return value
+
+
+def discover_crypto_resilient(
+    config: dict[str, Any], registry: dict[str, Any], *, now_s: int | None = None,
+    fetcher: Callable[[str, int], Any] = fetch_json,
+    previous: dict[str, Any] | None = None,
+) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+    """Resolve configured crypto windows without making Gamma availability critical.
+
+    Source order: public CLOB market index -> exact-slug Gamma fallback -> bounded
+    last-good cache. Gamma enriches/discovers but no longer gates the live market
+    identity. Missing liquidity/volume metadata never becomes an artificial zero;
+    executable depth remains an admission-time CLOB-book concern.
+    """
+    source=config["source"]
+    timeout=int(source.get("request_timeout_seconds",4))
+    clob_url=str(source["clob_url"]).rstrip("/")
+    gamma_url=str(source["gamma_url"]).rstrip("/")
+    max_pages=max(1,int(source.get("clob_max_pages",64)))
+    max_cache_age=max(1,int(source.get("metadata_cache_max_age_seconds",3600)))
+    now=int(time.time() if now_s is None else now_s)
+    expected=_expected_crypto_slugs(config,registry,now_s=now)
+    rows_by_slug: dict[str,dict[str,Any]]={}
+    clob_pages=0; gamma_requests=0; gamma_errors=0; cache_fallback=0
+    pagination_loop_guard_hit=False; clob_error=""
+    started_ns=time.monotonic_ns()
+
+    cursor="MA=="; seen_cursors:set[str]=set(); clob_complete=False
+    try:
+        for _ in range(max_pages):
+            if cursor in seen_cursors:
+                pagination_loop_guard_hit=True
+                break
+            seen_cursors.add(cursor)
+            query=urllib.parse.urlencode({"next_cursor":cursor})
+            value=fetcher(clob_url+"/markets?"+query,timeout)
+            clob_pages += 1
+            page=value.get("data",[]) if isinstance(value,dict) else []
+            for raw in page:
+                if not isinstance(raw,dict): continue
+                slug=str(raw.get("market_slug") or raw.get("slug") or "")
+                context=expected.get(slug)
+                if context is None: continue
+                normalized=normalize_market(_clob_raw_market(raw,context))
+                if normalized is not None: rows_by_slug[slug]=normalized
+            next_cursor=str(value.get("next_cursor") or "") if isinstance(value,dict) else ""
+            if next_cursor in ("", "LTE="):
+                clob_complete=True
+                break
+            cursor=next_cursor
+        else:
+            pagination_loop_guard_hit=True
+    except (OSError,TimeoutError,ValueError) as error:
+        clob_error=f"{type(error).__name__}:{error}"
+
+    # Exact-slug Gamma is now fallback only. One failed metadata host cannot
+    # invalidate CLOB-resolved token identity or stop a running hot path.
+    missing=[slug for slug in expected if slug not in rows_by_slug]
+    for slug in missing:
+        try:
+            gamma_requests += 1
+            query=urllib.parse.urlencode({"slug":slug})
+            value=fetcher(gamma_url+"/markets?"+query,timeout)
+            page=value if isinstance(value,list) else value.get("markets",[]) if isinstance(value,dict) else []
+            raw=next((row for row in page if isinstance(row,dict) and str(row.get("slug") or "")==slug),None)
+            if raw is None: continue
+            raw=dict(raw); raw["_crypto_context"]=dict(expected[slug]); raw["_metadata_source"]="GAMMA_FALLBACK"
+            normalized=normalize_market(raw)
+            if normalized is not None: rows_by_slug[slug]=normalized
+        except (OSError,TimeoutError,ValueError):
+            gamma_errors += 1
+
+    previous = previous or {}
+    previous_age_s=max(0.0,(time.time_ns()//1_000_000-int(previous.get("timestamp_ms") or 0))/1000.0)
+    if previous_age_s <= max_cache_age:
+        for row in previous.get("markets",[]):
+            if not isinstance(row,dict): continue
+            slug=str(row.get("slug") or "")
+            if slug in expected and slug not in rows_by_slug:
+                cached=dict(row); cached["metadata_source"]="LAST_GOOD_CACHE"
+                rows_by_slug[slug]=cached; cache_fallback += 1
+
+    rows=list(rows_by_slug.values())
+    missing_count=max(0,len(expected)-len(rows_by_slug))
+    if clob_complete:
+        mode="CLOB_PRIMARY"
+    elif rows and cache_fallback:
+        mode="DEGRADED_CACHE"
+    elif rows:
+        mode="GAMMA_FALLBACK"
+    else:
+        mode="UNAVAILABLE"
+    exhaustive=clob_complete or (gamma_errors==0 and gamma_requests==len(missing))
+    return rows, {
+        "source_mode":mode,
+        "discovery_exhaustive":bool(exhaustive and not pagination_loop_guard_hit),
+        "pagination_loop_guard_hit":pagination_loop_guard_hit,
+        "pages":clob_pages + gamma_requests,
+        "candidate_requests":clob_pages + gamma_requests,
+        "missing_markets":missing_count,
+        "raw_rows":len(rows),
+        "duplicate_rows":0,
+        "request_retries":0,
+        "clob_pages":clob_pages,
+        "clob_complete":clob_complete,
+        "clob_error":clob_error,
+        "gamma_fallback_requests":gamma_requests,
+        "gamma_fallback_errors":gamma_errors,
+        "cache_fallback_markets":cache_fallback,
+        "scan_duration_ms":(time.monotonic_ns()-started_ns)/1_000_000.0,
+    }
+
+
 def _eligibility(market: dict[str, Any], config: dict[str, Any]) -> str | None:
     rules = config["eligibility"]
     if rules.get("active_required") is True and market.get("active") is not True:
@@ -258,9 +434,9 @@ def _eligibility(market: dict[str, Any], config: dict[str, Any]) -> str | None:
         return "MISSING_CONDITION_ID"
     if len(market.get("clob_token_ids") or []) < int(rules.get("minimum_clob_tokens", 2)):
         return "MISSING_CLOB_TOKENS"
-    if _finite(market.get("liquidity")) + 1e-12 < _finite(rules.get("minimum_liquidity_usd")):
+    if market.get("liquidity_known", True) and _finite(market.get("liquidity")) + 1e-12 < _finite(rules.get("minimum_liquidity_usd")):
         return "BELOW_MINIMUM_LIQUIDITY"
-    if _finite(market.get("volume_24h")) + 1e-12 < _finite(rules.get("minimum_volume_24h_usd")):
+    if market.get("volume_24h_known", True) and _finite(market.get("volume_24h")) + 1e-12 < _finite(rules.get("minimum_volume_24h_usd")):
         return "BELOW_MINIMUM_VOLUME_24H"
     return None
 
@@ -350,7 +526,7 @@ def build_snapshot(
         "execution_authority": False,
         "model_sha": model_sha.lower(),
         "timestamp_ms": int(timestamp_ms),
-        "source": "gamma_exact_slug_configured_crypto_contexts",
+        "source": str(discovery.get("source_mode") or "UNKNOWN"),
         "discovery_exhaustive": bool(discovery.get("discovery_exhaustive")),
         "pagination_loop_guard_hit": bool(discovery.get("pagination_loop_guard_hit")),
         "pages": int(discovery.get("pages", 0)),
@@ -395,6 +571,7 @@ def status_from_snapshot(snapshot: dict[str, Any], *, state: str = "OPERATIONAL"
         "request_retries": snapshot.get("request_retries", 0),
         "scan_duration_ms": snapshot.get("scan_duration_ms", 0.0),
         "membership_sha256": snapshot.get("membership_sha256", ""),
+        "source": snapshot.get("source", "UNKNOWN"),
     }
 
 
@@ -419,7 +596,7 @@ def persist(output_dir: Path, snapshot: dict[str, Any], previous: dict[str, Any]
 def collect_once(config: dict[str, Any], output_dir: Path, model_sha: str) -> dict[str, Any]:
     previous = _load_json(output_dir / "current.json")
     registry = _load_json(Path(config["market_registry"]))
-    markets, discovery = discover_crypto(config, registry)
+    markets, discovery = discover_crypto_resilient(config, registry, previous=previous)
     snapshot = build_snapshot(markets, discovery, config, model_sha=model_sha, timestamp_ms=time.time_ns() // 1_000_000, previous=previous)
     persist(output_dir, snapshot, previous)
     return snapshot

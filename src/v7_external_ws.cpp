@@ -178,7 +178,9 @@ void ExternalVenueWsClient::run(ExternalStopToken stop) noexcept {
             tcp::resolver resolver(io);
             websocket::stream<beast::ssl_stream<beast::tcp_stream>> ws(io, context);
             const auto endpoints = resolver.resolve(spec_.host, spec_.port);
-            beast::get_lowest_layer(ws).connect(endpoints);
+            auto& transport = beast::get_lowest_layer(ws);
+            transport.expires_after(std::chrono::seconds(10));
+            transport.connect(endpoints);
             // Do not hold small subscription/control frames for Nagle batching.
             beast::get_lowest_layer(ws).socket().set_option(tcp::no_delay(true));
 
@@ -186,11 +188,13 @@ void ExternalVenueWsClient::run(ExternalStopToken stop) noexcept {
                 throw beast::system_error(
                     static_cast<int>(::ERR_get_error()), net::error::get_ssl_category());
             }
+            transport.expires_after(std::chrono::seconds(10));
             ws.next_layer().handshake(ssl::stream_base::client);
+            transport.expires_never();
             // Bound an otherwise blocking read so process shutdown can drain
             // writer queues and leave complete immutable tape records.
             websocket::stream_base::timeout timeout;
-            timeout.handshake_timeout = std::chrono::seconds(30);
+            timeout.handshake_timeout = std::chrono::seconds(10);
             timeout.idle_timeout = std::chrono::seconds(1);
             timeout.keep_alive_pings = true;
             ws.set_option(timeout);

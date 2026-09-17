@@ -103,7 +103,7 @@ def row(pid, title, y, children=None):
 
 def build():
     p = []
-    p.append({"id":100,"type":"text","title":"Data rules","gridPos":{"x":0,"y":0,"w":24,"h":2},"options":{"mode":"markdown","content":"**PAPER ONLY.** Missing data ≠ zero."}})
+    p.append({"id":100,"type":"text","title":"Data rules","gridPos":{"x":0,"y":0,"w":24,"h":2},"options":{"mode":"markdown","content":"**CRYPTO ONLY · PAPER ONLY.** Native critical path. Missing data ≠ zero."}})
     p += [
         stat(101,"Operator attention","polymarket_v7_operator_attention_required",0,2,mapping={0:("CLEAR","green"),1:("ATTENTION","red")}),
         stat(102,"PAPER runtime","polymarket_v7_execution_alive",4,2,source="runtime",mapping={0:("STOPPED","red"),1:("RUNNING","green")}),
@@ -207,19 +207,19 @@ def diagnostics():
     ]
     for panel in runtime + universe + latency + contexts:
         panel["gridPos"]["y"] += 8
-    return [row(160,"Details · runtime, ownership and accounting",74,runtime),row(180,"Details · discovery and research data quality",75,universe),row(190,"Details · latency and markout sample sizes",76,latency),row(200,"Details · crypto contexts and permissions",77,contexts)]
+    return [row(160,"Details · runtime, ownership and accounting",74,runtime),row(190,"Details · native latency and evidence",75,latency),row(200,"Details · crypto contexts and permissions",76,contexts)]
 
 
 def common(dashboard):
     dashboard.update({"schemaVersion":39,"refresh":"10s","timezone":"Europe/Zurich","time":{"from":"now-1h","to":"now"},"editable":False,"graphTooltip":1})
     dashboard["templating"]={"list":[{"name":"instance","label":"Runtime target","type":"query","datasource":DS,"definition":'label_values(up{job="polymarket-v7"}, instance)',"query":{"query":'label_values(up{job="polymarket-v7"}, instance)',"refId":"instance"},"refresh":1,"sort":1,"multi":False,"includeAll":False,"current":{"selected":False,"text":"127.0.0.1:9108","value":"127.0.0.1:9108"},"options":[]}]}
-    dashboard["links"]=[{"title":title,"type":"link","url":"/d/"+uid,"includeVars":True,"keepTime":True,"targetBlank":False} for title,uid in (("Control Room","polymarket-v7"),("Latency evidence","polymarket-v7-latency"),("Crypto evidence","polymarket-v7-external-fair")) if uid!=dashboard["uid"]]
+    dashboard["links"]=[{"title":title,"type":"link","url":"/d/"+uid,"includeVars":True,"keepTime":True,"targetBlank":False} for title,uid in (("Control Room","polymarket-v7"),("Latency evidence","polymarket-v7-latency")) if uid!=dashboard["uid"]]
     return dashboard
 
 
 def main():
     destination=HERE/"grafana/dashboards/polymarket-v7.json"
-    dashboard=common({"uid":"polymarket-v7","title":"Polymarket V7 — 24/7 PAPER Control Room","version":1,"tags":["polymarket","v7","paper","canonical-ledger","truth-v1"],"annotations":{"list":[]},"panels":build()+diagnostics()})
+    dashboard=common({"uid":"polymarket-v7","title":"Polymarket V7 — Crypto Flash PAPER Control Room","version":1,"tags":["polymarket","v7","paper","canonical-ledger","truth-v1"],"annotations":{"list":[]},"panels":build()+diagnostics()})
     destination.write_text(json.dumps(dashboard,indent=2,ensure_ascii=False)+"\n")
 
 

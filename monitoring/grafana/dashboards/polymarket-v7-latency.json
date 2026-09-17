@@ -13,14 +13,6 @@
       "includeVars": true,
       "keepTime": true,
       "targetBlank": false
-    },
-    {
-      "title": "Crypto evidence",
-      "type": "link",
-      "url": "/d/polymarket-v7-external-fair",
-      "includeVars": true,
-      "keepTime": true,
-      "targetBlank": false
     }
   ],
   "panels": [
@@ -137,7 +129,7 @@
       ],
       "fieldConfig": {
         "defaults": {
-          "unit": "\u00b5s",
+          "unit": "µs",
           "noValue": "UNAVAILABLE",
           "mappings": [
             {
@@ -210,7 +202,7 @@
       ],
       "fieldConfig": {
         "defaults": {
-          "unit": "\u00b5s",
+          "unit": "µs",
           "noValue": "UNAVAILABLE",
           "mappings": [
             {
@@ -295,7 +287,7 @@
     "to": "now"
   },
   "timezone": "Europe/Zurich",
-  "title": "Polymarket V7 Latency",
+  "title": "Polymarket V7 — Native Crypto Latency Evidence",
   "uid": "polymarket-v7-latency",
   "version": 1
 }

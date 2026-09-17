@@ -1,0 +1,94 @@
+{
+  "schema": "polymarket_v7_native_critical_path_policy_v1",
+  "version": 1,
+  "engine": "CRYPTO_SETTLEMENT_ENGINE",
+  "status": "REPOSITORY_POLICY",
+  "critical_path_language": "C++",
+  "minimum_cpp_standard": 20,
+  "policy_goal": "MINIMIZE_CAUSAL_TRIGGER_TO_EXECUTION_ADAPTER_LATENCY_WITHOUT_WEAKENING_CORRECTNESS_OR_SINGLE_OWNER_AUTHORITY",
+  "critical_path_start": "NORMALIZED_CAUSAL_MARKET_EVENT_AVAILABLE",
+  "critical_path_end": "CANONICAL_EXECUTION_ADAPTER_HANDOFF",
+  "single_execution_owner_required": true,
+  "single_risk_owner_required": true,
+  "single_oms_owner_required": true,
+  "single_inventory_owner_required": true,
+  "paper_only_until_explicit_separate_promotion": true,
+  "real_order_submission_default": false,
+  "mandatory_native_stages": [
+    "VENUE_FRAME_DECODE",
+    "CAUSAL_STATE_APPLY",
+    "FEATURE_UPDATE",
+    "SIGNAL_POLICY",
+    "CANDIDATE_CONSTRUCTION",
+    "PORTFOLIO_ARBITRATION",
+    "RISK_CAPITAL_ADMISSION",
+    "OMS_INTENT_HANDOFF"
+  ],
+  "forbidden_hot_path_dependencies": [
+    "PYTHON_INTERPRETER",
+    "FILESYSTEM_POLLING",
+    "SYNCHRONOUS_REST_MARKET_DATA",
+    "DATABASE_IO",
+    "PROCESS_SPAWN",
+    "CROSS_PROCESS_JSON_IPC",
+    "SYNCHRONOUS_TELEMETRY",
+    "UNBOUNDED_ALLOCATION",
+    "FIXED_SLEEP_POLLING",
+    "GAMMA_API",
+    "REMOTE_METADATA_DISCOVERY"
+  ],
+  "allowed_cold_path_dependencies": [
+    "STARTUP_CONFIG_LOAD",
+    "REST_BOOTSTRAP_METADATA",
+    "RECOVERY_RECONCILIATION",
+    "ASYNC_EVIDENCE_PERSISTENCE",
+    "PYTHON_RESEARCH",
+    "PYTHON_MONITORING",
+    "PYTHON_REPORTING",
+    "CLOB_MARKET_INDEX_DISCOVERY",
+    "GAMMA_METADATA_ENRICHMENT",
+    "LAST_GOOD_METADATA_CACHE"
+  ],
+  "bounded_exchange_json_parse_in_cpp_allowed": true,
+  "event_driven_required": true,
+  "bounded_queues_required": true,
+  "fail_closed_on_gap_or_overflow": true,
+  "hot_path_heap_allocation_target": 0,
+  "latency_targets_us": {
+    "trigger_to_admission_p99": 300,
+    "trigger_to_admission_stretch_p99": 100,
+    "queue_handoff_p99": 50
+  },
+  "measurement_rules": [
+    "MONOTONIC_CLOCK_ONLY_FOR_LOCAL_LATENCY",
+    "NO_SYNTHETIC_FILL_TIMESTAMP_AS_EXCHANGE_LATENCY",
+    "REPORT_P50_P95_P99_P999_AND_MAX",
+    "REPORT_DROPS_GAPS_CPU_AND_SAMPLE_COUNT",
+    "BENCHMARK_UNDER_REPRESENTATIVE_LOAD"
+  ],
+  "alternative_technology_gate": {
+    "allowed": [
+      "C",
+      "RUST",
+      "IO_URING",
+      "AF_XDP",
+      "DPDK",
+      "KERNEL_BYPASS_OR_VENDOR_NATIVE_API"
+    ],
+    "promotion_requires_same_semantics": true,
+    "promotion_requires_zero_authority_change": true,
+    "promotion_requires_zero_correctness_regression": true,
+    "promotion_requires_p99_improvement_fraction": 0.1,
+    "promotion_requires_p999_non_regression": true,
+    "promotion_requires_zero_silent_drop": true,
+    "note": "Technology is selected by measured end-to-end causal latency, not language preference."
+  },
+  "migration_gates": [
+    "UNIT_AND_PARITY",
+    "DETERMINISTIC_REPLAY",
+    "LIVE_ZERO_AUTHORITY_SHADOW",
+    "LONDON_PROSPECTIVE_PAPER",
+    "SINGLE_OWNER_CUTOVER",
+    "SEPARATE_REAL_MONEY_DECISION"
+  ]
+}
