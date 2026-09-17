@@ -238,6 +238,12 @@ class CanonicalExecutionLedgerTest(unittest.TestCase):
                     ledger.EconomicJournalEntry(
                         **{**base, field: None}
                     ).validate(sealed=False)
+                with self.assertRaisesRegex(
+                    ledger.LedgerContractError, f"journal:{field}:invalid"
+                ):
+                    ledger.EconomicJournalEntry(
+                        **{**base, field: "   "}
+                    ).validate(sealed=False)
 
     def test_price_ranges_fail_closed(self) -> None:
         with self.assertRaisesRegex(ledger.LedgerContractError, "fill_price:out_of_range"):
