@@ -1,0 +1,264 @@
+{
+  "schema": "polymarket_v7_multi_crypto_asset_registry_v1",
+  "version": 1,
+  "paper_only": true,
+  "authenticated_execution": false,
+  "real_order_submission": false,
+  "real_capital_at_risk": false,
+  "automatic_promotion": false,
+  "single_global_execution_owner": true,
+  "single_canonical_ledger_writer": true,
+  "frozen_btc_protocol_hash": "8b463ef8f66cd07fa694cbb49e355b812eac8d4724c35f65bd3e6a3505719d96",
+  "supported_horizons": [
+    "M5",
+    "M15"
+  ],
+  "assets": [
+    {
+      "asset": "BTC",
+      "mode": "FROZEN_BASELINE",
+      "allow_new_entry_authority": false,
+      "venues": {
+        "binance_spot": {
+          "symbol": "BTCUSDT",
+          "status": "VERIFIED_EXISTING_REGISTRY"
+        },
+        "coinbase_spot": {
+          "symbol": "BTC-USD",
+          "status": "VERIFIED_EXISTING_REGISTRY"
+        },
+        "bybit_spot": {
+          "symbol": "BTCUSDT",
+          "status": "VERIFIED_EXISTING_REGISTRY"
+        },
+        "binance_usdm": {
+          "symbol": "BTCUSDT",
+          "status": "VERIFIED_EXISTING_REGISTRY"
+        },
+        "bybit_linear": {
+          "symbol": "BTCUSDT",
+          "status": "VERIFIED_EXISTING_REGISTRY"
+        },
+        "deribit": {
+          "symbol": "BTC-PERPETUAL",
+          "status": "VERIFIED_EXISTING_REGISTRY"
+        }
+      },
+      "horizons": {
+        "M5": {
+          "state": "FROZEN_BASELINE",
+          "allow_entry_authority": false
+        },
+        "M15": {
+          "state": "SHADOW_ONLY",
+          "allow_entry_authority": false
+        }
+      }
+    },
+    {
+      "asset": "ETH",
+      "mode": "SHADOW_ONLY",
+      "allow_new_entry_authority": false,
+      "venues": {
+        "binance_spot": {
+          "symbol": "ETHUSDT",
+          "status": "VERIFIED_EXISTING_REGISTRY"
+        },
+        "coinbase_spot": {
+          "symbol": "ETH-USD",
+          "status": "VERIFIED_EXISTING_REGISTRY"
+        },
+        "bybit_spot": {
+          "symbol": "ETHUSDT",
+          "status": "VERIFIED_EXISTING_REGISTRY"
+        },
+        "binance_usdm": {
+          "symbol": "ETHUSDT",
+          "status": "VERIFIED_EXISTING_REGISTRY"
+        },
+        "bybit_linear": {
+          "symbol": "ETHUSDT",
+          "status": "VERIFIED_EXISTING_REGISTRY"
+        },
+        "deribit": {
+          "symbol": "ETH-PERPETUAL",
+          "status": "VERIFIED_EXISTING_REGISTRY"
+        }
+      },
+      "horizons": {
+        "M5": {
+          "state": "SHADOW_READY",
+          "allow_entry_authority": false
+        },
+        "M15": {
+          "state": "SHADOW_PREPARED",
+          "allow_entry_authority": false
+        }
+      }
+    },
+    {
+      "asset": "SOL",
+      "mode": "SHADOW_ONLY",
+      "allow_new_entry_authority": false,
+      "venues": {
+        "binance_spot": {
+          "symbol": "SOLUSDT",
+          "status": "VERIFIED_EXISTING_REGISTRY"
+        },
+        "coinbase_spot": {
+          "symbol": "SOL-USD",
+          "status": "VERIFIED_EXISTING_REGISTRY"
+        },
+        "bybit_spot": {
+          "symbol": "SOLUSDT",
+          "status": "VERIFIED_EXISTING_REGISTRY"
+        },
+        "binance_usdm": {
+          "symbol": "SOLUSDT",
+          "status": "VERIFIED_EXISTING_REGISTRY"
+        },
+        "bybit_linear": {
+          "symbol": "SOLUSDT",
+          "status": "VERIFIED_EXISTING_REGISTRY"
+        },
+        "deribit": {
+          "symbol": "SOL_USDC-PERPETUAL",
+          "status": "VERIFIED_EXISTING_REGISTRY"
+        }
+      },
+      "horizons": {
+        "M5": {
+          "state": "SHADOW_READY",
+          "allow_entry_authority": false
+        },
+        "M15": {
+          "state": "SHADOW_PREPARED",
+          "allow_entry_authority": false
+        }
+      }
+    },
+    {
+      "asset": "XRP",
+      "mode": "SHADOW_ONLY",
+      "allow_new_entry_authority": false,
+      "venues": {
+        "binance_spot": {
+          "symbol": "XRPUSDT",
+          "status": "VERIFIED_EXISTING_REGISTRY"
+        },
+        "coinbase_spot": {
+          "symbol": "XRP-USD",
+          "status": "VERIFIED_EXISTING_REGISTRY"
+        },
+        "bybit_spot": {
+          "symbol": "XRPUSDT",
+          "status": "VERIFIED_EXISTING_REGISTRY"
+        },
+        "binance_usdm": {
+          "symbol": "XRPUSDT",
+          "status": "VERIFIED_EXISTING_REGISTRY"
+        },
+        "bybit_linear": {
+          "symbol": "XRPUSDT",
+          "status": "VERIFIED_EXISTING_REGISTRY"
+        },
+        "deribit": {
+          "symbol": "XRP_USDC-PERPETUAL",
+          "status": "VERIFIED_EXISTING_REGISTRY"
+        }
+      },
+      "horizons": {
+        "M5": {
+          "state": "SHADOW_PREPARED",
+          "allow_entry_authority": false
+        },
+        "M15": {
+          "state": "SHADOW_PREPARED",
+          "allow_entry_authority": false
+        }
+      }
+    },
+    {
+      "asset": "DOGE",
+      "mode": "SHADOW_ONLY",
+      "allow_new_entry_authority": false,
+      "venues": {
+        "binance_spot": {
+          "symbol": "DOGEUSDT",
+          "status": "VERIFIED_RUNTIME_SMOKE"
+        },
+        "coinbase_spot": {
+          "symbol": "DOGE-USD",
+          "status": "VERIFIED_RUNTIME_SMOKE"
+        },
+        "bybit_spot": {
+          "symbol": "DOGEUSDT",
+          "status": "VERIFIED_RUNTIME_SMOKE"
+        },
+        "binance_usdm": {
+          "symbol": "DOGEUSDT",
+          "status": "VERIFIED_RUNTIME_SMOKE"
+        },
+        "bybit_linear": {
+          "symbol": "DOGEUSDT",
+          "status": "VERIFIED_RUNTIME_SMOKE"
+        },
+        "deribit": {
+          "symbol": null,
+          "status": "UNAVAILABLE_OR_UNVERIFIED"
+        }
+      },
+      "horizons": {
+        "M5": {
+          "state": "SHADOW_PREPARED",
+          "allow_entry_authority": false
+        },
+        "M15": {
+          "state": "SHADOW_PREPARED",
+          "allow_entry_authority": false
+        }
+      }
+    },
+    {
+      "asset": "BNB",
+      "mode": "SHADOW_ONLY",
+      "allow_new_entry_authority": false,
+      "venues": {
+        "binance_spot": {
+          "symbol": "BNBUSDT",
+          "status": "VERIFIED_RUNTIME_SMOKE"
+        },
+        "coinbase_spot": {
+          "symbol": null,
+          "status": "UNAVAILABLE_OR_UNVERIFIED"
+        },
+        "bybit_spot": {
+          "symbol": "BNBUSDT",
+          "status": "VERIFIED_RUNTIME_SMOKE"
+        },
+        "binance_usdm": {
+          "symbol": "BNBUSDT",
+          "status": "VERIFIED_RUNTIME_SMOKE"
+        },
+        "bybit_linear": {
+          "symbol": "BNBUSDT",
+          "status": "VERIFIED_RUNTIME_SMOKE"
+        },
+        "deribit": {
+          "symbol": null,
+          "status": "UNAVAILABLE_OR_UNVERIFIED"
+        }
+      },
+      "horizons": {
+        "M5": {
+          "state": "SHADOW_PREPARED",
+          "allow_entry_authority": false
+        },
+        "M15": {
+          "state": "SHADOW_PREPARED",
+          "allow_entry_authority": false
+        }
+      }
+    }
+  ]
+}
