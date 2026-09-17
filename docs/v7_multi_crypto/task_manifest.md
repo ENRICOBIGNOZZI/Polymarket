@@ -6,11 +6,11 @@ No row grants real-money authority.
 | Milestone | Repository state | Remaining external/evidence gate |
 |---|---|---|
 | M0 Audit and integrity | VERIFIED_CODE | Historical/live ledger evidence is only complete for supplied immutable inputs; no active production checkout is attached here. |
-| M1 Core common | VERIFIED_CODE | None for repository implementation. Runtime deployment still required. |
-| M2 Data plane | VERIFIED_SHADOW_CODE | Six-asset venue, PM BookHub, OracleHub, feature and label planes are not deployed by this branch. |
-| M3 Execution/accounting | VERIFIED_CODE | PAPER activation still requires a frozen eligible cohort. |
-| M4 Speed | VERIFIED_INTERNAL | Synthetic/internal path is measured; venue/network/end-to-end London latency is not yet measured. |
-| M5 Research | VERIFIED_PIPELINE / INSUFFICIENT_EVIDENCE | Independent economic clusters remain insufficient for an alpha claim or threshold promotion. |
+| M1 Core common | VERIFIED_CODE | ContractState, settlement/rules bindings and shared six-asset registry are integrated. Runtime deployment still required. |
+| M2 Data plane | VERIFIED_SHADOW_CODE | Six-asset venue, PM BookHub, OracleHub, feature/label planes and one zero-authority SHADOW supervisor are integrated; the candidate itself is not deployed. |
+| M3 Execution/accounting | VERIFIED_CODE | PAPER activation still requires a frozen eligible cohort and explicit coordinator authorization. |
+| M4 Speed | VERIFIED_INTERNAL | L1 latency/capacity replay and synthetic internal gates pass; venue/network/end-to-end London latency is not yet measured. |
+| M5 Research | VERIFIED_PIPELINE / INSUFFICIENT_EVIDENCE | Shock calibration, repricing research and fail-closed readiness gates are implemented; independent economic evidence is still insufficient. |
 | M6 Multi-crypto forward | IMPLEMENTED / BLOCKED_EVIDENCE | Freeze/report/reservation/execution mechanics exist; ETH/SOL PAPER remains off until prospective evidence gates pass. |
 | M7 Breadth | READY_SHADOW | XRP/DOGE/BNB M5/M15 remain zero-authority SHADOW. |
 | M8 Capacity/readiness | VERIFIED_CODE / NO_PROMOTION | Risk/correlation/capacity tooling exists; no real-money promotion is authorized. |

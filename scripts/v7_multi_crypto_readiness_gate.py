@@ -10,7 +10,9 @@ import time
 from pathlib import Path
 from typing import Any
 
+from v7_lead_lag_replay import ReplayError, digest
 from v7_multi_crypto_execution_accounting_contract import validate as validate_execution_contract
+from v7_multi_crypto_forward_freeze import DRAFT_SCHEMA, FROZEN_SCHEMA, validate_draft
 
 SCHEMA = "polymarket_v7_multi_crypto_readiness_gate_v1"
 
@@ -36,12 +38,37 @@ def safe_report(value: dict[str, Any]) -> bool:
     return value.get("paper_only") is True and value.get("execution_authority") is False \
         and value.get("real_order_submission") is False
 
+
+def valid_frozen_protocol(value: dict[str, Any]) -> bool:
+    frozen = value.get("frozen_protocol")
+    protocol_hash = str(value.get("protocol_hash") or "")
+    if (value.get("schema") != FROZEN_SCHEMA
+            or value.get("paper_only") is not True
+            or value.get("authenticated_execution") is not False
+            or value.get("real_order_submission") is not False
+            or value.get("real_capital_at_risk") is not False
+            or value.get("automatic_promotion") is not False
+            or value.get("entry_authority") is not False
+            or not isinstance(frozen, dict)
+            or frozen.get("schema") != FROZEN_SCHEMA
+            or len(protocol_hash) != 64
+            or digest(frozen) != protocol_hash):
+        return False
+    draft = dict(frozen); draft["schema"] = DRAFT_SCHEMA
+    try:
+        validate_draft(draft)
+    except (ReplayError, TypeError, ValueError, KeyError):
+        return False
+    return True
+
+
 def evaluate(root: Path, *, shock_report: Path | None, research_report: Path | None,
-             latency_report: Path | None) -> dict[str, Any]:
+             latency_report: Path | None, forward_protocol: Path | None = None) -> dict[str, Any]:
     execution = validate_execution_contract(root)
     ledger = load(root / "docs/v7_multi_crypto/ledger_recovery_audit_20260917.json")
     shadow = load(root / "docs/v7_multi_crypto/shadow_runtime_smoke_20260917.json")
     shock = load(shock_report); research = load(research_report); latency = load(latency_report)
+    forward = load(forward_protocol)
     london = load(root / "config/v7_london_az_shootout.json")
     shock_policy = load(root / "config/v7_multi_crypto_shock_calibration.json")
     shadow_policy = load(root / "config/v7_multi_crypto_shadow_runtime.json")
@@ -87,7 +114,8 @@ def evaluate(root: Path, *, shock_report: Path | None, research_report: Path | N
     selected_zone = london.get("selected_zone_id") or london.get("selected_zone")
     if not selected_zone:
         blockers.append("LONDON_AZ_NOT_SELECTED")
-    blockers.append("MULTI_CRYPTO_FORWARD_PROTOCOL_NOT_FROZEN")
+    if not valid_frozen_protocol(forward):
+        blockers.append("MULTI_CRYPTO_FORWARD_PROTOCOL_NOT_FROZEN")
 
     blockers = sorted(set(blockers))
     return {
@@ -101,6 +129,8 @@ def evaluate(root: Path, *, shock_report: Path | None, research_report: Path | N
         "shock_status": shock.get("status"), "shock_time_clusters": int(shock.get("time_clusters") or 0),
         "repricing_status": research.get("status"), "repricing_time_clusters": int(research.get("time_clusters") or 0),
         "latency_candidate_count": int(latency.get("common_observable_candidate_count") or 0),
+        "forward_protocol_valid": valid_frozen_protocol(forward),
+        "forward_protocol_hash": str(forward.get("protocol_hash") or "") or None,
         "disk_free_bytes": disk_free_bytes, "disk_required_bytes": disk_required_bytes,
         "claim_boundary": "Readiness gate only. It cannot authorize live or PAPER new-risk execution.",
     }
@@ -112,10 +142,11 @@ def main() -> int:
     parser.add_argument("--shock-report", type=Path)
     parser.add_argument("--research-report", type=Path)
     parser.add_argument("--latency-report", type=Path)
+    parser.add_argument("--forward-protocol", type=Path)
     parser.add_argument("--output", type=Path)
     args = parser.parse_args(); root = args.repository_root.resolve()
     value = evaluate(root, shock_report=args.shock_report, research_report=args.research_report,
-                     latency_report=args.latency_report)
+                     latency_report=args.latency_report, forward_protocol=args.forward_protocol)
     if args.output:
         atomic_json(args.output, value)
     print(json.dumps(value, indent=2, sort_keys=True))

@@ -8,7 +8,10 @@ from pathlib import Path
 
 ROOT=Path(__file__).resolve().parents[1]
 sys.path.insert(0,str(ROOT/'scripts'))
-from v7_multi_crypto_readiness_gate import evaluate
+sys.path.insert(0,str(ROOT/'tests'))
+from test_v7_multi_crypto_forward_freeze import draft
+from v7_multi_crypto_forward_freeze import freeze
+from v7_multi_crypto_readiness_gate import evaluate, valid_frozen_protocol
 
 SHOCK=ROOT/'runs/v7_multi_crypto_shadow/runtime_smoke_5adab31c_20260917/research/shock_calibration_report.json'
 RESEARCH=ROOT/'runs/v7_multi_crypto_shadow/runtime_smoke_5adab31c_20260917/research/research_report.json'
@@ -36,6 +39,20 @@ def test_missing_reports_fail_closed() -> None:
         assert 'SHOCK_CALIBRATION_INSUFFICIENT' in value['blockers']
         assert 'INDEPENDENT_OOS_REPRICING_EVIDENCE_INSUFFICIENT' in value['blockers']
         assert 'LATENCY_CAPACITY_MECHANICS_MISSING' in value['blockers']
+
+
+def test_valid_frozen_protocol_removes_only_protocol_blocker() -> None:
+    frozen=freeze(draft())
+    assert valid_frozen_protocol(frozen) is True
+    tampered=json.loads(json.dumps(frozen)); tampered['frozen_protocol']['entry_policy']['shock_threshold_z']=9.0
+    assert valid_frozen_protocol(tampered) is False
+    with tempfile.TemporaryDirectory() as tmp:
+        path=Path(tmp)/'forward.json'; path.write_text(json.dumps(frozen))
+        value=evaluate(ROOT,shock_report=SHOCK,research_report=RESEARCH,
+                       latency_report=LATENCY,forward_protocol=path)
+        assert 'MULTI_CRYPTO_FORWARD_PROTOCOL_NOT_FROZEN' not in value['blockers']
+        assert value['forward_protocol_valid'] is True
+        assert value['state']=='BLOCKED_EVIDENCE'
 
 
 def test_gate_never_grants_execution_authority() -> None:

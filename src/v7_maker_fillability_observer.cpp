@@ -489,8 +489,9 @@ public:
         const bool root_lineage_failure =
             result.invalid_frame || result.output_overflow || result.arena_exhausted;
         if (root_lineage_failure) {
-            lineage_recovery_requests_.fetch_add(1, std::memory_order_relaxed);
-            lineage_recovery_requested_.store(true, std::memory_order_release);
+            if (!lineage_recovery_requested_.exchange(true, std::memory_order_acq_rel)) {
+                lineage_recovery_requests_.fetch_add(1, std::memory_order_relaxed);
+            }
         }
         unknown_asset_.fetch_add(
             result.ignored_unknown_assets, std::memory_order_relaxed);
@@ -502,8 +503,9 @@ public:
             if (event.instrument_handle == 0 || event.instrument_handle >= lanes_.size()) continue;
             if (recover_missing_lineage_ && event.kind == MarketWsEventKind::LineageInvalidated
                 && token_active(event.instrument_handle, receive.wall_ms)) {
-                lineage_recovery_requests_.fetch_add(1, std::memory_order_relaxed);
-                lineage_recovery_requested_.store(true, std::memory_order_release);
+                if (!lineage_recovery_requested_.exchange(true, std::memory_order_acq_rel)) {
+                    lineage_recovery_requests_.fetch_add(1, std::memory_order_relaxed);
+                }
             }
             if (event.kind == MarketWsEventKind::Trade && (
                 event.price_e4 <= 0 || event.quantity_microunits <= 0
@@ -547,7 +549,7 @@ public:
         if (lineage_recovery_requested_.load(std::memory_order_acquire)
             && decoder_failures_.load(std::memory_order_relaxed) == 0
             && dropped_.load(std::memory_order_relaxed) == 0) {
-            const auto now_wall = wall_ms();
+            const auto now_wall = receive.wall_ms; // causal frame receive time, not process wall clock
             const bool still_missing = std::any_of(tokens_.begin(), tokens_.end(),
                 [&](const SelectedToken& token) {
                     return token.start_wall_ms <= now_wall && now_wall < token.end_wall_ms

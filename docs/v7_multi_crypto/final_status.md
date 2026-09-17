@@ -7,7 +7,9 @@ economic-profit certification.
 
 - six-asset BTC/ETH/SOL/XRP/DOGE/BNB M5/M15 discovery and verified settlement mappings;
 - persistent public venue feeds, PM BookHub and six-asset OracleHub;
+- one zero-authority SHADOW supervisor plus causal ContractState binding;
 - causal feature/label tape, idempotent normalized shocks, derivative and cross-crypto inputs;
+- training-only shock calibration, repricing research and fail-closed readiness gates;
 - pooled residual benchmark with chronological splits and nested ablations;
 - one global coordinator, one shared reservation projection and one canonical ledger writer;
 - direct bounded Unix IPC for forward candidates and durable ledger ACK after canonical append;
