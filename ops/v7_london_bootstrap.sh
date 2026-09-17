@@ -22,7 +22,7 @@ INSTALL_TAILSCALE="${POLYMARKET_INSTALL_TAILSCALE:-1}"
 sudo apt-get update
 sudo DEBIAN_FRONTEND=noninteractive apt-get install -y \
   build-essential ca-certificates cmake curl git gnupg jq libboost-all-dev \
-  libcurl4-openssl-dev libssl-dev ninja-build pkg-config \
+  libcurl4-openssl-dev libssl-dev libsecp256k1-dev ninja-build pkg-config \
   python3 python3-pip python3-venv rsync util-linux
 
 
