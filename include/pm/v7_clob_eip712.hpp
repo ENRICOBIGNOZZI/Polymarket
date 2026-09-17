@@ -65,6 +65,42 @@ private:
     bool valid_ = false;
 };
 
+
+// Static portion of one Exchange V2 order lane. For one market/account these
+// fields do not change per decision and should not be reparsed in the hot path.
+struct ExchangeV2PreparedStaticView {
+    std::string_view maker;
+    std::string_view signer;
+    std::string_view token_id_decimal;
+    std::uint8_t side = 0;
+    std::uint8_t signature_type = 0;
+    std::string_view metadata_hex;
+    std::string_view builder_hex;
+};
+
+// Single-owner hot-path hasher. Construction parses/ABI-encodes every static
+// field once. digest_u64() patches only salt, maker/taker amount and timestamp,
+// then performs the Order Keccak plus final 66-byte EIP-712 envelope Keccak.
+// The official V2 salt generator, millisecond timestamp and CLOB 6-decimal
+// amounts all fit uint64; tokenId remains pre-parsed as uint256 at construction.
+class ExchangeV2PreparedOrderHasher final {
+public:
+    ExchangeV2PreparedOrderHasher(const ExchangeV2DomainView& domain,
+                                  const ExchangeV2PreparedStaticView& fixed) noexcept;
+    [[nodiscard]] bool valid() const noexcept { return valid_; }
+    [[nodiscard]] const Hash32& domain_separator() const noexcept { return domain_separator_; }
+    [[nodiscard]] bool digest_u64(std::uint64_t salt,
+                                  std::uint64_t maker_amount,
+                                  std::uint64_t taker_amount,
+                                  std::uint64_t timestamp_ms,
+                                  Hash32& output) noexcept;
+private:
+    Hash32 domain_separator_{};
+    std::array<std::uint8_t, 12 * 32> encoded_{};
+    std::array<std::uint8_t, 66> envelope_{};
+    bool valid_ = false;
+};
+
 [[nodiscard]] bool hash32_hex(const Hash32& hash, std::span<char> output) noexcept;
 
 } // namespace pm::v7::clob_eip712

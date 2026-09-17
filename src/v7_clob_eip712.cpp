@@ -145,6 +145,15 @@ void encode_uint8(std::uint8_t value, std::array<std::uint8_t, 32>& word) noexce
     word[31] = value;
 }
 
+void patch_uint64_word(std::span<std::uint8_t> encoded, std::size_t index,
+                       std::uint64_t value) noexcept {
+    auto* dst = encoded.data() + index * 32 + 24;
+    for (std::size_t i = 0; i < 8; ++i) {
+        dst[7 - i] = static_cast<std::uint8_t>(value & 0xffU);
+        value >>= 8U;
+    }
+}
+
 void put_word(std::span<std::uint8_t> encoded, std::size_t index,
               const std::array<std::uint8_t, 32>& word) noexcept {
     std::memcpy(encoded.data() + index * 32, word.data(), word.size());
@@ -242,6 +251,52 @@ bool ExchangeV2OrderHasher::digest(const ExchangeV2OrderView& order, Hash32& out
     std::memcpy(envelope.data() + 2, domain_separator_.data(), domain_separator_.size());
     std::memcpy(envelope.data() + 34, struct_hash.data(), struct_hash.size());
     output = keccak256(envelope);
+    return true;
+}
+
+
+ExchangeV2PreparedOrderHasher::ExchangeV2PreparedOrderHasher(
+    const ExchangeV2DomainView& domain,
+    const ExchangeV2PreparedStaticView& fixed) noexcept {
+    if (fixed.side > 1 || fixed.signature_type > 3) return;
+    if (!exchange_v2_domain_separator(domain, domain_separator_)) return;
+    std::array<std::uint8_t, 32> word{};
+    put_word(encoded_, 0, kOrderTypeHash);
+    if (!parse_address(fixed.maker, word)) return;
+    put_word(encoded_, 2, word);
+    if (!parse_address(fixed.signer, word)) return;
+    put_word(encoded_, 3, word);
+    if (!parse_uint256_decimal(fixed.token_id_decimal, word)) return;
+    put_word(encoded_, 4, word);
+    encode_uint8(fixed.side, word);
+    put_word(encoded_, 7, word);
+    encode_uint8(fixed.signature_type, word);
+    put_word(encoded_, 8, word);
+    if (!parse_bytes32(fixed.metadata_hex, word)) return;
+    put_word(encoded_, 10, word);
+    if (!parse_bytes32(fixed.builder_hex, word)) return;
+    put_word(encoded_, 11, word);
+    envelope_[0] = 0x19U;
+    envelope_[1] = 0x01U;
+    std::memcpy(envelope_.data() + 2, domain_separator_.data(), domain_separator_.size());
+    valid_ = true;
+}
+
+bool ExchangeV2PreparedOrderHasher::digest_u64(
+    std::uint64_t salt,
+    std::uint64_t maker_amount,
+    std::uint64_t taker_amount,
+    std::uint64_t timestamp_ms,
+    Hash32& output) noexcept {
+    if (!valid_) return false;
+    patch_uint64_word(encoded_, 1, salt);
+    patch_uint64_word(encoded_, 5, maker_amount);
+    patch_uint64_word(encoded_, 6, taker_amount);
+    patch_uint64_word(encoded_, 9, timestamp_ms);
+
+    const Hash32 struct_hash = keccak256(encoded_);
+    std::memcpy(envelope_.data() + 34, struct_hash.data(), struct_hash.size());
+    output = keccak256(envelope_);
     return true;
 }
 
