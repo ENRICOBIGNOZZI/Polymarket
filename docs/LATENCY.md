@@ -26,7 +26,7 @@ This removes per-request `curl_easy_init`/`curl_easy_cleanup`. It is an implemen
 
 ## Regional shootout
 
-`polymarket_v7_latency_probe` performs read-only repeated GETs against an HTTPS Polymarket endpoint and reports DNS, TCP, TLS, first-byte and total p50/p90/p95/p99/p99.9/max plus connection reuse, failures and reconnects. Run the same exact SHA and configuration for 24 hours in Frankfurt, London, Amsterdam, New York and Northern Virginia:
+`polymarket_v7_latency_probe` performs read-only repeated GETs against the public `https://clob.polymarket.com/time` endpoint and reports DNS, TCP, TLS, first-byte and total p50/p90/p95/p99/p99.9/max plus connection reuse, failures and reconnects. It is a public HTTPS connectivity probe only: it does not measure authenticated order/cancel ACK, signal-to-send, or signal-to-fill latency. Run the same exact SHA and configuration for 24 hours when comparing regions:
 
 ```text
 polymarket_v7_latency_probe --region Frankfurt --exact-code-sha <40-lowercase-hex-sha>
