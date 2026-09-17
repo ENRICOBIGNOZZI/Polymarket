@@ -49,6 +49,11 @@ int main(int argc, char** argv) {
     config.port = port;
     config.timeout_ms = 2'000;
 
+    auto mismatched = config;
+    mismatched.signer_eoa_address = "0x0000000000000000000000000000000000000001";
+    NativeClobOrderLane rejected_identity(mismatched, private_key);
+    assert(!rejected_identity.valid());
+
     NativeClobOrderLane lane(config, private_key);
     assert(lane.valid());
     assert(lane.connect(argv[2]));
