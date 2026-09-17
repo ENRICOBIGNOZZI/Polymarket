@@ -1,4 +1,5 @@
 #include "pm/v7_ingress_wakeup.hpp"
+#include "pm/v7_latest_json_publisher.hpp"
 #include "pm/v7_binance_l2.hpp"
 #include "pm/v7_binance_l2_protocol.hpp"
 #include "pm/v7_coinbase_l2.hpp"
@@ -1277,6 +1278,7 @@ int main(int argc, char** argv) {
         ExternalStatePolicy policy;
         policy.external_cancel_enabled = external_cancel_signal_path.empty() ? 0 : 1;
         ExternalAssetState state(asset_handle);
+        LatestJsonPublisher status_publisher(output);
         if (!external_cancel_signal_path.empty()) {
             atomic_write(external_cancel_signal_path, external_cancel_signal_json(
                 ExternalCancelSignalSnapshot{}, model_sha, external_cancel_rule_sha256,
@@ -1435,7 +1437,7 @@ int main(int argc, char** argv) {
             venues.emplace_back(transport_json(deribit_status, "DERIBIT"));
             venues.emplace_back(transport_json(binance_usdm_depth_status, "BINANCE_USDM_DEPTH"));
             venues.emplace_back(transport_json(binance_usdm_market_status, "BINANCE_USDM_MARKET"));
-            atomic_write(output, {
+            json::object status_payload{
                 {"schema", "polymarket_v7_external_venue_runtime_v1"},
                 {"timestamp_ns", wall_now_ns()},
                 {"started_monotonic_ns", started_monotonic_ns},
@@ -1521,7 +1523,10 @@ int main(int argc, char** argv) {
                 {"deribit", deribit_json(deribit_observer.metrics())},
                 {"binance_usdm", usdm_json(binance_usdm_observer.metrics())},
                 {"venues", std::move(venues)},
-            });
+            };
+            if (!status_publisher.publish(std::move(status_payload))) {
+                throw std::runtime_error("external venue status publisher failed");
+            }
             wait_for_ingress();
         }
 
