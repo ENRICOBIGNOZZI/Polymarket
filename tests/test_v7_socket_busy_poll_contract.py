@@ -12,6 +12,8 @@ def test_busy_poll_is_per_socket_and_verified() -> None:
     assert "SO_BUSY_POLL" in header
     assert "setsockopt" in header
     assert "getsockopt" in header
+    assert "SO_INCOMING_CPU" in header
+    assert "SO_INCOMING_NAPI_ID" in header
     assert "kMaxBusyPollUs = 2000" in header
 
 
@@ -29,6 +31,8 @@ def test_runtime_and_probe_expose_measured_busy_poll_value() -> None:
     assert 'socket_busy_poll_us' in runtime
     assert '--socket-busy-poll-us' in probe
     assert 'socket_busy_poll_us' in probe
+    assert 'incoming_cpu' in probe
+    assert 'incoming_napi_id' in probe
 
 
 def test_default_semantics_remain_off() -> None:

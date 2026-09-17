@@ -136,6 +136,10 @@ int main(int argc, char** argv) {
         std::size_t measured_reconnects = 0;
         std::size_t transport_exceptions = 0;
         std::string primary_ip;
+        int incoming_cpu = -1;
+        int incoming_napi_id = -1;
+        std::size_t incoming_cpu_changes = 0;
+        std::size_t incoming_napi_changes = 0;
         for (std::size_t i = 0; i < cfg.samples; ++i) {
             try {
                 const auto response = client.get(cfg.endpoint);
@@ -156,6 +160,14 @@ int main(int argc, char** argv) {
                     new_connections += static_cast<std::size_t>(
                         std::max<long>(0, response.timings.new_connections));
                     if (!response.timings.primary_ip.empty()) primary_ip = response.timings.primary_ip;
+                    if (response.timings.incoming_cpu >= 0) {
+                        if (incoming_cpu >= 0 && incoming_cpu != response.timings.incoming_cpu) ++incoming_cpu_changes;
+                        incoming_cpu = response.timings.incoming_cpu;
+                    }
+                    if (response.timings.incoming_napi_id >= 0) {
+                        if (incoming_napi_id >= 0 && incoming_napi_id != response.timings.incoming_napi_id) ++incoming_napi_changes;
+                        incoming_napi_id = response.timings.incoming_napi_id;
+                    }
                 }
             } catch (const std::exception&) {
                 ++failed;
@@ -185,6 +197,10 @@ int main(int argc, char** argv) {
                   << ",\"failed_samples\":" << failed
                   << ",\"warmup_failed_samples\":" << warmup_failed
                   << ",\"primary_ip\":\"" << primary_ip << "\""
+                  << ",\"incoming_cpu\":" << incoming_cpu
+                  << ",\"incoming_napi_id\":" << incoming_napi_id
+                  << ",\"incoming_cpu_changes\":" << incoming_cpu_changes
+                  << ",\"incoming_napi_changes\":" << incoming_napi_changes
                   << ",\"connection_reused_samples\":" << reused
                   << ",\"new_connections\":" << new_connections
                   << ",\"reconnect_count\":" << measured_reconnects

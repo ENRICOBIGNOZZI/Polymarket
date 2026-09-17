@@ -61,6 +61,8 @@ def test_profiles_are_interleaved_and_rollback_verified() -> None:
     assert 'Path("/proc/sys/net/core/busy_poll").read_text()' in source
     assert "sysctl -w" not in source
     assert 'role_cpus()["decision"]' not in source
+    assert 'receive_path_on_feed_cpu' in source
+    assert 'incoming_napi_id' in source
 
 
 def test_ssm_wrapper_is_three_zone_paper_only() -> None:

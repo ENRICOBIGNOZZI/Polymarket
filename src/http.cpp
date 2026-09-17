@@ -151,6 +151,13 @@ HttpResponse HttpClient::request(const std::string& method, const std::string& u
         && primary_ip != nullptr) {
         resp.timings.primary_ip = primary_ip;
     }
+    curl_socket_t active_socket = CURL_SOCKET_BAD;
+    if (curl_easy_getinfo(curl, CURLINFO_ACTIVESOCKET, &active_socket) == CURLE_OK
+        && active_socket != CURL_SOCKET_BAD) {
+        const int fd = static_cast<int>(active_socket);
+        resp.timings.incoming_cpu = network::incoming_cpu(fd);
+        resp.timings.incoming_napi_id = network::incoming_napi_id(fd);
+    }
     if (list) curl_slist_free_all(list);
     return resp;
 }

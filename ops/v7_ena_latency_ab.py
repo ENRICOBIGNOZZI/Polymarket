@@ -224,12 +224,21 @@ def main() -> int:
                 args.probe, args.expected_sha, args.region_label,
                 args.samples, args.interval_ms, int(profile.get("busy_poll_us", 0)))
             change = delta(candidate, paired_baseline)
+            incoming_cpu = int(candidate.get("incoming_cpu", -1))
+            incoming_napi = int(candidate.get("incoming_napi_id", -1))
+            feed_cpus = list(applied["roles"]["feeds"])
+            path_aligned = (incoming_cpu in feed_cpus) if profile.get("irq_feed_affinity") else None
             result["runs"].append({
                 "profile": profile,
                 "baseline": paired_baseline,
                 "candidate": candidate,
                 "applied_host_state": applied,
                 "delta_candidate_minus_baseline": change,
+                "incoming_cpu": incoming_cpu,
+                "incoming_napi_id": incoming_napi,
+                "incoming_cpu_changes": int(candidate.get("incoming_cpu_changes", 0)),
+                "incoming_napi_changes": int(candidate.get("incoming_napi_changes", 0)),
+                "receive_path_on_feed_cpu": path_aligned,
                 "improved_tail_without_failures": (
                     change["total_p99_ns"] < 0
                     and change["total_p99_9_ns"] < 0

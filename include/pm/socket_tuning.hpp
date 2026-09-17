@@ -28,4 +28,22 @@ inline int apply_busy_poll(int fd, int requested_us) noexcept {
 #endif
 }
 
+inline int incoming_cpu(int fd) noexcept {
+#if defined(__linux__) && defined(SO_INCOMING_CPU)
+    int value = -1; socklen_t length = sizeof(value);
+    return ::getsockopt(fd, SOL_SOCKET, SO_INCOMING_CPU, &value, &length) == 0 ? value : -1;
+#else
+    (void)fd; return -1;
+#endif
+}
+
+inline int incoming_napi_id(int fd) noexcept {
+#if defined(__linux__) && defined(SO_INCOMING_NAPI_ID)
+    int value = -1; socklen_t length = sizeof(value);
+    return ::getsockopt(fd, SOL_SOCKET, SO_INCOMING_NAPI_ID, &value, &length) == 0 ? value : -1;
+#else
+    (void)fd; return -1;
+#endif
+}
+
 } // namespace pm::network
