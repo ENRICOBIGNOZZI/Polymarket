@@ -23,11 +23,11 @@
     "dashboard_uid": "polymarket-v7",
     "datasource_file": "monitoring/grafana/provisioning/datasources/prometheus-v7.yml",
     "datasource_uid": "prometheus-v7",
-    "external_fair_dashboard": "monitoring/grafana/dashboards/polymarket-v7-external-fair.json",
     "host": "127.0.0.1",
     "latency_dashboard": "monitoring/grafana/dashboards/polymarket-v7-latency.json",
     "port": 3000,
-    "provider_file": "monitoring/grafana/provisioning/dashboards/v7.yml"
+    "provider_file": "monitoring/grafana/provisioning/dashboards/v7.yml",
+    "dashboard_layout": "CRYPTO_FLASH_CONTROL_ROOM_PLUS_LATENCY_ONLY"
   },
   "legacy_algorithm_count": 0,
   "live_algorithm_count": 1,
@@ -86,5 +86,5 @@
     "status": "control/supervisor_status.json",
     "supervisor": "ops/v7_runtime_supervisor.py"
   },
-  "version": 7
+  "version": 8
 }
