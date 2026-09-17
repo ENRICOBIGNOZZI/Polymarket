@@ -22,6 +22,7 @@ struct Options {
     std::size_t samples = 120;
     std::size_t warmup = 3;
     std::int64_t interval_ms = 500;
+    int socket_busy_poll_us = 0;
     bool validate_only = false;
 };
 
@@ -62,6 +63,7 @@ Options options(int argc, char** argv) {
         else if (argument == "--samples") out.samples = static_cast<std::size_t>(integer(next(), "samples"));
         else if (argument == "--warmup") out.warmup = static_cast<std::size_t>(integer(next(), "warmup"));
         else if (argument == "--interval-ms") out.interval_ms = integer(next(), "interval-ms");
+        else if (argument == "--socket-busy-poll-us") out.socket_busy_poll_us = static_cast<int>(integer(next(), "socket-busy-poll-us"));
         else throw std::runtime_error("unknown argument: " + std::string(argument));
     }
     if (!approved_endpoint(out.endpoint)) {
@@ -73,6 +75,7 @@ Options options(int argc, char** argv) {
     if (!exact_sha(out.exact_code_sha)) throw std::runtime_error("exact-code-sha must be lowercase SHA-1");
     if (out.samples == 0 || out.samples > 1'000'000) throw std::runtime_error("samples out of range");
     if (out.warmup > 10000 || out.interval_ms > 60000) throw std::runtime_error("probe load out of range");
+    if (out.socket_busy_poll_us > 2000) throw std::runtime_error("socket-busy-poll-us out of range");
     return out;
 }
 
@@ -103,7 +106,7 @@ int main(int argc, char** argv) {
             std::cout << "{\"validated\":true,\"network_calls\":0}\n";
             return 0;
         }
-        pm::HttpClient client;
+        pm::HttpClient client(cfg.socket_busy_poll_us);
         bool connection_seen = false;
         const auto warmup_started = std::chrono::steady_clock::now();
         std::size_t warmup_failed = 0;
@@ -176,6 +179,7 @@ int main(int argc, char** argv) {
                   << ",\"started_wall_ms\":" << started_ms
                   << ",\"finished_wall_ms\":" << finished_ms
                   << ",\"samples\":" << cfg.samples
+                  << ",\"socket_busy_poll_us\":" << cfg.socket_busy_poll_us
                   << ",\"warmup\":" << cfg.warmup
                   << ",\"successful_samples\":" << total.size()
                   << ",\"failed_samples\":" << failed

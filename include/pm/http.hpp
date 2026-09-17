@@ -26,7 +26,7 @@ struct HttpResponse {
 
 class HttpClient {
 public:
-    HttpClient();
+    explicit HttpClient(int socket_busy_poll_us = 0);
     ~HttpClient();
 
     HttpClient(const HttpClient&) = delete;

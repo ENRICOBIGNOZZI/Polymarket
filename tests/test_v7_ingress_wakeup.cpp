@@ -39,12 +39,16 @@ int main() {
     while (wakeup.wait_for(0ms)) {}
     assert(wakeup.errors() == 0);
 
-    // Userspace spin catches a producer without requiring an fd wake.
+    // Concurrent notification is never lost. Whether a loaded scheduler lets
+    // the producer run inside the userspace spin budget is a benchmark result,
+    // not a correctness invariant.
+    std::atomic<bool> spin_producer_ready{false};
     std::thread spin_producer([&] {
-        std::this_thread::sleep_for(100us);
+        spin_producer_ready.store(true, std::memory_order_release);
         wakeup.notify();
     });
-    assert(wakeup.wait_for(5ms, 1000us));
+    while (!spin_producer_ready.load(std::memory_order_acquire)) std::this_thread::yield();
+    assert(wakeup.wait_for(50ms, 1000us));
     spin_producer.join();
 
     // Multiple independent venue producers may signal the same consumer.

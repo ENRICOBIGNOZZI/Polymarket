@@ -1,4 +1,5 @@
 #include "pm/v7_external_ws.hpp"
+#include "pm/socket_tuning.hpp"
 #include "pm/v7_external_tape.hpp"
 
 #include <boost/asio/connect.hpp>
@@ -15,6 +16,7 @@
 #include <iostream>
 #include <memory>
 #include <stdexcept>
+#include <system_error>
 #include <thread>
 #include <vector>
 
@@ -159,7 +161,9 @@ ExternalVenueWsClient::ExternalVenueWsClient(
         || spec_.host.empty() || spec_.port.empty() || spec_.target.empty()
         || (spec_.subscription_json.empty() && !spec_.start_without_subscription)
         || spec_.max_message_bytes == 0
-        || spec_.max_message_bytes > kAbsoluteMaxWsMessageBytes) {
+        || spec_.max_message_bytes > kAbsoluteMaxWsMessageBytes
+        || spec_.socket_busy_poll_us < 0
+        || spec_.socket_busy_poll_us > pm::network::kMaxBusyPollUs) {
         throw std::invalid_argument("invalid external venue connection spec");
     }
 }
@@ -181,6 +185,11 @@ void ExternalVenueWsClient::run(ExternalStopToken stop) noexcept {
             auto& transport = beast::get_lowest_layer(ws);
             transport.expires_after(std::chrono::seconds(10));
             transport.connect(endpoints);
+            if (const int error = pm::network::apply_busy_poll(
+                    beast::get_lowest_layer(ws).socket().native_handle(), spec_.socket_busy_poll_us);
+                error != 0) {
+                throw std::system_error(error, std::generic_category(), "SO_BUSY_POLL");
+            }
             // Do not hold small subscription/control frames for Nagle batching.
             beast::get_lowest_layer(ws).socket().set_option(tcp::no_delay(true));
 
