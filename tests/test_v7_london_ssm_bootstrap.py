@@ -24,12 +24,19 @@ class LondonSsmBootstrapTests(unittest.TestCase):
         self.assertIn('git -C "$APP" show "$SHA:ops/v7_london_bootstrap.sh"', command)
         self.assertIn("POLYMARKET_EXPECTED_SHA", command)
         self.assertIn("PM_V7_RUN_ROOT", command)
-        self.assertIn('LOG="$BENCH/bootstrap.$SHA.log"', command)
         self.assertIn('>"$LOG" 2>&1', command)
         self.assertIn('tail -200 "$LOG"', command)
         self.assertIn("! systemctl is-active --quiet polymarket-v7-paper.service", command)
         self.assertNotIn("systemctl enable", command)
         self.assertNotIn("real_order_submission=true", command.lower())
+
+    def test_remote_bootstrap_preserves_unique_log_receipt(self) -> None:
+        command = module.remote_command("a" * 40, "ubuntu")
+        self.assertIn('RUN_ID="$(cat /proc/sys/kernel/random/uuid)"', command)
+        self.assertIn('LOG="$BENCH/bootstrap.$SHA.$RUN_ID.log"', command)
+        self.assertNotIn('LOG="$BENCH/bootstrap.$SHA.log"', command)
+        self.assertIn('python3 - "$RUN/bootstrap_receipt.json" "$SHA" "$LOG"', command)
+        self.assertIn("v['ssm_bootstrap_log']=sys.argv[3]", command)
 
     def test_parse_receipt_is_single_envelope(self) -> None:
         payload = '{"code_sha":"' + "a" * 40 + '","paper_only":true}'
