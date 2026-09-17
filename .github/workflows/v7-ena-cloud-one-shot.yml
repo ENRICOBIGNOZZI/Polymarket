@@ -1,0 +1,104 @@
+name: V7 ENA cloud one-shot
+
+on:
+  push:
+    branches:
+      - ops/ena-cloud-one-shot-20260917
+
+permissions:
+  contents: read
+
+concurrency:
+  group: polymarket-v7-ena-cloud-one-shot
+  cancel-in-progress: false
+
+jobs:
+  ena:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 50
+    env:
+      AWS_REGION: eu-west-2
+      AWS_DEFAULT_REGION: eu-west-2
+      AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+      AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+      AWS_SESSION_TOKEN: ${{ secrets.AWS_SESSION_TOKEN }}
+      AWS_PAGER: ""
+      TARGET_SHA: 71ab629d320dfce7cba6cabde21cd5058dcb8d1d
+      STACK: polymarket-v7-london-shootout
+
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          fetch-depth: 0
+
+      - name: AWS and PAPER preflight
+        shell: bash
+        run: |
+          set -euo pipefail
+          aws sts get-caller-identity --region "$AWS_REGION" --output json >/dev/null
+          test "$(git cat-file -t "$TARGET_SHA")" = commit
+          git fetch --no-tags origin perf/hft-london-physical-cores-20260917
+          git worktree add "$RUNNER_TEMP/host-gate" origin/perf/hft-london-physical-cores-20260917
+
+      - name: Wait for any existing stack operation
+        shell: bash
+        run: |
+          set -euo pipefail
+          status="$(aws cloudformation describe-stacks --stack-name "$STACK" --region "$AWS_REGION" --query 'Stacks[0].StackStatus' --output text 2>/dev/null || true)"
+          case "$status" in
+            *IN_PROGRESS)
+              aws cloudformation wait stack-update-complete --stack-name "$STACK" --region "$AWS_REGION" || \
+              aws cloudformation wait stack-create-complete --stack-name "$STACK" --region "$AWS_REGION"
+              ;;
+          esac
+
+      - name: Replace undersized London benchmark hosts
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/london"
+          POLYMARKET_EXPECTED_SHA="$TARGET_SHA" \
+          POLYMARKET_LONDON_OUTPUT_DIR="$RUNNER_TEMP/london" \
+          "$RUNNER_TEMP/host-gate/ops/v7_london_provision.sh"
+
+      - name: Bootstrap exact SHA with runtime disabled
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 ops/v7_london_ssm_bootstrap.py \
+            --expected-sha "$TARGET_SHA" --region "$AWS_REGION" \
+            --output "$RUNNER_TEMP/london/bootstrap.$TARGET_SHA.json"
+
+      - name: Run reversible ENA A/B in all physical AZs
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/ena"
+          python3 ops/v7_london_ena_ab_ssm.py \
+            --expected-sha "$TARGET_SHA" --region "$AWS_REGION" \
+            --samples 240 --interval-ms 250 --output-dir "$RUNNER_TEMP/ena"
+          test -s "$RUNNER_TEMP/ena/ena-ab.$TARGET_SHA.json"
+
+      - name: Verify no persistent tuning or execution authority
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - "$RUNNER_TEMP/ena/ena-ab.$TARGET_SHA.json" <<'PY'
+          import json,sys
+          v=json.load(open(sys.argv[1]))
+          assert v['paper_only'] is True
+          assert v['authenticated_execution'] is False
+          assert v['real_order_submission'] is False
+          assert v['persistent_tuning'] is False
+          assert set(v['zones']) == {'euw2-az1','euw2-az2','euw2-az3'}
+          assert all(z['restored_exactly'] is True for z in v['zones'].values())
+          PY
+
+      - name: Upload ENA evidence
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: v7-ena-cloud-one-shot
+          path: |
+            ${{ runner.temp }}/london
+            ${{ runner.temp }}/ena
+          retention-days: 14
