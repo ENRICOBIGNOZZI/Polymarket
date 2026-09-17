@@ -159,6 +159,10 @@ add_executable(polymarket_v7_crypto_to_oms_bench src/v7_crypto_to_oms_bench.cpp)
 target_link_libraries(polymarket_v7_crypto_to_oms_bench PRIVATE pm_v7_external pm_v7_common)
 target_compile_options(polymarket_v7_crypto_to_oms_bench PRIVATE -Wall -Wextra -Wpedantic)
 
+add_executable(polymarket_v7_native_clob_full_prewire_bench src/v7_native_clob_full_prewire_bench.cpp)
+target_link_libraries(polymarket_v7_native_clob_full_prewire_bench PRIVATE pm_v7_clob_native)
+target_compile_options(polymarket_v7_native_clob_full_prewire_bench PRIVATE -Wall -Wextra -Wpedantic)
+
 add_executable(polymarket_v7_feed_race_probe src/v7_feed_race_probe.cpp)
 target_link_libraries(polymarket_v7_feed_race_probe PRIVATE pm_v7_external)
 target_compile_options(polymarket_v7_feed_race_probe PRIVATE -Wall -Wextra -Wpedantic)
@@ -251,6 +255,9 @@ if(BUILD_TESTING)
   add_executable(pm_v7_native_clob_order_lane_driver tests/v7_native_clob_order_lane_driver.cpp)
   target_link_libraries(pm_v7_native_clob_order_lane_driver PRIVATE pm_v7_account_native)
   target_compile_options(pm_v7_native_clob_order_lane_driver PRIVATE -UNDEBUG)
+
+  add_test(NAME pm_v7_native_clob_full_prewire_bench_smoke
+    COMMAND polymarket_v7_native_clob_full_prewire_bench 64)
 
 
 
