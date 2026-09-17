@@ -196,7 +196,7 @@ ExchangeV2PreparedOrderHasher::ExchangeV2PreparedOrderHasher(
     valid_ = true;
 }
 
-bool ExchangeV2PreparedOrderHasher::digest_u64(
+bool ExchangeV2PreparedOrderHasher::struct_hash_u64(
     std::uint64_t salt,
     std::uint64_t maker_amount,
     std::uint64_t taker_amount,
@@ -207,8 +207,19 @@ bool ExchangeV2PreparedOrderHasher::digest_u64(
     patch_uint64_word(encoded_, 5, maker_amount);
     patch_uint64_word(encoded_, 6, taker_amount);
     patch_uint64_word(encoded_, 9, timestamp_ms);
+    output = keccak256(encoded_);
+    return true;
+}
 
-    const Hash32 struct_hash = keccak256(encoded_);
+bool ExchangeV2PreparedOrderHasher::digest_u64(
+    std::uint64_t salt,
+    std::uint64_t maker_amount,
+    std::uint64_t taker_amount,
+    std::uint64_t timestamp_ms,
+    Hash32& output) noexcept {
+    Hash32 struct_hash{};
+    if (!struct_hash_u64(salt, maker_amount, taker_amount, timestamp_ms,
+                         struct_hash)) return false;
     std::memcpy(envelope_.data() + 34, struct_hash.data(), struct_hash.size());
     output = keccak256(envelope_);
     return true;
