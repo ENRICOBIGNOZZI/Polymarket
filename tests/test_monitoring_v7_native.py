@@ -64,6 +64,41 @@ class V7NativeMonitoringTest(unittest.TestCase):
             self.assertIn("polymarket_v7_live_algorithm_scope_wired 1",metrics)
             self.assertIn('polymarket_v7_economic_engine_configured{engine="CRYPTO_SETTLEMENT_ENGINE"} 1',metrics)
 
+    def test_native_runtime_is_healthy_without_legacy_selector_sidecars(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory) / "paper_v7_live"
+            self._fixture(root)
+            sha = self._sha()
+            for path in (
+                root / "control/fee_reward_registry.json",
+                root / "micro_maker/status.json",
+                root / "micro_maker/selector_status.json",
+                root / "micro_maker/rotation_status.json",
+            ):
+                path.unlink(missing_ok=True)
+            self._write(root / "control/native_engine_manager_status.json", {
+                "schema": "polymarket_v7_native_engine_manager_status_v1",
+                "timestamp_ms": 1_000_000,
+                "state": "RUNNING",
+                "blocker": "",
+                "paper_only": True,
+                "authenticated_execution": False,
+                "real_order_submission": False,
+                "real_capital_at_risk": False,
+                "model_sha": sha,
+                "run_id": "run-id",
+                "server_id": "server-id",
+                "single_native_hot_path": True,
+                "engine_pid": os.getpid(),
+                "market_id": "m1",
+            })
+            snapshot = exporter.collect_snapshot(root, ROOT, now=1000)
+            self.assertTrue(snapshot["native_mode"])
+            self.assertEqual(exporter.health_reasons(snapshot), [])
+            metrics = exporter.render_prometheus(snapshot)
+            self.assertIn("polymarket_v7_native_engine_mode 1", metrics)
+            self.assertIn("polymarket_v7_native_engine_ready 1", metrics)
+
     def test_professional_maker_latency_is_exported(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root=Path(directory)/"paper_v7_live"; self._fixture(root)
