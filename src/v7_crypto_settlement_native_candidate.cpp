@@ -140,9 +140,9 @@ Options parse_options(int argc, char** argv) {
         else if (arg == "--maximum-tte-ns") out.maximum_tte_ns = bounded_integer<std::int64_t>(next(), 1, 86'400'000'000'000LL);
         else if (arg == "--maker-share-cap-microunits") out.maker_share_cap_microunits = bounded_integer<std::int64_t>(next(), 1, 5'000'000);
         else if (arg == "--risk-policy-sha256") out.risk_policy_sha256 = next();
-        else if (arg == "--sleeve-budget-microdollars") out.capital_limits.sleeve_budget_microdollars = bounded_integer<std::int64_t>(next(), 1, 1'000'000'000);
-        else if (arg == "--max-total-exposure-microdollars") out.capital_limits.max_total_exposure_microdollars = bounded_integer<std::int64_t>(next(), 1, 1'000'000'000);
-        else if (arg == "--max-market-exposure-microdollars") out.capital_limits.max_market_exposure_microdollars = bounded_integer<std::int64_t>(next(), 1, 100'000'000);
+        else if (arg == "--sleeve-budget-microdollars") out.capital_limits.sleeve_budget_microdollars = bounded_integer<std::int64_t>(next(), 1, 10'000'000'000LL);
+        else if (arg == "--max-total-exposure-microdollars") out.capital_limits.max_total_exposure_microdollars = bounded_integer<std::int64_t>(next(), 1, 10'000'000'000LL);
+        else if (arg == "--max-market-exposure-microdollars") out.capital_limits.max_market_exposure_microdollars = bounded_integer<std::int64_t>(next(), 1, 333'333'333);
         else if (arg == "--max-single-order-microdollars") out.capital_limits.max_single_order_microdollars = bounded_integer<std::int64_t>(next(), 1, 20'000'000);
         else if (arg == "--taker-fee-rate") out.taker_fee_rate = bounded_double(next(), 0.0, 1.0);
         else if (arg == "--taker-fee-exponent") out.taker_fee_exponent = bounded_double(next(), 0.0, 10.0);
