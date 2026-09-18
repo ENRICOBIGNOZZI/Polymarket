@@ -14,6 +14,8 @@ def test_native_decision_loop_is_event_driven_and_router_free():
     assert 'authority.submit' in source
     assert 'v7_external_fair_paper_router.py' not in loop
     assert 'scripts/v7_native_crypto_engine_manager.py' in loop
+    assert '--allocation "$RUN_ROOT/control/allocations/crypto_settlement_engine.json"' in loop
+    assert '--market-registry "$ROOT/config/v7_crypto_settlement_markets.json"' in loop
     assert '--engine "$CRYPTO_SETTLEMENT_ENGINE"' in loop
 
 
