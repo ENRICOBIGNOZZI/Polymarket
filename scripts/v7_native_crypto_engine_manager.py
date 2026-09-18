@@ -28,6 +28,7 @@ from typing import Any
 from v7_execution_ledger import native_order_id_matches, LedgerEvent, canonical_ledger_path, iter_events
 from v7_ledger_spool import spool_event
 from v7_native_risk_policy import load_native_limits, unsettled_exposure
+from v7_legacy_native_claims import validate_registry as validate_legacy_claim_registry
 from v7_native_settlement_projection import context_from_fill
 
 STATUS_SCHEMA = "polymarket_v7_native_engine_manager_status_v1"
@@ -333,6 +334,18 @@ def _execution_budget_microdollars(allocation_path: Path) -> int:
     return micros
 
 
+def _budget_after_legacy_claims(
+    gross_microdollars: int, legacy_path: Path, target_sha: str,
+) -> tuple[int, int, str]:
+    if not isinstance(gross_microdollars, int) or isinstance(gross_microdollars, bool) or gross_microdollars <= 0:
+        raise RuntimeError("gross_engine_budget_invalid")
+    legacy = validate_legacy_claim_registry(read_json(legacy_path), target_sha=target_sha)
+    claim = int(legacy["total_claim_microdollars"])
+    if claim >= gross_microdollars:
+        raise RuntimeError("legacy_claims_exhaust_engine_budget")
+    return gross_microdollars - claim, claim, str(legacy["registry_sha256"])
+
+
 def _enabled_context_count(registry_path: Path) -> int:
     value = read_json(registry_path)
     rows = value.get("contexts") if isinstance(value.get("contexts"), list) else []
@@ -360,8 +373,17 @@ class Manager:
             read_json(args.repository_root / "config/v7_native_risk_policy.json"),
             read_json(self.run_root / "control/allocations/manifest.json"))
         self.allocated_execution_budget_microdollars = _execution_budget_microdollars(args.allocation)
-        self.global_budget_microdollars = min(self.allocated_execution_budget_microdollars,
-            self.base_risk_receipt["limits"]["max_total_exposure_microdollars"])
+        self.gross_global_budget_microdollars = min(
+            self.allocated_execution_budget_microdollars,
+            self.base_risk_receipt["limits"]["max_total_exposure_microdollars"],
+        )
+        (
+            self.global_budget_microdollars,
+            self.legacy_claim_microdollars,
+            self.legacy_claim_registry_sha256,
+        ) = _budget_after_legacy_claims(
+            self.gross_global_budget_microdollars, args.legacy_claims, args.model_sha
+        )
         self.partition_count = _enabled_context_count(args.market_registry)
         self.partition_microdollars = self.global_budget_microdollars // self.partition_count
         if self.partition_microdollars <= 0:
@@ -549,6 +571,9 @@ class Manager:
             "expected_context_count": self.partition_count,
             "target_contexts": target_keys,
             "missing_contexts": sorted(set(all_contexts) - set(target_keys)),
+            "gross_global_budget_microdollars": self.gross_global_budget_microdollars,
+            "legacy_claim_microdollars": self.legacy_claim_microdollars,
+            "legacy_claim_registry_sha256": self.legacy_claim_registry_sha256,
             "global_budget_microdollars": self.global_budget_microdollars,
             "partition_budget_microdollars": self.partition_microdollars,
             "partition_count": self.partition_count,
@@ -952,6 +977,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--engine-log", type=Path, required=True)
     parser.add_argument("--allocation", type=Path, required=True)
     parser.add_argument("--market-registry", type=Path, required=True)
+    parser.add_argument("--legacy-claims", type=Path, required=True)
     parser.add_argument("--python", default="python3")
     parser.add_argument("--settlement-timeout-seconds", type=int, default=600)
     parser.add_argument("--min-order-microunits", type=int, default=5_000_000)

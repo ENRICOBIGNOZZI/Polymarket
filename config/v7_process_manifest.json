@@ -304,6 +304,8 @@
         "${RUN_ROOT}/control/allocations/crypto_settlement_engine.json",
         "--market-registry",
         "${ROOT}/config/v7_crypto_settlement_markets.json",
+        "--legacy-claims",
+        "${RUN_ROOT}/control/legacy_native_claims.json",
         "--target-quantity-microunits",
         "20000000",
         "--minimum-tte-ns",
@@ -321,7 +323,8 @@
         "control/allocations/manifest.json",
         "control/allocations/crypto_settlement_engine.json",
         "config/v7_crypto_settlement_markets.json",
-        "config/v7_native_risk_policy.json"
+        "config/v7_native_risk_policy.json",
+        "control/legacy_native_claims.json"
       ],
       "outputs": [
         "control/native_engine_manager_status.json",

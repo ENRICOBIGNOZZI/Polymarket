@@ -292,6 +292,7 @@ def test_manager_cli_defaults_match_frequency_and_size_policy(monkeypatch) -> No
         "--engine-log", "/tmp/engine.log",
         "--allocation", "/tmp/allocation.json",
         "--market-registry", "/tmp/registry.json",
+        "--legacy-claims", "/tmp/legacy.json",
     ])
     args = manager.parse_args()
     assert args.min_order_microunits == 5_000_000
