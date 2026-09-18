@@ -18,7 +18,7 @@ def test_repository_contract_is_single_owner_zero_authority() -> None:
     assert value['new_risk_authorized'] is False
     assert value['single_global_execution_owner'] is True
     assert value['single_canonical_ledger_writer'] is True
-    assert value['global_portfolio_coordinator'] == 'V7_GLOBAL_PORTFOLIO_COORDINATOR'
+    assert value['global_portfolio_coordinator'] == 'V7_NATIVE_CRYPTO_SETTLEMENT_ENGINE'
     assert value['ledger_owner'] == 'V7_CANONICAL_LEDGER'
 
 
