@@ -1,5 +1,6 @@
 #include "pm/v7_native_settlement_oms_endpoint.hpp"
 #include "pm/v7_native_paper_execution.hpp"
+#include "pm/v7_native_runtime_evidence.hpp"
 #include "pm/fast_ws.hpp"
 #include "pm/v7_coinbase_l2_observer.hpp"
 #include "pm/v7_crypto_decision_lane.hpp"
@@ -56,14 +57,41 @@ T bounded_integer(std::string_view text, T lo, T hi) {
     return value;
 }
 
+double bounded_double(std::string_view text, double lo, double hi) {
+    double value{};
+    const auto result = std::from_chars(text.data(), text.data() + text.size(), value);
+    if (result.ec != std::errc{} || result.ptr != text.data() + text.size()
+        || !std::isfinite(value) || value < lo || value > hi) {
+        throw std::invalid_argument("bounded floating point required");
+    }
+    return value;
+}
+
+bool exact_sha(std::string_view value) noexcept {
+    if (value.size() != 40) return false;
+    for (char ch : value) {
+        if (!((ch >= '0' && ch <= '9') || (ch >= 'a' && ch <= 'f'))) return false;
+    }
+    return true;
+}
+
 struct Options {
     std::string yes_token;
     std::string no_token;
+    std::string run_root;
+    std::string model_sha;
+    std::string run_id;
+    std::string server_id;
+    std::string market_id;
+    std::string event_id;
+    std::string fee_source;
     std::string pm_ws_url = "wss://ws-subscriptions-clob.polymarket.com/ws/market";
     std::int64_t close_wall_ns = 0;
     std::int32_t tick_size_e4 = 100;
     std::int64_t min_order_microunits = 5'000'000;
-    int duration_seconds = 30;
+    double taker_fee_rate = 0.0;
+    double taker_fee_exponent = 1.0;
+    int duration_seconds = 0;
     bool validate_only = false;
 };
 
@@ -77,11 +105,20 @@ Options parse_options(int argc, char** argv) {
         };
         if (arg == "--yes-token") out.yes_token = next();
         else if (arg == "--no-token") out.no_token = next();
+        else if (arg == "--run-root") out.run_root = next();
+        else if (arg == "--model-sha") out.model_sha = next();
+        else if (arg == "--run-id") out.run_id = next();
+        else if (arg == "--server-id") out.server_id = next();
+        else if (arg == "--market-id") out.market_id = next();
+        else if (arg == "--event-id") out.event_id = next();
+        else if (arg == "--fee-source") out.fee_source = next();
         else if (arg == "--pm-ws-url") out.pm_ws_url = next();
         else if (arg == "--close-wall-ns") out.close_wall_ns = bounded_integer<std::int64_t>(next(), 1, std::numeric_limits<std::int64_t>::max());
         else if (arg == "--tick-size-e4") out.tick_size_e4 = bounded_integer<std::int32_t>(next(), 1, 5000);
         else if (arg == "--min-order-microunits") out.min_order_microunits = bounded_integer<std::int64_t>(next(), 1, 1'000'000'000);
-        else if (arg == "--duration-seconds") out.duration_seconds = bounded_integer<int>(next(), 1, 3600);
+        else if (arg == "--taker-fee-rate") out.taker_fee_rate = bounded_double(next(), 0.0, 1.0);
+        else if (arg == "--taker-fee-exponent") out.taker_fee_exponent = bounded_double(next(), 0.0, 10.0);
+        else if (arg == "--duration-seconds") out.duration_seconds = bounded_integer<int>(next(), 0, 86'400);
         else if (arg == "--validate-only") out.validate_only = true;
         else throw std::invalid_argument("unknown option");
     }
@@ -118,8 +155,14 @@ int main(int argc, char** argv) {
             std::cout << "native crypto settlement candidate configuration PASS\n";
             return 0;
         }
-        if (options.yes_token.empty() || options.no_token.empty() || options.yes_token == options.no_token
-            || options.close_wall_ns <= wall_now_ns()) throw std::invalid_argument("live market identity required");
+        if (options.yes_token.empty() || options.no_token.empty()
+            || options.yes_token == options.no_token || options.run_root.empty()
+            || !exact_sha(options.model_sha) || options.run_id.empty()
+            || options.server_id.empty() || options.market_id.empty()
+            || options.event_id.empty() || options.fee_source.empty()
+            || options.close_wall_ns <= wall_now_ns()) {
+            throw std::invalid_argument("live PAPER runtime identity required");
+        }
 
         constexpr std::uint64_t kAsset = 1, kMarket = 1, kEvent = 1, kYes = 1, kNo = 2;
         IngressWakeup wakeup;
@@ -254,7 +297,10 @@ int main(int argc, char** argv) {
         std::thread coinbase_thread([&] { coinbase.run(stop_token); });
         pm_feed.start();
 
-        const auto deadline = start_mono + static_cast<std::int64_t>(options.duration_seconds) * 1'000'000'000LL;
+        const auto requested_deadline = options.duration_seconds > 0
+            ? start_mono + static_cast<std::int64_t>(options.duration_seconds) * 1'000'000'000LL
+            : market.close_monotonic_ns;
+        const auto deadline = std::min(requested_deadline, market.close_monotonic_ns);
         const auto refill_binance = [&] {
             if (!binance_ready) {
                 binance_ready = binance_ingress.drain_events(
