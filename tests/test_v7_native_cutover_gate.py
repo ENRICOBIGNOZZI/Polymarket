@@ -27,10 +27,15 @@ class NativeCutoverGateTest(unittest.TestCase):
         self.policy = json.loads(POLICY.read_text(encoding="utf-8"))
         self.manifest = json.loads(MANIFEST.read_text(encoding="utf-8"))
 
-    def test_current_parallel_hot_path_is_rejected(self) -> None:
+    def test_current_native_single_owner_manifest_passes(self) -> None:
         errors = native_gate.validate(self.policy, self.manifest)
-        self.assertTrue(errors)
-        self.assertTrue(any("exactly one London-deployed HOT_PATH" in e for e in errors), errors)
+        self.assertEqual(errors, [])
+        hot = [
+            process for process in self.manifest["processes"]
+            if process.get("london_deployed") is True
+            and process.get("runtime_class") == "HOT_PATH"
+        ]
+        self.assertEqual([process["id"] for process in hot], ["crypto_settlement_engine"])
 
     def test_one_native_single_owner_engine_passes(self) -> None:
         manifest = copy.deepcopy(self.manifest)
@@ -108,7 +113,7 @@ class NativeCutoverGateTest(unittest.TestCase):
         errors = native_gate.validate(self.policy, manifest)
         self.assertTrue(any("native C++" in e for e in errors), errors)
 
-    def test_cli_fails_closed_on_current_manifest(self) -> None:
+    def test_cli_accepts_current_native_manifest(self) -> None:
         result = subprocess.run(
             [sys.executable, str(CHECKER), "--policy", str(POLICY), "--manifest", str(MANIFEST), "--json"],
             text=True,
@@ -116,9 +121,9 @@ class NativeCutoverGateTest(unittest.TestCase):
             stderr=subprocess.PIPE,
             check=False,
         )
-        self.assertEqual(result.returncode, 78)
+        self.assertEqual(result.returncode, 0, result.stderr)
         receipt = json.loads(result.stdout)
-        self.assertFalse(receipt["ready"])
+        self.assertTrue(receipt["ready"])
 
     def test_cutover_gate_runs_before_any_service_mutation(self) -> None:
         text = CUTOVER.read_text(encoding="utf-8")
