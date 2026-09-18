@@ -214,3 +214,18 @@ def test_native_only_runtime_still_blocks_unsettled_native_fill() -> None:
             assert str(exc)=='prior_native_unsettled_markets:1'
         else:
             raise AssertionError('native-only unsettled fill accepted')
+
+
+def test_git_ancestor_check_scopes_safe_directory(monkeypatch) -> None:
+    captured={}
+    class Result:
+        returncode=0
+    def fake_run(command, **kwargs):
+        captured["command"]=command
+        captured["kwargs"]=kwargs
+        return Result()
+    monkeypatch.setattr(cutover.subprocess,"run",fake_run)
+    repo=Path("/tmp/native-owned-repo")
+    assert cutover.git_is_ancestor(repo,"a"*40,"b"*40) is True
+    assert captured["command"][:4]==["git","-c",f"safe.directory={repo}","-C"]
+    assert captured["command"][4:]==[str(repo),"merge-base","--is-ancestor","a"*40,"b"*40]
