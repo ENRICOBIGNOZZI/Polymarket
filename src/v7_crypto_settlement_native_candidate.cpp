@@ -400,6 +400,14 @@ int main(int argc, char** argv) {
             if (coinbase_ready) receive_ns = std::min(receive_ns, pending_coinbase.local_receive_monotonic_ns);
             if (pm_ready) receive_ns = std::min(receive_ns, pending_pm.event.receive_monotonic_ns);
             if (receive_ns <= 0 || receive_ns == std::numeric_limits<std::int64_t>::max()) {
+                if (latency_overflow < 3) {
+                    std::cerr << "invalid_ingress_clock binance_ready=" << binance_ready
+                              << " binance_ns=" << pending_binance.local_receive_monotonic_ns
+                              << " coinbase_ready=" << coinbase_ready
+                              << " coinbase_ns=" << pending_coinbase.local_receive_monotonic_ns
+                              << " pm_ready=" << pm_ready
+                              << " pm_ns=" << pending_pm.event.receive_monotonic_ns << '\n';
+                }
                 ++latency_overflow;
                 binance_ready = coinbase_ready = pm_ready = false;
                 continue;
@@ -757,8 +765,8 @@ int main(int argc, char** argv) {
             {"first_signal_to_decision", latency_distribution(std::move(first_signal_to_decision))},
             {"decision_compute", latency_distribution(std::move(decision_compute))},
             {"reason_counts", reason_json(reasons)},
-            {"binance", {{"frames", binance_status.frames_received}, {"transport_failures", binance_status.transport_failures}, {"drops", binance_ingress_status.dropped_events}}},
-            {"coinbase", {{"frames", coinbase_status.frames_received}, {"transport_failures", coinbase_status.transport_failures}, {"drops", coinbase_ingress_status.dropped_events}}},
+            {"binance", {{"invalid_frames", binance_ingress_status.invalid_frames}, {"enqueued", binance_ingress_status.enqueued_events}, {"drained", binance_ingress_status.drained_events}, {"queued", binance_ingress_status.queued}, {"frames", binance_status.frames_received}, {"transport_failures", binance_status.transport_failures}, {"drops", binance_ingress_status.dropped_events}}},
+            {"coinbase", {{"invalid_frames", coinbase_ingress_status.invalid_frames}, {"enqueued", coinbase_ingress_status.enqueued_events}, {"drained", coinbase_ingress_status.drained_events}, {"queued", coinbase_ingress_status.queued}, {"frames", coinbase_status.frames_received}, {"transport_failures", coinbase_status.transport_failures}, {"drops", coinbase_ingress_status.dropped_events}}},
             {"polymarket", {{"messages", pm_status.messages}, {"reconnects", pm_status.reconnects}, {"errors", pm_status.errors}, {"drops", pm_drops.load()}}},
             {"note", "PAPER-only native candidate. Maker and taker share one in-process inventory/capital/OMS authority. Taker fills require causal executable L1 depth; maker fills use pessimistic public-print queue depletion and bounded cancel latency. No authenticated submission or real capital is possible."}
         }) << '\n';
