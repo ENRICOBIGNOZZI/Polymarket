@@ -35,6 +35,7 @@ struct NativeEvidenceEvent {
 struct NativeObservation {
     std::uint64_t instrument_handle = 0, book_version = 0, signal_version = 0;
     std::int64_t receive_ns = 0, exchange_ns = 0, observed_ns = 0, trigger_ns = 0;
+    std::int64_t evaluated_grid_ns = 0, valid_until_ns = 0;
     std::int64_t decision_ns = 0, close_ns = 0;
     std::int64_t bid_quantity = 0, ask_quantity = 0, trade_quantity = 0;
     std::int32_t bid_e4 = 0, ask_e4 = 0, tick_e4 = 0, trade_e4 = 0;
@@ -43,10 +44,12 @@ struct NativeObservation {
     std::int64_t event_receive_ns = 0, event_exchange_ns = 0;
     std::uint8_t event_kind = 0;
     double signal_return_bp = 0.0;
+    double binance_return_100ms_bp = 0.0, coinbase_return_100ms_bp = 0.0;
     double expected_ev = 0.0, ev_uncertainty = 0.0;
     std::int64_t proposed_quantity = 0, proposed_price_tick = 0;
     std::uint64_t connection_epoch = 0;
     std::int8_t direction = 0;
+    std::uint8_t confirmed_non_opposing = 0, signal_valid = 0;
     std::uint8_t kind = 0, reason = 0, valid = 0, accepted = 0, trade_side = 0;
 };
 
@@ -72,6 +75,7 @@ struct NativeRuntimeEvidenceConfig {
     double taker_fee_rate = 0.0;
     double taker_fee_exponent = 1.0;
     std::uint8_t taker_only_fee = 1;
+    std::string observation_capture_mode = "NONE";
 
     [[nodiscard]] bool valid() const noexcept;
 };
