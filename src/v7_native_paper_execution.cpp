@@ -99,6 +99,7 @@ NativePaperSubmitResult NativePaperExecutionAdapter::submit(
             out.reason = NativePaperReason::CapacityFull;
             return out;
         }
+        slot->command = command;
         slot->client_order_id = command.client_order_id;
         slot->command_id = command.command_id;
         slot->tick_size_e4 = command.tick_size_e4;
@@ -158,6 +159,7 @@ NativePaperSubmitResult NativePaperExecutionAdapter::submit(
     ++paper_fills_;
     out.reason = NativePaperReason::Accepted;
     out.filled_microunits = command.quantity_microunits;
+    out.fill.command = command;
     out.fill.client_order_id = command.client_order_id;
     out.fill.command_id = command.command_id;
     out.fill.instrument_handle = command.instrument_handle;
@@ -263,6 +265,7 @@ NativePaperTradeResult NativePaperExecutionAdapter::on_public_trade(
             break;
         }
         auto& record = out.records[out.fills];
+        record.command = slot->command;
         record.client_order_id = slot->client_order_id;
         record.command_id = slot->command_id;
         record.instrument_handle = trade.instrument_handle;
