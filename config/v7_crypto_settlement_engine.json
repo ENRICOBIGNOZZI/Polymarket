@@ -82,7 +82,7 @@
     "settlement_source": "REGISTRY_VERIFIED_CHAINLINK_TWAP_60S",
     "settlement_source_may_be_replaced_by_predictor": false
   },
-  "global_portfolio_coordinator": "V7_GLOBAL_PORTFOLIO_COORDINATOR",
+  "global_portfolio_coordinator": "V7_NATIVE_CRYPTO_SETTLEMENT_ENGINE",
   "horizons": [
     {
       "authority": "SHADOW",
