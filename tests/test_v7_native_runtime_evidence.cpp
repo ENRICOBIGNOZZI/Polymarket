@@ -33,6 +33,7 @@ int main() {
     config.close_wall_ns = 2'000'000'000LL;
     config.taker_fee_rate = 0.02;
     config.taker_fee_exponent = 1.0;
+    config.observation_capture_mode = "DECISIONS";
     assert(config.valid());
 
     NativeOrderCommand command{};
@@ -84,6 +85,10 @@ int main() {
         observation.kind = 2; observation.instrument_handle = 11;
         observation.book_version = 9; observation.signal_version = 42;
         observation.receive_ns = 999'900'000; observation.decision_ns = 1'000'010'000;
+        observation.trigger_ns = 999'000'000; observation.evaluated_grid_ns = 999'100'000;
+        observation.valid_until_ns = 1'100'000'000; observation.close_ns = 61'000'010'000;
+        observation.binance_return_100ms_bp = 0.55; observation.coinbase_return_100ms_bp = 0.21;
+        observation.confirmed_non_opposing = 1; observation.signal_valid = 1;
         observation.bid_e4 = 4000; observation.ask_e4 = 4100;
         observation.bid_prices[0] = 4000; observation.bid_quantities[0] = 3'000'000;
         observation.reason = 3; observation.direction = 1;
@@ -135,6 +140,13 @@ int main() {
         assert(observation.at("signal_version").as_int64() == 42);
         assert(observation.at("token_id").as_string() == "yes-token");
         assert(observation.at("capture_id").is_string());
+        assert(observation.at("capture_mode").as_string() == "DECISIONS");
+        assert(observation.at("binance_return_100ms_bp").as_double() == 0.55);
+        assert(observation.at("coinbase_return_100ms_bp").as_double() == 0.21);
+        assert(observation.at("confirmed_non_opposing").as_bool());
+        assert(observation.at("signal_valid").as_bool());
+        assert(observation.at("signal_age_ns").as_int64() == 1'010'000);
+        assert(observation.at("tte_ns").as_int64() == 60'000'000'000LL);
         assert(observation.at("model_artifact_hash").is_null());
         assert(!observation.at("execution_authority").as_bool());
         assert(observation.at("probability_forecast").is_null());

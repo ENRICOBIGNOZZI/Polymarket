@@ -20,6 +20,7 @@ sys.path.insert(0,str(HERE));sys.path.insert(0,str(HERE.parents[1]/'scripts'))
 from evidence import verify
 from inference import paired_block_report
 from causal_replay import Book,BookTape,Order,CausalReplay,EvidenceError
+from settlement_dataset import build as build_settlement_rows
 from v7_native_settlement_projection import iter_position_economics
 
 
@@ -114,11 +115,23 @@ def analyze(root:Path,protocol:dict) -> dict:
         canonical_by_block[block]+=float(row['final_pnl'])
     tests={k:{'name':v['name'],'state':'INCONCLUSIVE','missing_required':v['requires']} for k,v in protocol['tests'].items()}
     native={'books':0,'decisions':0,'errors':[]};arrival={'state':'INCONCLUSIVE','reason':'NATIVE_TAPES_NOT_IN_DATASET'}
+    settlement_rows={'state':'INCONCLUSIVE','reason':'NATIVE_DECISIONS_NOT_IN_DATASET'}
     if any('native_observations' in r['path'] for r in manifest['files']):
         tape,points,native=read_native(root,manifest)
-        arrival=arrival_diagnostics(tape,points,protocol)
-        tests['T3']['execution_diagnostics_available']=arrival['state']=='EXECUTION_DIAGNOSTICS_ONLY'
-        tests['T3']['missing_required']=['heldout_economic_outcomes','sufficient_time_blocks','exchange_latency_validation']
+        if native['books']>0:
+            arrival=arrival_diagnostics(tape,points,protocol)
+            tests['T3']['execution_diagnostics_available']=arrival['state']=='EXECUTION_DIAGNOSTICS_ONLY'
+            tests['T3']['missing_required']=['heldout_economic_outcomes','sufficient_time_blocks','exchange_latency_validation']
+        else:
+            arrival={'state':'INCONCLUSIVE','reason':'DECISION_ONLY_CAPTURE_REQUIRES_SEPARATE_FULL_BOOK_TAPE'}
+            tests['T3']['execution_diagnostics_available']=False
+        try:
+            built=build_settlement_rows(root)
+            settlement_rows={'state':'AVAILABLE',**built['diagnostics'],'feature_names':built['feature_names']}
+            tests['T2']['native_decision_rows_available']=built['diagnostics']['labelled_distinct_signal_rows']>0
+            tests['T2']['unique_markets_available']=built['diagnostics']['unique_markets']
+        except ValueError as exc:
+            settlement_rows={'state':'INCONCLUSIVE','reason':str(exc)}
     return {'schema':'polymarket_economic_research_report_v1','protocol_id':protocol['protocol_id'],
         'protocol_sha256':_canonical_hash(protocol),'dataset_sha256':manifest['dataset_sha256'],
         'identity':manifest['identity'],'paper_only':True,'execution_authority':False,'automatic_promotion':False,
@@ -128,7 +141,7 @@ def analyze(root:Path,protocol:dict) -> dict:
             'observed_realized_paper_pnl':observed_pnl,'open_positions':len(fill_positions-closed_positions),
             'projection_errors':errors,'observed_hour_blocks':len(canonical_by_block),
             'minimum_time_blocks':protocol['minimum_time_blocks'],'profitability_proven':False},
-        'native':native,'arrival_diagnostics':arrival,'tests':tests,
+        'native':native,'arrival_diagnostics':arrival,'settlement_training_rows':settlement_rows,'tests':tests,
         'promotion_blockers':['PROSPECTIVE_HELDOUT_COMPARISON_NOT_COMPLETE','VARIABLE_COST_AND_ARRIVAL_PARITY_REQUIRED',
             *(['FIXED_COSTS_NOT_SUPPLIED'] if protocol['fixed_cost_usd_per_hour'] is None else []),
             *(['ACCOUNTING_INVALID'] if errors else [])],

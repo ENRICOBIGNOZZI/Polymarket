@@ -82,7 +82,10 @@ bool NativeRuntimeEvidenceConfig::valid() const noexcept {
         && !fee_source.empty() && yes_instrument_handle != 0
         && no_instrument_handle != 0 && yes_instrument_handle != no_instrument_handle
         && close_wall_ns > 0 && std::isfinite(taker_fee_rate) && taker_fee_rate >= 0.0
-        && std::isfinite(taker_fee_exponent) && taker_fee_exponent >= 0.0;
+        && std::isfinite(taker_fee_exponent) && taker_fee_exponent >= 0.0
+        && (observation_capture_mode == "NONE"
+            || observation_capture_mode == "DECISIONS"
+            || observation_capture_mode == "FULL");
 }
 
 struct NativeRuntimeEvidenceWriter::Impl {
@@ -272,6 +275,7 @@ struct NativeRuntimeEvidenceWriter::Impl {
             {"market_id", config.market_id}, {"token_id", token(event.instrument_handle)},
             {"asset", config.asset}, {"horizon", config.horizon},
             {"capture_id", capture_id}, {"connection_epoch", event.connection_epoch},
+            {"capture_mode", config.observation_capture_mode},
             {"sequence", ++observation_sequence}, {"kind", event.kind},
             {"event_receive_monotonic_ns", event.event_receive_ns}, {"event_exchange_ns", event.event_exchange_ns},
             {"native_event_kind", event.event_kind},
@@ -279,10 +283,27 @@ struct NativeRuntimeEvidenceWriter::Impl {
             {"risk_policy_sha256", config.risk_policy_sha256}, {"fee_source", config.fee_source},
             {"receive_monotonic_ns", event.receive_ns}, {"exchange_event_ns", event.exchange_ns},
             {"observed_monotonic_ns", event.observed_ns}, {"trigger_monotonic_ns", event.trigger_ns},
+            {"evaluated_grid_monotonic_ns", event.evaluated_grid_ns},
+            {"valid_until_monotonic_ns", event.valid_until_ns},
             {"decision_monotonic_ns", event.decision_ns}, {"close_monotonic_ns", event.close_ns},
+            {"decision_wall_ms", wall_ms_from_monotonic(event.decision_ns)},
+            {"trigger_wall_ms", wall_ms_from_monotonic(event.trigger_ns)},
+            {"signal_age_ns", event.decision_ns > 0 && event.trigger_ns > 0
+                ? json::value(std::max<std::int64_t>(0, event.decision_ns - event.trigger_ns))
+                : json::value(nullptr)},
+            {"tte_ns", event.decision_ns > 0 && event.close_ns > 0
+                ? json::value(std::max<std::int64_t>(0, event.close_ns - event.decision_ns))
+                : json::value(nullptr)},
             {"receive_wall_ms", wall_ms_from_monotonic(event.receive_ns)},
             {"signal_version", event.signal_version}, {"book_version", event.book_version},
-            {"signal_return_bp", std::isfinite(event.signal_return_bp) ? json::value(event.signal_return_bp) : json::value(nullptr)}, {"direction", event.direction},
+            {"signal_return_bp", std::isfinite(event.signal_return_bp) ? json::value(event.signal_return_bp) : json::value(nullptr)},
+            {"binance_return_100ms_bp", std::isfinite(event.binance_return_100ms_bp)
+                ? json::value(event.binance_return_100ms_bp) : json::value(nullptr)},
+            {"coinbase_return_100ms_bp", std::isfinite(event.coinbase_return_100ms_bp)
+                ? json::value(event.coinbase_return_100ms_bp) : json::value(nullptr)},
+            {"direction", event.direction},
+            {"confirmed_non_opposing", event.confirmed_non_opposing != 0},
+            {"signal_valid", event.signal_valid != 0},
             {"reason", event.reason}, {"accepted", event.accepted != 0}, {"book_valid", event.valid != 0},
             {"bid_e4", event.bid_e4}, {"ask_e4", event.ask_e4}, {"tick_e4", event.tick_e4},
             {"bid_quantity", event.bid_quantity}, {"ask_quantity", event.ask_quantity},
@@ -315,6 +336,7 @@ struct NativeRuntimeEvidenceWriter::Impl {
             {"written", owner.written()},
             {"dropped", owner.dropped()},
             {"queue_depth", owner.queue_.approximate_size()},
+            {"observation_capture_mode", config.observation_capture_mode},
             {"observations_published", owner.observations_published_.load()},
             {"observations_written", owner.observations_written_.load()},
             {"observations_dropped", owner.observations_dropped_.load()},

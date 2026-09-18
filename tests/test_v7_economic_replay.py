@@ -206,3 +206,126 @@ def test_native_suballocation_never_exceeds_portfolio_allocation():
         'real_order_submission':False,'capital_authority_owner':'V7_CANONICAL_ALLOCATOR','capital_authority_owner_count':1,
         'account_starting_capital':500,'reserve_budget':0,'engine_budgets':{'CRYPTO_SETTLEMENT_ENGINE':500}}
     with pytest.raises(ValueError):load_native_limits(policy,allocation)
+
+
+def test_price_aware_break_even_and_loss_asymmetry() -> None:
+    from price_aware import normalize_trade
+    row = normalize_trade({
+        "market": "m1", "asset": "BTC", "horizon": "M5",
+        "entry_price": 0.99, "shares": 20, "fee_usd": 0.01386,
+        "outcome_payout": 1,
+    })
+    assert row["break_even_probability"] == pytest.approx(0.990693)
+    assert row["win_gain_per_share"] == pytest.approx(0.009307)
+    assert row["max_loss_per_share"] == pytest.approx(0.990693)
+    assert row["loss_to_win_ratio"] > 100
+
+
+def test_price_aware_max_loss_sizing_reduces_high_price_exposure() -> None:
+    from price_aware import max_loss_capped_shares
+    expensive = {
+        "market": "m1", "asset": "BTC", "horizon": "M5",
+        "entry_price": 0.99, "shares": 20, "fee_usd": 0.01386,
+        "outcome_payout": 0,
+    }
+    cheap = {
+        "market": "m2", "asset": "DOGE", "horizon": "M5",
+        "entry_price": 0.03, "shares": 20, "fee_usd": 0.04074,
+        "outcome_payout": 0,
+    }
+    assert max_loss_capped_shares(expensive, 5) < 5.1
+    assert max_loss_capped_shares(cheap, 5) == pytest.approx(20)
+
+
+def test_price_aware_summary_keeps_fees_separate_from_pre_fee_edge() -> None:
+    from price_aware import summarize
+    report = summarize([
+        {"market": "m1", "asset": "BTC", "horizon": "M5",
+         "entry_price": 0.96, "shares": 5, "fee_usd": 0.01344, "outcome_payout": 1},
+        {"market": "m2", "asset": "BTC", "horizon": "M5",
+         "entry_price": 0.95, "shares": 5, "fee_usd": 0.016625, "outcome_payout": 0},
+    ])
+    overall = report["overall"]
+    assert overall["trades"] == 2
+    assert overall["fees_usd"] == pytest.approx(0.030065)
+    assert overall["pre_fee_pnl_usd"] == pytest.approx(-4.55)
+    assert overall["net_pnl_usd"] == pytest.approx(-4.580065)
+    assert report["extreme_price_diagnostics"]["price_ge_0_95"]["trades"] == 2
+
+
+def test_grouped_settlement_model_gives_equal_total_weight_per_market():
+    from models import fit_settlement_residual_grouped,predict
+    rows=[]
+    for i in range(20):
+        outcome=i%2
+        for j in range(1 if i else 25):
+            rows.append({'market':str(i),'decision_ns':10+i+j,'label_observed_ns':200+i,
+                'complete':True,'outcome':outcome,'pm_probability':.5,
+                'features':{'return':(-1 if outcome==0 else 1)}})
+    model=fit_settlement_residual_grouped(rows,feature_names=['return'],train_end_ns=500,
+        dataset_sha256='b'*64,minimum_markets=20)
+    assert model['training_unique_markets']==20
+    assert model['training_rows']==44
+    assert model['market_weighting']=='EQUAL_TOTAL_WEIGHT_PER_MARKET'
+    future=[{**rows[-1],'decision_ns':600}]
+    assert predict(model,future)[0]>.5
+
+
+def test_settlement_dataset_joins_native_decision_to_final_without_future_leakage(tmp_path):
+    from settlement_dataset import build,FEATURE_NAMES
+    source=tmp_path/'source';(source/'ledger').mkdir(parents=True)
+    obsdir=source/'research/native_observations/run';obsdir.mkdir(parents=True)
+    final={'event_type':'FINAL','market_id':'m1','recorded_ts_ms':2000,
+        'metadata':{'crypto_context':{'asset':'SOL','horizon':'M5'},
+                    'settlement_payouts':{'YES':1.0,'NO':0.0}}}
+    (source/'ledger/execution.jsonl').write_text(json.dumps(final)+'\n')
+    observation={'schema':'polymarket_v7_native_observation_v1','kind':2,
+        'market_id':'m1','token_id':'YES','asset':'SOL','horizon':'M5',
+        'signal_version':7,'decision_wall_ms':1000,'book_valid':True,
+        'bid_e4':4000,'ask_e4':4100,'bid_quantity':3_000_000,'ask_quantity':2_000_000,
+        'binance_return_100ms_bp':.6,'coinbase_return_100ms_bp':.2,'direction':1,
+        'confirmed_non_opposing':True,'signal_age_ns':20_000_000,'tte_ns':60_000_000_000,
+        'fee_rate':.02,'fee_exponent':1.0,'accepted':True,'reason':1}
+    (obsdir/'m1.jsonl').write_text(json.dumps({**observation,'sequence':1})+'\n')
+    (obsdir/'m1.jsonl.closed.json').write_text(json.dumps({
+        'schema':'polymarket_v7_native_capture_closed_v1','healthy':True,'closed':True,
+        'capture_mode':'DECISIONS','last_sequence':1})+'\n')
+    dataset=tmp_path/'dataset'
+    freeze(source,dataset,['ledger/execution.jsonl','research/native_observations/run/m1.jsonl',
+        'research/native_observations/run/m1.jsonl.closed.json'],identity={'sha':'a'*40})
+    result=build(dataset)
+    assert result['diagnostics']['unique_markets']==1
+    row=result['rows'][0]
+    assert row['outcome']==1 and row['pm_probability']==pytest.approx(.405)
+    assert row['entry_price']==pytest.approx(.41)
+    assert row['break_even_probability']>.41
+    assert row['features']['signal_abs_bp']==pytest.approx(.6)
+    assert row['features']['asset_SOL']==1
+    assert set(result['feature_names'])==set(FEATURE_NAMES)
+
+
+def test_ev_policy_replays_later_signal_when_first_is_not_price_worthy(monkeypatch):
+    import ev_policy
+    base={'market':'m1','asset':'SOL','horizon':'M5','complete':True,'outcome':1,
+        'pm_probability':.5,'fee_per_share':.001,'confirmed_non_opposing':True,
+        'binance_return_100ms_bp':.6,'signal_age_ns':20_000_000,'tte_ns':60_000_000_000,
+        'minimum_order_microunits':5_000_000,'ask_quantity':30_000_000,
+        'tick_e4':100,'features':{}}
+    rows=[
+        {**base,'signal_version':1,'decision_ns':600,'bid_e4':9800,'ask_e4':9900,'entry_price':.99},
+        {**base,'signal_version':2,'decision_ns':700,'bid_e4':3900,'ask_e4':4000,'entry_price':.40},
+    ]
+    monkeypatch.setattr(ev_policy,'predict',lambda _m,_r:[.95,.70])
+    report=ev_policy.evaluate({'train_end_ns':500},rows,edge_buffer=.01)
+    assert report['baseline_first_structural']['trades']==1
+    assert report['ev_first_positive']['trades']==1
+    assert report['candidate_trades'][0]['entry_price']==pytest.approx(.40)
+    assert report['incremental_net_pnl']>0
+
+
+def test_ev_policy_structural_gate_rejects_insufficient_depth():
+    from ev_policy import structural_eligible
+    row={'entry_price':.5,'confirmed_non_opposing':True,'binance_return_100ms_bp':.6,
+        'signal_age_ns':1,'tte_ns':60_000_000_000,'minimum_order_microunits':5_000_000,
+        'ask_quantity':19_000_000,'ask_e4':5000,'tick_e4':100}
+    assert not structural_eligible(row,target_shares=20)

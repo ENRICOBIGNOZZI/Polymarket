@@ -312,7 +312,8 @@
         "120000000000",
         "--maker-share-cap-microunits",
         "5000000",
-        "--asynchronous-settlement"
+        "--asynchronous-settlement",
+        "--capture-native-decisions"
       ],
       "profile": "core",
       "inputs": [

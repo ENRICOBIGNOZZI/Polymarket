@@ -527,6 +527,8 @@ class Manager:
             "single_native_portfolio_owner": True,
             "partitioned_native_workers": True,
             "asynchronous_settlement": bool(getattr(self.args, "asynchronous_settlement", False)),
+            "native_decision_capture_enabled": bool(getattr(self.args, "capture_native_decisions", False)),
+            "native_full_capture_enabled": bool(getattr(self.args, "capture_native_observations", False)),
             "pending_settlement_markets": sorted(self.pending_settlements),
             "pending_settlement_count": len(self.pending_settlements),
             "pending_settlement_attempts": {
@@ -649,6 +651,8 @@ class Manager:
             "--taker-fee-exponent", repr(fee_exponent),
             "--duration-seconds", "0",
         ]
+        if getattr(self.args, "capture_native_decisions", False):
+            command.append("--capture-native-decisions")
         if getattr(self.args, "capture_native_observations", False):
             command.append("--capture-native-observations")
         return command
@@ -960,8 +964,10 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--maximum-tte-ns", type=int, default=120_000_000_000)
     parser.add_argument("--maker-share-cap-microunits", type=int, default=5_000_000)
     parser.add_argument("--asynchronous-settlement", action="store_true")
+    parser.add_argument("--capture-native-decisions", action="store_true",
+        help="Lightweight native decision/proposal snapshots; no full event tape")
     parser.add_argument("--capture-native-observations", action="store_true",
-        help="Explicit bounded research capture; keep off until storage/offload is provisioned")
+        help="Full native book/trade capture; bounded research use only")
     args = parser.parse_args()
     if not exact_sha(args.model_sha):
         parser.error("--model-sha must be exact lowercase 40-hex SHA")

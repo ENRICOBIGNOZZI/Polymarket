@@ -509,6 +509,7 @@ PM_V7_CONTROL_NICE=0 v7_exec_class CONTROL python3 scripts/v7_native_crypto_engi
   --minimum-tte-ns 5000000000 --maximum-tte-ns 120000000000 \
   --maker-share-cap-microunits 5000000 \
   --asynchronous-settlement \
+  --capture-native-decisions \
   >> "$RUN_ROOT/native_engine_manager.log" 2>&1 &
 v7_register_child "$!"
 

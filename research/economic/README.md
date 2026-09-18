@@ -51,12 +51,14 @@ separate from the last book-update clock. A capture is usable as closed evidence
 only with its healthy `.jsonl.closed.json` marker, matching sequence count and a
 verified frozen copy. Model and policy hashes refer to parsed content bytes.
 
-In the integrated 30-context manager, full native capture is explicitly opt-in
-(`--capture-native-observations`). Keep it off in unbounded production until
-storage and verified offload cover the expected volume. `--observation-only`
-turns capture on automatically in a bounded isolated probe and makes the engine research-only: candidate
-observations are recorded, but admission and all PAPER economic orders are
-skipped. Use a new isolated root; never point a probe at the running ledger.
+The integrated runtime uses two evidence levels. `--capture-native-decisions`
+records only native decision/proposal snapshots, including the contemporaneous
+L10 book and causal signal fields, and is designed for always-on multi-asset EV
+research. `--capture-native-observations` additionally records every native
+book/trade event and remains bounded research-only because its storage rate is
+much higher. `--observation-only` enables decision capture and prevents all
+economic admission; add `--capture-native-observations` explicitly for a short
+isolated full-tape probe. Never point an isolated probe at the running ledger.
 `--maker-share-cap-microunits 5000000` is a candidate parameter, not an automatic
 change to the baseline or to the user's risk appetite. Baseline remains one.
 

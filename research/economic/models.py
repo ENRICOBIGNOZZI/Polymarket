@@ -85,8 +85,56 @@ def fit_settlement_residual(rows:list[dict[str,Any]],*,feature_names:list[str],t
     return {**model,'model_sha256':_model_hash(model)}
 
 
+def fit_settlement_residual_grouped(rows:list[dict[str,Any]],*,feature_names:list[str],train_end_ns:int,
+                                    dataset_sha256:str,ridge:float=1.0,minimum_markets:int=100)->dict:
+    """Residual logistic model with equal total likelihood weight per market."""
+    if not 0<len(feature_names)<=32 or len(set(feature_names))!=len(feature_names) or ridge<=0 or not isfinite(ridge):
+        raise ValueError('features/ridge')
+    if len(dataset_sha256)!=64 or any(x not in '0123456789abcdef' for x in dataset_sha256):
+        raise ValueError('frozen dataset hash required')
+    counts={}
+    for row in rows:counts[row['market']]=counts.get(row['market'],0)+1
+    if minimum_markets<2 or len(counts)<minimum_markets:raise ValueError('insufficient unique training markets')
+    for row in rows:
+        if not 0<row['decision_ns']<=row['label_observed_ns']<train_end_ns:raise ValueError('training outcome unavailable at cutoff')
+        if row.get('complete') is not True or row['outcome'] not in (0,1):raise ValueError('missing label')
+        if not 0<row['pm_probability']<1:raise ValueError('invalid PM probability')
+    raw=[[float(r['features'][k]) for k in feature_names] for r in rows]
+    if not all(isfinite(v) for row in raw for v in row):raise ValueError('features must be observed and finite')
+    obs_weight=[1.0/counts[r['market']] for r in rows];total=fsum(obs_weight);d=len(feature_names)
+    mu=[fsum(w*row[j] for row,w in zip(raw,obs_weight))/total for j in range(d)]
+    scale=[max(1e-12,sqrt(fsum(w*(row[j]-mu[j])**2 for row,w in zip(raw,obs_weight))/total)) for j in range(d)]
+    scale=[1.0 if v<=1e-12 else v for v in scale]
+    X=[[1.0]+[(v-m)/s for v,m,s in zip(row,mu,scale)] for row in raw]
+    y=[float(r['outcome']) for r in rows];offset=[log(r['pm_probability']/(1-r['pm_probability'])) for r in rows]
+    beta=[0.0]*(d+1);converged=False
+    def objective(b):
+        z=[o+_dot(x,b) for o,x in zip(offset,X)]
+        return fsum(w*(max(v,0)+log1p(exp(-abs(v)))-target*v) for v,target,w in zip(z,y,obs_weight))+.5*ridge*_dot(b,b)
+    for _ in range(100):
+        probabilities=[_sigmoid(o+_dot(x,beta)) for o,x in zip(offset,X)]
+        variance=[max(p*(1-p),1e-8) for p in probabilities]
+        gradient=[fsum(w*x[j]*(p-target) for x,p,target,w in zip(X,probabilities,y,obs_weight))+ridge*beta[j] for j in range(d+1)]
+        hessian=[[fsum(w*x[j]*x[k]*var for x,var,w in zip(X,variance,obs_weight))+(ridge if j==k else 0.0) for k in range(d+1)] for j in range(d+1)]
+        step=_solve(hessian,gradient);old=objective(beta);fraction=1.0
+        for _ in range(20):
+            updated=[b-fraction*s for b,s in zip(beta,step)]
+            if objective(updated)<=old+1e-12:break
+            fraction*=.5
+        else:raise ValueError('optimizer failed line search')
+        beta=updated
+        if max(abs(fraction*s) for s in step)<1e-8:converged=True;break
+    if not converged:raise ValueError('optimizer did not converge')
+    model={'schema':'polymarket_settlement_residual_grouped_model_v1','feature_names':feature_names,
+        'mean':mu,'scale':scale,'coefficients':beta,'train_end_ns':train_end_ns,'dataset_sha256':dataset_sha256,
+        'ridge':ridge,'training_rows':len(rows),'training_unique_markets':len(counts),
+        'market_weighting':'EQUAL_TOTAL_WEIGHT_PER_MARKET','paper_only':True,'execution_authority':False,
+        'heldout_validated':False,'automatic_promotion':False}
+    return {**model,'model_sha256':_model_hash(model)}
+
+
 def predict(model:dict,rows:list[dict])->list[float]:
-    if model.get('schema')!='polymarket_settlement_residual_model_v1':raise ValueError('schema')
+    if model.get('schema') not in {'polymarket_settlement_residual_model_v1','polymarket_settlement_residual_grouped_model_v1'}:raise ValueError('schema')
     if _model_hash({k:v for k,v in model.items() if k!='model_sha256'})!=model.get('model_sha256'):
         raise ValueError('model hash mismatch')
     out=[]
