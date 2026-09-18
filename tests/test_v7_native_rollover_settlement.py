@@ -557,3 +557,71 @@ def test_settlement_summary_separates_retryable_timeout_from_blocker(tmp_path) -
     summary = owner._aggregate_settlements()
     assert summary["retryable_timeout_count"] == 1
     assert summary["blocked_count"] == 1
+
+
+def test_remote_launch_timeout_does_not_tear_down_other_contexts(monkeypatch) -> None:
+    import v7_native_crypto_engine_manager as manager
+
+    owner = manager.Manager.__new__(manager.Manager)
+    owner.workers = {"BTC:M5": object()}
+    owner.completed_market_ids = set()
+    owner.launch_retry_attempts = {}
+    owner.launch_retry_after = {}
+    owner.launch_retry_reasons = {}
+
+    launched = []
+    def launch(context, market):
+        launched.append(context)
+        if context == "DOGE:M15":
+            raise manager.RetryableLaunchError("remote_metadata_unavailable:TimeoutError")
+        return object()
+    owner.launch_worker = launch
+
+    targets = {
+        "BTC:M5": {"market_id": "btc"},
+        "DOGE:M15": {"market_id": "doge"},
+        "ETH:M5": {"market_id": "eth"},
+    }
+    assert owner._launch_missing_workers(targets) is None
+    assert "BTC:M5" in owner.workers
+    assert "ETH:M5" in owner.workers
+    assert "DOGE:M15" not in owner.workers
+    assert owner.launch_retry_attempts == {"DOGE:M15": 1}
+    assert "TimeoutError" in owner.launch_retry_reasons["DOGE:M15"]
+    assert owner.launch_retry_after["DOGE:M15"] > 0
+
+
+def test_structural_launch_failure_remains_fail_closed() -> None:
+    import v7_native_crypto_engine_manager as manager
+
+    owner = manager.Manager.__new__(manager.Manager)
+    owner.workers = {"BTC:M5": object()}
+    owner.completed_market_ids = set()
+    owner.launch_retry_attempts = {}
+    owner.launch_retry_after = {}
+    owner.launch_retry_reasons = {}
+    owner.launch_worker = lambda context, market: (_ for _ in ()).throw(
+        RuntimeError("fee_schedule_not_authoritative")
+    )
+
+    failure = owner._launch_missing_workers({"ETH:M15": {"market_id": "eth"}})
+    assert failure is not None
+    context, exc = failure
+    assert context == "ETH:M15"
+    assert str(exc) == "fee_schedule_not_authoritative"
+    assert "BTC:M5" in owner.workers
+    assert owner.launch_retry_attempts == {}
+
+
+def test_public_json_timeout_is_market_scoped_retry(monkeypatch) -> None:
+    import v7_native_crypto_engine_manager as manager
+
+    def timeout(*args, **kwargs):
+        raise TimeoutError("read timed out")
+    monkeypatch.setattr(manager.urllib.request, "urlopen", timeout)
+    try:
+        manager.public_json("https://clob.polymarket.com/book?token_id=x")
+    except manager.RetryableLaunchError as exc:
+        assert "TimeoutError" in str(exc)
+    else:
+        raise AssertionError("network timeout was not classified as retryable")
