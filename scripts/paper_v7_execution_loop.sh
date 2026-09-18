@@ -397,11 +397,14 @@ write_runtime_status() {
   local state="$1"
   local killed="${2:-false}"
   local now p0_ready=false readiness="CORE_RUNTIME_ONLY" external_ready=false
+  local decision_state="WAITING_FOR_NATIVE_MARKET" alpha_actions='[]'
   now="$(date +%s)"
   if [[ "$state" == "running" ]] && native_engine_ready; then
     p0_ready=true
     readiness="FULL_PAPER_RUNTIME"
     external_ready=true
+    decision_state="PAPER_NATIVE_SINGLE_OWNER"
+    alpha_actions='["MAKE","TAKE"]'
   fi
   local model_hash model_source
   if [[ -s "$MAKER_RESEARCH_MODEL" ]]; then
@@ -412,8 +415,8 @@ write_runtime_status() {
     model_source="cold_start_policy"
   fi
   local tmp="$CONTROL/runtime_status.json.tmp.$$"
-  printf '{"schema":"polymarket_v7_runtime_status_v3","timestamp":%s,"version":7,"paper_only":true,"authenticated_execution":false,"real_order_submission":false,"real_capital_at_risk":false,"model_sha":"%s","config_hash":"%s","policy_hash":"%s","model_hash":"%s","model_identity_source":"%s","run_id":"%s","ledger_id":"%s","server_id":"%s","pid":%s,"state":"%s","killed":%s,"economic_system":"V7_UNIFIED","economic_engines":["CRYPTO_SETTLEMENT_ENGINE"],"global_portfolio_coordinator":"V7_NATIVE_CRYPTO_SETTLEMENT_ENGINE","execution_authority":"V7_NATIVE_SINGLE_OWNER_CHAIN","single_execution_owner":true,"canonical_state_reconciled":true,"exact_sha_ci_green":%s,"p0_authority_configured":["CRYPTO_SETTLEMENT_ENGINE"],"p0_full_stack_ready":%s,"readiness":"%s","external_fair_runtime_ready":%s,"economic_new_risk_ready":%s,"economic_decision_state":"PAPER_NATIVE_SINGLE_OWNER","authorized_alpha_actions":["MAKE","TAKE"],"safe_actions":["CANCEL","WITHDRAW","NOTHING"]}\n' \
-    "$now" "$SHA" "$CONFIG_HASH" "$POLICY_HASH" "$model_hash" "$model_source" "$RUN_ID" "$LEDGER_ID" "$SERVER_ID" "$" "$state" "$killed" "$EXACT_SHA_CI_GREEN" "$p0_ready" "$readiness" "$external_ready" "$p0_ready" > "$tmp"
+  printf '{"schema":"polymarket_v7_runtime_status_v3","timestamp":%s,"version":7,"paper_only":true,"authenticated_execution":false,"real_order_submission":false,"real_capital_at_risk":false,"model_sha":"%s","config_hash":"%s","policy_hash":"%s","model_hash":"%s","model_identity_source":"%s","run_id":"%s","ledger_id":"%s","server_id":"%s","pid":%s,"state":"%s","killed":%s,"economic_system":"V7_UNIFIED","economic_engines":["CRYPTO_SETTLEMENT_ENGINE"],"global_portfolio_coordinator":"V7_NATIVE_CRYPTO_SETTLEMENT_ENGINE","execution_authority":"V7_NATIVE_SINGLE_OWNER_CHAIN","single_execution_owner":true,"canonical_state_reconciled":true,"exact_sha_ci_green":%s,"p0_authority_configured":["CRYPTO_SETTLEMENT_ENGINE"],"p0_full_stack_ready":%s,"readiness":"%s","external_fair_runtime_ready":%s,"economic_new_risk_ready":%s,"economic_decision_state":"%s","authorized_alpha_actions":%s,"safe_actions":["CANCEL","WITHDRAW","NOTHING"]}\n' \
+    "$now" "$SHA" "$CONFIG_HASH" "$POLICY_HASH" "$model_hash" "$model_source" "$RUN_ID" "$LEDGER_ID" "$SERVER_ID" "$$" "$state" "$killed" "$EXACT_SHA_CI_GREEN" "$p0_ready" "$readiness" "$external_ready" "$p0_ready" "$decision_state" "$alpha_actions" > "$tmp"
   mv "$tmp" "$CONTROL/runtime_status.json"
 }
 write_runtime_status starting false
