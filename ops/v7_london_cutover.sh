@@ -42,12 +42,12 @@ sudo systemctl stop polymarket-v7-exporter.service polymarket-v7-paper.service >
 python3 "$SOURCE_DIR/scripts/v7_prepare_cutover_run_root.py" \
   --run-root "$RUN_ROOT" --archive-root "$ARCHIVE_ROOT" \
   --repository-root "$SOURCE_DIR" --target-sha "$EXPECTED_SHA"
-install -d -o "$SERVICE_USER" -g "$(id -gn "$SERVICE_USER")" "$RUN_ROOT/control"
+SERVICE_GROUP="$(id -gn "$SERVICE_USER")"
+install -d -o "$SERVICE_USER" -g "$SERVICE_GROUP" "$RUN_ROOT" "$RUN_ROOT/control"
 
 # Atomic release pointer switch happens only after the model-artifact gate and old-generation archive.
 ln -sfn "by-sha/$EXPECTED_SHA" "$RUNTIME_CURRENT"
 [[ "$(cat "$RUNTIME_CURRENT/deploy/london/runtime_sha")" == "$EXPECTED_SHA" ]]
-SERVICE_GROUP="$(id -gn "$SERVICE_USER")"
 render_unit(){
   local source="$1" destination="$2"
   python3 - "$source" "$destination" "$SERVICE_USER" "$SERVICE_GROUP" "$RUNTIME_CURRENT" "$RUN_ROOT" "$EXPECTED_SHA" <<'PYUNIT'
