@@ -153,6 +153,33 @@ def _native_settlement_receipt_valid(event: LedgerEvent, engine_id: str) -> bool
     )
 
 
+def _native_market_settlement_receipt_valid(event: LedgerEvent, engine_id: str) -> bool:
+    """Authorize only a closed-market PAPER settlement fact, never an order."""
+    metadata = event.metadata if isinstance(event.metadata, dict) else {}
+    receipt = metadata.get("native_market_settlement_receipt")
+    if not isinstance(receipt, dict):
+        return False
+    observed = receipt.get("settlement_observed_ms")
+    winning_token = receipt.get("winning_token_id")
+    return (
+        event.event_type == "FINAL"
+        and engine_id == "CRYPTO_SETTLEMENT_ENGINE"
+        and receipt.get("schema") == "polymarket_v7_native_market_settlement_receipt_v1"
+        and receipt.get("owner") == "V7_NATIVE_PAPER_MARKET_SETTLEMENT"
+        and receipt.get("engine_id") == engine_id
+        and receipt.get("model_sha") == event.model_sha
+        and receipt.get("market_id") == event.market_id
+        and receipt.get("paper_only") is True
+        and receipt.get("authenticated_execution") is False
+        and receipt.get("real_order_submission") is False
+        and receipt.get("real_capital_at_risk") is False
+        and receipt.get("source") == "GAMMA_CLOSED_MARKET"
+        and receipt.get("market_closed") is True
+        and isinstance(observed, int) and not isinstance(observed, bool) and observed > 0
+        and isinstance(winning_token, str) and bool(winning_token)
+    )
+
+
 def _coordinator_receipt_valid(event: LedgerEvent, engine_id: str) -> bool:
     metadata = event.metadata if isinstance(event.metadata, dict) else {}
     receipt = metadata.get("coordinator_receipt")
@@ -237,7 +264,8 @@ def _authority_route(run_root: Path, event: LedgerEvent) -> str:
         return "QUARANTINED"
     metadata = event.metadata if isinstance(event.metadata, dict) else {}
     if (_coordinator_receipt_valid(event, engine_id)
-            or _native_settlement_receipt_valid(event, engine_id)):
+            or _native_settlement_receipt_valid(event, engine_id)
+            or _native_market_settlement_receipt_valid(event, engine_id)):
         return "APPEND"
     evidence_only = (
         metadata.get("counterfactual") is True
