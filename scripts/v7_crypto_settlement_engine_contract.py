@@ -91,7 +91,7 @@ def validate_config(config: dict[str, Any]) -> None:
         or config.get("model_registry") != "config/v7_crypto_settlement_model_registry.json"
         or config.get("authority_registry") != "config/v7_authority_registry.json"
         or config.get("opportunity_contract") != "schemas/v7/opportunity_envelope.schema.json"
-        or config.get("global_portfolio_coordinator") != "V7_GLOBAL_PORTFOLIO_COORDINATOR"
+        or config.get("global_portfolio_coordinator") != "V7_NATIVE_CRYPTO_SETTLEMENT_ENGINE"
         or config.get("component_independent_authority") is not False
     ):
         raise ContractError("engine_identity_or_safety")
