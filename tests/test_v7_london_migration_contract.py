@@ -54,7 +54,9 @@ def test_bootstrap_installs_but_does_not_start_runtime() -> None:
     assert '[[ ! -e "$RUNTIME_CURRENT/research" ]]' in source
     assert 'systemctl disable --now polymarket-v7-paper.service' in source
     assert 'tailscale up' not in source
-    assert 'grafana' not in source.lower()
+    assert 'v7_london_install_monitoring.sh' in source
+    assert 'systemctl enable --now prometheus.service prometheus-node-exporter.service grafana-server.service' in source
+    assert 'systemctl disable --now polymarket-v7-paper.service polymarket-v7-exporter.service' in source
     assert 'pkg-config prometheus' not in source
     assert 'systemctl enable --now polymarket-v7-paper.service' not in source
 
