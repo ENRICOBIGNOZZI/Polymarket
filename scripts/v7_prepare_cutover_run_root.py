@@ -229,8 +229,14 @@ def pid_alive(value: object) -> bool:
 
 
 def git_is_ancestor(repository_root: Path, older: str, newer: str) -> bool:
+    # London cutover runs as root while the immutable repository is owned by
+    # the service user. Scope Git's safe-directory exception to this read-only
+    # ancestry command instead of mutating global Git configuration.
     return subprocess.run(
-        ["git", "-C", str(repository_root), "merge-base", "--is-ancestor", older, newer],
+        [
+            "git", "-c", f"safe.directory={repository_root}",
+            "-C", str(repository_root), "merge-base", "--is-ancestor", older, newer,
+        ],
         check=False,
         stdout=subprocess.DEVNULL,
         stderr=subprocess.DEVNULL,
