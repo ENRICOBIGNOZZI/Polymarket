@@ -164,7 +164,7 @@ struct NativeRuntimeEvidenceWriter::Impl {
             {"model_sha", config.model_sha},
             {"paper_only", true},
             {"authenticated_execution", false},
-            {"record_id", config.run_id + ":native:" + std::to_string(sequence)},
+            {"record_id", config.run_id + ":" + config.market_id + ":native:" + std::to_string(sequence)},
             {"recorded_ts_ms", recorded_ms},
             {"model_version", "native-paper-engine"},
             {"order_id", order_id},
