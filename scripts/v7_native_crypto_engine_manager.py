@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import argparse
 import fcntl
+import functools
 from decimal import Decimal, InvalidOperation
 import json
 import math
@@ -29,6 +30,7 @@ from typing import Any
 from v7_execution_ledger import native_order_id_matches, LedgerEvent, canonical_ledger_path, iter_events
 from v7_ledger_spool import spool_event
 from v7_native_risk_policy import load_native_limits, unsettled_exposure
+from v7_legacy_native_claims import validate_registry as validate_legacy_claim_registry
 from v7_native_settlement_projection import context_from_fill
 
 STATUS_SCHEMA = "polymarket_v7_native_engine_manager_status_v1"
@@ -151,31 +153,40 @@ def select_market(
         return None
 
 
-def tick_size_e4(token_id: str) -> int:
-    query = urllib.parse.urlencode({"token_id": token_id})
-    value = public_json("https://clob.polymarket.com/tick-size?" + query)
+@functools.lru_cache(maxsize=512)
+def venue_metadata(token_id: str) -> tuple[int, int]:
+    """Fetch immutable per-token venue terms once on the cold plane."""
+    value = public_json(
+        "https://clob.polymarket.com/book?"
+        + urllib.parse.urlencode({"token_id": token_id})
+    )
     if not isinstance(value, dict):
-        raise RuntimeError("tick_size_response_invalid")
-    raw = float(value.get("minimum_tick_size"))
-    scaled = int(round(raw * 10_000.0))
-    if not math.isfinite(raw) or raw <= 0 or scaled <= 0 or abs(raw * 10_000.0 - scaled) > 1e-8:
+        raise RuntimeError("venue_metadata_response_invalid")
+    try:
+        raw_tick = float(value["tick_size"])
+        quantity = Decimal(str(value["min_order_size"])) * 1_000_000
+    except (KeyError, TypeError, InvalidOperation, ValueError) as exc:
+        raise RuntimeError("venue_metadata_missing") from exc
+    scaled = int(round(raw_tick * 10_000.0))
+    if (
+        not math.isfinite(raw_tick)
+        or raw_tick <= 0
+        or scaled <= 0
+        or abs(raw_tick * 10_000.0 - scaled) > 1e-8
+        or 10_000 % scaled != 0
+    ):
         raise RuntimeError("tick_size_invalid")
-    if 10_000 % scaled != 0:
-        raise RuntimeError("tick_size_not_canonical")
-    return scaled
+    if not quantity.is_finite() or quantity <= 0 or quantity != quantity.to_integral_value():
+        raise RuntimeError("venue_minimum_invalid")
+    return scaled, int(quantity)
+
+
+def tick_size_e4(token_id: str) -> int:
+    return venue_metadata(token_id)[0]
 
 
 def venue_minimum_microunits(token_id: str) -> int:
-    value = public_json("https://clob.polymarket.com/book?" + urllib.parse.urlencode({"token_id": token_id}))
-    if not isinstance(value, dict):
-        raise RuntimeError("venue_minimum_response_invalid")
-    try:
-        quantity = Decimal(str(value["min_order_size"])) * 1_000_000
-    except (KeyError, InvalidOperation, ValueError) as exc:
-        raise RuntimeError("venue_minimum_missing") from exc
-    if not quantity.is_finite() or quantity <= 0 or quantity != quantity.to_integral_value():
-        raise RuntimeError("venue_minimum_invalid")
-    return int(quantity)
+    return venue_metadata(token_id)[1]
 
 def fee_parameters(row: dict[str, Any]) -> tuple[float, float, str]:
     explicit = row.get("fees_enabled_explicit") is True
@@ -344,6 +355,18 @@ def _execution_budget_microdollars(allocation_path: Path) -> int:
     return micros
 
 
+def _budget_after_legacy_claims(
+    gross_microdollars: int, legacy_path: Path, target_sha: str,
+) -> tuple[int, int, str]:
+    if not isinstance(gross_microdollars, int) or isinstance(gross_microdollars, bool) or gross_microdollars <= 0:
+        raise RuntimeError("gross_engine_budget_invalid")
+    legacy = validate_legacy_claim_registry(read_json(legacy_path), target_sha=target_sha)
+    claim = int(legacy["total_claim_microdollars"])
+    if claim >= gross_microdollars:
+        raise RuntimeError("legacy_claims_exhaust_engine_budget")
+    return gross_microdollars - claim, claim, str(legacy["registry_sha256"])
+
+
 def _enabled_contexts(registry_path: Path) -> set[str]:
     value = read_json(registry_path)
     rows = value.get("contexts") if isinstance(value.get("contexts"), list) else []
@@ -433,8 +456,17 @@ class Manager:
             read_json(args.repository_root / "config/v7_native_risk_policy.json"),
             read_json(self.run_root / "control/allocations/manifest.json"))
         self.allocated_execution_budget_microdollars = _execution_budget_microdollars(args.allocation)
-        self.global_budget_microdollars = min(self.allocated_execution_budget_microdollars,
-            self.base_risk_receipt["limits"]["max_total_exposure_microdollars"])
+        self.gross_global_budget_microdollars = min(
+            self.allocated_execution_budget_microdollars,
+            self.base_risk_receipt["limits"]["max_total_exposure_microdollars"],
+        )
+        (
+            self.global_budget_microdollars,
+            self.legacy_claim_microdollars,
+            self.legacy_claim_registry_sha256,
+        ) = _budget_after_legacy_claims(
+            self.gross_global_budget_microdollars, args.legacy_claims, args.model_sha
+        )
         self.enabled_contexts = _enabled_contexts(args.market_registry)
         self.partition_count = len(self.enabled_contexts)
         self.native_carryover = load_native_carryover(
@@ -627,6 +659,9 @@ class Manager:
             "expected_context_count": self.partition_count,
             "target_contexts": target_keys,
             "missing_contexts": sorted(set(all_contexts) - set(target_keys)),
+            "gross_global_budget_microdollars": self.gross_global_budget_microdollars,
+            "legacy_claim_microdollars": self.legacy_claim_microdollars,
+            "legacy_claim_registry_sha256": self.legacy_claim_registry_sha256,
             "global_budget_microdollars": self.global_budget_microdollars,
             "partition_budget_microdollars": self.partition_microdollars,
             "partition_count": self.partition_count,
@@ -1086,13 +1121,14 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--engine-log", type=Path, required=True)
     parser.add_argument("--allocation", type=Path, required=True)
     parser.add_argument("--market-registry", type=Path, required=True)
+    parser.add_argument("--legacy-claims", type=Path, required=True)
     parser.add_argument("--python", default="python3")
     parser.add_argument("--settlement-timeout-seconds", type=int, default=600)
     parser.add_argument("--min-order-microunits", type=int, default=5_000_000)
-    parser.add_argument("--target-quantity-microunits", type=int, default=20_000_000)
-    parser.add_argument("--minimum-tte-ns", type=int, default=5_000_000_000)
+    parser.add_argument("--target-quantity-microunits", type=int, default=5_000_000)
+    parser.add_argument("--minimum-tte-ns", type=int, default=105_000_000_000)
     parser.add_argument("--maximum-tte-ns", type=int, default=120_000_000_000)
-    parser.add_argument("--maker-share-cap-microunits", type=int, default=5_000_000)
+    parser.add_argument("--maker-share-cap-microunits", type=int, default=1_000_000)
     parser.add_argument("--asynchronous-settlement", action="store_true")
     parser.add_argument("--capture-native-observations", action="store_true",
         help="Full bounded native book/trade + decision research capture")

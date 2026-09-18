@@ -89,18 +89,23 @@ def canonical_symbols(registry: dict[str, Any]) -> dict[str, dict[str, str]]:
 @dataclass
 class Child:
     asset: str
+    symbols: dict[str, str]
     process: subprocess.Popen[bytes]
     log_handle: Any
     status_path: Path
+    restart_count: int = 0
+    next_restart_monotonic: float = 0.0
+    last_returncode: int | None = None
 
 
-def child_paths(run_root: Path, asset: str) -> dict[str, Path]:
+def child_paths(run_root: Path, asset: str, *, session_id: str | None = None) -> dict[str, Path]:
     base = run_root / "external_fair"
+    session = session_id or f"{os.getpid()}.{time.time_ns()}"
     if asset == "BTC":
         return {
             "base": base,
             "status": base / "external_venues.json",
-            "tape": base / "tapes" / f"external_venues.{asset.lower()}.{os.getpid()}.bin",
+            "tape": base / "tapes" / f"external_venues.{asset.lower()}.{session}.bin",
             "raw": base / "raw",
             "normalized": base / "normalized_events",
             "log": base / "external_venues.log",
@@ -109,16 +114,17 @@ def child_paths(run_root: Path, asset: str) -> dict[str, Path]:
     return {
         "base": asset_root,
         "status": asset_root / "external_venues.json",
-        "tape": asset_root / "tapes" / f"external_venues.{asset.lower()}.{os.getpid()}.bin",
+        "tape": asset_root / "tapes" / f"external_venues.{asset.lower()}.{session}.bin",
         "raw": asset_root / "raw",
         "normalized": asset_root / "normalized_events",
         "log": asset_root / "external_venues.log",
     }
 
 
-def child_command(args: argparse.Namespace, asset: str,
-                  symbols: dict[str, str]) -> tuple[list[str], dict[str, Path]]:
-    paths = child_paths(args.run_root, asset)
+def child_command(
+    args: argparse.Namespace, asset: str, symbols: dict[str, str], *, session_id: str | None = None,
+) -> tuple[list[str], dict[str, Path]]:
+    paths = child_paths(args.run_root, asset, session_id=session_id)
     for key in ("base", "raw", "normalized"):
         paths[key].mkdir(parents=True, exist_ok=True)
     paths["tape"].parent.mkdir(parents=True, exist_ok=True)
@@ -149,8 +155,40 @@ def child_command(args: argparse.Namespace, asset: str,
     return command, paths
 
 
+def launch_child(
+    args: argparse.Namespace, asset: str, symbols: dict[str, str], *, restart_count: int = 0,
+) -> Child:
+    session_id = f"{os.getpid()}.{restart_count}.{time.time_ns()}"
+    command, paths = child_command(args, asset, symbols, session_id=session_id)
+    paths["log"].parent.mkdir(parents=True, exist_ok=True)
+    # Never let a prior generation's fresh-looking status satisfy the new child.
+    paths["status"].unlink(missing_ok=True)
+    handle = paths["log"].open("ab", buffering=0)
+    try:
+        process = subprocess.Popen(
+            command, cwd=args.repository_root, stdout=handle,
+            stderr=subprocess.STDOUT, env=os.environ.copy())
+    except Exception:
+        handle.close()
+        raise
+    return Child(asset, dict(symbols), process, handle, paths["status"], restart_count=restart_count)
+
+
+def restart_backoff_seconds(attempt: int) -> float:
+    return min(30.0, 0.25 * (2 ** min(max(0, attempt - 1), 7)))
+
+
+def collector_state(*, ready: int, total: int, elapsed: float, startup_timeout: int) -> str:
+    if ready == total:
+        return "OPERATIONAL"
+    return "WARMING" if elapsed <= startup_timeout else "DEGRADED"
+
+
 def data_ready(status: dict[str, Any], *, asset: str, sha: str,
                now_ns: int) -> tuple[bool, str]:
+    # This supervisor proves causal tape coverage, not trading-fair validity.
+    # A child may report WARMING_OR_DEGRADED because its composite has only one
+    # fresh contributor while still recording healthy primary + secondary tapes.
     if (
         status.get("schema") != CHILD_SCHEMA
         or status.get("asset") != asset
@@ -158,8 +196,7 @@ def data_ready(status: dict[str, Any], *, asset: str, sha: str,
         or status.get("paper_only") is not True
         or status.get("authenticated_execution") is not False
         or status.get("real_order_submission") is not False
-        or status.get("state") != "OPERATIONAL"
-        or status.get("valid") is not True
+        or status.get("state") not in {"OPERATIONAL", "WARMING_OR_DEGRADED"}
     ):
         return False, "STATUS_CONTRACT"
     try:
@@ -198,14 +235,6 @@ def data_ready(status: dict[str, Any], *, asset: str, sha: str,
     if not secondary_ready:
         return False, "SECONDARY_SPOT_TAPE_NOT_READY"
     return True, ""
-
-
-def readiness_state(ready: int, total: int, elapsed: float, timeout: float) -> str:
-    if total <= 0 or ready < 0 or ready > total or elapsed < 0 or timeout <= 0:
-        raise ValueError("invalid readiness state inputs")
-    if ready == total:
-        return "OPERATIONAL"
-    return "WARMING" if elapsed <= timeout else "DEGRADED"
 
 
 def terminate(children: list[Child]) -> None:
@@ -252,6 +281,8 @@ def write_status(path: Path, *, args: argparse.Namespace, children: list[Child],
             "reason": blockers.get(child.asset) or reason,
             "timestamp_ns": value.get("timestamp_ns"),
             "fresh_venue_count": value.get("fresh_venue_count"),
+            "restart_count": child.restart_count,
+            "last_returncode": child.last_returncode,
         })
     atomic_json(path, {
         "schema": SCHEMA,
@@ -289,25 +320,36 @@ def run(args: argparse.Namespace) -> int:
     children: list[Child] = []
     try:
         for asset in ASSETS:
-            command, paths = child_command(args, asset, symbols[asset])
-            paths["log"].parent.mkdir(parents=True, exist_ok=True)
-            handle = paths["log"].open("ab", buffering=0)
-            process = subprocess.Popen(
-                command, cwd=args.repository_root, stdout=handle,
-                stderr=subprocess.STDOUT, env=os.environ.copy())
-            children.append(Child(asset, process, handle, paths["status"]))
+            children.append(launch_child(args, asset, symbols[asset]))
 
         started = time.monotonic()
         while not STOP:
             blockers: dict[str, str] = {}
+            now = time.monotonic()
             for child in children:
                 rc = child.process.poll()
-                if rc is not None:
-                    blockers[child.asset] = f"CHILD_EXIT_{rc}"
-            if blockers:
-                write_status(status_path, args=args, children=children,
-                             state="BLOCKED_CHILD_EXIT", blockers=blockers)
-                return 70
+                if rc is None:
+                    continue
+                child.last_returncode = int(rc)
+                blockers[child.asset] = f"CHILD_EXIT_{rc}"
+                if now < child.next_restart_monotonic:
+                    continue
+                try:
+                    child.log_handle.close()
+                except Exception:
+                    pass
+                child.restart_count += 1
+                child.next_restart_monotonic = now + restart_backoff_seconds(child.restart_count)
+                try:
+                    replacement = launch_child(
+                        args, child.asset, child.symbols, restart_count=child.restart_count
+                    )
+                except Exception as exc:
+                    blockers[child.asset] = f"CHILD_RESTART_FAILED:{type(exc).__name__}"
+                    continue
+                child.process = replacement.process
+                child.log_handle = replacement.log_handle
+                child.status_path = replacement.status_path
 
             now_ns = time.time_ns()
             ready = 0
@@ -317,13 +359,13 @@ def run(args: argparse.Namespace) -> int:
                                         sha=args.model_sha, now_ns=now_ns)
                 if ok:
                     ready += 1
-                elif reason:
+                    blockers.pop(child.asset, None)
+                elif reason and child.asset not in blockers:
                     blockers[child.asset] = reason
-            elapsed = time.monotonic() - started
-            state = readiness_state(ready, len(ASSETS), elapsed, args.startup_timeout_seconds)
-            # This collector is zero-authority research/data-plane only.
-            # A degraded asset remains explicit/fail-closed in status, but
-            # cannot terminate otherwise healthy PAPER execution.
+            state = collector_state(
+                ready=ready, total=len(ASSETS), elapsed=time.monotonic() - started,
+                startup_timeout=args.startup_timeout_seconds,
+            )
             write_status(status_path, args=args, children=children,
                          state=state, blockers=blockers)
             time.sleep(1.0)

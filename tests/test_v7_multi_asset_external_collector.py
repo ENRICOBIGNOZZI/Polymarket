@@ -71,14 +71,39 @@ def test_tape_paths_are_restart_unique_for_supervisor_process():
     assert eth["tape"].parent.name == "tapes"
 
 
-def test_degraded_state_is_nonterminal_zero_authority_contract():
+def test_degraded_composite_with_complete_primary_secondary_tapes_is_collection_ready():
+    sha="c"*40; now=30_000_000_000
+    row=ready_status("BNB",sha,now)
+    row["state"]="WARMING_OR_DEGRADED"
+    row["valid"]=False
+    ok,reason=collector.data_ready(row,asset="BNB",sha=sha,now_ns=now)
+    assert ok and reason==""
+
+
+def test_degraded_composite_still_fails_when_secondary_tape_missing():
+    sha="d"*40; now=40_000_000_000
+    row=ready_status("BNB",sha,now)
+    row["state"]="WARMING_OR_DEGRADED"
+    row["valid"]=False
+    row["raw_frame_tapes"]["bybit_spot"]["written"]=0
+    assert collector.data_ready(row,asset="BNB",sha=sha,now_ns=now)==(
+        False,"SECONDARY_SPOT_TAPE_NOT_READY")
+
+
+def test_collector_state_degrades_without_process_exit():
+    assert collector.collector_state(ready=6,total=6,elapsed=500,startup_timeout=60)=="OPERATIONAL"
+    assert collector.collector_state(ready=5,total=6,elapsed=10,startup_timeout=60)=="WARMING"
+    assert collector.collector_state(ready=5,total=6,elapsed=61,startup_timeout=60)=="DEGRADED"
     source=(ROOT/"scripts/v7_multi_asset_external_collector.py").read_text()
-    assert collector.readiness_state(5,6,61.0,60.0)=="DEGRADED"
+    assert 'state="BLOCKED_CHILD_EXIT"' not in source
+    assert 'return 70' not in source
     assert 'return 77' not in source
-    assert '"execution_authority": False' in source
+    assert 'CHILD_RESTART_FAILED' in source
 
 
-def test_readiness_state_degrades_without_terminating_parent():
-    assert collector.readiness_state(5,6,10.0,60.0)=="WARMING"
-    assert collector.readiness_state(5,6,61.0,60.0)=="DEGRADED"
-    assert collector.readiness_state(6,6,1000.0,60.0)=="OPERATIONAL"
+def test_tape_session_id_changes_across_restarts():
+    first=collector.child_paths(Path("/tmp/run"),"BNB",session_id="session-a")
+    second=collector.child_paths(Path("/tmp/run"),"BNB",session_id="session-b")
+    assert first["tape"] != second["tape"]
+    assert first["tape"].name.endswith("session-a.bin")
+    assert second["tape"].name.endswith("session-b.bin")

@@ -483,6 +483,22 @@ v7_exec_class COLLECTOR "$RECORDER" \
   >> "$RUN_ROOT/trade_recorder.log" 2>&1 &
 v7_register_child "$!"
 
+# Reconcile historical PAPER claims before starting this run's sole ledger writer.
+# Anything unresolved remains reserved in the final registry and cannot vanish
+# across a code-SHA cutover.
+python3 scripts/v7_legacy_native_claims.py \
+  --current-run-root "$RUN_ROOT" --scan-parent "$(dirname "$RUN_ROOT")" \
+  --target-sha "$SHA" --output "$RUN_ROOT/control/legacy_native_claims.json" \
+  >> "$RUN_ROOT/legacy_native_claims.log" 2>&1
+python3 scripts/v7_legacy_native_reconciler.py \
+  --registry "$RUN_ROOT/control/legacy_native_claims.json" --repository-root "$ROOT" \
+  --target-sha "$SHA" --output "$RUN_ROOT/control/legacy_native_reconciliation.json" \
+  >> "$RUN_ROOT/legacy_native_reconciliation.log" 2>&1 || true
+python3 scripts/v7_legacy_native_claims.py \
+  --current-run-root "$RUN_ROOT" --scan-parent "$(dirname "$RUN_ROOT")" \
+  --target-sha "$SHA" --output "$RUN_ROOT/control/legacy_native_claims.json" \
+  >> "$RUN_ROOT/legacy_native_claims.log" 2>&1
+
 # One persistent canonical ledger router. 100ms transport cadence keeps FILL
 # evidence available before the 1s markout horizon without creating a second
 # ledger writer or repeatedly spawning Python processes.
@@ -501,12 +517,13 @@ PM_V7_CONTROL_NICE=0 v7_exec_class CONTROL python3 scripts/v7_native_crypto_engi
   --universe "$RUN_ROOT/universe/current.json" \
   --allocation "$RUN_ROOT/control/allocations/crypto_settlement_engine.json" \
   --market-registry "$ROOT/config/v7_crypto_settlement_markets.json" \
+  --legacy-claims "$RUN_ROOT/control/legacy_native_claims.json" \
   --engine "$CRYPTO_SETTLEMENT_ENGINE" \
   --settler "$ROOT/scripts/v7_native_paper_settlement.py" \
   --engine-log "$RUN_ROOT/native_crypto_settlement_engine.log" \
-  --target-quantity-microunits 20000000 \
-  --minimum-tte-ns 5000000000 --maximum-tte-ns 120000000000 \
-  --maker-share-cap-microunits 5000000 \
+  --target-quantity-microunits 5000000 \
+  --minimum-tte-ns 105000000000 --maximum-tte-ns 120000000000 \
+  --maker-share-cap-microunits 1000000 \
   --capture-native-decisions \
   --asynchronous-settlement \
   >> "$RUN_ROOT/native_engine_manager.log" 2>&1 &

@@ -16,3 +16,7 @@ def test_bundle_builder_has_final_tree_forbidden_gate():
     ast.parse(source)
     assert 'forbidden London files' in source
     assert 'module_imports' in source and 'local_closure' in source
+    assert 'verify_git_tree(root,sha,files)' in source
+    assert 'London runtime source checkout is dirty' in source
+    assert "git','-C',str(root),'show'" in source
+    assert "'source_tree_verified':True" in source

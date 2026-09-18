@@ -45,6 +45,23 @@ def git_sha(root:Path,explicit:str|None)->str:
     if not SHA40.fullmatch(value): raise SystemExit('exact London runtime SHA unavailable')
     return value
 
+def verify_git_tree(root:Path,sha:str,files:set[Path])->None:
+    try:
+        head=subprocess.check_output(['git','-C',str(root),'rev-parse','HEAD'],text=True,stderr=subprocess.DEVNULL).strip()
+        dirty=subprocess.check_output(['git','-C',str(root),'status','--porcelain','--untracked-files=normal'],text=True,stderr=subprocess.DEVNULL)
+    except (OSError,subprocess.SubprocessError) as exc:
+        raise SystemExit('London runtime source git verification unavailable') from exc
+    if head != sha: raise SystemExit('London runtime source HEAD does not match declared SHA')
+    if dirty.strip(): raise SystemExit('London runtime source checkout is dirty')
+    for path in sorted(files):
+        rel=str(path.relative_to(root))
+        try:
+            blob=subprocess.check_output(['git','-C',str(root),'show',f'{sha}:{rel}'],stderr=subprocess.DEVNULL)
+        except (OSError,subprocess.SubprocessError) as exc:
+            raise SystemExit(f'London runtime source is not tracked at declared SHA:{rel}') from exc
+        if blob != path.read_bytes():
+            raise SystemExit(f'London runtime source differs from declared SHA:{rel}')
+
 def main()->int:
     ap=argparse.ArgumentParser()
     ap.add_argument('--repository-root',type=Path,default=Path('.'))
@@ -62,6 +79,7 @@ def main()->int:
     files=local_closure(root,seeds)
     for p in files:
         if not p.is_file(): raise SystemExit(f'missing London runtime source:{p.relative_to(root)}')
+    verify_git_tree(root,sha,files)
     if out.exists(): shutil.rmtree(out)
     out.mkdir(parents=True)
     for p in sorted(files): copy_one(root,out,p)
@@ -78,7 +96,7 @@ def main()->int:
     if bad: raise SystemExit('forbidden London files:'+','.join(bad))
     receipt={'schema':'polymarket_v7_london_runtime_bundle_receipt_v1','paper_only':True,'authenticated_execution':False,
              'real_order_submission':False,'runtime_sha':sha,'files':len(rels),'binaries':manifest['binaries'],
-             'training_files':0,'research_tree_present':False}
+             'training_files':0,'research_tree_present':False,'source_tree_verified':True}
     (out/'runtime_bundle_receipt.json').write_text(json.dumps(receipt,sort_keys=True,indent=2)+'\n')
     print(json.dumps(receipt,sort_keys=True)); return 0
 if __name__=='__main__': raise SystemExit(main())

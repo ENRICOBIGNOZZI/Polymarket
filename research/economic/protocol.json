@@ -9,14 +9,82 @@
   "main_endpoint": "net_executable_pnl_per_eligible_market_after_variable_costs",
   "secondary_endpoint": "net_pnl_per_wall_clock_hour_after_fixed_costs",
   "main_repricing_horizon_ms": 250,
-  "markout_horizons_ms": [100, 250, 500, 1000, 5000, 15000, 60000],
-  "delay_ms": [0, 10, 25, 50, 100, 250, 500, 1000],
-  "cost_multipliers": [1, 1.5, 2],
-  "quantity_shares": [1, 5, 10, 20],
-  "maker_queue_multipliers": [1, 1.25, 1.5, 2],
-  "maker_cancel_ms": [50, 100, 250],
-  "signal_age_bins_ms": [0, 25, 100, 250, 1000, 5000],
-  "tte_windows_seconds": [[105, 120], [90, 120], [60, 120]],
+  "markout_horizons_ms": [
+    100,
+    250,
+    500,
+    1000,
+    5000,
+    15000,
+    60000
+  ],
+  "delay_ms": [
+    0,
+    10,
+    25,
+    50,
+    100,
+    250,
+    500,
+    1000
+  ],
+  "cost_multipliers": [
+    1,
+    1.5,
+    2
+  ],
+  "quantity_shares": [
+    5,
+    10,
+    20,
+    50,
+    100
+  ],
+  "maker_queue_multipliers": [
+    1,
+    1.25,
+    1.5,
+    2
+  ],
+  "maker_cancel_ms": [
+    50,
+    100,
+    250
+  ],
+  "signal_age_bins_ms": [
+    0,
+    25,
+    100,
+    250,
+    1000,
+    5000
+  ],
+  "tte_windows_seconds": [
+    [
+      0,
+      30
+    ],
+    [
+      30,
+      60
+    ],
+    [
+      60,
+      105
+    ],
+    [
+      105,
+      120
+    ],
+    [
+      120,
+      180
+    ],
+    [
+      180,
+      300
+    ]
+  ],
   "maximum_book_age_ms": 100,
   "settlement_target_unique_markets": 100,
   "minimum_time_blocks": 24,
@@ -33,13 +101,93 @@
   "split_policy": "CHRONOLOGICAL_EXPLICIT_CUTOFFS_LABEL_END_PURGE_EMBARGO",
   "missing_data": "CENSORED_NEVER_IMPUTE_ZERO",
   "tests": {
-    "T1": {"name": "maker_admissibility", "requires": ["maker_decisions", "native_books", "public_prints", "fee_schedule", "inventory"]},
-    "T2": {"name": "incremental_signal", "requires": ["native_decisions", "settlement_labels", "baseline_features", "purged_splits"]},
-    "T3": {"name": "arrival_latency", "requires": ["native_decisions", "native_books", "capture_watermarks", "gaps"]},
-    "T4": {"name": "signal_age", "requires": ["native_decisions", "native_books", "outcome_labels"]},
-    "T5": {"name": "exit_horizon", "requires": ["native_decisions", "native_books", "fee_schedule", "settlement_labels"]},
-    "T6": {"name": "tte_window", "requires": ["native_observations_all_tte", "settlement_labels", "fee_schedule"]},
-    "T7": {"name": "rollover_coverage", "requires": ["eligible_markets", "manager_timeline", "unsettled_capital_claims"]},
-    "T8": {"name": "capacity_and_assets", "requires": ["native_books", "fee_schedule", "verified_asset_contexts", "portfolio_risk_limits"]}
-  }
+    "T1": {
+      "name": "maker_admissibility",
+      "requires": [
+        "maker_decisions",
+        "native_books",
+        "public_prints",
+        "fee_schedule",
+        "inventory"
+      ]
+    },
+    "T2": {
+      "name": "incremental_signal",
+      "requires": [
+        "native_decisions",
+        "settlement_labels",
+        "baseline_features",
+        "purged_splits"
+      ]
+    },
+    "T3": {
+      "name": "arrival_latency",
+      "requires": [
+        "native_decisions",
+        "native_books",
+        "capture_watermarks",
+        "gaps"
+      ]
+    },
+    "T4": {
+      "name": "signal_age",
+      "requires": [
+        "native_decisions",
+        "native_books",
+        "outcome_labels"
+      ]
+    },
+    "T5": {
+      "name": "exit_horizon",
+      "requires": [
+        "native_decisions",
+        "native_books",
+        "fee_schedule",
+        "settlement_labels"
+      ]
+    },
+    "T6": {
+      "name": "tte_window",
+      "requires": [
+        "native_observations_all_tte",
+        "settlement_labels",
+        "fee_schedule"
+      ]
+    },
+    "T7": {
+      "name": "rollover_coverage",
+      "requires": [
+        "eligible_markets",
+        "manager_timeline",
+        "unsettled_capital_claims"
+      ]
+    },
+    "T8": {
+      "name": "capacity_and_assets",
+      "requires": [
+        "native_books",
+        "fee_schedule",
+        "verified_asset_contexts",
+        "portfolio_risk_limits"
+      ]
+    }
+  },
+  "baseline_tte_window_seconds": [
+    105,
+    120
+  ],
+  "entry_caps_per_market": [
+    1,
+    2,
+    4
+  ],
+  "multi_entry_requires_distinct_signal": true,
+  "entry_cooldown_ms": [
+    100,
+    250,
+    500,
+    1000
+  ],
+  "capacity_liquidity_semantics": "CONSUME_VISIBLE_RECEIVE_TIME_DEPTH_ONCE_PER_SCENARIO_NO_REUSE",
+  "multi_entry_semantics": "DISTINCT_SIGNAL_VERSION_PLUS_COOLDOWN"
 }

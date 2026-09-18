@@ -30,6 +30,28 @@ def read_json(path: Path) -> dict:
     return value if isinstance(value, dict) else {}
 
 
+def legacy_claim_carry_supported(repository_root: Path) -> bool:
+    """Prove the target release reserves legacy claims before execution."""
+    runtime = read_json(repository_root / "deploy/london/runtime_manifest.json")
+    process = read_json(repository_root / "config/v7_process_manifest.json")
+    try:
+        loop = (repository_root / "scripts/paper_v7_execution_loop.sh").read_text(encoding="utf-8")
+    except OSError:
+        return False
+    entrypoints = runtime.get("python_entrypoints") if isinstance(runtime.get("python_entrypoints"), list) else []
+    rows = process.get("processes") if isinstance(process.get("processes"), list) else []
+    manager = next((row for row in rows if isinstance(row, dict) and row.get("id") == "native_engine_manager"), {})
+    arguments = manager.get("arguments") if isinstance(manager.get("arguments"), list) else []
+    inputs = manager.get("inputs") if isinstance(manager.get("inputs"), list) else []
+    return (
+        "scripts/v7_legacy_native_claims.py" in entrypoints
+        and "--legacy-claims" in arguments
+        and "control/legacy_native_claims.json" in inputs
+        and "v7_legacy_native_claims.py" in loop
+        and "--legacy-claims" in loop
+    )
+
+
 def native_unsettled_markets(path: Path) -> list[str]:
     """Return native PAPER fill markets that lack their canonical native FINAL.
 
@@ -207,14 +229,8 @@ def pid_alive(value: object) -> bool:
 
 
 def git_is_ancestor(repository_root: Path, older: str, newer: str) -> bool:
-    # London cutover runs as root while the immutable repository is owned by
-    # the service user. Scope Git's safe-directory exception to this read-only
-    # ancestry command instead of mutating global Git configuration.
     return subprocess.run(
-        [
-            "git", "-c", f"safe.directory={repository_root}",
-            "-C", str(repository_root), "merge-base", "--is-ancestor", older, newer,
-        ],
+        ["git", "-C", str(repository_root), "merge-base", "--is-ancestor", older, newer],
         check=False,
         stdout=subprocess.DEVNULL,
         stderr=subprocess.DEVNULL,
@@ -282,6 +298,7 @@ def prepare(
     now: int | None = None,
     ancestor_check: Callable[[Path, str, str], bool] = git_is_ancestor,
     allow_native_carryover: bool = False,
+    legacy_carry_check: Callable[[Path], bool] = legacy_claim_carry_supported,
 ) -> dict:
     if not SHA40.fullmatch(target_sha):
         raise CutoverArchiveError("target_sha_invalid")
@@ -355,25 +372,35 @@ def prepare(
         if drawdown >= maximum:
             raise CutoverArchiveError("prior_portfolio_drawdown_limit")
 
-    # The current PAPER account and executor are the only inventory surfaces.
-    # Cutover requires both to be flat after the runtime has stopped.
+    # Native-only generations retired the legacy PAPER router/maker executor
+    # inventory surfaces. Missing legacy status files are acceptable only when
+    # the stopped runtime itself proves the single native execution-owner
+    # contract; its canonical ledger remains authoritative for fills/FINALs.
+    native_only_inventory = (
+        runtime.get("single_execution_owner") is True
+        and runtime.get("global_portfolio_coordinator") == "V7_NATIVE_CRYPTO_SETTLEMENT_ENGINE"
+        and runtime.get("execution_authority") == "V7_NATIVE_CRYPTO_SETTLEMENT_ENGINE"
+        and runtime.get("economic_engines") == ["CRYPTO_SETTLEMENT_ENGINE"]
+    )
     account = read_json(run_root / "external_fair/paper_router_status.json")
     executor = read_json(run_root / "micro_maker/authorized_make_executor_status.json")
     for name, value in (("paper_account", account), ("maker_executor", executor)):
         if not value:
+            if native_only_inventory:
+                continue
             raise CutoverArchiveError(f"prior_position_state_missing:{name}")
         if (value.get("paper_only") is not True
                 or value.get("authenticated_execution") is not False
                 or value.get("real_order_submission") is not False):
             raise CutoverArchiveError(f"prior_position_state_unsafe:{name}")
-    if account.get("model_sha") not in (None, "", previous_sha):
+    if account and account.get("model_sha") not in (None, "", previous_sha):
         raise CutoverArchiveError("prior_paper_account_sha_mismatch")
-    if executor.get("model_sha") != previous_sha:
+    if executor and executor.get("model_sha") != previous_sha:
         raise CutoverArchiveError("prior_maker_executor_sha_mismatch")
     try:
-        account_open = int(account.get("open_positions") or 0)
-        pending_maker = int(account.get("pending_maker_orders") or 0)
-        active_maker = int(executor.get("active_orders") or 0)
+        account_open = int(account.get("open_positions") or 0) if account else 0
+        pending_maker = int(account.get("pending_maker_orders") or 0) if account else 0
+        active_maker = int(executor.get("active_orders") or 0) if executor else 0
     except (TypeError, ValueError, OverflowError) as exc:
         raise CutoverArchiveError("prior_open_positions_invalid") from exc
     if account_open < 0 or pending_maker < 0 or active_maker < 0:
@@ -389,9 +416,11 @@ def prepare(
     )
     native_unsettled = native_unsettled_markets(ledger_path)
     inherited_carryover = read_json(run_root / "control/native_carryover_exposure.json")
-    if inherited_carryover and not allow_native_carryover:
+    legacy_supported = legacy_carry_check(repository_root)
+    legacy_carry_required = bool(native_unsettled or inherited_carryover) and not allow_native_carryover
+    if inherited_carryover and not allow_native_carryover and not legacy_supported:
         raise CutoverArchiveError("prior_native_carryover_present")
-    if native_unsettled and not allow_native_carryover:
+    if native_unsettled and not allow_native_carryover and not legacy_supported:
         raise CutoverArchiveError(f"prior_native_unsettled_markets:{len(native_unsettled)}")
     carryover = None
     if allow_native_carryover and (native_unsettled or inherited_carryover):
@@ -436,12 +465,18 @@ def prepare(
         "ledger_model_sha_counts": ledger_model_sha_counts,
         "ledger_strategy_counts": ledger_strategy_counts,
         "runtime_checkout_drift_detected": runtime_checkout_drift,
+        "prior_inventory_contract": (
+            "NATIVE_LEDGER_SINGLE_OWNER" if native_only_inventory
+            else "LEGACY_PAPER_ACCOUNT_AND_MAKER_EXECUTOR"
+        ),
         "prior_open_positions": durable_open,
         "native_carryover": None if carryover is None else {
             "total_unsettled_microdollars": carryover["total_unsettled_microdollars"],
             "context_claims_microdollars": carryover["context_claims_microdollars"],
             "market_count": len(carryover["markets"]),
         },
+        "legacy_claim_carry_required": legacy_carry_required,
+        "legacy_native_unsettled": native_unsettled,
     }
     temporary = control / f"cutover_lineage.json.tmp.{os.getpid()}"
     temporary.write_text(json.dumps(receipt, sort_keys=True) + "\n", encoding="utf-8")

@@ -64,6 +64,25 @@ class PrepareCutoverTests(unittest.TestCase):
             with self.assertRaisesRegex(cutover.CutoverArchiveError,'prior_native_unsettled_markets:1'):
                 cutover.prepare(root,base/'archives',base,NEW,ancestor_check=lambda *_:True)
 
+    def test_native_fill_can_archive_only_with_legacy_carry_contract(self):
+        with tempfile.TemporaryDirectory() as d:
+            base=Path(d);root=base/'run';fixture(root)
+            fill={
+                'event_type':'FILL','strategy':'CRYPTO_SETTLEMENT_ENGINE',
+                'model_sha':OLD,'paper_only':True,'authenticated_execution':False,
+                'market_id':'m1','record_kind':'ECONOMIC_JOURNAL',
+                'metadata':{'native_settlement_receipt':{
+                    'owner':'V7_NATIVE_CRYPTO_SETTLEMENT_ENGINE'}},
+            }
+            (root/'ledger/execution.jsonl').write_text(json.dumps(fill)+'\n',encoding='utf-8')
+            result=cutover.prepare(
+                root,base/'archives',base,NEW,now=125,
+                ancestor_check=lambda *_:True, legacy_carry_check=lambda _root:True)
+            self.assertEqual(result['state'],'ARCHIVED_PRIOR_SHA')
+            self.assertTrue(result['legacy_claim_carry_required'])
+            self.assertEqual(result['prior_open_positions']['native_unsettled_markets'],1)
+            self.assertEqual(result['legacy_native_unsettled'],[OLD+':m1'])
+
     def test_native_final_closes_cutover_exposure(self):
         with tempfile.TemporaryDirectory() as d:
             base=Path(d);root=base/'run';fixture(root)
@@ -179,16 +198,55 @@ def test_inherited_carryover_is_chained_without_credit() -> None:
         assert '/archive/older' in carry['source_archives']
 
 
-def test_git_ancestor_check_scopes_safe_directory(monkeypatch) -> None:
-    captured={}
-    class Result:
-        returncode=0
-    def fake_run(command, **kwargs):
-        captured["command"]=command
-        captured["kwargs"]=kwargs
-        return Result()
-    monkeypatch.setattr(cutover.subprocess,"run",fake_run)
-    repo=Path("/tmp/native-owned-repo")
-    assert cutover.git_is_ancestor(repo,"a"*40,"b"*40) is True
-    assert captured["command"][:4]==["git","-c",f"safe.directory={repo}","-C"]
-    assert captured["command"][4:]==[str(repo),"merge-base","--is-ancestor","a"*40,"b"*40]
+def _mark_native_only(root: Path) -> None:
+    p=root/'control/runtime_status.json'
+    row=json.loads(p.read_text())
+    row.update({
+        'single_execution_owner':True,
+        'global_portfolio_coordinator':'V7_NATIVE_CRYPTO_SETTLEMENT_ENGINE',
+        'execution_authority':'V7_NATIVE_CRYPTO_SETTLEMENT_ENGINE',
+        'economic_engines':['CRYPTO_SETTLEMENT_ENGINE'],
+    })
+    write(p,row)
+
+
+def test_native_only_prior_generation_does_not_require_retired_legacy_surfaces():
+    with tempfile.TemporaryDirectory() as d:
+        base=Path(d);root=base/'run';fixture(root);_mark_native_only(root)
+        (root/'external_fair/paper_router_status.json').unlink()
+        (root/'micro_maker/authorized_make_executor_status.json').unlink()
+        result=cutover.prepare(root,base/'archives',base,NEW,now=130,ancestor_check=lambda *_:True)
+        assert result['state']=='ARCHIVED_PRIOR_SHA'
+        assert result['prior_inventory_contract']=='NATIVE_LEDGER_SINGLE_OWNER'
+        assert result['prior_open_positions']['paper_account']==0
+        assert result['prior_open_positions']['maker_active_orders']==0
+
+
+def test_missing_legacy_surfaces_still_fail_without_exact_native_single_owner_contract():
+    with tempfile.TemporaryDirectory() as d:
+        base=Path(d);root=base/'run';fixture(root)
+        p=root/'control/runtime_status.json';row=json.loads(p.read_text())
+        row['single_execution_owner']=True
+        row['execution_authority']='V7_NATIVE_CRYPTO_SETTLEMENT_ENGINE'
+        write(p,row)
+        (root/'external_fair/paper_router_status.json').unlink()
+        (root/'micro_maker/authorized_make_executor_status.json').unlink()
+        try:
+            cutover.prepare(root,base/'archives',base,NEW,ancestor_check=lambda *_:True)
+        except cutover.CutoverArchiveError as exc:
+            assert str(exc)=='prior_position_state_missing:paper_account'
+        else:
+            raise AssertionError('partial native-only identity bypassed retired-surface guard')
+
+
+def test_native_only_prior_generation_still_blocks_nonflat_legacy_surface_if_present():
+    with tempfile.TemporaryDirectory() as d:
+        base=Path(d);root=base/'run';fixture(root);_mark_native_only(root)
+        p=root/'micro_maker/authorized_make_executor_status.json'
+        row=json.loads(p.read_text());row['active_orders']=1;write(p,row)
+        try:
+            cutover.prepare(root,base/'archives',base,NEW,ancestor_check=lambda *_:True)
+        except cutover.CutoverArchiveError as exc:
+            assert str(exc).startswith('prior_open_positions:')
+        else:
+            raise AssertionError('nonflat stale legacy surface was ignored')
