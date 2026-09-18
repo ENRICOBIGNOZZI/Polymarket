@@ -252,3 +252,26 @@ def test_partitioned_paper_budget_never_exceeds_engine_envelope(tmp_path: Path) 
     assert count == 30
     assert partition == 333_333_333
     assert partition * count <= total
+
+
+def test_manager_cli_defaults_match_frequency_and_size_policy(monkeypatch) -> None:
+    import v7_native_crypto_engine_manager as manager
+    monkeypatch.setattr(sys, "argv", [
+        "manager",
+        "--repository-root", "/tmp/repo",
+        "--run-root", "/tmp/run",
+        "--model-sha", SHA,
+        "--run-id", "run",
+        "--server-id", "server",
+        "--universe", "/tmp/universe.json",
+        "--engine", "/tmp/engine",
+        "--settler", "/tmp/settler.py",
+        "--engine-log", "/tmp/engine.log",
+        "--allocation", "/tmp/allocation.json",
+        "--market-registry", "/tmp/registry.json",
+    ])
+    args = manager.parse_args()
+    assert args.min_order_microunits == 5_000_000
+    assert args.target_quantity_microunits == 20_000_000
+    assert args.minimum_tte_ns == 5_000_000_000
+    assert args.maximum_tte_ns == 120_000_000_000
