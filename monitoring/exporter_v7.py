@@ -457,7 +457,8 @@ def health_reasons(snapshot: dict[str, Any], *, max_runtime_age: int = 180, max_
     native_mode = snapshot.get("native_mode") is True
     if native_mode:
         allowed_native_states = {
-            "STARTING", "RUNNING", "ENGINE_EXITED", "ROTATED_CLEAN",
+            "STARTING", "RUNNING", "RUNNING_DEGRADED",
+            "WAITING_FOR_CONTEXT_RETRY", "ENGINE_EXITED", "ROTATED_CLEAN",
             "WAITING_FOR_CANONICAL_MARKET", "WAITING_FOR_ROLLOVER",
             "SETTLING", "RECOVERING_SETTLEMENT",
         }
@@ -581,6 +582,18 @@ def render_prometheus(snapshot: dict[str, Any]) -> str:
         _metric("polymarket_v7_native_partition_budget_usd", _number((snapshot.get("native_engine_manager") or {}).get("partition_budget_microdollars")) / 1_000_000.0),
         _metric("polymarket_v7_native_global_budget_usd", _number((snapshot.get("native_engine_manager") or {}).get("global_budget_microdollars")) / 1_000_000.0),
         _metric("polymarket_v7_native_missing_contexts", max(0, _integer((snapshot.get("native_engine_manager") or {}).get("expected_context_count")) - _integer((snapshot.get("native_engine_manager") or {}).get("target_context_count")))),
+        _metric("polymarket_v7_native_launch_blocked_contexts", (snapshot.get("native_engine_manager") or {}).get("launch_blocked_count")),
+        _metric("polymarket_v7_native_observations_published", (snapshot.get("native_engine_manager") or {}).get("native_observations_published")),
+        _metric("polymarket_v7_native_observations_written", (snapshot.get("native_engine_manager") or {}).get("native_observations_written")),
+        _metric("polymarket_v7_native_observations_dropped", (snapshot.get("native_engine_manager") or {}).get("native_observations_dropped")),
+        _metric("polymarket_v7_native_observations_queue_depth", (snapshot.get("native_engine_manager") or {}).get("native_observations_queue_depth")),
+        _metric("polymarket_v7_native_engine_operational", (
+            snapshot.get("native_mode") is True
+            and (snapshot.get("native_engine_manager") or {}).get("state") in {"RUNNING", "RUNNING_DEGRADED"}
+            and _integer((snapshot.get("native_engine_manager") or {}).get("active_worker_count")) > 0
+            and "native_partition_engine_process_not_alive" not in reasons
+            and "native_partition_worker_not_ready" not in reasons
+        )),
         _metric("polymarket_v7_native_engine_ready", (
             snapshot.get("native_mode") is True
             and (snapshot.get("native_engine_manager") or {}).get("state") == "RUNNING"
