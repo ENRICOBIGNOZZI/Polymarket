@@ -68,7 +68,7 @@ def test_native_manager_launcher_invocation_satisfies_current_cli(tmp_path):
     assert args.market_registry==ROOT/'config/v7_crypto_settlement_markets.json'
     declared=next(p for p in json.loads((ROOT/'config/v7_process_manifest.json').read_text())['processes'] if p['id']=='native_engine_manager')['arguments']
     assert {arg for arg in argv if arg.startswith('--')}=={arg for arg in declared if arg.startswith('--')}
-    assert not args.asynchronous_settlement
+    assert args.asynchronous_settlement
     assert not args.capture_native_observations
     assert args.target_quantity_microunits == 20_000_000
     assert args.minimum_tte_ns == 5_000_000_000

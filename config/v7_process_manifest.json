@@ -311,7 +311,8 @@
         "--maximum-tte-ns",
         "120000000000",
         "--maker-share-cap-microunits",
-        "5000000"
+        "5000000",
+        "--asynchronous-settlement"
       ],
       "profile": "core",
       "inputs": [

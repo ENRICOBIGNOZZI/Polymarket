@@ -314,3 +314,48 @@ def test_clob_venue_minimum_is_loaded_and_fail_closed(monkeypatch) -> None:
         pass
     else:
         raise AssertionError("invalid CLOB venue minimum accepted")
+
+
+def test_async_settlement_detaches_context_after_canonical_commit(monkeypatch, tmp_path) -> None:
+    import types
+    import v7_native_crypto_engine_manager as manager
+
+    class Process:
+        def __init__(self, rc=0):
+            self.rc = rc
+            self.pid = 1234
+        def poll(self):
+            return self.rc
+
+    class Log:
+        def __init__(self):
+            self.closed = False
+        def close(self):
+            self.closed = True
+
+    owner = manager.Manager.__new__(manager.Manager)
+    owner.run_root = tmp_path
+    owner.args = types.SimpleNamespace(
+        model_sha=SHA, run_id="run", repository_root=ROOT,
+        asynchronous_settlement=True, python="python3",
+        settler=ROOT / "scripts/v7_native_paper_settlement.py",
+        settlement_timeout_seconds=600,
+    )
+    owner.workers = {}
+    owner.pending_settlements = {}
+    owner.completed_market_ids = set()
+    worker = manager.Worker(
+        context="BTC:M5", market={"market_id": "m1"},
+        budget_microdollars=100_000_000, process=Process(0), log_handle=Log(),
+    )
+    owner.workers["BTC:M5"] = worker
+    settlement = Process(None)
+    monkeypatch.setattr(manager, "native_commit_barrier", lambda *a, **k: True)
+    monkeypatch.setattr(manager.subprocess, "Popen", lambda *a, **k: settlement)
+
+    assert owner._finish_worker("BTC:M5", worker) is None
+    assert worker.state == "SETTLING"
+    assert worker.log_handle.closed
+    assert "BTC:M5" not in owner.workers
+    assert owner.pending_settlements["m1"] is worker
+    assert worker.settlement is settlement
