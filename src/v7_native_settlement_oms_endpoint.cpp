@@ -1,5 +1,7 @@
 #include "pm/v7_native_settlement_oms_endpoint.hpp"
 
+// Kept as an explicit translation unit in the immutable London runtime build.
+
 namespace pm::v7 {
 
 const OmsOrderRecord* NativeSettlementOmsEndpoint::find(
