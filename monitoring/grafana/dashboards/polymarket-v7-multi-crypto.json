@@ -2343,6 +2343,199 @@
         "graphMode": "none",
         "justifyMode": "auto"
       }
+    },
+    {
+      "id": 484,
+      "title": "LIVE DATA COVERAGE \u2014 PM BOOKS + EXTERNAL ASSETS",
+      "type": "row",
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 96
+      },
+      "collapsed": false,
+      "panels": []
+    },
+    {
+      "id": 485,
+      "title": "Book Contexts",
+      "type": "stat",
+      "gridPos": {
+        "h": 4,
+        "w": 6,
+        "x": 0,
+        "y": 97
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus-v7"
+      },
+      "targets": [
+        {
+          "expr": "(polymarket_v7_book_data_contexts{job=\"polymarket-v7\",instance=\"$instance\"}) and on(job,instance) (polymarket_v7_exporter_snapshot_usable{job=\"polymarket-v7\",instance=\"$instance\"} == 1)",
+          "refId": "A",
+          "instant": true,
+          "range": false,
+          "legendFormat": "Book Contexts"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "decimals": 0
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "values": false,
+          "calcs": [
+            "last"
+          ],
+          "fields": ""
+        },
+        "orientation": "auto",
+        "textMode": "auto",
+        "colorMode": "value",
+        "graphMode": "none",
+        "justifyMode": "auto"
+      }
+    },
+    {
+      "id": 486,
+      "title": "Observed Book Markets",
+      "type": "stat",
+      "gridPos": {
+        "h": 4,
+        "w": 6,
+        "x": 6,
+        "y": 97
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus-v7"
+      },
+      "targets": [
+        {
+          "expr": "(polymarket_v7_book_data_observed_markets{job=\"polymarket-v7\",instance=\"$instance\"}) and on(job,instance) (polymarket_v7_exporter_snapshot_usable{job=\"polymarket-v7\",instance=\"$instance\"} == 1)",
+          "refId": "A",
+          "instant": true,
+          "range": false,
+          "legendFormat": "Observed Book Markets"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "decimals": 0
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "values": false,
+          "calcs": [
+            "last"
+          ],
+          "fields": ""
+        },
+        "orientation": "auto",
+        "textMode": "auto",
+        "colorMode": "value",
+        "graphMode": "none",
+        "justifyMode": "auto"
+      }
+    },
+    {
+      "id": 487,
+      "title": "Observed Book Tokens",
+      "type": "stat",
+      "gridPos": {
+        "h": 4,
+        "w": 6,
+        "x": 12,
+        "y": 97
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus-v7"
+      },
+      "targets": [
+        {
+          "expr": "(polymarket_v7_book_data_observed_tokens{job=\"polymarket-v7\",instance=\"$instance\"}) and on(job,instance) (polymarket_v7_exporter_snapshot_usable{job=\"polymarket-v7\",instance=\"$instance\"} == 1)",
+          "refId": "A",
+          "instant": true,
+          "range": false,
+          "legendFormat": "Observed Book Tokens"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "decimals": 0
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "values": false,
+          "calcs": [
+            "last"
+          ],
+          "fields": ""
+        },
+        "orientation": "auto",
+        "textMode": "auto",
+        "colorMode": "value",
+        "graphMode": "none",
+        "justifyMode": "auto"
+      }
+    },
+    {
+      "id": 488,
+      "title": "External Ready Assets",
+      "type": "stat",
+      "gridPos": {
+        "h": 4,
+        "w": 6,
+        "x": 18,
+        "y": 97
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus-v7"
+      },
+      "targets": [
+        {
+          "expr": "(polymarket_v7_external_data_ready_assets{job=\"polymarket-v7\",instance=\"$instance\"}) and on(job,instance) (polymarket_v7_exporter_snapshot_usable{job=\"polymarket-v7\",instance=\"$instance\"} == 1)",
+          "refId": "A",
+          "instant": true,
+          "range": false,
+          "legendFormat": "External Ready Assets"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "decimals": 0
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "values": false,
+          "calcs": [
+            "last"
+          ],
+          "fields": ""
+        },
+        "orientation": "auto",
+        "textMode": "auto",
+        "colorMode": "value",
+        "graphMode": "none",
+        "justifyMode": "auto"
+      }
     }
   ],
   "refresh": "5s",
@@ -2441,5 +2634,5 @@
   "timezone": "browser",
   "title": "Polymarket V7 Multi-Crypto Performance",
   "uid": "polymarket-v7-multi-crypto",
-  "version": 5
+  "version": 6
 }
