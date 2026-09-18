@@ -2,7 +2,6 @@
   "authenticated_execution": false,
   "binaries": [
     "polymarket_v7_trade_recorder",
-    "polymarket_v7_maker_markout_observer",
     "polymarket_v7_maker_fillability_observer",
     "polymarket_v7_external_venue_runtime",
     "polymarket_v7_crypto_settlement_engine"
@@ -35,15 +34,8 @@
     "scripts/v7_runtime_resource_plan.py",
     "scripts/v7_public_https_proxy.py",
     "scripts/v7_rtds_external_fair_monitor.py",
-    "scripts/v7_binance_usdm_rest_collector.py",
-    "scripts/v7_deribit_rest_collector.py",
-    "scripts/v7_coinbase_l2_rest_collector.py",
-    "scripts/v7_external_cancel_signal_journal.py",
     "scripts/v7_crypto_universe.py",
     "scripts/v7_ledger_spool.py",
-    "scripts/v7_market_maker_rewards.py",
-    "scripts/v7_fee_reward_registry.py",
-    "scripts/v7_maker_cohort_supervisor.py",
     "scripts/v7_canonical_economics.py",
     "scripts/v7_portfolio_guard.py",
     "scripts/v7_runtime_profile.py",
