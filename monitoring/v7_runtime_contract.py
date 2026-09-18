@@ -244,76 +244,110 @@ def runtime_health(run_root: Path, expected_sha: str, *, now: int, stale_seconds
     elif age > stale_seconds:
         recoverable.append("runtime_status_stale")
     if runtime.get("state") == "running":
-        selector = read_json(run_root / "micro_maker" / "selector_status.json")
-        rotation = read_json(run_root / "micro_maker" / "rotation_status.json")
-        maker = read_json(run_root / "micro_maker" / "status.json")
-        if selector:
+        native = read_json(run_root / "control" / "native_engine_manager_status.json")
+        if native:
             if (
-                selector.get("paper_only") is not True
-                or selector.get("authenticated_execution") is not False
-                or selector.get("real_order_submission") is not False
+                native.get("schema") != "polymarket_v7_native_engine_manager_status_v1"
+                or native.get("paper_only") is not True
+                or native.get("authenticated_execution") is not False
+                or native.get("real_order_submission") is not False
+                or native.get("real_capital_at_risk") is not False
+                or native.get("single_native_hot_path") is not True
             ):
-                unsafe.append("maker_selector_execution_authority_unsafe")
-            if selector.get("model_sha") != expected_sha:
-                unsafe.append("maker_selector_identity_drift")
-            if (
-                selector.get("ready") is not True
-                or selector.get("state") not in MAKER_SELECTOR_OPERATIONAL_STATES
-            ):
-                recoverable.append("maker_selector_not_ready")
+                unsafe.append("native_engine_manager_contract_unsafe")
+            if native.get("model_sha") != expected_sha:
+                unsafe.append("native_engine_manager_identity_drift")
+            state = str(native.get("state") or "")
+            allowed = {
+                "STARTING", "RUNNING", "ENGINE_EXITED", "ROTATED_CLEAN",
+                "WAITING_FOR_CANONICAL_MARKET", "WAITING_FOR_ROLLOVER", "STOPPED",
+            }
+            if state not in allowed:
+                recoverable.append("native_engine_manager_not_ready")
             try:
-                selector_age = now * 1000 - int(selector.get("timestamp_ms") or 0)
+                native_age = now * 1000 - int(native.get("timestamp_ms") or 0)
             except (TypeError, ValueError, OverflowError):
-                selector_age = stale_seconds * 1000 + 1
-            if selector_age < -5_000:
-                unsafe.append("maker_selector_clock_in_future")
-            # The slow selector refreshes every 60s after a bounded network
-            # attempt; its heartbeat contract is intentionally slower than the
-            # 1s maker/runtime state loop.
-            elif selector_age > max(120, stale_seconds * 4) * 1000:
-                recoverable.append("maker_selector_stale")
+                native_age = stale_seconds * 1000 + 1
+            if native_age < -5_000:
+                unsafe.append("native_engine_manager_clock_in_future")
+            elif native_age > stale_seconds * 1000:
+                recoverable.append("native_engine_manager_status_stale")
+            if state == "RUNNING" and not pid_alive(native.get("engine_pid")):
+                recoverable.append("native_engine_pid_dead")
+            if state == "SETTLEMENT_BLOCKED" or native.get("blocker") == "NATIVE_PAPER_SETTLEMENT_INCOMPLETE":
+                unsafe.append("native_paper_settlement_incomplete")
         else:
-            recoverable.append("maker_selector_status_missing")
-        if rotation:
-            if (
-                rotation.get("paper_only") is not True
-                or rotation.get("authenticated_execution") is not False
-                or rotation.get("real_order_submission") is not False
-            ):
-                unsafe.append("maker_cohort_execution_authority_unsafe")
-            if rotation.get("model_sha") != expected_sha:
-                unsafe.append("maker_cohort_identity_drift")
-            if rotation.get("state") not in MAKER_ROTATION_OPERATIONAL_STATES:
-                recoverable.append("maker_cohort_not_ready")
-            try:
-                rotation_age = now * 1000 - int(rotation.get("timestamp_ms") or 0)
-            except (TypeError, ValueError, OverflowError):
-                rotation_age = stale_seconds * 1000 + 1
-            if rotation_age < -5_000:
-                unsafe.append("maker_cohort_clock_in_future")
-            elif rotation_age > stale_seconds * 1000:
-                recoverable.append("maker_cohort_status_stale")
-        else:
-            recoverable.append("maker_cohort_status_missing")
-        if maker:
-            if maker.get("paper_only") is not True or maker.get("authenticated_execution") is not False:
-                unsafe.append("professional_maker_execution_authority_unsafe")
-            if maker.get("model_sha") != expected_sha:
-                unsafe.append("professional_maker_identity_drift")
-            if maker.get("killed") is True:
-                recoverable.append("professional_maker_killed")
-            if maker.get("source") in {None, "", "not_started"}:
-                recoverable.append("professional_maker_not_started")
-            try:
-                maker_age = now * 1000 - int(maker.get("timestamp_ms") or 0)
-            except (TypeError, ValueError, OverflowError):
-                maker_age = stale_seconds * 1000 + 1
-            if maker_age < -5_000:
-                unsafe.append("professional_maker_clock_in_future")
-            elif maker_age > stale_seconds * 1000:
-                recoverable.append("professional_maker_status_stale")
-        else:
-            recoverable.append("professional_maker_status_missing")
+            selector = read_json(run_root / "micro_maker" / "selector_status.json")
+            rotation = read_json(run_root / "micro_maker" / "rotation_status.json")
+            maker = read_json(run_root / "micro_maker" / "status.json")
+            if selector:
+                if (
+                    selector.get("paper_only") is not True
+                    or selector.get("authenticated_execution") is not False
+                    or selector.get("real_order_submission") is not False
+                ):
+                    unsafe.append("maker_selector_execution_authority_unsafe")
+                if selector.get("model_sha") != expected_sha:
+                    unsafe.append("maker_selector_identity_drift")
+                if (
+                    selector.get("ready") is not True
+                    or selector.get("state") not in MAKER_SELECTOR_OPERATIONAL_STATES
+                ):
+                    recoverable.append("maker_selector_not_ready")
+                try:
+                    selector_age = now * 1000 - int(selector.get("timestamp_ms") or 0)
+                except (TypeError, ValueError, OverflowError):
+                    selector_age = stale_seconds * 1000 + 1
+                if selector_age < -5_000:
+                    unsafe.append("maker_selector_clock_in_future")
+                # The slow selector refreshes every 60s after a bounded network
+                # attempt; its heartbeat contract is intentionally slower than the
+                # 1s maker/runtime state loop.
+                elif selector_age > max(120, stale_seconds * 4) * 1000:
+                    recoverable.append("maker_selector_stale")
+            else:
+                recoverable.append("maker_selector_status_missing")
+            if rotation:
+                if (
+                    rotation.get("paper_only") is not True
+                    or rotation.get("authenticated_execution") is not False
+                    or rotation.get("real_order_submission") is not False
+                ):
+                    unsafe.append("maker_cohort_execution_authority_unsafe")
+                if rotation.get("model_sha") != expected_sha:
+                    unsafe.append("maker_cohort_identity_drift")
+                if rotation.get("state") not in MAKER_ROTATION_OPERATIONAL_STATES:
+                    recoverable.append("maker_cohort_not_ready")
+                try:
+                    rotation_age = now * 1000 - int(rotation.get("timestamp_ms") or 0)
+                except (TypeError, ValueError, OverflowError):
+                    rotation_age = stale_seconds * 1000 + 1
+                if rotation_age < -5_000:
+                    unsafe.append("maker_cohort_clock_in_future")
+                elif rotation_age > stale_seconds * 1000:
+                    recoverable.append("maker_cohort_status_stale")
+            else:
+                recoverable.append("maker_cohort_status_missing")
+            if maker:
+                if maker.get("paper_only") is not True or maker.get("authenticated_execution") is not False:
+                    unsafe.append("professional_maker_execution_authority_unsafe")
+                if maker.get("model_sha") != expected_sha:
+                    unsafe.append("professional_maker_identity_drift")
+                if maker.get("killed") is True:
+                    recoverable.append("professional_maker_killed")
+                if maker.get("source") in {None, "", "not_started"}:
+                    recoverable.append("professional_maker_not_started")
+                try:
+                    maker_age = now * 1000 - int(maker.get("timestamp_ms") or 0)
+                except (TypeError, ValueError, OverflowError):
+                    maker_age = stale_seconds * 1000 + 1
+                if maker_age < -5_000:
+                    unsafe.append("professional_maker_clock_in_future")
+                elif maker_age > stale_seconds * 1000:
+                    recoverable.append("professional_maker_status_stale")
+            else:
+                recoverable.append("professional_maker_status_missing")
+
     if unsafe:
         return Assessment(UNSAFE, tuple(sorted(set(unsafe + recoverable))))
     if recoverable:
