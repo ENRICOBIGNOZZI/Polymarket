@@ -1,5 +1,6 @@
 from __future__ import annotations
 from pathlib import Path
+import json
 import unittest
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -40,10 +41,12 @@ class LondonMonitoringLinuxTests(unittest.TestCase):
         manifest = (ROOT / 'deploy/london/runtime_manifest.json').read_text()
         self.assertIn('ops/v7_london_monitoring_bundle.py', manifest)
         self.assertIn('ops/v7_london_install_monitoring.sh', manifest)
-        policy = (ROOT / 'config/v7_native_critical_path_policy.json').read_text()
-        self.assertNotIn('v7_london_install_monitoring', policy)
-        self.assertNotIn('grafana', policy.lower())
-        self.assertNotIn('prometheus', policy.lower())
+        policy_text = (ROOT / 'config/v7_native_critical_path_policy.json').read_text()
+        self.assertNotIn('v7_london_install_monitoring', policy_text)
+        policy = json.loads(policy_text)
+        forbidden = set(policy['forbidden_hot_path_surface_tokens'])
+        for token in ('grafana', 'prometheus', 'exporter', 'retention', 'research', 'report'):
+            self.assertIn(token, forbidden)
 
 
 if __name__ == '__main__':
