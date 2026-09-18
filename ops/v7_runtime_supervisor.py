@@ -37,8 +37,28 @@ def _json(path: Path) -> dict[str, Any]:
 
 
 def external_fair_ready(run_root: Path, expected_sha: str, *, now: int | None = None) -> bool:
-    """Require the complete External Fair chain, not merely a live router PID."""
+    """Require the active execution chain, preferring the sole native engine."""
     current = int(time.time()) if now is None else int(now)
+    native = _json(run_root / "control" / "native_engine_manager_status.json")
+    if native:
+        try:
+            timestamp_ms = int(native.get("timestamp_ms") or 0)
+            engine_pid = int(native.get("engine_pid") or 0)
+        except (TypeError, ValueError, OverflowError):
+            return False
+        return bool(
+            native.get("schema") == "polymarket_v7_native_engine_manager_status_v1"
+            and native.get("model_sha") == expected_sha
+            and native.get("paper_only") is True
+            and native.get("authenticated_execution") is False
+            and native.get("real_order_submission") is False
+            and native.get("real_capital_at_risk") is False
+            and native.get("single_native_hot_path") is True
+            and native.get("state") == "RUNNING"
+            and engine_pid > 0 and pid_alive(engine_pid)
+            and 0 <= current * 1000 - timestamp_ms <= 15_000
+            and not native.get("blocker")
+        )
     status = _json(run_root / "external_fair" / "status.json")
     router = _json(run_root / "external_fair" / "paper_router_status.json")
     contract = status.get("contract") if isinstance(status.get("contract"), dict) else {}
