@@ -26,6 +26,7 @@ enum class NativePaperReason : std::uint8_t {
 };
 
 struct NativePaperFillRecord {
+    NativeOrderCommand command{};
     std::uint64_t client_order_id = 0;
     std::uint64_t command_id = 0;
     std::uint64_t instrument_handle = 0;
@@ -83,6 +84,7 @@ public:
 private:
     struct Slot {
         PaperRestingOrder paper{};
+        NativeOrderCommand command{};
         std::uint64_t client_order_id = 0;
         std::uint64_t command_id = 0;
         std::int32_t tick_size_e4 = 0;
