@@ -3,7 +3,7 @@
   "component_independent_authority": false,
   "decision_chain": [
     "LIVE_ALGORITHM",
-    "V7_GLOBAL_PORTFOLIO_COORDINATOR",
+    "V7_NATIVE_CRYPTO_SETTLEMENT_ENGINE",
     "V7_CANONICAL_ALLOCATOR",
     "V7_CANONICAL_RISK",
     "V7_CANONICAL_OMS",
@@ -28,7 +28,7 @@
   },
   "owners": {
     "capital_allocator": "V7_CANONICAL_ALLOCATOR",
-    "global_portfolio_coordinator": "V7_GLOBAL_PORTFOLIO_COORDINATOR",
+    "global_portfolio_coordinator": "V7_NATIVE_CRYPTO_SETTLEMENT_ENGINE",
     "inventory": "V7_CANONICAL_INVENTORY",
     "ledger": "V7_CANONICAL_LEDGER",
     "oms": "V7_CANONICAL_OMS",
