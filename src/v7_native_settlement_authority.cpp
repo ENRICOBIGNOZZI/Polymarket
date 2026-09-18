@@ -474,8 +474,6 @@ NativeInventorySnapshot NativeSettlementAuthority::inventory_snapshot(
 // Settlement adapter endpoint is compiled with the authority itself so the
 // London runtime cannot omit the sole lifecycle bridge translation unit.
 
-namespace pm::v7 {
-
 const OmsOrderRecord* NativeSettlementOmsEndpoint::find(
     std::uint64_t client_order_id) const noexcept {
     if (const auto* current = authority_.find_order(client_order_id)) return current;
