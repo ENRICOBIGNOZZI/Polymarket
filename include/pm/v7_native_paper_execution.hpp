@@ -27,6 +27,7 @@ enum class NativePaperReason : std::uint8_t {
 
 struct NativePaperFillRecord {
     NativeOrderCommand command{};
+    StrategyId strategy_id = StrategyId::CryptoSettlementEngine;
     std::uint64_t client_order_id = 0;
     std::uint64_t command_id = 0;
     std::uint64_t instrument_handle = 0;
@@ -42,6 +43,7 @@ struct NativePaperFillRecord {
 
 struct NativePaperCancelRecord {
     NativeOrderCommand command{};
+    StrategyId strategy_id = StrategyId::CryptoSettlementEngine;
     std::int64_t cancel_effective_monotonic_ns = 0;
 };
 
@@ -98,6 +100,7 @@ private:
     struct Slot {
         PaperRestingOrder paper{};
         NativeOrderCommand command{};
+        StrategyId strategy_id = StrategyId::CryptoSettlementEngine;
         std::uint64_t client_order_id = 0;
         std::uint64_t command_id = 0;
         std::int32_t tick_size_e4 = 0;
