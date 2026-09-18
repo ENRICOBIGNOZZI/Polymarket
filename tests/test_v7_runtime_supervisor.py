@@ -37,6 +37,19 @@ def test_unscoped_or_malformed_restart_budget_starts_a_new_exact_sha_counter(tmp
     assert instance(path, "c" * 40)._restart_times() == []
 
 
+def test_git_head_uses_exact_sha_env_or_runtime_identity(tmp_path: Path, monkeypatch) -> None:
+    env_sha = "e" * 40
+    monkeypatch.setenv("PM_V7_MODEL_SHA", env_sha)
+    assert supervisor._git_head(tmp_path) == env_sha
+
+    monkeypatch.delenv("PM_V7_MODEL_SHA")
+    identity = tmp_path / "deploy" / "london"
+    identity.mkdir(parents=True)
+    runtime_sha = "f" * 40
+    (identity / "runtime_sha").write_text(runtime_sha + "\n", encoding="utf-8")
+    assert supervisor._git_head(tmp_path) == runtime_sha
+
+
 def _write_external_state(root: Path, sha: str, *, full: bool = True, books: int = 2) -> None:
     external = root / "external_fair"
     external.mkdir(parents=True, exist_ok=True)
