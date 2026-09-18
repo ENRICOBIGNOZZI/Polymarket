@@ -80,8 +80,8 @@ class V7MakerFillabilityMonitoringTest(unittest.TestCase):
         loop = (ROOT / "scripts/paper_v7_execution_loop.sh").read_text(encoding="utf-8")
         manifest = json.loads((ROOT / "config/v7_process_manifest.json").read_text())
         self.assertIn("FILLABILITY_OBSERVER", loop)
-        self.assertTrue(any(row.get("id") == "maker_observer_cohort" for row in manifest["processes"]))
-        self.assertIn("--fillability-observer", loop)
+        self.assertTrue(any(row.get("id") == "pm_book_observer" for row in manifest["processes"]))
+        self.assertIn("--fair-only", loop)
 
 
 if __name__ == "__main__":
