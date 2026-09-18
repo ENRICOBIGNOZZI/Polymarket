@@ -33,7 +33,7 @@ Binance / Coinbase / Deribit        Polymarket public market data
           /              |               \
  settlement fair   informed taker   professional maker
           \              |               /
-           -> V7_GLOBAL_PORTFOLIO_COORDINATOR
+           -> V7_NATIVE_CRYPTO_SETTLEMENT_ENGINE
                          |
              one allocator -> one risk owner
                          |
