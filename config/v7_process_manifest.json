@@ -323,7 +323,8 @@
         "120000000000",
         "--maker-share-cap-microunits",
         "5000000",
-        "--asynchronous-settlement"
+        "--asynchronous-settlement",
+        "--capture-native-decisions"
       ],
       "profile": "core",
       "inputs": [
@@ -357,7 +358,8 @@
       "outputs": [
         "control/native_evidence_status.json",
         "ledger/spool",
-        "native_engine.log"
+        "native_engine.log",
+        "research/native_observations"
       ],
       "dependencies": [],
       "exact_sha_required": true,

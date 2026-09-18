@@ -206,3 +206,68 @@ def test_native_suballocation_never_exceeds_portfolio_allocation():
         'real_order_submission':False,'capital_authority_owner':'V7_CANONICAL_ALLOCATOR','capital_authority_owner_count':1,
         'account_starting_capital':500,'reserve_budget':0,'engine_budgets':{'CRYPTO_SETTLEMENT_ENGINE':500}}
     with pytest.raises(ValueError):load_native_limits(policy,allocation)
+
+
+def test_price_aware_break_even_and_loss_asymmetry() -> None:
+    from price_aware import normalize_trade
+    row = normalize_trade({
+        "market": "m1", "asset": "BTC", "horizon": "M5",
+        "entry_price": 0.99, "shares": 20, "fee_usd": 0.01386,
+        "outcome_payout": 1,
+    })
+    assert row["break_even_probability"] == pytest.approx(0.990693)
+    assert row["win_gain_per_share"] == pytest.approx(0.009307)
+    assert row["max_loss_per_share"] == pytest.approx(0.990693)
+    assert row["loss_to_win_ratio"] > 100
+
+
+def test_price_aware_max_loss_sizing_reduces_high_price_exposure() -> None:
+    from price_aware import max_loss_capped_shares
+    expensive = {
+        "market": "m1", "asset": "BTC", "horizon": "M5",
+        "entry_price": 0.99, "shares": 20, "fee_usd": 0.01386,
+        "outcome_payout": 0,
+    }
+    cheap = {
+        "market": "m2", "asset": "DOGE", "horizon": "M5",
+        "entry_price": 0.03, "shares": 20, "fee_usd": 0.04074,
+        "outcome_payout": 0,
+    }
+    assert max_loss_capped_shares(expensive, 5) < 5.1
+    assert max_loss_capped_shares(cheap, 5) == pytest.approx(20)
+
+
+def test_price_aware_summary_keeps_fees_separate_from_pre_fee_edge() -> None:
+    from price_aware import summarize
+    report = summarize([
+        {"market": "m1", "asset": "BTC", "horizon": "M5",
+         "entry_price": 0.96, "shares": 5, "fee_usd": 0.01344, "outcome_payout": 1},
+        {"market": "m2", "asset": "BTC", "horizon": "M5",
+         "entry_price": 0.95, "shares": 5, "fee_usd": 0.016625, "outcome_payout": 0},
+    ])
+    overall = report["overall"]
+    assert overall["trades"] == 2
+    assert overall["fees_usd"] == pytest.approx(0.030065)
+    assert overall["pre_fee_pnl_usd"] == pytest.approx(-4.55)
+    assert overall["net_pnl_usd"] == pytest.approx(-4.580065)
+    assert report["extreme_price_diagnostics"]["price_ge_0_95"]["trades"] == 2
+
+
+def test_price_aware_extracts_taker_market_from_canonical_ledger(tmp_path) -> None:
+    from price_aware import trades_from_ledger
+    ledger=tmp_path/'execution.jsonl'
+    fill={
+        'event_type':'FILL','strategy':'CRYPTO_SETTLEMENT_ENGINE','model_sha':'a'*40,
+        'market_id':'m1','token_id':'yes','filled_size':20.0,'fill_price':.76,'fee':.25,
+        'metadata':{'model_family':'crypto_informed_taker','asset':'BTC','horizon':'M5'}
+    }
+    final={
+        'event_type':'FINAL','strategy':'CRYPTO_SETTLEMENT_ENGINE','model_sha':'a'*40,
+        'market_id':'m1','metadata':{'native_market_settlement_id':'native-settlement:m1',
+        'settlement_payouts':{'yes':1.0,'no':0.0}}
+    }
+    ledger.write_text(json.dumps(fill)+'\n'+json.dumps(final)+'\n')
+    rows,stats=trades_from_ledger(ledger,expected_model_sha='a'*40)
+    assert stats=={'taker_markets':1,'resolved_taker_markets':1,'missing_final':0,'invalid_markets':0}
+    assert rows[0]['entry_price']==.76 and rows[0]['shares']==20
+    assert rows[0]['outcome_payout']==1.0

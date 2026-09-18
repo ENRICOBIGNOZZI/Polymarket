@@ -83,3 +83,32 @@ Five resolved markets do not establish profit. The first frozen baseline report
 is INCONCLUSIVE. Outcomes, arrival parity, full capture coverage, held-out
 comparisons, fixed infrastructure costs and an adequate number of time blocks
 remain required. Zero-recovery risk equity is not marked-to-market PnL.
+
+
+In the integrated 30-context manager, full native book/trade capture remains
+explicitly opt-in (--capture-native-observations) and is intended only for
+bounded probes. --observation-only defaults to low-volume decision capture;
+full capture requires the explicit full-capture flag as well. The 24/7 PAPER
+runtime uses --capture-native-decisions: it persists only causal taker decisions
+and maker intents from the state actually consumed by the native owner, avoiding
+duplicate raw book-event storage. Decision records include signal and
+confirmation returns, signal validity/age, executable book, depth, TTE, causal
+monotonic clocks and derived wall clocks. They remain research-only and never
+enter the economic ledger or order transport.
+
+## Price-aware native EV pipeline
+
+For the 24/7 PAPER runtime use decision-only native capture. After markets settle,
+build one market-level research row from the first accepted taker decision and
+the canonical append-only FINAL label:
+
+    python3 research/economic/native_ev_dataset.py       --observation <closed-native-observation.jsonl>       --ledger <run-root>/ledger/execution.jsonl       --model-sha <exact-runtime-sha>       --output <frozen-dataset.json>
+
+Then evaluate the fixed price-aware gate chronologically:
+
+    python3 research/economic/ev_gate_report.py       --dataset <frozen-dataset.json>       --output <ev-gate-report.json>
+
+The report compares the residual probability model with the Polymarket prior,
+uses executable ask plus taker fee as the cost hurdle, keeps the primary
+uncertainty buffer fixed before test evaluation, reports asset/horizon
+heterogeneity, and has no automatic promotion or execution authority.
