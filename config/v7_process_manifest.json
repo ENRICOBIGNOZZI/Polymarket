@@ -282,13 +282,37 @@
       "id": "native_engine_manager",
       "executable": "scripts/v7_native_crypto_engine_manager.py",
       "arguments": [
+        "--repository-root",
+        "${ROOT}",
+        "--run-root",
+        "${RUN_ROOT}",
         "--model-sha",
-        "${SHA}"
+        "${SHA}",
+        "--run-id",
+        "${RUN_ID}",
+        "--server-id",
+        "${SERVER_ID}",
+        "--universe",
+        "${RUN_ROOT}/universe/current.json",
+        "--engine",
+        "${CRYPTO_SETTLEMENT_ENGINE}",
+        "--settler",
+        "${ROOT}/scripts/v7_native_paper_settlement.py",
+        "--engine-log",
+        "${RUN_ROOT}/native_crypto_settlement_engine.log",
+        "--allocation",
+        "${RUN_ROOT}/control/allocations/crypto_settlement_engine.json",
+        "--market-registry",
+        "${ROOT}/config/v7_crypto_settlement_markets.json"
       ],
       "profile": "core",
       "inputs": [
         "universe/current.json",
-        "ledger/execution.jsonl"
+        "ledger/execution.jsonl",
+        "control/allocations/manifest.json",
+        "control/allocations/crypto_settlement_engine.json",
+        "config/v7_crypto_settlement_markets.json",
+        "config/v7_native_risk_policy.json"
       ],
       "outputs": [
         "control/native_engine_manager_status.json",
