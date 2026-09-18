@@ -304,6 +304,14 @@ def collect_snapshot(run_root: Path, repository_root: Path | None = None, *, now
     crypto_state_pnl = _optional_number(
         (canonical.get("strategy_net_pnl") or {}).get("CRYPTO_SETTLEMENT_ENGINE")
     )
+    if crypto_state_pnl is None:
+        total = ledger.get("total") if isinstance(ledger.get("total"), dict) else {}
+        no_realized_activity = (
+            ledger.get("valid") is True
+            and _integer(total.get("fills")) == 0
+            and _integer(total.get("finals")) == 0
+        )
+        crypto_state_pnl = 0.0 if no_realized_activity else None
     state_pnl = {"CRYPTO_SETTLEMENT_ENGINE": crypto_state_pnl}
     state_pnl_components = {
         "CRYPTO_SETTLEMENT_ENGINE": {
