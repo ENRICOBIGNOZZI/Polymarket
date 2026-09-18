@@ -18,8 +18,8 @@ def manifest() -> dict:
 
 def test_manifest_matches_crypto_only_runtime_inventory() -> None:
     report = resolve(ROOT, manifest())
-    assert report["process_count"] == report["expected_process_count"] == 19
-    assert report["launcher_child_count"] == report["expected_launcher_child_count"] == 16
+    assert report["process_count"] == report["expected_process_count"] == 10
+    assert report["launcher_child_count"] == report["expected_launcher_child_count"] == 9
     assert report["launcher_manifest_parity"] is True
     assert report["feed_zero_authority"] is True
 
