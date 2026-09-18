@@ -186,6 +186,13 @@ int main(int argc, char** argv) {
         limits.max_market_exposure_microdollars = 100'000'000LL;
         limits.max_single_order_microdollars = 10'000'000LL;
         NativeSettlementAuthority authority(limits);
+        // Zero-authority shadow begins from an explicit flat canonical inventory
+        // snapshot. Non-zero recovery inventory must come from the future native
+        // recovery/reconciliation boundary; strategy lanes never synthesize it.
+        if (!authority.sync_inventory(kMarket, kYes, 0, 0, 1)
+            || !authority.sync_inventory(kMarket, kNo, 0, 0, 1)) {
+            throw std::runtime_error("native inventory bootstrap failed");
+        }
         maker::MakerInstrumentLane yes_maker(+1), no_maker(-1);
         maker::MakerModelSnapshot maker_model;
         if (!maker_model.valid()) throw std::runtime_error("invalid native maker model snapshot");
@@ -223,6 +230,9 @@ int main(int argc, char** argv) {
         std::uint64_t taker_accepted = 0, maker_accepted = 0;
         std::uint64_t adapter_handoff_failures = 0;
         std::uint64_t maker_decisions = 0, maker_candidates = 0;
+        std::uint64_t maker_cancel_intents = 0, maker_cancel_handoffs = 0;
+        std::uint64_t maker_cancel_not_ready = 0, maker_duplicate_quotes = 0;
+        std::uint64_t maker_replace_pending = 0;
         std::uint64_t arbitration_conflicts = 0, authority_rejections = 0;
         std::uint64_t inventory_rejections = 0, minimum_size_rejections = 0;
         std::uint64_t last_measured_signal_version = 0;
@@ -330,6 +340,16 @@ int main(int argc, char** argv) {
                         ++maker_decisions;
                         for (std::size_t index = 0; index < maker_decision.intent_count; ++index) {
                             const auto& intent = maker_decision.intents[index];
+                            if (intent.type == IntentType::CancelQuote) {
+                                ++maker_cancel_intents;
+                                const auto cancel = authority.cancel_maker_quote(
+                                    intent.instrument_handle, intent.side, event.receive_monotonic_ns);
+                                if (cancel.accepted != 0) ++maker_cancel_handoffs;
+                                else if (cancel.reason == NativeCancelTxReason::NotCancelable) {
+                                    ++maker_cancel_not_ready;
+                                }
+                                continue;
+                            }
                             if (intent.type != IntentType::Quote) continue;
                             ExecutionPlan plan;
                             plan.intent = intent;
@@ -393,6 +413,14 @@ int main(int argc, char** argv) {
                         ++minimum_size_rejections;
                     } else if (authority_result.reason == NativeSettlementAuthorityReason::OmsDenied) {
                         ++adapter_handoff_failures;
+                    } else if (authority_result.reason == NativeSettlementAuthorityReason::DuplicateMakerQuote) {
+                        ++maker_duplicate_quotes;
+                    } else if (authority_result.reason == NativeSettlementAuthorityReason::MakerReplacePending) {
+                        ++maker_replace_pending;
+                        if (authority_result.cancel.accepted != 0) ++maker_cancel_handoffs;
+                        else if (authority_result.cancel.reason == NativeCancelTxReason::NotCancelable) {
+                            ++maker_cancel_not_ready;
+                        }
                     }
                 } else {
                     ++accepted;
@@ -442,6 +470,11 @@ int main(int argc, char** argv) {
             {"evaluations", evaluations}, {"accepted_candidates", accepted},
             {"taker_accepted", taker_accepted}, {"maker_accepted", maker_accepted},
             {"maker_decisions", maker_decisions}, {"maker_candidates", maker_candidates},
+            {"maker_cancel_intents", maker_cancel_intents},
+            {"maker_cancel_handoffs", maker_cancel_handoffs},
+            {"maker_cancel_not_ready", maker_cancel_not_ready},
+            {"maker_duplicate_quotes", maker_duplicate_quotes},
+            {"maker_replace_pending", maker_replace_pending},
             {"arbitration_conflicts_fail_closed", arbitration_conflicts},
             {"authority_rejections", authority_rejections},
             {"inventory_rejections", inventory_rejections},
@@ -457,7 +490,7 @@ int main(int argc, char** argv) {
             {"binance", {{"frames", binance_status.frames_received}, {"transport_failures", binance_status.transport_failures}, {"drops", binance_ingress_status.dropped_events}}},
             {"coinbase", {{"frames", coinbase_status.frames_received}, {"transport_failures", coinbase_status.transport_failures}, {"drops", coinbase_ingress_status.dropped_events}}},
             {"polymarket", {{"messages", pm_status.messages}, {"reconnects", pm_status.reconnects}, {"errors", pm_status.errors}, {"drops", pm_drops.load()}}},
-            {"note", "Zero-authority candidate only. Maker and taker candidates now share one in-process capital/OMS authority. Multi-alpha arbitration, SELL inventory synchronization, cancel lifecycle and the network adapter remain fail-closed deployment gates."}
+            {"note", "Zero-authority candidate only. Maker and taker now share one in-process inventory/capital/OMS authority with cancel-first maker replacement. Non-zero recovery inventory, comparable multi-alpha wealth scoring and the network adapter remain fail-closed deployment gates."}
         }) << '\n';
         return clean ? 0 : 2;
     } catch (const std::exception& error) {

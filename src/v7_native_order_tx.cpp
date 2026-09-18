@@ -113,6 +113,60 @@ NativeOrderTxResult NativeOrderTxOwner::prepare_submit(
     return out;
 }
 
+NativeCancelTxResult NativeOrderTxOwner::prepare_cancel(
+    std::uint64_t client_order_id,
+    std::int64_t now_monotonic_ns) noexcept {
+    NativeCancelTxResult out;
+    auto* slot = find_slot(client_order_id);
+    if (slot == nullptr || now_monotonic_ns <= 0) {
+        out.reason = NativeCancelTxReason::UnknownClientOrder;
+        return out;
+    }
+    const auto before = slot->order.record();
+    if (before.state == OrderState::CancelRequested
+        || before.state == OrderState::CancelPending
+        || before.state == OrderState::Cancelled
+        || before.state == OrderState::Filled) {
+        out.oms = before;
+        out.reason = NativeCancelTxReason::DuplicateNoop;
+        return out;
+    }
+    // A real adapter needs an acknowledged exchange order identity. Never
+    // manufacture a cancel for a merely queued/unacknowledged order.
+    if ((before.state != OrderState::Live && before.state != OrderState::Partial)
+        || before.exchange_order_handle == 0) {
+        out.oms = before;
+        out.reason = NativeCancelTxReason::NotCancelable;
+        return out;
+    }
+
+    OmsEvent request;
+    request.event_id = next_nonzero(next_event_id_);
+    request.type = OmsEventType::RequestCancel;
+    request.timestamp_ns = now_monotonic_ns;
+    const auto transition = slot->order.apply(request);
+    if (transition.applied == 0 || transition.invariant_violation != 0
+        || transition.state != OrderState::CancelRequested) {
+        out.oms = slot->order.record();
+        out.reason = NativeCancelTxReason::OmsRejected;
+        return out;
+    }
+
+    NativeCancelCommand command;
+    command.command_id = next_nonzero(next_command_id_);
+    command.client_order_id = client_order_id;
+    command.intent_id = before.intent_id;
+    command.market_handle = before.market_handle;
+    command.instrument_handle = before.instrument_handle;
+    command.exchange_order_handle = before.exchange_order_handle;
+    command.queue_monotonic_ns = now_monotonic_ns;
+    out.command = command;
+    out.oms = slot->order.record();
+    out.reason = NativeCancelTxReason::Accepted;
+    out.accepted = 1;
+    return out;
+}
+
 OmsTransitionResult NativeOrderTxOwner::apply(
     std::uint64_t client_order_id,
     const OmsEvent& event) noexcept {

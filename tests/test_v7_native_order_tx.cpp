@@ -129,11 +129,36 @@ void test_owned_event_ids_are_monotone() {
     assert(after_ack && after_ack->last_event_id==3);
 }
 
+void test_cancel_command_requires_live_exchange_identity() {
+    NativeOrderTxOwner owner;
+    const auto prepared = owner.prepare_submit(plan(), 1'100);
+    assert(prepared.accepted);
+    auto cancel = owner.prepare_cancel(prepared.command.client_order_id, 1'150);
+    assert(!cancel.accepted);
+    assert(cancel.reason == NativeCancelTxReason::NotCancelable);
+
+    OmsEvent wire{}; wire.type=OmsEventType::WireSend; wire.timestamp_ns=1'200;
+    assert(owner.apply_owned(prepared.command.client_order_id, wire).applied);
+    OmsEvent ack{}; ack.type=OmsEventType::AckLive; ack.timestamp_ns=1'300;
+    ack.exchange_order_handle=8123;
+    assert(owner.apply_owned(prepared.command.client_order_id, ack).applied);
+    cancel = owner.prepare_cancel(prepared.command.client_order_id, 1'400);
+    assert(cancel.accepted);
+    assert(cancel.reason == NativeCancelTxReason::Accepted);
+    assert(cancel.command.client_order_id == prepared.command.client_order_id);
+    assert(cancel.command.exchange_order_handle == 8123);
+    assert(cancel.oms.state == OrderState::CancelRequested);
+    const auto duplicate = owner.prepare_cancel(prepared.command.client_order_id, 1'450);
+    assert(!duplicate.accepted);
+    assert(duplicate.reason == NativeCancelTxReason::DuplicateNoop);
+}
+
 int main() {
     test_prepare_wire_reject_retire();
     test_capacity_is_bounded_and_reusable();
     test_prepare_submit_is_allocation_free();
     test_invalid_and_unknown_fail_closed();
     test_owned_event_ids_are_monotone();
+    test_cancel_command_requires_live_exchange_identity();
     return 0;
 }

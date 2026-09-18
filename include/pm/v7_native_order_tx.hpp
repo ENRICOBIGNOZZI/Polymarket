@@ -28,6 +28,14 @@ enum class NativeOrderTxReason : std::uint8_t {
     NonTerminalRetire = 6,
 };
 
+enum class NativeCancelTxReason : std::uint8_t {
+    Accepted = 1,
+    UnknownClientOrder = 2,
+    NotCancelable = 3,
+    DuplicateNoop = 4,
+    OmsRejected = 5,
+};
+
 struct NativeOrderCommand {
     std::uint64_t command_id = 0;
     std::uint64_t client_order_id = 0;
@@ -56,12 +64,33 @@ struct NativeOrderTxResult {
     std::array<std::uint8_t, 6> reserved{};
 };
 
+struct NativeCancelCommand {
+    std::uint64_t command_id = 0;
+    std::uint64_t client_order_id = 0;
+    std::uint64_t intent_id = 0;
+    std::uint64_t market_handle = 0;
+    std::uint64_t instrument_handle = 0;
+    std::uint64_t exchange_order_handle = 0;
+    std::int64_t queue_monotonic_ns = 0;
+};
+
+struct NativeCancelTxResult {
+    NativeCancelCommand command{};
+    OmsOrderRecord oms{};
+    NativeCancelTxReason reason = NativeCancelTxReason::UnknownClientOrder;
+    std::uint8_t accepted = 0;
+    std::array<std::uint8_t, 6> reserved{};
+};
+
 class NativeOrderTxOwner final {
 public:
     NativeOrderTxOwner() noexcept;
 
     [[nodiscard]] NativeOrderTxResult prepare_submit(
         const ExecutionPlan& plan,
+        std::int64_t now_monotonic_ns) noexcept;
+    [[nodiscard]] NativeCancelTxResult prepare_cancel(
+        std::uint64_t client_order_id,
         std::int64_t now_monotonic_ns) noexcept;
     [[nodiscard]] OmsTransitionResult apply(
         std::uint64_t client_order_id,
@@ -99,5 +128,8 @@ private:
 static_assert(std::is_trivially_copyable_v<NativeOrderCommand>);
 static_assert(std::is_standard_layout_v<NativeOrderCommand>);
 static_assert(std::is_trivially_copyable_v<NativeOrderTxResult>);
+static_assert(std::is_trivially_copyable_v<NativeCancelCommand>);
+static_assert(std::is_standard_layout_v<NativeCancelCommand>);
+static_assert(std::is_trivially_copyable_v<NativeCancelTxResult>);
 
 } // namespace pm::v7

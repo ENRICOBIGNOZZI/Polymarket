@@ -3,9 +3,14 @@
 #include "pm/v7_execution_admission.hpp"
 #include "pm/v7_native_order_tx.hpp"
 
+#include <array>
+#include <cstddef>
 #include <cstdint>
 
 namespace pm::v7 {
+
+inline constexpr std::size_t kNativeInventoryCapacity = 512;
+static_assert((kNativeInventoryCapacity & (kNativeInventoryCapacity - 1)) == 0);
 
 enum class NativeSettlementAuthorityReason : std::uint8_t {
     Accepted = 1,
@@ -14,38 +19,138 @@ enum class NativeSettlementAuthorityReason : std::uint8_t {
     InventoryUnavailable = 4,
     AdmissionDenied = 5,
     OmsDenied = 6,
+    DuplicateMakerQuote = 7,
+    MakerReplacePending = 8,
+    InventoryInvariant = 9,
+    LifecycleInvariant = 10,
 };
 
 struct NativeSettlementAuthorityResult {
     ExecutionAdmissionResult admission{};
     NativeOrderTxResult tx{};
+    NativeCancelTxResult cancel{};
     NativeSettlementAuthorityReason reason = NativeSettlementAuthorityReason::InvalidPlan;
     std::uint8_t accepted = 0;
     std::uint8_t capital_released_on_failure = 0;
 };
 
-// Single in-process owner for the native CRYPTO_SETTLEMENT_ENGINE admission
-// chain. Candidate generators never reserve capital or touch the OMS directly.
-// The zero-authority convergence runtime starts flat, so SELL new-risk intents
-// fail closed until canonical inventory state is wired into this owner.
+struct NativeInventorySnapshot {
+    std::uint64_t market_handle = 0;
+    std::uint64_t instrument_handle = 0;
+    std::uint64_t state_version = 0;
+    std::int64_t total_microunits = 0;
+    std::int64_t reserved_sell_microunits = 0;
+    std::int64_t available_microunits = 0;
+    std::int64_t collateral_basis_microdollars = 0;
+};
+
+struct NativeLifecycleResult {
+    OmsTransitionResult transition{};
+    NativeInventorySnapshot inventory{};
+    NativeSettlementAuthorityReason reason = NativeSettlementAuthorityReason::LifecycleInvariant;
+    std::uint8_t applied = 0;
+    std::uint8_t terminal_retired = 0;
+};
+
+// Single in-process owner for the native CRYPTO_SETTLEMENT_ENGINE admission,
+// inventory, maker lifecycle and OMS chain. Candidate generators never reserve
+// capital, reserve inventory, mutate OMS state or select a second executor.
 class NativeSettlementAuthority final {
 public:
     explicit NativeSettlementAuthority(CapitalLimits limits) noexcept;
+
+    // Cold/recovery boundary. Synchronization is rejected while the instrument
+    // has an active native order so a stale snapshot cannot overwrite a fill or
+    // a live sell reservation.
+    [[nodiscard]] bool sync_inventory(std::uint64_t market_handle,
+                                      std::uint64_t instrument_handle,
+                                      std::int64_t total_microunits,
+                                      std::int64_t collateral_basis_microdollars,
+                                      std::uint64_t state_version) noexcept;
+
     [[nodiscard]] NativeSettlementAuthorityResult submit(
         const ExecutionPlan& plan,
         std::int64_t minimum_order_microunits,
         std::int64_t now_monotonic_ns) noexcept;
 
-    [[nodiscard]] bool release_capital(std::uint64_t intent_id) noexcept {
-        return capital_.release_order(intent_id);
+    // Maker control traffic remains inside the same owner. A replacement quote
+    // is never admitted in parallel with the old quote: submit() first requests
+    // cancellation and returns MakerReplacePending. The strategy may submit the
+    // fresh quote only after a terminal cancel event retires the prior quote.
+    [[nodiscard]] NativeCancelTxResult cancel_maker_quote(
+        std::uint64_t instrument_handle,
+        Side side,
+        std::int64_t now_monotonic_ns) noexcept;
+
+    // Sole mutation entry point for adapter/reconciliation order events. Fill
+    // deltas update canonical inventory and the common capital account before a
+    // terminal order is retired.
+    [[nodiscard]] NativeLifecycleResult apply_order_event(
+        std::uint64_t client_order_id,
+        OmsEvent event) noexcept;
+
+    [[nodiscard]] NativeInventorySnapshot inventory_snapshot(
+        std::uint64_t instrument_handle) const noexcept;
+    [[nodiscard]] CapitalSnapshot capital_snapshot() const noexcept {
+        return capital_.snapshot();
+    }
+    [[nodiscard]] const OmsOrderRecord* find_order(
+        std::uint64_t client_order_id) const noexcept {
+        return order_tx_.find(client_order_id);
     }
     [[nodiscard]] std::size_t active_orders() const noexcept {
         return order_tx_.active_orders();
     }
 
 private:
+    struct InventorySlot {
+        std::uint64_t market_handle = 0;
+        std::uint64_t instrument_handle = 0;
+        std::uint64_t state_version = 0;
+        std::uint64_t maker_buy_client_order_id = 0;
+        std::uint64_t maker_sell_client_order_id = 0;
+        std::int64_t total_microunits = 0;
+        std::int64_t reserved_sell_microunits = 0;
+        std::int64_t collateral_basis_microdollars = 0;
+        std::uint8_t occupied = 0;
+    };
+
+    struct OrderTrack {
+        std::uint64_t client_order_id = 0;
+        std::uint64_t intent_id = 0;
+        std::uint64_t market_handle = 0;
+        std::uint64_t instrument_handle = 0;
+        std::int64_t price_e4 = 0;
+        std::int64_t settled_buy_basis_microdollars = 0;
+        std::int64_t reserved_sell_microunits = 0;
+        Side side = Side::None;
+        std::uint8_t maker_quote = 0;
+        std::uint8_t occupied = 0;
+    };
+
+    [[nodiscard]] std::size_t inventory_hash(std::uint64_t instrument_handle) const noexcept;
+    [[nodiscard]] InventorySlot* inventory(std::uint64_t instrument_handle) noexcept;
+    [[nodiscard]] const InventorySlot* inventory(std::uint64_t instrument_handle) const noexcept;
+    [[nodiscard]] InventorySlot* ensure_inventory(std::uint64_t market_handle,
+                                                  std::uint64_t instrument_handle) noexcept;
+    [[nodiscard]] bool instrument_has_active_order(std::uint64_t instrument_handle) const noexcept;
+    [[nodiscard]] OrderTrack* track(std::uint64_t client_order_id) noexcept;
+    [[nodiscard]] const OrderTrack* track(std::uint64_t client_order_id) const noexcept;
+    [[nodiscard]] bool price_e4(const ExecutionPlan& plan, std::int64_t& out) const noexcept;
+    [[nodiscard]] bool cumulative_buy_basis(const OrderTrack& item,
+                                            std::int64_t cumulative_fill_microunits,
+                                            std::int64_t& out) const noexcept;
+    [[nodiscard]] bool apply_fill(OrderTrack& item,
+                                  InventorySlot& inv,
+                                  std::int64_t fill_delta_microunits,
+                                  std::int64_t cumulative_fill_microunits) noexcept;
+    void clear_maker_quote(const OrderTrack& item) noexcept;
+    void bump_inventory_version(InventorySlot& inv) noexcept;
+
     SleeveCapitalAccount capital_;
     NativeOrderTxOwner order_tx_{};
+    std::array<InventorySlot, kNativeInventoryCapacity> inventory_{};
+    std::array<OrderTrack, kNativeOrderTxCapacity> order_tracks_{};
 };
 
 } // namespace pm::v7
