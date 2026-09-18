@@ -100,7 +100,7 @@ def child_paths(run_root: Path, asset: str) -> dict[str, Path]:
         return {
             "base": base,
             "status": base / "external_venues.json",
-            "tape": base / "tapes" / f"external_venues.{asset.lower()}.bin",
+            "tape": base / "tapes" / f"external_venues.{asset.lower()}.{os.getpid()}.bin",
             "raw": base / "raw",
             "normalized": base / "normalized_events",
             "log": base / "external_venues.log",
@@ -109,7 +109,7 @@ def child_paths(run_root: Path, asset: str) -> dict[str, Path]:
     return {
         "base": asset_root,
         "status": asset_root / "external_venues.json",
-        "tape": asset_root / "tapes" / "external_venues.bin",
+        "tape": asset_root / "tapes" / f"external_venues.{asset.lower()}.{os.getpid()}.bin",
         "raw": asset_root / "raw",
         "normalized": asset_root / "normalized_events",
         "log": asset_root / "external_venues.log",

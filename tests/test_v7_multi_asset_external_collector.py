@@ -1,5 +1,6 @@
 from __future__ import annotations
 import json
+import os
 from pathlib import Path
 import sys
 
@@ -58,3 +59,13 @@ if __name__=="__main__":
     tests=sorted((n,f) for n,f in globals().items() if n.startswith("test_") and callable(f))
     for _,test in tests:test()
     print(f"{len(tests)} function tests passed")
+
+
+def test_tape_paths_are_restart_unique_for_supervisor_process():
+    btc=collector.child_paths(Path("/tmp/run"),"BTC")
+    eth=collector.child_paths(Path("/tmp/run"),"ETH")
+    assert str(os.getpid()) in btc["tape"].name
+    assert str(os.getpid()) in eth["tape"].name
+    assert btc["tape"] != eth["tape"]
+    assert btc["tape"].parent.name == "tapes"
+    assert eth["tape"].parent.name == "tapes"
