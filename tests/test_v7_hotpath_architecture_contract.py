@@ -70,4 +70,7 @@ def test_native_manager_launcher_invocation_satisfies_current_cli(tmp_path):
     assert {arg for arg in argv if arg.startswith('--')}=={arg for arg in declared if arg.startswith('--')}
     assert not args.asynchronous_settlement
     assert not args.capture_native_observations
-    assert args.maker_share_cap_microunits==1_000_000
+    assert args.target_quantity_microunits == 20_000_000
+    assert args.minimum_tte_ns == 5_000_000_000
+    assert args.maximum_tte_ns == 120_000_000_000
+    assert args.maker_share_cap_microunits==5_000_000

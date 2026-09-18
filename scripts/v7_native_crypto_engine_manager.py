@@ -535,6 +535,10 @@ class Manager:
             "partition_budget_microdollars": self.partition_microdollars,
             "partition_count": self.partition_count,
             "partition_total_microdollars": self.partition_total_microdollars,
+            "taker_target_quantity_microunits": self.args.target_quantity_microunits,
+            "taker_minimum_tte_ns": self.args.minimum_tte_ns,
+            "taker_maximum_tte_ns": self.args.maximum_tte_ns,
+            "maker_share_cap_microunits": self.args.maker_share_cap_microunits,
             "evidence_worker_count": int(evidence.get("worker_count") or 0),
             "evidence_dropped": int(evidence.get("dropped") or 0),
             "evidence_queue_depth": int(evidence.get("queue_depth") or 0),
@@ -611,6 +615,9 @@ class Manager:
             "--close-wall-ns", str(close_wall_ns),
             "--tick-size-e4", str(yes_tick),
             "--min-order-microunits", str(minimum_order),
+            "--target-quantity-microunits", str(max(self.args.target_quantity_microunits, minimum_order)),
+            "--minimum-tte-ns", str(self.args.minimum_tte_ns),
+            "--maximum-tte-ns", str(self.args.maximum_tte_ns),
             "--maker-share-cap-microunits", str(self.args.maker_share_cap_microunits),
             "--risk-policy-sha256", self.base_risk_receipt["risk_policy_sha256"],
             "--sleeve-budget-microdollars", str(budget_microdollars),
@@ -874,7 +881,10 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--python", default="python3")
     parser.add_argument("--settlement-timeout-seconds", type=int, default=600)
     parser.add_argument("--min-order-microunits", type=int, default=5_000_000)
-    parser.add_argument("--maker-share-cap-microunits", type=int, default=1_000_000)
+    parser.add_argument("--target-quantity-microunits", type=int, default=20_000_000)
+    parser.add_argument("--minimum-tte-ns", type=int, default=5_000_000_000)
+    parser.add_argument("--maximum-tte-ns", type=int, default=120_000_000_000)
+    parser.add_argument("--maker-share-cap-microunits", type=int, default=5_000_000)
     parser.add_argument("--asynchronous-settlement", action="store_true")
     parser.add_argument("--capture-native-observations", action="store_true",
         help="Explicit bounded research capture; keep off until storage/offload is provisioned")
@@ -887,6 +897,10 @@ def parse_args() -> argparse.Namespace:
         parser.error("invalid maker share cap")
     if args.min_order_microunits <= 0:
         parser.error("invalid minimum order")
+    if args.target_quantity_microunits < args.min_order_microunits:
+        parser.error("target quantity below configured minimum")
+    if args.minimum_tte_ns <= 0 or args.maximum_tte_ns < args.minimum_tte_ns:
+        parser.error("invalid taker tte window")
     return args
 
 

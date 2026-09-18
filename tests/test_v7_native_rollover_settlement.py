@@ -275,3 +275,42 @@ def test_settlement_writer_links_actual_position_and_supports_payout_vectors(tmp
         assert row.metadata['included_position_ids']==['native-position:m1:yes']
         assert row.metadata['crypto_context']=={'asset':'ETH','horizon':'D1'}
         assert row.metadata['settlement_payouts']==payouts
+
+
+def test_manager_cli_defaults_match_frequency_and_size_policy(monkeypatch) -> None:
+    import v7_native_crypto_engine_manager as manager
+    monkeypatch.setattr(sys, "argv", [
+        "manager",
+        "--repository-root", "/tmp/repo",
+        "--run-root", "/tmp/run",
+        "--model-sha", SHA,
+        "--run-id", "run",
+        "--server-id", "server",
+        "--universe", "/tmp/universe.json",
+        "--engine", "/tmp/engine",
+        "--settler", "/tmp/settler.py",
+        "--engine-log", "/tmp/engine.log",
+        "--allocation", "/tmp/allocation.json",
+        "--market-registry", "/tmp/registry.json",
+    ])
+    args = manager.parse_args()
+    assert args.min_order_microunits == 5_000_000
+    assert args.target_quantity_microunits == 20_000_000
+    assert args.minimum_tte_ns == 5_000_000_000
+    assert args.maximum_tte_ns == 120_000_000_000
+    assert args.maker_share_cap_microunits == 5_000_000
+
+
+def test_clob_venue_minimum_is_loaded_and_fail_closed(monkeypatch) -> None:
+    import v7_native_crypto_engine_manager as manager
+    monkeypatch.setattr(manager, "public_json", lambda _url: {"min_order_size": "5"})
+    assert manager.venue_minimum_microunits("token") == 5_000_000
+    monkeypatch.setattr(manager, "public_json", lambda _url: {"min_order_size": "7.5"})
+    assert manager.venue_minimum_microunits("token") == 7_500_000
+    monkeypatch.setattr(manager, "public_json", lambda _url: {"min_order_size": None})
+    try:
+        manager.venue_minimum_microunits("token")
+    except RuntimeError:
+        pass
+    else:
+        raise AssertionError("invalid CLOB venue minimum accepted")
