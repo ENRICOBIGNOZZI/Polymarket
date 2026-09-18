@@ -12,7 +12,11 @@ import time
 from pathlib import Path
 from typing import Callable
 
+from v7_native_risk_policy import unsettled_exposure
+from v7_native_settlement_projection import context_from_fill
+
 SHA40 = re.compile(r"^[0-9a-f]{40}$")
+CARRYOVER_SCHEMA = "polymarket_v7_native_carryover_exposure_v1"
 
 class CutoverArchiveError(RuntimeError):
     pass
@@ -65,6 +69,127 @@ def native_unsettled_markets(path: Path) -> list[str]:
             elif metadata.get("native_market_settlement_id") == f"native-settlement:{market_id}":
                 finals.add(key)
     return [f"{sha}:{market}" for sha, market in sorted(fills - finals)]
+
+
+def _ledger_economic_rows(path: Path) -> list[dict]:
+    if not path.is_file():
+        return []
+    rows: list[dict] = []
+    with path.open("r", encoding="utf-8") as handle:
+        for number, line in enumerate(handle, start=1):
+            if not line.strip():
+                continue
+            try:
+                value = json.loads(line)
+            except json.JSONDecodeError as exc:
+                raise CutoverArchiveError(f"ledger_invalid_json:{number}") from exc
+            if not isinstance(value, dict):
+                raise CutoverArchiveError(f"ledger_invalid_record:{number}")
+            if value.get("event_type") in {"FILL", "FINAL"} and value.get("strategy") == "CRYPTO_SETTLEMENT_ENGINE":
+                rows.append(value)
+    return rows
+
+
+def _validate_inherited_carryover(value: dict, previous_sha: str) -> dict:
+    if not value:
+        return {
+            "markets": [], "context_claims_microdollars": {},
+            "total_unsettled_microdollars": 0, "source_archives": [],
+            "source_model_shas": [],
+        }
+    if (
+        value.get("schema") != CARRYOVER_SCHEMA
+        or value.get("paper_only") is not True
+        or value.get("authenticated_execution") is not False
+        or value.get("real_order_submission") is not False
+        or value.get("target_model_sha") != previous_sha
+    ):
+        raise CutoverArchiveError("prior_native_carryover_invalid")
+    claims = value.get("context_claims_microdollars")
+    markets = value.get("markets")
+    archives = value.get("source_archives")
+    shas = value.get("source_model_shas")
+    if not isinstance(claims, dict) or not isinstance(markets, list) or not isinstance(archives, list) or not isinstance(shas, list):
+        raise CutoverArchiveError("prior_native_carryover_invalid")
+    normalized: dict[str, int] = {}
+    for context, claim in claims.items():
+        if not isinstance(context, str) or not isinstance(claim, int) or isinstance(claim, bool) or claim < 0:
+            raise CutoverArchiveError("prior_native_carryover_invalid")
+        normalized[context] = claim
+    total = value.get("total_unsettled_microdollars")
+    if not isinstance(total, int) or isinstance(total, bool) or total < 0 or sum(normalized.values()) != total:
+        raise CutoverArchiveError("prior_native_carryover_invalid")
+    return {
+        "markets": [dict(row) for row in markets if isinstance(row, dict)],
+        "context_claims_microdollars": normalized,
+        "total_unsettled_microdollars": total,
+        "source_archives": [str(x) for x in archives],
+        "source_model_shas": [str(x) for x in shas],
+    }
+
+
+def build_native_carryover(
+    ledger_path: Path,
+    inherited: dict,
+    previous_sha: str,
+    target_sha: str,
+) -> dict:
+    """Conservatively carry unresolved native cost basis into the next SHA."""
+    prior = _validate_inherited_carryover(inherited, previous_sha)
+    economic = _ledger_economic_rows(ledger_path)
+    by_sha: dict[str, list[dict]] = {}
+    contexts: dict[tuple[str, str], str] = {}
+    for row in economic:
+        sha = str(row.get("model_sha") or "")
+        market = str(row.get("market_id") or "")
+        if not SHA40.fullmatch(sha) or not market:
+            raise CutoverArchiveError("native_carryover_identity_invalid")
+        by_sha.setdefault(sha, []).append(row)
+        if row.get("event_type") == "FILL":
+            try:
+                label = context_from_fill(row)
+            except Exception as exc:
+                raise CutoverArchiveError("native_carryover_context_invalid") from exc
+            context = f"{label['asset']}:{label['horizon']}"
+            key = sha, market
+            if key in contexts and contexts[key] != context:
+                raise CutoverArchiveError("native_carryover_context_conflict")
+            contexts[key] = context
+
+    entries = list(prior["markets"])
+    context_claims = dict(prior["context_claims_microdollars"])
+    source_shas = set(prior["source_model_shas"])
+    for sha, rows in sorted(by_sha.items()):
+        try:
+            exposure = unsettled_exposure(rows, sha)
+        except Exception as exc:
+            raise CutoverArchiveError("native_carryover_economics_invalid") from exc
+        for market, claim in sorted(exposure["unsettled_market_claims_microdollars"].items()):
+            context = contexts.get((sha, market))
+            if not context or not isinstance(claim, int) or claim < 0:
+                raise CutoverArchiveError("native_carryover_claim_invalid")
+            entries.append({
+                "model_sha": sha,
+                "market_id": market,
+                "context": context,
+                "claim_microdollars": claim,
+            })
+            context_claims[context] = context_claims.get(context, 0) + claim
+            source_shas.add(sha)
+    total = sum(context_claims.values())
+    return {
+        "schema": CARRYOVER_SCHEMA,
+        "paper_only": True,
+        "authenticated_execution": False,
+        "real_order_submission": False,
+        "target_model_sha": target_sha,
+        "source_model_shas": sorted(source_shas),
+        "source_archives": list(prior["source_archives"]),
+        "markets": entries,
+        "context_claims_microdollars": dict(sorted(context_claims.items())),
+        "total_unsettled_microdollars": total,
+        "lease_credit_policy": "NO_CREDIT_UNTIL_HISTORICAL_FINAL_RECONCILED",
+    }
 
 
 def pid_alive(value: object) -> bool:
@@ -150,6 +275,7 @@ def prepare(
     *,
     now: int | None = None,
     ancestor_check: Callable[[Path, str, str], bool] = git_is_ancestor,
+    allow_native_carryover: bool = False,
 ) -> dict:
     if not SHA40.fullmatch(target_sha):
         raise CutoverArchiveError("target_sha_invalid")
@@ -256,14 +382,23 @@ def prepare(
         ledger_path, repository_root, target_sha, ancestor_check,
     )
     native_unsettled = native_unsettled_markets(ledger_path)
-    if native_unsettled:
+    inherited_carryover = read_json(run_root / "control/native_carryover_exposure.json")
+    if inherited_carryover and not allow_native_carryover:
+        raise CutoverArchiveError("prior_native_carryover_present")
+    if native_unsettled and not allow_native_carryover:
         raise CutoverArchiveError(f"prior_native_unsettled_markets:{len(native_unsettled)}")
+    carryover = None
+    if allow_native_carryover and (native_unsettled or inherited_carryover):
+        carryover = build_native_carryover(
+            ledger_path, inherited_carryover, previous_sha, target_sha
+        )
     if spool_path.exists() and any(spool_path.glob("*.json")):
         raise CutoverArchiveError("prior_ledger_spool_not_empty")
     durable_open = {
         "paper_account": account_open,
         "maker_active_orders": active_maker,
-        "native_unsettled_markets": 0,
+        "native_unsettled_markets": len(native_unsettled),
+        "native_carryover_microdollars": 0 if carryover is None else carryover["total_unsettled_microdollars"],
     }
 
     archived_at = int(now if now is not None else time.time())
@@ -275,6 +410,12 @@ def prepare(
     run_root.mkdir(parents=True)
     control = run_root / "control"
     control.mkdir()
+    if carryover is not None:
+        carryover["source_archives"] = sorted(set([*carryover["source_archives"], str(destination)]))
+        temporary_carry = control / f"native_carryover_exposure.json.tmp.{os.getpid()}"
+        temporary_carry.write_text(json.dumps(carryover, sort_keys=True) + "\n", encoding="utf-8")
+        os.replace(temporary_carry, control / "native_carryover_exposure.json")
+
     receipt = {
         "schema": "polymarket_v7_cutover_lineage_v1",
         "paper_only": True,
@@ -290,6 +431,11 @@ def prepare(
         "ledger_strategy_counts": ledger_strategy_counts,
         "runtime_checkout_drift_detected": runtime_checkout_drift,
         "prior_open_positions": durable_open,
+        "native_carryover": None if carryover is None else {
+            "total_unsettled_microdollars": carryover["total_unsettled_microdollars"],
+            "context_claims_microdollars": carryover["context_claims_microdollars"],
+            "market_count": len(carryover["markets"]),
+        },
     }
     temporary = control / f"cutover_lineage.json.tmp.{os.getpid()}"
     temporary.write_text(json.dumps(receipt, sort_keys=True) + "\n", encoding="utf-8")
@@ -303,8 +449,12 @@ def main() -> int:
     parser.add_argument("--archive-root", type=Path, required=True)
     parser.add_argument("--repository-root", type=Path, required=True)
     parser.add_argument("--target-sha", required=True)
+    parser.add_argument("--allow-native-carryover", action="store_true")
     args = parser.parse_args()
-    print(json.dumps(prepare(args.run_root, args.archive_root, args.repository_root, args.target_sha), sort_keys=True))
+    print(json.dumps(prepare(
+        args.run_root, args.archive_root, args.repository_root, args.target_sha,
+        allow_native_carryover=args.allow_native_carryover,
+    ), sort_keys=True))
     return 0
 
 

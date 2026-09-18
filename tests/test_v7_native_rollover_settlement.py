@@ -625,3 +625,51 @@ def test_public_json_timeout_is_market_scoped_retry(monkeypatch) -> None:
         assert "TimeoutError" in str(exc)
     else:
         raise AssertionError("network timeout was not classified as retryable")
+
+def test_native_carryover_loader_and_context_lease(tmp_path) -> None:
+    import types
+    import v7_native_crypto_engine_manager as manager
+
+    carry_path=tmp_path/'control/native_carryover_exposure.json'
+    carry_path.parent.mkdir(parents=True)
+    carry_path.write_text(json.dumps({
+        'schema':'polymarket_v7_native_carryover_exposure_v1',
+        'paper_only':True,'authenticated_execution':False,'real_order_submission':False,
+        'target_model_sha':SHA,'source_model_shas':['b'*40],'source_archives':['/a'],
+        'markets':[{'model_sha':'b'*40,'market_id':'m1','context':'BTC:M5','claim_microdollars':8_100_000}],
+        'context_claims_microdollars':{'BTC:M5':8_100_000},
+        'total_unsettled_microdollars':8_100_000,
+    })+'\n')
+    carry=manager.load_native_carryover(carry_path,SHA,{'BTC:M5'},333_333_333)
+    assert carry['present'] is True
+    assert carry['total_unsettled_microdollars']==8_100_000
+
+    owner=manager.Manager.__new__(manager.Manager)
+    owner.run_root=tmp_path
+    owner.args=types.SimpleNamespace(model_sha=SHA,run_id='run')
+    owner.partition_microdollars=333_333_333
+    owner.base_risk_receipt={'risk_policy_sha256':'r'*64}
+    owner.native_carryover=carry
+    available=owner._context_lease('BTC:M5')
+    assert available==325_233_333
+    lease=json.loads((tmp_path/'control/native_risk_leases/BTC_M5.json').read_text())
+    assert lease['current_unsettled_microdollars']==0
+    assert lease['carryover_unsettled_microdollars']==8_100_000
+    assert lease['available_microdollars']==325_233_333
+
+
+def test_native_carryover_wrong_target_sha_fails_closed(tmp_path) -> None:
+    import v7_native_crypto_engine_manager as manager
+    p=tmp_path/'carry.json'
+    p.write_text(json.dumps({
+        'schema':'polymarket_v7_native_carryover_exposure_v1',
+        'paper_only':True,'authenticated_execution':False,'real_order_submission':False,
+        'target_model_sha':'b'*40,'markets':[],
+        'context_claims_microdollars':{},'total_unsettled_microdollars':0,
+    }))
+    try:
+        manager.load_native_carryover(p,SHA,{'BTC:M5'},333_333_333)
+    except RuntimeError as exc:
+        assert str(exc)=='native_carryover_invalid'
+    else:
+        raise AssertionError('wrong-SHA carryover accepted')
