@@ -10,7 +10,7 @@ from typing import Any
 SCHEMA = "polymarket_v7_multi_crypto_execution_accounting_contract_v1"
 ASSETS = {"BTC", "ETH", "SOL", "XRP", "DOGE", "BNB"}
 DECISION_CHAIN = [
-    "LIVE_ALGORITHM", "V7_GLOBAL_PORTFOLIO_COORDINATOR", "V7_CANONICAL_ALLOCATOR",
+    "LIVE_ALGORITHM", "V7_NATIVE_CRYPTO_SETTLEMENT_ENGINE", "V7_CANONICAL_ALLOCATOR",
     "V7_CANONICAL_RISK", "V7_CANONICAL_OMS", "V7_CANONICAL_INVENTORY", "V7_CANONICAL_LEDGER",
 ]
 
@@ -56,7 +56,7 @@ def validate(root: Path) -> dict[str, Any]:
     require(authority.get("decision_chain") == DECISION_CHAIN, "authority_decision_chain")
     owners = authority.get("owners") or {}
     expected_owners = {
-        "global_portfolio_coordinator": "V7_GLOBAL_PORTFOLIO_COORDINATOR",
+        "global_portfolio_coordinator": "V7_NATIVE_CRYPTO_SETTLEMENT_ENGINE",
         "capital_allocator": "V7_CANONICAL_ALLOCATOR", "risk_engine": "V7_CANONICAL_RISK",
         "oms": "V7_CANONICAL_OMS", "inventory": "V7_CANONICAL_INVENTORY",
         "ledger": "V7_CANONICAL_LEDGER",
@@ -106,7 +106,7 @@ def validate(root: Path) -> dict[str, Any]:
         "paper_only": True, "authenticated_execution": False, "real_order_submission": False,
         "real_capital_at_risk": False, "new_risk_authorized": False,
         "single_global_execution_owner": True, "single_canonical_ledger_writer": True,
-        "global_portfolio_coordinator": "V7_GLOBAL_PORTFOLIO_COORDINATOR",
+        "global_portfolio_coordinator": "V7_NATIVE_CRYPTO_SETTLEMENT_ENGINE",
         "ledger_owner": "V7_CANONICAL_LEDGER", "decision_chain": DECISION_CHAIN,
         "supported_assets": sorted(ASSETS),
         "claim_boundary": "Contract verification only; SHADOW lanes remain unable to add risk.",
