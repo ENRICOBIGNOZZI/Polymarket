@@ -89,7 +89,11 @@ struct NativeRuntimeEvidenceWriter::Impl {
     NativeRuntimeEvidenceWriter& owner;
     std::thread thread;
     std::int64_t wall_minus_monotonic_ns = 0;
-    std::uint64_t sequence = 0;
+    std::uint64_t sequence = 0, observation_sequence = 0;
+    std::ofstream observations_file;
+    fs::path observations_path;
+    std::int64_t observations_watermark_ns = 0;
+    const std::string capture_id = std::to_string(monotonic_now_ns());
 
     Impl(NativeRuntimeEvidenceConfig value, NativeRuntimeEvidenceWriter& source)
         : config(std::move(value)), owner(source),
@@ -152,6 +156,15 @@ struct NativeRuntimeEvidenceWriter::Impl {
         const auto component = strategy_component(event.strategy_id);
         json::object metadata{
             {"component", component},
+            {"crypto_context", json::object{{"asset", config.asset}, {"horizon", config.horizon}}},
+            {"code_sha", config.model_sha},
+            {"model_artifact_hash", event.strategy_id == StrategyId::ProfessionalMaker && !config.maker_artifact_sha256.empty()
+                ? json::value(config.maker_artifact_sha256) : json::value(nullptr)},
+            {"maker_policy_sha256", config.maker_policy_sha256.empty() ? json::value(nullptr) : json::value(config.maker_policy_sha256)},
+            {"prediction_model_kind", event.strategy_id == StrategyId::ProfessionalMaker
+                ? (config.maker_valid_cells > 0 ? "EXECUTION_CELLS_LOADED" : "DEFAULT_BASELINE")
+                : "FROZEN_DIRECTIONAL_RULE"},
+            {"maker_valid_cells", config.maker_valid_cells},
             {"model_family", component},
             {"paper_exploration", true},
             {"economic_authority", "PAPER_EXPLORATION"},
@@ -229,6 +242,59 @@ struct NativeRuntimeEvidenceWriter::Impl {
         owner.written_.fetch_add(1, std::memory_order_release);
     }
 
+    void write_observation(const NativeObservation& event) {
+        if (!observations_file.is_open()) {
+            const auto directory = fs::path(config.run_root) / "research/native_observations" / config.run_id;
+            fs::create_directories(directory);
+            observations_path = directory / (config.market_id + "-" + capture_id + ".jsonl");
+            observations_file.open(observations_path, std::ios::app);
+            if (!observations_file) throw std::runtime_error("native observations open failed");
+        }
+        json::array bids, asks;
+        for (std::size_t i = 0; i < 10; ++i) {
+            if (event.bid_prices[i] > 0) bids.emplace_back(json::array{event.bid_prices[i], event.bid_quantities[i]});
+            if (event.ask_prices[i] > 0) asks.emplace_back(json::array{event.ask_prices[i], event.ask_quantities[i]});
+        }
+        json::object value{
+            {"schema", "polymarket_v7_native_observation_v1"},
+            {"paper_only", true}, {"execution_authority", false},
+            {"code_sha", config.model_sha},
+            {"model_artifact_hash", event.kind == 4 && !config.maker_artifact_sha256.empty()
+                ? json::value(config.maker_artifact_sha256) : json::value(nullptr)},
+            {"maker_artifact_sha256", config.maker_artifact_sha256.empty() ? json::value(nullptr) : json::value(config.maker_artifact_sha256)},
+            {"maker_policy_sha256", config.maker_policy_sha256.empty() ? json::value(nullptr) : json::value(config.maker_policy_sha256)},
+            {"run_id", config.run_id}, {"server_id", config.server_id},
+            {"market_id", config.market_id}, {"token_id", token(event.instrument_handle)},
+            {"asset", config.asset}, {"horizon", config.horizon},
+            {"capture_id", capture_id}, {"connection_epoch", event.connection_epoch},
+            {"sequence", ++observation_sequence}, {"kind", event.kind},
+            {"event_receive_monotonic_ns", event.event_receive_ns}, {"event_exchange_ns", event.event_exchange_ns},
+            {"native_event_kind", event.event_kind},
+            {"minimum_order_microunits", config.minimum_order_microunits},
+            {"risk_policy_sha256", config.risk_policy_sha256}, {"fee_source", config.fee_source},
+            {"receive_monotonic_ns", event.receive_ns}, {"exchange_event_ns", event.exchange_ns},
+            {"observed_monotonic_ns", event.observed_ns}, {"trigger_monotonic_ns", event.trigger_ns},
+            {"decision_monotonic_ns", event.decision_ns}, {"close_monotonic_ns", event.close_ns},
+            {"receive_wall_ms", wall_ms_from_monotonic(event.receive_ns)},
+            {"signal_version", event.signal_version}, {"book_version", event.book_version},
+            {"signal_return_bp", std::isfinite(event.signal_return_bp) ? json::value(event.signal_return_bp) : json::value(nullptr)}, {"direction", event.direction},
+            {"reason", event.reason}, {"accepted", event.accepted != 0}, {"book_valid", event.valid != 0},
+            {"bid_e4", event.bid_e4}, {"ask_e4", event.ask_e4}, {"tick_e4", event.tick_e4},
+            {"bid_quantity", event.bid_quantity}, {"ask_quantity", event.ask_quantity},
+            {"bids", std::move(bids)}, {"asks", std::move(asks)},
+            {"trade_side", event.trade_side}, {"trade_e4", event.trade_e4}, {"trade_quantity", event.trade_quantity},
+            {"fee_rate", config.taker_fee_rate}, {"fee_exponent", config.taker_fee_exponent},
+            {"proposed_quantity", event.proposed_quantity}, {"proposed_price_tick", event.proposed_price_tick},
+            {"ev_uncertainty", event.kind == 4 ? json::value(event.ev_uncertainty) : json::value(nullptr)},
+            {"probability_forecast", nullptr},
+            {"expected_net_edge", event.kind == 4 ? json::value(event.expected_ev) : json::value(nullptr)},
+        };
+        observations_file << json::serialize(value) << '\n';
+        if (!observations_file) throw std::runtime_error("native observations write failed");
+        observations_watermark_ns = std::max(observations_watermark_ns, event.observed_ns);
+        owner.observations_written_.fetch_add(1, std::memory_order_release);
+    }
+
     void write_status() {
         json::object value{
             {"schema", "polymarket_v7_native_evidence_status_v1"},
@@ -238,10 +304,15 @@ struct NativeRuntimeEvidenceWriter::Impl {
             {"model_sha", config.model_sha},
             {"run_id", config.run_id},
             {"healthy", owner.healthy()},
+            {"market_id", config.market_id},
             {"published", owner.published()},
             {"written", owner.written()},
             {"dropped", owner.dropped()},
             {"queue_depth", owner.queue_.approximate_size()},
+            {"observations_published", owner.observations_published_.load()},
+            {"observations_written", owner.observations_written_.load()},
+            {"observations_dropped", owner.observations_dropped_.load()},
+            {"observations_queue_depth", owner.observations_->approximate_size()},
             {"timestamp_ms", to_ms(wall_now_ns())},
         };
         atomic_write(fs::path(config.run_root) / "control" / "native_evidence_status.json",
@@ -260,14 +331,36 @@ struct NativeRuntimeEvidenceWriter::Impl {
                     progressed = true;
                     write_event(event);
                 }
+                NativeObservation observation{};
+                for (std::size_t i = 0; i < 512 && owner.observations_->try_pop(observation); ++i) {
+                    progressed = true;
+                    write_observation(observation);
+                }
                 const auto now = std::chrono::steady_clock::now();
                 if (now - last_status >= std::chrono::seconds(1)) {
+                    if (observations_file.is_open()) observations_file.flush();
                     write_status();
                     last_status = now;
                 }
                 if (owner.stopping_.load(std::memory_order_acquire)
-                    && owner.queue_.approximate_size() == 0) break;
+                    && owner.queue_.approximate_size() == 0
+                    && owner.observations_->approximate_size() == 0) break;
                 if (!progressed) std::this_thread::sleep_for(std::chrono::milliseconds(1));
+            }
+            if (observations_file.is_open()) {
+                observations_file.flush();
+                if (!observations_file) throw std::runtime_error("observation flush failed");
+                observations_file.close();
+                json::object closed{
+                    {"schema", "polymarket_v7_native_capture_closed_v1"},
+                    {"capture_id", capture_id}, {"run_id", config.run_id}, {"server_id", config.server_id},
+                    {"market_id", config.market_id}, {"code_sha", config.model_sha},
+                    {"closed", true}, {"healthy", owner.healthy()},
+                    {"last_sequence", observation_sequence}, {"watermark_monotonic_ns", observations_watermark_ns},
+                    {"bytes", fs::file_size(observations_path)},
+                    {"source_delete_authorized", false},
+                };
+                atomic_write(observations_path.string() + ".closed.json", json::serialize(closed) + "\n");
             }
             write_status();
         } catch (...) {
@@ -277,6 +370,7 @@ struct NativeRuntimeEvidenceWriter::Impl {
 };
 
 NativeRuntimeEvidenceWriter::NativeRuntimeEvidenceWriter(NativeRuntimeEvidenceConfig config) {
+    observations_ = std::make_unique<SpscRing<NativeObservation, 8192>>();
     impl_ = std::make_unique<Impl>(std::move(config), *this);
 }
 
@@ -292,6 +386,17 @@ bool NativeRuntimeEvidenceWriter::publish(const NativeEvidenceEvent& event) noex
         return false;
     }
     published_.fetch_add(1, std::memory_order_release);
+    return true;
+}
+
+bool NativeRuntimeEvidenceWriter::publish_observation(const NativeObservation& event) noexcept {
+    if (!healthy() || stopping_.load(std::memory_order_acquire)) return false;
+    if (!observations_->try_push(event)) {
+        observations_dropped_.fetch_add(1, std::memory_order_release);
+        healthy_.store(false, std::memory_order_release);
+        return false;
+    }
+    observations_published_.fetch_add(1, std::memory_order_release);
     return true;
 }
 

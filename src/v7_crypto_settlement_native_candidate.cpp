@@ -11,6 +11,7 @@
 #include "pm/v7_market_ws.hpp"
 #include "pm/v7_maker_lane.hpp"
 #include "pm/v7_native_settlement_authority.hpp"
+#include "pm/v7_native_maker_context.hpp"
 #include "pm/v7_spsc.hpp"
 
 #include <boost/json.hpp>
@@ -90,10 +91,15 @@ struct Options {
     std::int64_t close_wall_ns = 0;
     std::int32_t tick_size_e4 = 100;
     std::int64_t min_order_microunits = 5'000'000;
+    std::int64_t maker_share_cap_microunits = 1'000'000; // Baseline cap stays unchanged.
+    std::string asset = "BTC", horizon = "M5";
+    std::string risk_policy_sha256;
+    CapitalLimits capital_limits{};
     double taker_fee_rate = 0.0;
     double taker_fee_exponent = 1.0;
     int duration_seconds = 0;
     bool validate_only = false;
+    bool observation_only = false;
 };
 
 Options parse_options(int argc, char** argv) {
@@ -117,10 +123,19 @@ Options parse_options(int argc, char** argv) {
         else if (arg == "--close-wall-ns") out.close_wall_ns = bounded_integer<std::int64_t>(next(), 1, std::numeric_limits<std::int64_t>::max());
         else if (arg == "--tick-size-e4") out.tick_size_e4 = bounded_integer<std::int32_t>(next(), 1, 5000);
         else if (arg == "--min-order-microunits") out.min_order_microunits = bounded_integer<std::int64_t>(next(), 1, 1'000'000'000);
+        else if (arg == "--maker-share-cap-microunits") out.maker_share_cap_microunits = bounded_integer<std::int64_t>(next(), 1, 5'000'000);
+        else if (arg == "--risk-policy-sha256") out.risk_policy_sha256 = next();
+        else if (arg == "--sleeve-budget-microdollars") out.capital_limits.sleeve_budget_microdollars = bounded_integer<std::int64_t>(next(), 1, 1'000'000'000);
+        else if (arg == "--max-total-exposure-microdollars") out.capital_limits.max_total_exposure_microdollars = bounded_integer<std::int64_t>(next(), 1, 1'000'000'000);
+        else if (arg == "--max-market-exposure-microdollars") out.capital_limits.max_market_exposure_microdollars = bounded_integer<std::int64_t>(next(), 1, 100'000'000);
+        else if (arg == "--max-single-order-microdollars") out.capital_limits.max_single_order_microdollars = bounded_integer<std::int64_t>(next(), 1, 10'000'000);
+        else if (arg == "--asset") out.asset = next();
+        else if (arg == "--horizon") out.horizon = next();
         else if (arg == "--taker-fee-rate") out.taker_fee_rate = bounded_double(next(), 0.0, 1.0);
         else if (arg == "--taker-fee-exponent") out.taker_fee_exponent = bounded_double(next(), 0.0, 10.0);
         else if (arg == "--duration-seconds") out.duration_seconds = bounded_integer<int>(next(), 0, 86'400);
         else if (arg == "--validate-only") out.validate_only = true;
+        else if (arg == "--observation-only") out.observation_only = true;
         else throw std::invalid_argument("unknown option");
     }
     return out;
@@ -165,6 +180,8 @@ int main(int argc, char** argv) {
             throw std::invalid_argument("live PAPER runtime identity required");
         }
 
+        if (options.asset != "BTC" || options.horizon != "M5")
+            throw std::invalid_argument("native binary supports BTC/M5 only; other contexts remain shadow");
         constexpr std::uint64_t kAsset = 1, kMarket = 1, kEvent = 1, kYes = 1, kNo = 2;
         IngressWakeup wakeup;
         ExternalVenueIngress binance_ingress(VenueId::BinanceSpot, kAsset, nullptr, &wakeup);
@@ -226,11 +243,15 @@ int main(int argc, char** argv) {
         // signal's shorter technical valid flag is not an economic expiry.
         decision_policy.require_signal_valid = 0;
         NativeCryptoDecisionLane lane(decision_policy);
-        CapitalLimits limits;
-        limits.sleeve_budget_microdollars = 1'000'000'000LL;
-        limits.max_total_exposure_microdollars = 1'000'000'000LL;
-        limits.max_market_exposure_microdollars = 100'000'000LL;
-        limits.max_single_order_microdollars = 10'000'000LL;
+        CapitalLimits limits = options.capital_limits;
+        if (!options.observation_only && (!limits.valid() || options.risk_policy_sha256.size() != 64
+            || !std::all_of(options.risk_policy_sha256.begin(), options.risk_policy_sha256.end(),
+                [](char c) { return (c >= '0' && c <= '9') || (c >= 'a' && c <= 'f'); })))
+            throw std::invalid_argument("validated canonical capital policy required");
+        if (options.observation_only && !limits.valid()) {
+            // No order is admissible in this mode; zero-risk probes need no funds.
+            limits = {1'000'000, 1'000'000, 1'000'000, 1'000'000};
+        }
         NativeSettlementAuthority authority(limits);
         NativeSettlementOmsEndpoint adapter_endpoint(authority);
         NativePaperExecutionAdapter paper_execution(adapter_endpoint);
@@ -250,7 +271,10 @@ int main(int argc, char** argv) {
         evidence_config.taker_fee_rate = options.taker_fee_rate;
         evidence_config.taker_fee_exponent = options.taker_fee_exponent;
         evidence_config.taker_only_fee = 1;
-        NativeRuntimeEvidenceWriter evidence_writer(evidence_config);
+        evidence_config.minimum_order_microunits = options.min_order_microunits;
+        evidence_config.risk_policy_sha256 = options.risk_policy_sha256;
+        evidence_config.asset = options.asset;
+        evidence_config.horizon = options.horizon;
         // Zero-authority shadow begins from an explicit flat canonical inventory
         // snapshot. Non-zero recovery inventory must come from the future native
         // recovery/reconciliation boundary; strategy lanes never synthesize it.
@@ -261,9 +285,15 @@ int main(int argc, char** argv) {
         maker::MakerInstrumentLane yes_maker(+1), no_maker(-1);
         maker::MakerModelSnapshot maker_model;
         if (!maker_model.valid()) throw std::runtime_error("invalid native maker model snapshot");
+        evidence_config.maker_artifact_sha256 = maker_model.execution_artifact_sha256.data();
+        evidence_config.maker_policy_sha256 = maker_model.exploration_policy_sha256.data();
+        evidence_config.maker_valid_cells = std::count_if(maker_model.execution_cells.begin(),
+            maker_model.execution_cells.end(), [](const auto& cell) { return cell.valid != 0; });
+        auto evidence_owner = std::make_unique<NativeRuntimeEvidenceWriter>(evidence_config);
+        auto& evidence_writer = *evidence_owner;
         maker::MakerLaneContext maker_context;
-        maker_context.risk.max_quote_shares = maker_model.base_quote_shares;
-        maker_context.risk.max_abs_residual_shares = maker_model.base_quote_shares;
+        maker_context.risk.max_quote_shares = options.maker_share_cap_microunits / 1'000'000.0;
+        maker_context.risk.max_abs_residual_shares = options.maker_share_cap_microunits / 1'000'000.0;
 
         const auto start_mono = monotonic_now_ns();
         const auto start_wall = wall_now_ns();
@@ -298,11 +328,39 @@ int main(int argc, char** argv) {
         std::uint64_t maker_cancel_intents = 0, maker_cancel_handoffs = 0;
         std::uint64_t maker_cancel_not_ready = 0, maker_duplicate_quotes = 0;
         std::uint64_t maker_replace_pending = 0;
+        std::uint64_t maker_inadmissible_quantity = 0;
         std::uint64_t paper_trade_sequence = 0, paper_fill_events = 0;
         std::uint64_t paper_invalid_trades = 0, paper_submit_failures = 0;
         std::uint64_t arbitration_conflicts = 0, authority_rejections = 0;
         std::uint64_t inventory_rejections = 0, minimum_size_rejections = 0;
-        std::uint64_t last_measured_signal_version = 0;
+        std::uint64_t last_measured_signal_version = 0, last_observed_signal_version = 0;
+        std::uint8_t last_observed_reason = 0;
+        const auto observation = [&](const BookHotSnapshot& book, std::uint64_t instrument,
+                                     std::uint8_t kind) noexcept {
+            NativeObservation out{};
+            out.instrument_handle = instrument; out.kind = kind;
+            out.book_version = book.state_version; out.signal_version = current_signal.signal_version;
+            out.connection_epoch = pm_epoch.load(std::memory_order_acquire);
+            out.receive_ns = book.receive_monotonic_ns; out.exchange_ns = book.exchange_event_ns;
+            out.observed_ns = monotonic_now_ns(); out.close_ns = market.close_monotonic_ns;
+            out.trigger_ns = current_signal.trigger_receive_monotonic_ns;
+            out.direction = current_signal.direction;
+            out.signal_return_bp = current_signal.binance_return_100ms_bp;
+            out.valid = book.valid != 0 && book.lineage_continuous != 0;
+            out.bid_e4 = book.best_bid_e4; out.ask_e4 = book.best_ask_e4; out.tick_e4 = book.tick_size_e4;
+            out.bid_quantity = book.best_bid_microunits; out.ask_quantity = book.best_ask_microunits;
+            for (std::size_t i = 0; i < 10; ++i) {
+                if (i < book.bid_level_count && i < book.bid_levels.size()) {
+                    out.bid_prices[i] = book.bid_levels[i].price_e4;
+                    out.bid_quantities[i] = book.bid_levels[i].quantity_microunits;
+                }
+                if (i < book.ask_level_count && i < book.ask_levels.size()) {
+                    out.ask_prices[i] = book.ask_levels[i].price_e4;
+                    out.ask_quantities[i] = book.ask_levels[i].quantity_microunits;
+                }
+            }
+            return out;
+        };
         const auto publish_order = [&](const NativeOrderCommand& command,
                                        ExecutionPolicyId policy,
                                        std::int64_t exchange_event_ns,
@@ -463,6 +521,17 @@ int main(int argc, char** argv) {
                 }
                 if (pm_ready && pending_pm.event.receive_monotonic_ns == receive_ns) {
                     const auto& event = pending_pm.event;
+                    auto book_observation = observation(event.book, event.instrument_handle, 1);
+                    book_observation.event_kind = static_cast<std::uint8_t>(event.kind);
+                    book_observation.event_receive_ns = event.receive_monotonic_ns;
+                    book_observation.event_exchange_ns = event.exchange_event_ns;
+                    if (event.kind == MarketWsEventKind::Trade) {
+                        book_observation.kind = 3;
+                        book_observation.trade_e4 = event.price_e4;
+                        book_observation.trade_quantity = event.quantity_microunits;
+                        book_observation.trade_side = static_cast<std::uint8_t>(event.side);
+                    }
+                    if (!evidence_writer.publish_observation(book_observation)) ++adapter_handoff_failures;
                     if (event.kind == MarketWsEventKind::Trade
                         && event.instrument_handle != 0 && event.price_e4 > 0
                         && event.quantity_microunits > 0 && event.book.tick_size_e4 > 0) {
@@ -495,6 +564,16 @@ int main(int argc, char** argv) {
                     }
                     maker::MakerDecision maker_decision;
                     bool maker_event = false;
+                    if (event.book.tick_size_e4 > 0) maker_model.tick_size = event.book.tick_size_e4 / 10'000.0;
+                    maker_context = native_maker_context(authority, kYes, kNo,
+                        event.instrument_handle, maker_context.risk);
+                    const auto maker_quantity = native_maker_admissible_quantity(
+                        1'000'000, options.min_order_microunits, options.maker_share_cap_microunits,
+                        event.book.best_ask_e4, limits.max_single_order_microdollars,
+                        authority.capital_snapshot().available_microdollars,
+                        std::min(event.book.best_bid_microunits, event.book.best_ask_microunits));
+                    maker_context.risk.new_risk_frozen = maker_quantity == 0 ? 1 : 0;
+                    if (maker_quantity > 0) maker_model.base_quote_shares = maker_quantity / 1'000'000.0;
                     if (event.instrument_handle == kYes) {
                         yes_book = event.book;
                         maker_decision = yes_maker.on_market_event(event, maker_context, maker_model);
@@ -524,6 +603,19 @@ int main(int argc, char** argv) {
                                 continue;
                             }
                             if (intent.type != IntentType::Quote) continue;
+                            auto maker_observation = observation(event.book, event.instrument_handle, 4);
+                            maker_observation.decision_ns = intent.decision_monotonic_ns;
+                            maker_observation.proposed_quantity = intent.quantity_microunits;
+                            maker_observation.proposed_price_tick = intent.price_tick;
+                            maker_observation.expected_ev = intent.expected_ev;
+                            maker_observation.ev_uncertainty = intent.ev_uncertainty;
+                            maker_observation.trade_side = static_cast<std::uint8_t>(intent.side);
+                            maker_observation.reason = static_cast<std::uint8_t>(maker_decision.reason);
+                            if (!evidence_writer.publish_observation(maker_observation)) ++adapter_handoff_failures;
+                            if (intent.quantity_microunits < options.min_order_microunits) {
+                                ++maker_inadmissible_quantity;
+                                continue;
+                            }
                             ExecutionPlan plan;
                             plan.intent = intent;
                             plan.tick_size_e4 = event.book.tick_size_e4;
@@ -544,10 +636,20 @@ int main(int argc, char** argv) {
                 input.market = market;
                 input.yes_book = yes_book;
                 input.no_book = no_book;
-                input.now_monotonic_ns = receive_ns;
+                input.now_monotonic_ns = monotonic_now_ns();
                 const auto result = lane.construct_candidate(input);
                 const auto finished = monotonic_now_ns();
                 ++evaluations;
+                const auto observation_reason = static_cast<std::uint8_t>(result.reason);
+                if (current_signal.signal_version != last_observed_signal_version
+                    || observation_reason != last_observed_reason || result.accepted != 0) {
+                    last_observed_signal_version = current_signal.signal_version;
+                    last_observed_reason = observation_reason;
+                    auto point = observation(current_signal.direction > 0 ? yes_book : no_book,
+                        current_signal.direction > 0 ? kYes : kNo, 2);
+                    point.decision_ns = finished; point.reason = observation_reason; point.accepted = result.accepted;
+                    if (!evidence_writer.publish_observation(point)) ++adapter_handoff_failures;
+                }
                 const auto reason_index = static_cast<std::size_t>(result.reason);
                 if (reason_index < reasons.size()) ++reasons[reason_index];
                 if (current_signal.signal_version != last_measured_signal_version) {
@@ -568,6 +670,9 @@ int main(int argc, char** argv) {
                 }
             }
 
+            if (!evidence_writer.healthy()) { ++adapter_handoff_failures; break; }
+            // Read-only research probes cannot reach admission or the economic ledger.
+            if (options.observation_only) continue;
             // Portfolio arbitration is deliberately fail-closed until all
             // component wealth scores are on one native comparable scale.
             // Exactly one new-risk alpha candidate may reach the sole authority.
@@ -729,12 +834,17 @@ int main(int argc, char** argv) {
             {"schema", "polymarket_v7_crypto_settlement_native_candidate_v2"},
             {"paper_only", true}, {"authenticated_execution", false},
             {"real_order_submission", false}, {"real_capital_at_risk", false},
-            {"authority", "PAPER_SIMULATED_SINGLE_OWNER"},
+            {"authority", options.observation_only ? "ZERO_AUTHORITY_RESEARCH" : "PAPER_SIMULATED_SINGLE_OWNER"},
+            {"observation_only", options.observation_only},
             {"critical_path", "CPP_SAME_PROCESS_FEED_DECODE_TO_SINGLE_SETTLEMENT_AUTHORITY"},
             {"clean_capture", clean}, {"duration_seconds", options.duration_seconds},
             {"evaluations", evaluations}, {"accepted_candidates", accepted},
             {"taker_accepted", taker_accepted}, {"maker_accepted", maker_accepted},
             {"maker_decisions", maker_decisions}, {"maker_candidates", maker_candidates},
+            {"maker_inadmissible_quantity", maker_inadmissible_quantity},
+            {"maker_quote_share_cap", maker_context.risk.max_quote_shares},
+            {"maker_model_valid_cells", std::count_if(maker_model.execution_cells.begin(),
+                maker_model.execution_cells.end(), [](const auto& cell) { return cell.valid != 0; })},
             {"maker_cancel_intents", maker_cancel_intents},
             {"maker_cancel_handoffs", maker_cancel_handoffs},
             {"maker_cancel_not_ready", maker_cancel_not_ready},

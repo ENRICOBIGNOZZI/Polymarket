@@ -94,3 +94,48 @@ def test_fill_after_final_invalidates_projection():
     fills=[fill()];end=final(fills);errors=[]
     list(iter_position_economics([*fills,end,fill('late')],errors))
     assert errors==['fill_after_final:m']
+
+
+def test_rollover_keeps_cost_basis_and_fee_until_verified_final():
+    from v7_native_risk_policy import unsettled_exposure,remaining_capital_lease
+    fills=[fill()]
+    pending=unsettled_exposure(fills,SHA)
+    assert pending['total_unsettled_microdollars']==2_010_000
+    receipt={'limits':{'sleeve_budget_microdollars':10_000_000,'max_total_exposure_microdollars':10_000_000,
+        'max_market_exposure_microdollars':10_000_000,'max_single_order_microdollars':10_000_000}}
+    lease=remaining_capital_lease(receipt,pending)
+    assert lease['limits']['sleeve_budget_microdollars']==7_990_000
+    assert receipt['limits']['sleeve_budget_microdollars']==10_000_000
+    after=unsettled_exposure([*fills,final(fills)],SHA)
+    assert after['total_unsettled_microdollars']==0
+    assert remaining_capital_lease(receipt,after)['limits']['sleeve_budget_microdollars']==10_000_000
+
+
+def test_bad_final_cannot_release_unsettled_claim():
+    from v7_native_risk_policy import unsettled_exposure
+    fills=[fill()];end=final(fills);end['final_pnl']+=100
+    with pytest.raises(ValueError):unsettled_exposure([*fills,end],SHA)
+
+
+def test_unsettled_claims_can_exhaust_allowance_without_reset():
+    from v7_native_risk_policy import remaining_capital_lease
+    receipt={'limits':{'sleeve_budget_microdollars':1,'max_total_exposure_microdollars':1,
+        'max_market_exposure_microdollars':1,'max_single_order_microdollars':1}}
+    result=remaining_capital_lease(receipt,{'total_unsettled_microdollars':2})
+    assert result['limits'] is None and not result['lease_available']
+
+
+def test_market_commit_barrier_waits_for_canonical_ledger(tmp_path, monkeypatch):
+    import types
+    import v7_native_crypto_engine_manager as manager
+    control=tmp_path/'control';control.mkdir();(tmp_path/'ledger/spool').mkdir(parents=True)
+    status={'model_sha':SHA,'run_id':'r','market_id':'m','healthy':True,'dropped':0,'published':1,'written':1}
+    (control/'native_evidence_status.json').write_text(json.dumps(status))
+    monkeypatch.setattr(manager,'iter_events',lambda *a,**k:iter([]))
+    monkeypatch.setattr(manager,'open_native_orders',lambda *a:{})
+    assert not manager.native_commit_barrier(tmp_path,SHA,'r','m',timeout=.01)
+    row=types.SimpleNamespace(record_id='r:m:native:00000000000000000001')
+    monkeypatch.setattr(manager,'iter_events',lambda *a,**k:iter([row]))
+    assert manager.native_commit_barrier(tmp_path,SHA,'r','m',timeout=.01)
+    (tmp_path/'ledger/spool/r:m:native:00000000000000000001.json').write_text('{}')
+    assert not manager.native_commit_barrier(tmp_path,SHA,'r','m',timeout=.01)

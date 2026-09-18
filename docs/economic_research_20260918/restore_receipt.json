@@ -1,0 +1,6 @@
+{
+  "schema": "polymarket_restore_receipt_v1",
+  "dataset_sha256": "3b85c11ac69dced547268e4ea05a27d98c65064222b119dbd99c48ec6bdbd102",
+  "passed": true,
+  "source_delete_authorized": false
+}

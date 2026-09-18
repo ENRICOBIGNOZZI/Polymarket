@@ -211,6 +211,8 @@ struct MakerModelSnapshot {
     // stale evidence leaves all cells invalid and the kernel uses GLOBAL.
     MakerModelSnapshot() noexcept;
 
+    std::array<char, 65> execution_artifact_sha256{};
+    std::array<char, 65> exploration_policy_sha256{};
     std::uint64_t model_version = 1;
     std::uint64_t policy_version = 1;
     double tick_size = 0.01;

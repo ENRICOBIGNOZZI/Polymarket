@@ -34,12 +34,16 @@ def _metadata(row: dict[str, Any]) -> dict[str, Any]:
 def context_from_fill(row: dict[str, Any]) -> dict[str, str]:
     meta = _metadata(row)
     context = meta.get('crypto_context') or {}
+    if not isinstance(context, dict):
+        raise ProjectionError('crypto_context:invalid')
     asset = str(context.get('asset') or meta.get('asset') or row.get('asset') or '').upper()
     horizon = str(context.get('horizon') or meta.get('horizon') or row.get('horizon') or '').upper()
     # These two historical strategies have an explicit immutable BTC/M5 scope.
     # Generic maker/native engine names must never imply an asset by themselves.
     if not asset or not horizon:
         if meta.get('model_family') in {'crypto_informed_taker', 'lead_lag_taker_v1'}:
+            if (asset and asset != 'BTC') or (horizon and horizon != 'M5'):
+                raise ProjectionError('crypto_context:conflicts_with_frozen_strategy')
             asset, horizon = 'BTC', 'M5'
     if not asset or not horizon:
         raise ProjectionError('crypto_context:missing')
@@ -70,7 +74,7 @@ def allocate_final(final: dict[str, Any], fills: list[dict[str, Any]]) -> list[d
     included = meta.get('included_fill_ids')
     if not all(ids) or len(set(ids)) != len(ids):
         raise ProjectionError('fill_identity:duplicate_or_missing')
-    if not isinstance(included, list) or len(set(included)) != len(included) or set(included) != set(ids):
+    if not isinstance(included, list) or not all(isinstance(x, str) and x for x in included) or len(set(included)) != len(included) or set(included) != set(ids):
         raise ProjectionError('settlement_fill_set:incomplete_or_conflicting')
     winner = str(meta.get('winning_token_id') or '')
     if not winner:
@@ -85,6 +89,10 @@ def allocate_final(final: dict[str, Any], fills: list[dict[str, Any]]) -> list[d
             raise ProjectionError('fill_authority:invalid')
         fm = _metadata(fill)
         receipt = fm.get('native_settlement_receipt') or {}
+        if not isinstance(receipt, dict):
+            raise ProjectionError('fill_receipt:invalid')
+        if not isinstance(fill.get('order_id'), str) or not fill['order_id']:
+            raise ProjectionError('fill_order:missing')
         if (receipt.get('owner') != 'V7_NATIVE_CRYPTO_SETTLEMENT_ENGINE'
                 or receipt.get('model_sha') != sha or receipt.get('single_owner') is not True):
             raise ProjectionError('fill_receipt:invalid')

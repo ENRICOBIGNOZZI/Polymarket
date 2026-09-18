@@ -157,7 +157,7 @@ def wait_for_record(run_root: Path, model_sha: str, record_id: str, timeout: flo
 
 
 def settle(args: argparse.Namespace) -> int:
-    status_path = args.run_root / "control" / "native_paper_settlement_status.json"
+    status_path = getattr(args, "status_path", None) or args.run_root / "control" / "native_paper_settlement_status.json"
     deadline = time.monotonic() + args.timeout_seconds
     while True:
         events = market_events(args.run_root, args.model_sha, args.market_id)
@@ -279,9 +279,12 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--market-id", required=True)
     parser.add_argument("--gamma-url", default="https://gamma-api.polymarket.com")
     parser.add_argument("--timeout-seconds", type=int, default=120)
+    parser.add_argument("--status-path", type=Path)
     args = parser.parse_args()
     if len(args.model_sha) != 40 or any(ch not in "0123456789abcdef" for ch in args.model_sha):
         parser.error("exact lowercase model SHA required")
+    if args.status_path and not args.status_path.resolve().is_relative_to((args.run_root / "control").resolve()):
+        parser.error("settlement status must stay under run-root/control")
     if args.timeout_seconds < 1 or args.timeout_seconds > 600:
         parser.error("invalid timeout")
     return args
