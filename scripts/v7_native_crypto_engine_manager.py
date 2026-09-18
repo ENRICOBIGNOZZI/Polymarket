@@ -9,6 +9,8 @@ canonical ledger writer, and never submits a real order.
 from __future__ import annotations
 
 import argparse
+import fcntl
+from decimal import Decimal, InvalidOperation
 import json
 import math
 import os
@@ -19,12 +21,14 @@ import sys
 import time
 import urllib.parse
 import urllib.request
-from dataclasses import dataclass
+from dataclasses import dataclass, asdict
 from pathlib import Path
 from typing import Any
 
 from v7_execution_ledger import native_order_id_matches, LedgerEvent, canonical_ledger_path, iter_events
 from v7_ledger_spool import spool_event
+from v7_native_risk_policy import load_native_limits, unsettled_exposure
+from v7_native_settlement_projection import context_from_fill
 
 STATUS_SCHEMA = "polymarket_v7_native_engine_manager_status_v1"
 
@@ -150,6 +154,18 @@ def tick_size_e4(token_id: str) -> int:
     return scaled
 
 
+def venue_minimum_microunits(token_id: str) -> int:
+    value = public_json("https://clob.polymarket.com/book?" + urllib.parse.urlencode({"token_id": token_id}))
+    if not isinstance(value, dict):
+        raise RuntimeError("venue_minimum_response_invalid")
+    try:
+        quantity = Decimal(str(value["min_order_size"])) * 1_000_000
+    except (KeyError, InvalidOperation, ValueError) as exc:
+        raise RuntimeError("venue_minimum_missing") from exc
+    if not quantity.is_finite() or quantity <= 0 or quantity != quantity.to_integral_value():
+        raise RuntimeError("venue_minimum_invalid")
+    return int(quantity)
+
 def fee_parameters(row: dict[str, Any]) -> tuple[float, float, str]:
     explicit = row.get("fees_enabled_explicit") is True
     enabled = row.get("fees_enabled") is True
@@ -250,6 +266,32 @@ def wait_for_record(run_root: Path, model_sha: str, record_id: str, timeout: flo
     return False
 
 
+def native_commit_barrier(run_root: Path, model_sha: str, run_id: str,
+                          market_id: str, timeout: float = 10.0) -> bool:
+    """Spool publication is not a canonical commit acknowledgement."""
+    deadline = time.monotonic() + timeout
+    prefix = f"{run_id}:{market_id}:native:"
+    while time.monotonic() < deadline:
+        per_market = run_root / "control/native_evidence" / (market_id + ".json")
+        status = read_json(per_market if per_market.is_file() else run_root / "control/native_evidence_status.json")
+        if (status.get("model_sha") == model_sha and status.get("run_id") == run_id
+                and status.get("market_id") == market_id and status.get("healthy") is True
+                and status.get("dropped") == 0 and status.get("published") == status.get("written")):
+            try:
+                events = list(iter_events(canonical_ledger_path(run_root), expected_model_sha=model_sha))
+                committed = {event.record_id for event in events if event.record_id.startswith(prefix)}
+                pending = list((run_root / "ledger/spool").glob(prefix + "*.json"))
+                if len(committed) == int(status["written"]) and not pending:
+                    return not any(str(event.market_id) == market_id for event in open_native_orders(run_root, model_sha).values())
+            except (OSError, ValueError):
+                pass
+        time.sleep(0.1)
+    return False
+
+class CapitalLeaseUnavailable(RuntimeError):
+    pass
+
+
 @dataclass
 class Worker:
     context: str
@@ -305,7 +347,13 @@ class Manager:
         self.workers: dict[str, Worker] = {}
         self.completed_market_ids: set[str] = set()
         self.stopping = False
-        self.global_budget_microdollars = _execution_budget_microdollars(args.allocation)
+        self.pending_settlements: dict[str, Worker] = {}
+        self.base_risk_receipt = load_native_limits(
+            read_json(args.repository_root / "config/v7_native_risk_policy.json"),
+            read_json(self.run_root / "control/allocations/manifest.json"))
+        self.allocated_execution_budget_microdollars = _execution_budget_microdollars(args.allocation)
+        self.global_budget_microdollars = min(self.allocated_execution_budget_microdollars,
+            self.base_risk_receipt["limits"]["max_total_exposure_microdollars"])
         self.partition_count = _enabled_context_count(args.market_registry)
         self.partition_microdollars = self.global_budget_microdollars // self.partition_count
         if self.partition_microdollars <= 0:
@@ -331,7 +379,7 @@ class Manager:
             child.wait(timeout=5)
 
     def _terminate_all(self) -> None:
-        for worker in list(self.workers.values()):
+        for worker in [*self.workers.values(), *self.pending_settlements.values()]:
             self._terminate_process(worker.process)
             self._terminate_process(worker.settlement)
 
@@ -423,6 +471,10 @@ class Manager:
             "written": sum(int(row.get("written") or 0) for row in rows),
             "dropped": sum(int(row.get("dropped") or 0) for row in rows),
             "queue_depth": sum(int(row.get("queue_depth") or 0) for row in rows),
+            "observations_published": sum(int(row.get("observations_published") or 0) for row in rows),
+            "observations_written": sum(int(row.get("observations_written") or 0) for row in rows),
+            "observations_dropped": sum(int(row.get("observations_dropped") or 0) for row in rows),
+            "observations_queue_depth": sum(int(row.get("observations_queue_depth") or 0) for row in rows),
             "timestamp_ms": time.time_ns() // 1_000_000,
             "worker_count": len(rows),
             "markets": sorted(str(row.get("market_id") or "") for row in rows if row.get("market_id")),
@@ -461,6 +513,10 @@ class Manager:
             "single_native_hot_path": True,
             "single_native_portfolio_owner": True,
             "partitioned_native_workers": True,
+            "asynchronous_settlement": bool(getattr(self.args, "asynchronous_settlement", False)),
+            "pending_settlement_markets": sorted(self.pending_settlements),
+            "risk_policy_sha256": self.base_risk_receipt["risk_policy_sha256"],
+            "allocated_execution_budget_microdollars": self.allocated_execution_budget_microdollars,
             "engine_pid": min(pids) if pids else 0,
             "engine_pids": pids,
             "market_id": str(workers[0]["market_id"]) if workers else "",
@@ -518,6 +574,8 @@ class Manager:
         no_tick = tick_size_e4(no_token)
         if yes_tick != no_tick:
             raise RuntimeError("complement_tick_size_mismatch")
+        minimum_order = max(self.args.min_order_microunits,
+            venue_minimum_microunits(yes_token), venue_minimum_microunits(no_token))
         fee_rate, fee_exponent, fee_source = fee_parameters(market)
         close_unix = _close_unix(market)
         close_wall_ns = close_unix * 1_000_000_000
@@ -533,9 +591,9 @@ class Manager:
         coinbase_symbol = str(symbols.get("coinbase_spot") or "NONE")
         if not binance_symbol:
             raise RuntimeError("binance_spot_symbol_missing")
-        max_market = min(budget_microdollars, 100_000_000)
-        max_order = min(max_market, 10_000_000)
-        return [
+        max_market = min(budget_microdollars, self.base_risk_receipt["limits"]["max_market_exposure_microdollars"])
+        max_order = min(max_market, self.base_risk_receipt["limits"]["max_single_order_microdollars"])
+        command = [
             str(self.args.engine),
             "--asset", str(market["asset"]),
             "--horizon", str(market["horizon"]),
@@ -552,7 +610,9 @@ class Manager:
             "--fee-source", fee_source,
             "--close-wall-ns", str(close_wall_ns),
             "--tick-size-e4", str(yes_tick),
-            "--min-order-microunits", str(self.args.min_order_microunits),
+            "--min-order-microunits", str(minimum_order),
+            "--maker-share-cap-microunits", str(self.args.maker_share_cap_microunits),
+            "--risk-policy-sha256", self.base_risk_receipt["risk_policy_sha256"],
             "--sleeve-budget-microdollars", str(budget_microdollars),
             "--max-total-exposure-microdollars", str(budget_microdollars),
             "--max-market-exposure-microdollars", str(max_market),
@@ -561,6 +621,9 @@ class Manager:
             "--taker-fee-exponent", repr(fee_exponent),
             "--duration-seconds", "0",
         ]
+        if getattr(self.args, "capture_native_observations", False):
+            command.append("--capture-native-observations")
+        return command
 
     def _wrapped_hot_command(self, command: list[str]) -> list[str]:
         launch = list(command)
@@ -583,9 +646,36 @@ class Manager:
             launch = [nice, "-n", str(hot_nice)] + launch
         return launch
 
+    def _context_lease(self, context: str) -> int:
+        ledger = canonical_ledger_path(self.run_root)
+        rows = [asdict(event) for event in iter_events(ledger, expected_model_sha=self.args.model_sha)] if ledger.is_file() else []
+        exposure = unsettled_exposure(rows, self.args.model_sha)
+        contexts = {}
+        for row in rows:
+            if row.get("event_type") == "FILL":
+                label = context_from_fill(row)
+                key = str(row["market_id"])
+                current = f"{label['asset']}:{label['horizon']}"
+                if key in contexts and contexts[key] != current:
+                    raise ValueError("market has conflicting capital contexts")
+                contexts[key] = current
+        used = sum(claim for market, claim in exposure["unsettled_market_claims_microdollars"].items()
+                   if contexts.get(market) == context)
+        available = self.partition_microdollars - used
+        atomic_json(self.run_root / "control/native_risk_leases" / (context.replace(":", "_") + ".json"), {
+            "schema": "polymarket_v7_native_context_lease_v1", "context": context,
+            "paper_only": True, "model_sha": self.args.model_sha, "run_id": self.args.run_id,
+            "timestamp_ms": time.time_ns() // 1_000_000, "risk_policy_sha256": self.base_risk_receipt["risk_policy_sha256"],
+            "partition_microdollars": self.partition_microdollars, "unsettled_microdollars": used,
+            "available_microdollars": max(0, available)})
+        if available <= 0:
+            raise CapitalLeaseUnavailable("unresolved capital claim exhausts context allowance")
+        return available
+
     def launch_worker(self, context: str, market: dict[str, Any]) -> Worker:
+        budget_microdollars = self._context_lease(context)
         command = self._wrapped_hot_command(
-            self._launch_command(market, self.partition_microdollars))
+            self._launch_command(market, budget_microdollars))
         log_dir = self.args.engine_log.parent
         log_dir.mkdir(parents=True, exist_ok=True)
         safe_context = context.lower().replace(":", "_")
@@ -604,7 +694,7 @@ class Manager:
             raise
         return Worker(
             context=context, market=market,
-            budget_microdollars=self.partition_microdollars,
+            budget_microdollars=budget_microdollars,
             process=child, log_handle=handle,
         )
 
@@ -616,11 +706,17 @@ class Manager:
             worker.log_handle.close()
             if rc != 0:
                 return int(rc)
+            if not native_commit_barrier(self.run_root, self.args.model_sha, self.args.run_id,
+                                         str(worker.market["market_id"])):
+                return 75
             worker.state = "SETTLING"
             worker.settlement = subprocess.Popen(
                 self._settlement_command(str(worker.market["market_id"])),
                 cwd=self.args.repository_root,
             )
+            if getattr(self.args, "asynchronous_settlement", False):
+                self.pending_settlements[str(worker.market["market_id"])] = worker
+                self.workers.pop(key, None)
             return None
         if worker.state == "SETTLING":
             assert worker.settlement is not None
@@ -680,6 +776,19 @@ class Manager:
         return 0
 
     def run(self) -> int:
+        lock_path = self.run_root / "control/native_engine_manager.lock"
+        lock_path.parent.mkdir(parents=True, exist_ok=True)
+        with lock_path.open("a") as lock:
+            try:
+                fcntl.flock(lock.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+            except BlockingIOError as exc:
+                raise RuntimeError("native manager already owns this run root") from exc
+            try:
+                return self._run_owned()
+            finally:
+                self._terminate_all()
+
+    def _run_owned(self) -> int:
         self.status("STARTING")
         recovery = self.recover()
         if recovery != 0:
@@ -694,6 +803,17 @@ class Manager:
                 time.sleep(0.5)
                 continue
 
+            # Detached settlements retain claims in their original partition.
+            for market_id, worker in list(self.pending_settlements.items()):
+                assert worker.settlement is not None
+                rc = worker.settlement.poll()
+                if rc is None:
+                    continue
+                if rc != 0:
+                    self.status("SETTLEMENT_BLOCKED", blocker=f"{market_id}_RC_{rc}", targets=targets)
+                    return int(rc)
+                self.completed_market_ids.add(market_id)
+                self.pending_settlements.pop(market_id)
             # Reap engines and settlements before launching replacement windows.
             for key, worker in list(self.workers.items()):
                 rc = self._finish_worker(key, worker)
@@ -716,6 +836,8 @@ class Manager:
                     continue
                 try:
                     self.workers[key] = self.launch_worker(key, market)
+                except CapitalLeaseUnavailable:
+                    continue
                 except (OSError, RuntimeError, ValueError) as exc:
                     self.status("LAUNCH_BLOCKED", blocker=f"{key}:{exc}", targets=targets)
                     self._terminate_all()
@@ -752,11 +874,17 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--python", default="python3")
     parser.add_argument("--settlement-timeout-seconds", type=int, default=600)
     parser.add_argument("--min-order-microunits", type=int, default=5_000_000)
+    parser.add_argument("--maker-share-cap-microunits", type=int, default=1_000_000)
+    parser.add_argument("--asynchronous-settlement", action="store_true")
+    parser.add_argument("--capture-native-observations", action="store_true",
+        help="Explicit bounded research capture; keep off until storage/offload is provisioned")
     args = parser.parse_args()
     if not exact_sha(args.model_sha):
         parser.error("--model-sha must be exact lowercase 40-hex SHA")
     if args.settlement_timeout_seconds < 1 or args.settlement_timeout_seconds > 600:
         parser.error("invalid settlement timeout")
+    if not 0 < args.maker_share_cap_microunits <= 5_000_000:
+        parser.error("invalid maker share cap")
     if args.min_order_microunits <= 0:
         parser.error("invalid minimum order")
     return args

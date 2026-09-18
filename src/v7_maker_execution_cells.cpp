@@ -1,6 +1,7 @@
 #include "pm/v7_maker_hft.hpp"
 
 #include <boost/json.hpp>
+#include <openssl/evp.h>
 
 #include <algorithm>
 #include <cmath>
@@ -17,6 +18,20 @@ namespace pm::v7::maker {
 namespace {
 namespace fs = std::filesystem;
 namespace json = boost::json;
+
+// Cold-start provenance hashes exactly the bytes parsed below, not a filename
+// or a code SHA. No cryptography or filesystem access occurs in the hot path.
+[[nodiscard]] std::array<char, 65> artifact_sha256(std::string_view payload) noexcept {
+    unsigned char digest[EVP_MAX_MD_SIZE]{};
+    unsigned int length = 0;
+    std::array<char, 65> out{};
+    if (EVP_Digest(payload.data(), payload.size(), digest, &length, EVP_sha256(), nullptr) != 1 || length != 32) return out;
+    constexpr char hex[] = "0123456789abcdef";
+    for (std::size_t i = 0; i < 32; ++i) {
+        out[2*i] = hex[digest[i] >> 4]; out[2*i+1] = hex[digest[i] & 15];
+    }
+    return out;
+}
 
 constexpr double kFillOrderShrinkage = 40.0;
 constexpr double kMarkoutShrinkage = 20.0;
@@ -202,6 +217,8 @@ void populate_exploration_policy(MakerModelSnapshot& model) noexcept {
             || confidence_z > std::max(0.0, model.robust_ev_z)
             || quote_fraction <= 0.0 || max_markets == 0
             || selected_market_capacity == 0) return;
+        model.exploration_policy_sha256 = artifact_sha256(payload);
+        if (model.exploration_policy_sha256[0] == '\0') return;
         model.exploration_confidence_z = confidence_z;
         model.exploration_epsilon = epsilon;
         model.exploration_quote_notional_fraction = quote_fraction;
@@ -272,6 +289,8 @@ void populate_execution_cells(MakerModelSnapshot& model) noexcept {
         const auto global_it = groups.find("GLOBAL");
         if (global_it == groups.end() || !global_it->value().is_object()) return;
         const auto& global = global_it->value().as_object();
+        model.execution_artifact_sha256 = artifact_sha256(payload);
+        if (model.execution_artifact_sha256[0] == '\0') return;
         const double global_fill = std::clamp(
             number(find_value(global, "fill_probability"), 0.02), 1e-6, 1.0 - 1e-6);
         const double global_adverse = std::max(

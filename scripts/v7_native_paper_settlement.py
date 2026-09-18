@@ -20,6 +20,7 @@ from typing import Any
 
 from v7_execution_ledger import native_order_id_matches, LedgerEvent, canonical_ledger_path, iter_events
 from v7_ledger_spool import spool_event
+from v7_native_settlement_projection import context_from_fill
 
 STATUS_SCHEMA = "polymarket_v7_native_paper_settlement_status_v1"
 
@@ -175,7 +176,7 @@ def wait_for_record(run_root: Path, model_sha: str, record_id: str, timeout: flo
 
 
 def settle(args: argparse.Namespace) -> int:
-    status_path = args.run_root / "control" / "native_paper_settlement" / f"{args.market_id}.json"
+    status_path = getattr(args, "status_path", None) or args.run_root / "control" / "native_paper_settlement" / f"{args.market_id}.json"
     deadline = time.monotonic() + args.timeout_seconds
     while True:
         events = market_events(args.run_root, args.model_sha, args.market_id)
@@ -245,6 +246,9 @@ def settle(args: argparse.Namespace) -> int:
             "settlement_outcome": resolved_label,
             "included_order_ids": sorted({str(event.order_id) for event in fills if event.order_id}),
             "included_fill_ids": sorted({str(event.fill_id) for event in fills if event.fill_id}),
+            "included_position_ids": sorted({str(event.position_id) for event in fills if event.position_id}),
+            "allocation_basis": "SIGNED_FILL_CASHFLOW_PLUS_SETTLEMENT",
+            "crypto_context": context_from_fill({"metadata": representative.metadata}),
             "terminal_id": settlement_id,
             "pnl_decomposition": {
                 "trading_cashflow_before_resolution": cash,
@@ -262,7 +266,7 @@ def settle(args: argparse.Namespace) -> int:
             position_id=f"native-market:{args.market_id}",
             market_id=args.market_id,
             event_id=representative.event_id,
-            token_id=winning_token,
+            token_id=next((token for token, weight in payouts.items() if weight >= 1.0 - 1e-9), representative.token_id),
             final_pnl=final_pnl,
             realized_cashflow=payout,
             fee=0.0,
@@ -300,9 +304,12 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--market-id", required=True)
     parser.add_argument("--gamma-url", default="https://gamma-api.polymarket.com")
     parser.add_argument("--timeout-seconds", type=int, default=120)
+    parser.add_argument("--status-path", type=Path)
     args = parser.parse_args()
     if len(args.model_sha) != 40 or any(ch not in "0123456789abcdef" for ch in args.model_sha):
         parser.error("exact lowercase model SHA required")
+    if args.status_path and not args.status_path.resolve().is_relative_to((args.run_root / "control").resolve()):
+        parser.error("settlement status must stay under run-root/control")
     if args.timeout_seconds < 1 or args.timeout_seconds > 600:
         parser.error("invalid timeout")
     return args

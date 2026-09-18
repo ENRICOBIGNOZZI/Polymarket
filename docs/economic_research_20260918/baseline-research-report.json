@@ -1,0 +1,127 @@
+{
+  "schema": "polymarket_economic_research_report_v1",
+  "protocol_id": "economic-recovery-20260918-v1",
+  "protocol_sha256": "10c01096a885215b20f9e52047d7bc178701f8bde01380a1821abedc39b2ac4c",
+  "dataset_sha256": "3b85c11ac69dced547268e4ea05a27d98c65064222b119dbd99c48ec6bdbd102",
+  "identity": {
+    "code_sha": "c27afd1574575a99f9c02262529e830dab3c4820",
+    "run_id": "c27afd157457-1789737865-17255",
+    "scope": "frozen_live_ledger_not_raw_market_tapes"
+  },
+  "paper_only": true,
+  "execution_authority": false,
+  "automatic_promotion": false,
+  "state": "INCONCLUSIVE",
+  "code_deployment_authorized": false,
+  "ledger": {
+    "event_counts": {
+      "ORDER_SUBMITTED": 6,
+      "ORDER_STATE": 6,
+      "FILL": 6,
+      "FINAL": 5
+    },
+    "aggregate_final_count": 5,
+    "attribution_view_count": 5,
+    "observed_realized_paper_pnl": 2.390715000000001,
+    "open_positions": 1,
+    "projection_errors": [],
+    "observed_hour_blocks": 2,
+    "minimum_time_blocks": 24,
+    "profitability_proven": false
+  },
+  "native": {
+    "books": 0,
+    "decisions": 0,
+    "errors": []
+  },
+  "arrival_diagnostics": {
+    "state": "INCONCLUSIVE",
+    "reason": "NATIVE_TAPES_NOT_IN_DATASET"
+  },
+  "tests": {
+    "T1": {
+      "name": "maker_admissibility",
+      "state": "INCONCLUSIVE",
+      "missing_required": [
+        "maker_decisions",
+        "native_books",
+        "public_prints",
+        "fee_schedule",
+        "inventory"
+      ]
+    },
+    "T2": {
+      "name": "incremental_signal",
+      "state": "INCONCLUSIVE",
+      "missing_required": [
+        "native_decisions",
+        "settlement_labels",
+        "baseline_features",
+        "purged_splits"
+      ]
+    },
+    "T3": {
+      "name": "arrival_latency",
+      "state": "INCONCLUSIVE",
+      "missing_required": [
+        "native_decisions",
+        "native_books",
+        "capture_watermarks",
+        "gaps"
+      ]
+    },
+    "T4": {
+      "name": "signal_age",
+      "state": "INCONCLUSIVE",
+      "missing_required": [
+        "native_decisions",
+        "native_books",
+        "outcome_labels"
+      ]
+    },
+    "T5": {
+      "name": "exit_horizon",
+      "state": "INCONCLUSIVE",
+      "missing_required": [
+        "native_decisions",
+        "native_books",
+        "fee_schedule",
+        "settlement_labels"
+      ]
+    },
+    "T6": {
+      "name": "tte_window",
+      "state": "INCONCLUSIVE",
+      "missing_required": [
+        "native_observations_all_tte",
+        "settlement_labels",
+        "fee_schedule"
+      ]
+    },
+    "T7": {
+      "name": "rollover_coverage",
+      "state": "INCONCLUSIVE",
+      "missing_required": [
+        "eligible_markets",
+        "manager_timeline",
+        "unsettled_capital_claims"
+      ]
+    },
+    "T8": {
+      "name": "capacity_and_assets",
+      "state": "INCONCLUSIVE",
+      "missing_required": [
+        "native_books",
+        "fee_schedule",
+        "verified_asset_contexts",
+        "portfolio_risk_limits"
+      ]
+    }
+  },
+  "promotion_blockers": [
+    "PROSPECTIVE_HELDOUT_COMPARISON_NOT_COMPLETE",
+    "VARIABLE_COST_AND_ARRIVAL_PARITY_REQUIRED",
+    "FIXED_COSTS_NOT_SUPPLIED"
+  ],
+  "note": "Accounting reconciliation and executable replay tests do not prove the signal profitable. No absent data or future outcome was imputed."
+}

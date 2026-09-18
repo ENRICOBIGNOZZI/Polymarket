@@ -252,3 +252,26 @@ def test_partitioned_paper_budget_never_exceeds_engine_envelope(tmp_path: Path) 
     assert count == 30
     assert partition == 333_333_333
     assert partition * count <= total
+
+
+def test_settlement_writer_links_actual_position_and_supports_payout_vectors(tmp_path, monkeypatch):
+    import types
+    import v7_native_paper_settlement as settlement
+    import pytest
+    event=fill(fill_id='f1',order_id='native:1',token='yes',side='BUY',qty=5,price=.4,fee=.01,client=1)
+    from dataclasses import replace
+    event=replace(event,position_id='native-position:m1:yes',metadata={**event.metadata,'crypto_context':{'asset':'ETH','horizon':'D1'},'model_family':'crypto_informed_taker'})
+    monkeypatch.setattr(settlement,'market_events',lambda *a:[event])
+    monkeypatch.setattr(settlement,'wait_for_record',lambda *a,**k:True)
+    captured=[]
+    monkeypatch.setattr(settlement,'spool_event',lambda root,row:captured.append(row))
+    args=types.SimpleNamespace(run_root=tmp_path,model_sha=SHA,market_id='m1',timeout_seconds=1,gamma_url='unused')
+    for payouts,label,pnl in [({'yes':1.0,'no':0.0},'Up',2.99),({'yes':.5,'no':.5},'50-50',.49)]:
+        monkeypatch.setattr(settlement,'resolved_payouts',lambda *a:(payouts,label))
+        assert settlement.settle(args)==0
+        row=captured[-1]
+        assert row.token_id=='yes'
+        assert row.final_pnl==pytest.approx(pnl)
+        assert row.metadata['included_position_ids']==['native-position:m1:yes']
+        assert row.metadata['crypto_context']=={'asset':'ETH','horizon':'D1'}
+        assert row.metadata['settlement_payouts']==payouts

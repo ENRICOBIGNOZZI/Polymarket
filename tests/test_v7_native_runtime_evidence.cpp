@@ -80,6 +80,14 @@ int main() {
         fill.fill.receive_monotonic_ns = 1'000'200'000LL;
         fill.fill.taker = 1;
         assert(writer.publish(fill));
+        NativeObservation observation{};
+        observation.kind = 2; observation.instrument_handle = 11;
+        observation.book_version = 9; observation.signal_version = 42;
+        observation.receive_ns = 999'900'000; observation.decision_ns = 1'000'010'000;
+        observation.bid_e4 = 4000; observation.ask_e4 = 4100;
+        observation.bid_prices[0] = 4000; observation.bid_quantities[0] = 3'000'000;
+        observation.reason = 3; observation.direction = 1;
+        assert(writer.publish_observation(observation));
         writer.stop();
         assert(writer.healthy());
         assert(writer.published() == 2);
@@ -117,6 +125,23 @@ int main() {
         ++count;
     }
     assert(count == 2 && saw_order && saw_fill);
+    std::size_t observation_files = 0;
+    for (const auto& entry : fs::directory_iterator(root / "research/native_observations/run-test")) {
+        if (entry.path().extension() != ".jsonl") continue;
+        assert(fs::is_regular_file(entry.path().string() + ".closed.json"));
+        std::ifstream input(entry.path()); std::string line; std::getline(input, line);
+        const auto observation = json::parse(line).as_object();
+        assert(observation.at("kind").as_int64() == 2);
+        assert(observation.at("signal_version").as_int64() == 42);
+        assert(observation.at("token_id").as_string() == "yes-token");
+        assert(observation.at("capture_id").is_string());
+        assert(observation.at("model_artifact_hash").is_null());
+        assert(!observation.at("execution_authority").as_bool());
+        assert(observation.at("probability_forecast").is_null());
+        assert(observation.at("bids").as_array().size() == 1);
+        ++observation_files;
+    }
+    assert(observation_files == 1); // Observations never increase the ledger rows.
     config.market_id = "next-market";
     {
         NativeRuntimeEvidenceWriter writer(config);

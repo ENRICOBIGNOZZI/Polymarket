@@ -36,7 +36,7 @@ def source_status(snapshot: dict[str, Any]) -> dict[str, dict[str, Any]]:
     specifications = (
         ("runtime", "runtime", ("polymarket_v7_runtime_status_v2", "polymarket_v7_runtime_status_v3"), "timestamp", 1, 180),
         ("portfolio", "portfolio", ("polymarket_v7_portfolio_guard_v2",), "timestamp", 1, 30),
-        ("economics", "canonical_economics", ("polymarket_v7_canonical_economics_v1",), None, 1, 180),
+        ("economics", "canonical_economics", ("polymarket_v7_canonical_economics_v1", "polymarket_v7_runtime_ledger_economics_v1"), None, 1, 180),
         ("lead_lag", "lead_lag", ("polymarket_v7_lead_lag_taker_v1_status",), "timestamp_ms", 1000, 30),
         ("lead_lag_collector", "lead_lag_collector", ("polymarket_v7_external_pm_lead_lag_collector_status_v1",), "timestamp_ns", 1e9, 30),
     )
@@ -73,6 +73,9 @@ def operator_summary(snapshot: dict[str, Any], runtime_reasons: list[str]) -> di
     ledger_current = bool(ledger.get("present") and ledger.get("valid") and set(ledger.get("model_shas") or []) <= {current_sha})
     verified = ledger_current and all(sources[k]["fresh"] for k in ("runtime", "portfolio", "economics")) and reconciliation.get("reconciled") is True
     verified = verified and finite((snapshot.get("canonical_economics") or {}).get("net_pnl")) is not None
+    if snapshot.get("native_mode"):
+        attribution = (snapshot.get("multi_crypto_performance") or {}).get("attribution") or {}
+        verified = verified and attribution.get("reconciled") is True
     reasons = set(runtime_reasons)
     reasons.update(str(x) for x in reconciliation.get("reason_codes") or [])
     for name in ("runtime", "portfolio", "economics"):
@@ -91,7 +94,7 @@ def operator_summary(snapshot: dict[str, Any], runtime_reasons: list[str]) -> di
         reasons.add("disk_free_unknown")
     elif free < 0.10:
         reasons.add("disk_pressure")
-    if sources["lead_lag"]["present"] and not sources["lead_lag"]["fresh"]:
+    if not snapshot.get("native_mode") and sources["lead_lag"]["present"] and not sources["lead_lag"]["fresh"]:
         reasons.add("lead_lag_missing_invalid_or_stale")
     return {"sources": sources, "ledger_current": ledger_current, "accounting_verified": bool(verified), "attention_required": bool(reasons), "reasons": sorted(reasons)}
 

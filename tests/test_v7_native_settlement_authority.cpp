@@ -1,4 +1,5 @@
 #include "pm/v7_native_settlement_authority.hpp"
+#include "pm/v7_native_maker_context.hpp"
 
 #include <cassert>
 
@@ -121,6 +122,10 @@ void test_inventory_sync_buy_fill_and_sell_fill_share_one_capital_owner() {
         event(OmsEventType::FillDelta, 2'300, 0, 2'000'000));
     assert(fill.reason == NativeSettlementAuthorityReason::Accepted);
     assert(fill.transition.state == OrderState::Partial);
+    auto context = native_maker_context(authority, 11, 12, 11, {});
+    assert(context.inventory.yes_shares == 2.0);
+    assert(context.inventory.reserved_buy_shares == 3.0);
+    assert(context.quotes.bid_active && context.quotes.bid_tick == 40);
     auto inv = authority.inventory_snapshot(11);
     assert(inv.total_microunits == 2'000'000);
     assert(inv.collateral_basis_microdollars == 800'000); // 2 shares at 0.40.
@@ -138,6 +143,9 @@ void test_inventory_sync_buy_fill_and_sell_fill_share_one_capital_owner() {
         buy.tx.command.client_order_id,
         event(OmsEventType::AckCancel, 2'600));
     assert(cancelled.terminal_retired);
+    context = native_maker_context(authority, 11, 12, 11, {});
+    assert(!context.quotes.bid_active && context.inventory.reserved_buy_shares == 0.0);
+    assert(context.inventory.yes_shares == 2.0);
     capital = authority.capital_snapshot();
     assert(capital.order_reserved_microdollars == 0);
     assert(capital.inventory_committed_microdollars == 800'000);
@@ -230,6 +238,10 @@ void test_inventory_sync_rejects_active_order_overwrite() {
 } // namespace
 
 int main() {
+    assert(native_maker_admissible_quantity(1'000'000, 5'000'000, 1'000'000, 4000, 10'000'000, 10'000'000, 10'000'000) == 0);
+    assert(native_maker_admissible_quantity(1'000'000, 5'000'000, 5'000'000, 4000, 10'000'000, 10'000'000, 10'000'000) == 5'000'000);
+    assert(native_maker_admissible_quantity(1'000'000, 5'000'000, 5'000'000, 4000, 1'000'000, 10'000'000, 10'000'000) == 0);
+    assert(native_maker_admissible_quantity(1'000'000, 5'000'000, 5'000'000, 4000, 10'000'000, 10'000'000, 4'000'000) == 0);
     test_one_authority_accepts_maker_and_taker_buy_paths();
     test_fail_closed_without_inventory_and_venue_minimum();
     test_inventory_sync_buy_fill_and_sell_fill_share_one_capital_owner();
