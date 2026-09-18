@@ -299,9 +299,14 @@ class Settler:
         self.publish("RUNNING")
         while not self.kill.exists():
             sessions = read_sessions(self.sessions, model_sha=self.args.model_sha)
+            now_ns = int(time.time() * 1_000_000_000)
             pending = [
                 row for market, row in sessions.items()
-                if market not in self.settled and int(row.get("ended_ms") or 0) > 0
+                if market not in self.settled
+                and (
+                    int(row.get("ended_ms") or 0) > 0
+                    or now_ns >= int(row.get("close_wall_ns") or 0) + 5_000_000_000
+                )
             ]
             progressed = False
             for row in sorted(pending, key=lambda value: int(value.get("ended_ms") or 0)):
