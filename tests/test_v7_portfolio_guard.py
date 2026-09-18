@@ -18,6 +18,13 @@ def fill(order,fill_id,price=.4,size=5.0,fee=.1,component='crypto_informed_taker
 def final(order,pnl,component='crypto_informed_taker',record_id=None):
     kw={} if record_id is None else {'record_id':record_id}; return LedgerEvent(event_type='FINAL',strategy='CRYPTO_SETTLEMENT_ENGINE',model_sha=SHA,order_id=order,final_pnl=pnl,recorded_ts_ms=1003,metadata={'component':component,'coordinator_receipt':{'owner':'V7_GLOBAL_PORTFOLIO_COORDINATOR'}},**kw)
 
+def native_receipt(client=1, command=101):
+    return {'schema':'polymarket_v7_native_settlement_receipt_v1','owner':'V7_NATIVE_CRYPTO_SETTLEMENT_ENGINE','engine_id':'CRYPTO_SETTLEMENT_ENGINE','model_sha':SHA,'paper_only':True,'authenticated_execution':False,'real_order_submission':False,'real_capital_at_risk':False,'execution_mode':'PAPER_SIMULATED','paper_simulation_authority':True,'real_new_risk_authorized':False,'single_owner':True,'owner_chain':['portfolio','risk','capital','oms','inventory'],'client_order_id':client,'command_id':command}
+def native_fill(client,fill_id,market,token,side,price,size,fee=0.0):
+    return LedgerEvent(event_type='FILL',strategy='CRYPTO_SETTLEMENT_ENGINE',model_sha=SHA,order_id=f'native:{client}',fill_id=fill_id,market_id=market,event_id='e1',token_id=token,side=side,fill_price=price,filled_size=size,fee=fee,fee_source='TEST_NATIVE',exchange_ts_ms=1000+client,receive_ts_ms=1100+client,recorded_ts_ms=1200+client,metadata={'component':'professional_maker','native_settlement_receipt':native_receipt(client,client+100)})
+def native_final(client,market,pnl):
+    return LedgerEvent(event_type='FINAL',strategy='CRYPTO_SETTLEMENT_ENGINE',model_sha=SHA,order_id=f'native:{client}',market_id=market,event_id='e1',final_pnl=pnl,recorded_ts_ms=2000+client,metadata={'component':'native_market_settlement','native_market_settlement_id':f'native-settlement:{market}','native_settlement_receipt':native_receipt(client,client+100)})
+
 class PortfolioGuardTests(unittest.TestCase):
     def test_crypto_equity_is_accounted_once(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -55,4 +62,26 @@ class PortfolioGuardTests(unittest.TestCase):
     def test_duplicate_canonical_final_kills_account(self):
         with tempfile.TemporaryDirectory() as tmp:
             root=Path(tmp); canonical_runtime(root); write_ledger(root,[fill('one','f1'),final('one',1.0,record_id='a'),final('one',1.0,record_id='b')]); report=assess(root,allocation(root/'manifest.json'),max_drawdown=.15); self.assertTrue(report['killed'])
+    def test_native_open_inventory_uses_conservative_cashflow(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root=Path(tmp); canonical_runtime(root)
+            write_ledger(root,[native_fill(1,'nf1','m1','yes','BUY',.4,3.0,.01),native_fill(2,'nf2','m1','yes','SELL',.6,1.0,.01)])
+            report=assess(root,allocation(root/'manifest.json'),max_drawdown=.15)
+            self.assertFalse(report['killed'])
+            self.assertAlmostEqual(report['engines']['CRYPTO_SETTLEMENT_ENGINE']['equity'],59.38)
+            self.assertIn('NATIVE_PAPER_SINGLE_OWNER',report['engines']['CRYPTO_SETTLEMENT_ENGINE']['details']['receipt_modes'])
+    def test_native_market_final_replaces_open_cashflow(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root=Path(tmp); canonical_runtime(root)
+            write_ledger(root,[native_fill(1,'nf1','m1','yes','BUY',.4,3.0,.01),native_final(1,'m1',1.79)])
+            report=assess(root,allocation(root/'manifest.json'),max_drawdown=.15)
+            self.assertFalse(report['killed'])
+            self.assertAlmostEqual(report['engines']['CRYPTO_SETTLEMENT_ENGINE']['equity'],61.79)
+    def test_native_unbound_receipt_kills_account(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root=Path(tmp); canonical_runtime(root)
+            bad=native_fill(1,'nf1','m1','yes','BUY',.4,1.0,0.0); bad=LedgerEvent.from_dict({**bad.to_dict(),'metadata':{'component':'x'}})
+            write_ledger(root,[bad])
+            report=assess(root,allocation(root/'manifest.json'),max_drawdown=.15)
+            self.assertTrue(report['killed'])
 if __name__=='__main__': unittest.main()
