@@ -21,6 +21,17 @@ def test_cutover_artifact_gate_precedes_stop_and_symlink_switch():
     assert "runtime_training') is False" in s
     assert "pgrep -af" in s
 
+def test_cutover_validates_previous_systemd_run_root_before_new_root():
+    s=(ROOT/'ops/v7_london_cutover.sh').read_text()
+    capture=s.index('PREVIOUS_RUN_ROOT="$(systemctl show polymarket-v7-paper.service')
+    stop=s.index('systemctl stop polymarket-v7-exporter.service polymarket-v7-paper.service')
+    guard=s.index('"$PREVIOUS_RUN_ROOT" != "$RUN_ROOT"', stop)
+    previous_prepare=s.index('--run-root "$PREVIOUS_RUN_ROOT"', guard)
+    target_prepare=s.index('--run-root "$RUN_ROOT"', previous_prepare)
+    switch=s.index('ln -sfn "by-sha/$EXPECTED_SHA"')
+    assert capture < stop < guard < previous_prepare < target_prepare < switch
+    assert 'previous London run root is not absolute' in s
+
 def test_cutover_assigns_run_root_to_service_user_before_runtime_start():
     s=(ROOT/'ops/v7_london_cutover.sh').read_text()
     prepare=s.index('v7_prepare_cutover_run_root.py')
