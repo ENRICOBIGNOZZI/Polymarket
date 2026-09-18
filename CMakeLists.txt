@@ -47,7 +47,7 @@ add_library(pm_v7_common
   src/v7_crypto_decision_lane.cpp
   src/v7_native_order_tx.cpp
   src/v7_native_settlement_authority.cpp
-  src/v7_native_settlement_oms_endpoint.cpp)
+  src/v7_native_settlement_oms_endpoint.cpp\n  src/v7_native_paper_execution.cpp)
 target_include_directories(pm_v7_common PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/include ${Boost_INCLUDE_DIRS})
 target_link_libraries(pm_v7_common PUBLIC pm_json)
 target_compile_options(pm_v7_common PRIVATE -Wall -Wextra -Wpedantic)
@@ -294,6 +294,13 @@ if(BUILD_TESTING)
   target_link_libraries(pm_v7_native_settlement_oms_endpoint_tests PRIVATE pm_v7_common)
   add_test(NAME pm_v7_native_settlement_oms_endpoint_tests
     COMMAND pm_v7_native_settlement_oms_endpoint_tests)
+
+  add_executable(pm_v7_native_paper_execution_tests
+    tests/test_v7_native_paper_execution.cpp)
+  target_link_libraries(pm_v7_native_paper_execution_tests PRIVATE pm_v7_common)
+  target_compile_options(pm_v7_native_paper_execution_tests PRIVATE -UNDEBUG)
+  add_test(NAME pm_v7_native_paper_execution_tests
+    COMMAND pm_v7_native_paper_execution_tests)
 
   add_executable(pm_v7_native_clob_order_lane_driver tests/v7_native_clob_order_lane_driver.cpp)
   target_link_libraries(pm_v7_native_clob_order_lane_driver PRIVATE pm_v7_account_native)
