@@ -15,7 +15,6 @@ done < <(python3 scripts/v7_runtime_profile.py --repository-root "$ROOT" --profi
 export PM_V7_EXECUTION_MODE
 RUN_ROOT="${PM_V7_RUN_ROOT:-runs/paper_v7_live}"
 RECORDER="${PM_TRADE_RECORDER:-build/polymarket_v7_trade_recorder}"
-MARKOUT_OBSERVER="${PM_V7_MAKER_MARKOUT_OBSERVER:-build/polymarket_v7_maker_markout_observer}"
 FILLABILITY_OBSERVER="${PM_V7_MAKER_FILLABILITY_OBSERVER:-build/polymarket_v7_maker_fillability_observer}"
 EXTERNAL_VENUE_RUNTIME="${PM_V7_EXTERNAL_VENUE_RUNTIME:-build/polymarket_v7_external_venue_runtime}"
 CRYPTO_SETTLEMENT_ENGINE="${PM_V7_CRYPTO_SETTLEMENT_ENGINE:-build/polymarket_v7_crypto_settlement_engine}"
@@ -57,7 +56,6 @@ export PM_V7_MAKER_EXECUTION_MODEL="$MAKER_RESEARCH_MODEL"
 CONTROL="$RUN_ROOT/control"
 ALLOC="$CONTROL/allocations"
 KILL="$CONTROL/KILL"
-MAKER_FREEZE="$CONTROL/MAKER_FREEZE"
 LOCK="$CONTROL/runtime.lock"
 mkdir -p "$CONTROL" "$RUN_ROOT/ledger" "$RUN_ROOT/opportunities/inbox" "$RUN_ROOT/research/evidence" "$RUN_ROOT/reports" "$RUN_ROOT/market_data" "$RUN_ROOT/universe" "$RUN_ROOT/micro_maker" "$RUN_ROOT/external" "$RUN_ROOT/external_fair" "$RUN_ROOT/learned_execution" "$DURABLE_ROOT/micro_maker" "$DURABLE_ROOT/external_fair" "$DURABLE_ROOT/profit_experiments"
 touch "$RUN_ROOT/ledger/execution.jsonl"
@@ -171,7 +169,7 @@ if [[ -d "$LOCK" ]]; then
 fi
 mkdir "$LOCK"
 echo $$ > "$LOCK/pid"
-rm -f "$KILL" "$MAKER_FREEZE"
+rm -f "$KILL"
 
 python3 scripts/v7_capital_allocator.py --config "$CONFIG" --output-dir "$ALLOC" >/dev/null
 # Resolve CPU classes before any child starts. London keeps the decision and
@@ -296,21 +294,6 @@ v7_register_child "$!"
 # Causal crypto context collectors remain on London because their receive-time
 # evidence cannot be reconstructed perfectly after the fact. They run outside
 # the hot CPU set and have no execution/capital/ledger authority.
-v7_exec_class COLLECTOR python3 scripts/v7_binance_usdm_rest_collector.py \
-  --status "$RUN_ROOT/external_fair/binance_usdm_rest_status.json" \
-  --tape "$RUN_ROOT/external_fair/binance_usdm_rest.jsonl" --interval 5 --loop \
-  >> "$RUN_ROOT/external_fair/binance_usdm_rest.log" 2>&1 &
-v7_register_child "$!"
-v7_exec_class COLLECTOR python3 scripts/v7_deribit_rest_collector.py \
-  --status "$RUN_ROOT/external_fair/deribit_rest_status.json" \
-  --tape "$RUN_ROOT/external_fair/deribit_rest.jsonl" --interval 15 --loop \
-  >> "$RUN_ROOT/external_fair/deribit_rest.log" 2>&1 &
-v7_register_child "$!"
-v7_exec_class COLLECTOR python3 scripts/v7_coinbase_l2_rest_collector.py \
-  --status "$RUN_ROOT/external_fair/coinbase_l2_rest_status.json" \
-  --tape "$RUN_ROOT/external_fair/coinbase_l2_rest.jsonl" --interval 5 --loop \
-  >> "$RUN_ROOT/external_fair/coinbase_l2_rest.log" 2>&1 &
-v7_register_child "$!"
 
 
 # Continuous receive-time PM book evidence for future crypto research. This is
@@ -323,13 +306,6 @@ v7_exec_class COLLECTOR "$FILLABILITY_OBSERVER" \
 v7_register_child "$!"
 
 
-v7_exec_class COLLECTOR python3 scripts/v7_external_cancel_signal_journal.py \
-  --signal "$RUN_ROOT/external_fair/external_cancel_signal.json" \
-  --output "$RUN_ROOT/research/external_cancel_signals.jsonl" \
-  --status "$RUN_ROOT/research/external_cancel_signal_journal_status.json" \
-  --model-sha "$SHA" --interval-ms 10 \
-  >> "$RUN_ROOT/research/external_cancel_signal_journal.log" 2>&1 &
-v7_register_child "$!"
 
 # PM repricing and two-sided complete-set shadows are reconstructible from the
 # causal tapes above, so those computations run only on the research worker.
@@ -439,10 +415,6 @@ if [[ ! -x "$RECORDER" ]]; then
   echo "missing canonical V7 trade recorder executable: $RECORDER" >&2
   exit 74
 fi
-if [[ ! -x "$MARKOUT_OBSERVER" ]]; then
-  echo "missing V7 maker markout observer executable: $MARKOUT_OBSERVER" >&2
-  exit 76
-fi
 if [[ ! -x "$FILLABILITY_OBSERVER" ]]; then
   echo "missing V7 maker exact-WS fillability observer executable: $FILLABILITY_OBSERVER" >&2
   exit 78
@@ -502,51 +474,7 @@ PY
 )
 
 
-maker_selection_ready() {
-  python3 - "$RUN_ROOT/micro_maker/reward_selection.json" "$SHA" <<'PY' >/dev/null 2>&1
-import json,sys
-from pathlib import Path
-path=Path(sys.argv[1])
-if not path.is_file(): raise SystemExit(1)
-try: obj=json.loads(path.read_text(encoding="utf-8"))
-except Exception: raise SystemExit(1)
-markets=obj.get("markets")
-ok=(obj.get("paper_only") is True and obj.get("authenticated_execution") is False
-    and obj.get("real_order_submission") is False and obj.get("model_sha")==sys.argv[2]
-    and obj.get("source") in {"crypto_universe_fallback","crypto_universe_recent_flow"}
-    and isinstance(markets,list) and len(markets)>0)
-raise SystemExit(0 if ok else 1)
-PY
-}
 
-fee_registry_ready() {
-  python3 - "$CONTROL/fee_reward_registry.json" "$SHA" <<'PY' >/dev/null 2>&1
-import json,sys,time
-from pathlib import Path
-path=Path(sys.argv[1])
-if not path.is_file(): raise SystemExit(1)
-try: obj=json.loads(path.read_text(encoding="utf-8"))
-except Exception: raise SystemExit(1)
-now=int(time.time()*1000)
-markets=obj.get("markets")
-rows=markets if isinstance(markets,list) else []
-fresh_verified=any(
-    isinstance(row,dict) and isinstance(row.get("fee"),dict)
-    and row["fee"].get("verified") is True
-    and int(row["fee"].get("observed_at_ms") or 0) <= now <= int(row["fee"].get("expires_at_ms") or 0)
-    for row in rows
-)
-ok=(obj.get("schema")=="polymarket_v7_fee_reward_registry_v1"
-    and obj.get("paper_only") is True and obj.get("authenticated_execution") is False
-    and obj.get("real_order_submission") is False and obj.get("execution_authority") is False
-    and obj.get("model_sha")==sys.argv[2]
-    and obj.get("unknown_fee_policy")=="NON_EXECUTABLE"
-    and obj.get("unknown_reward_policy")=="ZERO_EXPECTED_VALUE"
-    and len(rows)>0
-    and int(obj.get("executable_market_count") or 0)>0 and fresh_verified)
-raise SystemExit(0 if ok else 1)
-PY
-}
 
 v7_exec_class COLLECTOR "$RECORDER" \
   --run-dir "$RUN_ROOT" \
@@ -579,73 +507,8 @@ v7_register_child "$!"
 
 
 
-# Slow-plane crypto maker selection only. It ranks the exact crypto universe
-# from canonical public-trade evidence; it never broadens discovery or owns execution.
-(
-  while [[ ! -e "$KILL" ]]; do
-    v7_run_class CONTROL python3 scripts/v7_market_maker_rewards.py \
-      --config "$MAKER_POLICY" \
-      --output "$RUN_ROOT/micro_maker/reward_selection.json" \
-      --candidate-output "$RUN_ROOT/micro_maker/reward_selection_candidate.json" \
-      --pin-runtime-selection \
-      --status "$RUN_ROOT/micro_maker/selector_status.json" \
-      --fallback-universe "$RUN_ROOT/universe/current.json" \
-      --trade-tape "$RUN_ROOT/trade_tape.csv" \
-      --book-tape "$RUN_ROOT/micro_maker/book_observations/current.jsonl" \
-      --allocation "$ALLOC/micro_maker.json" \
-      --execution-model "$MAKER_RESEARCH_MODEL" \
-      --settlement-fair-status "$RUN_ROOT/external_fair/status.json" \
-      --anchor-flow "$RUN_ROOT/micro_maker/fillability_flow_snapshot.json" \
-      --model-sha "$SHA" \
-      --event-log "$RUN_ROOT/micro_maker/reward_selection.events.jsonl" \
-      >> "$RUN_ROOT/micro_maker/reward_selection.log" 2>&1 || true
-    sleep "$MAKER_SELECTOR_REFRESH_SECONDS"
-  done
-) & v7_register_child "$!"
-
-# Exact-SHA fee/reward evidence registry. Unknown fees are explicitly
-# non-executable and unknown rewards are forced to zero; this process has no
-# OMS, ledger or accounting authority.
-v7_exec_class CONTROL python3 scripts/v7_fee_reward_registry.py \
-  --universe "$RUN_ROOT/universe/current.json" \
-  --rewards "$RUN_ROOT/micro_maker/reward_selection.json" \
-  --output "$CONTROL/fee_reward_registry.json" \
-  --model-sha "$SHA" --interval 30 \
-  >> "$RUN_ROOT/fee_reward_registry.log" 2>&1 &
-v7_register_child "$!"
-
-
 # Maker model learning moved to the research plane. The staged immutable model
 # above remains fixed for this entire runtime generation.
-
-# The professional Maker is now an execution-model component of the single crypto
-# settlement owner. Keep its exact-WS fillability and fill-conditioned markout
-# observers live, but do not launch the legacy independent PAPER maker runtime.
-(
-  while [[ ! -e "$KILL" ]] && { ! maker_selection_ready || ! fee_registry_ready; }; do sleep 1; done
-  [[ ! -e "$KILL" ]] || exit 0
-  v7_exec_class COLLECTOR python3 scripts/v7_maker_cohort_supervisor.py \
-    --repository-root "$ROOT" \
-    --run-root "$RUN_ROOT" \
-    --config "$ALLOC/micro_maker.json" \
-    --maker-policy "$MAKER_POLICY" \
-    --selection "$RUN_ROOT/micro_maker/reward_selection.json" \
-    --candidate "$RUN_ROOT/micro_maker/reward_selection_candidate.json" \
-    --model "$MAKER_RESEARCH_MODEL" \
-    --model-sha "$SHA" \
-    --markout-observer "$MARKOUT_OBSERVER" \
-    --fillability-observer "$FILLABILITY_OBSERVER" \
-    --observer-arena-bytes "$WS_JSON_ARENA_OBSERVER_MAX_BYTES" \
-    --fillability-arena-bytes "$WS_JSON_ARENA_FILLABILITY_MAX_BYTES" \
-    --disk-pressure-min-free-bytes "$DISK_PRESSURE_MIN_FREE_BYTES" \
-    --candidate-confirmations "$MAKER_CANDIDATE_CONFIRMATIONS" \
-    --min-rotation-interval-seconds "$MAKER_ROTATION_INTERVAL_SECONDS" \
-    --rotation-min-projected-fill-probability "$MAKER_ROTATION_MIN_FILL" \
-    --rotation-min-absolute-fill-improvement "$MAKER_ROTATION_MIN_ABSOLUTE_IMPROVEMENT" \
-    --rotation-min-relative-fill-multiplier "$MAKER_ROTATION_MIN_RELATIVE_MULTIPLIER"
- ) >> "$RUN_ROOT/micro_maker/cohort_supervisor.log" 2>&1 &
-v7_register_child "$!"
-
 
 # Canonical economics is retained as a lightweight operational reconciliation
 # surface for health/PnL truth. Forward reports, attribution, fitting, compaction
@@ -661,7 +524,7 @@ v7_register_child "$!"
   done
 ) & v7_register_child "$!"
 
-v7_assert_registered_child_count 16
+v7_assert_registered_child_count 9
 write_runtime_status running false
 
 while [[ ! -e "$KILL" ]]; do
