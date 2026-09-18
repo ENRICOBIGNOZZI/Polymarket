@@ -20,6 +20,7 @@ from typing import Any, Iterable
 from v7_fast_forward_ipc import BoundedUnixRequestBridge, request as unix_request
 
 from v7_execution_ledger import (
+    native_order_id_matches,
     CanonicalLedgerWriter,
     EconomicJournalEntry,
     LedgerContractError,
@@ -129,7 +130,6 @@ def _native_settlement_receipt_valid(event: LedgerEvent, engine_id: str) -> bool
     client_order_id = receipt.get("client_order_id")
     command_id = receipt.get("command_id")
     owner_chain = receipt.get("owner_chain")
-    expected_order_id = f"native:{client_order_id}" if isinstance(client_order_id, int) else ""
     return (
         engine_id == "CRYPTO_SETTLEMENT_ENGINE"
         and receipt.get("schema") == "polymarket_v7_native_settlement_receipt_v1"
@@ -149,7 +149,7 @@ def _native_settlement_receipt_valid(event: LedgerEvent, engine_id: str) -> bool
         and client_order_id > 0
         and isinstance(command_id, int) and not isinstance(command_id, bool)
         and command_id > 0
-        and event.order_id == expected_order_id
+        and native_order_id_matches(event)
     )
 
 

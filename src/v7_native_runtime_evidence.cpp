@@ -125,6 +125,7 @@ struct NativeRuntimeEvidenceWriter::Impl {
             {"real_new_risk_authorized", false},
             {"single_owner", true},
             {"owner_chain", json::array{"portfolio", "risk", "capital", "oms", "inventory"}},
+            {"order_namespace", config.run_id + ":" + config.market_id},
             {"client_order_id", command.client_order_id},
             {"command_id", command.command_id},
         };
@@ -143,8 +144,11 @@ struct NativeRuntimeEvidenceWriter::Impl {
 
     [[nodiscard]] json::object base(const NativeEvidenceEvent& event, std::string event_type) {
         ++sequence;
+        std::ostringstream ordinal;
+        ordinal << std::setw(20) << std::setfill('0') << sequence;
         const auto recorded_ms = to_ms(wall_now_ns());
-        const auto order_id = std::string("native:") + std::to_string(event.command.client_order_id);
+        const auto order_id = std::string("native:") + config.run_id + ":" + config.market_id
+            + ":" + std::to_string(event.command.client_order_id);
         const auto component = strategy_component(event.strategy_id);
         json::object metadata{
             {"component", component},
@@ -164,7 +168,7 @@ struct NativeRuntimeEvidenceWriter::Impl {
             {"model_sha", config.model_sha},
             {"paper_only", true},
             {"authenticated_execution", false},
-            {"record_id", config.run_id + ":native:" + std::to_string(sequence)},
+            {"record_id", config.run_id + ":" + config.market_id + ":native:" + ordinal.str()},
             {"recorded_ts_ms", recorded_ms},
             {"model_version", "native-paper-engine"},
             {"order_id", order_id},
@@ -199,7 +203,8 @@ struct NativeRuntimeEvidenceWriter::Impl {
         auto out = base(event, "FILL");
         const auto price = static_cast<double>(event.fill.price_tick)
             * static_cast<double>(event.fill.tick_size_e4) / 10'000.0;
-        out["fill_id"] = "native:" + std::to_string(event.fill.client_order_id)
+        out["fill_id"] = "native:" + config.run_id + ":" + config.market_id
+            + ":" + std::to_string(event.fill.client_order_id)
             + ":fill:" + std::to_string(sequence);
         out["position_id"] = "native-position:" + config.market_id + ":" + token(event.fill.instrument_handle);
         out["token_id"] = token(event.fill.instrument_handle);

@@ -18,7 +18,7 @@ import urllib.request
 from pathlib import Path
 from typing import Any
 
-from v7_execution_ledger import LedgerEvent, canonical_ledger_path, iter_events
+from v7_execution_ledger import native_order_id_matches, LedgerEvent, canonical_ledger_path, iter_events
 from v7_ledger_spool import spool_event
 
 STATUS_SCHEMA = "polymarket_v7_native_paper_settlement_status_v1"
@@ -65,6 +65,7 @@ def native_receipt(event: LedgerEvent) -> dict[str, Any] | None:
         or value.get("real_capital_at_risk") is not False
         or value.get("execution_mode") != "PAPER_SIMULATED"
         or value.get("single_owner") is not True
+        or not native_order_id_matches(event)
     ):
         return None
     return value
@@ -213,6 +214,7 @@ def settle(args: argparse.Namespace) -> int:
             "unwind_accounted": True,
             "cost_vector_complete": True,
             "native_settlement_receipt": receipt,
+            "run_id": representative.metadata.get("run_id"),
             "native_market_settlement_id": settlement_id,
             "winning_token_id": winning_token,
             "settlement_outcome": resolved_label,

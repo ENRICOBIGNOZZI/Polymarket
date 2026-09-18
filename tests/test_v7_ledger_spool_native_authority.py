@@ -82,3 +82,29 @@ def test_native_receipt_is_bound_to_exact_order_and_command() -> None:
     value = receipt(command_id=0)
     with tempfile.TemporaryDirectory() as directory:
         assert _authority_route(Path(directory), order_event(value)) == "QUARANTINED"
+
+
+def test_native_order_namespace_prevents_rollover_collision() -> None:
+    from dataclasses import replace
+    from v7_execution_ledger import native_order_id_matches
+    from v7_portfolio_guard import _native_receipt_valid
+    from v7_native_crypto_engine_manager import _native_receipt
+    from v7_native_paper_settlement import native_receipt
+    ids = set()
+    for market in ("m1", "m2"):
+        meta = receipt()
+        meta["order_namespace"] = f"run1:{market}"
+        event = replace(order_event(meta), market_id=market,
+                        order_id=f"native:run1:{market}:17",
+                        metadata={"run_id": "run1", "native_settlement_receipt": meta})
+        ids.add(event.order_id)
+        assert native_order_id_matches(event)
+        assert _native_receipt_valid(event)
+        assert _native_receipt(event) is not None
+        assert native_receipt(event) is not None
+        with tempfile.TemporaryDirectory() as directory:
+            assert _authority_route(Path(directory), event) == "APPEND"
+            wrong_market = replace(event, market_id="other")
+            assert not native_order_id_matches(wrong_market)
+            assert _authority_route(Path(directory), wrong_market) == "QUARANTINED"
+    assert len(ids) == 2

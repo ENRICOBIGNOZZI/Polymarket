@@ -11,7 +11,7 @@ from pathlib import Path
 from typing import Any
 from collections import Counter, defaultdict
 
-from v7_execution_ledger import LedgerContractError, iter_events
+from v7_execution_ledger import native_order_id_matches, LedgerContractError, iter_events
 
 
 ENGINES = ("CRYPTO_SETTLEMENT_ENGINE",)
@@ -65,7 +65,7 @@ def _native_receipt_valid(event: Any) -> bool:
         and receipt.get("single_owner") is True
         and receipt.get("owner_chain") == ["portfolio", "risk", "capital", "oms", "inventory"]
         and isinstance(client, int) and not isinstance(client, bool) and client > 0
-        and event.order_id == f"native:{client}"
+        and native_order_id_matches(event)
     )
 
 

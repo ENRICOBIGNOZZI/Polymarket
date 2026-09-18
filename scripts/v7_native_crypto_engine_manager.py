@@ -22,7 +22,7 @@ import urllib.request
 from pathlib import Path
 from typing import Any
 
-from v7_execution_ledger import LedgerEvent, canonical_ledger_path, iter_events
+from v7_execution_ledger import native_order_id_matches, LedgerEvent, canonical_ledger_path, iter_events
 from v7_ledger_spool import spool_event
 
 STATUS_SCHEMA = "polymarket_v7_native_engine_manager_status_v1"
@@ -170,7 +170,7 @@ def _native_receipt(event: LedgerEvent) -> dict[str, Any] | None:
         or receipt.get("execution_mode") != "PAPER_SIMULATED"
         or receipt.get("single_owner") is not True
         or not isinstance(client, int) or isinstance(client, bool) or client <= 0
-        or event.order_id != f"native:{client}"
+        or not native_order_id_matches(event)
     ):
         return None
     return receipt

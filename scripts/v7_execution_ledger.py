@@ -561,6 +561,26 @@ def canonical_ledger_path(run_root: Path) -> Path:
     return Path(run_root) / "ledger" / "execution.jsonl"
 
 
+def native_order_id_matches(event: LedgerEvent) -> bool:
+    """Bind native ledger identity to its runtime and market; read old receipts."""
+    metadata = event.metadata if isinstance(event.metadata, dict) else {}
+    receipt = metadata.get("native_settlement_receipt")
+    if not isinstance(receipt, dict):
+        return False
+    client = receipt.get("client_order_id")
+    if not isinstance(client, int) or isinstance(client, bool) or client <= 0:
+        return False
+    if "order_namespace" not in receipt:
+        return event.order_id == f"native:{client}"
+    namespace = receipt["order_namespace"]
+    run_id = metadata.get("run_id")
+    market_id = event.market_id
+    if not isinstance(run_id, str) or not run_id or not isinstance(market_id, str) or not market_id:
+        return False
+    return (namespace == f"{run_id}:{market_id}"
+            and event.order_id == f"native:{namespace}:{client}")
+
+
 class CanonicalLedgerWriter:
     """Fail-closed single-process owner for the append-only V7 ledger.
 

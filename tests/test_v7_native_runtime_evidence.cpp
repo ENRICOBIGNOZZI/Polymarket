@@ -115,6 +115,23 @@ int main() {
         ++count;
     }
     assert(count == 2 && saw_order && saw_fill);
+    config.market_id = "next-market";
+    {
+        NativeRuntimeEvidenceWriter writer(config);
+        NativeEvidenceEvent event{};
+        event.command = command;
+        event.kind = NativeEvidenceKind::OrderSubmitted;
+        event.causal_exchange_event_ns = 1'700'000'000'000'000'000LL;
+        event.causal_receive_monotonic_ns = 999'900'000LL;
+        assert(writer.publish(event));
+        writer.stop();
+        assert(writer.healthy() && writer.written() == 1);
+    }
+    std::size_t rollover_count = 0;
+    for (const auto& entry : fs::directory_iterator(root / "ledger" / "spool")) {
+        if (entry.is_regular_file()) ++rollover_count;
+    }
+    assert(rollover_count == 3); // Local counter reuse must not overwrite records.
     assert(fs::is_regular_file(root / "control" / "native_evidence_status.json"));
     fs::remove_all(root);
     std::cout << "native runtime evidence PASS\n";
