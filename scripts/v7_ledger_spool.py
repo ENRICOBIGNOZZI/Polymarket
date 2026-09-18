@@ -120,6 +120,39 @@ def _atomic_payload(directory: Path, name: str, value: dict[str, object]) -> Pat
     return target
 
 
+def _native_settlement_receipt_valid(event: LedgerEvent, engine_id: str) -> bool:
+    """Accept PAPER lifecycle evidence only from the sole native settlement owner."""
+    metadata = event.metadata if isinstance(event.metadata, dict) else {}
+    receipt = metadata.get("native_settlement_receipt")
+    if not isinstance(receipt, dict):
+        return False
+    client_order_id = receipt.get("client_order_id")
+    command_id = receipt.get("command_id")
+    owner_chain = receipt.get("owner_chain")
+    expected_order_id = f"native:{client_order_id}" if isinstance(client_order_id, int) else ""
+    return (
+        engine_id == "CRYPTO_SETTLEMENT_ENGINE"
+        and receipt.get("schema") == "polymarket_v7_native_settlement_receipt_v1"
+        and receipt.get("owner") == "V7_NATIVE_CRYPTO_SETTLEMENT_ENGINE"
+        and receipt.get("engine_id") == engine_id
+        and receipt.get("model_sha") == event.model_sha
+        and receipt.get("paper_only") is True
+        and receipt.get("authenticated_execution") is False
+        and receipt.get("real_order_submission") is False
+        and receipt.get("real_capital_at_risk") is False
+        and receipt.get("execution_mode") == "PAPER_SIMULATED"
+        and receipt.get("paper_simulation_authority") is True
+        and receipt.get("real_new_risk_authorized") is False
+        and receipt.get("single_owner") is True
+        and owner_chain == ["portfolio", "risk", "capital", "oms", "inventory"]
+        and isinstance(client_order_id, int) and not isinstance(client_order_id, bool)
+        and client_order_id > 0
+        and isinstance(command_id, int) and not isinstance(command_id, bool)
+        and command_id > 0
+        and event.order_id == expected_order_id
+    )
+
+
 def _coordinator_receipt_valid(event: LedgerEvent, engine_id: str) -> bool:
     metadata = event.metadata if isinstance(event.metadata, dict) else {}
     receipt = metadata.get("coordinator_receipt")
@@ -203,7 +236,8 @@ def _authority_route(run_root: Path, event: LedgerEvent) -> str:
         _atomic_payload(run_root / "opportunities" / "quarantine", filename, payload)
         return "QUARANTINED"
     metadata = event.metadata if isinstance(event.metadata, dict) else {}
-    if _coordinator_receipt_valid(event, engine_id):
+    if (_coordinator_receipt_valid(event, engine_id)
+            or _native_settlement_receipt_valid(event, engine_id)):
         return "APPEND"
     evidence_only = (
         metadata.get("counterfactual") is True
