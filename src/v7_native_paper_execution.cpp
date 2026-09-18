@@ -73,19 +73,31 @@ NativePaperSubmitResult NativePaperExecutionAdapter::submit(
     }
     if (book.valid == 0 || book.lineage_continuous == 0
         || book.tick_size_e4 != command.tick_size_e4) {
-        (void)endpoint_.observe_unsent(command, now_monotonic_ns);
+        if (!endpoint_.observe_unsent(command, now_monotonic_ns)) {
+            out.reason = NativePaperReason::LifecycleFailure;
+            return out;
+        }
         out.reason = NativePaperReason::BookUnavailable;
+        out.final_state = OrderState::Rejected;
         return out;
     }
     if (command.time_in_force == AdapterTimeInForce::Gtc && free_slot() == nullptr) {
-        (void)endpoint_.observe_unsent(command, now_monotonic_ns);
+        if (!endpoint_.observe_unsent(command, now_monotonic_ns)) {
+            out.reason = NativePaperReason::LifecycleFailure;
+            return out;
+        }
         out.reason = NativePaperReason::CapacityFull;
+        out.final_state = OrderState::Rejected;
         return out;
     }
     if (command.time_in_force != AdapterTimeInForce::Gtc
         && command.time_in_force != AdapterTimeInForce::Fak) {
-        (void)endpoint_.observe_unsent(command, now_monotonic_ns);
+        if (!endpoint_.observe_unsent(command, now_monotonic_ns)) {
+            out.reason = NativePaperReason::LifecycleFailure;
+            return out;
+        }
         out.reason = NativePaperReason::InvalidCommand;
+        out.final_state = OrderState::Rejected;
         return out;
     }
     if (!live_locally(command, now_monotonic_ns)) {
@@ -169,6 +181,7 @@ NativePaperSubmitResult NativePaperExecutionAdapter::submit(
     out.fill.fill_microunits = command.quantity_microunits;
     out.fill.exchange_event_ns = book.exchange_event_ns;
     out.fill.receive_monotonic_ns = now_monotonic_ns;
+    out.fill.order_state = filled.state;
     out.fill.taker = 1;
     out.accepted = 1;
     return out;
@@ -195,9 +208,13 @@ bool NativePaperExecutionAdapter::request_cancel(
     return true;
 }
 
-bool NativePaperExecutionAdapter::advance_time(std::int64_t now_monotonic_ns) noexcept {
-    if (now_monotonic_ns <= 0) return false;
-    bool ok = true;
+NativePaperAdvanceResult NativePaperExecutionAdapter::advance_time(
+    std::int64_t now_monotonic_ns) noexcept {
+    NativePaperAdvanceResult out{};
+    if (now_monotonic_ns <= 0) {
+        out.invalid = 1;
+        return out;
+    }
     for (auto& slot : slots_) {
         if (slot.occupied == 0 || slot.cancel_deadline_ns <= 0
             || now_monotonic_ns < slot.cancel_deadline_ns) continue;
@@ -206,14 +223,18 @@ bool NativePaperExecutionAdapter::advance_time(std::int64_t now_monotonic_ns) no
         ack.timestamp_ns = slot.cancel_deadline_ns;
         const auto result = endpoint_.apply_owned(slot.client_order_id, ack);
         if (result.applied == 0 || result.invariant_violation != 0
-            || result.state != OrderState::Cancelled) {
-            ok = false;
+            || result.state != OrderState::Cancelled
+            || out.cancellation_count >= out.cancellations.size()) {
+            out.invalid = 1;
             continue;
         }
+        auto& record = out.cancellations[out.cancellation_count++];
+        record.command = slot.command;
+        record.cancel_effective_monotonic_ns = slot.cancel_deadline_ns;
         ++paper_cancels_;
         clear(slot);
     }
-    return ok;
+    return out;
 }
 
 NativePaperTradeResult NativePaperExecutionAdapter::on_public_trade(
@@ -275,6 +296,7 @@ NativePaperTradeResult NativePaperExecutionAdapter::on_public_trade(
         record.fill_microunits = fill_qty;
         record.exchange_event_ns = trade.exchange_event_ns;
         record.receive_monotonic_ns = trade.receive_monotonic_ns;
+        record.order_state = result.state;
         record.taker = 0;
         ++out.fills;
         out.filled_microunits += fill_qty;
