@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import argparse
 import fcntl
+import http.client
 from decimal import Decimal, InvalidOperation
 import json
 import math
@@ -34,13 +35,6 @@ from v7_native_settlement_projection import context_from_fill
 STATUS_SCHEMA = "polymarket_v7_native_engine_manager_status_v1"
 
 
-class RetryableLaunchError(RuntimeError):
-    """Remote per-market metadata is temporarily unavailable.
-
-    This must never tear down already-running native context workers.
-    """
-
-
 def read_json(path: Path) -> dict[str, Any]:
     try:
         value = json.loads(path.read_text(encoding="utf-8"))
@@ -60,13 +54,38 @@ def exact_sha(value: str) -> bool:
     return len(value) == 40 and all(ch in "0123456789abcdef" for ch in value)
 
 
-def public_json(url: str, timeout: float = 1.5) -> Any:
-    request = urllib.request.Request(url, headers={"User-Agent": "polymarket-v7-native-paper/1"})
-    try:
-        with urllib.request.urlopen(request, timeout=timeout) as response:
-            return json.loads(response.read().decode("utf-8"))
-    except (TimeoutError, ConnectionError, urllib.error.URLError, json.JSONDecodeError) as exc:
-        raise RetryableLaunchError(f"remote_metadata_unavailable:{type(exc).__name__}") from exc
+class VenueMetadataUnavailable(RuntimeError):
+    """Public venue metadata could not be read; the affected context must stay closed."""
+
+
+def public_json(url: str, timeout: float = 4.0, attempts: int = 3) -> Any:
+    if attempts < 1 or attempts > 5:
+        raise ValueError("public_json_attempts_invalid")
+    request = urllib.request.Request(
+        url, headers={"User-Agent": "polymarket-v7-native-paper/1"}
+    )
+    last: BaseException | None = None
+    for attempt in range(attempts):
+        try:
+            with urllib.request.urlopen(request, timeout=timeout) as response:
+                return json.loads(response.read().decode("utf-8"))
+        except urllib.error.HTTPError as exc:
+            last = exc
+            # Rate limits and server errors can be transient. Client errors still
+            # fail the context closed, but retrying them would only add load.
+            if exc.code < 500 and exc.code != 429:
+                break
+        except (
+            urllib.error.URLError,
+            http.client.RemoteDisconnected,
+            TimeoutError,
+            ConnectionError,
+            OSError,
+        ) as exc:
+            last = exc
+        if attempt + 1 < attempts:
+            time.sleep(0.05 * (2 ** attempt))
+    raise VenueMetadataUnavailable(f"venue_metadata_unavailable:{type(last).__name__}") from last
 
 
 def _close_unix(row: dict[str, Any]) -> int:
@@ -367,9 +386,7 @@ class Manager:
         self.completed_market_ids: set[str] = set()
         self.stopping = False
         self.pending_settlements: dict[str, PendingSettlement] = {}
-        self.launch_retry_attempts: dict[str, int] = {}
-        self.launch_retry_after: dict[str, float] = {}
-        self.launch_retry_reasons: dict[str, str] = {}
+        self.launch_failures: dict[str, dict[str, Any]] = {}
         self.base_risk_receipt = load_native_limits(
             read_json(args.repository_root / "config/v7_native_risk_policy.json"),
             read_json(self.run_root / "control/allocations/manifest.json"))
@@ -571,13 +588,28 @@ class Manager:
             "taker_minimum_tte_ns": self.args.minimum_tte_ns,
             "taker_maximum_tte_ns": self.args.maximum_tte_ns,
             "maker_share_cap_microunits": self.args.maker_share_cap_microunits,
-            "launch_retry_contexts": sorted(self.launch_retry_attempts),
-            "launch_retry_count": len(self.launch_retry_attempts),
-            "launch_retry_attempts": dict(sorted(self.launch_retry_attempts.items())),
-            "launch_retry_reasons": dict(sorted(self.launch_retry_reasons.items())),
+            "native_capture_mode": (
+                "FULL" if getattr(self.args, "capture_native_observations", False)
+                else "DECISIONS" if getattr(self.args, "capture_native_decisions", False)
+                else "OFF"
+            ),
             "evidence_worker_count": int(evidence.get("worker_count") or 0),
             "evidence_dropped": int(evidence.get("dropped") or 0),
             "evidence_queue_depth": int(evidence.get("queue_depth") or 0),
+            "native_observations_published": int(evidence.get("observations_published") or 0),
+            "native_observations_written": int(evidence.get("observations_written") or 0),
+            "native_observations_dropped": int(evidence.get("observations_dropped") or 0),
+            "native_observations_queue_depth": int(evidence.get("observations_queue_depth") or 0),
+            "launch_blocked_count": len(self.launch_failures),
+            "launch_blocked_contexts": {
+                key: {
+                    "market_id": str(value.get("market_id") or ""),
+                    "attempts": int(value.get("attempts") or 0),
+                    "reason": str(value.get("reason") or ""),
+                    "next_retry_monotonic_ns": int(value.get("next_retry_monotonic_ns") or 0),
+                }
+                for key, value in sorted(self.launch_failures.items())
+            },
             "settlement_market_count": int(settlements.get("market_count") or 0),
             "settlement_blocked_count": int(settlements.get("blocked_count") or 0),
             "settlement_retryable_timeout_count": int(
@@ -613,22 +645,12 @@ class Manager:
         if len(tokens) != 2 or len(outcomes) != 2:
             raise RuntimeError("outcome_mapping_invalid")
         yes_token, no_token = tokens
-        try:
-            yes_tick = tick_size_e4(yes_token)
-            no_tick = tick_size_e4(no_token)
-            if yes_tick != no_tick:
-                raise RuntimeError("complement_tick_size_mismatch")
-            minimum_order = max(
-                self.args.min_order_microunits,
-                venue_minimum_microunits(yes_token),
-                venue_minimum_microunits(no_token),
-            )
-        except RetryableLaunchError:
-            raise
-        except (OSError, RuntimeError, ValueError) as exc:
-            # CLOB terms are market-scoped remote metadata. Quarantine/retry
-            # this context without taking down already-running contexts.
-            raise RetryableLaunchError(f"clob_market_terms:{exc}") from exc
+        yes_tick = tick_size_e4(yes_token)
+        no_tick = tick_size_e4(no_token)
+        if yes_tick != no_tick:
+            raise RuntimeError("complement_tick_size_mismatch")
+        minimum_order = max(self.args.min_order_microunits,
+            venue_minimum_microunits(yes_token), venue_minimum_microunits(no_token))
         fee_rate, fee_exponent, fee_source = fee_parameters(market)
         close_unix = _close_unix(market)
         close_wall_ns = close_unix * 1_000_000_000
@@ -679,6 +701,8 @@ class Manager:
         ]
         if getattr(self.args, "capture_native_observations", False):
             command.append("--capture-native-observations")
+        elif getattr(self.args, "capture_native_decisions", False):
+            command.append("--capture-native-decisions")
         return command
 
     def _wrapped_hot_command(self, command: list[str]) -> list[str]:
@@ -727,6 +751,64 @@ class Manager:
         if available <= 0:
             raise CapitalLeaseUnavailable("unresolved capital claim exhausts context allowance")
         return available
+
+    @staticmethod
+    def _launch_backoff_ns(attempts: int) -> int:
+        seconds = min(30.0, float(2 ** max(0, min(attempts - 1, 5))))
+        return int(seconds * 1_000_000_000)
+
+    def _launch_retry_due(self, context: str, market_id: str, now_ns: int) -> bool:
+        failure = self.launch_failures.get(context)
+        if failure is None:
+            return True
+        if str(failure.get("market_id") or "") != market_id:
+            self.launch_failures.pop(context, None)
+            return True
+        return now_ns >= int(failure.get("next_retry_monotonic_ns") or 0)
+
+    def _record_launch_failure(
+        self, context: str, market_id: str, exc: BaseException, now_ns: int,
+    ) -> None:
+        prior = self.launch_failures.get(context)
+        attempts = (
+            int(prior.get("attempts") or 0) + 1
+            if prior is not None and str(prior.get("market_id") or "") == market_id
+            else 1
+        )
+        self.launch_failures[context] = {
+            "market_id": market_id,
+            "attempts": attempts,
+            "reason": f"{type(exc).__name__}:{exc}",
+            "last_failure_monotonic_ns": now_ns,
+            "next_retry_monotonic_ns": now_ns + self._launch_backoff_ns(attempts),
+        }
+
+    def _launch_targets(
+        self, targets: dict[str, dict[str, Any]], *, now_ns: int | None = None,
+    ) -> None:
+        clock_ns = time.monotonic_ns() if now_ns is None else now_ns
+        target_keys = set(targets)
+        for stale in set(self.launch_failures) - target_keys:
+            self.launch_failures.pop(stale, None)
+        for key, market in sorted(targets.items()):
+            market_id = str(market["market_id"])
+            if market_id in self.completed_market_ids or key in self.workers:
+                self.launch_failures.pop(key, None)
+                continue
+            if not self._launch_retry_due(key, market_id, clock_ns):
+                continue
+            try:
+                self.workers[key] = self.launch_worker(key, market)
+            except CapitalLeaseUnavailable:
+                # Capital remains canonically reserved. This is not a venue
+                # failure and must never free or duplicate the claim.
+                continue
+            except (OSError, RuntimeError, ValueError) as exc:
+                # Fail closed only for this context. Other contexts retain
+                # their running workers and capital ownership.
+                self._record_launch_failure(key, market_id, exc, clock_ns)
+                continue
+            self.launch_failures.pop(key, None)
 
     def launch_worker(self, context: str, market: dict[str, Any]) -> Worker:
         budget_microdollars = self._context_lease(context)
@@ -896,34 +978,6 @@ class Manager:
             finally:
                 self._terminate_all()
 
-    def _launch_missing_workers(
-        self, targets: dict[str, dict[str, Any]],
-    ) -> tuple[str, Exception] | None:
-        now = time.monotonic()
-        for key, market in sorted(targets.items()):
-            market_id = str(market["market_id"])
-            if market_id in self.completed_market_ids or key in self.workers:
-                continue
-            if now < self.launch_retry_after.get(key, 0.0):
-                continue
-            try:
-                self.workers[key] = self.launch_worker(key, market)
-            except CapitalLeaseUnavailable:
-                continue
-            except RetryableLaunchError as exc:
-                attempts = self.launch_retry_attempts.get(key, 0) + 1
-                self.launch_retry_attempts[key] = attempts
-                self.launch_retry_reasons[key] = str(exc)[:240]
-                self.launch_retry_after[key] = time.monotonic() + min(2.0, 0.25 * (2 ** min(attempts - 1, 3)))
-                continue
-            except (OSError, RuntimeError, ValueError) as exc:
-                return key, exc
-            else:
-                self.launch_retry_attempts.pop(key, None)
-                self.launch_retry_reasons.pop(key, None)
-                self.launch_retry_after.pop(key, None)
-        return None
-
     def _run_owned(self) -> int:
         self.status("STARTING")
         recovery = self.recover()
@@ -963,19 +1017,29 @@ class Manager:
                     self._terminate_all()
                     return rc
 
-            fatal_launch = self._launch_missing_workers(targets)
-            if fatal_launch is not None:
-                key, exc = fatal_launch
-                self.status("LAUNCH_BLOCKED", blocker=f"{key}:{exc}", targets=targets)
-                self._terminate_all()
-                return 78
+            self._launch_targets(targets)
 
+            blocked = sorted(set(self.launch_failures) & set(targets))
             if self.workers:
-                self.status("RUNNING", targets=targets)
+                self.status(
+                    "RUNNING_DEGRADED" if blocked else "RUNNING",
+                    blocker=(
+                        ";".join(
+                            f"{key}:{self.launch_failures[key]['reason']}" for key in blocked
+                        )
+                        if blocked else ""
+                    ),
+                    targets=targets,
+                )
             else:
                 self.status(
-                    "WAITING_FOR_CANONICAL_MARKETS",
-                    blocker="" if targets else "NO_REGISTERED_MARKET_READY",
+                    "WAITING_FOR_CONTEXT_RETRY" if blocked else "WAITING_FOR_CANONICAL_MARKETS",
+                    blocker=(
+                        ";".join(
+                            f"{key}:{self.launch_failures[key]['reason']}" for key in blocked
+                        )
+                        if blocked else ("" if targets else "NO_REGISTERED_MARKET_READY")
+                    ),
                     targets=targets,
                 )
             time.sleep(0.25)
@@ -1007,7 +1071,9 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--maker-share-cap-microunits", type=int, default=5_000_000)
     parser.add_argument("--asynchronous-settlement", action="store_true")
     parser.add_argument("--capture-native-observations", action="store_true",
-        help="Explicit bounded research capture; keep off until storage/offload is provisioned")
+        help="Full bounded native book/trade + decision research capture")
+    parser.add_argument("--capture-native-decisions", action="store_true",
+        help="Low-volume native decision/intent capture; no raw book-event duplication")
     args = parser.parse_args()
     if not exact_sha(args.model_sha):
         parser.error("--model-sha must be exact lowercase 40-hex SHA")
