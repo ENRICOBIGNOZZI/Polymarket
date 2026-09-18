@@ -37,8 +37,26 @@ assert v.get('runtime_training') is False
 print('artifact_gate=ready')
 PY
 
+# Capture the run root currently bound to systemd before rewriting it. The
+# target may use a new per-SHA root, but unresolved native fills in the previous
+# generation must still block a cross-SHA cutover.
+PREVIOUS_RUN_ROOT=""
+if systemctl cat polymarket-v7-paper.service >/dev/null 2>&1; then
+  PREVIOUS_RUN_ROOT="$(systemctl show polymarket-v7-paper.service -p Environment --value \
+    | tr ' ' '\\n' | sed -n 's/^PM_V7_RUN_ROOT=//p' | head -n 1)"
+fi
+if [[ -n "$PREVIOUS_RUN_ROOT" && "$PREVIOUS_RUN_ROOT" != /* ]]; then
+  echo "previous London run root is not absolute" >&2
+  exit 78
+fi
+
 # Stop old generation before archive; never copy its ledger into the new run.
 sudo systemctl stop polymarket-v7-exporter.service polymarket-v7-paper.service >/dev/null 2>&1 || true
+if [[ -n "$PREVIOUS_RUN_ROOT" && "$PREVIOUS_RUN_ROOT" != "$RUN_ROOT" && -e "$PREVIOUS_RUN_ROOT" ]]; then
+  python3 "$SOURCE_DIR/scripts/v7_prepare_cutover_run_root.py" \
+    --run-root "$PREVIOUS_RUN_ROOT" --archive-root "$ARCHIVE_ROOT" \
+    --repository-root "$SOURCE_DIR" --target-sha "$EXPECTED_SHA"
+fi
 python3 "$SOURCE_DIR/scripts/v7_prepare_cutover_run_root.py" \
   --run-root "$RUN_ROOT" --archive-root "$ARCHIVE_ROOT" \
   --repository-root "$SOURCE_DIR" --target-sha "$EXPECTED_SHA"
