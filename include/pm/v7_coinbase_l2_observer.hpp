@@ -18,7 +18,7 @@ namespace pm::v7::external_fair {
 
 inline constexpr std::size_t kCoinbaseJsonArenaBytes = 16U * 1024U * 1024U;
 inline constexpr std::size_t kCoinbaseMaxChangesPerFrame = 65'536;
-inline constexpr std::size_t kCoinbaseParserScratchBytes = 16U * 1024U;
+inline constexpr std::size_t kCoinbaseParserScratchBytes = 4U * 1024U * 1024U;
 
 // Canonical Coinbase Exchange level2/level2_batch observer. All per-frame JSON
 // and L2 scratch memory is reserved at cold start. Runtime overflow fails closed
@@ -52,7 +52,7 @@ private:
     CoinbaseL2Book book_{};
     std::vector<unsigned char> json_arena_;
     std::unique_ptr<boost::json::static_resource> json_resource_;
-    std::array<unsigned char, kCoinbaseParserScratchBytes> parser_scratch_{};
+    std::vector<unsigned char> parser_scratch_;
     std::unique_ptr<boost::json::parser> parser_;
     std::unique_ptr<std::array<CoinbaseDepthLevel, kCoinbaseL2MaxLevelsPerSide>> bid_scratch_;
     std::unique_ptr<std::array<CoinbaseDepthLevel, kCoinbaseL2MaxLevelsPerSide>> ask_scratch_;

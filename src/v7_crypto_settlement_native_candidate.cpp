@@ -768,6 +768,10 @@ int main(int argc, char** argv) {
             {"decision_compute", latency_distribution(std::move(decision_compute))},
             {"reason_counts", reason_json(reasons)},
             {"binance", {{"invalid_frames", binance_ingress_status.invalid_frames}, {"enqueued", binance_ingress_status.enqueued_events}, {"drained", binance_ingress_status.drained_events}, {"queued", binance_ingress_status.queued}, {"frames", binance_status.frames_received}, {"transport_failures", binance_status.transport_failures}, {"drops", binance_ingress_status.dropped_events}}},
+            {"coinbase_l2", {{"valid", coinbase_l2.metrics().valid != 0},
+                {"updates", coinbase_l2.metrics().update_count},
+                {"parse_failures", coinbase_l2.metrics().parse_failures},
+                {"diagnostic", coinbase_l2.diagnostic()}}},
             {"coinbase", {{"invalid_frames", coinbase_ingress_status.invalid_frames}, {"enqueued", coinbase_ingress_status.enqueued_events}, {"drained", coinbase_ingress_status.drained_events}, {"queued", coinbase_ingress_status.queued}, {"frames", coinbase_status.frames_received}, {"transport_failures", coinbase_status.transport_failures}, {"drops", coinbase_ingress_status.dropped_events}}},
             {"polymarket", {{"messages", pm_status.messages}, {"reconnects", pm_status.reconnects}, {"errors", pm_status.errors}, {"drops", pm_drops.load()}}},
             {"note", "PAPER-only native candidate. Maker and taker share one in-process inventory/capital/OMS authority. Taker fills require causal executable L1 depth; maker fills use pessimistic public-print queue depletion and bounded cancel latency. No authenticated submission or real capital is possible."}

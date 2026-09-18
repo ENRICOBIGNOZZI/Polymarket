@@ -122,6 +122,7 @@ CoinbaseL2FrameObserver::CoinbaseL2FrameObserver(
     : ingress_(ingress), asset_handle_(asset_handle),
       json_arena_(kCoinbaseJsonArenaBytes),
       json_resource_(std::make_unique<json::static_resource>(json_arena_.data(), json_arena_.size())),
+      parser_scratch_(kCoinbaseParserScratchBytes),
       parser_(std::make_unique<json::parser>(
           json::storage_ptr(json::get_null_resource()), json::parse_options{},
           parser_scratch_.data(), parser_scratch_.size())),

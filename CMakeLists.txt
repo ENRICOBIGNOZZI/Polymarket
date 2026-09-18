@@ -447,6 +447,11 @@ if(BUILD_TESTING)
   target_link_libraries(pm_v7_coinbase_l2_tests PRIVATE pm_v7_external)
   add_test(NAME pm_v7_coinbase_l2_tests COMMAND pm_v7_coinbase_l2_tests)
 
+  add_executable(pm_v7_coinbase_observer_capacity_tests tests/test_v7_coinbase_observer_capacity.cpp)
+  target_link_libraries(pm_v7_coinbase_observer_capacity_tests PRIVATE pm_v7_external)
+  add_test(NAME pm_v7_coinbase_observer_capacity_tests COMMAND pm_v7_coinbase_observer_capacity_tests)
+
+
   add_test(NAME test_v7_authorized_make_cancel_runtime
     COMMAND ${Python3_EXECUTABLE}
       "${CMAKE_CURRENT_SOURCE_DIR}/tests/test_v7_authorized_make_cancel_runtime.py"
