@@ -303,7 +303,16 @@
         "--allocation",
         "${RUN_ROOT}/control/allocations/crypto_settlement_engine.json",
         "--market-registry",
-        "${ROOT}/config/v7_crypto_settlement_markets.json"
+        "${ROOT}/config/v7_crypto_settlement_markets.json",
+        "--target-quantity-microunits",
+        "20000000",
+        "--minimum-tte-ns",
+        "5000000000",
+        "--maximum-tte-ns",
+        "120000000000",
+        "--maker-share-cap-microunits",
+        "5000000",
+        "--asynchronous-settlement"
       ],
       "profile": "core",
       "inputs": [
