@@ -91,6 +91,69 @@ def max_loss_capped_shares(
     return max(0.0, quantity)
 
 
+
+def price_aware_fractional_kelly_size(
+    *, probability: float, executable_ask: float, fee_per_share: float,
+    uncertainty_buffer: float, available_capital_usd: float,
+    fractional_kelly: float = 0.25, max_loss_usd: float = 5.0,
+    max_shares: float = 20.0, visible_depth_shares: float | None = None,
+    other_cost_per_share: float = 0.0, minimum_net_edge: float = 0.0,
+    minimum_shares: float = 0.0,
+) -> dict[str, float | str]:
+    """Prospective PAPER sizing from a robust settlement probability."""
+    values = {
+        'probability': probability, 'executable_ask': executable_ask,
+        'fee_per_share': fee_per_share, 'uncertainty_buffer': uncertainty_buffer,
+        'available_capital_usd': available_capital_usd,
+        'fractional_kelly': fractional_kelly, 'max_loss_usd': max_loss_usd,
+        'max_shares': max_shares, 'other_cost_per_share': other_cost_per_share,
+        'minimum_net_edge': minimum_net_edge, 'minimum_shares': minimum_shares,
+    }
+    clean = {k: _finite(v) for k, v in values.items()}
+    if not 0.0 <= clean['probability'] <= 1.0:
+        raise ValueError('probability outside unit interval')
+    if not 0.0 < clean['executable_ask'] < 1.0:
+        raise ValueError('invalid executable ask')
+    if min(clean['fee_per_share'], clean['uncertainty_buffer'],
+           clean['available_capital_usd'], clean['max_loss_usd'],
+           clean['other_cost_per_share'], clean['minimum_net_edge'],
+           clean['minimum_shares']) < 0.0:
+        raise ValueError('negative sizing input')
+    if not 0.0 < clean['fractional_kelly'] <= 1.0 or clean['max_shares'] <= 0.0:
+        raise ValueError('invalid sizing cap')
+    depth = clean['max_shares'] if visible_depth_shares is None else _finite(visible_depth_shares)
+    if depth < 0.0:
+        raise ValueError('negative visible depth')
+
+    robust_probability = max(0.0, clean['probability'] - clean['uncertainty_buffer'])
+    full_cost = clean['executable_ask'] + clean['fee_per_share'] + clean['other_cost_per_share']
+    edge = robust_probability - full_cost
+    if full_cost >= 1.0:
+        return {'shares': 0.0, 'reason': 'COST_AT_OR_ABOVE_PAYOUT',
+                'robust_probability': robust_probability, 'full_cost_per_share': full_cost,
+                'net_edge_per_share': edge, 'kelly_fraction': 0.0}
+    if edge <= clean['minimum_net_edge']:
+        return {'shares': 0.0, 'reason': 'NONPOSITIVE_ROBUST_EDGE',
+                'robust_probability': robust_probability, 'full_cost_per_share': full_cost,
+                'net_edge_per_share': edge, 'kelly_fraction': 0.0}
+
+    full_kelly = edge / (1.0 - full_cost)
+    kelly_fraction = min(1.0, clean['fractional_kelly'] * full_kelly)
+    kelly_cash = clean['available_capital_usd'] * kelly_fraction
+    cash_at_risk = min(kelly_cash, clean['max_loss_usd'])
+    shares = min(cash_at_risk / full_cost, clean['max_shares'], depth)
+    if shares + 1e-12 < clean['minimum_shares']:
+        shares = 0.0; reason = 'BELOW_MINIMUM_SHARES'
+    else:
+        reason = 'ADMISSIBLE'
+    return {
+        'shares': max(0.0, shares), 'reason': reason,
+        'robust_probability': robust_probability, 'full_cost_per_share': full_cost,
+        'net_edge_per_share': edge, 'kelly_fraction': kelly_fraction,
+        'cash_at_risk_usd': max(0.0, shares) * full_cost,
+        'kelly_cash_usd': kelly_cash,
+    }
+
 def _group(rows: list[dict[str, Any]]) -> dict[str, Any]:
     if not rows:
         return {

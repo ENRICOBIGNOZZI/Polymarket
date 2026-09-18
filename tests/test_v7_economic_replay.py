@@ -329,3 +329,33 @@ def test_ev_policy_structural_gate_rejects_insufficient_depth():
         'signal_age_ns':1,'tte_ns':60_000_000_000,'minimum_order_microunits':5_000_000,
         'ask_quantity':19_000_000,'ask_e4':5000,'tick_e4':100}
     assert not structural_eligible(row,target_shares=20)
+
+
+def test_price_aware_kelly_sizing_requires_robust_positive_edge():
+    from price_aware import price_aware_fractional_kelly_size
+    rejected=price_aware_fractional_kelly_size(
+        probability=.96,executable_ask=.96,fee_per_share=.002688,
+        uncertainty_buffer=.005,available_capital_usd=333.0)
+    assert rejected['shares']==0 and rejected['reason']=='NONPOSITIVE_ROBUST_EDGE'
+    accepted=price_aware_fractional_kelly_size(
+        probability=.80,executable_ask=.60,fee_per_share=.01,
+        uncertainty_buffer=.02,available_capital_usd=333.0,
+        max_loss_usd=5,max_shares=20,visible_depth_shares=100)
+    assert 0<accepted['shares']<=20
+    assert accepted['cash_at_risk_usd']<=5+1e-12
+    assert accepted['net_edge_per_share']>0
+
+
+def test_price_aware_kelly_sizing_respects_depth_and_minimum():
+    from price_aware import price_aware_fractional_kelly_size
+    shallow=price_aware_fractional_kelly_size(
+        probability=.9,executable_ask=.5,fee_per_share=0,
+        uncertainty_buffer=0,available_capital_usd=1000,
+        max_loss_usd=100,max_shares=20,visible_depth_shares=3)
+    assert shallow['shares']==3
+    too_small=price_aware_fractional_kelly_size(
+        probability=.55,executable_ask=.5,fee_per_share=0,
+        uncertainty_buffer=.01,available_capital_usd=10,
+        max_loss_usd=1,max_shares=20,visible_depth_shares=20,
+        minimum_shares=5)
+    assert too_small['shares']==0 and too_small['reason']=='BELOW_MINIMUM_SHARES'
