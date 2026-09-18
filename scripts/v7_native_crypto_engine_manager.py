@@ -51,7 +51,7 @@ def public_json(url: str, timeout: float = 4.0) -> Any:
 def select_market(snapshot: dict[str, Any], model_sha: str, *, now_s: int | None = None) -> dict[str, Any] | None:
     now = int(time.time() if now_s is None else now_s)
     if (
-        snapshot.get("schema") != "polymarket_v7_crypto_universe_v7"
+        snapshot.get("schema") != "polymarket_v7_crypto_universe_snapshot_v1"
         or snapshot.get("paper_only") is not True
         or snapshot.get("authenticated_execution") is not False
         or snapshot.get("real_order_submission") is not False
