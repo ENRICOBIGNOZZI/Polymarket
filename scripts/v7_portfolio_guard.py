@@ -44,6 +44,31 @@ def _finite_nonnegative(value: Any, name: str) -> float:
     return number
 
 
+def _native_receipt_valid(event: Any) -> bool:
+    metadata = event.metadata if isinstance(event.metadata, dict) else {}
+    receipt = metadata.get("native_settlement_receipt")
+    if not isinstance(receipt, dict):
+        return False
+    client = receipt.get("client_order_id")
+    return (
+        receipt.get("schema") == "polymarket_v7_native_settlement_receipt_v1"
+        and receipt.get("owner") == "V7_NATIVE_CRYPTO_SETTLEMENT_ENGINE"
+        and receipt.get("engine_id") == "CRYPTO_SETTLEMENT_ENGINE"
+        and receipt.get("model_sha") == event.model_sha
+        and receipt.get("paper_only") is True
+        and receipt.get("authenticated_execution") is False
+        and receipt.get("real_order_submission") is False
+        and receipt.get("real_capital_at_risk") is False
+        and receipt.get("execution_mode") == "PAPER_SIMULATED"
+        and receipt.get("paper_simulation_authority") is True
+        and receipt.get("real_new_risk_authorized") is False
+        and receipt.get("single_owner") is True
+        and receipt.get("owner_chain") == ["portfolio", "risk", "capital", "oms", "inventory"]
+        and isinstance(client, int) and not isinstance(client, bool) and client > 0
+        and event.order_id == f"native:{client}"
+    )
+
+
 def _canonical_crypto_equity(run_root: Path, budget: float) -> tuple[float, bool, str, bool, dict[str, Any]] | None:
     runtime = read_json(run_root / "control" / "runtime_status.json")
     ledger = run_root / "ledger" / "execution.jsonl"
@@ -62,29 +87,54 @@ def _canonical_crypto_equity(run_root: Path, budget: float) -> tuple[float, bool
                   if event.strategy == "CRYPTO_SETTLEMENT_ENGINE"]
     except (OSError, LedgerContractError, ValueError, TypeError) as exc:
         return 0.0, True, "canonical_ledger_invalid", True, {"reason": f"{type(exc).__name__}:{exc}"}
-    records: set[str] = set(); fills: set[str] = set()
-    histories: dict[str, list[Any]] = defaultdict(list)
+
+    records: set[str] = set()
+    fills_seen: set[str] = set()
+    coordinator_histories: dict[str, list[Any]] = defaultdict(list)
+    native_fills: dict[str, list[Any]] = defaultdict(list)
+    native_finals: dict[str, list[Any]] = defaultdict(list)
     components: dict[str, list[float]] = defaultdict(list)
+
     for event in events:
         if event.record_id in records:
             return 0.0, True, "canonical_ledger_duplicate", True, {"reason": "DUPLICATE_RECORD_ID"}
         records.add(event.record_id)
-        if event.event_type in {"FILL", "FINAL"}:
-            receipt = event.metadata.get("coordinator_receipt")
-            if not isinstance(receipt, dict) or not receipt:
-                return 0.0, True, "canonical_ledger_unbound", True, {"reason": "COORDINATOR_RECEIPT_MISSING"}
-            if not event.order_id:
-                return 0.0, True, "canonical_ledger_unbound", True, {"reason": "ORDER_ID_MISSING"}
-            histories[event.order_id].append(event)
+        if event.event_type not in {"FILL", "FINAL"}:
+            continue
+        if not event.order_id:
+            return 0.0, True, "canonical_ledger_unbound", True, {"reason": "ORDER_ID_MISSING"}
+
+        metadata = event.metadata if isinstance(event.metadata, dict) else {}
+        coordinator = metadata.get("coordinator_receipt")
+        native = _native_receipt_valid(event)
+        if native:
+            if not event.market_id:
+                return 0.0, True, "canonical_ledger_unbound", True, {"reason": "NATIVE_MARKET_ID_MISSING"}
+            if event.event_type == "FILL":
+                native_fills[event.market_id].append(event)
+            else:
+                settlement_id = metadata.get("native_market_settlement_id")
+                if settlement_id != f"native-settlement:{event.market_id}":
+                    return 0.0, True, "canonical_ledger_unbound", True, {
+                        "reason": "NATIVE_FINAL_SETTLEMENT_ID_INVALID", "market_id": event.market_id}
+                native_finals[event.market_id].append(event)
+        elif isinstance(coordinator, dict) and coordinator:
+            coordinator_histories[event.order_id].append(event)
+        else:
+            return 0.0, True, "canonical_ledger_unbound", True, {"reason": "EXECUTION_RECEIPT_MISSING"}
+
         if event.event_type == "FILL":
-            if not event.fill_id or event.fill_id in fills:
+            if not event.fill_id or event.fill_id in fills_seen:
                 return 0.0, True, "canonical_ledger_duplicate", True, {"reason": "DUPLICATE_OR_MISSING_FILL_ID"}
-            fills.add(event.fill_id)
+            fills_seen.add(event.fill_id)
+
     realized: list[float] = []
-    open_costs: list[float] = []
+    open_cashflows: list[float] = []
     open_orders = 0
     finals = 0
-    for order_id, history in histories.items():
+
+    # Preserve the existing coordinator-bound accounting contract.
+    for order_id, history in coordinator_histories.items():
         order_fills = [event for event in history if event.event_type == "FILL"]
         order_finals = [event for event in history if event.event_type == "FINAL"]
         if len(order_finals) > 1:
@@ -95,7 +145,9 @@ def _canonical_crypto_equity(run_root: Path, budget: float) -> tuple[float, bool
             final = order_finals[0]
             if final.final_pnl is None or not math.isfinite(float(final.final_pnl)):
                 return 0.0, True, "canonical_ledger_unmarkable", True, {"reason": "FINAL_PNL_INVALID", "order_id": order_id}
-            pnl = float(final.final_pnl); realized.append(pnl); finals += 1
+            pnl = float(final.final_pnl)
+            realized.append(pnl)
+            finals += 1
             component = str(final.metadata.get("component") or final.metadata.get("model_family") or "UNKNOWN")
             components[component].append(pnl)
             continue
@@ -108,18 +160,79 @@ def _canonical_crypto_equity(run_root: Path, budget: float) -> tuple[float, bool
                 return 0.0, True, "canonical_ledger_unmarkable", True, {"reason": "OPEN_FILL_COST_INVALID", "order_id": order_id}
             if str(fill.side or "").upper() != "BUY":
                 return 0.0, True, "canonical_ledger_unsupported", True, {"reason": "OPEN_NONBUY_POSITION", "order_id": order_id}
-            open_costs.append(float(fill.filled_size) * float(fill.fill_price) + float(fill.fee))
+            open_cashflows.append(-(float(fill.filled_size) * float(fill.fill_price) + float(fill.fee)))
+
+    # Native PAPER markets are settled as one economic unit. Before resolution,
+    # value residual inventory at zero and include only observed cashflows. This
+    # is conservative and supports inventory-backed SELL fills without double
+    # counting the earlier BUY basis.
+    native_markets = set(native_fills) | set(native_finals)
+    for market_id in native_markets:
+        fills = native_fills.get(market_id, [])
+        market_finals = native_finals.get(market_id, [])
+        if len(market_finals) > 1:
+            return 0.0, True, "canonical_ledger_duplicate", True, {
+                "reason": "MULTIPLE_NATIVE_MARKET_FINALS", "market_id": market_id}
+        if market_finals:
+            if not fills:
+                return 0.0, True, "canonical_ledger_unbound", True, {
+                    "reason": "NATIVE_FINAL_WITHOUT_FILL", "market_id": market_id}
+            final = market_finals[0]
+            if final.final_pnl is None or not math.isfinite(float(final.final_pnl)):
+                return 0.0, True, "canonical_ledger_unmarkable", True, {
+                    "reason": "NATIVE_FINAL_PNL_INVALID", "market_id": market_id}
+            pnl = float(final.final_pnl)
+            realized.append(pnl)
+            finals += 1
+            component = str(final.metadata.get("component") or "native_market_settlement")
+            components[component].append(pnl)
+            continue
+
+        inventory: dict[str, float] = defaultdict(float)
+        native_open_orders: set[str] = set()
+        for fill in fills:
+            values = (fill.filled_size, fill.fill_price, fill.fee)
+            if any(value is None or not math.isfinite(float(value)) or float(value) < 0 for value in values):
+                return 0.0, True, "canonical_ledger_unmarkable", True, {
+                    "reason": "NATIVE_OPEN_FILL_INVALID", "market_id": market_id}
+            if not fill.token_id or fill.side not in {"BUY", "SELL"}:
+                return 0.0, True, "canonical_ledger_unmarkable", True, {
+                    "reason": "NATIVE_OPEN_FILL_INSTRUMENT_INVALID", "market_id": market_id}
+            qty = float(fill.filled_size)
+            price = float(fill.fill_price)
+            fee = float(fill.fee)
+            if qty <= 0 or not (0.0 <= price <= 1.0):
+                return 0.0, True, "canonical_ledger_unmarkable", True, {
+                    "reason": "NATIVE_OPEN_FILL_ECONOMICS_INVALID", "market_id": market_id}
+            if fill.side == "BUY":
+                inventory[fill.token_id] += qty
+                open_cashflows.append(-(qty * price + fee))
+            else:
+                inventory[fill.token_id] -= qty
+                if inventory[fill.token_id] < -1e-9:
+                    return 0.0, True, "canonical_ledger_unsupported", True, {
+                        "reason": "NATIVE_NAKED_SELL", "market_id": market_id}
+                open_cashflows.append(qty * price - fee)
+            native_open_orders.add(fill.order_id)
+        open_orders += len(native_open_orders)
+
     realized_pnl = math.fsum(realized)
-    open_cost = math.fsum(open_costs)
-    equity = budget + realized_pnl - open_cost
+    conservative_open_cashflow = math.fsum(open_cashflows)
+    equity = budget + realized_pnl + conservative_open_cashflow
     if not math.isfinite(equity) or equity < -1e-9:
-        return 0.0, True, "canonical_ledger_negative_equity", True, {"reason": "NEGATIVE_ENGINE_EQUITY", "equity": equity}
+        return 0.0, True, "canonical_ledger_negative_equity", True, {
+            "reason": "NEGATIVE_ENGINE_EQUITY", "equity": equity}
     details = {
-        "model_sha": model_sha, "ledger_records": len(events), "final_count": finals,
-        "open_order_count": open_orders, "realized_pnl": realized_pnl,
-        "conservative_open_cost": open_cost,
-        "component_realized_pnl": {key: math.fsum(values) for key, values in sorted(components.items())},
+        "model_sha": model_sha,
+        "ledger_records": len(events),
+        "final_count": finals,
+        "open_order_count": open_orders,
+        "realized_pnl": realized_pnl,
+        "conservative_open_cashflow": conservative_open_cashflow,
+        "component_realized_pnl": {
+            key: math.fsum(values) for key, values in sorted(components.items())},
         "open_position_valuation": "ZERO_RECOVERY_CONSERVATIVE_UNTIL_FINAL",
+        "receipt_modes": ["COORDINATOR", "NATIVE_PAPER_SINGLE_OWNER"],
     }
     return max(0.0, equity), False, "canonical_ledger_conservative", False, details
 
