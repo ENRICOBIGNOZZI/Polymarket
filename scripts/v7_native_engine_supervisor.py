@@ -172,8 +172,37 @@ class Supervisor:
         self.sessions_path = self.run_root / "control" / "native_market_sessions.jsonl"
         self.kill_path = self.run_root / "control" / "KILL"
         self.completed: set[str] = set()
+        for market_id, row in self._prior_sessions().items():
+            if int(row.get("started_ms") or 0) > 0:
+                self.completed.add(market_id)
         self.child: subprocess.Popen[str] | None = None
         self.stopping = False
+
+    def _prior_sessions(self) -> dict[str, dict[str, Any]]:
+        rows: dict[str, dict[str, Any]] = {}
+        if not self.sessions_path.is_file():
+            return rows
+        try:
+            lines = self.sessions_path.read_text(encoding="utf-8").splitlines()
+        except OSError:
+            return rows
+        for line in lines:
+            try:
+                row = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            if (
+                isinstance(row, dict)
+                and row.get("schema") == SESSION_SCHEMA
+                and row.get("model_sha") == self.args.model_sha
+                and row.get("paper_only") is True
+                and row.get("authenticated_execution") is False
+                and row.get("real_order_submission") is False
+            ):
+                market_id = str(row.get("market_id") or "")
+                if market_id:
+                    rows[market_id] = row
+        return rows
 
     def publish(self, state: str, **extra: Any) -> None:
         atomic_json(self.status_path, {
@@ -228,6 +257,25 @@ class Supervisor:
             "--duration-seconds", "0",
         ]
         started_ms = int(time.time() * 1000)
+        append_jsonl(self.sessions_path, {
+            "schema": SESSION_SCHEMA,
+            "model_sha": self.args.model_sha,
+            "run_id": self.args.run_id,
+            "server_id": self.args.server_id,
+            "paper_only": True,
+            "authenticated_execution": False,
+            "real_order_submission": False,
+            "market_id": spec["market_id"],
+            "event_id": spec["event_id"],
+            "yes_token": spec["yes_token"],
+            "no_token": spec["no_token"],
+            "close_wall_ns": spec["close_wall_ns"],
+            "started_ms": started_ms,
+            "ended_ms": 0,
+            "engine_returncode": None,
+            "forced_rollover": False,
+            "state": "STARTED",
+        })
         self.child = subprocess.Popen(command, env=env, text=True)
         self.publish("RUNNING", market_id=spec["market_id"], market_started_ms=started_ms)
         forced_rollover = False
@@ -265,6 +313,7 @@ class Supervisor:
             "ended_ms": ended_ms,
             "engine_returncode": returncode,
             "forced_rollover": forced_rollover,
+            "state": "ENDED",
         })
         self.child = None
         if returncode != 0 and not forced_rollover:
