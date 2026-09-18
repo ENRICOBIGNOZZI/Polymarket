@@ -28,19 +28,21 @@ class V7PaperLoopBash3PortabilityTest(unittest.TestCase):
         self.assertIn("trap cleanup EXIT", cleanup)
         self.assertIn("trap shutdown INT TERM", cleanup)
 
-    def test_runtime_readiness_requires_full_external_fair_chain(self) -> None:
+    def test_runtime_readiness_requires_live_native_engine_identity(self) -> None:
         text = LOOP.read_text(encoding="utf-8")
-        ready = text[text.index("paper_router_ready()") : text.index("write_runtime_status()")]
+        ready = text[text.index("native_engine_ready()") : text.index("write_runtime_status()")]
         for required in (
-            'FULL_FAIR_SHADOW_OPERATIONAL',
-            'external_fair_required_markets',
-            'rules_hash_recognized',
-            'settlement_reference',
-            'fair.get("valid") is True',
-            'oracle.get("healthy") is True',
-            'external.get("healthy") is True',
-            'book_requests',
-            'decision.get("books") or 0)==2',
+            'polymarket_v7_native_engine_manager_status_v1',
+            'value.get("model_sha")==sys.argv[2]',
+            'value.get("state")=="RUNNING"',
+            'value.get("paper_only") is True',
+            'value.get("authenticated_execution") is False',
+            'value.get("real_order_submission") is False',
+            'value.get("real_capital_at_risk") is False',
+            'value.get("single_native_hot_path") is True',
+            'not value.get("blocker")',
+            'pid>0 and 0<=age<=15000',
+            'os.kill(pid,0)',
         ):
             self.assertIn(required, ready)
 

@@ -90,42 +90,25 @@ class MakerCohortSupervisorTests(unittest.TestCase):
         second["markets"][0]["score"] = 123.0
         self.assertEqual(membership_sha256(first), membership_sha256(second))
 
-    def test_runtime_contract_uses_one_flat_handoff_cohort(self) -> None:
+    def test_london_runtime_retires_independent_cohort_supervisor(self) -> None:
         loop = (ROOT / "scripts" / "paper_v7_execution_loop.sh").read_text(encoding="utf-8")
         supervisor = (ROOT / "scripts" / "v7_maker_cohort_supervisor.py").read_text(encoding="utf-8")
-        policy = json.loads((
-            ROOT / "config" / "v7_professional_market_maker.json"
-        ).read_text(encoding="utf-8"))
-        self.assertIn("v7_maker_cohort_supervisor.py", loop)
-        self.assertNotIn("--observer-only", loop)
+        manifest = json.loads((ROOT / "config" / "v7_process_manifest.json").read_text(encoding="utf-8"))
+        policy = json.loads((ROOT / "config" / "v7_professional_market_maker.json").read_text(encoding="utf-8"))
+        rows = {row["id"]: row for row in manifest["processes"]}
+        self.assertNotIn("v7_maker_cohort_supervisor.py", loop)
         self.assertNotIn("--maker-runtime", loop)
+        self.assertNotIn("maker_observer_cohort", rows)
+        self.assertEqual(rows["pm_book_observer"]["runtime_class"], "COLLECTOR")
+        self.assertEqual(rows["crypto_settlement_engine"]["runtime_class"], "HOT_PATH")
         self.assertIn("SHADOW_OBSERVERS_ONLY", supervisor)
         self.assertIn("atomic_json(self.selection, latest)", supervisor)
-        self.assertIn('--candidate-confirmations "$MAKER_CANDIDATE_CONFIRMATIONS"', loop)
-        self.assertIn('--min-rotation-interval-seconds "$MAKER_ROTATION_INTERVAL_SECONDS"', loop)
-        self.assertIn('--rotation-min-projected-fill-probability "$MAKER_ROTATION_MIN_FILL"', loop)
-        self.assertIn('--rotation-min-absolute-fill-improvement "$MAKER_ROTATION_MIN_ABSOLUTE_IMPROVEMENT"', loop)
-        self.assertIn('--rotation-min-relative-fill-multiplier "$MAKER_ROTATION_MIN_RELATIVE_MULTIPLIER"', loop)
         self.assertGreaterEqual(
-            policy["market_selection"]["recent_flow"]["rotation_min_interval_seconds"],
-            300,
+            policy["market_selection"]["recent_flow"]["rotation_min_interval_seconds"], 300
         )
-        # The selector reports a five-second fill probability while the
-        # bounded exploration order may rest for fifteen seconds.  A 0.4%
-        # five-second floor implies about 1.2% over the allowed resting
-        # horizon and does not repeat the former 5% cold-start deadlock.
         self.assertEqual(
-            policy["market_selection"]["recent_flow"][
-                "rotation_min_projected_fill_probability"
-            ],
+            policy["market_selection"]["recent_flow"]["rotation_min_projected_fill_probability"],
             0.004,
-        )
-        self.assertIn(
-            'recent.get("rotation_min_interval_seconds") or 300', loop
-        )
-        self.assertIn(
-            'recent.get("rotation_min_projected_fill_probability") or 0.004',
-            loop,
         )
         self.assertIn("authenticated_execution\") is not False", supervisor)
         self.assertIn("real_order_submission\") is not False", supervisor)

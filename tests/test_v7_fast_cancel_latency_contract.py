@@ -6,17 +6,21 @@ ROOT = Path(__file__).resolve().parents[1]
 
 def test_fast_cancel_latency_contract() -> None:
     launcher = (ROOT / "scripts/paper_v7_execution_loop.sh").read_text()
-    coordinator = (ROOT / "scripts/v7_global_portfolio_coordinator.py").read_text()
-    external = (ROOT / "src/v7_external_venue_runtime.cpp").read_text()
-    executor = (ROOT / "src/v7_authorized_maker_paper_executor.cpp").read_text()
+    native = (ROOT / "src/v7_crypto_settlement_native_candidate.cpp").read_text()
+    paper = (ROOT / "src/v7_native_paper_execution.cpp").read_text()
     cfg = json.loads((ROOT / "config/v7_crypto_execution_alpha.json").read_text())
     rule = cfg["execution_alpha"]["cancel"]["research_rule"]
-    assert "--fast-cancel-interval 0.005" in launcher
-    assert 'default=0.005' in coordinator
-    assert "std::chrono::milliseconds(5)" in external
-    assert "kFullStatusPublishIntervalNs = 25'000'000LL" in external
-    assert "std::chrono::milliseconds(5)" in executor
-    assert "executor_poll_interval_ms\"] = 5" in executor
+
+    assert "v7_global_portfolio_coordinator.py" not in launcher
+    assert "polymarket_v7_authorized_maker_paper_executor" not in launcher
+    assert "external_policy.external_cancel_shock_window_ns = 100'000'000LL" in native
+    assert "external_policy.external_cancel_signal_ttl_ns = 100'000'000LL" in native
+    assert "external_policy.external_cancel_min_abs_return_bp = 0.30" in native
+    assert "advance_external_cancel_signal(receive_ns - 1, external_policy)" in native
+    assert "authority.cancel_maker_quote" in native
+    assert "paper_execution.request_cancel" in native
+    assert "slot->cancel_deadline_ns = now_monotonic_ns + cancel_latency_ns_" in paper
+
     assert rule["shock_window_ms"] == 100
     assert rule["minimum_absolute_log_return_bp"] == 0.30
     assert rule["trigger_grid_ms"] == 25

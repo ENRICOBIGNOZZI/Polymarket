@@ -13,7 +13,8 @@ class MakerResearchRuntimeContractTests(unittest.TestCase):
         self.assertIn('export PM_V7_MAKER_EXECUTION_MODEL="$MAKER_RESEARCH_MODEL"',self.runtime)
         self.assertIn('v7_runtime_artifacts.py',self.runtime)
         self.assertNotIn('--output-model "$MAKER_RESEARCH_MODEL"',self.runtime)
-        self.assertIn('--model "$MAKER_RESEARCH_MODEL"',self.runtime)
+        self.assertIn('export PM_V7_MAKER_EXECUTION_MODEL="$MAKER_RESEARCH_MODEL"',self.runtime)
+        self.assertNotIn('--model "$MAKER_RESEARCH_MODEL"',self.runtime)
         self.assertNotIn('v7_maker_durable_learning.py',self.runtime)
         self.assertNotIn('v7_external_rich_train.py',self.runtime)
     def test_training_and_durable_evidence_live_on_research_plane(self):

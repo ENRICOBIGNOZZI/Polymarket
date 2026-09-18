@@ -1,27 +1,34 @@
 from pathlib import Path
+import json
 
 ROOT = Path(__file__).resolve().parents[1]
 
 
-def test_router_decision_loop_is_250ms_with_separate_maintenance():
-    source = (ROOT / 'scripts/v7_external_fair_paper_router.py').read_text()
+def test_native_decision_loop_is_event_driven_and_router_free():
+    source = (ROOT / 'src/v7_crypto_settlement_native_candidate.cpp').read_text()
     loop = (ROOT / 'scripts/paper_v7_execution_loop.sh').read_text()
-    assert 'def maintenance_step(self) -> None:' in source
-    assert 'maintenance_period = 1.0' in source
-    assert 'period = max(0.25, interval)' in source
-    assert 'next_decision += period' in source
-    assert '--config "$EXTERNAL_FAIR_POLICY" --interval 0.25' in loop
+    assert 'NativeCryptoDecisionLane' in source
+    assert 'ExternalVenueWsClient' in source
+    assert 'MarketWebSocketFeed' in source
+    assert 'lane.construct_candidate' in source
+    assert 'authority.submit' in source
+    assert 'v7_external_fair_paper_router.py' not in loop
+    assert 'scripts/v7_native_crypto_engine_manager.py' in loop
+    assert '--engine "$CRYPTO_SETTLEMENT_ENGINE"' in loop
 
 
-def test_repricing_book_observer_is_fair_only_and_persistent_across_maker_rotation():
+def test_repricing_book_observer_is_fair_only_and_outside_hot_path():
     observer = (ROOT / 'src/v7_maker_fillability_observer.cpp').read_text()
     loop = (ROOT / 'scripts/paper_v7_execution_loop.sh').read_text()
+    manifest = json.loads((ROOT / 'config/v7_process_manifest.json').read_text())
     assert 'else if (arg == "--fair-only") options.fair_only = true;' in observer
     assert 'if (options.fair_only)' in observer
     assert '--output-dir "$RUN_ROOT/research/repricing_book" --fair-only' in loop
-    assert '--book-tape "$RUN_ROOT/research/repricing_book/book_observations/current.jsonl"' in loop
-    assert '--book-status "$RUN_ROOT/research/repricing_book/fillability_ws_status.json"' in loop
-    assert 'v7_assert_registered_child_count 20' in loop
+    rows = {row['id']: row for row in manifest['processes']}
+    assert rows['pm_book_observer']['runtime_class'] == 'COLLECTOR'
+    assert rows['crypto_settlement_engine']['runtime_class'] == 'HOT_PATH'
+    assert rows['crypto_settlement_engine']['dependencies'] == []
+    assert 'v7_assert_registered_child_count 9' in loop
 
 
 def test_lineage_invalidation_is_instrumented_without_relaxing_fail_closed_rules():
@@ -51,16 +58,15 @@ def test_retrospective_analytics_are_off_london_and_complete_on_research_plane()
     for script in heavy:
         assert script not in loop
         assert f'scripts/{script}' in research
-    assert 'v7_canonical_economics.py' in loop  # lightweight health/PnL reconciliation only
+    assert 'v7_canonical_economics.py' in loop
 
 
-def test_router_maintenance_failure_is_fail_closed():
-    source = (ROOT / 'scripts/v7_external_fair_paper_router.py').read_text()
-    assert 'self.maintenance_ready = True' in source
-    assert 'elif not self.maintenance_ready:' in source
-    assert 'blocker = "ROUTER_MAINTENANCE_NOT_READY"' in source
-    assert 'self.maintenance_ready = False' in source
-    assert 'ROUTER_MAINTENANCE_ERROR' in source
+def test_native_rollover_settlement_failure_is_fail_closed():
+    manager = (ROOT / 'scripts/v7_native_crypto_engine_manager.py').read_text()
+    assert 'SETTLEMENT_BLOCKED' in manager
+    assert 'NATIVE_PAPER_SETTLEMENT_INCOMPLETE' in manager
+    assert 'return 79' in manager
+    assert 'self._terminate_engine()' in manager
 
 
 if __name__ == "__main__":
