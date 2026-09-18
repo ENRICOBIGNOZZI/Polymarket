@@ -653,6 +653,10 @@ class Manager:
             "evidence_worker_count": int(evidence.get("worker_count") or 0),
             "evidence_dropped": int(evidence.get("dropped") or 0),
             "evidence_queue_depth": int(evidence.get("queue_depth") or 0),
+            "native_observations_published": int(evidence.get("observations_published") or 0),
+            "native_observations_written": int(evidence.get("observations_written") or 0),
+            "native_observations_dropped": int(evidence.get("observations_dropped") or 0),
+            "native_observations_queue_depth": int(evidence.get("observations_queue_depth") or 0),
             "settlement_market_count": int(settlements.get("market_count") or 0),
             "settlement_blocked_count": int(settlements.get("blocked_count") or 0),
             "settlement_retryable_timeout_count": int(

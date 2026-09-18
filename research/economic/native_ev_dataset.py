@@ -195,16 +195,10 @@ def build_rows(
         if direction not in (-1, 1):
             stats["invalid_rows"] += 1
             continue
-        direction = int(row.get("direction") or 0)
-        if direction not in (-1, 1):
-            stats["invalid_rows"] += 1
-            continue
         features: dict[str, float] = {
             "signal_return_bp": float(signal),
             "confirmation_return_bp": float(confirm),
             "abs_signal_return_bp": abs(float(signal)),
-            "aligned_signal_return_bp": direction * float(signal),
-            "aligned_confirmation_return_bp": direction * float(confirm),
             "aligned_signal_return_bp": direction * float(signal),
             "aligned_confirmation_return_bp": direction * float(confirm),
             "tte_seconds": tte_ns / 1e9,
