@@ -98,6 +98,7 @@ add_library(pm_v7_external
   src/v7_binance_l2.cpp
   src/v7_binance_l2_protocol.cpp
   src/v7_coinbase_l2.cpp
+  src/v7_coinbase_l2_observer.cpp
   src/v7_external_state.cpp
   src/v7_external_execution.cpp
   src/v7_external_kernel.cpp
@@ -178,6 +179,17 @@ add_executable(polymarket_v7_external_venue_runtime src/v7_external_venue_runtim
 target_link_libraries(polymarket_v7_external_venue_runtime PRIVATE pm_v7_external)
 target_compile_options(polymarket_v7_external_venue_runtime PRIVATE -Wall -Wextra -Wpedantic)
 
+# Zero-authority convergence candidate: one native process owns feed decode,
+# causal state, feature/signal policy, capital/risk admission and canonical OMS
+# adapter-command handoff. It is intentionally not in the deployment manifest
+# until all CRYPTO_SETTLEMENT_ENGINE component semantics have converged.
+add_executable(polymarket_v7_crypto_settlement_native_candidate
+  src/v7_crypto_settlement_native_candidate.cpp)
+target_link_libraries(polymarket_v7_crypto_settlement_native_candidate PRIVATE
+  pm_v7_external pm_fast_arb)
+target_compile_options(polymarket_v7_crypto_settlement_native_candidate PRIVATE
+  -Wall -Wextra -Wpedantic)
+
 if(NOT PM_LONDON_RUNTIME_ONLY)
 add_executable(polymarket_v7_external_tape_replay src/v7_external_tape_replay.cpp)
 target_link_libraries(polymarket_v7_external_tape_replay PRIVATE pm_v7_external)
@@ -254,6 +266,14 @@ if(BUILD_TESTING)
   target_link_libraries(pm_v7_crypto_decision_lane_tests PRIVATE pm_v7_common)
   target_compile_options(pm_v7_crypto_decision_lane_tests PRIVATE -UNDEBUG)
   add_test(NAME pm_v7_crypto_decision_lane_tests COMMAND pm_v7_crypto_decision_lane_tests)
+
+  add_executable(pm_v7_coinbase_l2_observer_tests tests/test_v7_coinbase_l2_observer.cpp)
+  target_link_libraries(pm_v7_coinbase_l2_observer_tests PRIVATE pm_v7_external)
+  target_compile_options(pm_v7_coinbase_l2_observer_tests PRIVATE -UNDEBUG)
+  add_test(NAME pm_v7_coinbase_l2_observer_tests COMMAND pm_v7_coinbase_l2_observer_tests)
+
+  add_test(NAME pm_v7_crypto_settlement_native_candidate_validate
+    COMMAND polymarket_v7_crypto_settlement_native_candidate --validate-only)
 
   add_executable(pm_v7_native_order_tx_tests tests/test_v7_native_order_tx.cpp)
   target_link_libraries(pm_v7_native_order_tx_tests PRIVATE pm_v7_common)
