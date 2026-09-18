@@ -201,10 +201,14 @@ int main(int argc, char** argv) {
         std::atomic<std::uint64_t> pm_drops{0}, pm_faults{0};
         std::atomic<std::uint64_t> pm_epoch{1};
 
+        // Allocate bounded parser output once, before any feed thread starts.
+        // macOS worker stacks are about 512 KiB; a 1024-event BookHotSnapshot
+        // scratch array on that stack crashes before the first frame is parsed.
+        auto pm_decoded_scratch = std::make_unique<std::array<MarketWsEvent, kPmFrameEvents>>();
         pm::fast::MarketWebSocketFeed pm_feed(
             options.pm_ws_url, {options.yes_token, options.no_token}, 2,
             [&](std::string_view payload, const pm::fast::FeedReceiveStamp& stamp, std::size_t) {
-                std::array<MarketWsEvent, kPmFrameEvents> decoded{};
+                auto& decoded = *pm_decoded_scratch;
                 const auto result = pm_decoder.process_frame(payload, stamp, decoded);
                 bool notified = false;
                 if (result.invalid_frame || result.output_overflow || result.arena_exhausted || result.lineage_invalidated) {
