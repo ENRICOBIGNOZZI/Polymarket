@@ -125,23 +125,42 @@ def assess_reconciliation(
     runtime = read_json(run_root / "control" / "runtime_status.json")
     portfolio = read_json(run_root / "control" / "portfolio_state.json")
     kill = read_json(run_root / "control" / "KILL")
-    account = read_json(run_root / "external_fair" / "paper_router_status.json")
-    executor = read_json(run_root / "micro_maker" / "authorized_make_executor_status.json")
     lock_pid_path = run_root / "control" / "runtime.lock" / "pid"
-    inventory_present = False
-    for name, value, fields in (
-        ("paper_account", account, ("open_positions", "pending_maker_orders")),
-        ("maker_executor", executor, ("active_orders",)),
-    ):
-        if not value:
-            continue
-        if value.get("paper_only") is not True or value.get("authenticated_execution") is not False:
-            unsafe.append(f"{name}_contract_unsafe")
-            continue
+    settlement_state = read_json(run_root / "control" / "native_market_settlement_state.json")
+    settled_markets = {
+        str(value) for value in settlement_state.get("settled_markets", [])
+        if isinstance(value, str) and value
+    } if settlement_state.get("model_sha") == expected_sha else set()
+    session_path = run_root / "control" / "native_market_sessions.jsonl"
+    session_markets: set[str] = set()
+    if session_path.is_file():
         try:
-            inventory_present = inventory_present or any(int(value.get(field) or 0) > 0 for field in fields)
-        except (TypeError, ValueError, OverflowError):
-            unsafe.append(f"{name}_inventory_invalid")
+            session_lines = session_path.read_text(encoding="utf-8").splitlines()
+        except OSError:
+            unsafe.append("native_sessions_unavailable")
+            session_lines = []
+        for number, line in enumerate(session_lines, start=1):
+            try:
+                row = json.loads(line)
+            except json.JSONDecodeError:
+                unsafe.append(f"native_session_invalid_json:{number}")
+                continue
+            if not isinstance(row, dict):
+                unsafe.append(f"native_session_invalid_record:{number}")
+                continue
+            if (
+                row.get("schema") != "polymarket_v7_native_market_session_v1"
+                or row.get("model_sha") != expected_sha
+                or row.get("paper_only") is not True
+                or row.get("authenticated_execution") is not False
+                or row.get("real_order_submission") is not False
+            ):
+                unsafe.append(f"native_session_contract_invalid:{number}")
+                continue
+            market_id = str(row.get("market_id") or "")
+            if market_id and int(row.get("started_ms") or 0) > 0:
+                session_markets.add(market_id)
+    inventory_present = bool(session_markets - settled_markets)
     if inventory_present:
         recoverable.append("paper_inventory_reconciliation_required")
 
