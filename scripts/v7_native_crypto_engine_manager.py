@@ -303,6 +303,14 @@ class Worker:
     settlement: subprocess.Popen[bytes] | None = None
 
 
+@dataclass
+class PendingSettlement:
+    market_id: str
+    process: subprocess.Popen[bytes]
+    context: str = "RECOVERY"
+    attempts: int = 1
+
+
 def _execution_budget_microdollars(allocation_path: Path) -> int:
     value = read_json(allocation_path)
     scope = value.get("capital_scope") if isinstance(value.get("capital_scope"), dict) else {}
@@ -347,7 +355,7 @@ class Manager:
         self.workers: dict[str, Worker] = {}
         self.completed_market_ids: set[str] = set()
         self.stopping = False
-        self.pending_settlements: dict[str, Worker] = {}
+        self.pending_settlements: dict[str, PendingSettlement] = {}
         self.base_risk_receipt = load_native_limits(
             read_json(args.repository_root / "config/v7_native_risk_policy.json"),
             read_json(self.run_root / "control/allocations/manifest.json"))
@@ -379,9 +387,11 @@ class Manager:
             child.wait(timeout=5)
 
     def _terminate_all(self) -> None:
-        for worker in [*self.workers.values(), *self.pending_settlements.values()]:
+        for worker in self.workers.values():
             self._terminate_process(worker.process)
             self._terminate_process(worker.settlement)
+        for task in self.pending_settlements.values():
+            self._terminate_process(task.process)
 
     def _worker_rows(self) -> list[dict[str, Any]]:
         rows = []
@@ -436,6 +446,9 @@ class Manager:
                 for row in rows
             ),
             "blocked_count": sum(
+                str(row.get("state") or "") == "LEDGER_APPEND_TIMEOUT" for row in rows
+            ),
+            "retryable_timeout_count": sum(
                 str(row.get("state") or "") == "RESOLUTION_TIMEOUT" for row in rows
             ),
         }
@@ -515,6 +528,11 @@ class Manager:
             "partitioned_native_workers": True,
             "asynchronous_settlement": bool(getattr(self.args, "asynchronous_settlement", False)),
             "pending_settlement_markets": sorted(self.pending_settlements),
+            "pending_settlement_count": len(self.pending_settlements),
+            "pending_settlement_attempts": {
+                market_id: task.attempts
+                for market_id, task in sorted(self.pending_settlements.items())
+            },
             "risk_policy_sha256": self.base_risk_receipt["risk_policy_sha256"],
             "allocated_execution_budget_microdollars": self.allocated_execution_budget_microdollars,
             "engine_pid": min(pids) if pids else 0,
@@ -544,6 +562,9 @@ class Manager:
             "evidence_queue_depth": int(evidence.get("queue_depth") or 0),
             "settlement_market_count": int(settlements.get("market_count") or 0),
             "settlement_blocked_count": int(settlements.get("blocked_count") or 0),
+            "settlement_retryable_timeout_count": int(
+                settlements.get("retryable_timeout_count") or 0
+            ),
         })
 
     def _settlement_command(self, market_id: str) -> list[str]:
@@ -705,6 +726,34 @@ class Manager:
             process=child, log_handle=handle,
         )
 
+    def _start_pending_settlement(
+        self, market_id: str, *, context: str = "RECOVERY", attempts: int = 1,
+    ) -> None:
+        if market_id in self.pending_settlements:
+            return
+        child = subprocess.Popen(
+            self._settlement_command(market_id), cwd=self.args.repository_root
+        )
+        self.pending_settlements[market_id] = PendingSettlement(
+            market_id=market_id, process=child, context=context, attempts=attempts,
+        )
+
+    def _retryable_settlement_timeout(self, market_id: str, rc: int) -> bool:
+        if rc != 79:
+            return False
+        status = read_json(
+            self.run_root / "control" / "native_paper_settlement" / f"{market_id}.json"
+        )
+        return (
+            status.get("schema") == "polymarket_v7_native_paper_settlement_status_v1"
+            and status.get("model_sha") == self.args.model_sha
+            and status.get("market_id") == market_id
+            and status.get("paper_only") is True
+            and status.get("authenticated_execution") is False
+            and status.get("real_order_submission") is False
+            and status.get("state") == "RESOLUTION_TIMEOUT"
+        )
+
     def _finish_worker(self, key: str, worker: Worker) -> int | None:
         if worker.state == "RUNNING":
             rc = worker.process.poll()
@@ -717,13 +766,15 @@ class Manager:
                                          str(worker.market["market_id"])):
                 return 75
             worker.state = "SETTLING"
-            worker.settlement = subprocess.Popen(
-                self._settlement_command(str(worker.market["market_id"])),
-                cwd=self.args.repository_root,
-            )
+            market_id = str(worker.market["market_id"])
             if getattr(self.args, "asynchronous_settlement", False):
-                self.pending_settlements[str(worker.market["market_id"])] = worker
+                self._start_pending_settlement(market_id, context=key)
                 self.workers.pop(key, None)
+            else:
+                worker.settlement = subprocess.Popen(
+                    self._settlement_command(market_id),
+                    cwd=self.args.repository_root,
+                )
             return None
         if worker.state == "SETTLING":
             assert worker.settlement is not None
@@ -734,6 +785,25 @@ class Manager:
                 return int(rc)
             self.completed_market_ids.add(str(worker.market["market_id"]))
             self.workers.pop(key, None)
+        return None
+
+    def _reap_pending_settlements(self) -> tuple[str, int] | None:
+        for market_id, task in list(self.pending_settlements.items()):
+            rc = task.process.poll()
+            if rc is None:
+                continue
+            if rc == 0:
+                self.completed_market_ids.add(market_id)
+                self.pending_settlements.pop(market_id, None)
+                continue
+            if self._retryable_settlement_timeout(market_id, int(rc)):
+                attempts = task.attempts + 1
+                self.pending_settlements.pop(market_id, None)
+                self._start_pending_settlement(
+                    market_id, context=task.context, attempts=attempts
+                )
+                continue
+            return market_id, int(rc)
         return None
 
     def recover(self) -> int:
@@ -773,6 +843,9 @@ class Manager:
         for market_id in unsettled_native_markets(
             self.run_root, self.args.model_sha
         ):
+            if getattr(self.args, "asynchronous_settlement", False):
+                self._start_pending_settlement(market_id)
+                continue
             self.status("RECOVERING_SETTLEMENT")
             if not self.settle_blocking(market_id):
                 self.status(
@@ -810,17 +883,18 @@ class Manager:
                 time.sleep(0.5)
                 continue
 
-            # Detached settlements retain claims in their original partition.
-            for market_id, worker in list(self.pending_settlements.items()):
-                assert worker.settlement is not None
-                rc = worker.settlement.poll()
-                if rc is None:
-                    continue
-                if rc != 0:
-                    self.status("SETTLEMENT_BLOCKED", blocker=f"{market_id}_RC_{rc}", targets=targets)
-                    return int(rc)
-                self.completed_market_ids.add(market_id)
-                self.pending_settlements.pop(market_id)
+            # Detached settlements retain their capital claim through the
+            # canonical ledger. Resolution timeouts are expected for long
+            # horizons and are retried without stopping unrelated contexts.
+            settlement_failure = self._reap_pending_settlements()
+            if settlement_failure is not None:
+                market_id, rc = settlement_failure
+                self.status(
+                    "SETTLEMENT_BLOCKED",
+                    blocker=f"{market_id}_RC_{rc}",
+                    targets=targets,
+                )
+                return rc
             # Reap engines and settlements before launching replacement windows.
             for key, worker in list(self.workers.items()):
                 rc = self._finish_worker(key, worker)
