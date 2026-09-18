@@ -189,10 +189,11 @@ def test_native_suballocation_requires_single_canonical_allocator():
     policy=json.loads((ROOT/'config/v7_native_risk_policy.json').read_text())
     allocation={'schema':'polymarket_v7_capital_allocation_v3','paper_only':True,'authenticated_execution':False,
         'real_order_submission':False,'capital_authority_owner':'V7_CANONICAL_ALLOCATOR','capital_authority_owner_count':1,
-        'account_starting_capital':5000,'reserve_budget':1000,'engine_budgets':{'CRYPTO_SETTLEMENT_ENGINE':4000}}
+        'account_starting_capital':14000,'reserve_budget':4000,'engine_budgets':{'CRYPTO_SETTLEMENT_ENGINE':10000}}
     result=load_native_limits(policy,allocation)
-    assert result['canonical_engine_budget_microdollars']==4_000_000_000
-    assert result['native_suballocation_microdollars']==1_000_000_000
+    assert result['canonical_engine_budget_microdollars']==10_000_000_000
+    assert result['native_suballocation_microdollars']==10_000_000_000
+    assert result['limits']['max_market_exposure_microdollars']==333_333_333
     assert result['limits_increased'] is False
     allocation['capital_authority_owner_count']=2
     with pytest.raises(ValueError):load_native_limits(policy,allocation)
