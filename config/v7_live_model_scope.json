@@ -20,7 +20,7 @@
   "real_order_submission": false,
   "runtime_invariants": {
     "authority_registry": "config/v7_authority_registry.json",
-    "global_portfolio_coordinator": "V7_GLOBAL_PORTFOLIO_COORDINATOR",
+    "global_portfolio_coordinator": "V7_NATIVE_CRYPTO_SETTLEMENT_ENGINE",
     "opportunity_contract": "schemas/v7/opportunity_envelope.schema.json",
     "paper_only": true,
     "real_order_submission": false,
