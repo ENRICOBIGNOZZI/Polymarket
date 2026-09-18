@@ -30,6 +30,23 @@ class V7NativeMonitoringTest(unittest.TestCase):
             "model_sha":sha,"pid":pid,"run_id":"run-id","economic_engines":["CRYPTO_SETTLEMENT_ENGINE"],
             "economic_new_risk_ready":False,"authorized_alpha_actions":[],
         })
+        self._write(root / "control/native_engine_supervisor_status.json", {
+            "schema":"polymarket_v7_native_engine_supervisor_status_v1","timestamp_ms":(now-2)*1000,
+            "state":"WAITING_FOR_EXECUTABLE_MARKET","model_sha":sha,"paper_only":True,
+            "authenticated_execution":False,"real_order_submission":False,"real_capital_at_risk":False,
+            "execution_authority":False,"child_pid":0,
+        })
+        self._write(root / "control/native_evidence_status.json", {
+            "schema":"polymarket_v7_native_evidence_status_v1","timestamp_ms":(now-2)*1000,
+            "model_sha":sha,"paper_only":True,"authenticated_execution":False,
+            "real_order_submission":False,"healthy":True,"published":0,"written":0,"dropped":0,
+        })
+        self._write(root / "control/native_market_settlement_status.json", {
+            "schema":"polymarket_v7_native_market_settlement_status_v1","timestamp_ms":(now-2)*1000,
+            "state":"RUNNING","model_sha":sha,"paper_only":True,"authenticated_execution":False,
+            "real_order_submission":False,"real_capital_at_risk":False,
+            "settled_market_count":0,"realized_pnl":0.0,
+        })
         self._write(root / "control/allocations/manifest.json", {
             "schema":"polymarket_v7_capital_allocation_v3","paper_only":True,"authenticated_execution":False,
             "real_order_submission":False,"real_capital_at_risk":False,"account_starting_capital":10000.0,
@@ -88,7 +105,7 @@ class V7NativeMonitoringTest(unittest.TestCase):
         (root / "ledger/execution.jsonl").write_text(
             "".join(json.dumps(event.to_dict()) + "\n" for event in (fill, final)))
 
-    def test_crypto_state_pnl_aggregates_lead_lag_component(self) -> None:
+    def test_crypto_state_pnl_comes_from_canonical_native_ledger(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory) / "paper_v7_live"
             self._fixture(root)
@@ -110,15 +127,15 @@ class V7NativeMonitoringTest(unittest.TestCase):
             self._canonical_lead_lag_final(root)
             snapshot = exporter.collect_snapshot(root, ROOT, now=1000)
             components = snapshot["state_realized_pnl_components"]["CRYPTO_SETTLEMENT_ENGINE"]
-            self.assertEqual(components["external_fair"], 0.0)
-            self.assertEqual(components["lead_lag_taker_v1"], 2.0)
+            self.assertEqual(components["canonical_ledger"], 2.0)
+            self.assertTrue(components["complete"])
             self.assertEqual(components["total"], 2.0)
             self.assertNotIn(
                 "strategy_realized_pnl_divergence:CRYPTO_SETTLEMENT_ENGINE",
                 snapshot["reconciliation"]["reason_codes"],
             )
 
-    def test_required_lead_lag_state_missing_fails_reconciliation_closed(self) -> None:
+    def test_legacy_lead_lag_state_is_not_required_after_native_cutover(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory) / "paper_v7_live"
             self._fixture(root)
@@ -132,13 +149,16 @@ class V7NativeMonitoringTest(unittest.TestCase):
             self._write(canonical_path, canonical)
             self._canonical_lead_lag_final(root)
             snapshot = exporter.collect_snapshot(root, ROOT, now=1000)
-            self.assertFalse(snapshot["state_realized_pnl_components"]["CRYPTO_SETTLEMENT_ENGINE"]["complete"])
-            self.assertIn(
+            self.assertTrue(snapshot["state_realized_pnl_components"]["CRYPTO_SETTLEMENT_ENGINE"]["complete"])
+            self.assertEqual(
+                snapshot["state_realized_pnl_components"]["CRYPTO_SETTLEMENT_ENGINE"]["total"], 2.0
+            )
+            self.assertNotIn(
                 "strategy_realized_pnl_unverifiable:CRYPTO_SETTLEMENT_ENGINE",
                 snapshot["reconciliation"]["reason_codes"],
             )
 
-    def test_crypto_exposure_metrics_use_nested_coordinator_risk_without_zero_fallback(self) -> None:
+    def test_stale_legacy_coordinator_cannot_reenter_native_metrics(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory) / "paper_v7_live"
             self._fixture(root)
@@ -148,14 +168,12 @@ class V7NativeMonitoringTest(unittest.TestCase):
                     "net_directional_crypto_exposure_usd": -3.0,
                     "correlated_crypto_cluster_exposure_usd": 3.0,
                     "per_asset_exposure_usd": {"BTC": -3.0},
-                    "per_horizon_exposure_usd": {"M5": -3.0},
                 }
             })
-            metrics = exporter.render_prometheus(exporter.collect_snapshot(root, ROOT, now=1000))
-            self.assertIn("polymarket_v7_crypto_gross_exposure_usd 12", metrics)
-            self.assertIn("polymarket_v7_crypto_net_directional_exposure_usd -3", metrics)
-            self.assertIn("polymarket_v7_crypto_cluster_exposure_usd 3", metrics)
-            self.assertIn('polymarket_mc_coordinator_candidate_asset_exposure_usd{asset="BTC"} -3', metrics)
+            snapshot = exporter.collect_snapshot(root, ROOT, now=1000)
+            self.assertEqual(snapshot["global_coordinator"], {})
+            metrics = exporter.render_prometheus(snapshot)
+            self.assertNotIn("polymarket_v7_crypto_gross_exposure_usd 12", metrics)
 
     def test_runtime_cannot_add_second_algorithm(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
