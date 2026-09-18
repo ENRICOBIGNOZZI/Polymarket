@@ -260,7 +260,8 @@ def runtime_health(run_root: Path, expected_sha: str, *, now: int, stale_seconds
             state = str(native.get("state") or "")
             allowed = {
                 "STARTING", "RUNNING", "ENGINE_EXITED", "ROTATED_CLEAN",
-                "WAITING_FOR_CANONICAL_MARKET", "WAITING_FOR_ROLLOVER", "STOPPED",
+                "WAITING_FOR_CANONICAL_MARKET", "WAITING_FOR_ROLLOVER",
+                "SETTLING", "RECOVERING_SETTLEMENT", "STOPPED",
             }
             if state not in allowed:
                 recoverable.append("native_engine_manager_not_ready")
