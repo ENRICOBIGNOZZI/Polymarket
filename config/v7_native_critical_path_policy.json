@@ -85,5 +85,25 @@
     "LONDON_PROSPECTIVE_PAPER",
     "SINGLE_OWNER_CUTOVER",
     "SEPARATE_REAL_MONEY_DECISION"
+  ],
+  "canonical_hot_path_process_id": "crypto_settlement_engine",
+  "forbidden_hot_path_process_ids": [
+    "external_venue_runtime",
+    "external_fair_router",
+    "ledger_router",
+    "global_portfolio_coordinator",
+    "lead_lag_taker_v1",
+    "authorized_maker_paper_executor"
+  ],
+  "forbidden_hot_path_surface_tokens": [
+    "structural",
+    "arbitrage",
+    "legacy",
+    "grafana",
+    "prometheus",
+    "exporter",
+    "retention",
+    "research",
+    "report"
   ]
 }

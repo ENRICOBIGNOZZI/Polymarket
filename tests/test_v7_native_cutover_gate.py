@@ -56,6 +56,42 @@ class NativeCutoverGateTest(unittest.TestCase):
         )
         self.assertEqual(native_gate.validate(self.policy, manifest), [])
 
+    def test_noncanonical_native_owner_fails(self) -> None:
+        manifest = {
+            "processes": [
+                {
+                    "id": "other_native_engine",
+                    "executable": "${OTHER_NATIVE_ENGINE}",
+                    "runtime_class": "HOT_PATH",
+                    "london_deployed": True,
+                    "dependencies": [],
+                    "authority_overrides": {k: True for k in native_gate.CRITICAL_OWNER_KEYS},
+                }
+            ]
+        }
+        errors = native_gate.validate(self.policy, manifest)
+        self.assertTrue(any("canonical HOT_PATH process id" in e for e in errors), errors)
+
+    def test_structural_or_monitoring_surface_cannot_be_hot_path(self) -> None:
+        for process_id in ("structural_arbitrage", "prometheus_exporter"):
+            manifest = {
+                "processes": [
+                    {
+                        "id": process_id,
+                        "executable": "${NATIVE_COMPONENT}",
+                        "runtime_class": "HOT_PATH",
+                        "london_deployed": True,
+                        "dependencies": [],
+                        "authority_overrides": {k: True for k in native_gate.CRITICAL_OWNER_KEYS},
+                    }
+                ]
+            }
+            errors = native_gate.validate(self.policy, manifest)
+            self.assertTrue(
+                any("cold/legacy/structural surface" in e for e in errors),
+                (process_id, errors),
+            )
+
     def test_interpreted_hot_path_fails(self) -> None:
         manifest = {
             "processes": [

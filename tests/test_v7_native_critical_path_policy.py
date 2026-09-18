@@ -58,6 +58,25 @@ class NativeCriticalPathPolicyTest(unittest.TestCase):
         self.assertTrue(gate["promotion_requires_zero_silent_drop"])
         self.assertGreater(float(gate["promotion_requires_p99_improvement_fraction"]), 0.0)
 
+    def test_only_canonical_engine_may_be_hot_path(self) -> None:
+        self.assertEqual(
+            self.policy["canonical_hot_path_process_id"],
+            "crypto_settlement_engine",
+        )
+        legacy = set(self.policy["forbidden_hot_path_process_ids"])
+        for process_id in (
+            "external_venue_runtime", "external_fair_router", "ledger_router",
+            "global_portfolio_coordinator", "lead_lag_taker_v1",
+            "authorized_maker_paper_executor",
+        ):
+            self.assertIn(process_id, legacy)
+        surfaces = set(self.policy["forbidden_hot_path_surface_tokens"])
+        for token in (
+            "structural", "arbitrage", "legacy", "grafana", "prometheus",
+            "exporter", "retention", "research", "report",
+        ):
+            self.assertIn(token, surfaces)
+
     def test_latency_targets_and_doc_match_policy(self) -> None:
         target = self.policy["latency_targets_us"]
         self.assertLessEqual(int(target["trigger_to_admission_p99"]), 300)

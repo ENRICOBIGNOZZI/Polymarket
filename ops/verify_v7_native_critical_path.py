@@ -12,6 +12,7 @@ from pathlib import Path
 from typing import Any
 
 EXPECTED_ENGINE = "CRYPTO_SETTLEMENT_ENGINE"
+EXPECTED_HOT_PATH_PROCESS_ID = "crypto_settlement_engine"
 CRITICAL_OWNER_KEYS = {
     "capital_allocator",
     "global_portfolio_coordinator",
@@ -75,6 +76,25 @@ def validate(policy: dict[str, Any], manifest: dict[str, Any]) -> list[str]:
     if missing_forbidden:
         errors.append("policy missing forbidden hot-path dependencies: " + ",".join(missing_forbidden))
 
+    canonical_process_id = str(policy.get("canonical_hot_path_process_id") or "")
+    if canonical_process_id != EXPECTED_HOT_PATH_PROCESS_ID:
+        errors.append(
+            f"canonical HOT_PATH process id must be {EXPECTED_HOT_PATH_PROCESS_ID}"
+        )
+    forbidden_process_ids = {
+        str(value) for value in (policy.get("forbidden_hot_path_process_ids") or [])
+        if str(value)
+    }
+    forbidden_surface_tokens = {
+        str(value).strip().lower()
+        for value in (policy.get("forbidden_hot_path_surface_tokens") or [])
+        if str(value).strip()
+    }
+    if not forbidden_process_ids:
+        errors.append("policy must enumerate forbidden legacy HOT_PATH process ids")
+    if not forbidden_surface_tokens:
+        errors.append("policy must enumerate forbidden HOT_PATH surface tokens")
+
     processes = manifest.get("processes")
     if not isinstance(processes, list):
         errors.append("process manifest must contain a processes array")
@@ -90,8 +110,24 @@ def validate(policy: dict[str, Any], manifest: dict[str, Any]) -> list[str]:
     engine = hot[0]
     engine_id = str(engine.get("id") or "")
     executable = str(engine.get("executable") or "")
+    profile = str(engine.get("profile") or "")
     if not engine_id:
         errors.append("native HOT_PATH process requires an id")
+    elif engine_id != EXPECTED_HOT_PATH_PROCESS_ID:
+        errors.append(
+            f"canonical HOT_PATH process id must be {EXPECTED_HOT_PATH_PROCESS_ID}, not {engine_id}"
+        )
+    if engine_id in forbidden_process_ids:
+        errors.append(f"legacy HOT_PATH process id is forbidden: {engine_id}")
+    surface = " ".join((engine_id, executable, profile)).lower()
+    matched_surface_tokens = sorted(
+        token for token in forbidden_surface_tokens if token in surface
+    )
+    if matched_surface_tokens:
+        errors.append(
+            "cold/legacy/structural surface cannot own HOT_PATH: "
+            + ",".join(matched_surface_tokens)
+        )
     if not executable:
         errors.append("native HOT_PATH process requires an executable")
     elif _is_interpreted(executable):
