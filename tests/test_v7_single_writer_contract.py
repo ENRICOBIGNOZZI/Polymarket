@@ -33,7 +33,7 @@ class V7SingleWriterContractTest(unittest.TestCase):
         self.assertTrue(scope["paper_only"])
         self.assertFalse(scope["real_order_submission"])
         self.assertTrue(scope["runtime_invariants"]["single_execution_owner"])
-        self.assertEqual(scope["runtime_invariants"]["global_portfolio_coordinator"], "V7_GLOBAL_PORTFOLIO_COORDINATOR")
+        self.assertEqual(scope["runtime_invariants"]["global_portfolio_coordinator"], "V7_NATIVE_CRYPTO_SETTLEMENT_ENGINE")
 
     def test_every_main_sha_gets_exact_single_writer_proof(self) -> None:
         workflow = (ROOT / ".github/workflows/private-runtime-single-writer-validation.yml").read_text(encoding="utf-8")
