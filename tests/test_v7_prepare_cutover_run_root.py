@@ -34,7 +34,8 @@ class PrepareCutoverTests(unittest.TestCase):
             self.assertEqual(result['state'],'ARCHIVED_PRIOR_SHA')
             self.assertTrue(result['archived'])
             self.assertEqual(result['prior_open_positions'],{
-                'paper_account':0,'maker_active_orders':0,'native_unsettled_markets':0,
+                'paper_account':0,'maker_active_orders':0,'native_open_orders':0,
+                'native_unsettled_markets':0,
                 'native_carryover_microdollars':0})
             self.assertTrue(Path(result['archive_path']).exists())
             self.assertTrue((root/'control/cutover_lineage.json').exists())
@@ -192,3 +193,45 @@ def test_git_ancestor_check_scopes_safe_directory(monkeypatch) -> None:
     assert cutover.git_is_ancestor(repo,"a"*40,"b"*40) is True
     assert captured["command"][:4]==["git","-c",f"safe.directory={repo}","-C"]
     assert captured["command"][4:]==[str(repo),"merge-base","--is-ancestor","a"*40,"b"*40]
+
+
+def native_fixture(root: Path) -> None:
+    fixture(root)
+    (root/'external_fair/paper_router_status.json').unlink()
+    (root/'micro_maker/authorized_make_executor_status.json').unlink()
+    write(root/'control/native_engine_manager_status.json',{
+        'schema':'polymarket_v7_native_engine_manager_status_v1',
+        'model_sha':OLD,'state':'STOPPED','active_worker_count':0,
+        'paper_only':True,'authenticated_execution':False,
+        'real_order_submission':False,'real_capital_at_risk':False,
+        'single_native_portfolio_owner':True,
+    })
+
+
+def test_native_generation_does_not_require_legacy_position_surfaces(monkeypatch) -> None:
+    with tempfile.TemporaryDirectory() as d:
+        base=Path(d);root=base/'run';native_fixture(root)
+        monkeypatch.setattr(cutover,'open_native_orders',lambda *_:{})
+        result=cutover.prepare(root,base/'archives',base,NEW,now=127,ancestor_check=lambda *_:True)
+        assert result['state']=='ARCHIVED_PRIOR_SHA'
+        assert result['prior_open_positions']['native_open_orders']==0
+        assert result['prior_open_positions']['paper_account']==0
+        assert result['prior_open_positions']['maker_active_orders']==0
+
+
+def test_native_generation_requires_stopped_manager(monkeypatch) -> None:
+    with tempfile.TemporaryDirectory() as d:
+        base=Path(d);root=base/'run';native_fixture(root)
+        p=root/'control/native_engine_manager_status.json'
+        row=json.loads(p.read_text());row['state']='RUNNING';row['active_worker_count']=1;write(p,row)
+        monkeypatch.setattr(cutover,'open_native_orders',lambda *_:{})
+        with unittest.TestCase().assertRaisesRegex(cutover.CutoverArchiveError,'prior_native_manager_not_stopped'):
+            cutover.prepare(root,base/'archives',base,NEW,ancestor_check=lambda *_:True)
+
+
+def test_native_generation_open_orders_block_cutover(monkeypatch) -> None:
+    with tempfile.TemporaryDirectory() as d:
+        base=Path(d);root=base/'run';native_fixture(root)
+        monkeypatch.setattr(cutover,'open_native_orders',lambda *_:{'o1':object()})
+        with unittest.TestCase().assertRaisesRegex(cutover.CutoverArchiveError,'prior_native_open_orders:1'):
+            cutover.prepare(root,base/'archives',base,NEW,ancestor_check=lambda *_:True)
