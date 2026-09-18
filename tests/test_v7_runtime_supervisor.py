@@ -37,98 +37,77 @@ def test_unscoped_or_malformed_restart_budget_starts_a_new_exact_sha_counter(tmp
     assert instance(path, "c" * 40)._restart_times() == []
 
 
-def _write_external_state(root: Path, sha: str, *, full: bool = True, books: int = 2) -> None:
+def _write_external_state(root: Path, sha: str, *, full: bool = True) -> None:
     external = root / "external_fair"
+    control = root / "control"
     external.mkdir(parents=True, exist_ok=True)
+    control.mkdir(parents=True, exist_ok=True)
     (external / "status.json").write_text(json.dumps({
         "schema": "polymarket_v7_external_fair_status_v1",
         "code_sha": sha,
-        "state": "FULL_FAIR_SHADOW_OPERATIONAL" if full else "DATA_PLANE_OPERATIONAL",
         "paper_only": True,
         "authenticated_execution": False,
         "real_order_submission": False,
-        "blockers": [] if full else ["FAIR_VALUE_INVALID"],
-        "external_fair_required_markets": 1 if full else 0,
+        "market": {
+            "market_id": "m1", "active": True, "closed": False,
+            "accepting_orders": True,
+        },
         "contract": {"verified": full, "rules_hash_recognized": full},
         "settlement_reference": {"valid": full},
-        "fair": {"valid": full},
         "oracle": {"healthy": True},
         "external": {"healthy": True},
     }))
-    (external / "paper_router_status.json").write_text(json.dumps({
-        "schema": "polymarket_v7_crypto_settlement_engine_status_v1",
-        "code_sha": sha,
+    (control / "native_engine_supervisor_status.json").write_text(json.dumps({
+        "schema": "polymarket_v7_native_engine_supervisor_status_v1",
+        "timestamp_ms": 1_000_000,
         "state": "RUNNING",
+        "model_sha": sha,
         "paper_only": True,
         "authenticated_execution": False,
         "real_order_submission": False,
-        "execution_authority": "OPPORTUNITY_PROPOSAL_ONLY",
-        "capital_authority": False,
-        "oms_authority": False,
-        "inventory_authority": False,
-        "ledger_writer_authority": False,
-        "order_submission_enabled": False,
-        "counterfactual_collection_enabled": True,
-        "simulated_paper_account_authority": "V7_CANONICAL_LEDGER_AND_SINGLE_WRITER_SPOOL",
-        "paper_exploration_accounting_active": True,
-        "canonical_order_reconciliation": {
-            "schema": "polymarket_v7_paper_exploration_order_reconciliation_v1",
-            "model_sha": sha, "paper_only": True,
-            "authenticated_execution": False, "real_order_submission": False,
-            "complete": True, "unresolved_orders": [],
-            "invalid_spool_records": [], "conflicts": [],
-        },
-        "canonical_final_reconciliation": {
-            "schema": "polymarket_v7_paper_exploration_final_reconciliation_v1",
-            "model_sha": sha, "paper_only": True,
-            "authenticated_execution": False, "real_order_submission": False,
-            "complete": True, "missing_canonical_fills": [],
-            "invalid_virtual_finals": [],
-        },
-        "paper_exploration_account": {
-            "schema": "polymarket_v7_paper_exploration_account_v1",
-            "model_sha": sha, "paper_only": True,
-            "authenticated_execution": False, "real_order_submission": False,
-            "real_capital_at_risk": False,
-            "accounting_owner": "V7_CANONICAL_LEDGER_AND_SINGLE_WRITER_SPOOL",
-            "execution_authority": "SIMULATED_PAPER_EXPLORATION_ONLY",
-            "complete": True, "issues": [], "invalid_spool_records": [],
-            "starting_capital": 4000.0, "cash": 4000.0, "equity": 4000.0,
-            "realized_pnl": 0.0, "entry_debit": 0.0,
-            "settlement_payout": 0.0, "orders_submitted": 0,
-            "fills": 0, "terminal_positions": 0, "open_positions": 0,
-        },
-        "orders_submitted": 0, "fills": 0, "open_positions": 0,
-        "cash": 4000.0, "equity": 4000.0, "realized_pnl": 0.0,
-        "killed": False,
-        "blocker": "",
-        "book_requests": 7,
-        "last_decision": {"books": books},
-        "timestamp": 1_000,
+        "real_capital_at_risk": False,
+        "execution_authority": False,
+        "child_pid": 123,
+    }))
+    (control / "native_evidence_status.json").write_text(json.dumps({
+        "schema": "polymarket_v7_native_evidence_status_v1",
+        "timestamp_ms": 1_000_000,
+        "model_sha": sha,
+        "paper_only": True,
+        "authenticated_execution": False,
+        "real_order_submission": False,
+        "healthy": True,
+        "published": 5,
+        "written": 5,
+        "dropped": 0,
     }))
 
 
-def test_external_fair_readiness_requires_complete_chain_and_two_books(tmp_path: Path) -> None:
+def test_external_fair_readiness_requires_native_engine_and_evidence_chain(tmp_path: Path) -> None:
     sha = "d" * 40
     _write_external_state(tmp_path, sha)
     assert supervisor.external_fair_ready(tmp_path, sha, now=1_001)
-    _write_external_state(tmp_path, sha, books=0)
-    assert not supervisor.external_fair_ready(tmp_path, sha, now=1_001)
+
     _write_external_state(tmp_path, sha)
-    router_path = tmp_path / "external_fair" / "paper_router_status.json"
-    router_status = json.loads(router_path.read_text())
-    router_status["canonical_final_reconciliation"]["complete"] = False
-    router_path.write_text(json.dumps(router_status))
+    native_path = tmp_path / "control" / "native_engine_supervisor_status.json"
+    native = json.loads(native_path.read_text())
+    native["state"] = "ENGINE_FAILED"
+    native_path.write_text(json.dumps(native))
     assert not supervisor.external_fair_ready(tmp_path, sha, now=1_001)
+
     _write_external_state(tmp_path, sha)
-    router_status = json.loads(router_path.read_text())
-    router_status["canonical_order_reconciliation"]["complete"] = False
-    router_path.write_text(json.dumps(router_status))
+    evidence_path = tmp_path / "control" / "native_evidence_status.json"
+    evidence = json.loads(evidence_path.read_text())
+    evidence["dropped"] = 1
+    evidence_path.write_text(json.dumps(evidence))
     assert not supervisor.external_fair_ready(tmp_path, sha, now=1_001)
-    _write_external_state(tmp_path, sha)
-    router_status = json.loads(router_path.read_text())
-    router_status["cash"] = 3999.0
-    router_path.write_text(json.dumps(router_status))
-    assert not supervisor.external_fair_ready(tmp_path, sha, now=1_001)
+
     _write_external_state(tmp_path, sha, full=False)
     assert not supervisor.external_fair_ready(tmp_path, sha, now=1_001)
+
+    _write_external_state(tmp_path, sha)
+    evidence = json.loads(evidence_path.read_text())
+    evidence["timestamp_ms"] = 990_000
+    evidence_path.write_text(json.dumps(evidence))
+    assert not supervisor.external_fair_ready(tmp_path, sha, now=1_001)
+
