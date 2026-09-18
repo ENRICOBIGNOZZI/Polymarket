@@ -539,6 +539,11 @@ class Manager:
             "taker_minimum_tte_ns": self.args.minimum_tte_ns,
             "taker_maximum_tte_ns": self.args.maximum_tte_ns,
             "maker_share_cap_microunits": self.args.maker_share_cap_microunits,
+            "native_capture_mode": (
+                "FULL" if getattr(self.args, "capture_native_observations", False)
+                else "DECISION_ONLY" if getattr(self.args, "capture_native_decisions", False)
+                else "OFF"
+            ),
             "evidence_worker_count": int(evidence.get("worker_count") or 0),
             "evidence_dropped": int(evidence.get("dropped") or 0),
             "evidence_queue_depth": int(evidence.get("queue_depth") or 0),
@@ -630,6 +635,8 @@ class Manager:
         ]
         if getattr(self.args, "capture_native_observations", False):
             command.append("--capture-native-observations")
+        elif getattr(self.args, "capture_native_decisions", False):
+            command.append("--capture-native-decisions")
         return command
 
     def _wrapped_hot_command(self, command: list[str]) -> list[str]:
@@ -887,7 +894,9 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--maker-share-cap-microunits", type=int, default=5_000_000)
     parser.add_argument("--asynchronous-settlement", action="store_true")
     parser.add_argument("--capture-native-observations", action="store_true",
-        help="Explicit bounded research capture; keep off until storage/offload is provisioned")
+        help="Full bounded native book/trade + decision research capture")
+    parser.add_argument("--capture-native-decisions", action="store_true",
+        help="Low-volume native decision/intent capture; no raw book-event duplication")
     args = parser.parse_args()
     if not exact_sha(args.model_sha):
         parser.error("--model-sha must be exact lowercase 40-hex SHA")

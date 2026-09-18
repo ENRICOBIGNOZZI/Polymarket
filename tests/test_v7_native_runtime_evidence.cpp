@@ -83,7 +83,10 @@ int main() {
         NativeObservation observation{};
         observation.kind = 2; observation.instrument_handle = 11;
         observation.book_version = 9; observation.signal_version = 42;
-        observation.receive_ns = 999'900'000; observation.decision_ns = 1'000'010'000;
+        observation.receive_ns = 999'900'000; observation.trigger_ns = 999'950'000;
+        observation.decision_ns = 1'000'010'000; observation.close_ns = 1'500'000'000;
+        observation.signal_return_bp = 0.75; observation.confirmation_return_bp = 0.25;
+        observation.signal_valid = 1; observation.confirmed_non_opposing = 1;
         observation.bid_e4 = 4000; observation.ask_e4 = 4100;
         observation.bid_prices[0] = 4000; observation.bid_quantities[0] = 3'000'000;
         observation.reason = 3; observation.direction = 1;
@@ -137,6 +140,15 @@ int main() {
         assert(observation.at("capture_id").is_string());
         assert(observation.at("model_artifact_hash").is_null());
         assert(!observation.at("execution_authority").as_bool());
+        assert(observation.at("decision_wall_ns").as_int64() > 0);
+        assert(observation.at("trigger_wall_ns").as_int64() > 0);
+        assert(observation.at("close_wall_ns").as_int64() > observation.at("decision_wall_ns").as_int64());
+        assert(observation.at("signal_valid").as_bool());
+        assert(observation.at("confirmed_non_opposing").as_bool());
+        assert(observation.at("signal_return_bp").as_double() == 0.75);
+        assert(observation.at("confirmation_return_bp").as_double() == 0.25);
+        assert(observation.at("signal_age_ns").as_int64() == 60'000);
+        assert(observation.at("tte_ns").as_int64() == 499'990'000);
         assert(observation.at("probability_forecast").is_null());
         assert(observation.at("bids").as_array().size() == 1);
         ++observation_files;

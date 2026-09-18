@@ -2,11 +2,13 @@
 
 #include <boost/json.hpp>
 
+#include <algorithm>
 #include <chrono>
 #include <cmath>
 #include <filesystem>
 #include <fstream>
 #include <iomanip>
+#include <limits>
 #include <sstream>
 #include <thread>
 
@@ -109,10 +111,14 @@ struct NativeRuntimeEvidenceWriter::Impl {
         return {};
     }
 
-    [[nodiscard]] std::int64_t wall_ms_from_monotonic(std::int64_t ns) const noexcept {
+    [[nodiscard]] std::int64_t wall_ns_from_monotonic(std::int64_t ns) const noexcept {
         if (ns <= 0 || wall_minus_monotonic_ns <= 0
             || ns > std::numeric_limits<std::int64_t>::max() - wall_minus_monotonic_ns) return 0;
-        return to_ms(ns + wall_minus_monotonic_ns);
+        return ns + wall_minus_monotonic_ns;
+    }
+
+    [[nodiscard]] std::int64_t wall_ms_from_monotonic(std::int64_t ns) const noexcept {
+        return to_ms(wall_ns_from_monotonic(ns));
     }
 
     [[nodiscard]] json::object receipt(const NativeOrderCommand& command) const {
@@ -281,8 +287,19 @@ struct NativeRuntimeEvidenceWriter::Impl {
             {"observed_monotonic_ns", event.observed_ns}, {"trigger_monotonic_ns", event.trigger_ns},
             {"decision_monotonic_ns", event.decision_ns}, {"close_monotonic_ns", event.close_ns},
             {"receive_wall_ms", wall_ms_from_monotonic(event.receive_ns)},
+            {"trigger_wall_ns", wall_ns_from_monotonic(event.trigger_ns)},
+            {"decision_wall_ns", wall_ns_from_monotonic(event.decision_ns)},
+            {"close_wall_ns", wall_ns_from_monotonic(event.close_ns)},
             {"signal_version", event.signal_version}, {"book_version", event.book_version},
-            {"signal_return_bp", std::isfinite(event.signal_return_bp) ? json::value(event.signal_return_bp) : json::value(nullptr)}, {"direction", event.direction},
+            {"signal_return_bp", std::isfinite(event.signal_return_bp) ? json::value(event.signal_return_bp) : json::value(nullptr)},
+            {"confirmation_return_bp", std::isfinite(event.confirmation_return_bp) ? json::value(event.confirmation_return_bp) : json::value(nullptr)},
+            {"direction", event.direction},
+            {"signal_valid", event.signal_valid != 0},
+            {"confirmed_non_opposing", event.confirmed_non_opposing != 0},
+            {"signal_age_ns", event.decision_ns > 0 && event.trigger_ns > 0
+                ? json::value(std::max<std::int64_t>(0, event.decision_ns - event.trigger_ns)) : json::value(nullptr)},
+            {"tte_ns", event.decision_ns > 0 && event.close_ns > 0
+                ? json::value(std::max<std::int64_t>(0, event.close_ns - event.decision_ns)) : json::value(nullptr)},
             {"reason", event.reason}, {"accepted", event.accepted != 0}, {"book_valid", event.valid != 0},
             {"bid_e4", event.bid_e4}, {"ask_e4", event.ask_e4}, {"tick_e4", event.tick_e4},
             {"bid_quantity", event.bid_quantity}, {"ask_quantity", event.ask_quantity},

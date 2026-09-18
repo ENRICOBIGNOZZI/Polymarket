@@ -42,12 +42,13 @@ struct NativeObservation {
     std::array<std::int64_t, 10> bid_quantities{}, ask_quantities{};
     std::int64_t event_receive_ns = 0, event_exchange_ns = 0;
     std::uint8_t event_kind = 0;
-    double signal_return_bp = 0.0;
+    double signal_return_bp = 0.0, confirmation_return_bp = 0.0;
     double expected_ev = 0.0, ev_uncertainty = 0.0;
     std::int64_t proposed_quantity = 0, proposed_price_tick = 0;
     std::uint64_t connection_epoch = 0;
     std::int8_t direction = 0;
     std::uint8_t kind = 0, reason = 0, valid = 0, accepted = 0, trade_side = 0;
+    std::uint8_t signal_valid = 0, confirmed_non_opposing = 0;
 };
 
 struct NativeRuntimeEvidenceConfig {
