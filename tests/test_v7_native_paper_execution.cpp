@@ -71,6 +71,8 @@ void test_taker_fills_common_authority() {
     assert(admitted.accepted);
     const auto result = paper.submit(admitted.tx.command, book(), 2'100);
     assert(result.accepted && result.filled_microunits == 2'000'000);
+    assert(result.fill.command == admitted.tx.command);
+    assert(result.fill.order_state == OrderState::Filled);
     assert(authority.active_orders() == 0);
     const auto inv = authority.inventory_snapshot(11);
     assert(inv.total_microunits == 2'000'000);
@@ -97,9 +99,13 @@ void test_maker_queue_and_cancel_latency() {
     const auto cancel = authority.cancel_maker_quote(11, Side::Buy, 2'300);
     assert(cancel.accepted);
     assert(paper.request_cancel(cancel.command, 2'300));
-    assert(paper.advance_time(2'399));
+    const auto before_cancel = paper.advance_time(2'399);
+    assert(!before_cancel.invalid && before_cancel.cancellation_count == 0);
     assert(authority.active_orders() == 1);
-    assert(paper.advance_time(2'400));
+    const auto cancelled = paper.advance_time(2'400);
+    assert(!cancelled.invalid && cancelled.cancellation_count == 1);
+    assert(cancelled.cancellations[0].command.client_order_id
+           == admitted.tx.command.client_order_id);
     assert(authority.active_orders() == 0);
     assert(paper.resting_orders() == 0);
 }
@@ -121,6 +127,8 @@ void test_maker_fill_after_queue_depletion() {
     PublicTradePrint second{2, 11, Side::Sell, 40, 2'000'000, 902, 2'300};
     const auto filled = paper.on_public_trade(second);
     assert(filled.fills == 1 && filled.filled_microunits == 2'000'000);
+    assert(filled.records[0].command == admitted.tx.command);
+    assert(filled.records[0].order_state == OrderState::Filled);
     assert(authority.active_orders() == 0);
     assert(authority.inventory_snapshot(11).total_microunits == 2'000'000);
 }
