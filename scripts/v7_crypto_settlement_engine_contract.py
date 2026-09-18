@@ -91,7 +91,7 @@ def validate_config(config: dict[str, Any]) -> None:
         or config.get("model_registry") != "config/v7_crypto_settlement_model_registry.json"
         or config.get("authority_registry") != "config/v7_authority_registry.json"
         or config.get("opportunity_contract") != "schemas/v7/opportunity_envelope.schema.json"
-        or config.get("global_portfolio_coordinator") != "V7_GLOBAL_PORTFOLIO_COORDINATOR"
+        or config.get("global_portfolio_coordinator") != "V7_NATIVE_CRYPTO_SETTLEMENT_ENGINE"
         or config.get("component_independent_authority") is not False
     ):
         raise ContractError("engine_identity_or_safety")
@@ -157,8 +157,8 @@ def validate_config(config: dict[str, Any]) -> None:
         or execution_alpha.get("real_order_submission") is not False
         or float(execution_alpha.get("comparison_size_shares") or 0.0) <= 0.0
         or execution_alpha.get("selection_objective") != "MAX_CONSERVATIVE_EXPECTED_CHANGE_IN_ACCOUNT_WEALTH"
-        or execution_alpha.get("take_proposal_owner") != "EXISTING_ARRIVAL_REVALIDATED_EXTERNAL_FAIR_ROUTER"
-        or execution_alpha.get("make_proposal_owner") != "V7_CRYPTO_EXECUTION_ALPHA"
+        or execution_alpha.get("take_proposal_owner") != "V7_NATIVE_CRYPTO_SETTLEMENT_ENGINE"
+        or execution_alpha.get("make_proposal_owner") != "V7_NATIVE_CRYPTO_SETTLEMENT_ENGINE"
         or execution_alpha.get("cancel_activation") != "CURRENT_RESEARCH_RULE_HASH_PLUS_CAUSAL_LIVE_SIGNAL"
         or execution_alpha.get("maker_immature_fill_lower") != "CURRENT_RUN_POSTERIOR_LOWER_90_AFTER_20_ORDERS_2_CLUSTERS"
         or execution_alpha.get("retroactive_attribution_imputation") is not False
