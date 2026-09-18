@@ -293,6 +293,7 @@ NativeSettlementAuthorityResult NativeSettlementAuthority::submit(
     }
 
     item = OrderTrack{};
+    item.admitted_command = out.tx.command;
     item.client_order_id = out.tx.command.client_order_id;
     item.intent_id = intent.intent_id;
     item.market_handle = intent.market_handle;
@@ -400,6 +401,7 @@ NativeLifecycleResult NativeSettlementAuthority::apply_order_event(
         out.reason = NativeSettlementAuthorityReason::LifecycleInvariant;
         return out;
     }
+    out.record = *after;
     if (out.transition.invariant_violation != 0) {
         out.reason = NativeSettlementAuthorityReason::LifecycleInvariant;
         return out;
@@ -441,6 +443,15 @@ NativeLifecycleResult NativeSettlementAuthority::apply_order_event(
     out.reason = NativeSettlementAuthorityReason::Accepted;
     out.applied = out.transition.applied;
     return out;
+}
+
+bool NativeSettlementAuthority::matches_pending_command(
+    const NativeOrderCommand& command) const noexcept {
+    const auto* item = track(command.client_order_id);
+    const auto* current = order_tx_.find(command.client_order_id);
+    return item != nullptr && current != nullptr
+        && current->state == OrderState::SendPending
+        && command == item->admitted_command;
 }
 
 NativeInventorySnapshot NativeSettlementAuthority::inventory_snapshot(

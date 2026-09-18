@@ -18,7 +18,10 @@ def test_candidate_is_native_single_owner_and_not_deployed_early() -> None:
     assert "authority.submit" in text
     assert "arbitration_conflicts_fail_closed" in text
     assert "real_order_submission\", false" in text
-    assert "network adapter remain fail-closed" in text
+    assert "production network adapter remain fail-closed" in text
+    assert "adapter_endpoint.observe_unsent" in text
+    assert '"network_orders_sent", 0' in text
+    assert '"simulated_fills", 0' in text
     assert "polymarket_v7_crypto_settlement_native_candidate" in CMAKE.read_text()
     assert "crypto_settlement_native_candidate" not in MANIFEST.read_text()
 
@@ -40,3 +43,17 @@ def test_no_forbidden_hot_path_surfaces_in_candidate() -> None:
         "std::filesystem", "fstream", "curl", "requests", "sqlite", "system(", "popen("
     ):
         assert forbidden not in text
+
+
+def test_transport_cannot_skip_native_inventory_capital_authority() -> None:
+    header = (ROOT / "include/pm/v7_native_clob_order_lane.hpp").read_text()
+    transport = (ROOT / "src/v7_native_clob_order_lane.cpp").read_text()
+    endpoint = (ROOT / "src/v7_native_settlement_oms_endpoint.cpp").read_text()
+    assert "NativeSettlementOmsEndpoint& oms_owner" in header
+    assert "NativeOrderTxOwner&" not in header
+    assert "NativeOrderTxOwner&" not in transport
+    assert "matches_pending_command(oms_owner, command)" in transport
+    assert "authority_.apply_order_event(client_order_id, event)" in endpoint
+    assert "OmsEventType::Reject" in endpoint
+    for forbidden in ("private_key", "PersistentTlsSession", "NativeClobOrderLane", "FillDelta"):
+        assert forbidden not in endpoint

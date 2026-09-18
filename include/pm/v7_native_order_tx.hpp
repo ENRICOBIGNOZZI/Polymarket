@@ -54,6 +54,7 @@ struct NativeOrderCommand {
     std::uint8_t post_only = 0;
     std::uint8_t passive = 0;
     std::array<std::uint8_t, 4> reserved{};
+    friend bool operator==(const NativeOrderCommand&, const NativeOrderCommand&) = default;
 };
 
 struct NativeOrderTxResult {

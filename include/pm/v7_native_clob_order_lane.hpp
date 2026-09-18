@@ -10,6 +10,8 @@
 
 namespace pm::v7 {
 
+class NativeSettlementOmsEndpoint;
+
 enum class NativeClobSubmitReason : std::uint8_t {
     Accepted = 1,
     InvalidConfiguration = 2,
@@ -63,8 +65,10 @@ public:
     void close() noexcept;
     [[nodiscard]] bool connected() const noexcept;
 
+    // Settlement-owned path: transport cannot update OMS without its common
+    // capital/inventory authority. Network permission remains external.
     [[nodiscard]] NativeClobSubmitResult submit(
-        NativeOrderTxOwner& oms_owner,
+        NativeSettlementOmsEndpoint& oms_owner,
         UserOmsBridge& account_bridge,
         const NativeOrderCommand& command,
         std::uint64_t wall_timestamp_ms,

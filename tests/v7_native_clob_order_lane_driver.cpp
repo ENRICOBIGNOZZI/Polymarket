@@ -1,3 +1,4 @@
+#include "pm/v7_native_settlement_oms_endpoint.hpp"
 #include "pm/v7_native_clob_order_lane.hpp"
 #include "pm/v7_execution_plan.hpp"
 
@@ -16,6 +17,7 @@ ExecutionPlan make_plan() {
     plan.intent.instrument_handle = 11;
     plan.intent.state_version = 9;
     plan.intent.decision_monotonic_ns = 1'000;
+    plan.intent.exchange_event_ns = 900;
     plan.intent.price_tick = 50;
     plan.intent.quantity_microunits = 5'000'000;
     plan.intent.strategy_id = StrategyId::CryptoInformedTaker;
@@ -23,6 +25,8 @@ ExecutionPlan make_plan() {
     plan.intent.side = Side::Buy;
     plan.intent.urgency = Urgency::Aggressive;
     plan.intent.purpose = IntentPurpose::Alpha;
+    plan.intent.passive = 0;
+    plan.intent.post_only = 0;
     plan.tick_size_e4 = 100;
     plan.market_state_version = 9;
     plan.policy = ExecutionPolicyId::AggressiveTaker;
@@ -58,13 +62,25 @@ int main(int argc, char** argv) {
     assert(lane.valid());
     assert(lane.connect(argv[2]));
     assert(lane.connected());
-    NativeOrderTxOwner oms;
-    const auto prepared = oms.prepare_submit(make_plan(), 1'100);
+    CapitalLimits limits{20'000'000,20'000'000,20'000'000,10'000'000};
+    NativeSettlementAuthority authority(limits);
+    NativeSettlementOmsEndpoint oms(authority);
+    const auto admission = authority.submit(make_plan(), 1'000'000, 1'100);
+    if (!admission.accepted) std::cerr << "admission_reason=" << static_cast<int>(admission.reason) << "\n";
+    assert(admission.accepted);
+    const auto& prepared = admission.tx;
     assert(prepared.accepted);
     assert(prepared.oms.state == OrderState::SendPending);
 
     UserOmsBridge bridge;
     std::array<RoutedOmsEvent, 8> routed{};
+    auto changed = prepared.command;
+    ++changed.tick_size_e4;
+    const auto refused = lane.submit(oms, bridge, changed, 1'710'000'000'000ULL, routed);
+    assert(!refused.accepted && refused.reason == NativeClobSubmitReason::InvalidCommand);
+    assert(refused.wire_monotonic_ns == 0);
+    assert(authority.find_order(prepared.command.client_order_id)->state == OrderState::SendPending);
+    assert(authority.capital_snapshot().order_reserved_microdollars == 2'500'000);
     const auto result = lane.submit(
         oms, bridge, prepared.command, 1'710'000'000'000ULL, routed);
     assert(result.accepted);
@@ -81,6 +97,20 @@ int main(int argc, char** argv) {
     assert(record->ack_ns == result.response_complete_monotonic_ns);
     const auto exchange = bridge.lookup_exchange(prepared.command.client_order_id);
     assert(exchange.found && exchange.exchange_order_id == "ex-native-1");
+    // The loopback fixture has no real account. Inject a test-only execution
+    // event and prove it cannot bypass the common capital/inventory owner.
+    OmsEvent fixture_fill;
+    fixture_fill.type = OmsEventType::FillDelta;
+    fixture_fill.timestamp_ns = result.response_complete_monotonic_ns + 1;
+    fixture_fill.fill_delta_microunits = 5'000'000;
+    const auto terminal = oms.apply_owned(prepared.command.client_order_id, fixture_fill);
+    assert(terminal.state == OrderState::Filled && terminal.applied);
+    assert(oms.healthy());
+    assert(authority.active_orders() == 0);
+    assert(authority.inventory_snapshot(11).total_microunits == 5'000'000);
+    assert(authority.capital_snapshot().order_reserved_microdollars == 0);
+    assert(authority.capital_snapshot().inventory_committed_microdollars == 2'500'000);
+    assert(oms.find(prepared.command.client_order_id)->filled_microunits == 5'000'000);
     lane.close();
     std::cout << "NATIVE_CLOB_ORDER_LANE_PASS\n";
     return 0;

@@ -45,6 +45,7 @@ struct NativeInventorySnapshot {
 };
 
 struct NativeLifecycleResult {
+    OmsOrderRecord record{}; // Exact authority record before terminal slot retirement.
     OmsTransitionResult transition{};
     NativeInventorySnapshot inventory{};
     NativeSettlementAuthorityReason reason = NativeSettlementAuthorityReason::LifecycleInvariant;
@@ -89,6 +90,10 @@ public:
         std::uint64_t client_order_id,
         OmsEvent event) noexcept;
 
+    // Transport may consume exactly the command admitted by this authority.
+    // A matching client ID alone is insufficient to bind price, size or ticks.
+    [[nodiscard]] bool matches_pending_command(const NativeOrderCommand& command) const noexcept;
+
     [[nodiscard]] NativeInventorySnapshot inventory_snapshot(
         std::uint64_t instrument_handle) const noexcept;
     [[nodiscard]] CapitalSnapshot capital_snapshot() const noexcept {
@@ -116,6 +121,7 @@ private:
     };
 
     struct OrderTrack {
+        NativeOrderCommand admitted_command{};
         std::uint64_t client_order_id = 0;
         std::uint64_t intent_id = 0;
         std::uint64_t market_handle = 0;

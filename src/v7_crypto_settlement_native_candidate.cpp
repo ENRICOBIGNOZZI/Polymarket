@@ -1,3 +1,4 @@
+#include "pm/v7_native_settlement_oms_endpoint.hpp"
 #include "pm/fast_ws.hpp"
 #include "pm/v7_coinbase_l2_observer.hpp"
 #include "pm/v7_crypto_decision_lane.hpp"
@@ -186,6 +187,7 @@ int main(int argc, char** argv) {
         limits.max_market_exposure_microdollars = 100'000'000LL;
         limits.max_single_order_microdollars = 10'000'000LL;
         NativeSettlementAuthority authority(limits);
+        NativeSettlementOmsEndpoint adapter_endpoint(authority);
         // Zero-authority shadow begins from an explicit flat canonical inventory
         // snapshot. Non-zero recovery inventory must come from the future native
         // recovery/reconciliation boundary; strategy lanes never synthesize it.
@@ -423,6 +425,14 @@ int main(int argc, char** argv) {
                         }
                     }
                 } else {
+                    // A shadow command must terminate locally, not remain
+                    // indefinitely pending and consume capital/OMS capacity.
+                    // This is not an exchange ACK or a PAPER fill.
+                    if (!adapter_endpoint.observe_unsent(
+                            authority_result.tx.command, adapter_ready_ns)) {
+                        ++adapter_handoff_failures;
+                        break;
+                    }
                     ++accepted;
                     if (candidate_is_taker[index] != 0) {
                         ++taker_accepted;
@@ -481,6 +491,10 @@ int main(int argc, char** argv) {
             {"minimum_size_rejections", minimum_size_rejections},
             {"adapter_handoff_failures", adapter_handoff_failures},
             {"native_oms_active_orders", authority.active_orders()},
+            {"adapter_unsent_observations", adapter_endpoint.observed_unsent()},
+            {"adapter_healthy", adapter_endpoint.healthy()},
+            {"network_orders_sent", 0},
+            {"simulated_fills", 0},
             {"latency_sample_overflow", latency_overflow},
             {"accepted_signal_to_admission", latency_distribution(std::move(accepted_signal_to_admission))},
             {"accepted_signal_to_adapter", latency_distribution(std::move(accepted_signal_to_adapter))},
@@ -490,7 +504,7 @@ int main(int argc, char** argv) {
             {"binance", {{"frames", binance_status.frames_received}, {"transport_failures", binance_status.transport_failures}, {"drops", binance_ingress_status.dropped_events}}},
             {"coinbase", {{"frames", coinbase_status.frames_received}, {"transport_failures", coinbase_status.transport_failures}, {"drops", coinbase_ingress_status.dropped_events}}},
             {"polymarket", {{"messages", pm_status.messages}, {"reconnects", pm_status.reconnects}, {"errors", pm_status.errors}, {"drops", pm_drops.load()}}},
-            {"note", "Zero-authority candidate only. Maker and taker now share one in-process inventory/capital/OMS authority with cancel-first maker replacement. Non-zero recovery inventory, comparable multi-alpha wealth scoring and the network adapter remain fail-closed deployment gates."}
+            {"note", "Zero-authority candidate only. Maker and taker now share one in-process inventory/capital/OMS authority with cancel-first maker replacement. Non-zero recovery inventory, comparable multi-alpha wealth scoring and the production network adapter remain fail-closed deployment gates. Shadow handoffs terminate as definite pre-wire rejections; they are not fills."}
         }) << '\n';
         return clean ? 0 : 2;
     } catch (const std::exception& error) {

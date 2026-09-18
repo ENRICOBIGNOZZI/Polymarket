@@ -1,3 +1,4 @@
+#include "pm/v7_native_settlement_oms_endpoint.hpp"
 #include "pm/v7_native_clob_order_lane.hpp"
 
 #include "pm/v7_clob_http_frame.hpp"
@@ -63,8 +64,13 @@ template <typename T, std::size_t N>
             config.token_id_decimal, side, 3,
             config.metadata_hex, config.builder_hex};
 }
+[[nodiscard]] bool matches_pending_command(
+    const NativeSettlementOmsEndpoint& owner, const NativeOrderCommand& command) noexcept {
+    return owner.matches_pending_command(command);
+}
+
 [[nodiscard]] NativeClobSubmitResult fail_before_wire(
-    NativeOrderTxOwner& owner, std::uint64_t client_order_id,
+    NativeSettlementOmsEndpoint& owner, std::uint64_t client_order_id,
     NativeClobSubmitReason reason) noexcept {
     NativeClobSubmitResult out;
     out.reason = reason;
@@ -78,7 +84,7 @@ template <typename T, std::size_t N>
 }
 
 [[nodiscard]] NativeClobSubmitResult fail_after_wire(
-    NativeOrderTxOwner& owner, std::uint64_t client_order_id,
+    NativeSettlementOmsEndpoint& owner, std::uint64_t client_order_id,
     NativeClobSubmitReason reason, std::int64_t wire_ns = 0) noexcept {
     NativeClobSubmitResult out;
     out.reason = reason;
@@ -188,13 +194,19 @@ bool NativeClobOrderLane::connected() const noexcept {
 }
 
 NativeClobSubmitResult NativeClobOrderLane::submit(
-    NativeOrderTxOwner& oms_owner,
+    NativeSettlementOmsEndpoint& oms_owner,
     UserOmsBridge& account_bridge,
     const NativeOrderCommand& command,
     std::uint64_t wall_timestamp_ms,
     std::span<RoutedOmsEvent> routed_scratch) noexcept {
     NativeClobSubmitResult out;
     out.client_order_id = command.client_order_id;
+    // No bytes may leave the lane for a mutated/unreserved command. Preserve
+    // the real admitted order for reconciliation instead of rejecting a copy.
+    if (!matches_pending_command(oms_owner, command)) {
+        out.reason = NativeClobSubmitReason::InvalidCommand;
+        return out;
+    }
     if (!valid()) {
         out.reason = NativeClobSubmitReason::InvalidConfiguration;
         return out;
