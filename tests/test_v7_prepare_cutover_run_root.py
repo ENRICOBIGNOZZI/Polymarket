@@ -177,3 +177,40 @@ def test_inherited_carryover_is_chained_without_credit() -> None:
         assert carry['context_claims_microdollars']=={'BTC:M5':8_100_000,'ETH:H1':2_000_000}
         assert len(carry['markets'])==2
         assert '/archive/older' in carry['source_archives']
+
+
+def native_only_fixture(root: Path) -> None:
+    fixture(root)
+    runtime=json.loads((root/'control/runtime_status.json').read_text())
+    runtime.update({
+        'execution_authority':'V7_NATIVE_CRYPTO_SETTLEMENT_ENGINE',
+        'global_portfolio_coordinator':'V7_NATIVE_CRYPTO_SETTLEMENT_ENGINE',
+        'single_execution_owner':True,
+        'economic_engines':['CRYPTO_SETTLEMENT_ENGINE'],
+    })
+    write(root/'control/runtime_status.json',runtime)
+    (root/'external_fair/paper_router_status.json').unlink()
+    (root/'micro_maker/authorized_make_executor_status.json').unlink()
+
+
+def test_native_only_flat_runtime_archives_without_legacy_position_sidecars() -> None:
+    with tempfile.TemporaryDirectory() as d:
+        base=Path(d);root=base/'run';native_only_fixture(root)
+        result=cutover.prepare(root,base/'archives',base,NEW,now=126,ancestor_check=lambda *_:True)
+        assert result['state']=='ARCHIVED_PRIOR_SHA'
+        assert result['prior_open_positions']['paper_account']==0
+        assert result['prior_open_positions']['maker_active_orders']==0
+        assert result['prior_open_positions']['native_unsettled_markets']==0
+
+
+def test_native_only_runtime_still_blocks_unsettled_native_fill() -> None:
+    with tempfile.TemporaryDirectory() as d:
+        base=Path(d);root=base/'run';native_only_fixture(root)
+        (root/'ledger/execution.jsonl').write_text(
+            json.dumps(_native_fill_for_carryover())+'\n',encoding='utf-8')
+        try:
+            cutover.prepare(root,base/'archives',base,NEW,ancestor_check=lambda *_:True)
+        except cutover.CutoverArchiveError as exc:
+            assert str(exc)=='prior_native_unsettled_markets:1'
+        else:
+            raise AssertionError('native-only unsettled fill accepted')

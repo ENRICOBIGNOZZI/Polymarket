@@ -349,25 +349,48 @@ def prepare(
         if drawdown >= maximum:
             raise CutoverArchiveError("prior_portfolio_drawdown_limit")
 
-    # The current PAPER account and executor are the only inventory surfaces.
-    # Cutover requires both to be flat after the runtime has stopped.
+    # Inventory truth depends on the runtime generation. Legacy generations
+    # require their PAPER router + maker executor state to be present and flat.
+    # The native single-owner generation has no such sidecars: its canonical
+    # FILL/FINAL ledger is the inventory surface and is validated below.
+    native_only = (
+        runtime.get("execution_authority") == "V7_NATIVE_CRYPTO_SETTLEMENT_ENGINE"
+        and runtime.get("global_portfolio_coordinator") == "V7_NATIVE_CRYPTO_SETTLEMENT_ENGINE"
+        and runtime.get("single_execution_owner") is True
+        and set(runtime.get("economic_engines") or []) == {"CRYPTO_SETTLEMENT_ENGINE"}
+    )
     account = read_json(run_root / "external_fair/paper_router_status.json")
     executor = read_json(run_root / "micro_maker/authorized_make_executor_status.json")
-    for name, value in (("paper_account", account), ("maker_executor", executor)):
-        if not value:
-            raise CutoverArchiveError(f"prior_position_state_missing:{name}")
-        if (value.get("paper_only") is not True
+    if not native_only:
+        for name, value in (("paper_account", account), ("maker_executor", executor)):
+            if not value:
+                raise CutoverArchiveError(f"prior_position_state_missing:{name}")
+            if (value.get("paper_only") is not True
+                    or value.get("authenticated_execution") is not False
+                    or value.get("real_order_submission") is not False):
+                raise CutoverArchiveError(f"prior_position_state_unsafe:{name}")
+        if account.get("model_sha") not in (None, "", previous_sha):
+            raise CutoverArchiveError("prior_paper_account_sha_mismatch")
+        if executor.get("model_sha") != previous_sha:
+            raise CutoverArchiveError("prior_maker_executor_sha_mismatch")
+    else:
+        # If stale compatibility sidecars are present, they may not report
+        # unsafe/open state; absence is expected for the native-only runtime.
+        for name, value in (("paper_account", account), ("maker_executor", executor)):
+            if value and (
+                value.get("paper_only") is not True
                 or value.get("authenticated_execution") is not False
-                or value.get("real_order_submission") is not False):
-            raise CutoverArchiveError(f"prior_position_state_unsafe:{name}")
-    if account.get("model_sha") not in (None, "", previous_sha):
-        raise CutoverArchiveError("prior_paper_account_sha_mismatch")
-    if executor.get("model_sha") != previous_sha:
-        raise CutoverArchiveError("prior_maker_executor_sha_mismatch")
+                or value.get("real_order_submission") is not False
+            ):
+                raise CutoverArchiveError(f"prior_position_state_unsafe:{name}")
+        if account and account.get("model_sha") not in (None, "", previous_sha):
+            raise CutoverArchiveError("prior_paper_account_sha_mismatch")
+        if executor and executor.get("model_sha") != previous_sha:
+            raise CutoverArchiveError("prior_maker_executor_sha_mismatch")
     try:
-        account_open = int(account.get("open_positions") or 0)
-        pending_maker = int(account.get("pending_maker_orders") or 0)
-        active_maker = int(executor.get("active_orders") or 0)
+        account_open = int(account.get("open_positions") or 0) if account else 0
+        pending_maker = int(account.get("pending_maker_orders") or 0) if account else 0
+        active_maker = int(executor.get("active_orders") or 0) if executor else 0
     except (TypeError, ValueError, OverflowError) as exc:
         raise CutoverArchiveError("prior_open_positions_invalid") from exc
     if account_open < 0 or pending_maker < 0 or active_maker < 0:
