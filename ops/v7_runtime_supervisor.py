@@ -21,6 +21,7 @@ if str(MONITORING) not in sys.path:
 from v7_runtime_contract import (  # noqa: E402
     RECOVERABLE,
     SAFE,
+    SHA40,
     UNSAFE,
     assess_reconciliation,
     pid_alive,
