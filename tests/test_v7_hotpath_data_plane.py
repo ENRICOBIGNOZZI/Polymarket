@@ -66,7 +66,7 @@ def test_native_rollover_settlement_failure_is_fail_closed():
     assert 'SETTLEMENT_BLOCKED' in manager
     assert 'NATIVE_PAPER_SETTLEMENT_INCOMPLETE' in manager
     assert 'return 79' in manager
-    assert 'self._terminate_engine()' in manager
+    assert 'self._terminate_all()' in manager
 
 
 if __name__ == "__main__":

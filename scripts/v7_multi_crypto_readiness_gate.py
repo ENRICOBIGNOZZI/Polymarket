@@ -78,7 +78,7 @@ def evaluate(root: Path, *, shock_report: Path | None, research_report: Path | N
     if disk_required_bytes <= 0 or disk_free_bytes < disk_required_bytes:
         blockers.append("DISK_FREE_BELOW_RUNTIME_POLICY")
 
-    if execution.get("state") != "VERIFIED_SHADOW_CONTRACT" or execution.get("new_risk_authorized") is not False:
+    if execution.get("state") != "VERIFIED_PARTITIONED_PAPER_CONTRACT" or execution.get("new_risk_authorized") is not False:
         blockers.append("EXECUTION_ACCOUNTING_CONTRACT_NOT_VERIFIED")
     if (ledger.get("ledger_rows") or 0) <= 0 or ledger.get("open_orders") != 0 \
             or ledger.get("fill_final_one_to_one") is not True or ledger.get("spool_files") != 0:

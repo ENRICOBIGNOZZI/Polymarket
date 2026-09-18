@@ -79,14 +79,29 @@ def validate(root: Path) -> dict[str, Any]:
 
     require(set(settlement.get("supported_assets") or []) == ASSETS,
             "settlement_asset_partition")
+    expected_horizons = {"M5", "M15", "H1", "H4", "D1"}
+    require(set(settlement.get("supported_horizons") or []) == expected_horizons,
+            "settlement_horizon_partition")
+    require(settlement.get("decision_owner") == "CRYPTO_SETTLEMENT_ENGINE"
+            and settlement.get("automatic_discovery_execution") is False,
+            "settlement_owner_contract")
     contexts = settlement.get("contexts") if isinstance(settlement.get("contexts"), list) else []
+    require(len(contexts) == len(ASSETS) * len(expected_horizons),
+            "settlement_context_count")
+    identities: set[tuple[str, str]] = set()
     for row in contexts:
         if not isinstance(row, dict):
             raise ValueError("settlement_context_row")
-        if row.get("asset") != "BTC":
-            require(row.get("authority") == "SHADOW_ZERO_AUTHORITY"
-                    and row.get("research_only") is True,
-                    f"{row.get('asset')}/{row.get('horizon')}:non_btc_authority")
+        identity = (str(row.get("asset") or ""), str(row.get("horizon") or ""))
+        require(identity[0] in ASSETS and identity[1] in expected_horizons
+                and identity not in identities, "settlement_context_identity")
+        identities.add(identity)
+        # SHADOW here means the context itself never owns OMS/capital/risk.
+        # PAPER new-risk authority is held only by the single global engine.
+        require(row.get("authority") == "SHADOW"
+                and row.get("research_only") is False
+                and row.get("enabled") is True,
+                f"{identity[0]}/{identity[1]}:independent_context_authority")
 
     require(shadow.get("paper_only") is True and shadow.get("execution_authority") is False
             and shadow.get("real_order_submission") is False
@@ -102,14 +117,14 @@ def validate(root: Path) -> dict[str, Any]:
             "opportunity_zero_authority_gate_missing")
 
     return {
-        "schema": SCHEMA, "version": 1, "state": "VERIFIED_SHADOW_CONTRACT",
+        "schema": SCHEMA, "version": 1, "state": "VERIFIED_PARTITIONED_PAPER_CONTRACT",
         "paper_only": True, "authenticated_execution": False, "real_order_submission": False,
         "real_capital_at_risk": False, "new_risk_authorized": False,
         "single_global_execution_owner": True, "single_canonical_ledger_writer": True,
         "global_portfolio_coordinator": "V7_NATIVE_CRYPTO_SETTLEMENT_ENGINE",
         "ledger_owner": "V7_CANONICAL_LEDGER", "decision_chain": DECISION_CHAIN,
         "supported_assets": sorted(ASSETS),
-        "claim_boundary": "Contract verification only; SHADOW lanes remain unable to add risk.",
+        "claim_boundary": "Contract verification only. Contexts own no authority; PAPER risk is admitted only by the single CRYPTO_SETTLEMENT_ENGINE envelope.",
     }
 
 

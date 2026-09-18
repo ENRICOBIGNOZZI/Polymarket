@@ -33,19 +33,19 @@ class CryptoAsset(str, Enum):
 
 
 class CryptoHorizon(str, Enum):
-    M1 = "M1"
     M5 = "M5"
     M15 = "M15"
     H1 = "H1"
     H4 = "H4"
+    D1 = "D1"
 
 
 HORIZON_SECONDS = {
-    CryptoHorizon.M1: 60,
     CryptoHorizon.M5: 300,
     CryptoHorizon.M15: 900,
     CryptoHorizon.H1: 3_600,
     CryptoHorizon.H4: 14_400,
+    CryptoHorizon.D1: 86_400,
 }
 
 
@@ -125,30 +125,96 @@ def validate_registry(value: dict[str, Any]) -> dict[tuple[CryptoAsset, CryptoHo
         external = row.get("external_symbols") or {}
         mapping = row.get("polymarket") or {}
         horizon_slug = {
-            CryptoHorizon.M1: "1m", CryptoHorizon.M5: "5m",
-            CryptoHorizon.M15: "15m", CryptoHorizon.H1: "1h", CryptoHorizon.H4: "4h",
+            CryptoHorizon.M5: "5m", CryptoHorizon.M15: "15m",
+            CryptoHorizon.H1: "1h", CryptoHorizon.H4: "4h",
+            CryptoHorizon.D1: "1d",
         }[horizon]
         observed_slug = str(mapping.get("observed_live_slug") or "")
+        slug_kind = str(mapping.get("slug_kind") or "")
+        slug_prefix = str(mapping.get("slug_prefix") or "")
         maker_window = row.get("maker_tte_window_seconds")
         taker_window = row.get("taker_tte_window_seconds")
         required_external = ("binance_spot", "bybit_spot", "binance_perp", "bybit_perp")
         if asset is not CryptoAsset.BNB:
             required_external += ("coinbase_spot",)
+
+        if slug_kind == "UNIX_WINDOW":
+            slug_ok = (
+                mapping.get("slug_template")
+                == f"{asset.value.lower()}-updown-{{horizon_slug}}-{{window_start_unix}}"
+                and slug_prefix == asset.value.lower()
+                and horizon in {CryptoHorizon.M5, CryptoHorizon.M15, CryptoHorizon.H4}
+                and re.fullmatch(
+                    rf"{asset.value.lower()}-updown-{re.escape(horizon_slug)}-[0-9]+",
+                    observed_slug,
+                ) is not None
+            )
+        elif slug_kind == "HOURLY_ET":
+            slug_ok = (
+                horizon is CryptoHorizon.H1
+                and mapping.get("slug_template")
+                    == "{slug_prefix}-up-or-down-{month}-{day}-{year}-{hour12}{ampm}-et"
+                and bool(slug_prefix)
+                and re.fullmatch(
+                    rf"{re.escape(slug_prefix)}-up-or-down-[a-z]+-[0-9]{{1,2}}-[0-9]{{4}}-[0-9]{{1,2}}(?:am|pm)-et",
+                    observed_slug,
+                ) is not None
+            )
+        elif slug_kind == "DAILY_ET":
+            slug_ok = (
+                horizon is CryptoHorizon.D1
+                and mapping.get("slug_template")
+                    == "{slug_prefix}-up-or-down-on-{month}-{day}-{year}"
+                and bool(slug_prefix)
+                and re.fullmatch(
+                    rf"{re.escape(slug_prefix)}-up-or-down-on-[a-z]+-[0-9]{{1,2}}-[0-9]{{4}}",
+                    observed_slug,
+                ) is not None
+            )
+        else:
+            slug_ok = False
+
+        if horizon in {CryptoHorizon.M5, CryptoHorizon.M15, CryptoHorizon.H4}:
+            settlement_ok = (
+                settlement.get("comparison_operator") == "GREATER_THAN_OR_EQUAL"
+                and settlement.get("boundary_behavior") == "EQUAL_IS_UP"
+                and settlement.get("settlement_window_seconds") == 60
+                and settlement.get("oracle_source") == "CHAINLINK_DATA_STREAM"
+                and settlement.get("reference_pair") == f"{asset.value}/USD"
+                and settlement.get("timestamp_semantics") == "WINDOW_TWAP_COMPARED_TO_RANGE_START"
+                and settlement.get("rounding_rules") == "CHAINLINK_STREAM_NATIVE"
+                and str(settlement.get("stream_url") or "").startswith("https://data.chain.link/streams/")
+            )
+        elif horizon is CryptoHorizon.H1:
+            settlement_ok = (
+                settlement.get("comparison_operator") == "GREATER_THAN_OR_EQUAL"
+                and settlement.get("boundary_behavior") == "EQUAL_IS_UP"
+                and settlement.get("settlement_window_seconds") == 3600
+                and settlement.get("oracle_source") == "BINANCE_FINALIZED_CANDLE"
+                and settlement.get("reference_pair") == f"{asset.value}/USDT"
+                and settlement.get("timestamp_semantics") == "ONE_HOUR_CANDLE_CLOSE_COMPARED_TO_OPEN"
+                and settlement.get("rounding_rules") == "BINANCE_NATIVE"
+                and str(settlement.get("stream_url") or "").startswith("https://www.binance.com/")
+            )
+        else:
+            settlement_ok = (
+                horizon is CryptoHorizon.D1
+                and settlement.get("comparison_operator") == "GREATER_THAN"
+                and settlement.get("boundary_behavior") == "EQUAL_50_50"
+                and settlement.get("settlement_window_seconds") == 60
+                and settlement.get("oracle_source") == "BINANCE_FINALIZED_CANDLE"
+                and settlement.get("reference_pair") == f"{asset.value}/USDT"
+                and settlement.get("timestamp_semantics") == "NOON_ET_FINAL_1M_CLOSE_DAY_OVER_DAY"
+                and settlement.get("rounding_rules") == "BINANCE_NATIVE"
+                and str(settlement.get("stream_url") or "").startswith("https://www.binance.com/")
+            )
+
         if (
             row.get("market_mapping_verified") is not True
             or row.get("settlement_mapping_verified") is not True
-            or settlement.get("comparison_operator") != "GREATER_THAN_OR_EQUAL"
-            or settlement.get("boundary_behavior") != "EQUAL_IS_UP"
             or settlement.get("fallback_resolution") != "NONE_FAIL_CLOSED"
-            or settlement.get("settlement_window_seconds") != 60
-            or settlement.get("oracle_source") != "CHAINLINK_DATA_STREAM"
-            or settlement.get("reference_pair") != f"{asset.value}/USD"
-            or not str(settlement.get("stream_url") or "").startswith("https://data.chain.link/streams/")
-            or mapping.get("slug_template") != f"{asset.value.lower()}-updown-{{horizon_slug}}-{{window_start_unix}}"
+            or not slug_ok or not settlement_ok
             or mapping.get("horizon_slug") != horizon_slug
-            or not re.fullmatch(
-                rf"{asset.value.lower()}-updown-{re.escape(horizon_slug)}-[0-9]+", observed_slug,
-            )
             or mapping.get("verification_source") != "https://gamma-api.polymarket.com"
             or not str(mapping.get("verified_at_utc") or "").endswith("Z")
             or not isinstance(maker_window, list) or len(maker_window) != 2
@@ -163,10 +229,8 @@ def validate_registry(value: dict[str, Any]) -> dict[tuple[CryptoAsset, CryptoHo
             raise CryptoSettlementError(f"settlement_semantic_hash:{asset.value}:{horizon.value}")
         research_only = row.get("research_only") is True
         authority = row.get("authority")
-        if asset is not CryptoAsset.BTC and (
-            not research_only or authority != "SHADOW_ZERO_AUTHORITY"
-        ):
-            raise CryptoSettlementError("non_btc_must_start_shadow_zero_authority")
+        if research_only or authority != "SHADOW":
+            raise CryptoSettlementError("paper_context_must_be_registered_nonresearch_shadow")
         contexts[key] = CryptoSettlementContext(
             asset=asset, horizon=horizon, horizon_seconds=HORIZON_SECONDS[horizon],
             contract_family=str(row.get("contract_family") or ""),

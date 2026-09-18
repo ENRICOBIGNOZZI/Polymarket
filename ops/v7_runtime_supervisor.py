@@ -37,6 +37,49 @@ def _json(path: Path) -> dict[str, Any]:
     return value if isinstance(value, dict) else {}
 
 
+def _partitioned_native_ready(native: dict[str, Any]) -> bool:
+    if native.get("partitioned_native_workers") is not True:
+        return False
+    workers = native.get("workers")
+    if not isinstance(workers, list):
+        return False
+    try:
+        expected = int(native.get("expected_context_count") or 0)
+        targets = int(native.get("target_context_count") or 0)
+        global_budget = int(native.get("global_budget_microdollars") or 0)
+        partition_total = int(native.get("partition_total_microdollars") or 0)
+    except (TypeError, ValueError, OverflowError):
+        return False
+    if expected != 30 or targets != expected or len(workers) != expected:
+        return False
+    if global_budget <= 0 or partition_total <= 0 or partition_total > global_budget:
+        return False
+    contexts: set[str] = set()
+    for worker in workers:
+        if not isinstance(worker, dict):
+            return False
+        context = str(worker.get("context") or "")
+        state = str(worker.get("state") or "")
+        try:
+            engine_pid = int(worker.get("engine_pid") or 0)
+            settlement_pid = int(worker.get("settlement_pid") or 0)
+            budget = int(worker.get("budget_microdollars") or 0)
+        except (TypeError, ValueError, OverflowError):
+            return False
+        if not context or context in contexts or budget <= 0:
+            return False
+        contexts.add(context)
+        if state == "RUNNING":
+            if engine_pid <= 0 or not pid_alive(engine_pid):
+                return False
+        elif state == "SETTLING":
+            if settlement_pid <= 0 or not pid_alive(settlement_pid):
+                return False
+        else:
+            return False
+    return len(contexts) == expected
+
+
 def external_fair_ready(run_root: Path, expected_sha: str, *, now: int | None = None) -> bool:
     """Require the active execution chain, preferring the sole native engine."""
     current = int(time.time()) if now is None else int(now)
@@ -47,7 +90,7 @@ def external_fair_ready(run_root: Path, expected_sha: str, *, now: int | None = 
             engine_pid = int(native.get("engine_pid") or 0)
         except (TypeError, ValueError, OverflowError):
             return False
-        return bool(
+        base_ready = bool(
             native.get("schema") == "polymarket_v7_native_engine_manager_status_v1"
             and native.get("model_sha") == expected_sha
             and native.get("paper_only") is True
@@ -56,10 +99,17 @@ def external_fair_ready(run_root: Path, expected_sha: str, *, now: int | None = 
             and native.get("real_capital_at_risk") is False
             and native.get("single_native_hot_path") is True
             and native.get("state") == "RUNNING"
-            and engine_pid > 0 and pid_alive(engine_pid)
             and 0 <= current * 1000 - timestamp_ms <= 15_000
             and not native.get("blocker")
         )
+        if not base_ready:
+            return False
+        if native.get("partitioned_native_workers") is True:
+            return (
+                native.get("single_native_portfolio_owner") is True
+                and _partitioned_native_ready(native)
+            )
+        return engine_pid > 0 and pid_alive(engine_pid)
     status = _json(run_root / "external_fair" / "status.json")
     router = _json(run_root / "external_fair" / "paper_router_status.json")
     contract = status.get("contract") if isinstance(status.get("contract"), dict) else {}

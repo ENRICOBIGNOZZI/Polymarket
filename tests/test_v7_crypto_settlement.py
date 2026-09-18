@@ -39,12 +39,12 @@ def model(context) -> dict:
     }
 
 
-def test_twelve_verified_contexts_and_no_one_minute_instantiation() -> None:
+def test_thirty_verified_contexts_cover_all_available_timeframes() -> None:
     contexts = load_registry(REGISTRY)
-    assert len(contexts) == 12
+    assert len(contexts) == 30
     assert {row.asset.value for row in contexts.values()} == {"BTC", "ETH", "SOL", "XRP", "DOGE", "BNB"}
-    assert {row.horizon.value for row in contexts.values()} == {"M5", "M15"}
-    assert all(row.research_only for row in contexts.values() if row.asset.value != "BTC")
+    assert {row.horizon.value for row in contexts.values()} == {"M5", "M15", "H1", "H4", "D1"}
+    assert all(row.research_only is False and row.authority == "SHADOW" for row in contexts.values())
     try:
         require_context(contexts, "BTC", "M1")
     except CryptoSettlementError as exc:
@@ -196,7 +196,7 @@ def test_source_and_symbol_mappings_are_isolated_by_asset() -> None:
 
 
 if __name__ == "__main__":
-    test_twelve_verified_contexts_and_no_one_minute_instantiation()
+    test_thirty_verified_contexts_cover_all_available_timeframes()
     test_asset_horizon_and_settlement_hash_model_isolation()
     test_model_registry_is_complete_indexed_and_zero_authority()
     test_correlated_crypto_risk_has_no_fake_asset_diversification()

@@ -25,6 +25,30 @@
     },
     {
       "artifact": null,
+      "asset": "BTC",
+      "horizon": "H1",
+      "new_risk_authorized": false,
+      "settlement_semantic_hash": "06cd5db471279bd1e432c286a45647428dfdf187fad3eac28ec4690ba3f8f20a",
+      "status": "UNREGISTERED_SHADOW"
+    },
+    {
+      "artifact": null,
+      "asset": "BTC",
+      "horizon": "H4",
+      "new_risk_authorized": false,
+      "settlement_semantic_hash": "59710f458603c9bc1c0e4094281b172d2a57daa93242845b30da162debd4f6c7",
+      "status": "UNREGISTERED_SHADOW"
+    },
+    {
+      "artifact": null,
+      "asset": "BTC",
+      "horizon": "D1",
+      "new_risk_authorized": false,
+      "settlement_semantic_hash": "53ee2f7cf40fcdc8eb763e2d4c60ea089b8fdce66522186ffc3bd8c59987da5f",
+      "status": "UNREGISTERED_SHADOW"
+    },
+    {
+      "artifact": null,
       "asset": "ETH",
       "horizon": "M5",
       "new_risk_authorized": false,
@@ -37,6 +61,30 @@
       "horizon": "M15",
       "new_risk_authorized": false,
       "settlement_semantic_hash": "cf7e99de34e38d459a54bc36a6e323c6abd19ba07e5a8369722c2699a6707aac",
+      "status": "UNREGISTERED_SHADOW"
+    },
+    {
+      "artifact": null,
+      "asset": "ETH",
+      "horizon": "H1",
+      "new_risk_authorized": false,
+      "settlement_semantic_hash": "f6c46ffa1842fcdc9595e0b9e1226ec68cf46cf813242e6f2ac10a7419c1e9e8",
+      "status": "UNREGISTERED_SHADOW"
+    },
+    {
+      "artifact": null,
+      "asset": "ETH",
+      "horizon": "H4",
+      "new_risk_authorized": false,
+      "settlement_semantic_hash": "cf7e99de34e38d459a54bc36a6e323c6abd19ba07e5a8369722c2699a6707aac",
+      "status": "UNREGISTERED_SHADOW"
+    },
+    {
+      "artifact": null,
+      "asset": "ETH",
+      "horizon": "D1",
+      "new_risk_authorized": false,
+      "settlement_semantic_hash": "4ce390dab8634f74b11582032562771432091e6708dc9eab6248b8a375ecd9f5",
       "status": "UNREGISTERED_SHADOW"
     },
     {
@@ -57,6 +105,30 @@
     },
     {
       "artifact": null,
+      "asset": "SOL",
+      "horizon": "H1",
+      "new_risk_authorized": false,
+      "settlement_semantic_hash": "473b59e6cfed0a0c5142678e480fe9745ff6d35f1d705b6208f625a416ef8a4d",
+      "status": "UNREGISTERED_SHADOW"
+    },
+    {
+      "artifact": null,
+      "asset": "SOL",
+      "horizon": "H4",
+      "new_risk_authorized": false,
+      "settlement_semantic_hash": "a22521aaa0f025e5026c09c5c0684b76bc0780150944dbcb74a4f4ab57ce1d51",
+      "status": "UNREGISTERED_SHADOW"
+    },
+    {
+      "artifact": null,
+      "asset": "SOL",
+      "horizon": "D1",
+      "new_risk_authorized": false,
+      "settlement_semantic_hash": "9a29bf04ff62d7d2efb7dd72bae0881eca2c75a5e40113370b5ef21e1a23bdfc",
+      "status": "UNREGISTERED_SHADOW"
+    },
+    {
+      "artifact": null,
       "asset": "XRP",
       "horizon": "M5",
       "new_risk_authorized": false,
@@ -69,6 +141,30 @@
       "horizon": "M15",
       "new_risk_authorized": false,
       "settlement_semantic_hash": "3f5886b065ac99a0481bc99355bc56388f24b0f9009e4dbbbb0e83d2977ae7f4",
+      "status": "UNREGISTERED_SHADOW"
+    },
+    {
+      "artifact": null,
+      "asset": "XRP",
+      "horizon": "H1",
+      "new_risk_authorized": false,
+      "settlement_semantic_hash": "8ce82d2e3b088f41c56a5f5989663d6858d50b6c39480a217a776faadf8e5145",
+      "status": "UNREGISTERED_SHADOW"
+    },
+    {
+      "artifact": null,
+      "asset": "XRP",
+      "horizon": "H4",
+      "new_risk_authorized": false,
+      "settlement_semantic_hash": "3f5886b065ac99a0481bc99355bc56388f24b0f9009e4dbbbb0e83d2977ae7f4",
+      "status": "UNREGISTERED_SHADOW"
+    },
+    {
+      "artifact": null,
+      "asset": "XRP",
+      "horizon": "D1",
+      "new_risk_authorized": false,
+      "settlement_semantic_hash": "15cdd7add6ca032629c8f13536596b9a7cb89886dacf043b6027dcdc89873e86",
       "status": "UNREGISTERED_SHADOW"
     },
     {
@@ -89,6 +185,30 @@
     },
     {
       "artifact": null,
+      "asset": "DOGE",
+      "horizon": "H1",
+      "new_risk_authorized": false,
+      "settlement_semantic_hash": "3faa562e9a1a57286cf04b016ae53dc3df41ee6389e4135ff3b88eb12f3aa039",
+      "status": "UNREGISTERED_SHADOW"
+    },
+    {
+      "artifact": null,
+      "asset": "DOGE",
+      "horizon": "H4",
+      "new_risk_authorized": false,
+      "settlement_semantic_hash": "ad279225eec0dfb695fc229d1422cb38c1a97c9821203a7c401fbeb64ceba0fe",
+      "status": "UNREGISTERED_SHADOW"
+    },
+    {
+      "artifact": null,
+      "asset": "DOGE",
+      "horizon": "D1",
+      "new_risk_authorized": false,
+      "settlement_semantic_hash": "b074b2a5d0c26eb4353d2e7ba57f5c04fc2ee4d8db518d3830b3ee754d5c4fad",
+      "status": "UNREGISTERED_SHADOW"
+    },
+    {
+      "artifact": null,
       "asset": "BNB",
       "horizon": "M5",
       "new_risk_authorized": false,
@@ -101,6 +221,30 @@
       "horizon": "M15",
       "new_risk_authorized": false,
       "settlement_semantic_hash": "1061f60c542ffb51715905d3a9b366f7f607b5e07dc1f8cddaa00594094a1458",
+      "status": "UNREGISTERED_SHADOW"
+    },
+    {
+      "artifact": null,
+      "asset": "BNB",
+      "horizon": "H1",
+      "new_risk_authorized": false,
+      "settlement_semantic_hash": "45afe8c598233c9de2cf3fb3f45d3d9c1d5ef5e9c6e127d563ef371e213e12e5",
+      "status": "UNREGISTERED_SHADOW"
+    },
+    {
+      "artifact": null,
+      "asset": "BNB",
+      "horizon": "H4",
+      "new_risk_authorized": false,
+      "settlement_semantic_hash": "1061f60c542ffb51715905d3a9b366f7f607b5e07dc1f8cddaa00594094a1458",
+      "status": "UNREGISTERED_SHADOW"
+    },
+    {
+      "artifact": null,
+      "asset": "BNB",
+      "horizon": "D1",
+      "new_risk_authorized": false,
+      "settlement_semantic_hash": "cbe1496e7a0df58ee087f16dd11d0754f99ef3afbe13d884c26bb8ac67407e93",
       "status": "UNREGISTERED_SHADOW"
     }
   ],

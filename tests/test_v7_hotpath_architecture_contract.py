@@ -14,8 +14,8 @@ def test_hot_path_has_no_database_dataframe_or_python_execution_owner():
     assert 'NativeSettlementAuthority authority' in native
     assert 'NativePaperExecutionAdapter' in native
     assert 'subprocess.Popen(' in manager
-    assert 'launch_command = list(command)' in manager
-    assert '[taskset, "-c", hot_cpuset] + launch_command' in manager
+    assert 'launch = list(command)' in manager
+    assert '[taskset, "-c", hot_cpuset] + launch' in manager
 
 
 def test_hot_process_is_single_native_owner_and_cpu_classed():

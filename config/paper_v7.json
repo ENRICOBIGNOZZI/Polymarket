@@ -57,7 +57,7 @@
       "CRYPTO_SETTLEMENT_ENGINE"
     ],
     "engine_capital_fractions": {
-      "CRYPTO_SETTLEMENT_ENGINE": 0.2857142857142857
+      "CRYPTO_SETTLEMENT_ENGINE": 0.7142857142857143
     },
     "execution_mode": "PAPER_SIMULATED",
     "execution_modes_policy": "config/v7_execution_modes.json",

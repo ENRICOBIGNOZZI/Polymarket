@@ -45,7 +45,7 @@ class MultiCryptoDashboardTest(unittest.TestCase):
         dashboard = json.loads(DASHBOARD.read_text(encoding="utf-8"))
         variables = {row["name"]: row for row in dashboard["templating"]["list"]}
         self.assertEqual(variables["asset"]["query"], "BTC,ETH,SOL,XRP,DOGE,BNB")
-        self.assertEqual(variables["horizon"]["query"], "M5,M15")
+        self.assertEqual(variables["horizon"]["query"], "M5,M15,H1,H4,D1")
         self.assertTrue(variables["asset"]["includeAll"])
         self.assertTrue(variables["horizon"]["includeAll"])
 

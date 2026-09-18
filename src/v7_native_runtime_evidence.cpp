@@ -76,7 +76,8 @@ void atomic_write(const fs::path& target, const std::string& payload) {
 
 bool NativeRuntimeEvidenceConfig::valid() const noexcept {
     return !run_root.empty() && exact_sha(model_sha) && !run_id.empty()
-        && !server_id.empty() && !market_id.empty() && !event_id.empty()
+        && !server_id.empty() && !asset.empty() && !horizon.empty()
+        && !market_id.empty() && !event_id.empty()
         && !yes_token_id.empty() && !no_token_id.empty()
         && !fee_source.empty() && yes_instrument_handle != 0
         && no_instrument_handle != 0 && yes_instrument_handle != no_instrument_handle
@@ -116,6 +117,8 @@ struct NativeRuntimeEvidenceWriter::Impl {
             {"owner", "V7_NATIVE_CRYPTO_SETTLEMENT_ENGINE"},
             {"engine_id", "CRYPTO_SETTLEMENT_ENGINE"},
             {"model_sha", config.model_sha},
+            {"asset", config.asset},
+            {"horizon", config.horizon},
             {"paper_only", true},
             {"authenticated_execution", false},
             {"real_order_submission", false},
@@ -160,6 +163,8 @@ struct NativeRuntimeEvidenceWriter::Impl {
             {"native_settlement_receipt", receipt(event.command)},
             {"run_id", config.run_id},
             {"server_id", config.server_id},
+            {"asset", config.asset},
+            {"horizon", config.horizon},
         };
         return {
             {"schema_version", 1},
@@ -237,6 +242,7 @@ struct NativeRuntimeEvidenceWriter::Impl {
             {"real_order_submission", false},
             {"model_sha", config.model_sha},
             {"run_id", config.run_id},
+            {"market_id", config.market_id},
             {"healthy", owner.healthy()},
             {"published", owner.published()},
             {"written", owner.written()},
@@ -244,7 +250,9 @@ struct NativeRuntimeEvidenceWriter::Impl {
             {"queue_depth", owner.queue_.approximate_size()},
             {"timestamp_ms", to_ms(wall_now_ns())},
         };
-        atomic_write(fs::path(config.run_root) / "control" / "native_evidence_status.json",
+        const fs::path directory = fs::path(config.run_root) / "control" / "native_evidence";
+        fs::create_directories(directory);
+        atomic_write(directory / (config.market_id + ".json"),
                      json::serialize(value) + "\n");
     }
 

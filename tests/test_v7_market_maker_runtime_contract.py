@@ -24,7 +24,7 @@ class ProfessionalMakerRuntimeContractTests(unittest.TestCase):
         ), 2000.0)
         self.assertAlmostEqual(float(cfg["starting_capital"]) * float(
             v7["engine_capital_fractions"]["CRYPTO_SETTLEMENT_ENGINE"]
-        ), 4000.0)
+        ), 10000.0)
         self.assertEqual(v7["micro_maker_policy"], "config/v7_professional_market_maker.json")
         self.assertFalse(any(key.endswith("_capital_fraction") for key in v7))
 

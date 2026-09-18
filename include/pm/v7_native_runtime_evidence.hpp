@@ -35,6 +35,8 @@ struct NativeRuntimeEvidenceConfig {
     std::string model_sha;
     std::string run_id;
     std::string server_id;
+    std::string asset;
+    std::string horizon;
     std::string market_id;
     std::string event_id;
     std::string yes_token_id;

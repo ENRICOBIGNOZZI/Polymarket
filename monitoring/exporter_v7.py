@@ -462,7 +462,33 @@ def health_reasons(snapshot: dict[str, Any], *, max_runtime_age: int = 180, max_
             or not _fresh_ms(native, snapshot, max_runtime_age)
         ):
             reasons.append("native_engine_manager_missing_stale_or_unsafe")
-        if native.get("state") == "RUNNING" and (native_pid <= 0 or not _pid_alive(native_pid)):
+        if native.get("partitioned_native_workers") is True:
+            workers = native.get("workers")
+            expected = _integer(native.get("expected_context_count"))
+            targets = _integer(native.get("target_context_count"))
+            global_budget = _integer(native.get("global_budget_microdollars"))
+            partition_total = _integer(native.get("partition_total_microdollars"))
+            if (
+                native.get("single_native_portfolio_owner") is not True
+                or expected != 30 or targets != expected
+                or not isinstance(workers, list) or len(workers) != expected
+                or global_budget <= 0 or partition_total <= 0
+                or partition_total > global_budget
+            ):
+                reasons.append("native_partition_coverage_incomplete")
+            else:
+                for worker in workers:
+                    if not isinstance(worker, dict):
+                        reasons.append("native_partition_worker_invalid")
+                        continue
+                    worker_state = str(worker.get("state") or "")
+                    if worker_state == "RUNNING" and not _pid_alive(worker.get("engine_pid")):
+                        reasons.append("native_partition_engine_process_not_alive")
+                    elif worker_state == "SETTLING" and not _pid_alive(worker.get("settlement_pid")):
+                        reasons.append("native_partition_settlement_process_not_alive")
+                    elif worker_state not in {"RUNNING", "SETTLING"}:
+                        reasons.append("native_partition_worker_not_ready")
+        elif native.get("state") == "RUNNING" and (native_pid <= 0 or not _pid_alive(native_pid)):
             reasons.append("native_engine_process_not_alive")
         if native.get("blocker"):
             reasons.append("native_engine_manager_blocked")
@@ -534,6 +560,12 @@ def render_prometheus(snapshot: dict[str, Any]) -> str:
             else "professional_maker_missing_stale_or_unsafe" not in reasons
         ), {"component": "professional_maker"}),
         _metric("polymarket_v7_native_engine_mode", snapshot.get("native_mode") is True),
+        _metric("polymarket_v7_native_target_contexts", (snapshot.get("native_engine_manager") or {}).get("target_context_count")),
+        _metric("polymarket_v7_native_expected_contexts", (snapshot.get("native_engine_manager") or {}).get("expected_context_count")),
+        _metric("polymarket_v7_native_active_workers", (snapshot.get("native_engine_manager") or {}).get("active_worker_count")),
+        _metric("polymarket_v7_native_partition_budget_usd", _number((snapshot.get("native_engine_manager") or {}).get("partition_budget_microdollars")) / 1_000_000.0),
+        _metric("polymarket_v7_native_global_budget_usd", _number((snapshot.get("native_engine_manager") or {}).get("global_budget_microdollars")) / 1_000_000.0),
+        _metric("polymarket_v7_native_missing_contexts", max(0, _integer((snapshot.get("native_engine_manager") or {}).get("expected_context_count")) - _integer((snapshot.get("native_engine_manager") or {}).get("target_context_count")))),
         _metric("polymarket_v7_native_engine_ready", (
             snapshot.get("native_mode") is True
             and (snapshot.get("native_engine_manager") or {}).get("state") == "RUNNING"
@@ -546,6 +578,31 @@ def render_prometheus(snapshot: dict[str, Any]) -> str:
         _metric("polymarket_v7_maker_feed_connected_workers", diagnostics.get("feed_connected_workers")), _metric("polymarket_v7_maker_feed_messages_total", diagnostics.get("feed_messages")), _metric("polymarket_v7_maker_decisions_total", diagnostics.get("decisions")), _metric("polymarket_v7_maker_quote_intents_total", diagnostics.get("quote_intents")), _metric("polymarket_v7_maker_rejected_positive_point_ev_total", diagnostics.get("rejected_positive_point_ev")), _metric("polymarket_v7_maker_best_rejected_point_ev_per_share", diagnostics.get("best_rejected_point_ev_per_share")),
         _metric("polymarket_v7_universe_discovered_markets", universe.get("discovered_markets")), _metric("polymarket_v7_universe_eligible_markets", universe.get("eligible_markets")), _metric("polymarket_v7_universe_skipped_markets", universe.get("skipped_markets")), _metric("polymarket_v7_universe_pages", universe.get("pages")), _metric("polymarket_v7_universe_scan_duration_milliseconds", universe.get("scan_duration_ms")), _metric("polymarket_v7_universe_discovery_exhaustive", universe.get("discovery_exhaustive")),
     ]
+    native_manager = snapshot.get("native_engine_manager") or {}
+    for worker in native_manager.get("workers") or []:
+        if not isinstance(worker, dict):
+            continue
+        labels = {
+            "asset": worker.get("asset") or "",
+            "horizon": worker.get("horizon") or "",
+            "context": worker.get("context") or "",
+            "market_id": worker.get("market_id") or "",
+        }
+        state = str(worker.get("state") or "")
+        lines.append(_metric("polymarket_v7_native_context_present", 1, labels))
+        lines.append(_metric("polymarket_v7_native_context_running", state == "RUNNING", labels))
+        lines.append(_metric("polymarket_v7_native_context_settling", state == "SETTLING", labels))
+        lines.append(_metric(
+            "polymarket_v7_native_context_budget_usd",
+            _number(worker.get("budget_microdollars")) / 1_000_000.0,
+            labels,
+        ))
+        lines.append(_metric(
+            "polymarket_v7_native_context_engine_pid",
+            worker.get("engine_pid"),
+            labels,
+        ))
+
     configured = set(runtime.get("economic_engines") or [])
     for engine in LIVE_ALGORITHMS: lines.append(_metric("polymarket_v7_economic_engine_configured", engine in configured, {"engine": engine}))
     for name, row in sorted((snapshot.get("algorithms") or {}).items()):

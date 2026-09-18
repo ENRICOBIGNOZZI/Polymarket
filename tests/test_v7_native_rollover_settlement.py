@@ -9,7 +9,7 @@ sys.path.insert(0, str(ROOT / "scripts"))
 
 from v7_execution_ledger import LedgerEvent
 from v7_native_crypto_engine_manager import fee_parameters, open_native_orders, select_market
-from v7_native_paper_settlement import aggregate_fills, native_receipt
+from v7_native_paper_settlement import aggregate_fills, native_receipt, resolved_payouts
 
 
 SHA = "a" * 40
@@ -27,6 +27,7 @@ def universe_row(*, start: int) -> dict:
         "horizon_seconds": 300,
         "window_start_unix": start,
         "research_only": False,
+        "external_symbols": {"binance_spot": "BTCUSDT", "coinbase_spot": "BTC-USD"},
         "active": True,
         "closed": False,
         "accepting_orders": True,
@@ -168,6 +169,18 @@ def test_restart_detects_submitted_native_order_until_terminal_state(tmp_path: P
     assert open_native_orders(root, SHA) == {}
 
 
+
+def test_daily_equal_close_supports_fifty_fifty_payout(monkeypatch) -> None:
+    import v7_native_paper_settlement as settlement
+    monkeypatch.setattr(settlement, "public_json", lambda _url: {
+        "closed": True,
+        "outcomes": ["Up", "Down"],
+        "clobTokenIds": ["yes", "no"],
+        "outcomePrices": ["0.5", "0.5"],
+    })
+    result = resolved_payouts("https://gamma-api.polymarket.com", "m-daily")
+    assert result == ({"yes": 0.5, "no": 0.5}, "50-50")
+
 def test_settlement_rejects_naked_sell() -> None:
     events = [
         fill(fill_id="f1", order_id="native:1", token="yes", side="SELL", qty=1.0, price=0.6, fee=0.0, client=1)
@@ -178,3 +191,64 @@ def test_settlement_rejects_naked_sell() -> None:
         assert str(exc) == "native_naked_sell_in_ledger"
     else:
         raise AssertionError("naked native PAPER sell accepted")
+
+def test_manager_selects_all_six_assets_and_five_horizons() -> None:
+    from v7_native_crypto_engine_manager import select_markets
+    now = 1_000_100
+    markets = []
+    seconds = {"M5": 300, "M15": 900, "H1": 3600, "H4": 14400, "D1": 86400}
+    index = 0
+    for asset in ("BTC", "ETH", "SOL", "XRP", "DOGE", "BNB"):
+        for horizon, duration in seconds.items():
+            index += 1
+            markets.append({
+                **universe_row(start=1_000_000),
+                "market_id": f"m{index}",
+                "asset": asset,
+                "horizon": horizon,
+                "horizon_seconds": duration,
+                "close_timestamp_unix": 1_000_000 + duration,
+                "external_symbols": {
+                    "binance_spot": f"{asset}USDT",
+                    "coinbase_spot": None if asset == "BNB" else f"{asset}-USD",
+                },
+            })
+    snapshot = {
+        "schema": "polymarket_v7_crypto_universe_snapshot_v1",
+        "paper_only": True,
+        "authenticated_execution": False,
+        "real_order_submission": False,
+        "execution_authority": False,
+        "model_sha": SHA,
+        "discovery_exhaustive": True,
+        "markets": markets,
+    }
+    selected = select_markets(snapshot, SHA, now_s=now)
+    assert len(selected) == 30
+    assert set(selected) == {
+        f"{asset}:{horizon}"
+        for asset in ("BTC", "ETH", "SOL", "XRP", "DOGE", "BNB")
+        for horizon in seconds
+    }
+
+
+def test_partitioned_paper_budget_never_exceeds_engine_envelope(tmp_path: Path) -> None:
+    from v7_native_crypto_engine_manager import (
+        _enabled_context_count, _execution_budget_microdollars,
+    )
+    allocation = tmp_path / "allocation.json"
+    allocation.write_text(json.dumps({
+        "capital_scope": {
+            "engine_id": "CRYPTO_SETTLEMENT_ENGINE",
+            "scope_class": "ENGINE_ENVELOPE",
+            "independent_capital_authority": False,
+            "execution_budget": 10000.0,
+        }
+    }))
+    registry_path = ROOT / "config" / "v7_crypto_settlement_markets.json"
+    total = _execution_budget_microdollars(allocation)
+    count = _enabled_context_count(registry_path)
+    partition = total // count
+    assert count == 30
+    assert partition == 333_333_333
+    assert partition * count <= total
