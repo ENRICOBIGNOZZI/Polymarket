@@ -395,7 +395,9 @@ def collect_snapshot(run_root: Path, repository_root: Path | None = None, *, now
             "retrospective_analytics": False},
         "maker_lab": summarize_maker_microstructure(ledger_path, run_root / "micro_maker/reward_selection.json", run_root / "research/evidence/maker_markout"),
         "maker_fillability": _fillability(run_root, repository_root, runtime_sha, now),
-        "external_fair": external_fair, "reconciliation": reconciliation,
+        "external_fair": external_fair,
+        "external_asset_data": _json(run_root / "external_fair/all_assets_status.json"),
+        "reconciliation": reconciliation,
         "maker_latency": _runtime_latency(run_root),
         "lead_lag_summary": lead_lag, "state_realized_pnl_components": state_pnl_components,
         "trade_tape": tape, "trade_recorder": _trade_recorder(run_root / "trade_recorder_status.json", now),
@@ -549,6 +551,21 @@ def health_reasons(snapshot: dict[str, Any], *, max_runtime_age: int = 180, max_
     retention, operations = (snapshot.get("operations") or {}).get("retention") or {}, snapshot.get("operations") or {}
     if retention.get("schema") != "polymarket_v7_london_buffer_retention_status_v1" or retention.get("paper_only") is not True or _number(operations.get("retention_age"), math.inf) > 7200: reasons.append("london_buffer_retention_missing_or_stale")
     if retention.get("state") == "BUFFER_LIMIT_EXCEEDED_UNSYNCED_DATA_PRESERVED": reasons.append("london_buffer_limit_exceeded_unsynced_data_preserved")
+    external_data = snapshot.get("external_asset_data") or {}
+    if (
+        external_data.get("schema") != "polymarket_v7_multi_asset_external_collector_v1"
+        or external_data.get("model_sha") != snapshot.get("sha")
+        or external_data.get("state") != "OPERATIONAL"
+        or external_data.get("paper_only") is not True
+        or external_data.get("authenticated_execution") is not False
+        or external_data.get("real_order_submission") is not False
+        or external_data.get("execution_authority") is not False
+        or _integer(external_data.get("asset_count")) != 6
+        or _integer(external_data.get("ready_assets")) != 6
+        or bool(external_data.get("missing_assets"))
+        or not _fresh_ms(external_data, snapshot, max_runtime_age)
+    ):
+        reasons.append("crypto_external_data_coverage_incomplete")
     limit = _number((snapshot.get("authority") or {}).get("max_drawdown"))
     if limit > 0 and _number((snapshot.get("economics") or {}).get("drawdown")) >= limit - 1e-12: reasons.append("drawdown_limit_breached")
     external = snapshot.get("external_fair") or {}
@@ -621,7 +638,18 @@ def render_prometheus(snapshot: dict[str, Any]) -> str:
         _metric("polymarket_v7_book_data_observed_markets", (snapshot.get("book_data") or {}).get("observed_markets")),
         _metric("polymarket_v7_book_data_observed_tokens", (snapshot.get("book_data") or {}).get("observed_tokens")),
         _metric("polymarket_v7_book_data_runtime_ready", (snapshot.get("book_data") or {}).get("subscription_coverage_complete") is True and (snapshot.get("book_data") or {}).get("evidence_complete") is True),
+        _metric("polymarket_v7_external_data_assets", (snapshot.get("external_asset_data") or {}).get("asset_count")),
+        _metric("polymarket_v7_external_data_ready_assets", (snapshot.get("external_asset_data") or {}).get("ready_assets")),
+        _metric("polymarket_v7_external_data_ready", (snapshot.get("external_asset_data") or {}).get("state") == "OPERATIONAL" and _integer((snapshot.get("external_asset_data") or {}).get("ready_assets")) == 6),
     ]
+    for row in (snapshot.get("external_asset_data") or {}).get("assets") or []:
+        if not isinstance(row, dict):
+            continue
+        lines.append(_metric(
+            "polymarket_v7_external_asset_data_ready",
+            row.get("data_ready"),
+            {"asset": row.get("asset") or ""},
+        ))
     native_manager = snapshot.get("native_engine_manager") or {}
     for worker in native_manager.get("workers") or []:
         if not isinstance(worker, dict):

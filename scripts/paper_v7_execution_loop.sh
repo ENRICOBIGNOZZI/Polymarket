@@ -278,17 +278,15 @@ v7_exec_class COLLECTOR python3 scripts/v7_rtds_external_fair_monitor.py \
   >> "$RUN_ROOT/external_fair/rtds_monitor.log" 2>&1 &
 v7_register_child "$!"
 
-v7_exec_class COLLECTOR "$EXTERNAL_VENUE_RUNTIME" \
-  --output "$RUN_ROOT/external_fair/external_venues.json" \
-  --tape "$RUN_ROOT/external_fair/tapes/external_venues.${SHA}.$$.bin" --model-sha "$SHA" \
-  --normalized-event-tape-dir "$RUN_ROOT/external_fair/normalized_events" \
-  --raw-tape-dir "$RUN_ROOT/external_fair/raw" \
+v7_exec_class COLLECTOR python3 scripts/v7_multi_asset_external_collector.py \
+  --repository-root "$ROOT" --run-root "$RUN_ROOT" --model-sha "$SHA" \
+  --engine "$EXTERNAL_VENUE_RUNTIME" \
+  --market-registry "$CRYPTO_SETTLEMENT_MARKET_REGISTRY" \
   --disk-pressure-marker "$RUN_ROOT/control/DISK_PRESSURE" \
   --disk-pressure-min-free-bytes "$DISK_PRESSURE_MIN_FREE_BYTES" \
   --external-cancel-signal "$RUN_ROOT/external_fair/external_cancel_signal.json" \
   --external-cancel-rule-sha256 "$EXTERNAL_CANCEL_RULE_SHA" \
-  --event-driven-ingress \
-  >> "$RUN_ROOT/external_fair/external_venues.log" 2>&1 &
+  >> "$RUN_ROOT/external_fair/external_assets_supervisor.log" 2>&1 &
 v7_register_child "$!"
 
 # Causal crypto context collectors remain on London because their receive-time

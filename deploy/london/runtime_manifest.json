@@ -34,6 +34,7 @@
     "scripts/v7_runtime_resource_plan.py",
     "scripts/v7_public_https_proxy.py",
     "scripts/v7_rtds_external_fair_monitor.py",
+    "scripts/v7_multi_asset_external_collector.py",
     "scripts/v7_crypto_universe.py",
     "scripts/v7_ledger_spool.py",
     "scripts/v7_canonical_economics.py",
