@@ -495,7 +495,7 @@ v7_register_child "$!"
 # Cold-plane lifecycle manager. It discovers/rotates already-registered BTC/M5
 # contracts and starts exactly one native C++ execution owner at a time. The
 # manager has no capital/risk/OMS/inventory authority itself.
-v7_exec_class CONTROL python3 scripts/v7_native_crypto_engine_manager.py \
+PM_V7_CONTROL_NICE=0 v7_exec_class CONTROL python3 scripts/v7_native_crypto_engine_manager.py \
   --repository-root "$ROOT" --run-root "$RUN_ROOT" --model-sha "$SHA" \
   --run-id "$RUN_ID" --server-id "$SERVER_ID" \
   --universe "$RUN_ROOT/universe/current.json" \
