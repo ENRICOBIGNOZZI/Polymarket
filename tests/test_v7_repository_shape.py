@@ -128,7 +128,7 @@ class V7RepositoryShapeTest(unittest.TestCase):
         btc = (ROOT / "docs/v7_world_class/crypto_settlement_engine.md").read_text(encoding="utf-8")
         dashboard = (ROOT / "monitoring/grafana/dashboards/polymarket-v7.json").read_text(encoding="utf-8")
         for token in (
-            "CRYPTO_SETTLEMENT_ENGINE", "V7_GLOBAL_PORTFOLIO_COORDINATOR",
+            "CRYPTO_SETTLEMENT_ENGINE", "V7_NATIVE_CRYPTO_SETTLEMENT_ENGINE",
             "one allocator", "one risk owner", "one OMS", "one inventory owner",
             "one append-only canonical ledger writer", "one economic engine",
         ):
