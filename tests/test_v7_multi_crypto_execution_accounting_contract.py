@@ -12,9 +12,9 @@ sys.path.insert(0, str(ROOT / 'scripts'))
 from v7_multi_crypto_execution_accounting_contract import validate
 
 
-def test_repository_contract_is_single_owner_zero_authority() -> None:
+def test_repository_contract_is_single_owner_partitioned_paper() -> None:
     value = validate(ROOT)
-    assert value['state'] == 'VERIFIED_SHADOW_CONTRACT'
+    assert value['state'] == 'VERIFIED_PARTITIONED_PAPER_CONTRACT'
     assert value['new_risk_authorized'] is False
     assert value['single_global_execution_owner'] is True
     assert value['single_canonical_ledger_writer'] is True
@@ -64,15 +64,15 @@ def test_asset_entry_authority_is_rejected() -> None:
     finally: tmp.cleanup()
 
 
-def test_non_btc_settlement_authority_is_rejected() -> None:
+def test_independent_context_settlement_authority_is_rejected() -> None:
     def mutate(value):
         row = next(r for r in value['contexts'] if r['asset'] == 'ETH' and r['horizon'] == 'M5')
         row['authority'] = 'PAPER'
     tmp, root = mutated_root('v7_crypto_settlement_markets.json', mutate)
     try:
         try: validate(root)
-        except ValueError as exc: assert 'non_btc_authority' in str(exc)
-        else: raise AssertionError('ETH execution authority accepted')
+        except ValueError as exc: assert 'independent_context_authority' in str(exc)
+        else: raise AssertionError('independent ETH context authority accepted')
     finally: tmp.cleanup()
 
 

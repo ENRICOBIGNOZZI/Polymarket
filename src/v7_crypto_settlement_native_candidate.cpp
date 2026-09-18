@@ -24,6 +24,7 @@
 #include <cstdint>
 #include <iostream>
 #include <limits>
+#include <memory>
 #include <span>
 #include <stop_token>
 #include <string>
@@ -77,6 +78,10 @@ bool exact_sha(std::string_view value) noexcept {
 }
 
 struct Options {
+    std::string asset = "BTC";
+    std::string horizon = "M5";
+    std::string binance_symbol = "BTCUSDT";
+    std::string coinbase_symbol = "BTC-USD";
     std::string yes_token;
     std::string no_token;
     std::string run_root;
@@ -90,6 +95,10 @@ struct Options {
     std::int64_t close_wall_ns = 0;
     std::int32_t tick_size_e4 = 100;
     std::int64_t min_order_microunits = 5'000'000;
+    std::int64_t sleeve_budget_microdollars = 1'000'000'000LL;
+    std::int64_t max_total_exposure_microdollars = 1'000'000'000LL;
+    std::int64_t max_market_exposure_microdollars = 100'000'000LL;
+    std::int64_t max_single_order_microdollars = 10'000'000LL;
     double taker_fee_rate = 0.0;
     double taker_fee_exponent = 1.0;
     int duration_seconds = 0;
@@ -104,7 +113,11 @@ Options parse_options(int argc, char** argv) {
             if (++i >= argc) throw std::invalid_argument("missing option value");
             return argv[i];
         };
-        if (arg == "--yes-token") out.yes_token = next();
+        if (arg == "--asset") out.asset = next();
+        else if (arg == "--horizon") out.horizon = next();
+        else if (arg == "--binance-symbol") out.binance_symbol = next();
+        else if (arg == "--coinbase-symbol") out.coinbase_symbol = next();
+        else if (arg == "--yes-token") out.yes_token = next();
         else if (arg == "--no-token") out.no_token = next();
         else if (arg == "--run-root") out.run_root = next();
         else if (arg == "--model-sha") out.model_sha = next();
@@ -117,6 +130,10 @@ Options parse_options(int argc, char** argv) {
         else if (arg == "--close-wall-ns") out.close_wall_ns = bounded_integer<std::int64_t>(next(), 1, std::numeric_limits<std::int64_t>::max());
         else if (arg == "--tick-size-e4") out.tick_size_e4 = bounded_integer<std::int32_t>(next(), 1, 5000);
         else if (arg == "--min-order-microunits") out.min_order_microunits = bounded_integer<std::int64_t>(next(), 1, 1'000'000'000);
+        else if (arg == "--sleeve-budget-microdollars") out.sleeve_budget_microdollars = bounded_integer<std::int64_t>(next(), 1, 10'000'000'000LL);
+        else if (arg == "--max-total-exposure-microdollars") out.max_total_exposure_microdollars = bounded_integer<std::int64_t>(next(), 1, 10'000'000'000LL);
+        else if (arg == "--max-market-exposure-microdollars") out.max_market_exposure_microdollars = bounded_integer<std::int64_t>(next(), 1, 10'000'000'000LL);
+        else if (arg == "--max-single-order-microdollars") out.max_single_order_microdollars = bounded_integer<std::int64_t>(next(), 1, 10'000'000'000LL);
         else if (arg == "--taker-fee-rate") out.taker_fee_rate = bounded_double(next(), 0.0, 1.0);
         else if (arg == "--taker-fee-exponent") out.taker_fee_exponent = bounded_double(next(), 0.0, 10.0);
         else if (arg == "--duration-seconds") out.duration_seconds = bounded_integer<int>(next(), 0, 86'400);
@@ -156,7 +173,8 @@ int main(int argc, char** argv) {
             std::cout << "native crypto settlement candidate configuration PASS\n";
             return 0;
         }
-        if (options.yes_token.empty() || options.no_token.empty()
+        if (options.asset.empty() || options.horizon.empty() || options.binance_symbol.empty()
+            || options.yes_token.empty() || options.no_token.empty()
             || options.yes_token == options.no_token || options.run_root.empty()
             || !exact_sha(options.model_sha) || options.run_id.empty()
             || options.server_id.empty() || options.market_id.empty()
@@ -169,11 +187,19 @@ int main(int argc, char** argv) {
         IngressWakeup wakeup;
         ExternalVenueIngress binance_ingress(VenueId::BinanceSpot, kAsset, nullptr, &wakeup);
         ExternalVenueIngress coinbase_ingress(VenueId::CoinbaseSpot, kAsset, nullptr, &wakeup);
-        auto binance_spec = btc_spot_connection_spec(VenueId::BinanceSpot, kAsset);
-        auto coinbase_spec = btc_spot_connection_spec(VenueId::CoinbaseSpot, kAsset);
-        CoinbaseL2FrameObserver coinbase_l2(coinbase_ingress, kAsset);
+        auto binance_spec = crypto_connection_spec(
+            VenueId::BinanceSpot, kAsset, options.binance_symbol);
         ExternalVenueWsClient binance(binance_spec, &binance_ingress);
-        ExternalVenueWsClient coinbase(coinbase_spec, nullptr, &coinbase_l2);
+        std::unique_ptr<CoinbaseL2FrameObserver> coinbase_l2;
+        std::unique_ptr<ExternalVenueWsClient> coinbase;
+        if (!options.coinbase_symbol.empty() && options.coinbase_symbol != "NONE") {
+            auto coinbase_spec = crypto_connection_spec(
+                VenueId::CoinbaseSpot, kAsset, options.coinbase_symbol);
+            coinbase_l2 = std::make_unique<CoinbaseL2FrameObserver>(
+                coinbase_ingress, kAsset);
+            coinbase = std::make_unique<ExternalVenueWsClient>(
+                std::move(coinbase_spec), nullptr, coinbase_l2.get());
+        }
 
         std::vector<TokenBinding> bindings{
             {options.yes_token, kMarket, kEvent, kYes, options.tick_size_e4},
@@ -227,10 +253,10 @@ int main(int argc, char** argv) {
         decision_policy.require_signal_valid = 0;
         NativeCryptoDecisionLane lane(decision_policy);
         CapitalLimits limits;
-        limits.sleeve_budget_microdollars = 1'000'000'000LL;
-        limits.max_total_exposure_microdollars = 1'000'000'000LL;
-        limits.max_market_exposure_microdollars = 100'000'000LL;
-        limits.max_single_order_microdollars = 10'000'000LL;
+        limits.sleeve_budget_microdollars = options.sleeve_budget_microdollars;
+        limits.max_total_exposure_microdollars = options.max_total_exposure_microdollars;
+        limits.max_market_exposure_microdollars = options.max_market_exposure_microdollars;
+        limits.max_single_order_microdollars = options.max_single_order_microdollars;
         NativeSettlementAuthority authority(limits);
         NativeSettlementOmsEndpoint adapter_endpoint(authority);
         NativePaperExecutionAdapter paper_execution(adapter_endpoint);
@@ -239,6 +265,8 @@ int main(int argc, char** argv) {
         evidence_config.model_sha = options.model_sha;
         evidence_config.run_id = options.run_id;
         evidence_config.server_id = options.server_id;
+        evidence_config.asset = options.asset;
+        evidence_config.horizon = options.horizon;
         evidence_config.market_id = options.market_id;
         evidence_config.event_id = options.event_id;
         evidence_config.yes_token_id = options.yes_token;
@@ -353,7 +381,10 @@ int main(int argc, char** argv) {
         auto stop_token = stopping.get_token();
 #endif
         std::thread binance_thread([&] { binance.run(stop_token); });
-        std::thread coinbase_thread([&] { coinbase.run(stop_token); });
+        std::thread coinbase_thread;
+        if (coinbase) {
+            coinbase_thread = std::thread([&] { coinbase->run(stop_token); });
+        }
         pm_feed.start();
 
         const std::int64_t requested_deadline = options.duration_seconds > 0
@@ -709,11 +740,15 @@ int main(int argc, char** argv) {
 #endif
         pm_feed.stop();
         binance_thread.join();
-        coinbase_thread.join();
+        if (coinbase_thread.joinable()) coinbase_thread.join();
         evidence_writer.stop();
 
         const auto binance_status = binance.snapshot();
-        const auto coinbase_status = coinbase.snapshot();
+        const auto coinbase_status = coinbase ? coinbase->snapshot() : ExternalWsSnapshot{};
+        const auto coinbase_l2_status = coinbase_l2
+            ? coinbase_l2->metrics() : CoinbaseL2Metrics{};
+        const auto coinbase_l2_diagnostic = coinbase_l2
+            ? coinbase_l2->diagnostic() : std::string("UNAVAILABLE_FOR_ASSET");
         const auto pm_status = pm_feed.snapshot();
         const auto binance_ingress_status = binance_ingress.snapshot();
         const auto coinbase_ingress_status = coinbase_ingress.snapshot();
@@ -730,6 +765,7 @@ int main(int argc, char** argv) {
             {"paper_only", true}, {"authenticated_execution", false},
             {"real_order_submission", false}, {"real_capital_at_risk", false},
             {"authority", "PAPER_SIMULATED_SINGLE_OWNER"},
+            {"asset", options.asset},
             {"critical_path", "CPP_SAME_PROCESS_FEED_DECODE_TO_SINGLE_SETTLEMENT_AUTHORITY"},
             {"clean_capture", clean}, {"duration_seconds", options.duration_seconds},
             {"evaluations", evaluations}, {"accepted_candidates", accepted},
@@ -768,10 +804,11 @@ int main(int argc, char** argv) {
             {"decision_compute", latency_distribution(std::move(decision_compute))},
             {"reason_counts", reason_json(reasons)},
             {"binance", {{"invalid_frames", binance_ingress_status.invalid_frames}, {"enqueued", binance_ingress_status.enqueued_events}, {"drained", binance_ingress_status.drained_events}, {"queued", binance_ingress_status.queued}, {"frames", binance_status.frames_received}, {"transport_failures", binance_status.transport_failures}, {"drops", binance_ingress_status.dropped_events}}},
-            {"coinbase_l2", {{"valid", coinbase_l2.metrics().valid != 0},
-                {"updates", coinbase_l2.metrics().update_count},
-                {"parse_failures", coinbase_l2.metrics().parse_failures},
-                {"diagnostic", coinbase_l2.diagnostic()}}},
+            {"coinbase_l2", {{"available", static_cast<bool>(coinbase_l2)},
+                {"valid", coinbase_l2_status.valid != 0},
+                {"updates", coinbase_l2_status.update_count},
+                {"parse_failures", coinbase_l2_status.parse_failures},
+                {"diagnostic", coinbase_l2_diagnostic}}},
             {"coinbase", {{"invalid_frames", coinbase_ingress_status.invalid_frames}, {"enqueued", coinbase_ingress_status.enqueued_events}, {"drained", coinbase_ingress_status.drained_events}, {"queued", coinbase_ingress_status.queued}, {"frames", coinbase_status.frames_received}, {"transport_failures", coinbase_status.transport_failures}, {"drops", coinbase_ingress_status.dropped_events}}},
             {"polymarket", {{"messages", pm_status.messages}, {"reconnects", pm_status.reconnects}, {"errors", pm_status.errors}, {"drops", pm_drops.load()}}},
             {"note", "PAPER-only native candidate. Maker and taker share one in-process inventory/capital/OMS authority. Taker fills require causal executable L1 depth; maker fills use pessimistic public-print queue depletion and bounded cancel latency. No authenticated submission or real capital is possible."}

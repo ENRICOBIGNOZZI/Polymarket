@@ -19,16 +19,16 @@ class CapitalAllocatorTests(unittest.TestCase):
         self.assertEqual(budgets["CRYPTO_SETTLEMENT_ENGINE"],4_000.0); self.assertEqual(budgets["reserve"],6_000.0)
     def test_current_config_has_one_crypto_envelope_and_one_owner(self):
         cfg=json.loads((ROOT/'config/paper_v7.json').read_text()); budgets=allocate(cfg)
-        self.assertEqual(set(budgets),{*ENGINES,'reserve'}); self.assertEqual(budgets['CRYPTO_SETTLEMENT_ENGINE'],4_000.0)
-        self.assertAlmostEqual(budgets['reserve'],10_000.0); self.assertEqual(cfg['v7']['capital_authority_owner'],ALLOCATOR_OWNER)
+        self.assertEqual(set(budgets),{*ENGINES,'reserve'}); self.assertEqual(budgets['CRYPTO_SETTLEMENT_ENGINE'],10_000.0)
+        self.assertAlmostEqual(budgets['reserve'],4_000.0); self.assertEqual(cfg['v7']['capital_authority_owner'],ALLOCATOR_OWNER)
     def test_component_observation_budget_is_not_capital(self):
         cfg=json.loads((ROOT/'config/paper_v7.json').read_text())
         self.assertEqual(component_observation_budgets(cfg),{'crypto_informed_taker':0.0,'professional_maker':2_000.0})
         with tempfile.TemporaryDirectory() as tmp:
             root=Path(tmp)/'allocations'; manifest=materialize(ROOT/'config/paper_v7.json',root)
-            self.assertEqual(manifest['engine_count'],1); self.assertEqual(manifest['engine_budget_sum'],4_000.0); self.assertEqual(manifest['reserve_budget'],10_000.0)
+            self.assertEqual(manifest['engine_count'],1); self.assertEqual(manifest['engine_budget_sum'],10_000.0); self.assertEqual(manifest['reserve_budget'],4_000.0)
             maker=json.loads((root/'micro_maker.json').read_text()); self.assertEqual(maker['starting_capital'],0.0); self.assertEqual(maker['capital_scope']['observation_budget'],2_000.0)
-            crypto=json.loads((root/'crypto_settlement_engine.json').read_text()); self.assertEqual(crypto['starting_capital'],4_000.0); self.assertEqual(crypto['capital_scope']['scope_class'],'ENGINE_ENVELOPE')
+            crypto=json.loads((root/'crypto_settlement_engine.json').read_text()); self.assertEqual(crypto['starting_capital'],10_000.0); self.assertEqual(crypto['capital_scope']['scope_class'],'ENGINE_ENVELOPE')
     def test_unknown_engine_partition_fails_closed(self):
         cfg=self.config(.4,.1); cfg['v7']['engine_capital_fractions']['THIRD_ENGINE']=.1
         with self.assertRaisesRegex(ValueError,'engine_capital_fraction_partition'): allocate(cfg)

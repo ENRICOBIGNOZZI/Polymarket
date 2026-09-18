@@ -29,7 +29,7 @@ SNAPSHOT_SCHEMA = "polymarket_v7_crypto_settlement_runtime_snapshot_v1"
 LATENCY_SCHEMA = "polymarket_v7_empirical_latency_profile_v1"
 MAKER_SCHEMA = "polymarket_v7_maker_execution_evidence_v1"
 SHA40 = re.compile(r"[0-9a-f]{40}")
-ALLOWED_HORIZONS = {300, 900}
+ALLOWED_HORIZONS = {300, 900, 3_600, 14_400, 86_400}
 REQUIRED_LATENCY_SEGMENTS = (
     "taker_arrival", "maker_place_ack", "maker_cancel_ack",
     "private_ws_confirmation",
@@ -111,7 +111,7 @@ def validate_config(config: dict[str, Any]) -> None:
         ]
         or fair.get("fixed_bridge_coefficient_authorized") is not False
         or fair.get("empirical_frozen_artifact_required") is not True
-        or fair.get("settlement_source") != "REGISTRY_VERIFIED_CHAINLINK_TWAP_60S"
+        or fair.get("settlement_source") != "REGISTRY_VERIFIED_CONTEXT_SETTLEMENT"
         or fair.get("settlement_source_may_be_replaced_by_predictor") is not False
     ):
         raise ContractError("fair_value_binding")
@@ -177,7 +177,7 @@ def validate_config(config: dict[str, Any]) -> None:
     ):
         raise ContractError("execution_alpha_market_selection")
     rows = config.get("horizons")
-    if not isinstance(rows, list) or len(rows) != 2:
+    if not isinstance(rows, list) or len(rows) != len(ALLOWED_HORIZONS):
         raise ContractError("horizon_count")
     found: set[int] = set()
     scopes: set[str] = set()

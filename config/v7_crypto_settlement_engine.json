@@ -79,7 +79,7 @@
     ],
     "separate_frozen_model_per_asset_horizon": true,
     "separate_model_per_horizon": true,
-    "settlement_source": "REGISTRY_VERIFIED_CHAINLINK_TWAP_60S",
+    "settlement_source": "REGISTRY_VERIFIED_CONTEXT_SETTLEMENT",
     "settlement_source_may_be_replaced_by_predictor": false
   },
   "global_portfolio_coordinator": "V7_NATIVE_CRYPTO_SETTLEMENT_ENGINE",
@@ -93,7 +93,7 @@
         "maximum_tte_seconds": 300,
         "minimum_tte_seconds": 120
       },
-      "model_scope": "ASSET_USD_UPDOWN_5M",
+      "model_scope": "ASSET_USD_UPDOWN_M5",
       "research_only": false,
       "taker": {
         "enabled": true,
@@ -109,9 +109,63 @@
       "maker": {
         "enabled": true,
         "maximum_tte_seconds": 900,
-        "minimum_tte_seconds": 30
+        "minimum_tte_seconds": 120
       },
-      "model_scope": "ASSET_USD_UPDOWN_15M",
+      "model_scope": "ASSET_USD_UPDOWN_M15",
+      "research_only": false,
+      "taker": {
+        "enabled": true,
+        "maximum_tte_seconds": 120,
+        "minimum_tte_seconds": 5
+      },
+      "under_five_seconds": "NO_NEW_RISK"
+    },
+    {
+      "authority": "SHADOW",
+      "horizon_seconds": 3600,
+      "id": "H1",
+      "maker": {
+        "enabled": true,
+        "maximum_tte_seconds": 3600,
+        "minimum_tte_seconds": 120
+      },
+      "model_scope": "ASSET_USD_UPDOWN_H1",
+      "research_only": false,
+      "taker": {
+        "enabled": true,
+        "maximum_tte_seconds": 120,
+        "minimum_tte_seconds": 5
+      },
+      "under_five_seconds": "NO_NEW_RISK"
+    },
+    {
+      "authority": "SHADOW",
+      "horizon_seconds": 14400,
+      "id": "H4",
+      "maker": {
+        "enabled": true,
+        "maximum_tte_seconds": 14400,
+        "minimum_tte_seconds": 120
+      },
+      "model_scope": "ASSET_USD_UPDOWN_H4",
+      "research_only": false,
+      "taker": {
+        "enabled": true,
+        "maximum_tte_seconds": 120,
+        "minimum_tte_seconds": 5
+      },
+      "under_five_seconds": "NO_NEW_RISK"
+    },
+    {
+      "authority": "SHADOW",
+      "horizon_seconds": 86400,
+      "id": "D1",
+      "maker": {
+        "enabled": true,
+        "maximum_tte_seconds": 86400,
+        "minimum_tte_seconds": 120
+      },
+      "model_scope": "ASSET_USD_UPDOWN_D1",
       "research_only": false,
       "taker": {
         "enabled": true,

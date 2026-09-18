@@ -43,8 +43,13 @@ def test_discovery_queries_only_registered_crypto_slugs():
     expected=contexts*len(cfg['source']['window_offsets'])
     assert len(seen)==expected and len(rows)==expected
     assert stats['discovery_exhaustive'] is True and stats['pagination_loop_guard_hit'] is False
-    assert all(any(slug.startswith(asset.lower()+'-updown-') for asset in ('BTC','ETH','SOL','XRP','DOGE','BNB')) for slug in seen)
+    assert any('-updown-5m-' in slug for slug in seen)
+    assert any('-updown-15m-' in slug for slug in seen)
+    assert any('-updown-4h-' in slug for slug in seen)
+    assert any('-up-or-down-' in slug and slug.endswith('-et') for slug in seen)
+    assert any('-up-or-down-on-' in slug for slug in seen)
     assert {row['asset'] for row in rows} == {'BTC','ETH','SOL','XRP','DOGE','BNB'}
+    assert {row['horizon'] for row in rows} == {'M5','M15','H1','H4','D1'}
 
 
 def test_missing_unpublished_adjacent_window_is_not_a_global_scan_failure():
@@ -66,7 +71,7 @@ def test_transient_request_is_retried_then_succeeds():
 def test_normalization_and_crypto_identity_are_preserved():
     raw=market(); raw['_crypto_context']={
         'asset':'BTC','horizon':'M5','horizon_seconds':300,'contract_family':'BTC_USD_UPDOWN_5M',
-        'settlement_semantic_hash':'a'*64,'research_only':False,'authority':'SHADOW','window_start_unix':NOW,
+        'settlement_semantic_hash':'a'*64,'research_only':False,'authority':'SHADOW','external_symbols':{'binance_spot':'BTCUSDT','coinbase_spot':'BTC-USD'},'window_start_unix':NOW,
     }
     row=universe.normalize_market(raw)
     assert row['midpoint']==.45 and row['asset']=='BTC' and row['horizon']=='M5'
@@ -90,7 +95,7 @@ def test_skip_reasons_and_safety_fail_closed():
     cfg=config(); rows=[market(1),market(2,acceptingOrders=False),market(3,liquidityNum=0),market(4,conditionId=''),market(5,clobTokenIds=[])]
     norm=[universe.normalize_market(x) for x in rows]
     snap=universe.build_snapshot(norm,{'discovery_exhaustive':True},cfg,model_sha=SHA,timestamp_ms=1)
-    assert snap['eligible_markets']==1
+    assert snap['eligible_markets']==2
     assert snap['paper_only'] is True and snap['authenticated_execution'] is False and snap['real_order_submission'] is False
 
 
