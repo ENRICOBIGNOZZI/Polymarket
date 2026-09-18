@@ -23,7 +23,7 @@ OWNER_KEYS = (
     "runtime_identity",
 )
 EXPECTED_OWNERS = {
-    "global_portfolio_coordinator": "V7_GLOBAL_PORTFOLIO_COORDINATOR",
+    "global_portfolio_coordinator": "V7_NATIVE_CRYPTO_SETTLEMENT_ENGINE",
     "capital_allocator": "V7_CANONICAL_ALLOCATOR",
     "risk_engine": "V7_CANONICAL_RISK",
     "oms": "V7_CANONICAL_OMS",
