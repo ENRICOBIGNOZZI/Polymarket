@@ -32,3 +32,6 @@ def test_causal_split_purges_labels_unavailable_at_cutoff():
     assert report["state"]=="HELDOUT_EVALUATED_NO_AUTO_PROMOTION"
     assert report["automatic_promotion"] is False
     assert len(report["test"]["gates"])==5
+    assert report["test"]["ungated_policy"]["trades"]==report["split"]["test"]
+    assert "delta_brier_model_minus_pm" in report["test"]
+    assert all("selection_rate" in gate for gate in report["test"]["gates"])

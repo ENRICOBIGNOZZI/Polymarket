@@ -28,13 +28,22 @@ def _metrics(y:list[int],p:list[float])->dict[str,float|None]:
       "brier":sum((a-b)**2 for a,b in zip(y,p))/len(y),
       "log_loss":sum(-a*math.log(max(eps,min(1-eps,b)))-(1-a)*math.log(max(eps,min(1-eps,1-b))) for a,b in zip(y,p))/len(y)}
 
+def _economics(rows:list[dict])->dict[str,Any]:
+    pnl=[float(row["ex_post_net_per_share"]) for row in rows]
+    return {"trades":len(pnl),"net_per_share_sum":sum(pnl),
+            "net_per_share_mean":sum(pnl)/len(pnl) if pnl else None,
+            "win_rate":sum(x>0 for x in pnl)/len(pnl) if pnl else None,
+            "max_loss_per_share":min(pnl) if pnl else None}
+
 def _gate(rows:list[dict],probabilities:list[float],buffer:float)->dict[str,Any]:
     pnl=[];selected=[]
     for row,p in zip(rows,probabilities):
         edge=settlement_edge(p,float(row["executable_ask"]),float(row["fee_per_share"]),buffer)
         if edge<=0:continue
         value=float(row["ex_post_net_per_share"]); pnl.append(value); selected.append(row)
-    return {"buffer":buffer,"trades":len(pnl),"net_per_share_sum":sum(pnl),
+    return {"buffer":buffer,"trades":len(pnl),"rejected":len(rows)-len(pnl),
+            "selection_rate":len(pnl)/len(rows) if rows else None,
+            "net_per_share_sum":sum(pnl),
             "net_per_share_mean":sum(pnl)/len(pnl) if pnl else None,
             "win_rate":sum(x>0 for x in pnl)/len(pnl) if pnl else None,
             "max_loss_per_share":min(pnl) if pnl else None,
@@ -66,9 +75,16 @@ def evaluate(dataset:dict[str,Any],minimum_training_markets:int=100,minimum_test
     vy=[int(r["outcome"]) for r in validation];ty=[int(r["outcome"]) for r in test]
     vbase=[float(r["pm_probability"]) for r in validation];tbase=[float(r["pm_probability"]) for r in test]
     report["model"]={k:v for k,v in model.items() if k!="coefficients"}
-    report["validation"]={"model":_metrics(vy,vp),"pm_prior":_metrics(vy,vbase),
+    vm=_metrics(vy,vp); vb=_metrics(vy,vbase); tm=_metrics(ty,tp); tb=_metrics(ty,tbase)
+    report["validation"]={"model":vm,"pm_prior":vb,
+                          "delta_brier_model_minus_pm":vm["brier"]-vb["brier"],
+                          "delta_log_loss_model_minus_pm":vm["log_loss"]-vb["log_loss"],
+                          "ungated_policy":_economics(validation),
                           "gates":[_gate(validation,vp,b) for b in BUFFERS]}
-    report["test"]={"model":_metrics(ty,tp),"pm_prior":_metrics(ty,tbase),
+    report["test"]={"model":tm,"pm_prior":tb,
+                    "delta_brier_model_minus_pm":tm["brier"]-tb["brier"],
+                    "delta_log_loss_model_minus_pm":tm["log_loss"]-tb["log_loss"],
+                    "ungated_policy":_economics(test),
                     "gates":[_gate(test,tp,b) for b in BUFFERS]}
     report["state"]="HELDOUT_EVALUATED_NO_AUTO_PROMOTION"
     return report
