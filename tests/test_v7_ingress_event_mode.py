@@ -15,7 +15,10 @@ class IngressEventModeTest(unittest.TestCase):
         self.assertEqual(source.count("ingress_wakeup.get());"), 6)
         self.assertIn("wait_for_ingress();", source)
         launcher = (ROOT / "scripts/paper_v7_execution_loop.sh").read_text()
-        self.assertEqual(launcher.count("--event-driven-ingress"), 1)
+        supervisor = (ROOT / "scripts/v7_multi_asset_external_collector.py").read_text()
+        self.assertIn("scripts/v7_multi_asset_external_collector.py", launcher)
+        self.assertEqual(launcher.count("--event-driven-ingress"), 0)
+        self.assertEqual(supervisor.count('"--event-driven-ingress"'), 1)
 
     def test_transport_keeps_existing_single_queue_authority(self):
         source = (ROOT / "src/v7_external_ingress.cpp").read_text()

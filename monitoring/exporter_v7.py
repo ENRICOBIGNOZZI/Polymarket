@@ -389,12 +389,15 @@ def collect_snapshot(run_root: Path, repository_root: Path | None = None, *, now
         "maker_rotation": _json(run_root / "micro_maker/rotation_status.json"),
         "external": _json(run_root / "external/status.json"),
         "universe": _json(run_root / "universe/status.json"),
+        "book_data": _json(run_root / "research/repricing_book/fillability_ws_status.json"),
         "canonical_economics": canonical, "ledger": ledger,
         "research_plane": {"state": "OFF_LONDON", "runtime_training": False,
             "retrospective_analytics": False},
         "maker_lab": summarize_maker_microstructure(ledger_path, run_root / "micro_maker/reward_selection.json", run_root / "research/evidence/maker_markout"),
         "maker_fillability": _fillability(run_root, repository_root, runtime_sha, now),
-        "external_fair": external_fair, "reconciliation": reconciliation,
+        "external_fair": external_fair,
+        "external_asset_data": _json(run_root / "external_fair/all_assets_status.json"),
+        "reconciliation": reconciliation,
         "maker_latency": _runtime_latency(run_root),
         "lead_lag_summary": lead_lag, "state_realized_pnl_components": state_pnl_components,
         "trade_tape": tape, "trade_recorder": _trade_recorder(run_root / "trade_recorder_status.json", now),
@@ -514,6 +517,26 @@ def health_reasons(snapshot: dict[str, Any], *, max_runtime_age: int = 180, max_
         if selector.get("schema") != "polymarket_v7_maker_selector_status_v1" or selector.get("model_sha") != snapshot.get("sha") or selector.get("ready") is not True or selector.get("state") not in _MAKER_SELECTOR_OPERATIONAL_STATES or selector.get("paper_only") is not True or selector.get("authenticated_execution") is not False or selector.get("real_order_submission") is not False or not _fresh_ms(selector, snapshot, max_runtime_age): reasons.append("maker_selector_missing_stale_or_unsafe")
         if rotation.get("schema") != "polymarket_v7_maker_cohort_rotation_status_v1" or rotation.get("model_sha") != snapshot.get("sha") or rotation.get("state") not in _MAKER_ROTATION_OPERATIONAL_STATES or rotation.get("paper_only") is not True or rotation.get("authenticated_execution") is not False or rotation.get("real_order_submission") is not False or not _fresh_ms(rotation, snapshot, max_runtime_age): reasons.append("maker_cohort_supervisor_missing_stale_or_unsafe")
     if universe.get("schema") != "polymarket_v7_crypto_universe_status_v1" or universe.get("model_sha") != snapshot.get("sha") or universe.get("state") != "OPERATIONAL" or universe.get("discovery_exhaustive") is not True or universe.get("pagination_loop_guard_hit") is not False or universe.get("paper_only") is not True or universe.get("authenticated_execution") is not False or universe.get("real_order_submission") is not False or _integer(universe.get("eligible_markets")) <= 0 or not _fresh_ms(universe, snapshot, max_runtime_age): reasons.append("crypto_universe_missing_stale_or_unsafe")
+    if universe.get("book_selection_state") != "READY" or _integer(universe.get("book_selection_contexts")) != 30 or _integer(universe.get("book_selection_tokens")) != 60:
+        reasons.append("crypto_book_data_coverage_incomplete")
+    book_data = snapshot.get("book_data") or {}
+    if (
+        book_data.get("schema") != "polymarket_v7_maker_fillability_ws_status_v1"
+        or book_data.get("model_sha") != snapshot.get("sha")
+        or book_data.get("paper_only") is not True
+        or book_data.get("authenticated_execution") is not False
+        or book_data.get("real_order_submission") is not False
+        or book_data.get("state") != "running"
+        or _integer(book_data.get("subscribed_markets")) != 30
+        or _integer(book_data.get("subscribed_tokens")) != 60
+        or _integer(book_data.get("observed_markets")) != 30
+        or _integer(book_data.get("observed_tokens")) != 60
+        or book_data.get("subscription_coverage_complete") is not True
+        or book_data.get("evidence_complete") is not True
+        or _integer(book_data.get("dropped_events")) != 0
+        or not _fresh_ms(book_data, snapshot, max_runtime_age)
+    ):
+        reasons.append("crypto_book_data_runtime_incomplete")
     if snapshot.get("runtime_alive") is not True: reasons.append("execution_not_alive")
     if canonical.get("schema") != "polymarket_v7_runtime_ledger_economics_v1" or canonical.get("paper_only") is not True or canonical.get("authenticated_execution") is not False: reasons.append("runtime_ledger_economics_missing_or_unsafe")
     if canonical.get("expected_model_sha") != snapshot.get("sha"): reasons.append("runtime_ledger_economics_sha_mismatch")
@@ -528,6 +551,21 @@ def health_reasons(snapshot: dict[str, Any], *, max_runtime_age: int = 180, max_
     retention, operations = (snapshot.get("operations") or {}).get("retention") or {}, snapshot.get("operations") or {}
     if retention.get("schema") != "polymarket_v7_london_buffer_retention_status_v1" or retention.get("paper_only") is not True or _number(operations.get("retention_age"), math.inf) > 7200: reasons.append("london_buffer_retention_missing_or_stale")
     if retention.get("state") == "BUFFER_LIMIT_EXCEEDED_UNSYNCED_DATA_PRESERVED": reasons.append("london_buffer_limit_exceeded_unsynced_data_preserved")
+    external_data = snapshot.get("external_asset_data") or {}
+    if (
+        external_data.get("schema") != "polymarket_v7_multi_asset_external_collector_v1"
+        or external_data.get("model_sha") != snapshot.get("sha")
+        or external_data.get("state") != "OPERATIONAL"
+        or external_data.get("paper_only") is not True
+        or external_data.get("authenticated_execution") is not False
+        or external_data.get("real_order_submission") is not False
+        or external_data.get("execution_authority") is not False
+        or _integer(external_data.get("asset_count")) != 6
+        or _integer(external_data.get("ready_assets")) != 6
+        or bool(external_data.get("missing_assets"))
+        or not _fresh_ms(external_data, snapshot, max_runtime_age)
+    ):
+        reasons.append("crypto_external_data_coverage_incomplete")
     limit = _number((snapshot.get("authority") or {}).get("max_drawdown"))
     if limit > 0 and _number((snapshot.get("economics") or {}).get("drawdown")) >= limit - 1e-12: reasons.append("drawdown_limit_breached")
     external = snapshot.get("external_fair") or {}
@@ -592,7 +630,26 @@ def render_prometheus(snapshot: dict[str, Any]) -> str:
         _metric("polymarket_v7_maker_cohort_supervisor_ready", rotation.get("state") in _MAKER_ROTATION_OPERATIONAL_STATES), _metric("polymarket_v7_maker_cohort_rotations_total", rotation.get("rotation_count")), _metric("polymarket_v7_maker_rotation_candidate_confirmations", rotation.get("candidate_confirmations")), _metric("polymarket_v7_maker_rotation_required_confirmations", rotation.get("candidate_required_confirmations")), _metric("polymarket_v7_maker_rotation_cooldown_remaining_seconds", rotation.get("rotation_cooldown_remaining_seconds")), _metric("polymarket_v7_maker_paused_no_fresh_flow", rotation.get("fresh_flow_pause_active")),
         _metric("polymarket_v7_maker_feed_connected_workers", diagnostics.get("feed_connected_workers")), _metric("polymarket_v7_maker_feed_messages_total", diagnostics.get("feed_messages")), _metric("polymarket_v7_maker_decisions_total", diagnostics.get("decisions")), _metric("polymarket_v7_maker_quote_intents_total", diagnostics.get("quote_intents")), _metric("polymarket_v7_maker_rejected_positive_point_ev_total", diagnostics.get("rejected_positive_point_ev")), _metric("polymarket_v7_maker_best_rejected_point_ev_per_share", diagnostics.get("best_rejected_point_ev_per_share")),
         _metric("polymarket_v7_universe_discovered_markets", universe.get("discovered_markets")), _metric("polymarket_v7_universe_eligible_markets", universe.get("eligible_markets")), _metric("polymarket_v7_universe_skipped_markets", universe.get("skipped_markets")), _metric("polymarket_v7_universe_pages", universe.get("pages")), _metric("polymarket_v7_universe_scan_duration_milliseconds", universe.get("scan_duration_ms")), _metric("polymarket_v7_universe_discovery_exhaustive", universe.get("discovery_exhaustive")),
+        _metric("polymarket_v7_book_data_contexts", universe.get("book_selection_contexts")),
+        _metric("polymarket_v7_book_data_tokens", universe.get("book_selection_tokens")),
+        _metric("polymarket_v7_book_data_ready", universe.get("book_selection_state") == "READY"),
+        _metric("polymarket_v7_book_data_subscribed_markets", (snapshot.get("book_data") or {}).get("subscribed_markets")),
+        _metric("polymarket_v7_book_data_subscribed_tokens", (snapshot.get("book_data") or {}).get("subscribed_tokens")),
+        _metric("polymarket_v7_book_data_observed_markets", (snapshot.get("book_data") or {}).get("observed_markets")),
+        _metric("polymarket_v7_book_data_observed_tokens", (snapshot.get("book_data") or {}).get("observed_tokens")),
+        _metric("polymarket_v7_book_data_runtime_ready", (snapshot.get("book_data") or {}).get("subscription_coverage_complete") is True and (snapshot.get("book_data") or {}).get("evidence_complete") is True),
+        _metric("polymarket_v7_external_data_assets", (snapshot.get("external_asset_data") or {}).get("asset_count")),
+        _metric("polymarket_v7_external_data_ready_assets", (snapshot.get("external_asset_data") or {}).get("ready_assets")),
+        _metric("polymarket_v7_external_data_ready", (snapshot.get("external_asset_data") or {}).get("state") == "OPERATIONAL" and _integer((snapshot.get("external_asset_data") or {}).get("ready_assets")) == 6),
     ]
+    for row in (snapshot.get("external_asset_data") or {}).get("assets") or []:
+        if not isinstance(row, dict):
+            continue
+        lines.append(_metric(
+            "polymarket_v7_external_asset_data_ready",
+            row.get("data_ready"),
+            {"asset": row.get("asset") or ""},
+        ))
     native_manager = snapshot.get("native_engine_manager") or {}
     for worker in native_manager.get("workers") or []:
         if not isinstance(worker, dict):

@@ -278,17 +278,15 @@ v7_exec_class COLLECTOR python3 scripts/v7_rtds_external_fair_monitor.py \
   >> "$RUN_ROOT/external_fair/rtds_monitor.log" 2>&1 &
 v7_register_child "$!"
 
-v7_exec_class COLLECTOR "$EXTERNAL_VENUE_RUNTIME" \
-  --output "$RUN_ROOT/external_fair/external_venues.json" \
-  --tape "$RUN_ROOT/external_fair/tapes/external_venues.${SHA}.$$.bin" --model-sha "$SHA" \
-  --normalized-event-tape-dir "$RUN_ROOT/external_fair/normalized_events" \
-  --raw-tape-dir "$RUN_ROOT/external_fair/raw" \
+v7_exec_class COLLECTOR python3 scripts/v7_multi_asset_external_collector.py \
+  --repository-root "$ROOT" --run-root "$RUN_ROOT" --model-sha "$SHA" \
+  --engine "$EXTERNAL_VENUE_RUNTIME" \
+  --market-registry "$CRYPTO_SETTLEMENT_MARKET_REGISTRY" \
   --disk-pressure-marker "$RUN_ROOT/control/DISK_PRESSURE" \
   --disk-pressure-min-free-bytes "$DISK_PRESSURE_MIN_FREE_BYTES" \
   --external-cancel-signal "$RUN_ROOT/external_fair/external_cancel_signal.json" \
   --external-cancel-rule-sha256 "$EXTERNAL_CANCEL_RULE_SHA" \
-  --event-driven-ingress \
-  >> "$RUN_ROOT/external_fair/external_venues.log" 2>&1 &
+  >> "$RUN_ROOT/external_fair/external_assets_supervisor.log" 2>&1 &
 v7_register_child "$!"
 
 # Causal crypto context collectors remain on London because their receive-time
@@ -296,13 +294,11 @@ v7_register_child "$!"
 # the hot CPU set and have no execution/capital/ledger authority.
 
 
-# Continuous receive-time PM book evidence for future crypto research. This is
-# a collector only; model fitting and retrospective shadows stay off London.
-v7_exec_class COLLECTOR "$FILLABILITY_OBSERVER" \
-  --config "$ALLOC/micro_maker.json" --run-root "$RUN_ROOT" --model-sha "$SHA" \
-  --output-dir "$RUN_ROOT/research/repricing_book" --fair-only \
-  --disk-pressure-min-free-bytes "$DISK_PRESSURE_MIN_FREE_BYTES" \
-  >> "$RUN_ROOT/research/repricing_book_observer.log" 2>&1 &
+# Continuous receive-time PM book evidence for every currently traded
+# crypto asset×horizon context. The universe collector atomically maintains the
+# exact 30-market / 60-token zero-authority selection and this observer reloads
+# at rollover. Model fitting and retrospective shadows remain off London.
+v7_exec_class COLLECTOR "$FILLABILITY_OBSERVER"   --config "$ALLOC/micro_maker.json" --run-root "$RUN_ROOT" --model-sha "$SHA"   --selection "$RUN_ROOT/universe/book_selection.json" --selection-only   --output-dir "$RUN_ROOT/research/repricing_book"   --disk-pressure-min-free-bytes "$DISK_PRESSURE_MIN_FREE_BYTES"   >> "$RUN_ROOT/research/repricing_book_observer.log" 2>&1 &
 v7_register_child "$!"
 
 
@@ -439,6 +435,9 @@ value=json.load(open(sys.argv[1]))
 ok=(value.get("schema")=="polymarket_v7_crypto_universe_status_v1"
     and value.get("model_sha")==sys.argv[2] and value.get("state")=="OPERATIONAL"
     and value.get("discovery_exhaustive") is True and int(value.get("eligible_markets") or 0)>0
+    and value.get("book_selection_state")=="READY"
+    and int(value.get("book_selection_contexts") or 0)==30
+    and int(value.get("book_selection_tokens") or 0)==60
     and value.get("paper_only") is True and value.get("authenticated_execution") is False
     and value.get("real_order_submission") is False)
 raise SystemExit(0 if ok else 1)

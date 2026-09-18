@@ -81,7 +81,9 @@ class V7MakerFillabilityMonitoringTest(unittest.TestCase):
         manifest = json.loads((ROOT / "config/v7_process_manifest.json").read_text())
         self.assertIn("FILLABILITY_OBSERVER", loop)
         self.assertTrue(any(row.get("id") == "pm_book_observer" for row in manifest["processes"]))
-        self.assertIn("--fair-only", loop)
+        launch = loop.split('v7_exec_class COLLECTOR "$FILLABILITY_OBSERVER"', 1)[1].split('v7_register_child', 1)[0]
+        self.assertIn('--selection "$RUN_ROOT/universe/book_selection.json" --selection-only', launch)
+        self.assertNotIn("--fair-only", launch)
 
 
 if __name__ == "__main__":

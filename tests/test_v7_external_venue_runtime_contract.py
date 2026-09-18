@@ -9,6 +9,7 @@ def main() -> None:
     cmake = (ROOT / "CMakeLists.txt").read_text()
     launcher = (ROOT / "scripts" / "paper_v7_execution_loop.sh").read_text()
     websocket = (ROOT / "src" / "v7_external_ws.cpp").read_text()
+    multi_asset = (ROOT / "scripts" / "v7_multi_asset_external_collector.py").read_text()
     assert "ExternalVenueWsClient binance" in source
     assert "std::unique_ptr<ExternalVenueWsClient> coinbase;" in source
     assert "std::unique_ptr<ExternalVenueWsClient> bybit;" in source
@@ -41,7 +42,11 @@ def main() -> None:
     assert '"suppressed_by_policy"' in source
     assert '--disk-pressure-marker "$RUN_ROOT/control/DISK_PRESSURE"' in launcher
     assert '--disk-pressure-min-free-bytes "$DISK_PRESSURE_MIN_FREE_BYTES"' in launcher
-    assert "--event-driven-ingress" in launcher
+    assert "scripts/v7_multi_asset_external_collector.py" in launcher
+    assert "--event-driven-ingress" in multi_asset
+    assert 'ASSETS = ("BTC", "ETH", "SOL", "XRP", "DOGE", "BNB")' in multi_asset
+    assert "all_assets_status.json" in multi_asset
+    assert '"execution_authority": False' in multi_asset
     assert 'argument == "--asset"' in source
     assert "crypto_connection_spec(" in source
     assert "non-BTC assets require Binance spot as primary feed" in source

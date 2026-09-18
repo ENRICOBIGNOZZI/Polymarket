@@ -1,5 +1,6 @@
 import json
 import sys
+import tempfile
 from pathlib import Path
 from urllib.parse import parse_qs, urlparse
 
@@ -103,3 +104,70 @@ def test_configuration_contract_is_crypto_only():
     cfg=config(); universe.validate_config(cfg)
     assert cfg['market_registry']=='config/v7_crypto_settlement_markets.json'
     assert 'structural' not in cfg['resource_budget']
+
+def test_book_selection_covers_all_30_runtime_contexts_and_60_tokens():
+    assets = ("BTC", "ETH", "SOL", "XRP", "DOGE", "BNB")
+    horizons = {"M5":300, "M15":900, "H1":3600, "H4":14400, "D1":86400}
+    rows=[]
+    index=0
+    for asset in assets:
+        for horizon,seconds in horizons.items():
+            index+=1
+            rows.append({
+                "market_id":f"m{index}", "event_ids":[f"e{index}"],
+                "clob_token_ids":[f"up{index}",f"down{index}"], "outcomes":["Up","Down"],
+                "asset":asset, "horizon":horizon, "horizon_seconds":seconds,
+                "window_start_unix":NOW-10, "close_timestamp_unix":NOW+seconds,
+                "active":True, "closed":False, "accepting_orders":True,
+                "research_only":False,
+            })
+    snap={
+        "schema":universe.SNAPSHOT_SCHEMA, "version":7,
+        "paper_only":True, "authenticated_execution":False,
+        "real_order_submission":False, "execution_authority":False,
+        "model_sha":SHA, "timestamp_ms":NOW*1000, "markets":rows,
+    }
+    selection,blocker=universe.build_book_selection(snap)
+    assert blocker==""
+    assert selection["market_count"]==30 and selection["token_count"]==60
+    assert len(selection["markets"])==30
+    assert {f"{x['asset']}:{x['horizon']}" for x in selection["markets"]}=={
+        f"{a}:{h}" for a in assets for h in horizons
+    }
+    assert all(x["yes_token"].startswith("up") and x["no_token"].startswith("down")
+               for x in selection["markets"])
+
+
+def test_persist_publishes_book_selection_status_atomically():
+    assets = ("BTC", "ETH", "SOL", "XRP", "DOGE", "BNB")
+    horizons = {"M5":300, "M15":900, "H1":3600, "H4":14400, "D1":86400}
+    rows=[]
+    index=0
+    for asset in assets:
+        for horizon,seconds in horizons.items():
+            index+=1
+            rows.append({
+                "market_id":f"m{index}", "event_ids":[f"e{index}"],
+                "clob_token_ids":[f"up{index}",f"down{index}"], "outcomes":["Up","Down"],
+                "asset":asset, "horizon":horizon, "horizon_seconds":seconds,
+                "window_start_unix":NOW-10, "close_timestamp_unix":NOW+seconds,
+                "active":True, "closed":False, "accepting_orders":True,
+                "research_only":False, "tier":"HOT",
+            })
+    snap={
+        "schema":universe.SNAPSHOT_SCHEMA, "version":7,
+        "paper_only":True, "authenticated_execution":False,
+        "real_order_submission":False, "execution_authority":False,
+        "model_sha":SHA, "timestamp_ms":NOW*1000, "markets":rows,
+        "membership_sha256":"b"*64, "tier_counts":{"HOT":30,"WARM":0,"COLD":0},
+        "discovered_markets":30, "eligible_markets":30,
+    }
+    with tempfile.TemporaryDirectory() as directory:
+        root=Path(directory)
+        universe.persist(root,snap,{})
+        selection=json.loads((root/"book_selection.json").read_text())
+        status=json.loads((root/"status.json").read_text())
+        assert selection["market_count"]==30 and selection["token_count"]==60
+        assert status["book_selection_state"]=="READY"
+        assert status["book_selection_contexts"]==30
+        assert status["book_selection_tokens"]==60

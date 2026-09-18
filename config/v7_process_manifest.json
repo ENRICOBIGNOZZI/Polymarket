@@ -180,26 +180,34 @@
     },
     {
       "id": "external_venue_evidence",
-      "executable": "${EXTERNAL_VENUE_RUNTIME}",
+      "executable": "scripts/v7_multi_asset_external_collector.py",
       "arguments": [
         "--model-sha",
-        "${SHA}"
+        "${SHA}",
+        "--engine",
+        "${EXTERNAL_VENUE_RUNTIME}",
+        "--market-registry",
+        "${ROOT}/config/v7_crypto_settlement_markets.json"
       ],
       "profile": "feed",
-      "inputs": [],
+      "inputs": [
+        "config/v7_crypto_settlement_markets.json"
+      ],
       "outputs": [
+        "external_fair/all_assets_status.json",
         "external_fair/external_venues.json",
         "external_fair/tapes",
         "external_fair/raw",
         "external_fair/normalized_events",
-        "external_fair/external_venues.log"
+        "external_fair/assets",
+        "external_fair/external_assets_supervisor.log"
       ],
       "dependencies": [
         "public_https_proxy"
       ],
       "exact_sha_required": true,
       "config_identity_required": true,
-      "launcher_log": "external_fair/external_venues.log",
+      "launcher_log": "external_fair/external_assets_supervisor.log",
       "london_deployed": true,
       "runtime_class": "COLLECTOR"
     },
@@ -230,13 +238,16 @@
       "id": "pm_book_observer",
       "executable": "${FILLABILITY_OBSERVER}",
       "arguments": [
-        "--fair-only",
+        "--selection",
+        "${RUN_ROOT}/universe/book_selection.json",
+        "--selection-only",
         "--model-sha",
         "${SHA}"
       ],
       "profile": "observer",
       "inputs": [
-        "universe/current.json"
+        "universe/current.json",
+        "universe/book_selection.json"
       ],
       "outputs": [
         "research/repricing_book/fillability_ws_status.json",
