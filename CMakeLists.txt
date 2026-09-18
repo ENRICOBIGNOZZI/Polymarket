@@ -89,7 +89,7 @@ add_library(pm_v7_hft
   src/v7_maker_inventory.cpp
   src/v7_maker_execution_policy.cpp)
 target_include_directories(pm_v7_hft PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/include ${Boost_INCLUDE_DIRS})
-target_link_libraries(pm_v7_hft PUBLIC pm_v7_common Threads::Threads)
+target_link_libraries(pm_v7_hft PUBLIC pm_v7_common Threads::Threads OpenSSL::Crypto)
 target_compile_options(pm_v7_hft PRIVATE -Wall -Wextra -Wpedantic)
 
 # Settlement-aware external information is a V7 capability, not a second
@@ -350,6 +350,7 @@ if(BUILD_TESTING)
 
   add_executable(pm_v7_maker_execution_cells_tests tests/test_v7_maker_execution_cells.cpp)
   target_link_libraries(pm_v7_maker_execution_cells_tests PRIVATE pm_v7_hft)
+  target_compile_options(pm_v7_maker_execution_cells_tests PRIVATE -UNDEBUG)
   add_test(NAME pm_v7_maker_execution_cells_tests COMMAND pm_v7_maker_execution_cells_tests)
 
   add_executable(pm_v7_maker_lane_tests tests/test_v7_maker_lane.cpp)

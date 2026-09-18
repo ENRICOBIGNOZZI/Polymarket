@@ -76,6 +76,15 @@ void test_exact_sha_loader_shrinks_to_global() {
     assert(index < model.execution_cells.size());
     const auto& cell = model.execution_cells[index];
     assert(cell.valid);
+    const std::string loaded_hash(model.execution_artifact_sha256.data());
+    assert(loaded_hash.size() == 64);
+    pm::v7::maker::MakerModelSnapshot same_bytes;
+    assert(std::string(same_bytes.execution_artifact_sha256.data()) == loaded_hash);
+    { std::ofstream append(path, std::ios::app); append << '\n'; }
+    pm::v7::maker::MakerModelSnapshot changed_bytes;
+    assert(std::string(changed_bytes.execution_artifact_sha256.data()).size() == 64);
+    assert(std::string(changed_bytes.execution_artifact_sha256.data()) != loaded_hash);
+    assert(close(changed_bytes.execution_cells[index].fill_probability, cell.fill_probability));
     // orders: 80/(80+40)=2/3; clusters: 10/(10+5)=2/3.
     assert(close(cell.fill_weight, 2.0 / 3.0));
     assert(close(cell.fill_probability, 0.10 + (2.0 / 3.0) * 0.60));
@@ -120,6 +129,7 @@ void test_wrong_sha_fails_closed_to_invalid_cells() {
 
     pm::v7::maker::MakerModelSnapshot model;
     for (const auto& cell : model.execution_cells) assert(!cell.valid);
+    assert(model.execution_artifact_sha256[0] == '\0');
 
     unsetenv("PM_V7_MAKER_EXECUTION_MODEL");
     unsetenv("PM_V7_MODEL_SHA");

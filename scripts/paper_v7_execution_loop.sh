@@ -505,6 +505,8 @@ PM_V7_CONTROL_NICE=0 v7_exec_class CONTROL python3 scripts/v7_native_crypto_engi
   --engine "$CRYPTO_SETTLEMENT_ENGINE" \
   --settler "$ROOT/scripts/v7_native_paper_settlement.py" \
   --engine-log "$RUN_ROOT/native_crypto_settlement_engine.log" \
+  --allocation "$ALLOC/crypto_settlement_engine.json" \
+  --market-registry "$ROOT/config/v7_crypto_settlement_markets.json" \
   >> "$RUN_ROOT/native_engine_manager.log" 2>&1 &
 v7_register_child "$!"
 

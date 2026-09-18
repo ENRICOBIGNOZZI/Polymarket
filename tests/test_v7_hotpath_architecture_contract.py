@@ -45,3 +45,29 @@ def test_event_driven_features_are_incremental_not_dataframe_recomputed():
     assert 'ExternalAssetState' in state
     assert 'on_event' in ingress or 'push' in ingress
     assert 'DataFrame' not in state+ingress+kernel
+
+
+def test_native_manager_launcher_invocation_satisfies_current_cli(tmp_path):
+    """Catch full-stack startup regressions: inspect the real launch command."""
+    import re, shlex, sys
+    sys.path.insert(0,str(ROOT/'scripts'))
+    from unittest.mock import patch
+    from v7_native_crypto_engine_manager import parse_args
+    launcher=(ROOT/'scripts/paper_v7_execution_loop.sh').read_text()
+    match=re.search(r'python3 scripts/v7_native_crypto_engine_manager.py\s+\\\n(.*?)\s+>>',launcher,re.S)
+    assert match, 'missing native manager invocation'
+    command=match.group(1).replace('\\\n',' ')
+    environment={'ROOT':str(ROOT),'RUN_ROOT':str(tmp_path),'SHA':'a'*40,
+        'RUN_ID':'test-run','SERVER_ID':'test-server',
+        'CRYPTO_SETTLEMENT_ENGINE':str(ROOT/'build/polymarket_v7_crypto_settlement_engine'),
+        'ALLOC':str(tmp_path/'control/allocations')}
+    for key,value in environment.items():command=command.replace('$'+key,value)
+    argv=shlex.split(command.rstrip().rstrip(chr(92)))
+    with patch.object(sys,'argv',['native-manager',*argv]):args=parse_args()
+    assert args.allocation==tmp_path/'control/allocations/crypto_settlement_engine.json'
+    assert args.market_registry==ROOT/'config/v7_crypto_settlement_markets.json'
+    declared=next(p for p in json.loads((ROOT/'config/v7_process_manifest.json').read_text())['processes'] if p['id']=='native_engine_manager')['arguments']
+    assert {arg for arg in argv if arg.startswith('--')}=={arg for arg in declared if arg.startswith('--')}
+    assert not args.asynchronous_settlement
+    assert not args.capture_native_observations
+    assert args.maker_share_cap_microunits==1_000_000

@@ -96,6 +96,14 @@ public:
 
     [[nodiscard]] NativeInventorySnapshot inventory_snapshot(
         std::uint64_t instrument_handle) const noexcept;
+    // Read-only view of the sole OMS; no strategy-side quote/inventory copies.
+    [[nodiscard]] const OmsOrderRecord* maker_order(
+        std::uint64_t instrument_handle, Side side) const noexcept {
+        const auto* inv = inventory(instrument_handle);
+        if (inv == nullptr || (side != Side::Buy && side != Side::Sell)) return nullptr;
+        const auto id = side == Side::Buy ? inv->maker_buy_client_order_id : inv->maker_sell_client_order_id;
+        return id != 0 ? order_tx_.find(id) : nullptr;
+    }
     [[nodiscard]] CapitalSnapshot capital_snapshot() const noexcept {
         return capital_.snapshot();
     }
