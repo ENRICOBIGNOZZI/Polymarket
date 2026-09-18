@@ -159,6 +159,38 @@ void test_frozen_forward_can_ignore_source_valid_flag_with_age_gate() {
     assert(result.accepted == 1);
 }
 
+
+void test_runtime_policy_allows_twenty_shares_across_five_to_120_seconds() {
+    NativeCryptoDecisionPolicy policy;
+    policy.require_signal_valid = 0;
+    policy.minimum_tte_ns = 5'000'000'000LL;
+    policy.maximum_tte_ns = 120'000'000'000LL;
+    policy.target_quantity_microunits = 20'000'000;
+    NativeCryptoDecisionLane lane(policy);
+    CapitalLimits larger{100'000'000, 100'000'000, 100'000'000, 20'000'000};
+    SleeveCapitalAccount capital(larger);
+
+    auto value = input(1, 20);
+    value.market.close_monotonic_ns = kNow + 60'000'000'000LL;
+    value.yes_book = book(4000, 25'000'000);
+    const auto result = lane.evaluate(value, capital);
+    assert(result.accepted == 1);
+    assert(result.intent.quantity_microunits == 20'000'000);
+    assert(result.admission.reserved_microdollars == 8'000'000);
+    assert(capital.release_order(result.intent.intent_id));
+
+    lane.reset_market(7);
+    auto too_late = input(1, 21);
+    too_late.market.close_monotonic_ns = kNow + 4'000'000'000LL;
+    too_late.yes_book = book(4000, 25'000'000);
+    assert(lane.evaluate(too_late, capital).reason == NativeCryptoDecisionReason::TteOutsideWindow);
+
+    auto too_early = input(1, 22);
+    too_early.market.close_monotonic_ns = kNow + 121'000'000'000LL;
+    too_early.yes_book = book(4000, 25'000'000);
+    assert(lane.evaluate(too_early, capital).reason == NativeCryptoDecisionReason::TteOutsideWindow);
+}
+
 int main() {
     test_up_down_and_admission();
     test_duplicate_depth_tte_and_market_gates();
@@ -166,5 +198,6 @@ int main() {
     test_evaluate_is_allocation_free();
     test_construct_candidate_defers_capital_to_unified_owner();
     test_frozen_forward_can_ignore_source_valid_flag_with_age_gate();
+    test_runtime_policy_allows_twenty_shares_across_five_to_120_seconds();
     return 0;
 }

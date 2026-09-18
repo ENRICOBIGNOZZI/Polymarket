@@ -32,7 +32,7 @@
     ],
     "authenticated_execution": false,
     "cancel_activation": "CURRENT_RESEARCH_RULE_HASH_PLUS_CAUSAL_LIVE_SIGNAL",
-    "comparison_size_shares": 5.0,
+    "comparison_size_shares": 20.0,
     "make_proposal_owner": "V7_CRYPTO_EXECUTION_ALPHA",
     "maker_immature_fill_lower": "CURRENT_RUN_POSTERIOR_LOWER_90_AFTER_20_ORDERS_2_CLUSTERS",
     "market_selection": {

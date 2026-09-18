@@ -500,13 +500,15 @@ PM_V7_CONTROL_NICE=0 v7_exec_class CONTROL python3 scripts/v7_native_crypto_engi
   --repository-root "$ROOT" --run-root "$RUN_ROOT" --model-sha "$SHA" \
   --run-id "$RUN_ID" --server-id "$SERVER_ID" \
   --universe "$RUN_ROOT/universe/current.json" \
-  --allocation "$RUN_ROOT/control/allocations/crypto_settlement_engine.json" \
-  --market-registry "$ROOT/config/v7_crypto_settlement_markets.json" \
   --engine "$CRYPTO_SETTLEMENT_ENGINE" \
   --settler "$ROOT/scripts/v7_native_paper_settlement.py" \
   --engine-log "$RUN_ROOT/native_crypto_settlement_engine.log" \
   --allocation "$ALLOC/crypto_settlement_engine.json" \
   --market-registry "$ROOT/config/v7_crypto_settlement_markets.json" \
+  --target-quantity-microunits 20000000 \
+  --minimum-tte-ns 5000000000 \
+  --maximum-tte-ns 120000000000 \
+  --asynchronous-settlement \
   >> "$RUN_ROOT/native_engine_manager.log" 2>&1 &
 v7_register_child "$!"
 

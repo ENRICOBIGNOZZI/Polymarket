@@ -68,6 +68,18 @@ def test_native_manager_launcher_invocation_satisfies_current_cli(tmp_path):
     assert args.market_registry==ROOT/'config/v7_crypto_settlement_markets.json'
     declared=next(p for p in json.loads((ROOT/'config/v7_process_manifest.json').read_text())['processes'] if p['id']=='native_engine_manager')['arguments']
     assert {arg for arg in argv if arg.startswith('--')}=={arg for arg in declared if arg.startswith('--')}
-    assert not args.asynchronous_settlement
+    assert args.asynchronous_settlement
     assert not args.capture_native_observations
     assert args.maker_share_cap_microunits==1_000_000
+    assert args.target_quantity_microunits==20_000_000
+    assert args.minimum_tte_ns==5_000_000_000
+    assert args.maximum_tte_ns==120_000_000_000
+
+
+def test_native_manager_lifts_maker_only_to_venue_minimum_inside_paper_cap():
+    manager=(ROOT/'scripts/v7_native_crypto_engine_manager.py').read_text()
+    candidate=(ROOT/'src/v7_crypto_settlement_native_candidate.cpp').read_text()
+    assert 'maker_share_cap = max(self.args.maker_share_cap_microunits, minimum_order)' in manager
+    assert 'venue_minimum_exceeds_paper_maker_cap' in manager
+    assert '"--maker-share-cap-microunits", str(maker_share_cap)' in manager
+    assert 'maker_model.base_quote_shares = std::max(maker_model.base_quote_shares, venue_min_shares)' in candidate

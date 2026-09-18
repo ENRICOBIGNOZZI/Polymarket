@@ -348,9 +348,14 @@ class Manager:
         self.completed_market_ids: set[str] = set()
         self.stopping = False
         self.pending_settlements: dict[str, Worker] = {}
+        self.native_risk_policy = read_json(args.repository_root / "config/v7_native_risk_policy.json")
         self.base_risk_receipt = load_native_limits(
-            read_json(args.repository_root / "config/v7_native_risk_policy.json"),
+            self.native_risk_policy,
             read_json(self.run_root / "control/allocations/manifest.json"))
+        self.maximum_paper_candidate_maker_share_cap_microunits = int(
+            self.native_risk_policy.get("maximum_paper_candidate_maker_share_cap_microunits") or 0)
+        if self.maximum_paper_candidate_maker_share_cap_microunits <= 0:
+            raise RuntimeError("paper_maker_share_cap_missing")
         self.allocated_execution_budget_microdollars = _execution_budget_microdollars(args.allocation)
         self.global_budget_microdollars = min(self.allocated_execution_budget_microdollars,
             self.base_risk_receipt["limits"]["max_total_exposure_microdollars"])
@@ -535,6 +540,9 @@ class Manager:
             "partition_budget_microdollars": self.partition_microdollars,
             "partition_count": self.partition_count,
             "partition_total_microdollars": self.partition_total_microdollars,
+            "taker_target_quantity_microunits": self.args.target_quantity_microunits,
+            "taker_minimum_tte_ns": self.args.minimum_tte_ns,
+            "taker_maximum_tte_ns": self.args.maximum_tte_ns,
             "evidence_worker_count": int(evidence.get("worker_count") or 0),
             "evidence_dropped": int(evidence.get("dropped") or 0),
             "evidence_queue_depth": int(evidence.get("queue_depth") or 0),
@@ -576,6 +584,9 @@ class Manager:
             raise RuntimeError("complement_tick_size_mismatch")
         minimum_order = max(self.args.min_order_microunits,
             venue_minimum_microunits(yes_token), venue_minimum_microunits(no_token))
+        maker_share_cap = max(self.args.maker_share_cap_microunits, minimum_order)
+        if maker_share_cap > self.maximum_paper_candidate_maker_share_cap_microunits:
+            raise RuntimeError("venue_minimum_exceeds_paper_maker_cap")
         fee_rate, fee_exponent, fee_source = fee_parameters(market)
         close_unix = _close_unix(market)
         close_wall_ns = close_unix * 1_000_000_000
@@ -611,7 +622,10 @@ class Manager:
             "--close-wall-ns", str(close_wall_ns),
             "--tick-size-e4", str(yes_tick),
             "--min-order-microunits", str(minimum_order),
-            "--maker-share-cap-microunits", str(self.args.maker_share_cap_microunits),
+            "--maker-share-cap-microunits", str(maker_share_cap),
+            "--target-quantity-microunits", str(max(self.args.target_quantity_microunits, minimum_order)),
+            "--minimum-tte-ns", str(self.args.minimum_tte_ns),
+            "--maximum-tte-ns", str(self.args.maximum_tte_ns),
             "--risk-policy-sha256", self.base_risk_receipt["risk_policy_sha256"],
             "--sleeve-budget-microdollars", str(budget_microdollars),
             "--max-total-exposure-microdollars", str(budget_microdollars),
@@ -875,6 +889,9 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--settlement-timeout-seconds", type=int, default=600)
     parser.add_argument("--min-order-microunits", type=int, default=5_000_000)
     parser.add_argument("--maker-share-cap-microunits", type=int, default=1_000_000)
+    parser.add_argument("--target-quantity-microunits", type=int, default=20_000_000)
+    parser.add_argument("--minimum-tte-ns", type=int, default=5_000_000_000)
+    parser.add_argument("--maximum-tte-ns", type=int, default=120_000_000_000)
     parser.add_argument("--asynchronous-settlement", action="store_true")
     parser.add_argument("--capture-native-observations", action="store_true",
         help="Explicit bounded research capture; keep off until storage/offload is provisioned")
@@ -887,6 +904,10 @@ def parse_args() -> argparse.Namespace:
         parser.error("invalid maker share cap")
     if args.min_order_microunits <= 0:
         parser.error("invalid minimum order")
+    if args.target_quantity_microunits < args.min_order_microunits:
+        parser.error("target quantity below configured minimum")
+    if args.minimum_tte_ns <= 0 or args.maximum_tte_ns < args.minimum_tte_ns:
+        parser.error("invalid taker tte window")
     return args
 
 

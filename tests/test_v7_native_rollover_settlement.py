@@ -275,3 +275,16 @@ def test_settlement_writer_links_actual_position_and_supports_payout_vectors(tmp
         assert row.metadata['included_position_ids']==['native-position:m1:yes']
         assert row.metadata['crypto_context']=={'asset':'ETH','horizon':'D1'}
         assert row.metadata['settlement_payouts']==payouts
+
+
+def test_paper_size_increase_preserves_total_and_market_risk_caps() -> None:
+    policy = json.loads((ROOT / "config/v7_native_risk_policy.json").read_text())
+    assert policy["paper_only"] is True
+    assert policy["authenticated_execution"] is False
+    assert policy["real_order_submission"] is False
+    assert policy["max_total_exposure_microdollars"] == 1_000_000_000
+    assert policy["max_market_exposure_microdollars"] == 100_000_000
+    assert policy["max_single_order_microdollars"] == 20_000_000
+    assert policy["maximum_paper_candidate_maker_share_cap_microunits"] == 5_000_000
+    engine = json.loads((ROOT / "config/v7_crypto_settlement_engine.json").read_text())
+    assert engine["execution_alpha"]["comparison_size_shares"] == 20.0

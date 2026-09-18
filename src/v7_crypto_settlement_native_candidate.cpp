@@ -96,7 +96,10 @@ struct Options {
     std::int64_t close_wall_ns = 0;
     std::int32_t tick_size_e4 = 100;
     std::int64_t min_order_microunits = 5'000'000;
-    std::int64_t maker_share_cap_microunits = 1'000'000; // Baseline cap stays unchanged.
+    std::int64_t maker_share_cap_microunits = 1'000'000; // Manager may lift only to the venue minimum within PAPER cap.
+    std::int64_t target_quantity_microunits = 20'000'000;
+    std::int64_t minimum_tte_ns = 5'000'000'000LL;
+    std::int64_t maximum_tte_ns = 120'000'000'000LL;
     std::string risk_policy_sha256;
     CapitalLimits capital_limits{};
     double taker_fee_rate = 0.0;
@@ -133,11 +136,14 @@ Options parse_options(int argc, char** argv) {
         else if (arg == "--tick-size-e4") out.tick_size_e4 = bounded_integer<std::int32_t>(next(), 1, 5000);
         else if (arg == "--min-order-microunits") out.min_order_microunits = bounded_integer<std::int64_t>(next(), 1, 1'000'000'000);
         else if (arg == "--maker-share-cap-microunits") out.maker_share_cap_microunits = bounded_integer<std::int64_t>(next(), 1, 5'000'000);
+        else if (arg == "--target-quantity-microunits") out.target_quantity_microunits = bounded_integer<std::int64_t>(next(), 1, 1'000'000'000);
+        else if (arg == "--minimum-tte-ns") out.minimum_tte_ns = bounded_integer<std::int64_t>(next(), 1, 86'400'000'000'000LL);
+        else if (arg == "--maximum-tte-ns") out.maximum_tte_ns = bounded_integer<std::int64_t>(next(), 1, 86'400'000'000'000LL);
         else if (arg == "--risk-policy-sha256") out.risk_policy_sha256 = next();
         else if (arg == "--sleeve-budget-microdollars") out.capital_limits.sleeve_budget_microdollars = bounded_integer<std::int64_t>(next(), 1, 1'000'000'000);
         else if (arg == "--max-total-exposure-microdollars") out.capital_limits.max_total_exposure_microdollars = bounded_integer<std::int64_t>(next(), 1, 1'000'000'000);
         else if (arg == "--max-market-exposure-microdollars") out.capital_limits.max_market_exposure_microdollars = bounded_integer<std::int64_t>(next(), 1, 100'000'000);
-        else if (arg == "--max-single-order-microdollars") out.capital_limits.max_single_order_microdollars = bounded_integer<std::int64_t>(next(), 1, 10'000'000);
+        else if (arg == "--max-single-order-microdollars") out.capital_limits.max_single_order_microdollars = bounded_integer<std::int64_t>(next(), 1, 100'000'000);
         else if (arg == "--taker-fee-rate") out.taker_fee_rate = bounded_double(next(), 0.0, 1.0);
         else if (arg == "--taker-fee-exponent") out.taker_fee_exponent = bounded_double(next(), 0.0, 10.0);
         else if (arg == "--duration-seconds") out.duration_seconds = bounded_integer<int>(next(), 0, 86'400);
@@ -185,7 +191,9 @@ int main(int argc, char** argv) {
             || !exact_sha(options.model_sha) || options.run_id.empty()
             || options.server_id.empty() || options.market_id.empty()
             || options.event_id.empty() || options.fee_source.empty()
-            || options.close_wall_ns <= wall_now_ns()) {
+            || options.close_wall_ns <= wall_now_ns()
+            || options.target_quantity_microunits < options.min_order_microunits
+            || options.minimum_tte_ns > options.maximum_tte_ns) {
             throw std::invalid_argument("live PAPER runtime identity required");
         }
 
@@ -265,6 +273,9 @@ int main(int argc, char** argv) {
         // Frozen LEAD_LAG_TAKER_V1 uses maximum_signal_age_ms=5000; the source
         // signal's shorter technical valid flag is not an economic expiry.
         decision_policy.require_signal_valid = 0;
+        decision_policy.minimum_tte_ns = options.minimum_tte_ns;
+        decision_policy.maximum_tte_ns = options.maximum_tte_ns;
+        decision_policy.target_quantity_microunits = options.target_quantity_microunits;
         NativeCryptoDecisionLane lane(decision_policy);
         CapitalLimits limits = options.capital_limits;
         if (!options.observation_only && (!limits.valid() || options.risk_policy_sha256.size() != 64
@@ -309,6 +320,9 @@ int main(int argc, char** argv) {
         }
         maker::MakerInstrumentLane yes_maker(+1), no_maker(-1);
         maker::MakerModelSnapshot maker_model;
+        const double venue_min_shares =
+            static_cast<double>(options.min_order_microunits) / 1'000'000.0;
+        maker_model.base_quote_shares = std::max(maker_model.base_quote_shares, venue_min_shares);
         if (!maker_model.valid()) throw std::runtime_error("invalid native maker model snapshot");
         evidence_config.maker_artifact_sha256 = maker_model.execution_artifact_sha256.data();
         evidence_config.maker_policy_sha256 = maker_model.exploration_policy_sha256.data();
