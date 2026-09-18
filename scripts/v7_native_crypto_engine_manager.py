@@ -13,7 +13,9 @@ import json
 import math
 import os
 import signal
+import shutil
 import subprocess
+import sys
 import time
 import urllib.parse
 import urllib.request
@@ -194,6 +196,8 @@ class Manager:
             "market_id": str((market or {}).get("market_id") or ""),
             "window_start_unix": int((market or {}).get("window_start_unix") or 0),
             "hot_path_executable": str(self.args.engine),
+            "hot_cpuset": str(os.environ.get("PM_V7_HOT_CPUSET") or ""),
+            "hot_nice": int(os.environ.get("PM_V7_HOT_NICE") or 0),
         })
 
     def settle(self, market_id: str) -> bool:
@@ -255,9 +259,28 @@ class Manager:
             "--duration-seconds", "0",
         ]
         self.args.engine_log.parent.mkdir(parents=True, exist_ok=True)
+        launch_command = list(command)
+        hot_cpuset = str(os.environ.get("PM_V7_HOT_CPUSET") or "").strip()
+        hot_nice_raw = str(os.environ.get("PM_V7_HOT_NICE") or "0").strip()
+        try:
+            hot_nice = int(hot_nice_raw)
+        except ValueError as exc:
+            raise RuntimeError("native_hot_nice_invalid") from exc
+        if hot_nice < 0 or hot_nice > 19:
+            raise RuntimeError("native_hot_nice_invalid")
+        if os.name == "posix" and sys.platform.startswith("linux") and hot_cpuset:
+            taskset = shutil.which("taskset")
+            if not taskset:
+                raise RuntimeError("native_hot_taskset_missing")
+            launch_command = [taskset, "-c", hot_cpuset] + launch_command
+        if hot_nice > 0:
+            nice = shutil.which("nice")
+            if not nice:
+                raise RuntimeError("native_hot_nice_binary_missing")
+            launch_command = [nice, "-n", str(hot_nice)] + launch_command
         with self.args.engine_log.open("ab", buffering=0) as log:
             self.engine = subprocess.Popen(
-                command,
+                launch_command,
                 cwd=self.args.repository_root,
                 stdout=log,
                 stderr=subprocess.STDOUT,
