@@ -357,5 +357,203 @@ def test_async_settlement_detaches_context_after_canonical_commit(monkeypatch, t
     assert worker.state == "SETTLING"
     assert worker.log_handle.closed
     assert "BTC:M5" not in owner.workers
-    assert owner.pending_settlements["m1"] is worker
-    assert worker.settlement is settlement
+    task = owner.pending_settlements["m1"]
+    assert task.market_id == "m1"
+    assert task.context == "BTC:M5"
+    assert task.attempts == 1
+    assert task.process is settlement
+    assert worker.settlement is None
+
+
+def test_async_recovery_does_not_block_new_workers_on_unresolved_markets(monkeypatch, tmp_path) -> None:
+    import types
+    import v7_native_crypto_engine_manager as manager
+
+    class Process:
+        pid = 4321
+        def poll(self):
+            return None
+
+    owner = manager.Manager.__new__(manager.Manager)
+    owner.run_root = tmp_path
+    owner.args = types.SimpleNamespace(
+        model_sha=SHA, run_id="run", repository_root=ROOT,
+        asynchronous_settlement=True, python="python3",
+        settler=ROOT / "scripts/v7_native_paper_settlement.py",
+        settlement_timeout_seconds=600,
+    )
+    owner.workers = {}
+    owner.pending_settlements = {}
+    owner.completed_market_ids = set()
+    monkeypatch.setattr(manager, "open_native_orders", lambda *a, **k: {})
+    monkeypatch.setattr(
+        manager, "unsettled_native_markets",
+        lambda *a, **k: ["m-m5", "m-h1", "m-d1"],
+    )
+    processes = iter([Process(), Process(), Process()])
+    monkeypatch.setattr(manager.subprocess, "Popen", lambda *a, **k: next(processes))
+
+    assert owner.recover() == 0
+    assert set(owner.pending_settlements) == {"m-m5", "m-h1", "m-d1"}
+    assert all(task.context == "RECOVERY" for task in owner.pending_settlements.values())
+
+
+def test_resolution_timeout_is_retried_without_global_failure(monkeypatch, tmp_path) -> None:
+    import types
+    import v7_native_crypto_engine_manager as manager
+
+    class Done:
+        pid = 1
+        def poll(self):
+            return 79
+
+    class Running:
+        pid = 2
+        def poll(self):
+            return None
+
+    owner = manager.Manager.__new__(manager.Manager)
+    owner.run_root = tmp_path
+    owner.args = types.SimpleNamespace(
+        model_sha=SHA, repository_root=ROOT, python="python3",
+        settler=ROOT / "scripts/v7_native_paper_settlement.py",
+        settlement_timeout_seconds=600,
+    )
+    owner.pending_settlements = {
+        "m1": manager.PendingSettlement("m1", Done(), "SOL:D1", 1)
+    }
+    owner.completed_market_ids = set()
+    status = tmp_path / "control/native_paper_settlement/m1.json"
+    status.parent.mkdir(parents=True)
+    status.write_text(json.dumps({
+        "schema": "polymarket_v7_native_paper_settlement_status_v1",
+        "model_sha": SHA,
+        "market_id": "m1",
+        "paper_only": True,
+        "authenticated_execution": False,
+        "real_order_submission": False,
+        "state": "RESOLUTION_TIMEOUT",
+    }))
+    monkeypatch.setattr(manager.subprocess, "Popen", lambda *a, **k: Running())
+
+    assert owner._reap_pending_settlements() is None
+    task = owner.pending_settlements["m1"]
+    assert task.attempts == 2
+    assert task.context == "SOL:D1"
+    assert isinstance(task.process, Running)
+
+
+def test_nonretryable_settlement_error_remains_fail_closed(tmp_path) -> None:
+    import types
+    import v7_native_crypto_engine_manager as manager
+
+    class Done:
+        pid = 1
+        def poll(self):
+            return 75
+
+    owner = manager.Manager.__new__(manager.Manager)
+    owner.run_root = tmp_path
+    owner.args = types.SimpleNamespace(model_sha=SHA)
+    owner.pending_settlements = {
+        "m1": manager.PendingSettlement("m1", Done(), "BTC:M5", 1)
+    }
+    owner.completed_market_ids = set()
+
+    assert owner._reap_pending_settlements() == ("m1", 75)
+
+def test_async_recovery_queues_unresolved_markets_without_blocking(monkeypatch, tmp_path) -> None:
+    import types
+    import v7_native_crypto_engine_manager as manager
+
+    owner = manager.Manager.__new__(manager.Manager)
+    owner.run_root = tmp_path
+    owner.args = types.SimpleNamespace(
+        model_sha=SHA, asynchronous_settlement=True,
+    )
+    owner.pending_settlements = {}
+    owner.completed_market_ids = set()
+    monkeypatch.setattr(manager, "open_native_orders", lambda *_: {})
+    monkeypatch.setattr(
+        manager, "unsettled_native_markets", lambda *_: ["m-d1", "m-h4"]
+    )
+    started = []
+    monkeypatch.setattr(
+        owner, "_start_pending_settlement",
+        lambda market_id, **kwargs: started.append((market_id, kwargs)),
+    )
+
+    assert owner.recover() == 0
+    assert [market for market, _ in started] == ["m-d1", "m-h4"]
+
+
+def test_resolution_timeout_is_retried_not_promoted_to_global_failure(monkeypatch) -> None:
+    import v7_native_crypto_engine_manager as manager
+
+    class Process:
+        def __init__(self, rc):
+            self.rc = rc
+        def poll(self):
+            return self.rc
+
+    owner = manager.Manager.__new__(manager.Manager)
+    owner.pending_settlements = {
+        "m-d1": manager.PendingSettlement(
+            market_id="m-d1", process=Process(79), context="SOL:D1", attempts=3
+        )
+    }
+    owner.completed_market_ids = set()
+    monkeypatch.setattr(owner, "_retryable_settlement_timeout", lambda market, rc: True)
+    restarted = []
+    monkeypatch.setattr(
+        owner, "_start_pending_settlement",
+        lambda market_id, **kwargs: restarted.append((market_id, kwargs)),
+    )
+
+    assert owner._reap_pending_settlements() is None
+    assert restarted == [("m-d1", {"context": "SOL:D1", "attempts": 4})]
+    assert "m-d1" not in owner.pending_settlements
+
+
+def test_nonretryable_settlement_failure_remains_fail_closed() -> None:
+    import v7_native_crypto_engine_manager as manager
+
+    class Process:
+        def poll(self):
+            return 75
+
+    owner = manager.Manager.__new__(manager.Manager)
+    owner.pending_settlements = {
+        "m1": manager.PendingSettlement(market_id="m1", process=Process())
+    }
+    owner.completed_market_ids = set()
+    owner._retryable_settlement_timeout = lambda market, rc: False
+    assert owner._reap_pending_settlements() == ("m1", 75)
+
+
+def test_settlement_summary_separates_retryable_timeout_from_blocker(tmp_path) -> None:
+    import types
+    import v7_native_crypto_engine_manager as manager
+
+    owner = manager.Manager.__new__(manager.Manager)
+    owner.run_root = tmp_path
+    owner.args = types.SimpleNamespace(model_sha=SHA)
+    directory = tmp_path / "control" / "native_paper_settlement"
+    directory.mkdir(parents=True)
+    common = {
+        "schema": "polymarket_v7_native_paper_settlement_status_v1",
+        "paper_only": True,
+        "authenticated_execution": False,
+        "real_order_submission": False,
+        "model_sha": SHA,
+    }
+    (directory / "retry.json").write_text(json.dumps({
+        **common, "market_id": "m-retry", "state": "RESOLUTION_TIMEOUT",
+    }) + "\n")
+    (directory / "blocked.json").write_text(json.dumps({
+        **common, "market_id": "m-blocked", "state": "LEDGER_APPEND_TIMEOUT",
+    }) + "\n")
+
+    summary = owner._aggregate_settlements()
+    assert summary["retryable_timeout_count"] == 1
+    assert summary["blocked_count"] == 1
