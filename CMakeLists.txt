@@ -193,6 +193,15 @@ target_link_libraries(polymarket_v7_crypto_settlement_native_candidate PRIVATE
 target_compile_options(polymarket_v7_crypto_settlement_native_candidate PRIVATE
   -Wall -Wextra -Wpedantic)
 
+# Canonical London PAPER hot-path binary. The candidate target remains only for
+# parity/regression tests; the runtime bundle ships this explicit production name.
+add_executable(polymarket_v7_crypto_settlement_engine
+  src/v7_crypto_settlement_native_candidate.cpp)
+target_link_libraries(polymarket_v7_crypto_settlement_engine PRIVATE
+  pm_v7_external pm_v7_hft pm_fast_arb)
+target_compile_options(polymarket_v7_crypto_settlement_engine PRIVATE
+  -Wall -Wextra -Wpedantic)
+
 # Canonical London PAPER executable. The candidate target remains for explicit
 # migration tests; production bundles ship this exact native target.
 add_executable(polymarket_v7_crypto_settlement_engine
