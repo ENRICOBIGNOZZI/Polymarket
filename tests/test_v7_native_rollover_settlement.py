@@ -292,28 +292,40 @@ def test_manager_cli_defaults_match_frequency_and_size_policy(monkeypatch) -> No
         "--engine-log", "/tmp/engine.log",
         "--allocation", "/tmp/allocation.json",
         "--market-registry", "/tmp/registry.json",
+        "--legacy-claims", "/tmp/legacy.json",
     ])
     args = manager.parse_args()
     assert args.min_order_microunits == 5_000_000
-    assert args.target_quantity_microunits == 20_000_000
-    assert args.minimum_tte_ns == 5_000_000_000
+    assert args.target_quantity_microunits == 5_000_000
+    assert args.minimum_tte_ns == 105_000_000_000
     assert args.maximum_tte_ns == 120_000_000_000
-    assert args.maker_share_cap_microunits == 5_000_000
+    assert args.maker_share_cap_microunits == 1_000_000
 
 
 def test_clob_venue_minimum_is_loaded_and_fail_closed(monkeypatch) -> None:
     import v7_native_crypto_engine_manager as manager
-    monkeypatch.setattr(manager, "public_json", lambda _url: {"min_order_size": "5"})
-    assert manager.venue_minimum_microunits("token") == 5_000_000
-    monkeypatch.setattr(manager, "public_json", lambda _url: {"min_order_size": "7.5"})
-    assert manager.venue_minimum_microunits("token") == 7_500_000
-    monkeypatch.setattr(manager, "public_json", lambda _url: {"min_order_size": None})
+    manager.venue_metadata.cache_clear()
+    monkeypatch.setattr(
+        manager, "public_json",
+        lambda _url: {"tick_size": "0.01", "min_order_size": "5"},
+    )
+    assert manager.venue_minimum_microunits("token-5") == 5_000_000
+    monkeypatch.setattr(
+        manager, "public_json",
+        lambda _url: {"tick_size": "0.01", "min_order_size": "7.5"},
+    )
+    assert manager.venue_minimum_microunits("token-7") == 7_500_000
+    monkeypatch.setattr(
+        manager, "public_json",
+        lambda _url: {"tick_size": "0.01", "min_order_size": None},
+    )
     try:
-        manager.venue_minimum_microunits("token")
+        manager.venue_minimum_microunits("token-invalid")
     except RuntimeError:
         pass
     else:
         raise AssertionError("invalid CLOB venue minimum accepted")
+    manager.venue_metadata.cache_clear()
 
 
 def test_async_settlement_detaches_context_after_canonical_commit(monkeypatch, tmp_path) -> None:
@@ -673,6 +685,24 @@ def test_native_carryover_wrong_target_sha_fails_closed(tmp_path) -> None:
         assert str(exc)=='native_carryover_invalid'
     else:
         raise AssertionError('wrong-SHA carryover accepted')
+
+
+def test_venue_metadata_uses_one_book_fetch_for_tick_and_minimum(monkeypatch) -> None:
+    import v7_native_crypto_engine_manager as manager
+
+    calls = []
+    manager.venue_metadata.cache_clear()
+    def fake(url):
+        calls.append(url)
+        return {"tick_size": "0.01", "min_order_size": "5"}
+    monkeypatch.setattr(manager, "public_json", fake)
+    assert manager.tick_size_e4("token-cache-test") == 100
+    assert manager.venue_minimum_microunits("token-cache-test") == 5_000_000
+    assert len(calls) == 1
+    assert "/book?" in calls[0]
+    manager.venue_metadata.cache_clear()
+
+
 def test_native_evidence_aggregate_includes_decision_capture_health(tmp_path) -> None:
     import types
     import v7_native_crypto_engine_manager as manager
