@@ -32,11 +32,11 @@
     ],
     "authenticated_execution": false,
     "cancel_activation": "CURRENT_RESEARCH_RULE_HASH_PLUS_CAUSAL_LIVE_SIGNAL",
-    "comparison_size_shares": 5.0,
-    "make_proposal_owner": "V7_CRYPTO_EXECUTION_ALPHA",
+    "comparison_size_shares": 5,
+    "make_proposal_owner": "V7_NATIVE_CRYPTO_SETTLEMENT_ENGINE",
     "maker_immature_fill_lower": "CURRENT_RUN_POSTERIOR_LOWER_90_AFTER_20_ORDERS_2_CLUSTERS",
     "market_selection": {
-      "minimum_expected_wealth_change": 0.0,
+      "minimum_expected_wealth_change": 0,
       "paper_shadow_only": true,
       "top_fraction": 0.2
     },
@@ -45,7 +45,7 @@
     "retroactive_attribution_imputation": false,
     "schema": "polymarket_v7_crypto_execution_alpha_policy_v1",
     "selection_objective": "MAX_CONSERVATIVE_EXPECTED_CHANGE_IN_ACCOUNT_WEALTH",
-    "take_proposal_owner": "EXISTING_ARRIVAL_REVALIDATED_EXTERNAL_FAIR_ROUTER"
+    "take_proposal_owner": "V7_NATIVE_CRYPTO_SETTLEMENT_ENGINE"
   },
   "external_update_policy": {
     "oracle_or_external_update_can_cancel_without_polymarket_book_event": true,
@@ -82,7 +82,7 @@
     "settlement_source": "REGISTRY_VERIFIED_CHAINLINK_TWAP_60S",
     "settlement_source_may_be_replaced_by_predictor": false
   },
-  "global_portfolio_coordinator": "V7_GLOBAL_PORTFOLIO_COORDINATOR",
+  "global_portfolio_coordinator": "V7_NATIVE_CRYPTO_SETTLEMENT_ENGINE",
   "horizons": [
     {
       "authority": "SHADOW",
@@ -168,11 +168,11 @@
   "risk_actions_preempt_alpha": true,
   "schema": "polymarket_v7_crypto_settlement_engine_v1",
   "shared_owners": {
-    "capital": "V7_CANONICAL_ALLOCATOR",
-    "inventory": "V7_CANONICAL_INVENTORY",
+    "capital": "V7_NATIVE_CRYPTO_SETTLEMENT_ENGINE",
+    "inventory": "V7_NATIVE_CRYPTO_SETTLEMENT_ENGINE",
     "ledger": "V7_CANONICAL_LEDGER",
-    "oms": "V7_CANONICAL_OMS",
-    "risk": "V7_CANONICAL_RISK"
+    "oms": "V7_NATIVE_CRYPTO_SETTLEMENT_ENGINE",
+    "risk": "V7_NATIVE_CRYPTO_SETTLEMENT_ENGINE"
   },
   "version": 1
 }
