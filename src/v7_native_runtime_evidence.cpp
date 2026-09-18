@@ -166,7 +166,7 @@ struct NativeRuntimeEvidenceWriter::Impl {
             {"authenticated_execution", false},
             {"record_id", config.run_id + ":native:" + std::to_string(sequence)},
             {"recorded_ts_ms", recorded_ms},
-            {"model_version", "native-paper-v1"},
+            {"model_version", "native-paper-engine"},
             {"order_id", order_id},
             {"market_id", config.market_id},
             {"event_id", config.event_id},
