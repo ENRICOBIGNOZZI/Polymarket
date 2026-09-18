@@ -17,8 +17,8 @@ RUN_ROOT="${PM_V7_RUN_ROOT:-runs/paper_v7_live}"
 RECORDER="${PM_TRADE_RECORDER:-build/polymarket_v7_trade_recorder}"
 MARKOUT_OBSERVER="${PM_V7_MAKER_MARKOUT_OBSERVER:-build/polymarket_v7_maker_markout_observer}"
 FILLABILITY_OBSERVER="${PM_V7_MAKER_FILLABILITY_OBSERVER:-build/polymarket_v7_maker_fillability_observer}"
-AUTHORIZED_MAKER_EXECUTOR="${PM_V7_AUTHORIZED_MAKER_EXECUTOR:-build/polymarket_v7_authorized_maker_paper_executor}"
 EXTERNAL_VENUE_RUNTIME="${PM_V7_EXTERNAL_VENUE_RUNTIME:-build/polymarket_v7_external_venue_runtime}"
+CRYPTO_SETTLEMENT_ENGINE="${PM_V7_CRYPTO_SETTLEMENT_ENGINE:-build/polymarket_v7_crypto_settlement_engine}"
 CI_REPOSITORY="${PM_V7_CI_REPOSITORY:-ENRICOBIGNOZZI/Polymarket}"
 SHA="${PM_V7_MODEL_SHA:-$(cat deploy/london/runtime_sha 2>/dev/null || git rev-parse HEAD)}"
 [[ "$SHA" =~ ^[0-9a-f]{40}$ ]] || { echo "exact 40-character runtime SHA required" >&2; exit 78; }
@@ -70,14 +70,6 @@ python3 scripts/v7_exact_sha_ci_gate.py \
   --repository "$CI_REPOSITORY" --sha "$SHA" \
   --output "$CONTROL/exact_sha_ci_receipt.json"
 EXACT_SHA_CI_GREEN=true
-
-# Frozen lead/lag forward protocol is validated before any worker starts.
-PYTHONPATH="$ROOT/scripts" python3 - "$LEAD_LAG_TAKER_CONFIG" <<'PY'
-import json,sys
-from v7_lead_lag_taker_runtime import validate_config
-value=json.load(open(sys.argv[1],encoding="utf-8"))
-validate_config(value)
-PY
 
 # Source registration is an authority boundary, not a best-effort manifest.
 # Collectors may only publish information; this registry cannot grant OMS,
@@ -145,18 +137,9 @@ assert int(maker.get("market_selection",{}).get("max_active_markets",0)) == max_
 observation_fractions=v7.get("component_observation_budget_fractions") or {}
 expected_maker_observation_budget=float(cfg.get("starting_capital",0))*float(observation_fractions.get("professional_maker",0))
 assert abs(float(maker.get("market_selection",{}).get("observation_budget_usd",0))-expected_maker_observation_budget) <= 1e-9
-assert external.get("execution_authority") == "SHADOW_ZERO_AUTHORITY"
 assert external.get("paper_only") is True
 assert external.get("authenticated_execution") is False
 assert external.get("real_order_submission") is False
-assert external.get("taker",{}).get("authority") == "SHADOW"
-assert external.get("taker",{}).get("enabled_for_execution") is False
-assert external.get("taker",{}).get("counterfactual_enabled") is True
-assert external.get("fair_value",{}).get("default_model_mature") is False
-assert external.get("maker",{}).get("external_fair_enabled_for_live_quotes") is False
-assert external.get("maker",{}).get("economic_maturity_may_block_paper") is True
-assert external.get("gate_classes",{}).get("A_HARD_CORRECTNESS_SAFETY",{}).get("may_block_paper") is True
-assert external.get("gate_classes",{}).get("B_ECONOMIC_MATURITY",{}).get("may_block_paper") is True
 assert observer_arena >= 16*1024*1024
 assert fillability_arena >= 16*1024*1024
 assert observer_arena + fillability_arena <= total_budget
@@ -297,7 +280,7 @@ v7_exec_class COLLECTOR python3 scripts/v7_rtds_external_fair_monitor.py \
   >> "$RUN_ROOT/external_fair/rtds_monitor.log" 2>&1 &
 v7_register_child "$!"
 
-v7_exec_class HOT_PATH "$EXTERNAL_VENUE_RUNTIME" \
+v7_exec_class COLLECTOR "$EXTERNAL_VENUE_RUNTIME" \
   --output "$RUN_ROOT/external_fair/external_venues.json" \
   --tape "$RUN_ROOT/external_fair/tapes/external_venues.${SHA}.$$.bin" --model-sha "$SHA" \
   --normalized-event-tape-dir "$RUN_ROOT/external_fair/normalized_events" \
@@ -329,10 +312,6 @@ v7_exec_class COLLECTOR python3 scripts/v7_coinbase_l2_rest_collector.py \
   >> "$RUN_ROOT/external_fair/coinbase_l2_rest.log" 2>&1 &
 v7_register_child "$!"
 
-v7_exec_class HOT_PATH python3 scripts/v7_external_fair_paper_router.py \
-  --run-root "$RUN_ROOT" --model-sha "$SHA" --config "$EXTERNAL_FAIR_POLICY" --interval 0.25 \
-  >> "$RUN_ROOT/external_fair/paper_router.log" 2>&1 &
-v7_register_child "$!"
 
 # Continuous receive-time PM book evidence for future crypto research. This is
 # a collector only; model fitting and retrospective shadows stay off London.
@@ -343,17 +322,6 @@ v7_exec_class COLLECTOR "$FILLABILITY_OBSERVER" \
   >> "$RUN_ROOT/research/repricing_book_observer.log" 2>&1 &
 v7_register_child "$!"
 
-v7_exec_class COLLECTOR python3 scripts/v7_external_lead_lag_collector.py \
-  --fair-status "$RUN_ROOT/external_fair/status.json" \
-  --router-status "$RUN_ROOT/external_fair/paper_router_status.json" \
-  --output "$DURABLE_ROOT/external_fair/pm_lead_lag.jsonl" \
-  --status "$RUN_ROOT/external_fair/lead_lag_collector_status.json" \
-  --book-tape "$RUN_ROOT/research/repricing_book/book_observations/current.jsonl" \
-  --book-status "$RUN_ROOT/research/repricing_book/fillability_ws_status.json" \
-  --profit-root "$DURABLE_ROOT/profit_experiments/$SHA" --run-root "$RUN_ROOT" \
-  --model-sha "$SHA" --interval-ms 25 \
-  >> "$RUN_ROOT/external_fair/lead_lag_collector.log" 2>&1 &
-v7_register_child "$!"
 
 v7_exec_class COLLECTOR python3 scripts/v7_external_cancel_signal_journal.py \
   --signal "$RUN_ROOT/external_fair/external_cancel_signal.json" \
@@ -372,52 +340,31 @@ RUN_ID="${PM_V7_RUN_ID:-${SHA:0:12}-$(date +%s)-$$}"
 LEDGER_ID="${PM_V7_LEDGER_ID:-$RUN_ID:execution}"
 SERVER_ID="${PM_V7_SERVER_ID:-$(hostname -s 2>/dev/null || hostname)}"
 
-paper_router_ready() {
-  python3 - "$RUN_ROOT/external_fair/status.json" "$RUN_ROOT/external_fair/paper_router_status.json" "$SHA" <<'PY'
-import json,sys,time
+native_engine_ready() {
+  python3 - "$CONTROL/native_engine_manager_status.json" "$SHA" <<'PY' >/dev/null 2>&1
+import json,os,sys,time
 try:
-    status=json.load(open(sys.argv[1], encoding="utf-8"))
-    value=json.load(open(sys.argv[2], encoding="utf-8"))
-except (OSError, json.JSONDecodeError):
+    value=json.load(open(sys.argv[1],encoding="utf-8"))
+except (OSError,json.JSONDecodeError):
     raise SystemExit(1)
-contract=status.get("contract") if isinstance(status.get("contract"),dict) else {}
-reference=status.get("settlement_reference") if isinstance(status.get("settlement_reference"),dict) else {}
-fair=status.get("fair") if isinstance(status.get("fair"),dict) else {}
-oracle=status.get("oracle") if isinstance(status.get("oracle"),dict) else {}
-external=status.get("external") if isinstance(status.get("external"),dict) else {}
-decision=value.get("last_decision") if isinstance(value.get("last_decision"),dict) else {}
-ok=(status.get("schema")=="polymarket_v7_external_fair_status_v1"
-    and status.get("code_sha")==sys.argv[3]
-    and status.get("state")=="FULL_FAIR_SHADOW_OPERATIONAL"
-    and status.get("paper_only") is True
-    and status.get("authenticated_execution") is False
-    and status.get("real_order_submission") is False
-    and not status.get("blockers")
-    and int(status.get("external_fair_required_markets") or 0)>=1
-    and contract.get("verified") is True
-    and contract.get("rules_hash_recognized") is True
-    and reference.get("valid") is True
-    and fair.get("valid") is True
-    and oracle.get("healthy") is True
-    and external.get("healthy") is True
-    and value.get("schema")=="polymarket_v7_crypto_settlement_engine_status_v1"
-    and value.get("code_sha")==sys.argv[3]
+try:
+    pid=int(value.get("engine_pid") or 0)
+    age=int(time.time()*1000)-int(value.get("timestamp_ms") or 0)
+except (TypeError,ValueError,OverflowError):
+    raise SystemExit(1)
+ok=(value.get("schema")=="polymarket_v7_native_engine_manager_status_v1"
+    and value.get("model_sha")==sys.argv[2]
     and value.get("state")=="RUNNING"
     and value.get("paper_only") is True
     and value.get("authenticated_execution") is False
     and value.get("real_order_submission") is False
-    and value.get("execution_authority")=="OPPORTUNITY_PROPOSAL_ONLY"
-    and value.get("capital_authority") is False
-    and value.get("oms_authority") is False
-    and value.get("inventory_authority") is False
-    and value.get("ledger_writer_authority") is False
-    and value.get("order_submission_enabled") is False
-    and value.get("counterfactual_collection_enabled") is True
-    and value.get("killed") is False
+    and value.get("real_capital_at_risk") is False
+    and value.get("single_native_hot_path") is True
     and not value.get("blocker")
-    and int(value.get("book_requests") or 0)>0
-    and int(decision.get("books") or 0)==2
-    and int(time.time())-int(value.get("timestamp") or 0)<=5)
+    and pid>0 and 0<=age<=15000)
+if ok:
+    try: os.kill(pid,0)
+    except OSError: ok=False
 raise SystemExit(0 if ok else 1)
 PY
 }
@@ -427,7 +374,7 @@ write_runtime_status() {
   local killed="${2:-false}"
   local now p0_ready=false readiness="CORE_RUNTIME_ONLY" external_ready=false
   now="$(date +%s)"
-  if [[ "$state" == "running" ]] && paper_router_ready; then
+  if [[ "$state" == "running" ]] && native_engine_ready; then
     p0_ready=true
     readiness="FULL_PAPER_RUNTIME"
     external_ready=true
@@ -441,7 +388,7 @@ write_runtime_status() {
     model_source="cold_start_policy"
   fi
   local tmp="$CONTROL/runtime_status.json.tmp.$$"
-  printf '{"schema":"polymarket_v7_runtime_status_v3","timestamp":%s,"version":7,"paper_only":true,"authenticated_execution":false,"real_order_submission":false,"real_capital_at_risk":false,"model_sha":"%s","config_hash":"%s","policy_hash":"%s","model_hash":"%s","model_identity_source":"%s","run_id":"%s","ledger_id":"%s","server_id":"%s","pid":%s,"state":"%s","killed":%s,"economic_system":"V7_UNIFIED","economic_engines":["CRYPTO_SETTLEMENT_ENGINE"],"global_portfolio_coordinator":"V7_GLOBAL_PORTFOLIO_COORDINATOR","execution_authority":"V7_CANONICAL_CHAIN","single_execution_owner":true,"canonical_state_reconciled":true,"exact_sha_ci_green":%s,"p0_authority_configured":["CRYPTO_SETTLEMENT_ENGINE"],"p0_full_stack_ready":%s,"readiness":"%s","external_fair_runtime_ready":%s,"economic_new_risk_ready":false,"economic_decision_state":"SAFE_ACTIONS_ONLY","authorized_alpha_actions":[],"safe_actions":["CANCEL","WITHDRAW","NOTHING"]}\n' \
+  printf '{"schema":"polymarket_v7_runtime_status_v3","timestamp":%s,"version":7,"paper_only":true,"authenticated_execution":false,"real_order_submission":false,"real_capital_at_risk":false,"model_sha":"%s","config_hash":"%s","policy_hash":"%s","model_hash":"%s","model_identity_source":"%s","run_id":"%s","ledger_id":"%s","server_id":"%s","pid":%s,"state":"%s","killed":%s,"economic_system":"V7_UNIFIED","economic_engines":["CRYPTO_SETTLEMENT_ENGINE"],"global_portfolio_coordinator":"V7_NATIVE_CRYPTO_SETTLEMENT_ENGINE","execution_authority":"V7_NATIVE_CRYPTO_SETTLEMENT_ENGINE","single_execution_owner":true,"canonical_state_reconciled":true,"exact_sha_ci_green":%s,"p0_authority_configured":["CRYPTO_SETTLEMENT_ENGINE"],"p0_full_stack_ready":%s,"readiness":"%s","external_fair_runtime_ready":%s,"economic_new_risk_ready":false,"economic_decision_state":"SAFE_ACTIONS_ONLY","authorized_alpha_actions":[],"safe_actions":["CANCEL","WITHDRAW","NOTHING"]}\n' \
     "$now" "$SHA" "$CONFIG_HASH" "$POLICY_HASH" "$model_hash" "$model_source" "$RUN_ID" "$LEDGER_ID" "$SERVER_ID" "$$" "$state" "$killed" "$EXACT_SHA_CI_GREEN" "$p0_ready" "$readiness" "$external_ready" > "$tmp"
   mv "$tmp" "$CONTROL/runtime_status.json"
 }
@@ -500,8 +447,8 @@ if [[ ! -x "$FILLABILITY_OBSERVER" ]]; then
   echo "missing V7 maker exact-WS fillability observer executable: $FILLABILITY_OBSERVER" >&2
   exit 78
 fi
-if [[ ! -x "$AUTHORIZED_MAKER_EXECUTOR" ]]; then
-  echo "missing V7 coordinator-authorized maker PAPER executor: $AUTHORIZED_MAKER_EXECUTOR" >&2
+if [[ ! -x "$CRYPTO_SETTLEMENT_ENGINE" ]]; then
+  echo "missing canonical native V7 crypto settlement engine: $CRYPTO_SETTLEMENT_ENGINE" >&2
   exit 80
 fi
 # One canonical exhaustive metadata plane. The venue terminates pagination;
@@ -612,26 +559,25 @@ v7_register_child "$!"
 # One persistent canonical ledger router. 100ms transport cadence keeps FILL
 # evidence available before the 1s markout horizon without creating a second
 # ledger writer or repeatedly spawning Python processes.
-v7_exec_class HOT_PATH python3 scripts/v7_ledger_spool.py \
+v7_exec_class CONTROL python3 scripts/v7_ledger_spool.py \
   --run-root "$RUN_ROOT" --model-sha "$SHA" --loop --interval 0.1 \
   >> "$RUN_ROOT/ledger_router.log" 2>&1 &
 v7_register_child "$!"
 
-# The single consumer of proposals from all crypto components. Checked-in V7
-# cannot authorize new risk; the coordinator may select CANCEL/WITHDRAW or emit NOTHING.
-v7_exec_class HOT_PATH python3 scripts/v7_global_portfolio_coordinator.py \
-  --run-root "$RUN_ROOT" --loop --interval 0.1 --fast-cancel-interval 0.005 \
-  --event-log "$RUN_ROOT/global_portfolio_coordinator.events.jsonl" \
-  >> "$RUN_ROOT/global_portfolio_coordinator.log" 2>&1 &
+# Cold-plane lifecycle manager. It discovers/rotates already-registered BTC/M5
+# contracts and starts exactly one native C++ execution owner at a time. The
+# manager has no capital/risk/OMS/inventory authority itself.
+v7_exec_class CONTROL python3 scripts/v7_native_crypto_engine_manager.py \
+  --repository-root "$ROOT" --run-root "$RUN_ROOT" --model-sha "$SHA" \
+  --run-id "$RUN_ID" --server-id "$SERVER_ID" \
+  --universe "$RUN_ROOT/universe/current.json" \
+  --engine "$CRYPTO_SETTLEMENT_ENGINE" \
+  --settler "$ROOT/scripts/v7_native_paper_settlement.py" \
+  --engine-log "$RUN_ROOT/native_crypto_settlement_engine.log" \
+  >> "$RUN_ROOT/native_engine_manager.log" 2>&1 &
 v7_register_child "$!"
 
-# Frozen prospective PAPER strategy. It consumes the already-validated external
-# shock signal, asks the global coordinator for PAPER authority, revalidates
-# the current CLOB ask without chasing, and holds one position per market to settlement.
-v7_exec_class HOT_PATH python3 scripts/v7_lead_lag_taker_runtime.py \
-  --run-root "$RUN_ROOT" --model-sha "$SHA" --config "$LEAD_LAG_TAKER_CONFIG" \
-  >> "$RUN_ROOT/research/lead_lag_taker_v1.log" 2>&1 &
-v7_register_child "$!"
+
 
 # Slow-plane crypto maker selection only. It ranks the exact crypto universe
 # from canonical public-trade evidence; it never broadens discovery or owns execution.
@@ -700,14 +646,6 @@ v7_register_child "$!"
  ) >> "$RUN_ROOT/micro_maker/cohort_supervisor.log" 2>&1 &
 v7_register_child "$!"
 
-# The only executor for coordinator-authorized maker MAKE intents.  It owns no
-# decision, capital, signer, broker or ledger authority: it revalidates the
-# receipt and feeds the existing pessimistic PAPER queue engine, then writes
-# lifecycle events only into the canonical ledger spool.
-v7_exec_class HOT_PATH "$AUTHORIZED_MAKER_EXECUTOR" \
-  --run-root "$RUN_ROOT" --model-sha "$SHA" \
-  >> "$RUN_ROOT/micro_maker/authorized_make_executor.log" 2>&1 &
-v7_register_child "$!"
 
 # Canonical economics is retained as a lightweight operational reconciliation
 # surface for health/PnL truth. Forward reports, attribution, fitting, compaction
@@ -723,7 +661,7 @@ v7_register_child "$!"
   done
 ) & v7_register_child "$!"
 
-v7_assert_registered_child_count 20
+v7_assert_registered_child_count 16
 write_runtime_status running false
 
 while [[ ! -e "$KILL" ]]; do
