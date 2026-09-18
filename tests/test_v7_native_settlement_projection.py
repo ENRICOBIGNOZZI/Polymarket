@@ -139,3 +139,28 @@ def test_market_commit_barrier_waits_for_canonical_ledger(tmp_path, monkeypatch)
     assert manager.native_commit_barrier(tmp_path,SHA,'r','m',timeout=.01)
     (tmp_path/'ledger/spool/r:m:native:00000000000000000001.json').write_text('{}')
     assert not manager.native_commit_barrier(tmp_path,SHA,'r','m',timeout=.01)
+
+
+def test_half_payout_settlement_closes_both_positions_without_false_win_rate():
+    fills=[fill(),fill('f2','N',qty=3,price=.3)]
+    end=final(fills);end['metadata']['winning_token_id']=None
+    end['metadata']['settlement_payouts']={'Y':.5,'N':.5}
+    cash=sum(-f['filled_size']*f['fill_price']-f['fee'] for f in fills)
+    end['realized_cashflow']=4;end['final_pnl']=cash+4
+    views=allocate_final(end,fills)
+    assert sum(v['final_pnl'] for v in views)==pytest.approx(end['final_pnl'])
+    assert all(v['metadata']['won'] is None for v in views)
+    assert {v['position_id'] for v in views}=={f['position_id'] for f in fills}
+
+
+def test_explicit_non_btc_long_horizon_context_is_preserved(tmp_path):
+    fills=[fill()]
+    fills[0]['metadata']['crypto_context']={'asset':'ETH','horizon':'D1'}
+    end=final(fills)
+    views=allocate_final(end,fills)
+    assert views[0]['metadata']['crypto_context']=={'asset':'ETH','horizon':'D1'}
+    (tmp_path/'ledger').mkdir();(tmp_path/'ledger/execution.jsonl').write_text(''.join(json.dumps(x)+'\n' for x in [*fills,end]))
+    out=summarize_multi_crypto(tmp_path,expected_sha=SHA,portfolio={},canonical={'strategy_net_pnl':{'CRYPTO_SETTLEMENT_ENGINE':end['final_pnl']}},global_coordinator={},crypto_registry={},crypto_model_registry={},ledger_valid=True)
+    lane=next(x for x in out['lanes'] if x['asset']=='ETH' and x['horizon']=='D1')
+    assert lane['open_positions']==0 and lane['finals']==1
+    assert out['attribution']['reconciled']

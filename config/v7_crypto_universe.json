@@ -22,8 +22,8 @@
     "closed_forbidden": true,
     "accepting_orders_required": true,
     "minimum_clob_tokens": 2,
-    "minimum_liquidity_usd": 2.0,
-    "minimum_volume_24h_usd": 1.0
+    "minimum_liquidity_usd": 0.0,
+    "minimum_volume_24h_usd": 0.0
   },
   "resource_budget": {
     "hot": {

@@ -112,7 +112,7 @@ def test_config_and_horizon_separation() -> None:
     validate_registry_authority(value, registry())
     validate_live_scope(value, live_scope())
     scopes = {row["model_scope"] for row in value["horizons"]}
-    assert len(scopes) == 2
+    assert len(scopes) == 5
     five = freeze(
         value, code_sha=SHA, asset="BTC", horizon_name="M5",
         registry=registry(), live_scope=live_scope(),
@@ -125,16 +125,16 @@ def test_config_and_horizon_separation() -> None:
     assert five["latency"]["taker_arrival_p99_seconds"] == 0.075
     assert five["maker_execution"]["reach_probability_lower"] == 0.30
 
-    research = freeze(
+    eth = freeze(
         value, code_sha=SHA, asset="ETH", horizon_name="M5",
         registry=registry(), live_scope=live_scope(),
         market_registry=market_registry(), model_registry=model_registry("ETH", "M5"), latency_profile=latency(),
         maker_evidence=maker(), model_artifact=model("ETH", "M5"),
     )
-    assert research["new_risk_authorized"] is False
-    assert research["horizon_policy"]["research_only"] is True
-    assert research["horizon_policy"]["maker_enabled"] is False
-    assert research["horizon_policy"]["taker_enabled"] is False
+    assert eth["new_risk_authorized"] is True
+    assert eth["horizon_policy"]["research_only"] is False
+    assert eth["horizon_policy"]["maker_enabled"] is True
+    assert eth["horizon_policy"]["taker_enabled"] is True
 
 
 def test_missing_execution_truth_fails_closed_but_preserves_cancel_path() -> None:

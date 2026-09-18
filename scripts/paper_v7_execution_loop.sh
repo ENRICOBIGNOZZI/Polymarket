@@ -492,9 +492,10 @@ v7_exec_class CONTROL python3 scripts/v7_ledger_spool.py \
   >> "$RUN_ROOT/ledger_router.log" 2>&1 &
 v7_register_child "$!"
 
-# Cold-plane lifecycle manager. It discovers/rotates already-registered BTC/M5
-# contracts and starts exactly one native C++ execution owner at a time. The
-# manager has no capital/risk/OMS/inventory authority itself.
+# Cold-plane lifecycle manager. It discovers every registered active crypto
+# context and grants each native PAPER worker a bounded partition of the one
+# canonical CRYPTO_SETTLEMENT_ENGINE envelope. The sum of partitions may never
+# exceed the allocator-owned engine budget; real submission remains impossible.
 PM_V7_CONTROL_NICE=0 v7_exec_class CONTROL python3 scripts/v7_native_crypto_engine_manager.py \
   --repository-root "$ROOT" --run-root "$RUN_ROOT" --model-sha "$SHA" \
   --run-id "$RUN_ID" --server-id "$SERVER_ID" \

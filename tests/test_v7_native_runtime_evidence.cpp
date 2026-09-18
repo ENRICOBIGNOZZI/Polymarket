@@ -21,6 +21,8 @@ int main() {
     config.model_sha = std::string(40, 'a');
     config.run_id = "run-test";
     config.server_id = "server-test";
+    config.asset = "BTC";
+    config.horizon = "M5";
     config.market_id = "market-test";
     config.event_id = "event-test";
     config.yes_token_id = "yes-token";
@@ -157,7 +159,8 @@ int main() {
         if (entry.is_regular_file()) ++rollover_count;
     }
     assert(rollover_count == 3); // Local counter reuse must not overwrite records.
-    assert(fs::is_regular_file(root / "control" / "native_evidence_status.json"));
+    assert(fs::is_regular_file(root / "control" / "native_evidence" / "market-test.json"));
+    assert(fs::is_regular_file(root / "control" / "native_evidence" / "next-market.json"));
     fs::remove_all(root);
     std::cout << "native runtime evidence PASS\n";
     return 0;

@@ -55,12 +55,13 @@ struct NativeRuntimeEvidenceConfig {
     std::string model_sha;
     std::string run_id;
     std::string server_id;
+    std::string asset;
+    std::string horizon;
     std::string market_id;
     std::string event_id;
     std::string yes_token_id;
     std::string no_token_id;
     std::string fee_source;
-    std::string asset = "BTC", horizon = "M5";
     std::uint64_t maker_valid_cells = 0;
     std::int64_t minimum_order_microunits = 0;
     std::string risk_policy_sha256;

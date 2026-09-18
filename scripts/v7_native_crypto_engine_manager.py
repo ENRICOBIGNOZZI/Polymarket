@@ -1,20 +1,18 @@
 #!/usr/bin/env python3
-"""Cold-plane market rollover manager for the sole native V7 PAPER engine.
+"""Cold-plane manager for partitioned native V7 multi-crypto PAPER workers.
 
-This process owns no economic decision, capital, OMS, inventory, ledger or order
-submission authority. It selects the already-registered BTC/M5 market from the
-canonical universe, resolves public CLOB metadata, launches exactly one native
-engine, waits for clean terminal drain, settles PAPER evidence, then rotates.
+The manager remains the sole portfolio-level lifecycle owner. It grants one
+bounded capital partition to each registered asset/horizon context, launches at
+most one native worker per context, reconciles every worker through the single
+canonical ledger writer, and never submits a real order.
 """
 from __future__ import annotations
 
 import argparse
 import fcntl
-import hashlib
-from dataclasses import asdict
+from decimal import Decimal, InvalidOperation
 import json
 import math
-from decimal import Decimal, InvalidOperation
 import os
 import signal
 import shutil
@@ -23,12 +21,14 @@ import sys
 import time
 import urllib.parse
 import urllib.request
+from dataclasses import dataclass, asdict
 from pathlib import Path
 from typing import Any
 
 from v7_execution_ledger import native_order_id_matches, LedgerEvent, canonical_ledger_path, iter_events
 from v7_ledger_spool import spool_event
-from v7_native_risk_policy import load_native_limits, unsettled_exposure, remaining_capital_lease
+from v7_native_risk_policy import load_native_limits, unsettled_exposure
+from v7_native_settlement_projection import context_from_fill
 
 STATUS_SCHEMA = "polymarket_v7_native_engine_manager_status_v1"
 
@@ -58,7 +58,22 @@ def public_json(url: str, timeout: float = 4.0) -> Any:
         return json.loads(response.read().decode("utf-8"))
 
 
-def select_market(snapshot: dict[str, Any], model_sha: str, *, now_s: int | None = None) -> dict[str, Any] | None:
+def _close_unix(row: dict[str, Any]) -> int:
+    close = int(row.get("close_timestamp_unix") or 0)
+    if close > 0:
+        return close
+    start = int(row.get("window_start_unix") or 0)
+    horizon = int(row.get("horizon_seconds") or 0)
+    return start + horizon if start > 0 and horizon > 0 else 0
+
+
+def _context_key(row: dict[str, Any]) -> str:
+    return f"{str(row.get('asset') or '')}:{str(row.get('horizon') or '')}"
+
+
+def select_markets(
+    snapshot: dict[str, Any], model_sha: str, *, now_s: int | None = None,
+) -> dict[str, dict[str, Any]]:
     now = int(time.time() if now_s is None else now_s)
     if (
         snapshot.get("schema") != "polymarket_v7_crypto_universe_snapshot_v1"
@@ -69,26 +84,30 @@ def select_market(snapshot: dict[str, Any], model_sha: str, *, now_s: int | None
         or snapshot.get("model_sha") != model_sha
         or snapshot.get("discovery_exhaustive") is not True
     ):
-        return None
+        return {}
     rows = snapshot.get("markets")
     if not isinstance(rows, list):
-        return None
-    candidates: list[dict[str, Any]] = []
+        return {}
+
+    grouped: dict[str, list[dict[str, Any]]] = {}
     for row in rows:
-        if not isinstance(row, dict):
-            continue
-        if row.get("asset") != "BTC" or row.get("horizon") != "M5":
-            continue
-        if row.get("research_only") is True:
+        if not isinstance(row, dict) or row.get("research_only") is True:
             continue
         if row.get("active") is not True or row.get("closed") is True or row.get("accepting_orders") is not True:
             continue
+        asset = str(row.get("asset") or "")
+        horizon = str(row.get("horizon") or "")
+        if asset not in {"BTC", "ETH", "SOL", "XRP", "DOGE", "BNB"}:
+            continue
+        if horizon not in {"M5", "M15", "H1", "H4", "D1"}:
+            continue
         start = int(row.get("window_start_unix") or 0)
-        horizon = int(row.get("horizon_seconds") or 0)
+        close = _close_unix(row)
         tokens = row.get("clob_token_ids")
         outcomes = row.get("outcomes")
         events = row.get("event_ids")
-        if start <= 0 or horizon != 300 or not (start <= now < start + horizon):
+        symbols = row.get("external_symbols")
+        if start <= 0 or close <= start or not (start <= now < close):
             continue
         if not isinstance(tokens, list) or len(tokens) != 2 or not all(str(x) for x in tokens):
             continue
@@ -96,10 +115,29 @@ def select_market(snapshot: dict[str, Any], model_sha: str, *, now_s: int | None
             continue
         if not isinstance(events, list) or not events:
             continue
-        candidates.append(row)
-    if len(candidates) != 1:
+        if not isinstance(symbols, dict) or not str(symbols.get("binance_spot") or ""):
+            continue
+        grouped.setdefault(_context_key(row), []).append(row)
+
+    selected: dict[str, dict[str, Any]] = {}
+    for key, candidates in grouped.items():
+        # More than one currently active market for one registered context is an
+        # ambiguous execution surface. Never choose one by score or API order.
+        current = {str(row.get("market_id") or ""): row for row in candidates}
+        if len(current) != 1:
+            raise RuntimeError(f"ambiguous_active_context:{key}")
+        selected[key] = next(iter(current.values()))
+    return selected
+
+
+def select_market(
+    snapshot: dict[str, Any], model_sha: str, *, now_s: int | None = None,
+) -> dict[str, Any] | None:
+    """Backward-compatible BTC/M5 selector used by legacy contract tests."""
+    try:
+        return select_markets(snapshot, model_sha, now_s=now_s).get("BTC:M5")
+    except RuntimeError:
         return None
-    return candidates[0]
 
 
 def tick_size_e4(token_id: str) -> int:
@@ -127,7 +165,6 @@ def venue_minimum_microunits(token_id: str) -> int:
     if not quantity.is_finite() or quantity <= 0 or quantity != quantity.to_integral_value():
         raise RuntimeError("venue_minimum_invalid")
     return int(quantity)
-
 
 def fee_parameters(row: dict[str, Any]) -> tuple[float, float, str]:
     explicit = row.get("fees_enabled_explicit") is True
@@ -235,7 +272,8 @@ def native_commit_barrier(run_root: Path, model_sha: str, run_id: str,
     deadline = time.monotonic() + timeout
     prefix = f"{run_id}:{market_id}:native:"
     while time.monotonic() < deadline:
-        status = read_json(run_root / "control/native_evidence_status.json")
+        per_market = run_root / "control/native_evidence" / (market_id + ".json")
+        status = read_json(per_market if per_market.is_file() else run_root / "control/native_evidence_status.json")
         if (status.get("model_sha") == model_sha and status.get("run_id") == run_id
                 and status.get("market_id") == market_id and status.get("healthy") is True
                 and status.get("dropped") == 0 and status.get("published") == status.get("written")):
@@ -244,11 +282,60 @@ def native_commit_barrier(run_root: Path, model_sha: str, run_id: str,
                 committed = {event.record_id for event in events if event.record_id.startswith(prefix)}
                 pending = list((run_root / "ledger/spool").glob(prefix + "*.json"))
                 if len(committed) == int(status["written"]) and not pending:
-                    return not open_native_orders(run_root, model_sha)
+                    return not any(str(event.market_id) == market_id for event in open_native_orders(run_root, model_sha).values())
             except (OSError, ValueError):
                 pass
         time.sleep(0.1)
     return False
+
+class CapitalLeaseUnavailable(RuntimeError):
+    pass
+
+
+@dataclass
+class Worker:
+    context: str
+    market: dict[str, Any]
+    budget_microdollars: int
+    process: subprocess.Popen[bytes]
+    log_handle: Any
+    state: str = "RUNNING"
+    settlement: subprocess.Popen[bytes] | None = None
+
+
+def _execution_budget_microdollars(allocation_path: Path) -> int:
+    value = read_json(allocation_path)
+    scope = value.get("capital_scope") if isinstance(value.get("capital_scope"), dict) else {}
+    if (
+        scope.get("engine_id") != "CRYPTO_SETTLEMENT_ENGINE"
+        or scope.get("scope_class") != "ENGINE_ENVELOPE"
+        or scope.get("independent_capital_authority") is not False
+    ):
+        raise RuntimeError("canonical_allocation_scope_invalid")
+    raw = scope.get("execution_budget")
+    try:
+        dollars = float(raw)
+    except (TypeError, ValueError, OverflowError) as exc:
+        raise RuntimeError("canonical_allocation_budget_invalid") from exc
+    if not math.isfinite(dollars) or dollars <= 0:
+        raise RuntimeError("canonical_allocation_budget_invalid")
+    micros = int(math.floor(dollars * 1_000_000.0 + 1e-9))
+    if micros <= 0:
+        raise RuntimeError("canonical_allocation_budget_invalid")
+    return micros
+
+
+def _enabled_context_count(registry_path: Path) -> int:
+    value = read_json(registry_path)
+    rows = value.get("contexts") if isinstance(value.get("contexts"), list) else []
+    contexts = {
+        (str(row.get("asset") or ""), str(row.get("horizon") or ""))
+        for row in rows if isinstance(row, dict) and row.get("enabled") is True
+        and row.get("research_only") is not True
+    }
+    if len(contexts) != 30:
+        raise RuntimeError(f"paper_context_partition_invalid:{len(contexts)}")
+    return len(contexts)
 
 
 class Manager:
@@ -257,20 +344,31 @@ class Manager:
         self.run_root = args.run_root.resolve()
         self.status_path = self.run_root / "control" / "native_engine_manager_status.json"
         self.kill_path = self.run_root / "control" / "KILL"
-        self.engine: subprocess.Popen[bytes] | None = None
+        self.workers: dict[str, Worker] = {}
+        self.completed_market_ids: set[str] = set()
         self.stopping = False
-        self.last_market_id = ""
-        self.settlement_children: dict[str, subprocess.Popen[bytes]] = {}
-        self.settlement_retry: dict[str, float] = {}
+        self.pending_settlements: dict[str, Worker] = {}
+        self.base_risk_receipt = load_native_limits(
+            read_json(args.repository_root / "config/v7_native_risk_policy.json"),
+            read_json(self.run_root / "control/allocations/manifest.json"))
+        self.allocated_execution_budget_microdollars = _execution_budget_microdollars(args.allocation)
+        self.global_budget_microdollars = min(self.allocated_execution_budget_microdollars,
+            self.base_risk_receipt["limits"]["max_total_exposure_microdollars"])
+        self.partition_count = _enabled_context_count(args.market_registry)
+        self.partition_microdollars = self.global_budget_microdollars // self.partition_count
+        if self.partition_microdollars <= 0:
+            raise RuntimeError("paper_partition_budget_zero")
+        self.partition_total_microdollars = self.partition_microdollars * self.partition_count
+        if self.partition_total_microdollars > self.global_budget_microdollars:
+            raise RuntimeError("paper_partition_budget_exceeds_global")
         signal.signal(signal.SIGTERM, self._signal)
         signal.signal(signal.SIGINT, self._signal)
 
     def _signal(self, *_: object) -> None:
         self.stopping = True
-        self._terminate_engine()
+        self._terminate_all()
 
-    def _terminate_engine(self) -> None:
-        child = self.engine
+    def _terminate_process(self, child: subprocess.Popen[bytes] | None) -> None:
         if child is None or child.poll() is not None:
             return
         child.terminate()
@@ -280,7 +378,124 @@ class Manager:
             child.kill()
             child.wait(timeout=5)
 
-    def status(self, state: str, *, blocker: str = "", market: dict[str, Any] | None = None) -> None:
+    def _terminate_all(self) -> None:
+        for worker in [*self.workers.values(), *self.pending_settlements.values()]:
+            self._terminate_process(worker.process)
+            self._terminate_process(worker.settlement)
+
+    def _worker_rows(self) -> list[dict[str, Any]]:
+        rows = []
+        for key, worker in sorted(self.workers.items()):
+            market = worker.market
+            rows.append({
+                "context": key,
+                "asset": str(market.get("asset") or ""),
+                "horizon": str(market.get("horizon") or ""),
+                "market_id": str(market.get("market_id") or ""),
+                "window_start_unix": int(market.get("window_start_unix") or 0),
+                "close_timestamp_unix": _close_unix(market),
+                "state": worker.state,
+                "engine_pid": worker.process.pid if worker.process.poll() is None else 0,
+                "settlement_pid": (
+                    worker.settlement.pid
+                    if worker.settlement is not None and worker.settlement.poll() is None else 0
+                ),
+                "budget_microdollars": worker.budget_microdollars,
+            })
+        return rows
+
+    def _aggregate_settlements(self) -> dict[str, Any]:
+        rows: list[dict[str, Any]] = []
+        directory = self.run_root / "control" / "native_paper_settlement"
+        if directory.is_dir():
+            for path in sorted(directory.glob("*.json")):
+                value = read_json(path)
+                if (
+                    value.get("schema") == "polymarket_v7_native_paper_settlement_status_v1"
+                    and value.get("model_sha") == self.args.model_sha
+                    and value.get("paper_only") is True
+                    and value.get("authenticated_execution") is False
+                    and value.get("real_order_submission") is False
+                ):
+                    rows.append(value)
+        summary = {
+            "schema": "polymarket_v7_native_paper_settlement_status_v1",
+            "state": "MULTI_MARKET",
+            "paper_only": True,
+            "authenticated_execution": False,
+            "real_order_submission": False,
+            "model_sha": self.args.model_sha,
+            "timestamp_ms": time.time_ns() // 1_000_000,
+            "markets": {
+                str(row.get("market_id") or ""): str(row.get("state") or "")
+                for row in rows if row.get("market_id")
+            },
+            "market_count": len(rows),
+            "settled_count": sum(
+                str(row.get("state") or "") in {"SETTLED", "ALREADY_SETTLED", "NO_POSITION"}
+                for row in rows
+            ),
+            "blocked_count": sum(
+                str(row.get("state") or "") == "RESOLUTION_TIMEOUT" for row in rows
+            ),
+        }
+        atomic_json(
+            self.run_root / "control" / "native_paper_settlement_status.json", summary
+        )
+        return summary
+
+    def _aggregate_evidence(self) -> dict[str, Any]:
+        rows: list[dict[str, Any]] = []
+        directory = self.run_root / "control" / "native_evidence"
+        if directory.is_dir():
+            for path in sorted(directory.glob("*.json")):
+                value = read_json(path)
+                if (
+                    value.get("schema") == "polymarket_v7_native_evidence_status_v1"
+                    and value.get("model_sha") == self.args.model_sha
+                    and value.get("run_id") == self.args.run_id
+                    and value.get("paper_only") is True
+                    and value.get("authenticated_execution") is False
+                    and value.get("real_order_submission") is False
+                ):
+                    rows.append(value)
+        aggregate = {
+            "schema": "polymarket_v7_native_evidence_status_v1",
+            "paper_only": True,
+            "authenticated_execution": False,
+            "real_order_submission": False,
+            "model_sha": self.args.model_sha,
+            "run_id": self.args.run_id,
+            "healthy": all(row.get("healthy") is True for row in rows),
+            "published": sum(int(row.get("published") or 0) for row in rows),
+            "written": sum(int(row.get("written") or 0) for row in rows),
+            "dropped": sum(int(row.get("dropped") or 0) for row in rows),
+            "queue_depth": sum(int(row.get("queue_depth") or 0) for row in rows),
+            "observations_published": sum(int(row.get("observations_published") or 0) for row in rows),
+            "observations_written": sum(int(row.get("observations_written") or 0) for row in rows),
+            "observations_dropped": sum(int(row.get("observations_dropped") or 0) for row in rows),
+            "observations_queue_depth": sum(int(row.get("observations_queue_depth") or 0) for row in rows),
+            "timestamp_ms": time.time_ns() // 1_000_000,
+            "worker_count": len(rows),
+            "markets": sorted(str(row.get("market_id") or "") for row in rows if row.get("market_id")),
+        }
+        atomic_json(self.run_root / "control" / "native_evidence_status.json", aggregate)
+        return aggregate
+
+    def status(
+        self, state: str, *, blocker: str = "",
+        targets: dict[str, dict[str, Any]] | None = None,
+    ) -> None:
+        workers = self._worker_rows()
+        evidence = self._aggregate_evidence()
+        settlements = self._aggregate_settlements()
+        pids = [int(row["engine_pid"]) for row in workers if int(row["engine_pid"]) > 0]
+        target_keys = sorted((targets or {}).keys())
+        all_contexts = [
+            f"{asset}:{horizon}"
+            for asset in ("BTC", "ETH", "SOL", "XRP", "DOGE", "BNB")
+            for horizon in ("M5", "M15", "H1", "H4", "D1")
+        ]
         atomic_json(self.status_path, {
             "schema": STATUS_SCHEMA,
             "timestamp_ms": time.time_ns() // 1_000_000,
@@ -293,105 +508,97 @@ class Manager:
             "model_sha": self.args.model_sha,
             "run_id": self.args.run_id,
             "server_id": self.args.server_id,
+            # Backward compatibility: one native executable/authority class,
+            # even though the manager now runs bounded context partitions.
             "single_native_hot_path": True,
+            "single_native_portfolio_owner": True,
+            "partitioned_native_workers": True,
             "asynchronous_settlement": bool(getattr(self.args, "asynchronous_settlement", False)),
-            "pending_settlement_workers": sorted(self.settlement_children),
-            "settlement_retry_markets": sorted(self.settlement_retry),
-            "engine_pid": self.engine.pid if self.engine and self.engine.poll() is None else 0,
-            "market_id": str((market or {}).get("market_id") or ""),
-            "window_start_unix": int((market or {}).get("window_start_unix") or 0),
+            "pending_settlement_markets": sorted(self.pending_settlements),
+            "risk_policy_sha256": self.base_risk_receipt["risk_policy_sha256"],
+            "allocated_execution_budget_microdollars": self.allocated_execution_budget_microdollars,
+            "engine_pid": min(pids) if pids else 0,
+            "engine_pids": pids,
+            "market_id": str(workers[0]["market_id"]) if workers else "",
+            "window_start_unix": int(workers[0]["window_start_unix"]) if workers else 0,
             "hot_path_executable": str(self.args.engine),
             "hot_cpuset": str(os.environ.get("PM_V7_HOT_CPUSET") or ""),
             "hot_nice": int(os.environ.get("PM_V7_HOT_NICE") or 0),
+            "workers": workers,
+            "active_worker_count": len(pids),
+            "managed_context_count": len(workers),
+            "target_context_count": len(target_keys),
+            "expected_context_count": self.partition_count,
+            "target_contexts": target_keys,
+            "missing_contexts": sorted(set(all_contexts) - set(target_keys)),
+            "global_budget_microdollars": self.global_budget_microdollars,
+            "partition_budget_microdollars": self.partition_microdollars,
+            "partition_count": self.partition_count,
+            "partition_total_microdollars": self.partition_total_microdollars,
+            "evidence_worker_count": int(evidence.get("worker_count") or 0),
+            "evidence_dropped": int(evidence.get("dropped") or 0),
+            "evidence_queue_depth": int(evidence.get("queue_depth") or 0),
+            "settlement_market_count": int(settlements.get("market_count") or 0),
+            "settlement_blocked_count": int(settlements.get("blocked_count") or 0),
         })
 
-    def settle(self, market_id: str) -> bool:
-        cmd = [
+    def _settlement_command(self, market_id: str) -> list[str]:
+        return [
             self.args.python, str(self.args.settler),
             "--run-root", str(self.run_root),
             "--model-sha", self.args.model_sha,
             "--market-id", market_id,
             "--timeout-seconds", str(self.args.settlement_timeout_seconds),
         ]
-        child = subprocess.Popen(cmd, cwd=self.args.repository_root)
-        market = {"market_id": market_id}
+
+    def settle_blocking(self, market_id: str) -> bool:
+        child = subprocess.Popen(
+            self._settlement_command(market_id), cwd=self.args.repository_root)
         while child.poll() is None:
             if self.stopping or self.kill_path.exists():
-                child.terminate()
-                try:
-                    child.wait(timeout=5)
-                except subprocess.TimeoutExpired:
-                    child.kill()
-                    child.wait(timeout=5)
+                self._terminate_process(child)
                 return False
-            self.status("SETTLING", market=market)
+            self.status("RECOVERING_SETTLEMENT")
             time.sleep(1.0)
         return child.returncode == 0
 
-    def _start_settlement(self, market_id: str) -> None:
-        if market_id in self.settlement_children:
-            return
-        if len(self.settlement_children) >= 8:
-            self.settlement_retry[market_id] = time.monotonic() + 2.0
-            return
-        name = hashlib.sha256(market_id.encode()).hexdigest() + ".json"
-        status_path = self.run_root / "control/native_settlements" / name
-        child = subprocess.Popen([
-            self.args.python, str(self.args.settler), "--run-root", str(self.run_root),
-            "--model-sha", self.args.model_sha, "--market-id", market_id,
-            "--timeout-seconds", str(self.args.settlement_timeout_seconds),
-            "--status-path", str(status_path),
-        ], cwd=self.args.repository_root)
-        self.settlement_children[market_id] = child
-        self.settlement_retry.pop(market_id, None)
-
-    def _poll_settlements(self) -> None:
-        now = time.monotonic()
-        for market_id, child in list(self.settlement_children.items()):
-            rc = child.poll()
-            if rc is None:
-                continue
-            self.settlement_children.pop(market_id)
-            if rc != 0:
-                # A failed lookup does not release a single dollar of its claim.
-                self.settlement_retry[market_id] = now + 60.0
-        for market_id, retry_at in list(self.settlement_retry.items()):
-            if now >= retry_at:
-                self._start_settlement(market_id)
-
-    def run_market(self, market: dict[str, Any]) -> int:
+    def _launch_command(
+        self, market: dict[str, Any], budget_microdollars: int,
+    ) -> list[str]:
         tokens = [str(x) for x in market["clob_token_ids"]]
         outcomes = [str(x).strip().upper() for x in market["outcomes"]]
-        if outcomes not in (["UP", "DOWN"], ["YES", "NO"]):
-            # Gamma UP/DOWN contracts still map token index 0/1 canonically.
-            if len(outcomes) != 2:
-                raise RuntimeError("outcome_mapping_invalid")
+        if len(tokens) != 2 or len(outcomes) != 2:
+            raise RuntimeError("outcome_mapping_invalid")
         yes_token, no_token = tokens
         yes_tick = tick_size_e4(yes_token)
         no_tick = tick_size_e4(no_token)
         if yes_tick != no_tick:
             raise RuntimeError("complement_tick_size_mismatch")
-        venue_minimum = max(venue_minimum_microunits(yes_token), venue_minimum_microunits(no_token))
-        minimum_order = max(venue_minimum, self.args.min_order_microunits)
+        minimum_order = max(self.args.min_order_microunits,
+            venue_minimum_microunits(yes_token), venue_minimum_microunits(no_token))
         fee_rate, fee_exponent, fee_source = fee_parameters(market)
-        close_wall_ns = (int(market["window_start_unix"]) + int(market["horizon_seconds"])) * 1_000_000_000
+        close_unix = _close_unix(market)
+        close_wall_ns = close_unix * 1_000_000_000
         if close_wall_ns <= time.time_ns():
-            return 0
-        event_id = str(market["event_ids"][0])
-        risk = load_native_limits(
-            read_json(self.args.repository_root / "config/v7_native_risk_policy.json"),
-            read_json(self.run_root / "control/allocations/manifest.json"))
-        ledger_path = canonical_ledger_path(self.run_root)
-        rows = [asdict(event) for event in iter_events(ledger_path, expected_model_sha=self.args.model_sha)] if ledger_path.is_file() else []
-        risk = remaining_capital_lease(risk, unsettled_exposure(rows, self.args.model_sha))
-        atomic_json(self.run_root / "control/native_risk_policy_status.json", {
-            **risk, "timestamp_ms": time.time_ns() // 1_000_000,
-            "model_sha": self.args.model_sha, "run_id": self.args.run_id})
-        if not risk["lease_available"]:
-            self.status("WAITING_FOR_SETTLEMENT_CAPITAL", blocker="UNRESOLVED_CLAIMS_RETAINED", market=market)
-            return 76
+            raise RuntimeError("market_already_closed")
+        events = market.get("event_ids")
+        if not isinstance(events, list) or not events:
+            raise RuntimeError("event_identity_missing")
+        symbols = market.get("external_symbols")
+        if not isinstance(symbols, dict):
+            raise RuntimeError("external_symbols_missing")
+        binance_symbol = str(symbols.get("binance_spot") or "")
+        coinbase_symbol = str(symbols.get("coinbase_spot") or "NONE")
+        if not binance_symbol:
+            raise RuntimeError("binance_spot_symbol_missing")
+        max_market = min(budget_microdollars, self.base_risk_receipt["limits"]["max_market_exposure_microdollars"])
+        max_order = min(max_market, self.base_risk_receipt["limits"]["max_single_order_microdollars"])
         command = [
             str(self.args.engine),
+            "--asset", str(market["asset"]),
+            "--horizon", str(market["horizon"]),
+            "--binance-symbol", binance_symbol,
+            "--coinbase-symbol", coinbase_symbol,
             "--yes-token", yes_token,
             "--no-token", no_token,
             "--run-root", str(self.run_root),
@@ -399,26 +606,30 @@ class Manager:
             "--run-id", self.args.run_id,
             "--server-id", self.args.server_id,
             "--market-id", str(market["market_id"]),
-            "--event-id", event_id,
+            "--event-id", str(events[0]),
             "--fee-source", fee_source,
             "--close-wall-ns", str(close_wall_ns),
             "--tick-size-e4", str(yes_tick),
             "--min-order-microunits", str(minimum_order),
             "--maker-share-cap-microunits", str(self.args.maker_share_cap_microunits),
-            "--asset", str(market["asset"]), "--horizon", str(market["horizon"]),
+            "--risk-policy-sha256", self.base_risk_receipt["risk_policy_sha256"],
+            "--sleeve-budget-microdollars", str(budget_microdollars),
+            "--max-total-exposure-microdollars", str(budget_microdollars),
+            "--max-market-exposure-microdollars", str(max_market),
+            "--max-single-order-microdollars", str(max_order),
             "--taker-fee-rate", repr(fee_rate),
             "--taker-fee-exponent", repr(fee_exponent),
             "--duration-seconds", "0",
-            "--risk-policy-sha256", risk["risk_policy_sha256"],
         ]
-        for key, value in risk["limits"].items():
-            command.extend(["--" + key.replace("_", "-"), str(value)])
-        self.args.engine_log.parent.mkdir(parents=True, exist_ok=True)
-        launch_command = list(command)
+        if getattr(self.args, "capture_native_observations", False):
+            command.append("--capture-native-observations")
+        return command
+
+    def _wrapped_hot_command(self, command: list[str]) -> list[str]:
+        launch = list(command)
         hot_cpuset = str(os.environ.get("PM_V7_HOT_CPUSET") or "").strip()
-        hot_nice_raw = str(os.environ.get("PM_V7_HOT_NICE") or "0").strip()
         try:
-            hot_nice = int(hot_nice_raw)
+            hot_nice = int(str(os.environ.get("PM_V7_HOT_NICE") or "0").strip())
         except ValueError as exc:
             raise RuntimeError("native_hot_nice_invalid") from exc
         if hot_nice < 0 or hot_nice > 19:
@@ -427,71 +638,101 @@ class Manager:
             taskset = shutil.which("taskset")
             if not taskset:
                 raise RuntimeError("native_hot_taskset_missing")
-            launch_command = [taskset, "-c", hot_cpuset] + launch_command
+            launch = [taskset, "-c", hot_cpuset] + launch
         if hot_nice > 0:
             nice = shutil.which("nice")
             if not nice:
                 raise RuntimeError("native_hot_nice_binary_missing")
-            launch_command = [nice, "-n", str(hot_nice)] + launch_command
-        with self.args.engine_log.open("ab", buffering=0) as log:
-            self.engine = subprocess.Popen(
-                launch_command,
+            launch = [nice, "-n", str(hot_nice)] + launch
+        return launch
+
+    def _context_lease(self, context: str) -> int:
+        ledger = canonical_ledger_path(self.run_root)
+        rows = [asdict(event) for event in iter_events(ledger, expected_model_sha=self.args.model_sha)] if ledger.is_file() else []
+        exposure = unsettled_exposure(rows, self.args.model_sha)
+        contexts = {}
+        for row in rows:
+            if row.get("event_type") == "FILL":
+                label = context_from_fill(row)
+                key = str(row["market_id"])
+                current = f"{label['asset']}:{label['horizon']}"
+                if key in contexts and contexts[key] != current:
+                    raise ValueError("market has conflicting capital contexts")
+                contexts[key] = current
+        used = sum(claim for market, claim in exposure["unsettled_market_claims_microdollars"].items()
+                   if contexts.get(market) == context)
+        available = self.partition_microdollars - used
+        atomic_json(self.run_root / "control/native_risk_leases" / (context.replace(":", "_") + ".json"), {
+            "schema": "polymarket_v7_native_context_lease_v1", "context": context,
+            "paper_only": True, "model_sha": self.args.model_sha, "run_id": self.args.run_id,
+            "timestamp_ms": time.time_ns() // 1_000_000, "risk_policy_sha256": self.base_risk_receipt["risk_policy_sha256"],
+            "partition_microdollars": self.partition_microdollars, "unsettled_microdollars": used,
+            "available_microdollars": max(0, available)})
+        if available <= 0:
+            raise CapitalLeaseUnavailable("unresolved capital claim exhausts context allowance")
+        return available
+
+    def launch_worker(self, context: str, market: dict[str, Any]) -> Worker:
+        budget_microdollars = self._context_lease(context)
+        command = self._wrapped_hot_command(
+            self._launch_command(market, budget_microdollars))
+        log_dir = self.args.engine_log.parent
+        log_dir.mkdir(parents=True, exist_ok=True)
+        safe_context = context.lower().replace(":", "_")
+        log_path = log_dir / f"native_crypto_settlement_engine_{safe_context}.log"
+        handle = log_path.open("ab", buffering=0)
+        try:
+            child = subprocess.Popen(
+                command,
                 cwd=self.args.repository_root,
-                stdout=log,
+                stdout=handle,
                 stderr=subprocess.STDOUT,
                 env=os.environ.copy(),
             )
-            self.status("RUNNING", market=market)
-            while self.engine.poll() is None:
-                if self.stopping or self.kill_path.exists():
-                    self._terminate_engine()
-                    return 0
-                if getattr(self.args, "asynchronous_settlement", False):
-                    self._poll_settlements()
-                self.status("RUNNING", market=market)
-                time.sleep(1.0)
-            rc = int(self.engine.returncode or 0)
-        self.status("ENGINE_EXITED", blocker="" if rc == 0 else f"ENGINE_RC_{rc}", market=market)
-        if rc != 0:
-            return rc
-        if not native_commit_barrier(self.run_root, self.args.model_sha, self.args.run_id, str(market["market_id"])):
-            self.status("LEDGER_COMMIT_BLOCKED", blocker="NATIVE_EVENTS_NOT_COMMITTED", market=market)
-            return 75
-        if getattr(self.args, "asynchronous_settlement", False):
-            self._start_settlement(str(market["market_id"]))
-            self.status("ROTATED_WITH_CAPITAL_CLAIMS_RETAINED", market=market)
-            return 0
-        if not self.settle(str(market["market_id"])):
-            self.status("SETTLEMENT_BLOCKED", blocker="NATIVE_PAPER_SETTLEMENT_INCOMPLETE", market=market)
-            return 79
-        self.status("ROTATED_CLEAN", market=market)
-        return 0
+        except Exception:
+            handle.close()
+            raise
+        return Worker(
+            context=context, market=market,
+            budget_microdollars=budget_microdollars,
+            process=child, log_handle=handle,
+        )
 
-    def run(self) -> int:
-        lock_path = self.run_root / "control/native_engine_manager.lock"
-        lock_path.parent.mkdir(parents=True, exist_ok=True)
-        with lock_path.open("a") as lock:
-            try:
-                fcntl.flock(lock.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
-            except BlockingIOError as exc:
-                raise RuntimeError("native manager already owns this run root") from exc
-            try:
-                return self._run_owned()
-            finally:
-                self._terminate_engine()
-                for child in self.settlement_children.values():
-                    if child.poll() is None:
-                        child.terminate()
-                        try: child.wait(timeout=5)
-                        except subprocess.TimeoutExpired:
-                            child.kill(); child.wait(timeout=5)
+    def _finish_worker(self, key: str, worker: Worker) -> int | None:
+        if worker.state == "RUNNING":
+            rc = worker.process.poll()
+            if rc is None:
+                return None
+            worker.log_handle.close()
+            if rc != 0:
+                return int(rc)
+            if not native_commit_barrier(self.run_root, self.args.model_sha, self.args.run_id,
+                                         str(worker.market["market_id"])):
+                return 75
+            worker.state = "SETTLING"
+            worker.settlement = subprocess.Popen(
+                self._settlement_command(str(worker.market["market_id"])),
+                cwd=self.args.repository_root,
+            )
+            if getattr(self.args, "asynchronous_settlement", False):
+                self.pending_settlements[str(worker.market["market_id"])] = worker
+                self.workers.pop(key, None)
+            return None
+        if worker.state == "SETTLING":
+            assert worker.settlement is not None
+            rc = worker.settlement.poll()
+            if rc is None:
+                return None
+            if rc != 0:
+                return int(rc)
+            self.completed_market_ids.add(str(worker.market["market_id"]))
+            self.workers.pop(key, None)
+        return None
 
-    def _run_owned(self) -> int:
-        self.status("STARTING")
-        # Canonical event sourcing defines the committed PAPER state. Any
-        # previously submitted native order with no durable terminal event is
-        # cancelled at recovery before new risk is allowed.
-        for order_id, submitted in open_native_orders(self.run_root, self.args.model_sha).items():
+    def recover(self) -> int:
+        for order_id, submitted in open_native_orders(
+            self.run_root, self.args.model_sha
+        ).items():
             receipt = _native_receipt(submitted)
             if receipt is None:
                 self.status("RECOVERY_BLOCKED", blocker="NATIVE_OPEN_ORDER_RECEIPT_INVALID")
@@ -514,47 +755,105 @@ class Manager:
                 },
             )
             spool_event(self.run_root, recovered)
-            if not wait_for_record(self.run_root, self.args.model_sha, recovered.record_id):
-                self.status("RECOVERY_BLOCKED", blocker="NATIVE_RECOVERY_CANCEL_APPEND_TIMEOUT")
+            if not wait_for_record(
+                self.run_root, self.args.model_sha, recovered.record_id
+            ):
+                self.status(
+                    "RECOVERY_BLOCKED",
+                    blocker="NATIVE_RECOVERY_CANCEL_APPEND_TIMEOUT",
+                )
                 return 75
-        # Crash recovery is settlement-first. A prior native fill remains a
-        # capital claim until a canonical FINAL exists; no new engine may start
-        # while any such market is unresolved.
-        for market_id in unsettled_native_markets(self.run_root, self.args.model_sha):
-            if getattr(self.args, "asynchronous_settlement", False):
-                self._start_settlement(market_id)
-                continue
-            self.status("RECOVERING_SETTLEMENT", market={"market_id": market_id})
-            if not self.settle(market_id):
+        for market_id in unsettled_native_markets(
+            self.run_root, self.args.model_sha
+        ):
+            self.status("RECOVERING_SETTLEMENT")
+            if not self.settle_blocking(market_id):
                 self.status(
                     "SETTLEMENT_BLOCKED",
                     blocker="NATIVE_PAPER_SETTLEMENT_INCOMPLETE",
-                    market={"market_id": market_id},
                 )
                 return 79
+        return 0
+
+    def run(self) -> int:
+        lock_path = self.run_root / "control/native_engine_manager.lock"
+        lock_path.parent.mkdir(parents=True, exist_ok=True)
+        with lock_path.open("a") as lock:
+            try:
+                fcntl.flock(lock.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+            except BlockingIOError as exc:
+                raise RuntimeError("native manager already owns this run root") from exc
+            try:
+                return self._run_owned()
+            finally:
+                self._terminate_all()
+
+    def _run_owned(self) -> int:
+        self.status("STARTING")
+        recovery = self.recover()
+        if recovery != 0:
+            return recovery
+
         while not self.stopping and not self.kill_path.exists():
-            if getattr(self.args, "asynchronous_settlement", False):
-                self._poll_settlements()
-            snapshot = read_json(self.args.universe)
-            market = select_market(snapshot, self.args.model_sha)
-            if market is None:
-                self.status("WAITING_FOR_CANONICAL_MARKET", blocker="BTC_M5_MARKET_NOT_READY")
+            try:
+                targets = select_markets(
+                    read_json(self.args.universe), self.args.model_sha)
+            except RuntimeError as exc:
+                self.status("DISCOVERY_BLOCKED", blocker=str(exc))
                 time.sleep(0.5)
                 continue
-            market_id = str(market["market_id"])
-            if market_id == self.last_market_id:
-                self.status("WAITING_FOR_ROLLOVER", market=market)
-                time.sleep(0.5)
-                continue
-            rc = self.run_market(market)
-            self.engine = None
-            if rc == 76:
-                time.sleep(1.0)
-                continue
-            if rc != 0:
-                return rc
-            self.last_market_id = market_id
-        self._terminate_engine()
+
+            # Detached settlements retain claims in their original partition.
+            for market_id, worker in list(self.pending_settlements.items()):
+                assert worker.settlement is not None
+                rc = worker.settlement.poll()
+                if rc is None:
+                    continue
+                if rc != 0:
+                    self.status("SETTLEMENT_BLOCKED", blocker=f"{market_id}_RC_{rc}", targets=targets)
+                    return int(rc)
+                self.completed_market_ids.add(market_id)
+                self.pending_settlements.pop(market_id)
+            # Reap engines and settlements before launching replacement windows.
+            for key, worker in list(self.workers.items()):
+                rc = self._finish_worker(key, worker)
+                if rc is not None:
+                    self.status(
+                        "ENGINE_EXITED" if worker.state == "RUNNING"
+                        else "SETTLEMENT_BLOCKED",
+                        blocker=f"{key}_RC_{rc}", targets=targets,
+                    )
+                    self._terminate_all()
+                    return rc
+
+            for key, market in sorted(targets.items()):
+                market_id = str(market["market_id"])
+                if market_id in self.completed_market_ids:
+                    continue
+                current = self.workers.get(key)
+                if current is not None:
+                    # Existing window owns this context until it drains/settles.
+                    continue
+                try:
+                    self.workers[key] = self.launch_worker(key, market)
+                except CapitalLeaseUnavailable:
+                    continue
+                except (OSError, RuntimeError, ValueError) as exc:
+                    self.status("LAUNCH_BLOCKED", blocker=f"{key}:{exc}", targets=targets)
+                    self._terminate_all()
+                    return 78
+
+            if self.workers:
+                self.status("RUNNING", targets=targets)
+            else:
+                self.status(
+                    "WAITING_FOR_CANONICAL_MARKETS",
+                    blocker="" if targets else "NO_REGISTERED_MARKET_READY",
+                    targets=targets,
+                )
+            time.sleep(0.25)
+
+        self._terminate_all()
         self.status("STOPPED")
         return 0
 
@@ -570,19 +869,22 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--engine", type=Path, required=True)
     parser.add_argument("--settler", type=Path, required=True)
     parser.add_argument("--engine-log", type=Path, required=True)
+    parser.add_argument("--allocation", type=Path, required=True)
+    parser.add_argument("--market-registry", type=Path, required=True)
     parser.add_argument("--python", default="python3")
     parser.add_argument("--settlement-timeout-seconds", type=int, default=600)
-    parser.add_argument("--asynchronous-settlement", action="store_true",
-                        help="PAPER candidate only; retain unresolved claims in every capital lease")
     parser.add_argument("--min-order-microunits", type=int, default=5_000_000)
     parser.add_argument("--maker-share-cap-microunits", type=int, default=1_000_000)
+    parser.add_argument("--asynchronous-settlement", action="store_true")
+    parser.add_argument("--capture-native-observations", action="store_true",
+        help="Explicit bounded research capture; keep off until storage/offload is provisioned")
     args = parser.parse_args()
     if not exact_sha(args.model_sha):
         parser.error("--model-sha must be exact lowercase 40-hex SHA")
     if args.settlement_timeout_seconds < 1 or args.settlement_timeout_seconds > 600:
         parser.error("invalid settlement timeout")
     if not 0 < args.maker_share_cap_microunits <= 5_000_000:
-        parser.error("invalid maker share cap; candidate cap must be explicit and at most five")
+        parser.error("invalid maker share cap")
     if args.min_order_microunits <= 0:
         parser.error("invalid minimum order")
     return args

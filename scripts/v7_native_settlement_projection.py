@@ -77,8 +77,24 @@ def allocate_final(final: dict[str, Any], fills: list[dict[str, Any]]) -> list[d
     if not isinstance(included, list) or not all(isinstance(x, str) and x for x in included) or len(set(included)) != len(included) or set(included) != set(ids):
         raise ProjectionError('settlement_fill_set:incomplete_or_conflicting')
     winner = str(meta.get('winning_token_id') or '')
-    if not winner:
+    raw_payouts = meta.get('settlement_payouts')
+    payout_weights = None
+    if raw_payouts is not None:
+        if not isinstance(raw_payouts, dict) or len(raw_payouts) != 2 or not all(isinstance(k, str) and k for k in raw_payouts):
+            raise ProjectionError('settlement_payouts:invalid')
+        payout_weights = {token: _money(weight, 'payout_weight') for token, weight in raw_payouts.items()}
+        if any(weight < 0 or weight > 1 for weight in payout_weights.values()) or abs(sum(payout_weights.values()) - 1) > Decimal('0.000000001'):
+            raise ProjectionError('settlement_payouts:invalid')
+        if winner and payout_weights.get(winner) != 1:
+            raise ProjectionError('settlement_winner:mismatch')
+    elif not winner:
         raise ProjectionError('winning_token:missing')
+    def payout_weight(token: str) -> Decimal:
+        if payout_weights is None:
+            return Decimal(1) if token == winner else Decimal(0)
+        if token not in payout_weights:
+            raise ProjectionError('settlement_token:missing')
+        return payout_weights[token]
     positions: dict[tuple[str, str], dict[str, Any]] = {}
     inventory: dict[str, Decimal] = defaultdict(Decimal)
     cash = Decimal(0)
@@ -124,7 +140,7 @@ def allocate_final(final: dict[str, Any], fills: list[dict[str, Any]]) -> list[d
         group['quantity'] += sign * qty
         group['fills'].append(fill['fill_id'])
         group['orders'].add(fill.get('order_id'))
-    payout = inventory.get(winner, Decimal(0))
+    payout = sum((qty * payout_weight(token) for token, qty in inventory.items()), Decimal(0))
     expected = cash + payout
     reported = _money(final.get('final_pnl'), 'final_pnl')
     tolerance = Decimal('0.00000001') * max(Decimal(1), abs(expected), abs(reported))
@@ -139,13 +155,14 @@ def allocate_final(final: dict[str, Any], fills: list[dict[str, Any]]) -> list[d
         raise ProjectionError('settlement_positions:mismatch')
     views = []
     for ordinal, group in enumerate(positions.values()):
-        cashout = group['quantity'] if group['token_id'] == winner else Decimal(0)
+        weight = payout_weight(group['token_id'])
+        cashout = group['quantity'] * weight
         vm = dict(meta)
         vm.update({'component': group['component'], 'model_family': group['component'],
             'crypto_context': group['context'], 'projection_only': True,
             'canonical_final_record_id': final.get('record_id'),
             'included_fill_ids': list(group['fills']), 'included_order_ids': sorted(group['orders']),
-            'won': group['token_id'] == winner, 'attribution_basis': 'SIGNED_FILL_CASHFLOW_PLUS_SETTLEMENT'})
+            'won': (weight == 1) if weight in (0, 1) else None, 'attribution_basis': 'SIGNED_FILL_CASHFLOW_PLUS_SETTLEMENT'})
         view = dict(final)
         view.update({'record_id': str(final.get('record_id') or settlement) + ':view:' + str(ordinal),
             'position_id': group['position_id'], 'token_id': group['token_id'],

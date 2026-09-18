@@ -15,6 +15,8 @@ import math
 import os
 import random
 import time
+from datetime import datetime, timedelta, timezone
+from zoneinfo import ZoneInfo
 import urllib.parse
 import urllib.request
 from pathlib import Path
@@ -98,6 +100,75 @@ def fetch_json(url: str, timeout: int = 20) -> Any:
         return json.loads(response.read().decode("utf-8"))
 
 
+ET = ZoneInfo("America/New_York")
+MONTHS = (
+    "january", "february", "march", "april", "may", "june",
+    "july", "august", "september", "october", "november", "december",
+)
+
+
+def _iso_unix(value: Any) -> int:
+    text = str(value or "").strip()
+    if not text:
+        return 0
+    try:
+        parsed = datetime.fromisoformat(text.replace("Z", "+00:00"))
+    except ValueError:
+        return 0
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    return int(parsed.timestamp())
+
+
+def _slug_requests(context: dict[str, Any], now: int, offsets: list[int]) -> list[tuple[str, int]]:
+    mapping = context["polymarket"]
+    kind = str(mapping.get("slug_kind") or "")
+    prefix = str(mapping.get("slug_prefix") or "")
+    template = str(mapping.get("slug_template") or "")
+    horizon = int(context["horizon_seconds"])
+    horizon_slug = str(mapping.get("horizon_slug") or "")
+    result: list[tuple[str, int]] = []
+
+    if kind == "UNIX_WINDOW":
+        boundary = (now // horizon) * horizon
+        for offset in offsets:
+            start = boundary + offset * horizon
+            result.append((template.format(
+                horizon_slug=horizon_slug, window_start_unix=start,
+                slug_prefix=prefix,
+            ), start))
+        return result
+
+    current_et = datetime.fromtimestamp(now, timezone.utc).astimezone(ET)
+    if kind == "HOURLY_ET":
+        boundary = current_et.replace(minute=0, second=0, microsecond=0)
+        for offset in offsets:
+            start_dt = boundary + timedelta(hours=offset)
+            hour12 = start_dt.hour % 12 or 12
+            result.append((template.format(
+                slug_prefix=prefix, month=MONTHS[start_dt.month - 1],
+                day=start_dt.day, year=start_dt.year, hour12=hour12,
+                ampm="am" if start_dt.hour < 12 else "pm",
+                horizon_slug=horizon_slug, window_start_unix=int(start_dt.timestamp()),
+            ), int(start_dt.timestamp())))
+        return result
+
+    if kind == "DAILY_ET":
+        today_noon = current_et.replace(hour=12, minute=0, second=0, microsecond=0)
+        base_end = today_noon if current_et < today_noon else today_noon + timedelta(days=1)
+        for offset in offsets:
+            end_dt = base_end + timedelta(days=offset)
+            start_dt = end_dt - timedelta(days=1)
+            result.append((template.format(
+                slug_prefix=prefix, month=MONTHS[end_dt.month - 1],
+                day=end_dt.day, year=end_dt.year, hour12=12, ampm="pm",
+                horizon_slug=horizon_slug, window_start_unix=int(start_dt.timestamp()),
+            ), int(start_dt.timestamp())))
+        return result
+
+    raise ValueError(f"unsupported crypto slug kind:{kind}")
+
+
 def normalize_market(raw: dict[str, Any]) -> dict[str, Any] | None:
     market_id = str(raw.get("id") or "").strip()
     condition_id = str(raw.get("conditionId") or raw.get("condition_id") or "").strip()
@@ -143,6 +214,7 @@ def normalize_market(raw: dict[str, Any]) -> dict[str, Any] | None:
         "volume_24h": max(0.0, _finite(raw.get("volume24hr"), _finite(raw.get("volume24h")))),
         "created_at": str(raw.get("createdAt") or ""),
         "end_date": str(raw.get("endDate") or raw.get("end_date_iso") or ""),
+        "close_timestamp_unix": _iso_unix(raw.get("endDate") or raw.get("end_date_iso")),
         "active": bool(raw.get("active", True)),
         "closed": bool(raw.get("closed", False)),
         "accepting_orders": bool(raw.get("acceptingOrders", True)),
@@ -154,6 +226,8 @@ def normalize_market(raw: dict[str, Any]) -> dict[str, Any] | None:
         "settlement_semantic_hash": str((raw.get("_crypto_context") or {}).get("settlement_semantic_hash") or ""),
         "research_only": bool((raw.get("_crypto_context") or {}).get("research_only", False)),
         "authority": str((raw.get("_crypto_context") or {}).get("authority") or ""),
+        "external_symbols": (raw.get("_crypto_context") or {}).get("external_symbols")
+            if isinstance((raw.get("_crypto_context") or {}).get("external_symbols"), dict) else {},
         "window_start_unix": int(_finite((raw.get("_crypto_context") or {}).get("window_start_unix"))),
     }
 
@@ -176,8 +250,16 @@ def _registered_contexts(registry: dict[str, Any]) -> list[dict[str, Any]]:
         horizon_slug=str(mapping.get("horizon_slug") or "")
         horizon_seconds=int(row.get("horizon_seconds") or 0)
         semantic=str(row.get("settlement_semantic_hash") or "")
-        if (not template or "{window_start_unix}" not in template or not horizon_slug
-                or horizon_seconds <= 0 or len(semantic) != 64):
+        slug_kind = str(mapping.get("slug_kind") or "")
+        prefix = str(mapping.get("slug_prefix") or "")
+        required_fields = {
+            "UNIX_WINDOW": "{window_start_unix}",
+            "HOURLY_ET": "{hour12}",
+            "DAILY_ET": "{day}",
+        }
+        if (not template or slug_kind not in required_fields
+                or required_fields[slug_kind] not in template or not prefix
+                or not horizon_slug or horizon_seconds <= 0 or len(semantic) != 64):
             raise ValueError("invalid registered crypto context")
         output.append(row)
     if not output:
@@ -199,11 +281,7 @@ def discover_crypto(
     started_ns=time.monotonic_ns()
     for context in _registered_contexts(registry):
         horizon=int(context["horizon_seconds"])
-        boundary=(now // horizon) * horizon
-        mapping=context["polymarket"]; template=str(mapping["slug_template"]); horizon_slug=str(mapping["horizon_slug"])
-        for offset in offsets:
-            window_start=boundary + offset*horizon
-            slug=template.format(horizon_slug=horizon_slug,window_start_unix=window_start)
+        for slug, window_start in _slug_requests(context, now, offsets):
             query=urllib.parse.urlencode({"slug":slug})
             value=None
             for attempt in range(attempts):
@@ -233,6 +311,7 @@ def discover_crypto(
                 "horizon_seconds":horizon, "contract_family":context.get("contract_family"),
                 "settlement_semantic_hash":context.get("settlement_semantic_hash"),
                 "research_only":context.get("research_only") is True, "authority":context.get("authority"),
+                "external_symbols":context.get("external_symbols") if isinstance(context.get("external_symbols"),dict) else {},
                 "window_start_unix":window_start,
             }
             normalized=normalize_market(raw)

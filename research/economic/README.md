@@ -51,7 +51,10 @@ separate from the last book-update clock. A capture is usable as closed evidence
 only with its healthy `.jsonl.closed.json` marker, matching sequence count and a
 verified frozen copy. Model and policy hashes refer to parsed content bytes.
 
-`--observation-only` makes the standalone native engine research-only: candidate
+In the integrated 30-context manager, full native capture is explicitly opt-in
+(`--capture-native-observations`). Keep it off in unbounded production until
+storage and verified offload cover the expected volume. `--observation-only`
+turns capture on automatically in a bounded isolated probe and makes the engine research-only: candidate
 observations are recorded, but admission and all PAPER economic orders are
 skipped. Use a new isolated root; never point a probe at the running ledger.
 `--maker-share-cap-microunits 5000000` is a candidate parameter, not an automatic
@@ -64,10 +67,13 @@ retained as capital claims, including fees. A validated committed FINAL is the
 only release of a closed market's claim. A canonical-commit barrier prevents a
 spool publication race from making filled exposure vanish at rollover.
 The baseline still uses synchronous settlement and does not increase quote size.
-Persistent feed connections and multi-context integration are separate work.
+The integration retains main's six-asset, five-horizon partitioned manager.
+Each context keeps a fixed slice of the canonical allowance; unresolved claims
+are deducted from that slice before a new window starts. Persistent feed
+connections across windows remain separate work.
 
-Before production cutover: exact-SHA CI; merge with the concurrent all-crypto
-branch without dropping its changes; isolated public-feed capture; runtime
+Before production cutover: exact-SHA CI; validate the integrated all-crypto
+revision without dropping its changes; isolated public-feed capture; runtime
 resource/overflow test; all unresolved positions reconciled or imported through
 the canonical boundary; fresh run identity and unchanged approved risk caps.
 

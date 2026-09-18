@@ -5,17 +5,17 @@
   "paper_only": true,
   "real_order_submission": false,
   "live_parameters_changed": false,
-  "status": "CODE_IMPLEMENTED_VALIDATION_IN_PROGRESS_NOT_DEPLOYED",
+  "status": "ALL_CRYPTO_INTEGRATION_VALIDATION_IN_PROGRESS_NOT_DEPLOYED",
   "phases": {
     "0": "BASELINE_IMMUTABLE_COPY_HASH_VERIFIED_RESTORE_TEST_PASSED",
     "1": "ACCOUNTING_IMPLEMENTED_REAL_FROZEN_LEDGER_RECONCILED_NOT_LIVE",
     "2": "OWNER_CONTEXT_AND_ADMISSIBILITY_IMPLEMENTED_BASELINE_CAP_UNCHANGED",
-    "3": "NATIVE_BBO_L10_TRADES_DECISIONS_PROPOSALS_CAPTURE_IMPLEMENTED_NO_HISTORICAL_RECONSTRUCTION",
+    "3": "NATIVE_CAPTURE_IMPLEMENTED_PUBLIC_PROBE_22511_ROWS_NO_DROPS_FULL_CAPTURE_OPTIN_STORAGE_GATE",
     "4": "RECEIVE_TIME_CAUSAL_EXECUTION_REPLAY_IMPLEMENTED_EXCHANGE_PARITY_NOT_PROVEN",
     "5": "T1_T8_PREREGISTERED_BASELINE_REPORT_INCONCLUSIVE_FULL_EMPIRICAL_TESTS_NOT_COMPLETE",
     "6": "OFFLINE_REGULARIZED_PROBABILITY_BASELINE_IMPLEMENTED_NOT_TRAINED_ON_SUFFICIENT_REAL_DATA",
     "7": "PURGED_SPLIT_BLOCK_BOOTSTRAP_MULTIPLICITY_AND_GATES_IMPLEMENTED_HELDOUT_PENDING",
-    "8": "ASYNC_SETTLEMENT_OPTIN_CAPITAL_CLAIMS_AND_COMMIT_BARRIER_IMPLEMENTED_NOT_ACTIVATED_PERSISTENT_FEEDS_PENDING",
+    "8": "INTEGRATED_30_CONTEXT_MANAGER_RETAINS_CAPITAL_AND_COMMIT_BARRIER_OPTIN_ASYNC_NOT_ACTIVATED_PERSISTENT_FEEDS_PENDING",
     "9": "HASHED_FREEZE_RESTORE_AND_HOURLY_READONLY_AUTOMATION_ACTIVE_CONTINUOUS_RAW_OFFLOAD_PENDING"
   },
   "scope": "accounting, maker context/sizing, decision evidence, causal simulation, quantitative research; coordinate with all-crypto branch before deployment",
@@ -27,6 +27,8 @@
     "minimum_time_blocks": 24,
     "profitability_proven": false
   },
-  "coordination": "Other all-crypto agent has overlapping uncommitted work in original worktree. Do not overwrite or silently combine production changes.",
-  "last_verified_live_sha": "c27afd1574575a99f9c02262529e830dab3c4820"
+  "coordination": "Merged concurrent all-crypto main into this review branch without changing live deployment. Revalidate integrated SHA; previous public-feed proof is e4c7d303.",
+  "last_verified_live_sha": "76855d9c90714da4f741bbdf3b2c32a214b8d40c",
+  "integration_base_sha": "76855d9c90714da4f741bbdf3b2c32a214b8d40c",
+  "last_verified_live_health": false
 }

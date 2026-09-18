@@ -122,7 +122,9 @@ def aggregate_fills(events: list[LedgerEvent]) -> tuple[dict[str, float], float,
     return inventory, cash, fills
 
 
-def resolved_outcome(gamma_url: str, market_id: str) -> tuple[str, str] | None:
+def resolved_payouts(
+    gamma_url: str, market_id: str,
+) -> tuple[dict[str, float], str] | None:
     raw = public_json(f"{gamma_url.rstrip('/')}/markets/{urllib.parse.quote(market_id)}")
     if not isinstance(raw, dict) or raw.get("closed") is not True:
         return None
@@ -135,11 +137,28 @@ def resolved_outcome(gamma_url: str, market_id: str) -> tuple[str, str] | None:
         except (TypeError, ValueError, OverflowError):
             number = math.nan
         prices.append(number)
-    winner = next((i for i, p in enumerate(prices) if math.isfinite(p) and p >= 1.0 - 1e-9), -1)
-    if winner < 0 or winner >= len(tokens):
+    if len(tokens) != 2 or len(prices) != 2 or any(
+        not math.isfinite(p) or p < -1e-9 or p > 1.0 + 1e-9 for p in prices
+    ):
+        return None
+    if abs(prices[0] - 0.5) <= 1e-9 and abs(prices[1] - 0.5) <= 1e-9:
+        return {tokens[0]: 0.5, tokens[1]: 0.5}, "50-50"
+    winner = next((i for i, p in enumerate(prices) if p >= 1.0 - 1e-9), -1)
+    loser = next((i for i, p in enumerate(prices) if p <= 1e-9), -1)
+    if winner < 0 or loser < 0 or winner == loser:
         return None
     outcome = outcomes[winner] if winner < len(outcomes) else ""
-    return tokens[winner], outcome
+    return {tokens[winner]: 1.0, tokens[loser]: 0.0}, outcome
+
+
+def resolved_outcome(gamma_url: str, market_id: str) -> tuple[str, str] | None:
+    """Compatibility helper for winner-take-all binary settlements."""
+    resolved = resolved_payouts(gamma_url, market_id)
+    if resolved is None:
+        return None
+    payouts, label = resolved
+    winners = [token for token, payout in payouts.items() if payout >= 1.0 - 1e-9]
+    return (winners[0], label) if len(winners) == 1 else None
 
 
 def wait_for_record(run_root: Path, model_sha: str, record_id: str, timeout: float = 10.0) -> bool:
@@ -157,7 +176,7 @@ def wait_for_record(run_root: Path, model_sha: str, record_id: str, timeout: flo
 
 
 def settle(args: argparse.Namespace) -> int:
-    status_path = getattr(args, "status_path", None) or args.run_root / "control" / "native_paper_settlement_status.json"
+    status_path = getattr(args, "status_path", None) or args.run_root / "control" / "native_paper_settlement" / f"{args.market_id}.json"
     deadline = time.monotonic() + args.timeout_seconds
     while True:
         events = market_events(args.run_root, args.model_sha, args.market_id)
@@ -182,8 +201,8 @@ def settle(args: argparse.Namespace) -> int:
             })
             return 0
 
-        outcome = resolved_outcome(args.gamma_url, args.market_id)
-        if outcome is None:
+        resolution = resolved_payouts(args.gamma_url, args.market_id)
+        if resolution is None:
             if time.monotonic() >= deadline:
                 atomic_json(status_path, {
                     "schema": STATUS_SCHEMA, "state": "RESOLUTION_TIMEOUT",
@@ -195,8 +214,11 @@ def settle(args: argparse.Namespace) -> int:
             time.sleep(2.0)
             continue
 
-        winning_token, resolved_label = outcome
-        payout = max(0.0, inventory.get(winning_token, 0.0))
+        payouts, resolved_label = resolution
+        payout = sum(
+            max(0.0, inventory.get(token, 0.0)) * weight
+            for token, weight in payouts.items()
+        )
         final_pnl = cash + payout
         if not math.isfinite(final_pnl):
             raise RuntimeError("native_final_pnl_invalid")
@@ -217,7 +239,10 @@ def settle(args: argparse.Namespace) -> int:
             "native_settlement_receipt": receipt,
             "run_id": representative.metadata.get("run_id"),
             "native_market_settlement_id": settlement_id,
-            "winning_token_id": winning_token,
+            "winning_token_id": next(
+                (token for token, weight in payouts.items() if weight >= 1.0 - 1e-9), None
+            ),
+            "settlement_payouts": payouts,
             "settlement_outcome": resolved_label,
             "included_order_ids": sorted({str(event.order_id) for event in fills if event.order_id}),
             "included_fill_ids": sorted({str(event.fill_id) for event in fills if event.fill_id}),
@@ -241,7 +266,7 @@ def settle(args: argparse.Namespace) -> int:
             position_id=f"native-market:{args.market_id}",
             market_id=args.market_id,
             event_id=representative.event_id,
-            token_id=winning_token,
+            token_id=next((token for token, weight in payouts.items() if weight >= 1.0 - 1e-9), representative.token_id),
             final_pnl=final_pnl,
             realized_cashflow=payout,
             fee=0.0,
