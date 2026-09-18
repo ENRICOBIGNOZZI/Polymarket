@@ -344,17 +344,76 @@ def _execution_budget_microdollars(allocation_path: Path) -> int:
     return micros
 
 
-def _enabled_context_count(registry_path: Path) -> int:
+def _enabled_contexts(registry_path: Path) -> set[str]:
     value = read_json(registry_path)
     rows = value.get("contexts") if isinstance(value.get("contexts"), list) else []
     contexts = {
-        (str(row.get("asset") or ""), str(row.get("horizon") or ""))
+        f"{str(row.get('asset') or '')}:{str(row.get('horizon') or '')}"
         for row in rows if isinstance(row, dict) and row.get("enabled") is True
         and row.get("research_only") is not True
     }
     if len(contexts) != 30:
         raise RuntimeError(f"paper_context_partition_invalid:{len(contexts)}")
-    return len(contexts)
+    return contexts
+
+
+def _enabled_context_count(registry_path: Path) -> int:
+    return len(_enabled_contexts(registry_path))
+
+
+def load_native_carryover(
+    path: Path, model_sha: str, allowed_contexts: set[str], maximum_microdollars: int,
+) -> dict[str, Any]:
+    value = read_json(path)
+    if not value:
+        return {
+            "present": False, "total_unsettled_microdollars": 0,
+            "context_claims_microdollars": {}, "market_count": 0,
+        }
+    claims = value.get("context_claims_microdollars")
+    markets = value.get("markets")
+    if (
+        value.get("schema") != "polymarket_v7_native_carryover_exposure_v1"
+        or value.get("paper_only") is not True
+        or value.get("authenticated_execution") is not False
+        or value.get("real_order_submission") is not False
+        or value.get("target_model_sha") != model_sha
+        or not isinstance(claims, dict)
+        or not isinstance(markets, list)
+    ):
+        raise RuntimeError("native_carryover_invalid")
+    normalized: dict[str, int] = {}
+    for context, claim in claims.items():
+        if (
+            context not in allowed_contexts
+            or not isinstance(claim, int) or isinstance(claim, bool) or claim < 0
+        ):
+            raise RuntimeError("native_carryover_invalid")
+        normalized[context] = claim
+    total = value.get("total_unsettled_microdollars")
+    if (
+        not isinstance(total, int) or isinstance(total, bool) or total < 0
+        or total != sum(normalized.values()) or total > maximum_microdollars
+    ):
+        raise RuntimeError("native_carryover_invalid")
+    for row in markets:
+        if not isinstance(row, dict):
+            raise RuntimeError("native_carryover_invalid")
+        if (
+            not exact_sha(str(row.get("model_sha") or ""))
+            or not str(row.get("market_id") or "")
+            or row.get("context") not in allowed_contexts
+            or not isinstance(row.get("claim_microdollars"), int)
+            or isinstance(row.get("claim_microdollars"), bool)
+            or row.get("claim_microdollars") < 0
+        ):
+            raise RuntimeError("native_carryover_invalid")
+    return {
+        "present": True,
+        "total_unsettled_microdollars": total,
+        "context_claims_microdollars": normalized,
+        "market_count": len(markets),
+    }
 
 
 class Manager:
@@ -376,7 +435,12 @@ class Manager:
         self.allocated_execution_budget_microdollars = _execution_budget_microdollars(args.allocation)
         self.global_budget_microdollars = min(self.allocated_execution_budget_microdollars,
             self.base_risk_receipt["limits"]["max_total_exposure_microdollars"])
-        self.partition_count = _enabled_context_count(args.market_registry)
+        self.enabled_contexts = _enabled_contexts(args.market_registry)
+        self.partition_count = len(self.enabled_contexts)
+        self.native_carryover = load_native_carryover(
+            self.run_root / "control/native_carryover_exposure.json",
+            args.model_sha, self.enabled_contexts, self.global_budget_microdollars,
+        )
         self.partition_microdollars = self.global_budget_microdollars // self.partition_count
         if self.partition_microdollars <= 0:
             raise RuntimeError("paper_partition_budget_zero")
@@ -567,6 +631,12 @@ class Manager:
             "partition_budget_microdollars": self.partition_microdollars,
             "partition_count": self.partition_count,
             "partition_total_microdollars": self.partition_total_microdollars,
+            "native_carryover_present": self.native_carryover["present"],
+            "native_carryover_microdollars": self.native_carryover["total_unsettled_microdollars"],
+            "native_carryover_market_count": self.native_carryover["market_count"],
+            "new_risk_budget_microdollars": max(
+                0, self.global_budget_microdollars - self.native_carryover["total_unsettled_microdollars"]
+            ),
             "taker_target_quantity_microunits": self.args.target_quantity_microunits,
             "taker_minimum_tte_ns": self.args.minimum_tte_ns,
             "taker_maximum_tte_ns": self.args.maximum_tte_ns,
@@ -715,14 +785,21 @@ class Manager:
                 if key in contexts and contexts[key] != current:
                     raise ValueError("market has conflicting capital contexts")
                 contexts[key] = current
-        used = sum(claim for market, claim in exposure["unsettled_market_claims_microdollars"].items()
-                   if contexts.get(market) == context)
+        current_used = sum(
+            claim for market, claim in exposure["unsettled_market_claims_microdollars"].items()
+            if contexts.get(market) == context
+        )
+        carryover_used = int(self.native_carryover["context_claims_microdollars"].get(context, 0))
+        used = current_used + carryover_used
         available = self.partition_microdollars - used
         atomic_json(self.run_root / "control/native_risk_leases" / (context.replace(":", "_") + ".json"), {
             "schema": "polymarket_v7_native_context_lease_v1", "context": context,
             "paper_only": True, "model_sha": self.args.model_sha, "run_id": self.args.run_id,
             "timestamp_ms": time.time_ns() // 1_000_000, "risk_policy_sha256": self.base_risk_receipt["risk_policy_sha256"],
-            "partition_microdollars": self.partition_microdollars, "unsettled_microdollars": used,
+            "partition_microdollars": self.partition_microdollars,
+            "current_unsettled_microdollars": current_used,
+            "carryover_unsettled_microdollars": carryover_used,
+            "unsettled_microdollars": used,
             "available_microdollars": max(0, available)})
         if available <= 0:
             raise CapitalLeaseUnavailable("unresolved capital claim exhausts context allowance")

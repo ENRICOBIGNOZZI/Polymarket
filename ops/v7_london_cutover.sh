@@ -49,6 +49,14 @@ if [[ -n "$PREVIOUS_RUN_ROOT" && "$PREVIOUS_RUN_ROOT" != /* ]]; then
   echo "previous London run root is not absolute" >&2
   exit 78
 fi
+ALLOW_NATIVE_CARRYOVER="${PM_V7_ALLOW_NATIVE_CARRYOVER:-0}"
+[[ "$ALLOW_NATIVE_CARRYOVER" == 0 || "$ALLOW_NATIVE_CARRYOVER" == 1 ]] || {
+  echo "PM_V7_ALLOW_NATIVE_CARRYOVER must be 0 or 1" >&2; exit 78;
+}
+if [[ "$ALLOW_NATIVE_CARRYOVER" == 1 && -n "$PREVIOUS_RUN_ROOT" && "$PREVIOUS_RUN_ROOT" != "$RUN_ROOT" ]]; then
+  echo "native carryover requires a stable London run root" >&2
+  exit 78
+fi
 
 # Stop old generation before archive; never copy its ledger into the new run.
 sudo systemctl stop polymarket-v7-exporter.service polymarket-v7-paper.service >/dev/null 2>&1 || true
@@ -57,9 +65,14 @@ if [[ -n "$PREVIOUS_RUN_ROOT" && "$PREVIOUS_RUN_ROOT" != "$RUN_ROOT" && -e "$PRE
     --run-root "$PREVIOUS_RUN_ROOT" --archive-root "$ARCHIVE_ROOT" \
     --repository-root "$SOURCE_DIR" --target-sha "$EXPECTED_SHA"
 fi
-python3 "$SOURCE_DIR/scripts/v7_prepare_cutover_run_root.py" \
-  --run-root "$RUN_ROOT" --archive-root "$ARCHIVE_ROOT" \
+prepare_args=(
+  --run-root "$RUN_ROOT" --archive-root "$ARCHIVE_ROOT"
   --repository-root "$SOURCE_DIR" --target-sha "$EXPECTED_SHA"
+)
+if [[ "$ALLOW_NATIVE_CARRYOVER" == 1 ]]; then
+  prepare_args+=(--allow-native-carryover)
+fi
+python3 "$SOURCE_DIR/scripts/v7_prepare_cutover_run_root.py" "${prepare_args[@]}"
 SERVICE_GROUP="$(id -gn "$SERVICE_USER")"
 install -d -o "$SERVICE_USER" -g "$SERVICE_GROUP" "$RUN_ROOT" "$RUN_ROOT/control"
 

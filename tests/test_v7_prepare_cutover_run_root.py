@@ -34,7 +34,8 @@ class PrepareCutoverTests(unittest.TestCase):
             self.assertEqual(result['state'],'ARCHIVED_PRIOR_SHA')
             self.assertTrue(result['archived'])
             self.assertEqual(result['prior_open_positions'],{
-                'paper_account':0,'maker_active_orders':0,'native_unsettled_markets':0})
+                'paper_account':0,'maker_active_orders':0,'native_unsettled_markets':0,
+                'native_carryover_microdollars':0})
             self.assertTrue(Path(result['archive_path']).exists())
             self.assertTrue((root/'control/cutover_lineage.json').exists())
 
@@ -120,3 +121,59 @@ class PrepareCutoverTests(unittest.TestCase):
             self.assertEqual(result['state'],'NEW_RUN_ROOT')
 
 if __name__=='__main__':unittest.main()
+
+
+def _native_fill_for_carryover() -> dict:
+    return {
+        'event_type':'FILL','strategy':'CRYPTO_SETTLEMENT_ENGINE',
+        'model_sha':OLD,'paper_only':True,'authenticated_execution':False,
+        'market_id':'m1','record_kind':'ECONOMIC_JOURNAL','fill_id':'f1',
+        'token_id':'yes','filled_size':20.0,'fill_price':0.4,'fee':0.1,'side':'BUY',
+        'metadata':{
+            'native_settlement_receipt':{'owner':'V7_NATIVE_CRYPTO_SETTLEMENT_ENGINE'},
+            'crypto_context':{'asset':'BTC','horizon':'M5'},
+        },
+    }
+
+
+def test_explicit_native_carryover_archives_and_reserves_cost_basis() -> None:
+    with tempfile.TemporaryDirectory() as d:
+        base=Path(d);root=base/'run';fixture(root)
+        (root/'ledger/execution.jsonl').write_text(
+            json.dumps(_native_fill_for_carryover())+'\n',encoding='utf-8')
+        result=cutover.prepare(
+            root,base/'archives',base,NEW,now=125,
+            ancestor_check=lambda *_:True,allow_native_carryover=True)
+        self_carry=json.loads((root/'control/native_carryover_exposure.json').read_text())
+        assert result['state']=='ARCHIVED_PRIOR_SHA'
+        assert result['prior_open_positions']['native_unsettled_markets']==1
+        assert self_carry['target_model_sha']==NEW
+        assert self_carry['total_unsettled_microdollars']==8_100_000
+        assert self_carry['context_claims_microdollars']=={'BTC:M5':8_100_000}
+        assert self_carry['markets'][0]['market_id']=='m1'
+        assert self_carry['markets'][0]['claim_microdollars']==8_100_000
+        assert Path(result['archive_path']).joinpath('ledger/execution.jsonl').is_file()
+
+
+def test_inherited_carryover_is_chained_without_credit() -> None:
+    with tempfile.TemporaryDirectory() as d:
+        base=Path(d);root=base/'run';fixture(root)
+        prior={
+            'schema':cutover.CARRYOVER_SCHEMA,'paper_only':True,
+            'authenticated_execution':False,'real_order_submission':False,
+            'target_model_sha':OLD,'source_model_shas':['c'*40],
+            'source_archives':['/archive/older'],
+            'markets':[{'model_sha':'c'*40,'market_id':'old-m','context':'ETH:H1','claim_microdollars':2_000_000}],
+            'context_claims_microdollars':{'ETH:H1':2_000_000},
+            'total_unsettled_microdollars':2_000_000,
+        }
+        write(root/'control/native_carryover_exposure.json',prior)
+        (root/'ledger/execution.jsonl').write_text(
+            json.dumps(_native_fill_for_carryover())+'\n',encoding='utf-8')
+        cutover.prepare(root,base/'archives',base,NEW,now=126,
+            ancestor_check=lambda *_:True,allow_native_carryover=True)
+        carry=json.loads((root/'control/native_carryover_exposure.json').read_text())
+        assert carry['total_unsettled_microdollars']==10_100_000
+        assert carry['context_claims_microdollars']=={'BTC:M5':8_100_000,'ETH:H1':2_000_000}
+        assert len(carry['markets'])==2
+        assert '/archive/older' in carry['source_archives']

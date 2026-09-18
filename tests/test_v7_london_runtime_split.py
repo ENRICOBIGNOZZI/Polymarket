@@ -60,3 +60,13 @@ def test_shells_parse():
     for rel in ['ops/v7_london_stage_release.sh','ops/v7_london_bootstrap.sh','ops/v7_london_cutover.sh','research/run_research_cycle.sh','research/install_macos_scheduler.sh']:
         r=subprocess.run(['bash','-n',str(ROOT/rel)],capture_output=True,text=True)
         assert r.returncode==0, r.stderr
+
+
+def test_native_carryover_is_explicit_and_requires_stable_run_root():
+    s=(ROOT/'ops/v7_london_cutover.sh').read_text()
+    assert 'PM_V7_ALLOW_NATIVE_CARRYOVER' in s
+    assert 'native carryover requires a stable London run root' in s
+    assert 'prepare_args+=(--allow-native-carryover)' in s
+    guard=s.index('native carryover requires a stable London run root')
+    stop=s.index('systemctl stop polymarket-v7-exporter.service polymarket-v7-paper.service')
+    assert guard < stop
