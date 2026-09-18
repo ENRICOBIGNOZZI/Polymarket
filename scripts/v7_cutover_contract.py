@@ -177,7 +177,7 @@ def validate(root: Path, expected_head: str | None) -> dict[str, str]:
         fail("V7 cutover blocked: exactly one crypto engine must own PAPER decisions")
     invariants = scope.get("runtime_invariants") if isinstance(scope.get("runtime_invariants"), dict) else {}
     if (invariants.get("single_execution_owner") is not True
-            or invariants.get("global_portfolio_coordinator") != "V7_GLOBAL_PORTFOLIO_COORDINATOR"):
+            or invariants.get("global_portfolio_coordinator") != "V7_NATIVE_CRYPTO_SETTLEMENT_ENGINE"):
         fail("V7 cutover blocked: runtime invariant contract invalid")
 
     crypto_universe = load_json(root / "config/v7_crypto_universe.json")
