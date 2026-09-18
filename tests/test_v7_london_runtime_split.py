@@ -21,6 +21,14 @@ def test_cutover_artifact_gate_precedes_stop_and_symlink_switch():
     assert "runtime_training') is False" in s
     assert "pgrep -af" in s
 
+def test_cutover_assigns_run_root_to_service_user_before_runtime_start():
+    s=(ROOT/'ops/v7_london_cutover.sh').read_text()
+    prepare=s.index('v7_prepare_cutover_run_root.py')
+    ownership=s.index('install -d -o "$SERVICE_USER" -g "$SERVICE_GROUP" "$RUN_ROOT" "$RUN_ROOT/control"')
+    start=s.index('systemctl enable --now polymarket-v7-paper.service')
+    assert prepare < ownership < start
+    assert 'SERVICE_GROUP="$(id -gn "$SERVICE_USER")"' in s
+
 def test_runtime_bundle_is_research_free_by_contract():
     m=json.loads((ROOT/'deploy/london/runtime_manifest.json').read_text())
     assert m['paper_only'] is True and m['authenticated_execution'] is False and m['real_order_submission'] is False
