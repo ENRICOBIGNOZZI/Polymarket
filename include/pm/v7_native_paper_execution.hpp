@@ -36,7 +36,19 @@ struct NativePaperFillRecord {
     std::int64_t fill_microunits = 0;
     std::int64_t exchange_event_ns = 0;
     std::int64_t receive_monotonic_ns = 0;
+    OrderState order_state = OrderState::Unknown;
     std::uint8_t taker = 0;
+};
+
+struct NativePaperCancelRecord {
+    NativeOrderCommand command{};
+    std::int64_t cancel_effective_monotonic_ns = 0;
+};
+
+struct NativePaperAdvanceResult {
+    std::array<NativePaperCancelRecord, kNativePaperOrderCapacity> cancellations{};
+    std::size_t cancellation_count = 0;
+    std::uint8_t invalid = 0;
 };
 
 struct NativePaperSubmitResult {
@@ -74,7 +86,8 @@ public:
     [[nodiscard]] NativePaperTradeResult on_public_trade(
         const PublicTradePrint& trade) noexcept;
 
-    [[nodiscard]] bool advance_time(std::int64_t now_monotonic_ns) noexcept;
+    [[nodiscard]] NativePaperAdvanceResult advance_time(
+        std::int64_t now_monotonic_ns) noexcept;
 
     [[nodiscard]] std::size_t resting_orders() const noexcept;
     [[nodiscard]] std::uint64_t synthetic_acks() const noexcept { return synthetic_acks_; }
