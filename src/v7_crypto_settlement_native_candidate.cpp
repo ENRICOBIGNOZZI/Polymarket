@@ -648,6 +648,50 @@ int main(int argc, char** argv) {
             }
         }
 
+        // Market rollover is a control-plane boundary, but every PAPER
+        // order must be terminal before this native authority can disappear.
+        // Cancel all live maker quotes and advance beyond the bounded PAPER
+        // cancel latency; never carry an unowned reservation into the next market.
+        const auto shutdown_cancel_ns = monotonic_now_ns();
+        for (const auto instrument : {kYes, kNo}) {
+            for (const auto side : {Side::Buy, Side::Sell}) {
+                const auto cancel = authority.cancel_maker_quote(
+                    instrument, side, shutdown_cancel_ns);
+                if (cancel.accepted != 0) {
+                    if (!paper_execution.request_cancel(cancel.command, shutdown_cancel_ns)) {
+                        ++adapter_handoff_failures;
+                    }
+                } else if (cancel.reason != NativeCancelTxReason::UnknownClientOrder
+                           && cancel.reason != NativeCancelTxReason::DuplicateNoop) {
+                    const auto* current = cancel.command.client_order_id != 0
+                        ? adapter_endpoint.find(cancel.command.client_order_id) : nullptr;
+                    if (current != nullptr && !(
+                            current->state == OrderState::Filled
+                            || current->state == OrderState::Cancelled
+                            || current->state == OrderState::Rejected
+                            || current->state == OrderState::Expired
+                            || current->state == OrderState::Lost)) {
+                        ++adapter_handoff_failures;
+                    }
+                }
+            }
+        }
+        const auto shutdown_advance = paper_execution.advance_time(
+            shutdown_cancel_ns + 100'000'001LL);
+        if (shutdown_advance.invalid != 0) {
+            ++adapter_handoff_failures;
+        }
+        for (std::size_t i = 0; i < shutdown_advance.cancellation_count; ++i) {
+            if (!publish_state(shutdown_advance.cancellations[i].command,
+                               ExecutionPolicyId::PassiveMaker,
+                               OrderState::Cancelled)) {
+                ++adapter_handoff_failures;
+            }
+        }
+        if (authority.active_orders() != 0 || paper_execution.resting_orders() != 0) {
+            ++adapter_handoff_failures;
+        }
+
         pm_feed.stop();
 #if defined(__APPLE__)
         stopping.store(true, std::memory_order_release);
