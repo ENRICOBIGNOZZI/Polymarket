@@ -290,6 +290,13 @@ def collect_snapshot(run_root: Path, repository_root: Path | None = None, *, now
         "model_families_observed": ledger.get("model_families_observed", []),
     }
     maker = _json(run_root / "micro_maker/status.json")
+    native_manager = _json(run_root / "control/native_engine_manager_status.json")
+    native_mode = (
+        native_manager.get("schema") == "polymarket_v7_native_engine_manager_status_v1"
+        and native_manager.get("paper_only") is True
+        and native_manager.get("authenticated_execution") is False
+        and native_manager.get("real_order_submission") is False
+    )
     sha, runtime_sha = _git_head(repository_root), str(runtime.get("model_sha") or "")
     directives = _json(repository_root / "config/operator_directives.json")
     authorization = directives.get("paper_v7_authorization") if isinstance(directives.get("paper_v7_authorization"), dict) else {}
@@ -302,25 +309,37 @@ def collect_snapshot(run_root: Path, repository_root: Path | None = None, *, now
     model_families = canonical.get("model_families_observed")
     model_families = model_families if isinstance(model_families, list) else []
     lead_lag_required = "lead_lag_taker_v1" in model_families
-    external_pnl = _optional_number((external_fair.get("economics") or {}).get("realized_pnl"))
-    crypto_state_pnl: float | None = external_pnl
-    if lead_lag_required or lead_lag["present"]:
-        if external_pnl is None or not lead_lag["valid"]:
-            crypto_state_pnl = None
-        else:
-            crypto_state_pnl = external_pnl + float(lead_lag["realized_pnl"])
-    state_pnl = {
-        "CRYPTO_SETTLEMENT_ENGINE": crypto_state_pnl,
-    }
-    state_pnl_components = {
-        "CRYPTO_SETTLEMENT_ENGINE": {
-            "external_fair": external_pnl,
-            "lead_lag_taker_v1": lead_lag["realized_pnl"] if lead_lag["valid"] else None,
-            "lead_lag_required_by_canonical": lead_lag_required,
-            "complete": crypto_state_pnl is not None,
-            "total": crypto_state_pnl,
-        },
-    }
+    if native_mode:
+        native_pnl = _optional_number(canonical.get("net_pnl"))
+        state_pnl = {"CRYPTO_SETTLEMENT_ENGINE": native_pnl}
+        state_pnl_components = {
+            "CRYPTO_SETTLEMENT_ENGINE": {
+                "native_canonical_ledger": native_pnl,
+                "external_fair": None,
+                "lead_lag_taker_v1": None,
+                "lead_lag_required_by_canonical": False,
+                "complete": native_pnl is not None,
+                "total": native_pnl,
+            },
+        }
+    else:
+        external_pnl = _optional_number((external_fair.get("economics") or {}).get("realized_pnl"))
+        crypto_state_pnl: float | None = external_pnl
+        if lead_lag_required or lead_lag["present"]:
+            if external_pnl is None or not lead_lag["valid"]:
+                crypto_state_pnl = None
+            else:
+                crypto_state_pnl = external_pnl + float(lead_lag["realized_pnl"])
+        state_pnl = {"CRYPTO_SETTLEMENT_ENGINE": crypto_state_pnl}
+        state_pnl_components = {
+            "CRYPTO_SETTLEMENT_ENGINE": {
+                "external_fair": external_pnl,
+                "lead_lag_taker_v1": lead_lag["realized_pnl"] if lead_lag["valid"] else None,
+                "lead_lag_required_by_canonical": lead_lag_required,
+                "complete": crypto_state_pnl is not None,
+                "total": crypto_state_pnl,
+            },
+        }
     reconciliation = reconcile_portfolio(canonical=canonical, ledger=ledger, portfolio=portfolio, allocations=allocations, state_realized_pnl=state_pnl)
     engine_rows = portfolio.get("engines") if isinstance(portfolio.get("engines"), dict) else {}
     algorithms = {engine: {"equity": _number((engine_rows.get(engine) or {}).get("equity")), "budget": _number((engine_rows.get(engine) or {}).get("budget")), "killed": bool((engine_rows.get(engine) or {}).get("killed"))} for engine in LIVE_ALGORITHMS}
@@ -338,6 +357,8 @@ def collect_snapshot(run_root: Path, repository_root: Path | None = None, *, now
         "crypto_model_registry": _json(repository_root / "config/v7_crypto_settlement_model_registry.json"),
         "crypto_runtime": _json(run_root / "control/crypto_settlement_engine_snapshot.json"),
         "global_coordinator": _json(run_root / "control/global_portfolio_coordinator.json"),
+        "native_engine_manager": native_manager,
+        "native_mode": native_mode,
         "process_manifest": {
             "schema": process.get("schema"),
             "process_count": len(process.get("processes") or []),
@@ -417,11 +438,40 @@ def health_reasons(snapshot: dict[str, Any], *, max_runtime_age: int = 180, max_
     if allocations.get("schema") != "polymarket_v7_capital_allocation_v3" or set(budgets) != set(LIVE_ALGORITHMS) or allocations.get("engine_count") != 1 or allocations.get("paper_only") is not True or allocations.get("authenticated_execution") is not False or allocations.get("real_order_submission") is not False or allocations.get("real_capital_at_risk") is not False or allocations.get("capital_authority_owner_count") != 1: reasons.append("crypto_engine_allocation_missing_or_unsafe")
     engines = portfolio.get("engines") if isinstance(portfolio.get("engines"), dict) else {}
     if portfolio.get("schema") != "polymarket_v7_portfolio_guard_v2" or set(engines) != set(LIVE_ALGORITHMS) or portfolio.get("paper_only") is not True or portfolio.get("authenticated_execution") is not False or portfolio.get("real_order_submission") is not False or portfolio.get("real_capital_at_risk") is not False: reasons.append("portfolio_guard_contract_invalid")
-    fees = snapshot.get("fee_reward_registry") or {}
-    if fees.get("schema") != "polymarket_v7_fee_reward_registry_v1" or fees.get("model_sha") != snapshot.get("sha") or fees.get("paper_only") is not True or fees.get("authenticated_execution") is not False or fees.get("real_order_submission") is not False or fees.get("unknown_fee_policy") != "NON_EXECUTABLE" or fees.get("unknown_reward_policy") != "ZERO_EXPECTED_VALUE": reasons.append("fee_reward_registry_missing_or_unsafe")
-    if maker.get("schema") != "polymarket_v7_professional_maker_status_v1" or maker.get("model_sha") != snapshot.get("sha") or maker.get("paper_only") is not True or maker.get("authenticated_execution") is not False or maker.get("real_order_submission") not in (None, False) or maker.get("killed") is True or maker.get("source") in (None, "", "not_started") or not _fresh_ms(maker, snapshot, max_runtime_age): reasons.append("professional_maker_missing_stale_or_unsafe")
-    if selector.get("schema") != "polymarket_v7_maker_selector_status_v1" or selector.get("model_sha") != snapshot.get("sha") or selector.get("ready") is not True or selector.get("state") not in _MAKER_SELECTOR_OPERATIONAL_STATES or selector.get("paper_only") is not True or selector.get("authenticated_execution") is not False or selector.get("real_order_submission") is not False or not _fresh_ms(selector, snapshot, max_runtime_age): reasons.append("maker_selector_missing_stale_or_unsafe")
-    if rotation.get("schema") != "polymarket_v7_maker_cohort_rotation_status_v1" or rotation.get("model_sha") != snapshot.get("sha") or rotation.get("state") not in _MAKER_ROTATION_OPERATIONAL_STATES or rotation.get("paper_only") is not True or rotation.get("authenticated_execution") is not False or rotation.get("real_order_submission") is not False or not _fresh_ms(rotation, snapshot, max_runtime_age): reasons.append("maker_cohort_supervisor_missing_stale_or_unsafe")
+    native = snapshot.get("native_engine_manager") or {}
+    native_mode = snapshot.get("native_mode") is True
+    if native_mode:
+        allowed_native_states = {
+            "STARTING", "RUNNING", "ENGINE_EXITED", "ROTATED_CLEAN",
+            "WAITING_FOR_CANONICAL_MARKET", "WAITING_FOR_ROLLOVER",
+            "SETTLING", "RECOVERING_SETTLEMENT",
+        }
+        try:
+            native_pid = int(native.get("engine_pid") or 0)
+        except (TypeError, ValueError, OverflowError):
+            native_pid = 0
+        if (
+            native.get("schema") != "polymarket_v7_native_engine_manager_status_v1"
+            or native.get("model_sha") != snapshot.get("sha")
+            or native.get("paper_only") is not True
+            or native.get("authenticated_execution") is not False
+            or native.get("real_order_submission") is not False
+            or native.get("real_capital_at_risk") is not False
+            or native.get("single_native_hot_path") is not True
+            or native.get("state") not in allowed_native_states
+            or not _fresh_ms(native, snapshot, max_runtime_age)
+        ):
+            reasons.append("native_engine_manager_missing_stale_or_unsafe")
+        if native.get("state") == "RUNNING" and (native_pid <= 0 or not _pid_alive(native_pid)):
+            reasons.append("native_engine_process_not_alive")
+        if native.get("blocker"):
+            reasons.append("native_engine_manager_blocked")
+    else:
+        fees = snapshot.get("fee_reward_registry") or {}
+        if fees.get("schema") != "polymarket_v7_fee_reward_registry_v1" or fees.get("model_sha") != snapshot.get("sha") or fees.get("paper_only") is not True or fees.get("authenticated_execution") is not False or fees.get("real_order_submission") is not False or fees.get("unknown_fee_policy") != "NON_EXECUTABLE" or fees.get("unknown_reward_policy") != "ZERO_EXPECTED_VALUE": reasons.append("fee_reward_registry_missing_or_unsafe")
+        if maker.get("schema") != "polymarket_v7_professional_maker_status_v1" or maker.get("model_sha") != snapshot.get("sha") or maker.get("paper_only") is not True or maker.get("authenticated_execution") is not False or maker.get("real_order_submission") not in (None, False) or maker.get("killed") is True or maker.get("source") in (None, "", "not_started") or not _fresh_ms(maker, snapshot, max_runtime_age): reasons.append("professional_maker_missing_stale_or_unsafe")
+        if selector.get("schema") != "polymarket_v7_maker_selector_status_v1" or selector.get("model_sha") != snapshot.get("sha") or selector.get("ready") is not True or selector.get("state") not in _MAKER_SELECTOR_OPERATIONAL_STATES or selector.get("paper_only") is not True or selector.get("authenticated_execution") is not False or selector.get("real_order_submission") is not False or not _fresh_ms(selector, snapshot, max_runtime_age): reasons.append("maker_selector_missing_stale_or_unsafe")
+        if rotation.get("schema") != "polymarket_v7_maker_cohort_rotation_status_v1" or rotation.get("model_sha") != snapshot.get("sha") or rotation.get("state") not in _MAKER_ROTATION_OPERATIONAL_STATES or rotation.get("paper_only") is not True or rotation.get("authenticated_execution") is not False or rotation.get("real_order_submission") is not False or not _fresh_ms(rotation, snapshot, max_runtime_age): reasons.append("maker_cohort_supervisor_missing_stale_or_unsafe")
     if universe.get("schema") != "polymarket_v7_crypto_universe_status_v1" or universe.get("model_sha") != snapshot.get("sha") or universe.get("state") != "OPERATIONAL" or universe.get("discovery_exhaustive") is not True or universe.get("pagination_loop_guard_hit") is not False or universe.get("paper_only") is not True or universe.get("authenticated_execution") is not False or universe.get("real_order_submission") is not False or _integer(universe.get("eligible_markets")) <= 0 or not _fresh_ms(universe, snapshot, max_runtime_age): reasons.append("crypto_universe_missing_stale_or_unsafe")
     if snapshot.get("runtime_alive") is not True: reasons.append("execution_not_alive")
     if canonical.get("schema") != "polymarket_v7_runtime_ledger_economics_v1" or canonical.get("paper_only") is not True or canonical.get("authenticated_execution") is not False: reasons.append("runtime_ledger_economics_missing_or_unsafe")
@@ -476,7 +526,20 @@ def render_prometheus(snapshot: dict[str, Any]) -> str:
         _metric("polymarket_runtime_equity_usd", economics.get("equity")), _metric("polymarket_runtime_pnl_usd", economics.get("pnl")), _metric("polymarket_runtime_realized_pnl_usd", economics.get("realized_pnl")), _metric("polymarket_runtime_drawdown_ratio", economics.get("drawdown")), _metric("polymarket_runtime_killed", economics.get("killed")),
         _metric("polymarket_v7_canonical_submitted_units", canonical.get("submitted_units")), _metric("polymarket_v7_canonical_complete_units", canonical.get("complete_units")), _metric("polymarket_v7_ledger_valid", ledger.get("valid")), _metric("polymarket_v7_portfolio_reconciled", (snapshot.get("reconciliation") or {}).get("reconciled")), _metric("polymarket_v7_reconciliation_divergences", len((snapshot.get("reconciliation") or {}).get("reason_codes") or [])),
         _metric("polymarket_v7_trade_tape_rows", (snapshot.get("trade_tape") or {}).get("rows")), _metric("polymarket_v7_trade_tape_assets", (snapshot.get("trade_tape") or {}).get("assets")), _metric("polymarket_v7_trade_tape_no_standard_clob_flow", _verified_no_flow(snapshot.get("trade_recorder") or {}, 180)), _metric("polymarket_v7_latency_samples_present", (snapshot.get("maker_latency") or {}).get("present")),
-        _metric("polymarket_v7_component_ready", "professional_maker_missing_stale_or_unsafe" not in reasons, {"component": "professional_maker"}),
+        _metric("polymarket_v7_component_ready", (
+            ("native_engine_manager_missing_stale_or_unsafe" not in reasons
+             and "native_engine_process_not_alive" not in reasons
+             and "native_engine_manager_blocked" not in reasons)
+            if snapshot.get("native_mode") is True
+            else "professional_maker_missing_stale_or_unsafe" not in reasons
+        ), {"component": "professional_maker"}),
+        _metric("polymarket_v7_native_engine_mode", snapshot.get("native_mode") is True),
+        _metric("polymarket_v7_native_engine_ready", (
+            snapshot.get("native_mode") is True
+            and (snapshot.get("native_engine_manager") or {}).get("state") == "RUNNING"
+            and "native_engine_process_not_alive" not in reasons
+            and "native_engine_manager_blocked" not in reasons
+        )),
         _metric("polymarket_v7_maker_selector_ready", selector.get("ready") and selector.get("state") in _MAKER_SELECTOR_OPERATIONAL_STATES), _metric("polymarket_v7_maker_selector_fallback_active", selector.get("degraded")), _metric("polymarket_v7_maker_runtime_selection_pinned", selector.get("runtime_selection_pinned")), _metric("polymarket_v7_maker_candidate_rotation_pending", selector.get("candidate_rotation_pending")), _metric("polymarket_v7_maker_candidate_selected_markets", selector.get("candidate_selected_count")),
         _metric("polymarket_v7_maker_candidate_fresh_flow_eligible", selector.get("candidate_fresh_flow_eligible")), _metric("polymarket_v7_maker_candidate_sell_flow_30s_markets", selector.get("candidate_selected_with_sell_flow_30s")), _metric("polymarket_v7_maker_candidate_sell_flow_2m_markets", selector.get("candidate_selected_with_sell_flow_2m")), _metric("polymarket_v7_maker_candidate_max_last_sell_age_seconds", selector.get("candidate_max_last_sell_age_seconds")),
         _metric("polymarket_v7_maker_cohort_supervisor_ready", rotation.get("state") in _MAKER_ROTATION_OPERATIONAL_STATES), _metric("polymarket_v7_maker_cohort_rotations_total", rotation.get("rotation_count")), _metric("polymarket_v7_maker_rotation_candidate_confirmations", rotation.get("candidate_confirmations")), _metric("polymarket_v7_maker_rotation_required_confirmations", rotation.get("candidate_required_confirmations")), _metric("polymarket_v7_maker_rotation_cooldown_remaining_seconds", rotation.get("rotation_cooldown_remaining_seconds")), _metric("polymarket_v7_maker_paused_no_fresh_flow", rotation.get("fresh_flow_pause_active")),
