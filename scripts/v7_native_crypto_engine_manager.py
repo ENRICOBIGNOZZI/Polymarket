@@ -20,6 +20,8 @@ import urllib.request
 from pathlib import Path
 from typing import Any
 
+from v7_execution_ledger import canonical_ledger_path, iter_events
+
 STATUS_SCHEMA = "polymarket_v7_native_engine_manager_status_v1"
 
 
@@ -124,6 +126,29 @@ def fee_parameters(row: dict[str, Any]) -> tuple[float, float, str]:
     return rate, exponent, "GAMMA_FEE_SCHEDULE"
 
 
+def unsettled_native_markets(run_root: Path, model_sha: str) -> list[str]:
+    path = canonical_ledger_path(run_root)
+    if not path.is_file():
+        return []
+    fills: set[str] = set()
+    finals: set[str] = set()
+    for event in iter_events(path, expected_model_sha=model_sha):
+        if event.strategy != "CRYPTO_SETTLEMENT_ENGINE" or not event.market_id:
+            continue
+        metadata = event.metadata if isinstance(event.metadata, dict) else {}
+        receipt = metadata.get("native_settlement_receipt")
+        if not isinstance(receipt, dict) or receipt.get("owner") != "V7_NATIVE_CRYPTO_SETTLEMENT_ENGINE":
+            continue
+        if event.event_type == "FILL":
+            fills.add(event.market_id)
+        elif (
+            event.event_type == "FINAL"
+            and metadata.get("native_market_settlement_id") == f"native-settlement:{event.market_id}"
+        ):
+            finals.add(event.market_id)
+    return sorted(fills - finals)
+
+
 class Manager:
     def __init__(self, args: argparse.Namespace) -> None:
         self.args = args
@@ -179,8 +204,20 @@ class Manager:
             "--market-id", market_id,
             "--timeout-seconds", str(self.args.settlement_timeout_seconds),
         ]
-        result = subprocess.run(cmd, cwd=self.args.repository_root, check=False)
-        return result.returncode == 0
+        child = subprocess.Popen(cmd, cwd=self.args.repository_root)
+        market = {"market_id": market_id}
+        while child.poll() is None:
+            if self.stopping or self.kill_path.exists():
+                child.terminate()
+                try:
+                    child.wait(timeout=5)
+                except subprocess.TimeoutExpired:
+                    child.kill()
+                    child.wait(timeout=5)
+                return False
+            self.status("SETTLING", market=market)
+            time.sleep(1.0)
+        return child.returncode == 0
 
     def run_market(self, market: dict[str, Any]) -> int:
         tokens = [str(x) for x in market["clob_token_ids"]]
@@ -245,6 +282,18 @@ class Manager:
 
     def run(self) -> int:
         self.status("STARTING")
+        # Crash recovery is settlement-first. A prior native fill remains a
+        # capital claim until a canonical FINAL exists; no new engine may start
+        # while any such market is unresolved.
+        for market_id in unsettled_native_markets(self.run_root, self.args.model_sha):
+            self.status("RECOVERING_SETTLEMENT", market={"market_id": market_id})
+            if not self.settle(market_id):
+                self.status(
+                    "SETTLEMENT_BLOCKED",
+                    blocker="NATIVE_PAPER_SETTLEMENT_INCOMPLETE",
+                    market={"market_id": market_id},
+                )
+                return 79
         while not self.stopping and not self.kill_path.exists():
             snapshot = read_json(self.args.universe)
             market = select_market(snapshot, self.args.model_sha)
@@ -279,7 +328,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--settler", type=Path, required=True)
     parser.add_argument("--engine-log", type=Path, required=True)
     parser.add_argument("--python", default="python3")
-    parser.add_argument("--settlement-timeout-seconds", type=int, default=120)
+    parser.add_argument("--settlement-timeout-seconds", type=int, default=600)
     parser.add_argument("--min-order-microunits", type=int, default=5_000_000)
     args = parser.parse_args()
     if not exact_sha(args.model_sha):
