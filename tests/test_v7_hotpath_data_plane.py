@@ -19,18 +19,28 @@ def test_native_decision_loop_is_event_driven_and_router_free():
     assert '--engine "$CRYPTO_SETTLEMENT_ENGINE"' in loop
 
 
-def test_repricing_book_observer_is_fair_only_and_outside_hot_path():
+def test_repricing_book_observer_covers_all_runtime_contexts_outside_hot_path():
     observer = (ROOT / 'src/v7_maker_fillability_observer.cpp').read_text()
     loop = (ROOT / 'scripts/paper_v7_execution_loop.sh').read_text()
     manifest = json.loads((ROOT / 'config/v7_process_manifest.json').read_text())
     assert 'else if (arg == "--fair-only") options.fair_only = true;' in observer
     assert 'if (options.fair_only)' in observer
-    assert '--output-dir "$RUN_ROOT/research/repricing_book" --fair-only' in loop
+    assert '--selection "$RUN_ROOT/universe/book_selection.json" --selection-only' in loop
+    assert '--output-dir "$RUN_ROOT/research/repricing_book"' in loop
+    observer_launch = loop.split('v7_exec_class COLLECTOR "$FILLABILITY_OBSERVER"',1)[1].split('v7_register_child',1)[0]
+    assert '--fair-only' not in observer_launch
     rows = {row['id']: row for row in manifest['processes']}
     assert rows['pm_book_observer']['runtime_class'] == 'COLLECTOR'
     assert rows['crypto_settlement_engine']['runtime_class'] == 'HOT_PATH'
     assert rows['crypto_settlement_engine']['dependencies'] == []
     assert 'v7_assert_registered_child_count 9' in loop
+
+
+def test_runtime_start_is_gated_on_complete_30_context_book_data_selection():
+    loop = (ROOT / 'scripts/paper_v7_execution_loop.sh').read_text()
+    assert 'value.get("book_selection_state")=="READY"' in loop
+    assert 'int(value.get("book_selection_contexts") or 0)==30' in loop
+    assert 'int(value.get("book_selection_tokens") or 0)==60' in loop
 
 
 def test_lineage_invalidation_is_instrumented_without_relaxing_fail_closed_rules():

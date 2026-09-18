@@ -450,6 +450,113 @@ def build_snapshot(
     }
 
 
+
+BOOK_SELECTION_SCHEMA = "polymarket_v7_multi_crypto_book_selection_v1"
+BOOK_ASSETS = ("BTC", "ETH", "SOL", "XRP", "DOGE", "BNB")
+BOOK_HORIZONS = ("M5", "M15", "H1", "H4", "D1")
+BOOK_CONTEXTS = {f"{asset}:{horizon}" for asset in BOOK_ASSETS for horizon in BOOK_HORIZONS}
+
+
+def build_book_selection(snapshot: dict[str, Any]) -> tuple[dict[str, Any] | None, str]:
+    """Build the exact 30-context zero-authority PM book subscription."""
+    if (
+        snapshot.get("schema") != SNAPSHOT_SCHEMA
+        or snapshot.get("paper_only") is not True
+        or snapshot.get("authenticated_execution") is not False
+        or snapshot.get("real_order_submission") is not False
+        or snapshot.get("execution_authority") is not False
+    ):
+        return None, "UNIVERSE_CONTRACT_INVALID"
+    model_sha = str(snapshot.get("model_sha") or "")
+    if len(model_sha) != 40 or any(ch not in "0123456789abcdef" for ch in model_sha):
+        return None, "MODEL_SHA_INVALID"
+    try:
+        now_s = int(snapshot.get("timestamp_ms") or 0) // 1000
+    except (TypeError, ValueError, OverflowError):
+        return None, "TIMESTAMP_INVALID"
+    if now_s <= 0:
+        return None, "TIMESTAMP_INVALID"
+
+    grouped: dict[str, list[dict[str, Any]]] = {}
+    for row in snapshot.get("markets") or []:
+        if not isinstance(row, dict) or row.get("research_only") is True:
+            continue
+        asset = str(row.get("asset") or "")
+        horizon = str(row.get("horizon") or "")
+        context = f"{asset}:{horizon}"
+        if context not in BOOK_CONTEXTS:
+            continue
+        if row.get("active") is not True or row.get("closed") is True or row.get("accepting_orders") is not True:
+            continue
+        start = int(row.get("window_start_unix") or 0)
+        close = int(row.get("close_timestamp_unix") or 0)
+        if close <= 0:
+            close = start + int(row.get("horizon_seconds") or 0)
+        if start <= 0 or close <= start or not (start <= now_s < close):
+            continue
+        grouped.setdefault(context, []).append(row)
+
+    if set(grouped) != BOOK_CONTEXTS:
+        missing = sorted(BOOK_CONTEXTS - set(grouped))
+        return None, "MISSING_CONTEXTS:" + ",".join(missing)
+    ambiguous = sorted(context for context, rows in grouped.items() if len(rows) != 1)
+    if ambiguous:
+        return None, "AMBIGUOUS_CONTEXTS:" + ",".join(ambiguous)
+
+    markets: list[dict[str, Any]] = []
+    for context in sorted(BOOK_CONTEXTS):
+        row = grouped[context][0]
+        tokens = [str(x) for x in row.get("clob_token_ids") or []]
+        outcomes = [str(x).strip().upper() for x in row.get("outcomes") or []]
+        if len(tokens) != 2 or not all(tokens) or tokens[0] == tokens[1]:
+            return None, f"{context}:TOKEN_MAPPING_INVALID"
+        yes_index, no_index = 0, 1
+        for index, outcome in enumerate(outcomes[:2]):
+            if outcome in {"YES", "UP"}:
+                yes_index = index
+            if outcome in {"NO", "DOWN"}:
+                no_index = index
+        if yes_index == no_index or yes_index >= len(tokens) or no_index >= len(tokens):
+            yes_index, no_index = 0, 1
+        start_s = int(row.get("window_start_unix") or 0)
+        close_s = int(row.get("close_timestamp_unix") or 0)
+        if close_s <= 0:
+            close_s = start_s + int(row.get("horizon_seconds") or 0)
+        event_ids = [str(x) for x in row.get("event_ids") or [] if str(x)]
+        market_id = str(row.get("market_id") or "")
+        if not market_id:
+            return None, f"{context}:MARKET_ID_INVALID"
+        markets.append({
+            "asset": str(row.get("asset") or ""),
+            "horizon": str(row.get("horizon") or ""),
+            "market_id": market_id,
+            "event_id": event_ids[0] if event_ids else "",
+            "yes_token": tokens[yes_index],
+            "no_token": tokens[no_index],
+            "start_timestamp_ms": start_s * 1000,
+            "end_timestamp_ms": close_s * 1000,
+        })
+    identity = json.dumps(markets, sort_keys=True, separators=(",", ":"))
+    return {
+        "schema": BOOK_SELECTION_SCHEMA,
+        "version": 1,
+        "model_sha": model_sha,
+        "paper_only": True,
+        "authenticated_execution": False,
+        "real_order_submission": False,
+        "real_capital_at_risk": False,
+        "execution_authority": False,
+        "automatic_promotion": False,
+        "selection_only": True,
+        "active_only": True,
+        "generated_at_ms": int(snapshot["timestamp_ms"]),
+        "generation_sha256": hashlib.sha256(identity.encode("utf-8")).hexdigest(),
+        "market_count": len(markets),
+        "token_count": 2 * len(markets),
+        "markets": markets,
+    }, ""
+
+
 def status_from_snapshot(snapshot: dict[str, Any], *, state: str = "OPERATIONAL", blocker: str = "") -> dict[str, Any]:
     return {
         "schema": STATUS_SCHEMA,
@@ -481,7 +588,35 @@ def persist(output_dir: Path, snapshot: dict[str, Any], previous: dict[str, Any]
     previous = previous or {}
     changed = previous.get("membership_sha256") != snapshot.get("membership_sha256")
     _atomic_json(output_dir / "current.json", snapshot)
-    _atomic_json(output_dir / "status.json", status_from_snapshot(snapshot))
+
+    selection, selection_blocker = build_book_selection(snapshot)
+    selection_path = output_dir / "book_selection.json"
+    if selection is not None:
+        _atomic_json(selection_path, selection)
+        selection_state = "READY"
+        selection_contexts = int(selection["market_count"])
+        selection_tokens = int(selection["token_count"])
+    else:
+        prior_selection = _load_json(selection_path)
+        prior_safe = (
+            prior_selection.get("schema") == BOOK_SELECTION_SCHEMA
+            and prior_selection.get("model_sha") == snapshot.get("model_sha")
+            and prior_selection.get("paper_only") is True
+            and prior_selection.get("execution_authority") is False
+            and prior_selection.get("selection_only") is True
+        )
+        selection_state = "STALE_PRESERVED" if prior_safe else "NOT_READY"
+        selection_contexts = int(prior_selection.get("market_count") or 0) if prior_safe else 0
+        selection_tokens = int(prior_selection.get("token_count") or 0) if prior_safe else 0
+
+    status = status_from_snapshot(snapshot)
+    status.update({
+        "book_selection_state": selection_state,
+        "book_selection_contexts": selection_contexts,
+        "book_selection_tokens": selection_tokens,
+        "book_selection_blocker": selection_blocker,
+    })
+    _atomic_json(output_dir / "status.json", status)
     if changed:
         output_dir.mkdir(parents=True, exist_ok=True)
         change = {
@@ -489,6 +624,7 @@ def persist(output_dir: Path, snapshot: dict[str, Any], previous: dict[str, Any]
             "model_sha": snapshot["model_sha"], "previous_membership_sha256": previous.get("membership_sha256", ""),
             "membership_sha256": snapshot["membership_sha256"], "tier_counts": snapshot["tier_counts"],
             "discovered_markets": snapshot["discovered_markets"], "eligible_markets": snapshot["eligible_markets"],
+            "book_selection_state": selection_state, "book_selection_contexts": selection_contexts,
             "paper_only": True, "authenticated_execution": False, "real_order_submission": False,
         }
         with (output_dir / "changes.jsonl").open("a", encoding="utf-8") as handle:

@@ -48,7 +48,7 @@ class V7NativeMonitoringTest(unittest.TestCase):
         self._write(root / "micro_maker/selector_status.json", {"schema":"polymarket_v7_maker_selector_status_v1","timestamp_ms":(now-5)*1000,"model_sha":sha,"paper_only":True,"authenticated_execution":False,"real_order_submission":False,"state":"OPERATIONAL_BILATERAL_FLOW","ready":True,"runtime_selection_pinned":True,"candidate_rotation_pending":True,"candidate_selected_count":12})
         self._write(root / "micro_maker/rotation_status.json", {"schema":"polymarket_v7_maker_cohort_rotation_status_v1","timestamp_ms":(now-5)*1000,"model_sha":sha,"paper_only":True,"authenticated_execution":False,"real_order_submission":False,"state":"RUNNING","rotation_count":3})
         self._write(root / "micro_maker/runtime_diagnostics.json", {"feed_connected_workers":2,"feed_messages":1234,"decisions":4321,"quote_intents":7,"reason_counts":{"NO_ECONOMIC_QUOTE":4000}})
-        self._write(root / "universe/status.json", {"schema":"polymarket_v7_crypto_universe_status_v1","timestamp_ms":(now-5)*1000,"model_sha":sha,"state":"OPERATIONAL","paper_only":True,"authenticated_execution":False,"real_order_submission":False,"discovery_exhaustive":True,"pagination_loop_guard_hit":False,"discovered_markets":12,"eligible_markets":8,"tier_counts":{"HOT":8,"WARM":0,"COLD":0}})
+        self._write(root / "universe/status.json", {"schema":"polymarket_v7_crypto_universe_status_v1","timestamp_ms":(now-5)*1000,"model_sha":sha,"state":"OPERATIONAL","paper_only":True,"authenticated_execution":False,"real_order_submission":False,"discovery_exhaustive":True,"pagination_loop_guard_hit":False,"discovered_markets":30,"eligible_markets":30,"tier_counts":{"HOT":30,"WARM":0,"COLD":0},"book_selection_state":"READY","book_selection_contexts":30,"book_selection_tokens":60,"book_selection_blocker":""})
         self._write(root / "canonical_economics.json", {"schema":"polymarket_v7_canonical_economics_v1","expected_model_sha":sha,"paper_only":True,"authenticated_execution":False,"submitted_units":0,"complete_units":0,"net_pnl":0.0,"strategy_net_pnl":{"CRYPTO_SETTLEMENT_ENGINE":0.0}})
         (root / "ledger").mkdir(parents=True,exist_ok=True); (root / "ledger/execution.jsonl").write_text("")
         (root / "trade_tape.csv").write_text(f"timestamp,received_ms,market_id,asset_id,side,price,size,trade_id\n{now-1},{(now-1)*1000},m,t,SELL,0.5,2,tr1\n")
@@ -98,6 +98,18 @@ class V7NativeMonitoringTest(unittest.TestCase):
             metrics = exporter.render_prometheus(snapshot)
             self.assertIn("polymarket_v7_native_engine_mode 1", metrics)
             self.assertIn("polymarket_v7_native_engine_ready 1", metrics)
+
+    def test_incomplete_book_data_coverage_fails_health_closed(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root=Path(directory)/"paper_v7_live"; self._fixture(root)
+            status=json.loads((root/"universe/status.json").read_text())
+            status.update({"book_selection_state":"STALE_PRESERVED","book_selection_contexts":29,"book_selection_tokens":58})
+            self._write(root/"universe/status.json",status)
+            snapshot=exporter.collect_snapshot(root,ROOT,now=1000)
+            self.assertIn("crypto_book_data_coverage_incomplete",exporter.health_reasons(snapshot))
+            metrics=exporter.render_prometheus(snapshot)
+            self.assertIn("polymarket_v7_book_data_ready 0",metrics)
+            self.assertIn("polymarket_v7_book_data_contexts 29",metrics)
 
     def test_professional_maker_latency_is_exported(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
