@@ -19,6 +19,7 @@ import shutil
 import subprocess
 import sys
 import time
+import urllib.error
 import urllib.parse
 import urllib.request
 from dataclasses import dataclass, asdict
@@ -31,6 +32,13 @@ from v7_native_risk_policy import load_native_limits, unsettled_exposure
 from v7_native_settlement_projection import context_from_fill
 
 STATUS_SCHEMA = "polymarket_v7_native_engine_manager_status_v1"
+
+
+class RetryableLaunchError(RuntimeError):
+    """Remote per-market metadata is temporarily unavailable.
+
+    This must never tear down already-running native context workers.
+    """
 
 
 def read_json(path: Path) -> dict[str, Any]:
@@ -52,10 +60,13 @@ def exact_sha(value: str) -> bool:
     return len(value) == 40 and all(ch in "0123456789abcdef" for ch in value)
 
 
-def public_json(url: str, timeout: float = 4.0) -> Any:
+def public_json(url: str, timeout: float = 1.5) -> Any:
     request = urllib.request.Request(url, headers={"User-Agent": "polymarket-v7-native-paper/1"})
-    with urllib.request.urlopen(request, timeout=timeout) as response:
-        return json.loads(response.read().decode("utf-8"))
+    try:
+        with urllib.request.urlopen(request, timeout=timeout) as response:
+            return json.loads(response.read().decode("utf-8"))
+    except (TimeoutError, ConnectionError, urllib.error.URLError, json.JSONDecodeError) as exc:
+        raise RetryableLaunchError(f"remote_metadata_unavailable:{type(exc).__name__}") from exc
 
 
 def _close_unix(row: dict[str, Any]) -> int:
@@ -356,6 +367,9 @@ class Manager:
         self.completed_market_ids: set[str] = set()
         self.stopping = False
         self.pending_settlements: dict[str, PendingSettlement] = {}
+        self.launch_retry_attempts: dict[str, int] = {}
+        self.launch_retry_after: dict[str, float] = {}
+        self.launch_retry_reasons: dict[str, str] = {}
         self.base_risk_receipt = load_native_limits(
             read_json(args.repository_root / "config/v7_native_risk_policy.json"),
             read_json(self.run_root / "control/allocations/manifest.json"))
@@ -559,6 +573,10 @@ class Manager:
             "taker_minimum_tte_ns": self.args.minimum_tte_ns,
             "taker_maximum_tte_ns": self.args.maximum_tte_ns,
             "maker_share_cap_microunits": self.args.maker_share_cap_microunits,
+            "launch_retry_contexts": sorted(self.launch_retry_attempts),
+            "launch_retry_count": len(self.launch_retry_attempts),
+            "launch_retry_attempts": dict(sorted(self.launch_retry_attempts.items())),
+            "launch_retry_reasons": dict(sorted(self.launch_retry_reasons.items())),
             "evidence_worker_count": int(evidence.get("worker_count") or 0),
             "evidence_dropped": int(evidence.get("dropped") or 0),
             "evidence_queue_depth": int(evidence.get("queue_depth") or 0),
@@ -597,12 +615,22 @@ class Manager:
         if len(tokens) != 2 or len(outcomes) != 2:
             raise RuntimeError("outcome_mapping_invalid")
         yes_token, no_token = tokens
-        yes_tick = tick_size_e4(yes_token)
-        no_tick = tick_size_e4(no_token)
-        if yes_tick != no_tick:
-            raise RuntimeError("complement_tick_size_mismatch")
-        minimum_order = max(self.args.min_order_microunits,
-            venue_minimum_microunits(yes_token), venue_minimum_microunits(no_token))
+        try:
+            yes_tick = tick_size_e4(yes_token)
+            no_tick = tick_size_e4(no_token)
+            if yes_tick != no_tick:
+                raise RuntimeError("complement_tick_size_mismatch")
+            minimum_order = max(
+                self.args.min_order_microunits,
+                venue_minimum_microunits(yes_token),
+                venue_minimum_microunits(no_token),
+            )
+        except RetryableLaunchError:
+            raise
+        except (OSError, RuntimeError, ValueError) as exc:
+            # CLOB terms are market-scoped remote metadata. Quarantine/retry
+            # this context without taking down already-running contexts.
+            raise RetryableLaunchError(f"clob_market_terms:{exc}") from exc
         fee_rate, fee_exponent, fee_source = fee_parameters(market)
         close_unix = _close_unix(market)
         close_wall_ns = close_unix * 1_000_000_000
@@ -872,6 +900,34 @@ class Manager:
             finally:
                 self._terminate_all()
 
+    def _launch_missing_workers(
+        self, targets: dict[str, dict[str, Any]],
+    ) -> tuple[str, Exception] | None:
+        now = time.monotonic()
+        for key, market in sorted(targets.items()):
+            market_id = str(market["market_id"])
+            if market_id in self.completed_market_ids or key in self.workers:
+                continue
+            if now < self.launch_retry_after.get(key, 0.0):
+                continue
+            try:
+                self.workers[key] = self.launch_worker(key, market)
+            except CapitalLeaseUnavailable:
+                continue
+            except RetryableLaunchError as exc:
+                attempts = self.launch_retry_attempts.get(key, 0) + 1
+                self.launch_retry_attempts[key] = attempts
+                self.launch_retry_reasons[key] = str(exc)[:240]
+                self.launch_retry_after[key] = time.monotonic() + min(2.0, 0.25 * (2 ** min(attempts - 1, 3)))
+                continue
+            except (OSError, RuntimeError, ValueError) as exc:
+                return key, exc
+            else:
+                self.launch_retry_attempts.pop(key, None)
+                self.launch_retry_reasons.pop(key, None)
+                self.launch_retry_after.pop(key, None)
+        return None
+
     def _run_owned(self) -> int:
         self.status("STARTING")
         recovery = self.recover()
@@ -911,22 +967,12 @@ class Manager:
                     self._terminate_all()
                     return rc
 
-            for key, market in sorted(targets.items()):
-                market_id = str(market["market_id"])
-                if market_id in self.completed_market_ids:
-                    continue
-                current = self.workers.get(key)
-                if current is not None:
-                    # Existing window owns this context until it drains/settles.
-                    continue
-                try:
-                    self.workers[key] = self.launch_worker(key, market)
-                except CapitalLeaseUnavailable:
-                    continue
-                except (OSError, RuntimeError, ValueError) as exc:
-                    self.status("LAUNCH_BLOCKED", blocker=f"{key}:{exc}", targets=targets)
-                    self._terminate_all()
-                    return 78
+            fatal_launch = self._launch_missing_workers(targets)
+            if fatal_launch is not None:
+                key, exc = fatal_launch
+                self.status("LAUNCH_BLOCKED", blocker=f"{key}:{exc}", targets=targets)
+                self._terminate_all()
+                return 78
 
             if self.workers:
                 self.status("RUNNING", targets=targets)
