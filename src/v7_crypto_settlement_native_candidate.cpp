@@ -107,6 +107,7 @@ struct Options {
     int duration_seconds = 0;
     bool validate_only = false;
     bool observation_only = false;
+    bool capture_native_decisions = false;
     bool capture_native_observations = false;
 };
 
@@ -148,8 +149,15 @@ Options parse_options(int argc, char** argv) {
         else if (arg == "--taker-fee-exponent") out.taker_fee_exponent = bounded_double(next(), 0.0, 10.0);
         else if (arg == "--duration-seconds") out.duration_seconds = bounded_integer<int>(next(), 0, 86'400);
         else if (arg == "--validate-only") out.validate_only = true;
-        else if (arg == "--observation-only") { out.observation_only = true; out.capture_native_observations = true; }
-        else if (arg == "--capture-native-observations") out.capture_native_observations = true;
+        else if (arg == "--observation-only") {
+            out.observation_only = true;
+            out.capture_native_decisions = true;
+        }
+        else if (arg == "--capture-native-decisions") out.capture_native_decisions = true;
+        else if (arg == "--capture-native-observations") {
+            out.capture_native_observations = true;
+            out.capture_native_decisions = true;
+        }
         else throw std::invalid_argument("unknown option");
     }
     return out;
@@ -310,6 +318,8 @@ int main(int argc, char** argv) {
         evidence_config.taker_fee_rate = options.taker_fee_rate;
         evidence_config.taker_fee_exponent = options.taker_fee_exponent;
         evidence_config.taker_only_fee = 1;
+        evidence_config.observation_capture_mode = options.capture_native_observations
+            ? "FULL" : options.capture_native_decisions ? "DECISIONS" : "NONE";
         evidence_config.minimum_order_microunits = options.min_order_microunits;
         evidence_config.risk_policy_sha256 = options.risk_policy_sha256;
         evidence_config.asset = options.asset;
@@ -373,7 +383,7 @@ int main(int argc, char** argv) {
         std::uint64_t arbitration_conflicts = 0, authority_rejections = 0;
         std::uint64_t inventory_rejections = 0, minimum_size_rejections = 0;
         std::uint64_t last_measured_signal_version = 0, last_observed_signal_version = 0;
-        std::uint8_t last_observed_reason = 0;
+        std::uint8_t last_observed_reason = 0, last_observed_accepted = 0;
         const auto observation = [&](const BookHotSnapshot& book, std::uint64_t instrument,
                                      std::uint8_t kind) noexcept {
             NativeObservation out{};
@@ -383,8 +393,14 @@ int main(int argc, char** argv) {
             out.receive_ns = book.receive_monotonic_ns; out.exchange_ns = book.exchange_event_ns;
             out.observed_ns = monotonic_now_ns(); out.close_ns = market.close_monotonic_ns;
             out.trigger_ns = current_signal.trigger_receive_monotonic_ns;
+            out.evaluated_grid_ns = current_signal.evaluated_grid_monotonic_ns;
+            out.valid_until_ns = current_signal.valid_until_monotonic_ns;
             out.direction = current_signal.direction;
             out.signal_return_bp = current_signal.binance_return_100ms_bp;
+            out.binance_return_100ms_bp = current_signal.binance_return_100ms_bp;
+            out.coinbase_return_100ms_bp = current_signal.coinbase_return_100ms_bp;
+            out.confirmed_non_opposing = current_signal.confirmed_non_opposing;
+            out.signal_valid = current_signal.valid;
             out.valid = book.valid != 0 && book.lineage_continuous != 0;
             out.bid_e4 = book.best_bid_e4; out.ask_e4 = book.best_ask_e4; out.tick_e4 = book.tick_size_e4;
             out.bid_quantity = book.best_bid_microunits; out.ask_quantity = book.best_ask_microunits;
@@ -647,7 +663,7 @@ int main(int argc, char** argv) {
                                 continue;
                             }
                             if (intent.type != IntentType::Quote) continue;
-                            if (options.capture_native_observations) {
+                            if (options.capture_native_decisions) {
                             auto maker_observation = observation(event.book, event.instrument_handle, 4);
                             maker_observation.decision_ns = intent.decision_monotonic_ns;
                             maker_observation.proposed_quantity = intent.quantity_microunits;
@@ -687,10 +703,12 @@ int main(int argc, char** argv) {
                 const auto finished = monotonic_now_ns();
                 ++evaluations;
                 const auto observation_reason = static_cast<std::uint8_t>(result.reason);
-                if (options.capture_native_observations && (current_signal.signal_version != last_observed_signal_version
-                    || observation_reason != last_observed_reason || result.accepted != 0)) {
+                if (options.capture_native_decisions && (current_signal.signal_version != last_observed_signal_version
+                    || observation_reason != last_observed_reason
+                    || result.accepted != last_observed_accepted)) {
                     last_observed_signal_version = current_signal.signal_version;
                     last_observed_reason = observation_reason;
+                    last_observed_accepted = result.accepted;
                     auto point = observation(current_signal.direction > 0 ? yes_book : no_book,
                         current_signal.direction > 0 ? kYes : kNo, 2);
                     point.decision_ns = finished; point.reason = observation_reason; point.accepted = result.accepted;
@@ -886,7 +904,10 @@ int main(int argc, char** argv) {
             {"real_order_submission", false}, {"real_capital_at_risk", false},
             {"authority", options.observation_only ? "ZERO_AUTHORITY_RESEARCH" : "PAPER_SIMULATED_SINGLE_OWNER"},
             {"observation_only", options.observation_only},
-            {"native_observation_capture_enabled", options.capture_native_observations},
+            {"native_decision_capture_enabled", options.capture_native_decisions},
+            {"native_full_observation_capture_enabled", options.capture_native_observations},
+            {"native_observation_capture_mode", options.capture_native_observations
+                ? "FULL" : options.capture_native_decisions ? "DECISIONS" : "NONE"},
             {"asset", options.asset}, {"horizon", options.horizon},
             {"critical_path", "CPP_SAME_PROCESS_FEED_DECODE_TO_SINGLE_SETTLEMENT_AUTHORITY"},
             {"clean_capture", clean}, {"duration_seconds", options.duration_seconds},
