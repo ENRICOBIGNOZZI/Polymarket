@@ -303,11 +303,20 @@ def test_manager_cli_defaults_match_frequency_and_size_policy(monkeypatch) -> No
 
 def test_clob_venue_minimum_is_loaded_and_fail_closed(monkeypatch) -> None:
     import v7_native_crypto_engine_manager as manager
-    monkeypatch.setattr(manager, "public_json", lambda _url: {"min_order_size": "5"})
+    manager.venue_metadata.cache_clear()
+    monkeypatch.setattr(
+        manager, "public_json", lambda _url: {"tick_size": "0.01", "min_order_size": "5"}
+    )
     assert manager.venue_minimum_microunits("token") == 5_000_000
-    monkeypatch.setattr(manager, "public_json", lambda _url: {"min_order_size": "7.5"})
+    manager.venue_metadata.cache_clear()
+    monkeypatch.setattr(
+        manager, "public_json", lambda _url: {"tick_size": "0.01", "min_order_size": "7.5"}
+    )
     assert manager.venue_minimum_microunits("token") == 7_500_000
-    monkeypatch.setattr(manager, "public_json", lambda _url: {"min_order_size": None})
+    manager.venue_metadata.cache_clear()
+    monkeypatch.setattr(
+        manager, "public_json", lambda _url: {"tick_size": "0.01", "min_order_size": None}
+    )
     try:
         manager.venue_minimum_microunits("token")
     except RuntimeError:
@@ -557,3 +566,45 @@ def test_settlement_summary_separates_retryable_timeout_from_blocker(tmp_path) -
     summary = owner._aggregate_settlements()
     assert summary["retryable_timeout_count"] == 1
     assert summary["blocked_count"] == 1
+
+
+def test_venue_metadata_uses_one_book_fetch_for_tick_and_minimum(monkeypatch) -> None:
+    import v7_native_crypto_engine_manager as manager
+    calls=[]
+    manager.venue_metadata.cache_clear()
+    def fake(url):
+        calls.append(url)
+        return {'tick_size':'0.01','min_order_size':'5'}
+    monkeypatch.setattr(manager,'public_json',fake)
+    assert manager.tick_size_e4('token') == 100
+    assert manager.venue_minimum_microunits('token') == 5_000_000
+    assert len(calls) == 1
+    assert '/book?' in calls[0]
+
+
+def test_public_json_retries_transient_timeout(monkeypatch) -> None:
+    import v7_native_crypto_engine_manager as manager
+    calls=[]
+    class Response:
+        def __enter__(self): return self
+        def __exit__(self,*_): return False
+        def read(self): return b'{"ok": true}'
+    def fake(*_args,**_kwargs):
+        calls.append(1)
+        if len(calls) < 3:
+            raise TimeoutError('temporary')
+        return Response()
+    monkeypatch.setattr(manager.urllib.request,'urlopen',fake)
+    monkeypatch.setattr(manager.time,'sleep',lambda *_: None)
+    assert manager.public_json('https://example.invalid',timeout=.01,attempts=3)=={'ok':True}
+    assert len(calls)==3
+
+
+def test_transient_venue_metadata_is_not_global_launch_failure() -> None:
+    from pathlib import Path
+    source=(Path(__file__).resolve().parents[1]/'scripts/v7_native_crypto_engine_manager.py').read_text()
+    transient=source.index('except TransientVenueMetadataError:')
+    hard=source.index('except (OSError, RuntimeError, ValueError) as exc:',transient)
+    terminate=source.index('self._terminate_all()',hard)
+    assert transient < hard < terminate
+    assert 'must not tear down unrelated live contexts' in source[transient:hard]

@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import argparse
 import fcntl
+import functools
 from decimal import Decimal, InvalidOperation
 import json
 import math
@@ -19,6 +20,7 @@ import shutil
 import subprocess
 import sys
 import time
+import urllib.error
 import urllib.parse
 import urllib.request
 from dataclasses import dataclass, asdict
@@ -52,10 +54,26 @@ def exact_sha(value: str) -> bool:
     return len(value) == 40 and all(ch in "0123456789abcdef" for ch in value)
 
 
-def public_json(url: str, timeout: float = 4.0) -> Any:
+class TransientVenueMetadataError(RuntimeError):
+    pass
+
+
+def public_json(url: str, timeout: float = 1.0, attempts: int = 3) -> Any:
     request = urllib.request.Request(url, headers={"User-Agent": "polymarket-v7-native-paper/1"})
-    with urllib.request.urlopen(request, timeout=timeout) as response:
-        return json.loads(response.read().decode("utf-8"))
+    last: BaseException | None = None
+    for attempt in range(max(1, attempts)):
+        try:
+            with urllib.request.urlopen(request, timeout=timeout) as response:
+                return json.loads(response.read().decode("utf-8"))
+        except urllib.error.HTTPError:
+            raise
+        except (urllib.error.URLError, TimeoutError, ConnectionError) as exc:
+            last = exc
+            if attempt + 1 < max(1, attempts):
+                time.sleep(0.05 * (attempt + 1))
+    raise TransientVenueMetadataError(
+        str(last) if last is not None else "venue_metadata_unavailable"
+    )
 
 
 def _close_unix(row: dict[str, Any]) -> int:
@@ -140,31 +158,38 @@ def select_market(
         return None
 
 
-def tick_size_e4(token_id: str) -> int:
-    query = urllib.parse.urlencode({"token_id": token_id})
-    value = public_json("https://clob.polymarket.com/tick-size?" + query)
+@functools.lru_cache(maxsize=256)
+def venue_metadata(token_id: str) -> tuple[int, int]:
+    value = public_json(
+        "https://clob.polymarket.com/book?" + urllib.parse.urlencode({"token_id": token_id})
+    )
     if not isinstance(value, dict):
-        raise RuntimeError("tick_size_response_invalid")
-    raw = float(value.get("minimum_tick_size"))
-    scaled = int(round(raw * 10_000.0))
-    if not math.isfinite(raw) or raw <= 0 or scaled <= 0 or abs(raw * 10_000.0 - scaled) > 1e-8:
+        raise RuntimeError("venue_metadata_response_invalid")
+    try:
+        raw_tick = float(value["tick_size"])
+        quantity = Decimal(str(value["min_order_size"])) * 1_000_000
+    except (KeyError, TypeError, InvalidOperation, ValueError) as exc:
+        raise RuntimeError("venue_metadata_missing") from exc
+    scaled = int(round(raw_tick * 10_000.0))
+    if (
+        not math.isfinite(raw_tick)
+        or raw_tick <= 0
+        or scaled <= 0
+        or abs(raw_tick * 10_000.0 - scaled) > 1e-8
+        or 10_000 % scaled != 0
+    ):
         raise RuntimeError("tick_size_invalid")
-    if 10_000 % scaled != 0:
-        raise RuntimeError("tick_size_not_canonical")
-    return scaled
+    if not quantity.is_finite() or quantity <= 0 or quantity != quantity.to_integral_value():
+        raise RuntimeError("venue_minimum_invalid")
+    return scaled, int(quantity)
+
+
+def tick_size_e4(token_id: str) -> int:
+    return venue_metadata(token_id)[0]
 
 
 def venue_minimum_microunits(token_id: str) -> int:
-    value = public_json("https://clob.polymarket.com/book?" + urllib.parse.urlencode({"token_id": token_id}))
-    if not isinstance(value, dict):
-        raise RuntimeError("venue_minimum_response_invalid")
-    try:
-        quantity = Decimal(str(value["min_order_size"])) * 1_000_000
-    except (KeyError, InvalidOperation, ValueError) as exc:
-        raise RuntimeError("venue_minimum_missing") from exc
-    if not quantity.is_finite() or quantity <= 0 or quantity != quantity.to_integral_value():
-        raise RuntimeError("venue_minimum_invalid")
-    return int(quantity)
+    return venue_metadata(token_id)[1]
 
 def fee_parameters(row: dict[str, Any]) -> tuple[float, float, str]:
     explicit = row.get("fees_enabled_explicit") is True
@@ -918,6 +943,10 @@ class Manager:
                 try:
                     self.workers[key] = self.launch_worker(key, market)
                 except CapitalLeaseUnavailable:
+                    continue
+                except TransientVenueMetadataError:
+                    # Public CLOB metadata is control-plane input. A transient
+                    # read timeout must not tear down unrelated live contexts.
                     continue
                 except (OSError, RuntimeError, ValueError) as exc:
                     self.status("LAUNCH_BLOCKED", blocker=f"{key}:{exc}", targets=targets)
