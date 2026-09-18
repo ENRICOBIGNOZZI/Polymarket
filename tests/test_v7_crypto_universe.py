@@ -171,3 +171,44 @@ def test_persist_publishes_book_selection_status_atomically():
         assert status["book_selection_state"]=="READY"
         assert status["book_selection_contexts"]==30
         assert status["book_selection_tokens"]==60
+
+
+def test_persist_does_not_republish_unchanged_book_selection():
+    assets=("BTC","ETH","SOL","XRP","DOGE","BNB")
+    horizons={"M5":300,"M15":900,"H1":3600,"H4":14400,"D1":86400}
+    rows=[]; index=0
+    for asset in assets:
+        for horizon,seconds in horizons.items():
+            index+=1
+            rows.append({
+                "market_id":f"m{index}","event_ids":[f"e{index}"],
+                "clob_token_ids":[f"up{index}",f"down{index}"],"outcomes":["Up","Down"],
+                "asset":asset,"horizon":horizon,"horizon_seconds":seconds,
+                "window_start_unix":NOW-10,"close_timestamp_unix":NOW+seconds,
+                "active":True,"closed":False,"accepting_orders":True,
+                "research_only":False,"tier":"HOT",
+            })
+    base={
+        "schema":universe.SNAPSHOT_SCHEMA,"version":7,
+        "paper_only":True,"authenticated_execution":False,
+        "real_order_submission":False,"execution_authority":False,
+        "model_sha":SHA,"timestamp_ms":NOW*1000,"markets":rows,
+        "membership_sha256":"c"*64,"tier_counts":{"HOT":30,"WARM":0,"COLD":0},
+        "discovered_markets":30,"eligible_markets":30,
+    }
+    with tempfile.TemporaryDirectory() as directory:
+        root=Path(directory)
+        universe.persist(root,base,{})
+        first=(root/"book_selection.json").read_bytes()
+        first_value=json.loads(first)
+        later=dict(base); later["timestamp_ms"]=(NOW+1)*1000
+        universe.persist(root,later,base)
+        second=(root/"book_selection.json").read_bytes()
+        assert first==second
+        assert json.loads(second)["generated_at_ms"]==first_value["generated_at_ms"]
+        changed=json.loads(json.dumps(later))
+        changed["markets"][0]["market_id"]="m-new"
+        changed["markets"][0]["clob_token_ids"]=["up-new","down-new"]
+        universe.persist(root,changed,later)
+        third=(root/"book_selection.json").read_bytes()
+        assert third!=second
