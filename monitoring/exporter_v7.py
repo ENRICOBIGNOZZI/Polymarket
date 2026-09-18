@@ -400,8 +400,25 @@ def health_reasons(snapshot: dict[str, Any], *, max_runtime_age: int = 180, max_
     if runtime.get("authenticated_execution") is not False or runtime.get("real_order_submission") is not False: reasons.append("authenticated_execution_not_disabled")
     if runtime.get("model_sha") != snapshot.get("sha"): reasons.append("runtime_sha_mismatch")
     if set(runtime.get("economic_engines") or []) != set(LIVE_ALGORITHMS): reasons.append("runtime_live_algorithms_not_crypto_only")
-    if runtime.get("economic_new_risk_ready") is not False: reasons.append("economic_new_risk_must_remain_disabled")
-    if runtime.get("authorized_alpha_actions") not in (None, []): reasons.append("authorized_alpha_actions_not_empty")
+    new_risk_ready = runtime.get("economic_new_risk_ready") is True
+    alpha_actions = runtime.get("authorized_alpha_actions")
+    if new_risk_ready:
+        if set(alpha_actions or []) != {"MAKE", "TAKE"}:
+            reasons.append("native_alpha_actions_missing_when_ready")
+    elif alpha_actions not in (None, []):
+        reasons.append("alpha_actions_present_while_native_market_not_ready")
+    native = snapshot.get("native_engine") or {}
+    evidence = snapshot.get("native_evidence") or {}
+    settlement = snapshot.get("native_settlement") or {}
+    if native.get("schema") != "polymarket_v7_native_engine_supervisor_status_v1" or native.get("model_sha") != snapshot.get("sha") or native.get("paper_only") is not True or native.get("authenticated_execution") is not False or native.get("real_order_submission") is not False or native.get("real_capital_at_risk") is not False or not _fresh_ms(native, snapshot, max_runtime_age):
+        reasons.append("native_engine_supervisor_missing_stale_or_unsafe")
+    elif new_risk_ready and (native.get("state") != "RUNNING" or _integer(native.get("child_pid")) <= 0):
+        reasons.append("native_engine_not_running_while_risk_ready")
+    if evidence.get("schema") != "polymarket_v7_native_evidence_status_v1" or evidence.get("model_sha") != snapshot.get("sha") or evidence.get("paper_only") is not True or evidence.get("authenticated_execution") is not False or evidence.get("real_order_submission") is not False or evidence.get("healthy") is not True or _integer(evidence.get("dropped")) != 0 or not _fresh_ms(evidence, snapshot, max_runtime_age):
+        if new_risk_ready:
+            reasons.append("native_evidence_missing_stale_or_unsafe")
+    if settlement.get("schema") != "polymarket_v7_native_market_settlement_status_v1" or settlement.get("model_sha") != snapshot.get("sha") or settlement.get("paper_only") is not True or settlement.get("authenticated_execution") is not False or settlement.get("real_order_submission") is not False or not _fresh_ms(settlement, snapshot, max_runtime_age):
+        reasons.append("native_settlement_missing_stale_or_unsafe")
     if not _scope_valid(snapshot): reasons.append("live_algorithm_scope_missing_or_invalid")
     process_manifest = snapshot.get("process_manifest") or {}
     expected_process_count = _integer(process_manifest.get("expected_process_count"))
