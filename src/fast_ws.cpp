@@ -269,14 +269,6 @@ struct MarketWebSocketFeed::Impl {
                 marked_connected = true;
                 backoff_seconds = 1;
 
-#if PM_USE_STD_JTHREAD
-                std::stop_callback cancel_on_stop(stop, [&ws] {
-                    beast::error_code ignored;
-                    beast::get_lowest_layer(ws).socket().cancel(ignored);
-                    beast::get_lowest_layer(ws).socket().shutdown(tcp::socket::shutdown_both, ignored);
-                    beast::get_lowest_layer(ws).socket().close(ignored);
-                });
-#endif
                 // A synchronous read can block for the entire quiet timeout,
                 // which made the old post-read PING unreachable on quiet
                 // markets. Keep one async read and one async text heartbeat
@@ -284,13 +276,10 @@ struct MarketWebSocketFeed::Impl {
                 // write concurrently, while all callbacks stay serialized on
                 // this worker thread.
                 asio::steady_timer heartbeat(io);
-#if !PM_USE_STD_JTHREAD
-                // macOS uses std::thread rather than jthread here. Poll the
-                // shared stop flag on the worker io_context so a quiet
-                // async_read cannot hold stop() inside join() until the
-                // websocket read timeout expires.
+                // Both std::thread and std::jthread must cancel on their own
+                // io_context. Cross-thread socket cancellation is not the
+                // lifecycle boundary; poll the stop token on this worker.
                 asio::steady_timer stop_poll(io);
-#endif
                 bool terminal = false;
                 bool remote_closed = false;
                 std::string transport_error;
@@ -310,7 +299,6 @@ struct MarketWebSocketFeed::Impl {
                 };
                 std::function<void()> begin_read;
                 std::function<void()> schedule_text_ping;
-#if !PM_USE_STD_JTHREAD
                 std::function<void()> schedule_stop_poll;
                 schedule_stop_poll = [&] {
                     if (terminal) return;
@@ -332,7 +320,6 @@ struct MarketWebSocketFeed::Impl {
                         schedule_stop_poll();
                     });
                 };
-#endif
                 begin_read = [&] {
                     if (terminal || stop.stop_requested()) return;
                     buffer.consume(buffer.size());
@@ -370,9 +357,7 @@ struct MarketWebSocketFeed::Impl {
                 };
                 begin_read();
                 schedule_text_ping();
-#if !PM_USE_STD_JTHREAD
                 schedule_stop_poll();
-#endif
                 io.run();
                 if (!stop.stop_requested() && remote_closed) {
                     report(shard_index,

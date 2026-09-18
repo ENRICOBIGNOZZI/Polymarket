@@ -596,6 +596,12 @@ MarketWsFrameResult MarketWsShard::process_frame(
     result.receive_to_book_ns = receive.monotonic_ns > 0
         ? std::max<std::int64_t>(0, book_end_ns - receive.monotonic_ns) : 0;
     for (std::size_t index = 0; index < result.output_count; ++index) {
+        // Invalidation is a local control event, not an exchange observation.
+        // Preserve its actual frame receipt clock so it remains orderable beside
+        // independent venue events; its exchange timestamp stays unknown.
+        if (output[index].kind == MarketWsEventKind::LineageInvalidated) {
+            output[index].receive_monotonic_ns = receive.monotonic_ns;
+        }
         output[index].frame_parse_ns = result.parse_ns;
         output[index].book_apply_ns = result.book_apply_ns;
         output[index].receive_to_book_ns = result.receive_to_book_ns;

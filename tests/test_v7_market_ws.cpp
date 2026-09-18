@@ -110,6 +110,9 @@ void test_snapshot_delta_trade_and_reconnect_lineage() {
     assert(result.price_change_without_lineage == 1);
     assert(result.output_count == 1);
     assert(output[0].kind == pm::v7::MarketWsEventKind::LineageInvalidated);
+    assert(output[0].receive_monotonic_ns == 2'300'000'000LL);
+    assert(output[0].exchange_event_ns == 0); // Never fabricate exchange time.
+    assert(!output[0].book.valid && !output[0].book.lineage_continuous);
     assert(!shard.snapshot(301).valid);
 
     result = shard.process_frame(snapshot, stamp(2'400'000'000LL, 1'700'000'000'400LL), output);

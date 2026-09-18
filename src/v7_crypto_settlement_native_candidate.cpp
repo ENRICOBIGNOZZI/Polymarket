@@ -700,12 +700,14 @@ int main(int argc, char** argv) {
             ++adapter_handoff_failures;
         }
 
-        pm_feed.stop();
+        // Stop all producers before waiting for any feed to join. Otherwise a
+        // slow PM shutdown fills an external queue after its consumer has left.
 #if defined(__APPLE__)
         stopping.store(true, std::memory_order_release);
 #else
         stopping.request_stop();
 #endif
+        pm_feed.stop();
         binance_thread.join();
         coinbase_thread.join();
         evidence_writer.stop();
