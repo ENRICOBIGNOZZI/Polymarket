@@ -356,10 +356,12 @@ int main(int argc, char** argv) {
         std::thread coinbase_thread([&] { coinbase.run(stop_token); });
         pm_feed.start();
 
-        const auto requested_deadline = options.duration_seconds > 0
-            ? start_mono + static_cast<std::int64_t>(options.duration_seconds) * 1'000'000'000LL
+        const std::int64_t requested_deadline = options.duration_seconds > 0
+            ? start_mono + static_cast<std::int64_t>(options.duration_seconds)
+                * static_cast<std::int64_t>(1'000'000'000)
             : market.close_monotonic_ns;
-        const auto deadline = std::min(requested_deadline, market.close_monotonic_ns);
+        const std::int64_t deadline = std::min<std::int64_t>(
+            requested_deadline, market.close_monotonic_ns);
         const auto refill_binance = [&] {
             if (!binance_ready) {
                 binance_ready = binance_ingress.drain_events(
