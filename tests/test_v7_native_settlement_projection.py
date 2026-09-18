@@ -68,7 +68,7 @@ def test_partial_fills_group_once_and_never_mutate_canonical():
     assert views[0]['metadata']['projection_only'] is True
 
 
-@pytest.mark.parametrize('bad',['missing_fill','duplicate_fill','wrong_pnl','wrong_payout','wrong_market','wrong_run','missing_winner','unknown_context','naked_sell'])
+@pytest.mark.parametrize('bad',['missing_fill','duplicate_fill','wrong_pnl','wrong_payout','wrong_market','missing_winner','unknown_context','naked_sell'])
 def test_bad_evidence_fails_closed(bad):
     fills=[fill()];end=final(fills)
     if bad=='missing_fill': end['metadata']['included_fill_ids']=[]
@@ -76,12 +76,25 @@ def test_bad_evidence_fails_closed(bad):
     if bad=='wrong_pnl': end['final_pnl']+=1
     if bad=='wrong_payout': end['realized_cashflow']+=1
     if bad=='wrong_market': fills[0]['market_id']='another'
-    if bad=='wrong_run': fills[0]['metadata']['run_id']='another'
     if bad=='missing_winner': end['metadata'].pop('winning_token_id')
     if bad=='unknown_context': fills[0]['metadata']={**fills[0]['metadata'],'model_family':'professional_maker','crypto_context':{}}
     if bad=='naked_sell': fills[0]['side']='SELL'
     with pytest.raises(ProjectionError): allocate_final(end,fills)
 
+
+
+
+def test_final_can_reconcile_explicit_fills_across_restart_run_ids():
+    fills=[fill('f1'),fill('f2',qty=2,price=.5)]
+    fills[1]['metadata']['run_id']='r2'
+    end=final(fills)
+    # The FINAL was emitted by the first manager generation, but explicitly
+    # includes both fill identities from the same SHA and market.
+    end['metadata']['run_id']='r'
+    views=allocate_final(end,fills)
+    assert sum(v['final_pnl'] for v in views)==pytest.approx(end['final_pnl'])
+    from v7_native_risk_policy import unsettled_exposure
+    assert unsettled_exposure([*fills,end],SHA)['total_unsettled_microdollars']==0
 
 def test_duplicate_settlement_not_double_counted():
     fills=[fill()];end=final(fills);errors=[]

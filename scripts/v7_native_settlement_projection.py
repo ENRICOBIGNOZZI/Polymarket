@@ -112,8 +112,9 @@ def allocate_final(final: dict[str, Any], fills: list[dict[str, Any]]) -> list[d
         if (receipt.get('owner') != 'V7_NATIVE_CRYPTO_SETTLEMENT_ENGINE'
                 or receipt.get('model_sha') != sha or receipt.get('single_owner') is not True):
             raise ProjectionError('fill_receipt:invalid')
-        if meta.get('run_id') and fm.get('run_id') != meta.get('run_id'):
-            raise ProjectionError('fill_run:mismatch')
+        # A native market may survive a process restart within the same exact
+        # model SHA. The aggregate FINAL is authoritative over the explicit
+        # included_fill_ids set; run_id is provenance, not settlement scope.
         token, position = str(fill.get('token_id') or ''), str(fill.get('position_id') or '')
         if not token or not position:
             raise ProjectionError('fill_position:missing')
