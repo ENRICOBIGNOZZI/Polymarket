@@ -22,7 +22,8 @@ import urllib.request
 from pathlib import Path
 from typing import Any
 
-from v7_execution_ledger import canonical_ledger_path, iter_events
+from v7_execution_ledger import LedgerEvent, canonical_ledger_path, iter_events
+from v7_ledger_spool import spool_event
 
 STATUS_SCHEMA = "polymarket_v7_native_engine_manager_status_v1"
 
@@ -149,6 +150,65 @@ def unsettled_native_markets(run_root: Path, model_sha: str) -> list[str]:
         ):
             finals.add(event.market_id)
     return sorted(fills - finals)
+
+
+def _native_receipt(event: LedgerEvent) -> dict[str, Any] | None:
+    metadata = event.metadata if isinstance(event.metadata, dict) else {}
+    receipt = metadata.get("native_settlement_receipt")
+    if not isinstance(receipt, dict):
+        return None
+    client = receipt.get("client_order_id")
+    if (
+        receipt.get("schema") != "polymarket_v7_native_settlement_receipt_v1"
+        or receipt.get("owner") != "V7_NATIVE_CRYPTO_SETTLEMENT_ENGINE"
+        or receipt.get("engine_id") != "CRYPTO_SETTLEMENT_ENGINE"
+        or receipt.get("model_sha") != event.model_sha
+        or receipt.get("paper_only") is not True
+        or receipt.get("authenticated_execution") is not False
+        or receipt.get("real_order_submission") is not False
+        or receipt.get("real_capital_at_risk") is not False
+        or receipt.get("execution_mode") != "PAPER_SIMULATED"
+        or receipt.get("single_owner") is not True
+        or not isinstance(client, int) or isinstance(client, bool) or client <= 0
+        or event.order_id != f"native:{client}"
+    ):
+        return None
+    return receipt
+
+
+def open_native_orders(run_root: Path, model_sha: str) -> dict[str, LedgerEvent]:
+    path = canonical_ledger_path(run_root)
+    if not path.is_file():
+        return {}
+    open_orders: dict[str, LedgerEvent] = {}
+    terminal = {"FILLED", "CANCELLED", "REJECTED", "EXPIRED", "LOST"}
+    for event in iter_events(path, expected_model_sha=model_sha):
+        if event.strategy != "CRYPTO_SETTLEMENT_ENGINE" or not event.order_id:
+            continue
+        receipt = _native_receipt(event)
+        if receipt is None:
+            continue
+        if event.event_type == "ORDER_SUBMITTED":
+            open_orders[event.order_id] = event
+        elif event.event_type == "FILL" and event.complete is True:
+            open_orders.pop(event.order_id, None)
+        elif event.event_type == "ORDER_STATE" and str(event.order_state or "").upper() in terminal:
+            open_orders.pop(event.order_id, None)
+    return open_orders
+
+
+def wait_for_record(run_root: Path, model_sha: str, record_id: str, timeout: float = 10.0) -> bool:
+    deadline = time.monotonic() + timeout
+    path = canonical_ledger_path(run_root)
+    while time.monotonic() < deadline:
+        if path.is_file():
+            try:
+                if any(event.record_id == record_id for event in iter_events(path, expected_model_sha=model_sha)):
+                    return True
+            except Exception:
+                return False
+        time.sleep(0.1)
+    return False
 
 
 class Manager:
@@ -305,6 +365,35 @@ class Manager:
 
     def run(self) -> int:
         self.status("STARTING")
+        # Canonical event sourcing defines the committed PAPER state. Any
+        # previously submitted native order with no durable terminal event is
+        # cancelled at recovery before new risk is allowed.
+        for order_id, submitted in open_native_orders(self.run_root, self.args.model_sha).items():
+            receipt = _native_receipt(submitted)
+            if receipt is None:
+                self.status("RECOVERY_BLOCKED", blocker="NATIVE_OPEN_ORDER_RECEIPT_INVALID")
+                return 79
+            recovered = LedgerEvent(
+                event_type="ORDER_STATE",
+                strategy="CRYPTO_SETTLEMENT_ENGINE",
+                model_sha=self.args.model_sha,
+                model_version="native-paper-engine",
+                order_id=order_id,
+                market_id=submitted.market_id,
+                event_id=submitted.event_id,
+                token_id=submitted.token_id,
+                side=submitted.side,
+                order_state="CANCELLED",
+                metadata={
+                    **(submitted.metadata if isinstance(submitted.metadata, dict) else {}),
+                    "native_recovery_cancel": True,
+                    "recovery_reason": "PROCESS_RESTART_CANONICAL_COMMIT_BOUNDARY",
+                },
+            )
+            spool_event(self.run_root, recovered)
+            if not wait_for_record(self.run_root, self.args.model_sha, recovered.record_id):
+                self.status("RECOVERY_BLOCKED", blocker="NATIVE_RECOVERY_CANCEL_APPEND_TIMEOUT")
+                return 75
         # Crash recovery is settlement-first. A prior native fill remains a
         # capital claim until a canonical FINAL exists; no new engine may start
         # while any such market is unresolved.
