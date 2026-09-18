@@ -26,6 +26,47 @@ def read_json(path: Path) -> dict:
     return value if isinstance(value, dict) else {}
 
 
+def native_unsettled_markets(path: Path) -> list[str]:
+    """Return native PAPER fill markets that lack their canonical native FINAL.
+
+    This is a cross-generation cutover guard. Same-SHA recovery is handled
+    earlier and remains allowed so the native manager can finish settlement.
+    """
+    if not path.is_file():
+        return []
+    fills: set[tuple[str, str]] = set()
+    finals: set[tuple[str, str]] = set()
+    with path.open("r", encoding="utf-8") as handle:
+        for number, line in enumerate(handle, start=1):
+            if not line.strip():
+                continue
+            try:
+                value = json.loads(line)
+            except json.JSONDecodeError as exc:
+                raise CutoverArchiveError(f"ledger_invalid_json:{number}") from exc
+            if not isinstance(value, dict):
+                raise CutoverArchiveError(f"ledger_invalid_record:{number}")
+            if value.get("strategy") != "CRYPTO_SETTLEMENT_ENGINE":
+                continue
+            event_type = str(value.get("event_type") or "")
+            if event_type not in {"FILL", "FINAL"}:
+                continue
+            model_sha = str(value.get("model_sha") or "")
+            market_id = str(value.get("market_id") or "")
+            metadata = value.get("metadata") if isinstance(value.get("metadata"), dict) else {}
+            receipt = metadata.get("native_settlement_receipt")
+            if not market_id or not isinstance(receipt, dict):
+                continue
+            if receipt.get("owner") != "V7_NATIVE_CRYPTO_SETTLEMENT_ENGINE":
+                continue
+            key = model_sha, market_id
+            if event_type == "FILL":
+                fills.add(key)
+            elif metadata.get("native_market_settlement_id") == f"native-settlement:{market_id}":
+                finals.add(key)
+    return [f"{sha}:{market}" for sha, market in sorted(fills - finals)]
+
+
 def pid_alive(value: object) -> bool:
     try:
         pid = int(value)
@@ -214,9 +255,16 @@ def prepare(
     ledger_rows, ledger_sha256, ledger_model_sha_counts, ledger_strategy_counts = validate_ledger(
         ledger_path, repository_root, target_sha, ancestor_check,
     )
+    native_unsettled = native_unsettled_markets(ledger_path)
+    if native_unsettled:
+        raise CutoverArchiveError(f"prior_native_unsettled_markets:{len(native_unsettled)}")
     if spool_path.exists() and any(spool_path.glob("*.json")):
         raise CutoverArchiveError("prior_ledger_spool_not_empty")
-    durable_open = {"paper_account": account_open, "maker_active_orders": active_maker}
+    durable_open = {
+        "paper_account": account_open,
+        "maker_active_orders": active_maker,
+        "native_unsettled_markets": 0,
+    }
 
     archived_at = int(now if now is not None else time.time())
     archive_root.mkdir(parents=True, exist_ok=True)
