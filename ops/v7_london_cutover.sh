@@ -57,7 +57,25 @@ for name in polymarket-v7-paper.service polymarket-v7-exporter.service polymarke
   tmp="$(mktemp)"; render_unit "$TARGET_RUNTIME/ops/systemd/$name.in" "$tmp"; sudo install -m 0644 "$tmp" "/etc/systemd/system/$name"; rm -f "$tmp"
 done
 
+# Render and activate the immutable monitoring control plane before trading.
+# It consumes exporter snapshots asynchronously and is never a trigger-path dependency.
+sudo env POLYMARKET_EXPECTED_SHA="$EXPECTED_SHA" POLYMARKET_SERVICE_USER="$SERVICE_USER" \
+  POLYMARKET_RUNTIME_ROOT="$RUNTIME_ROOT" POLYMARKET_RUNTIME_DIR="$TARGET_RUNTIME" \
+  bash "$TARGET_RUNTIME/ops/v7_london_install_monitoring.sh"
 sudo systemctl daemon-reload
+sudo systemctl enable prometheus.service prometheus-node-exporter.service grafana-server.service
+sudo systemctl restart prometheus.service prometheus-node-exporter.service grafana-server.service
+
+monitoring_ready=0
+for _ in $(seq 1 "${POLYMARKET_MONITORING_HEALTH_ATTEMPTS:-60}"); do
+  if curl -fsS http://127.0.0.1:9090/-/ready >/dev/null 2>&1 && \
+     curl -fsS http://127.0.0.1:3000/api/health >/dev/null 2>&1; then
+    monitoring_ready=1; break
+  fi
+  sleep 1
+done
+[[ "$monitoring_ready" == 1 ]] || { echo "London monitoring control-plane health gate failed" >&2; exit 69; }
+
 sudo systemctl enable --now polymarket-v7-paper.service polymarket-v7-exporter.service polymarket-v7-retention.timer
 
 ready=0
@@ -83,6 +101,18 @@ PY
   sleep 1
 done
 [[ "$ready" == 1 ]] || { echo "London PAPER runtime health gate failed" >&2; exit 70; }
+
+# Prometheus must actually scrape the asynchronous V7 exporter. Do not infer
+# monitoring truth from process liveness alone.
+scrape_ready=0
+for _ in $(seq 1 "${POLYMARKET_PROMETHEUS_SCRAPE_ATTEMPTS:-30}"); do
+  if curl -fsS --get --data-urlencode 'query=up{job="polymarket-v7"}' \
+      http://127.0.0.1:9090/api/v1/query | python3 -c 'import json,sys; v=json.load(sys.stdin); r=v.get("data",{}).get("result",[]); assert len(r)==1 and r[0]["value"][1]=="1"' >/dev/null 2>&1; then
+    scrape_ready=1; break
+  fi
+  sleep 1
+done
+[[ "$scrape_ready" == 1 ]] || { echo "Prometheus is not scraping the V7 exporter" >&2; exit 72; }
 
 # Explicitly prove no research/training process is resident on London.
 if pgrep -af 'v7_(external_rich_train|external_residual_train|maker_durable_learning|pm_repricing_shadow|two_sided_complete_set_shadow|generate_economic_artifacts|profit_attribution|profit_report|economic_decision_report|lossless_data_compaction|permanent_evidence)\.py' >/tmp/polymarket-v7-forbidden-processes 2>/dev/null; then

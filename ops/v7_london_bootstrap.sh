@@ -11,6 +11,7 @@ RUNTIME_CURRENT="$RUNTIME_ROOT/current"
 ARTIFACT_ROOT="${POLYMARKET_ARTIFACT_ROOT:-/home/$SERVICE_USER/polymarket-artifacts}"
 RUN_ROOT="${PM_V7_RUN_ROOT:-/home/$SERVICE_USER/polymarket-runs/paper_v7_london}"
 INSTALL_TAILSCALE="${POLYMARKET_INSTALL_TAILSCALE:-1}"
+INSTALL_GRAFANA="${POLYMARKET_INSTALL_GRAFANA:-1}"
 
 [[ "$EXPECTED_SHA" =~ ^[0-9a-f]{40}$ ]] || { echo "exact lowercase 40-char SHA required" >&2; exit 78; }
 [[ "$(uname -s)" == "Linux" ]] || { echo "Linux required" >&2; exit 78; }
@@ -23,7 +24,18 @@ sudo apt-get update
 sudo DEBIAN_FRONTEND=noninteractive apt-get install -y \
   build-essential ca-certificates cmake curl git gnupg jq libboost-all-dev \
   libcurl4-openssl-dev libssl-dev libsecp256k1-dev ninja-build pkg-config \
-  python3 python3-pip python3-venv rsync util-linux
+  prometheus prometheus-node-exporter python3 python3-pip python3-venv rsync util-linux
+
+
+if [[ "$INSTALL_GRAFANA" == 1 ]]; then
+  sudo install -d -m 0755 /etc/apt/keyrings
+  curl -fsSL https://apt.grafana.com/gpg-full.key | sudo tee /etc/apt/keyrings/grafana.asc >/dev/null
+  sudo chmod 0644 /etc/apt/keyrings/grafana.asc
+  echo "deb [signed-by=/etc/apt/keyrings/grafana.asc] https://apt.grafana.com stable main" | \
+    sudo tee /etc/apt/sources.list.d/grafana.list >/dev/null
+  sudo apt-get update
+  sudo DEBIAN_FRONTEND=noninteractive apt-get install -y grafana
+fi
 
 
 if [[ "$INSTALL_TAILSCALE" == 1 ]]; then
@@ -86,7 +98,14 @@ for name in polymarket-v7-paper.service polymarket-v7-exporter.service polymarke
   sudo install -m 0644 "$tmp" "/etc/systemd/system/$name"
   rm -f "$tmp"
 done
+
+# Cold-plane monitoring is rendered from the immutable release. The installer
+# writes only monitoring files/systemd drop-ins; it never starts trading.
+sudo env POLYMARKET_EXPECTED_SHA="$EXPECTED_SHA" POLYMARKET_SERVICE_USER="$SERVICE_USER" \
+  POLYMARKET_RUNTIME_ROOT="$RUNTIME_ROOT" \
+  bash "$RUNTIME_CURRENT/ops/v7_london_install_monitoring.sh"
 sudo systemctl daemon-reload
+sudo systemctl enable --now prometheus.service prometheus-node-exporter.service grafana-server.service
 sudo systemctl disable --now polymarket-v7-paper.service polymarket-v7-exporter.service polymarket-v7-retention.timer >/dev/null 2>&1 || true
 
 receipt="$RUN_ROOT/bootstrap_receipt.json"

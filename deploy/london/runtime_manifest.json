@@ -99,6 +99,8 @@
     "config/operator_directives.json",
     "config/v7_execution_modes.json",
     "config/v7_profit_experiment.json",
+    "ops/v7_london_monitoring_bundle.py",
+    "ops/v7_london_install_monitoring.sh",
     "monitoring/prometheus_v7.yml",
     "monitoring/grafana/provisioning/datasources/prometheus-v7.yml",
     "monitoring/grafana/provisioning/dashboards/v7.yml",
