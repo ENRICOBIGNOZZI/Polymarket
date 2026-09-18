@@ -275,3 +275,18 @@ def test_manager_cli_defaults_match_frequency_and_size_policy(monkeypatch) -> No
     assert args.target_quantity_microunits == 20_000_000
     assert args.minimum_tte_ns == 5_000_000_000
     assert args.maximum_tte_ns == 120_000_000_000
+
+
+def test_venue_min_order_size_is_loaded_and_fail_closed(monkeypatch) -> None:
+    import v7_native_crypto_engine_manager as manager
+    monkeypatch.setattr(manager, "public_json", lambda _url: {"orderMinSize": 5})
+    assert manager.venue_min_order_microunits("m1") == 5_000_000
+    monkeypatch.setattr(manager, "public_json", lambda _url: {"orderMinSize": 7.5})
+    assert manager.venue_min_order_microunits("m1") == 7_500_000
+    monkeypatch.setattr(manager, "public_json", lambda _url: {"orderMinSize": None})
+    try:
+        manager.venue_min_order_microunits("m1")
+    except RuntimeError as exc:
+        assert str(exc) == "minimum_order_size_invalid"
+    else:
+        raise AssertionError("invalid venue minimum accepted")

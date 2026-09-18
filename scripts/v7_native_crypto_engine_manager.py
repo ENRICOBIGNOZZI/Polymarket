@@ -150,6 +150,26 @@ def tick_size_e4(token_id: str) -> int:
     return scaled
 
 
+def venue_min_order_microunits(market_id: str) -> int:
+    value = public_json(
+        "https://gamma-api.polymarket.com/markets/"
+        + urllib.parse.quote(str(market_id), safe="")
+    )
+    if not isinstance(value, dict):
+        raise RuntimeError("minimum_order_response_invalid")
+    try:
+        raw = float(value.get("orderMinSize"))
+    except (TypeError, ValueError, OverflowError) as exc:
+        raise RuntimeError("minimum_order_size_invalid") from exc
+    scaled = int(round(raw * 1_000_000.0))
+    if (
+        not math.isfinite(raw) or raw <= 0 or scaled <= 0
+        or abs(raw * 1_000_000.0 - scaled) > 1e-6
+    ):
+        raise RuntimeError("minimum_order_size_invalid")
+    return scaled
+
+
 def fee_parameters(row: dict[str, Any]) -> tuple[float, float, str]:
     explicit = row.get("fees_enabled_explicit") is True
     enabled = row.get("fees_enabled") is True
@@ -522,6 +542,10 @@ class Manager:
         if yes_tick != no_tick:
             raise RuntimeError("complement_tick_size_mismatch")
         fee_rate, fee_exponent, fee_source = fee_parameters(market)
+        min_order_microunits = max(
+            self.args.min_order_microunits,
+            venue_min_order_microunits(str(market["market_id"])),
+        )
         close_unix = _close_unix(market)
         close_wall_ns = close_unix * 1_000_000_000
         if close_wall_ns <= time.time_ns():
@@ -555,8 +579,8 @@ class Manager:
             "--fee-source", fee_source,
             "--close-wall-ns", str(close_wall_ns),
             "--tick-size-e4", str(yes_tick),
-            "--min-order-microunits", str(self.args.min_order_microunits),
-            "--target-quantity-microunits", str(self.args.target_quantity_microunits),
+            "--min-order-microunits", str(min_order_microunits),
+            "--target-quantity-microunits", str(max(self.args.target_quantity_microunits, min_order_microunits)),
             "--minimum-tte-ns", str(self.args.minimum_tte_ns),
             "--maximum-tte-ns", str(self.args.maximum_tte_ns),
             "--sleeve-budget-microdollars", str(budget_microdollars),

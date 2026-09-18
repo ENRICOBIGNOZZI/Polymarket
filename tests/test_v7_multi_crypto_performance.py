@@ -20,7 +20,7 @@ def registry() -> dict:
          "research_only": not (asset == "BTC" and horizon == "M5"),
          "authority": "PAPER_EXPLORATION" if (asset, horizon) == ("BTC", "M5") else "SHADOW_ZERO_AUTHORITY"}
         for asset in ("BTC", "ETH", "SOL", "XRP", "DOGE", "BNB")
-        for horizon in ("M5", "M15")
+        for horizon in ("M5", "M15", "H1", "H4", "D1")
     ]}
 
 
@@ -28,7 +28,7 @@ def models() -> dict:
     return {"models": [
         {"asset": asset, "horizon": horizon, "new_risk_authorized": False}
         for asset in ("BTC", "ETH", "SOL", "XRP", "DOGE", "BNB")
-        for horizon in ("M5", "M15")
+        for horizon in ("M5", "M15", "H1", "H4", "D1")
     ]}
 
 
@@ -61,7 +61,7 @@ class MultiCryptoPerformanceTest(unittest.TestCase):
             root = Path(directory); (root / "ledger").mkdir(); (root / "ledger/execution.jsonl").write_text("")
             summary = self._summarize(root)
             text = "\n".join(render_prometheus(summary))
-            self.assertEqual(summary["registered_lanes"], 12)
+            self.assertEqual(summary["registered_lanes"], 30)
             self.assertEqual(summary["known_economic_lanes"], 0)
             self.assertIn('polymarket_mc_lane_economic_evidence_present{asset="ETH",horizon="M15"} 0', text)
             self.assertNotIn('polymarket_mc_lane_realized_pnl_usd{asset="ETH",horizon="M15"}', text)
@@ -121,6 +121,34 @@ class MultiCryptoPerformanceTest(unittest.TestCase):
             self.assertEqual(lane["realized_pnl"], -0.5)
             self.assertTrue(summary["attribution"]["reconciled"])
 
+
+    def test_generic_context_supports_long_horizon_lane(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory); (root / "ledger").mkdir()
+            receipt = {"asset": "SOL", "horizon": "H4"}
+            rows = [
+                {"event_type": "FILL", "strategy": "CRYPTO_SETTLEMENT_ENGINE", "model_sha": SHA,
+                 "paper_only": True, "authenticated_execution": False,
+                 "fill_id": "f-h4", "position_id": "native-position:h4:yes",
+                 "fill_price": 0.45, "filled_size": 20, "fee": 0.05,
+                 "metadata": {"model_family": "crypto_informed_taker",
+                              "asset": "SOL", "horizon": "H4"}},
+                {"event_type": "FINAL", "strategy": "CRYPTO_SETTLEMENT_ENGINE", "model_sha": SHA,
+                 "paper_only": True, "authenticated_execution": False,
+                 "position_id": "native-market:h4", "final_pnl": 1.25,
+                 "metadata": {"model_family": "native-paper-engine",
+                              "native_settlement_receipt": receipt,
+                              "included_fill_ids": ["f-h4"]}},
+            ]
+            (root / "ledger/execution.jsonl").write_text(
+                "".join(json.dumps(row) + "\n" for row in rows)
+            )
+            summary = self._summarize(root, 1.25)
+            lane = next(x for x in summary["lanes"] if x["asset"] == "SOL" and x["horizon"] == "H4")
+            self.assertEqual(lane["fills"], 1)
+            self.assertEqual(lane["finals"], 1)
+            self.assertEqual(lane["open_positions"], 0)
+            self.assertTrue(summary["attribution"]["reconciled"])
 
     def test_shadow_runtime_is_separate_zero_authority_source(self) -> None:
         from v7_multi_crypto_performance import render_shadow_prometheus, summarize_shadow_runtime

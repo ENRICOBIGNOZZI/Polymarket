@@ -9,7 +9,7 @@ from pathlib import Path
 from typing import Any
 
 ASSETS = ("BTC", "ETH", "SOL", "XRP", "DOGE", "BNB")
-HORIZONS = ("M5", "M15")
+HORIZONS = ("M5", "M15", "H1", "H4", "D1")
 CRYPTO_ENGINE = "CRYPTO_SETTLEMENT_ENGINE"
 _FIXED_FAMILY_SCOPE = {
     "lead_lag_taker_v1": ("BTC", "M5", "LEAD_LAG_TAKER_V1"),
