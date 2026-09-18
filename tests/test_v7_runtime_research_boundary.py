@@ -15,7 +15,7 @@ def test_runtime_and_research_process_manifests_are_disjoint():
     research=json.loads((ROOT/'config/v7_research_process_manifest.json').read_text())
     rids={p['id'] for p in runtime['processes']}; qids={p['id'] for p in research['processes']}
     assert not (rids&qids)
-    assert runtime['expected_process_count']==22 and runtime['expected_launcher_child_count']==20
+    assert runtime['expected_process_count']==20 and runtime['expected_launcher_child_count']==17
     assert all(p.get('london_deployed') is True and p.get('runtime_class') in {'HOT_PATH','COLLECTOR','CONTROL'} for p in runtime['processes'])
     assert all(p.get('london_deployed') is False and p.get('runtime_class')=='RESEARCH_ONLY' for p in research['processes'])
 
