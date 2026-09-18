@@ -100,6 +100,8 @@ NativePaperSubmitResult NativePaperExecutionAdapter::submit(
             return out;
         }
         slot->client_order_id = command.client_order_id;
+        slot->command_id = command.command_id;
+        slot->tick_size_e4 = command.tick_size_e4;
         slot->occupied = 1;
         slot->paper.order_id = command.client_order_id;
         slot->paper.instrument_handle = command.instrument_handle;
@@ -127,8 +129,10 @@ NativePaperSubmitResult NativePaperExecutionAdapter::submit(
     const bool buy = command.side == Side::Buy;
     const auto executable_e4 = buy ? book.best_ask_e4 : book.best_bid_e4;
     const auto executable_qty = buy ? book.best_ask_microunits : book.best_bid_microunits;
-    const bool marketable = buy ? executable_e4 > 0 && executable_e4 <= limit_e4
-                                : executable_e4 > 0 && executable_e4 >= limit_e4;
+    // Frozen taker semantics are ARRIVAL_BEST_ASK_NO_CHASE / best-bid SELL.
+    // Requiring equality keeps capital basis, simulated fill price and ledger
+    // economics byte-for-byte aligned with the admitted command.
+    const bool marketable = executable_e4 > 0 && executable_e4 == limit_e4;
     if (!marketable || executable_qty < command.quantity_microunits) {
         OmsEvent expire{};
         expire.type = OmsEventType::Expire;
@@ -154,6 +158,16 @@ NativePaperSubmitResult NativePaperExecutionAdapter::submit(
     ++paper_fills_;
     out.reason = NativePaperReason::Accepted;
     out.filled_microunits = command.quantity_microunits;
+    out.fill.client_order_id = command.client_order_id;
+    out.fill.command_id = command.command_id;
+    out.fill.instrument_handle = command.instrument_handle;
+    out.fill.side = command.side;
+    out.fill.price_tick = command.price_tick;
+    out.fill.tick_size_e4 = command.tick_size_e4;
+    out.fill.fill_microunits = command.quantity_microunits;
+    out.fill.exchange_event_ns = book.exchange_event_ns;
+    out.fill.receive_monotonic_ns = now_monotonic_ns;
+    out.fill.taker = 1;
     out.accepted = 1;
     return out;
 }
@@ -244,6 +258,21 @@ NativePaperTradeResult NativePaperExecutionAdapter::on_public_trade(
             out.invalid = 1;
             continue;
         }
+        if (out.fills >= out.records.size()) {
+            out.invalid = 1;
+            break;
+        }
+        auto& record = out.records[out.fills];
+        record.client_order_id = slot->client_order_id;
+        record.command_id = slot->command_id;
+        record.instrument_handle = trade.instrument_handle;
+        record.side = slot->paper.side;
+        record.price_tick = slot->paper.price_tick;
+        record.tick_size_e4 = slot->tick_size_e4;
+        record.fill_microunits = fill_qty;
+        record.exchange_event_ns = trade.exchange_event_ns;
+        record.receive_monotonic_ns = trade.receive_monotonic_ns;
+        record.taker = 0;
         ++out.fills;
         out.filled_microunits += fill_qty;
         ++paper_fills_;
