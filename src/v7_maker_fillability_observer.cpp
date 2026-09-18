@@ -431,17 +431,21 @@ public:
           compact_label_tape_dir_(std::move(compact_label_tape_dir)) {
         std::vector<pm::v7::TokenBinding> bindings;
         std::size_t max_handle = 0;
+        std::size_t max_market_handle = 0;
         for (const auto& token : tokens_) {
             bindings.push_back({token.token_id, token.market_handle, token.event_handle,
                                 token.instrument_handle, token.tick_size_e4});
             ids_.push_back(token.token_id);
             max_handle = std::max<std::size_t>(max_handle, token.instrument_handle);
+            max_market_handle = std::max<std::size_t>(max_market_handle, token.market_handle);
         }
         by_handle_.resize(max_handle + 1, nullptr);
         lanes_.resize(max_handle + 1);
         feature_start_ns_.resize(max_handle + 1, 0);
         latest_books_.resize(max_handle + 1);
         flow_samples_.resize(max_handle + 1);
+        book_token_seen_.resize(max_handle + 1, 0);
+        book_market_seen_.resize(max_market_handle + 1, 0);
         for (const auto& token : tokens_) by_handle_[token.instrument_handle] = &token;
         for (const auto& token : tokens_) {
             lanes_[token.instrument_handle] = std::make_unique<pm::v7::maker::MakerInstrumentLane>(1);
@@ -677,6 +681,17 @@ public:
         root["observer_session_id"] = session_id_;
         root["book_events_observed"] = book_events_observed_;
         root["book_events_written"] = book_events_written_;
+        root["subscribed_tokens"] = ids_.size();
+        root["subscribed_markets"] = book_market_seen_.empty() ? 0 : book_market_seen_.size() - 1;
+        const auto observed_tokens = static_cast<std::size_t>(
+            std::count(book_token_seen_.begin(), book_token_seen_.end(), std::uint8_t{1}));
+        const auto observed_markets = static_cast<std::size_t>(
+            std::count(book_market_seen_.begin(), book_market_seen_.end(), std::uint8_t{1}));
+        root["observed_tokens"] = observed_tokens;
+        root["observed_markets"] = observed_markets;
+        root["subscription_coverage_complete"] =
+            observed_tokens == ids_.size()
+            && observed_markets == (book_market_seen_.empty() ? 0 : book_market_seen_.size() - 1);
         root["disk_pressure"] = disk_pressure();
         root["book_event_tape_suppressed_by_disk_pressure"] = disk_pressure();
         root["book_events_suppressed_disk_pressure"] = book_events_suppressed_disk_pressure_;
@@ -891,6 +906,14 @@ private:
         const bool valid = row.book.valid && row.book.lineage_continuous
             && dropped_.load(std::memory_order_relaxed) == 0
             && decoder_failures_.load(std::memory_order_relaxed) == 0;
+        if (row.book.valid && row.book.lineage_continuous) {
+            if (row.instrument_handle < book_token_seen_.size()) {
+                book_token_seen_[row.instrument_handle] = 1;
+            }
+            if (token->market_handle < book_market_seen_.size()) {
+                book_market_seen_[token->market_handle] = 1;
+            }
+        }
         const auto observer_sequence = ++book_events_observed_;
         append_compact_label(row, observer_sequence, valid);
         json::object value{
@@ -993,6 +1016,8 @@ private:
     std::vector<std::int64_t> feature_start_ns_;
     std::vector<std::string> latest_books_;
     std::vector<std::deque<FlowSample>> flow_samples_;
+    std::vector<std::uint8_t> book_token_seen_;
+    std::vector<std::uint8_t> book_market_seen_;
     pm::v7::maker::MakerModelSnapshot feature_model_;
     std::string session_id_;
     std::ofstream book_output_;

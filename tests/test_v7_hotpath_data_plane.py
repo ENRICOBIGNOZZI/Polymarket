@@ -29,6 +29,12 @@ def test_repricing_book_observer_covers_all_runtime_contexts_outside_hot_path():
     assert '--output-dir "$RUN_ROOT/research/repricing_book"' in loop
     observer_launch = loop.split('v7_exec_class COLLECTOR "$FILLABILITY_OBSERVER"',1)[1].split('v7_register_child',1)[0]
     assert '--fair-only' not in observer_launch
+    for field in (
+        '"subscribed_markets"', '"subscribed_tokens"',
+        '"observed_markets"', '"observed_tokens"',
+        '"subscription_coverage_complete"',
+    ):
+        assert field in observer
     rows = {row['id']: row for row in manifest['processes']}
     assert rows['pm_book_observer']['runtime_class'] == 'COLLECTOR'
     assert rows['crypto_settlement_engine']['runtime_class'] == 'HOT_PATH'
@@ -41,6 +47,16 @@ def test_runtime_start_is_gated_on_complete_30_context_book_data_selection():
     assert 'value.get("book_selection_state")=="READY"' in loop
     assert 'int(value.get("book_selection_contexts") or 0)==30' in loop
     assert 'int(value.get("book_selection_tokens") or 0)==60' in loop
+
+
+def test_book_observer_reports_actual_30_context_subscription_coverage():
+    observer = (ROOT / 'src/v7_maker_fillability_observer.cpp').read_text()
+    for field in (
+        '"subscribed_tokens"', '"subscribed_markets"',
+        '"observed_tokens"', '"observed_markets"',
+        '"subscription_coverage_complete"',
+    ):
+        assert field in observer
 
 
 def test_lineage_invalidation_is_instrumented_without_relaxing_fail_closed_rules():
