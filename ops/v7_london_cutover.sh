@@ -17,6 +17,13 @@ ARCHIVE_ROOT="${PM_V7_ARCHIVE_ROOT:-/home/$SERVICE_USER/polymarket-runs/paper_v7
 [[ "$(cat "$TARGET_RUNTIME/deploy/london/runtime_sha")" == "$EXPECTED_SHA" ]] || { echo "staged runtime bundle SHA mismatch" >&2; exit 66; }
 [[ ! -e "$TARGET_RUNTIME/research" && ! -e "$TARGET_RUNTIME/tests" ]] || { echo "forbidden tree present in staged runtime" >&2; exit 66; }
 
+# Fail closed before any service/runtime mutation unless the staged release is
+# one native, single-owner crypto trigger-to-admission process. This verifier
+# is deployment control-plane only; it is not a runtime dependency.
+python3 "$TARGET_RUNTIME/ops/verify_v7_native_critical_path.py" \
+  --policy "$TARGET_RUNTIME/config/v7_native_critical_path_policy.json" \
+  --manifest "$TARGET_RUNTIME/config/v7_process_manifest.json"
+
 python3 - "$ARTIFACT_ROOT/current/manifest.json" "$EXPECTED_SHA" <<'PY'
 import json,sys
 from pathlib import Path

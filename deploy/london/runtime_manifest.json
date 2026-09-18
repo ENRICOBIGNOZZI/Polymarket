@@ -107,7 +107,9 @@
     "monitoring/grafana/dashboards/polymarket-v7-external-fair.json",
     "monitoring/grafana/dashboards/polymarket-v7-latency.json",
     "monitoring/grafana/dashboards/polymarket-v7-multi-crypto.json",
-    "monitoring/grafana/dashboards/polymarket-v7.json"
+    "monitoring/grafana/dashboards/polymarket-v7.json",
+    "config/v7_native_critical_path_policy.json",
+    "ops/verify_v7_native_critical_path.py"
   ],
   "version": 2
 }
