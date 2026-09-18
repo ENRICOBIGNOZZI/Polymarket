@@ -1,6 +1,7 @@
 #include "pm/v7_native_settlement_oms_endpoint.hpp"
 #include "pm/v7_native_paper_execution.hpp"
 #include "pm/v7_native_runtime_evidence.hpp"
+#include "pm/v7_native_runtime_evidence.hpp"
 #include "pm/fast_ws.hpp"
 #include "pm/v7_coinbase_l2_observer.hpp"
 #include "pm/v7_crypto_decision_lane.hpp"
@@ -233,6 +234,23 @@ int main(int argc, char** argv) {
         NativeSettlementAuthority authority(limits);
         NativeSettlementOmsEndpoint adapter_endpoint(authority);
         NativePaperExecutionAdapter paper_execution(adapter_endpoint);
+        NativeRuntimeEvidenceConfig evidence_config{};
+        evidence_config.run_root = options.run_root;
+        evidence_config.model_sha = options.model_sha;
+        evidence_config.run_id = options.run_id;
+        evidence_config.server_id = options.server_id;
+        evidence_config.market_id = options.market_id;
+        evidence_config.event_id = options.event_id;
+        evidence_config.yes_token_id = options.yes_token;
+        evidence_config.no_token_id = options.no_token;
+        evidence_config.fee_source = options.fee_source;
+        evidence_config.yes_instrument_handle = kYes;
+        evidence_config.no_instrument_handle = kNo;
+        evidence_config.close_wall_ns = options.close_wall_ns;
+        evidence_config.taker_fee_rate = options.taker_fee_rate;
+        evidence_config.taker_fee_exponent = options.taker_fee_exponent;
+        evidence_config.taker_only_fee = 1;
+        NativeRuntimeEvidenceWriter evidence_writer(evidence_config);
         // Zero-authority shadow begins from an explicit flat canonical inventory
         // snapshot. Non-zero recovery inventory must come from the future native
         // recovery/reconciliation boundary; strategy lanes never synthesize it.
@@ -285,6 +303,47 @@ int main(int argc, char** argv) {
         std::uint64_t arbitration_conflicts = 0, authority_rejections = 0;
         std::uint64_t inventory_rejections = 0, minimum_size_rejections = 0;
         std::uint64_t last_measured_signal_version = 0;
+        const auto publish_order = [&](const NativeOrderCommand& command,
+                                       ExecutionPolicyId policy,
+                                       std::int64_t exchange_event_ns,
+                                       std::int64_t receive_monotonic_ns) noexcept {
+            NativeEvidenceEvent evidence{};
+            evidence.kind = NativeEvidenceKind::OrderSubmitted;
+            evidence.command = command;
+            evidence.strategy_id = policy == ExecutionPolicyId::AggressiveTaker
+                ? StrategyId::CryptoInformedTaker : StrategyId::ProfessionalMaker;
+            evidence.policy = policy;
+            evidence.causal_exchange_event_ns = exchange_event_ns;
+            evidence.causal_receive_monotonic_ns = receive_monotonic_ns;
+            evidence.recorded_monotonic_ns = monotonic_now_ns();
+            return evidence_writer.publish(evidence);
+        };
+        const auto publish_state = [&](const NativeOrderCommand& command,
+                                       ExecutionPolicyId policy,
+                                       OrderState state) noexcept {
+            NativeEvidenceEvent evidence{};
+            evidence.kind = NativeEvidenceKind::OrderState;
+            evidence.command = command;
+            evidence.strategy_id = policy == ExecutionPolicyId::AggressiveTaker
+                ? StrategyId::CryptoInformedTaker : StrategyId::ProfessionalMaker;
+            evidence.policy = policy;
+            evidence.order_state = state;
+            evidence.recorded_monotonic_ns = monotonic_now_ns();
+            return evidence_writer.publish(evidence);
+        };
+        const auto publish_fill = [&](const NativePaperFillRecord& fill,
+                                      ExecutionPolicyId policy) noexcept {
+            NativeEvidenceEvent evidence{};
+            evidence.kind = NativeEvidenceKind::Fill;
+            evidence.command = fill.command;
+            evidence.fill = fill;
+            evidence.strategy_id = policy == ExecutionPolicyId::AggressiveTaker
+                ? StrategyId::CryptoInformedTaker : StrategyId::ProfessionalMaker;
+            evidence.policy = policy;
+            evidence.order_state = fill.order_state;
+            evidence.recorded_monotonic_ns = monotonic_now_ns();
+            return evidence_writer.publish(evidence);
+        };
 
 #if defined(__APPLE__)
         std::atomic<bool> stopping{false};
@@ -343,7 +402,20 @@ int main(int argc, char** argv) {
                 binance_ready = coinbase_ready = pm_ready = false;
                 continue;
             }
-            if (!paper_execution.advance_time(receive_ns)) {
+            const auto paper_advance = paper_execution.advance_time(receive_ns);
+            if (paper_advance.invalid != 0) {
+                ++adapter_handoff_failures;
+                break;
+            }
+            for (std::size_t i = 0; i < paper_advance.cancellation_count; ++i) {
+                if (!publish_state(paper_advance.cancellations[i].command,
+                                   ExecutionPolicyId::PassiveMaker,
+                                   OrderState::Cancelled)) {
+                    ++adapter_handoff_failures;
+                    break;
+                }
+            }
+            if (!evidence_writer.healthy()) {
                 ++adapter_handoff_failures;
                 break;
             }
@@ -397,6 +469,19 @@ int main(int argc, char** argv) {
                         const auto paper_result = paper_execution.on_public_trade(trade);
                         paper_fill_events += paper_result.fills;
                         paper_invalid_trades += paper_result.invalid;
+                        for (std::size_t i = 0; i < paper_result.fills; ++i) {
+                            if (!publish_fill(paper_result.records[i],
+                                              ExecutionPolicyId::PassiveMaker)) {
+                                ++adapter_handoff_failures;
+                                break;
+                            }
+                            if (!publish_state(paper_result.records[i].command,
+                                               ExecutionPolicyId::PassiveMaker,
+                                               paper_result.records[i].order_state)) {
+                                ++adapter_handoff_failures;
+                                break;
+                            }
+                        }
                     }
                     maker::MakerDecision maker_decision;
                     bool maker_event = false;
@@ -516,9 +601,33 @@ int main(int argc, char** argv) {
                         ++adapter_handoff_failures;
                         break;
                     }
+                    if (!publish_order(authority_result.tx.command,
+                                       alpha_candidates[index].policy,
+                                       paper_book.exchange_event_ns,
+                                       paper_book.receive_monotonic_ns)) {
+                        ++adapter_handoff_failures;
+                        break;
+                    }
+                    if (paper_result.final_state == OrderState::Rejected
+                        || paper_result.final_state == OrderState::Expired) {
+                        if (!publish_state(authority_result.tx.command,
+                                           alpha_candidates[index].policy,
+                                           paper_result.final_state)) {
+                            ++adapter_handoff_failures;
+                            break;
+                        }
+                    }
                     ++accepted;
                     if (paper_result.accepted != 0 && paper_result.filled_microunits > 0) {
                         ++paper_fill_events;
+                        if (!publish_fill(paper_result.fill,
+                                          alpha_candidates[index].policy)
+                            || !publish_state(authority_result.tx.command,
+                                              alpha_candidates[index].policy,
+                                              paper_result.fill.order_state)) {
+                            ++adapter_handoff_failures;
+                            break;
+                        }
                     }
                     if (candidate_is_taker[index] != 0) {
                         ++taker_accepted;
@@ -545,6 +654,7 @@ int main(int argc, char** argv) {
 #endif
         binance_thread.join();
         coinbase_thread.join();
+        evidence_writer.stop();
 
         const auto binance_status = binance.snapshot();
         const auto coinbase_status = coinbase.snapshot();
@@ -554,7 +664,10 @@ int main(int argc, char** argv) {
         const bool clean = pm_drops.load() == 0
             && binance_ingress_status.dropped_events == 0
             && coinbase_ingress_status.dropped_events == 0
-            && adapter_handoff_failures == 0;
+            && adapter_handoff_failures == 0
+            && evidence_writer.healthy()
+            && evidence_writer.dropped() == 0
+            && evidence_writer.published() == evidence_writer.written();
 
         std::cout << json::serialize(json::object{
             {"schema", "polymarket_v7_crypto_settlement_native_candidate_v2"},
@@ -578,6 +691,10 @@ int main(int argc, char** argv) {
             {"paper_cancels", paper_execution.paper_cancels()},
             {"paper_invalid_trades", paper_invalid_trades},
             {"paper_submit_failures", paper_submit_failures},
+            {"evidence_healthy", evidence_writer.healthy()},
+            {"evidence_published", evidence_writer.published()},
+            {"evidence_written", evidence_writer.written()},
+            {"evidence_dropped", evidence_writer.dropped()},
             {"arbitration_conflicts_fail_closed", arbitration_conflicts},
             {"authority_rejections", authority_rejections},
             {"inventory_rejections", inventory_rejections},
