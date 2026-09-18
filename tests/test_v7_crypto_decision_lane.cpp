@@ -137,6 +137,15 @@ void test_evaluate_is_allocation_free() {
     assert(capital.release_order(result.intent.intent_id));
 }
 
+void test_construct_candidate_defers_capital_to_unified_owner() {
+    NativeCryptoDecisionLane lane({});
+    const auto result = lane.construct_candidate(input(1, 7));
+    assert(result.accepted == 1);
+    assert(result.reason == NativeCryptoDecisionReason::Accepted);
+    assert(result.admission.accepted == 0);
+    assert(result.admission.capital_reserved == 0);
+}
+
 void test_frozen_forward_can_ignore_source_valid_flag_with_age_gate() {
     NativeCryptoDecisionPolicy policy;
     policy.require_signal_valid = 0;
@@ -155,6 +164,7 @@ int main() {
     test_duplicate_depth_tte_and_market_gates();
     test_market_traded_and_capital_denied();
     test_evaluate_is_allocation_free();
+    test_construct_candidate_defers_capital_to_unified_owner();
     test_frozen_forward_can_ignore_source_valid_flag_with_age_gate();
     return 0;
 }

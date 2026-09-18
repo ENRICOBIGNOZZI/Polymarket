@@ -85,6 +85,10 @@ class NativeCryptoDecisionLane final {
 public:
     explicit NativeCryptoDecisionLane(NativeCryptoDecisionPolicy policy) noexcept;
 
+    // Build an already-causal taker candidate without reserving capital. The
+    // unified settlement owner performs portfolio/risk/capital/OMS admission.
+    [[nodiscard]] NativeCryptoDecisionResult construct_candidate(
+        const NativeCryptoDecisionInput& input) noexcept;
     [[nodiscard]] NativeCryptoDecisionResult evaluate(
         const NativeCryptoDecisionInput& input,
         SleeveCapitalAccount& capital) noexcept;

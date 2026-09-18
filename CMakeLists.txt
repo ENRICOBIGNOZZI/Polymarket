@@ -45,7 +45,8 @@ add_library(pm_v7_common
   src/v7_capital.cpp
   src/v7_execution_admission.cpp
   src/v7_crypto_decision_lane.cpp
-  src/v7_native_order_tx.cpp)
+  src/v7_native_order_tx.cpp
+  src/v7_native_settlement_authority.cpp)
 target_include_directories(pm_v7_common PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/include ${Boost_INCLUDE_DIRS})
 target_link_libraries(pm_v7_common PUBLIC pm_json)
 target_compile_options(pm_v7_common PRIVATE -Wall -Wextra -Wpedantic)
@@ -186,7 +187,7 @@ target_compile_options(polymarket_v7_external_venue_runtime PRIVATE -Wall -Wextr
 add_executable(polymarket_v7_crypto_settlement_native_candidate
   src/v7_crypto_settlement_native_candidate.cpp)
 target_link_libraries(polymarket_v7_crypto_settlement_native_candidate PRIVATE
-  pm_v7_external pm_fast_arb)
+  pm_v7_external pm_v7_hft pm_fast_arb)
 target_compile_options(polymarket_v7_crypto_settlement_native_candidate PRIVATE
   -Wall -Wextra -Wpedantic)
 
@@ -279,6 +280,13 @@ if(BUILD_TESTING)
   target_link_libraries(pm_v7_native_order_tx_tests PRIVATE pm_v7_common)
   target_compile_options(pm_v7_native_order_tx_tests PRIVATE -UNDEBUG)
   add_test(NAME pm_v7_native_order_tx_tests COMMAND pm_v7_native_order_tx_tests)
+
+  add_executable(pm_v7_native_settlement_authority_tests
+    tests/test_v7_native_settlement_authority.cpp)
+  target_link_libraries(pm_v7_native_settlement_authority_tests PRIVATE pm_v7_common)
+  target_compile_options(pm_v7_native_settlement_authority_tests PRIVATE -UNDEBUG)
+  add_test(NAME pm_v7_native_settlement_authority_tests
+    COMMAND pm_v7_native_settlement_authority_tests)
 
   add_executable(pm_v7_native_clob_order_lane_driver tests/v7_native_clob_order_lane_driver.cpp)
   target_link_libraries(pm_v7_native_clob_order_lane_driver PRIVATE pm_v7_account_native)

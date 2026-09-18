@@ -5,7 +5,8 @@
 #include "pm/v7_external_ws.hpp"
 #include "pm/v7_ingress_wakeup.hpp"
 #include "pm/v7_market_ws.hpp"
-#include "pm/v7_native_order_tx.hpp"
+#include "pm/v7_maker_lane.hpp"
+#include "pm/v7_native_settlement_authority.hpp"
 #include "pm/v7_spsc.hpp"
 
 #include <boost/json.hpp>
@@ -184,8 +185,13 @@ int main(int argc, char** argv) {
         limits.max_total_exposure_microdollars = 1'000'000'000LL;
         limits.max_market_exposure_microdollars = 100'000'000LL;
         limits.max_single_order_microdollars = 10'000'000LL;
-        SleeveCapitalAccount capital(limits);
-        NativeOrderTxOwner order_tx;
+        NativeSettlementAuthority authority(limits);
+        maker::MakerInstrumentLane yes_maker(+1), no_maker(-1);
+        maker::MakerModelSnapshot maker_model;
+        if (!maker_model.valid()) throw std::runtime_error("invalid native maker model snapshot");
+        maker::MakerLaneContext maker_context;
+        maker_context.risk.max_quote_shares = maker_model.base_quote_shares;
+        maker_context.risk.max_abs_residual_shares = maker_model.base_quote_shares;
 
         const auto start_mono = monotonic_now_ns();
         const auto start_wall = wall_now_ns();
@@ -214,7 +220,11 @@ int main(int argc, char** argv) {
         decision_compute.reserve(4096);
         std::array<std::uint64_t, 32> reasons{};
         std::uint64_t evaluations = 0, accepted = 0, latency_overflow = 0;
+        std::uint64_t taker_accepted = 0, maker_accepted = 0;
         std::uint64_t adapter_handoff_failures = 0;
+        std::uint64_t maker_decisions = 0, maker_candidates = 0;
+        std::uint64_t arbitration_conflicts = 0, authority_rejections = 0;
+        std::uint64_t inventory_rejections = 0, minimum_size_rejections = 0;
         std::uint64_t last_measured_signal_version = 0;
 
 #if defined(__APPLE__)
@@ -276,6 +286,22 @@ int main(int argc, char** argv) {
             if (has_external && receive_ns > 1) {
                 current_signal = external_state.advance_external_cancel_signal(receive_ns - 1, external_policy);
             }
+            std::array<ExecutionPlan, 8> alpha_candidates{};
+            std::array<std::int64_t, 8> candidate_trigger_ns{};
+            std::array<std::uint8_t, 8> candidate_is_taker{};
+            std::size_t alpha_candidate_count = 0;
+            const auto append_candidate = [&](const ExecutionPlan& plan,
+                                              std::int64_t trigger_ns,
+                                              bool is_taker) noexcept {
+                if (alpha_candidate_count >= alpha_candidates.size()) {
+                    ++latency_overflow;
+                    return;
+                }
+                alpha_candidates[alpha_candidate_count] = plan;
+                candidate_trigger_ns[alpha_candidate_count] = trigger_ns;
+                candidate_is_taker[alpha_candidate_count] = is_taker ? 1 : 0;
+                ++alpha_candidate_count;
+            };
             bool progressed = false;
             do {
                 progressed = false;
@@ -289,8 +315,31 @@ int main(int argc, char** argv) {
                 }
                 if (pm_ready && pending_pm.event.receive_monotonic_ns == receive_ns) {
                     const auto& event = pending_pm.event;
-                    if (event.instrument_handle == kYes) yes_book = event.book;
-                    else if (event.instrument_handle == kNo) no_book = event.book;
+                    maker::MakerDecision maker_decision;
+                    bool maker_event = false;
+                    if (event.instrument_handle == kYes) {
+                        yes_book = event.book;
+                        maker_decision = yes_maker.on_market_event(event, maker_context, maker_model);
+                        maker_event = true;
+                    } else if (event.instrument_handle == kNo) {
+                        no_book = event.book;
+                        maker_decision = no_maker.on_market_event(event, maker_context, maker_model);
+                        maker_event = true;
+                    }
+                    if (maker_event) {
+                        ++maker_decisions;
+                        for (std::size_t index = 0; index < maker_decision.intent_count; ++index) {
+                            const auto& intent = maker_decision.intents[index];
+                            if (intent.type != IntentType::Quote) continue;
+                            ExecutionPlan plan;
+                            plan.intent = intent;
+                            plan.tick_size_e4 = event.book.tick_size_e4;
+                            plan.market_state_version = event.state_version;
+                            plan.policy = ExecutionPolicyId::PassiveMaker;
+                            append_candidate(plan, event.receive_monotonic_ns, false);
+                            ++maker_candidates;
+                        }
+                    }
                     pm_ready = false; refill_pm(); progressed = true;
                 }
             } while (progressed);
@@ -303,7 +352,7 @@ int main(int argc, char** argv) {
                 input.yes_book = yes_book;
                 input.no_book = no_book;
                 input.now_monotonic_ns = receive_ns;
-                const auto result = lane.evaluate(input, capital);
+                const auto result = lane.construct_candidate(input);
                 const auto finished = monotonic_now_ns();
                 ++evaluations;
                 const auto reason_index = static_cast<std::size_t>(result.reason);
@@ -322,20 +371,43 @@ int main(int argc, char** argv) {
                     plan.tick_size_e4 = (result.selected_yes != 0 ? yes_book : no_book).tick_size_e4;
                     plan.market_state_version = result.intent.state_version;
                     plan.policy = ExecutionPolicyId::AggressiveTaker;
-                    const auto tx = order_tx.prepare_submit(plan, monotonic_now_ns());
-                    const auto adapter_ready_ns = monotonic_now_ns();
-                    if (tx.accepted == 0 || tx.oms.state != OrderState::SendPending) {
+                    append_candidate(plan, current_signal.trigger_receive_monotonic_ns, true);
+                }
+            }
+
+            // Portfolio arbitration is deliberately fail-closed until all
+            // component wealth scores are on one native comparable scale.
+            // Exactly one new-risk alpha candidate may reach the sole authority.
+            if (alpha_candidate_count > 1) {
+                ++arbitration_conflicts;
+            } else if (alpha_candidate_count == 1) {
+                const auto index = std::size_t{0};
+                const auto authority_result = authority.submit(
+                    alpha_candidates[index], options.min_order_microunits, monotonic_now_ns());
+                const auto adapter_ready_ns = monotonic_now_ns();
+                if (authority_result.accepted == 0) {
+                    ++authority_rejections;
+                    if (authority_result.reason == NativeSettlementAuthorityReason::InventoryUnavailable) {
+                        ++inventory_rejections;
+                    } else if (authority_result.reason == NativeSettlementAuthorityReason::BelowVenueMinimum) {
+                        ++minimum_size_rejections;
+                    } else if (authority_result.reason == NativeSettlementAuthorityReason::OmsDenied) {
                         ++adapter_handoff_failures;
-                        (void)capital.release_order(result.intent.intent_id);
-                    } else {
-                        ++accepted;
+                    }
+                } else {
+                    ++accepted;
+                    if (candidate_is_taker[index] != 0) {
+                        ++taker_accepted;
                         lane.mark_market_traded(kMarket);
                         if (accepted_signal_to_admission.size() < accepted_signal_to_admission.capacity()) {
+                            const auto trigger_ns = candidate_trigger_ns[index];
                             accepted_signal_to_admission.push_back(std::max<std::int64_t>(
-                                0, finished - current_signal.trigger_receive_monotonic_ns));
+                                0, authority_result.tx.command.queue_monotonic_ns - trigger_ns));
                             accepted_signal_to_adapter.push_back(std::max<std::int64_t>(
-                                0, adapter_ready_ns - current_signal.trigger_receive_monotonic_ns));
+                                0, adapter_ready_ns - trigger_ns));
                         } else ++latency_overflow;
+                    } else {
+                        ++maker_accepted;
                     }
                 }
             }
@@ -361,15 +433,21 @@ int main(int argc, char** argv) {
             && adapter_handoff_failures == 0;
 
         std::cout << json::serialize(json::object{
-            {"schema", "polymarket_v7_crypto_settlement_native_candidate_v1"},
+            {"schema", "polymarket_v7_crypto_settlement_native_candidate_v2"},
             {"paper_only", true}, {"authenticated_execution", false},
             {"real_order_submission", false}, {"real_capital_at_risk", false},
             {"authority", "SHADOW_ZERO_AUTHORITY"},
-            {"critical_path", "CPP_SAME_PROCESS_FEED_DECODE_TO_OMS_ADAPTER_COMMAND"},
+            {"critical_path", "CPP_SAME_PROCESS_FEED_DECODE_TO_SINGLE_SETTLEMENT_AUTHORITY"},
             {"clean_capture", clean}, {"duration_seconds", options.duration_seconds},
             {"evaluations", evaluations}, {"accepted_candidates", accepted},
+            {"taker_accepted", taker_accepted}, {"maker_accepted", maker_accepted},
+            {"maker_decisions", maker_decisions}, {"maker_candidates", maker_candidates},
+            {"arbitration_conflicts_fail_closed", arbitration_conflicts},
+            {"authority_rejections", authority_rejections},
+            {"inventory_rejections", inventory_rejections},
+            {"minimum_size_rejections", minimum_size_rejections},
             {"adapter_handoff_failures", adapter_handoff_failures},
-            {"native_oms_active_orders", order_tx.active_orders()},
+            {"native_oms_active_orders", authority.active_orders()},
             {"latency_sample_overflow", latency_overflow},
             {"accepted_signal_to_admission", latency_distribution(std::move(accepted_signal_to_admission))},
             {"accepted_signal_to_adapter", latency_distribution(std::move(accepted_signal_to_adapter))},
@@ -379,7 +457,7 @@ int main(int argc, char** argv) {
             {"binance", {{"frames", binance_status.frames_received}, {"transport_failures", binance_status.transport_failures}, {"drops", binance_ingress_status.dropped_events}}},
             {"coinbase", {{"frames", coinbase_status.frames_received}, {"transport_failures", coinbase_status.transport_failures}, {"drops", coinbase_ingress_status.dropped_events}}},
             {"polymarket", {{"messages", pm_status.messages}, {"reconnects", pm_status.reconnects}, {"errors", pm_status.errors}, {"drops", pm_drops.load()}}},
-            {"note", "Zero-authority candidate only. No network order adapter is instantiated. Accepted taker candidates reach canonical OMS SendPending and one in-process adapter command; maker/component convergence remains a deployment gate."}
+            {"note", "Zero-authority candidate only. Maker and taker candidates now share one in-process capital/OMS authority. Multi-alpha arbitration, SELL inventory synchronization, cancel lifecycle and the network adapter remain fail-closed deployment gates."}
         }) << '\n';
         return clean ? 0 : 2;
     } catch (const std::exception& error) {

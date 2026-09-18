@@ -61,9 +61,8 @@ void NativeCryptoDecisionLane::reset_market(std::uint64_t market_handle) noexcep
     last_signal_version_[market_handle] = 0;
     traded_market_[market_handle] = 0;
 }
-NativeCryptoDecisionResult NativeCryptoDecisionLane::evaluate(
-    const NativeCryptoDecisionInput& input,
-    SleeveCapitalAccount& capital) noexcept {
+NativeCryptoDecisionResult NativeCryptoDecisionLane::construct_candidate(
+    const NativeCryptoDecisionInput& input) noexcept {
     const auto started_ns = monotonic_now_ns();
     NativeCryptoDecisionResult out;
     out.signal_version = input.signal.signal_version;
@@ -160,15 +159,24 @@ NativeCryptoDecisionResult NativeCryptoDecisionLane::evaluate(
     intent.passive = 0;
     intent.post_only = 0;
     out.intent = intent;
-
-    out.admission = ExecutionAdmission::admit(intent, book.tick_size_e4, capital);
-    if (out.admission.accepted == 0) {
-        return finish(out.admission.reason == ExecutionAdmissionReason::CapitalDenied
-            ? NativeCryptoDecisionReason::CapitalDenied
-            : NativeCryptoDecisionReason::InvalidTick);
-    }
     out.accepted = 1;
     return finish(NativeCryptoDecisionReason::Accepted);
+}
+
+NativeCryptoDecisionResult NativeCryptoDecisionLane::evaluate(
+    const NativeCryptoDecisionInput& input,
+    SleeveCapitalAccount& capital) noexcept {
+    auto out = construct_candidate(input);
+    if (out.accepted == 0) return out;
+    const auto& book = out.selected_yes != 0 ? input.yes_book : input.no_book;
+    out.admission = ExecutionAdmission::admit(out.intent, book.tick_size_e4, capital);
+    if (out.admission.accepted == 0) {
+        out.accepted = 0;
+        out.reason = out.admission.reason == ExecutionAdmissionReason::CapitalDenied
+            ? NativeCryptoDecisionReason::CapitalDenied
+            : NativeCryptoDecisionReason::InvalidTick;
+    }
+    return out;
 }
 
 } // namespace pm::v7
