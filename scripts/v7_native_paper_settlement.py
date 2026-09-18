@@ -20,6 +20,7 @@ from typing import Any
 
 from v7_execution_ledger import native_order_id_matches, LedgerEvent, canonical_ledger_path, iter_events
 from v7_ledger_spool import spool_event
+from v7_native_settlement_projection import context_from_fill
 
 STATUS_SCHEMA = "polymarket_v7_native_paper_settlement_status_v1"
 
@@ -220,6 +221,9 @@ def settle(args: argparse.Namespace) -> int:
             "settlement_outcome": resolved_label,
             "included_order_ids": sorted({str(event.order_id) for event in fills if event.order_id}),
             "included_fill_ids": sorted({str(event.fill_id) for event in fills if event.fill_id}),
+            "included_position_ids": sorted({str(event.position_id) for event in fills if event.position_id}),
+            "allocation_basis": "SIGNED_FILL_CASHFLOW_PLUS_SETTLEMENT",
+            "crypto_context": context_from_fill({"metadata": representative.metadata}),
             "terminal_id": settlement_id,
             "pnl_decomposition": {
                 "trading_cashflow_before_resolution": cash,

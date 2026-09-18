@@ -510,6 +510,25 @@ def drain_spool_loop(
                 )
                 if bridge is not None:
                     result["ipc"] = bridge.snapshot()
+                # Permission is measured by the writer, not the read-only exporter.
+                runtime_path = root / "control/runtime_status.json"
+                try:
+                    runtime_identity = json.loads(runtime_path.read_text())
+                except (OSError, ValueError):
+                    runtime_identity = {}
+                _atomic_payload(root / "control", "ledger_writer_status.json", {
+                    "schema": "polymarket_v7_ledger_writer_status_v1",
+                    "timestamp_ms": time.time_ns() // 1_000_000,
+                    "model_sha": model_sha, "run_id": runtime_identity.get("run_id"),
+                    "pid": os.getpid(), "uid": os.getuid(), "writer_id": writer_id,
+                    "paper_only": True, "authenticated_execution": False,
+                    "real_order_submission": False,
+                    "healthy": result.get("rejected", 0) == 0,
+                    "ledger_writable": os.access(ledger_path.parent, os.W_OK)
+                        and (not ledger_path.exists() or os.access(ledger_path, os.W_OK)),
+                    "ledger_bytes": ledger_path.stat().st_size if ledger_path.exists() else 0,
+                    "drain": result,
+                })
                 print(json.dumps(result, sort_keys=True), flush=True)
                 next_spool = now + slow_interval
             deadline = min(next_spool, next_ipc) if bridge is not None else next_spool

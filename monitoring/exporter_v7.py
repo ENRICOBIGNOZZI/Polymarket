@@ -246,6 +246,17 @@ def _operations(run_root: Path, runtime: dict[str, Any], now: int) -> dict[str, 
         lock_pid = int((run_root / "control/runtime.lock/pid").read_text().strip())
     except (OSError, ValueError):
         lock_pid = 0
+    writer = _json(run_root / "control/ledger_writer_status.json")
+    writer_valid = (
+        writer.get("schema") == "polymarket_v7_ledger_writer_status_v1"
+        and writer.get("model_sha") == runtime.get("model_sha")
+        and bool(runtime.get("run_id")) and writer.get("run_id") == runtime.get("run_id")
+        and writer.get("paper_only") is True
+        and writer.get("authenticated_execution") is False
+        and writer.get("real_order_submission") is False
+        and writer.get("healthy") is True and _pid_alive(writer.get("pid"))
+        and -1 <= now - _number(writer.get("timestamp_ms")) / 1000 <= 5
+    )
     runtime_pid = _integer(runtime.get("pid"))
     child_pid = _integer(supervisor.get("child_pid"))
     try:
@@ -258,7 +269,9 @@ def _operations(run_root: Path, runtime: dict[str, Any], now: int) -> dict[str, 
         "single_writer": runtime_pid > 0 and runtime_pid == lock_pid and _pid_alive(lock_pid) and child_pid in {0, runtime_pid},
         "runtime_uptime": max(0, now - _integer(supervisor.get("started_at"))),
         "restart_count": _integer(supervisor.get("restart_count_window")),
-        "ledger_writable": os.access(run_root / "ledger", os.W_OK),
+        "ledger_writable": writer_valid and writer.get("ledger_writable") is True,
+        "ledger_writer_status": writer,
+        "exporter_has_write_permission": os.access(run_root / "ledger", os.W_OK),
         "disk_free_ratio": free_ratio, "retention_age": _age(now, retention.get("timestamp")),
     }
 
@@ -278,6 +291,8 @@ def collect_snapshot(run_root: Path, repository_root: Path | None = None, *, now
     }
     canonical = {
         "schema": "polymarket_v7_runtime_ledger_economics_v1",
+        "generated_ts_ms": now * 1000,
+        "ledger_valid": ledger.get("valid") is True,
         "paper_only": True,
         "authenticated_execution": False,
         "real_order_submission": False,
@@ -381,11 +396,11 @@ def collect_snapshot(run_root: Path, repository_root: Path | None = None, *, now
         "maker_fillability": _fillability(run_root, repository_root, runtime_sha, now),
         "external_fair": external_fair, "reconciliation": reconciliation,
         "maker_latency": _runtime_latency(run_root),
-        "lead_lag": lead_lag, "state_realized_pnl_components": state_pnl_components,
+        "lead_lag_summary": lead_lag, "state_realized_pnl_components": state_pnl_components,
         "trade_tape": tape, "trade_recorder": _trade_recorder(run_root / "trade_recorder_status.json", now),
         "authority": {"valid": authority_valid, "max_drawdown": max_drawdown},
         "algorithms": algorithms, "strategies": algorithms,
-        "ages": {"runtime": _age(now, runtime.get("timestamp")), "portfolio": _age(now, portfolio.get("timestamp")), "trade_tape": tape["age"]},
+        "ages": {"economics": 0.0, "runtime": _age(now, runtime.get("timestamp")), "portfolio": _age(now, portfolio.get("timestamp")), "trade_tape": tape["age"]},
         "operations": _operations(run_root, runtime, now),
         "economics": {"starting_capital": starting, "cash": _number(allocations.get("reserve_budget")), "equity": equity, "pnl": equity-starting, "realized_pnl": canonical.get("net_pnl"), "unrealized_executable_pnl": equity-starting-_number(canonical.get("net_pnl")), "drawdown": _number(portfolio.get("drawdown")), "gross_exposure": 0.0, "capital_utilization": 0.0, "live_units": 0, "killed": bool(portfolio.get("killed")), "source": "LEDGER_PLUS_PORTFOLIO_GUARD"},
     }

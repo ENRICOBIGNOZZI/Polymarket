@@ -1,0 +1,23 @@
+{
+  "schema": "polymarket_economic_work_checkpoint_v1",
+  "baseline_code_sha": "c27afd1574575a99f9c02262529e830dab3c4820",
+  "branch": "fix/v7-economic-research-20260918",
+  "paper_only": true,
+  "real_order_submission": false,
+  "live_parameters_changed": false,
+  "status": "IMPLEMENTING",
+  "phases": {
+    "0": "BASELINE_FROZEN_CHECKSUM_VERIFIED",
+    "1": "IMPLEMENTED_68_TESTS_PASS_REAL_LEDGER_RECONCILED_NOT_DEPLOYED",
+    "2": "IMPLEMENTING_OWNER_CONTEXT",
+    "3": "PENDING",
+    "4": "PENDING",
+    "5": "PENDING",
+    "6": "PENDING",
+    "7": "PENDING",
+    "8": "PENDING",
+    "9": "PENDING"
+  },
+  "scope": "accounting, maker context/sizing, decision evidence, causal simulation, quantitative research; coordinate with all-crypto branch before deployment",
+  "created_at": "2026-09-18T14:23:34.119756+00:00"
+}

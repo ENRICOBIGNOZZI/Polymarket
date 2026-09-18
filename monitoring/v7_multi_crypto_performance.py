@@ -5,8 +5,12 @@ from __future__ import annotations
 import json
 import math
 import time
+import sys
 from pathlib import Path
 from typing import Any
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
+from v7_native_settlement_projection import iter_position_economics
 
 ASSETS = ("BTC", "ETH", "SOL", "XRP", "DOGE", "BNB")
 HORIZONS = ("M5", "M15")
@@ -127,18 +131,22 @@ def summarize_multi_crypto(
         handle = ledger_path.open("r", encoding="utf-8")
     except OSError:
         handle = None
+    projection_errors: list[str] = []
     if handle is not None:
         with handle:
-            for line in handle:
-                if not line.strip():
-                    continue
-                diagnostics["rows"] += 1
-                try:
-                    row = json.loads(line)
-                except json.JSONDecodeError:
-                    continue
-                if not isinstance(row, dict) or row.get("strategy") != CRYPTO_ENGINE:
-                    continue
+            def decoded_rows():
+                for line in handle:
+                    if not line.strip():
+                        continue
+                    diagnostics["rows"] += 1
+                    try:
+                        row = json.loads(line)
+                    except json.JSONDecodeError:
+                        projection_errors.append("invalid_json")
+                        continue
+                    if isinstance(row, dict) and row.get("strategy") == CRYPTO_ENGINE:
+                        yield row
+            for row in iter_position_economics(decoded_rows(), projection_errors):
                 diagnostics["crypto_rows"] += 1
                 if row.get("paper_only") is not True or row.get("authenticated_execution") is not False:
                     diagnostics["unsafe_rows"] += 1
@@ -175,6 +183,8 @@ def summarize_multi_crypto(
                         lane["fill_position_ids"].add(position_id)
                         if price is not None and size is not None and size >= 0 and str(row.get("side") or "BUY").upper() == "BUY":
                             lane["position_open_costs"][position_id] = lane["position_open_costs"].get(position_id, 0.0) + price * size + max(0.0, fee or 0.0)
+                        elif price is not None and size is not None and str(row.get("side") or "").upper() == "SELL":
+                            lane["position_open_costs"][position_id] = lane["position_open_costs"].get(position_id, 0.0) - price * size + max(0.0, fee or 0.0)
                         else:
                             lane["position_id_missing"] += 1
                     else:
@@ -195,6 +205,7 @@ def summarize_multi_crypto(
                     else:
                         lane["position_id_missing"] += 1
 
+    diagnostics["native_projection_errors"] = projection_errors
     lane_final_count = 0
     attributed_realized = 0.0
     for lane in lanes.values():
@@ -208,12 +219,17 @@ def summarize_multi_crypto(
         lane["open_positions"] = max(0, len(lane["fill_position_ids"] - lane["final_position_ids"])) if lane["open_positions_known"] else None
         lane["open_cost_at_risk_known"] = lane["open_positions_known"]
         if lane["open_cost_at_risk_known"]:
-            lane["open_cost_at_risk"] = sum(cost for pid, cost in lane["position_open_costs"].items() if pid not in lane["final_position_ids"])
+            lane["open_cost_at_risk"] = sum(max(0.0, cost) for pid, cost in lane["position_open_costs"].items() if pid not in lane["final_position_ids"])
 
     engine_rows = portfolio.get("engines") if isinstance(portfolio.get("engines"), dict) else {}
     engine = engine_rows.get(CRYPTO_ENGINE) if isinstance(engine_rows.get(CRYPTO_ENGINE), dict) else {}
     budget, equity = _finite(engine.get("budget")), _finite(engine.get("equity"))
     total_pnl = equity - budget if equity is not None and budget is not None else None
+    conservative = engine.get("source") == "canonical_ledger_conservative"
+    risk_equity_lower_bound, pnl_lower_bound = (equity, total_pnl) if conservative else (None, None)
+    if conservative:
+        # Zero recovery is a risk bound, not an executable economic mark.
+        equity, total_pnl = None, None
     strategy_pnl = canonical.get("strategy_net_pnl") if isinstance(canonical.get("strategy_net_pnl"), dict) else {}
     canonical_realized = _finite(strategy_pnl.get(CRYPTO_ENGINE))
     gap = canonical_realized - attributed_realized if canonical_realized is not None else None
@@ -221,6 +237,7 @@ def summarize_multi_crypto(
     ledger_complete = bool(
         ledger_valid and diagnostics["unsafe_rows"] == 0 and diagnostics["sha_mismatch_rows"] == 0
         and diagnostics["unattributed_final_rows"] == 0 and diagnostics["final_rows_missing_pnl"] == 0
+        and not projection_errors
     )
     latest_final_ms = _finite(diagnostics.get("latest_final_recorded_ts_ms"))
     canonical_mtime = _finite(canonical_mtime_ms)
@@ -264,6 +281,8 @@ def summarize_multi_crypto(
         "registered_lanes": registered_lanes, "known_economic_lanes": known_lanes,
         "new_risk_authorized_lanes": authorized_lanes, "ledger_valid": bool(ledger_valid),
         "portfolio": {"budget": budget, "equity": equity, "total_pnl": total_pnl,
+                      "valuation_basis": "ZERO_RECOVERY_CONSERVATIVE_UNTIL_FINAL" if conservative else "REPORTED",
+                      "risk_equity_lower_bound": risk_equity_lower_bound, "pnl_lower_bound": pnl_lower_bound,
                       "realized_pnl": display_realized, "unrealized_pnl": unrealized,
                       "account_drawdown": account_drawdown,
                       "candidate_gross_exposure": _finite(crypto_risk.get("gross_crypto_exposure_usd")),
@@ -306,6 +325,8 @@ def render_prometheus(summary: dict[str, Any]) -> list[str]:
     ]
     portfolio = summary.get("portfolio") if isinstance(summary.get("portfolio"), dict) else {}
     for key, metric in (
+        ("risk_equity_lower_bound", "polymarket_mc_risk_equity_lower_bound_usd"),
+        ("pnl_lower_bound", "polymarket_mc_pnl_lower_bound_usd"),
         ("budget", "polymarket_mc_portfolio_budget_usd"), ("equity", "polymarket_mc_portfolio_equity_usd"),
         ("total_pnl", "polymarket_mc_total_pnl_usd"), ("realized_pnl", "polymarket_mc_realized_pnl_usd"),
         ("unrealized_pnl", "polymarket_mc_unrealized_pnl_usd"), ("account_drawdown", "polymarket_mc_account_drawdown_ratio"),
