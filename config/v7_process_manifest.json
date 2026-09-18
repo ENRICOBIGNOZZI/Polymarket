@@ -1,496 +1,14 @@
 {
-  "authenticated_execution": false,
-  "authority_registry": "config/v7_authority_registry.json",
-  "expected_launcher_child_count": 16,
-  "expected_process_count": 19,
-  "launcher": "scripts/paper_v7_execution_loop.sh",
+  "schema": "polymarket_v7_process_manifest_v1",
+  "version": 1,
   "paper_only": true,
-  "processes": [
-    {
-      "arguments": [
-        "--host",
-        "127.0.0.1",
-        "--port",
-        "${PUBLIC_PROXY_PORT}"
-      ],
-      "config_identity_required": false,
-      "dependencies": [],
-      "exact_sha_required": true,
-      "executable": "scripts/v7_public_https_proxy.py",
-      "id": "public_https_proxy",
-      "inputs": [],
-      "launcher_log": "public_https_proxy.log",
-      "london_deployed": true,
-      "outputs": [
-        "public_https_proxy.log"
-      ],
-      "profile": "infrastructure",
-      "runtime_class": "COLLECTOR"
-    },
-    {
-      "arguments": [],
-      "config_identity_required": true,
-      "dependencies": [
-        "public_https_proxy",
-        "crypto_universe",
-        "external_venue_runtime"
-      ],
-      "exact_sha_required": true,
-      "executable": "scripts/v7_rtds_external_fair_monitor.py",
-      "id": "rtds_monitor",
-      "inputs": [
-        "universe/current.json",
-        "external_fair/external_venues.json"
-      ],
-      "launcher_log": "external_fair/rtds_monitor.log",
-      "london_deployed": true,
-      "outputs": [
-        "external_fair/rtds_monitor.log"
-      ],
-      "profile": "engine",
-      "runtime_class": "COLLECTOR"
-    },
-    {
-      "arguments": [
-        "--model-sha",
-        "${SHA}"
-      ],
-      "config_identity_required": true,
-      "dependencies": [
-        "public_https_proxy"
-      ],
-      "exact_sha_required": true,
-      "executable": "${EXTERNAL_VENUE_RUNTIME}",
-      "id": "external_venue_runtime",
-      "inputs": [],
-      "launcher_log": "external_fair/external_venues.log",
-      "london_deployed": true,
-      "outputs": [
-        "external_fair/external_venues.json",
-        "external_fair/external_venues.log"
-      ],
-      "profile": "engine",
-      "runtime_class": "COLLECTOR"
-    },
-    {
-      "arguments": [
-        "--model-sha",
-        "${SHA}",
-        "--fair-only"
-      ],
-      "config_identity_required": true,
-      "dependencies": [
-        "rtds_monitor"
-      ],
-      "exact_sha_required": true,
-      "executable": "${FILLABILITY_OBSERVER}",
-      "id": "repricing_book_observer",
-      "inputs": [
-        "external_fair/status.json"
-      ],
-      "launcher_log": "research/repricing_book_observer.log",
-      "london_deployed": true,
-      "outputs": [
-        "research/repricing_book/fillability_ws_status.json",
-        "research/repricing_book/book_observations/current.jsonl",
-        "research/repricing_book_observer.log"
-      ],
-      "profile": "observer",
-      "runtime_class": "COLLECTOR"
-    },
-    {
-      "arguments": [
-        "--model-sha",
-        "${SHA}",
-        "--interval-ms",
-        "10"
-      ],
-      "config_identity_required": true,
-      "dependencies": [
-        "external_venue_runtime"
-      ],
-      "exact_sha_required": true,
-      "executable": "scripts/v7_external_cancel_signal_journal.py",
-      "id": "external_cancel_signal_journal",
-      "inputs": [
-        "external_fair/external_cancel_signal.json"
-      ],
-      "launcher_log": "research/external_cancel_signal_journal.log",
-      "london_deployed": true,
-      "outputs": [
-        "research/external_cancel_signals.jsonl*",
-        "research/external_cancel_signal_journal_status.json",
-        "research/external_cancel_signal_journal.log"
-      ],
-      "profile": "observer",
-      "runtime_class": "COLLECTOR"
-    },
-    {
-      "arguments": [
-        "--loop"
-      ],
-      "config_identity_required": false,
-      "dependencies": [
-        "public_https_proxy"
-      ],
-      "exact_sha_required": true,
-      "executable": "scripts/v7_binance_usdm_rest_collector.py",
-      "id": "binance_usdm_rest",
-      "inputs": [],
-      "launcher_log": "external_fair/binance_usdm_rest.log",
-      "london_deployed": true,
-      "outputs": [
-        "external_fair/binance_usdm_rest.jsonl",
-        "external_fair/binance_usdm_rest.log",
-        "external_fair/binance_usdm_rest.jsonl.segment-*"
-      ],
-      "profile": "feed",
-      "runtime_class": "COLLECTOR"
-    },
-    {
-      "arguments": [
-        "--loop"
-      ],
-      "config_identity_required": false,
-      "dependencies": [
-        "public_https_proxy"
-      ],
-      "exact_sha_required": true,
-      "executable": "scripts/v7_deribit_rest_collector.py",
-      "id": "deribit_rest",
-      "inputs": [],
-      "launcher_log": "external_fair/deribit_rest.log",
-      "london_deployed": true,
-      "outputs": [
-        "external_fair/deribit_rest.jsonl",
-        "external_fair/deribit_rest.log",
-        "external_fair/deribit_rest.jsonl.segment-*"
-      ],
-      "profile": "feed",
-      "runtime_class": "COLLECTOR"
-    },
-    {
-      "arguments": [
-        "--loop"
-      ],
-      "config_identity_required": false,
-      "dependencies": [
-        "public_https_proxy"
-      ],
-      "exact_sha_required": true,
-      "executable": "scripts/v7_coinbase_l2_rest_collector.py",
-      "id": "coinbase_l2_rest",
-      "inputs": [],
-      "launcher_log": "external_fair/coinbase_l2_rest.log",
-      "london_deployed": true,
-      "outputs": [
-        "external_fair/coinbase_l2_rest.jsonl",
-        "external_fair/coinbase_l2_rest.log",
-        "external_fair/coinbase_l2_rest.jsonl.segment-*"
-      ],
-      "profile": "feed",
-      "runtime_class": "COLLECTOR"
-    },
-    {
-      "arguments": [
-        "--loop",
-        "--model-sha",
-        "${SHA}"
-      ],
-      "config_identity_required": true,
-      "dependencies": [
-        "public_https_proxy"
-      ],
-      "exact_sha_required": true,
-      "executable": "scripts/v7_crypto_universe.py",
-      "id": "crypto_universe",
-      "inputs": [
-        "config/v7_crypto_universe.json"
-      ],
-      "launcher_log": "universe/collector.log",
-      "london_deployed": true,
-      "outputs": [
-        "universe/current.json",
-        "universe/status.json",
-        "universe/collector.log"
-      ],
-      "profile": "infrastructure",
-      "runtime_class": "COLLECTOR"
-    },
-    {
-      "arguments": [
-        "--universe",
-        "${RUN_ROOT}/universe/current.json",
-        "--model-sha",
-        "${SHA}",
-        "--loop"
-      ],
-      "config_identity_required": true,
-      "dependencies": [
-        "crypto_universe",
-        "public_https_proxy"
-      ],
-      "exact_sha_required": true,
-      "executable": "${RECORDER}",
-      "id": "trade_recorder",
-      "inputs": [
-        "universe/current.json"
-      ],
-      "launcher_log": "trade_recorder.log",
-      "london_deployed": true,
-      "outputs": [
-        "trade_tape.csv",
-        "trade_recorder_status.json",
-        "trade_recorder.log"
-      ],
-      "profile": "engine",
-      "runtime_class": "COLLECTOR"
-    },
-    {
-      "arguments": [
-        "--loop",
-        "--model-sha",
-        "${SHA}"
-      ],
-      "authority_overrides": {
-        "ledger": true
-      },
-      "config_identity_required": true,
-      "dependencies": [],
-      "exact_sha_required": true,
-      "executable": "scripts/v7_ledger_spool.py",
-      "id": "ledger_router",
-      "inputs": [
-        "ledger/spool"
-      ],
-      "launcher_log": "ledger_router.log",
-      "london_deployed": true,
-      "outputs": [
-        "ledger/execution.jsonl",
-        "ledger_router.log"
-      ],
-      "profile": "core",
-      "runtime_class": "CONTROL"
-    },
-    {
-      "arguments": [
-        "periodic"
-      ],
-      "config_identity_required": true,
-      "dependencies": [
-        "crypto_universe",
-        "trade_recorder",
-        "rtds_monitor"
-      ],
-      "exact_sha_required": true,
-      "executable": "scripts/v7_market_maker_rewards.py",
-      "id": "maker_reward_selection",
-      "inputs": [
-        "universe/current.json",
-        "trade_tape.csv",
-        "micro_maker/book_observations/current.jsonl",
-        "external_fair/status.json",
-        "micro_maker/fillability_flow_snapshot.json"
-      ],
-      "launcher_log": "micro_maker/reward_selection.log",
-      "london_deployed": true,
-      "outputs": [
-        "micro_maker/reward_selection.json",
-        "micro_maker/reward_selection.log",
-        "micro_maker/reward_selection.events.jsonl*"
-      ],
-      "profile": "engine",
-      "runtime_class": "CONTROL"
-    },
-    {
-      "arguments": [
-        "--model-sha",
-        "${SHA}"
-      ],
-      "config_identity_required": true,
-      "dependencies": [
-        "crypto_universe",
-        "maker_reward_selection"
-      ],
-      "exact_sha_required": true,
-      "executable": "scripts/v7_fee_reward_registry.py",
-      "id": "fee_reward_registry",
-      "inputs": [
-        "universe/current.json",
-        "micro_maker/reward_selection.json"
-      ],
-      "launcher_log": "fee_reward_registry.log",
-      "london_deployed": true,
-      "outputs": [
-        "control/fee_reward_registry.json",
-        "fee_reward_registry.log"
-      ],
-      "profile": "observer",
-      "runtime_class": "CONTROL"
-    },
-    {
-      "arguments": [
-        "--observer-only"
-      ],
-      "config_identity_required": true,
-      "dependencies": [
-        "maker_reward_selection",
-        "fee_reward_registry",
-        "trade_recorder"
-      ],
-      "exact_sha_required": true,
-      "executable": "scripts/v7_maker_cohort_supervisor.py",
-      "id": "maker_observer_cohort",
-      "inputs": [
-        "micro_maker/reward_selection.json",
-        "control/fee_reward_registry.json"
-      ],
-      "launcher_log": "micro_maker/cohort_supervisor.log",
-      "london_deployed": true,
-      "outputs": [
-        "micro_maker/cohort_supervisor.log"
-      ],
-      "profile": "observer",
-      "runtime_class": "COLLECTOR"
-    },
-    {
-      "arguments": [
-        "scripts/v7_canonical_economics.py",
-        "scripts/v7_lead_lag_forward_report.py"
-      ],
-      "config_identity_required": true,
-      "dependencies": [
-        "ledger_router"
-      ],
-      "exact_sha_required": true,
-      "executable": "launcher_subshell",
-      "id": "canonical_economics",
-      "inputs": [
-        "ledger/execution.jsonl",
-        "research/lead_lag_taker_v1/forward_manifest.json",
-        "research/lead_lag_taker_v1/status.json"
-      ],
-      "launcher_log": "canonical_economics.log",
-      "london_deployed": true,
-      "outputs": [
-        "canonical_economics.json",
-        "canonical_economics.log",
-        "research/lead_lag_taker_v1/forward_report.json"
-      ],
-      "profile": "observer",
-      "runtime_class": "CONTROL"
-    },
-    {
-      "id": "crypto_settlement_manager",
-      "executable": "scripts/v7_native_crypto_engine_manager.py",
-      "arguments": [
-        "--repository-root",
-        "${ROOT}",
-        "--run-root",
-        "${RUN_ROOT}",
-        "--model-sha",
-        "${SHA}",
-        "--run-id",
-        "${RUN_ID}",
-        "--server-id",
-        "${SERVER_ID}",
-        "--universe",
-        "${RUN_ROOT}/universe/current.json",
-        "--engine",
-        "${CRYPTO_SETTLEMENT_ENGINE}",
-        "--settler",
-        "${ROOT}/scripts/v7_native_paper_settlement.py",
-        "--engine-log",
-        "${RUN_ROOT}/native_crypto_settlement_engine.log"
-      ],
-      "profile": "core",
-      "inputs": [
-        "universe/current.json",
-        "ledger/execution.jsonl"
-      ],
-      "outputs": [
-        "control/native_engine_manager_status.json",
-        "control/native_paper_settlement_status.json",
-        "native_engine_manager.log",
-        "native_crypto_settlement_engine.log"
-      ],
-      "dependencies": [
-        "crypto_universe",
-        "ledger_router"
-      ],
-      "exact_sha_required": true,
-      "config_identity_required": true,
-      "launcher_log": "native_engine_manager.log",
-      "london_deployed": true,
-      "runtime_class": "CONTROL",
-      "authority_overrides": {}
-    },
-    {
-      "id": "crypto_settlement_engine",
-      "executable": "${CRYPTO_SETTLEMENT_ENGINE}",
-      "arguments": [],
-      "profile": "engine",
-      "inputs": [],
-      "outputs": [
-        "control/native_evidence_status.json",
-        "ledger/spool",
-        "native_crypto_settlement_engine.log"
-      ],
-      "dependencies": [],
-      "exact_sha_required": true,
-      "config_identity_required": true,
-      "london_deployed": true,
-      "runtime_class": "HOT_PATH",
-      "authority_overrides": {
-        "capital_allocator": true,
-        "global_portfolio_coordinator": true,
-        "inventory": true,
-        "oms": true,
-        "risk_engine": true
-      }
-    },
-    {
-      "arguments": [],
-      "authority_overrides": {},
-      "config_identity_required": true,
-      "dependencies": [
-        "runtime_supervisor"
-      ],
-      "exact_sha_required": true,
-      "executable": "scripts/paper_v7_execution_loop.sh",
-      "id": "paper_launcher",
-      "inputs": [
-        "config/paper_v7.json",
-        "config/v7_process_manifest.json"
-      ],
-      "london_deployed": true,
-      "outputs": [
-        "runtime_status.json"
-      ],
-      "profile": "core",
-      "runtime_class": "CONTROL"
-    },
-    {
-      "arguments": [],
-      "authority_overrides": {
-        "runtime_identity": true
-      },
-      "config_identity_required": true,
-      "dependencies": [],
-      "exact_sha_required": true,
-      "executable": "ops/v7_runtime_supervisor.py",
-      "id": "runtime_supervisor",
-      "inputs": [
-        "config/v7_process_manifest.json"
-      ],
-      "london_deployed": true,
-      "outputs": [
-        "supervisor_status.json"
-      ],
-      "profile": "core",
-      "runtime_class": "CONTROL"
-    }
-  ],
+  "authenticated_execution": false,
+  "real_order_submission": false,
+  "real_capital_at_risk": false,
+  "authority_registry": "config/v7_authority_registry.json",
+  "launcher": "scripts/paper_v7_execution_loop.sh",
+  "expected_process_count": 10,
+  "expected_launcher_child_count": 9,
   "profiles": {
     "core": {
       "archival_behavior": "EXACT_SHA_ATOMIC_ARCHIVE",
@@ -583,8 +101,254 @@
       "restart_policy": "RESTART_ISOLATED_WITH_BACKOFF"
     }
   },
-  "real_capital_at_risk": false,
-  "real_order_submission": false,
-  "schema": "polymarket_v7_process_manifest_v1",
-  "version": 1
+  "processes": [
+    {
+      "id": "public_https_proxy",
+      "executable": "scripts/v7_public_https_proxy.py",
+      "arguments": [
+        "--host",
+        "127.0.0.1",
+        "--port",
+        "${PUBLIC_PROXY_PORT}"
+      ],
+      "profile": "infrastructure",
+      "inputs": [],
+      "outputs": [
+        "public_https_proxy.log"
+      ],
+      "dependencies": [],
+      "exact_sha_required": true,
+      "config_identity_required": false,
+      "launcher_log": "public_https_proxy.log",
+      "london_deployed": true,
+      "runtime_class": "COLLECTOR"
+    },
+    {
+      "id": "crypto_universe",
+      "executable": "scripts/v7_crypto_universe.py",
+      "arguments": [
+        "--loop",
+        "--model-sha",
+        "${SHA}"
+      ],
+      "profile": "infrastructure",
+      "inputs": [
+        "config/v7_crypto_universe.json"
+      ],
+      "outputs": [
+        "universe/current.json",
+        "universe/status.json",
+        "universe/collector.log"
+      ],
+      "dependencies": [
+        "public_https_proxy"
+      ],
+      "exact_sha_required": true,
+      "config_identity_required": true,
+      "launcher_log": "universe/collector.log",
+      "london_deployed": true,
+      "runtime_class": "COLLECTOR"
+    },
+    {
+      "id": "trade_recorder",
+      "executable": "${RECORDER}",
+      "arguments": [
+        "--universe",
+        "${RUN_ROOT}/universe/current.json",
+        "--model-sha",
+        "${SHA}",
+        "--loop"
+      ],
+      "profile": "observer",
+      "inputs": [
+        "universe/current.json"
+      ],
+      "outputs": [
+        "trade_tape.csv",
+        "trade_recorder_status.json",
+        "trade_recorder.log"
+      ],
+      "dependencies": [
+        "crypto_universe",
+        "public_https_proxy"
+      ],
+      "exact_sha_required": true,
+      "config_identity_required": true,
+      "launcher_log": "trade_recorder.log",
+      "london_deployed": true,
+      "runtime_class": "COLLECTOR"
+    },
+    {
+      "id": "external_venue_evidence",
+      "executable": "${EXTERNAL_VENUE_RUNTIME}",
+      "arguments": [
+        "--model-sha",
+        "${SHA}"
+      ],
+      "profile": "feed",
+      "inputs": [],
+      "outputs": [
+        "external_fair/external_venues.json",
+        "external_fair/tapes",
+        "external_fair/raw",
+        "external_fair/normalized_events",
+        "external_fair/external_venues.log"
+      ],
+      "dependencies": [
+        "public_https_proxy"
+      ],
+      "exact_sha_required": true,
+      "config_identity_required": true,
+      "launcher_log": "external_fair/external_venues.log",
+      "london_deployed": true,
+      "runtime_class": "COLLECTOR"
+    },
+    {
+      "id": "rtds_monitor",
+      "executable": "scripts/v7_rtds_external_fair_monitor.py",
+      "arguments": [],
+      "profile": "observer",
+      "inputs": [
+        "universe/current.json",
+        "external_fair/external_venues.json"
+      ],
+      "outputs": [
+        "external_fair/status.json",
+        "external_fair/rtds_monitor.log"
+      ],
+      "dependencies": [
+        "crypto_universe",
+        "external_venue_evidence"
+      ],
+      "exact_sha_required": true,
+      "config_identity_required": true,
+      "launcher_log": "external_fair/rtds_monitor.log",
+      "london_deployed": true,
+      "runtime_class": "COLLECTOR"
+    },
+    {
+      "id": "pm_book_observer",
+      "executable": "${FILLABILITY_OBSERVER}",
+      "arguments": [
+        "--fair-only",
+        "--model-sha",
+        "${SHA}"
+      ],
+      "profile": "observer",
+      "inputs": [
+        "universe/current.json"
+      ],
+      "outputs": [
+        "research/repricing_book/fillability_ws_status.json",
+        "research/repricing_book/book_observations/current.jsonl",
+        "research/repricing_book_observer.log"
+      ],
+      "dependencies": [
+        "crypto_universe"
+      ],
+      "exact_sha_required": true,
+      "config_identity_required": true,
+      "launcher_log": "research/repricing_book_observer.log",
+      "london_deployed": true,
+      "runtime_class": "COLLECTOR"
+    },
+    {
+      "id": "ledger_router",
+      "executable": "scripts/v7_ledger_spool.py",
+      "arguments": [
+        "--loop",
+        "--model-sha",
+        "${SHA}"
+      ],
+      "profile": "core",
+      "inputs": [
+        "ledger/spool"
+      ],
+      "outputs": [
+        "ledger/execution.jsonl",
+        "ledger_router.log"
+      ],
+      "dependencies": [],
+      "exact_sha_required": true,
+      "config_identity_required": true,
+      "launcher_log": "ledger_router.log",
+      "london_deployed": true,
+      "runtime_class": "CONTROL",
+      "authority_overrides": {
+        "ledger": true
+      }
+    },
+    {
+      "id": "native_engine_manager",
+      "executable": "scripts/v7_native_crypto_engine_manager.py",
+      "arguments": [
+        "--model-sha",
+        "${SHA}"
+      ],
+      "profile": "core",
+      "inputs": [
+        "universe/current.json",
+        "ledger/execution.jsonl"
+      ],
+      "outputs": [
+        "control/native_engine_manager_status.json",
+        "native_engine_manager.log"
+      ],
+      "dependencies": [
+        "crypto_universe",
+        "ledger_router"
+      ],
+      "exact_sha_required": true,
+      "config_identity_required": true,
+      "launcher_log": "native_engine_manager.log",
+      "london_deployed": true,
+      "runtime_class": "CONTROL"
+    },
+    {
+      "id": "crypto_settlement_engine",
+      "executable": "${CRYPTO_SETTLEMENT_ENGINE}",
+      "arguments": [],
+      "profile": "engine",
+      "inputs": [],
+      "outputs": [
+        "control/native_evidence_status.json",
+        "ledger/spool",
+        "native_engine.log"
+      ],
+      "dependencies": [],
+      "exact_sha_required": true,
+      "config_identity_required": true,
+      "london_deployed": true,
+      "runtime_class": "HOT_PATH",
+      "authority_overrides": {
+        "capital_allocator": true,
+        "global_portfolio_coordinator": true,
+        "inventory": true,
+        "oms": true,
+        "risk_engine": true,
+        "runtime_identity": true
+      }
+    },
+    {
+      "id": "canonical_economics",
+      "executable": "scripts/v7_canonical_economics.py",
+      "arguments": [],
+      "profile": "observer",
+      "inputs": [
+        "ledger/execution.jsonl"
+      ],
+      "outputs": [
+        "canonical_economics.json",
+        "canonical_economics.log"
+      ],
+      "dependencies": [
+        "ledger_router"
+      ],
+      "exact_sha_required": true,
+      "config_identity_required": true,
+      "launcher_log": "canonical_economics.log",
+      "london_deployed": true,
+      "runtime_class": "CONTROL"
+    }
+  ]
 }
