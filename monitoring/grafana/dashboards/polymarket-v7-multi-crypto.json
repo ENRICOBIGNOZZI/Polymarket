@@ -318,7 +318,7 @@
     {
       "id": 10,
       "type": "row",
-      "title": "PERFORMANCE — portfolio first",
+      "title": "PERFORMANCE \u2014 portfolio first",
       "gridPos": {
         "h": 1,
         "w": 24,
@@ -481,7 +481,7 @@
     {
       "id": 20,
       "type": "row",
-      "title": "ASSET × HORIZON",
+      "title": "ASSET \u00d7 HORIZON",
       "gridPos": {
         "h": 1,
         "w": 24,
@@ -949,7 +949,7 @@
         {
           "expr": "(polymarket_mc_strategy_realized_pnl_usd{job=\"polymarket-v7\",instance=\"$instance\",asset=~\"$asset\",horizon=~\"$horizon\",strategy=~\"$strategy\"}) and on(job,instance) (polymarket_v7_exporter_snapshot_usable{job=\"polymarket-v7\",instance=\"$instance\"} == 1)",
           "refId": "A",
-          "legendFormat": "{{strategy}} · {{asset}} {{horizon}}",
+          "legendFormat": "{{strategy}} \u00b7 {{asset}} {{horizon}}",
           "instant": false,
           "range": true
         }
@@ -1498,7 +1498,7 @@
         "type": "prometheus",
         "uid": "prometheus-v7"
       },
-      "description": "Ready active markets; target is 12 = 6 assets × M5/M15.",
+      "description": "Ready active markets; target is 12 = 6 assets \u00d7 M5/M15.",
       "targets": [
         {
           "expr": "(polymarket_mc_shadow_contract_ready_markets{job=\"polymarket-v7\",instance=\"$instance\"}) and on(job,instance) (polymarket_v7_exporter_snapshot_usable{job=\"polymarket-v7\",instance=\"$instance\"} == 1)",
@@ -1756,7 +1756,7 @@
         "type": "prometheus",
         "uid": "prometheus-v7"
       },
-      "description": "Expected full universe is 12 = 6 assets × 2 horizons.",
+      "description": "Expected full universe is 12 = 6 assets \u00d7 2 horizons.",
       "targets": [
         {
           "expr": "(polymarket_mc_registered_lanes{job=\"polymarket-v7\",instance=\"$instance\"}) and on(job,instance) (polymarket_v7_exporter_snapshot_usable{job=\"polymarket-v7\",instance=\"$instance\"} == 1)",
@@ -1931,7 +1931,7 @@
         "type": "prometheus",
         "uid": "prometheus-v7"
       },
-      "description": "Must be zero for clean asset×horizon attribution.",
+      "description": "Must be zero for clean asset\u00d7horizon attribution.",
       "targets": [
         {
           "expr": "(polymarket_mc_unattributed_final_rows{job=\"polymarket-v7\",instance=\"$instance\"}) and on(job,instance) (polymarket_v7_exporter_snapshot_usable{job=\"polymarket-v7\",instance=\"$instance\"} == 1)",
@@ -2154,6 +2154,191 @@
         "mode": "markdown",
         "content": "**PAPER / SHADOW monitoring only.** Multi-crypto performance is derived from canonical PAPER sources. A lane without attributable economic events is **N/A**, not `$0`. Realized PnL uses canonical economics when current; if a newer complete ledger FINAL exists, the dashboard may temporarily show the ledger value while Attribution reads **CANONICAL REFRESH**. A true fresh mismatch remains **CHECK GAP**. Equity is intentionally separated from PnL charts."
       }
+    },
+    {
+      "id": 479,
+      "title": "LONDON LIVE PAPER \u2014 30 CONTEXTS",
+      "type": "row",
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 91
+      },
+      "collapsed": false,
+      "panels": []
+    },
+    {
+      "id": 480,
+      "title": "Target Contexts",
+      "type": "stat",
+      "gridPos": {
+        "h": 4,
+        "w": 6,
+        "x": 0,
+        "y": 92
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus-v7"
+      },
+      "targets": [
+        {
+          "expr": "polymarket_v7_native_target_contexts",
+          "refId": "A",
+          "instant": true
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "decimals": 0
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "values": false,
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": ""
+        },
+        "orientation": "auto",
+        "textMode": "auto",
+        "colorMode": "value",
+        "graphMode": "none",
+        "justifyMode": "auto"
+      }
+    },
+    {
+      "id": 481,
+      "title": "Active Workers",
+      "type": "stat",
+      "gridPos": {
+        "h": 4,
+        "w": 6,
+        "x": 6,
+        "y": 92
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus-v7"
+      },
+      "targets": [
+        {
+          "expr": "polymarket_v7_native_active_workers",
+          "refId": "A",
+          "instant": true
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "decimals": 0
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "values": false,
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": ""
+        },
+        "orientation": "auto",
+        "textMode": "auto",
+        "colorMode": "value",
+        "graphMode": "none",
+        "justifyMode": "auto"
+      }
+    },
+    {
+      "id": 482,
+      "title": "Missing Contexts",
+      "type": "stat",
+      "gridPos": {
+        "h": 4,
+        "w": 6,
+        "x": 12,
+        "y": 92
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus-v7"
+      },
+      "targets": [
+        {
+          "expr": "polymarket_v7_native_missing_contexts",
+          "refId": "A",
+          "instant": true
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "decimals": 0
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "values": false,
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": ""
+        },
+        "orientation": "auto",
+        "textMode": "auto",
+        "colorMode": "value",
+        "graphMode": "none",
+        "justifyMode": "auto"
+      }
+    },
+    {
+      "id": 483,
+      "title": "CRYPTO Engine Budget",
+      "type": "stat",
+      "gridPos": {
+        "h": 4,
+        "w": 6,
+        "x": 18,
+        "y": 92
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus-v7"
+      },
+      "targets": [
+        {
+          "expr": "polymarket_v7_native_global_budget_usd",
+          "refId": "A",
+          "instant": true
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "currencyUSD",
+          "decimals": 2
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "values": false,
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": ""
+        },
+        "orientation": "auto",
+        "textMode": "auto",
+        "colorMode": "value",
+        "graphMode": "none",
+        "justifyMode": "auto"
+      }
     }
   ],
   "refresh": "5s",
@@ -2210,7 +2395,7 @@
         "name": "horizon",
         "label": "Horizon",
         "type": "custom",
-        "query": "M5,M15",
+        "query": "M5,M15,H1,H4,D1",
         "options": [],
         "current": {
           "text": "All",
@@ -2252,5 +2437,5 @@
   "timezone": "browser",
   "title": "Polymarket V7 Multi-Crypto Performance",
   "uid": "polymarket-v7-multi-crypto",
-  "version": 4
+  "version": 5
 }
