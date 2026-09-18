@@ -18,10 +18,10 @@ def test_candidate_is_native_single_owner_and_not_deployed_early() -> None:
     assert "authority.submit" in text
     assert "arbitration_conflicts_fail_closed" in text
     assert "real_order_submission\", false" in text
-    assert "production network adapter remain fail-closed" in text
-    assert "adapter_endpoint.observe_unsent" in text
+    assert "NativePaperExecutionAdapter" in text
+    assert "PAPER_SIMULATED_SINGLE_OWNER" in text
     assert '"network_orders_sent", 0' in text
-    assert '"simulated_fills", 0' in text
+    assert '"simulated_fills", paper_execution.paper_fills()' in text
     assert "polymarket_v7_crypto_settlement_native_candidate" in CMAKE.read_text()
     assert "crypto_settlement_native_candidate" not in MANIFEST.read_text()
 
