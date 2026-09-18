@@ -104,7 +104,7 @@ assert live_scope.get("real_order_submission") is False
 assert set(live_scope.get("live_algorithms") or []) == algorithms
 invariants=live_scope.get("runtime_invariants") or {}
 assert invariants.get("single_execution_owner") is True
-assert invariants.get("global_portfolio_coordinator") == "V7_GLOBAL_PORTFOLIO_COORDINATOR"
+assert invariants.get("global_portfolio_coordinator") == "V7_NATIVE_CRYPTO_SETTLEMENT_ENGINE"
 assert invariants.get("paper_only") is True
 assert invariants.get("real_order_submission") is False
 assert crypto_universe.get("schema") == "polymarket_v7_crypto_universe_config_v1"
