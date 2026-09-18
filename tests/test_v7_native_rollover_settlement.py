@@ -559,69 +559,161 @@ def test_settlement_summary_separates_retryable_timeout_from_blocker(tmp_path) -
     assert summary["blocked_count"] == 1
 
 
-def test_remote_launch_timeout_does_not_tear_down_other_contexts(monkeypatch) -> None:
+def test_native_evidence_aggregate_includes_decision_capture_health(tmp_path) -> None:
+    import types
     import v7_native_crypto_engine_manager as manager
 
     owner = manager.Manager.__new__(manager.Manager)
-    owner.workers = {"BTC:M5": object()}
-    owner.completed_market_ids = set()
-    owner.launch_retry_attempts = {}
-    owner.launch_retry_after = {}
-    owner.launch_retry_reasons = {}
-
-    launched = []
-    def launch(context, market):
-        launched.append(context)
-        if context == "DOGE:M15":
-            raise manager.RetryableLaunchError("remote_metadata_unavailable:TimeoutError")
-        return object()
-    owner.launch_worker = launch
-
-    targets = {
-        "BTC:M5": {"market_id": "btc"},
-        "DOGE:M15": {"market_id": "doge"},
-        "ETH:M5": {"market_id": "eth"},
+    owner.run_root = tmp_path
+    owner.args = types.SimpleNamespace(model_sha=SHA, run_id="run")
+    directory = tmp_path / "control/native_evidence"
+    directory.mkdir(parents=True)
+    base = {
+        "schema": "polymarket_v7_native_evidence_status_v1",
+        "paper_only": True,
+        "authenticated_execution": False,
+        "real_order_submission": False,
+        "model_sha": SHA,
+        "run_id": "run",
+        "healthy": True,
+        "published": 2,
+        "written": 2,
+        "dropped": 0,
+        "queue_depth": 0,
+        "observations_published": 3,
+        "observations_written": 3,
+        "observations_dropped": 0,
+        "observations_queue_depth": 0,
     }
-    assert owner._launch_missing_workers(targets) is None
-    assert "BTC:M5" in owner.workers
+    (directory / "m1.json").write_text(json.dumps({**base, "market_id": "m1"}))
+    (directory / "m2.json").write_text(json.dumps({
+        **base, "market_id": "m2",
+        "observations_published": 5,
+        "observations_written": 4,
+        "observations_dropped": 1,
+        "observations_queue_depth": 1,
+    }))
+    result = owner._aggregate_evidence()
+    assert result["worker_count"] == 2
+    assert result["observations_published"] == 8
+    assert result["observations_written"] == 7
+    assert result["observations_dropped"] == 1
+    assert result["observations_queue_depth"] == 1
+
+def test_public_json_retries_transient_disconnect_then_succeeds(monkeypatch) -> None:
+    import http.client
+    import v7_native_crypto_engine_manager as manager
+
+    class Response:
+        def __enter__(self):
+            return self
+        def __exit__(self, *_):
+            return False
+        def read(self):
+            return b'{"min_order_size":"5"}'
+
+    attempts = {"count": 0}
+    def urlopen(*_args, **_kwargs):
+        attempts["count"] += 1
+        if attempts["count"] < 3:
+            raise http.client.RemoteDisconnected("temporary disconnect")
+        return Response()
+
+    monkeypatch.setattr(manager.urllib.request, "urlopen", urlopen)
+    monkeypatch.setattr(manager.time, "sleep", lambda _seconds: None)
+    assert manager.public_json("https://example.invalid", attempts=3) == {
+        "min_order_size": "5"
+    }
+    assert attempts["count"] == 3
+
+
+def test_public_json_exhaustion_fails_closed(monkeypatch) -> None:
+    import http.client
+    import pytest
+    import v7_native_crypto_engine_manager as manager
+
+    monkeypatch.setattr(
+        manager.urllib.request, "urlopen",
+        lambda *_a, **_k: (_ for _ in ()).throw(
+            http.client.RemoteDisconnected("still unavailable")
+        ),
+    )
+    monkeypatch.setattr(manager.time, "sleep", lambda _seconds: None)
+    with pytest.raises(manager.VenueMetadataUnavailable):
+        manager.public_json("https://example.invalid", attempts=3)
+
+
+def test_context_launch_failure_does_not_terminate_other_workers(monkeypatch) -> None:
+    import types
+    import v7_native_crypto_engine_manager as manager
+
+    class Process:
+        pid = 123
+        def poll(self):
+            return None
+
+    owner = manager.Manager.__new__(manager.Manager)
+    owner.workers = {
+        "ETH:M5": manager.Worker(
+            context="ETH:M5", market={"market_id": "eth-live"},
+            budget_microdollars=100, process=Process(), log_handle=None,
+        )
+    }
+    owner.completed_market_ids = set()
+    owner.launch_failures = {}
+    calls = []
+
+    def launch(context, market):
+        calls.append((context, market["market_id"]))
+        if context == "BTC:M5":
+            raise manager.VenueMetadataUnavailable("venue_metadata_unavailable:RemoteDisconnected")
+        return manager.Worker(
+            context=context, market=market, budget_microdollars=100,
+            process=Process(), log_handle=None,
+        )
+
+    monkeypatch.setattr(owner, "launch_worker", launch)
+    owner._launch_targets(
+        {
+            "BTC:M5": {"market_id": "btc-new"},
+            "ETH:M5": {"market_id": "eth-new"},
+            "SOL:M5": {"market_id": "sol-new"},
+        },
+        now_ns=1_000_000_000,
+    )
     assert "ETH:M5" in owner.workers
-    assert "DOGE:M15" not in owner.workers
-    assert owner.launch_retry_attempts == {"DOGE:M15": 1}
-    assert "TimeoutError" in owner.launch_retry_reasons["DOGE:M15"]
-    assert owner.launch_retry_after["DOGE:M15"] > 0
+    assert "SOL:M5" in owner.workers
+    assert "BTC:M5" not in owner.workers
+    assert owner.launch_failures["BTC:M5"]["attempts"] == 1
+    assert "RemoteDisconnected" in owner.launch_failures["BTC:M5"]["reason"]
 
 
-def test_structural_launch_failure_remains_fail_closed() -> None:
+def test_context_launch_backoff_prevents_hammering_and_market_change_retries(monkeypatch) -> None:
     import v7_native_crypto_engine_manager as manager
 
     owner = manager.Manager.__new__(manager.Manager)
-    owner.workers = {"BTC:M5": object()}
+    owner.workers = {}
     owner.completed_market_ids = set()
-    owner.launch_retry_attempts = {}
-    owner.launch_retry_after = {}
-    owner.launch_retry_reasons = {}
-    owner.launch_worker = lambda context, market: (_ for _ in ()).throw(
-        RuntimeError("fee_schedule_not_authoritative")
-    )
+    owner.launch_failures = {}
+    attempts = []
 
-    failure = owner._launch_missing_workers({"ETH:M15": {"market_id": "eth"}})
-    assert failure is not None
-    context, exc = failure
-    assert context == "ETH:M15"
-    assert str(exc) == "fee_schedule_not_authoritative"
-    assert "BTC:M5" in owner.workers
-    assert owner.launch_retry_attempts == {}
+    def fail(context, market):
+        attempts.append((context, market["market_id"]))
+        raise manager.VenueMetadataUnavailable("temporary")
 
+    monkeypatch.setattr(owner, "launch_worker", fail)
+    targets = {"BTC:M5": {"market_id": "m1"}}
+    owner._launch_targets(targets, now_ns=1_000_000_000)
+    assert len(attempts) == 1
+    retry = owner.launch_failures["BTC:M5"]["next_retry_monotonic_ns"]
 
-def test_public_json_timeout_is_market_scoped_retry(monkeypatch) -> None:
-    import v7_native_crypto_engine_manager as manager
+    owner._launch_targets(targets, now_ns=retry - 1)
+    assert len(attempts) == 1
 
-    def timeout(*args, **kwargs):
-        raise TimeoutError("read timed out")
-    monkeypatch.setattr(manager.urllib.request, "urlopen", timeout)
-    try:
-        manager.public_json("https://clob.polymarket.com/book?token_id=x")
-    except manager.RetryableLaunchError as exc:
-        assert "TimeoutError" in str(exc)
-    else:
-        raise AssertionError("network timeout was not classified as retryable")
+    owner._launch_targets(targets, now_ns=retry)
+    assert len(attempts) == 2
+    assert owner.launch_failures["BTC:M5"]["attempts"] == 2
+
+    owner._launch_targets({"BTC:M5": {"market_id": "m2"}}, now_ns=retry + 1)
+    assert attempts[-1] == ("BTC:M5", "m2")
+    assert owner.launch_failures["BTC:M5"]["attempts"] == 1
