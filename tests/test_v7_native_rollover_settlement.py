@@ -7,7 +7,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "scripts"))
 
 from v7_execution_ledger import LedgerEvent
-from v7_native_crypto_engine_manager import fee_parameters, select_market
+from v7_native_crypto_engine_manager import fee_parameters, open_native_orders, select_market
 from v7_native_paper_settlement import aggregate_fills, native_receipt
 
 
@@ -122,6 +122,49 @@ def test_settlement_aggregates_buy_and_inventory_backed_sell() -> None:
     assert abs(inventory["no"] - 2.0) < 1e-12
     assert abs(cash - (-1.2 - 0.01 + 0.6 - 0.01 - 0.6)) < 1e-12
     assert native_receipt(events[0]) is not None
+
+
+def test_restart_detects_submitted_native_order_until_terminal_state(tmp_path: Path) -> None:
+    root = tmp_path
+    ledger = root / "ledger" / "execution.jsonl"
+    ledger.parent.mkdir(parents=True, exist_ok=True)
+    submitted = LedgerEvent(
+        event_type="ORDER_SUBMITTED",
+        strategy="CRYPTO_SETTLEMENT_ENGINE",
+        model_sha=SHA,
+        order_id="native:1",
+        market_id="m1",
+        event_id="e1",
+        token_id="yes",
+        side="BUY",
+        exchange_ts_ms=1000,
+        receive_ts_ms=1001,
+        decision_ts_ms=1002,
+        recorded_ts_ms=1003,
+        book_snapshot_id="b1",
+        intended_action="MAKE",
+        intended_size=1.0,
+        metadata={"native_settlement_receipt": receipt(1, 101)},
+    )
+    ledger.write_text(json.dumps(submitted.to_dict()) + "\n", encoding="utf-8")
+    assert list(open_native_orders(root, SHA)) == ["native:1"]
+
+    cancelled = LedgerEvent(
+        event_type="ORDER_STATE",
+        strategy="CRYPTO_SETTLEMENT_ENGINE",
+        model_sha=SHA,
+        order_id="native:1",
+        market_id="m1",
+        event_id="e1",
+        token_id="yes",
+        side="BUY",
+        order_state="CANCELLED",
+        recorded_ts_ms=1004,
+        metadata={"native_settlement_receipt": receipt(1, 101)},
+    )
+    with ledger.open("a", encoding="utf-8") as handle:
+        handle.write(json.dumps(cancelled.to_dict()) + "\n")
+    assert open_native_orders(root, SHA) == {}
 
 
 def test_settlement_rejects_naked_sell() -> None:
