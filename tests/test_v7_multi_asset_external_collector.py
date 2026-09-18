@@ -69,3 +69,16 @@ def test_tape_paths_are_restart_unique_for_supervisor_process():
     assert btc["tape"] != eth["tape"]
     assert btc["tape"].parent.name == "tapes"
     assert eth["tape"].parent.name == "tapes"
+
+
+def test_degraded_state_is_nonterminal_zero_authority_contract():
+    source=(ROOT/"scripts/v7_multi_asset_external_collector.py").read_text()
+    assert collector.readiness_state(5,6,61.0,60.0)=="DEGRADED"
+    assert 'return 77' not in source
+    assert '"execution_authority": False' in source
+
+
+def test_readiness_state_degrades_without_terminating_parent():
+    assert collector.readiness_state(5,6,10.0,60.0)=="WARMING"
+    assert collector.readiness_state(5,6,61.0,60.0)=="DEGRADED"
+    assert collector.readiness_state(6,6,1000.0,60.0)=="OPERATIONAL"
