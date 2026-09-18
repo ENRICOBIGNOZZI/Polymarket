@@ -25,16 +25,31 @@ enum class NativePaperReason : std::uint8_t {
     UnknownOrder = 8,
 };
 
+struct NativePaperFillRecord {
+    std::uint64_t client_order_id = 0;
+    std::uint64_t command_id = 0;
+    std::uint64_t instrument_handle = 0;
+    Side side = Side::None;
+    std::int64_t price_tick = 0;
+    std::int32_t tick_size_e4 = 0;
+    std::int64_t fill_microunits = 0;
+    std::int64_t exchange_event_ns = 0;
+    std::int64_t receive_monotonic_ns = 0;
+    std::uint8_t taker = 0;
+};
+
 struct NativePaperSubmitResult {
     NativePaperReason reason = NativePaperReason::InvalidCommand;
     OrderState final_state = OrderState::Unknown;
     std::uint64_t client_order_id = 0;
     std::int64_t filled_microunits = 0;
+    NativePaperFillRecord fill{};
     std::uint8_t accepted = 0;
     std::uint8_t resting = 0;
 };
 
 struct NativePaperTradeResult {
+    std::array<NativePaperFillRecord, kNativePaperOrderCapacity> records{};
     std::size_t fills = 0;
     std::int64_t filled_microunits = 0;
     std::uint8_t invalid = 0;
@@ -69,6 +84,8 @@ private:
     struct Slot {
         PaperRestingOrder paper{};
         std::uint64_t client_order_id = 0;
+        std::uint64_t command_id = 0;
+        std::int32_t tick_size_e4 = 0;
         std::int64_t cancel_deadline_ns = 0;
         std::uint8_t occupied = 0;
     };
