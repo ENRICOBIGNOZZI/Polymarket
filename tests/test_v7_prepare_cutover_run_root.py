@@ -33,7 +33,8 @@ class PrepareCutoverTests(unittest.TestCase):
             result=cutover.prepare(root,base/'archives',base,NEW,now=123,ancestor_check=lambda *_:True)
             self.assertEqual(result['state'],'ARCHIVED_PRIOR_SHA')
             self.assertTrue(result['archived'])
-            self.assertEqual(result['prior_open_positions'],{'paper_account':0,'maker_active_orders':0})
+            self.assertEqual(result['prior_open_positions'],{
+                'paper_account':0,'maker_active_orders':0,'native_unsettled_markets':0})
             self.assertTrue(Path(result['archive_path']).exists())
             self.assertTrue((root/'control/cutover_lineage.json').exists())
 
@@ -47,6 +48,40 @@ class PrepareCutoverTests(unittest.TestCase):
                 p=root/rel;row=json.loads(p.read_text());row[key]=value;write(p,row)
                 with self.assertRaisesRegex(cutover.CutoverArchiveError,'prior_open_positions'):
                     cutover.prepare(root,base/'archives',base,NEW,ancestor_check=lambda *_:True)
+
+    def test_native_fill_without_final_blocks_cross_sha_cutover(self):
+        with tempfile.TemporaryDirectory() as d:
+            base=Path(d);root=base/'run';fixture(root)
+            fill={
+                'event_type':'FILL','strategy':'CRYPTO_SETTLEMENT_ENGINE',
+                'model_sha':OLD,'paper_only':True,'authenticated_execution':False,
+                'market_id':'m1','record_kind':'ECONOMIC_JOURNAL',
+                'metadata':{'native_settlement_receipt':{
+                    'owner':'V7_NATIVE_CRYPTO_SETTLEMENT_ENGINE'}},
+            }
+            (root/'ledger/execution.jsonl').write_text(json.dumps(fill)+'\n',encoding='utf-8')
+            with self.assertRaisesRegex(cutover.CutoverArchiveError,'prior_native_unsettled_markets:1'):
+                cutover.prepare(root,base/'archives',base,NEW,ancestor_check=lambda *_:True)
+
+    def test_native_final_closes_cutover_exposure(self):
+        with tempfile.TemporaryDirectory() as d:
+            base=Path(d);root=base/'run';fixture(root)
+            receipt={'owner':'V7_NATIVE_CRYPTO_SETTLEMENT_ENGINE'}
+            rows=[
+                {'event_type':'FILL','strategy':'CRYPTO_SETTLEMENT_ENGINE',
+                 'model_sha':OLD,'paper_only':True,'authenticated_execution':False,
+                 'market_id':'m1','record_kind':'ECONOMIC_JOURNAL',
+                 'metadata':{'native_settlement_receipt':receipt}},
+                {'event_type':'FINAL','strategy':'CRYPTO_SETTLEMENT_ENGINE',
+                 'model_sha':OLD,'paper_only':True,'authenticated_execution':False,
+                 'market_id':'m1','record_kind':'ECONOMIC_JOURNAL',
+                 'metadata':{'native_settlement_receipt':receipt,
+                             'native_market_settlement_id':'native-settlement:m1'}},
+            ]
+            (root/'ledger/execution.jsonl').write_text(
+                ''.join(json.dumps(row)+'\n' for row in rows),encoding='utf-8')
+            result=cutover.prepare(root,base/'archives',base,NEW,now=124,ancestor_check=lambda *_:True)
+            self.assertEqual(result['state'],'ARCHIVED_PRIOR_SHA')
 
     def test_killed_or_drawdown_limited_portfolio_blocks(self):
         for key,value,reason in (('killed',True,'prior_portfolio_state_invalid'),('drawdown',0.15,'prior_portfolio_drawdown_limit')):
