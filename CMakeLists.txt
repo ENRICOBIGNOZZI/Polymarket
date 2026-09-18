@@ -286,6 +286,13 @@ if(BUILD_TESTING)
 
   add_test(NAME pm_v7_crypto_settlement_native_candidate_validate
     COMMAND polymarket_v7_crypto_settlement_native_candidate --validate-only)
+  add_test(NAME pm_v7_crypto_settlement_native_candidate_10k_limits
+    COMMAND polymarket_v7_crypto_settlement_native_candidate
+      --sleeve-budget-microdollars 10000000000
+      --max-total-exposure-microdollars 10000000000
+      --max-market-exposure-microdollars 333333333
+      --max-single-order-microdollars 20000000
+      --validate-only)
 
   add_executable(pm_v7_native_order_tx_tests tests/test_v7_native_order_tx.cpp)
   target_link_libraries(pm_v7_native_order_tx_tests PRIVATE pm_v7_common)
