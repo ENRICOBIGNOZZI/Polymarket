@@ -1,8 +1,8 @@
 {
   "authenticated_execution": false,
   "authority_registry": "config/v7_authority_registry.json",
-  "expected_launcher_child_count": 20,
-  "expected_process_count": 22,
+  "expected_launcher_child_count": 17,
+  "expected_process_count": 20,
   "launcher": "scripts/paper_v7_execution_loop.sh",
   "paper_only": true,
   "processes": [
@@ -70,7 +70,7 @@
         "external_fair/external_venues.log"
       ],
       "profile": "engine",
-      "runtime_class": "HOT_PATH"
+      "runtime_class": "COLLECTOR"
     },
     {
       "arguments": [
@@ -94,63 +94,6 @@
         "research/repricing_book/fillability_ws_status.json",
         "research/repricing_book/book_observations/current.jsonl",
         "research/repricing_book_observer.log"
-      ],
-      "profile": "observer",
-      "runtime_class": "COLLECTOR"
-    },
-    {
-      "arguments": [
-        "--fair-status",
-        "external_fair/status.json",
-        "--router-status",
-        "external_fair/paper_router_status.json",
-        "--output",
-        "${DURABLE_ROOT}/external_fair/pm_lead_lag.jsonl",
-        "${DURABLE_ROOT}/external_fair/pm_lead_lag.jsonl.segment-*.jsonl.gz",
-        "${DURABLE_ROOT}/external_fair/pm_lead_lag.jsonl.segment-*.jsonl.gz.manifest.json",
-        "--status",
-        "external_fair/lead_lag_collector_status.json",
-        "--model-sha",
-        "${SHA}",
-        "--interval-ms",
-        "25",
-        "--book-tape",
-        "research/repricing_book/book_observations/current.jsonl",
-        "--book-status",
-        "research/repricing_book/fillability_ws_status.json",
-        "--profit-root",
-        "${DURABLE_ROOT}/profit_experiments/${SHA}",
-        "--run-root",
-        "${RUN_ROOT}"
-      ],
-      "config_identity_required": true,
-      "dependencies": [
-        "external_fair_router",
-        "external_venue_runtime",
-        "repricing_book_observer",
-        "rtds_monitor"
-      ],
-      "exact_sha_required": true,
-      "executable": "scripts/v7_external_lead_lag_collector.py",
-      "id": "external_pm_lead_lag_collector",
-      "inputs": [
-        "external_fair/status.json",
-        "external_fair/paper_router_status.json",
-        "config/v7_profit_experiment.json",
-        "research/repricing_book/book_observations/current.jsonl",
-        "research/repricing_book/fillability_ws_status.json",
-        "ledger/execution.jsonl"
-      ],
-      "launcher_log": "external_fair/lead_lag_collector.log",
-      "london_deployed": true,
-      "outputs": [
-        "external_fair/lead_lag_collector_status.json",
-        "${DURABLE_ROOT}/external_fair/pm_lead_lag.jsonl",
-        "external_fair/lead_lag_collector.log",
-        "profit_experiment_status.json",
-        "${DURABLE_ROOT}/profit_experiments/${SHA}/manifest.json",
-        "${DURABLE_ROOT}/profit_experiments/${SHA}/observations.jsonl",
-        "${DURABLE_ROOT}/profit_experiments/${SHA}/cohorts/*/confirmatory_window_closure.json"
       ],
       "profile": "observer",
       "runtime_class": "COLLECTOR"
@@ -250,33 +193,6 @@
     },
     {
       "arguments": [
-        "--model-sha",
-        "${SHA}"
-      ],
-      "config_identity_required": true,
-      "dependencies": [
-        "public_https_proxy",
-        "rtds_monitor",
-        "external_venue_runtime"
-      ],
-      "exact_sha_required": true,
-      "executable": "scripts/v7_external_fair_paper_router.py",
-      "id": "external_fair_router",
-      "inputs": [
-        "config/v7_external_fair.json"
-      ],
-      "launcher_log": "external_fair/paper_router.log",
-      "london_deployed": true,
-      "outputs": [
-        "external_fair/paper_router_status.json",
-        "external_fair/pm_prior.json",
-        "external_fair/paper_router.log"
-      ],
-      "profile": "engine",
-      "runtime_class": "HOT_PATH"
-    },
-    {
-      "arguments": [
         "--loop",
         "--model-sha",
         "${SHA}"
@@ -354,78 +270,7 @@
         "ledger_router.log"
       ],
       "profile": "core",
-      "runtime_class": "HOT_PATH"
-    },
-    {
-      "arguments": [
-        "--loop",
-        "--event-log",
-        "${RUN_ROOT}/global_portfolio_coordinator.events.jsonl"
-      ],
-      "authority_overrides": {
-        "capital_allocator": true,
-        "global_portfolio_coordinator": true,
-        "inventory": true,
-        "oms": true,
-        "risk_engine": true
-      },
-      "config_identity_required": true,
-      "dependencies": [
-        "ledger_router"
-      ],
-      "exact_sha_required": true,
-      "executable": "scripts/v7_global_portfolio_coordinator.py",
-      "id": "global_portfolio_coordinator",
-      "inputs": [
-        "opportunities/inbox",
-        "opportunities/fast_forward_inbox"
-      ],
-      "launcher_log": "global_portfolio_coordinator.log",
-      "london_deployed": true,
-      "outputs": [
-        "opportunities/receipts",
-        "global_portfolio_coordinator.log",
-        "global_portfolio_coordinator.events.jsonl*",
-        "control/fast_forward_status.json",
-        "opportunities/fast_forward_decisions.jsonl*",
-        "opportunities/fast_forward_archive",
-        "opportunities/fast_forward_rejected"
-      ],
-      "profile": "core",
-      "runtime_class": "HOT_PATH"
-    },
-    {
-      "arguments": [
-        "--model-sha",
-        "${SHA}"
-      ],
-      "config_identity_required": true,
-      "dependencies": [
-        "global_portfolio_coordinator",
-        "rtds_monitor",
-        "external_venue_runtime"
-      ],
-      "exact_sha_required": true,
-      "executable": "scripts/v7_lead_lag_taker_runtime.py",
-      "id": "lead_lag_taker_v1",
-      "inputs": [
-        "config/v7_lead_lag_taker_v1.json",
-        "external_fair/status.json",
-        "external_fair/external_cancel_signal.json"
-      ],
-      "launcher_log": "research/lead_lag_taker_v1.log",
-      "london_deployed": true,
-      "outputs": [
-        "research/lead_lag_taker_v1/status.json",
-        "research/lead_lag_taker_v1/state.json",
-        "research/lead_lag_taker_v1/events.jsonl",
-        "research/lead_lag_taker_v1/forward_manifest.json",
-        "ledger/spool",
-        "research/lead_lag_taker_v1.log",
-        "opportunities/fast_forward_inbox"
-      ],
-      "profile": "engine",
-      "runtime_class": "HOT_PATH"
+      "runtime_class": "CONTROL"
     },
     {
       "arguments": [
@@ -510,34 +355,6 @@
     },
     {
       "arguments": [
-        "--model-sha",
-        "${SHA}"
-      ],
-      "config_identity_required": true,
-      "dependencies": [
-        "global_portfolio_coordinator",
-        "maker_observer_cohort"
-      ],
-      "exact_sha_required": true,
-      "executable": "${AUTHORIZED_MAKER_EXECUTOR}",
-      "id": "authorized_maker_paper_executor",
-      "inputs": [
-        "micro_maker/authorized_make",
-        "micro_maker/authorized_cancel",
-        "micro_maker/fillability_ws.jsonl"
-      ],
-      "launcher_log": "micro_maker/authorized_make_executor.log",
-      "london_deployed": true,
-      "outputs": [
-        "micro_maker/authorized_make_executor_status.json",
-        "ledger/spool",
-        "micro_maker/authorized_make_executor.log"
-      ],
-      "profile": "engine",
-      "runtime_class": "HOT_PATH"
-    },
-    {
-      "arguments": [
         "scripts/v7_canonical_economics.py",
         "scripts/v7_lead_lag_forward_report.py"
       ],
@@ -603,6 +420,105 @@
       ],
       "profile": "core",
       "runtime_class": "CONTROL"
+    },
+    {
+      "id": "crypto_settlement_engine",
+      "executable": "${CRYPTO_SETTLEMENT_ENGINE}",
+      "arguments": [],
+      "profile": "engine",
+      "inputs": [],
+      "outputs": [
+        "ledger/spool",
+        "control/native_evidence_status.json"
+      ],
+      "dependencies": [],
+      "exact_sha_required": true,
+      "config_identity_required": true,
+      "london_deployed": true,
+      "runtime_class": "HOT_PATH",
+      "authority_overrides": {
+        "capital_allocator": true,
+        "global_portfolio_coordinator": true,
+        "inventory": true,
+        "oms": true,
+        "risk_engine": true
+      }
+    },
+    {
+      "id": "native_engine_supervisor",
+      "executable": "scripts/v7_native_engine_supervisor.py",
+      "arguments": [
+        "--run-root",
+        "${RUN_ROOT}",
+        "--model-sha",
+        "${SHA}",
+        "--run-id",
+        "${RUN_ID}",
+        "--server-id",
+        "${SERVER_ID}",
+        "--engine-binary",
+        "${CRYPTO_SETTLEMENT_ENGINE}",
+        "--universe",
+        "${RUN_ROOT}/universe/current.json",
+        "--external-status",
+        "${RUN_ROOT}/external_fair/status.json",
+        "--fee-registry",
+        "${RUN_ROOT}/control/fee_reward_registry.json",
+        "--maker-policy",
+        "config/v7_professional_market_maker.json"
+      ],
+      "profile": "core",
+      "inputs": [
+        "universe/current.json",
+        "external_fair/status.json",
+        "control/fee_reward_registry.json",
+        "config/v7_professional_market_maker.json"
+      ],
+      "outputs": [
+        "control/native_engine_supervisor_status.json",
+        "control/native_market_sessions.jsonl",
+        "native_engine_supervisor.log"
+      ],
+      "dependencies": [
+        "crypto_universe",
+        "rtds_monitor",
+        "fee_reward_registry"
+      ],
+      "exact_sha_required": true,
+      "config_identity_required": true,
+      "london_deployed": true,
+      "runtime_class": "CONTROL",
+      "launcher_log": "native_engine_supervisor.log"
+    },
+    {
+      "id": "native_market_settlement",
+      "executable": "scripts/v7_native_market_settlement.py",
+      "arguments": [
+        "--run-root",
+        "${RUN_ROOT}",
+        "--model-sha",
+        "${SHA}"
+      ],
+      "profile": "observer",
+      "inputs": [
+        "control/native_market_sessions.jsonl",
+        "ledger/execution.jsonl"
+      ],
+      "outputs": [
+        "control/native_market_settlement_status.json",
+        "control/native_market_settlement_state.json",
+        "native_market_settlement.log",
+        "ledger/spool"
+      ],
+      "dependencies": [
+        "native_engine_supervisor",
+        "ledger_router"
+      ],
+      "exact_sha_required": true,
+      "config_identity_required": true,
+      "london_deployed": true,
+      "runtime_class": "COLLECTOR",
+      "launcher_log": "native_market_settlement.log"
     }
   ],
   "profiles": {
