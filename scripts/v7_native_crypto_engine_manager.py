@@ -645,9 +645,18 @@ class Manager:
             "launch_retry_count": len(self.launch_retry_attempts),
             "launch_retry_attempts": dict(sorted(self.launch_retry_attempts.items())),
             "launch_retry_reasons": dict(sorted(self.launch_retry_reasons.items())),
+            "native_capture_mode": (
+                "FULL" if getattr(self.args, "capture_native_observations", False)
+                else "DECISIONS" if getattr(self.args, "capture_native_decisions", False)
+                else "OFF"
+            ),
             "evidence_worker_count": int(evidence.get("worker_count") or 0),
             "evidence_dropped": int(evidence.get("dropped") or 0),
             "evidence_queue_depth": int(evidence.get("queue_depth") or 0),
+            "native_observations_published": int(evidence.get("observations_published") or 0),
+            "native_observations_written": int(evidence.get("observations_written") or 0),
+            "native_observations_dropped": int(evidence.get("observations_dropped") or 0),
+            "native_observations_queue_depth": int(evidence.get("observations_queue_depth") or 0),
             "settlement_market_count": int(settlements.get("market_count") or 0),
             "settlement_blocked_count": int(settlements.get("blocked_count") or 0),
             "settlement_retryable_timeout_count": int(
@@ -749,6 +758,8 @@ class Manager:
         ]
         if getattr(self.args, "capture_native_observations", False):
             command.append("--capture-native-observations")
+        elif getattr(self.args, "capture_native_decisions", False):
+            command.append("--capture-native-decisions")
         return command
 
     def _wrapped_hot_command(self, command: list[str]) -> list[str]:
@@ -1084,7 +1095,9 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--maker-share-cap-microunits", type=int, default=5_000_000)
     parser.add_argument("--asynchronous-settlement", action="store_true")
     parser.add_argument("--capture-native-observations", action="store_true",
-        help="Explicit bounded research capture; keep off until storage/offload is provisioned")
+        help="Full bounded native book/trade + decision research capture")
+    parser.add_argument("--capture-native-decisions", action="store_true",
+        help="Low-volume native decision/intent capture; no raw book-event duplication")
     args = parser.parse_args()
     if not exact_sha(args.model_sha):
         parser.error("--model-sha must be exact lowercase 40-hex SHA")

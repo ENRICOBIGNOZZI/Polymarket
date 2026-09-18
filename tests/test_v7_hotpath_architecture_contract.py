@@ -70,7 +70,16 @@ def test_native_manager_launcher_invocation_satisfies_current_cli(tmp_path):
     assert {arg for arg in argv if arg.startswith('--')}=={arg for arg in declared if arg.startswith('--')}
     assert args.asynchronous_settlement
     assert not args.capture_native_observations
+    assert args.capture_native_decisions
     assert args.target_quantity_microunits == 20_000_000
     assert args.minimum_tte_ns == 5_000_000_000
     assert args.maximum_tte_ns == 120_000_000_000
     assert args.maker_share_cap_microunits==5_000_000
+
+
+def test_observation_only_defaults_to_decision_capture_not_full_firehose() -> None:
+    source=(ROOT/'src/v7_crypto_settlement_native_candidate.cpp').read_text()
+    block=source.split('else if (arg == "--observation-only")',1)[1].split('else if (arg == "--capture-native-observations")',1)[0]
+    assert 'out.observation_only = true' in block
+    assert 'out.capture_native_decisions = true' in block
+    assert 'out.capture_native_observations = true' not in block

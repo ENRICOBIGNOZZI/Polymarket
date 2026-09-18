@@ -618,11 +618,27 @@ def render_prometheus(snapshot: dict[str, Any]) -> str:
         _metric("polymarket_v7_native_active_workers", (snapshot.get("native_engine_manager") or {}).get("active_worker_count")),
         _metric("polymarket_v7_native_partition_budget_usd", _number((snapshot.get("native_engine_manager") or {}).get("partition_budget_microdollars")) / 1_000_000.0),
         _metric("polymarket_v7_native_global_budget_usd", _number((snapshot.get("native_engine_manager") or {}).get("global_budget_microdollars")) / 1_000_000.0),
-        _metric("polymarket_v7_native_missing_contexts", max(0, _integer((snapshot.get("native_engine_manager") or {}).get("expected_context_count")) - _integer((snapshot.get("native_engine_manager") or {}).get("target_context_count")))),
+        _metric("polymarket_v7_native_missing_contexts", max(0, _integer((snapshot.get("native_engine_manager") or {}).get("expected_context_count")) - _integer((snapshot.get("native_engine_manager") or {}).get("active_worker_count")))),
+        _metric("polymarket_v7_native_launch_retry_contexts", (snapshot.get("native_engine_manager") or {}).get("launch_retry_count")),
+        _metric("polymarket_v7_native_observations_published", (snapshot.get("native_engine_manager") or {}).get("native_observations_published")),
+        _metric("polymarket_v7_native_observations_written", (snapshot.get("native_engine_manager") or {}).get("native_observations_written")),
+        _metric("polymarket_v7_native_observations_dropped", (snapshot.get("native_engine_manager") or {}).get("native_observations_dropped")),
+        _metric("polymarket_v7_native_observations_queue_depth", (snapshot.get("native_engine_manager") or {}).get("native_observations_queue_depth")),
+        _metric("polymarket_v7_native_engine_operational", (
+            snapshot.get("native_mode") is True
+            and (snapshot.get("native_engine_manager") or {}).get("state") == "RUNNING"
+            and _integer((snapshot.get("native_engine_manager") or {}).get("active_worker_count")) > 0
+            and "native_partition_engine_process_not_alive" not in reasons
+            and "native_partition_worker_not_ready" not in reasons
+        )),
         _metric("polymarket_v7_native_engine_ready", (
             snapshot.get("native_mode") is True
             and (snapshot.get("native_engine_manager") or {}).get("state") == "RUNNING"
+            and _integer((snapshot.get("native_engine_manager") or {}).get("active_worker_count"))
+                == _integer((snapshot.get("native_engine_manager") or {}).get("expected_context_count"))
+            and _integer((snapshot.get("native_engine_manager") or {}).get("launch_retry_count")) == 0
             and "native_engine_process_not_alive" not in reasons
+            and "native_partition_engine_process_not_alive" not in reasons
             and "native_engine_manager_blocked" not in reasons
         )),
         _metric("polymarket_v7_maker_selector_ready", selector.get("ready") and selector.get("state") in _MAKER_SELECTOR_OPERATIONAL_STATES), _metric("polymarket_v7_maker_selector_fallback_active", selector.get("degraded")), _metric("polymarket_v7_maker_runtime_selection_pinned", selector.get("runtime_selection_pinned")), _metric("polymarket_v7_maker_candidate_rotation_pending", selector.get("candidate_rotation_pending")), _metric("polymarket_v7_maker_candidate_selected_markets", selector.get("candidate_selected_count")),

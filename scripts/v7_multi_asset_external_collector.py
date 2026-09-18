@@ -200,6 +200,14 @@ def data_ready(status: dict[str, Any], *, asset: str, sha: str,
     return True, ""
 
 
+def readiness_state(ready: int, total: int, elapsed: float, timeout: float) -> str:
+    if total <= 0 or ready < 0 or ready > total or elapsed < 0 or timeout <= 0:
+        raise ValueError("invalid readiness state inputs")
+    if ready == total:
+        return "OPERATIONAL"
+    return "WARMING" if elapsed <= timeout else "DEGRADED"
+
+
 def terminate(children: list[Child]) -> None:
     for child in children:
         if child.process.poll() is None:
@@ -311,11 +319,13 @@ def run(args: argparse.Namespace) -> int:
                     ready += 1
                 elif reason:
                     blockers[child.asset] = reason
-            state = "OPERATIONAL" if ready == len(ASSETS) else "WARMING"
+            elapsed = time.monotonic() - started
+            state = readiness_state(ready, len(ASSETS), elapsed, args.startup_timeout_seconds)
+            # This collector is zero-authority research/data-plane only.
+            # A degraded asset remains explicit/fail-closed in status, but
+            # cannot terminate otherwise healthy PAPER execution.
             write_status(status_path, args=args, children=children,
                          state=state, blockers=blockers)
-            if state != "OPERATIONAL" and time.monotonic() - started > args.startup_timeout_seconds:
-                return 77
             time.sleep(1.0)
         return 0
     finally:

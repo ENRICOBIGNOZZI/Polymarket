@@ -259,6 +259,48 @@ class V7RuntimeChaosContractTest(unittest.TestCase):
                     self.assertEqual(result.classification, SAFE)
                     self.assertNotIn("maker_cohort_not_ready", result.reasons)
 
+    def test_native_launch_retry_keeps_healthy_partitions_runtime_safe(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            self._write(root / "control/runtime_status.json", {
+                "version": 7, "timestamp": 1000, "paper_only": True,
+                "authenticated_execution": False, "real_order_submission": False,
+                "model_sha": SHA, "pid": os.getpid(), "killed": False, "state": "running",
+            })
+            contexts = [
+                f"{asset}:{horizon}"
+                for asset in ("BTC", "ETH", "SOL", "XRP", "DOGE", "BNB")
+                for horizon in ("M5", "M15", "H1", "H4", "D1")
+            ]
+            retry = "BTC:M5"
+            workers = [
+                {
+                    "context": context, "state": "RUNNING",
+                    "engine_pid": os.getpid(), "settlement_pid": 0,
+                    "budget_microdollars": 333_333_333,
+                }
+                for context in contexts if context != retry
+            ]
+            self._write(root / "control/native_engine_manager_status.json", {
+                "schema": "polymarket_v7_native_engine_manager_status_v1",
+                "timestamp_ms": 1_000_000, "state": "RUNNING", "blocker": "",
+                "paper_only": True, "authenticated_execution": False,
+                "real_order_submission": False, "real_capital_at_risk": False,
+                "model_sha": SHA, "single_native_hot_path": True,
+                "single_native_portfolio_owner": True,
+                "partitioned_native_workers": True,
+                "expected_context_count": 30, "target_context_count": 30,
+                "target_contexts": contexts, "workers": workers,
+                "global_budget_microdollars": 10_000_000_000,
+                "partition_total_microdollars": 9_999_999_990,
+                "launch_retry_count": 1, "launch_retry_contexts": [retry],
+                "launch_retry_attempts": {retry: 1},
+                "launch_retry_reasons": {retry: "remote_metadata_unavailable:RemoteDisconnected"},
+            })
+            result = runtime_health(root, SHA, now=1000, stale_seconds=30)
+            self.assertEqual(result.classification, SAFE)
+            self.assertEqual(result.reasons, ())
+
     def test_failure_isolation_matrix_covers_deterministic_chaos_scenarios(self) -> None:
         policy = json.loads((ROOT / "config/v7_runtime_supervision.json").read_text())
         expected = {

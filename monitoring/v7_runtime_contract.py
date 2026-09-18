@@ -275,23 +275,28 @@ def runtime_health(run_root: Path, expected_sha: str, *, now: int, stale_seconds
                 recoverable.append("native_engine_manager_status_stale")
             if native.get("partitioned_native_workers") is True:
                 workers = native.get("workers")
+                retry_contexts = {
+                    str(item) for item in (native.get("launch_retry_contexts") or []) if str(item)
+                }
                 try:
                     expected_contexts = int(native.get("expected_context_count") or 0)
                     target_contexts = int(native.get("target_context_count") or 0)
                     global_budget = int(native.get("global_budget_microdollars") or 0)
                     partition_total = int(native.get("partition_total_microdollars") or 0)
+                    retry_count = int(native.get("launch_retry_count") or 0)
                 except (TypeError, ValueError, OverflowError):
-                    expected_contexts = target_contexts = global_budget = partition_total = 0
-                if (
-                    native.get("single_native_portfolio_owner") is not True
-                    or expected_contexts != 30 or target_contexts != expected_contexts
-                    or not isinstance(workers, list) or len(workers) != expected_contexts
-                    or global_budget <= 0 or partition_total <= 0
-                    or partition_total > global_budget
-                ):
-                    recoverable.append("native_partition_coverage_incomplete")
-                else:
-                    seen: set[str] = set()
+                    expected_contexts = target_contexts = global_budget = partition_total = retry_count = 0
+                static_partition_ok = bool(
+                    native.get("single_native_portfolio_owner") is True
+                    and expected_contexts == 30
+                    and target_contexts == expected_contexts
+                    and isinstance(workers, list)
+                    and global_budget > 0
+                    and partition_total > 0
+                    and partition_total <= global_budget
+                )
+                seen: set[str] = set()
+                if isinstance(workers, list):
                     for worker in workers:
                         if not isinstance(worker, dict):
                             recoverable.append("native_partition_worker_invalid")
@@ -310,6 +315,29 @@ def runtime_health(run_root: Path, expected_sha: str, *, now: int, stale_seconds
                                 recoverable.append("native_partition_settlement_pid_dead")
                         else:
                             recoverable.append("native_partition_worker_not_ready")
+                target_names = {
+                    str(item) for item in (native.get("target_contexts") or []) if str(item)
+                }
+                full_coverage_ok = bool(
+                    state == "RUNNING"
+                    and static_partition_ok
+                    and len(seen) == expected_contexts
+                    and retry_count == 0
+                    and not retry_contexts
+                )
+                retry_coverage_ok = bool(
+                    state == "RUNNING"
+                    and static_partition_ok
+                    and 0 < len(seen) < expected_contexts
+                    and retry_count == len(retry_contexts)
+                    and retry_count > 0
+                    and len(seen) + len(retry_contexts) == expected_contexts
+                    and not (seen & retry_contexts)
+                    and len(target_names) == expected_contexts
+                    and seen | retry_contexts == target_names
+                )
+                if not (full_coverage_ok or retry_coverage_ok):
+                    recoverable.append("native_partition_coverage_incomplete")
             elif state == "RUNNING" and not pid_alive(native.get("engine_pid")):
                 recoverable.append("native_engine_pid_dead")
             if state == "SETTLEMENT_BLOCKED" or native.get("blocker") == "NATIVE_PAPER_SETTLEMENT_INCOMPLETE":

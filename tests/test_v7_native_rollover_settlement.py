@@ -673,3 +673,43 @@ def test_native_carryover_wrong_target_sha_fails_closed(tmp_path) -> None:
         assert str(exc)=='native_carryover_invalid'
     else:
         raise AssertionError('wrong-SHA carryover accepted')
+def test_native_evidence_aggregate_includes_decision_capture_health(tmp_path) -> None:
+    import types
+    import v7_native_crypto_engine_manager as manager
+
+    owner = manager.Manager.__new__(manager.Manager)
+    owner.run_root = tmp_path
+    owner.args = types.SimpleNamespace(model_sha=SHA, run_id="run")
+    directory = tmp_path / "control/native_evidence"
+    directory.mkdir(parents=True)
+    base = {
+        "schema": "polymarket_v7_native_evidence_status_v1",
+        "paper_only": True,
+        "authenticated_execution": False,
+        "real_order_submission": False,
+        "model_sha": SHA,
+        "run_id": "run",
+        "healthy": True,
+        "published": 2,
+        "written": 2,
+        "dropped": 0,
+        "queue_depth": 0,
+        "observations_published": 3,
+        "observations_written": 3,
+        "observations_dropped": 0,
+        "observations_queue_depth": 0,
+    }
+    (directory / "m1.json").write_text(json.dumps({**base, "market_id": "m1"}))
+    (directory / "m2.json").write_text(json.dumps({
+        **base, "market_id": "m2",
+        "observations_published": 5,
+        "observations_written": 4,
+        "observations_dropped": 1,
+        "observations_queue_depth": 1,
+    }))
+    result = owner._aggregate_evidence()
+    assert result["worker_count"] == 2
+    assert result["observations_published"] == 8
+    assert result["observations_written"] == 7
+    assert result["observations_dropped"] == 1
+    assert result["observations_queue_depth"] == 1

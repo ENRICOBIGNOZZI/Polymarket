@@ -160,6 +160,59 @@ class V7NativeMonitoringTest(unittest.TestCase):
             self.assertIn("polymarket_v7_book_data_runtime_ready 0",metrics)
             self.assertIn("polymarket_v7_book_data_observed_markets 29",metrics)
 
+    def test_native_launch_retry_is_operational_but_not_fully_ready(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory) / "paper_v7_live"
+            self._fixture(root)
+            sha = self._sha()
+            contexts = [
+                f"{asset}:{horizon}"
+                for asset in ("BTC", "ETH", "SOL", "XRP", "DOGE", "BNB")
+                for horizon in ("M5", "M15", "H1", "H4", "D1")
+            ]
+            retry = "BTC:M5"
+            workers = [
+                {
+                    "context": context, "asset": context.split(":")[0],
+                    "horizon": context.split(":")[1],
+                    "market_id": context.replace(":", "-"),
+                    "state": "RUNNING", "engine_pid": os.getpid(),
+                    "settlement_pid": 0, "budget_microdollars": 333_333_333,
+                }
+                for context in contexts if context != retry
+            ]
+            self._write(root / "control/native_engine_manager_status.json", {
+                "schema": "polymarket_v7_native_engine_manager_status_v1",
+                "timestamp_ms": 1_000_000, "state": "RUNNING", "blocker": "",
+                "paper_only": True, "authenticated_execution": False,
+                "real_order_submission": False, "real_capital_at_risk": False,
+                "model_sha": sha, "run_id": "run-id", "server_id": "server-id",
+                "single_native_hot_path": True, "single_native_portfolio_owner": True,
+                "partitioned_native_workers": True, "expected_context_count": 30,
+                "target_context_count": 30, "target_contexts": contexts,
+                "workers": workers, "active_worker_count": 29,
+                "global_budget_microdollars": 10_000_000_000,
+                "partition_total_microdollars": 9_999_999_990,
+                "partition_budget_microdollars": 333_333_333,
+                "launch_retry_count": 1, "launch_retry_contexts": [retry],
+                "launch_retry_attempts": {retry: 1},
+                "launch_retry_reasons": {retry: "remote_metadata_unavailable:RemoteDisconnected"},
+                "native_observations_published": 11,
+                "native_observations_written": 11,
+                "native_observations_dropped": 0,
+                "native_observations_queue_depth": 0,
+            })
+            snapshot = exporter.collect_snapshot(root, ROOT, now=1000)
+            reasons = exporter.health_reasons(snapshot)
+            self.assertIn("native_partition_coverage_incomplete", reasons)
+            metrics = exporter.render_prometheus(snapshot)
+            self.assertIn("polymarket_v7_native_engine_operational 1", metrics)
+            self.assertIn("polymarket_v7_native_engine_ready 0", metrics)
+            self.assertIn("polymarket_v7_native_launch_retry_contexts 1", metrics)
+            self.assertIn("polymarket_v7_native_missing_contexts 1", metrics)
+            self.assertIn("polymarket_v7_native_observations_written 11", metrics)
+            self.assertIn("polymarket_v7_native_observations_dropped 0", metrics)
+
     def test_professional_maker_latency_is_exported(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root=Path(directory)/"paper_v7_live"; self._fixture(root)
