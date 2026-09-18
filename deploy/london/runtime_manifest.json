@@ -40,6 +40,7 @@
     "scripts/v7_portfolio_guard.py",
     "scripts/v7_runtime_profile.py",
     "scripts/v7_legacy_native_claims.py",
+    "scripts/v7_legacy_native_reconciler.py",
     "scripts/v7_native_crypto_engine_manager.py",
     "scripts/v7_native_paper_settlement.py"
   ],

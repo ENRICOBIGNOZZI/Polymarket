@@ -63,6 +63,25 @@ class PrepareCutoverTests(unittest.TestCase):
             with self.assertRaisesRegex(cutover.CutoverArchiveError,'prior_native_unsettled_markets:1'):
                 cutover.prepare(root,base/'archives',base,NEW,ancestor_check=lambda *_:True)
 
+    def test_native_fill_can_archive_only_with_legacy_carry_contract(self):
+        with tempfile.TemporaryDirectory() as d:
+            base=Path(d);root=base/'run';fixture(root)
+            fill={
+                'event_type':'FILL','strategy':'CRYPTO_SETTLEMENT_ENGINE',
+                'model_sha':OLD,'paper_only':True,'authenticated_execution':False,
+                'market_id':'m1','record_kind':'ECONOMIC_JOURNAL',
+                'metadata':{'native_settlement_receipt':{
+                    'owner':'V7_NATIVE_CRYPTO_SETTLEMENT_ENGINE'}},
+            }
+            (root/'ledger/execution.jsonl').write_text(json.dumps(fill)+'\n',encoding='utf-8')
+            result=cutover.prepare(
+                root,base/'archives',base,NEW,now=125,
+                ancestor_check=lambda *_:True, legacy_carry_check=lambda _root:True)
+            self.assertEqual(result['state'],'ARCHIVED_PRIOR_SHA')
+            self.assertTrue(result['legacy_claim_carry_required'])
+            self.assertEqual(result['prior_open_positions']['native_unsettled_markets'],1)
+            self.assertEqual(result['legacy_native_unsettled'],[OLD+':m1'])
+
     def test_native_final_closes_cutover_exposure(self):
         with tempfile.TemporaryDirectory() as d:
             base=Path(d);root=base/'run';fixture(root)

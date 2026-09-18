@@ -484,6 +484,22 @@ v7_exec_class COLLECTOR "$RECORDER" \
   >> "$RUN_ROOT/trade_recorder.log" 2>&1 &
 v7_register_child "$!"
 
+# Reconcile historical PAPER claims before starting this run's sole ledger writer.
+# Anything unresolved remains reserved in the final registry and cannot vanish
+# across a code-SHA cutover.
+python3 scripts/v7_legacy_native_claims.py \
+  --current-run-root "$RUN_ROOT" --scan-parent "$(dirname "$RUN_ROOT")" \
+  --target-sha "$SHA" --output "$RUN_ROOT/control/legacy_native_claims.json" \
+  >> "$RUN_ROOT/legacy_native_claims.log" 2>&1
+python3 scripts/v7_legacy_native_reconciler.py \
+  --registry "$RUN_ROOT/control/legacy_native_claims.json" --repository-root "$ROOT" \
+  --target-sha "$SHA" --output "$RUN_ROOT/control/legacy_native_reconciliation.json" \
+  >> "$RUN_ROOT/legacy_native_reconciliation.log" 2>&1 || true
+python3 scripts/v7_legacy_native_claims.py \
+  --current-run-root "$RUN_ROOT" --scan-parent "$(dirname "$RUN_ROOT")" \
+  --target-sha "$SHA" --output "$RUN_ROOT/control/legacy_native_claims.json" \
+  >> "$RUN_ROOT/legacy_native_claims.log" 2>&1
+
 # One persistent canonical ledger router. 100ms transport cadence keeps FILL
 # evidence available before the 1s markout horizon without creating a second
 # ledger writer or repeatedly spawning Python processes.
@@ -496,11 +512,6 @@ v7_register_child "$!"
 # context and grants each native PAPER worker a bounded partition of the one
 # canonical CRYPTO_SETTLEMENT_ENGINE envelope. The sum of partitions may never
 # exceed the allocator-owned engine budget; real submission remains impossible.
-python3 scripts/v7_legacy_native_claims.py \
-  --current-run-root "$RUN_ROOT" --scan-parent "$(dirname "$RUN_ROOT")" \
-  --target-sha "$SHA" --output "$RUN_ROOT/control/legacy_native_claims.json" \
-  >> "$RUN_ROOT/legacy_native_claims.log" 2>&1
-
 PM_V7_CONTROL_NICE=0 v7_exec_class CONTROL python3 scripts/v7_native_crypto_engine_manager.py \
   --repository-root "$ROOT" --run-root "$RUN_ROOT" --model-sha "$SHA" \
   --run-id "$RUN_ID" --server-id "$SERVER_ID" \

@@ -26,6 +26,28 @@ def read_json(path: Path) -> dict:
     return value if isinstance(value, dict) else {}
 
 
+def legacy_claim_carry_supported(repository_root: Path) -> bool:
+    """Prove the target release reserves legacy claims before execution."""
+    runtime = read_json(repository_root / "deploy/london/runtime_manifest.json")
+    process = read_json(repository_root / "config/v7_process_manifest.json")
+    try:
+        loop = (repository_root / "scripts/paper_v7_execution_loop.sh").read_text(encoding="utf-8")
+    except OSError:
+        return False
+    entrypoints = runtime.get("python_entrypoints") if isinstance(runtime.get("python_entrypoints"), list) else []
+    rows = process.get("processes") if isinstance(process.get("processes"), list) else []
+    manager = next((row for row in rows if isinstance(row, dict) and row.get("id") == "native_engine_manager"), {})
+    arguments = manager.get("arguments") if isinstance(manager.get("arguments"), list) else []
+    inputs = manager.get("inputs") if isinstance(manager.get("inputs"), list) else []
+    return (
+        "scripts/v7_legacy_native_claims.py" in entrypoints
+        and "--legacy-claims" in arguments
+        and "control/legacy_native_claims.json" in inputs
+        and "v7_legacy_native_claims.py" in loop
+        and "--legacy-claims" in loop
+    )
+
+
 def native_unsettled_markets(path: Path) -> list[str]:
     """Return native PAPER fill markets that lack their canonical native FINAL.
 
@@ -150,6 +172,7 @@ def prepare(
     *,
     now: int | None = None,
     ancestor_check: Callable[[Path, str, str], bool] = git_is_ancestor,
+    legacy_carry_check: Callable[[Path], bool] = legacy_claim_carry_supported,
 ) -> dict:
     if not SHA40.fullmatch(target_sha):
         raise CutoverArchiveError("target_sha_invalid")
@@ -256,14 +279,15 @@ def prepare(
         ledger_path, repository_root, target_sha, ancestor_check,
     )
     native_unsettled = native_unsettled_markets(ledger_path)
-    if native_unsettled:
+    legacy_carry_required = bool(native_unsettled)
+    if native_unsettled and not legacy_carry_check(repository_root):
         raise CutoverArchiveError(f"prior_native_unsettled_markets:{len(native_unsettled)}")
     if spool_path.exists() and any(spool_path.glob("*.json")):
         raise CutoverArchiveError("prior_ledger_spool_not_empty")
     durable_open = {
         "paper_account": account_open,
         "maker_active_orders": active_maker,
-        "native_unsettled_markets": 0,
+        "native_unsettled_markets": len(native_unsettled),
     }
 
     archived_at = int(now if now is not None else time.time())
@@ -290,6 +314,8 @@ def prepare(
         "ledger_strategy_counts": ledger_strategy_counts,
         "runtime_checkout_drift_detected": runtime_checkout_drift,
         "prior_open_positions": durable_open,
+        "legacy_claim_carry_required": legacy_carry_required,
+        "legacy_native_unsettled": native_unsettled,
     }
     temporary = control / f"cutover_lineage.json.tmp.{os.getpid()}"
     temporary.write_text(json.dumps(receipt, sort_keys=True) + "\n", encoding="utf-8")
