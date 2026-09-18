@@ -1,4 +1,5 @@
 #include "pm/v7_native_settlement_oms_endpoint.hpp"
+#include "pm/v7_native_paper_execution.hpp"
 #include "pm/fast_ws.hpp"
 #include "pm/v7_coinbase_l2_observer.hpp"
 #include "pm/v7_crypto_decision_lane.hpp"
@@ -188,6 +189,7 @@ int main(int argc, char** argv) {
         limits.max_single_order_microdollars = 10'000'000LL;
         NativeSettlementAuthority authority(limits);
         NativeSettlementOmsEndpoint adapter_endpoint(authority);
+        NativePaperExecutionAdapter paper_execution(adapter_endpoint);
         // Zero-authority shadow begins from an explicit flat canonical inventory
         // snapshot. Non-zero recovery inventory must come from the future native
         // recovery/reconciliation boundary; strategy lanes never synthesize it.
@@ -235,6 +237,8 @@ int main(int argc, char** argv) {
         std::uint64_t maker_cancel_intents = 0, maker_cancel_handoffs = 0;
         std::uint64_t maker_cancel_not_ready = 0, maker_duplicate_quotes = 0;
         std::uint64_t maker_replace_pending = 0;
+        std::uint64_t paper_trade_sequence = 0, paper_fill_events = 0;
+        std::uint64_t paper_invalid_trades = 0, paper_submit_failures = 0;
         std::uint64_t arbitration_conflicts = 0, authority_rejections = 0;
         std::uint64_t inventory_rejections = 0, minimum_size_rejections = 0;
         std::uint64_t last_measured_signal_version = 0;
@@ -293,6 +297,10 @@ int main(int argc, char** argv) {
                 binance_ready = coinbase_ready = pm_ready = false;
                 continue;
             }
+            if (!paper_execution.advance_time(receive_ns)) {
+                ++adapter_handoff_failures;
+                break;
+            }
             bool has_external = (binance_ready && pending_binance.local_receive_monotonic_ns == receive_ns)
                 || (coinbase_ready && pending_coinbase.local_receive_monotonic_ns == receive_ns);
             if (has_external && receive_ns > 1) {
@@ -327,6 +335,23 @@ int main(int argc, char** argv) {
                 }
                 if (pm_ready && pending_pm.event.receive_monotonic_ns == receive_ns) {
                     const auto& event = pending_pm.event;
+                    if (event.kind == MarketWsEventKind::Trade
+                        && event.instrument_handle != 0 && event.price_e4 > 0
+                        && event.quantity_microunits > 0 && event.book.tick_size_e4 > 0) {
+                        ++paper_trade_sequence;
+                        if (paper_trade_sequence == 0) ++paper_trade_sequence;
+                        PublicTradePrint trade{};
+                        trade.trade_id = paper_trade_sequence;
+                        trade.instrument_handle = event.instrument_handle;
+                        trade.aggressor_side = event.side;
+                        trade.price_tick = event.price_e4 / event.book.tick_size_e4;
+                        trade.quantity_microunits = event.quantity_microunits;
+                        trade.exchange_event_ns = event.exchange_event_ns;
+                        trade.receive_monotonic_ns = event.receive_monotonic_ns;
+                        const auto paper_result = paper_execution.on_public_trade(trade);
+                        paper_fill_events += paper_result.fills;
+                        paper_invalid_trades += paper_result.invalid;
+                    }
                     maker::MakerDecision maker_decision;
                     bool maker_event = false;
                     if (event.instrument_handle == kYes) {
@@ -346,8 +371,13 @@ int main(int argc, char** argv) {
                                 ++maker_cancel_intents;
                                 const auto cancel = authority.cancel_maker_quote(
                                     intent.instrument_handle, intent.side, event.receive_monotonic_ns);
-                                if (cancel.accepted != 0) ++maker_cancel_handoffs;
-                                else if (cancel.reason == NativeCancelTxReason::NotCancelable) {
+                                if (cancel.accepted != 0) {
+                                    ++maker_cancel_handoffs;
+                                    if (!paper_execution.request_cancel(
+                                            cancel.command, event.receive_monotonic_ns)) {
+                                        ++paper_submit_failures;
+                                    }
+                                } else if (cancel.reason == NativeCancelTxReason::NotCancelable) {
                                     ++maker_cancel_not_ready;
                                 }
                                 continue;
@@ -419,24 +449,34 @@ int main(int argc, char** argv) {
                         ++maker_duplicate_quotes;
                     } else if (authority_result.reason == NativeSettlementAuthorityReason::MakerReplacePending) {
                         ++maker_replace_pending;
-                        if (authority_result.cancel.accepted != 0) ++maker_cancel_handoffs;
-                        else if (authority_result.cancel.reason == NativeCancelTxReason::NotCancelable) {
+                        if (authority_result.cancel.accepted != 0) {
+                            ++maker_cancel_handoffs;
+                            if (!paper_execution.request_cancel(
+                                    authority_result.cancel.command, adapter_ready_ns)) {
+                                ++paper_submit_failures;
+                            }
+                        } else if (authority_result.cancel.reason == NativeCancelTxReason::NotCancelable) {
                             ++maker_cancel_not_ready;
                         }
                     }
                 } else {
-                    // A shadow command must terminate locally, not remain
-                    // indefinitely pending and consume capital/OMS capacity.
-                    // This is not an exchange ACK or a PAPER fill.
-                    if (!adapter_endpoint.observe_unsent(
-                            authority_result.tx.command, adapter_ready_ns)) {
+                    const auto& paper_book = authority_result.tx.command.instrument_handle == kYes
+                        ? yes_book : no_book;
+                    const auto paper_result = paper_execution.submit(
+                        authority_result.tx.command, paper_book, adapter_ready_ns);
+                    if (paper_result.reason == NativePaperReason::LifecycleFailure
+                        || paper_result.reason == NativePaperReason::InvalidCommand) {
+                        ++paper_submit_failures;
                         ++adapter_handoff_failures;
                         break;
                     }
                     ++accepted;
+                    if (paper_result.accepted != 0 && paper_result.filled_microunits > 0) {
+                        ++paper_fill_events;
+                    }
                     if (candidate_is_taker[index] != 0) {
                         ++taker_accepted;
-                        lane.mark_market_traded(kMarket);
+                        if (paper_result.filled_microunits > 0) lane.mark_market_traded(kMarket);
                         if (accepted_signal_to_admission.size() < accepted_signal_to_admission.capacity()) {
                             const auto trigger_ns = candidate_trigger_ns[index];
                             accepted_signal_to_admission.push_back(std::max<std::int64_t>(
@@ -474,7 +514,7 @@ int main(int argc, char** argv) {
             {"schema", "polymarket_v7_crypto_settlement_native_candidate_v2"},
             {"paper_only", true}, {"authenticated_execution", false},
             {"real_order_submission", false}, {"real_capital_at_risk", false},
-            {"authority", "SHADOW_ZERO_AUTHORITY"},
+            {"authority", "PAPER_SIMULATED_SINGLE_OWNER"},
             {"critical_path", "CPP_SAME_PROCESS_FEED_DECODE_TO_SINGLE_SETTLEMENT_AUTHORITY"},
             {"clean_capture", clean}, {"duration_seconds", options.duration_seconds},
             {"evaluations", evaluations}, {"accepted_candidates", accepted},
@@ -485,6 +525,13 @@ int main(int argc, char** argv) {
             {"maker_cancel_not_ready", maker_cancel_not_ready},
             {"maker_duplicate_quotes", maker_duplicate_quotes},
             {"maker_replace_pending", maker_replace_pending},
+            {"paper_resting_orders", paper_execution.resting_orders()},
+            {"paper_synthetic_acks", paper_execution.synthetic_acks()},
+            {"paper_fill_events", paper_fill_events},
+            {"paper_adapter_fills", paper_execution.paper_fills()},
+            {"paper_cancels", paper_execution.paper_cancels()},
+            {"paper_invalid_trades", paper_invalid_trades},
+            {"paper_submit_failures", paper_submit_failures},
             {"arbitration_conflicts_fail_closed", arbitration_conflicts},
             {"authority_rejections", authority_rejections},
             {"inventory_rejections", inventory_rejections},
@@ -494,7 +541,7 @@ int main(int argc, char** argv) {
             {"adapter_unsent_observations", adapter_endpoint.observed_unsent()},
             {"adapter_healthy", adapter_endpoint.healthy()},
             {"network_orders_sent", 0},
-            {"simulated_fills", 0},
+            {"simulated_fills", paper_execution.paper_fills()},
             {"latency_sample_overflow", latency_overflow},
             {"accepted_signal_to_admission", latency_distribution(std::move(accepted_signal_to_admission))},
             {"accepted_signal_to_adapter", latency_distribution(std::move(accepted_signal_to_adapter))},
@@ -504,7 +551,7 @@ int main(int argc, char** argv) {
             {"binance", {{"frames", binance_status.frames_received}, {"transport_failures", binance_status.transport_failures}, {"drops", binance_ingress_status.dropped_events}}},
             {"coinbase", {{"frames", coinbase_status.frames_received}, {"transport_failures", coinbase_status.transport_failures}, {"drops", coinbase_ingress_status.dropped_events}}},
             {"polymarket", {{"messages", pm_status.messages}, {"reconnects", pm_status.reconnects}, {"errors", pm_status.errors}, {"drops", pm_drops.load()}}},
-            {"note", "Zero-authority candidate only. Maker and taker now share one in-process inventory/capital/OMS authority with cancel-first maker replacement. Non-zero recovery inventory, comparable multi-alpha wealth scoring and the production network adapter remain fail-closed deployment gates. Shadow handoffs terminate as definite pre-wire rejections; they are not fills."}
+            {"note", "PAPER-only native candidate. Maker and taker share one in-process inventory/capital/OMS authority. Taker fills require causal executable L1 depth; maker fills use pessimistic public-print queue depletion and bounded cancel latency. No authenticated submission or real capital is possible."}
         }) << '\n';
         return clean ? 0 : 2;
     } catch (const std::exception& error) {
