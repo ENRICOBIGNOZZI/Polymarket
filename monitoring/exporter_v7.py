@@ -298,25 +298,16 @@ def collect_snapshot(run_root: Path, repository_root: Path | None = None, *, now
     process_path = repository_root / "config/v7_process_manifest.json"
     process = _json(process_path)
     external_fair = summarize_external_fair(run_root, repository_root, runtime_sha=runtime_sha, now_s=now)
-    lead_lag = _lead_lag_state(run_root, runtime_sha)
-    model_families = canonical.get("model_families_observed")
-    model_families = model_families if isinstance(model_families, list) else []
-    lead_lag_required = "lead_lag_taker_v1" in model_families
-    external_pnl = _optional_number((external_fair.get("economics") or {}).get("realized_pnl"))
-    crypto_state_pnl: float | None = external_pnl
-    if lead_lag_required or lead_lag["present"]:
-        if external_pnl is None or not lead_lag["valid"]:
-            crypto_state_pnl = None
-        else:
-            crypto_state_pnl = external_pnl + float(lead_lag["realized_pnl"])
-    state_pnl = {
-        "CRYPTO_SETTLEMENT_ENGINE": crypto_state_pnl,
-    }
+    native_engine = _json(run_root / "control" / "native_engine_supervisor_status.json")
+    native_evidence = _json(run_root / "control" / "native_evidence_status.json")
+    native_settlement = _json(run_root / "control" / "native_market_settlement_status.json")
+    crypto_state_pnl = _optional_number(
+        (canonical.get("strategy_net_pnl") or {}).get("CRYPTO_SETTLEMENT_ENGINE")
+    )
+    state_pnl = {"CRYPTO_SETTLEMENT_ENGINE": crypto_state_pnl}
     state_pnl_components = {
         "CRYPTO_SETTLEMENT_ENGINE": {
-            "external_fair": external_pnl,
-            "lead_lag_taker_v1": lead_lag["realized_pnl"] if lead_lag["valid"] else None,
-            "lead_lag_required_by_canonical": lead_lag_required,
+            "canonical_ledger": crypto_state_pnl,
             "complete": crypto_state_pnl is not None,
             "total": crypto_state_pnl,
         },
@@ -337,7 +328,7 @@ def collect_snapshot(run_root: Path, repository_root: Path | None = None, *, now
         "crypto_registry": _json(repository_root / "config/v7_crypto_settlement_markets.json"),
         "crypto_model_registry": _json(repository_root / "config/v7_crypto_settlement_model_registry.json"),
         "crypto_runtime": _json(run_root / "control/crypto_settlement_engine_snapshot.json"),
-        "global_coordinator": _json(run_root / "control/global_portfolio_coordinator.json"),
+        "global_coordinator": {},
         "process_manifest": {
             "schema": process.get("schema"),
             "process_count": len(process.get("processes") or []),
@@ -346,8 +337,11 @@ def collect_snapshot(run_root: Path, repository_root: Path | None = None, *, now
             "sha256": hashlib.sha256(process_path.read_bytes()).hexdigest() if process_path.exists() else "",
         },
         "maker": maker,
-        "lead_lag": _json(run_root / "research/lead_lag_taker_v1/status.json"),
-        "lead_lag_collector": _json(run_root / "external_fair/lead_lag_collector_status.json"),
+        "native_engine": native_engine,
+        "native_evidence": native_evidence,
+        "native_settlement": native_settlement,
+        "lead_lag": {},
+        "lead_lag_collector": {},
         "maker_diagnostics": _json(run_root / "micro_maker/runtime_diagnostics.json"),
         "maker_selector": _json(run_root / "micro_maker/selector_status.json"),
         "maker_rotation": _json(run_root / "micro_maker/rotation_status.json"),
@@ -360,7 +354,7 @@ def collect_snapshot(run_root: Path, repository_root: Path | None = None, *, now
         "maker_fillability": _fillability(run_root, repository_root, runtime_sha, now),
         "external_fair": external_fair, "reconciliation": reconciliation,
         "maker_latency": _runtime_latency(run_root),
-        "lead_lag": lead_lag, "state_realized_pnl_components": state_pnl_components,
+        "state_realized_pnl_components": state_pnl_components,
         "trade_tape": tape, "trade_recorder": _trade_recorder(run_root / "trade_recorder_status.json", now),
         "authority": {"valid": authority_valid, "max_drawdown": max_drawdown},
         "algorithms": algorithms, "strategies": algorithms,
