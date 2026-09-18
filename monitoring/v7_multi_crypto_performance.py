@@ -55,8 +55,9 @@ def _strategy_name(metadata: dict[str, Any], fallback: str) -> str:
 def _lane_from_row(row: dict[str, Any]) -> tuple[str, str, str] | None:
     metadata = row.get("metadata") if isinstance(row.get("metadata"), dict) else {}
     context = metadata.get("crypto_context") if isinstance(metadata.get("crypto_context"), dict) else {}
-    asset = str(context.get("asset") or metadata.get("asset") or row.get("asset") or "").upper()
-    horizon = str(context.get("horizon") or metadata.get("horizon") or row.get("horizon") or "").upper()
+    receipt = metadata.get("native_settlement_receipt") if isinstance(metadata.get("native_settlement_receipt"), dict) else {}
+    asset = str(context.get("asset") or metadata.get("asset") or receipt.get("asset") or row.get("asset") or "").upper()
+    horizon = str(context.get("horizon") or metadata.get("horizon") or receipt.get("horizon") or row.get("horizon") or "").upper()
     family = str(metadata.get("model_family") or metadata.get("component") or "").strip()
     if (asset not in ASSETS or horizon not in HORIZONS) and family in _FIXED_FAMILY_SCOPE:
         asset, horizon, _ = _FIXED_FAMILY_SCOPE[family]
@@ -122,6 +123,7 @@ def summarize_multi_crypto(
     diagnostics = {"rows": 0, "crypto_rows": 0, "unsafe_rows": 0, "sha_mismatch_rows": 0,
                    "unattributed_fill_rows": 0, "unattributed_final_rows": 0,
                    "final_rows_missing_pnl": 0, "latest_final_recorded_ts_ms": None}
+    fill_position_by_id: dict[str, str] = {}
     ledger_path = Path(run_root) / "ledger/execution.jsonl"
     try:
         handle = ledger_path.open("r", encoding="utf-8")
@@ -173,6 +175,9 @@ def summarize_multi_crypto(
                         turnover = price * size; lane["turnover"] += turnover; strategy["turnover"] += turnover
                     if position_id:
                         lane["fill_position_ids"].add(position_id)
+                        fill_id = str(row.get("fill_id") or "").strip()
+                        if fill_id:
+                            fill_position_by_id[fill_id] = position_id
                         if price is not None and size is not None and size >= 0 and str(row.get("side") or "BUY").upper() == "BUY":
                             lane["position_open_costs"][position_id] = lane["position_open_costs"].get(position_id, 0.0) + price * size + max(0.0, fee or 0.0)
                         else:
@@ -190,7 +195,15 @@ def summarize_multi_crypto(
                     if isinstance(won, bool):
                         lane["wins_known"] += 1; strategy["wins_known"] += 1
                         lane["wins"] += int(won); strategy["wins"] += int(won)
-                    if position_id:
+                    included_fill_ids = metadata.get("included_fill_ids") if isinstance(metadata.get("included_fill_ids"), list) else []
+                    linked_positions = {
+                        fill_position_by_id[str(fill_id)]
+                        for fill_id in included_fill_ids
+                        if str(fill_id) in fill_position_by_id
+                    }
+                    if linked_positions:
+                        lane["final_position_ids"].update(linked_positions)
+                    elif position_id:
                         lane["final_position_ids"].add(position_id)
                     else:
                         lane["position_id_missing"] += 1

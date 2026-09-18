@@ -95,6 +95,9 @@ struct Options {
     std::int64_t close_wall_ns = 0;
     std::int32_t tick_size_e4 = 100;
     std::int64_t min_order_microunits = 5'000'000;
+    std::int64_t target_quantity_microunits = 20'000'000;
+    std::int64_t minimum_tte_ns = 5'000'000'000LL;
+    std::int64_t maximum_tte_ns = 120'000'000'000LL;
     std::int64_t sleeve_budget_microdollars = 1'000'000'000LL;
     std::int64_t max_total_exposure_microdollars = 1'000'000'000LL;
     std::int64_t max_market_exposure_microdollars = 100'000'000LL;
@@ -130,6 +133,9 @@ Options parse_options(int argc, char** argv) {
         else if (arg == "--close-wall-ns") out.close_wall_ns = bounded_integer<std::int64_t>(next(), 1, std::numeric_limits<std::int64_t>::max());
         else if (arg == "--tick-size-e4") out.tick_size_e4 = bounded_integer<std::int32_t>(next(), 1, 5000);
         else if (arg == "--min-order-microunits") out.min_order_microunits = bounded_integer<std::int64_t>(next(), 1, 1'000'000'000);
+        else if (arg == "--target-quantity-microunits") out.target_quantity_microunits = bounded_integer<std::int64_t>(next(), 1, 1'000'000'000);
+        else if (arg == "--minimum-tte-ns") out.minimum_tte_ns = bounded_integer<std::int64_t>(next(), 1, 86'400'000'000'000LL);
+        else if (arg == "--maximum-tte-ns") out.maximum_tte_ns = bounded_integer<std::int64_t>(next(), 1, 86'400'000'000'000LL);
         else if (arg == "--sleeve-budget-microdollars") out.sleeve_budget_microdollars = bounded_integer<std::int64_t>(next(), 1, 10'000'000'000LL);
         else if (arg == "--max-total-exposure-microdollars") out.max_total_exposure_microdollars = bounded_integer<std::int64_t>(next(), 1, 10'000'000'000LL);
         else if (arg == "--max-market-exposure-microdollars") out.max_market_exposure_microdollars = bounded_integer<std::int64_t>(next(), 1, 10'000'000'000LL);
@@ -169,6 +175,10 @@ json::object reason_json(const std::array<std::uint64_t, 32>& counts) {
 int main(int argc, char** argv) {
     try {
         const auto options = parse_options(argc, argv);
+        if (options.target_quantity_microunits < options.min_order_microunits
+            || options.minimum_tte_ns > options.maximum_tte_ns) {
+            throw std::invalid_argument("invalid PAPER sizing or tte policy");
+        }
         if (options.validate_only) {
             std::cout << "native crypto settlement candidate configuration PASS\n";
             return 0;
@@ -251,6 +261,9 @@ int main(int argc, char** argv) {
         // Frozen LEAD_LAG_TAKER_V1 uses maximum_signal_age_ms=5000; the source
         // signal's shorter technical valid flag is not an economic expiry.
         decision_policy.require_signal_valid = 0;
+        decision_policy.minimum_tte_ns = options.minimum_tte_ns;
+        decision_policy.maximum_tte_ns = options.maximum_tte_ns;
+        decision_policy.target_quantity_microunits = options.target_quantity_microunits;
         NativeCryptoDecisionLane lane(decision_policy);
         CapitalLimits limits;
         limits.sleeve_budget_microdollars = options.sleeve_budget_microdollars;
@@ -288,6 +301,8 @@ int main(int argc, char** argv) {
         }
         maker::MakerInstrumentLane yes_maker(+1), no_maker(-1);
         maker::MakerModelSnapshot maker_model;
+        const double venue_min_shares = static_cast<double>(options.min_order_microunits) / 1'000'000.0;
+        maker_model.base_quote_shares = std::max(maker_model.base_quote_shares, venue_min_shares);
         if (!maker_model.valid()) throw std::runtime_error("invalid native maker model snapshot");
         maker::MakerLaneContext maker_context;
         maker_context.risk.max_quote_shares = maker_model.base_quote_shares;

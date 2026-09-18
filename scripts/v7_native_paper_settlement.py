@@ -226,9 +226,14 @@ def settle(args: argparse.Namespace) -> int:
         if receipt is None:
             raise RuntimeError("native_final_receipt_missing")
         settlement_id = f"native-settlement:{args.market_id}"
+        asset = str(receipt.get("asset") or "")
+        horizon = str(receipt.get("horizon") or "")
         metadata = {
             "component": "native_market_settlement",
             "model_family": "native-paper-engine",
+            "asset": asset,
+            "horizon": horizon,
+            "crypto_context": {"asset": asset, "horizon": horizon},
             "economic_authority": "PAPER_EXPLORATION",
             "counterfactual": False,
             "research_evidence_only": False,

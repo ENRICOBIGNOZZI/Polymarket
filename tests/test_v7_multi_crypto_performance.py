@@ -178,6 +178,36 @@ class MultiCryptoPerformanceTest(unittest.TestCase):
             self.assertFalse(diverged["attribution"]["canonical_stale_vs_ledger"])
             self.assertEqual(diverged["portfolio"]["realized_pnl"], 0.0)
 
+    def test_native_aggregate_final_closes_included_fill_positions(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory); (root / "ledger").mkdir()
+            receipt = {"asset": "BTC", "horizon": "M5"}
+            rows = [
+                {"event_type": "FILL", "strategy": "CRYPTO_SETTLEMENT_ENGINE", "model_sha": SHA,
+                 "paper_only": True, "authenticated_execution": False,
+                 "fill_id": "f-native", "position_id": "native-position:m1:yes",
+                 "fill_price": 0.4, "filled_size": 20, "fee": 0.1,
+                 "metadata": {"model_family": "crypto_informed_taker",
+                              "asset": "BTC", "horizon": "M5"}},
+                {"event_type": "FINAL", "strategy": "CRYPTO_SETTLEMENT_ENGINE", "model_sha": SHA,
+                 "paper_only": True, "authenticated_execution": False,
+                 "position_id": "native-market:m1", "final_pnl": 2.0,
+                 "metadata": {"model_family": "native-paper-engine",
+                              "native_settlement_receipt": receipt,
+                              "included_fill_ids": ["f-native"]}},
+            ]
+            (root / "ledger/execution.jsonl").write_text(
+                "".join(json.dumps(row)+"\n" for row in rows)
+            )
+            summary = self._summarize(root, 2.0)
+            lane = next(x for x in summary["lanes"] if x["asset"] == "BTC" and x["horizon"] == "M5")
+            self.assertEqual(lane["fills"], 1)
+            self.assertEqual(lane["finals"], 1)
+            self.assertEqual(lane["open_positions"], 0)
+            self.assertEqual(lane["open_cost_at_risk"], 0.0)
+            self.assertEqual(summary["attribution"]["unattributed_final_rows"], 0)
+            self.assertTrue(summary["attribution"]["reconciled"])
+
     def test_unattributed_final_fails_reconciliation_closed(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory); (root / "ledger").mkdir()

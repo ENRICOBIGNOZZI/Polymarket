@@ -479,6 +479,9 @@ class Manager:
             "partition_budget_microdollars": self.partition_microdollars,
             "partition_count": self.partition_count,
             "partition_total_microdollars": self.partition_total_microdollars,
+            "taker_target_quantity_microunits": self.args.target_quantity_microunits,
+            "taker_minimum_tte_ns": self.args.minimum_tte_ns,
+            "taker_maximum_tte_ns": self.args.maximum_tte_ns,
             "evidence_worker_count": int(evidence.get("worker_count") or 0),
             "evidence_dropped": int(evidence.get("dropped") or 0),
             "evidence_queue_depth": int(evidence.get("queue_depth") or 0),
@@ -534,7 +537,7 @@ class Manager:
         if not binance_symbol:
             raise RuntimeError("binance_spot_symbol_missing")
         max_market = min(budget_microdollars, 100_000_000)
-        max_order = min(max_market, 10_000_000)
+        max_order = min(max_market, 20_000_000)
         return [
             str(self.args.engine),
             "--asset", str(market["asset"]),
@@ -553,6 +556,9 @@ class Manager:
             "--close-wall-ns", str(close_wall_ns),
             "--tick-size-e4", str(yes_tick),
             "--min-order-microunits", str(self.args.min_order_microunits),
+            "--target-quantity-microunits", str(self.args.target_quantity_microunits),
+            "--minimum-tte-ns", str(self.args.minimum_tte_ns),
+            "--maximum-tte-ns", str(self.args.maximum_tte_ns),
             "--sleeve-budget-microdollars", str(budget_microdollars),
             "--max-total-exposure-microdollars", str(budget_microdollars),
             "--max-market-exposure-microdollars", str(max_market),
@@ -752,6 +758,9 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--python", default="python3")
     parser.add_argument("--settlement-timeout-seconds", type=int, default=600)
     parser.add_argument("--min-order-microunits", type=int, default=5_000_000)
+    parser.add_argument("--target-quantity-microunits", type=int, default=20_000_000)
+    parser.add_argument("--minimum-tte-ns", type=int, default=5_000_000_000)
+    parser.add_argument("--maximum-tte-ns", type=int, default=120_000_000_000)
     args = parser.parse_args()
     if not exact_sha(args.model_sha):
         parser.error("--model-sha must be exact lowercase 40-hex SHA")
@@ -759,6 +768,10 @@ def parse_args() -> argparse.Namespace:
         parser.error("invalid settlement timeout")
     if args.min_order_microunits <= 0:
         parser.error("invalid minimum order")
+    if args.target_quantity_microunits < args.min_order_microunits:
+        parser.error("target quantity below venue minimum")
+    if args.minimum_tte_ns <= 0 or args.maximum_tte_ns < args.minimum_tte_ns:
+        parser.error("invalid taker tte window")
     return args
 
 
