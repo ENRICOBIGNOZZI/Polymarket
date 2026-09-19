@@ -155,6 +155,15 @@ bool ExternalAssetState::on_venue_event(const ExternalVenueEvent& event,
         && venue.book_source_sequence > 0 && event.source_sequence <= venue.book_source_sequence) {
         return false;
     }
+    if (epoch_changed || event.healthy == 0 || event.gap != 0) {
+        // Derivative fields belong to a connection epoch, not merely a venue.
+        // A recovered funding-only tick must not revive old-epoch OI.
+        venue.context_valid_mask = 0;
+        venue.context_field_receive_ns = {};
+        venue.context_receive_ns = 0;
+        venue.context_healthy = 0;
+        venue.context_gap = 1;
+    }
     const bool composite_inputs_changed = epoch_changed
         || event.event_type == ExternalEventType::BookTop
         || event.event_type == ExternalEventType::Health
@@ -223,7 +232,8 @@ bool ExternalAssetState::on_venue_event(const ExternalVenueEvent& event,
     } else if (event.event_type == ExternalEventType::DerivativeContext) {
         const auto derivative_index = derivative_context_index(event.venue);
         const auto mask = event.context_valid_mask;
-        const bool invalid = derivative_index >= kDerivativeContextVenueCount || mask == 0
+        const bool invalid = event.healthy == 0 || event.gap != 0
+            || derivative_index >= kDerivativeContextVenueCount || mask == 0
             || (mask & ~static_cast<std::uint8_t>(DerivativeContextMarkPrice
                 | DerivativeContextIndexPrice | DerivativeContextFundingRate
                 | DerivativeContextOpenInterest)) != 0
@@ -367,6 +377,16 @@ void ExternalAssetState::on_transport_heartbeat(
     const std::size_t index = venue_index(venue_id);
     if (index >= venues_.size() || connection_epoch == 0 || receive_monotonic_ns <= 0) return;
     auto& venue = venues_[index];
+    if (!healthy || (venue.connection_epoch != 0 && venue.connection_epoch != connection_epoch)) {
+        // Derivative fields belong to a connection epoch, not merely a venue.
+        // A recovered funding-only tick must not revive old-epoch OI.
+        venue.context_valid_mask = 0;
+        venue.context_field_receive_ns = {};
+        venue.context_receive_ns = 0;
+        venue.context_healthy = 0;
+        venue.context_gap = 1;
+        ++state_version_;
+    }
     if (venue.connection_epoch != 0 && venue.connection_epoch != connection_epoch) {
         venue.valid = 0;
         venue.book_source_sequence = 0;

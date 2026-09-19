@@ -99,6 +99,35 @@ void test_risk_off_has_no_slow_state_and_never_requotes_toxic_side() {
         assert(!quote_is_adverse_to_shock(yes,toxic,0));
     }
 }
-int main(){test_risk_off_has_no_slow_state_and_never_requotes_toxic_side();test_independent_freshness_and_no_wait();test_future_fields_and_missing_values();
+void test_derivative_context_cannot_cross_reconnect_or_health_gap() {
+    using namespace pm::v7::external_fair;
+    for (int mode = 0; mode < 5; ++mode) {
+        ExternalAssetState state(1); ExternalStatePolicy policy; ExternalVenueEvent e;
+        e.asset_handle=1; e.venue=VenueId::BinanceUsdM; e.connection_epoch=1;
+        e.local_receive_monotonic_ns=100; e.event_type=ExternalEventType::DerivativeContext;
+        e.healthy=1; e.context_valid_mask=DerivativeContextOpenInterest; e.open_interest=5;
+        assert(state.on_venue_event(e,policy));
+        if (mode==0) {
+            // First event of a new epoch is only a partial funding update.
+            e.connection_epoch=2;
+        } else if (mode==1 || mode==2) {
+            e.event_type=ExternalEventType::Health; e.local_receive_monotonic_ns=150;
+            e.healthy=mode==1 ? 0 : 1; e.gap=mode==2 ? 1 : 0;
+            assert(state.on_venue_event(e,policy));
+            assert(state.snapshot(151,policy).derivative_contexts[2].valid_mask==0);
+        } else {
+            state.on_transport_heartbeat(VenueId::BinanceUsdM,mode==3 ? 2 : 1,150,mode==3);
+            assert(state.snapshot(151,policy).derivative_contexts[2].valid_mask==0);
+            if(mode==3)e.connection_epoch=2;
+        }
+        e.event_type=ExternalEventType::DerivativeContext; e.local_receive_monotonic_ns=200;
+        e.healthy=1; e.gap=0; e.context_valid_mask=DerivativeContextFundingRate; e.funding_rate=.001;
+        assert(state.on_venue_event(e,policy));
+        const auto out=state.snapshot(201,policy);
+        assert(out.derivative_contexts[2].valid_mask==DerivativeContextFundingRate);
+        assert(state.derivative_field_clocks(VenueId::BinanceUsdM)[3]==0);
+    }
+}
+int main(){test_derivative_context_cannot_cross_reconnect_or_health_gap();test_risk_off_has_no_slow_state_and_never_requotes_toxic_side();test_independent_freshness_and_no_wait();test_future_fields_and_missing_values();
     test_bounded_mailbox_overflow_revokes_context();test_publisher_reader_ownership();
     test_decoder_identity_and_causality();test_derivative_fields_do_not_share_a_freshness_clock();}

@@ -35,6 +35,8 @@ No secondary runtime process, order owner, allocator, or ledger is introduced.
 
 Every field retains source receive time, source version and expiry. Publishing
 again does not refresh its source age. Funding updates cannot rejuvenate old OI.
+Reconnects, unhealthy transport and gaps invalidate all derivative field clocks;
+partial recovery cannot resurrect values from the previous connection.
 The source's conservative book clocks, not a JSON file timestamp, gate composite
 features. Missing history remains null. Derivative OI retains venue-native units.
 The currently available RTDS reference is bound only to BTC/M5 and its exact
