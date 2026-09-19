@@ -24,6 +24,7 @@ from v7_research_economic_contract import canonical_hash
 SCHEMA = 'polymarket_v7_native_repricing_label_v1'
 ORIGIN_REASONS = {1, 15, 16, 17}
 HORIZONS = {100, 250, 500, 1000}
+CAPTURE_HORIZONS = {100, 250, 500, 750, 1000, 1250, 1500, 1750, 2000}
 MAX_SOURCE_BYTES = 64 * 1024 * 1024
 MAX_LINE_BYTES = 4 * 1024 * 1024
 MAX_TOTAL_BYTES = 256 * 1024 * 1024
@@ -206,8 +207,10 @@ def build(paths: list[Path], *, require_closed: bool = False) -> tuple[list[dict
                 destination = origins
             elif kind == 6:
                 h = row.get('repricing_horizon_ms')
-                if type(h) is not int or h not in HORIZONS:
+                if type(h) is not int or h not in CAPTURE_HORIZONS:
                     invalid += 1
+                    continue
+                if h not in HORIZONS:
                     continue
                 destination, index = labels, (*key, h)
             if destination is not None:
