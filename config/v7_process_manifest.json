@@ -326,7 +326,9 @@
         "--maker-share-cap-microunits",
         "1000000",
         "--asynchronous-settlement",
-        "--capture-native-decisions"
+        "--capture-native-decisions",
+        "--capture-native-full-context",
+        "BTC:M5"
       ],
       "profile": "core",
       "inputs": [
