@@ -391,12 +391,14 @@ def cutover_command(expected_sha: str, selected: dict[str, Any]) -> str:
     if app != f"/home/{user}/polymarket":
         raise SsmDeployError("invalid cutover app path")
     run_root = selected.get("run_root")
-    if not isinstance(run_root, str) or not run_root.startswith("/"):
+    if run_root in (None, ""):
         run_root = (
             "/mnt/polymarket-data/paper_v7_london"
             if user == "ubuntu"
             else f"/home/{user}/polymarket-runs/paper_v7_london"
         )
+    elif not isinstance(run_root, str) or not run_root.startswith("/"):
+        raise SsmDeployError("unsafe run root")
     if not (
         run_root.startswith(f"/home/{user}/")
         or run_root.startswith("/mnt/polymarket-data/")
@@ -518,20 +520,3 @@ def main() -> int:
             args.region, args.stack_name, args.expected_sha,
             args.expected_tailscale_ip, args.artifact,
         )
-    except (OSError, ValueError, SsmDeployError) as exc:
-        parser.exit(2, f"v7_london_ssm_deploy: {exc}\n")
-    args.output.parent.mkdir(parents=True, exist_ok=True)
-    args.output.write_text(
-        json.dumps(receipt, sort_keys=True, indent=2) + "\n",
-        encoding="utf-8",
-    )
-    print("ssm_deploy_result=success")
-    print(f"deployed_sha={receipt['expected_sha']}")
-    print(f"ssm_instance={receipt['selected']['instance_id']}")
-    print(f"ssm_selection_reason={receipt['selected']['selection_reason']}")
-    print(f"ssm_receipt={args.output}")
-    return 0
-
-
-if __name__ == "__main__":
-    raise SystemExit(main())
