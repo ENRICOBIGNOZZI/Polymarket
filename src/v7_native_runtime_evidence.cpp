@@ -199,6 +199,16 @@ struct NativeRuntimeEvidenceWriter::Impl {
             {"maker_valid_cells", config.maker_valid_cells},
             {"model_family", component},
             {"paper_exploration", true},
+            {"causal_arrival_verified", false},
+            {"exchange_execution_verified", false},
+            {"paper_venue_delay_ns", config.paper_venue_delay_ns},
+            {"paper_assumed_transport_delay_ns", config.paper_assumed_transport_delay_ns},
+            {"paper_terms_sha256", config.paper_terms_sha256},
+            {"paper_execution_reason", static_cast<unsigned>(event.paper_reason)},
+            {"execution_observation_censored", event.paper_censored != 0},
+            {"paper_simulator_semantics", maker ? "PUBLIC_PRINT_QUEUE_RESEARCH"
+                : config.paper_venue_delay_ns < 0 ? "VENUE_TERMS_UNKNOWN_NO_TAKER_FILL"
+                : "LOCAL_RECEIVE_DELAYED_FULL_SIZE_SAME_PRICE_V1"},
             {"economic_authority", "PAPER_EXPLORATION"},
             {"counterfactual", false},
             {"research_evidence_only", false},
@@ -248,6 +258,11 @@ struct NativeRuntimeEvidenceWriter::Impl {
             return out;
         }
         auto out = base(event, "FILL");
+        auto& md = out.at("metadata").as_object();
+        md["local_receive_arrival_modelled"] = event.fill.causal_arrival_modelled != 0;
+        md["simulated_arrival_monotonic_ns"] = event.fill.receive_monotonic_ns;
+        md["arrival_book_receive_monotonic_ns"] = event.fill.arrival_book_receive_ns;
+        md["arrival_book_version"] = event.fill.arrival_book_version;
         const auto price = static_cast<double>(event.fill.price_tick)
             * static_cast<double>(event.fill.tick_size_e4) / 10'000.0;
         out["fill_id"] = "native:" + config.run_id + ":" + config.market_id
@@ -306,6 +321,10 @@ struct NativeRuntimeEvidenceWriter::Impl {
             {"asset", config.asset}, {"horizon", config.horizon},
             {"capture_id", capture_id}, {"connection_epoch", event.connection_epoch},
             {"capture_mode", config.observation_capture_mode},
+            {"capture_semantics_version", 2},
+            {"paper_venue_delay_ns", config.paper_venue_delay_ns},
+            {"paper_assumed_transport_delay_ns", config.paper_assumed_transport_delay_ns},
+            {"paper_terms_sha256", config.paper_terms_sha256},
             {"sequence", ++observation_sequence}, {"kind", event.kind},
             {"event_receive_monotonic_ns", event.event_receive_ns}, {"event_exchange_ns", event.event_exchange_ns},
             {"native_event_kind", event.event_kind},

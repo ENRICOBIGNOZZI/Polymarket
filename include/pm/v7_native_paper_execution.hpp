@@ -23,6 +23,9 @@ enum class NativePaperReason : std::uint8_t {
     CapacityFull = 6,
     LifecycleFailure = 7,
     UnknownOrder = 8,
+    PendingArrival = 9,
+    ArrivalCensored = 10,
+    VenueTermsUnknown = 11,
 };
 
 struct NativePaperFillRecord {
@@ -39,6 +42,9 @@ struct NativePaperFillRecord {
     std::int64_t receive_monotonic_ns = 0;
     OrderState order_state = OrderState::Unknown;
     std::uint8_t taker = 0;
+    std::int64_t arrival_book_receive_ns = 0;
+    std::uint64_t arrival_book_version = 0;
+    std::uint8_t causal_arrival_modelled = 0;
 };
 
 struct NativePaperCancelRecord {
@@ -61,6 +67,8 @@ struct NativePaperSubmitResult {
     NativePaperFillRecord fill{};
     std::uint8_t accepted = 0;
     std::uint8_t resting = 0;
+    std::uint8_t pending_arrival = 0;
+    std::uint8_t censored = 0;
 };
 
 struct NativePaperTradeResult {
@@ -70,11 +78,31 @@ struct NativePaperTradeResult {
     std::uint8_t invalid = 0;
 };
 
+struct NativePaperArrivalRecord {
+    NativeOrderCommand command{};
+    NativePaperSubmitResult result{};
+};
+struct NativePaperArrivalBatch {
+    std::array<NativePaperArrivalRecord, kNativePaperOrderCapacity> records{};
+    std::size_t count = 0;
+    std::uint8_t invalid = 0;
+};
+
 class NativePaperExecutionAdapter final {
 public:
     explicit NativePaperExecutionAdapter(
         NativeSettlementOmsEndpoint& endpoint,
-        std::int64_t cancel_latency_ns = 100'000'000LL) noexcept;
+        std::int64_t cancel_latency_ns = 100'000'000LL,
+        std::int64_t taker_delay_ns = 0,
+        std::int64_t maximum_arrival_book_age_ns = 100'000'000LL) noexcept;
+
+    // A strict receive watermark must pass the scheduled arrival before the
+    // previous consumed book can be used. A later book is never substituted.
+    [[nodiscard]] NativePaperArrivalBatch advance_arrivals(
+        std::uint64_t instrument, const BookHotSnapshot& previous_book,
+        std::int64_t receive_watermark_ns) noexcept;
+    void invalidate_arrivals() noexcept;
+    [[nodiscard]] std::size_t pending_arrivals() const noexcept;
 
     [[nodiscard]] NativePaperSubmitResult submit(
         const NativeOrderCommand& command,
@@ -97,6 +125,22 @@ public:
     [[nodiscard]] std::uint64_t paper_cancels() const noexcept { return paper_cancels_; }
 
 private:
+    struct PendingArrival {
+        NativeOrderCommand command{};
+        std::int64_t deadline_ns = 0;
+        std::uint8_t invalidated = 0;
+    };
+    struct ConsumedTop {
+        std::uint64_t instrument = 0;
+        Side side = Side::None;
+        std::int32_t price_e4 = 0;
+        std::int64_t visible = 0, remaining = 0;
+    };
+    [[nodiscard]] NativePaperSubmitResult match_now(
+        const NativeOrderCommand& command, const BookHotSnapshot& book,
+        std::int64_t now_monotonic_ns) noexcept;
+    [[nodiscard]] ConsumedTop* available_top(
+        const NativeOrderCommand& command, const BookHotSnapshot& book) noexcept;
     struct Slot {
         PaperRestingOrder paper{};
         NativeOrderCommand command{};
@@ -119,6 +163,10 @@ private:
     void clear(Slot& slot) noexcept;
 
     NativeSettlementOmsEndpoint& endpoint_;
+    std::int64_t taker_delay_ns_ = 0;
+    std::int64_t maximum_arrival_book_age_ns_ = 100'000'000LL;
+    std::array<PendingArrival, kNativePaperOrderCapacity> pending_{};
+    std::array<ConsumedTop, 256> consumed_tops_{};
     std::int64_t cancel_latency_ns_ = 100'000'000LL;
     std::array<Slot, kNativePaperOrderCapacity> slots_{};
     std::array<PaperFillEnvelope, kNativePaperOrderCapacity> fill_scratch_{};

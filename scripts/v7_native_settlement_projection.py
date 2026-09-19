@@ -41,7 +41,7 @@ def context_from_fill(row: dict[str, Any]) -> dict[str, str]:
     # These two historical strategies have an explicit immutable BTC/M5 scope.
     # Generic maker/native engine names must never imply an asset by themselves.
     if not asset or not horizon:
-        if meta.get('model_family') in {'crypto_informed_taker', 'lead_lag_taker_v1'}:
+        if meta.get('model_family') == 'lead_lag_taker_v1':
             if (asset and asset != 'BTC') or (horizon and horizon != 'M5'):
                 raise ProjectionError('crypto_context:conflicts_with_frozen_strategy')
             asset, horizon = 'BTC', 'M5'
@@ -134,7 +134,7 @@ def allocate_final(final: dict[str, Any], fills: list[dict[str, Any]]) -> list[d
         context = context_from_fill(fill)
         group = positions.setdefault(key, {'position_id': position, 'token_id': token,
             'component': component, 'context': context, 'cash': Decimal(0),
-            'quantity': Decimal(0), 'fills': [], 'orders': set()})
+            'quantity': Decimal(0), 'fills': [], 'orders': set(), 'receipt': dict(receipt)})
         if group['token_id'] != token or group['context'] != context:
             raise ProjectionError('position_scope:mismatch')
         group['cash'] += delta_cash
@@ -144,7 +144,7 @@ def allocate_final(final: dict[str, Any], fills: list[dict[str, Any]]) -> list[d
     payout = sum((qty * payout_weight(token) for token, qty in inventory.items()), Decimal(0))
     expected = cash + payout
     reported = _money(final.get('final_pnl'), 'final_pnl')
-    tolerance = Decimal('0.00000001') * max(Decimal(1), abs(expected), abs(reported))
+    tolerance = Decimal('0.000001')
     if abs(expected - reported) > tolerance:
         raise ProjectionError('settlement_pnl:mismatch')
     if final.get('realized_cashflow') is not None:
@@ -154,18 +154,30 @@ def allocate_final(final: dict[str, Any], fills: list[dict[str, Any]]) -> list[d
     closed = {group['position_id'] for group in positions.values()}
     if explicit_positions is not None and (not isinstance(explicit_positions, list) or set(explicit_positions) != closed):
         raise ProjectionError('settlement_positions:mismatch')
+    for cost in ('fee', 'slippage', 'unwind_loss', 'capital_cost', 'latency_cost'):
+        if final.get(cost) is not None and _money(final[cost], cost) != 0:
+            raise ProjectionError('aggregate_terminal_cost_allocation:unavailable')
     views = []
     for ordinal, group in enumerate(positions.values()):
         weight = payout_weight(group['token_id'])
         cashout = group['quantity'] * weight
         vm = dict(meta)
         vm.update({'component': group['component'], 'model_family': group['component'],
+            'native_settlement_receipt': group['receipt'],
             'crypto_context': group['context'], 'projection_only': True,
             'canonical_final_record_id': final.get('record_id'),
             'included_fill_ids': list(group['fills']), 'included_order_ids': sorted(group['orders']),
             'won': (weight == 1) if weight in (0, 1) else None, 'attribution_basis': 'SIGNED_FILL_CASHFLOW_PLUS_SETTLEMENT'})
+        # A market FINAL's representative order cannot identify another
+        # position. Allocate identity AND decomposition, not just final_pnl.
+        vm.update({'asset': group['context']['asset'], 'horizon': group['context']['horizon'],
+            'terminal_id': str(final.get('record_id') or settlement) + ':view:' + str(ordinal),
+            'pnl_decomposition': {'trading_cashflow_before_resolution': float(group['cash']),
+                'settlement_payout': float(cashout), 'trading_pnl': float(group['cash'] + cashout)}})
         view = dict(final)
         view.update({'record_id': str(final.get('record_id') or settlement) + ':view:' + str(ordinal),
+            'order_id': next(iter(group['orders'])) if len(group['orders']) == 1 else None,
+            'fill_id': group['fills'][0] if len(group['fills']) == 1 else None,
             'position_id': group['position_id'], 'token_id': group['token_id'],
             'final_pnl': float(group['cash'] + cashout), 'realized_cashflow': float(cashout), 'metadata': vm})
         views.append(view)
