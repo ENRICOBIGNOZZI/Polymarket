@@ -89,6 +89,7 @@ struct NativeRuntimeEvidenceConfig {
     std::string no_token_id;
     std::string fee_source;
     std::string probability_artifact_sha256;
+    std::int64_t probability_evaluation_end_wall_ns = 0;
     std::uint64_t maker_valid_cells = 0;
     std::int64_t minimum_order_microunits = 0;
     std::string risk_policy_sha256;

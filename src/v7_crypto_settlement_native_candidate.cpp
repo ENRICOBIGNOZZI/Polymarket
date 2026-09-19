@@ -91,6 +91,7 @@ struct Options {
     std::string run_root;
     std::string model_sha;
     std::string probability_model;
+    std::int64_t probability_evaluation_end_wall_ns = 0;
     std::string run_id;
     std::string server_id;
     std::string market_id;
@@ -145,6 +146,9 @@ Options parse_options(int argc, char** argv) {
         else if (arg == "--run-root") out.run_root = next();
         else if (arg == "--model-sha") out.model_sha = next();
         else if (arg == "--probability-model") out.probability_model = next();
+        else if (arg == "--probability-evaluation-end-wall-ns")
+            out.probability_evaluation_end_wall_ns = bounded_integer<std::int64_t>(
+                next(), 1, std::numeric_limits<std::int64_t>::max());
         else if (arg == "--run-id") out.run_id = next();
         else if (arg == "--server-id") out.server_id = next();
         else if (arg == "--market-id") out.market_id = next();
@@ -239,6 +243,10 @@ int main(int argc, char** argv) {
             throw std::invalid_argument("strict signal policy hash required");
         const auto probability_model = options.probability_model.empty() ? NativeProbabilityModel{}
             : NativeProbabilityModel::load(options.probability_model, options.model_sha);
+        if (probability_model.loaded && options.probability_evaluation_end_wall_ns <= 0)
+            throw std::invalid_argument("probability model requires fixed evaluation end");
+        if (!probability_model.loaded && options.probability_evaluation_end_wall_ns != 0)
+            throw std::invalid_argument("probability evaluation end without model");
         if (options.validate_only) {
             std::cout << "native crypto settlement candidate configuration PASS\n";
             return 0;
@@ -396,6 +404,8 @@ int main(int argc, char** argv) {
         evidence_config.no_token_id = options.no_token;
         evidence_config.fee_source = options.fee_source;
         evidence_config.probability_artifact_sha256 = probability_model.artifact_sha256;
+        evidence_config.probability_evaluation_end_wall_ns =
+            options.probability_evaluation_end_wall_ns;
         evidence_config.yes_instrument_handle = kYes;
         evidence_config.no_instrument_handle = kNo;
         evidence_config.close_wall_ns = options.close_wall_ns;
@@ -860,7 +870,9 @@ int main(int argc, char** argv) {
                 input.yes_book = yes_book;
                 input.no_book = no_book;
                 input.now_monotonic_ns = monotonic_now_ns();
-                if (probability_model.loaded) {
+                const bool probability_window_open = probability_model.loaded
+                    && wall_now_ns() <= options.probability_evaluation_end_wall_ns;
+                if (probability_window_open) {
                     input.probability = probability_model.predict(input, options.asset, options.horizon);
                     (void)probability_features(input, options.asset, options.horizon,
                         probability_model.shock_scales, decision_features);
@@ -1200,6 +1212,11 @@ int main(int argc, char** argv) {
                 {"diagnostic", coinbase_l2_diagnostic}}},
             {"coinbase", {{"invalid_frames", coinbase_ingress_status.invalid_frames}, {"enqueued", coinbase_ingress_status.enqueued_events}, {"drained", coinbase_ingress_status.drained_events}, {"queued", coinbase_ingress_status.queued}, {"frames", coinbase_status.frames_received}, {"transport_failures", coinbase_status.transport_failures}, {"drops", coinbase_ingress_status.dropped_events}}},
             {"bybit_confirmation", {{"enabled", static_cast<bool>(bybit)}, {"invalid_frames", bybit_ingress_status.invalid_frames}, {"enqueued", bybit_ingress_status.enqueued_events}, {"drained", bybit_ingress_status.drained_events}, {"queued", bybit_ingress_status.queued}, {"frames", bybit_status.frames_received}, {"transport_failures", bybit_status.transport_failures}, {"drops", bybit_ingress_status.dropped_events}}},
+            {"probability_model_configured", probability_model.loaded},
+            {"probability_evaluation_end_wall_ns",
+                probability_model.loaded ? json::value(options.probability_evaluation_end_wall_ns) : json::value(nullptr)},
+            {"probability_evaluation_open",
+                probability_model.loaded && wall_now_ns() <= options.probability_evaluation_end_wall_ns},
             {"signal_policy", {{"minimum_binance_return_bp", options.minimum_absolute_binance_return_bp},
                 {"minimum_confirmation_return_bp", options.minimum_absolute_confirmation_return_bp},
                 {"maximum_signal_age_ns", options.maximum_signal_age_ns},

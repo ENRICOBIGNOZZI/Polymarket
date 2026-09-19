@@ -71,6 +71,10 @@ def test_launcher_wires_policy():
     assert '--signal-policy "$CRYPTO_SIGNAL_POLICY"' in launcher
     assert 'PROBABILITY_MODEL="${PM_V7_PROBABILITY_MODEL:-}"' in launcher
     assert '"${PROBABILITY_MODEL_ARGS[@]}"' in launcher
+    assert 'PM_V7_PROBABILITY_EVALUATION_SECONDS:-7200' in launcher
+    assert 'PROBABILITY_EVALUATION_SECONDS == 7200' in launcher
+    assert '--probability-evaluation-end-wall-ns' in launcher
+    assert '"${PROBABILITY_EVALUATION_ARGS[@]}"' in launcher
 
 def test_native_candidate_wires_bybit_as_explicit_confirmation_source():
     source=(ROOT/'src/v7_crypto_settlement_native_candidate.cpp').read_text()

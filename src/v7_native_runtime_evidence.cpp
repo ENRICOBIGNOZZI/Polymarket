@@ -203,6 +203,9 @@ struct NativeRuntimeEvidenceWriter::Impl {
             {"probability_artifact_sha256", config.probability_artifact_sha256.empty()
                 ? json::value(nullptr) : json::value(config.probability_artifact_sha256)},
             {"probability_forward_calibrated", false},
+            {"probability_evaluation_end_wall_ns",
+                config.probability_evaluation_end_wall_ns > 0
+                    ? json::value(config.probability_evaluation_end_wall_ns) : json::value(nullptr)},
             {"maker_valid_cells", config.maker_valid_cells},
             {"model_family", component},
             {"paper_exploration", true},

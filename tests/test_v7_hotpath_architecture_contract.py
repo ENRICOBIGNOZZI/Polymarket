@@ -66,6 +66,7 @@ def test_native_manager_launcher_invocation_satisfies_current_cli(tmp_path):
     # probability artifact is configured. The static launcher test must model
     # shell expansion rather than pass its literal syntax to argparse.
     command=command.replace('"${PROBABILITY_MODEL_ARGS[@]}"','')
+    command=command.replace('"${PROBABILITY_EVALUATION_ARGS[@]}"','')
     argv=shlex.split(command.rstrip().rstrip(chr(92)))
     with patch.object(sys,'argv',['native-manager',*argv]):args=parse_args()
     assert args.allocation==tmp_path/'control/allocations/crypto_settlement_engine.json'

@@ -695,6 +695,12 @@ class Manager:
             "risk_policy_sha256": self.base_risk_receipt["risk_policy_sha256"],
             "signal_policy_sha256": self.signal_policy_sha256 or None,
             "signal_policy_context_count": len(self.signal_policy),
+            "probability_model_configured": self.args.probability_model is not None,
+            "probability_evaluation_end_wall_ns": self.args.probability_evaluation_end_wall_ns or None,
+            "probability_evaluation_open": (
+                self.args.probability_model is not None
+                and time.time_ns() <= self.args.probability_evaluation_end_wall_ns
+            ),
             "allocated_execution_budget_microdollars": self.allocated_execution_budget_microdollars,
             "engine_pid": min(pids) if pids else 0,
             "engine_pids": pids,
@@ -882,6 +888,8 @@ class Manager:
         probability_model = getattr(self.args, "probability_model", None)
         if probability_model is not None:
             command.extend(["--probability-model", str(probability_model)])
+            command.extend(["--probability-evaluation-end-wall-ns",
+                str(self.args.probability_evaluation_end_wall_ns)])
         scoped_full = _context_key(market) in getattr(self.args, "capture_native_full_context", [])
         full_requested = getattr(self.args, "capture_native_observations", False) or scoped_full
         capture_headroom = shutil.disk_usage(self.run_root).free >= 20 * 1024**3
@@ -1224,6 +1232,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--python", default="python3")
     parser.add_argument("--probability-model", type=Path, default=None,
         help="Explicit frozen experimental PAPER probability artifact; native loader verifies exact SHA")
+    parser.add_argument("--probability-evaluation-end-wall-ns", type=int, default=0,
+        help="Shared wall-clock end of the fixed 7200-second probability PAPER cohort")
     parser.add_argument("--settlement-timeout-seconds", type=int, default=600)
     parser.add_argument("--min-order-microunits", type=int, default=5_000_000)
     parser.add_argument("--target-quantity-microunits", type=int, default=5_000_000)
@@ -1258,6 +1268,10 @@ def parse_args() -> argparse.Namespace:
         parser.error("invalid taker tte window")
     if not 1_000_000 <= args.execution_window_ns <= 10_000_000_000:
         parser.error("invalid execution capture window")
+    if args.probability_model is not None and args.probability_evaluation_end_wall_ns <= 0:
+        parser.error("probability model requires explicit evaluation end wall ns")
+    if args.probability_model is None and args.probability_evaluation_end_wall_ns != 0:
+        parser.error("probability evaluation end requires probability model")
     return args
 
 

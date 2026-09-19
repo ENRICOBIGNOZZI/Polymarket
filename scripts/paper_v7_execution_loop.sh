@@ -21,9 +21,19 @@ CRYPTO_SETTLEMENT_ENGINE="${PM_V7_CRYPTO_SETTLEMENT_ENGINE:-build/polymarket_v7_
 CRYPTO_SIGNAL_POLICY="${PM_V7_CRYPTO_SIGNAL_POLICY:-$ROOT/config/v7_crypto_signal_policy.json}"
 PROBABILITY_MODEL="${PM_V7_PROBABILITY_MODEL:-}"
 PROBABILITY_MODEL_ARGS=()
+PROBABILITY_EVALUATION_ARGS=()
 if [[ -n "$PROBABILITY_MODEL" ]]; then
   [[ -f "$PROBABILITY_MODEL" ]] || { echo "probability model not found: $PROBABILITY_MODEL" >&2; exit 78; }
+  PROBABILITY_EVALUATION_SECONDS="${PM_V7_PROBABILITY_EVALUATION_SECONDS:-7200}"
+  [[ "$PROBABILITY_EVALUATION_SECONDS" =~ ^[1-9][0-9]*$ ]] || { echo "invalid probability evaluation seconds" >&2; exit 78; }
+  (( PROBABILITY_EVALUATION_SECONDS == 7200 )) || { echo "probability PAPER cohort must be exactly 7200 seconds" >&2; exit 78; }
+  PROBABILITY_EVALUATION_END_WALL_NS="$(python3 - "$PROBABILITY_EVALUATION_SECONDS" <<'PY_GATE'
+import sys,time
+print(time.time_ns()+int(sys.argv[1])*1_000_000_000)
+PY_GATE
+)"
   PROBABILITY_MODEL_ARGS=(--probability-model "$PROBABILITY_MODEL")
+  PROBABILITY_EVALUATION_ARGS=(--probability-evaluation-end-wall-ns "$PROBABILITY_EVALUATION_END_WALL_NS")
 fi
 CI_REPOSITORY="${PM_V7_CI_REPOSITORY:-ENRICOBIGNOZZI/Polymarket}"
 SHA="${PM_V7_MODEL_SHA:-$(cat deploy/london/runtime_sha 2>/dev/null || git rev-parse HEAD)}"
@@ -521,6 +531,7 @@ PM_V7_CONTROL_NICE=0 v7_exec_class CONTROL python3 scripts/v7_native_crypto_engi
   --market-registry "$ROOT/config/v7_crypto_settlement_markets.json" \
   --signal-policy "$CRYPTO_SIGNAL_POLICY" \
   "${PROBABILITY_MODEL_ARGS[@]}" \
+  "${PROBABILITY_EVALUATION_ARGS[@]}" \
   --legacy-claims "$RUN_ROOT/control/legacy_native_claims.json" \
   --engine "$CRYPTO_SETTLEMENT_ENGINE" \
   --settler "$ROOT/scripts/v7_native_paper_settlement.py" \
