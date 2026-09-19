@@ -116,6 +116,7 @@ def test_unknown_fee_terms_cannot_create_hypothetical_net_pnl(tmp_path):
     assert r['hypothetical_net_at_limit'] is None
 
 def test_unseen_asset_gets_curvature_uncertainty_not_zero(tmp_path):
+    pytest.importorskip("numpy", reason="research fitter dependency is not part of London/runtime CI")
     import v7_fit_probability_candidate as fit
     rows=[]
     for i in range(12):
