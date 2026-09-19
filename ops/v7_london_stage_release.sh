@@ -7,6 +7,23 @@ RUNTIME_ROOT="${POLYMARKET_RUNTIME_ROOT:-/home/$SERVICE_USER/polymarket-runtime}
 TARGET="$RUNTIME_ROOT/by-sha/$EXPECTED_SHA"
 [[ "$EXPECTED_SHA" =~ ^[0-9a-f]{40}$ ]] || { echo "exact SHA required" >&2; exit 78; }
 [[ "$(uname -s)" == Linux ]] || { echo "London stage requires Linux" >&2; exit 78; }
+LOCK_FILE="${POLYMARKET_LONDON_DEPLOY_LOCK_FILE:-/home/$SERVICE_USER/.cache/polymarket-v7-london-deploy.lock}"
+LOCK_DIR="$(dirname "$LOCK_FILE")"
+command -v flock >/dev/null 2>&1 || { echo "flock is required for London deployment serialization" >&2; exit 78; }
+if [[ "$(id -u)" == 0 ]]; then
+  SERVICE_GROUP="$(id -gn "$SERVICE_USER")"
+  install -d -o "$SERVICE_USER" -g "$SERVICE_GROUP" "$LOCK_DIR"
+  touch "$LOCK_FILE"
+  chown "$SERVICE_USER:$SERVICE_GROUP" "$LOCK_FILE"
+else
+  mkdir -p "$LOCK_DIR"
+  touch "$LOCK_FILE"
+fi
+exec 9>"$LOCK_FILE"
+if ! flock -n 9; then
+  echo "another London stage/cutover already owns this host" >&2
+  exit 73
+fi
 [[ -e "$SOURCE_DIR/.git" && "$(git -C "$SOURCE_DIR" rev-parse --is-inside-work-tree 2>/dev/null)" == true ]] || { echo "source checkout missing" >&2; exit 66; }
 [[ "$(git -C "$SOURCE_DIR" rev-parse HEAD)" == "$EXPECTED_SHA" ]] || { echo "source SHA mismatch" >&2; exit 66; }
 [[ -z "$(git -C "$SOURCE_DIR" status --porcelain)" ]] || { echo "dirty source checkout" >&2; exit 66; }
