@@ -76,24 +76,37 @@ def login(page, email: str, password: str) -> None:
 
     page.wait_for_timeout(1200)
     if "accounts.google.com" in page.url:
-        email_box = first_visible(page.locator('input[type="email"]'))
+        email_box = first_visible(page.locator('input[name="identifier"], input[type="email"]'))
         if email_box is not None:
             email_box.fill(email)
-            nxt = first_visible(page.get_by_role("button", name=re.compile(r"Next", re.I)))
+            nxt = first_visible(page.locator("#identifierNext"))
             if nxt is None:
-                nxt = first_visible(page.get_by_text(re.compile(r"Next", re.I)))
+                nxt = first_visible(page.get_by_role("button", name=re.compile(r"Next", re.I)))
             if nxt is None:
                 raise RuntimeError("google_email_next_missing")
             nxt.click()
+        password_box = page.locator('input[name="Passwd"]')
         try:
-            page.locator('input[type="password"]').wait_for(state="visible", timeout=20000)
+            password_box.wait_for(state="visible", timeout=20000)
         except Exception:
             body = page.locator("body").inner_text(timeout=5000)
-            if any(marker.lower() in body.lower() for marker in INTERACTIVE_MARKERS):
+            lowered = body.lower()
+            if any(marker.lower() in lowered for marker in INTERACTIVE_MARKERS):
                 raise RuntimeError("interactive_auth_required")
+            safe_markers = (
+                ("google_browser_blocked", ("couldn’t sign you in", "couldn't sign you in", "browser or app may not be secure")),
+                ("google_account_not_found", ("couldn’t find your google account", "couldn't find your google account")),
+                ("google_identifier_invalid", ("enter a valid email", "enter a valid email or phone number")),
+                ("google_account_chooser", ("choose an account",)),
+            )
+            for code, markers in safe_markers:
+                if any(marker in lowered for marker in markers):
+                    raise RuntimeError(code)
             raise RuntimeError("google_password_field_missing")
-        page.locator('input[type="password"]').fill(password)
-        nxt = first_visible(page.get_by_role("button", name=re.compile(r"Next", re.I)))
+        password_box.fill(password)
+        nxt = first_visible(page.locator("#passwordNext"))
+        if nxt is None:
+            nxt = first_visible(page.get_by_role("button", name=re.compile(r"Next", re.I)))
         if nxt is None:
             raise RuntimeError("google_password_next_missing")
         nxt.click()
