@@ -97,6 +97,7 @@ struct Options {
     std::int32_t tick_size_e4 = 100;
     std::int64_t min_order_microunits = 5'000'000;
     std::int64_t target_quantity_microunits = 20'000'000;
+    std::int32_t maximum_entry_price_e4 = 10'000;
     std::int64_t minimum_tte_ns = 5'000'000'000LL;
     std::int64_t maximum_tte_ns = 120'000'000'000LL;
     std::int64_t maker_share_cap_microunits = 5'000'000;
@@ -140,6 +141,7 @@ Options parse_options(int argc, char** argv) {
         else if (arg == "--tick-size-e4") out.tick_size_e4 = bounded_integer<std::int32_t>(next(), 1, 5000);
         else if (arg == "--min-order-microunits") out.min_order_microunits = bounded_integer<std::int64_t>(next(), 1, 1'000'000'000);
         else if (arg == "--target-quantity-microunits") out.target_quantity_microunits = bounded_integer<std::int64_t>(next(), 1, 1'000'000'000);
+        else if (arg == "--maximum-entry-price-e4") out.maximum_entry_price_e4 = bounded_integer<std::int32_t>(next(), 1, 9'999);
         else if (arg == "--minimum-tte-ns") out.minimum_tte_ns = bounded_integer<std::int64_t>(next(), 1, 86'400'000'000'000LL);
         else if (arg == "--maximum-tte-ns") out.maximum_tte_ns = bounded_integer<std::int64_t>(next(), 1, 86'400'000'000'000LL);
         else if (arg == "--maker-share-cap-microunits") out.maker_share_cap_microunits = bounded_integer<std::int64_t>(next(), 1, 5'000'000);
@@ -297,6 +299,7 @@ int main(int argc, char** argv) {
         decision_policy.minimum_tte_ns = options.minimum_tte_ns;
         decision_policy.maximum_tte_ns = options.maximum_tte_ns;
         decision_policy.target_quantity_microunits = options.target_quantity_microunits;
+        decision_policy.maximum_entry_price_e4 = options.maximum_entry_price_e4;
         NativeCryptoDecisionLane lane(decision_policy);
         CapitalLimits limits = options.capital_limits;
         if (!options.observation_only && (!limits.valid() || options.risk_policy_sha256.size() != 64
@@ -330,6 +333,7 @@ int main(int argc, char** argv) {
         evidence_config.close_wall_ns = options.close_wall_ns;
         evidence_config.taker_fee_rate = options.taker_fee_rate;
         evidence_config.taker_fee_exponent = options.taker_fee_exponent;
+        evidence_config.taker_maximum_entry_price_e4 = options.maximum_entry_price_e4;
         evidence_config.taker_only_fee = 1;
         evidence_config.paper_venue_delay_ns = options.paper_venue_delay_ns;
         evidence_config.paper_assumed_transport_delay_ns = options.paper_assumed_transport_delay_ns;

@@ -33,6 +33,7 @@ int main() {
     config.close_wall_ns = 2'000'000'000LL;
     config.taker_fee_rate = 0.02;
     config.taker_fee_exponent = 1.0;
+    config.taker_maximum_entry_price_e4 = 7'500;
     config.maker_execution_policy_hash = std::string(16, 'b');
     config.maker_execution_config_hash = std::string(16, 'c');
     config.maker_execution_semantics = "maker-paper-v7.2-bilateral-inventory";
@@ -130,6 +131,7 @@ int main() {
         assert(value.at("model_sha").as_string() == std::string(40, 'a'));
         const auto kind = std::string(value.at("event_type").as_string());
         const auto& metadata = value.at("metadata").as_object();
+        assert(metadata.at("taker_maximum_entry_price_e4").as_int64() == 7'500);
         const auto& receipt = metadata.at("native_settlement_receipt").as_object();
         assert(receipt.at("owner").as_string() == "V7_NATIVE_CRYPTO_SETTLEMENT_ENGINE");
         assert(!receipt.at("real_order_submission").as_bool());
@@ -178,6 +180,7 @@ int main() {
         assert(!observation.at("execution_authority").as_bool());
         assert(observation.at("probability_forecast").is_null());
         assert(observation.at("capture_mode").as_string() == "DECISIONS");
+        assert(observation.at("taker_maximum_entry_price_e4").as_int64() == 7'500);
         assert(observation.at("binance_return_100ms_bp").as_double() == 1.25);
         assert(observation.at("coinbase_return_100ms_bp").as_double() == 0.30);
         assert(observation.at("confirmed_non_opposing").as_bool());
