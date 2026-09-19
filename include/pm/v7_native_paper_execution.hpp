@@ -26,6 +26,9 @@ enum class NativePaperReason : std::uint8_t {
     PendingArrival = 9,
     ArrivalCensored = 10,
     VenueTermsUnknown = 11,
+    PriceImprovementUnmodelled = 12,
+    PartialFillUnmodelled = 13,
+    DepthAccountingUnavailable = 14,
 };
 
 struct NativePaperFillRecord {

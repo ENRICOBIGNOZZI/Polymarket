@@ -256,6 +256,14 @@ NativePaperSubmitResult NativePaperExecutionAdapter::match_now(
         const auto expired = endpoint_.apply_owned(command.client_order_id, expire);
         out.reason = marketable ? NativePaperReason::InsufficientDepth
                                 : NativePaperReason::NotMarketable;
+        if (taker_delay_ns_ > 0) {
+            const bool improved = executable_e4 > 0
+                && (buy ? executable_e4 < limit_e4 : executable_e4 > limit_e4);
+            if (depth == nullptr) out.reason = NativePaperReason::DepthAccountingUnavailable;
+            else if (improved) out.reason = NativePaperReason::PriceImprovementUnmodelled;
+            else if (marketable && executable_qty > 0) out.reason = NativePaperReason::PartialFillUnmodelled;
+            out.censored = depth == nullptr || improved || (marketable && executable_qty > 0);
+        }
         out.final_state = expired.state;
         return out;
     }

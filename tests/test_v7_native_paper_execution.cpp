@@ -205,8 +205,17 @@ void test_delayed_orders_do_not_reuse_visible_liquidity() {
     assert(f.paper.advance_arrivals(11, arrival_book(), 2'400).records[0].result.filled_microunits == 4'000'000);
     assert(f.paper.submit(f.admit(11, 2'000'000, 2'500), arrival_book(), 2'600).pending_arrival);
     auto done = f.paper.advance_arrivals(11, arrival_book(2'800), 2'900);
-    assert(done.count == 1 && done.records[0].result.reason == NativePaperReason::InsufficientDepth);
+    assert(done.count == 1 && done.records[0].result.reason == NativePaperReason::PartialFillUnmodelled);
     assert(f.authority.inventory_snapshot(11).total_microunits == 4'000'000);
+}
+void test_price_improvement_is_unmodelled_not_an_observed_nonfill() {
+    ArrivalFixture f;
+    assert(f.paper.submit(f.admit(), book(), 2'100).pending_arrival);
+    auto improved = arrival_book(); improved.best_ask_e4 = 4000;
+    auto done = f.paper.advance_arrivals(11, improved, 2'400);
+    assert(done.count == 1 && done.records[0].result.censored);
+    assert(done.records[0].result.reason == NativePaperReason::PriceImprovementUnmodelled);
+    assert(f.authority.active_orders() == 0 && f.paper.paper_fills() == 0);
 }
 void test_unknown_delay_and_overflow_never_make_a_fill() {
     for (const auto delay : {-1LL, 9223372036854775807LL}) {
@@ -224,6 +233,7 @@ int main() {
     test_price_moves_before_arrival_no_fill_and_no_future_substitution();
     test_delayed_orders_do_not_reuse_visible_liquidity();
     test_unknown_delay_and_overflow_never_make_a_fill();
+    test_price_improvement_is_unmodelled_not_an_observed_nonfill();
     test_taker_fills_common_authority();
     test_maker_queue_and_cancel_latency();
     test_maker_fill_after_queue_depletion();

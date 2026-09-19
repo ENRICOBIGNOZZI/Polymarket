@@ -17,7 +17,7 @@ a later PM event. Unknown terms, future/stale books and continuity failures are
 censored. Visible size is not replenished merely by a new message version.
 Pending arrivals retain their reservation; shutdown censors and closes them.
 The retained policy requires full size at the same limit price. This is NOT a
-complete FAK exchange replica: partial fills and price improvement are excluded.
+complete FAK exchange replica: partial fills and price improvement are censored, not counted as observed nonfills.
 The offline replay supports separate full/partial-fill research scenarios.
 
 Public CLOB itode is checked against the exact condition and both token IDs.

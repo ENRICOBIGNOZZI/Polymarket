@@ -747,6 +747,8 @@ class Manager:
             # CLOB terms are market-scoped remote metadata. Quarantine/retry
             # this context without taking down already-running contexts.
             raise RetryableLaunchError(f"clob_market_terms:{exc}") from exc
+        if minimum_order > self.args.target_quantity_microunits:
+            raise RetryableLaunchError("venue_minimum_exceeds_frozen_target_no_automatic_upsizing")
         fee_rate, fee_exponent, fee_source = fee_parameters(market)
         terms = execution_terms_snapshot(market, public_json)
         terms_path = persist_execution_terms(self.run_root, terms)
@@ -794,7 +796,7 @@ class Manager:
             "--close-wall-ns", str(close_wall_ns),
             "--tick-size-e4", str(yes_tick),
             "--min-order-microunits", str(minimum_order),
-            "--target-quantity-microunits", str(max(self.args.target_quantity_microunits, minimum_order)),
+            "--target-quantity-microunits", str(self.args.target_quantity_microunits),
             "--minimum-tte-ns", str(self.args.minimum_tte_ns),
             "--maximum-tte-ns", str(self.args.maximum_tte_ns),
             "--maker-share-cap-microunits", str(self.args.maker_share_cap_microunits),
