@@ -72,6 +72,7 @@ def test_native_manager_launcher_invocation_satisfies_current_cli(tmp_path):
     assert not args.capture_native_observations
     assert args.capture_native_decisions
     assert args.target_quantity_microunits == 5_000_000
+    assert args.maximum_entry_price_e4 == 7_500
     assert args.minimum_tte_ns == 105_000_000_000
     assert args.maximum_tte_ns == 120_000_000_000
     assert args.maker_share_cap_microunits==1_000_000

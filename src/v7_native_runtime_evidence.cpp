@@ -100,6 +100,7 @@ bool NativeRuntimeEvidenceConfig::valid() const noexcept {
         && no_instrument_handle != 0 && yes_instrument_handle != no_instrument_handle
         && close_wall_ns > 0 && std::isfinite(taker_fee_rate) && taker_fee_rate >= 0.0
         && std::isfinite(taker_fee_exponent) && taker_fee_exponent >= 0.0
+        && taker_maximum_entry_price_e4 > 0 && taker_maximum_entry_price_e4 <= 10'000
         && (observation_capture_mode == "NONE"
             || observation_capture_mode == "DECISIONS"
             || observation_capture_mode == "FULL");
@@ -201,6 +202,7 @@ struct NativeRuntimeEvidenceWriter::Impl {
             {"paper_exploration", true},
             {"causal_arrival_verified", false},
             {"exchange_execution_verified", false},
+            {"taker_maximum_entry_price_e4", config.taker_maximum_entry_price_e4},
             {"paper_venue_delay_ns", config.paper_venue_delay_ns},
             {"paper_assumed_transport_delay_ns", config.paper_assumed_transport_delay_ns},
             {"paper_terms_sha256", config.paper_terms_sha256},
@@ -322,6 +324,7 @@ struct NativeRuntimeEvidenceWriter::Impl {
             {"capture_id", capture_id}, {"connection_epoch", event.connection_epoch},
             {"capture_mode", config.observation_capture_mode},
             {"capture_semantics_version", 2},
+            {"taker_maximum_entry_price_e4", config.taker_maximum_entry_price_e4},
             {"paper_venue_delay_ns", config.paper_venue_delay_ns},
             {"paper_assumed_transport_delay_ns", config.paper_assumed_transport_delay_ns},
             {"paper_terms_sha256", config.paper_terms_sha256},

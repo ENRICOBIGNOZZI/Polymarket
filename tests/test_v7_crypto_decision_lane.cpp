@@ -113,6 +113,27 @@ void test_duplicate_depth_tte_and_market_gates() {
     auto closed = input(1, 5); closed.market.closed = 1;
     assert(lane.evaluate(closed, capital).reason == NativeCryptoDecisionReason::MarketUnavailable);
 }
+void test_entry_price_cap_rejects_without_consuming_signal() {
+    NativeCryptoDecisionPolicy policy;
+    policy.maximum_entry_price_e4 = 7'500;
+    NativeCryptoDecisionLane lane(policy);
+    SleeveCapitalAccount capital(limits());
+
+    auto expensive = input(1, 30);
+    expensive.yes_book = book(7'600);
+    const auto rejected = lane.evaluate(expensive, capital);
+    assert(rejected.accepted == 0);
+    assert(rejected.reason == NativeCryptoDecisionReason::EntryPriceTooHigh);
+
+    auto cheaper = input(1, 30);
+    cheaper.yes_book = book(7'400);
+    const auto accepted = lane.evaluate(cheaper, capital);
+    assert(accepted.accepted == 1);
+    assert(accepted.reason == NativeCryptoDecisionReason::Accepted);
+    assert(accepted.intent.price_tick == 74);
+    assert(capital.release_order(accepted.intent.intent_id));
+}
+
 void test_market_traded_and_capital_denied() {
     NativeCryptoDecisionLane lane({});
     SleeveCapitalAccount capital(limits());
@@ -193,6 +214,7 @@ void test_runtime_policy_allows_twenty_shares_across_five_to_120_seconds() {
 int main() {
     test_up_down_and_admission();
     test_duplicate_depth_tte_and_market_gates();
+    test_entry_price_cap_rejects_without_consuming_signal();
     test_market_traded_and_capital_denied();
     test_evaluate_is_allocation_free();
     test_construct_candidate_defers_capital_to_unified_owner();
