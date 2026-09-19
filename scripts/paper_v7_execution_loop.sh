@@ -27,11 +27,7 @@ if [[ -n "$PROBABILITY_MODEL" ]]; then
   PROBABILITY_EVALUATION_SECONDS="${PM_V7_PROBABILITY_EVALUATION_SECONDS:-7200}"
   [[ "$PROBABILITY_EVALUATION_SECONDS" =~ ^[1-9][0-9]*$ ]] || { echo "invalid probability evaluation seconds" >&2; exit 78; }
   (( PROBABILITY_EVALUATION_SECONDS == 7200 )) || { echo "probability PAPER cohort must be exactly 7200 seconds" >&2; exit 78; }
-  PROBABILITY_EVALUATION_END_WALL_NS="$(python3 - "$PROBABILITY_EVALUATION_SECONDS" <<'PY_GATE'
-import sys,time
-print(time.time_ns()+int(sys.argv[1])*1_000_000_000)
-PY_GATE
-)"
+  PROBABILITY_EVALUATION_END_WALL_NS="$(python3 scripts/v7_probability_evaluation_gate.py     --gate "$RUN_ROOT/control/probability_evaluation_gate.json"     --model "$PROBABILITY_MODEL" --code-sha "$SHA"     --duration-seconds "$PROBABILITY_EVALUATION_SECONDS" --print-end-wall-ns)"
   PROBABILITY_MODEL_ARGS=(--probability-model "$PROBABILITY_MODEL")
   PROBABILITY_EVALUATION_ARGS=(--probability-evaluation-end-wall-ns "$PROBABILITY_EVALUATION_END_WALL_NS")
 fi
