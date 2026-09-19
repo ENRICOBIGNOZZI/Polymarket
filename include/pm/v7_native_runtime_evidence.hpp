@@ -1,6 +1,7 @@
 #pragma once
 
 #include "pm/v7_execution_plan.hpp"
+#include "pm/v7_external_fair.hpp"
 #include "pm/v7_native_order_tx.hpp"
 #include "pm/v7_native_paper_execution.hpp"
 #include "pm/v7_spsc.hpp"
@@ -65,6 +66,8 @@ struct NativeObservation {
     std::uint8_t event_kind = 0;
     double signal_return_bp = 0.0;
     double binance_return_100ms_bp = 0.0, coinbase_return_100ms_bp = 0.0;
+    double confirmation_return_100ms_bp = 0.0;
+    external_fair::VenueId confirmation_venue = external_fair::VenueId::Unknown;
     double expected_ev = 0.0, ev_uncertainty = 0.0;
     std::int64_t proposed_quantity = 0, proposed_price_tick = 0;
     std::uint64_t connection_epoch = 0;
@@ -103,6 +106,7 @@ struct NativeRuntimeEvidenceConfig {
     std::int64_t paper_venue_delay_ns = -1;
     std::int64_t paper_assumed_transport_delay_ns = 250'000'000LL;
     std::string paper_terms_sha256;
+    std::string signal_policy_sha256;
 
     [[nodiscard]] bool valid() const noexcept;
 };

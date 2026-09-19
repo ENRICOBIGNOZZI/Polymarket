@@ -101,8 +101,10 @@ bool NativeRuntimeEvidenceConfig::valid() const noexcept {
         && close_wall_ns > 0 && std::isfinite(taker_fee_rate) && taker_fee_rate >= 0.0
         && std::isfinite(taker_fee_exponent) && taker_fee_exponent >= 0.0
         && taker_maximum_entry_price_e4 > 0 && taker_maximum_entry_price_e4 <= 10'000
+        && (signal_policy_sha256.empty() || exact_sha(signal_policy_sha256))
         && (observation_capture_mode == "NONE"
             || observation_capture_mode == "DECISIONS"
+            || observation_capture_mode == "DECISION_WINDOWS"
             || observation_capture_mode == "FULL");
 }
 
@@ -210,11 +212,13 @@ struct NativeRuntimeEvidenceWriter::Impl {
             {"paper_venue_delay_ns", config.paper_venue_delay_ns},
             {"paper_assumed_transport_delay_ns", config.paper_assumed_transport_delay_ns},
             {"paper_terms_sha256", config.paper_terms_sha256},
+            {"signal_policy_sha256", config.signal_policy_sha256.empty()
+                ? json::value(nullptr) : json::value(config.signal_policy_sha256)},
             {"paper_execution_reason", static_cast<unsigned>(event.paper_reason)},
             {"execution_observation_censored", event.paper_censored != 0},
             {"paper_simulator_semantics", maker ? "PUBLIC_PRINT_QUEUE_RESEARCH"
                 : config.paper_venue_delay_ns < 0 ? "VENUE_TERMS_UNKNOWN_NO_TAKER_FILL"
-                : "LOCAL_RECEIVE_DELAYED_FULL_SIZE_SAME_PRICE_V1"},
+                : "LOCAL_RECEIVE_DELAYED_ARRIVAL_PRICE_PARTIAL_FAK_V2"},
             {"economic_authority", "PAPER_EXPLORATION"},
             {"counterfactual", false},
             {"research_evidence_only", false},
@@ -274,6 +278,14 @@ struct NativeRuntimeEvidenceWriter::Impl {
                 md["conservative_net_edge_per_share"] = event.economics.conservative_net_edge;
                 md["fee_estimate_per_share"] = event.economics.fee_per_share;
                 md["all_in_cost_ceiling_per_share"] = event.economics.cost_per_share;
+                md["decision_observed_ask"] =
+                    static_cast<double>(event.economics.observed_ask_e4) / 10'000.0;
+                md["maximum_executable_price"] =
+                    static_cast<double>(event.economics.maximum_executable_price_e4) / 10'000.0;
+                md["worst_case_all_in_cost_per_share"] =
+                    event.economics.worst_case_cost_per_share;
+                md["worst_case_conservative_net_edge_per_share"] =
+                    event.economics.worst_case_conservative_net_edge;
                 md["order_cost_ceiling_microdollars"] = event.economics.cost_ceiling_microdollars;
                 md["uncertainty_semantics"] = "MODEL_PROXY_NOT_COVERAGE_CERTIFIED";
                 md["execution_reserve_is_measured"] = false;
@@ -382,6 +394,12 @@ struct NativeRuntimeEvidenceWriter::Impl {
                 ? json::value(event.binance_return_100ms_bp) : json::value(nullptr)},
             {"coinbase_return_100ms_bp", std::isfinite(event.coinbase_return_100ms_bp)
                 ? json::value(event.coinbase_return_100ms_bp) : json::value(nullptr)},
+            {"confirmation_return_100ms_bp", std::isfinite(event.confirmation_return_100ms_bp)
+                ? json::value(event.confirmation_return_100ms_bp) : json::value(nullptr)},
+            {"confirmation_venue",
+                event.confirmation_venue == external_fair::VenueId::BybitSpot ? "BYBIT"
+                : event.confirmation_venue == external_fair::VenueId::CoinbaseSpot ? "COINBASE"
+                : "UNKNOWN"},
             {"direction", event.direction},
             {"confirmed_non_opposing", event.confirmed_non_opposing != 0},
             {"signal_valid", event.signal_valid != 0},

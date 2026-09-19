@@ -30,7 +30,11 @@ def feature_vector(r, scales):
     total=float(f['bid_quantity'])+float(f['ask_quantity'])
     if age<0 or tte<=0 or total<=0:raise ValueError('invalid time/depth')
     x=[1.,math.log(pm/(1-pm)),min(10.,abs(float(f['binance_return_100ms_bp']))/scale),
-       max(-10.,min(10.,direction*float(f['coinbase_return_100ms_bp'])/scale)),
+       max(-10.,min(10.,direction*float(
+           f.get('confirmation_return_100ms_bp')
+           if f.get('confirmation_venue') not in (None,'UNKNOWN')
+           and f.get('confirmation_return_100ms_bp') is not None
+           else f['coinbase_return_100ms_bp'])/scale)),
        min(2.,math.log1p(age)/math.log(5001.)),max(-3.,min(3.,math.log(tte/120.))),
        min(20.,(ask-bid)/100.),(float(f['bid_quantity'])-float(f['ask_quantity']))/total]
     x += [float(a==v) for v in ASSETS]
@@ -106,14 +110,23 @@ def train(rows, output, code_sha, seed=20260919):
     for _ in range(128):
         selected=rng.choice(unique,len(unique),replace=True);counts={v:int(np.sum(selected==v)) for v in unique}
         boot_w=w*np.array([counts[v] for v in block]);draws.append(fit(X,y,boot_w,penalty))
-    covariance=np.cov(np.asarray(draws),rowvar=False,ddof=1)
+    bootstrap_covariance=np.cov(np.asarray(draws),rowvar=False,ddof=1)
+    fitted_q=sigmoid(X@b)
+    hessian=X.T@((w*fitted_q*(1-fitted_q))[:,None]*X)+np.diag(penalty)
+    # Bootstrap variance can be exactly zero for an unseen dummy/context because
+    # every resample contains the same absence. The inverse penalized curvature
+    # is an explicit uncertainty floor for those weakly identified directions.
+    curvature_covariance=np.linalg.inv(hessian)
+    covariance=bootstrap_covariance+curvature_covariance
     artifact={'schema':'v7_probability_logit_candidate_v1','feature_schema':list(FEATURES),
       'code_sha':code_sha,'created_unix':time.time(),'training_data_sha256':hashlib.sha256(json.dumps(rows,sort_keys=True).encode()).hexdigest(),
       'coefficients':b.tolist(),'covariance':covariance.tolist(),'shock_scales':s,
       'asset_order':list(ASSETS),'horizon_order':list(HORIZONS),'training_orders':len(usable),
       'training_markets':len({r['market_id'] for r in usable}),'excluded_orders':excluded,
+      'training_orders_by_context':{f'{a}:{h}':sum(r['asset']==a and r['horizon']==h for r in usable)
+          for a in ASSETS for h in HORIZONS},
       'time_blocks':len(unique),'uncertainty_z':1.645,'explicit_logit_reserve':.25,
-      'uncertainty_semantics':'15MIN_BLOCK_BOOTSTRAP_MODEL_COVARIANCE_PLUS_EXPLICIT_LOGIT_RESERVE_NOT_COVERAGE_CERTIFIED',
+      'uncertainty_semantics':'15MIN_BLOCK_BOOTSTRAP_PLUS_INVERSE_PENALIZED_CURVATURE_PLUS_EXPLICIT_LOGIT_RESERVE_NOT_COVERAGE_CERTIFIED',
       'forward_calibrated':False,'parameters_empirically_fitted':True,'paper_only':True,
       'prediction_target':'SETTLEMENT_PAYOFF_GIVEN_DECISION_FEATURES_NOT_FILL_CONDITIONED',
       'proposal_population':'HISTORICAL_SUBMITTED_ORDERS_ONLY',
@@ -122,6 +135,8 @@ def train(rows, output, code_sha, seed=20260919):
       'test_duration_seconds':7200,'excluded_assets':[],'asset_shadow_overrides':[],
       'maximum_order_cost_microdollars':3750000,'maximum_quantity_microunits':20000000,
       'execution_reserve_per_share':.005,'execution_reserve_is_measured':False,
+      'minimum_net_edge':.02,'fractional_kelly':.25,'maximum_chase_ticks':2,
+      'execution_policy_semantics':'CONSERVATIVE_PROBABILITY_EDGE_WITH_TWO_TICK_MAX_CHASE',
       'diagnostics':diagnostics}
     output.write_text(json.dumps(artifact,indent=2,allow_nan=False))
     return artifact

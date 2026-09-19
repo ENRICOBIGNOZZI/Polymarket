@@ -33,7 +33,9 @@ json::object artifact() {
       {"feature_schema",features},{"asset_order",assets},{"horizon_order",horizons},
       {"coefficients",coefficients},{"covariance",cov},{"shock_scales",scales},
       {"uncertainty_z",1.645},{"explicit_logit_reserve",.25},
-      {"execution_reserve_per_share",.005},{"maximum_order_cost_microdollars",3750000},
+      {"execution_reserve_per_share",.005},{"minimum_net_edge",.02},
+      {"fractional_kelly",.25},{"maximum_chase_ticks",2},
+      {"maximum_order_cost_microdollars",3750000},
       {"maximum_quantity_microunits",20000000}};
 }
 NativeCryptoDecisionInput input() {

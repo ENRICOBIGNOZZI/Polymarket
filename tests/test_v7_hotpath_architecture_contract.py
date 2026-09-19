@@ -62,6 +62,10 @@ def test_native_manager_launcher_invocation_satisfies_current_cli(tmp_path):
         'CRYPTO_SETTLEMENT_ENGINE':str(ROOT/'build/polymarket_v7_crypto_settlement_engine'),
         'ALLOC':str(tmp_path/'control/allocations')}
     for key,value in environment.items():command=command.replace('$'+key,value)
+    # The optional shell array expands to zero argv elements when no private
+    # probability artifact is configured. The static launcher test must model
+    # shell expansion rather than pass its literal syntax to argparse.
+    command=command.replace('"${PROBABILITY_MODEL_ARGS[@]}"','')
     argv=shlex.split(command.rstrip().rstrip(chr(92)))
     with patch.object(sys,'argv',['native-manager',*argv]):args=parse_args()
     assert args.allocation==tmp_path/'control/allocations/crypto_settlement_engine.json'

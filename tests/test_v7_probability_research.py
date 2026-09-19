@@ -114,3 +114,25 @@ def test_unknown_fee_terms_cannot_create_hypothetical_net_pnl(tmp_path):
     r=json.loads((out/'orders.json').read_text())[0]
     assert r['hypothetical_payoff_at_limit']==3.
     assert r['hypothetical_net_at_limit'] is None
+
+def test_unseen_asset_gets_curvature_uncertainty_not_zero(tmp_path):
+    import v7_fit_probability_candidate as fit
+    rows=[]
+    for i in range(12):
+        rows.append({
+            'market_id':f'm{i}','asset':'BTC','horizon':'M5',
+            'selected_outcome':float(i%2),'feature_join':'UNIQUE',
+            'close_ts_ms':(i+1)*900_000,'decision_ts_ms':(i+1)*900_000-10_000,
+            'features':{
+                'direction':1,'bid_e4':3900,'ask_e4':4100,
+                'bid_quantity':6_000_000,'ask_quantity':4_000_000,
+                'binance_return_100ms_bp':.5+(i%3)*.1,
+                'coinbase_return_100ms_bp':.1,'confirmation_venue':'COINBASE',
+                'confirmation_return_100ms_bp':.1,
+                'signal_age_ns':10_000_000,'tte_ns':110_000_000_000,
+            }})
+    out=tmp_path/'model.json'
+    artifact=fit.train(rows,out,'a'*40,seed=7)
+    bnb_index=fit.FEATURES.index('asset_BNB')
+    assert artifact['training_orders_by_context']['BNB:M5']==0
+    assert artifact['covariance'][bnb_index][bnb_index] > 0.01

@@ -11,7 +11,7 @@ from pathlib import Path
 
 PAPER_REASONS = {1:'FILLED',3:'BOOK_UNAVAILABLE',4:'NOT_MARKETABLE',
     10:'ARRIVAL_CENSORED',11:'VENUE_TERMS_UNKNOWN',12:'PRICE_IMPROVEMENT_UNMODELLED',
-    13:'PARTIAL_FILL_UNMODELLED',14:'DEPTH_ACCOUNTING_UNAVAILABLE'}
+    13:'PARTIAL_FILL_UNMODELLED',14:'DEPTH_ACCOUNTING_UNAVAILABLE',15:'PARTIAL_FILL_MODELLED'}
 
 def load_rows(path: Path):
     seen=set()
@@ -110,7 +110,7 @@ def build(snapshot: Path, root: Path, output: Path, fetch_public: bool):
     for p in (root/'research/native_observations').glob('*/*'):
         if p.name.endswith(('.jsonl','.jsonl.gz')):
             file_index[(p.parent.name,p.name.split('-')[0])].append(p)
-    rows=[]; feature_fields=['binance_return_100ms_bp','coinbase_return_100ms_bp','signal_age_ns','tte_ns','bid_e4','ask_e4','bid_quantity','ask_quantity','direction','fee_rate','fee_exponent','close_wall_ns']
+    rows=[]; feature_fields=['binance_return_100ms_bp','coinbase_return_100ms_bp','confirmation_return_100ms_bp','confirmation_venue','signal_age_ns','tte_ns','bid_e4','ask_e4','bid_quantity','ask_quantity','direction','fee_rate','fee_exponent','close_wall_ns']
     for oid,s in subs.items():
         md=s.get('metadata') or {};state=states.get(oid,{})
         reason=int((state.get('metadata') or {}).get('paper_execution_reason') or 0)

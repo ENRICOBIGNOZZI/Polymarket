@@ -82,11 +82,17 @@ NativeProbabilityModel NativeProbabilityModel::load(
     model.uncertainty_z=number(o.at("uncertainty_z"));
     model.explicit_logit_reserve=number(o.at("explicit_logit_reserve"));
     model.execution_reserve_per_share=number(o.at("execution_reserve_per_share"));
+    model.minimum_net_edge=number(o.at("minimum_net_edge"));
+    model.fractional_kelly=number(o.at("fractional_kelly"));
+    model.maximum_chase_ticks=static_cast<std::int32_t>(o.at("maximum_chase_ticks").as_int64());
     model.maximum_order_cost_microdollars=o.at("maximum_order_cost_microdollars").as_int64();
     model.maximum_quantity_microunits=o.at("maximum_quantity_microunits").as_int64();
     if(model.uncertainty_z<1.0 || model.uncertainty_z>10. || model.explicit_logit_reserve<0.
         || model.explicit_logit_reserve>10. || model.execution_reserve_per_share<0.
-        || model.execution_reserve_per_share>=1. || model.maximum_order_cost_microdollars<=10
+        || model.execution_reserve_per_share>=1. || model.minimum_net_edge<0.
+        || model.minimum_net_edge>.25 || model.fractional_kelly<=0. || model.fractional_kelly>1.
+        || model.maximum_chase_ticks<0 || model.maximum_chase_ticks>20
+        || model.maximum_order_cost_microdollars<=10
         || model.maximum_order_cost_microdollars>3'750'000 || model.maximum_quantity_microunits<=0
         || model.maximum_quantity_microunits>20'000'000)
         throw std::invalid_argument("probability experiment risk contract");
@@ -108,7 +114,9 @@ bool probability_features(const NativeCryptoDecisionInput& in,std::string_view a
         || in.signal.trigger_receive_monotonic_ns>in.now_monotonic_ns
         || in.market.close_monotonic_ns<=in.now_monotonic_ns
         || !std::isfinite(in.signal.binance_return_100ms_bp)
-        || !std::isfinite(in.signal.coinbase_return_100ms_bp))return false;
+        || !std::isfinite(in.signal.confirmation_venue != external_fair::VenueId::Unknown
+            ? in.signal.confirmation_return_100ms_bp
+            : in.signal.coinbase_return_100ms_bp))return false;
     const auto& b=in.signal.direction>0?in.yes_book:in.no_book;
     const double scale=scales[static_cast<std::size_t>(a-kProbabilityAssets.begin())];
     const double age=static_cast<double>(in.now_monotonic_ns-in.signal.trigger_receive_monotonic_ns)/1e6;
@@ -123,7 +131,11 @@ bool probability_features(const NativeCryptoDecisionInput& in,std::string_view a
     const double mid=std::clamp((static_cast<double>(b.best_bid_e4)+b.best_ask_e4)/20000.,.0001,.9999);
     x={};x[0]=1.;x[1]=std::log(mid/(1.-mid));
     x[2]=std::min(10.,std::abs(in.signal.binance_return_100ms_bp)/scale);
-    x[3]=std::clamp(in.signal.direction*in.signal.coinbase_return_100ms_bp/scale,-10.,10.);
+    const double confirmation_return =
+        in.signal.confirmation_venue != external_fair::VenueId::Unknown
+            ? in.signal.confirmation_return_100ms_bp
+            : in.signal.coinbase_return_100ms_bp;
+    x[3]=std::clamp(in.signal.direction*confirmation_return/scale,-10.,10.);
     x[4]=std::min(2.,std::log1p(age)/std::log(5001.));
     x[5]=std::clamp(std::log(tte/120.),-3.,3.);
     x[6]=std::min(20.,(b.best_ask_e4-b.best_bid_e4)/100.);

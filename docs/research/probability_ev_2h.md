@@ -21,7 +21,9 @@ reports must remain in the private research archive, not this public repository.
   Fees and an explicit, separately identified execution reserve are subtracted.
 - Fractional-Kelly sizing uses the conservative net edge, a hard dollar ceiling,
   available canonical capital and visible depth. It never rounds a position UP
-  through the risk ceiling to meet the venue minimum.
+  through the risk ceiling to meet the venue minimum. The experimental execution
+  limit may chase at most two ticks, and only while the conservative net edge
+  remains above the frozen minimum after fee and execution reserve.
 - The experimental logistic model uses a market-probability prior and regularized
   deviations for shock size, confirmation, signal age, TTE, spread, imbalance,
   asset and horizon. Markets receive equal training weight. Time-block bootstrap
@@ -50,21 +52,44 @@ Multiplying unconditional probability edge by a fill rate generally does not
 identify this objective. An execution model must account for selection into
 fills, censoring, partial size and actual arrival prices.
 
-The existing PAPER matcher deliberately censors price-improvement cases because
-capital/inventory accounting currently uses the submitted price. Removing the
-price-equality condition without carrying actual fill price through the OMS and
-cost-basis owner is NOT an acceptable fix. Changing simulation realism is not an
-increase in proven profitability. Unknown venue terms remain a blocking condition.
+The PAPER matcher now carries the actual arrival execution price through the OMS
+and capital/inventory cost basis. A FAK fills when the arrival top is at or better
+than its limit; visible partial quantity fills and the remainder expires. Price
+improvement is therefore not mislabeled as a non-fill. This is still simulated
+execution, not exchange-confirmed execution, and unknown venue terms remain a
+blocking condition.
 
-The original proposal trigger still has legacy trade-return and confirmation
-semantics. This PR changes valuation and sizing when explicitly supplied a model;
-it does not claim that the complete signal-generation system is redesigned.
-In particular, a missing Coinbase context needs an explicitly identified
-alternative confirmation venue; no venue may be relabelled as Coinbase.
+Signal selection is context-specific through `config/v7_crypto_signal_policy.json`.
+The 30 asset/horizon contexts have independently frozen shock and maximum-age
+parameters for the forward PAPER window. These numbers are exploratory rather
+than claimed optima. A positive second-venue move is required: a flat venue is no
+longer treated as confirmation. BNB keeps Binance spot as the trigger and uses
+Bybit spot as an explicitly identified confirmation source because the registered
+BNB contexts have no Coinbase spot symbol. Bybit is never relabelled as Coinbase.
+
+When the probability/EV model is explicitly active, its order limit may chase a
+small predeclared number of ticks only while the conservative settlement edge
+still exceeds fee plus execution reserve. Sizing pays the worst admissible price,
+while accounting pays the actual simulated fill price. Optimizing raw fill rate
+is not the objective.
 
 Native volatility diagnostics are event-time EWMA quantities, not per-second
 settlement volatility. Missing long-horizon history, an opening settlement
 reference or oracle basis must not be replaced by numerical zero.
+
+## Asset/context-specific trigger parameters
+
+The same raw 100ms return is not economically equivalent across crypto assets.
+The next PAPER cohort therefore freezes a separate `(asset, horizon)` policy for
+minimum Binance movement, second-venue confirmation and maximum signal age. The
+parameters are intentionally stored outside the hot code path. They are not
+post-hoc optimized during the two-hour cohort. Historical diagnostics motivated
+the heterogeneity, but prospective results decide whether it survives.
+
+The long-run target is stronger: use a normalized shock such as return divided by
+current exchange tick and properly time-normalized volatility, with asset/horizon
+calibration on top. Raw bp thresholds are a transitional guard, not the final
+alpha representation.
 
 ## Two-hour prospective protocol
 
@@ -95,17 +120,20 @@ No automatic promotion or enlargement of risk follows a positive sample.
    artifact outside Git. Its exact `code_sha` must match the staged runtime.
 3. Validate the native binary with `--probability-model /private/model.json
    --model-sha <exact-sha> --validate-only`.
-4. For an explicitly authorized, checked activation, the manager accepts
-   `--probability-model`. The standard launch script does not silently enable it.
+4. For an explicitly authorized, checked activation, set
+   PM_V7_PROBABILITY_MODEL=/private/model.json. The launcher checks that the
+   file exists and passes it to the manager. Without that environment variable,
+   the probability model remains disabled.
 5. Keep the rollout gated until the empirical candidate, source coverage, joint
    execution interpretation and normal exact-SHA deployment checks are reviewed.
 
 ## Remaining work before claiming a completed redesign
 
-- Causal, venue-neutral midprice signals normalized for tick size and volatility.
-- An explicitly wired alternative confirmation venue for unsupported contexts.
+- Replace transitional raw-bp shock gates with causal tick- and time-volatility-
+  normalized features, then re-estimate context parameters prospectively.
 - Actual settlement opening reference, oracle basis, per-time volatility and
   expiry semantics in the feature contract.
 - Joint fill/payoff modelling and out-of-sample checks for action/size changes.
-- Actual-price and partial-fill propagation through canonical OMS/capital.
+- Fit chase/fill/slippage from the new bounded post-decision book windows rather
+  than selecting execution parameters from settlement PnL alone.
 - Prospective two-hour activation and resulting forward evidence.

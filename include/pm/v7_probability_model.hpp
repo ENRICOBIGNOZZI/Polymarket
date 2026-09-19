@@ -19,6 +19,9 @@ struct NativeProbabilityModel {
     std::array<double,6> shock_scales{};
     double uncertainty_z=1.645, explicit_logit_reserve=.25;
     double execution_reserve_per_share=.005;
+    double minimum_net_edge=.02;
+    double fractional_kelly=.25;
+    std::int32_t maximum_chase_ticks=2;
     std::int64_t maximum_order_cost_microdollars=3'750'000;
     std::int64_t maximum_quantity_microunits=20'000'000;
     std::uint64_t version=0;

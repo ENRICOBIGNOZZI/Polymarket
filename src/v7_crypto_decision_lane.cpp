@@ -119,6 +119,8 @@ NativeCryptoDecisionResult NativeCryptoDecisionLane::construct_candidate(
             ProbabilityEvQuote q;
             q.is_up = up ? 1 : 0;
             q.ask_e4 = b.best_ask_e4;
+            q.tick_size_e4 = b.tick_size_e4;
+            q.maximum_limit_e4 = policy_.maximum_entry_price_e4;
             q.visible_quantity_microunits = b.best_ask_microunits;
             q.minimum_quantity_microunits = instrument.min_order_microunits;
             q.fee_rate = input.taker_fee_rate;
@@ -172,7 +174,13 @@ NativeCryptoDecisionResult NativeCryptoDecisionLane::construct_candidate(
     if (book.best_ask_e4 % book.tick_size_e4 != 0) {
         return finish(NativeCryptoDecisionReason::InvalidTick);
     }
-    const auto price_tick = book.best_ask_e4 / book.tick_size_e4;
+    const auto intended_limit_e4 = policy_.probability_ev_enabled != 0
+        ? out.economics.maximum_executable_price_e4 : book.best_ask_e4;
+    if (intended_limit_e4 <= 0 || intended_limit_e4 > policy_.maximum_entry_price_e4
+        || intended_limit_e4 % book.tick_size_e4 != 0) {
+        return finish(NativeCryptoDecisionReason::InvalidTick);
+    }
+    const auto price_tick = intended_limit_e4 / book.tick_size_e4;
     if (price_tick <= 0) return finish(NativeCryptoDecisionReason::InvalidTick);
 
     remember_signal(market.market_handle, input.signal.signal_version);
