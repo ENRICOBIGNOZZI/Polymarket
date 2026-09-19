@@ -519,7 +519,7 @@ PM_V7_CONTROL_NICE=0 v7_exec_class CONTROL python3 scripts/v7_native_crypto_engi
   --target-quantity-microunits 5000000 \
   --minimum-tte-ns 105000000000 --maximum-tte-ns 120000000000 \
   --maker-share-cap-microunits 1000000 \
-  --capture-native-decisions \
+  --capture-native-decisions --capture-native-full-context BTC:M5 \
   --asynchronous-settlement \
   >> "$RUN_ROOT/native_engine_manager.log" 2>&1 &
 v7_register_child "$!"

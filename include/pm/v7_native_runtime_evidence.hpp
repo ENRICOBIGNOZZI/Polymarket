@@ -20,6 +20,8 @@ enum class NativeEvidenceKind : std::uint8_t {
 
 struct NativeEvidenceEvent {
     NativeEvidenceKind kind = NativeEvidenceKind::OrderSubmitted;
+    NativePaperReason paper_reason = NativePaperReason::Accepted;
+    std::uint8_t paper_censored = 0;
     NativeOrderCommand command{};
     NativePaperFillRecord fill{};
     StrategyId strategy_id = StrategyId::CryptoSettlementEngine;
@@ -78,6 +80,9 @@ struct NativeRuntimeEvidenceConfig {
     double taker_fee_exponent = 1.0;
     std::uint8_t taker_only_fee = 1;
     std::string observation_capture_mode = "NONE";
+    std::int64_t paper_venue_delay_ns = -1;
+    std::int64_t paper_assumed_transport_delay_ns = 250'000'000LL;
+    std::string paper_terms_sha256;
 
     [[nodiscard]] bool valid() const noexcept;
 };

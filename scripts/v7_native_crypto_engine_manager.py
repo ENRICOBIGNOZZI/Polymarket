@@ -32,6 +32,7 @@ from v7_ledger_spool import spool_event
 from v7_native_risk_policy import load_native_limits, unsettled_exposure
 from v7_legacy_native_claims import validate_registry as validate_legacy_claim_registry
 from v7_native_settlement_projection import context_from_fill
+from v7_market_execution_terms import snapshot as execution_terms_snapshot, persist as persist_execution_terms
 
 STATUS_SCHEMA = "polymarket_v7_native_engine_manager_status_v1"
 
@@ -682,9 +683,12 @@ class Manager:
             "launch_retry_reasons": dict(sorted(self.launch_retry_reasons.items())),
             "native_capture_mode": (
                 "FULL" if getattr(self.args, "capture_native_observations", False)
+                else "SCOPED_FULL_REQUESTED" if getattr(self.args, "capture_native_full_context", [])
                 else "DECISIONS" if getattr(self.args, "capture_native_decisions", False)
                 else "OFF"
             ),
+            "native_full_capture_contexts_requested": getattr(self.args, "capture_native_full_context", []),
+            "native_full_capture_minimum_free_bytes": 20 * 1024**3,
             "evidence_worker_count": int(evidence.get("worker_count") or 0),
             "evidence_dropped": int(evidence.get("dropped") or 0),
             "evidence_queue_depth": int(evidence.get("queue_depth") or 0),
@@ -743,7 +747,18 @@ class Manager:
             # CLOB terms are market-scoped remote metadata. Quarantine/retry
             # this context without taking down already-running contexts.
             raise RetryableLaunchError(f"clob_market_terms:{exc}") from exc
+        if minimum_order > self.args.target_quantity_microunits:
+            raise RetryableLaunchError("venue_minimum_exceeds_frozen_target_no_automatic_upsizing")
         fee_rate, fee_exponent, fee_source = fee_parameters(market)
+        terms = execution_terms_snapshot(market, public_json)
+        terms_path = persist_execution_terms(self.run_root, terms)
+        atomic_json(self.run_root / "control/market_execution_terms" / (str(market["market_id"]) + ".json"), {
+            "schema": terms["schema"], "state": terms["state"], "reason": terms["reason"],
+            "market_id": terms["market_id"], "snapshot_sha256": terms["snapshot_sha256"],
+            "observed_at_ns": terms["observed_at_ns"], "paper_only": True,
+            "mandatory_taker_delay_ns": terms["mandatory_taker_delay_ns"],
+            "immutable_snapshot": str(terms_path), "assumed_transport_delay_ns": 250_000_000,
+            "transport_latency_measured": False})
         close_unix = _close_unix(market)
         close_wall_ns = close_unix * 1_000_000_000
         if close_wall_ns <= time.time_ns():
@@ -775,10 +790,13 @@ class Manager:
             "--market-id", str(market["market_id"]),
             "--event-id", str(events[0]),
             "--fee-source", fee_source,
+            "--paper-venue-delay-ns", str(terms["mandatory_taker_delay_ns"] if terms["state"] == "VERIFIED_SNAPSHOT" else -1),
+            "--paper-assumed-transport-delay-ns", "250000000",
+            "--paper-terms-sha256", terms["snapshot_sha256"],
             "--close-wall-ns", str(close_wall_ns),
             "--tick-size-e4", str(yes_tick),
             "--min-order-microunits", str(minimum_order),
-            "--target-quantity-microunits", str(max(self.args.target_quantity_microunits, minimum_order)),
+            "--target-quantity-microunits", str(self.args.target_quantity_microunits),
             "--minimum-tte-ns", str(self.args.minimum_tte_ns),
             "--maximum-tte-ns", str(self.args.maximum_tte_ns),
             "--maker-share-cap-microunits", str(self.args.maker_share_cap_microunits),
@@ -791,9 +809,12 @@ class Manager:
             "--taker-fee-exponent", repr(fee_exponent),
             "--duration-seconds", "0",
         ]
-        if getattr(self.args, "capture_native_observations", False):
+        scoped_full = _context_key(market) in getattr(self.args, "capture_native_full_context", [])
+        full_requested = getattr(self.args, "capture_native_observations", False) or scoped_full
+        capture_headroom = shutil.disk_usage(self.run_root).free >= 20 * 1024**3
+        if full_requested and capture_headroom:
             command.append("--capture-native-observations")
-        elif getattr(self.args, "capture_native_decisions", False):
+        elif getattr(self.args, "capture_native_decisions", False) or full_requested:
             command.append("--capture-native-decisions")
         return command
 
@@ -1134,6 +1155,8 @@ def parse_args() -> argparse.Namespace:
         help="Full bounded native book/trade + decision research capture")
     parser.add_argument("--capture-native-decisions", action="store_true",
         help="Low-volume native decision/intent capture; no raw book-event duplication")
+    parser.add_argument("--capture-native-full-context", action="append", default=[],
+        help="Record full native books only for this ASSET:HORIZON, with a 20 GiB free-space launch gate")
     args = parser.parse_args()
     if not exact_sha(args.model_sha):
         parser.error("--model-sha must be exact lowercase 40-hex SHA")

@@ -27,6 +27,9 @@ from pathlib import Path
 from typing import Any, Iterable
 
 ROOT = Path(__file__).resolve().parents[1]
+if str(ROOT / "scripts") not in sys.path:
+    sys.path.insert(0, str(ROOT / "scripts"))
+from v7_native_settlement_projection import iter_position_economics, native_final
 LEDGER_SCRIPT = ROOT / "scripts" / "v7_execution_ledger.py"
 _spec = importlib.util.spec_from_file_location("v7_execution_ledger_canonical_economics", LEDGER_SCRIPT)
 if _spec is None or _spec.loader is None:
@@ -79,6 +82,12 @@ def _horizon_seconds(event: Any) -> int | None:
         value = _finite(metadata.get(key))
         if value is not None and value >= 0 and float(value).is_integer():
             return int(value)
+    context = metadata.get("crypto_context")
+    context = context if isinstance(context, dict) else {}
+    explicit_horizon = context.get("horizon") or metadata.get("horizon")
+    mapped = {"M5": 300, "M15": 900, "H1": 3600, "H4": 14400, "D1": 86400}.get(explicit_horizon)
+    if mapped is not None:
+        return mapped
     if event.event_type == "MARKOUT" and event.markouts:
         key = next(iter(event.markouts))
         if isinstance(key, str) and key.endswith("s") and key[:-1].isdigit():
@@ -181,6 +190,7 @@ class UnitState:
     required_legs: dict[str, float] = field(default_factory=dict)
     required_contract_explicit: bool = False
     submitted_legs: dict[str, float] = field(default_factory=dict)
+    submission_orders: dict[str, tuple[str, float]] = field(default_factory=dict)
     fill_qty: dict[str, float] = field(default_factory=lambda: defaultdict(float))
     fill_ids: set[str] = field(default_factory=set)
     terminal_ids: set[str] = field(default_factory=set)
@@ -331,10 +341,14 @@ class UnitState:
         if qty is None or qty <= 0:
             self.reasons.add("submission_target_size_missing")
             return
-        if leg in self.submitted_legs and not math.isclose(self.submitted_legs[leg], qty, rel_tol=1e-12, abs_tol=1e-12):
-            self.reasons.add(f"submission_target_size_conflict:{leg}")
-        else:
-            self.submitted_legs[leg] = qty
+        order_key = _text(event.order_id) or _text(event.record_id)
+        previous = self.submission_orders.get(order_key)
+        if previous is not None:
+            if previous[0] != leg or not math.isclose(previous[1], qty, rel_tol=1e-12, abs_tol=1e-12):
+                self.reasons.add(f"submission_target_size_conflict:{leg}")
+            return
+        self.submission_orders[order_key] = (leg, qty)
+        self.submitted_legs[leg] = self.submitted_legs.get(leg, 0.0) + qty
 
     def observe_inventory_transform(self, event: Any) -> None:
         """Record an internal transform without manufacturing market execution.
@@ -532,6 +546,17 @@ def _load_units(
             if record_id:
                 seen_record_ids.add(record_id)
             events.append(event)
+    # Aggregate native FINALs are the cash authority; these are read-only
+    # views over explicitly linked fills. Never append them to the ledger.
+    projection_errors: list[str] = []
+    events = [ledger.LedgerEvent.from_dict(row) for row in iter_position_economics(
+        (event.to_dict() for event in events), projection_errors)
+        if not native_final(row) or row.get("metadata", {}).get("projection_only") is True]
+    global_reasons.extend("native_projection:" + reason for reason in projection_errors)
+    if any(event.event_type == "FILL" and event.metadata.get("native_settlement_receipt")
+           and event.metadata.get("causal_arrival_verified") is not True for event in events):
+        global_reasons.append("native_paper_arrival_parity_unverified")
+
     # Native PAPER settlement may close token-specific fill positions into one
     # market-level terminal. The FINAL event carries the authoritative lineage
     # of included order and position ids. Resolve those aliases first so a
@@ -542,7 +567,7 @@ def _load_units(
     conflicted_terminal_orders: set[str] = set()
     conflicted_terminal_positions: set[str] = set()
     for event in events:
-        if event.event_type != "FINAL":
+        if event.event_type != "FINAL" or event.metadata.get("projection_only") is True:
             continue
         metadata = event.metadata if isinstance(event.metadata, dict) else {}
         terminal_id = _text(metadata.get("terminal_id"))
@@ -602,6 +627,9 @@ def _load_units(
         unit_id = _economic_unit_id(
             event, order_positions, order_terminals, position_terminals,
         )
+        metadata = event.metadata if isinstance(event.metadata, dict) else {}
+        if unit_id and metadata.get("native_settlement_receipt"):
+            unit_id += ":component:" + _family(event)
         if not unit_id:
             if event.event_type in {"ORDER_SUBMITTED", "FILL", "FINAL"}:
                 global_reasons.append(f"{event.event_type.lower()}_economic_unit_missing")

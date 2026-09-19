@@ -151,9 +151,89 @@ void test_mutated_command_cannot_paper_fill() {
     assert(endpoint.observe_unsent(admitted.tx.command, 2'200));
     assert(authority.active_orders() == 0);
 }
+
+struct ArrivalFixture {
+    NativeSettlementAuthority authority{limits()};
+    NativeSettlementOmsEndpoint endpoint{authority};
+    NativePaperExecutionAdapter paper{endpoint, 100, 250, 100};
+    ArrivalFixture() { assert(authority.sync_inventory(7, 11, 0, 0, 1)); }
+    NativeOrderCommand admit(std::uint64_t id = 10, std::int64_t qty = 2'000'000,
+                             std::int64_t now = 2'000) {
+        const auto a = authority.submit(plan(id, StrategyId::CryptoInformedTaker,
+            IntentType::TargetPosition, Side::Buy, ExecutionPolicyId::AggressiveTaker, 41, qty),
+            1'000'000, now);
+        assert(a.accepted); return a.tx.command;
+    }
+};
+BookHotSnapshot arrival_book(std::int64_t timestamp = 2'300) {
+    auto b = book(); b.receive_monotonic_ns = timestamp; b.state_version = 10; return b;
+}
+void test_delayed_fill_requires_strict_watermark_and_fresh_previous_book() {
+    ArrivalFixture f; const auto cmd = f.admit();
+    auto pending = f.paper.submit(cmd, book(), 2'100);
+    assert(pending.accepted && pending.pending_arrival && pending.filled_microunits == 0);
+    assert(f.paper.synthetic_acks() == 0 && f.authority.active_orders() == 1);
+    assert(f.paper.advance_arrivals(11, arrival_book(), 2'350).count == 0);
+    const auto done = f.paper.advance_arrivals(11, arrival_book(), 2'351);
+    assert(done.count == 1 && !done.invalid && done.records[0].result.filled_microunits == 2'000'000);
+    assert(done.records[0].result.fill.receive_monotonic_ns == 2'350);
+    assert(f.paper.pending_arrivals() == 0 && f.authority.active_orders() == 0);
+}
+void test_arrival_cannot_use_future_stale_or_disconnected_book() {
+    for (int scenario = 0; scenario < 3; ++scenario) {
+        ArrivalFixture f; const auto cmd = f.admit();
+        assert(f.paper.submit(cmd, book(), 2'100).pending_arrival);
+        auto b = arrival_book(scenario == 0 ? 2'400 : scenario == 1 ? 2'000 : 2'300);
+        if (scenario == 2) f.paper.invalidate_arrivals();
+        auto done = f.paper.advance_arrivals(11, b, 2'500);
+        assert(done.count == 1 && done.records[0].result.censored);
+        assert(done.records[0].result.reason == NativePaperReason::ArrivalCensored);
+        assert(f.authority.active_orders() == 0 && f.paper.paper_fills() == 0);
+    }
+}
+void test_price_moves_before_arrival_no_fill_and_no_future_substitution() {
+    ArrivalFixture f; const auto cmd = f.admit();
+    assert(f.paper.submit(cmd, book(), 2'100).pending_arrival);
+    auto b = arrival_book(); b.best_ask_e4 = 4300;
+    const auto done = f.paper.advance_arrivals(11, b, 2'400);
+    assert(done.count == 1 && done.records[0].result.reason == NativePaperReason::NotMarketable);
+    assert(!done.records[0].result.censored && f.paper.paper_fills() == 0);
+}
+void test_delayed_orders_do_not_reuse_visible_liquidity() {
+    ArrivalFixture f;
+    assert(f.paper.submit(f.admit(10, 4'000'000), book(), 2'100).pending_arrival);
+    assert(f.paper.advance_arrivals(11, arrival_book(), 2'400).records[0].result.filled_microunits == 4'000'000);
+    assert(f.paper.submit(f.admit(11, 2'000'000, 2'500), arrival_book(), 2'600).pending_arrival);
+    auto done = f.paper.advance_arrivals(11, arrival_book(2'800), 2'900);
+    assert(done.count == 1 && done.records[0].result.reason == NativePaperReason::PartialFillUnmodelled);
+    assert(f.authority.inventory_snapshot(11).total_microunits == 4'000'000);
+}
+void test_price_improvement_is_unmodelled_not_an_observed_nonfill() {
+    ArrivalFixture f;
+    assert(f.paper.submit(f.admit(), book(), 2'100).pending_arrival);
+    auto improved = arrival_book(); improved.best_ask_e4 = 4000;
+    auto done = f.paper.advance_arrivals(11, improved, 2'400);
+    assert(done.count == 1 && done.records[0].result.censored);
+    assert(done.records[0].result.reason == NativePaperReason::PriceImprovementUnmodelled);
+    assert(f.authority.active_orders() == 0 && f.paper.paper_fills() == 0);
+}
+void test_unknown_delay_and_overflow_never_make_a_fill() {
+    for (const auto delay : {-1LL, 9223372036854775807LL}) {
+        ArrivalFixture f; NativePaperExecutionAdapter paper(f.endpoint, 100, delay, 100);
+        const auto result = paper.submit(f.admit(), book(), 2'100);
+        assert(result.censored && !result.accepted && paper.paper_fills() == 0);
+        assert(f.authority.active_orders() == 0);
+    }
+}
 }
 
 int main() {
+    test_delayed_fill_requires_strict_watermark_and_fresh_previous_book();
+    test_arrival_cannot_use_future_stale_or_disconnected_book();
+    test_price_moves_before_arrival_no_fill_and_no_future_substitution();
+    test_delayed_orders_do_not_reuse_visible_liquidity();
+    test_unknown_delay_and_overflow_never_make_a_fill();
+    test_price_improvement_is_unmodelled_not_an_observed_nonfill();
     test_taker_fills_common_authority();
     test_maker_queue_and_cancel_latency();
     test_maker_fill_after_queue_depletion();

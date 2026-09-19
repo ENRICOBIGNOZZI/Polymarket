@@ -13,7 +13,7 @@ rsync -a --partial-dir=.rsync-partial \
   --include='/research/***' \
   --include='/ledger/***' --include='/trade_tape.csv*' --include='/control/' \
   --include='/control/runtime_identity.json' \
-  --include='/control/runtime_artifact_receipt.json' --exclude='*' \
+  --include='/control/runtime_artifact_receipt.json' --include='/control/market_execution_terms/***' --exclude='*' \
   "$USER@$REMOTE:$REMOTE_ROOT/" "$LOCAL_ROOT/current/"
 receipt_tmp="$(mktemp)"
 python3 - "$LOCAL_ROOT" "$REMOTE" "$receipt_tmp" "$ROOT/config/v7_london_buffer_retention.json" <<'PY'
@@ -30,7 +30,13 @@ for p in current.rglob('*'):
  if not p.is_file() or p.is_symlink():continue
  rel=str(p.relative_to(current)); st=p.stat()
  if '.rsync-partial' in p.parts or rel in never or rel.endswith('.open') or (rel.endswith('.bin') and '.segment-' not in p.name): continue
- if st.st_mtime_ns<=cutoff and any(fnmatch.fnmatch(rel,x) for x in patterns): files.append({'path':rel,'size':st.st_size,'sha256':dig(p),'mtime_ns':st.st_mtime_ns})
+ native_closed=False
+ if rel.startswith('research/native_observations/') and rel.endswith('.jsonl'):
+  try:
+   closed=json.loads(Path(str(p)+'.closed.json').read_text())
+   native_closed=(closed.get('schema')=='polymarket_v7_native_capture_closed_v1' and closed.get('closed') is True and closed.get('healthy') is True and closed.get('bytes')==st.st_size)
+  except (OSError,ValueError):native_closed=False
+ if st.st_mtime_ns<=cutoff and (native_closed or any(fnmatch.fnmatch(rel,x) for x in patterns)): files.append({'path':rel,'size':st.st_size,'sha256':dig(p),'mtime_ns':st.st_mtime_ns})
 total=sum(p.stat().st_size for p in current.rglob('*') if p.is_file())
 v={'schema':'polymarket_v7_research_offload_receipt_v1','timestamp_ns':time.time_ns(),'source_host':sys.argv[2],'synced_through_ns':cutoff,'bytes_local':total,'complete_command':True,'zero_fill_missing':False,'files':files}
 Path(sys.argv[3]).write_text(json.dumps(v,sort_keys=True,indent=2)+'\n'); local=root/'receipts'/f"sync-{v['timestamp_ns']}.json";local.write_text(json.dumps(v,sort_keys=True,indent=2)+'\n');(root/'latest_sync_receipt.json').write_text(json.dumps(v,sort_keys=True,indent=2)+'\n');print(json.dumps({'bytes_local':total,'verified_closed_files':len(files),'synced_through_ns':cutoff},sort_keys=True))

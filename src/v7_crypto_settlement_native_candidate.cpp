@@ -105,6 +105,9 @@ struct Options {
     double taker_fee_rate = 0.0;
     double taker_fee_exponent = 1.0;
     int duration_seconds = 0;
+    std::int64_t paper_venue_delay_ns = -1;
+    std::int64_t paper_assumed_transport_delay_ns = 250'000'000LL;
+    std::string paper_terms_sha256;
     bool validate_only = false;
     bool observation_only = false;
     bool capture_native_decisions = false;
@@ -148,6 +151,9 @@ Options parse_options(int argc, char** argv) {
         else if (arg == "--taker-fee-rate") out.taker_fee_rate = bounded_double(next(), 0.0, 1.0);
         else if (arg == "--taker-fee-exponent") out.taker_fee_exponent = bounded_double(next(), 0.0, 10.0);
         else if (arg == "--duration-seconds") out.duration_seconds = bounded_integer<int>(next(), 0, 86'400);
+        else if (arg == "--paper-venue-delay-ns") out.paper_venue_delay_ns = bounded_integer<std::int64_t>(next(), -1, 5'000'000'000LL);
+        else if (arg == "--paper-assumed-transport-delay-ns") out.paper_assumed_transport_delay_ns = bounded_integer<std::int64_t>(next(), 1, 5'000'000'000LL);
+        else if (arg == "--paper-terms-sha256") out.paper_terms_sha256 = next();
         else if (arg == "--validate-only") out.validate_only = true;
         else if (arg == "--observation-only") {
             out.observation_only = true;
@@ -194,6 +200,10 @@ int main(int argc, char** argv) {
             || options.maximum_tte_ns < options.minimum_tte_ns) {
             throw std::invalid_argument("invalid PAPER sizing or tte policy");
         }
+        if (options.paper_venue_delay_ns >= 0 && (options.paper_terms_sha256.size() != 64
+            || !std::all_of(options.paper_terms_sha256.begin(), options.paper_terms_sha256.end(),
+                [](char c) { return (c >= '0' && c <= '9') || (c >= 'a' && c <= 'f'); })))
+            throw std::invalid_argument("market terms hash required for delayed PAPER matching");
         if (options.validate_only) {
             std::cout << "native crypto settlement candidate configuration PASS\n";
             return 0;
@@ -299,7 +309,10 @@ int main(int argc, char** argv) {
         }
         NativeSettlementAuthority authority(limits);
         NativeSettlementOmsEndpoint adapter_endpoint(authority);
-        NativePaperExecutionAdapter paper_execution(adapter_endpoint);
+        const auto paper_taker_delay_ns = options.paper_venue_delay_ns < 0 ? -1
+            : options.paper_venue_delay_ns + options.paper_assumed_transport_delay_ns;
+        NativePaperExecutionAdapter paper_execution(adapter_endpoint, 100'000'000LL,
+            paper_taker_delay_ns, decision_policy.maximum_book_age_ns);
         NativeRuntimeEvidenceConfig evidence_config{};
         evidence_config.run_root = options.run_root;
         evidence_config.model_sha = options.model_sha;
@@ -318,6 +331,9 @@ int main(int argc, char** argv) {
         evidence_config.taker_fee_rate = options.taker_fee_rate;
         evidence_config.taker_fee_exponent = options.taker_fee_exponent;
         evidence_config.taker_only_fee = 1;
+        evidence_config.paper_venue_delay_ns = options.paper_venue_delay_ns;
+        evidence_config.paper_assumed_transport_delay_ns = options.paper_assumed_transport_delay_ns;
+        evidence_config.paper_terms_sha256 = options.paper_terms_sha256;
         evidence_config.observation_capture_mode = options.capture_native_observations
             ? "FULL" : options.capture_native_decisions ? "DECISIONS" : "NONE";
         evidence_config.minimum_order_microunits = options.min_order_microunits;
@@ -383,6 +399,7 @@ int main(int argc, char** argv) {
         std::uint64_t maker_inadmissible_quantity = 0;
         std::uint64_t paper_trade_sequence = 0, paper_fill_events = 0;
         std::uint64_t paper_invalid_trades = 0, paper_submit_failures = 0;
+        std::uint64_t paper_arrival_censored = 0, paper_arrival_observed_nonfills = 0;
         std::uint64_t arbitration_conflicts = 0, authority_rejections = 0;
         std::uint64_t inventory_rejections = 0, minimum_size_rejections = 0;
         std::uint64_t last_measured_signal_version = 0, last_observed_signal_version = 0;
@@ -436,9 +453,13 @@ int main(int argc, char** argv) {
         };
         const auto publish_state = [&](const NativeOrderCommand& command,
                                        ExecutionPolicyId policy,
-                                       OrderState state) noexcept {
+                                       OrderState state,
+                                       NativePaperReason reason = NativePaperReason::Accepted,
+                                       bool censored = false) noexcept {
             NativeEvidenceEvent evidence{};
             evidence.kind = NativeEvidenceKind::OrderState;
+            evidence.paper_reason = reason;
+            evidence.paper_censored = censored;
             evidence.command = command;
             evidence.strategy_id = policy == ExecutionPolicyId::AggressiveTaker
                 ? StrategyId::CryptoInformedTaker : StrategyId::ProfessionalMaker;
@@ -459,6 +480,25 @@ int main(int argc, char** argv) {
             evidence.order_state = fill.order_state;
             evidence.recorded_monotonic_ns = monotonic_now_ns();
             return evidence_writer.publish(evidence);
+        };
+
+        const auto consume_arrivals = [&](std::uint64_t instrument,
+                                          const BookHotSnapshot& previous_book,
+                                          std::int64_t watermark) {
+            const auto batch = paper_execution.advance_arrivals(instrument, previous_book, watermark);
+            adapter_handoff_failures += batch.invalid;
+            for (std::size_t i = 0; i < batch.count; ++i) {
+                const auto& item = batch.records[i];
+                const auto& result = item.result;
+                if (result.filled_microunits > 0) {
+                    ++paper_fill_events;
+                    lane.mark_market_traded(kMarket);
+                    if (!publish_fill(result.fill, ExecutionPolicyId::AggressiveTaker)) ++adapter_handoff_failures;
+                } else if (result.censored) ++paper_arrival_censored;
+                else ++paper_arrival_observed_nonfills;
+                if (!publish_state(item.command, ExecutionPolicyId::AggressiveTaker,
+                                   result.final_state, result.reason, result.censored != 0)) ++adapter_handoff_failures;
+            }
         };
 
 #if defined(__APPLE__)
@@ -501,8 +541,13 @@ int main(int argc, char** argv) {
         };
         while (monotonic_now_ns() < deadline) {
             if (pm_faults.exchange(0, std::memory_order_acq_rel) != 0) {
+                paper_execution.invalidate_arrivals();
                 yes_book.valid = 0; yes_book.lineage_continuous = 0;
                 no_book.valid = 0; no_book.lineage_continuous = 0;
+                if (options.capture_native_observations) {
+                    if (!evidence_writer.publish_observation(observation(yes_book, kYes, 5))) ++adapter_handoff_failures;
+                    if (!evidence_writer.publish_observation(observation(no_book, kNo, 5))) ++adapter_handoff_failures;
+                }
                 if (pm_ready && pending_pm.connection_epoch != pm_epoch.load(std::memory_order_acquire)) {
                     pm_ready = false;
                 }
@@ -582,6 +627,10 @@ int main(int argc, char** argv) {
                 }
                 if (pm_ready && pending_pm.event.receive_monotonic_ns == receive_ns) {
                     const auto& event = pending_pm.event;
+                    // Match against the previous consumed book, never this later update.
+                    consume_arrivals(event.instrument_handle,
+                        event.instrument_handle == kYes ? yes_book : no_book,
+                        event.receive_monotonic_ns);
                     if (options.capture_native_observations) {
                     auto book_observation = observation(event.book, event.instrument_handle, 1);
                     book_observation.event_kind = static_cast<std::uint8_t>(event.kind);
@@ -695,7 +744,7 @@ int main(int argc, char** argv) {
             } while (progressed);
             if (has_external) current_signal = external_state.advance_external_cancel_signal(receive_ns, external_policy);
 
-            if (current_signal.signal_version != 0) {
+            if (current_signal.signal_version != 0 && paper_execution.pending_arrivals() == 0) {
                 NativeCryptoDecisionInput input;
                 input.signal = current_signal;
                 input.market = market;
@@ -727,7 +776,7 @@ int main(int argc, char** argv) {
                         decision_compute.push_back(result.decision_compute_ns);
                     } else ++latency_overflow;
                 }
-                if (result.accepted != 0) {
+                if (result.accepted != 0 && paper_execution.pending_arrivals() == 0) {
                     ExecutionPlan plan;
                     plan.intent = result.intent;
                     plan.tick_size_e4 = (result.selected_yes != 0 ? yes_book : no_book).tick_size_e4;
@@ -794,12 +843,14 @@ int main(int argc, char** argv) {
                         || paper_result.final_state == OrderState::Expired) {
                         if (!publish_state(authority_result.tx.command,
                                            alpha_candidates[index].policy,
-                                           paper_result.final_state)) {
+                                           paper_result.final_state, paper_result.reason,
+                                           paper_result.censored != 0)) {
                             ++adapter_handoff_failures;
                             break;
                         }
                     }
                     ++accepted;
+                    paper_arrival_censored += paper_result.censored != 0;
                     if (paper_result.accepted != 0 && paper_result.filled_microunits > 0) {
                         ++paper_fill_events;
                         if (!publish_fill(paper_result.fill,
@@ -833,6 +884,11 @@ int main(int argc, char** argv) {
         // Cancel all live maker quotes and advance beyond the bounded PAPER
         // cancel latency; never carry an unowned reservation into the next market.
         const auto shutdown_cancel_ns = monotonic_now_ns();
+        // A stopped capture cannot establish execution. Retire pending
+        // research arrivals as censored, never as fills or observed nonfills.
+        paper_execution.invalidate_arrivals();
+        for (const auto instrument : {kYes, kNo})
+            consume_arrivals(instrument, BookHotSnapshot{}, std::numeric_limits<std::int64_t>::max());
         for (const auto instrument : {kYes, kNo}) {
             for (const auto side : {Side::Buy, Side::Sell}) {
                 const auto cancel = authority.cancel_maker_quote(
@@ -930,6 +986,12 @@ int main(int argc, char** argv) {
             {"paper_synthetic_acks", paper_execution.synthetic_acks()},
             {"paper_fill_events", paper_fill_events},
             {"paper_adapter_fills", paper_execution.paper_fills()},
+            {"paper_pending_arrivals", paper_execution.pending_arrivals()},
+            {"paper_arrival_censored", paper_arrival_censored},
+            {"paper_arrival_observed_nonfills", paper_arrival_observed_nonfills},
+            {"paper_venue_delay_ns", options.paper_venue_delay_ns},
+            {"paper_assumed_transport_delay_ns", options.paper_assumed_transport_delay_ns},
+            {"paper_terms_sha256", options.paper_terms_sha256},
             {"paper_cancels", paper_execution.paper_cancels()},
             {"paper_invalid_trades", paper_invalid_trades},
             {"paper_submit_failures", paper_submit_failures},
@@ -961,7 +1023,7 @@ int main(int argc, char** argv) {
                 {"diagnostic", coinbase_l2_diagnostic}}},
             {"coinbase", {{"invalid_frames", coinbase_ingress_status.invalid_frames}, {"enqueued", coinbase_ingress_status.enqueued_events}, {"drained", coinbase_ingress_status.drained_events}, {"queued", coinbase_ingress_status.queued}, {"frames", coinbase_status.frames_received}, {"transport_failures", coinbase_status.transport_failures}, {"drops", coinbase_ingress_status.dropped_events}}},
             {"polymarket", {{"messages", pm_status.messages}, {"reconnects", pm_status.reconnects}, {"errors", pm_status.errors}, {"drops", pm_drops.load()}}},
-            {"note", "PAPER-only native candidate. Maker and taker share one in-process inventory/capital/OMS authority. Taker fills require causal executable L1 depth; maker fills use pessimistic public-print queue depletion and bounded cancel latency. No authenticated submission or real capital is possible."}
+            {"note", "PAPER-only native candidate. Maker and taker share one in-process inventory/capital/OMS authority. Taker research fills use delayed local-receive same-price/full-size depth, not exchange-confirmed execution; maker fills use pessimistic public-print queue depletion and bounded cancel latency. No authenticated submission or real capital is possible."}
         }) << '\n';
         return clean ? 0 : 2;
     } catch (const std::exception& error) {

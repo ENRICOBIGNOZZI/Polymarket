@@ -53,6 +53,8 @@ def read_native(root: Path, manifest: dict) -> tuple[BookTape,list[dict],dict]:
                 if key in last and available<last[key][1]:raise EvidenceError('observation clock reversed')
                 if key in epochs and epochs[key]!=row.get('connection_epoch'):
                     gaps[capture].append((last[key][1],available))
+                if row.get('kind') == 5:
+                    gaps[capture].append((last.get(key, (0, available))[1], available))
                 epochs[key]=row.get('connection_epoch');last[key]=(seq,available)
                 if key in closed and closed[key].get('healthy') is True:
                     watermarks[capture]=int(closed[key]['watermark_monotonic_ns'])
@@ -61,7 +63,7 @@ def read_native(root: Path, manifest: dict) -> tuple[BookTape,list[dict],dict]:
                 asks=tuple((int(p),int(q)) for p,q in row.get('asks',[]))
                 if not bids and int(row.get('bid_e4',0))>0:bids=((int(row['bid_e4']),int(row['bid_quantity'])),)
                 if not asks and int(row.get('ask_e4',0))>0:asks=((int(row['ask_e4']),int(row['ask_quantity'])),)
-                if row['kind'] in (1,3) and row.get('token_id') and row.get('tick_e4',0)>0:
+                if row['kind'] in (1,3,5) and row.get('token_id') and row.get('tick_e4',0)>0:
                     books.append(Book(str(row['market_id']),row['token_id'],capture,available,int(row['book_version']),bids,asks,int(row['tick_e4']),valid,int(row['receive_monotonic_ns'])))
                 if row['kind']==2:points.append(row)
     for key,(seq,_) in last.items():
@@ -87,10 +89,14 @@ def arrival_diagnostics(tape:BookTape,points:list[dict],protocol:dict) -> dict:
                 if minimum <= 0:
                     results.append({'status':'CENSORED','average_price':None,'reason':'minimum_order_metadata_missing'})
                     continue
+                mandatory = row.get('paper_venue_delay_ns')
+                if type(mandatory) is not int or mandatory < 0 or not row.get('paper_terms_sha256'):
+                    results.append({'status':'CENSORED','average_price':None,'reason':'mandatory_delay_metadata_unknown'})
+                    continue
                 order=Order(str(idx),str(row['market_id']),row['token_id'],row['_capture'],
-                    int(row['decision_monotonic_ns']),'BUY',int(row['ask_e4']),int(quantity*1e6),minimum,int(delay*1e6),True)
+                    int(row['decision_monotonic_ns']),'BUY',int(row['ask_e4']),int(quantity*1e6),minimum,int(delay*1e6)+mandatory,True)
                 result=sim.execute(order);results.append(asdict(result))
-            scenarios.append({'delay_ms':delay,'quantity_shares':quantity,'counts':dict(Counter(r['status'] for r in results)),
+            scenarios.append({'delay_ms':delay,'delay_semantics':'ASSUMED_TRANSPORT_PLUS_MARKET_MANDATORY','quantity_shares':quantity,'counts':dict(Counter(r['status'] for r in results)),
                 'mean_filled_price':mean([r['average_price'] for r in results if r['average_price'] is not None]) if any(r['average_price'] is not None for r in results) else None,
                 'execution_only_no_profit_claim':True,'orders':results})
     return {'state':'EXECUTION_DIAGNOSTICS_ONLY','accepted_candidates':len(accepted),'scenarios':scenarios,
