@@ -17,6 +17,10 @@ on:
         required: true
         default: false
         type: boolean
+  push:
+    branches: [main]
+    paths:
+      - deploy/v7-paper-deploy-request.json
 
 permissions:
   contents: read
@@ -28,7 +32,7 @@ concurrency:
 
 jobs:
   deploy:
-    if: github.event_name == 'workflow_dispatch' && inputs.cutover_approved == true
+    if: (github.event_name == 'workflow_dispatch' && inputs.cutover_approved == true) || github.event_name == 'push'
     runs-on: ubuntu-24.04
     timeout-minutes: 45
     env:
@@ -37,6 +41,7 @@ jobs:
       SERVER_PORT: ${{ vars.POLYMARKET_SERVER_PORT || '22' }}
       EXPECTED_DEPLOY_SHA: ${{ inputs.expected_sha }}
       FREEZE_MAKER_FORWARD_WINDOW: ${{ inputs.freeze_maker_forward_window }}
+      PUSH_BEFORE_SHA: ${{ github.event.before }}
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
@@ -51,6 +56,18 @@ jobs:
           git fetch --no-tags origin main
           main_sha="$(git rev-parse origin/main)"
           test "$(git rev-parse HEAD)" = "$main_sha"
+
+          if [[ "$GITHUB_EVENT_NAME" == "push" ]]; then
+            python3 scripts/v7_deploy_push_request.py \
+              --repository-root . \
+              --event-before "$PUSH_BEFORE_SHA" \
+              --event-after "$GITHUB_SHA" \
+              --request deploy/v7-paper-deploy-request.json \
+              --github-env "$GITHUB_ENV" \
+              --github-output "$GITHUB_OUTPUT"
+            EXPECTED_DEPLOY_SHA="$GITHUB_SHA"
+            FREEZE_MAKER_FORWARD_WINDOW=false
+          fi
 
           [[ "$EXPECTED_DEPLOY_SHA" =~ ^[0-9a-f]{40}$ ]]
           [[ "$FREEZE_MAKER_FORWARD_WINDOW" == "true" || "$FREEZE_MAKER_FORWARD_WINDOW" == "false" ]]
