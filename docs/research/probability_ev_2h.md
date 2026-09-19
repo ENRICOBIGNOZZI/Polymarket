@@ -101,9 +101,11 @@ Freeze code SHA, artifact SHA, fee sources, latency semantics, limits and the
 analysis plan before the first decision. Record the full six-asset universe and
 all configured horizons. No asset-specific post-hoc exclusion is allowed.
 
-Use the decision time to assign orders to the two-hour cohort. Stop admitting
-new observations to that evaluation cohort at the declared end; continue
-collecting feeds, managing risk and settling positions. Markets that settle
+Use the decision time to assign orders to the two-hour cohort. The launcher
+computes one immutable wall-clock deadline exactly 7,200 seconds after the
+private probability artifact is activated and passes that same deadline to all
+30 contexts. After the deadline the probability lane fails closed to new taker
+risk while feeds, risk, ledger and settlement remain active. Markets that settle
 after the two-hour boundary are pending, not losses, wins or zeros. Two hours
 is an operational research window, not a guarantee of statistical precision.
 

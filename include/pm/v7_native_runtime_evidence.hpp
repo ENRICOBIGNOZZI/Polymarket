@@ -63,6 +63,11 @@ struct NativeObservation {
     std::int64_t decision_ns = 0, close_ns = 0;
     std::int64_t bid_quantity = 0, ask_quantity = 0, trade_quantity = 0;
     std::int32_t bid_e4 = 0, ask_e4 = 0, tick_e4 = 0, trade_e4 = 0;
+    // Exact two-token PM state used for causal repricing labels. Missing remains zero/invalid.
+    std::int32_t yes_bid_e4 = 0, yes_ask_e4 = 0, no_bid_e4 = 0, no_ask_e4 = 0;
+    std::uint64_t repricing_origin_signal_version = 0;
+    std::uint32_t repricing_horizon_ms = 0;
+    std::uint8_t repricing_pair_valid = 0;
     std::array<std::int32_t, 10> bid_prices{}, ask_prices{};
     std::array<std::int64_t, 10> bid_quantities{}, ask_quantities{};
     std::int64_t event_receive_ns = 0, event_exchange_ns = 0;
@@ -92,6 +97,7 @@ struct NativeRuntimeEvidenceConfig {
     std::string no_token_id;
     std::string fee_source;
     std::string probability_artifact_sha256;
+    std::int64_t probability_evaluation_end_wall_ns = 0;
     std::uint64_t maker_valid_cells = 0;
     std::int64_t minimum_order_microunits = 0;
     std::string risk_policy_sha256;

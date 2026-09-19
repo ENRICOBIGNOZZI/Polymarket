@@ -46,3 +46,16 @@ def test_cold_publisher_retains_failure_diagnostics_and_no_authority():
     assert "slow_context_failures" in source and "slow_context_error" in source
     assert '"--slow-context"' in source
     assert '"model_used_mask", 0' in (ROOT / "src/v7_native_runtime_evidence.cpp").read_text()
+
+
+def test_research_validation_dependency_stays_out_of_london_runtime():
+    workflow=(ROOT/'.github/workflows/ci.yml').read_text()
+    sanitizer=workflow.split('  sanitizer:',1)[1].split('  build-test:',1)[0]
+    builds=workflow.split('  build-test:',1)[1].split('  london-runtime-boundary:',1)[0]
+    london=workflow.split('  london-runtime-boundary:',1)[1]
+    for job in (sanitizer,builds):
+        install=next(line for line in job.splitlines() if 'apt-get install' in line)
+        assert 'python3-pytest' in install and 'python3-numpy' in install
+        assert '-DPython3_EXECUTABLE=/usr/bin/python3' in job
+    assert 'python3-numpy' not in london
+    assert '-DBUILD_TESTING=OFF' in london

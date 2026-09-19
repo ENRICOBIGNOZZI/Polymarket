@@ -56,6 +56,29 @@ assert v.get('runtime_training') is False
 print('artifact_gate=ready')
 PY
 
+PROBABILITY_MODEL_SOURCE="${POLYMARKET_PROBABILITY_MODEL_SOURCE:-}"
+if [[ -n "$PROBABILITY_MODEL_SOURCE" ]]; then
+  [[ "$PROBABILITY_MODEL_SOURCE" == /* && -f "$PROBABILITY_MODEL_SOURCE" && ! -L "$PROBABILITY_MODEL_SOURCE" ]] || {
+    echo "probability model source must be an absolute regular file" >&2; exit 78;
+  }
+  python3 - "$PROBABILITY_MODEL_SOURCE" "$EXPECTED_SHA" <<'PYPROB'
+import json,sys
+from pathlib import Path
+p=Path(sys.argv[1]);sha=sys.argv[2]
+v=json.loads(p.read_text(encoding='utf-8'))
+assert v.get('schema')=='v7_probability_logit_candidate_v1'
+assert v.get('code_sha')==sha
+assert v.get('paper_only') is True
+assert v.get('authenticated_execution') is False
+assert v.get('real_order_submission') is False
+assert int(v.get('test_duration_seconds') or 0)==7200
+assert v.get('forward_calibrated') is False
+assert not (v.get('excluded_assets') or [])
+assert not (v.get('asset_shadow_overrides') or [])
+print('probability_model_gate=ready')
+PYPROB
+fi
+
 # Check the same exact-SHA CI contract as runtime BEFORE stopping healthy
 # services or moving any run directory. A failed/pending check must leave the
 # old generation collecting data; it must not spend the new restart budget.
@@ -105,6 +128,21 @@ fi
 python3 "$SOURCE_DIR/scripts/v7_prepare_cutover_run_root.py" "${prepare_args[@]}"
 SERVICE_GROUP="$(id -gn "$SERVICE_USER")"
 install -d -o "$SERVICE_USER" -g "$SERVICE_GROUP" "$RUN_ROOT" "$RUN_ROOT/control"
+
+PROBABILITY_ENV="$RUN_ROOT/control/probability-model.env"
+rm -f "$PROBABILITY_ENV"
+if [[ -n "$PROBABILITY_MODEL_SOURCE" ]]; then
+  PROBABILITY_MODEL_TARGET="$TARGET_ARTIFACT/probability_model.json"
+  install -o "$SERVICE_USER" -g "$SERVICE_GROUP" -m 0600     "$PROBABILITY_MODEL_SOURCE" "$PROBABILITY_MODEL_TARGET"
+  tmp_probability_env="$PROBABILITY_ENV.tmp.$$"
+  {
+    printf 'PM_V7_PROBABILITY_MODEL=%s\n' "$PROBABILITY_MODEL_TARGET"
+    printf 'PM_V7_PROBABILITY_EVALUATION_SECONDS=7200\n'
+  } > "$tmp_probability_env"
+  chown "$SERVICE_USER:$SERVICE_GROUP" "$tmp_probability_env"
+  chmod 0600 "$tmp_probability_env"
+  mv "$tmp_probability_env" "$PROBABILITY_ENV"
+fi
 
 # Shell redirections are opened by this root control-plane shell before sudo
 # changes the Python process user. Pre-create every shared log with the runtime

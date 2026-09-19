@@ -13,6 +13,8 @@ manager=importlib.util.module_from_spec(SPEC);sys.modules[SPEC.name]=manager;SPE
 
 def test_all_thirty_contexts_are_explicit_and_asset_horizon_specific():
     policy=manager._signal_policy(ROOT/"config/v7_crypto_signal_policy.json")
+    raw=json.loads((ROOT/"config/v7_crypto_signal_policy.json").read_text())
+    assert raw["require_pm_book_pre_signal"] is True
     assert len(policy)==30
     assert set(policy)=={f"{a}:{h}" for a in ("BTC","ETH","SOL","XRP","DOGE","BNB") for h in ("M5","M15","H1","H4","D1")}
     assert policy["DOGE:M5"]["minimum_binance_return_bp"] > policy["BTC:M5"]["minimum_binance_return_bp"]
@@ -68,14 +70,22 @@ def test_bnb_launch_uses_bybit_without_aliasing_coinbase(tmp_path,monkeypatch):
 
 def test_launcher_wires_policy():
     launcher=(ROOT/"scripts/paper_v7_execution_loop.sh").read_text()
-    assert 'CRYPTO_SIGNAL_POLICY="${PM_V7_CRYPTO_SIGNAL_POLICY:-}"' in launcher
-    assert 'CRYPTO_SIGNAL_POLICY_ARGS=(--signal-policy "$CRYPTO_SIGNAL_POLICY")' in launcher
-    assert '"${CRYPTO_SIGNAL_POLICY_ARGS[@]}"' in launcher
+    assert 'CRYPTO_SIGNAL_POLICY="${PM_V7_CRYPTO_SIGNAL_POLICY:-$ROOT/config/v7_crypto_signal_policy.json}"' in launcher
+    assert '--signal-policy "$CRYPTO_SIGNAL_POLICY"' in launcher
     manifest=json.loads((ROOT/'config/v7_process_manifest.json').read_text())
     native=next(p for p in manifest['processes'] if p['id']=='native_engine_manager')
-    assert '--signal-policy' not in native['arguments']
+    assert '--signal-policy' in native['arguments']
+    assert '${ROOT}/config/v7_crypto_signal_policy.json' in native['arguments']
     assert 'PROBABILITY_MODEL="${PM_V7_PROBABILITY_MODEL:-}"' in launcher
     assert '"${PROBABILITY_MODEL_ARGS[@]}"' in launcher
+    assert 'PM_V7_PROBABILITY_EVALUATION_SECONDS:-7200' in launcher
+    assert 'PROBABILITY_EVALUATION_SECONDS == 7200' in launcher
+    assert '--probability-evaluation-end-wall-ns' in launcher
+    assert '"${PROBABILITY_EVALUATION_ARGS[@]}"' in launcher
+    assert 'PM_V7_PROBABILITY_EVALUATION_SECONDS:-7200' in launcher
+    assert 'PROBABILITY_EVALUATION_SECONDS == 7200' in launcher
+    assert '--probability-evaluation-end-wall-ns' in launcher
+    assert '"${PROBABILITY_EVALUATION_ARGS[@]}"' in launcher
 
 def test_native_candidate_wires_bybit_as_explicit_confirmation_source():
     source=(ROOT/'src/v7_crypto_settlement_engine.cpp').read_text()
@@ -89,8 +99,12 @@ def test_native_candidate_wires_bybit_as_explicit_confirmation_source():
     # It must remain separately identified; no alias from Bybit into Coinbase.
     assert 'coinbase_symbol = bybit_symbol' not in manager_source
 
-
 def test_confirmation_evidence_does_not_fabricate_unobserved_provider_returns():
     source=(ROOT/'src/v7_native_runtime_evidence.cpp').read_text()
     assert '{"coinbase_return_100ms_bp", event.confirmation_venue != external_fair::VenueId::BybitSpot' in source
     assert '{"confirmation_return_100ms_bp", event.confirmation_venue != external_fair::VenueId::Unknown' in source
+
+def test_strict_candidate_has_no_direction_only_economic_fallback():
+    native=(ROOT/'src/v7_crypto_settlement_engine.cpp').read_text()
+    assert '(probability_model.loaded || options.strict_signal_policy) ? 1 : 0' in native
+    assert 'direction_only_fallback_allowed' in native

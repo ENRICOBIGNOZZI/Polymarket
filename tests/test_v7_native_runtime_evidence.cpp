@@ -112,6 +112,11 @@ int main() {
         observation.bid_e4 = 4000; observation.ask_e4 = 4100;
         observation.bid_prices[0] = 4000; observation.bid_quantities[0] = 3'000'000;
         observation.reason = 3; observation.direction = 1;
+        observation.repricing_pair_valid = 1;
+        observation.yes_bid_e4 = 4000; observation.yes_ask_e4 = 4100;
+        observation.no_bid_e4 = 5900; observation.no_ask_e4 = 6000;
+        observation.repricing_origin_signal_version = 42;
+        observation.repricing_horizon_ms = 500;
         observation.external_valid = 1;
         observation.external_composite_price = 100.;
         observation.external_return_250ms = .01;
@@ -219,6 +224,11 @@ int main() {
         assert(observation.at("confirmed_non_opposing").as_bool());
         assert(observation.at("signal_valid").as_bool());
         assert(observation.at("accepted").as_bool());
+        assert(observation.at("repricing_pair_valid").as_bool());
+        assert(observation.at("yes_bid_e4").as_int64() == 4000);
+        assert(observation.at("no_ask_e4").as_int64() == 6000);
+        assert(observation.at("repricing_origin_signal_version").as_int64() == 42);
+        assert(observation.at("repricing_horizon_ms").as_int64() == 500);
         assert(observation.at("signal_age_ns").as_int64() == 60'000);
         assert(observation.at("tte_ns").as_int64() == 1'000'000'000);
         assert(observation.at("decision_wall_ns").as_int64() > 0);

@@ -315,6 +315,8 @@
         "${RUN_ROOT}/control/allocations/crypto_settlement_engine.json",
         "--market-registry",
         "${ROOT}/config/v7_crypto_settlement_markets.json",
+        "--signal-policy",
+        "${ROOT}/config/v7_crypto_signal_policy.json",
         "--legacy-claims",
         "${RUN_ROOT}/control/legacy_native_claims.json",
         "--target-quantity-microunits",

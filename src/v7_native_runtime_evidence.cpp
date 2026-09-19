@@ -223,6 +223,9 @@ struct NativeRuntimeEvidenceWriter::Impl {
             {"probability_artifact_sha256", config.probability_artifact_sha256.empty()
                 ? json::value(nullptr) : json::value(config.probability_artifact_sha256)},
             {"probability_forward_calibrated", false},
+            {"probability_evaluation_end_wall_ns",
+                config.probability_evaluation_end_wall_ns > 0
+                    ? json::value(config.probability_evaluation_end_wall_ns) : json::value(nullptr)},
             {"maker_valid_cells", config.maker_valid_cells},
             {"model_family", component},
             {"paper_exploration", true},
@@ -429,6 +432,15 @@ struct NativeRuntimeEvidenceWriter::Impl {
             {"reason", event.reason}, {"accepted", event.accepted != 0}, {"book_valid", event.valid != 0},
             {"bid_e4", event.bid_e4}, {"ask_e4", event.ask_e4}, {"tick_e4", event.tick_e4},
             {"bid_quantity", event.bid_quantity}, {"ask_quantity", event.ask_quantity},
+            {"repricing_pair_valid", event.repricing_pair_valid != 0},
+            {"yes_bid_e4", event.repricing_pair_valid ? json::value(event.yes_bid_e4) : json::value(nullptr)},
+            {"yes_ask_e4", event.repricing_pair_valid ? json::value(event.yes_ask_e4) : json::value(nullptr)},
+            {"no_bid_e4", event.repricing_pair_valid ? json::value(event.no_bid_e4) : json::value(nullptr)},
+            {"no_ask_e4", event.repricing_pair_valid ? json::value(event.no_ask_e4) : json::value(nullptr)},
+            {"repricing_origin_signal_version", event.repricing_origin_signal_version > 0
+                ? json::value(event.repricing_origin_signal_version) : json::value(nullptr)},
+            {"repricing_horizon_ms", event.repricing_horizon_ms > 0
+                ? json::value(event.repricing_horizon_ms) : json::value(nullptr)},
             {"bids", std::move(bids)}, {"asks", std::move(asks)},
             {"trade_side", event.trade_side}, {"trade_e4", event.trade_e4}, {"trade_quantity", event.trade_quantity},
             {"fee_rate", config.taker_fee_rate}, {"fee_exponent", config.taker_fee_exponent},

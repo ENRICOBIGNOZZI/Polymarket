@@ -91,6 +91,7 @@ struct Options {
     std::string model_sha;
     std::string probability_model;
     std::string slow_context;
+    std::int64_t probability_evaluation_end_wall_ns = 0;
     std::string run_id;
     std::string server_id;
     std::string market_id;
@@ -146,6 +147,9 @@ Options parse_options(int argc, char** argv) {
         else if (arg == "--model-sha") out.model_sha = next();
         else if (arg == "--probability-model") out.probability_model = next();
         else if (arg == "--slow-context") out.slow_context = next();
+        else if (arg == "--probability-evaluation-end-wall-ns")
+            out.probability_evaluation_end_wall_ns = bounded_integer<std::int64_t>(
+                next(), 1, std::numeric_limits<std::int64_t>::max());
         else if (arg == "--run-id") out.run_id = next();
         else if (arg == "--server-id") out.server_id = next();
         else if (arg == "--market-id") out.market_id = next();
@@ -203,6 +207,18 @@ struct PmQueuedEvent {
     std::uint64_t connection_epoch = 0;
 };
 
+inline constexpr std::array<std::uint32_t, 4> kRepricingHorizonsMs{100, 250, 500, 1000};
+struct RepricingWindow {
+    std::uint64_t signal_version = 0;
+    std::int64_t trigger_ns = 0;
+    std::int64_t decision_ns = 0;
+    std::array<std::int64_t, 4> target_ns{};
+    std::uint8_t emitted_mask = 0;
+    std::int8_t direction = 0;
+    std::uint8_t active = 0;
+    std::uint8_t continuity_valid = 0;
+};
+
 
 json::object latency_distribution(std::vector<std::int64_t> values) {
     if (values.empty()) return {{"count", 0}, {"p50_ns", nullptr}, {"p95_ns", nullptr}, {"p99_ns", nullptr}, {"p999_ns", nullptr}, {"max_ns", nullptr}};
@@ -240,6 +256,10 @@ int main(int argc, char** argv) {
             throw std::invalid_argument("strict signal policy hash required");
         const auto probability_model = options.probability_model.empty() ? NativeProbabilityModel{}
             : NativeProbabilityModel::load(options.probability_model, options.model_sha);
+        if (probability_model.loaded && options.probability_evaluation_end_wall_ns <= 0)
+            throw std::invalid_argument("probability model requires fixed evaluation end");
+        if (!probability_model.loaded && options.probability_evaluation_end_wall_ns != 0)
+            throw std::invalid_argument("probability evaluation end without model");
         if (options.validate_only) {
             std::cout << "native crypto settlement candidate configuration PASS\n";
             return 0;
@@ -363,11 +383,13 @@ int main(int argc, char** argv) {
         decision_policy.maximum_signal_age_ns = options.maximum_signal_age_ns;
         decision_policy.minimum_absolute_binance_return_bp =
             options.minimum_absolute_binance_return_bp;
+        decision_policy.require_pm_book_pre_signal = options.strict_signal_policy ? 1 : 0;
         decision_policy.minimum_tte_ns = options.minimum_tte_ns;
         decision_policy.maximum_tte_ns = options.maximum_tte_ns;
         decision_policy.target_quantity_microunits = options.target_quantity_microunits;
         decision_policy.maximum_entry_price_e4 = options.maximum_entry_price_e4;
-        decision_policy.probability_ev_enabled = probability_model.loaded ? 1 : 0;
+        decision_policy.probability_ev_enabled =
+            (probability_model.loaded || options.strict_signal_policy) ? 1 : 0;
         NativeCryptoDecisionLane lane(decision_policy);
         CapitalLimits limits = options.capital_limits;
         if (!options.observation_only && (!limits.valid() || options.risk_policy_sha256.size() != 64
@@ -397,6 +419,8 @@ int main(int argc, char** argv) {
         evidence_config.no_token_id = options.no_token;
         evidence_config.fee_source = options.fee_source;
         evidence_config.probability_artifact_sha256 = probability_model.artifact_sha256;
+        evidence_config.probability_evaluation_end_wall_ns =
+            options.probability_evaluation_end_wall_ns;
         evidence_config.yes_instrument_handle = kYes;
         evidence_config.no_instrument_handle = kNo;
         evidence_config.close_wall_ns = options.close_wall_ns;
@@ -491,6 +515,9 @@ int main(int argc, char** argv) {
         std::uint64_t last_measured_signal_version = 0, last_observed_signal_version = 0;
         std::uint64_t last_execution_window_signal_version = 0;
         std::int64_t execution_window_until_ns = 0;
+        std::array<RepricingWindow, 16> repricing_windows{};
+        std::uint64_t repricing_origins = 0, repricing_labels = 0;
+        std::uint64_t repricing_censors = 0, repricing_window_overflow = 0;
         std::uint8_t last_observed_reason = 0, last_observed_accepted = 0;
         const auto observation = [&](const BookHotSnapshot& book, std::uint64_t instrument,
                                      std::uint8_t kind) noexcept {
@@ -525,6 +552,65 @@ int main(int argc, char** argv) {
                 }
             }
             return out;
+        };
+        const auto decorate_pm_pair = [&](NativeObservation& out) noexcept {
+            const bool yes_valid = yes_book.valid != 0 && yes_book.lineage_continuous != 0
+                && yes_book.best_bid_e4 > 0 && yes_book.best_ask_e4 > yes_book.best_bid_e4
+                && yes_book.best_ask_e4 < 10'000;
+            const bool no_valid = no_book.valid != 0 && no_book.lineage_continuous != 0
+                && no_book.best_bid_e4 > 0 && no_book.best_ask_e4 > no_book.best_bid_e4
+                && no_book.best_ask_e4 < 10'000;
+            out.repricing_pair_valid = yes_valid && no_valid ? 1 : 0;
+            if (out.repricing_pair_valid != 0) {
+                out.yes_bid_e4 = yes_book.best_bid_e4; out.yes_ask_e4 = yes_book.best_ask_e4;
+                out.no_bid_e4 = no_book.best_bid_e4; out.no_ask_e4 = no_book.best_ask_e4;
+            }
+        };
+        const auto start_repricing_window = [&](std::uint64_t signal_version,
+                                                 std::int64_t trigger_ns,
+                                                 std::int64_t decision_ns,
+                                                 std::int8_t direction) noexcept {
+            for (auto& window : repricing_windows) {
+                if (window.active != 0) continue;
+                window = RepricingWindow{};
+                window.signal_version = signal_version;
+                window.trigger_ns = trigger_ns;
+                window.decision_ns = decision_ns;
+                window.direction = direction;
+                window.active = 1;
+                window.continuity_valid = 1;
+                for (std::size_t i = 0; i < kRepricingHorizonsMs.size(); ++i) {
+                    window.target_ns[i] = decision_ns
+                        + static_cast<std::int64_t>(kRepricingHorizonsMs[i]) * 1'000'000LL;
+                }
+                ++repricing_origins;
+                return;
+            }
+            ++repricing_window_overflow;
+        };
+        const auto emit_repricing_labels_before = [&](std::int64_t watermark_ns) noexcept {
+            if (!options.capture_execution_windows || watermark_ns <= 0) return;
+            for (auto& window : repricing_windows) {
+                if (window.active == 0) continue;
+                for (std::size_t i = 0; i < kRepricingHorizonsMs.size(); ++i) {
+                    const auto mask = static_cast<std::uint8_t>(1U << i);
+                    if ((window.emitted_mask & mask) != 0 || window.target_ns[i] >= watermark_ns) continue;
+                    auto point = observation(yes_book, kYes, 6);
+                    point.signal_version = window.signal_version;
+                    point.repricing_origin_signal_version = window.signal_version;
+                    point.repricing_horizon_ms = kRepricingHorizonsMs[i];
+                    point.decision_ns = window.decision_ns;
+                    point.trigger_ns = window.trigger_ns;
+                    point.direction = window.direction;
+                    decorate_pm_pair(point);
+                    if (window.continuity_valid == 0) point.repricing_pair_valid = 0;
+                    if (!evidence_writer.publish_observation(point)) ++adapter_handoff_failures;
+                    if (point.repricing_pair_valid != 0) ++repricing_labels;
+                    else ++repricing_censors;
+                    window.emitted_mask = static_cast<std::uint8_t>(window.emitted_mask | mask);
+                }
+                if (window.emitted_mask == 0x0F) window.active = 0;
+            }
         };
         const auto publish_order = [&](const NativeOrderCommand& command,
                                        ExecutionPolicyId policy,
@@ -663,9 +749,12 @@ int main(int argc, char** argv) {
                     for (const auto side : {Side::Buy, Side::Sell})
                         protective_cancel(instrument, side, fault_now);
                 paper_execution.invalidate_arrivals();
+                for (auto& window : repricing_windows) if (window.active != 0) window.continuity_valid = 0;
+                const bool repricing_active = std::any_of(repricing_windows.begin(), repricing_windows.end(),
+                    [](const auto& window) { return window.active != 0; });
                 yes_book.valid = 0; yes_book.lineage_continuous = 0;
                 no_book.valid = 0; no_book.lineage_continuous = 0;
-                if (options.capture_native_observations) {
+                if (options.capture_native_observations || (options.capture_execution_windows && repricing_active)) {
                     if (!evidence_writer.publish_observation(observation(yes_book, kYes, 5))) ++adapter_handoff_failures;
                     if (!evidence_writer.publish_observation(observation(no_book, kNo, 5))) ++adapter_handoff_failures;
                 }
@@ -702,6 +791,7 @@ int main(int argc, char** argv) {
                 binance_ready = coinbase_ready = bybit_ready = pm_ready = false;
                 continue;
             }
+            emit_repricing_labels_before(receive_ns);
             const auto paper_advance = paper_execution.advance_time(receive_ns);
             if (paper_advance.invalid != 0) {
                 ++adapter_handoff_failures;
@@ -896,7 +986,9 @@ int main(int argc, char** argv) {
                 input.now_monotonic_ns = monotonic_now_ns();
                 input.slow_context = slow_cache.at(input.now_monotonic_ns);
                 decision_slow_context = input.slow_context;
-                if (probability_model.loaded) {
+                const bool probability_window_open = probability_model.loaded
+                    && wall_now_ns() <= options.probability_evaluation_end_wall_ns;
+                if (probability_window_open) {
                     input.probability = probability_model.predict(input, options.asset, options.horizon);
                     (void)probability_features(input, options.asset, options.horizon,
                         probability_model.shock_scales, decision_features);
@@ -920,7 +1012,11 @@ int main(int argc, char** argv) {
                 decision_economics = result.economics;
                 const auto finished = monotonic_now_ns();
                 ++evaluations;
-                if (options.capture_execution_windows
+                const bool repricing_origin_eligible = result.accepted != 0
+                    || result.reason == NativeCryptoDecisionReason::ProbabilityUnavailable
+                    || result.reason == NativeCryptoDecisionReason::NetEdgeNonPositive
+                    || result.reason == NativeCryptoDecisionReason::RiskSizeBelowMinimum;
+                if (options.capture_execution_windows && repricing_origin_eligible
                     && current_signal.signal_version != 0
                     && current_signal.signal_version != last_execution_window_signal_version) {
                     last_execution_window_signal_version = current_signal.signal_version;
@@ -928,6 +1024,8 @@ int main(int argc, char** argv) {
                             - options.execution_window_ns
                         ? std::numeric_limits<std::int64_t>::max()
                         : finished + options.execution_window_ns;
+                    start_repricing_window(current_signal.signal_version,
+                        current_signal.trigger_receive_monotonic_ns, finished, current_signal.direction);
                 }
                 const auto observation_reason = static_cast<std::uint8_t>(result.reason);
                 if (options.capture_native_decisions && (current_signal.signal_version != last_observed_signal_version
@@ -940,6 +1038,10 @@ int main(int argc, char** argv) {
                     auto point = observation(selected_up ? yes_book : no_book, selected_up ? kYes : kNo, 2);
                     point.decision_ns = finished; point.reason = observation_reason; point.accepted = result.accepted;
                     point.slow_context = input.slow_context;
+                    if (options.capture_execution_windows && repricing_origin_eligible) {
+                        point.repricing_origin_signal_version = current_signal.signal_version;
+                        decorate_pm_pair(point);
+                    }
                     point.probability = input.probability;
                     point.economics = result.economics;
                     point.probability_features = decision_features;
@@ -1194,6 +1296,10 @@ int main(int argc, char** argv) {
             {"native_full_observation_capture_enabled", options.capture_native_observations},
             {"execution_window_capture_enabled", options.capture_execution_windows},
             {"execution_window_ns", options.execution_window_ns},
+            {"repricing_origins", repricing_origins}, {"repricing_labels", repricing_labels},
+            {"repricing_censors", repricing_censors},
+            {"repricing_window_overflow", repricing_window_overflow},
+            {"repricing_horizons_ms", json::array{100, 250, 500, 1000}},
             {"native_observation_capture_mode", options.capture_native_observations
                 ? "FULL" : options.capture_execution_windows ? "DECISION_WINDOWS"
                 : options.capture_native_decisions ? "DECISIONS" : "NONE"},
@@ -1260,10 +1366,17 @@ int main(int argc, char** argv) {
                 {"diagnostic", coinbase_l2_diagnostic}}},
             {"coinbase", {{"invalid_frames", coinbase_ingress_status.invalid_frames}, {"enqueued", coinbase_ingress_status.enqueued_events}, {"drained", coinbase_ingress_status.drained_events}, {"queued", coinbase_ingress_status.queued}, {"frames", coinbase_status.frames_received}, {"transport_failures", coinbase_status.transport_failures}, {"drops", coinbase_ingress_status.dropped_events}}},
             {"bybit_confirmation", {{"enabled", static_cast<bool>(bybit)}, {"invalid_frames", bybit_ingress_status.invalid_frames}, {"enqueued", bybit_ingress_status.enqueued_events}, {"drained", bybit_ingress_status.drained_events}, {"queued", bybit_ingress_status.queued}, {"frames", bybit_status.frames_received}, {"transport_failures", bybit_status.transport_failures}, {"drops", bybit_ingress_status.dropped_events}}},
+            {"probability_model_configured", probability_model.loaded},
+            {"direction_only_fallback_allowed", !options.strict_signal_policy},
+            {"probability_evaluation_end_wall_ns",
+                probability_model.loaded ? json::value(options.probability_evaluation_end_wall_ns) : json::value(nullptr)},
+            {"probability_evaluation_open",
+                probability_model.loaded && wall_now_ns() <= options.probability_evaluation_end_wall_ns},
             {"signal_policy", {{"minimum_binance_return_bp", options.minimum_absolute_binance_return_bp},
                 {"minimum_confirmation_return_bp", options.minimum_absolute_confirmation_return_bp},
                 {"maximum_signal_age_ns", options.maximum_signal_age_ns},
-                {"confirmation_venue", options.confirmation_venue}}},
+                {"confirmation_venue", options.confirmation_venue},
+                {"require_pm_book_pre_signal", options.strict_signal_policy}}},
             {"polymarket", {{"messages", pm_status.messages}, {"reconnects", pm_status.reconnects}, {"errors", pm_status.errors}, {"drops", pm_drops.load()}}},
             {"note", "PAPER-only native candidate. Maker and taker share one in-process inventory/capital/OMS authority. Taker research fills use delayed local-receive arrival-price FAK with bounded visible-depth partial fills, not exchange-confirmed execution; maker fills use pessimistic public-print queue depletion and bounded cancel latency. No authenticated submission or real capital is possible."}
         }) << '\n';

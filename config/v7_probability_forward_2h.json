@@ -61,5 +61,11 @@
     "unknown_execution_terms": "NO_FILL_CLAIM"
   },
   "execution_semantics": "ARRIVAL_TOP_FAK_ACTUAL_PRICE_PARTIAL_FILL_V2",
-  "all_assets_remain_enabled": true
+  "all_assets_remain_enabled": true,
+  "hard_time_gate": {
+    "duration_seconds": 7200,
+    "start": "RUNTIME_LAUNCH_WALL_CLOCK_WHEN_PRIVATE_PROBABILITY_MODEL_IS_CONFIGURED",
+    "end": "ONE_SHARED_IMMUTABLE_WALL_CLOCK_FOR_ALL_30_CONTEXTS",
+    "after_end": "NO_NEW_PROBABILITY_TAKER_RISK_FEEDS_RISK_SETTLEMENT_CONTINUE"
+  }
 }

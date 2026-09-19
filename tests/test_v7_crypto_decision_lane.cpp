@@ -275,13 +275,30 @@ void test_required_slow_context_is_action_local_and_never_waits() {
     in.signal = signal(1, 81); in.now_monotonic_ns = kNow + 1;
     in.slow_context = cache.at(kNow + 1);
     assert(dependent.construct_candidate(in).reason == NativeCryptoDecisionReason::SlowContextUnavailable);
-    // The same required cut cannot be replayed against a later decision clock.
     in.slow_context = cache.at(kNow);
     assert(dependent.construct_candidate(in).reason == NativeCryptoDecisionReason::SlowContextUnavailable);
 }
 
+void test_strict_lead_lag_requires_pm_book_to_precede_signal() {
+    NativeCryptoDecisionPolicy policy; policy.require_pm_book_pre_signal = 1;
+    NativeCryptoDecisionLane lane(policy); SleeveCapitalAccount capital(limits());
+    auto repriced = input(1, 90);
+    assert(repriced.yes_book.receive_monotonic_ns > repriced.signal.trigger_receive_monotonic_ns);
+    const auto rejected = lane.evaluate(repriced, capital);
+    assert(rejected.accepted == 0);
+    assert(rejected.reason == NativeCryptoDecisionReason::MarketAlreadyRepriced);
+    lane.reset_market(7); auto stale = input(1, 91);
+    stale.yes_book.receive_monotonic_ns = stale.signal.trigger_receive_monotonic_ns - 1'000'000;
+    stale.no_book.receive_monotonic_ns = stale.signal.trigger_receive_monotonic_ns - 1'000'000;
+    const auto accepted = lane.evaluate(stale, capital);
+    assert(accepted.accepted == 1);
+    assert(accepted.reason == NativeCryptoDecisionReason::Accepted);
+    assert(capital.release_order(accepted.intent.intent_id));
+}
+
 int main() {
     test_required_slow_context_is_action_local_and_never_waits();
+    test_strict_lead_lag_requires_pm_book_to_precede_signal();
     test_probability_selects_economic_side_not_signal_side();
     test_up_down_and_admission();
     test_duplicate_depth_tte_and_market_gates();
