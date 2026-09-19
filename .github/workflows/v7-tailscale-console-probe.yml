@@ -45,6 +45,8 @@ jobs:
         shell: bash
         env:
           CHROME_BIN: /usr/bin/google-chrome
+          V7_TS_HEADED: "true"
         run: |
           set -euo pipefail
-          node scripts/v7_tailscale_console_probe.mjs
+          command -v Xvfb >/dev/null 2>&1
+          xvfb-run -a node scripts/v7_tailscale_console_probe.mjs
