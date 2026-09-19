@@ -29,6 +29,7 @@ enum class NativePaperReason : std::uint8_t {
     PriceImprovementUnmodelled = 12,
     PartialFillUnmodelled = 13,
     DepthAccountingUnavailable = 14,
+    PartialFillModelled = 15,
 };
 
 struct NativePaperFillRecord {

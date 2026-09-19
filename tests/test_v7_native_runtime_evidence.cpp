@@ -39,6 +39,9 @@ int main() {
     config.maker_execution_semantics = "maker-paper-v7.2-bilateral-inventory";
     config.observation_capture_mode = "DECISIONS";
     assert(config.valid());
+    auto window_config = config;
+    window_config.observation_capture_mode = "DECISION_WINDOWS";
+    assert(window_config.valid());
 
     NativeOrderCommand command{};
     command.command_id = 7;

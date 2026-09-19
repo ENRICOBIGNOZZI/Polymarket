@@ -1,0 +1,201 @@
+{
+  "schema": "polymarket_v7_crypto_signal_policy_v2",
+  "paper_only": true,
+  "real_order_submission": false,
+  "authenticated_execution": false,
+  "state": "EXPERIMENTAL_CONTEXT_SPECIFIC_FORWARD_TEST_REQUIRED",
+  "shock_window_ms": 100,
+  "grid_ms": 25,
+  "cooldown_ms": 250,
+  "warmup_ms": 300,
+  "contexts": {
+    "BTC:M5": {
+      "minimum_binance_return_bp": 0.35,
+      "minimum_confirmation_return_bp": 0.05,
+      "maximum_signal_age_ms": 100,
+      "confirmation_venue": "COINBASE"
+    },
+    "BTC:M15": {
+      "minimum_binance_return_bp": 0.35,
+      "minimum_confirmation_return_bp": 0.05,
+      "maximum_signal_age_ms": 200,
+      "confirmation_venue": "COINBASE"
+    },
+    "BTC:H1": {
+      "minimum_binance_return_bp": 0.35,
+      "minimum_confirmation_return_bp": 0.05,
+      "maximum_signal_age_ms": 150,
+      "confirmation_venue": "COINBASE"
+    },
+    "BTC:H4": {
+      "minimum_binance_return_bp": 0.35,
+      "minimum_confirmation_return_bp": 0.05,
+      "maximum_signal_age_ms": 150,
+      "confirmation_venue": "COINBASE"
+    },
+    "BTC:D1": {
+      "minimum_binance_return_bp": 0.35,
+      "minimum_confirmation_return_bp": 0.05,
+      "maximum_signal_age_ms": 150,
+      "confirmation_venue": "COINBASE"
+    },
+    "ETH:M5": {
+      "minimum_binance_return_bp": 0.7,
+      "minimum_confirmation_return_bp": 0.05,
+      "maximum_signal_age_ms": 250,
+      "confirmation_venue": "COINBASE"
+    },
+    "ETH:M15": {
+      "minimum_binance_return_bp": 0.45,
+      "minimum_confirmation_return_bp": 0.05,
+      "maximum_signal_age_ms": 150,
+      "confirmation_venue": "COINBASE"
+    },
+    "ETH:H1": {
+      "minimum_binance_return_bp": 0.6,
+      "minimum_confirmation_return_bp": 0.05,
+      "maximum_signal_age_ms": 200,
+      "confirmation_venue": "COINBASE"
+    },
+    "ETH:H4": {
+      "minimum_binance_return_bp": 0.6,
+      "minimum_confirmation_return_bp": 0.05,
+      "maximum_signal_age_ms": 200,
+      "confirmation_venue": "COINBASE"
+    },
+    "ETH:D1": {
+      "minimum_binance_return_bp": 0.6,
+      "minimum_confirmation_return_bp": 0.05,
+      "maximum_signal_age_ms": 200,
+      "confirmation_venue": "COINBASE"
+    },
+    "SOL:M5": {
+      "minimum_binance_return_bp": 0.5,
+      "minimum_confirmation_return_bp": 0.05,
+      "maximum_signal_age_ms": 150,
+      "confirmation_venue": "COINBASE"
+    },
+    "SOL:M15": {
+      "minimum_binance_return_bp": 0.5,
+      "minimum_confirmation_return_bp": 0.05,
+      "maximum_signal_age_ms": 350,
+      "confirmation_venue": "COINBASE"
+    },
+    "SOL:H1": {
+      "minimum_binance_return_bp": 0.5,
+      "minimum_confirmation_return_bp": 0.05,
+      "maximum_signal_age_ms": 150,
+      "confirmation_venue": "COINBASE"
+    },
+    "SOL:H4": {
+      "minimum_binance_return_bp": 0.5,
+      "minimum_confirmation_return_bp": 0.05,
+      "maximum_signal_age_ms": 150,
+      "confirmation_venue": "COINBASE"
+    },
+    "SOL:D1": {
+      "minimum_binance_return_bp": 0.5,
+      "minimum_confirmation_return_bp": 0.05,
+      "maximum_signal_age_ms": 150,
+      "confirmation_venue": "COINBASE"
+    },
+    "XRP:M5": {
+      "minimum_binance_return_bp": 0.5,
+      "minimum_confirmation_return_bp": 0.05,
+      "maximum_signal_age_ms": 250,
+      "confirmation_venue": "COINBASE"
+    },
+    "XRP:M15": {
+      "minimum_binance_return_bp": 0.5,
+      "minimum_confirmation_return_bp": 0.05,
+      "maximum_signal_age_ms": 150,
+      "confirmation_venue": "COINBASE"
+    },
+    "XRP:H1": {
+      "minimum_binance_return_bp": 0.5,
+      "minimum_confirmation_return_bp": 0.05,
+      "maximum_signal_age_ms": 150,
+      "confirmation_venue": "COINBASE"
+    },
+    "XRP:H4": {
+      "minimum_binance_return_bp": 0.5,
+      "minimum_confirmation_return_bp": 0.05,
+      "maximum_signal_age_ms": 200,
+      "confirmation_venue": "COINBASE"
+    },
+    "XRP:D1": {
+      "minimum_binance_return_bp": 0.5,
+      "minimum_confirmation_return_bp": 0.05,
+      "maximum_signal_age_ms": 200,
+      "confirmation_venue": "COINBASE"
+    },
+    "DOGE:M5": {
+      "minimum_binance_return_bp": 1.13,
+      "minimum_confirmation_return_bp": 0.05,
+      "maximum_signal_age_ms": 350,
+      "confirmation_venue": "COINBASE"
+    },
+    "DOGE:M15": {
+      "minimum_binance_return_bp": 1.13,
+      "minimum_confirmation_return_bp": 0.05,
+      "maximum_signal_age_ms": 150,
+      "confirmation_venue": "COINBASE"
+    },
+    "DOGE:H1": {
+      "minimum_binance_return_bp": 1.13,
+      "minimum_confirmation_return_bp": 0.05,
+      "maximum_signal_age_ms": 150,
+      "confirmation_venue": "COINBASE"
+    },
+    "DOGE:H4": {
+      "minimum_binance_return_bp": 1.13,
+      "minimum_confirmation_return_bp": 0.05,
+      "maximum_signal_age_ms": 200,
+      "confirmation_venue": "COINBASE"
+    },
+    "DOGE:D1": {
+      "minimum_binance_return_bp": 1.13,
+      "minimum_confirmation_return_bp": 0.05,
+      "maximum_signal_age_ms": 200,
+      "confirmation_venue": "COINBASE"
+    },
+    "BNB:M5": {
+      "minimum_binance_return_bp": 0.2,
+      "minimum_confirmation_return_bp": 0.05,
+      "maximum_signal_age_ms": 150,
+      "confirmation_venue": "BYBIT"
+    },
+    "BNB:M15": {
+      "minimum_binance_return_bp": 0.2,
+      "minimum_confirmation_return_bp": 0.05,
+      "maximum_signal_age_ms": 150,
+      "confirmation_venue": "BYBIT"
+    },
+    "BNB:H1": {
+      "minimum_binance_return_bp": 0.2,
+      "minimum_confirmation_return_bp": 0.05,
+      "maximum_signal_age_ms": 150,
+      "confirmation_venue": "BYBIT"
+    },
+    "BNB:H4": {
+      "minimum_binance_return_bp": 0.2,
+      "minimum_confirmation_return_bp": 0.05,
+      "maximum_signal_age_ms": 150,
+      "confirmation_venue": "BYBIT"
+    },
+    "BNB:D1": {
+      "minimum_binance_return_bp": 0.2,
+      "minimum_confirmation_return_bp": 0.05,
+      "maximum_signal_age_ms": 150,
+      "confirmation_venue": "BYBIT"
+    }
+  },
+  "interpretation": {
+    "thresholds": "Context-specific PAPER research parameters. Frozen before the next forward test; descriptive historical diagnostics informed them, but they are not claimed optimal.",
+    "horizon_specificity": "M5/M15/H1 can differ because the same 100ms move has different conditional value across contract horizons. H4/D1 inherit conservative asset defaults until evidence exists.",
+    "confirmation": "A positive minimum confirmation move means a flat second venue is not confirmation.",
+    "bnb": "Binance spot is the trigger; Bybit spot is explicitly the BNB confirmation venue because the registered BNB context has no Coinbase spot symbol.",
+    "normalization": "Raw bp thresholds are transitional. The target design normalizes shock by exchange tick and time-normalized volatility before context calibration.",
+    "execution": "Execution policy is separate from signal selection: actual arrival-price FAK, partial fills, hard risk ceilings, and bounded economic chase when probability EV is active."
+  }
+}

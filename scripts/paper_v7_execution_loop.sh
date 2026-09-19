@@ -18,6 +18,18 @@ RECORDER="${PM_TRADE_RECORDER:-build/polymarket_v7_trade_recorder}"
 FILLABILITY_OBSERVER="${PM_V7_MAKER_FILLABILITY_OBSERVER:-build/polymarket_v7_maker_fillability_observer}"
 EXTERNAL_VENUE_RUNTIME="${PM_V7_EXTERNAL_VENUE_RUNTIME:-build/polymarket_v7_external_venue_runtime}"
 CRYPTO_SETTLEMENT_ENGINE="${PM_V7_CRYPTO_SETTLEMENT_ENGINE:-build/polymarket_v7_crypto_settlement_engine}"
+CRYPTO_SIGNAL_POLICY="${PM_V7_CRYPTO_SIGNAL_POLICY:-}"
+CRYPTO_SIGNAL_POLICY_ARGS=()
+if [[ -n "$CRYPTO_SIGNAL_POLICY" ]]; then
+  [[ -f "$CRYPTO_SIGNAL_POLICY" ]] || { echo "signal policy not found: $CRYPTO_SIGNAL_POLICY" >&2; exit 78; }
+  CRYPTO_SIGNAL_POLICY_ARGS=(--signal-policy "$CRYPTO_SIGNAL_POLICY")
+fi
+PROBABILITY_MODEL="${PM_V7_PROBABILITY_MODEL:-}"
+PROBABILITY_MODEL_ARGS=()
+if [[ -n "$PROBABILITY_MODEL" ]]; then
+  [[ -f "$PROBABILITY_MODEL" ]] || { echo "probability model not found: $PROBABILITY_MODEL" >&2; exit 78; }
+  PROBABILITY_MODEL_ARGS=(--probability-model "$PROBABILITY_MODEL")
+fi
 CI_REPOSITORY="${PM_V7_CI_REPOSITORY:-ENRICOBIGNOZZI/Polymarket}"
 SHA="${PM_V7_MODEL_SHA:-$(cat deploy/london/runtime_sha 2>/dev/null || git rev-parse HEAD)}"
 [[ "$SHA" =~ ^[0-9a-f]{40}$ ]] || { echo "exact 40-character runtime SHA required" >&2; exit 78; }
@@ -512,6 +524,8 @@ PM_V7_CONTROL_NICE=0 v7_exec_class CONTROL python3 scripts/v7_native_crypto_engi
   --universe "$RUN_ROOT/universe/current.json" \
   --allocation "$RUN_ROOT/control/allocations/crypto_settlement_engine.json" \
   --market-registry "$ROOT/config/v7_crypto_settlement_markets.json" \
+  "${CRYPTO_SIGNAL_POLICY_ARGS[@]}" \
+  "${PROBABILITY_MODEL_ARGS[@]}" \
   --legacy-claims "$RUN_ROOT/control/legacy_native_claims.json" \
   --engine "$CRYPTO_SETTLEMENT_ENGINE" \
   --settler "$ROOT/scripts/v7_native_paper_settlement.py" \
@@ -520,7 +534,8 @@ PM_V7_CONTROL_NICE=0 v7_exec_class CONTROL python3 scripts/v7_native_crypto_engi
   --maximum-entry-price-e4 7500 \
   --minimum-tte-ns 105000000000 --maximum-tte-ns 120000000000 \
   --maker-share-cap-microunits 1000000 \
-  --capture-native-decisions --capture-native-full-context BTC:M5 \
+  --capture-native-decisions --capture-execution-windows --execution-window-ns 2000000000 \
+  --capture-native-full-context BTC:M5 \
   --asynchronous-settlement \
   >> "$RUN_ROOT/native_engine_manager.log" 2>&1 &
 v7_register_child "$!"

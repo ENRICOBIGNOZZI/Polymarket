@@ -329,6 +329,9 @@
         "1000000",
         "--asynchronous-settlement",
         "--capture-native-decisions",
+        "--capture-execution-windows",
+        "--execution-window-ns",
+        "2000000000",
         "--capture-native-full-context",
         "BTC:M5"
       ],
@@ -340,7 +343,8 @@
         "control/allocations/crypto_settlement_engine.json",
         "config/v7_crypto_settlement_markets.json",
         "config/v7_native_risk_policy.json",
-        "control/legacy_native_claims.json"
+        "control/legacy_native_claims.json",
+        "config/v7_crypto_signal_policy.json"
       ],
       "outputs": [
         "control/native_engine_manager_status.json",

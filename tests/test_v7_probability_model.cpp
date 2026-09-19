@@ -33,7 +33,9 @@ json::object artifact() {
       {"feature_schema",features},{"asset_order",assets},{"horizon_order",horizons},
       {"coefficients",coefficients},{"covariance",cov},{"shock_scales",scales},
       {"uncertainty_z",1.645},{"explicit_logit_reserve",.25},
-      {"execution_reserve_per_share",.005},{"maximum_order_cost_microdollars",3750000},
+      {"execution_reserve_per_share",.005},{"minimum_net_edge",.02},
+      {"fractional_kelly",.25},{"maximum_chase_ticks",2},
+      {"maximum_order_cost_microdollars",3750000},
       {"maximum_quantity_microunits",20000000}};
 }
 NativeCryptoDecisionInput input() {
@@ -57,7 +59,17 @@ int main(int argc,char** argv) {
             auto r=json::parse(line).as_object();const auto& z=r.at("features").as_object();auto x=input();
             x.signal.direction=json::value_to<std::int8_t>(z.at("direction"));
             x.signal.binance_return_100ms_bp=json::value_to<double>(z.at("binance_return_100ms_bp"));
-            x.signal.coinbase_return_100ms_bp=json::value_to<double>(z.at("coinbase_return_100ms_bp"));
+            const auto* provider=z.if_contains("confirmation_venue");
+            if(provider && provider->is_string() && provider->as_string()!="UNKNOWN") {
+                const auto name=std::string_view(provider->as_string());
+                if(name!="BYBIT" && name!="COINBASE") throw std::invalid_argument("unknown confirmation provider");
+                x.signal.confirmation_venue=name=="BYBIT"
+                    ? external_fair::VenueId::BybitSpot : external_fair::VenueId::CoinbaseSpot;
+                x.signal.confirmation_return_100ms_bp=json::value_to<double>(z.at("confirmation_return_100ms_bp"));
+                x.signal.coinbase_return_100ms_bp=std::numeric_limits<double>::quiet_NaN();
+            } else {
+                x.signal.coinbase_return_100ms_bp=json::value_to<double>(z.at("coinbase_return_100ms_bp"));
+            }
             x.signal.trigger_receive_monotonic_ns=x.now_monotonic_ns-json::value_to<std::int64_t>(z.at("signal_age_ns"));
             x.market.close_monotonic_ns=x.now_monotonic_ns+json::value_to<std::int64_t>(z.at("tte_ns"));
             auto& b=x.signal.direction>0?x.yes_book:x.no_book;
@@ -91,7 +103,14 @@ int main(int argc,char** argv) {
     x=input();x.signal.trigger_receive_monotonic_ns=x.now_monotonic_ns+1;
     assert(!m.predict(x,"DOGE","M5").valid);
     assert(!m.predict(input(),"UNKNOWN","M5").valid);
-    for(int failure=0;failure<6;++failure) {
+    x=input(); x.signal.confirmation_venue=external_fair::VenueId::BybitSpot;
+    x.signal.confirmation_return_100ms_bp=.3;
+    x.signal.coinbase_return_100ms_bp=std::numeric_limits<double>::quiet_NaN();
+    std::array<double,kProbabilityFeatures> generic_features{};
+    assert(probability_features(x,"BNB","M5",m.shock_scales,generic_features));
+    assert(std::abs(generic_features[3]-.3)<1e-12);
+    assert(m.predict(x,"BNB","M5").valid);
+    for(int failure=0;failure<7;++failure) {
         o=artifact();
         if(failure==0)o["code_sha"]=std::string(40,'b');
         if(failure==1)o["real_order_submission"]=true;
@@ -99,6 +118,7 @@ int main(int argc,char** argv) {
         if(failure==3)o["covariance"].as_array()[0].as_array()[0]=-1.;
         if(failure==4)o["maximum_order_cost_microdollars"]=3750001;
         if(failure==5)o["excluded_assets"]=json::array{"DOGE"};
+        if(failure==6)o["maximum_chase_ticks"]=std::int64_t{4'294'967'298LL};
         {std::ofstream out(path);out<<json::serialize(o);}
         bool rejected=false;try{(void)NativeProbabilityModel::load(path.string(),std::string(40,'a'));}
         catch(const std::exception&){rejected=true;}assert(rejected);

@@ -243,12 +243,15 @@ void test_probability_selects_economic_side_not_signal_side() {
         .version=1,.valid=1};
     x.risk_sizing.allocated_wealth_microdollars=100'000'000;
     x.risk_sizing.available_microdollars=100'000'000;
+    x.risk_sizing.maximum_chase_ticks=2;
     x.taker_fee_rate=.07; x.taker_fee_exponent=1; x.execution_reserve_per_share=.005;
     const auto before=allocations.load();
     auto d=lane.construct_candidate(x);
     assert(allocations.load()==before);
     assert(d.accepted && !d.selected_yes && d.intent.instrument_handle==12);
     assert(d.economics.conservative_net_edge>0);
+    assert(d.economics.maximum_executable_price_e4==6200);
+    assert(d.intent.price_tick==62);
     assert(d.economics.cost_ceiling_microdollars<=3'750'000);
     lane.reset_market(7);x.probability.valid=0;
     assert(lane.construct_candidate(x).reason==NativeCryptoDecisionReason::ProbabilityUnavailable);

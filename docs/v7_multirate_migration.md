@@ -82,3 +82,20 @@ admissible evaluations per path after warmup. It reports p50/p99/max and accepte
 counts. This is not an end-to-end exchange, loaded prediction-model, representative
 market-replay, fill, or PnL benchmark. The executable is excluded from the minimal
 London runtime build. Scheduler tails are reported rather than hidden.
+
+## Latest concurrent-agent integration
+
+PR 1194's final published head `f01631b415813a09e6fd47ec24569ae8de19f137` is
+integrated, including explicit context-specific confirmation sources, bounded
+post-decision capture, and arrival-price/partial-FAK PAPER execution accounting.
+Price improvement and partial fills now retain their actual simulated quantity,
+price, terminal remainder and reservation release; these remain simulated fills,
+not exchange-confirmed execution. Their V2 execution semantics must not be
+pooled with the earlier same-price/full-fill censored cohort.
+
+The proposed per-context shock thresholds and signal TTLs are NOT silently
+enabled by the normal launcher. `PM_V7_CRYPTO_SIGNAL_POLICY` must be explicitly
+set for that identified research policy. The probability artifact is independently
+opt-in through `PM_V7_PROBABILITY_MODEL`. Bybit confirmation is separately named;
+an unavailable Coinbase confirmation is null, not a fabricated zero return.
+The new slow context remains observational until a model is fitted for it.
