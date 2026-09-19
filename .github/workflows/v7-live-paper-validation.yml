@@ -199,6 +199,7 @@ jobs:
           rm -rf "$R"
           mkdir -p "$R/ledger"
           touch "$R/ledger/execution.jsonl"
+          PM_V7_RUNTIME_PROFILE=config/runtime/ci-paper.json \
           PM_V7_CONFIG=config/paper_v7.json \
           PM_V7_RUN_ROOT="$R" \
           PM_TRADE_RECORDER="$PWD/build/polymarket_v7_trade_recorder" \

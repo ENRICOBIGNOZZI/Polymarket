@@ -1,0 +1,29 @@
+{
+  "schema": "polymarket_v7_runtime_resources_v1",
+  "version": 2,
+  "paper_only": true,
+  "minimum_visible_cpus": 4,
+  "require_disjoint_cpu_classes": true,
+  "hot_path": {
+    "reserved_cores": 1,
+    "nice": 0
+  },
+  "collector": {
+    "reserved_cores": 1,
+    "nice": 5
+  },
+  "control": {
+    "reserved_cores": 1,
+    "nice": 3
+  },
+  "housekeeping": {
+    "reserved_cores": 1
+  },
+  "forbidden_on_london": [
+    "training",
+    "backtest",
+    "retrospective_analytics",
+    "report_generation",
+    "hyperparameter_search"
+  ]
+}
