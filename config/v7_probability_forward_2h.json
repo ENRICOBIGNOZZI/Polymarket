@@ -1,0 +1,71 @@
+{
+  "schema": "v7_probability_forward_protocol_v1",
+  "state": "PREPARED_NOT_STARTED",
+  "duration_seconds": 7200,
+  "paper_only": true,
+  "authenticated_execution": false,
+  "real_order_submission": false,
+  "real_capital_at_risk": false,
+  "assets": [
+    "BTC",
+    "ETH",
+    "SOL",
+    "XRP",
+    "DOGE",
+    "BNB"
+  ],
+  "horizons": [
+    "M5",
+    "M15",
+    "H1",
+    "H4",
+    "D1"
+  ],
+  "excluded_assets": [],
+  "asset_shadow_overrides": [],
+  "risk": {
+    "preserve_existing_global_authority": true,
+    "max_order_cost_microdollars": 3750000,
+    "max_quantity_microunits": 20000000,
+    "fractional_kelly": 0.25,
+    "never_round_up_to_venue_minimum": true,
+    "minimum_net_edge": 0.02,
+    "maximum_chase_ticks": 2,
+    "execution_reserve_per_share": 0.005
+  },
+  "freeze": [
+    "runtime_sha",
+    "artifact_sha256",
+    "signal_policy_sha256",
+    "training_cut",
+    "analysis_plan",
+    "fee_terms",
+    "arrival_semantics",
+    "execution_chase_policy"
+  ],
+  "cohort_time": "ORDER_DECISION_RECEIVE_TIME",
+  "end_action": "CLOSE_EVALUATION_COHORT_KEEP_FEEDS_RISK_AND_SETTLEMENT_RUNNING",
+  "unresolved_outcomes": "PENDING_NOT_ZERO",
+  "hypothetical_nonfill_pnl_in_canonical_ledger": false,
+  "automatic_promotion": false,
+  "requires_checked_explicit_activation": true,
+  "signal_policy": "config/v7_crypto_signal_policy.json",
+  "signal_policy_semantics": "CONTEXT_SPECIFIC_ASSET_HORIZON_THRESHOLDS_WITH_EXPLICIT_SECOND_VENUE_CONFIRMATION",
+  "execution": {
+    "paper_simulator_semantics": "LOCAL_RECEIVE_DELAYED_ARRIVAL_PRICE_PARTIAL_FAK_V2",
+    "post_decision_capture_window_ns": 2000000000,
+    "price_improvement": "FILL_AT_ACTUAL_ARRIVAL_PRICE",
+    "partial_fak": "FILL_VISIBLE_QUANTITY_EXPIRE_REMAINDER",
+    "probability_ev_bounded_chase_ticks": 2,
+    "chase_condition": "CONSERVATIVE_PROBABILITY_EDGE_REMAINS_POSITIVE_AFTER_FEE_AND_RESERVE",
+    "unknown_execution_terms": "NO_FILL_CLAIM"
+  },
+  "execution_semantics": "ARRIVAL_TOP_FAK_ACTUAL_PRICE_PARTIAL_FILL_V2",
+  "all_assets_remain_enabled": true,
+  "hard_time_gate": {
+    "duration_seconds": 7200,
+    "start": "RUNTIME_LAUNCH_WALL_CLOCK_WHEN_PRIVATE_PROBABILITY_MODEL_IS_CONFIGURED",
+    "end": "ONE_SHARED_IMMUTABLE_WALL_CLOCK_FOR_ALL_30_CONTEXTS",
+    "after_end": "NO_NEW_PROBABILITY_TAKER_RISK_FEEDS_RISK_SETTLEMENT_CONTINUE"
+  }
+}

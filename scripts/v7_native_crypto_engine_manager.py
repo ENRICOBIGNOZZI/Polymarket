@@ -11,6 +11,7 @@ from __future__ import annotations
 import argparse
 import fcntl
 import functools
+import hashlib
 from decimal import Decimal, InvalidOperation
 import json
 import math
@@ -26,6 +27,8 @@ import urllib.request
 from dataclasses import dataclass, asdict
 from pathlib import Path
 from typing import Any
+
+from v7_slow_context import context_path, publish_contexts
 
 from v7_execution_ledger import native_order_id_matches, LedgerEvent, canonical_ledger_path, iter_events
 from v7_ledger_spool import spool_event
@@ -368,6 +371,49 @@ def _budget_after_legacy_claims(
     return gross_microdollars - claim, claim, str(legacy["registry_sha256"])
 
 
+
+def _signal_policy(path: Path | None) -> dict[str, dict[str, Any]]:
+    if path is None:
+        return {}
+    value = read_json(path)
+    contexts = value.get("contexts")
+    expected = {f"{asset}:{horizon}" for asset in ("BTC", "ETH", "SOL", "XRP", "DOGE", "BNB") for horizon in ("M5", "M15", "H1", "H4", "D1")}
+    if (
+        value.get("schema") != "polymarket_v7_crypto_signal_policy_v2"
+        or value.get("paper_only") is not True
+        or value.get("real_order_submission") is not False
+        or value.get("authenticated_execution") is not False
+        or value.get("require_pm_book_pre_signal") is not True
+        or not isinstance(contexts, dict)
+        or set(contexts) != expected
+    ):
+        raise RuntimeError("crypto_signal_policy_invalid")
+    normalized: dict[str, dict[str, Any]] = {}
+    for context, row in contexts.items():
+        if not isinstance(row, dict):
+            raise RuntimeError("crypto_signal_policy_invalid")
+        trigger = row.get("minimum_binance_return_bp")
+        confirm = row.get("minimum_confirmation_return_bp")
+        age = row.get("maximum_signal_age_ms")
+        venue = row.get("confirmation_venue")
+        if (
+            not isinstance(trigger, (int, float)) or isinstance(trigger, bool)
+            or not math.isfinite(float(trigger)) or not 0 < float(trigger) <= 1000
+            or not isinstance(confirm, (int, float)) or isinstance(confirm, bool)
+            or not math.isfinite(float(confirm)) or not 0 < float(confirm) <= 1000
+            or not isinstance(age, int) or isinstance(age, bool) or not 1 <= age <= 5000
+            or venue not in {"COINBASE", "BYBIT"}
+        ):
+            raise RuntimeError("crypto_signal_policy_invalid")
+        normalized[context] = {
+            "minimum_binance_return_bp": float(trigger),
+            "minimum_confirmation_return_bp": float(confirm),
+            "maximum_signal_age_ns": age * 1_000_000,
+            "confirmation_venue": venue,
+        }
+    return normalized
+
+
 def _enabled_contexts(registry_path: Path) -> set[str]:
     value = read_json(registry_path)
     rows = value.get("contexts") if isinstance(value.get("contexts"), list) else []
@@ -449,6 +495,9 @@ class Manager:
         self.workers: dict[str, Worker] = {}
         self.completed_market_ids: set[str] = set()
         self.stopping = False
+        self.slow_context_failures = 0
+        self.slow_context_error = ""
+        self.slow_context_publications = 0
         self.pending_settlements: dict[str, PendingSettlement] = {}
         self.launch_retry_attempts: dict[str, int] = {}
         self.launch_retry_after: dict[str, float] = {}
@@ -469,6 +518,11 @@ class Manager:
             self.gross_global_budget_microdollars, args.legacy_claims, args.model_sha
         )
         self.enabled_contexts = _enabled_contexts(args.market_registry)
+        self.signal_policy = _signal_policy(getattr(args, "signal_policy", None))
+        self.signal_policy_sha256 = (
+            hashlib.sha256(args.signal_policy.read_bytes()).hexdigest()
+            if getattr(args, "signal_policy", None) is not None else ""
+        )
         self.partition_count = len(self.enabled_contexts)
         self.native_carryover = load_native_carryover(
             self.run_root / "control/native_carryover_exposure.json",
@@ -645,12 +699,23 @@ class Manager:
                 for market_id, task in sorted(self.pending_settlements.items())
             },
             "risk_policy_sha256": self.base_risk_receipt["risk_policy_sha256"],
+            "signal_policy_sha256": getattr(self, "signal_policy_sha256", "") or None,
+            "signal_policy_context_count": len(getattr(self, "signal_policy", {})),
+            "probability_model_configured": getattr(self.args, "probability_model", None) is not None,
+            "probability_evaluation_end_wall_ns": getattr(self.args, "probability_evaluation_end_wall_ns", 0) or None,
+            "probability_evaluation_open": (
+                getattr(self.args, "probability_model", None) is not None
+                and time.time_ns() <= getattr(self.args, "probability_evaluation_end_wall_ns", 0)
+            ),
             "allocated_execution_budget_microdollars": self.allocated_execution_budget_microdollars,
             "engine_pid": min(pids) if pids else 0,
             "engine_pids": pids,
             "market_id": str(workers[0]["market_id"]) if workers else "",
             "window_start_unix": int(workers[0]["window_start_unix"]) if workers else 0,
             "hot_path_executable": str(self.args.engine),
+            "slow_context_failures": getattr(self, "slow_context_failures", 0),
+            "slow_context_error": getattr(self, "slow_context_error", ""),
+            "slow_context_publications": getattr(self, "slow_context_publications", 0),
             "hot_cpuset": str(os.environ.get("PM_V7_HOT_CPUSET") or ""),
             "hot_nice": int(os.environ.get("PM_V7_HOT_NICE") or 0),
             "workers": workers,
@@ -772,8 +837,17 @@ class Manager:
             raise RuntimeError("external_symbols_missing")
         binance_symbol = str(symbols.get("binance_spot") or "")
         coinbase_symbol = str(symbols.get("coinbase_spot") or "NONE")
+        bybit_symbol = str(symbols.get("bybit_spot") or "NONE")
         if not binance_symbol:
             raise RuntimeError("binance_spot_symbol_missing")
+        signal_policies = getattr(self, "signal_policy", {})
+        signal_policy = signal_policies.get(_context_key(market))
+        if signal_policies and signal_policy is None:
+            raise RuntimeError("crypto_signal_policy_context_missing")
+        if signal_policy and signal_policy["confirmation_venue"] == "COINBASE" and coinbase_symbol == "NONE":
+            raise RetryableLaunchError("signal_confirmation_coinbase_missing")
+        if signal_policy and signal_policy["confirmation_venue"] == "BYBIT" and bybit_symbol == "NONE":
+            raise RetryableLaunchError("signal_confirmation_bybit_missing")
         max_market = min(budget_microdollars, self.base_risk_receipt["limits"]["max_market_exposure_microdollars"])
         max_order = min(max_market, self.base_risk_receipt["limits"]["max_single_order_microdollars"])
         command = [
@@ -782,6 +856,7 @@ class Manager:
             "--horizon", str(market["horizon"]),
             "--binance-symbol", binance_symbol,
             "--coinbase-symbol", coinbase_symbol,
+            "--bybit-symbol", bybit_symbol if signal_policy and signal_policy["confirmation_venue"] == "BYBIT" else "NONE",
             "--yes-token", yes_token,
             "--no-token", no_token,
             "--run-root", str(self.run_root),
@@ -811,11 +886,29 @@ class Manager:
             "--taker-fee-exponent", repr(fee_exponent),
             "--duration-seconds", "0",
         ]
+        command.extend(["--slow-context", str(context_path(self.run_root, str(market["market_id"])))])
+        if signal_policy:
+            command.extend([
+                "--signal-policy-sha256", self.signal_policy_sha256,
+                "--strict-signal-policy",
+                "--confirmation-venue", str(signal_policy["confirmation_venue"]),
+                "--minimum-absolute-binance-return-bp", repr(signal_policy["minimum_binance_return_bp"]),
+                "--minimum-absolute-confirmation-return-bp", repr(signal_policy["minimum_confirmation_return_bp"]),
+                "--maximum-signal-age-ns", str(signal_policy["maximum_signal_age_ns"]),
+            ])
+        probability_model = getattr(self.args, "probability_model", None)
+        if probability_model is not None:
+            command.extend(["--probability-model", str(probability_model)])
+            command.extend(["--probability-evaluation-end-wall-ns",
+                str(self.args.probability_evaluation_end_wall_ns)])
         scoped_full = _context_key(market) in getattr(self.args, "capture_native_full_context", [])
         full_requested = getattr(self.args, "capture_native_observations", False) or scoped_full
         capture_headroom = shutil.disk_usage(self.run_root).free >= 20 * 1024**3
         if full_requested and capture_headroom:
             command.append("--capture-native-observations")
+        elif getattr(self.args, "capture_execution_windows", False):
+            command.extend(["--capture-execution-windows", "--execution-window-ns",
+                            str(self.args.execution_window_ns)])
         elif getattr(self.args, "capture_native_decisions", False) or full_requested:
             command.append("--capture-native-decisions")
         return command
@@ -1109,6 +1202,17 @@ class Manager:
                     self._terminate_all()
                     return rc
 
+            # Optional context failures cannot stall independent fast trading.
+            # Missing/expired context stays unavailable in the native cache.
+            try:
+                self.slow_context_publications += publish_contexts(
+                    self.run_root, code_sha=self.args.model_sha,
+                    run_id=self.args.run_id, markets=targets)
+                self.slow_context_error = ""
+            except (OSError, ValueError, TypeError, AttributeError, KeyError, OverflowError) as exc:
+                self.slow_context_failures += 1
+                self.slow_context_error = type(exc).__name__
+
             fatal_launch = self._launch_missing_workers(targets)
             if fatal_launch is not None:
                 key, exc = fatal_launch
@@ -1144,8 +1248,14 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--engine-log", type=Path, required=True)
     parser.add_argument("--allocation", type=Path, required=True)
     parser.add_argument("--market-registry", type=Path, required=True)
+    parser.add_argument("--signal-policy", type=Path, default=None,
+        help="Explicit per-asset PAPER trigger/confirmation policy")
     parser.add_argument("--legacy-claims", type=Path, required=True)
     parser.add_argument("--python", default="python3")
+    parser.add_argument("--probability-model", type=Path, default=None,
+        help="Explicit frozen experimental PAPER probability artifact; native loader verifies exact SHA")
+    parser.add_argument("--probability-evaluation-end-wall-ns", type=int, default=0,
+        help="Shared wall-clock end of the fixed 7200-second probability PAPER cohort")
     parser.add_argument("--settlement-timeout-seconds", type=int, default=600)
     parser.add_argument("--min-order-microunits", type=int, default=5_000_000)
     parser.add_argument("--target-quantity-microunits", type=int, default=5_000_000)
@@ -1158,6 +1268,9 @@ def parse_args() -> argparse.Namespace:
         help="Full bounded native book/trade + decision research capture")
     parser.add_argument("--capture-native-decisions", action="store_true",
         help="Low-volume native decision/intent capture; no raw book-event duplication")
+    parser.add_argument("--capture-execution-windows", action="store_true",
+        help="Capture bounded post-decision PM book/trade windows for execution modelling")
+    parser.add_argument("--execution-window-ns", type=int, default=2_000_000_000)
     parser.add_argument("--capture-native-full-context", action="append", default=[],
         help="Record full native books only for this ASSET:HORIZON, with a 20 GiB free-space launch gate")
     args = parser.parse_args()
@@ -1175,6 +1288,12 @@ def parse_args() -> argparse.Namespace:
         parser.error("invalid maximum taker entry price")
     if args.minimum_tte_ns <= 0 or args.maximum_tte_ns < args.minimum_tte_ns:
         parser.error("invalid taker tte window")
+    if not 1_000_000 <= args.execution_window_ns <= 10_000_000_000:
+        parser.error("invalid execution capture window")
+    if args.probability_model is not None and args.probability_evaluation_end_wall_ns <= 0:
+        parser.error("probability model requires explicit evaluation end wall ns")
+    if args.probability_model is None and args.probability_evaluation_end_wall_ns != 0:
+        parser.error("probability evaluation end requires probability model")
     return args
 
 

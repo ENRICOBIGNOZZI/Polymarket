@@ -5,7 +5,7 @@ ROOT=Path(__file__).resolve().parents[1]
 
 
 def test_hot_path_has_no_database_dataframe_or_python_execution_owner():
-    native=(ROOT/'src/v7_crypto_settlement_native_candidate.cpp').read_text()
+    native=(ROOT/'src/v7_crypto_settlement_engine.cpp').read_text()
     manager=(ROOT/'scripts/v7_native_crypto_engine_manager.py').read_text()
     forbidden=('sqlite3','sqlalchemy','psycopg','pandas','DataFrame')
     for token in forbidden:
@@ -60,10 +60,18 @@ def test_native_manager_launcher_invocation_satisfies_current_cli(tmp_path):
     environment={'ROOT':str(ROOT),'RUN_ROOT':str(tmp_path),'SHA':'a'*40,
         'RUN_ID':'test-run','SERVER_ID':'test-server',
         'CRYPTO_SETTLEMENT_ENGINE':str(ROOT/'build/polymarket_v7_crypto_settlement_engine'),
+        'CRYPTO_SIGNAL_POLICY':str(ROOT/'config/v7_crypto_signal_policy.json'),
         'ALLOC':str(tmp_path/'control/allocations')}
     for key,value in environment.items():command=command.replace('$'+key,value)
+    # The optional shell array expands to zero argv elements when no private
+    # probability artifact is configured. The static launcher test must model
+    # shell expansion rather than pass its literal syntax to argparse.
+    command=command.replace('"${PROBABILITY_MODEL_ARGS[@]}"','')
+    command=command.replace('"${PROBABILITY_EVALUATION_ARGS[@]}"','')
     argv=shlex.split(command.rstrip().rstrip(chr(92)))
     with patch.object(sys,'argv',['native-manager',*argv]):args=parse_args()
+    assert args.signal_policy==ROOT/'config/v7_crypto_signal_policy.json'
+    assert args.probability_model is None
     assert args.allocation==tmp_path/'control/allocations/crypto_settlement_engine.json'
     assert args.market_registry==ROOT/'config/v7_crypto_settlement_markets.json'
     declared=next(p for p in json.loads((ROOT/'config/v7_process_manifest.json').read_text())['processes'] if p['id']=='native_engine_manager')['arguments']
@@ -79,7 +87,7 @@ def test_native_manager_launcher_invocation_satisfies_current_cli(tmp_path):
 
 
 def test_observation_only_defaults_to_decision_capture_not_full_firehose() -> None:
-    source=(ROOT/'src/v7_crypto_settlement_native_candidate.cpp').read_text()
+    source=(ROOT/'src/v7_crypto_settlement_engine.cpp').read_text()
     block=source.split('else if (arg == "--observation-only")',1)[1].split('else if (arg == "--capture-native-observations")',1)[0]
     assert 'out.observation_only = true' in block
     assert 'out.capture_native_decisions = true' in block

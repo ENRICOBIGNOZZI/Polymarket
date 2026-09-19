@@ -1,9 +1,12 @@
 #pragma once
 
 #include "pm/v7_execution_plan.hpp"
+#include "pm/v7_external_fair.hpp"
 #include "pm/v7_native_order_tx.hpp"
 #include "pm/v7_native_paper_execution.hpp"
 #include "pm/v7_spsc.hpp"
+#include "pm/v7_probability_ev.hpp"
+#include "pm/v7_multirate_context.hpp"
 
 #include <atomic>
 #include <cstdint>
@@ -20,6 +23,11 @@ enum class NativeEvidenceKind : std::uint8_t {
 
 struct NativeEvidenceEvent {
     NativeEvidenceKind kind = NativeEvidenceKind::OrderSubmitted;
+    SlowContextCut slow_context{};
+    SettlementProbabilityForecast probability{};
+    ProbabilityEvDecision economics{};
+    std::array<double, 18> probability_features{};
+    std::uint64_t probability_input_instrument = 0;
     NativePaperReason paper_reason = NativePaperReason::Accepted;
     std::uint8_t paper_censored = 0;
     NativeOrderCommand command{};
@@ -35,18 +43,39 @@ struct NativeEvidenceEvent {
 // A bounded copy of exactly the state consumed by the native decision owner.
 // Research observations never enter the economic ledger or order transport.
 struct NativeObservation {
+    SlowContextCut slow_context{};
+    SettlementProbabilityForecast probability{};
+    ProbabilityEvDecision economics{};
+    std::array<double, 18> probability_features{};
+    std::uint64_t probability_input_instrument = 0;
+    std::uint64_t external_state_version = 0;
+    std::int64_t external_input_receive_ns = 0;
+    double external_composite_price = 0.0, external_return_250ms = 0.0;
+    double external_return_1s = 0.0, external_return_5s = 0.0;
+    double external_vol_fast = 0.0, external_vol_slow = 0.0, external_dispersion_bps = 0.0;
+    std::uint32_t external_fresh_venues = 0;
+    std::uint8_t external_valid = 0;
+    std::uint8_t external_return_250ms_valid = 0, external_return_1s_valid = 0, external_return_5s_valid = 0;
+
     std::uint64_t instrument_handle = 0, book_version = 0, signal_version = 0;
     std::int64_t receive_ns = 0, exchange_ns = 0, observed_ns = 0, trigger_ns = 0;
     std::int64_t evaluated_grid_ns = 0, valid_until_ns = 0;
     std::int64_t decision_ns = 0, close_ns = 0;
     std::int64_t bid_quantity = 0, ask_quantity = 0, trade_quantity = 0;
     std::int32_t bid_e4 = 0, ask_e4 = 0, tick_e4 = 0, trade_e4 = 0;
+    // Exact two-token PM state used for causal repricing labels. Missing remains zero/invalid.
+    std::int32_t yes_bid_e4 = 0, yes_ask_e4 = 0, no_bid_e4 = 0, no_ask_e4 = 0;
+    std::uint64_t repricing_origin_signal_version = 0;
+    std::uint32_t repricing_horizon_ms = 0;
+    std::uint8_t repricing_pair_valid = 0;
     std::array<std::int32_t, 10> bid_prices{}, ask_prices{};
     std::array<std::int64_t, 10> bid_quantities{}, ask_quantities{};
     std::int64_t event_receive_ns = 0, event_exchange_ns = 0;
     std::uint8_t event_kind = 0;
     double signal_return_bp = 0.0;
     double binance_return_100ms_bp = 0.0, coinbase_return_100ms_bp = 0.0;
+    double confirmation_return_100ms_bp = 0.0;
+    external_fair::VenueId confirmation_venue = external_fair::VenueId::Unknown;
     double expected_ev = 0.0, ev_uncertainty = 0.0;
     std::int64_t proposed_quantity = 0, proposed_price_tick = 0;
     std::uint64_t connection_epoch = 0;
@@ -67,6 +96,8 @@ struct NativeRuntimeEvidenceConfig {
     std::string yes_token_id;
     std::string no_token_id;
     std::string fee_source;
+    std::string probability_artifact_sha256;
+    std::int64_t probability_evaluation_end_wall_ns = 0;
     std::uint64_t maker_valid_cells = 0;
     std::int64_t minimum_order_microunits = 0;
     std::string risk_policy_sha256;
@@ -84,6 +115,7 @@ struct NativeRuntimeEvidenceConfig {
     std::int64_t paper_venue_delay_ns = -1;
     std::int64_t paper_assumed_transport_delay_ns = 250'000'000LL;
     std::string paper_terms_sha256;
+    std::string signal_policy_sha256;
 
     [[nodiscard]] bool valid() const noexcept;
 };

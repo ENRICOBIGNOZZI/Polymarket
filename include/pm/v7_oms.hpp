@@ -49,6 +49,8 @@ struct OmsEvent {
     std::int64_t timestamp_ns = 0;
     std::int64_t exchange_order_handle = 0;
     std::int64_t fill_delta_microunits = 0;
+    std::int32_t fill_price_e4 = 0; // actual execution price; zero means legacy/unknown.
+    std::int32_t fill_price_reserved = 0;
     std::int64_t authoritative_filled_microunits = -1;
     std::int64_t authoritative_remaining_microunits = -1;
 };

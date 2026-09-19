@@ -81,6 +81,11 @@ NativeCryptoDecisionResult NativeCryptoDecisionLane::construct_candidate(
         || (policy_.require_signal_valid != 0 && input.signal.valid == 0)) {
         return finish(NativeCryptoDecisionReason::InvalidSignal);
     }
+    if (policy_.required_slow_context_mask != 0
+        && (input.slow_context.decision_ns != now_ns
+            || !input.slow_context.satisfies(policy_.required_slow_context_mask))) {
+        return finish(NativeCryptoDecisionReason::SlowContextUnavailable);
+    }
     out.signal_age_ns = now_ns - input.signal.trigger_receive_monotonic_ns;
     if (out.signal_age_ns > policy_.maximum_signal_age_ns
         || (policy_.require_signal_valid != 0
@@ -110,7 +115,55 @@ NativeCryptoDecisionResult NativeCryptoDecisionLane::construct_candidate(
     if (seen_signal(market.market_handle, input.signal.signal_version)) {
         return finish(NativeCryptoDecisionReason::DuplicateSignal);
     }
-    const bool choose_yes = input.signal.direction > 0;
+    if (policy_.require_pm_book_pre_signal != 0) {
+        const bool yes_valid = valid_book(input.yes_book, now_ns, policy_.maximum_book_age_ns);
+        const bool no_valid = valid_book(input.no_book, now_ns, policy_.maximum_book_age_ns);
+        if (!yes_valid || !no_valid) return finish(NativeCryptoDecisionReason::InvalidBook);
+        if (input.yes_book.receive_monotonic_ns >= input.signal.trigger_receive_monotonic_ns
+            || input.no_book.receive_monotonic_ns >= input.signal.trigger_receive_monotonic_ns) {
+            return finish(NativeCryptoDecisionReason::MarketAlreadyRepriced);
+        }
+    }
+    bool choose_yes = input.signal.direction > 0;
+    std::int64_t selected_quantity = policy_.target_quantity_microunits;
+    if (policy_.probability_ev_enabled != 0) {
+        const auto price_quote = [&](bool up) noexcept {
+            const auto& b = up ? input.yes_book : input.no_book;
+            const auto& instrument = up ? market.yes : market.no;
+            ProbabilityEvQuote q;
+            q.is_up = up ? 1 : 0;
+            q.ask_e4 = b.best_ask_e4;
+            q.tick_size_e4 = b.tick_size_e4;
+            q.maximum_limit_e4 = policy_.maximum_entry_price_e4;
+            q.visible_quantity_microunits = b.best_ask_microunits;
+            q.minimum_quantity_microunits = instrument.min_order_microunits;
+            q.fee_rate = input.taker_fee_rate;
+            q.fee_exponent = input.taker_fee_exponent;
+            q.execution_reserve_per_share = input.execution_reserve_per_share;
+            if (!valid_book(b, now_ns, policy_.maximum_book_age_ns)
+                || b.tick_size_e4 <= 0 || b.best_ask_e4 % b.tick_size_e4 != 0
+                || b.best_ask_e4 > policy_.maximum_entry_price_e4
+                || instrument.instrument_handle == 0
+                || instrument.instrument_is_yes != static_cast<std::uint8_t>(up)) q.ask_e4 = 0;
+            return q;
+        };
+        const auto yes = evaluate_probability_ev(input.probability, price_quote(true), input.risk_sizing, now_ns);
+        const auto no = evaluate_probability_ev(input.probability, price_quote(false), input.risk_sizing, now_ns);
+        choose_yes = yes.accepted && (!no.accepted || yes.conservative_net_edge >= no.conservative_net_edge);
+        out.economics = choose_yes ? yes : no;
+        if (!yes.accepted && !no.accepted) {
+            // Preserve the most informative quote diagnosis; never fall back to direction-only.
+            out.economics = std::isfinite(yes.conservative_net_edge)
+                && (!std::isfinite(no.conservative_net_edge) || yes.conservative_net_edge >= no.conservative_net_edge)
+                ? yes : no;
+            if (out.economics.reason == ProbabilityEvReason::NonPositiveNetEdge)
+                return finish(NativeCryptoDecisionReason::NetEdgeNonPositive);
+            if (out.economics.reason == ProbabilityEvReason::BelowVenueMinimum)
+                return finish(NativeCryptoDecisionReason::RiskSizeBelowMinimum);
+            return finish(NativeCryptoDecisionReason::ProbabilityUnavailable);
+        }
+        selected_quantity = out.economics.quantity_microunits;
+    }
     const auto& instrument = choose_yes ? market.yes : market.no;
     const auto& book = choose_yes ? input.yes_book : input.no_book;
     out.selected_yes = choose_yes ? 1 : 0;
@@ -126,16 +179,22 @@ NativeCryptoDecisionResult NativeCryptoDecisionLane::construct_candidate(
         || book.best_ask_e4 > policy_.maximum_entry_price_e4) {
         return finish(NativeCryptoDecisionReason::EntryPriceTooHigh);
     }
-    if (policy_.target_quantity_microunits <= 0
-        || instrument.min_order_microunits > policy_.target_quantity_microunits
+    if (selected_quantity <= 0
+        || instrument.min_order_microunits > selected_quantity
         || (policy_.require_full_visible_depth != 0
-            && book.best_ask_microunits < policy_.target_quantity_microunits)) {
+            && book.best_ask_microunits < selected_quantity)) {
         return finish(NativeCryptoDecisionReason::InsufficientDepth);
     }
     if (book.best_ask_e4 % book.tick_size_e4 != 0) {
         return finish(NativeCryptoDecisionReason::InvalidTick);
     }
-    const auto price_tick = book.best_ask_e4 / book.tick_size_e4;
+    const auto intended_limit_e4 = policy_.probability_ev_enabled != 0
+        ? out.economics.maximum_executable_price_e4 : book.best_ask_e4;
+    if (intended_limit_e4 <= 0 || intended_limit_e4 > policy_.maximum_entry_price_e4
+        || intended_limit_e4 % book.tick_size_e4 != 0) {
+        return finish(NativeCryptoDecisionReason::InvalidTick);
+    }
+    const auto price_tick = intended_limit_e4 / book.tick_size_e4;
     if (price_tick <= 0) return finish(NativeCryptoDecisionReason::InvalidTick);
 
     remember_signal(market.market_handle, input.signal.signal_version);
@@ -154,7 +213,7 @@ NativeCryptoDecisionResult NativeCryptoDecisionLane::construct_candidate(
     intent.decision_monotonic_ns = now_ns;
     intent.exchange_event_ns = book.exchange_event_ns;
     intent.price_tick = price_tick;
-    intent.quantity_microunits = policy_.target_quantity_microunits;
+    intent.quantity_microunits = selected_quantity;
     intent.horizon_ms = 300'000;
     intent.strategy_id = StrategyId::CryptoInformedTaker;
     intent.type = IntentType::TargetPosition;

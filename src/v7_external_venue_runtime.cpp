@@ -895,9 +895,10 @@ json::object bybit_linear_json(const BybitLinearMarketMetrics& value) {
     };
 }
 
-json::array derivative_context_json(const ExternalAssetSnapshot& snapshot) {
+json::array derivative_context_json(const ExternalAssetSnapshot& snapshot, const ExternalAssetState& state) {
     json::array output;
     for (const auto& value : snapshot.derivative_contexts) {
+        const auto clocks = state.derivative_field_clocks(value.venue);
         const char* venue = value.venue == VenueId::Deribit ? "DERIBIT"
             : value.venue == VenueId::BybitLinear ? "BYBIT_LINEAR"
             : value.venue == VenueId::BinanceUsdM ? "BINANCE_USDM" : "UNKNOWN";
@@ -907,6 +908,9 @@ json::array derivative_context_json(const ExternalAssetSnapshot& snapshot) {
             {"mark_price", value.mark_price}, {"index_price", value.index_price},
             {"funding_rate", value.funding_rate}, {"open_interest_native", value.open_interest},
             {"receive_monotonic_ns", value.receive_monotonic_ns}, {"age_ns", value.age_ns},
+            {"field_receive_monotonic_ns", json::array{clocks[0],
+                clocks[1], clocks[2],
+                clocks[3]}},
         });
     }
     return output;
@@ -1500,6 +1504,7 @@ int main(int argc, char** argv) {
             json::object status_payload{
                 {"schema", "polymarket_v7_external_venue_runtime_v1"},
                 {"timestamp_ns", wall_now_ns()},
+                {"snapshot_monotonic_ns", now_mono},
                 {"started_monotonic_ns", started_monotonic_ns},
                 {"uptime_ns", std::max<std::int64_t>(0, now_mono - started_monotonic_ns)},
                 {"code_sha", model_sha},
@@ -1553,6 +1558,8 @@ int main(int argc, char** argv) {
                 {"aggregate_ofi", snapshot.aggregate_ofi},
                 {"aggregate_trade_imbalance", snapshot.aggregate_trade_imbalance},
                 {"latest_input_receive_monotonic_ns", snapshot.latest_input_receive_monotonic_ns},
+                {"price_inputs_receive_monotonic_ns", state.price_context_bounds(snapshot.venue_health_mask, policy)[0]},
+                {"price_inputs_valid_until_monotonic_ns", state.price_context_bounds(snapshot.venue_health_mask, policy)[1]},
                 {"external_cancel_signal", asset == "BTC"
                     ? json::value(external_cancel_signal_json(
                         cancel_signal, model_sha, external_cancel_rule_sha256,
@@ -1568,7 +1575,7 @@ int main(int argc, char** argv) {
                     {"healthy", external_cancel_publish_status.healthy != 0},
                     {"in_flight", external_cancel_publish_status.in_flight != 0},
                 }},
-                {"derivative_contexts", derivative_context_json(snapshot)},
+                {"derivative_contexts", derivative_context_json(snapshot, state)},
                 {"drained_last_cycle", drained},
                 {"causal_merge_sort_fallbacks", causal_sort_fallbacks},
                 {"fast_signal_poll_interval_ms", event_driven_ingress ? json::value(nullptr) : json::value(5)},

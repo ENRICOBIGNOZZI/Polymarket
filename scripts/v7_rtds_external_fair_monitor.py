@@ -1138,6 +1138,8 @@ class Monitor:
                          "oracle_window_seconds": int(self.active_contract.get("oracle_window_seconds") or 60)},
             "settlement_reference": self.reference or {"valid": False, "value": 0.0, "version": 0},
             "oracle": {"healthy": oracle_healthy, "value": float(oracle.get("price") or 0.0),
+                       "receive_monotonic_ns": int(oracle.get("receive_monotonic_ns") or 0),
+                       "source_sequence": int(oracle.get("timestamp_ms") or 0),
                        "age_ns": oracle_age, "continuity": continuity,
                        "connection_epoch": self.connection_epoch, "reconnects": self.reconnects, "gaps": self.gaps},
             "external": {"healthy": multi_venue_healthy,

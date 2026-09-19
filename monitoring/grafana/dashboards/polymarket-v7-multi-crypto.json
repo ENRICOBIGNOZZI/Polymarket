@@ -318,7 +318,7 @@
     {
       "id": 10,
       "type": "row",
-      "title": "PERFORMANCE \u2014 portfolio first",
+      "title": "PERFORMANCE — portfolio first",
       "gridPos": {
         "h": 1,
         "w": 24,
@@ -474,7 +474,7 @@
     {
       "id": 20,
       "type": "row",
-      "title": "ASSET \u00d7 HORIZON",
+      "title": "ASSET × HORIZON",
       "gridPos": {
         "h": 1,
         "w": 24,
@@ -942,7 +942,7 @@
         {
           "expr": "(polymarket_mc_strategy_realized_pnl_usd{job=\"polymarket-v7\",instance=~\".+\",asset=~\"$asset\",horizon=~\"$horizon\",strategy=~\"$strategy\"}) and on(job,instance) (polymarket_v7_exporter_snapshot_usable{job=\"polymarket-v7\",instance=~\".+\"} == 1)",
           "refId": "A",
-          "legendFormat": "{{strategy}} \u00b7 {{asset}} {{horizon}}",
+          "legendFormat": "{{strategy}} · {{asset}} {{horizon}}",
           "instant": false,
           "range": true
         }
@@ -1031,7 +1031,7 @@
     {
       "id": 41,
       "type": "timeseries",
-      "title": "Coordinator Candidate Crypto Risk",
+      "title": "Native Worker Health",
       "gridPos": {
         "h": 8,
         "w": 12,
@@ -1042,26 +1042,33 @@
         "type": "prometheus",
         "uid": "prometheus-v7"
       },
-      "description": "Opportunity/candidate exposure seen by the coordinator; this is not the same as capital actually open in the canonical ledger.",
+      "description": "One native economic engine partitioned across the registered contexts. Missing/retrying contexts are operational faults, not strategy outcomes.",
       "targets": [
         {
-          "expr": "(polymarket_mc_coordinator_candidate_gross_exposure_usd{job=\"polymarket-v7\",instance=~\".+\"}) and on(job,instance) (polymarket_v7_exporter_snapshot_usable{job=\"polymarket-v7\",instance=~\".+\"} == 1)",
+          "expr": "(polymarket_v7_native_active_workers{job=\"polymarket-v7\",instance=~\".+\"}) and on(job,instance) (polymarket_v7_exporter_snapshot_usable{job=\"polymarket-v7\",instance=~\".+\"} == 1)",
+          "legendFormat": "active workers",
           "refId": "A",
-          "legendFormat": "gross",
           "instant": false,
           "range": true
         },
         {
-          "expr": "(polymarket_mc_coordinator_candidate_net_exposure_usd{job=\"polymarket-v7\",instance=~\".+\"}) and on(job,instance) (polymarket_v7_exporter_snapshot_usable{job=\"polymarket-v7\",instance=~\".+\"} == 1)",
+          "expr": "(polymarket_v7_native_target_contexts{job=\"polymarket-v7\",instance=~\".+\"}) and on(job,instance) (polymarket_v7_exporter_snapshot_usable{job=\"polymarket-v7\",instance=~\".+\"} == 1)",
+          "legendFormat": "target contexts",
           "refId": "B",
-          "legendFormat": "net directional",
           "instant": false,
           "range": true
         },
         {
-          "expr": "(polymarket_mc_coordinator_candidate_cluster_exposure_usd{job=\"polymarket-v7\",instance=~\".+\"}) and on(job,instance) (polymarket_v7_exporter_snapshot_usable{job=\"polymarket-v7\",instance=~\".+\"} == 1)",
+          "expr": "(polymarket_v7_native_missing_contexts{job=\"polymarket-v7\",instance=~\".+\"}) and on(job,instance) (polymarket_v7_exporter_snapshot_usable{job=\"polymarket-v7\",instance=~\".+\"} == 1)",
+          "legendFormat": "missing contexts",
           "refId": "C",
-          "legendFormat": "cluster",
+          "instant": false,
+          "range": true
+        },
+        {
+          "expr": "(polymarket_v7_native_launch_retry_contexts{job=\"polymarket-v7\",instance=~\".+\"}) and on(job,instance) (polymarket_v7_exporter_snapshot_usable{job=\"polymarket-v7\",instance=~\".+\"} == 1)",
+          "legendFormat": "launch retries",
+          "refId": "D",
           "instant": false,
           "range": true
         }
@@ -1145,8 +1152,8 @@
     },
     {
       "id": 43,
-      "type": "bargauge",
-      "title": "Candidate Exposure by Asset",
+      "type": "timeseries",
+      "title": "Observation Throughput",
       "gridPos": {
         "h": 7,
         "w": 8,
@@ -1157,40 +1164,51 @@
         "type": "prometheus",
         "uid": "prometheus-v7"
       },
-      "description": "Coordinator opportunity/candidate exposure, not an executed-position balance.",
+      "description": "Decision/evidence observations accepted by the native publisher versus durably written.",
       "targets": [
         {
-          "expr": "(polymarket_mc_coordinator_candidate_asset_exposure_usd{job=\"polymarket-v7\",instance=~\".+\"}) and on(job,instance) (polymarket_v7_exporter_snapshot_usable{job=\"polymarket-v7\",instance=~\".+\"} == 1)",
+          "expr": "(polymarket_v7_native_observations_published{job=\"polymarket-v7\",instance=~\".+\"}) and on(job,instance) (polymarket_v7_exporter_snapshot_usable{job=\"polymarket-v7\",instance=~\".+\"} == 1)",
+          "legendFormat": "published",
           "refId": "A",
-          "legendFormat": "{{asset}}",
-          "instant": true,
-          "range": false
+          "instant": false,
+          "range": true
+        },
+        {
+          "expr": "(polymarket_v7_native_observations_written{job=\"polymarket-v7\",instance=~\".+\"}) and on(job,instance) (polymarket_v7_exporter_snapshot_usable{job=\"polymarket-v7\",instance=~\".+\"} == 1)",
+          "legendFormat": "written",
+          "refId": "B",
+          "instant": false,
+          "range": true
         }
       ],
       "fieldConfig": {
         "defaults": {
           "unit": "prefix:$",
+          "custom": {
+            "spanNulls": false
+          },
           "decimals": 2
         },
         "overrides": []
       },
       "options": {
-        "displayMode": "gradient",
-        "orientation": "horizontal",
-        "reduceOptions": {
-          "values": false,
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom",
           "calcs": [
-            "last"
-          ],
-          "fields": ""
+            "lastNotNull"
+          ]
         },
-        "showUnfilled": true
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
       }
     },
     {
       "id": 44,
-      "type": "bargauge",
-      "title": "Candidate Exposure by Horizon",
+      "type": "timeseries",
+      "title": "Observation Backpressure",
       "gridPos": {
         "h": 7,
         "w": 8,
@@ -1201,40 +1219,51 @@
         "type": "prometheus",
         "uid": "prometheus-v7"
       },
-      "description": "Coordinator opportunity/candidate exposure aggregated by M5/M15.",
+      "description": "Queue depth and loss on the native evidence path. Drops should remain zero.",
       "targets": [
         {
-          "expr": "(polymarket_mc_coordinator_candidate_horizon_exposure_usd{job=\"polymarket-v7\",instance=~\".+\"}) and on(job,instance) (polymarket_v7_exporter_snapshot_usable{job=\"polymarket-v7\",instance=~\".+\"} == 1)",
+          "expr": "(polymarket_v7_native_observations_queue_depth{job=\"polymarket-v7\",instance=~\".+\"}) and on(job,instance) (polymarket_v7_exporter_snapshot_usable{job=\"polymarket-v7\",instance=~\".+\"} == 1)",
+          "legendFormat": "queue depth",
           "refId": "A",
-          "legendFormat": "{{horizon}}",
-          "instant": true,
-          "range": false
+          "instant": false,
+          "range": true
+        },
+        {
+          "expr": "(polymarket_v7_native_observations_dropped{job=\"polymarket-v7\",instance=~\".+\"}) and on(job,instance) (polymarket_v7_exporter_snapshot_usable{job=\"polymarket-v7\",instance=~\".+\"} == 1)",
+          "legendFormat": "dropped",
+          "refId": "B",
+          "instant": false,
+          "range": true
         }
       ],
       "fieldConfig": {
         "defaults": {
           "unit": "prefix:$",
+          "custom": {
+            "spanNulls": false
+          },
           "decimals": 2
         },
         "overrides": []
       },
       "options": {
-        "displayMode": "gradient",
-        "orientation": "horizontal",
-        "reduceOptions": {
-          "values": false,
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom",
           "calcs": [
-            "last"
-          ],
-          "fields": ""
+            "lastNotNull"
+          ]
         },
-        "showUnfilled": true
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
       }
     },
     {
       "id": 45,
       "type": "stat",
-      "title": "Candidate Oracle Concentration",
+      "title": "Engine Operational",
       "gridPos": {
         "h": 7,
         "w": 4,
@@ -1245,10 +1274,11 @@
         "type": "prometheus",
         "uid": "prometheus-v7"
       },
-      "description": "Share of gross crypto exposure concentrated in the largest oracle source.",
+      "description": "1 only when the native engine manager and workers are operational.",
       "targets": [
         {
-          "expr": "(polymarket_mc_coordinator_candidate_oracle_concentration_ratio{job=\"polymarket-v7\",instance=~\".+\"}) and on(job,instance) (polymarket_v7_exporter_snapshot_usable{job=\"polymarket-v7\",instance=~\".+\"} == 1)",
+          "expr": "(polymarket_v7_native_engine_operational{job=\"polymarket-v7\",instance=~\".+\"}) and on(job,instance) (polymarket_v7_exporter_snapshot_usable{job=\"polymarket-v7\",instance=~\".+\"} == 1)",
+          "legendFormat": "operational",
           "refId": "A",
           "instant": true,
           "range": false
@@ -1279,7 +1309,7 @@
     {
       "id": 46,
       "type": "stat",
-      "title": "Candidate Venue Concentration",
+      "title": "Engine Ready",
       "gridPos": {
         "h": 7,
         "w": 4,
@@ -1290,10 +1320,11 @@
         "type": "prometheus",
         "uid": "prometheus-v7"
       },
-      "description": "Share of gross crypto exposure concentrated in the largest exchange/depth source.",
+      "description": "1 only when all expected native contexts are running with no launch retries.",
       "targets": [
         {
-          "expr": "(polymarket_mc_coordinator_candidate_exchange_concentration_ratio{job=\"polymarket-v7\",instance=~\".+\"}) and on(job,instance) (polymarket_v7_exporter_snapshot_usable{job=\"polymarket-v7\",instance=~\".+\"} == 1)",
+          "expr": "(polymarket_v7_native_engine_ready{job=\"polymarket-v7\",instance=~\".+\"}) and on(job,instance) (polymarket_v7_exporter_snapshot_usable{job=\"polymarket-v7\",instance=~\".+\"} == 1)",
+          "legendFormat": "ready",
           "refId": "A",
           "instant": true,
           "range": false
@@ -1324,7 +1355,7 @@
     {
       "id": 47,
       "type": "row",
-      "title": "SHADOW 6-CRYPTO DATA PLANE",
+      "title": "DATA PLANE / EVIDENCE HEALTH",
       "gridPos": {
         "h": 1,
         "w": 24,
@@ -1337,7 +1368,7 @@
     {
       "id": 471,
       "type": "stat",
-      "title": "SHADOW Ready",
+      "title": "Book Runtime Ready",
       "gridPos": {
         "h": 4,
         "w": 6,
@@ -1348,10 +1379,11 @@
         "type": "prometheus",
         "uid": "prometheus-v7"
       },
-      "description": "READY requires zero-authority safety plus all active contracts ready.",
+      "description": "Polymarket book subscription coverage and evidence completeness.",
       "targets": [
         {
-          "expr": "(polymarket_mc_shadow_ready{job=\"polymarket-v7\",instance=~\".+\"}) and on(job,instance) (polymarket_v7_exporter_snapshot_usable{job=\"polymarket-v7\",instance=~\".+\"} == 1)",
+          "expr": "(polymarket_v7_book_data_runtime_ready{job=\"polymarket-v7\",instance=~\".+\"}) and on(job,instance) (polymarket_v7_exporter_snapshot_usable{job=\"polymarket-v7\",instance=~\".+\"} == 1)",
+          "legendFormat": "ready",
           "refId": "A",
           "instant": true,
           "range": false
@@ -1394,7 +1426,7 @@
     {
       "id": 472,
       "type": "stat",
-      "title": "External Feeds Ready",
+      "title": "Observed Book Markets",
       "gridPos": {
         "h": 4,
         "w": 6,
@@ -1405,10 +1437,11 @@
         "type": "prometheus",
         "uid": "prometheus-v7"
       },
-      "description": "Healthy external venue data assets; target universe is 6.",
+      "description": "Distinct subscribed markets with observed book evidence.",
       "targets": [
         {
-          "expr": "(polymarket_mc_shadow_external_ready_assets{job=\"polymarket-v7\",instance=~\".+\"}) and on(job,instance) (polymarket_v7_exporter_snapshot_usable{job=\"polymarket-v7\",instance=~\".+\"} == 1)",
+          "expr": "(polymarket_v7_book_data_observed_markets{job=\"polymarket-v7\",instance=~\".+\"}) and on(job,instance) (polymarket_v7_exporter_snapshot_usable{job=\"polymarket-v7\",instance=~\".+\"} == 1)",
+          "legendFormat": "markets",
           "refId": "A",
           "instant": true,
           "range": false
@@ -1437,7 +1470,7 @@
     {
       "id": 473,
       "type": "stat",
-      "title": "Oracle Assets Healthy",
+      "title": "Observed Book Tokens",
       "gridPos": {
         "h": 4,
         "w": 6,
@@ -1448,10 +1481,11 @@
         "type": "prometheus",
         "uid": "prometheus-v7"
       },
-      "description": "Settlement/oracle health across the six-asset SHADOW universe.",
+      "description": "Distinct YES/NO tokens with observed book evidence.",
       "targets": [
         {
-          "expr": "(polymarket_mc_shadow_oracle_healthy_assets{job=\"polymarket-v7\",instance=~\".+\"}) and on(job,instance) (polymarket_v7_exporter_snapshot_usable{job=\"polymarket-v7\",instance=~\".+\"} == 1)",
+          "expr": "(polymarket_v7_book_data_observed_tokens{job=\"polymarket-v7\",instance=~\".+\"}) and on(job,instance) (polymarket_v7_exporter_snapshot_usable{job=\"polymarket-v7\",instance=~\".+\"} == 1)",
+          "legendFormat": "tokens",
           "refId": "A",
           "instant": true,
           "range": false
@@ -1480,7 +1514,7 @@
     {
       "id": 474,
       "type": "stat",
-      "title": "Contracts Ready",
+      "title": "External Assets Ready",
       "gridPos": {
         "h": 4,
         "w": 6,
@@ -1491,10 +1525,11 @@
         "type": "prometheus",
         "uid": "prometheus-v7"
       },
-      "description": "Ready active markets; target is 12 = 6 assets \u00d7 M5/M15.",
+      "description": "External fast-feed assets currently data-ready; full universe is six assets.",
       "targets": [
         {
-          "expr": "(polymarket_mc_shadow_contract_ready_markets{job=\"polymarket-v7\",instance=~\".+\"}) and on(job,instance) (polymarket_v7_exporter_snapshot_usable{job=\"polymarket-v7\",instance=~\".+\"} == 1)",
+          "expr": "(polymarket_v7_external_data_ready_assets{job=\"polymarket-v7\",instance=~\".+\"}) and on(job,instance) (polymarket_v7_exporter_snapshot_usable{job=\"polymarket-v7\",instance=~\".+\"} == 1)",
+          "legendFormat": "assets",
           "refId": "A",
           "instant": true,
           "range": false
@@ -1523,7 +1558,7 @@
     {
       "id": 475,
       "type": "stat",
-      "title": "Book Evidence",
+      "title": "External Data Ready",
       "gridPos": {
         "h": 4,
         "w": 6,
@@ -1534,10 +1569,11 @@
         "type": "prometheus",
         "uid": "prometheus-v7"
       },
-      "description": "Book evidence completeness from the SHADOW supervisor.",
+      "description": "1 only when the external-data plane is operational for all six assets.",
       "targets": [
         {
-          "expr": "(polymarket_mc_shadow_book_evidence_complete{job=\"polymarket-v7\",instance=~\".+\"}) and on(job,instance) (polymarket_v7_exporter_snapshot_usable{job=\"polymarket-v7\",instance=~\".+\"} == 1)",
+          "expr": "(polymarket_v7_external_data_ready{job=\"polymarket-v7\",instance=~\".+\"}) and on(job,instance) (polymarket_v7_exporter_snapshot_usable{job=\"polymarket-v7\",instance=~\".+\"} == 1)",
+          "legendFormat": "ready",
           "refId": "A",
           "instant": true,
           "range": false
@@ -1580,7 +1616,7 @@
     {
       "id": 476,
       "type": "stat",
-      "title": "Label Evidence",
+      "title": "Observation Drops",
       "gridPos": {
         "h": 4,
         "w": 6,
@@ -1591,10 +1627,11 @@
         "type": "prometheus",
         "uid": "prometheus-v7"
       },
-      "description": "Label evidence completeness from the SHADOW supervisor.",
+      "description": "Native evidence drops. Any nonzero value requires investigation.",
       "targets": [
         {
-          "expr": "(polymarket_mc_shadow_label_evidence_complete{job=\"polymarket-v7\",instance=~\".+\"}) and on(job,instance) (polymarket_v7_exporter_snapshot_usable{job=\"polymarket-v7\",instance=~\".+\"} == 1)",
+          "expr": "(polymarket_v7_native_observations_dropped{job=\"polymarket-v7\",instance=~\".+\"}) and on(job,instance) (polymarket_v7_exporter_snapshot_usable{job=\"polymarket-v7\",instance=~\".+\"} == 1)",
+          "legendFormat": "drops",
           "refId": "A",
           "instant": true,
           "range": false
@@ -1637,7 +1674,7 @@
     {
       "id": 477,
       "type": "stat",
-      "title": "Feature Tape Rows",
+      "title": "Observation Queue",
       "gridPos": {
         "h": 4,
         "w": 6,
@@ -1648,10 +1685,11 @@
         "type": "prometheus",
         "uid": "prometheus-v7"
       },
-      "description": "Causal feature rows emitted by the SHADOW six-crypto tape.",
+      "description": "Current native evidence queue depth.",
       "targets": [
         {
-          "expr": "(polymarket_mc_shadow_feature_tape_emitted{job=\"polymarket-v7\",instance=~\".+\"}) and on(job,instance) (polymarket_v7_exporter_snapshot_usable{job=\"polymarket-v7\",instance=~\".+\"} == 1)",
+          "expr": "(polymarket_v7_native_observations_queue_depth{job=\"polymarket-v7\",instance=~\".+\"}) and on(job,instance) (polymarket_v7_exporter_snapshot_usable{job=\"polymarket-v7\",instance=~\".+\"} == 1)",
+          "legendFormat": "queued",
           "refId": "A",
           "instant": true,
           "range": false
@@ -1680,7 +1718,7 @@
     {
       "id": 478,
       "type": "stat",
-      "title": "SHADOW Status Age",
+      "title": "Snapshot Age",
       "gridPos": {
         "h": 4,
         "w": 6,
@@ -1691,10 +1729,11 @@
         "type": "prometheus",
         "uid": "prometheus-v7"
       },
-      "description": "Age of the last SHADOW supervisor status. Missing means no configured SHADOW source.",
+      "description": "Age of the cached exporter snapshot; do not interpret stale metrics as live zeros.",
       "targets": [
         {
-          "expr": "(polymarket_mc_shadow_status_age_seconds{job=\"polymarket-v7\",instance=~\".+\"}) and on(job,instance) (polymarket_v7_exporter_snapshot_usable{job=\"polymarket-v7\",instance=~\".+\"} == 1)",
+          "expr": "(polymarket_v7_exporter_snapshot_age_seconds{job=\"polymarket-v7\",instance=~\".+\"}) and on(job,instance) (polymarket_v7_exporter_snapshot_usable{job=\"polymarket-v7\",instance=~\".+\"} == 1)",
+          "legendFormat": "seconds",
           "refId": "A",
           "instant": true,
           "range": false
@@ -1749,7 +1788,7 @@
         "type": "prometheus",
         "uid": "prometheus-v7"
       },
-      "description": "Expected full universe is 12 = 6 assets \u00d7 2 horizons.",
+      "description": "Expected full universe is 12 = 6 assets × 2 horizons.",
       "targets": [
         {
           "expr": "(polymarket_mc_registered_lanes{job=\"polymarket-v7\",instance=~\".+\"}) and on(job,instance) (polymarket_v7_exporter_snapshot_usable{job=\"polymarket-v7\",instance=~\".+\"} == 1)",
@@ -1924,7 +1963,7 @@
         "type": "prometheus",
         "uid": "prometheus-v7"
       },
-      "description": "Must be zero for clean asset\u00d7horizon attribution.",
+      "description": "Must be zero for clean asset×horizon attribution.",
       "targets": [
         {
           "expr": "(polymarket_mc_unattributed_final_rows{job=\"polymarket-v7\",instance=~\".+\"}) and on(job,instance) (polymarket_v7_exporter_snapshot_usable{job=\"polymarket-v7\",instance=~\".+\"} == 1)",
@@ -2145,389 +2184,7 @@
       },
       "options": {
         "mode": "markdown",
-        "content": "**PAPER / SHADOW monitoring only.** Multi-crypto performance is derived from canonical PAPER sources. A lane without attributable economic events is **N/A**, not `$0`. Realized PnL uses canonical economics when current; if a newer complete ledger FINAL exists, the dashboard may temporarily show the ledger value while Attribution reads **CANONICAL REFRESH**. A true fresh mismatch remains **CHECK GAP**. Equity is intentionally separated from PnL charts."
-      }
-    },
-    {
-      "id": 479,
-      "title": "LONDON LIVE PAPER \u2014 30 CONTEXTS",
-      "type": "row",
-      "gridPos": {
-        "h": 1,
-        "w": 24,
-        "x": 0,
-        "y": 91
-      },
-      "collapsed": false,
-      "panels": []
-    },
-    {
-      "id": 480,
-      "title": "Target Contexts",
-      "type": "stat",
-      "gridPos": {
-        "h": 4,
-        "w": 6,
-        "x": 0,
-        "y": 92
-      },
-      "datasource": {
-        "type": "prometheus",
-        "uid": "prometheus-v7"
-      },
-      "targets": [
-        {
-          "expr": "(polymarket_v7_native_target_contexts{job=\"polymarket-v7\",instance=~\".+\"}) and on(job,instance) (polymarket_v7_exporter_snapshot_usable{job=\"polymarket-v7\",instance=~\".+\"} == 1)",
-          "refId": "A",
-          "instant": true,
-          "range": false
-        }
-      ],
-      "fieldConfig": {
-        "defaults": {
-          "unit": "short",
-          "decimals": 0
-        },
-        "overrides": []
-      },
-      "options": {
-        "reduceOptions": {
-          "values": false,
-          "calcs": [
-            "last"
-          ],
-          "fields": ""
-        },
-        "orientation": "auto",
-        "textMode": "auto",
-        "colorMode": "value",
-        "graphMode": "none",
-        "justifyMode": "auto"
-      }
-    },
-    {
-      "id": 481,
-      "title": "Active Workers",
-      "type": "stat",
-      "gridPos": {
-        "h": 4,
-        "w": 6,
-        "x": 6,
-        "y": 92
-      },
-      "datasource": {
-        "type": "prometheus",
-        "uid": "prometheus-v7"
-      },
-      "targets": [
-        {
-          "expr": "(polymarket_v7_native_active_workers{job=\"polymarket-v7\",instance=~\".+\"}) and on(job,instance) (polymarket_v7_exporter_snapshot_usable{job=\"polymarket-v7\",instance=~\".+\"} == 1)",
-          "refId": "A",
-          "instant": true,
-          "range": false
-        }
-      ],
-      "fieldConfig": {
-        "defaults": {
-          "unit": "short",
-          "decimals": 0
-        },
-        "overrides": []
-      },
-      "options": {
-        "reduceOptions": {
-          "values": false,
-          "calcs": [
-            "last"
-          ],
-          "fields": ""
-        },
-        "orientation": "auto",
-        "textMode": "auto",
-        "colorMode": "value",
-        "graphMode": "none",
-        "justifyMode": "auto"
-      }
-    },
-    {
-      "id": 482,
-      "title": "Missing Contexts",
-      "type": "stat",
-      "gridPos": {
-        "h": 4,
-        "w": 6,
-        "x": 12,
-        "y": 92
-      },
-      "datasource": {
-        "type": "prometheus",
-        "uid": "prometheus-v7"
-      },
-      "targets": [
-        {
-          "expr": "(polymarket_v7_native_missing_contexts{job=\"polymarket-v7\",instance=~\".+\"}) and on(job,instance) (polymarket_v7_exporter_snapshot_usable{job=\"polymarket-v7\",instance=~\".+\"} == 1)",
-          "refId": "A",
-          "instant": true,
-          "range": false
-        }
-      ],
-      "fieldConfig": {
-        "defaults": {
-          "unit": "short",
-          "decimals": 0
-        },
-        "overrides": []
-      },
-      "options": {
-        "reduceOptions": {
-          "values": false,
-          "calcs": [
-            "last"
-          ],
-          "fields": ""
-        },
-        "orientation": "auto",
-        "textMode": "auto",
-        "colorMode": "value",
-        "graphMode": "none",
-        "justifyMode": "auto"
-      }
-    },
-    {
-      "id": 483,
-      "title": "CRYPTO Engine Budget",
-      "type": "stat",
-      "gridPos": {
-        "h": 4,
-        "w": 6,
-        "x": 18,
-        "y": 92
-      },
-      "datasource": {
-        "type": "prometheus",
-        "uid": "prometheus-v7"
-      },
-      "targets": [
-        {
-          "expr": "(polymarket_v7_native_global_budget_usd{job=\"polymarket-v7\",instance=~\".+\"}) and on(job,instance) (polymarket_v7_exporter_snapshot_usable{job=\"polymarket-v7\",instance=~\".+\"} == 1)",
-          "refId": "A",
-          "instant": true,
-          "range": false
-        }
-      ],
-      "fieldConfig": {
-        "defaults": {
-          "unit": "currencyUSD",
-          "decimals": 2
-        },
-        "overrides": []
-      },
-      "options": {
-        "reduceOptions": {
-          "values": false,
-          "calcs": [
-            "last"
-          ],
-          "fields": ""
-        },
-        "orientation": "auto",
-        "textMode": "auto",
-        "colorMode": "value",
-        "graphMode": "none",
-        "justifyMode": "auto"
-      }
-    },
-    {
-      "id": 484,
-      "title": "LIVE DATA COVERAGE \u2014 PM BOOKS + EXTERNAL ASSETS",
-      "type": "row",
-      "gridPos": {
-        "h": 1,
-        "w": 24,
-        "x": 0,
-        "y": 96
-      },
-      "collapsed": false,
-      "panels": []
-    },
-    {
-      "id": 485,
-      "title": "Book Contexts",
-      "type": "stat",
-      "gridPos": {
-        "h": 4,
-        "w": 6,
-        "x": 0,
-        "y": 97
-      },
-      "datasource": {
-        "type": "prometheus",
-        "uid": "prometheus-v7"
-      },
-      "targets": [
-        {
-          "expr": "(polymarket_v7_book_data_contexts{job=\"polymarket-v7\",instance=~\".+\"}) and on(job,instance) (polymarket_v7_exporter_snapshot_usable{job=\"polymarket-v7\",instance=~\".+\"} == 1)",
-          "refId": "A",
-          "instant": true,
-          "range": false,
-          "legendFormat": "Book Contexts"
-        }
-      ],
-      "fieldConfig": {
-        "defaults": {
-          "unit": "short",
-          "decimals": 0
-        },
-        "overrides": []
-      },
-      "options": {
-        "reduceOptions": {
-          "values": false,
-          "calcs": [
-            "last"
-          ],
-          "fields": ""
-        },
-        "orientation": "auto",
-        "textMode": "auto",
-        "colorMode": "value",
-        "graphMode": "none",
-        "justifyMode": "auto"
-      }
-    },
-    {
-      "id": 486,
-      "title": "Observed Book Markets",
-      "type": "stat",
-      "gridPos": {
-        "h": 4,
-        "w": 6,
-        "x": 6,
-        "y": 97
-      },
-      "datasource": {
-        "type": "prometheus",
-        "uid": "prometheus-v7"
-      },
-      "targets": [
-        {
-          "expr": "(polymarket_v7_book_data_observed_markets{job=\"polymarket-v7\",instance=~\".+\"}) and on(job,instance) (polymarket_v7_exporter_snapshot_usable{job=\"polymarket-v7\",instance=~\".+\"} == 1)",
-          "refId": "A",
-          "instant": true,
-          "range": false,
-          "legendFormat": "Observed Book Markets"
-        }
-      ],
-      "fieldConfig": {
-        "defaults": {
-          "unit": "short",
-          "decimals": 0
-        },
-        "overrides": []
-      },
-      "options": {
-        "reduceOptions": {
-          "values": false,
-          "calcs": [
-            "last"
-          ],
-          "fields": ""
-        },
-        "orientation": "auto",
-        "textMode": "auto",
-        "colorMode": "value",
-        "graphMode": "none",
-        "justifyMode": "auto"
-      }
-    },
-    {
-      "id": 487,
-      "title": "Observed Book Tokens",
-      "type": "stat",
-      "gridPos": {
-        "h": 4,
-        "w": 6,
-        "x": 12,
-        "y": 97
-      },
-      "datasource": {
-        "type": "prometheus",
-        "uid": "prometheus-v7"
-      },
-      "targets": [
-        {
-          "expr": "(polymarket_v7_book_data_observed_tokens{job=\"polymarket-v7\",instance=~\".+\"}) and on(job,instance) (polymarket_v7_exporter_snapshot_usable{job=\"polymarket-v7\",instance=~\".+\"} == 1)",
-          "refId": "A",
-          "instant": true,
-          "range": false,
-          "legendFormat": "Observed Book Tokens"
-        }
-      ],
-      "fieldConfig": {
-        "defaults": {
-          "unit": "short",
-          "decimals": 0
-        },
-        "overrides": []
-      },
-      "options": {
-        "reduceOptions": {
-          "values": false,
-          "calcs": [
-            "last"
-          ],
-          "fields": ""
-        },
-        "orientation": "auto",
-        "textMode": "auto",
-        "colorMode": "value",
-        "graphMode": "none",
-        "justifyMode": "auto"
-      }
-    },
-    {
-      "id": 488,
-      "title": "External Ready Assets",
-      "type": "stat",
-      "gridPos": {
-        "h": 4,
-        "w": 6,
-        "x": 18,
-        "y": 97
-      },
-      "datasource": {
-        "type": "prometheus",
-        "uid": "prometheus-v7"
-      },
-      "targets": [
-        {
-          "expr": "(polymarket_v7_external_data_ready_assets{job=\"polymarket-v7\",instance=~\".+\"}) and on(job,instance) (polymarket_v7_exporter_snapshot_usable{job=\"polymarket-v7\",instance=~\".+\"} == 1)",
-          "refId": "A",
-          "instant": true,
-          "range": false,
-          "legendFormat": "External Ready Assets"
-        }
-      ],
-      "fieldConfig": {
-        "defaults": {
-          "unit": "short",
-          "decimals": 0
-        },
-        "overrides": []
-      },
-      "options": {
-        "reduceOptions": {
-          "values": false,
-          "calcs": [
-            "last"
-          ],
-          "fields": ""
-        },
-        "orientation": "auto",
-        "textMode": "auto",
-        "colorMode": "value",
-        "graphMode": "none",
-        "justifyMode": "auto"
+        "content": "**Interpretation:** PnL comes from the canonical PAPER ledger. Runtime/data panels report whether that evidence is trustworthy. Missing series are not zero. Legacy coordinator-candidate and SHADOW-only metrics are intentionally removed."
       }
     }
   ],
@@ -2601,7 +2258,8 @@
   },
   "timepicker": {},
   "timezone": "browser",
-  "title": "Polymarket V7 Multi-Crypto Performance",
+  "title": "Polymarket V7 Multi-Crypto Performance & Runtime",
   "uid": "polymarket-v7-multi-crypto",
-  "version": 6
+  "version": 7,
+  "description": "PAPER economic performance plus native runtime and data-plane health. Empty panels are treated as telemetry defects, not zeros."
 }

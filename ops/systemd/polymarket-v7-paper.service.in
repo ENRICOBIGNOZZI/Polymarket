@@ -17,6 +17,7 @@ Environment=POLYMARKET_EXPECTED_SHA=@EXPECTED_SHA@
 Environment=PM_V7_MODEL_SHA=@EXPECTED_SHA@
 Environment=PM_V7_AUTHENTICATED_EXECUTION=0
 Environment=PM_V7_REAL_ORDER_SUBMISSION=0
+EnvironmentFile=-@RUN_ROOT@/control/probability-model.env
 ExecStart=@APP_DIR@/ops/v7_service_entrypoint.sh
 Restart=on-failure
 RestartSec=5

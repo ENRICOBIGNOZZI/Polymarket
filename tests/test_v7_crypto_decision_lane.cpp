@@ -234,7 +234,72 @@ void test_runtime_policy_allows_twenty_shares_across_five_to_120_seconds() {
     assert(lane.evaluate(too_early, capital).reason == NativeCryptoDecisionReason::TteOutsideWindow);
 }
 
+void test_probability_selects_economic_side_not_signal_side() {
+    NativeCryptoDecisionPolicy policy; policy.probability_ev_enabled=1;
+    NativeCryptoDecisionLane lane(policy);
+    auto x=input(1,80); // UP signal, but only DOWN is underpriced.
+    x.probability={.up=.20,.lower=.15,.upper=.25,.asof_ns=kNow,
+        .max_input_receive_ns=kNow-1,.valid_until_ns=kNow+1'000'000,
+        .version=1,.valid=1};
+    x.risk_sizing.allocated_wealth_microdollars=100'000'000;
+    x.risk_sizing.available_microdollars=100'000'000;
+    x.risk_sizing.maximum_chase_ticks=2;
+    x.taker_fee_rate=.07; x.taker_fee_exponent=1; x.execution_reserve_per_share=.005;
+    const auto before=allocations.load();
+    auto d=lane.construct_candidate(x);
+    assert(allocations.load()==before);
+    assert(d.accepted && !d.selected_yes && d.intent.instrument_handle==12);
+    assert(d.economics.conservative_net_edge>0);
+    assert(d.economics.maximum_executable_price_e4==6200);
+    assert(d.intent.price_tick==62);
+    assert(d.economics.cost_ceiling_microdollars<=3'750'000);
+    lane.reset_market(7);x.probability.valid=0;
+    assert(lane.construct_candidate(x).reason==NativeCryptoDecisionReason::ProbabilityUnavailable);
+    lane.reset_market(7);x.probability.valid=1;x.risk_sizing.max_order_cost_microdollars=100'000;
+    assert(lane.construct_candidate(x).reason==NativeCryptoDecisionReason::RiskSizeBelowMinimum);
+}
+
+void test_required_slow_context_is_action_local_and_never_waits() {
+    NativeCryptoDecisionPolicy policy; policy.required_slow_context_mask = 1;
+    NativeCryptoDecisionLane dependent(policy), independent({});
+    auto in = input(1, 80);
+    assert(dependent.construct_candidate(in).reason == NativeCryptoDecisionReason::SlowContextUnavailable);
+    assert(independent.construct_candidate(in).accepted);
+    SlowContextCache cache; SlowContextSnapshot context;
+    context.version = 1; context.envelope_valid = 1; context.valid_mask = 1;
+    context.published_ns = kNow - 1;
+    context.fields[0] = {42., kNow - 1000, kNow, 1};
+    assert(cache.apply(context, kNow));
+    in.slow_context = cache.at(kNow);
+    assert(dependent.construct_candidate(in).accepted);
+    in.signal = signal(1, 81); in.now_monotonic_ns = kNow + 1;
+    in.slow_context = cache.at(kNow + 1);
+    assert(dependent.construct_candidate(in).reason == NativeCryptoDecisionReason::SlowContextUnavailable);
+    in.slow_context = cache.at(kNow);
+    assert(dependent.construct_candidate(in).reason == NativeCryptoDecisionReason::SlowContextUnavailable);
+}
+
+void test_strict_lead_lag_requires_pm_book_to_precede_signal() {
+    NativeCryptoDecisionPolicy policy; policy.require_pm_book_pre_signal = 1;
+    NativeCryptoDecisionLane lane(policy); SleeveCapitalAccount capital(limits());
+    auto repriced = input(1, 90);
+    assert(repriced.yes_book.receive_monotonic_ns > repriced.signal.trigger_receive_monotonic_ns);
+    const auto rejected = lane.evaluate(repriced, capital);
+    assert(rejected.accepted == 0);
+    assert(rejected.reason == NativeCryptoDecisionReason::MarketAlreadyRepriced);
+    lane.reset_market(7); auto stale = input(1, 91);
+    stale.yes_book.receive_monotonic_ns = stale.signal.trigger_receive_monotonic_ns - 1'000'000;
+    stale.no_book.receive_monotonic_ns = stale.signal.trigger_receive_monotonic_ns - 1'000'000;
+    const auto accepted = lane.evaluate(stale, capital);
+    assert(accepted.accepted == 1);
+    assert(accepted.reason == NativeCryptoDecisionReason::Accepted);
+    assert(capital.release_order(accepted.intent.intent_id));
+}
+
 int main() {
+    test_required_slow_context_is_action_local_and_never_waits();
+    test_strict_lead_lag_requires_pm_book_to_precede_signal();
+    test_probability_selects_economic_side_not_signal_side();
     test_up_down_and_admission();
     test_duplicate_depth_tte_and_market_gates();
     test_entry_price_cap_rejects_without_consuming_signal();

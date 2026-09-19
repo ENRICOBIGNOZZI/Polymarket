@@ -15,8 +15,7 @@ sys.path.insert(0, str(ROOT / "tests"))
 
 from v7_coordinator_reservations import ReservationLimits, ReservationProjection, ReservationRequest
 from v7_fast_forward_ipc import FastForwardIpcBridge, FastForwardIpcError, request
-from v7_global_portfolio_coordinator import process_fast_forward_ipc_reserved
-from test_v7_global_portfolio_coordinator import forward_envelope
+from v7_historical_coordinator_fixtures import forward_envelope
 from decimal import Decimal as D
 from unittest.mock import patch
 
@@ -45,48 +44,6 @@ class FastForwardIpcTest(unittest.TestCase):
                 self.assertFalse(result["new_risk_authorized"])
                 self.assertGreaterEqual(result["ipc_queue_wait_ns"], 0)
 
-    def test_direct_ipc_path_reserves_durably_without_inbox_or_receipt_file(self) -> None:
-        with tempfile.TemporaryDirectory() as directory:
-            root = Path(directory)
-            path = root / "ipc.sock"
-            now_ms = 1_800_000_000_000
-            now_ns = now_ms * 1_000_000
-            raw = forward_envelope("ipc-forward")
-            raw["decision_receive_timestamp_ns"] = now_ns - 10_000_000
-            raw["source_event_timestamps_ns"] = [now_ns - 20_000_000]
-            raw["expires_at_ns"] = now_ns + 1_000_000_000
-            leg = raw["execution_plan"]["legs"][0]
-            req = ReservationRequest(
-                "ipc-cohort", "f" * 64, raw["market_id"], leg["token_id"], "signal",
-                "parent-shock", "BTC", "M5", raw["engine_id"], "USDC", D("20"),
-                D(str(leg["target_quantity"])), D(str(leg["limit_price"])),
-                now_ms + 1000, raw["deterministic_replay_key"],
-            )
-            projection = ReservationProjection(
-                code_sha="a" * 40, checkpoint_id="SYNTHETIC_FULL_ACCOUNT", starting_cash=D("100"),
-                external_exposures=[], limits=ReservationLimits("USDC", *[D("100")] * 6),
-                whole_portfolio_reconciled=True,
-            )
-            events = []; result: dict = {}
-            with FastForwardIpcBridge(path) as bridge:
-                thread = threading.Thread(target=lambda: result.update(request(path, raw))); thread.start()
-                deadline = time.monotonic() + 1
-                while bridge.snapshot()["queued"] == 0 and time.monotonic() < deadline:
-                    time.sleep(.001)
-                with patch("builtins.open", side_effect=AssertionError("hot path file I/O")):
-                    bridge.drain(lambda value: process_fast_forward_ipc_reserved(
-                        root, value, now_ns=now_ns, risk_preempt=False, drain_active=False,
-                        reservation_projection=projection,
-                        requests_by_replay_key={req.coordinator_replay_key: req},
-                        append_event=events.append, entry_gate_open=True,
-                    ))
-                thread.join(1)
-            self.assertEqual(result["action"], "TAKE", result)
-            self.assertTrue(result["reservation_durable"])
-            self.assertFalse(result["receipt_file_written"])
-            self.assertFalse(result["new_risk_authorized"])
-            self.assertEqual(len(events), 1)
-            self.assertFalse((root / "opportunities/receipts").exists())
 
     def test_bounded_queue_fails_closed_instead_of_dropping_silently(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

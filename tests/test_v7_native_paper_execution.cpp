@@ -205,17 +205,35 @@ void test_delayed_orders_do_not_reuse_visible_liquidity() {
     assert(f.paper.advance_arrivals(11, arrival_book(), 2'400).records[0].result.filled_microunits == 4'000'000);
     assert(f.paper.submit(f.admit(11, 2'000'000, 2'500), arrival_book(), 2'600).pending_arrival);
     auto done = f.paper.advance_arrivals(11, arrival_book(2'800), 2'900);
-    assert(done.count == 1 && done.records[0].result.reason == NativePaperReason::PartialFillUnmodelled);
-    assert(f.authority.inventory_snapshot(11).total_microunits == 4'000'000);
+    assert(done.count == 1);
+    const auto& result = done.records[0].result;
+    assert(result.reason == NativePaperReason::PartialFillModelled);
+    assert(result.filled_microunits == 1'000'000);
+    assert(result.fill.order_state == OrderState::Partial);
+    assert(result.final_state == OrderState::Expired);
+    const auto inventory = f.authority.inventory_snapshot(11);
+    assert(inventory.total_microunits == 5'000'000);
+    assert(inventory.collateral_basis_microdollars == 2'050'000);
+    assert(f.authority.capital_snapshot().order_reserved_microdollars == 0);
 }
-void test_price_improvement_is_unmodelled_not_an_observed_nonfill() {
+void test_price_improvement_fills_at_arrival_price_and_releases_limit_reserve() {
     ArrivalFixture f;
     assert(f.paper.submit(f.admit(), book(), 2'100).pending_arrival);
-    auto improved = arrival_book(); improved.best_ask_e4 = 4000;
+    auto improved = arrival_book(); improved.best_bid_e4 = 3900; improved.best_ask_e4 = 4000;
     auto done = f.paper.advance_arrivals(11, improved, 2'400);
-    assert(done.count == 1 && done.records[0].result.censored);
-    assert(done.records[0].result.reason == NativePaperReason::PriceImprovementUnmodelled);
-    assert(f.authority.active_orders() == 0 && f.paper.paper_fills() == 0);
+    assert(done.count == 1 && !done.records[0].result.censored);
+    const auto& result = done.records[0].result;
+    assert(result.reason == NativePaperReason::Accepted);
+    assert(result.filled_microunits == 2'000'000);
+    assert(result.fill.price_tick == 40);
+    assert(result.final_state == OrderState::Filled);
+    const auto inventory = f.authority.inventory_snapshot(11);
+    assert(inventory.total_microunits == 2'000'000);
+    assert(inventory.collateral_basis_microdollars == 800'000);
+    const auto capital = f.authority.capital_snapshot();
+    assert(capital.order_reserved_microdollars == 0);
+    assert(capital.inventory_committed_microdollars == 800'000);
+    assert(f.authority.active_orders() == 0 && f.paper.paper_fills() == 1);
 }
 void test_unknown_delay_and_overflow_never_make_a_fill() {
     for (const auto delay : {-1LL, 9223372036854775807LL}) {
@@ -227,13 +245,42 @@ void test_unknown_delay_and_overflow_never_make_a_fill() {
 }
 }
 
+
+void test_controlled_worse_price_within_limit_fills_at_actual_price() {
+    NativeSettlementAuthority authority(limits());
+    assert(authority.sync_inventory(7, 11, 0, 0, 1));
+    NativeSettlementOmsEndpoint endpoint(authority);
+    NativePaperExecutionAdapter paper(endpoint);
+    // Decision-time economic limit is 0.42. Arrival top worsens to 0.41:
+    // still inside the limit, so fill at 0.41 and release the unused reserve.
+    const auto admitted = authority.submit(
+        plan(91, StrategyId::CryptoInformedTaker, IntentType::TargetPosition,
+             Side::Buy, ExecutionPolicyId::AggressiveTaker, 42),
+        1'000'000, 2'000);
+    assert(admitted.accepted);
+    auto arrival = book();
+    arrival.best_bid_e4 = 4000;
+    arrival.best_ask_e4 = 4100;
+    const auto result = paper.submit(admitted.tx.command, arrival, 2'100);
+    assert(result.accepted);
+    assert(result.fill.price_tick == 41);
+    assert(result.filled_microunits == 2'000'000);
+    const auto inv = authority.inventory_snapshot(11);
+    assert(inv.total_microunits == 2'000'000);
+    assert(inv.collateral_basis_microdollars == 820'000);
+    const auto capital = authority.capital_snapshot();
+    assert(capital.order_reserved_microdollars == 0);
+    assert(capital.inventory_committed_microdollars == 820'000);
+}
+
 int main() {
+    test_controlled_worse_price_within_limit_fills_at_actual_price();
     test_delayed_fill_requires_strict_watermark_and_fresh_previous_book();
     test_arrival_cannot_use_future_stale_or_disconnected_book();
     test_price_moves_before_arrival_no_fill_and_no_future_substitution();
     test_delayed_orders_do_not_reuse_visible_liquidity();
+    test_price_improvement_fills_at_arrival_price_and_releases_limit_reserve();
     test_unknown_delay_and_overflow_never_make_a_fill();
-    test_price_improvement_is_unmodelled_not_an_observed_nonfill();
     test_taker_fills_common_authority();
     test_maker_queue_and_cancel_latency();
     test_maker_fill_after_queue_depletion();

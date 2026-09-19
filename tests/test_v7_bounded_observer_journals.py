@@ -7,7 +7,6 @@ from unittest.mock import patch
 
 sys.path.insert(0,str(Path(__file__).resolve().parents[1]/'scripts'))
 from v7_compressed_journal import journal_rows
-import v7_global_portfolio_coordinator as coordinator
 import v7_market_maker_rewards as rewards
 import v7_binance_usdm_rest_collector as binance
 import v7_deribit_rest_collector as deribit
@@ -15,14 +14,6 @@ import v7_coinbase_l2_rest_collector as coinbase
 
 
 class BoundedObserverTests(unittest.TestCase):
-    def test_coordinator_persists_exact_result_without_executing_cut_twice(self):
-        with tempfile.TemporaryDirectory() as d:
-            path=Path(d)/'events.jsonl';row={'state':'NOTHING','decisions':[{'opportunity_id':'one','selected':False}]}
-            with patch.object(sys,'argv',['coordinator','--run-root',d,'--event-log',str(path)]),\
-                    patch.object(coordinator,'process_cut',return_value=row) as process:
-                self.assertEqual(coordinator.main(),0)
-            process.assert_called_once_with(Path(d))
-            self.assertEqual(list(journal_rows(path)),[row])
 
     def test_selector_preserves_published_runtime_snapshot(self):
         with tempfile.TemporaryDirectory() as d:

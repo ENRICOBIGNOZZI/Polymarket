@@ -43,6 +43,8 @@ struct ExternalStatePolicy {
     std::int64_t external_cancel_warmup_ns = 300'000'000LL;
     std::int64_t external_cancel_signal_ttl_ns = 100'000'000LL;
     double external_cancel_min_abs_return_bp = 0.30;
+    double external_cancel_min_abs_confirmation_return_bp = 0.0;
+    VenueId external_cancel_confirmation_venue = VenueId::CoinbaseSpot;
 };
 
 struct ExternalCancelSignalSnapshot {
@@ -51,11 +53,14 @@ struct ExternalCancelSignalSnapshot {
     std::int64_t evaluated_grid_monotonic_ns = 0;
     std::int64_t valid_until_monotonic_ns = 0;
     double binance_return_100ms_bp = 0.0;
-    double coinbase_return_100ms_bp = 0.0;
-    std::int8_t direction = 0; // +1 BTC up => stale NO BUY; -1 => stale YES BUY.
+    double coinbase_return_100ms_bp = 0.0; // compatibility: populated only for Coinbase confirmation.
+    double confirmation_return_100ms_bp = 0.0;
+    std::int8_t direction = 0; // +1 underlying up, -1 underlying down.
+    VenueId confirmation_venue = VenueId::Unknown;
     std::uint8_t confirmed_non_opposing = 0;
+    std::uint8_t confirmation_observed = 0;
     std::uint8_t valid = 0;
-    std::array<std::uint8_t, 5> reserved{};
+    std::array<std::uint8_t, 3> reserved{};
 };
 
 struct CausalStateInputs {
@@ -120,6 +125,9 @@ public:
     [[nodiscard]] bool return_history_available(std::int64_t now_ns,
         std::int64_t horizon_ns) const noexcept;
     [[nodiscard]] std::uint64_t state_version() const noexcept { return state_version_; }
+    [[nodiscard]] std::array<std::int64_t, 4> derivative_field_clocks(VenueId venue) const noexcept;
+    [[nodiscard]] std::array<std::int64_t, 2> price_context_bounds(
+        std::uint32_t health_mask, const ExternalStatePolicy& policy) const noexcept;
 
 private:
     struct VenueState {
@@ -134,6 +142,7 @@ private:
         std::int64_t last_book_receive_ns = 0;
         std::int64_t last_transport_receive_ns = 0;
         std::int64_t context_receive_ns = 0;
+        std::array<std::int64_t, 4> context_field_receive_ns{};
         double bid = 0.0;
         double ask = 0.0;
         double bid_size = 0.0;
@@ -168,7 +177,7 @@ private:
     struct ExternalCancelGridSample {
         std::int64_t grid_ns = 0;
         double binance_trade_price = 0.0;
-        double coinbase_mid_price = 0.0;
+        double confirmation_mid_price = 0.0;
     };
 
     [[nodiscard]] static std::size_t venue_index(VenueId venue) noexcept;
@@ -225,8 +234,10 @@ private:
 
     PriceSample external_cancel_binance_trade_{};
     PriceSample external_cancel_coinbase_mid_{};
+    PriceSample external_cancel_confirmation_mid_{};
     std::int64_t external_cancel_first_binance_ns_ = 0;
     std::int64_t external_cancel_first_coinbase_ns_ = 0;
+    std::int64_t external_cancel_first_confirmation_ns_ = 0;
     std::int64_t external_cancel_grid_start_ns_ = 0;
     std::int64_t external_cancel_next_grid_ns_ = 0;
     std::int64_t external_cancel_last_trigger_ns_ = 0;

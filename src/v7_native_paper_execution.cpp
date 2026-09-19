@@ -245,52 +245,54 @@ NativePaperSubmitResult NativePaperExecutionAdapter::match_now(
     const auto executable_qty = taker_delay_ns_ > 0
         ? (depth ? depth->remaining : 0)
         : (buy ? book.best_ask_microunits : book.best_bid_microunits);
-    // Frozen taker semantics are ARRIVAL_BEST_ASK_NO_CHASE / best-bid SELL.
-    // Requiring equality keeps capital basis, simulated fill price and ledger
-    // economics byte-for-byte aligned with the admitted command.
-    const bool marketable = executable_e4 > 0 && executable_e4 == limit_e4;
-    if (!marketable || executable_qty < command.quantity_microunits) {
+    // FAK is marketable at the arrival top when it is at or better than the
+    // submitted limit. Price improvement is real execution, not a non-fill.
+    const bool marketable = executable_e4 > 0
+        && (buy ? executable_e4 <= limit_e4 : executable_e4 >= limit_e4);
+    if (!marketable || executable_qty <= 0) {
         OmsEvent expire{};
         expire.type = OmsEventType::Expire;
         expire.timestamp_ns = now_monotonic_ns + 2;
         const auto expired = endpoint_.apply_owned(command.client_order_id, expire);
         out.reason = marketable ? NativePaperReason::InsufficientDepth
                                 : NativePaperReason::NotMarketable;
-        if (taker_delay_ns_ > 0) {
-            const bool improved = executable_e4 > 0
-                && (buy ? executable_e4 < limit_e4 : executable_e4 > limit_e4);
-            if (depth == nullptr) out.reason = NativePaperReason::DepthAccountingUnavailable;
-            else if (improved) out.reason = NativePaperReason::PriceImprovementUnmodelled;
-            else if (marketable && executable_qty > 0) out.reason = NativePaperReason::PartialFillUnmodelled;
-            out.censored = depth == nullptr || improved || (marketable && executable_qty > 0);
+        if (taker_delay_ns_ > 0 && depth == nullptr) {
+            out.reason = NativePaperReason::DepthAccountingUnavailable;
+            out.censored = 1;
         }
         out.final_state = expired.state;
         return out;
     }
 
-    OmsEvent fill{};
-    fill.type = OmsEventType::FillDelta;
-    fill.timestamp_ns = now_monotonic_ns + 2;
-    fill.fill_delta_microunits = command.quantity_microunits;
-    const auto filled = endpoint_.apply_owned(command.client_order_id, fill);
-    out.final_state = filled.state;
-    if (filled.applied == 0 || filled.invariant_violation != 0
-        || filled.state != OrderState::Filled) {
+    const auto fill_qty = std::min(command.quantity_microunits, executable_qty);
+    if (executable_e4 % command.tick_size_e4 != 0) {
         out.reason = NativePaperReason::LifecycleFailure;
         return out;
     }
-    if (depth) depth->remaining -= command.quantity_microunits;
+    OmsEvent fill{};
+    fill.type = OmsEventType::FillDelta;
+    fill.timestamp_ns = now_monotonic_ns + 2;
+    fill.fill_delta_microunits = fill_qty;
+    fill.fill_price_e4 = static_cast<std::int32_t>(executable_e4);
+    const auto filled = endpoint_.apply_owned(command.client_order_id, fill);
+    if (filled.applied == 0 || filled.invariant_violation != 0
+        || (filled.state != OrderState::Filled && filled.state != OrderState::Partial)) {
+        out.reason = NativePaperReason::LifecycleFailure;
+        return out;
+    }
+    if (depth) depth->remaining -= fill_qty;
     ++paper_fills_;
-    out.reason = NativePaperReason::Accepted;
-    out.filled_microunits = command.quantity_microunits;
+    out.reason = fill_qty == command.quantity_microunits
+        ? NativePaperReason::Accepted : NativePaperReason::PartialFillModelled;
+    out.filled_microunits = fill_qty;
     out.fill.command = command;
     out.fill.client_order_id = command.client_order_id;
     out.fill.command_id = command.command_id;
     out.fill.instrument_handle = command.instrument_handle;
     out.fill.side = command.side;
-    out.fill.price_tick = command.price_tick;
+    out.fill.price_tick = executable_e4 / command.tick_size_e4;
     out.fill.tick_size_e4 = command.tick_size_e4;
-    out.fill.fill_microunits = command.quantity_microunits;
+    out.fill.fill_microunits = fill_qty;
     out.fill.exchange_event_ns = book.exchange_event_ns;
     out.fill.receive_monotonic_ns = now_monotonic_ns;
     out.fill.order_state = filled.state;
@@ -299,6 +301,22 @@ NativePaperSubmitResult NativePaperExecutionAdapter::match_now(
     out.fill.arrival_book_version = book.state_version;
     out.fill.causal_arrival_modelled = taker_delay_ns_ > 0;
     out.accepted = 1;
+
+    if (fill_qty < command.quantity_microunits) {
+        OmsEvent expire{};
+        expire.type = OmsEventType::Expire;
+        expire.timestamp_ns = now_monotonic_ns + 3;
+        const auto expired = endpoint_.apply_owned(command.client_order_id, expire);
+        if (expired.applied == 0 || expired.invariant_violation != 0
+            || expired.state != OrderState::Expired) {
+            out.reason = NativePaperReason::LifecycleFailure;
+            out.accepted = 0;
+            return out;
+        }
+        out.final_state = expired.state;
+    } else {
+        out.final_state = filled.state;
+    }
     return out;
 }
 
