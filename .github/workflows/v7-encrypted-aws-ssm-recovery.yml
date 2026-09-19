@@ -1,0 +1,110 @@
+name: V7 encrypted AWS SSM recovery
+
+on:
+  pull_request:
+    paths:
+      - .github/workflows/v7-encrypted-aws-ssm-recovery.yml
+      - scripts/v7_ssh_envelope.py
+      - deploy/v7-aws-handoff.envelope.json
+
+permissions:
+  contents: read
+
+jobs:
+  recover:
+    if: github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          fetch-depth: 0
+
+      - name: Decrypt one-shot AWS credential envelope
+        shell: bash
+        env:
+          SSH_PRIVATE_KEY: ${{ secrets.POLYMARKET_SERVER_SSH_KEY }}
+        run: |
+          set -euo pipefail
+          test -n "${SSH_PRIVATE_KEY:-}"
+          umask 077
+          printf '%s\n' "$SSH_PRIVATE_KEY" > "$RUNNER_TEMP/deploy-key"
+          python3 scripts/v7_ssh_envelope.py             --private-key "$RUNNER_TEMP/deploy-key"             --input deploy/v7-aws-handoff.envelope.json             --output "$RUNNER_TEMP/aws-handoff.json"
+          rm -f "$RUNNER_TEMP/deploy-key"
+
+      - name: Verify exact main and AWS STS identity
+        shell: bash
+        run: |
+          set -euo pipefail
+          git fetch --no-tags origin main
+          main_sha="$(git rev-parse origin/main)"
+          python3 - "$RUNNER_TEMP/aws-handoff.json" "$main_sha" "$RUNNER_TEMP/aws.env" <<'PY'
+          import json,shlex,sys
+          p,main,out=sys.argv[1:]
+          v=json.load(open(p,encoding='utf-8'))
+          assert set(v)=={
+            'schema','purpose','expected_sha','region',
+            'aws_access_key_id','aws_secret_access_key','aws_session_token'
+          }
+          assert v['schema']=='polymarket_v7_aws_handoff_v1'
+          assert v['purpose']=='LONDON_PAPER_SSM_CUTOVER'
+          assert v['expected_sha']==main
+          assert v['region']=='eu-west-2'
+          for k in ('aws_access_key_id','aws_secret_access_key','aws_session_token'):
+              assert isinstance(v[k],str) and v[k]
+          with open(out,'x',encoding='utf-8') as f:
+              f.write('export AWS_ACCESS_KEY_ID='+shlex.quote(v['aws_access_key_id'])+'\n')
+              f.write('export AWS_SECRET_ACCESS_KEY='+shlex.quote(v['aws_secret_access_key'])+'\n')
+              f.write('export AWS_SESSION_TOKEN='+shlex.quote(v['aws_session_token'])+'\n')
+              f.write('export AWS_REGION=eu-west-2\nexport AWS_DEFAULT_REGION=eu-west-2\n')
+          PY
+          chmod 600 "$RUNNER_TEMP/aws.env"
+          set +x
+          source "$RUNNER_TEMP/aws.env"
+          aws sts get-caller-identity --region eu-west-2 --output json >/dev/null
+          echo "aws_sts_identity=valid"
+
+      - name: Deploy exact main through reviewed SSM path
+        shell: bash
+        run: |
+          set -euo pipefail
+          set +x
+          source "$RUNNER_TEMP/aws.env"
+          expected_sha="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["expected_sha"])' "$RUNNER_TEMP/aws-handoff.json")"
+          git fetch --no-tags origin main
+          test "$(git rev-parse origin/main)" = "$expected_sha"
+          main_tree="$RUNNER_TEMP/main-exact"
+          git worktree add --detach "$main_tree" "$expected_sha" >/dev/null
+          trap 'git worktree remove --force "$main_tree" >/dev/null 2>&1 || true' EXIT
+          cd "$main_tree"
+          python3 scripts/v7_cutover_contract.py --repository-root . --expected-head "$expected_sha" >/dev/null
+          artifact_root="$RUNNER_TEMP/runtime-artifacts"
+          source_root="$RUNNER_TEMP/research-source-empty"
+          archive_root="$RUNNER_TEMP/research-archive-empty"
+          durable_root="$RUNNER_TEMP/research-durable"
+          mkdir -p "$source_root" "$archive_root" "$durable_root" "$artifact_root"
+          PM_V7_RESEARCH_SOURCE_ROOT="$source_root"             PM_V7_RESEARCH_ARCHIVE_ROOT="$archive_root"             PM_V7_RESEARCH_DURABLE_ROOT="$durable_root"             PM_V7_RESEARCH_ARTIFACT_ROOT="$artifact_root"             research/build_runtime_artifacts.sh "$expected_sha"
+          bundle="$artifact_root/by-sha/$expected_sha"
+          test -s "$bundle/manifest.json"
+          artifact_tgz="$RUNNER_TEMP/runtime-artifact-$expected_sha.tgz"
+          tar -C "$bundle" -czf "$artifact_tgz" .
+          receipt="$RUNNER_TEMP/v7-ssm-recovery.json"
+          python3 ops/v7_london_ssm_deploy.py             --expected-sha "$expected_sha"             --expected-tailscale-ip "100.104.183.109"             --artifact "$artifact_tgz"             --region eu-west-2             --output "$receipt"
+          python3 - "$receipt" "$expected_sha" <<'PY'
+          import json,sys
+          v=json.load(open(sys.argv[1]))
+          assert v['expected_sha']==sys.argv[2]
+          assert v['paper_only'] is True
+          assert v['authenticated_execution'] is False
+          assert v['real_order_submission'] is False
+          assert v['cutover']['sha']==sys.argv[2]
+          print('paper_ssm_cutover=success')
+          PY
+
+      - name: Destroy plaintext handoff
+        if: always()
+        shell: bash
+        run: |
+          set +e
+          shred -u "$RUNNER_TEMP/aws-handoff.json" "$RUNNER_TEMP/aws.env" "$RUNNER_TEMP/deploy-key" 2>/dev/null ||             rm -f "$RUNNER_TEMP/aws-handoff.json" "$RUNNER_TEMP/aws.env" "$RUNNER_TEMP/deploy-key"
