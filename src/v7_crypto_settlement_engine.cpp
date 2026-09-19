@@ -207,13 +207,13 @@ struct PmQueuedEvent {
     std::uint64_t connection_epoch = 0;
 };
 
-inline constexpr std::array<std::uint32_t, 4> kRepricingHorizonsMs{100, 250, 500, 1000};
+inline constexpr std::array<std::uint32_t, 9> kRepricingHorizonsMs{100, 250, 500, 750, 1000, 1250, 1500, 1750, 2000};
 struct RepricingWindow {
     std::uint64_t signal_version = 0;
     std::int64_t trigger_ns = 0;
     std::int64_t decision_ns = 0;
-    std::array<std::int64_t, 4> target_ns{};
-    std::uint8_t emitted_mask = 0;
+    std::array<std::int64_t, 9> target_ns{};
+    std::uint16_t emitted_mask = 0;
     std::int8_t direction = 0;
     std::uint8_t active = 0;
     std::uint8_t continuity_valid = 0;
@@ -593,7 +593,7 @@ int main(int argc, char** argv) {
             for (auto& window : repricing_windows) {
                 if (window.active == 0) continue;
                 for (std::size_t i = 0; i < kRepricingHorizonsMs.size(); ++i) {
-                    const auto mask = static_cast<std::uint8_t>(1U << i);
+                    const auto mask = static_cast<std::uint16_t>(1U << i);
                     if ((window.emitted_mask & mask) != 0 || window.target_ns[i] >= watermark_ns) continue;
                     const bool selected_up = window.direction > 0;
                     auto point = observation(selected_up ? yes_book : no_book,
@@ -609,9 +609,9 @@ int main(int argc, char** argv) {
                     if (!evidence_writer.publish_observation(point)) ++adapter_handoff_failures;
                     if (point.repricing_pair_valid != 0) ++repricing_labels;
                     else ++repricing_censors;
-                    window.emitted_mask = static_cast<std::uint8_t>(window.emitted_mask | mask);
+                    window.emitted_mask = static_cast<std::uint16_t>(window.emitted_mask | mask);
                 }
-                if (window.emitted_mask == 0x0F) window.active = 0;
+                if (window.emitted_mask == 0x01FF) window.active = 0;
             }
         };
         const auto publish_order = [&](const NativeOrderCommand& command,
