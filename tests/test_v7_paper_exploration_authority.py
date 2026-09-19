@@ -4,7 +4,6 @@ from pathlib import Path
 ROOT=Path(__file__).resolve().parents[1]
 sys.path.insert(0,str(ROOT/"scripts")); sys.path.insert(0,str(ROOT/"tests"))
 from v7_opportunity import OpportunityEnvelope, OpportunityError, coordinate
-from v7_global_portfolio_coordinator import process_cut
 from v7_execution_ledger import LedgerEvent
 from v7_ledger_spool import spool_event, drain_spool
 from test_v7_opportunity import envelope
@@ -26,13 +25,6 @@ def test_exploration_is_btc_m5_only_and_not_mature_new_risk():
     except OpportunityError as e: assert str(e)=="paper_exploration_evidence_incomplete"
     else: raise AssertionError("ETH exploration accepted")
 
-def test_coordinator_writes_separate_exploration_receipt():
-    with tempfile.TemporaryDirectory() as td:
-        root=Path(td); (root/"opportunities/inbox").mkdir(parents=True)
-        (root/"opportunities/inbox/e.json").write_text(json.dumps(exploration()))
-        d=process_cut(root,now_ns=150)["last_decision"]
-        assert d["paper_exploration_authorized"] is True and d["new_risk_authorized"] is False
-        assert list((root/"opportunities/receipts").glob("*.json"))
 
 def test_ledger_accepts_only_explicit_paper_exploration_receipt():
     with tempfile.TemporaryDirectory() as td:
@@ -45,13 +37,6 @@ def test_ledger_accepts_only_explicit_paper_exploration_receipt():
         ev2=LedgerEvent(event_type="FILL",strategy="CRYPTO_SETTLEMENT_ENGINE",model_sha=SHA,order_id="o2",fill_id="f2",side="BUY",token_id="t",exchange_ts_ms=1000,receive_ts_ms=1100,fill_price=.5,filled_size=1,fee=0,fee_source="test:authoritative",metadata=meta)
         spool_event(root,ev2); r=drain_spool(root,model_sha=SHA); assert r["quarantined"]==1
 
-def test_router_requires_arrival_and_receipt_before_canonical_fill():
-    text=(ROOT/"scripts/v7_external_fair_paper_router.py").read_text()
-    assert "arrival_revalidated" in text
-    assert "wait_for_exploration_receipt" in text
-    assert "PAPER_EXPLORATION_NOT_SELECTED" in text
-    assert "replay_key = self.emit_shadow_ingress" in text
-    assert "paper_exploration" in text
 
 
 
@@ -115,28 +100,3 @@ def test_ledger_probe_requires_matching_probe_receipt():
         event2=LedgerEvent(event_type="FILL",strategy="CRYPTO_SETTLEMENT_ENGINE",model_sha=SHA,order_id="probe-o2",fill_id="probe-f2",side="BUY",token_id="t",exchange_ts_ms=1000,receive_ts_ms=1100,fill_price=.1,filled_size=5,fee=0,fee_source="test:authoritative",metadata=meta)
         spool_event(root,event2); result=drain_spool(root,model_sha=SHA)
         assert result["quarantined"]==1
-
-
-def test_live_router_has_distinct_probe_candidate_and_arrival_revalidation_paths():
-    import v7_external_fair_paper_router as router
-    policy=json.loads((ROOT/"config/v7_external_fair.json").read_text())
-    probe=router.validate_probe_policy(policy["paper_exploration_probe"])
-    now=router.time.monotonic_ns()
-    yes=router.Book("yes",((.88,100.0),),((.90,100.0),),.01,5.0,1000,1000,"y")
-    no=router.Book("no",((.09,100.0),),((.11,100.0),),.01,5.0,1000,1000,"n")
-    status={
-        "paper_only":True,"authenticated_execution":False,"real_order_submission":False,
-        "contract":{"verified":True,"rules_hash_recognized":True},
-        "settlement_reference":{"valid":True},
-        "oracle":{"healthy":True,"continuity":"LIVE_CONTINUOUS"},
-        "external":{"healthy":True},
-        "market":{"yes_token":"yes","no_token":"no","fee_schedule":{"rate":0.0,"exponent":1,"takerOnly":True}},
-        "fair":{"valid":True,"paper_exploration_bootstrap":True,"research_only":True,"real_money_authority":False,"probability_model_id":"btc_m5_same_oracle_diffusion_bootstrap_v1","probability_model_hash":"f"*64,"yes":.775,"lower":.567,"upper":.911,"tte_seconds":120.0,"calculated_monotonic_ns":now-1,"valid_until_monotonic_ns":now+10_000_000_000},
-    }
-    assert router.robust_candidates(status,{"yes":yes,"no":no},policy["taker"])==[]
-    rows=router.paper_probe_candidates(status,{"yes":yes,"no":no},policy["taker"],probe)
-    assert len(rows)==1 and rows[0]["outcome"]=="NO"
-    assert rows[0]["point_ev"]>0 and rows[0]["robust_ev"]<0
-    text=(ROOT/"scripts/v7_external_fair_paper_router.py").read_text()
-    assert "paper_probe_candidates(arrival_status" in text
-    assert "paper_exploration_probe_authorized" in text

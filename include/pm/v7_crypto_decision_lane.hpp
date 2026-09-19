@@ -3,6 +3,8 @@
 #include "pm/v7_execution_admission.hpp"
 #include "pm/v7_external_state.hpp"
 #include "pm/v7_market_state.hpp"
+#include "pm/v7_probability_ev.hpp"
+#include "pm/v7_multirate_context.hpp"
 
 #include <array>
 #include <cstdint>
@@ -24,6 +26,11 @@ enum class NativeCryptoDecisionReason : std::uint8_t {
     MarketAlreadyTraded = 11,
     CapitalDenied = 12,
     EntryPriceTooHigh = 13,
+    MarketAlreadyRepriced = 14,
+    ProbabilityUnavailable = 15,
+    NetEdgeNonPositive = 16,
+    RiskSizeBelowMinimum = 17,
+    SlowContextUnavailable = 18,
 };
 struct NativeCryptoDecisionPolicy {
     std::int64_t minimum_tte_ns = 105'000'000'000LL;
@@ -36,7 +43,10 @@ struct NativeCryptoDecisionPolicy {
     std::uint8_t require_signal_valid = 1;
     std::uint8_t require_full_visible_depth = 1;
     std::uint8_t one_entry_per_market = 1;
-    std::array<std::uint8_t, 5> reserved{};
+    std::uint32_t required_slow_context_mask = 0;
+    std::uint8_t probability_ev_enabled = 0;
+    std::uint8_t require_pm_book_pre_signal = 0;
+    std::array<std::uint8_t, 3> reserved{};
 };
 
 struct NativeCryptoInstrumentContext {
@@ -67,10 +77,17 @@ struct NativeCryptoDecisionInput {
     std::int64_t now_monotonic_ns = 0;
     std::uint64_t model_version = 1;
     std::uint64_t policy_version = 1;
+    SlowContextCut slow_context{};
+    SettlementProbabilityForecast probability{};
+    ProbabilityEvPolicy risk_sizing{};
+    double taker_fee_rate = std::numeric_limits<double>::quiet_NaN();
+    double taker_fee_exponent = std::numeric_limits<double>::quiet_NaN();
+    double execution_reserve_per_share = std::numeric_limits<double>::quiet_NaN();
 };
 
 struct NativeCryptoDecisionResult {
     StrategyIntent intent{};
+    ProbabilityEvDecision economics{};
     ExecutionAdmissionResult admission{};
     NativeCryptoDecisionReason reason = NativeCryptoDecisionReason::InvalidSignal;
     std::uint64_t signal_version = 0;

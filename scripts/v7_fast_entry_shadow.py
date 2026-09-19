@@ -20,7 +20,7 @@ import urllib.parse
 from pathlib import Path
 from typing import Any
 
-from v7_external_fair_paper_router import (
+from v7_external_fair_research import (
     Book,
     load,
     live_market_yes,

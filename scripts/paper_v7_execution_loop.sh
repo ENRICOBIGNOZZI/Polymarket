@@ -18,9 +18,23 @@ RECORDER="${PM_TRADE_RECORDER:-build/polymarket_v7_trade_recorder}"
 FILLABILITY_OBSERVER="${PM_V7_MAKER_FILLABILITY_OBSERVER:-build/polymarket_v7_maker_fillability_observer}"
 EXTERNAL_VENUE_RUNTIME="${PM_V7_EXTERNAL_VENUE_RUNTIME:-build/polymarket_v7_external_venue_runtime}"
 CRYPTO_SETTLEMENT_ENGINE="${PM_V7_CRYPTO_SETTLEMENT_ENGINE:-build/polymarket_v7_crypto_settlement_engine}"
-CI_REPOSITORY="${PM_V7_CI_REPOSITORY:-ENRICOBIGNOZZI/Polymarket}"
 SHA="${PM_V7_MODEL_SHA:-$(cat deploy/london/runtime_sha 2>/dev/null || git rev-parse HEAD)}"
 [[ "$SHA" =~ ^[0-9a-f]{40}$ ]] || { echo "exact 40-character runtime SHA required" >&2; exit 78; }
+CRYPTO_SIGNAL_POLICY="${PM_V7_CRYPTO_SIGNAL_POLICY:-$ROOT/config/v7_crypto_signal_policy.json}"
+[[ -f "$CRYPTO_SIGNAL_POLICY" ]] || { echo "signal policy not found: $CRYPTO_SIGNAL_POLICY" >&2; exit 78; }
+PROBABILITY_MODEL="${PM_V7_PROBABILITY_MODEL:-}"
+PROBABILITY_MODEL_ARGS=()
+PROBABILITY_EVALUATION_ARGS=()
+if [[ -n "$PROBABILITY_MODEL" ]]; then
+  [[ -f "$PROBABILITY_MODEL" ]] || { echo "probability model not found: $PROBABILITY_MODEL" >&2; exit 78; }
+  PROBABILITY_EVALUATION_SECONDS="${PM_V7_PROBABILITY_EVALUATION_SECONDS:-7200}"
+  [[ "$PROBABILITY_EVALUATION_SECONDS" =~ ^[1-9][0-9]*$ ]] || { echo "invalid probability evaluation seconds" >&2; exit 78; }
+  (( PROBABILITY_EVALUATION_SECONDS == 7200 )) || { echo "probability PAPER cohort must be exactly 7200 seconds" >&2; exit 78; }
+  PROBABILITY_EVALUATION_END_WALL_NS="$(python3 scripts/v7_probability_evaluation_gate.py     --gate "$RUN_ROOT/control/probability_evaluation_gate.json"     --model "$PROBABILITY_MODEL" --code-sha "$SHA"     --duration-seconds "$PROBABILITY_EVALUATION_SECONDS" --print-end-wall-ns)"
+  PROBABILITY_MODEL_ARGS=(--probability-model "$PROBABILITY_MODEL")
+  PROBABILITY_EVALUATION_ARGS=(--probability-evaluation-end-wall-ns "$PROBABILITY_EVALUATION_END_WALL_NS")
+fi
+CI_REPOSITORY="${PM_V7_CI_REPOSITORY:-ENRICOBIGNOZZI/Polymarket}"
 DISK_PRESSURE_MIN_FREE_BYTES="$(python3 -c 'import json,sys; v=json.load(open(sys.argv[1],encoding="utf-8")); x=v["disk_pressure_min_free_bytes"]; assert type(x) is int and x>0; print(x)' "$LONDON_BUFFER_RETENTION_CONFIG")"
 [[ "$DISK_PRESSURE_MIN_FREE_BYTES" =~ ^[1-9][0-9]*$ ]] || { echo "invalid disk pressure threshold" >&2; exit 74; }
 DURABLE_ROOT="${PM_V7_DURABLE_ROOT:-$RUN_ROOT/research/collector_buffer}"
@@ -512,6 +526,9 @@ PM_V7_CONTROL_NICE=0 v7_exec_class CONTROL python3 scripts/v7_native_crypto_engi
   --universe "$RUN_ROOT/universe/current.json" \
   --allocation "$RUN_ROOT/control/allocations/crypto_settlement_engine.json" \
   --market-registry "$ROOT/config/v7_crypto_settlement_markets.json" \
+  --signal-policy "$CRYPTO_SIGNAL_POLICY" \
+  "${PROBABILITY_MODEL_ARGS[@]}" \
+  "${PROBABILITY_EVALUATION_ARGS[@]}" \
   --legacy-claims "$RUN_ROOT/control/legacy_native_claims.json" \
   --engine "$CRYPTO_SETTLEMENT_ENGINE" \
   --settler "$ROOT/scripts/v7_native_paper_settlement.py" \
@@ -520,7 +537,8 @@ PM_V7_CONTROL_NICE=0 v7_exec_class CONTROL python3 scripts/v7_native_crypto_engi
   --maximum-entry-price-e4 7500 \
   --minimum-tte-ns 105000000000 --maximum-tte-ns 120000000000 \
   --maker-share-cap-microunits 1000000 \
-  --capture-native-decisions --capture-native-full-context BTC:M5 \
+  --capture-native-decisions --capture-execution-windows --execution-window-ns 2000000000 \
+  --capture-native-full-context BTC:M5 \
   --asynchronous-settlement \
   >> "$RUN_ROOT/native_engine_manager.log" 2>&1 &
 v7_register_child "$!"

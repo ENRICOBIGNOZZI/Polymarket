@@ -11,7 +11,7 @@ from unittest.mock import patch
 
 sys.path.insert(0,str(Path(__file__).resolve().parents[1]/'scripts'))
 from v7_compressed_journal import CompressedJournal,compress_closed,journal_rows
-from v7_external_fair_paper_router import _CounterfactualIndex,PaperRouter,_paper_exploration_evidence_paths
+from v7_external_fair_research import _CounterfactualIndex,_paper_exploration_evidence_paths
 from v7_external_rich_train import records as training_records
 from v7_external_economic_common import discover_counterfactual_tapes
 from v7_profitability_audit import counterfactual_paths
@@ -95,7 +95,7 @@ class JournalTests(unittest.TestCase):
                 calls.append(fd)
                 if len(calls)==2:temporary.unlink()
                 return original(fd)
-            with patch('v7_external_fair_paper_router.os.fstat',side_effect=fstat):
+            with patch('v7_external_fair_research.os.fstat',side_effect=fstat):
                 self.assertEqual(dict(index.iter_records()),{'saved':row})
             self.assertFalse(temporary.exists())
 
@@ -161,39 +161,6 @@ class JournalTests(unittest.TestCase):
                 with self.assertRaisesRegex(RuntimeError,'incomplete'):dict(index.iter_records())
             finally:index.close()
 
-    def test_router_model_switch_keeps_both_compressed_evidence_generations(self):
-        with tempfile.TemporaryDirectory() as d:
-            root=Path(d);config=Path(__file__).resolve().parents[1]/'config/v7_external_fair.json'
-            first=PaperRouter(root,'a'*40,config,'https://invalid','https://invalid')
-            first.enable_compressed_counterfactuals(512)
-            try:
-                for i in range(4):
-                    first.emit_counterfactual('OPPORTUNITY_SET',counterfactual_id=str(i),opportunity_id=str(i))
-                    for journal in first.counterfactual_journals.values():
-                        if journal.pending:journal.pending.result()
-                # Simulate interruption between active and durable publication.
-                extra={**list(journal_rows(first.counterfactual_path))[-1],
-                       'record_id':'active-only','counterfactual_id':'recovered','opportunity_id':'recovered'}
-                first.counterfactual_journals[first.counterfactual_path].append(extra)
-            finally:first.close_counterfactuals()
-            before=list(journal_rows(first.durable_counterfactual_path))
-            with ExitStack() as stack:
-                journals={path:stack.enter_context(CompressedJournal(path,512))
-                          for path in _paper_exploration_evidence_paths(root)}
-                second=PaperRouter(root,'b'*40,config,'https://invalid','https://invalid',counterfactual_journals=journals)
-                # Cross-SHA compaction is explicit maintenance, never a live-startup blocker.
-                second.compact_durable_evidence()
-                second.emit_counterfactual('OPPORTUNITY_SET',counterfactual_id='new',opportunity_id='new')
-                for journal in second.counterfactual_journals.values():
-                    if journal.pending:journal.pending.result()
-            after=list(journal_rows(second.durable_counterfactual_path))
-            self.assertEqual(after[:4],before)
-            self.assertEqual(after[4],extra)
-            self.assertEqual(len(after),6)
-            records=PaperRouter.read_counterfactual_records(second.evidence_source_paths())
-            self.assertEqual(len(records),6)
-            self.assertEqual({r['model_sha'] for r in records.values()},{'a'*40,'b'*40})
-            self.assertFalse((root/'ledger/execution.jsonl').exists())
 
     def test_legacy_read_is_read_only(self):
         with tempfile.TemporaryDirectory() as d:

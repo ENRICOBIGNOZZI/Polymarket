@@ -2,7 +2,7 @@
 
 The existing `polymarket-v7` UID remains the canonical operator home. The visible
 Grafana folder, datasource, dashboard titles, navigation and panel language are
-crypto-only. Exactly three repository-provisioned dashboards are permitted.
+crypto-only. Exactly four repository-provisioned dashboards are permitted.
 The exporter and dashboards are read-only. They never authorize execution,
 change capital, write ledger events, or promote a research strategy.
 

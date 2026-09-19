@@ -360,6 +360,60 @@ int main() {
     assert(down.signal_version == 1);
     assert(down.direction == -1);
 
+    // BNB-style strict second-venue confirmation: Bybit is an explicitly
+    // identified source, not a Coinbase alias, and a zero confirmation move
+    // cannot pass a positive confirmation threshold.
+    ExternalStatePolicy bybit_policy = cancel_policy;
+    bybit_policy.external_cancel_confirmation_venue = VenueId::BybitSpot;
+    bybit_policy.external_cancel_min_abs_confirmation_return_bp = 0.05;
+    ExternalAssetState bybit_state(500);
+    auto apply_bybit_group = [&](std::int64_t receive_ns,
+                                 const ExternalVenueEvent& first_event,
+                                 const ExternalVenueEvent& second_event) {
+        (void)bybit_state.advance_external_cancel_signal(receive_ns - 1, bybit_policy);
+        assert(bybit_state.on_venue_event(first_event, bybit_policy));
+        assert(bybit_state.on_venue_event(second_event, bybit_policy));
+        return bybit_state.advance_external_cancel_signal(receive_ns, bybit_policy);
+    };
+    (void)apply_bybit_group(
+        base,
+        trade(VenueId::BinanceSpot, 1, base, 100.0),
+        book(VenueId::BybitSpot, 1, base, 99.5, 100.5, 1, 1));
+    (void)bybit_state.advance_external_cancel_signal(
+        base + 300'000'000LL, bybit_policy);
+    const auto bybit_confirmed = apply_bybit_group(
+        base + 400'000'000LL,
+        trade(VenueId::BinanceSpot, 2, base + 400'000'000LL, 100.004),
+        book(VenueId::BybitSpot, 2, base + 400'000'000LL,
+             99.504, 100.504, 1, 1));
+    assert(bybit_confirmed.signal_version == 1);
+    assert(bybit_confirmed.confirmation_venue == VenueId::BybitSpot);
+    assert(bybit_confirmed.confirmation_observed == 1);
+    assert(bybit_confirmed.confirmation_return_100ms_bp > 0.05);
+    assert(bybit_confirmed.coinbase_return_100ms_bp == 0.0);
+
+    ExternalAssetState flat_bybit_state(500);
+    auto apply_flat_bybit = [&](std::int64_t receive_ns,
+                                const ExternalVenueEvent& first_event,
+                                const ExternalVenueEvent& second_event) {
+        (void)flat_bybit_state.advance_external_cancel_signal(receive_ns - 1, bybit_policy);
+        assert(flat_bybit_state.on_venue_event(first_event, bybit_policy));
+        assert(flat_bybit_state.on_venue_event(second_event, bybit_policy));
+        return flat_bybit_state.advance_external_cancel_signal(receive_ns, bybit_policy);
+    };
+    (void)apply_flat_bybit(
+        base,
+        trade(VenueId::BinanceSpot, 1, base, 100.0),
+        book(VenueId::BybitSpot, 1, base, 99.5, 100.5, 1, 1));
+    (void)flat_bybit_state.advance_external_cancel_signal(
+        base + 300'000'000LL, bybit_policy);
+    const auto flat_confirmation = apply_flat_bybit(
+        base + 400'000'000LL,
+        trade(VenueId::BinanceSpot, 2, base + 400'000'000LL, 100.004),
+        book(VenueId::BybitSpot, 2, base + 400'000'000LL,
+             99.5, 100.5, 1, 1));
+    assert(flat_confirmation.signal_version == 0);
+
     // Burst traffic must not erase the five-second history. 6,001 updates
     // reproduce the old 256-event-ring defect: missing history looked like zero.
     ExternalAssetState burst_state(500);

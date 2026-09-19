@@ -632,6 +632,11 @@ def render_prometheus(snapshot: dict[str, Any]) -> str:
         _metric("polymarket_v7_native_observations_written", (snapshot.get("native_engine_manager") or {}).get("native_observations_written")),
         _metric("polymarket_v7_native_observations_dropped", (snapshot.get("native_engine_manager") or {}).get("native_observations_dropped")),
         _metric("polymarket_v7_native_observations_queue_depth", (snapshot.get("native_engine_manager") or {}).get("native_observations_queue_depth")),
+        _metric("polymarket_v7_native_slow_context_publications", (snapshot.get("native_engine_manager") or {}).get("slow_context_publications")),
+        _metric("polymarket_v7_native_slow_context_failures", (snapshot.get("native_engine_manager") or {}).get("slow_context_failures")),
+        _metric("polymarket_v7_native_evidence_workers", (snapshot.get("native_engine_manager") or {}).get("evidence_worker_count")),
+        _metric("polymarket_v7_native_pending_settlements", (snapshot.get("native_engine_manager") or {}).get("pending_settlement_count")),
+        _metric("polymarket_v7_native_settlement_blocked", (snapshot.get("native_engine_manager") or {}).get("settlement_blocked_count")),
         _metric("polymarket_v7_native_engine_operational", (
             snapshot.get("native_mode") is True
             and (snapshot.get("native_engine_manager") or {}).get("state") == "RUNNING"
@@ -675,6 +680,8 @@ def render_prometheus(snapshot: dict[str, Any]) -> str:
             {"asset": row.get("asset") or ""},
         ))
     native_manager = snapshot.get("native_engine_manager") or {}
+    slow_error = str(native_manager.get("slow_context_error") or "")
+    lines.append(_metric("polymarket_v7_native_slow_context_error_info", 1, {"error": slow_error or "NONE"}))
     for worker in native_manager.get("workers") or []:
         if not isinstance(worker, dict):
             continue

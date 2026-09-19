@@ -565,7 +565,7 @@ for rel in (
     'ops/v7_runtime_supervisor.py',
     'ops/v7_service_entrypoint.sh',
     'scripts/v7_rtds_external_fair_monitor.py',
-    'scripts/v7_external_fair_paper_router.py',
+    'scripts/v7_external_fair_research.py',
     'scripts/v7_fee_reward_registry.py',
     'scripts/v7_generate_economic_artifacts.py',
     'scripts/v7_exact_sha_ci_gate.py',
@@ -604,7 +604,7 @@ prevalidate_candidate(){
       scripts/v7_prepare_cutover_run_root.py \
       scripts/v7_finalize_maker_cutover.py \
       scripts/v7_rtds_external_fair_monitor.py \
-      scripts/v7_external_fair_paper_router.py \
+      scripts/v7_external_fair_research.py \
       scripts/v7_fee_reward_registry.py \
       scripts/v7_generate_economic_artifacts.py \
       monitoring/exporter_v7.py \

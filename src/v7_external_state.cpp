@@ -155,6 +155,15 @@ bool ExternalAssetState::on_venue_event(const ExternalVenueEvent& event,
         && venue.book_source_sequence > 0 && event.source_sequence <= venue.book_source_sequence) {
         return false;
     }
+    if (epoch_changed || event.healthy == 0 || event.gap != 0) {
+        // Derivative fields belong to a connection epoch, not merely a venue.
+        // A recovered funding-only tick must not revive old-epoch OI.
+        venue.context_valid_mask = 0;
+        venue.context_field_receive_ns = {};
+        venue.context_receive_ns = 0;
+        venue.context_healthy = 0;
+        venue.context_gap = 1;
+    }
     const bool composite_inputs_changed = epoch_changed
         || event.event_type == ExternalEventType::BookTop
         || event.event_type == ExternalEventType::Health
@@ -202,6 +211,13 @@ bool ExternalAssetState::on_venue_event(const ExternalVenueEvent& event,
                 external_cancel_first_coinbase_ns_ = event.local_receive_monotonic_ns;
             }
         }
+        if (event.venue == policy.external_cancel_confirmation_venue && venue.valid != 0) {
+            external_cancel_confirmation_mid_ = PriceSample{
+                event.local_receive_monotonic_ns, venue.mid};
+            if (external_cancel_first_confirmation_ns_ == 0) {
+                external_cancel_first_confirmation_ns_ = event.local_receive_monotonic_ns;
+            }
+        }
     } else if (event.event_type == ExternalEventType::Trade) {
         if (finite(event.trade_size) && event.trade_size >= 0.0
             && (event.trade_side == 1 || event.trade_side == -1)) {
@@ -223,7 +239,8 @@ bool ExternalAssetState::on_venue_event(const ExternalVenueEvent& event,
     } else if (event.event_type == ExternalEventType::DerivativeContext) {
         const auto derivative_index = derivative_context_index(event.venue);
         const auto mask = event.context_valid_mask;
-        const bool invalid = derivative_index >= kDerivativeContextVenueCount || mask == 0
+        const bool invalid = event.healthy == 0 || event.gap != 0
+            || derivative_index >= kDerivativeContextVenueCount || mask == 0
             || (mask & ~static_cast<std::uint8_t>(DerivativeContextMarkPrice
                 | DerivativeContextIndexPrice | DerivativeContextFundingRate
                 | DerivativeContextOpenInterest)) != 0
@@ -243,6 +260,10 @@ bool ExternalAssetState::on_venue_event(const ExternalVenueEvent& event,
         if ((mask & DerivativeContextFundingRate) != 0) venue.funding_rate = event.funding_rate;
         if ((mask & DerivativeContextOpenInterest) != 0) venue.open_interest = event.open_interest;
         venue.context_valid_mask |= mask;
+        for (std::size_t field = 0; field < 4; ++field) {
+            if ((mask & (1U << field)) != 0)
+                venue.context_field_receive_ns[field] = event.local_receive_monotonic_ns;
+        }
         venue.context_receive_ns = event.local_receive_monotonic_ns;
         venue.context_healthy = event.healthy;
         venue.context_gap = event.gap;
@@ -363,6 +384,16 @@ void ExternalAssetState::on_transport_heartbeat(
     const std::size_t index = venue_index(venue_id);
     if (index >= venues_.size() || connection_epoch == 0 || receive_monotonic_ns <= 0) return;
     auto& venue = venues_[index];
+    if (!healthy || (venue.connection_epoch != 0 && venue.connection_epoch != connection_epoch)) {
+        // Derivative fields belong to a connection epoch, not merely a venue.
+        // A recovered funding-only tick must not revive old-epoch OI.
+        venue.context_valid_mask = 0;
+        venue.context_field_receive_ns = {};
+        venue.context_receive_ns = 0;
+        venue.context_healthy = 0;
+        venue.context_gap = 1;
+        ++state_version_;
+    }
     if (venue.connection_epoch != 0 && venue.connection_epoch != connection_epoch) {
         venue.valid = 0;
         venue.book_source_sequence = 0;
@@ -570,9 +601,9 @@ void ExternalAssetState::record_external_cancel_grid_sample(
         && external_cancel_binance_trade_.receive_ns <= grid_ns) {
         sample.binance_trade_price = external_cancel_binance_trade_.price;
     }
-    if (external_cancel_coinbase_mid_.receive_ns > 0
-        && external_cancel_coinbase_mid_.receive_ns <= grid_ns) {
-        sample.coinbase_mid_price = external_cancel_coinbase_mid_.price;
+    if (external_cancel_confirmation_mid_.receive_ns > 0
+        && external_cancel_confirmation_mid_.receive_ns <= grid_ns) {
+        sample.confirmation_mid_price = external_cancel_confirmation_mid_.price;
     }
     external_cancel_grid_history_[external_cancel_grid_head_] = sample;
     external_cancel_grid_head_ = (external_cancel_grid_head_ + 1)
@@ -602,17 +633,21 @@ ExternalCancelSignalSnapshot ExternalAssetState::advance_external_cancel_signal(
         || policy.external_cancel_warmup_ns < policy.external_cancel_shock_window_ns
         || policy.external_cancel_signal_ttl_ns <= 0
         || !finite(policy.external_cancel_min_abs_return_bp)
-        || policy.external_cancel_min_abs_return_bp <= 0.0) {
+        || policy.external_cancel_min_abs_return_bp <= 0.0
+        || !finite(policy.external_cancel_min_abs_confirmation_return_bp)
+        || policy.external_cancel_min_abs_confirmation_return_bp < 0.0
+        || (policy.external_cancel_confirmation_venue != VenueId::CoinbaseSpot
+            && policy.external_cancel_confirmation_venue != VenueId::BybitSpot)) {
         ExternalCancelSignalSnapshot disabled;
         return disabled;
     }
     if (external_cancel_first_binance_ns_ == 0
-        || external_cancel_first_coinbase_ns_ == 0) {
+        || external_cancel_first_confirmation_ns_ == 0) {
         return external_cancel_signal_;
     }
     if (external_cancel_grid_start_ns_ == 0) {
         external_cancel_grid_start_ns_ = std::max(
-            external_cancel_first_binance_ns_, external_cancel_first_coinbase_ns_);
+            external_cancel_first_binance_ns_, external_cancel_first_confirmation_ns_);
         external_cancel_next_grid_ns_ = external_cancel_grid_start_ns_;
     }
     while (external_cancel_next_grid_ns_ > 0
@@ -627,14 +662,21 @@ ExternalCancelSignalSnapshot ExternalAssetState::advance_external_cancel_signal(
             if (current != nullptr && prior != nullptr
                 && current->binance_trade_price > 0.0
                 && prior->binance_trade_price > 0.0
-                && current->coinbase_mid_price > 0.0
-                && prior->coinbase_mid_price > 0.0) {
+                && current->confirmation_mid_price > 0.0
+                && prior->confirmation_mid_price > 0.0) {
                 const double binance_bp = 10'000.0 * std::log(
                     current->binance_trade_price / prior->binance_trade_price);
-                const double coinbase_bp = 10'000.0 * std::log(
-                    current->coinbase_mid_price / prior->coinbase_mid_price);
-                const bool non_opposing = coinbase_bp == 0.0
-                    || binance_bp * coinbase_bp > 0.0;
+                const double confirmation_bp = 10'000.0 * std::log(
+                    current->confirmation_mid_price / prior->confirmation_mid_price);
+                const bool confirmation_required =
+                    policy.external_cancel_min_abs_confirmation_return_bp > 0.0;
+                const bool confirmation_large_enough = !confirmation_required
+                    || std::abs(confirmation_bp) + 1e-12
+                        >= policy.external_cancel_min_abs_confirmation_return_bp;
+                const bool non_opposing = confirmation_large_enough
+                    && (confirmation_required
+                        ? binance_bp * confirmation_bp > 0.0
+                        : (confirmation_bp == 0.0 || binance_bp * confirmation_bp > 0.0));
                 const bool cooldown_ok = external_cancel_last_trigger_ns_ == 0
                     || grid_ns - external_cancel_last_trigger_ns_
                         >= policy.external_cancel_cooldown_ns;
@@ -647,9 +689,15 @@ ExternalCancelSignalSnapshot ExternalAssetState::advance_external_cancel_signal(
                     external_cancel_signal_.valid_until_monotonic_ns = grid_ns
                         + policy.external_cancel_signal_ttl_ns;
                     external_cancel_signal_.binance_return_100ms_bp = binance_bp;
-                    external_cancel_signal_.coinbase_return_100ms_bp = coinbase_bp;
+                    external_cancel_signal_.coinbase_return_100ms_bp =
+                        policy.external_cancel_confirmation_venue == VenueId::CoinbaseSpot
+                            ? confirmation_bp : 0.0;
+                    external_cancel_signal_.confirmation_return_100ms_bp = confirmation_bp;
+                    external_cancel_signal_.confirmation_venue =
+                        policy.external_cancel_confirmation_venue;
                     external_cancel_signal_.direction = binance_bp > 0.0 ? 1 : -1;
                     external_cancel_signal_.confirmed_non_opposing = 1;
+                    external_cancel_signal_.confirmation_observed = 1;
                 }
             }
         }
@@ -737,6 +785,12 @@ ExternalAssetSnapshot ExternalAssetState::snapshot(
             && now_ns - venue.context_receive_ns <= policy.max_venue_age_ns;
         context.valid_mask = fresh && venue.context_healthy != 0 && venue.context_gap == 0
             ? venue.context_valid_mask : 0;
+        for (std::size_t field = 0; field < 4; ++field) {
+            const auto received = venue.context_field_receive_ns[field];
+            if (received <= 0 || received > now_ns
+                || now_ns - received > policy.max_venue_age_ns)
+                context.valid_mask &= static_cast<std::uint8_t>(~(1U << field));
+        }
         context.healthy = venue.context_healthy;
         context.gap = venue.context_gap;
     }
@@ -744,6 +798,28 @@ ExternalAssetSnapshot ExternalAssetState::snapshot(
         && count >= policy.min_healthy_venues && latest_receive_ns_ > 0
         && latest_receive_ns_ <= now_ns ? 1 : 0;
     return out;
+}
+
+std::array<std::int64_t, 4> ExternalAssetState::derivative_field_clocks(VenueId venue) const noexcept {
+    const auto index = venue_index(venue);
+    return index < venues_.size() ? venues_[index].context_field_receive_ns
+                                  : std::array<std::int64_t, 4>{};
+}
+std::array<std::int64_t, 2> ExternalAssetState::price_context_bounds(
+    std::uint32_t mask, const ExternalStatePolicy& policy) const noexcept {
+    std::array<std::int64_t, 2> bounds{};
+    for (std::size_t i = 0; i < venues_.size(); ++i) {
+        if ((mask & (1U << i)) == 0) continue;
+        const auto received = policy.use_transport_freshness_for_book != 0
+            ? venues_[i].last_transport_receive_ns : venues_[i].last_book_receive_ns;
+        const auto ttl = policy.use_transport_freshness_for_book != 0
+            ? policy.max_transport_age_ns : policy.max_venue_age_ns;
+        if (received <= 0 || ttl < 0 || received > std::numeric_limits<std::int64_t>::max() - ttl) return {};
+        if (bounds[0] == 0 || received < bounds[0]) bounds[0] = received;
+        const auto expires = received + ttl;
+        if (bounds[1] == 0 || expires < bounds[1]) bounds[1] = expires;
+    }
+    return bounds;
 }
 
 CausalCut make_causal_cut(

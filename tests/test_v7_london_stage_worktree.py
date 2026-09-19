@@ -1,5 +1,7 @@
 from __future__ import annotations
 import os
+import shutil
+import sys
 from pathlib import Path
 import subprocess
 import tempfile
@@ -18,6 +20,18 @@ class LondonStageWorktreeTests(unittest.TestCase):
         prefix = prefix.replace('$(uname -s)', 'Linux')
         env = dict(os.environ, POLYMARKET_EXPECTED_SHA=sha, POLYMARKET_APP_DIR=str(source),
                    POLYMARKET_LONDON_DEPLOY_LOCK_FILE=str(source.parent / "deploy.lock"))
+        # macOS lacks the flock CLI. Exercise the same OS lock, not a no-op,
+        # in this source-guard unit fixture; production still requires flock.
+        if shutil.which('flock') is None:
+            tools = source.parent / 'test-lock-tools'
+            tools.mkdir(exist_ok=True)
+            helper = tools / 'flock'
+            helper.write_text('#!' + sys.executable + '\nimport fcntl,sys\n'
+                              'assert sys.argv[1] == "-n"\n'
+                              'try: fcntl.flock(int(sys.argv[2]), fcntl.LOCK_EX | fcntl.LOCK_NB)\n'
+                              'except BlockingIOError: raise SystemExit(1)\n')
+            helper.chmod(0o700)
+            env['PATH'] = str(tools) + os.pathsep + env.get('PATH','')
         return subprocess.run(['bash', '-c', prefix], env=env, capture_output=True, text=True)
 
     def test_linked_worktree_and_normal_checkout_pass_while_dirty_fails(self):

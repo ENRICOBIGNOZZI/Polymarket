@@ -333,23 +333,45 @@ bool NativeSettlementAuthority::apply_fill(
     OrderTrack& item,
     InventorySlot& inv,
     std::int64_t fill_delta_microunits,
-    std::int64_t cumulative_fill_microunits) noexcept {
+    std::int64_t cumulative_fill_microunits,
+    std::int32_t actual_fill_price_e4) noexcept {
     if (fill_delta_microunits <= 0 || cumulative_fill_microunits <= 0) return false;
+    const bool actual_price_observed = actual_fill_price_e4 > 0;
+    const auto fill_price = actual_price_observed
+        ? static_cast<std::int64_t>(actual_fill_price_e4) : item.price_e4;
+    if (fill_price <= 0 || fill_price >= kPriceScale
+        || item.admitted_command.tick_size_e4 <= 0
+        || fill_price % item.admitted_command.tick_size_e4 != 0
+        || (item.side == Side::Buy && fill_price > item.price_e4)
+        || (item.side == Side::Sell && fill_price < item.price_e4)) return false;
     if (item.side == Side::Buy) {
-        std::int64_t target_basis = 0;
-        if (!cumulative_buy_basis(item, cumulative_fill_microunits, target_basis)
-            || target_basis < item.settled_buy_basis_microdollars) return false;
-        const auto delta_basis = target_basis - item.settled_buy_basis_microdollars;
+        std::int64_t delta_basis = 0;
+        if (actual_price_observed) {
+            // For an explicitly modelled/observed taker fill, move only the
+            // dollars actually consumed at that arrival price. The unused
+            // limit-price reservation remains until the terminal event.
+            if (!mul_div_ceil_positive(
+                    fill_delta_microunits, fill_price, kPriceScale, delta_basis)) return false;
+        } else {
+            // Preserve the original cumulative rounding semantics for legacy
+            // and maker fills whose execution price is the admitted price.
+            std::int64_t target_basis = 0;
+            if (!cumulative_buy_basis(item, cumulative_fill_microunits, target_basis)
+                || target_basis < item.settled_buy_basis_microdollars) return false;
+            delta_basis = target_basis - item.settled_buy_basis_microdollars;
+        }
         if (delta_basis > 0 && !capital_.settle_partial_fill(item.intent_id, delta_basis)) {
             return false;
         }
         if (inv.total_microunits > std::numeric_limits<std::int64_t>::max()
                                        - fill_delta_microunits
             || inv.collateral_basis_microdollars > std::numeric_limits<std::int64_t>::max()
+                                                   - delta_basis
+            || item.settled_buy_basis_microdollars > std::numeric_limits<std::int64_t>::max()
                                                    - delta_basis) return false;
         inv.total_microunits += fill_delta_microunits;
         inv.collateral_basis_microdollars += delta_basis;
-        item.settled_buy_basis_microdollars = target_basis;
+        item.settled_buy_basis_microdollars += delta_basis;
         bump_inventory_version(inv);
         return true;
     }
@@ -409,15 +431,24 @@ NativeLifecycleResult NativeSettlementAuthority::apply_order_event(
     }
     if (out.transition.applied != 0 && after->filled_microunits > old_filled) {
         const auto fill_delta = after->filled_microunits - old_filled;
-        if (!apply_fill(*item, *inv, fill_delta, after->filled_microunits)) {
+        if (!apply_fill(*item, *inv, fill_delta, after->filled_microunits,
+                        event.fill_price_e4)) {
             out.reason = NativeSettlementAuthorityReason::InventoryInvariant;
             return out;
         }
     }
 
     if (terminal(after->state)) {
-        if (item->side == Side::Buy && after->remaining_microunits > 0) {
-            if (!capital_.release_order(item->intent_id)) {
+        if (item->side == Side::Buy) {
+            std::int64_t full_limit_basis = 0;
+            if (!cumulative_buy_basis(*item, after->original_microunits, full_limit_basis)) {
+                out.reason = NativeSettlementAuthorityReason::LifecycleInvariant;
+                return out;
+            }
+            const bool residual_reservation =
+                after->remaining_microunits > 0
+                || item->settled_buy_basis_microdollars < full_limit_basis;
+            if (residual_reservation && !capital_.release_order(item->intent_id)) {
                 out.reason = NativeSettlementAuthorityReason::LifecycleInvariant;
                 return out;
             }

@@ -25,7 +25,7 @@ def research_artifact() -> FairModelArtifact:
 class MonitorTests(unittest.TestCase):
     def test_hybrid_probability_has_distinct_recipe_identity(self):
         from v7_evidence_contract import hybrid_identity
-        from v7_external_fair_paper_router import hybrid_probability
+        from v7_external_fair_research import hybrid_probability
         source={'valid':True,'yes':.7,'pm_mid':.4,'lower':0.,'upper':1.,
                 'probability_model_id':'external','probability_model_hash':'a'*64}
         result=module.Monitor.hybrid_fair_snapshot(None,source)

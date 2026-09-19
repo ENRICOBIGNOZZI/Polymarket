@@ -157,7 +157,8 @@ private:
     [[nodiscard]] bool apply_fill(OrderTrack& item,
                                   InventorySlot& inv,
                                   std::int64_t fill_delta_microunits,
-                                  std::int64_t cumulative_fill_microunits) noexcept;
+                                  std::int64_t cumulative_fill_microunits,
+                                  std::int32_t actual_fill_price_e4) noexcept;
     void clear_maker_quote(const OrderTrack& item) noexcept;
     void bump_inventory_version(InventorySlot& inv) noexcept;
 
