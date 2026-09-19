@@ -1,0 +1,6 @@
+{
+  "schema": "polymarket_v7_tailnet_key_request_v1",
+  "paper_only": true,
+  "real_order_submission": false,
+  "requested_for": "TAILNET_CI_QUOTA_RECOVERY"
+}
