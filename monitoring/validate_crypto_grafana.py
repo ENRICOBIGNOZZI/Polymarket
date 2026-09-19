@@ -111,8 +111,12 @@ def validate(root: Path) -> None:
             for target in panel.get("targets") or []:
                 if not isinstance(target, dict):
                     continue
-                if "polymarket_execution_arbs" in str(target.get("expr") or ""):
+                expr = str(target.get("expr") or "")
+                if "polymarket_execution_arbs" in expr:
                     fail(f"{path.name} still renders retired generic arb-event telemetry")
+                for retired_metric in ("polymarket_mc_coordinator_candidate_", "polymarket_mc_shadow_"):
+                    if retired_metric in expr:
+                        fail(f"{path.name} still renders retired metric family {retired_metric!r}")
 
     datasource = (root / "monitoring/grafana/provisioning/datasources/prometheus-v7.yml").read_text(encoding="utf-8")
     if "name: Polymarket V7 Crypto Prometheus" not in datasource:

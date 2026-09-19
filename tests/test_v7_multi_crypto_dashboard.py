@@ -16,20 +16,19 @@ class MultiCryptoDashboardTest(unittest.TestCase):
         text = json.dumps(dashboard)
         for metric in (
             "polymarket_mc_risk_equity_lower_bound_usd", "polymarket_mc_pnl_lower_bound_usd",
-            "polymarket_mc_realized_pnl_usd",
-            "polymarket_mc_lane_realized_pnl_usd", "polymarket_mc_strategy_realized_pnl_usd",
-            "polymarket_mc_attribution_status_code", "polymarket_mc_attribution_gap_usd",
-            "polymarket_mc_lane_economic_evidence_present",
-            "polymarket_mc_shadow_ready", "polymarket_mc_shadow_external_ready_assets",
-            "polymarket_mc_shadow_contract_ready_markets", "polymarket_mc_shadow_status_age_seconds",
+            "polymarket_mc_realized_pnl_usd", "polymarket_mc_lane_realized_pnl_usd",
+            "polymarket_mc_strategy_realized_pnl_usd", "polymarket_mc_attribution_status_code",
+            "polymarket_mc_attribution_gap_usd", "polymarket_mc_lane_economic_evidence_present",
             "polymarket_mc_lane_realized_return_on_turnover", "polymarket_mc_lane_fees_bps",
-            "polymarket_mc_coordinator_candidate_asset_exposure_usd",
-            "polymarket_mc_coordinator_candidate_horizon_exposure_usd",
-            "polymarket_mc_coordinator_candidate_oracle_concentration_ratio",
-            "polymarket_mc_coordinator_candidate_exchange_concentration_ratio",
-            "polymarket_mc_lane_open_cost_at_risk_usd",
+            "polymarket_mc_lane_open_cost_at_risk_usd", "polymarket_v7_native_active_workers",
+            "polymarket_v7_native_target_contexts", "polymarket_v7_native_missing_contexts",
+            "polymarket_v7_native_observations_published", "polymarket_v7_native_observations_written",
+            "polymarket_v7_native_observations_dropped", "polymarket_v7_native_observations_queue_depth",
+            "polymarket_v7_book_data_runtime_ready", "polymarket_v7_external_data_ready_assets",
         ):
             self.assertIn(metric, text)
+        self.assertNotIn("polymarket_mc_coordinator_candidate_", text)
+        self.assertNotIn("polymarket_mc_shadow_", text)
         self.assertIn("N/A", text)
         self.assertNotIn("polymarket_runtime_pnl_usd", text)
         self.assertNotIn("polymarket_runtime_equity_usd", text)
