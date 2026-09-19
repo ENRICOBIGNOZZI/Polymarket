@@ -120,6 +120,9 @@ public:
     [[nodiscard]] bool return_history_available(std::int64_t now_ns,
         std::int64_t horizon_ns) const noexcept;
     [[nodiscard]] std::uint64_t state_version() const noexcept { return state_version_; }
+    [[nodiscard]] std::array<std::int64_t, 4> derivative_field_clocks(VenueId venue) const noexcept;
+    [[nodiscard]] std::array<std::int64_t, 2> price_context_bounds(
+        std::uint32_t health_mask, const ExternalStatePolicy& policy) const noexcept;
 
 private:
     struct VenueState {
@@ -134,6 +137,7 @@ private:
         std::int64_t last_book_receive_ns = 0;
         std::int64_t last_transport_receive_ns = 0;
         std::int64_t context_receive_ns = 0;
+        std::array<std::int64_t, 4> context_field_receive_ns{};
         double bid = 0.0;
         double ask = 0.0;
         double bid_size = 0.0;

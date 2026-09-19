@@ -1,7 +1,6 @@
 #include "pm/v7_native_settlement_oms_endpoint.hpp"
 #include "pm/v7_native_paper_execution.hpp"
 #include "pm/v7_native_runtime_evidence.hpp"
-#include "pm/v7_native_runtime_evidence.hpp"
 #include "pm/fast_ws.hpp"
 #include "pm/v7_coinbase_l2_observer.hpp"
 #include "pm/v7_crypto_decision_lane.hpp"
@@ -89,6 +88,7 @@ struct Options {
     std::string run_root;
     std::string model_sha;
     std::string probability_model;
+    std::string slow_context;
     std::string run_id;
     std::string server_id;
     std::string market_id;
@@ -134,6 +134,7 @@ Options parse_options(int argc, char** argv) {
         else if (arg == "--run-root") out.run_root = next();
         else if (arg == "--model-sha") out.model_sha = next();
         else if (arg == "--probability-model") out.probability_model = next();
+        else if (arg == "--slow-context") out.slow_context = next();
         else if (arg == "--run-id") out.run_id = next();
         else if (arg == "--server-id") out.server_id = next();
         else if (arg == "--market-id") out.market_id = next();
@@ -386,6 +387,13 @@ int main(int argc, char** argv) {
         market.contract_verified = 1;
         market.settlement_reference_valid = 1;
 
+        SlowContextCache slow_cache;
+        SlowContextFeed slow_feed(options.slow_context,
+            {options.model_sha, options.run_id, options.market_id, options.asset, options.horizon});
+        SlowContextCut decision_slow_context{};
+        std::uint64_t slow_context_updates = 0, external_protective_cancels = 0;
+        std::uint64_t maker_blocked_by_fast_shock = 0;
+        std::uint64_t last_protective_signal = 0;
         BookHotSnapshot yes_book{}, no_book{};
         ExternalCancelSignalSnapshot current_signal{};
         SettlementProbabilityForecast decision_probability{};
@@ -458,6 +466,7 @@ int main(int argc, char** argv) {
             NativeEvidenceEvent evidence{};
             evidence.kind = NativeEvidenceKind::OrderSubmitted;
             if (policy == ExecutionPolicyId::AggressiveTaker) {
+                evidence.slow_context = decision_slow_context;
                 evidence.probability = decision_probability;
                 evidence.economics = decision_economics;
                 evidence.probability_features = decision_features;
@@ -503,6 +512,15 @@ int main(int argc, char** argv) {
             return evidence_writer.publish(evidence);
         };
 
+        // Risk-off has no dependency on slow context, fair inference or a new PM tick.
+        const auto protective_cancel = [&](std::uint64_t instrument, Side side, std::int64_t now) {
+            const auto cancel = authority.cancel_maker_quote(instrument, side, now);
+            if (cancel.accepted != 0) {
+                ++external_protective_cancels;
+                if (!paper_execution.request_cancel(cancel.command, now)) ++adapter_handoff_failures;
+            }
+        };
+
         const auto consume_arrivals = [&](std::uint64_t instrument,
                                           const BookHotSnapshot& previous_book,
                                           std::int64_t watermark) {
@@ -529,6 +547,7 @@ int main(int argc, char** argv) {
         std::stop_source stopping;
         auto stop_token = stopping.get_token();
 #endif
+        slow_feed.start();
         std::thread binance_thread([&] { binance.run(stop_token); });
         std::thread coinbase_thread;
         if (coinbase) {
@@ -562,6 +581,10 @@ int main(int argc, char** argv) {
         };
         while (monotonic_now_ns() < deadline) {
             if (pm_faults.exchange(0, std::memory_order_acq_rel) != 0) {
+                const auto fault_now = monotonic_now_ns();
+                for (const auto instrument : {kYes, kNo})
+                    for (const auto side : {Side::Buy, Side::Sell})
+                        protective_cancel(instrument, side, fault_now);
                 paper_execution.invalidate_arrivals();
                 yes_book.valid = 0; yes_book.lineage_continuous = 0;
                 no_book.valid = 0; no_book.lineage_continuous = 0;
@@ -573,6 +596,7 @@ int main(int argc, char** argv) {
                     pm_ready = false;
                 }
             }
+            slow_context_updates += slow_feed.consume(slow_cache, monotonic_now_ns());
             refill_binance();
             refill_coinbase();
             refill_pm();
@@ -765,6 +789,16 @@ int main(int argc, char** argv) {
             } while (progressed);
             if (has_external) current_signal = external_state.advance_external_cancel_signal(receive_ns, external_policy);
 
+            const auto protect_now = monotonic_now_ns();
+            const int shock_direction = fresh_shock_direction(current_signal.direction,
+                current_signal.trigger_receive_monotonic_ns,
+                current_signal.valid_until_monotonic_ns, protect_now);
+            if (shock_direction != 0 && current_signal.signal_version > last_protective_signal) {
+                last_protective_signal = current_signal.signal_version;
+                protective_cancel(kYes, current_signal.direction > 0 ? Side::Sell : Side::Buy, protect_now);
+                protective_cancel(kNo, current_signal.direction > 0 ? Side::Buy : Side::Sell, protect_now);
+            }
+
             if (current_signal.signal_version != 0 && paper_execution.pending_arrivals() == 0) {
                 NativeCryptoDecisionInput input;
                 input.signal = current_signal;
@@ -772,6 +806,8 @@ int main(int argc, char** argv) {
                 input.yes_book = yes_book;
                 input.no_book = no_book;
                 input.now_monotonic_ns = monotonic_now_ns();
+                input.slow_context = slow_cache.at(input.now_monotonic_ns);
+                decision_slow_context = input.slow_context;
                 if (probability_model.loaded) {
                     input.probability = probability_model.predict(input, options.asset, options.horizon);
                     (void)probability_features(input, options.asset, options.horizon,
@@ -803,6 +839,7 @@ int main(int argc, char** argv) {
                     const bool selected_up = result.accepted ? result.selected_yes != 0 : current_signal.direction > 0;
                     auto point = observation(selected_up ? yes_book : no_book, selected_up ? kYes : kNo, 2);
                     point.decision_ns = finished; point.reason = observation_reason; point.accepted = result.accepted;
+                    point.slow_context = input.slow_context;
                     point.probability = input.probability;
                     point.economics = result.economics;
                     point.probability_features = decision_features;
@@ -846,6 +883,21 @@ int main(int argc, char** argv) {
                 }
             }
 
+            // Do not cancel a toxic quote and immediately recreate that same
+            // exposure from a maker candidate formed earlier in this causal cut.
+            std::size_t retained_candidates = 0;
+            for (std::size_t i = 0; i < alpha_candidate_count; ++i) {
+                const auto& intent = alpha_candidates[i].intent;
+                if (candidate_is_taker[i] == 0 && quote_is_adverse_to_shock(
+                        intent.instrument_handle == kYes, intent.side, shock_direction)) {
+                    ++maker_blocked_by_fast_shock;
+                    continue;
+                }
+                alpha_candidates[retained_candidates] = alpha_candidates[i];
+                candidate_trigger_ns[retained_candidates] = candidate_trigger_ns[i];
+                candidate_is_taker[retained_candidates++] = candidate_is_taker[i];
+            }
+            alpha_candidate_count = retained_candidates;
             if (!evidence_writer.healthy()) { ++adapter_handoff_failures; break; }
             // Read-only research probes cannot reach admission or the economic ledger.
             if (options.observation_only) continue;
@@ -998,6 +1050,7 @@ int main(int argc, char** argv) {
         pm_feed.stop();
         binance_thread.join();
         if (coinbase_thread.joinable()) coinbase_thread.join();
+        slow_feed.stop();
         evidence_writer.stop();
 
         const auto binance_status = binance.snapshot();
@@ -1029,6 +1082,13 @@ int main(int argc, char** argv) {
                 ? "FULL" : options.capture_native_decisions ? "DECISIONS" : "NONE"},
             {"asset", options.asset}, {"horizon", options.horizon},
             {"critical_path", "CPP_SAME_PROCESS_FEED_DECODE_TO_SINGLE_SETTLEMENT_AUTHORITY"},
+            {"temporal_architecture", "FAST_NATIVE_PLUS_ASYNC_VERSIONED_CONTEXT"},
+            {"slow_context_updates", slow_context_updates},
+            {"slow_context_failures", slow_feed.failures()},
+            {"slow_context_overflows", slow_feed.overflows()},
+            {"slow_context_model_used_mask", 0},
+            {"external_protective_cancels", external_protective_cancels},
+            {"maker_blocked_by_fast_shock", maker_blocked_by_fast_shock},
             {"clean_capture", clean}, {"duration_seconds", options.duration_seconds},
             {"evaluations", evaluations}, {"accepted_candidates", accepted},
             {"taker_accepted", taker_accepted}, {"maker_accepted", maker_accepted},

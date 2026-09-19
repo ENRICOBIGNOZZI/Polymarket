@@ -27,6 +27,8 @@ from dataclasses import dataclass, asdict
 from pathlib import Path
 from typing import Any
 
+from v7_slow_context import context_path, publish_contexts
+
 from v7_execution_ledger import native_order_id_matches, LedgerEvent, canonical_ledger_path, iter_events
 from v7_ledger_spool import spool_event
 from v7_native_risk_policy import load_native_limits, unsettled_exposure
@@ -449,6 +451,9 @@ class Manager:
         self.workers: dict[str, Worker] = {}
         self.completed_market_ids: set[str] = set()
         self.stopping = False
+        self.slow_context_failures = 0
+        self.slow_context_error = ""
+        self.slow_context_publications = 0
         self.pending_settlements: dict[str, PendingSettlement] = {}
         self.launch_retry_attempts: dict[str, int] = {}
         self.launch_retry_after: dict[str, float] = {}
@@ -651,6 +656,9 @@ class Manager:
             "market_id": str(workers[0]["market_id"]) if workers else "",
             "window_start_unix": int(workers[0]["window_start_unix"]) if workers else 0,
             "hot_path_executable": str(self.args.engine),
+            "slow_context_failures": getattr(self, "slow_context_failures", 0),
+            "slow_context_error": getattr(self, "slow_context_error", ""),
+            "slow_context_publications": getattr(self, "slow_context_publications", 0),
             "hot_cpuset": str(os.environ.get("PM_V7_HOT_CPUSET") or ""),
             "hot_nice": int(os.environ.get("PM_V7_HOT_NICE") or 0),
             "workers": workers,
@@ -811,6 +819,7 @@ class Manager:
             "--taker-fee-exponent", repr(fee_exponent),
             "--duration-seconds", "0",
         ]
+        command.extend(["--slow-context", str(context_path(self.run_root, str(market["market_id"])))])
         probability_model = getattr(self.args, "probability_model", None)
         if probability_model is not None:
             command.extend(["--probability-model", str(probability_model)])
@@ -1111,6 +1120,17 @@ class Manager:
                     )
                     self._terminate_all()
                     return rc
+
+            # Optional context failures cannot stall independent fast trading.
+            # Missing/expired context stays unavailable in the native cache.
+            try:
+                self.slow_context_publications += publish_contexts(
+                    self.run_root, code_sha=self.args.model_sha,
+                    run_id=self.args.run_id, markets=targets)
+                self.slow_context_error = ""
+            except (OSError, ValueError, TypeError) as exc:
+                self.slow_context_failures += 1
+                self.slow_context_error = type(exc).__name__
 
             fatal_launch = self._launch_missing_workers(targets)
             if fatal_launch is not None:

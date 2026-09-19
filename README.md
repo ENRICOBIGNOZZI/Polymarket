@@ -61,7 +61,7 @@ config/v7_crypto_settlement_markets.json
         -> runs/paper_v7_live/universe/
 ```
 
-Registered contexts are BTC, ETH, SOL, and XRP at the configured horizons.
+Registered contexts are BTC, ETH, SOL, XRP, DOGE, and BNB at the configured horizons.
 Exact rolling slugs are queried around the active settlement window. Discovery
 has zero execution authority.
 
@@ -103,7 +103,7 @@ config/v7_crypto_settlement_markets.json
 config/v7_crypto_settlement_model_registry.json
 config/v7_external_fair.json
 scripts/v7_crypto_settlement.py
-scripts/v7_external_fair_paper_router.py
+scripts/v7_external_fair_research.py
 ```
 
 ### Professional maker
@@ -168,7 +168,7 @@ monitoring/v7_retention.py
 ```text
 scripts/v7_capital_allocator.py
 scripts/v7_portfolio_guard.py
-scripts/v7_global_portfolio_coordinator.py
+src/v7_crypto_settlement_engine.cpp
 config/v7_authority_registry.json
 config/v7_strategy_registry.json
 config/v7_live_model_scope.json
@@ -219,3 +219,22 @@ A file belongs in the canonical repository only if it supports at least one of:
 6. replay/backtest/training/evidence that can improve the crypto system.
 
 Everything else belongs in Git history, not the live repository.
+
+## Multi-rate native boundary
+
+The canonical executable is `polymarket_v7_crypto_settlement_engine`. Fast
+Binance/Coinbase/Polymarket events never wait for the cold context publisher.
+The existing lifecycle manager publishes exact-run, market-bound context; an
+isolated native reader validates it and hands POD snapshots through a bounded
+SPSC queue. Each field retains its own receive clock, source identity and expiry.
+Publication does not make stale data fresh. Unavailable fields remain null.
+
+External protective cancels and book-lineage risk-off are independent of slow
+context and do not require a new Polymarket book tick. Existing risk limits,
+PAPER-only mode and canonical ownership are unchanged.
+
+The optional probability/EV candidate remains opt-in research. Its current
+18-feature artifact does not consume the new slow fields: evidence explicitly
+reports `model_used_mask=0`. No trained slow-prior residual model, automatic
+promotion, production cutover, profit or network-latency improvement is claimed.
+See `docs/v7_multirate_migration.md` for the migration and validation boundary.

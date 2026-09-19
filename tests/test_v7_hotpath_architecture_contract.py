@@ -5,7 +5,7 @@ ROOT=Path(__file__).resolve().parents[1]
 
 
 def test_hot_path_has_no_database_dataframe_or_python_execution_owner():
-    native=(ROOT/'src/v7_crypto_settlement_native_candidate.cpp').read_text()
+    native=(ROOT/'src/v7_crypto_settlement_engine.cpp').read_text()
     manager=(ROOT/'scripts/v7_native_crypto_engine_manager.py').read_text()
     forbidden=('sqlite3','sqlalchemy','psycopg','pandas','DataFrame')
     for token in forbidden:
@@ -79,7 +79,7 @@ def test_native_manager_launcher_invocation_satisfies_current_cli(tmp_path):
 
 
 def test_observation_only_defaults_to_decision_capture_not_full_firehose() -> None:
-    source=(ROOT/'src/v7_crypto_settlement_native_candidate.cpp').read_text()
+    source=(ROOT/'src/v7_crypto_settlement_engine.cpp').read_text()
     block=source.split('else if (arg == "--observation-only")',1)[1].split('else if (arg == "--capture-native-observations")',1)[0]
     assert 'out.observation_only = true' in block
     assert 'out.capture_native_decisions = true' in block

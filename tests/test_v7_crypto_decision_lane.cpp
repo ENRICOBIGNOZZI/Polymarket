@@ -256,7 +256,29 @@ void test_probability_selects_economic_side_not_signal_side() {
     assert(lane.construct_candidate(x).reason==NativeCryptoDecisionReason::RiskSizeBelowMinimum);
 }
 
+void test_required_slow_context_is_action_local_and_never_waits() {
+    NativeCryptoDecisionPolicy policy; policy.required_slow_context_mask = 1;
+    NativeCryptoDecisionLane dependent(policy), independent({});
+    auto in = input(1, 80);
+    assert(dependent.construct_candidate(in).reason == NativeCryptoDecisionReason::SlowContextUnavailable);
+    assert(independent.construct_candidate(in).accepted);
+    SlowContextCache cache; SlowContextSnapshot context;
+    context.version = 1; context.envelope_valid = 1; context.valid_mask = 1;
+    context.published_ns = kNow - 1;
+    context.fields[0] = {42., kNow - 1000, kNow, 1};
+    assert(cache.apply(context, kNow));
+    in.slow_context = cache.at(kNow);
+    assert(dependent.construct_candidate(in).accepted);
+    in.signal = signal(1, 81); in.now_monotonic_ns = kNow + 1;
+    in.slow_context = cache.at(kNow + 1);
+    assert(dependent.construct_candidate(in).reason == NativeCryptoDecisionReason::SlowContextUnavailable);
+    // The same required cut cannot be replayed against a later decision clock.
+    in.slow_context = cache.at(kNow);
+    assert(dependent.construct_candidate(in).reason == NativeCryptoDecisionReason::SlowContextUnavailable);
+}
+
 int main() {
+    test_required_slow_context_is_action_local_and_never_waits();
     test_probability_selects_economic_side_not_signal_side();
     test_up_down_and_admission();
     test_duplicate_depth_tte_and_market_gates();

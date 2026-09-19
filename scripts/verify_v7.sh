@@ -16,8 +16,8 @@ fi
 echo "verify_v7: clean-worktree exact-SHA provenance passed"
 
 BUILD_ROOT="${V7_VERIFY_BUILD_ROOT:-$REPOSITORY_ROOT/build-verify-v7}"
-RELEASE_BUILD="$BUILD_ROOT/Release"
-DEBUG_BUILD="$BUILD_ROOT/Debug"
+RELEASE_BUILD="${V7_VERIFY_RELEASE_BUILD:-$BUILD_ROOT/Release}"
+DEBUG_BUILD="${V7_VERIFY_DEBUG_BUILD:-$BUILD_ROOT/Debug}"
 JOBS="${V7_VERIFY_JOBS:-2}"
 LATENCY_SAMPLES="${V7_VERIFY_LATENCY_SAMPLES:-200000}"
 
@@ -104,11 +104,11 @@ python3 tests/test_v7_repository_shape.py
 python3 tests/test_v7_single_writer_contract.py
 python3 -m unittest discover -s tests -p 'test_v7_*manifest.py'
 
-cmake -S . -B "$RELEASE_BUILD" -DCMAKE_BUILD_TYPE=Release
+cmake -DPython3_EXECUTABLE="$(command -v python3)" -S . -B "$RELEASE_BUILD" -DCMAKE_BUILD_TYPE=Release
 cmake --build "$RELEASE_BUILD" --parallel "$JOBS"
 ctest --test-dir "$RELEASE_BUILD" --output-on-failure
 
-cmake -S . -B "$DEBUG_BUILD" -DCMAKE_BUILD_TYPE=Debug
+cmake -DPython3_EXECUTABLE="$(command -v python3)" -S . -B "$DEBUG_BUILD" -DCMAKE_BUILD_TYPE=Debug
 cmake --build "$DEBUG_BUILD" --parallel "$JOBS"
 ctest --test-dir "$DEBUG_BUILD" --output-on-failure
 
@@ -148,7 +148,7 @@ python3 scripts/v7_build_manifest.py validate "$BUILD_MANIFEST" >/dev/null
 
 if [[ "${V7_VERIFY_SANITIZERS:-0}" == "1" ]]; then
   SANITIZER_BUILD="$BUILD_ROOT/ASan-UBSan"
-  cmake -S . -B "$SANITIZER_BUILD" -DCMAKE_BUILD_TYPE=Debug \
+  cmake -DPython3_EXECUTABLE="$(command -v python3)" -S . -B "$SANITIZER_BUILD" -DCMAKE_BUILD_TYPE=Debug \
     -DCMAKE_CXX_FLAGS="-fsanitize=address,undefined -fno-omit-frame-pointer" \
     -DCMAKE_EXE_LINKER_FLAGS="-fsanitize=address,undefined"
   cmake --build "$SANITIZER_BUILD" --parallel "$JOBS"
@@ -164,7 +164,7 @@ fi
 
 if [[ "${V7_VERIFY_TSAN:-0}" == "1" ]]; then
   TSAN_BUILD="$BUILD_ROOT/TSan"
-  cmake -S . -B "$TSAN_BUILD" -DCMAKE_BUILD_TYPE=Debug \
+  cmake -DPython3_EXECUTABLE="$(command -v python3)" -S . -B "$TSAN_BUILD" -DCMAKE_BUILD_TYPE=Debug \
     -DCMAKE_CXX_FLAGS="-fsanitize=thread -fno-omit-frame-pointer" \
     -DCMAKE_EXE_LINKER_FLAGS="-fsanitize=thread"
   cmake --build "$TSAN_BUILD" --parallel "$JOBS"

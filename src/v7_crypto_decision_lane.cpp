@@ -81,6 +81,11 @@ NativeCryptoDecisionResult NativeCryptoDecisionLane::construct_candidate(
         || (policy_.require_signal_valid != 0 && input.signal.valid == 0)) {
         return finish(NativeCryptoDecisionReason::InvalidSignal);
     }
+    if (policy_.required_slow_context_mask != 0
+        && (input.slow_context.decision_ns != now_ns
+            || !input.slow_context.satisfies(policy_.required_slow_context_mask))) {
+        return finish(NativeCryptoDecisionReason::SlowContextUnavailable);
+    }
     out.signal_age_ns = now_ns - input.signal.trigger_receive_monotonic_ns;
     if (out.signal_age_ns > policy_.maximum_signal_age_ns
         || (policy_.require_signal_valid != 0

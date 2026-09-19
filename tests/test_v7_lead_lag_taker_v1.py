@@ -3,8 +3,8 @@ import json, sys
 from pathlib import Path
 ROOT=Path(__file__).resolve().parents[1]
 sys.path.insert(0,str(ROOT/'scripts'))
-import v7_lead_lag_taker_runtime as mod
-from v7_lead_lag_taker_runtime import signal_candidate, validate_config
+import v7_lead_lag_policy as mod
+from v7_lead_lag_policy import signal_candidate, validate_config
 
 SHA='a'*40
 NOW=10_000_000_000
@@ -58,7 +58,6 @@ def test_rule_requires_original_hard_signal_contract():
 
 import tempfile, time
 from unittest import mock
-from v7_lead_lag_taker_runtime import LeadLagRuntime
 from v7_ledger_spool import drain_spool
 from v7_execution_ledger import canonical_ledger_path, iter_events
 
@@ -108,74 +107,10 @@ def _receipt(replay: str) -> dict:
             'real_capital_at_risk':False,
             'crypto_context':{'asset':'BTC','horizon':'M5','authority':'PAPER_EXPLORATION'}}
 
-def _runtime_case(root: Path, *, arrival_yes_ask: float=.40):
-    sha='a'*40; now_ns=time.time_ns()
-    _write(root/'control/runtime_status.json', {'schema':'polymarket_v7_runtime_status_v3','model_sha':sha,
-           'config_hash':'b'*40,'policy_hash':'c'*40,'run_id':'r1','paper_only':True,
-           'authenticated_execution':False,'real_order_submission':False})
-    _write(root/'external_fair/status.json', _live_status(sha,now_ns))
-    _write(root/'external_fair/external_cancel_signal.json', _live_signal(sha,now_ns))
-    r=LeadLagRuntime(root,sha,ROOT/'config/v7_lead_lag_taker_v1.json','https://clob.invalid','https://gamma.invalid')
-    stamp=time.time_ns()//1_000_000
-    r.clob.request_books=mock.Mock(side_effect=[_books(stamp,.40,.61),_books(stamp,arrival_yes_ask,.61)])
-    def receipt(key): return _receipt(key)
-    r.wait_receipt=mock.Mock(side_effect=receipt)
-    return r
-
-def test_forward_runtime_fill_and_settlement_are_canonical_paper_events():
-    with tempfile.TemporaryDirectory() as d:
-        root=Path(d); r=_runtime_case(root)
-        r.candidate_step()
-        rows=[json.loads(p.read_text()) for p in sorted((root/'ledger/spool').glob('*.json'))]
-        assert [x['event_type'] for x in rows]==['ORDER_SUBMITTED','FILL']
-        order,fill=rows
-        capacity_book=order['metadata']['capacity_book']
-        assert capacity_book['schema']=='polymarket_v7_lead_lag_capacity_book_v1'
-        assert capacity_book['ask_levels']==[{'price':0.4,'size':100.0}]
-        assert capacity_book['fee_schedule']['rate']==0.07
-        assert capacity_book['observed_ladder_complete_as_received'] is True
-        assert fill['filled_size']==5.0 and fill['fill_price']==0.40
-        assert fill['metadata']['paper_forward_test'] is True
-        assert fill['metadata']['hold_to_settlement'] is True
-        assert fill['metadata']['entry_uses_absolute_fair'] is False
-        assert fill['metadata']['coordinator_receipt']['paper_forward_test_authorized'] is True
-        assert r.state['entries']==1 and r.state['traded_markets']==['m-live']
-        pos=next(iter(r.state['positions'].values())); pos['resolution_due_ms']=0
-        settled={'closed':True,'outcomes':'["Up","Down"]','clobTokenIds':'["yes","no"]','outcomePrices':'["1","0"]'}
-        with mock.patch('v7_lead_lag_taker_runtime.request_json',return_value=settled):
-            r.settle_positions()
-        rows=[json.loads(p.read_text()) for p in sorted((root/'ledger/spool').glob('*.json'))]
-        final=next(x for x in rows if x['event_type']=='FINAL')
-        assert final['final_pnl']>0 and final['metadata']['won'] is True
-        assert final['metadata']['coordinator_receipt']['paper_forward_test_authorized'] is True
-        result=drain_spool(root,model_sha='a'*40)
-        assert result['appended']==3 and result['quarantined']==0
-        canonical=list(iter_events(canonical_ledger_path(root),expected_model_sha='a'*40))
-        assert [x.event_type for x in canonical]==['ORDER_SUBMITTED','FILL','FINAL']
-        assert canonical[-1].metadata['paper_forward_test'] is True
-        assert canonical[-1].metadata['coordinator_receipt']['selected_replay_key']
-        assert r.state['settled']==1 and r.state['wins']==1
-
-def test_forward_runtime_disk_pressure_blocks_before_book_or_receipt() -> None:
-    with tempfile.TemporaryDirectory() as d:
-        root=Path(d); r=_runtime_case(root)
-        (root/'control/DISK_PRESSURE').write_text('{}')
-        r.clob.request_books.reset_mock(); r.wait_receipt.reset_mock()
-        r.candidate_step()
-        assert r.clob.request_books.call_count==0 and r.wait_receipt.call_count==0
-        assert r.state['entries']==0
-        assert r.state['skip_reasons']['DISK_PRESSURE']==1
-        assert not (root/'ledger/spool').exists()
 
 
-def test_forward_runtime_never_chases_a_worse_arrival_ask():
-    with tempfile.TemporaryDirectory() as d:
-        root=Path(d); r=_runtime_case(root,arrival_yes_ask=.41)
-        r.candidate_step()
-        rows=[json.loads(p.read_text()) for p in sorted((root/'ledger/spool').glob('*.json'))] if (root/'ledger/spool').exists() else []
-        assert rows==[]
-        assert r.state['entries']==0 and r.state['arrival_rejections']==1
-        assert r.state['skip_reasons']['ARRIVAL_NO_CHASE_OR_DEPTH']==1
+
+
 
 
 

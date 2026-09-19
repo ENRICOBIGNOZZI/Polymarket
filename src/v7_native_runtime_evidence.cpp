@@ -16,6 +16,26 @@
 namespace pm::v7 {
 namespace fs = std::filesystem;
 namespace json = boost::json;
+
+json::object slow_context_json(const SlowContextCut& cut) {
+    json::object fields;
+    for (std::size_t i = 0; i < kSlowContextFields; ++i) {
+        const auto& field = cut.snapshot.fields[i];
+        if ((cut.fresh_mask & (1U << i)) == 0) {
+            fields[std::string(kSlowContextNames[i])] = nullptr;
+        } else {
+            fields[std::string(kSlowContextNames[i])] = json::object{
+                {"value", field.value}, {"receive_monotonic_ns", field.receive_ns},
+                {"expires_monotonic_ns", field.expires_ns}, {"source_version", field.source_version}};
+        }
+    }
+    return {{"schema", "polymarket_v7_slow_context_cut_v1"},
+        {"version", cut.snapshot.version}, {"fresh_mask", cut.fresh_mask},
+        {"decision_monotonic_ns", cut.decision_ns},
+        {"max_input_receive_monotonic_ns", cut.max_input_receive_ns},
+        {"model_used_mask", 0}, {"fields", std::move(fields)}};
+}
+
 namespace {
 
 [[nodiscard]] bool exact_sha(const std::string& value) noexcept {
@@ -256,6 +276,7 @@ struct NativeRuntimeEvidenceWriter::Impl {
                 * static_cast<double>(event.command.tick_size_e4) / 10'000.0;
             out["intended_action"] = event.policy == ExecutionPolicyId::AggressiveTaker ? "TAKE" : "MAKE";
             out["intended_size"] = static_cast<double>(event.command.quantity_microunits) / 1'000'000.0;
+            out["metadata"].as_object()["slow_context"] = slow_context_json(event.slow_context);
             if (event.probability.valid && event.economics.accepted) {
                 out["predicted_alpha"] = event.economics.expected_net_edge;
                 out["expected_ev"] = event.economics.expected_net_edge
@@ -400,6 +421,8 @@ struct NativeRuntimeEvidenceWriter::Impl {
                 ? json::value(nullptr) : json::value(config.probability_artifact_sha256)},
             {"probability_forward_calibrated", false},
             {"probability_input_token_id", event.probability.valid ? json::value(token(event.probability_input_instrument)) : json::value(nullptr)},
+            {"slow_context", event.slow_context.decision_ns > 0
+                ? json::value(slow_context_json(event.slow_context)) : json::value(nullptr)},
             {"probability_input_features", event.probability.valid ? json::value(std::move(probability_inputs)) : json::value(nullptr)},
             {"expected_net_edge", event.kind == 4 ? json::value(event.expected_ev)
                 : std::isfinite(event.economics.expected_net_edge) ? json::value(event.economics.expected_net_edge) : json::value(nullptr)},

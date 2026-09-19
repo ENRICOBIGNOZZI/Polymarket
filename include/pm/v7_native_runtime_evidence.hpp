@@ -5,6 +5,7 @@
 #include "pm/v7_native_paper_execution.hpp"
 #include "pm/v7_spsc.hpp"
 #include "pm/v7_probability_ev.hpp"
+#include "pm/v7_multirate_context.hpp"
 
 #include <atomic>
 #include <cstdint>
@@ -21,6 +22,7 @@ enum class NativeEvidenceKind : std::uint8_t {
 
 struct NativeEvidenceEvent {
     NativeEvidenceKind kind = NativeEvidenceKind::OrderSubmitted;
+    SlowContextCut slow_context{};
     SettlementProbabilityForecast probability{};
     ProbabilityEvDecision economics{};
     std::array<double, 18> probability_features{};
@@ -40,6 +42,7 @@ struct NativeEvidenceEvent {
 // A bounded copy of exactly the state consumed by the native decision owner.
 // Research observations never enter the economic ledger or order transport.
 struct NativeObservation {
+    SlowContextCut slow_context{};
     SettlementProbabilityForecast probability{};
     ProbabilityEvDecision economics{};
     std::array<double, 18> probability_features{};

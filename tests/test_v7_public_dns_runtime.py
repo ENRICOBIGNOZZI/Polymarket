@@ -54,7 +54,7 @@ class V7PublicDnsRuntimeContractTests(unittest.TestCase):
         proxy_export = source.index('export HTTPS_PROXY="$PUBLIC_PROXY"')
         self.assertLess(proxy_export, source.index("v7_rtds_external_fair_monitor.py"))
         self.assertLess(proxy_export, source.index("scripts/v7_native_crypto_engine_manager.py"))
-        self.assertNotIn("v7_external_fair_paper_router.py", source)
+        self.assertNotIn("v7_external_fair_research.py", source)
         self.assertNotIn("v7_maker_cohort_supervisor.py", source)
         self.assertIn("scripts/v7_native_crypto_engine_manager.py", source)
         self.assertNotIn("polymarket_v7_market_maker_runtime", source)

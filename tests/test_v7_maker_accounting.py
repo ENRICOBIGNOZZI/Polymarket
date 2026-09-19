@@ -61,20 +61,20 @@ class MakerAccountingTests(unittest.TestCase):
         self.assertEqual(projection['issues'],[]);self.assertEqual(projection['positions'],{})
         self.assertEqual(projection['realized_pnl'],3.)
         self.assertEqual(f.record_id,settlement_event(p,raw,500_000).record_id)
-    def test_existing_router_account_and_settlement_owner_include_maker(self):
-        from v7_external_fair_paper_router import (reconstruct_paper_exploration_account,
-            spool_event, PaperRouter)
+    def test_historical_account_and_settlement_projection_include_maker(self):
+        from v7_external_fair_research import (reconstruct_paper_exploration_account,
+            spool_event)
         with tempfile.TemporaryDirectory() as directory:
             root=Path(directory)
             for e in [event('ORDER_SUBMITTED'),event('FILL')]:spool_event(root,e)
             account=reconstruct_paper_exploration_account(root,SHA,4000.)
             self.assertTrue(account['complete'],account['issues'])
             self.assertEqual(account['cash'],3998.);self.assertEqual(account['open_positions'],1)
-            router=object.__new__(PaperRouter);router.root=root;router.sha=SHA
-            router.state={'positions':account['positions']};router.gamma_url='https://invalid.example'
             raw={'id':'m1','closed':True,'clobTokenIds':['m1-yes','m1-no'],'outcomePrices':[1.,0.]}
-            with mock.patch('v7_external_fair_paper_router.request_json',return_value=raw):
-                self.assertEqual(router.observe_positions(),1)
+            position=next(iter(account['positions'].values()))
+            final=settlement_event(position,raw,400_000)
+            self.assertIsNotNone(final)
+            spool_event(root,final)
             settled=reconstruct_paper_exploration_account(root,SHA,4000.)
             self.assertTrue(settled['complete'],settled['issues'])
             self.assertEqual(settled['cash'],4003.);self.assertEqual(settled['equity'],4003.)

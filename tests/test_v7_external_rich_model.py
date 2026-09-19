@@ -117,7 +117,7 @@ class RichModelTests(unittest.TestCase):
             self.assertFalse(parsed['exploration']['robust_candidate'])
             self.assertLessEqual(parsed['exploration']['maximum_probe_loss'],2.)
     def test_learned_taker_respects_explicit_switch_and_hard_guards(self):
-        m=self.load_fixture('test_v7_external_fair_paper_router')
+        m=self.load_fixture('test_v7_external_fair_research')
         status=m.snapshot();status['fair'].update(self.learned_fair())
         policy=json.loads((Path(__file__).resolve().parents[1]/'config/v7_external_fair.json').read_text())
         probes=m.router.validate_probe_policy(policy['paper_exploration_probe'])
@@ -129,7 +129,7 @@ class RichModelTests(unittest.TestCase):
         status['real_order_submission']=True
         self.assertEqual(m.router.paper_probe_candidates(status,books,policy['taker'],enabled),[])
     def test_rich_taker_revalidates_pm_prior_at_arrival(self):
-        m=self.load_fixture('test_v7_external_fair_paper_router')
+        m=self.load_fixture('test_v7_external_fair_research')
         status=m.snapshot();fair=self.learned_fair();fair.update(
             uses_polymarket_price_as_feature=True,market_prior_causal_cut_valid=True,
             pm_mid=.50,pm_mid_receive_ts_ms=1001)

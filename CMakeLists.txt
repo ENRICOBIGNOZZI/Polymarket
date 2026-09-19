@@ -45,6 +45,7 @@ add_library(pm_v7_common
   src/v7_capital.cpp
   src/v7_execution_admission.cpp
   src/v7_crypto_decision_lane.cpp
+  src/v7_multirate_context.cpp
   src/v7_native_order_tx.cpp
   src/v7_native_settlement_authority.cpp
   src/v7_native_paper_execution.cpp
@@ -146,14 +147,6 @@ add_executable(polymarket_v7_maker_fillability_observer src/v7_maker_fillability
 target_link_libraries(polymarket_v7_maker_fillability_observer PRIVATE pm_v7_hft pm_v7_common pm_fast_arb pm_core)
 target_compile_options(polymarket_v7_maker_fillability_observer PRIVATE -Wall -Wextra -Wpedantic)
 
-# Receipt-gated PAPER executor. It never makes an economic decision and never
-# talks to authenticated endpoints: it consumes only coordinator-authorized
-# MAKE intents and reuses the canonical queue-aware MakerPaperMarketEngine plus
-# the fillability observer's public-trade tape.
-add_executable(polymarket_v7_authorized_maker_paper_executor
-  src/v7_authorized_maker_paper_executor.cpp)
-target_link_libraries(polymarket_v7_authorized_maker_paper_executor PRIVATE pm_v7_hft Threads::Threads)
-target_compile_options(polymarket_v7_authorized_maker_paper_executor PRIVATE -Wall -Wextra -Wpedantic)
 if(NOT PM_LONDON_RUNTIME_ONLY)
 add_executable(polymarket_v7_maker_research_replay src/v7_maker_research_replay.cpp)
 target_link_libraries(polymarket_v7_maker_research_replay PRIVATE pm_v7_hft)
@@ -187,21 +180,9 @@ add_executable(polymarket_v7_external_venue_runtime src/v7_external_venue_runtim
 target_link_libraries(polymarket_v7_external_venue_runtime PRIVATE pm_v7_external)
 target_compile_options(polymarket_v7_external_venue_runtime PRIVATE -Wall -Wextra -Wpedantic)
 
-# Zero-authority convergence candidate: one native process owns feed decode,
-# causal state, feature/signal policy, capital/risk admission and canonical OMS
-# adapter-command handoff. It is intentionally not in the deployment manifest
-# until all CRYPTO_SETTLEMENT_ENGINE component semantics have converged.
-add_executable(polymarket_v7_crypto_settlement_native_candidate
-  src/v7_crypto_settlement_native_candidate.cpp)
-target_link_libraries(polymarket_v7_crypto_settlement_native_candidate PRIVATE
-  pm_v7_external pm_v7_hft pm_fast_arb pm_v7_probability_model)
-target_compile_options(polymarket_v7_crypto_settlement_native_candidate PRIVATE
-  -Wall -Wextra -Wpedantic)
-
-# Canonical London PAPER hot-path binary. The candidate target remains only for
-# parity/regression tests; the runtime bundle ships this explicit production name.
+# One canonical London PAPER native executable; no parallel candidate runtime.
 add_executable(polymarket_v7_crypto_settlement_engine
-  src/v7_crypto_settlement_native_candidate.cpp)
+  src/v7_crypto_settlement_engine.cpp)
 target_link_libraries(polymarket_v7_crypto_settlement_engine PRIVATE
   pm_v7_hft pm_v7_external pm_v7_common pm_v7_probability_model pm_fast_arb pm_core Threads::Threads)
 
@@ -223,6 +204,10 @@ if(PM_LONDON_RUNTIME_ONLY AND BUILD_TESTING)
   message(FATAL_ERROR "PM_LONDON_RUNTIME_ONLY requires BUILD_TESTING=OFF")
 endif()
 if(BUILD_TESTING)
+  add_executable(pm_v7_multirate_context_tests tests/test_v7_multirate_context.cpp)
+  target_link_libraries(pm_v7_multirate_context_tests PRIVATE pm_v7_external)
+  target_compile_options(pm_v7_multirate_context_tests PRIVATE -UNDEBUG)
+  add_test(NAME pm_v7_multirate_context_tests COMMAND pm_v7_multirate_context_tests)
   find_package(Python3 REQUIRED COMPONENTS Interpreter)
   execute_process(COMMAND ${Python3_EXECUTABLE} -c "import pytest"
                   RESULT_VARIABLE V7_PYTEST_RESULT OUTPUT_QUIET ERROR_QUIET)
@@ -244,10 +229,6 @@ if(BUILD_TESTING)
   target_link_libraries(pm_v7_causal_book_observer_tests PRIVATE pm_v7_hft pm_fast_arb pm_core)
   target_compile_options(pm_v7_causal_book_observer_tests PRIVATE -UNDEBUG)
   add_test(NAME pm_v7_causal_book_observer_tests COMMAND pm_v7_causal_book_observer_tests)
-  add_executable(pm_v7_observed_feature_admission_tests tests/test_v7_observed_feature_admission.cpp)
-  target_link_libraries(pm_v7_observed_feature_admission_tests PRIVATE pm_v7_hft Threads::Threads)
-  target_compile_options(pm_v7_observed_feature_admission_tests PRIVATE -UNDEBUG)
-  add_test(NAME pm_v7_observed_feature_admission_tests COMMAND pm_v7_observed_feature_admission_tests)
   add_executable(pm_fast_arb_tests tests/test_fast_arb.cpp)
   target_link_libraries(pm_fast_arb_tests PRIVATE pm_fast_arb)
   add_test(NAME pm_fast_arb_tests COMMAND pm_fast_arb_tests)
@@ -301,9 +282,9 @@ if(BUILD_TESTING)
   add_test(NAME pm_v7_coinbase_l2_observer_tests COMMAND pm_v7_coinbase_l2_observer_tests)
 
   add_test(NAME pm_v7_crypto_settlement_native_candidate_validate
-    COMMAND polymarket_v7_crypto_settlement_native_candidate --validate-only)
+    COMMAND polymarket_v7_crypto_settlement_engine --validate-only)
   add_test(NAME pm_v7_crypto_settlement_native_candidate_10k_limits
-    COMMAND polymarket_v7_crypto_settlement_native_candidate
+    COMMAND polymarket_v7_crypto_settlement_engine
       --sleeve-budget-microdollars 10000000000
       --max-total-exposure-microdollars 10000000000
       --max-market-exposure-microdollars 333333333
@@ -476,10 +457,6 @@ if(BUILD_TESTING)
   add_test(NAME pm_v7_coinbase_observer_capacity_tests COMMAND pm_v7_coinbase_observer_capacity_tests)
 
 
-  add_test(NAME test_v7_authorized_make_cancel_runtime
-    COMMAND ${Python3_EXECUTABLE}
-      "${CMAKE_CURRENT_SOURCE_DIR}/tests/test_v7_authorized_make_cancel_runtime.py"
-      --executor $<TARGET_FILE:polymarket_v7_authorized_maker_paper_executor>)
   add_test(NAME test_v7_profit_native_replay
     COMMAND ${Python3_EXECUTABLE} "${CMAKE_CURRENT_SOURCE_DIR}/tests/integration_v7_profit_replay.py"
       --binary $<TARGET_FILE:polymarket_v7_maker_research_replay>)
