@@ -128,7 +128,7 @@
     "authorization": "USER_AUTHORIZED_CONTINUOUS_COLLECTION_WITH_OLDER_DETAIL_AGGREGATED_20260909",
     "target_bytes": 50000000000,
     "trigger_bytes": 54000000000,
-    "minimum_age_seconds": 21600,
+    "minimum_age_seconds": 28800,
     "maximum_seconds_per_pass": 180,
     "hard_filesystem_quota": false,
     "scope": "CLOSED_EXTERNAL_RAW_AND_NORMALIZED_TAPES_ONLY",
@@ -137,7 +137,7 @@
   "rolling_window": {
     "enabled": true,
     "authorization": "USER_AUTHORIZED_HFT_ROLLING_RAW_WINDOW_20260916",
-    "raw_detail_seconds": 21600,
+    "raw_detail_seconds": 28800,
     "target_managed_bytes": 50000000000,
     "trigger_managed_bytes": 54000000000,
     "maximum_managed_bytes": 60000000000,

@@ -129,7 +129,7 @@ class LondonLosslessRetentionTests(unittest.TestCase):
             with gzip.GzipFile(filename='', mode='wb', fileobj=compressed.open('wb'), mtime=0) as handle:
                 handle.write(payload)
             now = 100_000.0
-            old = now - 7 * 3600
+            old = now - 9 * 3600
             os.utime(compressed, (old, old))
             result = retention.run(root, self.config(), now=now)
             self.assertFalse(compressed.exists())
@@ -183,7 +183,7 @@ class LondonLosslessRetentionTests(unittest.TestCase):
             compressed.parent.mkdir(parents=True)
             compressed.write_bytes(b'not-a-gzip-stream')
             now = 100_000.0
-            old = now - 7 * 3600
+            old = now - 9 * 3600
             os.utime(compressed, (old, old))
             result = retention.run(root, self.config(), now=now)
             self.assertTrue(compressed.exists())

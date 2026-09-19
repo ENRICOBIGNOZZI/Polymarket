@@ -43,7 +43,7 @@
   "offload_receipt": "control/research_offload_receipt.json",
   "offload_safety_lag_seconds": 300,
   "paper_only": true,
-  "rolling_raw_detail_seconds": 21600,
+  "rolling_raw_detail_seconds": 28800,
   "rolling_receipt_directory": "control/london_windowed_retirement_receipts",
   "rolling_retention_authorization": "USER_AUTHORIZED_HFT_ROLLING_RAW_WINDOW_20260916",
   "schema": "polymarket_v7_london_buffer_retention_v1",

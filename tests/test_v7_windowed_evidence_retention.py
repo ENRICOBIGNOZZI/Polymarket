@@ -89,7 +89,7 @@ class WindowedRetentionTest(unittest.TestCase):
         policy=cfg['rolling_window']
         from v7_windowed_evidence_retention import POLICY, WINDOWED
         self.assertTrue(policy['enabled']);self.assertEqual(policy['authorization'],POLICY)
-        self.assertEqual(policy['raw_detail_seconds'],21600)
+        self.assertEqual(policy['raw_detail_seconds'],28800)
         self.assertEqual(set(policy['windowed_source_families']),WINDOWED)
         self.assertEqual(policy['target_managed_bytes'],50_000_000_000)
         self.assertEqual(policy['trigger_managed_bytes'],54_000_000_000)
