@@ -129,7 +129,7 @@ jobs:
           elif [[ -n "${TS_OAUTH_CLIENT_ID:-}" && -n "${TS_OAUTH_SECRET:-}" ]]; then
             mode=oauth
           elif [[ -n "${TS_AUTHKEY:-}" ]]; then
-            # tailscale/github-action is pinned below. With statedir: '' the
+            # tailscale/github-action is pinned below. With an empty state directory the
             # pinned v4 action starts tailscaled with --state=mem:, which
             # registers this CI node as ephemeral and logs it out in post-job
             # cleanup. This is the actual transport invariant; the auth key's
