@@ -20,7 +20,10 @@ inline constexpr std::uint32_t kExternalTapeSchemaVersion = 3;
 inline constexpr std::size_t kExternalTapePayloadBytes = 512;
 inline constexpr std::size_t kExternalTapeQueueCapacity = 4096;
 inline constexpr std::size_t kExternalRawTapePayloadBytes = 32 * 1024;
-inline constexpr std::size_t kExternalRawTapeQueueCapacity = 256;
+// London BTC raw-frame bursts exceeded the previous 256-slot FIFO while the
+// writer remained healthy. 512 absorbs the observed burst without weakening
+// the lossless-evidence gate; fixed memory stays bounded.
+inline constexpr std::size_t kExternalRawTapeQueueCapacity = 512;
 // Deribit's catch-up batches can emit a transiently larger public frame. It
 // uses this bounded source-specific FIFO so those frames are captured without
 // making every venue pay the memory cost.
