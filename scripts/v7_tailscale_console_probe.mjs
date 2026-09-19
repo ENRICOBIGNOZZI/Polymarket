@@ -19,16 +19,25 @@ const password = process.env.V7_TS_ADMIN_PASSWORD || '';
 if (!email || !password) throw new Error('admin credentials missing');
 
 const executablePath = process.env.CHROME_BIN || '/usr/bin/google-chrome';
-const browser = await chromium.launch({
-  headless: process.env.V7_TS_HEADED !== 'true',
-  executablePath,
-  args: ['--no-sandbox', '--disable-dev-shm-usage'],
-});
-const context = await browser.newContext({
-  viewport: { width: 1440, height: 1000 },
-  locale: 'en-US',
-});
-const page = await context.newPage();
+const cdpUrl = process.env.V7_TS_CDP_URL || '';
+const browser = cdpUrl
+  ? await chromium.connectOverCDP(cdpUrl)
+  : await chromium.launch({
+      headless: process.env.V7_TS_HEADED !== 'true',
+      executablePath,
+      args: ['--no-sandbox', '--disable-dev-shm-usage'],
+    });
+const context = cdpUrl
+  ? (browser.contexts()[0] || await browser.newContext({
+      viewport: { width: 1440, height: 1000 },
+      locale: 'en-US',
+    }))
+  : await browser.newContext({
+      viewport: { width: 1440, height: 1000 },
+      locale: 'en-US',
+    });
+const pages = context.pages();
+const page = pages[0] || await context.newPage();
 page.setDefaultTimeout(10000);
 
 try {
