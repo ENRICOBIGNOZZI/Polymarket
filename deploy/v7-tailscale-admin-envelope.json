@@ -1,0 +1,13 @@
+{
+  "aad": "polymarket-v7-tailscale-admin-envelope-v1",
+  "algorithm": "ED25519_TO_X25519_HKDF_SHA256_AES256GCM",
+  "ciphertext_b64": "PciIV+I0OJL0xChqUqRelQcV72zPNCLwEDahfD01mQDcfWyEOyhA+Dfb/VhJuzhu6HX7LF4zSLMMMVP7/3OiQKei0to27Kh1AZ+n1zbdlMl63RgEGBXBsR0GW6Jq3bIVB21tas9Fth2vMEx8E8ytNDff4qFeHxTq9Ro4amNu4DZXU4tqHnYB0/irVW1UHQn+od21XhpIpiZZt8LeuG9PnA==",
+  "created_at_unix": 1789860753,
+  "ephemeral_x25519_public_b64": "1Hiv6xF1II8KMWh3X0I6n7VyU4aPqYCrEkXEuUzuOk0=",
+  "nonce_b64": "CLV9hfApPyfQWm7V",
+  "not_after_unix": 1789864353,
+  "recipient_sha256": "9a7d378a0ef5051b7ddace821fe12293dd9108633ee292718a1dc4147d56d4fd",
+  "salt_b64": "ABouhcy+/nj8M9SQrLoH0A==",
+  "schema": "polymarket_v7_tailscale_admin_envelope_v1",
+  "version": 1
+}
