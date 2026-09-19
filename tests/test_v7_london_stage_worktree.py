@@ -16,7 +16,8 @@ class LondonStageWorktreeTests(unittest.TestCase):
         self.assertNotIn('rm -rf', prefix)
         # This test is platform-independent. Production retains its Linux guard.
         prefix = prefix.replace('$(uname -s)', 'Linux')
-        env = dict(os.environ, POLYMARKET_EXPECTED_SHA=sha, POLYMARKET_APP_DIR=str(source),\n                   POLYMARKET_LONDON_DEPLOY_LOCK_FILE=str(source.parent / "deploy.lock"))
+        env = dict(os.environ, POLYMARKET_EXPECTED_SHA=sha, POLYMARKET_APP_DIR=str(source),
+                   POLYMARKET_LONDON_DEPLOY_LOCK_FILE=str(source.parent / "deploy.lock"))
         return subprocess.run(['bash', '-c', prefix], env=env, capture_output=True, text=True)
 
     def test_linked_worktree_and_normal_checkout_pass_while_dirty_fails(self):
