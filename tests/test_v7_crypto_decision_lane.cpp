@@ -277,6 +277,8 @@ void test_strict_lead_lag_requires_pm_book_to_precede_signal() {
     auto stale = input(1, 91);
     stale.yes_book.receive_monotonic_ns =
         stale.signal.trigger_receive_monotonic_ns - 1'000'000;
+    stale.no_book.receive_monotonic_ns =
+        stale.signal.trigger_receive_monotonic_ns - 1'000'000;
     const auto accepted = lane.evaluate(stale, capital);
     assert(accepted.accepted == 1);
     assert(accepted.reason == NativeCryptoDecisionReason::Accepted);

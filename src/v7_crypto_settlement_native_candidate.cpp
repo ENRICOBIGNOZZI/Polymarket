@@ -206,6 +206,18 @@ struct PmQueuedEvent {
     std::uint64_t connection_epoch = 0;
 };
 
+inline constexpr std::array<std::uint32_t, 4> kRepricingHorizonsMs{100, 250, 500, 1000};
+struct RepricingWindow {
+    std::uint64_t signal_version = 0;
+    std::int64_t trigger_ns = 0;
+    std::int64_t decision_ns = 0;
+    std::array<std::int64_t, 4> target_ns{};
+    std::uint8_t emitted_mask = 0;
+    std::int8_t direction = 0;
+    std::uint8_t active = 0;
+    std::uint8_t continuity_valid = 0;
+};
+
 
 json::object latency_distribution(std::vector<std::int64_t> values) {
     if (values.empty()) return {{"count", 0}, {"p50_ns", nullptr}, {"p95_ns", nullptr}, {"p99_ns", nullptr}, {"p999_ns", nullptr}, {"max_ns", nullptr}};
@@ -495,6 +507,9 @@ int main(int argc, char** argv) {
         std::uint64_t last_measured_signal_version = 0, last_observed_signal_version = 0;
         std::uint64_t last_execution_window_signal_version = 0;
         std::int64_t execution_window_until_ns = 0;
+        std::array<RepricingWindow, 16> repricing_windows{};
+        std::uint64_t repricing_origins = 0, repricing_labels = 0;
+        std::uint64_t repricing_censors = 0, repricing_window_overflow = 0;
         std::uint8_t last_observed_reason = 0, last_observed_accepted = 0;
         const auto observation = [&](const BookHotSnapshot& book, std::uint64_t instrument,
                                      std::uint8_t kind) noexcept {
@@ -529,6 +544,65 @@ int main(int argc, char** argv) {
                 }
             }
             return out;
+        };
+        const auto decorate_pm_pair = [&](NativeObservation& out) noexcept {
+            const bool yes_valid = yes_book.valid != 0 && yes_book.lineage_continuous != 0
+                && yes_book.best_bid_e4 > 0 && yes_book.best_ask_e4 > yes_book.best_bid_e4
+                && yes_book.best_ask_e4 < 10'000;
+            const bool no_valid = no_book.valid != 0 && no_book.lineage_continuous != 0
+                && no_book.best_bid_e4 > 0 && no_book.best_ask_e4 > no_book.best_bid_e4
+                && no_book.best_ask_e4 < 10'000;
+            out.repricing_pair_valid = yes_valid && no_valid ? 1 : 0;
+            if (out.repricing_pair_valid != 0) {
+                out.yes_bid_e4 = yes_book.best_bid_e4; out.yes_ask_e4 = yes_book.best_ask_e4;
+                out.no_bid_e4 = no_book.best_bid_e4; out.no_ask_e4 = no_book.best_ask_e4;
+            }
+        };
+        const auto start_repricing_window = [&](std::uint64_t signal_version,
+                                                 std::int64_t trigger_ns,
+                                                 std::int64_t decision_ns,
+                                                 std::int8_t direction) noexcept {
+            for (auto& window : repricing_windows) {
+                if (window.active != 0) continue;
+                window = RepricingWindow{};
+                window.signal_version = signal_version;
+                window.trigger_ns = trigger_ns;
+                window.decision_ns = decision_ns;
+                window.direction = direction;
+                window.active = 1;
+                window.continuity_valid = 1;
+                for (std::size_t i = 0; i < kRepricingHorizonsMs.size(); ++i) {
+                    window.target_ns[i] = decision_ns
+                        + static_cast<std::int64_t>(kRepricingHorizonsMs[i]) * 1'000'000LL;
+                }
+                ++repricing_origins;
+                return;
+            }
+            ++repricing_window_overflow;
+        };
+        const auto emit_repricing_labels_before = [&](std::int64_t watermark_ns) noexcept {
+            if (!options.capture_execution_windows || watermark_ns <= 0) return;
+            for (auto& window : repricing_windows) {
+                if (window.active == 0) continue;
+                for (std::size_t i = 0; i < kRepricingHorizonsMs.size(); ++i) {
+                    const auto mask = static_cast<std::uint8_t>(1U << i);
+                    if ((window.emitted_mask & mask) != 0 || window.target_ns[i] >= watermark_ns) continue;
+                    auto point = observation(yes_book, kYes, 6);
+                    point.signal_version = window.signal_version;
+                    point.repricing_origin_signal_version = window.signal_version;
+                    point.repricing_horizon_ms = kRepricingHorizonsMs[i];
+                    point.decision_ns = window.decision_ns;
+                    point.trigger_ns = window.trigger_ns;
+                    point.direction = window.direction;
+                    decorate_pm_pair(point);
+                    if (window.continuity_valid == 0) point.repricing_pair_valid = 0;
+                    if (!evidence_writer.publish_observation(point)) ++adapter_handoff_failures;
+                    if (point.repricing_pair_valid != 0) ++repricing_labels;
+                    else ++repricing_censors;
+                    window.emitted_mask = static_cast<std::uint8_t>(window.emitted_mask | mask);
+                }
+                if (window.emitted_mask == 0x0F) window.active = 0;
+            }
         };
         const auto publish_order = [&](const NativeOrderCommand& command,
                                        ExecutionPolicyId policy,
@@ -652,9 +726,12 @@ int main(int argc, char** argv) {
         while (monotonic_now_ns() < deadline) {
             if (pm_faults.exchange(0, std::memory_order_acq_rel) != 0) {
                 paper_execution.invalidate_arrivals();
+                for (auto& window : repricing_windows) if (window.active != 0) window.continuity_valid = 0;
+                const bool repricing_active = std::any_of(repricing_windows.begin(), repricing_windows.end(),
+                    [](const auto& window) { return window.active != 0; });
                 yes_book.valid = 0; yes_book.lineage_continuous = 0;
                 no_book.valid = 0; no_book.lineage_continuous = 0;
-                if (options.capture_native_observations) {
+                if (options.capture_native_observations || (options.capture_execution_windows && repricing_active)) {
                     if (!evidence_writer.publish_observation(observation(yes_book, kYes, 5))) ++adapter_handoff_failures;
                     if (!evidence_writer.publish_observation(observation(no_book, kNo, 5))) ++adapter_handoff_failures;
                 }
@@ -690,6 +767,7 @@ int main(int argc, char** argv) {
                 binance_ready = coinbase_ready = bybit_ready = pm_ready = false;
                 continue;
             }
+            emit_repricing_labels_before(receive_ns);
             const auto paper_advance = paper_execution.advance_time(receive_ns);
             if (paper_advance.invalid != 0) {
                 ++adapter_handoff_failures;
@@ -898,7 +976,11 @@ int main(int argc, char** argv) {
                 decision_economics = result.economics;
                 const auto finished = monotonic_now_ns();
                 ++evaluations;
-                if (options.capture_execution_windows
+                const bool repricing_origin_eligible = result.accepted != 0
+                    || result.reason == NativeCryptoDecisionReason::ProbabilityUnavailable
+                    || result.reason == NativeCryptoDecisionReason::NetEdgeNonPositive
+                    || result.reason == NativeCryptoDecisionReason::RiskSizeBelowMinimum;
+                if (options.capture_execution_windows && repricing_origin_eligible
                     && current_signal.signal_version != 0
                     && current_signal.signal_version != last_execution_window_signal_version) {
                     last_execution_window_signal_version = current_signal.signal_version;
@@ -906,6 +988,8 @@ int main(int argc, char** argv) {
                             - options.execution_window_ns
                         ? std::numeric_limits<std::int64_t>::max()
                         : finished + options.execution_window_ns;
+                    start_repricing_window(current_signal.signal_version,
+                        current_signal.trigger_receive_monotonic_ns, finished, current_signal.direction);
                 }
                 const auto observation_reason = static_cast<std::uint8_t>(result.reason);
                 if (options.capture_native_decisions && (current_signal.signal_version != last_observed_signal_version
@@ -917,6 +1001,10 @@ int main(int argc, char** argv) {
                     const bool selected_up = result.accepted ? result.selected_yes != 0 : current_signal.direction > 0;
                     auto point = observation(selected_up ? yes_book : no_book, selected_up ? kYes : kNo, 2);
                     point.decision_ns = finished; point.reason = observation_reason; point.accepted = result.accepted;
+                    if (options.capture_execution_windows && repricing_origin_eligible) {
+                        point.repricing_origin_signal_version = current_signal.signal_version;
+                        decorate_pm_pair(point);
+                    }
                     point.probability = input.probability;
                     point.economics = result.economics;
                     point.probability_features = decision_features;
@@ -1155,6 +1243,10 @@ int main(int argc, char** argv) {
             {"native_full_observation_capture_enabled", options.capture_native_observations},
             {"execution_window_capture_enabled", options.capture_execution_windows},
             {"execution_window_ns", options.execution_window_ns},
+            {"repricing_origins", repricing_origins}, {"repricing_labels", repricing_labels},
+            {"repricing_censors", repricing_censors},
+            {"repricing_window_overflow", repricing_window_overflow},
+            {"repricing_horizons_ms", json::array{100, 250, 500, 1000}},
             {"native_observation_capture_mode", options.capture_native_observations
                 ? "FULL" : options.capture_execution_windows ? "DECISION_WINDOWS"
                 : options.capture_native_decisions ? "DECISIONS" : "NONE"},

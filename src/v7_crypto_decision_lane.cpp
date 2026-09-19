@@ -110,6 +110,15 @@ NativeCryptoDecisionResult NativeCryptoDecisionLane::construct_candidate(
     if (seen_signal(market.market_handle, input.signal.signal_version)) {
         return finish(NativeCryptoDecisionReason::DuplicateSignal);
     }
+    if (policy_.require_pm_book_pre_signal != 0) {
+        const bool yes_valid = valid_book(input.yes_book, now_ns, policy_.maximum_book_age_ns);
+        const bool no_valid = valid_book(input.no_book, now_ns, policy_.maximum_book_age_ns);
+        if (!yes_valid || !no_valid) return finish(NativeCryptoDecisionReason::InvalidBook);
+        if (input.yes_book.receive_monotonic_ns >= input.signal.trigger_receive_monotonic_ns
+            || input.no_book.receive_monotonic_ns >= input.signal.trigger_receive_monotonic_ns) {
+            return finish(NativeCryptoDecisionReason::MarketAlreadyRepriced);
+        }
+    }
     bool choose_yes = input.signal.direction > 0;
     std::int64_t selected_quantity = policy_.target_quantity_microunits;
     if (policy_.probability_ev_enabled != 0) {
@@ -159,10 +168,6 @@ NativeCryptoDecisionResult NativeCryptoDecisionLane::construct_candidate(
         || instrument.min_order_microunits <= 0
         || !valid_book(book, now_ns, policy_.maximum_book_age_ns)) {
         return finish(NativeCryptoDecisionReason::InvalidBook);
-    }
-    if (policy_.require_pm_book_pre_signal != 0
-        && book.receive_monotonic_ns >= input.signal.trigger_receive_monotonic_ns) {
-        return finish(NativeCryptoDecisionReason::MarketAlreadyRepriced);
     }
     if (policy_.maximum_entry_price_e4 <= 0
         || policy_.maximum_entry_price_e4 > kCanonicalPriceScale
