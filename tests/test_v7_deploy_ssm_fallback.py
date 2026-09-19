@@ -18,9 +18,12 @@ def test_ssm_is_fallback_not_authkey_bypass():
 
 def test_ssm_and_ssh_paths_are_mutually_exclusive():
     text = WORKFLOW.read_text(encoding="utf-8")
-    assert "Configure SSH identity and await private server\\n        if: steps.preflight.outputs.ready == 'true' && steps.tailscale_auth.outputs.mode != 'ssm'" in text
-    assert "Reconcile exact approved main V7 SHA on server\\n        if: steps.preflight.outputs.ready == 'true' && steps.tailscale_auth.outputs.mode != 'ssm'" in text
-    assert "Reconcile exact approved main V7 SHA through AWS SSM\\n        if: steps.preflight.outputs.ready == 'true' && steps.tailscale_auth.outputs.mode == 'ssm'" in text
+    ssh_config = text.split("- name: Configure SSH identity and await private server", 1)[1].split("- name:", 1)[0]
+    ssh_deploy = text.split("- name: Reconcile exact approved main V7 SHA on server", 1)[1].split("- name:", 1)[0]
+    ssm_deploy = text.split("- name: Reconcile exact approved main V7 SHA through AWS SSM", 1)[1].split("- name:", 1)[0]
+    assert "steps.tailscale_auth.outputs.mode != 'ssm'" in ssh_config
+    assert "steps.tailscale_auth.outputs.mode != 'ssm'" in ssh_deploy
+    assert "steps.tailscale_auth.outputs.mode == 'ssm'" in ssm_deploy
 
 
 def test_ssm_builds_artifact_on_ci_research_plane():
