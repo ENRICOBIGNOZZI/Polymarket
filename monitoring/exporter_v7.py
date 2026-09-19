@@ -239,7 +239,7 @@ def _fillability(run_root: Path, repository_root: Path, sha: str, now: int) -> d
     return value
 
 
-def _operations(run_root: Path, runtime: dict[str, Any], now: int) -> dict[str, Any]:
+def _operations(run_root: Path, runtime: dict[str, Any], now: int | float | None) -> dict[str, Any]:
     supervisor = _json(run_root / "control/supervisor_status.json")
     retention = _json(run_root / "control/london_buffer_retention_status.json")
     try:
@@ -247,6 +247,11 @@ def _operations(run_root: Path, runtime: dict[str, Any], now: int) -> dict[str, 
     except (OSError, ValueError):
         lock_pid = 0
     writer = _json(run_root / "control/ledger_writer_status.json")
+    # The writer is read after potentially expensive ledger/analytics scans.
+    # Compare with its own observation clock, not the snapshot-start timestamp:
+    # otherwise a healthy concurrent update falsely appears to be in the future.
+    # Explicit clocks are preserved for deterministic tests and historical reads.
+    now = time.time() if now is None else now
     writer_valid = (
         writer.get("schema") == "polymarket_v7_ledger_writer_status_v1"
         and writer.get("model_sha") == runtime.get("model_sha")
@@ -271,12 +276,14 @@ def _operations(run_root: Path, runtime: dict[str, Any], now: int) -> dict[str, 
         "restart_count": _integer(supervisor.get("restart_count_window")),
         "ledger_writable": writer_valid and writer.get("ledger_writable") is True,
         "ledger_writer_status": writer,
+        "writer_observed_at_unix": now,
         "exporter_has_write_permission": os.access(run_root / "ledger", os.W_OK),
         "disk_free_ratio": free_ratio, "retention_age": _age(now, retention.get("timestamp")),
     }
 
 
 def collect_snapshot(run_root: Path, repository_root: Path | None = None, *, now: int | None = None, multi_crypto_shadow_run_root: Path | None = None, include_profit_experiment_report: bool = True) -> dict[str, Any]:
+    live_observation_clock = now is None
     now = int(time.time()) if now is None else int(now)
     run_root = run_root.resolve(); repository_root = (repository_root or Path(".")).resolve()
     runtime = _json(run_root / "control/runtime_status.json")
@@ -404,7 +411,7 @@ def collect_snapshot(run_root: Path, repository_root: Path | None = None, *, now
         "authority": {"valid": authority_valid, "max_drawdown": max_drawdown},
         "algorithms": algorithms, "strategies": algorithms,
         "ages": {"economics": 0.0, "runtime": _age(now, runtime.get("timestamp")), "portfolio": _age(now, portfolio.get("timestamp")), "trade_tape": tape["age"]},
-        "operations": _operations(run_root, runtime, now),
+        "operations": _operations(run_root, runtime, None if live_observation_clock else now),
         "economics": {"starting_capital": starting, "cash": _number(allocations.get("reserve_budget")), "equity": equity, "pnl": equity-starting, "realized_pnl": canonical.get("net_pnl"), "unrealized_executable_pnl": equity-starting-_number(canonical.get("net_pnl")), "drawdown": _number(portfolio.get("drawdown")), "gross_exposure": 0.0, "capital_utilization": 0.0, "live_units": 0, "killed": bool(portfolio.get("killed")), "source": "LEDGER_PLUS_PORTFOLIO_GUARD"},
     }
     snapshot["multi_crypto_performance"] = summarize_multi_crypto(
