@@ -811,6 +811,9 @@ class Manager:
             "--taker-fee-exponent", repr(fee_exponent),
             "--duration-seconds", "0",
         ]
+        probability_model = getattr(self.args, "probability_model", None)
+        if probability_model is not None:
+            command.extend(["--probability-model", str(probability_model)])
         scoped_full = _context_key(market) in getattr(self.args, "capture_native_full_context", [])
         full_requested = getattr(self.args, "capture_native_observations", False) or scoped_full
         capture_headroom = shutil.disk_usage(self.run_root).free >= 20 * 1024**3
@@ -1146,6 +1149,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--market-registry", type=Path, required=True)
     parser.add_argument("--legacy-claims", type=Path, required=True)
     parser.add_argument("--python", default="python3")
+    parser.add_argument("--probability-model", type=Path, default=None,
+        help="Explicit frozen experimental PAPER probability artifact; native loader verifies exact SHA")
     parser.add_argument("--settlement-timeout-seconds", type=int, default=600)
     parser.add_argument("--min-order-microunits", type=int, default=5_000_000)
     parser.add_argument("--target-quantity-microunits", type=int, default=5_000_000)

@@ -5,6 +5,7 @@
 #include "pm/fast_ws.hpp"
 #include "pm/v7_coinbase_l2_observer.hpp"
 #include "pm/v7_crypto_decision_lane.hpp"
+#include "pm/v7_probability_model.hpp"
 #include "pm/v7_external_ingress.hpp"
 #include "pm/v7_external_ws.hpp"
 #include "pm/v7_ingress_wakeup.hpp"
@@ -87,6 +88,7 @@ struct Options {
     std::string no_token;
     std::string run_root;
     std::string model_sha;
+    std::string probability_model;
     std::string run_id;
     std::string server_id;
     std::string market_id;
@@ -131,6 +133,7 @@ Options parse_options(int argc, char** argv) {
         else if (arg == "--no-token") out.no_token = next();
         else if (arg == "--run-root") out.run_root = next();
         else if (arg == "--model-sha") out.model_sha = next();
+        else if (arg == "--probability-model") out.probability_model = next();
         else if (arg == "--run-id") out.run_id = next();
         else if (arg == "--server-id") out.server_id = next();
         else if (arg == "--market-id") out.market_id = next();
@@ -206,6 +209,8 @@ int main(int argc, char** argv) {
             || !std::all_of(options.paper_terms_sha256.begin(), options.paper_terms_sha256.end(),
                 [](char c) { return (c >= '0' && c <= '9') || (c >= 'a' && c <= 'f'); })))
             throw std::invalid_argument("market terms hash required for delayed PAPER matching");
+        const auto probability_model = options.probability_model.empty() ? NativeProbabilityModel{}
+            : NativeProbabilityModel::load(options.probability_model, options.model_sha);
         if (options.validate_only) {
             std::cout << "native crypto settlement candidate configuration PASS\n";
             return 0;
@@ -300,6 +305,7 @@ int main(int argc, char** argv) {
         decision_policy.maximum_tte_ns = options.maximum_tte_ns;
         decision_policy.target_quantity_microunits = options.target_quantity_microunits;
         decision_policy.maximum_entry_price_e4 = options.maximum_entry_price_e4;
+        decision_policy.probability_ev_enabled = probability_model.loaded ? 1 : 0;
         NativeCryptoDecisionLane lane(decision_policy);
         CapitalLimits limits = options.capital_limits;
         if (!options.observation_only && (!limits.valid() || options.risk_policy_sha256.size() != 64
@@ -328,6 +334,7 @@ int main(int argc, char** argv) {
         evidence_config.yes_token_id = options.yes_token;
         evidence_config.no_token_id = options.no_token;
         evidence_config.fee_source = options.fee_source;
+        evidence_config.probability_artifact_sha256 = probability_model.artifact_sha256;
         evidence_config.yes_instrument_handle = kYes;
         evidence_config.no_instrument_handle = kNo;
         evidence_config.close_wall_ns = options.close_wall_ns;
@@ -381,6 +388,10 @@ int main(int argc, char** argv) {
 
         BookHotSnapshot yes_book{}, no_book{};
         ExternalCancelSignalSnapshot current_signal{};
+        SettlementProbabilityForecast decision_probability{};
+        ProbabilityEvDecision decision_economics{};
+        std::array<double, kProbabilityFeatures> decision_features{};
+        std::uint64_t probability_input_instrument = 0;
         ExternalVenueEvent pending_binance{}, pending_coinbase{};
         PmQueuedEvent pending_pm{};
         bool binance_ready = false, coinbase_ready = false, pm_ready = false;
@@ -446,6 +457,12 @@ int main(int argc, char** argv) {
                                        std::int64_t receive_monotonic_ns) noexcept {
             NativeEvidenceEvent evidence{};
             evidence.kind = NativeEvidenceKind::OrderSubmitted;
+            if (policy == ExecutionPolicyId::AggressiveTaker) {
+                evidence.probability = decision_probability;
+                evidence.economics = decision_economics;
+                evidence.probability_features = decision_features;
+                evidence.probability_input_instrument = probability_input_instrument;
+            }
             evidence.command = command;
             evidence.strategy_id = policy == ExecutionPolicyId::AggressiveTaker
                 ? StrategyId::CryptoInformedTaker : StrategyId::ProfessionalMaker;
@@ -755,7 +772,25 @@ int main(int argc, char** argv) {
                 input.yes_book = yes_book;
                 input.no_book = no_book;
                 input.now_monotonic_ns = monotonic_now_ns();
+                if (probability_model.loaded) {
+                    input.probability = probability_model.predict(input, options.asset, options.horizon);
+                    (void)probability_features(input, options.asset, options.horizon,
+                        probability_model.shock_scales, decision_features);
+                    probability_input_instrument = current_signal.direction > 0 ? kYes : kNo;
+                    input.taker_fee_rate = options.taker_fee_rate;
+                    input.taker_fee_exponent = options.taker_fee_exponent;
+                    input.execution_reserve_per_share = probability_model.execution_reserve_per_share;
+                    input.risk_sizing.max_order_cost_microdollars = std::min(
+                        limits.max_single_order_microdollars, probability_model.maximum_order_cost_microdollars);
+                    input.risk_sizing.maximum_quantity_microunits = probability_model.maximum_quantity_microunits;
+                    input.risk_sizing.allocated_wealth_microdollars = limits.sleeve_budget_microdollars;
+                    const auto cap = authority.capital_snapshot();
+                    input.risk_sizing.available_microdollars = std::max<std::int64_t>(0,
+                        std::min(cap.available_microdollars, limits.max_market_exposure_microdollars - cap.total_exposure_microdollars));
+                }
                 const auto result = lane.construct_candidate(input);
+                decision_probability = input.probability;
+                decision_economics = result.economics;
                 const auto finished = monotonic_now_ns();
                 ++evaluations;
                 const auto observation_reason = static_cast<std::uint8_t>(result.reason);
@@ -765,9 +800,30 @@ int main(int argc, char** argv) {
                     last_observed_signal_version = current_signal.signal_version;
                     last_observed_reason = observation_reason;
                     last_observed_accepted = result.accepted;
-                    auto point = observation(current_signal.direction > 0 ? yes_book : no_book,
-                        current_signal.direction > 0 ? kYes : kNo, 2);
+                    const bool selected_up = result.accepted ? result.selected_yes != 0 : current_signal.direction > 0;
+                    auto point = observation(selected_up ? yes_book : no_book, selected_up ? kYes : kNo, 2);
                     point.decision_ns = finished; point.reason = observation_reason; point.accepted = result.accepted;
+                    point.probability = input.probability;
+                    point.economics = result.economics;
+                    point.probability_features = decision_features;
+                    point.probability_input_instrument = probability_input_instrument;
+                    point.proposed_quantity = result.intent.quantity_microunits;
+                    point.proposed_price_tick = result.intent.price_tick;
+                    const auto external = external_state.snapshot(input.now_monotonic_ns, external_policy);
+                    point.external_valid = external.valid;
+                    point.external_state_version = external.state_version;
+                    point.external_input_receive_ns = external.latest_input_receive_monotonic_ns;
+                    point.external_composite_price = external.venue_composite_price;
+                    point.external_return_250ms = external.venue_composite_return_250ms;
+                    point.external_return_1s = external.venue_composite_return_1s;
+                    point.external_return_5s = external.venue_composite_return_5s;
+                    point.external_return_250ms_valid = external_state.return_history_available(input.now_monotonic_ns, 250'000'000LL);
+                    point.external_return_1s_valid = external_state.return_history_available(input.now_monotonic_ns, 1'000'000'000LL);
+                    point.external_return_5s_valid = external_state.return_history_available(input.now_monotonic_ns, 5'000'000'000LL);
+                    point.external_vol_fast = external.realized_vol_fast;
+                    point.external_vol_slow = external.realized_vol_slow;
+                    point.external_dispersion_bps = external.venue_dispersion_bps;
+                    point.external_fresh_venues = external.venue_count_fresh;
                     if (!evidence_writer.publish_observation(point)) ++adapter_handoff_failures;
                 }
                 const auto reason_index = static_cast<std::size_t>(result.reason);
