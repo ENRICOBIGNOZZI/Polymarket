@@ -120,6 +120,12 @@ class DashboardTruthTests(unittest.TestCase):
     def test_all_current_stat_queries_are_instant_and_never_last_not_null(self):
         for path in (ROOT / "monitoring/grafana/dashboards").glob("*.json"):
             dashboard = json.loads(path.read_text())
+            variables = {row.get("name") for row in (dashboard.get("templating") or {}).get("list", [])}
+            global_instance_surface = path.name == "polymarket-v7-multi-crypto.json"
+            if global_instance_surface:
+                self.assertNotIn("instance", variables)
+            else:
+                self.assertIn("instance", variables)
             ids = [p["id"] for p in panels(dashboard["panels"])]
             self.assertEqual(len(ids), len(set(ids)), path.name)
             for p in panels(dashboard["panels"]):
@@ -130,7 +136,11 @@ class DashboardTruthTests(unittest.TestCase):
                         self.assertFalse(t["range"])
                 for t in p.get("targets", []):
                     self.assertIn('job="polymarket-v7"', t["expr"])
-                    self.assertIn('instance="$instance"', t["expr"])
+                    if global_instance_surface:
+                        self.assertIn('instance=~".+"', t["expr"])
+                        self.assertNotIn('$instance', t["expr"])
+                    else:
+                        self.assertIn('instance="$instance"', t["expr"])
                     if p.get("title") not in {"Data age", "Exporter"} and not t["expr"].startswith("ALERTS"):
                         self.assertIn("polymarket_v7_exporter_snapshot_usable", t["expr"])
                 if p["type"] == "timeseries":
