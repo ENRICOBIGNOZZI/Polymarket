@@ -70,3 +70,10 @@ def test_native_carryover_is_explicit_and_requires_stable_run_root():
     guard=s.index('native carryover requires a stable London run root')
     stop=s.index('systemctl stop polymarket-v7-exporter.service polymarket-v7-paper.service')
     assert guard < stop
+
+
+def test_cutover_parses_systemd_environment_with_shlex_not_broken_tr_escape():
+    s=(ROOT/'ops/v7_london_cutover.sh').read_text()
+    assert 'python3 -c \'import shlex,sys;' in s
+    assert 'x.startswith("PM_V7_RUN_ROOT=")' in s
+    assert "tr ' ' '\\\\n'" not in s

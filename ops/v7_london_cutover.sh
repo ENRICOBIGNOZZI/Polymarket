@@ -42,8 +42,8 @@ PY
 # generation must still block a cross-SHA cutover.
 PREVIOUS_RUN_ROOT=""
 if systemctl cat polymarket-v7-paper.service >/dev/null 2>&1; then
-  PREVIOUS_RUN_ROOT="$(systemctl show polymarket-v7-paper.service -p Environment --value \
-    | tr ' ' '\\n' | sed -n 's/^PM_V7_RUN_ROOT=//p' | head -n 1)"
+  PREVIOUS_RUN_ROOT="$(systemctl show polymarket-v7-paper.service -p Environment --value | \
+    python3 -c 'import shlex,sys; items=shlex.split(sys.stdin.read()); print(next((x.split("=",1)[1] for x in items if x.startswith("PM_V7_RUN_ROOT=")), ""))')"
 fi
 if [[ -n "$PREVIOUS_RUN_ROOT" && "$PREVIOUS_RUN_ROOT" != /* ]]; then
   echo "previous London run root is not absolute" >&2

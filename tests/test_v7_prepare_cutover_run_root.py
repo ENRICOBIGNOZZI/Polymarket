@@ -330,3 +330,21 @@ def test_native_unclean_manager_with_live_pid_blocks(monkeypatch) -> None:
         monkeypatch.setattr(cutover,'open_native_orders',lambda *_:{})
         with unittest.TestCase().assertRaisesRegex(cutover.CutoverArchiveError,'prior_native_manager_not_stopped'):
             cutover.prepare(root,base/'archives',base,NEW,ancestor_check=lambda *_:True)
+
+
+def test_empty_directory_skeleton_is_idempotent_new_root():
+    with tempfile.TemporaryDirectory() as d:
+        base=Path(d);root=base/'run'
+        (root/'control').mkdir(parents=True)
+        (root/'ledger/spool').mkdir(parents=True)
+        (root/'external_fair/assets/bnb').mkdir(parents=True)
+        result=cutover.prepare(root,base/'archives',base,NEW,ancestor_check=lambda *_:True)
+        assert result=={'state':'NEW_RUN_ROOT','target_sha':NEW,'archived':False}
+
+
+def test_nonempty_skeleton_without_identity_still_fails_closed():
+    with tempfile.TemporaryDirectory() as d:
+        base=Path(d);root=base/'run';(root/'control').mkdir(parents=True)
+        (root/'control/unknown-state').write_text('x')
+        with unittest.TestCase().assertRaisesRegex(cutover.CutoverArchiveError,'previous_runtime_sha_missing_or_invalid'):
+            cutover.prepare(root,base/'archives',base,NEW,ancestor_check=lambda *_:True)

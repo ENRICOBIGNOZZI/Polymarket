@@ -324,7 +324,8 @@ def prepare(
 
     if not runtime and not deployed_sha:
         lineage = read_json(run_root / "control/cutover_lineage.json")
-        if not any(run_root.iterdir()):
+        material = any(path.is_file() or path.is_symlink() for path in run_root.rglob("*"))
+        if not material:
             return {"state": "NEW_RUN_ROOT", "target_sha": target_sha, "archived": False}
         if (
             lineage.get("schema") == "polymarket_v7_cutover_lineage_v1"
