@@ -4,6 +4,7 @@
 #include "pm/v7_native_order_tx.hpp"
 #include "pm/v7_native_paper_execution.hpp"
 #include "pm/v7_spsc.hpp"
+#include "pm/v7_probability_ev.hpp"
 
 #include <atomic>
 #include <cstdint>
@@ -20,6 +21,10 @@ enum class NativeEvidenceKind : std::uint8_t {
 
 struct NativeEvidenceEvent {
     NativeEvidenceKind kind = NativeEvidenceKind::OrderSubmitted;
+    SettlementProbabilityForecast probability{};
+    ProbabilityEvDecision economics{};
+    std::array<double, 18> probability_features{};
+    std::uint64_t probability_input_instrument = 0;
     NativePaperReason paper_reason = NativePaperReason::Accepted;
     std::uint8_t paper_censored = 0;
     NativeOrderCommand command{};
@@ -35,6 +40,19 @@ struct NativeEvidenceEvent {
 // A bounded copy of exactly the state consumed by the native decision owner.
 // Research observations never enter the economic ledger or order transport.
 struct NativeObservation {
+    SettlementProbabilityForecast probability{};
+    ProbabilityEvDecision economics{};
+    std::array<double, 18> probability_features{};
+    std::uint64_t probability_input_instrument = 0;
+    std::uint64_t external_state_version = 0;
+    std::int64_t external_input_receive_ns = 0;
+    double external_composite_price = 0.0, external_return_250ms = 0.0;
+    double external_return_1s = 0.0, external_return_5s = 0.0;
+    double external_vol_fast = 0.0, external_vol_slow = 0.0, external_dispersion_bps = 0.0;
+    std::uint32_t external_fresh_venues = 0;
+    std::uint8_t external_valid = 0;
+    std::uint8_t external_return_250ms_valid = 0, external_return_1s_valid = 0, external_return_5s_valid = 0;
+
     std::uint64_t instrument_handle = 0, book_version = 0, signal_version = 0;
     std::int64_t receive_ns = 0, exchange_ns = 0, observed_ns = 0, trigger_ns = 0;
     std::int64_t evaluated_grid_ns = 0, valid_until_ns = 0;
@@ -67,6 +85,7 @@ struct NativeRuntimeEvidenceConfig {
     std::string yes_token_id;
     std::string no_token_id;
     std::string fee_source;
+    std::string probability_artifact_sha256;
     std::uint64_t maker_valid_cells = 0;
     std::int64_t minimum_order_microunits = 0;
     std::string risk_policy_sha256;

@@ -1,0 +1,27 @@
+{
+  "schema": "v7_probability_forward_protocol_v1",
+  "state": "PREPARED_NOT_STARTED",
+  "duration_seconds": 7200,
+  "paper_only": true,
+  "authenticated_execution": false,
+  "real_order_submission": false,
+  "real_capital_at_risk": false,
+  "assets": ["BTC", "ETH", "SOL", "XRP", "DOGE", "BNB"],
+  "horizons": ["M5", "M15", "H1", "H4", "D1"],
+  "excluded_assets": [],
+  "asset_shadow_overrides": [],
+  "risk": {
+    "preserve_existing_global_authority": true,
+    "max_order_cost_microdollars": 3750000,
+    "max_quantity_microunits": 20000000,
+    "fractional_kelly": 0.25,
+    "never_round_up_to_venue_minimum": true
+  },
+  "freeze": ["runtime_sha", "artifact_sha256", "training_cut", "analysis_plan", "fee_terms", "arrival_semantics"],
+  "cohort_time": "ORDER_DECISION_RECEIVE_TIME",
+  "end_action": "CLOSE_EVALUATION_COHORT_KEEP_FEEDS_RISK_AND_SETTLEMENT_RUNNING",
+  "unresolved_outcomes": "PENDING_NOT_ZERO",
+  "hypothetical_nonfill_pnl_in_canonical_ledger": false,
+  "automatic_promotion": false,
+  "requires_checked_explicit_activation": true
+}

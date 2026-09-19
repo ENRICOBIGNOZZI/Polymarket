@@ -234,7 +234,30 @@ void test_runtime_policy_allows_twenty_shares_across_five_to_120_seconds() {
     assert(lane.evaluate(too_early, capital).reason == NativeCryptoDecisionReason::TteOutsideWindow);
 }
 
+void test_probability_selects_economic_side_not_signal_side() {
+    NativeCryptoDecisionPolicy policy; policy.probability_ev_enabled=1;
+    NativeCryptoDecisionLane lane(policy);
+    auto x=input(1,80); // UP signal, but only DOWN is underpriced.
+    x.probability={.up=.20,.lower=.15,.upper=.25,.asof_ns=kNow,
+        .max_input_receive_ns=kNow-1,.valid_until_ns=kNow+1'000'000,
+        .version=1,.valid=1};
+    x.risk_sizing.allocated_wealth_microdollars=100'000'000;
+    x.risk_sizing.available_microdollars=100'000'000;
+    x.taker_fee_rate=.07; x.taker_fee_exponent=1; x.execution_reserve_per_share=.005;
+    const auto before=allocations.load();
+    auto d=lane.construct_candidate(x);
+    assert(allocations.load()==before);
+    assert(d.accepted && !d.selected_yes && d.intent.instrument_handle==12);
+    assert(d.economics.conservative_net_edge>0);
+    assert(d.economics.cost_ceiling_microdollars<=3'750'000);
+    lane.reset_market(7);x.probability.valid=0;
+    assert(lane.construct_candidate(x).reason==NativeCryptoDecisionReason::ProbabilityUnavailable);
+    lane.reset_market(7);x.probability.valid=1;x.risk_sizing.max_order_cost_microdollars=100'000;
+    assert(lane.construct_candidate(x).reason==NativeCryptoDecisionReason::RiskSizeBelowMinimum);
+}
+
 int main() {
+    test_probability_selects_economic_side_not_signal_side();
     test_up_down_and_admission();
     test_duplicate_depth_tte_and_market_gates();
     test_entry_price_cap_rejects_without_consuming_signal();

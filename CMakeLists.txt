@@ -54,6 +54,11 @@ target_link_libraries(pm_v7_common PUBLIC pm_json Threads::Threads)
 target_compile_options(pm_v7_common PRIVATE -Wall -Wextra -Wpedantic)
 
 
+add_library(pm_v7_probability_model src/v7_probability_model.cpp)
+target_include_directories(pm_v7_probability_model PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/include ${Boost_INCLUDE_DIRS})
+target_link_libraries(pm_v7_probability_model PUBLIC pm_v7_common OpenSSL::Crypto)
+target_compile_options(pm_v7_probability_model PRIVATE -Wall -Wextra -Wpedantic)
+
 add_library(pm_v7_clob_native
   src/v7_keccak_fast.cpp
   src/v7_clob_eip712.cpp
@@ -189,7 +194,7 @@ target_compile_options(polymarket_v7_external_venue_runtime PRIVATE -Wall -Wextr
 add_executable(polymarket_v7_crypto_settlement_native_candidate
   src/v7_crypto_settlement_native_candidate.cpp)
 target_link_libraries(polymarket_v7_crypto_settlement_native_candidate PRIVATE
-  pm_v7_external pm_v7_hft pm_fast_arb)
+  pm_v7_external pm_v7_hft pm_fast_arb pm_v7_probability_model)
 target_compile_options(polymarket_v7_crypto_settlement_native_candidate PRIVATE
   -Wall -Wextra -Wpedantic)
 
@@ -198,7 +203,8 @@ target_compile_options(polymarket_v7_crypto_settlement_native_candidate PRIVATE
 add_executable(polymarket_v7_crypto_settlement_engine
   src/v7_crypto_settlement_native_candidate.cpp)
 target_link_libraries(polymarket_v7_crypto_settlement_engine PRIVATE
-  pm_v7_external pm_v7_hft pm_fast_arb)
+  pm_v7_hft pm_v7_external pm_v7_common pm_v7_probability_model pm_fast_arb pm_core Threads::Threads)
+
 target_compile_options(polymarket_v7_crypto_settlement_engine PRIVATE
   -Wall -Wextra -Wpedantic)
 
@@ -273,6 +279,16 @@ if(BUILD_TESTING)
   add_executable(pm_v7_execution_admission_tests tests/test_v7_execution_admission.cpp)
   target_link_libraries(pm_v7_execution_admission_tests PRIVATE pm_v7_common)
   add_test(NAME pm_v7_execution_admission_tests COMMAND pm_v7_execution_admission_tests)
+
+  add_executable(pm_v7_probability_model_tests tests/test_v7_probability_model.cpp)
+  target_link_libraries(pm_v7_probability_model_tests PRIVATE pm_v7_probability_model)
+  target_compile_options(pm_v7_probability_model_tests PRIVATE -UNDEBUG)
+  add_test(NAME pm_v7_probability_model_tests COMMAND pm_v7_probability_model_tests)
+
+  add_executable(pm_v7_probability_ev_tests tests/test_v7_probability_ev.cpp)
+  target_include_directories(pm_v7_probability_ev_tests PRIVATE include)
+  target_compile_options(pm_v7_probability_ev_tests PRIVATE -UNDEBUG)
+  add_test(NAME pm_v7_probability_ev_tests COMMAND pm_v7_probability_ev_tests)
 
   add_executable(pm_v7_crypto_decision_lane_tests tests/test_v7_crypto_decision_lane.cpp)
   target_link_libraries(pm_v7_crypto_decision_lane_tests PRIVATE pm_v7_common)

@@ -196,7 +196,11 @@ struct NativeRuntimeEvidenceWriter::Impl {
             {"identity_provenance", maker ? json::value("EXACT_RUNTIME_ARTIFACT_V1") : json::value(nullptr)},
             {"prediction_model_kind", event.strategy_id == StrategyId::ProfessionalMaker
                 ? (config.maker_valid_cells > 0 ? "EXECUTION_CELLS_LOADED" : "DEFAULT_BASELINE")
-                : "FROZEN_DIRECTIONAL_RULE"},
+                : config.probability_artifact_sha256.empty() ? "FROZEN_DIRECTIONAL_RULE"
+                : "EXPERIMENTAL_SETTLEMENT_PROBABILITY_V1"},
+            {"probability_artifact_sha256", config.probability_artifact_sha256.empty()
+                ? json::value(nullptr) : json::value(config.probability_artifact_sha256)},
+            {"probability_forward_calibrated", false},
             {"maker_valid_cells", config.maker_valid_cells},
             {"model_family", component},
             {"paper_exploration", true},
@@ -252,6 +256,28 @@ struct NativeRuntimeEvidenceWriter::Impl {
                 * static_cast<double>(event.command.tick_size_e4) / 10'000.0;
             out["intended_action"] = event.policy == ExecutionPolicyId::AggressiveTaker ? "TAKE" : "MAKE";
             out["intended_size"] = static_cast<double>(event.command.quantity_microunits) / 1'000'000.0;
+            if (event.probability.valid && event.economics.accepted) {
+                out["predicted_alpha"] = event.economics.expected_net_edge;
+                out["expected_ev"] = event.economics.expected_net_edge
+                    * static_cast<double>(event.command.quantity_microunits) / 1'000'000.;
+                auto& md = out["metadata"].as_object();
+                md["probability_input_token_id"] = token(event.probability_input_instrument);
+                json::array features;
+                for (double x : event.probability_features) features.emplace_back(x);
+                md["probability_input_features"] = std::move(features);
+                md["probability_up"] = event.probability.up;
+                md["probability_up_lower"] = event.probability.lower;
+                md["probability_up_upper"] = event.probability.upper;
+                md["selected_probability"] = event.economics.probability;
+                md["selected_probability_lower"] = event.economics.probability_lower;
+                md["net_edge_per_share"] = event.economics.expected_net_edge;
+                md["conservative_net_edge_per_share"] = event.economics.conservative_net_edge;
+                md["fee_estimate_per_share"] = event.economics.fee_per_share;
+                md["all_in_cost_ceiling_per_share"] = event.economics.cost_per_share;
+                md["order_cost_ceiling_microdollars"] = event.economics.cost_ceiling_microdollars;
+                md["uncertainty_semantics"] = "MODEL_PROXY_NOT_COVERAGE_CERTIFIED";
+                md["execution_reserve_is_measured"] = false;
+            }
             return out;
         }
         if (event.kind == NativeEvidenceKind::OrderState) {
@@ -301,7 +327,9 @@ struct NativeRuntimeEvidenceWriter::Impl {
             observations_file.open(observations_path, std::ios::app);
             if (!observations_file) throw std::runtime_error("native observations open failed");
         }
-        json::array bids, asks;
+        json::array bids, asks, probability_inputs;
+        if (event.probability.valid)
+            for (double x : event.probability_features) probability_inputs.emplace_back(x);
         for (std::size_t i = 0; i < 10; ++i) {
             if (event.bid_prices[i] > 0) bids.emplace_back(json::array{event.bid_prices[i], event.bid_quantities[i]});
             if (event.ask_prices[i] > 0) asks.emplace_back(json::array{event.ask_prices[i], event.ask_quantities[i]});
@@ -365,8 +393,33 @@ struct NativeRuntimeEvidenceWriter::Impl {
             {"fee_rate", config.taker_fee_rate}, {"fee_exponent", config.taker_fee_exponent},
             {"proposed_quantity", event.proposed_quantity}, {"proposed_price_tick", event.proposed_price_tick},
             {"ev_uncertainty", event.kind == 4 ? json::value(event.ev_uncertainty) : json::value(nullptr)},
-            {"probability_forecast", nullptr},
-            {"expected_net_edge", event.kind == 4 ? json::value(event.expected_ev) : json::value(nullptr)},
+            {"probability_forecast", event.probability.valid ? json::value(event.probability.up) : json::value(nullptr)},
+            {"probability_up_lower", event.probability.valid ? json::value(event.probability.lower) : json::value(nullptr)},
+            {"probability_up_upper", event.probability.valid ? json::value(event.probability.upper) : json::value(nullptr)},
+            {"probability_artifact_sha256", config.probability_artifact_sha256.empty()
+                ? json::value(nullptr) : json::value(config.probability_artifact_sha256)},
+            {"probability_forward_calibrated", false},
+            {"probability_input_token_id", event.probability.valid ? json::value(token(event.probability_input_instrument)) : json::value(nullptr)},
+            {"probability_input_features", event.probability.valid ? json::value(std::move(probability_inputs)) : json::value(nullptr)},
+            {"expected_net_edge", event.kind == 4 ? json::value(event.expected_ev)
+                : std::isfinite(event.economics.expected_net_edge) ? json::value(event.economics.expected_net_edge) : json::value(nullptr)},
+            {"conservative_net_edge", std::isfinite(event.economics.conservative_net_edge)
+                ? json::value(event.economics.conservative_net_edge) : json::value(nullptr)},
+            {"probability_decision_reason", event.probability.valid
+                ? json::value(static_cast<unsigned>(event.economics.reason)) : json::value(nullptr)},
+            {"external_features", event.external_valid ? json::value(json::object{
+                {"state_version", event.external_state_version},
+                {"input_receive_ns", event.external_input_receive_ns},
+                {"composite_price", event.external_composite_price},
+                {"return_250ms", event.external_return_250ms_valid ? json::value(event.external_return_250ms) : json::value(nullptr)},
+                {"return_1s", event.external_return_1s_valid ? json::value(event.external_return_1s) : json::value(nullptr)},
+                {"return_5s", event.external_return_5s_valid ? json::value(event.external_return_5s) : json::value(nullptr)},
+                {"native_vol_fast", event.external_vol_fast}, {"native_vol_slow", event.external_vol_slow},
+                {"dispersion_bps", event.external_dispersion_bps}, {"fresh_venues", event.external_fresh_venues},
+                {"oracle_basis", nullptr}, {"opening_reference", nullptr},
+                {"volatility_units", "EVENT_TIME_LOG_RETURN_RMS_NOT_PER_SECOND"},
+                {"long_horizon_history_validated", false},
+                {"source", "NATIVE_DIAGNOSTIC_NOT_STRUCTURAL_SETTLEMENT_MODEL"}}) : json::value(nullptr)},
         };
         observations_file << json::serialize(value) << '\n';
         if (!observations_file) throw std::runtime_error("native observations write failed");
