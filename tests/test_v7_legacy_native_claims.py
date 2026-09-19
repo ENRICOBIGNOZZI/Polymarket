@@ -89,6 +89,23 @@ def test_previous_run_claim_is_reserved_and_hash_bound(tmp_path: Path) -> None:
     assert validate_registry(registry, target_sha=TARGET) == registry
 
 
+def test_flat_legacy_market_zero_claim_is_ignored(tmp_path: Path) -> None:
+    current = tmp_path / "paper_v7_london_bbbbbbbb"; current.mkdir()
+    old = tmp_path / "paper_v7_london_aaaaaaaa"
+    buy = fill()
+    buy.update({"filled_size": 5.0, "fill_price": 0.53, "fee": 0.0})
+    sell = fill()
+    sell.update({
+        "fill_id": "f2", "order_id": "o2", "side": "SELL",
+        "filled_size": 5.0, "fill_price": 0.14, "fee": 0.0,
+    })
+    write_ledger(old, [buy, sell])
+    registry = build_registry(current_run_root=current, target_sha=TARGET, scan_parent=tmp_path)
+    assert registry["total_claim_microdollars"] == 0
+    assert registry["sources"] == []
+    assert validate_registry(registry, target_sha=TARGET) == registry
+
+
 def test_canonical_final_releases_claim_on_rescan(tmp_path: Path) -> None:
     current = tmp_path / "paper_v7_london_bbbbbbbb"; current.mkdir()
     old = tmp_path / "paper_v7_london_aaaaaaaa"

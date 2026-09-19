@@ -157,8 +157,14 @@ def build_registry(*, current_run_root: Path, target_sha: str, scan_parent: Path
             ]
             exposure = unsettled_exposure(unresolved_fills, sha)
             for market, claim in sorted(exposure["unsettled_market_claims_microdollars"].items()):
-                if not isinstance(claim, int) or isinstance(claim, bool) or claim <= 0:
+                if not isinstance(claim, int) or isinstance(claim, bool) or claim < 0:
                     raise ValueError("legacy_claim_invalid")
+                # A fully offset PAPER inventory can remain present in the
+                # historical FILL set without carrying any unsettled capital
+                # claim. It is economically flat, so omit it rather than
+                # turning zero exposure into a bootstrap-fatal condition.
+                if claim == 0:
+                    continue
                 key = (sha, market)
                 if key in covered:
                     if covered[key] != claim:
