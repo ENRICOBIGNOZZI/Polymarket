@@ -213,6 +213,12 @@ struct MakerModelSnapshot {
 
     std::array<char, 65> execution_artifact_sha256{};
     std::array<char, 65> exploration_policy_sha256{};
+    // Exact slow-plane execution identity. These values are loaded from the
+    // same immutable artifact as the execution cells and copied into every
+    // native Maker ledger row; they never participate in hot-path decisions.
+    std::array<char, 17> execution_policy_hash{};
+    std::array<char, 17> execution_config_hash{};
+    std::array<char, 64> execution_semantics_version{};
     std::uint64_t model_version = 1;
     std::uint64_t policy_version = 1;
     double tick_size = 0.01;

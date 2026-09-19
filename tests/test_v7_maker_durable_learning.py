@@ -1,4 +1,5 @@
 import gzip
+import hashlib
 import json
 import pathlib
 import sys
@@ -10,7 +11,8 @@ sys.path.insert(0, str(ROOT / "scripts"))
 
 from v7_maker_durable_learning import (  # noqa: E402
     adverse_markout_models, append_new, compact_evidence, fit_model, hazard_model, identity,
-    evidence_files, compatible_archive_file, placement_features, rows, research_policy_value, materialize_research_model,
+    evidence_files, compatible_archive_file, legacy_source_identity,
+    placement_features, rows, research_policy_value, materialize_research_model,
     placement_action, exact_execution_cell, order_examples,
 )
 
@@ -124,6 +126,96 @@ class DurableLearningTests(unittest.TestCase):
             self.assertTrue(compatible_archive_file(root/"live/execution.jsonl","policy","config",cache))
             missing=root/("cutover-"+"d"*40+"-1-4")/"ledger/execution.jsonl.gz"
             self.assertFalse(compatible_archive_file(missing,"policy","config",cache))
+
+    def test_legacy_identity_is_receipt_bound_and_never_overwrites_rows(self) -> None:
+        with tempfile.TemporaryDirectory() as folder:
+            run = pathlib.Path(folder) / "paper_v7_london_legacy"
+            source = run / "ledger/execution.jsonl"
+            model_path = run / "micro_maker/execution_model.json"
+            receipt_path = run / "control/runtime_artifact_receipt.json"
+            source.parent.mkdir(parents=True)
+            model_path.parent.mkdir(parents=True)
+            receipt_path.parent.mkdir(parents=True)
+
+            model = {
+                "schema": "polymarket_v7_maker_execution_model_v1",
+                "model_sha": SHA,
+                "paper_only": True,
+                "authenticated_execution": False,
+                "real_order_submission": False,
+                "policy_hash": "policy",
+                "config_hash": "config",
+                "execution_semantics_version": "maker-paper-v7.2-bilateral-inventory",
+            }
+            model_payload = (json.dumps(model, sort_keys=True) + "\n").encode()
+            model_path.write_bytes(model_payload)
+            receipt = {
+                "schema": "polymarket_v7_runtime_artifact_receipt_v1",
+                "target_model_sha": SHA,
+                "paper_only": True,
+                "authenticated_execution": False,
+                "real_order_submission": False,
+                "runtime_training": False,
+                "maker_execution_model_sha256": hashlib.sha256(model_payload).hexdigest(),
+                "maker_staged_path": str(model_path),
+            }
+            receipt_path.write_text(json.dumps(receipt) + "\n", encoding="utf-8")
+
+            legacy_order = record(
+                "ORDER_SUBMITTED", "legacy-order", order_id="legacy",
+                intended_size=5.0,
+            )
+            legacy_fill = record(
+                "FILL", "legacy-fill", order_id="legacy", filled_size=2.0,
+            )
+            for row in (legacy_order, legacy_fill):
+                for key in ("policy_hash", "config_hash", "execution_semantics_version"):
+                    row["metadata"].pop(key)
+            explicit_conflict = record(
+                "ORDER_SUBMITTED", "conflict", order_id="conflict", intended_size=5.0,
+            )
+            explicit_conflict["metadata"]["policy_hash"] = "wrong-policy"
+            other_generation = record(
+                "ORDER_SUBMITTED", "other", order_id="other", intended_size=5.0,
+            )
+            other_generation["model_sha"] = "b" * 40
+            for key in ("policy_hash", "config_hash", "execution_semantics_version"):
+                other_generation["metadata"].pop(key)
+            source.write_text("".join(
+                json.dumps(row) + "\n" for row in (
+                    legacy_order, legacy_fill, explicit_conflict, other_generation
+                )
+            ), encoding="utf-8")
+
+            cache = {}
+            inherited = legacy_source_identity(source, "policy", "config", cache)
+            self.assertIsNotNone(inherited)
+            assert inherited is not None
+            store = pathlib.Path(folder) / "durable/evidence.jsonl"
+            values, status = compact_evidence(
+                [source], store_path=store, policy_hash="policy", config_hash="config",
+                source_identities={source.resolve(): inherited},
+            )
+            self.assertEqual(
+                {row["record_id"] for row in values},
+                {"legacy-order", "legacy-fill"},
+            )
+            self.assertEqual(status["exact_policy_orders"], 1)
+            self.assertEqual(status["legacy_identity_records"], 2)
+            for row in values:
+                metadata = row["metadata"]
+                self.assertEqual(metadata["policy_hash"], "policy")
+                self.assertEqual(metadata["config_hash"], "config")
+                self.assertEqual(
+                    metadata["identity_provenance"],
+                    "RUN_ROOT_ARTIFACT_RECEIPT_BACKFILL_V1",
+                )
+
+            receipt["maker_execution_model_sha256"] = "0" * 64
+            receipt_path.write_text(json.dumps(receipt) + "\n", encoding="utf-8")
+            self.assertIsNone(
+                legacy_source_identity(source, "policy", "config", {})
+            )
 
     def test_jsonl_gzip_evidence_is_discovered_and_read_losslessly(self) -> None:
         with tempfile.TemporaryDirectory() as folder:

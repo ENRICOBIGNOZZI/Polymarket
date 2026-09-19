@@ -10,6 +10,7 @@
 #include <iomanip>
 #include <limits>
 #include <sstream>
+#include <string_view>
 #include <thread>
 
 namespace pm::v7 {
@@ -24,6 +25,17 @@ namespace {
     }
     return true;
 }
+
+[[nodiscard]] bool exact_hex16(const std::string& value) noexcept {
+    if (value.size() != 16) return false;
+    for (const char ch : value) {
+        if (!((ch >= '0' && ch <= '9') || (ch >= 'a' && ch <= 'f'))) return false;
+    }
+    return true;
+}
+
+constexpr std::string_view kMakerExecutionSemantics =
+    "maker-paper-v7.2-bilateral-inventory";
 
 [[nodiscard]] std::int64_t wall_now_ns() noexcept {
     return std::chrono::duration_cast<std::chrono::nanoseconds>(
@@ -81,7 +93,10 @@ bool NativeRuntimeEvidenceConfig::valid() const noexcept {
         && !server_id.empty() && !asset.empty() && !horizon.empty()
         && !market_id.empty() && !event_id.empty()
         && !yes_token_id.empty() && !no_token_id.empty()
-        && !fee_source.empty() && yes_instrument_handle != 0
+        && !fee_source.empty() && exact_hex16(maker_execution_policy_hash)
+        && exact_hex16(maker_execution_config_hash)
+        && maker_execution_semantics == kMakerExecutionSemantics
+        && yes_instrument_handle != 0
         && no_instrument_handle != 0 && yes_instrument_handle != no_instrument_handle
         && close_wall_ns > 0 && std::isfinite(taker_fee_rate) && taker_fee_rate >= 0.0
         && std::isfinite(taker_fee_exponent) && taker_fee_exponent >= 0.0
@@ -166,6 +181,7 @@ struct NativeRuntimeEvidenceWriter::Impl {
         const auto order_id = std::string("native:") + config.run_id + ":" + config.market_id
             + ":" + std::to_string(event.command.client_order_id);
         const auto component = strategy_component(event.strategy_id);
+        const bool maker = event.strategy_id == StrategyId::ProfessionalMaker;
         json::object metadata{
             {"component", component},
             {"crypto_context", json::object{{"asset", config.asset}, {"horizon", config.horizon}}},
@@ -173,6 +189,10 @@ struct NativeRuntimeEvidenceWriter::Impl {
             {"model_artifact_hash", event.strategy_id == StrategyId::ProfessionalMaker && !config.maker_artifact_sha256.empty()
                 ? json::value(config.maker_artifact_sha256) : json::value(nullptr)},
             {"maker_policy_sha256", config.maker_policy_sha256.empty() ? json::value(nullptr) : json::value(config.maker_policy_sha256)},
+            {"policy_hash", maker ? json::value(config.maker_execution_policy_hash) : json::value(nullptr)},
+            {"config_hash", maker ? json::value(config.maker_execution_config_hash) : json::value(nullptr)},
+            {"execution_semantics_version", maker ? json::value(config.maker_execution_semantics) : json::value(nullptr)},
+            {"identity_provenance", maker ? json::value("EXACT_RUNTIME_ARTIFACT_V1") : json::value(nullptr)},
             {"prediction_model_kind", event.strategy_id == StrategyId::ProfessionalMaker
                 ? (config.maker_valid_cells > 0 ? "EXECUTION_CELLS_LOADED" : "DEFAULT_BASELINE")
                 : "FROZEN_DIRECTIONAL_RULE"},
@@ -277,6 +297,10 @@ struct NativeRuntimeEvidenceWriter::Impl {
                 ? json::value(config.maker_artifact_sha256) : json::value(nullptr)},
             {"maker_artifact_sha256", config.maker_artifact_sha256.empty() ? json::value(nullptr) : json::value(config.maker_artifact_sha256)},
             {"maker_policy_sha256", config.maker_policy_sha256.empty() ? json::value(nullptr) : json::value(config.maker_policy_sha256)},
+            {"policy_hash", event.kind == 4 ? json::value(config.maker_execution_policy_hash) : json::value(nullptr)},
+            {"config_hash", event.kind == 4 ? json::value(config.maker_execution_config_hash) : json::value(nullptr)},
+            {"execution_semantics_version", event.kind == 4 ? json::value(config.maker_execution_semantics) : json::value(nullptr)},
+            {"identity_provenance", event.kind == 4 ? json::value("EXACT_RUNTIME_ARTIFACT_V1") : json::value(nullptr)},
             {"run_id", config.run_id}, {"server_id", config.server_id},
             {"market_id", config.market_id}, {"token_id", token(event.instrument_handle)},
             {"asset", config.asset}, {"horizon", config.horizon},

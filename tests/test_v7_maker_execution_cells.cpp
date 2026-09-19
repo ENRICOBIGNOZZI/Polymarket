@@ -13,14 +13,23 @@ bool close(double a, double b, double tol = 1e-12) {
     return std::abs(a - b) <= tol;
 }
 
-void write_model(const std::filesystem::path& path, const std::string& sha) {
+void write_model(const std::filesystem::path& path, const std::string& sha,
+                 bool include_identity = true) {
     std::ofstream out(path, std::ios::trunc);
     out << R"({
   "schema": "polymarket_v7_maker_execution_model_v1",
   "strategy": "CRYPTO_SETTLEMENT_ENGINE",
   "paper_only": true,
   "authenticated_execution": false,
-  "model_sha": ")" << sha << R"(",
+  "real_order_submission": false,
+)";
+    if (include_identity) {
+        out << R"(  "policy_hash": "a0c7f86875181980",
+  "config_hash": "3935c59ce2037137",
+  "execution_semantics_version": "maker-paper-v7.2-bilateral-inventory",
+)";
+    }
+    out << R"(  "model_sha": ")" << sha << R"(",
   "groups": {
     "GLOBAL": {
       "fill_probability": 0.10,
@@ -78,6 +87,10 @@ void test_exact_sha_loader_shrinks_to_global() {
     assert(cell.valid);
     const std::string loaded_hash(model.execution_artifact_sha256.data());
     assert(loaded_hash.size() == 64);
+    assert(std::string(model.execution_policy_hash.data()) == "a0c7f86875181980");
+    assert(std::string(model.execution_config_hash.data()) == "3935c59ce2037137");
+    assert(std::string(model.execution_semantics_version.data())
+        == "maker-paper-v7.2-bilateral-inventory");
     pm::v7::maker::MakerModelSnapshot same_bytes;
     assert(std::string(same_bytes.execution_artifact_sha256.data()) == loaded_hash);
     { std::ofstream append(path, std::ios::app); append << '\n'; }
@@ -119,6 +132,26 @@ void test_exact_sha_loader_shrinks_to_global() {
     std::filesystem::remove(path);
 }
 
+void test_missing_execution_identity_fails_closed() {
+    const std::string sha(40, 'e');
+    const auto path = std::filesystem::temp_directory_path()
+        / "pm_v7_execution_cells_missing_identity_test.json";
+    write_model(path, sha, false);
+    setenv("PM_V7_MODEL_SHA", sha.c_str(), 1);
+    setenv("PM_V7_MAKER_EXECUTION_MODEL", path.c_str(), 1);
+
+    pm::v7::maker::MakerModelSnapshot model;
+    for (const auto& cell : model.execution_cells) assert(!cell.valid);
+    assert(model.execution_artifact_sha256[0] == '\0');
+    assert(model.execution_policy_hash[0] == '\0');
+    assert(model.execution_config_hash[0] == '\0');
+    assert(model.execution_semantics_version[0] == '\0');
+
+    unsetenv("PM_V7_MAKER_EXECUTION_MODEL");
+    unsetenv("PM_V7_MODEL_SHA");
+    std::filesystem::remove(path);
+}
+
 void test_wrong_sha_fails_closed_to_invalid_cells() {
     const std::string expected(40, 'c');
     const std::string stale(40, 'd');
@@ -140,6 +173,7 @@ void test_wrong_sha_fails_closed_to_invalid_cells() {
 
 int main() {
     test_exact_sha_loader_shrinks_to_global();
+    test_missing_execution_identity_fails_closed();
     test_wrong_sha_fails_closed_to_invalid_cells();
     return 0;
 }

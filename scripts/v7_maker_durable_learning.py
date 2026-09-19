@@ -39,6 +39,8 @@ PLACEMENT_FEATURE_NAMES = (
     "log_queue_ahead_per_quote", "distance_from_touch_ticks",
 )
 EXECUTION_SEMANTICS = "maker-paper-v7.2-bilateral-inventory"
+LEGACY_IDENTITY_PROVENANCE = "RUN_ROOT_ARTIFACT_RECEIPT_BACKFILL_V1"
+IDENTITY_FIELDS = ("policy_hash", "config_hash", "execution_semantics_version")
 RISK_TRANSFER_EVENTS = {"ORDER_SUBMITTED", "FILL", "MARKOUT"}
 STANDALONE_ECONOMIC_EVENTS = {"FINAL", "INVENTORY_MERGE"}
 PROBE_EVENT = "SHADOW_PROBE"
@@ -130,8 +132,102 @@ def compatible_archive_file(path: pathlib.Path, policy_hash: str, config_hash: s
     return cache[archive]
 
 
-def rows(paths: Iterable[pathlib.Path]) -> Iterable[dict[str, Any]]:
+def legacy_source_identity(
+    path: pathlib.Path, policy_hash: str, config_hash: str,
+    cache: dict[pathlib.Path, dict[str, str] | None],
+) -> dict[str, str] | None:
+    """Bind legacy row identity to an immutable run-level artifact receipt.
+
+    Historical native rows predate row-level policy/config fields. They may be
+    recovered only when the same run contains a PAPER-only execution model and
+    a receipt that cryptographically binds that model to the row generation.
+    """
+    resolved = path.resolve()
+    runtime_root = next((
+        parent for parent in resolved.parents
+        if (parent / "micro_maker" / "execution_model.json").is_file()
+        and (parent / "control" / "runtime_artifact_receipt.json").is_file()
+    ), None)
+    if runtime_root is None:
+        return None
+    if runtime_root in cache:
+        return cache[runtime_root]
+    model_path = runtime_root / "micro_maker" / "execution_model.json"
+    receipt_path = runtime_root / "control" / "runtime_artifact_receipt.json"
+    try:
+        model_payload = model_path.read_bytes()
+        model = json.loads(model_payload)
+        receipt = json.loads(receipt_path.read_text(encoding="utf-8"))
+    except (OSError, ValueError, TypeError):
+        cache[runtime_root] = None
+        return None
+    model_sha = str(model.get("model_sha") or "")
+    staged = pathlib.Path(str(receipt.get("maker_staged_path") or ""))
+    valid = (
+        isinstance(model, dict) and isinstance(receipt, dict)
+        and model.get("schema") == MODEL_SCHEMA
+        and len(model_sha) == 40
+        and all(ch in "0123456789abcdef" for ch in model_sha)
+        and model.get("paper_only") is True
+        and model.get("authenticated_execution") is False
+        and model.get("real_order_submission") is False
+        and str(model.get("policy_hash") or "") == policy_hash
+        and str(model.get("config_hash") or "") == config_hash
+        and str(model.get("execution_semantics_version") or "") == EXECUTION_SEMANTICS
+        and receipt.get("schema") == "polymarket_v7_runtime_artifact_receipt_v1"
+        and receipt.get("paper_only") is True
+        and receipt.get("authenticated_execution") is False
+        and receipt.get("real_order_submission") is False
+        and receipt.get("runtime_training") is False
+        and str(receipt.get("target_model_sha") or "") == model_sha
+        and str(receipt.get("maker_execution_model_sha256") or "")
+            == hashlib.sha256(model_payload).hexdigest()
+        and staged.name == "execution_model.json"
+        and staged.parent.name == "micro_maker"
+    )
+    if not valid:
+        cache[runtime_root] = None
+        return None
+    value = {
+        "model_sha": model_sha,
+        "policy_hash": policy_hash,
+        "config_hash": config_hash,
+        "execution_semantics_version": EXECUTION_SEMANTICS,
+        "source_artifact_sha256": hashlib.sha256(model_payload).hexdigest(),
+    }
+    cache[runtime_root] = value
+    return value
+
+
+def _enrich_legacy_identity(
+    row: dict[str, Any], source_identity: dict[str, str] | None,
+) -> dict[str, Any]:
+    metadata = row.get("metadata") if isinstance(row.get("metadata"), dict) else {}
+    # Row-level identity is authoritative. Partial, null, or conflicting fields
+    # are never repaired from surrounding files.
+    if source_identity is None or any(key in metadata for key in IDENTITY_FIELDS):
+        return row
+    if str(row.get("model_sha") or "") != source_identity["model_sha"]:
+        return row
+    enriched = dict(row)
+    enriched_metadata = dict(metadata)
+    for key in IDENTITY_FIELDS:
+        enriched_metadata[key] = source_identity[key]
+    enriched_metadata["identity_provenance"] = LEGACY_IDENTITY_PROVENANCE
+    enriched_metadata["source_artifact_sha256"] = source_identity[
+        "source_artifact_sha256"
+    ]
+    enriched["metadata"] = enriched_metadata
+    return enriched
+
+
+def rows(
+    paths: Iterable[pathlib.Path], *,
+    source_identities: dict[pathlib.Path, dict[str, str]] | None = None,
+) -> Iterable[dict[str, Any]]:
+    identities = source_identities or {}
     for path in paths:
+        source_identity = identities.get(path.resolve())
         try:
             opener = gzip.open if path.name.endswith(".gz") else open
             with opener(path, "rt", encoding="utf-8") as handle:
@@ -148,7 +244,7 @@ def rows(paths: Iterable[pathlib.Path]) -> Iterable[dict[str, Any]]:
                         and isinstance(row.get("metadata"), dict)
                         and row["metadata"].get("component") == COMPONENT
                     ):
-                        yield row
+                        yield _enrich_legacy_identity(row, source_identity)
         except OSError:
             continue
 
@@ -220,6 +316,7 @@ def _write_jsonl_atomic(path: pathlib.Path, values: Iterable[dict[str, Any]]) ->
 def compact_evidence(
     paths: list[pathlib.Path], *, store_path: pathlib.Path,
     policy_hash: str, config_hash: str,
+    source_identities: dict[pathlib.Path, dict[str, str]] | None = None,
 ) -> tuple[list[dict[str, Any]], dict[str, int]]:
     """Compact the exact policy/config Maker lifecycle across cutovers.
 
@@ -232,7 +329,7 @@ def compact_evidence(
     # materializing duplicate archival checkpoints in memory. The second pass
     # below retains their lifecycle rows. Gzip checkpoints are intentionally
     # re-read: bounded memory is more important than avoiding sequential I/O.
-    for row in rows(paths):
+    for row in rows(paths, source_identities=source_identities):
         scanned_rows += 1
         order_id = str(row.get("order_id") or "")
         if (row.get("event_type") == "ORDER_SUBMITTED" and order_id
@@ -244,7 +341,7 @@ def compact_evidence(
     store_resolved = store_path.resolve()
     for path in paths:
         from_existing_store = path.resolve() == store_resolved
-        for row in rows([path]):
+        for row in rows([path], source_identities=source_identities):
             event_type = str(row.get("event_type") or "")
             order_id = str(row.get("order_id") or "")
             keep = (
@@ -267,6 +364,11 @@ def compact_evidence(
         "retained_records": len(values),
         "new_records": sum(key not in existing_keys for key in retained),
         "exact_policy_orders": len(exact_order_ids),
+        "legacy_identity_records": sum(
+            (row.get("metadata") or {}).get("identity_provenance")
+                == LEGACY_IDENTITY_PROVENANCE
+            for row in values
+        ),
         "evidence_scope": "CROSS_CUTOVER_EXACT_POLICY_CONFIG",
     }
 
@@ -1315,10 +1417,19 @@ def main() -> int:
             )
         )
     ]
+    legacy_identity_cache: dict[pathlib.Path, dict[str, str] | None] = {}
+    source_identities = {
+        path.resolve(): identity
+        for path in source_files
+        if (identity := legacy_source_identity(
+            path, policy_hash, config_hash, legacy_identity_cache
+        )) is not None
+    }
     evidence_paths = ([args.store] if args.store.exists() else []) + source_files
     evidence, compaction = compact_evidence(
         evidence_paths, store_path=args.store,
         policy_hash=policy_hash, config_hash=config_hash,
+        source_identities=source_identities,
     )
     policy = json.loads(args.policy.read_text(encoding="utf-8"))
     execution = policy.get("execution_model") if isinstance(
@@ -1349,6 +1460,8 @@ def main() -> int:
         "stored_records": compaction["retained_records"],
         "scanned_strategy_rows": compaction["scanned_strategy_rows"],
         "exact_policy_orders": compaction["exact_policy_orders"],
+        "legacy_identity_source_files": len(source_identities),
+        "legacy_identity_records": compaction["legacy_identity_records"],
         "store_projection": "CROSS_CUTOVER_EXACT_POLICY_CONFIG_LIFECYCLE_V1",
         "compatible_training_records": model["training_window"]["records"],
         "model_state": model["model_state"],

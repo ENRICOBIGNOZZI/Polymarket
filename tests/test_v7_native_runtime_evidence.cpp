@@ -33,6 +33,9 @@ int main() {
     config.close_wall_ns = 2'000'000'000LL;
     config.taker_fee_rate = 0.02;
     config.taker_fee_exponent = 1.0;
+    config.maker_execution_policy_hash = std::string(16, 'b');
+    config.maker_execution_config_hash = std::string(16, 'c');
+    config.maker_execution_semantics = "maker-paper-v7.2-bilateral-inventory";
     config.observation_capture_mode = "DECISIONS";
     assert(config.valid());
 
@@ -81,6 +84,18 @@ int main() {
         fill.fill.receive_monotonic_ns = 1'000'200'000LL;
         fill.fill.taker = 1;
         assert(writer.publish(fill));
+
+        NativeEvidenceEvent maker_order{};
+        maker_order.kind = NativeEvidenceKind::OrderSubmitted;
+        maker_order.command = command;
+        maker_order.command.client_order_id = 20;
+        maker_order.strategy_id = StrategyId::ProfessionalMaker;
+        maker_order.policy = ExecutionPolicyId::PassiveMaker;
+        maker_order.causal_exchange_event_ns = 1'700'000'000'200'000'000LL;
+        maker_order.causal_receive_monotonic_ns = 1'000'300'000LL;
+        maker_order.recorded_monotonic_ns = 1'000'400'000LL;
+        assert(writer.publish(maker_order));
+
         NativeObservation observation{};
         observation.kind = 2; observation.instrument_handle = 11;
         observation.book_version = 9; observation.signal_version = 42;
@@ -96,14 +111,15 @@ int main() {
         assert(writer.publish_observation(observation));
         writer.stop();
         assert(writer.healthy());
-        assert(writer.published() == 2);
-        assert(writer.written() == 2);
+        assert(writer.published() == 3);
+        assert(writer.written() == 3);
         assert(writer.dropped() == 0);
     }
 
     std::size_t count = 0;
     bool saw_order = false;
     bool saw_fill = false;
+    bool saw_maker_order = false;
     for (const auto& entry : fs::directory_iterator(root / "ledger" / "spool")) {
         if (!entry.is_regular_file()) continue;
         std::ifstream in(entry.path());
@@ -118,9 +134,23 @@ int main() {
         assert(receipt.at("owner").as_string() == "V7_NATIVE_CRYPTO_SETTLEMENT_ENGINE");
         assert(!receipt.at("real_order_submission").as_bool());
         if (kind == "ORDER_SUBMITTED") {
-            saw_order = true;
-            assert(value.at("intended_action").as_string() == "TAKE");
             assert(value.at("limit_price").as_double() == 0.41);
+            if (metadata.at("component").as_string() == "professional_maker") {
+                saw_maker_order = true;
+                assert(value.at("intended_action").as_string() == "MAKE");
+                assert(metadata.at("policy_hash").as_string() == std::string(16, 'b'));
+                assert(metadata.at("config_hash").as_string() == std::string(16, 'c'));
+                assert(metadata.at("execution_semantics_version").as_string()
+                    == "maker-paper-v7.2-bilateral-inventory");
+                assert(metadata.at("identity_provenance").as_string()
+                    == "EXACT_RUNTIME_ARTIFACT_V1");
+            } else {
+                saw_order = true;
+                assert(value.at("intended_action").as_string() == "TAKE");
+                assert(metadata.at("policy_hash").is_null());
+                assert(metadata.at("config_hash").is_null());
+                assert(metadata.at("execution_semantics_version").is_null());
+            }
         } else if (kind == "FILL") {
             saw_fill = true;
             assert(value.at("fill_price").as_double() == 0.41);
@@ -130,7 +160,7 @@ int main() {
         }
         ++count;
     }
-    assert(count == 2 && saw_order && saw_fill);
+    assert(count == 3 && saw_order && saw_fill && saw_maker_order);
     std::size_t observation_files = 0;
     for (const auto& entry : fs::directory_iterator(root / "research/native_observations/run-test")) {
         if (entry.path().extension() != ".jsonl") continue;
@@ -142,6 +172,9 @@ int main() {
         assert(observation.at("token_id").as_string() == "yes-token");
         assert(observation.at("capture_id").is_string());
         assert(observation.at("model_artifact_hash").is_null());
+        assert(observation.at("policy_hash").is_null());
+        assert(observation.at("config_hash").is_null());
+        assert(observation.at("execution_semantics_version").is_null());
         assert(!observation.at("execution_authority").as_bool());
         assert(observation.at("probability_forecast").is_null());
         assert(observation.at("capture_mode").as_string() == "DECISIONS");
@@ -175,7 +208,7 @@ int main() {
     for (const auto& entry : fs::directory_iterator(root / "ledger" / "spool")) {
         if (entry.is_regular_file()) ++rollover_count;
     }
-    assert(rollover_count == 3); // Local counter reuse must not overwrite records.
+    assert(rollover_count == 4); // Local counter reuse must not overwrite records.
     assert(fs::is_regular_file(root / "control" / "native_evidence" / "market-test.json"));
     assert(fs::is_regular_file(root / "control" / "native_evidence" / "next-market.json"));
     fs::remove_all(root);

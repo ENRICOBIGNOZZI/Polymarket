@@ -69,6 +69,8 @@ struct NativeRuntimeEvidenceConfig {
     std::int64_t minimum_order_microunits = 0;
     std::string risk_policy_sha256;
     std::string maker_artifact_sha256, maker_policy_sha256;
+    std::string maker_execution_policy_hash, maker_execution_config_hash;
+    std::string maker_execution_semantics;
     std::uint64_t yes_instrument_handle = 0;
     std::uint64_t no_instrument_handle = 0;
     std::int64_t close_wall_ns = 0;

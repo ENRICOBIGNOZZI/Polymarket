@@ -36,12 +36,31 @@ namespace json = boost::json;
 constexpr double kFillOrderShrinkage = 40.0;
 constexpr double kMarkoutShrinkage = 20.0;
 constexpr double kClusterShrinkage = 5.0;
+constexpr std::string_view kMakerExecutionSemantics =
+    "maker-paper-v7.2-bilateral-inventory";
 
 [[nodiscard]] bool exact_sha(std::string_view value) noexcept {
     if (value.size() != 40) return false;
     for (const char ch : value) {
         if (!((ch >= '0' && ch <= '9') || (ch >= 'a' && ch <= 'f'))) return false;
     }
+    return true;
+}
+
+[[nodiscard]] bool exact_hex16(std::string_view value) noexcept {
+    if (value.size() != 16) return false;
+    for (const char ch : value) {
+        if (!((ch >= '0' && ch <= '9') || (ch >= 'a' && ch <= 'f'))) return false;
+    }
+    return true;
+}
+
+template <std::size_t N>
+[[nodiscard]] bool copy_identity(std::array<char, N>& target,
+                                 std::string_view value) noexcept {
+    if (value.empty() || value.size() >= N) return false;
+    target.fill('\0');
+    std::copy(value.begin(), value.end(), target.begin());
     return true;
 }
 
@@ -280,7 +299,8 @@ void populate_execution_cells(MakerModelSnapshot& model) noexcept {
         const auto& object = root.as_object();
         if (text(find_value(object, "model_sha")) != sha
             || !boolean(find_value(object, "paper_only"), false)
-            || boolean(find_value(object, "authenticated_execution"), true)) {
+            || boolean(find_value(object, "authenticated_execution"), true)
+            || boolean(find_value(object, "real_order_submission"), true)) {
             return;
         }
         const auto* groups_value = find_value(object, "groups");
@@ -289,6 +309,15 @@ void populate_execution_cells(MakerModelSnapshot& model) noexcept {
         const auto global_it = groups.find("GLOBAL");
         if (global_it == groups.end() || !global_it->value().is_object()) return;
         const auto& global = global_it->value().as_object();
+        const std::string policy_hash = text(find_value(object, "policy_hash"));
+        const std::string config_hash = text(find_value(object, "config_hash"));
+        const std::string semantics = text(find_value(
+            object, "execution_semantics_version"));
+        if (!exact_hex16(policy_hash) || !exact_hex16(config_hash)
+            || semantics != kMakerExecutionSemantics) return;
+        if (!copy_identity(model.execution_policy_hash, policy_hash)
+            || !copy_identity(model.execution_config_hash, config_hash)
+            || !copy_identity(model.execution_semantics_version, semantics)) return;
         model.execution_artifact_sha256 = artifact_sha256(payload);
         if (model.execution_artifact_sha256[0] == '\0') return;
         const double global_fill = std::clamp(
