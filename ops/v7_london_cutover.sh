@@ -75,6 +75,18 @@ fi
 python3 "$SOURCE_DIR/scripts/v7_prepare_cutover_run_root.py" "${prepare_args[@]}"
 SERVICE_GROUP="$(id -gn "$SERVICE_USER")"
 install -d -o "$SERVICE_USER" -g "$SERVICE_GROUP" "$RUN_ROOT" "$RUN_ROOT/control"
+# Redirection is evaluated by the root cutover shell before sudo changes the
+# command user. Pre-create and repair these append-only logs for the service
+# owner, otherwise a successful control-plane scan leaves root-owned files that
+# make every runtime restart fail with EACCES.
+for log_path in "$RUN_ROOT/legacy_native_claims.log" "$RUN_ROOT/legacy_native_reconciliation.log"; do
+  if [[ ! -e "$log_path" ]]; then
+    install -o "$SERVICE_USER" -g "$SERVICE_GROUP" -m 0644 /dev/null "$log_path"
+  else
+    chown "$SERVICE_USER:$SERVICE_GROUP" "$log_path"
+    chmod 0644 "$log_path"
+  fi
+done
 
 # Reconcile historical PAPER native claims in the cutover control plane, before
 # the current run's ledger writer starts. Anything unresolved remains reserved

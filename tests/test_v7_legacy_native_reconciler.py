@@ -82,12 +82,16 @@ def test_resolution_pending_is_not_global_failure(monkeypatch, tmp_path: Path) -
 def test_cutover_reconciles_legacy_before_current_runtime_starts() -> None:
     cutover = (ROOT / "ops/v7_london_cutover.sh").read_text()
     prepare = cutover.index("v7_prepare_cutover_run_root.py")
+    ownership = cutover.index('install -o "$SERVICE_USER" -g "$SERVICE_GROUP" -m 0644 /dev/null')
     first_scan = cutover.index("v7_legacy_native_claims.py", prepare)
     reconcile = cutover.index("v7_legacy_native_reconciler.py", first_scan)
     rescan = cutover.index("v7_legacy_native_claims.py", reconcile)
     switch = cutover.index("ln -sfn", rescan)
     start = cutover.index("systemctl enable --now polymarket-v7-paper.service", switch)
-    assert prepare < first_scan < reconcile < rescan < switch < start
+    assert prepare < ownership < first_scan < reconcile < rescan < switch < start
+    assert 'chown "$SERVICE_USER:$SERVICE_GROUP" "$log_path"' in cutover
+    assert 'legacy_native_claims.log' in cutover
+    assert 'legacy_native_reconciliation.log' in cutover
 
     runtime = (ROOT / "scripts/paper_v7_execution_loop.sh").read_text()
     assert "v7_legacy_native_reconciler.py" not in runtime
