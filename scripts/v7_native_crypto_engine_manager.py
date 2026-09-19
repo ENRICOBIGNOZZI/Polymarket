@@ -381,6 +381,7 @@ def _signal_policy(path: Path | None) -> dict[str, dict[str, Any]]:
         or value.get("paper_only") is not True
         or value.get("real_order_submission") is not False
         or value.get("authenticated_execution") is not False
+        or value.get("require_pm_book_pre_signal") is not True
         or not isinstance(contexts, dict)
         or set(contexts) != expected
     ):

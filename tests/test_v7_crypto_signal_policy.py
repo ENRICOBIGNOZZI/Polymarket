@@ -13,6 +13,8 @@ manager=importlib.util.module_from_spec(SPEC);sys.modules[SPEC.name]=manager;SPE
 
 def test_all_thirty_contexts_are_explicit_and_asset_horizon_specific():
     policy=manager._signal_policy(ROOT/"config/v7_crypto_signal_policy.json")
+    raw=json.loads((ROOT/"config/v7_crypto_signal_policy.json").read_text())
+    assert raw["require_pm_book_pre_signal"] is True
     assert len(policy)==30
     assert set(policy)=={f"{a}:{h}" for a in ("BTC","ETH","SOL","XRP","DOGE","BNB") for h in ("M5","M15","H1","H4","D1")}
     assert policy["DOGE:M5"]["minimum_binance_return_bp"] > policy["BTC:M5"]["minimum_binance_return_bp"]

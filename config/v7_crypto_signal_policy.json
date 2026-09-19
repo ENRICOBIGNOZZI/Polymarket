@@ -196,6 +196,8 @@
     "confirmation": "A positive minimum confirmation move means a flat second venue is not confirmation.",
     "bnb": "Binance spot is the trigger; Bybit spot is explicitly the BNB confirmation venue because the registered BNB context has no Coinbase spot symbol.",
     "normalization": "Raw bp thresholds are transitional. The target design normalizes shock by exchange tick and time-normalized volatility before context calibration.",
-    "execution": "Execution policy is separate from signal selection: actual arrival-price FAK, partial fills, hard risk ceilings, and bounded economic chase when probability EV is active."
-  }
+    "execution": "Execution policy is separate from signal selection: actual arrival-price FAK, partial fills, hard risk ceilings, and bounded economic chase when probability EV is active.",
+    "stale_book": "A taker candidate is admissible only when the consumed Polymarket book predates the external trigger; a post-trigger PM book is treated as already repriced."
+  },
+  "require_pm_book_pre_signal": true
 }

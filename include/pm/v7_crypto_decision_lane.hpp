@@ -25,9 +25,10 @@ enum class NativeCryptoDecisionReason : std::uint8_t {
     MarketAlreadyTraded = 11,
     CapitalDenied = 12,
     EntryPriceTooHigh = 13,
-    ProbabilityUnavailable = 14,
-    NetEdgeNonPositive = 15,
-    RiskSizeBelowMinimum = 16,
+    MarketAlreadyRepriced = 14,
+    ProbabilityUnavailable = 15,
+    NetEdgeNonPositive = 16,
+    RiskSizeBelowMinimum = 17,
 };
 struct NativeCryptoDecisionPolicy {
     std::int64_t minimum_tte_ns = 105'000'000'000LL;
@@ -41,7 +42,8 @@ struct NativeCryptoDecisionPolicy {
     std::uint8_t require_full_visible_depth = 1;
     std::uint8_t one_entry_per_market = 1;
     std::uint8_t probability_ev_enabled = 0;
-    std::array<std::uint8_t, 4> reserved{};
+    std::uint8_t require_pm_book_pre_signal = 0;
+    std::array<std::uint8_t, 3> reserved{};
 };
 
 struct NativeCryptoInstrumentContext {

@@ -370,6 +370,7 @@ int main(int argc, char** argv) {
         decision_policy.maximum_signal_age_ns = options.maximum_signal_age_ns;
         decision_policy.minimum_absolute_binance_return_bp =
             options.minimum_absolute_binance_return_bp;
+        decision_policy.require_pm_book_pre_signal = options.strict_signal_policy ? 1 : 0;
         decision_policy.minimum_tte_ns = options.minimum_tte_ns;
         decision_policy.maximum_tte_ns = options.maximum_tte_ns;
         decision_policy.target_quantity_microunits = options.target_quantity_microunits;
@@ -1220,7 +1221,8 @@ int main(int argc, char** argv) {
             {"signal_policy", {{"minimum_binance_return_bp", options.minimum_absolute_binance_return_bp},
                 {"minimum_confirmation_return_bp", options.minimum_absolute_confirmation_return_bp},
                 {"maximum_signal_age_ns", options.maximum_signal_age_ns},
-                {"confirmation_venue", options.confirmation_venue}}},
+                {"confirmation_venue", options.confirmation_venue},
+                {"require_pm_book_pre_signal", options.strict_signal_policy}}},
             {"polymarket", {{"messages", pm_status.messages}, {"reconnects", pm_status.reconnects}, {"errors", pm_status.errors}, {"drops", pm_drops.load()}}},
             {"note", "PAPER-only native candidate. Maker and taker share one in-process inventory/capital/OMS authority. Taker research fills use delayed local-receive arrival-price FAK with bounded visible-depth partial fills, not exchange-confirmed execution; maker fills use pessimistic public-print queue depletion and bounded cancel latency. No authenticated submission or real capital is possible."}
         }) << '\n';
