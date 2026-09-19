@@ -79,10 +79,19 @@ def test_resolution_pending_is_not_global_failure(monkeypatch, tmp_path: Path) -
     assert writer.stopped
 
 
-def test_launcher_reconciles_before_current_ledger_writer() -> None:
-    text = (ROOT / "scripts/paper_v7_execution_loop.sh").read_text()
-    reconcile = text.index("v7_legacy_native_reconciler.py")
-    rescan = text.index("v7_legacy_native_claims.py", reconcile)
-    writer = text.index("v7_ledger_spool.py", rescan)
-    manager = text.index("v7_native_crypto_engine_manager.py", writer)
-    assert reconcile < rescan < writer < manager
+def test_cutover_reconciles_legacy_before_current_runtime_starts() -> None:
+    cutover = (ROOT / "ops/v7_london_cutover.sh").read_text()
+    prepare = cutover.index("v7_prepare_cutover_run_root.py")
+    first_scan = cutover.index("v7_legacy_native_claims.py", prepare)
+    reconcile = cutover.index("v7_legacy_native_reconciler.py", first_scan)
+    rescan = cutover.index("v7_legacy_native_claims.py", reconcile)
+    switch = cutover.index("ln -sfn", rescan)
+    start = cutover.index("systemctl enable --now polymarket-v7-paper.service", switch)
+    assert prepare < first_scan < reconcile < rescan < switch < start
+
+    runtime = (ROOT / "scripts/paper_v7_execution_loop.sh").read_text()
+    assert "v7_legacy_native_reconciler.py" not in runtime
+    scan = runtime.index("v7_legacy_native_claims.py")
+    writer = runtime.index("v7_ledger_spool.py", scan)
+    manager = runtime.index("v7_native_crypto_engine_manager.py", writer)
+    assert scan < writer < manager

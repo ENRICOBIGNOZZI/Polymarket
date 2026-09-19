@@ -483,17 +483,9 @@ v7_exec_class COLLECTOR "$RECORDER" \
   >> "$RUN_ROOT/trade_recorder.log" 2>&1 &
 v7_register_child "$!"
 
-# Reconcile historical PAPER claims before starting this run's sole ledger writer.
-# Anything unresolved remains reserved in the final registry and cannot vanish
-# across a code-SHA cutover.
-python3 scripts/v7_legacy_native_claims.py \
-  --current-run-root "$RUN_ROOT" --scan-parent "$(dirname "$RUN_ROOT")" \
-  --target-sha "$SHA" --output "$RUN_ROOT/control/legacy_native_claims.json" \
-  >> "$RUN_ROOT/legacy_native_claims.log" 2>&1
-python3 scripts/v7_legacy_native_reconciler.py \
-  --registry "$RUN_ROOT/control/legacy_native_claims.json" --repository-root "$ROOT" \
-  --target-sha "$SHA" --output "$RUN_ROOT/control/legacy_native_reconciliation.json" \
-  >> "$RUN_ROOT/legacy_native_reconciliation.log" 2>&1 || true
+# Reserve historical PAPER native claims before this run's sole ledger writer.
+# Reconciliation of old ledgers runs only in the cutover control plane, where
+# source run roots are writable and no current ledger writer is alive.
 python3 scripts/v7_legacy_native_claims.py \
   --current-run-root "$RUN_ROOT" --scan-parent "$(dirname "$RUN_ROOT")" \
   --target-sha "$SHA" --output "$RUN_ROOT/control/legacy_native_claims.json" \
