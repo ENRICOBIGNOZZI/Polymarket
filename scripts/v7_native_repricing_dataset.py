@@ -99,6 +99,7 @@ def _source(path: Path, require_closed: bool) -> tuple[list[dict], dict]:
             if (row.get('schema') != 'polymarket_v7_native_observation_v1'
                     or row.get('paper_only') is not True or row.get('execution_authority') is not False):
                 raise ValueError('invalid record inside certified capture')
+            _integer(row.get('connection_epoch'), 1)
             observed = _integer(row.get('observed_monotonic_ns'), 1)
             if observed < previous_observed:
                 raise ValueError('capture observation clock moved backwards')
@@ -181,13 +182,22 @@ def build(paths: list[Path], *, require_closed: bool = False) -> tuple[list[dict
                 observed = _integer(row.get('observed_monotonic_ns'), 1)
                 capture = row.get('capture_id')
                 scope = (_identity(capture) if capture else 'UNIDENTIFIED_SOURCE:' + source['decoded_sha256'])
-                server = row.get('server_id') or 'UNIDENTIFIED_SERVER'
+                server = _identity(row['server_id']) if row.get('server_id') else 'UNIDENTIFIED_SERVER'
                 partition = (code, run, server, scope, market)
                 if kind == 5:
                     gaps[partition].append(observed)
                     continue
+                if kind not in {2, 6}:
+                    continue
+                if kind == 2 and (type(row.get('reason')) is not int or row['reason'] not in ORIGIN_REASONS):
+                    continue
+                if kind == 2 and row.get('repricing_origin_signal_version') in (None, 0):
+                    continue
                 version = _integer(row.get('repricing_origin_signal_version'), 1)
-                key = (*partition, version)
+                origin_decision = _integer(row.get('decision_monotonic_ns'), 1)
+                # The producer may reevaluate one signal repeatedly. A label
+                # belongs to the exact decision that started its window.
+                key = (*partition, version, origin_decision)
             except ValueError:
                 invalid += 1
                 continue
@@ -244,7 +254,7 @@ def build(paths: list[Path], *, require_closed: bool = False) -> tuple[list[dict
                     raise ValueError('target after market close')
                 if label.get('paper_terms_sha256') != origin.get('paper_terms_sha256'):
                     raise ValueError('market terms changed')
-                points = gaps[key[:-1]]
+                points = gaps[key[:-2]]
                 j = bisect_right(points, decision_ns)
                 if j < len(points) and points[j] <= observed_ns:
                     raise ValueError('book lineage gap')
@@ -296,6 +306,11 @@ def _publish(path: Path, text: str) -> None:
             stream.flush()
             os.fsync(stream.fileno())
         os.link(temporary, path)  # Atomic, never overwrite old evidence.
+        directory = os.open(path.parent, os.O_RDONLY)
+        try:
+            os.fsync(directory)
+        finally:
+            os.close(directory)
     finally:
         os.unlink(temporary)
 

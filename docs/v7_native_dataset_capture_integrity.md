@@ -10,6 +10,8 @@ The previous join used only run, market and signal version. The native writer
 already records capture, server and code identities. A restarted process can
 reuse a signal version. Joins now retain all those identities; unidentified
 legacy sources are isolated per input file rather than joined across files.
+Repeated evaluations of one signal retain the exact original decision timestamp;
+only the decision which started a label window may consume that label.
 
 Partial JSONL tails, duplicate JSON keys, nonfinite JSON, conflicting rows,
 duplicate source content and conflicting sealed-capture identities fail closed.
@@ -45,14 +47,14 @@ not cleared by this patch or by successful CI.
 
 ## Validation at development time
 
-The focused local suite contains 90 passing tests and 11 passing subtests:
-50 existing research-contract/dataset tests and 40 native-consumer cases.
+The focused local suite contains 93 passing tests and 11 passing subtests:
+50 existing research-contract/dataset tests and 43 native-consumer cases.
 Tests use deterministic synthetic fixtures, including the producer's real field
 names and closure format. This is not a live-capture validation claim.
 
 ```sh
 PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 python3 -m pytest -q \
-  tests/test_v7_native_repricing_dataset.py \
+  tests/test_v7_native_repricing*.py \
   tests/test_v7_research_economic_contract.py \
   tests/test_v7_research_causal_dataset.py
 ```
