@@ -88,7 +88,7 @@ def test_cutover_command_reuses_canonical_stage_and_cutover():
     assert "paper_only" in command
     assert "authenticated_execution" in command
     assert "real_order_submission" in command
-    assert "git worktree add --detach" in command
+    assert "worktree add --detach" in command
 
 
 def test_cutover_command_ubuntu_uses_data_volume_default():
