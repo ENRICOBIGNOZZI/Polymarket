@@ -336,8 +336,11 @@ def build(paths: list[Path], *, require_closed: bool = True) -> tuple[list[dict[
                         if residual:
                             status = "OPEN_RESIDUAL"
                             net_pnl = None
+                        elif filled < quantity:
+                            status = "PARTIAL_ENTRY_ROUND_TRIP"
+                            net_pnl = cash_delta
                         else:
-                            status = "COMPLETE"
+                            status = "FULL_ROUND_TRIP"
                             net_pnl = cash_delta
                     record = {
                         "schema": SCHEMA, "version": 1,
@@ -363,6 +366,7 @@ def build(paths: list[Path], *, require_closed: bool = True) -> tuple[list[dict[
                         "paper_terms_sha256": origin.get("paper_terms_sha256"),
                         "entry": entry, "exit": exit_result,
                         "status": status, "remaining_inventory_microunits": residual,
+                        "entry_unfilled_microunits": quantity - filled,
                         "cash_delta_usd": str(cash_delta),
                         "net_pnl_usd": str(net_pnl) if net_pnl is not None else None,
                         "origin_features": {
