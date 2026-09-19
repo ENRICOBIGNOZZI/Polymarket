@@ -91,11 +91,16 @@ private:
     [[nodiscard]] std::uint8_t fill_side_snapshot(
         Side side, DepthSummary& depth,
         std::array<PriceLevelE4, kHotDepthLevels>& output) const noexcept;
+    [[nodiscard]] bool hot_side_affected(Side side, std::int32_t price_e4) const noexcept;
+    void refresh_hot_side(Side side) noexcept;
+    void refresh_hot_metadata() noexcept;
+    void refresh_hot_full() noexcept;
 
-    std::array<std::int64_t, kCanonicalPriceSlots> bid_qty_{};
-    std::array<std::int64_t, kCanonicalPriceSlots> ask_qty_{};
-    std::array<std::uint64_t, kOccupancyWords> bid_occupied_{};
-    std::array<std::uint64_t, kOccupancyWords> ask_occupied_{};
+    // Keep the state touched on every delta together and ahead of the large
+    // direct-index quantity domains. hot_snapshot() becomes a bounded copy,
+    // while the ladder cache is refreshed only when a top-L10 mutation can
+    // actually change it.
+    BookHotSnapshot hot_cache_{};
     std::uint64_t state_version_ = 0;
     std::int64_t exchange_event_ns_ = 0;
     std::int64_t receive_monotonic_ns_ = 0;
@@ -103,6 +108,10 @@ private:
     std::int32_t best_bid_e4_ = 0;
     std::int32_t best_ask_e4_ = 0;
     bool lineage_continuous_ = false;
+    std::array<std::uint64_t, kOccupancyWords> bid_occupied_{};
+    std::array<std::uint64_t, kOccupancyWords> ask_occupied_{};
+    std::array<std::int64_t, kCanonicalPriceSlots> bid_qty_{};
+    std::array<std::int64_t, kCanonicalPriceSlots> ask_qty_{};
 };
 
 static_assert(std::is_trivially_copyable_v<PriceLevelE4>);
