@@ -99,16 +99,33 @@ class V7LivePaperValidationContractTest(unittest.TestCase):
             runtime,
         )
 
-    def test_deploy_is_manual_exact_sha_cutover_only(self) -> None:
+    def test_deploy_requires_explicit_exact_sha_cutover_approval(self) -> None:
         text = (ROOT / ".github/workflows/v7-deploy-paper-server.yml").read_text(encoding="utf-8")
+        push_validator = (ROOT / "scripts/v7_deploy_push_request.py").read_text(encoding="utf-8")
         for required in (
             "expected_sha:",
             "cutover_approved:",
             "inputs.cutover_approved == true",
-            "EXPECTED_DEPLOY_SHA: ${{ inputs.expected_sha }}",
+            "github.event_name == 'workflow_dispatch' && inputs.expected_sha || github.sha",
             "canonical main does not match the explicitly approved SHA",
+            "push:",
+            "branches: [main]",
+            "deploy/v7-paper-deploy-request.json",
+            "scripts/v7_deploy_push_request.py",
+            '--event-before "$PUSH_BEFORE_SHA"',
+            '--event-after "$GITHUB_SHA"',
         ):
             self.assertIn(required, text)
+        for required in (
+            "approval_commit_must_have_exactly_one_expected_parent",
+            "approval_commit_must_only_change_request_file",
+            "cutover_not_approved",
+            "paper_only_required",
+            "authenticated_execution_must_remain_false",
+            "real_order_submission_must_remain_false",
+            "GITHUB_PUSH_ONE_SHOT",
+        ):
+            self.assertIn(required, push_validator)
         for forbidden in ("schedule:", "workflow_run:", "github.event_name == 'schedule'"):
             self.assertNotIn(forbidden, text)
         self.assertIn('git show "$main_sha:scripts/v7_prepare_cutover_run_root.py" > "$archiver"', text)
