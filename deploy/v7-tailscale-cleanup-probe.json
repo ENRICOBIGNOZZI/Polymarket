@@ -1,0 +1,10 @@
+{
+  "final_host": "console.tailscale.com",
+  "final_path": "/admin/machines",
+  "login_success": true,
+  "machine_names": [],
+  "mfa_required": false,
+  "row_buttons": {},
+  "schema": "polymarket_v7_tailscale_cleanup_probe_v1",
+  "scope": "CI_EPHEMERAL_ONLY"
+}
