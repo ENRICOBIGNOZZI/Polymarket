@@ -21,9 +21,9 @@ PY
 [[ "$EXPECTED_SHA" =~ ^[0-9a-f]{40}$ ]] || { echo "exact 40-character SHA required" >&2; exit 78; }
 [[ "$(cat "$APP_DIR/deploy/london/runtime_sha" 2>/dev/null || true)" == "$EXPECTED_SHA" ]] || { echo "staged runtime SHA drift" >&2; exit 78; }
 
-# Native service managers must not turn an explicitly quarantined state into an
-# unbounded restart loop.  Exit successfully until an operator reconciles and
-# removes the quarantine status through the controlled deployment path.
+# A true safety quarantine remains operator-controlled. Restart-budget exhaustion
+# is different: the supervisor stays fail-closed through its bounded cooldown and
+# retries automatically when the exact-SHA window expires.
 if [[ -f "$STATUS" ]]; then
   state="$(python3 - "$STATUS" <<'PY'
 import json,sys
@@ -32,7 +32,7 @@ except Exception: print('')
 PY
 )"
   case "$state" in
-    quarantined|restart_budget_exhausted) exit 0 ;;
+    quarantined) exit 0 ;;
   esac
 fi
 

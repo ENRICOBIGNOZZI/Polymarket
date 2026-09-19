@@ -20,3 +20,23 @@ def test_bundle_builder_has_final_tree_forbidden_gate():
     assert 'London runtime source checkout is dirty' in source
     assert "git','-C',str(root),'show'" in source
     assert "'source_tree_verified':True" in source
+
+
+def test_london_retention_dependency_is_runtime_only():
+    entry=(ROOT/'monitoring/v7_london_buffer_retention.py').read_text()
+    runtime=(ROOT/'monitoring/v7_closed_tape_retention.py').read_text()
+    assert 'from v7_closed_tape_retention import compress_closed_cutover_tapes' in entry
+    assert 'v7_retention' not in entry
+    tree=ast.parse(runtime)
+    local_imports={
+        node.module.split('.')[0]
+        for node in ast.walk(tree)
+        if isinstance(node,ast.ImportFrom) and node.module
+    }
+    local_imports.update(
+        alias.name.split('.')[0]
+        for node in ast.walk(tree) if isinstance(node,ast.Import)
+        for alias in node.names
+    )
+    assert not ({'v7_lossless_data_compaction','v7_permanent_evidence','v7_aggregate_retention'} & local_imports)
+    assert 'research' not in local_imports

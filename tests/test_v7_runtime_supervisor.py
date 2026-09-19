@@ -16,6 +16,8 @@ def instance(restart_path: Path, expected_sha: str) -> supervisor.Supervisor:
     value.restart_path = restart_path
     value.expected_sha = expected_sha
     value.restart_window = 900
+    value.restart_maximum = 5
+    value.stopping = False
     return value
 
 
@@ -145,3 +147,28 @@ def test_external_fair_readiness_requires_complete_chain_and_two_books(tmp_path:
     assert not supervisor.external_fair_ready(tmp_path, sha, now=1_001)
     _write_external_state(tmp_path, sha, full=False)
     assert not supervisor.external_fair_ready(tmp_path, sha, now=1_001)
+
+
+def test_exhausted_restart_budget_has_bounded_exact_sha_cooldown(tmp_path: Path, monkeypatch) -> None:
+    path = tmp_path / "supervisor_restarts.json"
+    current = 10_000
+    monkeypatch.setattr(supervisor.time, "time", lambda: current)
+    path.write_text(json.dumps({
+        "schema": "polymarket_v7_supervisor_restarts_v1",
+        "expected_sha": "a" * 40,
+        "timestamps": [current - 899, current - 10, current - 5, current - 2, current],
+    }))
+    value = instance(path, "a" * 40)
+    times = value._restart_times()
+    assert len(times) == 5
+    assert value.restart_cooldown_seconds(times) == 2
+    monkeypatch.setattr(supervisor.time, "time", lambda: current + 2)
+    assert value._restart_times() == [current - 10, current - 5, current - 2, current]
+    assert value.restart_cooldown_seconds() == 0
+
+
+def test_service_entrypoint_auto_recovers_budget_but_not_safety_quarantine() -> None:
+    entrypoint = (ROOT / "ops/v7_service_entrypoint.sh").read_text()
+    assert 'quarantined) exit 0' in entrypoint
+    assert 'quarantined|restart_budget_exhausted) exit 0' not in entrypoint
+    assert 'restart_budget_cooldown' in (ROOT / "ops/v7_runtime_supervisor.py").read_text()

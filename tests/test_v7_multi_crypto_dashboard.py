@@ -15,8 +15,8 @@ class MultiCryptoDashboardTest(unittest.TestCase):
         self.assertIn("Multi-Crypto Performance", dashboard["title"])
         text = json.dumps(dashboard)
         for metric in (
-            "polymarket_mc_portfolio_equity_usd", "polymarket_mc_total_pnl_usd",
-            "polymarket_mc_realized_pnl_usd", "polymarket_mc_unrealized_pnl_usd",
+            "polymarket_mc_risk_equity_lower_bound_usd", "polymarket_mc_pnl_lower_bound_usd",
+            "polymarket_mc_realized_pnl_usd",
             "polymarket_mc_lane_realized_pnl_usd", "polymarket_mc_strategy_realized_pnl_usd",
             "polymarket_mc_attribution_status_code", "polymarket_mc_attribution_gap_usd",
             "polymarket_mc_lane_economic_evidence_present",
@@ -33,13 +33,26 @@ class MultiCryptoDashboardTest(unittest.TestCase):
         self.assertIn("N/A", text)
         self.assertNotIn("polymarket_runtime_pnl_usd", text)
         self.assertNotIn("polymarket_runtime_equity_usd", text)
+        self.assertNotIn("polymarket_mc_portfolio_equity_usd", text)
+        self.assertNotIn("polymarket_mc_total_pnl_usd", text)
+        self.assertNotIn("polymarket_mc_unrealized_pnl_usd", text)
+        self.assertNotIn("$instance", text)
 
     def test_equity_is_not_mixed_into_pnl_timeseries(self) -> None:
         dashboard = json.loads(DASHBOARD.read_text(encoding="utf-8"))
-        pnl_panel = next(p for p in dashboard["panels"] if p.get("title") == "Cumulative Multi-Crypto PnL")
+        pnl_panel = next(p for p in dashboard["panels"] if p.get("title") == "Verified PnL Bounds")
         expressions = [target.get("expr", "") for target in pnl_panel.get("targets", [])]
         self.assertTrue(all("pnl" in expr for expr in expressions))
         self.assertTrue(all("equity" not in expr for expr in expressions))
+
+    def test_blank_legacy_instance_url_cannot_hide_london_data(self) -> None:
+        dashboard = json.loads(DASHBOARD.read_text(encoding="utf-8"))
+        variables = {row["name"]: row for row in dashboard["templating"]["list"]}
+        self.assertNotIn("instance", variables)
+        text = json.dumps(dashboard)
+        self.assertNotIn('instance="$instance"', text)
+        expressions = [target.get("expr", "") for panel in dashboard["panels"] for target in panel.get("targets", [])]
+        self.assertTrue(any('instance=~".+"' in expr for expr in expressions))
 
     def test_asset_horizon_filters_cover_full_requested_universe(self) -> None:
         dashboard = json.loads(DASHBOARD.read_text(encoding="utf-8"))

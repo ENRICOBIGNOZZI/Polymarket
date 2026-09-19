@@ -100,14 +100,24 @@ def _family(event: Any) -> str:
     return _text(metadata.get("model_family")) or _text(event.strategy)
 
 
-def _economic_unit_id(event: Any, order_positions: dict[str, str] | None = None) -> str:
+def _economic_unit_id(
+    event: Any,
+    order_positions: dict[str, str] | None = None,
+    order_terminals: dict[str, str] | None = None,
+    position_terminals: dict[str, str] | None = None,
+) -> str:
     if _text(event.bundle_id):
         return f"bundle:{event.bundle_id}"
     order_id = _text(event.order_id)
+    position_id = _text(event.position_id)
+    if order_id and order_terminals and order_id in order_terminals:
+        return order_terminals[order_id]
+    if position_id and position_terminals and position_id in position_terminals:
+        return position_terminals[position_id]
     if order_id and order_positions and order_id in order_positions:
         return f"position:{order_positions[order_id]}"
-    if _text(event.position_id):
-        return f"position:{event.position_id}"
+    if position_id:
+        return f"position:{position_id}"
     if order_id:
         return f"order:{order_id}"
     if _text(event.candidate_id):
@@ -547,6 +557,52 @@ def _load_units(
            and event.metadata.get("causal_arrival_verified") is not True for event in events):
         global_reasons.append("native_paper_arrival_parity_unverified")
 
+    # Native PAPER settlement may close token-specific fill positions into one
+    # market-level terminal. The FINAL event carries the authoritative lineage
+    # of included order and position ids. Resolve those aliases first so a
+    # legitimate aggregate settlement is one economic unit, while retaining
+    # fail-closed behavior for genuinely conflicting order->position lineage.
+    order_terminals: dict[str, str] = {}
+    position_terminals: dict[str, str] = {}
+    conflicted_terminal_orders: set[str] = set()
+    conflicted_terminal_positions: set[str] = set()
+    for event in events:
+        if event.event_type != "FINAL" or event.metadata.get("projection_only") is True:
+            continue
+        metadata = event.metadata if isinstance(event.metadata, dict) else {}
+        terminal_id = _text(metadata.get("terminal_id"))
+        raw_order_ids = metadata.get("included_order_ids")
+        raw_position_ids = metadata.get("included_position_ids")
+        if not terminal_id or not isinstance(raw_order_ids, list) or not isinstance(raw_position_ids, list):
+            continue
+        terminal_unit = f"terminal:{terminal_id}"
+        included_orders = {_text(value) for value in raw_order_ids if _text(value)}
+        included_positions = {_text(value) for value in raw_position_ids if _text(value)}
+        own_order_id = _text(event.order_id)
+        own_position_id = _text(event.position_id)
+        if own_order_id:
+            included_orders.add(own_order_id)
+        if own_position_id:
+            included_positions.add(own_position_id)
+        for order_id in included_orders:
+            previous = order_terminals.get(order_id)
+            if previous is not None and previous != terminal_unit:
+                conflicted_terminal_orders.add(order_id)
+                continue
+            order_terminals[order_id] = terminal_unit
+        for position_id in included_positions:
+            previous = position_terminals.get(position_id)
+            if previous is not None and previous != terminal_unit:
+                conflicted_terminal_positions.add(position_id)
+                continue
+            position_terminals[position_id] = terminal_unit
+    for order_id in conflicted_terminal_orders:
+        order_terminals.pop(order_id, None)
+        global_reasons.append(f"order_terminal_identity_conflict:{order_id}")
+    for position_id in conflicted_terminal_positions:
+        position_terminals.pop(position_id, None)
+        global_reasons.append(f"position_terminal_identity_conflict:{position_id}")
+
     # A submitted order does not necessarily know its eventual position id,
     # while its FILL and FINAL do. Resolve that canonical relationship in a
     # first pass so one economic trade cannot be split into an order unit and
@@ -556,7 +612,7 @@ def _load_units(
     for event in events:
         order_id = _text(event.order_id)
         position_id = _text(event.position_id)
-        if not order_id or not position_id:
+        if not order_id or not position_id or order_id in order_terminals:
             continue
         previous = order_positions.get(order_id)
         if previous is not None and previous != position_id:
@@ -568,7 +624,9 @@ def _load_units(
         global_reasons.append(f"order_position_identity_conflict:{order_id}")
 
     for event in events:
-        unit_id = _economic_unit_id(event, order_positions)
+        unit_id = _economic_unit_id(
+            event, order_positions, order_terminals, position_terminals,
+        )
         metadata = event.metadata if isinstance(event.metadata, dict) else {}
         if unit_id and metadata.get("native_settlement_receipt"):
             unit_id += ":component:" + _family(event)

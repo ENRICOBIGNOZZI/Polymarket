@@ -154,7 +154,14 @@ bool CanonicalL2Book::replace_snapshot(std::span<const PriceLevelE4> bids,
     for (const auto& level : asks) set_raw(Side::Sell, level.price_e4, level.quantity_microunits);
     best_bid_e4_ = best_bid();
     best_ask_e4_ = best_ask();
-    if (best_bid_e4_ <= 0 || best_ask_e4_ <= 0 || best_bid_e4_ >= best_ask_e4_) {
+    // A public prediction-market book can legitimately become one-sided near
+    // settlement. Preserve its causal lineage so later deltas can restore the
+    // missing side. It is still non-executable: hot_snapshot().valid requires
+    // both sides. Empty or crossed snapshots remain corrupt and fail closed.
+    const bool empty = best_bid_e4_ <= 0 && best_ask_e4_ <= 0;
+    const bool crossed = best_bid_e4_ > 0 && best_ask_e4_ > 0
+        && best_bid_e4_ >= best_ask_e4_;
+    if (empty || crossed) {
         clear_levels();
         lineage_continuous_ = false;
         exchange_event_ns_ = 0;
