@@ -236,6 +236,8 @@ jobs:
           probe_rc=${probe_rc:-0}
           git add "$PROBE_PATH"
           git commit -m "ops(v7): publish sanitized Tailscale CI cleanup probe [skip ci]"
+          git fetch --quiet origin "$BRIDGE_BRANCH"
+          git rebase "origin/$BRIDGE_BRANCH"
           git push origin "HEAD:$BRIDGE_BRANCH"
           exit "$probe_rc"
 
@@ -320,6 +322,8 @@ jobs:
           python3 "$RUNNER_TEMP/remove.py"
           git add "$RECEIPT_PATH"
           git commit -m "ops(v7): publish Tailscale CI cleanup receipt [skip ci]"
+          git fetch --quiet origin "$BRIDGE_BRANCH"
+          git rebase "origin/$BRIDGE_BRANCH"
           git push origin "HEAD:$BRIDGE_BRANCH"
 
       - name: Clear login environment
