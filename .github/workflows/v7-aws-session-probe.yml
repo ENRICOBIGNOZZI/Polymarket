@@ -1,0 +1,62 @@
+name: V7 encrypted AWS session probe
+
+on:
+  push:
+    branches:
+      - ops/v7-aws-envelope-probe-20260920
+    paths:
+      - .github/workflows/v7-aws-session-probe.yml
+      - scripts/v7_decrypt_aws_session_envelope.py
+      - deploy/v7-aws-session-envelope.json
+
+permissions:
+  contents: read
+
+jobs:
+  probe:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 8
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+      - name: Decrypt envelope without logging credentials
+        id: decrypt
+        shell: bash
+        env:
+          SSH_PRIVATE_KEY: ${{ secrets.POLYMARKET_SERVER_SSH_KEY }}
+        run: |
+          set -euo pipefail
+          test -n "${SSH_PRIVATE_KEY:-}"
+          python3 -c 'import cryptography'
+          key="$RUNNER_TEMP/deploy_key"
+          umask 077
+          printf '%s\n' "$SSH_PRIVATE_KEY" > "$key"
+          chmod 600 "$key"
+          python3 scripts/v7_decrypt_aws_session_envelope.py             --envelope deploy/v7-aws-session-envelope.json             --ssh-private-key "$key"             --github-env "$GITHUB_ENV"             --github-output "$GITHUB_OUTPUT"
+          rm -f "$key"
+      - name: Verify short-lived AWS session
+        if: steps.decrypt.outputs.ready == 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+          command -v aws >/dev/null 2>&1
+          identity="$(aws sts get-caller-identity --region eu-west-2 --output json)"
+          IDENTITY_JSON="$identity" python3 - <<'PY'
+          import json,os
+          v=json.loads(os.environ['IDENTITY_JSON'])
+          assert v.get('Account') == '350769147128'
+          assert str(v.get('Arn') or '')
+          print('V7_AWS_SESSION_VALID=true')
+          print('V7_AWS_ACCOUNT='+v['Account'])
+          PY
+          stack="$(aws cloudformation describe-stacks --region eu-west-2             --stack-name polymarket-v7-london-shootout --output json)"
+          STACK_JSON="$stack" python3 - <<'PY'
+          import json,os
+          v=json.loads(os.environ['STACK_JSON'])
+          stacks=v.get('Stacks') or []
+          assert len(stacks)==1
+          out={x.get('OutputKey'):x.get('OutputValue') for x in stacks[0].get('Outputs') or []}
+          ids=[out.get(k) for k in ('InstanceAz1','InstanceAz2','InstanceAz3')]
+          assert all(isinstance(x,str) and x.startswith('i-') for x in ids)
+          print('V7_LONDON_STACK_VISIBLE=true')
+          print('V7_LONDON_INSTANCE_COUNT=3')
+          PY
