@@ -74,8 +74,10 @@ class LondonOffloadCopyTests(unittest.TestCase):
             partial = raw / '.rsync-partial'; partial.mkdir(); (partial / 'x.segment-000001.bin').write_bytes(b'partial')
             (raw / 'link.segment-000001.bin').symlink_to(closed)
             result_path = root / 'receipt.json'
-            result = subprocess.run(['python3', '-', str(root), 'fixture-host', str(result_path)],
-                                    input=code, text=True, capture_output=True)
+            result = subprocess.run([
+                'python3', '-', str(root), 'fixture-host', str(result_path),
+                str(ROOT / 'config/v7_london_buffer_retention.json'),
+            ], input=code, text=True, capture_output=True)
             self.assertEqual(result.returncode, 0, result.stderr)
             receipt = json.loads(result_path.read_text())
             self.assertEqual([f['path'] for f in receipt['files']], [str(closed.relative_to(current))])

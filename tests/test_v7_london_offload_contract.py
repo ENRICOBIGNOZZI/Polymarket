@@ -11,12 +11,12 @@ def config(): return json.loads((ROOT/'config/v7_london_buffer_retention.json').
 
 def test_no_verified_offload_means_no_delete():
     with tempfile.TemporaryDirectory() as d:
-        root=Path(d);p=root/'external_fair/raw/x.bin.segment-1';p.parent.mkdir(parents=True);p.write_bytes(b'x'*1024)
+        root=Path(d);p=root/'external_fair/raw/x.segment-000001.bin';p.parent.mkdir(parents=True);p.write_bytes(b'x'*1024)
         v=run(root,config());assert v['state']=='NO_VERIFIED_OFFLOAD';assert p.exists()
 
 def test_only_exact_hash_synced_closed_segment_can_be_deleted():
     with tempfile.TemporaryDirectory() as d:
-        root=Path(d);p=root/'external_fair/raw/x.bin.segment-1';p.parent.mkdir(parents=True);p.write_bytes(b'x'*1024)
+        root=Path(d);p=root/'external_fair/raw/x.segment-000001.bin';p.parent.mkdir(parents=True);p.write_bytes(b'x'*1024)
         old=time.time()-7200;p.touch();import os;os.utime(p,(old,old))
         c=config();c['target_managed_bytes']=1;c['maximum_managed_bytes']=10_000
         receipt=root/'control/research_offload_receipt.json';receipt.parent.mkdir(parents=True)

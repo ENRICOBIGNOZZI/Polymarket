@@ -77,3 +77,25 @@ def test_cutover_parses_systemd_environment_with_shlex_not_broken_tr_escape():
     assert 'python3 -c \'import shlex,sys;' in s
     assert 'x.startswith("PM_V7_RUN_ROOT=")' in s
     assert "tr ' ' '\\\\n'" not in s
+
+
+def test_linux_runtime_pins_artifacts_to_exact_sha_generation():
+    unit=(ROOT/'ops/systemd/polymarket-v7-paper.service.in').read_text()
+    cutover=(ROOT/'ops/v7_london_cutover.sh').read_text()
+    deploy=(ROOT/'.github/workflows/v7-deploy-paper-server.yml').read_text()
+
+    exact='Environment=PM_V7_RUNTIME_ARTIFACT_ROOT=/home/@SERVICE_USER@/polymarket-artifacts/by-sha/@EXPECTED_SHA@'
+    assert exact in unit
+    assert 'PM_V7_RUNTIME_ARTIFACT_ROOT=/home/@SERVICE_USER@/polymarket-artifacts/current' not in unit
+    assert 'TARGET_ARTIFACT="$ARTIFACT_ROOT/by-sha/$EXPECTED_SHA"' in cutover
+    assert 'python3 - "$TARGET_ARTIFACT/manifest.json" "$EXPECTED_SHA"' in cutover
+
+    stop=cutover.index('systemctl stop polymarket-v7-exporter.service polymarket-v7-paper.service')
+    start=cutover.index('systemctl enable --now polymarket-v7-paper.service')
+    scrape=cutover.index('Prometheus is not scraping the V7 exporter')
+    advance=cutover.index('ln -sfn "by-sha/$EXPECTED_SHA" "$ARTIFACT_CURRENT"')
+    assert stop < start < scrape < advance
+
+    # The deploy workflow may stage by-sha artifacts, but must not move the
+    # shared convenience pointer before the exact-SHA cutover has succeeded.
+    assert "ln -sfn 'by-sha/$deploy_sha' \\$HOME/polymarket-artifacts/current" not in deploy

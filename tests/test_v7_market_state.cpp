@@ -104,6 +104,37 @@ void test_replacing_snapshot_clears_only_previous_occupied_levels() {
     assert(hot.best_ask_e4 == 5100);
 }
 
+void test_one_sided_snapshot_preserves_lineage_but_is_not_executable() {
+    const std::array<pm::v7::PriceLevelE4, 0> empty{};
+    const std::array<pm::v7::PriceLevelE4, 1> bids{{{4800, 1'000'000}}};
+    const std::array<pm::v7::PriceLevelE4, 1> asks{{{5200, 2'000'000}}};
+
+    pm::v7::CanonicalL2Book bid_only(100);
+    assert(bid_only.replace_snapshot(bids, empty, 100, 1000));
+    auto hot = bid_only.hot_snapshot();
+    assert(hot.lineage_continuous);
+    assert(!hot.valid);
+    assert(hot.best_bid_e4 == 4800);
+    assert(hot.best_ask_e4 == 0);
+    assert(bid_only.mutate_level(pm::v7::Side::Sell, 5200, 2'000'000, 101, 1001));
+    hot = bid_only.hot_snapshot();
+    assert(hot.valid && hot.lineage_continuous);
+
+    pm::v7::CanonicalL2Book ask_only(100);
+    assert(ask_only.replace_snapshot(empty, asks, 200, 2000));
+    hot = ask_only.hot_snapshot();
+    assert(hot.lineage_continuous);
+    assert(!hot.valid);
+    assert(hot.best_bid_e4 == 0);
+    assert(hot.best_ask_e4 == 5200);
+    assert(ask_only.mutate_level(pm::v7::Side::Buy, 4800, 1'000'000, 201, 2001));
+    assert(ask_only.hot_snapshot().valid);
+
+    pm::v7::CanonicalL2Book empty_book(100);
+    assert(!empty_book.replace_snapshot(empty, empty, 300, 3000));
+    assert(!empty_book.lineage_continuous());
+}
+
 void test_crossed_or_off_tick_updates_fail_closed() {
     pm::v7::CanonicalL2Book book(100);
     const std::array<pm::v7::PriceLevelE4, 1> bids{{{4800, 1'000'000}}};
@@ -172,6 +203,7 @@ int main() {
     test_hot_l10_ladder_is_ordered_bounded_and_updates();
     test_delete_best_uses_occupancy_index_without_sorting();
     test_replacing_snapshot_clears_only_previous_occupied_levels();
+    test_one_sided_snapshot_preserves_lineage_but_is_not_executable();
     test_crossed_or_off_tick_updates_fail_closed();
     test_tick_change_requires_existing_levels_to_remain_valid();
     test_receive_clock_cannot_go_backwards();

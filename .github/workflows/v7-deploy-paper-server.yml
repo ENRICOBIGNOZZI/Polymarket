@@ -215,7 +215,6 @@ jobs:
               rsync -a --delete                 -e "ssh -i $HOME/.ssh/polymarket_deploy -o IdentitiesOnly=yes -o BatchMode=yes -p $SERVER_PORT"                 "$artifact_root/by-sha/$deploy_sha/" "$SERVER_USER@$SERVER_HOST:~/$remote_tmp/"
               ssh "${ssh_common[@]}" "$SERVER_USER@$SERVER_HOST"                 "set -e; rm -rf \$HOME/polymarket-artifacts/by-sha/$deploy_sha; mv \$HOME/$remote_tmp \$HOME/polymarket-artifacts/by-sha/$deploy_sha"
             fi
-            ssh "${ssh_common[@]}" "$SERVER_USER@$SERVER_HOST"               "mkdir -p \$HOME/polymarket-artifacts; ln -sfn 'by-sha/$deploy_sha' \$HOME/polymarket-artifacts/current"
           fi
 
           set +e

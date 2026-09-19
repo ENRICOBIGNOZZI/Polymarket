@@ -8,6 +8,8 @@ RUNTIME_ROOT="${POLYMARKET_RUNTIME_ROOT:-/home/$SERVICE_USER/polymarket-runtime}
 RUNTIME_CURRENT="$RUNTIME_ROOT/current"
 TARGET_RUNTIME="$RUNTIME_ROOT/by-sha/$EXPECTED_SHA"
 ARTIFACT_ROOT="${POLYMARKET_ARTIFACT_ROOT:-/home/$SERVICE_USER/polymarket-artifacts}"
+TARGET_ARTIFACT="$ARTIFACT_ROOT/by-sha/$EXPECTED_SHA"
+ARTIFACT_CURRENT="$ARTIFACT_ROOT/current"
 RUN_ROOT="${PM_V7_RUN_ROOT:-/home/$SERVICE_USER/polymarket-runs/paper_v7_london}"
 ARCHIVE_ROOT="${PM_V7_ARCHIVE_ROOT:-/home/$SERVICE_USER/polymarket-runs/paper_v7_london_archives}"
 
@@ -24,7 +26,7 @@ python3 "$TARGET_RUNTIME/ops/verify_v7_native_critical_path.py" \
   --policy "$TARGET_RUNTIME/config/v7_native_critical_path_policy.json" \
   --manifest "$TARGET_RUNTIME/config/v7_process_manifest.json"
 
-python3 - "$ARTIFACT_ROOT/current/manifest.json" "$EXPECTED_SHA" <<'PY'
+python3 - "$TARGET_ARTIFACT/manifest.json" "$EXPECTED_SHA" <<'PY'
 import json,sys
 from pathlib import Path
 p=Path(sys.argv[1]); sha=sys.argv[2]
@@ -75,6 +77,20 @@ fi
 python3 "$SOURCE_DIR/scripts/v7_prepare_cutover_run_root.py" "${prepare_args[@]}"
 SERVICE_GROUP="$(id -gn "$SERVICE_USER")"
 install -d -o "$SERVICE_USER" -g "$SERVICE_GROUP" "$RUN_ROOT" "$RUN_ROOT/control"
+
+# Shell redirections are opened by this root control-plane shell before sudo
+# changes the Python process user. Pre-create every shared log with the runtime
+# owner, or the later service restart cannot append under UMask=0077.
+for runtime_log in "$RUN_ROOT/legacy_native_claims.log" "$RUN_ROOT/legacy_native_reconciliation.log"; do
+  [[ ! -L "$runtime_log" ]] || { echo "unsafe legacy runtime log symlink: $runtime_log" >&2; exit 78; }
+  if [[ -e "$runtime_log" ]]; then
+    [[ -f "$runtime_log" ]] || { echo "unsafe legacy runtime log type: $runtime_log" >&2; exit 78; }
+    chown "$SERVICE_USER:$SERVICE_GROUP" "$runtime_log"
+    chmod 0600 "$runtime_log"
+  else
+    install -o "$SERVICE_USER" -g "$SERVICE_GROUP" -m 0600 /dev/null "$runtime_log"
+  fi
+done
 
 # Reconcile historical PAPER native claims in the cutover control plane, before
 # the current run's ledger writer starts. Anything unresolved remains reserved
@@ -176,4 +192,10 @@ if pgrep -af 'v7_(external_rich_train|external_residual_train|maker_durable_lear
   exit 71
 fi
 rm -f /tmp/polymarket-v7-forbidden-processes
+
+# `current` is a convenience pointer for research/control-plane consumers only.
+# The service itself is pinned to by-sha/$EXPECTED_SHA, so moving this pointer
+# can never invalidate or prevent restart of an older active generation.
+ln -sfn "by-sha/$EXPECTED_SHA" "$ARTIFACT_CURRENT"
+[[ "$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["target_model_sha"])' "$ARTIFACT_CURRENT/manifest.json")" == "$EXPECTED_SHA" ]]
 printf 'cutover_result=success\nsha=%s\nruntime=%s\nrun_root=%s\n' "$EXPECTED_SHA" "$RUNTIME_CURRENT" "$RUN_ROOT"

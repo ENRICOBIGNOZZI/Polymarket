@@ -598,6 +598,15 @@ public:
 
     void on_reconnect() {
         decoder_->invalidate_all_lineage();
+        // A transport reconnect may cross a venue tick-size transition. The
+        // in-memory bindings were created from the pre-reconnect cold-start
+        // books, so accepting later snapshots against those stale ticks can
+        // invalidate every update for the affected contract. Force the outer
+        // loop to rebuild all bindings from authoritative current CLOB books.
+        root_lineage_recovery_requested_.store(true, std::memory_order_release);
+        if (!lineage_recovery_requested_.exchange(true, std::memory_order_acq_rel)) {
+            lineage_recovery_requests_.fetch_add(1, std::memory_order_relaxed);
+        }
         connection_epoch_.fetch_add(1, std::memory_order_relaxed);
         reconnects_.fetch_add(1, std::memory_order_relaxed);
         for (std::size_t i=1; i<lanes_.size(); ++i) {
@@ -912,7 +921,11 @@ private:
         const bool valid = row.book.valid && row.book.lineage_continuous
             && dropped_.load(std::memory_order_relaxed) == 0
             && decoder_failures_.load(std::memory_order_relaxed) == 0;
-        if (row.book.valid && row.book.lineage_continuous) {
+        // Coverage means that the subscribed token delivered a causally
+        // continuous book. A legitimate one-sided near-settlement book is
+        // observed but not executable: row.valid remains false until both
+        // sides are present and uncrossed.
+        if (row.book.lineage_continuous) {
             if (row.instrument_handle < book_token_seen_.size()) {
                 book_token_seen_[row.instrument_handle] = 1;
             }
