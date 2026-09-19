@@ -66,23 +66,30 @@ int main() {
         assert(u64(reset_flow.at("rows").as_array().front().as_object().at("sell_prints_120s")) == 0);
         send(snapshot(1'700'000'001'300), 1300);
         assert(!observer.lineage_recovery_requested());
+        assert(!observer.root_lineage_recovery_requested());
         send(R"({"event_type":"price_change","timestamp":1700000001400,"price_changes":[{"asset_id":"yes","side":"SELL","price":"0.47","size":"1"}]})", 1400);
         assert(observer.lineage_recovery_requested());
+        assert(!observer.root_lineage_recovery_requested());
         assert(observer.lineage_recovery_requests() == 1);
         send(R"({"event_type":"price_change","timestamp":1700000001500,"price_changes":[{"asset_id":"yes","side":"BUY","price":"0.48","size":"1"}]})", 1500);
         assert(observer.lineage_recovery_requests() == 1);
+        assert(!observer.root_lineage_recovery_requested());
         const auto reset = read_last(directory / "book_observations" / "current.jsonl");
         assert(!reset.at("features_valid").as_bool());
         assert(reset.at("public_trade").is_null());
         assert(reset.at("connection_epoch").as_int64() == 2);
         send(snapshot(1'700'000'001'600), 1600);
         assert(!observer.lineage_recovery_requested());
+        assert(!observer.root_lineage_recovery_requested());
         assert(observer.lineage_recovery_requests() == 1);
-        // An ordinary snapshot may restore lineage, never lost-frame evidence.
+        // An ordinary snapshot may restore token-local lineage, never a
+        // process-global lost/corrupt-frame condition.
         send("{invalid-json", 1700);
         assert(observer.lineage_recovery_requested());
+        assert(observer.root_lineage_recovery_requested());
         send(snapshot(1'700'000'001'800), 1800);
         assert(observer.lineage_recovery_requested());
+        assert(observer.root_lineage_recovery_requested());
         observer.stop();
     }
     {
