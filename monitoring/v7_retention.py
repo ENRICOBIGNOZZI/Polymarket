@@ -381,12 +381,68 @@ def compact_cutover_archives(
 
 
 
-def _tape_file_closed(path: Path) -> bool:
+def _open_regular_file_identities() -> set[tuple[int, int]] | None:
+    """Take one fail-closed snapshot instead of spawning lsof per segment."""
+    import stat
     import subprocess
+
+    proc = Path("/proc")
+    if proc.is_dir():
+        identities: set[tuple[int, int]] = set()
+        scanned = False
+        for process in proc.iterdir():
+            if not process.name.isdigit():
+                continue
+            descriptors = process / "fd"
+            try:
+                entries = list(descriptors.iterdir())
+                scanned = True
+            except (FileNotFoundError, PermissionError, ProcessLookupError):
+                continue
+            for descriptor in entries:
+                try:
+                    info = descriptor.stat()
+                except (FileNotFoundError, PermissionError, ProcessLookupError, OSError):
+                    continue
+                if stat.S_ISREG(info.st_mode):
+                    identities.add((info.st_dev, info.st_ino))
+        if scanned:
+            return identities
+
     binary = shutil.which("lsof")
-    if binary is None: return False
-    result = subprocess.run([binary, "-t", "--", str(path)], text=True, capture_output=True, timeout=10)
-    return result.returncode == 1 and not result.stdout.strip()
+    if binary is None:
+        return None
+    try:
+        result = subprocess.run(
+            [binary, "-nP", "-a", "-u", str(os.getuid()), "-Fn"],
+            text=True, capture_output=True, timeout=30,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return None
+    if result.returncode not in (0, 1):
+        return None
+    identities: set[tuple[int, int]] = set()
+    for line in result.stdout.splitlines():
+        if not line.startswith("n/"):
+            continue
+        try:
+            info = Path(line[1:]).stat()
+        except (FileNotFoundError, PermissionError, OSError):
+            continue
+        if stat.S_ISREG(info.st_mode):
+            identities.add((info.st_dev, info.st_ino))
+    return identities
+
+
+def _tape_file_closed(path: Path, open_identities: set[tuple[int, int]] | None = None) -> bool:
+    snapshot = _open_regular_file_identities() if open_identities is None else open_identities
+    if snapshot is None:
+        return False
+    try:
+        info = path.stat()
+    except OSError:
+        return False
+    return (info.st_dev, info.st_ino) not in snapshot
 
 
 def _tape_identity(path: Path):
@@ -503,6 +559,12 @@ def compress_closed_cutover_tapes(archive_root: Path, *, now: int, dry_run: bool
         shared_aliases = _shared_pack_aliases(permanent_store_root, relevant_aliases)
         result["shared_alias_candidates"] = len(relevant_aliases)
         result["verified_shared_aliases"] = len(shared_aliases)
+        open_identities = _open_regular_file_identities()
+        result["open_file_snapshot_verified"] = open_identities is not None
+        result["open_regular_file_count"] = len(open_identities or ())
+        if open_identities is None:
+            result["failures"].append({"source": "*", "reason": "open_file_snapshot_unavailable"})
+            return result
         for archive, active_scope in scopes:
             relative_root = archive if active_scope else root
             for folder, suffix in _closed_tape_locations(archive):
@@ -522,7 +584,7 @@ def compress_closed_cutover_tapes(archive_root: Path, *, now: int, dry_run: bool
                         minimum_age = active_minimum_age_seconds if active_scope else minimum_age_seconds
                         if now - source.stat().st_mtime < minimum_age:
                             result["skipped"].append({"path": str(source), "reason": "recent"}); continue
-                        if not _tape_file_closed(source):
+                        if not _tape_file_closed(source, open_identities):
                             result["skipped"].append({"path": str(source), "reason": "open_or_unverifiable"}); continue
                         target = source.with_name(source.name + ".gz")
                         if target.is_symlink(): raise ValueError("archive target is symlink")
@@ -547,7 +609,7 @@ def compress_closed_cutover_tapes(archive_root: Path, *, now: int, dry_run: bool
                             with source.open("rb") as handle:
                                 while block := handle.read(1024*1024): digest.update(block); size += len(block)
                         if _gzip_digest(target) != (digest.hexdigest(), size) or size != before[2]: raise ValueError("existing tape archive mismatch")
-                        if _tape_identity(source) != before or not _tape_file_closed(source): raise ValueError("tape changed or opened before retirement")
+                        if _tape_identity(source) != before or not _tape_file_closed(source, open_identities): raise ValueError("tape changed or opened before retirement")
                         manifest = archive / "lossless_compression_manifest.jsonl"
                         if manifest.is_symlink(): raise ValueError("unsafe tape manifest")
                         row = {"source": str(source.relative_to(relative_root)), "archive": str(target.relative_to(relative_root)),
