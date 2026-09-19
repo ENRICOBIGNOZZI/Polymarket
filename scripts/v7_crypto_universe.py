@@ -591,13 +591,22 @@ def persist(output_dir: Path, snapshot: dict[str, Any], previous: dict[str, Any]
 
     selection, selection_blocker = build_book_selection(snapshot)
     selection_path = output_dir / "book_selection.json"
+    prior_selection = _load_json(selection_path)
     if selection is not None:
-        _atomic_json(selection_path, selection)
+        selection_unchanged = (
+            prior_selection.get("schema") == BOOK_SELECTION_SCHEMA
+            and prior_selection.get("model_sha") == selection.get("model_sha")
+            and prior_selection.get("generation_sha256") == selection.get("generation_sha256")
+            and prior_selection.get("paper_only") is True
+            and prior_selection.get("execution_authority") is False
+            and prior_selection.get("selection_only") is True
+        )
+        if not selection_unchanged:
+            _atomic_json(selection_path, selection)
         selection_state = "READY"
         selection_contexts = int(selection["market_count"])
         selection_tokens = int(selection["token_count"])
     else:
-        prior_selection = _load_json(selection_path)
         prior_safe = (
             prior_selection.get("schema") == BOOK_SELECTION_SCHEMA
             and prior_selection.get("model_sha") == snapshot.get("model_sha")
