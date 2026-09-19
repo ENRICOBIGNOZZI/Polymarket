@@ -45,8 +45,26 @@ jobs:
         shell: bash
         env:
           CHROME_BIN: /usr/bin/google-chrome
-          V7_TS_HEADED: "true"
+          V7_TS_CDP_URL: http://127.0.0.1:9222
         run: |
           set -euo pipefail
           command -v Xvfb >/dev/null 2>&1
-          xvfb-run -a node scripts/v7_tailscale_console_probe.mjs
+          export DISPLAY=:99
+          Xvfb :99 -screen 0 1440x1000x24 >/tmp/v7-xvfb.log 2>&1 &
+          xvfb_pid=$!
+          profile="$RUNNER_TEMP/v7-standard-chrome"
+          mkdir -p "$profile"
+          google-chrome             --remote-debugging-port=9222             --user-data-dir="$profile"             --no-first-run             --no-default-browser-check             --disable-dev-shm-usage             about:blank >/tmp/v7-chrome.log 2>&1 &
+          chrome_pid=$!
+          cleanup() { kill "$chrome_pid" "$xvfb_pid" >/dev/null 2>&1 || true; }
+          trap cleanup EXIT
+          ready=0
+          for _ in $(seq 1 50); do
+            if curl -fsS http://127.0.0.1:9222/json/version >/dev/null 2>&1; then
+              ready=1
+              break
+            fi
+            sleep 0.1
+          done
+          test "$ready" = 1
+          node scripts/v7_tailscale_console_probe.mjs
