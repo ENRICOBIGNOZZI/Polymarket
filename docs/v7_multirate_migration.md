@@ -71,3 +71,12 @@ Multiple incompatible alpha candidates still fail closed until scores are on a
 validated common economic scale. This migration does not claim a learned optimal
 Q controller, positive expected profit, measured exchange latency or production
 cutover. Compiler/runtime tests are distinct from exact-SHA London qualification.
+
+## Reproducible compute-only benchmark
+
+`polymarket_v7_multirate_bench` compares the native rule candidate with and
+without bounded context consumption/freshness validation over 100,000 synthetic
+admissible evaluations per path after warmup. It reports p50/p99/max and accepted
+counts. This is not an end-to-end exchange, loaded prediction-model, representative
+market-replay, fill, or PnL benchmark. The executable is excluded from the minimal
+London runtime build. Scheduler tails are reported rather than hidden.

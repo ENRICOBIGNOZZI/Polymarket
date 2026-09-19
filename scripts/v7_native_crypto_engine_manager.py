@@ -1128,7 +1128,7 @@ class Manager:
                     self.run_root, code_sha=self.args.model_sha,
                     run_id=self.args.run_id, markets=targets)
                 self.slow_context_error = ""
-            except (OSError, ValueError, TypeError) as exc:
+            except (OSError, ValueError, TypeError, AttributeError, KeyError, OverflowError) as exc:
                 self.slow_context_failures += 1
                 self.slow_context_error = type(exc).__name__
 

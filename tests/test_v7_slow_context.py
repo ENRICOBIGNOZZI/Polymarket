@@ -74,3 +74,22 @@ def test_publication_has_no_execution_or_path_authority(tmp_path):
     assert target.parent==tmp_path/'control'/'slow_context'
     assert json.loads(target.read_text())['fields']==dict.fromkeys(FIELDS)
     assert not (tmp_path/'ledger').exists()
+
+
+def test_malformed_optional_subtrees_remain_unavailable():
+    for bad in (True, 3, 'invalid', ['invalid'], {'unexpected': True}):
+        source=ext();source['derivative_contexts']=bad
+        source['return_history_available']=bad
+        result=build(source)
+        assert result['fields']['binance_open_interest'] is None
+        oracle={'code_sha':'a'*40,'market':bad,'contract':bad}
+        assert build(oracle=oracle)['fields']['oracle_value'] is None
+    source=ext();source['derivative_contexts']=[None,True,{}, {'venue':[]}]
+    assert build(source)['fields']['binance_open_interest'] is None
+
+
+def test_clocks_and_source_versions_require_exact_integers():
+    for key in ('price_inputs_receive_monotonic_ns','state_version'):
+        for bad in (100.25,'100',True,None):
+            source=ext();source[key]=bad
+            assert build(source)['fields']['spot_composite'] is None

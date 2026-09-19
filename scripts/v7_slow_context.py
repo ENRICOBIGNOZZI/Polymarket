@@ -32,6 +32,10 @@ def read_json(path: Path) -> dict[str, Any]:
 def build_context(external: dict[str, Any], oracle_status: dict[str, Any], *,
                   code_sha: str, run_id: str, market: dict[str, Any],
                   now_ns: int, wall_ns: int) -> dict[str, Any]:
+    def obj(value):
+        return value if isinstance(value, dict) else {}
+
+    external, oracle_status = obj(external), obj(oracle_status)
     asset, horizon = str(market.get('asset') or ''), str(market.get('horizon') or '')
     market_id = str(market.get('market_id') or '')
     fields: dict[str, Any] = dict.fromkeys(FIELDS)
@@ -39,7 +43,9 @@ def build_context(external: dict[str, Any], oracle_status: dict[str, Any], *,
     def put(name: str, value: Any, receive: Any, version: Any, ttl: int,
             *, expiry: int | None = None, source: str) -> None:
         # Boolean values, missing clocks and stale values are not zero observations.
-        if isinstance(value, bool) or isinstance(receive, bool) or isinstance(version, bool):
+        if (isinstance(value, bool) or not isinstance(receive, int)
+                or isinstance(receive, bool) or not isinstance(version, int)
+                or isinstance(version, bool)):
             return
         try:
             v, r, seq = float(value), int(receive), int(version)
@@ -68,12 +74,15 @@ def build_context(external: dict[str, Any], oracle_status: dict[str, Any], *,
                               ('dispersion_bps', 'dispersion_bps')]:
                 put(name, external.get(key), receive, version, 1_000_000_000,
                     expiry=expiry, source='CAUSAL_SPOT_COMPOSITE')
-            history = external.get('return_history_available') or {}
+            history = obj(external.get('return_history_available'))
             if history.get('5s') is True:
                 put('return_5s', external.get('return_5s'), receive, version,
                     1_000_000_000, expiry=expiry, source='CAUSAL_SPOT_COMPOSITE')
     if safe:
-        for derivative in external.get('derivative_contexts') or []:
+        derivatives = external.get('derivative_contexts')
+        for derivative in derivatives if isinstance(derivatives, list) else []:
+            if not isinstance(derivative, dict) or not isinstance(derivative.get('venue'), str):
+                continue
             prefix = {'BINANCE_USDM': 'binance', 'BYBIT_LINEAR': 'bybit', 'DERIBIT': 'deribit'}.get(derivative.get('venue'))
             clocks = derivative.get('field_receive_monotonic_ns')
             if not prefix or derivative.get('healthy') is not True or derivative.get('gap') is not False:
@@ -82,27 +91,27 @@ def build_context(external: dict[str, Any], oracle_status: dict[str, Any], *,
                 continue
             for index, suffix, key in [(2, 'funding', 'funding_rate'), (3, 'open_interest', 'open_interest_native')]:
                 mask = derivative.get('valid_mask')
-                if not isinstance(mask, int) or not (mask & (1 << index)):
+                if not isinstance(mask, int) or not 0 <= mask <= 15 or not (mask & (1 << index)):
                     continue
                 put(prefix + '_' + suffix, derivative.get(key), clocks[index],
                     external.get('state_version'), 1_000_000_000,
                     source=str(derivative.get('venue')) + '_NATIVE_UNITS')
     # The current RTDS monitor is BTC/M5 only. Never reuse that reference for
     # another asset/horizon or replace the actual oracle with an exchange price.
-    contract = oracle_status.get('contract') or {}
+    contract = obj(oracle_status.get('contract'))
     bound = (asset == 'BTC' and horizon == 'M5'
              and oracle_status.get('code_sha') == code_sha
-             and (oracle_status.get('market') or {}).get('market_id') == market_id
+             and obj(oracle_status.get('market')).get('market_id') == market_id
              and oracle_status.get('paper_only') is True
              and oracle_status.get('authenticated_execution') is False
              and oracle_status.get('real_order_submission') is False
              and contract.get('verified') is True and contract.get('rules_hash_recognized') is True)
     if bound:
-        oracle = oracle_status.get('oracle') or {}
+        oracle = obj(oracle_status.get('oracle'))
         if oracle.get('healthy') is True:
             put('oracle_value', oracle.get('value'), oracle.get('receive_monotonic_ns'),
                 oracle.get('source_sequence'), 2_000_000_000, source='CONTRACT_BOUND_RTDS_ORACLE')
-        reference = oracle_status.get('settlement_reference') or {}
+        reference = obj(oracle_status.get('settlement_reference'))
         close = int(market.get('close_timestamp_unix') or 0)
         if not close:
             close = int(market.get('window_start_unix') or 0) + int(market.get('horizon_seconds') or 0)
