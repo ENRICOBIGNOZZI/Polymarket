@@ -1,0 +1,43 @@
+name: V7 Tailscale API auth probe
+
+on:
+  push:
+    branches:
+      - ops/v7-ssh-key-probe-20260920
+    paths:
+      - .github/workflows/v7-tailscale-api-auth-probe.yml
+
+permissions:
+  contents: read
+
+jobs:
+  probe:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - name: Probe Tailscale device API read-only
+        shell: bash
+        env:
+          TS_AUTHKEY: ${{ secrets.TS_AUTHKEY }}
+        run: |
+          set -euo pipefail
+          test -n "${TS_AUTHKEY:-}"
+          echo "::add-mask::$TS_AUTHKEY"
+          body="$RUNNER_TEMP/tailscale-devices.json"
+          code="$(curl -sS -o "$body" -w '%{http_code}'             -u "$TS_AUTHKEY:"             'https://api.tailscale.com/api/v2/tailnet/-/devices' || true)"
+          printf 'V7_TAILSCALE_API_HTTP=%s\n' "$code"
+          if [[ "$code" == 200 ]]; then
+            python3 - "$body" <<'PY'
+          import json,sys
+          v=json.load(open(sys.argv[1]))
+          devices=v.get('devices') if isinstance(v,dict) else None
+          assert isinstance(devices,list)
+          gh=[d for d in devices if str(d.get('hostname') or '').startswith('gh-deploy-')]
+          print('V7_TAILSCALE_DEVICE_API_AUTH=true')
+          print('V7_TAILSCALE_DEVICE_COUNT='+str(len(devices)))
+          print('V7_TAILSCALE_GH_DEPLOY_COUNT='+str(len(gh)))
+          PY
+          else
+            echo 'V7_TAILSCALE_DEVICE_API_AUTH=false'
+          fi
+          rm -f "$body"
