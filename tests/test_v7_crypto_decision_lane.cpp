@@ -135,12 +135,12 @@ void test_entry_price_cap_rejects_without_consuming_signal() {
 }
 
 
-void test_default_selective_taker_filters_match_preregistered_shadow_gate() {
+void test_default_taker_keeps_baseline_shock_and_price_guard() {
     NativeCryptoDecisionLane lane({});
     SleeveCapitalAccount capital(limits());
 
     auto weak = input(1, 40);
-    weak.signal.binance_return_100ms_bp = 0.49;
+    weak.signal.binance_return_100ms_bp = 0.29;
     assert(lane.evaluate(weak, capital).reason == NativeCryptoDecisionReason::WeakSignal);
 
     auto expensive = input(1, 41);
@@ -148,7 +148,7 @@ void test_default_selective_taker_filters_match_preregistered_shadow_gate() {
     assert(lane.evaluate(expensive, capital).reason == NativeCryptoDecisionReason::EntryPriceTooHigh);
 
     auto admissible = input(1, 42);
-    admissible.signal.binance_return_100ms_bp = 0.50;
+    admissible.signal.binance_return_100ms_bp = 0.30;
     admissible.yes_book = book(8'000);
     const auto result = lane.evaluate(admissible, capital);
     assert(result.accepted == 1);
@@ -238,7 +238,7 @@ int main() {
     test_up_down_and_admission();
     test_duplicate_depth_tte_and_market_gates();
     test_entry_price_cap_rejects_without_consuming_signal();
-    test_default_selective_taker_filters_match_preregistered_shadow_gate();
+    test_default_taker_keeps_baseline_shock_and_price_guard();
     test_market_traded_and_capital_denied();
     test_evaluate_is_allocation_free();
     test_construct_candidate_defers_capital_to_unified_owner();
