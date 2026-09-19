@@ -67,7 +67,21 @@ try {
 
     const passwordInput = await firstVisible(page, ['input[type="password"]']);
     if (!passwordInput) {
+      const prePasswordBody = (await page.locator('body').innerText().catch(() => '')).toLowerCase();
       marker('V7_TS_LOGIN_CHALLENGE', 'true');
+      if (/couldn.?t sign you in|browser or app may not be secure|this browser|not secure/.test(prePasswordBody)) {
+        marker('V7_TS_CHALLENGE_KIND', 'BROWSER_POLICY');
+      } else if (/2-step|two-step|google prompt|tap yes|phone|device|passkey/.test(prePasswordBody)) {
+        marker('V7_TS_CHALLENGE_KIND', 'DEVICE_OR_2SV');
+      } else if (/captcha/.test(prePasswordBody)) {
+        marker('V7_TS_CHALLENGE_KIND', 'CAPTCHA');
+      } else if (/verify|confirm|challenge|recovery/.test(prePasswordBody)) {
+        marker('V7_TS_CHALLENGE_KIND', 'GENERIC_VERIFICATION');
+      } else if (/choose an account|use another account|account/.test(prePasswordBody)) {
+        marker('V7_TS_CHALLENGE_KIND', 'ACCOUNT_SELECTION');
+      } else {
+        marker('V7_TS_CHALLENGE_KIND', 'UNKNOWN_PREPASSWORD');
+      }
       marker('V7_TS_AUTHENTICATED', 'false');
       process.exitCode = 3;
     } else {
