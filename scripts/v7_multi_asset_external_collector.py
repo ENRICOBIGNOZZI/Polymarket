@@ -3,12 +3,13 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import os
 import signal
 import subprocess
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
@@ -96,6 +97,11 @@ class Child:
     restart_count: int = 0
     next_restart_monotonic: float = 0.0
     last_returncode: int | None = None
+    recovery_requested_at: float | None = None
+    recovery_times: list[float] = field(default_factory=list)
+    fault_archived_pid: int | None = None
+    capture_incident_count: int = 0
+    last_capture_incident: str | None = None
 
 
 def child_paths(run_root: Path, asset: str, *, session_id: str | None = None) -> dict[str, Path]:
@@ -237,6 +243,84 @@ def data_ready(status: dict[str, Any], *, asset: str, sha: str,
     return True, ""
 
 
+
+def capture_fault_reason(status: dict[str, Any], *, asset: str, sha: str,
+                         now_ns: int) -> str:
+    """Recover a permanently invalid capture, never normal warm-up or suppression."""
+    try:
+        ok, reason = data_ready(status, asset=asset, sha=sha, now_ns=now_ns)
+    except (ValueError, TypeError, OverflowError):
+        return ""
+    if ok or status.get("disk_pressure") is True:
+        return ""
+    tapes = status.get("raw_frame_tapes") or {}
+    venues = ("binance_spot",) if reason == "BINANCE_TAPE_NOT_READY" else (
+        ("coinbase_spot", "bybit_spot") if reason == "SECONDARY_SPOT_TAPE_NOT_READY" else ())
+    for venue in venues:
+        row = tapes.get(venue)
+        if not isinstance(row, dict) or row.get("enabled") is not True:
+            continue
+        if row.get("suppression_active") is True:
+            continue
+        try:
+            dropped, written = int(row.get("dropped") or 0), int(row.get("written") or 0)
+        except (ValueError, TypeError, OverflowError):
+            continue
+        if dropped > 0 or (written > 0 and (
+                row.get("writer_healthy") is False or row.get("evidence_valid") is False)):
+            return "CAPTURE_PERMANENTLY_INVALID:" + venue
+    return ""
+
+
+def preserve_capture_incident(run_root: Path, child: Child, status: dict[str, Any],
+                              reason: str, now_ns: int, *, phase: str = "BEFORE_STOP") -> Path:
+    """Retain the original counter snapshot before any status unlink or restart."""
+    payload = {
+        "schema": "polymarket_v7_external_capture_incident_v1",
+        "paper_only": True, "execution_authority": False,
+        "real_order_submission": False, "authenticated_execution": False,
+        "asset": child.asset, "pid": child.process.pid, "timestamp_ns": now_ns,
+        "reason": reason, "phase": phase, "evidence_valid": False,
+        "missing_frames_recovered": False, "raw_files_deleted": False,
+        "previous_incident": child.last_capture_incident, "status": status,
+    }
+    data = json.dumps(payload, sort_keys=True, separators=(",", ":"), allow_nan=False) + "\n"
+    digest = hashlib.sha256(data.encode()).hexdigest()
+    directory = run_root / "external_fair" / "capture_incidents"
+    directory.mkdir(parents=True, exist_ok=True)
+    path = directory / f"{child.asset}-{child.process.pid}-{now_ns}-{digest[:16]}.json"
+    with path.open("x", encoding="utf-8") as handle:
+        handle.write(data); handle.flush(); os.fsync(handle.fileno())
+    return path
+
+
+def recover_invalid_capture(args: argparse.Namespace, child: Child, *,
+                            now: float, now_ns: int) -> str:
+    """Bounded component-only recovery. Old gaps remain immutable evidence."""
+    if child.recovery_requested_at is not None:
+        if child.process.poll() is None and now - child.recovery_requested_at >= 8.0:
+            child.process.kill()
+        return "CAPTURE_RECOVERY_PENDING"
+    value = load_json(child.status_path)
+    reason = capture_fault_reason(value, asset=child.asset, sha=args.model_sha, now_ns=now_ns)
+    if not reason:
+        return ""
+    if child.fault_archived_pid != child.process.pid:
+        path = preserve_capture_incident(args.run_root, child, value, reason, now_ns)
+        child.last_capture_incident = str(path)
+        child.capture_incident_count += 1
+        child.fault_archived_pid = child.process.pid
+    child.recovery_times[:] = [t for t in child.recovery_times if now - t < 300.0]
+    if len(child.recovery_times) >= 3:
+        return "CAPTURE_RECOVERY_BUDGET_EXHAUSTED"
+    if now < child.next_restart_monotonic:
+        return "CAPTURE_RECOVERY_BACKOFF"
+    child.process.terminate()
+    child.recovery_requested_at = now
+    child.recovery_times.append(now)
+    return "CAPTURE_RECOVERY_PENDING"
+
+
 def terminate(children: list[Child]) -> None:
     for child in children:
         if child.process.poll() is None:
@@ -269,6 +353,7 @@ def write_status(path: Path, *, args: argparse.Namespace, children: list[Child],
         value = load_json(child.status_path)
         is_ready, reason = data_ready(value, asset=child.asset,
                                       sha=args.model_sha, now_ns=now_ns)
+        is_ready = is_ready and child.process.poll() is None and child.recovery_requested_at is None
         if is_ready:
             ready += 1
         rows.append({
@@ -283,13 +368,19 @@ def write_status(path: Path, *, args: argparse.Namespace, children: list[Child],
             "fresh_venue_count": value.get("fresh_venue_count"),
             "restart_count": child.restart_count,
             "last_returncode": child.last_returncode,
+            "capture_incident_count": child.capture_incident_count,
+            "capture_incident_count_scope": "CURRENT_SUPERVISOR",
+            "last_capture_incident": child.last_capture_incident,
+            "capture_recovery_pending": child.recovery_requested_at is not None,
         })
     atomic_json(path, {
         "schema": SCHEMA,
         "timestamp_ns": now_ns,
         "timestamp_ms": now_ns // 1_000_000,
         "model_sha": args.model_sha,
-        "state": state,
+        "state": "DEGRADED" if state == "OPERATIONAL" and ready != len(children) else state,
+        "historical_capture_gaps_repaired": False,
+        "capture_incident_directory": str(args.run_root / "external_fair" / "capture_incidents"),
         "paper_only": True,
         "authenticated_execution": False,
         "real_order_submission": False,
@@ -327,6 +418,15 @@ def run(args: argparse.Namespace) -> int:
             blockers: dict[str, str] = {}
             now = time.monotonic()
             for child in children:
+                if child.process.poll() is None:
+                    try:
+                        recovery_reason = recover_invalid_capture(
+                            args, child, now=now, now_ns=time.time_ns())
+                        if recovery_reason:
+                            blockers[child.asset] = recovery_reason
+                    except (OSError, ValueError, TypeError) as exc:
+                        # An unrecorded fault must never be hidden by restarting.
+                        blockers[child.asset] = "CAPTURE_RECOVERY_FAILED:" + type(exc).__name__
                 rc = child.process.poll()
                 if rc is None:
                     continue
@@ -334,6 +434,16 @@ def run(args: argparse.Namespace) -> int:
                 blockers[child.asset] = f"CHILD_EXIT_{rc}"
                 if now < child.next_restart_monotonic:
                     continue
+                recovering = child.recovery_requested_at is not None
+                if recovering:
+                    try:
+                        path = preserve_capture_incident(args.run_root, child,
+                            load_json(child.status_path), "CAPTURE_RECOVERY_TERMINAL",
+                            time.time_ns(), phase="AFTER_STOP")
+                        child.last_capture_incident = str(path)
+                    except (OSError, ValueError, TypeError) as exc:
+                        blockers[child.asset] = "CAPTURE_ARCHIVE_FAILED:" + type(exc).__name__
+                        continue
                 try:
                     child.log_handle.close()
                 except Exception:
@@ -350,6 +460,9 @@ def run(args: argparse.Namespace) -> int:
                 child.process = replacement.process
                 child.log_handle = replacement.log_handle
                 child.status_path = replacement.status_path
+                child.recovery_requested_at = None
+                if recovering:
+                    child.next_restart_monotonic = max(child.next_restart_monotonic, now + 30.0)
 
             now_ns = time.time_ns()
             ready = 0
@@ -357,6 +470,7 @@ def run(args: argparse.Namespace) -> int:
                 value = load_json(child.status_path)
                 ok, reason = data_ready(value, asset=child.asset,
                                         sha=args.model_sha, now_ns=now_ns)
+                ok = ok and child.process.poll() is None and child.recovery_requested_at is None
                 if ok:
                     ready += 1
                     blockers.pop(child.asset, None)
