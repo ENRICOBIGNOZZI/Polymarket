@@ -1,0 +1,50 @@
+name: V7 Tailscale console read-only probe
+
+on:
+  push:
+    branches:
+      - ops/v7-aws-envelope-probe-20260920
+    paths:
+      - .github/workflows/v7-tailscale-console-probe.yml
+      - scripts/v7_decrypt_tailscale_admin_envelope.py
+      - scripts/v7_tailscale_console_probe.mjs
+      - deploy/v7-tailscale-admin-envelope.json
+
+permissions:
+  contents: read
+
+jobs:
+  probe:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+      - name: Decrypt short-lived admin envelope
+        id: decrypt
+        shell: bash
+        env:
+          SSH_PRIVATE_KEY: ${{ secrets.POLYMARKET_SERVER_SSH_KEY }}
+        run: |
+          set -euo pipefail
+          test -n "${SSH_PRIVATE_KEY:-}"
+          key="$RUNNER_TEMP/deploy_key"
+          umask 077
+          printf '%s\n' "$SSH_PRIVATE_KEY" > "$key"
+          chmod 600 "$key"
+          python3 scripts/v7_decrypt_tailscale_admin_envelope.py             --envelope deploy/v7-tailscale-admin-envelope.json             --ssh-private-key "$key"             --github-env "$GITHUB_ENV"             --github-output "$GITHUB_OUTPUT"
+          rm -f "$key"
+      - name: Install browser driver
+        if: steps.decrypt.outputs.ready == 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+          command -v google-chrome >/dev/null 2>&1
+          npm install --no-save --no-package-lock playwright-core@1.55.0 >/dev/null
+      - name: Probe Tailscale console without mutations
+        if: steps.decrypt.outputs.ready == 'true'
+        shell: bash
+        env:
+          CHROME_BIN: /usr/bin/google-chrome
+        run: |
+          set -euo pipefail
+          node scripts/v7_tailscale_console_probe.mjs
