@@ -674,6 +674,7 @@ class Manager:
                 0, self.global_budget_microdollars - self.native_carryover["total_unsettled_microdollars"]
             ),
             "taker_target_quantity_microunits": self.args.target_quantity_microunits,
+            "taker_maximum_entry_price_e4": self.args.maximum_entry_price_e4,
             "taker_minimum_tte_ns": self.args.minimum_tte_ns,
             "taker_maximum_tte_ns": self.args.maximum_tte_ns,
             "maker_share_cap_microunits": self.args.maker_share_cap_microunits,
@@ -797,6 +798,7 @@ class Manager:
             "--tick-size-e4", str(yes_tick),
             "--min-order-microunits", str(minimum_order),
             "--target-quantity-microunits", str(self.args.target_quantity_microunits),
+            "--maximum-entry-price-e4", str(self.args.maximum_entry_price_e4),
             "--minimum-tte-ns", str(self.args.minimum_tte_ns),
             "--maximum-tte-ns", str(self.args.maximum_tte_ns),
             "--maker-share-cap-microunits", str(self.args.maker_share_cap_microunits),
@@ -1147,6 +1149,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--settlement-timeout-seconds", type=int, default=600)
     parser.add_argument("--min-order-microunits", type=int, default=5_000_000)
     parser.add_argument("--target-quantity-microunits", type=int, default=5_000_000)
+    parser.add_argument("--maximum-entry-price-e4", type=int, default=7_500)
     parser.add_argument("--minimum-tte-ns", type=int, default=105_000_000_000)
     parser.add_argument("--maximum-tte-ns", type=int, default=120_000_000_000)
     parser.add_argument("--maker-share-cap-microunits", type=int, default=1_000_000)
@@ -1168,6 +1171,8 @@ def parse_args() -> argparse.Namespace:
         parser.error("invalid minimum order")
     if args.target_quantity_microunits < args.min_order_microunits:
         parser.error("target quantity below configured minimum")
+    if not 0 < args.maximum_entry_price_e4 < 10_000:
+        parser.error("invalid maximum taker entry price")
     if args.minimum_tte_ns <= 0 or args.maximum_tte_ns < args.minimum_tte_ns:
         parser.error("invalid taker tte window")
     return args

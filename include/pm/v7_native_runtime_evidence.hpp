@@ -78,6 +78,7 @@ struct NativeRuntimeEvidenceConfig {
     std::int64_t close_wall_ns = 0;
     double taker_fee_rate = 0.0;
     double taker_fee_exponent = 1.0;
+    std::int32_t taker_maximum_entry_price_e4 = 10'000;
     std::uint8_t taker_only_fee = 1;
     std::string observation_capture_mode = "NONE";
     std::int64_t paper_venue_delay_ns = -1;

@@ -319,6 +319,8 @@
         "${RUN_ROOT}/control/legacy_native_claims.json",
         "--target-quantity-microunits",
         "5000000",
+        "--maximum-entry-price-e4",
+        "7500",
         "--minimum-tte-ns",
         "105000000000",
         "--maximum-tte-ns",

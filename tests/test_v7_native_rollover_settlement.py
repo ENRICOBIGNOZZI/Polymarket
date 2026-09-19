@@ -297,6 +297,7 @@ def test_manager_cli_defaults_match_frequency_and_size_policy(monkeypatch) -> No
     args = manager.parse_args()
     assert args.min_order_microunits == 5_000_000
     assert args.target_quantity_microunits == 5_000_000
+    assert args.maximum_entry_price_e4 == 7_500
     assert args.minimum_tte_ns == 105_000_000_000
     assert args.maximum_tte_ns == 120_000_000_000
     assert args.maker_share_cap_microunits == 1_000_000

@@ -121,6 +121,11 @@ NativeCryptoDecisionResult NativeCryptoDecisionLane::construct_candidate(
         || !valid_book(book, now_ns, policy_.maximum_book_age_ns)) {
         return finish(NativeCryptoDecisionReason::InvalidBook);
     }
+    if (policy_.maximum_entry_price_e4 <= 0
+        || policy_.maximum_entry_price_e4 > kCanonicalPriceScale
+        || book.best_ask_e4 > policy_.maximum_entry_price_e4) {
+        return finish(NativeCryptoDecisionReason::EntryPriceTooHigh);
+    }
     if (policy_.target_quantity_microunits <= 0
         || instrument.min_order_microunits > policy_.target_quantity_microunits
         || (policy_.require_full_visible_depth != 0
