@@ -92,3 +92,25 @@ def test_two_hour_protocol_preserves_all_assets():
     assert not p['excluded_assets'] and not p['asset_shadow_overrides']
     assert p['paper_only'] and not p['real_order_submission']
     assert not p['automatic_promotion']
+
+def test_unknown_fee_terms_cannot_create_hypothetical_net_pnl(tmp_path):
+    root=tmp_path/'run';obs=root/'research/native_observations/run1';obs.mkdir(parents=True)
+    snapshot=tmp_path/'ledger.jsonl'
+    submit=event('s','ORDER_SUBMITTED',market_id='123',decision_ts_ms=6000,
+        book_snapshot_id='native-book:4',model_sha='a'*40,
+        metadata={'asset':'DOGE','horizon':'M5','run_id':'run1'})
+    state=event('state','ORDER_STATE',market_id='123',metadata={'paper_execution_reason':11})
+    final=event('final','FINAL',order='other',market_id='123',final_pnl=0.,
+        metadata={'included_order_ids':['other'],'settlement_payouts':{'up':1.,'down':0.}})
+    write(snapshot,[submit,state,final])
+    point={'observed_monotonic_ns':1_000_000_000,'close_wall_ns':10_000_000_000,
+        'close_monotonic_ns':5_000_000_000,'kind':2,'accepted':True,'token_id':'up',
+        'book_version':4,'fee_rate':.07,'fee_exponent':1.,'signal_age_ns':1.,
+        'tte_ns':4_000_000_000,'bid_e4':3900,'ask_e4':4000,
+        'binance_return_100ms_bp':1.,'coinbase_return_100ms_bp':0.,
+        'capture_mode':'DECISIONS'}
+    (obs/'123-capture.jsonl').write_text(json.dumps(point)+'\n')
+    out=tmp_path/'audit';audit.build(snapshot,root,out,False)
+    r=json.loads((out/'orders.json').read_text())[0]
+    assert r['hypothetical_payoff_at_limit']==3.
+    assert r['hypothetical_net_at_limit'] is None

@@ -130,15 +130,24 @@ def build(snapshot: Path, root: Path, output: Path, fetch_public: bool):
         if len(hits)==1:
             h=hits[0];r['features']={k:h.get(k) for k in feature_fields}
             r['signal_age_ms']=h['signal_age_ns']/1e6;r['binance_return_bp']=h['binance_return_100ms_bp']
+            # Post-switch observations may describe a chosen token different
+            # from the forecast-input token. Do not silently train the legacy
+            # feature recipe on a mismatched target/book pair.
+            if h.get('probability_forecast') is not None and h.get('probability_input_token_id') != token:
+                r['feature_join']='MODEL_INPUT_SIDE_MISMATCH_REQUIRES_EXPLICIT_ADAPTER'
             r['tte_seconds']=h['tte_ns']/1e9;r['close_ts_ms']=h['close_wall_ns']//1_000_000
             r['spread']= (h['ask_e4']-h['bid_e4'])/10000
         label=known.get(market,{})
         if label.get('resolved') and token in (label.get('payouts') or {}):
             y=float(label['payouts'][token]);r['selected_outcome']=y
             r['hypothetical_payoff_at_limit']=q*(y-price)
-            if len(hits)==1:
-                fee=q*hits[0]['fee_rate']*(price*(1-price))**hits[0]['fee_exponent']
-                r['hypothetical_net_at_limit']=q*(y-price)-fee
+            # A numeric fee field is not evidence of authoritative venue terms.
+            # In particular reason 11 explicitly says those terms were unknown.
+            if len(hits)==1 and reason != 11:
+                rate=hits[0].get('fee_rate'); exponent=hits[0].get('fee_exponent')
+                if isinstance(rate,(int,float)) and isinstance(exponent,(int,float)) and math.isfinite(rate) and math.isfinite(exponent) and 0<=rate<=1 and exponent>0:
+                    fee=q*rate*(price*(1-price))**exponent
+                    r['hypothetical_net_at_limit']=q*(y-price)-fee
         else:r['selected_outcome']=None
         rows.append(r)
     byasset={a:summarize([r for r in rows if r['asset']==a]) for a in ['BTC','ETH','SOL','XRP','DOGE','BNB']}
