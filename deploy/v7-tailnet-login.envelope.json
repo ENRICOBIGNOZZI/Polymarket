@@ -1,0 +1,9 @@
+{
+  "ciphertext_b64": "RBEpPRzxdjsGGEmYNIscYY9Yq9OVv9NlIvonpPd/RE+ozSqyp3ZZ8IcFKjZ+59Wib3kLvyz3BkVCI9sJ2EhqTzuJQyff4nEbi4qG+SNY7H5FgeQk0AZOHTnSXyefE7OYtL319/bphxAsYhyseBFhaurabY6rFSnVuQ6MZnqOXkKrLq9yvJd3qhplzOioCdd5EU/kr0cfVFSNDWzTaPjTxWgaq6xM8s/TBWxI+rlg9ZV9g9tJaw9tpWIS3IKBV217HKgcggwDEHahUwSqcp3uOcfijdAAXIz/o0loeqwXP0CLxeCmicwVST3OFdukhNY4d/iaZ70d5N3VmuYFwZnnxY6oE0mF8dwiLsygrOlLKlTKxAtdxAcE4BioGvtSMZnMmXiJLBDprb7CeZrKkoOGvs939ULZ2eTL",
+  "ephemeral_public_b64": "EHpiDiQ+/GiKks2aErZ2bZ6br79L0+5T6axl/UhpMzo=",
+  "nonce_b64": "kcAeuxk8danKQeEg",
+  "recipient_fingerprint": "cd6be771b7b9fa942308494a4f388a8a9e670f185cb98cc2ca0da1ef441f834d",
+  "recipient_type": "ssh-ed25519",
+  "salt_b64": "O/GYd90xCgTlqUdZC9kKaA==",
+  "schema": "polymarket_v7_ssh_envelope_v1"
+}
