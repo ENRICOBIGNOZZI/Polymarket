@@ -76,6 +76,42 @@ python3 "$SOURCE_DIR/scripts/v7_prepare_cutover_run_root.py" "${prepare_args[@]}
 SERVICE_GROUP="$(id -gn "$SERVICE_USER")"
 install -d -o "$SERVICE_USER" -g "$SERVICE_GROUP" "$RUN_ROOT" "$RUN_ROOT/control"
 
+# Legacy PAPER settlement belongs to the cutover control plane. The old
+# canonical writer is stopped and the new one has not started yet, so a
+# temporary writer can safely append FINALs to prior source ledgers. The claim
+# scan before/after is fail-closed; reconciliation is best-effort because any
+# unresolved/error claim remains fully reserved.
+LEGACY_CLAIMS="$RUN_ROOT/control/legacy_native_claims.json"
+LEGACY_RECONCILIATION="$RUN_ROOT/control/legacy_native_reconciliation.json"
+python3 "$SOURCE_DIR/scripts/v7_legacy_native_claims.py" \
+  --current-run-root "$RUN_ROOT" --scan-parent "$(dirname "$RUN_ROOT")" \
+  --target-sha "$EXPECTED_SHA" --output "$LEGACY_CLAIMS" \
+  >> "$RUN_ROOT/legacy_native_claims.log" 2>&1
+if ! python3 "$SOURCE_DIR/scripts/v7_legacy_native_reconciler.py" \
+    --registry "$LEGACY_CLAIMS" --repository-root "$SOURCE_DIR" \
+    --target-sha "$EXPECTED_SHA" --output "$LEGACY_RECONCILIATION" \
+    >> "$RUN_ROOT/legacy_native_reconciliation.log" 2>&1; then
+  python3 - "$LEGACY_RECONCILIATION" "$EXPECTED_SHA" <<'PYLEGACY'
+import json,os,sys,time
+from pathlib import Path
+path=Path(sys.argv[1]); sha=sys.argv[2]
+value={
+    "schema":"polymarket_v7_legacy_native_reconciliation_v1",
+    "paper_only":True,"authenticated_execution":False,
+    "real_order_submission":False,"execution_authority":False,
+    "target_sha":sha,"state":"ERROR_CLAIMS_RETAINED",
+    "groups":[],"timestamp_ms":time.time_ns()//1_000_000,
+}
+tmp=path.with_name(path.name+f".tmp.{os.getpid()}")
+tmp.write_text(json.dumps(value,sort_keys=True)+"\n")
+os.replace(tmp,path)
+PYLEGACY
+fi
+python3 "$SOURCE_DIR/scripts/v7_legacy_native_claims.py" \
+  --current-run-root "$RUN_ROOT" --scan-parent "$(dirname "$RUN_ROOT")" \
+  --target-sha "$EXPECTED_SHA" --output "$LEGACY_CLAIMS" \
+  >> "$RUN_ROOT/legacy_native_claims.log" 2>&1
+
 # Atomic release pointer switch happens only after the model-artifact gate and old-generation archive.
 ln -sfn "by-sha/$EXPECTED_SHA" "$RUNTIME_CURRENT"
 [[ "$(cat "$RUNTIME_CURRENT/deploy/london/runtime_sha")" == "$EXPECTED_SHA" ]]
