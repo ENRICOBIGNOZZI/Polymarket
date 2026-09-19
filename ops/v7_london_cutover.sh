@@ -15,6 +15,23 @@ ARCHIVE_ROOT="${PM_V7_ARCHIVE_ROOT:-/home/$SERVICE_USER/polymarket-runs/paper_v7
 
 [[ "$EXPECTED_SHA" =~ ^[0-9a-f]{40}$ ]] || { echo "exact SHA required" >&2; exit 78; }
 [[ "$(uname -s)" == Linux ]] || { echo "London cutover requires Linux" >&2; exit 78; }
+LOCK_FILE="${POLYMARKET_LONDON_DEPLOY_LOCK_FILE:-/home/$SERVICE_USER/.cache/polymarket-v7-london-deploy.lock}"
+LOCK_DIR="$(dirname "$LOCK_FILE")"
+command -v flock >/dev/null 2>&1 || { echo "flock is required for London deployment serialization" >&2; exit 78; }
+if [[ "$(id -u)" == 0 ]]; then
+  SERVICE_GROUP="$(id -gn "$SERVICE_USER")"
+  install -d -o "$SERVICE_USER" -g "$SERVICE_GROUP" "$LOCK_DIR"
+  touch "$LOCK_FILE"
+  chown "$SERVICE_USER:$SERVICE_GROUP" "$LOCK_FILE"
+else
+  mkdir -p "$LOCK_DIR"
+  touch "$LOCK_FILE"
+fi
+exec 9>"$LOCK_FILE"
+if ! flock -n 9; then
+  echo "another London stage/cutover already owns this host" >&2
+  exit 73
+fi
 [[ -f "$TARGET_RUNTIME/deploy/london/runtime_sha" ]] || { echo "staged runtime bundle missing" >&2; exit 66; }
 [[ "$(cat "$TARGET_RUNTIME/deploy/london/runtime_sha")" == "$EXPECTED_SHA" ]] || { echo "staged runtime bundle SHA mismatch" >&2; exit 66; }
 [[ ! -e "$TARGET_RUNTIME/research" && ! -e "$TARGET_RUNTIME/tests" ]] || { echo "forbidden tree present in staged runtime" >&2; exit 66; }

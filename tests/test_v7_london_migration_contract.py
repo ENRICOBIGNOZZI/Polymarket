@@ -9,6 +9,8 @@ ROOT = Path(__file__).resolve().parents[1]
 CONFIG = ROOT / "config/v7_london_az_shootout.json"
 BOOTSTRAP = ROOT / "ops/v7_london_bootstrap.sh"
 BENCHMARK = ROOT / "ops/v7_london_benchmark.sh"
+STAGE = ROOT / "ops/v7_london_stage_release.sh"
+CUTOVER = ROOT / "ops/v7_london_cutover.sh"
 DOC = ROOT / "docs/LONDON_MIGRATION.md"
 
 
@@ -61,6 +63,19 @@ def test_bootstrap_installs_but_does_not_start_runtime() -> None:
     assert 'systemctl enable --now polymarket-v7-paper.service' not in source
 
 
+def test_stage_and_cutover_share_one_host_deployment_lock() -> None:
+    stage = STAGE.read_text(encoding="utf-8")
+    cutover = CUTOVER.read_text(encoding="utf-8")
+    marker = "POLYMARKET_LONDON_DEPLOY_LOCK_FILE"
+    default_lock = "polymarket-v7-london-deploy.lock"
+    for source in (stage, cutover):
+        assert marker in source
+        assert default_lock in source
+        assert "flock -n 9" in source
+        assert "another London stage/cutover already owns this host" in source
+        assert "exit 73" in source
+
+
 def test_benchmark_uses_imdsv2_and_physical_az_id() -> None:
     source = BENCHMARK.read_text(encoding="utf-8")
     assert 'X-aws-ec2-metadata-token-ttl-seconds' in source
@@ -70,7 +85,7 @@ def test_benchmark_uses_imdsv2_and_physical_az_id() -> None:
 
 
 def test_shell_contracts_are_syntax_valid() -> None:
-    for path in (BOOTSTRAP, BENCHMARK):
+    for path in (BOOTSTRAP, BENCHMARK, STAGE, CUTOVER):
         completed = subprocess.run(["bash", "-n", str(path)], capture_output=True, text=True, check=False)
         assert completed.returncode == 0, completed.stderr
 
