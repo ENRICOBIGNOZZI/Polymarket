@@ -78,6 +78,20 @@ python3 "$SOURCE_DIR/scripts/v7_prepare_cutover_run_root.py" "${prepare_args[@]}
 SERVICE_GROUP="$(id -gn "$SERVICE_USER")"
 install -d -o "$SERVICE_USER" -g "$SERVICE_GROUP" "$RUN_ROOT" "$RUN_ROOT/control"
 
+# Shell redirections are opened by this root control-plane shell before sudo
+# changes the Python process user. Pre-create every shared log with the runtime
+# owner, or the later service restart cannot append under UMask=0077.
+for runtime_log in "$RUN_ROOT/legacy_native_claims.log" "$RUN_ROOT/legacy_native_reconciliation.log"; do
+  [[ ! -L "$runtime_log" ]] || { echo "unsafe legacy runtime log symlink: $runtime_log" >&2; exit 78; }
+  if [[ -e "$runtime_log" ]]; then
+    [[ -f "$runtime_log" ]] || { echo "unsafe legacy runtime log type: $runtime_log" >&2; exit 78; }
+    chown "$SERVICE_USER:$SERVICE_GROUP" "$runtime_log"
+    chmod 0600 "$runtime_log"
+  else
+    install -o "$SERVICE_USER" -g "$SERVICE_GROUP" -m 0600 /dev/null "$runtime_log"
+  fi
+done
+
 # Reconcile historical PAPER native claims in the cutover control plane, before
 # the current run's ledger writer starts. Anything unresolved remains reserved
 # by the final registry and cannot vanish across SHA generations.

@@ -82,7 +82,12 @@ def test_resolution_pending_is_not_global_failure(monkeypatch, tmp_path: Path) -
 def test_cutover_reconciles_legacy_before_current_runtime_starts() -> None:
     cutover = (ROOT / "ops/v7_london_cutover.sh").read_text()
     prepare = cutover.index("v7_prepare_cutover_run_root.py")
+    log_preparation = cutover.index('for runtime_log in "$RUN_ROOT/legacy_native_claims.log"')
     first_scan = cutover.index("v7_legacy_native_claims.py", prepare)
+    assert prepare < log_preparation < first_scan
+    assert 'install -o "$SERVICE_USER" -g "$SERVICE_GROUP" -m 0600 /dev/null "$runtime_log"' in cutover
+    assert 'chown "$SERVICE_USER:$SERVICE_GROUP" "$runtime_log"' in cutover
+    assert '[[ ! -L "$runtime_log" ]]' in cutover
     reconcile = cutover.index("v7_legacy_native_reconciler.py", first_scan)
     rescan = cutover.index("v7_legacy_native_claims.py", reconcile)
     switch = cutover.index("ln -sfn", rescan)

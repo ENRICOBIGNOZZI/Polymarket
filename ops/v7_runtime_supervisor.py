@@ -358,6 +358,17 @@ class Supervisor:
         )
         return len(times)
 
+    def restart_cooldown_seconds(self, times: list[int] | None = None) -> int:
+        active = self._restart_times() if times is None else sorted(times)
+        if len(active) < self.restart_maximum:
+            return 0
+        return max(1, active[0] + self.restart_window - int(time.time()) + 1)
+
+    def sleep_interruptibly(self, seconds: int) -> None:
+        deadline = time.monotonic() + max(0, seconds)
+        while not self.stopping and time.monotonic() < deadline:
+            time.sleep(min(0.25, max(0.0, deadline - time.monotonic())))
+
     def reconcile(self) -> Any:
         result = assess_reconciliation(self.run_root, self.expected_sha, now=int(time.time()))
         self.status("reconciling" if result.may_start else "quarantined", result.reasons)
@@ -405,8 +416,10 @@ class Supervisor:
                 return 78
             prior_restarts = self._restart_times()
             if len(prior_restarts) >= self.restart_maximum:
-                self.status("restart_budget_exhausted", ["repeated_restart"])
-                return 75
+                cooldown = self.restart_cooldown_seconds(prior_restarts)
+                self.status("restart_budget_cooldown", ["repeated_restart", f"retry_after_seconds:{cooldown}"])
+                self.sleep_interruptibly(cooldown)
+                continue
 
             environment = os.environ.copy()
             environment.update(
@@ -462,8 +475,10 @@ class Supervisor:
             reasons.append(f"child_exit:{exit_code}")
             count = self.record_restart()
             if count >= self.restart_maximum:
-                self.status("restart_budget_exhausted", reasons + ["repeated_restart"])
-                return 75
+                cooldown = self.restart_cooldown_seconds()
+                self.status("restart_budget_cooldown", reasons + ["repeated_restart", f"retry_after_seconds:{cooldown}"])
+                self.sleep_interruptibly(cooldown)
+                continue
             self.status("backoff", reasons)
             time.sleep(self.backoff[min(count - 1, len(self.backoff) - 1)])
 
