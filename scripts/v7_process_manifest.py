@@ -25,7 +25,7 @@ def launcher_logs(text: str) -> list[str]:
     previous = 0
     logs: list[str] = []
     for index, line in enumerate(lines):
-        if 'pids+=("$!")' not in line and 'v7_register_child "$!"' not in line:
+        if ('pids+=("$!")' not in line and 'v7_register_child "$!"' not in line and 'v7_register_optional_child "$!"' not in line):
             continue
         segment = "\n".join(lines[previous:index + 1])
         previous = index + 1

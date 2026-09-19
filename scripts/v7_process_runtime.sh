@@ -8,6 +8,16 @@ v7_register_child() {
     return 64
   fi
   pids+=("$child_pid")
+  fatal_pids+=("$child_pid")
+}
+
+v7_register_optional_child() {
+  local child_pid="${1:-}"
+  if [[ ! "$child_pid" =~ ^[1-9][0-9]*$ ]]; then
+    echo "invalid V7 optional child PID" >&2
+    return 64
+  fi
+  pids+=("$child_pid")
 }
 
 v7_assert_registered_child_count() {
