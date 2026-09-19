@@ -20,7 +20,7 @@ if (!email || !password) throw new Error('admin credentials missing');
 
 const executablePath = process.env.CHROME_BIN || '/usr/bin/google-chrome';
 const browser = await chromium.launch({
-  headless: true,
+  headless: process.env.V7_TS_HEADED !== 'true',
   executablePath,
   args: ['--no-sandbox', '--disable-dev-shm-usage'],
 });
