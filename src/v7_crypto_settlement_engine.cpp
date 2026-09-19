@@ -595,7 +595,9 @@ int main(int argc, char** argv) {
                 for (std::size_t i = 0; i < kRepricingHorizonsMs.size(); ++i) {
                     const auto mask = static_cast<std::uint8_t>(1U << i);
                     if ((window.emitted_mask & mask) != 0 || window.target_ns[i] >= watermark_ns) continue;
-                    auto point = observation(yes_book, kYes, 6);
+                    const bool selected_up = window.direction > 0;
+                    auto point = observation(selected_up ? yes_book : no_book,
+                                             selected_up ? kYes : kNo, 6);
                     point.signal_version = window.signal_version;
                     point.repricing_origin_signal_version = window.signal_version;
                     point.repricing_horizon_ms = kRepricingHorizonsMs[i];
