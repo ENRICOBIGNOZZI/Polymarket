@@ -5,14 +5,14 @@ ROOT = Path(__file__).resolve().parents[1]
 
 
 def test_native_decision_loop_is_event_driven_and_router_free():
-    source = (ROOT / 'src/v7_crypto_settlement_native_candidate.cpp').read_text()
+    source = (ROOT / 'src/v7_crypto_settlement_engine.cpp').read_text()
     loop = (ROOT / 'scripts/paper_v7_execution_loop.sh').read_text()
     assert 'NativeCryptoDecisionLane' in source
     assert 'ExternalVenueWsClient' in source
     assert 'MarketWebSocketFeed' in source
     assert 'lane.construct_candidate' in source
     assert 'authority.submit' in source
-    assert 'v7_external_fair_paper_router.py' not in loop
+    assert 'v7_external_fair_research.py' not in loop
     assert 'scripts/v7_native_crypto_engine_manager.py' in loop
     assert '--allocation "$RUN_ROOT/control/allocations/crypto_settlement_engine.json"' in loop
     assert '--market-registry "$ROOT/config/v7_crypto_settlement_markets.json"' in loop

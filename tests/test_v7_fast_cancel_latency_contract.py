@@ -6,7 +6,7 @@ ROOT = Path(__file__).resolve().parents[1]
 
 def test_fast_cancel_latency_contract() -> None:
     launcher = (ROOT / "scripts/paper_v7_execution_loop.sh").read_text()
-    native = (ROOT / "src/v7_crypto_settlement_native_candidate.cpp").read_text()
+    native = (ROOT / "src/v7_crypto_settlement_engine.cpp").read_text()
     paper = (ROOT / "src/v7_native_paper_execution.cpp").read_text()
     cfg = json.loads((ROOT / "config/v7_crypto_execution_alpha.json").read_text())
     rule = cfg["execution_alpha"]["cancel"]["research_rule"]

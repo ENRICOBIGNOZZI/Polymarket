@@ -1,0 +1,111 @@
+# Native probability / execution-value research candidate
+
+## Scope
+
+This change adds an **opt-in PAPER research candidate**, not a proven profitable
+model and not an automatic production cutover. Every existing asset remains
+registered. No asset exclusion or shadow override is introduced. Existing
+single-writer portfolio, capital, risk, OMS, inventory and canonical-ledger
+ownership remain authoritative. No authenticated order endpoint is added.
+
+Private ledgers, fitted coefficients, market identifiers and profitability
+reports must remain in the private research archive, not this public repository.
+
+## Implemented
+
+- Frozen-ledger audit joins submitted orders to unique causal decision features;
+  it labels submitted-but-unfilled orders from public settlement data as well as
+  canonical FINAL events. Ambiguous joins and unresolved outcomes remain missing.
+- Native expected-value admission compares both actual token asks with a supplied
+  settlement-probability interval. DOWN's lower probability is `1-UP_upper`.
+  Fees and an explicit, separately identified execution reserve are subtracted.
+- Fractional-Kelly sizing uses the conservative net edge, a hard dollar ceiling,
+  available canonical capital and visible depth. It never rounds a position UP
+  through the risk ceiling to meet the venue minimum.
+- The experimental logistic model uses a market-probability prior and regularized
+  deviations for shock size, confirmation, signal age, TTE, spread, imbalance,
+  asset and horizon. Markets receive equal training weight. Time-block bootstrap
+  covariance is a model-uncertainty proxy, **not a certified conditional LCB**.
+- The cold loader checks artifact SHA identity, feature order, covariance,
+  finite parameters, PAPER-only flags and risk limits. Inference is native,
+  bounded and allocation-free; it does not train or read files on the hot path.
+- Order evidence contains forecast, model hash, exact input feature vector,
+  the input-token identity, expected net edge, conservative edge and risk size.
+  Input-token identity matters when the chosen trade is opposite to the trigger.
+- Incremental `v7_nonfill_outcomes.py` persists its cursor and deduplication in
+  research-only SQLite. It survives atomic mirror replacements and records
+  labels without adding a cent to canonical PnL. Long unresolved markets cannot
+  starve later resolution requests.
+
+## Interpretation boundaries
+
+The current fitted model estimates settlement payoff conditional on decision
+features in the historical proposal population. It is **not** a validated model
+of payoff conditional on obtaining a fill under a different limit, quantity or
+latency. The correct action objective requires the joint distribution:
+
+`E[filled_quantity * (settlement_payoff - actual_execution_price) - fees - other_costs | X, action]`.
+
+Multiplying unconditional probability edge by a fill rate generally does not
+identify this objective. An execution model must account for selection into
+fills, censoring, partial size and actual arrival prices.
+
+The existing PAPER matcher deliberately censors price-improvement cases because
+capital/inventory accounting currently uses the submitted price. Removing the
+price-equality condition without carrying actual fill price through the OMS and
+cost-basis owner is NOT an acceptable fix. Changing simulation realism is not an
+increase in proven profitability. Unknown venue terms remain a blocking condition.
+
+The original proposal trigger still has legacy trade-return and confirmation
+semantics. This PR changes valuation and sizing when explicitly supplied a model;
+it does not claim that the complete signal-generation system is redesigned.
+In particular, a missing Coinbase context needs an explicitly identified
+alternative confirmation venue; no venue may be relabelled as Coinbase.
+
+Native volatility diagnostics are event-time EWMA quantities, not per-second
+settlement volatility. Missing long-horizon history, an opening settlement
+reference or oracle basis must not be replaced by numerical zero.
+
+## Two-hour prospective protocol
+
+See `config/v7_probability_forward_2h.json`. The duration is **7200 seconds**, not
+8 hours. It begins only when a checked runtime and immutable artifact are
+actually activated. Preparing this file does not start a test.
+
+Freeze code SHA, artifact SHA, fee sources, latency semantics, limits and the
+analysis plan before the first decision. Record the full six-asset universe and
+all configured horizons. No asset-specific post-hoc exclusion is allowed.
+
+Use the decision time to assign orders to the two-hour cohort. Stop admitting
+new observations to that evaluation cohort at the declared end; continue
+collecting feeds, managing risk and settling positions. Markets that settle
+after the two-hour boundary are pending, not losses, wins or zeros. Two hours
+is an operational research window, not a guarantee of statistical precision.
+
+Primary diagnostics are calibration/log loss against the market prior,
+fill-conditioned net PnL, quote/arrival degradation, actual cost and uncertainty
+coverage by market and time block. Nonfill limit-price payoffs must be labelled
+hypothetical and not aggregated over mutually exclusive retries as a strategy.
+No automatic promotion or enlargement of risk follows a positive sample.
+
+## Cold-plane usage
+
+1. Run the audit against a frozen ledger and the corresponding observation files.
+2. Fit on the research machine with `v7_fit_probability_candidate.py`. Keep the
+   artifact outside Git. Its exact `code_sha` must match the staged runtime.
+3. Validate the native binary with `--probability-model /private/model.json
+   --model-sha <exact-sha> --validate-only`.
+4. For an explicitly authorized, checked activation, the manager accepts
+   `--probability-model`. The standard launch script does not silently enable it.
+5. Keep the rollout gated until the empirical candidate, source coverage, joint
+   execution interpretation and normal exact-SHA deployment checks are reviewed.
+
+## Remaining work before claiming a completed redesign
+
+- Causal, venue-neutral midprice signals normalized for tick size and volatility.
+- An explicitly wired alternative confirmation venue for unsupported contexts.
+- Actual settlement opening reference, oracle basis, per-time volatility and
+  expiry semantics in the feature contract.
+- Joint fill/payoff modelling and out-of-sample checks for action/size changes.
+- Actual-price and partial-fill propagation through canonical OMS/capital.
+- Prospective two-hour activation and resulting forward evidence.

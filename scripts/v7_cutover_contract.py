@@ -104,7 +104,7 @@ def validate(root: Path, expected_head: str | None) -> dict[str, str]:
     required_files = (
         loop_rel, config_rel,
         "scripts/v7_execution_ledger.py", "scripts/v7_ledger_spool.py",
-        "scripts/v7_global_portfolio_coordinator.py", "scripts/v7_opportunity.py",
+        "src/v7_crypto_settlement_engine.cpp", "scripts/v7_opportunity.py",
         "scripts/v7_canonical_economics.py", "scripts/v7_capital_allocator.py",
         "scripts/v7_portfolio_guard.py", "scripts/v7_fee_reward_registry.py",
         "scripts/v7_generate_economic_artifacts.py", "scripts/v7_exact_sha_economic_bundle.py",
@@ -112,7 +112,7 @@ def validate(root: Path, expected_head: str | None) -> dict[str, str]:
         "scripts/v7_external_policy_replay.py", "scripts/v7_learned_execution_model.py",
         "scripts/v7_joint_execution_policy.py", "scripts/v7_maker_durable_learning.py",
         "scripts/v7_maker_opportunity_bridge.py", "scripts/v7_market_maker_rewards.py",
-        "scripts/v7_external_cancel_opportunity_bridge.py", "scripts/v7_external_fair_paper_router.py",
+        "scripts/v7_external_cancel_opportunity_bridge.py", "scripts/v7_external_fair_research.py",
         "scripts/v7_rtds_external_fair_monitor.py", "scripts/v7_external_rich_model.py",
         "scripts/v7_fair_model_artifact.py", "scripts/v7_external_lead_lag_collector.py",
         "scripts/v7_external_cancel_signal_journal.py", "scripts/v7_pm_repricing_shadow.py",

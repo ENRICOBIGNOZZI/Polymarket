@@ -32,6 +32,5 @@ def test_cpp_and_python_persisted_fnv_offset_remain_aligned():
         "scripts/v7_maker_durable_learning.py",
         "include/pm/v7_external_replay.hpp",
         "src/v7_maker_markout_observer.cpp",
-        "src/v7_authorized_maker_paper_executor.cpp",
     ):
         assert expected in (ROOT / relative).read_text(encoding="utf-8")

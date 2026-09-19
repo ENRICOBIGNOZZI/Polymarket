@@ -109,11 +109,30 @@ int main() {
         observation.bid_e4 = 4000; observation.ask_e4 = 4100;
         observation.bid_prices[0] = 4000; observation.bid_quantities[0] = 3'000'000;
         observation.reason = 3; observation.direction = 1;
+        observation.external_valid = 1;
+        observation.external_composite_price = 100.;
+        observation.external_return_250ms = .01;
+        observation.external_return_250ms_valid = 1;
         assert(writer.publish_observation(observation));
+        NativeEvidenceEvent probability_order = order;
+        probability_order.command.client_order_id = 21;
+        probability_order.probability = {.up=.60, .lower=.52, .upper=.68,
+            .asof_ns=1'000'000'000, .max_input_receive_ns=999'900'000,
+            .valid_until_ns=1'100'000'000, .version=1, .valid=1};
+        probability_order.economics.accepted=1;
+        probability_order.economics.expected_net_edge=.18;
+        probability_order.economics.conservative_net_edge=.10;
+        probability_order.economics.probability=.60;
+        probability_order.economics.probability_lower=.52;
+        probability_order.economics.fee_per_share=.004838;
+        probability_order.economics.cost_per_share=.42;
+        probability_order.economics.cost_ceiling_microdollars=840010;
+        probability_order.probability_input_instrument=11;
+        assert(writer.publish(probability_order));
         writer.stop();
         assert(writer.healthy());
-        assert(writer.published() == 3);
-        assert(writer.written() == 3);
+        assert(writer.published() == 4);
+        assert(writer.written() == 4);
         assert(writer.dropped() == 0);
     }
 
@@ -137,6 +156,13 @@ int main() {
         assert(!receipt.at("real_order_submission").as_bool());
         if (kind == "ORDER_SUBMITTED") {
             assert(value.at("limit_price").as_double() == 0.41);
+            if (auto q=metadata.if_contains("probability_up")) {
+                assert(q->as_double()==.60);
+                assert(metadata.at("selected_probability_lower").as_double()==.52);
+                assert(metadata.at("probability_input_token_id").as_string()=="yes-token");
+                assert(metadata.at("probability_input_features").as_array().size()==18);
+                assert(value.at("expected_ev").as_double()==.36);
+            }
             if (metadata.at("component").as_string() == "professional_maker") {
                 saw_maker_order = true;
                 assert(value.at("intended_action").as_string() == "MAKE");
@@ -162,7 +188,7 @@ int main() {
         }
         ++count;
     }
-    assert(count == 3 && saw_order && saw_fill && saw_maker_order);
+    assert(count == 4 && saw_order && saw_fill && saw_maker_order);
     std::size_t observation_files = 0;
     for (const auto& entry : fs::directory_iterator(root / "research/native_observations/run-test")) {
         if (entry.path().extension() != ".jsonl") continue;
@@ -179,6 +205,10 @@ int main() {
         assert(observation.at("execution_semantics_version").is_null());
         assert(!observation.at("execution_authority").as_bool());
         assert(observation.at("probability_forecast").is_null());
+        const auto& features=observation.at("external_features").as_object();
+        assert(features.at("return_250ms").as_double()==.01);
+        assert(features.at("return_1s").is_null() && features.at("return_5s").is_null());
+        assert(features.at("oracle_basis").is_null());
         assert(observation.at("capture_mode").as_string() == "DECISIONS");
         assert(observation.at("taker_maximum_entry_price_e4").as_int64() == 7'500);
         assert(observation.at("binance_return_100ms_bp").as_double() == 1.25);
@@ -211,7 +241,7 @@ int main() {
     for (const auto& entry : fs::directory_iterator(root / "ledger" / "spool")) {
         if (entry.is_regular_file()) ++rollover_count;
     }
-    assert(rollover_count == 4); // Local counter reuse must not overwrite records.
+    assert(rollover_count == 5); // Local counter reuse must not overwrite records.
     assert(fs::is_regular_file(root / "control" / "native_evidence" / "market-test.json"));
     assert(fs::is_regular_file(root / "control" / "native_evidence" / "next-market.json"));
     fs::remove_all(root);

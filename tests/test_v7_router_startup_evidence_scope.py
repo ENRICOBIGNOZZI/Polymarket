@@ -9,7 +9,7 @@ import tempfile
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "scripts"))
 SPEC = importlib.util.spec_from_file_location(
-    "v7_external_fair_paper_router", ROOT / "scripts/v7_external_fair_paper_router.py"
+    "v7_external_fair_research", ROOT / "scripts/v7_external_fair_research.py"
 )
 assert SPEC and SPEC.loader
 router = importlib.util.module_from_spec(SPEC)
@@ -17,28 +17,21 @@ sys.modules[SPEC.name] = router
 SPEC.loader.exec_module(router)
 
 
-def test_live_startup_and_maturity_ignore_cross_sha_durable_history() -> None:
+def test_native_slow_context_does_not_scan_historical_journals() -> None:
+    from v7_slow_context import publish_contexts, context_path
+    import json
     with tempfile.TemporaryDirectory() as directory:
         run_root = Path(directory)
         durable = run_root / "paper_v7_durable" / "external_fair"
         durable.mkdir(parents=True)
-        # A deliberately invalid historical gzip proves the live critical path
-        # never opens durable cross-SHA history. Explicit maintenance would fail.
         sealed = durable / "counterfactuals.jsonl.segment-00000000000000000001.jsonl.gz"
         sealed.write_bytes(b"not-a-gzip")
-        instance = router.PaperRouter(
-            run_root, "a" * 40, ROOT / "config" / "v7_external_fair.json",
-            "https://clob.invalid", "https://gamma.invalid",
-        )
-        diagnostics = instance.maturity_diagnostics()
-        assert diagnostics["forecast_rows"] == 0
-        assert diagnostics["research_evidence_sufficient"] is False
-        try:
-            instance.compact_durable_evidence()
-        except (OSError, EOFError, gzip.BadGzipFile, RuntimeError):
-            pass
-        else:
-            raise AssertionError("explicit durable maintenance unexpectedly accepted corrupt history")
+        count = publish_contexts(run_root, code_sha="a" * 40, run_id="r",
+            markets={"BTC:M5":{"asset":"BTC","horizon":"M5","market_id":"m"}})
+        assert count == 1
+        value = json.loads(context_path(run_root,"m").read_text())
+        assert all(field is None for field in value["fields"].values())
+        assert sealed.read_bytes() == b"not-a-gzip"
 
 
 def test_recovery_paths_are_live_only_but_writes_still_target_both_journals() -> None:
@@ -53,5 +46,5 @@ def test_recovery_paths_are_live_only_but_writes_still_target_both_journals() ->
 
 
 if __name__ == "__main__":
-    test_live_startup_and_maturity_ignore_cross_sha_durable_history()
+    test_native_slow_context_does_not_scan_historical_journals()
     test_recovery_paths_are_live_only_but_writes_still_target_both_journals()

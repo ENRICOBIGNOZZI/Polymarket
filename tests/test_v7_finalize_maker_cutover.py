@@ -24,7 +24,7 @@ def fixture(root:Path)->None:
         'model_sha':SHA,'paper_only':True,'authenticated_execution':False,
         'real_order_submission':False,'active_orders':0})
     write(root/'external_fair/paper_router_status.json',{
-        'schema':'polymarket_v7_external_fair_paper_router_status_v1',
+        'schema':'polymarket_v7_external_fair_research_status_v1',
         'model_sha':SHA,'paper_only':True,'authenticated_execution':False,
         'real_order_submission':False,'open_positions':0,'pending_maker_orders':0})
     ledger=root/'ledger/execution.jsonl';ledger.parent.mkdir(parents=True);ledger.write_text('',encoding='utf-8')

@@ -1,7 +1,7 @@
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
-SOURCE = ROOT / "src" / "v7_crypto_settlement_native_candidate.cpp"
+SOURCE = ROOT / "src" / "v7_crypto_settlement_engine.cpp"
 AUTHORITY = ROOT / "src" / "v7_native_settlement_authority.cpp"
 CMAKE = ROOT / "CMakeLists.txt"
 MANIFEST = ROOT / "config" / "v7_process_manifest.json"
@@ -22,7 +22,7 @@ def test_candidate_is_native_single_owner_and_not_deployed_early() -> None:
     assert "PAPER_SIMULATED_SINGLE_OWNER" in text
     assert '"network_orders_sent", 0' in text
     assert '"simulated_fills", paper_execution.paper_fills()' in text
-    assert "polymarket_v7_crypto_settlement_native_candidate" in CMAKE.read_text()
+    assert "polymarket_v7_crypto_settlement_engine" in CMAKE.read_text()
     assert "crypto_settlement_native_candidate" not in MANIFEST.read_text()
 
 def test_candidate_cannot_bypass_shared_capital_or_oms_owner() -> None:

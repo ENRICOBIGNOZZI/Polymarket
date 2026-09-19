@@ -31,11 +31,11 @@ class CryptoOnlyRuntimeGatesTest(unittest.TestCase):
         self.assertIn("^polymarket_v7_live_algorithm_count 1$", text)
         self.assertNotIn("^polymarket_v7_live_algorithm_count 2$", text)
 
-    def test_portfolio_coordinator_reports_one_economic_engine(self) -> None:
-        text = (ROOT / "scripts/v7_global_portfolio_coordinator.py").read_text(encoding="utf-8")
-        self.assertIn('"economic_engine_count": 1', text)
-        for stale in ("both V7 economic-engine", "both engines", "Structural opportunities"):
-            self.assertNotIn(stale, text)
+    def test_native_owner_replaces_parallel_python_coordinator(self) -> None:
+        self.assertFalse((ROOT / "scripts/v7_global_portfolio_coordinator.py").exists())
+        text = (ROOT / "scripts/paper_v7_execution_loop.sh").read_text(encoding="utf-8")
+        self.assertIn('V7_NATIVE_CRYPTO_SETTLEMENT_ENGINE', text)
+        self.assertIn('"single_execution_owner":true', text)
 
     def test_runtime_execution_replay_docs_are_crypto_only(self) -> None:
         runtime = (ROOT / "docs/RUNTIME.md").read_text(encoding="utf-8")

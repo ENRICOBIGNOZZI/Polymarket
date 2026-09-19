@@ -12,8 +12,7 @@ sys.path.insert(0,str(ROOT/'scripts')); sys.path.insert(0,str(ROOT/'tests'))
 from v7_coordinator_reservations import ReservationLimits, ReservationProjection, ReservationRequest, OWNER
 from v7_lead_lag_replay import ReplayError, ResolutionProof, primitive
 from v7_execution_ledger import CanonicalLedgerWriter, LedgerEvent, iter_records
-from v7_global_portfolio_coordinator import coordinate_reserved_paper
-from test_v7_global_portfolio_coordinator import forward_envelope
+from v7_historical_coordinator_fixtures import forward_envelope
 NOW=1_800_000_000_000
 SHA='a'*40
 
@@ -358,22 +357,5 @@ class ReservationTest(unittest.TestCase):
         with self.assertRaisesRegex(ReplayError,'TRANSITION_PRECEDES_ITS_EVIDENCE'):
             fresh.observe(replace(e,recorded_ts_ms=NOW-1))
 
-    def test_existing_coordinator_opt_in_actual_call_graph(self):
-        raw=forward_envelope('coordinator-synthetic'); now_ns=NOW*1_000_000
-        raw['decision_receive_timestamp_ns']=now_ns-10_000_000
-        raw['source_event_timestamps_ns']=[now_ns-20_000_000]
-        raw['expires_at_ns']=now_ns+1_000_000_000
-        leg=raw['execution_plan']['legs'][0]
-        req=ReservationRequest('cohort','f'*64,raw['market_id'],leg['token_id'],'s','parent','BTC','M5',
-            raw['engine_id'],'USDC',D(20),D(str(leg['target_quantity'])),D(str(leg['limit_price'])),
-            NOW+1000,raw['deterministic_replay_key'])
-        decision=coordinate_reserved_paper([raw],now_ns=now_ns,reservation_projection=self.p,
-            requests_by_replay_key={req.coordinator_replay_key:req},append_event=self.events.append,entry_gate_open=True)
-        self.assertEqual(decision['action'],'TAKE',decision)
-        self.assertTrue(decision['reservation_durable']); self.assertEqual(len(self.events),1)
-        self.assertFalse(decision['new_risk_authorized'])
-        denied=coordinate_reserved_paper([raw],now_ns=now_ns,reservation_projection=self.p,
-            requests_by_replay_key={req.coordinator_replay_key:req},append_event=self.events.append,entry_gate_open=False)
-        self.assertEqual(denied['action'],'NOTHING'); self.assertEqual(len(self.events),1)
 
 if __name__=='__main__':unittest.main()

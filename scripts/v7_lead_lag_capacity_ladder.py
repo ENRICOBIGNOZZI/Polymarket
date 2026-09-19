@@ -13,7 +13,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from v7_external_fair_paper_router import fee_per_share
+from v7_external_fair_research import fee_per_share
 from v7_lead_lag_capacity_replay import (
     MODEL_FAMILY,
     STRATEGY,

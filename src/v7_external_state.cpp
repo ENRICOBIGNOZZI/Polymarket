@@ -243,6 +243,10 @@ bool ExternalAssetState::on_venue_event(const ExternalVenueEvent& event,
         if ((mask & DerivativeContextFundingRate) != 0) venue.funding_rate = event.funding_rate;
         if ((mask & DerivativeContextOpenInterest) != 0) venue.open_interest = event.open_interest;
         venue.context_valid_mask |= mask;
+        for (std::size_t field = 0; field < 4; ++field) {
+            if ((mask & (1U << field)) != 0)
+                venue.context_field_receive_ns[field] = event.local_receive_monotonic_ns;
+        }
         venue.context_receive_ns = event.local_receive_monotonic_ns;
         venue.context_healthy = event.healthy;
         venue.context_gap = event.gap;
@@ -737,6 +741,12 @@ ExternalAssetSnapshot ExternalAssetState::snapshot(
             && now_ns - venue.context_receive_ns <= policy.max_venue_age_ns;
         context.valid_mask = fresh && venue.context_healthy != 0 && venue.context_gap == 0
             ? venue.context_valid_mask : 0;
+        for (std::size_t field = 0; field < 4; ++field) {
+            const auto received = venue.context_field_receive_ns[field];
+            if (received <= 0 || received > now_ns
+                || now_ns - received > policy.max_venue_age_ns)
+                context.valid_mask &= static_cast<std::uint8_t>(~(1U << field));
+        }
         context.healthy = venue.context_healthy;
         context.gap = venue.context_gap;
     }
@@ -744,6 +754,28 @@ ExternalAssetSnapshot ExternalAssetState::snapshot(
         && count >= policy.min_healthy_venues && latest_receive_ns_ > 0
         && latest_receive_ns_ <= now_ns ? 1 : 0;
     return out;
+}
+
+std::array<std::int64_t, 4> ExternalAssetState::derivative_field_clocks(VenueId venue) const noexcept {
+    const auto index = venue_index(venue);
+    return index < venues_.size() ? venues_[index].context_field_receive_ns
+                                  : std::array<std::int64_t, 4>{};
+}
+std::array<std::int64_t, 2> ExternalAssetState::price_context_bounds(
+    std::uint32_t mask, const ExternalStatePolicy& policy) const noexcept {
+    std::array<std::int64_t, 2> bounds{};
+    for (std::size_t i = 0; i < venues_.size(); ++i) {
+        if ((mask & (1U << i)) == 0) continue;
+        const auto received = policy.use_transport_freshness_for_book != 0
+            ? venues_[i].last_transport_receive_ns : venues_[i].last_book_receive_ns;
+        const auto ttl = policy.use_transport_freshness_for_book != 0
+            ? policy.max_transport_age_ns : policy.max_venue_age_ns;
+        if (received <= 0 || ttl < 0 || received > std::numeric_limits<std::int64_t>::max() - ttl) return {};
+        if (bounds[0] == 0 || received < bounds[0]) bounds[0] = received;
+        const auto expires = received + ttl;
+        if (bounds[1] == 0 || expires < bounds[1]) bounds[1] = expires;
+    }
+    return bounds;
 }
 
 CausalCut make_causal_cut(
