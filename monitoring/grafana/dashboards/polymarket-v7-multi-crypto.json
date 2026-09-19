@@ -52,7 +52,8 @@
       "fieldConfig": {
         "defaults": {
           "unit": "prefix:$",
-          "decimals": 2
+          "decimals": 2,
+          "noValue": "N/A"
         },
         "overrides": []
       },
@@ -98,7 +99,8 @@
       "fieldConfig": {
         "defaults": {
           "unit": "prefix:$",
-          "decimals": 2
+          "decimals": 2,
+          "noValue": "N/A"
         },
         "overrides": []
       },
@@ -144,7 +146,8 @@
       "fieldConfig": {
         "defaults": {
           "unit": "prefix:$",
-          "decimals": 2
+          "decimals": 2,
+          "noValue": "N/A"
         },
         "overrides": []
       },
@@ -190,7 +193,8 @@
       "fieldConfig": {
         "defaults": {
           "unit": "prefix:$",
-          "decimals": 2
+          "decimals": 2,
+          "noValue": "N/A"
         },
         "overrides": []
       },
@@ -235,7 +239,8 @@
       ],
       "fieldConfig": {
         "defaults": {
-          "unit": "percentunit"
+          "unit": "percentunit",
+          "noValue": "N/A"
         },
         "overrides": []
       },
@@ -295,7 +300,8 @@
                 }
               }
             }
-          ]
+          ],
+          "noValue": "N/A"
         },
         "overrides": []
       },
@@ -318,7 +324,7 @@
     {
       "id": 10,
       "type": "row",
-      "title": "PERFORMANCE \u2014 portfolio first",
+      "title": "PERFORMANCE — portfolio first",
       "gridPos": {
         "h": 1,
         "w": 24,
@@ -410,7 +416,8 @@
       "fieldConfig": {
         "defaults": {
           "unit": "prefix:$",
-          "decimals": 2
+          "decimals": 2,
+          "noValue": "N/A"
         },
         "overrides": []
       },
@@ -454,7 +461,8 @@
       "fieldConfig": {
         "defaults": {
           "unit": "prefix:$",
-          "decimals": 2
+          "decimals": 2,
+          "noValue": "N/A"
         },
         "overrides": []
       },
@@ -474,7 +482,7 @@
     {
       "id": 20,
       "type": "row",
-      "title": "ASSET \u00d7 HORIZON",
+      "title": "ASSET × HORIZON",
       "gridPos": {
         "h": 1,
         "w": 24,
@@ -511,7 +519,8 @@
       "fieldConfig": {
         "defaults": {
           "unit": "prefix:$",
-          "decimals": 2
+          "decimals": 2,
+          "noValue": "N/A"
         },
         "overrides": []
       },
@@ -554,7 +563,8 @@
       ],
       "fieldConfig": {
         "defaults": {
-          "unit": "percentunit"
+          "unit": "percentunit",
+          "noValue": "N/A"
         },
         "overrides": []
       },
@@ -598,7 +608,8 @@
       "fieldConfig": {
         "defaults": {
           "unit": "prefix:$",
-          "decimals": 2
+          "decimals": 2,
+          "noValue": "N/A"
         },
         "overrides": []
       },
@@ -640,7 +651,9 @@
         }
       ],
       "fieldConfig": {
-        "defaults": {},
+        "defaults": {
+          "noValue": "N/A"
+        },
         "overrides": []
       },
       "options": {
@@ -681,7 +694,9 @@
         }
       ],
       "fieldConfig": {
-        "defaults": {},
+        "defaults": {
+          "noValue": "N/A"
+        },
         "overrides": []
       },
       "options": {
@@ -722,7 +737,9 @@
         }
       ],
       "fieldConfig": {
-        "defaults": {},
+        "defaults": {
+          "noValue": "N/A"
+        },
         "overrides": []
       },
       "options": {
@@ -765,7 +782,8 @@
       "fieldConfig": {
         "defaults": {
           "unit": "prefix:$",
-          "decimals": 2
+          "decimals": 2,
+          "noValue": "N/A"
         },
         "overrides": []
       },
@@ -808,7 +826,8 @@
       ],
       "fieldConfig": {
         "defaults": {
-          "unit": "percentunit"
+          "unit": "percentunit",
+          "noValue": "N/A"
         },
         "overrides": []
       },
@@ -850,7 +869,9 @@
         }
       ],
       "fieldConfig": {
-        "defaults": {},
+        "defaults": {
+          "noValue": "N/A"
+        },
         "overrides": []
       },
       "options": {
@@ -893,7 +914,8 @@
       "fieldConfig": {
         "defaults": {
           "unit": "prefix:$",
-          "decimals": 2
+          "decimals": 2,
+          "noValue": "N/A"
         },
         "overrides": []
       },
@@ -942,7 +964,7 @@
         {
           "expr": "(polymarket_mc_strategy_realized_pnl_usd{job=\"polymarket-v7\",instance=~\".+\",asset=~\"$asset\",horizon=~\"$horizon\",strategy=~\"$strategy\"}) and on(job,instance) (polymarket_v7_exporter_snapshot_usable{job=\"polymarket-v7\",instance=~\".+\"} == 1)",
           "refId": "A",
-          "legendFormat": "{{strategy}} \u00b7 {{asset}} {{horizon}}",
+          "legendFormat": "{{strategy}} · {{asset}} {{horizon}}",
           "instant": false,
           "range": true
         }
@@ -998,7 +1020,8 @@
       "fieldConfig": {
         "defaults": {
           "unit": "prefix:$",
-          "decimals": 2
+          "decimals": 2,
+          "noValue": "N/A"
         },
         "overrides": []
       },
@@ -1018,7 +1041,7 @@
     {
       "id": 40,
       "type": "row",
-      "title": "EXECUTION / EXPOSURE",
+      "title": "NATIVE EXECUTION / EVIDENCE",
       "gridPos": {
         "h": 1,
         "w": 24,
@@ -1031,7 +1054,7 @@
     {
       "id": 41,
       "type": "timeseries",
-      "title": "Coordinator Candidate Crypto Risk",
+      "title": "Native Evidence Flow",
       "gridPos": {
         "h": 8,
         "w": 12,
@@ -1042,37 +1065,30 @@
         "type": "prometheus",
         "uid": "prometheus-v7"
       },
-      "description": "Opportunity/candidate exposure seen by the coordinator; this is not the same as capital actually open in the canonical ledger.",
+      "description": "Cumulative native decision/evidence observations published and durably written. The two curves should remain together; divergence means backlog or loss.",
       "targets": [
         {
-          "expr": "(polymarket_mc_coordinator_candidate_gross_exposure_usd{job=\"polymarket-v7\",instance=~\".+\"}) and on(job,instance) (polymarket_v7_exporter_snapshot_usable{job=\"polymarket-v7\",instance=~\".+\"} == 1)",
+          "expr": "(polymarket_v7_native_observations_published{job=\"polymarket-v7\",instance=~\".+\"}) and on(job,instance) (polymarket_v7_exporter_snapshot_usable{job=\"polymarket-v7\",instance=~\".+\"} == 1)",
           "refId": "A",
-          "legendFormat": "gross",
           "instant": false,
-          "range": true
+          "range": true,
+          "legendFormat": "published"
         },
         {
-          "expr": "(polymarket_mc_coordinator_candidate_net_exposure_usd{job=\"polymarket-v7\",instance=~\".+\"}) and on(job,instance) (polymarket_v7_exporter_snapshot_usable{job=\"polymarket-v7\",instance=~\".+\"} == 1)",
+          "expr": "(polymarket_v7_native_observations_written{job=\"polymarket-v7\",instance=~\".+\"}) and on(job,instance) (polymarket_v7_exporter_snapshot_usable{job=\"polymarket-v7\",instance=~\".+\"} == 1)",
           "refId": "B",
-          "legendFormat": "net directional",
           "instant": false,
-          "range": true
-        },
-        {
-          "expr": "(polymarket_mc_coordinator_candidate_cluster_exposure_usd{job=\"polymarket-v7\",instance=~\".+\"}) and on(job,instance) (polymarket_v7_exporter_snapshot_usable{job=\"polymarket-v7\",instance=~\".+\"} == 1)",
-          "refId": "C",
-          "legendFormat": "cluster",
-          "instant": false,
-          "range": true
+          "range": true,
+          "legendFormat": "written"
         }
       ],
       "fieldConfig": {
         "defaults": {
-          "unit": "prefix:$",
+          "unit": "short",
           "custom": {
             "spanNulls": false
           },
-          "decimals": 2
+          "decimals": 0
         },
         "overrides": []
       },
@@ -1093,7 +1109,7 @@
     {
       "id": 42,
       "type": "timeseries",
-      "title": "Execution Counts",
+      "title": "Orders / Fills / Settled",
       "gridPos": {
         "h": 8,
         "w": 12,
@@ -1104,28 +1120,37 @@
         "type": "prometheus",
         "uid": "prometheus-v7"
       },
-      "description": "Counts are derived from canonical PAPER ledger events.",
+      "description": "Canonical PAPER ledger counts. These are execution outcomes, not alpha opportunities.",
       "targets": [
         {
-          "expr": "(sum by (job, instance) (polymarket_mc_lane_fills_total{job=\"polymarket-v7\",instance=~\".+\"})) and on(job,instance) (polymarket_v7_exporter_snapshot_usable{job=\"polymarket-v7\",instance=~\".+\"} == 1)",
+          "expr": "(polymarket_execution_orders_submitted{job=\"polymarket-v7\",instance=~\".+\"}) and on(job,instance) (polymarket_v7_exporter_snapshot_usable{job=\"polymarket-v7\",instance=~\".+\"} == 1)",
           "refId": "A",
-          "legendFormat": "fills",
           "instant": false,
-          "range": true
+          "range": true,
+          "legendFormat": "submitted"
+        },
+        {
+          "expr": "(polymarket_execution_fills{job=\"polymarket-v7\",instance=~\".+\"}) and on(job,instance) (polymarket_v7_exporter_snapshot_usable{job=\"polymarket-v7\",instance=~\".+\"} == 1)",
+          "refId": "B",
+          "instant": false,
+          "range": true,
+          "legendFormat": "fills"
         },
         {
           "expr": "(sum by (job, instance) (polymarket_mc_lane_finals_total{job=\"polymarket-v7\",instance=~\".+\"})) and on(job,instance) (polymarket_v7_exporter_snapshot_usable{job=\"polymarket-v7\",instance=~\".+\"} == 1)",
-          "refId": "B",
-          "legendFormat": "settled",
+          "refId": "C",
+          "legendFormat": "settled / FINAL",
           "instant": false,
           "range": true
         }
       ],
       "fieldConfig": {
         "defaults": {
+          "unit": "short",
           "custom": {
             "spanNulls": false
-          }
+          },
+          "decimals": 0
         },
         "overrides": []
       },
@@ -1146,7 +1171,7 @@
     {
       "id": 43,
       "type": "bargauge",
-      "title": "Candidate Exposure by Asset",
+      "title": "Worker State by Context",
       "gridPos": {
         "h": 7,
         "w": 8,
@@ -1157,20 +1182,33 @@
         "type": "prometheus",
         "uid": "prometheus-v7"
       },
-      "description": "Coordinator opportunity/candidate exposure, not an executed-position balance.",
+      "description": "1 = native context worker RUNNING. Filter by asset/horizon. Missing series is N/A, never coerced to zero.",
       "targets": [
         {
-          "expr": "(polymarket_mc_coordinator_candidate_asset_exposure_usd{job=\"polymarket-v7\",instance=~\".+\"}) and on(job,instance) (polymarket_v7_exporter_snapshot_usable{job=\"polymarket-v7\",instance=~\".+\"} == 1)",
+          "expr": "(polymarket_v7_native_context_running{job=\"polymarket-v7\",instance=~\".+\",asset=~\"$asset\",horizon=~\"$horizon\"}) and on(job,instance) (polymarket_v7_exporter_snapshot_usable{job=\"polymarket-v7\",instance=~\".+\"} == 1)",
           "refId": "A",
-          "legendFormat": "{{asset}}",
+          "legendFormat": "{{context}}",
           "instant": true,
           "range": false
         }
       ],
       "fieldConfig": {
         "defaults": {
-          "unit": "prefix:$",
-          "decimals": 2
+          "noValue": "N/A",
+          "decimals": 0,
+          "mappings": [
+            {
+              "type": "value",
+              "options": {
+                "0": {
+                  "text": "DOWN"
+                },
+                "1": {
+                  "text": "RUNNING"
+                }
+              }
+            }
+          ]
         },
         "overrides": []
       },
@@ -1190,7 +1228,7 @@
     {
       "id": 44,
       "type": "bargauge",
-      "title": "Candidate Exposure by Horizon",
+      "title": "Native Budget by Context",
       "gridPos": {
         "h": 7,
         "w": 8,
@@ -1201,19 +1239,20 @@
         "type": "prometheus",
         "uid": "prometheus-v7"
       },
-      "description": "Coordinator opportunity/candidate exposure aggregated by M5/M15.",
+      "description": "Budget partition assigned to each native context. This is an authority ceiling, not current open exposure.",
       "targets": [
         {
-          "expr": "(polymarket_mc_coordinator_candidate_horizon_exposure_usd{job=\"polymarket-v7\",instance=~\".+\"}) and on(job,instance) (polymarket_v7_exporter_snapshot_usable{job=\"polymarket-v7\",instance=~\".+\"} == 1)",
+          "expr": "(polymarket_v7_native_context_budget_usd{job=\"polymarket-v7\",instance=~\".+\",asset=~\"$asset\",horizon=~\"$horizon\"}) and on(job,instance) (polymarket_v7_exporter_snapshot_usable{job=\"polymarket-v7\",instance=~\".+\"} == 1)",
           "refId": "A",
-          "legendFormat": "{{horizon}}",
+          "legendFormat": "{{context}}",
           "instant": true,
           "range": false
         }
       ],
       "fieldConfig": {
         "defaults": {
-          "unit": "prefix:$",
+          "noValue": "N/A",
+          "unit": "currencyUSD",
           "decimals": 2
         },
         "overrides": []
@@ -1234,7 +1273,7 @@
     {
       "id": 45,
       "type": "stat",
-      "title": "Candidate Oracle Concentration",
+      "title": "Observation Queue",
       "gridPos": {
         "h": 7,
         "w": 4,
@@ -1245,10 +1284,10 @@
         "type": "prometheus",
         "uid": "prometheus-v7"
       },
-      "description": "Share of gross crypto exposure concentrated in the largest oracle source.",
+      "description": "Current native evidence queue depth. Persistent non-zero depth means the writer is falling behind.",
       "targets": [
         {
-          "expr": "(polymarket_mc_coordinator_candidate_oracle_concentration_ratio{job=\"polymarket-v7\",instance=~\".+\"}) and on(job,instance) (polymarket_v7_exporter_snapshot_usable{job=\"polymarket-v7\",instance=~\".+\"} == 1)",
+          "expr": "(polymarket_v7_native_observations_queue_depth{job=\"polymarket-v7\",instance=~\".+\"}) and on(job,instance) (polymarket_v7_exporter_snapshot_usable{job=\"polymarket-v7\",instance=~\".+\"} == 1)",
           "refId": "A",
           "instant": true,
           "range": false
@@ -1256,7 +1295,26 @@
       ],
       "fieldConfig": {
         "defaults": {
-          "unit": "percentunit"
+          "noValue": "N/A",
+          "unit": "short",
+          "decimals": 0,
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "yellow",
+                "value": 1
+              },
+              {
+                "color": "red",
+                "value": 100
+              }
+            ]
+          }
         },
         "overrides": []
       },
@@ -1279,7 +1337,7 @@
     {
       "id": 46,
       "type": "stat",
-      "title": "Candidate Venue Concentration",
+      "title": "Observation Drops",
       "gridPos": {
         "h": 7,
         "w": 4,
@@ -1290,10 +1348,10 @@
         "type": "prometheus",
         "uid": "prometheus-v7"
       },
-      "description": "Share of gross crypto exposure concentrated in the largest exchange/depth source.",
+      "description": "Cumulative native observation drops. Zero is required for a clean evidence path.",
       "targets": [
         {
-          "expr": "(polymarket_mc_coordinator_candidate_exchange_concentration_ratio{job=\"polymarket-v7\",instance=~\".+\"}) and on(job,instance) (polymarket_v7_exporter_snapshot_usable{job=\"polymarket-v7\",instance=~\".+\"} == 1)",
+          "expr": "(polymarket_v7_native_observations_dropped{job=\"polymarket-v7\",instance=~\".+\"}) and on(job,instance) (polymarket_v7_exporter_snapshot_usable{job=\"polymarket-v7\",instance=~\".+\"} == 1)",
           "refId": "A",
           "instant": true,
           "range": false
@@ -1301,7 +1359,22 @@
       ],
       "fieldConfig": {
         "defaults": {
-          "unit": "percentunit"
+          "noValue": "N/A",
+          "unit": "short",
+          "decimals": 0,
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "red",
+                "value": 1
+              }
+            ]
+          }
         },
         "overrides": []
       },
@@ -1324,7 +1397,7 @@
     {
       "id": 47,
       "type": "row",
-      "title": "SHADOW 6-CRYPTO DATA PLANE",
+      "title": "LIVE NATIVE DATA PLANE",
       "gridPos": {
         "h": 1,
         "w": 24,
@@ -1337,7 +1410,7 @@
     {
       "id": 471,
       "type": "stat",
-      "title": "SHADOW Ready",
+      "title": "Engine Ready",
       "gridPos": {
         "h": 4,
         "w": 6,
@@ -1348,10 +1421,10 @@
         "type": "prometheus",
         "uid": "prometheus-v7"
       },
-      "description": "READY requires zero-authority safety plus all active contracts ready.",
+      "description": "RUNNING requires the native manager to own every expected context with no launch retry.",
       "targets": [
         {
-          "expr": "(polymarket_mc_shadow_ready{job=\"polymarket-v7\",instance=~\".+\"}) and on(job,instance) (polymarket_v7_exporter_snapshot_usable{job=\"polymarket-v7\",instance=~\".+\"} == 1)",
+          "expr": "(polymarket_v7_native_engine_ready{job=\"polymarket-v7\",instance=~\".+\"}) and on(job,instance) (polymarket_v7_exporter_snapshot_usable{job=\"polymarket-v7\",instance=~\".+\"} == 1)",
           "refId": "A",
           "instant": true,
           "range": false
@@ -1359,12 +1432,14 @@
       ],
       "fieldConfig": {
         "defaults": {
+          "noValue": "N/A",
+          "decimals": 0,
           "mappings": [
             {
               "type": "value",
               "options": {
                 "0": {
-                  "text": "WARMING / DEGRADED"
+                  "text": "DEGRADED"
                 },
                 "1": {
                   "text": "READY"
@@ -1394,7 +1469,7 @@
     {
       "id": 472,
       "type": "stat",
-      "title": "External Feeds Ready",
+      "title": "Snapshot Age",
       "gridPos": {
         "h": 4,
         "w": 6,
@@ -1405,17 +1480,38 @@
         "type": "prometheus",
         "uid": "prometheus-v7"
       },
-      "description": "Healthy external venue data assets; target universe is 6.",
+      "description": "Age of the cached monitoring snapshot. Large age means Grafana may be reachable while telemetry is stale.",
       "targets": [
         {
-          "expr": "(polymarket_mc_shadow_external_ready_assets{job=\"polymarket-v7\",instance=~\".+\"}) and on(job,instance) (polymarket_v7_exporter_snapshot_usable{job=\"polymarket-v7\",instance=~\".+\"} == 1)",
+          "expr": "(polymarket_v7_exporter_snapshot_age_seconds{job=\"polymarket-v7\",instance=~\".+\"}) and on(job,instance) (polymarket_v7_exporter_snapshot_usable{job=\"polymarket-v7\",instance=~\".+\"} == 1)",
           "refId": "A",
           "instant": true,
           "range": false
         }
       ],
       "fieldConfig": {
-        "defaults": {},
+        "defaults": {
+          "noValue": "N/A",
+          "unit": "s",
+          "decimals": 1,
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "yellow",
+                "value": 1
+              },
+              {
+                "color": "red",
+                "value": 10
+              }
+            ]
+          }
+        },
         "overrides": []
       },
       "options": {
@@ -1437,7 +1533,7 @@
     {
       "id": 473,
       "type": "stat",
-      "title": "Oracle Assets Healthy",
+      "title": "Active Workers",
       "gridPos": {
         "h": 4,
         "w": 6,
@@ -1448,17 +1544,21 @@
         "type": "prometheus",
         "uid": "prometheus-v7"
       },
-      "description": "Settlement/oracle health across the six-asset SHADOW universe.",
+      "description": "Current native worker processes.",
       "targets": [
         {
-          "expr": "(polymarket_mc_shadow_oracle_healthy_assets{job=\"polymarket-v7\",instance=~\".+\"}) and on(job,instance) (polymarket_v7_exporter_snapshot_usable{job=\"polymarket-v7\",instance=~\".+\"} == 1)",
+          "expr": "(polymarket_v7_native_active_workers{job=\"polymarket-v7\",instance=~\".+\"}) and on(job,instance) (polymarket_v7_exporter_snapshot_usable{job=\"polymarket-v7\",instance=~\".+\"} == 1)",
           "refId": "A",
           "instant": true,
           "range": false
         }
       ],
       "fieldConfig": {
-        "defaults": {},
+        "defaults": {
+          "noValue": "N/A",
+          "unit": "short",
+          "decimals": 0
+        },
         "overrides": []
       },
       "options": {
@@ -1480,7 +1580,7 @@
     {
       "id": 474,
       "type": "stat",
-      "title": "Contracts Ready",
+      "title": "Missing Contexts",
       "gridPos": {
         "h": 4,
         "w": 6,
@@ -1491,17 +1591,38 @@
         "type": "prometheus",
         "uid": "prometheus-v7"
       },
-      "description": "Ready active markets; target is 12 = 6 assets \u00d7 M5/M15.",
+      "description": "Expected minus active native contexts. Must stay zero.",
       "targets": [
         {
-          "expr": "(polymarket_mc_shadow_contract_ready_markets{job=\"polymarket-v7\",instance=~\".+\"}) and on(job,instance) (polymarket_v7_exporter_snapshot_usable{job=\"polymarket-v7\",instance=~\".+\"} == 1)",
+          "expr": "(polymarket_v7_native_missing_contexts{job=\"polymarket-v7\",instance=~\".+\"}) and on(job,instance) (polymarket_v7_exporter_snapshot_usable{job=\"polymarket-v7\",instance=~\".+\"} == 1)",
           "refId": "A",
           "instant": true,
           "range": false
         }
       ],
       "fieldConfig": {
-        "defaults": {},
+        "defaults": {
+          "noValue": "N/A",
+          "unit": "short",
+          "decimals": 0,
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "yellow",
+                "value": 1
+              },
+              {
+                "color": "red",
+                "value": 10
+              }
+            ]
+          }
+        },
         "overrides": []
       },
       "options": {
@@ -1523,7 +1644,7 @@
     {
       "id": 475,
       "type": "stat",
-      "title": "Book Evidence",
+      "title": "Book Runtime",
       "gridPos": {
         "h": 4,
         "w": 6,
@@ -1534,10 +1655,10 @@
         "type": "prometheus",
         "uid": "prometheus-v7"
       },
-      "description": "Book evidence completeness from the SHADOW supervisor.",
+      "description": "Complete Polymarket book subscription/evidence coverage.",
       "targets": [
         {
-          "expr": "(polymarket_mc_shadow_book_evidence_complete{job=\"polymarket-v7\",instance=~\".+\"}) and on(job,instance) (polymarket_v7_exporter_snapshot_usable{job=\"polymarket-v7\",instance=~\".+\"} == 1)",
+          "expr": "(polymarket_v7_book_data_runtime_ready{job=\"polymarket-v7\",instance=~\".+\"}) and on(job,instance) (polymarket_v7_exporter_snapshot_usable{job=\"polymarket-v7\",instance=~\".+\"} == 1)",
           "refId": "A",
           "instant": true,
           "range": false
@@ -1545,6 +1666,8 @@
       ],
       "fieldConfig": {
         "defaults": {
+          "noValue": "N/A",
+          "decimals": 0,
           "mappings": [
             {
               "type": "value",
@@ -1553,7 +1676,7 @@
                   "text": "INCOMPLETE"
                 },
                 "1": {
-                  "text": "COMPLETE"
+                  "text": "READY"
                 }
               }
             }
@@ -1580,7 +1703,7 @@
     {
       "id": 476,
       "type": "stat",
-      "title": "Label Evidence",
+      "title": "External Data",
       "gridPos": {
         "h": 4,
         "w": 6,
@@ -1591,10 +1714,10 @@
         "type": "prometheus",
         "uid": "prometheus-v7"
       },
-      "description": "Label evidence completeness from the SHADOW supervisor.",
+      "description": "All six external crypto asset feeds operational.",
       "targets": [
         {
-          "expr": "(polymarket_mc_shadow_label_evidence_complete{job=\"polymarket-v7\",instance=~\".+\"}) and on(job,instance) (polymarket_v7_exporter_snapshot_usable{job=\"polymarket-v7\",instance=~\".+\"} == 1)",
+          "expr": "(polymarket_v7_external_data_ready{job=\"polymarket-v7\",instance=~\".+\"}) and on(job,instance) (polymarket_v7_exporter_snapshot_usable{job=\"polymarket-v7\",instance=~\".+\"} == 1)",
           "refId": "A",
           "instant": true,
           "range": false
@@ -1602,6 +1725,8 @@
       ],
       "fieldConfig": {
         "defaults": {
+          "noValue": "N/A",
+          "decimals": 0,
           "mappings": [
             {
               "type": "value",
@@ -1610,7 +1735,7 @@
                   "text": "INCOMPLETE"
                 },
                 "1": {
-                  "text": "COMPLETE"
+                  "text": "READY"
                 }
               }
             }
@@ -1637,7 +1762,7 @@
     {
       "id": 477,
       "type": "stat",
-      "title": "Feature Tape Rows",
+      "title": "Observations Written",
       "gridPos": {
         "h": 4,
         "w": 6,
@@ -1648,17 +1773,21 @@
         "type": "prometheus",
         "uid": "prometheus-v7"
       },
-      "description": "Causal feature rows emitted by the SHADOW six-crypto tape.",
+      "description": "Durably written native observations.",
       "targets": [
         {
-          "expr": "(polymarket_mc_shadow_feature_tape_emitted{job=\"polymarket-v7\",instance=~\".+\"}) and on(job,instance) (polymarket_v7_exporter_snapshot_usable{job=\"polymarket-v7\",instance=~\".+\"} == 1)",
+          "expr": "(polymarket_v7_native_observations_written{job=\"polymarket-v7\",instance=~\".+\"}) and on(job,instance) (polymarket_v7_exporter_snapshot_usable{job=\"polymarket-v7\",instance=~\".+\"} == 1)",
           "refId": "A",
           "instant": true,
           "range": false
         }
       ],
       "fieldConfig": {
-        "defaults": {},
+        "defaults": {
+          "unit": "short",
+          "decimals": 0,
+          "noValue": "N/A"
+        },
         "overrides": []
       },
       "options": {
@@ -1680,7 +1809,7 @@
     {
       "id": 478,
       "type": "stat",
-      "title": "SHADOW Status Age",
+      "title": "Launch Retry Contexts",
       "gridPos": {
         "h": 4,
         "w": 6,
@@ -1691,10 +1820,10 @@
         "type": "prometheus",
         "uid": "prometheus-v7"
       },
-      "description": "Age of the last SHADOW supervisor status. Missing means no configured SHADOW source.",
+      "description": "Contexts currently in launch retry. Zero is healthy.",
       "targets": [
         {
-          "expr": "(polymarket_mc_shadow_status_age_seconds{job=\"polymarket-v7\",instance=~\".+\"}) and on(job,instance) (polymarket_v7_exporter_snapshot_usable{job=\"polymarket-v7\",instance=~\".+\"} == 1)",
+          "expr": "(polymarket_v7_native_launch_retry_contexts{job=\"polymarket-v7\",instance=~\".+\"}) and on(job,instance) (polymarket_v7_exporter_snapshot_usable{job=\"polymarket-v7\",instance=~\".+\"} == 1)",
           "refId": "A",
           "instant": true,
           "range": false
@@ -1702,7 +1831,9 @@
       ],
       "fieldConfig": {
         "defaults": {
-          "unit": "s"
+          "unit": "short",
+          "decimals": 0,
+          "noValue": "N/A"
         },
         "overrides": []
       },
@@ -1749,7 +1880,7 @@
         "type": "prometheus",
         "uid": "prometheus-v7"
       },
-      "description": "Expected full universe is 12 = 6 assets \u00d7 2 horizons.",
+      "description": "Expected full universe is 12 = 6 assets × 2 horizons.",
       "targets": [
         {
           "expr": "(polymarket_mc_registered_lanes{job=\"polymarket-v7\",instance=~\".+\"}) and on(job,instance) (polymarket_v7_exporter_snapshot_usable{job=\"polymarket-v7\",instance=~\".+\"} == 1)",
@@ -1759,7 +1890,9 @@
         }
       ],
       "fieldConfig": {
-        "defaults": {},
+        "defaults": {
+          "noValue": "N/A"
+        },
         "overrides": []
       },
       "options": {
@@ -1802,7 +1935,9 @@
         }
       ],
       "fieldConfig": {
-        "defaults": {},
+        "defaults": {
+          "noValue": "N/A"
+        },
         "overrides": []
       },
       "options": {
@@ -1845,7 +1980,9 @@
         }
       ],
       "fieldConfig": {
-        "defaults": {},
+        "defaults": {
+          "noValue": "N/A"
+        },
         "overrides": []
       },
       "options": {
@@ -1890,7 +2027,8 @@
       "fieldConfig": {
         "defaults": {
           "unit": "prefix:$",
-          "decimals": 2
+          "decimals": 2,
+          "noValue": "N/A"
         },
         "overrides": []
       },
@@ -1924,7 +2062,7 @@
         "type": "prometheus",
         "uid": "prometheus-v7"
       },
-      "description": "Must be zero for clean asset\u00d7horizon attribution.",
+      "description": "Must be zero for clean asset×horizon attribution.",
       "targets": [
         {
           "expr": "(polymarket_mc_unattributed_final_rows{job=\"polymarket-v7\",instance=~\".+\"}) and on(job,instance) (polymarket_v7_exporter_snapshot_usable{job=\"polymarket-v7\",instance=~\".+\"} == 1)",
@@ -1934,7 +2072,9 @@
         }
       ],
       "fieldConfig": {
-        "defaults": {},
+        "defaults": {
+          "noValue": "N/A"
+        },
         "overrides": []
       },
       "options": {
@@ -1990,7 +2130,8 @@
                 }
               }
             }
-          ]
+          ],
+          "noValue": "N/A"
         },
         "overrides": []
       },
@@ -2035,7 +2176,9 @@
         }
       ],
       "fieldConfig": {
-        "defaults": {},
+        "defaults": {
+          "noValue": "N/A"
+        },
         "overrides": []
       },
       "options": {
@@ -2076,7 +2219,9 @@
         }
       ],
       "fieldConfig": {
-        "defaults": {},
+        "defaults": {
+          "noValue": "N/A"
+        },
         "overrides": []
       },
       "options": {
@@ -2117,7 +2262,9 @@
         }
       ],
       "fieldConfig": {
-        "defaults": {},
+        "defaults": {
+          "noValue": "N/A"
+        },
         "overrides": []
       },
       "options": {
@@ -2150,7 +2297,7 @@
     },
     {
       "id": 479,
-      "title": "LONDON LIVE PAPER \u2014 30 CONTEXTS",
+      "title": "NATIVE CAPACITY / SETTLEMENT",
       "type": "row",
       "gridPos": {
         "h": 1,
@@ -2163,7 +2310,7 @@
     },
     {
       "id": 480,
-      "title": "Target Contexts",
+      "title": "Expected Contexts",
       "type": "stat",
       "gridPos": {
         "h": 4,
@@ -2177,7 +2324,7 @@
       },
       "targets": [
         {
-          "expr": "(polymarket_v7_native_target_contexts{job=\"polymarket-v7\",instance=~\".+\"}) and on(job,instance) (polymarket_v7_exporter_snapshot_usable{job=\"polymarket-v7\",instance=~\".+\"} == 1)",
+          "expr": "(polymarket_v7_native_expected_contexts{job=\"polymarket-v7\",instance=~\".+\"}) and on(job,instance) (polymarket_v7_exporter_snapshot_usable{job=\"polymarket-v7\",instance=~\".+\"} == 1)",
           "refId": "A",
           "instant": true,
           "range": false
@@ -2186,28 +2333,31 @@
       "fieldConfig": {
         "defaults": {
           "unit": "short",
-          "decimals": 0
+          "decimals": 0,
+          "noValue": "N/A"
         },
         "overrides": []
       },
       "options": {
         "reduceOptions": {
-          "values": false,
           "calcs": [
             "last"
           ],
-          "fields": ""
+          "fields": "",
+          "values": false
         },
-        "orientation": "auto",
-        "textMode": "auto",
         "colorMode": "value",
         "graphMode": "none",
-        "justifyMode": "auto"
-      }
+        "justifyMode": "auto",
+        "orientation": "auto",
+        "textMode": "auto",
+        "wideLayout": true
+      },
+      "description": "Configured native context count."
     },
     {
       "id": 481,
-      "title": "Active Workers",
+      "title": "Partition Budget",
       "type": "stat",
       "gridPos": {
         "h": 4,
@@ -2221,7 +2371,7 @@
       },
       "targets": [
         {
-          "expr": "(polymarket_v7_native_active_workers{job=\"polymarket-v7\",instance=~\".+\"}) and on(job,instance) (polymarket_v7_exporter_snapshot_usable{job=\"polymarket-v7\",instance=~\".+\"} == 1)",
+          "expr": "(polymarket_v7_native_partition_budget_usd{job=\"polymarket-v7\",instance=~\".+\"}) and on(job,instance) (polymarket_v7_exporter_snapshot_usable{job=\"polymarket-v7\",instance=~\".+\"} == 1)",
           "refId": "A",
           "instant": true,
           "range": false
@@ -2229,29 +2379,32 @@
       ],
       "fieldConfig": {
         "defaults": {
-          "unit": "short",
-          "decimals": 0
+          "unit": "currencyUSD",
+          "decimals": 2,
+          "noValue": "N/A"
         },
         "overrides": []
       },
       "options": {
         "reduceOptions": {
-          "values": false,
           "calcs": [
             "last"
           ],
-          "fields": ""
+          "fields": "",
+          "values": false
         },
-        "orientation": "auto",
-        "textMode": "auto",
         "colorMode": "value",
         "graphMode": "none",
-        "justifyMode": "auto"
-      }
+        "justifyMode": "auto",
+        "orientation": "auto",
+        "textMode": "auto",
+        "wideLayout": true
+      },
+      "description": "PAPER budget ceiling per native partition."
     },
     {
       "id": 482,
-      "title": "Missing Contexts",
+      "title": "Observed Book Markets",
       "type": "stat",
       "gridPos": {
         "h": 4,
@@ -2265,7 +2418,7 @@
       },
       "targets": [
         {
-          "expr": "(polymarket_v7_native_missing_contexts{job=\"polymarket-v7\",instance=~\".+\"}) and on(job,instance) (polymarket_v7_exporter_snapshot_usable{job=\"polymarket-v7\",instance=~\".+\"} == 1)",
+          "expr": "(polymarket_v7_book_data_observed_markets{job=\"polymarket-v7\",instance=~\".+\"}) and on(job,instance) (polymarket_v7_exporter_snapshot_usable{job=\"polymarket-v7\",instance=~\".+\"} == 1)",
           "refId": "A",
           "instant": true,
           "range": false
@@ -2274,24 +2427,27 @@
       "fieldConfig": {
         "defaults": {
           "unit": "short",
-          "decimals": 0
+          "decimals": 0,
+          "noValue": "N/A"
         },
         "overrides": []
       },
       "options": {
         "reduceOptions": {
-          "values": false,
           "calcs": [
             "last"
           ],
-          "fields": ""
+          "fields": "",
+          "values": false
         },
-        "orientation": "auto",
-        "textMode": "auto",
         "colorMode": "value",
         "graphMode": "none",
-        "justifyMode": "auto"
-      }
+        "justifyMode": "auto",
+        "orientation": "auto",
+        "textMode": "auto",
+        "wideLayout": true
+      },
+      "description": "Polymarket markets with live book evidence."
     },
     {
       "id": 483,
@@ -2318,28 +2474,31 @@
       "fieldConfig": {
         "defaults": {
           "unit": "currencyUSD",
-          "decimals": 2
+          "decimals": 2,
+          "noValue": "N/A"
         },
         "overrides": []
       },
       "options": {
         "reduceOptions": {
-          "values": false,
           "calcs": [
             "last"
           ],
-          "fields": ""
+          "fields": "",
+          "values": false
         },
-        "orientation": "auto",
-        "textMode": "auto",
         "colorMode": "value",
         "graphMode": "none",
-        "justifyMode": "auto"
-      }
+        "justifyMode": "auto",
+        "orientation": "auto",
+        "textMode": "auto",
+        "wideLayout": true
+      },
+      "description": "Global PAPER authority ceiling assigned to the crypto engine."
     },
     {
       "id": 484,
-      "title": "LIVE DATA COVERAGE \u2014 PM BOOKS + EXTERNAL ASSETS",
+      "title": "LIVE DATA COVERAGE — PM BOOKS + EXTERNAL ASSETS",
       "type": "row",
       "gridPos": {
         "h": 1,
@@ -2376,7 +2535,8 @@
       "fieldConfig": {
         "defaults": {
           "unit": "short",
-          "decimals": 0
+          "decimals": 0,
+          "noValue": "N/A"
         },
         "overrides": []
       },
@@ -2421,7 +2581,8 @@
       "fieldConfig": {
         "defaults": {
           "unit": "short",
-          "decimals": 0
+          "decimals": 0,
+          "noValue": "N/A"
         },
         "overrides": []
       },
@@ -2466,7 +2627,8 @@
       "fieldConfig": {
         "defaults": {
           "unit": "short",
-          "decimals": 0
+          "decimals": 0,
+          "noValue": "N/A"
         },
         "overrides": []
       },
@@ -2511,7 +2673,8 @@
       "fieldConfig": {
         "defaults": {
           "unit": "short",
-          "decimals": 0
+          "decimals": 0,
+          "noValue": "N/A"
         },
         "overrides": []
       },
@@ -2603,5 +2766,5 @@
   "timezone": "browser",
   "title": "Polymarket V7 Multi-Crypto Performance",
   "uid": "polymarket-v7-multi-crypto",
-  "version": 6
+  "version": 7
 }

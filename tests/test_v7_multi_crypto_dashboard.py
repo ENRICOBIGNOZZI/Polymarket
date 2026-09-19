@@ -20,16 +20,16 @@ class MultiCryptoDashboardTest(unittest.TestCase):
             "polymarket_mc_lane_realized_pnl_usd", "polymarket_mc_strategy_realized_pnl_usd",
             "polymarket_mc_attribution_status_code", "polymarket_mc_attribution_gap_usd",
             "polymarket_mc_lane_economic_evidence_present",
-            "polymarket_mc_shadow_ready", "polymarket_mc_shadow_external_ready_assets",
-            "polymarket_mc_shadow_contract_ready_markets", "polymarket_mc_shadow_status_age_seconds",
             "polymarket_mc_lane_realized_return_on_turnover", "polymarket_mc_lane_fees_bps",
-            "polymarket_mc_coordinator_candidate_asset_exposure_usd",
-            "polymarket_mc_coordinator_candidate_horizon_exposure_usd",
-            "polymarket_mc_coordinator_candidate_oracle_concentration_ratio",
-            "polymarket_mc_coordinator_candidate_exchange_concentration_ratio",
             "polymarket_mc_lane_open_cost_at_risk_usd",
+            "polymarket_v7_native_engine_ready", "polymarket_v7_native_active_workers",
+            "polymarket_v7_native_context_running", "polymarket_v7_native_observations_queue_depth",
+            "polymarket_v7_native_observations_dropped", "polymarket_v7_native_observations_written",
+            "polymarket_v7_book_data_runtime_ready", "polymarket_v7_external_data_ready",
         ):
             self.assertIn(metric, text)
+        for retired in ("polymarket_mc_coordinator_candidate_", "polymarket_mc_shadow_"):
+            self.assertNotIn(retired, text)
         self.assertIn("N/A", text)
         self.assertNotIn("polymarket_runtime_pnl_usd", text)
         self.assertNotIn("polymarket_runtime_equity_usd", text)
@@ -37,6 +37,12 @@ class MultiCryptoDashboardTest(unittest.TestCase):
         self.assertNotIn("polymarket_mc_total_pnl_usd", text)
         self.assertNotIn("polymarket_mc_unrealized_pnl_usd", text)
         self.assertNotIn("$instance", text)
+
+    def test_single_value_panels_render_missing_as_na_not_zero(self) -> None:
+        dashboard = json.loads(DASHBOARD.read_text(encoding="utf-8"))
+        for panel in dashboard["panels"]:
+            if panel.get("type") in {"stat", "bargauge"}:
+                self.assertEqual(panel["fieldConfig"]["defaults"].get("noValue"), "N/A", panel["title"])
 
     def test_equity_is_not_mixed_into_pnl_timeseries(self) -> None:
         dashboard = json.loads(DASHBOARD.read_text(encoding="utf-8"))
