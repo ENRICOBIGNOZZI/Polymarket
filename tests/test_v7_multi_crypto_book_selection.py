@@ -105,7 +105,9 @@ def test_observer_selection_only_preserves_default_behavior_and_blocks_fair_inje
     assert 'reload = !options.selection_only' in source
     assert 'options.fair_only ? 25 : 1000' in source
     assert 'recover_missing_lineage_' in source
-    assert '(options.fair_only || options.selection_only)' in source
+    assert 'if (options.fair_only && observer.lineage_recovery_requested())' in source
+    assert '(options.fair_only || options.selection_only)' not in source
+    assert 'load_selected_pairs(options.selection, options.selection_only, options.model_sha) != selected_pairs' in source
     assert 'token_active(event.instrument_handle, receive.wall_ms)' in source
     assert 'result.price_change_without_lineage > 0' not in source
     assert 'token.start_wall_ms <= now_wall && now_wall < token.end_wall_ms' in source

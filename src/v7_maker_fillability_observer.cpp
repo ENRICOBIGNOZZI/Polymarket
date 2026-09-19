@@ -1118,8 +1118,12 @@ int main(int argc, char** argv) {
                     // Restarting on every mtime update erased queue evidence.
                     reload = !options.selection_only
                         && fair_observation_pairs(options) != fair_pairs;
-                    if ((options.fair_only || options.selection_only)
-                            && observer.lineage_recovery_requested()) {
+                    // Selection-only mode already heals token-local lineage in place
+                    // when a later full snapshot arrives. Restarting the entire 30-context
+                    // observer here turns one transient gap into repeated 0/30 coverage.
+                    // Fair-only mode has no stable explicit selection and retains the
+                    // conservative reconnect behavior.
+                    if (options.fair_only && observer.lineage_recovery_requested()) {
                         reload = true;
                     }
                     if (!options.fair_only) {
