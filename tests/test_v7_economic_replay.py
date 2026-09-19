@@ -271,3 +271,63 @@ def test_price_aware_extracts_taker_market_from_canonical_ledger(tmp_path) -> No
     assert stats=={'taker_markets':1,'resolved_taker_markets':1,'missing_final':0,'invalid_markets':0}
     assert rows[0]['entry_price']==.76 and rows[0]['shares']==20
     assert rows[0]['outcome_payout']==1.0
+
+def test_tte_window_diagnostics_changes_only_tte_and_stays_zero_authority():
+    import importlib.util
+    spec=importlib.util.spec_from_file_location('economic_report_tte',ROOT/'research/economic/run.py')
+    mod=importlib.util.module_from_spec(spec);spec.loader.exec_module(mod)
+    protocol={
+        'quantity_shares':[5],
+        'tte_windows_seconds':[[90,105],[105,120]],
+        'baseline_tte_window_seconds':[105,120],
+    }
+    common={
+        'kind':2,'book_valid':True,'confirmed_non_opposing':True,
+        'minimum_order_microunits':1_000_000,'fee_rate':.07,'fee_exponent':1.0,
+        'asks':[[4000,10_000_000]],'ask_e4':4000,'ask_quantity':10_000_000,
+        'signal_age_ns':50_000_000,'_capture':'c',
+    }
+    points=[
+        {**common,'market_id':'m1','token_id':'Y','reason':7,'tte_ns':100_000_000_000,
+         'decision_wall_ns':90,'decision_monotonic_ns':90},
+        {**common,'market_id':'m1','token_id':'Y','reason':6,'tte_ns':100_000_000_000,
+         'decision_wall_ns':100,'decision_monotonic_ns':100},
+        {**common,'market_id':'m1','token_id':'N','reason':1,'tte_ns':110_000_000_000,
+         'decision_wall_ns':110,'decision_monotonic_ns':110},
+        {**common,'market_id':'m2','token_id':'Y','reason':6,'tte_ns':100_000_000_000,
+         'decision_wall_ns':120,'decision_monotonic_ns':120},
+    ]
+    ledger=[{
+        'event_type':'FINAL','market_id':'m1','final_pnl':-2.084,
+        'metadata':{'winning_token_id':'Y'},
+    }]
+    report=mod.tte_window_diagnostics(points,ledger,protocol)
+    assert report['state']=='HYPOTHESIS_GENERATING_SELECTION_CONDITIONED'
+    assert report['settlement_label_coverage']==pytest.approx(.5)
+    assert report['automatic_promotion'] is False
+    assert report['real_money_authorized'] is False
+    by_window={tuple(x['window_seconds']):x for x in report['scenarios']}
+    assert by_window[(90.0,105.0)]['markets']==1
+    assert by_window[(90.0,105.0)]['net_pnl_usd']==pytest.approx(2.916)
+    assert by_window[(105.0,120.0)]['net_pnl_usd']==pytest.approx(-2.084)
+    assert by_window[(90.0,105.0)]['trades'][0]['reason']==6
+
+
+def test_tte_window_diagnostics_is_available_when_all_observed_markets_are_labeled():
+    import importlib.util
+    spec=importlib.util.spec_from_file_location('economic_report_tte_full',ROOT/'research/economic/run.py')
+    mod=importlib.util.module_from_spec(spec);spec.loader.exec_module(mod)
+    protocol={'quantity_shares':[5],'tte_windows_seconds':[[105,120]],'baseline_tte_window_seconds':[105,120]}
+    point={
+        'kind':2,'book_valid':True,'confirmed_non_opposing':True,
+        'minimum_order_microunits':1_000_000,'fee_rate':.07,'fee_exponent':1.0,
+        'asks':[[4000,10_000_000]],'ask_e4':4000,'ask_quantity':10_000_000,
+        'signal_age_ns':50_000_000,'_capture':'c','market_id':'m1','token_id':'Y',
+        'reason':1,'tte_ns':110_000_000_000,'decision_wall_ns':100,'decision_monotonic_ns':100,
+    }
+    ledger=[{'event_type':'FINAL','market_id':'m1','final_pnl':2.916,'metadata':{'winning_token_id':'Y'}}]
+    report=mod.tte_window_diagnostics([point],ledger,protocol)
+    assert report['state']=='COUNTERFACTUAL_DIAGNOSTICS_AVAILABLE'
+    assert report['settlement_label_coverage']==1
+    assert report['baseline_accepted_decision_book_pnl_usd']==pytest.approx(2.916)
+    assert report['baseline_accepted_canonical_pnl_usd']==pytest.approx(2.916)
