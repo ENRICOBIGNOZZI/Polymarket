@@ -31,6 +31,7 @@ int main(){
 }
 """
 
+
 def test_native_order_salt_sequence() -> None:
     compiler=shutil.which("c++")
     assert compiler
@@ -40,3 +41,7 @@ def test_native_order_salt_sequence() -> None:
                         f"-I{ROOT/'include'}",str(ROOT/'src/v7_clob_order_salt.cpp'),
                         str(main),"-o",str(binary)],check=True,capture_output=True,text=True)
         subprocess.run([str(binary)],check=True,timeout=10)
+
+
+if __name__ == "__main__":
+    test_native_order_salt_sequence()
