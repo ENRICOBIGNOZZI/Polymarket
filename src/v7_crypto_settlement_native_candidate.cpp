@@ -336,6 +336,9 @@ int main(int argc, char** argv) {
         if (!maker_model.valid()) throw std::runtime_error("invalid native maker model snapshot");
         evidence_config.maker_artifact_sha256 = maker_model.execution_artifact_sha256.data();
         evidence_config.maker_policy_sha256 = maker_model.exploration_policy_sha256.data();
+        evidence_config.maker_execution_policy_hash = maker_model.execution_policy_hash.data();
+        evidence_config.maker_execution_config_hash = maker_model.execution_config_hash.data();
+        evidence_config.maker_execution_semantics = maker_model.execution_semantics_version.data();
         evidence_config.maker_valid_cells = std::count_if(maker_model.execution_cells.begin(),
             maker_model.execution_cells.end(), [](const auto& cell) { return cell.valid != 0; });
         auto evidence_owner = std::make_unique<NativeRuntimeEvidenceWriter>(evidence_config);
