@@ -1,0 +1,32 @@
+{
+  "schema": "polymarket_v7_model_data_implementation_checkpoint_v1",
+  "program_id": "crypto-model-data-20260919",
+  "base_sha": "037a57758c39cfb2dccb36580b6ca04fd90e7f69",
+  "paper_only": true,
+  "authenticated_execution": false,
+  "real_order_submission": false,
+  "real_capital_at_risk": false,
+  "automatic_promotion": false,
+  "execution_authority": "ZERO_AUTHORITY_RESEARCH_ONLY",
+  "maximum_managed_data_bytes": 60000000000,
+  "external_storage_allowed": false,
+  "scope": "OFFLINE_RESEARCH_CONTRACTS_NOT_RUNTIME_CONFIGURATION",
+  "work_packages": [
+    {"id": "P0_ECONOMICS", "state": "IMPLEMENTED_OFFLINE_NOT_WIRED", "output": "scripts/v7_research_economic_contract.py", "next_gate": "Bind exact market metadata, delay and fee settlement semantics to a real recorded episode; fee rounding remains unvalidated"},
+    {"id": "P0_CAUSALITY", "state": "IMPLEMENTED_OFFLINE_NOT_WIRED", "output": "scripts/v7_research_economic_contract.py", "next_gate": "Producer-certified availability clocks and continuous coverage; no reconstructed proof from sparse historical BBO"},
+    {"id": "P0_DATASETS", "state": "IMPLEMENTED_OFFLINE_NOT_WIRED", "output": "scripts/v7_research_causal_dataset.py", "next_gate": "Adapter from canonical tapes, real-data parity and canonical storage-owner admission"},
+    {"id": "P0_COLLECTORS", "state": "PENDING_RUNTIME_ACCESS", "next_gate": "Metadata/oracle/public L2 gap and sequence audit, availability timestamps, selected and unselected states"},
+    {"id": "P0_RETENTION", "state": "PREFLIGHT_ONLY", "next_gate": "Integrate admission with existing retention owner; protect immature labels and stratified episodes within current budget"},
+    {"id": "P1_SETTLEMENT", "state": "PENDING_CAUSAL_DATASET", "next_gate": "Reuse existing trainer; frozen external-only and PM-plus-external models with exact settlement semantics"},
+    {"id": "P1_REPRICING", "state": "LABEL_CONTRACT_IMPLEMENTED_OFFLINE", "next_gate": "Train on executable labels; keep midpoint benchmark; evaluate full cost and latency scenarios"},
+    {"id": "P1_LEAD_LAG", "state": "PENDING_CAUSAL_DATASET", "next_gate": "Freeze multi-window volatility-normalized challenger; include oracle distance and time-to-settlement"},
+    {"id": "P1_FILL_CONDITIONED", "state": "PENDING_EXECUTION_EVIDENCE", "next_gate": "Compare empirical/kernel/duration/tabular models for joint fill size, time and fill-conditioned markout; retain censoring"},
+    {"id": "P1_VALIDATION", "state": "PURGED_GROUP_SPLIT_IMPLEMENTED", "next_gate": "Real-data walk-forward, paired baseline, locked final audit, dependence-aware economic uncertainty"},
+    {"id": "P2_POLICY", "state": "PENDING_VALIDATED_MODELS", "next_gate": "Existing single coordinator compares complete price-size-lifetime-exit policies with no double counting"},
+    {"id": "P2_MULTI_ASSET", "state": "PENDING_BTC_BASELINE", "next_gate": "Compare separate versus partially pooled context models; preserve asset/horizon/settlement identities"},
+    {"id": "P2_EXPLORATION", "state": "PENDING_VALIDATED_SIMULATOR", "next_gate": "Pre-outcome bounded PAPER assignment with propensities; simulated fills remain counterfactual"},
+    {"id": "P2_OPERABILITY", "state": "PENDING_RUNTIME_ACCESS", "next_gate": "Collect independently of inference; feature parity, recovery, source loss and PnL-funnel monitoring"},
+    {"id": "P2_LATENCY_CAPACITY", "state": "PENDING_EXECUTABLE_EDGE", "next_gate": "Measure net opportunity decay and quantity capacity before promoting extra complexity"},
+    {"id": "INTEGRATION", "state": "NOT_DEPLOYED", "next_gate": "Exact-head full CI, canonical verifier, independent review, real-data PAPER replay and explicit governed cutover"}
+  ]
+}
