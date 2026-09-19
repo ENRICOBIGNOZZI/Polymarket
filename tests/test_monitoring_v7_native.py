@@ -327,6 +327,15 @@ class V7NativeMonitoringTest(unittest.TestCase):
             root=Path(directory)/"paper_v7_live"; self._fixture(root); path=root/"control/portfolio_state.json"; value=json.loads(path.read_text()); value["killed"]=True; value["drawdown"]=.15; self._write(path,value)
             reasons=exporter.health_reasons(exporter.collect_snapshot(root,ROOT,now=1000)); self.assertIn("runtime_killed",reasons); self.assertIn("drawdown_limit_breached",reasons)
 
+    def test_retention_partial_failure_fails_operator_health_closed(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root=Path(directory)/"paper_v7_live"; self._fixture(root)
+            status=json.loads((root/"control/london_buffer_retention_status.json").read_text())
+            status["state"]="RETENTION_PARTIAL_FAILURE"
+            self._write(root/"control/london_buffer_retention_status.json",status)
+            reasons=exporter.health_reasons(exporter.collect_snapshot(root,ROOT,now=1000))
+            self.assertIn("london_buffer_retention_partial_failure",reasons)
+
     def test_dashboard_and_alerts_are_crypto_only(self) -> None:
         dashboard=(ROOT/"monitoring/grafana/dashboards/polymarket-v7.json").read_text().lower(); alerts=(ROOT/"monitoring/v7_alerts.yml").read_text().lower()
         self.assertIn("polymarket_v7_live_algorithm_count",dashboard)

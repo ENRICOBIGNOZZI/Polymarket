@@ -551,6 +551,7 @@ def health_reasons(snapshot: dict[str, Any], *, max_runtime_age: int = 180, max_
     retention, operations = (snapshot.get("operations") or {}).get("retention") or {}, snapshot.get("operations") or {}
     if retention.get("schema") != "polymarket_v7_london_buffer_retention_status_v1" or retention.get("paper_only") is not True or _number(operations.get("retention_age"), math.inf) > 7200: reasons.append("london_buffer_retention_missing_or_stale")
     if retention.get("state") == "BUFFER_LIMIT_EXCEEDED_UNSYNCED_DATA_PRESERVED": reasons.append("london_buffer_limit_exceeded_unsynced_data_preserved")
+    if retention.get("state") == "RETENTION_PARTIAL_FAILURE": reasons.append("london_buffer_retention_partial_failure")
     external_data = snapshot.get("external_asset_data") or {}
     if (
         external_data.get("schema") != "polymarket_v7_multi_asset_external_collector_v1"

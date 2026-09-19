@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
 set -euo pipefail
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 REMOTE="${POLYMARKET_LONDON_HOST:?POLYMARKET_LONDON_HOST required}"; USER="${POLYMARKET_LONDON_USER:-enrico}"; REMOTE_ROOT="${POLYMARKET_LONDON_RUN_ROOT:-/home/$USER/polymarket-runs/paper_v7_london}"
 LOCAL_ROOT="${PM_V7_RESEARCH_SYNC_ROOT:-$HOME/polymarket-research/london}"
 mkdir -p "$LOCAL_ROOT/current" "$LOCAL_ROOT/receipts"
@@ -15,10 +16,10 @@ rsync -a --partial-dir=.rsync-partial \
   --include='/control/runtime_artifact_receipt.json' --exclude='*' \
   "$USER@$REMOTE:$REMOTE_ROOT/" "$LOCAL_ROOT/current/"
 receipt_tmp="$(mktemp)"
-python3 - "$LOCAL_ROOT" "$REMOTE" "$receipt_tmp" <<'PY'
+python3 - "$LOCAL_ROOT" "$REMOTE" "$receipt_tmp" "$ROOT/config/v7_london_buffer_retention.json" <<'PY'
 import fnmatch,hashlib,json,sys,time
 from pathlib import Path
-root=Path(sys.argv[1]); current=root/'current'; cutoff=time.time_ns(); patterns=['external_fair/raw/*.bin*','external_fair/normalized_events/*.bin*','trade_tape.csv.*','micro_maker/book_observations/*.jsonl.*','micro_maker/fillability_ws.jsonl.*','**/*.log.*','**/*.log.gz']
+root=Path(sys.argv[1]); current=root/'current'; cutoff=time.time_ns(); policy=json.loads(Path(sys.argv[4]).read_text()); patterns=list(policy['closed_segment_patterns']); never=set(policy.get('never_delete') or [])
 def dig(p):
  h=hashlib.sha256();
  with p.open('rb') as f:
@@ -28,7 +29,7 @@ files=[]
 for p in current.rglob('*'):
  if not p.is_file() or p.is_symlink():continue
  rel=str(p.relative_to(current)); st=p.stat()
- if '.rsync-partial' in p.parts or rel.endswith('.open') or (rel.endswith('.bin') and '.segment-' not in p.name): continue
+ if '.rsync-partial' in p.parts or rel in never or rel.endswith('.open') or (rel.endswith('.bin') and '.segment-' not in p.name): continue
  if st.st_mtime_ns<=cutoff and any(fnmatch.fnmatch(rel,x) for x in patterns): files.append({'path':rel,'size':st.st_size,'sha256':dig(p),'mtime_ns':st.st_mtime_ns})
 total=sum(p.stat().st_size for p in current.rglob('*') if p.is_file())
 v={'schema':'polymarket_v7_research_offload_receipt_v1','timestamp_ns':time.time_ns(),'source_host':sys.argv[2],'synced_through_ns':cutoff,'bytes_local':total,'complete_command':True,'zero_fill_missing':False,'files':files}
