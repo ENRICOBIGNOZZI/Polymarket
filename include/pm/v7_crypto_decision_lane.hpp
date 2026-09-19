@@ -30,9 +30,9 @@ struct NativeCryptoDecisionPolicy {
     std::int64_t maximum_tte_ns = 120'000'000'000LL;
     std::int64_t maximum_signal_age_ns = 5'000'000'000LL;
     std::int64_t maximum_book_age_ns = 100'000'000LL;
-    double minimum_absolute_binance_return_bp = 0.30;
+    double minimum_absolute_binance_return_bp = 0.50;
     std::int64_t target_quantity_microunits = 5'000'000;
-    std::int32_t maximum_entry_price_e4 = 10'000;
+    std::int32_t maximum_entry_price_e4 = 8'000;
     std::uint8_t require_signal_valid = 1;
     std::uint8_t require_full_visible_depth = 1;
     std::uint8_t one_entry_per_market = 1;
