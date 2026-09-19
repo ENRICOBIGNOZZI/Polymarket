@@ -18,6 +18,9 @@
 
 using namespace pm::v7::external_fair;
 
+static_assert(kExternalRawTapeQueueCapacity >= 512,
+              "raw tape burst buffer regressed below observed London requirement");
+
 int main() {
     const auto path = std::filesystem::temp_directory_path() / "pm_v7_external_tape_test.bin";
     std::filesystem::remove(path);
