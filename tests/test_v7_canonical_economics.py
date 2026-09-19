@@ -387,6 +387,62 @@ class CanonicalEconomicsTest(unittest.TestCase):
         self.assertEqual(report["mature_terminal_units"], 1)
         self.assertAlmostEqual(report["net_pnl"], 5.8)
 
+    def test_native_market_final_aliases_token_position_without_false_conflict(self) -> None:
+        now = clock()
+        order_id = "native-order-1"
+        fill_position = "native-position:market-1:yes-token"
+        terminal_position = "native-market:market-1"
+        terminal_id = "native-market-settlement:market-1"
+        common = dict(
+            strategy="CRYPTO_SETTLEMENT_ENGINE", model_sha=SHA,
+            order_id=order_id, event_id="event-native", market_id="market-1",
+            token_id="yes-token", side="BUY",
+        )
+        events = [
+            ledger.LedgerEvent(
+                event_type="ORDER_SUBMITTED", intended_size=5.0,
+                intended_action="TAKE", limit_price=0.4,
+                exchange_ts_ms=now, receive_ts_ms=now + 1,
+                decision_ts_ms=now + 2, book_snapshot_id="native-book",
+                metadata=metadata("crypto_informed_taker", 300), **common,
+            ),
+            ledger.LedgerEvent(
+                event_type="FILL", position_id=fill_position,
+                fill_id="native-fill-1", fill_price=0.4, filled_size=5.0,
+                fee=0.1, slippage=0.0,
+                fee_source="GAMMA_AUTHORITATIVE_FEE_SCHEDULE",
+                exchange_ts_ms=now + 3, receive_ts_ms=now + 4,
+                metadata=metadata("crypto_informed_taker", 300), **common,
+            ),
+            ledger.LedgerEvent(
+                event_type="FINAL", position_id=terminal_position,
+                final_pnl=2.9, realized_cashflow=5.0, fee=0.0,
+                slippage=0.0, unwind_loss=0.0, capital_cost=0.0,
+                latency_cost=0.0, capital_duration_ms=300_000,
+                metadata=metadata(
+                    "crypto_informed_taker", 300, realized=True,
+                    cost_vector_complete=True, unwind_accounted=True,
+                    terminal_id=terminal_id,
+                    included_order_ids=[order_id],
+                    included_position_ids=[fill_position],
+                ),
+                **common,
+            ),
+        ]
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "execution.jsonl"
+            write_events(path, events)
+            report = econ.assess(path, expected_model_sha=SHA)
+        self.assertNotIn(
+            f"order_position_identity_conflict:{order_id}",
+            report["reason_codes"],
+        )
+        self.assertEqual(report["economic_units"], 1)
+        self.assertEqual(report["submitted_units"], 1)
+        self.assertEqual(report["complete_units"], 1)
+        self.assertEqual(report["mature_terminal_units"], 1)
+        self.assertAlmostEqual(report["net_pnl"], 2.9)
+
     def test_order_to_multiple_positions_fails_closed(self) -> None:
         now = clock()
         order_event = order(
