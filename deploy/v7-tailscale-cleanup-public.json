@@ -1,0 +1,9 @@
+{
+  "cert_sha256": "4f205fb7afa6ec70cc02fd02f2e12897cf23775d7e5ac2efda6276e695aab0be",
+  "created_at": 1789861347,
+  "request_nonce": "tailscale-cleanup-20260920-v1",
+  "run_attempt": 1,
+  "run_id": 35476841015,
+  "schema": "polymarket_v7_ephemeral_tailscale_cleanup_public_v1",
+  "scope": "CI_EPHEMERAL_ONLY"
+}
