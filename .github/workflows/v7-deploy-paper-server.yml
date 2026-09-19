@@ -119,6 +119,9 @@ jobs:
           TS_AUDIENCE: ${{ secrets.TS_AUDIENCE }}
           TS_TAGS: ${{ vars.TS_TAGS || 'tag:ci' }}
           TS_AUTHKEY_EPHEMERAL_VERIFIED: ${{ vars.TS_AUTHKEY_EPHEMERAL_VERIFIED || 'false' }}
+          AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          AWS_SESSION_TOKEN: ${{ secrets.AWS_SESSION_TOKEN }}
         run: |
           set -euo pipefail
           test -n "${TS_TAGS:-}"
@@ -126,15 +129,17 @@ jobs:
             mode=oidc
           elif [[ -n "${TS_OAUTH_CLIENT_ID:-}" && -n "${TS_OAUTH_SECRET:-}" ]]; then
             mode=oauth
-          elif [[ -n "${TS_AUTHKEY:-}" ]]; then
-            if [[ "${TS_AUTHKEY_EPHEMERAL_VERIFIED:-false}" != true ]]; then
-              echo "::error::Auth-key fallback requires TS_AUTHKEY_EPHEMERAL_VERIFIED=true for a verified ephemeral CI key. Prefer OIDC/OAuth."
-              exit 1
-            fi
+          elif [[ -n "${TS_AUTHKEY:-}" && "${TS_AUTHKEY_EPHEMERAL_VERIFIED:-false}" == true ]]; then
             mode=authkey
             echo "::warning title=Tailscale auth-key fallback::TS_AUTHKEY must be reusable, tagged, pre-approved when required, and ephemeral. The workflow uses in-memory daemon state for ephemeral nodes."
+          elif [[ -n "${AWS_ACCESS_KEY_ID:-}" && -n "${AWS_SECRET_ACCESS_KEY:-}" && -n "${AWS_SESSION_TOKEN:-}" ]]; then
+            mode=ssm
+            echo "::notice title=AWS SSM transport::Tailscale credentials are not qualified for CI; using fail-closed eu-west-2 SSM transport."
+          elif [[ -n "${TS_AUTHKEY:-}" ]]; then
+            echo "::error::Auth-key fallback requires TS_AUTHKEY_EPHEMERAL_VERIFIED=true. AWS SSM credentials are not available as a safe alternate transport."
+            exit 1
           else
-            echo "No visible Tailscale OIDC, OAuth, or auth-key credential set" >&2
+            echo "No verified Tailscale or AWS SSM credential set" >&2
             exit 1
           fi
           echo "mode=$mode" >> "$GITHUB_OUTPUT"
@@ -174,7 +179,7 @@ jobs:
           ping: ${{ env.SERVER_HOST }}
 
       - name: Configure SSH identity and await private server
-        if: steps.preflight.outputs.ready == 'true'
+        if: steps.preflight.outputs.ready == 'true' && steps.tailscale_auth.outputs.mode != 'ssm'
         shell: bash
         env:
           SSH_PRIVATE_KEY: ${{ secrets.POLYMARKET_SERVER_SSH_KEY }}
@@ -198,7 +203,7 @@ jobs:
           test -s ~/.ssh/known_hosts
 
       - name: Reconcile exact approved main V7 SHA on server
-        if: steps.preflight.outputs.ready == 'true'
+        if: steps.preflight.outputs.ready == 'true' && steps.tailscale_auth.outputs.mode != 'ssm'
         shell: bash
         run: |
           set -euo pipefail
@@ -411,6 +416,59 @@ jobs:
             printf 'deploy_result=recovered_after_transport_loss\ndeployed_sha=%s\n' \
               "$deploy_sha" | tee -a deploy-evidence.txt
           fi
+
+      - name: Reconcile exact approved main V7 SHA through AWS SSM
+        if: steps.preflight.outputs.ready == 'true' && steps.tailscale_auth.outputs.mode == 'ssm'
+        shell: bash
+        env:
+          AWS_REGION: eu-west-2
+          AWS_DEFAULT_REGION: eu-west-2
+          AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          AWS_SESSION_TOKEN: ${{ secrets.AWS_SESSION_TOKEN }}
+        run: |
+          set -euo pipefail
+          deploy_sha="$(git rev-parse origin/main)"
+          test "$deploy_sha" = "$EXPECTED_DEPLOY_SHA"
+          command -v aws >/dev/null 2>&1
+          aws sts get-caller-identity --region eu-west-2 --output json >/dev/null
+
+          artifact_root="$RUNNER_TEMP/runtime-artifacts"
+          source_root="$RUNNER_TEMP/research-source-empty"
+          archive_root="$RUNNER_TEMP/research-archive-empty"
+          durable_root="$RUNNER_TEMP/research-durable"
+          mkdir -p "$source_root" "$archive_root" "$durable_root" "$artifact_root"
+          PM_V7_RESEARCH_SOURCE_ROOT="$source_root" \
+            PM_V7_RESEARCH_ARCHIVE_ROOT="$archive_root" \
+            PM_V7_RESEARCH_DURABLE_ROOT="$durable_root" \
+            PM_V7_RESEARCH_ARTIFACT_ROOT="$artifact_root" \
+            research/build_runtime_artifacts.sh "$deploy_sha"
+
+          bundle="$artifact_root/by-sha/$deploy_sha"
+          test -s "$bundle/manifest.json"
+          artifact_tgz="$RUNNER_TEMP/runtime-artifact-$deploy_sha.tgz"
+          tar -C "$bundle" -czf "$artifact_tgz" .
+
+          receipt="$RUNNER_TEMP/v7-ssm-deploy-$deploy_sha.json"
+          python3 ops/v7_london_ssm_deploy.py \
+            --expected-sha "$deploy_sha" \
+            --expected-tailscale-ip "$SERVER_HOST" \
+            --artifact "$artifact_tgz" \
+            --region eu-west-2 \
+            --output "$receipt" | tee -a deploy-evidence.txt
+          test -s "$receipt"
+          python3 - "$receipt" "$deploy_sha" <<'PY'
+          import json,sys
+          v=json.load(open(sys.argv[1]))
+          assert v.get('schema')=='polymarket_v7_ssm_deploy_receipt_v1'
+          assert v.get('expected_sha')==sys.argv[2]
+          assert v.get('paper_only') is True
+          assert v.get('authenticated_execution') is False
+          assert v.get('real_order_submission') is False
+          assert (v.get('cutover') or {}).get('sha')==sys.argv[2]
+          PY
+          printf 'deploy_result=success_ssm\ndeployed_sha=%s\norigin_main=%s\n' \
+            "$deploy_sha" "$deploy_sha" | tee -a deploy-evidence.txt
 
       - name: Upload deployment evidence
         if: always()
