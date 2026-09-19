@@ -495,6 +495,7 @@ public:
         const bool root_lineage_failure =
             result.invalid_frame || result.output_overflow || result.arena_exhausted;
         if (root_lineage_failure) {
+            root_lineage_recovery_requested_.store(true, std::memory_order_release);
             if (!lineage_recovery_requested_.exchange(true, std::memory_order_acq_rel)) {
                 lineage_recovery_requests_.fetch_add(1, std::memory_order_relaxed);
             }
@@ -578,6 +579,10 @@ public:
 
     [[nodiscard]] bool lineage_recovery_requested() const noexcept {
         return lineage_recovery_requested_.load(std::memory_order_acquire);
+    }
+
+    [[nodiscard]] bool root_lineage_recovery_requested() const noexcept {
+        return root_lineage_recovery_requested_.load(std::memory_order_acquire);
     }
 
     [[nodiscard]] std::uint64_t lineage_recovery_requests() const noexcept {
@@ -723,6 +728,7 @@ public:
         root["lineage_invalid_tick_size_change"] = lineage_invalid_tick_size_change_.load(std::memory_order_relaxed);
         root["price_change_without_lineage"] = price_change_without_lineage_.load(std::memory_order_relaxed);
         root["lineage_recovery_requested"] = lineage_recovery_requested();
+        root["root_lineage_recovery_requested"] = root_lineage_recovery_requested();
         root["lineage_recovery_requests"] = lineage_recovery_requests();
         root["lineage_recovered_without_restart"] = lineage_recovered_without_restart_.load(std::memory_order_relaxed);
         root["unknown_asset"] = unknown_asset_.load(std::memory_order_relaxed);
@@ -1053,6 +1059,7 @@ private:
     std::atomic<std::uint64_t> lineage_recovery_requests_{0};
     std::atomic<std::uint64_t> lineage_recovered_without_restart_{0};
     std::atomic<bool> lineage_recovery_requested_{false};
+    std::atomic<bool> root_lineage_recovery_requested_{false};
     std::atomic<std::uint64_t> unknown_asset_{0};
     std::atomic<std::uint64_t> reconnects_{0};
     std::atomic<bool> disk_pressure_{false};
@@ -1118,8 +1125,13 @@ int main(int argc, char** argv) {
                     // Restarting on every mtime update erased queue evidence.
                     reload = !options.selection_only
                         && fair_observation_pairs(options) != fair_pairs;
+                    // Token-local lineage gaps are isolated by the decoder and
+                    // remain explicitly non-continuous until a later full snapshot
+                    // heals that token. Restarting all 60 subscriptions for one
+                    // expiring/gapped token creates a coverage death spiral.
+                    // Only irrecoverable frame/arena/output corruption is global.
                     if ((options.fair_only || options.selection_only)
-                            && observer.lineage_recovery_requested()) {
+                            && observer.root_lineage_recovery_requested()) {
                         reload = true;
                     }
                     if (!options.fair_only) {
