@@ -56,6 +56,17 @@ assert v.get('runtime_training') is False
 print('artifact_gate=ready')
 PY
 
+# Check the same exact-SHA CI contract as runtime BEFORE stopping healthy
+# services or moving any run directory. A failed/pending check must leave the
+# old generation collecting data; it must not spend the new restart budget.
+CI_REPOSITORY="${PM_V7_CI_REPOSITORY:-ENRICOBIGNOZZI/Polymarket}"
+CI_PREFLIGHT_DIR="$RUNTIME_ROOT/deployment-receipts"
+mkdir -p "$CI_PREFLIGHT_DIR"
+CI_PREFLIGHT_RECEIPT="$CI_PREFLIGHT_DIR/ci-$EXPECTED_SHA-$(date -u +%Y%m%dT%H%M%S)-$$.json"
+python3 "$TARGET_RUNTIME/scripts/v7_exact_sha_ci_gate.py" \
+  --repository "$CI_REPOSITORY" --sha "$EXPECTED_SHA" \
+  --output "$CI_PREFLIGHT_RECEIPT"
+
 # Capture the run root currently bound to systemd before rewriting it. The
 # target may use a new per-SHA root, but unresolved native fills in the previous
 # generation must still block a cross-SHA cutover.
