@@ -111,6 +111,19 @@ class LondonSsmBenchmarkTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "exactly one"):
             parse_result("no envelope")
 
+    def test_formal_benchmark_binds_timestamped_sample_audit(self) -> None:
+        runner = (ROOT / "ops/v7_london_benchmark.sh").read_text(encoding="utf-8")
+        probe = (ROOT / "src/v7_latency_probe.cpp").read_text(encoding="utf-8")
+        self.assertIn('--sample-audit-jsonl "$audit_path"', runner)
+        self.assertIn('audit_rows="$(wc -l', runner)
+        self.assertIn("sample_audit_sha256", runner)
+        self.assertIn("sample_audit_path", runner)
+        self.assertIn("polymarket_v7_latency_sample_v1", probe)
+        self.assertIn("started_wall_ms", probe)
+        self.assertIn("finished_wall_ms", probe)
+        self.assertIn("total_ns", probe)
+        self.assertIn("sample_audit.flush()", probe)
+
     def test_source_keeps_no_cutover_authority(self) -> None:
         source = (ROOT / "ops/v7_london_ssm_benchmark.py").read_text(encoding="utf-8")
         self.assertIn('"automatic_cutover": False', source)
