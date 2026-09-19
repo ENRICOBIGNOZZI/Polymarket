@@ -1,0 +1,35 @@
+name: V7 deployment SSH public-key probe
+
+on:
+  push:
+    branches:
+      - ops/v7-ssh-key-probe-20260920
+    paths:
+      - .github/workflows/v7-deployment-ssh-public-key-probe.yml
+
+permissions:
+  contents: read
+
+jobs:
+  probe:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - name: Derive public key only
+        shell: bash
+        env:
+          SSH_PRIVATE_KEY: ${{ secrets.POLYMARKET_SERVER_SSH_KEY }}
+        run: |
+          set -euo pipefail
+          test -n "${SSH_PRIVATE_KEY:-}"
+          key="$RUNNER_TEMP/deploy_key"
+          umask 077
+          printf '%s\n' "$SSH_PRIVATE_KEY" > "$key"
+          chmod 600 "$key"
+          pub="$(ssh-keygen -y -f "$key")"
+          case "$pub" in
+            ssh-ed25519\ *|ssh-rsa\ *|ecdsa-sha2-*\ *) ;;
+            *) echo "unsupported SSH public key type" >&2; exit 2 ;;
+          esac
+          printf 'V7_DEPLOY_PUBLIC_KEY=%s\n' "$pub"
+          rm -f "$key"
