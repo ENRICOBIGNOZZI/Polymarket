@@ -97,7 +97,7 @@ class LondonLosslessRetentionTests(unittest.TestCase):
     def test_repricing_book_segments_are_counted_and_losslessly_compressed(self):
         from unittest import mock
         import gzip
-        import v7_retention
+        import v7_closed_tape_retention
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory) / 'paper_v7_live'
             _runtime(root)
@@ -107,7 +107,7 @@ class LondonLosslessRetentionTests(unittest.TestCase):
             source.write_bytes(payload)
             old = time.time() - 120
             os.utime(source, (old, old))
-            with mock.patch.object(v7_retention, '_tape_file_closed', return_value=True):
+            with mock.patch.object(v7_closed_tape_retention, '_tape_file_closed', return_value=True):
                 result = retention.run(root, self.config())
             compressed = source.with_name(source.name + '.gz')
             self.assertFalse(source.exists())

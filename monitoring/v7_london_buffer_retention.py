@@ -23,7 +23,7 @@ from pathlib import Path
 from typing import Any, Iterable
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from v7_retention import compress_closed_cutover_tapes
+from v7_closed_tape_retention import compress_closed_cutover_tapes
 
 
 SHA40 = re.compile(r"^[0-9a-f]{40}$")
