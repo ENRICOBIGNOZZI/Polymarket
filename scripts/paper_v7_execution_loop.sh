@@ -188,6 +188,7 @@ done < <(python3 scripts/v7_runtime_resource_plan.py --config "$RUNTIME_RESOURCE
 python3 scripts/v7_runtime_artifacts.py   --artifact-root "$RUNTIME_ARTIFACT_ROOT" --run-root "$RUN_ROOT"   --model-sha "$SHA" --policy "$MAKER_POLICY" --allocation "$ALLOC/micro_maker.json"   --receipt "$CONTROL/runtime_artifact_receipt.json"   >> "$RUN_ROOT/runtime_artifacts.log" 2>&1
 
 pids=()
+fatal_pids=()
 
 # Startup can fail before the full runtime cleanup function is defined. Every
 # child started before that point must still be owned and terminated; otherwise
@@ -299,7 +300,9 @@ v7_register_child "$!"
 # exact 30-market / 60-token zero-authority selection and this observer reloads
 # at rollover. Model fitting and retrospective shadows remain off London.
 v7_exec_class COLLECTOR "$FILLABILITY_OBSERVER"   --config "$ALLOC/micro_maker.json" --run-root "$RUN_ROOT" --model-sha "$SHA"   --selection "$RUN_ROOT/universe/book_selection.json" --selection-only   --output-dir "$RUN_ROOT/research/repricing_book"   --disk-pressure-min-free-bytes "$DISK_PRESSURE_MIN_FREE_BYTES"   >> "$RUN_ROOT/research/repricing_book_observer.log" 2>&1 &
-v7_register_child "$!"
+# Zero-authority PM book evidence is diagnostically important but reconstructible.
+# It must not stop the native execution owner if it rolls or exits during market refresh.
+v7_register_optional_child "$!"
 
 
 
@@ -483,17 +486,9 @@ v7_exec_class COLLECTOR "$RECORDER" \
   >> "$RUN_ROOT/trade_recorder.log" 2>&1 &
 v7_register_child "$!"
 
-# Reconcile historical PAPER claims before starting this run's sole ledger writer.
-# Anything unresolved remains reserved in the final registry and cannot vanish
-# across a code-SHA cutover.
-python3 scripts/v7_legacy_native_claims.py \
-  --current-run-root "$RUN_ROOT" --scan-parent "$(dirname "$RUN_ROOT")" \
-  --target-sha "$SHA" --output "$RUN_ROOT/control/legacy_native_claims.json" \
-  >> "$RUN_ROOT/legacy_native_claims.log" 2>&1
-python3 scripts/v7_legacy_native_reconciler.py \
-  --registry "$RUN_ROOT/control/legacy_native_claims.json" --repository-root "$ROOT" \
-  --target-sha "$SHA" --output "$RUN_ROOT/control/legacy_native_reconciliation.json" \
-  >> "$RUN_ROOT/legacy_native_reconciliation.log" 2>&1 || true
+# Reserve historical PAPER native claims before this run's sole ledger writer.
+# Reconciliation of old ledgers runs only in the cutover control plane, where
+# source run roots are writable and no current ledger writer is alive.
 python3 scripts/v7_legacy_native_claims.py \
   --current-run-root "$RUN_ROOT" --scan-parent "$(dirname "$RUN_ROOT")" \
   --target-sha "$SHA" --output "$RUN_ROOT/control/legacy_native_claims.json" \
@@ -558,7 +553,7 @@ while [[ ! -e "$KILL" ]]; do
     break
   fi
   write_runtime_status running false
-  for pid in "${pids[@]}"; do
+  for pid in "${fatal_pids[@]}"; do
     if ! kill -0 "$pid" 2>/dev/null; then
       printf '{"schema":"polymarket_v7_runtime_failure_v1","timestamp":%s,"paper_only":true,"authenticated_execution":false,"model_sha":"%s","dead_pid":%s}\n' "$(date +%s)" "$SHA" "$pid" > "$KILL"
       break

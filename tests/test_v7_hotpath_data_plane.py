@@ -27,7 +27,7 @@ def test_repricing_book_observer_covers_all_runtime_contexts_outside_hot_path():
     assert 'if (options.fair_only)' in observer
     assert '--selection "$RUN_ROOT/universe/book_selection.json" --selection-only' in loop
     assert '--output-dir "$RUN_ROOT/research/repricing_book"' in loop
-    observer_launch = loop.split('v7_exec_class COLLECTOR "$FILLABILITY_OBSERVER"',1)[1].split('v7_register_child',1)[0]
+    observer_launch = loop.split('v7_exec_class COLLECTOR "$FILLABILITY_OBSERVER"',1)[1].split('v7_register_optional_child',1)[0]
     assert '--fair-only' not in observer_launch
     for field in (
         '"subscribed_markets"', '"subscribed_tokens"',
@@ -40,6 +40,8 @@ def test_repricing_book_observer_covers_all_runtime_contexts_outside_hot_path():
     assert rows['crypto_settlement_engine']['runtime_class'] == 'HOT_PATH'
     assert rows['crypto_settlement_engine']['dependencies'] == []
     assert 'v7_assert_registered_child_count 9' in loop
+    assert 'v7_register_optional_child "$!"' in loop
+    assert 'for pid in "${fatal_pids[@]}"' in loop
 
 
 def test_runtime_start_is_gated_on_complete_30_context_book_data_selection():

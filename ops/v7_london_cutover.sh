@@ -76,7 +76,23 @@ python3 "$SOURCE_DIR/scripts/v7_prepare_cutover_run_root.py" "${prepare_args[@]}
 SERVICE_GROUP="$(id -gn "$SERVICE_USER")"
 install -d -o "$SERVICE_USER" -g "$SERVICE_GROUP" "$RUN_ROOT" "$RUN_ROOT/control"
 
-# Atomic release pointer switch happens only after the model-artifact gate and old-generation archive.
+# Reconcile historical PAPER native claims in the cutover control plane, before
+# the current run's ledger writer starts. Anything unresolved remains reserved
+# by the final registry and cannot vanish across SHA generations.
+sudo -u "$SERVICE_USER" python3 "$TARGET_RUNTIME/scripts/v7_legacy_native_claims.py" \
+  --current-run-root "$RUN_ROOT" --scan-parent "$(dirname "$RUN_ROOT")" \
+  --target-sha "$EXPECTED_SHA" --output "$RUN_ROOT/control/legacy_native_claims.json" \
+  >> "$RUN_ROOT/legacy_native_claims.log" 2>&1
+sudo -u "$SERVICE_USER" python3 "$TARGET_RUNTIME/scripts/v7_legacy_native_reconciler.py" \
+  --registry "$RUN_ROOT/control/legacy_native_claims.json" --repository-root "$TARGET_RUNTIME" \
+  --target-sha "$EXPECTED_SHA" --output "$RUN_ROOT/control/legacy_native_reconciliation.json" \
+  >> "$RUN_ROOT/legacy_native_reconciliation.log" 2>&1 || true
+sudo -u "$SERVICE_USER" python3 "$TARGET_RUNTIME/scripts/v7_legacy_native_claims.py" \
+  --current-run-root "$RUN_ROOT" --scan-parent "$(dirname "$RUN_ROOT")" \
+  --target-sha "$EXPECTED_SHA" --output "$RUN_ROOT/control/legacy_native_claims.json" \
+  >> "$RUN_ROOT/legacy_native_claims.log" 2>&1
+
+# Atomic release pointer switch happens only after the model-artifact gate, old-generation archive, and legacy native claim reconciliation/reservation.
 ln -sfn "by-sha/$EXPECTED_SHA" "$RUNTIME_CURRENT"
 [[ "$(cat "$RUNTIME_CURRENT/deploy/london/runtime_sha")" == "$EXPECTED_SHA" ]]
 render_unit(){
