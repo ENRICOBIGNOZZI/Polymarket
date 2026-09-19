@@ -58,35 +58,41 @@ int main() {
         const auto& flow_row = flow.at("rows").as_array().front().as_object();
         assert(u64(flow_row.at("sell_prints_120s")) == 1);
         assert(std::abs(flow_row.at("sell_shares_120s").as_double() - 2.0) < 1e-12);
+        // A token-local crossed delta invalidates only that token. It never
+        // requests a process-global reload and a fresh full snapshot heals it.
+        send(R"({"event_type":"price_change","timestamp":1700000001250,"price_changes":[{"asset_id":"yes","side":"SELL","price":"0.47","size":"1"}]})", 1250);
+        assert(observer.lineage_recovery_requested());
+        assert(!observer.root_lineage_recovery_requested());
+        assert(observer.lineage_recovery_requests() == 1);
+        const auto reset = read_last(directory / "book_observations" / "current.jsonl");
+        assert(!reset.at("features_valid").as_bool());
+        assert(reset.at("public_trade").is_null());
+        assert(reset.at("connection_epoch").as_int64() == 1);
+        send(snapshot(1'700'000'001'260), 1260);
+        assert(!observer.lineage_recovery_requested());
+        assert(!observer.root_lineage_recovery_requested());
+        assert(observer.lineage_recovery_requests() == 1);
+
+        // A transport reconnect is different: venue tick size may have changed
+        // while disconnected, so the outer loop must rebuild cold-start books.
         observer.on_reconnect();
         observer.write_status();
         observer.write_flow_snapshot(1'700'000'001'300);
         const auto reset_flow = json::parse(read_file(directory / "fillability_flow_snapshot.json")).as_object();
         assert(u64(reset_flow.at("connection_epoch")) == 2);
         assert(u64(reset_flow.at("rows").as_array().front().as_object().at("sell_prints_120s")) == 0);
+        assert(observer.lineage_recovery_requested());
+        assert(observer.root_lineage_recovery_requested());
+        assert(observer.lineage_recovery_requests() == 2);
         send(snapshot(1'700'000'001'300), 1300);
         assert(!observer.lineage_recovery_requested());
-        assert(!observer.root_lineage_recovery_requested());
-        send(R"({"event_type":"price_change","timestamp":1700000001400,"price_changes":[{"asset_id":"yes","side":"SELL","price":"0.47","size":"1"}]})", 1400);
-        assert(observer.lineage_recovery_requested());
-        assert(!observer.root_lineage_recovery_requested());
-        assert(observer.lineage_recovery_requests() == 1);
-        send(R"({"event_type":"price_change","timestamp":1700000001500,"price_changes":[{"asset_id":"yes","side":"BUY","price":"0.48","size":"1"}]})", 1500);
-        assert(observer.lineage_recovery_requests() == 1);
-        assert(!observer.root_lineage_recovery_requested());
-        const auto reset = read_last(directory / "book_observations" / "current.jsonl");
-        assert(!reset.at("features_valid").as_bool());
-        assert(reset.at("public_trade").is_null());
-        assert(reset.at("connection_epoch").as_int64() == 2);
-        send(snapshot(1'700'000'001'600), 1600);
-        assert(!observer.lineage_recovery_requested());
-        assert(!observer.root_lineage_recovery_requested());
-        assert(observer.lineage_recovery_requests() == 1);
-        // An ordinary snapshot may restore token-local lineage, never a
-        // process-global lost/corrupt-frame condition.
+        assert(observer.root_lineage_recovery_requested());
+        assert(observer.lineage_recovery_requests() == 2);
+        // Self-healing a token cannot clear a latched global bootstrap request.
         send("{invalid-json", 1700);
         assert(observer.lineage_recovery_requested());
         assert(observer.root_lineage_recovery_requested());
+        assert(observer.lineage_recovery_requests() == 3);
         send(snapshot(1'700'000'001'800), 1800);
         assert(observer.lineage_recovery_requested());
         assert(observer.root_lineage_recovery_requested());
@@ -111,6 +117,36 @@ int main() {
         assert(std::abs(row.at("tick_size").as_double() - 0.001) < 1e-12);
         assert(std::abs(row.at("best_bid").as_double() - 0.005) < 1e-12);
         assert(std::abs(row.at("best_ask").as_double() - 0.015) < 1e-12);
+        observer.stop();
+    }
+    {
+        const auto one_sided_dir = directory / "one-sided";
+        ExactWsObserver observer({SelectedToken{"settling-market", "event", "settling", 1, 1, 1, 10}},
+                                 "wss://unused.example", one_sided_dir, std::string(40, 'c'));
+        pm::fast::FeedReceiveStamp stamp;
+        stamp.wall_ms = 1'700'000'020'000;
+        stamp.monotonic_ns = 20'000'000'000LL;
+        observer.on_frame(
+            R"({"event_type":"book","asset_id":"settling","timestamp":1700000020000,"bids":[],"asks":[{"price":"0.999","size":"15"}]})",
+            stamp);
+        observer.drain();
+        observer.write_status();
+        std::ifstream stream(one_sided_dir / "book_observations" / "current.jsonl");
+        std::string line, last;
+        while (std::getline(stream, line)) last = line;
+        const auto row = json::parse(last).as_object();
+        assert(!row.at("valid").as_bool());
+        assert(row.at("lineage_continuous").as_bool());
+        assert(row.at("best_bid").as_double() == 0.0);
+        assert(std::abs(row.at("best_ask").as_double() - 0.999) < 1e-12);
+        const auto status = json::parse(read_file(one_sided_dir / "fillability_ws_status.json")).as_object();
+        const auto u64 = [](const json::value& value) -> std::uint64_t {
+            return value.is_uint64() ? value.as_uint64()
+                                     : static_cast<std::uint64_t>(value.as_int64());
+        };
+        assert(u64(status.at("observed_tokens")) == 1);
+        assert(u64(status.at("observed_markets")) == 1);
+        assert(status.at("subscription_coverage_complete").as_bool());
         observer.stop();
     }
     const auto selection = directory / "selection.json";
