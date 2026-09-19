@@ -142,6 +142,22 @@ for _ in $(seq 1 "${POLYMARKET_MONITORING_HEALTH_ATTEMPTS:-60}"); do
 done
 [[ "$monitoring_ready" == 1 ]] || { echo "London monitoring control-plane health gate failed" >&2; exit 69; }
 
+# A retry of the same authorized exact-SHA cutover may inherit a supervisor
+# quarantine produced by a now-repaired startup defect. Preserve that evidence,
+# clear the bounded restart window, and let only this controlled deployment
+# re-arm the service. Ledger, inventory, carryover and KILL state are untouched.
+SUPERVISOR_RECOVERY_DIR="$RUN_ROOT/control/cutover_recovery"
+install -d -o "$SERVICE_USER" -g "$SERVICE_GROUP" "$SUPERVISOR_RECOVERY_DIR"
+for state_name in supervisor_status.json supervisor_restarts.json; do
+  state_path="$RUN_ROOT/control/$state_name"
+  if [[ -f "$state_path" ]]; then
+    preserved="$SUPERVISOR_RECOVERY_DIR/${state_name%.json}.$(date -u +%Y%m%dT%H%M%SZ).$$.json"
+    mv "$state_path" "$preserved"
+    chown "$SERVICE_USER:$SERVICE_GROUP" "$preserved"
+    chmod 0644 "$preserved"
+  fi
+done
+sudo systemctl reset-failed polymarket-v7-paper.service >/dev/null 2>&1 || true
 sudo systemctl enable --now polymarket-v7-paper.service polymarket-v7-exporter.service polymarket-v7-retention.timer
 
 ready=0

@@ -87,11 +87,15 @@ def test_cutover_reconciles_legacy_before_current_runtime_starts() -> None:
     reconcile = cutover.index("v7_legacy_native_reconciler.py", first_scan)
     rescan = cutover.index("v7_legacy_native_claims.py", reconcile)
     switch = cutover.index("ln -sfn", rescan)
-    start = cutover.index("systemctl enable --now polymarket-v7-paper.service", switch)
-    assert prepare < ownership < first_scan < reconcile < rescan < switch < start
+    recovery = cutover.index('SUPERVISOR_RECOVERY_DIR=', switch)
+    reset = cutover.index('systemctl reset-failed polymarket-v7-paper.service', recovery)
+    start = cutover.index("systemctl enable --now polymarket-v7-paper.service", reset)
+    assert prepare < ownership < first_scan < reconcile < rescan < switch < recovery < reset < start
     assert 'chown "$SERVICE_USER:$SERVICE_GROUP" "$log_path"' in cutover
     assert 'legacy_native_claims.log' in cutover
     assert 'legacy_native_reconciliation.log' in cutover
+    assert 'supervisor_status.json supervisor_restarts.json' in cutover
+    assert 'control/cutover_recovery' in cutover
 
     runtime = (ROOT / "scripts/paper_v7_execution_loop.sh").read_text()
     assert "v7_legacy_native_reconciler.py" not in runtime
