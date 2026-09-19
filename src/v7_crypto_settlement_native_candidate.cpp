@@ -375,7 +375,8 @@ int main(int argc, char** argv) {
         decision_policy.maximum_tte_ns = options.maximum_tte_ns;
         decision_policy.target_quantity_microunits = options.target_quantity_microunits;
         decision_policy.maximum_entry_price_e4 = options.maximum_entry_price_e4;
-        decision_policy.probability_ev_enabled = probability_model.loaded ? 1 : 0;
+        decision_policy.probability_ev_enabled =
+            (probability_model.loaded || options.strict_signal_policy) ? 1 : 0;
         NativeCryptoDecisionLane lane(decision_policy);
         CapitalLimits limits = options.capital_limits;
         if (!options.observation_only && (!limits.valid() || options.risk_policy_sha256.size() != 64
@@ -1214,6 +1215,7 @@ int main(int argc, char** argv) {
             {"coinbase", {{"invalid_frames", coinbase_ingress_status.invalid_frames}, {"enqueued", coinbase_ingress_status.enqueued_events}, {"drained", coinbase_ingress_status.drained_events}, {"queued", coinbase_ingress_status.queued}, {"frames", coinbase_status.frames_received}, {"transport_failures", coinbase_status.transport_failures}, {"drops", coinbase_ingress_status.dropped_events}}},
             {"bybit_confirmation", {{"enabled", static_cast<bool>(bybit)}, {"invalid_frames", bybit_ingress_status.invalid_frames}, {"enqueued", bybit_ingress_status.enqueued_events}, {"drained", bybit_ingress_status.drained_events}, {"queued", bybit_ingress_status.queued}, {"frames", bybit_status.frames_received}, {"transport_failures", bybit_status.transport_failures}, {"drops", bybit_ingress_status.dropped_events}}},
             {"probability_model_configured", probability_model.loaded},
+            {"direction_only_fallback_allowed", !options.strict_signal_policy},
             {"probability_evaluation_end_wall_ns",
                 probability_model.loaded ? json::value(options.probability_evaluation_end_wall_ns) : json::value(nullptr)},
             {"probability_evaluation_open",

@@ -89,3 +89,8 @@ def test_native_candidate_wires_bybit_as_explicit_confirmation_source():
     assert 'signal_policy["confirmation_venue"] == "BYBIT"' in manager_source
     # It must remain separately identified; no alias from Bybit into Coinbase.
     assert 'coinbase_symbol = bybit_symbol' not in manager_source
+
+def test_strict_candidate_has_no_direction_only_economic_fallback():
+    native=(ROOT/'src/v7_crypto_settlement_native_candidate.cpp').read_text()
+    assert '(probability_model.loaded || options.strict_signal_policy) ? 1 : 0' in native
+    assert 'direction_only_fallback_allowed' in native
