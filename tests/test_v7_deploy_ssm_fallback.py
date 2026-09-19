@@ -5,15 +5,21 @@ WORKFLOW = ROOT / ".github" / "workflows" / "v7-deploy-paper-server.yml"
 SSM = ROOT / "ops" / "v7_london_ssm_deploy.py"
 
 
-def test_ssm_is_fallback_not_authkey_bypass():
+def test_ssm_is_fallback_after_pinned_in_memory_tailscale():
     text = WORKFLOW.read_text(encoding="utf-8")
-    assert 'TS_AUTHKEY_EPHEMERAL_VERIFIED' in text
-    assert '&& "${TS_AUTHKEY_EPHEMERAL_VERIFIED:-false}" == true' in text
+    assert 'TS_AUTHKEY_EPHEMERAL_VERIFIED' not in text
+    assert 'mode=authkey' in text
     assert 'mode=ssm' in text
     assert 'AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}' in text
     assert 'AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}' in text
     assert 'AWS_SESSION_TOKEN: ${{ secrets.AWS_SESSION_TOKEN }}' in text
-    assert 'No verified Tailscale or AWS SSM credential set' in text
+    assert 'No Tailscale or AWS SSM credential set' in text
+    assert text.count('tailscale/github-action@780049a30b6ff5c378a9e7b389d15ece7a204888') == 3
+    auth = text.split('- name: Join private tailnet with in-memory ephemeral auth key', 1)[1].split('- name:', 1)[0]
+    assert 'authkey: ${{ secrets.TS_AUTHKEY }}' in auth
+    assert "statedir: ''" in auth
+    assert "Explicitly logout in-memory Tailscale CI node" in text
+    assert "sudo tailscale logout" in text
 
 
 def test_ssm_and_ssh_paths_are_mutually_exclusive():
