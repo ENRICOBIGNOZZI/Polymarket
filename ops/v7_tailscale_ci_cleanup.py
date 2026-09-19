@@ -59,6 +59,35 @@ def first_visible(locator):
             pass
     return None
 
+def wait_for_human_2sv(page, timeout_s: int = 420) -> bool:
+    """Wait for a human-approved Google 2SV challenge without bypassing MFA."""
+    deadline = time.monotonic() + timeout_s
+    last_url = ""
+    while time.monotonic() < deadline:
+        try:
+            url = page.url
+            body = page.locator("body").inner_text(timeout=3000)
+        except Exception:
+            url, body = "", ""
+        if url != last_url:
+            print(f"tailnet_auth_url_stage={url.split('?')[0][:160]}", flush=True)
+            last_url = url
+        lowered = body.lower()
+        if "accounts.google.com" not in url:
+            return True
+        if any(marker.lower() in lowered for marker in (
+            "2-step verification", "verify it's you", "confirm it's you",
+            "check your phone", "tap yes", "google prompt", "passkey",
+        )):
+            print("tailnet_auth_waiting_for_human_2sv=true", flush=True)
+        if any(x in lowered for x in (
+            "couldn’t sign you in", "couldn't sign you in",
+            "browser or app may not be secure",
+        )):
+            raise RuntimeError("google_browser_blocked")
+        page.wait_for_timeout(2000)
+    return False
+
 def login(page, email: str, password: str) -> None:
     page.goto("https://login.tailscale.com/admin/machines",
               wait_until="domcontentloaded", timeout=60000)
@@ -92,7 +121,27 @@ def login(page, email: str, password: str) -> None:
             body = page.locator("body").inner_text(timeout=5000)
             lowered = body.lower()
             if any(marker.lower() in lowered for marker in INTERACTIVE_MARKERS):
-                raise RuntimeError("interactive_auth_required")
+                if not wait_for_human_2sv(page):
+                    raise RuntimeError("interactive_auth_timeout")
+                password_box = page.locator('input[name="Passwd"]')
+                try:
+                    password_box.wait_for(state="visible", timeout=5000)
+                except Exception:
+                    # Approval may have completed the whole Google flow.
+                    if "accounts.google.com" not in page.url:
+                        password_box = None
+                    else:
+                        raise RuntimeError("interactive_auth_incomplete")
+                if password_box is None:
+                    pass
+                else:
+                    password_box.fill(password)
+                    nxt = first_visible(page.locator("#passwordNext"))
+                    if nxt is None:
+                        nxt = first_visible(page.get_by_role("button", name=re.compile(r"Next", re.I)))
+                    if nxt is None:
+                        raise RuntimeError("google_password_next_missing")
+                    nxt.click()
             safe_markers = (
                 ("google_browser_blocked", ("couldn’t sign you in", "couldn't sign you in", "browser or app may not be secure")),
                 ("google_account_not_found", ("couldn’t find your google account", "couldn't find your google account")),
@@ -103,13 +152,24 @@ def login(page, email: str, password: str) -> None:
                 if any(marker in lowered for marker in markers):
                     raise RuntimeError(code)
             raise RuntimeError("google_password_field_missing")
-        password_box.fill(password)
-        nxt = first_visible(page.locator("#passwordNext"))
-        if nxt is None:
-            nxt = first_visible(page.get_by_role("button", name=re.compile(r"Next", re.I)))
-        if nxt is None:
-            raise RuntimeError("google_password_next_missing")
-        nxt.click()
+        if password_box is not None:
+            password_box.fill(password)
+            nxt = first_visible(page.locator("#passwordNext"))
+            if nxt is None:
+                nxt = first_visible(page.get_by_role("button", name=re.compile(r"Next", re.I)))
+            if nxt is None:
+                raise RuntimeError("google_password_next_missing")
+            nxt.click()
+            page.wait_for_timeout(1200)
+            try:
+                body = page.locator("body").inner_text(timeout=3000)
+            except Exception:
+                body = ""
+            if "accounts.google.com" in page.url and any(
+                marker.lower() in body.lower() for marker in INTERACTIVE_MARKERS
+            ):
+                if not wait_for_human_2sv(page):
+                    raise RuntimeError("interactive_auth_timeout")
 
     deadline = time.monotonic() + 45
     while time.monotonic() < deadline:
