@@ -1,6 +1,10 @@
 name: V7 export deploy SSH public key
 
 on:
+  pull_request:
+    paths:
+      - .github/workflows/v7-export-server-ssh-public-key.yml
+      - deploy/v7-tailnet-key-request.json
   push:
     branches: [main]
     paths:
