@@ -42,7 +42,7 @@ groups:
         labels: {severity: critical}
         annotations: {summary: "Canonical V7 supervisor is down"}
       - alert: PolymarketV7DuplicateWriter
-        expr: polymarket_v7_single_writer_ok < 1
+        expr: (polymarket_v7_single_writer_ok < 1) and on(job, instance) (polymarket_v7_execution_alive == 1)
         for: 5s
         labels: {severity: critical}
         annotations: {summary: "Single-writer proof failed"}
@@ -62,7 +62,7 @@ groups:
         labels: {severity: critical}
         annotations: {summary: "PAPER drawdown reached the operator ceiling"}
       - alert: PolymarketV7ProfessionalMakerDown
-        expr: polymarket_v7_component_ready{component="professional_maker"} < 1
+        expr: (polymarket_v7_component_ready{component="professional_maker"} < 1) and on(job, instance) (polymarket_v7_execution_alive == 1)
         for: 30s
         labels: {severity: critical}
         annotations: {summary: "Crypto Settlement Engine maker component is unavailable"}

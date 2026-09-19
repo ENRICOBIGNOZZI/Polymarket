@@ -78,6 +78,14 @@ class V7OperatorHomeTest(unittest.TestCase):
             else:
                 self.assertIn(alert, alerts)
         self.assertIn("PolymarketV7AlgorithmScopeInvalid", alerts)
+        self.assertIn(
+            "(polymarket_v7_single_writer_ok < 1) and on(job, instance) (polymarket_v7_execution_alive == 1)",
+            alerts,
+        )
+        self.assertIn(
+            '(polymarket_v7_component_ready{component="professional_maker"} < 1) and on(job, instance) (polymarket_v7_execution_alive == 1)',
+            alerts,
+        )
         self.assertNotIn("ZeroTrades", alerts)
         self.assertNotIn("NoFills", alerts)
 
