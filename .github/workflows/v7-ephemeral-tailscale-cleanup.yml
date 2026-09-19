@@ -1,0 +1,333 @@
+name: V7 ephemeral Tailscale CI cleanup
+
+on:
+  push:
+    branches:
+      - ops/v7-ephemeral-tailscale-cleanup-20260920
+    paths:
+      - deploy/v7-tailscale-cleanup-request.json
+
+permissions:
+  contents: write
+
+concurrency:
+  group: polymarket-v7-ephemeral-tailscale-cleanup
+  cancel-in-progress: false
+
+jobs:
+  cleanup:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    env:
+      BRIDGE_BRANCH: ops/v7-ephemeral-tailscale-cleanup-20260920
+      REQUEST_PATH: deploy/v7-tailscale-cleanup-request.json
+      PUBLIC_CERT_PATH: deploy/v7-tailscale-cleanup-public.crt
+      PUBLIC_META_PATH: deploy/v7-tailscale-cleanup-public.json
+      PAYLOAD_PATH: deploy/v7-tailscale-cleanup-payload.json
+      PROBE_PATH: deploy/v7-tailscale-cleanup-probe.json
+      APPROVE_PATH: deploy/v7-tailscale-cleanup-approve.json
+      RECEIPT_PATH: deploy/v7-tailscale-cleanup-receipt.json
+    steps:
+      - name: Checkout cleanup branch
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          ref: ${{ env.BRIDGE_BRANCH }}
+          fetch-depth: 0
+
+      - name: Validate cleanup request
+        id: request
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - "$REQUEST_PATH" "$GITHUB_OUTPUT" <<'PY'
+          import json,re,sys
+          from pathlib import Path
+          v=json.loads(Path(sys.argv[1]).read_text(encoding='utf-8'))
+          assert v.get('schema')=='polymarket_v7_ephemeral_tailscale_cleanup_request_v1'
+          assert v.get('version')==1
+          assert v.get('scope')=='CI_EPHEMERAL_ONLY'
+          assert v.get('allowed_prefixes')==['gh-deploy-','gh-health-','gh-freeze-']
+          nonce=v.get('request_nonce')
+          assert isinstance(nonce,str) and re.fullmatch(r'[A-Za-z0-9._:-]{12,128}',nonce)
+          with open(sys.argv[2],'a',encoding='utf-8') as h:
+              h.write(f"nonce={nonce}\n")
+          PY
+
+      - name: Generate ephemeral certificate and publish public half
+        shell: bash
+        env:
+          REQUEST_NONCE: ${{ steps.request.outputs.nonce }}
+        run: |
+          set -euo pipefail
+          key="$RUNNER_TEMP/cleanup-private.key"
+          cert="$RUNNER_TEMP/cleanup-public.crt"
+          openssl req -x509 -newkey rsa:3072 -sha256 -days 1 -nodes             -keyout "$key" -out "$cert"             -subj "/CN=polymarket-v7-tailscale-cleanup-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}" >/dev/null 2>&1
+          chmod 600 "$key"
+          cp "$cert" "$PUBLIC_CERT_PATH"
+          cert_sha="$(sha256sum "$cert" | awk '{print $1}')"
+          python3 - "$PUBLIC_META_PATH" "$REQUEST_NONCE" "$cert_sha" "$GITHUB_RUN_ID" "$GITHUB_RUN_ATTEMPT" <<'PY'
+          import json,sys,time
+          from pathlib import Path
+          Path(sys.argv[1]).write_text(json.dumps({
+            'schema':'polymarket_v7_ephemeral_tailscale_cleanup_public_v1',
+            'request_nonce':sys.argv[2],
+            'cert_sha256':sys.argv[3],
+            'run_id':int(sys.argv[4]),
+            'run_attempt':int(sys.argv[5]),
+            'created_at':int(time.time()),
+            'scope':'CI_EPHEMERAL_ONLY'
+          },sort_keys=True,indent=2)+'\n',encoding='utf-8')
+          PY
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add "$PUBLIC_CERT_PATH" "$PUBLIC_META_PATH"
+          git commit -m "ops(v7): publish ephemeral Tailscale cleanup certificate [skip ci]"
+          git push origin "HEAD:$BRIDGE_BRANCH"
+          echo "cert_sha=$cert_sha" >> "$GITHUB_ENV"
+
+      - name: Wait for encrypted login payload
+        shell: bash
+        env:
+          REQUEST_NONCE: ${{ steps.request.outputs.nonce }}
+        run: |
+          set -euo pipefail
+          found=0
+          for _ in $(seq 1 180); do
+            git fetch --quiet origin "$BRIDGE_BRANCH"
+            if git cat-file -e "origin/$BRIDGE_BRANCH:$PAYLOAD_PATH" 2>/dev/null; then
+              git show "origin/$BRIDGE_BRANCH:$PAYLOAD_PATH" > "$RUNNER_TEMP/payload.json"
+              if python3 - "$RUNNER_TEMP/payload.json" "$REQUEST_NONCE" "$cert_sha" "$GITHUB_RUN_ID" <<'PY'
+          import base64,json,sys
+          from pathlib import Path
+          v=json.loads(Path(sys.argv[1]).read_text(encoding='utf-8'))
+          assert v.get('schema')=='polymarket_v7_ephemeral_tailscale_cleanup_payload_v1'
+          assert v.get('request_nonce')==sys.argv[2]
+          assert v.get('cert_sha256')==sys.argv[3]
+          assert int(v.get('run_id') or 0)==int(sys.argv[4])
+          raw=base64.b64decode(v['cms_der_b64'],validate=True)
+          assert 100 < len(raw) < 10000
+          Path('/tmp/tailscale-cleanup.cms').write_bytes(raw)
+          PY
+              then found=1; break; fi
+            fi
+            sleep 3
+          done
+          test "$found" = 1
+
+      - name: Decrypt login only in runner memory
+        shell: bash
+        run: |
+          set -euo pipefail
+          openssl cms -decrypt -binary -inform DER             -in /tmp/tailscale-cleanup.cms             -recip "$RUNNER_TEMP/cleanup-public.crt"             -inkey "$RUNNER_TEMP/cleanup-private.key"             -out "$RUNNER_TEMP/tailscale-login.json"
+          python3 - "$RUNNER_TEMP/tailscale-login.json" "$GITHUB_ENV" <<'PY'
+          import json,secrets,sys
+          v=json.load(open(sys.argv[1],encoding='utf-8'))
+          assert set(v)=={'TAILSCALE_EMAIL','TAILSCALE_PASSWORD'}
+          assert '@' in v['TAILSCALE_EMAIL'] and len(v['TAILSCALE_PASSWORD'])>=8
+          with open(sys.argv[2],'a',encoding='utf-8') as h:
+              for k in ('TAILSCALE_EMAIL','TAILSCALE_PASSWORD'):
+                  val=v[k]; print(f'::add-mask::{val}')
+                  d='TSBRIDGE_'+secrets.token_hex(12)
+                  h.write(f'{k}<<{d}\n{val}\n{d}\n')
+          PY
+          rm -f /tmp/tailscale-cleanup.cms "$RUNNER_TEMP/tailscale-login.json"
+          shred -u "$RUNNER_TEMP/cleanup-private.key" 2>/dev/null || rm -f "$RUNNER_TEMP/cleanup-private.key"
+
+      - name: Install headless browser
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 -m pip install --quiet playwright
+          python3 -m playwright install --with-deps chromium >/dev/null
+
+      - name: Login and probe CI machines
+        shell: bash
+        run: |
+          set -euo pipefail
+          cat > "$RUNNER_TEMP/probe.py" <<'PY'
+          import json,os,re,time
+          from pathlib import Path
+          from urllib.parse import urlparse
+          from playwright.sync_api import sync_playwright, TimeoutError as PwTimeout
+
+          email=os.environ['TAILSCALE_EMAIL']; password=os.environ['TAILSCALE_PASSWORD']
+          out=Path(os.environ['PROBE_PATH'])
+          result={'schema':'polymarket_v7_tailscale_cleanup_probe_v1',
+                  'scope':'CI_EPHEMERAL_ONLY','login_success':False,'mfa_required':False,
+                  'machine_names':[],'row_buttons':{},'final_host':None,'final_path':None}
+          with sync_playwright() as p:
+              browser=p.chromium.launch(headless=True)
+              ctx=browser.new_context()
+              page=ctx.new_page()
+              page.goto('https://console.tailscale.com/admin/machines',wait_until='domcontentloaded',timeout=120000)
+              deadline=time.time()+90
+              while time.time()<deadline:
+                  host=urlparse(page.url).hostname or ''
+                  body=''
+                  try: body=page.locator('body').inner_text(timeout=5000)
+                  except Exception: pass
+                  lower=body.lower()
+                  if host.endswith('console.tailscale.com'):
+                      result['login_success']=True
+                      break
+                  if host.endswith('accounts.google.com'):
+                      email_box=page.locator('input[type="email"]:visible')
+                      password_box=page.locator('input[type="password"]:visible')
+                      if email_box.count():
+                          email_box.first.fill(email)
+                          btn=page.get_by_role('button',name=re.compile('next',re.I))
+                          if btn.count(): btn.first.click()
+                          else: page.keyboard.press('Enter')
+                          page.wait_for_timeout(1800); continue
+                      if password_box.count():
+                          password_box.first.fill(password)
+                          btn=page.get_by_role('button',name=re.compile('next',re.I))
+                          if btn.count(): btn.first.click()
+                          else: page.keyboard.press('Enter')
+                          page.wait_for_timeout(2200); continue
+                      if any(x in lower for x in ['2-step verification','verify it’s you','verify it\'s you','check your phone','authenticator','security key']):
+                          result['mfa_required']=True
+                          break
+                  else:
+                      google=page.get_by_text(re.compile('google',re.I))
+                      if google.count():
+                          try: google.first.click(); page.wait_for_timeout(1500); continue
+                          except Exception: pass
+                      email_box=page.locator('input[type="email"]:visible')
+                      if email_box.count():
+                          email_box.first.fill(email)
+                          page.keyboard.press('Enter'); page.wait_for_timeout(1500); continue
+                  # consent / continue pages
+                  for label in ['Continue','Allow','Next']:
+                      btn=page.get_by_role('button',name=re.compile(f'^{label}$',re.I))
+                      if btn.count():
+                          try: btn.first.click(); page.wait_for_timeout(1200); break
+                          except Exception: pass
+                  else:
+                      page.wait_for_timeout(1000)
+              result['final_host']=urlparse(page.url).hostname
+              result['final_path']=urlparse(page.url).path
+              if result['login_success']:
+                  page.goto('https://console.tailscale.com/admin/machines',wait_until='domcontentloaded',timeout=120000)
+                  page.wait_for_timeout(6000)
+                  body=page.locator('body').inner_text(timeout=10000)
+                  names=sorted(set(re.findall(r'gh-(?:deploy|health|freeze)-\d+-\d+',body)))
+                  result['machine_names']=names
+                  for name in names:
+                      try:
+                          loc=page.get_by_text(name,exact=True).first
+                          row=loc.locator('xpath=ancestor::*[@role="row"][1]')
+                          if not row.count(): row=loc.locator('xpath=ancestor::tr[1]')
+                          labels=[]
+                          if row.count():
+                              for i in range(min(row.locator('button').count(),10)):
+                                  b=row.locator('button').nth(i)
+                                  labels.append((b.get_attribute('aria-label') or b.get_attribute('title') or b.inner_text() or '').strip())
+                          result['row_buttons'][name]=[x for x in labels if x][:10]
+                      except Exception:
+                          result['row_buttons'][name]=[]
+                  ctx.storage_state(path=os.environ['RUNNER_TEMP']+'/tailscale-storage.json')
+              browser.close()
+          out.write_text(json.dumps(result,sort_keys=True,indent=2)+'\n',encoding='utf-8')
+          if not result['login_success']:
+              raise SystemExit(3 if result['mfa_required'] else 2)
+          PY
+          python3 "$RUNNER_TEMP/probe.py" || probe_rc=$?
+          probe_rc=${probe_rc:-0}
+          git add "$PROBE_PATH"
+          git commit -m "ops(v7): publish sanitized Tailscale CI cleanup probe [skip ci]"
+          git push origin "HEAD:$BRIDGE_BRANCH"
+          exit "$probe_rc"
+
+      - name: Wait for exact cleanup approval
+        shell: bash
+        run: |
+          set -euo pipefail
+          found=0
+          for _ in $(seq 1 180); do
+            git fetch --quiet origin "$BRIDGE_BRANCH"
+            if git cat-file -e "origin/$BRIDGE_BRANCH:$APPROVE_PATH" 2>/dev/null; then
+              git show "origin/$BRIDGE_BRANCH:$APPROVE_PATH" > "$RUNNER_TEMP/approve.json"
+              if python3 - "$RUNNER_TEMP/approve.json" "$PROBE_PATH" <<'PY'
+          import json,re,sys
+          a=json.load(open(sys.argv[1])); p=json.load(open(sys.argv[2]))
+          assert a.get('schema')=='polymarket_v7_tailscale_cleanup_approval_v1'
+          names=a.get('machine_names'); assert isinstance(names,list) and names
+          discovered=set(p.get('machine_names') or [])
+          assert set(names)<=discovered
+          assert all(re.fullmatch(r'gh-(?:deploy|health|freeze)-\d+-\d+',x) for x in names)
+          PY
+              then found=1; break; fi
+            fi
+            sleep 3
+          done
+          test "$found" = 1
+
+      - name: Remove only approved CI machines
+        shell: bash
+        run: |
+          set -euo pipefail
+          cat > "$RUNNER_TEMP/remove.py" <<'PY'
+          import json,os,re,time
+          from pathlib import Path
+          from playwright.sync_api import sync_playwright
+          approve=json.load(open(os.environ['RUNNER_TEMP']+'/approve.json'))
+          names=approve['machine_names']; removed=[]; failed={}
+          with sync_playwright() as p:
+              browser=p.chromium.launch(headless=True)
+              ctx=browser.new_context(storage_state=os.environ['RUNNER_TEMP']+'/tailscale-storage.json')
+              page=ctx.new_page()
+              page.goto('https://console.tailscale.com/admin/machines',wait_until='domcontentloaded',timeout=120000)
+              page.wait_for_timeout(5000)
+              for name in names:
+                  if not re.fullmatch(r'gh-(?:deploy|health|freeze)-\d+-\d+',name):
+                      failed[name]='invalid_name'; continue
+                  try:
+                      # Use the page search when available to isolate one row.
+                      boxes=page.locator('input[placeholder*="Search" i]:visible')
+                      if boxes.count():
+                          boxes.first.fill(name); page.wait_for_timeout(1200)
+                      loc=page.get_by_text(name,exact=True).first
+                      if not loc.count(): raise RuntimeError('machine_not_found')
+                      row=loc.locator('xpath=ancestor::*[@role="row"][1]')
+                      if not row.count(): row=loc.locator('xpath=ancestor::tr[1]')
+                      if not row.count(): raise RuntimeError('row_not_found')
+                      buttons=row.locator('button')
+                      if not buttons.count(): raise RuntimeError('row_menu_not_found')
+                      chosen=None
+                      for i in range(buttons.count()):
+                          b=buttons.nth(i); label=((b.get_attribute('aria-label') or '')+' '+(b.get_attribute('title') or '')).lower()
+                          if any(k in label for k in ['more','menu','action']):
+                              chosen=b; break
+                      (chosen or buttons.last).click()
+                      page.wait_for_timeout(500)
+                      rem=page.get_by_text(re.compile('^Remove$',re.I))
+                      if not rem.count(): raise RuntimeError('remove_menu_not_found')
+                      rem.last.click(); page.wait_for_timeout(500)
+                      confirm=page.get_by_role('button',name=re.compile('remove machine|^remove$',re.I))
+                      if not confirm.count(): raise RuntimeError('remove_confirm_not_found')
+                      confirm.last.click(); page.wait_for_timeout(1200)
+                      removed.append(name)
+                      if boxes.count(): boxes.first.fill(''); page.wait_for_timeout(500)
+                  except Exception as exc:
+                      failed[name]=str(exc)[:180]
+              browser.close()
+          receipt={'schema':'polymarket_v7_tailscale_cleanup_receipt_v1',
+                   'scope':'CI_EPHEMERAL_ONLY','approved':names,'removed':removed,'failed':failed}
+          Path(os.environ['RECEIPT_PATH']).write_text(json.dumps(receipt,sort_keys=True,indent=2)+'\n')
+          if failed: raise SystemExit(4)
+          PY
+          python3 "$RUNNER_TEMP/remove.py"
+          git add "$RECEIPT_PATH"
+          git commit -m "ops(v7): publish Tailscale CI cleanup receipt [skip ci]"
+          git push origin "HEAD:$BRIDGE_BRANCH"
+
+      - name: Clear login environment
+        if: always()
+        shell: bash
+        run: |
+          {
+            echo 'TAILSCALE_EMAIL='
+            echo 'TAILSCALE_PASSWORD='
+          } >> "$GITHUB_ENV"
+          rm -f "$RUNNER_TEMP/tailscale-storage.json" "$RUNNER_TEMP/tailscale-login.json"             /tmp/tailscale-cleanup.cms "$RUNNER_TEMP/cleanup-private.key" || true

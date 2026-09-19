@@ -1,0 +1,11 @@
+{
+  "schema": "polymarket_v7_ephemeral_tailscale_cleanup_request_v1",
+  "version": 1,
+  "request_nonce": "tailscale-cleanup-20260920-v1",
+  "scope": "CI_EPHEMERAL_ONLY",
+  "allowed_prefixes": [
+    "gh-deploy-",
+    "gh-health-",
+    "gh-freeze-"
+  ]
+}
