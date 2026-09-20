@@ -29,7 +29,11 @@ def fixture():
 
 
 def is_independent_live_exporter_telemetry(expr: str) -> bool:
-    return expr.startswith('max(up{job="polymarket-v7"') or expr.startswith('up{job="polymarket-v7"')
+    return (
+        expr.startswith('max(up{job="polymarket-v7"')
+        or expr.startswith('up{job="polymarket-v7"')
+        or "polymarket_v7_exporter_snapshot_age_seconds" in expr
+    )
 
 
 class OperatorTruthTests(unittest.TestCase):
