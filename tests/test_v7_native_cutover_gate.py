@@ -133,6 +133,21 @@ class NativeCutoverGateTest(unittest.TestCase):
         self.assertLess(gate, first_stop)
         self.assertLess(gate, first_restart)
 
+    def test_cutover_proves_quiescence_before_normalizing_native_status(self) -> None:
+        text = CUTOVER.read_text(encoding="utf-8")
+        stop = text.index("systemctl stop polymarket-v7-paper.service")
+        state = text.index("paper_state=", stop)
+        main_pid = text.index("paper_main_pid=", state)
+        cgroup = text.index("paper_cgroup=", main_pid)
+        normalize = text.index("native_engine_manager_status.json", cgroup)
+        archive = text.index("v7_prepare_cutover_run_root.py", normalize)
+        self.assertTrue(stop < state < main_pid < cgroup < normalize < archive)
+        self.assertIn("prior PAPER service did not quiesce", text)
+        self.assertIn("prior PAPER service cgroup still has processes", text)
+        self.assertIn('v["state"]="STOPPED"', text)
+        self.assertIn('v["active_worker_count"]=0', text)
+        self.assertIn('v["engine_pid"]=0', text)
+
     def test_gate_and_policy_are_shipped_in_runtime_bundle(self) -> None:
         runtime = json.loads(RUNTIME_MANIFEST.read_text(encoding="utf-8"))
         support = set(runtime["support_files"])
