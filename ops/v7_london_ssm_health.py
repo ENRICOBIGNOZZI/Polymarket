@@ -21,9 +21,12 @@ def health_command(expected_sha: str) -> str:
     if not exact_sha(expected_sha):
         raise SsmDeployError("invalid health SHA")
     template = r"""set -euo pipefail
+trap 'rc=$?; echo "V7_SSM_HEALTH_FAIL line=${LINENO} command=${BASH_COMMAND} rc=${rc}" >&2; exit "$rc"' ERR
 SHA=__EXPECTED_SHA__
 UNIT=polymarket-v7-paper.service
 EXPORTER=polymarket-v7-exporter.service
+
+echo "health_probe=services"
 [[ "$(systemctl is-active "$UNIT")" == active ]]
 [[ "$(systemctl is-active "$EXPORTER")" == active ]]
 APP="$(systemctl show "$UNIT" -p WorkingDirectory --value)"
@@ -36,36 +39,53 @@ if [[ -e "$DEPLOYED_SHA_FILE" ]]; then
   [[ -f "$DEPLOYED_SHA_FILE" && ! -L "$DEPLOYED_SHA_FILE" ]]
   [[ "$(cat "$DEPLOYED_SHA_FILE")" == "$SHA" ]]
 fi
+
+echo "health_probe=runtime"
 python3 - "$ROOT" "$SHA" <<'PY'
 import json,os,sys,time
 from pathlib import Path
 root=Path(sys.argv[1]); sha=sys.argv[2]; now=int(time.time())
 r=json.loads((root/'control/runtime_status.json').read_text())
 a=json.loads((root/'control/allocations/manifest.json').read_text())
-assert r.get('state')=='running'
-assert r.get('model_sha')==sha
-assert r.get('paper_only') is True
-assert r.get('authenticated_execution') is False
-assert r.get('real_order_submission') is False
-assert r.get('economic_new_risk_ready') is False
-assert r.get('authorized_alpha_actions') in (None, [])
-assert set(r.get('economic_engines') or [])=={'CRYPTO_SETTLEMENT_ENGINE'}
-assert a.get('engine_count')==1
-assert set((a.get('engine_budgets') or {}).keys())=={'CRYPTO_SETTLEMENT_ENGINE'}
-pid=int(r.get('pid') or 0); assert pid>0; os.kill(pid,0)
-assert now-int(r.get('timestamp') or 0)<=180
+assert r.get('state')=='running', r
+assert r.get('model_sha')==sha, r
+assert r.get('paper_only') is True, r
+assert r.get('authenticated_execution') is False, r
+assert r.get('real_order_submission') is False, r
+assert r.get('economic_new_risk_ready') is False, r
+assert r.get('authorized_alpha_actions') in (None, []), r
+assert set(r.get('economic_engines') or [])=={'CRYPTO_SETTLEMENT_ENGINE'}, r
+assert a.get('engine_count')==1, a
+assert set((a.get('engine_budgets') or {}).keys())=={'CRYPTO_SETTLEMENT_ENGINE'}, a
+pid=int(r.get('pid') or 0); assert pid>0, r; os.kill(pid,0)
+assert now-int(r.get('timestamp') or 0)<=180, r
 PY
+
+echo "health_probe=metrics"
 metrics="$(curl -fsS http://127.0.0.1:9108/metrics)"
 for expected in   'polymarket_v7_execution_alive 1'   'polymarket_v7_single_writer_ok 1'   'polymarket_v7_exact_sha_ok 1'   'polymarket_v7_paper_only_contract_ok 1'   'polymarket_v7_authenticated_execution_disabled 1'   'polymarket_v7_live_algorithm_count 1'   'polymarket_v7_native_engine_mode 1'   'polymarket_v7_economic_new_risk_ready 0'; do
-  grep -Fxq "$expected" <<<"$metrics"
+  if ! grep -Fxq "$expected" <<<"$metrics"; then
+    echo "missing_metric_line=$expected" >&2
+    exit 66
+  fi
 done
 for metric in   polymarket_execution_opportunities   polymarket_execution_orders_submitted   polymarket_execution_fills   polymarket_execution_complete_fills   polymarket_execution_final_pnl_usd   polymarket_runtime_pnl_usd   polymarket_v7_canonical_submitted_units   polymarket_v7_canonical_complete_units; do
-  grep -Eq "^${metric}(\\{| )" <<<"$metrics"
+  if ! grep -Eq "^${metric}(\\{| )" <<<"$metrics"; then
+    echo "missing_metric=$metric" >&2
+    exit 67
+  fi
 done
+
+echo "health_probe=prometheus"
 curl -fsS http://127.0.0.1:9090/-/ready >/dev/null
-curl -fsS --get --data-urlencode 'query=up{job="polymarket-v7"}'   http://127.0.0.1:9090/api/v1/query | python3 -c 'import json,sys; v=json.load(sys.stdin); r=v.get("data",{}).get("result",[]); assert len(r)==1 and r[0]["value"][1]=="1"'
+curl -fsS --get --data-urlencode 'query=up{job="polymarket-v7"}' \
+  http://127.0.0.1:9090/api/v1/query | python3 -c 'import json,sys; v=json.load(sys.stdin); r=v.get("data",{}).get("result",[]); assert len(r)==1 and r[0]["value"][1]=="1", v'
+
+echo "health_probe=grafana"
 curl -fsS http://127.0.0.1:3000/api/health >/dev/null
 curl -fsS http://127.0.0.1:3000/api/dashboards/uid/polymarket-v7 >/dev/null
+
+echo "health_probe=full_health"
 full_health="$(curl -sS http://127.0.0.1:9108/healthz 2>/dev/null || true)"
 python3 - "$SHA" "$APP" "$ROOT" "$full_health" <<'PY'
 import json,sys
