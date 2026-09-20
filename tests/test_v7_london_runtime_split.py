@@ -12,6 +12,18 @@ def test_stage_does_not_switch_or_start_runtime():
     assert 'systemctl enable' not in s
     assert 'systemctl stop' not in s
 
+def test_stage_reuses_full_exact_sha_ci_before_skipping_duplicate_suite():
+    s=(ROOT/'ops/v7_london_stage_release.sh').read_text()
+    fast=s.index('REUSED_EXACT_SHA_CI')
+    gate=s.index('v7_exact_sha_ci_gate.py')
+    runtime=s.index('PM_LONDON_RUNTIME_ONLY=ON')
+    assert gate < fast < runtime
+    for check in ('ci-v7-Release','ci-v7-Debug','sanitizer-v7','security-audit-v7',
+                  'london-runtime-boundary-v7','monitoring-v7','single-writer-v7'):
+        assert check in s
+    assert 'FULL_LOCAL_CI' in s
+
+
 def test_cutover_artifact_gate_precedes_stop_and_symlink_switch():
     s=(ROOT/'ops/v7_london_cutover.sh').read_text()
     gate=s.index("runtime artifact bundle missing")

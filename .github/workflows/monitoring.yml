@@ -3,6 +3,8 @@ name: monitoring
 on:
   push:
     branches: [main]
+    paths-ignore:
+      - deploy/v7-paper-deploy-aws-oidc-request.json
   pull_request:
   workflow_dispatch:
     inputs:

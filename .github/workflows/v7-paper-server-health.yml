@@ -3,11 +3,11 @@ name: V7 PAPER server health
 on:
   workflow_dispatch:
     inputs:
-      expected_sha: {description: "Exact deployed V7 SHA", required: false, type: string}
+      expected_sha: {description: "Exact deployed V7 SHA or request SHA", required: false, type: string}
   repository_dispatch:
     types: [v7-paper-server-health]
   workflow_run:
-    workflows: ["V7 deploy PAPER server", "V7 deploy PAPER server AWS OIDC"]
+    workflows: ["V7 deploy PAPER server AWS OIDC", "V7 deploy PAPER server"]
     types: [completed]
     branches: [main]
   schedule:
@@ -17,164 +17,122 @@ permissions:
   contents: read
   actions: read
   id-token: write
-concurrency: {group: v7-paper-server-health, cancel-in-progress: false}
+
+concurrency:
+  group: v7-paper-server-health
+  cancel-in-progress: false
 
 jobs:
   health:
     runs-on: ubuntu-24.04
-    timeout-minutes: 18
+    timeout-minutes: 8
     env:
+      AWS_REGION: eu-west-2
+      AWS_DEFAULT_REGION: eu-west-2
+      ROLE_ARN: arn:aws:iam::350769147128:role/PolymarketLondonPaperDeployPolicy
       SERVER_HOST: ${{ vars.POLYMARKET_SERVER_HOST || '100.104.183.109' }}
-      SERVER_USER: ${{ vars.POLYMARKET_SERVER_USER || 'ubuntu' }}
-      SERVER_PORT: ${{ vars.POLYMARKET_SERVER_PORT || '22' }}
-      EXPECTED_SHA: ${{ github.event.inputs.expected_sha || github.event.client_payload.expected_sha || github.event.workflow_run.head_sha || github.sha }}
-      GRAFANA_HOSTNAME: mamma-portfolio
-      GRAFANA_FQDN: mamma-portfolio.tail1bae85.ts.net
-      GRAFANA_URL: https://mamma-portfolio.tail1bae85.ts.net
+      LONDON_INSTANCE_ID: ${{ vars.POLYMARKET_LONDON_INSTANCE_ID || 'i-0fba2bac9fdc5cbeb' }}
+      SOURCE_SHA: ${{ github.event.inputs.expected_sha || github.event.client_payload.expected_sha || github.event.workflow_run.head_sha || github.sha }}
+
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
-        with: {ref: "${{ env.EXPECTED_SHA }}", fetch-depth: 0}
-      - name: Gate exact deployed main SHA
-        id: gate
-        env: {GH_TOKEN: "${{ github.token }}"}
+        with:
+          ref: main
+          fetch-depth: 0
+
+      - name: Resolve deployed runtime SHA
+        id: target
+        shell: bash
         run: |
           set -euo pipefail
-          [[ "$EXPECTED_SHA" =~ ^[0-9a-f]{40}$ ]]
+          [[ "$SOURCE_SHA" =~ ^[0-9a-f]{40}$ ]]
           git fetch --no-tags origin main
-          test "$(git rev-parse origin/main)" = "$EXPECTED_SHA"
-          python3 scripts/v7_cutover_contract.py --repository-root . --expected-head "$EXPECTED_SHA" >/dev/null
-          echo "ready=true" >> "$GITHUB_OUTPUT"
-      - name: Select ephemeral Tailscale credential mode
-        if: steps.gate.outputs.ready == 'true'
-        id: tailscale_auth
-        env:
-          TS_AUTHKEY: ${{ secrets.TS_AUTHKEY }}
-          TS_OAUTH_CLIENT_ID: TCb65amTk321CNTRL-kwWnLvpSbF11CNTRL
-          TS_OAUTH_SECRET: ${{ secrets.TS_OAUTH_SECRET }}
-          TS_AUDIENCE: api.tailscale.com/TCb65amTk321CNTRL-kwWnLvpSbF11CNTRL
-          TS_TAGS: ${{ vars.TS_TAGS || 'tag:ci' }}
-          TS_AUTHKEY_EPHEMERAL_VERIFIED: ${{ vars.TS_AUTHKEY_EPHEMERAL_VERIFIED || 'false' }}
-        run: |
-          set -euo pipefail
-          test -n "${TS_TAGS:-}"
-          if [[ -n "${TS_OAUTH_CLIENT_ID:-}" && -n "${TS_AUDIENCE:-}" ]]; then
-            mode=oidc
-          elif [[ -n "${TS_OAUTH_CLIENT_ID:-}" && -n "${TS_OAUTH_SECRET:-}" ]]; then
-            mode=oauth
-          elif [[ -n "${TS_AUTHKEY:-}" ]]; then
-            if [[ "${TS_AUTHKEY_EPHEMERAL_VERIFIED:-false}" != true ]]; then
-              echo "::error title=Tailnet credential requires administrator verification::Auth-key fallback is disabled until TS_AUTHKEY_EPHEMERAL_VERIFIED=true confirms a reusable tagged ephemeral key. Use OIDC/OAuth preferably. Existing production nodes are never modified."
-              exit 1
-            fi
-            mode=authkey
-            echo "::warning title=Tailscale auth-key fallback::TS_AUTHKEY must be reusable, tagged, pre-approved when required, and ephemeral. The workflow uses in-memory daemon state for ephemeral nodes."
-          else
-            echo "No visible Tailscale OIDC, OAuth, or auth-key credential set" >&2
-            exit 1
-          fi
-          echo "mode=$mode" >> "$GITHUB_OUTPUT"
-      - name: Join tailnet with workload identity
-        if: steps.tailscale_auth.outputs.mode == 'oidc'
-        uses: tailscale/github-action@780049a30b6ff5c378a9e7b389d15ece7a204888
-        with:
-          oauth-client-id: TCb65amTk321CNTRL-kwWnLvpSbF11CNTRL
-          audience: api.tailscale.com/TCb65amTk321CNTRL-kwWnLvpSbF11CNTRL
-          tags: ${{ vars.TS_TAGS || 'tag:ci' }}
-          version: 1.94.2
-          statedir: ''
-          hostname: gh-health-${{ github.run_id }}-${{ github.run_attempt }}
-          ping: ${{ env.SERVER_HOST }}
-      - name: Join tailnet with OAuth
-        if: steps.tailscale_auth.outputs.mode == 'oauth'
-        uses: tailscale/github-action@780049a30b6ff5c378a9e7b389d15ece7a204888
-        with:
-          oauth-client-id: TCb65amTk321CNTRL-kwWnLvpSbF11CNTRL
-          oauth-secret: ${{ secrets.TS_OAUTH_SECRET }}
-          tags: ${{ vars.TS_TAGS || 'tag:ci' }}
-          version: 1.94.2
-          statedir: ''
-          hostname: gh-health-${{ github.run_id }}-${{ github.run_attempt }}
-          ping: ${{ env.SERVER_HOST }}
-      - name: Join tailnet with ephemeral auth key
-        if: steps.tailscale_auth.outputs.mode == 'authkey'
-        uses: tailscale/github-action@780049a30b6ff5c378a9e7b389d15ece7a204888
-        with:
-          authkey: ${{ secrets.TS_AUTHKEY }}
-          version: 1.94.2
-          statedir: ''
-          hostname: gh-health-${{ github.run_id }}-${{ github.run_attempt }}
-          ping: ${{ env.SERVER_HOST }}
-      - name: Configure SSH
-        env: {SSH_PRIVATE_KEY: "${{ secrets.POLYMARKET_SERVER_SSH_KEY }}"}
-        run: |
-          set -euo pipefail
-          install -d -m 700 ~/.ssh
-          printf '%s\n' "$SSH_PRIVATE_KEY" > ~/.ssh/polymarket_v7_health
-          chmod 600 ~/.ssh/polymarket_v7_health
-          ssh-keyscan -T 5 -p "$SERVER_PORT" "$SERVER_HOST" > ~/.ssh/known_hosts
-      - name: Verify crypto-only PAPER runtime
-        run: |
-          set -euo pipefail
-          mkdir -p health-evidence
-          ssh -i ~/.ssh/polymarket_v7_health -o IdentitiesOnly=yes -o BatchMode=yes -o ConnectTimeout=10 -p "$SERVER_PORT" "$SERVER_USER@$SERVER_HOST" "EXPECTED_SHA='$EXPECTED_SHA' bash -s" <<'REMOTE' | tee health-evidence/server-health.txt
-          set -euo pipefail
-          unit=polymarket-v7-paper.service
-          app="$(systemctl show "$unit" -p WorkingDirectory --value)"
-          env_raw="$(systemctl show "$unit" -p Environment --value)"
-          root="$(python3 -c 'import shlex,sys; items=shlex.split(sys.stdin.read()); print(next((x.split("=",1)[1] for x in items if x.startswith("PM_V7_RUN_ROOT=")), ""))' <<<"$env_raw")"
-          test -n "$app" -a -d "$app"
-          test -n "$root" -a -d "$root"
-          test "$(cat "$app/deploy/london/runtime_sha")" = "$EXPECTED_SHA"
-          test "$(cat "$root/control/deployed_sha")" = "$EXPECTED_SHA"
-          cd "$app"
-          python3 - "$root" "$EXPECTED_SHA" <<'PY'
-          import json,os,sys,time
-          from pathlib import Path
-          root=Path(sys.argv[1]); sha=sys.argv[2]; now=int(time.time())
-          runtime=json.loads((root/'control/runtime_status.json').read_text())
-          portfolio=json.loads((root/'control/portfolio_state.json').read_text())
-          allocation=json.loads((root/'control/allocations/manifest.json').read_text())
-          scope=json.loads(Path('config/v7_live_model_scope.json').read_text())
-          registry=json.loads(Path('config/v7_strategy_registry.json').read_text())
-          expected={'CRYPTO_SETTLEMENT_ENGINE'}
-          assert runtime.get('version')==7 and runtime.get('model_sha')==sha
-          assert runtime.get('paper_only') is True and runtime.get('authenticated_execution') is False and runtime.get('real_order_submission') is False
-          assert set(runtime.get('economic_engines') or [])==expected and runtime.get('economic_new_risk_ready') is False
-          pid=int(runtime.get('pid') or 0); os.kill(pid,0); assert now-int(runtime.get('timestamp') or 0)<=180
-          assert portfolio.get('schema')=='polymarket_v7_portfolio_guard_v2' and set(portfolio.get('engines') or {})==expected and portfolio.get('killed') is False
-          assert allocation.get('schema')=='polymarket_v7_capital_allocation_v3' and set(allocation.get('engine_budgets') or {})==expected and allocation.get('engine_count')==1
-          assert scope.get('schema')=='polymarket_v7_live_engine_scope_v2' and scope.get('version')==8 and set(scope.get('live_algorithms') or [])==expected and scope.get('live_algorithm_count')==1
-          assert registry.get('schema')=='polymarket_v7_live_algorithm_registry_v2' and {r.get('id') for r in registry.get('live_algorithms',[])}==expected
-          for removed in ('graph_rv','micro_taker','ranking','pca','local_factor','wallet_intelligence','market_open','osint','sports_latency','cross_platform'):
-              assert not (root/removed).exists(), removed
+          git cat-file -e "$SOURCE_SHA^{commit}"
+          git checkout --detach "$SOURCE_SHA"
+
+          target="$SOURCE_SHA"
+          request_path=deploy/v7-paper-deploy-aws-oidc-request.json
+          changed="$(git diff-tree --no-commit-id --name-only -r "$SOURCE_SHA")"
+          if [[ "$changed" == "$request_path" ]]; then
+            parent="$(git rev-parse "$SOURCE_SHA^")"
+            parsed="$(python3 - "$request_path" "$parent" <<'PY'
+          import json,sys
+          v=json.load(open(sys.argv[1],encoding='utf-8'))
+          assert v.get('schema')=='polymarket_v7_aws_oidc_paper_deploy_request_v1'
+          assert v.get('expected_parent_sha')==sys.argv[2]
+          assert v.get('paper_only') is True
+          assert v.get('authenticated_execution') is False
+          assert v.get('real_order_submission') is False
+          assert v.get('cutover_approved') is True
+          print(v['expected_parent_sha'])
           PY
-          curl -fsS http://127.0.0.1:9108/healthz
-          metrics="$(curl -fsS http://127.0.0.1:9108/metrics)"
-          grep -q '^polymarket_v7_health 1$' <<<"$metrics"
-          grep -q '^polymarket_v7_live_algorithm_count 1$' <<<"$metrics"
-          grep -q '^polymarket_v7_live_algorithm_scope_wired 1$' <<<"$metrics"
-          grep -q '^polymarket_v7_execution_alive 1$' <<<"$metrics"
-          grep -q '^polymarket_v7_single_writer_ok 1$' <<<"$metrics"
-          grep -q '^polymarket_v7_exact_sha_ok 1$' <<<"$metrics"
-          grep -q '^polymarket_v7_paper_only_contract_ok 1$' <<<"$metrics"
-          grep -q '^polymarket_v7_authenticated_execution_disabled 1$' <<<"$metrics"
-          grep -q '^polymarket_v7_economic_new_risk_ready 0$' <<<"$metrics"
-          grep -q '^polymarket_v7_ledger_valid 1$' <<<"$metrics"
-          printf '%s\n' "$metrics" | grep -E '^(polymarket_execution_opportunities|polymarket_execution_orders_submitted|polymarket_execution_fills|polymarket_execution_complete_fills|polymarket_execution_final_pnl_usd|polymarket_runtime_pnl_usd|polymarket_v7_canonical_submitted_units|polymarket_v7_canonical_complete_units)(\{| )'
-          curl -fsS http://127.0.0.1:9090/-/ready >/dev/null
-          curl -fsS http://127.0.0.1:3000/api/health >/dev/null
-          curl -fsS http://127.0.0.1:3000/api/dashboards/uid/polymarket-v7 >/dev/null
-          REMOTE
-      - name: Verify canonical Grafana route from tailnet
+          )"
+            target="$parsed"
+          fi
+
+          [[ "$target" =~ ^[0-9a-f]{40}$ ]]
+          git checkout --detach "$target"
+          python3 scripts/v7_cutover_contract.py --repository-root . --expected-head "$target" >/dev/null
+          echo "sha=$target" >> "$GITHUB_OUTPUT"
+          echo "health_target_sha=$target" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Configure AWS credentials through GitHub OIDC
+        uses: aws-actions/configure-aws-credentials@e1253824e5c10ff9df46874f81ed3ec929e19cfd
+        with:
+          role-to-assume: ${{ env.ROLE_ARN }}
+          role-session-name: polymarket-v7-paper-health
+          aws-region: eu-west-2
+
+      - name: Verify London PAPER runtime through read-only SSM
+        env:
+          TARGET_SHA: ${{ steps.target.outputs.sha }}
         run: |
           set -euo pipefail
-          tailscale ping --until-direct=false --c 1 --timeout=10s "$GRAFANA_HOSTNAME"
-          getent hosts "$GRAFANA_FQDN" | tee health-evidence/grafana-dns.txt
-          curl -fsS --max-time 10 "$GRAFANA_URL/api/health" > health-evidence/grafana-tailnet-health.json
-          curl -fsS --max-time 10 "$GRAFANA_URL/api/dashboards/uid/polymarket-v7" > health-evidence/grafana-tailnet-dashboard.json
+          aws sts get-caller-identity --region eu-west-2 --output json >/dev/null
+          python3 ops/v7_london_ssm_health.py \
+            --expected-sha "$TARGET_SHA" \
+            --expected-tailscale-ip "$SERVER_HOST" \
+            --expected-instance-id "$LONDON_INSTANCE_ID" \
+            --region eu-west-2 \
+            --output v7-ssm-health-receipt.json | tee health-evidence.txt
+          python3 - "$TARGET_SHA" <<'PY'
+          import json,sys
+          v=json.load(open('v7-ssm-health-receipt.json',encoding='utf-8'))
+          assert v.get('schema')=='polymarket_v7_ssm_health_receipt_v1'
+          assert v.get('expected_sha')==sys.argv[1]
+          assert v.get('paper_only') is True
+          assert v.get('authenticated_execution') is False
+          assert v.get('real_order_submission') is False
+          r=v.get('runtime') or {}
+          assert r.get('core_runtime_healthy') is True
+          assert r.get('prometheus_ready') is True
+          assert r.get('grafana_local_ready') is True
+          print('server_health=PASS')
+          print('full_data_health_ok='+str(bool(r.get('full_data_health_ok'))).lower())
+          print('full_data_health_reasons='+','.join(map(str,r.get('full_data_health_reasons') or [])))
+          PY
+
       - name: Publish health summary
         run: |
           echo '## V7 PAPER server health' >> "$GITHUB_STEP_SUMMARY"
-          echo "- exact deployed SHA: $EXPECTED_SHA" >> "$GITHUB_STEP_SUMMARY"
-          echo '- live algorithms: exactly 1 (CRYPTO_SETTLEMENT_ENGINE); legacy algorithms: 0' >> "$GITHUB_STEP_SUMMARY"
-          echo '- runtime, single writer, PAPER safety, ledger, Prometheus and Grafana: PASS' >> "$GITHUB_STEP_SUMMARY"
+          echo "- exact deployed SHA: ${{ steps.target.outputs.sha }}" >> "$GITHUB_STEP_SUMMARY"
+          echo '- core runtime / single writer / PAPER safety / Prometheus / local Grafana: PASS' >> "$GITHUB_STEP_SUMMARY"
+          python3 - <<'PY' >> "$GITHUB_STEP_SUMMARY"
+          import json
+          v=json.load(open('v7-ssm-health-receipt.json'))
+          r=v.get('runtime') or {}
+          print(f"- full data health: {'PASS' if r.get('full_data_health_ok') else 'WARMING/DEGRADED'}")
+          if r.get('full_data_health_reasons'):
+              print("- data readiness reasons: "+", ".join(map(str,r['full_data_health_reasons'])))
+          PY
+
+      - name: Upload health evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: v7-paper-server-health-${{ github.run_id }}
+          path: |
+            health-evidence.txt
+            v7-ssm-health-receipt.json
+          if-no-files-found: warn
+          retention-days: 14

@@ -115,17 +115,15 @@ class V7MacosMonitoringOwnerTest(unittest.TestCase):
         self.assertGreaterEqual(text.count('grep -Fq "$http_route" <<<"$serve_status"'), 2)
         self.assertGreaterEqual(text.count('grep -Fq "localhost:3000" <<<"$serve_status"'), 2)
 
-    def test_server_health_checks_operator_route_and_trade_funnel(self) -> None:
-        text = (ROOT / ".github" / "workflows" / "v7-paper-server-health.yml").read_text(
+    def test_server_health_checks_local_grafana_and_trade_funnel_over_ssm(self) -> None:
+        workflow = (ROOT / ".github" / "workflows" / "v7-paper-server-health.yml").read_text(
             encoding="utf-8"
         )
-        self.assertIn("GRAFANA_HOSTNAME: mamma-portfolio", text)
-        self.assertIn("GRAFANA_FQDN: mamma-portfolio.tail1bae85.ts.net", text)
-        self.assertIn("GRAFANA_URL: https://mamma-portfolio.tail1bae85.ts.net", text)
-        self.assertIn('tailscale ping --until-direct=false --c 1 --timeout=10s "$GRAFANA_HOSTNAME"', text)
-        self.assertIn('getent hosts "$GRAFANA_FQDN"', text)
-        self.assertIn('$GRAFANA_URL/api/health', text)
-        self.assertIn('$GRAFANA_URL/api/dashboards/uid/polymarket-v7', text)
+        helper = (ROOT / "ops" / "v7_london_ssm_health.py").read_text(encoding="utf-8")
+        self.assertIn("Verify London PAPER runtime through read-only SSM", workflow)
+        self.assertNotIn("tailscale ping", workflow)
+        self.assertIn("http://127.0.0.1:3000/api/health", helper)
+        self.assertIn("http://127.0.0.1:3000/api/dashboards/uid/polymarket-v7", helper)
         for metric in (
             "polymarket_execution_opportunities",
             "polymarket_execution_orders_submitted",
@@ -136,7 +134,7 @@ class V7MacosMonitoringOwnerTest(unittest.TestCase):
             "polymarket_v7_canonical_submitted_units",
             "polymarket_v7_canonical_complete_units",
         ):
-            self.assertIn(metric, text)
+            self.assertIn(metric, helper)
 
 
 if __name__ == "__main__":

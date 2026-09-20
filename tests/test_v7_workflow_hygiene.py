@@ -36,7 +36,6 @@ def test_tailnet_workflows_prefer_ephemeral_trust_credentials():
     # Ephemeral state is not a tailscale up --ephemeral CLI option.
     names = (
         "v7-deploy-paper-server.yml",
-        "v7-paper-server-health.yml",
         "v7-point-in-time-universe-archive.yml",
         "v7-freeze-maker-forward-window.yml",
     )
@@ -58,6 +57,26 @@ def test_tailnet_workflows_prefer_ephemeral_trust_credentials():
         assert workflow.count("statedir: ''") == workflow.count("uses: tailscale/github-action@") == 3
         assert "version: 1.94.2" in workflow
         assert "ping: ${{ env.SERVER_HOST }}" in workflow
+
+
+def test_server_health_uses_read_only_ssm_not_tailnet():
+    workflow=(ROOT/'.github/workflows/v7-paper-server-health.yml').read_text()
+    assert 'v7_london_ssm_health.py' in workflow
+    assert 'Configure AWS credentials through GitHub OIDC' in workflow
+    assert 'tailscale/github-action@' not in workflow
+    assert 'Configure SSH' not in workflow
+    assert 'api/dashboards/uid/polymarket-v7' in (ROOT/'ops/v7_london_ssm_health.py').read_text()
+
+
+def test_request_only_deploy_targets_validated_parent_and_skips_duplicate_gates():
+    deploy=(ROOT/'.github/workflows/v7-deploy-paper-server-aws-oidc.yml').read_text()
+    assert 'expected_sha="$parent_sha"' in deploy
+    assert 'Wait for target exact-SHA release gates' in deploy
+    assert 'git checkout --detach "$expected_sha"' in deploy
+    for path in ('ci.yml','monitoring.yml','private-runtime-single-writer-validation.yml'):
+        workflow=(ROOT/'.github/workflows'/path).read_text()
+        assert 'deploy/v7-paper-deploy-aws-oidc-request.json' in workflow
+        assert 'paths-ignore:' in workflow
 
 
 def test_tailscale_oidc_cleanup_is_main_only_and_fail_closed():
