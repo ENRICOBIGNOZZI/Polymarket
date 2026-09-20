@@ -649,7 +649,7 @@ def main() -> int:
         parser.exit(2, f"v7_london_ssm_deploy: {exc}\\n")
     args.output.parent.mkdir(parents=True, exist_ok=True)
     args.output.write_text(
-        json.dumps(receipt, sort_keys=True, indent=2) + "\\n",
+        json.dumps(receipt, sort_keys=True, indent=2) + "\n",
         encoding="utf-8",
     )
     print("ssm_deploy_result=success")
