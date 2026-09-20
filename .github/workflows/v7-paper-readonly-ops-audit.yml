@@ -140,13 +140,18 @@ jobs:
           print(json.dumps({"commands":[command],"executionTimeout":["120"]}))
           PY
           cid="$(aws ssm send-command --instance-ids "$LONDON_INSTANCE_ID" --document-name AWS-RunShellScript --parameters file://"$RUNNER_TEMP/params.json" --comment "Polymarket V7 PAPER read-only ops audit" --query 'Command.CommandId' --output text)"
+          status=""
           for _ in {1..30}; do
             status="$(aws ssm get-command-invocation --command-id "$cid" --instance-id "$LONDON_INSTANCE_ID" --query Status --output text 2>/dev/null || true)"
             case "$status" in
-              Success) break ;;
-              Failed|Cancelled|TimedOut) echo "ssm_status=$status" >&2; exit 1 ;;
+              Success|Failed|Cancelled|TimedOut) break ;;
             esac
             sleep 2
           done
           aws ssm get-command-invocation --command-id "$cid" --instance-id "$LONDON_INSTANCE_ID" --query StandardOutputContent --output text | tee audit.txt
+          if [[ "$status" != "Success" ]]; then
+            echo "ssm_status=$status" >&2
+            aws ssm get-command-invocation --command-id "$cid" --instance-id "$LONDON_INSTANCE_ID" --query StandardErrorContent --output text >&2 || true
+            exit 1
+          fi
           grep -q '^V7_READONLY_OPS_AUDIT=' audit.txt
