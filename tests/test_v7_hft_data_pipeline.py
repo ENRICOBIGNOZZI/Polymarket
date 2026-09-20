@@ -87,6 +87,19 @@ def test_old_unread_live_tail_remains_explicit_backlog(tmp_path):
     finally:store.close()
 
 
+def test_closed_archive_catchup_uses_larger_bounded_chunk(tmp_path):
+    archive=tmp_path.parent/'paper_v7_london_archives'/'cutover-test'/'research/native_observations/run'
+    archive.mkdir(parents=True)
+    p=archive/'market-capture.jsonl'
+    p.write_bytes(b''.join(json.dumps(native(i+10)).encode()+b'\n' for i in range(3)))
+    store=Windows(tmp_path)
+    try:
+        result=store.ingest(max_rows=1,archive_max_rows=3,realtime_lag_seconds=30)
+        assert result['total_opportunities']==3
+        assert result['scan_complete'] is True
+    finally:store.close()
+
+
 def test_epoch_skips_old_training_but_keeps_new_pending_population(tmp_path):
     write_native(tmp_path,[native(10),native(20)])
     store=Windows(tmp_path,15*SECOND)

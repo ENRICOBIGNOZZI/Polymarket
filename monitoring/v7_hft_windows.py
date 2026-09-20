@@ -116,7 +116,7 @@ class Windows:
     def source_key(self,path):
         return str(path.relative_to(self.run_root)) if path.is_relative_to(self.run_root) else str(path)
 
-    def ingest(self, *, max_rows=10000, budget_seconds=45, realtime_lag_seconds=30):
+    def ingest(self, *, max_rows=10000, archive_max_rows=50000, budget_seconds=45, realtime_lag_seconds=30):
         """Freeze complete append-only prefixes, including active D1 captures.
 
         Offsets commit only after immutable compact chunks exist. Repeated reads
@@ -124,6 +124,8 @@ class Windows:
         """
         if realtime_lag_seconds < 1:
             raise ValueError('REALTIME_LAG_MUST_BE_POSITIVE')
+        if archive_max_rows < max_rows:
+            raise ValueError('ARCHIVE_ROW_LIMIT_BELOW_ACTIVE_LIMIT')
         counts={'records':0,'decisions':0,'pending_markets':set()}; failures=[]; backlog_sources=[]
         progress={}; incomplete=set(); started=time.monotonic(); scan_complete=True
         # The input is append-only and active captures will normally gain a few
@@ -145,13 +147,19 @@ class Windows:
                 if path.suffix!='.gz' and path.stat().st_size==old[0]: continue
                 closure=Path(str(path).removesuffix('.gz')+'.closed.json')
                 if closure.exists() and json.loads(closure.read_bytes()).get('bytes')==old[0]: continue
-            offset=old[0] if old else 0; batch=[]; requests=[]; last=0; capture=''; contexts={}
+            offset=old[0] if old else 0; requests=[]; last=0; capture=''; contexts={}
+            archived_source=path.is_relative_to(archives)
+            row_limit=archive_max_rows if archived_source else max_rows
+            # Native compact chunks can be dense during an archive catch-up.
+            # Spill after 8 MiB so preserving old opportunity population never
+            # turns a cold worker into an unbounded-memory process.
+            batch=tempfile.SpooledTemporaryFile(max_size=8<<20)
             opener=gzip.open if path.suffix=='.gz' else open
             try:
                 with opener(path,'rb') as stream:
                     stream.seek(offset)
                     exhausted_rows = False
-                    for _ in range(max_rows):
+                    for _ in range(row_limit):
                         if time.monotonic()-started >= budget_seconds:
                             scan_complete=False
                             incomplete.update(contexts)
@@ -168,7 +176,7 @@ class Windows:
                         if stamp: contexts[(row['asset'],row['horizon'])]=max(stamp,contexts.get((row['asset'],row['horizon']),0))
                         kind=row.get('kind')
                         if stamp < self.minimum_wall_ns: continue
-                        if kind in (2,4,5,6): batch.append(line)
+                        if kind in (2,4,5,6): batch.write(line)
                         if kind==2:
                             decision=row.get('decision_wall_ns') or stamp
                             if not decision: raise ValueError('MISSING_OPPORTUNITY_CLOCK')
@@ -203,7 +211,9 @@ class Windows:
                                     backlog_sources.append(dict(source=relative,asset=None,horizon=None,
                                         next_observation_ns=next_stamp,
                                         lag_seconds=max(0,(time.time_ns()-next_stamp)/1e9) if next_stamp else None))
-                if batch: publish(self.root,'compact',b''.join(batch))
+                if batch.tell():
+                    batch.seek(0)
+                    publish(self.root,'compact',batch)
                 if offset!=(old[0] if old else 0):
                     with self.db:
                         self.db.executemany('INSERT OR IGNORE INTO requests VALUES (?,?,?,?,?,?,?,?,?,?)',requests)
@@ -212,6 +222,8 @@ class Windows:
             except (ValueError,OSError,KeyError) as exc:
                 failures.append({'source':relative,'reason':str(exc)})
                 incomplete.update(contexts)
+            finally:
+                batch.close()
         # A newer capture cannot conceal an unread prefix in an older capture.
         if not failures and scan_complete:
             # Include already-indexed unchanged sources after a bounded catch-up
