@@ -269,11 +269,21 @@ jobs:
           echo fast_existing=pre_kill_marker
           cat "$ROOT/control/KILL" || true
           echo fast_existing=pre_native_engine_manager_status
-          cat "$ROOT/control/native_engine_manager_status.json" || true
-          echo fast_existing=pre_native_settlement_status
-          cat "$ROOT/control/native_paper_settlement_status.json" || true
-          echo fast_existing=pre_native_evidence_status
-          cat "$ROOT/control/native_evidence_status.json" || true
+          python3 - "$ROOT/control/native_engine_manager_status.json" <<'PYNATIVE' || true
+          import json,sys
+          try:
+              v=json.load(open(sys.argv[1],encoding='utf-8'))
+          except Exception as exc:
+              print("native_manager_status_unreadable="+type(exc).__name__)
+              raise SystemExit(0)
+          workers=[]
+          for w in v.get("workers") or []:
+              if str(w.get("state") or "") != "RUNNING" or int(w.get("engine_pid") or 0) == 0:
+                  workers.append({k:w.get(k) for k in ("context","market_id","state","engine_pid","settlement_pid")})
+          out={k:v.get(k) for k in ("schema","timestamp_ms","state","blocker","run_id","target_context_count","settlement_blocked_count","settlement_retryable_timeout_count","slow_context_error","slow_context_failures")}
+          out["nonrunning_workers"]=workers[:30]
+          print("V7_NATIVE_MANAGER_COMPACT="+json.dumps(out,sort_keys=True,separators=(",",":")))
+          PYNATIVE
           if systemctl is-active --quiet "$UNIT" && python3 - "$ROOT/control/runtime_status.json" "$SHA" <<'PYHEALTH'
           import json,os,sys,time
           from pathlib import Path
