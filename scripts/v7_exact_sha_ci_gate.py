@@ -63,12 +63,21 @@ def receipt(repository: str, sha: str, check_runs: list[dict[str, Any]], now: in
     }
 
 
+def github_headers(accept: str) -> dict[str, str]:
+    headers = {
+        "Accept": accept,
+        "User-Agent": "polymarket-v7-exact-sha-gate",
+        "X-GitHub-Api-Version": "2022-11-28",
+    }
+    token = os.environ.get("GITHUB_TOKEN") or os.environ.get("GH_TOKEN")
+    if token:
+        headers["Authorization"] = f"Bearer {token}"
+    return headers
+
+
 def fetch_check_runs(repository: str, sha: str, timeout: float) -> list[dict[str, Any]]:
     url = f"https://api.github.com/repos/{repository}/commits/{sha}/check-runs?per_page=100"
-    request = urllib.request.Request(url, headers={
-        "Accept": "application/vnd.github+json",
-        "User-Agent": "polymarket-v7-exact-sha-gate",
-    })
+    request = urllib.request.Request(url, headers=github_headers("application/vnd.github+json"))
     try:
         with urllib.request.urlopen(request, timeout=timeout) as response:
             payload = json.load(response)
@@ -140,10 +149,7 @@ def fetch_check_runs_html(repository: str, sha: str, timeout: float,
                           required: tuple[str, ...] = DEFAULT_REQUIRED) -> list[dict[str, Any]]:
     """Read the exact-commit GitHub checks page when the API is unavailable."""
     url = f"https://github.com/{repository}/commit/{sha}/checks"
-    request = urllib.request.Request(url, headers={
-        "Accept": "text/html",
-        "User-Agent": "polymarket-v7-exact-sha-gate",
-    })
+    request = urllib.request.Request(url, headers=github_headers("text/html"))
     try:
         with urllib.request.urlopen(request, timeout=timeout) as response:
             page = response.read().decode("utf-8")
