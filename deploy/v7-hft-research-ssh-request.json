@@ -1,0 +1,15 @@
+{
+  "schema": "polymarket_v7_hft_research_ssh_request_v1",
+  "version": 1,
+  "request_id": "hft-readonly-ssh-20260920T211500Z",
+  "expected_parent_sha": "93fce99a1142c5f9b4f9bfcf68b10767cf8c629f",
+  "role_arn": "arn:aws:iam::350769147128:role/PolymarketLondonPaperDeployPolicy",
+  "instance_id": "i-0fba2bac9fdc5cbeb",
+  "expected_public_ip": "35.179.153.174",
+  "client_cidr": "195.176.44.38/32",
+  "port": 22,
+  "paper_only": true,
+  "authenticated_execution": false,
+  "real_order_submission": false,
+  "operation": "ATTACH_DEDICATED_READ_ONLY_RESEARCH_SSH_GROUP"
+}
