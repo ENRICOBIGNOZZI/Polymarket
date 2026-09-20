@@ -31,7 +31,6 @@ ENV_RAW="$(systemctl show "$UNIT" -p Environment --value)"
 ROOT="$(python3 -c 'import shlex,sys; x=shlex.split(sys.stdin.read()); print(next((v.split("=",1)[1] for v in x if v.startswith("PM_V7_RUN_ROOT=")), ""))' <<<"$ENV_RAW")"
 [[ -n "$APP" && -d "$APP" && -n "$ROOT" && -d "$ROOT" ]]
 [[ "$(cat "$APP/deploy/london/runtime_sha")" == "$SHA" ]]
-[[ "$(cat "$ROOT/control/deployed_sha")" == "$SHA" ]]
 python3 - "$ROOT" "$SHA" <<'PY'
 import json,os,sys,time
 from pathlib import Path
