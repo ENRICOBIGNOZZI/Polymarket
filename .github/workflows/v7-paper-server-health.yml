@@ -52,6 +52,7 @@ jobs:
 
           target="$SOURCE_SHA"
           request_path=deploy/v7-paper-deploy-aws-oidc-request.json
+          fast_request_path=deploy/v7-paper-fast-restart-existing-request.json
           changed="$(git diff-tree --no-commit-id --name-only -r "$SOURCE_SHA")"
           if [[ "$changed" == "$request_path" ]]; then
             parent="$(git rev-parse "$SOURCE_SHA^")"
@@ -65,6 +66,20 @@ jobs:
           assert v.get('real_order_submission') is False
           assert v.get('cutover_approved') is True
           print(v['expected_parent_sha'])
+          PY
+          )"
+            target="$parsed"
+          elif [[ "$changed" == "$fast_request_path" ]]; then
+            parsed="$(python3 - "$fast_request_path" <<'PY'
+          import json,sys
+          v=json.load(open(sys.argv[1],encoding='utf-8'))
+          assert v.get('schema')=='polymarket_v7_paper_fast_restart_existing_request_v1'
+          assert v.get('paper_only') is True
+          assert v.get('authenticated_execution') is False
+          assert v.get('real_order_submission') is False
+          assert v.get('restart_approved') is True
+          assert v.get('trigger')=='GITHUB_AWS_OIDC_SSM_FAST_RESTART_EXISTING'
+          print(v['expected_sha'])
           PY
           )"
             target="$parsed"
