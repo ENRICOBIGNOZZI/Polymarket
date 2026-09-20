@@ -89,6 +89,10 @@ def test_cutover_command_reuses_canonical_stage_and_cutover():
     assert "authenticated_execution" in command
     assert "real_order_submission" in command
     assert "worktree add --detach" in command
+    assert 'sudo -u "$SERVICE_USER" -H env POLYMARKET_EXPECTED_SHA="$SHA"' in command
+    stage = command.index("ops/v7_london_stage_release.sh")
+    cutover = command.index("ops/v7_london_cutover.sh")
+    assert stage < cutover
 
 
 def test_cutover_command_ubuntu_uses_data_volume_default():
