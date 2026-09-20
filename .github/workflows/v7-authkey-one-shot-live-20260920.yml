@@ -87,6 +87,7 @@ jobs:
             done
             [[ -n "$brew_bin" ]] || { echo "V7 deploy blocked: Homebrew not found" >&2; exit 1; }
             eval "$("$brew_bin" shellenv)"
+            export PKG_CONFIG_PATH="/opt/homebrew/lib/pkgconfig:/opt/homebrew/opt/libsecp256k1/lib/pkgconfig:/opt/homebrew/opt/secp256k1/lib/pkgconfig:${PKG_CONFIG_PATH:-}"
             missing=""
             for cmd in cmake pkg-config prometheus grafana; do
               command -v "$cmd" >/dev/null 2>&1 || missing="$missing $cmd"
@@ -95,6 +96,11 @@ jobs:
               echo "[v7-deploy] Installing missing macOS dependencies:$missing"
               brew install $missing
             fi
+            if ! pkg-config --exists libsecp256k1; then
+              echo "[v7-deploy] Installing missing macOS dependency: libsecp256k1"
+              brew install libsecp256k1 || brew install secp256k1
+            fi
+            pkg-config --exists libsecp256k1
           fi
           git fetch --no-tags origin main
           main_sha="$(git rev-parse origin/main)"
@@ -157,4 +163,4 @@ jobs:
           if-no-files-found: warn
           retention-days: 14
 
-# trigger: 2026-09-20T01:03:00Z
+# trigger: 2026-09-20T01:05:00Z
