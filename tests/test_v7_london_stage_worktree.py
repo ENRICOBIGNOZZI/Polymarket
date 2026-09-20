@@ -18,7 +18,9 @@ class LondonStageWorktreeTests(unittest.TestCase):
         self.assertNotIn('rm -rf', prefix)
         # This test is platform-independent. Production retains its Linux guard.
         prefix = prefix.replace('$(uname -s)', 'Linux')
+        service_user = subprocess.check_output(['id', '-un'], text=True).strip()
         env = dict(os.environ, POLYMARKET_EXPECTED_SHA=sha, POLYMARKET_APP_DIR=str(source),
+                   POLYMARKET_SERVICE_USER=service_user,
                    POLYMARKET_LONDON_DEPLOY_LOCK_FILE=str(source.parent / "deploy.lock"))
         # macOS lacks the flock CLI. Exercise the same OS lock, not a no-op,
         # in this source-guard unit fixture; production still requires flock.
