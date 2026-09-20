@@ -21,6 +21,9 @@ def test_health_command_is_read_only_and_exact_sha():
     assert "polymarket_v7_single_writer_ok 1" in command
     assert "polymarket_v7_economic_new_risk_ready 0" in command
     assert "api/dashboards/uid/polymarket-v7" in command
+    assert "control/deployed_sha" not in command
+    assert "deploy/london/runtime_sha" in command
+    assert "runtime_status.json" in command
 
 
 def test_health_selects_exact_instance_and_parses_marker(monkeypatch):
