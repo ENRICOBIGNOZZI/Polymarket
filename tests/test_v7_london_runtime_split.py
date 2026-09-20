@@ -40,6 +40,17 @@ def test_cutover_assigns_run_root_to_service_user_before_runtime_start():
     assert prepare < ownership < start
     assert 'SERVICE_GROUP="$(id -gn "$SERVICE_USER")"' in s
 
+def test_cutover_separates_core_runtime_health_from_full_data_readiness():
+    s=(ROOT/'ops/v7_london_cutover.sh').read_text()
+    core=s.index("'polymarket_v7_execution_alive 1'")
+    safe=s.index("'polymarket_v7_economic_new_risk_ready 0'")
+    full=s.index("exporter_full_health=")
+    assert core < safe < full
+    assert "London PAPER core runtime health gate failed" in s
+    assert "exporter_full_health=%s" in s
+    assert "'polymarket_v7_health 1'" not in s[core:full]
+
+
 def test_runtime_bundle_is_research_free_by_contract():
     m=json.loads((ROOT/'deploy/london/runtime_manifest.json').read_text())
     assert m['paper_only'] is True and m['authenticated_execution'] is False and m['real_order_submission'] is False
