@@ -61,11 +61,16 @@ def test_tailnet_workflows_prefer_ephemeral_trust_credentials():
 
 def test_server_health_uses_read_only_ssm_not_tailnet():
     workflow=(ROOT/'.github/workflows/v7-paper-server-health.yml').read_text()
+    helper=(ROOT/'ops/v7_london_ssm_health.py').read_text()
     assert 'v7_london_ssm_health.py' in workflow
     assert 'Configure AWS credentials through GitHub OIDC' in workflow
     assert 'tailscale/github-action@' not in workflow
     assert 'Configure SSH' not in workflow
-    assert 'api/dashboards/uid/polymarket-v7' in (ROOT/'ops/v7_london_ssm_health.py').read_text()
+    assert 'http://127.0.0.1:3000/api/health' in helper
+    assert 'api/dashboards/uid' not in helper
+    assert 'monitoring/grafana/dashboards' in helper
+    assert 'polymarket-v7' in helper
+    assert 'polymarket-v7-multi-crypto' in helper
 
 
 def test_request_only_deploy_targets_validated_parent_and_skips_duplicate_gates():
