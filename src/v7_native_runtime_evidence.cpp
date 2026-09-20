@@ -93,6 +93,30 @@ constexpr std::string_view kMakerExecutionSemantics =
         ? "professional_maker" : "crypto_informed_taker";
 }
 
+[[nodiscard]] const char* native_decision_reason_name(std::uint8_t reason) noexcept {
+    switch (reason) {
+    case 1: return "ACCEPTED";
+    case 2: return "INVALID_SIGNAL";
+    case 3: return "EXPIRED_SIGNAL";
+    case 4: return "WEAK_SIGNAL";
+    case 5: return "MARKET_UNAVAILABLE";
+    case 6: return "TTE_OUTSIDE_WINDOW";
+    case 7: return "INVALID_BOOK";
+    case 8: return "INSUFFICIENT_DEPTH";
+    case 9: return "INVALID_TICK";
+    case 10: return "DUPLICATE_SIGNAL";
+    case 11: return "MARKET_ALREADY_TRADED";
+    case 12: return "CAPITAL_DENIED";
+    case 13: return "ENTRY_PRICE_TOO_HIGH";
+    case 14: return "MARKET_ALREADY_REPRICED";
+    case 15: return "PROBABILITY_UNAVAILABLE";
+    case 16: return "NET_EDGE_NON_POSITIVE";
+    case 17: return "RISK_SIZE_BELOW_MINIMUM";
+    case 18: return "SLOW_CONTEXT_UNAVAILABLE";
+    default: return "UNKNOWN";
+    }
+}
+
 void atomic_write(const fs::path& target, const std::string& payload) {
     fs::create_directories(target.parent_path());
     const fs::path temporary = target.string() + ".tmp";
@@ -137,6 +161,9 @@ struct NativeRuntimeEvidenceWriter::Impl {
     std::ofstream observations_file;
     fs::path observations_path;
     std::int64_t observations_watermark_ns = 0;
+    std::array<std::uint64_t, 32> decision_reason_counts{};
+    std::uint64_t decision_observations = 0;
+    std::uint64_t accepted_decision_observations = 0;
     const std::string capture_id = std::to_string(monotonic_now_ns());
 
     Impl(NativeRuntimeEvidenceConfig value, NativeRuntimeEvidenceWriter& source)
@@ -243,6 +270,11 @@ struct NativeRuntimeEvidenceWriter::Impl {
                 : config.paper_venue_delay_ns < 0 ? "VENUE_TERMS_UNKNOWN_NO_TAKER_FILL"
                 : "LOCAL_RECEIVE_DELAYED_ARRIVAL_PRICE_PARTIAL_FAK_V2"},
             {"economic_authority", "PAPER_EXPLORATION"},
+            {"action_value_semantics", maker
+                ? "MAKER_FILL_CONDITIONED_ROBUST_EV_PER_SHARE"
+                : (event.probability.valid != 0 && event.economics.accepted != 0)
+                    ? "TAKER_SETTLEMENT_EDGE_NOT_FILL_CONDITIONED"
+                    : "TAKER_RULE_NO_COMPARABLE_ACTION_SCORE"},
             {"counterfactual", false},
             {"research_evidence_only", false},
             {"native_settlement_receipt", receipt(event.command)},
@@ -356,6 +388,12 @@ struct NativeRuntimeEvidenceWriter::Impl {
     }
 
     void write_observation(const NativeObservation& event) {
+        if (event.kind == 2) {
+            ++decision_observations;
+            if (event.accepted != 0) ++accepted_decision_observations;
+            const auto index = static_cast<std::size_t>(event.reason);
+            if (index < decision_reason_counts.size()) ++decision_reason_counts[index];
+        }
         if (!observations_file.is_open()) {
             const auto directory = fs::path(config.run_root) / "research/native_observations" / config.run_id;
             fs::create_directories(directory);
@@ -460,6 +498,12 @@ struct NativeRuntimeEvidenceWriter::Impl {
                 : std::isfinite(event.economics.expected_net_edge) ? json::value(event.economics.expected_net_edge) : json::value(nullptr)},
             {"conservative_net_edge", std::isfinite(event.economics.conservative_net_edge)
                 ? json::value(event.economics.conservative_net_edge) : json::value(nullptr)},
+            {"expected_fill_probability", event.expected_fill_probability_valid
+                && std::isfinite(event.expected_fill_probability)
+                    ? json::value(event.expected_fill_probability) : json::value(nullptr)},
+            {"economic_score_fill_conditioned", event.economic_score_fill_conditioned != 0},
+            {"selector_score_comparable", event.economic_score_fill_conditioned != 0
+                && event.expected_fill_probability_valid != 0},
             {"probability_decision_reason", event.probability.valid
                 ? json::value(static_cast<unsigned>(event.economics.reason)) : json::value(nullptr)},
             {"external_features", event.external_valid ? json::value(json::object{
@@ -483,6 +527,12 @@ struct NativeRuntimeEvidenceWriter::Impl {
     }
 
     void write_status() {
+        json::object reason_counts;
+        for (std::size_t i = 0; i < decision_reason_counts.size(); ++i) {
+            if (decision_reason_counts[i] == 0) continue;
+            reason_counts[native_decision_reason_name(static_cast<std::uint8_t>(i))]
+                = decision_reason_counts[i];
+        }
         json::object value{
             {"schema", "polymarket_v7_native_evidence_status_v1"},
             {"paper_only", true},
@@ -491,8 +541,9 @@ struct NativeRuntimeEvidenceWriter::Impl {
             {"model_sha", config.model_sha},
             {"run_id", config.run_id},
             {"market_id", config.market_id},
+            {"asset", config.asset},
+            {"horizon", config.horizon},
             {"healthy", owner.healthy()},
-            {"market_id", config.market_id},
             {"published", owner.published()},
             {"written", owner.written()},
             {"dropped", owner.dropped()},
@@ -502,6 +553,11 @@ struct NativeRuntimeEvidenceWriter::Impl {
             {"observations_written", owner.observations_written_.load()},
             {"observations_dropped", owner.observations_dropped_.load()},
             {"observations_queue_depth", owner.observations_->approximate_size()},
+            {"decision_observations", decision_observations},
+            {"accepted_decision_observations", accepted_decision_observations},
+            {"rejected_decision_observations",
+                decision_observations - accepted_decision_observations},
+            {"decision_reason_counts", std::move(reason_counts)},
             {"timestamp_ms", to_ms(wall_now_ns())},
         };
         const fs::path directory = fs::path(config.run_root) / "control" / "native_evidence";

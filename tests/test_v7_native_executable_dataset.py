@@ -188,6 +188,17 @@ def test_down_signal_requires_no_token_depth(tmp_path):
     assert {r["direction"] for r in out} == {-1}
 
 
+def test_economic_token_can_differ_from_signal_direction(tmp_path):
+    p = tmp_path / "x.jsonl"
+    # Probability/EV may select NO even when the causal external shock is UP.
+    # Token identity drives executable depth; direction remains signal provenance.
+    write_capture(p, capture_rows(token="no", direction=1))
+    out, _ = m.build([p], require_closed=True)
+    assert out
+    assert {r["token_id"] for r in out} == {"no"}
+    assert {r["direction"] for r in out} == {1}
+
+
 def test_old_yes_only_future_depth_cannot_complete_down_label(tmp_path):
     p = tmp_path / "x.jsonl"
     data = capture_rows(token="no", direction=-1)

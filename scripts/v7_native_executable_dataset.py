@@ -23,9 +23,13 @@ import tempfile
 from typing import Any
 
 from v7_native_repricing_dataset import (
-    _source, _integer, _identity, CAPTURE_HORIZONS, ORIGIN_REASONS,
+    _source, _integer, _identity, CAPTURE_HORIZONS,
     MAX_TOTAL_BYTES,
 )
+
+# Keep the executable consumer on its previous narrow contract. Broader rejected
+# origins are useful for repricing diagnostics but are not executable orders.
+ORIGIN_REASONS = {1, 15, 16, 17}
 from v7_research_economic_contract import canonical_hash
 
 SCHEMA = "polymarket_v7_native_executable_label_v1"

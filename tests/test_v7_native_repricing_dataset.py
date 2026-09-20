@@ -12,6 +12,10 @@ sys.path.insert(0, str(ROOT / 'scripts'))
 import v7_native_repricing_dataset as m
 
 
+def test_repricing_diagnostics_include_informative_rejections():
+    assert {1, 4, 8, 13, 14, 15, 16, 17, 18} <= m.ORIGIN_REASONS
+
+
 def row(kind=2, h=None, pair=(4000,4200,5800,6000), observed=1_000_000_000):
     yb, ya, nb, na = pair
     return {'schema':'polymarket_v7_native_observation_v1','paper_only':True,'execution_authority':False,

@@ -11,6 +11,7 @@
 #include <atomic>
 #include <cstdint>
 #include <memory>
+#include <limits>
 #include <string>
 
 namespace pm::v7 {
@@ -77,11 +78,14 @@ struct NativeObservation {
     double confirmation_return_100ms_bp = 0.0;
     external_fair::VenueId confirmation_venue = external_fair::VenueId::Unknown;
     double expected_ev = 0.0, ev_uncertainty = 0.0;
+    double expected_fill_probability = std::numeric_limits<double>::quiet_NaN();
     std::int64_t proposed_quantity = 0, proposed_price_tick = 0;
     std::uint64_t connection_epoch = 0;
     std::int8_t direction = 0;
     std::uint8_t confirmed_non_opposing = 0, signal_valid = 0;
     std::uint8_t kind = 0, reason = 0, valid = 0, accepted = 0, trade_side = 0;
+    std::uint8_t expected_fill_probability_valid = 0;
+    std::uint8_t economic_score_fill_conditioned = 0;
 };
 
 struct NativeRuntimeEvidenceConfig {
