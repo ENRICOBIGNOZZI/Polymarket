@@ -344,7 +344,12 @@ def run(root: Path, config: dict[str, Any], dry_run: bool = False, *, now: float
     preservation = None
     if runtime and config.get('require_hft_window_preservation') and not dry_run:
         windows = Windows(root, config.get('research_epoch_start_wall_ns',0))
-        try: preservation = windows.ingest()
+        try:
+            preservation = windows.ingest(
+                max_rows=int(config.get('hft_active_ingest_max_rows',10_000)),
+                archive_max_rows=int(config.get('hft_archive_ingest_max_rows',50_000)),
+                budget_seconds=int(config.get('hft_ingest_budget_seconds',45)),
+            )
         finally: windows.close()
     initial_rows = _managed(root, config)
     before = measured['total_bytes'] if config.get('account_all_run_files') else _total(initial_rows)

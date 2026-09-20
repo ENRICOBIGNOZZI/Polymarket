@@ -51,9 +51,12 @@
   "rolling_retention_authorization": "USER_AUTHORIZED_HFT_ROLLING_RAW_WINDOW_20260916",
   "schema": "polymarket_v7_london_buffer_retention_v1",
   "target_managed_bytes": 50000000000,
-  "version": 3,
+  "version": 4,
   "require_hft_window_preservation": true,
   "research_epoch_start_wall_ns": 1789921800000000000,
   "account_all_run_files": true,
-  "account_sibling_run_archives": true
+  "account_sibling_run_archives": true,
+  "hft_active_ingest_max_rows": 10000,
+  "hft_archive_ingest_max_rows": 200000,
+  "hft_ingest_budget_seconds": 300
 }

@@ -171,6 +171,12 @@ class LondonLosslessRetentionTests(unittest.TestCase):
             self.assertEqual({row[1] for row in rows}, {str(path.relative_to(root)) for path in files})
             self.assertEqual(retention._total(rows), 51)
 
+    def test_production_archive_catchup_is_cold_path_and_within_service_timeout(self):
+        config = self.config()
+        self.assertEqual(config['hft_active_ingest_max_rows'], 10_000)
+        self.assertGreater(config['hft_archive_ingest_max_rows'], config['hft_active_ingest_max_rows'])
+        self.assertLess(config['hft_ingest_budget_seconds'], 900)
+
 
     def test_corrupt_old_gzip_is_preserved_and_surfaces_partial_failure(self):
         with tempfile.TemporaryDirectory() as directory:
