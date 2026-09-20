@@ -447,7 +447,7 @@ sudo -u "$SERVICE_USER" git -C "$APP" worktree prune
 sudo -u "$SERVICE_USER" git -C "$APP" worktree add --detach "$WORKTREE" "$SHA" >/dev/null
 cleanup() {{
   sudo -u "$SERVICE_USER" git -C "$APP" worktree remove --force "$WORKTREE" >/dev/null 2>&1 || true
-  rm -rf -- "$WORKTREE"
+  rm -rf -- "$WORKTREE" "$STAGE_TMPDIR"
 }}
 trap cleanup EXIT
 [[ "$(sudo -u "$SERVICE_USER" git -C "$WORKTREE" rev-parse HEAD)" == "$SHA" ]]
@@ -471,7 +471,7 @@ sudo -u "$SERVICE_USER" -H python3 -c 'import numpy' >/dev/null
 # in /tmp. Give every exact SHA a fresh private temporary root owned by the
 # service user so C++ std::filesystem::temp_directory_path() and Python
 # tempfile cannot collide with stale/root-owned artifacts.
-STAGE_TMPDIR="/var/tmp/pmv7-${SHA:0:12}"
+STAGE_TMPDIR=/var/tmp/pmv7-{expected_sha[:12]}
 rm -rf -- "$STAGE_TMPDIR"
 install -d -m 0700 -o "$SERVICE_USER" -g "$SERVICE_GROUP" "$STAGE_TMPDIR"
 
