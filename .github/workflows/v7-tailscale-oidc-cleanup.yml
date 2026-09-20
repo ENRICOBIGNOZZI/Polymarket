@@ -68,6 +68,18 @@ jobs:
           print(token)
           PY
           )"
+          python3 - "$jwt" <<'PY'
+          import base64,json,sys
+          token=sys.argv[1]
+          part=token.split('.')[1]
+          part += '=' * (-len(part) % 4)
+          claims=json.loads(base64.urlsafe_b64decode(part.encode()))
+          safe={k:claims.get(k) for k in (
+              'iss','aud','sub','repository','repository_id',
+              'repository_owner','repository_owner_id','ref','job_workflow_ref'
+          )}
+          print('V7_GITHUB_OIDC_CLAIMS='+json.dumps(safe,sort_keys=True))
+          PY
           response="$(curl -fsS -X POST 'https://api.tailscale.com/api/v2/oauth/token-exchange' \
             -H 'Content-Type: application/x-www-form-urlencoded' \
             --data-urlencode "client_id=$CLIENT_ID" \
