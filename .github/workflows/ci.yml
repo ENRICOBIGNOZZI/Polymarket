@@ -85,7 +85,7 @@ jobs:
           if grep -Eq '^(src/v7_(maker|crypto_decision|external|ingress|market_ws)|include/.*v7_(maker|crypto_decision|external|ingress|market_ws)|config/v7_latency_slo\.json|scripts/v7_latency_gate\.py)' "$RUNNER_TEMP/v7-changed-paths.txt"; then
             latency=true
           fi
-          if grep -Eq '^(ops/build_london_runtime_bundle\.py|ops/update_server_v7\.sh|deploy/london/|config/paper_v7\.json|config/v7_)' "$RUNNER_TEMP/v7-changed-paths.txt"; then
+          if grep -Eq '^(\.gitignore$|ops/build_london_runtime_bundle\.py|ops/update_server_v7\.sh|deploy/london/|config/paper_v7\.json|config/v7_)' "$RUNNER_TEMP/v7-changed-paths.txt"; then
             london=true
           fi
           if [[ "$force_full" == true ]]; then
