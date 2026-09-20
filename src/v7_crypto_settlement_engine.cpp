@@ -523,6 +523,7 @@ int main(int argc, char** argv) {
         std::array<RepricingWindow, 16> repricing_windows{};
         std::uint64_t repricing_origins = 0, repricing_labels = 0;
         std::uint64_t repricing_censors = 0, repricing_window_overflow = 0;
+        std::int64_t repricing_evidence_compute_ns = 0, repricing_evidence_max_ns = 0;
         std::uint8_t last_observed_reason = 0, last_observed_accepted = 0;
         std::int64_t last_control_observation_ns = 0;
         const auto observation = [&](const BookHotSnapshot& book, std::uint64_t instrument,
@@ -603,6 +604,7 @@ int main(int argc, char** argv) {
                 for (std::size_t i = 0; i < kRepricingHorizonsMs.size(); ++i) {
                     const auto mask = static_cast<std::uint16_t>(1U << i);
                     if ((window.emitted_mask & mask) != 0 || window.target_ns[i] >= watermark_ns) continue;
+                    const auto evidence_started_ns = monotonic_now_ns();
                     const bool selected_up = window.instrument_handle == kYes;
                     if (!selected_up && window.instrument_handle != kNo) {
                         window.continuity_valid = 0;
@@ -621,6 +623,9 @@ int main(int argc, char** argv) {
                     if (point.repricing_pair_valid != 0) ++repricing_labels;
                     else ++repricing_censors;
                     window.emitted_mask = static_cast<std::uint16_t>(window.emitted_mask | mask);
+                    const auto evidence_elapsed_ns = monotonic_now_ns() - evidence_started_ns;
+                    repricing_evidence_compute_ns += evidence_elapsed_ns;
+                    repricing_evidence_max_ns = std::max(repricing_evidence_max_ns, evidence_elapsed_ns);
                 }
                 if (window.emitted_mask == ((1U << kRepricingHorizonsMs.size()) - 1U)) window.active = 0;
             }
@@ -1348,6 +1353,8 @@ int main(int argc, char** argv) {
             {"repricing_origins", repricing_origins}, {"repricing_labels", repricing_labels},
             {"repricing_censors", repricing_censors},
             {"repricing_window_overflow", repricing_window_overflow},
+            {"repricing_evidence_compute_ns", repricing_evidence_compute_ns},
+            {"repricing_evidence_max_ns", repricing_evidence_max_ns},
             {"repricing_horizons_ms", json::array{25, 50, 100, 250, 500, 750, 1000, 1250, 1500, 1750, 2000}},
             {"native_observation_capture_mode", options.capture_native_observations
                 ? "FULL" : options.capture_execution_windows ? "DECISION_WINDOWS"

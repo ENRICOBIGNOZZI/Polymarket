@@ -121,6 +121,7 @@ fi
 # manager status file as historical. KillMode=mixed keeps all runtime children
 # in the service cgroup, so inactive+MainPID=0 (and an empty cgroup when it
 # still exists) is the authoritative liveness proof.
+sudo systemctl stop polymarket-v7-retention.timer polymarket-v7-retention.service >/dev/null 2>&1 || true
 sudo systemctl stop polymarket-v7-paper.service >/dev/null 2>&1 || true
 paper_state="$(systemctl show polymarket-v7-paper.service -p ActiveState --value 2>/dev/null || true)"
 paper_main_pid="$(systemctl show polymarket-v7-paper.service -p MainPID --value 2>/dev/null || true)"

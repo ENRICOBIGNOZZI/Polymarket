@@ -30,6 +30,8 @@ class PrepareCutoverTests(unittest.TestCase):
     def test_flat_prior_sha_is_atomically_archived(self):
         with tempfile.TemporaryDirectory() as d:
             base=Path(d);root=base/'run';fixture(root)
+            permanent=root/'research/hft_permanent';permanent.mkdir(parents=True)
+            (permanent/'unchanged-proof.json').write_text('{"preserved":true}')
             result=cutover.prepare(root,base/'archives',base,NEW,now=123,ancestor_check=lambda *_:True)
             self.assertEqual(result['state'],'ARCHIVED_PRIOR_SHA')
             self.assertTrue(result['archived'])
@@ -39,6 +41,8 @@ class PrepareCutoverTests(unittest.TestCase):
                 'native_carryover_microdollars':0})
             self.assertTrue(Path(result['archive_path']).exists())
             self.assertTrue((root/'control/cutover_lineage.json').exists())
+            self.assertEqual((permanent/'unchanged-proof.json').read_text(),'{"preserved":true}')
+            self.assertFalse((Path(result['archive_path'])/'research/hft_permanent').exists())
 
     def test_current_inventory_or_orders_block_archive(self):
         cases=(('external_fair/paper_router_status.json','open_positions',1),

@@ -85,7 +85,7 @@ jobs:
           if grep -Eq '^(src/v7_(maker|crypto_decision|external|ingress|market_ws)|include/.*v7_(maker|crypto_decision|external|ingress|market_ws)|config/v7_latency_slo\.json|scripts/v7_latency_gate\.py)' "$RUNNER_TEMP/v7-changed-paths.txt"; then
             latency=true
           fi
-          if grep -Eq '^(\.gitignore$|ops/build_london_runtime_bundle\.py|ops/update_server_v7\.sh|deploy/london/|config/paper_v7\.json|config/v7_)' "$RUNNER_TEMP/v7-changed-paths.txt"; then
+          if grep -Eq '^(\.gitignore$|ops/build_london_runtime_bundle\.py|ops/update_server_v7\.sh|deploy/london/|config/paper_v7\.json|config/v7_|monitoring/v7_hft|monitoring/v7_london_buffer_retention)' "$RUNNER_TEMP/v7-changed-paths.txt"; then
             london=true
           fi
           if [[ "$force_full" == true ]]; then
@@ -95,7 +95,7 @@ jobs:
             london=true
             research=true
           fi
-          if grep -Eq '^(research/|tests/test_v7_cumulative_learning.py|tests/test_v7_learning_models.py|tests/test_v7_simple_backtest.py|ops/.*research)' "$RUNNER_TEMP/v7-changed-paths.txt"; then
+          if grep -Eq '^(research/|tests/test_v7_cumulative_learning.py|tests/test_v7_learning_models.py|tests/test_v7_simple_backtest.py|tests/test_v7_hft_data_pipeline.py|monitoring/v7_hft|monitoring/v7_london_buffer_retention|ops/.*research)' "$RUNNER_TEMP/v7-changed-paths.txt"; then
             research=true
           fi
 
@@ -123,7 +123,7 @@ jobs:
         run: |
           python3 -m venv /tmp/v7-learning
           /tmp/v7-learning/bin/pip install -r research/requirements-learning.txt
-          /tmp/v7-learning/bin/python -m pytest tests/test_v7_cumulative_learning.py tests/test_v7_learning_models.py tests/test_v7_simple_backtest.py -q
+          /tmp/v7-learning/bin/python -m pytest tests/test_v7_cumulative_learning.py tests/test_v7_learning_models.py tests/test_v7_simple_backtest.py tests/test_v7_hft_data_pipeline.py tests/test_v7_london_buffer_observation.py tests/test_v7_native_repricing_dataset.py tests/test_v7_native_repricing_identity.py -q
 
   security-audit:
     name: security-audit-v7

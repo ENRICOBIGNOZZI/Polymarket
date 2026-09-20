@@ -23,7 +23,7 @@ from pathlib import Path
 from typing import Any, Iterable
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from v7_closed_tape_retention import compress_closed_cutover_tapes
+from v7_closed_tape_retention import compress_closed_cutover_tapes, _safe_cutover_archive
 from v7_hft_windows import Windows
 from v7_hft_data_health import snapshot, storage_projection
 
@@ -175,6 +175,7 @@ def _rolling_retire(
     *,
     now_ns: int,
     dry_run: bool,
+    window_root: Path | None = None,
 ) -> dict[str, Any]:
     result: dict[str, Any] = {
         "policy": config.get("rolling_retention_authorization"),
@@ -196,7 +197,7 @@ def _rolling_retire(
         raise ValueError("unsafe rolling raw-detail window")
     receipt_directory = _safe_relative(root, str(config.get("rolling_receipt_directory") or ""))
     cutoff = now_ns - window * 1_000_000_000
-    windows = Windows(root, config.get('research_epoch_start_wall_ns',0)) if config.get('require_hft_window_preservation') and not dry_run else None
+    windows = Windows(window_root or root, config.get('research_epoch_start_wall_ns',0)) if config.get('require_hft_window_preservation') and not dry_run else None
     for path, relative, info in sorted(_managed(root, config), key=lambda row: (row[2].st_mtime_ns, row[1])):
         if relative.startswith('research/hft_permanent/'):
             continue
@@ -325,9 +326,12 @@ def run(root: Path, config: dict[str, Any], dry_run: bool = False, *, now: float
     if not 0 < target < maximum or minimum_age < 300 or lag < 60 or not 30 <= compression_age <= 3600:
         raise ValueError("unsafe London retention bounds")
     runtime = _runtime_contract(root)
+    archive_root=root.parent/'paper_v7_london_archives'
+    archives=sorted(p for p in archive_root.glob('cutover-*') if _safe_cutover_archive(p)) if config.get('account_sibling_run_archives') else []
+    storage_root=root.parent if config.get('account_sibling_run_archives') else root
     storage = None
     if config.get('account_all_run_files'):
-        measured=snapshot(root)
+        measured=snapshot(storage_root)
         previous=_load(root/'control/hft_storage_sample.json')
         if previous and measured['at_ns'] > previous.get('at_ns',0):
             storage=storage_projection(root,previous,measured,target=int(config['target_managed_bytes']))
@@ -352,7 +356,7 @@ def run(root: Path, config: dict[str, Any], dry_run: bool = False, *, now: float
     }
     if runtime:
         compression = compress_closed_cutover_tapes(
-            root / "control/retention_archive_scope",
+            archive_root if config.get('account_sibling_run_archives') else root / "control/retention_archive_scope",
             now=int(now),
             dry_run=dry_run,
             minimum_age_seconds=minimum_age,
@@ -363,12 +367,17 @@ def run(root: Path, config: dict[str, Any], dry_run: bool = False, *, now: float
     after_compression_rows = _managed(root, config)
     after_compression = _total(after_compression_rows)
     rolling = _rolling_retire(root, config, runtime, now_ns=now_ns, dry_run=dry_run)
+    for archive in archives:
+        retired=_rolling_retire(archive,config,_runtime_contract(archive),now_ns=now_ns,
+                                dry_run=dry_run,window_root=root)
+        for key in ('eligible','reclaimed_bytes'): rolling[key]=rolling.get(key,0)+retired.get(key,0)
+        for key in ('retired','failures'): rolling[key].extend(retired.get(key,[]))
     after_rolling_rows = _managed(root, config)
     deleted, receipt_valid = _offload_prune(
         root, config, after_rolling_rows, now_ns=now_ns, dry_run=dry_run,
     )
     final_rows = _managed(root, config)
-    after = snapshot(root)['total_bytes'] if config.get('account_all_run_files') else _total(final_rows)
+    after = snapshot(storage_root)['total_bytes'] if config.get('account_all_run_files') else _total(final_rows)
     if dry_run:
         after = max(0, after - sum(int(row.get("bytes") or row.get("compressed_bytes") or 0)
                                    for row in deleted + list(rolling.get("retired") or [])))

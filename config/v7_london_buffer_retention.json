@@ -54,5 +54,6 @@
   "version": 3,
   "require_hft_window_preservation": true,
   "research_epoch_start_wall_ns": 1789921800000000000,
-  "account_all_run_files": true
+  "account_all_run_files": true,
+  "account_sibling_run_archives": true
 }

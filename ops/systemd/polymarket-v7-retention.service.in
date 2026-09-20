@@ -14,4 +14,4 @@ NoNewPrivileges=true
 PrivateTmp=true
 ProtectSystem=strict
 ProtectHome=read-only
-ReadWritePaths=@RUN_ROOT@
+ReadWritePaths=@RUN_ROOT@ -@RUN_ROOT@/../paper_v7_london_archives

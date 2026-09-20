@@ -511,6 +511,16 @@ def prepare(
         raise CutoverArchiveError("archive_destination_exists")
     os.replace(run_root, destination)
     run_root.mkdir(parents=True)
+    # Research history belongs to the data epoch, not the executable SHA. Move
+    # it back intact (including SQLite WAL) while the old generation is stopped.
+    permanent = destination / 'research/hft_permanent'
+    if permanent.exists():
+        if permanent.is_symlink() or not permanent.is_dir():
+            raise CutoverArchiveError('unsafe_permanent_research_history')
+        parent_info=permanent.parent.stat()
+        (run_root / 'research').mkdir(exist_ok=True)
+        os.chown(run_root / 'research',parent_info.st_uid,parent_info.st_gid)
+        os.replace(permanent, run_root / 'research/hft_permanent')
     control = run_root / "control"
     control.mkdir()
     if carryover is not None:

@@ -112,6 +112,9 @@ class Windows:
 
     def close(self): self.db.close()
 
+    def source_key(self,path):
+        return str(path.relative_to(self.run_root)) if path.is_relative_to(self.run_root) else str(path)
+
     def ingest(self, *, max_rows=10000):
         """Freeze complete append-only prefixes, including active D1 captures.
 
@@ -120,10 +123,14 @@ class Windows:
         """
         counts={'records':0,'decisions':0,'pending_markets':set()}; failures=[]
         progress={}; incomplete=set()
-        for path in sorted((self.run_root/'research/native_observations').rglob('*.jsonl*')):
+        roots=[self.run_root/'research/native_observations']
+        archives=self.run_root.parent/'paper_v7_london_archives'
+        if archives.is_dir() and not archives.is_symlink():
+            roots.extend(p/'research/native_observations' for p in archives.glob('cutover-*') if p.is_dir() and not p.is_symlink())
+        for path in sorted(p for folder in roots for p in folder.rglob('*.jsonl*')):
             if path.is_symlink() or path.name.endswith('.closed.json') or not path.name.endswith(('.jsonl','.jsonl.gz')):
                 continue
-            relative=str(path.relative_to(self.run_root)).removesuffix('.gz')
+            relative=self.source_key(path).removesuffix('.gz')
             old=self.db.execute('SELECT offset FROM sources WHERE path=?',(relative,)).fetchone()
             offset=old[0] if old else 0; batch=[]; requests=[]; last=0; capture=''; contexts={}
             opener=gzip.open if path.suffix=='.gz' else open
@@ -184,7 +191,7 @@ class Windows:
 
     def preserve(self,path):
         """Return verified proof or raise; caller must retain the source on error."""
-        path=Path(path); relative=str(path.relative_to(self.run_root))
+        path=Path(path); relative=self.source_key(path)
         prior=self.db.execute('SELECT source_sha,proof FROM preserved WHERE source=?',(relative,)).fetchone()
         source_sha=hashlib.sha256()
         with path.open('rb') as stream:
