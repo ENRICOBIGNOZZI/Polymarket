@@ -1,0 +1,77 @@
+name: V7 branch consolidation
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - .github/workflows/v7-branch-consolidation.yml
+      - deploy/v7-branch-consolidation-request.txt
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: v7-branch-consolidation
+  cancel-in-progress: true
+
+jobs:
+  consolidate:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          fetch-depth: 0
+          persist-credentials: true
+
+      - name: Fetch every remote branch
+        shell: bash
+        run: |
+          set -euo pipefail
+          git fetch --prune origin '+refs/heads/*:refs/remotes/origin/*'
+
+      - name: Delete branches already merged into main and audit unique branches
+        shell: bash
+        run: |
+          set -euo pipefail
+          : > merged-branches.txt
+          : > unmerged-branches.txt
+          : > deletion-failures.txt
+          : > unique-branch-summary.txt
+
+          mapfile -t branches < <(
+            git for-each-ref --format='%(refname:strip=3)' refs/remotes/origin               | grep -v '^HEAD$'               | grep -v '^main$'               | sort -u
+          )
+
+          for branch in "${branches[@]}"; do
+            ref="refs/remotes/origin/$branch"
+            if git merge-base --is-ancestor "$ref" refs/remotes/origin/main; then
+              echo "$branch" >> merged-branches.txt
+              if ! git push origin --delete "$branch"; then
+                echo "$branch" >> deletion-failures.txt
+              fi
+            else
+              echo "$branch" >> unmerged-branches.txt
+              ahead="$(git rev-list --count refs/remotes/origin/main.."$ref")"
+              behind="$(git rev-list --count "$ref"..refs/remotes/origin/main)"
+              tip="$(git log -1 --format='%H|%cI|%s' "$ref")"
+              printf '%s|ahead=%s|behind=%s|%s\n' "$branch" "$ahead" "$behind" "$tip" >> unique-branch-summary.txt
+            fi
+          done
+
+          printf 'merged_deleted=%s\n' "$(wc -l < merged-branches.txt)"
+          printf 'unmerged_preserved=%s\n' "$(wc -l < unmerged-branches.txt)"
+          printf 'delete_failures=%s\n' "$(wc -l < deletion-failures.txt)"
+
+      - name: Upload branch audit
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: v7-branch-consolidation-${{ github.run_id }}
+          path: |
+            merged-branches.txt
+            unmerged-branches.txt
+            deletion-failures.txt
+            unique-branch-summary.txt
+          if-no-files-found: error
+          retention-days: 7
