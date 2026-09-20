@@ -156,3 +156,5 @@ jobs:
           path: deploy-evidence.txt
           if-no-files-found: warn
           retention-days: 14
+
+# trigger: 2026-09-20T01:03:00Z
