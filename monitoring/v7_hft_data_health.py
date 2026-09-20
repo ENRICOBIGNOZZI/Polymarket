@@ -6,6 +6,7 @@ import argparse
 import json
 from pathlib import Path
 import shutil
+import sqlite3
 import subprocess
 import time
 import urllib.request
@@ -203,6 +204,23 @@ def measure(root, seconds=30):
             '-p','CPUUsageNSec'],text=True,timeout=5)
         preservation['retention_service']=dict(line.split('=',1) for line in service.splitlines() if '=' in line)
     except (OSError,subprocess.SubprocessError):pass
+    if preservation.get('retention_service',{}).get('Result') not in (None,'success'):
+        try:
+            preservation['retention_failure_log']=subprocess.check_output(
+                ['journalctl','-u','polymarket-v7-retention.service','-n','15','--no-pager'],
+                text=True,timeout=5)[-6000:]
+        except (OSError,subprocess.SubprocessError):pass
+    index=root/'research/hft_permanent/index.sqlite'
+    if index.exists():
+        try:
+            with sqlite3.connect(index.as_uri()+'?mode=ro',uri=True,timeout=1) as db:
+                row=db.execute('SELECT COUNT(*),COUNT(DISTINCT market),MIN(decision_ns),MAX(decision_ns) FROM requests').fetchone()
+                preservation['opportunity_history']=dict(zip(
+                    ('unique_opportunities','unique_markets','first_decision_ns','last_decision_ns'),row))
+                preservation['opportunity_history']['contexts']=[dict(asset=a,horizon=h,opportunities=n)
+                    for a,h,n in db.execute('SELECT asset,horizon,COUNT(*) FROM requests GROUP BY asset,horizon')]
+                preservation['opportunity_history']['verified_source_windows']=db.execute('SELECT COUNT(*) FROM preserved').fetchone()[0]
+        except sqlite3.Error as exc:preservation['history_audit_error']=str(exc)
     for relative in ('control/london_buffer_retention_status.json','research/hft_permanent/compact/population.json'):
         path=root/relative
         if path.exists():
