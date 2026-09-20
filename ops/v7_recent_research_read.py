@@ -59,6 +59,29 @@ def main():
         health=base64.b64encode(gzip.compress(Path('monitoring/v7_hft_data_health.py').read_bytes())).decode()
         remote=remote.replace('payload=gzip.compress', "namespace={'__name__':'health'};exec(gzip.decompress(base64.b64decode("+repr(health)+")),namespace)\nresult=namespace['measure'](root,30)\npayload=gzip.compress")
     source='START_MS='+str(req['start_ms'])+'\nCERT='+repr(cert)+'\n'+remote
+    if req.get('repair_retention_path') is True:
+        repair = r'''
+import os,pwd,shlex,subprocess
+from pathlib import Path
+env=subprocess.check_output(['systemctl','show','polymarket-v7-paper.service','-p','Environment','--value'],text=True)
+root=Path(next(v.split('=',1)[1] for v in shlex.split(env) if v.startswith('PM_V7_RUN_ROOT='))).resolve()
+assert root.parent==Path('/mnt/polymarket-data') and root.name.startswith('paper_v7_london_')
+unit=Path('/etc/systemd/system/polymarket-v7-retention.service')
+payload=unit.read_text();archive=root.parent/'paper_v7_london_archives'
+before='ReadWritePaths='+str(root)+' -'+str(root)+'/../paper_v7_london_archives'
+after='ReadWritePaths='+str(root)+' -'+str(archive)
+assert before in payload or after in payload
+assert not archive.is_symlink()
+owner=pwd.getpwnam('ubuntu');archive.mkdir(exist_ok=True)
+os.chown(archive,owner.pw_uid,owner.pw_gid)
+temporary=unit.with_suffix('.repair-tmp');temporary.write_text(payload.replace(before,after));temporary.chmod(0o644);temporary.replace(unit)
+subprocess.run(['systemctl','daemon-reload'],check=True)
+subprocess.run(['systemctl','reset-failed','polymarket-v7-retention.service'],check=True)
+subprocess.run(['systemctl','start','--no-block','polymarket-v7-retention.service'],check=True)
+print('RETENTION_NORMALIZED_PATH_REPAIRED')
+'''
+        output,_=run(REGION,'i-0fba2bac9fdc5cbeb','python3 -c '+shlex.quote(repair),60)
+        print(output.strip())
     command='nice -n 15 python3 -c '+shlex.quote(source)
     stdout,_=run(REGION,'i-0fba2bac9fdc5cbeb',command,120)
     lines=[line for line in stdout.splitlines() if line.startswith('ENCRYPTED_RESEARCH=')]

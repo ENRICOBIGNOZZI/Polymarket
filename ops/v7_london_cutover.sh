@@ -196,7 +196,7 @@ if [[ "$ALLOW_NATIVE_CARRYOVER" == 1 ]]; then
 fi
 python3 "$SOURCE_DIR/scripts/v7_prepare_cutover_run_root.py" "${prepare_args[@]}"
 SERVICE_GROUP="$(id -gn "$SERVICE_USER")"
-install -d -o "$SERVICE_USER" -g "$SERVICE_GROUP" "$RUN_ROOT" "$RUN_ROOT/control"
+install -d -o "$SERVICE_USER" -g "$SERVICE_GROUP" "$RUN_ROOT" "$RUN_ROOT/control" "$(dirname "$RUN_ROOT")/paper_v7_london_archives"
 deployed_sha_tmp="$RUN_ROOT/control/deployed_sha.tmp.$"
 printf '%s\n' "$EXPECTED_SHA" > "$deployed_sha_tmp"
 chown "$SERVICE_USER:$SERVICE_GROUP" "$deployed_sha_tmp"
@@ -272,7 +272,8 @@ import os,sys
 from pathlib import Path
 source,destination,user,group,app,run,sha=sys.argv[1:]
 payload=Path(source).read_text()
-for k,v in {'@SERVICE_USER@':user,'@SERVICE_GROUP@':group,'@APP_DIR@':app,'@RUN_ROOT@':run,'@EXPECTED_SHA@':sha}.items(): payload=payload.replace(k,v)
+for k,v in {'@SERVICE_USER@':user,'@SERVICE_GROUP@':group,'@APP_DIR@':app,'@RUN_ROOT@':run,'@EXPECTED_SHA@':sha,
+            '@ARCHIVE_ROOT@':str(Path(run).resolve().parent/'paper_v7_london_archives')}.items(): payload=payload.replace(k,v)
 if '@' in payload: raise SystemExit('unrendered systemd marker')
 t=Path(destination+'.tmp');t.write_text(payload);os.chmod(t,0o644);os.replace(t,destination)
 PYUNIT

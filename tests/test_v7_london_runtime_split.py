@@ -125,3 +125,17 @@ def test_linux_runtime_pins_artifacts_to_exact_sha_generation():
     # The deploy workflow may stage by-sha artifacts, but must not move the
     # shared convenience pointer before the exact-SHA cutover has succeeded.
     assert "ln -sfn 'by-sha/$deploy_sha' \\$HOME/polymarket-artifacts/current" not in deploy
+
+
+def test_retention_unit_renders_normalized_archive_path(tmp_path):
+    import sys
+    template=ROOT/'ops/systemd/polymarket-v7-retention.service.in'
+    for name,delimiter in [('v7_london_bootstrap.sh','PY'),('v7_london_cutover.sh','PYUNIT')]:
+        script=(ROOT/'ops'/name).read_text()
+        start=script.index("<<'"+delimiter+"'",script.index('render_unit'))
+        block=script[start:].split('\n',1)[1].split('\n'+delimiter+'\n',1)[0]
+        output=tmp_path/(name+'.service')
+        subprocess.run([sys.executable,'-c',block,str(template),str(output),'ubuntu','ubuntu',
+                        '/opt/runtime/current','/mnt/polymarket-data/paper_v7_london_test','a'*40],check=True)
+        line=next(s for s in output.read_text().splitlines() if s.startswith('ReadWritePaths='))
+        assert line=='ReadWritePaths=/mnt/polymarket-data/paper_v7_london_test -/mnt/polymarket-data/paper_v7_london_archives'

@@ -52,7 +52,7 @@ if ! id "$SERVICE_USER" >/dev/null 2>&1; then
   sudo useradd --create-home --shell /bin/bash "$SERVICE_USER"
 fi
 SERVICE_GROUP="$(id -gn "$SERVICE_USER")"
-sudo install -d -o "$SERVICE_USER" -g "$SERVICE_GROUP" "$(dirname "$APP_DIR")" "$RUN_ROOT" "$RUNTIME_ROOT/by-sha" "$ARTIFACT_ROOT/by-sha"
+sudo install -d -o "$SERVICE_USER" -g "$SERVICE_GROUP" "$(dirname "$APP_DIR")" "$RUN_ROOT" "$RUNTIME_ROOT/by-sha" "$ARTIFACT_ROOT/by-sha" "$(dirname "$RUN_ROOT")/paper_v7_london_archives"
 
 if [[ ! -d "$APP_DIR/.git" ]]; then
   sudo -u "$SERVICE_USER" git clone "$REPO_URL" "$APP_DIR"
@@ -81,6 +81,7 @@ payload=Path(source).read_text(encoding='utf-8')
 for marker,value in {
     '@SERVICE_USER@':user, '@SERVICE_GROUP@':group, '@APP_DIR@':app,
     '@RUN_ROOT@':run_root, '@EXPECTED_SHA@':sha,
+    '@ARCHIVE_ROOT@':str(Path(run_root).resolve().parent/'paper_v7_london_archives'),
 }.items():
     payload=payload.replace(marker,value)
 if '@' in payload:
