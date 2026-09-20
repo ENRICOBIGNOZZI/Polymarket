@@ -1,8 +1,8 @@
 {
   "schema": "polymarket_v7_aws_oidc_paper_deploy_request_v1",
   "version": 1,
-  "request_id": "paper-london-action-integrity-recover-1f562bbb",
-  "expected_parent_sha": "1f562bbb9e1eecd490aecdda362137b5951cf27b",
+  "request_id": "paper-london-core-health-8f15c4a7",
+  "expected_parent_sha": "8f15c4a73837761ba01eac9f10e06c7dc4c6557a",
   "role_arn": "arn:aws:iam::350769147128:role/PolymarketLondonPaperDeployPolicy",
   "paper_only": true,
   "authenticated_execution": false,
