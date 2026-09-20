@@ -440,7 +440,11 @@ cleanup() {{
 trap cleanup EXIT
 [[ "$(sudo -u "$SERVICE_USER" git -C "$WORKTREE" rev-parse HEAD)" == "$SHA" ]]
 [[ -z "$(sudo -u "$SERVICE_USER" git -C "$WORKTREE" status --porcelain)" ]]
-env POLYMARKET_EXPECTED_SHA="$SHA" \
+# Stage/build/test runs entirely as the service user that owns the immutable
+# worktree. Keep root only for the later cutover/systemd control plane.
+install -d -m 0755 -o "$SERVICE_USER" -g "$SERVICE_GROUP" "$RUNTIME_ROOT" "$RUNTIME_ROOT/by-sha"
+rm -rf -- "$RUNTIME_ROOT/by-sha/$SHA"
+sudo -u "$SERVICE_USER" -H env POLYMARKET_EXPECTED_SHA="$SHA" \
   POLYMARKET_SERVICE_USER="$SERVICE_USER" \
   POLYMARKET_APP_DIR="$WORKTREE" \
   POLYMARKET_RUNTIME_ROOT="$RUNTIME_ROOT" \
