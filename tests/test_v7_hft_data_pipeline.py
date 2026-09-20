@@ -80,6 +80,10 @@ def test_old_unread_live_tail_remains_explicit_backlog(tmp_path):
     try:
         result=store.ingest(max_rows=1,realtime_lag_seconds=30)
         assert result['scan_complete'] is False
+        population=json.loads((store.root/'compact'/'population.json').read_bytes())
+        assert population['backlog_contexts'] == ['BTC:M5']
+        assert population['backlog_sources'][0]['source'].endswith('.jsonl')
+        assert population['backlog_sources'][0]['lag_seconds'] > 30
     finally:store.close()
 
 

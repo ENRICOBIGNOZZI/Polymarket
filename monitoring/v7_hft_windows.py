@@ -124,7 +124,7 @@ class Windows:
         """
         if realtime_lag_seconds < 1:
             raise ValueError('REALTIME_LAG_MUST_BE_POSITIVE')
-        counts={'records':0,'decisions':0,'pending_markets':set()}; failures=[]
+        counts={'records':0,'decisions':0,'pending_markets':set()}; failures=[]; backlog_sources=[]
         progress={}; incomplete=set(); started=time.monotonic(); scan_complete=True
         # The input is append-only and active captures will normally gain a few
         # records while a cold pass is running. A fresh tail is not a historical
@@ -195,8 +195,14 @@ class Windows:
                                 scan_complete=False
                                 if all(isinstance(v,str) and v for v in next_context):
                                     incomplete.add(next_context)
+                                    backlog_sources.append(dict(source=relative,asset=next_context[0],
+                                        horizon=next_context[1],next_observation_ns=next_stamp,
+                                        lag_seconds=max(0,(time.time_ns()-next_stamp)/1e9) if next_stamp else None))
                                 else:
                                     incomplete.update(contexts)
+                                    backlog_sources.append(dict(source=relative,asset=None,horizon=None,
+                                        next_observation_ns=next_stamp,
+                                        lag_seconds=max(0,(time.time_ns()-next_stamp)/1e9) if next_stamp else None))
                 if batch: publish(self.root,'compact',b''.join(batch))
                 if offset!=(old[0] if old else 0):
                     with self.db:
@@ -230,6 +236,7 @@ class Windows:
                     'complete_before_ns':complete_before_ns,
                     'realtime_lag_seconds':realtime_lag_seconds,
                     'capture_failures':failures,'backlog_contexts':sorted(':'.join(c) for c in incomplete),
+                    'backlog_sources':sorted(backlog_sources,key=lambda r:(-(r['lag_seconds'] or 0),r['source'])),
                     'watermarks':{a+':'+h:t for a,h,t in self.db.execute('SELECT * FROM watermarks')}}
         compact=self.root/'compact';compact.mkdir(exist_ok=True)
         temp=compact/'population.tmp';temp.write_bytes(canonical(population));temp.replace(compact/'population.json')
