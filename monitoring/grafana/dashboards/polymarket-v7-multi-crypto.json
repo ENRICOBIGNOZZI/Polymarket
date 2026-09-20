@@ -27,6 +27,181 @@
   "liveNow": false,
   "panels": [
     {
+      "id": 75,
+      "type": "row",
+      "title": "LIVE TELEMETRY — always visible",
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 0
+      },
+      "collapsed": false,
+      "panels": []
+    },
+    {
+      "id": 76,
+      "type": "stat",
+      "title": "Prometheus Scrape",
+      "gridPos": {
+        "h": 4,
+        "w": 8,
+        "x": 0,
+        "y": 1
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus-v7"
+      },
+      "description": "Independent scrape liveness. This stays visible even when the exporter snapshot is stale.",
+      "targets": [
+        {
+          "expr": "max(up{job=\"polymarket-v7\",instance=~\".+\"}) or vector(0)",
+          "refId": "A",
+          "instant": true,
+          "range": false
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "decimals": 0,
+          "mappings": [
+            {
+              "type": "value",
+              "options": {
+                "0": {
+                  "text": "DOWN"
+                },
+                "1": {
+                  "text": "UP"
+                }
+              }
+            }
+          ]
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "last"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "colorMode": "value",
+        "graphMode": "none",
+        "justifyMode": "auto",
+        "orientation": "auto",
+        "textMode": "auto",
+        "wideLayout": true
+      }
+    },
+    {
+      "id": 77,
+      "type": "stat",
+      "title": "Exporter Snapshot Usable",
+      "gridPos": {
+        "h": 4,
+        "w": 8,
+        "x": 8,
+        "y": 1
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus-v7"
+      },
+      "description": "Freshness gate used by the economic panels. 0 means telemetry is stale/not ready; it does not mean zero PnL.",
+      "targets": [
+        {
+          "expr": "max(polymarket_v7_exporter_snapshot_usable{job=\"polymarket-v7\",instance=~\".+\"}) or vector(0)",
+          "refId": "A",
+          "instant": true,
+          "range": false
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "decimals": 0,
+          "mappings": [
+            {
+              "type": "value",
+              "options": {
+                "0": {
+                  "text": "STALE / NOT READY"
+                },
+                "1": {
+                  "text": "USABLE"
+                }
+              }
+            }
+          ]
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "last"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "colorMode": "value",
+        "graphMode": "none",
+        "justifyMode": "auto",
+        "orientation": "auto",
+        "textMode": "auto",
+        "wideLayout": true
+      }
+    },
+    {
+      "id": 78,
+      "type": "stat",
+      "title": "Exporter Snapshot Age",
+      "gridPos": {
+        "h": 4,
+        "w": 8,
+        "x": 16,
+        "y": 1
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus-v7"
+      },
+      "description": "Age in seconds of the cached exporter snapshot. Economic panels intentionally disappear when the snapshot is not usable.",
+      "targets": [
+        {
+          "expr": "max(polymarket_v7_exporter_snapshot_age_seconds{job=\"polymarket-v7\",instance=~\".+\"})",
+          "refId": "A",
+          "instant": true,
+          "range": false
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s",
+          "decimals": 1
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "last"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "colorMode": "value",
+        "graphMode": "none",
+        "justifyMode": "auto",
+        "orientation": "auto",
+        "textMode": "auto",
+        "wideLayout": true
+      }
+    },
+    {
       "id": 1,
       "type": "stat",
       "title": "Risk Equity Lower Bound",
@@ -34,7 +209,7 @@
         "h": 4,
         "w": 4,
         "x": 0,
-        "y": 0
+        "y": 5
       },
       "datasource": {
         "type": "prometheus",
@@ -80,7 +255,7 @@
         "h": 4,
         "w": 4,
         "x": 4,
-        "y": 0
+        "y": 5
       },
       "datasource": {
         "type": "prometheus",
@@ -126,7 +301,7 @@
         "h": 4,
         "w": 4,
         "x": 8,
-        "y": 0
+        "y": 5
       },
       "datasource": {
         "type": "prometheus",
@@ -172,7 +347,7 @@
         "h": 4,
         "w": 4,
         "x": 12,
-        "y": 0
+        "y": 5
       },
       "datasource": {
         "type": "prometheus",
@@ -218,7 +393,7 @@
         "h": 4,
         "w": 4,
         "x": 16,
-        "y": 0
+        "y": 5
       },
       "datasource": {
         "type": "prometheus",
@@ -263,7 +438,7 @@
         "h": 4,
         "w": 4,
         "x": 20,
-        "y": 0
+        "y": 5
       },
       "datasource": {
         "type": "prometheus",
@@ -323,7 +498,7 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 4
+        "y": 9
       },
       "collapsed": false,
       "panels": []
@@ -336,7 +511,7 @@
         "h": 9,
         "w": 12,
         "x": 0,
-        "y": 5
+        "y": 10
       },
       "datasource": {
         "type": "prometheus",
@@ -391,7 +566,7 @@
         "h": 9,
         "w": 6,
         "x": 12,
-        "y": 5
+        "y": 10
       },
       "datasource": {
         "type": "prometheus",
@@ -435,7 +610,7 @@
         "h": 9,
         "w": 6,
         "x": 18,
-        "y": 5
+        "y": 10
       },
       "datasource": {
         "type": "prometheus",
@@ -479,7 +654,7 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 14
+        "y": 19
       },
       "collapsed": false,
       "panels": []
@@ -492,7 +667,7 @@
         "h": 8,
         "w": 8,
         "x": 0,
-        "y": 15
+        "y": 20
       },
       "datasource": {
         "type": "prometheus",
@@ -536,7 +711,7 @@
         "h": 8,
         "w": 8,
         "x": 8,
-        "y": 15
+        "y": 20
       },
       "datasource": {
         "type": "prometheus",
@@ -579,7 +754,7 @@
         "h": 8,
         "w": 8,
         "x": 16,
-        "y": 15
+        "y": 20
       },
       "datasource": {
         "type": "prometheus",
@@ -623,7 +798,7 @@
         "h": 7,
         "w": 6,
         "x": 0,
-        "y": 23
+        "y": 28
       },
       "datasource": {
         "type": "prometheus",
@@ -664,7 +839,7 @@
         "h": 7,
         "w": 6,
         "x": 6,
-        "y": 23
+        "y": 28
       },
       "datasource": {
         "type": "prometheus",
@@ -705,7 +880,7 @@
         "h": 7,
         "w": 6,
         "x": 12,
-        "y": 23
+        "y": 28
       },
       "datasource": {
         "type": "prometheus",
@@ -746,7 +921,7 @@
         "h": 7,
         "w": 6,
         "x": 18,
-        "y": 23
+        "y": 28
       },
       "datasource": {
         "type": "prometheus",
@@ -790,7 +965,7 @@
         "h": 7,
         "w": 8,
         "x": 0,
-        "y": 30
+        "y": 35
       },
       "datasource": {
         "type": "prometheus",
@@ -833,7 +1008,7 @@
         "h": 7,
         "w": 8,
         "x": 8,
-        "y": 30
+        "y": 35
       },
       "datasource": {
         "type": "prometheus",
@@ -874,7 +1049,7 @@
         "h": 7,
         "w": 8,
         "x": 16,
-        "y": 30
+        "y": 35
       },
       "datasource": {
         "type": "prometheus",
@@ -918,7 +1093,7 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 37
+        "y": 42
       },
       "collapsed": false,
       "panels": []
@@ -931,7 +1106,7 @@
         "h": 9,
         "w": 16,
         "x": 0,
-        "y": 38
+        "y": 43
       },
       "datasource": {
         "type": "prometheus",
@@ -979,7 +1154,7 @@
         "h": 9,
         "w": 8,
         "x": 16,
-        "y": 38
+        "y": 43
       },
       "datasource": {
         "type": "prometheus",
@@ -1023,7 +1198,7 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 47
+        "y": 52
       },
       "collapsed": false,
       "panels": []
@@ -1036,7 +1211,7 @@
         "h": 8,
         "w": 12,
         "x": 0,
-        "y": 48
+        "y": 53
       },
       "datasource": {
         "type": "prometheus",
@@ -1105,7 +1280,7 @@
         "h": 8,
         "w": 12,
         "x": 12,
-        "y": 48
+        "y": 53
       },
       "datasource": {
         "type": "prometheus",
@@ -1158,7 +1333,7 @@
         "h": 7,
         "w": 8,
         "x": 0,
-        "y": 56
+        "y": 61
       },
       "datasource": {
         "type": "prometheus",
@@ -1213,7 +1388,7 @@
         "h": 7,
         "w": 8,
         "x": 8,
-        "y": 56
+        "y": 61
       },
       "datasource": {
         "type": "prometheus",
@@ -1268,7 +1443,7 @@
         "h": 7,
         "w": 4,
         "x": 16,
-        "y": 56
+        "y": 61
       },
       "datasource": {
         "type": "prometheus",
@@ -1314,7 +1489,7 @@
         "h": 7,
         "w": 4,
         "x": 20,
-        "y": 56
+        "y": 61
       },
       "datasource": {
         "type": "prometheus",
@@ -1360,7 +1535,7 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 63
+        "y": 68
       },
       "collapsed": false,
       "panels": []
@@ -1373,7 +1548,7 @@
         "h": 4,
         "w": 6,
         "x": 0,
-        "y": 64
+        "y": 69
       },
       "datasource": {
         "type": "prometheus",
@@ -1431,7 +1606,7 @@
         "h": 4,
         "w": 6,
         "x": 6,
-        "y": 64
+        "y": 69
       },
       "datasource": {
         "type": "prometheus",
@@ -1475,7 +1650,7 @@
         "h": 4,
         "w": 6,
         "x": 12,
-        "y": 64
+        "y": 69
       },
       "datasource": {
         "type": "prometheus",
@@ -1519,7 +1694,7 @@
         "h": 4,
         "w": 6,
         "x": 18,
-        "y": 64
+        "y": 69
       },
       "datasource": {
         "type": "prometheus",
@@ -1563,7 +1738,7 @@
         "h": 4,
         "w": 6,
         "x": 0,
-        "y": 68
+        "y": 73
       },
       "datasource": {
         "type": "prometheus",
@@ -1621,7 +1796,7 @@
         "h": 4,
         "w": 6,
         "x": 6,
-        "y": 68
+        "y": 73
       },
       "datasource": {
         "type": "prometheus",
@@ -1679,7 +1854,7 @@
         "h": 4,
         "w": 6,
         "x": 12,
-        "y": 68
+        "y": 73
       },
       "datasource": {
         "type": "prometheus",
@@ -1723,7 +1898,7 @@
         "h": 4,
         "w": 6,
         "x": 18,
-        "y": 68
+        "y": 73
       },
       "datasource": {
         "type": "prometheus",
@@ -1769,7 +1944,7 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 72
+        "y": 77
       },
       "collapsed": false,
       "panels": []
@@ -1782,7 +1957,7 @@
         "h": 4,
         "w": 4,
         "x": 0,
-        "y": 73
+        "y": 78
       },
       "datasource": {
         "type": "prometheus",
@@ -1825,7 +2000,7 @@
         "h": 4,
         "w": 4,
         "x": 4,
-        "y": 73
+        "y": 78
       },
       "datasource": {
         "type": "prometheus",
@@ -1868,7 +2043,7 @@
         "h": 4,
         "w": 4,
         "x": 8,
-        "y": 73
+        "y": 78
       },
       "datasource": {
         "type": "prometheus",
@@ -1911,7 +2086,7 @@
         "h": 4,
         "w": 4,
         "x": 12,
-        "y": 73
+        "y": 78
       },
       "datasource": {
         "type": "prometheus",
@@ -1957,7 +2132,7 @@
         "h": 4,
         "w": 4,
         "x": 16,
-        "y": 73
+        "y": 78
       },
       "datasource": {
         "type": "prometheus",
@@ -2000,7 +2175,7 @@
         "h": 4,
         "w": 4,
         "x": 20,
-        "y": 73
+        "y": 78
       },
       "datasource": {
         "type": "prometheus",
@@ -2057,7 +2232,7 @@
         "h": 8,
         "w": 8,
         "x": 0,
-        "y": 77
+        "y": 82
       },
       "datasource": {
         "type": "prometheus",
@@ -2098,7 +2273,7 @@
         "h": 8,
         "w": 8,
         "x": 8,
-        "y": 77
+        "y": 82
       },
       "datasource": {
         "type": "prometheus",
@@ -2139,7 +2314,7 @@
         "h": 8,
         "w": 8,
         "x": 16,
-        "y": 77
+        "y": 82
       },
       "datasource": {
         "type": "prometheus",
@@ -2180,7 +2355,7 @@
         "h": 6,
         "w": 24,
         "x": 0,
-        "y": 85
+        "y": 90
       },
       "options": {
         "mode": "markdown",
@@ -2195,7 +2370,7 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 91
+        "y": 96
       },
       "collapsed": false,
       "panels": []
@@ -2208,7 +2383,7 @@
         "h": 8,
         "w": 8,
         "x": 0,
-        "y": 92
+        "y": 97
       },
       "datasource": {
         "type": "prometheus",
@@ -2262,7 +2437,7 @@
         "h": 8,
         "w": 8,
         "x": 8,
-        "y": 92
+        "y": 97
       },
       "datasource": {
         "type": "prometheus",
@@ -2305,7 +2480,7 @@
         "h": 8,
         "w": 8,
         "x": 16,
-        "y": 92
+        "y": 97
       },
       "datasource": {
         "type": "prometheus",
@@ -2348,7 +2523,7 @@
         "h": 8,
         "w": 24,
         "x": 0,
-        "y": 100
+        "y": 105
       },
       "datasource": {
         "type": "prometheus",
@@ -2488,6 +2663,6 @@
   "timezone": "browser",
   "title": "Polymarket V7 Multi-Crypto Performance & Runtime",
   "uid": "polymarket-v7-multi-crypto",
-  "version": 8,
-  "description": "PAPER economic performance plus native runtime and data-plane health. Empty panels are treated as telemetry defects, not zeros."
+  "version": 9,
+  "description": "PAPER economic performance plus native runtime and data-plane health. Live telemetry remains visible when freshness gates hide stale economic panels; missing economic series are never interpreted as zeros."
 }

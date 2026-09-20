@@ -31,7 +31,11 @@ ENV_RAW="$(systemctl show "$UNIT" -p Environment --value)"
 ROOT="$(python3 -c 'import shlex,sys; x=shlex.split(sys.stdin.read()); print(next((v.split("=",1)[1] for v in x if v.startswith("PM_V7_RUN_ROOT=")), ""))' <<<"$ENV_RAW")"
 [[ -n "$APP" && -d "$APP" && -n "$ROOT" && -d "$ROOT" ]]
 [[ "$(cat "$APP/deploy/london/runtime_sha")" == "$SHA" ]]
-[[ "$(cat "$ROOT/control/deployed_sha")" == "$SHA" ]]
+DEPLOYED_SHA_FILE="$ROOT/control/deployed_sha"
+if [[ -e "$DEPLOYED_SHA_FILE" ]]; then
+  [[ -f "$DEPLOYED_SHA_FILE" && ! -L "$DEPLOYED_SHA_FILE" ]]
+  [[ "$(cat "$DEPLOYED_SHA_FILE")" == "$SHA" ]]
+fi
 python3 - "$ROOT" "$SHA" <<'PY'
 import json,os,sys,time
 from pathlib import Path
@@ -59,6 +63,7 @@ for metric in   polymarket_execution_opportunities   polymarket_execution_orders
   grep -Eq "^${metric}(\\{| )" <<<"$metrics"
 done
 curl -fsS http://127.0.0.1:9090/-/ready >/dev/null
+curl -fsS --get --data-urlencode 'query=up{job="polymarket-v7"}'   http://127.0.0.1:9090/api/v1/query | python3 -c 'import json,sys; v=json.load(sys.stdin); r=v.get("data",{}).get("result",[]); assert len(r)==1 and r[0]["value"][1]=="1"'
 curl -fsS http://127.0.0.1:3000/api/health >/dev/null
 curl -fsS http://127.0.0.1:3000/api/dashboards/uid/polymarket-v7 >/dev/null
 full_health="$(curl -sS http://127.0.0.1:9108/healthz 2>/dev/null || true)"

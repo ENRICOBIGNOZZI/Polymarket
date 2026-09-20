@@ -75,6 +75,22 @@ def test_control_room_uses_crypto_specific_runtime_language() -> None:
         assert required in serialized
 
 
+def test_multi_crypto_keeps_independent_live_telemetry_visible() -> None:
+    dashboard = json.loads((DASHBOARDS / "polymarket-v7-multi-crypto.json").read_text(encoding="utf-8"))
+    by_title = {panel.get("title"): panel for panel in panels(dashboard)}
+    assert "LIVE TELEMETRY — always visible" in by_title
+    scrape = by_title["Prometheus Scrape"]["targets"][0]["expr"]
+    usable = by_title["Exporter Snapshot Usable"]["targets"][0]["expr"]
+    age = by_title["Exporter Snapshot Age"]["targets"][0]["expr"]
+    assert 'up{job="polymarket-v7"' in scrape
+    assert "polymarket_v7_exporter_snapshot_usable" not in scrape
+    assert "or vector(0)" in scrape
+    assert "polymarket_v7_exporter_snapshot_usable" in usable
+    assert "or vector(0)" in usable
+    assert "polymarket_v7_exporter_snapshot_age_seconds" in age
+
+
+
 def test_provisioning_names_and_manifest_are_crypto_only() -> None:
     manifest = json.loads((ROOT / "monitoring/v7_monitoring_manifest.json").read_text(encoding="utf-8"))
     assert manifest["grafana"]["crypto_only"] is True
