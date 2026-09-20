@@ -251,6 +251,7 @@ def remove_one(page, name: str) -> None:
     page.wait_for_timeout(600)
 
 def main() -> int:
+    print("tailnet_cleanup_stage=START", flush=True)
     p = argparse.ArgumentParser()
     p.add_argument("--credentials", type=Path, required=True)
     p.add_argument("--repository", required=True)
@@ -258,6 +259,7 @@ def main() -> int:
     p.add_argument("--chrome", default="")
     p.add_argument("--cdp-url", default="")
     a = p.parse_args()
+    print("tailnet_cleanup_stage=ARGS_PARSED", flush=True)
     value = json.loads(a.credentials.read_text(encoding="utf-8"))
     required = {
         "schema","purpose","expected_main_sha","email","password",
@@ -273,6 +275,7 @@ def main() -> int:
     if not 1 <= maximum <= 24:
         p.error("maximum_deletions")
     protected = protected_run_ids(a.repository, a.github_token)
+    print(f"tailnet_cleanup_stage=PROTECTED_RUNS count={len(protected)}", flush=True)
 
     try:
         from playwright.sync_api import sync_playwright
@@ -285,7 +288,9 @@ def main() -> int:
     removed: list[str] = []
     candidates: list[str] = []
     with sync_playwright() as pw:
+        print("tailnet_cleanup_stage=PLAYWRIGHT_READY", flush=True)
         if a.cdp_url:
+            print("tailnet_cleanup_stage=CONNECT_CDP", flush=True)
             browser = pw.chromium.connect_over_cdp(a.cdp_url)
             context = browser.contexts[0] if browser.contexts else browser.new_context()
             pages = context.pages
@@ -297,8 +302,11 @@ def main() -> int:
             )
             context = browser.new_context()
             page = context.new_page()
+        print("tailnet_cleanup_stage=LOGIN_BEGIN", flush=True)
         login(page, value["email"], value["password"])
+        print("tailnet_cleanup_stage=LOGIN_OK", flush=True)
         candidates = candidate_names(page)
+        print(f"tailnet_cleanup_stage=CANDIDATES count={len(candidates)}", flush=True)
         for name in candidates:
             match = NAME_RE.fullmatch(name)
             if not match:
@@ -308,6 +316,7 @@ def main() -> int:
                 continue
             if len(removed) >= maximum:
                 raise RuntimeError("deletion_limit_reached")
+            print(f"tailnet_cleanup_removing={name}", flush=True)
             remove_one(page, name)
             removed.append(name)
         if not a.cdp_url:
