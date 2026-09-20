@@ -111,14 +111,17 @@ public:
     [[nodiscard]] NativeCryptoDecisionResult evaluate(
         const NativeCryptoDecisionInput& input,
         SleeveCapitalAccount& capital) noexcept;
+    // A causal candidate is only a proposal. Consume its signal after the sole
+    // execution owner has accepted new risk; arbitration/rejection must not
+    // destroy a still-fresh opportunity.
+    void commit_signal(std::uint64_t market_handle,
+                       std::uint64_t signal_version) noexcept;
     void mark_market_traded(std::uint64_t market_handle) noexcept;
     void reset_market(std::uint64_t market_handle) noexcept;
 
 private:
     [[nodiscard]] bool seen_signal(std::uint64_t market_handle,
                                    std::uint64_t signal_version) const noexcept;
-    void remember_signal(std::uint64_t market_handle,
-                         std::uint64_t signal_version) noexcept;
     [[nodiscard]] bool market_traded(std::uint64_t market_handle) const noexcept;
 
     NativeCryptoDecisionPolicy policy_{};
