@@ -1,8 +1,8 @@
 {
   "schema": "polymarket_v7_aws_oidc_paper_deploy_request_v1",
   "version": 1,
-  "request_id": "paper-london-explicit-instance-e700a6ac",
-  "expected_parent_sha": "e700a6acf84267dababf3c8aa70e67f892e9a93a",
+  "request_id": "paper-london-explicit-instance-7e147ef1",
+  "expected_parent_sha": "7e147ef18fa3f84f16a892562f7aec076b1f828c",
   "role_arn": "arn:aws:iam::350769147128:role/PolymarketLondonPaperDeployPolicy",
   "paper_only": true,
   "authenticated_execution": false,
