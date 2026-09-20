@@ -27,12 +27,16 @@ jobs:
           set -euo pipefail
           git fetch --no-tags origin main
           main_sha="$(git rev-parse origin/main)"
-          python3 - deploy/v7-tailscale-cleanup-request.json "$main_sha" "$GITHUB_OUTPUT" <<'PY'
+          test "$(git rev-parse HEAD)" = "$main_sha"
+          parent_sha="$(git rev-parse HEAD^)"
+          changed="$(git diff-tree --no-commit-id --name-only -r HEAD)"
+          test "$changed" = "deploy/v7-tailscale-cleanup-request.json"
+          python3 - deploy/v7-tailscale-cleanup-request.json "$parent_sha" "$GITHUB_OUTPUT" <<'PY'
           import json,re,sys
           v=json.load(open(sys.argv[1],encoding='utf-8'))
           assert v.get('schema')=='polymarket_v7_tailscale_cleanup_request_v1'
           assert v.get('version')==1
-          assert v.get('expected_main_sha')==sys.argv[2]
+          assert v.get('expected_parent_sha')==sys.argv[2]
           client=v.get('client_id'); audience=v.get('audience')
           assert isinstance(client,str) and len(client)>=8
           assert isinstance(audience,str) and len(audience)>=8
