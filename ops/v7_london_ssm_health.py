@@ -20,9 +20,8 @@ SCHEMA = "polymarket_v7_ssm_health_receipt_v1"
 def health_command(expected_sha: str) -> str:
     if not exact_sha(expected_sha):
         raise SsmDeployError("invalid health SHA")
-    sha = shlex.quote(expected_sha)
-    return f"""set -euo pipefail
-SHA={sha}
+    template = r"""set -euo pipefail
+SHA=__EXPECTED_SHA__
 UNIT=polymarket-v7-paper.service
 EXPORTER=polymarket-v7-exporter.service
 [[ "$(systemctl is-active "$UNIT")" == active ]]
@@ -38,6 +37,7 @@ import json,os,sys,time
 from pathlib import Path
 root=Path(sys.argv[1]); sha=sys.argv[2]; now=int(time.time())
 r=json.loads((root/'control/runtime_status.json').read_text())
+a=json.loads((root/'control/allocations/manifest.json').read_text())
 assert r.get('state')=='running'
 assert r.get('model_sha')==sha
 assert r.get('paper_only') is True
@@ -46,19 +46,17 @@ assert r.get('real_order_submission') is False
 assert r.get('economic_new_risk_ready') is False
 assert r.get('authorized_alpha_actions') in (None, [])
 assert set(r.get('economic_engines') or [])=={'CRYPTO_SETTLEMENT_ENGINE'}
+assert a.get('engine_count')==1
+assert set((a.get('engine_budgets') or {}).keys())=={'CRYPTO_SETTLEMENT_ENGINE'}
 pid=int(r.get('pid') or 0); assert pid>0; os.kill(pid,0)
 assert now-int(r.get('timestamp') or 0)<=180
 PY
 metrics="$(curl -fsS http://127.0.0.1:9108/metrics)"
-for expected in \
-  'polymarket_v7_execution_alive 1' \
-  'polymarket_v7_single_writer_ok 1' \
-  'polymarket_v7_exact_sha_ok 1' \
-  'polymarket_v7_paper_only_contract_ok 1' \
-  'polymarket_v7_authenticated_execution_disabled 1' \
-  'polymarket_v7_native_engine_mode 1' \
-  'polymarket_v7_economic_new_risk_ready 0'; do
+for expected in   'polymarket_v7_execution_alive 1'   'polymarket_v7_single_writer_ok 1'   'polymarket_v7_exact_sha_ok 1'   'polymarket_v7_paper_only_contract_ok 1'   'polymarket_v7_authenticated_execution_disabled 1'   'polymarket_v7_live_algorithm_count 1'   'polymarket_v7_native_engine_mode 1'   'polymarket_v7_economic_new_risk_ready 0'; do
   grep -Fxq "$expected" <<<"$metrics"
+done
+for metric in   polymarket_execution_opportunities   polymarket_execution_orders_submitted   polymarket_execution_fills   polymarket_execution_complete_fills   polymarket_execution_final_pnl_usd   polymarket_runtime_pnl_usd   polymarket_v7_canonical_submitted_units   polymarket_v7_canonical_complete_units; do
+  grep -Eq "^${metric}(\\{| )" <<<"$metrics"
 done
 curl -fsS http://127.0.0.1:9090/-/ready >/dev/null
 curl -fsS http://127.0.0.1:3000/api/health >/dev/null
@@ -67,8 +65,10 @@ full_health="$(curl -sS http://127.0.0.1:9108/healthz 2>/dev/null || true)"
 python3 - "$SHA" "$APP" "$ROOT" "$full_health" <<'PY'
 import json,sys
 sha,app,root,full=sys.argv[1:]
-try: h=json.loads(full) if full else {}
-except json.JSONDecodeError: h={}
+try:
+    h=json.loads(full) if full else {}
+except json.JSONDecodeError:
+    h={}
 print('V7_SSM_HEALTH='+json.dumps({
   'sha':sha,'app':app,'run_root':root,
   'paper_only':True,'authenticated_execution':False,'real_order_submission':False,
@@ -79,6 +79,7 @@ print('V7_SSM_HEALTH='+json.dumps({
 },sort_keys=True,separators=(',',':')))
 PY
 """
+    return template.replace("__EXPECTED_SHA__", expected_sha)
 
 
 def health(region: str, stack_name: str, expected_sha: str,
