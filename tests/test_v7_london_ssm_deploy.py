@@ -263,3 +263,25 @@ def test_cancel_prior_deploy_transports_refuses_unknown_transport(monkeypatch):
     monkeypatch.setattr(m, "aws_json", fake_aws)
     with pytest.raises(m.SsmDeployError, match="cannot prove"):
         m.cancel_prior_deploy_transports("eu-west-2", "i-123abc", SHA)
+
+
+def test_main_writes_receipt_as_one_valid_json_document(tmp_path, monkeypatch):
+    out = tmp_path / "receipt.json"
+    artifact = tmp_path / "artifact.tgz"
+    artifact.write_bytes(b"x")
+    receipt = {
+        "schema": "polymarket_v7_ssm_deploy_receipt_v1",
+        "expected_sha": SHA,
+        "selected": {"instance_id": "i-123abc"},
+    }
+    monkeypatch.setattr(m, "deploy", lambda *args, **kwargs: receipt)
+    monkeypatch.setattr(sys, "argv", [
+        "v7_london_ssm_deploy.py",
+        "--expected-sha", SHA,
+        "--artifact", str(artifact),
+        "--output", str(out),
+    ])
+    assert m.main() == 0
+    import json
+    assert json.loads(out.read_text(encoding="utf-8")) == receipt
+    assert out.read_text(encoding="utf-8").endswith("\n")
