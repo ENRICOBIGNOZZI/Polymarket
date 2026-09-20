@@ -10,7 +10,7 @@ on:
   repository_dispatch:
     types: [v7-live-paper-validate]
   workflow_run:
-    workflows: ["ci", "monitoring", "Private runtime single-writer validation"]
+    workflows: ["ci"]
     types: [completed]
     branches: [main]
 
@@ -49,10 +49,44 @@ jobs:
           echo "ready=false" >> "$GITHUB_OUTPUT"
           git fetch --no-tags origin main
           test "$(git rev-parse HEAD)" = "$VALIDATION_SHA"
-          if [[ "$(git rev-parse origin/main)" != "$VALIDATION_SHA" ]]; then
-            echo "validation_state=BLOCKED_STALE_NON_MAIN_SHA" >> "$GITHUB_STEP_SUMMARY"
-            echo "::error title=V7 PAPER validation blocked::Requested SHA is not the current immutable main SHA. No substantive PAPER validation ran."
-            exit 1
+          current_main="$(git rev-parse origin/main)"
+          if [[ "$current_main" != "$VALIDATION_SHA" ]]; then
+            request_path=deploy/v7-paper-deploy-aws-oidc-request.json
+            fast_request_path=deploy/v7-paper-fast-restart-existing-request.json
+            changed="$(git diff-tree --no-commit-id --name-only -r "$current_main")"
+            allowed=false
+            if [[ "$changed" == "$request_path" && "$(git rev-parse "$current_main^")" == "$VALIDATION_SHA" ]]; then
+              git show "$current_main:$request_path" > "$RUNNER_TEMP/live-deploy-request.json"
+              python3 - "$RUNNER_TEMP/live-deploy-request.json" "$VALIDATION_SHA" <<'PY'
+          import json,sys
+          v=json.load(open(sys.argv[1],encoding='utf-8'))
+          assert v.get('schema')=='polymarket_v7_aws_oidc_paper_deploy_request_v1'
+          assert v.get('expected_parent_sha')==sys.argv[2]
+          assert v.get('paper_only') is True
+          assert v.get('authenticated_execution') is False
+          assert v.get('real_order_submission') is False
+          assert v.get('cutover_approved') is True
+          PY
+              allowed=true
+            elif [[ "$changed" == "$fast_request_path" ]]; then
+              git show "$current_main:$fast_request_path" > "$RUNNER_TEMP/live-fast-request.json"
+              python3 - "$RUNNER_TEMP/live-fast-request.json" "$VALIDATION_SHA" <<'PY'
+          import json,sys
+          v=json.load(open(sys.argv[1],encoding='utf-8'))
+          assert v.get('schema')=='polymarket_v7_paper_fast_restart_existing_request_v1'
+          assert v.get('expected_sha')==sys.argv[2]
+          assert v.get('paper_only') is True
+          assert v.get('authenticated_execution') is False
+          assert v.get('real_order_submission') is False
+          assert v.get('restart_approved') is True
+          PY
+              allowed=true
+            fi
+            if [[ "$allowed" != true ]]; then
+              echo "validation_state=BLOCKED_STALE_NON_MAIN_SHA" >> "$GITHUB_STEP_SUMMARY"
+              echo "::error title=V7 PAPER validation blocked::Requested SHA is neither current main nor the exact runtime target of the current PAPER request."
+              exit 1
+            fi
           fi
           python3 - <<'PY'
           import json
