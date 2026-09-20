@@ -50,7 +50,8 @@ class LondonStageWorktreeTests(unittest.TestCase):
             for checkout in (repository, worktree):
                 result = self.run_preflight(script, checkout, sha)
                 self.assertEqual(result.returncode, 0, result.stderr)
-            old = script.replace('[[ -e "$SOURCE_DIR/.git" && "$(git -C "$SOURCE_DIR" rev-parse --is-inside-work-tree 2>/dev/null)" == true ]]',
+            self.assertIn('GIT_SOURCE=(git -c "safe.directory=$SOURCE_DIR" -C "$SOURCE_DIR")', script)
+            old = script.replace('[[ -e "$SOURCE_DIR/.git" && "$("${GIT_SOURCE[@]}" rev-parse --is-inside-work-tree 2>/dev/null)" == true ]]',
                                  '[[ -d "$SOURCE_DIR/.git" ]]')
             self.assertEqual(self.run_preflight(old, worktree, sha).returncode, 66)
             (worktree / 'source.txt').write_text('dirty')
