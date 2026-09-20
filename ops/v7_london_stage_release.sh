@@ -32,10 +32,30 @@ mkdir -p "$RUNTIME_ROOT/by-sha"
 # Full verification build is staging-only; it never runs on the trading path.
 rm -rf "$SOURCE_DIR/build-verify" "$SOURCE_DIR/build-runtime"
 cmake -S "$SOURCE_DIR" -B "$SOURCE_DIR/build-verify" -GNinja -DCMAKE_BUILD_TYPE=Release
-cmake --build "$SOURCE_DIR/build-verify" --parallel "${POLYMARKET_BUILD_JOBS:-2}"
-ctest --test-dir "$SOURCE_DIR/build-verify" --output-on-failure
+verify_build_log="$SOURCE_DIR/build-verify/london-stage-build.log"
+if ! cmake --build "$SOURCE_DIR/build-verify" --parallel "${POLYMARKET_BUILD_JOBS:-2}" >"$verify_build_log" 2>&1; then
+  echo "London verification build failed" >&2
+  tail -n 160 "$verify_build_log" >&2 || true
+  exit 8
+fi
+verify_test_log="$SOURCE_DIR/build-verify/london-stage-ctest.log"
+if ! ctest --test-dir "$SOURCE_DIR/build-verify" --output-on-failure >"$verify_test_log" 2>&1; then
+  echo "London verification ctest failed" >&2
+  failed_list="$SOURCE_DIR/build-verify/Testing/Temporary/LastTestsFailed.log"
+  if [[ -s "$failed_list" ]]; then
+    echo "London failed tests:" >&2
+    cat "$failed_list" >&2
+  fi
+  ctest --test-dir "$SOURCE_DIR/build-verify" --rerun-failed --output-on-failure >&2 || true
+  exit 8
+fi
 cmake -S "$SOURCE_DIR" -B "$SOURCE_DIR/build-runtime" -GNinja -DCMAKE_BUILD_TYPE=Release -DPM_LONDON_RUNTIME_ONLY=ON -DBUILD_TESTING=OFF
-cmake --build "$SOURCE_DIR/build-runtime" --parallel "${POLYMARKET_BUILD_JOBS:-2}"
+runtime_build_log="$SOURCE_DIR/build-runtime/london-runtime-build.log"
+if ! cmake --build "$SOURCE_DIR/build-runtime" --parallel "${POLYMARKET_BUILD_JOBS:-2}" >"$runtime_build_log" 2>&1; then
+  echo "London runtime-only build failed" >&2
+  tail -n 160 "$runtime_build_log" >&2 || true
+  exit 8
+fi
 tmp="$TARGET.tmp.$$"; rm -rf "$tmp"
 python3 "$SOURCE_DIR/ops/build_london_runtime_bundle.py" --repository-root "$SOURCE_DIR" \
   --build-dir "$SOURCE_DIR/build-runtime" --expected-sha "$EXPECTED_SHA" --output "$tmp"
