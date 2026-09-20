@@ -279,30 +279,42 @@ def probe(region: str, instances: list[str]) -> dict[str, dict[str, Any]]:
 
 
 def select_target(probes: dict[str, dict[str, Any]],
-                  expected_tailscale_ip: str) -> dict[str, Any]:
+                  expected_tailscale_ip: str,
+                  expected_instance_id: str = "") -> dict[str, Any]:
     healthy = [
         value for value in probes.values()
         if not value.get("probe_error") and isinstance(value.get("app"), dict)
     ]
-    ip_matches = [
-        value for value in healthy
-        if expected_tailscale_ip
-        and expected_tailscale_ip in (value.get("tailscale_ips") or [])
-    ]
-    if len(ip_matches) == 1:
-        selected = ip_matches[0]
-        reason = "EXACT_TAILSCALE_IP"
-    elif len(ip_matches) > 1:
-        raise SsmDeployError("multiple instances claim expected Tailscale IP")
-    else:
-        active = [value for value in healthy if value.get("unit_active") is True]
-        if len(active) != 1:
+    if expected_instance_id:
+        if not INSTANCE_RE.fullmatch(expected_instance_id):
+            raise SsmDeployError("invalid expected London instance id")
+        exact = [value for value in healthy if value.get("instance_id") == expected_instance_id]
+        if len(exact) != 1:
             raise SsmDeployError(
-                f"cannot select unique London runtime: ip_matches={len(ip_matches)} "
-                f"active={len(active)} healthy={len(healthy)}"
+                f"expected London instance unavailable: {expected_instance_id}"
             )
-        selected = active[0]
-        reason = "UNIQUE_ACTIVE_PAPER_SERVICE"
+        selected = exact[0]
+        reason = "EXACT_INSTANCE_ID"
+    else:
+            ip_matches = [
+            value for value in healthy
+            if expected_tailscale_ip
+            and expected_tailscale_ip in (value.get("tailscale_ips") or [])
+        ]
+        if len(ip_matches) == 1:
+            selected = ip_matches[0]
+            reason = "EXACT_TAILSCALE_IP"
+        elif len(ip_matches) > 1:
+            raise SsmDeployError("multiple instances claim expected Tailscale IP")
+        else:
+            active = [value for value in healthy if value.get("unit_active") is True]
+            if len(active) != 1:
+                raise SsmDeployError(
+                    f"cannot select unique London runtime: ip_matches={len(ip_matches)} "
+                    f"active={len(active)} healthy={len(healthy)}"
+                )
+            selected = active[0]
+            reason = "UNIQUE_ACTIVE_PAPER_SERVICE"
     user = (selected.get("app") or {}).get("user")
     app = (selected.get("app") or {}).get("path")
     if not isinstance(user, str) or not USER_RE.fullmatch(user):
@@ -479,14 +491,15 @@ PY
 
 
 def deploy(region: str, stack_name: str, expected_sha: str,
-           expected_tailscale_ip: str, artifact: Path) -> dict[str, Any]:
+           expected_tailscale_ip: str, expected_instance_id: str,
+           artifact: Path) -> dict[str, Any]:
     if region != REGION or not exact_sha(expected_sha):
         raise SsmDeployError("eu-west-2 and exact SHA required")
     # Prove the runner's AWS identity before any remote operation.
     identity = aws_json(region, ["sts", "get-caller-identity"])
     candidates = candidate_instances(region, stack_name)
     probes = probe(region, candidates)
-    selected = select_target(probes, expected_tailscale_ip)
+    selected = select_target(probes, expected_tailscale_ip, expected_instance_id)
     user = selected["app"]["user"]
     artifact_result = upload_artifact(
         region, selected["instance_id"], artifact, expected_sha, user,
@@ -519,6 +532,7 @@ def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--expected-sha", required=True)
     parser.add_argument("--expected-tailscale-ip", default="")
+    parser.add_argument("--expected-instance-id", default="")
     parser.add_argument("--artifact", type=Path, required=True)
     parser.add_argument("--region", default=REGION)
     parser.add_argument("--stack-name", default=STACK)
@@ -527,7 +541,7 @@ def main() -> int:
     try:
         receipt = deploy(
             args.region, args.stack_name, args.expected_sha,
-            args.expected_tailscale_ip, args.artifact,
+            args.expected_tailscale_ip, args.expected_instance_id, args.artifact,
         )
     except (OSError, ValueError, SsmDeployError) as exc:
         parser.exit(2, f"v7_london_ssm_deploy: {exc}\\n")
