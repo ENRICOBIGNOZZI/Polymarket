@@ -5,10 +5,9 @@
   "real_order_submission": false,
   "operation": "health",
   "recipient_certificate": "-----BEGIN CERTIFICATE-----\nMIICzjCCAbYCCQDtDpJf0fxzWTANBgkqhkiG9w0BAQsFADApMScwJQYDVQQDDB5Q\nb2x5bWFya2V0IGxvY2FsIHJlc2VhcmNoIG9ubHkwHhcNMjYwOTIwMTgxODExWhcN\nMjYwOTI3MTgxODExWjApMScwJQYDVQQDDB5Qb2x5bWFya2V0IGxvY2FsIHJlc2Vh\ncmNoIG9ubHkwggEiMA0GCSqGSIb3DQEBAQUAA4IBDwAwggEKAoIBAQCq1BDqKIcq\nLZezKCSJEfdpy1DL0b+9c7wuWDbrn0chiNWkOwqHGlJpuMzN6UhBq7/WqpBMKDkF\n1aog7HV8n7M+w79VTUFOrWnhAouiHt3oRsyjynPWFFpdfa+dxb351jT581Jza0pK\njhzKPygb+O04Xsjh5d8+FyQRE1uipC9DZNdXvziuCyJuC805NN1H3vI64iasnDtJ\n/Qo/3FN+ZfmKx7fMvtS5rcRImEHFY8AhNbphcXOAT7YUaAGZ9s2Y9gdtXn4a+tBE\nMrelHZu3P0pyf6tU9YWLm8vdY/WiFkfxKuIDk9u1JnPC+PWD/xW7SeVKFLLyv0M2\nuxwrSMmljkbzAgMBAAEwDQYJKoZIhvcNAQELBQADggEBAHOhtxwqr3hWBpBIRHmG\n09DjdBkJ1GSkl/fysQhWTCCCldf7YRh60wI6XCgqBjNB8IP1lDbsUvByBwYogjE5\nMXH0DNcu7f4XBJoccjw79dELSmIAPJQ5Cye/Oip5fq45uiEHX/OHtZhPNB2dHOEP\nJ3Mv/o6MrBnUGQ13FSUoXq9RP0Td4ttao9ookoHh2h2Zi3b0FYgVT98oJldkws9N\nrTpUzwAwDkWyRcx26/4Z+ZRTXzxN27YyNSL2na1otgY73rz0UuSm8KsUpg2T6+an\nD+FSoh6c9eB4q/s1W4rsFe4RyaqmNt+S0lnGt7HyJWJQGf+5JDe7WQSLWyISUeWM\n+K0=\n-----END CERTIFICATE-----\n",
-  "request_id": "2026-09-20T19:59:12.407708+00:00",
+  "request_id": "2026-09-20T20:09:48.000000+00:00",
   "start_ms": 1789921800000,
   "end_ms": 1789928951671,
   "include_health": true,
-  "research_reader_public_key": "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIMLrOTkYfXvKUrafkY17IDiXtIp2hSngVzjdl3Vs63Gx polymarket-shf-research-readonly",
-  "verify_one_native_window": true
+  "research_reader_public_key": "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIMLrOTkYfXvKUrafkY17IDiXtIp2hSngVzjdl3Vs63Gx polymarket-shf-research-readonly"
 }
