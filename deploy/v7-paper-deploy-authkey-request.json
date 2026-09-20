@@ -1,0 +1,11 @@
+{
+  "schema": "polymarket_v7_authkey_paper_deploy_request_v1",
+  "version": 1,
+  "request_id": "paper-london-authkey-20260920-86ff9510",
+  "expected_parent_sha": "86ff9510c8407d92e69ce07b221d8925bcaed5e9",
+  "paper_only": true,
+  "authenticated_execution": false,
+  "real_order_submission": false,
+  "cutover_approved": true,
+  "trigger": "GITHUB_TAILSCALE_AUTHKEY_ONE_SHOT"
+}
