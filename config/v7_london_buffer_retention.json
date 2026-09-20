@@ -56,7 +56,7 @@
   "research_epoch_start_wall_ns": 1789921800000000000,
   "account_all_run_files": true,
   "account_sibling_run_archives": true,
-  "hft_active_ingest_max_rows": 10000,
+  "hft_active_ingest_max_rows": 50000,
   "hft_archive_ingest_max_rows": 200000,
   "hft_ingest_budget_seconds": 300
 }

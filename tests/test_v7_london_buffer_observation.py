@@ -173,7 +173,7 @@ class LondonLosslessRetentionTests(unittest.TestCase):
 
     def test_production_archive_catchup_is_cold_path_and_within_service_timeout(self):
         config = self.config()
-        self.assertEqual(config['hft_active_ingest_max_rows'], 10_000)
+        self.assertEqual(config['hft_active_ingest_max_rows'], 50_000)
         self.assertGreater(config['hft_archive_ingest_max_rows'], config['hft_active_ingest_max_rows'])
         self.assertLess(config['hft_ingest_budget_seconds'], 900)
 
