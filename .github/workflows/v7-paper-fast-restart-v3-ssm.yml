@@ -114,10 +114,11 @@ jobs:
           echo V7_FAST_RESTART_V3_OK="$SHA"
           REMOTE
           sed -i "s/__SHA__/$EXPECTED_SHA/g" "$RUNNER_TEMP/remote-fast-restart.sh"
-          REMOTE_CMD="bash -lc $(printf '%q' "$(cat "$RUNNER_TEMP/remote-fast-restart.sh")")"
-          PARAMS="$(python3 - "$REMOTE_CMD" <<'PY'
-          import json,sys
-          print(json.dumps({'commands':[sys.argv[1]], 'executionTimeout':['150']}))
+          PARAMS="$(python3 - "$RUNNER_TEMP/remote-fast-restart.sh" <<'PY'
+          import json, pathlib, sys
+          script=pathlib.Path(sys.argv[1]).read_text(encoding='utf-8')
+          cmd="cat > /tmp/v7_fast_restart_v3.sh <<'__PMV7__'\n"+script+"\n__PMV7__\nbash /tmp/v7_fast_restart_v3.sh"
+          print(json.dumps({'commands':[cmd], 'executionTimeout':['150']}))
           PY
           )"
           CID="$(aws ssm send-command --region eu-west-2 --instance-ids "$LONDON_INSTANCE_ID" --document-name AWS-RunShellScript --parameters "$PARAMS" --comment 'Polymarket V7 PAPER fast restart v3' --query Command.CommandId --output text)"
