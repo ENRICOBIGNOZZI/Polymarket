@@ -269,21 +269,21 @@ jobs:
           echo fast_existing=pre_kill_marker
           cat "$ROOT/control/KILL" || true
           for log in \
-            "$ROOT/public_https_proxy.log" \
-            "$ROOT/external_fair/rtds_monitor.log" \
-            "$ROOT/external_fair/external_assets_supervisor.log" \
-            "$ROOT/research/repricing_book_observer.log" \
-            "$ROOT/universe/collector.log" \
-            "$ROOT/trade_recorder.log" \
-            "$ROOT/ledger_router.log" \
             "$ROOT/native_engine_manager.log" \
             "$ROOT/native_crypto_settlement_engine.log" \
-            "$ROOT/canonical_economics.log"; do
+            "$ROOT/ledger_router.log" \
+            "$ROOT/trade_recorder.log" \
+            "$ROOT/external_fair/external_assets_supervisor.log" \
+            "$ROOT/external_fair/rtds_monitor.log" \
+            "$ROOT/research/repricing_book_observer.log" \
+            "$ROOT/canonical_economics.log" \
+            "$ROOT/universe/collector.log"; do
             echo "fast_existing=pre_log:$log"
             if [[ -f "$log" ]]; then
-              grep -Ei 'traceback|error|fatal|failed|exception|blocker|invalid|missing|terminate|exit' "$log" | tail -n 12 || true
-              echo fast_existing=pre_log_tail
-              tail -n 12 "$log" || true
+              grep -Ei 'traceback|error|fatal|failed|exception|blocker|invalid|missing|terminate|exit' "$log" | tail -n 8 || true
+              echo fast_existing=pre_log_tail_bytes
+              tail -c 1000 "$log" || true
+              echo
             fi
           done
           echo fast_existing=pre_processes
@@ -405,6 +405,8 @@ jobs:
           curl -fsS http://127.0.0.1:3000/api/health >/dev/null
           curl -fsS --get --data-urlencode 'query=up{job="polymarket-v7"}' http://127.0.0.1:9090/api/v1/query | python3 -c 'import json,sys; v=json.load(sys.stdin); r=v.get("data",{}).get("result",[]); assert len(r)==1 and r[0]["value"][1]=="1", v'
           curl -fsS http://127.0.0.1:9108/metrics | grep -E '^polymarket_v7_execution_alive(\{| )' >/dev/null
+          echo fast_existing=post_restart_processes
+          ps -eo pid,ppid,stat,comm,args --sort=pid | grep -E 'v7_|polymarket|paper_v7|python3' | tail -n 120 || true
           echo V7_FAST_RESTART_EXISTING_OK="$SHA"
           ''').replace('__SHA__', sha)
           params=json.dumps({'commands':['bash -lc '+shlex.quote(remote)], 'executionTimeout':['150']})
