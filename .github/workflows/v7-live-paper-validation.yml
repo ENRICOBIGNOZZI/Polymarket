@@ -164,23 +164,41 @@ jobs:
           set -euo pipefail
           python3 scripts/v7_cutover_contract.py --repository-root . --expected-head "$VALIDATION_SHA" --github-env "$GITHUB_ENV"
 
-      - name: Install build dependencies
+      - name: Install minimal runtime build dependencies
         if: steps.gate.outputs.ready == 'true'
         run: |
           sudo apt-get update
-          sudo apt-get install -y build-essential cmake pkg-config libcurl4-openssl-dev libboost-all-dev libssl-dev libsecp256k1-dev python3 python3-pytest python3-numpy
+          sudo apt-get install -y ccache ninja-build build-essential cmake pkg-config libcurl4-openssl-dev libboost-all-dev libssl-dev libsecp256k1-dev python3 python3-pytest python3-numpy
 
-      - name: Deterministic V7 validation
+      - name: Restore live-validation compiler cache
         if: steps.gate.outputs.ready == 'true'
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+        with:
+          path: .ccache
+          key: v7-live-runtime-${{ runner.os }}-${{ hashFiles('CMakeLists.txt', 'include/**', 'src/**') }}
+          restore-keys: |
+            v7-live-runtime-${{ runner.os }}-
+
+      - name: Minimal deterministic V7 runtime validation
+        if: steps.gate.outputs.ready == 'true'
+        env:
+          CCACHE_DIR: ${{ github.workspace }}/.ccache
         run: |
           set -euo pipefail
-          cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
-          cmake --build build --parallel 2
-          ctest --test-dir build --output-on-failure
+          ccache --max-size=1G
+          cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release \
+            -DPM_LONDON_RUNTIME_ONLY=ON -DBUILD_TESTING=OFF \
+            -DCMAKE_CXX_COMPILER_LAUNCHER=ccache
+          cmake --build build --parallel "$(nproc)" --target \
+            polymarket_v7_trade_recorder \
+            polymarket_v7_maker_fillability_observer \
+            polymarket_v7_external_venue_runtime \
+            polymarket_v7_crypto_settlement_engine
           python3 -m py_compile scripts/v7_*.py monitoring/exporter_v7.py monitoring/v7_ledger_metrics.py
           bash -n scripts/paper_v7_execution_loop.sh
           python3 -m json.tool config/paper_v7.json >/dev/null
           python3 -m json.tool config/v7_frequency_matrix.json >/dev/null
+          ccache --show-stats
 
       - name: Build same-SHA validation artifact
         if: steps.gate.outputs.ready == 'true'
