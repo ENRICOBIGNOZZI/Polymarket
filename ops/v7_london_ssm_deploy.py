@@ -471,7 +471,7 @@ sudo -u "$SERVICE_USER" -H python3 -c 'import numpy' >/dev/null
 # in /tmp. Give every exact SHA a fresh private temporary root owned by the
 # service user so C++ std::filesystem::temp_directory_path() and Python
 # tempfile cannot collide with stale/root-owned artifacts.
-STAGE_TMPDIR="$WORKTREE_PARENT/tmp-$SHA"
+STAGE_TMPDIR="/var/tmp/pmv7-${SHA:0:12}"
 rm -rf -- "$STAGE_TMPDIR"
 install -d -m 0700 -o "$SERVICE_USER" -g "$SERVICE_GROUP" "$STAGE_TMPDIR"
 
