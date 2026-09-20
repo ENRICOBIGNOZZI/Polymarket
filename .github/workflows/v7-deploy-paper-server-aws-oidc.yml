@@ -262,6 +262,24 @@ jobs:
           ROOT="$(systemctl show "$UNIT" -p Environment --value | python3 -c 'import shlex,sys; print(next((x.split("=",1)[1] for x in shlex.split(sys.stdin.read()) if x.startswith("PM_V7_RUN_ROOT=")), ""))')"
           [[ -n "$APP_DIR" && "$APP_DIR" == /* && -n "$ROOT" && "$ROOT" == /* ]]
 
+          echo fast_existing=pre_supervisor_status
+          cat "$ROOT/control/supervisor_status.json" || true
+          echo fast_existing=pre_runtime_status
+          cat "$ROOT/control/runtime_status.json" || true
+          echo fast_existing=pre_kill_marker
+          cat "$ROOT/control/KILL" || true
+          for log in \
+            "$ROOT/public_https_proxy.log" \
+            "$ROOT/external_fair/rtds_monitor.log" \
+            "$ROOT/external_fair/external_assets_supervisor.log" \
+            "$ROOT/universe/collector.log" \
+            "$ROOT/trade_recorder.log" \
+            "$ROOT/ledger_router.log" \
+            "$ROOT/native_engine_manager.log"; do
+            echo "fast_existing=pre_log:$log"
+            tail -n 80 "$log" 2>/dev/null || true
+          done
+
           if systemctl is-active --quiet "$UNIT" && python3 - "$ROOT/control/runtime_status.json" "$SHA" <<'PYHEALTH'
           import json,os,sys,time
           from pathlib import Path
