@@ -1,7 +1,8 @@
 {
   "schema": "v7_branch_consolidation_request_v1",
   "version": 1,
-  "mode": "audit",
+  "mode": "prepare",
   "keep_branch": "main",
-  "requested_at": "2026-09-20"
+  "requested_at": "2026-09-20",
+  "request_id": "one-branch-prepare-20260920-1"
 }
