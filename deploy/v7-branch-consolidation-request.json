@@ -1,8 +1,0 @@
-{
-  "schema": "v7_branch_consolidation_request_v1",
-  "version": 1,
-  "mode": "delete",
-  "keep_branch": "main",
-  "requested_at": "2026-09-20",
-  "request_id": "one-branch-delete-20260920-1"
-}
