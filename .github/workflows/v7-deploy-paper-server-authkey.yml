@@ -67,7 +67,6 @@ jobs:
           version: 1.94.2
           statedir: ''
           hostname: gh-authkey-deploy-${{ github.run_id }}-${{ github.run_attempt }}
-          ping: ${{ env.SERVER_HOST }}
 
       - name: Configure SSH
         shell: bash
