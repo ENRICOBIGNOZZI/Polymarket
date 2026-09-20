@@ -42,7 +42,7 @@
     {
       "id": 76,
       "type": "stat",
-      "title": "Prometheus Scrape",
+      "title": "Exporter",
       "gridPos": {
         "h": 4,
         "w": 8,
@@ -158,7 +158,7 @@
     {
       "id": 78,
       "type": "stat",
-      "title": "Exporter Snapshot Age",
+      "title": "Data age",
       "gridPos": {
         "h": 4,
         "w": 8,
@@ -2663,6 +2663,6 @@
   "timezone": "browser",
   "title": "Polymarket V7 Multi-Crypto Performance & Runtime",
   "uid": "polymarket-v7-multi-crypto",
-  "version": 9,
+  "version": 10,
   "description": "PAPER economic performance plus native runtime and data-plane health. Live telemetry remains visible when freshness gates hide stale economic panels; missing economic series are never interpreted as zeros."
 }
