@@ -254,6 +254,9 @@ jobs:
           SHA="__SHA__"
           UNIT="polymarket-v7-paper.service"
           EXPORTER="polymarket-v7-exporter.service"
+          echo fast_existing=pre_restart_status
+          systemctl status "$UNIT" --no-pager -l || true
+          journalctl -u "$UNIT" -n 120 --no-pager || true
           echo fast_existing=restart_begin
           systemctl reset-failed "$UNIT" || true
           systemctl reset-failed "$EXPORTER" || true
@@ -299,7 +302,18 @@ jobs:
           if int(time.time())-int(safe.get('timestamp') or 0)>180:
               raise SystemExit('runtime_status_stale '+json.dumps(safe,sort_keys=True))
           PYREMOTE
-          python3 /tmp/v7_fast_existing_check.py "$ROOT" "$SHA"
+          if ! python3 /tmp/v7_fast_existing_check.py "$ROOT" "$SHA"; then
+            echo fast_existing=runtime_check_failed
+            echo fast_existing=supervisor_status
+            cat "$ROOT/control/supervisor_status.json" || true
+            echo fast_existing=runtime_status
+            cat "$ROOT/control/runtime_status.json" || true
+            echo fast_existing=systemd_status
+            systemctl status "$UNIT" --no-pager -l || true
+            echo fast_existing=journal
+            journalctl -u "$UNIT" -n 220 --no-pager || true
+            exit 21
+          fi
           echo fast_existing=metrics
           curl -fsS http://127.0.0.1:9090/-/ready >/dev/null
           curl -fsS http://127.0.0.1:3000/api/health >/dev/null
