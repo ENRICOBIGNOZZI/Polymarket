@@ -91,6 +91,8 @@ Published research results live under [`docs/research`](docs/research/). The
 first recent-data PAPER backtest, including its PNG charts, frozen parameters
 and reproducibility receipts, is in
 [`docs/research/simple-backtest-2026-09-20`](docs/research/simple-backtest-2026-09-20/REPORT.md).
+The causal expanding-window successor is published in
+[`docs/research/historical-walk-forward-v2-2026-09-21`](docs/research/historical-walk-forward-v2-2026-09-21/REPORT.md).
 
 ## Live crypto components
 
