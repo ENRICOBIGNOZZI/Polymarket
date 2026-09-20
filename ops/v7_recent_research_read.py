@@ -82,6 +82,36 @@ print('RETENTION_NORMALIZED_PATH_REPAIRED')
 '''
         output,_=run(REGION,'i-0fba2bac9fdc5cbeb','python3 -c '+shlex.quote(repair),60)
         print(output.strip())
+    if req.get('verify_one_native_window') is True:
+        verify = r'''
+import json,sys,subprocess
+from pathlib import Path
+app=subprocess.check_output(['systemctl','show','polymarket-v7-retention.service','-p','WorkingDirectory','--value'],text=True).strip()
+sys.path.insert(0,str(Path(app)/'monitoring'))
+from v7_hft_windows import Windows
+root=Path('/mnt/polymarket-data/paper_v7_london_1c47b4e8')
+runtime=json.loads((root/'control/runtime_status.json').read_bytes())
+assert runtime['paper_only'] is True and runtime['real_order_submission'] is False and runtime['authenticated_execution'] is False
+store=Windows(root,1789921800000000000)
+try:
+ for name,offset in store.db.execute('SELECT path,offset FROM sources ORDER BY path'):
+  path=Path(name) if Path(name).is_absolute() else root/name
+  closure=Path(str(path)+'.closed.json')
+  if not closure.exists():continue
+  meta=json.loads(closure.read_bytes())
+  if not (meta.get('healthy') is True and meta.get('closed') is True and meta.get('bytes')==offset and offset<8000000):continue
+  if not path.exists():path=Path(str(path)+'.gz')
+  if not path.exists():continue
+  proof=store.preserve(path)
+  print('NATIVE_WINDOW_VERIFIED='+json.dumps({k:v for k,v in proof.items() if k.endswith('sha256') or k in ('source_records','selected_records','replayable')}));break
+ else:print('NATIVE_WINDOW_VERIFICATION_PENDING_CLOSED_INDEXED_SOURCE')
+finally:store.close()
+'''
+        # Run as the collector owner: research objects must remain writable by
+        # the existing cold worker. This audit never deletes a source.
+        output,_=run(REGION,'i-0fba2bac9fdc5cbeb',
+            'sudo -u ubuntu nice -n 15 python3 -c '+shlex.quote(verify),60)
+        print(output.strip())
     command='nice -n 15 python3 -c '+shlex.quote(source)
     stdout,_=run(REGION,'i-0fba2bac9fdc5cbeb',command,120)
     lines=[line for line in stdout.splitlines() if line.startswith('ENCRYPTED_RESEARCH=')]
