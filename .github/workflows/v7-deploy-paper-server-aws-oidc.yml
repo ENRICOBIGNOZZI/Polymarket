@@ -19,6 +19,7 @@ on:
 
 permissions:
   contents: read
+  checks: read
   id-token: write
 
 concurrency:
@@ -93,6 +94,7 @@ jobs:
         shell: bash
         env:
           EXPECTED_SHA: ${{ steps.request.outputs.expected_sha }}
+          GITHUB_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
           test "$(git rev-parse HEAD)" = "$EXPECTED_SHA"
