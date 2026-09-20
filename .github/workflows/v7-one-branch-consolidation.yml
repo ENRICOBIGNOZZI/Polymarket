@@ -11,56 +11,68 @@ permissions:
 
 concurrency:
   group: v7-one-branch-consolidation
-  cancel-in-progress: true
+  cancel-in-progress: false
 
 jobs:
-  audit:
+  consolidate:
     runs-on: ubuntu-24.04
-    timeout-minutes: 12
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
           fetch-depth: 0
-      - name: Audit every remote branch against main
+      - name: Consolidate branch history or delete merged refs
         shell: bash
         run: |
           set -euo pipefail
+          REQUEST=deploy/v7-branch-consolidation-request.json
           git fetch --prune origin '+refs/heads/*:refs/remotes/origin/*'
-          python3 - <<'PY'
-          import json, subprocess
-          def run(*args):
-              return subprocess.check_output(args, text=True).strip()
-          branches=[x.strip() for x in run("git","for-each-ref","--format=%(refname:short)","refs/remotes/origin").splitlines()
-                    if x.strip() and x.strip()!="origin/main" and not x.strip().endswith("/HEAD")]
-          unique=[]
-          integrated=[]
-          for ref in branches:
-              name=ref.removeprefix("origin/")
-              cherry=subprocess.run(["git","cherry","origin/main",ref],text=True,capture_output=True,check=True).stdout.splitlines()
-              plus=[x for x in cherry if x.startswith("+ ")]
-              if not plus:
-                  integrated.append(name)
-                  continue
-              commits=[]
-              for row in plus:
-                  sha=row.split()[1]
-                  meta=run("git","show","-s","--format=%H%x09%cI%x09%s",sha).split("\t",2)
-                  commits.append({"sha":meta[0],"date":meta[1],"subject":meta[2]})
-              files=run("git","diff","--name-only","origin/main..."+ref).splitlines()
-              unique.append({"branch":name,"unique_patch_count":len(plus),"commits":commits,"files":files})
-          out={"schema":"v7_branch_consolidation_audit_v1","total_remote_branches":len(branches)+1,
-               "main":"main","integrated_or_patch_equivalent":sorted(integrated),
-               "unique_branches":sorted(unique,key=lambda x:x["branch"])}
-          open("branch-consolidation-audit.json","w").write(json.dumps(out,indent=2)+"\n")
-          print("TOTAL_BRANCHES="+str(out["total_remote_branches"]))
-          print("INTEGRATED_OR_EQUIVALENT="+str(len(integrated)))
-          print("UNIQUE_BRANCHES="+str(len(unique)))
-          for row in unique:
-              latest=max((c["date"] for c in row["commits"]),default="")
-              print(f'UNIQUE {row["branch"]} patches={row["unique_patch_count"]} latest={latest} files={len(row["files"])}')
+          mode="$(python3 - "$REQUEST" <<'PY'
+          import json,sys
+          v=json.load(open(sys.argv[1],encoding='utf-8'))
+          assert v.get('schema')=='v7_branch_consolidation_request_v1'
+          assert v.get('version')==1
+          assert v.get('keep_branch')=='main'
+          assert v.get('mode') in {'prepare','delete'}
+          print(v['mode'])
           PY
-      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
-        with:
-          name: v7-branch-consolidation-audit
-          path: branch-consolidation-audit.json
-          retention-days: 2
+          )"
+          git config user.name "polymarket-branch-consolidator"
+          git config user.email "actions@users.noreply.github.com"
+          mapfile -t branches < <(git for-each-ref --format='%(refname:short)' refs/remotes/origin \
+            | sed 's#^origin/##' | grep -v '^main$' | grep -v '^HEAD$' | sort -u)
+          echo "REMOTE_NON_MAIN_COUNT=${#branches[@]}"
+          if [[ "$mode" == prepare ]]; then
+            mapfile -t refs < <(printf '%s\n' "${branches[@]}" | sed 's#^#origin/#')
+            if (( ${#refs[@]} > 0 )); then
+              git merge -s ours --no-edit --no-ff "${refs[@]}"
+            fi
+            merge_sha="$(git rev-parse HEAD)"
+            echo "PREPARED_MERGE_SHA=$merge_sha"
+            echo "PREPARED_TREE_SHA=$(git rev-parse HEAD^{tree})"
+            echo "BASE_TREE_SHA=$(git rev-parse HEAD^1^{tree})"
+            test "$(git rev-parse HEAD^{tree})" = "$(git rev-parse HEAD^1^{tree})"
+            git push --force origin HEAD:refs/heads/__one_branch_consolidation_tmp
+            exit 0
+          fi
+
+          # Destructive phase is fail-closed: every branch tip must already be
+          # reachable from main before its ref can be deleted.
+          git fetch origin main
+          bad=0
+          for b in "${branches[@]}"; do
+            if ! git merge-base --is-ancestor "origin/$b" origin/main; then
+              echo "NOT_MERGED=$b" >&2
+              bad=1
+            fi
+          done
+          test "$bad" = 0
+          if (( ${#branches[@]} > 0 )); then
+            git push origin --delete "${branches[@]}"
+          fi
+          git fetch --prune origin
+          mapfile -t remaining < <(git for-each-ref --format='%(refname:short)' refs/remotes/origin \
+            | sed 's#^origin/##' | grep -v '^HEAD$' | sort -u)
+          printf 'REMAINING_BRANCH=%s\n' "${remaining[@]}"
+          test "${#remaining[@]}" = 1
+          test "${remaining[0]}" = main
