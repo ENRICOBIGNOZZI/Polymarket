@@ -289,17 +289,36 @@ p=json.loads((root/'control/runtime_resource_plan.json').read_text())
 assert r.get('state')=='running' and r.get('model_sha')==sha
 assert r.get('paper_only') is True and r.get('authenticated_execution') is False and r.get('real_order_submission') is False
 assert set(r.get('economic_engines') or [])=={'CRYPTO_SETTLEMENT_ENGINE'}
+assert r.get('economic_new_risk_ready') is False
+assert r.get('authorized_alpha_actions') in (None, [])
 assert a.get('target_model_sha')==sha and a.get('runtime_training') is False
 assert p.get('runtime_training') is False and p.get('retrospective_analytics') is False
 pid=int(r.get('pid') or 0); assert pid>0; os.kill(pid,0)
 assert int(time.time())-int(r.get('timestamp') or 0)<=30
 PY
   then
-    if curl -fsS http://127.0.0.1:9108/healthz >/dev/null 2>&1; then ready=1; break; fi
+    if metrics="$(curl -fsS http://127.0.0.1:9108/metrics 2>/dev/null)"; then
+      core_metrics_ready=1
+      for expected_metric in         'polymarket_v7_execution_alive 1'         'polymarket_v7_single_writer_ok 1'         'polymarket_v7_exact_sha_ok 1'         'polymarket_v7_paper_only_contract_ok 1'         'polymarket_v7_authenticated_execution_disabled 1'         'polymarket_v7_native_engine_mode 1'         'polymarket_v7_economic_new_risk_ready 0'; do
+        grep -Fxq "$expected_metric" <<<"$metrics" || { core_metrics_ready=0; break; }
+      done
+      if [[ "$core_metrics_ready" == 1 ]]; then
+        ready=1
+        break
+      fi
+    fi
   fi
   sleep 1
 done
-[[ "$ready" == 1 ]] || { echo "London PAPER runtime health gate failed" >&2; exit 70; }
+[[ "$ready" == 1 ]] || { echo "London PAPER core runtime health gate failed" >&2; exit 70; }
+
+# Full exporter health deliberately includes data-plane completeness (30/60 PM
+# book coverage, all external assets, retention, etc.). Those are observable
+# readiness conditions, not permission to keep the PAPER core stopped. New risk
+# remains fail-closed above. Preserve the full health result as deployment
+# evidence without conflating it with core process/safety liveness.
+exporter_health_payload="$(curl -sS http://127.0.0.1:9108/healthz 2>/dev/null || true)"
+printf 'exporter_full_health=%s\n' "$exporter_health_payload"
 
 # Prometheus must actually scrape the asynchronous V7 exporter. Do not infer
 # monitoring truth from process liveness alone.
