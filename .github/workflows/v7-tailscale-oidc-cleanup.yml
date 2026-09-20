@@ -17,7 +17,7 @@ jobs:
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
-          ref: ops/v7-tailscale-oidc-cleanup-20260920
+          ref: main
           fetch-depth: 0
 
       - name: Validate cleanup request against canonical main
@@ -68,7 +68,10 @@ jobs:
           print(token)
           PY
           )"
-          response="$(curl -fsS -X POST 'https://api.tailscale.com/api/v2/oauth/token-exchange'             -H 'Content-Type: application/x-www-form-urlencoded'             --data-urlencode "client_id=$CLIENT_ID"             --data-urlencode "jwt=$jwt")"
+          response="$(curl -fsS -X POST 'https://api.tailscale.com/api/v2/oauth/token-exchange' \
+            -H 'Content-Type: application/x-www-form-urlencoded' \
+            --data-urlencode "client_id=$CLIENT_ID" \
+            --data-urlencode "jwt=$jwt")"
           access="$(python3 -c 'import json,sys; v=json.load(sys.stdin); print(v["access_token"])' <<<"$response")"
           test -n "$access"
           echo "::add-mask::$access"
@@ -82,7 +85,9 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          python3 scripts/v7_tailscale_oidc_cleanup.py             --request deploy/v7-tailscale-cleanup-request.json             --token "$TS_ACCESS_TOKEN"
+          python3 scripts/v7_tailscale_oidc_cleanup.py \
+            --request deploy/v7-tailscale-cleanup-request.json \
+            --token "$TS_ACCESS_TOKEN"
 
       - name: Clear short-lived Tailscale token
         if: always()
