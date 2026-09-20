@@ -272,7 +272,10 @@ def test_main_writes_receipt_as_one_valid_json_document(tmp_path, monkeypatch):
     receipt = {
         "schema": "polymarket_v7_ssm_deploy_receipt_v1",
         "expected_sha": SHA,
-        "selected": {"instance_id": "i-123abc"},
+        "selected": {
+            "instance_id": "i-123abc",
+            "selection_reason": "EXACT_INSTANCE_ID",
+        },
     }
     monkeypatch.setattr(m, "deploy", lambda *args, **kwargs: receipt)
     monkeypatch.setattr(sys, "argv", [
