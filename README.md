@@ -87,6 +87,11 @@ replay identities.
 Training, hyperparameter search, historical backtests, notebooks, plots and
 retrospective research are not part of the trading hot path.
 
+Published research results live under [`docs/research`](docs/research/). The
+first recent-data PAPER backtest, including its PNG charts, frozen parameters
+and reproducibility receipts, is in
+[`docs/research/simple-backtest-2026-09-20`](docs/research/simple-backtest-2026-09-20/REPORT.md).
+
 ## Live crypto components
 
 ### Settlement fair / informed taker
