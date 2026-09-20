@@ -28,6 +28,10 @@ def fixture():
     }
 
 
+def is_independent_live_exporter_telemetry(expr: str) -> bool:
+    return expr.startswith('max(up{job="polymarket-v7"') or expr.startswith('up{job="polymarket-v7"')
+
+
 class OperatorTruthTests(unittest.TestCase):
     def test_missing_nan_and_infinite_are_not_zero(self):
         for value in (None, "bad", math.nan):
@@ -135,14 +139,15 @@ class DashboardTruthTests(unittest.TestCase):
                         self.assertTrue(t["instant"])
                         self.assertFalse(t["range"])
                 for t in p.get("targets", []):
-                    self.assertIn('job="polymarket-v7"', t["expr"])
+                    expr = t["expr"]
+                    self.assertIn('job="polymarket-v7"', expr)
                     if global_instance_surface:
-                        self.assertIn('instance=~".+"', t["expr"])
-                        self.assertNotIn('$instance', t["expr"])
+                        self.assertIn('instance=~".+"', expr)
+                        self.assertNotIn('$instance', expr)
                     else:
-                        self.assertIn('instance="$instance"', t["expr"])
-                    if p.get("title") not in {"Data age", "Exporter"} and not t["expr"].startswith("ALERTS"):
-                        self.assertIn("polymarket_v7_exporter_snapshot_usable", t["expr"])
+                        self.assertIn('instance="$instance"', expr)
+                    if p.get("title") not in {"Data age", "Exporter"} and not expr.startswith("ALERTS") and not is_independent_live_exporter_telemetry(expr):
+                        self.assertIn("polymarket_v7_exporter_snapshot_usable", expr)
                 if p["type"] == "timeseries":
                     self.assertIs(p["fieldConfig"]["defaults"]["custom"]["spanNulls"], False)
 
