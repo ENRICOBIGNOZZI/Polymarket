@@ -171,3 +171,95 @@ def test_probe_command_is_read_only():
         assert forbidden not in command
     assert "systemctl','is-active" in command
     assert "tailscale','ip','-4" in command
+
+def test_transport_target_sha_extracts_exact_cutover_sha():
+    old = "b" * 40
+    command = {
+        "Parameters": {
+            "commands": [
+                f"bash -lc 'set -euo pipefail; SHA={old}; echo x'"
+            ],
+        },
+    }
+    assert m._transport_target_sha(command) == old
+    assert m._transport_target_sha({"Parameters": {"commands": ["echo no-sha"]}}) is None
+
+
+def test_cancel_prior_deploy_transports_cancels_only_proven_older_sha(monkeypatch):
+    old = "b" * 40
+    cancelled = []
+
+    def fake_aws(region, args):
+        if args[:2] == ["ssm", "list-commands"]:
+            return {
+                "Commands": [
+                    {
+                        "Comment": m.DEPLOY_COMMENT,
+                        "Status": "InProgress",
+                        "CommandId": "cmd-old",
+                        "Parameters": {
+                            "commands": [f"bash -lc 'SHA={old}; echo old'"],
+                        },
+                    },
+                    {
+                        "Comment": "unrelated",
+                        "Status": "InProgress",
+                        "CommandId": "cmd-other",
+                        "Parameters": {"commands": [f"SHA={old}"]},
+                    },
+                ],
+            }
+        if args[:2] == ["ssm", "cancel-command"]:
+            cancelled.append(tuple(args))
+            return {}
+        raise AssertionError(args)
+
+    monkeypatch.setattr(m, "aws_json", fake_aws)
+    monkeypatch.setattr(
+        m, "wait",
+        lambda region, instance, command_id, timeout_s, poll_s: {"Status": "Cancelled"},
+    )
+    recovered = m.cancel_prior_deploy_transports("eu-west-2", "i-123abc", SHA)
+    assert recovered == [{
+        "command_id": "cmd-old",
+        "target_sha": old,
+        "final_status": "Cancelled",
+    }]
+    assert len(cancelled) == 1
+    assert "cmd-old" in cancelled[0]
+
+
+def test_cancel_prior_deploy_transports_refuses_same_sha(monkeypatch):
+    def fake_aws(region, args):
+        assert args[:2] == ["ssm", "list-commands"]
+        return {
+            "Commands": [{
+                "Comment": m.DEPLOY_COMMENT,
+                "Status": "InProgress",
+                "CommandId": "cmd-current",
+                "Parameters": {
+                    "commands": [f"bash -lc 'SHA={SHA}; echo current'"],
+                },
+            }],
+        }
+
+    monkeypatch.setattr(m, "aws_json", fake_aws)
+    with pytest.raises(m.SsmDeployError, match="same-SHA"):
+        m.cancel_prior_deploy_transports("eu-west-2", "i-123abc", SHA)
+
+
+def test_cancel_prior_deploy_transports_refuses_unknown_transport(monkeypatch):
+    def fake_aws(region, args):
+        assert args[:2] == ["ssm", "list-commands"]
+        return {
+            "Commands": [{
+                "Comment": m.DEPLOY_COMMENT,
+                "Status": "InProgress",
+                "CommandId": "cmd-unknown",
+                "Parameters": {"commands": ["bash -lc 'echo no-target'"]},
+            }],
+        }
+
+    monkeypatch.setattr(m, "aws_json", fake_aws)
+    with pytest.raises(m.SsmDeployError, match="cannot prove"):
+        m.cancel_prior_deploy_transports("eu-west-2", "i-123abc", SHA)
