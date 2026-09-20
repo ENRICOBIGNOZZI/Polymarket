@@ -54,6 +54,14 @@ namespace {
     return true;
 }
 
+[[nodiscard]] bool exact_hex64(const std::string& value) noexcept {
+    if (value.size() != 64) return false;
+    for (const char ch : value) {
+        if (!((ch >= '0' && ch <= '9') || (ch >= 'a' && ch <= 'f'))) return false;
+    }
+    return true;
+}
+
 constexpr std::string_view kMakerExecutionSemantics =
     "maker-paper-v7.2-bilateral-inventory";
 
@@ -145,7 +153,7 @@ bool NativeRuntimeEvidenceConfig::valid() const noexcept {
         && close_wall_ns > 0 && std::isfinite(taker_fee_rate) && taker_fee_rate >= 0.0
         && std::isfinite(taker_fee_exponent) && taker_fee_exponent >= 0.0
         && taker_maximum_entry_price_e4 > 0 && taker_maximum_entry_price_e4 <= 10'000
-        && (signal_policy_sha256.empty() || exact_sha(signal_policy_sha256))
+        && (signal_policy_sha256.empty() || exact_hex64(signal_policy_sha256))
         && (observation_capture_mode == "NONE"
             || observation_capture_mode == "DECISIONS"
             || observation_capture_mode == "DECISION_WINDOWS"
