@@ -22,6 +22,13 @@ not reconstructed or converted into an assumed fill. Raw L2 deltas still need
 a preceding venue snapshot for full-depth replay; normalized L1 events are
 self-contained.
 
+An active append-only source is caught up when its first unread complete record
+is within a 30-second local-receive lag. This permits continuous collection
+without treating every live tail as a historical failure. An unread older
+record, an unknown/partial schema, or a time-budget interruption remains an
+explicit backlog and blocks a new daily fit. At midnight, eligible inputs are
+therefore required to be materially older than this small ingestion lag.
+
 The user-authorized history reset is fixed at 2026-09-20 16:30 UTC. This is an
 epoch boundary, not a daily rolling filter. Subsequent compact history and
 opportunity windows are permanent. General raw retention is based on measured
