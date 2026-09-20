@@ -35,6 +35,7 @@ jobs:
       AWS_DEFAULT_REGION: eu-west-2
       ROLE_ARN: arn:aws:iam::350769147128:role/PolymarketLondonPaperDeployPolicy
       SERVER_HOST: ${{ vars.POLYMARKET_SERVER_HOST || '100.104.183.109' }}
+      LONDON_INSTANCE_ID: ${{ vars.POLYMARKET_LONDON_INSTANCE_ID || 'i-0fba2bac9fdc5cbeb' }}
       EXPECTED_DEPLOY_SHA: ${{ inputs.expected_sha }}
       REQUEST_PATH: deploy/v7-paper-deploy-aws-oidc-request.json
     steps:
@@ -122,6 +123,7 @@ jobs:
           python3 ops/v7_london_ssm_deploy.py \
             --expected-sha "$EXPECTED_SHA" \
             --expected-tailscale-ip "$SERVER_HOST" \
+            --expected-instance-id "$LONDON_INSTANCE_ID" \
             --artifact "$artifact_tgz" \
             --region eu-west-2 \
             --output "$receipt" | tee -a deploy-evidence.txt
