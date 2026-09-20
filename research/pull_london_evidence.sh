@@ -8,7 +8,15 @@ if [[ "${PM_V7_RESEARCH_HFT_ONLY:-false}" == true ]]; then
   KEY="${PM_V7_RESEARCH_SSH_KEY:?PM_V7_RESEARCH_SSH_KEY required}"
   # The remote authorized key is a forced sender for this exact evidence path.
   # No upload receipt, deletion, model activation or remote shell is available.
-  export RSYNC_RSH="ssh -i $KEY -o IdentitiesOnly=yes -o BatchMode=yes -o ConnectTimeout=10"
+  KNOWN_HOSTS="${PM_V7_RESEARCH_KNOWN_HOSTS:?PM_V7_RESEARCH_KNOWN_HOSTS required}"
+  export RSYNC_RSH
+  RSYNC_RSH="$(python3 - "$KEY" "$KNOWN_HOSTS" <<'PY'
+import shlex,sys
+print(shlex.join(['ssh','-i',sys.argv[1],'-o','UserKnownHostsFile='+sys.argv[2],
+                  '-o','IdentitiesOnly=yes','-o','StrictHostKeyChecking=yes',
+                  '-o','BatchMode=yes','-o','ConnectTimeout=10']))
+PY
+)"
   rsync -rt --timeout=60 --partial-dir=.rsync-partial \
     --exclude='index.sqlite*' --exclude='*.tmp' --exclude='.writing-*' \
     "$USER@$REMOTE:$REMOTE_ROOT/research/hft_permanent/" "$LOCAL_ROOT/current/"

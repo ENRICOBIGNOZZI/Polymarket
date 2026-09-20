@@ -73,6 +73,26 @@ def fit_with_calibration(family, rows, stop, params, policy):
                                 "calibration_market_sha256": digest(canonical(sorted({r["market_id"] for r in cal})))}
 
 
+def history_diagnostic(family, development, audit, audit_start, params, policy, expanding_score):
+    """One fixed 30-day comparison after primary selection, never a selector."""
+    start=audit_start-30*DAY
+    starts={}
+    for row in development: starts[row['market_id']]=min(starts.get(row['market_id'],row['decision_ns']),row['decision_ns'])
+    recent=[r for r in development if starts[r['market_id']]>=start]
+    result={'state':'INSUFFICIENT_OLDER_HISTORY','recent_days':30,'selection_impact':'NONE',
+            'expanding_rows':len(development),'recent_rows':len(recent)}
+    if len(recent)==len(development) or len({r['market_id'] for r in recent})<30:
+        return result
+    try:
+        model,cal,_=fit_with_calibration(family,recent,audit_start,params,policy)
+        score=metrics(audit,calibrated(model.predict(audit),cal))
+        result.update(state='DIAGNOSTIC_ONLY',expanding=expanding_score,recent=score,
+                      recent_log_loss_better=score['log_loss']<expanding_score['log_loss'])
+    except (ValueError,RuntimeError,Warning) as exc:
+        result.update(state='INSUFFICIENT_RECENT_SUPPORT',reason=str(exc))
+    return result
+
+
 def train_stratum(rows, manifest, output, *, policy=None):
     policy = dict(DEFAULT_POLICY if policy is None else policy)
     if any(policy.get(k) != v for k, v in SAFETY.items()):
@@ -141,6 +161,7 @@ def train_stratum(rows, manifest, output, *, policy=None):
             report.update(selected_forecaster=winner, audit=score, audit_pm=baseline,
                           final_fit=fitting, final_inner_search=search,
                           uncertainty=paired_block_uncertainty(audit, predicted, [r["pm_probability"] for r in audit]))
+            report['history_diagnostic']=history_diagnostic(winner,development,audit,audit_start,params,policy,score)
             report["stability"] = {}
             for key in ("asset", "horizon"):
                 report["stability"][key] = {value: metrics([r for r in audit if r[key] == value],

@@ -9,14 +9,16 @@ import sys
 
 def sender_args(command, root):
     args=shlex.split(command)
-    if len(args)!=6 or args[:3]!=['rsync','--server','--sender'] or args[4]!='.':
+    if len(args)<6 or args[:3]!=['rsync','--server','--sender'] or args[-2]!='.':
         raise ValueError('ONLY_FIXED_RESEARCH_RSYNC_SENDER_ALLOWED')
-    if not re.fullmatch(r'-[A-Za-z.]+',args[3]) or any(c in args[3].split('e.')[0] for c in 'LKks'):
-        raise ValueError('UNSUPPORTED_RSYNC_OPTIONS')
+    for option in args[3:-2]:
+        if option=='--dirs': continue  # macOS openrsync uses separate flags.
+        if not re.fullmatch(r'-[A-Za-z.]+',option) or any(c in option.split('e.')[0] for c in 'LKks'):
+            raise ValueError('UNSUPPORTED_RSYNC_OPTIONS')
     root=Path(root).resolve()
-    if root.name!='hft_permanent' or root.parent.name!='research' or args[5].rstrip('/')!=str(root):
+    if root.name!='hft_permanent' or root.parent.name!='research' or args[-1].rstrip('/')!=str(root):
         raise ValueError('ONLY_FIXED_RESEARCH_PATH_ALLOWED')
-    return ['/usr/bin/rsync','--server','--sender',args[3],'.',str(root)+'/']
+    return ['/usr/bin/rsync','--server','--sender',*args[3:-2],'.',str(root)+'/']
 
 
 if __name__=='__main__':

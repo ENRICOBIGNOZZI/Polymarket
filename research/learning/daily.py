@@ -90,8 +90,12 @@ def run(root, *, now=None, train_fn=None):
                 result = "NO_NEW_TRAINING_INFORMATION"
             else:
                 if train_fn is None:
-                    from .train import train_stratum
-                    train_fn = train_stratum
+                    from functools import partial
+                    from .train import DEFAULT_POLICY, train_stratum
+                    # Use the existing trainer with an expanding-history policy.
+                    # The hard recent-window alternative is diagnostic only.
+                    policy={**DEFAULT_POLICY,'weightings':[w for w in DEFAULT_POLICY['weightings'] if w!='recent']}
+                    train_fn = partial(train_stratum, policy=policy)
                 strata = defaultdict(list)
                 for row in rows:
                     strata[row["stratum"]].append(row)

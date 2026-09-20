@@ -144,6 +144,15 @@ print('RESEARCH_READER='+json.dumps({'user':user,'root':str(root/'research/hft_p
 '''
     stdout,_=run(REGION,'i-0fba2bac9fdc5cbeb','python3 -c '+shlex.quote(code),60)
     print(next(line for line in stdout.splitlines() if line.startswith('RESEARCH_READER=')))
+    if req.get('include_health') is True:
+        import tempfile
+        req['operation']='health'
+        with tempfile.TemporaryDirectory() as folder:
+            path=Path(folder)/'request.json';path.write_text(json.dumps(req))
+            original=sys.argv[1];sys.argv[1]=str(path)
+            try:main()
+            finally:sys.argv[1]=original
+
 
 
 def prune_pre_epoch(request_path):

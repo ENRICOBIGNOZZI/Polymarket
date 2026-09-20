@@ -16,6 +16,11 @@ from xml.sax.saxutils import escape
 src,dst,root,host,user,home,research,python=sys.argv[1:]
 s=Path(src).read_text()
 for k,v in {'@APP_DIR@':root,'@LONDON_HOST@':host,'@LONDON_USER@':user,'@HOME@':home,'@RESEARCH_ROOT@':research,'@PYTHON@':python}.items(): s=s.replace(k,escape(v))
+extra=''
+for name in ('POLYMARKET_LONDON_RUN_ROOT','PM_V7_RESEARCH_SYNC_ROOT','PM_V7_RESEARCH_HFT_ONLY',
+             'PM_V7_RESEARCH_SSH_KEY','PM_V7_RESEARCH_KNOWN_HOSTS'):
+ if name in os.environ:extra+='<key>'+name+'</key><string>'+escape(os.environ[name])+'</string>\n'
+s=s.replace('</dict>\n<key>StandardOutPath',extra+'</dict>\n<key>StandardOutPath')
 if '@' in s: raise SystemExit('unrendered scheduler marker')
 t=Path(dst+'.tmp'); t.write_text(s); os.chmod(t,0o600); os.replace(t,dst)
 PY

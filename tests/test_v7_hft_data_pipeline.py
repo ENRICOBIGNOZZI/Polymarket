@@ -89,6 +89,7 @@ def test_sender_refuses_shell_upload_path_escape_and_link_dereference(tmp_path):
     root=tmp_path/'research/hft_permanent'
     good=f'rsync --server --sender -tr . {root}/'
     assert sender_args(good,root)[-1]==str(root)+'/'
+    assert sender_args(good.replace('-tr','-r -t --dirs'),root)[3:6]==['-r','-t','--dirs']
     for command in ('sh',good+'; cat /etc/passwd',good.replace('--sender ',''),
                     good.replace('-tr','-trL'),good.replace(str(root),'/etc')):
         with pytest.raises(ValueError):sender_args(command,root)

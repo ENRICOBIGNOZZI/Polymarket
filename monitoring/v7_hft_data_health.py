@@ -123,7 +123,21 @@ def storage_projection(root, before, after, target=50_000_000_000):
 
 
 def measure(root, seconds=30):
-    root=Path(root).resolve(); first=snapshot(root); time.sleep(seconds); last=snapshot(root)
+    root=Path(root).resolve(); first=snapshot(root); first_feeds=collectors(root)
+    time.sleep(seconds); last=snapshot(root); last_feeds=collectors(root)
+    previous={(r.get('asset'),v['venue']):v for r in first_feeds for v in r.get('venues',[])}
+    quality=[]
+    for row in last_feeds:
+        for venue in row.get('venues',[]):
+            if not venue.get('enabled'): continue
+            old=previous.get((row.get('asset'),venue['venue']),{})
+            delta=venue.get('frames_received',0)-old.get('frames_received',0)
+            age=(time.time_ns()-venue.get('last_receive_wall_ns',0))/1e9 if venue.get('last_receive_wall_ns') else None
+            quality.append(dict(asset=row.get('asset'),venue=venue['venue'],connected=venue.get('connected'),
+                                healthy=venue.get('healthy'),events_in_sample=delta if delta>=0 else None,
+                                counter_reset=delta<0,last_event_age_seconds=age,
+                                stale=age is None or age>5,decode_failures=venue.get('decode_failures'),
+                                transport_failures=venue.get('transport_failures')))
     compression_raw=compression_gzip=0; failures=0
     manifest=root/'lossless_compression_manifest.jsonl'
     if manifest.exists():
@@ -170,12 +184,43 @@ def measure(root, seconds=30):
                     if p.is_file() and not p.is_symlink():size+=p.stat().st_size
                 except FileNotFoundError:pass
             siblings[folder.name]=size
+    native=[]
+    for path in sorted(root.glob('native_crypto_settlement_engine_*_M5.log')):
+        with path.open('rb') as stream:
+            stream.seek(max(0,path.stat().st_size-512*1024))
+            for line in reversed(stream.read().splitlines()):
+                try: row=json.loads(line)
+                except (ValueError,UnicodeError):continue
+                if isinstance(row,dict) and 'decision_compute' in row:
+                    native.append({k:row.get(k) for k in ('code_sha','model_sha','asset','horizon','clean_capture',
+                        'decision_compute','first_signal_to_decision','repricing_horizons_ms','repricing_origins',
+                        'repricing_labels','repricing_censors','repricing_window_overflow',
+                        'repricing_evidence_compute_ns','repricing_evidence_max_ns')});break
+    preservation={}
+    for relative in ('control/london_buffer_retention_status.json','research/hft_permanent/compact/population.json'):
+        path=root/relative
+        if path.exists():
+            try:
+                value=json.loads(path.read_bytes())
+                if 'lossless_compression' in value:
+                    value['lossless_compression']={k:v for k,v in value['lossless_compression'].items() if k not in ('archived','skipped')}
+                    value['rolling_retirement']={k:v for k,v in value.get('rolling_retirement',{}).items() if k!='retired'}
+                    for section in ('lossless_compression','rolling_retirement','hft_opportunity_preservation'):
+                        item=value.get(section) or {}
+                        if isinstance(item.get('failures'),list):
+                            item['failure_count']=len(item['failures']);item['failures']=item['failures'][:10]
+                if 'markets' in value: value['markets_count']=len(value.pop('markets'))
+                if isinstance(value.get('capture_failures'),list):
+                    value['capture_failure_count']=len(value['capture_failures']);value['capture_failures']=value['capture_failures'][:10]
+                preservation[relative]=value
+            except (ValueError,OSError): pass
     return dict(sibling_directory_bytes=siblings,public_ip=public_ip,ssh_host_public_key=ssh_host_key,
+                preservation=preservation,native_latency=native,feed_quality=quality,
                 private_ips=private_ips,pm_observers=pm,largest_files=largest,schema='v7_hft_data_health_v1', paper_only=True, authenticated_execution=False,
                 real_order_submission=False, root=str(root),
                 **{k:v for k,v in last.items() if k!='files'}, **storage_projection(root,first,last),
                 verified_compression_ratio=(compression_raw/compression_gzip if compression_gzip else None),
-                collectors=collectors(root))
+                collectors=last_feeds)
 
 
 if __name__=='__main__':

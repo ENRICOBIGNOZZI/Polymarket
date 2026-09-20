@@ -22,6 +22,7 @@
 #include <charconv>
 #include <chrono>
 #include <cmath>
+#include <csignal>
 #include <cstdint>
 #include <iostream>
 #include <limits>
@@ -41,6 +42,11 @@ using namespace std::chrono_literals;
 namespace {
 constexpr std::size_t kPmQueueCapacity = 8192;
 constexpr std::size_t kPmFrameEvents = 1024;
+static_assert(std::atomic<bool>::is_always_lock_free);
+std::atomic<bool> shutdown_requested{false};
+void request_shutdown(int) noexcept {
+    shutdown_requested.store(true, std::memory_order_relaxed);
+}
 
 std::int64_t monotonic_now_ns() noexcept {
     return std::chrono::duration_cast<std::chrono::nanoseconds>(
@@ -760,7 +766,11 @@ int main(int argc, char** argv) {
                 if (pending_pm.connection_epoch == epoch) pm_ready = true;
             }
         };
-        while (monotonic_now_ns() < deadline) {
+        // SIGTERM follows the same bounded PAPER cancellation and evidence
+        // drain as a natural rollover, so deployments seal capture prefixes.
+        std::signal(SIGTERM, request_shutdown);
+        std::signal(SIGINT, request_shutdown);
+        while (!shutdown_requested.load(std::memory_order_relaxed) && monotonic_now_ns() < deadline) {
             if (pm_faults.exchange(0, std::memory_order_acq_rel) != 0) {
                 const auto fault_now = monotonic_now_ns();
                 for (const auto instrument : {kYes, kNo})
