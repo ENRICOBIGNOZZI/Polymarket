@@ -126,3 +126,13 @@ def test_settlement_preserves_actual_retrieval_and_reported_resolution():
     assert 'RETROSPECTIVE' in value['availability_assumption']
     assert settlement(dict(raw,closed=False),observed) is None
     assert settlement(dict(raw,closedTime=None),observed) is None
+
+
+def test_fit_cutoff_preserves_native_nanoseconds_at_epoch_scale():
+    pytest.importorskip('sklearn')
+    from research.backtest.fit import exact_boundaries
+    stamp=1789925400000000001
+    rows=[dict(market='v',model_input={'decision_wall_ns':stamp}),
+          dict(market='v',model_input={'decision_wall_ns':stamp+100})]
+    assert int(stamp/1e6*1e6)!=stamp
+    assert exact_boundaries(rows,{'markets':{'validation':['v']}})['validation']==stamp

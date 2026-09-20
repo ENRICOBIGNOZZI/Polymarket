@@ -60,13 +60,26 @@ def collect(markets, root):
     with ThreadPoolExecutor(max_workers=6) as pool:return dict(pool.map(fetch,sorted(markets)))
 
 
+def exact_boundaries(opportunities, splits):
+    groups={market:name for name,markets in splits['markets'].items() for market in markets}
+    result={}
+    for row in opportunities:
+        name=groups[row['market']];stamp=row['model_input']['decision_wall_ns']
+        result[name]=min(stamp,result.get(name,stamp))
+    return result
+
+
 def prepare(data_path, output):
     import numpy as np
     from threadpoolctl import threadpool_limits
     output=Path(output);output.mkdir(parents=True,exist_ok=True)
     if (output/'models_frozen.json').exists():raise ValueError('models_already_frozen_no_refit')
     with gzip.open(data_path,'rt') as f:data=json.load(f)
-    parts,splits=split(data['opportunities']);cut=int(splits['boundaries_ms']['validation']*1e6)
+    parts,splits=split(data['opportunities'])
+    # Preserve the native integer clock. Epoch milliseconds represented as a
+    # float can round the first validation decision a few ns before its model.
+    boundaries_ns=exact_boundaries(data['opportunities'],splits)
+    cut=boundaries_ns['validation']
     labels=collect({o['market'] for o in data['opportunities']},output/'public_settlements')
     examples={};excluded=Counter()
     for o in data['opportunities']:
@@ -83,7 +96,7 @@ def prepare(data_path, output):
            examples[o['id']].get('outcome') in (0,1) and examples[o['id']]['label_information_ns']<cut-5_000_000_000]
     validation=[examples[o['id']] for o in parts['validation'] if o['id'] in examples and
                 examples[o['id']].get('outcome') in (0,1) and
-                examples[o['id']]['label_information_ns']<int(splits['boundaries_ms']['test']*1e6)-5_000_000_000]
+                examples[o['id']]['label_information_ns']<boundaries_ns['test']-5_000_000_000]
     if len({r['market_id'] for r in train})<10 or len({r['market_id'] for r in validation})<5:
         raise ValueError('insufficient_resolved_train_or_validation_markets')
     # Keep exactly three existing families. No hyperparameter/calibration search.
@@ -100,7 +113,7 @@ def prepare(data_path, output):
     frozen=dict(model_families=list(FAMILIES),winning_family=winner,validation_scores=scores,failures=failures,
         selection_rule='MARKET_WEIGHTED_VALIDATION_LOG_LOSS_THEN_TRADING_PARAMETERS_BY_VALIDATION_PNL',
         fixed_ridge=8.,fixed_weighting='market',calibration='raw',fit_wall_ns=time.time_ns(),
-        simulated_fit_cutoff_ns=cut,split=splits,train_rows=len(train),validation_rows=len(validation),
+        simulated_fit_cutoff_ns=cut,split=splits,split_boundaries_ns=boundaries_ns,train_rows=len(train),validation_rows=len(validation),
         train_markets=len({r['market_id'] for r in train}),
         validation_markets=len({r['market_id'] for r in validation}),
         train_contexts=dict(Counter(r['asset']+':'+r['horizon'] for r in train)),
