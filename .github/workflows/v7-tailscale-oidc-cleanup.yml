@@ -2,8 +2,7 @@ name: V7 Tailscale OIDC stale-CI cleanup
 
 on:
   push:
-    branches:
-      - ops/v7-tailscale-oidc-cleanup-20260920
+    branches: [main]
     paths:
       - deploy/v7-tailscale-cleanup-request.json
 
