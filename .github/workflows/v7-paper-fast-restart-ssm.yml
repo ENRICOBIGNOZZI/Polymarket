@@ -90,7 +90,7 @@ jobs:
           set -euo pipefail
           aws sts get-caller-identity --region eu-west-2 --output json >/dev/null
           python3 - "$EXPECTED_SHA" "$LONDON_INSTANCE_ID" <<'PY' | tee -a fast-restart-evidence.txt
-          import json, subprocess, sys, time
+          import json, shlex, subprocess, sys, time
           sha, instance = sys.argv[1], sys.argv[2]
           remote = r'''set -euo pipefail
           SHA="__EXPECTED_SHA__"
@@ -105,7 +105,12 @@ jobs:
             if systemctl is-active --quiet "$UNIT"; then break; fi
             sleep 1
           done
-          systemctl is-active --quiet "$UNIT"
+          if ! systemctl is-active --quiet "$UNIT"; then
+            echo fast_probe=paper_unit_not_active
+            systemctl status "$UNIT" --no-pager -l || true
+            journalctl -u "$UNIT" -n 80 --no-pager || true
+            exit 20
+          fi
           ROOT="$(systemctl show "$UNIT" -p Environment --value | python3 -c 'import shlex,sys; print(next((x.split("=",1)[1] for x in shlex.split(sys.stdin.read()) if x.startswith("PM_V7_RUN_ROOT=")), ""))')"
           [[ -n "$ROOT" && "$ROOT" == /* ]]
           python3 - "$ROOT" "$SHA" <<'PYREMOTE'
@@ -116,7 +121,7 @@ jobs:
           if not status.is_file():
               raise SystemExit('runtime_status_missing')
           last={}
-          for _ in range(12):
+          for _ in range(15):
               last=json.loads(status.read_text(encoding='utf-8'))
               if last.get('state')=='running' and last.get('killed') is not True:
                   break
@@ -146,7 +151,7 @@ jobs:
           remote = remote.replace('__EXPECTED_SHA__', sha)
           def run(args):
               return subprocess.run(args, text=True, capture_output=True, check=True)
-          params=json.dumps({'commands':[remote], 'executionTimeout':['90']})
+          params=json.dumps({'commands':['bash -lc '+shlex.quote(remote)], 'executionTimeout':['120']})
           cid=run(['aws','ssm','send-command','--region','eu-west-2','--instance-ids',instance,'--document-name','AWS-RunShellScript','--parameters',params,'--comment','Polymarket V7 PAPER fast restart','--query','Command.CommandId','--output','text']).stdout.strip()
           deadline=time.time()+150
           last={}
