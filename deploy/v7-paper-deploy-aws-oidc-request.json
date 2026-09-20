@@ -1,8 +1,8 @@
 {
   "schema": "polymarket_v7_aws_oidc_paper_deploy_request_v1",
   "version": 1,
-  "request_id": "grafana-auth-health-25820a43",
-  "expected_parent_sha": "25820a43ce38988caa7e876b3e84cbee7870cd8a",
+  "request_id": "local-grafana-health-tests-6901f070",
+  "expected_parent_sha": "6901f0708bf810cee11c75bd27fac0f1c6c51460",
   "role_arn": "arn:aws:iam::350769147128:role/PolymarketLondonPaperDeployPolicy",
   "paper_only": true,
   "authenticated_execution": false,
