@@ -95,7 +95,7 @@ jobs:
             london=true
             research=true
           fi
-          if grep -Eq '^(research/|tests/test_v7_cumulative_learning.py|tests/test_v7_learning_models.py|ops/.*research)' "$RUNNER_TEMP/v7-changed-paths.txt"; then
+          if grep -Eq '^(research/|tests/test_v7_cumulative_learning.py|tests/test_v7_learning_models.py|tests/test_v7_simple_backtest.py|ops/.*research)' "$RUNNER_TEMP/v7-changed-paths.txt"; then
             research=true
           fi
 
@@ -123,7 +123,7 @@ jobs:
         run: |
           python3 -m venv /tmp/v7-learning
           /tmp/v7-learning/bin/pip install -r research/requirements-learning.txt
-          /tmp/v7-learning/bin/python -m pytest tests/test_v7_cumulative_learning.py tests/test_v7_learning_models.py -q
+          /tmp/v7-learning/bin/python -m pytest tests/test_v7_cumulative_learning.py tests/test_v7_learning_models.py tests/test_v7_simple_backtest.py -q
 
   security-audit:
     name: security-audit-v7

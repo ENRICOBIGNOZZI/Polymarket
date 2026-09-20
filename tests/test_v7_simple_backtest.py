@@ -23,9 +23,9 @@ def test_never_fill_predecision_or_predelay_book():
     assert r['status']=='UNAVAILABLE' and r['pnl'] is None
 
 
-def test_deterioration_causes_real_nonfill_at_native_limit():
-    r=replay([opportunity()],Tape([book(1100,.52)]),Parameters(),100)[0]
-    assert r['status']=='NO_FILL' and r['pnl']==0 and r['deterioration']==pytest.approx(.02)
+def test_deterioration_causes_real_nonfill_beyond_bounded_chase_limit():
+    r=replay([opportunity()],Tape([book(1100,.53)]),Parameters(),100)[0]
+    assert r['status']=='NO_FILL' and r['pnl']==0 and r['deterioration']==pytest.approx(.03)
 
 
 def test_partial_fill_known_fee_actual_cheaper_price_and_settlement():
@@ -98,3 +98,31 @@ def test_validation_freezes_and_test_reuses_without_retuning(tmp_path):
     assert final_test(path,out)['status']=='EXISTING_FINAL_TEST_REUSED'
     frozen=json.loads((out/'freeze.json').read_text())
     assert frozen['selection_status']=='INSUFFICIENT_VALIDATION_SUPPORT_BASELINE_FROZEN'
+
+
+def test_epoch_change_never_reuses_another_connection():
+    r=replay([opportunity(model_input={'connection_epoch':1})],Tape([book(epoch=2)]),Parameters(),100)[0]
+    assert r['reason']=='capture_epoch_changed' and r['pnl'] is None
+
+
+def test_native_adapter_rejects_future_features_and_uses_signal_age():
+    from test_v7_cumulative_learning import native
+    r=native(signal_valid=True,confirmed_non_opposing=True,minimum_order_microunits=5000000,
+        fee_rate=.07,fee_exponent=1,paper_terms_sha256='terms',fee_source='GAMMA',connection_epoch=1)
+    o=decision(r);assert o['p'] is None and o['signal_age_ms']==5 and o['asset']=='BTC'
+    with pytest.raises(ValueError,match='causal_clock'):
+        decision(dict(r,receive_monotonic_ns=r['decision_monotonic_ns']+1))
+
+
+def test_settlement_preserves_actual_retrieval_and_reported_resolution():
+    pytest.importorskip('sklearn')
+    from research.backtest.fit import settlement
+    raw=dict(id='m',closed=True,umaResolutionStatus='resolved',clobTokenIds=['yes','no'],
+        outcomePrices=['1','0'],endDate='2026-09-20T17:00:00Z',closedTime='2026-09-20 17:00:54+00',
+        umaEndDate='2026-09-20T17:00:54Z')
+    observed=1789930000000000000
+    value=settlement(raw,observed)
+    assert value['retrieved_ns']==observed and value['information_ns']<observed
+    assert 'RETROSPECTIVE' in value['availability_assumption']
+    assert settlement(dict(raw,closed=False),observed) is None
+    assert settlement(dict(raw,closedTime=None),observed) is None

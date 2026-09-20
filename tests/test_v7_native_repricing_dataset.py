@@ -63,7 +63,7 @@ def run_cli(source, output, summary, *extra):
 # The three original regressions are retained for explicit diagnostic callers.
 def test_complete_pair_builds_causal_delta(tmp_path):
     p=tmp_path/'x.jsonl';p.write_text(''.join(json.dumps(x)+'\n' for x in rows()))
-    out,s=m.build([p]);assert len(out)==4 and s['censored_horizons']==0
+    out,s=m.build([p]);assert len(out)==4 and s['censored_horizons']==2
     assert {x['repricing_horizon_ms'] for x in out}=={100,250,500,1000}
     assert all(x['delta_logit']>0 for x in out)
     assert not any(x['eligible_for_executable_training'] for x in out)
@@ -72,7 +72,7 @@ def test_complete_pair_builds_causal_delta(tmp_path):
 def test_missing_or_broken_pair_is_censored_not_zero(tmp_path):
     p=tmp_path/'x.jsonl';bad=row(6,100);bad['repricing_pair_valid']=False
     p.write_text(json.dumps(row())+'\n'+json.dumps(bad)+'\n')
-    out,s=m.build([p]);assert out==[] and s['censored_horizons']==4
+    out,s=m.build([p]);assert out==[] and s['censored_horizons']==6
 
 
 def test_conflicting_identity_fails(tmp_path):
@@ -96,14 +96,14 @@ def test_labels_from_other_capture_never_complete_an_origin(tmp_path):
     a,b=tmp_path/'a.jsonl',tmp_path/'b.jsonl'
     capture(a,[row()],capture_id='origin');capture(b,rows()[1:],capture_id='other')
     out,s=m.build([a,b],require_closed=True)
-    assert not out and s['censored_horizons']==4
+    assert not out and s['censored_horizons']==6
 
 
 def test_legacy_files_without_capture_identity_never_join(tmp_path):
     a,b=tmp_path/'a.jsonl',tmp_path/'b.jsonl'
     a.write_text(json.dumps(row())+'\n')
     b.write_text(''.join(json.dumps(x)+'\n' for x in rows()[1:]))
-    out,s=m.build([a,b]);assert not out and s['censored_horizons']==4
+    out,s=m.build([a,b]);assert not out and s['censored_horizons']==6
 
 
 @pytest.mark.parametrize('field,value',[('code_sha','c'*40),('server_id','other'),('market_id','other')])
@@ -121,7 +121,7 @@ def test_matching_capture_but_wrong_context_is_censored(tmp_path,field,value):
     p=tmp_path/'x.jsonl';data=capture(p)
     for r in data[1:]:r[field]=value
     write(p,data)
-    out,s=m.build([p],require_closed=True);assert not out and s['censored_horizons']==4
+    out,s=m.build([p],require_closed=True);assert not out and s['censored_horizons']==6
 
 
 def test_future_external_feature_is_never_a_predictor(tmp_path):
@@ -129,7 +129,7 @@ def test_future_external_feature_is_never_a_predictor(tmp_path):
     data[0]['external_features']={'input_receive_ns':1_000_000_001,'return_1s':1}
     write(p,data)
     out,s=m.build([p],require_closed=True)
-    assert not out and s['excluded']['INVALID_ORIGIN_CLOCK_OR_FEATURE_CUT']==4
+    assert not out and s['excluded']['INVALID_ORIGIN_CLOCK_OR_FEATURE_CUT']==6
 
 
 def test_recorded_gap_censors_even_when_endpoint_pair_is_valid(tmp_path):
@@ -152,13 +152,13 @@ def test_no_labels_after_contract_close(tmp_path):
     for r in data:r['close_monotonic_ns']=1_250_000_000
     write(p,data)
     out,s=m.build([p],require_closed=True)
-    assert len(out)==1 and out[0]['repricing_horizon_ms']==100 and s['censored_horizons']==3
+    assert len(out)==1 and out[0]['repricing_horizon_ms']==100 and s['censored_horizons']==5
 
 
 def test_early_label_is_censored(tmp_path):
     p=tmp_path/'x.jsonl';data=capture(p);data[1]['observed_monotonic_ns']=1_099_000_000
     write(p,data)
-    out,s=m.build([p],require_closed=True);assert len(out)==3 and s['censored_horizons']==1
+    out,s=m.build([p],require_closed=True);assert len(out)==3 and s['censored_horizons']==3
 
 
 @pytest.mark.parametrize('changes',[{'healthy':False},{'closed':False},{'bytes':0},
@@ -244,3 +244,13 @@ def test_two_sealed_files_cannot_claim_same_capture(tmp_path):
     a,b=tmp_path/'a.jsonl',tmp_path/'b.jsonl'
     capture(a,[row()]);capture(b,rows()[1:])
     with pytest.raises(ValueError,match='duplicate closed capture'):m.build([a,b],require_closed=True)
+
+
+def test_sub_100ms_labels_use_exact_receive_clock_and_preserve_legacy_labels(tmp_path):
+    p=tmp_path/'early.jsonl'
+    records=[row()]+[row(6,h,(4100,4300,5700,5900),1_000_000_000+h*1_000_000)
+                     for h in (25,50,100,250,500,1000)]
+    capture(p,records)
+    output,status=m.build([p],require_closed=True)
+    assert {r['repricing_horizon_ms'] for r in output}=={25,50,100,250,500,1000}
+    assert status['censored_horizons']==0

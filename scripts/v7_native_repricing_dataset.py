@@ -26,8 +26,8 @@ SCHEMA = 'polymarket_v7_native_repricing_label_v1'
 # rejects. They remain diagnostics: only accepted origins can qualify as an
 # executable action in the separate executable-label consumer.
 ORIGIN_REASONS = {1, 4, 8, 13, 14, 15, 16, 17, 18}
-HORIZONS = {100, 250, 500, 1000}
-CAPTURE_HORIZONS = {100, 250, 500, 750, 1000, 1250, 1500, 1750, 2000}
+HORIZONS = {25, 50, 100, 250, 500, 1000}
+CAPTURE_HORIZONS = {25, 50, 100, 250, 500, 750, 1000, 1250, 1500, 1750, 2000}
 MAX_SOURCE_BYTES = 64 * 1024 * 1024
 MAX_LINE_BYTES = 4 * 1024 * 1024
 MAX_TOTAL_BYTES = 256 * 1024 * 1024

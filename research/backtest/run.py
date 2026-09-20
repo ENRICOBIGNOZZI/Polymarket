@@ -19,12 +19,12 @@ from research.economic.causal_replay import cash_fee
 
 LATENCIES = (50,100,250,500)
 MAX_BOOK_WAIT_MS = 50
-EXECUTION_RESERVE = .001
+EXECUTION_RESERVE = .005
 
 
 @dataclass(frozen=True)
 class Parameters:
-    edge: float = 0.0
+    edge: float = .02
     tte_min: int = 105
     tte_max: int = 120
     signal_age_ms: int = 100
@@ -36,12 +36,12 @@ def grid():
     """Small prespecified grid; no model or feature tuning."""
     base = Parameters()
     values = [base]
-    for field, options in dict(edge=(0,.0025,.005,.01,.02), tte_min=(30,60,90,105),
+    for field, options in dict(edge=(.005,.01,.02,.03,.04), tte_min=(30,60,90,105),
         signal_age_ms=(50,100,250,500),entry_cap=(.65,.70,.75,.80),shares=(5.,10.,20.)).items():
         values += [replace(base, **{field:v}) for v in options]
     # Broad age variant is prespecified, never added after looking at TEST.
     values += [replace(base, edge=e,tte_min=t,signal_age_ms=500)
-               for e in (.0025,.005,.01,.02) for t in (30,60,90,105)]
+               for e in (.005,.01,.02,.04) for t in (30,60,90,105)]
     return list(dict.fromkeys(values))
 
 
@@ -105,8 +105,12 @@ def replay(rows, tape, params, latency):
                 choices.append((edge,side,p,b))
         if not choices: continue
         _,side,p,b=max(choices,key=lambda v:(v[0],v[1]))
-        # Match the default native zero-chase limit; price is still checked AFTER latency.
-        limit=b['ask']
+        # Reuse the prepared forward protocol's two-tick bounded chase rule.
+        tick=b.get('tick',.01);limit=b['ask']
+        for step in (1,2):
+            candidate=round(b['ask']+step*tick,4)
+            if candidate>params.entry_cap or p-candidate-per_share_fee(o,candidate)-EXECUTION_RESERVE<params.edge:break
+            limit=candidate
         qty=math.floor(min(params.shares,20.,(3.75-.00001)/(limit+per_share_fee(o,limit)+EXECUTION_RESERVE))*1e6)/1e6
         if qty < b['minimum'] or reserve+3.75>1000: continue
         used.add(o['market']);reserve+=3.75  # no reuse of unseen/censored capital
@@ -116,6 +120,8 @@ def replay(rows, tape, params, latency):
                filled=0.,fees=0.,turnover=0.,pnl=None,deterioration=None,status='UNAVAILABLE')
         arrival,why=tape.after(b['token'],o['ts']+latency,o['market'])
         if why: r['reason']=why;out.append(r);continue
+        if arrival.get('epoch') != (o.get('model_input') or {}).get('connection_epoch'):
+            r['reason']='capture_epoch_changed';out.append(r);continue
         if arrival['ts']>=o['end']:
             r['reason']='market_expired';out.append(r);continue
         r['execution_ts']=arrival['ts'];r['effective_latency_ms']=arrival['ts']-o['ts']
@@ -191,7 +197,7 @@ def lead_lag(rows,tape):
             values=[];markets=set();delays=[]
             for r in signals:
                 b,why=tape.after(next(iter(r['sides'].values()))['token'],r['ts']+horizon,r['market'])
-                if why or b['ts']>=r['end']:continue
+                if why or b['ts']>=r['end'] or b.get('epoch') != (r.get('model_input') or {}).get('connection_epoch'):continue
                 side=next(iter(r['sides'].values()));before=(side['ask']+side['bid'])/2
                 values.append(((b['ask']+b['bid'])/2-before))
                 markets.add(r['market']);delays.append(b['ts']-r['ts'])
@@ -220,9 +226,11 @@ def validate(data_path,output):
     data,sha=load(data_path); parts,splits=split(data['opportunities']);tape=Tape(data['books'])
     output=Path(output);output.mkdir(parents=True,exist_ok=True)
     if (output/'freeze.json').exists():raise ValueError('validation_already_frozen_use_existing_result')
+    validation_cut=splits['boundaries_ms']['test']
+    validation_rows=[dict(o,settlement=o.get('settlement') if o.get('settlement') and o['settlement']['ts']<validation_cut else None) for o in parts['validation']]
     results=[]
     for p in grid():
-        m=evaluate(parts['validation'],tape,p,100)
+        m=evaluate(validation_rows,tape,p,100)
         # Five distinct filled markets and full accounting coverage; no one-trade winner.
         eligible=m['settled_fills']>=5 and m['net_pnl'] is not None
         results.append(dict(parameters=asdict(p),metrics=m,selection_eligible=eligible,baseline=p==Parameters()))
@@ -231,12 +239,12 @@ def validate(data_path,output):
     eligible=[r for r in ranked if r['selection_eligible']]
     winner=eligible[0] if eligible else next(r for r in results if r['baseline'])
     frozen=dict(schema='simple_paper_backtest_freeze_v1',**SAFETY,data_sha256=sha,code_sha256=code_hash(),
-        model_hash=data['model_hash'],model_description=data['model_description'],splits=splits,
+        model_hash=data['model_hash'],model_description=data['model_description'],model_fit_summary=data.get('model_fit_summary'),splits=splits,
         baseline=asdict(Parameters()),selected=winner['parameters'],
         selection_status='VALIDATION_SELECTED' if eligible else 'INSUFFICIENT_VALIDATION_SUPPORT_BASELINE_FROZEN',
         selection_minimum_markets=5,primary_latency_ms=100,latencies_ms=list(LATENCIES),
         maximum_book_wait_ms=MAX_BOOK_WAIT_MS,validation_configurations=ranked,
-        baseline_note='Native 0 EV, 105–120s, 100ms BTC comparator, .75 entry, 5 shares, zero chase. Fixed-size research, no native allocator parity claim.',
+        baseline_note='Prepared forward protocol: .02 EV, .005 execution reserve, two-tick chase; 105–120s, 100ms comparator, .75 entry, 5 shares. Point-probability fixed-size research, no native robust-bound/allocator parity claim.',
         london_latency_ms=None)
     write_new(output/'freeze.json',frozen)
     return {k:v for k,v in frozen.items() if k not in ('validation_configurations','splits')}

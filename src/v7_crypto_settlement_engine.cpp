@@ -207,13 +207,13 @@ struct PmQueuedEvent {
     std::uint64_t connection_epoch = 0;
 };
 
-inline constexpr std::array<std::uint32_t, 9> kRepricingHorizonsMs{100, 250, 500, 750, 1000, 1250, 1500, 1750, 2000};
+inline constexpr std::array<std::uint32_t, 11> kRepricingHorizonsMs{25, 50, 100, 250, 500, 750, 1000, 1250, 1500, 1750, 2000};
 struct RepricingWindow {
     std::uint64_t signal_version = 0;
     std::uint64_t instrument_handle = 0;
     std::int64_t trigger_ns = 0;
     std::int64_t decision_ns = 0;
-    std::array<std::int64_t, 9> target_ns{};
+    std::array<std::int64_t, kRepricingHorizonsMs.size()> target_ns{};
     std::uint16_t emitted_mask = 0;
     // Signal direction is provenance. instrument_handle is the economically
     // selected token and owns the executable depth labels.
@@ -621,7 +621,7 @@ int main(int argc, char** argv) {
                     else ++repricing_censors;
                     window.emitted_mask = static_cast<std::uint16_t>(window.emitted_mask | mask);
                 }
-                if (window.emitted_mask == 0x01FF) window.active = 0;
+                if (window.emitted_mask == ((1U << kRepricingHorizonsMs.size()) - 1U)) window.active = 0;
             }
         };
         const auto publish_order = [&](const NativeOrderCommand& command,
@@ -1350,7 +1350,7 @@ int main(int argc, char** argv) {
             {"repricing_origins", repricing_origins}, {"repricing_labels", repricing_labels},
             {"repricing_censors", repricing_censors},
             {"repricing_window_overflow", repricing_window_overflow},
-            {"repricing_horizons_ms", json::array{100, 250, 500, 1000}},
+            {"repricing_horizons_ms", json::array{25, 50, 100, 250, 500, 750, 1000, 1250, 1500, 1750, 2000}},
             {"native_observation_capture_mode", options.capture_native_observations
                 ? "FULL" : options.capture_execution_windows ? "DECISION_WINDOWS"
                 : options.capture_native_decisions ? "DECISIONS" : "NONE"},
