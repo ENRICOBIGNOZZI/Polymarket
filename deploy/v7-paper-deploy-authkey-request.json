@@ -1,8 +1,8 @@
 {
   "schema": "polymarket_v7_authkey_paper_deploy_request_v1",
   "version": 1,
-  "request_id": "paper-london-authkey-20260920-86ff9510",
-  "expected_parent_sha": "86ff9510c8407d92e69ce07b221d8925bcaed5e9",
+  "request_id": "paper-london-authkey-20260920-c76914cd",
+  "expected_parent_sha": "c76914cdc189ce6743eba41a13cb93bbc9d45520",
   "paper_only": true,
   "authenticated_execution": false,
   "real_order_submission": false,
