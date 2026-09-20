@@ -164,6 +164,8 @@ def refresh_inputs(root, config):
         if p.exists():
             population=read_json(p);markets.update(map(str,population.get('markets',[])))
             source_failures.extend(population.get('capture_failures',[]))
+            if population.get('scan_complete') is False:
+                source_failures.append({'source':str(p),'reason':'HFT_POPULATION_BACKFILL_IN_PROGRESS'})
             if time.time_ns()-population.get('updated_ns',0)>900*1_000_000_000:
                 source_failures.append({'source':str(p),'reason':'STALE_RESEARCH_COLLECTION'})
         elif config.get('require_hft_population'):

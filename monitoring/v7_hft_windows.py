@@ -106,6 +106,7 @@ class Windows:
           CREATE TABLE IF NOT EXISTS requests(id TEXT PRIMARY KEY, capture TEXT, asset TEXT, horizon TEXT,
             market TEXT, decision_ns INTEGER, start_ns INTEGER, end_ns INTEGER, reason INTEGER, accepted INTEGER);
           CREATE INDEX IF NOT EXISTS windows_asset ON requests(asset,start_ns,end_ns);
+          CREATE INDEX IF NOT EXISTS windows_capture ON requests(capture);
           CREATE TABLE IF NOT EXISTS watermarks(asset TEXT,horizon TEXT,stamp INTEGER,PRIMARY KEY(asset,horizon));
           CREATE TABLE IF NOT EXISTS preserved(source TEXT PRIMARY KEY,source_sha TEXT, proof TEXT);
         ''')
@@ -115,23 +116,29 @@ class Windows:
     def source_key(self,path):
         return str(path.relative_to(self.run_root)) if path.is_relative_to(self.run_root) else str(path)
 
-    def ingest(self, *, max_rows=10000):
+    def ingest(self, *, max_rows=10000, budget_seconds=45):
         """Freeze complete append-only prefixes, including active D1 captures.
 
         Offsets commit only after immutable compact chunks exist. Repeated reads
         after a crash deduplicate by payload hash and opportunity identity.
         """
         counts={'records':0,'decisions':0,'pending_markets':set()}; failures=[]
-        progress={}; incomplete=set()
+        progress={}; incomplete=set(); started=time.monotonic(); scan_complete=True
         roots=[self.run_root/'research/native_observations']
         archives=self.run_root.parent/'paper_v7_london_archives'
         if archives.is_dir() and not archives.is_symlink():
             roots.extend(p/'research/native_observations' for p in archives.glob('cutover-*') if p.is_dir() and not p.is_symlink())
         for path in sorted(p for folder in roots for p in folder.rglob('*.jsonl*')):
+            if time.monotonic()-started>=budget_seconds:
+                scan_complete=False;break
             if path.is_symlink() or path.name.endswith('.closed.json') or not path.name.endswith(('.jsonl','.jsonl.gz')):
                 continue
             relative=self.source_key(path).removesuffix('.gz')
             old=self.db.execute('SELECT offset FROM sources WHERE path=?',(relative,)).fetchone()
+            if old:
+                if path.suffix!='.gz' and path.stat().st_size==old[0]: continue
+                closure=Path(str(path).removesuffix('.gz')+'.closed.json')
+                if closure.exists() and json.loads(closure.read_bytes()).get('bytes')==old[0]: continue
             offset=old[0] if old else 0; batch=[]; requests=[]; last=0; capture=''; contexts={}
             opener=gzip.open if path.suffix=='.gz' else open
             try:
@@ -172,17 +179,25 @@ class Windows:
                 failures.append({'source':relative,'reason':str(exc)})
                 incomplete.update(contexts)
         # A newer capture cannot conceal an unread prefix in an older capture.
-        if not failures:
+        if not failures and scan_complete:
+            # Include already-indexed unchanged sources after a bounded catch-up
+            # pass; absence of new bytes does not erase their proven frontier.
+            for asset,horizon,stamp in self.db.execute('''SELECT r.asset,r.horizon,MAX(s.last_ns)
+                FROM sources s JOIN (SELECT DISTINCT capture,asset,horizon FROM requests) r
+                ON s.capture=r.capture GROUP BY r.asset,r.horizon'''):
+                progress[(asset,horizon)]=max(stamp,progress.get((asset,horizon),0))
             with self.db:
                 for (asset,horizon),stamp in progress.items():
                     if (asset,horizon) not in incomplete:
                         self.db.execute('INSERT INTO watermarks VALUES (?,?,?) ON CONFLICT(asset,horizon) DO UPDATE SET stamp=MAX(stamp,excluded.stamp)',(asset,horizon,stamp))
         counts['pending_markets']=sorted(counts['pending_markets']);counts['failures']=failures
+        counts['scan_complete']=scan_complete and not incomplete
         counts['total_opportunities']=self.db.execute('SELECT COUNT(*) FROM requests').fetchone()[0]
         counts['total_markets']=self.db.execute('SELECT COUNT(DISTINCT market) FROM requests').fetchone()[0]
         population={'schema':'v7_hft_population_v1','paper_only':True,
                     'markets':[r[0] for r in self.db.execute('SELECT DISTINCT market FROM requests ORDER BY market')],
                     'unique_opportunities':counts['total_opportunities'], 'updated_ns':time.time_ns(),
+                    'scan_complete':counts['scan_complete'],
                     'capture_failures':failures,'backlog_contexts':sorted(':'.join(c) for c in incomplete),
                     'watermarks':{a+':'+h:t for a,h,t in self.db.execute('SELECT * FROM watermarks')}}
         compact=self.root/'compact';compact.mkdir(exist_ok=True)

@@ -1050,10 +1050,18 @@ int main(int argc, char** argv) {
                 decision_economics = result.economics;
                 const auto finished = monotonic_now_ns();
                 ++evaluations;
-                // Preserve the opportunity population independent of eligibility,
-                // including TTE, expired and already-repriced rejections.
-                const bool repricing_origin_eligible = current_signal.signal_version != 0
-                    && current_signal.direction != 0;
+                // All decision reasons remain in the population tape. The
+                // full PM observer supplies their historical paths; bounded
+                // native repricing snapshots focus on execution candidates.
+                const bool repricing_origin_eligible = result.accepted != 0
+                    || result.reason == NativeCryptoDecisionReason::WeakSignal
+                    || result.reason == NativeCryptoDecisionReason::InsufficientDepth
+                    || result.reason == NativeCryptoDecisionReason::EntryPriceTooHigh
+                    || result.reason == NativeCryptoDecisionReason::MarketAlreadyRepriced
+                    || result.reason == NativeCryptoDecisionReason::ProbabilityUnavailable
+                    || result.reason == NativeCryptoDecisionReason::NetEdgeNonPositive
+                    || result.reason == NativeCryptoDecisionReason::RiskSizeBelowMinimum
+                    || result.reason == NativeCryptoDecisionReason::SlowContextUnavailable;
                 const auto repricing_instrument = result.accepted != 0
                     ? result.selected_instrument_handle
                     : (current_signal.direction > 0 ? kYes : kNo);

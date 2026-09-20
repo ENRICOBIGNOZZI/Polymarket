@@ -197,6 +197,12 @@ def measure(root, seconds=30):
                         'repricing_labels','repricing_censors','repricing_window_overflow',
                         'repricing_evidence_compute_ns','repricing_evidence_max_ns')});break
     preservation={}
+    try:
+        service=subprocess.check_output(['systemctl','show','polymarket-v7-retention.service',
+            '-p','ActiveState','-p','SubState','-p','Result','-p','ExecMainStatus','-p','MemoryPeak',
+            '-p','CPUUsageNSec'],text=True,timeout=5)
+        preservation['retention_service']=dict(line.split('=',1) for line in service.splitlines() if '=' in line)
+    except (OSError,subprocess.SubprocessError):pass
     for relative in ('control/london_buffer_retention_status.json','research/hft_permanent/compact/population.json'):
         path=root/relative
         if path.exists():

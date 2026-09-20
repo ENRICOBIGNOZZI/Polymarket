@@ -333,9 +333,7 @@
         "--capture-native-decisions",
         "--capture-execution-windows",
         "--execution-window-ns",
-        "5000000000",
-        "--capture-native-full-context",
-        "BTC:M5"
+        "5000000000"
       ],
       "profile": "core",
       "inputs": [
