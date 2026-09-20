@@ -6,6 +6,7 @@ import argparse
 import json
 from pathlib import Path
 import shutil
+import subprocess
 import time
 
 
@@ -110,7 +111,20 @@ def measure(root, seconds=30):
             try: largest.append((p.stat().st_size,str(p.relative_to(root))))
             except FileNotFoundError: pass
     largest=sorted(largest,reverse=True)[:20]
-    return dict(largest_files=largest,schema='v7_hft_data_health_v1', paper_only=True, authenticated_execution=False,
+    pm={}
+    for relative in ('research/repricing_book/fillability_ws_status.json','universe/book_selection.json'):
+        path=root/relative
+        if path.exists():
+            try:
+                value=json.loads(path.read_bytes())
+                if 'markets' in value:
+                    value={'contexts':sorted({str(r.get('asset'))+':'+str(r.get('horizon')) for r in value['markets']}),
+                           'markets':len(value['markets'])}
+                pm[relative]=value
+            except (ValueError,OSError): pass
+    try: private_ips=subprocess.check_output(['tailscale','ip','-4'],text=True,timeout=5).strip()
+    except (OSError,subprocess.SubprocessError): private_ips=None
+    return dict(private_ips=private_ips,pm_observers=pm,largest_files=largest,schema='v7_hft_data_health_v1', paper_only=True, authenticated_execution=False,
                 real_order_submission=False, root=str(root),
                 **{k:v for k,v in last.items() if k!='files'}, **compare(first,last),
                 verified_compression_ratio=(compression_raw/compression_gzip if compression_gzip else None),
