@@ -191,6 +191,11 @@ fi
 python3 "$SOURCE_DIR/scripts/v7_prepare_cutover_run_root.py" "${prepare_args[@]}"
 SERVICE_GROUP="$(id -gn "$SERVICE_USER")"
 install -d -o "$SERVICE_USER" -g "$SERVICE_GROUP" "$RUN_ROOT" "$RUN_ROOT/control"
+deployed_sha_tmp="$RUN_ROOT/control/deployed_sha.tmp.$"
+printf '%s\n' "$EXPECTED_SHA" > "$deployed_sha_tmp"
+chown "$SERVICE_USER:$SERVICE_GROUP" "$deployed_sha_tmp"
+chmod 0600 "$deployed_sha_tmp"
+mv "$deployed_sha_tmp" "$RUN_ROOT/control/deployed_sha"
 
 PROBABILITY_ENV="$RUN_ROOT/control/probability-model.env"
 rm -f "$PROBABILITY_ENV"
