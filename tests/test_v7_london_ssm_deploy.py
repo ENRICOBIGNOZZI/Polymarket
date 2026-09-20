@@ -34,6 +34,23 @@ def probe(instance, *, ip=None, active=False, user="enrico", run_root=None):
     }
 
 
+def test_select_target_prefers_exact_instance_id():
+    probes = {
+        "i-1": probe("i-1", active=False),
+        "i-2": probe("i-2", active=False),
+        "i-3": probe("i-3", active=False),
+    }
+    selected = m.select_target(probes, "", "i-2")
+    assert selected["instance_id"] == "i-2"
+    assert selected["selection_reason"] == "EXACT_INSTANCE_ID"
+
+
+def test_select_target_rejects_missing_exact_instance():
+    probes = {"i-1": probe("i-1", active=False)}
+    with pytest.raises(m.SsmDeployError, match="expected London instance unavailable"):
+        m.select_target(probes, "", "i-2")
+
+
 def test_select_target_prefers_exact_tailscale_ip():
     probes = {
         "i-1": probe("i-1", active=True),
