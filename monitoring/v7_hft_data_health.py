@@ -220,6 +220,19 @@ def measure(root, seconds=30):
                 preservation['opportunity_history']['contexts']=[dict(asset=a,horizon=h,opportunities=n)
                     for a,h,n in db.execute('SELECT asset,horizon,COUNT(*) FROM requests GROUP BY asset,horizon')]
                 preservation['opportunity_history']['verified_source_windows']=db.execute('SELECT COUNT(*) FROM preserved').fetchone()[0]
+                sources=[]
+                for source,offset,capture,last_ns in db.execute('SELECT path,offset,capture,last_ns FROM sources'):
+                    original=Path(source)
+                    if not original.is_absolute(): original=root/original
+                    candidates=(original,Path(str(original)+'.gz'))
+                    current=next((p for p in candidates if p.exists() and p.is_file() and not p.is_symlink()),None)
+                    sources.append(dict(source=source,capture=capture,indexed_bytes=offset,
+                        remaining_bytes=max(0,current.stat().st_size-offset) if current and current.suffix!='.gz' else None,
+                        last_observation_age_seconds=max(0,(time.time_ns()-last_ns)/1e9) if last_ns else None))
+                # The oldest indexed source explains a real backlog without
+                # publishing event payloads or an unbounded database dump.
+                preservation['source_progress']=sorted(sources,key=lambda r:(
+                    -(r['last_observation_age_seconds'] or 0),r['source']))[:50]
         except sqlite3.Error as exc:preservation['history_audit_error']=str(exc)
     for relative in ('control/london_buffer_retention_status.json','research/hft_permanent/compact/population.json'):
         path=root/relative
