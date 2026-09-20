@@ -277,7 +277,11 @@ jobs:
             "$ROOT/ledger_router.log" \
             "$ROOT/native_engine_manager.log"; do
             echo "fast_existing=pre_log:$log"
-            tail -n 80 "$log" 2>/dev/null || true
+            if [[ -f "$log" ]]; then
+              grep -Ei 'traceback|error|fatal|failed|exception|blocker|invalid|missing|terminate|exit' "$log" | tail -n 12 || true
+              echo fast_existing=pre_log_tail
+              tail -n 12 "$log" || true
+            fi
           done
 
           if systemctl is-active --quiet "$UNIT" && python3 - "$ROOT/control/runtime_status.json" "$SHA" <<'PYHEALTH'
