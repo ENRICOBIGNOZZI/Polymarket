@@ -55,37 +55,36 @@ jobs:
             parent_sha="${{ github.event.before }}"
             changed="$(git diff-tree --no-commit-id --name-only -r HEAD)"
             test "$changed" = "$REQUEST_PATH"
-            python3 - "$REQUEST_PATH" "$parent_sha" "$main_sha" "$ROLE_ARN" "$GITHUB_OUTPUT" <<'PY'
+            python3 - "$REQUEST_PATH" "$parent_sha" "$ROLE_ARN" "$GITHUB_OUTPUT" <<'PY'
           import json,re,sys
           from pathlib import Path
           req=Path(sys.argv[1])
-          parent, head, role = sys.argv[2], sys.argv[3], sys.argv[4]
+          parent, role = sys.argv[2], sys.argv[3]
           v=json.loads(req.read_text(encoding='utf-8'))
-          assert set(v)=={'schema','version','request_id','expected_parent_sha','expected_deploy_sha','role_arn','paper_only','authenticated_execution','real_order_submission','cutover_approved','trigger'}
+          assert set(v)=={'schema','version','request_id','expected_parent_sha','role_arn','paper_only','authenticated_execution','real_order_submission','cutover_approved','trigger'}
           assert v['schema']=='polymarket_v7_aws_oidc_paper_deploy_request_v1'
           assert v['version']==1
           assert isinstance(v['request_id'],str) and re.fullmatch(r'[A-Za-z0-9._:-]{8,128}', v['request_id'])
           assert v['expected_parent_sha']==parent
-          assert v['expected_deploy_sha']==head
           assert v['role_arn']==role
           assert v['paper_only'] is True
           assert v['authenticated_execution'] is False
           assert v['real_order_submission'] is False
           assert v['cutover_approved'] is True
           assert v['trigger']=='GITHUB_AWS_OIDC_SSM_ONE_SHOT'
-          with open(sys.argv[5],'a',encoding='utf-8') as h:
-              h.write(f"expected_sha={head}\n")
+          with open(sys.argv[4],'a',encoding='utf-8') as h:
               h.write(f"request_id={v['request_id']}\n")
           PY
+            expected_sha="$main_sha"
           else
             [[ "$EXPECTED_DEPLOY_SHA" =~ ^[0-9a-f]{40}$ ]]
             test "$EXPECTED_DEPLOY_SHA" = "$main_sha"
-            echo "expected_sha=$EXPECTED_DEPLOY_SHA" >> "$GITHUB_OUTPUT"
+            expected_sha="$EXPECTED_DEPLOY_SHA"
             echo "request_id=manual-dispatch" >> "$GITHUB_OUTPUT"
           fi
+          echo "expected_sha=$expected_sha" >> "$GITHUB_OUTPUT"
           python3 scripts/v7_cutover_contract.py --repository-root . --expected-head "$main_sha" >/dev/null
-          printf 'request_result=ready\nexpected_sha=%s\nrequest_id=%s\n' \
-            "${{ steps.request.outputs.expected_sha || '' }}" "${{ steps.request.outputs.request_id || '' }}" | tee deploy-evidence.txt || true
+          printf 'request_result=ready\nexpected_sha=%s\n' "$expected_sha" | tee deploy-evidence.txt
 
       - name: Configure AWS credentials through GitHub OIDC
         uses: aws-actions/configure-aws-credentials@e1253824e5c10ff9df46874f81ed3ec929e19cfd
