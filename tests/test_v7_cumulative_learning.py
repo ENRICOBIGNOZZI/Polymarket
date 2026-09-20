@@ -229,6 +229,7 @@ def test_snapshot_labels_and_tar_members_are_repeatably_readable(tmp_path):
 
 
 def test_forecast_scope_is_exactly_three_models():
+    pytest.importorskip("sklearn")  # Required in the isolated causal-learning CI job.
     from research.learning.models import FAMILIES
     assert FAMILIES == ('pm', 'logistic_offset', 'boosted_offset')
 
@@ -253,6 +254,7 @@ def test_legacy_pending_opportunity_is_kept_without_synthetic_label():
 
 @pytest.mark.parametrize('mode,expected', [('FULL','PARTIAL_FILL'), ('DECISIONS','CENSORED'), ('DECISION_WINDOWS','CENSORED')])
 def test_arrival_replay_requires_proven_continuous_capture(tmp_path, mode, expected):
+    pytest.importorskip("sklearn")
     from research.learning.catalog import CLOSED
     source=tmp_path/'source'; source.mkdir(); out=tmp_path/'private'
     common={'capture_mode':mode,'connection_epoch':1,'paper_terms_sha256':'b'*64,
