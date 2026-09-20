@@ -535,15 +535,11 @@ trap cleanup EXIT
 install -d -m 0755 -o "$SERVICE_USER" -g "$SERVICE_GROUP" "$RUNTIME_ROOT" "$RUNTIME_ROOT/by-sha"
 rm -rf -- "$RUNTIME_ROOT/by-sha/$SHA"
 
-# The full verification suite includes probability-research tests that import
-# NumPy. Provision this build/test dependency in the root control plane; the
-# PAPER runtime itself does not import NumPy on its trading path.
-if ! sudo -u "$SERVICE_USER" -H python3 -c 'import numpy' >/dev/null 2>&1; then
-  export DEBIAN_FRONTEND=noninteractive
-  apt-get update
-  apt-get install -y python3-numpy
-fi
-sudo -u "$SERVICE_USER" -H python3 -c 'import numpy' >/dev/null
+# The canonical SSM path reuses the exact-SHA GitHub release matrix. The
+# stage script independently re-verifies those check-runs before skipping its
+# duplicate full local suite. NumPy is therefore not a London deploy dependency
+# on this fast path.
+REUSE_EXACT_SHA_CI=1
 
 # Previous root-run staging attempts may have left deterministic test fixtures
 # in /tmp. Give every exact SHA a fresh private temporary root owned by the
@@ -558,6 +554,8 @@ sudo -u "$SERVICE_USER" -H env TMPDIR="$STAGE_TMPDIR" \
   POLYMARKET_SERVICE_USER="$SERVICE_USER" \
   POLYMARKET_APP_DIR="$WORKTREE" \
   POLYMARKET_RUNTIME_ROOT="$RUNTIME_ROOT" \
+  POLYMARKET_REUSE_EXACT_SHA_CI="$REUSE_EXACT_SHA_CI" \
+  PM_V7_CI_REPOSITORY="ENRICOBIGNOZZI/Polymarket" \
   bash "$WORKTREE/ops/v7_london_stage_release.sh"
 env POLYMARKET_EXPECTED_SHA="$SHA" \
   POLYMARKET_SERVICE_USER="$SERVICE_USER" \
