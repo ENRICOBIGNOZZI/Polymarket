@@ -7,6 +7,7 @@ RUNTIME_ROOT="${POLYMARKET_RUNTIME_ROOT:-/home/$SERVICE_USER/polymarket-runtime}
 TARGET="$RUNTIME_ROOT/by-sha/$EXPECTED_SHA"
 [[ "$EXPECTED_SHA" =~ ^[0-9a-f]{40}$ ]] || { echo "exact SHA required" >&2; exit 78; }
 [[ "$(uname -s)" == Linux ]] || { echo "London stage requires Linux" >&2; exit 78; }
+python3 -c 'import numpy' >/dev/null 2>&1 || { echo "python3 numpy required for London verification stage" >&2; exit 78; }
 LOCK_FILE="${POLYMARKET_LONDON_DEPLOY_LOCK_FILE:-/home/$SERVICE_USER/.cache/polymarket-v7-london-deploy.lock}"
 LOCK_DIR="$(dirname "$LOCK_FILE")"
 command -v flock >/dev/null 2>&1 || { echo "flock is required for London deployment serialization" >&2; exit 78; }
