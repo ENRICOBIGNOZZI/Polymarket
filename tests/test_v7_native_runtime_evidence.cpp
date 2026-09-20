@@ -39,6 +39,11 @@ int main() {
     config.maker_execution_semantics = "maker-paper-v7.2-bilateral-inventory";
     config.observation_capture_mode = "DECISIONS";
     assert(config.valid());
+    auto signal_config = config;
+    signal_config.signal_policy_sha256 = std::string(64, 'd');
+    assert(signal_config.valid());
+    signal_config.signal_policy_sha256 = std::string(40, 'd');
+    assert(!signal_config.valid());
     auto window_config = config;
     window_config.observation_capture_mode = "DECISION_WINDOWS";
     assert(window_config.valid());
