@@ -456,7 +456,27 @@ trap cleanup EXIT
 # worktree. Keep root only for the later cutover/systemd control plane.
 install -d -m 0755 -o "$SERVICE_USER" -g "$SERVICE_GROUP" "$RUNTIME_ROOT" "$RUNTIME_ROOT/by-sha"
 rm -rf -- "$RUNTIME_ROOT/by-sha/$SHA"
-sudo -u "$SERVICE_USER" -H env POLYMARKET_EXPECTED_SHA="$SHA" \
+
+# The full verification suite includes probability-research tests that import
+# NumPy. Provision this build/test dependency in the root control plane; the
+# PAPER runtime itself does not import NumPy on its trading path.
+if ! sudo -u "$SERVICE_USER" -H python3 -c 'import numpy' >/dev/null 2>&1; then
+  export DEBIAN_FRONTEND=noninteractive
+  apt-get update
+  apt-get install -y python3-numpy
+fi
+sudo -u "$SERVICE_USER" -H python3 -c 'import numpy' >/dev/null
+
+# Previous root-run staging attempts may have left deterministic test fixtures
+# in /tmp. Give every exact SHA a fresh private temporary root owned by the
+# service user so C++ std::filesystem::temp_directory_path() and Python
+# tempfile cannot collide with stale/root-owned artifacts.
+STAGE_TMPDIR="$WORKTREE_PARENT/tmp-$SHA"
+rm -rf -- "$STAGE_TMPDIR"
+install -d -m 0700 -o "$SERVICE_USER" -g "$SERVICE_GROUP" "$STAGE_TMPDIR"
+
+sudo -u "$SERVICE_USER" -H env TMPDIR="$STAGE_TMPDIR" \
+  POLYMARKET_EXPECTED_SHA="$SHA" \
   POLYMARKET_SERVICE_USER="$SERVICE_USER" \
   POLYMARKET_APP_DIR="$WORKTREE" \
   POLYMARKET_RUNTIME_ROOT="$RUNTIME_ROOT" \
