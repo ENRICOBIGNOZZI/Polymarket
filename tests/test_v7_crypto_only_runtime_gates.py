@@ -15,16 +15,14 @@ class CryptoOnlyRuntimeGatesTest(unittest.TestCase):
         self.assertNotIn("m.get('live_algorithm_count') == 2", text)
 
     def test_server_health_uses_single_crypto_scope_everywhere(self) -> None:
-        text = (ROOT / ".github/workflows/v7-paper-server-health.yml").read_text(encoding="utf-8")
-        self.assertIn("Verify crypto-only PAPER runtime", text)
-        self.assertIn("allocation.get('engine_count')==1", text)
-        self.assertIn("scope.get('version')==8", text)
-        self.assertIn("scope.get('live_algorithm_count')==1", text)
-        self.assertIn("^polymarket_v7_live_algorithm_count 1$", text)
-        self.assertNotIn("Verify two-engine PAPER runtime", text)
-        self.assertNotIn("scope.get('live_algorithm_count')==2", text)
-        self.assertNotIn("allocation.get('engine_count')==2", text)
-        self.assertNotIn("^polymarket_v7_live_algorithm_count 2$", text)
+        workflow = (ROOT / ".github/workflows/v7-paper-server-health.yml").read_text(encoding="utf-8")
+        helper = (ROOT / "ops/v7_london_ssm_health.py").read_text(encoding="utf-8")
+        self.assertIn("Verify London PAPER runtime through read-only SSM", workflow)
+        self.assertIn("a.get('engine_count')==1", helper)
+        self.assertIn("{'CRYPTO_SETTLEMENT_ENGINE'}", helper)
+        self.assertIn("polymarket_v7_live_algorithm_count 1", helper)
+        self.assertNotIn("engine_count')==2", helper)
+        self.assertNotIn("polymarket_v7_live_algorithm_count 2", helper)
 
     def test_legacy_server_updater_health_gate_is_crypto_only(self) -> None:
         text = (ROOT / "ops/update_server_v7.sh").read_text(encoding="utf-8")
