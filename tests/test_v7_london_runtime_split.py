@@ -24,7 +24,7 @@ def test_cutover_artifact_gate_precedes_stop_and_symlink_switch():
 def test_cutover_validates_previous_systemd_run_root_before_new_root():
     s=(ROOT/'ops/v7_london_cutover.sh').read_text()
     capture=s.index('PREVIOUS_RUN_ROOT="$(systemctl show polymarket-v7-paper.service')
-    stop=s.index('systemctl stop polymarket-v7-exporter.service polymarket-v7-paper.service')
+    stop=s.index('systemctl stop polymarket-v7-paper.service')
     guard=s.index('"$PREVIOUS_RUN_ROOT" != "$RUN_ROOT"', stop)
     previous_prepare=s.index('--run-root "$PREVIOUS_RUN_ROOT"', guard)
     target_prepare=s.index('--run-root "$RUN_ROOT"', previous_prepare)
@@ -68,7 +68,7 @@ def test_native_carryover_is_explicit_and_requires_stable_run_root():
     assert 'native carryover requires a stable London run root' in s
     assert 'prepare_args+=(--allow-native-carryover)' in s
     guard=s.index('native carryover requires a stable London run root')
-    stop=s.index('systemctl stop polymarket-v7-exporter.service polymarket-v7-paper.service')
+    stop=s.index('systemctl stop polymarket-v7-paper.service')
     assert guard < stop
 
 
@@ -90,7 +90,7 @@ def test_linux_runtime_pins_artifacts_to_exact_sha_generation():
     assert 'TARGET_ARTIFACT="$ARTIFACT_ROOT/by-sha/$EXPECTED_SHA"' in cutover
     assert 'python3 - "$TARGET_ARTIFACT/manifest.json" "$EXPECTED_SHA"' in cutover
 
-    stop=cutover.index('systemctl stop polymarket-v7-exporter.service polymarket-v7-paper.service')
+    stop=cutover.index('systemctl stop polymarket-v7-paper.service')
     start=cutover.index('systemctl enable --now polymarket-v7-paper.service')
     scrape=cutover.index('Prometheus is not scraping the V7 exporter')
     advance=cutover.index('ln -sfn "by-sha/$EXPECTED_SHA" "$ARTIFACT_CURRENT"')
