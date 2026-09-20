@@ -41,6 +41,7 @@ jobs:
       full_required: ${{ steps.diff.outputs.full_required }}
       latency_required: ${{ steps.diff.outputs.latency_required }}
       london_required: ${{ steps.diff.outputs.london_required }}
+      research_required: ${{ steps.diff.outputs.research_required }}
     env:
       VALIDATION_SHA: ${{ github.event.inputs.expected_sha || github.event.pull_request.head.sha || github.sha }}
     steps:
@@ -72,6 +73,7 @@ jobs:
           full=false
           latency=false
           london=false
+          research=false
 
           if grep -Eq '^(src/|include/|tests/.*\.(cpp|cc|cxx|h|hpp)$|CMakeLists\.txt$)' "$RUNNER_TEMP/v7-changed-paths.txt"; then
             cpp=true
@@ -91,13 +93,37 @@ jobs:
             full=true
             latency=true
             london=true
+            research=true
+          fi
+          if grep -Eq '^(research/|tests/test_v7_cumulative_learning.py|tests/test_v7_learning_models.py|ops/.*research)' "$RUNNER_TEMP/v7-changed-paths.txt"; then
+            research=true
           fi
 
           echo "cpp_required=$cpp" >> "$GITHUB_OUTPUT"
           echo "full_required=$full" >> "$GITHUB_OUTPUT"
           echo "latency_required=$latency" >> "$GITHUB_OUTPUT"
           echo "london_required=$london" >> "$GITHUB_OUTPUT"
+          echo "research_required=$research" >> "$GITHUB_OUTPUT"
           printf 'cpp_required=%s\nfull_required=%s\nlatency_required=%s\nlondon_required=%s\n' "$cpp" "$full" "$latency" "$london"
+
+  research-learning:
+    name: causal-learning-v7
+    needs: classify
+    if: needs.classify.outputs.research_required == 'true'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    env:
+      OMP_NUM_THREADS: '1'
+      OPENBLAS_NUM_THREADS: '1'
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          ref: ${{ github.event.inputs.expected_sha || github.event.pull_request.head.sha || github.sha }}
+      - name: Isolated offline research dependencies and causal regression tests
+        run: |
+          python3 -m venv /tmp/v7-learning
+          /tmp/v7-learning/bin/pip install -r research/requirements-learning.txt
+          /tmp/v7-learning/bin/python -m pytest tests/test_v7_cumulative_learning.py tests/test_v7_learning_models.py -q
 
   security-audit:
     name: security-audit-v7

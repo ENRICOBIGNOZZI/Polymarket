@@ -65,6 +65,8 @@ def test_native_manager_aggregates_funnel_by_context(tmp_path):
 
 def test_exporter_emits_native_reason_and_context_metrics():
     native = {
+        "native_signal_funnel": {"unique_signals_observed": 2},
+        "probability_model_configured": False,
         "native_decision_observations": 10,
         "native_accepted_decision_observations": 3,
         "native_rejected_decision_observations": 7,
@@ -74,6 +76,8 @@ def test_exporter_emits_native_reason_and_context_metrics():
         },
     }
     text = render_prometheus({"native_engine_manager": native})
+    assert 'polymarket_v7_native_signal_funnel_total{stage="unique_signals_observed"} 2' in text
+    assert 'polymarket_v7_probability_model_configured 0' in text
     assert 'polymarket_v7_native_decision_reason_total{reason="ACCEPTED"} 3' in text
     assert (
         'polymarket_v7_native_context_decision_reason_total'

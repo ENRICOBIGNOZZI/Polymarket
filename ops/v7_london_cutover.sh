@@ -77,6 +77,11 @@ assert not (v.get('excluded_assets') or [])
 assert not (v.get('asset_shadow_overrides') or [])
 print('probability_model_gate=ready')
 PYPROB
+  # Fitting/structural validity cannot authorize a forward cohort. This proof
+  # binds independent offline, native parity and executable-policy evidence.
+  python3 "$SOURCE_DIR/scripts/v7_probability_promotion.py" \
+    --model "$PROBABILITY_MODEL_SOURCE" \
+    --proof "$PROBABILITY_MODEL_SOURCE.promotion.json" --code-sha "$EXPECTED_SHA"
 fi
 
 # Check the same exact-SHA CI contract as runtime BEFORE stopping healthy
@@ -202,6 +207,20 @@ rm -f "$PROBABILITY_ENV"
 if [[ -n "$PROBABILITY_MODEL_SOURCE" ]]; then
   PROBABILITY_MODEL_TARGET="$TARGET_ARTIFACT/probability_model.json"
   install -o "$SERVICE_USER" -g "$SERVICE_GROUP" -m 0600     "$PROBABILITY_MODEL_SOURCE" "$PROBABILITY_MODEL_TARGET"
+  install -o "$SERVICE_USER" -g "$SERVICE_GROUP" -m 0600 \
+    "$PROBABILITY_MODEL_SOURCE.promotion.json" "$PROBABILITY_MODEL_TARGET.promotion.json"
+  PROBABILITY_REPORT_NAME="$(python3 - "$PROBABILITY_MODEL_SOURCE.promotion.json" <<'PYREPORT'
+import json,sys
+from pathlib import Path
+name=json.loads(Path(sys.argv[1]).read_text())['report_file']
+if Path(name).name!=name: raise SystemExit('unsafe probability report path')
+print(name)
+PYREPORT
+)"
+  install -o "$SERVICE_USER" -g "$SERVICE_GROUP" -m 0600 \
+    "$(dirname "$PROBABILITY_MODEL_SOURCE")/$PROBABILITY_REPORT_NAME" "$TARGET_ARTIFACT/$PROBABILITY_REPORT_NAME"
+  python3 "$SOURCE_DIR/scripts/v7_probability_promotion.py" --model "$PROBABILITY_MODEL_TARGET" \
+    --proof "$PROBABILITY_MODEL_TARGET.promotion.json" --code-sha "$EXPECTED_SHA"
   tmp_probability_env="$PROBABILITY_ENV.tmp.$$"
   {
     printf 'PM_V7_PROBABILITY_MODEL=%s\n' "$PROBABILITY_MODEL_TARGET"

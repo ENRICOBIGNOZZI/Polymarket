@@ -1,0 +1,13 @@
+[Unit]
+Description=V7 private PAPER research retraining (no promotion)
+ConditionPathExists=@RESEARCH_ROOT@/research_host.json
+
+[Service]
+Type=oneshot
+User=@RESEARCH_USER@
+WorkingDirectory=@APP_DIR@
+ExecStart=@PYTHON@ -m research.learning.daily --root @RESEARCH_ROOT@
+UMask=0077
+Nice=10
+NoNewPrivileges=true
+PrivateTmp=true

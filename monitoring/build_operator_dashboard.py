@@ -207,13 +207,28 @@ def diagnostics():
     ]
     for panel in runtime + universe + latency + contexts:
         panel["gridPos"]["y"] += 8
-    return [row(160,"Details · runtime, ownership and accounting",74,runtime),row(180,"Details · discovery and research data quality",75,universe),row(190,"Details · latency and markout sample sizes",76,latency),row(200,"Details · crypto contexts and permissions",77,contexts)]
+    learning = [
+        stat(301,"Probability model configured","polymarket_v7_probability_model_configured",0,88,w=6,
+             mapping={0:("ECONOMICALLY BLOCKED","yellow"),1:("CONFIGURED","green")}),
+        stat(302,"Fixed PAPER cohort open","polymarket_v7_probability_evaluation_open",6,88,w=6,
+             mapping={0:("CLOSED","yellow"),1:("OPEN","green")}),
+        stat(303,"Unique observed signals","polymarket_v7_native_signal_funnel_total{stage=\"unique_signals_observed\"}",12,88,w=6),
+        stat(304,"Signals with positive conservative edge","polymarket_v7_native_signal_funnel_total{stage=\"signals_economically_positive\"}",18,88,w=6),
+        chart(305,"Signal progression · each signal counted once per stage",[("polymarket_v7_native_signal_funnel_total","{{stage}}")],0,92,w=24,
+              description="Per market/capture observed signals. Stage-ever-reached counts; generation validity is not inferred. Absent instrumentation is unavailable."),
+        stat(306,"Cumulative research rows","polymarket_v7_research_rows",0,100,w=6),
+        stat(307,"Unique research markets","polymarket_v7_research_markets",6,100,w=6),
+        stat(308,"Training data cutoff","polymarket_v7_research_training_cutoff_seconds",12,100,w=6,unit="dateTimeAsIso"),
+        table(309,"Daily training / candidate state · no automatic promotion","polymarket_v7_research_state_info",0,104,w=24,
+              columns={"state":"Candidate state","result":"Daily result","artifact_sha256":"Runtime artifact SHA"}),
+    ]
+    return [row(160,"Details · runtime, ownership and accounting",74,runtime),row(180,"Details · discovery and research data quality",75,universe),row(190,"Details · latency and markout sample sizes",76,latency),row(200,"Details · crypto contexts and permissions",77,contexts),row(300,"Learning · probability gate, unique signals and daily research",78,learning)]
 
 
 def common(dashboard):
     dashboard.update({"schemaVersion":39,"refresh":"10s","timezone":"Europe/Zurich","time":{"from":"now-1h","to":"now"},"editable":False,"graphTooltip":1})
     dashboard["templating"]={"list":[{"name":"instance","label":"Crypto runtime target","type":"query","datasource":DS,"definition":'label_values(up{job="polymarket-v7"}, instance)',"query":{"query":'label_values(up{job="polymarket-v7"}, instance)',"refId":"instance"},"refresh":1,"sort":1,"multi":False,"includeAll":False,"current":{"selected":False,"text":"127.0.0.1:9108","value":"127.0.0.1:9108"},"options":[]}]}
-    dashboard["links"]=[{"title":title,"type":"link","url":"/d/"+uid,"includeVars":True,"keepTime":True,"targetBlank":False} for title,uid in (("Crypto Control Room","polymarket-v7"),("Crypto Latency","polymarket-v7-latency"),("Crypto Settlement","polymarket-v7-external-fair")) if uid!=dashboard["uid"]]
+    dashboard["links"]=[{"title":title,"type":"link","url":"/d/"+uid,"includeVars":True,"keepTime":True,"targetBlank":False} for title,uid in (("Crypto Control Room","polymarket-v7"),("Multi-Crypto Performance","polymarket-v7-multi-crypto"),("Crypto Latency","polymarket-v7-latency"),("Crypto Settlement","polymarket-v7-external-fair")) if uid!=dashboard["uid"]]
     return dashboard
 
 

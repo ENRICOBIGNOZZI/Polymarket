@@ -3,11 +3,15 @@
 <plist version="1.0"><dict>
 <key>Label</key><string>com.polymarket.v7.research-cycle</string>
 <key>ProgramArguments</key><array><string>/bin/bash</string><string>@APP_DIR@/research/run_research_cycle.sh</string></array>
-<key>StartInterval</key><integer>3600</integer>
-<key>RunAtLoad</key><false/>
+<!-- Polling computes Europe/Zurich midnight in Python, independent of host TZ.
+     Completed cutoff receipts make all other wakes no-ops, including catch-up. -->
+<key>StartInterval</key><integer>60</integer>
+<key>RunAtLoad</key><true/>
 <key>EnvironmentVariables</key><dict>
   <key>POLYMARKET_LONDON_HOST</key><string>@LONDON_HOST@</string>
   <key>POLYMARKET_LONDON_USER</key><string>@LONDON_USER@</string>
+  <key>PM_V7_RESEARCH_ROOT</key><string>@RESEARCH_ROOT@</string>
+  <key>PM_V7_RESEARCH_PYTHON</key><string>@PYTHON@</string>
 </dict>
 <key>StandardOutPath</key><string>@HOME@/polymarket-research/research-cycle.log</string>
 <key>StandardErrorPath</key><string>@HOME@/polymarket-research/research-cycle.err.log</string>

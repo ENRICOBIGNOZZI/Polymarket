@@ -25,6 +25,9 @@ def _artifact_identity(path: Path, code_sha: str) -> tuple[str,dict[str,Any]]:
         or value.get("real_order_submission") is not False
         or int(value.get("test_duration_seconds") or 0)!=7200
     ): raise ValueError("probability_artifact_identity")
+    if value.get("promotion_evidence_required") is True:
+        from v7_probability_promotion import validate
+        validate(path, Path(str(path)+".promotion.json"), code_sha)
     return hashlib.sha256(raw).hexdigest(),value
 
 def prepare(gate_path: Path, model_path: Path, code_sha: str,

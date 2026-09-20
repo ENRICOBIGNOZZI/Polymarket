@@ -19,7 +19,8 @@ def test_ci_runs_exact_v7_review_branches_without_enabling_branch_deployment():
     ci = (ROOT / ".github/workflows/ci.yml").read_text()
     deploy = (ROOT / ".github/workflows/v7-deploy-paper-server.yml").read_text()
     assert 'branches: [main, "codex/v7-*"]' in ci
-    assert ci.count("fetch-depth: 0") == 4
+    assert ci.count("fetch-depth: 0") == 1  # Secret scan requires full history.
+    assert ci.count("fetch-depth: 2") >= 3  # Incremental build/path gates.
     assert "london-runtime-boundary-v7" in ci
     assert "PM_LONDON_RUNTIME_ONLY=ON" in ci
     assert "canonical main does not match the explicitly approved SHA" in deploy

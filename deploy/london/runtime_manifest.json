@@ -39,6 +39,7 @@
     "scripts/v7_native_paper_settlement.py",
     "scripts/v7_portfolio_guard.py",
     "scripts/v7_probability_evaluation_gate.py",
+    "scripts/v7_probability_promotion.py",
     "scripts/v7_process_manifest.py",
     "scripts/v7_public_https_proxy.py",
     "scripts/v7_rtds_external_fair_monitor.py",

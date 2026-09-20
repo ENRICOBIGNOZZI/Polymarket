@@ -24,8 +24,9 @@ def test_evidence_accumulating_without_predictive_oos_is_rejected():
 def test_predictively_valid_maker_is_promotable():
     code,v=run(maker('EVIDENCE_ACCUMULATING',True));assert code==0;assert v['maker']['state']=='PREDICTIVE_OOS_VALID'
 
-def test_research_cycle_validates_before_push():
+def test_manual_artifacts_validate_and_daily_cycle_never_pushes():
     build=(ROOT/'research/build_runtime_artifacts.sh').read_text(); push=(ROOT/'research/push_runtime_artifacts.sh').read_text(); cycle=(ROOT/'research/run_research_cycle.sh').read_text()
     assert build.index('validate_candidate.py') < build.index('runtime_artifact_manifest.py')
     assert 'candidate_validation.json' in push and "state')=='PROMOTABLE'" in push
-    assert cycle.index('build_runtime_artifacts.sh') < cycle.index('push_runtime_artifacts.sh')
+    assert 'research.learning.daily' in cycle
+    assert 'push_runtime_artifacts.sh' not in cycle

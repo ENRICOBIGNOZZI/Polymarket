@@ -683,6 +683,12 @@ class Manager:
                 key: dict(sorted(value.items()))
                 for key, value in sorted(context_reason_counts.items())
             },
+            "signal_funnel": {
+                key: sum(row["signal_funnel"][key] for row in rows)
+                for key in sorted(set.intersection(*[
+                    set((row.get("signal_funnel") or {}).keys()) for row in rows
+                ]))
+            } if rows and all(isinstance(row.get("signal_funnel"), dict) for row in rows) else {},
             "timestamp_ms": time.time_ns() // 1_000_000,
             "worker_count": len(rows),
             "markets": sorted(str(row.get("market_id") or "") for row in rows if row.get("market_id")),
@@ -802,6 +808,7 @@ class Manager:
             "native_decision_reason_counts": evidence.get("decision_reason_counts") or {},
             "native_context_decision_reason_counts":
                 evidence.get("context_decision_reason_counts") or {},
+            "native_signal_funnel": evidence.get("signal_funnel") or {},
             "settlement_market_count": int(settlements.get("market_count") or 0),
             "settlement_blocked_count": int(settlements.get("blocked_count") or 0),
             "settlement_retryable_timeout_count": int(

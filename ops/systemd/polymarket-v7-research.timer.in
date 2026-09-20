@@ -1,0 +1,11 @@
+[Unit]
+Description=V7 midnight Europe/Zurich research with catch-up
+
+[Timer]
+OnCalendar=*-*-* 00:00:00 Europe/Zurich
+Persistent=true
+AccuracySec=1s
+Unit=polymarket-v7-research.service
+
+[Install]
+WantedBy=timers.target

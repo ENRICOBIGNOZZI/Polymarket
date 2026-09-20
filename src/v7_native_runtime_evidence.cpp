@@ -1,4 +1,5 @@
 #include "pm/v7_native_runtime_evidence.hpp"
+#include "pm/v7_signal_funnel.hpp"
 
 #include <boost/json.hpp>
 
@@ -172,6 +173,7 @@ struct NativeRuntimeEvidenceWriter::Impl {
     std::array<std::uint64_t, 32> decision_reason_counts{};
     std::uint64_t decision_observations = 0;
     std::uint64_t accepted_decision_observations = 0;
+    NativeSignalFunnel signal_funnel;
     const std::string capture_id = std::to_string(monotonic_now_ns());
 
     Impl(NativeRuntimeEvidenceConfig value, NativeRuntimeEvidenceWriter& source)
@@ -397,6 +399,12 @@ struct NativeRuntimeEvidenceWriter::Impl {
 
     void write_observation(const NativeObservation& event) {
         if (event.kind == 2) {
+            signal_funnel.observe(event.signal_version, event.trigger_ns, event.decision_ns,
+                event.valid_until_ns, event.close_ns, event.receive_ns,
+                event.signal_valid != 0 && (event.direction == 1 || event.direction == -1),
+                event.valid != 0, event.probability.valid != 0,
+                std::isfinite(event.economics.conservative_net_edge)
+                    && event.economics.conservative_net_edge > 0., event.accepted != 0);
             ++decision_observations;
             if (event.accepted != 0) ++accepted_decision_observations;
             const auto index = static_cast<std::size_t>(event.reason);
@@ -535,6 +543,9 @@ struct NativeRuntimeEvidenceWriter::Impl {
     }
 
     void write_status() {
+        json::object funnel;
+        for (std::size_t i = 0; i < NativeSignalFunnel::names.size(); ++i)
+            funnel[NativeSignalFunnel::names[i]] = signal_funnel.counts[i];
         json::object reason_counts;
         for (std::size_t i = 0; i < decision_reason_counts.size(); ++i) {
             if (decision_reason_counts[i] == 0) continue;
@@ -562,6 +573,9 @@ struct NativeRuntimeEvidenceWriter::Impl {
             {"observations_dropped", owner.observations_dropped_.load()},
             {"observations_queue_depth", owner.observations_->approximate_size()},
             {"decision_observations", decision_observations},
+            {"signal_funnel", std::move(funnel)},
+            {"signal_funnel_semantics", "UNIQUE_OBSERVED_SIGNAL_PER_MARKET_CAPTURE_STAGE_EVER_REACHED"},
+            {"signals_valid_at_generation", nullptr},
             {"accepted_decision_observations", accepted_decision_observations},
             {"rejected_decision_observations",
                 decision_observations - accepted_decision_observations},

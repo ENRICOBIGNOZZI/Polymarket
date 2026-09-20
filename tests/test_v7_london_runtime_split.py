@@ -70,14 +70,17 @@ def test_runtime_bundle_is_research_free_by_contract():
     assert '/research/' in m['forbidden_path_fragments']
     assert all('train.py' not in x and 'durable_learning' not in x for x in m['python_entrypoints']+m['support_files'])
 
-def test_research_cycle_has_no_execution_authority_and_hourly_template():
+def test_research_cycle_has_no_execution_authority_and_midnight_guard():
     cycle=(ROOT/'research/run_research_cycle.sh').read_text()
+    daily=(ROOT/'research/learning/daily.py').read_text()
     plist=(ROOT/'ops/launchd/com.polymarket.v7.research-cycle.plist.in').read_text()
-    assert 'pull_london_evidence.sh' in cycle
-    assert 'build_runtime_artifacts.sh' in cycle
-    assert 'push_runtime_artifacts.sh' in cycle
-    assert "'execution_authority':False" in cycle
-    assert '<integer>3600</integer>' in plist
+    assert 'research.learning.daily' in cycle
+    assert 'pull_london_evidence.sh' in daily
+    assert 'push_runtime_artifacts.sh' not in cycle + daily
+    assert 'Europe/Zurich' in daily
+    assert '<integer>60</integer>' in plist
+    assert '<key>RunAtLoad</key>' in plist
+
 
 def test_shells_parse():
     for rel in ['ops/v7_london_stage_release.sh','ops/v7_london_bootstrap.sh','ops/v7_london_cutover.sh','research/run_research_cycle.sh','research/install_macos_scheduler.sh']:

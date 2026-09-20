@@ -1,4 +1,5 @@
 #include "pm/v7_native_runtime_evidence.hpp"
+#include "pm/v7_signal_funnel.hpp"
 
 #include <boost/json.hpp>
 
@@ -13,6 +14,18 @@ namespace fs = std::filesystem;
 namespace json = boost::json;
 
 int main() {
+    NativeSignalFunnel funnel;
+    for (int i = 0; i < 10000; ++i)
+        funnel.observe(1, 100, 200, 300, 110'000'000'200LL, 90,
+                       true, true, false, false, false);
+    assert(funnel.counts[0] == 1 && funnel.counts[1] == 1);
+    assert(funnel.counts[3] == 1 && funnel.counts[4] == 1 && funnel.counts[5] == 0);
+    funnel.observe(1, 100, 210, 300, 110'000'000'200LL, 90, true, true, true, true, true);
+    assert(funnel.counts[5] == 1 && funnel.counts[6] == 1 && funnel.counts[7] == 1);
+    funnel.observe(2, 400, 600, 500, 110'000'000'600LL, 390, false, true, false, false, false);
+    assert(funnel.counts[0] == 2 && funnel.counts[2] == 1);
+    funnel.observe(1, 100, 210, 300, 110'000'000'200LL, 90, true, true, true, true, true);
+    assert(funnel.counts[0] == 2); // delayed old observation cannot recount
     const auto root = fs::temp_directory_path() / "v7-native-evidence-test";
     fs::remove_all(root);
 

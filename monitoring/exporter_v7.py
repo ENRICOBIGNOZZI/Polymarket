@@ -380,6 +380,7 @@ def collect_snapshot(run_root: Path, repository_root: Path | None = None, *, now
         "crypto_runtime": _json(run_root / "control/crypto_settlement_engine_snapshot.json"),
         "global_coordinator": _json(run_root / "control/global_portfolio_coordinator.json"),
         "native_engine_manager": native_manager,
+        "research_training": _json(run_root / "control/research_training_status.json"),
         "native_mode": native_mode,
         "process_manifest": {
             "schema": process.get("schema"),
@@ -758,6 +759,25 @@ def render_prometheus(snapshot: dict[str, Any]) -> str:
         lines.append(_metric(
             "polymarket_v7_native_decision_reason_total", count, {"reason": reason}
         ))
+    for stage, count in sorted((native.get("native_signal_funnel") or {}).items()):
+        lines.append(_metric("polymarket_v7_native_signal_funnel_total", count, {"stage": stage}))
+    for field in ("probability_model_configured", "probability_evaluation_open"):
+        lines.append(_metric("polymarket_v7_" + field, native.get(field)))
+    training = snapshot.get("research_training") or {}
+    if (training.get("schema") == "v7_daily_retraining_receipt_v1"
+            and training.get("paper_only") is True
+            and training.get("authenticated_execution") is False
+            and training.get("real_order_submission") is False
+            and training.get("automatic_promotion") is False):
+        for field in ("rows", "markets", "new_rows", "new_markets"):
+            lines.append(_metric("polymarket_v7_research_" + field, training.get(field)))
+        cutoff = training.get("cutoff_ns")
+        lines.append(_metric("polymarket_v7_research_training_cutoff_seconds",
+                             cutoff / 1e9 if isinstance(cutoff, int) else None))
+        lines.append(_metric("polymarket_v7_research_state_info", 1, {
+            "state": training.get("candidate_state") or "UNKNOWN",
+            "result": training.get("result") or "UNKNOWN",
+            "artifact_sha256": training.get("artifact_sha256") or "UNAVAILABLE"}))
     for context, counts in sorted((native.get("native_context_decision_reason_counts") or {}).items()):
         asset, _, horizon = str(context).partition(":")
         for reason, count in sorted((counts or {}).items()):

@@ -7,6 +7,9 @@
 #include <fstream>
 #include <iostream>
 #include <new>
+#include <algorithm>
+#include <chrono>
+#include <vector>
 
 std::atomic<std::uint64_t> allocations{0};
 void* operator new(std::size_t n) {allocations.fetch_add(1);if(void* p=std::malloc(n))return p;throw std::bad_alloc();}
@@ -92,6 +95,41 @@ int main(int argc,char** argv) {
     auto o=artifact();{std::ofstream f(path);f<<json::serialize(o);}
     auto m=NativeProbabilityModel::load(path.string(),std::string(40,'a'));
     assert(m.loaded && m.artifact_sha256.size()==64);
+    if (argc==2 && std::string_view(argv[1])=="--benchmark") {
+        using clock=std::chrono::steady_clock;
+        auto x=input();
+        std::array<double,kProbabilityFeatures> features{};
+        volatile double sink=0.;
+        const auto measure=[&](auto operation) {
+            std::vector<double> samples(100000);
+            for (int i=0;i<1000;++i) sink=operation();
+            const auto before=allocations.load();
+            for (auto& sample:samples) {
+                const auto start=clock::now();
+                for (int j=0;j<64;++j) {
+                    x.signal.binance_return_100ms_bp=.8+j*.0001;
+                    sink=operation();
+                }
+                sample=std::chrono::duration<double,std::nano>(clock::now()-start).count()/64.;
+            }
+            assert(allocations.load()==before);
+            std::sort(samples.begin(),samples.end());
+            return json::object{{"samples",samples.size()},{"calls_per_timing_sample",64},
+                {"p50_ns",samples[50000]},
+                {"p90_ns",samples[90000]},{"p99_ns",samples[99000]},
+                {"p99_9_ns",samples[99900]},{"hot_allocations",0}};
+        };
+        auto construction=measure([&] {
+            const auto valid=probability_features(x,"DOGE","M5",m.shock_scales,features);
+            return valid ? features[1] : -1.;
+        });
+        auto inference=measure([&] {return m.predict(x,"DOGE","M5").lower;});
+        json::object result{{"schema","v7_probability_microbenchmark_v1"},
+            {"scope","SYNTHETIC_LOCAL_MICROBENCHMARK_NOT_LONDON_END_TO_END"},
+            {"feature_construction",construction},{"inference_including_features",inference},
+            {"signal_to_admission",nullptr},{"admission_to_arrival",nullptr}};
+        std::cout<<json::serialize(result)<<'\n';fs::remove(path);(void)sink;return 0;
+    }
     auto x=input();const auto before=allocations.load();
     auto f=m.predict(x,"DOGE","M5");assert(allocations.load()==before);
     assert(f.valid && !f.forward_calibrated && std::abs(f.up-.4)<1e-12);
