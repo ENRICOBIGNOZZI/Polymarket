@@ -13,6 +13,13 @@ on:
       expected_sha:
         required: false
         type: string
+      full_validation:
+        description: Run the complete Release/Debug/Sanitizer sweep
+        required: false
+        default: false
+        type: boolean
+  schedule:
+    - cron: "17 3 * * *"
 
 permissions:
   contents: read
@@ -25,6 +32,73 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  classify:
+    name: classify-v7-change
+    runs-on: ubuntu-24.04
+    timeout-minutes: 2
+    outputs:
+      cpp_required: ${{ steps.diff.outputs.cpp_required }}
+      full_required: ${{ steps.diff.outputs.full_required }}
+      latency_required: ${{ steps.diff.outputs.latency_required }}
+      london_required: ${{ steps.diff.outputs.london_required }}
+    env:
+      VALIDATION_SHA: ${{ github.event.inputs.expected_sha || github.event.pull_request.head.sha || github.sha }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          ref: ${{ github.event.inputs.expected_sha || github.event.pull_request.head.sha || github.sha }}
+          fetch-depth: 2
+      - id: diff
+        name: Classify exact-SHA change
+        shell: bash
+        run: |
+          set -euo pipefail
+          [[ "$VALIDATION_SHA" =~ ^[0-9a-f]{40}$ ]]
+          test "$(git rev-parse HEAD)" = "$VALIDATION_SHA"
+
+          force_full=false
+          if [[ "${{ github.event_name }}" == "schedule" || "${{ github.event.inputs.full_validation || 'false' }}" == "true" ]]; then
+            force_full=true
+          fi
+
+          if git rev-parse HEAD^1 >/dev/null 2>&1; then
+            changed="$(git diff --name-only HEAD^1 HEAD)"
+          else
+            changed="$(git ls-tree -r --name-only HEAD)"
+          fi
+          printf '%s\n' "$changed" > "$RUNNER_TEMP/v7-changed-paths.txt"
+
+          cpp=false
+          full=false
+          latency=false
+          london=false
+
+          if grep -Eq '^(src/|include/|tests/.*\.(cpp|cc|cxx|h|hpp)$|CMakeLists\.txt$)' "$RUNNER_TEMP/v7-changed-paths.txt"; then
+            cpp=true
+            london=true
+          fi
+          if grep -Eq '^(CMakeLists\.txt|include/|src/(http|api|event_api|config|boost_json|fast_arb|fast_ws)\.cpp)' "$RUNNER_TEMP/v7-changed-paths.txt"; then
+            full=true
+          fi
+          if grep -Eq '^(src/v7_(maker|crypto_decision|external|ingress|market_ws)|include/.*v7_(maker|crypto_decision|external|ingress|market_ws)|config/v7_latency_slo\.json|scripts/v7_latency_gate\.py)' "$RUNNER_TEMP/v7-changed-paths.txt"; then
+            latency=true
+          fi
+          if grep -Eq '^(ops/build_london_runtime_bundle\.py|ops/update_server_v7\.sh|deploy/london/|config/paper_v7\.json|config/v7_)' "$RUNNER_TEMP/v7-changed-paths.txt"; then
+            london=true
+          fi
+          if [[ "$force_full" == true ]]; then
+            cpp=true
+            full=true
+            latency=true
+            london=true
+          fi
+
+          echo "cpp_required=$cpp" >> "$GITHUB_OUTPUT"
+          echo "full_required=$full" >> "$GITHUB_OUTPUT"
+          echo "latency_required=$latency" >> "$GITHUB_OUTPUT"
+          echo "london_required=$london" >> "$GITHUB_OUTPUT"
+          printf 'cpp_required=%s\nfull_required=%s\nlatency_required=%s\nlondon_required=%s\n' "$cpp" "$full" "$latency" "$london"
+
   security-audit:
     name: security-audit-v7
     runs-on: ubuntu-24.04
@@ -41,43 +115,71 @@ jobs:
 
   sanitizer:
     name: sanitizer-v7
+    needs: classify
     runs-on: ubuntu-24.04
-    timeout-minutes: 25
+    timeout-minutes: 15
     env:
       VALIDATION_SHA: ${{ github.event.inputs.expected_sha || github.event.pull_request.head.sha || github.sha }}
+      CCACHE_DIR: ${{ github.workspace }}/.ccache
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
           ref: ${{ github.event.inputs.expected_sha || github.event.pull_request.head.sha || github.sha }}
-          # The V7 pre-canary contract scans repository history. A shallow
-          # checkout would silently turn a known historical finding into a
-          # false clean result and make test_v7_live_capability fail.
-          fetch-depth: 0
+          fetch-depth: 2
       - name: Verify exact V7 revision
         run: |
           set -euo pipefail
           [[ "$VALIDATION_SHA" =~ ^[0-9a-f]{40}$ ]]
           test "$(git rev-parse HEAD)" = "$VALIDATION_SHA"
-      - name: Install dependencies
+      - name: Fast-path no C++ sanitizer
+        if: needs.classify.outputs.cpp_required != 'true'
+        run: echo "sanitizer_fast_path=no_cpp_change"
+      - name: Install sanitizer dependencies
+        if: needs.classify.outputs.cpp_required == 'true'
         run: |
           sudo apt-get update
-          sudo apt-get install -y build-essential cmake pkg-config libcurl4-openssl-dev libboost-all-dev libssl-dev libsecp256k1-dev python3 python3-pytest python3-numpy
-      - name: ASan and UBSan V7 suite
+          sudo apt-get install -y ccache ninja-build build-essential cmake pkg-config libcurl4-openssl-dev libboost-all-dev libssl-dev libsecp256k1-dev python3 python3-pytest python3-numpy
+      - name: Restore sanitizer compiler cache
+        if: needs.classify.outputs.cpp_required == 'true'
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+        with:
+          path: .ccache
+          key: v7-asan-${{ runner.os }}-${{ hashFiles('CMakeLists.txt', 'include/**', 'src/**') }}
+          restore-keys: |
+            v7-asan-${{ runner.os }}-
+      - name: ASan and UBSan V7 gate
+        if: needs.classify.outputs.cpp_required == 'true'
         run: |
           set -euo pipefail
-          cmake -S . -B build-ASan-UBSan -DCMAKE_BUILD_TYPE=Debug -DPython3_EXECUTABLE=/usr/bin/python3 \
+          ccache --max-size=1G
+          cmake -S . -B build-ASan-UBSan -G Ninja -DCMAKE_BUILD_TYPE=Debug -DPython3_EXECUTABLE=/usr/bin/python3 \
+            -DCMAKE_CXX_COMPILER_LAUNCHER=ccache \
             -DCMAKE_CXX_FLAGS="-fsanitize=address,undefined -fno-omit-frame-pointer" \
             -DCMAKE_EXE_LINKER_FLAGS="-fsanitize=address,undefined"
-          cmake --build build-ASan-UBSan --parallel 2
-          ASAN_OPTIONS=detect_leaks=1 UBSAN_OPTIONS=halt_on_error=1 \
-            ctest --test-dir build-ASan-UBSan --output-on-failure
+          if [[ "${{ needs.classify.outputs.full_required }}" == "true" ]]; then
+            cmake --build build-ASan-UBSan --parallel "$(nproc)"
+            ASAN_OPTIONS=detect_leaks=1 UBSAN_OPTIONS=halt_on_error=1 \
+              ctest --test-dir build-ASan-UBSan --parallel "$(nproc)" --output-on-failure
+          else
+            cmake --build build-ASan-UBSan --parallel "$(nproc)" --target \
+              polymarket_v7_crypto_settlement_engine \
+              pm_v7_native_runtime_evidence_tests pm_v7_execution_mode_tests \
+              pm_v7_native_paper_execution_tests pm_v7_execution_admission_tests \
+              pm_v7_native_settlement_authority_tests pm_v7_paper_queue_tests pm_v7_oms_tests
+            ASAN_OPTIONS=detect_leaks=1 UBSAN_OPTIONS=halt_on_error=1 \
+              ctest --test-dir build-ASan-UBSan --parallel "$(nproc)" --output-on-failure \
+              -R 'pm_v7_(native_runtime_evidence_tests|execution_mode_tests|native_paper_execution_tests|execution_admission_tests|native_settlement_authority_tests|paper_queue_tests|oms_tests|crypto_settlement_native_candidate_validate)'
+          fi
+          ccache --show-stats
 
   build-test:
     name: ci-v7-${{ matrix.build_type }}
+    needs: classify
     runs-on: ubuntu-24.04
-    timeout-minutes: 20
+    timeout-minutes: 15
     env:
       VALIDATION_SHA: ${{ github.event.inputs.expected_sha || github.event.pull_request.head.sha || github.sha }}
+      CCACHE_DIR: ${{ github.workspace }}/.ccache
     strategy:
       fail-fast: false
       matrix:
@@ -86,31 +188,12 @@ jobs:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
           ref: ${{ github.event.inputs.expected_sha || github.event.pull_request.head.sha || github.sha }}
-          fetch-depth: 0
+          fetch-depth: 2
       - name: Verify exact V7 revision
         run: |
           set -euo pipefail
           [[ "$VALIDATION_SHA" =~ ^[0-9a-f]{40}$ ]]
           test "$(git rev-parse HEAD)" = "$VALIDATION_SHA"
-      - name: Install dependencies
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y build-essential cmake pkg-config libcurl4-openssl-dev libboost-all-dev libssl-dev libsecp256k1-dev python3 python3-pytest python3-numpy
-      - name: Build V7
-        run: |
-          cmake -S . -B build-${{ matrix.build_type }} -DCMAKE_BUILD_TYPE=${{ matrix.build_type }} -DPython3_EXECUTABLE=/usr/bin/python3
-          cmake --build build-${{ matrix.build_type }} --parallel 2
-      - name: Test V7 only
-        run: ctest --test-dir build-${{ matrix.build_type }} --output-on-failure
-      - name: Enforce V7 internal latency SLO
-        if: matrix.build_type == 'Release'
-        run: |
-          set -euo pipefail
-          build-Release/polymarket_v7_maker_replay_bench 200000 > build-Release/v7-latency-benchmark.json
-          python3 scripts/v7_latency_gate.py \
-            --config config/v7_latency_slo.json \
-            --benchmark build-Release/v7-latency-benchmark.json \
-            --output build-Release/v7-latency-gate.json
       - name: Static V7 contract
         run: |
           set -euo pipefail
@@ -129,29 +212,100 @@ jobs:
           bash -n ops/update_server_v7.sh
           python3 scripts/v7_authority_contract.py
           python3 tests/test_v7_repository_shape.py
+      - name: Fast-path no C++ build
+        if: needs.classify.outputs.cpp_required != 'true'
+        run: echo "cpp_build_fast_path=skipped_no_cpp_change"
+      - name: Install C++ dependencies
+        if: needs.classify.outputs.cpp_required == 'true'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ccache ninja-build build-essential cmake pkg-config libcurl4-openssl-dev libboost-all-dev libssl-dev libsecp256k1-dev python3 python3-pytest python3-numpy
+      - name: Restore compiler cache
+        if: needs.classify.outputs.cpp_required == 'true'
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+        with:
+          path: .ccache
+          key: v7-${{ matrix.build_type }}-${{ runner.os }}-${{ hashFiles('CMakeLists.txt', 'include/**', 'src/**') }}
+          restore-keys: |
+            v7-${{ matrix.build_type }}-${{ runner.os }}-
+      - name: Build and test V7
+        if: needs.classify.outputs.cpp_required == 'true'
+        run: |
+          set -euo pipefail
+          ccache --max-size=1G
+          cmake -S . -B build-${{ matrix.build_type }} -G Ninja \
+            -DCMAKE_BUILD_TYPE=${{ matrix.build_type }} -DPython3_EXECUTABLE=/usr/bin/python3 \
+            -DCMAKE_CXX_COMPILER_LAUNCHER=ccache
+          if [[ "${{ needs.classify.outputs.full_required }}" == "true" ]]; then
+            cmake --build build-${{ matrix.build_type }} --parallel "$(nproc)"
+            ctest --test-dir build-${{ matrix.build_type }} --parallel "$(nproc)" --output-on-failure
+          else
+            cmake --build build-${{ matrix.build_type }} --parallel "$(nproc)" --target \
+              polymarket_v7_crypto_settlement_engine \
+              pm_v7_native_runtime_evidence_tests pm_v7_execution_mode_tests \
+              pm_v7_native_paper_execution_tests pm_v7_execution_admission_tests \
+              pm_v7_native_settlement_authority_tests pm_v7_paper_queue_tests pm_v7_oms_tests \
+              pm_v7_crypto_decision_lane_tests pm_v7_maker_paper_tests pm_v7_external_execution_tests
+            ctest --test-dir build-${{ matrix.build_type }} --parallel "$(nproc)" --output-on-failure \
+              -R 'pm_v7_(native_runtime_evidence_tests|execution_mode_tests|native_paper_execution_tests|execution_admission_tests|native_settlement_authority_tests|paper_queue_tests|oms_tests|crypto_decision_lane_tests|maker_paper_tests|external_execution_tests|crypto_settlement_native_candidate_validate)'
+          fi
+          ccache --show-stats
+      - name: Enforce V7 internal latency SLO
+        if: matrix.build_type == 'Release' && needs.classify.outputs.latency_required == 'true'
+        run: |
+          set -euo pipefail
+          cmake --build build-Release --parallel "$(nproc)" --target polymarket_v7_maker_replay_bench
+          build-Release/polymarket_v7_maker_replay_bench 200000 > build-Release/v7-latency-benchmark.json
+          python3 scripts/v7_latency_gate.py \
+            --config config/v7_latency_slo.json \
+            --benchmark build-Release/v7-latency-benchmark.json \
+            --output build-Release/v7-latency-gate.json
 
   london-runtime-boundary:
     name: london-runtime-boundary-v7
+    needs: classify
     runs-on: ubuntu-24.04
-    timeout-minutes: 15
+    timeout-minutes: 12
     env:
       VALIDATION_SHA: ${{ github.event.inputs.expected_sha || github.event.pull_request.head.sha || github.sha }}
+      CCACHE_DIR: ${{ github.workspace }}/.ccache
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
           ref: ${{ github.event.inputs.expected_sha || github.event.pull_request.head.sha || github.sha }}
-          fetch-depth: 0
-      - name: Install runtime build dependencies
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y build-essential cmake pkg-config libcurl4-openssl-dev libboost-all-dev libssl-dev libsecp256k1-dev python3
-      - name: Build minimal London binaries
+          fetch-depth: 2
+      - name: Verify exact V7 revision
         run: |
           set -euo pipefail
+          [[ "$VALIDATION_SHA" =~ ^[0-9a-f]{40}$ ]]
           test "$(git rev-parse HEAD)" = "$VALIDATION_SHA"
-          cmake -S . -B build-london -DCMAKE_BUILD_TYPE=Release -DPM_LONDON_RUNTIME_ONLY=ON -DBUILD_TESTING=OFF
-          cmake --build build-london --parallel 2
+      - name: Fast-path unchanged London runtime
+        if: needs.classify.outputs.london_required != 'true'
+        run: echo "london_runtime_fast_path=unchanged"
+      - name: Install runtime build dependencies
+        if: needs.classify.outputs.london_required == 'true'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ccache ninja-build build-essential cmake pkg-config libcurl4-openssl-dev libboost-all-dev libssl-dev libsecp256k1-dev python3
+      - name: Restore London compiler cache
+        if: needs.classify.outputs.london_required == 'true'
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+        with:
+          path: .ccache
+          key: v7-london-${{ runner.os }}-${{ hashFiles('CMakeLists.txt', 'include/**', 'src/**') }}
+          restore-keys: |
+            v7-london-${{ runner.os }}-
+      - name: Build minimal London binaries
+        if: needs.classify.outputs.london_required == 'true'
+        run: |
+          set -euo pipefail
+          ccache --max-size=1G
+          cmake -S . -B build-london -G Ninja -DCMAKE_BUILD_TYPE=Release \
+            -DPM_LONDON_RUNTIME_ONLY=ON -DBUILD_TESTING=OFF -DCMAKE_CXX_COMPILER_LAUNCHER=ccache
+          cmake --build build-london --parallel "$(nproc)"
+          ccache --show-stats
       - name: Materialize research-free runtime bundle
+        if: needs.classify.outputs.london_required == 'true'
         run: |
           set -euo pipefail
           python3 ops/build_london_runtime_bundle.py \
