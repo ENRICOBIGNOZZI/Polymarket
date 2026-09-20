@@ -121,6 +121,11 @@ int main() {
         observation.external_composite_price = 100.;
         observation.external_return_250ms = .01;
         observation.external_return_250ms_valid = 1;
+        // A taker fill estimate may be logged for research without claiming
+        // that its settlement-edge score is already fill-conditioned.
+        observation.expected_fill_probability = .35;
+        observation.expected_fill_probability_valid = 1;
+        observation.economic_score_fill_conditioned = 0;
         assert(writer.publish_observation(observation));
         NativeEvidenceEvent probability_order = order;
         probability_order.command.client_order_id = 21;
@@ -173,6 +178,8 @@ int main() {
             }
             if (metadata.at("component").as_string() == "professional_maker") {
                 saw_maker_order = true;
+                assert(metadata.at("action_value_semantics").as_string()
+                    == "MAKER_FILL_CONDITIONED_ROBUST_EV_PER_SHARE");
                 assert(value.at("intended_action").as_string() == "MAKE");
                 assert(metadata.at("policy_hash").as_string() == std::string(16, 'b'));
                 assert(metadata.at("config_hash").as_string() == std::string(16, 'c'));
@@ -183,6 +190,8 @@ int main() {
             } else {
                 saw_order = true;
                 assert(value.at("intended_action").as_string() == "TAKE");
+                assert(metadata.at("action_value_semantics").as_string()
+                    == "TAKER_SETTLEMENT_EDGE_NOT_FILL_CONDITIONED");
                 assert(metadata.at("policy_hash").is_null());
                 assert(metadata.at("config_hash").is_null());
                 assert(metadata.at("execution_semantics_version").is_null());
@@ -205,6 +214,9 @@ int main() {
         const auto observation = json::parse(line).as_object();
         assert(observation.at("kind").as_int64() == 2);
         assert(observation.at("signal_version").as_int64() == 42);
+        assert(observation.at("expected_fill_probability").as_double() == .35);
+        assert(!observation.at("economic_score_fill_conditioned").as_bool());
+        assert(!observation.at("selector_score_comparable").as_bool());
         assert(observation.at("token_id").as_string() == "yes-token");
         assert(observation.at("capture_id").is_string());
         assert(observation.at("model_artifact_hash").is_null());
