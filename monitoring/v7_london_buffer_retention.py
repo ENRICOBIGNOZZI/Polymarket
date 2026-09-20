@@ -24,6 +24,8 @@ from typing import Any, Iterable
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from v7_closed_tape_retention import compress_closed_cutover_tapes
+from v7_hft_windows import Windows
+from v7_hft_data_health import snapshot, storage_projection
 
 
 SHA40 = re.compile(r"^[0-9a-f]{40}$")
@@ -194,7 +196,10 @@ def _rolling_retire(
         raise ValueError("unsafe rolling raw-detail window")
     receipt_directory = _safe_relative(root, str(config.get("rolling_receipt_directory") or ""))
     cutoff = now_ns - window * 1_000_000_000
+    windows = Windows(root, config.get('research_epoch_start_wall_ns',0)) if config.get('require_hft_window_preservation') and not dry_run else None
     for path, relative, info in sorted(_managed(root, config), key=lambda row: (row[2].st_mtime_ns, row[1])):
+        if relative.startswith('research/hft_permanent/'):
+            continue
         if not relative.endswith(".gz") or ".open" in path.suffixes or info.st_mtime_ns >= cutoff:
             continue
         result["eligible"] += 1
@@ -203,6 +208,10 @@ def _rolling_retire(
             raw_sha, raw_bytes, compressed_sha = _gzip_identity(path)
             if _identity(path) != before:
                 raise ValueError("compressed evidence changed while hashing")
+            hft_source = any(part in relative for part in ('/raw/','/normalized_events/','/book_observations/','native_observations/'))
+            if hft_source and dry_run and config.get('require_hft_window_preservation'):
+                raise ValueError('HFT_PRESERVATION_NOT_VERIFIED_IN_DRY_RUN')
+            preservation = windows.preserve(path) if windows and hft_source else None
             receipt = {
                 "schema": "polymarket_v7_london_windowed_retirement_receipt_v1",
                 "paper_only": True,
@@ -219,6 +228,7 @@ def _rolling_retire(
                 "source_mtime_ns": before[3],
                 "retired_at_ns": now_ns,
                 "raw_detail_available": False,
+                "hft_window_preservation": preservation,
                 "limitations": [
                     "Replayable raw detail was retired after the authorized rolling window.",
                     "The receipt preserves exact compressed and decompressed identities, not observations.",
@@ -240,6 +250,7 @@ def _rolling_retire(
             })
         except (OSError, EOFError, gzip.BadGzipFile, ValueError) as exc:
             result["failures"].append({"source": relative, "reason": str(exc)})
+    if windows: windows.close()
     result["state"] = "WINDOW_ENFORCED" if not result["failures"] else "WINDOW_PARTIAL_FAILURE"
     return result
 
@@ -266,6 +277,8 @@ def _offload_prune(
     }
     candidates: list[tuple[int, Path, str, os.stat_result]] = []
     for path, relative, info in rows:
+        if relative.startswith('research/hft_permanent/'):
+            continue
         if ".open" in path.suffixes or (relative.endswith(".bin") and ".segment-" not in path.name):
             continue
         metadata = indexed.get(relative)
@@ -312,8 +325,25 @@ def run(root: Path, config: dict[str, Any], dry_run: bool = False, *, now: float
     if not 0 < target < maximum or minimum_age < 300 or lag < 60 or not 30 <= compression_age <= 3600:
         raise ValueError("unsafe London retention bounds")
     runtime = _runtime_contract(root)
+    storage = None
+    if config.get('account_all_run_files'):
+        measured=snapshot(root)
+        previous=_load(root/'control/hft_storage_sample.json')
+        if previous and measured['at_ns'] > previous.get('at_ns',0):
+            storage=storage_projection(root,previous,measured,target=int(config['target_managed_bytes']))
+            hours=storage.get('estimated_compressed_raw_hours')
+            if hours:
+                config=dict(config)
+                config['rolling_raw_detail_seconds']=max(7200,min(7*86400,int(hours*3600*.8)))
+            storage['raw_retention_hours']=config['rolling_raw_detail_seconds']/3600
+        if not dry_run: _atomic_json(root/'control/hft_storage_sample.json',measured)
+    preservation = None
+    if runtime and config.get('require_hft_window_preservation') and not dry_run:
+        windows = Windows(root, config.get('research_epoch_start_wall_ns',0))
+        try: preservation = windows.ingest()
+        finally: windows.close()
     initial_rows = _managed(root, config)
-    before = _total(initial_rows)
+    before = measured['total_bytes'] if config.get('account_all_run_files') else _total(initial_rows)
     compression: dict[str, Any] = {
         "state": "NO_VERIFIED_RUNTIME_CONTRACT",
         "archived": [],
@@ -338,7 +368,7 @@ def run(root: Path, config: dict[str, Any], dry_run: bool = False, *, now: float
         root, config, after_rolling_rows, now_ns=now_ns, dry_run=dry_run,
     )
     final_rows = _managed(root, config)
-    after = _total(final_rows)
+    after = snapshot(root)['total_bytes'] if config.get('account_all_run_files') else _total(final_rows)
     if dry_run:
         after = max(0, after - sum(int(row.get("bytes") or row.get("compressed_bytes") or 0)
                                    for row in deleted + list(rolling.get("retired") or [])))
@@ -367,6 +397,8 @@ def run(root: Path, config: dict[str, Any], dry_run: bool = False, *, now: float
         "maximum_bytes": maximum,
         "managed_files": len(final_rows),
         "lossless_compression": compression,
+        "hft_opportunity_preservation": preservation,
+        "hft_storage": storage,
         "rolling_retirement": rolling,
         "verified_offload_receipt": receipt_valid,
         "deleted": deleted,

@@ -11,7 +11,8 @@
     "**/*.log.gz",
     "research/repricing_book/book_observations/*.segment-*.jsonl*",
     "research/repricing_book/fillability_ws.jsonl.*",
-    "research/external_cancel_signals.jsonl.*"
+    "research/external_cancel_signals.jsonl.*",
+    "research/native_observations/**/*.jsonl.gz"
   ],
   "disk_pressure_min_free_bytes": 8589934592,
   "lossless_compress_minimum_age_seconds": 60,
@@ -27,7 +28,9 @@
     "**/*.log.gz",
     "research/repricing_book/book_observations/*.jsonl*",
     "research/repricing_book/fillability_ws.jsonl*",
-    "research/external_cancel_signals.jsonl*"
+    "research/external_cancel_signals.jsonl*",
+    "research/native_observations/**/*.jsonl*",
+    "research/hft_permanent/**/*"
   ],
   "maximum_managed_bytes": 60000000000,
   "minimum_age_seconds": 3600,
@@ -47,6 +50,9 @@
   "rolling_receipt_directory": "control/london_windowed_retirement_receipts",
   "rolling_retention_authorization": "USER_AUTHORIZED_HFT_ROLLING_RAW_WINDOW_20260916",
   "schema": "polymarket_v7_london_buffer_retention_v1",
-  "target_managed_bytes": 30000000000,
-  "version": 2
+  "target_managed_bytes": 50000000000,
+  "version": 3,
+  "require_hft_window_preservation": true,
+  "research_epoch_start_wall_ns": 1789921800000000000,
+  "account_all_run_files": true
 }

@@ -524,6 +524,7 @@ int main(int argc, char** argv) {
         std::uint64_t repricing_origins = 0, repricing_labels = 0;
         std::uint64_t repricing_censors = 0, repricing_window_overflow = 0;
         std::uint8_t last_observed_reason = 0, last_observed_accepted = 0;
+        std::int64_t last_control_observation_ns = 0;
         const auto observation = [&](const BookHotSnapshot& book, std::uint64_t instrument,
                                      std::uint8_t kind) noexcept {
             NativeObservation out{};
@@ -1034,15 +1035,10 @@ int main(int argc, char** argv) {
                 decision_economics = result.economics;
                 const auto finished = monotonic_now_ns();
                 ++evaluations;
-                const bool repricing_origin_eligible = result.accepted != 0
-                    || result.reason == NativeCryptoDecisionReason::WeakSignal
-                    || result.reason == NativeCryptoDecisionReason::InsufficientDepth
-                    || result.reason == NativeCryptoDecisionReason::EntryPriceTooHigh
-                    || result.reason == NativeCryptoDecisionReason::MarketAlreadyRepriced
-                    || result.reason == NativeCryptoDecisionReason::ProbabilityUnavailable
-                    || result.reason == NativeCryptoDecisionReason::NetEdgeNonPositive
-                    || result.reason == NativeCryptoDecisionReason::RiskSizeBelowMinimum
-                    || result.reason == NativeCryptoDecisionReason::SlowContextUnavailable;
+                // Preserve the opportunity population independent of eligibility,
+                // including TTE, expired and already-repriced rejections.
+                const bool repricing_origin_eligible = current_signal.signal_version != 0
+                    && current_signal.direction != 0;
                 const auto repricing_instrument = result.accepted != 0
                     ? result.selected_instrument_handle
                     : (current_signal.direction > 0 ? kYes : kNo);
@@ -1069,7 +1065,9 @@ int main(int argc, char** argv) {
                 const auto observation_reason = static_cast<std::uint8_t>(result.reason);
                 if (options.capture_native_decisions && (current_signal.signal_version != last_observed_signal_version
                     || observation_reason != last_observed_reason
-                    || result.accepted != last_observed_accepted)) {
+                    || result.accepted != last_observed_accepted
+                    || finished - last_control_observation_ns >= 30'000'000'000LL)) {
+                    last_control_observation_ns = finished;
                     last_observed_signal_version = current_signal.signal_version;
                     last_observed_reason = observation_reason;
                     last_observed_accepted = result.accepted;

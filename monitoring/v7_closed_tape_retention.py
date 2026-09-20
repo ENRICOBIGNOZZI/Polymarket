@@ -175,6 +175,9 @@ def _closed_tape_locations(scope: Path) -> list[tuple[Path, str]]:
                 (asset / "raw", "bin"),
                 (asset / "normalized_events", "bin"),
             ])
+    native = scope / "research/native_observations"
+    if native.is_dir():
+        rows.extend((p, "jsonl") for p in sorted(native.iterdir()) if p.is_dir() and not p.is_symlink())
     return rows
 
 
@@ -221,9 +224,11 @@ def compress_closed_cutover_tapes(archive_root: Path, *, now: int, dry_run: bool
             for folder, suffix in _closed_tape_locations(archive):
                 if folder.is_symlink() or folder.parent.is_symlink():
                     continue
-                pattern = f"*.segment-*.{suffix}" if active_scope else f"*.{suffix}"
+                native = "native_observations" in folder.parts
+                pattern = f"*.segment-*.{suffix}" if active_scope and not native else f"*.{suffix}"
                 for source in folder.glob(pattern):
-                    if active_scope and not re.fullmatch(r".+\.segment-[0-9]{6,}\." + suffix, source.name):
+                    if native and not _json(Path(str(source)+".closed.json")).get("closed"): continue
+                    if active_scope and not native and not re.fullmatch(r".+\.segment-[0-9]{6,}\." + suffix, source.name):
                         continue
                     relevant_aliases.add(str(source.resolve()))
         shared_aliases = _shared_pack_aliases(permanent_store_root, relevant_aliases)
@@ -240,9 +245,11 @@ def compress_closed_cutover_tapes(archive_root: Path, *, now: int, dry_run: bool
             for folder, suffix in _closed_tape_locations(archive):
                 if folder.is_symlink() or folder.parent.is_symlink():
                     continue
-                pattern = f"*.segment-*.{suffix}" if active_scope else f"*.{suffix}"
+                native = "native_observations" in folder.parts
+                pattern = f"*.segment-*.{suffix}" if active_scope and not native else f"*.{suffix}"
                 for source in sorted(folder.glob(pattern)):
-                    if active_scope and not re.fullmatch(r".+\.segment-[0-9]{6,}\." + suffix, source.name):
+                    if native and not _json(Path(str(source)+".closed.json")).get("closed"): continue
+                    if active_scope and not native and not re.fullmatch(r".+\.segment-[0-9]{6,}\." + suffix, source.name):
                         continue
                     temporary = None
                     try:

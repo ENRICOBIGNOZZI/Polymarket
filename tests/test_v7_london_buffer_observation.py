@@ -17,7 +17,10 @@ spec.loader.exec_module(retention)
 class LondonBufferObservationTests(unittest.TestCase):
     def config(self):
         cfg = json.loads((ROOT / 'config/v7_london_buffer_retention.json').read_text())
-        cfg.update(target_managed_bytes=1, maximum_managed_bytes=10_000)
+        # These legacy offload tests isolate file deletion from full-disk
+        # accounting, which is exercised separately by the HFT tests.
+        cfg.update(target_managed_bytes=1, maximum_managed_bytes=10_000,
+                   account_all_run_files=False)
         return cfg
 
     def segment(self, root, name):
@@ -113,12 +116,12 @@ class LondonLosslessRetentionTests(unittest.TestCase):
             self.assertFalse(source.exists())
             self.assertTrue(compressed.is_file())
             self.assertEqual(gzip.open(compressed, 'rb').read(), payload)
-            self.assertEqual(result['before_bytes'], len(payload))
+            self.assertGreaterEqual(result['before_bytes'], len(payload))
             self.assertLess(result['after_compression_bytes'], len(payload))
             self.assertEqual(len(result['lossless_compression']['archived']), 1)
             self.assertFalse(result['lossless_compression']['failures'])
 
-    def test_old_compressed_detail_retires_only_after_immutable_hash_receipt(self):
+    def test_old_compressed_detail_stays_pinned_without_replayable_hft_windows(self):
         import gzip
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory) / 'paper_v7_live'
@@ -132,16 +135,10 @@ class LondonLosslessRetentionTests(unittest.TestCase):
             old = now - 9 * 3600
             os.utime(compressed, (old, old))
             result = retention.run(root, self.config(), now=now)
-            self.assertFalse(compressed.exists())
+            self.assertTrue(compressed.exists())
             retired = result['rolling_retirement']['retired']
-            self.assertEqual(len(retired), 1)
-            receipt = root / retired[0]['receipt']
-            value = json.loads(receipt.read_text())
-            self.assertEqual(value['source'], str(compressed.relative_to(root)))
-            self.assertEqual(value['decompressed_sha256'], hashlib.sha256(payload).hexdigest())
-            self.assertEqual(value['decompressed_bytes'], len(payload))
-            self.assertEqual(value['compressed_sha256'], retired[0]['compressed_sha256'])
-            self.assertEqual(hashlib.sha256(receipt.read_bytes()).hexdigest(), retired[0]['receipt_sha256'])
+            self.assertEqual(retired, [])
+            self.assertTrue(result['rolling_retirement']['failures'])
 
     def test_recent_compressed_detail_is_preserved(self):
         import gzip

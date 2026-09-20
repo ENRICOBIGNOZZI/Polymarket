@@ -953,7 +953,7 @@ class Manager:
         capture_headroom = shutil.disk_usage(self.run_root).free >= 20 * 1024**3
         if full_requested and capture_headroom:
             command.append("--capture-native-observations")
-        elif getattr(self.args, "capture_execution_windows", False):
+        if getattr(self.args, "capture_execution_windows", False):
             command.extend(["--capture-execution-windows", "--execution-window-ns",
                             str(self.args.execution_window_ns)])
         elif getattr(self.args, "capture_native_decisions", False) or full_requested:

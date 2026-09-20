@@ -15,7 +15,12 @@ def collect(markets, output, *, maximum=100, opener=urllib.request.urlopen):
     output.mkdir(parents=True, exist_ok=True)
     attempts_path = output/"attempts.json"
     attempts = read_json(attempts_path) if attempts_path.exists() else {}
-    for market in sorted(set(map(str, markets)), key=lambda m: (attempts.get(m, 0), m))[:maximum]:
+    resolved = set()
+    for path in output.glob('*.jsonl'):
+        value = read_json(path)
+        validate_label(value)
+        resolved.add(str(value['market_id']))
+    for market in sorted(set(map(str, markets))-resolved, key=lambda m: (attempts.get(m, 0), m))[:maximum]:
         url = "https://gamma-api.polymarket.com/markets/"+urllib.parse.quote(market, safe="")
         try:
             request = urllib.request.Request(url, headers={"User-Agent": "V7-causal-paper-research/1"})

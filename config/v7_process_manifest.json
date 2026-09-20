@@ -333,7 +333,7 @@
         "--capture-native-decisions",
         "--capture-execution-windows",
         "--execution-window-ns",
-        "2000000000",
+        "5000000000",
         "--capture-native-full-context",
         "BTC:M5"
       ],

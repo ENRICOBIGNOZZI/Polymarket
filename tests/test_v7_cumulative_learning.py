@@ -279,3 +279,41 @@ def test_arrival_replay_requires_proven_continuous_capture(tmp_path, mode, expec
         assert e['state'] == expected and e['quantity'] == 1
         assert e['net_pnl'] == pytest.approx(.485)
         assert e['cost_assumption']['measured'] is False
+
+
+def test_actual_native_writer_code_sha_is_accepted_without_legacy_model_sha():
+    row=native(code_sha='b'*40);row.pop('model_sha')
+    assert native_example(row)['code_sha']=='b'*40
+
+
+def test_daily_growth_distinguishes_new_signals_new_labels_and_shrinkage(tmp_path):
+    from research.learning.daily import growth_receipt
+    old=[dict(signal_id='old',market_id='a',decision_ns=1,training_eligible=False,outcome=None)]
+    (tmp_path/'dataset_manifests').mkdir();(tmp_path/'datasets').mkdir()
+    (tmp_path/'dataset_manifests'/'prior.json').write_text(json.dumps({'views':{'signals':{'sha256':'view'}}}))
+    (tmp_path/'datasets'/'view.jsonl').write_text(json.dumps(old[0])+'\n')
+    rows=[dict(old[0],training_eligible=True,outcome=1),dict(old[0],signal_id='new',market_id='b',decision_ns=2)]
+    manifest=dict(unique_markets=2,unresolved=1,first_decision_ns=1,last_decision_ns=2)
+    value=growth_receipt(tmp_path,{'dataset_sha256':'prior'},manifest,rows)
+    assert value['training_rows']==1 and value['new_observations']==1 and value['new_resolved_observations']==1
+    assert not value['historical_data_shrank']
+    value=growth_receipt(tmp_path,{'dataset_sha256':'prior'},manifest,rows[1:])
+    assert value['historical_data_shrank'] and value['lost_observations']==1
+
+
+def test_settlement_polling_continues_after_daily_receipt_and_does_not_backdate(tmp_path,monkeypatch):
+    import platform
+    from research.learning import daily, settlements
+    (tmp_path/'research_host.json').write_text(json.dumps(dict(schema='v7_research_host_v1',hostname=platform.node(),role='RESEARCH_ONLY')))
+    source=tmp_path/'source';source.mkdir()
+    (source/'population.json').write_text(json.dumps({'markets':['m'],'updated_ns':daily.time.time_ns()}))
+    (tmp_path/'settings.json').write_text(json.dumps({'source_roots':[str(source)],'fetch_public_settlements':True,'collection_interval_seconds':0}))
+    receipts=tmp_path/'receipts';receipts.mkdir()
+    date,_=daily.midnight();receipt={'training_date':date,'result':'ALREADY_FROZEN','dataset_sha256':'missing-view'}
+    (receipts/(date+'.json')).write_text(json.dumps(receipt))
+    calls=[]
+    monkeypatch.setattr(settlements,'collect',lambda markets,root: calls.append(set(markets)) or {'resolved':0})
+    assert daily.run(tmp_path)==receipt
+    assert daily.run(tmp_path)==receipt
+    assert calls==[{'m'},{'m'}]
+    assert json.loads((tmp_path/'collection_status.json').read_text())['information_ns']>daily.midnight()[1]

@@ -794,6 +794,24 @@ def render_prometheus(snapshot: dict[str, Any]) -> str:
     _append_external_fair_metrics(lines, snapshot.get("external_fair") or {})
     lines.extend(render_multi_crypto_prometheus(snapshot.get("multi_crypto_performance") or {}))
     lines.extend(render_shadow_prometheus(snapshot.get("multi_crypto_shadow") or {}))
+    retention=operations.get('retention') or {}
+    storage=retention.get('hft_storage') or {}
+    population=retention.get('hft_opportunity_preservation') or {}
+    for key, value in {
+        'managed_bytes':retention.get('after_bytes'),
+        'raw_retention_hours':storage.get('raw_retention_hours'),
+        'total_gb_per_hour':storage.get('total_gb_per_hour'),
+        'estimated_compressed_raw_hours':storage.get('estimated_compressed_raw_hours'),
+        'hours_until_ceiling':storage.get('hours_until_ceiling_without_compression'),
+        'permanent_opportunities':population.get('total_opportunities'),
+        'permanent_markets':population.get('total_markets'),
+        'capture_failures':len(population.get('failures',[])),
+    }.items():
+        lines.append(_metric('polymarket_v7_hft_'+key,value))
+    for family,value in (storage.get('gb_per_hour') or {}).items():
+        lines.append(_metric('polymarket_v7_hft_source_gb_per_hour',value,{'source':family}))
+    for family,value in (storage.get('verified_compression_ratios') or {}).items():
+        lines.append(_metric('polymarket_v7_hft_compression_ratio',value,{'source':family}))
     return "\n".join(lines) + "\n"
 
 

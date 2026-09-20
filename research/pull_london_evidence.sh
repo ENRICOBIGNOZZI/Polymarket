@@ -4,6 +4,16 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 REMOTE="${POLYMARKET_LONDON_HOST:?POLYMARKET_LONDON_HOST required}"; USER="${POLYMARKET_LONDON_USER:-enrico}"; REMOTE_ROOT="${POLYMARKET_LONDON_RUN_ROOT:-/home/$USER/polymarket-runs/paper_v7_london}"
 LOCAL_ROOT="${PM_V7_RESEARCH_SYNC_ROOT:-$HOME/polymarket-research/london}"
 mkdir -p "$LOCAL_ROOT/current" "$LOCAL_ROOT/receipts"
+if [[ "${PM_V7_RESEARCH_HFT_ONLY:-false}" == true ]]; then
+  KEY="${PM_V7_RESEARCH_SSH_KEY:?PM_V7_RESEARCH_SSH_KEY required}"
+  # The remote authorized key is a forced sender for this exact evidence path.
+  # No upload receipt, deletion, model activation or remote shell is available.
+  export RSYNC_RSH="ssh -i $KEY -o IdentitiesOnly=yes -o BatchMode=yes -o ConnectTimeout=10"
+  rsync -rt --timeout=60 --partial-dir=.rsync-partial \
+    --exclude='index.sqlite*' --exclude='*.tmp' --exclude='.writing-*' \
+    "$USER@$REMOTE:$REMOTE_ROOT/research/hft_permanent/" "$LOCAL_ROOT/current/"
+  exit 0
+fi
 # Copy raw crypto evidence and canonical execution state. Partial files remain
 # partial and are never zero-filled. Mutable snapshots are NOT append-only;
 # normal delta transfer handles same-size rewrites and shrinking snapshots.

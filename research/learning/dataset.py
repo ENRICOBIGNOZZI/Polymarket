@@ -40,7 +40,10 @@ def positive_int(v):
 
 def native_example(r):
     """Clock comparisons stay within one capture. Wall mapping uses decision offset."""
-    required = ("server_id", "run_id", "capture_id", "market_id", "token_id", "model_sha")
+    required = ("server_id", "run_id", "capture_id", "market_id", "token_id")
+    code_sha = r.get("code_sha") or r.get("model_sha")
+    if not isinstance(code_sha, str) or not code_sha:
+        raise ValueError("MISSING_CODE_IDENTITY")
     if any(not isinstance(r.get(k), str) or not r[k] for k in required):
         raise ValueError("MISSING_CAUSAL_IDENTITY")
     if r.get("asset") not in ASSETS or r.get("horizon") not in HORIZONS:
@@ -134,7 +137,7 @@ def native_example(r):
         fee = rate*((ask/10000)*(1-ask/10000))**exponent
     return {"decision_id": decision_id, "signal_id": signal, "market_id": r["market_id"],
             "token_id": r["token_id"], "asset": r["asset"], "horizon": r["horizon"],
-            "code_sha": r["model_sha"], "run_id": r["run_id"], "decision_ns": wall,
+            "code_sha": code_sha, "run_id": r["run_id"], "decision_ns": wall,
             "feature_information_ns": wall - decision + max(book, trigger, grid, ext_time if ext_valid else trigger),
             "information_end_ns": close_wall, "stratum": FEATURE_CONTRACT,
             "features": features, "native_input": {k: r.get(k) for k in (
