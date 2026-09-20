@@ -1,7 +1,7 @@
 {
   "schema": "polymarket_v7_paper_fast_restart_request_v1",
   "version": 1,
-  "request_id": "fast-restart-after-killed-runtime-2ab25442",
+  "request_id": "fast-restart-bash-2ab25442",
   "expected_sha": "2ab254420b914ae178cb868124255f2a52c0d599",
   "paper_only": true,
   "authenticated_execution": false,
