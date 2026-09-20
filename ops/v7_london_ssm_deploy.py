@@ -170,9 +170,10 @@ def run(region: str, instance: str, command: str,
     stdout = str(value.get("StandardOutputContent") or "")
     stderr = str(value.get("StandardErrorContent") or "")
     if value.get("Status") != "Success":
+        status = str(value.get("StatusDetails") or value.get("Status") or "")
         raise SsmDeployError(
             f"SSM failed instance={instance} command={command_id}: "
-            f"{(stderr or str(value.get('StatusDetails') or value.get('Status')))[-4000:]}"
+            f"stdout_tail={stdout[-8000:]!r} stderr_tail={stderr[-4000:]!r} status={status!r}"
         )
     return stdout, stderr
 
