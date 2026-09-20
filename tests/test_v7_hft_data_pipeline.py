@@ -56,6 +56,29 @@ def test_active_and_partial_native_prefix_cannot_authorize_retirement(tmp_path):
     finally:store.close()
 
 
+def test_fresh_live_tail_is_not_mislabeled_as_historical_backlog(tmp_path):
+    # A current append may be unread after a bounded cold pass. It is safe for
+    # the next midnight cutoff and must not keep daily learning blocked forever.
+    import time
+    current=time.time_ns()//SECOND
+    write_native(tmp_path,[native(current),native(current+1)],closed=False)
+    store=Windows(tmp_path)
+    try:
+        result=store.ingest(max_rows=1,realtime_lag_seconds=30)
+        assert result['scan_complete'] is True
+        assert list(store.db.execute('SELECT * FROM watermarks'))
+    finally:store.close()
+
+
+def test_old_unread_live_tail_remains_explicit_backlog(tmp_path):
+    write_native(tmp_path,[native(10),native(11)],closed=False)
+    store=Windows(tmp_path)
+    try:
+        result=store.ingest(max_rows=1,realtime_lag_seconds=30)
+        assert result['scan_complete'] is False
+    finally:store.close()
+
+
 def test_epoch_skips_old_training_but_keeps_new_pending_population(tmp_path):
     write_native(tmp_path,[native(10),native(20)])
     store=Windows(tmp_path,15*SECOND)

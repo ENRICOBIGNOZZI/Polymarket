@@ -116,14 +116,20 @@ class Windows:
     def source_key(self,path):
         return str(path.relative_to(self.run_root)) if path.is_relative_to(self.run_root) else str(path)
 
-    def ingest(self, *, max_rows=10000, budget_seconds=45):
+    def ingest(self, *, max_rows=10000, budget_seconds=45, realtime_lag_seconds=30):
         """Freeze complete append-only prefixes, including active D1 captures.
 
         Offsets commit only after immutable compact chunks exist. Repeated reads
         after a crash deduplicate by payload hash and opportunity identity.
         """
+        if realtime_lag_seconds < 1:
+            raise ValueError('REALTIME_LAG_MUST_BE_POSITIVE')
         counts={'records':0,'decisions':0,'pending_markets':set()}; failures=[]
         progress={}; incomplete=set(); started=time.monotonic(); scan_complete=True
+        # The input is append-only and active captures will normally gain a few
+        # records while a cold pass is running. A fresh tail is not a historical
+        # gap: the daily cutoff will be far behind it. An older unread record is.
+        complete_before_ns=time.time_ns()-int(realtime_lag_seconds*SECOND)
         roots=[self.run_root/'research/native_observations']
         archives=self.run_root.parent/'paper_v7_london_archives'
         if archives.is_dir() and not archives.is_symlink():
@@ -144,7 +150,12 @@ class Windows:
             try:
                 with opener(path,'rb') as stream:
                     stream.seek(offset)
+                    exhausted_rows = False
                     for _ in range(max_rows):
+                        if time.monotonic()-started >= budget_seconds:
+                            scan_complete=False
+                            incomplete.update(contexts)
+                            break
                         line=stream.readline()
                         if not line or not line.endswith(b'\n'): break
                         row=json.loads(line)
@@ -168,7 +179,24 @@ class Windows:
                             requests.append((sha(canonical(identity)),capture,row['asset'],row['horizon'],str(row['market_id']),
                                              decision,decision-2*SECOND,decision+5*SECOND,int(row.get('reason') or 0),int(bool(row.get('accepted')))))
                             counts['decisions']+=1;counts['pending_markets'].add(str(row['market_id']))
-                    if stream.read(1): incomplete.update(contexts)
+                    else:
+                        exhausted_rows = True
+                    # Do not advance the committed offset over the peek: an
+                    # interruption must replay that complete record. It is only
+                    # used to distinguish a genuine historical backlog from a
+                    # normal live tail.
+                    if exhausted_rows:
+                        next_line=stream.readline()
+                        if next_line and next_line.endswith(b'\n'):
+                            next_row=json.loads(next_line)
+                            next_stamp=wall(next_row)
+                            next_context=(next_row.get('asset'),next_row.get('horizon'))
+                            if (not next_stamp or next_stamp <= complete_before_ns):
+                                scan_complete=False
+                                if all(isinstance(v,str) and v for v in next_context):
+                                    incomplete.add(next_context)
+                                else:
+                                    incomplete.update(contexts)
                 if batch: publish(self.root,'compact',b''.join(batch))
                 if offset!=(old[0] if old else 0):
                     with self.db:
@@ -198,6 +226,9 @@ class Windows:
                     'markets':[r[0] for r in self.db.execute('SELECT DISTINCT market FROM requests ORDER BY market')],
                     'unique_opportunities':counts['total_opportunities'], 'updated_ns':time.time_ns(),
                     'scan_complete':counts['scan_complete'],
+                    'scan_complete_semantics':'ALL_INDEXED_SOURCES_CAUGHT_UP_TO_BOUNDED_REALTIME_LAG',
+                    'complete_before_ns':complete_before_ns,
+                    'realtime_lag_seconds':realtime_lag_seconds,
                     'capture_failures':failures,'backlog_contexts':sorted(':'.join(c) for c in incomplete),
                     'watermarks':{a+':'+h:t for a,h,t in self.db.execute('SELECT * FROM watermarks')}}
         compact=self.root/'compact';compact.mkdir(exist_ok=True)
