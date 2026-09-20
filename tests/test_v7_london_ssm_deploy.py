@@ -97,6 +97,9 @@ def test_cutover_command_ubuntu_uses_data_volume_default():
     command = m.cutover_command(SHA, selected)
     assert "/mnt/polymarket-data/paper_v7_london" in command
     assert "/home/ubuntu/polymarket-artifacts" in command
+    assert "/home/ubuntu/.cache/polymarket-v7-deploy/" in command
+    assert "/tmp/polymarket-v7-deploy-" not in command
+    assert 'rm -rf -- "$WORKTREE"' in command
 
 
 @pytest.mark.parametrize("run_root", ["/tmp/x", "relative/path", "/root/private"])
