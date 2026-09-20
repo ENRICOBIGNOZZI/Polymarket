@@ -1,0 +1,158 @@
+name: V7 one-shot authkey PAPER live deploy
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - .github/workflows/v7-authkey-one-shot-live-20260920.yml
+
+permissions:
+  contents: read
+
+concurrency:
+  group: polymarket-v7-paper-server
+  cancel-in-progress: true
+
+jobs:
+  deploy:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 35
+    env:
+      SERVER_HOST: ${{ vars.POLYMARKET_SERVER_HOST || '100.104.183.109' }}
+      SERVER_USER: ${{ vars.POLYMARKET_SERVER_USER || 'enrico' }}
+      SERVER_PORT: ${{ vars.POLYMARKET_SERVER_PORT || '22' }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          ref: main
+          fetch-depth: 0
+
+      - name: Validate exact PAPER contract
+        id: preflight
+        shell: bash
+        run: |
+          set -euo pipefail
+          git fetch --no-tags origin main
+          sha="$(git rev-parse origin/main)"
+          test "$(git rev-parse HEAD)" = "$sha"
+          python3 scripts/v7_cutover_contract.py --repository-root . --expected-head "$sha" >/dev/null
+          echo "expected_sha=$sha" >> "$GITHUB_OUTPUT"
+          printf 'request_result=ready\nexpected_sha=%s\npaper_only=true\nreal_order_submission=false\n' "$sha" | tee deploy-evidence.txt
+
+      - name: Join tailnet with in-memory authkey
+        uses: tailscale/github-action@780049a30b6ff5c378a9e7b389d15ece7a204888
+        with:
+          authkey: ${{ secrets.TS_AUTHKEY }}
+          version: 1.94.2
+          statedir: ''
+          hostname: gh-one-shot-live-${{ github.run_id }}-${{ github.run_attempt }}
+
+      - name: Configure SSH
+        shell: bash
+        env:
+          SSH_PRIVATE_KEY: ${{ secrets.POLYMARKET_SERVER_SSH_KEY }}
+        run: |
+          set -euo pipefail
+          test -n "${SSH_PRIVATE_KEY:-}"
+          install -d -m 700 ~/.ssh
+          printf '%s\n' "$SSH_PRIVATE_KEY" > ~/.ssh/polymarket_deploy
+          chmod 600 ~/.ssh/polymarket_deploy
+          : > ~/.ssh/known_hosts
+          ready=0
+          for _ in $(seq 1 30); do
+            tailscale ping --timeout=4s -c 1 "$SERVER_HOST" >/dev/null 2>&1 || true
+            if ssh-keyscan -T 3 -p "$SERVER_PORT" "$SERVER_HOST" >> ~/.ssh/known_hosts 2>/dev/null; then
+              ready=1
+              break
+            fi
+            sleep 3
+          done
+          test "$ready" = 1
+          test -s ~/.ssh/known_hosts
+
+      - name: Deploy exact SHA on server
+        shell: bash
+        env:
+          EXPECTED_SHA: ${{ steps.preflight.outputs.expected_sha }}
+        run: |
+          set -euo pipefail
+          ssh_common=(-i ~/.ssh/polymarket_deploy -o IdentitiesOnly=yes -o BatchMode=yes -o ConnectTimeout=10 -o ConnectionAttempts=3 -o ServerAliveInterval=15 -o ServerAliveCountMax=4 -p "$SERVER_PORT")
+          ssh "${ssh_common[@]}" "$SERVER_USER@$SERVER_HOST" "EXPECTED_DEPLOY_SHA='$EXPECTED_SHA' bash -s" <<'REMOTE' | tee -a deploy-evidence.txt
+          set -euo pipefail
+          cd ~/polymarket
+          if [[ "$(uname -s)" == "Darwin" ]]; then
+            brew_bin=""
+            for candidate in /opt/homebrew/bin/brew /usr/local/bin/brew; do
+              [[ -x "$candidate" ]] && brew_bin="$candidate" && break
+            done
+            [[ -n "$brew_bin" ]] || { echo "V7 deploy blocked: Homebrew not found" >&2; exit 1; }
+            eval "$("$brew_bin" shellenv)"
+            missing=""
+            for cmd in cmake pkg-config prometheus grafana; do
+              command -v "$cmd" >/dev/null 2>&1 || missing="$missing $cmd"
+            done
+            if [[ -n "$missing" ]]; then
+              echo "[v7-deploy] Installing missing macOS dependencies:$missing"
+              brew install $missing
+            fi
+          fi
+          git fetch --no-tags origin main
+          main_sha="$(git rev-parse origin/main)"
+          test "$main_sha" = "$EXPECTED_DEPLOY_SHA"
+          updater="$(mktemp)"; archiver="$(mktemp)"
+          trap 'rm -f "$updater" "$archiver"' EXIT
+          git show "$main_sha:ops/update_server_v7.sh" > "$updater"
+          git show "$main_sha:scripts/v7_prepare_cutover_run_root.py" > "$archiver"
+          chmod 700 "$updater"; chmod 600 "$archiver"
+          POLYMARKET_APP_DIR="$HOME/polymarket" \
+            POLYMARKET_CUTOVER_ARCHIVER="$archiver" \
+            EXPECTED_DEPLOY_SHA="$main_sha" \
+            POLYMARKET_DEPLOY_REF=main \
+            POLYMARKET_RUNTIME_HEALTH_ATTEMPTS=390 \
+            bash "$updater"
+          root="$HOME/polymarket/runs/paper_v7_live"
+          test "$(cat "$root/control/deployed_sha")" = "$main_sha"
+          python3 - "$root" "$main_sha" <<'PY'
+          import json,os,sys,time
+          from pathlib import Path
+          root=Path(sys.argv[1]); sha=sys.argv[2]; now=int(time.time())
+          runtime=json.loads((root/'control/runtime_status.json').read_text(encoding='utf-8'))
+          identity=json.loads((root/'control/runtime_identity.json').read_text(encoding='utf-8'))
+          portfolio=json.loads((root/'control/portfolio_state.json').read_text(encoding='utf-8'))
+          assert runtime.get('version') == 7
+          assert runtime.get('model_sha') == sha
+          assert runtime.get('paper_only') is True
+          assert runtime.get('authenticated_execution') is False
+          assert runtime.get('real_order_submission') is False
+          assert runtime.get('state') == 'running'
+          assert runtime.get('killed') is False
+          assert identity.get('verified') is True and identity.get('runtime_sha') == sha
+          pid=int(runtime.get('pid') or 0); assert pid > 0; os.kill(pid,0)
+          assert now-int(runtime.get('timestamp') or 0) <= 180
+          assert portfolio.get('paper_only') is True and portfolio.get('authenticated_execution') is False
+          assert portfolio.get('killed') is False
+          print(f'deploy_result=success_authkey')
+          print(f'deployed_sha={sha}')
+          print(f'runtime_pid={pid}')
+          PY
+          curl -fsS http://127.0.0.1:9108/healthz >/dev/null
+          metrics="$(curl -fsS http://127.0.0.1:9108/metrics)"
+          grep -q '^polymarket_v7_runtime_info 1$' <<<"$metrics"
+          grep -q '^polymarket_v7_execution_alive 1$' <<<"$metrics"
+          grep -q '^polymarket_v7_paper_only_contract_ok 1$' <<<"$metrics"
+          grep -q '^polymarket_v7_authenticated_execution_disabled 1$' <<<"$metrics"
+          REMOTE
+
+      - name: Explicitly logout CI tailnet node
+        if: always()
+        shell: bash
+        run: sudo tailscale logout >/dev/null 2>&1 || true
+
+      - name: Upload deployment evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: v7-one-shot-authkey-live-${{ github.run_id }}
+          path: deploy-evidence.txt
+          if-no-files-found: warn
+          retention-days: 14
