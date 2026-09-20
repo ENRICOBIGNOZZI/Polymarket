@@ -5,6 +5,8 @@ on:
     # Exact SHA verification for V7 review branches is safe to run before a
     # pull request exists. Deployment remains separately restricted to main.
     branches: [main, "codex/v7-*"]
+    paths-ignore:
+      - deploy/v7-paper-deploy-aws-oidc-request.json
   pull_request:
   workflow_dispatch:
     inputs:
