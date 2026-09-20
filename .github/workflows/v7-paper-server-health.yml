@@ -7,7 +7,7 @@ on:
   repository_dispatch:
     types: [v7-paper-server-health]
   workflow_run:
-    workflows: ["V7 deploy PAPER server"]
+    workflows: ["V7 deploy PAPER server", "V7 deploy PAPER server AWS OIDC"]
     types: [completed]
     branches: [main]
   schedule:
@@ -25,7 +25,7 @@ jobs:
     timeout-minutes: 18
     env:
       SERVER_HOST: ${{ vars.POLYMARKET_SERVER_HOST || '100.104.183.109' }}
-      SERVER_USER: ${{ vars.POLYMARKET_SERVER_USER || 'enrico' }}
+      SERVER_USER: ${{ vars.POLYMARKET_SERVER_USER || 'ubuntu' }}
       SERVER_PORT: ${{ vars.POLYMARKET_SERVER_PORT || '22' }}
       EXPECTED_SHA: ${{ github.event.inputs.expected_sha || github.event.client_payload.expected_sha || github.event.workflow_run.head_sha || github.sha }}
       GRAFANA_HOSTNAME: mamma-portfolio
@@ -118,10 +118,15 @@ jobs:
           mkdir -p health-evidence
           ssh -i ~/.ssh/polymarket_v7_health -o IdentitiesOnly=yes -o BatchMode=yes -o ConnectTimeout=10 -p "$SERVER_PORT" "$SERVER_USER@$SERVER_HOST" "EXPECTED_SHA='$EXPECTED_SHA' bash -s" <<'REMOTE' | tee health-evidence/server-health.txt
           set -euo pipefail
-          cd "$HOME/polymarket"
-          root="$HOME/polymarket/runs/paper_v7_live"
-          test "$(git rev-parse HEAD)" = "$EXPECTED_SHA"
+          unit=polymarket-v7-paper.service
+          app="$(systemctl show "$unit" -p WorkingDirectory --value)"
+          env_raw="$(systemctl show "$unit" -p Environment --value)"
+          root="$(python3 -c 'import shlex,sys; items=shlex.split(sys.stdin.read()); print(next((x.split("=",1)[1] for x in items if x.startswith("PM_V7_RUN_ROOT=")), ""))' <<<"$env_raw")"
+          test -n "$app" -a -d "$app"
+          test -n "$root" -a -d "$root"
+          test "$(cat "$app/deploy/london/runtime_sha")" = "$EXPECTED_SHA"
           test "$(cat "$root/control/deployed_sha")" = "$EXPECTED_SHA"
+          cd "$app"
           python3 - "$root" "$EXPECTED_SHA" <<'PY'
           import json,os,sys,time
           from pathlib import Path
@@ -171,5 +176,5 @@ jobs:
         run: |
           echo '## V7 PAPER server health' >> "$GITHUB_STEP_SUMMARY"
           echo "- exact deployed SHA: $EXPECTED_SHA" >> "$GITHUB_STEP_SUMMARY"
-          echo '- live algorithms: exactly 2; legacy algorithms: 0' >> "$GITHUB_STEP_SUMMARY"
+          echo '- live algorithms: exactly 1 (CRYPTO_SETTLEMENT_ENGINE); legacy algorithms: 0' >> "$GITHUB_STEP_SUMMARY"
           echo '- runtime, single writer, PAPER safety, ledger, Prometheus and Grafana: PASS' >> "$GITHUB_STEP_SUMMARY"
