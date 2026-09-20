@@ -145,8 +145,41 @@ print('RESEARCH_READER='+json.dumps({'user':user,'root':str(root/'research/hft_p
     stdout,_=run(REGION,'i-0fba2bac9fdc5cbeb','python3 -c '+shlex.quote(code),60)
     print(next(line for line in stdout.splitlines() if line.startswith('RESEARCH_READER=')))
 
+
+def prune_pre_epoch(request_path):
+    import gzip
+    req=json.loads(Path(request_path).read_text())
+    assert req['paper_only'] is True and req['authenticated_execution'] is False and req['real_order_submission'] is False
+    assert req['start_ms']==1789921800000
+    source=base64.b64encode(gzip.compress(Path('ops/v7_prune_pre_epoch.py').read_bytes())).decode()
+    helper=base64.b64encode(gzip.compress(Path('monitoring/v7_closed_tape_retention.py').read_bytes())).decode()
+    code='SOURCE='+repr(source)+'\nHELPER='+repr(helper)+'\nAPPLY='+repr(req.get('apply_pre_epoch_deletion') is True)+'\n'+r'''
+import base64,gzip,hashlib,json,shlex,subprocess,time
+from pathlib import Path
+namespace={'__name__':'cleanup'};exec(gzip.decompress(base64.b64decode(SOURCE)),namespace)
+helper={'__name__':'closed'};exec(gzip.decompress(base64.b64decode(HELPER)),helper)
+env=subprocess.check_output(['systemctl','show','polymarket-v7-paper.service','-p','Environment','--value'],text=True)
+root=Path(next(v.split('=',1)[1] for v in shlex.split(env) if v.startswith('PM_V7_RUN_ROOT=')))
+assert root.parent==Path('/mnt/polymarket-data')
+state=json.loads((root/'control/runtime_status.json').read_text())
+assert state.get('paper_only') is True and state.get('authenticated_execution') is False and state.get('real_order_submission') is False
+opened=helper['_open_regular_file_identities']();assert opened is not None
+cut=1789921800000000000;rows=namespace['plan'](root,cut,opened)
+payload=json.dumps(rows,sort_keys=True,separators=(',',':')).encode();digest=hashlib.sha256(payload).hexdigest()
+folder=root/'control/pre_epoch_cleanup';folder.mkdir(mode=0o700,exist_ok=True)
+path=folder/(digest+'.plan.json');path.write_bytes(payload)
+summary={'plan_sha256':digest,'files':len(rows),'bytes':sum(r['identity'][2] for r in rows),'apply':APPLY,'cutoff_ns':cut}
+if APPLY:
+ summary.update(namespace['execute'](rows,root,cut,helper['_open_regular_file_identities']()))
+ (folder/(digest+'.receipt.json')).write_text(json.dumps(summary,sort_keys=True)+'\n')
+print('PRE_EPOCH_CLEANUP='+json.dumps(summary))
+'''
+    stdout,_=run(REGION,'i-0fba2bac9fdc5cbeb','nice -n 15 python3 -c '+shlex.quote(code),300)
+    print(next(line for line in stdout.splitlines() if line.startswith('PRE_EPOCH_CLEANUP=')))
+
 if __name__=='__main__':
     request=json.loads(Path(sys.argv[1]).read_text())
-    if request.get('operation')=='install_research_reader':install_reader(sys.argv[1])
+    if request.get('operation')=='prune_pre_epoch':prune_pre_epoch(sys.argv[1])
+    elif request.get('operation')=='install_research_reader':install_reader(sys.argv[1])
     elif request.get('operation')=='export_recent':export(sys.argv[1])
     else:main()

@@ -102,3 +102,23 @@ def test_growth_measurement_does_not_count_compression_as_new_events():
     assert report['gb_per_hour']['cex_raw']==pytest.approx(100/30*3600/1e9)
     assert merged([(1,5),(4,7),(10,11)])==[[1,7],[10,11]]
     assert contains([[1,7],[10,11]],7) and not contains([[1,7],[10,11]],8)
+
+
+def test_one_time_epoch_cleanup_excludes_current_open_recent_models_and_changed_files(tmp_path):
+    import os
+    from v7_prune_pre_epoch import plan,execute
+    active=tmp_path/'paper_v7_london_live';active.mkdir()
+    archive=tmp_path/'paper_v7_london_archives'
+    paths=[]
+    for name in ('old','open','recent','model','changed'):
+        p=archive/'external_fair/raw'/(name+'.bin');p.parent.mkdir(parents=True,exist_ok=True)
+        p.write_bytes(b'data');os.utime(p,ns=(1,1));paths.append(p)
+    old,opened,recent,model,changed=paths;os.utime(recent,ns=(100,100))
+    current=active/'external_fair/raw/current.bin';current.parent.mkdir(parents=True);current.write_bytes(b'current');os.utime(current,ns=(1,1))
+    opened_ids={(opened.stat().st_dev,opened.stat().st_ino)}
+    rows=plan(active,50,opened_ids)
+    assert {Path(r['path']).name for r in rows}=={'old.bin','changed.bin'}
+    changed.write_bytes(b'new data')
+    result=execute(rows,active,50,opened_ids)
+    assert result['removed_files']==1 and not old.exists()
+    assert all(p.exists() for p in (opened,recent,model,changed,current))
