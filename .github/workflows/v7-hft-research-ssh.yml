@@ -59,7 +59,7 @@ jobs:
           assert value['operation']=='ATTACH_DEDICATED_READ_ONLY_RESEARCH_SSH_GROUP'
           with open(out,'a',encoding='utf-8') as stream:
               for key in ('request_id','instance_id','expected_public_ip','client_cidr','port'):
-                  stream.write(f'{key}={value[key]}\\n')
+                  stream.write(f'{key}={value[key]}\n')
           PY
 
       - name: Configure AWS credentials through GitHub OIDC
