@@ -1,0 +1,12 @@
+{
+  "schema": "polymarket_v7_aws_oidc_paper_deploy_request_v1",
+  "version": 1,
+  "request_id": "paper-london-aws-oidc-20260920-44392cbc",
+  "expected_parent_sha": "44392cbc00afaf3e8b04a2ad056c924a55d3d548",
+  "role_arn": "arn:aws:iam::350769147128:role/PolymarketLondonPaperDeployPolicy",
+  "paper_only": true,
+  "authenticated_execution": false,
+  "real_order_submission": false,
+  "cutover_approved": true,
+  "trigger": "GITHUB_AWS_OIDC_SSM_ONE_SHOT"
+}
