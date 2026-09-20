@@ -24,9 +24,10 @@ if ! flock -n 9; then
   echo "another London stage/cutover already owns this host" >&2
   exit 73
 fi
-[[ -e "$SOURCE_DIR/.git" && "$(git -C "$SOURCE_DIR" rev-parse --is-inside-work-tree 2>/dev/null)" == true ]] || { echo "source checkout missing" >&2; exit 66; }
-[[ "$(git -C "$SOURCE_DIR" rev-parse HEAD)" == "$EXPECTED_SHA" ]] || { echo "source SHA mismatch" >&2; exit 66; }
-[[ -z "$(git -C "$SOURCE_DIR" status --porcelain)" ]] || { echo "dirty source checkout" >&2; exit 66; }
+GIT_SOURCE=(git -c "safe.directory=$SOURCE_DIR" -C "$SOURCE_DIR")
+[[ -e "$SOURCE_DIR/.git" && "$("${GIT_SOURCE[@]}" rev-parse --is-inside-work-tree 2>/dev/null)" == true ]] || { echo "source checkout missing" >&2; exit 66; }
+[[ "$("${GIT_SOURCE[@]}" rev-parse HEAD)" == "$EXPECTED_SHA" ]] || { echo "source SHA mismatch" >&2; exit 66; }
+[[ -z "$("${GIT_SOURCE[@]}" status --porcelain)" ]] || { echo "dirty source checkout" >&2; exit 66; }
 mkdir -p "$RUNTIME_ROOT/by-sha"
 # Full verification build is staging-only; it never runs on the trading path.
 rm -rf "$SOURCE_DIR/build-verify" "$SOURCE_DIR/build-runtime"
