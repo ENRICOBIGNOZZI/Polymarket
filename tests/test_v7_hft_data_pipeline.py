@@ -67,6 +67,10 @@ def test_fresh_live_tail_is_not_mislabeled_as_historical_backlog(tmp_path):
         result=store.ingest(max_rows=1,realtime_lag_seconds=30)
         assert result['scan_complete'] is True
         assert list(store.db.execute('SELECT * FROM watermarks'))
+        population=json.loads((store.root/'compact'/'population.json').read_bytes())
+        assert population['scan_complete'] is True
+        assert population['complete_before_ns'] <= time.time_ns()
+        assert population['realtime_lag_seconds'] == 30
     finally:store.close()
 
 
