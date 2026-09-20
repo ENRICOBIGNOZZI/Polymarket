@@ -310,7 +310,22 @@ PY
   fi
   sleep 1
 done
-[[ "$ready" == 1 ]] || { echo "London PAPER core runtime health gate failed" >&2; exit 70; }
+if [[ "$ready" != 1 ]]; then
+  echo "London PAPER core runtime health gate failed" >&2
+  printf '%s\n' '--- runtime_status.json ---' >&2
+  cat "$RUN_ROOT/control/runtime_status.json" >&2 2>/dev/null || true
+  printf '%s\n' '--- native_engine_manager_status.json ---' >&2
+  cat "$RUN_ROOT/control/native_engine_manager_status.json" >&2 2>/dev/null || true
+  printf '%s\n' '--- exporter health ---' >&2
+  curl -sS http://127.0.0.1:9108/healthz >&2 2>/dev/null || true
+  printf '%s\n' '--- PAPER service ---' >&2
+  systemctl --no-pager --full status polymarket-v7-paper.service >&2 2>/dev/null || true
+  printf '%s\n' '--- exporter service ---' >&2
+  systemctl --no-pager --full status polymarket-v7-exporter.service >&2 2>/dev/null || true
+  printf '%s\n' '--- PAPER journal tail ---' >&2
+  journalctl -u polymarket-v7-paper.service -n 120 --no-pager >&2 2>/dev/null || true
+  exit 70
+fi
 
 # Full exporter health deliberately includes data-plane completeness (30/60 PM
 # book coverage, all external assets, retention, etc.). Those are observable
