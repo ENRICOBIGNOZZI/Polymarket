@@ -42,7 +42,7 @@ def main() -> int:
     p.add_argument("--token", required=True)
     a=p.parse_args()
     v=json.loads(a.request.read_text(encoding="utf-8"))
-    required={"schema","version","expected_main_sha","maximum_deletions","preserve_ips"}
+    required={"schema","version","expected_parent_sha","maximum_deletions","preserve_ips"}
     if set(v) != required or v["schema"] != "polymarket_v7_tailscale_cleanup_request_v1" or v["version"] != 1:
         p.error("request_contract")
     maximum=int(v["maximum_deletions"])
