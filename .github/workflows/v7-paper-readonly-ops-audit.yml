@@ -136,7 +136,9 @@ jobs:
           python3 - "$payload" > "$RUNNER_TEMP/params.json" <<'PY'
           import json,sys
           payload=sys.argv[1]
-          command=f"set -euo pipefail; printf '%s' '{payload}' | base64 -d > /tmp/v7-readonly-audit.py; python3 /tmp/v7-readonly-audit.py; rm -f /tmp/v7-readonly-audit.py"
+          import shlex
+          inner=f"set -euo pipefail; printf '%s' '{payload}' | base64 -d > /tmp/v7-readonly-audit.py; python3 /tmp/v7-readonly-audit.py; rm -f /tmp/v7-readonly-audit.py"
+          command="bash -lc "+shlex.quote(inner)
           print(json.dumps({"commands":[command],"executionTimeout":["120"]}))
           PY
           cid="$(aws ssm send-command --instance-ids "$LONDON_INSTANCE_ID" --document-name AWS-RunShellScript --parameters file://"$RUNNER_TEMP/params.json" --comment "Polymarket V7 PAPER read-only ops audit" --query 'Command.CommandId' --output text)"
