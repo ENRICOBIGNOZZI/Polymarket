@@ -54,7 +54,7 @@ def decision(r):
                         minimum=minimum/1e6,tick=tick/10000)},
         fee_rate=rate,fee_exponent=exponent,venue_delay_ms=r.get('paper_venue_delay_ns',0)/1e6,
         external_return_bp=r.get('binance_return_100ms_bp'),strong_signal=True,
-        capture_mode=r.get('capture_mode'),settlement=None)
+        capture_mode=r.get('capture_mode'),settlement=None,model_input=r)
 
 
 def snapshot(r):
