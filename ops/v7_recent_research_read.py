@@ -153,7 +153,7 @@ def prune_pre_epoch(request_path):
     assert req['start_ms']==1789921800000
     source=base64.b64encode(gzip.compress(Path('ops/v7_prune_pre_epoch.py').read_bytes())).decode()
     helper=base64.b64encode(gzip.compress(Path('monitoring/v7_closed_tape_retention.py').read_bytes())).decode()
-    code='SOURCE='+repr(source)+'\nHELPER='+repr(helper)+'\nAPPLY='+repr(req.get('apply_pre_epoch_deletion') is True)+'\n'+r'''
+    code='SOURCE='+repr(source)+'\nHELPER='+repr(helper)+'\nAPPLY='+repr(req.get('apply_pre_epoch_deletion') is True)+'\nEXPECTED_PLAN='+repr(req.get('expected_plan_sha256'))+'\n'+r'''
 import base64,gzip,hashlib,json,shlex,subprocess,time
 from pathlib import Path
 namespace={'__name__':'cleanup'};exec(gzip.decompress(base64.b64decode(SOURCE)),namespace)
@@ -170,7 +170,9 @@ folder=root/'control/pre_epoch_cleanup';folder.mkdir(mode=0o700,exist_ok=True)
 path=folder/(digest+'.plan.json');path.write_bytes(payload)
 summary={'plan_sha256':digest,'files':len(rows),'bytes':sum(r['identity'][2] for r in rows),'apply':APPLY,'cutoff_ns':cut}
 if APPLY:
- summary.update(namespace['execute'](rows,root,cut,helper['_open_regular_file_identities']()))
+ assert EXPECTED_PLAN==digest,'pre-epoch deletion plan changed; rerun audit'
+ current_opened=helper['_open_regular_file_identities']();assert current_opened is not None
+ summary.update(namespace['execute'](rows,root,cut,current_opened))
  (folder/(digest+'.receipt.json')).write_text(json.dumps(summary,sort_keys=True)+'\n')
 print('PRE_EPOCH_CLEANUP='+json.dumps(summary))
 '''

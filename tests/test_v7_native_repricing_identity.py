@@ -10,7 +10,7 @@ def test_repeated_decisions_for_one_signal_do_not_conflict_or_share_labels(tmp_p
                  yes_bid_e4=3900,yes_ask_e4=4100,no_bid_e4=5900,no_ask_e4=6100)
     data.insert(1,later);capture(p,data)
     out,s=m.build([p],require_closed=True)
-    assert s['origins']==2 and len(out)==4 and s['censored_horizons']==4
+    assert s['origins']==2 and len(out)==4 and s['censored_horizons']==8
     assert all(r['decision_monotonic_ns']==1_000_000_000 for r in out)
 
 

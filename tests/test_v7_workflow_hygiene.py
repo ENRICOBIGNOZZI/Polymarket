@@ -11,7 +11,7 @@ def test_current_workflow_inventory_is_final_paper_only():
         "v7-paper-server-health.yml", "v7-point-in-time-universe-archive.yml",
         "v7-freeze-maker-forward-window.yml", "v7-public-book-wire-probe.yml",
         "v7-london-aws-provision.yml", "v7-tailscale-oidc-cleanup.yml",
-        "v7-deploy-paper-server-aws-oidc.yml",
+        "v7-deploy-paper-server-aws-oidc.yml", "v7-recent-research-read.yml",
     }
 
 
