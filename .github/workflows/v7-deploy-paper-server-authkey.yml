@@ -111,6 +111,33 @@ jobs:
             "EXPECTED_DEPLOY_SHA='$EXPECTED_SHA' bash -s" <<'REMOTE' | tee -a deploy-evidence.txt
           set -euo pipefail
           cd ~/polymarket
+          if [[ "$(uname -s)" == "Darwin" ]]; then
+            brew_bin=""
+            for candidate in /opt/homebrew/bin/brew /usr/local/bin/brew; do
+              if [[ -x "$candidate" ]]; then
+                brew_bin="$candidate"
+                break
+              fi
+            done
+            [[ -n "$brew_bin" ]] || {
+              echo "V7 deploy blocked: Homebrew not found on macOS server" >&2
+              exit 1
+            }
+            eval "$("$brew_bin" shellenv)"
+            missing=""
+            for cmd in cmake pkg-config prometheus grafana; do
+              if ! command -v "$cmd" >/dev/null 2>&1; then
+                missing="$missing $cmd"
+              fi
+            done
+            if [[ -n "$missing" ]]; then
+              echo "[v7-deploy] Installing missing macOS dependencies:$missing"
+              brew install $missing
+            fi
+            for cmd in cmake pkg-config prometheus grafana; do
+              command -v "$cmd" >/dev/null 2>&1
+            done
+          fi
           git fetch --no-tags origin main
           main_sha="$(git rev-parse origin/main)"
           test "$main_sha" = "$EXPECTED_DEPLOY_SHA"
