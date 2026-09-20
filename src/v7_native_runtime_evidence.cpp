@@ -243,6 +243,11 @@ struct NativeRuntimeEvidenceWriter::Impl {
                 : config.paper_venue_delay_ns < 0 ? "VENUE_TERMS_UNKNOWN_NO_TAKER_FILL"
                 : "LOCAL_RECEIVE_DELAYED_ARRIVAL_PRICE_PARTIAL_FAK_V2"},
             {"economic_authority", "PAPER_EXPLORATION"},
+            {"action_value_semantics", maker
+                ? "MAKER_FILL_CONDITIONED_ROBUST_EV_PER_SHARE"
+                : config.probability_artifact_sha256.empty()
+                    ? "TAKER_RULE_NO_COMPARABLE_ACTION_SCORE"
+                    : "TAKER_SETTLEMENT_EDGE_NOT_FILL_CONDITIONED"},
             {"counterfactual", false},
             {"research_evidence_only", false},
             {"native_settlement_receipt", receipt(event.command)},
@@ -460,6 +465,12 @@ struct NativeRuntimeEvidenceWriter::Impl {
                 : std::isfinite(event.economics.expected_net_edge) ? json::value(event.economics.expected_net_edge) : json::value(nullptr)},
             {"conservative_net_edge", std::isfinite(event.economics.conservative_net_edge)
                 ? json::value(event.economics.conservative_net_edge) : json::value(nullptr)},
+            {"expected_fill_probability", event.expected_fill_probability_valid
+                && std::isfinite(event.expected_fill_probability)
+                    ? json::value(event.expected_fill_probability) : json::value(nullptr)},
+            {"economic_score_fill_conditioned", event.economic_score_fill_conditioned != 0},
+            {"selector_score_comparable", event.economic_score_fill_conditioned != 0
+                && event.expected_fill_probability_valid != 0},
             {"probability_decision_reason", event.probability.valid
                 ? json::value(static_cast<unsigned>(event.economics.reason)) : json::value(nullptr)},
             {"external_features", event.external_valid ? json::value(json::object{
