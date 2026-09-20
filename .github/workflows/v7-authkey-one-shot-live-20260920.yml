@@ -101,6 +101,16 @@ jobs:
               brew install libsecp256k1 || brew install secp256k1
             fi
             pkg-config --exists libsecp256k1
+            if ! python3 - <<'PYTEST_CHECK'
+          import pytest
+          PYTEST_CHECK
+            then
+              echo "[v7-deploy] Installing missing macOS Python dependency: pytest"
+              python3 -m pip install --user pytest || python3 -m pip install --break-system-packages pytest || brew install pytest
+            fi
+            python3 - <<'PYTEST_CHECK'
+          import pytest
+          PYTEST_CHECK
           fi
           git fetch --no-tags origin main
           main_sha="$(git rev-parse origin/main)"
@@ -163,4 +173,4 @@ jobs:
           if-no-files-found: warn
           retention-days: 14
 
-# trigger: 2026-09-20T01:05:00Z
+# trigger: 2026-09-20T01:06:45Z
