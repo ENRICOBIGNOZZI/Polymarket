@@ -123,7 +123,10 @@ class V7MacosMonitoringOwnerTest(unittest.TestCase):
         self.assertIn("Verify London PAPER runtime through read-only SSM", workflow)
         self.assertNotIn("tailscale ping", workflow)
         self.assertIn("http://127.0.0.1:3000/api/health", helper)
-        self.assertIn("http://127.0.0.1:3000/api/dashboards/uid/polymarket-v7", helper)
+        self.assertNotIn("api/dashboards/uid", helper)
+        self.assertIn("monitoring/grafana/dashboards", helper)
+        self.assertIn("polymarket-v7", helper)
+        self.assertIn("polymarket-v7-multi-crypto", helper)
         for metric in (
             "polymarket_execution_opportunities",
             "polymarket_execution_orders_submitted",
