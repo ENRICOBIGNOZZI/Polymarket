@@ -268,6 +268,32 @@ jobs:
           cat "$ROOT/control/runtime_status.json" || true
           echo fast_existing=pre_kill_marker
           cat "$ROOT/control/KILL" || true
+          echo fast_existing=maker_execution_model_contract
+          python3 - "$ROOT/micro_maker/execution_model.json" "$SHA" <<'PYMODEL' || true
+          import json,sys
+          p=sys.argv[1]; expected=sys.argv[2]
+          try:
+              v=json.load(open(p,encoding='utf-8'))
+          except Exception as exc:
+              print("MAKER_MODEL_CONTRACT="+json.dumps({"readable":False,"error":type(exc).__name__},sort_keys=True,separators=(",",":")))
+              raise SystemExit(0)
+          out={
+              "readable":True,
+              "model_sha":v.get("model_sha"),
+              "model_sha_matches":v.get("model_sha")==expected,
+              "paper_only":v.get("paper_only"),
+              "authenticated_execution":v.get("authenticated_execution"),
+              "real_order_submission":v.get("real_order_submission"),
+              "policy_hash":v.get("policy_hash"),
+              "policy_hash_len":len(str(v.get("policy_hash") or "")),
+              "config_hash":v.get("config_hash"),
+              "config_hash_len":len(str(v.get("config_hash") or "")),
+              "execution_semantics_version":v.get("execution_semantics_version"),
+              "has_global":isinstance(v.get("groups"),dict) and isinstance((v.get("groups") or {}).get("GLOBAL"),dict),
+              "group_count":len(v.get("groups") or {}) if isinstance(v.get("groups"),dict) else 0,
+          }
+          print("MAKER_MODEL_CONTRACT="+json.dumps(out,sort_keys=True,separators=(",",":")))
+          PYMODEL
           echo fast_existing=pre_native_engine_manager_status
           python3 - "$ROOT/control/native_engine_manager_status.json" <<'PYNATIVE' || true
           import json,sys
