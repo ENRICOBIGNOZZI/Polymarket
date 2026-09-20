@@ -262,6 +262,39 @@ jobs:
           ROOT="$(systemctl show "$UNIT" -p Environment --value | python3 -c 'import shlex,sys; print(next((x.split("=",1)[1] for x in shlex.split(sys.stdin.read()) if x.startswith("PM_V7_RUN_ROOT=")), ""))')"
           [[ -n "$APP_DIR" && "$APP_DIR" == /* && -n "$ROOT" && "$ROOT" == /* ]]
 
+          if systemctl is-active --quiet "$UNIT" && python3 - "$ROOT/control/runtime_status.json" "$SHA" <<'PYHEALTH'
+          import json,os,sys,time
+          from pathlib import Path
+          p=Path(sys.argv[1]); sha=sys.argv[2]
+          try:
+              v=json.loads(p.read_text(encoding='utf-8'))
+          except Exception:
+              raise SystemExit(1)
+          if v.get('model_sha') != sha:
+              raise SystemExit(1)
+          if v.get('paper_only') is not True or v.get('authenticated_execution') is not False or v.get('real_order_submission') is not False:
+              raise SystemExit(1)
+          if v.get('state') != 'running' or v.get('killed') is True:
+              raise SystemExit(1)
+          pid=int(v.get('pid') or 0)
+          ts=int(v.get('timestamp') or 0)
+          if pid <= 0 or abs(int(time.time())-ts) > 30:
+              raise SystemExit(1)
+          try:
+              os.kill(pid,0)
+          except OSError:
+              raise SystemExit(1)
+          PYHEALTH
+          then
+            echo fast_existing=already_healthy
+            curl -fsS http://127.0.0.1:9090/-/ready >/dev/null
+            curl -fsS http://127.0.0.1:3000/api/health >/dev/null
+            curl -fsS --get --data-urlencode 'query=up{job="polymarket-v7"}' http://127.0.0.1:9090/api/v1/query | python3 -c 'import json,sys; v=json.load(sys.stdin); r=v.get("data",{}).get("result",[]); assert len(r)==1 and r[0]["value"][1]=="1", v'
+            curl -fsS http://127.0.0.1:9108/metrics | grep -E '^polymarket_v7_execution_alive(\{| )' >/dev/null
+            echo V7_FAST_RESTART_EXISTING_OK="$SHA"
+            exit 0
+          fi
+
           if [[ -f "$ROOT/control/supervisor_status.json" ]] && python3 - "$ROOT/control/supervisor_status.json" <<'PYCHECK'
           import json,sys
           try:
