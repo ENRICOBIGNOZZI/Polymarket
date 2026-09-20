@@ -7,7 +7,8 @@ RUNTIME_ROOT="${POLYMARKET_RUNTIME_ROOT:-/home/$SERVICE_USER/polymarket-runtime}
 TARGET="$RUNTIME_ROOT/by-sha/$EXPECTED_SHA"
 [[ "$EXPECTED_SHA" =~ ^[0-9a-f]{40}$ ]] || { echo "exact SHA required" >&2; exit 78; }
 [[ "$(uname -s)" == Linux ]] || { echo "London stage requires Linux" >&2; exit 78; }
-python3 -c 'import numpy' >/dev/null 2>&1 || { echo "python3 numpy required for London verification stage" >&2; exit 78; }
+REUSE_EXACT_SHA_CI="${POLYMARKET_REUSE_EXACT_SHA_CI:-0}"
+CI_REPOSITORY="${PM_V7_CI_REPOSITORY:-ENRICOBIGNOZZI/Polymarket}"
 LOCK_FILE="${POLYMARKET_LONDON_DEPLOY_LOCK_FILE:-/home/$SERVICE_USER/.cache/polymarket-v7-london-deploy.lock}"
 LOCK_DIR="$(dirname "$LOCK_FILE")"
 command -v flock >/dev/null 2>&1 || { echo "flock is required for London deployment serialization" >&2; exit 78; }
@@ -30,26 +31,49 @@ GIT_SOURCE=(git -c "safe.directory=$SOURCE_DIR" -C "$SOURCE_DIR")
 [[ "$("${GIT_SOURCE[@]}" rev-parse HEAD)" == "$EXPECTED_SHA" ]] || { echo "source SHA mismatch" >&2; exit 66; }
 [[ -z "$("${GIT_SOURCE[@]}" status --porcelain)" ]] || { echo "dirty source checkout" >&2; exit 66; }
 mkdir -p "$RUNTIME_ROOT/by-sha"
-# Full verification build is staging-only; it never runs on the trading path.
 rm -rf "$SOURCE_DIR/build-verify" "$SOURCE_DIR/build-runtime"
-cmake -S "$SOURCE_DIR" -B "$SOURCE_DIR/build-verify" -GNinja -DCMAKE_BUILD_TYPE=Release
-verify_build_log="$SOURCE_DIR/build-verify/london-stage-build.log"
-if ! cmake --build "$SOURCE_DIR/build-verify" --parallel "${POLYMARKET_BUILD_JOBS:-2}" >"$verify_build_log" 2>&1; then
-  echo "London verification build failed" >&2
-  tail -n 160 "$verify_build_log" >&2 || true
-  exit 8
-fi
-verify_test_log="$SOURCE_DIR/build-verify/london-stage-ctest.log"
-if ! ctest --test-dir "$SOURCE_DIR/build-verify" --output-on-failure >"$verify_test_log" 2>&1; then
-  echo "London verification ctest failed" >&2
-  failed_list="$SOURCE_DIR/build-verify/Testing/Temporary/LastTestsFailed.log"
-  if [[ -s "$failed_list" ]]; then
-    echo "London failed tests:" >&2
-    cat "$failed_list" >&2
+
+# Fast path: the exact immutable code SHA has already passed the full GitHub
+# release matrix. Re-prove those check-runs from London, then avoid rebuilding
+# and re-running the same 343-test suite a second time on the deployment host.
+# The fallback remains the original full local verification.
+if [[ "$REUSE_EXACT_SHA_CI" == 1 ]]; then
+  CI_RECEIPT_DIR="$RUNTIME_ROOT/ci-receipts"
+  mkdir -p "$CI_RECEIPT_DIR"
+  python3 "$SOURCE_DIR/scripts/v7_exact_sha_ci_gate.py" \
+    --repository "$CI_REPOSITORY" --sha "$EXPECTED_SHA" \
+    --required-check ci-v7-Release \
+    --required-check ci-v7-Debug \
+    --required-check sanitizer-v7 \
+    --required-check security-audit-v7 \
+    --required-check london-runtime-boundary-v7 \
+    --required-check monitoring-v7 \
+    --required-check single-writer-v7 \
+    --output "$CI_RECEIPT_DIR/$EXPECTED_SHA.json"
+  printf 'london_stage_verification=REUSED_EXACT_SHA_CI\n'
+else
+  python3 -c 'import numpy' >/dev/null 2>&1 || { echo "python3 numpy required for London verification stage" >&2; exit 78; }
+  cmake -S "$SOURCE_DIR" -B "$SOURCE_DIR/build-verify" -GNinja -DCMAKE_BUILD_TYPE=Release
+  verify_build_log="$SOURCE_DIR/build-verify/london-stage-build.log"
+  if ! cmake --build "$SOURCE_DIR/build-verify" --parallel "${POLYMARKET_BUILD_JOBS:-2}" >"$verify_build_log" 2>&1; then
+    echo "London verification build failed" >&2
+    tail -n 160 "$verify_build_log" >&2 || true
+    exit 8
   fi
-  ctest --test-dir "$SOURCE_DIR/build-verify" --rerun-failed --output-on-failure >&2 || true
-  exit 8
+  verify_test_log="$SOURCE_DIR/build-verify/london-stage-ctest.log"
+  if ! ctest --test-dir "$SOURCE_DIR/build-verify" --output-on-failure >"$verify_test_log" 2>&1; then
+    echo "London verification ctest failed" >&2
+    failed_list="$SOURCE_DIR/build-verify/Testing/Temporary/LastTestsFailed.log"
+    if [[ -s "$failed_list" ]]; then
+      echo "London failed tests:" >&2
+      cat "$failed_list" >&2
+    fi
+    ctest --test-dir "$SOURCE_DIR/build-verify" --rerun-failed --output-on-failure >&2 || true
+    exit 8
+  fi
+  printf 'london_stage_verification=FULL_LOCAL_CI\n'
 fi
+
 cmake -S "$SOURCE_DIR" -B "$SOURCE_DIR/build-runtime" -GNinja -DCMAKE_BUILD_TYPE=Release -DPM_LONDON_RUNTIME_ONLY=ON -DBUILD_TESTING=OFF
 runtime_build_log="$SOURCE_DIR/build-runtime/london-runtime-build.log"
 if ! cmake --build "$SOURCE_DIR/build-runtime" --parallel "${POLYMARKET_BUILD_JOBS:-2}" >"$runtime_build_log" 2>&1; then
