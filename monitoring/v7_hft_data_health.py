@@ -186,7 +186,7 @@ def measure(root, seconds=30):
                 except FileNotFoundError:pass
             siblings[folder.name]=size
     native=[]
-    for path in sorted(root.glob('native_crypto_settlement_engine_*_M5.log')):
+    for path in sorted(root.glob('native_crypto_settlement_engine_*_m5.log')):
         with path.open('rb') as stream:
             stream.seek(max(0,path.stat().st_size-512*1024))
             for line in reversed(stream.read().splitlines()):
