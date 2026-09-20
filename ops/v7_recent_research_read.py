@@ -49,11 +49,16 @@ with tempfile.TemporaryDirectory(prefix='pm-readonly-research-') as tmp:
 
 def main():
     req=json.loads(Path(sys.argv[1]).read_text())
-    assert req['schema']=='v7_recent_research_read_v1' and req['operation']=='audit'
+    assert req['schema']=='v7_recent_research_read_v1' and req['operation'] in ('audit','health')
     assert req['paper_only'] is True and req['authenticated_execution'] is False and req['real_order_submission'] is False
     assert isinstance(req['start_ms'],int) and req['start_ms']>0
     cert=base64.b64encode(req['recipient_certificate'].encode()).decode()
-    source='START_MS='+str(req['start_ms'])+'\nCERT='+repr(cert)+'\n'+REMOTE
+    remote = REMOTE
+    if req['operation']=='health':
+        import gzip
+        health=base64.b64encode(gzip.compress(Path('monitoring/v7_hft_data_health.py').read_bytes())).decode()
+        remote=remote.replace('payload=gzip.compress', "namespace={'__name__':'health'};exec(gzip.decompress(base64.b64decode("+repr(health)+")),namespace)\nresult=namespace['measure'](root,30)\npayload=gzip.compress")
+    source='START_MS='+str(req['start_ms'])+'\nCERT='+repr(cert)+'\n'+remote
     command='nice -n 15 python3 -c '+shlex.quote(source)
     stdout,_=run(REGION,'i-0fba2bac9fdc5cbeb',command,120)
     lines=[line for line in stdout.splitlines() if line.startswith('ENCRYPTED_RESEARCH=')]
