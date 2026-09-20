@@ -272,10 +272,13 @@ jobs:
             "$ROOT/public_https_proxy.log" \
             "$ROOT/external_fair/rtds_monitor.log" \
             "$ROOT/external_fair/external_assets_supervisor.log" \
+            "$ROOT/research/repricing_book_observer.log" \
             "$ROOT/universe/collector.log" \
             "$ROOT/trade_recorder.log" \
             "$ROOT/ledger_router.log" \
-            "$ROOT/native_engine_manager.log"; do
+            "$ROOT/native_engine_manager.log" \
+            "$ROOT/native_crypto_settlement_engine.log" \
+            "$ROOT/canonical_economics.log"; do
             echo "fast_existing=pre_log:$log"
             if [[ -f "$log" ]]; then
               grep -Ei 'traceback|error|fatal|failed|exception|blocker|invalid|missing|terminate|exit' "$log" | tail -n 12 || true
@@ -283,6 +286,8 @@ jobs:
               tail -n 12 "$log" || true
             fi
           done
+          echo fast_existing=pre_processes
+          ps -eo pid,ppid,stat,comm,args --sort=pid | grep -E 'v7_|polymarket|python3' | tail -n 120 || true
 
           if systemctl is-active --quiet "$UNIT" && python3 - "$ROOT/control/runtime_status.json" "$SHA" <<'PYHEALTH'
           import json,os,sys,time
