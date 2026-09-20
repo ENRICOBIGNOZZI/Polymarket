@@ -88,6 +88,27 @@ jobs:
                       except Exception: pass
               values[fam]={'series':len(vals),'sum':sum(vals) if vals else None,'max':max(vals) if vals else None}
 
+          reason_totals={}
+          lane_rejections={}
+          for line in metrics.splitlines():
+              if not line.startswith('polymarket_v7_native_context_decision_reason_total{'):
+                  continue
+              try:
+                  value=float(line.rsplit(None,1)[1])
+              except Exception:
+                  continue
+              reason_match=re.search(r'reason="([^"]*)"',line)
+              asset_match=re.search(r'asset="([^"]*)"',line)
+              horizon_match=re.search(r'horizon="([^"]*)"',line)
+              reason=reason_match.group(1) if reason_match else 'UNKNOWN'
+              asset=asset_match.group(1) if asset_match else 'UNKNOWN'
+              horizon=horizon_match.group(1) if horizon_match else 'UNKNOWN'
+              reason_totals[reason]=reason_totals.get(reason,0.0)+value
+              lane=f"{asset}:{horizon}"
+              lane_rejections[lane]=lane_rejections.get(lane,0.0)+value
+          top_reasons=sorted(reason_totals.items(),key=lambda kv:(-kv[1],kv[0]))[:20]
+          top_lanes=sorted(lane_rejections.items(),key=lambda kv:(-kv[1],kv[0]))[:20]
+
           ledger=root/'ledger/execution.jsonl'
           event_counts={}
           last_ts=None
@@ -125,6 +146,8 @@ jobs:
             'settlement_blocked_count':manager.get('settlement_blocked_count'),
             'pending_settlement_count':manager.get('pending_settlement_count'),
             'metrics':values,
+            'decision_reason_totals':top_reasons,
+            'decision_rejections_by_lane':top_lanes,
             'ledger_valid_rows':valid_rows,
             'ledger_event_counts':event_counts,
             'ledger_last_event_age_seconds':(max(0,time.time()-last_ts) if last_ts else None),
