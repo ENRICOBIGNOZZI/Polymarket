@@ -16,7 +16,10 @@ permissions:
   contents: read
 
 concurrency:
-  group: ci-${{ github.workflow }}-${{ github.ref }}
+  # Exact-SHA CI must be allowed to finish even if another agent advances main.
+  # Deployment gates bind to a specific immutable SHA, so cross-SHA cancellation
+  # creates false negatives and can starve a valid release indefinitely.
+  group: ci-${{ github.workflow }}-${{ github.ref }}-${{ github.sha }}
   cancel-in-progress: true
 
 jobs:
