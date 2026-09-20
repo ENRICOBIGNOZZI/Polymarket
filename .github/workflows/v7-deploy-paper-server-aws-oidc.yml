@@ -349,7 +349,7 @@ jobs:
           if ! systemctl is-active --quiet "$UNIT"; then
             echo fast_existing=paper_unit_inactive
             systemctl status "$UNIT" --no-pager -l || true
-            journalctl -u "$UNIT" -n 160 --no-pager || true
+            journalctl -u "$UNIT" -n 20 --no-pager || true
             exit 20
           fi
           cat > /tmp/v7_fast_existing_check.py <<'PYREMOTE'
@@ -392,7 +392,7 @@ jobs:
             echo fast_existing=systemd_status
             systemctl status "$UNIT" --no-pager -l || true
             echo fast_existing=journal
-            journalctl -u "$UNIT" -n 220 --no-pager || true
+            journalctl -u "$UNIT" -n 20 --no-pager || true
             exit 21
           fi
           echo fast_existing=stability_probe
