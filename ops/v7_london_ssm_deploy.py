@@ -296,7 +296,7 @@ def select_target(probes: dict[str, dict[str, Any]],
         selected = exact[0]
         reason = "EXACT_INSTANCE_ID"
     else:
-            ip_matches = [
+        ip_matches = [
             value for value in healthy
             if expected_tailscale_ip
             and expected_tailscale_ip in (value.get("tailscale_ips") or [])
