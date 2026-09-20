@@ -1,0 +1,124 @@
+name: V7 restricted HFT research SSH
+
+on:
+  push:
+    branches: [main]
+    paths: [deploy/v7-hft-research-ssh-request.json]
+
+permissions:
+  contents: read
+  id-token: write
+
+concurrency:
+  group: v7-hft-research-ssh
+  cancel-in-progress: false
+
+jobs:
+  grant:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    env:
+      AWS_REGION: eu-west-2
+      AWS_DEFAULT_REGION: eu-west-2
+      ROLE_ARN: arn:aws:iam::350769147128:role/PolymarketLondonPaperDeployPolicy
+      REQUEST_PATH: deploy/v7-hft-research-ssh-request.json
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          ref: main
+          fetch-depth: 2
+
+      - name: Validate one-time, single-host SSH request
+        id: request
+        shell: bash
+        run: |
+          set -euo pipefail
+          git fetch --no-tags origin main
+          test "$(git rev-parse HEAD)" = "$(git rev-parse origin/main)"
+          changed="$(git diff-tree --no-commit-id --name-only -r HEAD)"
+          test "$changed" = "$REQUEST_PATH"
+          python3 - "$REQUEST_PATH" "${{ github.event.before }}" "$ROLE_ARN" "$GITHUB_OUTPUT" <<'PY'
+          import ipaddress,json,re,sys
+          from pathlib import Path
+          value=json.loads(Path(sys.argv[1]).read_text(encoding='utf-8'))
+          parent,role,out=sys.argv[2:]
+          assert set(value)=={'schema','version','request_id','expected_parent_sha','role_arn','instance_id','expected_public_ip','client_cidr','port','paper_only','authenticated_execution','real_order_submission','operation'}
+          assert value['schema']=='polymarket_v7_hft_research_ssh_request_v1'
+          assert value['version']==1
+          assert re.fullmatch(r'[A-Za-z0-9._:-]{8,128}',value['request_id'])
+          assert value['expected_parent_sha']==parent
+          assert value['role_arn']==role
+          assert value['instance_id']=='i-0fba2bac9fdc5cbeb'
+          assert value['expected_public_ip']=='35.179.153.174'
+          assert str(ipaddress.ip_network(value['client_cidr'],strict=True))==value['client_cidr']
+          assert value['client_cidr'].endswith('/32')
+          assert value['port']==22
+          assert value['paper_only'] is True
+          assert value['authenticated_execution'] is False
+          assert value['real_order_submission'] is False
+          assert value['operation']=='ATTACH_DEDICATED_READ_ONLY_RESEARCH_SSH_GROUP'
+          with open(out,'a',encoding='utf-8') as stream:
+              for key in ('request_id','instance_id','expected_public_ip','client_cidr','port'):
+                  stream.write(f'{key}={value[key]}\\n')
+          PY
+
+      - name: Configure AWS credentials through GitHub OIDC
+        uses: aws-actions/configure-aws-credentials@e1253824e5c10ff9df46874f81ed3ec929e19cfd
+        with:
+          role-to-assume: ${{ env.ROLE_ARN }}
+          role-session-name: polymarket-hft-research-ssh
+          aws-region: eu-west-2
+
+      - name: Attach dedicated source-restricted SSH group
+        shell: bash
+        env:
+          INSTANCE_ID: ${{ steps.request.outputs.instance_id }}
+          EXPECTED_PUBLIC_IP: ${{ steps.request.outputs.expected_public_ip }}
+          CLIENT_CIDR: ${{ steps.request.outputs.client_cidr }}
+          PORT: ${{ steps.request.outputs.port }}
+          REQUEST_ID: ${{ steps.request.outputs.request_id }}
+        run: |
+          set -euo pipefail
+          aws sts get-caller-identity --output json > caller.json
+          aws ec2 describe-instances --instance-ids "$INSTANCE_ID" --output json > instance.json
+          python3 - "$INSTANCE_ID" "$EXPECTED_PUBLIC_IP" "$CLIENT_CIDR" "$PORT" "$REQUEST_ID" <<'PY'
+          import json,re,subprocess,sys
+          instance,public_ip,cidr,port,request_id=sys.argv[1:]
+          record=json.load(open('instance.json',encoding='utf-8'))['Reservations'][0]['Instances'][0]
+          assert record['InstanceId']==instance and record['State']['Name']=='running'
+          assert record['PublicIpAddress']==public_ip
+          groups=[g['GroupId'] for g in record['SecurityGroups']]
+          assert groups and all(re.fullmatch(r'sg-[0-9a-f]+',g) for g in groups)
+          vpc=record['VpcId']
+          name='polymarket-hft-research-ssh-'+cidr.split('/')[0].replace('.','-')
+          existing=json.loads(subprocess.check_output(['aws','ec2','describe-security-groups','--filters',f'Name=vpc-id,Values={vpc}',f'Name=group-name,Values={name}','--output','json'],text=True))['SecurityGroups']
+          if existing:
+              assert len(existing)==1
+              sg=existing[0]['GroupId']
+          else:
+              sg=subprocess.check_output(['aws','ec2','create-security-group','--group-name',name,'--description','Dedicated read-only HFT research SSH; one source CIDR','--vpc-id',vpc,'--tag-specifications',f'ResourceType=security-group,Tags=[{{Key=Name,Value={name}}},{{Key=ManagedBy,Value=Polymarket}},{{Key=Purpose,Value=HFTReadOnlyResearch}},{{Key=RequestId,Value={request_id}}}]','--query','GroupId','--output','text'],text=True).strip()
+              subprocess.run(['aws','ec2','revoke-security-group-egress','--group-id',sg,'--ip-permissions','IpProtocol=-1,IpRanges=[{CidrIp=0.0.0.0/0}]'],check=True)
+          permissions=json.loads(subprocess.check_output(['aws','ec2','describe-security-groups','--group-ids',sg,'--output','json'],text=True))['SecurityGroups'][0]
+          desired={'IpProtocol':'tcp','FromPort':int(port),'ToPort':int(port),'IpRanges':[{'CidrIp':cidr,'Description':'User-authorized read-only HFT research source'}]}
+          if not permissions['IpPermissions']:
+              subprocess.run(['aws','ec2','authorize-security-group-ingress','--group-id',sg,'--ip-permissions',json.dumps([desired])],check=True)
+          final=json.loads(subprocess.check_output(['aws','ec2','describe-security-groups','--group-ids',sg,'--output','json'],text=True))['SecurityGroups'][0]
+          assert final['IpPermissions']==[{'IpProtocol':'tcp','FromPort':int(port),'ToPort':int(port),'UserIdGroupPairs':[],'IpRanges':[{'CidrIp':cidr,'Description':'User-authorized read-only HFT research source'}],'Ipv6Ranges':[],'PrefixListIds':[]}]
+          assert final['IpPermissionsEgress']==[]
+          subprocess.run(['aws','ec2','modify-instance-attribute','--instance-id',instance,'--groups',*(groups+[sg])],check=True)
+          attached=json.loads(subprocess.check_output(['aws','ec2','describe-instances','--instance-ids',instance,'--output','json'],text=True))['Reservations'][0]['Instances'][0]['SecurityGroups']
+          assert {g['GroupId'] for g in attached}==set(groups+[sg])
+          receipt={'request_id':request_id,'instance_id':instance,'public_ip':public_ip,'client_cidr':cidr,'port':int(port),'dedicated_security_group_id':sg,'existing_group_ids':groups,'paper_only':True,'authenticated_execution':False,'real_order_submission':False}
+          open('ssh-access-receipt.json','w',encoding='utf-8').write(json.dumps(receipt,sort_keys=True,indent=2)+'\\n')
+          print(json.dumps(receipt,sort_keys=True))
+          PY
+
+      - name: Upload access receipt
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: v7-hft-research-ssh-${{ github.run_id }}
+          path: |
+            caller.json
+            instance.json
+            ssh-access-receipt.json
+          retention-days: 14
