@@ -87,6 +87,18 @@ jobs:
             done
             [[ -n "$brew_bin" ]] || { echo "V7 deploy blocked: Homebrew not found" >&2; exit 1; }
             eval "$("$brew_bin" shellenv)"
+            if ! ls /opt/homebrew/bin/g++-* /usr/local/bin/g++-* >/dev/null 2>&1; then
+              echo "[v7-deploy] Installing missing macOS compiler: gcc"
+              brew install gcc
+            fi
+            for candidate in /opt/homebrew/bin/g++-* /usr/local/bin/g++-*; do
+              if [[ -x "$candidate" ]]; then
+                export CXX="$candidate"
+                break
+              fi
+            done
+            [[ -n "${CXX:-}" ]] || { echo "V7 deploy blocked: Homebrew g++ not found" >&2; exit 1; }
+            echo "[v7-deploy] Using CXX=$CXX"
             export PKG_CONFIG_PATH="/opt/homebrew/lib/pkgconfig:/opt/homebrew/opt/libsecp256k1/lib/pkgconfig:/opt/homebrew/opt/secp256k1/lib/pkgconfig:${PKG_CONFIG_PATH:-}"
             missing=""
             for cmd in cmake pkg-config prometheus grafana; do
@@ -173,4 +185,4 @@ jobs:
           if-no-files-found: warn
           retention-days: 14
 
-# trigger: 2026-09-20T01:06:45Z
+# trigger: 2026-09-20T01:09:00Z
