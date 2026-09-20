@@ -1,0 +1,175 @@
+name: V7 PAPER fast restart SSM
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - deploy/v7-paper-fast-restart-request.json
+  workflow_dispatch:
+    inputs:
+      expected_sha:
+        description: Exact deployed PAPER SHA to restart
+        required: true
+        type: string
+      restart_approved:
+        description: Confirm PAPER-only restart through AWS SSM
+        required: true
+        default: false
+        type: boolean
+
+permissions:
+  contents: read
+  id-token: write
+
+concurrency:
+  group: polymarket-v7-paper-fast-restart
+  cancel-in-progress: true
+
+jobs:
+  restart:
+    if: github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && inputs.restart_approved == true)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    env:
+      AWS_REGION: eu-west-2
+      AWS_DEFAULT_REGION: eu-west-2
+      ROLE_ARN: arn:aws:iam::350769147128:role/PolymarketLondonPaperDeployPolicy
+      LONDON_INSTANCE_ID: ${{ vars.POLYMARKET_LONDON_INSTANCE_ID || 'i-0fba2bac9fdc5cbeb' }}
+      REQUEST_PATH: deploy/v7-paper-fast-restart-request.json
+      EXPECTED_SHA_INPUT: ${{ inputs.expected_sha }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          ref: main
+          fetch-depth: 1
+
+      - name: Resolve restart request
+        id: request
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ "$GITHUB_EVENT_NAME" == "push" ]]; then
+            python3 - "$REQUEST_PATH" "$GITHUB_OUTPUT" <<'PY'
+          import json,re,sys
+          from pathlib import Path
+          p=Path(sys.argv[1])
+          v=json.loads(p.read_text(encoding='utf-8'))
+          assert set(v)=={'schema','version','request_id','expected_sha','paper_only','authenticated_execution','real_order_submission','restart_approved','trigger'}
+          assert v['schema']=='polymarket_v7_paper_fast_restart_request_v1'
+          assert v['version']==1
+          assert isinstance(v['request_id'],str) and re.fullmatch(r'[A-Za-z0-9._:-]{8,128}', v['request_id'])
+          assert re.fullmatch(r'[0-9a-f]{40}', v['expected_sha'])
+          assert v['paper_only'] is True
+          assert v['authenticated_execution'] is False
+          assert v['real_order_submission'] is False
+          assert v['restart_approved'] is True
+          assert v['trigger']=='GITHUB_AWS_OIDC_SSM_FAST_RESTART'
+          with open(sys.argv[2],'a',encoding='utf-8') as h:
+              h.write(f"expected_sha={v['expected_sha']}\n")
+              h.write(f"request_id={v['request_id']}\n")
+          PY
+          else
+            [[ "$EXPECTED_SHA_INPUT" =~ ^[0-9a-f]{40}$ ]]
+            echo "expected_sha=$EXPECTED_SHA_INPUT" >> "$GITHUB_OUTPUT"
+            echo "request_id=manual-fast-restart" >> "$GITHUB_OUTPUT"
+          fi
+          echo "fast_restart_request=ready" | tee fast-restart-evidence.txt
+
+      - name: Configure AWS credentials through GitHub OIDC
+        uses: aws-actions/configure-aws-credentials@e1253824e5c10ff9df46874f81ed3ec929e19cfd
+        with:
+          role-to-assume: ${{ env.ROLE_ARN }}
+          role-session-name: polymarket-v7-paper-fast-restart
+          aws-region: eu-west-2
+
+      - name: Fast restart PAPER service and verify
+        shell: bash
+        env:
+          EXPECTED_SHA: ${{ steps.request.outputs.expected_sha }}
+        run: |
+          set -euo pipefail
+          aws sts get-caller-identity --region eu-west-2 --output json >/dev/null
+          python3 - "$EXPECTED_SHA" "$LONDON_INSTANCE_ID" <<'PY' | tee -a fast-restart-evidence.txt
+          import json, subprocess, sys, time
+          sha, instance = sys.argv[1], sys.argv[2]
+          remote = r'''set -euo pipefail
+          SHA="__EXPECTED_SHA__"
+          UNIT="polymarket-v7-paper.service"
+          EXPORTER="polymarket-v7-exporter.service"
+          echo fast_probe=restart
+          systemctl reset-failed "$UNIT" || true
+          systemctl reset-failed "$EXPORTER" || true
+          systemctl restart "$EXPORTER" || true
+          systemctl restart "$UNIT"
+          for i in $(seq 1 15); do
+            if systemctl is-active --quiet "$UNIT"; then break; fi
+            sleep 1
+          done
+          systemctl is-active --quiet "$UNIT"
+          ROOT="$(systemctl show "$UNIT" -p Environment --value | python3 -c 'import shlex,sys; print(next((x.split("=",1)[1] for x in shlex.split(sys.stdin.read()) if x.startswith("PM_V7_RUN_ROOT=")), ""))')"
+          [[ -n "$ROOT" && "$ROOT" == /* ]]
+          python3 - "$ROOT" "$SHA" <<'PYREMOTE'
+          import json, os, sys, time
+          from pathlib import Path
+          root=Path(sys.argv[1]); sha=sys.argv[2]
+          status=root/'control/runtime_status.json'
+          if not status.is_file():
+              raise SystemExit('runtime_status_missing')
+          last={}
+          for _ in range(12):
+              last=json.loads(status.read_text(encoding='utf-8'))
+              if last.get('state')=='running' and last.get('killed') is not True:
+                  break
+              time.sleep(1)
+          safe={k:last.get(k) for k in ['state','killed','model_sha','paper_only','authenticated_execution','real_order_submission','pid','readiness','economic_decision_state','authorized_alpha_actions','safe_actions','timestamp']}
+          print('V7_FAST_RUNTIME='+json.dumps(safe,sort_keys=True,separators=(',',':')))
+          if safe.get('model_sha') != sha:
+              raise SystemExit('sha_mismatch '+json.dumps(safe,sort_keys=True))
+          if safe.get('paper_only') is not True or safe.get('authenticated_execution') is not False or safe.get('real_order_submission') is not False:
+              raise SystemExit('safety_contract_failed '+json.dumps(safe,sort_keys=True))
+          if safe.get('state') != 'running' or safe.get('killed') is True:
+              raise SystemExit('runtime_not_running '+json.dumps(safe,sort_keys=True))
+          pid=int(safe.get('pid') or 0)
+          if pid <= 0:
+              raise SystemExit('pid_missing '+json.dumps(safe,sort_keys=True))
+          os.kill(pid, 0)
+          if int(time.time()) - int(safe.get('timestamp') or 0) > 180:
+              raise SystemExit('runtime_status_stale '+json.dumps(safe,sort_keys=True))
+          PYREMOTE
+          echo fast_probe=metrics
+          curl -fsS http://127.0.0.1:9090/-/ready >/dev/null
+          curl -fsS http://127.0.0.1:3000/api/health >/dev/null
+          curl -fsS --get --data-urlencode 'query=up{job="polymarket-v7"}' http://127.0.0.1:9090/api/v1/query | python3 -c 'import json,sys; v=json.load(sys.stdin); r=v.get("data",{}).get("result",[]); assert len(r)==1 and r[0]["value"][1]=="1", v'
+          curl -fsS http://127.0.0.1:9108/metrics | grep -E '^polymarket_v7_execution_alive(\{| )' >/dev/null
+          echo V7_FAST_RESTART_OK="$SHA"
+          '''
+          remote = remote.replace('__EXPECTED_SHA__', sha)
+          def run(args):
+              return subprocess.run(args, text=True, capture_output=True, check=True)
+          params=json.dumps({'commands':[remote], 'executionTimeout':['90']})
+          cid=run(['aws','ssm','send-command','--region','eu-west-2','--instance-ids',instance,'--document-name','AWS-RunShellScript','--parameters',params,'--comment','Polymarket V7 PAPER fast restart','--query','Command.CommandId','--output','text']).stdout.strip()
+          deadline=time.time()+150
+          last={}
+          while time.time()<deadline:
+              p=run(['aws','ssm','get-command-invocation','--region','eu-west-2','--command-id',cid,'--instance-id',instance,'--output','json'])
+              last=json.loads(p.stdout)
+              if last.get('Status') in {'Success','Cancelled','TimedOut','Failed','Cancelling'}:
+                  break
+              time.sleep(2)
+          status=last.get('Status')
+          out=str(last.get('StandardOutputContent') or '')
+          err=str(last.get('StandardErrorContent') or '')
+          print(out[-12000:])
+          if status!='Success':
+              print(err[-8000:], file=sys.stderr)
+              raise SystemExit(f'fast_restart_failed status={status} command={cid}')
+          PY
+
+      - name: Upload fast restart evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: v7-paper-fast-restart-${{ github.run_id }}
+          path: fast-restart-evidence.txt
+          if-no-files-found: warn
+          retention-days: 7
