@@ -284,6 +284,22 @@ jobs:
           out["nonrunning_workers"]=workers[:30]
           print("V7_NATIVE_MANAGER_COMPACT="+json.dumps(out,sort_keys=True,separators=(",",":")))
           PYNATIVE
+          BLOCKER_CONTEXT="$(python3 - "$ROOT/control/native_engine_manager_status.json" <<'PYCTX'
+          import json,re,sys
+          try:
+              v=json.load(open(sys.argv[1],encoding='utf-8'))
+          except Exception:
+              raise SystemExit(0)
+          b=str(v.get('blocker') or '')
+          m=re.fullmatch(r'([A-Z0-9]+):([A-Z0-9]+)_RC_-?[0-9]+', b)
+          if m:
+              print((m.group(1)+'_'+m.group(2)).lower())
+          PYCTX
+          )"
+          if [[ -n "$BLOCKER_CONTEXT" ]]; then
+            echo "fast_existing=blocker_context:$BLOCKER_CONTEXT"
+            tail -n 40 "$ROOT/native_crypto_settlement_engine_${BLOCKER_CONTEXT}.log" 2>/dev/null || true
+          fi
           if systemctl is-active --quiet "$UNIT" && python3 - "$ROOT/control/runtime_status.json" "$SHA" <<'PYHEALTH'
           import json,os,sys,time
           from pathlib import Path
