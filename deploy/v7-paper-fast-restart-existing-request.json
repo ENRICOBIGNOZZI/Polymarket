@@ -1,7 +1,7 @@
 {
   "schema": "polymarket_v7_paper_fast_restart_existing_request_v1",
   "version": 1,
-  "request_id": "fast-restart-existing-2ab25442-healthfirst1",
+  "request_id": "fast-restart-existing-2ab25442-fatal-child-diag",
   "expected_sha": "2ab254420b914ae178cb868124255f2a52c0d599",
   "paper_only": true,
   "authenticated_execution": false,
