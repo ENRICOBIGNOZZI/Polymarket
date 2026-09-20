@@ -34,6 +34,17 @@ class ExactShaCiGateTest(unittest.TestCase):
         self.assertFalse(value["exact_sha_ci_green"])
         self.assertIsNone(value["checks"]["ci-v7-Debug"]["id"])
 
+    def test_custom_release_matrix_can_be_required(self) -> None:
+        required=("ci-v7-Release","ci-v7-Debug","sanitizer-v7")
+        rows=[
+            {"id":1,"name":"ci-v7-Release","status":"completed","conclusion":"success","completed_at":"1"},
+            {"id":2,"name":"ci-v7-Debug","status":"completed","conclusion":"success","completed_at":"1"},
+            {"id":3,"name":"sanitizer-v7","status":"completed","conclusion":"success","completed_at":"1"},
+        ]
+        value=GATE.receipt("owner/repo","d"*40,rows,1,required)
+        self.assertTrue(value["exact_sha_ci_green"])
+        self.assertEqual(value["required_checks"],list(required))
+
     def test_official_checks_html_parser_requires_both_successful_jobs(self) -> None:
         parser = GATE._ChecksPageParser(GATE.DEFAULT_REQUIRED)
         parser.feed("""
