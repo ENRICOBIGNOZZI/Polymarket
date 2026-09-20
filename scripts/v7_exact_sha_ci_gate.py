@@ -172,6 +172,10 @@ def main() -> int:
     parser.add_argument("--sha", required=True)
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--timeout-seconds", type=float, default=10.0)
+    parser.add_argument(
+        "--required-check", action="append", default=[],
+        help="Exact GitHub check-run name required to be completed/success. Repeatable.",
+    )
     args = parser.parse_args()
     if not REPOSITORY_RE.fullmatch(args.repository):
         raise SystemExit("repository must be owner/name")
@@ -188,7 +192,10 @@ def main() -> int:
                     args.repository, args.sha, args.timeout_seconds)
             except RuntimeError as html_error:
                 raise RuntimeError(f"{api_error};{html_error}") from html_error
-        value = receipt(args.repository, args.sha, check_runs, int(time.time()))
+        required = tuple(args.required_check) if args.required_check else DEFAULT_REQUIRED
+        if not required or len(required) != len(set(required)):
+            raise RuntimeError("required_checks_must_be_unique_nonempty")
+        value = receipt(args.repository, args.sha, check_runs, int(time.time()), required)
     except RuntimeError as exc:
         print(str(exc), file=sys.stderr)
         return 2
