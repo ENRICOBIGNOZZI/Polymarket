@@ -8,6 +8,7 @@ from pathlib import Path
 import shutil
 import subprocess
 import time
+import urllib.request
 
 
 def category(relative):
@@ -94,6 +95,33 @@ def collectors(root):
     return result
 
 
+def compression_ratios(root):
+    totals=defaultdict(lambda:[0,0]);errors=0
+    manifest=root/'lossless_compression_manifest.jsonl'
+    if manifest.exists():
+        with manifest.open() as stream:
+            for line in stream:
+                try: row=json.loads(line)
+                except ValueError: errors+=1;continue
+                if row.get('decompressed_sha256_verified') is True:
+                    values=totals[category(row.get('source',''))]
+                    values[0]+=int(row.get('source_bytes',0));values[1]+=int(row.get('gzip_bytes',0))
+    return {k:v[0]/v[1] for k,v in totals.items() if v[1]},errors
+
+
+def storage_projection(root, before, after, target=50_000_000_000):
+    result=compare(before,after,target=target)
+    ratios,errors=compression_ratios(root)
+    rate=sum(v/max(1,ratios.get(k,1)) for k,v in result['gb_per_hour'].items() if k!='permanent')
+    # Other disk users count against actual headroom even outside this run root.
+    available=min(target,after['total_bytes']+max(0,after['filesystem_free_bytes']-8*1024**3))
+    available=max(0,available-after['category_bytes'].get('permanent',0))
+    result.update(verified_compression_ratios=ratios,compression_manifest_errors=errors,
+                  estimated_compressed_gb_per_hour=rate,safe_raw_budget_bytes=available,
+                  estimated_compressed_raw_hours=(available/1e9/rate if rate else None))
+    return result
+
+
 def measure(root, seconds=30):
     root=Path(root).resolve(); first=snapshot(root); time.sleep(seconds); last=snapshot(root)
     compression_raw=compression_gzip=0; failures=0
@@ -124,11 +152,30 @@ def measure(root, seconds=30):
             except (ValueError,OSError): pass
     try: private_ips=subprocess.check_output(['tailscale','ip','-4'],text=True,timeout=5).strip()
     except (OSError,subprocess.SubprocessError): private_ips=None
-    return dict(private_ips=private_ips,pm_observers=pm,largest_files=largest,schema='v7_hft_data_health_v1', paper_only=True, authenticated_execution=False,
+    public_ip=None;ssh_host_key=None
+    try:
+        request=urllib.request.Request('http://169.254.169.254/latest/api/token',method='PUT',
+            headers={'X-aws-ec2-metadata-token-ttl-seconds':'60'})
+        with urllib.request.urlopen(request,timeout=2) as response: token=response.read().decode()
+        request=urllib.request.Request('http://169.254.169.254/latest/meta-data/public-ipv4',headers={'X-aws-ec2-metadata-token':token})
+        with urllib.request.urlopen(request,timeout=2) as response: public_ip=response.read().decode()
+        ssh_host_key=Path('/etc/ssh/ssh_host_ed25519_key.pub').read_text().strip()
+    except (OSError,ValueError): pass
+    siblings={}
+    for folder in root.parent.iterdir():
+        if folder.is_dir() and not folder.is_symlink():
+            size=0
+            for p in folder.rglob('*'):
+                try:
+                    if p.is_file() and not p.is_symlink():size+=p.stat().st_size
+                except FileNotFoundError:pass
+            siblings[folder.name]=size
+    return dict(sibling_directory_bytes=siblings,public_ip=public_ip,ssh_host_public_key=ssh_host_key,
+                private_ips=private_ips,pm_observers=pm,largest_files=largest,schema='v7_hft_data_health_v1', paper_only=True, authenticated_execution=False,
                 real_order_submission=False, root=str(root),
-                **{k:v for k,v in last.items() if k!='files'}, **compare(first,last),
+                **{k:v for k,v in last.items() if k!='files'}, **storage_projection(root,first,last),
                 verified_compression_ratio=(compression_raw/compression_gzip if compression_gzip else None),
-                compression_manifest_errors=failures, collectors=collectors(root))
+                collectors=collectors(root))
 
 
 if __name__=='__main__':
