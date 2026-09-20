@@ -5,7 +5,6 @@ import platform
 import sys
 import pytest
 
-pytest.importorskip("sklearn")
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 sys.path.insert(0, str(ROOT/"tests"))
@@ -34,6 +33,7 @@ def test_daily_cutoff_receipt_is_idempotent_and_no_new_information(tmp_path):
 
 
 def test_nested_race_preserves_final_audit_and_is_deterministic(tmp_path, monkeypatch):
+    pytest.importorskip("sklearn")
     from research.learning import train
     rows = synthetic_rows(360)
     policy = {**train.DEFAULT_POLICY, "ridges": [8.], "weightings": ["market"], "calibrations": ["raw", "platt"]}
@@ -49,6 +49,7 @@ def test_nested_race_preserves_final_audit_and_is_deterministic(tmp_path, monkey
 
 
 def test_native_artifact_exact_identity_and_deterministic_export(tmp_path):
+    pytest.importorskip("sklearn")
     from research.learning.artifact import export_native, validate
     from research.learning.dataset import native_example
     rows = synthetic_rows(80)
