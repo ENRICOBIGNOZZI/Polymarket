@@ -82,6 +82,19 @@ print('RETENTION_NORMALIZED_PATH_REPAIRED')
 '''
         output,_=run(REGION,'i-0fba2bac9fdc5cbeb','python3 -c '+shlex.quote(repair),60)
         print(output.strip())
+    if req.get('run_retention_once') is True:
+        start = r'''
+import json,subprocess
+from pathlib import Path
+root=Path(subprocess.check_output(['systemctl','show','polymarket-v7-paper.service','-p','Environment','--value'],text=True).split('PM_V7_RUN_ROOT=',1)[1].split()[0]).resolve()
+status=json.loads((root/'control/runtime_status.json').read_bytes())
+assert status.get('paper_only') is True and status.get('authenticated_execution') is False and status.get('real_order_submission') is False
+subprocess.run(['systemctl','start','--no-block','polymarket-v7-retention.service'],check=True)
+print('RETENTION_CYCLE_REQUESTED')
+'''
+        output,_=run(REGION,'i-0fba2bac9fdc5cbeb','python3 -c '+shlex.quote(start),60)
+        assert 'RETENTION_CYCLE_REQUESTED' in output
+        print(output.strip())
     if req.get('verify_one_native_window') is True:
         verify = r'''
 import json,sys,subprocess
