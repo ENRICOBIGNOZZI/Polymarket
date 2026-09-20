@@ -167,6 +167,12 @@ void test_market_traded_and_capital_denied() {
     SleeveCapitalAccount constrained(small);
     auto result = lane.evaluate(input(1), constrained);
     assert(!result.accepted && result.reason == NativeCryptoDecisionReason::CapitalDenied);
+
+    // Capital denial is not an execution attempt and cannot consume the signal.
+    SleeveCapitalAccount retry_capital(limits());
+    auto retry = lane.evaluate(input(1), retry_capital);
+    assert(retry.accepted && retry.reason == NativeCryptoDecisionReason::Accepted);
+    assert(retry_capital.release_order(retry.intent.intent_id));
 }
 
 void test_evaluate_is_allocation_free() {
@@ -183,11 +189,20 @@ void test_evaluate_is_allocation_free() {
 
 void test_construct_candidate_defers_capital_to_unified_owner() {
     NativeCryptoDecisionLane lane({});
-    const auto result = lane.construct_candidate(input(1, 7));
-    assert(result.accepted == 1);
-    assert(result.reason == NativeCryptoDecisionReason::Accepted);
-    assert(result.admission.accepted == 0);
-    assert(result.admission.capital_reserved == 0);
+    const auto first = lane.construct_candidate(input(1, 7));
+    assert(first.accepted == 1);
+    assert(first.reason == NativeCryptoDecisionReason::Accepted);
+    assert(first.admission.accepted == 0);
+    assert(first.admission.capital_reserved == 0);
+
+    // Arbitration may discard a proposal. Until the sole owner accepts new
+    // risk, the same still-fresh signal must remain evaluable.
+    const auto second = lane.construct_candidate(input(1, 7));
+    assert(second.accepted == 1);
+    assert(second.reason == NativeCryptoDecisionReason::Accepted);
+    lane.commit_signal(7, 7);
+    assert(lane.construct_candidate(input(1, 7)).reason
+        == NativeCryptoDecisionReason::DuplicateSignal);
 }
 
 void test_frozen_forward_can_ignore_source_valid_flag_with_age_gate() {
@@ -253,6 +268,11 @@ void test_probability_selects_economic_side_not_signal_side() {
     assert(d.economics.maximum_executable_price_e4==6200);
     assert(d.intent.price_tick==62);
     assert(d.economics.cost_ceiling_microdollars<=3'750'000);
+    assert(d.intent.expected_edge == d.economics.expected_net_edge);
+    assert(d.intent.expected_cost == d.economics.cost_per_share);
+    assert(d.intent.expected_ev == d.economics.conservative_net_edge);
+    assert(d.intent.expected_risk >= 0.0);
+    assert(d.intent.ev_uncertainty >= 0.0);
     lane.reset_market(7);x.probability.valid=0;
     assert(lane.construct_candidate(x).reason==NativeCryptoDecisionReason::ProbabilityUnavailable);
     lane.reset_market(7);x.probability.valid=1;x.risk_sizing.max_order_cost_microdollars=100'000;
