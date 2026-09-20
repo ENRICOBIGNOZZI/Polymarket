@@ -30,6 +30,7 @@ INSTANCE_RE = re.compile(r"^i-[0-9a-f]+$")
 MAX_CANDIDATES = 16
 MAX_ARTIFACT_BYTES = 16 * 1024 * 1024
 CHUNK_CHARS = 12000
+DEPLOY_COMMENT = "Polymarket V7 exact-SHA PAPER SSM transport"
 
 
 class SsmDeployError(RuntimeError):
@@ -135,7 +136,7 @@ def send(region: str, instance: str, command: str, timeout_s: int = 600) -> str:
         "--instance-ids", instance,
         "--document-name", "AWS-RunShellScript",
         "--parameters", parameters,
-        "--comment", "Polymarket V7 exact-SHA PAPER SSM transport",
+        "--comment", DEPLOY_COMMENT,
     ])
     command_id = (value.get("Command") or {}).get("CommandId")
     if not isinstance(command_id, str) or not command_id:
@@ -176,6 +177,83 @@ def run(region: str, instance: str, command: str,
             f"stdout_tail={stdout[-8000:]!r} stderr_tail={stderr[-4000:]!r} status={status!r}"
         )
     return stdout, stderr
+
+
+def _transport_target_sha(command: dict[str, Any]) -> str | None:
+    parameters = command.get("Parameters")
+    if not isinstance(parameters, dict):
+        return None
+    payloads = parameters.get("commands")
+    if isinstance(payloads, str):
+        payloads = [payloads]
+    if not isinstance(payloads, list):
+        return None
+    text = "\n".join(str(value) for value in payloads)
+    matches = set(re.findall(
+        r"(?:^|[ ;'\"])(?:SHA|POLYMARKET_EXPECTED_SHA)=([0-9a-f]{40})(?:$|[ ;'\"])",
+        text,
+    ))
+    if len(matches) != 1:
+        return None
+    return next(iter(matches))
+
+
+def cancel_prior_deploy_transports(region: str, instance: str,
+                                   expected_sha: str) -> list[dict[str, str]]:
+    """Cancel only older Polymarket deploy transports on the selected host.
+
+    GitHub cancellation can leave an already-dispatched AWS-RunShellScript
+    alive on the instance. That process legitimately keeps the London flock.
+    Before a replacement cutover, prove the in-flight command is our exact
+    deployment transport and targets a different SHA, then cancel it through
+    SSM. Unknown commands or a same-SHA deployment remain fail-closed.
+    """
+    if not INSTANCE_RE.fullmatch(instance) or not exact_sha(expected_sha):
+        raise SsmDeployError("invalid stale-deploy recovery identity")
+    value = aws_json(region, [
+        "ssm", "list-commands", "--instance-id", instance,
+    ])
+    commands = value.get("Commands")
+    if not isinstance(commands, list):
+        raise SsmDeployError("SSM command list missing")
+    recovered: list[dict[str, str]] = []
+    for command in commands:
+        if not isinstance(command, dict):
+            continue
+        if command.get("Comment") != DEPLOY_COMMENT:
+            continue
+        status = str(command.get("Status") or "")
+        if status in TERMINAL:
+            continue
+        command_id = command.get("CommandId")
+        if not isinstance(command_id, str) or not command_id:
+            raise SsmDeployError("in-flight deploy command id missing")
+        target_sha = _transport_target_sha(command)
+        if target_sha is None:
+            raise SsmDeployError(
+                f"cannot prove in-flight London deploy target: {command_id}"
+            )
+        if target_sha == expected_sha:
+            raise SsmDeployError(
+                f"same-SHA London deploy already in flight: {command_id}"
+            )
+        aws_json(region, [
+            "ssm", "cancel-command",
+            "--command-id", command_id,
+            "--instance-ids", instance,
+        ])
+        final = wait(region, instance, command_id, 120, .5)
+        final_status = str(final.get("Status") or "")
+        if final_status not in TERMINAL:
+            raise SsmDeployError(
+                f"prior London deploy did not terminate: {command_id}"
+            )
+        recovered.append({
+            "command_id": command_id,
+            "target_sha": target_sha,
+            "final_status": final_status,
+        })
+    return recovered
 
 
 PROBE_COMMAND = r"""set -euo pipefail
@@ -520,6 +598,9 @@ def deploy(region: str, stack_name: str, expected_sha: str,
     candidates = candidate_instances(region, stack_name)
     probes = probe(region, candidates)
     selected = select_target(probes, expected_tailscale_ip, expected_instance_id)
+    recovered_transports = cancel_prior_deploy_transports(
+        region, selected["instance_id"], expected_sha,
+    )
     user = selected["app"]["user"]
     artifact_result = upload_artifact(
         region, selected["instance_id"], artifact, expected_sha, user,
@@ -539,6 +620,7 @@ def deploy(region: str, stack_name: str, expected_sha: str,
         "aws_account": identity.get("Account"),
         "selected": selected,
         "probes": probes,
+        "cancelled_prior_deploy_transports": recovered_transports,
         "artifact": artifact_result,
         "cutover": receipt,
         "stderr_tail": stderr[-2000:],
