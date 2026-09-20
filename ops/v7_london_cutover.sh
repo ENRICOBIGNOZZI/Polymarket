@@ -112,7 +112,70 @@ if [[ "$ALLOW_NATIVE_CARRYOVER" == 1 && -n "$PREVIOUS_RUN_ROOT" && "$PREVIOUS_RU
 fi
 
 # Stop old generation before archive; never copy its ledger into the new run.
-sudo systemctl stop polymarket-v7-exporter.service polymarket-v7-paper.service >/dev/null 2>&1 || true
+# Prove the PAPER service cgroup is actually quiescent before treating the
+# manager status file as historical. KillMode=mixed keeps all runtime children
+# in the service cgroup, so inactive+MainPID=0 (and an empty cgroup when it
+# still exists) is the authoritative liveness proof.
+sudo systemctl stop polymarket-v7-paper.service >/dev/null 2>&1 || true
+paper_state="$(systemctl show polymarket-v7-paper.service -p ActiveState --value 2>/dev/null || true)"
+paper_main_pid="$(systemctl show polymarket-v7-paper.service -p MainPID --value 2>/dev/null || true)"
+paper_cgroup="$(systemctl show polymarket-v7-paper.service -p ControlGroup --value 2>/dev/null || true)"
+[[ "$paper_state" == inactive || "$paper_state" == failed ]] || {
+  echo "prior PAPER service did not quiesce: state=$paper_state" >&2; exit 69;
+}
+[[ "$paper_main_pid" =~ ^[0-9]+$ && "$paper_main_pid" == 0 ]] || {
+  echo "prior PAPER service MainPID still active: $paper_main_pid" >&2; exit 69;
+}
+if [[ -n "$paper_cgroup" && -r "/sys/fs/cgroup$paper_cgroup/cgroup.procs" && -s "/sys/fs/cgroup$paper_cgroup/cgroup.procs" ]]; then
+  echo "prior PAPER service cgroup still has processes" >&2
+  exit 69
+fi
+sudo systemctl stop polymarket-v7-exporter.service >/dev/null 2>&1 || true
+
+# A clean systemd stop can leave the last manager snapshot with non-zero PIDs.
+# Normalize only after the service/cgroup liveness proof above; never use this
+# as a substitute for stopping a live process.
+if [[ -n "$PREVIOUS_RUN_ROOT" ]]; then
+  native_status="$PREVIOUS_RUN_ROOT/control/native_engine_manager_status.json"
+  if [[ -e "$native_status" ]]; then
+    [[ -f "$native_status" && ! -L "$native_status" ]] || {
+      echo "unsafe prior native manager status path" >&2; exit 78;
+    }
+    python3 - "$native_status" <<'PYNATIVEQUIESCE'
+import json, os, sys
+from pathlib import Path
+p=Path(sys.argv[1])
+v=json.loads(p.read_text(encoding="utf-8"))
+if (
+    v.get("schema") != "polymarket_v7_native_engine_manager_status_v1"
+    or v.get("paper_only") is not True
+    or v.get("authenticated_execution") is not False
+    or v.get("real_order_submission") is not False
+    or v.get("real_capital_at_risk") is not False
+    or v.get("single_native_portfolio_owner") is not True
+):
+    raise SystemExit("prior native manager status safety contract invalid")
+v["state"]="STOPPED"
+v["active_worker_count"]=0
+v["engine_pid"]=0
+v["engine_pids"]=[]
+workers=v.get("workers")
+if isinstance(workers,list):
+    for row in workers:
+        if isinstance(row,dict):
+            row["pid"]=0
+            if "state" in row:
+                row["state"]="STOPPED"
+st=p.stat()
+tmp=p.with_name(p.name+".cutover-quiesced.tmp")
+tmp.write_text(json.dumps(v,sort_keys=True,separators=(",",":"))+"\n",encoding="utf-8")
+os.chmod(tmp, st.st_mode & 0o777)
+os.chown(tmp, st.st_uid, st.st_gid)
+os.replace(tmp,p)
+PYNATIVEQUIESCE
+  fi
+fi
+
 if [[ -n "$PREVIOUS_RUN_ROOT" && "$PREVIOUS_RUN_ROOT" != "$RUN_ROOT" && -e "$PREVIOUS_RUN_ROOT" ]]; then
   python3 "$SOURCE_DIR/scripts/v7_prepare_cutover_run_root.py" \
     --run-root "$PREVIOUS_RUN_ROOT" --archive-root "$ARCHIVE_ROOT" \
