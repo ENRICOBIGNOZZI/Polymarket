@@ -2186,6 +2186,234 @@
         "mode": "markdown",
         "content": "**Interpretation:** PnL comes from the canonical PAPER ledger. Runtime/data panels report whether that evidence is trustworthy. Missing series are not zero. Legacy coordinator-candidate and SHADOW-only metrics are intentionally removed."
       }
+    },
+    {
+      "id": 70,
+      "type": "row",
+      "title": "DECISION FUNNEL",
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 91
+      },
+      "collapsed": false,
+      "panels": []
+    },
+    {
+      "id": 71,
+      "type": "timeseries",
+      "title": "Native Decisions — Accepted vs Rejected",
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 0,
+        "y": 92
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus-v7"
+      },
+      "description": "Cumulative native decision observations from the asynchronous evidence writer. These are decision states, not fills.",
+      "targets": [
+        {
+          "expr": "(polymarket_v7_native_accepted_decision_observations_total{job=\"polymarket-v7\",instance=~\".+\"}) and on(job,instance) (polymarket_v7_exporter_snapshot_usable{job=\"polymarket-v7\",instance=~\".+\"} == 1)",
+          "refId": "A",
+          "legendFormat": "accepted",
+          "instant": false,
+          "range": true
+        },
+        {
+          "expr": "(polymarket_v7_native_rejected_decision_observations_total{job=\"polymarket-v7\",instance=~\".+\"}) and on(job,instance) (polymarket_v7_exporter_snapshot_usable{job=\"polymarket-v7\",instance=~\".+\"} == 1)",
+          "refId": "B",
+          "legendFormat": "rejected",
+          "instant": false,
+          "range": true
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "spanNulls": false
+          },
+          "decimals": 0
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom",
+          "calcs": [
+            "lastNotNull"
+          ]
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      }
+    },
+    {
+      "id": 72,
+      "type": "bargauge",
+      "title": "Decision Reasons",
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 8,
+        "y": 92
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus-v7"
+      },
+      "description": "Why native taker decisions were accepted or rejected, filtered by asset and horizon.",
+      "targets": [
+        {
+          "expr": "(sum by (job, instance, reason) (polymarket_v7_native_context_decision_reason_total{job=\"polymarket-v7\",instance=~\".+\",asset=~\"$asset\",horizon=~\"$horizon\"})) and on(job,instance) (polymarket_v7_exporter_snapshot_usable{job=\"polymarket-v7\",instance=~\".+\"} == 1)",
+          "refId": "A",
+          "legendFormat": "{{reason}}",
+          "instant": true,
+          "range": false
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "decimals": 0
+        },
+        "overrides": []
+      },
+      "options": {
+        "displayMode": "gradient",
+        "orientation": "horizontal",
+        "reduceOptions": {
+          "values": false,
+          "calcs": [
+            "last"
+          ],
+          "fields": ""
+        },
+        "showUnfilled": true
+      }
+    },
+    {
+      "id": 73,
+      "type": "bargauge",
+      "title": "Reject Funnel by Lane",
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 16,
+        "y": 92
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus-v7"
+      },
+      "description": "Per asset × horizon decision reasons. Use this to locate where opportunities are lost before execution.",
+      "targets": [
+        {
+          "expr": "(sum by (job, instance, asset,horizon,reason) (polymarket_v7_native_context_decision_reason_total{job=\"polymarket-v7\",instance=~\".+\",asset=~\"$asset\",horizon=~\"$horizon\",reason!=\"ACCEPTED\"})) and on(job,instance) (polymarket_v7_exporter_snapshot_usable{job=\"polymarket-v7\",instance=~\".+\"} == 1)",
+          "refId": "A",
+          "legendFormat": "{{asset}} {{horizon}} · {{reason}}",
+          "instant": true,
+          "range": false
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "decimals": 0
+        },
+        "overrides": []
+      },
+      "options": {
+        "displayMode": "gradient",
+        "orientation": "horizontal",
+        "reduceOptions": {
+          "values": false,
+          "calcs": [
+            "last"
+          ],
+          "fields": ""
+        },
+        "showUnfilled": true
+      }
+    },
+    {
+      "id": 74,
+      "type": "timeseries",
+      "title": "Key Economic Rejections by Lane",
+      "gridPos": {
+        "h": 8,
+        "w": 24,
+        "x": 0,
+        "y": 100
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus-v7"
+      },
+      "description": "Cumulative economic/selectivity gates. A high count is diagnostic; it is not evidence the gate should be relaxed.",
+      "targets": [
+        {
+          "expr": "(sum by (job, instance, asset,horizon) (polymarket_v7_native_context_decision_reason_total{job=\"polymarket-v7\",instance=~\".+\",asset=~\"$asset\",horizon=~\"$horizon\",reason=\"MARKET_ALREADY_REPRICED\"})) and on(job,instance) (polymarket_v7_exporter_snapshot_usable{job=\"polymarket-v7\",instance=~\".+\"} == 1)",
+          "refId": "A",
+          "legendFormat": "repriced · {{asset}} {{horizon}}",
+          "instant": false,
+          "range": true
+        },
+        {
+          "expr": "(sum by (job, instance, asset,horizon) (polymarket_v7_native_context_decision_reason_total{job=\"polymarket-v7\",instance=~\".+\",asset=~\"$asset\",horizon=~\"$horizon\",reason=\"NET_EDGE_NON_POSITIVE\"})) and on(job,instance) (polymarket_v7_exporter_snapshot_usable{job=\"polymarket-v7\",instance=~\".+\"} == 1)",
+          "refId": "B",
+          "legendFormat": "EV≤0 · {{asset}} {{horizon}}",
+          "instant": false,
+          "range": true
+        },
+        {
+          "expr": "(sum by (job, instance, asset,horizon) (polymarket_v7_native_context_decision_reason_total{job=\"polymarket-v7\",instance=~\".+\",asset=~\"$asset\",horizon=~\"$horizon\",reason=\"ENTRY_PRICE_TOO_HIGH\"})) and on(job,instance) (polymarket_v7_exporter_snapshot_usable{job=\"polymarket-v7\",instance=~\".+\"} == 1)",
+          "refId": "C",
+          "legendFormat": "price cap · {{asset}} {{horizon}}",
+          "instant": false,
+          "range": true
+        },
+        {
+          "expr": "(sum by (job, instance, asset,horizon) (polymarket_v7_native_context_decision_reason_total{job=\"polymarket-v7\",instance=~\".+\",asset=~\"$asset\",horizon=~\"$horizon\",reason=\"INSUFFICIENT_DEPTH\"})) and on(job,instance) (polymarket_v7_exporter_snapshot_usable{job=\"polymarket-v7\",instance=~\".+\"} == 1)",
+          "refId": "D",
+          "legendFormat": "depth · {{asset}} {{horizon}}",
+          "instant": false,
+          "range": true
+        },
+        {
+          "expr": "(sum by (job, instance, asset,horizon) (polymarket_v7_native_context_decision_reason_total{job=\"polymarket-v7\",instance=~\".+\",asset=~\"$asset\",horizon=~\"$horizon\",reason=\"WEAK_SIGNAL\"})) and on(job,instance) (polymarket_v7_exporter_snapshot_usable{job=\"polymarket-v7\",instance=~\".+\"} == 1)",
+          "refId": "E",
+          "legendFormat": "weak shock · {{asset}} {{horizon}}",
+          "instant": false,
+          "range": true
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "spanNulls": false
+          },
+          "decimals": 0
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom",
+          "calcs": [
+            "lastNotNull"
+          ]
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      }
     }
   ],
   "refresh": "5s",
@@ -2260,6 +2488,6 @@
   "timezone": "browser",
   "title": "Polymarket V7 Multi-Crypto Performance & Runtime",
   "uid": "polymarket-v7-multi-crypto",
-  "version": 7,
+  "version": 8,
   "description": "PAPER economic performance plus native runtime and data-plane health. Empty panels are treated as telemetry defects, not zeros."
 }

@@ -600,6 +600,7 @@ def render_prometheus(snapshot: dict[str, Any]) -> str:
     total, operations = ledger.get("total") or {}, snapshot.get("operations") or {}
     selector, rotation, diagnostics = snapshot.get("maker_selector") or {}, snapshot.get("maker_rotation") or {}, snapshot.get("maker_diagnostics") or {}
     universe, reasons = snapshot.get("universe") or {}, health_reasons(snapshot)
+    native = snapshot.get("native_engine_manager") or {}
     scope_ok = _scope_valid(snapshot)
     lines = [
         _metric("polymarket_v7_health", not reasons), _metric("polymarket_v7_runtime_info", 1),
@@ -741,6 +742,30 @@ def render_prometheus(snapshot: dict[str, Any]) -> str:
         for percentile in ("p50", "p90", "p95", "p99", "p99_9", "max"): lines.append(_metric("polymarket_v7_latency_stage_nanoseconds", row.get(percentile), {"stage": stage, "percentile": percentile}))
     for source, present in sorted(((snapshot.get("maker_latency") or {}).get("sources") or {}).items()):
         lines.append(_metric("polymarket_v7_latency_source_present", present, {"source": source}))
+    lines.append(_metric(
+        "polymarket_v7_native_decision_observations_total",
+        native.get("native_decision_observations"),
+    ))
+    lines.append(_metric(
+        "polymarket_v7_native_accepted_decision_observations_total",
+        native.get("native_accepted_decision_observations"),
+    ))
+    lines.append(_metric(
+        "polymarket_v7_native_rejected_decision_observations_total",
+        native.get("native_rejected_decision_observations"),
+    ))
+    for reason, count in sorted((native.get("native_decision_reason_counts") or {}).items()):
+        lines.append(_metric(
+            "polymarket_v7_native_decision_reason_total", count, {"reason": reason}
+        ))
+    for context, counts in sorted((native.get("native_context_decision_reason_counts") or {}).items()):
+        asset, _, horizon = str(context).partition(":")
+        for reason, count in sorted((counts or {}).items()):
+            lines.append(_metric(
+                "polymarket_v7_native_context_decision_reason_total",
+                count,
+                {"asset": asset or "UNKNOWN", "horizon": horizon or "UNKNOWN", "reason": reason},
+            ))
     append_operator_metrics(lines, snapshot, reasons, _metric)
     _append_maker_metrics(lines, snapshot)
     from exporter_v7_fillability import _append_fillability_metrics

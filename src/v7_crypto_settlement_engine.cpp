@@ -210,10 +210,13 @@ struct PmQueuedEvent {
 inline constexpr std::array<std::uint32_t, 9> kRepricingHorizonsMs{100, 250, 500, 750, 1000, 1250, 1500, 1750, 2000};
 struct RepricingWindow {
     std::uint64_t signal_version = 0;
+    std::uint64_t instrument_handle = 0;
     std::int64_t trigger_ns = 0;
     std::int64_t decision_ns = 0;
     std::array<std::int64_t, 9> target_ns{};
     std::uint16_t emitted_mask = 0;
+    // Signal direction is provenance. instrument_handle is the economically
+    // selected token and owns the executable depth labels.
     std::int8_t direction = 0;
     std::uint8_t active = 0;
     std::uint8_t continuity_valid = 0;
@@ -514,6 +517,8 @@ int main(int argc, char** argv) {
         std::uint64_t inventory_rejections = 0, minimum_size_rejections = 0;
         std::uint64_t last_measured_signal_version = 0, last_observed_signal_version = 0;
         std::uint64_t last_execution_window_signal_version = 0;
+        std::uint64_t last_execution_window_instrument = 0;
+        std::uint8_t last_execution_window_reason = 0, last_execution_window_accepted = 0;
         std::int64_t execution_window_until_ns = 0;
         std::array<RepricingWindow, 16> repricing_windows{};
         std::uint64_t repricing_origins = 0, repricing_labels = 0;
@@ -569,11 +574,13 @@ int main(int argc, char** argv) {
         const auto start_repricing_window = [&](std::uint64_t signal_version,
                                                  std::int64_t trigger_ns,
                                                  std::int64_t decision_ns,
-                                                 std::int8_t direction) noexcept {
+                                                 std::int8_t direction,
+                                                 std::uint64_t instrument_handle) noexcept {
             for (auto& window : repricing_windows) {
                 if (window.active != 0) continue;
                 window = RepricingWindow{};
                 window.signal_version = signal_version;
+                window.instrument_handle = instrument_handle;
                 window.trigger_ns = trigger_ns;
                 window.decision_ns = decision_ns;
                 window.direction = direction;
@@ -595,7 +602,10 @@ int main(int argc, char** argv) {
                 for (std::size_t i = 0; i < kRepricingHorizonsMs.size(); ++i) {
                     const auto mask = static_cast<std::uint16_t>(1U << i);
                     if ((window.emitted_mask & mask) != 0 || window.target_ns[i] >= watermark_ns) continue;
-                    const bool selected_up = window.direction > 0;
+                    const bool selected_up = window.instrument_handle == kYes;
+                    if (!selected_up && window.instrument_handle != kNo) {
+                        window.continuity_valid = 0;
+                    }
                     auto point = observation(selected_up ? yes_book : no_book,
                                              selected_up ? kYes : kNo, 6);
                     point.signal_version = window.signal_version;
@@ -947,6 +957,16 @@ int main(int argc, char** argv) {
                             maker_observation.proposed_price_tick = intent.price_tick;
                             maker_observation.expected_ev = intent.expected_ev;
                             maker_observation.ev_uncertainty = intent.ev_uncertainty;
+                            const double maker_fill_probability = intent.side == Side::Buy
+                                ? maker_decision.bid_fill_probability
+                                : maker_decision.ask_fill_probability;
+                            if (std::isfinite(maker_fill_probability)
+                                && maker_fill_probability >= 0.0
+                                && maker_fill_probability <= 1.0) {
+                                maker_observation.expected_fill_probability = maker_fill_probability;
+                                maker_observation.expected_fill_probability_valid = 1;
+                            }
+                            maker_observation.economic_score_fill_conditioned = 1;
                             maker_observation.trade_side = static_cast<std::uint8_t>(intent.side);
                             maker_observation.reason = static_cast<std::uint8_t>(maker_decision.reason);
                             if (!evidence_writer.publish_observation(maker_observation)) ++adapter_handoff_failures;
@@ -1015,19 +1035,36 @@ int main(int argc, char** argv) {
                 const auto finished = monotonic_now_ns();
                 ++evaluations;
                 const bool repricing_origin_eligible = result.accepted != 0
+                    || result.reason == NativeCryptoDecisionReason::WeakSignal
+                    || result.reason == NativeCryptoDecisionReason::InsufficientDepth
+                    || result.reason == NativeCryptoDecisionReason::EntryPriceTooHigh
+                    || result.reason == NativeCryptoDecisionReason::MarketAlreadyRepriced
                     || result.reason == NativeCryptoDecisionReason::ProbabilityUnavailable
                     || result.reason == NativeCryptoDecisionReason::NetEdgeNonPositive
-                    || result.reason == NativeCryptoDecisionReason::RiskSizeBelowMinimum;
+                    || result.reason == NativeCryptoDecisionReason::RiskSizeBelowMinimum
+                    || result.reason == NativeCryptoDecisionReason::SlowContextUnavailable;
+                const auto repricing_instrument = result.accepted != 0
+                    ? result.selected_instrument_handle
+                    : (current_signal.direction > 0 ? kYes : kNo);
+                const auto repricing_reason = static_cast<std::uint8_t>(result.reason);
+                const bool new_execution_window_state =
+                    current_signal.signal_version != last_execution_window_signal_version
+                    || repricing_reason != last_execution_window_reason
+                    || result.accepted != last_execution_window_accepted
+                    || repricing_instrument != last_execution_window_instrument;
                 if (options.capture_execution_windows && repricing_origin_eligible
-                    && current_signal.signal_version != 0
-                    && current_signal.signal_version != last_execution_window_signal_version) {
+                    && current_signal.signal_version != 0 && new_execution_window_state) {
                     last_execution_window_signal_version = current_signal.signal_version;
+                    last_execution_window_reason = repricing_reason;
+                    last_execution_window_accepted = result.accepted;
+                    last_execution_window_instrument = repricing_instrument;
                     execution_window_until_ns = finished > std::numeric_limits<std::int64_t>::max()
                             - options.execution_window_ns
                         ? std::numeric_limits<std::int64_t>::max()
                         : finished + options.execution_window_ns;
                     start_repricing_window(current_signal.signal_version,
-                        current_signal.trigger_receive_monotonic_ns, finished, current_signal.direction);
+                        current_signal.trigger_receive_monotonic_ns, finished,
+                        current_signal.direction, repricing_instrument);
                 }
                 const auto observation_reason = static_cast<std::uint8_t>(result.reason);
                 if (options.capture_native_decisions && (current_signal.signal_version != last_observed_signal_version
@@ -1046,6 +1083,12 @@ int main(int argc, char** argv) {
                     }
                     point.probability = input.probability;
                     point.economics = result.economics;
+                    point.expected_ev = result.intent.expected_ev;
+                    point.ev_uncertainty = result.intent.ev_uncertainty;
+                    // Settlement probability edge is not yet a joint
+                    // fill/payoff action value. Keep the distinction explicit
+                    // so MAKE/TAKE arbitration cannot silently compare scales.
+                    point.economic_score_fill_conditioned = 0;
                     point.probability_features = decision_features;
                     point.probability_input_instrument = probability_input_instrument;
                     point.proposed_quantity = result.intent.quantity_microunits;
@@ -1138,6 +1181,12 @@ int main(int argc, char** argv) {
                         }
                     }
                 } else {
+                    // Only the sole new-risk owner consumes a taker signal.
+                    // Arbitration conflicts and admission rejection leave a
+                    // still-fresh signal available for causal reevaluation.
+                    if (candidate_is_taker[index] != 0) {
+                        lane.commit_signal(kMarket, current_signal.signal_version);
+                    }
                     const auto& paper_book = authority_result.tx.command.instrument_handle == kYes
                         ? yes_book : no_book;
                     const auto paper_result = paper_execution.submit(

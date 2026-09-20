@@ -142,8 +142,16 @@ No automatic promotion or enlargement of risk follows a positive sample.
 
 ### Integration activation boundary
 
-In the unified multi-rate launcher both `PM_V7_PROBABILITY_MODEL` and
-`PM_V7_CRYPTO_SIGNAL_POLICY` are empty by default. The new context thresholds
-and TTLs are a separately activated research policy, not a demonstrated
-improvement or an automatic consequence of deploying an infrastructure patch.
-Native source: `src/v7_crypto_settlement_engine.cpp`.
+The checked-in launcher supplies the context signal policy by default. Strict
+signal-policy mode is deliberately fail-closed: it does not permit the legacy
+direction-only taker fallback. The native decision lane therefore requires
+economic probability/EV evidence before admitting new taker risk under that
+strict profile. A missing probability artifact is a blocker, not an implicit
+permission to revert to the old rule.
+
+`PM_V7_PROBABILITY_MODEL` remains an explicit, separately identified research
+artifact with the fixed 7,200-second evaluation boundary. The signal-policy
+thresholds and TTLs are likewise exploratory inputs rather than demonstrated
+improvements. Deploying infrastructure alone does not validate either policy or
+authorize automatic promotion. Native source:
+`src/v7_crypto_settlement_engine.cpp`.

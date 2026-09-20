@@ -637,6 +637,24 @@ class Manager:
                     and value.get("real_order_submission") is False
                 ):
                     rows.append(value)
+        reason_counts: dict[str, int] = {}
+        context_reason_counts: dict[str, dict[str, int]] = {}
+        for row in rows:
+            counts = row.get("decision_reason_counts")
+            if not isinstance(counts, dict):
+                continue
+            context = f"{row.get('asset') or 'UNKNOWN'}:{row.get('horizon') or 'UNKNOWN'}"
+            target = context_reason_counts.setdefault(context, {})
+            for reason, raw in counts.items():
+                try:
+                    count = int(raw)
+                except (TypeError, ValueError, OverflowError):
+                    continue
+                if count < 0:
+                    continue
+                key = str(reason)
+                reason_counts[key] = reason_counts.get(key, 0) + count
+                target[key] = target.get(key, 0) + count
         aggregate = {
             "schema": "polymarket_v7_native_evidence_status_v1",
             "paper_only": True,
@@ -653,6 +671,18 @@ class Manager:
             "observations_written": sum(int(row.get("observations_written") or 0) for row in rows),
             "observations_dropped": sum(int(row.get("observations_dropped") or 0) for row in rows),
             "observations_queue_depth": sum(int(row.get("observations_queue_depth") or 0) for row in rows),
+            "decision_observations": sum(int(row.get("decision_observations") or 0) for row in rows),
+            "accepted_decision_observations": sum(
+                int(row.get("accepted_decision_observations") or 0) for row in rows
+            ),
+            "rejected_decision_observations": sum(
+                int(row.get("rejected_decision_observations") or 0) for row in rows
+            ),
+            "decision_reason_counts": dict(sorted(reason_counts.items())),
+            "context_decision_reason_counts": {
+                key: dict(sorted(value.items()))
+                for key, value in sorted(context_reason_counts.items())
+            },
             "timestamp_ms": time.time_ns() // 1_000_000,
             "worker_count": len(rows),
             "markets": sorted(str(row.get("market_id") or "") for row in rows if row.get("market_id")),
@@ -762,6 +792,16 @@ class Manager:
             "native_observations_written": int(evidence.get("observations_written") or 0),
             "native_observations_dropped": int(evidence.get("observations_dropped") or 0),
             "native_observations_queue_depth": int(evidence.get("observations_queue_depth") or 0),
+            "native_decision_observations": int(evidence.get("decision_observations") or 0),
+            "native_accepted_decision_observations": int(
+                evidence.get("accepted_decision_observations") or 0
+            ),
+            "native_rejected_decision_observations": int(
+                evidence.get("rejected_decision_observations") or 0
+            ),
+            "native_decision_reason_counts": evidence.get("decision_reason_counts") or {},
+            "native_context_decision_reason_counts":
+                evidence.get("context_decision_reason_counts") or {},
             "settlement_market_count": int(settlements.get("market_count") or 0),
             "settlement_blocked_count": int(settlements.get("blocked_count") or 0),
             "settlement_retryable_timeout_count": int(

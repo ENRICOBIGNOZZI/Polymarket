@@ -4,10 +4,11 @@ ROOT = Path(__file__).resolve().parents[1]
 SOURCE = ROOT / "src" / "v7_crypto_settlement_engine.cpp"
 
 
-def test_repricing_label_captures_direction_selected_token_depth():
+def test_repricing_label_captures_economically_selected_token_depth():
     text = SOURCE.read_text(encoding="utf-8")
     assert "auto point = observation(yes_book, kYes, 6);" not in text
-    assert "const bool selected_up = window.direction > 0;" in text
+    assert "window.instrument_handle = instrument_handle;" in text
+    assert "const bool selected_up = window.instrument_handle == kYes;" in text
     assert "selected_up ? yes_book : no_book" in text
     assert "selected_up ? kYes : kNo, 6" in text
 

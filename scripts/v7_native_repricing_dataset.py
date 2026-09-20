@@ -22,7 +22,10 @@ from v7_research_causal_dataset import strict_json
 from v7_research_economic_contract import canonical_hash
 
 SCHEMA = 'polymarket_v7_native_repricing_label_v1'
-ORIGIN_REASONS = {1, 15, 16, 17}
+# Midpoint/repricing diagnostics intentionally include economically informative
+# rejects. They remain diagnostics: only accepted origins can qualify as an
+# executable action in the separate executable-label consumer.
+ORIGIN_REASONS = {1, 4, 8, 13, 14, 15, 16, 17, 18}
 HORIZONS = {100, 250, 500, 1000}
 CAPTURE_HORIZONS = {100, 250, 500, 750, 1000, 1250, 1500, 1750, 2000}
 MAX_SOURCE_BYTES = 64 * 1024 * 1024
@@ -273,6 +276,8 @@ def build(paths: list[Path], *, require_closed: bool = False) -> tuple[list[dict
                 'asset': origin.get('asset'), 'horizon': origin.get('horizon'), 'repricing_horizon_ms': h,
                 'decision_wall_ns': origin.get('decision_wall_ns'), 'decision_monotonic_ns': decision_ns,
                 'label_observed_monotonic_ns': observed_ns, 'target_monotonic_ns': target_ns,
+                'origin_reason': origin.get('reason'), 'origin_accepted': bool(origin.get('accepted')),
+                'signal_direction': origin.get('direction'), 'origin_token_id': origin.get('token_id'),
                 'origin_pm_yes': p0, 'label_pm_yes': p1, 'delta_probability': p1 - p0,
                 'delta_logit': math.log(p1 / (1-p1)) - math.log(p0 / (1-p0)),
                 'binance_return_100ms_bp': origin.get('binance_return_100ms_bp'),

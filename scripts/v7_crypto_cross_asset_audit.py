@@ -129,6 +129,11 @@ def build(snapshot: Path, root: Path, output: Path, fetch_public: bool):
            'counterfactual_execution_verified':False,'signal_age_ms':None,'binance_return_bp':None}
         if len(hits)==1:
             h=hits[0];r['features']={k:h.get(k) for k in feature_fields}
+            # Preserve the exact causal slow/fast evidence cut for the next
+            # model family. Missing fields remain missing; no imputation occurs
+            # in this audit.
+            r['slow_context']=h.get('slow_context')
+            r['external_features']=h.get('external_features')
             r['signal_age_ms']=h['signal_age_ns']/1e6;r['binance_return_bp']=h['binance_return_100ms_bp']
             # Post-switch observations may describe a chosen token different
             # from the forecast-input token. Do not silently train the legacy

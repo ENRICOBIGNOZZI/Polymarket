@@ -25,6 +25,7 @@ class MultiCryptoDashboardTest(unittest.TestCase):
             "polymarket_v7_native_observations_published", "polymarket_v7_native_observations_written",
             "polymarket_v7_native_observations_dropped", "polymarket_v7_native_observations_queue_depth",
             "polymarket_v7_book_data_runtime_ready", "polymarket_v7_external_data_ready_assets",
+            "polymarket_v7_native_context_decision_reason_total",
         ):
             self.assertIn(metric, text)
         self.assertNotIn("polymarket_mc_coordinator_candidate_", text)
@@ -36,6 +37,23 @@ class MultiCryptoDashboardTest(unittest.TestCase):
         self.assertNotIn("polymarket_mc_total_pnl_usd", text)
         self.assertNotIn("polymarket_mc_unrealized_pnl_usd", text)
         self.assertNotIn("$instance", text)
+
+    def test_native_decision_funnel_is_visible_by_context(self) -> None:
+        dashboard = json.loads(DASHBOARD.read_text(encoding="utf-8"))
+        titles = {p.get("title") for p in dashboard["panels"]}
+        self.assertIn("DECISION FUNNEL", titles)
+        self.assertIn("Decision Reasons", titles)
+        self.assertIn("Reject Funnel by Lane", titles)
+        self.assertIn("Key Economic Rejections by Lane", titles)
+        expressions = "\n".join(
+            target.get("expr", "")
+            for panel in dashboard["panels"]
+            for target in panel.get("targets", [])
+        )
+        self.assertIn('reason="MARKET_ALREADY_REPRICED"', expressions)
+        self.assertIn('reason="NET_EDGE_NON_POSITIVE"', expressions)
+        self.assertIn('asset=~"$asset"', expressions)
+        self.assertIn('horizon=~"$horizon"', expressions)
 
     def test_equity_is_not_mixed_into_pnl_timeseries(self) -> None:
         dashboard = json.loads(DASHBOARD.read_text(encoding="utf-8"))

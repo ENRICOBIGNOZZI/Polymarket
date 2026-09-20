@@ -40,7 +40,7 @@ bool NativeCryptoDecisionLane::seen_signal(
         && last_signal_version_[market_handle] >= signal_version;
 }
 
-void NativeCryptoDecisionLane::remember_signal(
+void NativeCryptoDecisionLane::commit_signal(
     std::uint64_t market_handle,
     std::uint64_t signal_version) noexcept {
     if (valid_market_handle(market_handle) && signal_version > 0) {
@@ -197,7 +197,6 @@ NativeCryptoDecisionResult NativeCryptoDecisionLane::construct_candidate(
     const auto price_tick = intended_limit_e4 / book.tick_size_e4;
     if (price_tick <= 0) return finish(NativeCryptoDecisionReason::InvalidTick);
 
-    remember_signal(market.market_handle, input.signal.signal_version);
     auto intent_id = next_intent_id_++;
     if (next_intent_id_ == 0) next_intent_id_ = 1;
     StrategyIntent intent;
@@ -222,6 +221,19 @@ NativeCryptoDecisionResult NativeCryptoDecisionLane::construct_candidate(
     intent.purpose = IntentPurpose::Alpha;
     intent.passive = 0;
     intent.post_only = 0;
+    if (policy_.probability_ev_enabled != 0) {
+        // Common per-share economic fields. expected_ev is deliberately the
+        // conservative settlement edge, not a fill-conditioned action score.
+        // The portfolio owner must not compare it with maker robust EV until a
+        // validated execution/fill model puts both actions on the same scale.
+        intent.expected_edge = out.economics.expected_net_edge;
+        intent.expected_cost = out.economics.cost_per_share;
+        intent.expected_risk = std::max(0.0,
+            out.economics.expected_net_edge - out.economics.conservative_net_edge);
+        intent.expected_ev = out.economics.conservative_net_edge;
+        intent.ev_uncertainty = std::max(0.0,
+            out.economics.probability - out.economics.probability_lower);
+    }
     out.intent = intent;
     out.accepted = 1;
     return finish(NativeCryptoDecisionReason::Accepted);
@@ -239,6 +251,8 @@ NativeCryptoDecisionResult NativeCryptoDecisionLane::evaluate(
         out.reason = out.admission.reason == ExecutionAdmissionReason::CapitalDenied
             ? NativeCryptoDecisionReason::CapitalDenied
             : NativeCryptoDecisionReason::InvalidTick;
+    } else {
+        commit_signal(input.market.market_handle, input.signal.signal_version);
     }
     return out;
 }
