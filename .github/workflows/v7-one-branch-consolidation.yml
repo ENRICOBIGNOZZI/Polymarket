@@ -1,0 +1,66 @@
+name: V7 one-branch consolidation
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - deploy/v7-branch-consolidation-request.json
+
+permissions:
+  contents: write
+
+concurrency:
+  group: v7-one-branch-consolidation
+  cancel-in-progress: true
+
+jobs:
+  audit:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 12
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          fetch-depth: 0
+      - name: Audit every remote branch against main
+        shell: bash
+        run: |
+          set -euo pipefail
+          git fetch --prune origin '+refs/heads/*:refs/remotes/origin/*'
+          python3 - <<'PY'
+          import json, subprocess
+          def run(*args):
+              return subprocess.check_output(args, text=True).strip()
+          branches=[x.strip() for x in run("git","for-each-ref","--format=%(refname:short)","refs/remotes/origin").splitlines()
+                    if x.strip() and x.strip()!="origin/main" and not x.strip().endswith("/HEAD")]
+          unique=[]
+          integrated=[]
+          for ref in branches:
+              name=ref.removeprefix("origin/")
+              cherry=subprocess.run(["git","cherry","origin/main",ref],text=True,capture_output=True,check=True).stdout.splitlines()
+              plus=[x for x in cherry if x.startswith("+ ")]
+              if not plus:
+                  integrated.append(name)
+                  continue
+              commits=[]
+              for row in plus:
+                  sha=row.split()[1]
+                  meta=run("git","show","-s","--format=%H%x09%cI%x09%s",sha).split("\t",2)
+                  commits.append({"sha":meta[0],"date":meta[1],"subject":meta[2]})
+              files=run("git","diff","--name-only","origin/main..."+ref).splitlines()
+              unique.append({"branch":name,"unique_patch_count":len(plus),"commits":commits,"files":files})
+          out={"schema":"v7_branch_consolidation_audit_v1","total_remote_branches":len(branches)+1,
+               "main":"main","integrated_or_patch_equivalent":sorted(integrated),
+               "unique_branches":sorted(unique,key=lambda x:x["branch"])}
+          open("branch-consolidation-audit.json","w").write(json.dumps(out,indent=2)+"\n")
+          print("TOTAL_BRANCHES="+str(out["total_remote_branches"]))
+          print("INTEGRATED_OR_EQUIVALENT="+str(len(integrated)))
+          print("UNIQUE_BRANCHES="+str(len(unique)))
+          for row in unique:
+              latest=max((c["date"] for c in row["commits"]),default="")
+              print(f'UNIQUE {row["branch"]} patches={row["unique_patch_count"]} latest={latest} files={len(row["files"])}')
+          PY
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: v7-branch-consolidation-audit
+          path: branch-consolidation-audit.json
+          retention-days: 2
