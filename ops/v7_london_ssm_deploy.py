@@ -31,7 +31,6 @@ MAX_CANDIDATES = 16
 MAX_ARTIFACT_BYTES = 16 * 1024 * 1024
 CHUNK_CHARS = 12000
 DEPLOY_COMMENT = "Polymarket V7 exact-SHA PAPER SSM transport"
-CUTOVER_HEALTH_ATTEMPTS = 30
 
 
 class SsmDeployError(RuntimeError):
@@ -201,7 +200,14 @@ def _transport_target_sha(command: dict[str, Any]) -> str | None:
 
 def cancel_prior_deploy_transports(region: str, instance: str,
                                    expected_sha: str) -> list[dict[str, str]]:
-    """Cancel only older Polymarket deploy transports on the selected host."""
+    """Cancel only older Polymarket deploy transports on the selected host.
+
+    GitHub cancellation can leave an already-dispatched AWS-RunShellScript
+    alive on the instance. That process legitimately keeps the London flock.
+    Before a replacement cutover, prove the in-flight command is our exact
+    deployment transport and targets a different SHA, then cancel it through
+    SSM. Unknown commands or a same-SHA deployment remain fail-closed.
+    """
     if not INSTANCE_RE.fullmatch(instance) or not exact_sha(expected_sha):
         raise SsmDeployError("invalid stale-deploy recovery identity")
     value = aws_json(region, [
@@ -538,4 +544,119 @@ REUSE_EXACT_SHA_CI=1
 # Previous root-run staging attempts may have left deterministic test fixtures
 # in /tmp. Give every exact SHA a fresh private temporary root owned by the
 # service user so C++ std::filesystem::temp_directory_path() and Python
-ios ... (truncated)
+# tempfile cannot collide with stale/root-owned artifacts.
+STAGE_TMPDIR=/var/tmp/pmv7-{expected_sha[:12]}
+rm -rf -- "$STAGE_TMPDIR"
+install -d -m 0700 -o "$SERVICE_USER" -g "$SERVICE_GROUP" "$STAGE_TMPDIR"
+
+sudo -u "$SERVICE_USER" -H env TMPDIR="$STAGE_TMPDIR" \
+  POLYMARKET_EXPECTED_SHA="$SHA" \
+  POLYMARKET_SERVICE_USER="$SERVICE_USER" \
+  POLYMARKET_APP_DIR="$WORKTREE" \
+  POLYMARKET_RUNTIME_ROOT="$RUNTIME_ROOT" \
+  POLYMARKET_REUSE_EXACT_SHA_CI="$REUSE_EXACT_SHA_CI" \
+  PM_V7_CI_REPOSITORY="ENRICOBIGNOZZI/Polymarket" \
+  bash "$WORKTREE/ops/v7_london_stage_release.sh"
+env POLYMARKET_EXPECTED_SHA="$SHA" \
+  POLYMARKET_SERVICE_USER="$SERVICE_USER" \
+  POLYMARKET_APP_DIR="$WORKTREE" \
+  POLYMARKET_RUNTIME_ROOT="$RUNTIME_ROOT" \
+  POLYMARKET_ARTIFACT_ROOT="$ARTIFACT_ROOT" \
+  PM_V7_RUN_ROOT="$RUN_ROOT" \
+  PM_V7_ARCHIVE_ROOT="$ARCHIVE_ROOT" \
+  POLYMARKET_RUNTIME_HEALTH_ATTEMPTS=30 \
+  bash "$WORKTREE/ops/v7_london_cutover.sh"
+python3 - "$RUN_ROOT" "$SHA" <<'PY'
+import json,os,sys,time
+from pathlib import Path
+root=Path(sys.argv[1]);sha=sys.argv[2]
+r=json.loads((root/'control/runtime_status.json').read_text())
+assert r.get('state')=='running'
+assert r.get('model_sha')==sha
+assert r.get('paper_only') is True
+assert r.get('authenticated_execution') is False
+assert r.get('real_order_submission') is False
+pid=int(r.get('pid') or 0); assert pid>0; os.kill(pid,0)
+assert int(time.time())-int(r.get('timestamp') or 0)<=30
+print('V7_SSM_CUTOVER='+json.dumps({{
+ 'sha':sha,'run_root':str(root),'pid':pid,
+ 'paper_only':True,'authenticated_execution':False,'real_order_submission':False
+}},sort_keys=True,separators=(',',':')))
+PY
+"""
+
+
+def deploy(region: str, stack_name: str, expected_sha: str,
+           expected_tailscale_ip: str, expected_instance_id: str,
+           artifact: Path) -> dict[str, Any]:
+    if region != REGION or not exact_sha(expected_sha):
+        raise SsmDeployError("eu-west-2 and exact SHA required")
+    # Prove the runner's AWS identity before any remote operation.
+    identity = aws_json(region, ["sts", "get-caller-identity"])
+    candidates = candidate_instances(region, stack_name)
+    probes = probe(region, candidates)
+    selected = select_target(probes, expected_tailscale_ip, expected_instance_id)
+    recovered_transports = cancel_prior_deploy_transports(
+        region, selected["instance_id"], expected_sha,
+    )
+    user = selected["app"]["user"]
+    artifact_result = upload_artifact(
+        region, selected["instance_id"], artifact, expected_sha, user,
+    )
+    stdout, stderr = run(
+        region, selected["instance_id"],
+        cutover_command(expected_sha, selected),
+        3600,
+    )
+    receipt = parse_marker(stdout, "V7_SSM_CUTOVER=")
+    if receipt.get("sha") != expected_sha:
+        raise SsmDeployError("cutover receipt SHA mismatch")
+    return {
+        "schema": "polymarket_v7_ssm_deploy_receipt_v1",
+        "expected_sha": expected_sha,
+        "region": region,
+        "aws_account": identity.get("Account"),
+        "selected": selected,
+        "probes": probes,
+        "cancelled_prior_deploy_transports": recovered_transports,
+        "artifact": artifact_result,
+        "cutover": receipt,
+        "stderr_tail": stderr[-2000:],
+        "paper_only": True,
+        "authenticated_execution": False,
+        "real_order_submission": False,
+    }
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--expected-sha", required=True)
+    parser.add_argument("--expected-tailscale-ip", default="")
+    parser.add_argument("--expected-instance-id", default="")
+    parser.add_argument("--artifact", type=Path, required=True)
+    parser.add_argument("--region", default=REGION)
+    parser.add_argument("--stack-name", default=STACK)
+    parser.add_argument("--output", type=Path, required=True)
+    args = parser.parse_args()
+    try:
+        receipt = deploy(
+            args.region, args.stack_name, args.expected_sha,
+            args.expected_tailscale_ip, args.expected_instance_id, args.artifact,
+        )
+    except (OSError, ValueError, SsmDeployError) as exc:
+        parser.exit(2, f"v7_london_ssm_deploy: {exc}\n")
+    args.output.parent.mkdir(parents=True, exist_ok=True)
+    args.output.write_text(
+        json.dumps(receipt, sort_keys=True, indent=2) + "\n",
+        encoding="utf-8",
+    )
+    print("ssm_deploy_result=success")
+    print(f"deployed_sha={receipt['expected_sha']}")
+    print(f"ssm_instance={receipt['selected']['instance_id']}")
+    print(f"ssm_selection_reason={receipt['selected']['selection_reason']}")
+    print(f"ssm_receipt={args.output}")
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
