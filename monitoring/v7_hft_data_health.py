@@ -49,7 +49,8 @@ def snapshot(root):
     return dict(at_ns=time.time_ns(), files=files, category_bytes=dict(totals),
                 total_bytes=sum(totals.values()), allocated_bytes=allocated,
                 raw_bytes=raw, compressed_bytes=compressed,
-                filesystem_free_bytes=shutil.disk_usage(root).free)
+                filesystem_free_bytes=shutil.disk_usage(root).free,
+                filesystem_total_bytes=shutil.disk_usage(root).total)
 
 
 def compare(before, after, *, ceiling=60_000_000_000, target=50_000_000_000):
@@ -77,7 +78,7 @@ def compare(before, after, *, ceiling=60_000_000_000, target=50_000_000_000):
 
 def collectors(root):
     result = []
-    for path in sorted((root/'external_fair').rglob('*status*.json')):
+    for path in sorted((root/'external_fair').rglob('external_venues.json')):
         if path.is_symlink() or path.stat().st_size > 4*1024**2:
             continue
         try: value = json.loads(path.read_bytes())
@@ -86,7 +87,8 @@ def collectors(root):
             continue
         selected = {k:v for k,v in value.items() if k in {
             'asset','timestamp','timestamp_ms','updated_at_ms','raw_frame_tapes',
-            'normalized_event_tapes','venues','disk_pressure','l2','ingress'}}
+            'normalized_event_tapes','venues','disk_pressure','l2','ingress','state','valid',
+            'binance_spot_l2','coinbase_spot_l2','bybit_spot_l2'}}
         result.append(dict(path=str(path.relative_to(root)), status_age_seconds=max(0,time.time()-path.stat().st_mtime), **selected))
     return result
 
@@ -102,7 +104,13 @@ def measure(root, seconds=30):
                 except ValueError: failures+=1; continue
                 if row.get('decompressed_sha256_verified') is True:
                     compression_raw+=int(row.get('source_bytes',0)); compression_gzip+=int(row.get('gzip_bytes',0))
-    return dict(schema='v7_hft_data_health_v1', paper_only=True, authenticated_execution=False,
+    largest=[]
+    for p in root.rglob('*'):
+        if p.is_file() and not p.is_symlink():
+            try: largest.append((p.stat().st_size,str(p.relative_to(root))))
+            except FileNotFoundError: pass
+    largest=sorted(largest,reverse=True)[:20]
+    return dict(largest_files=largest,schema='v7_hft_data_health_v1', paper_only=True, authenticated_execution=False,
                 real_order_submission=False, root=str(root),
                 **{k:v for k,v in last.items() if k!='files'}, **compare(first,last),
                 verified_compression_ratio=(compression_raw/compression_gzip if compression_gzip else None),
