@@ -257,6 +257,31 @@ jobs:
           echo fast_existing=pre_restart_status
           systemctl status "$UNIT" --no-pager -l || true
           journalctl -u "$UNIT" -n 120 --no-pager || true
+
+          APP_DIR="$(systemctl show "$UNIT" -p WorkingDirectory --value)"
+          ROOT="$(systemctl show "$UNIT" -p Environment --value | python3 -c 'import shlex,sys; print(next((x.split("=",1)[1] for x in shlex.split(sys.stdin.read()) if x.startswith("PM_V7_RUN_ROOT=")), ""))')"
+          [[ -n "$APP_DIR" && "$APP_DIR" == /* && -n "$ROOT" && "$ROOT" == /* ]]
+
+          if [[ -f "$ROOT/control/supervisor_status.json" ]] && python3 - "$ROOT/control/supervisor_status.json" <<'PYCHECK'
+          import json,sys
+          try:
+              v=json.load(open(sys.argv[1],encoding='utf-8'))
+          except Exception:
+              raise SystemExit(1)
+          raise SystemExit(0 if v.get('state')=='quarantined' else 1)
+          PYCHECK
+          then
+            echo fast_existing=quarantine_reconcile
+            PM_V7_MODEL_SHA="$SHA" PM_V7_AUTHENTICATED_EXECUTION=0 PM_V7_REAL_ORDER_SUBMISSION=0 \
+              python3 "$APP_DIR/ops/v7_runtime_supervisor.py" \
+                --repository-root "$APP_DIR" \
+                --run-root "$ROOT" \
+                --policy "$APP_DIR/config/v7_runtime_supervision.json" \
+                --expected-sha "$SHA" \
+                --reconcile-only
+          fi
+
+          RESTART_EPOCH="$(date +%s)"
           echo fast_existing=restart_begin
           systemctl reset-failed "$UNIT" || true
           systemctl reset-failed "$EXPORTER" || true
@@ -272,19 +297,20 @@ jobs:
             journalctl -u "$UNIT" -n 160 --no-pager || true
             exit 20
           fi
-          ROOT="$(systemctl show "$UNIT" -p Environment --value | python3 -c 'import shlex,sys; print(next((x.split("=",1)[1] for x in shlex.split(sys.stdin.read()) if x.startswith("PM_V7_RUN_ROOT=")), ""))')"
-          [[ -n "$ROOT" && "$ROOT" == /* ]]
           cat > /tmp/v7_fast_existing_check.py <<'PYREMOTE'
           import json, os, sys, time
           from pathlib import Path
-          root=Path(sys.argv[1]); sha=sys.argv[2]
+          root=Path(sys.argv[1]); sha=sys.argv[2]; restart_epoch=int(sys.argv[3])
           p=root/'control'/'runtime_status.json'
-          if not p.is_file():
-              raise SystemExit('runtime_status_missing')
           row={}
-          for _ in range(20):
-              row=json.loads(p.read_text(encoding='utf-8'))
-              if row.get('state')=='running' and row.get('killed') is not True:
+          for _ in range(35):
+              if p.is_file():
+                  try:
+                      row=json.loads(p.read_text(encoding='utf-8'))
+                  except Exception:
+                      row={}
+              ts=int(row.get('timestamp') or 0) if isinstance(row,dict) else 0
+              if ts >= restart_epoch and row.get('state')=='running' and row.get('killed') is not True:
                   break
               time.sleep(1)
           safe={k:row.get(k) for k in ['state','killed','model_sha','paper_only','authenticated_execution','real_order_submission','pid','readiness','economic_decision_state','authorized_alpha_actions','safe_actions','timestamp']}
@@ -302,7 +328,7 @@ jobs:
           if int(time.time())-int(safe.get('timestamp') or 0)>180:
               raise SystemExit('runtime_status_stale '+json.dumps(safe,sort_keys=True))
           PYREMOTE
-          if ! python3 /tmp/v7_fast_existing_check.py "$ROOT" "$SHA"; then
+          if ! python3 /tmp/v7_fast_existing_check.py "$ROOT" "$SHA" "$RESTART_EPOCH"; then
             echo fast_existing=runtime_check_failed
             echo fast_existing=supervisor_status
             cat "$ROOT/control/supervisor_status.json" || true
