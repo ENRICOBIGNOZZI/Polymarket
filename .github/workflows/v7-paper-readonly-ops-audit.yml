@@ -35,7 +35,7 @@ jobs:
         run: |
           set -euo pipefail
           cat > "$RUNNER_TEMP/audit.py" <<'PY'
-          import json, os, re, shlex, subprocess, time
+          import json, os, re, shlex, subprocess, time, pwd, hashlib
           from pathlib import Path
 
           def sh(args):
@@ -129,6 +129,44 @@ jobs:
                               last_ts=max(last_ts or ts,ts)
                               break
 
+          service_user=sh(['systemctl','show',unit,'-p','User','--value']).strip()
+          home=Path(pwd.getpwnam(service_user).pw_dir)
+          probability_candidates=[]
+          scan_roots=[
+              home/'polymarket-artifacts',
+              home/'polymarket'/'runs',
+              home/'polymarket-research',
+          ]
+          seen=set()
+          for scan_root in scan_roots:
+              if not scan_root.exists():
+                  continue
+              for path in scan_root.rglob('*.json'):
+                  name=path.name.lower()
+                  if 'probability' not in name or path in seen:
+                      continue
+                  seen.add(path)
+                  try:
+                      if path.is_symlink() or not path.is_file() or path.stat().st_size > 5_000_000:
+                          continue
+                      value=json.loads(path.read_text())
+                      if not isinstance(value,dict):
+                          continue
+                      probability_candidates.append({
+                          'path':str(path),
+                          'schema':value.get('schema'),
+                          'code_sha':value.get('code_sha'),
+                          'test_duration_seconds':value.get('test_duration_seconds'),
+                          'paper_only':value.get('paper_only'),
+                          'authenticated_execution':value.get('authenticated_execution'),
+                          'real_order_submission':value.get('real_order_submission'),
+                          'sha256':hashlib.sha256(path.read_bytes()).hexdigest(),
+                          'size':path.stat().st_size,
+                      })
+                  except Exception:
+                      continue
+          probability_candidates=probability_candidates[:50]
+
           out={
             'unit_active':active=='active',
             'runtime_state':runtime.get('state'),
@@ -148,6 +186,7 @@ jobs:
             'probability_model_configured':manager.get('probability_model_configured'),
             'probability_evaluation_open':manager.get('probability_evaluation_open'),
             'probability_evaluation_end_wall_ns':manager.get('probability_evaluation_end_wall_ns'),
+            'probability_candidates':probability_candidates,
             'metrics':values,
             'decision_reason_totals':top_reasons,
             'decision_rejections_by_lane':top_lanes,
