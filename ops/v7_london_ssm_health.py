@@ -6,7 +6,6 @@ import argparse
 import json
 from pathlib import Path
 import re
-import shlex
 from typing import Any
 
 from v7_london_ssm_deploy import (
@@ -83,7 +82,15 @@ curl -fsS --get --data-urlencode 'query=up{job="polymarket-v7"}' \
 
 echo "health_probe=grafana"
 curl -fsS http://127.0.0.1:3000/api/health >/dev/null
-curl -fsS http://127.0.0.1:3000/api/dashboards/uid/polymarket-v7 >/dev/null
+python3 - "$APP" <<'PY'
+import json,sys
+from pathlib import Path
+root=Path(sys.argv[1])/'monitoring/grafana/dashboards'
+for uid in ('polymarket-v7','polymarket-v7-multi-crypto'):
+    path=root/f'{uid}.json'
+    value=json.loads(path.read_text(encoding='utf-8'))
+    assert value.get('uid')==uid, value
+PY
 
 echo "health_probe=full_health"
 full_health="$(curl -sS http://127.0.0.1:9108/healthz 2>/dev/null || true)"
