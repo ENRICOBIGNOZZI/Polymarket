@@ -112,7 +112,41 @@ def export(request_path):
     print('ENCRYPTED_RESEARCH_SHA256='+info['sha256'])
 
 
+
+def install_reader(request_path):
+    import re
+    req=json.loads(Path(request_path).read_text())
+    assert req['paper_only'] is True and req['authenticated_execution'] is False and req['real_order_submission'] is False
+    key=req['research_reader_public_key']
+    assert re.fullmatch(r'ssh-ed25519 [A-Za-z0-9+/=]+ polymarket-shf-research-readonly',key)
+    script=base64.b64encode(Path('ops/v7_hft_readonly_rsync.py').read_bytes()).decode()
+    code="KEY="+repr(key)+"\nSCRIPT="+repr(script)+"\n"+r'''
+import base64,json,os,pwd,shlex,subprocess
+from pathlib import Path
+unit='polymarket-v7-paper.service'
+user=subprocess.check_output(['systemctl','show',unit,'-p','User','--value'],text=True).strip()
+assert user and user!='root'
+account=pwd.getpwnam(user)
+env=subprocess.check_output(['systemctl','show',unit,'-p','Environment','--value'],text=True)
+root=Path(next(v.split('=',1)[1] for v in shlex.split(env) if v.startswith('PM_V7_RUN_ROOT=')))
+state=json.loads((root/'control/runtime_status.json').read_text())
+assert state.get('paper_only') is True and state.get('authenticated_execution') is False and state.get('real_order_submission') is False
+folder=Path(account.pw_dir)/'.ssh';folder.mkdir(mode=0o700,exist_ok=True)
+script=folder/'polymarket-hft-readonly.py';script.write_bytes(base64.b64decode(SCRIPT));script.chmod(0o700)
+authorized=folder/'authorized_keys';old=authorized.read_text() if authorized.exists() else ''
+command='/usr/bin/python3 '+str(script)+' '+str(root/'research/hft_permanent')
+line='restrict,command="'+command+'" '+KEY
+if line not in old.splitlines():
+ with authorized.open('a') as stream:stream.write(('\n' if old and not old.endswith('\n') else '')+line+'\n');stream.flush();os.fsync(stream.fileno())
+for p in (folder,script,authorized):os.chown(p,account.pw_uid,account.pw_gid)
+authorized.chmod(0o600)
+print('RESEARCH_READER='+json.dumps({'user':user,'root':str(root/'research/hft_permanent'),'sender_only':True,'installed':True}))
+'''
+    stdout,_=run(REGION,'i-0fba2bac9fdc5cbeb','python3 -c '+shlex.quote(code),60)
+    print(next(line for line in stdout.splitlines() if line.startswith('RESEARCH_READER=')))
+
 if __name__=='__main__':
     request=json.loads(Path(sys.argv[1]).read_text())
-    if request.get('operation')=='export_recent':export(sys.argv[1])
+    if request.get('operation')=='install_research_reader':install_reader(sys.argv[1])
+    elif request.get('operation')=='export_recent':export(sys.argv[1])
     else:main()
