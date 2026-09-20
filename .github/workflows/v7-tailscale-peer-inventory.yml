@@ -1,0 +1,56 @@
+name: V7 Tailscale peer inventory
+
+on:
+  push:
+    branches:
+      - ops/v7-tailscale-inventory-20260920
+    paths:
+      - .github/workflows/v7-tailscale-peer-inventory.yml
+
+permissions:
+  contents: read
+
+jobs:
+  inventory:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 8
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+      - name: Join tailnet ephemerally
+        uses: tailscale/github-action@780049a30b6ff5c378a9e7b389d15ece7a204888
+        with:
+          authkey: ${{ secrets.TS_AUTHKEY }}
+          version: 1.94.2
+          statedir: ''
+          hostname: gh-inventory-${{ github.run_id }}-${{ github.run_attempt }}
+      - name: Inventory peers
+        shell: bash
+        run: |
+          set -euo pipefail
+          tailscale status --json > "$RUNNER_TEMP/status.json"
+          python3 - "$RUNNER_TEMP/status.json" <<'PY'
+          import json,sys
+          v=json.load(open(sys.argv[1]))
+          peers=v.get('Peer') or {}
+          rows=[]
+          for _,d in peers.items():
+              if not isinstance(d,dict): continue
+              rows.append({
+                  'hostname':d.get('HostName'),
+                  'dns_name':d.get('DNSName'),
+                  'os':d.get('OS'),
+                  'ips':d.get('TailscaleIPs') or [],
+                  'online':bool(d.get('Online')),
+                  'active':bool(d.get('Active')),
+                  'exit_node':bool(d.get('ExitNode')),
+                  'last_seen':d.get('LastSeen'),
+              })
+          rows.sort(key=lambda x:(str(x.get('hostname') or ''),str(x.get('ips') or '')))
+          print('V7_TS_PEERS_BEGIN')
+          print(json.dumps(rows,sort_keys=True))
+          print('V7_TS_PEERS_END')
+          PY
+      - name: Explicit logout
+        if: always()
+        shell: bash
+        run: sudo tailscale logout >/dev/null 2>&1 || true
