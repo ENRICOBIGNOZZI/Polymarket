@@ -111,7 +111,17 @@ jobs:
             "EXPECTED_DEPLOY_SHA='$EXPECTED_SHA' bash -s" <<'REMOTE' | tee -a deploy-evidence.txt
           set -euo pipefail
           cd ~/polymarket
-          if [[ "$(uname -s)" == "Darwin" ]]; then
+          platform="$(uname -s)"
+          if [[ "$platform" == "Darwin" ]]; then
+            if command -v aws >/dev/null 2>&1 && aws sts get-caller-identity --region eu-west-2 --output json >/dev/null 2>&1; then
+              echo "V7_MAC_AWS_IDENTITY_VALID=true"
+            else
+              echo "V7_MAC_AWS_IDENTITY_VALID=false"
+            fi
+            echo "V7 deploy blocked: Tailscale host is macOS control plane, not London Linux runtime" >&2
+            exit 42
+          fi
+          if [[ "$platform" == "Darwin" ]]; then
             brew_bin=""
             for candidate in /opt/homebrew/bin/brew /usr/local/bin/brew; do
               if [[ -x "$candidate" ]]; then
