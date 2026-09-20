@@ -6,11 +6,13 @@ on:
       expected_sha:
         required: false
         type: string
-  # Live PAPER validation is exact-SHA. Therefore every main SHA needs a
-  # single-writer proof, even when the commit changes only deploy/monitoring
-  # orchestration and does not touch the runtime files themselves.
+  # Deploy-request commits carry no runtime code and deploy their validated
+  # parent SHA. Do not rerun the same single-writer proof for the control-plane
+  # request wrapper.
   push:
     branches: [main]
+    paths-ignore:
+      - deploy/v7-paper-deploy-aws-oidc-request.json
   pull_request:
     branches: [main]
 
