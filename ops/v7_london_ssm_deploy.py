@@ -412,11 +412,13 @@ def cutover_command(expected_sha: str, selected: dict[str, Any]) -> str:
     )
     runtime_root = f"/home/{user}/polymarket-runtime"
     artifact_root = f"/home/{user}/polymarket-artifacts"
-    worktree = f"/tmp/polymarket-v7-deploy-{expected_sha}"
+    worktree_parent = f"/home/{user}/.cache/polymarket-v7-deploy"
+    worktree = f"{worktree_parent}/{expected_sha}"
     return f"""set -euo pipefail
 SHA={expected_sha}
 SERVICE_USER={shlex.quote(user)}
 APP={shlex.quote(app)}
+WORKTREE_PARENT={shlex.quote(worktree_parent)}
 WORKTREE={shlex.quote(worktree)}
 RUNTIME_ROOT={shlex.quote(runtime_root)}
 ARTIFACT_ROOT={shlex.quote(artifact_root)}
@@ -425,13 +427,15 @@ ARCHIVE_ROOT={shlex.quote(archive_root)}
 [[ -d "$APP/.git" ]]
 sudo -u "$SERVICE_USER" git -C "$APP" fetch --no-tags origin main
 sudo -u "$SERVICE_USER" git -C "$APP" cat-file -e "$SHA^{{commit}}"
-if [[ -e "$WORKTREE" ]]; then
-  sudo -u "$SERVICE_USER" git -C "$APP" worktree remove --force "$WORKTREE" >/dev/null 2>&1 || rm -rf "$WORKTREE"
-fi
+SERVICE_GROUP="$(id -gn "$SERVICE_USER")"
+install -d -m 0700 -o "$SERVICE_USER" -g "$SERVICE_GROUP" "$WORKTREE_PARENT"
+sudo -u "$SERVICE_USER" git -C "$APP" worktree remove --force "$WORKTREE" >/dev/null 2>&1 || true
+rm -rf -- "$WORKTREE"
 sudo -u "$SERVICE_USER" git -C "$APP" worktree prune
 sudo -u "$SERVICE_USER" git -C "$APP" worktree add --detach "$WORKTREE" "$SHA" >/dev/null
 cleanup() {{
-  sudo -u "$SERVICE_USER" git -C "$APP" worktree remove --force "$WORKTREE" >/dev/null 2>&1 || rm -rf "$WORKTREE"
+  sudo -u "$SERVICE_USER" git -C "$APP" worktree remove --force "$WORKTREE" >/dev/null 2>&1 || true
+  rm -rf -- "$WORKTREE"
 }}
 trap cleanup EXIT
 [[ "$(sudo -u "$SERVICE_USER" git -C "$WORKTREE" rev-parse HEAD)" == "$SHA" ]]
