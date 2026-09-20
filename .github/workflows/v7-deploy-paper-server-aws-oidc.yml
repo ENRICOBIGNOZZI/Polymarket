@@ -76,7 +76,7 @@ jobs:
           with open(sys.argv[4],'a',encoding='utf-8') as h:
               h.write(f"request_id={v['request_id']}\n")
           PY
-            expected_sha="$main_sha"
+            expected_sha="$parent_sha"
           else
             [[ "$EXPECTED_DEPLOY_SHA" =~ ^[0-9a-f]{40}$ ]]
             test "$EXPECTED_DEPLOY_SHA" = "$main_sha"
@@ -84,8 +84,43 @@ jobs:
             echo "request_id=manual-dispatch" >> "$GITHUB_OUTPUT"
           fi
           echo "expected_sha=$expected_sha" >> "$GITHUB_OUTPUT"
-          python3 scripts/v7_cutover_contract.py --repository-root . --expected-head "$main_sha" >/dev/null
-          printf 'request_result=ready\nexpected_sha=%s\n' "$expected_sha" | tee deploy-evidence.txt
+          git checkout --detach "$expected_sha"
+          test "$(git rev-parse HEAD)" = "$expected_sha"
+          python3 scripts/v7_cutover_contract.py --repository-root . --expected-head "$expected_sha" >/dev/null
+          printf 'request_result=ready\nrequest_sha=%s\nexpected_sha=%s\n' "$main_sha" "$expected_sha" | tee deploy-evidence.txt
+
+      - name: Wait for target exact-SHA release gates
+        shell: bash
+        env:
+          EXPECTED_SHA: ${{ steps.request.outputs.expected_sha }}
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$EXPECTED_SHA"
+          deadline=$((SECONDS + 900))
+          while true; do
+            set +e
+            python3 scripts/v7_exact_sha_ci_gate.py \
+              --repository "$GITHUB_REPOSITORY" --sha "$EXPECTED_SHA" \
+              --required-check ci-v7-Release \
+              --required-check ci-v7-Debug \
+              --required-check sanitizer-v7 \
+              --required-check security-audit-v7 \
+              --required-check london-runtime-boundary-v7 \
+              --required-check monitoring-v7 \
+              --required-check single-writer-v7 \
+              --output "$RUNNER_TEMP/exact-sha-ci-$EXPECTED_SHA.json"
+            rc=$?
+            set -e
+            if [[ "$rc" == 0 ]]; then
+              echo "exact_sha_release_gates=green" | tee -a deploy-evidence.txt
+              break
+            fi
+            if (( SECONDS >= deadline )); then
+              echo "exact-SHA release gates did not become green" >&2
+              exit "$rc"
+            fi
+            sleep 5
+          done
 
       - name: Configure AWS credentials through GitHub OIDC
         uses: aws-actions/configure-aws-credentials@e1253824e5c10ff9df46874f81ed3ec929e19cfd
