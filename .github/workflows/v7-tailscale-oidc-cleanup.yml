@@ -1,0 +1,90 @@
+name: V7 Tailscale OIDC stale-CI cleanup
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - deploy/v7-tailscale-cleanup-request.json
+
+permissions:
+  contents: read
+  id-token: write
+
+jobs:
+  cleanup:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          ref: ops/v7-tailscale-oidc-cleanup-20260920
+          fetch-depth: 0
+
+      - name: Validate cleanup request against canonical main
+        id: req
+        shell: bash
+        run: |
+          set -euo pipefail
+          git fetch --no-tags origin main
+          main_sha="$(git rev-parse origin/main)"
+          test "$(git rev-parse HEAD)" = "$main_sha"
+          parent_sha="$(git rev-parse HEAD^)"
+          changed="$(git diff-tree --no-commit-id --name-only -r HEAD)"
+          test "$changed" = "deploy/v7-tailscale-cleanup-request.json"
+          python3 - deploy/v7-tailscale-cleanup-request.json "$parent_sha" "$GITHUB_OUTPUT" <<'PY'
+          import json,re,sys
+          v=json.load(open(sys.argv[1],encoding='utf-8'))
+          assert v.get('schema')=='polymarket_v7_tailscale_cleanup_request_v1'
+          assert v.get('version')==1
+          assert v.get('expected_parent_sha')==sys.argv[2]
+          client=v.get('client_id'); audience=v.get('audience')
+          assert isinstance(client,str) and len(client)>=8
+          assert isinstance(audience,str) and len(audience)>=8
+          assert 1 <= int(v.get('maximum_deletions') or 0) <= 1200
+          assert v.get('preserve_ips')==['100.102.9.16','100.104.183.109','100.65.195.111']
+          with open(sys.argv[3],'a',encoding='utf-8') as h:
+              h.write(f"client_id={client}\n")
+              h.write(f"audience={audience}\n")
+          PY
+
+      - name: Exchange GitHub OIDC token for Tailscale API token
+        id: auth
+        shell: bash
+        env:
+          CLIENT_ID: ${{ steps.req.outputs.client_id }}
+          AUDIENCE: ${{ steps.req.outputs.audience }}
+        run: |
+          set -euo pipefail
+          jwt="$(python3 - <<'PY'
+          import json,os,urllib.parse,urllib.request
+          url=os.environ['ACTIONS_ID_TOKEN_REQUEST_URL']
+          sep='&' if '?' in url else '?'
+          url=url+sep+urllib.parse.urlencode({'audience':os.environ['AUDIENCE']})
+          req=urllib.request.Request(url,headers={'Authorization':'Bearer '+os.environ['ACTIONS_ID_TOKEN_REQUEST_TOKEN']})
+          with urllib.request.urlopen(req,timeout=30) as r:
+              v=json.load(r)
+          token=v.get('value')
+          assert isinstance(token,str) and token.count('.')==2
+          print(token)
+          PY
+          )"
+          response="$(curl -fsS -X POST 'https://api.tailscale.com/api/v2/oauth/token-exchange'             -H 'Content-Type: application/x-www-form-urlencoded'             --data-urlencode "client_id=$CLIENT_ID"             --data-urlencode "jwt=$jwt")"
+          access="$(python3 -c 'import json,sys; v=json.load(sys.stdin); print(v["access_token"])' <<<"$response")"
+          test -n "$access"
+          echo "::add-mask::$access"
+          {
+            echo 'TS_ACCESS_TOKEN<<EOF_TS_TOKEN'
+            echo "$access"
+            echo 'EOF_TS_TOKEN'
+          } >> "$GITHUB_ENV"
+
+      - name: Remove only offline GitHub CI nodes
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 scripts/v7_tailscale_oidc_cleanup.py             --request deploy/v7-tailscale-cleanup-request.json             --token "$TS_ACCESS_TOKEN"
+
+      - name: Clear short-lived Tailscale token
+        if: always()
+        shell: bash
+        run: echo 'TS_ACCESS_TOKEN=' >> "$GITHUB_ENV"

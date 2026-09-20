@@ -49,9 +49,9 @@ jobs:
         id: tailscale_auth
         env:
           TS_AUTHKEY: ${{ secrets.TS_AUTHKEY }}
-          TS_OAUTH_CLIENT_ID: ${{ secrets.TS_OAUTH_CLIENT_ID }}
+          TS_OAUTH_CLIENT_ID: TCb65amTk321CNTRL-kwWnLvpSbF11CNTRL
           TS_OAUTH_SECRET: ${{ secrets.TS_OAUTH_SECRET }}
-          TS_AUDIENCE: ${{ secrets.TS_AUDIENCE }}
+          TS_AUDIENCE: api.tailscale.com/TCb65amTk321CNTRL-kwWnLvpSbF11CNTRL
           TS_TAGS: ${{ vars.TS_TAGS || 'tag:ci' }}
           TS_AUTHKEY_EPHEMERAL_VERIFIED: ${{ vars.TS_AUTHKEY_EPHEMERAL_VERIFIED || 'false' }}
         run: |
@@ -77,8 +77,8 @@ jobs:
         if: steps.tailscale_auth.outputs.mode == 'oidc'
         uses: tailscale/github-action@780049a30b6ff5c378a9e7b389d15ece7a204888
         with:
-          oauth-client-id: ${{ secrets.TS_OAUTH_CLIENT_ID }}
-          audience: ${{ secrets.TS_AUDIENCE }}
+          oauth-client-id: TCb65amTk321CNTRL-kwWnLvpSbF11CNTRL
+          audience: api.tailscale.com/TCb65amTk321CNTRL-kwWnLvpSbF11CNTRL
           tags: ${{ vars.TS_TAGS || 'tag:ci' }}
           version: 1.94.2
           statedir: ''
@@ -88,7 +88,7 @@ jobs:
         if: steps.tailscale_auth.outputs.mode == 'oauth'
         uses: tailscale/github-action@780049a30b6ff5c378a9e7b389d15ece7a204888
         with:
-          oauth-client-id: ${{ secrets.TS_OAUTH_CLIENT_ID }}
+          oauth-client-id: TCb65amTk321CNTRL-kwWnLvpSbF11CNTRL
           oauth-secret: ${{ secrets.TS_OAUTH_SECRET }}
           tags: ${{ vars.TS_TAGS || 'tag:ci' }}
           version: 1.94.2
