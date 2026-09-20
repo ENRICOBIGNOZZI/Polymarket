@@ -1,8 +1,8 @@
 {
   "schema": "polymarket_v7_paper_deploy_request_v1",
   "version": 1,
-  "request_id": "paper-london-tailscale-20260920-90b0523b",
-  "expected_parent_sha": "90b0523b476696f5ebfdfe5c6585ce099623dec6",
+  "request_id": "paper-london-oidc-20260920-f436655f",
+  "expected_parent_sha": "f436655f44bd44c9b01291a92b3f3e0526ec16ed",
   "cutover_approved": true,
   "paper_only": true,
   "authenticated_execution": false,
