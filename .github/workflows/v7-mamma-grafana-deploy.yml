@@ -1,0 +1,199 @@
+name: V7 mamma Grafana deploy pure arb
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - deploy/v7-mamma-grafana-deploy-request.json
+
+permissions:
+  contents: read
+
+jobs:
+  deploy:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    env:
+      SERVER_HOST: ${{ vars.POLYMARKET_SERVER_HOST || '100.104.183.109' }}
+      SERVER_USER: ${{ vars.POLYMARKET_SERVER_USER || 'enrico' }}
+      SERVER_PORT: ${{ vars.POLYMARKET_SERVER_PORT || '22' }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+
+      - name: Validate request
+        id: req
+        run: |
+          python3 - deploy/v7-mamma-grafana-deploy-request.json "$GITHUB_OUTPUT" <<'PY'
+          import json,re,sys
+          v=json.load(open(sys.argv[1]))
+          assert set(v)=={'schema','source_sha','dashboard_uid','folder_uid','monitoring_only'}
+          assert v['schema']=='polymarket_v7_mamma_grafana_deploy_v1'
+          assert re.fullmatch(r'[0-9a-f]{40}',v['source_sha'])
+          assert v['dashboard_uid']=='polymarket-v7-pure-arb'
+          assert v['folder_uid']=='afyms0c1xjabkf'
+          assert v['monitoring_only'] is True
+          with open(sys.argv[2],'a') as h: h.write('sha='+v['source_sha']+'\n')
+          PY
+
+      - name: Select Tailscale credential
+        id: ts
+        shell: bash
+        env:
+          TS_AUTHKEY: ${{ secrets.TS_AUTHKEY }}
+          TS_OAUTH_CLIENT_ID: ${{ secrets.TS_OAUTH_CLIENT_ID }}
+          TS_OAUTH_SECRET: ${{ secrets.TS_OAUTH_SECRET }}
+        run: |
+          set -euo pipefail
+          if [[ -n "${TS_AUTHKEY:-}" ]]; then echo mode=authkey >> "$GITHUB_OUTPUT"
+          elif [[ -n "${TS_OAUTH_CLIENT_ID:-}" && -n "${TS_OAUTH_SECRET:-}" ]]; then echo mode=oauth >> "$GITHUB_OUTPUT"
+          else exit 1; fi
+
+      - name: Join tailnet with auth key
+        if: steps.ts.outputs.mode == 'authkey'
+        uses: tailscale/github-action@v4
+        with:
+          authkey: ${{ secrets.TS_AUTHKEY }}
+          ping: ${{ env.SERVER_HOST }}
+
+      - name: Join tailnet with OAuth
+        if: steps.ts.outputs.mode == 'oauth'
+        uses: tailscale/github-action@v4
+        with:
+          oauth-client-id: ${{ secrets.TS_OAUTH_CLIENT_ID }}
+          oauth-secret: ${{ secrets.TS_OAUTH_SECRET }}
+          tags: ${{ vars.TS_TAGS || 'tag:ci' }}
+          ping: ${{ env.SERVER_HOST }}
+
+      - name: Configure SSH
+        env:
+          SSH_PRIVATE_KEY: ${{ secrets.POLYMARKET_SERVER_SSH_KEY }}
+        run: |
+          set -euo pipefail
+          test -n "${SSH_PRIVATE_KEY:-}"
+          install -d -m 700 ~/.ssh
+          printf '%s\n' "$SSH_PRIVATE_KEY" > ~/.ssh/polymarket_mamma
+          chmod 600 ~/.ssh/polymarket_mamma
+          ssh-keyscan -T 5 -p "$SERVER_PORT" "$SERVER_HOST" > ~/.ssh/known_hosts
+
+      - name: Prepare exact dashboard payload
+        env:
+          SOURCE_SHA: ${{ steps.req.outputs.sha }}
+        run: |
+          set -euo pipefail
+          git fetch --no-tags origin "$SOURCE_SHA"
+          git show "$SOURCE_SHA:monitoring/grafana/dashboards/polymarket-v7-pure-arb.json" > /tmp/polymarket-v7-pure-arb.json
+          python3 - /tmp/polymarket-v7-pure-arb.json <<'PY'
+          import json,sys
+          v=json.load(open(sys.argv[1]))
+          assert v.get('uid')=='polymarket-v7-pure-arb'
+          assert isinstance(v.get('panels'),list) and v['panels']
+          PY
+
+      - name: Inspect and deploy on mamma
+        shell: bash
+        run: |
+          set -euo pipefail
+          scp -i ~/.ssh/polymarket_mamma -o IdentitiesOnly=yes -o BatchMode=yes -P "$SERVER_PORT" \
+            /tmp/polymarket-v7-pure-arb.json "$SERVER_USER@$SERVER_HOST:/tmp/polymarket-v7-pure-arb.json"
+
+          ssh -i ~/.ssh/polymarket_mamma -o IdentitiesOnly=yes -o BatchMode=yes \
+            -o ConnectTimeout=10 -p "$SERVER_PORT" "$SERVER_USER@$SERVER_HOST" 'bash -s' <<'REMOTE'
+          set -euo pipefail
+          BASE="$HOME/.cache/polymarket-grafana-london"
+          PROV="$BASE/config/provisioning"
+          DASH="$BASE/dashboards"
+          mkdir -p "$PROV/dashboards" "$DASH"
+
+          echo '=== EXISTING DATASOURCE ==='
+          find "$PROV/datasources" -maxdepth 1 -type f -print -exec cat {} \; 2>/dev/null || true
+
+          # Verify the canonical datasource UID exists before adding dashboard.
+          grep -R -q 'uid: prometheus-v7' "$PROV/datasources" 2>/dev/null || {
+            echo "prometheus-v7 datasource missing on mamma" >&2
+            exit 21
+          }
+
+          install -m 0644 /tmp/polymarket-v7-pure-arb.json "$DASH/polymarket-v7-pure-arb.json"
+          rm -f /tmp/polymarket-v7-pure-arb.json
+
+          cat > "$PROV/dashboards/v7-pure-arb.yml" <<YAML
+          apiVersion: 1
+          providers:
+            - name: Polymarket V7 Pure Arb
+              orgId: 1
+              folder: Polymarket London
+              folderUid: afyms0c1xjabkf
+              type: file
+              disableDeletion: false
+              allowUiUpdates: false
+              updateIntervalSeconds: 5
+              options:
+                path: $DASH
+                foldersFromFilesStructure: false
+          YAML
+
+          echo '=== INSTALLED ==='
+          cat "$PROV/dashboards/v7-pure-arb.yml"
+          python3 - "$DASH/polymarket-v7-pure-arb.json" <<'PY'
+          import json,sys
+          v=json.load(open(sys.argv[1]))
+          print('UID='+v['uid'])
+          print('TITLE='+v['title'])
+          PY
+
+          # Restart only Grafana through the existing operator control path.
+          if sudo -n /usr/local/sbin/polymarket-service-control status >/dev/null 2>&1; then
+            sudo -n /usr/local/sbin/polymarket-service-control restart
+          else
+            pkill -TERM -f '/opt/homebrew/bin/grafana server' || true
+            sleep 2
+            if command -v brew >/dev/null 2>&1; then
+              brew services restart grafana >/dev/null 2>&1 || true
+            fi
+          fi
+
+          for i in $(seq 1 40); do
+            if curl -fsS http://127.0.0.1:3000/api/health >/tmp/grafana-health.json 2>/dev/null; then break; fi
+            sleep 1
+          done
+          cat /tmp/grafana-health.json
+
+          # Verify the dashboard is in Grafana's active storage, supporting both legacy DB and Unified Storage.
+          python3 - <<'PY'
+          import os,sqlite3,json,time
+          candidates=[
+            os.path.expanduser('~/.cache/polymarket-grafana-london/data/grafana.db'),
+            '/opt/homebrew/var/lib/grafana/grafana.db',
+          ]
+          deadline=time.time()+40
+          while time.time()<deadline:
+              ok=False
+              for db in candidates:
+                  if not os.path.isfile(db): continue
+                  con=sqlite3.connect('file:'+db+'?mode=ro',uri=True)
+                  tabs={r[0] for r in con.execute("select name from sqlite_master where type='table'")}
+                  if 'resource' in tabs:
+                      cols=[r[1] for r in con.execute('pragma table_info(resource)')]
+                      idx={c:i for i,c in enumerate(cols)}
+                      rows=con.execute("select * from resource where name=?",('polymarket-v7-pure-arb',)).fetchall()
+                      for row in rows:
+                          if str(row[idx.get('folder',-1)] or '')=='afyms0c1xjabkf':
+                              ok=True
+                  if not ok and 'dashboard' in tabs:
+                      cols={r[1] for r in con.execute('pragma table_info(dashboard)')}
+                      if 'uid' in cols:
+                          row=con.execute("select uid from dashboard where uid=?",('polymarket-v7-pure-arb',)).fetchone()
+                          ok=bool(row)
+                  con.close()
+                  if ok: break
+              if ok:
+                  print('MAMMA_PURE_ARB_DASHBOARD_OK=1')
+                  break
+              time.sleep(1)
+          else:
+              raise SystemExit('dashboard not loaded by mamma Grafana')
+          PY
+
+          echo '=== TAILSCALE ROUTE ==='
+          curl -k -sS -I --max-time 5 https://mamma-portfolio.tail1bae85.ts.net/d/polymarket-v7-pure-arb/polymarket-v7-crypto-pure-arbitrage-paper | head -12 || true
+          REMOTE
