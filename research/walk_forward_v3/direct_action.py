@@ -35,8 +35,11 @@ from research.walk_forward_v2.core import (
 
 SCHEMA = "polymarket_direct_action_value_v3"
 DEFAULT_SIZE_GRID = (1.0, 2.0, 5.0, 10.0, 20.0, 40.0, 80.0, 160.0, 320.0)
-DEFAULT_ACTION_HORIZONS_MS = (50, 100, 250, 500, 1000, 2000)
-DEFAULT_TRAIN_LATENCIES_MS = (25, 50, 100, 250)
+DEFAULT_ACTION_HORIZONS_MS = (
+    50, 100, 250, 500, 750, 1000, 1500, 2000,
+    3000, 4000, 5000, 7500, 10000,
+)
+DEFAULT_TRAIN_LATENCIES_MS = (5, 10, 25, 50, 100, 250)
 DEFAULT_ENTRY_CAP = 0.80
 DEFAULT_HARD_ORDER_NOTIONAL = 100.0
 DEFAULT_MINIMUM_TTE_NS = 30_000_000_000
@@ -1071,13 +1074,103 @@ def _polylog_level_crossings(coefficients, level, lower, upper):
 
 def effective_age_bucket(signal_age_ms, latency_ms):
     age = max(0.0, float(signal_age_ms)) + float(latency_ms)
+    if age <= 10.0:
+        return "le10"
+    if age <= 25.0:
+        return "10_25"
     if age <= 50.0:
-        return "le50"
+        return "25_50"
     if age <= 100.0:
         return "50_100"
     if age <= 250.0:
         return "100_250"
     return "gt250"
+
+
+def _first_finite_feature(source, *names):
+    for name in names:
+        value = source.get(name)
+        if finite(value):
+            return float(value)
+    return None
+
+
+def external_regime_features(row):
+    """Causal continuation/reversal state from already-observed external data."""
+    source = row.get("features") or {}
+    venue_returns = [
+        value for value in (
+            _first_finite_feature(
+                source, "external.binance_return_100ms_bp",
+                "binance_return_100ms_bp"),
+            _first_finite_feature(
+                source, "external.coinbase_return_100ms_bp",
+                "coinbase_return_100ms_bp"),
+            _first_finite_feature(
+                source, "external.bybit_return_100ms_bp",
+                "bybit_return_100ms_bp"),
+        )
+        if value is not None
+    ]
+    consensus = (
+        sum(venue_returns) / len(venue_returns)
+        if venue_returns else 0.0
+    )
+    dispersion = (
+        max(venue_returns) - min(venue_returns)
+        if len(venue_returns) >= 2 else 0.0
+    )
+    if venue_returns and abs(consensus) > 1e-15:
+        sign = 1.0 if consensus > 0 else -1.0
+        agreement = sum(
+            1.0 for value in venue_returns
+            if (1.0 if value >= 0 else -1.0) == sign
+        ) / len(venue_returns)
+    else:
+        agreement = 0.0
+
+    ret250 = _first_finite_feature(
+        source, "external.return_250ms", "return_250ms")
+    ret1s = _first_finite_feature(
+        source, "external.return_1s", "return_1s")
+    ret5s = _first_finite_feature(
+        source, "external.return_5s", "return_5s")
+    vol_fast = _first_finite_feature(
+        source, "external.native_vol_fast", "native_vol_fast")
+    vol_slow = _first_finite_feature(
+        source, "external.native_vol_slow", "native_vol_slow")
+    external_dispersion = _first_finite_feature(
+        source, "external.dispersion_bps", "dispersion_bps")
+    fresh_venues = _first_finite_feature(
+        source, "external.fresh_venues", "fresh_venues")
+
+    acceleration = (
+        4.0 * ret250 - ret1s
+        if ret250 is not None and ret1s is not None else 0.0
+    )
+    slow_deceleration = (
+        ret1s - ret5s / 5.0
+        if ret1s is not None and ret5s is not None else 0.0
+    )
+    vol_ratio = (
+        vol_fast / max(1e-12, abs(vol_slow))
+        if vol_fast is not None and vol_slow is not None else 0.0
+    )
+    return {
+        "consensus_100ms_bp": float(consensus),
+        "cross_venue_dispersion_100ms_bp": float(dispersion),
+        "cross_venue_agreement": float(agreement),
+        "return_250ms": float(ret250 or 0.0),
+        "return_1s": float(ret1s or 0.0),
+        "return_5s": float(ret5s or 0.0),
+        "trend_acceleration": float(acceleration),
+        "trend_slow_deceleration": float(slow_deceleration),
+        "native_vol_fast": float(vol_fast or 0.0),
+        "native_vol_slow": float(vol_slow or 0.0),
+        "native_vol_ratio": float(vol_ratio),
+        "external_dispersion_bps": float(external_dispersion or 0.0),
+        "fresh_venues": float(fresh_venues or 0.0),
+    }
 
 
 def regime_support_key(row, latency_ms):
@@ -1210,26 +1303,50 @@ class DirectActionValueModel:
             "binance_return_100ms_bp",
             "coinbase_return_100ms_bp",
             "bybit_return_100ms_bp",
+            "external.return_250ms",
+            "external.return_1s",
+            "external.return_5s",
+            "external.native_vol_fast",
+            "external.native_vol_slow",
+            "external.dispersion_bps",
+            "external.fresh_venues",
             "signal_return_bp",
             "signal_age_ns",
             "tte_ns",
             "bid_e4",
             "ask_e4",
+            "bid_quantity",
             "ask_quantity",
         ]
         chosen = [name for name in priority if name in available]
         chosen.extend(name for name in available if name not in chosen)
-        return tuple(chosen[:12])
+        return tuple(chosen[:24])
 
     def _configure_levels(self, rows):
         self.base_names = self._base_feature_names(rows)
         self.assets = tuple(sorted({str(row.get("asset") or "UNKNOWN") for row in rows}))
         self.contract_horizons = tuple(sorted({str(row.get("horizon") or "UNKNOWN") for row in rows}))
-        self.age_buckets = ("le50", "50_100", "100_250", "gt250")
+        self.age_buckets = (
+            "le10", "10_25", "25_50", "50_100", "100_250", "gt250",
+        )
         names = [
             "state.ask", "state.bid", "state.spread", "state.depth",
             "state.minimum", "state.tte_s", "state.signal_age_ms",
-            "state.direction", "action.side_sign", "action.signal_alignment",
+            "state.direction", "state.price_distance_from_half",
+            "state.cross_venue_consensus_100ms_bp",
+            "state.cross_venue_dispersion_100ms_bp",
+            "state.cross_venue_agreement",
+            "state.return_250ms", "state.return_1s", "state.return_5s",
+            "state.trend_acceleration", "state.trend_slow_deceleration",
+            "state.native_vol_fast", "state.native_vol_slow",
+            "state.native_vol_ratio", "state.external_dispersion_bps",
+            "state.fresh_venues",
+            "action.side_sign", "action.signal_alignment",
+            "action.continuation_100ms", "action.reversal_100ms",
+            "action.continuation_250ms", "action.reversal_250ms",
+            "action.continuation_1s", "action.reversal_1s",
+            "action.continuation_5s", "action.reversal_5s",
+            "action.price_extension",
             "action.size", "action.size2",
             "action.log_size", "action.depth_fraction", "action.notional",
             "action.notional_fraction_of_cap", "action.exit_horizon_ms",
@@ -1294,6 +1411,14 @@ class DirectActionValueModel:
             if finite(value):
                 signal = float(value)
                 break
+        regime = external_regime_features(row)
+        mid = (ask + bid) / 2.0
+        continuation_100ms = (
+            side_sign * regime["consensus_100ms_bp"])
+        continuation_250ms = side_sign * regime["return_250ms"]
+        continuation_1s = side_sign * regime["return_1s"]
+        continuation_5s = side_sign * regime["return_5s"]
+        price_extension = side_sign * (mid - 0.5)
         features = {
             "state.ask": ask,
             "state.bid": bid,
@@ -1303,8 +1428,31 @@ class DirectActionValueModel:
             "state.tte_s": float(row["tte_ns"]) / 1e9,
             "state.signal_age_ms": signal_age_ms,
             "state.direction": float(row.get("direction") or 0),
+            "state.price_distance_from_half": mid - 0.5,
+            "state.cross_venue_consensus_100ms_bp": regime["consensus_100ms_bp"],
+            "state.cross_venue_dispersion_100ms_bp": regime["cross_venue_dispersion_100ms_bp"],
+            "state.cross_venue_agreement": regime["cross_venue_agreement"],
+            "state.return_250ms": regime["return_250ms"],
+            "state.return_1s": regime["return_1s"],
+            "state.return_5s": regime["return_5s"],
+            "state.trend_acceleration": regime["trend_acceleration"],
+            "state.trend_slow_deceleration": regime["trend_slow_deceleration"],
+            "state.native_vol_fast": regime["native_vol_fast"],
+            "state.native_vol_slow": regime["native_vol_slow"],
+            "state.native_vol_ratio": regime["native_vol_ratio"],
+            "state.external_dispersion_bps": regime["external_dispersion_bps"],
+            "state.fresh_venues": regime["fresh_venues"],
             "action.side_sign": side_sign,
             "action.signal_alignment": alignment,
+            "action.continuation_100ms": continuation_100ms,
+            "action.reversal_100ms": -continuation_100ms,
+            "action.continuation_250ms": continuation_250ms,
+            "action.reversal_250ms": -continuation_250ms,
+            "action.continuation_1s": continuation_1s,
+            "action.reversal_1s": -continuation_1s,
+            "action.continuation_5s": continuation_5s,
+            "action.reversal_5s": -continuation_5s,
+            "action.price_extension": price_extension,
             "action.size": float(size),
             "action.size2": float(size) ** 2,
             "action.log_size": math.log1p(float(size)),
@@ -1329,7 +1477,11 @@ class DirectActionValueModel:
             "interaction.signal_effective_age": signal * effective_action_age_ms,
             "interaction.horizon_effective_age": (
                 math.log1p(float(horizon_ms)) * effective_action_age_ms),
-            "age::le50": 1.0 if effective_action_age_ms <= 50.0 else 0.0,
+            "age::le10": 1.0 if effective_action_age_ms <= 10.0 else 0.0,
+            "age::10_25": (
+                1.0 if 10.0 < effective_action_age_ms <= 25.0 else 0.0),
+            "age::25_50": (
+                1.0 if 25.0 < effective_action_age_ms <= 50.0 else 0.0),
             "age::50_100": (
                 1.0 if 50.0 < effective_action_age_ms <= 100.0 else 0.0),
             "age::100_250": (
