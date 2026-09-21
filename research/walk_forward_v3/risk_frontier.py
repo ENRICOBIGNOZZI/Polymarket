@@ -16,8 +16,9 @@ import json
 import math
 from pathlib import Path
 
-from research.walk_forward_v2.core import SAFETY, atomic_json
+from research.walk_forward_v2.core import SAFETY, atomic_json, folds
 from research.walk_forward_v3.direct_action import (
+    DirectActionValueModel,
     FrictionPolicy,
     evaluate_direct_action_policy,
     summarize_direct_action,
@@ -358,6 +359,143 @@ def evaluate_empirical_risk_frontier(
         "pareto_policy_ids": pareto_frontier(entries),
         "entries": entries,
     }
+
+
+
+def nested_walk_forward_risk_frontier(
+    records,
+    *,
+    desired_folds=3,
+    inner_desired_folds=2,
+    policy_grid=None,
+    latency_ms=50,
+    capital_budget=10_000.0,
+    model_kwargs=None,
+    max_cvar95=None,
+    max_drawdown=None,
+):
+    """Nested, leakage-safe risk-policy evaluation.
+
+    Inner historical validation decides either:
+    - one policy satisfying an explicit CVaR/drawdown budget, or
+    - a Pareto survivor set when no human risk budget is supplied.
+
+    Only those validation-qualified policies reach the outer OOS fold.
+    """
+    policies = list(policy_grid or default_policy_grid())
+    policy_by_id = {str(spec["policy_id"]): spec for spec in policies}
+    outer_folds, outer_receipt = folds(records, desired_folds=desired_folds)
+    result = {
+        "schema": SCHEMA + "_nested_walk_forward",
+        **SAFETY,
+        "state": outer_receipt.get("state"),
+        "mean_covariance_estimation": False,
+        "gaussian_risk_assumption": False,
+        "outer_fold_receipt": outer_receipt,
+        "max_cvar95": max_cvar95,
+        "max_drawdown": max_drawdown,
+        "folds": [],
+    }
+    if not outer_folds:
+        return result
+
+    for outer in outer_folds:
+        outer_train = list(outer["train_repricing"])
+        outer_test = list(outer["test"])
+        inner_folds, inner_receipt = folds(
+            outer_train, desired_folds=inner_desired_folds)
+
+        fold_result = {
+            "fold": outer["fold"],
+            "cutoff_ns": outer["cutoff_ns"],
+            "outer_train_markets": len(outer["train_markets"]),
+            "outer_test_markets": len(outer["test_markets"]),
+            "inner_receipt": inner_receipt,
+            "validation": None,
+            "selection": None,
+            "outer_oos": None,
+        }
+        if not inner_folds:
+            fold_result["selection"] = {
+                "state": "INSUFFICIENT_INNER_FOLDS_NO_POLICY_SELECTION",
+                "policy_id": None,
+            }
+            result["folds"].append(fold_result)
+            continue
+
+        # Last chronological inner fold gives the largest causal training set
+        # while keeping a fully future validation block.
+        inner = inner_folds[-1]
+        inner_model = DirectActionValueModel(
+            **(model_kwargs or {})).fit(inner["train_repricing"])
+        validation_frontier = evaluate_empirical_risk_frontier(
+            inner_model,
+            inner["test"],
+            policy_grid=policies,
+            latency_ms=latency_ms,
+            capital_budget=capital_budget,
+            one_entry_per_market=True,
+            live_geometry=True,
+        )
+        selection = select_policy_under_risk_budget(
+            validation_frontier,
+            max_cvar95=max_cvar95,
+            max_drawdown=max_drawdown,
+        )
+
+        if selection["policy_id"] is not None:
+            qualified_ids = [str(selection["policy_id"])]
+            qualification = "EXPLICIT_VALIDATION_RISK_BUDGET"
+        elif selection["state"] == "NO_RISK_BUDGET_NO_AUTOMATIC_SELECTION":
+            qualified_ids = list(validation_frontier["pareto_policy_ids"])
+            qualification = "VALIDATION_PARETO_SET_NO_SINGLE_SELECTION"
+        else:
+            qualified_ids = []
+            qualification = "NO_VALIDATION_POLICY_QUALIFIED"
+
+        qualified_grid = [
+            policy_by_id[policy_id]
+            for policy_id in qualified_ids
+            if policy_id in policy_by_id
+        ]
+
+        outer_model = DirectActionValueModel(
+            **(model_kwargs or {})).fit(outer_train)
+        if qualified_grid:
+            outer_oos = evaluate_empirical_risk_frontier(
+                outer_model,
+                outer_test,
+                policy_grid=qualified_grid,
+                latency_ms=latency_ms,
+                capital_budget=capital_budget,
+                one_entry_per_market=True,
+                live_geometry=True,
+            )
+        else:
+            outer_oos = {
+                "schema": SCHEMA + "_frontier",
+                **SAFETY,
+                "state": "NO_VALIDATION_QUALIFIED_POLICY",
+                "selection": "NONE",
+                "policy_count": 0,
+                "pareto_policy_ids": [],
+                "entries": [],
+            }
+
+        fold_result["validation"] = validation_frontier
+        fold_result["selection"] = {
+            **selection,
+            "qualification": qualification,
+            "qualified_policy_ids": qualified_ids,
+        }
+        fold_result["outer_oos"] = outer_oos
+        result["folds"].append(fold_result)
+
+    result["state"] = "READY"
+    result["selection_semantics"] = (
+        "INNER_VALIDATION_ONLY_OUTER_OOS_NEVER_USED_TO_CHOOSE_RISK_POLICY"
+    )
+    return result
 
 
 def main(argv=None):
