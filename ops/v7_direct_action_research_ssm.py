@@ -56,7 +56,7 @@ def load_request(path: Path) -> dict:
         raise ValueError("invalid minimum wall ns")
     if not isinstance(value["folds"], int) or not 2 <= value["folds"] <= 8:
         raise ValueError("invalid folds")
-    if value["latency_ms"] not in (25, 50, 100, 250):
+    if value["latency_ms"] not in (5, 10, 25, 50, 100, 250):
         raise ValueError("latency outside direct-action training support")
     if not isinstance(value["capital_budget"], (int, float)) or isinstance(value["capital_budget"], bool):
         raise ValueError("invalid capital budget")
@@ -145,7 +145,7 @@ mkdir -p src output
 tar -xzf source.tgz -C src
 python3 -m venv venv
 venv/bin/pip install --disable-pip-version-check --quiet -r src/research/requirements-learning.txt
-PYTHONPATH={remote}/src:{app_dir} venv/bin/python -m research.walk_forward_v3.direct_action \
+POLYMARKET_RESEARCH_HORIZONS_MS=50,100,250,500,750,1000,1500,2000,3000,4000,5000,7500,10000 \\\nPOLYMARKET_RESEARCH_EXECUTION_LATENCIES_MS=5,10,25,50,100,250 \\\nPYTHONPATH={remote}/src:{app_dir} venv/bin/python -m research.walk_forward_v3.direct_action \
   --root {run_root} \
   --output {remote}/output/direct_action.json \
   --minimum-wall-ns {request['minimum_wall_ns']} \
