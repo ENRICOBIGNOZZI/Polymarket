@@ -16,7 +16,7 @@ import re
 import tarfile
 
 from v7_london_ssm_deploy import REGION, run
-from v7_direct_action_research_ssm import remote_context, upload, extract
+from v7_direct_action_research_ssm import upload, extract
 
 SHA=re.compile(r"^[0-9a-f]{40}$")
 INSTANCE=re.compile(r"^i-[0-9a-f]+$")
@@ -73,20 +73,32 @@ def main():
     if a.minimum_wall_ns<=0:p.error("positive minimum wall required")
 
     repo=Path(__file__).resolve().parents[1]
-    ctx=remote_context(a.instance_id)
+    run_root="/mnt/polymarket-data/paper_v7_london"
     remote="/tmp/polymarket-native-alpha-2h-"+a.source_sha[:12]
     upload(a.instance_id,remote,archive(repo))
     command=f"""set -euo pipefail
 cd {remote}
 rm -rf src output results.tgz
 mkdir -p src output
+python3 - {run_root} <<'PY'
+import json,sys
+from pathlib import Path
+root=Path(sys.argv[1]).resolve()
+assert root==Path('/mnt/polymarket-data/paper_v7_london')
+assert root.is_dir()
+state=json.loads((root/'control/runtime_status.json').read_text())
+assert state.get('paper_only') is True
+assert state.get('authenticated_execution') is False
+assert state.get('real_order_submission') is False
+print('NATIVE_ALPHA_CONTEXT_DIRECT='+str(root))
+PY
 tar -xzf source.tgz -C src
 python3 -m venv venv
 venv/bin/pip install --disable-pip-version-check --quiet -r src/research/requirements-learning.txt
 POLYMARKET_RESEARCH_HORIZONS_MS=5,10,25,50,100,250,500,750,1000,1500,2000,3000,4000,5000,7500,10000 \
 POLYMARKET_RESEARCH_EXECUTION_LATENCIES_MS=5,10,25,50,100,250 \
-PYTHONPATH={remote}/src:{ctx['app_dir']} nice -n 18 venv/bin/python -m research.walk_forward_v3.native_2h_alpha_library \
-  --root {ctx['run_root']} \
+PYTHONPATH={remote}/src nice -n 18 venv/bin/python -m research.walk_forward_v3.native_2h_alpha_library \
+  --root {run_root} \
   --output-dir {remote}/output \
   --minimum-wall-ns {a.minimum_wall_ns} \
   --skip-figures
