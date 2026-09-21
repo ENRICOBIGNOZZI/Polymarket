@@ -1,0 +1,216 @@
+name: V7 recover clean PAPER quarantine
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - deploy/v7-recover-clean-paper-quarantine-request.json
+
+permissions:
+  contents: read
+  id-token: write
+
+concurrency:
+  group: polymarket-v7-paper-recovery
+  cancel-in-progress: false
+
+jobs:
+  recover:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 12
+    env:
+      AWS_REGION: eu-west-2
+      AWS_DEFAULT_REGION: eu-west-2
+      ROLE_ARN: arn:aws:iam::350769147128:role/PolymarketLondonPaperDeployPolicy
+      INSTANCE_ID: ${{ vars.POLYMARKET_LONDON_INSTANCE_ID || 'i-0fba2bac9fdc5cbeb' }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+
+      - name: Validate request
+        id: req
+        run: |
+          python3 - deploy/v7-recover-clean-paper-quarantine-request.json "$GITHUB_OUTPUT" <<'PY'
+          import json,re,sys
+          v=json.load(open(sys.argv[1]))
+          assert set(v)=={'schema','expected_sha','paper_only','authenticated_execution','real_order_submission','recovery_approved'}
+          assert v['schema']=='polymarket_v7_recover_clean_paper_quarantine_v1'
+          assert re.fullmatch(r'[0-9a-f]{40}',v['expected_sha'])
+          assert v['paper_only'] is True
+          assert v['authenticated_execution'] is False
+          assert v['real_order_submission'] is False
+          assert v['recovery_approved'] is True
+          with open(sys.argv[2],'a') as h:
+              h.write('sha='+v['expected_sha']+'\n')
+          PY
+
+      - uses: aws-actions/configure-aws-credentials@e1253824e5c10ff9df46874f81ed3ec929e19cfd
+        with:
+          role-to-assume: ${{ env.ROLE_ARN }}
+          role-session-name: polymarket-v7-paper-clean-recovery
+          aws-region: eu-west-2
+
+      - name: Recover proven clean PAPER quarantine
+        env:
+          EXPECTED_SHA: ${{ steps.req.outputs.sha }}
+        run: |
+          set -euo pipefail
+          command="$(cat <<'SH'
+          set -euo pipefail
+          SHA=__SHA__
+          PAPER=polymarket-v7-paper.service
+          EXPORTER=polymarket-v7-exporter.service
+
+          test "$(systemctl is-active "$PAPER" || true)" = inactive
+          test "$(systemctl show "$PAPER" -p MainPID --value)" = 0
+
+          envs="$(systemctl show "$PAPER" -p Environment --value)"
+          ROOT="$(python3 - "$envs" "$SHA" <<'PY'
+          import shlex,sys
+          env=dict(x.split('=',1) for x in shlex.split(sys.argv[1]) if '=' in x)
+          sha=sys.argv[2]
+          assert env.get('POLYMARKET_EXPECTED_SHA')==sha
+          assert env.get('PM_V7_MODEL_SHA')==sha
+          assert env.get('PM_V7_AUTHENTICATED_EXECUTION')=='0'
+          assert env.get('PM_V7_REAL_ORDER_SUBMISSION')=='0'
+          root=env.get('PM_V7_RUN_ROOT')
+          assert root and root.startswith('/mnt/polymarket-data/')
+          print(root)
+          PY
+          )"
+
+          python3 - "$ROOT" "$SHA" <<'PY'
+          import json,sys
+          from pathlib import Path
+          root=Path(sys.argv[1]); sha=sys.argv[2]
+          control=root/'control'
+          sup=json.load(open(control/'supervisor_status.json'))
+          run=json.load(open(control/'runtime_status.json'))
+          port=json.load(open(control/'portfolio_state.json'))
+          assert sup.get('state')=='quarantined'
+          assert set(sup.get('reasons') or [])=={'runtime_killed','runtime_pid_dead'}
+          assert sup.get('paper_only') is True
+          assert sup.get('authenticated_execution') is False
+          assert sup.get('real_order_submission') is False
+          assert sup.get('expected_sha')==sha
+
+          assert run.get('state')=='killed' and run.get('killed') is True
+          assert run.get('paper_only') is True
+          assert run.get('authenticated_execution') is False
+          assert run.get('real_order_submission') is False
+          assert run.get('real_capital_at_risk') is False
+          assert run.get('model_sha')==sha
+
+          assert port.get('paper_only') is True
+          assert port.get('authenticated_execution') is False
+          assert port.get('real_order_submission') is False
+          assert port.get('real_capital_at_risk') is False
+          assert port.get('killed') is False
+          assert not (port.get('fatal_engines') or [])
+          assert float(port.get('drawdown') or 0) < float(port.get('max_drawdown') or 0.15)
+          eng=(port.get('engines') or {}).get('CRYPTO_SETTLEMENT_ENGINE') or {}
+          details=eng.get('details') or {}
+          assert eng.get('killed') is False
+          assert int(details.get('open_order_count') or 0)==0
+          assert int(details.get('ledger_records') or 0)==0
+          assert int(details.get('final_count') or 0)==0
+
+          ledger=root/'ledger'/'execution.jsonl'
+          assert ledger.is_file() and not ledger.is_symlink()
+          assert not ledger.read_text(encoding='utf-8').strip()
+
+          kill=control/'KILL'
+          assert kill.is_file() and not kill.is_symlink()
+          assert kill.stat().st_size==0
+          print('CLEAN_PAPER_QUARANTINE_PROVEN=1')
+          PY
+
+          stamp="$(date -u +%Y%m%dT%H%M%SZ)"
+          archive="$ROOT/control/recovery/$stamp"
+          install -d -m 0700 "$archive"
+          for name in KILL runtime_status.json supervisor_status.json supervisor_restarts.json; do
+            if [[ -e "$ROOT/control/$name" ]]; then
+              cp -a "$ROOT/control/$name" "$archive/$name"
+            fi
+          done
+          printf '%s\n' "$SHA" > "$archive/expected_sha"
+          printf '%s\n' clean_technical_shutdown_quarantine > "$archive/recovery_reason"
+
+          rm -f "$ROOT/control/KILL" "$ROOT/control/runtime_status.json" "$ROOT/control/supervisor_status.json"
+          systemctl reset-failed "$PAPER" || true
+          systemctl start "$EXPORTER" || true
+          systemctl start "$PAPER"
+
+          for i in $(seq 1 210); do
+            if [[ "$(systemctl is-active "$PAPER" || true)" == active ]]; then
+              STATUS="$ROOT/research/repricing_book/pure_arb_status.json"
+              if [[ -s "$STATUS" ]] && python3 - "$STATUS" "$SHA" <<'PY' >/dev/null 2>&1
+          import json,sys,time
+          v=json.load(open(sys.argv[1])); sha=sys.argv[2]
+          assert v.get('schema')=='polymarket_v7_pure_arb_paper_status_v1'
+          assert v.get('model_sha')==sha
+          assert v.get('state')=='running'
+          assert v.get('paper_only') is True
+          assert v.get('authenticated_execution') is False
+          assert v.get('real_order_submission') is False
+          assert int(v.get('expected_contexts') or 0)==30
+          assert int(v.get('fee_ready_contexts') or 0)==30
+          assert len(v.get('contexts') or [])==30
+          assert int(time.time()*1000)-int(v.get('timestamp_ms') or 0)<10000
+          PY
+              then
+                break
+              fi
+            fi
+            sleep 1
+          done
+
+          test "$(systemctl is-active "$PAPER")" = active
+          STATUS="$ROOT/research/repricing_book/pure_arb_status.json"
+          python3 - "$STATUS" "$SHA" <<'PY'
+          import json,sys,time
+          v=json.load(open(sys.argv[1])); sha=sys.argv[2]
+          assert v.get('model_sha')==sha
+          assert v.get('state')=='running'
+          assert int(v.get('expected_contexts') or 0)==30
+          assert int(v.get('fee_ready_contexts') or 0)==30
+          assert int(time.time()*1000)-int(v.get('timestamp_ms') or 0)<10000
+          print('PURE_ARB_STATE='+str(v.get('state')))
+          print('PURE_ARB_EVALUATIONS='+str(v.get('evaluations')))
+          print('PURE_ARB_CYCLES='+str(v.get('cycles_total')))
+          print('PURE_ARB_PNL='+str(v.get('paper_locked_pnl_pre_gas_total')))
+          PY
+
+          for i in $(seq 1 60); do
+            q="$(curl -fsS --get --data-urlencode 'query=polymarket_pure_arb_up' http://127.0.0.1:9090/api/v1/query || true)"
+            if python3 - "$q" <<'PY' >/dev/null 2>&1
+          import json,sys
+          v=json.loads(sys.argv[1]); r=v.get('data',{}).get('result',[])
+          assert r and float(r[0]['value'][1])==1.0
+          PY
+            then break
+            fi
+            sleep 1
+          done
+          curl -fsS --get --data-urlencode 'query=polymarket_pure_arb_up' http://127.0.0.1:9090/api/v1/query
+          echo
+          echo PAPER_RECOVERY_OK=1
+          SH
+          )"
+          command="${command/__SHA__/$EXPECTED_SHA}"
+          encoded="$(printf '%s' "$command" | base64 -w0)"
+          wrapped="printf '%s' '$encoded' | base64 -d | bash"
+          params="$(python3 -c 'import json,sys; print(json.dumps({"commands":[sys.argv[1]],"executionTimeout":["420"]},separators=(",",":")))' "$wrapped")"
+          cid="$(aws ssm send-command --instance-ids "$INSTANCE_ID" --document-name AWS-RunShellScript --parameters "$params" --comment "Polymarket V7 clean PAPER quarantine recovery" --region "$AWS_REGION" --query 'Command.CommandId' --output text)"
+          for i in $(seq 1 240); do
+            status="$(aws ssm get-command-invocation --command-id "$cid" --instance-id "$INSTANCE_ID" --region "$AWS_REGION" --query Status --output text 2>/dev/null || true)"
+            if [[ "$status" == "Success" ]]; then
+              aws ssm get-command-invocation --command-id "$cid" --instance-id "$INSTANCE_ID" --region "$AWS_REGION" --query StandardOutputContent --output text
+              exit 0
+            fi
+            case "$status" in Failed|Cancelled|TimedOut)
+              aws ssm get-command-invocation --command-id "$cid" --instance-id "$INSTANCE_ID" --region "$AWS_REGION" --query StandardErrorContent --output text >&2 || true
+              exit 1;;
+            esac
+            sleep 1
+          done
+          exit 1
