@@ -850,6 +850,13 @@ def regime_support_key(row, latency_ms):
     ))
 
 
+def side_regime_support_key(row, latency_ms, side):
+    return "::".join((
+        str(side),
+        regime_support_key(row, latency_ms),
+    ))
+
+
 class DirectActionValueModel:
     """Direct Q(S, q, h | latency) learner with market-block calibration."""
 
@@ -870,6 +877,7 @@ class DirectActionValueModel:
         prequential_calibration_blocks=2,
         maximum_effective_action_age_ms=None,
         minimum_regime_action_targets=0,
+        minimum_side_regime_action_targets=0,
     ):
         self.size_grid = tuple(float(v) for v in size_grid)
         self.action_horizons_ms = tuple(int(v) for v in action_horizons_ms)
@@ -889,6 +897,8 @@ class DirectActionValueModel:
         )
         self.minimum_regime_action_targets = int(
             minimum_regime_action_targets)
+        self.minimum_side_regime_action_targets = int(
+            minimum_side_regime_action_targets)
         if (
             self.maximum_effective_action_age_ms is not None
             and (
@@ -900,6 +910,9 @@ class DirectActionValueModel:
                 "positive finite maximum effective action age required")
         if self.minimum_regime_action_targets < 0:
             raise ValueError("nonnegative regime support threshold required")
+        if self.minimum_side_regime_action_targets < 0:
+            raise ValueError(
+                "nonnegative side-regime support threshold required")
         if self.max_sizes_per_state <= 0 or self.streaming_batch_size <= 0:
             raise ValueError("positive direct-action capacity limits required")
         if self.selection_calibration_mode not in ("PREQUENTIAL", "OFF"):
@@ -1096,6 +1109,7 @@ class DirectActionValueModel:
 
     def _iter_training_actions(
         self, rows, *, markets=None, state_counter=None, regime_counter=None,
+        side_regime_counter=None,
     ):
         market_filter = set(markets) if markets is not None else None
         for row in rows:
@@ -1153,6 +1167,11 @@ class DirectActionValueModel:
                                 regime_counter[
                                     regime_support_key(row, latency)
                                 ] += 1
+                            if side_regime_counter is not None:
+                                side_regime_counter[
+                                    side_regime_support_key(
+                                        row, latency, side)
+                                ] += 1
                             yield action
 
 
@@ -1185,6 +1204,8 @@ class DirectActionValueModel:
             prequential_calibration_blocks=self.prequential_calibration_blocks,
             maximum_effective_action_age_ms=self.maximum_effective_action_age_ms,
             minimum_regime_action_targets=self.minimum_regime_action_targets,
+            minimum_side_regime_action_targets=(
+                self.minimum_side_regime_action_targets),
         )
 
     def _prequential_selected_policy_calibration(
@@ -1460,12 +1481,14 @@ class DirectActionValueModel:
 
         def factory(
             market_subset=None, counter=None, regime_counter=None,
+            side_regime_counter=None,
         ):
             return lambda: self._iter_training_actions(
                 rows,
                 markets=market_subset,
                 state_counter=counter,
                 regime_counter=regime_counter,
+                side_regime_counter=side_regime_counter,
             )
 
         self.uncertainty_floor = 1e-6
@@ -1512,6 +1535,7 @@ class DirectActionValueModel:
 
         target_states = Counter()
         regime_action_targets = Counter()
+        side_regime_action_targets = Counter()
         if fit_markets and scale_markets and calibration_markets:
             provisional = StreamingRidge(
                 self.model_feature_names, ridge=self.ridge,
@@ -1536,6 +1560,7 @@ class DirectActionValueModel:
                         mean_fit_markets,
                         target_states,
                         regime_action_targets,
+                        side_regime_action_targets,
                     ),
                     lambda action: action["target"])
 
@@ -1573,7 +1598,12 @@ class DirectActionValueModel:
             deployment_mean = StreamingRidge(
                 self.model_feature_names, ridge=self.ridge,
                 batch_size=self.streaming_batch_size).fit_factory(
-                    factory(None, target_states, regime_action_targets),
+                    factory(
+                        None,
+                        target_states,
+                        regime_action_targets,
+                        side_regime_action_targets,
+                    ),
                     lambda action: action["target"])
 
         if self.scale_model is None:
@@ -1582,6 +1612,8 @@ class DirectActionValueModel:
 
         self.mean_model = deployment_mean
         self.regime_action_target_counts = dict(regime_action_targets)
+        self.side_regime_action_target_counts = dict(
+            side_regime_action_targets)
         training_states_used = sum(
             1 for row in rows if str(row["market_id"]) in mean_fit_markets)
         self.training_receipt = {
@@ -1612,8 +1644,15 @@ class DirectActionValueModel:
             ),
             "minimum_regime_action_targets": (
                 self.minimum_regime_action_targets),
+            "minimum_side_regime_action_targets": (
+                self.minimum_side_regime_action_targets),
             "regime_action_target_counts": dict(
                 sorted(self.regime_action_target_counts.items())),
+            "side_regime_action_target_counts": dict(
+                sorted(self.side_regime_action_target_counts.items())),
+            "bilateral_side_support_semantics": (
+                "YES_AND_NO_REQUIRE_THEIR_OWN_CAUSAL_ACTION_TARGET_SUPPORT"
+            ),
             "action_space": ["NO_TRADE", "YES_X_SIZE_X_EXIT_HORIZON", "NO_X_SIZE_X_EXIT_HORIZON"],
             "opposite_side_counterfactual": "AVAILABLE_ONLY_WITH_CAUSAL_BILATERAL_L1_DECISION_ARRIVAL_AND_EXIT_EVIDENCE",
             "entry_cap": self.entry_cap,
@@ -1825,6 +1864,14 @@ class DirectActionValueModel:
             "regime_action_target_support": int(
                 getattr(self, "regime_action_target_counts", {}).get(
                     regime_support_key(row, latency_ms), 0)),
+            "side_regime_support_key": side_regime_support_key(
+                row, latency_ms, side),
+            "side_regime_action_target_support": int(
+                getattr(
+                    self, "side_regime_action_target_counts", {}
+                ).get(
+                    side_regime_support_key(row, latency_ms, side), 0
+                )),
             "notional": float(notional),
         }
         residual = residual_policy_friction(
@@ -2009,7 +2056,19 @@ class DirectActionValueModel:
             return [], "OUTSIDE_LIVE_GEOMETRY"
 
         scored = []
-        for side in decision_action_sides(row):
+        sides_considered = decision_action_sides(row)
+        side_support_rejections = 0
+        for side in sides_considered:
+            side_key = side_regime_support_key(row, latency_ms, side)
+            side_support = int(
+                getattr(self, "side_regime_action_target_counts", {}).get(
+                    side_key, 0))
+            if (
+                self.minimum_side_regime_action_targets > 0
+                and side_support < self.minimum_side_regime_action_targets
+            ):
+                side_support_rejections += 1
+                continue
             lower, upper = self._quantity_bounds(row, available_capital, side)
             if upper + 1e-12 < lower or upper <= 0:
                 continue
@@ -2050,7 +2109,14 @@ class DirectActionValueModel:
             ),
             reverse=True,
         )
-        return scored, "READY" if scored else "NO_FEASIBLE_ACTION"
+        if scored:
+            return scored, "READY"
+        if (
+            sides_considered
+            and side_support_rejections == len(sides_considered)
+        ):
+            return [], "INSUFFICIENT_SIDE_REGIME_SUPPORT"
+        return [], "NO_FEASIBLE_ACTION"
 
     def select_action(self, row, *, latency_ms=50, available_capital=None,
                       live_geometry=True, minimum_lower_value=0.0,
