@@ -15,6 +15,9 @@ def test_collection_plane_is_separate_from_trading_model_lifecycle():
     assert "v7_runtime_resource_plan.py" not in script
     assert "trading_runtime_resource_plan_required" in script
     assert "PM_V7_COLLECTION_NICE" in script
+    assert 'export NO_PROXY="127.0.0.1,localhost"' in script
+    assert 'export no_proxy="$NO_PROXY"' in script
+    assert script.index('export NO_PROXY="127.0.0.1,localhost"') < script.index('export no_proxy="$NO_PROXY"')
 
 
 def test_collection_service_has_its_own_systemd_lifecycle_and_root():
