@@ -28,6 +28,7 @@ from research.walk_forward_v3.direct_action import (
     summarize_direct_action,
     merge_direct_action_summaries,
     bilateral_evidence_summary,
+    regime_support_key,
     evaluate_latency_age_surface,
     summarize_effective_age_buckets,
 )
@@ -1707,3 +1708,86 @@ def test_diagnostic_support_mode_never_changes_policy_utility():
         best["base_lower_cash_before_support"],
         abs_tol=1e-12,
     )
+
+
+
+def test_bilateral_side_support_rejects_unsupported_leg_but_keeps_supported_leg():
+    import numpy as np
+
+    r = bilateral_row("m14001", no_depth=10.0)
+    model = DirectActionValueModel(
+        action_horizons_ms=(500,),
+        train_latencies_ms=(50,),
+        minimum_side_regime_action_targets=2,
+        selection_calibration_mode="OFF",
+    )
+    model._configure_levels([r])
+
+    class FlatModel:
+        def __init__(self, names):
+            self.names = tuple(names)
+            self.scale = {name: 1.0 for name in self.names}
+            self.beta = np.zeros(1 + 2 * len(self.names), dtype=float)
+            self.beta[0] = 1.0
+        def predict(self, record):
+            return 1.0
+
+    base = regime_support_key(r, 50)
+    model.regime_action_target_counts = {base: 10}
+    model.side_regime_action_target_counts = {
+        "YES::" + base: 5,
+        "NO::" + base: 0,
+    }
+    model.mean_model = FlatModel(model.model_feature_names)
+    model.scale_model = None
+    model.support_model = None
+    model.uncertainty_floor = 0.0
+    model.calibration_multiplier = 1.0
+    model.selection_optimism_penalty = 0.0
+    model.fitted = True
+
+    scored, state = model.score_actions(r, latency_ms=50)
+    assert state == "READY"
+    assert scored
+    assert all(item["side"] == "YES" for item in scored)
+    assert all(item["side_regime_action_target_support"] >= 2 for item in scored)
+
+
+def test_bilateral_side_support_fails_closed_if_both_sides_unsupported():
+    import numpy as np
+
+    r = bilateral_row("m14002", no_depth=10.0)
+    model = DirectActionValueModel(
+        action_horizons_ms=(500,),
+        train_latencies_ms=(50,),
+        minimum_side_regime_action_targets=2,
+        selection_calibration_mode="OFF",
+    )
+    model._configure_levels([r])
+
+    class FlatModel:
+        def __init__(self, names):
+            self.names = tuple(names)
+            self.scale = {name: 1.0 for name in self.names}
+            self.beta = np.zeros(1 + 2 * len(self.names), dtype=float)
+            self.beta[0] = 1.0
+        def predict(self, record):
+            return 1.0
+
+    base = regime_support_key(r, 50)
+    model.regime_action_target_counts = {base: 10}
+    model.side_regime_action_target_counts = {}
+    model.mean_model = FlatModel(model.model_feature_names)
+    model.scale_model = None
+    model.support_model = None
+    model.uncertainty_floor = 0.0
+    model.calibration_multiplier = 1.0
+    model.selection_optimism_penalty = 0.0
+    model.fitted = True
+
+    scored, state = model.score_actions(r, latency_ms=50)
+    assert scored == []
+    assert state == "INSUFFICIENT_SIDE_REGIME_SUPPORT"
+    selected = model.select_action(r, latency_ms=50)
+    assert selected["action"] == "NO_TRADE"
+    assert selected["reason"] == "INSUFFICIENT_SIDE_REGIME_SUPPORT"
