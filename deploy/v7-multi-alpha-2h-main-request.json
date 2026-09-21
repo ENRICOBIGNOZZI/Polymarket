@@ -1,9 +1,9 @@
 {
   "schema": "polymarket_v7_multi_alpha_2h_main_request_v1",
   "version": 1,
-  "request_id": "multi-alpha-2h-native-kind6-gallery-20260921",
+  "request_id": "multi-alpha-2h-native-library-gallery-20260921",
   "instance_id": "i-0fba2bac9fdc5cbeb",
-  "expected_research_sha": "0c8e165b22e8e1b53d97f92afc089d1e904c1fbb",
+  "expected_research_sha": "ec5580a41012c276a49ec8711b51529d15e13e3e",
   "baseline_code_sha": "0f115313c80c72fd9ee52afc36a5f3a8af85f981",
   "minimum_wall_ns": 1790007780000000000,
   "research_branch": "multi-alpha-2h-20260921",
