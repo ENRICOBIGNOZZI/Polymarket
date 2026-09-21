@@ -204,6 +204,10 @@ NativeCryptoDecisionResult NativeCryptoDecisionLane::construct_candidate(
         && policy_.target_notional_microdollars > 0) {
         selected_quantity = quantity_for_notional_microdollars(
             policy_.target_notional_microdollars, intended_limit_e4);
+        if (policy_.clip_capital_target_to_visible_depth != 0) {
+            selected_quantity = std::min(
+                selected_quantity, book.best_ask_microunits);
+        }
     }
     if (selected_quantity <= 0
         || instrument.min_order_microunits > selected_quantity
