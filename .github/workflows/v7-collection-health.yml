@@ -37,14 +37,15 @@ jobs:
         run: |
           python3 - <<'PY'
           import json
+          import re
           value=json.load(open('deploy/v7-collection-health-request.json',encoding='utf-8'))
-          assert value == {
-              'schema':'polymarket_v7_collection_health_request_v1',
-              'paper_only':True,
-              'authenticated_execution':False,
-              'real_order_submission':False,
-              'operation':'READ_ONLY_HEALTH',
-          }
+          assert value.get('schema')=='polymarket_v7_collection_health_request_v1'
+          assert re.fullmatch(r'[A-Za-z0-9._:-]{8,128}',value.get('request_id') or '')
+          assert value.get('paper_only') is True
+          assert value.get('authenticated_execution') is False
+          assert value.get('real_order_submission') is False
+          assert value.get('operation')=='READ_ONLY_HEALTH'
+          assert value.get('model_independent') is True
           PY
 
       - name: Configure AWS credentials through OIDC
