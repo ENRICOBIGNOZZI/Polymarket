@@ -22,6 +22,10 @@ runs/
 run/
 .private_validation/
 /deploy-evidence.txt
+# Published PAPER research receipts, tables and PNGs belong in docs/research
+# and must remain versioned. Raw captures and private credentials stay out.
+!docs/research/
+!docs/research/**
 artifacts/
 !artifacts/
 artifacts/*

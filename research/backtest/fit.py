@@ -25,7 +25,12 @@ from research.learning.validation import metrics
 
 def timestamp(value):
     if not value:return None
-    try:return int(datetime.fromisoformat(str(value).replace('Z','+00:00')).timestamp()*1e9)
+    text=str(value).replace('Z','+00:00')
+    # Gamma has emitted both RFC3339 and the compact ``+00`` offset. Python
+    # 3.9 accepts the former but not the latter; normalize before parsing so a
+    # valid reported resolution is not silently treated as unavailable.
+    if text.endswith(('+00','-00')):text += ':00'
+    try:return int(datetime.fromisoformat(text).timestamp()*1e9)
     except ValueError:return None
 
 

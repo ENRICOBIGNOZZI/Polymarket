@@ -1,0 +1,38 @@
+name: Historical walk-forward V2 research gate
+
+on:
+  pull_request:
+    paths:
+      - "research/walk_forward_v2/**"
+      - "tests/test_historical_walk_forward_v2.py"
+      - "ops/v7_historical_walk_forward_v2_ssm.py"
+      - ".github/workflows/v7-historical-walk-forward-v2.yml"
+      - ".github/workflows/v7-walk-forward-v2-ci.yml"
+      - "deploy/v7-historical-walk-forward-v2-request.json"
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    env:
+      OMP_NUM_THREADS: "1"
+      OPENBLAS_NUM_THREADS: "1"
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          fetch-depth: 0
+      - name: Install isolated research dependencies
+        run: |
+          python3 -m venv /tmp/v7-wfv2
+          /tmp/v7-wfv2/bin/pip install -r research/requirements-learning.txt
+      - name: Compile V2 and SSM runner
+        run: |
+          /tmp/v7-wfv2/bin/python -m py_compile research/walk_forward_v2/*.py ops/v7_historical_walk_forward_v2_ssm.py
+      - name: Run V2 causal regressions
+        run: /tmp/v7-wfv2/bin/python -m pytest tests/test_historical_walk_forward_v2.py -q
+      - name: Repository whitespace gate
+        run: git diff --check origin/main...HEAD
