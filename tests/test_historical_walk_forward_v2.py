@@ -280,6 +280,10 @@ def test_native_kind6_repricing_label_populates_oos_target_and_arrival():
         "no_bid_e4": 4900, "no_ask_e4": 5000,
         "yes_bid_quantity": 3_000_000, "yes_ask_quantity": 4_000_000,
         "no_bid_quantity": 5_000_000, "no_ask_quantity": 6_000_000,
+        "yes_bid_e4": 5000, "yes_ask_e4": 5100,
+        "no_bid_e4": 4900, "no_ask_e4": 5000,
+        "yes_bid_quantity": 3_000_000, "yes_ask_quantity": 4_000_000,
+        "no_bid_quantity": 5_000_000, "no_ask_quantity": 6_000_000,
     }
     parsed = native_repricing_point(label)
     assert parsed is not None
@@ -291,6 +295,10 @@ def test_native_kind6_repricing_label_populates_oos_target_and_arrival():
     arrival = origin["arrivals"]["100"]
     assert math.isclose(arrival["ask"], .51, abs_tol=1e-12)
     assert arrival["quantity"] == 4.0
+    assert arrival["pair"]["state"] == "BILATERAL_EXECUTABLE_READY"
+    assert arrival["pair"]["yes"]["ask_quantity"] == 4.0
+    assert arrival["pair"]["no"]["ask_quantity"] == 6.0
+    assert origin["targets"]["100"]["pair"] == arrival["pair"]
     assert arrival["pair"]["NO"]["ask_quantity"] == 6.0
     assert origin["targets"]["100"]["pair"]["YES"]["bid_quantity"] == 3.0
 
