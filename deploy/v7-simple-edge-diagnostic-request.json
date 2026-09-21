@@ -1,0 +1,14 @@
+{
+  "schema": "polymarket_v7_simple_edge_diagnostic_request_v1",
+  "version": 1,
+  "request_id": "simple-edge-two-hour-20260921T2055CEST",
+  "instance_id": "i-0fba2bac9fdc5cbeb",
+  "expected_research_sha": "49383848f8c5ee562f745d0dd8d278a693f688e8",
+  "minimum_wall_ns": 1790007780000000000,
+  "output_directory": "docs/research/simple-edge-fast-2026-09-21",
+  "paper_only": true,
+  "authenticated_execution": false,
+  "real_order_submission": false,
+  "real_capital_at_risk": false,
+  "automatic_promotion": false
+}
