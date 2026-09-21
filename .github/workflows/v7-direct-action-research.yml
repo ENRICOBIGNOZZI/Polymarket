@@ -68,12 +68,21 @@ jobs:
           assert result["mean_covariance_estimation"] is False
           assert result["summary"]["opportunities"]>0
           assert len(result["folds"])>0
+          bilateral=result.get("bilateral_evidence") or {}
+          assert bilateral.get("schema")=="polymarket_direct_action_value_v3_bilateral_evidence_v1"
+          assert isinstance(bilateral.get("decision_pair_states"),dict)
+          assert result.get("output_semantics")==(
+              "FULL_OOS_OUTCOMES_ARE_SUMMARIZED_NOT_SERIALIZED;"
+              "BOUNDED_SELECTED_TRADE_DIAGNOSTICS_ONLY"
+          )
           for fold in result["folds"]:
               training=fold["training"]
               assert training["mean_covariance_estimation"] is False
               assert training["training_state_cap"] is None
               assert training["matrix_strategy"]=="ONE_PASS_SUFFICIENT_STATISTICS_THEN_P_X_P_NORMAL_EQUATIONS"
               assert training["policy_loss"]=="NEGATIVE_POLICY_UTILITY_WITH_NO_TRADE_BASELINE_ZERO"
+              embedded=set(training["execution_frictions_in_training_target"])
+              assert "exit_l1_capacity_and_zero_value_residual_lower_bound" in embedded
               assert training["gram_matrix_bytes"] < 5_000_000
           print(json.dumps({
               "state":result["state"],
@@ -83,6 +92,8 @@ jobs:
               "total_observed_net_pnl":result["summary"]["total_observed_net_pnl"],
               "max_active_positions":result["summary"]["max_active_positions"],
               "max_gross_notional":result["summary"]["max_gross_notional"],
+              "bilateral_ready_fraction":bilateral.get("bilateral_ready_decision_fraction"),
+              "bilateral_pair_states":bilateral.get("decision_pair_states"),
           },sort_keys=True))
           PY
 
