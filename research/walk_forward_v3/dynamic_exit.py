@@ -7,9 +7,13 @@ with executable proceeds available now. No trading authority or promotion.
 from __future__ import annotations
 
 from collections import Counter
+import argparse
 import math
+from pathlib import Path
 
-from research.walk_forward_v2.core import SAFETY, fee_per_share, finite
+from research.walk_forward_v2.core import (
+    SAFETY, atomic_json, build_dataset, fee_per_share, finite,
+)
 from research.walk_forward_v3.direct_action import (
     DEFAULT_ACTION_HORIZONS_MS,
     DirectActionValueModel,
@@ -237,3 +241,68 @@ class DynamicExitValueModel:
             **best,
             "re_evaluate_on_next_causal_book_update": True,
         }
+
+
+
+def summarize_dynamic_exit(model, rows, *, position_size=1.0):
+    counts=Counter()
+    observed=0
+    realized=0.0
+    for row in rows:
+        for side in decision_action_sides(row):
+            decision=model.decide(
+                row, side=side, position_size=position_size)
+            action=str(decision.get("action") or "UNKNOWN")
+            counts[action]+=1
+            if action!="HOLD":
+                continue
+            horizon=int(decision["additional_horizon_ms"])
+            value,state=hold_incremental_value(
+                row,side=side,horizon_ms=horizon,size=position_size)
+            if value is not None:
+                observed+=1
+                realized+=float(value)
+            else:
+                counts["HOLD_CENSORED_"+str(state)]+=1
+    return {
+        "schema":SCHEMA+"_diagnostic_v1",
+        **SAFETY,
+        "diagnostic_only":True,
+        "automatic_promotion":False,
+        "position_size":float(position_size),
+        "decisions":dict(sorted(counts.items())),
+        "observed_hold_outcomes":observed,
+        "realized_incremental_hold_value":realized,
+    }
+
+
+def main(argv=None):
+    p=argparse.ArgumentParser(description=__doc__)
+    p.add_argument("--root",type=Path,required=True)
+    p.add_argument("--output",type=Path,required=True)
+    p.add_argument("--minimum-wall-ns",type=int,required=True)
+    a=p.parse_args(argv)
+    data=build_dataset(
+        a.root,minimum_wall_ns=a.minimum_wall_ns,
+        include_settlement_labels=False,use_compact_window_index=True)
+    if data.get("input_state")!="READY":
+        out={"schema":SCHEMA,**SAFETY,"state":data.get("input_state")}
+        atomic_json(a.output,out)
+        return 2
+    rows=data["decisions"]
+    model=DynamicExitValueModel().fit(rows)
+    out={
+        "schema":SCHEMA,
+        **SAFETY,
+        "state":"READY",
+        "automatic_promotion":False,
+        "training_receipt":model.training_receipt,
+        "diagnostic":summarize_dynamic_exit(model,rows),
+        "data_sha256":data.get("data_sha256"),
+    }
+    atomic_json(a.output,out)
+    return 0
+
+
+if __name__=="__main__":
+    raise SystemExit(main())
