@@ -84,7 +84,8 @@ PYTHONPATH={remote}/src:{ctx['app_dir']} nice -n 18 venv/bin/python -m research.
   --root {ctx['run_root']} \
   --output-dir {remote}/output \
   --minimum-wall-ns {a.minimum_wall_ns} \
-  --code-sha {a.expected_sha}
+  --code-sha {a.expected_sha} \
+  --skip-gallery
 python3 - {remote}/output <<'PY'
 import json,sys
 from pathlib import Path
@@ -100,8 +101,6 @@ assert manifest['evidence_source']=='NATIVE_KIND6_CAUSAL_REPRICING'
 assert len(summary['strategies'])==11
 assert (root/'equity_grid.json').is_file()
 assert (root/'pnl_grid.csv').is_file()
-gallery=json.load(open(root/'equity_gallery/manifest.json'))
-assert gallery['total_equity_curves']==660
 print('NATIVE_EQUITY_2H_READY')
 print(json.dumps({{'window_start_ns':manifest['window_start_ns'],'window_end_ns':manifest['window_end_ns'],'rows':manifest['rows'],'assets':manifest['assets'],'summary':summary['strategies']}},sort_keys=True))
 PY
@@ -117,6 +116,9 @@ PY"""
     info=json.loads(marker.split("=",1)[1])
     payload=download_large(a.instance_id,remote,info)
     extract(payload,a.output_dir)
+    from research.walk_forward_v3.native_equity_grid_2h import render_gallery
+    local_results=json.loads((a.output_dir/"equity_grid.json").read_text(encoding="utf-8"))["results"]
+    render_gallery(a.output_dir,local_results)
     run(REGION,a.instance_id,f"rm -rf {remote}",60)
     print("native_equity_output="+str(a.output_dir))
     return 0
