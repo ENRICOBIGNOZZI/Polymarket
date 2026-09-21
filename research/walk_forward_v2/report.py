@@ -271,7 +271,7 @@ def _support_statement(metrics, uncertainty):
             else "ZERO POINT ESTIMATE / INSUFFICIENT EVIDENCE")
 
 
-def publish(output, *, root, start_sha, data, folds, economics):
+def publish(output, *, root, start_sha, data, folds, economics, final_models):
     output = Path(output)
     output.mkdir(parents=True, exist_ok=True)
     audit, data_manifest, methodology = audit_receipt(root, start_sha), manifest(data), method()
@@ -298,10 +298,12 @@ def publish(output, *, root, start_sha, data, folds, economics):
                                   "primary": methodology["primary_latency"], "fixed": public.get("latency", {})},
         "uncertainty.json": {"schema": SCHEMA + "_uncertainty_v1", **SAFETY,
                               "models": {key: value["uncertainty"] for key, value in public.get("models", {}).items()}},
+        "full_window_repricing_models.json": final_models,
     }
     values["results.json"] = {"schema": SCHEMA + "_results_v1", **SAFETY, "start_sha": start_sha,
                               "audit_sha256": digest(audit), "data_sha256": data_manifest["data_sha256"],
-                              "fold_sha256": digest(folds), "economic_sha256": digest(public)}
+                              "fold_sha256": digest(folds), "economic_sha256": digest(public),
+                              "full_window_model_sha256": digest(final_models)}
     for name, value in values.items():
         atomic_json(output / name, value)
     charts = chart(output, data_manifest["input_state"], economics)
@@ -327,6 +329,8 @@ def publish(output, *, root, start_sha, data, folds, economics):
         "- Markets: " + str(data_manifest["unique_markets"]),
         "- Short-horizon pairs: " + str(data_manifest["short_horizon_observed_pairs"]),
         "- OOS predictions: " + str(folds.get("oos_predictions",0)),
+        "- Full-window repricing models ready: " + str(sum(
+            value.get("state") == "READY" for value in final_models.get("models", {}).values())),
         "", "## Selected combined-policy economics", "",
         "- Simulated orders: " + str(selected_metrics.get("simulated_orders")),
         "- Fills: " + str(selected_metrics.get("fills")),
