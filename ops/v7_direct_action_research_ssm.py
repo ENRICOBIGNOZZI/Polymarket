@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Run direct-action value research on the active London PAPER host via SSM.
 
-Runtime evidence remains in London.  Only the bounded public-safe JSON result is
+Runtime evidence remains in London.  Only the public-safe JSON result is
 returned.  This script does not deploy, restart, submit, cancel or promote any
 trading process.
 """
@@ -37,7 +37,7 @@ def load_request(path: Path) -> dict:
     value = json.loads(path.read_text(encoding="utf-8"))
     required = {
         "schema", "version", "request_id", "instance_id", "minimum_wall_ns",
-        "folds", "latency_ms", "capital_budget", "max_training_states",
+        "folds", "latency_ms", "capital_budget",
         "output_directory", "paper_only", "authenticated_execution",
         "real_order_submission", "real_capital_at_risk",
     }
@@ -61,8 +61,6 @@ def load_request(path: Path) -> dict:
         raise ValueError("invalid capital budget")
     if not 1 <= float(value["capital_budget"]) <= 100_000:
         raise ValueError("capital budget outside bounded research range")
-    if not isinstance(value["max_training_states"], int) or not 1_000 <= value["max_training_states"] <= 100_000:
-        raise ValueError("invalid training state cap")
     if not re.fullmatch(
         r"docs/research/direct-action-value-[0-9]{4}-[0-9]{2}-[0-9]{2}",
         value["output_directory"],
@@ -144,8 +142,7 @@ PYTHONPATH={remote}/src:{app_dir} venv/bin/python -m research.walk_forward_v3.di
   --minimum-wall-ns {request['minimum_wall_ns']} \
   --folds {request['folds']} \
   --latency-ms {request['latency_ms']} \
-  --capital-budget {request['capital_budget']} \
-  --max-training-states {request['max_training_states']}
+  --capital-budget {request['capital_budget']}
 tar -C {remote}/output -czf {remote}/results.tgz .
 python3 - <<'PY'
 import hashlib,json
