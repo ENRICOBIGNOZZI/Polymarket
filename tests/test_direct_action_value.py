@@ -1562,3 +1562,127 @@ def test_negative_bilateral_support_threshold_is_rejected():
         assert "minimum bilateral opposite-side markets" in str(exc)
     else:
         raise AssertionError("expected negative bilateral support threshold to fail")
+
+
+
+def test_support_examples_distinguish_censoring_no_fill_and_full_round_trip():
+    full = row("m9600", exit_bid=.56, depth=20.0)
+    censored = row("m9601", exit_bid=.56, depth=20.0)
+    censored["targets"] = {}
+    no_fill = row("m9602", exit_bid=.56, depth=20.0)
+    no_fill["arrivals"]["50"]["ask"] = .51
+
+    model = DirectActionValueModel(
+        size_grid=(5.0,),
+        action_horizons_ms=(500,),
+        train_latencies_ms=(50,),
+        support_heads_enabled=True,
+        selection_calibration_mode="OFF",
+    )
+    model._configure_levels([full, censored, no_fill])
+
+    examples = list(model._iter_support_examples(
+        [full, censored, no_fill]))
+    by_market = {}
+    for item in examples:
+        by_market.setdefault(item["market_id"], []).append(item)
+
+    assert by_market["m9600"][0]["evidence_support_target"] == 1.0
+    assert by_market["m9600"][0]["full_execution_target"] == 1.0
+    assert by_market["m9601"][0]["evidence_support_target"] == 0.0
+    assert by_market["m9601"][0]["full_execution_target"] == 0.0
+    assert by_market["m9602"][0]["evidence_support_target"] == 1.0
+    assert by_market["m9602"][0]["full_execution_target"] == 0.0
+
+
+def test_support_gate_can_reject_action_without_redefining_pnl_target():
+    import numpy as np
+
+    r = row("m9603", exit_bid=.56, depth=20.0)
+    model = DirectActionValueModel(
+        size_grid=(5.0,),
+        action_horizons_ms=(500,),
+        train_latencies_ms=(50,),
+        minimum_evidence_support_probability=.7,
+        minimum_full_execution_probability=.6,
+        selection_calibration_mode="OFF",
+    )
+    model._configure_levels([r])
+
+    class ConstantModel:
+        def __init__(self, names, value):
+            self.names = tuple(names)
+            self.value = float(value)
+            self.center = {name: 0.0 for name in names}
+            self.scale = {name: 1.0 for name in names}
+            self.beta = np.zeros(1 + 2 * len(names), dtype=float)
+            self.beta[0] = self.value
+
+        def predict(self, record):
+            return self.value
+
+    model.mean_model = ConstantModel(model.model_feature_names, 1.0)
+    model.scale_model = None
+    model.uncertainty_floor = 0.0
+    model.calibration_multiplier = 1.0
+    model.selection_optimism_penalty = 0.0
+    model.evidence_support_model = ConstantModel(
+        model.model_feature_names, .65)
+    model.full_execution_model = ConstantModel(
+        model.model_feature_names, .90)
+    model.fitted = True
+
+    scored, state = model.score_actions(r, latency_ms=50)
+    assert scored == []
+    assert state == "ACTION_SUPPORT_GATE"
+
+    model.minimum_evidence_support_probability = .6
+    scored, state = model.score_actions(r, latency_ms=50)
+    assert state == "READY"
+    assert scored
+    assert scored[0]["evidence_support_probability"] == .65
+    assert scored[0]["full_execution_probability"] == .90
+    assert scored[0]["support_eligible"] is True
+    assert scored[0]["predicted_total_net_cash_pnl"] == 1.0
+
+
+def test_support_heads_are_fitted_on_precalibration_training_rows():
+    rows = []
+    for index in range(40):
+        item = row(
+            "m" + str(index + 9610),
+            exit_bid=.56 if index % 2 == 0 else .44,
+            depth=20.0,
+        )
+        if index % 5 == 0:
+            item["targets"] = {}
+        rows.append(item)
+
+    model = DirectActionValueModel(
+        size_grid=(5.0,),
+        action_horizons_ms=(500,),
+        train_latencies_ms=(50,),
+        support_heads_enabled=True,
+        selection_calibration_mode="OFF",
+        streaming_batch_size=16,
+    ).fit(rows)
+    receipt = model.training_receipt["action_support_heads"]
+    assert receipt["enabled"] is True
+    assert receipt["state"] == "READY"
+    assert receipt["used_as_economic_pnl"] is False
+    assert receipt["role"] == "SELECTION_SUPPORT_GATE_ONLY"
+    assert model.evidence_support_model is not None
+    assert model.full_execution_model is not None
+
+
+def test_support_probability_thresholds_are_bounded():
+    for kwargs in (
+        {"minimum_evidence_support_probability": 1.1},
+        {"minimum_full_execution_probability": -0.1},
+    ):
+        try:
+            DirectActionValueModel(**kwargs)
+        except ValueError as exc:
+            assert "probability" in str(exc)
+        else:
+            raise AssertionError("expected invalid support threshold to fail")
