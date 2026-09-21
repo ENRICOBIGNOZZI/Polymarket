@@ -575,14 +575,27 @@ class StreamingRidge:
     factory is enough to compute the standardized Gram matrix exactly.
     """
 
-    def __init__(self, names, *, ridge=8.0, batch_size=4096):
+    def __init__(
+        self, names, *, ridge=8.0, batch_size=4096,
+        deviation_penalty_multiplier=1.0,
+        deviation_prefix="pool.",
+    ):
         self.names = tuple(names)
         self.ridge = float(ridge)
         self.batch_size = int(batch_size)
+        self.deviation_penalty_multiplier = float(
+            deviation_penalty_multiplier)
+        self.deviation_prefix = str(deviation_prefix)
         if not self.names or not finite(self.ridge) or self.ridge <= 0:
             raise ValueError("valid streaming ridge specification required")
         if self.batch_size <= 0:
             raise ValueError("positive streaming ridge batch size required")
+        if (
+            not finite(self.deviation_penalty_multiplier)
+            or self.deviation_penalty_multiplier < 1.0
+        ):
+            raise ValueError(
+                "deviation penalty multiplier must be finite and >= 1")
 
     def fit_factory(self, factory, target):
         import numpy as np
@@ -720,6 +733,14 @@ class StreamingRidge:
 
         penalty = np.eye(dimension, dtype=np.float64) * self.ridge
         penalty[0, 0] = 0.0
+        for j, name in enumerate(self.names):
+            multiplier = (
+                self.deviation_penalty_multiplier
+                if name.startswith(self.deviation_prefix)
+                else 1.0
+            )
+            penalty[1 + j, 1 + j] = self.ridge * multiplier
+            penalty[1 + p + j, 1 + p + j] = self.ridge * multiplier
         regularized = gram + penalty
         try:
             beta = np.linalg.solve(regularized, rhs)
@@ -738,6 +759,8 @@ class StreamingRidge:
         variance = max(0.0, float(sum_y2 / n) - self.target_mean ** 2)
         self.target_std = float(math.sqrt(variance))
         self.condition_number = float(np.linalg.cond(regularized))
+        self.deviation_feature_count = sum(
+            name.startswith(self.deviation_prefix) for name in self.names)
         return self
 
     def row(self, record):
@@ -865,6 +888,8 @@ class DirectActionValueModel:
         selection_calibration_mode="PREQUENTIAL",
         prequential_calibration_blocks=2,
         maximum_effective_signal_age_ms=None,
+        partial_pooling_enabled=True,
+        partial_pooling_penalty_multiplier=4.0,
     ):
         self.size_grid = tuple(float(v) for v in size_grid)
         self.action_horizons_ms = tuple(int(v) for v in action_horizons_ms)
@@ -882,6 +907,15 @@ class DirectActionValueModel:
             if maximum_effective_signal_age_ms is None
             else float(maximum_effective_signal_age_ms)
         )
+        self.partial_pooling_enabled = bool(partial_pooling_enabled)
+        self.partial_pooling_penalty_multiplier = float(
+            partial_pooling_penalty_multiplier)
+        if (
+            not finite(self.partial_pooling_penalty_multiplier)
+            or self.partial_pooling_penalty_multiplier < 1.0
+        ):
+            raise ValueError(
+                "partial pooling penalty multiplier must be finite and >= 1")
         if (
             self.maximum_effective_signal_age_ms is not None
             and (
@@ -952,6 +986,25 @@ class DirectActionValueModel:
         names.extend("contract::" + horizon for horizon in self.contract_horizons)
         names.extend("exit::" + str(h) for h in self.action_horizons_ms)
         names.extend("latency::" + str(v) for v in self.train_latencies_ms)
+        if self.partial_pooling_enabled:
+            for asset in self.assets:
+                names.extend([
+                    "pool.asset_signal::" + asset,
+                    "pool.asset_abs_signal::" + asset,
+                    "pool.asset_effective_age::" + asset,
+                    "pool.asset_signal_age::" + asset,
+                ])
+                for exit_horizon in self.action_horizons_ms:
+                    key = asset + "::" + str(exit_horizon)
+                    names.extend([
+                        "pool.asset_exit::" + key,
+                        "pool.asset_exit_signal::" + key,
+                    ])
+            for contract in self.contract_horizons:
+                names.extend([
+                    "pool.contract_signal::" + contract,
+                    "pool.contract_effective_age::" + contract,
+                ])
         self.model_feature_names = tuple(names)
 
     def _action_record(self, row, *, size, horizon_ms, latency_ms, side=None):
@@ -1043,6 +1096,30 @@ class DirectActionValueModel:
             features["exit::" + str(value)] = 1.0 if value == int(horizon_ms) else 0.0
         for value in self.train_latencies_ms:
             features["latency::" + str(value)] = 1.0 if value == int(latency_ms) else 0.0
+        if self.partial_pooling_enabled:
+            for value in self.assets:
+                active = 1.0 if value == asset else 0.0
+                features["pool.asset_signal::" + value] = active * signal
+                features["pool.asset_abs_signal::" + value] = active * abs(signal)
+                features["pool.asset_effective_age::" + value] = (
+                    active * effective_age_ms)
+                features["pool.asset_signal_age::" + value] = (
+                    active * signal_age_ms)
+                for exit_horizon in self.action_horizons_ms:
+                    key = value + "::" + str(exit_horizon)
+                    action_active = (
+                        active
+                        if exit_horizon == int(horizon_ms)
+                        else 0.0
+                    )
+                    features["pool.asset_exit::" + key] = action_active
+                    features["pool.asset_exit_signal::" + key] = (
+                        action_active * signal)
+            for value in self.contract_horizons:
+                active = 1.0 if value == contract else 0.0
+                features["pool.contract_signal::" + value] = active * signal
+                features["pool.contract_effective_age::" + value] = (
+                    active * effective_age_ms)
         return {
             "features": features,
             "market_id": str(row["market_id"]),
@@ -1145,6 +1222,9 @@ class DirectActionValueModel:
             selection_calibration_mode="OFF",
             prequential_calibration_blocks=self.prequential_calibration_blocks,
             maximum_effective_signal_age_ms=self.maximum_effective_signal_age_ms,
+            partial_pooling_enabled=self.partial_pooling_enabled,
+            partial_pooling_penalty_multiplier=(
+                self.partial_pooling_penalty_multiplier),
         )
 
     def _prequential_selected_policy_calibration(
@@ -1409,6 +1489,17 @@ class DirectActionValueModel:
                if include_score_values else {}),
         }
 
+    def _streaming_ridge(self):
+        return StreamingRidge(
+            self.model_feature_names,
+            ridge=self.ridge,
+            batch_size=self.streaming_batch_size,
+            deviation_penalty_multiplier=(
+                self.partial_pooling_penalty_multiplier
+                if self.partial_pooling_enabled else 1.0),
+            deviation_prefix="pool.",
+        )
+
     def fit(self, rows):
         rows = list(rows)
         if not rows:
@@ -1466,14 +1557,10 @@ class DirectActionValueModel:
 
         target_states = Counter()
         if fit_markets and scale_markets and calibration_markets:
-            provisional = StreamingRidge(
-                self.model_feature_names, ridge=self.ridge,
-                batch_size=self.streaming_batch_size).fit_factory(
+            provisional = self._streaming_ridge().fit_factory(
                     factory(fit_markets), lambda action: action["target"])
 
-            self.scale_model = StreamingRidge(
-                self.model_feature_names, ridge=self.ridge,
-                batch_size=self.streaming_batch_size).fit_factory(
+            self.scale_model = self._streaming_ridge().fit_factory(
                     factory(scale_markets),
                     lambda action: abs(
                         float(action["target"]) - provisional.predict(action)),
@@ -1482,9 +1569,7 @@ class DirectActionValueModel:
                 1e-6, 0.10 * self.scale_model.target_mean)
 
             mean_fit_markets = fit_markets | scale_markets
-            deployment_mean = StreamingRidge(
-                self.model_feature_names, ridge=self.ridge,
-                batch_size=self.streaming_batch_size).fit_factory(
+            deployment_mean = self._streaming_ridge().fit_factory(
                     factory(mean_fit_markets, target_states),
                     lambda action: action["target"])
 
@@ -1519,9 +1604,7 @@ class DirectActionValueModel:
                 self.selection_optimism_penalty = float(
                     self.selection_calibration["penalty"])
         else:
-            deployment_mean = StreamingRidge(
-                self.model_feature_names, ridge=self.ridge,
-                batch_size=self.streaming_batch_size).fit_factory(
+            deployment_mean = self._streaming_ridge().fit_factory(
                     factory(None, target_states),
                     lambda action: action["target"])
 
@@ -1567,6 +1650,18 @@ class DirectActionValueModel:
             "maximum_streaming_batch_bytes": deployment_mean.maximum_batch_bytes,
             "regularized_gram_condition_number": deployment_mean.condition_number,
             "streaming_batch_size": self.streaming_batch_size,
+            "partial_pooling": {
+                "enabled": self.partial_pooling_enabled,
+                "deviation_prefix": "pool.",
+                "deviation_penalty_multiplier": (
+                    self.partial_pooling_penalty_multiplier),
+                "deviation_feature_count": int(
+                    getattr(deployment_mean, "deviation_feature_count", 0)),
+                "semantics": (
+                    "SHARED_GLOBAL_COEFFICIENTS_PLUS_SHRUNK_"
+                    "ASSET_CONTRACT_EXIT_AGE_DEVIATIONS"
+                ),
+            },
             "policy_objective": "PREDICTED_EXECUTABLE_CASH_PNL_MINUS_ACTION_UNCERTAINTY_MINUS_POST_ARGMAX_OPTIMISM_MINUS_RESIDUAL_PORTFOLIO_FRICTIONS",
             "policy_loss": "NEGATIVE_POLICY_UTILITY_WITH_NO_TRADE_BASELINE_ZERO",
             "execution_frictions_in_training_target": [
