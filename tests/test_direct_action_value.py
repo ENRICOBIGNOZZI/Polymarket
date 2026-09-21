@@ -2133,8 +2133,7 @@ def test_marginal_edge_sizing_does_not_explode_from_fixed_cash_intercept_at_low_
 
         def _score_quantity(self, row, *, size, horizon_ms, latency_ms, side,
                             portfolio_state, capital_budget):
-            state = decision_side_state(row, side)
-            notional = float(size) * float(state["ask"])
+            notional = float(size) * float(row["ask"])
             # Deliberately large fixed intercept plus a stable 2% marginal edge.
             value = 1.0 + 0.02 * notional
             return {
