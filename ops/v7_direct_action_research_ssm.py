@@ -27,7 +27,6 @@ SOURCE_PATHS = (
     "research/walk_forward_v3/direct_action.py",
     "research/walk_forward_v2/__init__.py",
     "research/walk_forward_v2/core.py",
-    "research/economic/__init__.py",
     "research/economic/causal_replay.py",
     "research/requirements-learning.txt",
 )
