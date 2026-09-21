@@ -22,6 +22,8 @@ from v7_direct_action_research_ssm import (
 INSTANCE_RE = re.compile(r"^i-[0-9a-f]+$")
 SOURCE_PATHS = (
     "research/walk_forward_v3/maker_challenger.py",
+    "research/walk_forward_v3/maker_value_challenger.py",
+    "scripts/v7_maker_durable_learning.py",
     "scripts/v7_maker_fillability_report.py",
     "scripts/v7_maker_fill_conditioned_toxicity.py",
     "scripts/v7_maker_execution_horse_race.py",
@@ -188,6 +190,30 @@ else:
     json.dumps(value,indent=2,sort_keys=True)+"\n",encoding="utf-8")
 PY
 
+MODEL_SHA="$MODEL_SHA" RUN_ROOT={run_root} python3 - <<'PY'
+import os
+from pathlib import Path
+from research.walk_forward_v2.core import atomic_json
+from research.walk_forward_v3.maker_value_challenger import run
+
+root=Path(os.environ["RUN_ROOT"])
+model_sha=os.environ["MODEL_SHA"]
+cycle_paths=[]
+for base in (root/"micro_maker", root/"research"):
+    if not base.is_dir():
+        continue
+    for pattern in ("*complete_set*.jsonl", "*complete_set*.jsonl.gz"):
+        cycle_paths.extend(path for path in base.rglob(pattern) if path.is_file())
+result=run(
+    [root/"ledger", root/"micro_maker"],
+    model_sha=model_sha,
+    markout_horizon="1s",
+    bootstrap_samples=1000,
+    complete_set_paths=sorted(set(cycle_paths)),
+)
+atomic_json(Path("output/causal_value.json"), result)
+PY
+
 python3 -m research.walk_forward_v3.maker_challenger \
   --fillability output/fillability.json \
   --toxicity output/toxicity_JOIN.json \
@@ -196,6 +222,7 @@ python3 -m research.walk_forward_v3.maker_challenger \
   --horse-race output/horse_race.json \
   --complete-set output/complete_set.json \
   --forward-report output/forward_report.json \
+  --causal-value output/causal_value.json \
   --output output/maker_challenger.json >/dev/null
 
 tar -C output -czf results.tgz .
