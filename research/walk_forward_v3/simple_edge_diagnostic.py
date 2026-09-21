@@ -68,6 +68,19 @@ def bucket_tte(ns):
     return "105_120"
 
 
+def independent_shock_key(row):
+    market=str(row.get("market_id") or "")
+    features=row.get("features") or {}
+    shock=str(
+        row.get("parent_shock_id")
+        or features.get("parent_shock_id")
+        or ""
+    )
+    # Fail closed: without a causal shock identity, do not reinterpret every
+    # decision row as a fresh independent opportunity.
+    return (market, shock) if shock else (market, "MISSING_SHOCK_FALLBACK")
+
+
 def market_halves(rows):
     first={}
     for row in rows:
@@ -123,14 +136,21 @@ def finalize(stats):
 def analyze(records):
     rows=[row for row in records if _valid_state(row)]
     discovery,validation=market_halves(rows)
+    entry_views=("ALL_DECISIONS","ONE_PER_INDEPENDENT_SHOCK")
     groups={
-        split:defaultdict(fresh_stats)
-        for split in ("DISCOVERY","VALIDATION","ALL")
+        view:{
+            split:defaultdict(fresh_stats)
+            for split in ("DISCOVERY","VALIDATION","ALL")
+        }
+        for view in entry_views
     }
     unavailable={
         split:Counter() for split in ("DISCOVERY","VALIDATION","ALL")
     }
     decision_counts=Counter()
+    seen_shocks={
+        split:set() for split in ("DISCOVERY","VALIDATION","ALL")
+    }
 
     for row in rows:
         market=str(row["market_id"])
@@ -152,16 +172,33 @@ def analyze(records):
             unavailable["ALL"]["DECISION_CAPACITY_OR_PRICE"]+=1
             continue
         sig=signal_bp(row)
+        asset=str(row["asset"])
+        contract=str(row["horizon"])
+        sig_bucket=bucket_signal(sig)
+        price_bucket=bucket_price(ask)
+        tte_bucket=bucket_tte(row["tte_ns"])
         dimensions={
             "overall":"ALL",
-            "asset":str(row["asset"]),
-            "contract":str(row["horizon"]),
-            "signal":bucket_signal(sig),
-            "price":bucket_price(ask),
-            "tte":bucket_tte(row["tte_ns"]),
+            "asset":asset,
+            "contract":contract,
+            "asset_contract":asset+"|"+contract,
+            "signal":sig_bucket,
+            "price":price_bucket,
+            "tte":tte_bucket,
+            "asset_contract_signal":asset+"|"+contract+"|"+sig_bucket,
+            "asset_contract_tte":asset+"|"+contract+"|"+tte_bucket,
+            "asset_contract_price":asset+"|"+contract+"|"+price_bucket,
         }
         decision_counts[(split,"eligible_decisions")]+=1
         decision_counts[("ALL","eligible_decisions")]+=1
+        shock_key=independent_shock_key(row)
+        views=["ALL_DECISIONS"]
+        if shock_key not in seen_shocks[split]:
+            views.append("ONE_PER_INDEPENDENT_SHOCK")
+            seen_shocks[split].add(shock_key)
+            seen_shocks["ALL"].add(shock_key)
+            decision_counts[(split,"independent_shocks")]+=1
+            decision_counts[("ALL","independent_shocks")]+=1
 
         for latency in LATENCIES:
             for horizon in EXITS:
@@ -180,15 +217,18 @@ def analyze(records):
                     f"{name}::{value}::{latency}::{horizon}"
                     for name,value in dimensions.items()
                 )
-                for key in keys:
-                    add(groups[split][key],economics,why)
-                    add(groups["ALL"][key],economics,why)
+                for view in views:
+                    for key in keys:
+                        add(groups[view][split][key],economics,why)
+                        add(groups[view]["ALL"][key],economics,why)
 
     result={}
-    for split,table in groups.items():
-        result[split]={
-            key:finalize(value) for key,value in sorted(table.items())
-        }
+    for view,splits in groups.items():
+        result[view]={}
+        for split,table in splits.items():
+            result[view][split]={
+                key:finalize(value) for key,value in sorted(table.items())
+            }
     return {
         "schema":SCHEMA,
         **SAFETY,
@@ -208,6 +248,20 @@ def analyze(records):
             split:int(decision_counts[(split,"eligible_decisions")])
             for split in ("DISCOVERY","VALIDATION","ALL")
         },
+        "independent_shocks":{
+            split:int(decision_counts[(split,"independent_shocks")])
+            for split in ("DISCOVERY","VALIDATION","ALL")
+        },
+        "entry_views":[
+            "ALL_DECISIONS",
+            "ONE_PER_INDEPENDENT_SHOCK",
+        ],
+        "joint_dimensions":[
+            "asset_contract",
+            "asset_contract_signal",
+            "asset_contract_tte",
+            "asset_contract_price",
+        ],
         "unavailable_reasons":{
             split:dict(counter.most_common())
             for split,counter in unavailable.items()
