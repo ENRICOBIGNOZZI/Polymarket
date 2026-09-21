@@ -1,0 +1,112 @@
+name: V7 Direct Action gate frontier London research
+
+on:
+  push:
+    branches: [main]
+    paths: [deploy/v7-direct-action-gate-research-request.json]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  id-token: write
+
+concurrency:
+  group: v7-direct-action-gate-research
+  cancel-in-progress: true
+
+jobs:
+  run:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 180
+    env:
+      AWS_REGION: eu-west-2
+      AWS_DEFAULT_REGION: eu-west-2
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 2
+
+      - name: Require explicit PAPER gate request
+        id: request
+        shell: bash
+        run: |
+          set -euo pipefail
+          request=deploy/v7-direct-action-gate-research-request.json
+          test -s "$request"
+          echo "request=$request" >> "$GITHUB_OUTPUT"
+
+      - name: Configure AWS credentials through OIDC
+        uses: aws-actions/configure-aws-credentials@e1253824e5c10ff9df46874f81ed3ec929e19cfd
+        with:
+          role-to-assume: arn:aws:iam::350769147128:role/PolymarketLondonPaperDeployPolicy
+          role-session-name: polymarket-direct-action-gate-research
+          aws-region: eu-west-2
+
+      - name: Run nested gate frontier on London PAPER evidence
+        env:
+          REQUEST: ${{ steps.request.outputs.request }}
+        run: python3 ops/v7_direct_action_gate_research_ssm.py "$REQUEST" "$GITHUB_SHA"
+
+      - name: Require leakage-safe gate selection
+        env:
+          REQUEST: ${{ steps.request.outputs.request }}
+        run: |
+          set -euo pipefail
+          python3 - "$REQUEST" <<'PY'
+          import json,sys
+          from pathlib import Path
+          req=json.loads(Path(sys.argv[1]).read_text())
+          result=json.loads((Path(req["output_directory"])/"gate_frontier.json").read_text())
+          assert result["paper_only"] is True
+          assert result["authenticated_execution"] is False
+          assert result["real_order_submission"] is False
+          assert result["real_capital_at_risk"] is False
+          assert result["state"]=="READY"
+          nested=result["nested_gate_frontier"]
+          assert nested["state"]=="READY"
+          assert nested["selection_semantics"]==(
+              "INNER_VALIDATION_ONLY;OUTER_OOS_NEVER_USED_TO_CHOOSE_GATE"
+          )
+          assert nested["validation_objective"].startswith(
+              "MAX_CAUSAL_CENSORED_WORST_CASE_TOTAL_PNL_LOWER_BOUND"
+          )
+          print(json.dumps({
+              "state":result["state"],
+              "folds":len(nested["folds"]),
+              "selections":[
+                  {
+                      "fold":fold["fold"],
+                      "policy_id":(fold.get("selection") or {}).get("policy_id"),
+                      "validation_lower_bound":(
+                          fold.get("selection") or {}
+                      ).get("selected_validation_lower_bound"),
+                      "outer_state":(fold.get("outer_oos") or {}).get("state"),
+                      "outer_lower_bound":(
+                          fold.get("outer_oos") or {}
+                      ).get("robust_total_pnl_lower_bound"),
+                  }
+                  for fold in nested["folds"]
+              ],
+          },sort_keys=True))
+          PY
+
+      - name: Publish immutable gate frontier
+        env:
+          REQUEST: ${{ steps.request.outputs.request }}
+        run: |
+          set -euo pipefail
+          output="$(python3 -c 'import json,os;print(json.load(open(os.environ["REQUEST"]))["output_directory"])')"
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -f "$output"
+          git diff --cached --check
+          if git diff --cached --quiet; then
+            exit 0
+          fi
+          git commit -m "Publish London Direct Action gate frontier"
+          if ! git push origin HEAD:main; then
+            git fetch origin main
+            git rebase origin/main
+            git push origin HEAD:main
+          fi
