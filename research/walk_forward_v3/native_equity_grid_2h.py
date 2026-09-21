@@ -291,6 +291,7 @@ def main(argv=None):
     p.add_argument("--output-dir",type=Path,required=True)
     p.add_argument("--minimum-wall-ns",type=int,required=True)
     p.add_argument("--code-sha",required=True)
+    p.add_argument("--skip-gallery",action="store_true")
     a=p.parse_args(argv)
     out=a.output_dir;out.mkdir(parents=True,exist_ok=True)
     data=build_dataset(
@@ -330,7 +331,8 @@ def main(argv=None):
                         **{k:cell.get(k) for k in fields[3:]},
                     })
 
-    render_gallery(out,results)
+    if not a.skip_gallery:
+        render_gallery(out,results)
 
     summary=[]
     for name,result in results.items():
