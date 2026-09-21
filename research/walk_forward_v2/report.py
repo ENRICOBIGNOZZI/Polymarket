@@ -12,9 +12,9 @@ def git_sha(root):
     return subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=root, text=True).strip()
 
 
-def audit_receipt(root):
+def audit_receipt(root, code_sha=None):
     return {
-        "schema": SCHEMA + "_audit_v1", **SAFETY, "code_sha": git_sha(root),
+        "schema": SCHEMA + "_audit_v1", **SAFETY, "code_sha": code_sha or git_sha(root),
         "differences": [
             {"object": "training_target", "v1": "settlement outcome", "v2": "settlement and actual PM repricing",
              "evidence": "research/learning/models.py; research/walk_forward_v2/core.py:book_targets"},
@@ -273,7 +273,7 @@ def _support_statement(metrics, uncertainty):
 def publish(output, *, root, start_sha, data, folds, economics):
     output = Path(output)
     output.mkdir(parents=True, exist_ok=True)
-    audit, data_manifest, methodology = audit_receipt(root), manifest(data), method()
+    audit, data_manifest, methodology = audit_receipt(root, start_sha), manifest(data), method()
     public = public_economics(economics)
     prediction = public.get("prediction_metrics", {})
     model_metrics = {"schema": SCHEMA + "_model_metrics_v1", **SAFETY,
