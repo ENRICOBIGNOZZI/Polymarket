@@ -1,0 +1,69 @@
+"""Run nested Direct Action gate selection from a causal dataset root."""
+from __future__ import annotations
+
+import argparse
+from pathlib import Path
+
+from research.walk_forward_v2.core import SAFETY, atomic_json, build_dataset
+from research.walk_forward_v3.gate_frontier import nested_gate_frontier
+
+
+SCHEMA = "polymarket_direct_action_gate_frontier_london_v1"
+
+
+def run(root: Path, *, minimum_wall_ns: int, outer_folds: int = 3,
+        inner_folds: int = 2, latency_ms: int = 50,
+        capital_budget: float = 10_000.0):
+    data = build_dataset(root, minimum_wall_ns=int(minimum_wall_ns))
+    result = {
+        "schema": SCHEMA,
+        **SAFETY,
+        "input_state": data.get("input_state"),
+        "data_sha256": data.get("data_sha256"),
+        "minimum_wall_ns": int(minimum_wall_ns),
+        "outer_folds": int(outer_folds),
+        "inner_folds": int(inner_folds),
+        "latency_ms": int(latency_ms),
+        "capital_budget": float(capital_budget),
+        "mean_covariance_estimation": False,
+        "nested_gate_frontier": None,
+    }
+    if data.get("input_state") != "READY":
+        result["state"] = data.get("input_state")
+        return result
+    frontier = nested_gate_frontier(
+        data["decisions"],
+        outer_folds=int(outer_folds),
+        inner_folds=int(inner_folds),
+        latency_ms=int(latency_ms),
+        capital_budget=float(capital_budget),
+    )
+    result["nested_gate_frontier"] = frontier
+    result["state"] = frontier.get("state")
+    return result
+
+
+def main(argv=None):
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--input-root", type=Path, required=True)
+    parser.add_argument("--output", type=Path, required=True)
+    parser.add_argument("--minimum-wall-ns", type=int, required=True)
+    parser.add_argument("--outer-folds", type=int, default=3)
+    parser.add_argument("--inner-folds", type=int, default=2)
+    parser.add_argument("--latency-ms", type=int, default=50)
+    parser.add_argument("--capital-budget", type=float, default=10_000.0)
+    args = parser.parse_args(argv)
+    result = run(
+        args.input_root,
+        minimum_wall_ns=args.minimum_wall_ns,
+        outer_folds=args.outer_folds,
+        inner_folds=args.inner_folds,
+        latency_ms=args.latency_ms,
+        capital_budget=args.capital_budget,
+    )
+    atomic_json(args.output, result)
+    return 0 if result.get("state") == "READY" else 2
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
