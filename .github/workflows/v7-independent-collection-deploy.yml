@@ -1,0 +1,114 @@
+name: V7 independent collection plane deploy
+
+on:
+  push:
+    branches: [main]
+    paths: [deploy/v7-collection-plane-deploy-request.json]
+  workflow_dispatch:
+    inputs:
+      expected_sha:
+        description: Exact collector code SHA already on main
+        required: true
+        type: string
+
+permissions:
+  contents: read
+  id-token: write
+
+concurrency:
+  group: v7-independent-collection-plane-deploy
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    env:
+      AWS_REGION: eu-west-2
+      AWS_DEFAULT_REGION: eu-west-2
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          fetch-depth: 2
+
+      - name: Resolve exact collection SHA
+        id: request
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ "$GITHUB_EVENT_NAME" == "push" ]]; then
+            changed="$(git diff-tree --no-commit-id --name-only -r HEAD)"
+            test "$changed" = "deploy/v7-collection-plane-deploy-request.json"
+            parent="$(git rev-parse HEAD^1)"
+            python3 - "$parent" "$GITHUB_OUTPUT" <<'PY'
+          import json,re,sys
+          value=json.load(open('deploy/v7-collection-plane-deploy-request.json',encoding='utf-8'))
+          assert set(value)=={
+              'schema','version','request_id','expected_parent_sha','paper_only',
+              'authenticated_execution','real_order_submission','real_capital_at_risk',
+              'operation',
+          }
+          assert value['schema']=='polymarket_v7_collection_plane_deploy_request_v1'
+          assert value['version']==1
+          assert re.fullmatch(r'[A-Za-z0-9._:-]{8,128}',value['request_id'])
+          assert value['expected_parent_sha']==sys.argv[1]
+          assert value['paper_only'] is True
+          assert value['authenticated_execution'] is False
+          assert value['real_order_submission'] is False
+          assert value['real_capital_at_risk'] is False
+          assert value['operation']=='DEPLOY_COLLECTION_ONLY'
+          with open(sys.argv[2],'a',encoding='utf-8') as out:
+              out.write('sha='+sys.argv[1]+'\n')
+          PY
+          else
+            [[ "${{ inputs.expected_sha }}" =~ ^[0-9a-f]{40}$ ]]
+            git fetch --no-tags origin main
+            git merge-base --is-ancestor "${{ inputs.expected_sha }}" origin/main
+            echo "sha=${{ inputs.expected_sha }}" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Configure AWS credentials through OIDC
+        uses: aws-actions/configure-aws-credentials@e1253824e5c10ff9df46874f81ed3ec929e19cfd
+        with:
+          role-to-assume: arn:aws:iam::350769147128:role/PolymarketLondonPaperDeployPolicy
+          role-session-name: polymarket-independent-collection-deploy
+          aws-region: eu-west-2
+
+      - name: Deploy independent zero-authority collection plane
+        run: |
+          set -euo pipefail
+          python3 ops/v7_collection_plane_ssm_deploy.py \
+            --expected-sha "${{ steps.request.outputs.sha }}" \
+            --output collection-deploy-receipt.json
+
+      - name: Validate independent data-plane receipt
+        run: |
+          python3 - <<'PY'
+          import json
+          value=json.load(open('collection-deploy-receipt.json',encoding='utf-8'))
+          assert value['schema']=='polymarket_v7_independent_collection_deploy_receipt_v1'
+          assert value['model_independent'] is True
+          assert value['live_model_required'] is False
+          assert value['paper_only'] is True
+          assert value['authenticated_execution'] is False
+          assert value['real_order_submission'] is False
+          assert value['real_capital_at_risk'] is False
+          assert value['execution_authority']=='ZERO_AUTHORITY_DATA_COLLECTION'
+          assert value['service_active'] is True
+          assert value['retention_timer_active'] is True
+          assert float(value['observed_ingress_gb_per_hour']) > 0
+          assert int(value['fresh_external_feeds']) >= 2
+          print(json.dumps({
+              'collector_sha':value['collector_sha'],
+              'collection_root':value['collection_root'],
+              'observed_ingress_gb_per_hour':value['observed_ingress_gb_per_hour'],
+              'fresh_external_feeds':value['fresh_external_feeds'],
+          },sort_keys=True))
+          PY
+
+      - name: Upload collection deployment evidence
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: v7-independent-collection-${{ github.run_id }}
+          path: collection-deploy-receipt.json
+          retention-days: 30
