@@ -58,6 +58,8 @@ jobs:
           import json,sys
           from pathlib import Path
           request=json.loads(Path(sys.argv[1]).read_text())
+          expected_support_mode=str(
+              request.get("support_policy_mode") or "DIAGNOSTIC").upper()
           root=Path(request["output_directory"])
           result=json.loads((root/"direct_action.json").read_text())
           assert result["paper_only"] is True
@@ -78,6 +80,10 @@ jobs:
           for fold in result["folds"]:
               training=fold["training"]
               assert training["mean_covariance_estimation"] is False
+              assert training["support_policy_mode"]==expected_support_mode
+              assert training["evidence_support_head"]==(
+                  "STREAMING_RIDGE_LINEAR_PROBABILITY_ON_CAUSAL_ACTION_OBSERVABILITY"
+              )
               assert training["training_state_cap"] is None
               assert training["matrix_strategy"]=="ONE_PASS_SUFFICIENT_STATISTICS_THEN_P_X_P_NORMAL_EQUATIONS"
               assert training["policy_loss"]=="NEGATIVE_POLICY_UTILITY_WITH_NO_TRADE_BASELINE_ZERO"
@@ -117,6 +123,11 @@ jobs:
               "total_observed_net_pnl":result["summary"]["total_observed_net_pnl"],
               "max_active_positions":result["summary"]["max_active_positions"],
               "max_gross_notional":result["summary"]["max_gross_notional"],
+              "support_policy_mode":expected_support_mode,
+              "total_support_robustness_penalty":result["summary"].get(
+                  "total_support_robustness_penalty"),
+              "selected_evidence_support_probability":result["summary"].get(
+                  "selected_evidence_support_probability"),
               "bilateral_ready_fraction":bilateral.get("bilateral_ready_decision_fraction"),
               "bilateral_pair_states":bilateral.get("decision_pair_states"),
               "total_selection_optimism_penalty":result["summary"].get("total_predicted_selection_optimism_penalty"),
