@@ -1,0 +1,96 @@
+name: V7 cancel proven stale London cutover
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - deploy/v7-cancel-stale-london-cutover-request.json
+
+permissions:
+  contents: read
+  id-token: write
+
+concurrency:
+  group: v7-cancel-stale-london-cutover
+  cancel-in-progress: false
+
+jobs:
+  cancel:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 8
+    env:
+      AWS_REGION: eu-west-2
+      AWS_DEFAULT_REGION: eu-west-2
+      ROLE_ARN: arn:aws:iam::350769147128:role/PolymarketLondonPaperDeployPolicy
+      INSTANCE_ID: ${{ vars.POLYMARKET_LONDON_INSTANCE_ID || 'i-0fba2bac9fdc5cbeb' }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+      - name: Validate request
+        id: req
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - deploy/v7-cancel-stale-london-cutover-request.json "$GITHUB_OUTPUT" <<'PY'
+          import json,re,sys
+          v=json.load(open(sys.argv[1]))
+          assert set(v)=={'schema','version','request_id','command_id','stale_sha','replacement_sha','paper_only','authenticated_execution','real_order_submission'}
+          assert v['schema']=='polymarket_v7_cancel_stale_london_cutover_v1'
+          assert v['version']==1
+          assert re.fullmatch(r'[A-Za-z0-9._:-]{8,128}',v['request_id'])
+          assert re.fullmatch(r'[0-9a-f-]{36}',v['command_id'])
+          assert re.fullmatch(r'[0-9a-f]{40}',v['stale_sha'])
+          assert re.fullmatch(r'[0-9a-f]{40}',v['replacement_sha'])
+          assert v['stale_sha'] != v['replacement_sha']
+          assert v['paper_only'] is True
+          assert v['authenticated_execution'] is False
+          assert v['real_order_submission'] is False
+          with open(sys.argv[2],'a') as h:
+              for k in ('command_id','stale_sha','replacement_sha'):
+                  h.write(k+'='+v[k]+'\n')
+          PY
+      - uses: aws-actions/configure-aws-credentials@e1253824e5c10ff9df46874f81ed3ec929e19cfd
+        with:
+          role-to-assume: ${{ env.ROLE_ARN }}
+          role-session-name: polymarket-v7-cancel-stale-cutover
+          aws-region: eu-west-2
+      - name: Prove and cancel stale cutover
+        env:
+          COMMAND_ID: ${{ steps.req.outputs.command_id }}
+          STALE_SHA: ${{ steps.req.outputs.stale_sha }}
+          REPLACEMENT_SHA: ${{ steps.req.outputs.replacement_sha }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          aws ssm list-commands --command-id "$COMMAND_ID" --region "$AWS_REGION" --output json > command.json
+          python3 - command.json "$COMMAND_ID" "$STALE_SHA" "$REPLACEMENT_SHA" <<'PY'
+          import json,sys
+          v=json.load(open(sys.argv[1])); cid,old,new=sys.argv[2:5]
+          rows=v.get('Commands') or []
+          assert len(rows)==1
+          c=rows[0]
+          assert c.get('CommandId')==cid
+          assert c.get('Comment')=='Polymarket V7 exact-SHA PAPER SSM transport'
+          assert str(c.get('Status') or '') not in {'Success','Cancelled','TimedOut','Failed','Cancelling'}
+          p=c.get('Parameters') or {}; xs=p.get('commands') or []
+          if isinstance(xs,str): xs=[xs]
+          txt='\n'.join(map(str,xs))
+          assert ('SHA='+old) in txt or ('POLYMARKET_EXPECTED_SHA='+old) in txt
+          assert 'V7_SSM_CUTOVER=' in txt
+          assert new not in txt
+          print('STALE_CUTOVER_PROVEN='+cid+' sha='+old)
+          PY
+          aws ssm cancel-command --command-id "$COMMAND_ID" --instance-ids "$INSTANCE_ID" --region "$AWS_REGION" >/dev/null
+          python3 - "$COMMAND_ID" "$INSTANCE_ID" <<'PY'
+          import json,subprocess,sys,time
+          cid,instance=sys.argv[1:3]
+          terminal={'Success','Cancelled','TimedOut','Failed'}
+          for _ in range(120):
+              p=subprocess.run(['aws','ssm','get-command-invocation','--command-id',cid,'--instance-id',instance,'--region','eu-west-2','--output','json'],capture_output=True,text=True)
+              if p.returncode==0:
+                  v=json.loads(p.stdout); s=str(v.get('Status') or '')
+                  if s in terminal:
+                      assert s in {'Cancelled','Failed','TimedOut'}
+                      print('STALE_CUTOVER_TERMINAL='+s)
+                      raise SystemExit(0)
+              time.sleep(1)
+          raise SystemExit('stale cutover did not become terminal')
