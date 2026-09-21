@@ -1,4 +1,5 @@
 import json
+import math
 from pathlib import Path
 
 from research.walk_forward_v3.maker_challenger import build
@@ -51,10 +52,16 @@ def test_maker_challenger_screening_is_not_promotion_claim():
     assert result["automatic_promotion"] is False
     assert result["profitability_proven"] is False
     assert result["state"] == "SCREENING_ONLY_NO_FROZEN_FORWARD_REPORT"
-    assert result["actions"]["JOIN"][
-        "trading_only_screening_ev_per_submitted_share"] == .001
-    assert result["actions"]["IMPROVE1"][
-        "trading_only_screening_ev_per_submitted_share"] == -.004
+    assert math.isclose(
+        result["actions"]["JOIN"][
+            "trading_only_screening_ev_per_submitted_share"],
+        .001, abs_tol=1e-12,
+    )
+    assert math.isclose(
+        result["actions"]["IMPROVE1"][
+            "trading_only_screening_ev_per_submitted_share"],
+        -.004, abs_tol=1e-12,
+    )
     assert result["screening_order"][0]["action"] == "JOIN"
     assert "NOT_POLICY_SELECTION" in result["screening_order_warning"]
 
