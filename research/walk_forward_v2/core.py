@@ -2061,6 +2061,9 @@ def economic_evaluation(evaluations, *, latency_ms=(10, 25, 50, 100, 250, 500)):
         variants["asset_markout_" + key + "ms"] = (
             lambda event, h=key: (event.get("asset_markout_predictions", {}).get(h), None),
             "EXECUTABLE_MARKOUT", horizon)
+        variants["partial_pool_markout_" + key + "ms"] = (
+            lambda event, h=key: (event.get("partial_pool_markout_predictions", {}).get(h), None),
+            "EXECUTABLE_MARKOUT", horizon)
 
     for name, (selector, valuation_mode, markout_horizon) in variants.items():
         outcomes = replay_policy(
@@ -2174,6 +2177,142 @@ def economic_evaluation(evaluations, *, latency_ms=(10, 25, 50, 100, 250, 500)):
             }
         result["live_parity_horizon_latency"][hkey] = pooled_cells
         result["live_parity_asset_horizon_latency"][hkey] = asset_cells
+
+    # Diagnostic partial-pooling surface. This family is intentionally excluded
+    # from automatic promotion until fresh post-registration evidence exists.
+    result["live_parity_partial_pool_horizon_latency"] = {}
+    for horizon in (500, 1000, 2000):
+        hkey = str(horizon)
+        selector = lambda event, h=hkey: (
+            event.get("partial_pool_markout_predictions", {}).get(h), None)
+        cells = {}
+        for latency in latency_ms:
+            if latency >= horizon:
+                cells[str(latency)] = {
+                    "state": "LATENCY_NOT_BEFORE_MARKOUT_HORIZON",
+                    "horizon_ms": horizon, "latency_ms": latency,
+                }
+                continue
+            metrics = replay_policy_summary(
+                ordered, selector,
+                latency_ms=latency,
+                valuation_mode="EXECUTABLE_MARKOUT",
+                markout_horizon_ms=horizon,
+                assume_sorted=True,
+                entry_cap=.80,
+                shares=5.0,
+                minimum_tte_ns=105_000_000_000,
+                maximum_tte_ns=120_000_000_000,
+                require_full_visible_depth=True,
+            )
+            cells[str(latency)] = {"state": "READY", **metrics}
+        result["live_parity_partial_pool_horizon_latency"][hkey] = cells
+
+    # Diagnostics-only sensitivity grids. They never enter the promotion policy.
+    result["required_net_markout_sensitivity"] = {
+        "promotion_eligible": False,
+        "reference_latency_ms": 50,
+        "margins_per_share": [.0025, .005, .01, .02],
+        "families": {},
+    }
+    diagnostic_families = {
+        "POOLED": lambda event, h: event.get("markout_predictions", {}).get(h),
+        "PARTIAL_POOL": lambda event, h: event.get("partial_pool_markout_predictions", {}).get(h),
+    }
+    for family, getter in diagnostic_families.items():
+        family_rows = {}
+        for horizon in (500, 1000, 2000):
+            hkey = str(horizon)
+            margin_rows = {}
+            for margin in (.0025, .005, .01, .02):
+                selector = lambda event, h=hkey, g=getter: (g(event, h), None)
+                metrics = replay_policy_summary(
+                    ordered, selector,
+                    latency_ms=50,
+                    valuation_mode="EXECUTABLE_MARKOUT",
+                    markout_horizon_ms=horizon,
+                    assume_sorted=True,
+                    edge_threshold=margin,
+                    execution_reserve=0.0,
+                    entry_cap=.80,
+                    shares=5.0,
+                    minimum_tte_ns=105_000_000_000,
+                    maximum_tte_ns=120_000_000_000,
+                    require_full_visible_depth=True,
+                )
+                margin_rows[str(margin)] = metrics
+            family_rows[hkey] = margin_rows
+        result["required_net_markout_sensitivity"]["families"][family] = family_rows
+
+    result["size_capacity_sensitivity"] = {
+        "promotion_eligible": False,
+        "reference_latency_ms": 50,
+        "sizes_shares": [5.0, 10.0, 20.0],
+        "families": {},
+    }
+    for family, getter in diagnostic_families.items():
+        family_rows = {}
+        for horizon in (500, 1000, 2000):
+            hkey = str(horizon)
+            size_rows = {}
+            for size in (5.0, 10.0, 20.0):
+                selector = lambda event, h=hkey, g=getter: (g(event, h), None)
+                metrics = replay_policy_summary(
+                    ordered, selector,
+                    latency_ms=50,
+                    valuation_mode="EXECUTABLE_MARKOUT",
+                    markout_horizon_ms=horizon,
+                    assume_sorted=True,
+                    edge_threshold=.005,
+                    execution_reserve=.005,
+                    entry_cap=.80,
+                    shares=size,
+                    minimum_tte_ns=105_000_000_000,
+                    maximum_tte_ns=120_000_000_000,
+                    require_full_visible_depth=True,
+                )
+                size_rows[str(size)] = metrics
+            family_rows[hkey] = size_rows
+        result["size_capacity_sensitivity"]["families"][family] = family_rows
+
+    result["common_support_economics"] = {
+        "promotion_eligible": False,
+        "common_shock_floor_bp": 1.13,
+        "signal_age_caps_ms": [10, 25, 50, 100],
+        "reference_latency_ms": 50,
+        "families": {},
+    }
+    for family, getter in diagnostic_families.items():
+        family_rows = {}
+        for horizon in (500, 1000, 2000):
+            hkey = str(horizon)
+            age_rows = {}
+            for age_cap in (10, 25, 50, 100):
+                subset = []
+                for event in ordered:
+                    row = event["row"]
+                    shock = row.get("features", {}).get("binance_return_100ms_bp")
+                    if not finite(shock) or abs(float(shock)) + 1e-12 < 1.13:
+                        continue
+                    if float(row.get("signal_age_ns") or 0) / 1_000_000 > age_cap + 1e-12:
+                        continue
+                    subset.append(event)
+                selector = lambda event, h=hkey, g=getter: (g(event, h), None)
+                metrics = replay_policy_summary(
+                    subset, selector,
+                    latency_ms=50,
+                    valuation_mode="EXECUTABLE_MARKOUT",
+                    markout_horizon_ms=horizon,
+                    assume_sorted=True,
+                    entry_cap=.80,
+                    shares=5.0,
+                    minimum_tte_ns=105_000_000_000,
+                    maximum_tte_ns=120_000_000_000,
+                    require_full_visible_depth=True,
+                )
+                age_rows[str(age_cap)] = metrics
+            family_rows[hkey] = age_rows
+        result["common_support_economics"]["families"][family] = family_rows
 
     # Preregistered promotion candidate set evaluated under exact current
     # native PAPER geometry at one frozen reference latency. This avoids
