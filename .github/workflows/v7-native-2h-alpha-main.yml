@@ -11,7 +11,7 @@ permissions:
   id-token: write
 
 concurrency:
-  group: v7-native-2h-alpha-equity
+  group: v7-native-2h-alpha-equity-v2
   cancel-in-progress: false
 
 jobs:
@@ -105,6 +105,12 @@ jobs:
           PYTHONPATH=. python3 -m research.walk_forward_v3.native_2h_alpha_figures \
             --root "$OUTPUT_DIR"
 
+      - name: Render exhaustive equity gallery on runner
+        run: |
+          set -euo pipefail
+          PYTHONPATH=. python3 -m research.walk_forward_v3.native_2h_alpha_figures \
+            --root "$OUTPUT_DIR"
+
       - name: Validate equity package
         run: |
           python3 - <<'PY'
@@ -124,6 +130,7 @@ jobs:
           assert len(data['alphas'])>=20
           assert manifest['alpha_count']==len(data['alphas'])
           assert manifest['cells_per_alpha']==60
+          assert manifest['figure_count']>=len(data['alphas'])*8+60
           assert (root/'21_native_alpha_grid.csv').is_file()
           assert (root/'22_native_alpha_equity_paths.csv.gz').is_file()
           rows=list(csv.DictReader(open(root/'21_native_alpha_grid.csv',newline='')))
