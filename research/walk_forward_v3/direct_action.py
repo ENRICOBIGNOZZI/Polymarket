@@ -572,6 +572,7 @@ class DirectActionValueModel:
             "hard_order_notional": self.hard_order_notional,
             "model": "RIDGE_DIRECT_EXECUTABLE_CASH_PNL",
             "policy_objective": "PREDICTED_EXECUTABLE_CASH_PNL_MINUS_UNCERTAINTY_MINUS_RESIDUAL_PORTFOLIO_FRICTIONS",
+            "policy_loss": "NEGATIVE_POLICY_UTILITY_WITH_NO_TRADE_BASELINE_ZERO",
             "execution_frictions_in_training_target": [
                 "decision_spread_via_executable_entry",
                 "post_signal_latency_price_drift_via_arrival_book",
@@ -670,6 +671,7 @@ class DirectActionValueModel:
                 "calibrated_lower_cash_value": float(lower_cash),
                 "calibrated_lower_value": float(policy_utility),
                 "policy_utility": float(policy_utility),
+                "policy_loss": float(-policy_utility),
                 **residual,
                 "predicted_return_on_notional": (
                     float(mean) / notional if notional > 0 else None),
@@ -698,6 +700,8 @@ class DirectActionValueModel:
                 "latency_ms": int(latency_ms),
                 "calibrated_lower_value": 0.0,
                 "predicted_total_net_pnl": 0.0,
+                "policy_utility": 0.0,
+                "policy_loss": 0.0,
             }
         selected = dict(scored[0])
         selected["reason"] = "DIRECT_ACTION_VALUE_MAXIMUM"
