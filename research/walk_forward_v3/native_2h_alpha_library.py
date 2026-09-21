@@ -424,7 +424,7 @@ def alpha_library(th):
     }
 
 
-def evaluate_alpha(rows,rule):
+def evaluate_alpha(rows,rule,economics_cache):
     cells={};events={}
     for latency in LATENCIES:
         for horizon in EXITS:
@@ -436,7 +436,13 @@ def evaluate_alpha(rows,rule):
                 if side is None:
                     continue
                 selected+=1
-                economics,state=native_execute_side_cell(row,latency,horizon,side)
+                cache_key=(str(row["decision_id"]),str(side),int(latency),int(horizon))
+                cached=economics_cache.get(cache_key)
+                if cached is None:
+                    economics,state=native_execute_side_cell(row,latency,horizon,side)
+                    economics_cache[cache_key]=(economics,state)
+                else:
+                    economics,state=cached
                 if economics is None:
                     censored[state]+=1
                     continue
@@ -561,8 +567,9 @@ def run(root,output,minimum_wall_ns,skip_figures=False):
     th=training_thresholds(splits["TRAIN"])
     alphas=alpha_library(th)
     results={}
+    economics_cache={}
     for name,rule in alphas.items():
-        results[name]=evaluate_alpha(window_rows,rule)
+        results[name]=evaluate_alpha(window_rows,rule,economics_cache)
 
     gallery=write_equity_outputs(output,results,make_figures=not skip_figures)
     payload={
@@ -570,6 +577,8 @@ def run(root,output,minimum_wall_ns,skip_figures=False):
         "window":window,"thresholds_fit_on_first_60pct":th,
         "latencies_ms":list(LATENCIES),"exit_horizons_ms":list(EXITS),
         "alphas":{name:{"cells":value["cells"]} for name,value in results.items()},
+        "execution_cache_entries":len(economics_cache),
+        "execution_cache_semantics":"EXACT_MEMOIZATION_ONLY_NO_ECONOMIC_CHANGE",
         "equity_gallery":gallery,
     }
     atomic_json(output/"20_native_alpha_library.json",payload)
