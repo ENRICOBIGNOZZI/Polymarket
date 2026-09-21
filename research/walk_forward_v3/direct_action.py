@@ -1623,6 +1623,48 @@ def evaluate_direct_action_policy(
     return outcomes
 
 
+def bilateral_evidence_summary(records):
+    """Aggregate support for causal YES/NO counterfactual actions."""
+    decision_states = Counter()
+    target_states = {
+        str(horizon): Counter() for horizon in DEFAULT_ACTION_HORIZONS_MS
+    }
+    for row in records:
+        pair = row.get("pair")
+        state = (
+            str(pair.get("state"))
+            if isinstance(pair, dict) and pair.get("state")
+            else "UNAVAILABLE"
+        )
+        decision_states[state] += 1
+        for horizon in DEFAULT_ACTION_HORIZONS_MS:
+            target = (row.get("targets") or {}).get(str(horizon), {})
+            target_pair = target.get("pair") if isinstance(target, dict) else None
+            target_state = (
+                str(target_pair.get("state"))
+                if isinstance(target_pair, dict) and target_pair.get("state")
+                else "UNAVAILABLE"
+            )
+            target_states[str(horizon)][target_state] += 1
+    return {
+        "schema": SCHEMA + "_bilateral_evidence_v1",
+        **SAFETY,
+        "decisions": len(records),
+        "decision_pair_states": dict(decision_states),
+        "bilateral_ready_decision_fraction": (
+            decision_states["BILATERAL_EXECUTABLE_READY"] / len(records)
+            if records else None
+        ),
+        "target_pair_states_by_horizon_ms": {
+            horizon: dict(counts) for horizon, counts in target_states.items()
+        },
+        "counterfactual_side_rule": (
+            "YES_AND_NO_ONLY_WHEN_DECISION_ARRIVAL_AND_EXIT_HAVE_"
+            "BILATERAL_EXECUTABLE_READY;OTHERWISE_SELECTED_SIDE_ONLY"
+        ),
+    }
+
+
 def numeric_distribution(values):
     values = [float(value) for value in values if finite(value)]
     if not values:
@@ -1788,6 +1830,7 @@ def walk_forward_direct_action(
         "fold_receipt": receipt,
         "latency_ms": int(latency_ms),
         "capital_budget": float(capital_budget),
+        "bilateral_evidence": bilateral_evidence_summary(records),
         "folds": [],
         "diagnostic_selected_outcomes": [],
         "output_semantics": (
