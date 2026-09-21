@@ -1,0 +1,9 @@
+{
+  "schema": "polymarket_v7_ssh_envelope_v1",
+  "recipient_type": "ssh-ed25519",
+  "recipient_fingerprint": "cd6be771b7b9fa942308494a4f388a8a9e670f185cb98cc2ca0da1ef441f834d",
+  "ephemeral_public_b64": "ciR/FoQ2dXEKh7I6TdS9yM49VoK2OwlfVTj3sSbiQCY=",
+  "salt_b64": "eS6XSlBJNxJrMV9GDi8Ldg==",
+  "nonce_b64": "28bA80mnT3PLyXt1",
+  "ciphertext_b64": "vSxffz9tI3byj0bkoDlKReUwqk/tD5PWDLejbe2JyG32L2fDqZN+vvp9J/l9zAhL3ILZTW1i9ymK6CZrkbqMhgDcIEeaushdzwHVsRlTXx1q+2zaFTyYZCd9JfDGZArxp7ekn88IrnjGaDpjQak3MiKlI/J6RoOJtRNC2z11go0Bz5AB4uoL+WnTvvOwmkmj8iXA/FmkaySzOmrvoq1K/Xu33/uFOqq81Iqz5opjhEG7AiYH+A7790b+5X3+mNTNw9G2dfg0Xhuy0c6xj4zTOG4DK8jHyBeSGVAMI1sxyhVyREYO0kKWBVcV8enGTjtDI/T6aAEs502//ThwYHIWPVSkt3GZ+XMRLmxtTbanfMpAUTEJSNTcySCscnYZ2jpBPzfGDt9LKKDKu1zhBZ9G/oQ16y5qvTSIuLRIFS/HW/X2aHGfpBILLJZIOohKehkOZSEu6V5hL1trI8bkPaIAq/9XA1ScykmDY+0Aww=="
+}
