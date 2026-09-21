@@ -155,6 +155,20 @@ def load_trade_frequency_challenger_config(path):
     calibration = value.get("conditional_calibration") or {}
     if calibration.get("enabled") is not True:
         raise ValueError("challenger conditional calibration must be enabled")
+    geometry = value.get("opportunity_geometry") or {}
+    minimum_tte_seconds = float(geometry.get("minimum_tte_seconds", 105.0))
+    maximum_tte_seconds = float(geometry.get("maximum_tte_seconds", 120.0))
+    entry_cap = float(geometry.get("entry_cap", DEFAULT_ENTRY_CAP))
+    if (
+        not finite(minimum_tte_seconds)
+        or not finite(maximum_tte_seconds)
+        or minimum_tte_seconds < DEFAULT_MINIMUM_TTE_NS / 1e9
+        or maximum_tte_seconds > DEFAULT_MAXIMUM_TTE_NS / 1e9
+        or minimum_tte_seconds > maximum_tte_seconds
+    ):
+        raise ValueError("challenger TTE geometry outside trained support")
+    if not finite(entry_cap) or not 0 < entry_cap < 1:
+        raise ValueError("challenger entry cap must be a price sanity bound")
     sizing = value.get("sizing") or {}
     policy = EdgeSizingPolicy(
         context_count=int(sizing.get("context_count")),
@@ -166,6 +180,9 @@ def load_trade_frequency_challenger_config(path):
             calibration.get("minimum_markets")),
         "conditional_calibration_shrinkage": float(
             calibration.get("shrinkage")),
+        "entry_cap": entry_cap,
+        "live_minimum_tte_ns": int(minimum_tte_seconds * 1e9),
+        "live_maximum_tte_ns": int(maximum_tte_seconds * 1e9),
         "insufficient_selection_calibration_policy": str(
             calibration.get("selection_insufficient_policy") or "ZERO"
         ).upper(),
@@ -1105,6 +1122,8 @@ class DirectActionValueModel:
         conditional_calibration_min_markets=12,
         conditional_calibration_shrinkage=20.0,
         insufficient_selection_calibration_policy="ZERO",
+        live_minimum_tte_ns=LIVE_MINIMUM_TTE_NS,
+        live_maximum_tte_ns=LIVE_MAXIMUM_TTE_NS,
     ):
         self.size_grid = tuple(float(v) for v in size_grid)
         self.action_horizons_ms = tuple(int(v) for v in action_horizons_ms)
@@ -1135,6 +1154,8 @@ class DirectActionValueModel:
             conditional_calibration_shrinkage)
         self.insufficient_selection_calibration_policy = str(
             insufficient_selection_calibration_policy).upper()
+        self.live_minimum_tte_ns = int(live_minimum_tte_ns)
+        self.live_maximum_tte_ns = int(live_maximum_tte_ns)
         if (
             self.maximum_effective_action_age_ms is not None
             and (
@@ -1166,6 +1187,11 @@ class DirectActionValueModel:
             "ZERO", "MAX_OBSERVED",
         ):
             raise ValueError("unknown insufficient selection calibration policy")
+        if not (
+            DEFAULT_MINIMUM_TTE_NS <= self.live_minimum_tte_ns
+            <= self.live_maximum_tte_ns <= DEFAULT_MAXIMUM_TTE_NS
+        ):
+            raise ValueError("live TTE geometry must remain inside trained support")
         if self.max_sizes_per_state <= 0 or self.streaming_batch_size <= 0:
             raise ValueError("positive direct-action capacity limits required")
         if self.selection_calibration_mode not in ("PREQUENTIAL", "OFF"):
@@ -1572,6 +1598,8 @@ class DirectActionValueModel:
                 self.conditional_calibration_shrinkage),
             insufficient_selection_calibration_policy=(
                 self.insufficient_selection_calibration_policy),
+            live_minimum_tte_ns=self.live_minimum_tte_ns,
+            live_maximum_tte_ns=self.live_maximum_tte_ns,
         )
 
     @staticmethod
@@ -2128,6 +2156,10 @@ class DirectActionValueModel:
             "action_space": ["NO_TRADE", "YES_X_SIZE_X_EXIT_HORIZON", "NO_X_SIZE_X_EXIT_HORIZON"],
             "opposite_side_counterfactual": "AVAILABLE_ONLY_WITH_CAUSAL_BILATERAL_L1_DECISION_ARRIVAL_AND_EXIT_EVIDENCE",
             "entry_cap": self.entry_cap,
+            "live_minimum_tte_ns": self.live_minimum_tte_ns,
+            "live_maximum_tte_ns": self.live_maximum_tte_ns,
+            "live_tte_geometry_semantics": (
+                "WITHIN_CAUSAL_TRAINING_SUPPORT_ONLY"),
             "hard_order_notional": self.hard_order_notional,
             "model": "STREAMING_RIDGE_DIRECT_EXECUTABLE_CASH_PNL",
             "matrix_strategy": "ONE_PASS_SUFFICIENT_STATISTICS_THEN_P_X_P_NORMAL_EQUATIONS",
@@ -2582,7 +2614,7 @@ class DirectActionValueModel:
         ):
             return [], "INSUFFICIENT_REGIME_SUPPORT"
         if live_geometry and not (
-            LIVE_MINIMUM_TTE_NS <= int(row["tte_ns"]) <= LIVE_MAXIMUM_TTE_NS
+            self.live_minimum_tte_ns <= int(row["tte_ns"]) <= self.live_maximum_tte_ns
             and any(
                 (decision_side_state(row, side) is not None
                  and float(decision_side_state(row, side)["ask"]) <= self.entry_cap + 1e-12)
@@ -2776,7 +2808,7 @@ class DirectActionValueModel:
             return no_trade("INSUFFICIENT_REGIME_SUPPORT")
         sides = decision_action_sides(row)
         if live_geometry and not (
-            LIVE_MINIMUM_TTE_NS <= int(row["tte_ns"]) <= LIVE_MAXIMUM_TTE_NS
+            self.live_minimum_tte_ns <= int(row["tte_ns"]) <= self.live_maximum_tte_ns
             and any(
                 decision_side_state(row, side) is not None
                 and float(decision_side_state(row, side)["ask"])
