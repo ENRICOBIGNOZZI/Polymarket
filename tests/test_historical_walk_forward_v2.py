@@ -13,6 +13,8 @@ from research.walk_forward_v2.core import (
     executable_markout_target,
     replay_one,
     replay_policy,
+    replay_policy_summary,
+    summarize,
     settlement_predictors,
     valid_native,
     native_repricing_point,
@@ -503,3 +505,43 @@ def test_executable_markout_charges_both_entry_and_exit_fee():
         outcome["markout"],
         outcome["markout_before_fee"] - outcome["markout_entry_fee"] - outcome["markout_exit_fee"],
         abs_tol=1e-12)
+
+
+
+def test_streaming_replay_summary_matches_materialized_outcomes_exactly():
+    evaluations = []
+    base = 1_789_921_800_000_000_001
+    for index in range(12):
+        row = record("speed" + str(index), decision_ns=base + index * 1_000_000_000)
+        row["fee_rate"] = .01
+        row["targets"] = {
+            "500": {
+                "state": "OBSERVED",
+                "arrival_bid": .56 if index % 2 == 0 else .52,
+                "observed_time_ns": row["decision_ns"] + 500_000_000,
+            }
+        }
+        row["arrivals"] = {
+            "100": {
+                "time_ns": row["decision_ns"] + 100_000_000,
+                "bid": .49, "ask": .50, "quantity": 5.0, "epoch": 7,
+            }
+        }
+        evaluations.append({
+            "decision_ns": row["decision_ns"],
+            "decision_id": row["decision_id"],
+            "row": row,
+            "settlement_predictions": {"pm": .495},
+            "repricing_predictions": {"500": .03},
+            "markout_predictions": {"500": .03},
+        })
+    selector = lambda event: (event["markout_predictions"]["500"], None)
+    ordered = sorted(evaluations, key=lambda value: (value["decision_ns"], value["decision_id"]))
+    outcomes = replay_policy(
+        ordered, selector, latency_ms=100, valuation_mode="EXECUTABLE_MARKOUT",
+        markout_horizon_ms=500, assume_sorted=True)
+    materialized = summarize(outcomes)
+    streamed = replay_policy_summary(
+        ordered, selector, latency_ms=100, valuation_mode="EXECUTABLE_MARKOUT",
+        markout_horizon_ms=500, assume_sorted=True)
+    assert streamed == materialized
