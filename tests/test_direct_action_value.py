@@ -1395,3 +1395,104 @@ def test_prequential_clone_preserves_effective_signal_age_gate():
     clone = model._prequential_clone()
     assert clone.maximum_effective_signal_age_ms == 125.0
     assert clone.selection_calibration_mode == "OFF"
+
+
+
+def test_streaming_ridge_partial_pooling_penalty_shrinks_deviation_feature():
+    rows = []
+    for index in range(1, 40):
+        x = float(index) / 10.0
+        rows.append({
+            "features": {
+                "shared": x,
+                "pool.asset_signal::BTC": x,
+            },
+            "target": 2.0 * x,
+        })
+
+    equal = StreamingRidge(
+        ("shared", "pool.asset_signal::BTC"),
+        ridge=2.0,
+        batch_size=8,
+        deviation_penalty_multiplier=1.0,
+    ).fit_factory(lambda: iter(rows), lambda r: r["target"])
+    pooled = StreamingRidge(
+        ("shared", "pool.asset_signal::BTC"),
+        ridge=2.0,
+        batch_size=8,
+        deviation_penalty_multiplier=16.0,
+    ).fit_factory(lambda: iter(rows), lambda r: r["target"])
+
+    equal_shared = float(equal.beta[1])
+    equal_deviation = float(equal.beta[2])
+    pooled_shared = float(pooled.beta[1])
+    pooled_deviation = float(pooled.beta[2])
+
+    assert math.isclose(
+        abs(equal_shared), abs(equal_deviation), rel_tol=1e-7, abs_tol=1e-7)
+    assert abs(pooled_deviation) < abs(pooled_shared)
+    assert abs(pooled_deviation) < abs(equal_deviation)
+    assert pooled.deviation_feature_count == 1
+
+
+def test_partial_pooling_features_are_asset_horizon_and_age_specific():
+    btc = row("m9200", signal=2.0)
+    btc["asset"] = "BTC"
+    eth = row("m9201", signal=-1.0)
+    eth["asset"] = "ETH"
+    model = DirectActionValueModel(
+        size_grid=(5.0,),
+        action_horizons_ms=(500, 1000),
+        train_latencies_ms=(50,),
+        partial_pooling_enabled=True,
+        partial_pooling_penalty_multiplier=8.0,
+        selection_calibration_mode="OFF",
+    )
+    model._configure_levels([btc, eth])
+
+    action = model._action_record(
+        btc, size=5.0, horizon_ms=500, latency_ms=50)
+    features = action["features"]
+    assert features["pool.asset_signal::BTC"] == 2.0
+    assert features["pool.asset_signal::ETH"] == 0.0
+    assert features["pool.asset_exit::BTC::500"] == 1.0
+    assert features["pool.asset_exit::BTC::1000"] == 0.0
+    assert features["pool.asset_exit::ETH::500"] == 0.0
+    assert features["pool.asset_effective_age::BTC"] > 0
+    assert features["pool.asset_effective_age::ETH"] == 0.0
+
+
+def test_direct_model_receipt_declares_partial_pooling_shrinkage():
+    rows = []
+    for index in range(40):
+        item = row(
+            "m" + str(index + 9300),
+            signal=2.0 if index % 2 == 0 else -2.0,
+            exit_bid=.56 if index % 2 == 0 else .44,
+        )
+        item["asset"] = "BTC" if index % 3 else "ETH"
+        rows.append(item)
+
+    model = DirectActionValueModel(
+        size_grid=(5.0,),
+        action_horizons_ms=(500,),
+        train_latencies_ms=(50,),
+        partial_pooling_enabled=True,
+        partial_pooling_penalty_multiplier=8.0,
+        selection_calibration_mode="OFF",
+        streaming_batch_size=16,
+    ).fit(rows)
+    pooling = model.training_receipt["partial_pooling"]
+    assert pooling["enabled"] is True
+    assert pooling["deviation_penalty_multiplier"] == 8.0
+    assert pooling["deviation_feature_count"] > 0
+    assert pooling["deviation_prefix"] == "pool."
+
+
+def test_partial_pooling_multiplier_below_one_is_rejected():
+    try:
+        DirectActionValueModel(partial_pooling_penalty_multiplier=.5)
+    except ValueError as exc:
+        assert "partial pooling penalty multiplier" in str(exc)
+    else:
+        raise AssertionError("expected invalid pooling multiplier to fail")
