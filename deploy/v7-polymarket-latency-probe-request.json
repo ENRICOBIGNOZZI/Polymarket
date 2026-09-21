@@ -1,0 +1,13 @@
+{
+  "schema": "polymarket_v7_london_latency_probe_request_v1",
+  "version": 1,
+  "request_id": "london-latency-probe-install-20260921T1650CEST",
+  "instance_id": "i-0fba2bac9fdc5cbeb",
+  "samples": 20,
+  "recent_window_seconds": 900,
+  "output_directory": "docs/research/london-latency-2026-09-21",
+  "paper_only": true,
+  "authenticated_execution": false,
+  "real_order_submission": false,
+  "real_capital_at_risk": false
+}
