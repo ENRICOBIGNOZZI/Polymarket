@@ -74,16 +74,19 @@ def bilateral_row(market="mb", *, no_depth=7.0):
     r["no_token_id"] = "no-" + market
     r["token_id"] = r["yes_token_id"]
     r["pair"] = {
-        "YES": {"bid": .49, "ask": .50, "bid_quantity": 20.0, "ask_quantity": 20.0},
-        "NO": {"bid": .48, "ask": .51, "bid_quantity": no_depth, "ask_quantity": no_depth},
+        "state": "BILATERAL_EXECUTABLE_READY",
+        "yes": {"bid": .49, "ask": .50, "bid_quantity": 20.0, "ask_quantity": 20.0},
+        "no": {"bid": .48, "ask": .51, "bid_quantity": no_depth, "ask_quantity": no_depth},
     }
     r["arrivals"]["50"]["pair"] = {
-        "YES": {"bid": .49, "ask": .50, "bid_quantity": 20.0, "ask_quantity": 20.0},
-        "NO": {"bid": .48, "ask": .51, "bid_quantity": no_depth, "ask_quantity": no_depth},
+        "state": "BILATERAL_EXECUTABLE_READY",
+        "yes": {"bid": .49, "ask": .50, "bid_quantity": 20.0, "ask_quantity": 20.0},
+        "no": {"bid": .48, "ask": .51, "bid_quantity": no_depth, "ask_quantity": no_depth},
     }
     r["targets"]["500"]["pair"] = {
-        "YES": {"bid": .45, "ask": .46, "bid_quantity": 20.0, "ask_quantity": 20.0},
-        "NO": {"bid": .56, "ask": .57, "bid_quantity": no_depth, "ask_quantity": no_depth},
+        "state": "BILATERAL_EXECUTABLE_READY",
+        "yes": {"bid": .45, "ask": .46, "bid_quantity": 20.0, "ask_quantity": 20.0},
+        "no": {"bid": .56, "ask": .57, "bid_quantity": no_depth, "ask_quantity": no_depth},
     }
     return r
 
