@@ -2013,7 +2013,8 @@ def prediction_quality(evaluations):
     return {"settlement": settlement, "repricing": repricing, "executable_markout": markout}
 
 
-def economic_evaluation(evaluations, *, latency_ms=(10, 25, 50, 100, 250, 500)):
+def economic_evaluation(evaluations, *, latency_ms=(10, 25, 50, 100, 250, 500),
+                        capital_sizing_contract=None):
     """OOS economics for settlement, midpoint and direct executable-markout targets."""
     ordered = sorted(evaluations, key=lambda value: (value["decision_ns"], value["decision_id"]))
     result = {
@@ -2024,6 +2025,7 @@ def economic_evaluation(evaluations, *, latency_ms=(10, 25, 50, 100, 250, 500)):
         "asset_selection_diagnostics": asset_selection_diagnostics(evaluations),
         "live_parity_policy_diagnostics": live_parity_policy_diagnostics(evaluations),
         "common_signal_support_diagnostics": common_signal_support_diagnostics(evaluations),
+        "capital_sizing_contract": capital_sizing_contract,
         "latency_reference_horizon_ms": 500,
     }
     variants = {
@@ -2206,6 +2208,58 @@ def economic_evaluation(evaluations, *, latency_ms=(10, 25, 50, 100, 250, 500)):
                     "require_full_visible_depth": True,
                 },
             }
+
+    # Capital-based PAPER sizing challenger from the repository risk contract.
+    # This preserves exact decision geometry (105-120s, 0.80 cap, full depth,
+    # zero chase) but cannot reconstruct historical per-context carryover.
+    result["capital_sizing_horizon_latency"] = {}
+    result["capital_sizing_asset_horizon_latency"] = {}
+    if isinstance(capital_sizing_contract, dict):
+        target_notional = int(capital_sizing_contract.get("target_notional_microdollars") or 0)
+        global_budget = float(capital_sizing_contract.get("global_budget_microdollars") or 0) / 1_000_000
+        if target_notional > 0 and global_budget > 0:
+            for horizon in (500, 1000, 2000):
+                hkey = str(horizon)
+                pooled_selector = lambda event, h=hkey: (
+                    event.get("markout_predictions", {}).get(h), None)
+                asset_selector = lambda event, h=hkey: (
+                    event.get("asset_markout_predictions", {}).get(h), None)
+                pooled_cells, asset_cells = {}, {}
+                for latency in latency_ms:
+                    if latency >= horizon:
+                        state = {
+                            "state": "LATENCY_NOT_BEFORE_MARKOUT_HORIZON",
+                            "horizon_ms": horizon, "latency_ms": latency,
+                        }
+                        pooled_cells[str(latency)] = dict(state)
+                        asset_cells[str(latency)] = dict(state)
+                        continue
+                    common = dict(
+                        latency_ms=latency,
+                        valuation_mode="EXECUTABLE_MARKOUT",
+                        markout_horizon_ms=horizon,
+                        assume_sorted=True,
+                        entry_cap=.80,
+                        shares=5.0,
+                        minimum_tte_ns=105_000_000_000,
+                        maximum_tte_ns=120_000_000_000,
+                        require_full_visible_depth=True,
+                        limit_chase_ticks=0,
+                        target_notional_microdollars=target_notional,
+                        capital_budget=global_budget,
+                    )
+                    pooled_cells[str(latency)] = {
+                        "state": "READY",
+                        "sizing_mode": "CAPITAL_BASED_TARGET_NOTIONAL",
+                        **replay_policy_summary(ordered, pooled_selector, **common),
+                    }
+                    asset_cells[str(latency)] = {
+                        "state": "READY",
+                        "sizing_mode": "CAPITAL_BASED_TARGET_NOTIONAL",
+                        **replay_policy_summary(ordered, asset_selector, **common),
+                    }
+                result["capital_sizing_horizon_latency"][hkey] = pooled_cells
+                result["capital_sizing_asset_horizon_latency"][hkey] = asset_cells
 
     # Backward-compatible latency chart uses a declared reference horizon only.
     result["latency"] = result["horizon_latency"]["500"]
