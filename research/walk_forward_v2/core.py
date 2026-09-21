@@ -2112,14 +2112,72 @@ def economic_evaluation(evaluations, *, latency_ms=(10, 25, 50, 100, 250, 500)):
         result["live_parity_horizon_latency"][hkey] = pooled_cells
         result["live_parity_asset_horizon_latency"][hkey] = asset_cells
 
+    # Venue-floor-aware latency surfaces. A total latency is admissible only
+    # if it is not earlier than the market's mandatory taker delay. Rows with
+    # unavailable venue-delay evidence are excluded rather than treated as zero.
+    result["venue_floor_aware_horizon_latency"] = {}
+    result["venue_floor_aware_asset_horizon_latency"] = {}
+    for horizon in (500, 1000, 2000):
+        hkey = str(horizon)
+        pooled_selector = lambda event, h=hkey: (
+            event.get("markout_predictions", {}).get(h), None)
+        asset_selector = lambda event, h=hkey: (
+            event.get("asset_markout_predictions", {}).get(h), None)
+        pooled_cells, asset_cells = {}, {}
+        for total_latency in (25, 50, 100, 250, 500):
+            if total_latency >= horizon:
+                state = {
+                    "state": "LATENCY_NOT_BEFORE_MARKOUT_HORIZON",
+                    "horizon_ms": horizon,
+                    "total_latency_ms": total_latency,
+                }
+                pooled_cells[str(total_latency)] = dict(state)
+                asset_cells[str(total_latency)] = dict(state)
+                continue
+            feasible = [
+                event for event in ordered
+                if isinstance(event["row"].get("paper_venue_delay_ns"), int)
+                and event["row"]["paper_venue_delay_ns"] >= 0
+                and event["row"]["paper_venue_delay_ns"] <= total_latency * 1_000_000
+            ]
+            floor_counts = dict(Counter(
+                str(int(event["row"]["paper_venue_delay_ns"] // 1_000_000))
+                for event in feasible
+            ))
+            common = dict(
+                latency_ms=total_latency,
+                valuation_mode="EXECUTABLE_MARKOUT",
+                markout_horizon_ms=horizon,
+                assume_sorted=True,
+                entry_cap=.80,
+                shares=5.0,
+                minimum_tte_ns=105_000_000_000,
+                maximum_tte_ns=120_000_000_000,
+                require_full_visible_depth=True,
+            )
+            pooled_cells[str(total_latency)] = {
+                "state": "READY",
+                "feasible_rows": len(feasible),
+                "venue_floor_ms_counts": floor_counts,
+                **replay_policy_summary(feasible, pooled_selector, **common),
+            }
+            asset_cells[str(total_latency)] = {
+                "state": "READY",
+                "feasible_rows": len(feasible),
+                "venue_floor_ms_counts": floor_counts,
+                **replay_policy_summary(feasible, asset_selector, **common),
+            }
+        result["venue_floor_aware_horizon_latency"][hkey] = pooled_cells
+        result["venue_floor_aware_asset_horizon_latency"][hkey] = asset_cells
+
     # Preregistered promotion candidate set evaluated under exact current
     # native PAPER geometry at one frozen reference latency. This avoids
     # selecting a model and a latency jointly after seeing outcomes.
-    promotion_latency_ms = 50
+    promotion_latency_ms = 500
     result["promotion_reference_latency_ms"] = promotion_latency_ms
     result["live_policy_promotion_candidates"] = {}
     for family in ("POOLED", "ASSET_SPECIFIC"):
-        for horizon in (500, 1000, 2000):
+        for horizon in (1000, 2000):
             hkey = str(horizon)
             if family == "POOLED":
                 selector = lambda event, h=hkey: (
