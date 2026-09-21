@@ -36,6 +36,7 @@ from research.walk_forward_v3.direct_action import (
     summarize_effective_age_buckets,
     evaluate_direct_action_policy,
     load_trade_frequency_challenger_config,
+    trade_frequency_opportunity_audit,
 )
 
 
@@ -2176,3 +2177,26 @@ def test_marginal_edge_sizing_does_not_explode_from_fixed_cash_intercept_at_low_
     # Average total utility/notional is intentionally very different because
     # of the fixed intercept; it must not drive sizing anymore.
     assert cheap_pick["admission_return_on_notional"] > rich_pick["admission_return_on_notional"]
+
+
+
+def test_trade_frequency_opportunity_audit_quantifies_heuristic_attrition_without_selection():
+    live = row("m13000", ask=.50, depth=20.0, minimum=5.0)
+    live["parent_shock_id"] = "s1"
+    earlier = row("m13000", ask=.50, depth=20.0, minimum=5.0)
+    earlier["decision_id"] = "m13000-earlier"
+    earlier["tte_ns"] = 80_000_000_000
+    earlier["parent_shock_id"] = "s2"
+    expensive = row("m13001", ask=.90, depth=20.0, minimum=5.0)
+    expensive["parent_shock_id"] = "s3"
+    audit = trade_frequency_opportunity_audit([live, earlier, expensive])
+    assert audit["diagnostic_only"] is True
+    assert audit["selection"] == "NONE_NO_POLICY_TUNING_FROM_OUTER_OOS"
+    stages = {entry["stage"]: entry for entry in audit["sequential_funnel"]}
+    assert stages["research_tte_30_120s"]["survivors"] == 3
+    assert stages["live_tte_105_120s"]["survivors"] == 2
+    assert stages["entry_price_cap"]["survivors"] == 1
+    assert audit["filter_classification"]["live_tte_105_120s"].startswith("LEGACY")
+    assert audit["filter_classification"]["entry_price_cap"].startswith("LEGACY")
+    assert audit["shock_identity"]["markets_with_multiple_independent_shocks"] == 1
+    assert audit["shock_identity"]["independent_shock_count"] == 3
