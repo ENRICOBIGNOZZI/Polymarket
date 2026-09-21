@@ -24,6 +24,8 @@ from research.walk_forward_v3.direct_action import (
     realized_action_economics,
     realized_action_value,
     residual_policy_friction,
+    summarize_direct_action,
+    merge_direct_action_summaries,
 )
 
 
@@ -839,3 +841,60 @@ def test_execution_kernel_preserves_zero_chase_no_fill_for_every_size():
         assert observed == "OBSERVED_NO_FILL_LIMIT_NOT_TOUCHED"
         assert economics["cash_pnl"] == 0.0
         assert economics["filled"] == 0.0
+
+
+
+def test_continuous_q_summary_uses_distributions_not_unbounded_size_keys():
+    outcomes = []
+    for index in range(50):
+        outcomes.append({
+            "action": "TRADE",
+            "asset": "BTC",
+            "side": "YES" if index % 2 == 0 else "NO",
+            "size": 1.0 + index / 7.0,
+            "notional": 0.5 + index / 14.0,
+            "exit_horizon_ms": 500 if index % 3 else 250,
+            "realized_pnl": 0.01 * (index - 20),
+            "policy_utility": 0.1,
+            "total_residual_friction": 0.01,
+            "uncertainty_penalty": 0.02,
+            "replay_max_active_positions": 3,
+            "replay_max_gross_notional": 12.0,
+        })
+    summary = summarize_direct_action(outcomes)
+    assert "by_size" not in summary
+    assert summary["selected_size_distribution"]["count"] == 50
+    assert summary["selected_size_distribution"]["p50"] is not None
+    assert summary["by_side"]["YES"]["trades"] == 25
+    assert summary["by_side"]["NO"]["trades"] == 25
+
+
+def test_fold_summary_merge_preserves_exact_counts_and_pnl():
+    first = summarize_direct_action([
+        {
+            "action": "TRADE", "asset": "BTC", "side": "YES",
+            "size": 5.0, "notional": 2.5, "exit_horizon_ms": 250,
+            "realized_pnl": 0.4, "policy_utility": 0.2,
+            "total_residual_friction": 0.01, "uncertainty_penalty": 0.02,
+            "replay_max_active_positions": 1, "replay_max_gross_notional": 2.5,
+        },
+        {"action": "NO_TRADE", "realized_pnl": 0.0},
+    ])
+    second = summarize_direct_action([
+        {
+            "action": "TRADE", "asset": "ETH", "side": "NO",
+            "size": 7.0, "notional": 3.5, "exit_horizon_ms": 500,
+            "realized_pnl": -0.1, "policy_utility": 0.1,
+            "total_residual_friction": 0.03, "uncertainty_penalty": 0.04,
+            "replay_max_active_positions": 2, "replay_max_gross_notional": 5.0,
+        },
+    ])
+    merged = merge_direct_action_summaries([first, second])
+    assert merged["opportunities"] == 3
+    assert merged["selected_trades"] == 2
+    assert merged["no_trade"] == 1
+    assert math.isclose(merged["total_observed_net_pnl"], 0.3, abs_tol=1e-12)
+    assert math.isclose(merged["mean_observed_net_pnl"], 0.15, abs_tol=1e-12)
+    assert merged["max_active_positions"] == 2
+    assert merged["by_asset"]["BTC"]["trades"] == 1
+    assert merged["by_asset"]["ETH"]["trades"] == 1
