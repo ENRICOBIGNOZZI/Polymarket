@@ -2949,6 +2949,7 @@ def evaluate_direct_action_policy(
     entry_policy=None,
     max_entries_per_market=1,
     sizing_policy=None,
+    max_market_exposure=None,
 ):
     """Sequential OOS replay with explicit entry identity and optional sizing challenger."""
     ordered = sorted(rows, key=lambda row: (row["decision_ns"], row["decision_id"]))
@@ -2961,6 +2962,10 @@ def evaluate_direct_action_policy(
         raise ValueError("unknown entry policy")
     if type(max_entries_per_market) is not int or max_entries_per_market <= 0:
         raise ValueError("positive max entries per market required")
+    if max_market_exposure is not None and (
+        not finite(max_market_exposure) or float(max_market_exposure) <= 0
+    ):
+        raise ValueError("positive finite max market exposure required")
     used_markets = set()
     used_shocks = set()
     market_entry_counts = Counter()
@@ -3015,7 +3020,16 @@ def evaluate_direct_action_policy(
             })
             continue
 
-        available = max(0.0, float(capital_budget) - gross_notional)
+        global_available = max(0.0, float(capital_budget) - gross_notional)
+        market_active_notional = sum(
+            position["notional"] for position in active
+            if position["market_id"] == market)
+        market_available = (
+            global_available
+            if max_market_exposure is None
+            else max(0.0, float(max_market_exposure) - market_active_notional)
+        )
+        available = min(global_available, market_available)
         if sizing_policy is None:
             selected = model.select_action(
                 row, latency_ms=latency_ms, available_capital=available,
@@ -3035,6 +3049,12 @@ def evaluate_direct_action_policy(
             "entry_policy": entry_policy,
             "parent_shock_id": shock_id or None,
             "available_capital_before": float(available),
+            "global_available_capital_before": float(global_available),
+            "market_available_capital_before": float(market_available),
+            "market_active_notional_before": float(market_active_notional),
+            "max_market_exposure": (
+                None if max_market_exposure is None
+                else float(max_market_exposure)),
             "capital_utilization_before": (
                 gross_notional / float(capital_budget)
                 if float(capital_budget) > 0 else None),
@@ -3618,6 +3638,9 @@ def walk_forward_direct_action(
                 live_geometry=True,
                 entry_policy=challenger_entry_policy,
                 sizing_policy=challenger_sizing_policy,
+                max_market_exposure=(
+                    float(capital_budget)
+                    / challenger_sizing_policy.context_count),
             )
             challenger_summary = summarize_direct_action(challenger_outcomes)
             challenger_fold_summaries.append(challenger_summary)
@@ -3664,6 +3687,9 @@ def walk_forward_direct_action(
                             "context_capital_fraction",
                             "desired_notional_before_constraints",
                             "desired_notional_after_constraints",
+                            "global_available_capital_before",
+                            "market_available_capital_before",
+                            "market_active_notional_before", "max_market_exposure",
                             "calibration_multiplier_used", "uncertainty_penalty",
                             "policy_utility", "realized_pnl", "target_state",
                         )
