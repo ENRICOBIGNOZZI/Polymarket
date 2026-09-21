@@ -24,6 +24,9 @@ from research.walk_forward_v3.direct_action import (
     realized_action_economics,
     realized_action_value,
     residual_policy_friction,
+    summarize_direct_action,
+    merge_direct_action_summaries,
+    bilateral_evidence_summary,
 )
 
 
@@ -45,6 +48,7 @@ def row(market, *, signal=1.0, exit_bid=.55, depth=20.0, ask=.50, minimum=1.0):
         "pretrigger": True,
         "bid": ask - .01,
         "ask": ask,
+        "bid_quantity": depth,
         "quantity": depth,
         "minimum": minimum,
         "tick": .01,
@@ -60,6 +64,7 @@ def row(market, *, signal=1.0, exit_bid=.55, depth=20.0, ask=.50, minimum=1.0):
                 "time_ns": decision_ns + 50_000_000,
                 "bid": ask - .01,
                 "ask": ask,
+                "bid_quantity": depth,
                 "quantity": depth,
                 "epoch": 7,
             }
@@ -69,6 +74,7 @@ def row(market, *, signal=1.0, exit_bid=.55, depth=20.0, ask=.50, minimum=1.0):
                 "state": "OBSERVED",
                 "arrival_bid": exit_bid,
                 "arrival_ask": exit_bid + .01,
+                "arrival_bid_quantity": depth,
                 "arrival_quantity": depth,
                 "observed_time_ns": decision_ns + 500_000_000,
             }
@@ -200,11 +206,14 @@ def test_execution_friction_decomposition_reconciles_without_double_counting():
     assert math.isclose(economics["decision_half_spread_cost"], .05, abs_tol=1e-12)
     assert math.isclose(economics["exit_half_spread_cost"], .05, abs_tol=1e-12)
     assert math.isclose(economics["latency_price_drift_cost"], 0.0, abs_tol=1e-12)
+    assert math.isclose(economics["exit_liquidity_shortfall_cost"], 0.0, abs_tol=1e-12)
+    assert economics["fully_exitable_at_horizon"] is True
     reconstructed = (
         economics["ideal_midpoint_alpha"]
         - economics["decision_half_spread_cost"]
         - economics["latency_price_drift_cost"]
         - economics["exit_half_spread_cost"]
+        - economics["exit_liquidity_shortfall_cost"]
         - economics["total_fees"]
     )
     assert math.isclose(reconstructed, economics["cash_pnl"], abs_tol=1e-12)
@@ -259,6 +268,7 @@ def test_model_receipt_lists_execution_frictions_inside_target_and_residuals_out
     embedded = set(receipt["execution_frictions_in_training_target"])
     assert "entry_taker_fee" in embedded
     assert "exit_taker_fee" in embedded
+    assert "exit_l1_capacity_and_zero_value_residual_lower_bound" in embedded
     assert "fill_and_no_fill" in embedded
     assert "post_signal_latency_price_drift_via_arrival_book" in embedded
     assert receipt["residual_policy_frictions"]["capital_charge_bps_per_second"] == 1.0
@@ -839,3 +849,126 @@ def test_execution_kernel_preserves_zero_chase_no_fill_for_every_size():
         assert observed == "OBSERVED_NO_FILL_LIMIT_NOT_TOUCHED"
         assert economics["cash_pnl"] == 0.0
         assert economics["filled"] == 0.0
+
+
+
+def test_continuous_q_summary_uses_distributions_not_unbounded_size_keys():
+    outcomes = []
+    for index in range(50):
+        outcomes.append({
+            "action": "TRADE",
+            "asset": "BTC",
+            "side": "YES" if index % 2 == 0 else "NO",
+            "size": 1.0 + index / 7.0,
+            "notional": 0.5 + index / 14.0,
+            "exit_horizon_ms": 500 if index % 3 else 250,
+            "realized_pnl": 0.01 * (index - 20),
+            "policy_utility": 0.1,
+            "total_residual_friction": 0.01,
+            "uncertainty_penalty": 0.02,
+            "replay_max_active_positions": 3,
+            "replay_max_gross_notional": 12.0,
+        })
+    summary = summarize_direct_action(outcomes)
+    assert "by_size" not in summary
+    assert summary["selected_size_distribution"]["count"] == 50
+    assert summary["selected_size_distribution"]["p50"] is not None
+    assert summary["by_side"]["YES"]["trades"] == 25
+    assert summary["by_side"]["NO"]["trades"] == 25
+
+
+def test_fold_summary_merge_preserves_exact_counts_and_pnl():
+    first = summarize_direct_action([
+        {
+            "action": "TRADE", "asset": "BTC", "side": "YES",
+            "size": 5.0, "notional": 2.5, "exit_horizon_ms": 250,
+            "realized_pnl": 0.4, "policy_utility": 0.2,
+            "total_residual_friction": 0.01, "uncertainty_penalty": 0.02,
+            "replay_max_active_positions": 1, "replay_max_gross_notional": 2.5,
+        },
+        {"action": "NO_TRADE", "realized_pnl": 0.0},
+    ])
+    second = summarize_direct_action([
+        {
+            "action": "TRADE", "asset": "ETH", "side": "NO",
+            "size": 7.0, "notional": 3.5, "exit_horizon_ms": 500,
+            "realized_pnl": -0.1, "policy_utility": 0.1,
+            "total_residual_friction": 0.03, "uncertainty_penalty": 0.04,
+            "replay_max_active_positions": 2, "replay_max_gross_notional": 5.0,
+        },
+    ])
+    merged = merge_direct_action_summaries([first, second])
+    assert merged["opportunities"] == 3
+    assert merged["selected_trades"] == 2
+    assert merged["no_trade"] == 1
+    assert math.isclose(merged["total_observed_net_pnl"], 0.3, abs_tol=1e-12)
+    assert math.isclose(merged["mean_observed_net_pnl"], 0.15, abs_tol=1e-12)
+    assert merged["max_active_positions"] == 2
+    assert merged["by_asset"]["BTC"]["trades"] == 1
+    assert merged["by_asset"]["ETH"]["trades"] == 1
+
+
+
+def test_exit_horizon_respects_observed_bid_capacity_and_values_residual_at_zero():
+    r = row("m982", exit_bid=.55, depth=20.0)
+    r["targets"]["500"]["arrival_bid_quantity"] = 4.0
+    economics, state = realized_action_economics(
+        r, size=10.0, horizon_ms=500, latency_ms=50)
+    assert state == "OBSERVED_FULL_FILL"
+    assert economics["filled"] == 10.0
+    assert economics["exit_filled"] == 4.0
+    assert economics["residual_inventory"] == 6.0
+    assert economics["fully_exitable_at_horizon"] is False
+    assert economics["residual_terminal_value_assumption"] == "ZERO_WORST_CASE"
+    assert math.isclose(economics["cash_pnl"], -2.8, abs_tol=1e-12)
+    # Future mid=.555; six unliquidated shares lose that entire executable-mark
+    # reference under the static zero-residual lower-bound target.
+    assert math.isclose(
+        economics["exit_liquidity_shortfall_cost"], 6.0 * .555,
+        abs_tol=1e-12)
+    reconstructed = (
+        economics["ideal_midpoint_alpha"]
+        - economics["decision_half_spread_cost"]
+        - economics["latency_price_drift_cost"]
+        - economics["exit_half_spread_cost"]
+        - economics["exit_liquidity_shortfall_cost"]
+        - economics["total_fees"]
+    )
+    assert math.isclose(reconstructed, economics["cash_pnl"], abs_tol=1e-12)
+
+
+def test_bilateral_exit_capacity_is_side_specific():
+    r = bilateral_row("m983", no_depth=7.0)
+    # Entry/arrival can execute five NO shares, but the future NO bid can
+    # liquidate only three. This isolates exit capacity from entry capacity.
+    r["targets"]["500"]["pair"]["no"]["bid_quantity"] = 3.0
+    yes, yes_state = realized_action_economics(
+        r, size=5.0, horizon_ms=500, latency_ms=50, side="YES")
+    no, no_state = realized_action_economics(
+        r, size=5.0, horizon_ms=500, latency_ms=50, side="NO")
+    assert yes_state == no_state == "OBSERVED_FULL_FILL"
+    assert yes["exit_filled"] == 5.0
+    assert yes["residual_inventory"] == 0.0
+    assert no["exit_filled"] == 3.0
+    assert no["residual_inventory"] == 2.0
+    assert no["fully_exitable_at_horizon"] is False
+
+
+
+def test_bilateral_evidence_summary_never_promotes_prices_only_to_executable():
+    legacy = row("m984")
+    ready = bilateral_row("m985", no_depth=7.0)
+    prices_only = bilateral_row("m986", no_depth=7.0)
+    prices_only["pair"] = {
+        "state": "PRICES_ONLY",
+        "yes": {"bid": .49, "ask": .50, "bid_quantity": None, "ask_quantity": None},
+        "no": {"bid": .48, "ask": .51, "bid_quantity": None, "ask_quantity": None},
+    }
+    result = bilateral_evidence_summary([legacy, ready, prices_only])
+    states = result["decision_pair_states"]
+    assert states["BILATERAL_EXECUTABLE_READY"] == 1
+    assert states["PRICES_ONLY"] == 1
+    assert states["UNAVAILABLE"] == 1
+    assert math.isclose(result["bilateral_ready_decision_fraction"], 1 / 3)
+    target = result["target_pair_states_by_horizon_ms"]["500"]
+    assert target["BILATERAL_EXECUTABLE_READY"] == 2

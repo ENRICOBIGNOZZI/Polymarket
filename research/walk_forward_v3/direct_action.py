@@ -163,10 +163,12 @@ def observed_side_state(container, side, row):
         bid = container.get("bid", container.get("arrival_bid"))
         ask = container.get("ask", container.get("arrival_ask"))
         quantity = container.get("quantity", container.get("arrival_quantity"))
+        bid_quantity = container.get(
+            "bid_quantity", container.get("arrival_bid_quantity"))
         if finite(bid) and finite(ask):
             return {
                 "bid": float(bid), "ask": float(ask),
-                "bid_quantity": 0.0,
+                "bid_quantity": float(bid_quantity or 0.0),
                 "ask_quantity": float(quantity or 0.0),
             }
     return None
@@ -236,7 +238,9 @@ def action_execution_kernel(
     """Size-independent causal execution kernel for one state/side/horizon.
 
     All book lookup, zero-chase, fee and exit economics are computed once.
-    Quantity enters later only through min(q, observed_arrival_depth).
+    Quantity enters later through observed entry ask capacity and future exit
+    bid capacity. Residual inventory at the chosen horizon is never assigned
+    fictitious liquidity.
     """
     if horizon_ms <= latency_ms:
         return None, "HORIZON_NOT_AFTER_EXECUTION"
@@ -264,6 +268,7 @@ def action_execution_kernel(
             "side": side,
             "state": "OBSERVED_NO_FILL_LIMIT_NOT_TOUCHED",
             "fill_capacity": 0.0,
+            "exit_capacity": 0.0,
             "decision_ask": ask0,
             "decision_bid": bid0,
             "entry_price": None,
@@ -276,6 +281,7 @@ def action_execution_kernel(
             "latency_price_drift_per_share": 0.0,
             "exit_half_spread_per_share": 0.0,
             "ideal_midpoint_alpha_per_share": None,
+            "future_mid": None,
         }, "OBSERVED_NO_FILL_LIMIT_NOT_TOUCHED"
 
     fill_capacity = float(arrival_state.get("ask_quantity") or 0.0)
@@ -284,6 +290,7 @@ def action_execution_kernel(
             "side": side,
             "state": "OBSERVED_NO_FILL_ZERO_DEPTH",
             "fill_capacity": 0.0,
+            "exit_capacity": 0.0,
             "decision_ask": ask0,
             "decision_bid": bid0,
             "entry_price": None,
@@ -296,6 +303,7 @@ def action_execution_kernel(
             "latency_price_drift_per_share": 0.0,
             "exit_half_spread_per_share": 0.0,
             "ideal_midpoint_alpha_per_share": None,
+            "future_mid": None,
         }, "OBSERVED_NO_FILL_ZERO_DEPTH"
 
     target = row.get("targets", {}).get(str(int(horizon_ms)), {})
@@ -307,6 +315,7 @@ def action_execution_kernel(
 
     entry_price = float(arrival_state["ask"])
     exit_bid = float(exit_state["bid"])
+    exit_capacity = max(0.0, float(exit_state.get("bid_quantity") or 0.0))
     entry_fee = fee_per_share(row, entry_price)
     exit_fee = fee_per_share(row, exit_bid)
     gross = exit_bid - entry_price
@@ -331,6 +340,7 @@ def action_execution_kernel(
         "side": side,
         "state": "OBSERVED_EXECUTABLE",
         "fill_capacity": fill_capacity,
+        "exit_capacity": exit_capacity,
         "decision_ask": ask0,
         "decision_bid": bid0,
         "entry_price": entry_price,
@@ -347,11 +357,18 @@ def action_execution_kernel(
         "ideal_midpoint_alpha_per_share": (
             float(ideal_alpha) if ideal_alpha is not None else None
         ),
+        "future_mid": float(future_mid) if future_mid is not None else None,
     }, "OBSERVED_EXECUTABLE"
 
 
 def economics_from_execution_kernel(kernel, size):
-    """Apply one candidate quantity to a previously computed kernel."""
+    """Apply quantity with conservative, capacity-aware forced exit.
+
+    Entry fill is bounded by observed arrival ask depth. At the selected exit
+    horizon, only observed bid depth is executable. Any residual inventory is
+    assigned terminal value zero in this static target, yielding a conservative
+    lower bound rather than inventing unobserved exit liquidity.
+    """
     size = float(size)
     fill = min(size, max(0.0, float(kernel["fill_capacity"])))
     side = str(kernel["side"])
@@ -361,50 +378,79 @@ def economics_from_execution_kernel(kernel, size):
             "cash_pnl": 0.0,
             "gross_executable_markout": 0.0,
             "filled": 0.0,
+            "exit_filled": 0.0,
+            "residual_inventory": 0.0,
+            "fully_exitable_at_horizon": True,
             "requested": size,
             "entry_price": None,
             "exit_bid": None,
+            "exit_bid_quantity": 0.0,
             "entry_fee": 0.0,
             "exit_fee": 0.0,
             "total_fees": 0.0,
             "decision_half_spread_cost": 0.0,
             "latency_price_drift_cost": 0.0,
             "exit_half_spread_cost": 0.0,
+            "exit_liquidity_shortfall_cost": 0.0,
             "ideal_midpoint_alpha": None,
+            "residual_terminal_value_assumption": "ZERO_WORST_CASE",
             "frictions_embedded_in_cash_pnl": True,
         }, str(kernel["state"])
 
+    exit_capacity = max(0.0, float(kernel.get("exit_capacity") or 0.0))
+    exit_fill = min(fill, exit_capacity)
+    residual = max(0.0, fill - exit_fill)
+    entry_price = float(kernel["entry_price"])
+    exit_bid = float(kernel["exit_bid"])
+    entry_fee = fill * float(kernel["entry_fee_per_share"])
+    exit_fee = exit_fill * float(kernel["exit_fee_per_share"])
+    gross = exit_fill * exit_bid - fill * entry_price
+    cash = gross - entry_fee - exit_fee
+
+    # Preserve the historical entry-fill state taxonomy for funnel parity.
+    # Exit feasibility is orthogonal and recorded explicitly below.
     state = (
         "OBSERVED_FULL_FILL"
         if fill + 1e-12 >= size
         else "OBSERVED_PARTIAL_FILL"
     )
+
     exit_half = kernel["exit_half_spread_per_share"]
     ideal_alpha = kernel["ideal_midpoint_alpha_per_share"]
+    future_mid = kernel.get("future_mid")
+    exit_liquidity_shortfall = (
+        residual * float(future_mid) if finite(future_mid) else None
+    )
     return {
         "side": side,
-        "cash_pnl": float(fill * kernel["cash_pnl_per_share"]),
-        "gross_executable_markout": float(
-            fill * kernel["gross_executable_markout_per_share"]),
+        "cash_pnl": float(cash),
+        "gross_executable_markout": float(gross),
         "filled": float(fill),
+        "exit_filled": float(exit_fill),
+        "residual_inventory": float(residual),
+        "fully_exitable_at_horizon": residual <= 1e-12,
         "requested": size,
-        "entry_price": kernel["entry_price"],
-        "exit_bid": kernel["exit_bid"],
-        "entry_fee": float(fill * kernel["entry_fee_per_share"]),
-        "exit_fee": float(fill * kernel["exit_fee_per_share"]),
-        "total_fees": float(
-            fill * (
-                kernel["entry_fee_per_share"] + kernel["exit_fee_per_share"])),
+        "entry_price": entry_price,
+        "exit_bid": exit_bid,
+        "exit_bid_quantity": float(exit_capacity),
+        "entry_fee": float(entry_fee),
+        "exit_fee": float(exit_fee),
+        "total_fees": float(entry_fee + exit_fee),
         "decision_half_spread_cost": float(
             fill * kernel["decision_half_spread_per_share"]),
         "latency_price_drift_cost": float(
             fill * kernel["latency_price_drift_per_share"]),
         "exit_half_spread_cost": (
-            float(fill * exit_half) if exit_half is not None else None
+            float(exit_fill * exit_half) if exit_half is not None else None
+        ),
+        "exit_liquidity_shortfall_cost": (
+            float(exit_liquidity_shortfall)
+            if exit_liquidity_shortfall is not None else None
         ),
         "ideal_midpoint_alpha": (
             float(fill * ideal_alpha) if ideal_alpha is not None else None
         ),
+        "residual_terminal_value_assumption": "ZERO_WORST_CASE",
         "frictions_embedded_in_cash_pnl": True,
     }, state
 
@@ -1113,6 +1159,7 @@ class DirectActionValueModel:
                 "fill_and_no_fill",
                 "partial_fill",
                 "exit_spread_via_executable_bid",
+                "exit_l1_capacity_and_zero_value_residual_lower_bound",
                 "entry_taker_fee",
                 "exit_taker_fee",
                 "post_fill_adverse_repricing",
@@ -1576,30 +1623,89 @@ def evaluate_direct_action_policy(
     return outcomes
 
 
+def bilateral_evidence_summary(records):
+    """Aggregate support for causal YES/NO counterfactual actions."""
+    decision_states = Counter()
+    target_states = {
+        str(horizon): Counter() for horizon in DEFAULT_ACTION_HORIZONS_MS
+    }
+    for row in records:
+        pair = row.get("pair")
+        state = (
+            str(pair.get("state"))
+            if isinstance(pair, dict) and pair.get("state")
+            else "UNAVAILABLE"
+        )
+        decision_states[state] += 1
+        for horizon in DEFAULT_ACTION_HORIZONS_MS:
+            target = (row.get("targets") or {}).get(str(horizon), {})
+            target_pair = target.get("pair") if isinstance(target, dict) else None
+            target_state = (
+                str(target_pair.get("state"))
+                if isinstance(target_pair, dict) and target_pair.get("state")
+                else "UNAVAILABLE"
+            )
+            target_states[str(horizon)][target_state] += 1
+    return {
+        "schema": SCHEMA + "_bilateral_evidence_v1",
+        **SAFETY,
+        "decisions": len(records),
+        "decision_pair_states": dict(decision_states),
+        "bilateral_ready_decision_fraction": (
+            decision_states["BILATERAL_EXECUTABLE_READY"] / len(records)
+            if records else None
+        ),
+        "target_pair_states_by_horizon_ms": {
+            horizon: dict(counts) for horizon, counts in target_states.items()
+        },
+        "counterfactual_side_rule": (
+            "YES_AND_NO_ONLY_WHEN_DECISION_ARRIVAL_AND_EXIT_HAVE_"
+            "BILATERAL_EXECUTABLE_READY;OTHERWISE_SELECTED_SIDE_ONLY"
+        ),
+    }
+
+
+def numeric_distribution(values):
+    values = [float(value) for value in values if finite(value)]
+    if not values:
+        return {"count": 0, "min": None, "p10": None, "p25": None,
+                "p50": None, "p75": None, "p90": None, "p99": None,
+                "max": None, "mean": None}
+    return {
+        "count": len(values),
+        "min": min(values),
+        "p10": _quantile(values, .10),
+        "p25": _quantile(values, .25),
+        "p50": _quantile(values, .50),
+        "p75": _quantile(values, .75),
+        "p90": _quantile(values, .90),
+        "p99": _quantile(values, .99),
+        "max": max(values),
+        "mean": sum(values) / len(values),
+    }
+
+
 def summarize_direct_action(outcomes):
     trades = [row for row in outcomes if row.get("action") == "TRADE"]
     observed = [row for row in trades if row.get("realized_pnl") is not None]
     pnl = [float(row["realized_pnl"]) for row in observed]
     by_asset = defaultdict(lambda: {"trades": 0, "observed": 0, "pnl": 0.0})
     by_side = defaultdict(lambda: {"trades": 0, "observed": 0, "pnl": 0.0})
-    by_size = defaultdict(lambda: {"trades": 0, "observed": 0, "pnl": 0.0})
     by_horizon = defaultdict(lambda: {"trades": 0, "observed": 0, "pnl": 0.0})
     for row in trades:
         asset = str(row.get("asset") or "UNKNOWN")
         side = str(row.get("side") or "SELECTED")
-        size = str(row.get("size"))
         horizon = str(row.get("exit_horizon_ms"))
         by_asset[asset]["trades"] += 1
         by_side[side]["trades"] += 1
-        by_size[size]["trades"] += 1
         by_horizon[horizon]["trades"] += 1
         if row.get("realized_pnl") is not None:
             value = float(row["realized_pnl"])
-            for cell in (by_asset[asset], by_side[side], by_size[size], by_horizon[horizon]):
+            for cell in (by_asset[asset], by_side[side], by_horizon[horizon]):
                 cell["observed"] += 1
                 cell["pnl"] += value
     return {
-        "schema": SCHEMA + "_summary_v1",
+        "schema": SCHEMA + "_summary_v2",
         **SAFETY,
         "opportunities": len(outcomes),
         "selected_trades": len(trades),
@@ -1619,6 +1725,11 @@ def summarize_direct_action(outcomes):
             float(row.get("total_residual_friction") or 0.0) for row in trades),
         "total_predicted_uncertainty_penalty": sum(
             float(row.get("uncertainty_penalty") or 0.0) for row in trades),
+        "selected_size_distribution": numeric_distribution(
+            row.get("size") for row in trades),
+        "selected_notional_distribution": numeric_distribution(
+            row.get("notional") for row in trades),
+        "observed_pnl_distribution": numeric_distribution(pnl),
         "max_active_positions": max(
             (int(row.get("replay_max_active_positions") or 0) for row in outcomes),
             default=0),
@@ -1627,9 +1738,80 @@ def summarize_direct_action(outcomes):
             default=0.0),
         "by_asset": dict(by_asset),
         "by_side": dict(by_side),
-        "by_size": dict(by_size),
         "by_exit_horizon_ms": dict(by_horizon),
     }
+
+
+def merge_direct_action_summaries(summaries):
+    summaries = list(summaries)
+    if not summaries:
+        return {
+            "schema": SCHEMA + "_summary_v2", **SAFETY,
+            "opportunities": 0, "selected_trades": 0, "no_trade": 0,
+            "observed_selected_trades": 0, "censored_selected_trades": 0,
+        }
+
+    additive = (
+        "opportunities", "selected_trades", "no_trade",
+        "observed_selected_trades", "censored_selected_trades",
+        "positive_observed_trades", "zero_observed_trades",
+        "negative_observed_trades", "total_predicted_residual_friction",
+        "total_predicted_uncertainty_penalty",
+    )
+    result = {"schema": SCHEMA + "_summary_v2", **SAFETY}
+    for key in additive:
+        result[key] = sum(float(summary.get(key) or 0) for summary in summaries)
+        if key not in (
+            "total_predicted_residual_friction",
+            "total_predicted_uncertainty_penalty",
+        ):
+            result[key] = int(result[key])
+
+    observed = result["observed_selected_trades"]
+    pnl_total = sum(
+        float(summary.get("total_observed_net_pnl") or 0.0)
+        for summary in summaries
+    )
+    result["total_observed_net_pnl"] = pnl_total if observed else None
+    result["mean_observed_net_pnl"] = pnl_total / observed if observed else None
+
+    selected = result["selected_trades"]
+    utility_total = sum(
+        float(summary.get("mean_predicted_policy_utility") or 0.0)
+        * int(summary.get("selected_trades") or 0)
+        for summary in summaries
+    )
+    result["mean_predicted_policy_utility"] = (
+        utility_total / selected if selected else None
+    )
+    result["max_active_positions"] = max(
+        int(summary.get("max_active_positions") or 0) for summary in summaries)
+    result["max_gross_notional"] = max(
+        float(summary.get("max_gross_notional") or 0.0) for summary in summaries)
+
+    for dimension in ("by_asset", "by_side", "by_exit_horizon_ms"):
+        cells = defaultdict(lambda: {"trades": 0, "observed": 0, "pnl": 0.0})
+        for summary in summaries:
+            for name, source in (summary.get(dimension) or {}).items():
+                cell = cells[str(name)]
+                cell["trades"] += int(source.get("trades") or 0)
+                cell["observed"] += int(source.get("observed") or 0)
+                cell["pnl"] += float(source.get("pnl") or 0.0)
+        result[dimension] = dict(cells)
+
+    result["selected_size_distribution"] = {
+        "state": "SEE_EXACT_PER_FOLD_DISTRIBUTIONS",
+        "folds": [summary["selected_size_distribution"] for summary in summaries],
+    }
+    result["selected_notional_distribution"] = {
+        "state": "SEE_EXACT_PER_FOLD_DISTRIBUTIONS",
+        "folds": [summary["selected_notional_distribution"] for summary in summaries],
+    }
+    result["observed_pnl_distribution"] = {
+        "state": "SEE_EXACT_PER_FOLD_DISTRIBUTIONS",
+        "folds": [summary["observed_pnl_distribution"] for summary in summaries],
+    }
+    return result
 
 
 def walk_forward_direct_action(
@@ -1648,28 +1830,50 @@ def walk_forward_direct_action(
         "fold_receipt": receipt,
         "latency_ms": int(latency_ms),
         "capital_budget": float(capital_budget),
+        "bilateral_evidence": bilateral_evidence_summary(records),
         "folds": [],
-        "outcomes": [],
+        "diagnostic_selected_outcomes": [],
+        "output_semantics": (
+            "FULL_OOS_OUTCOMES_ARE_SUMMARIZED_NOT_SERIALIZED;"
+            "BOUNDED_SELECTED_TRADE_DIAGNOSTICS_ONLY"
+        ),
         "mean_covariance_estimation": False,
     }
     if not found:
         return result
+    fold_summaries = []
     for fold in found:
         model = DirectActionValueModel(**(model_kwargs or {})).fit(fold["train_repricing"])
         outcomes = evaluate_direct_action_policy(
             model, fold["test"], latency_ms=latency_ms,
             capital_budget=capital_budget, one_entry_per_market=True,
             live_geometry=True)
+        summary = summarize_direct_action(outcomes)
+        fold_summaries.append(summary)
         result["folds"].append({
             "fold": fold["fold"],
             "cutoff_ns": fold["cutoff_ns"],
             "train_markets": len(fold["train_markets"]),
             "test_markets": len(fold["test_markets"]),
             "training": model.training_receipt,
-            "oos": summarize_direct_action(outcomes),
+            "oos": summary,
         })
-        result["outcomes"].extend(outcomes)
-    result["summary"] = summarize_direct_action(result["outcomes"])
+        remaining = max(0, 384 - len(result["diagnostic_selected_outcomes"]))
+        if remaining:
+            for row in (value for value in outcomes if value.get("action") == "TRADE"):
+                result["diagnostic_selected_outcomes"].append({
+                    key: row.get(key) for key in (
+                        "market_id", "asset", "contract_horizon", "decision_ns",
+                        "side", "size", "exit_horizon_ms", "latency_ms", "notional",
+                        "policy_utility", "predicted_total_net_cash_pnl",
+                        "uncertainty_penalty", "total_residual_friction",
+                        "realized_pnl", "target_state",
+                    )
+                })
+                remaining -= 1
+                if remaining <= 0:
+                    break
+    result["summary"] = merge_direct_action_summaries(fold_summaries)
     result["state"] = "READY"
     return result
 
