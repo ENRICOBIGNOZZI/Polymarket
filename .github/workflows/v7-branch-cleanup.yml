@@ -52,6 +52,9 @@ jobs:
           assert value.get('apply') is True
           assert value.get('preserve_open_prs') is True
           assert value.get('prefixes')==['codex/','research/']
+          force=value.get('force_delete') or []
+          assert isinstance(force,list)
+          assert all(isinstance(branch,str) and branch for branch in force)
           PY
 
       - name: Delete only fully-contained stale branches
@@ -62,8 +65,34 @@ jobs:
           set -euo pipefail
           git fetch --prune origin '+refs/heads/*:refs/remotes/origin/*'
           deleted=0
+          force_deleted=0
           skipped_open=0
           skipped_divergent=0
+
+          if [[ "$GITHUB_EVENT_NAME" == "push" ]]; then
+            while IFS= read -r branch; do
+              [[ -z "$branch" || "$branch" == "main" ]] && continue
+              open_count="$(gh pr list --repo "$GITHUB_REPOSITORY" --head "$branch" --state open --json number --jq 'length')"
+              if [[ "$open_count" != "0" ]]; then
+                echo "preserve_force_candidate_open_pr=$branch"
+                skipped_open=$((skipped_open+1))
+                continue
+              fi
+              if git show-ref --verify --quiet "refs/remotes/origin/$branch"; then
+                echo "force_delete_abandoned_branch=$branch"
+                gh api --method DELETE "repos/$GITHUB_REPOSITORY/git/refs/heads/$(python3 -c 'import urllib.parse,sys; print(urllib.parse.quote(sys.argv[1],safe=""))' "$branch")"
+                force_deleted=$((force_deleted+1))
+              fi
+            done < <(python3 - <<'PY'
+import json
+value=json.load(open('deploy/v7-branch-cleanup-request.json',encoding='utf-8'))
+for branch in value.get('force_delete') or []:
+    print(branch)
+PY
+)
+            git fetch --prune origin '+refs/heads/*:refs/remotes/origin/*'
+          fi
+
           while IFS= read -r ref; do
             branch="${ref#refs/remotes/origin/}"
             [[ "$branch" == "main" || "$branch" == "HEAD" ]] && continue
@@ -89,7 +118,8 @@ jobs:
             fi
           done < <(git for-each-ref --format='%(refname)' refs/remotes/origin/ | sort)
           {
-            echo "deleted=$deleted"
+            echo "deleted_contained=$deleted"
+            echo "deleted_abandoned=$force_deleted"
             echo "preserved_open_pr=$skipped_open"
             echo "preserved_divergent=$skipped_divergent"
           } >> "$GITHUB_STEP_SUMMARY"
