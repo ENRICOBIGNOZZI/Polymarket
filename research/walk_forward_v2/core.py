@@ -614,6 +614,33 @@ def attach_native_repricing(decisions, labels):
         duplicate=duplicate, epoch_mismatch=epoch_mismatch)
 
 
+def attach_native_repricing_points(
+    decisions, points, *, native_label_rows, invalid_or_censored_label_rows=0,
+):
+    """Attach already-decoded kind=6 points with stream-identical accounting."""
+    by_key = _native_repricing_index(decisions)
+    matched = duplicate = epoch_mismatch = unmatched = 0
+    for key, horizon, value in points:
+        record = by_key.get(key)
+        if record is None:
+            unmatched += 1
+            continue
+        status = _attach_native_repricing_point(record, horizon, value)
+        if status == "MATCHED":
+            matched += 1
+        elif status == "DUPLICATE_IDENTICAL":
+            duplicate += 1
+        elif status == "EPOCH_MISMATCH":
+            epoch_mismatch += 1
+    result = _finalize_native_repricing(
+        decisions, native_label_rows=int(native_label_rows), matched=matched,
+        duplicate=duplicate, epoch_mismatch=epoch_mismatch)
+    result["invalid_or_censored_label_rows"] = int(
+        invalid_or_censored_label_rows)
+    result["unmatched_label_rows"] = unmatched
+    return result
+
+
 def attach_native_repricing_stream(decisions, paths):
     """Second compact pass: attach each kind=6 label and discard it immediately."""
     by_key = _native_repricing_index(decisions)
@@ -874,6 +901,18 @@ def build_dataset(
     indexed_sources = []
     index_hits = index_misses = 0
     decision_files_scanned = decision_files_skipped = 0
+    source_files_scanned = source_files_skipped = 0
+
+    # Recent research windows can decode kind=2 decisions and kind=6 labels in
+    # the same selected-source pass. Full-history jobs retain the streaming
+    # two-pass path to avoid materializing a large label corpus.
+    recent_single_pass = (
+        bool(use_compact_window_index)
+        and int(minimum_wall_ns) > int(DEFAULT_EPOCH_NS)
+    )
+    recent_repricing_points = []
+    recent_native_label_rows = 0
+    recent_invalid_label_rows = 0
 
     for path in compact:
         if path.is_symlink() or not path.is_file():
@@ -890,15 +929,29 @@ def build_dataset(
             result["exclusions"]["DUPLICATE_SOURCE_OBJECT"] += 1
             continue
         seen_sources.add(content)
-        result["sources"].append({"path": str(path.relative_to(hft_root)), "sha256": content})
+        result["sources"].append({
+            "path": str(path.relative_to(hft_root)), "sha256": content})
         indexed_sources.append((path, index))
-        if (
-            index is not None
-            and not compact_index_intersects_decisions(index, minimum_wall_ns)
-        ):
+
+        decision_intersects = (
+            index is None
+            or compact_index_intersects_decisions(index, minimum_wall_ns)
+        )
+        repricing_intersects_recent = (
+            recent_single_pass
+            and index is not None
+            and isinstance(index.get("kind6_max_origin_wall_ns"), int)
+            and int(index["kind6_max_origin_wall_ns"]) >= int(minimum_wall_ns)
+        )
+        if not decision_intersects:
             decision_files_skipped += 1
+        if not (decision_intersects or repricing_intersects_recent):
+            source_files_skipped += 1
             continue
-        decision_files_scanned += 1
+
+        source_files_scanned += 1
+        if decision_intersects:
+            decision_files_scanned += 1
         for row in json_lines(path):
             if row is None:
                 result["exclusions"]["INVALID_JSON"] += 1
@@ -907,8 +960,22 @@ def build_dataset(
                 continue
             kind = row.get("kind")
             if kind == 6:
+                if not recent_single_pass:
+                    continue
+                origin_wall = row.get("decision_wall_ns")
+                if (
+                    not isinstance(origin_wall, int)
+                    or origin_wall < int(minimum_wall_ns)
+                ):
+                    continue
+                recent_native_label_rows += 1
+                point = native_repricing_point(row)
+                if point is None:
+                    recent_invalid_label_rows += 1
+                else:
+                    recent_repricing_points.append(point)
                 continue
-            if kind != 2:
+            if kind != 2 or not decision_intersects:
                 continue
             result["exclusions"]["NATIVE_DECISION_ROWS_TOTAL"] += 1
             if native_wall_ns(row) < minimum_wall_ns:
@@ -927,19 +994,31 @@ def build_dataset(
     if include_settlement_labels:
         attach_labels(result["decisions"], label_roots)
     if result["decisions"]:
-        minimum_decision_ns = min(row["decision_ns"] for row in result["decisions"])
-        maximum_decision_ns = max(row["decision_ns"] for row in result["decisions"])
-        repricing_paths = []
-        repricing_files_skipped = 0
-        for path, index in indexed_sources:
-            if index is None or compact_index_intersects_repricing(
-                index, minimum_decision_ns, maximum_decision_ns
-            ):
-                repricing_paths.append(path)
-            else:
-                repricing_files_skipped += 1
-        result["book_evidence"] = attach_native_repricing_stream(
-            result["decisions"], repricing_paths)
+        minimum_decision_ns = min(
+            row["decision_ns"] for row in result["decisions"])
+        maximum_decision_ns = max(
+            row["decision_ns"] for row in result["decisions"])
+        if recent_single_pass:
+            repricing_paths = []
+            repricing_files_skipped = len(indexed_sources)
+            result["book_evidence"] = attach_native_repricing_points(
+                result["decisions"],
+                recent_repricing_points,
+                native_label_rows=recent_native_label_rows,
+                invalid_or_censored_label_rows=recent_invalid_label_rows,
+            )
+        else:
+            repricing_paths = []
+            repricing_files_skipped = 0
+            for path, index in indexed_sources:
+                if index is None or compact_index_intersects_repricing(
+                    index, minimum_decision_ns, maximum_decision_ns
+                ):
+                    repricing_paths.append(path)
+                else:
+                    repricing_files_skipped += 1
+            result["book_evidence"] = attach_native_repricing_stream(
+                result["decisions"], repricing_paths)
     else:
         repricing_paths = []
         repricing_files_skipped = len(indexed_sources)
@@ -950,10 +1029,19 @@ def build_dataset(
         "cache_hits": index_hits,
         "cache_misses": index_misses,
         "source_files": len(indexed_sources),
+        "source_files_scanned": source_files_scanned,
+        "source_files_skipped": source_files_skipped,
         "decision_files_scanned": decision_files_scanned,
         "decision_files_skipped": decision_files_skipped,
         "repricing_files_scanned": len(repricing_paths),
         "repricing_files_skipped": repricing_files_skipped,
+        "repricing_mode": (
+            "SINGLE_PASS_RECENT_INDEXED"
+            if recent_single_pass else "SECOND_PASS_STREAMING"
+        ),
+        "recent_repricing_points_buffered": (
+            len(recent_repricing_points) if recent_single_pass else 0
+        ),
         "minimum_wall_ns": int(minimum_wall_ns),
         "settlement_labels_included": bool(include_settlement_labels),
     }
