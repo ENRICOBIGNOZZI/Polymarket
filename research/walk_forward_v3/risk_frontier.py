@@ -222,6 +222,74 @@ def pareto_frontier(entries):
     return output
 
 
+
+def select_policy_under_risk_budget(
+    frontier,
+    *,
+    max_cvar95=None,
+    max_drawdown=None,
+):
+    """Choose max net dollars only after a risk budget has been supplied.
+
+    Intended for train/validation data only.  With no explicit budget, no
+    selection is made: human agency over risk appetite is preserved.
+    """
+    if max_cvar95 is None and max_drawdown is None:
+        return {
+            "state": "NO_RISK_BUDGET_NO_AUTOMATIC_SELECTION",
+            "policy_id": None,
+        }
+    if max_cvar95 is not None and (
+        not math.isfinite(float(max_cvar95)) or float(max_cvar95) < 0
+    ):
+        raise ValueError("nonnegative finite max_cvar95 required")
+    if max_drawdown is not None and (
+        not math.isfinite(float(max_drawdown)) or float(max_drawdown) < 0
+    ):
+        raise ValueError("nonnegative finite max_drawdown required")
+
+    admissible = []
+    for entry in frontier.get("entries") or []:
+        risk = entry.get("risk") or {}
+        if risk.get("state") != "ALL_SELECTED_TRADES_OBSERVED":
+            continue
+        pnl = risk.get("total_observed_net_pnl")
+        drawdown = risk.get("max_drawdown")
+        cvar = ((risk.get("tail_loss") or {}).get("0.95") or {}).get("cvar")
+        if pnl is None or drawdown is None or cvar is None:
+            continue
+        if max_cvar95 is not None and float(cvar) > float(max_cvar95) + 1e-15:
+            continue
+        if max_drawdown is not None and float(drawdown) > float(max_drawdown) + 1e-15:
+            continue
+        admissible.append(entry)
+
+    if not admissible:
+        return {
+            "state": "NO_POLICY_MEETS_VALIDATION_RISK_BUDGET",
+            "policy_id": None,
+        }
+    admissible.sort(
+        key=lambda entry: (
+            float(entry["risk"]["total_observed_net_pnl"]),
+            -float(entry["risk"]["tail_loss"]["0.95"]["cvar"]),
+            -float(entry["risk"]["max_drawdown"]),
+            str(entry["policy_id"]),
+        ),
+        reverse=True,
+    )
+    chosen = admissible[0]
+    return {
+        "state": "VALIDATION_POLICY_SELECTED",
+        "policy_id": str(chosen["policy_id"]),
+        "validation_net_pnl": float(chosen["risk"]["total_observed_net_pnl"]),
+        "validation_cvar95": float(chosen["risk"]["tail_loss"]["0.95"]["cvar"]),
+        "validation_max_drawdown": float(chosen["risk"]["max_drawdown"]),
+        "max_cvar95": None if max_cvar95 is None else float(max_cvar95),
+        "max_drawdown": None if max_drawdown is None else float(max_drawdown),
+    }
+
+
 def default_policy_grid():
     """Predeclared exploration grid; it is a frontier, not a risk preference."""
     grid = []
