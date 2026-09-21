@@ -26,7 +26,7 @@ jobs:
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
-          ref: \${{ github.sha }}
+          ref: ${{ github.sha }}
           fetch-depth: 2
 
       - name: Validate frozen request
@@ -76,21 +76,21 @@ jobs:
       - name: Configure AWS credentials through OIDC
         uses: aws-actions/configure-aws-credentials@e1253824e5c10ff9df46874f81ed3ec929e19cfd
         with:
-          role-to-assume: \${{ env.ROLE_ARN }}
+          role-to-assume: ${{ env.ROLE_ARN }}
           role-session-name: polymarket-v7-multi-alpha-2h
           aws-region: eu-west-2
 
       - name: Run read-only London PAPER research
         env:
-          REQUEST: \${{ steps.request.outputs.request }}
-          SOURCE_SHA: \${{ steps.request.outputs.source_sha }}
+          REQUEST: ${{ steps.request.outputs.request }}
+          SOURCE_SHA: ${{ steps.request.outputs.source_sha }}
         run: |
           set -euo pipefail
           python3 ops/v7_multi_alpha_2h_ssm.py "$REQUEST" "$SOURCE_SHA"
 
       - name: Validate required artifacts
         env:
-          REQUEST: \${{ steps.request.outputs.request }}
+          REQUEST: ${{ steps.request.outputs.request }}
         run: |
           python3 - "$REQUEST" <<'PY'
           import json,sys
@@ -121,7 +121,7 @@ jobs:
 
       - name: Publish research artifacts to isolated branch
         env:
-          REQUEST: \${{ steps.request.outputs.request }}
+          REQUEST: ${{ steps.request.outputs.request }}
         run: |
           set -euo pipefail
           output="$(python3 -c 'import json,os;print(json.load(open(os.environ["REQUEST"]))["output_directory"])')"
@@ -135,6 +135,6 @@ jobs:
 
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
-          name: v7-multi-alpha-2h-\${{ github.run_id }}
+          name: v7-multi-alpha-2h-${{ github.run_id }}
           path: docs/research/multi-alpha-2h-2026-09-21
           retention-days: 30
