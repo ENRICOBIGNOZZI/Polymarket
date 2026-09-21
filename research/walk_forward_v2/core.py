@@ -112,13 +112,25 @@ def native_wall_ns(row):
 
 
 def valid_native(row):
-    return (
-        row.get("schema") == "polymarket_v7_native_observation_v1"
-        and row.get("paper_only") is True
-        and row.get("execution_authority") is False
-        and row.get("authenticated_execution") is False
-        and row.get("real_order_submission") is False
-    )
+    """Match the actual native-observation schema.
+
+    Runtime native observations always carry paper_only=true and
+    execution_authority=false.  Older/current capture revisions do not
+    necessarily duplicate the top-level authenticated_execution and
+    real_order_submission flags on every observation.  When those optional
+    flags are present they must still be false.
+    """
+    if (
+        row.get("schema") != "polymarket_v7_native_observation_v1"
+        or row.get("paper_only") is not True
+        or row.get("execution_authority") is not False
+    ):
+        return False
+    if "authenticated_execution" in row and row.get("authenticated_execution") is not False:
+        return False
+    if "real_order_submission" in row and row.get("real_order_submission") is not False:
+        return False
+    return True
 
 
 def valid_book(row):
@@ -262,8 +274,8 @@ def settlement_index(root):
     return labels
 
 
-def attach_labels(decisions, root):
-    labels = settlement_index(Path(root) / "public_settlements")
+def attach_labels(decisions, settlement_root):
+    labels = settlement_index(Path(settlement_root))
     for record in decisions:
         label = labels.get(record["market_id"])
         if label is None or record["token_id"] not in label["outcomes"]:
@@ -313,14 +325,32 @@ def book_targets(decisions, books, tolerance_ns=TARGET_TOLERANCE_NS):
         record["timeline"] = sequence
 
 
-def build_dataset(root, *, minimum_wall_ns=DEFAULT_EPOCH_NS):
-    """Load only immutable compact/window objects and deduplicate immutable content."""
-    root = Path(root)
-    result = {"schema": SCHEMA + "_data_v1", **SAFETY, "root": str(root),
+def build_dataset(root, *, minimum_wall_ns=DEFAULT_EPOCH_NS, settlement_root=None):
+    """Load immutable HFT objects from either a run root or hft_permanent.
+
+    The production layout is RUN_ROOT/research/hft_permanent for compact/window
+    data and RUN_ROOT/research/public_settlements for settlement evidence.
+    Direct hft_permanent input remains supported for tests/offline copies.
+    """
+    supplied_root = Path(root)
+    run_layout = supplied_root / "research" / "hft_permanent"
+    if run_layout.is_dir():
+        hft_root = run_layout
+        default_settlement_root = supplied_root / "research" / "public_settlements"
+    else:
+        hft_root = supplied_root
+        default_settlement_root = (
+            supplied_root.parent / "public_settlements"
+            if supplied_root.name == "hft_permanent"
+            else supplied_root / "public_settlements"
+        )
+    labels_root = Path(settlement_root) if settlement_root is not None else default_settlement_root
+    result = {"schema": SCHEMA + "_data_v1", **SAFETY, "root": str(supplied_root),
+              "hft_root": str(hft_root), "settlement_root": str(labels_root),
               "minimum_wall_ns": minimum_wall_ns, "sources": [], "decisions": [],
               "books": [], "exclusions": Counter(), "input_state": "READY"}
-    compact = list((root / "compact").glob("*.jsonl*")) + list((root / "compact_closed").glob("*.jsonl*"))
-    windows = list((root / "windows").glob("*.jsonl*"))
+    compact = list((hft_root / "compact").glob("*.jsonl*")) + list((hft_root / "compact_closed").glob("*.jsonl*"))
+    windows = list((hft_root / "windows").glob("*.jsonl*"))
     seen_sources, seen_decisions, seen_books = set(), set(), set()
     for path in sorted(compact + windows):
         if path.is_symlink() or not path.is_file():
@@ -330,7 +360,7 @@ def build_dataset(root, *, minimum_wall_ns=DEFAULT_EPOCH_NS):
             result["exclusions"]["DUPLICATE_SOURCE_OBJECT"] += 1
             continue
         seen_sources.add(content)
-        result["sources"].append({"path": str(path.relative_to(root)), "sha256": content})
+        result["sources"].append({"path": str(path.relative_to(hft_root)), "sha256": content})
         for row in json_lines(path):
             if row is None:
                 result["exclusions"]["INVALID_JSON"] += 1
@@ -363,10 +393,10 @@ def build_dataset(root, *, minimum_wall_ns=DEFAULT_EPOCH_NS):
                     result["books"].append(book)
     result["decisions"].sort(key=lambda r: (r["decision_ns"], r["decision_id"]))
     result["books"].sort(key=lambda r: (r["time_ns"], r["market_id"], r["token_id"], r["sequence"]))
-    attach_labels(result["decisions"], root)
+    attach_labels(result["decisions"], labels_root)
     book_targets(result["decisions"], result["books"])
     result["exclusions"] = dict(result["exclusions"])
-    if not root.is_dir():
+    if not hft_root.is_dir():
         result["input_state"] = "ROOT_UNAVAILABLE"
     elif not result["decisions"]:
         result["input_state"] = "NO_ADMISSIBLE_NATIVE_DECISIONS"
