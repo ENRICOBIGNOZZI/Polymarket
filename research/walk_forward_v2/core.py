@@ -1227,8 +1227,16 @@ def pm_edge_distribution(evaluations, execution_reserve=.005):
                                     "after_reserve": value - row["ask"] - fee - execution_reserve})
         for horizon, value in evaluation["repricing_predictions"].items():
             if value is not None:
-                by_model["repricing_" + horizon].append({"before_cost": value, "after_fee": value - fee_per_share(row, row["ask"]),
-                                                          "after_reserve": value - fee_per_share(row, row["ask"]) - execution_reserve})
+                fee = fee_per_share(row, row["ask"])
+                by_model["repricing_" + horizon].append({
+                    "before_cost": value, "after_fee": value - fee,
+                    "after_reserve": value - fee - execution_reserve})
+        for horizon, value in evaluation.get("markout_predictions", {}).items():
+            if value is not None:
+                fee = fee_per_share(row, row["ask"])
+                by_model["markout_" + horizon].append({
+                    "before_cost": value + fee, "after_fee": value,
+                    "after_reserve": value - execution_reserve})
     thresholds = (0, .001, .0025, .005, .01, .02)
     result = {}
     for model, values in by_model.items():
@@ -1247,11 +1255,12 @@ def quantile(values):
     return {str(q): ordered[round((len(ordered) - 1) * q)] for q in (.01, .05, .5, .95, .99)}
 
 
-def market_bootstrap(outcomes, *, seed=20260920, draws=256):
+def _bootstrap_field(outcomes, field, *, seed, draws):
     groups = defaultdict(list)
     for row in outcomes:
-        if row["pnl"] is not None:
-            groups[row.get("market_id", "")].append(row["pnl"])
+        value = row.get(field)
+        if value is not None:
+            groups[row.get("market_id", "")].append(float(value))
     keys = sorted(key for key, value in groups.items() if value)
     if len(keys) < 4:
         return {"state": "INSUFFICIENT_MARKET_BLOCKS", "markets": len(keys), "interval": None}
@@ -1259,11 +1268,25 @@ def market_bootstrap(outcomes, *, seed=20260920, draws=256):
     samples = []
     for _ in range(draws):
         chosen = [keys[rng.randrange(len(keys))] for _ in keys]
-        pnl = sum(sum(groups[key]) for key in chosen)
-        fills = sum(len(groups[key]) for key in chosen)
-        samples.append(pnl / fills if fills else 0.0)
-    return {"state": "READY", "markets": len(keys), "draws": draws,
-            "pnl_per_fill_interval": [sorted(samples)[int(.025 * draws)], sorted(samples)[int(.975 * draws)]]}
+        total = sum(sum(groups[key]) for key in chosen)
+        count = sum(len(groups[key]) for key in chosen)
+        samples.append(total / count if count else 0.0)
+    ordered = sorted(samples)
+    return {
+        "state": "READY", "markets": len(keys), "draws": draws,
+        "interval": [ordered[int(.025 * draws)], ordered[int(.975 * draws)]],
+    }
+
+
+def market_bootstrap(outcomes, *, seed=20260920, draws=256):
+    settlement = _bootstrap_field(outcomes, "pnl", seed=seed, draws=draws)
+    markout = _bootstrap_field(outcomes, "markout", seed=seed + 1, draws=draws)
+    return {
+        "settlement": settlement,
+        "markout": markout,
+        "pnl_per_fill_interval": settlement.get("interval"),
+        "markout_per_fill_interval": markout.get("interval"),
+    }
 
 
 def prediction_quality(evaluations):
@@ -1304,40 +1327,102 @@ def prediction_quality(evaluations):
             "actual_mean_move": sum(y for _, y in pairs) / len(pairs),
             "predicted_mean_move": sum(p for p, _ in pairs) / len(pairs),
         }
-    return {"settlement": settlement, "repricing": repricing}
+    markout = {}
+    for horizon in HORIZONS_MS:
+        pairs = []
+        key = str(horizon)
+        for event in evaluations:
+            predicted = event.get("markout_predictions", {}).get(key)
+            target = executable_markout_target(event["row"], key)
+            if predicted is None or target is None:
+                continue
+            pairs.append((float(predicted), float(target)))
+        if not pairs:
+            markout[key] = {"state": "INSUFFICIENT_OOS_TARGETS", "rows": 0}
+            continue
+        errors = [p-y for p, y in pairs]
+        markout[key] = {
+            "state": "READY", "rows": len(pairs),
+            "mae": sum(abs(e) for e in errors) / len(errors),
+            "mse": sum(e*e for e in errors) / len(errors),
+            "directional_accuracy": sum((p > 0) == (y > 0) for p, y in pairs) / len(pairs),
+            "actual_mean_net_markout": sum(y for _, y in pairs) / len(pairs),
+            "predicted_mean_net_markout": sum(p for p, _ in pairs) / len(pairs),
+            "actual_positive_fraction": sum(y > 0 for _, y in pairs) / len(pairs),
+            "predicted_positive_fraction": sum(p > 0 for p, _ in pairs) / len(pairs),
+        }
+    return {"settlement": settlement, "repricing": repricing, "executable_markout": markout}
 
 
 def economic_evaluation(evaluations, *, latency_ms=(10, 25, 50, 100, 250, 500)):
-    """Apply identical replay to every OOS candidate and diagnostic upper bound."""
-    result = {"schema": SCHEMA + "_economics_v1", **SAFETY, "models": {}, "latency": {},
-              "pm_edge_distribution": pm_edge_distribution(evaluations),
-              "prediction_metrics": prediction_quality(evaluations)}
-    variants = {
-        "pm": (lambda event: (event["settlement_predictions"]["pm"], None), "SETTLEMENT"),
-        "logistic_offset": (lambda event: (event["settlement_predictions"]["logistic_offset"], None), "SETTLEMENT"),
-        "boosted_offset": (lambda event: (event["settlement_predictions"]["boosted_offset"], None), "SETTLEMENT"),
-        "repricing_250ms": (lambda event: ((event["row"]["bid"] + event["row"]["ask"]) / 2,
-                                           event["repricing_predictions"].get("250")), "REPRICING"),
-        "combined_settlement_repricing": (lambda event: (event["settlement_predictions"]["logistic_offset"],
-                                                          event["repricing_predictions"].get("250")),
-                                           "SETTLEMENT_WITH_REPRICING_CONFIRMATION"),
+    """OOS economics for settlement, midpoint and direct executable-markout targets."""
+    result = {
+        "schema": SCHEMA + "_economics_v2", **SAFETY,
+        "models": {}, "latency": {}, "horizon_latency": {},
+        "pm_edge_distribution": pm_edge_distribution(evaluations),
+        "prediction_metrics": prediction_quality(evaluations),
+        "latency_reference_horizon_ms": 500,
     }
-    for name, (selector, valuation_mode) in variants.items():
-        outcomes = replay_policy(evaluations, selector, latency_ms=100,
-                                 valuation_mode=valuation_mode)
-        result["models"][name] = {"metrics": summarize(outcomes), "uncertainty": market_bootstrap(outcomes), "outcomes": outcomes}
-    combined_selector = variants["combined_settlement_repricing"][0]
-    for latency in latency_ms:
+    variants = {
+        "pm": (lambda event: (event["settlement_predictions"]["pm"], None), "SETTLEMENT", 250),
+        "logistic_offset": (lambda event: (event["settlement_predictions"]["logistic_offset"], None), "SETTLEMENT", 250),
+        "boosted_offset": (lambda event: (event["settlement_predictions"]["boosted_offset"], None), "SETTLEMENT", 250),
+        "repricing_midpoint_250ms": (
+            lambda event: ((event["row"]["bid"] + event["row"]["ask"]) / 2,
+                           event["repricing_predictions"].get("250")), "REPRICING", 250),
+        "combined_settlement_repricing": (
+            lambda event: (event["settlement_predictions"]["logistic_offset"],
+                           event["repricing_predictions"].get("250")),
+            "SETTLEMENT_WITH_REPRICING_CONFIRMATION", 250),
+    }
+    # Fixed 100ms execution reference for horizons strictly after arrival.
+    for horizon in (250, 500, 1000, 2000):
+        key = str(horizon)
+        variants["markout_" + key + "ms"] = (
+            lambda event, h=key: (event["markout_predictions"].get(h), None),
+            "EXECUTABLE_MARKOUT", horizon)
+
+    for name, (selector, valuation_mode, markout_horizon) in variants.items():
         outcomes = replay_policy(
-            evaluations, combined_selector, latency_ms=latency,
-            valuation_mode="SETTLEMENT_WITH_REPRICING_CONFIRMATION")
-        result["latency"][str(latency)] = summarize(outcomes)
+            evaluations, selector, latency_ms=100, valuation_mode=valuation_mode,
+            markout_horizon_ms=markout_horizon)
+        result["models"][name] = {
+            "metrics": summarize(outcomes),
+            "uncertainty": market_bootstrap(outcomes),
+            "outcomes": outcomes,
+        }
+
+    # Full prespecified horizon x latency surface. Never evaluate an exit horizon
+    # at or before assumed order arrival.
+    for horizon in HORIZONS_MS:
+        hkey = str(horizon)
+        selector = lambda event, h=hkey: (event["markout_predictions"].get(h), None)
+        cells = {}
+        for latency in latency_ms:
+            if latency >= horizon:
+                cells[str(latency)] = {
+                    "state": "LATENCY_NOT_BEFORE_MARKOUT_HORIZON",
+                    "horizon_ms": horizon, "latency_ms": latency,
+                }
+                continue
+            outcomes = replay_policy(
+                evaluations, selector, latency_ms=latency,
+                valuation_mode="EXECUTABLE_MARKOUT",
+                markout_horizon_ms=horizon)
+            cells[str(latency)] = {"state": "READY", **summarize(outcomes)}
+        result["horizon_latency"][hkey] = cells
+
+    # Backward-compatible latency chart uses a declared reference horizon only.
+    result["latency"] = result["horizon_latency"]["500"]
+
     upper = {}
+    reference_selector = lambda event: (event["markout_predictions"].get("500"), None)
     for kind in ("ZERO_LATENCY_EXECUTION_UPPER_BOUND", "NO_SPREAD_FEE_EXECUTION_UPPER_BOUND",
                  "PERFECT_FILL_AT_CAUSAL_DECISION_ASK_UPPER_BOUND"):
         outcomes = replay_policy(
-            evaluations, combined_selector, latency_ms=100,
-            valuation_mode="SETTLEMENT_WITH_REPRICING_CONFIRMATION", ideal=kind)
+            evaluations, reference_selector, latency_ms=100,
+            valuation_mode="EXECUTABLE_MARKOUT", markout_horizon_ms=500,
+            ideal=kind)
         upper[kind] = summarize(outcomes)
     result["idealized_upper_bounds"] = upper
     return result
