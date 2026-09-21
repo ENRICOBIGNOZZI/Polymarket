@@ -223,7 +223,7 @@ def numeric_features(row):
     for key in (
         "binance_return_100ms_bp", "coinbase_return_100ms_bp",
         "bybit_return_100ms_bp", "signal_return_bp", "signal_age_ns",
-        "tte_ns", "bid_e4", "ask_e4", "ask_quantity",
+        "tte_ns", "bid_e4", "ask_e4", "bid_quantity", "ask_quantity",
     ):
         if finite(row.get(key)):
             result[key] = float(row[key])
@@ -282,7 +282,9 @@ def native_decision(row):
             "confirmed": row.get("confirmed_non_opposing") is True,
             "book_valid": row.get("book_valid") is True,
             "pretrigger": row.get("pm_book_pre_signal") is True or row.get("require_pm_book_pre_signal") is not True,
-            "bid": bid, "ask": ask, "quantity": float(row.get("ask_quantity") or 0) / 1_000_000,
+            "bid": bid, "ask": ask,
+            "bid_quantity": float(row.get("bid_quantity") or 0) / 1_000_000,
+            "quantity": float(row.get("ask_quantity") or 0) / 1_000_000,
             "tick": int(row["tick_e4"]) / 10000,
             "minimum": float(row["minimum_order_microunits"]) / 1_000_000,
             "fee_rate": float(row["fee_rate"]), "fee_exponent": float(row["fee_exponent"]),
@@ -352,6 +354,7 @@ def native_repricing_point(row):
         bid = int(row["bid_e4"]) / 10000
         ask = int(row["ask_e4"]) / 10000
         tick = int(row["tick_e4"]) / 10000
+        bid_quantity = float(row.get("bid_quantity") or 0) / 1_000_000
         quantity = float(row.get("ask_quantity") or 0) / 1_000_000
         epoch = int(row["connection_epoch"])
         if horizon not in HORIZONS_MS or not 0 < bid < ask < 1 or tick <= 0 or quantity < 0:
@@ -375,7 +378,8 @@ def native_repricing_point(row):
             "observed_time_ns": target_wall,
             "information_ns": information_wall,
             "label_observed_monotonic_ns": observed_mono,
-            "bid": bid, "ask": ask, "quantity": quantity,
+            "bid": bid, "ask": ask,
+            "bid_quantity": bid_quantity, "quantity": quantity,
             "pair": native_pair_l1(row),
             "tick": tick, "epoch": epoch,
         }
@@ -414,6 +418,7 @@ def _attach_native_repricing_point(record, horizon, point):
         "ask_change": point["ask"] - record["ask"],
         "bid_change": point["bid"] - record["bid"],
         "arrival_ask": point["ask"], "arrival_bid": point["bid"],
+        "arrival_bid_quantity": point.get("bid_quantity", 0.0),
         "arrival_quantity": point["quantity"],
         "pair": point.get("pair"),
     }
@@ -427,6 +432,7 @@ def _attach_native_repricing_point(record, horizon, point):
             "time_ns": point.get("target_time_ns", point["observed_time_ns"]),
             "information_ns": point.get("information_ns", point["observed_time_ns"]),
             "bid": point["bid"], "ask": point["ask"],
+            "bid_quantity": point.get("bid_quantity", 0.0),
             "quantity": point["quantity"], "pair": point.get("pair"),
             "epoch": point["epoch"],
         }
