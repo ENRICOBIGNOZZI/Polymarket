@@ -64,8 +64,10 @@ jobs:
           with open(sys.argv[3],'a',encoding='utf-8') as h:
               h.write(f"source_sha={sys.argv[2]}\n")
           PY
-          git checkout --detach "$parent"
-          test "$(git rev-parse HEAD)" = "$parent"
+          # The trigger commit is proven to change only REQUEST, therefore all
+          # shadow source/artifact bytes in this checkout are identical to the
+          # parent while the current request file remains available.
+          test "$(git rev-parse HEAD^)" = "$parent"
 
       - name: Configure AWS credentials through OIDC
         uses: aws-actions/configure-aws-credentials@e1253824e5c10ff9df46874f81ed3ec929e19cfd
