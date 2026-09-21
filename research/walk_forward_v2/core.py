@@ -558,8 +558,14 @@ def walk_forward(records, *, desired_folds=3):
                 "settlement_predictions": {key: values[index] for key, values in settlement.items()},
                 "repricing_predictions": {key: values[index] for key, values in repricing.items()},
             })
-        fold["train"] = [row["decision_id"] for row in fold["train"]]
-        fold["test"] = [row["decision_id"] for row in fold["test"]]
+        train_ids = [row["decision_id"] for row in fold["train"]]
+        test_ids = [row["decision_id"] for row in fold["test"]]
+        fold["train_rows"] = len(train_ids)
+        fold["test_rows"] = len(test_ids)
+        fold["train_decision_sha256"] = digest(train_ids)
+        fold["test_decision_sha256"] = digest(test_ids)
+        fold.pop("train")
+        fold.pop("test")
         fold["settlement"] = settlement_meta
         fold["repricing"] = repricing_meta
     return evaluations, {"schema": SCHEMA + "_folds_v1", **SAFETY, "receipt": receipt, "folds": all_folds,
@@ -588,7 +594,7 @@ def arrival(row, latency_ms):
 
 
 def replay_one(row, prediction, repricing, *, latency_ms, edge_threshold=.005, entry_cap=.75, shares=5.0,
-               execution_reserve=.005, ideal="REALISTIC"):
+               execution_reserve=.005, ideal="REALISTIC", valuation_mode="SETTLEMENT"):
     """Same L1 taker economics for every candidate; unavailable is never a nonfill."""
     funnel = {stage: False for stage in FUNNEL_STAGES}
     funnel["native_decision_rows"] = True
@@ -601,9 +607,20 @@ def replay_one(row, prediction, repricing, *, latency_ms, edge_threshold=.005, e
     if not funnel["pm_pretrigger"] or prediction is None:
         return outcome
     funnel["forecast_available"] = True
-    expected = prediction if repricing is None else min(.9999, max(.0001, (row["bid"] + row["ask"]) / 2 + repricing))
-    gross = expected - row["ask"]
-    fee = fee_per_share(row, row["ask"])
+    midpoint = (row["bid"] + row["ask"]) / 2
+    if valuation_mode == "REPRICING":
+        if repricing is None:
+            return outcome
+        expected = min(.9999, max(.0001, midpoint + repricing))
+    elif valuation_mode == "SETTLEMENT_WITH_REPRICING_CONFIRMATION":
+        if repricing is None:
+            return outcome
+        expected = prediction
+    else:
+        expected = prediction
+    decision_price = midpoint if ideal == "NO_SPREAD_FEE_EXECUTION_UPPER_BOUND" else row["ask"]
+    fee = 0.0 if ideal == "NO_SPREAD_FEE_EXECUTION_UPPER_BOUND" else fee_per_share(row, decision_price)
+    gross = expected - decision_price
     after_fee = gross - fee
     after_reserve = after_fee - execution_reserve
     funnel["predicted_repricing_positive"] = repricing is None or repricing > 0
@@ -617,7 +634,10 @@ def replay_one(row, prediction, repricing, *, latency_ms, edge_threshold=.005, e
     funnel["sufficient_depth"] = requested >= row["minimum"]
     funnel["risk_size"] = funnel["sufficient_depth"]
     funnel["capital_admitted"] = funnel["risk_size"]
-    if not all(funnel[key] for key in ("edge_threshold", "price_cap", "sufficient_depth", "risk_size", "capital_admitted")):
+    required_gates = ["edge_threshold", "price_cap", "sufficient_depth", "risk_size", "capital_admitted"]
+    if valuation_mode == "SETTLEMENT_WITH_REPRICING_CONFIRMATION":
+        required_gates.append("predicted_repricing_positive")
+    if not all(funnel[key] for key in required_gates):
         outcome.update({"status": "FILTERED", "predicted_edge": after_reserve})
         return outcome
     funnel["simulated_order"] = True
@@ -639,8 +659,9 @@ def replay_one(row, prediction, repricing, *, latency_ms, edge_threshold=.005, e
         outcome.update({"status": "NO_FILL_ZERO_VISIBLE_DEPTH", "predicted_edge": after_reserve})
         return outcome
     funnel["fill"] = funnel["partial_or_full_fill"] = True
-    cost_fee = 0.0 if ideal == "NO_SPREAD_FEE_EXECUTION_UPPER_BOUND" else fee_per_share(row, book["ask"]) * filled
-    turnover = filled * (row["bid"] if ideal == "NO_SPREAD_FEE_EXECUTION_UPPER_BOUND" else book["ask"])
+    execution_price = (book["bid"] + book["ask"]) / 2 if ideal == "NO_SPREAD_FEE_EXECUTION_UPPER_BOUND" else book["ask"]
+    cost_fee = 0.0 if ideal == "NO_SPREAD_FEE_EXECUTION_UPPER_BOUND" else fee_per_share(row, execution_price) * filled
+    turnover = filled * execution_price
     target = row.get("targets", {}).get("250", {})
     if target.get("state") == "OBSERVED":
         outcome["markout"] = filled * target["arrival_bid"] - turnover - cost_fee
@@ -725,23 +746,70 @@ def market_bootstrap(outcomes, *, seed=20260920, draws=256):
             "pnl_per_fill_interval": [sorted(samples)[int(.025 * draws)], sorted(samples)[int(.975 * draws)]]}
 
 
+def prediction_quality(evaluations):
+    settlement = {}
+    for model in ("pm", "logistic_offset", "boosted_offset"):
+        pairs = [(event["settlement_predictions"].get(model), event["row"].get("label"))
+                 for event in evaluations]
+        pairs = [(float(p), int(y)) for p, y in pairs if p is not None and y in (0, 1)]
+        if not pairs:
+            settlement[model] = {"state": "INSUFFICIENT_LABELED_OOS", "rows": 0}
+            continue
+        probabilities = [clamp_probability(p) for p, _ in pairs]
+        outcomes = [y for _, y in pairs]
+        log_loss = -sum(y * math.log(p) + (1-y) * math.log(1-p)
+                        for p, y in zip(probabilities, outcomes)) / len(pairs)
+        brier = sum((p-y) ** 2 for p, y in zip(probabilities, outcomes)) / len(pairs)
+        settlement[model] = {"state": "READY", "rows": len(pairs),
+                             "log_loss": log_loss, "brier": brier}
+    repricing = {}
+    for horizon in HORIZONS_MS:
+        pairs = []
+        key = str(horizon)
+        for event in evaluations:
+            predicted = event["repricing_predictions"].get(key)
+            target = event["row"].get("targets", {}).get(key, {})
+            if predicted is None or target.get("state") != "OBSERVED":
+                continue
+            pairs.append((float(predicted), float(target["mid_change"])))
+        if not pairs:
+            repricing[key] = {"state": "INSUFFICIENT_OOS_TARGETS", "rows": 0}
+            continue
+        errors = [p-y for p, y in pairs]
+        repricing[key] = {
+            "state": "READY", "rows": len(pairs),
+            "mae": sum(abs(e) for e in errors) / len(errors),
+            "mse": sum(e*e for e in errors) / len(errors),
+            "directional_accuracy": sum((p > 0) == (y > 0) for p, y in pairs) / len(pairs),
+            "actual_mean_move": sum(y for _, y in pairs) / len(pairs),
+            "predicted_mean_move": sum(p for p, _ in pairs) / len(pairs),
+        }
+    return {"settlement": settlement, "repricing": repricing}
+
+
 def economic_evaluation(evaluations, *, latency_ms=(10, 25, 50, 100, 250, 500)):
     """Apply identical replay to every OOS candidate and diagnostic upper bound."""
-    result = {"schema": SCHEMA + "_economics_v1", **SAFETY, "models": {}, "latency": {}, "pm_edge_distribution": pm_edge_distribution(evaluations)}
+    result = {"schema": SCHEMA + "_economics_v1", **SAFETY, "models": {}, "latency": {},
+              "pm_edge_distribution": pm_edge_distribution(evaluations),
+              "prediction_metrics": prediction_quality(evaluations)}
     variants = {
-        "pm": lambda event: (event["settlement_predictions"]["pm"], None),
-        "logistic_offset": lambda event: (event["settlement_predictions"]["logistic_offset"], None),
-        "boosted_offset": lambda event: (event["settlement_predictions"]["boosted_offset"], None),
-        "repricing_250ms": lambda event: ((event["row"]["bid"] + event["row"]["ask"]) / 2, event["repricing_predictions"].get("250")),
-        "combined_settlement_repricing": lambda event: (event["settlement_predictions"]["logistic_offset"], event["repricing_predictions"].get("250")),
+        "pm": (lambda event: (event["settlement_predictions"]["pm"], None), "SETTLEMENT"),
+        "logistic_offset": (lambda event: (event["settlement_predictions"]["logistic_offset"], None), "SETTLEMENT"),
+        "boosted_offset": (lambda event: (event["settlement_predictions"]["boosted_offset"], None), "SETTLEMENT"),
+        "repricing_250ms": (lambda event: ((event["row"]["bid"] + event["row"]["ask"]) / 2,
+                                           event["repricing_predictions"].get("250")), "REPRICING"),
+        "combined_settlement_repricing": (lambda event: (event["settlement_predictions"]["logistic_offset"],
+                                                          event["repricing_predictions"].get("250")),
+                                           "SETTLEMENT_WITH_REPRICING_CONFIRMATION"),
     }
-    for name, selector in variants.items():
+    for name, (selector, valuation_mode) in variants.items():
         outcomes = []
         for event in evaluations:
             prediction, repricing = selector(event)
             row = event["row"]
-            outcome = replay_one(row, prediction, repricing, latency_ms=100)
+            outcome = replay_one(row, prediction, repricing, latency_ms=100, valuation_mode=valuation_mode)
             outcome["market_id"], outcome["asset"], outcome["horizon"] = row["market_id"], row["asset"], row["horizon"]
+            outcome["decision_ns"] = row["decision_ns"]
             outcomes.append(outcome)
         result["models"][name] = {"metrics": summarize(outcomes), "uncertainty": market_bootstrap(outcomes), "outcomes": outcomes}
     for latency in latency_ms:
