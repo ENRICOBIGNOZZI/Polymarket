@@ -503,7 +503,7 @@ def plot_group(path,event_map,keys,title,legend=True):
     plt.close()
 
 
-def write_equity_outputs(output,results):
+def write_equity_outputs(output,results,make_figures=True):
     gallery=output/"native_alpha_equity_gallery"
     gallery.mkdir(parents=True,exist_ok=True)
     files=[]
@@ -513,18 +513,19 @@ def write_equity_outputs(output,results):
         for name,res in sorted(results.items()):
             safe="".join(ch if ch.isalnum() or ch in "._-" else "_" for ch in name)
             event_map=res["events"]
-            all_name=gallery/safe/"00_all_60_cells.png"
-            plot_group(
-                all_name,event_map,
-                [f"{l}::{h}" for l in LATENCIES for h in EXITS],
-                f"{name}: all 60 entry × exit equity lines",legend=False)
-            files.append(str(all_name.relative_to(output)))
-            for latency in LATENCIES:
-                path=gallery/safe/f"latency_{latency}ms_all_exits.png"
+            if make_figures:
+                all_name=gallery/safe/"00_all_60_cells.png"
                 plot_group(
-                    path,event_map,[f"{latency}::{h}" for h in EXITS],
-                    f"{name}: entry {latency}ms, all exits",legend=True)
-                files.append(str(path.relative_to(output)))
+                    all_name,event_map,
+                    [f"{l}::{h}" for l in LATENCIES for h in EXITS],
+                    f"{name}: all 60 entry × exit equity lines",legend=False)
+                files.append(str(all_name.relative_to(output)))
+                for latency in LATENCIES:
+                    path=gallery/safe/f"latency_{latency}ms_all_exits.png"
+                    plot_group(
+                        path,event_map,[f"{latency}::{h}" for h in EXITS],
+                        f"{name}: entry {latency}ms, all exits",legend=True)
+                    files.append(str(path.relative_to(output)))
             for cell,events in sorted(event_map.items()):
                 total=0.0
                 for row in sorted(events,key=lambda x:(x["decision_ns"],x["decision_id"])):
@@ -542,6 +543,7 @@ def write_equity_outputs(output,results):
         "figures_per_alpha":1+len(LATENCIES),
         "figure_count":len(files),
         "figures":files,
+        "generation_deferred":not make_figures,
         "raw_equity_paths":"22_native_alpha_equity_paths.csv.gz",
         "grid_csv":"21_native_alpha_grid.csv",
     }
@@ -549,7 +551,7 @@ def write_equity_outputs(output,results):
     return manifest
 
 
-def run(root,output,minimum_wall_ns):
+def run(root,output,minimum_wall_ns,skip_figures=False):
     output.mkdir(parents=True,exist_ok=True)
     data=build_dataset(root,minimum_wall_ns=minimum_wall_ns,include_settlement_labels=False,use_compact_window_index=True)
     if data.get("input_state")!="READY":raise ValueError("DATA_NOT_READY")
@@ -562,7 +564,7 @@ def run(root,output,minimum_wall_ns):
     for name,rule in alphas.items():
         results[name]=evaluate_alpha(window_rows,rule)
 
-    gallery=write_equity_outputs(output,results)
+    gallery=write_equity_outputs(output,results,make_figures=not skip_figures)
     payload={
         "schema":SCHEMA,**SAFETY,"research_only":True,"automatic_promotion":False,
         "window":window,"thresholds_fit_on_first_60pct":th,
@@ -588,8 +590,9 @@ def main(argv=None):
     p.add_argument("--root",type=Path,required=True)
     p.add_argument("--output-dir",type=Path,required=True)
     p.add_argument("--minimum-wall-ns",type=int,required=True)
+    p.add_argument("--skip-figures",action="store_true")
     a=p.parse_args(argv)
-    out=run(a.root,a.output_dir,a.minimum_wall_ns)
+    out=run(a.root,a.output_dir,a.minimum_wall_ns,skip_figures=a.skip_figures)
     print(json.dumps({"state":"READY","alphas":len(out["alphas"]),"window":out["window"]},sort_keys=True))
     return 0
 
