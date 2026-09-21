@@ -94,7 +94,7 @@ mkdir -p src output
 tar -xzf source.tgz -C src
 python3 -m venv venv
 venv/bin/pip install --disable-pip-version-check --quiet -r src/research/requirements-learning.txt
-POLYMARKET_RESEARCH_HORIZONS_MS=50,100,250,500,750,1000,1500,2000,3000,4000,5000,7500,10000 \
+POLYMARKET_RESEARCH_HORIZONS_MS=5,10,25,50,100,250,500,750,1000,1500,2000,3000,4000,5000,7500,10000 \
 POLYMARKET_RESEARCH_EXECUTION_LATENCIES_MS=5,10,25,50,100,250 \
 PYTHONPATH={remote}/src:{ctx['app_dir']} nice -n 18 venv/bin/python -m research.walk_forward_v3.multi_alpha_2h \
   --root {ctx['run_root']} \
