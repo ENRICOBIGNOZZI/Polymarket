@@ -1,0 +1,15 @@
+{
+  "schema": "polymarket_v7_executable_markout_shadow_ssm_request_v1",
+  "version": 1,
+  "request_id": "markout-shadow-forward-20260921T1115CEST",
+  "instance_id": "i-0fba2bac9fdc5cbeb",
+  "expected_parent_sha": "f47518adec158ac1ce925887187cffafd521a7f8",
+  "paper_only": true,
+  "authenticated_execution": false,
+  "real_order_submission": false,
+  "real_capital_at_risk": false,
+  "execution_authority": false,
+  "automatic_promotion": false,
+  "poll_ms": 5,
+  "maximum_inference_age_ms": 50
+}
