@@ -1,9 +1,9 @@
 {
   "schema": "polymarket_v7_all_crypto_equity_request_v1",
   "version": 1,
-  "request_id": "all-crypto-equity-grid-20260921",
+  "request_id": "all-crypto-equity-grid-retry-20260921",
   "instance_id": "i-0fba2bac9fdc5cbeb",
-  "expected_research_sha": "44bababbd8d292a510b4b2d6be3afd519c9b832c",
+  "expected_research_sha": "110a1b99c45ee87baa1cd96bd01e7a723b7ac8f4",
   "minimum_wall_ns": 1790007780000000000,
   "output_directory": "docs/research/all-crypto-equity-grid-2026-09-21",
   "paper_only": true,
