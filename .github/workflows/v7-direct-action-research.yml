@@ -90,6 +90,22 @@ jobs:
               assert training["selection_calibration_mode"]=="PREQUENTIAL"
               assert training["selection_scores_oos_when_generated"] is True
               assert training["selection_score_blocks_may_enter_final_mean_fit"] is True
+              assert training["partial_pooling"]==(
+                  "GLOBAL_BASE_PLUS_RIDGE_SHRUNK_ASSET_CONTRACT_AGE_DEVIATIONS"
+              )
+              assert isinstance(training["regime_action_target_counts"],dict)
+              assert training["minimum_regime_action_targets"] >= 0
+              surface=fold.get("latency_age_surface") or {}
+              assert surface.get("selection")=="NONE_DIAGNOSTIC_ONLY"
+              assert surface.get("selection_warning")==(
+                  "LATENCY_AND_AGE_BUCKETS_ARE_DIAGNOSTIC_OOS_CELLS;"
+                  "DO_NOT_PICK_A_GATE_FROM_THE_SAME_OUTER_OOS"
+              )
+              entries=surface.get("entries") or []
+              assert {int(entry["latency_ms"]) for entry in entries}=={25,50,100,250}
+              for entry in entries:
+                  assert entry["state"]=="READY"
+                  assert isinstance(entry.get("by_effective_age_bucket"),dict)
               embedded=set(training["execution_frictions_in_training_target"])
               assert "exit_l1_capacity_and_zero_value_residual_lower_bound" in embedded
               assert training["gram_matrix_bytes"] < 5_000_000
@@ -104,6 +120,22 @@ jobs:
               "bilateral_ready_fraction":bilateral.get("bilateral_ready_decision_fraction"),
               "bilateral_pair_states":bilateral.get("decision_pair_states"),
               "total_selection_optimism_penalty":result["summary"].get("total_predicted_selection_optimism_penalty"),
+              "fold_latency_surface":[
+                  {
+                      "fold":fold["fold"],
+                      "cells":[
+                          {
+                              "latency_ms":entry["latency_ms"],
+                              "selected":entry["summary"]["selected_trades"],
+                              "observed":entry["summary"]["observed_selected_trades"],
+                              "pnl":entry["summary"]["total_observed_net_pnl"],
+                              "by_effective_age_bucket":entry["by_effective_age_bucket"],
+                          }
+                          for entry in fold["latency_age_surface"]["entries"]
+                      ],
+                  }
+                  for fold in result["folds"]
+              ],
               "fold_selection_calibration":[
                   {
                       "state":fold["training"].get("selection_calibration_state"),
