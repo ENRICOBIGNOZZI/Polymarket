@@ -84,9 +84,12 @@ jobs:
               assert training["calibration_holdout_excluded_from_mean_fit"] is True
               assert training["calibration_holdouts_disjoint"] is True
               assert training["selection_calibration_state"] in (
-                  "TEMPORAL_MARKET_BLOCK_POST_ARGMAX_ONE_SIDED",
-                  "INSUFFICIENT_POST_ARGMAX_CALIBRATION",
+                  "PREQUENTIAL_SELECTED_POLICY_ONE_SIDED",
+                  "INSUFFICIENT_PREQUENTIAL_SELECTION_CALIBRATION",
               )
+              assert training["selection_calibration_mode"]=="PREQUENTIAL"
+              assert training["selection_scores_oos_when_generated"] is True
+              assert training["selection_score_blocks_may_enter_final_mean_fit"] is True
               embedded=set(training["execution_frictions_in_training_target"])
               assert "exit_l1_capacity_and_zero_value_residual_lower_bound" in embedded
               assert training["gram_matrix_bytes"] < 5_000_000
