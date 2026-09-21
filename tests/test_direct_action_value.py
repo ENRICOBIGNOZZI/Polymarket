@@ -29,6 +29,7 @@ from research.walk_forward_v3.direct_action import (
     merge_direct_action_summaries,
     bilateral_evidence_summary,
     evaluate_latency_age_surface,
+    summarize_effective_age_buckets,
 )
 
 
@@ -1483,3 +1484,68 @@ def test_partial_pooling_receipt_exposes_training_support_without_outcome_tuning
         isinstance(value, int) and value >= 0
         for value in receipt["regime_action_target_counts"].values()
     )
+
+
+
+def test_selected_action_carries_signal_and_effective_age():
+    import numpy as np
+    r = row("m9100", signal=2.0, exit_bid=.56, depth=20.0)
+    r["signal_age_ns"] = 30_000_000
+    model = DirectActionValueModel(
+        action_horizons_ms=(500,),
+        train_latencies_ms=(50,),
+        friction_policy=FrictionPolicy(uncertainty_aversion=0.0),
+    )
+    model._configure_levels([r])
+
+    class PositiveModel:
+        def __init__(self, names):
+            self.names = tuple(names)
+            self.center = {name: 0.0 for name in self.names}
+            self.scale = {name: 1.0 for name in self.names}
+            self.beta = np.zeros(1 + 2 * len(self.names), dtype=float)
+            self.beta[0] = 1.0
+        def predict(self, record):
+            return 1.0
+
+    model.mean_model = PositiveModel(model.model_feature_names)
+    model.scale_model = None
+    model.uncertainty_floor = 0.0
+    model.calibration_multiplier = 1.0
+    model.selection_optimism_penalty = 0.0
+    model.regime_support_counts = {}
+    model.fitted = True
+
+    selected = model.select_action(r, latency_ms=50)
+    assert selected["action"] == "TRADE"
+    assert math.isclose(selected["signal_age_ms"], 30.0, abs_tol=1e-12)
+    assert math.isclose(
+        selected["effective_action_age_ms"], 80.0, abs_tol=1e-12)
+
+
+def test_effective_age_bucket_summary_separates_observed_and_censored():
+    outcomes = [
+        {
+            "action": "TRADE", "signal_age_ms": 10.0, "latency_ms": 25,
+            "effective_action_age_ms": 35.0,
+            "realized_pnl": .2, "policy_utility": .1,
+        },
+        {
+            "action": "TRADE", "signal_age_ms": 60.0, "latency_ms": 25,
+            "effective_action_age_ms": 85.0,
+            "realized_pnl": None, "policy_utility": .2,
+        },
+        {
+            "action": "TRADE", "signal_age_ms": 100.0, "latency_ms": 100,
+            "effective_action_age_ms": 200.0,
+            "realized_pnl": -.1, "policy_utility": .3,
+        },
+    ]
+    result = summarize_effective_age_buckets(outcomes)
+    assert result["le50"]["selected_trades"] == 1
+    assert result["le50"]["observed_selected_trades"] == 1
+    assert math.isclose(result["le50"]["total_observed_net_pnl"], .2)
+    assert result["50_100"]["selected_trades"] == 1
+    assert result["50_100"]["censored_selected_trades"] == 1
+    assert result["100_250"]["observed_selected_trades"] == 1
+    assert math.isclose(result["100_250"]["total_observed_net_pnl"], -.1)
