@@ -8,10 +8,13 @@ from research.walk_forward_v2.core import (
     book_targets,
     build_dataset,
     folds,
+    fit_full_repricing,
     replay_one,
     replay_policy,
     settlement_predictors,
     valid_native,
+    native_repricing_point,
+    attach_native_repricing,
 )
 
 
@@ -226,3 +229,95 @@ def test_pm_baseline_remains_available_before_any_settlement_labels():
     assert predictions["pm"] == [(row["bid"] + row["ask"]) / 2 for row in test]
     assert predictions["logistic_offset"] == [None, None]
     assert predictions["boosted_offset"] == [None, None]
+
+
+
+def test_native_kind6_repricing_label_populates_oos_target_and_arrival():
+    origin = record("native")
+    origin.update({
+        "server_id": "s1", "run_id": "r1", "capture_id": "c1",
+        "signal_version": 17, "repricing_origin_signal_version": 17,
+        "decision_monotonic_ns": 1_000_000_000,
+    })
+    label = {
+        "schema": "polymarket_v7_native_observation_v1",
+        "paper_only": True,
+        "execution_authority": False,
+        "kind": 6,
+        "server_id": "s1", "run_id": "r1", "capture_id": "c1",
+        "market_id": "native", "token_id": "yes-native",
+        "repricing_origin_signal_version": 17,
+        "repricing_horizon_ms": 100,
+        "decision_monotonic_ns": 1_000_000_000,
+        "decision_wall_ns": origin["decision_ns"],
+        "observed_monotonic_ns": 1_100_000_001,
+        "close_monotonic_ns": 200_000_000_000,
+        "connection_epoch": 7,
+        "repricing_pair_valid": True,
+        "book_valid": True,
+        "bid_e4": 5000, "ask_e4": 5100, "tick_e4": 100,
+        "ask_quantity": 4_000_000,
+    }
+    parsed = native_repricing_point(label)
+    assert parsed is not None
+    key, horizon, point = parsed
+    proof = attach_native_repricing([origin], {(key, horizon): point})
+    assert proof["matched_target_rows"] == 1
+    assert origin["targets"]["100"]["state"] == "OBSERVED"
+    assert math.isclose(origin["targets"]["100"]["mid_change"], .010, abs_tol=1e-12)
+    arrival = origin["arrivals"]["100"]
+    assert math.isclose(arrival["ask"], .51, abs_tol=1e-12)
+    assert arrival["quantity"] == 4.0
+
+
+def test_native_kind6_wrong_identity_never_joins_origin():
+    origin = record("native2")
+    origin.update({
+        "server_id": "s1", "run_id": "r1", "capture_id": "c1",
+        "signal_version": 3, "repricing_origin_signal_version": 3,
+        "decision_monotonic_ns": 1_000_000_000,
+    })
+    label = {
+        "schema": "polymarket_v7_native_observation_v1",
+        "paper_only": True, "execution_authority": False, "kind": 6,
+        "server_id": "s1", "run_id": "r1", "capture_id": "other",
+        "market_id": "native2", "token_id": "yes-native2",
+        "repricing_origin_signal_version": 3, "repricing_horizon_ms": 250,
+        "decision_monotonic_ns": 1_000_000_000,
+        "decision_wall_ns": origin["decision_ns"],
+        "observed_monotonic_ns": 1_250_000_001,
+        "close_monotonic_ns": 200_000_000_000,
+        "connection_epoch": 7, "repricing_pair_valid": True, "book_valid": True,
+        "bid_e4": 5100, "ask_e4": 5200, "tick_e4": 100, "ask_quantity": 5_000_000,
+    }
+    key, horizon, point = native_repricing_point(label)
+    proof = attach_native_repricing([origin], {(key, horizon): point})
+    assert proof["matched_target_rows"] == 0
+    assert origin["targets"]["250"]["state"] == "UNAVAILABLE_NO_NATIVE_REPRICING_LABEL"
+
+
+
+def test_full_window_repricing_fit_uses_all_observed_history_without_promotion():
+    rows = []
+    base = 1_789_921_800_000_000_001
+    for index in range(10):
+        row = record("full" + str(index), decision_ns=base + index * 1_000_000_000)
+        row["features"]["x"] = float(index)
+        for horizon in HORIZONS_MS:
+            row.setdefault("targets", {})[str(horizon)] = {
+                "state": "OBSERVED",
+                "source": "NATIVE_REPRICING_KIND6_ASOF_HORIZON",
+                "observed_time_ns": row["decision_ns"] + horizon * 1_000_000,
+                "mid_change": .001 * (index + 1),
+            }
+        rows.append(row)
+    artifact = fit_full_repricing(rows)
+    assert artifact["automatic_promotion"] is False
+    for horizon in HORIZONS_MS:
+        model = artifact["models"][str(horizon)]
+        assert model["state"] == "READY"
+        assert model["rows"] == 10
+        assert model["unique_markets"] == 10
+        assert model["label_sources"] == {"NATIVE_REPRICING_KIND6_ASOF_HORIZON": 10}
+        assert model["training_start_ns"] == rows[0]["decision_ns"]
+        assert model["training_end_ns"] == rows[-1]["decision_ns"]

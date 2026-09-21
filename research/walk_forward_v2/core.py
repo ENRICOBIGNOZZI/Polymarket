@@ -200,7 +200,7 @@ def native_decision(row):
         return None, "invalid_book"
     required = (
         "server_id", "run_id", "capture_id", "market_id", "token_id", "asset",
-        "horizon", "decision_monotonic_ns", "trigger_monotonic_ns",
+        "horizon", "signal_version", "decision_monotonic_ns", "trigger_monotonic_ns",
         "receive_monotonic_ns", "close_monotonic_ns", "close_wall_ns",
         "bid_e4", "ask_e4", "tick_e4", "fee_rate", "fee_exponent",
         "minimum_order_microunits",
@@ -230,6 +230,10 @@ def native_decision(row):
         return {
             "decision_id": identity, "market_id": str(row["market_id"]),
             "token_id": str(row["token_id"]), "asset": str(row["asset"]),
+            "server_id": str(row["server_id"]), "run_id": str(row["run_id"]),
+            "capture_id": str(row["capture_id"]), "signal_version": int(row["signal_version"]),
+            "repricing_origin_signal_version": int(row.get("repricing_origin_signal_version") or 0),
+            "decision_monotonic_ns": monotonic,
             "horizon": str(row["horizon"]), "decision_ns": decision_ns,
             "information_end_ns": decision_ns + 2_000_000_000,
             "trigger_ns": trigger, "signal_age_ns": monotonic - trigger,
@@ -249,6 +253,134 @@ def native_decision(row):
         }, None
     except (TypeError, ValueError, OverflowError):
         return None, "invalid_decision_fields"
+
+
+def native_repricing_key(row):
+    try:
+        version = int(row.get("repricing_origin_signal_version") or 0)
+        decision = int(row.get("decision_monotonic_ns") or 0)
+        if version <= 0 or decision <= 0:
+            return None
+        return (
+            str(row["server_id"]), str(row["run_id"]), str(row["capture_id"]),
+            str(row["market_id"]), str(row["token_id"]), version, decision,
+        )
+    except (KeyError, TypeError, ValueError):
+        return None
+
+
+def decision_repricing_key(record):
+    version = int(record.get("repricing_origin_signal_version") or 0)
+    if version <= 0:
+        return None
+    return (
+        record["server_id"], record["run_id"], record["capture_id"],
+        record["market_id"], record["token_id"], version,
+        int(record["decision_monotonic_ns"]),
+    )
+
+
+def native_repricing_point(row):
+    """Decode a producer-emitted kind=6 as-of-horizon selected-token book.
+
+    The native engine emits this only after the event-processing watermark has
+    crossed the nominal horizon. The selected top-of-book is the latest valid
+    receive-time state available to the engine at that horizon. Continuity
+    failures are explicitly censored through repricing_pair_valid=false.
+    """
+    if not valid_native(row) or row.get("kind") != 6:
+        return None
+    key = native_repricing_key(row)
+    if key is None or row.get("repricing_pair_valid") is not True or row.get("book_valid") is not True:
+        return None
+    try:
+        horizon = int(row["repricing_horizon_ms"])
+        decision_mono = int(row["decision_monotonic_ns"])
+        observed_mono = int(row["observed_monotonic_ns"])
+        close_mono = int(row["close_monotonic_ns"])
+        bid = int(row["bid_e4"]) / 10000
+        ask = int(row["ask_e4"]) / 10000
+        tick = int(row["tick_e4"]) / 10000
+        quantity = float(row.get("ask_quantity") or 0) / 1_000_000
+        epoch = int(row["connection_epoch"])
+        if horizon not in HORIZONS_MS or not 0 < bid < ask < 1 or tick <= 0 or quantity < 0:
+            return None
+        target_mono = decision_mono + horizon * 1_000_000
+        if observed_mono < target_mono or close_mono <= target_mono or epoch <= 0:
+            return None
+        decision_wall = row.get("decision_wall_ns")
+        if not isinstance(decision_wall, int) or decision_wall <= 0:
+            return None
+        return key, horizon, {
+            "state": "OBSERVED",
+            "source": "NATIVE_REPRICING_KIND6_ASOF_HORIZON",
+            "observed_time_ns": decision_wall + horizon * 1_000_000,
+            "label_observed_monotonic_ns": observed_mono,
+            "bid": bid, "ask": ask, "quantity": quantity,
+            "tick": tick, "epoch": epoch,
+        }
+    except (KeyError, TypeError, ValueError, OverflowError):
+        return None
+
+
+def attach_native_repricing(decisions, labels):
+    by_key = {}
+    for record in decisions:
+        record["targets"] = {}
+        record["arrivals"] = {}
+        key = decision_repricing_key(record)
+        if key is not None:
+            by_key[key] = record
+
+    matched = conflicts = 0
+    for (key, horizon), point in sorted(labels.items(), key=lambda item: (item[0][0], item[0][1])):
+        record = by_key.get(key)
+        if record is None:
+            continue
+        if point["epoch"] != record["epoch"]:
+            continue
+        hkey = str(horizon)
+        prior = record["targets"].get(hkey)
+        if prior is not None:
+            conflicts += 1
+            continue
+        mid0 = (record["bid"] + record["ask"]) / 2
+        mid1 = (point["bid"] + point["ask"]) / 2
+        record["targets"][hkey] = {
+            "state": "OBSERVED",
+            "source": point["source"],
+            "observed_time_ns": point["observed_time_ns"],
+            "mid_change": mid1 - mid0,
+            "ask_change": point["ask"] - record["ask"],
+            "bid_change": point["bid"] - record["bid"],
+            "arrival_ask": point["ask"], "arrival_bid": point["bid"],
+            "arrival_quantity": point["quantity"],
+        }
+        if horizon in EXECUTION_LATENCIES_MS:
+            record["arrivals"][hkey] = {
+                "time_ns": point["observed_time_ns"],
+                "bid": point["bid"], "ask": point["ask"],
+                "quantity": point["quantity"], "epoch": point["epoch"],
+            }
+        matched += 1
+
+    short_pairs = arrival_pairs = 0
+    for record in decisions:
+        for horizon in HORIZONS_MS:
+            key = str(horizon)
+            if key not in record["targets"]:
+                record["targets"][key] = {"state": "UNAVAILABLE_NO_NATIVE_REPRICING_LABEL"}
+            elif record["targets"][key].get("state") == "OBSERVED":
+                short_pairs += 1
+        arrival_pairs += len(record["arrivals"])
+    return {
+        "source": "NATIVE_KIND6_CAUSAL_ASOF_HORIZON",
+        "native_label_rows": len(labels),
+        "matched_target_rows": matched,
+        "conflicting_target_rows": conflicts,
+        "short_horizon_observed_pairs": short_pairs,
+        "arrival_observed_pairs": arrival_pairs,
+    }
 
 
 def settlement_index(roots):
@@ -432,7 +564,13 @@ def attach_streamed_book_evidence(decisions, paths, *, tolerance_ns=TARGET_TOLER
 
 
 def build_dataset(root, *, minimum_wall_ns=DEFAULT_EPOCH_NS, settlement_root=None):
-    """Load causal signals first; stream PM evidence without materializing the full tape."""
+    """Build V2 primarily from compact native decisions + producer kind=6 labels.
+
+    Native kind=6 labels are emitted by the same engine/capture identity as the
+    originating decision after its event-processing watermark crosses each
+    horizon. This gives full-window causal repricing and executable L1/depth
+    snapshots without materializing the large PM observer archive in RAM.
+    """
     supplied_root = Path(root)
     run_layout = supplied_root / "research" / "hft_permanent"
     if run_layout.is_dir():
@@ -464,8 +602,8 @@ def build_dataset(root, *, minimum_wall_ns=DEFAULT_EPOCH_NS, settlement_root=Non
               "exclusions": Counter(), "input_state": "READY", "book_evidence": {}}
     compact = sorted(list((hft_root / "compact").glob("*.jsonl*"))
                      + list((hft_root / "compact_closed").glob("*.jsonl*")))
-    windows = sorted((hft_root / "windows").glob("*.jsonl*"))
     seen_sources, seen_decisions = set(), set()
+    native_labels = {}
 
     for path in compact:
         if path.is_symlink() or not path.is_file():
@@ -482,8 +620,22 @@ def build_dataset(root, *, minimum_wall_ns=DEFAULT_EPOCH_NS, settlement_root=Non
                 continue
             if row.get("schema") != "polymarket_v7_native_observation_v1":
                 continue
-            if row.get("kind") == 2:
-                result["exclusions"]["NATIVE_DECISION_ROWS_TOTAL"] += 1
+            kind = row.get("kind")
+            if kind == 6:
+                point = native_repricing_point(row)
+                if point is None:
+                    result["exclusions"]["INVALID_OR_CENSORED_NATIVE_REPRICING_LABEL"] += 1
+                    continue
+                key, horizon, value = point
+                identity = (key, horizon)
+                prior = native_labels.get(identity)
+                if prior is not None and prior != value:
+                    raise ValueError("CONFLICTING_NATIVE_REPRICING_LABEL")
+                native_labels[identity] = value
+                continue
+            if kind != 2:
+                continue
+            result["exclusions"]["NATIVE_DECISION_ROWS_TOTAL"] += 1
             if native_wall_ns(row) < minimum_wall_ns:
                 result["exclusions"]["PRE_EPOCH_NATIVE"] += 1
                 continue
@@ -498,20 +650,8 @@ def build_dataset(root, *, minimum_wall_ns=DEFAULT_EPOCH_NS, settlement_root=Non
 
     result["decisions"].sort(key=lambda r: (r["decision_ns"], r["decision_id"]))
     attach_labels(result["decisions"], label_roots)
-
-    unique_windows = []
-    for path in windows:
-        if path.is_symlink() or not path.is_file():
-            continue
-        content = source_hash(path)
-        if content in seen_sources:
-            result["exclusions"]["DUPLICATE_SOURCE_OBJECT"] += 1
-            continue
-        seen_sources.add(content)
-        result["sources"].append({"path": str(path.relative_to(hft_root)), "sha256": content})
-        unique_windows.append(path)
     if result["decisions"]:
-        result["book_evidence"] = attach_streamed_book_evidence(result["decisions"], unique_windows)
+        result["book_evidence"] = attach_native_repricing(result["decisions"], native_labels)
 
     result["exclusions"] = dict(result["exclusions"])
     if not hft_root.is_dir():
@@ -519,7 +659,7 @@ def build_dataset(root, *, minimum_wall_ns=DEFAULT_EPOCH_NS, settlement_root=Non
     elif not result["decisions"]:
         result["input_state"] = "NO_ADMISSIBLE_NATIVE_DECISIONS"
     elif result["book_evidence"].get("short_horizon_observed_pairs", 0) == 0:
-        result["input_state"] = "NO_ADMISSIBLE_PM_BOOK_WINDOWS"
+        result["input_state"] = "NO_ADMISSIBLE_NATIVE_REPRICING_LABELS"
     result["data_sha256"] = digest({
         "minimum_wall_ns": minimum_wall_ns, "sources": result["sources"],
         "decision_ids": [r["decision_id"] for r in result["decisions"]],
@@ -698,6 +838,55 @@ def repricing_predictors(train, test):
         details[str(horizon)] = {"state": "READY", "rows": len(eligible), "feature_names": names,
                                  "target": "future_observed_pm_midpoint_change"}
     return out, details
+
+
+def fit_full_repricing(records):
+    """Freeze research-only repricing models on the full available historical window.
+
+    These fits are intentionally NOT used for historical OOS evaluation. They
+    are the post-evaluation artifacts intended for the next forward PAPER
+    experiment after an explicit promotion decision.
+    """
+    names = feature_names(records)
+    models = {}
+    for horizon in HORIZONS_MS:
+        key = str(horizon)
+        eligible = [
+            row for row in records
+            if row.get("targets", {}).get(key, {}).get("state") == "OBSERVED"
+            and row.get("features") is not None
+        ]
+        if len(eligible) < 8:
+            models[key] = {"state": "INSUFFICIENT_TRAINING_TARGETS", "rows": len(eligible)}
+            continue
+        model = Ridge(names, ridge=8.0).fit(
+            eligible, lambda row, h=key: row["targets"][h]["mid_change"])
+        model.beta = [float(value) for value in model.beta]
+        models[key] = {
+            "state": "READY",
+            "rows": len(eligible),
+            "unique_markets": len({row["market_id"] for row in eligible}),
+            "feature_names": list(names),
+            "ridge": 8.0,
+            "target": "selected_token_pm_midpoint_change_asof_horizon",
+            "training_start_ns": min(row["decision_ns"] for row in eligible),
+            "training_end_ns": max(row["decision_ns"] for row in eligible),
+            "label_information_end_ns": max(
+                int(row["targets"][key]["observed_time_ns"]) for row in eligible),
+            "training_decision_sha256": digest([row["decision_id"] for row in eligible]),
+            "center": {name: float(model.center[name]) for name in names},
+            "scale": {name: float(model.scale[name]) for name in names},
+            "beta": model.beta,
+            "label_sources": dict(Counter(
+                row["targets"][key].get("source", "UNKNOWN") for row in eligible)),
+        }
+    return {
+        "schema": SCHEMA + "_full_window_repricing_models_v1",
+        **SAFETY,
+        "automatic_promotion": False,
+        "evaluation_role": "POST_OOS_FIT_FOR_NEXT_FORWARD_PAPER_ONLY",
+        "models": models,
+    }
 
 
 def walk_forward(records, *, desired_folds=3):
