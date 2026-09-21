@@ -153,6 +153,8 @@ POLYMARKET_RESEARCH_HORIZONS_MS=50,100,250,500,750,1000,1500,2000,3000,4000,5000
   --folds {request['folds']} \
   --latency-ms {request['latency_ms']} \
   --capital-budget {request['capital_budget']}{challenger_flag}
+POLYMARKET_RESEARCH_HORIZONS_MS=50,100,250,500,750,1000,1500,2000,3000,4000,5000,7500,10000 \
+POLYMARKET_RESEARCH_EXECUTION_LATENCIES_MS=5,10,25,50,100,250 \
 PYTHONPATH={remote}/src:{app_dir} venv/bin/python -m research.walk_forward_v3.dynamic_exit \
   --root {run_root} \
   --output {remote}/output/dynamic_exit.json \
