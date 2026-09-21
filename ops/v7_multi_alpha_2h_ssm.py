@@ -23,9 +23,7 @@ PATHS = (
     "research/walk_forward_v3/dynamic_exit.py",
     "research/walk_forward_v2/__init__.py",
     "research/walk_forward_v2/core.py",
-    "research/economic/__init__.py",
     "research/economic/causal_replay.py",
-    "scripts/__init__.py",
     "scripts/v7_multi_crypto_compact_pm_tape.py",
     "research/requirements-learning.txt",
 )
