@@ -225,15 +225,18 @@ def candidate_sizes(row, *, side=None, size_grid=DEFAULT_SIZE_GRID,
     return [ordered[i] for i in sorted(indices)]
 
 
-def realized_action_economics(row, *, size, horizon_ms, latency_ms, side=None,
-                              entry_cap=DEFAULT_ENTRY_CAP,
-                              hard_order_notional=DEFAULT_HARD_ORDER_NOTIONAL,
-                              require_full_decision_depth=True):
-    """Observed execution economics for one counterfactual action.
+def action_execution_kernel(
+    row,
+    *,
+    horizon_ms,
+    latency_ms,
+    side=None,
+    entry_cap=DEFAULT_ENTRY_CAP,
+):
+    """Size-independent causal execution kernel for one state/side/horizon.
 
-    The returned cash PnL already includes the observable trading frictions:
-    entry spread, realized post-signal/latency price drift, exit spread,
-    partial fill/no-fill and both taker fees.  Missing evidence is censored.
+    All book lookup, zero-chase, fee and exit economics are computed once.
+    Quantity enters later only through min(q, observed_arrival_depth).
     """
     if horizon_ms <= latency_ms:
         return None, "HORIZON_NOT_AFTER_EXECUTION"
@@ -245,16 +248,8 @@ def realized_action_economics(row, *, size, horizon_ms, latency_ms, side=None,
         return None, "SIDE_DECISION_EVIDENCE_UNAVAILABLE"
     ask0 = float(decision_state["ask"])
     bid0 = float(decision_state["bid"])
-    decision_depth = float(decision_state["ask_quantity"])
-    size = float(size)
-    if ask0 > entry_cap + 1e-12:
+    if ask0 > float(entry_cap) + 1e-12:
         return None, "ENTRY_CAP"
-    if size + 1e-12 < float(row["minimum"]) or size <= 0:
-        return None, "BELOW_VENUE_MINIMUM"
-    if require_full_decision_depth and size > decision_depth + 1e-12:
-        return None, "INSUFFICIENT_DECISION_DEPTH"
-    if size * ask0 > float(hard_order_notional) + 1e-9:
-        return None, "ORDER_NOTIONAL_CAP"
 
     book, why = arrival(row, int(latency_ms))
     if book is None:
@@ -263,27 +258,103 @@ def realized_action_economics(row, *, size, horizon_ms, latency_ms, side=None,
     if arrival_state is None:
         return None, "SIDE_ARRIVAL_EVIDENCE_UNAVAILABLE"
 
-    # Zero chase.  A causally observed non-fill is a real zero payoff for this
-    # action, not censored evidence.
+    # Zero chase is size-independent.
     if float(arrival_state["ask"]) > ask0 + 1e-12:
         return {
             "side": side,
-            "cash_pnl": 0.0,
-            "gross_executable_markout": 0.0,
-            "filled": 0.0,
-            "requested": size,
+            "state": "OBSERVED_NO_FILL_LIMIT_NOT_TOUCHED",
+            "fill_capacity": 0.0,
+            "decision_ask": ask0,
+            "decision_bid": bid0,
             "entry_price": None,
             "exit_bid": None,
-            "entry_fee": 0.0,
-            "exit_fee": 0.0,
-            "total_fees": 0.0,
-            "decision_half_spread_cost": 0.0,
-            "latency_price_drift_cost": 0.0,
-            "exit_half_spread_cost": 0.0,
-            "ideal_midpoint_alpha": None,
-            "frictions_embedded_in_cash_pnl": True,
+            "cash_pnl_per_share": 0.0,
+            "gross_executable_markout_per_share": 0.0,
+            "entry_fee_per_share": 0.0,
+            "exit_fee_per_share": 0.0,
+            "decision_half_spread_per_share": 0.0,
+            "latency_price_drift_per_share": 0.0,
+            "exit_half_spread_per_share": 0.0,
+            "ideal_midpoint_alpha_per_share": None,
         }, "OBSERVED_NO_FILL_LIMIT_NOT_TOUCHED"
-    fill = min(size, float(arrival_state.get("ask_quantity") or 0.0))
+
+    fill_capacity = float(arrival_state.get("ask_quantity") or 0.0)
+    if fill_capacity <= 0:
+        return {
+            "side": side,
+            "state": "OBSERVED_NO_FILL_ZERO_DEPTH",
+            "fill_capacity": 0.0,
+            "decision_ask": ask0,
+            "decision_bid": bid0,
+            "entry_price": None,
+            "exit_bid": None,
+            "cash_pnl_per_share": 0.0,
+            "gross_executable_markout_per_share": 0.0,
+            "entry_fee_per_share": 0.0,
+            "exit_fee_per_share": 0.0,
+            "decision_half_spread_per_share": 0.0,
+            "latency_price_drift_per_share": 0.0,
+            "exit_half_spread_per_share": 0.0,
+            "ideal_midpoint_alpha_per_share": None,
+        }, "OBSERVED_NO_FILL_ZERO_DEPTH"
+
+    target = row.get("targets", {}).get(str(int(horizon_ms)), {})
+    if target.get("state") != "OBSERVED":
+        return None, "EXIT_EVIDENCE_UNAVAILABLE"
+    exit_state = observed_side_state(target, side, row)
+    if exit_state is None:
+        return None, "SIDE_EXIT_EVIDENCE_UNAVAILABLE"
+
+    entry_price = float(arrival_state["ask"])
+    exit_bid = float(exit_state["bid"])
+    entry_fee = fee_per_share(row, entry_price)
+    exit_fee = fee_per_share(row, exit_bid)
+    gross = exit_bid - entry_price
+    cash = gross - entry_fee - exit_fee
+
+    decision_mid = (bid0 + ask0) / 2.0
+    future_ask = exit_state.get("ask")
+    future_mid = (
+        (exit_bid + float(future_ask)) / 2.0
+        if finite(future_ask) and float(future_ask) > exit_bid
+        else None
+    )
+    ideal_alpha = (
+        future_mid - decision_mid if future_mid is not None else None
+    )
+    decision_half_spread = ask0 - decision_mid
+    latency_drift = entry_price - ask0
+    exit_half_spread = (
+        future_mid - exit_bid if future_mid is not None else None
+    )
+    return {
+        "side": side,
+        "state": "OBSERVED_EXECUTABLE",
+        "fill_capacity": fill_capacity,
+        "decision_ask": ask0,
+        "decision_bid": bid0,
+        "entry_price": entry_price,
+        "exit_bid": exit_bid,
+        "cash_pnl_per_share": float(cash),
+        "gross_executable_markout_per_share": float(gross),
+        "entry_fee_per_share": float(entry_fee),
+        "exit_fee_per_share": float(exit_fee),
+        "decision_half_spread_per_share": float(decision_half_spread),
+        "latency_price_drift_per_share": float(latency_drift),
+        "exit_half_spread_per_share": (
+            float(exit_half_spread) if exit_half_spread is not None else None
+        ),
+        "ideal_midpoint_alpha_per_share": (
+            float(ideal_alpha) if ideal_alpha is not None else None
+        ),
+    }, "OBSERVED_EXECUTABLE"
+
+
+def economics_from_execution_kernel(kernel, size):
+    """Apply one candidate quantity to a previously computed kernel."""
+    size = float(size)
+    fill = min(size, max(0.0, float(kernel["fill_capacity"])))
+    side = str(kernel["side"])
     if fill <= 0:
         return {
             "side": side,
@@ -301,61 +372,75 @@ def realized_action_economics(row, *, size, horizon_ms, latency_ms, side=None,
             "exit_half_spread_cost": 0.0,
             "ideal_midpoint_alpha": None,
             "frictions_embedded_in_cash_pnl": True,
-        }, "OBSERVED_NO_FILL_ZERO_DEPTH"
+        }, str(kernel["state"])
 
-    target = row.get("targets", {}).get(str(int(horizon_ms)), {})
-    if target.get("state") != "OBSERVED":
-        return None, "EXIT_EVIDENCE_UNAVAILABLE"
-    exit_state = observed_side_state(target, side, row)
-    if exit_state is None:
-        return None, "SIDE_EXIT_EVIDENCE_UNAVAILABLE"
-
-    entry_price = float(arrival_state["ask"])
-    exit_bid = float(exit_state["bid"])
-    entry_fee = fee_per_share(row, entry_price) * fill
-    exit_fee = fee_per_share(row, exit_bid) * fill
-    gross_executable = fill * (exit_bid - entry_price)
-    cash_pnl = gross_executable - entry_fee - exit_fee
-
-    decision_mid = (bid0 + ask0) / 2.0
-    future_ask = exit_state.get("ask")
-    future_mid = (
-        (exit_bid + float(future_ask)) / 2.0
-        if finite(future_ask) and float(future_ask) > exit_bid
-        else None
+    state = (
+        "OBSERVED_FULL_FILL"
+        if fill + 1e-12 >= size
+        else "OBSERVED_PARTIAL_FILL"
     )
-    ideal_midpoint_alpha = (
-        fill * (future_mid - decision_mid) if future_mid is not None else None
-    )
-    decision_half_spread = fill * (ask0 - decision_mid)
-    latency_price_drift = fill * (entry_price - ask0)
-    exit_half_spread = (
-        fill * (future_mid - exit_bid) if future_mid is not None else None
-    )
-    state = "OBSERVED_FULL_FILL" if fill + 1e-12 >= size else "OBSERVED_PARTIAL_FILL"
+    exit_half = kernel["exit_half_spread_per_share"]
+    ideal_alpha = kernel["ideal_midpoint_alpha_per_share"]
     return {
         "side": side,
-        "cash_pnl": float(cash_pnl),
-        "gross_executable_markout": float(gross_executable),
+        "cash_pnl": float(fill * kernel["cash_pnl_per_share"]),
+        "gross_executable_markout": float(
+            fill * kernel["gross_executable_markout_per_share"]),
         "filled": float(fill),
-        "requested": float(size),
-        "entry_price": entry_price,
-        "exit_bid": exit_bid,
-        "entry_fee": float(entry_fee),
-        "exit_fee": float(exit_fee),
-        "total_fees": float(entry_fee + exit_fee),
-        "decision_half_spread_cost": float(decision_half_spread),
-        # Signed: negative means latency gave price improvement.  No-fill due to
-        # adverse drift is represented by the explicit zero-payoff state above.
-        "latency_price_drift_cost": float(latency_price_drift),
+        "requested": size,
+        "entry_price": kernel["entry_price"],
+        "exit_bid": kernel["exit_bid"],
+        "entry_fee": float(fill * kernel["entry_fee_per_share"]),
+        "exit_fee": float(fill * kernel["exit_fee_per_share"]),
+        "total_fees": float(
+            fill * (
+                kernel["entry_fee_per_share"] + kernel["exit_fee_per_share"])),
+        "decision_half_spread_cost": float(
+            fill * kernel["decision_half_spread_per_share"]),
+        "latency_price_drift_cost": float(
+            fill * kernel["latency_price_drift_per_share"]),
         "exit_half_spread_cost": (
-            float(exit_half_spread) if exit_half_spread is not None else None
+            float(fill * exit_half) if exit_half is not None else None
         ),
         "ideal_midpoint_alpha": (
-            float(ideal_midpoint_alpha) if ideal_midpoint_alpha is not None else None
+            float(fill * ideal_alpha) if ideal_alpha is not None else None
         ),
         "frictions_embedded_in_cash_pnl": True,
     }, state
+
+
+def realized_action_economics(row, *, size, horizon_ms, latency_ms, side=None,
+                              entry_cap=DEFAULT_ENTRY_CAP,
+                              hard_order_notional=DEFAULT_HARD_ORDER_NOTIONAL,
+                              require_full_decision_depth=True):
+    """Observed total executable economics, implemented through one kernel."""
+    if not _valid_state(row):
+        return None, "STATE_OUTSIDE_RESEARCH_SUPPORT"
+    side = side or selected_action_side(row)
+    decision_state = decision_side_state(row, side)
+    if decision_state is None:
+        return None, "SIDE_DECISION_EVIDENCE_UNAVAILABLE"
+
+    size = float(size)
+    ask0 = float(decision_state["ask"])
+    decision_depth = float(decision_state["ask_quantity"])
+    if size + 1e-12 < float(row["minimum"]) or size <= 0:
+        return None, "BELOW_VENUE_MINIMUM"
+    if require_full_decision_depth and size > decision_depth + 1e-12:
+        return None, "INSUFFICIENT_DECISION_DEPTH"
+    if size * ask0 > float(hard_order_notional) + 1e-9:
+        return None, "ORDER_NOTIONAL_CAP"
+
+    kernel, state = action_execution_kernel(
+        row,
+        horizon_ms=horizon_ms,
+        latency_ms=latency_ms,
+        side=side,
+        entry_cap=entry_cap,
+    )
+    if kernel is None:
+        return None, state
+    return economics_from_execution_kernel(kernel, size)
 
 
 def realized_action_value(row, *, size, horizon_ms, latency_ms, side=None,
@@ -857,34 +942,47 @@ class DirectActionValueModel:
                 if state_counter is not None:
                     state_counter["STATE_OUTSIDE_RESEARCH_SUPPORT"] += 1
                 continue
+
+            # Quantity feasibility is independent of exit horizon.  Compute it
+            # once per causal state/side instead of once per horizon.
+            side_sizes = {}
+            for side in decision_action_sides(row):
+                sizes = candidate_sizes(
+                    row, side=side, size_grid=self.size_grid,
+                    hard_order_notional=self.hard_order_notional,
+                    max_sizes=self.max_sizes_per_state,
+                )
+                if sizes:
+                    side_sizes[side] = sizes
+                elif state_counter is not None:
+                    state_counter["NO_FEASIBLE_SIZE"] += 1
+
             for latency in self.train_latencies_ms:
-                for horizon in self.action_horizons_ms:
-                    if horizon <= latency:
-                        continue
-                    for side in decision_action_sides(row):
-                        sizes = candidate_sizes(
-                            row, side=side, size_grid=self.size_grid,
-                            hard_order_notional=self.hard_order_notional,
-                            max_sizes=self.max_sizes_per_state,
+                for side, sizes in side_sizes.items():
+                    for horizon in self.action_horizons_ms:
+                        if horizon <= latency:
+                            continue
+                        kernel, kernel_state = action_execution_kernel(
+                            row,
+                            horizon_ms=horizon,
+                            latency_ms=latency,
+                            side=side,
+                            entry_cap=self.entry_cap,
                         )
-                        if not sizes:
+                        if kernel is None:
                             if state_counter is not None:
-                                state_counter["NO_FEASIBLE_SIZE"] += 1
+                                state_counter[kernel_state] += len(sizes)
                             continue
                         for size in sizes:
-                            target, state = realized_action_value(
-                                row, size=size, horizon_ms=horizon, latency_ms=latency,
-                                side=side, entry_cap=self.entry_cap,
-                                hard_order_notional=self.hard_order_notional,
-                            )
+                            economics, state = economics_from_execution_kernel(
+                                kernel, size)
                             if state_counter is not None:
                                 state_counter[state] += 1
-                            if target is None:
-                                continue
+                            target = float(economics["cash_pnl"])
                             action = self._action_record(
                                 row, size=size, horizon_ms=horizon,
                                 latency_ms=latency, side=side)
-                            action["target"] = float(target)
+                            action["target"] = target
                             action["target_state"] = state
                             if state_counter is not None:
                                 state_counter["ACTION_SIDE_" + side] += 1
