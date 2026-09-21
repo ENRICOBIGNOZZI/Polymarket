@@ -8,6 +8,8 @@
   "research_only": true,
   "label_definition": "PM_YES_MID_ASOF_TARGET_MINUS_PM_YES_MID_AT_ORIGIN",
   "horizons_ms": [
+    5,
+    10,
     25,
     50,
     100,
@@ -22,9 +24,12 @@
     3000,
     4000,
     5000,
+    7500,
     10000
   ],
   "maximum_asof_gap_ms": {
+    "5": 5,
+    "10": 10,
     "25": 10,
     "50": 25,
     "100": 75,
@@ -39,6 +44,7 @@
     "3000": 125,
     "4000": 125,
     "5000": 125,
+    "7500": 125,
     "10000": 125
   },
   "interpolation": "FORBIDDEN",
