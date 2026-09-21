@@ -10,6 +10,7 @@ from research.walk_forward_v3.risk_frontier import (
     empirical_var_cvar_from_losses,
     pareto_frontier,
     scenario_risk_metrics,
+    select_policy_under_risk_budget,
 )
 from research.walk_forward_v3.direct_action import (
     DirectActionValueModel,
@@ -700,3 +701,42 @@ def test_pareto_frontier_keeps_more_pnl_only_when_tail_risk_is_not_worse():
     frontier = set(pareto_frontier(entries))
     assert "dominated" not in frontier
     assert frontier == {"safe", "profit"}
+
+
+
+def test_risk_budget_selection_requires_explicit_budget_and_uses_validation_only():
+    frontier = {
+        "entries": [
+            {
+                "policy_id": "loose",
+                "risk": {
+                    "state": "ALL_SELECTED_TRADES_OBSERVED",
+                    "total_observed_net_pnl": 12.0,
+                    "max_drawdown": 6.0,
+                    "tail_loss": {"0.95": {"cvar": 5.0}},
+                },
+            },
+            {
+                "policy_id": "safe",
+                "risk": {
+                    "state": "ALL_SELECTED_TRADES_OBSERVED",
+                    "total_observed_net_pnl": 8.0,
+                    "max_drawdown": 2.0,
+                    "tail_loss": {"0.95": {"cvar": 1.5}},
+                },
+            },
+        ]
+    }
+    none = select_policy_under_risk_budget(frontier)
+    assert none["state"] == "NO_RISK_BUDGET_NO_AUTOMATIC_SELECTION"
+    assert none["policy_id"] is None
+
+    chosen = select_policy_under_risk_budget(
+        frontier, max_cvar95=2.0, max_drawdown=3.0)
+    assert chosen["state"] == "VALIDATION_POLICY_SELECTED"
+    assert chosen["policy_id"] == "safe"
+
+    impossible = select_policy_under_risk_budget(
+        frontier, max_cvar95=1.0, max_drawdown=1.0)
+    assert impossible["state"] == "NO_POLICY_MEETS_VALIDATION_RISK_BUDGET"
+    assert impossible["policy_id"] is None
