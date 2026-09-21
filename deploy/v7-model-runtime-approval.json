@@ -1,0 +1,14 @@
+{
+  "schema": "polymarket_v7_model_runtime_approval_v1",
+  "version": 1,
+  "approved": false,
+  "approval_scope": "PAPER_RUNTIME_NEW_MODEL_ACTIVATION",
+  "explicit_user_approval_required": true,
+  "review_backtest_before_approval": true,
+  "automatic_promotion": false,
+  "target_model_sha": null,
+  "bundle_id": null,
+  "backtest_report_sha256": null,
+  "approval_id": null,
+  "note": "Fail closed. Populate only after explicit user approval following review of backtest performance."
+}
