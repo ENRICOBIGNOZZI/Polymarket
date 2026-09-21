@@ -71,7 +71,34 @@ def method():
     }
 
 
-def chart(output, state):
+def public_economics(economics):
+    """Keep public research receipts compact; raw per-opportunity outcomes stay ephemeral."""
+    return {
+        "schema": economics.get("schema"),
+        **SAFETY,
+        "prediction_metrics": economics.get("prediction_metrics", {}),
+        "pm_edge_distribution": economics.get("pm_edge_distribution", {}),
+        "models": {
+            name: {"metrics": value.get("metrics", {}), "uncertainty": value.get("uncertainty", {})}
+            for name, value in economics.get("models", {}).items()
+        },
+        "latency": economics.get("latency", {}),
+        "idealized_upper_bounds": economics.get("idealized_upper_bounds", {}),
+    }
+
+
+def _point_pnl(metrics):
+    return metrics.get("net_pnl") if metrics.get("net_pnl") is not None else metrics.get("observed_net_pnl")
+
+
+def _sample(rows, maximum=5000):
+    if len(rows) <= maximum:
+        return rows
+    step = max(1, len(rows) // maximum)
+    return rows[::step][:maximum]
+
+
+def chart(output, state, economics):
     names = [
         "01-walk-forward-cumulative-pnl", "02-pnl-by-model", "03-pnl-by-latency",
         "04-edge-decay-vs-latency", "05-predicted-edge-vs-markout",
@@ -86,59 +113,211 @@ def chart(output, state):
         import matplotlib.pyplot as plt
     except ImportError:
         return {"state": "MATPLOTLIB_UNAVAILABLE", "files": []}
+
+    output = Path(output)
+    if state != "READY":
+        files = []
+        for name in names:
+            fig, axis = plt.subplots(figsize=(8, 4))
+            axis.set_title(name.replace("-", " "))
+            axis.text(.5, .5, "UNAVAILABLE: " + state, ha="center", va="center", transform=axis.transAxes)
+            axis.set_xticks([]); axis.set_yticks([])
+            fig.tight_layout()
+            path = output / (name + ".png")
+            fig.savefig(path, dpi=130); plt.close(fig); files.append(path.name)
+        return {"state": state, "files": files}
+
     files = []
-    for name in names:
+    models = economics.get("models", {})
+    selected = models.get("combined_settlement_repricing") or models.get("logistic_offset") or {}
+    selected_outcomes = selected.get("outcomes", [])
+
+    def save(name, draw):
         fig, axis = plt.subplots(figsize=(8, 4))
+        draw(axis)
         axis.set_title(name.replace("-", " "))
-        axis.text(.5, .5, "UNAVAILABLE: " + state if state != "READY" else "See JSON receipt",
-                  ha="center", va="center", transform=axis.transAxes)
-        axis.set_xticks([]); axis.set_yticks([])
         fig.tight_layout()
-        path = Path(output) / (name + ".png")
+        path = output / (name + ".png")
         fig.savefig(path, dpi=130)
         plt.close(fig)
         files.append(path.name)
+
+    def cumulative(axis):
+        rows = sorted((r for r in selected_outcomes if r.get("pnl") is not None),
+                      key=lambda r: r.get("decision_ns", 0))
+        total = 0.0; x=[]; y=[]
+        for row in rows:
+            total += row["pnl"]; x.append(row.get("decision_ns", 0) / 1e9); y.append(total)
+        if x:
+            axis.plot(x, y); axis.axhline(0, linewidth=.8); axis.set_xlabel("decision epoch seconds"); axis.set_ylabel("PAPER PnL")
+        else: axis.text(.5,.5,"No settled fills",ha="center",va="center",transform=axis.transAxes)
+
+    def pnl_models(axis):
+        labels=[]; values=[]
+        for name,value in models.items():
+            p=_point_pnl(value.get("metrics",{}))
+            if p is not None: labels.append(name);values.append(p)
+        if values: axis.bar(range(len(values)),values);axis.set_xticks(range(len(labels)),labels,rotation=25,ha="right");axis.axhline(0,linewidth=.8);axis.set_ylabel("PAPER PnL")
+        else: axis.text(.5,.5,"PnL unavailable",ha="center",va="center",transform=axis.transAxes)
+
+    def pnl_latency(axis):
+        rows=[]
+        for key,value in economics.get("latency",{}).items():
+            p=_point_pnl(value)
+            if p is not None: rows.append((int(key),p))
+        rows.sort()
+        if rows: axis.plot([x for x,_ in rows],[y for _,y in rows],marker="o");axis.axhline(0,linewidth=.8);axis.set_xlabel("latency ms");axis.set_ylabel("PAPER PnL")
+        else: axis.text(.5,.5,"Latency PnL unavailable",ha="center",va="center",transform=axis.transAxes)
+
+    def edge_decay(axis):
+        rows=[]
+        for key,value in economics.get("prediction_metrics",{}).get("repricing",{}).items():
+            if value.get("state")=="READY" and value.get("actual_mean_move") is not None:
+                rows.append((int(key),value["actual_mean_move"]))
+        rows.sort()
+        if rows: axis.plot([x for x,_ in rows],[y for _,y in rows],marker="o");axis.axhline(0,linewidth=.8);axis.set_xlabel("horizon ms");axis.set_ylabel("mean realized PM midpoint move")
+        else: axis.text(.5,.5,"Repricing targets unavailable",ha="center",va="center",transform=axis.transAxes)
+
+    def predicted_vs_markout(axis):
+        rows=_sample([r for r in selected_outcomes if r.get("predicted_edge") is not None and r.get("markout") is not None])
+        if rows: axis.scatter([r["predicted_edge"] for r in rows],[r["markout"] for r in rows],s=8,alpha=.35);axis.axhline(0,linewidth=.8);axis.set_xlabel("predicted net edge/share");axis.set_ylabel("250ms markout PnL")
+        else: axis.text(.5,.5,"Markout pairs unavailable",ha="center",va="center",transform=axis.transAxes)
+
+    def predicted_vs_settlement(axis):
+        rows=_sample([r for r in selected_outcomes if r.get("predicted_edge") is not None and r.get("pnl") is not None])
+        if rows: axis.scatter([r["predicted_edge"] for r in rows],[r["pnl"] for r in rows],s=8,alpha=.35);axis.axhline(0,linewidth=.8);axis.set_xlabel("predicted net edge/share");axis.set_ylabel("settlement PnL")
+        else: axis.text(.5,.5,"Settled fills unavailable",ha="center",va="center",transform=axis.transAxes)
+
+    def funnel(axis):
+        f=(selected.get("metrics") or {}).get("funnel",{})
+        rows=[(k,v) for k,v in f.items()]
+        if rows: axis.barh(range(len(rows)),[v for _,v in rows]);axis.set_yticks(range(len(rows)),[k for k,_ in rows],fontsize=7);axis.set_xlabel("count")
+        else: axis.text(.5,.5,"Funnel unavailable",ha="center",va="center",transform=axis.transAxes)
+
+    def pm_edges(axis):
+        rows=[r["predicted_edge"] for r in (models.get("pm") or {}).get("outcomes",[]) if r.get("predicted_edge") is not None]
+        if rows: axis.hist(rows,bins=50);axis.axvline(0,linewidth=.8);axis.set_xlabel("PM forecast - executable cost");axis.set_ylabel("opportunities")
+        else: axis.text(.5,.5,"PM OOS edges unavailable",ha="center",va="center",transform=axis.transAxes)
+
+    def logloss(axis):
+        rows=[]
+        for name,value in economics.get("prediction_metrics",{}).get("settlement",{}).items():
+            if value.get("state")=="READY": rows.append((name,value["log_loss"]))
+        if rows: axis.bar(range(len(rows)),[v for _,v in rows]);axis.set_xticks(range(len(rows)),[k for k,_ in rows],rotation=20,ha="right");axis.set_ylabel("OOS log loss")
+        else: axis.text(.5,.5,"OOS settlement labels unavailable",ha="center",va="center",transform=axis.transAxes)
+
+    def repricing_quality(axis):
+        rows=[]
+        for key,value in economics.get("prediction_metrics",{}).get("repricing",{}).items():
+            if value.get("state")=="READY": rows.append((int(key),value["mae"]))
+        rows.sort()
+        if rows: axis.plot([x for x,_ in rows],[y for _,y in rows],marker="o");axis.set_xlabel("horizon ms");axis.set_ylabel("OOS repricing MAE")
+        else: axis.text(.5,.5,"OOS repricing metrics unavailable",ha="center",va="center",transform=axis.transAxes)
+
+    def grouped_pnl(axis, field):
+        totals={}
+        for row in selected_outcomes:
+            if row.get("pnl") is not None: totals[row.get(field,"UNKNOWN")]=totals.get(row.get(field,"UNKNOWN"),0.0)+row["pnl"]
+        rows=sorted(totals.items())
+        if rows: axis.bar(range(len(rows)),[v for _,v in rows]);axis.set_xticks(range(len(rows)),[k for k,_ in rows],rotation=20,ha="right");axis.axhline(0,linewidth=.8);axis.set_ylabel("PAPER PnL")
+        else: axis.text(.5,.5,"PnL unavailable",ha="center",va="center",transform=axis.transAxes)
+
+    def friction(axis):
+        labels=["realistic"];values=[_point_pnl(selected.get("metrics",{}))]
+        for name,value in economics.get("idealized_upper_bounds",{}).items():
+            labels.append(name.replace("_UPPER_BOUND",""));values.append(_point_pnl(value))
+        pairs=[(k,v) for k,v in zip(labels,values) if v is not None]
+        if pairs: axis.bar(range(len(pairs)),[v for _,v in pairs]);axis.set_xticks(range(len(pairs)),[k for k,_ in pairs],rotation=20,ha="right");axis.axhline(0,linewidth=.8);axis.set_ylabel("PAPER PnL")
+        else: axis.text(.5,.5,"Friction decomposition unavailable",ha="center",va="center",transform=axis.transAxes)
+
+    def fill_by_edge(axis):
+        rows=[r for r in selected_outcomes if r.get("predicted_edge") is not None]
+        bounds=[-1e9,0,.0025,.005,.01,.02,1e9];labels=["<0","0-.25%",".25-.5%",".5-1%","1-2%",">2%"];rates=[]
+        for lo,hi in zip(bounds[:-1],bounds[1:]):
+            cell=[r for r in rows if lo <= r["predicted_edge"] < hi]
+            rates.append(sum(r.get("filled",0)>0 for r in cell)/len(cell) if cell else 0)
+        if rows: axis.bar(range(len(labels)),rates);axis.set_xticks(range(len(labels)),labels,rotation=20);axis.set_ylabel("fill rate")
+        else: axis.text(.5,.5,"Edge observations unavailable",ha="center",va="center",transform=axis.transAxes)
+
+    save(names[0], cumulative)
+    save(names[1], pnl_models)
+    save(names[2], pnl_latency)
+    save(names[3], edge_decay)
+    save(names[4], predicted_vs_markout)
+    save(names[5], predicted_vs_settlement)
+    save(names[6], funnel)
+    save(names[7], pm_edges)
+    save(names[8], logloss)
+    save(names[9], repricing_quality)
+    save(names[10], lambda axis: grouped_pnl(axis,"asset"))
+    save(names[11], lambda axis: grouped_pnl(axis,"horizon"))
+    save(names[12], friction)
+    save(names[13], fill_by_edge)
     return {"state": "READY", "files": files}
+
+
+def _support_statement(metrics, uncertainty):
+    pnl = _point_pnl(metrics)
+    if pnl is None:
+        return "UNKNOWN / INSUFFICIENT EVIDENCE"
+    interval = uncertainty.get("pnl_per_fill_interval") if isinstance(uncertainty, dict) else None
+    if interval and interval[0] > 0:
+        return "POSITIVE WITH MARKET-BLOCK SUPPORT"
+    if interval and interval[1] < 0:
+        return "NEGATIVE WITH MARKET-BLOCK SUPPORT"
+    return ("POSITIVE POINT ESTIMATE / UNCERTAIN" if pnl > 0
+            else "NEGATIVE POINT ESTIMATE / UNCERTAIN" if pnl < 0
+            else "ZERO POINT ESTIMATE / INSUFFICIENT EVIDENCE")
 
 
 def publish(output, *, root, start_sha, data, folds, economics):
     output = Path(output)
     output.mkdir(parents=True, exist_ok=True)
     audit, data_manifest, methodology = audit_receipt(root), manifest(data), method()
+    public = public_economics(economics)
+    prediction = public.get("prediction_metrics", {})
     model_metrics = {"schema": SCHEMA + "_model_metrics_v1", **SAFETY,
                      "state": "OOS_READY" if folds["oos_predictions"] else "NO_OOS_PREDICTIONS",
-                     "families": ["pm", "logistic_offset", "boosted_offset", "repricing_ridge"]}
-    funnel = {key: value["metrics"]["funnel"] for key, value in economics.get("models", {}).items()}
+                     "families": ["pm", "logistic_offset", "boosted_offset", "repricing_ridge"],
+                     "prediction_metrics": prediction}
+    funnel = {key: value["metrics"]["funnel"] for key, value in public.get("models", {}).items()}
     parity = {"schema": SCHEMA + "_execution_parity_v1", **SAFETY, "rows": [
         {"rule": "post-latency book", "live": "required", "backtest": "required", "same": True},
         {"rule": "visible L1 partial fill", "live": "required", "backtest": "required", "same": True},
         {"rule": "fee, tick, entry cap", "live": "native terms", "backtest": "native terms", "same": True},
-        {"rule": "global capital allocator", "live": "global", "backtest": "sequential research reservation", "same": False},
+        {"rule": "global capital allocator", "live": "global", "backtest": "research approximation", "same": False},
     ]}
     values = {
         "audit.json": audit, "methodology.json": methodology, "data_manifest.json": data_manifest,
         "walk_forward_folds.json": folds, "model_metrics.json": model_metrics,
-        "economic_metrics.json": economics,
+        "economic_metrics.json": public,
         "funnel.json": {"schema": SCHEMA + "_funnel_v1", **SAFETY, "models": funnel},
         "execution_parity.json": parity,
-        "latency_analysis.json": {"schema": SCHEMA + "_latency_v1", **SAFETY, "primary": methodology["primary_latency"], "fixed": economics.get("latency", {})},
+        "latency_analysis.json": {"schema": SCHEMA + "_latency_v1", **SAFETY,
+                                  "primary": methodology["primary_latency"], "fixed": public.get("latency", {})},
         "uncertainty.json": {"schema": SCHEMA + "_uncertainty_v1", **SAFETY,
-                               "models": {key: value["uncertainty"] for key, value in economics.get("models", {}).items()}},
+                              "models": {key: value["uncertainty"] for key, value in public.get("models", {}).items()}},
     }
     values["results.json"] = {"schema": SCHEMA + "_results_v1", **SAFETY, "start_sha": start_sha,
                               "audit_sha256": digest(audit), "data_sha256": data_manifest["data_sha256"],
-                              "fold_sha256": digest(folds), "economic_sha256": digest(economics)}
+                              "fold_sha256": digest(folds), "economic_sha256": digest(public)}
     for name, value in values.items():
         atomic_json(output / name, value)
-    charts = chart(output, data_manifest["input_state"])
-    direct = "UNKNOWN / INSUFFICIENT EVIDENCE" if data_manifest["input_state"] != "READY" else "SEE_RESULTS_JSON"
+    charts = chart(output, data_manifest["input_state"], economics)
+
+    selected = public.get("models", {}).get("combined_settlement_repricing") or {}
+    direct = _support_statement(selected.get("metrics", {}), selected.get("uncertainty", {})) if data_manifest["input_state"] == "READY" else "UNKNOWN / INSUFFICIENT EVIDENCE"
+    repricing = prediction.get("repricing", {}).get("250", {})
+    lag = ("POSITIVE DESCRIPTIVE 250MS MOVE" if repricing.get("state") == "READY" and repricing.get("actual_mean_move",0) > 0
+           else "NONPOSITIVE DESCRIPTIVE 250MS MOVE" if repricing.get("state") == "READY"
+           else "UNKNOWN / INSUFFICIENT EVIDENCE")
+    selected_metrics = selected.get("metrics", {})
     lines = [
         "# HISTORICAL WALK-FORWARD V2", "", "## Direct answers", "",
-        "- Positive gross alpha: **" + direct + "**",
-        "- Positive net executable alpha: **" + direct + "**",
-        "- PM lag after causal external signal: **" + direct + "**",
-        "- Prior zero-trade diagnosis: **OOS PM executable-edge distribution is in economic_metrics.json.**",
-        "- Principal bottleneck: **" + ("ADMISSIBLE_HFT_INPUT_UNAVAILABLE" if data_manifest["input_state"] != "READY" else "SEE_FUNNEL") + "**",
+        "- Positive gross/net executable alpha: **" + direct + "**",
+        "- PM lag after causal external signal: **" + lag + "**",
+        "- Prior zero-trade diagnosis: **see PM executable-edge distribution and funnel below.**",
+        "- Principal bottleneck: **" + ("ADMISSIBLE_HFT_INPUT_UNAVAILABLE" if data_manifest["input_state"] != "READY" else "SEE_FUNNEL_AND_FRICTION_DECOMPOSITION") + "**",
         "", "## Identity", "",
         "- Starting SHA: " + start_sha,
         "- Data SHA: " + data_manifest["data_sha256"],
@@ -146,6 +325,13 @@ def publish(output, *, root, start_sha, data, folds, economics):
         "- Decisions: " + str(data_manifest["deduplicated_decisions"]),
         "- Markets: " + str(data_manifest["unique_markets"]),
         "- Short-horizon pairs: " + str(data_manifest["short_horizon_observed_pairs"]),
+        "- OOS predictions: " + str(folds.get("oos_predictions",0)),
+        "", "## Selected combined-policy economics", "",
+        "- Simulated orders: " + str(selected_metrics.get("simulated_orders")),
+        "- Fills: " + str(selected_metrics.get("fills")),
+        "- Settled fills: " + str(selected_metrics.get("settled_fills")),
+        "- Net/observed PnL: " + str(_point_pnl(selected_metrics)),
+        "- Fill rate: " + str(selected_metrics.get("fill_rate")),
         "", "The report never converts unavailable books, labels, forecasts, or fills into zero.",
     ]
     for name in charts["files"]:
